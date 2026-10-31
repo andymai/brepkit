@@ -3809,6 +3809,11 @@ impl LoopEnclosers {
 /// sphere caps). Cylinder/cone laterals are routed to
 /// [`split_periodic_face_into_bands`] first and only reach this fallback
 /// when the band preconditions don't hold.
+///
+/// `None` when a plane face's loop chained from open sections crosses one of
+/// the face's holes and could not be merged with it: the loop's disc and the
+/// hole would overlap, so the caller hands the sections to the general
+/// splitter, which trims them against the hole.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn split_face_with_internal_loops(
     surface: &FaceSurface,
@@ -3820,7 +3825,7 @@ pub(super) fn split_face_with_internal_loops(
     face_id: FaceId,
     wire_pts: &[Point3],
     clearance: f64,
-) -> Vec<SplitSubFace> {
+) -> Option<Vec<SplitSubFace>> {
     let tol_3d = brepkit_math::tolerance::Tolerance::new().linear;
 
     // Convert each section edge to an OrientedPCurveEdge, preserving the
@@ -4198,6 +4203,36 @@ pub(super) fn split_face_with_internal_loops(
                 hole_absorbed[li] = true;
             }
             consumed_holes.insert(hi);
+        }
+    }
+
+    // A loop that still crosses a hole after both unions bounds no region of
+    // this face: a slab bridging a boss's foot stamps its whole footprint on
+    // the plate's top, but the strip over the foot belongs to the boss, so the
+    // loop's disc would overlap the hole. The general splitter trims such
+    // sections against the hole. A closed section curve stays here, since that
+    // splitter leaves closed curves on a plane to this path.
+    if let Some(frame) = plane_frame.as_ref() {
+        let holes: Vec<Option<ChordOutline>> = original_inner_wires
+            .iter()
+            .enumerate()
+            .map(|(hi, hole)| (!consumed_holes.contains(&hi)).then(|| chord_outline(hole, frame)))
+            .collect();
+        for (li, loop_edges) in loops.iter().enumerate() {
+            if loop_edges.len() < 2 {
+                continue;
+            }
+            let outline = chord_outline(loop_edges, frame);
+            for (hi, hole) in holes.iter().enumerate() {
+                if let Some(hole) = hole
+                    && loop_crosses_hole(&outline, hole, tol_3d)
+                {
+                    log::debug!(
+                        "split_face_with_internal_loops: face {face_id:?} loop {li} crosses hole {hi}"
+                    );
+                    return None;
+                }
+            }
         }
     }
 
@@ -4705,13 +4740,13 @@ pub(super) fn split_face_with_internal_loops(
         && !remainder.inner_wires.is_empty()
     {
         let Some(inside) = region_sample(surface, boundary_edges, &remainder.inner_wires) else {
-            return Vec::new();
+            return Some(Vec::new());
         };
         remainder.precomputed_interior = Some(inside);
     }
     result.push(remainder);
 
-    result
+    Some(result)
 }
 
 /// 3D samples along a wire's edges: two per line, 32 per curved edge, never
@@ -5248,6 +5283,228 @@ fn internal_loop_hole_interact(
     };
     lp.iter().any(|&p| strictly_inside(p, &hp, &hs))
         || hp.iter().any(|&p| strictly_inside(p, &lp, &ls))
+}
+
+/// A wire's outline in a plane frame: its chord polygon, the most any chord
+/// sags from its curve (none when every edge is a line), the polygon's
+/// bounds, and the wire's own segments and arcs where no edge is a NURBS
+/// curve.
+struct ChordOutline {
+    poly: Vec<Point2>,
+    sag: f64,
+    lo: Point2,
+    hi: Point2,
+    exact: Option<Vec<brepkit_math::region2d::Boundary2>>,
+}
+
+fn chord_outline(edges: &[OrientedPCurveEdge], frame: &PlaneFrame) -> ChordOutline {
+    const CHORDS: usize = 64;
+    let mut poly = Vec::new();
+    let mut sag = 0.0_f64;
+    for e in edges {
+        let n = if matches!(e.curve_3d, EdgeCurve::Line) {
+            1
+        } else {
+            CHORDS
+        };
+        let pts: Vec<Point2> = edge_samples(e, 2 * n)
+            .into_iter()
+            .map(|p| frame.project(p))
+            .collect();
+        for k in 0..n {
+            let (a, mid, b) = (pts[2 * k], pts[2 * k + 1], pts[2 * k + 2]);
+            sag = sag.max(point_seg_dist_2d(mid, a, b));
+            poly.push(a);
+        }
+    }
+    let (lo, hi) = poly.iter().fold(
+        (
+            Point2::new(f64::INFINITY, f64::INFINITY),
+            Point2::new(f64::NEG_INFINITY, f64::NEG_INFINITY),
+        ),
+        |(lo, hi), p| {
+            (
+                Point2::new(lo.x().min(p.x()), lo.y().min(p.y())),
+                Point2::new(hi.x().max(p.x()), hi.y().max(p.y())),
+            )
+        },
+    );
+    let exact = super::containment::exact_hole(edges, frame);
+    ChordOutline {
+        poly,
+        sag,
+        lo,
+        hi,
+        exact,
+    }
+}
+
+impl ChordOutline {
+    /// Some(true) when `p` lies clearly inside, Some(false) clearly outside,
+    /// None within `clear` of the boundary. Read against the wire's own
+    /// curves where it has them, else against its chords less their sag.
+    fn side(&self, p: Point2, clear: f64) -> Option<bool> {
+        use super::super::classify_2d::{distance_to_polygon_boundary, point_in_polygon_2d};
+        use brepkit_math::region2d::{distance_to_boundary, point_in_region};
+        if let Some(pieces) = &self.exact {
+            return (distance_to_boundary(pieces, p) > clear)
+                .then(|| point_in_region(pieces, p, clear))?;
+        }
+        let clear = clear + self.sag;
+        (distance_to_polygon_boundary(p, &self.poly) > clear)
+            .then(|| point_in_polygon_2d(p, &self.poly))
+    }
+}
+
+/// Whether a section loop runs into a hole or holds part of one: a point of
+/// the loop lies clearly inside the hole, or the hole's rim lies partly
+/// clearly inside the loop and partly clearly outside it. A hole wholly
+/// inside the loop or wholly outside it, touching it or not, does not count.
+/// Each outline's chords are cut where they cross the other wire, on its own
+/// curves where it has them, and every piece between cuts, which lies wholly
+/// on one side, is read at its quarter points; a crossing between any fixed
+/// samples is found. A curved wire's chords stand off its curves by their
+/// sag, which joins the clearance for points read along them.
+fn loop_crosses_hole(lp: &ChordOutline, hole: &ChordOutline, tol: f64) -> bool {
+    if lp.poly.len() < 3 || hole.poly.len() < 3 {
+        return false;
+    }
+    let base = tol * 100.0;
+    let reach = base + lp.sag.max(hole.sag);
+    if lp.lo.x() > hole.hi.x() + reach
+        || hole.lo.x() > lp.hi.x() + reach
+        || lp.lo.y() > hole.hi.y() + reach
+        || hole.lo.y() > lp.hi.y() + reach
+    {
+        return false;
+    }
+    if crossing_witnesses(&lp.poly, hole)
+        .into_iter()
+        .any(|p| hole.side(p, base + lp.sag) == Some(true))
+    {
+        return true;
+    }
+    let rim: Vec<Option<bool>> = crossing_witnesses(&hole.poly, lp)
+        .into_iter()
+        .map(|p| lp.side(p, base + hole.sag))
+        .collect();
+    rim.contains(&Some(true)) && rim.contains(&Some(false))
+}
+
+/// Points along the closed polygon `path` that show which side of `region`
+/// each stretch of it lies on: each chord cut where it meets `region`, on
+/// its own segments and arcs where it has them, else on its chords, and
+/// every piece between cuts read at its quarter points.
+fn crossing_witnesses(path: &[Point2], region: &ChordOutline) -> Vec<Point2> {
+    let mut out = Vec::new();
+    for i in 0..path.len() {
+        let (a, b) = (path[i], path[(i + 1) % path.len()]);
+        let ab = Point2::new(b.x() - a.x(), b.y() - a.y());
+        let mut cuts = vec![0.0, 1.0];
+        let (lo_x, hi_x) = (a.x().min(b.x()), a.x().max(b.x()));
+        let (lo_y, hi_y) = (a.y().min(b.y()), a.y().max(b.y()));
+        let reach = region.sag;
+        if !(hi_x < region.lo.x() - reach
+            || lo_x > region.hi.x() + reach
+            || hi_y < region.lo.y() - reach
+            || lo_y > region.hi.y() + reach)
+        {
+            if let Some(pieces) = &region.exact {
+                for piece in pieces {
+                    cuts.extend(segment_piece_crossings(a, b, piece));
+                }
+            } else {
+                let ring = &region.poly;
+                for j in 0..ring.len() {
+                    let (c, d) = (ring[j], ring[(j + 1) % ring.len()]);
+                    if c.x().max(d.x()) < lo_x
+                        || c.x().min(d.x()) > hi_x
+                        || c.y().max(d.y()) < lo_y
+                        || c.y().min(d.y()) > hi_y
+                    {
+                        continue;
+                    }
+                    cuts.extend(segment_piece_crossings(
+                        a,
+                        b,
+                        &brepkit_math::region2d::Boundary2::Segment(c, d),
+                    ));
+                }
+            }
+        }
+        cuts.retain(|t| (0.0..=1.0).contains(t));
+        cuts.sort_by(f64::total_cmp);
+        for w in cuts.windows(2) {
+            for f in [0.25, 0.5, 0.75] {
+                let t = (w[1] - w[0]).mul_add(f, w[0]);
+                out.push(Point2::new(
+                    ab.x().mul_add(t, a.x()),
+                    ab.y().mul_add(t, a.y()),
+                ));
+            }
+        }
+    }
+    out
+}
+
+/// The parameters along the segment from `a` to `b` where it meets `piece`.
+fn segment_piece_crossings(
+    a: Point2,
+    b: Point2,
+    piece: &brepkit_math::region2d::Boundary2,
+) -> Vec<f64> {
+    use brepkit_math::region2d::Boundary2;
+    let cross = |u: Vec2, v: Vec2| u.x().mul_add(v.y(), -(u.y() * v.x()));
+    let ab = Vec2::new(b.x() - a.x(), b.y() - a.y());
+    match *piece {
+        Boundary2::Segment(c, d) => {
+            let cd = Vec2::new(d.x() - c.x(), d.y() - c.y());
+            let denom = cross(ab, cd);
+            if denom.abs() <= f64::EPSILON * ab.length() * cd.length() {
+                return Vec::new();
+            }
+            let ac = Vec2::new(c.x() - a.x(), c.y() - a.y());
+            let (t, s) = (cross(ac, cd) / denom, cross(ac, ab) / denom);
+            if (0.0..=1.0).contains(&s) {
+                vec![t]
+            } else {
+                Vec::new()
+            }
+        }
+        Boundary2::Arc {
+            center,
+            u,
+            v,
+            a: ra,
+            b: rb,
+            t0,
+            t1,
+        } => {
+            // In the ellipse's own frame scaled to a unit circle the segment
+            // is still straight: |p + t q|^2 = 1.
+            let rel = Vec2::new(a.x() - center.x(), a.y() - center.y());
+            let p = Vec2::new(rel.dot(u) / ra, rel.dot(v) / rb);
+            let q = Vec2::new(ab.dot(u) / ra, ab.dot(v) / rb);
+            let (qa, qb, qc) = (q.dot(q), 2.0 * p.dot(q), p.dot(p) - 1.0);
+            if qa <= 0.0 {
+                return Vec::new();
+            }
+            let disc = qb.mul_add(qb, -4.0 * qa * qc);
+            if disc < 0.0 {
+                return Vec::new();
+            }
+            let root = disc.sqrt();
+            [(-qb - root) / (2.0 * qa), (-qb + root) / (2.0 * qa)]
+                .into_iter()
+                .filter(|&t| {
+                    let x = p + q * t;
+                    let angle = x.y().atan2(x.x());
+                    let off = (angle - t0).rem_euclid(std::f64::consts::TAU);
+                    off <= t1 - t0
+                })
+                .collect()
+        }
+    }
 }
 
 fn point_seg_dist_2d(p: Point2, a: Point2, b: Point2) -> f64 {
@@ -6649,10 +6906,10 @@ pub(super) fn try_split_disk_by_chords(
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::{
-        FaceId, OrientedPCurveEdge, PlaneFrame, SectionEdge, SplitSubFace, UvChord,
+        ChordOutline, FaceId, OrientedPCurveEdge, PlaneFrame, SectionEdge, SplitSubFace, UvChord,
         arc_covers_segment, between_loop_and_holes, curved_loop_interior,
-        cylinder_cone_remainder_interior, loop_chords, outline_samples, point_in_hole_loops_uv,
-        segment_distance_2d, stands_clear,
+        cylinder_cone_remainder_interior, loop_chords, loop_crosses_hole, outline_samples,
+        point_in_hole_loops_uv, segment_distance_2d, stands_clear,
     };
     use brepkit_math::curves::Circle3D;
     use brepkit_math::curves2d::{Curve2D, Line2D};
@@ -8144,5 +8401,95 @@ mod tests {
             }
         }
         assert!(inside, "the point at ({fu}, {fv}) lies outside the L");
+    }
+
+    fn outline_of(
+        poly: Vec<Point2>,
+        sag: f64,
+        exact: Option<Vec<brepkit_math::region2d::Boundary2>>,
+    ) -> ChordOutline {
+        let lo = Point2::new(
+            poly.iter().map(|p| p.x()).fold(f64::INFINITY, f64::min),
+            poly.iter().map(|p| p.y()).fold(f64::INFINITY, f64::min),
+        );
+        let hi = Point2::new(
+            poly.iter().map(|p| p.x()).fold(f64::NEG_INFINITY, f64::max),
+            poly.iter().map(|p| p.y()).fold(f64::NEG_INFINITY, f64::max),
+        );
+        ChordOutline {
+            poly,
+            sag,
+            lo,
+            hi,
+            exact,
+        }
+    }
+
+    fn rect(x0: f64, x1: f64, y0: f64, y1: f64) -> ChordOutline {
+        let poly = vec![
+            Point2::new(x0, y0),
+            Point2::new(x1, y0),
+            Point2::new(x1, y1),
+            Point2::new(x0, y1),
+        ];
+        let sides = (0..4)
+            .map(|k| brepkit_math::region2d::Boundary2::Segment(poly[k], poly[(k + 1) % 4]))
+            .collect();
+        outline_of(poly, 0.0, Some(sides))
+    }
+
+    /// A circle of 64 chords, clockwise as a hole runs.
+    fn circle(cx: f64, cy: f64, r: f64) -> ChordOutline {
+        let poly = (0..64)
+            .map(|k| {
+                let a = -TAU * f64::from(k) / 64.0;
+                Point2::new(r.mul_add(a.cos(), cx), r.mul_add(a.sin(), cy))
+            })
+            .collect();
+        let arc = brepkit_math::region2d::Boundary2::Arc {
+            center: Point2::new(cx, cy),
+            u: Vec2::new(1.0, 0.0),
+            v: Vec2::new(0.0, 1.0),
+            a: r,
+            b: r,
+            t0: 0.0,
+            t1: TAU,
+        };
+        outline_of(poly, r * (1.0 - (PI / 64.0).cos()), Some(vec![arc]))
+    }
+
+    /// A strip 0.01 tall about the top of a hole of radius 5, its lower
+    /// side 0.005 into the hole, less than the 0.006 its 64 chords sag: read
+    /// against the hole's own arc, the strip crosses it.
+    #[test]
+    fn a_strip_grazing_into_a_hole_by_less_than_its_chords_sag_crosses_it() {
+        let strip = rect(-50.0, 50.0, 4.995, 5.005);
+        assert!(loop_crosses_hole(&strip, &circle(3.125, 0.0, 5.0), 1e-7));
+    }
+
+    /// A strip 0.1 tall across the top of a hole of radius 5 about
+    /// (3.125, 0): its lower side runs inside the hole from x = 1.42 to
+    /// 4.83, between samples 6.25 apart along it, and none of the rim's 16
+    /// samples lands in the strip.
+    #[test]
+    fn a_thin_loop_across_a_holes_rim_crosses_it() {
+        let strip = rect(-50.0, 50.0, 4.7, 4.8);
+        assert!(loop_crosses_hole(&strip, &circle(3.125, 0.0, 5.0), 1e-7));
+    }
+
+    #[test]
+    fn a_hole_inside_or_clear_of_a_loop_does_not_cross_it() {
+        let hole = circle(3.125, 0.0, 5.0);
+        assert!(!loop_crosses_hole(
+            &rect(-10.0, 20.0, -10.0, 10.0),
+            &hole,
+            1e-7
+        ));
+        assert!(!loop_crosses_hole(
+            &rect(-10.0, 20.0, 5.5, 6.0),
+            &hole,
+            1e-7
+        ));
+        assert!(loop_crosses_hole(&rect(2.0, 4.0, -1.0, 1.0), &hole, 1e-7));
     }
 }
