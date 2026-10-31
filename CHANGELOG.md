@@ -1,5 +1,13 @@
 # Changelog
 
+## [4.6.11](https://github.com/andymai/brepkit/compare/v4.6.10...v4.6.11) (2026-10-31)
+
+
+### Bug Fixes
+
+* **algo:** cross a plane face's curved edges on the curves when trimming a NURBS section ([#2241](https://github.com/andymai/brepkit/issues/2241)) ([1d28a0a](https://github.com/andymai/brepkit/commit/1d28a0a736f74f386061b6e1f929ca641a714ca8))
+* **operations:** mesh a twisted NURBS face to its twist ([#2245](https://github.com/andymai/brepkit/issues/2245)) ([438ca32](https://github.com/andymai/brepkit/commit/438ca323ac4e3c89f80c14ea832fc6ce2aea5c12))
+
 ## [4.6.10](https://github.com/andymai/brepkit/compare/v4.6.9...v4.6.10) (2026-10-30)
 
 
