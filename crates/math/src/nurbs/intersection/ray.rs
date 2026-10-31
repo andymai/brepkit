@@ -303,6 +303,13 @@ impl RaySurface {
     /// recording the hit when it lands in the leaf. Whether it converged,
     /// in the leaf or out of it: a stall (the ray along the tangent plane
     /// at a step) or no convergence leaves the leaf unsettled.
+    ///
+    /// Where the surface runs fast in its parameters, a unit in the last
+    /// place of `u` or `v` moves the point farther than 1e-12 of the
+    /// surface's size, and Newton stalls short of that. A hit it stalls on
+    /// within four such units is settled there, after Newton has run its
+    /// course; it is one hit with any other that near, and when that is
+    /// farther than `reach` the ray is flagged, its count in doubt.
     fn solve(
         &self,
         leaf: &Patch,
@@ -317,35 +324,18 @@ impl RaySurface {
         );
         let (du, dv) = (self.surface.domain_u(), self.surface.domain_v());
         let mut t = dir.dot(self.surface.evaluate(u, v) - origin);
+        let mut stalled = None;
         for _ in 0..32 {
             let d = self.surface.derivatives(u, v, 1);
             let (s, su, sv) = (d[0][0], d[1][0], d[0][1]);
             let f = s - Vec3::new(origin.x(), origin.y(), origin.z()) - dir * t;
+            if f.length() <= 1e-12 * self.scale {
+                return self.record(leaf, (u, v, t), origin, dir, reach, reach, out);
+            }
+            let spacing = 4.0 * f64::EPSILON * su.length().mul_add(u.abs(), sv.length() * v.abs());
+            stalled = (f.length() <= spacing).then_some((u, v, t, spacing));
             let normal = su.cross(sv);
             let det = -normal.dot(dir);
-            // Where the surface runs fast in its parameters a unit in the
-            // last place of `u` or `v` moves the point farther than the
-            // bound on the patch's size, and Newton stalls short of it. The
-            // unit is the parameter's own: knots near zero are finely spaced.
-            let resolved = 4.0 * f64::EPSILON * su.length().mul_add(u.abs(), sv.length() * v.abs());
-            if f.length() <= (1e-12 * self.scale).max(resolved) {
-                let slack_u = 1e-9 * (du.1 - du.0);
-                let slack_v = 1e-9 * (dv.1 - dv.0);
-                if u < leaf.u.0 - slack_u
-                    || u > leaf.u.1 + slack_u
-                    || v < leaf.v.0 - slack_v
-                    || v > leaf.v.1 + slack_v
-                    || t < -reach
-                {
-                    return true;
-                }
-                out.grazed |= self.second_crossing_near(u, v, dir);
-                let point = origin + dir * t;
-                if !out.hits.iter().any(|h| (h.point - point).length() <= reach) {
-                    out.hits.push(RayHit { u, v, t, point });
-                }
-                return true;
-            }
             if det.abs() <= 1e-300 {
                 break;
             }
@@ -359,7 +349,44 @@ impl RaySurface {
             v = (v + x_v).clamp(dv.0, dv.1);
             t += x_t;
         }
-        false
+        let Some((u, v, t, spacing)) = stalled else {
+            return false;
+        };
+        out.grazed |= spacing > reach;
+        self.record(leaf, (u, v, t), origin, dir, reach, spacing.max(reach), out)
+    }
+
+    /// Record the hit at `(u, v)`, `t` along the ray, when it lies in `leaf`
+    /// and ahead of `origin` by no less than `-reach`, unless one lies
+    /// within `merge` of it. Always settles the leaf.
+    #[allow(clippy::too_many_arguments)]
+    fn record(
+        &self,
+        leaf: &Patch,
+        (u, v, t): (f64, f64, f64),
+        origin: Point3,
+        dir: Vec3,
+        reach: f64,
+        merge: f64,
+        out: &mut RayHits,
+    ) -> bool {
+        let (du, dv) = (self.surface.domain_u(), self.surface.domain_v());
+        let slack_u = 1e-9 * (du.1 - du.0);
+        let slack_v = 1e-9 * (dv.1 - dv.0);
+        if u < leaf.u.0 - slack_u
+            || u > leaf.u.1 + slack_u
+            || v < leaf.v.0 - slack_v
+            || v > leaf.v.1 + slack_v
+            || t < -reach
+        {
+            return true;
+        }
+        out.grazed |= self.second_crossing_near(u, v, dir);
+        let point = origin + dir * t;
+        if !out.hits.iter().any(|h| (h.point - point).length() <= merge) {
+            out.hits.push(RayHit { u, v, t, point });
+        }
+        true
     }
 }
 
@@ -538,20 +565,29 @@ mod tests {
         assert!(RaySurface::new(&s).is_none());
     }
 
-    /// A flat unit patch over [0, 1e-12] in each parameter, crossed slant
-    /// through its middle, where every leaf of its subdivision has a
-    /// corner: one hit, as over the unit square, however small its knots.
+    /// A flat unit patch crossed slant: one hit over [0, 1] in each
+    /// parameter, over [0, 1e-12], and over [2^40, 2^40 + 1], each through
+    /// its middle, where every leaf of its subdivision has a corner. Over
+    /// [2^40, 2^40 + 1] a unit in the last place of a parameter is 2^-12:
+    /// the middle lies on that grid, but (0.50003, 0.50007) does not, and
+    /// its hit, settled no finer, is flagged.
     #[test]
-    fn a_patch_on_a_tiny_knot_domain_is_crossed_once() {
+    fn a_patch_on_a_tiny_or_far_knot_domain_is_crossed_once() {
         let p = Point3::new;
         let corners = vec![
             vec![p(0.0, 0.0, 0.0), p(0.0, 1.0, 0.0)],
             vec![p(1.0, 0.0, 0.0), p(1.0, 1.0, 0.0)],
         ];
         let dir = Vec3::new(0.3, 0.2, -1.0);
-        let origin = p(0.5, 0.5, 0.0) - dir;
-        for scale in [1.0, 1e-12] {
-            let knots = vec![0.0, 0.0, scale, scale];
+        let far = 2.0_f64.powi(40);
+        let middle = p(0.5, 0.5, 0.0);
+        for (lo, hi, through, flagged) in [
+            (0.0, 1.0, middle, false),
+            (0.0, 1e-12, middle, false),
+            (far, far + 1.0, middle, false),
+            (far, far + 1.0, p(0.500_03, 0.500_07, 0.0), true),
+        ] {
+            let knots = vec![lo, lo, hi, hi];
             let s = NurbsSurface::new(
                 1,
                 1,
@@ -561,8 +597,10 @@ mod tests {
                 vec![vec![1.0; 2]; 2],
             )
             .unwrap();
-            let found = RaySurface::new(&s).unwrap().hits(origin, dir, 1e-6);
-            assert_eq!(found.hits.len(), 1, "knots to {scale}: {:?}", found.hits);
+            let found = RaySurface::new(&s).unwrap().hits(through - dir, dir, 1e-6);
+            let case = format!("knots {lo} to {hi} through {through:?}");
+            assert_eq!(found.hits.len(), 1, "{case}: {:?}", found.hits);
+            assert_eq!(found.grazed, flagged, "{case}");
         }
     }
 }
