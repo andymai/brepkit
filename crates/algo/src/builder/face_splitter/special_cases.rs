@@ -8089,7 +8089,7 @@ mod tests {
     /// notch holds its centroid and whose (u, v) polygon, unwrapped from a
     /// sample just past the seam, runs below the domain's start. The point
     /// inside it lies in the L: evaluated unwrapped, past the domain, the
-    /// end span's extrapolation put it at u = -0.218 of a turn, outside.
+    /// end span's extrapolation put it at -0.218 of the u domain, outside.
     #[test]
     fn a_notched_loop_across_a_periodic_seam_samples_on_its_surface() {
         let cyl =
