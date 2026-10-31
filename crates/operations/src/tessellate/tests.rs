@@ -3980,31 +3980,41 @@ fn bilinear(p00: Point3, p10: Point3, p01: Point3, p11: Point3) -> NurbsSurface 
     .unwrap()
 }
 
-/// The saddle S(u, v) = (20u, 20v, 10000(u - 0.5)(v - 0.5)) is steep at its
-/// edges and flattens mid-patch, where its cells stray most. The grid taken
-/// for it at deflection 0.04 holds its middle cells within the deflection.
+/// The saddle S(u, v) = (20u, 20v, 10000(u - c)(v - c)) is steep at its
+/// edges and flattens at (c, c), where its cells stray most: at c = 0.5, and
+/// at c = 0.49609375, whose flattest cell of a 128-wide grid a spread of 64
+/// cells steps over. The grid taken for each at deflection 0.05 holds the
+/// cells about (c, c) within the deflection.
 #[test]
 fn a_saddle_flattening_mid_patch_is_meshed_at_its_middle() {
-    let saddle = bilinear(
-        Point3::new(0.0, 0.0, 2500.0),
-        Point3::new(20.0, 0.0, -2500.0),
-        Point3::new(0.0, 20.0, -2500.0),
-        Point3::new(20.0, 20.0, 2500.0),
-    );
-    let at = |u: f64, v: f64| saddle.evaluate(u, v);
-    let (n_u, n_v) =
-        super::nurbs::untwisted_grid(&at, ((0.0, 1.0), (0.0, 1.0)), (1, 1), 0.04, 1024);
-    #[allow(clippy::cast_precision_loss)]
-    let (du, dv) = (1.0 / n_u as f64, 1.0 / n_v as f64);
-    let worst = (n_u / 2 - 2..n_u / 2 + 2)
-        .flat_map(|i| (n_v / 2 - 2..n_v / 2 + 2).map(move |j| (i, j)))
-        .map(|(i, j)| {
-            #[allow(clippy::cast_precision_loss)]
-            let corner = (du * i as f64, dv * j as f64);
-            cell_strays(&at, corner, (du, dv))
-        })
-        .fold(0.0_f64, f64::max);
-    assert!(worst <= 0.04, "{n_u} x {n_v}: a middle cell strays {worst}");
+    for c in [0.5_f64, 0.496_093_75] {
+        let z = |u: f64, v: f64| 10000.0 * (u - c) * (v - c);
+        let saddle = bilinear(
+            Point3::new(0.0, 0.0, z(0.0, 0.0)),
+            Point3::new(20.0, 0.0, z(1.0, 0.0)),
+            Point3::new(0.0, 20.0, z(0.0, 1.0)),
+            Point3::new(20.0, 20.0, z(1.0, 1.0)),
+        );
+        let at = |u: f64, v: f64| saddle.evaluate(u, v);
+        let (n_u, n_v) =
+            super::nurbs::untwisted_grid(&at, ((0.0, 1.0), (0.0, 1.0)), (1, 1), 0.05, 1024);
+        #[allow(clippy::cast_precision_loss)]
+        let (du, dv) = (1.0 / n_u as f64, 1.0 / n_v as f64);
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let (ci, cj) = ((c / du) as usize, (c / dv) as usize);
+        let worst = (ci - 2..ci + 3)
+            .flat_map(|i| (cj - 2..cj + 3).map(move |j| (i, j)))
+            .map(|(i, j)| {
+                #[allow(clippy::cast_precision_loss)]
+                let corner = (du * i as f64, dv * j as f64);
+                cell_strays(&at, corner, (du, dv))
+            })
+            .fold(0.0_f64, f64::max);
+        assert!(
+            worst <= 0.05,
+            "c = {c}, {n_u} x {n_v}: a cell strays {worst}"
+        );
+    }
 }
 
 /// The patch S(u, v) = (20u(1 - 0.99v), 20v, 0.2uv) tapers from 20 wide to

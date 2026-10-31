@@ -927,40 +927,39 @@ pub(super) fn untwisted_grid(
     deflection: f64,
     max_divisions: usize,
 ) -> (usize, usize) {
-    // Every cell of a grid up to 64 a side; past that, 64 a side spread over
-    // it, the first and last included. A cell's error follows the patch's
-    // own shape, so its worst cell lies near one of those: at a taper's
-    // narrow end, or mid-patch where a saddle flattens.
-    const SAMPLES: usize = 64;
-    let spread = |n: usize| {
-        let cells = n.min(SAMPLES);
-        (0..cells).map(move |k| {
-            if cells > 1 {
-                k * (n - 1) / (cells - 1)
-            } else {
-                0
-            }
-        })
-    };
+    // Every cell is checked: a patch's worst cell can sit anywhere, at a
+    // taper's narrow end or wherever a saddle flattens, and a spread of cells
+    // can step over it. The check stops at the first cell that fails.
     let fits = |n_u: usize, n_v: usize| {
         #[allow(clippy::cast_precision_loss)]
         let (du, dv) = ((u_hi - u_lo) / n_u as f64, (v_hi - v_lo) / n_v as f64);
-        spread(n_u).all(|i| {
-            spread(n_v).all(|j| {
+        (0..n_u).all(|i| {
+            (0..n_v).all(|j| {
                 #[allow(clippy::cast_precision_loss)]
                 let corner = (du.mul_add(i as f64, u_lo), dv.mul_add(j as f64, v_lo));
                 cell_twist(at, corner, (du, dv)) <= 0.5 * deflection
             })
         })
     };
-    while !fits(n_u, n_v) {
+    let mut refined = false;
+    loop {
         let next = ((n_u * 2).min(max_divisions), (n_v * 2).min(max_divisions));
         // The twist never takes cells past the grid's budget: a grid capped
-        // down to it gives up the divisions the chord test asked for.
+        // down to it gives up the divisions the chord test asked for. Short of
+        // a grid it could move to, it checks nothing.
         if next == (n_u, n_v) || next.0 * next.1 > GRID_MAX_CELLS {
+            if refined {
+                log::warn!(
+                    "twisted NURBS grid stops at {n_u} x {n_v} cells, its budget; it may stand off its surface by more than the requested deflection"
+                );
+            }
+            break;
+        }
+        if fits(n_u, n_v) {
             break;
         }
         (n_u, n_v) = next;
+        refined = true;
     }
     (n_u, n_v)
 }
