@@ -811,9 +811,13 @@ fn whole_torus_less_holes(
 /// surface's `(u, v)` domain directly, in panels between its knots. Green's
 /// theorem along its boundary comes to the same through a projection of
 /// every boundary point, which a face cut from nothing need not pay for: a
-/// sweep tiles its tube with hundreds of such patches. `None` unless the
-/// face has no holes and its wire runs along the domain's four sides, each
-/// edge from one corner to the next.
+/// sweep tiles its tube with hundreds of such patches. Taken only where the
+/// face is shown to be the whole surface: no holes, and its wire straight
+/// edges from one corner of the domain to the next, each side of the
+/// surface shown straight by its control points lying on its edge. The
+/// surface is polynomial with clamped knots, so its sides are the outer rows
+/// of its control points, which bound them, and its integrands are smooth
+/// in each panel. `None` for any other face.
 pub(super) fn nurbs_face_over_domain(
     topo: &Topology,
     face: &Face,
@@ -821,58 +825,68 @@ pub(super) fn nurbs_face_over_domain(
     about: Vec3,
 ) -> Result<Option<FaceContribution>, CheckError> {
     const DEPTH: u32 = 24;
-    const SAMPLES: u32 = 16;
     let FaceSurface::Nurbs(s) = face.surface() else {
         return Ok(None);
     };
-    if !face.inner_wires().is_empty() || !open_and_poleless(s) {
+    let clamped = |knots: &[f64], degree: usize| {
+        knots.len() > 2 * degree + 1
+            && knots[..=degree]
+                .iter()
+                .all(|&k| k.to_bits() == knots[0].to_bits())
+            && knots[knots.len() - degree - 1..]
+                .iter()
+                .all(|&k| k.to_bits() == knots[knots.len() - 1].to_bits())
+    };
+    if !face.inner_wires().is_empty()
+        || s.is_rational()
+        || !clamped(s.knots_u(), s.degree_u())
+        || !clamped(s.knots_v(), s.degree_v())
+        || !open_and_poleless(s)
+    {
         return Ok(None);
     }
-    let (u0, u1) = s.domain_u();
-    let (v0, v1) = s.domain_v();
-    let corners = [
-        s.evaluate(u0, v0),
-        s.evaluate(u1, v0),
-        s.evaluate(u1, v1),
-        s.evaluate(u0, v1),
-    ];
-    let size = (corners[2] - corners[0])
-        .length()
-        .max((corners[1] - corners[3]).length());
-    let reach = 1e-6 * size.max(1.0);
+    let cps = s.control_points();
+    let (nu, nv) = (cps.len(), cps.first().map_or(0, Vec::len));
+    if nu < 2 || nv < 2 {
+        return Ok(None);
+    }
     // Side `k` runs from corner `k` to the next, along `v = v0`, `u = u1`,
-    // `v = v1` and `u = u0` in turn.
-    let along_side = |k: usize, w: f64| match k {
-        0 => s.evaluate((u1 - u0).mul_add(w, u0), v0),
-        1 => s.evaluate(u1, (v1 - v0).mul_add(w, v0)),
-        2 => s.evaluate((u1 - u0).mul_add(w, u0), v1),
-        _ => s.evaluate(u0, (v1 - v0).mul_add(w, v0)),
-    };
-    // The distance from `p` to side `k`, its nearest sample refined by
-    // golden section between the samples either side.
-    let off_side = |k: usize, p: Point3| {
-        let at = |w: f64| (along_side(k, w) - p).length();
-        let step = 1.0 / f64::from(SAMPLES);
-        let nearest = (0..=SAMPLES)
-            .map(|i| f64::from(i) * step)
-            .min_by(|a, b| at(*a).total_cmp(&at(*b)))
-            .unwrap_or(0.0);
-        let (mut lo, mut hi) = ((nearest - step).max(0.0), (nearest + step).min(1.0));
-        let ratio = 0.5 * (5.0_f64.sqrt() - 1.0);
-        for _ in 0..60 {
-            let (a, b) = (hi - ratio * (hi - lo), lo + ratio * (hi - lo));
-            if at(a) < at(b) {
-                hi = b;
-            } else {
-                lo = a;
-            }
+    // `v = v1` and `u = u0` in turn, its control points the outer row there.
+    let corners = [
+        cps[0][0],
+        cps[nu - 1][0],
+        cps[nu - 1][nv - 1],
+        cps[0][nv - 1],
+    ];
+    let side = |k: usize| -> Vec<Point3> {
+        match k {
+            0 => (0..nu).map(|i| cps[i][0]).collect(),
+            1 => (0..nv).map(|j| cps[nu - 1][j]).collect(),
+            2 => (0..nu).map(|i| cps[i][nv - 1]).collect(),
+            _ => (0..nv).map(|j| cps[0][j]).collect(),
         }
-        at(f64::midpoint(lo, hi))
+    };
+    // Matched to the shortest side: a tolerance taken from the whole patch
+    // would let a long thin one's trim pass for its side.
+    let shortest = (0..4)
+        .map(|k| (corners[(k + 1) % 4] - corners[k]).length())
+        .fold(f64::INFINITY, f64::min);
+    if !shortest.is_finite() || shortest <= 0.0 {
+        return Ok(None);
+    }
+    let reach = 1e-9 * shortest;
+    let on_segment = |p: Point3, a: Point3, b: Point3| {
+        let (ab, ap) = (b - a, p - a);
+        let w = (ap.dot(ab) / ab.dot(ab)).clamp(0.0, 1.0);
+        (ap - ab * w).length() <= reach
     };
     let corner_of = |p: Point3| corners.iter().position(|&c| (c - p).length() <= reach);
     let mut covered = [false; 4];
     for oe in topo.wire(face.outer_wire())?.edges() {
         let edge = topo.edge(oe.edge())?;
+        if !matches!(edge.curve(), EdgeCurve::Line) {
+            return Ok(None);
+        }
         let (a, b) = (
             topo.vertex(edge.start())?.point(),
             topo.vertex(edge.end())?.point(),
@@ -880,49 +894,37 @@ pub(super) fn nurbs_face_over_domain(
         let (Some(i), Some(j)) = (corner_of(a), corner_of(b)) else {
             return Ok(None);
         };
-        let side = if (i + 1) % 4 == j {
+        let k = if (i + 1) % 4 == j {
             i
         } else if (j + 1) % 4 == i {
             j
         } else {
             return Ok(None);
         };
-        // A straight edge is its side where the side is straight: a few
-        // of the side's points on the edge, and the edge's middle on the
-        // side. Another edge is read at its middle.
-        let runs_along = if matches!(edge.curve(), EdgeCurve::Line) {
-            let segment = |p: Point3| {
-                let (ab, ap) = (b - a, p - a);
-                let w = (ap.dot(ab) / ab.dot(ab).max(f64::MIN_POSITIVE)).clamp(0.0, 1.0);
-                (ap - ab * w).length()
-            };
-            [0.25, 0.5, 0.75]
-                .iter()
-                .all(|&w| segment(along_side(side, w)) <= reach)
-        } else {
-            let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
-            let middle = edge
-                .curve()
-                .evaluate_with_endpoints(f64::midpoint(t0, t1), a, b);
-            off_side(side, middle) <= reach
-        };
-        if !runs_along {
+        if !side(k).iter().all(|&p| on_segment(p, a, b)) {
             return Ok(None);
         }
-        covered[side] = true;
+        covered[k] = true;
     }
     if !covered.iter().all(|&c| c) {
         return Ok(None);
     }
+    let (u0, u1) = s.domain_u();
+    let (v0, v1) = s.domain_v();
+    // Every distinct knot cuts: a span however short can hold a share of
+    // the surface.
     let cuts = |knots: &[f64], lo: f64, hi: f64| {
         let mut c: Vec<f64> = std::iter::once(lo)
             .chain(knots.iter().copied().filter(|&k| k > lo && k < hi))
             .chain(std::iter::once(hi))
             .collect();
-        c.dedup_by(|a, b| (*a - *b).abs() <= 1e-12 * (hi - lo));
+        c.dedup_by(|a, b| a.to_bits() == b.to_bits());
         c
     };
     let (u_cuts, v_cuts) = (cuts(s.knots_u(), u0, u1), cuts(s.knots_v(), v0, v1));
+    let size = (corners[2] - corners[0])
+        .length()
+        .max((corners[1] - corners[3]).length());
     let floor = 1e-14 * size.powi(3);
     // The volume's integrand is a polynomial of a few times the surface's
     // degree in each parameter; each panel is halved until it settles, so
