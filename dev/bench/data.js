@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793468271504,
+  "lastUpdate": 1793469829225,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -63395,6 +63395,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 28909001,
             "range": "± 129274",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ca096cb2d7d7844888baf061b0faca598964d691",
+          "message": "fix(wasm): loft a profile's sides as an open shell when asked for solid: false (#2257)\n\n`loftWithOptions` with `\"solid\": false` now returns the loft's faces\nwithout its caps, as a shell handle, and sewing faces into a solid now\norients them. brepjs lofts each loop of a holed profile open and sews\nthe pieces to two holed caps; a square of side 10 holed by a circle of\nradius 2, lofted 10 up that way, now holds (100 - 4π) · 10 = 874.336.\n\nToday the binding reads `ruled`, `startPoint` and `endPoint` but not\n`solid`, so every loft comes back capped and the sewn caps land twice\n(#2246).\n\n## Change\n\n- `loft::loft_sides` returns a loft's faces less its caps, as an open\nshell. A cap is a face every corner of which lies, to the construction\ntolerance of 1e-7, on an end profile's surface or on its boundary, where\na cap filled flat across a curved profile or laid on chords of its rim\nstill has its corners; every other face of a loft has a corner on the\nnext section. `loftWithOptions` calls it for `\"solid\": false`. A profile\nthe loft carries on to `startPoint` or `endPoint` is no end.\n- `sew_faces` now orients what it sews. A plane whose outer wire winds\nclockwise about its normal first takes the normal its wire gives it.\nThen every face takes the first face's sense across their shared edges\n(`propagate_orientation`), and all of them turn over if they close with\na negative signed volume. A circle's open loft faces away from its axis;\nsewn in as the hole's wall without this, it read the hole as material\nand the holed square came to 1041.888.\n- `sew_faces` is called only by the wasm sewing bindings (`sewFaces`,\n`makeSolid` and the others in `heal.rs`, and the batch dispatcher).\nFaces that already agree and face outward are left as they were.\n\n## Tests\n\n- `an_open_loft_of_each_loop_sews_to_holed_caps` (wasm): the square's\nopen loft is its 4 sides and the circle's its 1 wall; sewn to the holed\ncaps they hold 874.336 to 1e-6. Without the orientation step the same\ntest reads 1041.888.\n- `sewn_faces_face_out_of_what_they_close`: a box of 2 by 3 by 4 with\none face, then all six, turned inside out sews to a solid whose signed\nvolume is 24.\n- `sew_six_cube_faces`, whose quads partly wind against their normals,\nnow also holds a signed volume of 1, which it fails without the planes\ntaking their wires' normals.\n- `a_lofts_sides_are_its_faces_less_its_caps`: the loft of two\nsphere-surfaced sections with a flat diamond boundary, whose flat caps\nleave the spheres, and a loft of squares 1e-6 apart each come to their\nfour sides. Rims of radius 3 on spheres of radius 5 loft with caps on\nchords of the rims, and come to the loft's faces less those two; read by\nedge samples, the chord caps stayed.\n- The sew and loft tests in `brepkit-operations` (78) and all of\n`brepkit-wasm`'s (262) pass.\n\nFixes #2246",
+          "timestamp": "2026-10-31T18:00:34Z",
+          "tree_id": "62e9cfaa7383bfa1e815ea754136fec1948b10e2",
+          "url": "https://github.com/andymai/brepkit/commit/ca096cb2d7d7844888baf061b0faca598964d691"
+        },
+        "date": 1793469821172,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1105661,
+            "range": "± 3814",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1182249,
+            "range": "± 1842",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12965,
+            "range": "± 38",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 670941,
+            "range": "± 1610",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 29371974,
+            "range": "± 49118",
             "unit": "ns/iter"
           }
         ]
