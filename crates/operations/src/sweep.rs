@@ -179,9 +179,17 @@ fn profile_basis(input_normal: Vec3) -> (Vec3, Vec3, Vec3) {
 
 /// Project `v` to be perpendicular to `tangent`, then normalize.
 ///
-/// Falls back to a world-axis-based vector if the projection is degenerate.
+/// Falls back to a world-axis-based vector if the projection is degenerate:
+/// `v` along `tangent` leaves only rounding, which would normalize to a
+/// direction off the perpendicular plane.
 fn orthogonalize(v: Vec3, tangent: Vec3) -> Vec3 {
     let projected = v - tangent * tangent.dot(v);
+    let degenerate = projected.length() <= 1e-9 * v.length();
+    let projected = if degenerate {
+        Vec3::new(0.0, 0.0, 0.0)
+    } else {
+        projected
+    };
     projected.normalize().unwrap_or_else(|_| {
         // Fallback: pick a world axis that isn't parallel to the tangent.
         let candidate = if tangent.x().abs() < 0.9 {
@@ -1426,6 +1434,15 @@ pub fn sweep_with_options(
         return Ok(solid);
     }
 
+    // A smooth path with a planar profile sweeps each profile edge on its own
+    // curve. A kink has no single section in smooth mode, and a non-planar
+    // profile no plane cap, so those keep the ring-by-ring sweep below.
+    if detect_kinks(path).is_empty()
+        && let Some(solid) = exact::sweep_exact(topo, profile, path, options)?
+    {
+        return Ok(solid);
+    }
+
     let input_wire = topo.wire(input_wire_id)?;
     let original_oriented: Vec<_> = input_wire.edges().to_vec();
 
@@ -2535,6 +2552,7 @@ pub fn sweep_guided(
     )
 }
 
+mod exact;
 mod spine;
 
 /// `curve` from parameter `t0` to `t1`, traced backward when `t1 < t0`,
