@@ -39,46 +39,58 @@ const CUT_VOLUME: f64 = 58_189.792_027_939_23;
 
 #[test]
 fn a_keyway_tangent_to_a_rod_cuts_exactly_wherever_its_seam_lies() {
-    for tool in ["keyway_tool.bin", "keyway_tool_nudged.bin"] {
-        for spin in [0.0_f64, 1.0, 10.0, 17.0, 30.0, 90.0, 180.0, 359.0] {
-            let mut topo = Topology::new();
-            let rod = std::fs::read(fixture("keyway_rod.bin")).unwrap();
-            let key = std::fs::read(fixture(tool)).unwrap();
-            let rod = deserialize_solid(&rod, &mut topo).unwrap();
-            let key = deserialize_solid(&key, &mut topo).unwrap();
-            // Turning the rod about its axis moves only its seam.
-            transform_solid(&mut topo, rod, &Mat4::rotation_z(spin.to_radians())).unwrap();
+    // At a hundredth of the size the rim arcs still stand 0.0062 off the rod,
+    // far past the weld scale.
+    for (tool, size, spin) in ["keyway_tool.bin", "keyway_tool_nudged.bin"]
+        .into_iter()
+        .flat_map(|tool| [1.0_f64, 0.01].map(|size| (tool, size)))
+        .flat_map(|(tool, size)| {
+            [0.0_f64, 1.0, 10.0, 17.0, 30.0, 90.0, 180.0, 359.0].map(|spin| (tool, size, spin))
+        })
+    {
+        let mut topo = Topology::new();
+        let rod = std::fs::read(fixture("keyway_rod.bin")).unwrap();
+        let key = std::fs::read(fixture(tool)).unwrap();
+        let rod = deserialize_solid(&rod, &mut topo).unwrap();
+        let key = deserialize_solid(&key, &mut topo).unwrap();
+        // Turning the rod about its axis moves only its seam.
+        transform_solid(&mut topo, rod, &Mat4::rotation_z(spin.to_radians())).unwrap();
+        let shrink = Mat4::scale(size, size, size);
+        transform_solid(&mut topo, rod, &shrink).unwrap();
+        transform_solid(&mut topo, key, &shrink).unwrap();
 
-            let before = mesh_fallback_count();
-            let cut = boolean(&mut topo, BooleanOp::Cut, rod, key).unwrap();
-            let case = format!("{tool}, seam at {spin} degrees");
-            assert_eq!(mesh_fallback_count(), before, "{case}: mesh fallback");
-            assert_eq!(solid_faces(&topo, cut).unwrap().len(), 8, "{case}");
-            let report = validate_solid(&topo, cut).unwrap();
-            assert!(report.is_valid(), "{case}: {:?}", report.issues);
-            let volume = solid_volume(&topo, cut, 0.001).unwrap();
-            assert!(
-                (volume - CUT_VOLUME).abs() < 1e-6 * CUT_VOLUME,
-                "{case}: volume {volume}"
+        let before = mesh_fallback_count();
+        let cut = boolean(&mut topo, BooleanOp::Cut, rod, key).unwrap();
+        let case = format!("{tool} at size {size}, seam at {spin} degrees");
+        assert_eq!(mesh_fallback_count(), before, "{case}: mesh fallback");
+        assert_eq!(solid_faces(&topo, cut).unwrap().len(), 8, "{case}");
+        let report = validate_solid(&topo, cut).unwrap();
+        assert!(report.is_valid(), "{case}: {:?}", report.issues);
+        let volume = solid_volume(&topo, cut, 0.001 * size).unwrap();
+        let want = CUT_VOLUME * size.powi(3);
+        assert!(
+            (volume - want).abs() < 1e-6 * want,
+            "{case}: volume {volume}"
+        );
+        let classify = |x: f64, y: f64, z: f64| {
+            let p = Point3::new(x * size, y * size, z * size);
+            classify_point(&topo, cut, p, 0.0, 1e-7).unwrap()
+        };
+        // In the slot, in the slot beside a rounded end, and out in the
+        // rod past the end's bulge.
+        for (x, y, z) in [(11.0, 0.0, 60.0), (12.4, 0.0, 60.0), (11.0, 3.9, 46.0)] {
+            assert_eq!(
+                classify(x, y, z),
+                PointClassification::Outside,
+                "{case}: ({x}, {y}, {z})"
             );
-            let classify =
-                |x, y, z| classify_point(&topo, cut, Point3::new(x, y, z), 0.0, 1e-7).unwrap();
-            // In the slot, in the slot beside a rounded end, and out in the
-            // rod past the end's bulge.
-            for (x, y, z) in [(11.0, 0.0, 60.0), (12.4, 0.0, 60.0), (11.0, 3.9, 46.0)] {
-                assert_eq!(
-                    classify(x, y, z),
-                    PointClassification::Outside,
-                    "{case}: ({x}, {y}, {z})"
-                );
-            }
-            for (x, y, z) in [(5.0, 0.0, 60.0), (11.0, 0.0, 46.0), (12.4, 0.0, 47.0)] {
-                assert_eq!(
-                    classify(x, y, z),
-                    PointClassification::Inside,
-                    "{case}: ({x}, {y}, {z})"
-                );
-            }
+        }
+        for (x, y, z) in [(5.0, 0.0, 60.0), (11.0, 0.0, 46.0), (12.4, 0.0, 47.0)] {
+            assert_eq!(
+                classify(x, y, z),
+                PointClassification::Inside,
+                "{case}: ({x}, {y}, {z})"
+            );
         }
     }
 }
