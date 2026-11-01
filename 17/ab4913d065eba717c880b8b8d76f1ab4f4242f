@@ -1,0 +1,22 @@
+crates/operations/src/sweep.rs
+  s_489facd0569909::t_aa8bd6145a249c 167-178,185-188,193,195,198-242,244-246,252-254,277,279-300,306
+crates/operations/tests/sweep_on_the_profiles_own_curves.rs
+  s_489facd0569909::t_780d25d2ada3a1 593-600,605-618,640-642,687,766-806
+  s_489facd0569909::t_79fdb3aa3662ac 807-808
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "17ab4913d065eba717c880b8b8d76f1ab4f4242f",
+  "prompts": {},
+  "sessions": {
+    "s_489facd0569909": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c29f5475-80ce-4718-819f-3b43541bee54",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
