@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793532041586,
+  "lastUpdate": 1793540478990,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -64313,6 +64313,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 29629989,
             "range": "± 419907",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "2a921f3cee591d6ef179abd5f782b67d52d7d2cd",
+          "message": "fix(algo): cut a keyway whose outer face is tangent to the rod exactly (#2272)\n\nThe keyway cut in #2166's last row is now exact. A slot 8 wide from z =\n45 to 75, its ends curving in as half circles of radius 4, extruded from\nx = 8.5 to 12.5 and cut from a rod of radius 12.5, gives 8 faces holding\n58189.792, the cut's closed form. `main` falls back to a mesh of 122\nfaces holding 58113.763, whether the arcs' mid points are exact or\n4.9e-16 off as brepjs leaves them. The slot's outer face lies in the\nplane tangent to the rod along y = 0.\n\nTwo faults broke it, each on its own depending on where the rod's seam\nlies:\n\n- Each rounded end of the slot is half a turn of a cylinder, so all its\nvertices sit on two rulings half a turn apart. The face splitter lays a\npartial band out in the period that starts after the widest gap between\nits edges' ends in u; here the two gaps are equal, and rounding chose.\nFor the exact keyway, with the rod turned 30, 90 or 180 degrees, it\nchose the half the face does not cover, so the end's outer piece was\nsampled inside the rod and kept.\n- The outer face's rim arcs touch the rod only where they cross the\ntangent line, and leave it quadratically: one end of each half arc sits\n0.624 off the rod, at a chord of 5.66. The in-face test for an edge that\nmeets a face keeps a curved piece lying within 20% of its chord of the\nface, so the arcs went into the rod's wall as sections lying on it.\n\n## Change\n\n- A partial band's window starts at the low end of its outline's u,\nwhere the boundary walk laid the outline out in one unbroken run wider\nthan nothing and narrower than a period. Any other boundary keeps the\nwidest-gap rule, among them a whole ring's seam placeholders, which all\nsit at one u (taking their u as the window hung\n`ray_index_matches_full_scan`'s torus grid).\n- A circle or ellipse piece on a cylinder, cone, sphere or torus lies in\nthe face only within the weld scale (`MAX_WIDEN`, 1e-3) as well as the\nratio, as a straight piece on a plane already does: both are exact\ngeometry on an exact surface, so a piece that truly lies there passes,\nand one that only touches it is refused once it stands farther off than\nfit error could put it, whatever its ratio to its chord. Other curved\npieces (a NURBS curve on any face, a conic on a plane or a NURBS face)\nkeep the ratio alone.\n\n## Tests\n\n- `a_keyway_tangent_to_a_rod_cuts_exactly_wherever_its_seam_lies` (io):\nthe rod and both keyways as brepjs builds them on brepkit-wasm 4.6.9,\ncaptured as arena files, at full size and at a hundredth of it, with the\nrod turned about its axis so its seam lies on the tangent line, 1, 10 or\n17 degrees off it inside the slot's opening, or at 30, 90, 180 or 359\ndegrees. Every cut is valid, has 8 faces, holds the closed form to 1e-6,\nand classifies points in the slot, beside its rounded ends and in the\nrod as it should.\n- Without the window change, the cut with the seam at 30 degrees falls\nback; without the in-face change, the one with the seam on the tangent\nline does. With a fixed ceiling of 1e-2 in place of the weld scale, the\nhundredth-size cut with the seam at 1 degree falls back: its rim arcs\nstand 0.0062 off the rod.\n- The algo, operations, io and wasm crates' 2728 tests pass.\n- The pose sweep and truth audit outputs are identical to `main`'s.\n\nOn this branch all seven rows of #2166 are exact, rows 4 and 5 through\n#2269.\n\nFixes #2166",
+          "timestamp": "2026-11-01T13:38:24Z",
+          "tree_id": "577800578588afa1ac0bf60514a218cc7eea2848",
+          "url": "https://github.com/andymai/brepkit/commit/2a921f3cee591d6ef179abd5f782b67d52d7d2cd"
+        },
+        "date": 1793540469204,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 675955,
+            "range": "± 6386",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 738091,
+            "range": "± 77968",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 8892,
+            "range": "± 198",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 418339,
+            "range": "± 2139",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 18816921,
+            "range": "± 113205",
             "unit": "ns/iter"
           }
         ]
