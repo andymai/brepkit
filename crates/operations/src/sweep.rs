@@ -159,23 +159,16 @@ fn frames_at(
     Ok(frames)
 }
 
-/// The profile's own orthonormal basis `(right, up, tangent)` for mapping its 2D
-/// shape onto the path's perpendicular plane.
-///
-/// `tangent` is the profile normal, so a planar profile has ~zero tangent
-/// component and is mapped entirely into `right`/`up`; the profile is then swept
-/// perpendicular to the path regardless of how its plane was oriented relative
-/// to the path (an edge-on profile no longer collapses to a flat ribbon). For a
-/// profile already perpendicular to the path this equals the path frame's basis,
-/// leaving such sweeps unchanged.
 /// The centroid of the region `profile` bounds, in the plane of `r` and `u`
 /// through `origin`, by Green's theorem along its wires' own curves: the
 /// outer wire's region adds and each hole's takes away, whichever way it
 /// runs. No mean of points along the boundary would do: samples or cuts
 /// crowd where a curve's parameter runs slow, and an edge held as a NURBS
 /// would pull the centre its way. A line is taken in closed form; a curve
-/// span by span, each halved until its integrals settle. `None` for a region
-/// of no area, or a span that does not settle.
+/// span by span, each halved until its integrals settle, each to its own
+/// scale (an area and two moments a length apart). `None` for a region of no
+/// area, a span that does not settle, or a boundary that leaves the plane,
+/// whose centre off it would hang on the point the plane was taken through.
 pub(crate) fn region_centroid(
     topo: &Topology,
     profile: FaceId,
@@ -187,8 +180,28 @@ pub(crate) fn region_centroid(
         .chain(face.inner_wires().iter().copied())
         .collect();
     let rule = brepkit_math::quadrature::gauss_legendre_points(8);
+    let normal = r.cross(u);
+    // The boundary's reach from `origin`, its control points bounding its
+    // curves, and how far it strays from the plane.
+    let mut size = 0.0_f64;
+    for &wid in &wires {
+        for oe in topo.wire(wid)?.edges() {
+            let edge = topo.edge(oe.edge())?;
+            for v in [edge.start(), edge.end()] {
+                size = size.max((topo.vertex(v)?.point() - origin).length());
+            }
+            if let EdgeCurve::NurbsCurve(c) = edge.curve() {
+                for &q in c.control_points() {
+                    size = size.max((q - origin).length());
+                }
+            }
+        }
+    }
+    let size = size.max(f64::MIN_POSITIVE);
+    let stray = std::cell::Cell::new(0.0_f64);
     let plane = |p: Point3| {
         let d = p - origin;
+        stray.set(stray.get().max(d.dot(normal).abs()));
         (d.dot(r), d.dot(u))
     };
     // `x dy`, `x^2 dy / 2` and `-y^2 dx / 2` along a curve over `[a, b]`.
@@ -209,7 +222,9 @@ pub(crate) fn region_centroid(
     let mut total = [0.0_f64; 3];
     for (wi, &wid) in wires.iter().enumerate() {
         let mut acc = [0.0_f64; 3];
-        let scale = std::cell::Cell::new(0.0_f64);
+        // Each integral's scale: the most it has read on a span, and never
+        // less than the region's size to its own power.
+        let scale = std::cell::Cell::new([size * size, size * size * size, size * size * size]);
         for oe in topo.wire(wid)?.edges() {
             let edge = topo.edge(oe.edge())?;
             let (from, to) = (
@@ -236,11 +251,14 @@ pub(crate) fn region_centroid(
                 while let Some((a, b, whole, depth)) = stack.pop() {
                     let m = f64::midpoint(a, b);
                     let (left, right) = (over(&curve, a, m), over(&curve, m, b));
-                    let size = whole.iter().fold(0.0_f64, |s, x| s.max(x.abs()));
-                    scale.set(scale.get().max(size));
-                    let gap =
-                        (0..3).fold(0.0_f64, |g, k| g.max((left[k] + right[k] - whole[k]).abs()));
-                    if gap <= 1e-12 * scale.get().max(size) {
+                    let mut seen = scale.get();
+                    for (s, w) in seen.iter_mut().zip(whole) {
+                        *s = s.max(w.abs());
+                    }
+                    scale.set(seen);
+                    let settled =
+                        (0..3).all(|k| (left[k] + right[k] - whole[k]).abs() <= 1e-12 * seen[k]);
+                    if settled {
                         for k in 0..3 {
                             acc[k] += left[k] + right[k];
                         }
@@ -262,7 +280,11 @@ pub(crate) fn region_centroid(
             *t += sign * a;
         }
     }
-    if !(total[0].abs() > 0.0 && total.iter().all(|x| x.is_finite())) {
+    // The plane the exact sweep reads a profile in: within ten linear
+    // tolerances and 1e-9 of its reach.
+    if stray.get() > 10.0f64.mul_add(Tolerance::new().linear, 1e-9 * size)
+        || !(total[0].abs() > 0.0 && total.iter().all(|x| x.is_finite()))
+    {
         return Ok(None);
     }
     Ok(Some(
@@ -270,6 +292,15 @@ pub(crate) fn region_centroid(
     ))
 }
 
+/// The profile's own orthonormal basis `(right, up, tangent)` for mapping its 2D
+/// shape onto the path's perpendicular plane.
+///
+/// `tangent` is the profile normal, so a planar profile has ~zero tangent
+/// component and is mapped entirely into `right`/`up`; the profile is then swept
+/// perpendicular to the path regardless of how its plane was oriented relative
+/// to the path (an edge-on profile no longer collapses to a flat ribbon). For a
+/// profile already perpendicular to the path this equals the path frame's basis,
+/// leaving such sweeps unchanged.
 fn profile_basis(input_normal: Vec3) -> (Vec3, Vec3, Vec3) {
     let tangent = input_normal
         .normalize()

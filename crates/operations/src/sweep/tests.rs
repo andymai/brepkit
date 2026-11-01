@@ -2591,3 +2591,38 @@ fn a_chain_through_crowded_knots_sweeps() {
             .is_valid()
     );
 }
+
+/// The saddle profile, which leaves any plane, swept one turn round a helix
+/// with its centre on the path: its wire read from its first corner or from
+/// its second, the coil lands in one place. A centroid taken in a plane
+/// through the wire's first point would carry that point's height off it.
+#[test]
+fn a_saddle_profiles_centre_on_a_helix_does_not_hang_on_where_its_wire_starts() {
+    let coil = |turn: usize| {
+        let mut topo = Topology::new();
+        let saddle = crate::test_helpers::make_saddle_profile(&mut topo, 2.0);
+        let face = topo.face(saddle).unwrap();
+        let surface = face.surface().clone();
+        let mut edges = topo.wire(face.outer_wire()).unwrap().edges().to_vec();
+        edges.rotate_left(turn);
+        let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+        let profile = topo.add_face(Face::new(wire, vec![], surface));
+        let solid = crate::helix::helical_sweep(
+            &mut topo,
+            profile,
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            20.0,
+            8.0,
+            1.0,
+            8,
+        )
+        .unwrap();
+        crate::measure::solid_bounding_box(&topo, solid).unwrap()
+    };
+    let (first, second) = (coil(0), coil(1));
+    let off = (first.min - second.min)
+        .length()
+        .max((first.max - second.max).length());
+    assert!(off < 1e-9, "the coils' boxes differ by {off}");
+}
