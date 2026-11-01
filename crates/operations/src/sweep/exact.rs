@@ -229,8 +229,16 @@ pub(super) fn sweep_exact(
             [first[0].right, first[0].up, first[0].tangent],
         ),
         ProfilePlacement::CentroidOnPath => {
+            // The outer loop's corners, each piece's start, as the
+            // ring-by-ring sweep reads them: the samples crowd a curved edge,
+            // and an edge held as a NURBS would pull the centre its way.
             let (r, u, t) = profile_basis(input_normal);
-            (crate::winding::polygon_centroid(&samples[0]), [r, u, t])
+            let corners: Vec<Point3> = loops[0]
+                .edges
+                .iter()
+                .map(|le| le.span.evaluate(le.span.domain().0))
+                .collect();
+            (crate::winding::polygon_centroid(&corners), [r, u, t])
         }
     };
     let maps_for = |ts: &[f64]| -> Result<Vec<Mat4>, crate::OperationsError> {
@@ -557,7 +565,7 @@ type SectionMaps<'a> = dyn Fn(&[f64]) -> Result<Vec<Mat4>, crate::OperationsErro
 /// set of path parameters and checked halfway between them. The path is cut
 /// at `breaks`, where the path or guide may bend in its parameter, and each
 /// piece is fitted on its own and joined to the next at their shared point.
-/// The pieces' samples grow until every trajectory holds within the fit
+/// The pieces' samples double until every trajectory holds within the fit
 /// tolerance or the path reaches [`MAX_SEGMENTS`]. Trajectories that all run
 /// straight at an even pace come back as lines. Also the section maps at the
 /// path's two ends.
@@ -586,11 +594,6 @@ fn fit_trajectories(
     let mut total = min_segments.max(2);
     let mut fit_tol: Option<f64> = None;
     let mut last_count = 0;
-    // Every sample of a fit that missed, and every midpoint it missed:
-    // samples that grow by other than doubling move off a narrow feature
-    // either found, so each later fit, straight or cubic, is held there too.
-    let mut witnesses: Vec<f64> = Vec::new();
-    let mut witnessed: std::collections::HashSet<u64> = std::collections::HashSet::new();
     loop {
         // Pieces at their floor of three segments add none while `total` is
         // small against their number.
@@ -623,29 +626,7 @@ fn fit_trajectories(
             pieces.push(piece);
             slots.push(slot);
         }
-        // Rotation-minimizing frames run on from the first parameter they are
-        // given: the witnesses take theirs in one run with the samples.
-        let (maps, witness_maps) = if witnesses.is_empty() {
-            (maps_for(&all)?, Vec::new())
-        } else {
-            let mut merged: Vec<f64> = all.iter().chain(&witnesses).copied().collect();
-            merged.sort_by(f64::total_cmp);
-            merged.dedup_by(|a, b| a.to_bits() == b.to_bits());
-            let merged_maps = maps_for(&merged)?;
-            let pick = |ts: &[f64]| -> Result<Vec<Mat4>, crate::OperationsError> {
-                ts.iter()
-                    .map(|&t| {
-                        merged
-                            .binary_search_by(|x| x.total_cmp(&t))
-                            .map(|i| merged_maps[i])
-                            .map_err(|_| crate::OperationsError::InvalidInput {
-                                reason: format!("sweep fit lost its parameter {t}"),
-                            })
-                    })
-                    .collect()
-            };
-            (pick(&all)?, pick(&witnesses)?)
-        };
+        let maps = maps_for(&all)?;
 
         let fit = *fit_tol.get_or_insert_with(|| {
             let moved: Vec<Point3> = maps
@@ -659,8 +640,7 @@ fn fit_trajectories(
         let straight = points.iter().all(|&p| {
             let (a, b) = (first.mul_point(p), last.mul_point(p));
             all.iter()
-                .chain(&witnesses)
-                .zip(maps.iter().chain(&witness_maps))
+                .zip(&maps)
                 .all(|(&t, m)| (a + (b - a) * t - m.mul_point(p)).length() <= fit)
         });
         if straight {
@@ -680,7 +660,6 @@ fn fit_trajectories(
 
         let mut rails = Vec::with_capacity(points.len());
         let mut worst = 0.0_f64;
-        let mut missed: Vec<f64> = Vec::new();
         for &p in points {
             let mut fitted = Vec::with_capacity(pieces.len());
             for (piece, slot) in pieces.iter().zip(&slots) {
@@ -688,19 +667,11 @@ fn fit_trajectories(
                 let rail = crate::loft::interpolate_at(&track, 3, piece)?;
                 for &i in &slot[..slot.len() - 1] {
                     let q = maps[i + 1].mul_point(p);
-                    let miss = (rail.evaluate(all[i + 1]) - q).length();
-                    if miss > fit {
-                        missed.push(all[i + 1]);
-                    }
-                    worst = worst.max(miss);
+                    worst = worst.max((rail.evaluate(all[i + 1]) - q).length());
                 }
                 fitted.push(rail);
             }
-            let rail = join(&fitted)?;
-            for (&t, m) in witnesses.iter().zip(&witness_maps) {
-                worst = worst.max((rail.evaluate(t) - m.mul_point(p)).length());
-            }
-            rails.push(rail);
+            rails.push(join(&fitted)?);
         }
         let segments: usize = pieces.iter().map(|piece| piece.len() - 1).sum();
         if worst <= fit || segments >= MAX_SEGMENTS {
@@ -711,25 +682,7 @@ fn fit_trajectories(
             );
             return Ok((rails, first, last));
         }
-        // A narrow feature a sample sat on is lost as surely as one a
-        // midpoint missed.
-        for t in missed.into_iter().chain(pieces.iter().flatten().copied()) {
-            if witnessed.insert(t.to_bits()) {
-                witnesses.push(t);
-            }
-        }
-        // A cubic's error falls with the fourth power of its step: grow the
-        // samples by what that asks, with a tenth to spare, rather than
-        // doubling past a fit that was only just missed.
-        let grow = (1.1 * (worst / fit).powf(0.25)).clamp(1.2, 2.0);
-        #[allow(
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            clippy::cast_precision_loss
-        )]
-        {
-            total = ((total as f64 * grow).ceil() as usize).max(total + 1);
-        }
+        total *= 2;
     }
 }
 

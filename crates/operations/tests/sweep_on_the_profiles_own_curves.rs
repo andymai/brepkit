@@ -517,3 +517,73 @@ fn rail_off_a_scale_bump(c: f64) -> f64 {
         (scaled - (a + ab * f)).length()
     }
 }
+
+/// A square of side 2 about the origin swept one turn round a helix of
+/// radius 20 by `helical_sweep`, which puts the profile's centre on the
+/// path: with its top side a line or the same side held as a degree-1
+/// NURBS, the centre is the square's, and the two coils match.
+#[test]
+fn a_profiles_centre_on_a_helix_does_not_hang_on_how_its_edges_are_held() {
+    let coil = |nurbs_top: bool| {
+        let mut topo = Topology::new();
+        let corners = [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)];
+        let v: Vec<_> = corners
+            .iter()
+            .map(|&(x, y)| topo.add_vertex(Vertex::new(Point3::new(x, y, 0.0), TOL)))
+            .collect();
+        let edges = (0..4)
+            .map(|k| {
+                let (a, b) = (v[k], v[(k + 1) % 4]);
+                let curve = if nurbs_top && k == 2 {
+                    let (p, q) = (corners[2], corners[3]);
+                    EdgeCurve::NurbsCurve(
+                        NurbsCurve::new(
+                            1,
+                            vec![0.0, 0.0, 1.0, 1.0],
+                            vec![Point3::new(p.0, p.1, 0.0), Point3::new(q.0, q.1, 0.0)],
+                            vec![1.0; 2],
+                        )
+                        .unwrap(),
+                    )
+                } else {
+                    EdgeCurve::Line
+                };
+                OrientedEdge::new(topo.add_edge(Edge::new(a, b, curve)), true)
+            })
+            .collect();
+        let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+        let profile = topo.add_face(Face::new(
+            wire,
+            vec![],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: 0.0,
+            },
+        ));
+        let solid = brepkit_operations::helix::helical_sweep(
+            &mut topo,
+            profile,
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            20.0,
+            8.0,
+            1.0,
+            8,
+        )
+        .unwrap();
+        let volume = brepkit_check::properties::exact_solid_volume(&topo, solid)
+            .unwrap()
+            .unwrap();
+        let bbox = brepkit_operations::measure::solid_bounding_box(&topo, solid).unwrap();
+        (volume, bbox)
+    };
+    let ((v_line, b_line), (v_nurbs, b_nurbs)) = (coil(false), coil(true));
+    assert!(
+        ((v_line - v_nurbs) / v_line).abs() < 1e-9,
+        "{v_line} and {v_nurbs}"
+    );
+    let off = (b_line.min - b_nurbs.min)
+        .length()
+        .max((b_line.max - b_nurbs.max).length());
+    assert!(off < 1e-6, "the coils' boxes differ by {off}");
+}
