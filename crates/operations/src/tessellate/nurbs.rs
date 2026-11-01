@@ -838,11 +838,33 @@ pub(super) fn iso_divisions_over(
     at: &dyn Fn(f64, f64) -> Point3,
     normal_at: &dyn Fn(f64, f64) -> Vec3,
     along_u: bool,
-    ((lo, hi), (o_lo, o_hi)): ((f64, f64), (f64, f64)),
+    ranges: ((f64, f64), (f64, f64)),
     deflection: f64,
     angular_tol: f64,
     max_divisions: usize,
 ) -> usize {
+    let mut n = 1;
+    while n < max_divisions
+        && !iso_chords_hold(at, normal_at, along_u, ranges, deflection, angular_tol, n)
+    {
+        n *= 2;
+    }
+    n
+}
+
+/// Whether `n` even divisions of one parameter direction keep every
+/// iso-line chord of a few sampled rows within half the deflection and the
+/// angular tolerance, as [`iso_divisions_over`] asks of the count it takes.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn iso_chords_hold(
+    at: &dyn Fn(f64, f64) -> Point3,
+    normal_at: &dyn Fn(f64, f64) -> Vec3,
+    along_u: bool,
+    ((lo, hi), (o_lo, o_hi)): ((f64, f64), (f64, f64)),
+    deflection: f64,
+    angular_tol: f64,
+    n: usize,
+) -> bool {
     const ROWS: usize = 8;
     let point = |t: f64, o: f64| if along_u { at(t, o) } else { at(o, t) };
     let normal = |t: f64, o: f64| {
@@ -905,49 +927,147 @@ pub(super) fn iso_divisions_over(
             })
         })
     };
-    let mut n = 1;
-    while n < max_divisions && !fits(n) {
-        n *= 2;
-    }
-    n
+    fits(n)
 }
 
 /// Refine an `(n_u, n_v)` grid over `u_span` by `v_span` until each checked
 /// cell strays within half the deflection of the triangles it splits into
-/// along either diagonal ([`cell_twist`]). A twisted cell (a bilinear patch
+/// along either diagonal ([`probe_strays`]). A twisted cell (a bilinear patch
 /// between skew lines) has straight sides and iso-lines, which no chord test
 /// sees, yet its middle stands up to a quarter of its twist,
-/// |P00 + P11 - P01 - P10| / 4, off those triangles; doubling both directions
-/// quarters that. A flat cell whose parameters run unevenly across it lies in
-/// its triangles' plane, however far from their diagonal, and needs nothing.
+/// |P00 + P11 - P01 - P10| / 4, off those triangles. A flat cell whose
+/// parameters run unevenly across it lies in its triangles' plane, however
+/// far from their diagonal, and needs nothing.
+///
+/// A cell's stray, from its twist or from its curvature both ways, falls
+/// with the square of its size, so both directions grow by the root of what
+/// the worst cell still needs, with a tenth to spare and at most double. A
+/// tube's quarter whose iso-lines each hold half the deflection strays up
+/// to their sum: doubling both directions for a cell a tenth over would
+/// quadruple its mesh.
+///
+/// `chords` tells whether a count of divisions along `u` (`true`) or `v`
+/// keeps the iso-line chords the starting grid was sized by. A count that
+/// is no multiple of the starting one moves the grid's lines off those the
+/// sizing read, and a chord can then take in two creases it held apart. Nor
+/// does a multiple always hold: creases turning opposite ways can leave a
+/// chord's ends alike and turn one of its parts. A step `chords` refuses
+/// goes up through the multiples of the starting count to the first it
+/// holds, and to the first multiple when none within the division cap does.
 pub(super) fn untwisted_grid(
     at: &dyn Fn(f64, f64) -> Point3,
     ((u_lo, u_hi), (v_lo, v_hi)): ((f64, f64), (f64, f64)),
     (mut n_u, mut n_v): (usize, usize),
     deflection: f64,
     max_divisions: usize,
+    chords: Option<&dyn Fn(bool, usize) -> bool>,
 ) -> (usize, usize) {
-    // Every cell is checked: a patch's worst cell can sit anywhere, at a
+    let (start_u, start_v) = (n_u.max(1), n_v.max(1));
+    // Every cell is read: a patch's worst cell can sit anywhere, at a
     // taper's narrow end or wherever a saddle flattens, and a spread of cells
-    // can step over it. The check stops at the first cell that fails.
-    let fits = |n_u: usize, n_v: usize| {
+    // can step over it.
+    let half = 0.5 * deflection;
+    // The worst cell's stray over the grid, and where its probes strayed
+    // past half the deflection.
+    let worst = |n_u: usize, n_v: usize, past: &mut Vec<(f64, (f64, f64))>| {
         #[allow(clippy::cast_precision_loss)]
         let (du, dv) = ((u_hi - u_lo) / n_u as f64, (v_hi - v_lo) / n_v as f64);
-        (0..n_u).all(|i| {
-            (0..n_v).all(|j| {
+        let mut worst = 0.0_f64;
+        for i in 0..n_u {
+            for j in 0..n_v {
                 #[allow(clippy::cast_precision_loss)]
                 let corner = (du.mul_add(i as f64, u_lo), dv.mul_add(j as f64, v_lo));
-                cell_twist(at, corner, (du, dv)) <= 0.5 * deflection
-            })
-        })
+                for (stray, uv) in probe_strays(at, corner, (du, dv)) {
+                    worst = worst.max(stray);
+                    if stray > half {
+                        past.push((stray, uv));
+                    }
+                }
+            }
+        }
+        worst
     };
+    // How far the grid's cell holding `(u, v)` strays from its triangles there.
+    let stray_at = |(n_u, n_v): (usize, usize), (u, v): (f64, f64)| {
+        #[allow(clippy::cast_precision_loss)]
+        let (du, dv) = ((u_hi - u_lo) / n_u as f64, (v_hi - v_lo) / n_v as f64);
+        #[allow(
+            clippy::cast_precision_loss,
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss
+        )]
+        let cell = |x: f64, lo: f64, d: f64, n: usize| {
+            (((x - lo) / d).floor().max(0.0) as usize).min(n - 1)
+        };
+        let (i, j) = (cell(u, u_lo, du, n_u), cell(v, v_lo, dv, n_v));
+        #[allow(clippy::cast_precision_loss)]
+        let corner = |a: usize, b: usize| {
+            at(
+                du.mul_add((i + a) as f64, u_lo),
+                dv.mul_add((j + b) as f64, v_lo),
+            )
+        };
+        split_stray(
+            [corner(0, 0), corner(1, 0), corner(0, 1), corner(1, 1)],
+            &[at(u, v)],
+        )
+    };
+    let holds = |along_u: bool, n: usize| chords.is_none_or(|holds| holds(along_u, n));
+    // From `from` on by steps of `by`, the first count the chords hold; `from`
+    // itself when none within the division cap does.
+    let first_held = |from: usize, by: usize, along_u: bool| {
+        let mut m = from;
+        while !holds(along_u, m) {
+            if m >= max_divisions {
+                return from;
+            }
+            m = m.saturating_add(by).min(max_divisions);
+        }
+        m
+    };
+    // A whole multiple of a chain grid's count, the least past one its chords
+    // hold: every multiple puts each cell's middle and quarter points on the
+    // new grid's vertices or probes.
+    let nested = |n: usize, along_u: bool| first_held((2 * n).min(max_divisions), n, along_u);
+    // A proportional count, or the multiples of the sized count from it on,
+    // whose chords each lie within one the sizing read.
+    let sized = |n: usize, start: usize, along_u: bool| {
+        if holds(along_u, n) {
+            n
+        } else {
+            first_held(
+                n.div_ceil(start).saturating_mul(start).min(max_divisions),
+                start,
+                along_u,
+            )
+        }
+    };
+    // The grids reached by whole multiples from the start, each keeping its
+    // forebears' probes on its vertices or probes, and every probe of any
+    // grid read that strayed past half the deflection. A proportional grid
+    // between them is tried only when it holds those witnesses, and given
+    // up for the chain's next multiple when it does not hold itself: a grid
+    // whose lines move off a narrow peak a probe found can leave it between
+    // its own probes.
+    let mut chain = (n_u, n_v);
+    // Each chain grid holds at least four times the cells of the one before,
+    // and a grid tried between two no more than the later one, so at five
+    // probes a cell the witnesses number at most some 13 times the last chain
+    // grid's cells.
+    // A whole multiple keeps a probe where one was, and one still straying
+    // there is the same witness.
+    let mut witnesses: Vec<(f64, f64)> = Vec::new();
+    let mut witnessed: std::collections::HashSet<(u64, u64)> = std::collections::HashSet::new();
     let mut refined = false;
     loop {
-        let next = ((n_u * 2).min(max_divisions), (n_v * 2).min(max_divisions));
         // The twist never takes cells past the grid's budget: a grid capped
         // down to it gives up the divisions the chord test asked for. Short of
         // a grid it could move to, it checks nothing.
-        if next == (n_u, n_v) || next.0 * next.1 > GRID_MAX_CELLS {
+        let fits_a_step = |n_u: usize, n_v: usize| {
+            let next = ((n_u + 1).min(max_divisions), (n_v + 1).min(max_divisions));
+            next != (n_u, n_v) && next.0 * next.1 <= GRID_MAX_CELLS
+        };
+        if !fits_a_step(n_u, n_v) {
             if refined {
                 log::warn!(
                     "twisted NURBS grid stops at {n_u} x {n_v} cells, its budget; it may stand off its surface by more than the requested deflection"
@@ -955,7 +1075,54 @@ pub(super) fn untwisted_grid(
             }
             break;
         }
-        if fits(n_u, n_v) {
+        let mut past = Vec::new();
+        let stray = witnesses
+            .iter()
+            .map(|&uv| stray_at((n_u, n_v), uv))
+            .fold(worst(n_u, n_v, &mut past), f64::max);
+        let (held_u, held_v) = (holds(true, n_u), holds(false, n_v));
+        if stray <= half && held_u && held_v {
+            break;
+        }
+        for &(_, (u, v)) in &past {
+            if witnessed.insert((u.to_bits(), v.to_bits())) {
+                witnesses.push((u, v));
+            }
+        }
+        let next = if (n_u, n_v) == chain {
+            let grow = (1.1 * (stray / half).sqrt()).min(2.0);
+            #[allow(
+                clippy::cast_precision_loss,
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss
+            )]
+            let step = |n: usize, held: bool| {
+                if stray <= half && held {
+                    n
+                } else {
+                    (((n as f64) * grow).ceil() as usize)
+                        .max(n + 1)
+                        .min(max_divisions)
+                }
+            };
+            let tried = (
+                sized(step(n_u, held_u), start_u, true),
+                sized(step(n_v, held_v), start_v, false),
+            );
+            if tried == chain || witnesses.iter().any(|&uv| stray_at(tried, uv) > half) {
+                chain = (nested(n_u, true), nested(n_v, false));
+                chain
+            } else {
+                tried
+            }
+        } else {
+            chain = (nested(chain.0, true), nested(chain.1, false));
+            chain
+        };
+        if next.0 * next.1 > GRID_MAX_CELLS {
+            log::warn!(
+                "twisted NURBS grid stops at {n_u} x {n_v} cells, its budget; it may stand off its surface by more than the requested deflection"
+            );
             break;
         }
         (n_u, n_v) = next;
@@ -970,6 +1137,7 @@ pub(super) fn untwisted_grid(
 /// most at its middle; a tapered one, whose split leaves a sliver standing
 /// steep, can stray farther toward its narrow end. A flat cell lies in its
 /// triangles and strays nowhere.
+#[cfg(test)]
 pub(super) fn cell_twist(
     at: &dyn Fn(f64, f64) -> Point3,
     (u0, v0): (f64, f64),
@@ -986,7 +1154,28 @@ pub(super) fn cell_twist(
     split_stray(corners, &probes)
 }
 
-/// Where in a cell [`cell_twist`] reads it: its middle and quarter points.
+/// Each of [`PROBES`] of the cell from `(u0, v0)` across `(du, dv)`, with how
+/// far it strays from the cell's triangles and where it lies.
+fn probe_strays(
+    at: &dyn Fn(f64, f64) -> Point3,
+    (u0, v0): (f64, f64),
+    (du, dv): (f64, f64),
+) -> [(f64, (f64, f64)); 5] {
+    let uv = |a: f64, b: f64| (du.mul_add(a, u0), dv.mul_add(b, v0));
+    let corner = |a: f64, b: f64| {
+        let (u, v) = uv(a, b);
+        at(u, v)
+    };
+    let corners = [
+        corner(0.0, 0.0),
+        corner(1.0, 0.0),
+        corner(0.0, 1.0),
+        corner(1.0, 1.0),
+    ];
+    PROBES.map(|(a, b)| (split_stray(corners, &[corner(a, b)]), uv(a, b)))
+}
+
+/// Where in a cell [`probe_strays`] reads it: its middle and quarter points.
 const PROBES: [(f64, f64); 5] = [
     (0.5, 0.5),
     (0.25, 0.25),
