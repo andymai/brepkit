@@ -586,9 +586,9 @@ fn fit_trajectories(
     let mut total = min_segments.max(2);
     let mut fit_tol: Option<f64> = None;
     let mut last_count = 0;
-    // Every midpoint a fit has missed: samples that grow by other than
-    // doubling move off a narrow feature a midpoint found, so each later fit,
-    // straight or cubic, is held there too.
+    // Every sample of a fit that missed, and every midpoint it missed:
+    // samples that grow by other than doubling move off a narrow feature
+    // either found, so each later fit, straight or cubic, is held there too.
     let mut witnesses: Vec<f64> = Vec::new();
     let mut witnessed: std::collections::HashSet<u64> = std::collections::HashSet::new();
     loop {
@@ -711,7 +711,9 @@ fn fit_trajectories(
             );
             return Ok((rails, first, last));
         }
-        for t in missed {
+        // A narrow feature a sample sat on is lost as surely as one a
+        // midpoint missed.
+        for t in missed.into_iter().chain(pieces.iter().flatten().copied()) {
             if witnessed.insert(t.to_bits()) {
                 witnesses.push(t);
             }

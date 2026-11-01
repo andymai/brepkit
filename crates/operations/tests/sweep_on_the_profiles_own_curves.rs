@@ -450,13 +450,26 @@ fn a_circle_swept_round_a_helix_holds_its_area_times_its_length() {
 }
 
 /// A square of side 2 swept 10 up a straight spine in 4 segments, scaled
-/// by 1 + 4e-6 w((t - 0.125) / 0.005) with w a smooth bump of width 2: the
-/// scale moves its corners 5.7e-6 out within 0.005 of t = 0.125, past the
-/// fit's bound of some 1e-6. The first fit reads that at a midpoint;
-/// however its samples grow after, the corner's rail passes within 1.5e-6
-/// of the scaled corner there.
+/// by 1 + 4e-6 w((t - c) / 0.005) with w a smooth bump of width 2: the
+/// scale moves its corners 5.7e-6 out within 0.005 of t = c, past the fit's
+/// bound of some 1e-6. The first fit reads that at a midpoint for c =
+/// 0.125, and at a sample for c = 0.25; however its samples grow after,
+/// the corner's rail passes within 1.5e-6 of the scaled corner there.
 #[test]
 fn a_narrow_scale_bump_a_fit_has_read_is_kept() {
+    for c in [0.125_f64, 0.25] {
+        let off = rail_off_a_scale_bump(c);
+        assert!(
+            off <= 1.5e-6,
+            "bump at {c}: the rail passes {off} from the scaled corner"
+        );
+    }
+}
+
+/// How far the corner's rail of the sweep in
+/// [`a_narrow_scale_bump_a_fit_has_read_is_kept`] passes from the corner
+/// scaled at the bump's middle `c`.
+fn rail_off_a_scale_bump(c: f64) -> f64 {
     let bump = |x: f64| {
         if x.abs() < 1.0 {
             (0.5 * PI * x).cos().powi(2)
@@ -468,7 +481,7 @@ fn a_narrow_scale_bump_a_fit_has_read_is_kept() {
     let profile = square(&mut topo, Mat4::identity(), 1.0, None);
     let options = SweepOptions {
         scale_law: Some(Box::new(move |t: f64| {
-            4e-6f64.mul_add(bump((t - 0.125) / 0.005), 1.0)
+            4e-6f64.mul_add(bump((t - c) / 0.005), 1.0)
         })),
         segments: 4,
         ..Default::default()
@@ -489,9 +502,9 @@ fn a_narrow_scale_bump_a_fit_has_read_is_kept() {
         })
         .expect("the corner's rail");
     let edge = topo.edge(rail).unwrap();
-    let scaled = Point3::new(1.0 + 4e-6, 1.0 + 4e-6, 1.25);
-    let off = if let EdgeCurve::NurbsCurve(c) = edge.curve() {
-        brepkit_math::nurbs::projection::project_point_to_curve(c, scaled, 1e-12)
+    let scaled = Point3::new(1.0 + 4e-6, 1.0 + 4e-6, 10.0 * c);
+    if let EdgeCurve::NurbsCurve(curve) = edge.curve() {
+        brepkit_math::nurbs::projection::project_point_to_curve(curve, scaled, 1e-12)
             .unwrap()
             .distance
     } else {
@@ -502,9 +515,5 @@ fn a_narrow_scale_bump_a_fit_has_read_is_kept() {
         let ab = b - a;
         let f = ((scaled - a).dot(ab) / ab.dot(ab)).clamp(0.0, 1.0);
         (scaled - (a + ab * f)).length()
-    };
-    assert!(
-        off <= 1.5e-6,
-        "the rail passes {off} from the scaled corner"
-    );
+    }
 }
