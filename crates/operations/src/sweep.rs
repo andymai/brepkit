@@ -218,7 +218,8 @@ pub(crate) fn region_centroid(
                 .chain(curve.knots().iter().copied().filter(|&k| k > t0 && k < t1))
                 .chain(std::iter::once(t1))
                 .collect();
-            cuts.dedup_by(|a, b| a.to_bits() == b.to_bits());
+            // By value: -0 and 0 are one knot.
+            cuts.dedup_by(|a, b| (*a - *b).abs() <= 0.0);
             for w in cuts.windows(2) {
                 let h = brepkit_math::nurbs::decompose::curve_bezier_between(&curve, w[0], w[1])?;
                 if !h.iter().all(|q| q[3].is_finite() && q[3] > 0.0) {

@@ -3,75 +3,73 @@
 use crate::MathError;
 use crate::aabb::Aabb3;
 use crate::nurbs::curve::NurbsCurve;
-use crate::nurbs::knot_ops::{curve_knot_insert, surface_knot_insert_u, surface_knot_insert_v};
+use crate::nurbs::knot_ops::{surface_knot_insert_u, surface_knot_insert_v};
 use crate::nurbs::surface::NurbsSurface;
 use crate::vec::Point3;
 
 /// Decompose a NURBS curve into Bezier segments.
 ///
 /// Each segment is a NURBS curve of the same degree with a clamped knot vector
-/// (all interior knots at full multiplicity). The segments are parametrically
-/// contiguous — segment *i* goes from knot *i* to knot *i+1*.
+/// over one knot span of the curve's domain, in order: segment *i* runs from
+/// the domain's *i*-th distinct knot to the next. Each is read off its span's
+/// de Boor points ([`curve_bezier_between`]) with no knot inserted, so a knot
+/// vector that is not clamped, a degree of zero, or an interior knot repeated
+/// past the degree needs no special case.
 ///
 /// # Errors
 ///
-/// Returns an error if internal knot insertion fails.
+/// Returns [`MathError::PoleAtInfinity`] if a span's Bezier form has a
+/// control point at infinity, as weights of mixed sign can give, or another
+/// error if a segment cannot be built.
 pub fn curve_to_bezier_segments(curve: &NurbsCurve) -> Result<Vec<NurbsCurve>, MathError> {
     let p = curve.degree();
-    let knots = curve.knots();
-
-    let mut unique_interior = Vec::new();
-    let mut i = p + 1;
-    while i < knots.len() - p - 1 {
-        let u = knots[i];
-        let mut mult = 1;
-        while i + mult < knots.len() - p - 1 && (knots[i + mult] - u).abs() < 1e-15 {
-            mult += 1;
+    let (d0, d1) = curve.domain();
+    let mut cuts: Vec<f64> = std::iter::once(d0)
+        .chain(curve.knots().iter().copied().filter(|&k| k > d0 && k < d1))
+        .chain(std::iter::once(d1))
+        .collect();
+    // By value: -0 and 0 are one knot.
+    cuts.dedup_by(|a, b| (*a - *b).abs() <= 0.0);
+    if cuts.len() < 2 {
+        return Ok(vec![curve.clone()]);
+    }
+    let mut segments = Vec::with_capacity(cuts.len() - 1);
+    for w in cuts.windows(2) {
+        let homogeneous = curve_bezier_between(curve, w[0], w[1])?;
+        let mut points = Vec::with_capacity(p + 1);
+        let mut weights = Vec::with_capacity(p + 1);
+        for q in homogeneous {
+            points.push(cartesian(q).ok_or(MathError::PoleAtInfinity {
+                start: w[0],
+                end: w[1],
+            })?);
+            weights.push(q[3]);
         }
-        let deficit = p - mult;
-        if deficit > 0 {
-            unique_interior.push((u, deficit));
-        }
-        i += mult;
+        let mut knots = vec![w[0]; p + 1];
+        knots.extend(std::iter::repeat_n(w[1], p + 1));
+        segments.push(NurbsCurve::new(p, knots, points, weights)?);
     }
-
-    // Insert knots to make all interior knots have multiplicity p.
-    let mut refined = curve.clone();
-    for &(u, deficit) in &unique_interior {
-        refined = curve_knot_insert(&refined, u, deficit)?;
-    }
-
-    // Each Bezier segment spans p+1 consecutive control points.
-    let ref_knots = refined.knots();
-    let ref_cps = refined.control_points();
-    let ref_ws = refined.weights();
-
-    let n_segments = (ref_cps.len() - 1) / p;
-    if n_segments == 0 {
-        return Ok(vec![refined]);
-    }
-
-    let mut segments = Vec::with_capacity(n_segments);
-    for seg in 0..n_segments {
-        let start_cp = seg * p;
-        let end_cp = start_cp + p + 1;
-        if end_cp > ref_cps.len() {
-            break;
-        }
-
-        let seg_cps: Vec<Point3> = ref_cps[start_cp..end_cp].to_vec();
-        let seg_ws: Vec<f64> = ref_ws[start_cp..end_cp].to_vec();
-
-        // Knot vector for a Bezier: p+1 copies of start, p+1 copies of end
-        let u_start = ref_knots[start_cp + p];
-        let u_end = ref_knots[end_cp];
-        let mut seg_knots = vec![u_start; p + 1];
-        seg_knots.extend(std::iter::repeat_n(u_end, p + 1));
-
-        segments.push(NurbsCurve::new(p, seg_knots, seg_cps, seg_ws)?);
-    }
-
     Ok(segments)
+}
+
+/// A homogeneous point `[w x, w y, w z, w]` as its point, the origin for a
+/// weight of zero over a numerator of zero (it adds nothing to the curve).
+/// `None` for a point at infinity: a weight of zero over a numerator that is
+/// not, or a quotient that overflows. Evaluation scales a point by its
+/// weight, so it would drop that numerator.
+fn cartesian(q: [f64; 4]) -> Option<Point3> {
+    let point = if q[3] == 0.0 {
+        if q[..3].iter().any(|&c| c != 0.0) {
+            return None;
+        }
+        Point3::new(0.0, 0.0, 0.0)
+    } else {
+        Point3::new(q[0] / q[3], q[1] / q[3], q[2] / q[3])
+    };
+    [point.x(), point.y(), point.z()]
+        .iter()
+        .all(|c| c.is_finite())
+        .then_some(point)
 }
 
 /// The rational Bezier form of `curve` from parameter `a` to parameter `b`.
@@ -329,6 +327,31 @@ pub fn curve_degree_elevate(curve: &NurbsCurve, t: usize) -> Result<NurbsCurve, 
     let mut all_cps: Vec<[f64; 4]> = Vec::new();
     let mut all_knots: Vec<f64> = Vec::new();
 
+    // Whether each piece ends where the next starts, read off the knot's
+    // repeats: the curve is continuous at a knot repeated at most its degree
+    // times. One repeated more (or any knot of a degree-zero curve) may jump
+    // there, so both ends stay and the elevated knot repeats once more.
+    // Comparing the ends' coordinates instead would hang on the weights'
+    // scale, which leaves the curve unchanged.
+    // Breaks and knots both ascend, so one pass counts every break's repeats.
+    let knots = curve.knots();
+    let mut at = 0;
+    let joined: Vec<bool> = segments
+        .iter()
+        .take(n_segs.saturating_sub(1))
+        .map(|seg| {
+            let u = seg.knots()[p + 1];
+            while at < knots.len() && knots[at] < u {
+                at += 1;
+            }
+            let repeats = knots[at..]
+                .iter()
+                .take_while(|&&k| (k - u).abs() <= 0.0)
+                .count();
+            repeats <= p
+        })
+        .collect();
+
     for (seg_idx, seg) in segments.iter().enumerate() {
         let seg_cps = seg.control_points();
         let seg_ws = seg.weights();
@@ -358,9 +381,11 @@ pub fn curve_degree_elevate(curve: &NurbsCurve, t: usize) -> Result<NurbsCurve, 
                 all_knots.push(u_start);
             }
             all_cps.extend_from_slice(&elevated);
-        } else {
+        } else if joined[seg_idx - 1] {
             // Subsequent segments: skip first control point (shared with previous).
             all_cps.extend_from_slice(&elevated[1..]);
+        } else {
+            all_cps.extend_from_slice(&elevated);
         }
 
         if seg_idx == n_segs - 1 {
@@ -370,9 +395,11 @@ pub fn curve_degree_elevate(curve: &NurbsCurve, t: usize) -> Result<NurbsCurve, 
                 all_knots.push(u_end);
             }
         } else {
-            // Interior break: add new_p copies of the break knot.
+            // Interior break: new_p copies of the break knot, one more
+            // where the curve jumps.
             let u_break = seg.knots()[p + 1];
-            for _ in 0..new_p {
+            let copies = if joined[seg_idx] { new_p } else { new_p + 1 };
+            for _ in 0..copies {
                 all_knots.push(u_break);
             }
         }
@@ -731,5 +758,210 @@ mod tests {
         assert!(curve_bezier_between(&curve, 0.4, 0.6).is_err());
         assert!(curve_bezier_between(&curve, 0.1, 0.3).is_err());
         assert!(curve_bezier_between(&curve, 0.9, 1.1).is_err());
+    }
+
+    /// A curve's Bezier pieces trace it: each at 7 points inside its span
+    /// holds the curve to 1e-12 there (a curve of degree zero jumps at its
+    /// knots).
+    fn pieces_trace(c: &NurbsCurve, spans: usize) {
+        let segs = curve_to_bezier_segments(c).expect("valid");
+        assert_eq!(segs.len(), spans);
+        for seg in &segs {
+            let (a, b) = seg.domain();
+            for k in 1..8 {
+                let t = (b - a).mul_add(f64::from(k) / 8.0, a);
+                let off = (seg.evaluate(t) - c.evaluate(t)).length();
+                assert!(off < 1e-12, "at {t}: {off}");
+            }
+        }
+    }
+
+    /// A degree-1 side on knots 0, 0, 0.5, 0.5, 1, 1 through its ends and its
+    /// middle twice, an interior knot repeated past the degree: two pieces.
+    #[test]
+    fn a_knot_repeated_past_the_degree_cuts_two_pieces() {
+        let p = Point3::new;
+        let c = NurbsCurve::new(
+            1,
+            vec![0.0, 0.0, 0.5, 0.5, 1.0, 1.0],
+            vec![
+                p(1.0, 1.0, 0.0),
+                p(0.0, 1.0, 0.0),
+                p(0.0, 1.0, 0.0),
+                p(-1.0, 1.0, 0.0),
+            ],
+            vec![1.0; 4],
+        )
+        .expect("valid");
+        pieces_trace(&c, 2);
+    }
+
+    /// A degree-0 curve on knots 0, 0.5, 1: two constant pieces.
+    #[test]
+    fn a_degree_zero_curve_cuts_into_its_spans() {
+        let p = Point3::new;
+        let c = NurbsCurve::new(
+            0,
+            vec![0.0, 0.5, 1.0],
+            vec![p(0.0, 0.0, 0.0), p(1.0, 0.0, 0.0)],
+            vec![1.0; 2],
+        )
+        .expect("valid");
+        pieces_trace(&c, 2);
+    }
+
+    /// A cubic on the uniform knots 0 to 7, not clamped: the pieces of its
+    /// domain, 3 to 4, cut at its knots.
+    #[test]
+    fn a_curve_not_clamped_cuts_into_its_domains_spans() {
+        let c = NurbsCurve::new(
+            3,
+            (0..8).map(f64::from).collect(),
+            vec![
+                Point3::new(0.0, 0.0, 0.0),
+                Point3::new(1.0, 2.0, 0.0),
+                Point3::new(3.0, -1.0, 1.0),
+                Point3::new(4.0, 1.0, 0.0),
+            ],
+            vec![1.0, 2.0, 0.5, 1.0],
+        )
+        .expect("valid");
+        pieces_trace(&c, 1);
+    }
+
+    /// A quadratic weighted 1, 0, 1: its piece evaluates as it does, the
+    /// zero-weight pole kept rather than divided by.
+    #[test]
+    fn a_zero_weight_pole_cuts_a_piece_that_traces_the_curve() {
+        let p = Point3::new;
+        let c = NurbsCurve::new(
+            2,
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            vec![p(0.0, 0.0, 0.0), p(1.0, 1.0, 0.0), p(2.0, 0.0, 0.0)],
+            vec![1.0, 0.0, 1.0],
+        )
+        .expect("valid");
+        pieces_trace(&c, 1);
+    }
+
+    /// A quadratic on knots -1, -1, -1, -0, 0, 1, 1, 1: -0 and 0 are one
+    /// knot, so two pieces and none of no width.
+    #[test]
+    fn a_signed_zero_knot_cuts_no_piece_of_no_width() {
+        let p = Point3::new;
+        let c = NurbsCurve::new(
+            2,
+            vec![-1.0, -1.0, -1.0, -0.0, 0.0, 1.0, 1.0, 1.0],
+            vec![
+                p(0.0, 0.0, 0.0),
+                p(1.0, 1.0, 0.0),
+                p(2.0, 0.0, 0.0),
+                p(3.0, 1.0, 0.0),
+                p(4.0, 0.0, 0.0),
+            ],
+            vec![1.0; 5],
+        )
+        .expect("valid");
+        pieces_trace(&c, 2);
+    }
+
+    /// A degree-1 curve that jumps at 0.5, its knot repeated past its
+    /// degree: raised to degree 3, it still jumps there, and traces the
+    /// curve inside each span.
+    #[test]
+    fn a_curve_raised_in_degree_keeps_its_jump() {
+        let p = Point3::new;
+        let c = NurbsCurve::new(
+            1,
+            vec![0.0, 0.0, 0.5, 0.5, 1.0, 1.0],
+            vec![
+                p(0.0, 0.0, 0.0),
+                p(1.0, 0.0, 0.0),
+                p(1.0, 2.0, 0.0),
+                p(2.0, 2.0, 0.0),
+            ],
+            vec![1.0; 4],
+        )
+        .expect("valid");
+        let raised = curve_degree_elevate(&c, 2).expect("valid");
+        assert_eq!(raised.degree(), 3);
+        for t in [0.1, 0.25, 0.4, 0.6, 0.75, 0.9] {
+            let off = (raised.evaluate(t) - c.evaluate(t)).length();
+            assert!(off < 1e-12, "at {t}: {off}");
+        }
+    }
+
+    #[test]
+    fn a_jump_raised_in_degree_does_not_hang_on_the_weights_scale() {
+        let p = Point3::new;
+        for w in [1.0, 1e-14, 1e14] {
+            let c = NurbsCurve::new(
+                1,
+                vec![0.0, 0.0, 0.5, 0.5, 1.0, 1.0],
+                vec![
+                    p(0.0, 0.0, 0.0),
+                    p(1.0, 0.0, 0.0),
+                    p(10.0, 0.0, 0.0),
+                    p(11.0, 0.0, 0.0),
+                ],
+                vec![w; 4],
+            )
+            .expect("valid");
+            let raised = curve_degree_elevate(&c, 2).expect("valid");
+            for t in [0.1, 0.25, 0.4, 0.6, 0.75, 0.9] {
+                let off = (raised.evaluate(t) - c.evaluate(t)).length();
+                assert!(off < 1e-9, "weights {w}, at {t}: {off}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_span_whose_weights_cancel_to_a_pole_at_infinity_cuts_no_piece() {
+        let p = Point3::new;
+        let c = NurbsCurve::new(
+            3,
+            vec![0.0, 0.0, 1.0, 2.0, 3.0, 5.0, 5.0, 5.0],
+            vec![
+                p(0.0, 0.0, 0.0),
+                p(1.0, 0.0, 0.0),
+                p(2.0, 0.0, 0.0),
+                p(3.0, 0.0, 0.0),
+            ],
+            vec![10.0, -1.0, 3.0, 1.0],
+        )
+        .expect("valid");
+        let q = curve_bezier_between(&c, 2.0, 3.0).expect("in one span");
+        assert!(
+            q.iter().any(|h| h[3] == 0.0 && h[0] != 0.0),
+            "no pole at infinity: {q:?}"
+        );
+        assert!(matches!(
+            curve_to_bezier_segments(&c),
+            Err(MathError::PoleAtInfinity { .. })
+        ));
+    }
+
+    #[test]
+    fn a_curve_continuous_at_its_knots_raised_in_degree_stays_joined() {
+        let p = Point3::new;
+        let c = NurbsCurve::new(
+            2,
+            vec![0.0, 0.0, 0.0, 0.5, 0.5, 1.0, 1.0, 1.0],
+            vec![
+                p(0.0, 0.0, 0.0),
+                p(1.0, 1.0, 0.0),
+                p(2.0, 0.0, 0.0),
+                p(3.0, 1.0, 0.0),
+                p(4.0, 0.0, 0.0),
+            ],
+            vec![1.0, 2.0, 1.0, 0.5, 1.0],
+        )
+        .expect("valid");
+        let raised = curve_degree_elevate(&c, 1).expect("valid");
+        assert_eq!(raised.control_points().len(), 7);
+        for t in [0.1, 0.25, 0.4, 0.5, 0.6, 0.75, 0.9] {
+            let off = (raised.evaluate(t) - c.evaluate(t)).length();
+            assert!(off < 1e-12, "at {t}: {off}");
+        }
     }
 }
