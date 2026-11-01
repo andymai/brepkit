@@ -1,0 +1,31 @@
+crates/io/tests/keyway_tangent_to_a_rod.rs
+  s_489facd0569909::t_29a35ad149fff8 1-7,9-21,23-63,66-84
+  s_489facd0569909::t_baca4bb64c96b8 8
+  s_489facd0569909::t_fadddc9b81638f 22,64-65
+crates/io/tests/data/keyway_tool_nudged.bin
+  s_489facd0569909::t_1facf80beef102 1
+crates/algo/src/builder/face_splitter/mod.rs
+  s_489facd0569909::t_15ee510f4d6a47 7189-7206,7223
+crates/io/tests/data/keyway_rod.bin
+  s_489facd0569909::t_1facf80beef102 1
+crates/io/tests/data/keyway_tool.bin
+  s_489facd0569909::t_1facf80beef102 1
+crates/algo/src/pave_filler/fill_face_info.rs
+  s_489facd0569909::t_15ee510f4d6a47 426-430,432-442,445
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "0ee880fa88c89af564dc172bf698de83e46b1b84",
+  "prompts": {},
+  "sessions": {
+    "s_489facd0569909": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c29f5475-80ce-4718-819f-3b43541bee54",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
