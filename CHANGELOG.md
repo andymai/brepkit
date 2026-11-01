@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.6.18](https://github.com/andymai/brepkit/compare/v4.6.17...v4.6.18) (2026-11-01)
+
+
+### Bug Fixes
+
+* **algo:** lay a plane's internal line loop out in its boundary's frame ([#2269](https://github.com/andymai/brepkit/issues/2269)) ([39f8d2a](https://github.com/andymai/brepkit/commit/39f8d2a5d2e92bece591636e7ed3e333887f76d7))
+
 ## [4.6.17](https://github.com/andymai/brepkit/compare/v4.6.16...v4.6.17) (2026-11-01)
 
 
