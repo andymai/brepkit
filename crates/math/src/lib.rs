@@ -201,6 +201,18 @@ pub enum MathError {
         /// Number of iterations attempted.
         iterations: usize,
     },
+
+    /// A rational curve's Bezier form over a span has a control point at
+    /// infinity: its homogeneous weight is zero while its numerator is not,
+    /// so it has no Cartesian point to store. Weights of mixed sign can
+    /// cancel to such a weight.
+    #[error("the Bezier form over [{start}, {end}] has a control point at infinity")]
+    PoleAtInfinity {
+        /// Start of the span.
+        start: f64,
+        /// End of the span.
+        end: f64,
+    },
 }
 
 pub mod aabb;
