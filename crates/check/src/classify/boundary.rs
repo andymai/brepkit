@@ -22,6 +22,9 @@ use crate::util::{face_polygon, point_in_polygon_3d};
 /// Minimum positive ray parameter to count as a forward hit.
 const RAY_T_MIN: f64 = 1e-12;
 
+/// How near two of a ray's hits on a NURBS face lie to be one hit.
+const NURBS_HIT_REACH: f64 = 1e-6;
+
 /// Threshold for half-space sign test (negative side rejection).
 const HALF_SPACE_EPS: f64 = 1e-10;
 
@@ -940,8 +943,10 @@ fn count_3d_polygon_crossings(
 /// For plane faces, uses direct ray-plane + 3D polygon containment.
 /// For analytic curved faces, uses ray-surface intersection + UV containment.
 /// For sphere faces, uses 3D polygon containment (avoids UV pole singularity).
-/// For NURBS faces, uses line-surface intersection. `sphere` keeps a sphere
-/// face's region from one ray to the next.
+/// For NURBS faces, uses line-surface intersection, patch by patch. `cache`
+/// keeps what a sphere or NURBS face builds from one ray to the next, and
+/// `unsure` is set when the ray grazes a NURBS face, so that its count of
+/// crossings there may be wrong.
 ///
 /// # Errors
 ///
@@ -952,7 +957,8 @@ pub fn count_face_ray_crossings(
     face_id: FaceId,
     origin: Point3,
     direction: Vec3,
-    sphere: &std::cell::OnceCell<Option<SphereRegion>>,
+    cache: &FaceRayCache,
+    unsure: &mut bool,
 ) -> Result<u32, CheckError> {
     let face = topo.face(face_id)?;
     match face.surface() {
@@ -990,7 +996,7 @@ pub fn count_face_ray_crossings(
         FaceSurface::Sphere(sph) => {
             let sph = sph.clone();
             let roots = ray_surface::ray_sphere(origin, direction, &sph);
-            count_3d_polygon_crossings(topo, face_id, origin, direction, &roots, sphere)
+            count_3d_polygon_crossings(topo, face_id, origin, direction, &roots, &cache.sphere)
         }
         FaceSurface::Torus(tor) => {
             let tor = tor.clone();
@@ -1007,9 +1013,15 @@ pub fn count_face_ray_crossings(
                 apex,
             )
         }
-        FaceSurface::Nurbs(surface) => {
-            ray_crossings_nurbs(topo, face_id, origin, direction, surface)
-        }
+        FaceSurface::Nurbs(surface) => ray_crossings_nurbs(
+            topo,
+            face_id,
+            origin,
+            direction,
+            surface,
+            &cache.nurbs,
+            unsure,
+        ),
     }
 }
 
@@ -1073,15 +1085,49 @@ pub fn plane_hit_inside(
     ))
 }
 
+/// What a face's ray crossings build once and keep from one ray to the
+/// next: a sphere face's region, or a NURBS face's surface cut into the
+/// Bezier patches the ray is tested against.
+#[derive(Default)]
+pub struct FaceRayCache {
+    sphere: std::cell::OnceCell<Option<SphereRegion>>,
+    nurbs: std::cell::OnceCell<Option<brepkit_math::nurbs::intersection::RaySurface>>,
+}
+
 /// Count ray crossings for a NURBS face using ray-surface intersection.
+///
+/// The ray is tested against each Bezier patch's control hull, so a
+/// crossing inside a knot span however narrow is found; a grid of the
+/// whole domain passes over a feature that spans a sliver of it. A surface
+/// the patches cannot hold (a weight not positive, knots not clamped) is
+/// sampled on that grid, and the ray is unsure of its count there.
 fn ray_crossings_nurbs(
     topo: &Topology,
     face_id: FaceId,
     origin: Point3,
     direction: Vec3,
     surface: &brepkit_math::nurbs::surface::NurbsSurface,
+    patches: &std::cell::OnceCell<Option<brepkit_math::nurbs::intersection::RaySurface>>,
+    unsure: &mut bool,
 ) -> Result<u32, CheckError> {
-    let hits = ray_surface::ray_nurbs(origin, direction, surface, 20)?;
+    let patches =
+        patches.get_or_init(|| brepkit_math::nurbs::intersection::RaySurface::new(surface));
+    let hits = if let Some(patches) = patches {
+        let found = patches.hits(origin, direction, NURBS_HIT_REACH);
+        *unsure |= found.grazed;
+        // `hits` reads `t` along the unit direction.
+        let scale = direction.length();
+        found
+            .hits
+            .iter()
+            .map(|h| (h.t / scale, h.u, h.v))
+            .filter(|&(t, _, _)| t > RAY_T_MIN)
+            .collect()
+    } else {
+        // The grid can pass over a crossing inside a narrow knot span.
+        *unsure = true;
+        ray_surface::ray_nurbs(origin, direction, surface, 20)?
+    };
     if hits.is_empty() {
         return Ok(0);
     }
@@ -1268,5 +1314,169 @@ mod tests {
         assert!(face_contains(&topo, face, above).unwrap());
         assert!(face_contains(&topo, face, Point3::new(0.0, 0.0, 1.0)).unwrap());
         assert!(!face_contains(&topo, face, Point3::new(0.0, 0.0, -1.0)).unwrap());
+    }
+
+    /// A whole patch through (k, u, z_k) for k = 0..=8 along a cubic `v`,
+    /// flat but for (4, u, 1), whose interior knots sit `width` apart after
+    /// 0.5: its bump rises to z = 2/3 at x = 4 inside v from 0.5 + width to
+    /// 0.5 + 5 width, where no even grid of the domain samples it. At
+    /// 1e-8 a unit in the last place of `v` moves the point farther than
+    /// 1e-12 of the patch's size, which Newton cannot then reach. A ray up
+    /// through the bump crosses the face once, and one above it not at all.
+    #[test]
+    fn a_ray_crosses_a_bump_inside_narrow_knot_spans() {
+        for width in [1e-4, 1e-6, 1e-8] {
+            crosses_a_bump(width);
+        }
+    }
+
+    fn crosses_a_bump(width: f64) {
+        let (topo, face) = bump_face(width);
+        let up = Vec3::new(0.0, 0.0, 1.0);
+        let cell = FaceRayCache::default();
+        let below = Point3::new(4.0, 0.5, 0.3);
+        let above = Point3::new(4.0, 0.5, 1.0);
+        let crossings = |from| {
+            let mut unsure = false;
+            let n = count_face_ray_crossings(&topo, face, from, up, &cell, &mut unsure).unwrap();
+            assert!(!unsure, "width {width}: unsure from {from:?}");
+            n
+        };
+        assert_eq!(crossings(below), 1, "width {width}: below");
+        assert_eq!(crossings(above), 0, "width {width}: above");
+    }
+
+    /// Along `u` the bump is straight: a ray along its ridge, at the top of
+    /// the bump, runs in the face, and its count there is not to be trusted.
+    #[test]
+    fn a_ray_along_a_nurbs_face_is_unsure_of_its_crossings() {
+        let width = 1e-4_f64;
+        let (topo, face) = bump_face(width);
+        let surface = match topo.face(face).unwrap().surface() {
+            FaceSurface::Nurbs(surface) => Some(surface),
+            _ => None,
+        }
+        .unwrap();
+        let top = surface.evaluate(0.5, width.mul_add(3.0, 0.5));
+        let along = Vec3::new(0.0, 1.0, 0.0);
+        let mut unsure = false;
+        let from = Point3::new(top.x(), -0.5, top.z());
+        count_face_ray_crossings(
+            &topo,
+            face,
+            from,
+            along,
+            &FaceRayCache::default(),
+            &mut unsure,
+        )
+        .unwrap();
+        assert!(unsure, "a ray along the ridge at {top:?}");
+    }
+
+    /// A flat patch at z = 1 whose `u` knots are not clamped, which the
+    /// Bezier patches cannot hold: its grid of samples could pass over a
+    /// crossing, so a ray up through it is unsure of its count.
+    #[test]
+    fn a_ray_through_a_patch_read_on_its_grid_is_unsure() {
+        use brepkit_math::nurbs::surface::NurbsSurface;
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let p = Point3::new;
+        let surface = NurbsSurface::new(
+            1,
+            1,
+            vec![0.0, 0.25, 0.5, 0.75, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![
+                vec![p(0.0, 0.0, 1.0), p(0.0, 1.0, 1.0)],
+                vec![p(0.5, 0.0, 1.0), p(0.5, 1.0, 1.0)],
+                vec![p(1.0, 0.0, 1.0), p(1.0, 1.0, 1.0)],
+            ],
+            vec![vec![1.0; 2]; 3],
+        )
+        .unwrap();
+        assert!(brepkit_math::nurbs::intersection::RaySurface::new(&surface).is_none());
+        let (u0, u1) = surface.domain_u();
+        let corners =
+            [(u0, 0.0), (u1, 0.0), (u1, 1.0), (u0, 1.0)].map(|(u, v)| surface.evaluate(u, v));
+        let mut topo = Topology::new();
+        let v: Vec<_> = corners
+            .iter()
+            .map(|&c| topo.add_vertex(Vertex::new(c, 1e-7)))
+            .collect();
+        let edges = (0..4)
+            .map(|k| {
+                OrientedEdge::new(
+                    topo.add_edge(Edge::new(v[k], v[(k + 1) % 4], EdgeCurve::Line)),
+                    true,
+                )
+            })
+            .collect();
+        let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+        let face = topo.add_face(Face::new(wire, vec![], FaceSurface::Nurbs(surface)));
+        let mut unsure = false;
+        count_face_ray_crossings(
+            &topo,
+            face,
+            p(0.5, 0.5, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            &FaceRayCache::default(),
+            &mut unsure,
+        )
+        .unwrap();
+        assert!(unsure);
+    }
+
+    /// The face of [`crosses_a_bump`], its bump inside knot spans `width`
+    /// apart.
+    fn bump_face(width: f64) -> (Topology, FaceId) {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        use brepkit_math::nurbs::surface::NurbsSurface;
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        let mut knots_v = vec![0.0; 4];
+        knots_v.extend((1..=5).map(|k| width.mul_add(f64::from(k), 0.5)));
+        knots_v.extend([1.0; 4]);
+        let z = |k: usize| if k == 4 { 1.0 } else { 0.0 };
+        #[allow(clippy::cast_precision_loss)]
+        let row =
+            |u: f64| -> Vec<Point3> { (0..9).map(|k| Point3::new(k as f64, u, z(k))).collect() };
+        let surface = NurbsSurface::new(
+            1,
+            3,
+            vec![0.0, 0.0, 1.0, 1.0],
+            knots_v.clone(),
+            vec![row(0.0), row(1.0)],
+            vec![vec![1.0; 9]; 2],
+        )
+        .unwrap();
+        let side = |u: f64| {
+            EdgeCurve::NurbsCurve(
+                NurbsCurve::new(3, knots_v.clone(), row(u), vec![1.0; 9]).unwrap(),
+            )
+        };
+        let mut topo = Topology::new();
+        let v: Vec<_> = [(0.0, 0.0), (8.0, 0.0), (8.0, 1.0), (0.0, 1.0)]
+            .iter()
+            .map(|&(x, y)| topo.add_vertex(Vertex::new(Point3::new(x, y, 0.0), 1e-7)))
+            .collect();
+        let edges = [
+            Edge::new(v[0], v[1], side(0.0)),
+            Edge::new(v[1], v[2], EdgeCurve::Line),
+            Edge::new(v[3], v[2], side(1.0)),
+            Edge::new(v[0], v[3], EdgeCurve::Line),
+        ]
+        .into_iter()
+        .zip([true, true, false, false])
+        .map(|(e, forward)| OrientedEdge::new(topo.add_edge(e), forward))
+        .collect();
+        let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+        let face = topo.add_face(Face::new(wire, vec![], FaceSurface::Nurbs(surface)));
+        (topo, face)
     }
 }

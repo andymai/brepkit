@@ -222,6 +222,23 @@ impl RaySurface {
     #[must_use]
     pub fn hits(&self, origin: Point3, dir: Vec3, reach: f64) -> RayHits {
         let mut out = RayHits::default();
+        // How near another hit must lie to each hit to be it: a hit settled
+        // on its parameters' spacing is known no closer than that.
+        let mut radii: Vec<f64> = Vec::new();
+        out = self.collect_hits(origin, dir, reach, (out, &mut radii));
+        coalesce(&mut out.hits, &radii);
+        out
+    }
+
+    /// Every hit [`Self::hits`] finds, before those of one crossing are
+    /// joined, each with its radius in `radii`.
+    fn collect_hits(
+        &self,
+        origin: Point3,
+        dir: Vec3,
+        reach: f64,
+        (mut out, radii): (RayHits, &mut Vec<f64>),
+    ) -> RayHits {
         let Ok(frame) = Frame3::from_normal(origin, dir) else {
             out.grazed = true;
             return out;
@@ -256,7 +273,7 @@ impl RaySurface {
             if along_u.max(along_v) <= leaf || depth >= MAX_DEPTH {
                 // A leaf the solve cannot settle is cut further, and at the
                 // deepest level the ray is taken to graze it.
-                if self.solve(&patch, origin, frame.z, reach, &mut out) {
+                if self.solve(&patch, origin, frame.z, reach, (&mut out, radii)) {
                     continue;
                 }
                 if depth >= MAX_DEPTH {
@@ -303,13 +320,20 @@ impl RaySurface {
     /// recording the hit when it lands in the leaf. Whether it converged,
     /// in the leaf or out of it: a stall (the ray along the tangent plane
     /// at a step) or no convergence leaves the leaf unsettled.
+    ///
+    /// Where the surface runs fast in its parameters, a unit in the last
+    /// place of `u` or `v` moves the point farther than 1e-12 of the
+    /// surface's size, and Newton stalls short of that. A hit it stalls on
+    /// within four such units is settled there, after Newton has run its
+    /// course; it is one hit with any other that near, and when that is
+    /// farther than `reach` the ray is flagged, its count in doubt.
     fn solve(
         &self,
         leaf: &Patch,
         origin: Point3,
         dir: Vec3,
         reach: f64,
-        out: &mut RayHits,
+        (out, radii): (&mut RayHits, &mut Vec<f64>),
     ) -> bool {
         let (mut u, mut v) = (
             f64::midpoint(leaf.u.0, leaf.u.1),
@@ -317,30 +341,18 @@ impl RaySurface {
         );
         let (du, dv) = (self.surface.domain_u(), self.surface.domain_v());
         let mut t = dir.dot(self.surface.evaluate(u, v) - origin);
+        let mut stalled = None;
         for _ in 0..32 {
             let d = self.surface.derivatives(u, v, 1);
             let (s, su, sv) = (d[0][0], d[1][0], d[0][1]);
             let f = s - Vec3::new(origin.x(), origin.y(), origin.z()) - dir * t;
+            if f.length() <= 1e-12 * self.scale {
+                return self.record(leaf, (u, v, t), origin, dir, reach, reach, (out, radii));
+            }
+            let spacing = 4.0 * f64::EPSILON * su.length().mul_add(u.abs(), sv.length() * v.abs());
+            stalled = (f.length() <= spacing).then_some((u, v, t, spacing));
             let normal = su.cross(sv);
             let det = -normal.dot(dir);
-            if f.length() <= 1e-12 * self.scale {
-                let slack_u = 1e-9 * (du.1 - du.0);
-                let slack_v = 1e-9 * (dv.1 - dv.0);
-                if u < leaf.u.0 - slack_u
-                    || u > leaf.u.1 + slack_u
-                    || v < leaf.v.0 - slack_v
-                    || v > leaf.v.1 + slack_v
-                    || t < -reach
-                {
-                    return true;
-                }
-                out.grazed |= self.second_crossing_near(u, v, dir);
-                let point = origin + dir * t;
-                if !out.hits.iter().any(|h| (h.point - point).length() <= reach) {
-                    out.hits.push(RayHit { u, v, t, point });
-                }
-                return true;
-            }
             if det.abs() <= 1e-300 {
                 break;
             }
@@ -354,8 +366,121 @@ impl RaySurface {
             v = (v + x_v).clamp(dv.0, dv.1);
             t += x_t;
         }
-        false
+        let Some((u, v, t, spacing)) = stalled else {
+            return false;
+        };
+        out.grazed |= spacing > reach;
+        self.record(
+            leaf,
+            (u, v, t),
+            origin,
+            dir,
+            reach,
+            spacing.max(reach),
+            (out, radii),
+        )
     }
+
+    /// Record the hit at `(u, v)`, `t` along the ray, when it lies in `leaf`
+    /// and ahead of `origin` by no less than `-reach`, with `merge` in
+    /// `radii`: the distance within which another hit is the same one.
+    /// Always settles the leaf.
+    #[allow(clippy::too_many_arguments)]
+    fn record(
+        &self,
+        leaf: &Patch,
+        (u, v, t): (f64, f64, f64),
+        origin: Point3,
+        dir: Vec3,
+        reach: f64,
+        merge: f64,
+        (out, radii): (&mut RayHits, &mut Vec<f64>),
+    ) -> bool {
+        let (du, dv) = (self.surface.domain_u(), self.surface.domain_v());
+        let slack_u = 1e-9 * (du.1 - du.0);
+        let slack_v = 1e-9 * (dv.1 - dv.0);
+        if u < leaf.u.0 - slack_u
+            || u > leaf.u.1 + slack_u
+            || v < leaf.v.0 - slack_v
+            || v > leaf.v.1 + slack_v
+            || t < -reach
+        {
+            return true;
+        }
+        out.grazed |= self.second_crossing_near(u, v, dir);
+        let point = origin + dir * t;
+        out.hits.push(RayHit { u, v, t, point });
+        radii.push(merge);
+        true
+    }
+}
+
+/// Join the hits of one crossing: two lie on one when they lie within the
+/// wider of their radii, and so does any chain of such pairs. A chain does
+/// not hang on the order the hits were found in, so neither does the count.
+/// Each crossing keeps its most precise hit, the nearest along the ray among
+/// those as precise, and the hits are left in order along the ray.
+///
+/// Every hit lies on the ray, `t` along it, so two lie `|t - t'|` apart.
+/// Taken in order of `t`, a hit joins the last crossing when it lies within
+/// the farthest that crossing's hits reach, or its own radius reaches back to
+/// that crossing's last hit, and its radius can reach on back to join the
+/// crossings before it into one. A crossing before the last whose own reach
+/// takes the hit in would have taken the last one in already.
+fn coalesce(hits: &mut Vec<RayHit>, radii: &[f64]) {
+    /// A crossing's hits so far: the last along the ray, the one whose radius
+    /// reaches farthest past it, and the most precise.
+    struct Crossing {
+        last: f64,
+        reacher: (f64, f64),
+        best: usize,
+    }
+    // Separations are taken between `t`s and set against radii, never as
+    // sums: at `t` = 1e10 a unit in the last place is 1.9e-6, and `t + r`
+    // would round a radius of 1e-6 away. A hit at `(t, r)` reaches past one
+    // at `(s, q)` when `t - s` exceeds `q - r`.
+    let farther = |a: (f64, f64), b: (f64, f64)| a.0 - b.0 > b.1 - a.1;
+    let mut order: Vec<usize> = (0..hits.len()).collect();
+    order.sort_by(|&a, &b| hits[a].t.total_cmp(&hits[b].t));
+    let precise = |a: usize, b: usize| {
+        radii[a]
+            .total_cmp(&radii[b])
+            .then(hits[a].t.total_cmp(&hits[b].t))
+            .is_lt()
+    };
+    let mut crossings: Vec<Crossing> = Vec::new();
+    for i in order {
+        let (t, r) = (hits[i].t, radii[i]);
+        match crossings.last_mut() {
+            Some(c) if t - c.reacher.0 <= c.reacher.1 || t - c.last <= r => {
+                c.last = t;
+                if farther((t, r), c.reacher) {
+                    c.reacher = (t, r);
+                }
+                if precise(i, c.best) {
+                    c.best = i;
+                }
+            }
+            _ => crossings.push(Crossing {
+                last: t,
+                reacher: (t, r),
+                best: i,
+            }),
+        }
+        while crossings.len() >= 2 && t - crossings[crossings.len() - 2].last <= r {
+            let Some(later) = crossings.pop() else { break };
+            if let Some(c) = crossings.last_mut() {
+                c.last = later.last;
+                if farther(later.reacher, c.reacher) {
+                    c.reacher = later.reacher;
+                }
+                if precise(later.best, c.best) {
+                    c.best = later.best;
+                }
+            }
+        }
+    }
+    *hits = crossings.into_iter().map(|c| hits[c.best]).collect();
 }
 
 #[cfg(test)]
@@ -531,5 +656,133 @@ mod tests {
         )
         .unwrap();
         assert!(RaySurface::new(&s).is_none());
+    }
+
+    /// A flat unit patch crossed slant: one hit over [0, 1] in each
+    /// parameter, over [0, 1e-12], and over [2^40, 2^40 + 1], each through
+    /// its middle, where every leaf of its subdivision has a corner. Over
+    /// [2^40, 2^40 + 1] a unit in the last place of a parameter is 2^-12:
+    /// the middle lies on that grid, but (0.50003, 0.50007) does not, and
+    /// its hit, settled no finer, is flagged.
+    #[test]
+    fn a_patch_on_a_tiny_or_far_knot_domain_is_crossed_once() {
+        let p = Point3::new;
+        let corners = vec![
+            vec![p(0.0, 0.0, 0.0), p(0.0, 1.0, 0.0)],
+            vec![p(1.0, 0.0, 0.0), p(1.0, 1.0, 0.0)],
+        ];
+        let dir = Vec3::new(0.3, 0.2, -1.0);
+        let far = 2.0_f64.powi(40);
+        let middle = p(0.5, 0.5, 0.0);
+        for (lo, hi, through, flagged) in [
+            (0.0, 1.0, middle, false),
+            (0.0, 1e-12, middle, false),
+            (far, far + 1.0, middle, false),
+            (far, far + 1.0, p(0.500_03, 0.500_07, 0.0), true),
+        ] {
+            let knots = vec![lo, lo, hi, hi];
+            let s = NurbsSurface::new(
+                1,
+                1,
+                knots.clone(),
+                knots,
+                corners.clone(),
+                vec![vec![1.0; 2]; 2],
+            )
+            .unwrap();
+            let found = RaySurface::new(&s).unwrap().hits(through - dir, dir, 1e-6);
+            let case = format!("knots {lo} to {hi} through {through:?}");
+            assert_eq!(found.hits.len(), 1, "{case}: {:?}", found.hits);
+            assert_eq!(found.grazed, flagged, "{case}");
+        }
+    }
+
+    /// Three hits along a ray at 1, 1.0001 and 1.0002, the middle one
+    /// settled on a spacing of 1e-3 and the others found to 1e-6, are one
+    /// crossing in every order they are found in, and so are three a wide
+    /// radius chains from the last hit back past the middle one. Two hits
+    /// 1.9e-6 apart at 1e10 along the ray, each found to 1e-6, are two.
+    #[test]
+    fn hits_merge_on_the_wider_radius_in_any_order() {
+        let p = Point3::new;
+        let knots = vec![0.0, 0.0, 1.0, 1.0];
+        let flat = NurbsSurface::new(
+            1,
+            1,
+            knots.clone(),
+            knots,
+            vec![
+                vec![p(0.0, 0.0, 0.0), p(0.0, 1.0, 0.0)],
+                vec![p(1.0, 0.0, 0.0), p(1.0, 1.0, 0.0)],
+            ],
+            vec![vec![1.0; 2]; 2],
+        )
+        .unwrap();
+        let ray = RaySurface::new(&flat).unwrap();
+        let leaf = ray.patches[0].clone();
+        let (origin, dir) = (p(0.5, 0.5, 1.0), Vec3::new(0.0, 0.0, -1.0));
+        // The middle hit reaches both others; and a hit at 1.0021, reaching
+        // back 3e-3, joins one at 1 reaching 1e-3 with one at 1.002 that
+        // neither reaches.
+        let chains = [
+            [
+                ((0.5, 0.5, 1.0), 1e-6),
+                ((0.5, 0.5, 1.0001), 1e-3),
+                ((0.5, 0.5, 1.0002), 1e-6),
+            ],
+            [
+                ((0.5, 0.5, 1.0), 1e-3),
+                ((0.5, 0.5, 1.002), 1e-6),
+                ((0.5, 0.5, 1.0021), 3e-3),
+            ],
+        ];
+        let orders = [
+            [0, 1, 2],
+            [0, 2, 1],
+            [1, 0, 2],
+            [1, 2, 0],
+            [2, 0, 1],
+            [2, 1, 0],
+        ];
+        // Far along the ray a unit in the last place of `t` is 1.9e-6: two hits
+        // that far apart, each found to 1e-6, are two crossings.
+        let far = 1e10_f64;
+        let next = f64::from_bits(far.to_bits() + 1);
+        for order in [[0, 1], [1, 0]] {
+            let (mut out, mut radii) = (RayHits::default(), Vec::new());
+            for k in order {
+                let t = [far, next][k];
+                assert!(ray.record(
+                    &leaf,
+                    (0.5, 0.5, t),
+                    origin,
+                    dir,
+                    1e-6,
+                    1e-6,
+                    (&mut out, &mut radii)
+                ));
+            }
+            coalesce(&mut out.hits, &radii);
+            assert_eq!(out.hits.len(), 2, "far along the ray in {order:?}");
+        }
+        for found in chains {
+            for order in orders {
+                let (mut out, mut radii) = (RayHits::default(), Vec::new());
+                for k in order {
+                    let (hit, merge) = found[k];
+                    assert!(ray.record(
+                        &leaf,
+                        hit,
+                        origin,
+                        dir,
+                        1e-6,
+                        merge,
+                        (&mut out, &mut radii)
+                    ));
+                }
+                coalesce(&mut out.hits, &radii);
+                assert_eq!(out.hits.len(), 1, "{found:?} in {order:?}: {:?}", out.hits);
+            }
+        }
     }
 }

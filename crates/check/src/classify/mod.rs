@@ -102,13 +102,15 @@ impl<'a> SolidClassifier<'a> {
     }
 
     /// How many times the ray from `origin` along `direction` crosses the
-    /// solid's faces ahead of `origin`.
+    /// solid's faces ahead of `origin`. The count can be wrong where the ray
+    /// grazes a NURBS face, touching it or running in it, which
+    /// [`classify_point`] answers by casting other rays.
     ///
     /// # Errors
     ///
     /// Returns an error if a face contains invalid topology references.
     pub fn ray_crossings(&self, origin: Point3, direction: Vec3) -> Result<u32, CheckError> {
-        count_ray_crossings(self.topo, &self.faces, origin, direction)
+        Ok(count_ray_crossings(self.topo, &self.faces, origin, direction)?.0)
     }
 }
 
@@ -143,26 +145,34 @@ fn classify_in(
         ),
     ];
 
-    let mut inside_votes = 0u32;
-    let mut outside_votes = 0u32;
+    // A ray that grazes a face may miscount its crossings there: it votes
+    // only when no ray that crosses cleanly does. `[inside, outside]`.
+    let mut sure = [0u32; 2];
+    let mut doubtful = [0u32; 2];
+    let mut cast = |dir: Vec3, sure: &mut [u32; 2]| -> Result<(), CheckError> {
+        let (crossings, unsure) = count_ray_crossings(topo, faces, point, dir)?;
+        let slot = usize::from(crossings % 2 == 0);
+        if unsure {
+            doubtful[slot] += 1;
+        } else {
+            sure[slot] += 1;
+        }
+        Ok(())
+    };
 
     for &dir in &base_dirs {
-        let crossings = count_ray_crossings(topo, faces, point, dir)?;
-        if crossings % 2 == 1 {
-            inside_votes += 1;
-        } else {
-            outside_votes += 1;
-        }
+        cast(dir, &mut sure)?;
         // Early exit: if 2 rays agree, that's the answer.
-        if inside_votes >= 2 {
+        if sure[0] >= 2 {
             return Ok(PointClassification::Inside);
         }
-        if outside_votes >= 2 {
+        if sure[1] >= 2 {
             return Ok(PointClassification::Outside);
         }
     }
 
-    // All three disagreed (very rare). Try perturbed directions as recovery.
+    // No two rays that crossed cleanly agreed: the three disagreed, or one
+    // grazed a face. Try perturbed directions as recovery.
     for attempt in 0..options.max_recovery_attempts {
         // Generate a pseudo-random direction from attempt index using golden ratio.
         let seed = (attempt as f64 + 1.0) * 0.618_033_988_749_895;
@@ -170,22 +180,19 @@ fn classify_in(
         let phi = (seed * std::f64::consts::E).fract() * std::f64::consts::PI;
         let dir = Vec3::new(phi.sin() * theta.cos(), phi.sin() * theta.sin(), phi.cos());
 
-        let crossings = count_ray_crossings(topo, faces, point, dir)?;
-        if crossings % 2 == 1 {
-            inside_votes += 1;
-        } else {
-            outside_votes += 1;
-        }
+        cast(dir, &mut sure)?;
         let remaining = options.max_recovery_attempts as u32 - attempt as u32;
-        if inside_votes > outside_votes + remaining {
+        if sure[0] > sure[1] + remaining {
             return Ok(PointClassification::Inside);
         }
-        if outside_votes > inside_votes + remaining {
+        if sure[1] > sure[0] + remaining {
             return Ok(PointClassification::Outside);
         }
     }
 
-    // Majority vote from all attempts.
+    // Majority vote from all attempts, from the grazing rays only when
+    // every ray grazed.
+    let [inside_votes, outside_votes] = if sure == [0, 0] { doubtful } else { sure };
     if inside_votes > outside_votes {
         Ok(PointClassification::Inside)
     } else {
@@ -287,13 +294,13 @@ pub fn classify_point_robust(
 }
 
 /// The solid's faces in a BVH over their bounding boxes, built once per
-/// point so each ray only tests the faces whose box it meets, with each
-/// sphere face's region kept once built.
+/// point so each ray only tests the faces whose box it meets, with what
+/// each sphere or NURBS face builds for its crossings kept once built.
 struct FaceBvh {
     faces: Vec<FaceId>,
     aabbs: Vec<brepkit_math::aabb::Aabb3>,
     bvh: brepkit_math::bvh::Bvh,
-    spheres: Vec<std::cell::OnceCell<Option<boundary::SphereRegion>>>,
+    caches: Vec<boundary::FaceRayCache>,
 }
 
 impl FaceBvh {
@@ -307,34 +314,40 @@ impl FaceBvh {
             .collect::<Result<Vec<_>, _>>()?;
         let indexed: Vec<_> = aabbs.iter().copied().enumerate().collect();
         let bvh = brepkit_math::bvh::Bvh::build(&indexed);
-        let spheres = faces.iter().map(|_| std::cell::OnceCell::new()).collect();
+        let caches = faces
+            .iter()
+            .map(|_| boundary::FaceRayCache::default())
+            .collect();
         Ok(Self {
             faces,
             aabbs,
             bvh,
-            spheres,
+            caches,
         })
     }
 }
 
-/// Count a ray's crossings with the solid's faces.
+/// Count a ray's crossings with the solid's faces, and whether it grazed
+/// one so that the count may be wrong.
 fn count_ray_crossings(
     topo: &Topology,
     faces: &FaceBvh,
     origin: Point3,
     direction: Vec3,
-) -> Result<u32, CheckError> {
+) -> Result<(u32, bool), CheckError> {
     let mut crossings = 0u32;
+    let mut unsure = false;
     for face_idx in faces.bvh.query_ray(origin, direction) {
         crossings += boundary::count_face_ray_crossings(
             topo,
             faces.faces[face_idx],
             origin,
             direction,
-            &faces.spheres[face_idx],
+            &faces.caches[face_idx],
+            &mut unsure,
         )?;
     }
-    Ok(crossings)
+    Ok((crossings, unsure))
 }
 
 // ===========================================================================
