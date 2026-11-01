@@ -7191,6 +7191,7 @@ fn split_face_2d_impl(
         // endpoints' widest gap cannot always say which side is the face: a
         // half band's vertices all sit on its two rulings half a turn apart,
         // its two gaps tie, and rounding can pick the side it does not cover.
+        // A whole ring's seam placeholders all sit at one u and span nothing.
         let boundary = &all_edges[..n_boundary_edges];
         let unbroken = !boundary.is_empty()
             && boundary
@@ -7203,7 +7204,8 @@ fn split_face_2d_impl(
             .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), u| {
                 (lo.min(u), hi.max(u))
             });
-        let walked = (unbroken && walk_hi - walk_lo < u_period - 1e-6).then_some(walk_lo);
+        let span = walk_hi - walk_lo;
+        let walked = (unbroken && span > 1e-6 && span < u_period - 1e-6).then_some(walk_lo);
         let mut us: Vec<f64> = all_edges
             .iter()
             .flat_map(|e| [e.start_uv.x(), e.end_uv.x()])
