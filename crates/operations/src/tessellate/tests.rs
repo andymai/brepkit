@@ -3920,7 +3920,7 @@ fn a_flat_trapezoid_needs_no_grid_for_its_twist() {
     let grid = |lift: f64| {
         let surface = patch(lift);
         let at = |u: f64, v: f64| surface.evaluate(u, v);
-        super::nurbs::untwisted_grid(&at, ((0.0, 1.0), (0.0, 1.0)), (1, 1), 0.01, 1024)
+        super::nurbs::untwisted_grid(&at, ((0.0, 1.0), (0.0, 1.0)), (1, 1), 0.01, 1024, None)
     };
     assert_eq!(grid(0.0), (1, 1));
     let (n_u, n_v) = grid(10.0);
@@ -3997,7 +3997,7 @@ fn a_saddle_flattening_mid_patch_is_meshed_at_its_middle() {
         );
         let at = |u: f64, v: f64| saddle.evaluate(u, v);
         let (n_u, n_v) =
-            super::nurbs::untwisted_grid(&at, ((0.0, 1.0), (0.0, 1.0)), (1, 1), 0.05, 1024);
+            super::nurbs::untwisted_grid(&at, ((0.0, 1.0), (0.0, 1.0)), (1, 1), 0.05, 1024, None);
         #[allow(clippy::cast_precision_loss)]
         let (du, dv) = (1.0 / n_u as f64, 1.0 / n_v as f64);
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
@@ -4017,6 +4017,231 @@ fn a_saddle_flattening_mid_patch_is_meshed_at_its_middle() {
     }
 }
 
+/// The saddle S(u, v) = (u, v, 5.78uv) has straight iso-lines, so only its
+/// twist refines its grid: at deflection 0.01 it needs some 17 divisions
+/// each way. The grid taken for it holds every cell within half the
+/// deflection in fewer cells than doubling both directions to the first
+/// grid that holds, 32 by 32.
+#[test]
+fn a_twisted_patch_grows_its_grid_by_what_its_worst_cell_needs() {
+    let saddle = bilinear(
+        Point3::new(0.0, 0.0, 0.0),
+        Point3::new(1.0, 0.0, 0.0),
+        Point3::new(0.0, 1.0, 0.0),
+        Point3::new(1.0, 1.0, 5.78),
+    );
+    let at = |u: f64, v: f64| saddle.evaluate(u, v);
+    let deflection = 0.01;
+    let worst = |(n_u, n_v): (usize, usize)| {
+        #[allow(clippy::cast_precision_loss)]
+        let (du, dv) = (1.0 / n_u as f64, 1.0 / n_v as f64);
+        (0..n_u)
+            .flat_map(|i| (0..n_v).map(move |j| (i, j)))
+            .map(|(i, j)| {
+                #[allow(clippy::cast_precision_loss)]
+                let corner = (du * i as f64, dv * j as f64);
+                super::nurbs::cell_twist(&at, corner, (du, dv))
+            })
+            .fold(0.0_f64, f64::max)
+    };
+    let doubled = (0..=10)
+        .map(|k| (1_usize << k, 1_usize << k))
+        .find(|&grid| worst(grid) <= 0.5 * deflection)
+        .unwrap();
+    assert_eq!(doubled, (32, 32));
+    let grid = super::nurbs::untwisted_grid(
+        &at,
+        ((0.0, 1.0), (0.0, 1.0)),
+        (1, 1),
+        deflection,
+        1024,
+        None,
+    );
+    assert!(
+        worst(grid) <= 0.5 * deflection,
+        "{grid:?} strays {}",
+        worst(grid)
+    );
+    assert!(grid.0 * grid.1 < 32 * 32, "grew to {grid:?}");
+}
+
+/// The patch S(u, v) = (u, v, 0.075 max(0, u - 0.435) + 0.075 max(0, u -
+/// 0.44) + 0.3uv) creases at u = 0.435 and 0.44, its normal turning 0.075
+/// at each. Sized at deflection 0.0022 and angular tolerance 0.1, a line of
+/// its grid falls between the creases; refined for its twist to counts
+/// that are no multiple of that grid's, a chord could take in both creases
+/// and turn its normal 0.15. Every chord of the grid taken holds the
+/// angular tolerance.
+#[test]
+fn a_twisted_grid_keeps_two_creases_in_separate_chords() {
+    let ramp = |u: f64, at: f64| (u - at).max(0.0);
+    let at =
+        |u: f64, v: f64| Point3::new(u, v, 0.075 * (ramp(u, 0.435) + ramp(u, 0.44)) + 0.3 * u * v);
+    let normal_at = |u: f64, v: f64| {
+        let step = |at: f64| if u > at { 0.075 } else { 0.0 };
+        let su = Vec3::new(1.0, 0.0, step(0.435) + step(0.44) + 0.3 * v);
+        let sv = Vec3::new(0.0, 1.0, 0.3 * u);
+        su.cross(sv).normalize().unwrap()
+    };
+    let (deflection, angular_tol) = (0.0022, 0.1);
+    let unit = ((0.0, 1.0), (0.0, 1.0));
+    let holds = |along_u: bool, n: usize| {
+        super::nurbs::iso_chords_hold(&at, &normal_at, along_u, unit, deflection, angular_tol, n)
+    };
+    let sized = |along_u| {
+        super::nurbs::iso_divisions_over(
+            &at,
+            &normal_at,
+            along_u,
+            unit,
+            deflection,
+            angular_tol,
+            1024,
+        )
+    };
+    let start = (sized(true), sized(false));
+    let grid = super::nurbs::untwisted_grid(&at, unit, start, deflection, 1024, Some(&holds));
+    assert!(grid != start, "{start:?} needs no refinement");
+    assert!(
+        holds(true, grid.0) && holds(false, grid.1),
+        "{start:?} grew to {grid:?}"
+    );
+    // Read apart from the sizing's own test: across every chord along u of
+    // a few rows the normal turns within the tolerance.
+    #[allow(clippy::cast_precision_loss)]
+    let turn = (0..grid.0)
+        .flat_map(|k| (0..8).map(move |row| (k, row)))
+        .map(|(k, row)| {
+            let (u0, u1) = (k as f64 / grid.0 as f64, (k + 1) as f64 / grid.0 as f64);
+            let v = (f64::from(row) + 0.5) / 8.0;
+            normal_at(u0, v)
+                .dot(normal_at(u1, v))
+                .clamp(-1.0, 1.0)
+                .acos()
+        })
+        .fold(0.0_f64, f64::max);
+    assert!(turn <= angular_tol, "{grid:?}: a chord turns {turn}");
+}
+
+/// The twisted saddle S(u, v) = (u, v, 5.78uv) from a 4 by 4 grid, under a
+/// chord test that holds only counts divisible by 3, as creases might: a
+/// step the test refuses goes on through the multiples of 4 to one it holds,
+/// and the grid taken holds both the test and the deflection. Rounded up to
+/// the next multiple of 4 alone, it ends on a count the test refuses.
+#[test]
+fn a_twisted_grid_steps_on_to_a_count_its_chords_hold() {
+    let saddle = bilinear(
+        Point3::new(0.0, 0.0, 0.0),
+        Point3::new(1.0, 0.0, 0.0),
+        Point3::new(0.0, 1.0, 0.0),
+        Point3::new(1.0, 1.0, 5.78),
+    );
+    let at = |u: f64, v: f64| saddle.evaluate(u, v);
+    let thirds = |_: bool, n: usize| n.is_multiple_of(3);
+    let deflection = 0.01;
+    let grid = super::nurbs::untwisted_grid(
+        &at,
+        ((0.0, 1.0), (0.0, 1.0)),
+        (4, 4),
+        deflection,
+        1024,
+        Some(&thirds),
+    );
+    assert!(
+        thirds(true, grid.0) && thirds(false, grid.1),
+        "grew to {grid:?}"
+    );
+    #[allow(clippy::cast_precision_loss)]
+    let (du, dv) = (1.0 / grid.0 as f64, 1.0 / grid.1 as f64);
+    let worst = (0..grid.0)
+        .flat_map(|i| (0..grid.1).map(move |j| (i, j)))
+        .map(|(i, j)| {
+            #[allow(clippy::cast_precision_loss)]
+            let corner = (du * i as f64, dv * j as f64);
+            super::nurbs::cell_twist(&at, corner, (du, dv))
+        })
+        .fold(0.0_f64, f64::max);
+    assert!(worst <= 0.5 * deflection, "{grid:?} strays {worst}");
+}
+
+/// S(u, v) = (u, v, 0.7uv + 0.217 h(u) h(v)), h(t) = max(0, 1 - |t - 0.125|
+/// / 0.003): a twisted patch with a peak 0.217 high and 0.006 wide at
+/// (0.125, 0.125). From a 1 by 1 grid at deflection 0.2, a 4 by 4 grid finds
+/// the peak at a cell's middle, and one 7 by 7 would leave it between its
+/// probes, 0.215 off their triangles. The grid taken holds the peak within
+/// half the deflection.
+#[test]
+fn a_twisted_grid_keeps_a_narrow_peak_it_has_found() {
+    let h = |t: f64| (1.0 - (t - 0.125).abs() / 0.003).max(0.0);
+    let at = |u: f64, v: f64| Point3::new(u, v, 0.7 * u * v + 0.217 * h(u) * h(v));
+    let deflection = 0.2;
+    let grid = super::nurbs::untwisted_grid(
+        &at,
+        ((0.0, 1.0), (0.0, 1.0)),
+        (1, 1),
+        deflection,
+        1024,
+        None,
+    );
+    let stray = stray_in_grid(&at, grid, (0.125, 0.125));
+    assert!(
+        stray <= 0.5 * deflection,
+        "{grid:?}: the peak stands {stray} off"
+    );
+}
+
+/// The stray of the grid's cell holding `(u, v)` there, from either split.
+fn stray_in_grid(
+    at: &dyn Fn(f64, f64) -> Point3,
+    (n_u, n_v): (usize, usize),
+    (u, v): (f64, f64),
+) -> f64 {
+    use super::nurbs::point_triangle_distance;
+    #[allow(clippy::cast_precision_loss)]
+    let (du, dv) = (1.0 / n_u as f64, 1.0 / n_v as f64);
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let (i, j) = (
+        ((u / du) as usize).min(n_u - 1),
+        ((v / dv) as usize).min(n_v - 1),
+    );
+    #[allow(clippy::cast_precision_loss)]
+    let corner = |a: usize, b: usize| at(du * (i + a) as f64, dv * (j + b) as f64);
+    let (p00, p10, p01, p11) = (corner(0, 0), corner(1, 0), corner(0, 1), corner(1, 1));
+    let p = at(u, v);
+    let split = |a: Point3, b: Point3, c: Point3, d: Point3| {
+        point_triangle_distance(p, a, b, c).min(point_triangle_distance(p, a, c, d))
+    };
+    split(p00, p10, p11, p01).max(split(p10, p11, p01, p00))
+}
+
+/// The narrow peak above under a chord test that refuses 8 divisions, as
+/// creases turning opposite ways might: the grid that keeps the peak is no
+/// doubling to 8 by 8, and the grid taken holds the peak and its chords.
+#[test]
+fn a_twisted_grid_keeps_a_narrow_peak_where_its_chords_hold() {
+    let h = |t: f64| (1.0 - (t - 0.125).abs() / 0.003).max(0.0);
+    let at = |u: f64, v: f64| Point3::new(u, v, 0.7 * u * v + 0.217 * h(u) * h(v));
+    let not_eight = |_: bool, n: usize| n != 8;
+    let deflection = 0.2;
+    let grid = super::nurbs::untwisted_grid(
+        &at,
+        ((0.0, 1.0), (0.0, 1.0)),
+        (1, 1),
+        deflection,
+        1024,
+        Some(&not_eight),
+    );
+    assert!(
+        not_eight(true, grid.0) && not_eight(false, grid.1),
+        "{grid:?}"
+    );
+    let stray = stray_in_grid(&at, grid, (0.125, 0.125));
+    assert!(
+        stray <= 0.5 * deflection,
+        "{grid:?}: the peak stands {stray} off"
+    );
+}
+
 /// The patch S(u, v) = (20u(1 - 0.99v), 20v, 0.2uv) tapers from 20 wide to
 /// 0.2. Its middle strays 0.05 from the two triangles of either split, but
 /// toward its narrow end, where one triangle is a sliver standing steep,
@@ -4032,7 +4257,7 @@ fn a_tapered_patch_strays_most_toward_its_narrow_end() {
     );
     let at = |u: f64, v: f64| taper.evaluate(u, v);
     let (n_u, n_v) =
-        super::nurbs::untwisted_grid(&at, ((0.0, 1.0), (0.0, 1.0)), (1, 1), 0.11, 1024);
+        super::nurbs::untwisted_grid(&at, ((0.0, 1.0), (0.0, 1.0)), (1, 1), 0.11, 1024, None);
     #[allow(clippy::cast_precision_loss)]
     let (du, dv) = (1.0 / n_u as f64, 1.0 / n_v as f64);
     let worst = (0..n_u)

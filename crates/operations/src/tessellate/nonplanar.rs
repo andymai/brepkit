@@ -5233,12 +5233,34 @@ fn interior_grid_resolution(
                 })
                 .unwrap_or((1, 1));
             let at = |u: f64, v: f64| eval_surface_point(surface, u, v);
+            let normal_at = |u: f64, v: f64| {
+                let (u, v) = wrap_to_domain(surface, u, v);
+                surface.normal(u, v)
+            };
+            let (u_span, v_span) = ((u_min, u_min + du), (v_min, v_min + dv));
+            let chords = |along_u: bool, n: usize| {
+                let spans = if along_u {
+                    (u_span, v_span)
+                } else {
+                    (v_span, u_span)
+                };
+                super::nurbs::iso_chords_hold(
+                    &at,
+                    &normal_at,
+                    along_u,
+                    spans,
+                    deflection,
+                    angular_tol,
+                    n,
+                )
+            };
             let (n_u, n_v) = super::nurbs::untwisted_grid(
                 &at,
-                ((u_min, u_min + du), (v_min, v_min + dv)),
+                (u_span, v_span),
                 (n_u, n_v),
                 deflection,
                 NURBS_MAX_DIVISIONS,
+                Some(&chords),
             );
             super::nurbs::cap_grid(n_u, n_v, super::nurbs::GRID_MAX_CELLS)
         }
