@@ -301,6 +301,8 @@ pub(super) fn twisted_straight_edge_samples(
         return Ok(Vec::new());
     }
     let at = |u: f64, v: f64| nurbs.evaluate(u, v);
+    // The grid only counts samples along straight edges: a line has no sag
+    // or turn along it for a chord test to read.
     let (n_u, n_v) = super::nurbs::untwisted_grid(
         &at,
         ((u_lo, u_hi), (v_lo, v_hi)),

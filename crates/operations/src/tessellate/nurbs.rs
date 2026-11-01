@@ -1050,7 +1050,14 @@ pub(super) fn untwisted_grid(
     // whose lines move off a narrow peak a probe found can leave it between
     // its own probes.
     let mut chain = (n_u, n_v);
+    // Each chain grid holds at least four times the cells of the one before,
+    // and a grid tried between two no more than the later one, so at five
+    // probes a cell the witnesses number at most some 13 times the last chain
+    // grid's cells.
+    // A whole multiple keeps a probe where one was, and one still straying
+    // there is the same witness.
     let mut witnesses: Vec<(f64, f64)> = Vec::new();
+    let mut witnessed: std::collections::HashSet<(u64, u64)> = std::collections::HashSet::new();
     let mut refined = false;
     loop {
         // The twist never takes cells past the grid's budget: a grid capped
@@ -1077,7 +1084,11 @@ pub(super) fn untwisted_grid(
         if stray <= half && held_u && held_v {
             break;
         }
-        witnesses.extend(past.iter().map(|&(_, uv)| uv));
+        for &(_, (u, v)) in &past {
+            if witnessed.insert((u.to_bits(), v.to_bits())) {
+                witnesses.push((u, v));
+            }
+        }
         let next = if (n_u, n_v) == chain {
             let grow = (1.1 * (stray / half).sqrt()).min(2.0);
             #[allow(
