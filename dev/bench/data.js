@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793483625623,
+  "lastUpdate": 1793496230045,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -63827,6 +63827,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 29170583,
             "range": "± 38793",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "603752e3e099429901f545db949b930cc0f529b6",
+          "message": "fix(check): find a ray's crossings on a NURBS face patch by patch (#2262)\n\n`classify_point` now finds where a ray crosses a NURBS face however\nnarrow the knot span that holds the crossing. On `main`, a disc of\nradius 0.1 swept by `sweep_with_options` along a cubic whose bend sits\ninside knot spans 1e-4 wide reads a point on its path at the top of the\nbend as `Outside`, and the same at 1e-6. Both now read `Inside`.\n\nToday the check crate's ray cast counts a NURBS face's crossings with\n`intersect_line_nurbs`, which seeds Newton from a 20 by 20 grid of the\nwhole domain and keeps only seeds within a twentieth of the surface's\ncorner-to-corner distance (at least 0.1) of the ray. A feature inside a\nsliver of the domain gets no seed. The tube's bend lies between `v` =\n0.5001 and 0.5005, between the grid's rows at 0.474 and 0.526.\n\n## Change\n\n- The ray cast reads NURBS crossings through `RaySurface`, which tests\nthe ray against each Bezier patch's control hull, cuts the patches it\nmeets, and runs Newton in each leaf. The boolean engine's classifier has\nused it since #2220. A surface it refuses (a weight not positive, or\nknots not clamped) keeps the grid, and a ray read on the grid is unsure\nof its count there.\n- Each face's `RaySurface` is built once per classification and kept\nacross its rays, as a sphere face's region already is.\n- A ray that `RaySurface` reports as grazing a face (a tangency, a leaf\nit cannot settle, or its visit limit) casts no vote while a ray that\ncrosses cleanly can. Its count decides only when every ray grazed.\n- `RaySurface` accepted a root only once Newton's residual fell to 1e-12\nof the surface's size. Where a surface runs fast in its parameters, one\nunit in the last place of `u` or `v` moves the point farther than that:\non a tube swept along that path with knot spans 1e-6 wide, Newton\nstalled at 1.56e-11 on a side about 8 long, and every leaf went\nunsolved. Newton now runs its course, and a hit it stalls on within four\nunits in the last place of each parameter (at the parameter's own value)\ntimes how fast the surface moves along it is settled there. When that\nspacing exceeds 1e-6, the ray is flagged as grazing.\n- Each hit keeps the distance within which another is the same hit:\n1e-6, or the spacing it was settled on. Once a ray's hits are all found,\ntwo lie on one crossing when they lie within the wider of their two\ndistances, and so does any chain of such pairs, so the count does not\nhang on the order the hits were found in. One sweep along the ray, in\norder of distance, joins them, setting each separation between two hits'\ndistances against their radii rather than comparing rounded sums.\n\n## Tests\n\n- `a_ray_crosses_a_bump_inside_narrow_knot_spans`: a whole patch, flat\nbut for a bump of height 2/3 inside knot spans `width` apart, for\n`width` 1e-4, 1e-6 and 1e-8. A ray up through the bump crosses the face\nonce, and one above it not at all. On `main` the 1e-4 case finds no\ncrossing.\n- `a_ray_along_a_nurbs_face_is_unsure_of_its_crossings`: a ray along the\nsame bump's straight ridge runs in the face, and its count is flagged.\n- `a_ray_through_a_patch_read_on_its_grid_is_unsure`: a flat patch with\nunclamped knots, read on the grid, flags a ray up through it.\n- `a_patch_on_a_tiny_or_far_knot_domain_is_crossed_once`: a flat unit\npatch crossed slant gives one hit over [0, 1] in each parameter, over\n[0, 1e-12], and over [2^40, 2^40 + 1], through its middle, where every\nleaf of its subdivision has a corner. Off the middle on [2^40, 2^40 +\n1], where a unit in the last place of a parameter is 2^-12, its one hit\nis flagged.\n- `hits_merge_on_the_wider_radius_in_any_order`: three hits along a ray\nat 1, 1.0001 and 1.0002, the middle one settled on a spacing of 1e-3 and\nthe others found to 1e-6, are one crossing in all six orders, and so are\nhits at 1 (1e-3), 1.002 (1e-6) and 1.0021 (3e-3), whose last reaches\nback past the middle one. Two hits 1.9e-6 apart at 1e10 along the ray,\neach found to 1e-6, stay two.\n- The check crate's 77 tests, the math crate's 651, and the operations\nand algo crates' 2023 pass.\n- The pose sweep and truth audit outputs are identical to `main`'s.",
+          "timestamp": "2026-11-01T01:20:36Z",
+          "tree_id": "a65bb8de095c7ad457832a4e4f9aae50f1c0dac0",
+          "url": "https://github.com/andymai/brepkit/commit/603752e3e099429901f545db949b930cc0f529b6"
+        },
+        "date": 1793496220434,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1111006,
+            "range": "± 1833",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1188192,
+            "range": "± 7781",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13084,
+            "range": "± 27",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 674229,
+            "range": "± 5263",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 29028156,
+            "range": "± 65528",
             "unit": "ns/iter"
           }
         ]
