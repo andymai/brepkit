@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793519630046,
+  "lastUpdate": 1793526432329,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -64097,6 +64097,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 17667303,
             "range": "± 175906",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "39f8d2a5d2e92bece591636e7ed3e333887f76d7",
+          "message": "fix(algo): lay a plane's internal line loop out in its boundary's frame (#2269)\n\nA plane that crosses a box's hole now cuts it exactly. A box 60 by 40 by\n20 with a through hole of radius 5, cut by a box whose floor lies at z =\n10, gives 7 faces holding 23214.602, its closed form, where `main` falls\nback to a mesh of 51 faces holding 23217.151. A slab whose floor meets a\nblind hole's floor (#2166's fourth row) goes from 38 faces and 11804.910\nto 7 faces and 11803.650.\n\nToday the plane's face takes the box's outline as a loop of four lines\ninside its boundary, and the hole's rim as a circle inside that loop.\n`split_face_with_internal_loops` reads each line's UVs off its pcurve,\nbut a line from a pave block carries no UVs (a plane gives none to\n`project_point`) and a placeholder pcurve at the origin, so every line\nstarts at (0, 0) and the loop lands in the wrong place in the face's 2D\nframe. The rim is then handed to the piece outside the outline, whose\nhole has no area, and the island stays a whole rectangle; the ring\nbetween the outline and the rim is never built, and the boolean falls\nback.\n\n## Change\n\n- On a plane, `split_face_with_internal_loops` lays each line section\nout in the boundary's frame, the one built from the face's wire points:\nits UVs are its ends projected there, as the general splitter reads\nevery plane section, and its pcurve is the line between them. Curved\nsections keep the pcurves `build_section_edges` fitted, which already\nlie in that frame.\n\n## Tests\n\n- `a_plane_across_a_through_hole_cuts_it_exactly`: the box with its hole\nat (30, 20) or (12, 9), cut above z = 10 or z = 7, in three poses (as\nbuilt, turned 90 degrees about x, and turned about z and x and moved).\nEach cut is valid, has 7 faces, holds its closed-form volume, and\nclassifies points in the material, in the hole and above the cut as it\nshould.\n- `a_slab_on_a_blind_holes_floor_keeps_the_hole_through`: #2166's fourth\nrow in the same three poses.\n- Both fail on `main` with a mesh fallback.\n- The algo, operations, io and wasm crates' 2727 tests pass.\n- The pose sweep and truth audit outputs are identical to `main`'s.\n\nThis fixes rows 4 and 5 of #2166.\n\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes plane cuts through a box's hole so they no longer fall back to a\nmesh. A plane whose face outline includes straight edges from the box's\nboundary was laying its line loop out at the frame's origin, so the\nhole's rim was handed to the wrong piece and the boolean meshed the\nresult. Now line sections on a plane are laid out in the boundary's\nframe by projecting their endpoints there, giving exact cuts (7 faces\nholding the closed-form volume instead of a 51-face mesh).\n\n- Adds two regression tests covering through and blind holes across\nthree poses; both fail on `main` with a mesh fallback.\n- Fixes rows 4 and 5 of #2166.\n\n<sup>Written for commit 9bda91987728c0cb921b83e45920f116cda7b966.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2269?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2269?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2269&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-11-01T09:44:22Z",
+          "tree_id": "415133c60dd12e77add5e1c34a901aec624e80d0",
+          "url": "https://github.com/andymai/brepkit/commit/39f8d2a5d2e92bece591636e7ed3e333887f76d7"
+        },
+        "date": 1793526424669,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 892947,
+            "range": "± 11346",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 959447,
+            "range": "± 14897",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11142,
+            "range": "± 18",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 532856,
+            "range": "± 1280",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 23109913,
+            "range": "± 409675",
             "unit": "ns/iter"
           }
         ]
