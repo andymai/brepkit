@@ -623,11 +623,28 @@ fn fit_trajectories(
             pieces.push(piece);
             slots.push(slot);
         }
-        let maps = maps_for(&all)?;
-        let witness_maps = if witnesses.is_empty() {
-            Vec::new()
+        // Rotation-minimizing frames run on from the first parameter they are
+        // given: the witnesses take theirs in one run with the samples.
+        let (maps, witness_maps) = if witnesses.is_empty() {
+            (maps_for(&all)?, Vec::new())
         } else {
-            maps_for(&witnesses)?
+            let mut merged: Vec<f64> = all.iter().chain(&witnesses).copied().collect();
+            merged.sort_by(f64::total_cmp);
+            merged.dedup_by(|a, b| a.to_bits() == b.to_bits());
+            let merged_maps = maps_for(&merged)?;
+            let pick = |ts: &[f64]| -> Result<Vec<Mat4>, crate::OperationsError> {
+                ts.iter()
+                    .map(|&t| {
+                        merged
+                            .binary_search_by(|x| x.total_cmp(&t))
+                            .map(|i| merged_maps[i])
+                            .map_err(|_| crate::OperationsError::InvalidInput {
+                                reason: format!("sweep fit lost its parameter {t}"),
+                            })
+                    })
+                    .collect()
+            };
+            (pick(&all)?, pick(&witnesses)?)
         };
 
         let fit = *fit_tol.get_or_insert_with(|| {
