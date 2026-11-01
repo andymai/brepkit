@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.6.20](https://github.com/andymai/brepkit/compare/v4.6.19...v4.6.20) (2026-11-01)
+
+
+### Bug Fixes
+
+* **algo:** cut a keyway whose outer face is tangent to the rod exactly ([#2272](https://github.com/andymai/brepkit/issues/2272)) ([2a921f3](https://github.com/andymai/brepkit/commit/2a921f3cee591d6ef179abd5f782b67d52d7d2cd)), closes [#2166](https://github.com/andymai/brepkit/issues/2166)
+
 ## [4.6.19](https://github.com/andymai/brepkit/compare/v4.6.18...v4.6.19) (2026-11-01)
 
 
