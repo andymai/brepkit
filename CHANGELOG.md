@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.6.17](https://github.com/andymai/brepkit/compare/v4.6.16...v4.6.17) (2026-11-01)
+
+
+### Bug Fixes
+
+* **operations:** sweep each profile edge on its own curve in sweep and helical_sweep ([#2266](https://github.com/andymai/brepkit/issues/2266)) ([ffb7181](https://github.com/andymai/brepkit/commit/ffb71813a3c3237eed207d39ef721ffb63ebcd45)), closes [#2170](https://github.com/andymai/brepkit/issues/2170)
+
 ## [4.6.16](https://github.com/andymai/brepkit/compare/v4.6.15...v4.6.16) (2026-11-01)
 
 
