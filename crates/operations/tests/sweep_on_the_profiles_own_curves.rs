@@ -587,3 +587,116 @@ fn a_profiles_centre_on_a_helix_does_not_hang_on_how_its_edges_are_held() {
         .max((b_line.max - b_nurbs.max).length());
     assert!(off < 1e-6, "the coils' boxes differ by {off}");
 }
+
+/// A disc of radius 2 swept one turn round a helix of radius 20 by
+/// `helical_sweep`, its rim a circle edge or the same circle as five rational
+/// arcs of 72 degrees on knots 0, 0.1, 0.3, 0.5, 0.7 and 1: the disc's centre
+/// is the circle's either way, and the two coils match.
+#[test]
+fn a_discs_centre_on_a_helix_does_not_hang_on_its_rims_knots() {
+    let coil = |as_nurbs: bool| {
+        let mut topo = Topology::new();
+        let rim = if as_nurbs {
+            let w = (36.0_f64.to_radians()).cos();
+            let mut points = Vec::new();
+            let mut weights = Vec::new();
+            for k in 0..5 {
+                let (a, b) = (
+                    f64::from(k) * 72.0_f64.to_radians(),
+                    f64::from(k + 1) * 72.0_f64.to_radians(),
+                );
+                let m = 0.5 * (a + b);
+                points.push(Point3::new(2.0 * a.cos(), 2.0 * a.sin(), 0.0));
+                weights.push(1.0);
+                points.push(Point3::new(2.0 * m.cos() / w, 2.0 * m.sin() / w, 0.0));
+                weights.push(w);
+            }
+            points.push(Point3::new(2.0, 0.0, 0.0));
+            weights.push(1.0);
+            let knots = vec![
+                0.0, 0.0, 0.0, 0.1, 0.1, 0.3, 0.3, 0.5, 0.5, 0.7, 0.7, 1.0, 1.0, 1.0,
+            ];
+            let circle = NurbsCurve::new(2, knots, points, weights).unwrap();
+            let v = topo.add_vertex(Vertex::new(Point3::new(2.0, 0.0, 0.0), TOL));
+            topo.add_edge(Edge::new(v, v, EdgeCurve::NurbsCurve(circle)))
+        } else {
+            make_circle_edge(
+                &mut topo,
+                Point3::new(0.0, 0.0, 0.0),
+                Vec3::new(0.0, 0.0, 1.0),
+                2.0,
+                TOL,
+            )
+            .unwrap()
+        };
+        let wire = topo.add_wire(Wire::new(vec![OrientedEdge::new(rim, true)], true).unwrap());
+        let profile = topo.add_face(Face::new(
+            wire,
+            vec![],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: 0.0,
+            },
+        ));
+        let solid = brepkit_operations::helix::helical_sweep(
+            &mut topo,
+            profile,
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            20.0,
+            8.0,
+            1.0,
+            8,
+        )
+        .unwrap();
+        let volume = brepkit_check::properties::exact_solid_volume(&topo, solid)
+            .unwrap()
+            .unwrap();
+        // The start cap's rim, sampled, from the helix's start.
+        let helix = make_helix_curve(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            20.0,
+            8.0,
+            1.0,
+            8,
+        )
+        .unwrap();
+        let start = helix.evaluate(helix.domain().0);
+        let cap = solid_faces(&topo, solid)
+            .unwrap()
+            .into_iter()
+            .find(|&f| match topo.face(f).unwrap().surface() {
+                FaceSurface::Plane { normal, d } => {
+                    (normal.dot(Vec3::new(start.x(), start.y(), start.z())) - d).abs() < 1e-6
+                }
+                _ => false,
+            })
+            .expect("the start cap");
+        let mut spread = (f64::INFINITY, 0.0_f64);
+        let wire = topo.wire(topo.face(cap).unwrap().outer_wire()).unwrap();
+        for oe in wire.edges() {
+            let edge = topo.edge(oe.edge()).unwrap();
+            let (a, b) = (
+                topo.vertex(edge.start()).unwrap().point(),
+                topo.vertex(edge.end()).unwrap().point(),
+            );
+            let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
+            for k in 0..=16 {
+                let t = (t1 - t0).mul_add(f64::from(k) / 16.0, t0);
+                let r = (edge.curve().evaluate_with_endpoints(t, a, b) - start).length();
+                spread = (spread.0.min(r), spread.1.max(r));
+            }
+        }
+        (volume, spread)
+    };
+    let ((v_circle, _), (v_nurbs, (near, far))) = (coil(false), coil(true));
+    assert!(
+        ((v_circle - v_nurbs) / v_circle).abs() < 1e-6,
+        "{v_circle} and {v_nurbs}"
+    );
+    assert!(
+        (near - 2.0).abs() < 1e-6 && (far - 2.0).abs() < 1e-6,
+        "the start cap's rim lies {near} to {far} from the path"
+    );
+}

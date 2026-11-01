@@ -229,16 +229,11 @@ pub(super) fn sweep_exact(
             [first[0].right, first[0].up, first[0].tangent],
         ),
         ProfilePlacement::CentroidOnPath => {
-            // The outer loop's corners, each piece's start, as the
-            // ring-by-ring sweep reads them: the samples crowd a curved edge,
-            // and an edge held as a NURBS would pull the centre its way.
             let (r, u, t) = profile_basis(input_normal);
-            let corners: Vec<Point3> = loops[0]
-                .edges
-                .iter()
-                .map(|le| le.span.evaluate(le.span.domain().0))
-                .collect();
-            (crate::winding::polygon_centroid(&corners), [r, u, t])
+            let Some(centre) = region_centroid(&loops, anchor, (r, u)) else {
+                return Ok(None);
+            };
+            (centre, [r, u, t])
         }
     };
     let maps_for = |ts: &[f64]| -> Result<Vec<Mat4>, crate::OperationsError> {
@@ -474,6 +469,55 @@ fn with_ends(
 }
 
 /// Points along a loop in its order, each edge read along its own curve.
+/// The centroid of the region the loops bound in the plane of `r` and `u`
+/// through `origin`, by Green's theorem along each loop's own curves, a
+/// Gauss rule on every knot span: the outer loop's region adds and each
+/// hole's takes away, whichever way it runs. No mean of points along the
+/// boundary would do, as samples or cuts crowd where a curve's parameter
+/// runs slow. `None` for a region of no area.
+fn region_centroid(loops: &[ProfileLoop], origin: Point3, (r, u): (Vec3, Vec3)) -> Option<Point3> {
+    let rule = brepkit_math::quadrature::gauss_legendre_points(16);
+    let o = Vec3::new(origin.x(), origin.y(), origin.z());
+    let mut total = [0.0_f64; 3];
+    for (li, lp) in loops.iter().enumerate() {
+        // `x dy`, `x^2 dy / 2` and `-y^2 dx / 2` about the loop.
+        let mut acc = [0.0_f64; 3];
+        for le in &lp.edges {
+            let curve = &le.span;
+            let (t0, t1) = curve.domain();
+            let mut cuts: Vec<f64> = std::iter::once(t0)
+                .chain(curve.knots().iter().copied().filter(|&k| k > t0 && k < t1))
+                .chain(std::iter::once(t1))
+                .collect();
+            cuts.dedup_by(|a, b| a.to_bits() == b.to_bits());
+            for w in cuts.windows(2) {
+                let (half, mid) = (0.5 * (w[1] - w[0]), 0.5 * (w[0] + w[1]));
+                for gp in rule {
+                    let d = curve.derivatives(half.mul_add(gp.x, mid), 1);
+                    let (p, dp) = (d[0] - o, d[1]);
+                    let (x, y, dx, dy) = (p.dot(r), p.dot(u), dp.dot(r), dp.dot(u));
+                    let weight = half * gp.w;
+                    acc[0] += weight * x * dy;
+                    acc[1] += weight * 0.5 * x * x * dy;
+                    acc[2] -= weight * 0.5 * y * y * dx;
+                }
+            }
+        }
+        let sign = if li == 0 {
+            acc[0].signum()
+        } else {
+            -acc[0].signum()
+        };
+        for (t, a) in total.iter_mut().zip(acc) {
+            *t += sign * a;
+        }
+    }
+    if !(total[0].abs() > 0.0 && total.iter().all(|x| x.is_finite())) {
+        return None;
+    }
+    Some(origin + r * (total[1] / total[0]) + u * (total[2] / total[0]))
+}
+
 fn loop_samples(lp: &ProfileLoop) -> Vec<Point3> {
     let mut out = Vec::new();
     for le in &lp.edges {
