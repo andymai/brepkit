@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793496230045,
+  "lastUpdate": 1793497860451,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -63881,6 +63881,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 29028156,
             "range": "± 65528",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "d22bcd1765b32b0a20cd3125c0cdcaf0de48f205",
+          "message": "perf(operations): grow a twisted NURBS grid by what its worst cell needs (#2264)\n\nA NURBS face's mesh grid now grows by what its worst cell needs instead\nof doubling in both directions. A circle of radius 2 swept by\n`sweep_with_options` three turns round a helix of radius 20 meshes at\ndeflection 0.01 in 88,082 triangles and 0.52 s, where `main` takes\n208,178 triangles and 0.78 s. The mesh stays watertight, and its volume\nis 1.3e-3 under the exact 4747.0056, against 5.2e-4 on `main`.\n\nToday `untwisted_grid` reads each cell of the grid its iso-line chords\ngive against half the deflection, at its middle and quarter points\nagainst the two triangles it splits into, and doubles both directions\nuntil every cell holds. On that coil the chords give each side 16 by 512\ncells. The worst cells of three of the four sides stray 0.0054 to 0.0066\nagainst 0.005, and doubling takes each of those sides to 32 by 1024,\nfour times the cells.\n\n## Change\n\n- From a grid that fails, both directions grow by 1.1 times the square\nroot of the worst cell's stray over half the deflection, at most double\nand at least one division. A cell's stray, from its twist or its\ncurvature, falls with the square of its size.\n- Such a step is tried between grids that stay whole multiples of the\nlast, from the start. A multiple puts each cell's middle and quarter\npoints on the new grid's vertices or probes, so a narrow peak one probe\nfound stays read. Every probe that strays past half the deflection is\nkept as a witness, once each, which bounds them at about 13 times the\nlast whole-multiple grid's cells. A proportional grid is tried only if\nit holds them, and when it does not hold itself the next whole multiple\nfollows instead.\n- A grid holds only when its cells, the witnesses and the chord test\nthat sized it all hold. A step to a count the chord test refuses goes up\nthrough multiples of the sized count, or of a whole-multiple grid's\ncount, to the first it holds. A count that is no multiple of the sized\none moves the grid's lines, and a chord can then take in two creases the\nsizing held apart; creases turning opposite ways can leave a chord's\nends alike while turning one of its parts. The chord test\n(`iso_chords_hold`) is split out of `iso_divisions_over` for this.\n- A grid at its cell budget or its division cap is not read, as before.\n\n## Tests\n\n- `a_twisted_patch_grows_its_grid_by_what_its_worst_cell_needs`: the\nsaddle S(u, v) = (u, v, 5.78uv), whose straight iso-lines leave only its\ntwist to refine it. At deflection 0.01, doubling to the first grid that\nholds gives 32 by 32; the grid taken holds every cell within half the\ndeflection in fewer cells.\n- `a_twisted_grid_keeps_two_creases_in_separate_chords`: a twisted patch\ncreased at u = 0.435 and 0.44, sized at deflection 0.0022 and angular\ntolerance 0.1. Every chord along u of the grid taken holds the angular\ntolerance.\n- `a_twisted_grid_steps_on_to_a_count_its_chords_hold`: the saddle from\na 4 by 4 grid under a chord test that holds only counts divisible by 3.\nThe grid taken holds the test and every cell within half the deflection.\n- `a_twisted_grid_keeps_a_narrow_peak_it_has_found`: a twisted patch\nwith a peak 0.217 high and 0.006 wide at (0.125, 0.125), at deflection\n0.2. A 4 by 4 grid finds the peak at a cell's middle, and a 7 by 7 grid\nwould leave it 0.215 off its triangles. The grid taken holds it within\nhalf the deflection.\n- `a_twisted_grid_keeps_a_narrow_peak_where_its_chords_hold`: the same\npeak under a chord test that refuses 8 divisions. The grid taken holds\nthe peak and its chords.\n- Each of these fails with its part of the change taken out.\n- The coil meshes as before at deflections 0.1 (15,364 triangles) and\n0.001 (523,746).\n- The 100 tessellation unit tests pass, and so do the operations, wasm\nand io crates' 2365 tests.\n- The pose sweep and truth audit outputs are identical to `main`'s.",
+          "timestamp": "2026-11-01T01:47:41Z",
+          "tree_id": "67a1dfc4b1ec3ddc6db64b6b6fb90b064fb4018d",
+          "url": "https://github.com/andymai/brepkit/commit/d22bcd1765b32b0a20cd3125c0cdcaf0de48f205"
+        },
+        "date": 1793497850995,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1102928,
+            "range": "± 2121",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1181200,
+            "range": "± 54198",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12969,
+            "range": "± 52",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 679050,
+            "range": "± 2067",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 28893683,
+            "range": "± 88355",
             "unit": "ns/iter"
           }
         ]
