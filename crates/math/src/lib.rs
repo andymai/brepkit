@@ -201,6 +201,18 @@ pub enum MathError {
         /// Number of iterations attempted.
         iterations: usize,
     },
+
+    /// A rational curve's Bezier form over a span needs a control point at
+    /// infinity: a weight of zero under a numerator that is not, which a
+    /// point and its weight cannot hold. Weights of mixed sign can cancel to
+    /// one.
+    #[error("the Bezier form over [{start}, {end}] has a control point at infinity")]
+    PoleAtInfinity {
+        /// Start of the span.
+        start: f64,
+        /// End of the span.
+        end: f64,
+    },
 }
 
 pub mod aabb;

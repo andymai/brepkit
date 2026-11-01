@@ -18,7 +18,9 @@ use crate::vec::Point3;
 ///
 /// # Errors
 ///
-/// Returns an error if a segment cannot be built.
+/// Returns [`MathError::PoleAtInfinity`] if a span's Bezier form has a
+/// control point at infinity, as weights of mixed sign can give, or another
+/// error if a segment cannot be built.
 pub fn curve_to_bezier_segments(curve: &NurbsCurve) -> Result<Vec<NurbsCurve>, MathError> {
     let p = curve.degree();
     let (d0, d1) = curve.domain();
@@ -34,8 +36,15 @@ pub fn curve_to_bezier_segments(curve: &NurbsCurve) -> Result<Vec<NurbsCurve>, M
     let mut segments = Vec::with_capacity(cuts.len() - 1);
     for w in cuts.windows(2) {
         let homogeneous = curve_bezier_between(curve, w[0], w[1])?;
-        let (points, weights): (Vec<Point3>, Vec<f64>) =
-            homogeneous.iter().map(|q| (cartesian(*q), q[3])).unzip();
+        let mut points = Vec::with_capacity(p + 1);
+        let mut weights = Vec::with_capacity(p + 1);
+        for q in homogeneous {
+            points.push(cartesian(q).ok_or(MathError::PoleAtInfinity {
+                start: w[0],
+                end: w[1],
+            })?);
+            weights.push(q[3]);
+        }
         let mut knots = vec![w[0]; p + 1];
         knots.extend(std::iter::repeat_n(w[1], p + 1));
         segments.push(NurbsCurve::new(p, knots, points, weights)?);
@@ -43,14 +52,24 @@ pub fn curve_to_bezier_segments(curve: &NurbsCurve) -> Result<Vec<NurbsCurve>, M
     Ok(segments)
 }
 
-/// A homogeneous point `[w x, w y, w z, w]` as its point, or its first three
-/// coordinates for a weight of zero, as knot insertion reads one.
-fn cartesian(q: [f64; 4]) -> Point3 {
-    if q[3] == 0.0 {
-        Point3::new(q[0], q[1], q[2])
+/// A homogeneous point `[w x, w y, w z, w]` as its point, the origin for a
+/// weight of zero over a numerator of zero (it adds nothing to the curve).
+/// `None` for a point at infinity: a weight of zero over a numerator that is
+/// not, or a quotient that overflows. Evaluation scales a point by its
+/// weight, so it would drop that numerator.
+fn cartesian(q: [f64; 4]) -> Option<Point3> {
+    let point = if q[3] == 0.0 {
+        if q[..3].iter().any(|&c| c != 0.0) {
+            return None;
+        }
+        Point3::new(0.0, 0.0, 0.0)
     } else {
         Point3::new(q[0] / q[3], q[1] / q[3], q[2] / q[3])
-    }
+    };
+    [point.x(), point.y(), point.z()]
+        .iter()
+        .all(|c| c.is_finite())
+        .then_some(point)
 }
 
 /// The rational Bezier form of `curve` from parameter `a` to parameter `b`.
@@ -314,17 +333,22 @@ pub fn curve_degree_elevate(curve: &NurbsCurve, t: usize) -> Result<NurbsCurve, 
     // there, so both ends stay and the elevated knot repeats once more.
     // Comparing the ends' coordinates instead would hang on the weights'
     // scale, which leaves the curve unchanged.
+    // Breaks and knots both ascend, so one pass counts every break's repeats.
+    let knots = curve.knots();
+    let mut at = 0;
     let joined: Vec<bool> = segments
         .iter()
         .take(n_segs.saturating_sub(1))
         .map(|seg| {
             let u = seg.knots()[p + 1];
-            curve
-                .knots()
+            while at < knots.len() && knots[at] < u {
+                at += 1;
+            }
+            let repeats = knots[at..]
                 .iter()
-                .filter(|&&k| (k - u).abs() <= 0.0)
-                .count()
-                <= p
+                .take_while(|&&k| (k - u).abs() <= 0.0)
+                .count();
+            repeats <= p
         })
         .collect();
 
@@ -889,6 +913,32 @@ mod tests {
                 assert!(off < 1e-9, "weights {w}, at {t}: {off}");
             }
         }
+    }
+
+    #[test]
+    fn a_span_whose_weights_cancel_to_a_pole_at_infinity_cuts_no_piece() {
+        let p = Point3::new;
+        let c = NurbsCurve::new(
+            3,
+            vec![0.0, 0.0, 1.0, 2.0, 3.0, 5.0, 5.0, 5.0],
+            vec![
+                p(0.0, 0.0, 0.0),
+                p(1.0, 0.0, 0.0),
+                p(2.0, 0.0, 0.0),
+                p(3.0, 0.0, 0.0),
+            ],
+            vec![10.0, -1.0, 3.0, 1.0],
+        )
+        .expect("valid");
+        let q = curve_bezier_between(&c, 2.0, 3.0).expect("in one span");
+        assert!(
+            q.iter().any(|h| h[3] == 0.0 && h[0] != 0.0),
+            "no pole at infinity: {q:?}"
+        );
+        assert!(matches!(
+            curve_to_bezier_segments(&c),
+            Err(MathError::PoleAtInfinity { .. })
+        ));
     }
 
     #[test]
