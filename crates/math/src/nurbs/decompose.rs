@@ -308,21 +308,23 @@ pub fn curve_degree_elevate(curve: &NurbsCurve, t: usize) -> Result<NurbsCurve, 
     let mut all_cps: Vec<[f64; 4]> = Vec::new();
     let mut all_knots: Vec<f64> = Vec::new();
 
-    // Whether each piece ends where the next starts. A curve that jumps at
-    // a knot (one repeated past its degree, or of degree zero) keeps both
-    // ends there, and its elevated knot one more repeat.
-    let homogeneous = |seg: &NurbsCurve, i: usize| {
-        let (pt, w) = (seg.control_points()[i], seg.weights()[i]);
-        [pt.x() * w, pt.y() * w, pt.z() * w, w]
-    };
+    // Whether each piece ends where the next starts, read off the knot's
+    // repeats: the curve is continuous at a knot repeated at most its degree
+    // times. One repeated more (or any knot of a degree-zero curve) may jump
+    // there, so both ends stay and the elevated knot repeats once more.
+    // Comparing the ends' coordinates instead would hang on the weights'
+    // scale, which leaves the curve unchanged.
     let joined: Vec<bool> = segments
-        .windows(2)
-        .map(|pair| {
-            let (a, b) = (homogeneous(&pair[0], p), homogeneous(&pair[1], 0));
-            let scale = a.iter().chain(&b).fold(1.0_f64, |m, x| m.max(x.abs()));
-            a.iter()
-                .zip(&b)
-                .all(|(x, y)| (x - y).abs() <= 1e-12 * scale)
+        .iter()
+        .take(n_segs.saturating_sub(1))
+        .map(|seg| {
+            let u = seg.knots()[p + 1];
+            curve
+                .knots()
+                .iter()
+                .filter(|&&k| (k - u).abs() <= 0.0)
+                .count()
+                <= p
         })
         .collect();
 
@@ -860,6 +862,54 @@ mod tests {
         let raised = curve_degree_elevate(&c, 2).expect("valid");
         assert_eq!(raised.degree(), 3);
         for t in [0.1, 0.25, 0.4, 0.6, 0.75, 0.9] {
+            let off = (raised.evaluate(t) - c.evaluate(t)).length();
+            assert!(off < 1e-12, "at {t}: {off}");
+        }
+    }
+
+    #[test]
+    fn a_jump_raised_in_degree_does_not_hang_on_the_weights_scale() {
+        let p = Point3::new;
+        for w in [1.0, 1e-14, 1e14] {
+            let c = NurbsCurve::new(
+                1,
+                vec![0.0, 0.0, 0.5, 0.5, 1.0, 1.0],
+                vec![
+                    p(0.0, 0.0, 0.0),
+                    p(1.0, 0.0, 0.0),
+                    p(10.0, 0.0, 0.0),
+                    p(11.0, 0.0, 0.0),
+                ],
+                vec![w; 4],
+            )
+            .expect("valid");
+            let raised = curve_degree_elevate(&c, 2).expect("valid");
+            for t in [0.1, 0.25, 0.4, 0.6, 0.75, 0.9] {
+                let off = (raised.evaluate(t) - c.evaluate(t)).length();
+                assert!(off < 1e-9, "weights {w}, at {t}: {off}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_curve_continuous_at_its_knots_raised_in_degree_stays_joined() {
+        let p = Point3::new;
+        let c = NurbsCurve::new(
+            2,
+            vec![0.0, 0.0, 0.0, 0.5, 0.5, 1.0, 1.0, 1.0],
+            vec![
+                p(0.0, 0.0, 0.0),
+                p(1.0, 1.0, 0.0),
+                p(2.0, 0.0, 0.0),
+                p(3.0, 1.0, 0.0),
+                p(4.0, 0.0, 0.0),
+            ],
+            vec![1.0, 2.0, 1.0, 0.5, 1.0],
+        )
+        .expect("valid");
+        let raised = curve_degree_elevate(&c, 1).expect("valid");
+        assert_eq!(raised.control_points().len(), 7);
+        for t in [0.1, 0.25, 0.4, 0.5, 0.6, 0.75, 0.9] {
             let off = (raised.evaluate(t) - c.evaluate(t)).length();
             assert!(off < 1e-12, "at {t}: {off}");
         }
