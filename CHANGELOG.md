@@ -1,5 +1,17 @@
 # Changelog
 
+## [4.6.16](https://github.com/andymai/brepkit/compare/v4.6.15...v4.6.16) (2026-11-01)
+
+
+### Bug Fixes
+
+* **check:** find a ray's crossings on a NURBS face patch by patch ([#2262](https://github.com/andymai/brepkit/issues/2262)) ([603752e](https://github.com/andymai/brepkit/commit/603752e3e099429901f545db949b930cc0f529b6))
+
+
+### Performance
+
+* **operations:** grow a twisted NURBS grid by what its worst cell needs ([#2264](https://github.com/andymai/brepkit/issues/2264)) ([d22bcd1](https://github.com/andymai/brepkit/commit/d22bcd1765b32b0a20cd3125c0cdcaf0de48f205))
+
 ## [4.6.15](https://github.com/andymai/brepkit/compare/v4.6.14...v4.6.15) (2026-10-31)
 
 
