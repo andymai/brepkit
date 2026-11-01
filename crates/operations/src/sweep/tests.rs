@@ -375,10 +375,15 @@ fn sweep_square_along_quarter_circle() {
     let solid_data = topo.solid(solid).unwrap();
     let shell = topo.shell(solid_data.outer_shell()).unwrap();
 
-    // 6 segments (max(3*2, 4)) × 4 edges + 2 caps = 26 faces.
-    let num_segs = (path.control_points().len() * 2).max(4);
-    let expected_faces = num_segs * 4 + 2;
-    assert_eq!(shell.faces().len(), expected_faces);
+    // A side per edge on the edge's own curve, and two caps.
+    assert_eq!(shell.faces().len(), 6);
+    // Carried perpendicular to the path, the unit square holds its area
+    // times the quarter circle's length.
+    let volume = brepkit_check::properties::exact_solid_volume(&topo, solid)
+        .unwrap()
+        .unwrap();
+    let want = 2.5 * std::f64::consts::PI;
+    assert!(((volume - want) / want).abs() < 1e-6, "volume {volume}");
 
     // Verify manifold: every edge shared by exactly 2 faces.
     let mut edge_counts: HashMap<usize, usize> = HashMap::new();
@@ -1253,12 +1258,18 @@ fn sweep_planar_profile_caps_are_planar() {
     let sh = topo
         .shell(topo.solid(solid).unwrap().outer_shell())
         .unwrap();
-    let planar = sh
-        .faces()
-        .iter()
-        .filter(|&&fid| topo.face(fid).unwrap().surface().is_planar())
-        .count();
-    assert_eq!(planar, sh.faces().len(), "planar sweep stays all-planar");
+    // Each cap is the end section's plane, through the path's end and
+    // normal to its tangent there.
+    for t in [0.0, 1.0] {
+        let end = path.evaluate(t);
+        let tangent = path.tangent(t).unwrap();
+        let capped = sh.faces().iter().any(|&fid| {
+            matches!(topo.face(fid).unwrap().surface(), FaceSurface::Plane { normal, d }
+                if (normal.dot(tangent).abs() - 1.0).abs() < 1e-9
+                    && (normal.dot(Vec3::new(end.x(), end.y(), end.z())) - d).abs() < 1e-9)
+        });
+        assert!(capped, "no plane cap at t = {t}");
+    }
 }
 
 #[test]
@@ -2579,4 +2590,39 @@ fn a_chain_through_crowded_knots_sweeps() {
             .unwrap()
             .is_valid()
     );
+}
+
+/// The saddle profile, which leaves any plane, swept one turn round a helix
+/// with its centre on the path: its wire read from its first corner or from
+/// its second, the coil lands in one place. A centroid taken in a plane
+/// through the wire's first point would carry that point's height off it.
+#[test]
+fn a_saddle_profiles_centre_on_a_helix_does_not_hang_on_where_its_wire_starts() {
+    let coil = |turn: usize| {
+        let mut topo = Topology::new();
+        let saddle = crate::test_helpers::make_saddle_profile(&mut topo, 2.0);
+        let face = topo.face(saddle).unwrap();
+        let surface = face.surface().clone();
+        let mut edges = topo.wire(face.outer_wire()).unwrap().edges().to_vec();
+        edges.rotate_left(turn);
+        let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+        let profile = topo.add_face(Face::new(wire, vec![], surface));
+        let solid = crate::helix::helical_sweep(
+            &mut topo,
+            profile,
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            20.0,
+            8.0,
+            1.0,
+            8,
+        )
+        .unwrap();
+        crate::measure::solid_bounding_box(&topo, solid).unwrap()
+    };
+    let (first, second) = (coil(0), coil(1));
+    let off = (first.min - second.min)
+        .length()
+        .max((first.max - second.max).length());
+    assert!(off < 1e-9, "the coils' boxes differ by {off}");
 }

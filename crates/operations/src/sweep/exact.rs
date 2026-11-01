@@ -75,6 +75,7 @@ pub(super) fn sweep_exact(
     profile: FaceId,
     path: &NurbsCurve,
     options: &SweepOptions,
+    placement: ProfilePlacement,
 ) -> Result<Option<SolidId>, crate::OperationsError> {
     let tol = Tolerance::new();
     let face = topo.face(profile)?;
@@ -222,17 +223,19 @@ pub(super) fn sweep_exact(
     };
 
     let first = frames_for(&[0.0])?;
-    let (reference, basis) =
-        match resolve_placement(ProfilePlacement::AsPositioned, input_normal, path_tangent_0) {
-            ProfilePlacement::AsPositioned => (
-                first[0].origin,
-                [first[0].right, first[0].up, first[0].tangent],
-            ),
-            ProfilePlacement::CentroidOnPath => {
-                let (r, u, t) = profile_basis(input_normal);
-                (crate::winding::polygon_centroid(&samples[0]), [r, u, t])
-            }
-        };
+    let (reference, basis) = match resolve_placement(placement, input_normal, path_tangent_0) {
+        ProfilePlacement::AsPositioned => (
+            first[0].origin,
+            [first[0].right, first[0].up, first[0].tangent],
+        ),
+        ProfilePlacement::CentroidOnPath => {
+            let (r, u, t) = profile_basis(input_normal);
+            let Some(centre) = super::region_centroid(topo, profile, anchor, (r, u))? else {
+                return Ok(None);
+            };
+            (centre, [r, u, t])
+        }
+    };
     let maps_for = |ts: &[f64]| -> Result<Vec<Mat4>, crate::OperationsError> {
         let frames = frames_for(ts)?;
         ts.iter()

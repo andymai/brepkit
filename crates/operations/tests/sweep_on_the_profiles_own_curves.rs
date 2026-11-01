@@ -396,3 +396,518 @@ fn a_path_with_a_knot_span_too_narrow_to_fit_sweeps_ring_by_ring() {
     let report = validate_solid(&topo, solid).unwrap();
     assert!(report.is_valid(), "{:?}", report.issues);
 }
+
+/// A circle of radius 2 swept three turns round a helix of radius 20 and
+/// pitch 8, perpendicular to it by `helical_sweep` and as it stands,
+/// upright across the helix's start, by `sweep`. On rotation-minimizing frames each
+/// section keeps the angle its normal makes with the path, so the coil holds
+/// the circle's area times the path's length times that angle's cosine.
+#[test]
+fn a_circle_swept_round_a_helix_holds_its_area_times_its_length() {
+    let mut topo = Topology::new();
+    let helix = make_helix_curve(
+        Point3::new(0.0, 0.0, 0.0),
+        Vec3::new(0.0, 0.0, 1.0),
+        20.0,
+        8.0,
+        3.0,
+        8,
+    )
+    .unwrap();
+    let (h0, _) = helix.domain();
+    let start = helix.evaluate(h0);
+    let tangent = helix.tangent(h0).unwrap();
+    let length = helix.arc_length(200_000);
+    let area = PI * 4.0;
+
+    let profile = disc(&mut topo, Mat4::identity(), Vec3::new(0.0, 0.0, 1.0), 2.0);
+    let coil = brepkit_operations::helix::helical_sweep(
+        &mut topo,
+        profile,
+        Point3::new(0.0, 0.0, 0.0),
+        Vec3::new(0.0, 0.0, 1.0),
+        20.0,
+        8.0,
+        3.0,
+        8,
+    )
+    .unwrap();
+    assert_exact(&topo, coil, area * length, "perpendicular");
+    assert_eq!(solid_faces(&topo, coil).unwrap().len(), 6, "perpendicular");
+
+    // Standing upright across the helix's start, its normal the start
+    // tangent's horizontal part.
+    let normal = Vec3::new(tangent.x(), tangent.y(), 0.0)
+        .normalize()
+        .unwrap();
+    let e = make_circle_edge(&mut topo, start, normal, 2.0, TOL).unwrap();
+    let w = topo.add_wire(Wire::new(vec![OrientedEdge::new(e, true)], true).unwrap());
+    let d = normal.dot(Vec3::new(start.x(), start.y(), start.z()));
+    let profile = topo.add_face(Face::new(w, vec![], FaceSurface::Plane { normal, d }));
+    let coil = brepkit_operations::sweep::sweep(&mut topo, profile, &helix).unwrap();
+    let want = area * length * normal.dot(tangent).abs();
+    assert_exact(&topo, coil, want, "as it stands");
+}
+
+/// A square of side 2 swept 10 up a straight spine in 4 segments, scaled
+/// by 1 + 4e-6 w((t - c) / 0.005) with w a smooth bump of width 2: the
+/// scale moves its corners 5.7e-6 out within 0.005 of t = c, past the fit's
+/// bound of some 1e-6. The first fit reads that at a midpoint for c =
+/// 0.125, and at a sample for c = 0.25; however its samples grow after,
+/// the corner's rail passes within 1.5e-6 of the scaled corner there.
+#[test]
+fn a_narrow_scale_bump_a_fit_has_read_is_kept() {
+    for c in [0.125_f64, 0.25] {
+        let off = rail_off_a_scale_bump(c);
+        assert!(
+            off <= 1.5e-6,
+            "bump at {c}: the rail passes {off} from the scaled corner"
+        );
+    }
+}
+
+/// How far the corner's rail of the sweep in
+/// [`a_narrow_scale_bump_a_fit_has_read_is_kept`] passes from the corner
+/// scaled at the bump's middle `c`.
+fn rail_off_a_scale_bump(c: f64) -> f64 {
+    let bump = |x: f64| {
+        if x.abs() < 1.0 {
+            (0.5 * PI * x).cos().powi(2)
+        } else {
+            0.0
+        }
+    };
+    let mut topo = Topology::new();
+    let profile = square(&mut topo, Mat4::identity(), 1.0, None);
+    let options = SweepOptions {
+        scale_law: Some(Box::new(move |t: f64| {
+            4e-6f64.mul_add(bump((t - c) / 0.005), 1.0)
+        })),
+        segments: 4,
+        ..Default::default()
+    };
+    let solid =
+        sweep_with_options(&mut topo, profile, &spine(Mat4::identity(), 10.0), &options).unwrap();
+    let corner = |p: Point3| (p - Point3::new(1.0, 1.0, p.z())).length() < 1e-3;
+    let rail = brepkit_topology::explorer::solid_edges(&topo, solid)
+        .unwrap()
+        .into_iter()
+        .find(|&e| {
+            let edge = topo.edge(e).unwrap();
+            let (a, b) = (
+                topo.vertex(edge.start()).unwrap().point(),
+                topo.vertex(edge.end()).unwrap().point(),
+            );
+            corner(a) && corner(b) && (a.z() - b.z()).abs() > 9.0
+        })
+        .expect("the corner's rail");
+    let edge = topo.edge(rail).unwrap();
+    let scaled = Point3::new(1.0 + 4e-6, 1.0 + 4e-6, 10.0 * c);
+    if let EdgeCurve::NurbsCurve(curve) = edge.curve() {
+        brepkit_math::nurbs::projection::project_point_to_curve(curve, scaled, 1e-12)
+            .unwrap()
+            .distance
+    } else {
+        let (a, b) = (
+            topo.vertex(edge.start()).unwrap().point(),
+            topo.vertex(edge.end()).unwrap().point(),
+        );
+        let ab = b - a;
+        let f = ((scaled - a).dot(ab) / ab.dot(ab)).clamp(0.0, 1.0);
+        (scaled - (a + ab * f)).length()
+    }
+}
+
+/// A square of side 2 about the origin swept one turn round a helix of
+/// radius 20 by `helical_sweep`, which puts the profile's centre on the
+/// path: with its top side a line or the same side held as a degree-1
+/// NURBS, the centre is the square's, and the two coils match.
+#[test]
+fn a_profiles_centre_on_a_helix_does_not_hang_on_how_its_edges_are_held() {
+    let coil = |nurbs_top: bool| {
+        let mut topo = Topology::new();
+        let corners = [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)];
+        let v: Vec<_> = corners
+            .iter()
+            .map(|&(x, y)| topo.add_vertex(Vertex::new(Point3::new(x, y, 0.0), TOL)))
+            .collect();
+        let edges = (0..4)
+            .map(|k| {
+                let (a, b) = (v[k], v[(k + 1) % 4]);
+                let curve = if nurbs_top && k == 2 {
+                    let (p, q) = (corners[2], corners[3]);
+                    EdgeCurve::NurbsCurve(
+                        NurbsCurve::new(
+                            1,
+                            vec![0.0, 0.0, 1.0, 1.0],
+                            vec![Point3::new(p.0, p.1, 0.0), Point3::new(q.0, q.1, 0.0)],
+                            vec![1.0; 2],
+                        )
+                        .unwrap(),
+                    )
+                } else {
+                    EdgeCurve::Line
+                };
+                OrientedEdge::new(topo.add_edge(Edge::new(a, b, curve)), true)
+            })
+            .collect();
+        let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+        let profile = topo.add_face(Face::new(
+            wire,
+            vec![],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: 0.0,
+            },
+        ));
+        let solid = brepkit_operations::helix::helical_sweep(
+            &mut topo,
+            profile,
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            20.0,
+            8.0,
+            1.0,
+            8,
+        )
+        .unwrap();
+        let volume = brepkit_check::properties::exact_solid_volume(&topo, solid)
+            .unwrap()
+            .unwrap();
+        let bbox = brepkit_operations::measure::solid_bounding_box(&topo, solid).unwrap();
+        (volume, bbox)
+    };
+    let ((v_line, b_line), (v_nurbs, b_nurbs)) = (coil(false), coil(true));
+    assert!(
+        ((v_line - v_nurbs) / v_line).abs() < 1e-9,
+        "{v_line} and {v_nurbs}"
+    );
+    let off = (b_line.min - b_nurbs.min)
+        .length()
+        .max((b_line.max - b_nurbs.max).length());
+    assert!(off < 1e-6, "the coils' boxes differ by {off}");
+}
+
+/// A disc of radius 2 swept one turn round a helix of radius 20 by
+/// `helical_sweep`, its rim a circle edge, the same circle as five rational
+/// arcs of 72 degrees on knots 0, 0.1, 0.3, 0.5, 0.7 and 1, as four quarter
+/// arcs the first weighted 1, 1000 cos 45 degrees and 10^6 or 1, 10^14 cos
+/// 45 degrees and 10^28, or as arcs of 179.9999, 90.0001 and 90 degrees the
+/// first weighted 1000 to one, whose middle control point stands some 2.3
+/// million off. Weights far apart crowd an arc's parameter into one end,
+/// where a Gauss rule can pass over it whole. The disc's centre is the
+/// circle's each way, its start cap's rim 2 from the path, and the first two
+/// coils hold one volume.
+#[test]
+fn a_discs_centre_on_a_helix_does_not_hang_on_its_rims_knots() {
+    let coil = |rim_kind: u8| {
+        let mut topo = Topology::new();
+        let rims = match rim_kind {
+            2 => rim_arcs(
+                &mut topo,
+                &[(90.0, 1000.0), (90.0, 1.0), (90.0, 1.0), (90.0, 1.0)],
+            ),
+            3 => rim_arcs(
+                &mut topo,
+                &[(90.0, 1e14), (90.0, 1.0), (90.0, 1.0), (90.0, 1.0)],
+            ),
+            4 => rim_arcs(
+                &mut topo,
+                &[(179.9999, 1000.0), (90.0001, 1.0), (90.0, 1.0)],
+            ),
+            _ => vec![OrientedEdge::new(rim_edge(&mut topo, rim_kind == 1), true)],
+        };
+        let wire = topo.add_wire(Wire::new(rims, true).unwrap());
+        let profile = topo.add_face(Face::new(
+            wire,
+            vec![],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: 0.0,
+            },
+        ));
+        let solid = brepkit_operations::helix::helical_sweep(
+            &mut topo,
+            profile,
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            20.0,
+            8.0,
+            1.0,
+            8,
+        )
+        .unwrap();
+        // The crowded rims' sides, weighted 10^6 to one and more, are left to
+        // their placement here: their volume reads slowly along their
+        // boundary.
+        let volume = (rim_kind < 2).then(|| {
+            brepkit_check::properties::exact_solid_volume(&topo, solid)
+                .unwrap()
+                .unwrap()
+        });
+        // The start cap's rim, sampled, from the helix's start.
+        let helix = make_helix_curve(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            20.0,
+            8.0,
+            1.0,
+            8,
+        )
+        .unwrap();
+        let start = helix.evaluate(helix.domain().0);
+        let cap = solid_faces(&topo, solid)
+            .unwrap()
+            .into_iter()
+            .find(|&f| match topo.face(f).unwrap().surface() {
+                FaceSurface::Plane { normal, d } => {
+                    (normal.dot(Vec3::new(start.x(), start.y(), start.z())) - d).abs() < 1e-6
+                }
+                _ => false,
+            })
+            .expect("the start cap");
+        let mut spread = (f64::INFINITY, 0.0_f64);
+        let wire = topo.wire(topo.face(cap).unwrap().outer_wire()).unwrap();
+        for oe in wire.edges() {
+            let edge = topo.edge(oe.edge()).unwrap();
+            let (a, b) = (
+                topo.vertex(edge.start()).unwrap().point(),
+                topo.vertex(edge.end()).unwrap().point(),
+            );
+            let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
+            for k in 0..=16 {
+                let t = (t1 - t0).mul_add(f64::from(k) / 16.0, t0);
+                let r = (edge.curve().evaluate_with_endpoints(t, a, b) - start).length();
+                spread = (spread.0.min(r), spread.1.max(r));
+            }
+        }
+        (volume, spread)
+    };
+    let v_circle = coil(0).0.unwrap();
+    for kind in [1, 2, 3, 4] {
+        let (v, (near, far)) = coil(kind);
+        if let Some(v) = v {
+            assert!(
+                ((v_circle - v) / v_circle).abs() < 1e-6,
+                "rim {kind}: {v_circle} and {v}"
+            );
+        }
+        assert!(
+            (near - 2.0).abs() < 1e-6 && (far - 2.0).abs() < 1e-6,
+            "rim {kind}: the start cap's rim lies {near} to {far} from the path"
+        );
+    }
+}
+
+/// A square of side 2 about the origin with a hole of radius 0.5 about
+/// (0.5, 0), swept one turn round a helix by `helical_sweep`: the region's
+/// centroid, (-0.1222, 0), lands on the path, so the hole's centre sits
+/// 0.6222 from it. Without the hole the square's centre would land there
+/// (0.5 off), and with the hole added rather than taken away 0.418.
+#[test]
+fn a_holed_profiles_centre_on_a_helix_takes_its_hole_away() {
+    let mut topo = Topology::new();
+    let profile = square(
+        &mut topo,
+        Mat4::identity(),
+        1.0,
+        Some((Point3::new(0.5, 0.0, 0.0), 0.5)),
+    );
+    let solid = brepkit_operations::helix::helical_sweep(
+        &mut topo,
+        profile,
+        Point3::new(0.0, 0.0, 0.0),
+        Vec3::new(0.0, 0.0, 1.0),
+        20.0,
+        8.0,
+        1.0,
+        8,
+    )
+    .unwrap();
+    let helix = make_helix_curve(
+        Point3::new(0.0, 0.0, 0.0),
+        Vec3::new(0.0, 0.0, 1.0),
+        20.0,
+        8.0,
+        1.0,
+        8,
+    )
+    .unwrap();
+    let start = helix.evaluate(helix.domain().0);
+    let cap = solid_faces(&topo, solid)
+        .unwrap()
+        .into_iter()
+        .find(|&f| match topo.face(f).unwrap().surface() {
+            FaceSurface::Plane { normal, d } => {
+                (normal.dot(Vec3::new(start.x(), start.y(), start.z())) - d).abs() < 1e-6
+            }
+            _ => false,
+        })
+        .expect("the start cap");
+    let hole = topo.face(cap).unwrap().inner_wires()[0];
+    let centre = topo
+        .wire(hole)
+        .unwrap()
+        .edges()
+        .iter()
+        .find_map(|oe| match topo.edge(oe.edge()).unwrap().curve() {
+            EdgeCurve::Circle(c) => Some(c.center()),
+            _ => None,
+        })
+        .expect("the hole's circle");
+    let want = 0.5 + std::f64::consts::FRAC_PI_4 * 0.5 / (4.0 - std::f64::consts::FRAC_PI_4);
+    let off = (centre - start).length();
+    assert!(
+        (off - want).abs() < 1e-6,
+        "the hole's centre sits {off} from the path, want {want}"
+    );
+}
+
+/// A rim of radius 2 about the origin in z = 0 from consecutive arcs from
+/// angle 0, each `(degrees, l)`: the arc's rational quadratic weighted 1,
+/// l cos(half its angle) and l^2, which draws the same arc.
+fn rim_arcs(topo: &mut Topology, arcs: &[(f64, f64)]) -> Vec<OrientedEdge> {
+    let mut at = 0.0_f64;
+    let ends: Vec<f64> = std::iter::once(0.0)
+        .chain(arcs.iter().map(|&(deg, _)| {
+            at += deg.to_radians();
+            at
+        }))
+        .collect();
+    let point = |a: f64| Point3::new(2.0 * a.cos(), 2.0 * a.sin(), 0.0);
+    let corners: Vec<_> = ends[..arcs.len()]
+        .iter()
+        .map(|&a| topo.add_vertex(Vertex::new(point(a), TOL)))
+        .collect();
+    arcs.iter()
+        .enumerate()
+        .map(|(k, &(_, l))| {
+            let (a, b) = (ends[k], ends[k + 1]);
+            let c = (0.5 * (b - a)).cos();
+            let m = 0.5 * (a + b);
+            let arc = NurbsCurve::new(
+                2,
+                vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+                vec![
+                    point(a),
+                    Point3::new(2.0 * m.cos() / c, 2.0 * m.sin() / c, 0.0),
+                    point(b),
+                ],
+                vec![1.0, c * l, l * l],
+            )
+            .unwrap();
+            let edge = Edge::new(
+                corners[k],
+                corners[(k + 1) % arcs.len()],
+                EdgeCurve::NurbsCurve(arc),
+            );
+            OrientedEdge::new(topo.add_edge(edge), true)
+        })
+        .collect()
+}
+
+/// A closed rim of radius 2 about the origin in z = 0: the same circle as
+/// five rational arcs of 72 degrees on knots 0, 0.1, 0.3, 0.5, 0.7 and 1
+/// (`five_arcs`), or a circle edge.
+fn rim_edge(topo: &mut Topology, five_arcs: bool) -> brepkit_topology::edge::EdgeId {
+    if five_arcs {
+        let w = (36.0_f64.to_radians()).cos();
+        let mut points = Vec::new();
+        let mut weights = Vec::new();
+        for k in 0..5 {
+            let (a, b) = (
+                f64::from(k) * 72.0_f64.to_radians(),
+                f64::from(k + 1) * 72.0_f64.to_radians(),
+            );
+            let m = 0.5 * (a + b);
+            points.push(Point3::new(2.0 * a.cos(), 2.0 * a.sin(), 0.0));
+            weights.push(1.0);
+            points.push(Point3::new(2.0 * m.cos() / w, 2.0 * m.sin() / w, 0.0));
+            weights.push(w);
+        }
+        points.push(Point3::new(2.0, 0.0, 0.0));
+        weights.push(1.0);
+        let knots = vec![
+            0.0, 0.0, 0.0, 0.1, 0.1, 0.3, 0.3, 0.5, 0.5, 0.7, 0.7, 1.0, 1.0, 1.0,
+        ];
+        let circle = NurbsCurve::new(2, knots, points, weights).unwrap();
+        let v = topo.add_vertex(Vertex::new(Point3::new(2.0, 0.0, 0.0), TOL));
+        topo.add_edge(Edge::new(v, v, EdgeCurve::NurbsCurve(circle)))
+    } else {
+        make_circle_edge(
+            topo,
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            2.0,
+            TOL,
+        )
+        .unwrap()
+    }
+}
+
+/// The square of side 2 about the origin with its top side a degree-1 curve
+/// on knots 0, 0, 0.5, 0.5, 1 and 1 through its ends and its middle twice,
+/// which traces the straight side: swept one turn by `helical_sweep`, it
+/// builds, and holds the volume the square of four lines does.
+#[test]
+fn a_profile_side_with_a_knot_repeated_past_its_degree_sweeps_round_a_helix() {
+    let coil = |doubled: bool| {
+        let mut topo = Topology::new();
+        let corners = [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)];
+        let v: Vec<_> = corners
+            .iter()
+            .map(|&(x, y)| topo.add_vertex(Vertex::new(Point3::new(x, y, 0.0), TOL)))
+            .collect();
+        let edges = (0..4)
+            .map(|k| {
+                let curve = if doubled && k == 2 {
+                    let (a, m, b) = (
+                        Point3::new(1.0, 1.0, 0.0),
+                        Point3::new(0.0, 1.0, 0.0),
+                        Point3::new(-1.0, 1.0, 0.0),
+                    );
+                    EdgeCurve::NurbsCurve(
+                        NurbsCurve::new(
+                            1,
+                            vec![0.0, 0.0, 0.5, 0.5, 1.0, 1.0],
+                            vec![a, m, m, b],
+                            vec![1.0; 4],
+                        )
+                        .unwrap(),
+                    )
+                } else {
+                    EdgeCurve::Line
+                };
+                OrientedEdge::new(topo.add_edge(Edge::new(v[k], v[(k + 1) % 4], curve)), true)
+            })
+            .collect();
+        let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+        let profile = topo.add_face(Face::new(
+            wire,
+            vec![],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: 0.0,
+            },
+        ));
+        let solid = brepkit_operations::helix::helical_sweep(
+            &mut topo,
+            profile,
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            20.0,
+            8.0,
+            1.0,
+            8,
+        )
+        .unwrap();
+        brepkit_check::properties::exact_solid_volume(&topo, solid)
+            .unwrap()
+            .unwrap()
+    };
+    let (lines, doubled) = (coil(false), coil(true));
+    assert!(
+        ((lines - doubled) / lines).abs() < 1e-9,
+        "{lines} and {doubled}"
+    );
+}
