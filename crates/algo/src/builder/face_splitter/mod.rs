@@ -7186,6 +7186,26 @@ fn split_face_2d_impl(
         && !is_plane
         && let (Some(u_period), _) = super::pcurve_compute::surface_periods(&surface)
     {
+        // The boundary walk lays the face's outline out in one unbroken run
+        // of u, which spans the face: the window starts at its low end. The
+        // endpoints' widest gap cannot always say which side is the face: a
+        // half band's vertices all sit on its two rulings half a turn apart,
+        // its two gaps tie, and rounding can pick the side it does not cover.
+        // A whole ring's seam placeholders all sit at one u and span nothing.
+        let boundary = &all_edges[..n_boundary_edges];
+        let unbroken = !boundary.is_empty()
+            && boundary
+                .iter()
+                .zip(boundary.iter().cycle().skip(1))
+                .all(|(a, b)| (b.start_uv.x() - a.end_uv.x()).abs() < 1e-9);
+        let (walk_lo, walk_hi) = boundary
+            .iter()
+            .flat_map(|e| [e.start_uv.x(), e.end_uv.x()])
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), u| {
+                (lo.min(u), hi.max(u))
+            });
+        let span = walk_hi - walk_lo;
+        let walked = (unbroken && span > 1e-6 && span < u_period - 1e-6).then_some(walk_lo);
         let mut us: Vec<f64> = all_edges
             .iter()
             .flat_map(|e| [e.start_uv.x(), e.end_uv.x()])
@@ -7202,7 +7222,7 @@ fn split_face_2d_impl(
                 }
             }
             if max_gap > 0.05 {
-                let lo = gap_start + max_gap;
+                let lo = walked.unwrap_or(gap_start + max_gap);
                 for e in &mut all_edges {
                     let remap = |uv: Point2| -> Point2 {
                         let mut d = (uv.x() - lo).rem_euclid(u_period);
