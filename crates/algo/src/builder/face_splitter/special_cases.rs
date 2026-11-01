@@ -3828,6 +3828,21 @@ pub(super) fn split_face_with_internal_loops(
 ) -> Option<Vec<SplitSubFace>> {
     let tol_3d = brepkit_math::tolerance::Tolerance::new().linear;
 
+    // Stored UVs on section and hole wires can be fitted in a foreign frame;
+    // build ONE local frame and project every 3D endpoint through it for all
+    // 2D tests (the pcurve-convention lesson). This frame also decides the
+    // disc/hole winding normalization below: stored UVs from the FF phase
+    // live in the surface's own parameterization, whose handedness disagrees
+    // with the local frame on a down-facing plane, and a signed area taken in
+    // the wrong frame inverts the winding verdict (the z-interface pocket
+    // ring of #1538: the bottom cap's hole wound backwards while the top
+    // cap's was correct).
+    let plane_frame = if let FaceSurface::Plane { normal, .. } = surface {
+        Some(PlaneFrame::from_plane_face(*normal, wire_pts))
+    } else {
+        None
+    };
+
     // Convert each section edge to an OrientedPCurveEdge, preserving the
     // original EdgeCurve (NURBS, Circle, etc.) without polyline approximation.
     let mut forward_edges: Vec<OrientedPCurveEdge> = Vec::new();
@@ -3838,18 +3853,53 @@ pub(super) fn split_face_with_internal_loops(
             Rank::B => &section.pcurve_b,
         };
 
-        let (start_uv, end_uv) = match rank {
-            Rank::A => section.start_uv_a.zip(section.end_uv_a).unwrap_or_else(|| {
-                uv_endpoints_from_pcurve(pcurve_on_face, section.start, section.end, surface, &[])
-            }),
-            Rank::B => section.start_uv_b.zip(section.end_uv_b).unwrap_or_else(|| {
-                uv_endpoints_from_pcurve(pcurve_on_face, section.start, section.end, surface, &[])
-            }),
+        // A line on a plane comes with no UVs and, from a pave block, a
+        // placeholder pcurve at the frame's origin; its UVs read off that
+        // placeholder would all start there. Lay it out in the boundary's
+        // frame, where the curved sections' pcurves were fitted.
+        let line_on_plane = plane_frame
+            .as_ref()
+            .filter(|_| matches!(section.curve_3d, EdgeCurve::Line));
+        let (pcurve, start_uv, end_uv) = if let Some(frame) = line_on_plane {
+            (
+                super::super::pcurve_compute::compute_pcurve_on_surface(
+                    &section.curve_3d,
+                    section.start,
+                    section.end,
+                    surface,
+                    wire_pts,
+                    Some(frame),
+                ),
+                frame.project(section.start),
+                frame.project(section.end),
+            )
+        } else {
+            let (start_uv, end_uv) = match rank {
+                Rank::A => section.start_uv_a.zip(section.end_uv_a).unwrap_or_else(|| {
+                    uv_endpoints_from_pcurve(
+                        pcurve_on_face,
+                        section.start,
+                        section.end,
+                        surface,
+                        &[],
+                    )
+                }),
+                Rank::B => section.start_uv_b.zip(section.end_uv_b).unwrap_or_else(|| {
+                    uv_endpoints_from_pcurve(
+                        pcurve_on_face,
+                        section.start,
+                        section.end,
+                        surface,
+                        &[],
+                    )
+                }),
+            };
+            (pcurve_on_face.clone(), start_uv, end_uv)
         };
 
         forward_edges.push(OrientedPCurveEdge {
             curve_3d: section.curve_3d.clone(),
-            pcurve: pcurve_on_face.clone(),
+            pcurve,
             start_uv,
             end_uv,
             start_3d: section.start,
@@ -3939,20 +3989,6 @@ pub(super) fn split_face_with_internal_loops(
     // the hole plus the hole pieces inside the loop.
     let mut consumed_holes: std::collections::HashSet<usize> = std::collections::HashSet::new();
     let mut union_hole_by_loop: Vec<Option<Vec<OrientedPCurveEdge>>> = vec![None; loops.len()];
-    // Stored UVs on section and hole wires can be fitted in a foreign frame;
-    // build ONE local frame and project every 3D endpoint through it for all
-    // 2D tests (the pcurve-convention lesson). This frame also decides the
-    // disc/hole winding normalization below: stored UVs from the FF phase
-    // live in the surface's own parameterization, whose handedness disagrees
-    // with the local frame on a down-facing plane, and a signed area taken in
-    // the wrong frame inverts the winding verdict (the z-interface pocket
-    // ring of #1538: the bottom cap's hole wound backwards while the top
-    // cap's was correct).
-    let plane_frame = if let FaceSurface::Plane { normal, .. } = surface {
-        Some(PlaneFrame::from_plane_face(*normal, wire_pts))
-    } else {
-        None
-    };
     if let Some(frame) = plane_frame.as_ref() {
         let frame = frame.clone();
         for (li, loop_edges) in loops.iter_mut().enumerate() {
