@@ -4202,6 +4202,58 @@ fn a_twisted_grid_keeps_a_narrow_peak_it_has_found() {
     );
 }
 
+/// The stray of the grid's cell holding `(u, v)` there, from either split.
+fn stray_in_grid(
+    at: &dyn Fn(f64, f64) -> Point3,
+    (n_u, n_v): (usize, usize),
+    (u, v): (f64, f64),
+) -> f64 {
+    use super::nurbs::point_triangle_distance;
+    #[allow(clippy::cast_precision_loss)]
+    let (du, dv) = (1.0 / n_u as f64, 1.0 / n_v as f64);
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let (i, j) = (
+        ((u / du) as usize).min(n_u - 1),
+        ((v / dv) as usize).min(n_v - 1),
+    );
+    #[allow(clippy::cast_precision_loss)]
+    let corner = |a: usize, b: usize| at(du * (i + a) as f64, dv * (j + b) as f64);
+    let (p00, p10, p01, p11) = (corner(0, 0), corner(1, 0), corner(0, 1), corner(1, 1));
+    let p = at(u, v);
+    let split = |a: Point3, b: Point3, c: Point3, d: Point3| {
+        point_triangle_distance(p, a, b, c).min(point_triangle_distance(p, a, c, d))
+    };
+    split(p00, p10, p11, p01).max(split(p10, p11, p01, p00))
+}
+
+/// The narrow peak above under a chord test that refuses 8 divisions, as
+/// creases turning opposite ways might: the grid that keeps the peak is no
+/// doubling to 8 by 8, and the grid taken holds the peak and its chords.
+#[test]
+fn a_twisted_grid_keeps_a_narrow_peak_where_its_chords_hold() {
+    let h = |t: f64| (1.0 - (t - 0.125).abs() / 0.003).max(0.0);
+    let at = |u: f64, v: f64| Point3::new(u, v, 0.7 * u * v + 0.217 * h(u) * h(v));
+    let not_eight = |_: bool, n: usize| n != 8;
+    let deflection = 0.2;
+    let grid = super::nurbs::untwisted_grid(
+        &at,
+        ((0.0, 1.0), (0.0, 1.0)),
+        (1, 1),
+        deflection,
+        1024,
+        Some(&not_eight),
+    );
+    assert!(
+        not_eight(true, grid.0) && not_eight(false, grid.1),
+        "{grid:?}"
+    );
+    let stray = stray_in_grid(&at, grid, (0.125, 0.125));
+    assert!(
+        stray <= 0.5 * deflection,
+        "{grid:?}: the peak stands {stray} off"
+    );
+}
+
 /// The patch S(u, v) = (20u(1 - 0.99v), 20v, 0.2uv) tapers from 20 wide to
 /// 0.2. Its middle strays 0.05 from the two triangles of either split, but
 /// toward its narrow end, where one triangle is a sliver standing steep,

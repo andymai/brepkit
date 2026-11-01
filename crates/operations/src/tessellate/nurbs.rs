@@ -1012,10 +1012,45 @@ pub(super) fn untwisted_grid(
             &[at(u, v)],
         )
     };
-    // Where a cell once strayed past half the deflection, the worst first: a
-    // grid whose lines move off a narrow peak a probe found can leave it
-    // between its own probes.
-    let mut witnesses: Vec<(f64, (f64, f64))> = Vec::new();
+    let holds = |along_u: bool, n: usize| chords.is_none_or(|holds| holds(along_u, n));
+    // From `from` on by steps of `by`, the first count the chords hold; `from`
+    // itself when none within the division cap does.
+    let first_held = |from: usize, by: usize, along_u: bool| {
+        let mut m = from;
+        while !holds(along_u, m) {
+            if m >= max_divisions {
+                return from;
+            }
+            m = m.saturating_add(by).min(max_divisions);
+        }
+        m
+    };
+    // A whole multiple of a chain grid's count, the least past one its chords
+    // hold: every multiple puts each cell's middle and quarter points on the
+    // new grid's vertices or probes.
+    let nested = |n: usize, along_u: bool| first_held((2 * n).min(max_divisions), n, along_u);
+    // A proportional count, or the multiples of the sized count from it on,
+    // whose chords each lie within one the sizing read.
+    let sized = |n: usize, start: usize, along_u: bool| {
+        if holds(along_u, n) {
+            n
+        } else {
+            first_held(
+                n.div_ceil(start).saturating_mul(start).min(max_divisions),
+                start,
+                along_u,
+            )
+        }
+    };
+    // The grids reached by whole multiples from the start, each keeping its
+    // forebears' probes on its vertices or probes, and every probe of any
+    // grid read that strayed past half the deflection. A proportional grid
+    // between them is tried only when it holds those witnesses, and given
+    // up for the chain's next multiple when it does not hold itself: a grid
+    // whose lines move off a narrow peak a probe found can leave it between
+    // its own probes.
+    let mut chain = (n_u, n_v);
+    let mut witnesses: Vec<(f64, f64)> = Vec::new();
     let mut refined = false;
     loop {
         // The twist never takes cells past the grid's budget: a grid capped
@@ -1036,52 +1071,43 @@ pub(super) fn untwisted_grid(
         let mut past = Vec::new();
         let stray = witnesses
             .iter()
-            .map(|&(_, uv)| stray_at((n_u, n_v), uv))
+            .map(|&uv| stray_at((n_u, n_v), uv))
             .fold(worst(n_u, n_v, &mut past), f64::max);
-        if stray <= half {
+        let (held_u, held_v) = (holds(true, n_u), holds(false, n_v));
+        if stray <= half && held_u && held_v {
             break;
         }
-        witnesses.append(&mut past);
-        witnesses.sort_by(|a, b| b.0.total_cmp(&a.0));
-        witnesses.truncate(MAX_WITNESSES);
-        let grow = (1.1 * (stray / half).sqrt()).min(2.0);
-        #[allow(
-            clippy::cast_precision_loss,
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss
-        )]
-        let step = |n: usize| {
-            (((n as f64) * grow).ceil() as usize)
-                .max(n + 1)
-                .min(max_divisions)
-        };
-        let nested = |n: usize, start: usize, along_u: bool| {
-            let Some(holds) = chords else {
-                return n;
-            };
-            if holds(along_u, n) {
-                return n;
-            }
-            let first = n.div_ceil(start).saturating_mul(start).min(max_divisions);
-            let mut m = first;
-            while !holds(along_u, m) {
-                if m >= max_divisions {
-                    return first;
+        witnesses.extend(past.iter().map(|&(_, uv)| uv));
+        let next = if (n_u, n_v) == chain {
+            let grow = (1.1 * (stray / half).sqrt()).min(2.0);
+            #[allow(
+                clippy::cast_precision_loss,
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss
+            )]
+            let step = |n: usize, held: bool| {
+                if stray <= half && held {
+                    n
+                } else {
+                    (((n as f64) * grow).ceil() as usize)
+                        .max(n + 1)
+                        .min(max_divisions)
                 }
-                m = m.saturating_add(start).min(max_divisions);
+            };
+            let tried = (
+                sized(step(n_u, held_u), start_u, true),
+                sized(step(n_v, held_v), start_v, false),
+            );
+            if tried == chain || witnesses.iter().any(|&uv| stray_at(tried, uv) > half) {
+                chain = (nested(n_u, true), nested(n_v, false));
+                chain
+            } else {
+                tried
             }
-            m
+        } else {
+            chain = (nested(chain.0, true), nested(chain.1, false));
+            chain
         };
-        let mut next = (
-            nested(step(n_u), start_u, true),
-            nested(step(n_v), start_v, false),
-        );
-        // A step that loses a witness gives way to doubling, which keeps each
-        // cell's middle as a vertex and its quarter points as the new cells'
-        // middles.
-        if witnesses.iter().any(|&(_, uv)| stray_at(next, uv) > half) {
-            next = ((n_u * 2).min(max_divisions), (n_v * 2).min(max_divisions));
-        }
         if next.0 * next.1 > GRID_MAX_CELLS {
             log::warn!(
                 "twisted NURBS grid stops at {n_u} x {n_v} cells, its budget; it may stand off its surface by more than the requested deflection"
@@ -1137,9 +1163,6 @@ fn probe_strays(
     ];
     PROBES.map(|(a, b)| (split_stray(corners, &[corner(a, b)]), uv(a, b)))
 }
-
-/// The most witnesses [`untwisted_grid`] keeps.
-const MAX_WITNESSES: usize = 4096;
 
 /// Where in a cell [`probe_strays`] reads it: its middle and quarter points.
 const PROBES: [(f64, f64); 5] = [
