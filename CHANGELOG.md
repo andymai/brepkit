@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.6.19](https://github.com/andymai/brepkit/compare/v4.6.18...v4.6.19) (2026-11-01)
+
+
+### Bug Fixes
+
+* **math:** cut a NURBS curve into Bezier pieces off each span's de Boor points ([#2267](https://github.com/andymai/brepkit/issues/2267)) ([8891714](https://github.com/andymai/brepkit/commit/889171415c959e206029a23f9c7c14b49e645b32))
+
 ## [4.6.18](https://github.com/andymai/brepkit/compare/v4.6.17...v4.6.18) (2026-11-01)
 
 
