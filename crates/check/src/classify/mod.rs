@@ -102,7 +102,9 @@ impl<'a> SolidClassifier<'a> {
     }
 
     /// How many times the ray from `origin` along `direction` crosses the
-    /// solid's faces ahead of `origin`.
+    /// solid's faces ahead of `origin`. The count can be wrong where the ray
+    /// grazes a NURBS face, touching it or running in it, which
+    /// [`classify_point`] answers by casting other rays.
     ///
     /// # Errors
     ///
@@ -169,7 +171,8 @@ fn classify_in(
         }
     }
 
-    // All three disagreed (very rare). Try perturbed directions as recovery.
+    // No two rays that crossed cleanly agreed: the three disagreed, or one
+    // grazed a face. Try perturbed directions as recovery.
     for attempt in 0..options.max_recovery_attempts {
         // Generate a pseudo-random direction from attempt index using golden ratio.
         let seed = (attempt as f64 + 1.0) * 0.618_033_988_749_895;

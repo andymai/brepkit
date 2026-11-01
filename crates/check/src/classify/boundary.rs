@@ -1100,7 +1100,7 @@ pub struct FaceRayCache {
 /// crossing inside a knot span however narrow is found; a grid of the
 /// whole domain passes over a feature that spans a sliver of it. A surface
 /// the patches cannot hold (a weight not positive, knots not clamped) is
-/// sampled on that grid.
+/// sampled on that grid, and the ray is unsure of its count there.
 fn ray_crossings_nurbs(
     topo: &Topology,
     face_id: FaceId,
@@ -1112,20 +1112,21 @@ fn ray_crossings_nurbs(
 ) -> Result<u32, CheckError> {
     let patches =
         patches.get_or_init(|| brepkit_math::nurbs::intersection::RaySurface::new(surface));
-    let hits = match patches {
-        Some(patches) => {
-            let found = patches.hits(origin, direction, NURBS_HIT_REACH);
-            *unsure |= found.grazed;
-            // `hits` reads `t` along the unit direction.
-            let scale = direction.length();
-            found
-                .hits
-                .iter()
-                .map(|h| (h.t / scale, h.u, h.v))
-                .filter(|&(t, _, _)| t > RAY_T_MIN)
-                .collect()
-        }
-        None => ray_surface::ray_nurbs(origin, direction, surface, 20)?,
+    let hits = if let Some(patches) = patches {
+        let found = patches.hits(origin, direction, NURBS_HIT_REACH);
+        *unsure |= found.grazed;
+        // `hits` reads `t` along the unit direction.
+        let scale = direction.length();
+        found
+            .hits
+            .iter()
+            .map(|h| (h.t / scale, h.u, h.v))
+            .filter(|&(t, _, _)| t > RAY_T_MIN)
+            .collect()
+    } else {
+        // The grid can pass over a crossing inside a narrow knot span.
+        *unsure = true;
+        ray_surface::ray_nurbs(origin, direction, surface, 20)?
     };
     if hits.is_empty() {
         return Ok(0);
@@ -1370,6 +1371,62 @@ mod tests {
         )
         .unwrap();
         assert!(unsure, "a ray along the ridge at {top:?}");
+    }
+
+    /// A flat patch at z = 1 whose `u` knots are not clamped, which the
+    /// Bezier patches cannot hold: its grid of samples could pass over a
+    /// crossing, so a ray up through it is unsure of its count.
+    #[test]
+    fn a_ray_through_a_patch_read_on_its_grid_is_unsure() {
+        use brepkit_math::nurbs::surface::NurbsSurface;
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let p = Point3::new;
+        let surface = NurbsSurface::new(
+            1,
+            1,
+            vec![0.0, 0.25, 0.5, 0.75, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![
+                vec![p(0.0, 0.0, 1.0), p(0.0, 1.0, 1.0)],
+                vec![p(0.5, 0.0, 1.0), p(0.5, 1.0, 1.0)],
+                vec![p(1.0, 0.0, 1.0), p(1.0, 1.0, 1.0)],
+            ],
+            vec![vec![1.0; 2]; 3],
+        )
+        .unwrap();
+        assert!(brepkit_math::nurbs::intersection::RaySurface::new(&surface).is_none());
+        let (u0, u1) = surface.domain_u();
+        let corners =
+            [(u0, 0.0), (u1, 0.0), (u1, 1.0), (u0, 1.0)].map(|(u, v)| surface.evaluate(u, v));
+        let mut topo = Topology::new();
+        let v: Vec<_> = corners
+            .iter()
+            .map(|&c| topo.add_vertex(Vertex::new(c, 1e-7)))
+            .collect();
+        let edges = (0..4)
+            .map(|k| {
+                OrientedEdge::new(
+                    topo.add_edge(Edge::new(v[k], v[(k + 1) % 4], EdgeCurve::Line)),
+                    true,
+                )
+            })
+            .collect();
+        let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+        let face = topo.add_face(Face::new(wire, vec![], FaceSurface::Nurbs(surface)));
+        let mut unsure = false;
+        count_face_ray_crossings(
+            &topo,
+            face,
+            p(0.5, 0.5, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            &FaceRayCache::default(),
+            &mut unsure,
+        )
+        .unwrap();
+        assert!(unsure);
     }
 
     /// The face of [`crosses_a_bump`], its bump inside knot spans `width`
