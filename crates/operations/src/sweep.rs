@@ -164,40 +164,94 @@ fn frames_at(
 /// outer wire's region adds and each hole's takes away, whichever way it
 /// runs. No mean of points along the boundary would do: samples or cuts
 /// crowd where a curve's parameter runs slow, and an edge held as a NURBS
-/// would pull the centre its way. A line is taken in closed form; a curve
-/// span by span, each halved until its integrals settle, each to its own
-/// scale (an area and two moments a length apart). `None` for a region of no
-/// area, a span that does not settle, or a boundary that leaves the plane,
-/// whose centre off it would hang on the point the plane was taken through.
+/// would pull the centre its way.
+///
+/// A line is taken in closed form. A curve is cut into its Bezier pieces,
+/// each given end weights alike: weights `w_i` and `w_i l^i` with
+/// `l = (w_0 / w_n)^(1 / n)` draw the same curve, and the even ends spread
+/// its parameter, which weights far apart crowd into one end where a Gauss
+/// rule can pass over it whole. Each piece is halved until its area and
+/// moments settle to the region's size squared and cubed, never to what a
+/// span reads, which a crowded one can inflate. `None` for a region of no
+/// area, a piece that does not settle, a weight not positive, or a boundary
+/// that leaves the plane, whose centre off it would hang on the point the
+/// plane was taken through.
 pub(crate) fn region_centroid(
     topo: &Topology,
     profile: FaceId,
     origin: Point3,
     (r, u): (Vec3, Vec3),
 ) -> Result<Option<Point3>, crate::OperationsError> {
+    enum Piece {
+        Line(Point3, Point3),
+        Bezier(NurbsCurve),
+    }
     let face = topo.face(profile)?;
     let wires: Vec<brepkit_topology::wire::WireId> = std::iter::once(face.outer_wire())
         .chain(face.inner_wires().iter().copied())
         .collect();
-    let rule = brepkit_math::quadrature::gauss_legendre_points(8);
-    let normal = r.cross(u);
-    // The boundary's reach from `origin`, its control points bounding its
-    // curves, and how far it strays from the plane.
-    let mut size = 0.0_f64;
+    let mut loops: Vec<Vec<Piece>> = Vec::with_capacity(wires.len());
     for &wid in &wires {
+        let mut pieces = Vec::new();
         for oe in topo.wire(wid)?.edges() {
             let edge = topo.edge(oe.edge())?;
-            for v in [edge.start(), edge.end()] {
-                size = size.max((topo.vertex(v)?.point() - origin).length());
+            let (from, to) = (
+                topo.vertex(oe.oriented_start(edge))?.point(),
+                topo.vertex(oe.oriented_end(edge))?.point(),
+            );
+            let Some(curve) =
+                crate::revolve::edge_span_nurbs(edge.curve(), oe.is_forward(), (from, to))?
+            else {
+                pieces.push(Piece::Line(from, to));
+                continue;
+            };
+            for piece in brepkit_math::nurbs::decompose::curve_to_bezier_segments(&curve)? {
+                let n = piece.degree();
+                let w = piece.weights();
+                let (w0, wn) = (w[0], w[n]);
+                if !(w.iter().all(|x| x.is_finite() && *x > 0.0)) {
+                    return Ok(None);
+                }
+                #[allow(clippy::cast_precision_loss, clippy::cast_possible_wrap)]
+                let l = (w0 / wn).powf(1.0 / n as f64);
+                #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+                let even: Vec<f64> = w
+                    .iter()
+                    .enumerate()
+                    .map(|(i, x)| x * l.powi(i as i32))
+                    .collect();
+                let knots: Vec<f64> = std::iter::repeat_n(0.0, n + 1)
+                    .chain(std::iter::repeat_n(1.0, n + 1))
+                    .collect();
+                pieces.push(Piece::Bezier(NurbsCurve::new(
+                    n,
+                    knots,
+                    piece.control_points().to_vec(),
+                    even,
+                )?));
             }
-            if let EdgeCurve::NurbsCurve(c) = edge.curve() {
-                for &q in c.control_points() {
-                    size = size.max((q - origin).length());
+        }
+        loops.push(pieces);
+    }
+    // The region's reach from `origin`, read on its curves themselves: a
+    // curve's control points can stand far off it.
+    let mut size = 0.0_f64;
+    for piece in loops.iter().flatten() {
+        match piece {
+            Piece::Line(a, b) => {
+                size = size.max((*a - origin).length()).max((*b - origin).length());
+            }
+            Piece::Bezier(c) => {
+                for k in 0..=16 {
+                    size = size.max((c.evaluate(f64::from(k) / 16.0) - origin).length());
                 }
             }
         }
     }
     let size = size.max(f64::MIN_POSITIVE);
+    let budget = [size * size, size * size * size, size * size * size].map(|s| 1e-12 * s);
+    let rule = brepkit_math::quadrature::gauss_legendre_points(8);
+    let normal = r.cross(u);
     let stray = std::cell::Cell::new(0.0_f64);
     let plane = |p: Point3| {
         let d = p - origin;
@@ -220,58 +274,36 @@ pub(crate) fn region_centroid(
         acc
     };
     let mut total = [0.0_f64; 3];
-    for (wi, &wid) in wires.iter().enumerate() {
+    for (li, pieces) in loops.iter().enumerate() {
         let mut acc = [0.0_f64; 3];
-        // Each integral's scale: the most it has read on a span, and never
-        // less than the region's size to its own power.
-        let scale = std::cell::Cell::new([size * size, size * size * size, size * size * size]);
-        for oe in topo.wire(wid)?.edges() {
-            let edge = topo.edge(oe.edge())?;
-            let (from, to) = (
-                topo.vertex(oe.oriented_start(edge))?.point(),
-                topo.vertex(oe.oriented_end(edge))?.point(),
-            );
-            let Some(curve) =
-                crate::revolve::edge_span_nurbs(edge.curve(), oe.is_forward(), (from, to))?
-            else {
-                let ((ax, ay), (bx, by)) = (plane(from), plane(to));
-                acc[0] += 0.5 * (ax + bx) * (by - ay);
-                acc[1] += (by - ay) * ax.mul_add(ax, ax.mul_add(bx, bx * bx)) / 6.0;
-                acc[2] -= (bx - ax) * ay.mul_add(ay, ay.mul_add(by, by * by)) / 6.0;
-                continue;
-            };
-            let (t0, t1) = curve.domain();
-            let mut cuts: Vec<f64> = std::iter::once(t0)
-                .chain(curve.knots().iter().copied().filter(|&k| k > t0 && k < t1))
-                .chain(std::iter::once(t1))
-                .collect();
-            cuts.dedup_by(|a, b| a.to_bits() == b.to_bits());
-            for w in cuts.windows(2) {
-                let mut stack = vec![(w[0], w[1], over(&curve, w[0], w[1]), 0_u32)];
-                while let Some((a, b, whole, depth)) = stack.pop() {
-                    let m = f64::midpoint(a, b);
-                    let (left, right) = (over(&curve, a, m), over(&curve, m, b));
-                    let mut seen = scale.get();
-                    for (s, w) in seen.iter_mut().zip(whole) {
-                        *s = s.max(w.abs());
-                    }
-                    scale.set(seen);
-                    let settled =
-                        (0..3).all(|k| (left[k] + right[k] - whole[k]).abs() <= 1e-12 * seen[k]);
-                    if settled {
-                        for k in 0..3 {
-                            acc[k] += left[k] + right[k];
+        for piece in pieces {
+            match piece {
+                Piece::Line(from, to) => {
+                    let ((ax, ay), (bx, by)) = (plane(*from), plane(*to));
+                    acc[0] += 0.5 * (ax + bx) * (by - ay);
+                    acc[1] += (by - ay) * ax.mul_add(ax, ax.mul_add(bx, bx * bx)) / 6.0;
+                    acc[2] -= (bx - ax) * ay.mul_add(ay, ay.mul_add(by, by * by)) / 6.0;
+                }
+                Piece::Bezier(curve) => {
+                    let mut stack = vec![(0.0, 1.0, over(curve, 0.0, 1.0), 0_u32)];
+                    while let Some((a, b, whole, depth)) = stack.pop() {
+                        let m = f64::midpoint(a, b);
+                        let (left, right) = (over(curve, a, m), over(curve, m, b));
+                        if (0..3).all(|k| (left[k] + right[k] - whole[k]).abs() <= budget[k]) {
+                            for k in 0..3 {
+                                acc[k] += left[k] + right[k];
+                            }
+                        } else if depth >= 30 {
+                            return Ok(None);
+                        } else {
+                            stack.push((a, m, left, depth + 1));
+                            stack.push((m, b, right, depth + 1));
                         }
-                    } else if depth >= 30 {
-                        return Ok(None);
-                    } else {
-                        stack.push((a, m, left, depth + 1));
-                        stack.push((m, b, right, depth + 1));
                     }
                 }
             }
         }
-        let sign = if wi == 0 {
+        let sign = if li == 0 {
             acc[0].signum()
         } else {
             -acc[0].signum()

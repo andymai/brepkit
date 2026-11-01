@@ -590,58 +590,32 @@ fn a_profiles_centre_on_a_helix_does_not_hang_on_how_its_edges_are_held() {
 
 /// A disc of radius 2 swept one turn round a helix of radius 20 by
 /// `helical_sweep`, its rim a circle edge, the same circle as five rational
-/// arcs of 72 degrees on knots 0, 0.1, 0.3, 0.5, 0.7 and 1, or as four
-/// quarter arcs, the first weighted 1, 1000 cos 45 degrees and 10^6, its
-/// parameter crowding toward one end, where a fixed Gauss rule misreads it:
-/// the disc's centre is the circle's each way, its start cap's rim 2 from
-/// the path, and the first two coils hold one volume.
+/// arcs of 72 degrees on knots 0, 0.1, 0.3, 0.5, 0.7 and 1, as four quarter
+/// arcs the first weighted 1, 1000 cos 45 degrees and 10^6 or 1, 10^14 cos
+/// 45 degrees and 10^28, or as arcs of 179.9999, 90.0001 and 90 degrees the
+/// first weighted 1000 to one, whose middle control point stands some 2.3
+/// million off. Weights far apart crowd an arc's parameter into one end,
+/// where a Gauss rule can pass over it whole. The disc's centre is the
+/// circle's each way, its start cap's rim 2 from the path, and the first two
+/// coils hold one volume.
 #[test]
 fn a_discs_centre_on_a_helix_does_not_hang_on_its_rims_knots() {
     let coil = |rim_kind: u8| {
         let mut topo = Topology::new();
-        let rims = if rim_kind == 2 {
-            let c = std::f64::consts::FRAC_1_SQRT_2;
-            let lambda = 1000.0;
-            let corners: Vec<_> = (0..4)
-                .map(|k| {
-                    let a = f64::from(k) * std::f64::consts::FRAC_PI_2;
-                    topo.add_vertex(Vertex::new(
-                        Point3::new(2.0 * a.cos(), 2.0 * a.sin(), 0.0),
-                        TOL,
-                    ))
-                })
-                .collect();
-            (0..4)
-                .map(|k| {
-                    let (a, b) = (
-                        f64::from(k) * std::f64::consts::FRAC_PI_2,
-                        f64::from(k + 1) * std::f64::consts::FRAC_PI_2,
-                    );
-                    let m = 0.5 * (a + b);
-                    let arc = NurbsCurve::new(
-                        2,
-                        vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
-                        vec![
-                            Point3::new(2.0 * a.cos(), 2.0 * a.sin(), 0.0),
-                            Point3::new(2.0 * m.cos() / c, 2.0 * m.sin() / c, 0.0),
-                            Point3::new(2.0 * b.cos(), 2.0 * b.sin(), 0.0),
-                        ],
-                        {
-                            let l = if k == 0 { lambda } else { 1.0 };
-                            vec![1.0, c * l, l * l]
-                        },
-                    )
-                    .unwrap();
-                    let edge = Edge::new(
-                        corners[k as usize],
-                        corners[(k as usize + 1) % 4],
-                        EdgeCurve::NurbsCurve(arc),
-                    );
-                    OrientedEdge::new(topo.add_edge(edge), true)
-                })
-                .collect()
-        } else {
-            vec![OrientedEdge::new(rim_edge(&mut topo, rim_kind == 1), true)]
+        let rims = match rim_kind {
+            2 => rim_arcs(
+                &mut topo,
+                &[(90.0, 1000.0), (90.0, 1.0), (90.0, 1.0), (90.0, 1.0)],
+            ),
+            3 => rim_arcs(
+                &mut topo,
+                &[(90.0, 1e14), (90.0, 1.0), (90.0, 1.0), (90.0, 1.0)],
+            ),
+            4 => rim_arcs(
+                &mut topo,
+                &[(179.9999, 1000.0), (90.0001, 1.0), (90.0, 1.0)],
+            ),
+            _ => vec![OrientedEdge::new(rim_edge(&mut topo, rim_kind == 1), true)],
         };
         let wire = topo.add_wire(Wire::new(rims, true).unwrap());
         let profile = topo.add_face(Face::new(
@@ -663,8 +637,9 @@ fn a_discs_centre_on_a_helix_does_not_hang_on_its_rims_knots() {
             8,
         )
         .unwrap();
-        // The crowded rim's side, weighted 1 to 10^6, is left to its
-        // placement here: its volume reads slowly along its boundary.
+        // The crowded rims' sides, weighted 10^6 to one and more, are left to
+        // their placement here: their volume reads slowly along their
+        // boundary.
         let volume = (rim_kind < 2).then(|| {
             brepkit_check::properties::exact_solid_volume(&topo, solid)
                 .unwrap()
@@ -709,7 +684,7 @@ fn a_discs_centre_on_a_helix_does_not_hang_on_its_rims_knots() {
         (volume, spread)
     };
     let v_circle = coil(0).0.unwrap();
-    for kind in [1, 2] {
+    for kind in [1, 2, 3, 4] {
         let (v, (near, far)) = coil(kind);
         if let Some(v) = v {
             assert!(
@@ -786,6 +761,49 @@ fn a_holed_profiles_centre_on_a_helix_takes_its_hole_away() {
         (off - want).abs() < 1e-6,
         "the hole's centre sits {off} from the path, want {want}"
     );
+}
+
+/// A rim of radius 2 about the origin in z = 0 from consecutive arcs from
+/// angle 0, each `(degrees, l)`: the arc's rational quadratic weighted 1,
+/// l cos(half its angle) and l^2, which draws the same arc.
+fn rim_arcs(topo: &mut Topology, arcs: &[(f64, f64)]) -> Vec<OrientedEdge> {
+    let mut at = 0.0_f64;
+    let ends: Vec<f64> = std::iter::once(0.0)
+        .chain(arcs.iter().map(|&(deg, _)| {
+            at += deg.to_radians();
+            at
+        }))
+        .collect();
+    let point = |a: f64| Point3::new(2.0 * a.cos(), 2.0 * a.sin(), 0.0);
+    let corners: Vec<_> = ends[..arcs.len()]
+        .iter()
+        .map(|&a| topo.add_vertex(Vertex::new(point(a), TOL)))
+        .collect();
+    arcs.iter()
+        .enumerate()
+        .map(|(k, &(_, l))| {
+            let (a, b) = (ends[k], ends[k + 1]);
+            let c = (0.5 * (b - a)).cos();
+            let m = 0.5 * (a + b);
+            let arc = NurbsCurve::new(
+                2,
+                vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+                vec![
+                    point(a),
+                    Point3::new(2.0 * m.cos() / c, 2.0 * m.sin() / c, 0.0),
+                    point(b),
+                ],
+                vec![1.0, c * l, l * l],
+            )
+            .unwrap();
+            let edge = Edge::new(
+                corners[k],
+                corners[(k + 1) % arcs.len()],
+                EdgeCurve::NurbsCurve(arc),
+            );
+            OrientedEdge::new(topo.add_edge(edge), true)
+        })
+        .collect()
 }
 
 /// A closed rim of radius 2 about the origin in z = 0: the same circle as
