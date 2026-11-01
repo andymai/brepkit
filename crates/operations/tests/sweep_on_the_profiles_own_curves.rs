@@ -844,3 +844,70 @@ fn rim_edge(topo: &mut Topology, five_arcs: bool) -> brepkit_topology::edge::Edg
         .unwrap()
     }
 }
+
+/// The square of side 2 about the origin with its top side a degree-1 curve
+/// on knots 0, 0, 0.5, 0.5, 1 and 1 through its ends and its middle twice,
+/// which traces the straight side: swept one turn by `helical_sweep`, it
+/// builds, and holds the volume the square of four lines does.
+#[test]
+fn a_profile_side_with_a_knot_repeated_past_its_degree_sweeps_round_a_helix() {
+    let coil = |doubled: bool| {
+        let mut topo = Topology::new();
+        let corners = [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)];
+        let v: Vec<_> = corners
+            .iter()
+            .map(|&(x, y)| topo.add_vertex(Vertex::new(Point3::new(x, y, 0.0), TOL)))
+            .collect();
+        let edges = (0..4)
+            .map(|k| {
+                let curve = if doubled && k == 2 {
+                    let (a, m, b) = (
+                        Point3::new(1.0, 1.0, 0.0),
+                        Point3::new(0.0, 1.0, 0.0),
+                        Point3::new(-1.0, 1.0, 0.0),
+                    );
+                    EdgeCurve::NurbsCurve(
+                        NurbsCurve::new(
+                            1,
+                            vec![0.0, 0.0, 0.5, 0.5, 1.0, 1.0],
+                            vec![a, m, m, b],
+                            vec![1.0; 4],
+                        )
+                        .unwrap(),
+                    )
+                } else {
+                    EdgeCurve::Line
+                };
+                OrientedEdge::new(topo.add_edge(Edge::new(v[k], v[(k + 1) % 4], curve)), true)
+            })
+            .collect();
+        let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+        let profile = topo.add_face(Face::new(
+            wire,
+            vec![],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: 0.0,
+            },
+        ));
+        let solid = brepkit_operations::helix::helical_sweep(
+            &mut topo,
+            profile,
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            20.0,
+            8.0,
+            1.0,
+            8,
+        )
+        .unwrap();
+        brepkit_check::properties::exact_solid_volume(&topo, solid)
+            .unwrap()
+            .unwrap()
+    };
+    let (lines, doubled) = (coil(false), coil(true));
+    assert!(
+        ((lines - doubled) / lines).abs() < 1e-9,
+        "{lines} and {doubled}"
+    );
+}

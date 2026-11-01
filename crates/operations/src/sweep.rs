@@ -166,16 +166,16 @@ fn frames_at(
 /// crowd where a curve's parameter runs slow, and an edge held as a NURBS
 /// would pull the centre its way.
 ///
-/// A line is taken in closed form. A curve is cut into its Bezier pieces,
-/// each given end weights alike: weights `w_i` and `w_i l^i` with
+/// A line is taken in closed form. A curve is cut into the Bezier pieces of
+/// its knot spans, each given end weights alike: weights `w_i` and `w_i l^i` with
 /// `l = (w_0 / w_n)^(1 / n)` draw the same curve, and the even ends spread
 /// its parameter, which weights far apart crowd into one end where a Gauss
 /// rule can pass over it whole. Each piece is halved until its area and
 /// moments settle to the region's size squared and cubed, never to what a
 /// span reads, which a crowded one can inflate. `None` for a region of no
-/// area, a piece that does not settle, a weight not positive, or a boundary
-/// that leaves the plane, whose centre off it would hang on the point the
-/// plane was taken through.
+/// area, a curve of degree zero, a piece that does not settle, a weight not
+/// positive, or a boundary that leaves the plane, whose centre off it would
+/// hang on the point the plane was taken through.
 pub(crate) fn region_centroid(
     topo: &Topology,
     profile: FaceId,
@@ -184,7 +184,8 @@ pub(crate) fn region_centroid(
 ) -> Result<Option<Point3>, crate::OperationsError> {
     enum Piece {
         Line(Point3, Point3),
-        Bezier(NurbsCurve),
+        /// A curve over `[a, b]`, Bezier pieces over `[0, 1]`.
+        Curve(NurbsCurve, f64, f64),
     }
     let face = topo.face(profile)?;
     let wires: Vec<brepkit_topology::wire::WireId> = std::iter::once(face.outer_wire())
@@ -205,30 +206,44 @@ pub(crate) fn region_centroid(
                 pieces.push(Piece::Line(from, to));
                 continue;
             };
-            for piece in brepkit_math::nurbs::decompose::curve_to_bezier_segments(&curve)? {
-                let n = piece.degree();
-                let w = piece.weights();
-                let (w0, wn) = (w[0], w[n]);
-                if !(w.iter().all(|x| x.is_finite() && *x > 0.0)) {
+            // Each knot span's Bezier form, read off its de Boor points with
+            // nothing inserted: any knot vector, clamped or not, its knots
+            // repeated however often.
+            let p = curve.degree();
+            if p == 0 {
+                return Ok(None);
+            }
+            let (t0, t1) = curve.domain();
+            let mut cuts: Vec<f64> = std::iter::once(t0)
+                .chain(curve.knots().iter().copied().filter(|&k| k > t0 && k < t1))
+                .chain(std::iter::once(t1))
+                .collect();
+            cuts.dedup_by(|a, b| a.to_bits() == b.to_bits());
+            for w in cuts.windows(2) {
+                let h = brepkit_math::nurbs::decompose::curve_bezier_between(&curve, w[0], w[1])?;
+                if !h.iter().all(|q| q[3].is_finite() && q[3] > 0.0) {
                     return Ok(None);
                 }
-                #[allow(clippy::cast_precision_loss, clippy::cast_possible_wrap)]
-                let l = (w0 / wn).powf(1.0 / n as f64);
+                #[allow(clippy::cast_precision_loss)]
+                let l = (h[0][3] / h[p][3]).powf(1.0 / p as f64);
+                let points: Vec<Point3> = h
+                    .iter()
+                    .map(|q| Point3::new(q[0] / q[3], q[1] / q[3], q[2] / q[3]))
+                    .collect();
                 #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
-                let even: Vec<f64> = w
+                let even: Vec<f64> = h
                     .iter()
                     .enumerate()
-                    .map(|(i, x)| x * l.powi(i as i32))
+                    .map(|(i, q)| q[3] * l.powi(i as i32))
                     .collect();
-                let knots: Vec<f64> = std::iter::repeat_n(0.0, n + 1)
-                    .chain(std::iter::repeat_n(1.0, n + 1))
+                let knots: Vec<f64> = std::iter::repeat_n(0.0, p + 1)
+                    .chain(std::iter::repeat_n(1.0, p + 1))
                     .collect();
-                pieces.push(Piece::Bezier(NurbsCurve::new(
-                    n,
-                    knots,
-                    piece.control_points().to_vec(),
-                    even,
-                )?));
+                pieces.push(Piece::Curve(
+                    NurbsCurve::new(p, knots, points, even)?,
+                    0.0,
+                    1.0,
+                ));
             }
         }
         loops.push(pieces);
@@ -241,9 +256,10 @@ pub(crate) fn region_centroid(
             Piece::Line(a, b) => {
                 size = size.max((*a - origin).length()).max((*b - origin).length());
             }
-            Piece::Bezier(c) => {
+            Piece::Curve(c, a, b) => {
                 for k in 0..=16 {
-                    size = size.max((c.evaluate(f64::from(k) / 16.0) - origin).length());
+                    let t = (b - a).mul_add(f64::from(k) / 16.0, *a);
+                    size = size.max((c.evaluate(t) - origin).length());
                 }
             }
         }
@@ -284,8 +300,8 @@ pub(crate) fn region_centroid(
                     acc[1] += (by - ay) * ax.mul_add(ax, ax.mul_add(bx, bx * bx)) / 6.0;
                     acc[2] -= (bx - ax) * ay.mul_add(ay, ay.mul_add(by, by * by)) / 6.0;
                 }
-                Piece::Bezier(curve) => {
-                    let mut stack = vec![(0.0, 1.0, over(curve, 0.0, 1.0), 0_u32)];
+                Piece::Curve(curve, a0, b0) => {
+                    let mut stack = vec![(*a0, *b0, over(curve, *a0, *b0), 0_u32)];
                     while let Some((a, b, whole, depth)) = stack.pop() {
                         let m = f64::midpoint(a, b);
                         let (left, right) = (over(curve, a, m), over(curve, m, b));
