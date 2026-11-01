@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793528039533,
+  "lastUpdate": 1793529831010,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -64205,6 +64205,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 18207382,
             "range": "± 397815",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "889171415c959e206029a23f9c7c14b49e645b32",
+          "message": "fix(math): cut a NURBS curve into Bezier pieces off each span's de Boor points (#2267)\n\n`curve_to_bezier_segments` now cuts any NURBS curve into the Bezier\npieces of its knot spans, reading each off the span's de Boor points\nwith `curve_bezier_between`. A curve of degree zero, an interior knot\nrepeated past the degree, and a knot vector that is not clamped each\ndecompose into pieces that trace the curve; all three fail on `main`.\n\nToday the function inserts every interior knot up to the degree's\nmultiplicity and slices the control points in blocks of the degree.\nDegree zero divides by the degree, and an interior knot repeated degree\n+ 1 times underflows `p - mult`; in a debug build both panic. The\nbounding box reaches it through `include_nurbs_edge_hull`: on #2266's\nbranch, the box of a coil swept from a square whose side is a degree-1\ncurve on knots 0, 0, 0.5, 0.5, 1, 1 panicked there. A knot vector that\nis not clamped has its blocks read as though it were.\n\n## Change\n\n- Each distinct knot span of the curve's domain becomes one piece, of\nthe curve's degree, with clamped knots over that span, from\n`curve_bezier_between`, which inserts no knot.\n- Knots equal in value are one knot, so -0 and 0 make no piece of no\nwidth; the sweep's `region_centroid` (#2266) takes its cuts the same\nway. A pole of weight zero keeps its homogeneous coordinates as its\npoint, as knot insertion reads it, rather than being divided by zero.\n- `curve_degree_elevate` joins two pieces where their knot repeats at\nmost the degree's times, where the curve is continuous. At a knot\nrepeated more (or any knot of a degree-zero curve), where the curve may\njump, it keeps both ends with the break knot one repeat higher. It reads\nthe knot rather than the ends' coordinates, so scaling every weight\nalike, which leaves the curve unchanged, leaves the result unchanged\ntoo. It counts each break's repeats in one pass over the knots.\n- A span's Bezier form can need a control point at infinity: a weight of\nzero over a numerator that is not, where weights of mixed sign cancel. A\npoint and its weight cannot hold one, since evaluation scales the point\nby its weight, so `curve_to_bezier_segments` returns the new\n`MathError::PoleAtInfinity` instead of a piece that drops it. With\npositive weights every de Boor point blends positive weights, so this\nnever fires. A `match` on `MathError` that lists every variant needs an\narm for it, so this is a source break for such a match outside the\nworkspace (nothing inside matches that way). STABILITY.md lets a change\naccept a break and note it in the PR, which is what this does.\n- Callers keep the same contract: pieces in order along the domain, each\nover one span. The bounding box, curve-curve and curve-surface\nintersection, healing's conversion to Bezier, and the face splitter all\ntake their pieces from here.\n\n## Tests\n\n- `a_knot_repeated_past_the_degree_cuts_two_pieces`: a degree-1 side on\nknots 0, 0, 0.5, 0.5, 1, 1 through its ends and its middle twice.\n- `a_degree_zero_curve_cuts_into_its_spans`: a degree-0 curve on knots\n0, 0.5, 1.\n- `a_curve_not_clamped_cuts_into_its_domains_spans`: a rational cubic on\nthe uniform knots 0 to 7.\n- `a_zero_weight_pole_cuts_a_piece_that_traces_the_curve`: a quadratic\nweighted 1, 0, 1.\n- `a_signed_zero_knot_cuts_no_piece_of_no_width`: a quadratic on knots\n-1, -1, -1, -0, 0, 1, 1, 1 cuts two pieces.\n- In each, every piece traces the curve to 1e-12 at seven points inside\nits span. The first three fail on `main`'s implementation.\n- `a_curve_raised_in_degree_keeps_its_jump`: a degree-1 curve that jumps\nat 0.5, raised to degree 3, traces the curve inside each span; joined\nacross the jump, it did not.\n- `a_jump_raised_in_degree_does_not_hang_on_the_weights_scale`: a\ndegree-1 curve along x through 0, 1, 10 and 11 that jumps at 0.5, its\nweights all 1, 1e-14 or 1e14, raised to degree 3, traces the curve\ninside each span. Joined by its ends' coordinates, at weights of 1e-14\nit missed by 4.6 at t = 0.6.\n- `a_span_whose_weights_cancel_to_a_pole_at_infinity_cuts_no_piece`: a\ncubic on knots 0, 0, 1, 2, 3, 5, 5, 5 weighted 10, -1, 3, 1. Its span\nfrom 2 to 3 has a pole of weight zero over a numerator that is not, and\nthe call refuses it; holding that pole as a point, it returned a piece.\n- `a_curve_continuous_at_its_knots_raised_in_degree_stays_joined`: a\nrational quadratic with a knot repeated twice at 0.5, raised to degree\n3, has 7 control points and traces the curve.\n- The math, algo, heal, operations, io and wasm crates' 3481 tests pass.\n- The pose sweep and truth audit outputs are identical to `main`'s.",
+          "timestamp": "2026-11-01T10:41:13Z",
+          "tree_id": "da8af02b89a013dab7cf7476e326b3f0c02c0a13",
+          "url": "https://github.com/andymai/brepkit/commit/889171415c959e206029a23f9c7c14b49e645b32"
+        },
+        "date": 1793529821295,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 617909,
+            "range": "± 10319",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 699596,
+            "range": "± 13040",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 8041,
+            "range": "± 266",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 407174,
+            "range": "± 5373",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 17965949,
+            "range": "± 61502",
             "unit": "ns/iter"
           }
         ]
