@@ -586,6 +586,11 @@ fn fit_trajectories(
     let mut total = min_segments.max(2);
     let mut fit_tol: Option<f64> = None;
     let mut last_count = 0;
+    // Every midpoint a fit has missed: samples that grow by other than
+    // doubling move off a narrow feature a midpoint found, so each later fit,
+    // straight or cubic, is held there too.
+    let mut witnesses: Vec<f64> = Vec::new();
+    let mut witnessed: std::collections::HashSet<u64> = std::collections::HashSet::new();
     loop {
         // Pieces at their floor of three segments add none while `total` is
         // small against their number.
@@ -619,6 +624,11 @@ fn fit_trajectories(
             slots.push(slot);
         }
         let maps = maps_for(&all)?;
+        let witness_maps = if witnesses.is_empty() {
+            Vec::new()
+        } else {
+            maps_for(&witnesses)?
+        };
 
         let fit = *fit_tol.get_or_insert_with(|| {
             let moved: Vec<Point3> = maps
@@ -632,7 +642,8 @@ fn fit_trajectories(
         let straight = points.iter().all(|&p| {
             let (a, b) = (first.mul_point(p), last.mul_point(p));
             all.iter()
-                .zip(&maps)
+                .chain(&witnesses)
+                .zip(maps.iter().chain(&witness_maps))
                 .all(|(&t, m)| (a + (b - a) * t - m.mul_point(p)).length() <= fit)
         });
         if straight {
@@ -652,6 +663,7 @@ fn fit_trajectories(
 
         let mut rails = Vec::with_capacity(points.len());
         let mut worst = 0.0_f64;
+        let mut missed: Vec<f64> = Vec::new();
         for &p in points {
             let mut fitted = Vec::with_capacity(pieces.len());
             for (piece, slot) in pieces.iter().zip(&slots) {
@@ -659,11 +671,19 @@ fn fit_trajectories(
                 let rail = crate::loft::interpolate_at(&track, 3, piece)?;
                 for &i in &slot[..slot.len() - 1] {
                     let q = maps[i + 1].mul_point(p);
-                    worst = worst.max((rail.evaluate(all[i + 1]) - q).length());
+                    let miss = (rail.evaluate(all[i + 1]) - q).length();
+                    if miss > fit {
+                        missed.push(all[i + 1]);
+                    }
+                    worst = worst.max(miss);
                 }
                 fitted.push(rail);
             }
-            rails.push(join(&fitted)?);
+            let rail = join(&fitted)?;
+            for (&t, m) in witnesses.iter().zip(&witness_maps) {
+                worst = worst.max((rail.evaluate(t) - m.mul_point(p)).length());
+            }
+            rails.push(rail);
         }
         let segments: usize = pieces.iter().map(|piece| piece.len() - 1).sum();
         if worst <= fit || segments >= MAX_SEGMENTS {
@@ -673,6 +693,11 @@ fn fit_trajectories(
                 pieces.len()
             );
             return Ok((rails, first, last));
+        }
+        for t in missed {
+            if witnessed.insert(t.to_bits()) {
+                witnesses.push(t);
+            }
         }
         // A cubic's error falls with the fourth power of its step: grow the
         // samples by what that asks, with a tenth to spare, rather than
