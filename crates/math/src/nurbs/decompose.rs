@@ -3,74 +3,44 @@
 use crate::MathError;
 use crate::aabb::Aabb3;
 use crate::nurbs::curve::NurbsCurve;
-use crate::nurbs::knot_ops::{curve_knot_insert, surface_knot_insert_u, surface_knot_insert_v};
+use crate::nurbs::knot_ops::{surface_knot_insert_u, surface_knot_insert_v};
 use crate::nurbs::surface::NurbsSurface;
 use crate::vec::Point3;
 
 /// Decompose a NURBS curve into Bezier segments.
 ///
 /// Each segment is a NURBS curve of the same degree with a clamped knot vector
-/// (all interior knots at full multiplicity). The segments are parametrically
-/// contiguous — segment *i* goes from knot *i* to knot *i+1*.
+/// over one knot span of the curve's domain, in order: segment *i* runs from
+/// the domain's *i*-th distinct knot to the next. Each is read off its span's
+/// de Boor points ([`curve_bezier_between`]) with no knot inserted, so a knot
+/// vector that is not clamped, a degree of zero, or an interior knot repeated
+/// past the degree needs no special case.
 ///
 /// # Errors
 ///
-/// Returns an error if internal knot insertion fails.
+/// Returns an error if a segment cannot be built.
 pub fn curve_to_bezier_segments(curve: &NurbsCurve) -> Result<Vec<NurbsCurve>, MathError> {
     let p = curve.degree();
-    let knots = curve.knots();
-
-    let mut unique_interior = Vec::new();
-    let mut i = p + 1;
-    while i < knots.len() - p - 1 {
-        let u = knots[i];
-        let mut mult = 1;
-        while i + mult < knots.len() - p - 1 && (knots[i + mult] - u).abs() < 1e-15 {
-            mult += 1;
-        }
-        let deficit = p - mult;
-        if deficit > 0 {
-            unique_interior.push((u, deficit));
-        }
-        i += mult;
+    let (d0, d1) = curve.domain();
+    let mut cuts: Vec<f64> = std::iter::once(d0)
+        .chain(curve.knots().iter().copied().filter(|&k| k > d0 && k < d1))
+        .chain(std::iter::once(d1))
+        .collect();
+    cuts.dedup_by(|a, b| a.to_bits() == b.to_bits());
+    if cuts.len() < 2 {
+        return Ok(vec![curve.clone()]);
     }
-
-    // Insert knots to make all interior knots have multiplicity p.
-    let mut refined = curve.clone();
-    for &(u, deficit) in &unique_interior {
-        refined = curve_knot_insert(&refined, u, deficit)?;
+    let mut segments = Vec::with_capacity(cuts.len() - 1);
+    for w in cuts.windows(2) {
+        let homogeneous = curve_bezier_between(curve, w[0], w[1])?;
+        let (points, weights): (Vec<Point3>, Vec<f64>) = homogeneous
+            .iter()
+            .map(|q| (Point3::new(q[0] / q[3], q[1] / q[3], q[2] / q[3]), q[3]))
+            .unzip();
+        let mut knots = vec![w[0]; p + 1];
+        knots.extend(std::iter::repeat_n(w[1], p + 1));
+        segments.push(NurbsCurve::new(p, knots, points, weights)?);
     }
-
-    // Each Bezier segment spans p+1 consecutive control points.
-    let ref_knots = refined.knots();
-    let ref_cps = refined.control_points();
-    let ref_ws = refined.weights();
-
-    let n_segments = (ref_cps.len() - 1) / p;
-    if n_segments == 0 {
-        return Ok(vec![refined]);
-    }
-
-    let mut segments = Vec::with_capacity(n_segments);
-    for seg in 0..n_segments {
-        let start_cp = seg * p;
-        let end_cp = start_cp + p + 1;
-        if end_cp > ref_cps.len() {
-            break;
-        }
-
-        let seg_cps: Vec<Point3> = ref_cps[start_cp..end_cp].to_vec();
-        let seg_ws: Vec<f64> = ref_ws[start_cp..end_cp].to_vec();
-
-        // Knot vector for a Bezier: p+1 copies of start, p+1 copies of end
-        let u_start = ref_knots[start_cp + p];
-        let u_end = ref_knots[end_cp];
-        let mut seg_knots = vec![u_start; p + 1];
-        seg_knots.extend(std::iter::repeat_n(u_end, p + 1));
-
-        segments.push(NurbsCurve::new(p, seg_knots, seg_cps, seg_ws)?);
-    }
-
     Ok(segments)
 }
 
@@ -731,5 +701,74 @@ mod tests {
         assert!(curve_bezier_between(&curve, 0.4, 0.6).is_err());
         assert!(curve_bezier_between(&curve, 0.1, 0.3).is_err());
         assert!(curve_bezier_between(&curve, 0.9, 1.1).is_err());
+    }
+
+    /// A curve's Bezier pieces trace it: each at 7 points inside its span
+    /// holds the curve to 1e-12 there (a curve of degree zero jumps at its
+    /// knots).
+    fn pieces_trace(c: &NurbsCurve, spans: usize) {
+        let segs = curve_to_bezier_segments(c).expect("valid");
+        assert_eq!(segs.len(), spans);
+        for seg in &segs {
+            let (a, b) = seg.domain();
+            for k in 1..8 {
+                let t = (b - a).mul_add(f64::from(k) / 8.0, a);
+                let off = (seg.evaluate(t) - c.evaluate(t)).length();
+                assert!(off < 1e-12, "at {t}: {off}");
+            }
+        }
+    }
+
+    /// A degree-1 side on knots 0, 0, 0.5, 0.5, 1, 1 through its ends and its
+    /// middle twice, an interior knot repeated past the degree: two pieces.
+    #[test]
+    fn a_knot_repeated_past_the_degree_cuts_two_pieces() {
+        let p = Point3::new;
+        let c = NurbsCurve::new(
+            1,
+            vec![0.0, 0.0, 0.5, 0.5, 1.0, 1.0],
+            vec![
+                p(1.0, 1.0, 0.0),
+                p(0.0, 1.0, 0.0),
+                p(0.0, 1.0, 0.0),
+                p(-1.0, 1.0, 0.0),
+            ],
+            vec![1.0; 4],
+        )
+        .expect("valid");
+        pieces_trace(&c, 2);
+    }
+
+    /// A degree-0 curve on knots 0, 0.5, 1: two constant pieces.
+    #[test]
+    fn a_degree_zero_curve_cuts_into_its_spans() {
+        let p = Point3::new;
+        let c = NurbsCurve::new(
+            0,
+            vec![0.0, 0.5, 1.0],
+            vec![p(0.0, 0.0, 0.0), p(1.0, 0.0, 0.0)],
+            vec![1.0; 2],
+        )
+        .expect("valid");
+        pieces_trace(&c, 2);
+    }
+
+    /// A cubic on the uniform knots 0 to 7, not clamped: the pieces of its
+    /// domain, 3 to 4, cut at its knots.
+    #[test]
+    fn a_curve_not_clamped_cuts_into_its_domains_spans() {
+        let c = NurbsCurve::new(
+            3,
+            (0..8).map(f64::from).collect(),
+            vec![
+                Point3::new(0.0, 0.0, 0.0),
+                Point3::new(1.0, 2.0, 0.0),
+                Point3::new(3.0, -1.0, 1.0),
+                Point3::new(4.0, 1.0, 0.0),
+            ],
+            vec![1.0, 2.0, 0.5, 1.0],
+        )
+        .expect("valid");
+        pieces_trace(&c, 1);
     }
 }
