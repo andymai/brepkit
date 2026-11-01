@@ -423,10 +423,26 @@ fn fill_ef_in(topo: &Topology, arena: &mut GfaArena) {
                     // between a lattice strut edge's crossings of a wall and
                     // a notch ceiling stands 0.0026 off the ceiling at 20% of
                     // its chord, crossing it at 11 degrees.
+                    //
+                    // An exact conic on a quadric lies in it to rounding, so
+                    // one that only touches it (a cap's rim arc tangent to a
+                    // wall at one end, leaving it quadratically) is held to
+                    // the straight ceiling too.
                     let straight = matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Line);
+                    let conic_on_quadric = matches!(
+                        edge.curve(),
+                        brepkit_topology::edge::EdgeCurve::Circle(_)
+                            | brepkit_topology::edge::EdgeCurve::Ellipse(_)
+                    ) && matches!(
+                        surface,
+                        FaceSurface::Cylinder(_)
+                            | FaceSurface::Cone(_)
+                            | FaceSurface::Sphere(_)
+                            | FaceSurface::Torus(_)
+                    );
                     let band = if straight && matches!(surface, FaceSurface::Plane { .. }) {
                         (IN_FACE_MAX_DEVIATION_RATIO * chord).min(crate::ds::shape_store::MAX_WIDEN)
-                    } else if straight {
+                    } else if straight || conic_on_quadric {
                         (IN_FACE_MAX_DEVIATION_RATIO * chord).min(IN_FACE_MAX_DEVIATION_ABS)
                     } else {
                         IN_FACE_MAX_DEVIATION_RATIO * chord
