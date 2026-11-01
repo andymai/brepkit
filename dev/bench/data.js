@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793499839931,
+  "lastUpdate": 1793517573752,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -63989,6 +63989,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 16763447,
             "range": "± 124672",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ffb71813a3c3237eed207d39ef721ffb63ebcd45",
+          "message": "fix(operations): sweep each profile edge on its own curve in sweep and helical_sweep (#2266)\n\n`sweep` and `helical_sweep` now sweep each profile edge on its own curve\nalong an open path without kinks, as `sweep_with_options` has since\n#2255. A circle of radius 2 standing across the start of a three-turn\nhelix of radius 20 and pitch 8, as in #2170, sweeps 6 faces holding\n4738.3830, its closed form, where `main` gives 1766 faces and 4614.311,\n2.6% low.\n\nToday both run through `sweep_placed`, which cuts a curved profile into\nchords and joins a fixed count of rings with flat or ruled faces.\n\n## Change\n\n- `sweep_placed` tries the exact builder first on an open path without\nkinks, with the profile placed as each caller asks: `sweep` keeps it\nwhere it stands, and `helical_sweep` puts its centre on the path, normal\nto it. `sweep_exact` takes the placement, and `sweep_with_options`\npasses the one it used before.\n- A profile placed with its centre on the path, as `helical_sweep`\nplaces it, goes on the centroid of the region it bounds, holes taken\naway, on the exact and ring-by-ring paths alike\n(`sweep::region_centroid`). A mean of boundary points hangs on how the\nedges are held: samples crowd a curved edge, and a circle cut at its\nknots on uneven spacing leaves the mean off its centre. For a profile\nthat is not symmetric, the centroid differs from the mean of corners the\nring-by-ring sweeps took.\n- The centroid is read by Green's theorem along the wires' own curves: a\nline in closed form, a curve in the Bezier pieces of its knot spans\n(`curve_bezier_between`, which takes any knot vector, clamped or not,\nits knots repeated however often), each first given equal end weights\n(`w_i` times `l^i`, `l = (w_0 / w_n)^(1/n)`), which draws the same curve\nbut spreads a parameter that far-apart weights crowd into one end. Each\npiece is halved until its area and moments settle to the region's size\nsquared and cubed, the size read on the curves rather than their control\npoints. A boundary that leaves its plane, a piece that does not settle,\na weight that is not positive, or a curve of degree zero keeps the mean\nof corners.\n- A path that closes on itself or kinks keeps the ring-by-ring sweep, as\ndo the cases the exact builder declines (#2255).\n\n## Tests\n\n- `a_circle_swept_round_a_helix_holds_its_area_times_its_length`: the\ncircle swept three turns round the helix by `helical_sweep` holds its\narea times the path's length, in 6 faces. Swept by `sweep` as it stands,\nupright across the helix's start, it holds that times the cosine of the\nangle its normal makes with the path. Both are valid, mesh closed, and\nhold their closed forms to 1e-6 by `measure::solid_volume` and by\n`exact_solid_volume`.\n-\n`a_profiles_centre_on_a_helix_does_not_hang_on_how_its_edges_are_held`:\na square of side 2 swept one turn by `helical_sweep`, its top side a\nline or the same side as a degree-1 NURBS. The two coils hold the same\nvolume and bounding box; centred on the samples, they did not.\n- `a_discs_centre_on_a_helix_does_not_hang_on_its_rims_knots`: a disc of\nradius 2 swept one turn by `helical_sweep`, its rim a circle edge, the\nsame circle as five rational arcs on knots 0, 0.1, 0.3, 0.5, 0.7 and 1,\nfour quarter arcs the first weighted 1, 1000 cos 45 degrees and 10^6 or\n1, 10^14 cos 45 degrees and 10^28, or arcs of 179.9999, 90.0001 and 90\ndegrees the first weighted a thousand to one. Each start cap's rim lies\n2 from the path at every sample, and the first two coils hold one\nvolume. Centred on the rim's cut points, the first two held 1582.34 and\n1608.10; without equal end weights, a crowded rim's centre missed.\n- `a_holed_profiles_centre_on_a_helix_takes_its_hole_away`: a square of\nside 2 with a hole of radius 0.5 at (0.5, 0). The hole's centre sits\n0.6222 from the path, where the region's centroid puts it; with the hole\nadded rather than taken away, it did not.\n-\n`a_saddle_profiles_centre_on_a_helix_does_not_hang_on_where_its_wire_starts`:\nthe non-planar saddle profile swept round a helix, its wire read from\nits first corner or its second, lands in one place; a centroid read in a\nplane through the wire's first point did not.\n-\n`a_profile_side_with_a_knot_repeated_past_its_degree_sweeps_round_a_helix`:\nthe square with its top side a degree-1 curve on knots 0, 0, 0.5, 0.5,\n1, 1 through its ends and its middle twice holds the volume the square\nof four lines does.\n- `a_narrow_scale_bump_a_fit_has_read_is_kept`: a square of side 2 swept\nup a straight spine of 10 in 4 segments, scaled by a smooth bump that\nmoves its corners 5.7e-6 out within 0.005 of t = 0.125, where the first\nfit has a midpoint, or of 0.25, where it has a sample. The corner's rail\npasses within 1.5e-6 of the scaled corner there.\n- `sweep_square_along_quarter_circle` counted 26 faces, 6 rings of 4\nsides and 2 caps. It now expects 4 sides and 2 caps, holding the unit\nsquare's area times the quarter circle's length, 5π/2.\n- `sweep_planar_profile_caps_are_planar` required every face to be\nplanar. Two of the square's sides now curve with the path, so it checks\nthat each cap is the end section's plane, through the path's end and\nnormal to its tangent there.\n- `a_single_edge_follows_a_bend_inside_narrow_knot_spans` sweeps a disc\nalong a cubic whose bend lies inside knot spans 1e-4 wide. Its tube is\nnow exact, and #2262 is what classifies a point at the top of the bend\ninside it.\n- The operations, wasm and io crates' 2372 tests pass.\n- The pose sweep and truth audit outputs are identical to `main`'s.\n\nOn this coil the exact volume takes 0.52 s, and meshing at deflection\n0.01 gives 88,470 triangles in 0.46 s.\n\nFixes #2170",
+          "timestamp": "2026-11-01T07:17:04Z",
+          "tree_id": "1cdc8a90fb759f486fd4a41424253056d1ba9301",
+          "url": "https://github.com/andymai/brepkit/commit/ffb71813a3c3237eed207d39ef721ffb63ebcd45"
+        },
+        "date": 1793517567056,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 610950,
+            "range": "± 6187",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 658264,
+            "range": "± 53098",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 8197,
+            "range": "± 141",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 374628,
+            "range": "± 26443",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 17185350,
+            "range": "± 255910",
             "unit": "ns/iter"
           }
         ]
