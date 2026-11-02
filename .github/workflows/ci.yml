@@ -30,7 +30,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+      - uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo clippy --all-targets --all-features -- -D warnings
@@ -41,10 +41,10 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+      - uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.62.30
+      - uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2.62.30
         with:
           tool: nextest
       # The `ci` profile optimizes lightly and keeps debug assertions and
@@ -64,10 +64,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+      - uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.62.30
+      - uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2.62.30
         with:
           tool: cargo-llvm-cov
       - name: Generate coverage
@@ -99,7 +99,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@c93f4f9c67595668add93d3d6895795ce52d8c2d # 1.85.0
         with:
           toolchain: "1.88.0"
-      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+      - uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
         with:
           key: msrv
       - run: cargo check --workspace --all-features
@@ -109,10 +109,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+      - uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.62.30
+      - uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2.62.30
         with:
           tool: wasm-pack
       - name: Build and validate WASM
@@ -126,7 +126,7 @@ jobs:
       pull-requests: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+      - uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build WASM (PR)
@@ -238,7 +238,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+      - uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo doc --no-deps --all-features
@@ -250,7 +250,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+      - uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       # Fails fast on version drift between the workspace and the inter-crate
@@ -274,10 +274,10 @@ jobs:
     continue-on-error: true
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+      - uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.62.30
+      - uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2.62.30
         with:
           tool: cargo-semver-checks
       # Baselines against the newest version of each crate on crates.io.
