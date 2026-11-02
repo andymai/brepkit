@@ -2068,6 +2068,66 @@ fn fuse_perpendicular_cylinders_is_analytic_watertight() {
     );
 }
 
+/// The same two crossing cylinders intersected: the Steinmetz solid,
+/// `16 r³ / 3`. Each wall carries the two section loops, which touch where
+/// the cylinders' rulings meet; on the wall whose loops wind its axis they
+/// bound one band pinched in two, which has no exact split yet. The
+/// intersect must still come back as a valid solid of that volume (the
+/// mesh fallback's, within its chords), in either operand order: it had
+/// spun in a gate meshing a piece whose box was a point, then, given that
+/// box, kept pieces bounded by one winding loop each, at half the volume.
+#[test]
+fn intersect_perpendicular_cylinders_gives_the_steinmetz_solid() {
+    use brepkit_math::mat::Mat4;
+
+    for swap in [false, true] {
+        let mut topo = Topology::new();
+        let c1 = crate::primitives::make_cylinder(&mut topo, 3.0, 20.0).unwrap();
+        crate::transform::transform_solid(&mut topo, c1, &Mat4::translation(0.0, 0.0, -10.0))
+            .unwrap();
+        let c2 = crate::primitives::make_cylinder(&mut topo, 3.0, 20.0).unwrap();
+        crate::transform::transform_solid(
+            &mut topo,
+            c2,
+            &(Mat4::rotation_y(std::f64::consts::FRAC_PI_2) * Mat4::translation(0.0, 0.0, -10.0)),
+        )
+        .unwrap();
+        let (a, b) = if swap { (c2, c1) } else { (c1, c2) };
+
+        let res = boolean(&mut topo, BooleanOp::Intersect, a, b).unwrap();
+
+        let report = crate::validate::validate_solid(&topo, res).unwrap();
+        assert!(report.is_valid(), "swap {swap}: invalid result: {report:?}");
+        let v_steinmetz = 16.0 * 27.0 / 3.0;
+        let vol = crate::measure::oriented_solid_volume(&topo, res, 0.01).unwrap();
+        assert!(
+            (vol - v_steinmetz).abs() < v_steinmetz * 0.05,
+            "swap {swap}: volume {vol:.4} should be the Steinmetz solid's {v_steinmetz:.4}"
+        );
+    }
+}
+
+/// A whole ring's face has a single vertex, so its piece's box must come
+/// from the face itself: a box at that vertex sized the interior probe's
+/// mesh to a deflection of zero.
+#[test]
+fn a_single_vertex_piece_is_boxed_by_its_face() {
+    let mut topo = Topology::new();
+    let ring = crate::primitives::make_torus(&mut topo, 4.0, 1.5, 32).unwrap();
+    let faces = brepkit_topology::explorer::solid_faces(&topo, ring).unwrap();
+    let (min, max) = component_aabb(&topo, &faces).unwrap();
+    for (lo, hi, reach) in [
+        (min.x(), max.x(), 5.5),
+        (min.y(), max.y(), 5.5),
+        (min.z(), max.z(), 1.5),
+    ] {
+        assert!(
+            lo <= -reach + 1e-9 && hi >= reach - 1e-9,
+            "box {min:?}..{max:?} misses the ring"
+        );
+    }
+}
+
 /// Fuse two overlapping cylinders (r=5,h=20 and r=3,h=20, offset x=2).
 ///
 /// Fused volume must be > max(V_cyl1, V_cyl2) and < V_cyl1 + V_cyl2.

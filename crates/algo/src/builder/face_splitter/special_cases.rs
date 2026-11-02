@@ -4604,15 +4604,24 @@ pub(super) fn split_face_with_internal_loops(
                 None => Some(disc_interior),
             }
         };
-        result.push(SplitSubFace {
-            surface: surface.clone(),
-            outer_wire: loop_edges.clone(),
-            inner_wires: nested,
-            reversed,
-            parent: face_id,
-            rank,
-            precomputed_interior: interior,
-        });
+        // A loop winding a cylinder's axis separates the wall rather than
+        // bounding a region of it, so it has no disc: the two touching loops
+        // of equal crossing cylinders bound the pinched band between them.
+        if loop_winds_cylinder(surface, loop_edges) {
+            log::debug!(
+                "split_face_with_internal_loops: face {face_id:?} loop {li} winds the axis, no disc"
+            );
+        } else {
+            result.push(SplitSubFace {
+                surface: surface.clone(),
+                outer_wire: loop_edges.clone(),
+                inner_wires: nested,
+                reversed,
+                parent: face_id,
+                rank,
+                precomputed_interior: interior,
+            });
+        }
 
         // Build the outside sub-face's hole: the merged union outline when
         // this loop consumed an overlapping pre-existing hole, otherwise the
@@ -4980,6 +4989,33 @@ fn outline_samples(e: &OrientedPCurveEdge, n: usize) -> Vec<Point3> {
         pts.reverse();
     }
     pts
+}
+
+/// Whether a loop on a cylinder turns once round its axis.
+fn loop_winds_cylinder(surface: &FaceSurface, loop_edges: &[OrientedPCurveEdge]) -> bool {
+    let FaceSurface::Cylinder(cyl) = surface else {
+        return false;
+    };
+    let turn = std::f64::consts::TAU;
+    let mut first: Option<f64> = None;
+    let mut prev = 0.0;
+    let mut swept = 0.0;
+    for edge in loop_edges {
+        for p in edge_samples(edge, 16).into_iter().take(16) {
+            let (u, _) = cyl.project_point(p);
+            if first.is_none() {
+                first = Some(u);
+            } else {
+                swept += (u - prev + turn / 2.0).rem_euclid(turn) - turn / 2.0;
+            }
+            prev = u;
+        }
+    }
+    let Some(u0) = first else {
+        return false;
+    };
+    swept += (u0 - prev + turn / 2.0).rem_euclid(turn) - turn / 2.0;
+    swept.abs() > turn / 2.0
 }
 
 /// `n + 1` samples along an edge's own span, in traversal order.

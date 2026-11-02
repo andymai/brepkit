@@ -15,6 +15,21 @@ use brepkit_topology::wire::{OrientedEdge, Wire};
 use super::nurbs::tessellate_nurbs;
 use super::*;
 
+/// A deflection of zero (or below, or not a number) asks for endless
+/// refinement: the meshers refuse it rather than spin.
+#[test]
+fn a_deflection_that_is_not_positive_is_refused() {
+    let mut topo = Topology::new();
+    let cyl = crate::primitives::make_cylinder(&mut topo, 1.0, 2.0).unwrap();
+    let faces = brepkit_topology::explorer::solid_faces(&topo, cyl).unwrap();
+    for d in [0.0, -0.1, f64::NAN, f64::INFINITY] {
+        for &face in &faces {
+            assert!(tessellate(&topo, face, d).is_err(), "face at {d}");
+        }
+        assert!(tessellate_solid(&topo, cyl, d).is_err(), "solid at {d}");
+    }
+}
+
 #[test]
 fn tessellate_square() {
     let mut topo = Topology::new();
