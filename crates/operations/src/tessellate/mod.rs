@@ -100,6 +100,20 @@ pub(super) enum AnalyticKind {
     VMaxPole,
 }
 
+/// A deflection the meshers can refine down to: a zero or negative one
+/// subdivides without end.
+pub(super) fn check_deflection(deflection: f64) -> Result<(), crate::OperationsError> {
+    if deflection > 0.0 && deflection.is_finite() {
+        Ok(())
+    } else {
+        Err(crate::OperationsError::InvalidInput {
+            reason: format!(
+                "tessellation deflection must be positive and finite, got {deflection}"
+            ),
+        })
+    }
+}
+
 /// Tessellate a face into a triangle mesh.
 ///
 /// For planar faces, this performs fan triangulation from the first vertex,

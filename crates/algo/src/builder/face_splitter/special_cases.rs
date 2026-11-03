@@ -4604,15 +4604,24 @@ pub(super) fn split_face_with_internal_loops(
                 None => Some(disc_interior),
             }
         };
-        result.push(SplitSubFace {
-            surface: surface.clone(),
-            outer_wire: loop_edges.clone(),
-            inner_wires: nested,
-            reversed,
-            parent: face_id,
-            rank,
-            precomputed_interior: interior,
-        });
+        // A loop winding a cylinder's axis separates the wall rather than
+        // bounding a region of it, so it has no disc: the two touching loops
+        // of equal crossing cylinders bound the pinched band between them.
+        if loop_winds_cylinder(surface, loop_edges) {
+            log::debug!(
+                "split_face_with_internal_loops: face {face_id:?} loop {li} winds the axis, no disc"
+            );
+        } else {
+            result.push(SplitSubFace {
+                surface: surface.clone(),
+                outer_wire: loop_edges.clone(),
+                inner_wires: nested,
+                reversed,
+                parent: face_id,
+                rank,
+                precomputed_interior: interior,
+            });
+        }
 
         // Build the outside sub-face's hole: the merged union outline when
         // this loop consumed an overlapping pre-existing hole, otherwise the
@@ -4980,6 +4989,75 @@ fn outline_samples(e: &OrientedPCurveEdge, n: usize) -> Vec<Point3> {
         pts.reverse();
     }
     pts
+}
+
+/// Whether a loop on a cylinder turns once round its axis. Each edge's angle
+/// is followed from its knot spans by bisection until no step turns past an
+/// eighth of a turn, so a parameterization crowded into one end of an edge
+/// cannot hide a turn between two samples.
+fn loop_winds_cylinder(surface: &FaceSurface, loop_edges: &[OrientedPCurveEdge]) -> bool {
+    let FaceSurface::Cylinder(cyl) = surface else {
+        return false;
+    };
+    let turn = std::f64::consts::TAU;
+    let wrap = |d: f64| (d + turn / 2.0).rem_euclid(turn) - turn / 2.0;
+    let mut swept = 0.0;
+    for e in loop_edges {
+        let (from, to) = natural_endpoints(e);
+        let (t0, t1) = e.curve_3d.domain_with_endpoints(from, to);
+        let angle = |t: f64| {
+            cyl.project_point(e.curve_3d.evaluate_with_endpoints(t, from, to))
+                .0
+        };
+        // Start from four pieces of each knot span (sixteen of a curve with
+        // none): one span of a rational arc turns less than a half turn, so
+        // no piece can hide a whole turn between its ends however crowded
+        // the parameter is.
+        let (lo, hi) = (t0.min(t1), t0.max(t1));
+        let mut breaks: Vec<f64> = match &e.curve_3d {
+            EdgeCurve::NurbsCurve(n) => n
+                .knots()
+                .iter()
+                .copied()
+                .filter(|&k| k > lo && k < hi)
+                .collect(),
+            EdgeCurve::Line | EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => Vec::new(),
+        };
+        breaks.push(lo);
+        breaks.push(hi);
+        breaks.sort_by(f64::total_cmp);
+        breaks.dedup();
+        let per_span: u32 = if breaks.len() > 2 { 4 } else { 16 };
+        let mut stack = Vec::new();
+        for w in breaks.windows(2) {
+            for k in 0..per_span {
+                let a = w[0] + (w[1] - w[0]) * f64::from(k) / f64::from(per_span);
+                let b = w[0] + (w[1] - w[0]) * f64::from(k + 1) / f64::from(per_span);
+                stack.push((a, angle(a), b, angle(b), 0_u32));
+            }
+        }
+        // `lo` to `hi` runs with the curve's parameter; flip when its
+        // domain runs the other way.
+        let sense = if t1 >= t0 { 1.0 } else { -1.0 };
+        let mut along = 0.0;
+        while let Some((a, ua, b, ub, depth)) = stack.pop() {
+            let m = 0.5 * (a + b);
+            let um = angle(m);
+            let (first, second) = (wrap(um - ua), wrap(ub - um));
+            if depth >= 24 || (first.abs() <= turn / 8.0 && second.abs() <= turn / 8.0) {
+                along += first + second;
+            } else {
+                stack.push((a, ua, m, um, depth + 1));
+                stack.push((m, um, b, ub, depth + 1));
+            }
+        }
+        swept += if e.forward {
+            sense * along
+        } else {
+            -sense * along
+        };
+    }
+    swept.abs() > turn / 2.0
 }
 
 /// `n + 1` samples along an edge's own span, in traversal order.
@@ -6944,8 +7022,8 @@ mod tests {
     use super::{
         ChordOutline, FaceId, OrientedPCurveEdge, PlaneFrame, SectionEdge, SplitSubFace, UvChord,
         arc_covers_segment, between_loop_and_holes, curved_loop_interior,
-        cylinder_cone_remainder_interior, loop_chords, loop_crosses_hole, outline_samples,
-        point_in_hole_loops_uv, segment_distance_2d, stands_clear,
+        cylinder_cone_remainder_interior, loop_chords, loop_crosses_hole, loop_winds_cylinder,
+        outline_samples, point_in_hole_loops_uv, segment_distance_2d, stands_clear,
     };
     use brepkit_math::curves::Circle3D;
     use brepkit_math::curves2d::{Curve2D, Line2D};
@@ -7307,6 +7385,104 @@ mod tests {
             source_edge_idx: None,
             pave_block_id: None,
         }
+    }
+
+    /// A whole circle round a cylinder's axis winds it however its parameter
+    /// is spread: an exact rational circle whose last three quarters crowd
+    /// into the last 3% of its knots, one whose first seven eighths crowd into
+    /// the first 35%, each read either way, and a circle of two arcs read
+    /// backwards. A loop beside the axis does not wind it.
+    #[test]
+    fn a_loop_round_the_axis_winds_whatever_its_parameterization() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        let cyl = FaceSurface::Cylinder(
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0)
+                .unwrap(),
+        );
+        let w = std::f64::consts::FRAC_1_SQRT_2;
+        let corners = [
+            (1.0, 0.0),
+            (1.0, 1.0),
+            (0.0, 1.0),
+            (-1.0, 1.0),
+            (-1.0, 0.0),
+            (-1.0, -1.0),
+            (0.0, -1.0),
+            (1.0, -1.0),
+            (1.0, 0.0),
+        ];
+        let crowded = NurbsCurve::new(
+            2,
+            vec![
+                0.0, 0.0, 0.0, 0.97, 0.97, 0.98, 0.98, 0.99, 0.99, 1.0, 1.0, 1.0,
+            ],
+            corners
+                .iter()
+                .map(|&(x, y)| Point3::new(x, y, 0.5))
+                .collect(),
+            vec![1.0, w, 1.0, w, 1.0, w, 1.0, w, 1.0],
+        )
+        .unwrap();
+        // Eight arcs of 45 degrees, the first seven in the first 35% of the
+        // parameter: at its middle the curve is already on its last arc.
+        let eighth = (PI / 8.0).cos();
+        let mut octants = Vec::new();
+        let mut octant_weights = Vec::new();
+        for k in 0..8 {
+            let a = f64::from(k) * PI / 4.0;
+            let m = a + PI / 8.0;
+            octants.push(Point3::new(a.cos(), a.sin(), 0.5));
+            octants.push(Point3::new(m.cos() / eighth, m.sin() / eighth, 0.5));
+            octant_weights.extend([1.0, eighth]);
+        }
+        octants.push(Point3::new(1.0, 0.0, 0.5));
+        octant_weights.push(1.0);
+        let mut octant_knots = vec![0.0, 0.0, 0.0];
+        for k in 1..8 {
+            let t = 0.05 * f64::from(k);
+            octant_knots.extend([t, t]);
+        }
+        octant_knots.extend([1.0, 1.0, 1.0]);
+        let late = NurbsCurve::new(2, octant_knots, octants, octant_weights).unwrap();
+        let start = Point3::new(1.0, 0.0, 0.5);
+        for (curve, forward) in [
+            (&crowded, true),
+            (&crowded, false),
+            (&late, true),
+            (&late, false),
+        ] {
+            let edge = OrientedPCurveEdge {
+                curve_3d: EdgeCurve::NurbsCurve(curve.clone()),
+                pcurve: dummy_pcurve(),
+                start_uv: Point2::new(0.0, 0.0),
+                end_uv: Point2::new(0.0, 0.0),
+                start_3d: start,
+                end_3d: start,
+                forward,
+                source_edge_idx: None,
+                pave_block_id: None,
+            };
+            assert!(
+                loop_winds_cylinder(&cyl, &[edge]),
+                "{} spans, forward {forward}",
+                curve.knots().len()
+            );
+        }
+        let circle =
+            Circle3D::new(Point3::new(0.0, 0.0, 0.5), Vec3::new(0.0, 0.0, 1.0), 1.0).unwrap();
+        let backwards = [
+            arc_edge(&circle, PI, TAU, false),
+            arc_edge(&circle, 0.0, PI, false),
+        ];
+        assert!(loop_winds_cylinder(&cyl, &backwards));
+        let p = |a: f64, z: f64| Point3::new(a.cos(), a.sin(), z);
+        let beside = [
+            line_chord(p(-0.2, 0.0), p(0.2, 0.0)),
+            line_chord(p(0.2, 0.0), p(0.2, 1.0)),
+            line_chord(p(0.2, 1.0), p(-0.2, 1.0)),
+            line_chord(p(-0.2, 1.0), p(-0.2, 0.0)),
+        ];
+        assert!(!loop_winds_cylinder(&cyl, &beside));
     }
 
     /// A circular hole closer to the outline than its own chords' sag: the
