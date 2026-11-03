@@ -2045,9 +2045,12 @@ pub(super) fn conic_side_of_plane_face(
 }
 
 /// A plane face's boundary as chords in the plane through `origin` spanned
-/// by `x` and `y`, holes included, with the farthest a chord's middle stands
-/// off its curve's, doubled. Lines are exact; a circle or ellipse is cut every
-/// 64th of a turn and a NURBS edge 16 times per knot span.
+/// by `x` and `y`, holes included, with a bound on how far its curves stand
+/// off them. Lines are exact. A circle or ellipse is cut every 64th of a turn,
+/// its chords' sag at their middles doubled. A NURBS edge is cut eight times
+/// in each knot span, each chord bounded by the farthest control point of its
+/// piece, which holds the piece by the convex hull. `None` when a NURBS edge
+/// has a weight that is not positive, or cannot be split.
 fn chorded_boundary(
     topo: &Topology,
     face: &Face,
@@ -2061,8 +2064,18 @@ fn chorded_boundary(
         let off = p - origin;
         Point2::new(off.dot(x), off.dot(y))
     };
+    let to_segment = |c: Point3, p: Point3, q: Point3| {
+        let d = q - p;
+        let len2 = d.dot(d);
+        let s = if len2 > 0.0 {
+            ((c - p).dot(d) / len2).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        (c - (p + d * s)).length()
+    };
     let mut pieces = Vec::new();
-    let mut sag = 0.0_f64;
+    let mut slack = 0.0_f64;
     for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
         for oe in topo.wire(wid).ok()?.edges() {
             let edge = topo.edge(oe.edge()).ok()?;
@@ -2072,38 +2085,70 @@ fn chorded_boundary(
             );
             let curve = edge.curve();
             let (t0, t1) = curve.domain_with_endpoints(a, b);
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            let n = match curve {
-                EdgeCurve::Line => 1,
+            match curve {
+                EdgeCurve::Line => pieces.push(Boundary2::Segment(flat(a), flat(b))),
                 EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => {
-                    ((64.0 * (t1 - t0).abs() / std::f64::consts::TAU).ceil() as usize).max(4)
+                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                    let n =
+                        ((64.0 * (t1 - t0).abs() / std::f64::consts::TAU).ceil() as usize).max(4);
+                    #[allow(clippy::cast_precision_loss)]
+                    let at = |k: usize| (t1 - t0).mul_add(k as f64 / n as f64, t0);
+                    for k in 0..n {
+                        let (p, q) = (
+                            curve.evaluate_with_endpoints(at(k), a, b),
+                            curve.evaluate_with_endpoints(at(k + 1), a, b),
+                        );
+                        let mid = curve.evaluate_with_endpoints(0.5 * (at(k) + at(k + 1)), a, b);
+                        slack = slack.max(2.0 * (mid - (p + (q - p) * 0.5)).length());
+                        pieces.push(Boundary2::Segment(flat(p), flat(q)));
+                    }
                 }
                 EdgeCurve::NurbsCurve(nurbs) => {
+                    if nurbs.weights().iter().any(|&w| w <= 0.0) {
+                        return None;
+                    }
                     let (lo, hi) = (t0.min(t1), t0.max(t1));
-                    let spans = 1 + nurbs
+                    let mut ends: Vec<f64> = nurbs
                         .knots()
-                        .windows(2)
-                        .filter(|w| w[1] > w[0] && w[0] > lo && w[0] < hi)
-                        .count();
-                    16 * spans
+                        .iter()
+                        .copied()
+                        .filter(|&k| k > lo && k < hi)
+                        .collect();
+                    ends.dedup();
+                    ends.push(hi);
+                    let mut cuts = vec![lo];
+                    let mut from = lo;
+                    for end in ends {
+                        for j in 1..=8 {
+                            cuts.push((end - from).mul_add(f64::from(j) / 8.0, from));
+                        }
+                        from = end;
+                    }
+                    let (d0, d1) = nurbs.domain();
+                    for w in cuts.windows(2) {
+                        let (ta, tb) = (w[0], w[1]);
+                        let mut piece = nurbs.clone();
+                        if tb < d1 {
+                            piece = brepkit_math::nurbs::knot_ops::curve_split(&piece, tb)
+                                .ok()?
+                                .0;
+                        }
+                        if ta > d0 {
+                            piece = brepkit_math::nurbs::knot_ops::curve_split(&piece, ta)
+                                .ok()?
+                                .1;
+                        }
+                        let (p, q) = (nurbs.evaluate(ta), nurbs.evaluate(tb));
+                        for &c in piece.control_points() {
+                            slack = slack.max(to_segment(c, p, q));
+                        }
+                        pieces.push(Boundary2::Segment(flat(p), flat(q)));
+                    }
                 }
-            };
-            #[allow(clippy::cast_precision_loss)]
-            let at = |k: usize| (t1 - t0).mul_add(k as f64 / n as f64, t0);
-            for k in 0..n {
-                let (p, q) = (
-                    curve.evaluate_with_endpoints(at(k), a, b),
-                    curve.evaluate_with_endpoints(at(k + 1), a, b),
-                );
-                if !matches!(curve, EdgeCurve::Line) {
-                    let mid = curve.evaluate_with_endpoints(0.5 * (at(k) + at(k + 1)), a, b);
-                    sag = sag.max((mid - (p + (q - p) * 0.5)).length());
-                }
-                pieces.push(Boundary2::Segment(flat(p), flat(q)));
             }
         }
     }
-    Some((pieces, 2.0 * sag))
+    Some((pieces, slack))
 }
 
 /// A full section circle's arcs, from `anchor` round, between the vertices of
@@ -5650,6 +5695,97 @@ mod tests {
                 "radius {r}"
             );
         }
+    }
+
+    /// A closed polyline face whose `k`th side is a degree-1 NURBS through
+    /// `side`, the others lines, about the origin in the plane `z = 0`.
+    fn square_with_a_nurbs_side(
+        topo: &mut Topology,
+        corners: &[(f64, f64)],
+        k: usize,
+        knots: Vec<f64>,
+        side: &[(f64, f64)],
+    ) -> brepkit_topology::wire::WireId {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        let verts: Vec<_> = corners
+            .iter()
+            .map(|&(x, y)| topo.add_vertex(Vertex::new(Point3::new(x, y, 0.0), 1e-7)))
+            .collect();
+        let mut sides = Vec::new();
+        for i in 0..corners.len() {
+            let (a, b) = (verts[i], verts[(i + 1) % corners.len()]);
+            let curve = if i == k {
+                EdgeCurve::NurbsCurve(
+                    NurbsCurve::new(
+                        1,
+                        knots.clone(),
+                        side.iter().map(|&(x, y)| Point3::new(x, y, 0.0)).collect(),
+                        vec![1.0; side.len()],
+                    )
+                    .unwrap(),
+                )
+            } else {
+                EdgeCurve::Line
+            };
+            let edge = topo.add_edge(Edge::new(a, b, curve));
+            sides.push(brepkit_topology::wire::OrientedEdge::new(edge, true));
+        }
+        topo.add_wire(brepkit_topology::wire::Wire::new(sides, true).unwrap())
+    }
+
+    /// A NURBS side hiding a notch or a spike in three tiny knot spans: a
+    /// unit circle crossing it meets the boundary, wherever uniform samples
+    /// of the side would fall.
+    #[test]
+    fn a_circle_meets_a_notch_hidden_in_tiny_knot_spans() {
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        let circle = EdgeCurve::Circle(Circle3D::new(Point3::new(0.0, 0.0, 0.0), z, 1.0).unwrap());
+        let plane = FaceSurface::Plane { normal: z, d: 0.0 };
+        // The outline's right side dents in to x = 0.97.
+        let mut topo = Topology::new();
+        let outer = square_with_a_nurbs_side(
+            &mut topo,
+            &[(-2.0, -2.0), (2.0, -2.0), (2.0, 2.0), (-2.0, 2.0)],
+            1,
+            vec![0.0, 0.0, 0.5501, 0.5502, 0.5503, 1.0, 1.0],
+            &[
+                (2.0, -2.0),
+                (2.0, 0.2004),
+                (0.97, 0.2008),
+                (2.0, 0.2012),
+                (2.0, 2.0),
+            ],
+        );
+        let face = topo.add_face(Face::new(outer, vec![], plane.clone()));
+        assert_eq!(conic_side_of_plane_face(&topo, face, &circle, 1e-7), None);
+        // A hole whose right side reaches material in to x = 0.9.
+        let mut topo = Topology::new();
+        let outer = brepkit_topology::builder::make_polygon_wire(
+            &mut topo,
+            &[
+                Point3::new(-3.0, -3.0, 0.0),
+                Point3::new(3.0, -3.0, 0.0),
+                Point3::new(3.0, 3.0, 0.0),
+                Point3::new(-3.0, 3.0, 0.0),
+            ],
+            1e-7,
+        )
+        .unwrap();
+        let hole = square_with_a_nurbs_side(
+            &mut topo,
+            &[(-2.0, 2.0), (2.0, 2.0), (2.0, -2.0), (-2.0, -2.0)],
+            1,
+            vec![0.0, 0.0, 0.5371, 0.53715, 0.5372, 1.0, 1.0],
+            &[
+                (2.0, 2.0),
+                (2.0, -0.1),
+                (0.9, -0.1002),
+                (2.0, -0.1004),
+                (2.0, -2.0),
+            ],
+        );
+        let face = topo.add_face(Face::new(outer, vec![hole], plane));
+        assert_eq!(conic_side_of_plane_face(&topo, face, &circle, 1e-7), None);
     }
 
     /// A chord shares both ends with the arc it subtends; only an edge that
