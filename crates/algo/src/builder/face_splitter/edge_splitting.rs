@@ -395,7 +395,9 @@ pub(super) fn find_splits_on_circle(
             let turns = ((mid - u_raw) / std::f64::consts::TAU).round();
             let u = std::f64::consts::TAU.mul_add(turns, u_raw);
             (u - edge.start_uv.x()) / u_span
-        } else if !edge.forward {
+        } else if matches!(surface, FaceSurface::Plane { .. } | FaceSurface::Torus(_))
+            && !edge.forward
+        {
             // A reversed-traversal arc covers ccw(end→start); the
             // ccw(start→end) span below is its COMPLEMENT, so on-arc points
             // would normalize outside [0,1] and drop (a bay ring absorbed
@@ -403,7 +405,10 @@ pub(super) fn find_splits_on_circle(
             // crossings never split it), and a point on the complement
             // would split it (the half of a torus meridian walked back to
             // the seam split at the meridian's far end). Normalize in the
-            // physical span and map back to traversal order.
+            // physical span and map back to traversal order. A NURBS face
+            // keeps the start-to-end reading: the scooped fillet's clip to
+            // its tapered envelope (`fillet_taper_clip_inmem.rs`) is exact
+            // with it and falls back without it.
             let (p0, p1) = edge
                 .curve_3d
                 .domain_with_endpoints(edge.end_3d, edge.start_3d);
