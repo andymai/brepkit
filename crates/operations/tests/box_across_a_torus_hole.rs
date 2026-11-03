@@ -49,11 +49,20 @@ fn a_box_across_a_torus_hole_is_not_inside_the_torus() {
     // The hole inside the box: pi * integral over |z| <= 1 of
     // (5 - sqrt(16 - z^2))^2.
     let hole = PI * (50.0 - 10.0 * (15.0_f64.sqrt() + 16.0 * 0.25_f64.asin()) + 32.0 - 2.0 / 3.0);
-    for (label, lo, hi) in [
-        ("off centre", (-2.0, -2.0, -1.0), (6.0, 2.0, 1.0)),
-        ("centred", (-2.0, -2.0, -1.0), (2.0, 2.0, 1.0)),
+    // Each box with the share of the hole it holds: a box whose face holds
+    // the axis takes half.
+    for (label, lo, hi, share) in [
+        ("off centre", (-2.0, -2.0, -1.0), (6.0, 2.0, 1.0), 1.0),
+        ("centred", (-2.0, -2.0, -1.0), (2.0, 2.0, 1.0), 1.0),
+        (
+            "with a face on the axis",
+            (0.0, -4.0, -1.0),
+            (5.0, 7.0, 1.0),
+            0.5,
+        ),
     ] {
         let box_volume = (hi.0 - lo.0) * (hi.1 - lo.1) * (hi.2 - lo.2);
+        let hole = hole * share;
         for pose in ["upright", "turned", "mirrored"] {
             for op in [BooleanOp::Intersect, BooleanOp::Cut] {
                 let case = format!("{label} box, {pose}, {op:?}");

@@ -2859,8 +2859,6 @@ fn detect_trivial_relation(
         if t0 > t1 {
             return false;
         }
-        let (dx, dy, dz) = (hi.x() - lo.x(), hi.y() - lo.y(), hi.z() - lo.z());
-        let defl = (dx.mul_add(dx, dy.mul_add(dy, dz * dz)).sqrt() * 0.01).max(1e-6);
         let Ok(faces) = brepkit_topology::explorer::solid_faces(topo, inner) else {
             return false;
         };
@@ -2891,19 +2889,24 @@ fn detect_trivial_relation(
             );
         }
         cuts.sort_by(f64::total_cmp);
+        // One classifier for every probe: its face index is built once. A
+        // probe on the solid's boundary counts too (the axis lying in one of
+        // its faces): that point of the solid is just as clear of the torus.
+        let Ok(classifier) = brepkit_check::classify::SolidClassifier::new(topo, inner) else {
+            return false;
+        };
+        let options = brepkit_check::classify::ClassifyOptions {
+            tolerance: tol.linear,
+            ..brepkit_check::classify::ClassifyOptions::default()
+        };
         cuts.windows(2).any(|w| {
             [0.25, 0.5, 0.75].into_iter().any(|f| {
                 let t = (w[1] - w[0]).mul_add(f, w[0]);
                 major_radius.hypot(t) - minor_radius > tol.linear * 10.0
                     && matches!(
-                        crate::classify::classify_point(
-                            topo,
-                            inner,
-                            *center + *axis * t,
-                            defl,
-                            tol.linear
-                        ),
-                        Ok(crate::classify::PointClassification::Inside)
+                        classifier.classify(*center + *axis * t, &options),
+                        Ok(brepkit_check::classify::PointClassification::Inside
+                            | brepkit_check::classify::PointClassification::OnBoundary)
                     )
             })
         })
