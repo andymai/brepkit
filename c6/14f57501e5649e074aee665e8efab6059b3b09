@@ -1,0 +1,30 @@
+crates/algo/src/pave_filler/mod.rs
+  s_e2239106c550d5::t_abff1728f1b6da 169
+  s_e2239106c550d5::t_41c752ef533f40 237-240,244,246
+  s_e2239106c550d5::t_4c40d2759f7474 207-209
+  s_e2239106c550d5::t_7af977500f632a 223-224,226
+crates/algo/src/pave_filler/tests.rs
+  s_e2239106c550d5::t_cb448b5a19e3d3 1938-1950,1952-1954,1956-1975,1977,1980-1987,1989-1998
+  s_e2239106c550d5::t_519331d667639a 1951,1955,1976,1978-1979,1988
+crates/algo/src/builder/face_splitter/conversion.rs
+  s_e2239106c550d5::t_f793dbdd3b536f 6,320-356
+  s_e2239106c550d5::t_55211523b8d686 242-250
+  s_e2239106c550d5::t_b284057270afa1 357,662-729
+  s_e2239106c550d5::t_6342726210e96b 358
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c614f57501e5649e074aee665e8efab6059b3b09",
+  "prompts": {},
+  "sessions": {
+    "s_e2239106c550d5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "26ec17ea-56f1-450e-99f1-3ada95f60730",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
