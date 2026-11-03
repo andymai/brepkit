@@ -395,13 +395,15 @@ pub(super) fn find_splits_on_circle(
             let turns = ((mid - u_raw) / std::f64::consts::TAU).round();
             let u = std::f64::consts::TAU.mul_add(turns, u_raw);
             (u - edge.start_uv.x()) / u_span
-        } else if matches!(surface, FaceSurface::Plane { .. }) && !edge.forward {
-            // A reversed-traversal plane arc covers ccw(end→start); the
+        } else if !edge.forward {
+            // A reversed-traversal arc covers ccw(end→start); the
             // ccw(start→end) span below is its COMPLEMENT, so on-arc points
             // would normalize outside [0,1] and drop (a bay ring absorbed
-            // into the outer boundary is walked CW — its section crossings
-            // never split it). Normalize in the physical span and map back
-            // to traversal order.
+            // into a plane's outer boundary is walked CW, so its section
+            // crossings never split it), and a point on the complement
+            // would split it (the half of a torus meridian walked back to
+            // the seam split at the meridian's far end). Normalize in the
+            // physical span and map back to traversal order.
             let (p0, p1) = edge
                 .curve_3d
                 .domain_with_endpoints(edge.end_3d, edge.start_3d);
@@ -1162,5 +1164,57 @@ mod tests {
                 assert!((ellipse.evaluate(ellipse.project(p)) - p).length() < 1e-9);
             }
         }
+    }
+
+    /// A quarter of a torus meridian walked against its circle, from the
+    /// tube's top down to its outer equator, splits at a point on that
+    /// quarter and at none on the other three.
+    #[test]
+    fn a_reversed_meridian_splits_only_on_its_own_arc() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::ToroidalSurface;
+        use brepkit_math::vec::Vec3;
+        use std::f64::consts::FRAC_PI_2;
+
+        let surface = FaceSurface::Torus(
+            ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), 20.0, 5.0).unwrap(),
+        );
+        // Counterclockwise about -y the circle turns from +x up to +z, so
+        // the stored arc from the equator to the top is the quarter.
+        let circle =
+            Circle3D::new(Point3::new(20.0, 0.0, 0.0), Vec3::new(0.0, -1.0, 0.0), 5.0).unwrap();
+        let (top, equator) = (Point3::new(20.0, 0.0, 5.0), Point3::new(25.0, 0.0, 0.0));
+        let edge = OrientedPCurveEdge {
+            curve_3d: EdgeCurve::Circle(circle),
+            pcurve: Curve2D::Line(
+                Line2D::new(Point2::new(0.0, FRAC_PI_2), Vec2::new(0.0, -1.0)).unwrap(),
+            ),
+            start_uv: Point2::new(0.0, FRAC_PI_2),
+            end_uv: Point2::new(0.0, 0.0),
+            start_3d: top,
+            end_3d: equator,
+            forward: false,
+            source_edge_idx: None,
+            pave_block_id: None,
+        };
+        let inner_equator = Point3::new(15.0, 0.0, 0.0);
+        let pieces = split_boundary_edges_at_3d_points(
+            vec![edge.clone()],
+            &[inner_equator],
+            None,
+            &surface,
+            1e-7,
+        );
+        assert_eq!(pieces.len(), 1, "split at a point off the quarter");
+
+        let half = std::f64::consts::FRAC_1_SQRT_2 * 5.0;
+        let between = Point3::new(20.0 + half, 0.0, half);
+        let pieces =
+            split_boundary_edges_at_3d_points(vec![edge], &[between], None, &surface, 1e-7);
+        assert_eq!(pieces.len(), 2, "the quarter is not split where it runs");
+        assert!((pieces[0].start_3d - top).length() < 1e-9);
+        assert!((pieces[0].end_3d - between).length() < 1e-9);
+        assert!((pieces[1].start_3d - between).length() < 1e-9);
+        assert!((pieces[1].end_3d - equator).length() < 1e-9);
     }
 }

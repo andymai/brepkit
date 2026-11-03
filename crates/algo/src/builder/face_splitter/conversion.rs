@@ -54,6 +54,7 @@ pub(super) fn boundary_edges_to_pcurve(
         wire_pts,
         frame,
         &std::collections::HashMap::new(),
+        &std::collections::BTreeSet::new(),
         &[],
         false,
     )
@@ -80,6 +81,7 @@ pub(super) fn boundary_edges_to_pcurve_with_images<S: std::hash::BuildHasher>(
         Vec<brepkit_topology::edge::EdgeId>,
         S,
     >,
+    kept_splits: &std::collections::BTreeSet<brepkit_topology::vertex::VertexId>,
     anchors: &[Point3],
     expand_lines: bool,
 ) -> Vec<OrientedPCurveEdge> {
@@ -210,10 +212,20 @@ pub(super) fn boundary_edges_to_pcurve_with_images<S: std::hash::BuildHasher>(
                 curve_kind,
                 Some(brepkit_topology::edge::EdgeCurve::Circle(_))
             );
+        // An edge paved apart from a partner sharing both its ends stays in
+        // pieces whatever the sections do (`GfaArena::co_endpoint_middles`).
+        let split_to_keep = |imgs: &[brepkit_topology::edge::EdgeId]| {
+            imgs.iter().any(|&img| {
+                topo.edge(img).is_ok_and(|e| {
+                    kept_splits.contains(&e.start()) || kept_splits.contains(&e.end())
+                })
+            })
+        };
         match edge_images.get(&oe.edge()) {
             Some(imgs)
                 if imgs.len() > 1
-                    && ((is_line && expand_lines && junction_near_anchor(imgs))
+                    && (split_to_keep(imgs)
+                        || (is_line && expand_lines && junction_near_anchor(imgs))
                         || (torus_meridian && junction_in_band_nurbs(imgs))
                         || (is_nurbs
                             && ((matches!(

@@ -147,11 +147,15 @@ impl<'a> PaveFiller<'a> {
     }
 }
 
-/// Pave at its middle every curved edge of a solid that shares both
-/// endpoints with another of its edges along a different path (a chord
-/// and its arc, two arcs closing a circle) and that nothing else splits.
-/// The assembler keys duplicate edges on their endpoint pair and would
-/// weld the two into one, dropping the region between them.
+/// Pave at its middle every curved edge that shares both endpoints with
+/// another edge along a different path (a chord and its arc, two arcs
+/// closing a circle) and that nothing else splits. The two edges may come
+/// from one solid or from both (two half rings meeting along their flat
+/// sides each bring half of one tube circle), so endpoints are compared
+/// after the vertex merge. The assembler keys duplicate edges on their
+/// endpoint pair and would weld the two into one, dropping the region
+/// between them; the face splitter keeps every edge paved here in pieces
+/// ([`GfaArena::co_endpoint_middles`]).
 fn pave_co_endpoint_curves(
     topo: &mut Topology,
     solids: &[SolidId],
@@ -165,56 +169,58 @@ fn pave_co_endpoint_curves(
 
     use crate::ds::Pave;
 
+    let mut by_ends: BTreeMap<(usize, usize), Vec<EdgeId>> = BTreeMap::new();
     for &solid in solids {
-        let mut by_ends: BTreeMap<(usize, usize), Vec<EdgeId>> = BTreeMap::new();
         for edge_id in brepkit_topology::explorer::solid_edges(topo, solid)? {
             let edge = topo.edge(edge_id)?;
-            let (s, e) = (edge.start().index(), edge.end().index());
-            if s != e {
-                by_ends
-                    .entry((s.min(e), s.max(e)))
-                    .or_default()
-                    .push(edge_id);
+            let (s, e) = (
+                arena.resolve_vertex(edge.start()).index(),
+                arena.resolve_vertex(edge.end()).index(),
+            );
+            let group = by_ends.entry((s.min(e), s.max(e))).or_default();
+            if s != e && !group.contains(&edge_id) {
+                group.push(edge_id);
             }
         }
-        for group in by_ends.values().filter(|g| g.len() > 1) {
-            let mut middles = Vec::with_capacity(group.len());
-            for &edge_id in group {
-                let edge = topo.edge(edge_id)?;
-                let (a, b) = (
-                    topo.vertex(edge.start())?.point(),
-                    topo.vertex(edge.end())?.point(),
-                );
-                let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
-                let tm = 0.5 * (t0 + t1);
-                let curved = !matches!(edge.curve(), EdgeCurve::Line);
-                middles.push((
-                    edge_id,
-                    curved,
-                    tm,
-                    edge.curve().evaluate_with_endpoints(tm, a, b),
-                ));
-            }
-            let apart = middles.iter().enumerate().all(|(i, m)| {
-                middles[i + 1..]
-                    .iter()
-                    .all(|n| (m.3 - n.3).length() > tol.linear * 100.0)
-            });
-            if !apart {
+    }
+    for group in by_ends.values().filter(|g| g.len() > 1) {
+        let mut middles = Vec::with_capacity(group.len());
+        for &edge_id in group {
+            let edge = topo.edge(edge_id)?;
+            let (a, b) = (
+                topo.vertex(edge.start())?.point(),
+                topo.vertex(edge.end())?.point(),
+            );
+            let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
+            let tm = 0.5 * (t0 + t1);
+            let curved = !matches!(edge.curve(), EdgeCurve::Line);
+            middles.push((
+                edge_id,
+                curved,
+                tm,
+                edge.curve().evaluate_with_endpoints(tm, a, b),
+            ));
+        }
+        let apart = middles.iter().enumerate().all(|(i, m)| {
+            middles[i + 1..]
+                .iter()
+                .all(|n| (m.3 - n.3).length() > tol.linear * 100.0)
+        });
+        if !apart {
+            continue;
+        }
+        for &(edge_id, curved, tm, mid) in &middles {
+            let Some(&[pb_id]) = arena.edge_pave_blocks.get(&edge_id).map(Vec::as_slice) else {
                 continue;
-            }
-            for &(edge_id, curved, tm, mid) in &middles {
-                let Some(&[pb_id]) = arena.edge_pave_blocks.get(&edge_id).map(Vec::as_slice) else {
-                    continue;
-                };
-                let unsplit = arena
-                    .pave_blocks
-                    .get(pb_id)
-                    .is_some_and(|pb| pb.extra_paves.is_empty());
-                if curved && unsplit {
-                    let vertex = topo.add_vertex(Vertex::new(mid, tol.linear));
-                    arena.add_extra_pave(topo, pb_id, Pave::new(vertex, tm));
-                }
+            };
+            let unsplit = arena
+                .pave_blocks
+                .get(pb_id)
+                .is_some_and(|pb| pb.extra_paves.is_empty());
+            if curved && unsplit {
+                let vertex = topo.add_vertex(Vertex::new(mid, tol.linear));
+                arena.add_extra_pave(topo, pb_id, Pave::new(vertex, tm));
+                arena.co_endpoint_middles.insert(vertex);
             }
         }
     }
