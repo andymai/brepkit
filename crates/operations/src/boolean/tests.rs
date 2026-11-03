@@ -2104,6 +2104,24 @@ fn intersect_perpendicular_cylinders_gives_the_steinmetz_solid() {
             (vol - v_steinmetz).abs() < v_steinmetz * 0.05,
             "swap {swap}: volume {vol:.4} should be the Steinmetz solid's {v_steinmetz:.4}"
         );
+        // Material in all four quadrants about the two axes, and none
+        // where only one rod reaches.
+        let class = |p: Point3| crate::classify::classify_point(&topo, res, p, 0.01, 1e-7).unwrap();
+        for (x, z) in [(1.5, 1.5), (-1.5, 1.5), (-1.5, -1.5), (1.5, -1.5)] {
+            let p = Point3::new(x, 0.5, z);
+            assert_eq!(
+                class(p),
+                crate::classify::PointClassification::Inside,
+                "swap {swap}: {p:?}"
+            );
+        }
+        for p in [Point3::new(0.0, 0.5, 5.0), Point3::new(5.0, 0.5, 0.0)] {
+            assert_eq!(
+                class(p),
+                crate::classify::PointClassification::Outside,
+                "swap {swap}: {p:?}"
+            );
+        }
     }
 }
 
