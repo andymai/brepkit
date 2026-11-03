@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793682735653,
+  "lastUpdate": 1793688042415,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -64799,6 +64799,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 28128505,
             "range": "± 80841",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "64f8fd426ef878be8b0d209aa684c1fee91e5d4e",
+          "message": "fix(algo): fuse two revolved half rings into the ring exactly (#2281)\n\nFusing two half rings revolved part of a turn about one axis now gives\nthe ring's exact solid. Each half is the ring between radii 4 and 5\nsplit along its diameter (two lines and two arcs, as in #2183's notes).\nA quarter turn gives 8 faces holding 888.264396 in 0.053 s, a half turn\n12 faces holding 1776.528792 in 0.116 s, and 1.7 pi 20 faces holding\n3020.098947 in 0.238 s, each Pappus's volume. `main` falls back to a\nmesh at all three: 1992 faces holding 886.190797, 3978 holding\n1772.381057 and 6580 holding 3012.816354, in 0.18, 0.58 and 1.45 s.\n\nEach half brings half of every tube circle, so the upper half's half\ncircle and the lower half's share both ends once the halves' vertices\nmerge. The assembler welds two edges with the same ends into one, so\nboth have to be split apart first, and three steps missed that:\n\n- The pave filler paves a curved edge at its middle when another edge\nshares both its ends, but it grouped edges within one solid, so two half\ncircles from different halves were never paved apart.\n- Once paved, a half circle still reached the face splitter whole on a\ntorus face that sections cross, since the splitter takes a torus\nmeridian's pieces only where a section ends on it. At a half turn the\nhalf circles where the revolve's two bands join came out as one edge on\nfour torus faces.\n- With the pieces taken, the circle split finder read a reversed arc on\na torus as the counterclockwise span from its start to its end, the\ncomplement of the arc it covers, and split a quarter of a meridian at\nthe far side of the tube.\n\n## Change\n\n- `pave_co_endpoint_curves` groups the edges of both solids by their\nends after the vertex merge. Coincident copies, one from each operand\nalong the same path, count as one path, so a group is paved only when it\nholds two distinct paths. Copies share a middle vertex only within the\nvertex tolerance; one farther off takes a vertex on its own curve.\n- The arena records the vertices it paves there\n(`GfaArena::co_endpoint_middles`), and the face splitter keeps every\nboundary edge split at one of them in pieces (`split_face_2d` takes the\nset). An edge's pieces are chained from where the walk enters it by\ntheir endpoints, since a piece shared with a coincident edge of the\nother operand keeps that edge's direction.\n- `find_splits_on_circle` reads a reversed open arc from its end to its\nstart on a torus, as it already did on planes. A NURBS face keeps the\nstart-to-end reading: the scooped fillet's clip to its tapered envelope\n(`fillet_taper_clip_inmem.rs`) is exact with it and falls back with the\nend-to-start one.\n\n## Tests\n\n- `revolved_half_rings.rs`: a quarter turn, a half turn and 1.7 pi, each\nupright, turned, mirrored and scaled by -1. Every result is exact (no\nmesh fallback), valid, keeps every tube face of both halves plus the\nfour end caps, meshes watertight, holds 9 pi times 20 times the angle to\n1e-6, and classifies points in the tube and outside it correctly. On\n`main` it fails at its first case, a quarter turn upright.\n- `stacked_half_discs.rs`: two prisms of one half disc stacked end to\nend, upright, turned and mirrored, fuse exactly into the half cylinder\n(4 pi). Where they meet each brings an arc and a diameter lying on the\nother's. Without the path rule the copies skipped the group and the fuse\nfell back.\n- `near_coincident_arcs_get_middles_on_their_own_curves`: two arcs over\none diameter whose middles lie 5e-6 apart each take a middle on their\nown curve; shared within 100 times the tolerance, the second arc's\nmiddle sat 5e-6 off it.\n- `kept_pieces_stored_against_their_arc_chain_along_it`: an arc whose\ntwo pieces are stored against it expands into a boundary that walks end\nto end; taken in the parent's direction, each piece ran backwards and\nthe walk did not join.\n- `a_reversed_meridian_splits_only_on_its_own_arc`: a quarter of a torus\nmeridian walked against its circle is not split at the tube's inner\nequator, and is split at its own 45 degree point. The plane-only branch\nsplit it at the inner equator.\n- The algo (366), operations (1078) and wasm (262) library tests pass on\nthis branch rebased onto `main`, and `fillet_taper_clip_inmem.rs` stays\nexact.\n- The pose sweep and truth audit outputs are identical to `main`'s.\n\n#2278 makes the other boolean in #2183 exact, the revolved r 4 disc cut\nfrom the r 5 one at a quarter turn.\n\nCloses #2183",
+          "timestamp": "2026-11-02T22:37:48-08:00",
+          "tree_id": "a8786417567560d6ad24b33c854b6bd87676b9e9",
+          "url": "https://github.com/andymai/brepkit/commit/64f8fd426ef878be8b0d209aa684c1fee91e5d4e"
+        },
+        "date": 1793688037984,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 863423,
+            "range": "± 2721",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 924576,
+            "range": "± 2009",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10932,
+            "range": "± 32",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 542422,
+            "range": "± 3408",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 23158892,
+            "range": "± 85408",
             "unit": "ns/iter"
           }
         ]
