@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793690009338,
+  "lastUpdate": 1793691011201,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -64907,6 +64907,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 28671808,
             "range": "± 204973",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "92c444039a1ef8ca87a5c790ebd3e2c9b5bd721b",
+          "message": "fix(algo): split a whole circle on a torus or sphere from its seam (#2284)\n\nThe face splitter now splits a whole circle on a torus or sphere into\npieces that cover it once. Before, a ring split at two or more points\ncame out as pieces sweeping two turns whenever its seam lay away from\nthe circle's own zero angle. Copilot asked about this case in its last\nreview of #2281. I found no boolean that reaches it: the two half rings\nof #2281 revolved a full turn fuse exactly into 4 faces with and without\nthis change.\n\n`find_splits_on_circle` gives each split point a parameter along the\nedge, and the pieces are cut in that order from the edge's start. For a\nclosed circle it ran those parameters from the seam only on cylinders,\ncones and planes. On a torus or sphere they ran from the circle's zero\nangle, so with the seam elsewhere the splits came in the wrong order. A\nring of radius 25 seamed at 1.5 pi and split at three points gave four\npieces sweeping 4 pi, walked forward on either surface.\n\n## Change\n\n- A closed circle on a torus or sphere takes its split parameters from\nits seam, as on a cylinder, cone or plane. Its split UVs come from\nprojection, so the parameter only orders the splits.\n\n## Tests\n\n- `a_closed_ring_split_from_its_seam_tiles_the_ring_once`: that ring, on\na torus and on a sphere, walked each way, splits into four pieces that\nchain end to end and sweep exactly 2 pi. Before the change, walked\nforward, both surfaces swept 4 pi.\n- The algo (367), operations (1078) and wasm (262) library tests pass,\nas do `stacked_half_discs.rs`, `revolved_half_rings.rs`,\n`revolved_discs.rs` and `fillet_taper_clip_inmem.rs`.\n- The pose sweep and truth audit outputs are identical to `main`'s.\n\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes closed circles on tori and spheres so they split from their seam,\nnot from the circle's own zero angle, preventing pieces that sweep two\nturns.\n\nPreviously, `find_splits_on_circle` anchored a closed circle's split\nparameters at its seam only for cylinders, cones, and planes; tori and\nspheres used the circle's zero angle instead, so a ring seamed away from\nthat angle and split two or more times came out covered twice. Tori and\nspheres now anchor at the seam too. No boolean in the codebase appears\nto reach this case.\n\n- Adds `a_closed_ring_split_from_its_seam_tiles_the_ring_once`, which\nsplits a seamed ring on a torus and a sphere into four chained pieces\nsweeping exactly `2π` in either walk direction.\n\n<sup>Written for commit a97533d9325c5ea00fa79bb2597d1aaefb7d8063.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2284?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2284?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2284&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-11-02T23:26:59-08:00",
+          "tree_id": "cdaed5d2dc8b783930d15dbec9afff0d1df30cb2",
+          "url": "https://github.com/andymai/brepkit/commit/92c444039a1ef8ca87a5c790ebd3e2c9b5bd721b"
+        },
+        "date": 1793691006575,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1061036,
+            "range": "± 27604",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1133760,
+            "range": "± 40818",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12792,
+            "range": "± 177",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 684560,
+            "range": "± 1443",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 28317923,
+            "range": "± 101777",
             "unit": "ns/iter"
           }
         ]
