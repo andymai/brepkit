@@ -33,6 +33,7 @@ const RAY_T_MIN: f64 = 1e-12;
 ///
 /// Returns `Some(t)` if the ray hits the plane at `origin + t * direction`
 /// with `t > RAY_T_MIN`, or `None` if the ray is parallel or behind.
+#[must_use]
 pub fn ray_plane(origin: Point3, direction: Vec3, normal: Vec3, d: f64) -> Option<f64> {
     let denom = normal.dot(direction);
     if denom.abs() < NEAR_ZERO {
@@ -50,6 +51,7 @@ pub fn ray_plane(origin: Point3, direction: Vec3, normal: Vec3, d: f64) -> Optio
 /// Intersect a ray with an infinite cylindrical surface.
 ///
 /// Returns up to 2 positive-t values.
+#[must_use]
 pub fn ray_cylinder(
     origin: Point3,
     direction: Vec3,
@@ -75,6 +77,7 @@ pub fn ray_cylinder(
 ///
 /// Returns up to 2 positive-t values (both nappes of the double cone).
 #[allow(clippy::similar_names)]
+#[must_use]
 pub fn ray_cone(origin: Point3, direction: Vec3, cone: &ConicalSurface) -> SmallVec<[f64; 4]> {
     let ov = origin - cone.apex();
     let axis = cone.axis();
@@ -100,6 +103,7 @@ pub fn ray_cone(origin: Point3, direction: Vec3, cone: &ConicalSurface) -> Small
 /// Intersect a ray with a sphere.
 ///
 /// Returns up to 2 positive-t values.
+#[must_use]
 pub fn ray_sphere(origin: Point3, direction: Vec3, sph: &SphericalSurface) -> SmallVec<[f64; 4]> {
     let ov = origin - sph.center();
     let a = direction.dot(direction);
@@ -119,6 +123,7 @@ pub fn ray_sphere(origin: Point3, direction: Vec3, sph: &SphericalSurface) -> Sm
 /// residual-verified quartic root finder in `brepkit_math` — a local Ferrari
 /// solver previously both missed real roots and emitted off-surface spurious
 /// ones for oblique rays at moderate radii, flipping crossing parity.
+#[must_use]
 pub fn ray_torus(origin: Point3, direction: Vec3, tor: &ToroidalSurface) -> SmallVec<[f64; 4]> {
     brepkit_math::analytic_intersection::intersect_line_torus(tor, origin, direction)
         .into_iter()
@@ -163,6 +168,7 @@ pub fn ray_nurbs(
 // ===========================================================================
 
 /// Solve `a*t^2 + b*t + c = 0` returning positive roots (t > `RAY_T_MIN`).
+#[must_use]
 pub fn solve_quadratic(a: f64, b: f64, c: f64) -> SmallVec<[f64; 4]> {
     let all = solve_quadratic_all(a, b, c);
     all.into_iter().filter(|&t| t > RAY_T_MIN).collect()

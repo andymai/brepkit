@@ -2820,7 +2820,9 @@ fn detect_trivial_relation(
     // along it (a horn torus touches it at its pinch), so a solid holding a
     // point of the axis clear of the torus is not inside it, though every
     // vertex, edge probe and its centre lie in the tube: a box spanning the
-    // torus's hole.
+    // torus's hole. The axis enters and leaves the solid only where it
+    // meets one of the solid's surfaces, so the stretches between those
+    // meetings are probed, however thin the solid is along the axis.
     let axis_outside = |topo: &Topology,
                         inner: SolidId,
                         outer: Option<&brepkit_algo::classifier::AnalyticClassifier>,
@@ -2859,19 +2861,51 @@ fn detect_trivial_relation(
         }
         let (dx, dy, dz) = (hi.x() - lo.x(), hi.y() - lo.y(), hi.z() - lo.z());
         let defl = (dx.mul_add(dx, dy.mul_add(dy, dz * dz)).sqrt() * 0.01).max(1e-6);
-        (0..=8).any(|k| {
-            let t = (t1 - t0).mul_add(f64::from(k) / 8.0, t0);
-            major_radius.hypot(t) - minor_radius > tol.linear * 10.0
-                && matches!(
-                    crate::classify::classify_point(
-                        topo,
-                        inner,
-                        *center + *axis * t,
-                        defl,
-                        tol.linear
-                    ),
-                    Ok(crate::classify::PointClassification::Inside)
-                )
+        let Ok(faces) = brepkit_topology::explorer::solid_faces(topo, inner) else {
+            return false;
+        };
+        let from = *center + *axis * t0;
+        let mut cuts = vec![t0, t1];
+        for fid in faces {
+            use brepkit_check::classify::ray_surface as ray;
+            let Ok(face) = topo.face(fid) else {
+                return false;
+            };
+            let hits: Vec<f64> = match face.surface() {
+                FaceSurface::Plane { normal, d } => ray::ray_plane(from, *axis, *normal, *d)
+                    .into_iter()
+                    .collect(),
+                FaceSurface::Cylinder(c) => ray::ray_cylinder(from, *axis, c).to_vec(),
+                FaceSurface::Cone(c) => ray::ray_cone(from, *axis, c).to_vec(),
+                FaceSurface::Sphere(s) => ray::ray_sphere(from, *axis, s).to_vec(),
+                FaceSurface::Torus(t) => ray::ray_torus(from, *axis, t).to_vec(),
+                FaceSurface::Nurbs(n) => match ray::ray_nurbs(from, *axis, n, 20) {
+                    Ok(hits) => hits.into_iter().map(|(t, _, _)| t).collect(),
+                    Err(_) => return false,
+                },
+            };
+            cuts.extend(
+                hits.into_iter()
+                    .map(|t| t + t0)
+                    .filter(|&t| t > t0 && t < t1),
+            );
+        }
+        cuts.sort_by(f64::total_cmp);
+        cuts.windows(2).any(|w| {
+            [0.25, 0.5, 0.75].into_iter().any(|f| {
+                let t = (w[1] - w[0]).mul_add(f, w[0]);
+                major_radius.hypot(t) - minor_radius > tol.linear * 10.0
+                    && matches!(
+                        crate::classify::classify_point(
+                            topo,
+                            inner,
+                            *center + *axis * t,
+                            defl,
+                            tol.linear
+                        ),
+                        Ok(crate::classify::PointClassification::Inside)
+                    )
+            })
         })
     };
 

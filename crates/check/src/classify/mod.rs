@@ -5,7 +5,7 @@
 //! lies inside, outside, or on the boundary of a B-Rep solid.
 
 pub(crate) mod boundary;
-pub(crate) mod ray_surface;
+pub mod ray_surface;
 pub(crate) mod winding;
 
 use brepkit_math::vec::{Point3, Vec3};

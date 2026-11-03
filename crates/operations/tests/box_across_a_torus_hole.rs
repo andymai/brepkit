@@ -79,4 +79,36 @@ fn a_box_across_a_torus_hole_is_not_inside_the_torus() {
             }
         }
     }
+
+    // Thin boxes crossing the axis at a slant, their stretch of the axis a
+    // few hundredths long, are not inside the torus either: the hole takes
+    // about a tenth of each. The general boolean falls back to a mesh on
+    // these slivers, so only the intersect's volume is read here, and
+    // these run after the exact cases above, whose fallback counter they
+    // would otherwise disturb.
+    for (lo, hi, turn, about) in [
+        ((-2.0, -2.0, -0.01), (5.5, 2.0, 0.01), 0.5, (0.0, 0.0, 0.0)),
+        (
+            (-2.0, -2.0, -0.001),
+            (6.0, 2.0, 0.001),
+            0.2,
+            (2.0, 0.0, 0.0),
+        ),
+    ] {
+        let case = format!("box {lo:?}..{hi:?} turned {turn} about {about:?}");
+        let box_volume = (hi.0 - lo.0) * (hi.1 - lo.1) * (hi.2 - lo.2);
+        let mut topo = Topology::new();
+        let torus = make_torus(&mut topo, 5.0, 4.0, 16).unwrap();
+        let tool = placed_box(&mut topo, lo, hi);
+        let m = Mat4::translation(about.0, about.1, about.2)
+            * Mat4::rotation_y(turn)
+            * Mat4::translation(-about.0, -about.1, -about.2);
+        transform_solid(&mut topo, tool, &m).unwrap();
+        let result = boolean(&mut topo, BooleanOp::Intersect, torus, tool).unwrap();
+        let volume = solid_volume(&topo, result, 0.0001).unwrap();
+        assert!(
+            volume < 0.95 * box_volume && volume > 0.75 * box_volume,
+            "{case}: volume {volume} of a box of {box_volume}"
+        );
+    }
 }
