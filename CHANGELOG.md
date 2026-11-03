@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.6.21](https://github.com/andymai/brepkit/compare/v4.6.20...v4.6.21) (2026-11-03)
+
+
+### Bug Fixes
+
+* **algo:** give a loop winding a cylinder's axis no disc of its own ([#2275](https://github.com/andymai/brepkit/issues/2275)) ([d61b098](https://github.com/andymai/brepkit/commit/d61b098cd61254ffa67c89cd068401486373a40d))
+
 ## [4.6.20](https://github.com/andymai/brepkit/compare/v4.6.19...v4.6.20) (2026-11-01)
 
 
