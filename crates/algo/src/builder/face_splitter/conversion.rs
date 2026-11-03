@@ -3,6 +3,7 @@
 use brepkit_math::vec::{Point2, Point3, Vec3};
 use brepkit_topology::Topology;
 use brepkit_topology::face::FaceSurface;
+use brepkit_topology::vertex::Vertex;
 
 use super::super::pcurve_compute::{
     compute_pcurve_on_surface, project_point_on_surface, sample_edge_to_uv,
@@ -54,6 +55,7 @@ pub(super) fn boundary_edges_to_pcurve(
         wire_pts,
         frame,
         &std::collections::HashMap::new(),
+        &std::collections::BTreeSet::new(),
         &[],
         false,
     )
@@ -80,6 +82,7 @@ pub(super) fn boundary_edges_to_pcurve_with_images<S: std::hash::BuildHasher>(
         Vec<brepkit_topology::edge::EdgeId>,
         S,
     >,
+    kept_splits: &std::collections::BTreeSet<brepkit_topology::vertex::VertexId>,
     anchors: &[Point3],
     expand_lines: bool,
 ) -> Vec<OrientedPCurveEdge> {
@@ -210,10 +213,20 @@ pub(super) fn boundary_edges_to_pcurve_with_images<S: std::hash::BuildHasher>(
                 curve_kind,
                 Some(brepkit_topology::edge::EdgeCurve::Circle(_))
             );
+        // An edge paved apart from a partner sharing both its ends stays in
+        // pieces whatever the sections do (`GfaArena::co_endpoint_middles`).
+        let split_to_keep = |imgs: &[brepkit_topology::edge::EdgeId]| {
+            imgs.iter().any(|&img| {
+                topo.edge(img).is_ok_and(|e| {
+                    kept_splits.contains(&e.start()) || kept_splits.contains(&e.end())
+                })
+            })
+        };
         match edge_images.get(&oe.edge()) {
             Some(imgs)
                 if imgs.len() > 1
-                    && ((is_line && expand_lines && junction_near_anchor(imgs))
+                    && (split_to_keep(imgs)
+                        || (is_line && expand_lines && junction_near_anchor(imgs))
                         || (torus_meridian && junction_in_band_nurbs(imgs))
                         || (is_nurbs
                             && ((matches!(
@@ -226,7 +239,15 @@ pub(super) fn boundary_edges_to_pcurve_with_images<S: std::hash::BuildHasher>(
                                 || matches!(surface, FaceSurface::Plane { .. }))
                             && junction_in_band_nurbs(imgs))) =>
             {
-                if oe.is_forward() {
+                let entry = topo.edge(oe.edge()).ok().and_then(|e| {
+                    let at = if oe.is_forward() { e.start() } else { e.end() };
+                    (e.start() != e.end())
+                        .then(|| topo.vertex(at).ok().map(Vertex::point))
+                        .flatten()
+                });
+                if let Some(chained) = entry.and_then(|at| chain_images(topo, at, imgs)) {
+                    pieces.extend(chained);
+                } else if oe.is_forward() {
                     pieces.extend(imgs.iter().map(|&i| (i, true)));
                 } else {
                     pieces.extend(imgs.iter().rev().map(|&i| (i, false)));
@@ -294,6 +315,45 @@ pub(super) fn boundary_edges_to_pcurve_with_images<S: std::hash::BuildHasher>(
         resolve_seam_endpoint_uv(&mut result, surface);
     }
     result
+}
+
+/// An open edge's image pieces in walk order from `from`, where the walk
+/// enters the edge, each oriented by its endpoints: a piece shared with a
+/// coincident edge of the other operand keeps that edge's direction, which
+/// need not be its parent's. `None` when a piece cannot be read.
+fn chain_images(
+    topo: &Topology,
+    from: Point3,
+    imgs: &[brepkit_topology::edge::EdgeId],
+) -> Option<Vec<(brepkit_topology::edge::EdgeId, bool)>> {
+    let ends = |id: brepkit_topology::edge::EdgeId| -> Option<(Point3, Point3)> {
+        let e = topo.edge(id).ok()?;
+        Some((
+            topo.vertex(e.start()).ok()?.point(),
+            topo.vertex(e.end()).ok()?.point(),
+        ))
+    };
+    let mut left = imgs.to_vec();
+    let mut cursor = from;
+    let mut out = Vec::with_capacity(left.len());
+    while !left.is_empty() {
+        let mut best: Option<(f64, usize, bool, Point3)> = None;
+        for (k, &img) in left.iter().enumerate() {
+            let (s, e) = ends(img)?;
+            for (gap, forward, next) in [
+                ((s - cursor).length(), true, e),
+                ((e - cursor).length(), false, s),
+            ] {
+                if best.is_none_or(|b| gap < b.0) {
+                    best = Some((gap, k, forward, next));
+                }
+            }
+        }
+        let (_, k, forward, next) = best?;
+        out.push((left.remove(k), forward));
+        cursor = next;
+    }
+    Some(out)
 }
 
 /// Unwrap the boundary's u along the wire on a periodic surface, so no
@@ -597,5 +657,73 @@ pub(super) fn uv_endpoints_from_pcurve(
             project_point_on_surface(start_3d, surface, wire_pts, None),
             project_point_on_surface(end_3d, surface, wire_pts, None),
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+    use super::*;
+    use brepkit_math::curves::Circle3D;
+    use brepkit_topology::edge::{Edge, EdgeCurve};
+    use brepkit_topology::face::Face;
+    use brepkit_topology::wire::{OrientedEdge, Wire};
+
+    /// A half disc whose arc was paved at its top, the two pieces stored
+    /// against the arc (as a coincident arc of the other operand stores
+    /// them): its boundary still walks end to end.
+    #[test]
+    fn kept_pieces_stored_against_their_arc_chain_along_it() {
+        let mut topo = Topology::new();
+        let right = topo.add_vertex(Vertex::new(Point3::new(2.0, 0.0, 0.0), 1e-7));
+        let top = topo.add_vertex(Vertex::new(Point3::new(0.0, 2.0, 0.0), 1e-7));
+        let left = topo.add_vertex(Vertex::new(Point3::new(-2.0, 0.0, 0.0), 1e-7));
+        let centre = Point3::new(0.0, 0.0, 0.0);
+        let up = Circle3D::new(centre, Vec3::new(0.0, 0.0, 1.0), 2.0).unwrap();
+        let down = Circle3D::new(centre, Vec3::new(0.0, 0.0, -1.0), 2.0).unwrap();
+        let arc = topo.add_edge(Edge::new(right, left, EdgeCurve::Circle(up)));
+        let diameter = topo.add_edge(Edge::new(left, right, EdgeCurve::Line));
+        let first = topo.add_edge(Edge::new(top, right, EdgeCurve::Circle(down.clone())));
+        let second = topo.add_edge(Edge::new(left, top, EdgeCurve::Circle(down)));
+        let wire = topo.add_wire(
+            Wire::new(
+                vec![
+                    OrientedEdge::new(arc, true),
+                    OrientedEdge::new(diameter, true),
+                ],
+                true,
+            )
+            .unwrap(),
+        );
+        let surface = FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: 0.0,
+        };
+        let face = topo.add_face(Face::new(wire, vec![], surface.clone()));
+        let wire_id = topo.face(face).unwrap().outer_wire();
+        let images = std::collections::HashMap::from([(arc, vec![first, second])]);
+        let kept = std::collections::BTreeSet::from([top]);
+        let wire_pts = collect_wire_points(&topo, wire_id);
+        let edges = boundary_edges_to_pcurve_with_images(
+            &topo,
+            wire_id,
+            &surface,
+            &wire_pts,
+            None,
+            &images,
+            &kept,
+            &[],
+            false,
+        );
+        assert_eq!(edges.len(), 3);
+        for (k, edge) in edges.iter().enumerate() {
+            let next = &edges[(k + 1) % edges.len()];
+            assert!(
+                (edge.end_3d - next.start_3d).length() < 1e-12,
+                "piece {k} ends at {:?}, the next starts at {:?}",
+                edge.end_3d,
+                next.start_3d
+            );
+        }
     }
 }

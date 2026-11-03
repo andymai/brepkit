@@ -5129,6 +5129,7 @@ pub fn split_face_2d(
         Vec<brepkit_topology::edge::EdgeId>,
         impl std::hash::BuildHasher,
     >,
+    kept_splits: &std::collections::BTreeSet<brepkit_topology::vertex::VertexId>,
     split_registry: Option<&mut std::collections::HashMap<usize, Vec<Point3>>>,
 ) -> Vec<SplitSubFace> {
     let run_impl = move |secs: &[SectionEdge]| {
@@ -5141,6 +5142,7 @@ pub fn split_face_2d(
             frame,
             info,
             edge_images,
+            kept_splits,
             split_registry,
         )
     };
@@ -5627,6 +5629,7 @@ fn split_face_2d_impl(
         Vec<brepkit_topology::edge::EdgeId>,
         impl std::hash::BuildHasher,
     >,
+    kept_splits: &std::collections::BTreeSet<brepkit_topology::vertex::VertexId>,
     mut split_registry: Option<&mut std::collections::HashMap<usize, Vec<Point3>>>,
 ) -> Vec<SplitSubFace> {
     let face = match topo.face(face_id) {
@@ -5757,6 +5760,7 @@ fn split_face_2d_impl(
                 &wire_pts,
                 if is_plane { Some(frame) } else { None },
                 edge_images,
+                kept_splits,
                 &section_anchor_pts,
                 is_plane,
             )
@@ -10191,6 +10195,7 @@ mod tests {
             None,
             None,
             &edge_images,
+            &std::collections::BTreeSet::new(),
             None,
         );
         assert_eq!(

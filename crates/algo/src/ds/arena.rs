@@ -1,6 +1,6 @@
 //! GFA arena — owns all transient state for a boolean operation.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use brepkit_topology::arena::Arena;
 use brepkit_topology::edge::EdgeId;
@@ -53,6 +53,11 @@ pub struct GfaArena {
     /// closed circle running along a face's inscribed boundary (a faceted
     /// sphere's equator in a plane through it) splits only the plane.
     pub curve_skip_faces: BTreeMap<usize, Vec<FaceId>>,
+    /// Vertices paved at the middle of a curved edge that shares both ends
+    /// with another edge (two half circles of one tube circle): every face
+    /// keeps such an edge in its pieces, or the two would weld into one
+    /// edge on four faces.
+    pub co_endpoint_middles: BTreeSet<VertexId>,
 }
 
 impl GfaArena {
@@ -72,6 +77,7 @@ impl GfaArena {
             pave_ball_index: None,
             curve_extra_faces: BTreeMap::new(),
             curve_skip_faces: BTreeMap::new(),
+            co_endpoint_middles: BTreeSet::new(),
         }
     }
 

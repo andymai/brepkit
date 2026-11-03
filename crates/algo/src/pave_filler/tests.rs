@@ -1935,3 +1935,64 @@ fn reversed_whole_nurbs_edge_span_descends() {
     assert_eq!(super::edge_pave_span(&curve, a, b), (0.0, 1.0));
     assert_eq!(super::edge_pave_span(&curve, b, a), (1.0, 0.0));
 }
+
+/// Two half discs sharing their diameter's ends, one per operand, whose
+/// arcs bulge 5e-6 apart: inside the band that makes them one path, but
+/// past the vertex tolerance, so each arc takes a middle on its own curve.
+#[test]
+fn near_coincident_arcs_get_middles_on_their_own_curves() {
+    use brepkit_math::curves::Circle3D;
+    use brepkit_math::tolerance::Tolerance;
+    use brepkit_topology::solid::SolidId;
+
+    let mut topo = Topology::default();
+    let right = topo.add_vertex(Vertex::new(Point3::new(2.0, 0.0, 0.0), 1e-7));
+    let left = topo.add_vertex(Vertex::new(Point3::new(-2.0, 0.0, 0.0), 1e-7));
+    let mut half_disc = |below: f64| -> (SolidId, brepkit_topology::edge::EdgeId, Circle3D) {
+        let centre = Point3::new(0.0, -below, 0.0);
+        let radius = (4.0 + below * below).sqrt();
+        let circle = Circle3D::new(centre, Vec3::new(0.0, 0.0, 1.0), radius).unwrap();
+        let arc = topo.add_edge(Edge::new(right, left, EdgeCurve::Circle(circle.clone())));
+        let diameter = topo.add_edge(Edge::new(left, right, EdgeCurve::Line));
+        let wire = topo.add_wire(
+            Wire::new(
+                vec![
+                    OrientedEdge::new(arc, true),
+                    OrientedEdge::new(diameter, true),
+                ],
+                true,
+            )
+            .unwrap(),
+        );
+        let face = topo.add_face(Face::new(
+            wire,
+            vec![],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: 0.0,
+            },
+        ));
+        let shell = topo.add_shell(Shell::new(vec![face]).unwrap());
+        (topo.add_solid(Solid::new(shell, vec![])), arc, circle)
+    };
+    let (a, arc_a, circle_a) = half_disc(0.0);
+    let (b, arc_b, circle_b) = half_disc(5e-6);
+    let tol = Tolerance::new();
+    let mut arena = GfaArena::new();
+    PaveFiller::with_tolerance(&mut topo, a, b, tol)
+        .init_pave_blocks(&mut arena)
+        .unwrap();
+    super::pave_co_endpoint_curves(&mut topo, &[a, b], tol, &mut arena).unwrap();
+
+    let mut middles = Vec::new();
+    for (arc, circle) in [(arc_a, circle_a), (arc_b, circle_b)] {
+        let pb = arena.edge_pave_blocks[&arc][0];
+        let paves = &arena.pave_blocks.get(pb).unwrap().extra_paves;
+        assert_eq!(paves.len(), 1, "arc {arc:?} paved {} times", paves.len());
+        let at = topo.vertex(paves[0].vertex).unwrap().point();
+        let off = (circle.evaluate(circle.project(at)) - at).length();
+        assert!(off < 1e-9, "arc {arc:?}'s middle lies {off} off its curve");
+        middles.push(paves[0].vertex);
+    }
+    assert_ne!(middles[0], middles[1], "the arcs share one middle");
+}

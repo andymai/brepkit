@@ -453,6 +453,7 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
             None, // PlaneFrame built internally by face_splitter
             info.as_ref(),
             edge_images,
+            &arena.co_endpoint_middles,
             Some(&mut section_split_registry),
         );
 
