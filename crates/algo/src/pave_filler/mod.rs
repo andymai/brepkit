@@ -166,7 +166,7 @@ fn pave_co_endpoint_curves(
 
     use brepkit_math::vec::Point3;
     use brepkit_topology::edge::{EdgeCurve, EdgeId};
-    use brepkit_topology::vertex::Vertex;
+    use brepkit_topology::vertex::{Vertex, VertexId};
 
     use crate::ds::Pave;
 
@@ -204,8 +204,9 @@ fn pave_co_endpoint_curves(
         }
         // Coincident copies (an edge of each operand along one path, where
         // two stacked prisms meet) are one path: the group needs pieces only
-        // when it holds two, and the copies of a path share one middle
-        // vertex so they split alike.
+        // when it holds two. Copies whose middles agree within the vertex
+        // tolerance share one middle vertex so they split alike; a copy
+        // farther off gets a vertex on its own curve.
         let mut paths: Vec<(Point3, Vec<usize>)> = Vec::new();
         for (i, m) in middles.iter().enumerate() {
             match paths
@@ -219,10 +220,10 @@ fn pave_co_endpoint_curves(
         if paths.len() < 2 {
             continue;
         }
-        for (mid, copies) in &paths {
-            let mut shared = None;
+        for (_, copies) in &paths {
+            let mut placed: Vec<(VertexId, Point3)> = Vec::new();
             for &i in copies {
-                let (edge_id, curved, tm, _) = middles[i];
+                let (edge_id, curved, tm, mid) = middles[i];
                 let Some(&[pb_id]) = arena.edge_pave_blocks.get(&edge_id).map(Vec::as_slice) else {
                     continue;
                 };
@@ -233,12 +234,16 @@ fn pave_co_endpoint_curves(
                 if !(curved && unsplit) {
                     continue;
                 }
+                let shared = placed
+                    .iter()
+                    .find(|(_, at)| (*at - mid).length() <= tol.linear)
+                    .map(|&(vertex, _)| vertex);
                 let vertex = if let Some(vertex) = shared {
                     vertex
                 } else {
-                    let vertex = topo.add_vertex(Vertex::new(*mid, tol.linear));
+                    let vertex = topo.add_vertex(Vertex::new(mid, tol.linear));
                     arena.co_endpoint_middles.insert(vertex);
-                    shared = Some(vertex);
+                    placed.push((vertex, mid));
                     vertex
                 };
                 arena.add_extra_pave(topo, pb_id, Pave::new(vertex, tm));
