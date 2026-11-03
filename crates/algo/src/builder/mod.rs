@@ -1317,6 +1317,37 @@ pub fn whole_ring(
     collapsed.then(|| torus.clone())
 }
 
+/// The middle of a torus face that is a partial revolution's whole tube
+/// ([`classifier::partial_revolution_band`]): halfway round its ring-angle
+/// band, opposite its seam on the tube. `None` for any other face.
+fn partial_revolution_middle(
+    topo: &Topology,
+    face: &brepkit_topology::face::Face,
+) -> Result<Option<Point3>, AlgoError> {
+    use brepkit_topology::edge::EdgeCurve;
+    let brepkit_topology::face::FaceSurface::Torus(torus) = face.surface() else {
+        return Ok(None);
+    };
+    if !face.inner_wires().is_empty() {
+        return Ok(None);
+    }
+    let Some((u_start, span)) = classifier::partial_revolution_band(topo, face, torus)? else {
+        return Ok(None);
+    };
+    for oe in topo.wire(face.outer_wire())?.edges() {
+        let e = topo.edge(oe.edge())?;
+        if e.start() == e.end() || matches!(e.curve(), EdgeCurve::Line) {
+            continue;
+        }
+        let (_, seam_v) = torus.project_point(topo.vertex(e.start())?.point());
+        return Ok(Some(torus.evaluate(
+            0.5_f64.mul_add(span, u_start),
+            seam_v + std::f64::consts::PI,
+        )));
+    }
+    Ok(None)
+}
+
 /// Sample a point in the interior of a face.
 ///
 /// Uses the midpoint of the longest boundary edge, then offsets slightly
@@ -1326,74 +1357,6 @@ pub fn whole_ring(
 ///
 /// The offset distance is scaled relative to the face's bounding box
 /// diagonal to handle both very small and very large faces correctly.
-/// The middle of a face whose outer wire has a closed curved edge at one
-/// `u` (a tube circle of a torus band from a partial revolution): that
-/// edge's middle `v`, at the `u` an open curved edge of the wire running in
-/// `u` reaches halfway. An edge holds `u` when eight points along it share
-/// one. `None` when no closed edge holds `u`, no open edge runs in it, or the
-/// face has holes or an outer wire carrying more than a seam out and back,
-/// either of which could cover that point.
-fn closed_curve_holds_u(
-    topo: &Topology,
-    face: &brepkit_topology::face::Face,
-    edges: &[brepkit_topology::wire::OrientedEdge],
-    tol: Tolerance,
-) -> Result<Option<Point3>, AlgoError> {
-    use brepkit_topology::edge::EdgeCurve;
-    if !face.inner_wires().is_empty()
-        || !crate::classifier::open_edges_run_there_and_back(topo, edges)?
-    {
-        return Ok(None);
-    }
-    let surface = face.surface();
-    let turn = std::f64::consts::TAU;
-    let wrap = |d: f64| (d + turn / 2.0).rem_euclid(turn) - turn / 2.0;
-    let same = tol.angular.max(1e-9);
-    let mut v_mid: Option<f64> = None;
-    let mut u_mid: Option<f64> = None;
-    for oe in edges {
-        let e = topo.edge(oe.edge())?;
-        if matches!(e.curve(), EdgeCurve::Line) {
-            continue;
-        }
-        let (sp, ep) = (
-            topo.vertex(e.start())?.point(),
-            topo.vertex(e.end())?.point(),
-        );
-        let (t0, t1) = e.curve().domain_with_endpoints(sp, ep);
-        let uv = |f: f64| {
-            surface.project_point(e.curve().evaluate_with_endpoints(
-                (t1 - t0).mul_add(f, t0),
-                sp,
-                ep,
-            ))
-        };
-        let Some(samples) = (0..8)
-            .map(|k| uv((f64::from(k) + 0.5) / 8.0))
-            .collect::<Option<Vec<_>>>()
-        else {
-            continue;
-        };
-        let Some(m) = uv(0.5) else {
-            continue;
-        };
-        let holds_u = samples
-            .iter()
-            .all(|p| wrap(p.0 - samples[0].0).abs() <= same);
-        if e.start() == e.end() {
-            if v_mid.is_none() && holds_u {
-                v_mid = Some(m.1);
-            }
-        } else if u_mid.is_none() && !holds_u {
-            u_mid = Some(m.0);
-        }
-    }
-    Ok(match (u_mid, v_mid) {
-        (Some(u), Some(v)) => surface.evaluate(u, v),
-        _ => None,
-    })
-}
-
 fn sample_face_interior(
     topo: &Topology,
     face_id: FaceId,
@@ -1443,13 +1406,11 @@ fn sample_face_interior(
                 }
             }
         }
-        // A band of a partial revolution is bounded by closed curves that
-        // hold `u` (a torus's tube circles at the revolve's two ends): its
-        // middle lies at the closed curve's `v` and the `u` an arc along the
-        // ring reaches halfway, as the cylinder rule above would put the
-        // sample on the end circle itself.
+        // A torus band of a partial revolution is bounded by tube circles
+        // that hold `u`, where the cylinder rule below would put the sample
+        // on an end circle itself.
         if closed_mid.is_some()
-            && let Some(pt) = closed_curve_holds_u(topo, face, edges, tol)?
+            && let Some(pt) = partial_revolution_middle(topo, face)?
         {
             return Ok(pt);
         }
@@ -1818,11 +1779,11 @@ mod tests {
         );
     }
 
-    /// A rim of the unit sphere in the plane x = 0.6 has one ring angle at
-    /// a quarter and three quarters of the way round but not between, so it
-    /// does not hold `u`; a sphere band bounded by it has no tube middle.
+    /// A unit sphere's band between rims at x = 0.6 and 0.8 is no torus
+    /// band, though its rim at 0.6 has one ring angle a quarter and three
+    /// quarters of the way round: it has no partial revolution's middle.
     #[test]
-    fn a_sphere_rim_is_no_tube_circle() {
+    fn a_sphere_band_has_no_tube_middle() {
         use brepkit_math::curves::Circle3D;
         use brepkit_math::surfaces::SphericalSurface;
         use brepkit_topology::edge::{Edge, EdgeCurve};
@@ -1864,12 +1825,7 @@ mod tests {
             FaceSurface::Sphere(SphericalSurface::new(Point3::new(0.0, 0.0, 0.0), 1.0).unwrap()),
         ));
         let face = topo.face(face_id).unwrap();
-        let edges = topo.wire(face.outer_wire()).unwrap().edges().to_vec();
-        assert!(
-            closed_curve_holds_u(&topo, face, &edges, Tolerance::default())
-                .unwrap()
-                .is_none()
-        );
+        assert!(partial_revolution_middle(&topo, face).unwrap().is_none());
     }
 
     #[test]

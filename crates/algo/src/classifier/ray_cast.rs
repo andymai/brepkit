@@ -3624,16 +3624,22 @@ fn ray_torus_crossings(
             origin.z() + dir.z() * t,
         );
         let (u, v) = surface.project_point(hit);
+        // Each border read round the circle: a hit just short of the start
+        // wraps to nearly a whole turn.
+        let near_border = |along: f64, span: f64, near: f64| {
+            let to_end = (along - span).abs();
+            along.min(TAU - along) <= near || to_end.min(TAU - to_end) <= near
+        };
         if let Some((v_start, span)) = v_band {
             let vv = (v - v_start).rem_euclid(TAU);
-            suspicious |= vv <= near_angle || (span - vv).abs() <= near_angle;
+            suspicious |= near_border(vv, span, near_angle);
             if vv > span {
                 continue;
             }
         }
         if let Some((u_start, span)) = u_band {
             let uu = (u - u_start).rem_euclid(TAU);
-            suspicious |= uu <= near_ring || (span - uu).abs() <= near_ring;
+            suspicious |= near_border(uu, span, near_ring);
             if uu > span {
                 continue;
             }
@@ -3646,7 +3652,7 @@ fn ray_torus_crossings(
 /// Whether every open edge of a wire appears in it exactly twice, once each
 /// way: the wire runs a chain out and back, as a band's seam between its two
 /// closed rims does, and holds no cutout of its own.
-pub fn open_edges_run_there_and_back(
+fn open_edges_run_there_and_back(
     topo: &Topology,
     edges: &[brepkit_topology::wire::OrientedEdge],
 ) -> Result<bool, AlgoError> {
@@ -3672,7 +3678,7 @@ pub fn open_edges_run_there_and_back(
 /// between them along the ring and back ([`open_edges_run_there_and_back`]).
 /// The band runs from one circle to the other the way the arcs go. `None`
 /// for any other face.
-fn partial_revolution_band(
+pub fn partial_revolution_band(
     topo: &Topology,
     face: &brepkit_topology::face::Face,
     surface: &brepkit_math::surfaces::ToroidalSurface,
@@ -4765,6 +4771,33 @@ mod tests {
                 assert_eq!(crossings(u), 0, "band {a}..{b}, ring angle {u}");
             }
         }
+    }
+
+    /// A hit within the grazing band of either end circle is suspicious,
+    /// one just short of the start too, whose ring angle wraps to nearly a
+    /// whole turn past it.
+    #[test]
+    fn a_hit_beside_either_end_circle_is_suspicious() {
+        use brepkit_math::surfaces::ToroidalSurface;
+        use std::f64::consts::{FRAC_PI_2, FRAC_PI_4, PI};
+        let t = ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), 3.0, 1.0).unwrap();
+        let band = Some((FRAC_PI_4, FRAC_PI_2));
+        let up = |u: f64| {
+            let (near, far) = (t.evaluate(u, 0.0), t.evaluate(u, PI));
+            let centre = near + (far - near) * 0.5;
+            ray_torus_crossings(
+                centre,
+                Vec3::new(0.0, 0.0, 1.0),
+                &t,
+                None,
+                band,
+                Tolerance::new(),
+            )
+        };
+        for u in [FRAC_PI_4 - 1e-9, FRAC_PI_4 + 1e-9, 3.0 * FRAC_PI_4 + 1e-9] {
+            assert!(up(u).1, "ring angle {u}");
+        }
+        assert_eq!(up(FRAC_PI_2), (1, false));
     }
 
     /// A band whose outer wire comes back from its far end circle by a
