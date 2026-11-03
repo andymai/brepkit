@@ -3643,20 +3643,48 @@ fn ray_torus_crossings(
     (crossings, suspicious)
 }
 
+/// Whether every open edge of a wire appears in it exactly twice, once each
+/// way: the wire runs a chain out and back, as a band's seam between its two
+/// closed rims does, and holds no cutout of its own.
+pub fn open_edges_run_there_and_back(
+    topo: &Topology,
+    edges: &[brepkit_topology::wire::OrientedEdge],
+) -> Result<bool, AlgoError> {
+    let mut uses: std::collections::HashMap<usize, (u32, u32)> = std::collections::HashMap::new();
+    for oe in edges {
+        let edge = topo.edge(oe.edge())?;
+        if edge.start() == edge.end() {
+            continue;
+        }
+        let entry = uses.entry(oe.edge().index()).or_insert((0, 0));
+        if oe.is_forward() {
+            entry.0 += 1;
+        } else {
+            entry.1 += 1;
+        }
+    }
+    Ok(!uses.is_empty() && uses.values().all(|&n| n == (1, 1)))
+}
+
 /// The ring-angle band `(u_start, span)` of a torus face that is a partial
 /// revolution's whole tube: its outer wire two closed tube circles, each at
 /// one ring angle (eight points along it share one), and open arcs running
-/// between them along the ring. The band runs from one circle to the other
-/// the way the arcs go. `None` for any other face.
+/// between them along the ring and back ([`open_edges_run_there_and_back`]).
+/// The band runs from one circle to the other the way the arcs go. `None`
+/// for any other face.
 fn partial_revolution_band(
     topo: &Topology,
     face: &brepkit_topology::face::Face,
     surface: &brepkit_math::surfaces::ToroidalSurface,
 ) -> Result<Option<(f64, f64)>, AlgoError> {
     use brepkit_topology::edge::EdgeCurve;
+    let wire = topo.wire(face.outer_wire())?;
+    if !open_edges_run_there_and_back(topo, wire.edges())? {
+        return Ok(None);
+    }
     let mut ends: Vec<f64> = Vec::new();
     let mut inside: Option<f64> = None;
-    for oe in topo.wire(face.outer_wire())?.edges() {
+    for oe in wire.edges() {
         let edge = topo.edge(oe.edge())?;
         let (sp, ep) = (
             topo.vertex(edge.start())?.point(),
@@ -4737,6 +4765,46 @@ mod tests {
                 assert_eq!(crossings(u), 0, "band {a}..{b}, ring angle {u}");
             }
         }
+    }
+
+    /// A band whose outer wire comes back from its far end circle by a
+    /// detour off the seam carries a cutout, so it is no partial
+    /// revolution's whole tube.
+    #[test]
+    fn a_band_with_a_detour_is_no_whole_tube() {
+        use std::f64::consts::FRAC_PI_2;
+        let mut topo = Topology::default();
+        let face_id = torus_band(&mut topo, 0.0, FRAC_PI_2);
+        let face = topo.face(face_id).unwrap().clone();
+        let FaceSurface::Torus(t) = face.surface() else {
+            unreachable!()
+        };
+        let edges = topo.wire(face.outer_wire()).unwrap().edges().to_vec();
+        let (start_circle, arc, end_circle) = (edges[0], edges[1], edges[2]);
+        let (va, vb) = {
+            let e = topo.edge(arc.edge()).unwrap();
+            (e.start(), e.end())
+        };
+        let off = topo.add_vertex(Vertex::new(t.evaluate(FRAC_PI_2 / 2.0, 0.6), 1e-7));
+        let back = topo.add_edge(Edge::new(vb, off, EdgeCurve::Line));
+        let home = topo.add_edge(Edge::new(off, va, EdgeCurve::Line));
+        let wire = topo.add_wire(
+            Wire::new(
+                vec![
+                    start_circle,
+                    arc,
+                    end_circle,
+                    OrientedEdge::new(back, true),
+                    OrientedEdge::new(home, true),
+                ],
+                true,
+            )
+            .unwrap(),
+        );
+        let detour = topo.add_face(Face::new(wire, vec![], face.surface().clone()));
+        let detour = topo.face(detour).unwrap();
+        assert!(partial_revolution_band(&topo, detour, t).unwrap().is_none());
+        assert!(partial_revolution_band(&topo, &face, t).unwrap().is_some());
     }
 
     #[test]

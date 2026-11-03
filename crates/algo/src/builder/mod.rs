@@ -1331,7 +1331,8 @@ pub fn whole_ring(
 /// edge's middle `v`, at the `u` an open curved edge of the wire running in
 /// `u` reaches halfway. An edge holds `u` when eight points along it share
 /// one. `None` when no closed edge holds `u`, no open edge runs in it, or the
-/// face has holes, which could cover that point.
+/// face has holes or an outer wire carrying more than a seam out and back,
+/// either of which could cover that point.
 fn closed_curve_holds_u(
     topo: &Topology,
     face: &brepkit_topology::face::Face,
@@ -1339,7 +1340,9 @@ fn closed_curve_holds_u(
     tol: Tolerance,
 ) -> Result<Option<Point3>, AlgoError> {
     use brepkit_topology::edge::EdgeCurve;
-    if !face.inner_wires().is_empty() {
+    if !face.inner_wires().is_empty()
+        || !crate::classifier::open_edges_run_there_and_back(topo, edges)?
+    {
         return Ok(None);
     }
     let surface = face.surface();

@@ -9,7 +9,7 @@ mod analytic;
 mod ray_cast;
 
 pub use analytic::{AnalyticClassifier, classify_analytic, try_build_analytic_classifier};
-pub(crate) use ray_cast::{LateralTrim, largest_u_gap, u_in_gap};
+pub(crate) use ray_cast::{LateralTrim, largest_u_gap, open_edges_run_there_and_back, u_in_gap};
 pub use ray_cast::{
     RayCastGeoms, classify_ray_cast, classify_ray_cast_cached, compute_solid_bbox,
     planar_face_polygons, point_in_face_3d, point_in_planar_region, ray_cast_inside_votes,
