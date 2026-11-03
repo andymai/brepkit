@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793679189438,
+  "lastUpdate": 1793681108616,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -64691,6 +64691,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 28356013,
             "range": "± 154442",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "56fff99888f3888778dac9a3f64abd379b3a0495",
+          "message": "fix(algo): read a partial revolution's torus band by its ring angle (#2278)\n\nCutting a disc revolved part way from a larger coaxial one is now exact.\nWith the discs of #2183 (radius 5 and 4 about (30, 0, 0) in the plane x\n= 30, revolved a quarter turn about the z line through (30, 20, 0)), the\ncut gives 4 faces holding 888.264396, Pappus's 90 pi², in 14 ms. `main`\nfalls back to a mesh of 2217 faces holding 886.278, in 187 ms. Fusing\nthe issue's two revolved half rings still falls back, so this leaves\n#2183 open.\n\nTwo faults, both in the boolean engine's classification of the result's\nfaces:\n\n- The GFA ray cast had no reader for the larger disc's torus band: a\ntube bounded by two tube circles at fixed ring angles. Its band rule\nwants a whole revolution, and `TorusTrim` a tube short of a whole turn,\nso the face was read as a flat polygon through its boundary.\n- A whole curved face's interior sample took a closed boundary curve's\n`u` and the middle of the face's `v` range, which is right for a\ncylinder's level rims. On the smaller disc's band the closed curves are\ntube circles at one `u` each, so the sample landed on an end circle, in\nthe larger disc's end plane, and read On.\n\n## Change\n\n- `FaceGeom::Torus` gains a ring-angle band. A torus face whose outer\nwire is two closed tube circles and arcs along the ring between them\n(`partial_revolution_band`) counts only crossings between its end\ncircles, the way the arcs run.\n- A face the recognizer reads as a partial revolution's whole tube,\nwithout holes, is sampled halfway round its band, opposite its seam on\nthe tube.\n- An end circle holds `u` when eight points along it share one ring\nangle, and the wire's open edges must run out and back once each way, as\na seam between two rims does, so a wire carrying a cutout keeps the\ngeneral readers.\n- A hit within the grazing band of either end circle marks the ray\nsuspicious, measured round the circle, so one just short of the start no\nlonger wraps out of reach; the tube band's check reads the same way.\n\n## Tests\n\n- `revolved_discs.rs`: the discs revolved a quarter, a half and 0.85 of\na turn, each upright, turned, mirrored and scaled by -1. The cut is\nexact (no mesh fallback), 4 faces, valid, meshes watertight, holds\nPappus's volume to 1e-6, and classifies points between the two tubes, on\neither side of the ring, as inside, and points on the tubes' centre\ncircle, inside the smaller tube and past the larger as outside. It fails\non `main`.\n- `a_partial_revolution_band_counts_crossings_between_its_ends`: bands\nfrom 0 to a quarter turn and across the ring's angle origin are read\nwith the right ring-angle band, and a ray up out of the tube's centre\ncrosses each only between its end circles.\n- `a_band_with_a_detour_is_no_whole_tube`: the same band returning from\nits far end circle by a detour off the seam is not read as a whole tube.\n- `a_hit_beside_either_end_circle_is_suspicious`: rays up from the\ntube's centre 1e-9 inside or outside either end circle are flagged, one\njust short of the start included.\n- `a_sphere_band_has_no_tube_middle`: a unit sphere's band between rims\nat x = 0.6 and 0.8 gets no partial revolution's middle, though its rim\nat 0.6 has one ring angle a quarter and three quarters of the way round.\n- The algo (358), operations (1078) and wasm (262) library tests pass on\nthis branch merged with `main`, as do `coaxial_torus`,\n`torus_plane_cut`, `torus_coaxial_tools` and\n`ray_index_matches_full_scan`.\n- The pose sweep and truth audit outputs are identical to `main`'s.",
+          "timestamp": "2026-11-02T20:41:48-08:00",
+          "tree_id": "c522c84d01fc2fc9ebc555651428fd2c5c264ba5",
+          "url": "https://github.com/andymai/brepkit/commit/56fff99888f3888778dac9a3f64abd379b3a0495"
+        },
+        "date": 1793681104916,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1060834,
+            "range": "± 5576",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1133948,
+            "range": "± 2634",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12723,
+            "range": "± 43",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 683833,
+            "range": "± 2696",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 28426121,
+            "range": "± 77687",
             "unit": "ns/iter"
           }
         ]
