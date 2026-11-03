@@ -3603,7 +3603,6 @@ fn ray_torus_crossings(
     };
     let roots = brepkit_math::analytic_intersection::intersect_line_torus(surface, origin, dir);
     let near_angle = near / surface.minor_radius().max(near);
-    let near_ring = near / surface.major_radius().max(near);
     let mut crossings = 0;
     let mut suspicious = false;
     for (i, &t) in roots.iter().enumerate() {
@@ -3639,6 +3638,8 @@ fn ray_torus_crossings(
         }
         if let Some((u_start, span)) = u_band {
             let uu = (u - u_start).rem_euclid(TAU);
+            // The ring angle a hit's distance spans grows toward the axis.
+            let near_ring = near / torus_radius_at(surface, v).max(near);
             suspicious |= near_border(uu, span, near_ring);
             if uu > span {
                 continue;
