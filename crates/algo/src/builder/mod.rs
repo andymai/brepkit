@@ -1326,6 +1326,57 @@ pub fn whole_ring(
 ///
 /// The offset distance is scaled relative to the face's bounding box
 /// diagonal to handle both very small and very large faces correctly.
+/// The middle of a face whose outer wire has a closed curved edge at one
+/// `u` (a tube circle of a torus band from a partial revolution): that
+/// edge's middle `v`, at the `u` an open curved edge of the wire running in
+/// `u` reaches halfway. `None` when no closed edge holds `u` or no open edge
+/// runs in it.
+fn closed_curve_holds_u(
+    topo: &Topology,
+    face: &brepkit_topology::face::Face,
+    edges: &[brepkit_topology::wire::OrientedEdge],
+    tol: Tolerance,
+) -> Result<Option<Point3>, AlgoError> {
+    use brepkit_topology::edge::EdgeCurve;
+    let surface = face.surface();
+    let turn = std::f64::consts::TAU;
+    let wrap = |d: f64| (d + turn / 2.0).rem_euclid(turn) - turn / 2.0;
+    let mut v_mid: Option<f64> = None;
+    let mut u_mid: Option<f64> = None;
+    for oe in edges {
+        let e = topo.edge(oe.edge())?;
+        if matches!(e.curve(), EdgeCurve::Line) {
+            continue;
+        }
+        let (sp, ep) = (
+            topo.vertex(e.start())?.point(),
+            topo.vertex(e.end())?.point(),
+        );
+        let (t0, t1) = e.curve().domain_with_endpoints(sp, ep);
+        let uv = |f: f64| {
+            surface.project_point(e.curve().evaluate_with_endpoints(
+                (t1 - t0).mul_add(f, t0),
+                sp,
+                ep,
+            ))
+        };
+        let (Some(a), Some(m), Some(b)) = (uv(0.25), uv(0.5), uv(0.75)) else {
+            continue;
+        };
+        if e.start() == e.end() {
+            if v_mid.is_none() && wrap(a.0 - b.0).abs() <= tol.angular.max(1e-9) {
+                v_mid = Some(m.1);
+            }
+        } else if u_mid.is_none() && wrap(b.0 - a.0).abs() > tol.angular.max(1e-9) {
+            u_mid = Some(m.0);
+        }
+    }
+    Ok(match (u_mid, v_mid) {
+        (Some(u), Some(v)) => surface.evaluate(u, v),
+        _ => None,
+    })
+}
+
 fn sample_face_interior(
     topo: &Topology,
     face_id: FaceId,
@@ -1374,6 +1425,14 @@ fn sample_face_interior(
                     v_max = v_max.max(v);
                 }
             }
+        }
+        // A band of a partial revolution is bounded by closed curves that
+        // hold `u` (a torus's tube circles at the revolve's two ends): its
+        // middle lies at the closed curve's `v` and the `u` an arc along the
+        // ring reaches halfway, as the cylinder rule above would put the
+        // sample on the end circle itself.
+        if let Some(pt) = closed_curve_holds_u(topo, face, edges, tol)? {
+            return Ok(pt);
         }
         if let Some(mid) = closed_mid
             && v_max - v_min > tol.linear
