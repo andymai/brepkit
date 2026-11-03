@@ -123,32 +123,15 @@ fn collect_edge_data(topo: &Topology, edges: &[EdgeId]) -> Result<Vec<EdgeData>,
         let start_pos = topo.vertex(edge.start())?.point();
         let end_pos = topo.vertex(edge.end())?.point();
         let (t0, t1) = edge.curve().domain_with_endpoints(start_pos, end_pos);
-
-        let n: usize = 16;
-        let mut min = start_pos;
-        let mut max = start_pos;
-        for i in 0..=n {
-            let t = t0 + (t1 - t0) * (i as f64 / n as f64);
-            let pt = edge.curve().evaluate_with_endpoints(t, start_pos, end_pos);
-            min = Point3::new(
-                min.x().min(pt.x()),
-                min.y().min(pt.y()),
-                min.z().min(pt.z()),
-            );
-            max = Point3::new(
-                max.x().max(pt.x()),
-                max.y().max(pt.y()),
-                max.z().max(pt.z()),
-            );
-        }
+        let span = super::helpers::edge_span_box(edge.curve(), start_pos, end_pos, 16);
 
         data.push(EdgeData {
             start_pos,
             end_pos,
             t0,
             t1,
-            bbox_min: min,
-            bbox_max: max,
+            bbox_min: span.min,
+            bbox_max: span.max,
         });
     }
     Ok(data)

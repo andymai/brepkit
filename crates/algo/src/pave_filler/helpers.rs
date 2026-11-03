@@ -8,12 +8,35 @@ use brepkit_math::nurbs::surface::NurbsSurface;
 use brepkit_math::tolerance::Tolerance;
 use brepkit_math::vec::Point3;
 use brepkit_topology::Topology;
-use brepkit_topology::edge::EdgeId;
+use brepkit_topology::edge::{EdgeCurve, EdgeId};
 use brepkit_topology::face::FaceId;
 use brepkit_topology::vertex::VertexId;
 
 use crate::ds::{GfaArena, Pave};
 use crate::error::AlgoError;
+
+/// The box of an edge's span from `start` to `end`: exact for a line, circle
+/// or ellipse, and over `samples + 1` points along any other curve. A circle
+/// sampled from a vertex off its axes' extremes misses them by up to its
+/// chords' sag, past an edge crossing it there.
+pub(super) fn edge_span_box(
+    curve: &EdgeCurve,
+    start: Point3,
+    end: Point3,
+    samples: usize,
+) -> Aabb3 {
+    let (t0, t1) = curve.domain_with_endpoints(start, end);
+    match curve {
+        EdgeCurve::Line => Aabb3::from_points([start, end]),
+        EdgeCurve::Circle(c) => c.arc_aabb(t0, t1),
+        EdgeCurve::Ellipse(e) => e.arc_aabb(t0, t1),
+        EdgeCurve::NurbsCurve(_) => Aabb3::from_points((0..=samples).map(|i| {
+            #[allow(clippy::cast_precision_loss)]
+            let t = t0 + (t1 - t0) * (i as f64 / samples as f64);
+            curve.evaluate_with_endpoints(t, start, end)
+        })),
+    }
+}
 
 /// A NURBS face's box grown to where its surface rises off the boundary
 /// between its edges (a lid flat along its rim), past `bounds`, the box of

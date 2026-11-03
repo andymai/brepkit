@@ -5177,8 +5177,8 @@ pub fn split_face_2d(
     // else stays in `sections` and reaches the impl unchanged.
     // The frame must be built from the same points the impl uses, so the
     // sub-face UVs and the projected circle centres agree; the containment
-    // polygon must follow wire traversal order (see
-    // [`collect_wire_points_oriented`]).
+    // polygon follows wire traversal order along each edge's own curve, so
+    // a face bounded by one circle (one vertex) still has an outline.
     let frame_pts = collect_wire_points(topo, face.outer_wire());
     let owned_frame;
     let cap_frame = if let Some(f) = frame {
@@ -5188,7 +5188,7 @@ pub fn split_face_2d(
         owned_frame = PlaneFrame::from_plane_face(normal, &frame_pts);
         &owned_frame
     };
-    let outer_poly: Vec<Point2> = collect_wire_points_oriented(topo, face.outer_wire())
+    let outer_poly: Vec<Point2> = sample_wire_outline(topo, face.outer_wire())
         .iter()
         .map(|&p| cap_frame.project(p))
         .collect();
@@ -5205,12 +5205,16 @@ pub fn split_face_2d(
             EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => None,
         };
         let closed = (s.start - s.end).length() < tol.linear && outer_poly.len() >= 3;
+        // A ring near the face's rim (one standing on a tube's top) has
+        // its centre within the margin of the outline but clears it all
+        // round, as a tangent corner circle does not.
         let cap_center = if closed && let Some((center, reach)) = conic {
             let center_uv = cap_frame.project(center);
             (super::classify_2d::point_in_polygon_2d(center_uv, &outer_poly)
-                && super::classify_2d::distance_to_polygon_boundary(center_uv, &outer_poly)
-                    > reach * CAP_INTERIORITY_MARGIN)
-                .then_some(center)
+                && (super::classify_2d::distance_to_polygon_boundary(center_uv, &outer_poly)
+                    > reach * CAP_INTERIORITY_MARGIN
+                    || conic_clears_outline(s, cap_frame, &outer_poly, reach)))
+            .then_some(center)
         } else if closed && matches!(s.curve_3d, EdgeCurve::NurbsCurve(_)) {
             interior_loop_center(s, cap_frame, &outer_poly)
         } else {
@@ -5281,6 +5285,70 @@ fn interior_loop_center(
     });
     let mean = sum * (1.0 / f64::from(n));
     Some(Point3::new(mean.x(), mean.y(), mean.z()))
+}
+
+/// Whether every sample of a closed conic section lies inside the outline
+/// and clears it by a hundredth of the conic's reach: the conic stays off the
+/// outline, which a corner circle tangent to it touches.
+fn conic_clears_outline(
+    section: &SectionEdge,
+    frame: &PlaneFrame,
+    outer_poly: &[Point2],
+    reach: f64,
+) -> bool {
+    let mut pts = Vec::with_capacity(OUTLINE_CURVE_SAMPLES);
+    super::pcurve_compute::sample_edge_uniform_native(
+        &section.curve_3d,
+        section.start,
+        section.end,
+        OUTLINE_CURVE_SAMPLES,
+        true,
+        &mut pts,
+    );
+    pts.iter().all(|&p| {
+        let uv = frame.project(p);
+        super::classify_2d::point_in_polygon_2d(uv, outer_poly)
+            && super::classify_2d::distance_to_polygon_boundary(uv, outer_poly)
+                > reach * CAP_CLEARANCE
+    })
+}
+
+/// How far a cap's samples clear the outline, as a share of its reach.
+const CAP_CLEARANCE: f64 = 0.01;
+
+/// Samples per curved edge of an outline, and of a conic tested against one:
+/// a chord of a circle in 64 sags 0.12% of its radius.
+const OUTLINE_CURVE_SAMPLES: usize = 64;
+
+/// A wire's outline in traversal order: each line's start, and each curved
+/// edge sampled along its own span.
+fn sample_wire_outline(topo: &Topology, wire_id: brepkit_topology::wire::WireId) -> Vec<Point3> {
+    let Ok(wire) = topo.wire(wire_id) else {
+        return Vec::new();
+    };
+    let mut pts = Vec::new();
+    for oe in wire.edges() {
+        let Ok(edge) = topo.edge(oe.edge()) else {
+            continue;
+        };
+        let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) else {
+            continue;
+        };
+        let n = if matches!(edge.curve(), EdgeCurve::Line) {
+            1
+        } else {
+            OUTLINE_CURVE_SAMPLES
+        };
+        super::pcurve_compute::sample_edge_uniform_native(
+            edge.curve(),
+            sv.point(),
+            ev.point(),
+            n,
+            oe.is_forward(),
+            &mut pts,
+        );
+    }
+    pts
 }
 
 /// Slack on the cap interiority test. A genuine drilled hole's centre clears
@@ -5455,34 +5523,6 @@ fn place_section_in_turn(e: &mut OrientedPCurveEdge, surface: &FaceSurface, lo: 
     );
 }
 
-/// Wire points in TRAVERSAL order, honouring each oriented edge's direction.
-///
-/// [`collect_wire_points`] pushes every edge's stored `start()` and ignores the
-/// orientation flag, so a wire carrying reversed edges comes back scrambled.
-/// Containment tests need the traversal-ordered outline, so they use this.
-fn collect_wire_points_oriented(
-    topo: &Topology,
-    wire_id: brepkit_topology::wire::WireId,
-) -> Vec<Point3> {
-    let Ok(wire) = topo.wire(wire_id) else {
-        return Vec::new();
-    };
-    let mut pts = Vec::new();
-    for oe in wire.edges() {
-        if let Ok(edge) = topo.edge(oe.edge()) {
-            let vid = if oe.is_forward() {
-                edge.start()
-            } else {
-                edge.end()
-            };
-            if let Ok(v) = topo.vertex(vid) {
-                pts.push(v.point());
-            }
-        }
-    }
-    pts
-}
-
 /// Carve closed cap circles and ellipses (see [`split_face_2d`]) into the
 /// base sub-faces.
 ///
@@ -5531,6 +5571,24 @@ fn distribute_cap_circles(
         // sampler can fold a loop carrying reversed arc sections into a
         // self-crossing polygon (see [`sample_wire_loop_uv_via_frame`]).
         let poly = sample_wire_loop_uv_via_frame(&sf.outer_wire, frame);
+        // Read on the sub-face's own lines and arcs where it has no NURBS
+        // edge: eight chords of a circular outline leave a cap's point off it.
+        let exact = |wire: &[OrientedPCurveEdge]| containment::exact_hole(wire, frame);
+        let outer_exact = exact(&sf.outer_wire);
+        let holes_exact: Vec<_> = sf.inner_wires.iter().map(|h| exact(h)).collect();
+        let in_outer = |p: Point2| match &outer_exact {
+            Some(pieces) => point_in_region(pieces, p, 0.0) == Some(true),
+            None => super::classify_2d::point_in_polygon_2d(p, &poly),
+        };
+        let in_hole = |p: Point2| {
+            sf.inner_wires
+                .iter()
+                .zip(&holes_exact)
+                .any(|(hole, pieces)| match pieces {
+                    Some(pieces) => point_in_region(pieces, p, 0.0) == Some(true),
+                    None => is_inside_any_hole(&p, std::slice::from_ref(hole)),
+                })
+        };
         let contained: Vec<SectionEdge> = if poly.len() < 3 {
             Vec::new()
         } else {
@@ -5538,10 +5596,7 @@ fn distribute_cap_circles(
                 .iter()
                 .enumerate()
                 .filter_map(|(i, cs)| {
-                    if assigned[i]
-                        || !super::classify_2d::point_in_polygon_2d(points_uv[i], &poly)
-                        || is_inside_any_hole(&points_uv[i], &sf.inner_wires)
-                    {
+                    if assigned[i] || !in_outer(points_uv[i]) || in_hole(points_uv[i]) {
                         return None;
                     }
                     assigned[i] = true;

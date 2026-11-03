@@ -1418,7 +1418,7 @@ const SEAM_ON_CIRCLE_TOL: f64 = 1e-6;
 struct SeamAnchor {
     anchor: Point3,
     rotated: Option<brepkit_math::nurbs::curve::NurbsCurve>,
-    pieces: Vec<(brepkit_math::nurbs::curve::NurbsCurve, Point3, Point3)>,
+    pieces: Vec<(EdgeCurve, Point3, Point3)>,
 }
 
 /// Compute seam-anchored start points for closed intersection curves.
@@ -1479,12 +1479,13 @@ fn compute_seam_anchors(topo: &Topology, arena: &GfaArena) -> BTreeMap<usize, Se
             let Some(anchor) = seam_anchor_on_circle(topo, face, circle) else {
                 continue;
             };
+            let pieces = arcs_at_coincident_rim_vertices(topo, arena, curve_ds, circle, anchor);
             anchors.insert(
                 idx,
                 SeamAnchor {
                     anchor,
                     rotated: None,
-                    pieces: Vec::new(),
+                    pieces,
                 },
             );
             break;
@@ -1832,7 +1833,10 @@ fn cut_window_at_seams(
     Some(SeamAnchor {
         anchor: from,
         rotated: None,
-        pieces,
+        pieces: pieces
+            .into_iter()
+            .map(|(piece, a, b)| (EdgeCurve::NurbsCurve(piece), a, b))
+            .collect(),
     })
 }
 
@@ -1922,7 +1926,10 @@ fn anchor_and_cut_loop(
     Some(SeamAnchor {
         anchor,
         rotated: Some(rotated),
-        pieces,
+        pieces: pieces
+            .into_iter()
+            .map(|(piece, a, b)| (EdgeCurve::NurbsCurve(piece), a, b))
+            .collect(),
     })
 }
 
@@ -1957,6 +1964,151 @@ pub fn start_closed_curve_at(
 /// Returns `None` if the face has no non-degenerate seam Line edge, the
 /// projections fail, or the seam point at the circle's v does not actually
 /// lie on the circle (e.g. the circle is not a constant-v iso-curve).
+/// Whether a closed circle or ellipse lies in a plane face's plane and wholly
+/// off the face, in one of its holes or past its outline, read on the face's
+/// own lines and arcs. Every sample must lie outside, and every two
+/// neighbouring samples stand farther from the face's boundary together than
+/// the arc joining them is long, so the curve cannot cross it there; arcs
+/// that fail are halved down to a depth, past which the curve counts as
+/// meeting the face. `false` for any other curve or face.
+fn closed_conic_off_plane_face(
+    topo: &Topology,
+    face_id: FaceId,
+    curve: &EdgeCurve,
+    tol: f64,
+) -> bool {
+    use brepkit_math::region2d::{distance_to_boundary, point_in_region};
+    use brepkit_math::vec::Point2;
+    const SAMPLES: u32 = 16;
+    const DEPTH: u32 = 8;
+    let Ok(face) = topo.face(face_id) else {
+        return false;
+    };
+    let FaceSurface::Plane { normal, d } = *face.surface() else {
+        return false;
+    };
+    // `reach` bounds the curve's speed, so `reach` times an angle bounds
+    // the length of the arc it spans.
+    let (center, reach, at): (Point3, f64, Box<dyn Fn(f64) -> Point3 + '_>) = match curve {
+        EdgeCurve::Circle(c) => (c.center(), c.radius(), Box::new(|t| c.evaluate(t))),
+        EdgeCurve::Ellipse(e) => (e.center(), e.semi_major(), Box::new(|t| e.evaluate(t))),
+        EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => return false,
+    };
+    let Ok(frame) = brepkit_math::frame::Frame3::from_normal(center, normal) else {
+        return false;
+    };
+    let Ok(Some(pieces)) =
+        brepkit_topology::planar::face_boundary_2d(topo, face_id, center, frame.x, frame.y)
+    else {
+        return false;
+    };
+    let flat = |t: f64| -> Option<Point2> {
+        let p = at(t);
+        let off = p - center;
+        ((normal.dot(brepkit_math::vec::Vec3::new(p.x(), p.y(), p.z())) - d).abs() <= tol)
+            .then(|| Point2::new(off.dot(frame.x), off.dot(frame.y)))
+    };
+    let outside = |q: Point2| point_in_region(&pieces, q, tol) == Some(false);
+    let step = std::f64::consts::TAU / f64::from(SAMPLES);
+    let mut stack: Vec<(f64, f64, u32)> = (0..SAMPLES)
+        .map(|k| (step * f64::from(k), step * f64::from(k + 1), 0))
+        .collect();
+    while let Some((t0, t1, depth)) = stack.pop() {
+        let (Some(a), Some(b)) = (flat(t0), flat(t1)) else {
+            return false;
+        };
+        if !outside(a) || !outside(b) {
+            return false;
+        }
+        if distance_to_boundary(&pieces, a) + distance_to_boundary(&pieces, b) > reach * (t1 - t0) {
+            continue;
+        }
+        if depth >= DEPTH {
+            return false;
+        }
+        stack.push((t0, 0.5 * (t0 + t1), depth + 1));
+        stack.push((0.5 * (t0 + t1), t1, depth + 1));
+    }
+    true
+}
+
+/// A full section circle's arcs, from `anchor` round, between the vertices of
+/// a closed boundary circle of one of its two faces that coincides with it
+/// and that the pave filler split (a tube's rim under a coaxial wall whose
+/// seam crosses it at another angle). Every face the section bounds then
+/// shares the rim's vertices. Empty unless that gives three vertices or more:
+/// two arcs between the same two vertices would weld into one edge.
+fn arcs_at_coincident_rim_vertices(
+    topo: &Topology,
+    arena: &GfaArena,
+    curve_ds: &crate::ds::IntersectionCurveDS,
+    circle: &brepkit_math::curves::Circle3D,
+    anchor: Point3,
+) -> Vec<(EdgeCurve, Point3, Point3)> {
+    use std::f64::consts::TAU;
+    let near = |p: Point3, q: Point3| (p - q).length() <= SEAM_ON_CIRCLE_TOL;
+    let mut points = vec![anchor];
+    for fid in [curve_ds.face_a, curve_ds.face_b] {
+        let Ok(face) = topo.face(fid) else { continue };
+        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            let Ok(wire) = topo.wire(wid) else { continue };
+            for oe in wire.edges() {
+                let Ok(edge) = topo.edge(oe.edge()) else {
+                    continue;
+                };
+                let EdgeCurve::Circle(rim) = edge.curve() else {
+                    continue;
+                };
+                if edge.start() != edge.end()
+                    || (rim.radius() - circle.radius()).abs() > SEAM_ON_CIRCLE_TOL
+                    || !near(rim.center(), circle.center())
+                    || rim.normal().dot(circle.normal()).abs() < 1.0 - 1e-9
+                {
+                    continue;
+                }
+                let Some(blocks) = arena.edge_pave_blocks.get(&oe.edge()) else {
+                    continue;
+                };
+                let leaves = arena.collect_leaf_pave_blocks(blocks);
+                if leaves.len() < 2 {
+                    continue;
+                }
+                for pb in leaves.iter().filter_map(|&id| arena.pave_blocks.get(id)) {
+                    for pave in [pb.start, pb.end] {
+                        if let Ok(v) = topo.vertex(arena.resolve_vertex(pave.vertex))
+                            && !points.iter().any(|&q| near(q, v.point()))
+                        {
+                            points.push(v.point());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if points.len() < 3 {
+        return Vec::new();
+    }
+    let Ok(start) = brepkit_math::curves::Circle3D::new_with_ref(
+        circle.center(),
+        circle.normal(),
+        circle.radius(),
+        anchor - circle.center(),
+    ) else {
+        return Vec::new();
+    };
+    let mut along: Vec<(f64, Point3)> = points
+        .iter()
+        .map(|&p| (start.project(p).rem_euclid(TAU), p))
+        .collect();
+    along[0].0 = 0.0;
+    along.sort_by(|a, b| a.0.total_cmp(&b.0));
+    along.push((TAU, anchor));
+    along
+        .windows(2)
+        .map(|w| (EdgeCurve::Circle(start.clone()), w[0].1, w[1].1))
+        .collect()
+}
+
 fn seam_anchor_on_circle(
     topo: &Topology,
     face: &Face,
@@ -2289,6 +2441,11 @@ fn build_section_edges(
                 {
                     continue;
                 }
+                // A partner's rim circle lying wholly in one of this plane
+                // face's holes, or past its outline, splits nothing here.
+                if closed_conic_off_plane_face(topo, face_id, &curve_ds.curve, tol) {
+                    continue;
+                }
 
                 // Find start/end 3D points by evaluating the curve at its
                 // parametric endpoints. For closed curves (circles), start ≈ end.
@@ -2366,7 +2523,7 @@ fn build_section_edges(
                     Some(seam) if !seam.pieces.is_empty() => seam
                         .pieces
                         .iter()
-                        .map(|(piece, from, to)| (EdgeCurve::NurbsCurve(piece.clone()), *from, *to))
+                        .map(|(piece, from, to)| (piece.clone(), *from, *to))
                         .collect(),
                     Some(SeamAnchor {
                         anchor,
