@@ -1327,6 +1327,36 @@ fn grid_seeder_budget_keeps_a_shallow_crossing() {
 }
 
 #[test]
+fn grid_seeder_refines_each_sample_once_after_its_first_seed() {
+    // A gentle crossing along x = 0.5: each sample has some fifty partners
+    // within the grid's closeness threshold, and refining every close pair
+    // once a seed exists made the seeder quartic in the grid.
+    let s1 = flat_at(0.0);
+    let s2 = NurbsSurface::new(
+        1,
+        1,
+        vec![0.0, 0.0, 1.0, 1.0],
+        vec![0.0, 0.0, 1.0, 1.0],
+        vec![
+            vec![Point3::new(0.0, 0.0, -0.02), Point3::new(0.0, 1.0, -0.02)],
+            vec![Point3::new(1.0, 0.0, 0.02), Point3::new(1.0, 1.0, 0.02)],
+        ],
+        vec![vec![1.0, 1.0], vec![1.0, 1.0]],
+    )
+    .unwrap();
+    let before = REFINE_CALLS.with(std::cell::Cell::get);
+    let seeds = find_ssi_seeds_grid(&s1, &s2, 32, 1e-6);
+    let refinements = REFINE_CALLS.with(std::cell::Cell::get) - before;
+    assert!(!seeds.is_empty(), "the crossing must still be seeded");
+    // The mutual nearest pairs, the bounded closest set, and each sample's
+    // nearest partner from either side.
+    assert!(
+        refinements <= 3 * 32 * 32 + 256,
+        "grid seeder refined {refinements} pairs"
+    );
+}
+
+#[test]
 fn grid_seeder_budget_keeps_a_crossing_confined_to_one_corner() {
     // s2 dips below z=0 only near the (1, 1) corner: almost every sample pair
     // is close but far from the crossing, so the closest-first order and

@@ -1073,9 +1073,8 @@ pub(super) fn find_ssi_seeds_grid(
     // first; Newton is local and a transversal crossing converges from its
     // closest samples, so when none of them converges the pair is grazing
     // without meeting (or touching tangentially, which the marcher cannot
-    // trace either) and the search stops. Once any seed exists the full
-    // close-pair pass streams as before, so a second branch that has no
-    // mutual nearest pair is still found.
+    // trace either) and the search stops. Once any seed exists, every
+    // sample's nearest partner is refined too.
     let mut nearest_in_2: Vec<(usize, f64)> = vec![(usize::MAX, f64::MAX); pts1.len()];
     let mut nearest_in_1: Vec<(usize, f64)> = vec![(usize::MAX, f64::MAX); pts2.len()];
     let mut closest: std::collections::BinaryHeap<ClosePair> = std::collections::BinaryHeap::new();
@@ -1132,14 +1131,29 @@ pub(super) fn find_ssi_seeds_grid(
     if seeds.is_empty() {
         return seeds;
     }
-    for &(u1, v1, p1) in &pts1 {
-        for &(u2, v2, p2) in &pts2 {
-            let dist = (p1 - p2).length();
-            if dist < threshold
-                && let Some(refined) = refine_ssi_point(s1, s2, u1, v1, u2, v2, tolerance)
-            {
-                push_seed(&mut seeds, refined);
-            }
+    // Every sample's nearest partner, from either side: a second branch with
+    // no mutual nearest pair still holds samples whose nearest partner lies on
+    // it. Newton from every pair within the threshold (130,000 of them on a
+    // wide band against a narrow wall) lands on the same few branches.
+    let one_sided = nearest_in_2
+        .iter()
+        .enumerate()
+        .map(|(i, &(k, dist))| (i, k, dist))
+        .chain(
+            nearest_in_1
+                .iter()
+                .enumerate()
+                .map(|(k, &(i, dist))| (i, k, dist)),
+        );
+    for (i, k, dist) in one_sided {
+        let mutual = nearest_in_2[i].0 == k && nearest_in_1[k].0 == i;
+        if dist < threshold
+            && !mutual
+            && let Some(refined) = refine_ssi_point(
+                s1, s2, pts1[i].0, pts1[i].1, pts2[k].0, pts2[k].1, tolerance,
+            )
+        {
+            push_seed(&mut seeds, refined);
         }
     }
 
