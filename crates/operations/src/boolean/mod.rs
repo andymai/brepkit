@@ -2816,6 +2816,65 @@ fn detect_trivial_relation(
             })
         };
 
+    // A torus's axis lies outside it, `sqrt(R^2 + t^2) - r` clear at `t`
+    // along it (a horn torus touches it at its pinch), so a solid holding a
+    // point of the axis clear of the torus is not inside it, though every
+    // vertex, edge probe and its centre lie in the tube: a box spanning the
+    // torus's hole.
+    let axis_outside = |topo: &Topology,
+                        inner: SolidId,
+                        outer: Option<&brepkit_algo::classifier::AnalyticClassifier>,
+                        bb: &Option<(Point3, Point3)>|
+     -> bool {
+        let (
+            Some(brepkit_algo::classifier::AnalyticClassifier::Torus {
+                center,
+                axis,
+                major_radius,
+                minor_radius,
+            }),
+            Some((lo, hi)),
+        ) = (outer, *bb)
+        else {
+            return false;
+        };
+        let (mut t0, mut t1) = (f64::NEG_INFINITY, f64::INFINITY);
+        for (o, d, l, h) in [
+            (center.x(), axis.x(), lo.x(), hi.x()),
+            (center.y(), axis.y(), lo.y(), hi.y()),
+            (center.z(), axis.z(), lo.z(), hi.z()),
+        ] {
+            if d.abs() < 1e-12 {
+                if o < l || o > h {
+                    return false;
+                }
+            } else {
+                let (a, b) = ((l - o) / d, (h - o) / d);
+                t0 = t0.max(a.min(b));
+                t1 = t1.min(a.max(b));
+            }
+        }
+        if t0 > t1 {
+            return false;
+        }
+        let (dx, dy, dz) = (hi.x() - lo.x(), hi.y() - lo.y(), hi.z() - lo.z());
+        let defl = (dx.mul_add(dx, dy.mul_add(dy, dz * dz)).sqrt() * 0.01).max(1e-6);
+        (0..=8).any(|k| {
+            let t = (t1 - t0).mul_add(f64::from(k) / 8.0, t0);
+            major_radius.hypot(t) - minor_radius > tol.linear * 10.0
+                && matches!(
+                    crate::classify::classify_point(
+                        topo,
+                        inner,
+                        *center + *axis * t,
+                        defl,
+                        tol.linear
+                    ),
+                    Ok(crate::classify::PointClassification::Inside)
+                )
+        })
+    };
+
     // The boundary witness guards both terms: the analytic term tests the
     // tool's VERTICES, and a round tool (two seam vertices on a cylinder)
     // can hold every vertex inside the blank while its rims leave it. A
@@ -2831,7 +2890,8 @@ fn detect_trivial_relation(
                 && !volume_refutes(topo, b, a)))
         && nurbs_faces_proved_inside(topo, b, a, tol)
         && !center_outside(topo, b, a, &aabb_b)
-        && !boundary_probe_outside(topo, b, a, &aabb_b);
+        && !boundary_probe_outside(topo, b, a, &aabb_b)
+        && !axis_outside(topo, b, ca, &aabb_b);
     let a_in_b = !hollow(b)
         && ((all_a_verts_in_b && aabb_encloses(&aabb_a, &aabb_b))
             || (cb.is_none()
@@ -2839,7 +2899,8 @@ fn detect_trivial_relation(
                 && !volume_refutes(topo, a, b)))
         && nurbs_faces_proved_inside(topo, a, b, tol)
         && !center_outside(topo, a, b, &aabb_a)
-        && !boundary_probe_outside(topo, a, b, &aabb_a);
+        && !boundary_probe_outside(topo, a, b, &aabb_a)
+        && !axis_outside(topo, a, cb, &aabb_a);
 
     TrivialRelation {
         identical: aabbs_match && all_b_verts_in_a && all_a_verts_in_b,
