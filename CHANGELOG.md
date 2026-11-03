@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.6.24](https://github.com/andymai/brepkit/compare/v4.6.23...v4.6.24) (2026-11-03)
+
+
+### Bug Fixes
+
+* **algo:** fuse two revolved half rings into the ring exactly ([#2281](https://github.com/andymai/brepkit/issues/2281)) ([64f8fd4](https://github.com/andymai/brepkit/commit/64f8fd426ef878be8b0d209aa684c1fee91e5d4e)), closes [#2183](https://github.com/andymai/brepkit/issues/2183)
+
 ## [4.6.23](https://github.com/andymai/brepkit/compare/v4.6.22...v4.6.23) (2026-11-03)
 
 
