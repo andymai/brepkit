@@ -1,0 +1,23 @@
+crates/operations/tests/torus_cut_by_a_tilted_plane.rs
+  s_e2239106c550d5::t_e7b5ec0d324059 1-47,88,90,95-98
+  s_e2239106c550d5::t_b72828f4cb806a 48-58
+  s_e2239106c550d5::t_db221258f93d2d 59-87,89,91-94
+crates/operations/tests/box_across_a_torus_hole.rs
+  s_e2239106c550d5::t_45d7e8e6ea7d27 99-100,111-134,136-137
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5df6cdae311b6cb92c915fd202fb6dba70c398c4",
+  "prompts": {},
+  "sessions": {
+    "s_e2239106c550d5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "26ec17ea-56f1-450e-99f1-3ada95f60730",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
