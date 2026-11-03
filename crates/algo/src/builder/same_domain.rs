@@ -2241,7 +2241,8 @@ fn analytic_faces_overlap(
 
 /// The axial interval of a cylinder or cone face that is a whole band between
 /// two level rims, read through `surface`: no holes, every edge either a
-/// ruling or level at one of the two ends. `None` for any other face.
+/// ruling or a circle level at one of the two ends. `None` for any other
+/// face.
 fn level_band(
     topo: &Topology,
     face_id: FaceId,
@@ -2277,10 +2278,14 @@ fn level_band(
             .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), &(_, v)| {
                 (lo.min(v), hi.max(v))
             });
-        if hi - lo <= tol.linear {
-            levels.push(lo);
-        } else if !matches!(edge.curve(), EdgeCurve::Line) {
-            return None;
+        // Only a circle can be read level from samples: a NURBS rim could
+        // dip between them, and an ellipse on the wall is never level.
+        match edge.curve() {
+            EdgeCurve::Circle(_) if hi - lo <= tol.linear => levels.push(lo),
+            EdgeCurve::Line => {}
+            EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_) => {
+                return None;
+            }
         }
     }
     let lo = levels.iter().copied().fold(f64::INFINITY, f64::min);
