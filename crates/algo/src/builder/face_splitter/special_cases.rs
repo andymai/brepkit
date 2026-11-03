@@ -4992,9 +4992,9 @@ fn outline_samples(e: &OrientedPCurveEdge, n: usize) -> Vec<Point3> {
 }
 
 /// Whether a loop on a cylinder turns once round its axis. Each edge's angle
-/// is followed by bisection until no step turns past an eighth of a turn, so
-/// a parameterization crowded into one end of an edge cannot hide a turn
-/// between two samples.
+/// is followed from its knot spans by bisection until no step turns past an
+/// eighth of a turn, so a parameterization crowded into one end of an edge
+/// cannot hide a turn between two samples.
 fn loop_winds_cylinder(surface: &FaceSurface, loop_edges: &[OrientedPCurveEdge]) -> bool {
     let FaceSurface::Cylinder(cyl) = surface else {
         return false;
@@ -5009,8 +5009,37 @@ fn loop_winds_cylinder(surface: &FaceSurface, loop_edges: &[OrientedPCurveEdge])
             cyl.project_point(e.curve_3d.evaluate_with_endpoints(t, from, to))
                 .0
         };
+        // Start from four pieces of each knot span (sixteen of a curve with
+        // none): one span of a rational arc turns less than a half turn, so
+        // no piece can hide a whole turn between its ends however crowded
+        // the parameter is.
+        let (lo, hi) = (t0.min(t1), t0.max(t1));
+        let mut breaks: Vec<f64> = match &e.curve_3d {
+            EdgeCurve::NurbsCurve(n) => n
+                .knots()
+                .iter()
+                .copied()
+                .filter(|&k| k > lo && k < hi)
+                .collect(),
+            EdgeCurve::Line | EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => Vec::new(),
+        };
+        breaks.push(lo);
+        breaks.push(hi);
+        breaks.sort_by(f64::total_cmp);
+        breaks.dedup();
+        let per_span: u32 = if breaks.len() > 2 { 4 } else { 16 };
+        let mut stack = Vec::new();
+        for w in breaks.windows(2) {
+            for k in 0..per_span {
+                let a = w[0] + (w[1] - w[0]) * f64::from(k) / f64::from(per_span);
+                let b = w[0] + (w[1] - w[0]) * f64::from(k + 1) / f64::from(per_span);
+                stack.push((a, angle(a), b, angle(b), 0_u32));
+            }
+        }
+        // `lo` to `hi` runs with the curve's parameter; flip when its
+        // domain runs the other way.
+        let sense = if t1 >= t0 { 1.0 } else { -1.0 };
         let mut along = 0.0;
-        let mut stack = vec![(t0, angle(t0), t1, angle(t1), 0_u32)];
         while let Some((a, ua, b, ub, depth)) = stack.pop() {
             let m = 0.5 * (a + b);
             let um = angle(m);
@@ -5022,7 +5051,11 @@ fn loop_winds_cylinder(surface: &FaceSurface, loop_edges: &[OrientedPCurveEdge])
                 stack.push((m, um, b, ub, depth + 1));
             }
         }
-        swept += if e.forward { along } else { -along };
+        swept += if e.forward {
+            sense * along
+        } else {
+            -sense * along
+        };
     }
     swept.abs() > turn / 2.0
 }
@@ -7356,8 +7389,9 @@ mod tests {
 
     /// A whole circle round a cylinder's axis winds it however its parameter
     /// is spread: an exact rational circle whose last three quarters crowd
-    /// into the last 3% of its knots, read either way, and a circle of two
-    /// arcs read backwards. A loop beside the axis does not wind it.
+    /// into the last 3% of its knots, one whose first seven eighths crowd into
+    /// the first 35%, each read either way, and a circle of two arcs read
+    /// backwards. A loop beside the axis does not wind it.
     #[test]
     fn a_loop_round_the_axis_winds_whatever_its_parameterization() {
         use brepkit_math::nurbs::curve::NurbsCurve;
@@ -7389,10 +7423,36 @@ mod tests {
             vec![1.0, w, 1.0, w, 1.0, w, 1.0, w, 1.0],
         )
         .unwrap();
+        // Eight arcs of 45 degrees, the first seven in the first 35% of the
+        // parameter: at its middle the curve is already on its last arc.
+        let eighth = (PI / 8.0).cos();
+        let mut octants = Vec::new();
+        let mut octant_weights = Vec::new();
+        for k in 0..8 {
+            let a = f64::from(k) * PI / 4.0;
+            let m = a + PI / 8.0;
+            octants.push(Point3::new(a.cos(), a.sin(), 0.5));
+            octants.push(Point3::new(m.cos() / eighth, m.sin() / eighth, 0.5));
+            octant_weights.extend([1.0, eighth]);
+        }
+        octants.push(Point3::new(1.0, 0.0, 0.5));
+        octant_weights.push(1.0);
+        let mut octant_knots = vec![0.0, 0.0, 0.0];
+        for k in 1..8 {
+            let t = 0.05 * f64::from(k);
+            octant_knots.extend([t, t]);
+        }
+        octant_knots.extend([1.0, 1.0, 1.0]);
+        let late = NurbsCurve::new(2, octant_knots, octants, octant_weights).unwrap();
         let start = Point3::new(1.0, 0.0, 0.5);
-        for forward in [true, false] {
+        for (curve, forward) in [
+            (&crowded, true),
+            (&crowded, false),
+            (&late, true),
+            (&late, false),
+        ] {
             let edge = OrientedPCurveEdge {
-                curve_3d: EdgeCurve::NurbsCurve(crowded.clone()),
+                curve_3d: EdgeCurve::NurbsCurve(curve.clone()),
                 pcurve: dummy_pcurve(),
                 start_uv: Point2::new(0.0, 0.0),
                 end_uv: Point2::new(0.0, 0.0),
@@ -7402,7 +7462,11 @@ mod tests {
                 source_edge_idx: None,
                 pave_block_id: None,
             };
-            assert!(loop_winds_cylinder(&cyl, &[edge]), "forward {forward}");
+            assert!(
+                loop_winds_cylinder(&cyl, &[edge]),
+                "{} spans, forward {forward}",
+                curve.knots().len()
+            );
         }
         let circle =
             Circle3D::new(Point3::new(0.0, 0.0, 0.5), Vec3::new(0.0, 0.0, 1.0), 1.0).unwrap();
