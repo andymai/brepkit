@@ -1975,9 +1975,10 @@ fn closed_conic_off_plane_face(
 /// wholly on the face, `Some(false)` wholly off it. Every sample must read
 /// the same side, and every two neighbouring samples stand farther from the
 /// boundary together than the arc joining them is long, so the curve cannot
-/// cross it there; arcs that fail are halved down to a depth. `None` when the
-/// curve meets the boundary or cannot be read (another curve or face, a NURBS
-/// edge, a sample off the plane).
+/// cross it there; arcs that fail are halved down to a depth. A face with a
+/// NURBS edge is read through chords ([`chorded_boundary`]). `None` when the
+/// curve meets the boundary or cannot be read (another curve or face, a
+/// sample off the plane).
 pub(super) fn conic_side_of_plane_face(
     topo: &Topology,
     face_id: FaceId,
@@ -2000,9 +2001,15 @@ pub(super) fn conic_side_of_plane_face(
         EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => return None,
     };
     let frame = brepkit_math::frame::Frame3::from_normal(center, normal).ok()?;
-    let pieces =
-        brepkit_topology::planar::face_boundary_2d(topo, face_id, center, frame.x, frame.y)
-            .ok()??;
+    // With a NURBS edge the boundary is read through chords, every distance
+    // to it shrunk by how far they stray from their curves.
+    let (pieces, slack) =
+        match brepkit_topology::planar::face_boundary_2d(topo, face_id, center, frame.x, frame.y)
+            .ok()?
+        {
+            Some(pieces) => (pieces, 0.0),
+            None => chorded_boundary(topo, face, center, frame.x, frame.y)?,
+        };
     let flat = |t: f64| -> Option<Point2> {
         let p = at(t);
         let off = p - center;
@@ -2017,13 +2024,15 @@ pub(super) fn conic_side_of_plane_face(
     while let Some((t0, t1, depth)) = stack.pop() {
         let (a, b) = (flat(t0)?, flat(t1)?);
         for q in [a, b] {
-            let here = point_in_region(&pieces, q, tol)?;
+            let here = point_in_region(&pieces, q, tol + slack)?;
             if side.is_some_and(|s| s != here) {
                 return None;
             }
             side = Some(here);
         }
-        if distance_to_boundary(&pieces, a) + distance_to_boundary(&pieces, b) > reach * (t1 - t0) {
+        if distance_to_boundary(&pieces, a) + distance_to_boundary(&pieces, b) - 2.0 * slack
+            > reach * (t1 - t0)
+        {
             continue;
         }
         if depth >= DEPTH {
@@ -2033,6 +2042,68 @@ pub(super) fn conic_side_of_plane_face(
         stack.push((0.5 * (t0 + t1), t1, depth + 1));
     }
     side
+}
+
+/// A plane face's boundary as chords in the plane through `origin` spanned
+/// by `x` and `y`, holes included, with the farthest a chord's middle stands
+/// off its curve's, doubled. Lines are exact; a circle or ellipse is cut every
+/// 64th of a turn and a NURBS edge 16 times per knot span.
+fn chorded_boundary(
+    topo: &Topology,
+    face: &Face,
+    origin: Point3,
+    x: brepkit_math::vec::Vec3,
+    y: brepkit_math::vec::Vec3,
+) -> Option<(Vec<brepkit_math::region2d::Boundary2>, f64)> {
+    use brepkit_math::region2d::Boundary2;
+    use brepkit_math::vec::Point2;
+    let flat = |p: Point3| {
+        let off = p - origin;
+        Point2::new(off.dot(x), off.dot(y))
+    };
+    let mut pieces = Vec::new();
+    let mut sag = 0.0_f64;
+    for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+        for oe in topo.wire(wid).ok()?.edges() {
+            let edge = topo.edge(oe.edge()).ok()?;
+            let (a, b) = (
+                topo.vertex(edge.start()).ok()?.point(),
+                topo.vertex(edge.end()).ok()?.point(),
+            );
+            let curve = edge.curve();
+            let (t0, t1) = curve.domain_with_endpoints(a, b);
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let n = match curve {
+                EdgeCurve::Line => 1,
+                EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => {
+                    ((64.0 * (t1 - t0).abs() / std::f64::consts::TAU).ceil() as usize).max(4)
+                }
+                EdgeCurve::NurbsCurve(nurbs) => {
+                    let (lo, hi) = (t0.min(t1), t0.max(t1));
+                    let spans = 1 + nurbs
+                        .knots()
+                        .windows(2)
+                        .filter(|w| w[1] > w[0] && w[0] > lo && w[0] < hi)
+                        .count();
+                    16 * spans
+                }
+            };
+            #[allow(clippy::cast_precision_loss)]
+            let at = |k: usize| (t1 - t0).mul_add(k as f64 / n as f64, t0);
+            for k in 0..n {
+                let (p, q) = (
+                    curve.evaluate_with_endpoints(at(k), a, b),
+                    curve.evaluate_with_endpoints(at(k + 1), a, b),
+                );
+                if !matches!(curve, EdgeCurve::Line) {
+                    let mid = curve.evaluate_with_endpoints(0.5 * (at(k) + at(k + 1)), a, b);
+                    sag = sag.max((mid - (p + (q - p) * 0.5)).length());
+                }
+                pieces.push(Boundary2::Segment(flat(p), flat(q)));
+            }
+        }
+    }
+    Some((pieces, 2.0 * sag))
 }
 
 /// A full section circle's arcs, from `anchor` round, between the vertices of
@@ -5529,6 +5600,56 @@ mod tests {
             conic_side_of_plane_face(&topo, face, &curve, 1e-7),
             Some(false)
         );
+    }
+
+    /// A square of half-width 2 with one side stored as a straight NURBS
+    /// edge is read through chords: circles of radius 1.94 and 1.95 about
+    /// its centre lie on it, and one of radius 2.5 meets its boundary.
+    #[test]
+    fn a_circle_reads_on_a_plane_face_with_a_nurbs_side() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        let mut topo = Topology::new();
+        let corners = [(-2.0, -2.0), (2.0, -2.0), (2.0, 2.0), (-2.0, 2.0)];
+        let verts: Vec<_> = corners
+            .iter()
+            .map(|&(x, y)| topo.add_vertex(Vertex::new(Point3::new(x, y, 0.0), 1e-7)))
+            .collect();
+        let mut sides = Vec::new();
+        for k in 0..4 {
+            let (a, b) = (verts[k], verts[(k + 1) % 4]);
+            let curve = if k == 1 {
+                let (p, q) = (corners[1], corners[2]);
+                EdgeCurve::NurbsCurve(
+                    NurbsCurve::new(
+                        1,
+                        vec![0.0, 0.0, 1.0, 1.0],
+                        vec![Point3::new(p.0, p.1, 0.0), Point3::new(q.0, q.1, 0.0)],
+                        vec![1.0, 1.0],
+                    )
+                    .unwrap(),
+                )
+            } else {
+                EdgeCurve::Line
+            };
+            let edge = topo.add_edge(Edge::new(a, b, curve));
+            sides.push(brepkit_topology::wire::OrientedEdge::new(edge, true));
+        }
+        let wire = topo.add_wire(brepkit_topology::wire::Wire::new(sides, true).unwrap());
+        let face = topo.add_face(Face::new(
+            wire,
+            vec![],
+            FaceSurface::Plane { normal: z, d: 0.0 },
+        ));
+        for (r, want) in [(1.94, Some(true)), (1.95, Some(true)), (2.5, None)] {
+            let circle =
+                EdgeCurve::Circle(Circle3D::new(Point3::new(0.0, 0.0, 0.0), z, r).unwrap());
+            assert_eq!(
+                conic_side_of_plane_face(&topo, face, &circle, 1e-7),
+                want,
+                "radius {r}"
+            );
+        }
     }
 
     /// A chord shares both ends with the arc it subtends; only an edge that
