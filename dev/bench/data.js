@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793700806084,
+  "lastUpdate": 1793716206663,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -65069,6 +65069,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 28173264,
             "range": "± 53693",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f56bfeffd48ba2736d3d4bc28d9f271d5a8b569d",
+          "message": "fix(operations): keep a box across a torus's hole from reading as inside the torus (#2287)\n\nIntersecting a torus with a box that spans the torus's hole now keeps\nonly the part of the box inside the torus. Today it returns the whole\nbox: a torus of radii 5 and 4 (its tube 1 to 9 from the axis)\nintersected with the box [-2, 6] x [-2, 2] x [-1, 1] gives 64, where\n57.168107 is exact, and the cut builds the box as a cavity in the torus\n(1515.137 against 1521.969). With this change both match the closed\nform.\n\nBefore running the general boolean, `detect_trivial_relation` checks\nwhether one solid lies inside the other and, if so, returns it directly.\nFor this box every vertex, every edge probe and the box's centre lie in\nthe torus's tube, and its bounding box lies within the torus's, so\ncontainment was accepted. The box leaves the torus only in the hole,\nwhere nothing was sampled.\n\n## Change\n\n- A torus's axis lies outside the torus, `sqrt(R^2 + t^2) - r` clear of\nit at `t` along the axis (a horn torus touches it at its pinch). The\naxis enters and leaves the other solid only where it meets one of that\nsolid's surfaces, so the axis is cut at those meetings within the\nsolid's bounding box and each stretch between them is probed at a\nquarter, a half and three quarters. A probe inside the solid or on its\nboundary (the axis lying in one of its faces) and clear of the torus\nrefutes containment, however thin the solid is along the axis. The\nprobes share one classifier, so its face index is built once.\n- The check crate's ray-surface intersectors\n(`brepkit_check::classify::ray_surface`) are public for it.\n\nThin boxes crossing the axis at a slant (one 0.02 thick turned 0.5\nradians, one 0.002 thick turned 0.2) are no longer read as inside the\ntorus, but the general boolean then falls back to a mesh on them. On the\nfirst, the intersect reads 0.5245 of a 0.6 box, while the cut comes out\n0.8% low from the mesh torus. Before this change both returned\nexact-looking, wrong solids.\n\nI found this while probing #2178. A horn torus (major radius equal to\nminor) with the box [-1, 1]^3 around its pinch hit the same shortcut,\nand with this change that intersect is exact (7.987251). Horn tori stay\nrejected by `make_torus`: a thin box through the pinch still comes out\nwrong.\n\n## Tests\n\n- `box_across_a_torus_hole.rs`: the off-centre box, a centred one and\none whose face x = 0 holds the axis (it keeps half the hole), each\nintersected with and cut from the torus, upright, turned and mirrored,\nagainst the closed form; then the two thin slanted boxes, whose\nintersect must keep less than 95% of the box. On `main` it fails at its\nfirst case, the intersect at 64. With nine samples across the box\ninstead of the crossings it fails on the first thin box, and counting\nonly probes inside the box it fails on the box with a face on the axis;\nboth come back whole.\n- The algo (367), check (82), operations (1078) and wasm (262) library\ntests pass, as do the io and operations integration suites.\n- The pose sweep and truth audit outputs are identical to `main`'s.",
+          "timestamp": "2026-11-03T06:27:32-08:00",
+          "tree_id": "43423426e209f69810865555eb990e1c4a27a788",
+          "url": "https://github.com/andymai/brepkit/commit/f56bfeffd48ba2736d3d4bc28d9f271d5a8b569d"
+        },
+        "date": 1793716202728,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 616142,
+            "range": "± 8628",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 674761,
+            "range": "± 10570",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 8239,
+            "range": "± 365",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 403431,
+            "range": "± 9354",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 17666063,
+            "range": "± 533154",
             "unit": "ns/iter"
           }
         ]
