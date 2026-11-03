@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793647509837,
+  "lastUpdate": 1793672640257,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -64475,6 +64475,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 28204961,
             "range": "± 70256",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "d61b098cd61254ffa67c89cd068401486373a40d",
+          "message": "fix(algo): give a loop winding a cylinder's axis no disc of its own (#2275)\n\nIntersecting two equal cylinders that cross at right angles (the\nSteinmetz solid) no longer hangs. On `main`, `make_cylinder(1, 4)`\ncentred on the origin, intersected with the same cylinder turned onto\nthe x axis, runs past 60 s. On this branch it returns in 5 ms as a valid\nmesh-fallback solid of 40 faces holding 5.2028, against the closed form\n16/3. Fuse and Cut of the pair give the same exact results as before (6\nand 5 faces, 19.799408 and 7.233037).\n\nThe two walls meet in two loops that touch at (0, ±1, 0), where the\nwalls are tangent. On one wall each loop winds the axis once; on the\nother each is a lens. Two faults:\n\n- The internal-loops splitter makes a sub-face of every loop, so on the\nwall whose loops wind its axis it made two faces bounded by one winding\nloop each. Such a loop separates a cylinder wall and bounds no region of\nit. Fuse and Cut never keep those faces, but the intersect did, and came\nout as two pieces of two faces each, every piece with a single vertex.\n- The multi-piece intersect gate boxes each piece to size the mesh it\nprobes the piece's interior with, and read that box off the vertices\nalone. One vertex gave a box that is a point, a deflection of 0, and a\nface mesh that never finished.\n\n## Change\n\n- A section loop on a cylinder that turns once round its axis (its angle\nfollowed by bisection from each knot span of its edges) gets no disc;\nits reverse still becomes the remainder's hole. The intersect then falls\nback to the mesh boolean. An exact result needs a face split at the\npinch, the roadmap's TERMINAL row for this pair, which now notes the\nintersect.\n- A piece's box comes from `face_set_bounding_box`, which also holds\neach curved face's extent.\n- `tessellate_with_uvs_floor` and `tessellate_solid_core` refuse a\ndeflection that is not positive and finite, so no internal caller can\nask for endless refinement. The wasm tessellation bindings already check\nit.\n\nWith the box fixed and the splitter unchanged, the intersect came back\nexact but held 2.6667, half the solid.\n\n## Tests\n\n- `intersect_perpendicular_cylinders_gives_the_steinmetz_solid`: radius\n3, length 20, both operand orders; the result is valid, within 5% of\n144, holds material in all four quadrants about the two axes and none\nwhere only one rod reaches.\n- `a_loop_round_the_axis_winds_whatever_its_parameterization`: the\nwinding test follows each edge's angle by bisection from four pieces of\neach knot span, so an exact rational circle whose last three quarters\ncrowd into the last 3% of its knots winds, as does one whose first seven\n45 degree arcs crowd into the first 35%, each read either way, and a\ncircle of two arcs read backwards; a loop beside the axis does not.\nUniform samples misread the first circle, and bisection from the edge's\nends the second.\n- `a_single_vertex_piece_is_boxed_by_its_face`: a whole ring's faces box\nto the ring.\n- `a_deflection_that_is_not_positive_is_refused`: 0, -0.1, NaN and\ninfinity, per face and per solid.\n- Turned off the axes and mirrored through a slanted plane, in both\norders, the intersect falls back to a valid solid and Fuse and Cut stay\nexact.\n- The operations (1078), algo (353) and wasm (262) library tests pass.\n- The pose sweep and truth audit outputs are identical to `main`'s.",
+          "timestamp": "2026-11-02T18:21:05-08:00",
+          "tree_id": "14a4040ee1c8ce8604d15b22011c5bd9d631bf36",
+          "url": "https://github.com/andymai/brepkit/commit/d61b098cd61254ffa67c89cd068401486373a40d"
+        },
+        "date": 1793672630557,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 900135,
+            "range": "± 1686",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 926961,
+            "range": "± 861",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10807,
+            "range": "± 8",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 512755,
+            "range": "± 4223",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 23291979,
+            "range": "± 58014",
             "unit": "ns/iter"
           }
         ]
