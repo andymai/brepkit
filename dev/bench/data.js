@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793676039757,
+  "lastUpdate": 1793677199393,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -64583,6 +64583,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 28736130,
             "range": "± 121117",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "2ed19dbf993a4961f2a1c0de1c1aa15fe8e6ac49",
+          "message": "fix(algo): join coaxial walls and rings whose seams lie at different angles (#2276)\n\nThe two booleans in #2193 are now exact. Fusing a tube from radius 18 to\n20 (z 0 to 12) with a ring from 18.2 to 19 standing on its top gives 8\nfaces holding 3005.373196, the closed form; `main` falls back to a mesh\nof 1042 faces holding 3003.913. Cutting a cup (radius 20, height 12,\nshelled 2 with its top open) by a ring from 19.2 to 20 extruded from a\nface of two circles gives 7 faces and removes 167.48459, as cutting by\nthe same ring built as a tube already did; `main` falls back to 964\nfaces and removes 170.639. The same roots broke a plainer case: a rod of\nradius 1 over z 0 to 1, less the same rod over z 0.5 to 1.5 turned 30 or\n90 degrees about its axis, now gives 3 faces holding pi/2, where `main`\nfalls back.\n\nEach case hinged on coincident circles whose seams lie at different\nangles, read through samples or chords as if exact, or keeping different\nvertices:\n\n- The plane split's cap pass built a face's outline from its vertices,\nso a face bounded by one circle (one vertex) had none and its section\ncircles were dropped. It also refused a ring near the rim, whose centre\nclears the outline by less than 1.05 radii, and assigned each cap to a\nsub-face by an octagon of its outline.\n- The same-domain overlap test sampled each edge at 8 points, so a whole\ncircle was an octagon sagging 1.4 at radius 18.2, past the width of a\n0.2 ring: the ring's foot paired with the wrong piece of the tube's top.\n- Two coaxial walls that each go a whole turn were never compared, so\nthe cup's outer wall and the ring's were not paired once their seams\ndiffered.\n- EE and VE boxed each edge by 16 samples from its start vertex; a\ncircle starting at 30 degrees missed its extreme at 0 and the crossing\nseam line there.\n- A full section circle anchored at a wall's seam stayed whole while the\ncoincident rim it shares was split at the other solid's seam, so the two\nnever became one edge.\n- The tube's r 18 rim circle reached the ring's foot as a section lying\nin its r 18.2 hole and was carved as a disc.\n\n## Change\n\n- The cap pass samples the outline along each edge's own curve, also\ntakes a conic that lies on the face all round, and assigns caps by the\nsub-face's exact lines and arcs.\n- A closed conic section that lies wholly off a plane face (in one of\nits holes or past its outline) no longer splits it.\n- Both read a conic against the face's own lines and arcs\n(`conic_side_of_plane_face`): every sample on one side, and neighbouring\nsamples farther from the boundary together than the arc between them is\nlong, halving arcs that fail; a conic meeting the boundary is left to\nthe general splitter. A face with a NURBS edge is read through chords\n(`chorded_boundary`), cut eight times in each knot span and each bounded\nby the farthest control point of its piece's Bezier form; a sample must\nclear the boundary by that bound, while the parity test keeps the\ngeometric tolerance.\n- Same-domain planar polygons sample a circle or ellipse at one point\nper 64th of a turn it sweeps, and two whole-turn coaxial bands between\nlevel circle rims overlap where their axial intervals do.\n- EE and VE box circles and ellipses exactly (`edge_span_box`).\n- A full section circle anchored at a wall's seam is cut at the vertices\nof a coincident rim of one of its faces once the pave filler has split\nthat rim. When a piece would pass half a turn the circle stays whole,\nsince an open arc's pcurve runs the short way round.\n\n## Tests\n\n- `coaxial_rims_at_other_seams.rs`: the ring on the rim (two ring\nwidths, the ring turned 0 or 30 degrees), the cup cut at seam angles 0,\n30, 90 and 200, and the rod pair at the same angles, each upright,\nturned, mirrored and scaled by -1. Every result is exact (no mesh\nfallback), valid, at most 8 faces, meshes watertight, holds its closed\nform to 1e-6, and classifies points in and out of the removed or added\nmaterial correctly.\n- `a_circle_reads_on_off_or_across_a_plane_face`: a unit circle in a 4\nby 4 square reads on it; with a notch 0.01 wide reaching to radius 0.97\nbetween the circle's samples it reads as meeting the boundary; in a hole\nof radius 1.5 it reads off the face.\n- `a_circle_reads_on_a_plane_face_with_a_nurbs_side`: circles of radius\n1.94 and 1.95 in a square of half-width 2 with one side a straight NURBS\nread on it, and one of radius 2.5 meets its boundary.\n- `a_circle_meets_a_notch_hidden_in_tiny_knot_spans`: a NURBS side\ndenting the outline in to x = 0.97, and a hole's NURBS side reaching\nmaterial in to x = 0.9, each within three tiny knot spans; a unit circle\ncrossing either reads as meeting the boundary. Sampled uniformly over\nthe side's domain, both read clear.\n- `short_chords_still_count_beside_a_bulging_side`: a square of dense\nNURBS sides, one with a small outward bump, still holds a unit circle;\nwith the chords' slack in the parity tolerance every short chord dropped\nout and it read off the face.\n- `a_level_band_takes_circle_rims_only`: a whole cylinder band between\ncircle rims reads its axial interval, and with one rim an exact rational\nNURBS circle it reads none.\n- The operations (1078), algo (359) and wasm (262) library tests pass on\nthis branch merged with `main`.\n- The pose sweep and truth audit outputs are identical to `main`'s.\n\nCloses #2193",
+          "timestamp": "2026-11-02T19:36:39-08:00",
+          "tree_id": "68a681599bb883ba45b71358770f95ad77ba89e5",
+          "url": "https://github.com/andymai/brepkit/commit/2ed19dbf993a4961f2a1c0de1c1aa15fe8e6ac49"
+        },
+        "date": 1793677192941,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1038513,
+            "range": "± 2840",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1112840,
+            "range": "± 2225",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12763,
+            "range": "± 355",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 672651,
+            "range": "± 16130",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 28302637,
+            "range": "± 72495",
             "unit": "ns/iter"
           }
         ]
