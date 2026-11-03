@@ -1,0 +1,39 @@
+crates/operations/tests/revolved_half_rings.rs
+  s_e2239106c550d5::t_32e2ea4dff0ebf 1-145,156-163,165-190
+  s_e2239106c550d5::t_d01f4ea523d9f7 146-155,164
+crates/algo/src/ds/arena.rs
+  s_e2239106c550d5::t_aed62a2ca4cdb4 56-60,80
+  s_e2239106c550d5::t_b93785251721d6 3
+crates/algo/src/builder/fill_images_faces.rs
+  s_e2239106c550d5::t_c76cb39d5c16f8 456
+crates/algo/src/builder/face_splitter/edge_splitting.rs
+  s_e2239106c550d5::t_283947d997a2c6 1179-1181
+  s_e2239106c550d5::t_b55ae723fef1cd 398-399,402-406
+  s_e2239106c550d5::t_274f60bd92c314 1168-1178,1182-1219
+crates/algo/src/pave_filler/mod.rs
+  s_e2239106c550d5::t_5eaa3271d84959 152-158,186-213,215,220-223
+  s_e2239106c550d5::t_a942c41a1a5330 216-219
+  s_e2239106c550d5::t_1966b78a86fe2d 150-151,172,176-182,185
+crates/algo/src/builder/face_splitter/conversion.rs
+  s_e2239106c550d5::t_c76cb39d5c16f8 57,84,215-223,227-228
+.claude/skills/roadmap/SKILL.md
+  s_e2239106c550d5::t_f867bd10c1a11e 202
+crates/algo/src/builder/face_splitter/mod.rs
+  s_e2239106c550d5::t_c76cb39d5c16f8 5132,5145,5632,5763,10198
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9925d78f01d7006d497b46a63fd7338555025b07",
+  "prompts": {},
+  "sessions": {
+    "s_e2239106c550d5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "26ec17ea-56f1-450e-99f1-3ada95f60730",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
