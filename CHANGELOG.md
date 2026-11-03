@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.6.25](https://github.com/andymai/brepkit/compare/v4.6.24...v4.6.25) (2026-11-03)
+
+
+### Bug Fixes
+
+* **algo:** split a whole circle on a torus or sphere from its seam ([#2284](https://github.com/andymai/brepkit/issues/2284)) ([92c4440](https://github.com/andymai/brepkit/commit/92c444039a1ef8ca87a5c790ebd3e2c9b5bd721b))
+
 ## [4.6.24](https://github.com/andymai/brepkit/compare/v4.6.23...v4.6.24) (2026-11-03)
 
 
