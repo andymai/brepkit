@@ -1959,85 +1959,89 @@ pub fn start_closed_curve_at(
     NurbsCurve::new(p, knots, points, weights).ok()
 }
 
-/// Find the point on `circle` at the seam u of `face`'s periodic surface.
-///
-/// Returns `None` if the face has no non-degenerate seam Line edge, the
-/// projections fail, or the seam point at the circle's v does not actually
-/// lie on the circle (e.g. the circle is not a constant-v iso-curve).
 /// Whether a closed circle or ellipse lies in a plane face's plane and wholly
-/// off the face, in one of its holes or past its outline, read on the face's
-/// own lines and arcs. Every sample must lie outside, and every two
-/// neighbouring samples stand farther from the face's boundary together than
-/// the arc joining them is long, so the curve cannot cross it there; arcs
-/// that fail are halved down to a depth, past which the curve counts as
-/// meeting the face. `false` for any other curve or face.
+/// off the face, in one of its holes or past its outline.
 fn closed_conic_off_plane_face(
     topo: &Topology,
     face_id: FaceId,
     curve: &EdgeCurve,
     tol: f64,
 ) -> bool {
+    conic_side_of_plane_face(topo, face_id, curve, tol) == Some(false)
+}
+
+/// Which side of a plane face a closed circle or ellipse in its plane lies
+/// on, read on the face's own lines and arcs, holes included: `Some(true)`
+/// wholly on the face, `Some(false)` wholly off it. Every sample must read
+/// the same side, and every two neighbouring samples stand farther from the
+/// boundary together than the arc joining them is long, so the curve cannot
+/// cross it there; arcs that fail are halved down to a depth. `None` when the
+/// curve meets the boundary or cannot be read (another curve or face, a NURBS
+/// edge, a sample off the plane).
+pub(super) fn conic_side_of_plane_face(
+    topo: &Topology,
+    face_id: FaceId,
+    curve: &EdgeCurve,
+    tol: f64,
+) -> Option<bool> {
     use brepkit_math::region2d::{distance_to_boundary, point_in_region};
     use brepkit_math::vec::Point2;
     const SAMPLES: u32 = 16;
     const DEPTH: u32 = 8;
-    let Ok(face) = topo.face(face_id) else {
-        return false;
-    };
+    let face = topo.face(face_id).ok()?;
     let FaceSurface::Plane { normal, d } = *face.surface() else {
-        return false;
+        return None;
     };
     // `reach` bounds the curve's speed, so `reach` times an angle bounds
     // the length of the arc it spans.
     let (center, reach, at): (Point3, f64, Box<dyn Fn(f64) -> Point3 + '_>) = match curve {
         EdgeCurve::Circle(c) => (c.center(), c.radius(), Box::new(|t| c.evaluate(t))),
         EdgeCurve::Ellipse(e) => (e.center(), e.semi_major(), Box::new(|t| e.evaluate(t))),
-        EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => return false,
+        EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => return None,
     };
-    let Ok(frame) = brepkit_math::frame::Frame3::from_normal(center, normal) else {
-        return false;
-    };
-    let Ok(Some(pieces)) =
+    let frame = brepkit_math::frame::Frame3::from_normal(center, normal).ok()?;
+    let pieces =
         brepkit_topology::planar::face_boundary_2d(topo, face_id, center, frame.x, frame.y)
-    else {
-        return false;
-    };
+            .ok()??;
     let flat = |t: f64| -> Option<Point2> {
         let p = at(t);
         let off = p - center;
         ((normal.dot(brepkit_math::vec::Vec3::new(p.x(), p.y(), p.z())) - d).abs() <= tol)
             .then(|| Point2::new(off.dot(frame.x), off.dot(frame.y)))
     };
-    let outside = |q: Point2| point_in_region(&pieces, q, tol) == Some(false);
     let step = std::f64::consts::TAU / f64::from(SAMPLES);
+    let mut side: Option<bool> = None;
     let mut stack: Vec<(f64, f64, u32)> = (0..SAMPLES)
         .map(|k| (step * f64::from(k), step * f64::from(k + 1), 0))
         .collect();
     while let Some((t0, t1, depth)) = stack.pop() {
-        let (Some(a), Some(b)) = (flat(t0), flat(t1)) else {
-            return false;
-        };
-        if !outside(a) || !outside(b) {
-            return false;
+        let (a, b) = (flat(t0)?, flat(t1)?);
+        for q in [a, b] {
+            let here = point_in_region(&pieces, q, tol)?;
+            if side.is_some_and(|s| s != here) {
+                return None;
+            }
+            side = Some(here);
         }
         if distance_to_boundary(&pieces, a) + distance_to_boundary(&pieces, b) > reach * (t1 - t0) {
             continue;
         }
         if depth >= DEPTH {
-            return false;
+            return None;
         }
         stack.push((t0, 0.5 * (t0 + t1), depth + 1));
         stack.push((0.5 * (t0 + t1), t1, depth + 1));
     }
-    true
+    side
 }
 
 /// A full section circle's arcs, from `anchor` round, between the vertices of
 /// a closed boundary circle of one of its two faces that coincides with it
 /// and that the pave filler split (a tube's rim under a coaxial wall whose
 /// seam crosses it at another angle). Every face the section bounds then
-/// shares the rim's vertices. Empty unless that gives three vertices or more:
-/// two arcs between the same two vertices would weld into one edge.
+/// shares the rim's vertices. Empty unless that gives three vertices or more
+/// (two arcs between the same two vertices would weld into one edge), each
+/// arc under half a turn.
 fn arcs_at_coincident_rim_vertices(
     topo: &Topology,
     arena: &GfaArena,
@@ -2103,12 +2107,25 @@ fn arcs_at_coincident_rim_vertices(
     along[0].0 = 0.0;
     along.sort_by(|a, b| a.0.total_cmp(&b.0));
     along.push((TAU, anchor));
+    // An open arc's pcurve runs the short way round, so a piece past half a
+    // turn would be read as its complement; keep the circle whole.
+    if along
+        .windows(2)
+        .any(|w| w[1].0 - w[0].0 >= std::f64::consts::PI)
+    {
+        return Vec::new();
+    }
     along
         .windows(2)
         .map(|w| (EdgeCurve::Circle(start.clone()), w[0].1, w[1].1))
         .collect()
 }
 
+/// Find the point on `circle` at the seam u of `face`'s periodic surface.
+///
+/// Returns `None` if the face has no non-degenerate seam Line edge, the
+/// projections fail, or the seam point at the circle's v does not actually
+/// lie on the circle (e.g. the circle is not a constant-v iso-curve).
 fn seam_anchor_on_circle(
     topo: &Topology,
     face: &Face,
@@ -5454,6 +5471,65 @@ mod tests {
     use super::*;
     use brepkit_math::curves::Circle3D;
     use brepkit_math::vec::Vec3;
+
+    /// A unit circle in a 4 by 4 square lies on it; with a notch 0.01 wide
+    /// reaching to radius 0.97 between the circle's samples it meets the
+    /// boundary; in a hole of radius 1.5 cut from the square it lies off it.
+    #[test]
+    fn a_circle_reads_on_off_or_across_a_plane_face() {
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        let origin = Point3::new(0.0, 0.0, 0.0);
+        let circle = Circle3D::new(origin, z, 1.0).unwrap();
+        let curve = EdgeCurve::Circle(circle.clone());
+        let square = |notch: bool| {
+            let p = |x: f64, y: f64| Point3::new(x, y, 0.0);
+            let mut pts = vec![p(-2.0, -2.0), p(2.0, -2.0)];
+            if notch {
+                // Midway between two of the sixteen samples.
+                let at = circle.evaluate(std::f64::consts::PI / 16.0);
+                let d = Vec3::new(at.x(), at.y(), 0.0);
+                let n = Vec3::new(-d.y(), d.x(), 0.0) * 0.005;
+                let (tip_a, tip_b) = (origin + d * 0.97 - n, origin + d * 0.97 + n);
+                let out = |tip: Point3| tip + d * ((2.0 - tip.x()) / d.x());
+                pts.extend([out(tip_a), tip_a, tip_b, out(tip_b)]);
+            }
+            pts.extend([p(2.0, 2.0), p(-2.0, 2.0)]);
+            pts
+        };
+        for (notch, want) in [(false, Some(true)), (true, None)] {
+            let mut topo = Topology::new();
+            let wire =
+                brepkit_topology::builder::make_polygon_wire(&mut topo, &square(notch), 1e-7)
+                    .unwrap();
+            let face = brepkit_topology::builder::make_face_from_wire(&mut topo, wire).unwrap();
+            assert_eq!(
+                conic_side_of_plane_face(&topo, face, &curve, 1e-7),
+                want,
+                "notch {notch}"
+            );
+        }
+        let mut topo = Topology::new();
+        let wire =
+            brepkit_topology::builder::make_polygon_wire(&mut topo, &square(false), 1e-7).unwrap();
+        let rim =
+            brepkit_topology::builder::make_circle_edge(&mut topo, origin, z, 1.5, 1e-7).unwrap();
+        let hole = topo.add_wire(
+            brepkit_topology::wire::Wire::new(
+                vec![brepkit_topology::wire::OrientedEdge::new(rim, false)],
+                true,
+            )
+            .unwrap(),
+        );
+        let face = topo.add_face(Face::new(
+            wire,
+            vec![hole],
+            FaceSurface::Plane { normal: z, d: 0.0 },
+        ));
+        assert_eq!(
+            conic_side_of_plane_face(&topo, face, &curve, 1e-7),
+            Some(false)
+        );
+    }
 
     /// A chord shares both ends with the arc it subtends; only an edge that
     /// runs along the arc may stand in for it.

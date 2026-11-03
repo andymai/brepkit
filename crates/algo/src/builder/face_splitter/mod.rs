@@ -5206,14 +5206,20 @@ pub fn split_face_2d(
         };
         let closed = (s.start - s.end).length() < tol.linear && outer_poly.len() >= 3;
         // A ring near the face's rim (one standing on a tube's top) has
-        // its centre within the margin of the outline but clears it all
-        // round, as a tangent corner circle does not.
+        // its centre within the margin of the outline but lies on the face
+        // all round, crossing none of its boundary, as a tangent corner
+        // circle does not.
         let cap_center = if closed && let Some((center, reach)) = conic {
             let center_uv = cap_frame.project(center);
             (super::classify_2d::point_in_polygon_2d(center_uv, &outer_poly)
                 && (super::classify_2d::distance_to_polygon_boundary(center_uv, &outer_poly)
                     > reach * CAP_INTERIORITY_MARGIN
-                    || conic_clears_outline(s, cap_frame, &outer_poly, reach)))
+                    || super::fill_images_faces::conic_side_of_plane_face(
+                        topo,
+                        face_id,
+                        &s.curve_3d,
+                        tol.linear,
+                    ) == Some(true)))
             .then_some(center)
         } else if closed && matches!(s.curve_3d, EdgeCurve::NurbsCurve(_)) {
             interior_loop_center(s, cap_frame, &outer_poly)
@@ -5287,37 +5293,8 @@ fn interior_loop_center(
     Some(Point3::new(mean.x(), mean.y(), mean.z()))
 }
 
-/// Whether every sample of a closed conic section lies inside the outline
-/// and clears it by a hundredth of the conic's reach: the conic stays off the
-/// outline, which a corner circle tangent to it touches.
-fn conic_clears_outline(
-    section: &SectionEdge,
-    frame: &PlaneFrame,
-    outer_poly: &[Point2],
-    reach: f64,
-) -> bool {
-    let mut pts = Vec::with_capacity(OUTLINE_CURVE_SAMPLES);
-    super::pcurve_compute::sample_edge_uniform_native(
-        &section.curve_3d,
-        section.start,
-        section.end,
-        OUTLINE_CURVE_SAMPLES,
-        true,
-        &mut pts,
-    );
-    pts.iter().all(|&p| {
-        let uv = frame.project(p);
-        super::classify_2d::point_in_polygon_2d(uv, outer_poly)
-            && super::classify_2d::distance_to_polygon_boundary(uv, outer_poly)
-                > reach * CAP_CLEARANCE
-    })
-}
-
-/// How far a cap's samples clear the outline, as a share of its reach.
-const CAP_CLEARANCE: f64 = 0.01;
-
-/// Samples per curved edge of an outline, and of a conic tested against one:
-/// a chord of a circle in 64 sags 0.12% of its radius.
+/// Samples per curved edge of an outline: a chord of a circle in 64 sags
+/// 0.12% of its radius.
 const OUTLINE_CURVE_SAMPLES: usize = 64;
 
 /// A wire's outline in traversal order: each line's start, and each curved
