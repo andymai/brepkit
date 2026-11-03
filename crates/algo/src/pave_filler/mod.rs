@@ -164,6 +164,7 @@ fn pave_co_endpoint_curves(
 ) -> Result<(), AlgoError> {
     use std::collections::BTreeMap;
 
+    use brepkit_math::vec::Point3;
     use brepkit_topology::edge::{EdgeCurve, EdgeId};
     use brepkit_topology::vertex::Vertex;
 
@@ -201,26 +202,46 @@ fn pave_co_endpoint_curves(
                 edge.curve().evaluate_with_endpoints(tm, a, b),
             ));
         }
-        let apart = middles.iter().enumerate().all(|(i, m)| {
-            middles[i + 1..]
-                .iter()
-                .all(|n| (m.3 - n.3).length() > tol.linear * 100.0)
-        });
-        if !apart {
+        // Coincident copies (an edge of each operand along one path, where
+        // two stacked prisms meet) are one path: the group needs pieces only
+        // when it holds two, and the copies of a path share one middle
+        // vertex so they split alike.
+        let mut paths: Vec<(Point3, Vec<usize>)> = Vec::new();
+        for (i, m) in middles.iter().enumerate() {
+            match paths
+                .iter_mut()
+                .find(|(mid, _)| (*mid - m.3).length() <= tol.linear * 100.0)
+            {
+                Some((_, copies)) => copies.push(i),
+                None => paths.push((m.3, vec![i])),
+            }
+        }
+        if paths.len() < 2 {
             continue;
         }
-        for &(edge_id, curved, tm, mid) in &middles {
-            let Some(&[pb_id]) = arena.edge_pave_blocks.get(&edge_id).map(Vec::as_slice) else {
-                continue;
-            };
-            let unsplit = arena
-                .pave_blocks
-                .get(pb_id)
-                .is_some_and(|pb| pb.extra_paves.is_empty());
-            if curved && unsplit {
-                let vertex = topo.add_vertex(Vertex::new(mid, tol.linear));
+        for (mid, copies) in &paths {
+            let mut shared = None;
+            for &i in copies {
+                let (edge_id, curved, tm, _) = middles[i];
+                let Some(&[pb_id]) = arena.edge_pave_blocks.get(&edge_id).map(Vec::as_slice) else {
+                    continue;
+                };
+                let unsplit = arena
+                    .pave_blocks
+                    .get(pb_id)
+                    .is_some_and(|pb| pb.extra_paves.is_empty());
+                if !(curved && unsplit) {
+                    continue;
+                }
+                let vertex = if let Some(vertex) = shared {
+                    vertex
+                } else {
+                    let vertex = topo.add_vertex(Vertex::new(*mid, tol.linear));
+                    arena.co_endpoint_middles.insert(vertex);
+                    shared = Some(vertex);
+                    vertex
+                };
                 arena.add_extra_pave(topo, pb_id, Pave::new(vertex, tm));
-                arena.co_endpoint_middles.insert(vertex);
             }
         }
     }
