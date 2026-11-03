@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.6.23](https://github.com/andymai/brepkit/compare/v4.6.22...v4.6.23) (2026-11-03)
+
+
+### Bug Fixes
+
+* **algo:** read a partial revolution's torus band by its ring angle ([#2278](https://github.com/andymai/brepkit/issues/2278)) ([56fff99](https://github.com/andymai/brepkit/commit/56fff99888f3888778dac9a3f64abd379b3a0495))
+
 ## [4.6.22](https://github.com/andymai/brepkit/compare/v4.6.21...v4.6.22) (2026-11-03)
 
 
