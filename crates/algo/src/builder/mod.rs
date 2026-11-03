@@ -1317,6 +1317,37 @@ pub fn whole_ring(
     collapsed.then(|| torus.clone())
 }
 
+/// The middle of a torus face that is a partial revolution's whole tube
+/// ([`classifier::partial_revolution_band`]): halfway round its ring-angle
+/// band, opposite its seam on the tube. `None` for any other face.
+fn partial_revolution_middle(
+    topo: &Topology,
+    face: &brepkit_topology::face::Face,
+) -> Result<Option<Point3>, AlgoError> {
+    use brepkit_topology::edge::EdgeCurve;
+    let brepkit_topology::face::FaceSurface::Torus(torus) = face.surface() else {
+        return Ok(None);
+    };
+    if !face.inner_wires().is_empty() {
+        return Ok(None);
+    }
+    let Some((u_start, span)) = classifier::partial_revolution_band(topo, face, torus)? else {
+        return Ok(None);
+    };
+    for oe in topo.wire(face.outer_wire())?.edges() {
+        let e = topo.edge(oe.edge())?;
+        if e.start() == e.end() || matches!(e.curve(), EdgeCurve::Line) {
+            continue;
+        }
+        let (_, seam_v) = torus.project_point(topo.vertex(e.start())?.point());
+        return Ok(Some(torus.evaluate(
+            0.5_f64.mul_add(span, u_start),
+            seam_v + std::f64::consts::PI,
+        )));
+    }
+    Ok(None)
+}
+
 /// Sample a point in the interior of a face.
 ///
 /// Uses the midpoint of the longest boundary edge, then offsets slightly
@@ -1374,6 +1405,14 @@ fn sample_face_interior(
                     v_max = v_max.max(v);
                 }
             }
+        }
+        // A torus band of a partial revolution is bounded by tube circles
+        // that hold `u`, where the cylinder rule below would put the sample
+        // on an end circle itself.
+        if closed_mid.is_some()
+            && let Some(pt) = partial_revolution_middle(topo, face)?
+        {
+            return Ok(pt);
         }
         if let Some(mid) = closed_mid
             && v_max - v_min > tol.linear
@@ -1738,6 +1777,55 @@ mod tests {
             classify_2d::point_in_polygon_2d(frame.project(pt), &poly2d),
             "sample {pt:?} is not inside the L-frame polygon"
         );
+    }
+
+    /// A unit sphere's band between rims at x = 0.6 and 0.8 is no torus
+    /// band, though its rim at 0.6 has one ring angle a quarter and three
+    /// quarters of the way round: it has no partial revolution's middle.
+    #[test]
+    fn a_sphere_band_has_no_tube_middle() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::SphericalSurface;
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::{Face, FaceSurface};
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        let mut topo = Topology::new();
+        let x = Vec3::new(1.0, 0.0, 0.0);
+        let mut rim = |at: f64| {
+            let r = (1.0 - at * at).sqrt();
+            let v = topo.add_vertex(Vertex::new(Point3::new(at, r, 0.0), 1e-7));
+            // Its angle starts at +y, so a quarter and three quarters round
+            // lie at +z and -z, both at ring angle 0.
+            let circle =
+                Circle3D::new_with_ref(Point3::new(at, 0.0, 0.0), x, r, Vec3::new(0.0, 1.0, 0.0))
+                    .unwrap();
+            (v, topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(circle))))
+        };
+        let ((va, ra), (vb, rb)) = (rim(0.6), rim(0.8));
+        let level =
+            Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0).unwrap();
+        let arc = topo.add_edge(Edge::new(va, vb, EdgeCurve::Circle(level)));
+        let wire = topo.add_wire(
+            Wire::new(
+                vec![
+                    OrientedEdge::new(ra, true),
+                    OrientedEdge::new(arc, true),
+                    OrientedEdge::new(rb, false),
+                    OrientedEdge::new(arc, false),
+                ],
+                true,
+            )
+            .unwrap(),
+        );
+        let face_id = topo.add_face(Face::new(
+            wire,
+            vec![],
+            FaceSurface::Sphere(SphericalSurface::new(Point3::new(0.0, 0.0, 0.0), 1.0).unwrap()),
+        ));
+        let face = topo.face(face_id).unwrap();
+        assert!(partial_revolution_middle(&topo, face).unwrap().is_none());
     }
 
     #[test]

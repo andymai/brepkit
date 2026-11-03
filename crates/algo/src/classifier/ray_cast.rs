@@ -102,6 +102,9 @@ enum FaceGeom {
         /// membership tested periodically from `v_start`. `None` = the full
         /// tube (whole torus).
         v_band: Option<(f64, f64)>,
+        /// Ring-angle band, likewise: a partial revolution's tube between
+        /// its two end circles. `None` = the whole ring.
+        u_band: Option<(f64, f64)>,
     },
     /// A toroidal face covering part of the major revolution (a fillet's
     /// corner), read against its own wires in `(u, v)` with `v` measured from
@@ -1449,6 +1452,15 @@ fn collect_geoms_of(
                 result.push(FaceGeom::Torus {
                     surface: t.clone(),
                     v_band: None,
+                    u_band: None,
+                });
+                continue;
+            }
+            if let Some(u_band) = partial_revolution_band(topo, face, t)? {
+                result.push(FaceGeom::Torus {
+                    surface: t.clone(),
+                    v_band: None,
+                    u_band: Some(u_band),
                 });
                 continue;
             }
@@ -1503,6 +1515,7 @@ fn collect_geoms_of(
                         result.push(FaceGeom::Torus {
                             surface: t.clone(),
                             v_band: None,
+                            u_band: None,
                         });
                         continue;
                     }
@@ -2551,9 +2564,11 @@ fn ray_geom_crossings(
             trim.as_ref(),
             tol,
         ),
-        FaceGeom::Torus { surface, v_band } => {
-            ray_torus_crossings(origin, ray_dir, surface, *v_band, tol)
-        }
+        FaceGeom::Torus {
+            surface,
+            v_band,
+            u_band,
+        } => ray_torus_crossings(origin, ray_dir, surface, *v_band, *u_band, tol),
         FaceGeom::TorusTrim {
             surface,
             trim,
@@ -3579,6 +3594,7 @@ fn ray_torus_crossings(
     ray_dir: Vec3,
     surface: &brepkit_math::surfaces::ToroidalSurface,
     v_band: Option<(f64, f64)>,
+    u_band: Option<(f64, f64)>,
     tol: Tolerance,
 ) -> (i32, bool) {
     let near = 10.0 * tol.linear;
@@ -3601,22 +3617,119 @@ fn ray_torus_crossings(
                 suspicious = true;
             }
         }
+        let hit = Point3::new(
+            origin.x() + dir.x() * t,
+            origin.y() + dir.y() * t,
+            origin.z() + dir.z() * t,
+        );
+        let (u, v) = surface.project_point(hit);
+        // Each border read round the circle: a hit just short of the start
+        // wraps to nearly a whole turn.
+        let near_border = |along: f64, span: f64, near: f64| {
+            let to_end = (along - span).abs();
+            along.min(TAU - along) <= near || to_end.min(TAU - to_end) <= near
+        };
         if let Some((v_start, span)) = v_band {
-            let hit = Point3::new(
-                origin.x() + dir.x() * t,
-                origin.y() + dir.y() * t,
-                origin.z() + dir.z() * t,
-            );
-            let (_, v) = surface.project_point(hit);
             let vv = (v - v_start).rem_euclid(TAU);
-            suspicious |= vv <= near_angle || (span - vv).abs() <= near_angle;
+            suspicious |= near_border(vv, span, near_angle);
             if vv > span {
+                continue;
+            }
+        }
+        if let Some((u_start, span)) = u_band {
+            let uu = (u - u_start).rem_euclid(TAU);
+            // The ring angle a hit's distance spans grows toward the axis.
+            let near_ring = near / torus_radius_at(surface, v).max(near);
+            suspicious |= near_border(uu, span, near_ring);
+            if uu > span {
                 continue;
             }
         }
         crossings += 1;
     }
     (crossings, suspicious)
+}
+
+/// Whether every open edge of a wire appears in it exactly twice, once each
+/// way: the wire runs a chain out and back, as a band's seam between its two
+/// closed rims does, and holds no cutout of its own.
+fn open_edges_run_there_and_back(
+    topo: &Topology,
+    edges: &[brepkit_topology::wire::OrientedEdge],
+) -> Result<bool, AlgoError> {
+    let mut uses: std::collections::HashMap<usize, (u32, u32)> = std::collections::HashMap::new();
+    for oe in edges {
+        let edge = topo.edge(oe.edge())?;
+        if edge.start() == edge.end() {
+            continue;
+        }
+        let entry = uses.entry(oe.edge().index()).or_insert((0, 0));
+        if oe.is_forward() {
+            entry.0 += 1;
+        } else {
+            entry.1 += 1;
+        }
+    }
+    Ok(!uses.is_empty() && uses.values().all(|&n| n == (1, 1)))
+}
+
+/// The ring-angle band `(u_start, span)` of a torus face that is a partial
+/// revolution's whole tube: its outer wire two closed tube circles, each at
+/// one ring angle (eight points along it share one), and open arcs running
+/// between them along the ring and back ([`open_edges_run_there_and_back`]).
+/// The band runs from one circle to the other the way the arcs go. `None`
+/// for any other face.
+pub fn partial_revolution_band(
+    topo: &Topology,
+    face: &brepkit_topology::face::Face,
+    surface: &brepkit_math::surfaces::ToroidalSurface,
+) -> Result<Option<(f64, f64)>, AlgoError> {
+    use brepkit_topology::edge::EdgeCurve;
+    let wire = topo.wire(face.outer_wire())?;
+    if !open_edges_run_there_and_back(topo, wire.edges())? {
+        return Ok(None);
+    }
+    let mut ends: Vec<f64> = Vec::new();
+    let mut inside: Option<f64> = None;
+    for oe in wire.edges() {
+        let edge = topo.edge(oe.edge())?;
+        let (sp, ep) = (
+            topo.vertex(edge.start())?.point(),
+            topo.vertex(edge.end())?.point(),
+        );
+        let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
+        let u_at = |f: f64| {
+            surface
+                .project_point(edge.curve().evaluate_with_endpoints(
+                    (t1 - t0).mul_add(f, t0),
+                    sp,
+                    ep,
+                ))
+                .0
+        };
+        let m = u_at(0.5);
+        let holds_u = (0..8).all(|k| wrap_pi(u_at((f64::from(k) + 0.5) / 8.0) - m).abs() <= 1e-9);
+        if edge.start() == edge.end() {
+            if !matches!(edge.curve(), EdgeCurve::Circle(_)) || !holds_u {
+                return Ok(None);
+            }
+            ends.push(m);
+        } else if !matches!(edge.curve(), EdgeCurve::Line) && inside.is_none() {
+            inside = Some(m);
+        }
+    }
+    let (&[u0, u1], Some(mid)) = (ends.as_slice(), inside) else {
+        return Ok(None);
+    };
+    let span = (u1 - u0).rem_euclid(TAU);
+    if span <= 1e-9 || TAU - span <= 1e-9 {
+        return Ok(None);
+    }
+    Ok(Some(if (mid - u0).rem_euclid(TAU) < span {
+        (u0, span)
+    } else {
+        (u1, TAU - span)
+    }))
 }
 
 /// A torus patch's point as `(u, v)`, its tube angle `v` taken within half a
@@ -4575,6 +4688,157 @@ mod tests {
             sphere_face_loops(&topo, face, sph).unwrap().is_none(),
             "the seam loop declined"
         );
+    }
+
+    /// A partial revolution's band of the torus R 3, r 1 between ring angles
+    /// `a` and `b`, the way the ring runs: two tube circles at `a` and `b`
+    /// joined along the outer equator.
+    fn torus_band(topo: &mut Topology, a: f64, b: f64) -> brepkit_topology::face::FaceId {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::ToroidalSurface;
+        let t = ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), 3.0, 1.0).unwrap();
+        let mut tube = |u: f64| {
+            let (near, far) = (t.evaluate(u, 0.0), t.evaluate(u, std::f64::consts::PI));
+            let centre = near + (far - near) * 0.5;
+            let along = (t.evaluate(u + 1e-6, 0.0) - t.evaluate(u - 1e-6, 0.0))
+                .normalize()
+                .unwrap();
+            let v = topo.add_vertex(Vertex::new(near, 1e-7));
+            let circle = Circle3D::new(centre, along, 1.0).unwrap();
+            (v, topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(circle))))
+        };
+        let ((va, ca), (vb, cb)) = (tube(a), tube(b));
+        let equator =
+            Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 4.0).unwrap();
+        let arc = topo.add_edge(Edge::new(va, vb, EdgeCurve::Circle(equator)));
+        let wire = topo.add_wire(
+            Wire::new(
+                vec![
+                    OrientedEdge::new(ca, true),
+                    OrientedEdge::new(arc, true),
+                    OrientedEdge::new(cb, false),
+                    OrientedEdge::new(arc, false),
+                ],
+                true,
+            )
+            .unwrap(),
+        );
+        topo.add_face(Face::new(wire, vec![], FaceSurface::Torus(t)))
+    }
+
+    /// A band from 0 to a quarter turn, and one across the ring's angle
+    /// origin, read by their ring angles: a ray up out of the tube's centre
+    /// crosses the band only where its angle lies between the end circles.
+    #[test]
+    fn a_partial_revolution_band_counts_crossings_between_its_ends() {
+        use std::f64::consts::{FRAC_PI_2, FRAC_PI_4, PI, TAU};
+        for (a, b, inside, outside) in [
+            (0.0, FRAC_PI_2, [FRAC_PI_4, 0.1], [PI, -0.1]),
+            (TAU - FRAC_PI_4, FRAC_PI_4, [0.0, 0.7], [PI, 1.0]),
+        ] {
+            let mut topo = Topology::default();
+            let face_id = torus_band(&mut topo, a, b);
+            let face = topo.face(face_id).unwrap();
+            let FaceSurface::Torus(t) = face.surface() else {
+                unreachable!()
+            };
+            let (start, span) = partial_revolution_band(&topo, face, t).unwrap().unwrap();
+            let (ua, ub) = (
+                t.project_point(t.evaluate(a, 0.0)).0,
+                t.project_point(t.evaluate(b, 0.0)).0,
+            );
+            assert!(
+                wrap_pi(start - ua).abs() < 1e-9 && ((ub - ua).rem_euclid(TAU) - span).abs() < 1e-9,
+                "band ({start}, {span}) between {a} and {b}"
+            );
+            let crossings = |u: f64| {
+                let near = t.evaluate(u, 0.0);
+                let far = t.evaluate(u, PI);
+                let centre = near + (far - near) * 0.5;
+                ray_torus_crossings(
+                    centre,
+                    Vec3::new(0.0, 0.0, 1.0),
+                    t,
+                    None,
+                    Some((start, span)),
+                    Tolerance::new(),
+                )
+                .0
+            };
+            for u in inside {
+                assert_eq!(crossings(u), 1, "band {a}..{b}, ring angle {u}");
+            }
+            for u in outside {
+                assert_eq!(crossings(u), 0, "band {a}..{b}, ring angle {u}");
+            }
+        }
+    }
+
+    /// A hit within the grazing band of either end circle is suspicious,
+    /// one just short of the start too, whose ring angle wraps to nearly a
+    /// whole turn past it.
+    #[test]
+    fn a_hit_beside_either_end_circle_is_suspicious() {
+        use brepkit_math::surfaces::ToroidalSurface;
+        use std::f64::consts::{FRAC_PI_2, FRAC_PI_4, PI};
+        let t = ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), 3.0, 1.0).unwrap();
+        let band = Some((FRAC_PI_4, FRAC_PI_2));
+        let up = |u: f64| {
+            let (near, far) = (t.evaluate(u, 0.0), t.evaluate(u, PI));
+            let centre = near + (far - near) * 0.5;
+            ray_torus_crossings(
+                centre,
+                Vec3::new(0.0, 0.0, 1.0),
+                &t,
+                None,
+                band,
+                Tolerance::new(),
+            )
+        };
+        for u in [FRAC_PI_4 - 1e-9, FRAC_PI_4 + 1e-9, 3.0 * FRAC_PI_4 + 1e-9] {
+            assert!(up(u).1, "ring angle {u}");
+        }
+        assert_eq!(up(FRAC_PI_2), (1, false));
+    }
+
+    /// A band whose outer wire comes back from its far end circle by a
+    /// detour off the seam carries a cutout, so it is no partial
+    /// revolution's whole tube.
+    #[test]
+    fn a_band_with_a_detour_is_no_whole_tube() {
+        use std::f64::consts::FRAC_PI_2;
+        let mut topo = Topology::default();
+        let face_id = torus_band(&mut topo, 0.0, FRAC_PI_2);
+        let face = topo.face(face_id).unwrap().clone();
+        let FaceSurface::Torus(t) = face.surface() else {
+            unreachable!()
+        };
+        let edges = topo.wire(face.outer_wire()).unwrap().edges().to_vec();
+        let (start_circle, arc, end_circle) = (edges[0], edges[1], edges[2]);
+        let (va, vb) = {
+            let e = topo.edge(arc.edge()).unwrap();
+            (e.start(), e.end())
+        };
+        let off = topo.add_vertex(Vertex::new(t.evaluate(FRAC_PI_2 / 2.0, 0.6), 1e-7));
+        let back = topo.add_edge(Edge::new(vb, off, EdgeCurve::Line));
+        let home = topo.add_edge(Edge::new(off, va, EdgeCurve::Line));
+        let wire = topo.add_wire(
+            Wire::new(
+                vec![
+                    start_circle,
+                    arc,
+                    end_circle,
+                    OrientedEdge::new(back, true),
+                    OrientedEdge::new(home, true),
+                ],
+                true,
+            )
+            .unwrap(),
+        );
+        let detour = topo.add_face(Face::new(wire, vec![], face.surface().clone()));
+        let detour = topo.face(detour).unwrap();
+        assert!(partial_revolution_band(&topo, detour, t).unwrap().is_none());
+        assert!(partial_revolution_band(&topo, &face, t).unwrap().is_some());
     }
 
     #[test]
