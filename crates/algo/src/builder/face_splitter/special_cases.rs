@@ -2949,7 +2949,7 @@ pub(super) fn split_torus_by_ring_loops(
             }
         }
         pairs.sort_by(|p, q| p.0.abs().total_cmp(&q.0.abs()));
-        let (ka, at_a, kb, at_b) = pairs.iter().find_map(|&(du, ka, a, kb, b)| {
+        let straight = pairs.iter().find_map(|&(du, ka, a, kb, b)| {
             let (ua, va) = torus.project_point(a);
             let (_, vb) = torus.project_point(b);
             let span = (vb - va).rem_euclid(TAU);
@@ -2959,9 +2959,56 @@ pub(super) fn split_torus_by_ring_loops(
                 kb,
                 (ua + du, va + span),
             ))
-        })?;
-        let mid = (f64::midpoint(at_a.0, at_b.0), f64::midpoint(at_a.1, at_b.1));
-        let (up_1, up_2) = (seam_piece(at_a, mid)?, seam_piece(mid, at_b)?);
+        });
+        let (ka, at_a, kb, up_1, up_2) = if let Some((ka, at_a, kb, at_b)) = straight {
+            let mid = (f64::midpoint(at_a.0, at_b.0), f64::midpoint(at_a.1, at_b.1));
+            (ka, at_a, kb, seam_piece(at_a, mid)?, seam_piece(mid, at_b)?)
+        } else {
+            // Where the band narrows between two lone vertices (a plane
+            // nearly as steep as the tube's tangent), the seam follows the
+            // band instead, rising from the first loop to the next along it.
+            let ((ka, a), (kb, b)) = (first.vertices().next()?, next.vertices().next()?);
+            let ((ua, va), (ub, vb)) = (torus.project_point(a), torus.project_point(b));
+            let du = wrap(ub - ua);
+            let lo = first.v_at(ua);
+            let mut path: Vec<(f64, f64)> = (0..=32_u32)
+                .map(|k| {
+                    let t = f64::from(k) / 32.0;
+                    let u = du.mul_add(t, ua);
+                    (u, t.mul_add(width(i, u), va + first.v_at(u) - lo))
+                })
+                .collect();
+            let end = path[32].1;
+            path[0] = (ua, va);
+            path[32] = (ua + du, vb + ((end - vb) / TAU).round() * TAU);
+            let piece = |uvs: &[(f64, f64)], from: Point3, to: Point3| {
+                let mut pts: Vec<Point3> = uvs.iter().map(|&(u, v)| torus.evaluate(u, v)).collect();
+                let last = pts.len() - 1;
+                (pts[0], pts[last]) = (from, to);
+                let flat: Vec<Point2> = uvs.iter().map(|&(u, v)| Point2::new(u, v)).collect();
+                Some(OrientedPCurveEdge {
+                    curve_3d: EdgeCurve::NurbsCurve(
+                        brepkit_math::nurbs::fitting::interpolate(&pts, 3).ok()?,
+                    ),
+                    pcurve: super::super::pcurve_compute::fit_nurbs2d_through_points(&flat),
+                    start_uv: flat[0],
+                    end_uv: flat[last],
+                    start_3d: from,
+                    end_3d: to,
+                    forward: true,
+                    source_edge_idx: None,
+                    pave_block_id: None,
+                })
+            };
+            let mid = torus.evaluate(path[16].0, path[16].1);
+            (
+                ka,
+                (ua, va),
+                kb,
+                piece(&path[..=16], a, mid)?,
+                piece(&path[16..], mid, b)?,
+            )
+        };
         let down = reverse_loop(&[up_1.clone(), up_2.clone()]);
         // Counterclockwise in (u, v): up the seam, back along the next loop,
         // down the seam, along the first. The seam is split at its middle,

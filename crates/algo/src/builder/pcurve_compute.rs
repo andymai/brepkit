@@ -505,7 +505,7 @@ fn is_collinear_2d(pts: &[Point2], tol: f64) -> bool {
 ///
 /// Lifts 2D points to 3D (z=0), uses the math crate's `interpolate`, then
 /// extracts 2D control points from the result.
-fn fit_nurbs2d_through_points(pts: &[Point2]) -> Curve2D {
+pub(super) fn fit_nurbs2d_through_points(pts: &[Point2]) -> Curve2D {
     let fallback = || -> Curve2D {
         let p0 = pts[0];
         let p1 = pts[pts.len() - 1];
