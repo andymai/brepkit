@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.6.22](https://github.com/andymai/brepkit/compare/v4.6.21...v4.6.22) (2026-11-03)
+
+
+### Bug Fixes
+
+* **algo:** join coaxial walls and rings whose seams lie at different angles ([#2276](https://github.com/andymai/brepkit/issues/2276)) ([2ed19db](https://github.com/andymai/brepkit/commit/2ed19dbf993a4961f2a1c0de1c1aa15fe8e6ac49)), closes [#2193](https://github.com/andymai/brepkit/issues/2193)
+
 ## [4.6.21](https://github.com/andymai/brepkit/compare/v4.6.20...v4.6.21) (2026-11-03)
 
 
