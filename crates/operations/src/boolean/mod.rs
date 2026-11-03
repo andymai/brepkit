@@ -3518,33 +3518,12 @@ fn component_interior_point(topo: &Topology, comp: &[FaceId]) -> Option<Point3> 
 }
 
 /// A face component's vertex AABB, or `None` for an empty component.
+/// The box of a face component, curved faces bounded along their edges: a
+/// piece bounded by closed curves can have a single vertex, whose box alone
+/// is a point.
 fn component_aabb(topo: &Topology, comp: &[FaceId]) -> Option<(Point3, Point3)> {
-    let mut min = Point3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY);
-    let mut max = Point3::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
-    for &fid in comp {
-        let Ok(face) = topo.face(fid) else { continue };
-        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
-            let Ok(wire) = topo.wire(wid) else { continue };
-            for oe in wire.edges() {
-                let Ok(edge) = topo.edge(oe.edge()) else {
-                    continue;
-                };
-                for vid in [edge.start(), edge.end()] {
-                    if let Ok(v) = topo.vertex(vid) {
-                        let p = v.point();
-                        min =
-                            Point3::new(min.x().min(p.x()), min.y().min(p.y()), min.z().min(p.z()));
-                        max =
-                            Point3::new(max.x().max(p.x()), max.y().max(p.y()), max.z().max(p.z()));
-                    }
-                }
-            }
-        }
-    }
-    if min.x() > max.x() {
-        return None;
-    }
-    Some((min, max))
+    let aabb = crate::measure::face_set_bounding_box(topo, comp).ok()?;
+    Some((aabb.min, aabb.max))
 }
 
 /// Does the closed surface made of `faces` enclose `p`?

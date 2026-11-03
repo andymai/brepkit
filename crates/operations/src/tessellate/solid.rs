@@ -314,6 +314,7 @@ pub(super) fn tessellate_solid_core(
 ) -> Result<CoreMesh, crate::OperationsError> {
     use brepkit_topology::explorer;
 
+    super::check_deflection(deflection)?;
     let all_faces = explorer::solid_faces(topo, solid)?;
     let edge_face_map = explorer::edge_to_face_map(topo, solid)?;
     let mut phase_t = PhaseTimer::start();
