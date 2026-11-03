@@ -1329,8 +1329,9 @@ pub fn whole_ring(
 /// The middle of a face whose outer wire has a closed curved edge at one
 /// `u` (a tube circle of a torus band from a partial revolution): that
 /// edge's middle `v`, at the `u` an open curved edge of the wire running in
-/// `u` reaches halfway. `None` when no closed edge holds `u` or no open edge
-/// runs in it.
+/// `u` reaches halfway. An edge holds `u` when eight points along it share
+/// one. `None` when no closed edge holds `u`, no open edge runs in it, or the
+/// face has holes, which could cover that point.
 fn closed_curve_holds_u(
     topo: &Topology,
     face: &brepkit_topology::face::Face,
@@ -1338,9 +1339,13 @@ fn closed_curve_holds_u(
     tol: Tolerance,
 ) -> Result<Option<Point3>, AlgoError> {
     use brepkit_topology::edge::EdgeCurve;
+    if !face.inner_wires().is_empty() {
+        return Ok(None);
+    }
     let surface = face.surface();
     let turn = std::f64::consts::TAU;
     let wrap = |d: f64| (d + turn / 2.0).rem_euclid(turn) - turn / 2.0;
+    let same = tol.angular.max(1e-9);
     let mut v_mid: Option<f64> = None;
     let mut u_mid: Option<f64> = None;
     for oe in edges {
@@ -1360,14 +1365,23 @@ fn closed_curve_holds_u(
                 ep,
             ))
         };
-        let (Some(a), Some(m), Some(b)) = (uv(0.25), uv(0.5), uv(0.75)) else {
+        let Some(samples) = (0..8)
+            .map(|k| uv((f64::from(k) + 0.5) / 8.0))
+            .collect::<Option<Vec<_>>>()
+        else {
             continue;
         };
+        let Some(m) = uv(0.5) else {
+            continue;
+        };
+        let holds_u = samples
+            .iter()
+            .all(|p| wrap(p.0 - samples[0].0).abs() <= same);
         if e.start() == e.end() {
-            if v_mid.is_none() && wrap(a.0 - b.0).abs() <= tol.angular.max(1e-9) {
+            if v_mid.is_none() && holds_u {
                 v_mid = Some(m.1);
             }
-        } else if u_mid.is_none() && wrap(b.0 - a.0).abs() > tol.angular.max(1e-9) {
+        } else if u_mid.is_none() && !holds_u {
             u_mid = Some(m.0);
         }
     }
@@ -1431,7 +1445,9 @@ fn sample_face_interior(
         // middle lies at the closed curve's `v` and the `u` an arc along the
         // ring reaches halfway, as the cylinder rule above would put the
         // sample on the end circle itself.
-        if let Some(pt) = closed_curve_holds_u(topo, face, edges, tol)? {
+        if closed_mid.is_some()
+            && let Some(pt) = closed_curve_holds_u(topo, face, edges, tol)?
+        {
             return Ok(pt);
         }
         if let Some(mid) = closed_mid
@@ -1796,6 +1812,60 @@ mod tests {
         assert!(
             classify_2d::point_in_polygon_2d(frame.project(pt), &poly2d),
             "sample {pt:?} is not inside the L-frame polygon"
+        );
+    }
+
+    /// A rim of the unit sphere in the plane x = 0.6 has one ring angle at
+    /// a quarter and three quarters of the way round but not between, so it
+    /// does not hold `u`; a sphere band bounded by it has no tube middle.
+    #[test]
+    fn a_sphere_rim_is_no_tube_circle() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::SphericalSurface;
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::{Face, FaceSurface};
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        let mut topo = Topology::new();
+        let x = Vec3::new(1.0, 0.0, 0.0);
+        let mut rim = |at: f64| {
+            let r = (1.0 - at * at).sqrt();
+            let v = topo.add_vertex(Vertex::new(Point3::new(at, r, 0.0), 1e-7));
+            // Its angle starts at +y, so a quarter and three quarters round
+            // lie at +z and -z, both at ring angle 0.
+            let circle =
+                Circle3D::new_with_ref(Point3::new(at, 0.0, 0.0), x, r, Vec3::new(0.0, 1.0, 0.0))
+                    .unwrap();
+            (v, topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(circle))))
+        };
+        let ((va, ra), (vb, rb)) = (rim(0.6), rim(0.8));
+        let level =
+            Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0).unwrap();
+        let arc = topo.add_edge(Edge::new(va, vb, EdgeCurve::Circle(level)));
+        let wire = topo.add_wire(
+            Wire::new(
+                vec![
+                    OrientedEdge::new(ra, true),
+                    OrientedEdge::new(arc, true),
+                    OrientedEdge::new(rb, false),
+                    OrientedEdge::new(arc, false),
+                ],
+                true,
+            )
+            .unwrap(),
+        );
+        let face_id = topo.add_face(Face::new(
+            wire,
+            vec![],
+            FaceSurface::Sphere(SphericalSurface::new(Point3::new(0.0, 0.0, 0.0), 1.0).unwrap()),
+        ));
+        let face = topo.face(face_id).unwrap();
+        let edges = topo.wire(face.outer_wire()).unwrap().edges().to_vec();
+        assert!(
+            closed_curve_holds_u(&topo, face, &edges, Tolerance::default())
+                .unwrap()
+                .is_none()
         );
     }
 
