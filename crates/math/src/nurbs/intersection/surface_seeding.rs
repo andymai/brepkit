@@ -1146,9 +1146,10 @@ pub(super) fn find_ssi_seeds_grid(
                 .map(|(k, &(i, dist))| (i, k, dist)),
         );
     for (i, k, dist) in one_sided {
-        let mutual = nearest_in_2[i].0 == k && nearest_in_1[k].0 == i;
+        // An unset partner keeps its infinite distance, so the threshold
+        // test guards the index.
         if dist < threshold
-            && !mutual
+            && !(nearest_in_2[i].0 == k && nearest_in_1[k].0 == i)
             && let Some(refined) = refine_ssi_point(
                 s1, s2, pts1[i].0, pts1[i].1, pts2[k].0, pts2[k].1, tolerance,
             )
