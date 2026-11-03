@@ -2816,6 +2816,102 @@ fn detect_trivial_relation(
             })
         };
 
+    // A torus's axis lies outside it, `sqrt(R^2 + t^2) - r` clear at `t`
+    // along it (a horn torus touches it at its pinch), so a solid holding a
+    // point of the axis clear of the torus is not inside it, though every
+    // vertex, edge probe and its centre lie in the tube: a box spanning the
+    // torus's hole. The axis enters and leaves the solid only where it
+    // meets one of the solid's surfaces, so the stretches between those
+    // meetings are probed, however thin the solid is along the axis.
+    let axis_outside = |topo: &Topology,
+                        inner: SolidId,
+                        outer: Option<&brepkit_algo::classifier::AnalyticClassifier>,
+                        bb: &Option<(Point3, Point3)>|
+     -> bool {
+        let (
+            Some(brepkit_algo::classifier::AnalyticClassifier::Torus {
+                center,
+                axis,
+                major_radius,
+                minor_radius,
+            }),
+            Some((lo, hi)),
+        ) = (outer, *bb)
+        else {
+            return false;
+        };
+        let (mut t0, mut t1) = (f64::NEG_INFINITY, f64::INFINITY);
+        for (o, d, l, h) in [
+            (center.x(), axis.x(), lo.x(), hi.x()),
+            (center.y(), axis.y(), lo.y(), hi.y()),
+            (center.z(), axis.z(), lo.z(), hi.z()),
+        ] {
+            if d.abs() < 1e-12 {
+                if o < l || o > h {
+                    return false;
+                }
+            } else {
+                let (a, b) = ((l - o) / d, (h - o) / d);
+                t0 = t0.max(a.min(b));
+                t1 = t1.min(a.max(b));
+            }
+        }
+        if t0 > t1 {
+            return false;
+        }
+        let Ok(faces) = brepkit_topology::explorer::solid_faces(topo, inner) else {
+            return false;
+        };
+        let from = *center + *axis * t0;
+        let mut cuts = vec![t0, t1];
+        for fid in faces {
+            use brepkit_check::classify::ray_surface as ray;
+            let Ok(face) = topo.face(fid) else {
+                return false;
+            };
+            let hits: Vec<f64> = match face.surface() {
+                FaceSurface::Plane { normal, d } => ray::ray_plane(from, *axis, *normal, *d)
+                    .into_iter()
+                    .collect(),
+                FaceSurface::Cylinder(c) => ray::ray_cylinder(from, *axis, c).to_vec(),
+                FaceSurface::Cone(c) => ray::ray_cone(from, *axis, c).to_vec(),
+                FaceSurface::Sphere(s) => ray::ray_sphere(from, *axis, s).to_vec(),
+                FaceSurface::Torus(t) => ray::ray_torus(from, *axis, t).to_vec(),
+                FaceSurface::Nurbs(n) => match ray::ray_nurbs(from, *axis, n, 20) {
+                    Ok(hits) => hits.into_iter().map(|(t, _, _)| t).collect(),
+                    Err(_) => return false,
+                },
+            };
+            cuts.extend(
+                hits.into_iter()
+                    .map(|t| t + t0)
+                    .filter(|&t| t > t0 && t < t1),
+            );
+        }
+        cuts.sort_by(f64::total_cmp);
+        // One classifier for every probe: its face index is built once. A
+        // probe on the solid's boundary counts too (the axis lying in one of
+        // its faces): that point of the solid is just as clear of the torus.
+        let Ok(classifier) = brepkit_check::classify::SolidClassifier::new(topo, inner) else {
+            return false;
+        };
+        let options = brepkit_check::classify::ClassifyOptions {
+            tolerance: tol.linear,
+            ..brepkit_check::classify::ClassifyOptions::default()
+        };
+        cuts.windows(2).any(|w| {
+            [0.25, 0.5, 0.75].into_iter().any(|f| {
+                let t = (w[1] - w[0]).mul_add(f, w[0]);
+                major_radius.hypot(t) - minor_radius > tol.linear * 10.0
+                    && matches!(
+                        classifier.classify(*center + *axis * t, &options),
+                        Ok(brepkit_check::classify::PointClassification::Inside
+                            | brepkit_check::classify::PointClassification::OnBoundary)
+                    )
+            })
+        })
+    };
+
     // The boundary witness guards both terms: the analytic term tests the
     // tool's VERTICES, and a round tool (two seam vertices on a cylinder)
     // can hold every vertex inside the blank while its rims leave it. A
@@ -2831,7 +2927,8 @@ fn detect_trivial_relation(
                 && !volume_refutes(topo, b, a)))
         && nurbs_faces_proved_inside(topo, b, a, tol)
         && !center_outside(topo, b, a, &aabb_b)
-        && !boundary_probe_outside(topo, b, a, &aabb_b);
+        && !boundary_probe_outside(topo, b, a, &aabb_b)
+        && !axis_outside(topo, b, ca, &aabb_b);
     let a_in_b = !hollow(b)
         && ((all_a_verts_in_b && aabb_encloses(&aabb_a, &aabb_b))
             || (cb.is_none()
@@ -2839,7 +2936,8 @@ fn detect_trivial_relation(
                 && !volume_refutes(topo, a, b)))
         && nurbs_faces_proved_inside(topo, a, b, tol)
         && !center_outside(topo, a, b, &aabb_a)
-        && !boundary_probe_outside(topo, a, b, &aabb_a);
+        && !boundary_probe_outside(topo, a, b, &aabb_a)
+        && !axis_outside(topo, a, cb, &aabb_a);
 
     TrivialRelation {
         identical: aabbs_match && all_b_verts_in_a && all_a_verts_in_b,
