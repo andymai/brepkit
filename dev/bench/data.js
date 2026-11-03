@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793693064234,
+  "lastUpdate": 1793700806084,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -65015,6 +65015,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 28328513,
             "range": "± 420393",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "66242dffbece5aff6f763f3d0b93a29ea0e4b760",
+          "message": "test(operations): pin a slab across a plate's through hole as a ready repro (#2286)\n\nThis adds an ignored ready repro for a fuse that falls back, and records\nwhat I found in the roadmap. No engine code changes.\n\nA plate 60 by 40 by 5 with a round through hole of radius 5, fused with\na slab 3 by 30 by 20 standing on the plate across the hole, falls back\nto a mesh of 57 faces holding 13408.576, where 13407.301 is exact. The\nhole's rim cuts the slab's bottom edge into a chord that shares both\nends with the rim's arc, and the assembler welds the two into one edge\nused by the hole's wall and three planes. The crossing reaches the paves\nas three vertices at one point, one per phase that found it. Sunk 0.5\ninto the plate, the slab falls back too: there the chord is the slab\nside's section along the plate's top, left whole across the hole, so it\nfirst appears in the face splitter.\n\nI tried pairing these in the pave filler: grouping the pieces between an\nedge's paves by the positions of their ends, and paving the curved one\napart. That made the standing slab exact (13 faces, 13407.301), but it\nalso split the lip corner's chord and arc, which have to weld.\n`exact_coincident_lip_fuse_stays_analytic` ran past 10 minutes and\n`compound_cut_by_two_keyhole_pins_meeting_on_a_knuckle_face_stays_exact`\nfailed. That is the universal merge rule the roadmap already lists as\nunbuildable, so the change is not here and the roadmap lists it as\nrefuted.\n\n## Change\n\n- `slab_across_a_hole.rs`: the fuse in three poses with the hole's seam\nturned to five angles, ignored as a ready repro. Run with `--ignored` it\nfails on its first case, a mesh fallback.\n- The roadmap gains an OPEN row for the case (next step: a per-case\nsplit in the face splitter), the refuted pave, and a third\ndeferred-defect pin in the inventory.\n\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nAdds an ignored ready repro for a fuse that falls back to a mesh when a\nslab stands on a plate across a round through hole, and records the\nfindings in the roadmap. No engine code changes.\n\n- `slab_across_a_hole.rs` pins the slab fuse in three poses with five\nhole-seam angles; run with `--ignored` it fails on its first case.\n- The roadmap gains an OPEN row for the case, a refuted universal pave\nmerge rule, and a third deferred-defect pin in the inventory.\n\n<sup>Written for commit 34d53f4a835f1f01a3ebc309aa764473283c99d9.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2286?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2286?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2286&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-11-03T02:10:18-08:00",
+          "tree_id": "7df108de774e701764db9145242c52ba04eb58a3",
+          "url": "https://github.com/andymai/brepkit/commit/66242dffbece5aff6f763f3d0b93a29ea0e4b760"
+        },
+        "date": 1793700799996,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1068217,
+            "range": "± 1177",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1139258,
+            "range": "± 58445",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12692,
+            "range": "± 50",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 683539,
+            "range": "± 1302",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 28173264,
+            "range": "± 53693",
             "unit": "ns/iter"
           }
         ]
