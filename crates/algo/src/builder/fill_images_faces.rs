@@ -1418,7 +1418,7 @@ const SEAM_ON_CIRCLE_TOL: f64 = 1e-6;
 struct SeamAnchor {
     anchor: Point3,
     rotated: Option<brepkit_math::nurbs::curve::NurbsCurve>,
-    pieces: Vec<(brepkit_math::nurbs::curve::NurbsCurve, Point3, Point3)>,
+    pieces: Vec<(EdgeCurve, Point3, Point3)>,
 }
 
 /// Compute seam-anchored start points for closed intersection curves.
@@ -1479,12 +1479,13 @@ fn compute_seam_anchors(topo: &Topology, arena: &GfaArena) -> BTreeMap<usize, Se
             let Some(anchor) = seam_anchor_on_circle(topo, face, circle) else {
                 continue;
             };
+            let pieces = arcs_at_coincident_rim_vertices(topo, arena, curve_ds, circle, anchor);
             anchors.insert(
                 idx,
                 SeamAnchor {
                     anchor,
                     rotated: None,
-                    pieces: Vec::new(),
+                    pieces,
                 },
             );
             break;
@@ -1832,7 +1833,10 @@ fn cut_window_at_seams(
     Some(SeamAnchor {
         anchor: from,
         rotated: None,
-        pieces,
+        pieces: pieces
+            .into_iter()
+            .map(|(piece, a, b)| (EdgeCurve::NurbsCurve(piece), a, b))
+            .collect(),
     })
 }
 
@@ -1922,7 +1926,10 @@ fn anchor_and_cut_loop(
     Some(SeamAnchor {
         anchor,
         rotated: Some(rotated),
-        pieces,
+        pieces: pieces
+            .into_iter()
+            .map(|(piece, a, b)| (EdgeCurve::NurbsCurve(piece), a, b))
+            .collect(),
     })
 }
 
@@ -1950,6 +1957,284 @@ pub fn start_closed_curve_at(
     let mut weights = tail.weights().to_vec();
     weights.extend(head.weights()[1..].iter().map(|w| w * scale));
     NurbsCurve::new(p, knots, points, weights).ok()
+}
+
+/// Whether a closed circle or ellipse lies in a plane face's plane and wholly
+/// off the face, in one of its holes or past its outline.
+fn closed_conic_off_plane_face(
+    topo: &Topology,
+    face_id: FaceId,
+    curve: &EdgeCurve,
+    tol: f64,
+) -> bool {
+    conic_side_of_plane_face(topo, face_id, curve, tol) == Some(false)
+}
+
+/// Which side of a plane face a closed circle or ellipse in its plane lies
+/// on, read on the face's own lines and arcs, holes included: `Some(true)`
+/// wholly on the face, `Some(false)` wholly off it. Every sample must read
+/// the same side, and every two neighbouring samples stand farther from the
+/// boundary together than the arc joining them is long, so the curve cannot
+/// cross it there; arcs that fail are halved down to a depth. A face with a
+/// NURBS edge is read through chords ([`chorded_boundary`]). `None` when the
+/// curve meets the boundary or cannot be read (another curve or face, a
+/// sample off the plane).
+pub(super) fn conic_side_of_plane_face(
+    topo: &Topology,
+    face_id: FaceId,
+    curve: &EdgeCurve,
+    tol: f64,
+) -> Option<bool> {
+    use brepkit_math::region2d::{distance_to_boundary, point_in_region};
+    use brepkit_math::vec::Point2;
+    const SAMPLES: u32 = 16;
+    const DEPTH: u32 = 8;
+    let face = topo.face(face_id).ok()?;
+    let FaceSurface::Plane { normal, d } = *face.surface() else {
+        return None;
+    };
+    // `reach` bounds the curve's speed, so `reach` times an angle bounds
+    // the length of the arc it spans.
+    let (center, reach, at): (Point3, f64, Box<dyn Fn(f64) -> Point3 + '_>) = match curve {
+        EdgeCurve::Circle(c) => (c.center(), c.radius(), Box::new(|t| c.evaluate(t))),
+        EdgeCurve::Ellipse(e) => (e.center(), e.semi_major(), Box::new(|t| e.evaluate(t))),
+        EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => return None,
+    };
+    let frame = brepkit_math::frame::Frame3::from_normal(center, normal).ok()?;
+    // With a NURBS edge the boundary is read through chords, every distance
+    // to it shrunk by how far they stray from their curves.
+    let (pieces, slack) =
+        match brepkit_topology::planar::face_boundary_2d(topo, face_id, center, frame.x, frame.y)
+            .ok()?
+        {
+            Some(pieces) => (pieces, 0.0),
+            None => chorded_boundary(topo, face, center, frame.x, frame.y)?,
+        };
+    let flat = |t: f64| -> Option<Point2> {
+        let p = at(t);
+        let off = p - center;
+        ((normal.dot(brepkit_math::vec::Vec3::new(p.x(), p.y(), p.z())) - d).abs() <= tol)
+            .then(|| Point2::new(off.dot(frame.x), off.dot(frame.y)))
+    };
+    let step = std::f64::consts::TAU / f64::from(SAMPLES);
+    let mut side: Option<bool> = None;
+    let mut stack: Vec<(f64, f64, u32)> = (0..SAMPLES)
+        .map(|k| (step * f64::from(k), step * f64::from(k + 1), 0))
+        .collect();
+    while let Some((t0, t1, depth)) = stack.pop() {
+        let (a, b) = (flat(t0)?, flat(t1)?);
+        for q in [a, b] {
+            // Chords' slack widens the band a sample must clear, not the
+            // parity test, which skips pieces shorter than its tolerance.
+            if slack > 0.0 && distance_to_boundary(&pieces, q) <= tol + slack {
+                return None;
+            }
+            let here = point_in_region(&pieces, q, tol)?;
+            if side.is_some_and(|s| s != here) {
+                return None;
+            }
+            side = Some(here);
+        }
+        if distance_to_boundary(&pieces, a) + distance_to_boundary(&pieces, b) - 2.0 * slack
+            > reach * (t1 - t0)
+        {
+            continue;
+        }
+        if depth >= DEPTH {
+            return None;
+        }
+        stack.push((t0, 0.5 * (t0 + t1), depth + 1));
+        stack.push((0.5 * (t0 + t1), t1, depth + 1));
+    }
+    side
+}
+
+/// A plane face's boundary as chords in the plane through `origin` spanned
+/// by `x` and `y`, holes included, with a bound on how far its curves stand
+/// off them. Lines are exact. A circle or ellipse is cut every 64th of a turn,
+/// its chords' sag at their middles doubled. A NURBS edge is cut eight times
+/// in each knot span, each chord bounded by the farthest control point of its
+/// piece's Bezier form, which holds the piece by the convex hull. `None` when
+/// a piece has a weight that is not positive, or cannot be read.
+fn chorded_boundary(
+    topo: &Topology,
+    face: &Face,
+    origin: Point3,
+    x: brepkit_math::vec::Vec3,
+    y: brepkit_math::vec::Vec3,
+) -> Option<(Vec<brepkit_math::region2d::Boundary2>, f64)> {
+    use brepkit_math::region2d::Boundary2;
+    use brepkit_math::vec::Point2;
+    let flat = |p: Point3| {
+        let off = p - origin;
+        Point2::new(off.dot(x), off.dot(y))
+    };
+    let to_segment = |c: Point3, p: Point3, q: Point3| {
+        let d = q - p;
+        let len2 = d.dot(d);
+        let s = if len2 > 0.0 {
+            ((c - p).dot(d) / len2).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        (c - (p + d * s)).length()
+    };
+    let mut pieces = Vec::new();
+    let mut slack = 0.0_f64;
+    for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+        for oe in topo.wire(wid).ok()?.edges() {
+            let edge = topo.edge(oe.edge()).ok()?;
+            let (a, b) = (
+                topo.vertex(edge.start()).ok()?.point(),
+                topo.vertex(edge.end()).ok()?.point(),
+            );
+            let curve = edge.curve();
+            let (t0, t1) = curve.domain_with_endpoints(a, b);
+            match curve {
+                EdgeCurve::Line => pieces.push(Boundary2::Segment(flat(a), flat(b))),
+                EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => {
+                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                    let n =
+                        ((64.0 * (t1 - t0).abs() / std::f64::consts::TAU).ceil() as usize).max(4);
+                    #[allow(clippy::cast_precision_loss)]
+                    let at = |k: usize| (t1 - t0).mul_add(k as f64 / n as f64, t0);
+                    for k in 0..n {
+                        let (p, q) = (
+                            curve.evaluate_with_endpoints(at(k), a, b),
+                            curve.evaluate_with_endpoints(at(k + 1), a, b),
+                        );
+                        let mid = curve.evaluate_with_endpoints(0.5 * (at(k) + at(k + 1)), a, b);
+                        slack = slack.max(2.0 * (mid - (p + (q - p) * 0.5)).length());
+                        pieces.push(Boundary2::Segment(flat(p), flat(q)));
+                    }
+                }
+                EdgeCurve::NurbsCurve(nurbs) => {
+                    if nurbs.weights().iter().any(|&w| w <= 0.0) {
+                        return None;
+                    }
+                    let (lo, hi) = (t0.min(t1), t0.max(t1));
+                    let mut ends: Vec<f64> = nurbs
+                        .knots()
+                        .iter()
+                        .copied()
+                        .filter(|&k| k > lo && k < hi)
+                        .collect();
+                    ends.dedup();
+                    ends.push(hi);
+                    let mut cuts = vec![lo];
+                    let mut from = lo;
+                    for end in ends {
+                        for j in 1..=8 {
+                            cuts.push((end - from).mul_add(f64::from(j) / 8.0, from));
+                        }
+                        from = end;
+                    }
+                    for w in cuts.windows(2) {
+                        let (ta, tb) = (w[0], w[1]);
+                        let hull =
+                            brepkit_math::nurbs::decompose::curve_bezier_between(nurbs, ta, tb)
+                                .ok()?;
+                        let (p, q) = (nurbs.evaluate(ta), nurbs.evaluate(tb));
+                        for [wx, wy, wz, wt] in hull {
+                            if wt <= 0.0 {
+                                return None;
+                            }
+                            let c = Point3::new(wx / wt, wy / wt, wz / wt);
+                            slack = slack.max(to_segment(c, p, q));
+                        }
+                        pieces.push(Boundary2::Segment(flat(p), flat(q)));
+                    }
+                }
+            }
+        }
+    }
+    Some((pieces, slack))
+}
+
+/// A full section circle's arcs, from `anchor` round, between the vertices of
+/// a closed boundary circle of one of its two faces that coincides with it
+/// and that the pave filler split (a tube's rim under a coaxial wall whose
+/// seam crosses it at another angle). Every face the section bounds then
+/// shares the rim's vertices. Empty unless that gives three vertices or more
+/// (two arcs between the same two vertices would weld into one edge), each
+/// arc under half a turn.
+fn arcs_at_coincident_rim_vertices(
+    topo: &Topology,
+    arena: &GfaArena,
+    curve_ds: &crate::ds::IntersectionCurveDS,
+    circle: &brepkit_math::curves::Circle3D,
+    anchor: Point3,
+) -> Vec<(EdgeCurve, Point3, Point3)> {
+    use std::f64::consts::TAU;
+    let near = |p: Point3, q: Point3| (p - q).length() <= SEAM_ON_CIRCLE_TOL;
+    let mut points = vec![anchor];
+    for fid in [curve_ds.face_a, curve_ds.face_b] {
+        let Ok(face) = topo.face(fid) else { continue };
+        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            let Ok(wire) = topo.wire(wid) else { continue };
+            for oe in wire.edges() {
+                let Ok(edge) = topo.edge(oe.edge()) else {
+                    continue;
+                };
+                let EdgeCurve::Circle(rim) = edge.curve() else {
+                    continue;
+                };
+                if edge.start() != edge.end()
+                    || (rim.radius() - circle.radius()).abs() > SEAM_ON_CIRCLE_TOL
+                    || !near(rim.center(), circle.center())
+                    || rim.normal().dot(circle.normal()).abs() < 1.0 - 1e-9
+                {
+                    continue;
+                }
+                let Some(blocks) = arena.edge_pave_blocks.get(&oe.edge()) else {
+                    continue;
+                };
+                let leaves = arena.collect_leaf_pave_blocks(blocks);
+                if leaves.len() < 2 {
+                    continue;
+                }
+                for pb in leaves.iter().filter_map(|&id| arena.pave_blocks.get(id)) {
+                    for pave in [pb.start, pb.end] {
+                        if let Ok(v) = topo.vertex(arena.resolve_vertex(pave.vertex))
+                            && !points.iter().any(|&q| near(q, v.point()))
+                        {
+                            points.push(v.point());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if points.len() < 3 {
+        return Vec::new();
+    }
+    let Ok(start) = brepkit_math::curves::Circle3D::new_with_ref(
+        circle.center(),
+        circle.normal(),
+        circle.radius(),
+        anchor - circle.center(),
+    ) else {
+        return Vec::new();
+    };
+    let mut along: Vec<(f64, Point3)> = points
+        .iter()
+        .map(|&p| (start.project(p).rem_euclid(TAU), p))
+        .collect();
+    along[0].0 = 0.0;
+    along.sort_by(|a, b| a.0.total_cmp(&b.0));
+    along.push((TAU, anchor));
+    // An open arc's pcurve runs the short way round, so a piece past half a
+    // turn would be read as its complement; keep the circle whole.
+    if along
+        .windows(2)
+        .any(|w| w[1].0 - w[0].0 >= std::f64::consts::PI)
+    {
+        return Vec::new();
+    }
+    along
+        .windows(2)
+        .map(|w| (EdgeCurve::Circle(start.clone()), w[0].1, w[1].1))
+        .collect()
 }
 
 /// Find the point on `circle` at the seam u of `face`'s periodic surface.
@@ -2289,6 +2574,11 @@ fn build_section_edges(
                 {
                     continue;
                 }
+                // A partner's rim circle lying wholly in one of this plane
+                // face's holes, or past its outline, splits nothing here.
+                if closed_conic_off_plane_face(topo, face_id, &curve_ds.curve, tol) {
+                    continue;
+                }
 
                 // Find start/end 3D points by evaluating the curve at its
                 // parametric endpoints. For closed curves (circles), start ≈ end.
@@ -2366,7 +2656,7 @@ fn build_section_edges(
                     Some(seam) if !seam.pieces.is_empty() => seam
                         .pieces
                         .iter()
-                        .map(|(piece, from, to)| (EdgeCurve::NurbsCurve(piece.clone()), *from, *to))
+                        .map(|(piece, from, to)| (piece.clone(), *from, *to))
                         .collect(),
                     Some(SeamAnchor {
                         anchor,
@@ -5297,6 +5587,266 @@ mod tests {
     use super::*;
     use brepkit_math::curves::Circle3D;
     use brepkit_math::vec::Vec3;
+
+    /// A unit circle in a 4 by 4 square lies on it; with a notch 0.01 wide
+    /// reaching to radius 0.97 between the circle's samples it meets the
+    /// boundary; in a hole of radius 1.5 cut from the square it lies off it.
+    #[test]
+    fn a_circle_reads_on_off_or_across_a_plane_face() {
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        let origin = Point3::new(0.0, 0.0, 0.0);
+        let circle = Circle3D::new(origin, z, 1.0).unwrap();
+        let curve = EdgeCurve::Circle(circle.clone());
+        let square = |notch: bool| {
+            let p = |x: f64, y: f64| Point3::new(x, y, 0.0);
+            let mut pts = vec![p(-2.0, -2.0), p(2.0, -2.0)];
+            if notch {
+                // Midway between two of the sixteen samples.
+                let at = circle.evaluate(std::f64::consts::PI / 16.0);
+                let d = Vec3::new(at.x(), at.y(), 0.0);
+                let n = Vec3::new(-d.y(), d.x(), 0.0) * 0.005;
+                let (tip_a, tip_b) = (origin + d * 0.97 - n, origin + d * 0.97 + n);
+                let out = |tip: Point3| tip + d * ((2.0 - tip.x()) / d.x());
+                pts.extend([out(tip_a), tip_a, tip_b, out(tip_b)]);
+            }
+            pts.extend([p(2.0, 2.0), p(-2.0, 2.0)]);
+            pts
+        };
+        for (notch, want) in [(false, Some(true)), (true, None)] {
+            let mut topo = Topology::new();
+            let wire =
+                brepkit_topology::builder::make_polygon_wire(&mut topo, &square(notch), 1e-7)
+                    .unwrap();
+            let face = brepkit_topology::builder::make_face_from_wire(&mut topo, wire).unwrap();
+            assert_eq!(
+                conic_side_of_plane_face(&topo, face, &curve, 1e-7),
+                want,
+                "notch {notch}"
+            );
+        }
+        let mut topo = Topology::new();
+        let wire =
+            brepkit_topology::builder::make_polygon_wire(&mut topo, &square(false), 1e-7).unwrap();
+        let rim =
+            brepkit_topology::builder::make_circle_edge(&mut topo, origin, z, 1.5, 1e-7).unwrap();
+        let hole = topo.add_wire(
+            brepkit_topology::wire::Wire::new(
+                vec![brepkit_topology::wire::OrientedEdge::new(rim, false)],
+                true,
+            )
+            .unwrap(),
+        );
+        let face = topo.add_face(Face::new(
+            wire,
+            vec![hole],
+            FaceSurface::Plane { normal: z, d: 0.0 },
+        ));
+        assert_eq!(
+            conic_side_of_plane_face(&topo, face, &curve, 1e-7),
+            Some(false)
+        );
+    }
+
+    /// A square of half-width 2 with one side stored as a straight NURBS
+    /// edge is read through chords: circles of radius 1.94 and 1.95 about
+    /// its centre lie on it, and one of radius 2.5 meets its boundary.
+    #[test]
+    fn a_circle_reads_on_a_plane_face_with_a_nurbs_side() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        let mut topo = Topology::new();
+        let corners = [(-2.0, -2.0), (2.0, -2.0), (2.0, 2.0), (-2.0, 2.0)];
+        let verts: Vec<_> = corners
+            .iter()
+            .map(|&(x, y)| topo.add_vertex(Vertex::new(Point3::new(x, y, 0.0), 1e-7)))
+            .collect();
+        let mut sides = Vec::new();
+        for k in 0..4 {
+            let (a, b) = (verts[k], verts[(k + 1) % 4]);
+            let curve = if k == 1 {
+                let (p, q) = (corners[1], corners[2]);
+                EdgeCurve::NurbsCurve(
+                    NurbsCurve::new(
+                        1,
+                        vec![0.0, 0.0, 1.0, 1.0],
+                        vec![Point3::new(p.0, p.1, 0.0), Point3::new(q.0, q.1, 0.0)],
+                        vec![1.0, 1.0],
+                    )
+                    .unwrap(),
+                )
+            } else {
+                EdgeCurve::Line
+            };
+            let edge = topo.add_edge(Edge::new(a, b, curve));
+            sides.push(brepkit_topology::wire::OrientedEdge::new(edge, true));
+        }
+        let wire = topo.add_wire(brepkit_topology::wire::Wire::new(sides, true).unwrap());
+        let face = topo.add_face(Face::new(
+            wire,
+            vec![],
+            FaceSurface::Plane { normal: z, d: 0.0 },
+        ));
+        for (r, want) in [(1.94, Some(true)), (1.95, Some(true)), (2.5, None)] {
+            let circle =
+                EdgeCurve::Circle(Circle3D::new(Point3::new(0.0, 0.0, 0.0), z, r).unwrap());
+            assert_eq!(
+                conic_side_of_plane_face(&topo, face, &circle, 1e-7),
+                want,
+                "radius {r}"
+            );
+        }
+    }
+
+    /// A closed polyline face whose `k`th side is a degree-1 NURBS through
+    /// `side`, the others lines, about the origin in the plane `z = 0`.
+    fn square_with_a_nurbs_side(
+        topo: &mut Topology,
+        corners: &[(f64, f64)],
+        k: usize,
+        knots: Vec<f64>,
+        side: &[(f64, f64)],
+    ) -> brepkit_topology::wire::WireId {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        let verts: Vec<_> = corners
+            .iter()
+            .map(|&(x, y)| topo.add_vertex(Vertex::new(Point3::new(x, y, 0.0), 1e-7)))
+            .collect();
+        let mut sides = Vec::new();
+        for i in 0..corners.len() {
+            let (a, b) = (verts[i], verts[(i + 1) % corners.len()]);
+            let curve = if i == k {
+                EdgeCurve::NurbsCurve(
+                    NurbsCurve::new(
+                        1,
+                        knots.clone(),
+                        side.iter().map(|&(x, y)| Point3::new(x, y, 0.0)).collect(),
+                        vec![1.0; side.len()],
+                    )
+                    .unwrap(),
+                )
+            } else {
+                EdgeCurve::Line
+            };
+            let edge = topo.add_edge(Edge::new(a, b, curve));
+            sides.push(brepkit_topology::wire::OrientedEdge::new(edge, true));
+        }
+        topo.add_wire(brepkit_topology::wire::Wire::new(sides, true).unwrap())
+    }
+
+    /// A NURBS side hiding a notch or a spike in three tiny knot spans: a
+    /// unit circle crossing it meets the boundary, wherever uniform samples
+    /// of the side would fall.
+    #[test]
+    fn a_circle_meets_a_notch_hidden_in_tiny_knot_spans() {
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        let circle = EdgeCurve::Circle(Circle3D::new(Point3::new(0.0, 0.0, 0.0), z, 1.0).unwrap());
+        let plane = FaceSurface::Plane { normal: z, d: 0.0 };
+        // The outline's right side dents in to x = 0.97.
+        let mut topo = Topology::new();
+        let outer = square_with_a_nurbs_side(
+            &mut topo,
+            &[(-2.0, -2.0), (2.0, -2.0), (2.0, 2.0), (-2.0, 2.0)],
+            1,
+            vec![0.0, 0.0, 0.5501, 0.5502, 0.5503, 1.0, 1.0],
+            &[
+                (2.0, -2.0),
+                (2.0, 0.2004),
+                (0.97, 0.2008),
+                (2.0, 0.2012),
+                (2.0, 2.0),
+            ],
+        );
+        let face = topo.add_face(Face::new(outer, vec![], plane.clone()));
+        assert_eq!(conic_side_of_plane_face(&topo, face, &circle, 1e-7), None);
+        // A hole whose right side reaches material in to x = 0.9.
+        let mut topo = Topology::new();
+        let outer = brepkit_topology::builder::make_polygon_wire(
+            &mut topo,
+            &[
+                Point3::new(-3.0, -3.0, 0.0),
+                Point3::new(3.0, -3.0, 0.0),
+                Point3::new(3.0, 3.0, 0.0),
+                Point3::new(-3.0, 3.0, 0.0),
+            ],
+            1e-7,
+        )
+        .unwrap();
+        let hole = square_with_a_nurbs_side(
+            &mut topo,
+            &[(-2.0, 2.0), (2.0, 2.0), (2.0, -2.0), (-2.0, -2.0)],
+            1,
+            vec![0.0, 0.0, 0.5371, 0.53715, 0.5372, 1.0, 1.0],
+            &[
+                (2.0, 2.0),
+                (2.0, -0.1),
+                (0.9, -0.1002),
+                (2.0, -0.1004),
+                (2.0, -2.0),
+            ],
+        );
+        let face = topo.add_face(Face::new(outer, vec![hole], plane));
+        assert_eq!(conic_side_of_plane_face(&topo, face, &circle, 1e-7), None);
+    }
+
+    /// A square whose sides are NURBS through 2,000 points each, their
+    /// chords far shorter than the slack a small outward bump on the bottom
+    /// side brings: a unit circle inside still reads on the face, the parity
+    /// test counting every short chord.
+    #[test]
+    fn short_chords_still_count_beside_a_bulging_side() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        let mut topo = Topology::new();
+        let corners = [(-2.0, -2.0), (2.0, -2.0), (2.0, 2.0), (-2.0, 2.0)];
+        let verts: Vec<_> = corners
+            .iter()
+            .map(|&(x, y)| topo.add_vertex(Vertex::new(Point3::new(x, y, 0.0), 1e-7)))
+            .collect();
+        let n = 2000_u32;
+        // A clamped uniform NURBS of `degree` from `p` to `q` through `n`
+        // control points along the side, the middle one moved by `bump`.
+        let dense = |degree: usize, p: (f64, f64), q: (f64, f64), bump: (f64, f64)| {
+            let spans = n as usize - degree;
+            let mut knots = vec![0.0; degree + 1];
+            #[allow(clippy::cast_precision_loss)]
+            knots.extend((1..spans).map(|k| k as f64 / spans as f64));
+            knots.extend(vec![1.0; degree + 1]);
+            let points = (0..n)
+                .map(|k| {
+                    let f = f64::from(k) / f64::from(n - 1);
+                    let (dx, dy) = if k == n / 2 { bump } else { (0.0, 0.0) };
+                    Point3::new(p.0 + (q.0 - p.0) * f + dx, p.1 + (q.1 - p.1) * f + dy, 0.0)
+                })
+                .collect();
+            NurbsCurve::new(degree, knots, points, vec![1.0; n as usize]).unwrap()
+        };
+        let mut sides = Vec::new();
+        for k in 0..4 {
+            let (p, q) = (corners[k], corners[(k + 1) % 4]);
+            let curve = if k == 0 {
+                dense(2, p, q, (0.0, -0.05))
+            } else {
+                dense(1, p, q, (0.0, 0.0))
+            };
+            let edge = topo.add_edge(Edge::new(
+                verts[k],
+                verts[(k + 1) % 4],
+                EdgeCurve::NurbsCurve(curve),
+            ));
+            sides.push(brepkit_topology::wire::OrientedEdge::new(edge, true));
+        }
+        let wire = topo.add_wire(brepkit_topology::wire::Wire::new(sides, true).unwrap());
+        let face = topo.add_face(Face::new(
+            wire,
+            vec![],
+            FaceSurface::Plane { normal: z, d: 0.0 },
+        ));
+        let circle = EdgeCurve::Circle(Circle3D::new(Point3::new(0.0, 0.0, 0.0), z, 1.0).unwrap());
+        assert_eq!(
+            conic_side_of_plane_face(&topo, face, &circle, 1e-7),
+            Some(true)
+        );
+    }
 
     /// A chord shares both ends with the arc it subtends; only an edge that
     /// runs along the arc may stand in for it.

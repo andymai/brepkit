@@ -1558,3 +1558,87 @@ fn coaxial_patches_read_apart_only_when_they_share_no_area() {
         tol
     ));
 }
+
+/// A whole cylinder band between circle rims reads its axial interval; with
+/// one rim an exact rational circle stored as NURBS, which samples cannot
+/// prove level, it reads none.
+#[test]
+fn a_level_band_takes_circle_rims_only() {
+    use brepkit_math::curves::Circle3D;
+    use brepkit_math::nurbs::curve::NurbsCurve;
+    use brepkit_topology::edge::{Edge, EdgeCurve};
+    use brepkit_topology::face::{Face, FaceSurface};
+    use brepkit_topology::vertex::Vertex;
+    use brepkit_topology::wire::{OrientedEdge, Wire};
+
+    let z = Vec3::new(0.0, 0.0, 1.0);
+    let cyl = brepkit_math::surfaces::CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), z, 1.0)
+        .unwrap();
+    let band = |nurbs_rim: bool| {
+        let mut topo = Topology::new();
+        let (p0, p1) = (Point3::new(1.0, 0.0, 0.0), Point3::new(1.0, 0.0, 1.0));
+        let (v0, v1) = (
+            topo.add_vertex(Vertex::new(p0, 1e-7)),
+            topo.add_vertex(Vertex::new(p1, 1e-7)),
+        );
+        let bottom = if nurbs_rim {
+            let w = std::f64::consts::FRAC_1_SQRT_2;
+            let corners = [
+                (1.0, 0.0),
+                (1.0, 1.0),
+                (0.0, 1.0),
+                (-1.0, 1.0),
+                (-1.0, 0.0),
+                (-1.0, -1.0),
+                (0.0, -1.0),
+                (1.0, -1.0),
+                (1.0, 0.0),
+            ];
+            EdgeCurve::NurbsCurve(
+                NurbsCurve::new(
+                    2,
+                    vec![
+                        0.0, 0.0, 0.0, 0.25, 0.25, 0.5, 0.5, 0.75, 0.75, 1.0, 1.0, 1.0,
+                    ],
+                    corners
+                        .iter()
+                        .map(|&(x, y)| Point3::new(x, y, 0.0))
+                        .collect(),
+                    vec![1.0, w, 1.0, w, 1.0, w, 1.0, w, 1.0],
+                )
+                .unwrap(),
+            )
+        } else {
+            EdgeCurve::Circle(Circle3D::new(Point3::new(0.0, 0.0, 0.0), z, 1.0).unwrap())
+        };
+        let top = EdgeCurve::Circle(Circle3D::new(Point3::new(0.0, 0.0, 1.0), z, 1.0).unwrap());
+        let rim0 = topo.add_edge(Edge::new(v0, v0, bottom));
+        let rim1 = topo.add_edge(Edge::new(v1, v1, top));
+        let seam = topo.add_edge(Edge::new(v0, v1, EdgeCurve::Line));
+        let wire = topo.add_wire(
+            Wire::new(
+                vec![
+                    OrientedEdge::new(rim0, true),
+                    OrientedEdge::new(seam, true),
+                    OrientedEdge::new(rim1, false),
+                    OrientedEdge::new(seam, false),
+                ],
+                true,
+            )
+            .unwrap(),
+        );
+        let face = topo.add_face(Face::new(wire, vec![], FaceSurface::Cylinder(cyl.clone())));
+        level_band(
+            &topo,
+            face,
+            &FaceSurface::Cylinder(cyl.clone()),
+            Tolerance::new(),
+        )
+    };
+    let (lo, hi) = band(false).expect("circle rims read level");
+    assert!(
+        lo.abs() < 1e-9 && (hi - 1.0).abs() < 1e-9,
+        "interval {lo}..{hi}"
+    );
+    assert!(band(true).is_none());
+}

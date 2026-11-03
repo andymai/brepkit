@@ -103,6 +103,27 @@ pub struct SameDomainResult {
 /// the area-based representative pick could disagree with the overlap test.
 const SD_EDGE_SAMPLES: usize = 8;
 
+/// Samples along an edge for the planar polygons: [`SD_EDGE_SAMPLES`], or
+/// for a circle or ellipse arc one per 64th of a turn it sweeps if that is
+/// more. A whole circle in eight sags 7.6% of its radius, past the width of a
+/// ring cut from a tube's rim, whose interior point then reads off its own
+/// polygon and inside a neighbouring ring's.
+fn sd_edge_samples(
+    curve: &brepkit_topology::edge::EdgeCurve,
+    start: brepkit_math::vec::Point3,
+    end: brepkit_math::vec::Point3,
+) -> usize {
+    use brepkit_topology::edge::EdgeCurve;
+    if !matches!(curve, EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_)) {
+        return SD_EDGE_SAMPLES;
+    }
+    let (t0, t1) = curve.domain_with_endpoints(start, end);
+    let per_turn = 64.0 * (t1 - t0).abs() / std::f64::consts::TAU;
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let n = per_turn.ceil().min(64.0) as usize;
+    n.max(SD_EDGE_SAMPLES)
+}
+
 /// Quantized 3D grid position — collision-free vertex identity.
 type QVert = (i64, i64, i64);
 
@@ -1455,7 +1476,7 @@ fn sample_sd_wire(
             edge.curve(),
             sp,
             ep,
-            SD_EDGE_SAMPLES,
+            sd_edge_samples(edge.curve(), sp, ep),
             oe.is_forward(),
             &mut pts,
         );
@@ -1801,7 +1822,7 @@ fn bbox2d_overlap_area(a: &[brepkit_math::vec::Point2], b: &[brepkit_math::vec::
 ///
 /// Returns `None` for non-planar faces or faces whose outer wire samples to
 /// fewer than three points. The area is an approximation: each edge is sampled
-/// at [`SD_EDGE_SAMPLES`] points (so arc boundaries contribute their swept
+/// at [`sd_edge_samples`] points (so arc boundaries contribute their swept
 /// area, matching [`planar_faces_overlap`]), then the projected polygon's
 /// signed area is taken — a finer arc is under-counted by the chord polygon.
 ///
@@ -1828,7 +1849,7 @@ fn planar_face_area(topo: &Topology, face_id: FaceId) -> Option<f64> {
             edge.curve(),
             sp,
             ep,
-            SD_EDGE_SAMPLES,
+            sd_edge_samples(edge.curve(), sp, ep),
             oe.is_forward(),
             &mut pts,
         );
@@ -2094,8 +2115,23 @@ fn analytic_faces_overlap(
 
     // A patch spanning (near) a full turn is a closed/seam surface, not the
     // partial corner patches this pass targets; comparing it parametrically is
-    // ambiguous, so bail and let edge-set matching handle it.
-    if (i_hi - i_lo) >= TAU - tol.angular || (j_hi - j_lo) >= TAU - tol.angular {
+    // ambiguous. Two whole bands between level rims overlap where their
+    // axial intervals do, whatever angle their seams lie at (a tube extruded
+    // from a circle against a cup's wall); any other pair is left to
+    // edge-set matching.
+    let i_whole = (i_hi - i_lo) >= TAU - tol.angular;
+    let j_whole = (j_hi - j_lo) >= TAU - tol.angular;
+    if i_whole || j_whole {
+        if i_whole
+            && j_whole
+            && let (Some((a0, a1)), Some((b0, b1))) = (
+                level_band(topo, sub_faces[i].face_id, &ref_surface, tol),
+                level_band(topo, sub_faces[j].face_id, &ref_surface, tol),
+            )
+        {
+            let overlap = a1.min(b1) - a0.max(b0);
+            return overlap > tol.linear && overlap > 0.5 * (a1 - a0).min(b1 - b0);
+        }
         return false;
     }
 
@@ -2203,6 +2239,64 @@ fn analytic_faces_overlap(
     smaller > tol.linear_sq() && overlap_area > smaller * 0.5
 }
 
+/// The axial interval of a cylinder or cone face that is a whole band between
+/// two level rims, read through `surface`: no holes, every edge either a
+/// ruling or a circle level at one of the two ends. `None` for any other
+/// face.
+fn level_band(
+    topo: &Topology,
+    face_id: FaceId,
+    surface: &FaceSurface,
+    tol: Tolerance,
+) -> Option<(f64, f64)> {
+    use brepkit_topology::edge::EdgeCurve;
+    let face = topo.face(face_id).ok()?;
+    if !face.inner_wires().is_empty() {
+        return None;
+    }
+    let wire = topo.wire(face.outer_wire()).ok()?;
+    let mut levels: Vec<f64> = Vec::new();
+    for oe in wire.edges() {
+        let edge = topo.edge(oe.edge()).ok()?;
+        let (sp, ep) = (
+            topo.vertex(edge.start()).ok()?.point(),
+            topo.vertex(edge.end()).ok()?.point(),
+        );
+        let mut pts = Vec::new();
+        super::pcurve_compute::sample_edge_uniform_native(
+            edge.curve(),
+            sp,
+            ep,
+            SD_EDGE_SAMPLES,
+            true,
+            &mut pts,
+        );
+        pts.push(ep);
+        let (uv, _) = project_points_through_surface(surface, &pts)?;
+        let (lo, hi) = uv
+            .iter()
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), &(_, v)| {
+                (lo.min(v), hi.max(v))
+            });
+        // Only a circle can be read level from samples: a NURBS rim could
+        // dip between them, and an ellipse on the wall is never level.
+        match edge.curve() {
+            EdgeCurve::Circle(_) if hi - lo <= tol.linear => levels.push(lo),
+            EdgeCurve::Line => {}
+            EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_) => {
+                return None;
+            }
+        }
+    }
+    let lo = levels.iter().copied().fold(f64::INFINITY, f64::min);
+    let hi = levels.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    (hi - lo > tol.linear
+        && levels
+            .iter()
+            .all(|&v| (v - lo).abs() <= tol.linear || (v - hi).abs() <= tol.linear))
+    .then_some((lo, hi))
+}
+
 /// Approximate `(arc-length, axial)` parameter-space area of a cylinder/cone
 /// sub-face's outer wire.
 ///
@@ -2256,9 +2350,9 @@ fn face_outer_aabb(topo: &Topology, face_id: FaceId) -> Option<brepkit_math::aab
     brepkit_math::aabb::Aabb3::try_from_points(face_outer_wire_points(topo, face_id))
 }
 
-/// Sample a face's outer wire at [`SD_EDGE_SAMPLES`] points per edge, matching
-/// the polygons the overlap tests build. Samples `0..SD_EDGE_SAMPLES` (not
-/// `..=`) so each shared vertex is covered once, by the next edge's `frac=0`.
+/// Sample a face's outer wire at [`sd_edge_samples`] points per edge, matching
+/// the polygons the overlap tests build. Samples `0..n` (not `..=`) so each
+/// shared vertex is covered once, by the next edge's `frac=0`.
 fn face_outer_wire_points(topo: &Topology, face_id: FaceId) -> Vec<brepkit_math::vec::Point3> {
     let Ok(face) = topo.face(face_id) else {
         return Vec::new();
@@ -2279,7 +2373,7 @@ fn face_outer_wire_points(topo: &Topology, face_id: FaceId) -> Vec<brepkit_math:
             edge.curve(),
             sv.point(),
             ev.point(),
-            SD_EDGE_SAMPLES,
+            sd_edge_samples(edge.curve(), sv.point(), ev.point()),
             oe.is_forward(),
             &mut pts,
         );
