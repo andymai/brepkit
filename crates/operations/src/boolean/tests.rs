@@ -8433,8 +8433,8 @@ fn mesh_fallback_counter_records_fallbacks() {
     // tolerate concurrent increments from unrelated tests; only the
     // ordering within this test is load-bearing.
     //
-    // Phase 1: a clean overlapping-box fuse stays analytic. Phase 2: a
-    // ball cut from a torus's wall takes the mesh fallback (see
+    // Phase 1: a clean overlapping-box fuse stays analytic. Phase 2: a rod
+    // cut through a torus's wall takes the mesh fallback (see
     // `compound_cut_cuts_the_exact_piece_and_defers_the_other`), and the
     // counter must record it.
     let mut topo = Topology::new();
@@ -8446,14 +8446,15 @@ fn mesh_fallback_counter_records_fallbacks() {
     assert!(crate::measure::solid_volume(&topo, clean, 0.1).unwrap() > 0.0);
 
     let torus = crate::primitives::make_torus(&mut topo, 4.0, 1.5, 32).unwrap();
-    let ball = crate::primitives::make_sphere(&mut topo, 1.0, 32).unwrap();
-    let m = brepkit_math::mat::Mat4::translation(5.0, 0.0, 0.0);
-    crate::transform::transform_solid(&mut topo, ball, &m).unwrap();
+    let rod = crate::primitives::make_cylinder(&mut topo, 0.6, 20.0).unwrap();
+    let m = brepkit_math::mat::Mat4::translation(0.5, 10.0, 1.0)
+        * brepkit_math::mat::Mat4::rotation_x(std::f64::consts::FRAC_PI_2);
+    crate::transform::transform_solid(&mut topo, rod, &m).unwrap();
     let before = super::mesh_fallback_count();
-    let _ = boolean(&mut topo, BooleanOp::Cut, torus, ball);
+    let _ = boolean(&mut topo, BooleanOp::Cut, torus, rod);
     assert!(
         super::mesh_fallback_count() > before,
-        "the ball's cut should route through the mesh fallback and increment the counter"
+        "the rod's cut should route through the mesh fallback and increment the counter"
     );
 }
 
@@ -8518,6 +8519,12 @@ fn pieces_filling_pockets_fuse_into_the_whole_block() {
     let pieces = boolean(&mut topo, BooleanOp::Fuse, first, second).unwrap();
     assert_eq!(super::assembly::face_components(&topo, pieces).len(), 2);
     let fused = boolean(&mut topo, BooleanOp::Fuse, part, pieces).unwrap();
+    assert_eq!(super::assembly::face_components(&topo, fused).len(), 1);
+    assert!(
+        crate::validate::validate_solid(&topo, fused)
+            .unwrap()
+            .is_valid()
+    );
     assert_volume_near(&topo, fused, 1000.0, 1e-9);
 }
 

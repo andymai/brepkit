@@ -929,6 +929,63 @@ pub(crate) fn edge_connected_faces(topo: &Topology, face_ids: &[FaceId]) -> Vec<
     components
 }
 
+/// Each of `n` faces' piece, and the number of pieces: faces joined through
+/// edges with exactly two uses (`uses` lists each edge's faces, a seam's
+/// face twice).
+fn manifold_piece_of(uses: &HashMap<EdgeId, Vec<usize>>, n: usize) -> (Vec<usize>, usize) {
+    fn root(parent: &mut [usize], mut i: usize) -> usize {
+        while parent[i] != i {
+            parent[i] = parent[parent[i]];
+            i = parent[i];
+        }
+        i
+    }
+    let mut parent: Vec<usize> = (0..n).collect();
+    for faces in uses.values() {
+        if let [a, b] = faces[..] {
+            let (ra, rb) = (root(&mut parent, a), root(&mut parent, b));
+            parent[ra] = rb;
+        }
+    }
+    let mut piece_of: Vec<usize> = Vec::with_capacity(n);
+    let mut roots: Vec<usize> = Vec::new();
+    for i in 0..n {
+        let r = root(&mut parent, i);
+        let piece = roots.iter().position(|&x| x == r).unwrap_or_else(|| {
+            roots.push(r);
+            roots.len() - 1
+        });
+        piece_of.push(piece);
+    }
+    (piece_of, roots.len())
+}
+
+/// The pieces of a solid's outer shell, as [`separate_touching_pieces`]
+/// reads them: faces joined through edges with exactly two uses, so pieces
+/// that only touch along an edge or at a vertex come apart.
+pub(crate) fn manifold_pieces(topo: &Topology, solid: SolidId) -> Vec<Vec<FaceId>> {
+    let Ok(shell) = topo.solid(solid).and_then(|s| topo.shell(s.outer_shell())) else {
+        return Vec::new();
+    };
+    let face_ids = shell.faces();
+    let mut uses: HashMap<EdgeId, Vec<usize>> = HashMap::new();
+    for (fi, &fid) in face_ids.iter().enumerate() {
+        let Ok(face) = topo.face(fid) else { continue };
+        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            let Ok(wire) = topo.wire(wid) else { continue };
+            for oe in wire.edges() {
+                uses.entry(oe.edge()).or_default().push(fi);
+            }
+        }
+    }
+    let (piece_of, pieces) = manifold_piece_of(&uses, face_ids.len());
+    let mut out: Vec<Vec<FaceId>> = vec![Vec::new(); pieces];
+    for (fi, &fid) in face_ids.iter().enumerate() {
+        out[piece_of[fi]].push(fid);
+    }
+    out
+}
+
 /// Give each piece of a solid whose pieces only touch, along edges or at
 /// vertices, its own copies of the edges and vertices they share.
 ///
@@ -943,13 +1000,6 @@ pub(super) fn separate_touching_pieces(
     topo: &mut Topology,
     solid: SolidId,
 ) -> Result<usize, crate::OperationsError> {
-    fn root(parent: &mut [usize], mut i: usize) -> usize {
-        while parent[i] != i {
-            parent[i] = parent[parent[i]];
-            i = parent[i];
-        }
-        i
-    }
     let face_ids: Vec<FaceId> = topo
         .shell(topo.solid(solid)?.outer_shell())?
         .faces()
@@ -970,25 +1020,7 @@ pub(super) fn separate_touching_pieces(
         }
         face_wires.push(wires);
     }
-    // Pieces: faces joined through edges with exactly two uses.
-    let mut parent: Vec<usize> = (0..n).collect();
-    for faces in uses.values() {
-        if let [a, b] = faces[..] {
-            let (ra, rb) = (root(&mut parent, a), root(&mut parent, b));
-            parent[ra] = rb;
-        }
-    }
-    let mut piece_of: Vec<usize> = Vec::with_capacity(n);
-    let mut roots: Vec<usize> = Vec::new();
-    for i in 0..n {
-        let r = root(&mut parent, i);
-        let piece = roots.iter().position(|&x| x == r).unwrap_or_else(|| {
-            roots.push(r);
-            roots.len() - 1
-        });
-        piece_of.push(piece);
-    }
-    let pieces = roots.len();
+    let (piece_of, pieces) = manifold_piece_of(&uses, n);
     if pieces < 2 {
         return Ok(pieces);
     }
@@ -1051,7 +1083,7 @@ pub(super) fn separate_touching_pieces(
             }
             let fid = face_ids[fi];
             for (old, new) in changed {
-                if let Some(pc) = topo.pcurves().get(old, fid).cloned() {
+                if let Some(pc) = topo.pcurves_mut().remove(old, fid) {
                     topo.pcurves_mut().set(new, fid, pc);
                 }
             }

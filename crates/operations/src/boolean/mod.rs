@@ -894,19 +894,28 @@ fn boolean_inner(
                             .is_none_or(|cls_b| {
                                 all_component_centers_outside(topo, result, &pieces, cls_b, tol)
                             });
-                    // Touching pieces share no volume: a point inside each
-                    // lies outside every other. A builder that kept both
-                    // copies of coincident solids leaves pieces that fail it.
+                    // Touching pieces share no volume: a point inside each,
+                    // and a point just inside each of its faces, lies outside
+                    // every other. The builder splits faces along every
+                    // section, so a face of a piece overlapping another lies
+                    // wholly inside it; a builder that kept both copies of
+                    // coincident solids leaves pieces that fail the first.
                     let meshes: Vec<Option<Vec<[Point3; 3]>>> = pieces
                         .iter()
                         .map(|p| component_triangles(topo, p))
                         .collect();
                     let only_touch = pieces.iter().enumerate().all(|(i, piece)| {
-                        component_interior_point(topo, piece).is_some_and(|p| {
+                        let Some(own) = meshes[i].as_ref() else {
+                            return false;
+                        };
+                        let outside_others = |p: Point3| {
                             meshes.iter().enumerate().all(|(j, mesh)| {
                                 i == j || mesh.as_ref().is_some_and(|m| !triangles_hold(m, p))
                             })
-                        })
+                        };
+                        component_interior_point(topo, piece).is_some_and(outside_others)
+                            && face_witnesses(topo, piece, own)
+                                .is_some_and(|ws| ws.into_iter().all(outside_others))
                     });
                     if pieces.len() >= 2
                         && only_touch
@@ -2979,7 +2988,7 @@ fn detect_trivial_relation(
             ((hi - lo).length() * 0.01).max(1e-6)
         };
         let d = defl(&aabb_a).min(defl(&aabb_b));
-        crate::boolean::assembly::face_components(topo, inner)
+        crate::boolean::assembly::manifold_pieces(topo, inner)
             .iter()
             .filter_map(|piece| component_interior_point(topo, piece))
             .any(|p| {
@@ -3604,6 +3613,48 @@ fn component_triangles(topo: &Topology, comp: &[FaceId]) -> Option<Vec<[Point3; 
         }
     }
     Some(triangles)
+}
+
+/// A point just inside a component off each of its faces: the centroid of
+/// the face's largest mesh triangle, stepped along the triangle's normal to
+/// the side the component holds (`triangles`, its whole surface). `None`
+/// when a face has no triangle or no such point.
+fn face_witnesses(
+    topo: &Topology,
+    comp: &[FaceId],
+    triangles: &[[Point3; 3]],
+) -> Option<Vec<Point3>> {
+    let (min, max) = component_aabb(topo, comp)?;
+    let extent = (max - min).length();
+    let deflection = (extent * 1e-3).min(0.01);
+    let mut out = Vec::with_capacity(comp.len());
+    for &fid in comp {
+        let mesh = crate::tessellate::tessellate_with_uvs(topo, fid, deflection).ok()?;
+        let pos = &mesh.mesh.positions;
+        let [a, b, c] = mesh
+            .mesh
+            .indices
+            .chunks_exact(3)
+            .map(|t| [pos[t[0] as usize], pos[t[1] as usize], pos[t[2] as usize]])
+            .max_by(|p, q| {
+                let area = |[a, b, c]: &[Point3; 3]| (*b - *a).cross(*c - *a).length();
+                area(p).total_cmp(&area(q))
+            })?;
+        let normal = (b - a).cross(c - a).normalize().ok()?;
+        let centroid = Point3::new(
+            (a.x() + b.x() + c.x()) / 3.0,
+            (a.y() + b.y() + c.y()) / 3.0,
+            (a.z() + b.z() + c.z()) / 3.0,
+        );
+        let witness = [1e-6, 1e-5, 1e-4, 1e-3]
+            .into_iter()
+            .map(|f| f * extent)
+            .filter(|&step| step >= 1e-7)
+            .flat_map(|step| [centroid + normal * step, centroid - normal * step])
+            .find(|&p| triangles_hold(triangles, p))?;
+        out.push(witness);
+    }
+    Some(out)
 }
 
 /// Whether a closed set of triangles holds `p`, by the parity of a ray's

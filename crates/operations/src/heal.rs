@@ -1290,9 +1290,10 @@ pub fn unify_faces(topo: &mut Topology, solid: SolidId) -> Result<usize, crate::
         }
     }
 
-    // Union faces sharing geometrically-equivalent curved edges on the same surface.
+    // Union faces sharing geometrically-equivalent curved edges on the same
+    // surface, two uses being a join and more a touch, as above.
     for faces in geom_edge_faces.values() {
-        if faces.len() < 2 {
+        if faces.len() != 2 {
             continue;
         }
         for i in 0..faces.len() {
