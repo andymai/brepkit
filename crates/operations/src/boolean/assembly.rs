@@ -929,6 +929,137 @@ pub(crate) fn edge_connected_faces(topo: &Topology, face_ids: &[FaceId]) -> Vec<
     components
 }
 
+/// Give each piece of a solid whose pieces only touch, along edges or at
+/// vertices, its own copies of the edges and vertices they share.
+///
+/// Two boxes fused edge to edge come out of the builder as one shell whose
+/// shared edge has four faces: no piece is a closed manifold on its own,
+/// and the union reads as a single non-manifold piece. The pieces are the
+/// faces joined through edges with exactly two uses; every other edge and
+/// every vertex a piece shares with another gets a copy for each piece
+/// after the first, so each piece closes on its own. Returns the number of
+/// pieces (1 when the shell is one piece, which is left alone).
+pub(super) fn separate_touching_pieces(
+    topo: &mut Topology,
+    solid: SolidId,
+) -> Result<usize, crate::OperationsError> {
+    fn root(parent: &mut [usize], mut i: usize) -> usize {
+        while parent[i] != i {
+            parent[i] = parent[parent[i]];
+            i = parent[i];
+        }
+        i
+    }
+    let face_ids: Vec<FaceId> = topo
+        .shell(topo.solid(solid)?.outer_shell())?
+        .faces()
+        .to_vec();
+    let n = face_ids.len();
+    // Each face's wires, and each edge's uses by face (a seam counts twice).
+    let mut face_wires: Vec<Vec<WireId>> = Vec::with_capacity(n);
+    let mut uses: HashMap<EdgeId, Vec<usize>> = HashMap::new();
+    for (fi, &fid) in face_ids.iter().enumerate() {
+        let face = topo.face(fid)?;
+        let wires: Vec<WireId> = std::iter::once(face.outer_wire())
+            .chain(face.inner_wires().iter().copied())
+            .collect();
+        for &wid in &wires {
+            for oe in topo.wire(wid)?.edges() {
+                uses.entry(oe.edge()).or_default().push(fi);
+            }
+        }
+        face_wires.push(wires);
+    }
+    // Pieces: faces joined through edges with exactly two uses.
+    let mut parent: Vec<usize> = (0..n).collect();
+    for faces in uses.values() {
+        if let [a, b] = faces[..] {
+            let (ra, rb) = (root(&mut parent, a), root(&mut parent, b));
+            parent[ra] = rb;
+        }
+    }
+    let mut piece_of: Vec<usize> = Vec::with_capacity(n);
+    let mut roots: Vec<usize> = Vec::new();
+    for i in 0..n {
+        let r = root(&mut parent, i);
+        let piece = roots.iter().position(|&x| x == r).unwrap_or_else(|| {
+            roots.push(r);
+            roots.len() - 1
+        });
+        piece_of.push(piece);
+    }
+    let pieces = roots.len();
+    if pieces < 2 {
+        return Ok(pieces);
+    }
+    // The pieces using each edge and each vertex.
+    let mut edge_pieces: HashMap<EdgeId, Vec<usize>> = HashMap::new();
+    for (&eid, faces) in &uses {
+        let mut ps: Vec<usize> = faces.iter().map(|&fi| piece_of[fi]).collect();
+        ps.sort_unstable();
+        ps.dedup();
+        edge_pieces.insert(eid, ps);
+    }
+    let mut vertex_pieces: HashMap<VertexId, Vec<usize>> = HashMap::new();
+    for (&eid, ps) in &edge_pieces {
+        let edge = topo.edge(eid)?;
+        for vid in [edge.start(), edge.end()] {
+            let entry = vertex_pieces.entry(vid).or_default();
+            entry.extend(ps.iter().copied());
+            entry.sort_unstable();
+            entry.dedup();
+        }
+    }
+    // Copies for every piece after the first a shared entity reaches.
+    let mut vertex_copy: HashMap<(VertexId, usize), VertexId> = HashMap::new();
+    for (&vid, ps) in &vertex_pieces {
+        let vertex = topo.vertex(vid)?;
+        let (point, tolerance) = (vertex.point(), vertex.tolerance());
+        for &p in ps.iter().skip(1) {
+            vertex_copy.insert((vid, p), topo.add_vertex(Vertex::new(point, tolerance)));
+        }
+    }
+    let mut edge_copy: HashMap<(EdgeId, usize), EdgeId> = HashMap::new();
+    let edge_list: Vec<(EdgeId, Vec<usize>)> =
+        edge_pieces.iter().map(|(&e, ps)| (e, ps.clone())).collect();
+    for (eid, ps) in edge_list {
+        let edge = topo.edge(eid)?.clone();
+        for &p in &ps {
+            let remap = |v: VertexId| vertex_copy.get(&(v, p)).copied().unwrap_or(v);
+            let (start, end) = (remap(edge.start()), remap(edge.end()));
+            let shared = ps.first() != Some(&p);
+            if !shared && start == edge.start() && end == edge.end() {
+                continue;
+            }
+            let mut copy = Edge::new(start, end, edge.curve().clone());
+            copy.set_tolerance(edge.tolerance());
+            edge_copy.insert((eid, p), topo.add_edge(copy));
+        }
+    }
+    if edge_copy.is_empty() {
+        return Ok(pieces);
+    }
+    for (fi, wires) in face_wires.iter().enumerate() {
+        let p = piece_of[fi];
+        for &wid in wires {
+            let mut changed: Vec<(EdgeId, EdgeId)> = Vec::new();
+            for oe in topo.wire_mut(wid)?.edges_mut() {
+                if let Some(&copy) = edge_copy.get(&(oe.edge(), p)) {
+                    changed.push((oe.edge(), copy));
+                    *oe = OrientedEdge::new(copy, oe.is_forward());
+                }
+            }
+            let fid = face_ids[fi];
+            for (old, new) in changed {
+                if let Some(pc) = topo.pcurves().get(old, fid).cloned() {
+                    topo.pcurves_mut().set(new, fid, pc);
+                }
+            }
+        }
+    }
+    Ok(pieces)
+}
+
 /// Split long boundary edges at intermediate collinear vertices.
 ///
 /// After boolean assembly, some unsplit (passthrough) faces may have edges that
