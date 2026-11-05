@@ -261,6 +261,10 @@ struct SewnEdge {
     three_quarters: Point3,
 }
 
+/// How deep a boundary's composite curves may nest. A real file nests one or two
+/// deep, and this keeps a long chain of them off the end of the stack.
+const MAX_COMPOSITE_DEPTH: usize = 32;
+
 /// The file's entities by directory entry, and what has been sewn so far.
 struct Sewing<'a> {
     entities: HashMap<u32, &'a IgesEntity>,
@@ -355,20 +359,29 @@ impl<'a> Sewing<'a> {
     /// The stretches of a curve entity, in the order they run.
     fn stretches(&self, pointer: u32) -> Result<Vec<Stretch>, IoError> {
         let mut out = Vec::new();
-        self.expand(pointer, &mut Vec::new(), &mut out)?;
+        let mut visits = 0;
+        self.expand(pointer, &mut Vec::new(), &mut visits, &mut out)?;
         Ok(out)
     }
 
-    /// Adds a curve's stretches to `out`. A composite holding itself, directly or
-    /// not, or holding more stretches than the file has entities, is refused: a
-    /// file is not trusted to end its own recursion.
+    /// Adds a curve's stretches to `out`. A file is not trusted to end its own
+    /// recursion. A composite is refused when it holds itself, directly or not,
+    /// when it nests past [`MAX_COMPOSITE_DEPTH`], and when its boundary visits
+    /// more than twice the file's entities: a boundary runs along a curve twice
+    /// at most, while a few composites holding each other twice over could ask
+    /// for more visits than there is time for without emitting a thing.
     fn expand(
         &self,
         pointer: u32,
         path: &mut Vec<u32>,
+        visits: &mut usize,
         out: &mut Vec<Stretch>,
     ) -> Result<(), IoError> {
-        if path.contains(&pointer) || out.len() > self.entities.len() {
+        *visits += 1;
+        if path.contains(&pointer)
+            || path.len() >= MAX_COMPOSITE_DEPTH
+            || *visits > 2 * self.entities.len()
+        {
             return Err(IoError::ParseError {
                 reason: format!("IGES composite curve {pointer} does not end"),
             });
@@ -380,7 +393,7 @@ impl<'a> Sewing<'a> {
                 let count = params.count()?;
                 path.push(pointer);
                 for _ in 0..count {
-                    self.expand(params.pointer()?, path, out)?;
+                    self.expand(params.pointer()?, path, visits, out)?;
                 }
                 path.pop();
             }
@@ -519,18 +532,52 @@ fn read_plane(params: &mut Params) -> Result<FaceSurface, IoError> {
     })
 }
 
+/// Refuses knots evaluation could not walk, in one parameter direction, since
+/// `NurbsCurve::new` and `NurbsSurface::new` check only their counts. A degree
+/// past the points runs off the knots, and knots that fall can search forever.
+/// `knots` holds `points + degree + 1` values, as the file's counts ask for.
+fn check_knots(degree: usize, points: usize, knots: &[f64]) -> Result<(), IoError> {
+    let sound = degree >= 1
+        && degree < points
+        && knots.windows(2).all(|pair| pair[0] <= pair[1])
+        && knots[degree] < knots[points];
+    if sound {
+        Ok(())
+    } else {
+        Err(IoError::ParseError {
+            reason: format!(
+                "an IGES spline of degree {degree} over {points} points has unusable knots"
+            ),
+        })
+    }
+}
+
+/// How far past its domain a curve's span may run, as a share of that domain.
+/// A writer rounding its knots and spans alike can land just outside.
+const SPAN_SLACK: f64 = 1e-6;
+
 /// A rational B-spline curve (126), over the span it gives.
 fn read_curve(params: &mut Params) -> Result<Stretch, IoError> {
     let last = params.count()?;
     let degree = params.count()?;
     params.reals(4)?; // Closed, planar, polynomial, periodic.
     let knots = params.reals(last + degree + 2)?;
+    check_knots(degree, last + 1, &knots)?;
     let weights = params.reals(last + 1)?;
     let mut points = Vec::with_capacity(last + 1);
     for _ in 0..=last {
         points.push(params.point()?);
     }
     let (from, to) = (params.real()?, params.real()?);
+
+    let (low, high) = (knots[degree], knots[last + 1]);
+    let slack = (high - low) * SPAN_SLACK;
+    let within = |t: f64| low - slack <= t && t <= high + slack;
+    if !weights.iter().all(|&weight| weight > 0.0) || !within(from) || !within(to) {
+        return Err(IoError::ParseError {
+            reason: "an IGES curve has a weight or span it cannot use".to_string(),
+        });
+    }
     let curve =
         NurbsCurve::new(degree, knots, points, weights).map_err(|e| IoError::ParseError {
             reason: format!("an IGES curve is malformed: {e}"),
@@ -545,6 +592,8 @@ fn read_surface(params: &mut Params) -> Result<FaceSurface, IoError> {
     params.reals(5)?; // Closed both ways, polynomial, periodic both ways.
     let knots_u = params.reals(last_u + degree_u + 2)?;
     let knots_v = params.reals(last_v + degree_v + 2)?;
+    check_knots(degree_u, last_u + 1, &knots_u)?;
+    check_knots(degree_v, last_v + 1, &knots_v)?;
 
     // A weight and three coordinates per point must already be in the file.
     let fits = (last_u + 1)
@@ -561,6 +610,11 @@ fn read_surface(params: &mut Params) -> Result<FaceSurface, IoError> {
         for row in &mut weights {
             row[j] = params.real()?;
         }
+    }
+    if !weights.iter().flatten().all(|&weight| weight > 0.0) {
+        return Err(IoError::ParseError {
+            reason: "an IGES surface has a weight it cannot use".to_string(),
+        });
     }
     let mut points = vec![vec![Point3::new(0.0, 0.0, 0.0); last_v + 1]; last_u + 1];
     for j in 0..=last_v {

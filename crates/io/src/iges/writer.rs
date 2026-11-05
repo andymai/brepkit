@@ -23,7 +23,7 @@
 
 use std::fmt::Write as _;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::f64::consts::{FRAC_PI_2, TAU};
 
 use brepkit_math::nurbs::{NurbsCurve, NurbsSurface};
@@ -58,9 +58,18 @@ pub fn write_iges(topo: &Topology, solids: &[SolidId]) -> Result<String, IoError
         });
     }
 
-    let rational = rational_surfaces(topo, solids)?;
+    // One solid named twice is one solid: its faces written twice would read back
+    // with every edge on four faces.
+    let mut seen = HashSet::new();
+    let solids: Vec<SolidId> = solids
+        .iter()
+        .copied()
+        .filter(|&solid| seen.insert(solid))
+        .collect();
+
+    let rational = rational_surfaces(topo, &solids)?;
     let mut ctx = IgesWriteContext::new();
-    for &solid_id in solids {
+    for &solid_id in &solids {
         for face_id in solid_faces(topo, solid_id).map_err(topo_err)? {
             ctx.write_face(topo, face_id, &rational)?;
         }

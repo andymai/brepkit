@@ -273,7 +273,8 @@ impl BrepKernel {
 
     /// Export several solids to one IGES document, each of its faces a trimmed
     /// surface that refers to its other entities by number, so documents written
-    /// one solid at a time cannot simply be joined.
+    /// one solid at a time cannot simply be joined. A handle given twice is
+    /// written once.
     ///
     /// Returns the IGES file as a UTF-8 encoded byte vector.
     ///
