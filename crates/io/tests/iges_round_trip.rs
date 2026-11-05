@@ -384,15 +384,110 @@ fn a_malformed_file_is_read_safely() {
         ],
         vec![plane.clone(), (144, "144,1,1,1E30,1;".to_string())],
         vec![plane.clone(), (144, "144,1,1,-3,1;".to_string())],
-        vec![plane, (144, "144,1,1,2.5,1;".to_string())],
-        vec![(128, "128,1E9,1E9,1,1,0,0,0,0,0;".to_string())],
-        vec![(126, "126,1E30,2,0,0,0,0;".to_string())],
+        vec![plane.clone(), (144, "144,1,1,2.5,1;".to_string())],
+        // A lone spline is read by nothing, so each is reached through a face.
+        vec![
+            (128, "128,1E30,1E30,1,1,0,0,0,0,0;".to_string()),
+            (144, "144,1,0,0,0;".to_string()),
+        ],
+        vec![
+            plane,
+            (126, "126,1E30,2,0,0,0,0;".to_string()),
+            (144, "144,1,1,0,3;".to_string()),
+        ],
     ];
     for entities in &bad {
         let mut topo = Topology::new();
         let solids = read_iges(&iges_file(entities), &mut topo).unwrap();
         assert!(solids.is_empty(), "{entities:?}");
     }
+}
+
+/// A spline evaluation cannot walk costs its face, not the process: a degree past
+/// its points runs off the knots, and knots that fall can search forever.
+#[test]
+fn a_spline_evaluation_cannot_walk_is_refused() {
+    let plane = (108, "108,0.,0.,1.,0.,0,0.,0.,0.;".to_string());
+    let curve_in_a_face = |params: &str| {
+        vec![
+            plane.clone(),
+            (126, params.to_string()),
+            (144, "144,1,1,0,3;".to_string()),
+        ]
+    };
+    let surface_as_a_face =
+        |params: &str| vec![(128, params.to_string()), (144, "144,1,0,0,0;".to_string())];
+    let corners = "0.,0.,0.,1.,0.,0.,0.,1.,0.,1.,1.,0.";
+    let bad = [
+        curve_in_a_face("126,1,5,0,0,0,0,0.,0.,0.,0.,1.,1.,1.,1.,1.,1.,0.,0.,0.,1.,0.,0.,0.,1.;"),
+        curve_in_a_face("126,1,1,0,0,0,0,1.,0.5,0.,-1.,1.,1.,0.,0.,0.,1.,0.,0.,0.,1.;"),
+        surface_as_a_face(&format!(
+            "128,1,1,5,5,0,0,0,0,0,0.,0.,0.,0.,1.,1.,1.,1.,0.,0.,0.,0.,1.,1.,1.,1.,\
+             1.,1.,1.,1.,{corners},0.,1.,0.,1.;"
+        )),
+        surface_as_a_face(&format!(
+            "128,1,1,1,1,0,0,0,0,0,1.,0.5,0.,-1.,1.,0.5,0.,-1.,\
+             1.,1.,1.,1.,{corners},0.,1.,0.,1.;"
+        )),
+    ];
+    for entities in &bad {
+        let mut topo = Topology::new();
+        let solids = read_iges(&iges_file(entities), &mut topo).unwrap();
+        assert!(solids.is_empty(), "{entities:?}");
+    }
+}
+
+/// A composite nested far past any real file costs its face, not the stack.
+#[test]
+fn a_long_chain_of_composites_is_refused() {
+    let depth = 50_000_usize;
+    let mut entities = vec![(108, "108,0.,0.,1.,0.,0,0.,0.,0.;".to_string())];
+    for level in 0..depth {
+        entities.push((102, format!("102,1,{};", 2 * level + 5)));
+    }
+    entities.push((102, "102,0;".to_string()));
+    entities.push((144, "144,1,1,0,3;".to_string()));
+
+    let mut topo = Topology::new();
+    assert!(
+        read_iges(&iges_file(&entities), &mut topo)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+/// Forty composites, each holding the next one twice, would ask for 2^40 visits
+/// from a file of a few dozen lines. No cycle is involved, and nothing is emitted.
+#[test]
+fn composites_cannot_multiply_the_work_of_reading_them() {
+    let levels = 40_usize;
+    let mut entities = vec![(108, "108,0.,0.,1.,0.,0,0.,0.,0.;".to_string())];
+    for level in 0..levels {
+        let next = 2 * level + 5;
+        entities.push((102, format!("102,2,{next},{next};")));
+    }
+    entities.push((102, "102,0;".to_string()));
+    entities.push((144, "144,1,1,0,3;".to_string()));
+
+    let mut topo = Topology::new();
+    assert!(
+        read_iges(&iges_file(&entities), &mut topo)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+/// One solid named twice is one solid: its faces written twice would read back
+/// with every edge on four faces.
+#[test]
+fn a_solid_named_twice_is_written_once() {
+    let mut topo = Topology::new();
+    let solid = make_box(&mut topo, 10.0, 20.0, 30.0).unwrap();
+
+    let once = write_iges(&topo, &[solid]).unwrap();
+    let twice = write_iges(&topo, &[solid, solid]).unwrap();
+
+    assert_eq!(once, twice);
 }
 
 /// Two closed circles sharing a start and a far point, in planes at right angles,

@@ -778,6 +778,97 @@ mod tests {
         assert_eq!(solids.len(), 1);
     }
 
+    fn entity(de_seq: u32, entity_type: u32, params: &str) -> IgesEntity {
+        IgesEntity {
+            entity_type,
+            params: strip_entity_prefix(params, entity_type),
+            de_seq,
+        }
+    }
+
+    fn curve_is_read(params: &str) -> bool {
+        read_curve(&mut Params::of(&entity(1, 126, params))).is_ok()
+    }
+
+    fn surface_is_read(params: &str) -> bool {
+        read_surface(&mut Params::of(&entity(1, 128, params))).is_ok()
+    }
+
+    /// Each rule alone: past `NurbsCurve::new`, which checks only the counts.
+    #[test]
+    fn a_curve_must_be_one_evaluation_can_walk() {
+        let line = "0.,0.,0.,1.,0.,0.";
+        assert!(curve_is_read(&format!(
+            "126,1,1,0,0,0,0,0.,0.,1.,1.,1.,1.,{line},0.,1.;"
+        )));
+        // A span running down its domain is a span.
+        assert!(curve_is_read(&format!(
+            "126,1,1,0,0,0,0,0.,0.,1.,1.,1.,1.,{line},1.,0.;"
+        )));
+        for bad in [
+            format!("126,1,2,0,0,0,0,0.,0.,0.,1.,1.,1.,1.,1.,{line},0.,1.;"),
+            format!("126,1,0,0,0,0,0,0.,0.5,1.,1.,1.,{line},0.,1.;"),
+            format!("126,1,1,0,0,0,0,1.,0.5,0.,-1.,1.,1.,{line},0.,1.;"),
+            format!("126,1,1,0,0,0,0,0.,0.,0.,0.,1.,1.,{line},0.,0.;"),
+            format!("126,1,1,0,0,0,0,0.,0.,1.,1.,0.,1.,{line},0.,1.;"),
+            format!("126,1,1,0,0,0,0,0.,0.,1.,1.,1.,-1.,{line},0.,1.;"),
+            format!("126,1,1,0,0,0,0,0.,0.,1.,1.,1.,1.,{line},-5.,1.;"),
+            format!("126,1,1,0,0,0,0,0.,0.,1.,1.,1.,1.,{line},0.,9.;"),
+        ] {
+            assert!(!curve_is_read(&bad), "{bad}");
+        }
+    }
+
+    /// Each rule alone, in each direction, past `NurbsSurface::new`.
+    #[test]
+    fn a_surface_must_be_one_evaluation_can_walk() {
+        let corners = "0.,0.,0.,1.,0.,0.,0.,1.,0.,1.,1.,0.";
+        let weights = "1.,1.,1.,1.";
+        let flat = "0.,0.,1.,1.";
+        assert!(surface_is_read(&format!(
+            "128,1,1,1,1,0,0,0,0,0,{flat},{flat},{weights},{corners},0.,1.,0.,1.;"
+        )));
+        for bad in [
+            format!("128,1,1,2,1,0,0,0,0,0,0.,0.,0.,1.,1.,{flat},{weights},{corners};"),
+            format!("128,1,1,1,2,0,0,0,0,0,{flat},0.,0.,0.,1.,1.,{weights},{corners};"),
+            format!("128,1,1,1,1,0,0,0,0,0,1.,0.5,0.,-1.,{flat},{weights},{corners};"),
+            format!("128,1,1,1,1,0,0,0,0,0,{flat},1.,0.5,0.,-1.,{weights},{corners};"),
+            format!("128,1,1,1,1,0,0,0,0,0,0.,0.,0.,0.,{flat},{weights},{corners};"),
+            format!("128,1,1,1,1,0,0,0,0,0,{flat},{flat},1.,0.,1.,1.,{corners};"),
+        ] {
+            assert!(!surface_is_read(&bad), "{bad}");
+        }
+    }
+
+    /// The limits leave real files alone: composites of composites, and a curve
+    /// a boundary runs along twice, as a seam is.
+    #[test]
+    fn composites_nest_and_share_within_reason() {
+        let entities = [
+            entity(1, 110, "110,0.,0.,0.,1.,0.,0.;"),
+            entity(3, 102, "102,2,1,1;"),
+            entity(5, 102, "102,1,3;"),
+            entity(7, 102, "102,2,5,1;"),
+        ];
+        assert_eq!(Sewing::new(&entities).stretches(7).unwrap().len(), 3);
+    }
+
+    #[test]
+    fn composites_nest_only_so_far() {
+        let nested = |depth: u32| -> Vec<IgesEntity> {
+            let mut entities = vec![entity(1, 110, "110,0.,0.,0.,1.,0.,0.;")];
+            for level in 1..=depth {
+                let params = format!("102,1,{};", 2 * level - 1);
+                entities.push(entity(2 * level + 1, 102, &params));
+            }
+            entities
+        };
+        let shallow = nested(8);
+        assert_eq!(Sewing::new(&shallow).stretches(17).unwrap().len(), 1);
+        let deep = nested(100);
+        assert!(Sewing::new(&deep).stretches(201).is_err());
+    }
+
     #[test]
     fn empty_file_returns_empty() {
         let mut topo = Topology::new();
