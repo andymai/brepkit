@@ -460,43 +460,61 @@ fn a_part_turn_merges_a_torus_band() {
 #[test]
 fn a_hole_reads_the_same_with_the_axis_origin_far_along() {
     let p = |x: f64, z: f64| Point3::new(x, 0.0, z);
-    let mut topo = Topology::new();
-    let outer = polygon(
-        &mut topo,
-        &[p(5.0, -4.0), p(13.0, -4.0), p(13.0, 4.0), p(5.0, 4.0)],
-    );
-    // Wound with the outer wire, so only reading its winding keeps it a hole.
-    let corners = [p(7.0, -2.0), p(11.0, -2.0), p(11.0, 2.0), p(7.0, 2.0)];
-    let vs: Vec<_> = corners.iter().map(|&c| at(&mut topo, c)).collect();
-    let edges: Vec<_> = (0..4)
-        .map(|i| {
-            OrientedEdge::new(
-                topo.add_edge(Edge::new(vs[i], vs[(i + 1) % 4], EdgeCurve::Line)),
-                true,
+    let loop_of = |topo: &mut Topology, corners: &[Point3]| {
+        let vs: Vec<_> = corners.iter().map(|&c| at(topo, c)).collect();
+        let edges: Vec<_> = (0..vs.len())
+            .map(|i| {
+                OrientedEdge::new(
+                    topo.add_edge(Edge::new(vs[i], vs[(i + 1) % vs.len()], EdgeCurve::Line)),
+                    true,
+                )
+            })
+            .collect();
+        topo.add_wire(Wire::new(edges, true).unwrap())
+    };
+    for outer_ccw in [true, false] {
+        for hole_ccw in [true, false] {
+            let mut topo = Topology::new();
+            let mut outer = vec![p(5.0, -4.0), p(13.0, -4.0), p(13.0, 4.0), p(5.0, 4.0)];
+            if !outer_ccw {
+                outer.reverse();
+            }
+            let mut hole = vec![p(7.0, -2.0), p(11.0, -2.0), p(11.0, 2.0), p(7.0, 2.0)];
+            if !hole_ccw {
+                hole.reverse();
+            }
+            let outer = loop_of(&mut topo, &outer);
+            let hole = loop_of(&mut topo, &hole);
+            let face = topo.add_face(Face::new(
+                outer,
+                vec![hole],
+                FaceSurface::Plane {
+                    normal: Vec3::new(0.0, -1.0, 0.0),
+                    d: 0.0,
+                },
+            ));
+
+            let angle = 1.5 * PI;
+            let solid = revolve(
+                &mut topo,
+                face,
+                Point3::new(0.0, 0.0, -200_000.0),
+                Vec3::new(0.0, 0.0, 1.0),
+                angle,
             )
-        })
-        .collect();
-    let hole = topo.add_wire(Wire::new(edges, true).unwrap());
-    topo.face_mut(outer).unwrap().inner_wires_mut().push(hole);
+            .unwrap();
 
-    let angle = 1.5 * PI;
-    let solid = revolve(
-        &mut topo,
-        outer,
-        Point3::new(0.0, 0.0, -200_000.0),
-        Vec3::new(0.0, 0.0, 1.0),
-        angle,
-    )
-    .unwrap();
-
-    // Rounding at a 200,000 origin; sweeping the hole as material reads hundreds off.
-    assert_sound(
-        &topo,
-        solid,
-        (64.0 - 16.0) * 9.0 * angle,
-        1e-4,
-        "far origin",
-    );
+            // Rounding at a 200,000 origin; sweeping the hole as material reads
+            // hundreds off.
+            assert_sound(
+                &topo,
+                solid,
+                (64.0 - 16.0) * 9.0 * angle,
+                1e-4,
+                &format!("far origin, outer ccw {outer_ccw} hole ccw {hole_ccw}"),
+            );
+        }
+    }
 }
 
 /// A profile whose plane misses the axis: a straight side sweeps a hyperboloid,
