@@ -1319,5 +1319,9 @@ pub fn chamfer_tangent_chains(
         );
         return Ok(None);
     }
+    // And a shell whose faces disagree can still hold the right volume.
+    if !crate::validate::validate_solid(topo, result)?.is_valid() {
+        return Ok(None);
+    }
     Ok(Some(result))
 }
