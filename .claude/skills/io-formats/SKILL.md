@@ -25,7 +25,7 @@ a file. The reader must be trustworthy first.
 | Format | Kind | Analytic fidelity | Reader entry | Writer entry |
 |--------|------|-------------------|--------------|--------------|
 | STEP | B-Rep | Faithful: all 6 `FaceSurface` + 4 `EdgeCurve` variants round-trip | `step::reader::read_step(&str, &mut Topology) -> Vec<SolidId>` | `step::write_step(&Topology, &[SolidId]) -> String` |
-| IGES | B-Rep in name only | Not trustworthy (see below) | `iges::reader::read_iges(&str, &mut Topology) -> Vec<SolidId>` | `iges::writer::write_iges(&Topology, &[SolidId]) -> String` |
+| IGES | B-Rep | Round trips solids, curved faces as B-splines (see below) | `iges::reader::read_iges(&str, &mut Topology) -> Vec<SolidId>` | `iges::writer::write_iges(&Topology, &[SolidId]) -> String` |
 | STL | Mesh-only by design | n/a (faceted) | `stl::read_stl(&[u8]) -> TriangleMesh`; `stl::read_stl_solid(topo, data, tol)` | `stl::write_stl(topo, solids, deflection, StlFormat)` |
 | 3MF | Mesh-only by design | n/a | `threemf::read_threemf(data)`; `read_threemf_solid(topo, data, tol)` | `threemf::write_threemf(topo, solids, deflection)` |
 | OBJ | Mesh-only by design | n/a | `obj::read_obj(&str)`; `read_obj_solid(topo, input, tol)` | `obj::write_obj(topo, solids, deflection)` |
@@ -39,11 +39,12 @@ tolerance and auto-flips winding by signed volume. The result is a solid whose e
 face is a planar triangle. A high-face-count all-planar solid out of STL/OBJ/PLY/3MF/GLB
 is correct output. Do not file it as analytic degradation.
 
-**IGES is write-partial / read-stub.** The writer emits planes, NURBS, and lines but
-drops Cylinder/Cone/Sphere/Torus (placeholder comment) and approximates Circle edges as
-a 32-segment polyline. The reader reconstructs only entity 108 planes, and builds a
-fixed unit square face (0.5 half-extent) per plane "for visualization." IGES round-trips do not
-preserve real geometry. Use STEP or the arena format for anything load-bearing.
+**IGES keeps solids, not analytic surfaces.** The writer sends each face as a 144 over its
+108 or 128, each boundary as a 142 holding a 102 of 110s and 126s, arcs as exact rational
+quadratics and curved analytic faces as the exact B-splines `convert_to_bspline` gives. The
+reader sews 144s and bounded 108s by position into solids, so a cylinder reads back as NURBS.
+It skips other entities, and solids sharing an edge in one file come back as one. Use STEP when
+analytic faces matter.
 
 `StlFormat` has variants `Binary` and `Ascii` (`rg -n 'enum StlFormat'
 crates/io/src/stl/writer.rs`). `PlyFormat` has variants `Ascii` and
@@ -174,7 +175,7 @@ wrong:
 | STEP surfaces all came in as NURBS | Reader bug | The file likely stored B-splines. Confirm in a viewer, then `convert_to_elementary`. |
 | `UnsupportedEntity` error | The file is corrupt | The reader hit a surface/curve type with no arm. It is a reader gap; the file may be fine. |
 | Fixture volume matches, so the fixture is faithful | Fixture reproduces the bug | If it round-tripped to NURBS you are debugging a different solid. Assert the surface *type*, or use the arena dump. |
-| IGES import produced a shape | IGES import works | The reader only makes fixed unit squares (0.5 half-extent) from entity-108 planes. Use STEP or arena. |
+| IGES import read a cylinder | It came back analytic | It reads as NURBS: the writer sends curved faces as B-splines, and the reader recognizes nothing. Use STEP or arena for analytic faces. |
 | A part shows up several times | Reader duplicated geometry | The assembly uses it several times; each placement is its own solid. |
 | Coordinates look 25.4x off | Reader ignores units | Output is always mm; a tool that assumed the file's own unit needs converting. |
 
