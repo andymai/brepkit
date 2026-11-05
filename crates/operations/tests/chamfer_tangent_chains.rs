@@ -555,3 +555,155 @@ fn a_chain_keeps_a_cavity_and_its_pcurves() {
     let copied_face = topo.shell(kept).unwrap().faces()[0];
     assert_eq!(topo.pcurves().pcurves_for_face(copied_face).len(), 1);
 }
+
+/// A straight edge of the top rim as of the bottom one: the cap is whichever
+/// of its two planes the chain fits, wherever the shell lists it.
+#[test]
+fn a_straight_edge_of_either_rim_takes_off_its_prism() {
+    let plain = AREA * HEIGHT;
+    for clockwise in [true, false] {
+        for z in [0.0, HEIGHT] {
+            let mut topo = Topology::new();
+            let solid = obround(&mut topo, clockwise, 0.0, HEIGHT);
+            let edge = edges_at(&topo, solid, z, |a, b| a.y() > 0.0 && b.y() > 0.0)[0];
+            assert!(is_line(&topo, edge));
+
+            let result = chamfer(&mut topo, solid, &[edge], 1.0).unwrap();
+
+            let what = format!("z {z} clockwise {clockwise}");
+            assert_exact(&topo, result, plain - 20.0, &what);
+            assert_eq!(census(&topo, result), (2, 7), "{what}");
+        }
+    }
+}
+
+/// A rod whose profile is four quarter circles: two opposite rim arcs are two
+/// chains on one circle, whose new edges share a circle and nothing else.
+#[test]
+fn two_arcs_of_one_circle_are_two_chains() {
+    let r = 5.0;
+    let mut topo = Topology::new();
+    let corners: Vec<_> = [(r, 0.0), (0.0, r), (-r, 0.0), (0.0, -r)]
+        .iter()
+        .map(|&(x, y)| topo.add_vertex(Vertex::new(Point3::new(x, y, 0.0), 1e-7)))
+        .collect();
+    let edges: Vec<_> = (0..4)
+        .map(|i| {
+            let circle =
+                Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), r).unwrap();
+            OrientedEdge::new(
+                topo.add_edge(Edge::new(
+                    corners[i],
+                    corners[(i + 1) % 4],
+                    EdgeCurve::Circle(circle),
+                )),
+                true,
+            )
+        })
+        .collect();
+    let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+    let plane = FaceSurface::Plane {
+        normal: Vec3::new(0.0, 0.0, 1.0),
+        d: 0.0,
+    };
+    let face = topo.add_face(Face::new(wire, Vec::new(), plane));
+    let solid = extrude(&mut topo, face, Vec3::new(0.0, 0.0, 1.0), HEIGHT).unwrap();
+    // The arcs in the two quadrants with x and y of one sign.
+    let opposite = edges_at(&topo, solid, 0.0, |a, b| {
+        let quadrant = |p: Point3| p.x() + p.y();
+        quadrant(a) * quadrant(b) > 0.0
+    });
+    assert_eq!(opposite.len(), 2);
+
+    let result = chamfer(&mut topo, solid, &opposite, 1.0).unwrap();
+
+    let quarter = 0.5 * (PI / 2.0) * (r - 1.0 / 3.0);
+    assert_exact(
+        &topo,
+        result,
+        PI * r * r * HEIGHT - 2.0 * quarter,
+        "two opposite arcs",
+    );
+}
+
+/// A rod with one wall whose rim is two half circles meeting on its seam: the
+/// seam shortens in both its uses, and the other joint has none.
+#[test]
+fn a_rim_split_on_one_wall_shortens_its_seam() {
+    use brepkit_math::surfaces::CylindricalSurface;
+    use brepkit_topology::shell::Shell;
+    use brepkit_topology::solid::Solid;
+
+    let r = 5.0;
+    let mut topo = Topology::new();
+    let mut v = |x: f64, z: f64| topo.add_vertex(Vertex::new(Point3::new(x, 0.0, z), 1e-7));
+    let (s0, m0, s1, m1) = (v(r, 0.0), v(-r, 0.0), v(r, HEIGHT), v(-r, HEIGHT));
+    let mut arc = |a, b, z: f64| {
+        let circle = Circle3D::new(Point3::new(0.0, 0.0, z), Vec3::new(0.0, 0.0, 1.0), r).unwrap();
+        topo.add_edge(Edge::new(a, b, EdgeCurve::Circle(circle)))
+    };
+    let (b1, b2, t1, t2) = (
+        arc(s0, m0, 0.0),
+        arc(m0, s0, 0.0),
+        arc(s1, m1, HEIGHT),
+        arc(m1, s1, HEIGHT),
+    );
+    let seam = topo.add_edge(Edge::new(s0, s1, EdgeCurve::Line));
+    let oriented = |list: &[(EdgeId, bool)]| -> Vec<OrientedEdge> {
+        list.iter().map(|&(e, f)| OrientedEdge::new(e, f)).collect()
+    };
+    let wall_wire = Wire::new(
+        oriented(&[
+            (b1, true),
+            (b2, true),
+            (seam, true),
+            (t2, false),
+            (t1, false),
+            (seam, false),
+        ]),
+        true,
+    )
+    .unwrap();
+    let floor_wire = Wire::new(oriented(&[(b2, false), (b1, false)]), true).unwrap();
+    let top_wire = Wire::new(oriented(&[(t1, true), (t2, true)]), true).unwrap();
+    let (wall_wire, floor_wire, top_wire) = (
+        topo.add_wire(wall_wire),
+        topo.add_wire(floor_wire),
+        topo.add_wire(top_wire),
+    );
+    let cylinder =
+        CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), r).unwrap();
+    let faces = vec![
+        topo.add_face(Face::new(
+            wall_wire,
+            Vec::new(),
+            FaceSurface::Cylinder(cylinder),
+        )),
+        topo.add_face(Face::new(
+            floor_wire,
+            Vec::new(),
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, -1.0),
+                d: 0.0,
+            },
+        )),
+        topo.add_face(Face::new(
+            top_wire,
+            Vec::new(),
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: HEIGHT,
+            },
+        )),
+    ];
+    let shell = topo.add_shell(Shell::new(faces).unwrap());
+    let solid = topo.add_solid(Solid::new(shell, Vec::new()));
+    let plain = PI * r * r * HEIGHT;
+    assert_exact(&topo, solid, plain, "the rod itself");
+
+    let result = chamfer(&mut topo, solid, &[b1, b2], 1.0).unwrap();
+
+    let ring = 0.5 * 2.0 * PI * (r - 1.0 / 3.0);
+    assert_exact(&topo, result, plain - ring, "split rim");
+    assert_eq!(census(&topo, result), (3, 2));
+}

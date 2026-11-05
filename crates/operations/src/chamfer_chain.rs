@@ -265,11 +265,23 @@ impl Span {
                     sweep: other_sweep,
                 },
             ) => {
-                // One circle: read as touching rather than work out the overlap.
+                // One circle: they touch only where an end of one lies on the other.
                 if (circle.center() - other.center()).length() <= tol
                     && (circle.radius() - other.radius()).abs() <= tol
                 {
-                    return vec![circle.evaluate(*t0 + 0.5 * *sweep)];
+                    let ends = [*t0, *t0 + *sweep];
+                    let other_ends = [*other_t0, *other_t0 + *other_sweep];
+                    return ends
+                        .map(|t| circle.evaluate(t))
+                        .into_iter()
+                        .filter(|&p| Self::holds(other, *other_t0, *other_sweep, p, tol))
+                        .chain(
+                            other_ends
+                                .map(|t| other.evaluate(t))
+                                .into_iter()
+                                .filter(|&p| Self::holds(circle, *t0, *sweep, p, tol)),
+                        )
+                        .collect();
                 }
                 circle
                     .intersect_circle(other, tol)
@@ -341,15 +353,13 @@ fn side_of_plane_face(
     )
 }
 
-/// The ruling of `wall` leaving `vertex` along `dir`, when it runs past `d`.
+/// The ruling of `wall` leaving `vertex` along `dir`, and how long it runs.
 fn ruling_along(
     topo: &Topology,
     wall: FaceId,
     vertex: VertexId,
     dir: Vec3,
-    d: f64,
-    tol: f64,
-) -> Result<Option<EdgeId>, OperationsError> {
+) -> Result<Option<(EdgeId, f64)>, OperationsError> {
     let at = topo.vertex(vertex)?.point();
     for oe in topo.wire(topo.face(wall)?.outer_wire())?.edges() {
         let edge = topo.edge(oe.edge())?;
@@ -364,10 +374,8 @@ fn ruling_along(
             continue;
         };
         let run = topo.vertex(other)?.point() - at;
-        let length = run.length();
-        if length > d + tol && run.normalize()?.cross(dir).length() < JOIN_TOL && run.dot(dir) > 0.0
-        {
-            return Ok(Some(oe.edge()));
+        if run.normalize()?.cross(dir).length() < JOIN_TOL && run.dot(dir) > 0.0 {
+            return Ok(Some((oe.edge(), run.length())));
         }
     }
     Ok(None)
@@ -388,14 +396,12 @@ fn wire_flag(topo: &Topology, face: FaceId, edge: EdgeId) -> Result<Option<bool>
 
 /// Read one connected group of selected edges off the solid as a chain, or
 /// `None` when it is not one this path can build exactly.
-#[allow(clippy::too_many_lines)]
 fn plan_chain(
     topo: &Topology,
     faces: &[FaceId],
     group: &[EdgeId],
     d: f64,
 ) -> Result<Option<Plan>, OperationsError> {
-    let tol = Tolerance::new().linear;
     let adjacency = AdjacencyIndex::build_from_faces(topo, faces)?;
 
     // The cap is a plane every edge of the chain lies on.
@@ -417,9 +423,26 @@ fn plan_chain(
             Some(kept) => kept.into_iter().filter(|f| planes.contains(f)).collect(),
         });
     }
-    let Some(&cap) = caps.as_ref().and_then(|c| c.first()) else {
-        return Ok(None);
-    };
+    // A line lies on two planes and either may be its cap: a shell's face order
+    // has no say in which one the chain fits.
+    for cap in caps.unwrap_or_default() {
+        if let Some(plan) = plan_on_cap(topo, &adjacency, group, cap, d)? {
+            return Ok(Some(plan));
+        }
+    }
+    Ok(None)
+}
+
+/// [`plan_chain`] with `cap` as the plane the chain lies on.
+#[allow(clippy::too_many_lines)]
+fn plan_on_cap(
+    topo: &Topology,
+    adjacency: &AdjacencyIndex,
+    group: &[EdgeId],
+    cap: FaceId,
+    d: f64,
+) -> Result<Option<Plan>, OperationsError> {
+    let tol = Tolerance::new().linear;
     let Some(cap_normal) = plane_normal(topo, cap)? else {
         return Ok(None);
     };
@@ -554,10 +577,24 @@ fn plan_chain(
                 if through.length() > JOIN_TOL {
                     return Ok(None);
                 }
-                if first.wall != second.wall {
-                    let Some(ruling) =
-                        ruling_along(topo, first.wall, vertex, section.wall_dir, d, tol)?
-                    else {
+                let ruling = ruling_along(topo, first.wall, vertex, section.wall_dir)?;
+                if let Some((_, length)) = ruling
+                    && length <= d + tol
+                {
+                    return Ok(None);
+                }
+                if first.wall == second.wall {
+                    // A seam between two pieces of one wall's rim shortens in
+                    // both its uses; pieces of a flat wall's edge have none.
+                    if let Some((ruling, _)) = ruling {
+                        joints.push(Joint {
+                            vertex,
+                            ruling,
+                            walls: [first.wall, first.wall],
+                        });
+                    }
+                } else {
+                    let Some((ruling, _)) = ruling else {
                         return Ok(None);
                     };
                     if !adjacency.faces_for_edge(ruling).contains(&second.wall) {
@@ -611,11 +648,14 @@ fn plan_chain(
                 else {
                     return Ok(None);
                 };
-                let Some(ruling) =
-                    ruling_along(topo, piece.wall, vertex, section.wall_dir, d, tol)?
+                let Some((ruling, length)) =
+                    ruling_along(topo, piece.wall, vertex, section.wall_dir)?
                 else {
                     return Ok(None);
                 };
+                if length <= d + tol {
+                    return Ok(None);
+                }
                 if beyond == piece.wall || !adjacency.faces_for_edge(ruling).contains(&beyond) {
                     return Ok(None);
                 }
@@ -897,7 +937,7 @@ fn loop_normal(corners: &[Point3]) -> Result<Vec3, OperationsError> {
     let mut sum = Vec3::new(0.0, 0.0, 0.0);
     for (i, &p) in corners.iter().enumerate() {
         let q = corners[(i + 1) % corners.len()];
-        sum = sum + (p - corners[0]).cross(q - corners[0]);
+        sum += (p - corners[0]).cross(q - corners[0]);
     }
     Ok(sum.normalize()?)
 }
@@ -1083,7 +1123,7 @@ fn build_chain(
 
         // The band runs its new cap edge against the cap's use of it.
         let reversed = band.as_ref().is_some_and(|&(_, r)| r);
-        let forward = (!cap_use) != reversed;
+        let forward = cap_use == reversed;
         let (start_across, end_across) = (across[&piece.start], across[&piece.end]);
         let (uses, corners) = if forward {
             (
@@ -1106,7 +1146,7 @@ fn build_chain(
                 [a.cap, a.wall, b.wall, b.cap],
             )
         };
-        across_uses.insert(piece.start, (!forward) != reversed);
+        across_uses.insert(piece.start, forward == reversed);
         across_uses.insert(piece.end, forward != reversed);
         let wire = topo.add_wire(Wire::new(
             uses.iter().map(|&(e, f)| OrientedEdge::new(e, f)).collect(),
