@@ -489,11 +489,12 @@ fn a_hole_reads_the_same_with_the_axis_origin_far_along() {
     )
     .unwrap();
 
+    // Rounding at a 200,000 origin; sweeping the hole as material reads hundreds off.
     assert_sound(
         &topo,
         solid,
         (64.0 - 16.0) * 9.0 * angle,
-        1e-6,
+        1e-4,
         "far origin",
     );
 }
