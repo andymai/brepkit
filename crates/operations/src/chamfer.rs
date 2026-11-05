@@ -29,7 +29,10 @@ use crate::dot_normal_point;
 /// Returns an error if:
 /// - `distance` is zero or negative
 /// - any edge is not shared by exactly two faces in the solid
-/// - any face is a NURBS surface (only planar faces are supported)
+/// - a face has a curved edge, unless the edges are closed circular rims or
+///   tangent chains of lines and arcs (see
+///   [`crate::chamfer_chain::chamfer_tangent_chains`])
+/// - a chamfered edge reaches a face's hole
 /// - the result cannot be assembled into a valid solid
 pub fn chamfer(
     topo: &mut Topology,
@@ -52,6 +55,11 @@ pub fn chamfer(
     {
         return Ok(result);
     }
+    if let Some(result) =
+        crate::chamfer_chain::chamfer_tangent_chains(topo, solid, edges, distance)?
+    {
+        return Ok(result);
+    }
     chamfer_core(topo, solid, edges, ChamferDistances::Symmetric(distance))
 }
 
@@ -66,7 +74,7 @@ pub fn chamfer(
 /// Returns an error if:
 /// - either distance is zero or negative
 /// - any edge is not shared by exactly two faces in the solid
-/// - any face is a NURBS surface (only planar faces are supported)
+/// - a face has a curved edge, or a chamfered edge reaches a face's hole
 /// - the result cannot be assembled into a valid solid
 pub fn chamfer_asymmetric(
     topo: &mut Topology,
@@ -215,6 +223,31 @@ fn chamfer_core(
     let shell = topo.shell(solid_data.outer_shell())?;
     let shell_face_ids: Vec<FaceId> = shell.faces().to_vec();
 
+    // This rebuild writes each face from its corners, as straight sides. A
+    // curved edge would come back as its chord, which reads as a valid solid
+    // of the wrong volume.
+    let straight = |topo: &Topology, wire| -> Result<bool, crate::OperationsError> {
+        for oe in topo.wire(wire)?.edges() {
+            if !matches!(
+                topo.edge(oe.edge())?.curve(),
+                brepkit_topology::edge::EdgeCurve::Line
+            ) {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    };
+    for &face_id in &shell_face_ids {
+        let face = topo.face(face_id)?;
+        for wire in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            if !straight(topo, wire)? {
+                return Err(crate::OperationsError::InvalidInput {
+                    reason: "the planar chamfer cannot rebuild a curved edge".into(),
+                });
+            }
+        }
+    }
+
     let mut edge_to_faces: HashMap<usize, Vec<FaceId>> = HashMap::new();
     let mut face_polygons: HashMap<usize, FacePolygon> = HashMap::new();
 
@@ -256,6 +289,18 @@ fn chamfer_core(
         let normal = match face.surface() {
             FaceSurface::Plane { normal, .. } => *normal,
             _ => continue,
+        };
+        // The rebuilt face has no flag to turn it over, so a reversed face
+        // (a boolean's hole wall) is read as it faces: its normal flipped and
+        // its loop run backward, each edge still following its vertex.
+        let normal = if face.is_reversed() {
+            vertex_ids.reverse();
+            positions.reverse();
+            wire_edge_ids.reverse();
+            wire_edge_ids.rotate_left(1);
+            -normal
+        } else {
+            normal
         };
 
         face_polygons.insert(
@@ -312,6 +357,33 @@ fn chamfer_core(
         }
     }
 
+    // A hole the chamfer leaves alone goes through as its corners. One it
+    // reaches would need its own set-back, which the rebuild only does for an
+    // outer wire.
+    let mut holes: HashMap<usize, Vec<Vec<Point3>>> = HashMap::new();
+    for &face_id in &shell_face_ids {
+        let face = topo.face(face_id)?;
+        for &wire in face.inner_wires() {
+            let mut corners = Vec::new();
+            for oe in topo.wire(wire)?.edges() {
+                let edge = topo.edge(oe.edge())?;
+                let vertex = oe.oriented_start(edge);
+                if target_set.contains(&oe.edge().index())
+                    || vertex_chamfer_endpoints.contains(&vertex.index())
+                {
+                    return Err(crate::OperationsError::InvalidInput {
+                        reason: "the planar chamfer cannot reach a face's hole".into(),
+                    });
+                }
+                corners.push(topo.vertex(vertex)?.point());
+            }
+            if face.is_reversed() {
+                corners.reverse();
+            }
+            holes.entry(face_id.index()).or_default().push(corners);
+        }
+    }
+
     let mut chamfer_data: HashMap<usize, ChamferEdgeData> = HashMap::new();
     let mut result_specs: Vec<FaceSpec> = Vec::new();
 
@@ -335,7 +407,7 @@ fn chamfer_core(
             result_specs.push(FaceSpec::Surface {
                 vertices: verts,
                 surface: face.surface().clone(),
-                reversed: false,
+                reversed: face.is_reversed(),
                 inner_wires: vec![],
             });
             continue;
@@ -556,7 +628,7 @@ fn chamfer_core(
             vertices: new_verts,
             normal: poly.normal,
             d: new_d,
-            inner_wires: vec![],
+            inner_wires: holes.remove(&face_id.index()).unwrap_or_default(),
         });
     }
 

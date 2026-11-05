@@ -77,12 +77,25 @@ fn example_gridfinity_bin() {
 
     // Chamfer bottom edges (first 4 edges)
     let bottom_edges = brepkit_topology::explorer::solid_edges(&topo, hollowed).unwrap();
-    let _chamfered =
+    let chamfered =
         brepkit_operations::chamfer::chamfer(&mut topo, hollowed, &bottom_edges[..4], 0.8).unwrap();
 
-    // Verify it has positive volume
-    let vol = brepkit_operations::measure::solid_volume(&topo, hollowed, 0.1).unwrap();
-    assert!(vol > 0.0, "bin should have positive volume");
+    // The bin keeps its opening, and the chamfer takes off a mitred ring: at
+    // height `s` under the top of its bevel the outline is `2 s` short of the
+    // full side `l`, which integrates to `2 l d^2 - 4 d^3 / 3`.
+    let hollow = 42.0 * 42.0 * 21.0 - 39.0 * 39.0 * 19.5;
+    let ring = 2.0 * 42.0 * 0.8 * 0.8 - 4.0 * 0.8 * 0.8 * 0.8 / 3.0;
+    let vol = brepkit_operations::measure::solid_volume(&topo, chamfered, 0.1).unwrap();
+    assert!(
+        (vol - (hollow - ring)).abs() < 1e-6,
+        "bin measures {vol}, expected {}",
+        hollow - ring
+    );
+    assert!(
+        brepkit_operations::validate::validate_solid(&topo, chamfered)
+            .unwrap()
+            .is_valid()
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════════

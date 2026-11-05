@@ -236,7 +236,7 @@ fn one_arc_takes_off_its_half_ring() {
 
             let what = format!("{name} clockwise {clockwise}");
             assert_exact(&topo, result, plain - arc, &what);
-            assert_eq!(census(&topo, result), (3, 7), "{what}");
+            assert_eq!(census(&topo, result), (3, 6), "{what}");
             assert!(
                 !inside(&topo, result, &pose, Point3::new(47.8, 0.0, 0.1)),
                 "{what}"
@@ -347,8 +347,9 @@ fn a_pockets_mouth_loop_is_a_hole_of_its_cap() {
         for (name, pose) in poses() {
             let mut topo = Topology::new();
             let (solid, plain) = pocketed_block(&mut topo, clockwise);
+            // The boolean's mouth rim can be split further at seam vertices.
             let edges = edges_at(&topo, solid, 25.0, over_the_pocket);
-            assert_eq!(edges.len(), 4);
+            assert!(edges.len() >= 4);
             transform_solid(&mut topo, solid, &pose).unwrap();
 
             let result = chamfer(&mut topo, solid, &edges, 1.0).unwrap();
@@ -422,10 +423,10 @@ fn the_planar_rebuild_refuses_curved_edges() {
     );
 }
 
-/// The same refusal around a hole: the rebuild writes every face without its
-/// inner wires, so a drilled plate's hole would close over.
+/// A hole the rebuild can carry goes through it: a drilled plate's far edge
+/// comes off without closing the hole over.
 #[test]
-fn the_planar_rebuild_refuses_a_face_with_a_hole() {
+fn the_planar_rebuild_keeps_a_hole_it_does_not_reach() {
     let mut topo = Topology::new();
     let plate = make_box(&mut topo, 20.0, 20.0, 4.0).unwrap();
     let inner = make_box(&mut topo, 4.0, 4.0, 8.0).unwrap();
@@ -433,5 +434,29 @@ fn the_planar_rebuild_refuses_a_face_with_a_hole() {
     let drilled = boolean(&mut topo, BooleanOp::Cut, plate, inner).unwrap();
     let edge = edges_at(&topo, drilled, 4.0, |a, b| a.y() < 1e-9 && b.y() < 1e-9)[0];
 
-    assert!(chamfer(&mut topo, drilled, &[edge], 0.5).is_err());
+    let result = chamfer(&mut topo, drilled, &[edge], 0.5).unwrap();
+
+    assert_exact(
+        &topo,
+        result,
+        20.0 * 20.0 * 4.0 - 4.0 * 4.0 * 4.0 - 0.5 * 0.5 * 0.5 * 20.0,
+        "drilled plate",
+    );
+}
+
+/// One the chamfer does reach is refused rather than closed over.
+#[test]
+fn the_planar_rebuild_refuses_a_hole_it_reaches() {
+    let mut topo = Topology::new();
+    let plate = make_box(&mut topo, 20.0, 20.0, 4.0).unwrap();
+    let inner = make_box(&mut topo, 4.0, 4.0, 8.0).unwrap();
+    transform_solid(&mut topo, inner, &Mat4::translation(8.0, 8.0, -2.0)).unwrap();
+    let drilled = boolean(&mut topo, BooleanOp::Cut, plate, inner).unwrap();
+    let rim: Vec<_> = edges_at(&topo, drilled, 4.0, |a, b| {
+        let held = |p: Point3| p.x() > 1.0 && p.x() < 19.0 && p.y() > 1.0 && p.y() < 19.0;
+        held(a) && held(b)
+    });
+    assert_eq!(rim.len(), 4);
+
+    assert!(chamfer(&mut topo, drilled, &rim, 0.5).is_err());
 }
