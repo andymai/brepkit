@@ -916,23 +916,6 @@ pub fn set_back_convex_trihedral_stripes(
             })
             .collect::<Result<_, _>>()?;
 
-        // The setback ball must sit in a symmetric trihedral corner. When
-        // the incident stripes differ widely in length (e.g. a short rib
-        // edge against long runs: 90:60:10), the trims land at very
-        // different fractions and the rebuilt wall caps + corner patch do
-        // not re-close the shell within volume tolerance (measured vs the
-        // Reference-kernel oracle on the cross-one-row fixture: the equal-stripe box
-        // composes to within 0.1%, the mixed-stripe solid loses ~0.9%).
-        // Restrict setbacks to near-equal incident stripes.
-        let mut lengths: Vec<f64> = indices
-            .iter()
-            .map(|&i| original_stripes[i].spine.length())
-            .collect();
-        lengths.sort_by(f64::total_cmp);
-        if lengths.last().copied().unwrap_or(0.0) > lengths[0] * 2.0 + TOL {
-            continue;
-        }
-
         let Some(fractions) = convex_trihedral_setback(
             topo,
             junction.vertex,
@@ -1075,9 +1058,7 @@ fn convex_trihedral_setback(
         let fraction = (center - start).dot(direction) / length_squared;
         let projected = start + direction * fraction;
         // A setback trims the stripe end down to the rolling-ball center, so
-        // the center must lie on the bounded stripe centerline. Short-spine
-        // junctions (rib tops) are already excluded by the near-equal-stripe
-        // guard above, so no separate end-decile limit is needed here.
+        // the center must lie on the bounded stripe centerline.
         if !(TOL..=1.0 - TOL).contains(&fraction) || (projected - center).length() > TOL * 100.0 {
             return Ok(None);
         }
@@ -1206,8 +1187,8 @@ fn trihedral_ball_centre(topo: &Topology, radius: f64, support_faces: &[FaceId])
 ///   stripe end down to the solved centre) reports all three centres at the
 ///   ball centre, and its contacts are the tangency points at `|contact −
 ///   centre| == radius`;
-/// - the un-set-back construction (the near-equal-stripe guard deliberately
-///   leaves the junction untrimmed) reports none of them at the centre, and
+/// - the un-set-back construction (a junction no setback ball fits stays
+///   untrimmed) reports none of them at the centre, and
 ///   its contacts are the vertex-plane section endpoints at `|contact −
 ///   vertex| == radius`.
 ///
@@ -5045,7 +5026,7 @@ mod tests {
     }
 
     #[test]
-    fn convex_trihedral_short_rib_still_skips_setback() {
+    fn convex_trihedral_unequal_stripes_set_back_like_any() {
         let mut topo = Topology::new();
         let solid = make_box(&mut topo, Vec3::new(90.0, 60.0, 10.0));
         let (_vertex, selected) = box_edges_at_origin(&topo, solid);
@@ -5058,33 +5039,19 @@ mod tests {
             .collect();
         lengths.sort_by(f64::total_cmp);
         assert_eq!(lengths, vec![10.0, 60.0, 90.0]);
-        let centers_before: Vec<_> = stripe_results
-            .iter()
-            .map(|result| {
-                [
-                    result.stripe.sections[0].center,
-                    result.stripe.sections[1].center,
-                ]
-            })
-            .collect();
 
         let solid_faces = solid_shell_faces(&topo, solid);
         let setback_edges =
             set_back_convex_trihedral_stripes(&topo, &plan, &mut stripe_results, &solid_faces)
                 .unwrap();
 
-        assert!(
-            setback_edges.is_empty(),
-            "outer 2x gate must skip the setback"
-        );
-        for (result, before) in stripe_results.iter().zip(centers_before) {
-            assert_eq!(result.stripe.sections[0].center, before[0]);
-            assert_eq!(result.stripe.sections[1].center, before[1]);
-        }
+        // Stripes 10, 60 and 90 long set back alike: left at the box's corner,
+        // their ends would sit a radius past the rolling ball that closes it.
+        assert_eq!(setback_edges.len(), 3);
     }
 
-    /// The un-set-back trihedral junction (the 90:60:10 corner the
-    /// near-equal-stripe guard deliberately leaves untrimmed) classifies
+    /// A trihedral junction whose stripes stay untrimmed (as at a corner where
+    /// another face passes through, which no setback ball fits) classifies
     /// `Some(false)` and builds its cap on the geometrically determined
     /// `r*sqrt(2)` sphere through contacts at exactly `r` from the vertex.
     /// The build-level half of this regression is
@@ -5107,15 +5074,7 @@ mod tests {
                 .unwrap();
             assert_eq!(junction.incident_contours.len(), 3);
             let indices: Vec<usize> = junction.incident_contours.clone();
-            let mut stripe_results = analytic_box_stripes(&topo, &plan, radius);
-            let solid_faces = solid_shell_faces(&topo, solid);
-            let setback_edges =
-                set_back_convex_trihedral_stripes(&topo, &plan, &mut stripe_results, &solid_faces)
-                    .unwrap();
-            assert!(
-                setback_edges.is_empty(),
-                "the 90:60:10 near-equal guard must skip the setback"
-            );
+            let stripe_results = analytic_box_stripes(&topo, &plan, radius);
             let stripes: Vec<Stripe> = stripe_results
                 .iter()
                 .map(|result| result.stripe.clone())
@@ -5145,11 +5104,9 @@ mod tests {
         }
     }
 
-    /// The near-equal controls keep
-    /// their set-back construction — every terminal section centre equals
-    /// the solved ball centre and every contact sits at exactly `radius`
-    /// from it — and classify `Some(true)`, so the qualified class does not
-    /// move onto the untrimmed path.
+    /// A box's corners keep their set-back construction — every terminal
+    /// section centre equals the solved ball centre and every contact sits at
+    /// exactly `radius` from it — and classify `Some(true)`.
     #[test]
     fn setback_junction_classifies_true_with_bit_exact_contacts() {
         let radius = 0.5;
