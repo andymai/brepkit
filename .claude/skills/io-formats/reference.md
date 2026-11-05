@@ -92,10 +92,13 @@ and transforms it once per chain of placements to a root, scaled to mm.
   the arena. A closed conic's rational curve starts at its vertex, not its curve's origin.
 - Reader: sews 144s and bounded 108s by position (`SEW_TOL`). Each connected set of faces
   is a solid, or a cavity of the solid whose box holds it when its signed volume is
-  negative. A bare 108 bounds nothing and is skipped. Entities it does not read (100, 186,
+  negative, taking the smallest box that holds it. A bare 108 bounds nothing and is skipped,
+  and a closed-both-ways 128 under a 144 with no boundary of its own takes collapsed seams. Entities it does not read (100, 186,
   analytic surfaces) cost the faces that need them.
 - Net: a solid survives the round trip, its curved faces as NURBS and so measured off a
-  mesh. Use STEP or the arena format when analytic faces matter.
+  mesh. Solids sharing an edge in one file merge, and the 142/144 output has been read
+  back by this reader only, not by another CAD system. Use STEP or the arena format when
+  analytic faces matter.
 
 ## 3. Mesh import path
 

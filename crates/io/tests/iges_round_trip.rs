@@ -323,3 +323,191 @@ fn an_unbounded_plane_is_no_face() {
     let mut topo = Topology::new();
     assert!(read_iges(&text, &mut topo).unwrap().is_empty());
 }
+
+/// An IGES file from entity lines: `(type, parameters)`, numbered in order.
+fn iges_file(entities: &[(u32, String)]) -> String {
+    let mut directory = Vec::new();
+    let mut parameters = Vec::new();
+    for (i, (kind, params)) in entities.iter().enumerate() {
+        let de = u32::try_from(2 * i + 1).unwrap();
+        let mut count = 0_u32;
+        let first = parameters.len() + 1;
+        let mut line = String::new();
+        for token in params.split_inclusive([',', ';']) {
+            if line.len() + token.len() > 64 {
+                parameters.push(format!("{line:<64}{de:>8}P{:>7}", parameters.len() + 1));
+                count += 1;
+                line.clear();
+            }
+            line.push_str(token);
+        }
+        parameters.push(format!("{line:<64}{de:>8}P{:>7}", parameters.len() + 1));
+        count += 1;
+        directory.push(format!(
+            "{kind:>8}{first:>8}{:>8}{:>8}{:>8}{:>8}{:>8}{:>8}{:>8}D{de:>7}",
+            0, 0, 0, 0, 0, 0, 0
+        ));
+        directory.push(format!(
+            "{kind:>8}{:>8}{:>8}{count:>8}{:>8}{:>8}{:>8}{:>8}{:>8}D{:>7}",
+            0,
+            0,
+            0,
+            " ",
+            " ",
+            " ",
+            0,
+            de + 1
+        ));
+    }
+    let mut lines = vec![format!("{:<72}S{:>7}", "brepkit test", 1)];
+    lines.extend(directory);
+    lines.extend(parameters);
+    lines.join("\n")
+}
+
+/// A malformed file costs its bad entities, not the process: a composite holding
+/// itself, two holding each other, and counts past anything the file could hold.
+#[test]
+fn a_malformed_file_is_read_safely() {
+    let plane = (108, "108,0.,0.,1.,0.,0,0.,0.,0.;".to_string());
+    let bad = [
+        vec![
+            plane.clone(),
+            (102, "102,1,3;".to_string()),
+            (144, "144,1,1,0,3;".to_string()),
+        ],
+        vec![
+            plane.clone(),
+            (102, "102,1,5;".to_string()),
+            (102, "102,1,3;".to_string()),
+            (144, "144,1,1,0,3;".to_string()),
+        ],
+        vec![plane.clone(), (144, "144,1,1,1E30,1;".to_string())],
+        vec![plane.clone(), (144, "144,1,1,-3,1;".to_string())],
+        vec![plane, (144, "144,1,1,2.5,1;".to_string())],
+        vec![(128, "128,1E9,1E9,1,1,0,0,0,0,0;".to_string())],
+        vec![(126, "126,1E30,2,0,0,0,0;".to_string())],
+    ];
+    for entities in &bad {
+        let mut topo = Topology::new();
+        let solids = read_iges(&iges_file(entities), &mut topo).unwrap();
+        assert!(solids.is_empty(), "{entities:?}");
+    }
+}
+
+/// Two closed circles sharing a start and a far point, in planes at right angles,
+/// are two edges: those points alone would sew them into one.
+#[test]
+fn closed_curves_through_the_same_points_stay_apart() {
+    let root = std::f64::consts::FRAC_1_SQRT_2;
+    let circle = |flat: [(f64, f64); 9], y: bool| {
+        let weights: Vec<String> = (0..9)
+            .map(|k| {
+                if k % 2 == 0 {
+                    "1.".into()
+                } else {
+                    format!("{root}")
+                }
+            })
+            .collect();
+        let points: Vec<String> = flat
+            .iter()
+            .map(|&(a, b)| {
+                if y {
+                    format!("{a},{b},0.")
+                } else {
+                    format!("{a},0.,{b}")
+                }
+            })
+            .collect();
+        format!(
+            "126,8,2,0,0,0,0,0.,0.,0.,1.,1.,2.,2.,3.,3.,4.,4.,4.,{},{},0.,4.,0.,0.,0.;",
+            weights.join(","),
+            points.join(",")
+        )
+    };
+    let flat = [
+        (1.0, 0.0),
+        (1.0, 1.0),
+        (0.0, 1.0),
+        (-1.0, 1.0),
+        (-1.0, 0.0),
+        (-1.0, -1.0),
+        (0.0, -1.0),
+        (1.0, -1.0),
+        (1.0, 0.0),
+    ];
+    let entities = vec![
+        (126, circle(flat, true)),
+        (126, circle(flat, false)),
+        (108, "108,0.,0.,1.,0.,1,0.,0.,0.;".to_string()),
+        (108, "108,0.,1.,0.,0.,3,0.,0.,0.;".to_string()),
+    ];
+
+    let mut topo = Topology::new();
+    let solids = read_iges(&iges_file(&entities), &mut topo).unwrap();
+
+    assert_eq!(solids.len(), 2, "each disc is its own, sharing no edge");
+}
+
+/// A hollow box standing in the void of a larger hollow box: each keeps its own
+/// cavity, whichever the file lists first.
+#[test]
+fn nested_hollow_solids_keep_their_own_cavities() {
+    let mut topo = Topology::new();
+    let hollow = |topo: &mut Topology, side: f64, wall: f64, at: f64| {
+        let outer = make_box(topo, side, side, side).unwrap();
+        let core = make_box(
+            topo,
+            side - 2.0 * wall,
+            side - 2.0 * wall,
+            side - 2.0 * wall,
+        )
+        .unwrap();
+        transform_solid(topo, core, &Mat4::translation(wall, wall, wall)).unwrap();
+        let shell = boolean(topo, BooleanOp::Cut, outer, core).unwrap();
+        transform_solid(topo, shell, &Mat4::translation(at, at, at)).unwrap();
+        shell
+    };
+    let large = hollow(&mut topo, 20.0, 2.0, 0.0);
+    let small = hollow(&mut topo, 6.0, 1.0, 7.0);
+    let volume = |side: f64, wall: f64| side.powi(3) - (side - 2.0 * wall).powi(3);
+
+    for order in [[large, small], [small, large]] {
+        let (read, back) = round_trip(&topo, &order);
+
+        assert_eq!(back.len(), 2);
+        let mut sizes: Vec<(f64, usize)> = back
+            .iter()
+            .map(|&s| {
+                (
+                    solid_volume(&read, s, 0.01).unwrap(),
+                    read.solid(s).unwrap().inner_shells().len(),
+                )
+            })
+            .collect();
+        sizes.sort_by(|p, q| p.0.total_cmp(&q.0));
+        assert!((sizes[0].0 - volume(6.0, 1.0)).abs() < 1e-9, "{sizes:?}");
+        assert!((sizes[1].0 - volume(20.0, 2.0)).abs() < 1e-9, "{sizes:?}");
+        assert_eq!((sizes[0].1, sizes[1].1), (1, 1), "{sizes:?}");
+    }
+}
+
+/// A whole ring has no boundary to write: it takes its surface's own, and reads
+/// back with its two seams each used twice, not one edge used four times.
+#[test]
+fn a_whole_ring_takes_its_surfaces_own_boundary() {
+    let mut topo = Topology::new();
+    let solid = make_torus(&mut topo, 4.0, 1.5, 32).unwrap();
+
+    let (read, back) = round_trip(&topo, &[solid]);
+
+    assert_eq!(back.len(), 1);
+    let faces = solid_faces(&read, back[0]).unwrap();
+    assert_eq!(faces.len(), 1);
+    let wire = read
+        .wire(read.face(faces[0]).unwrap().outer_wire())
+        .unwrap();
+    let edges: BTreeSet<_> = wire.edges().iter().map(|oe| oe.edge().index()).collect();
+    assert_eq!((wire.edges().len(), edges.len()), (4, 2));
+}

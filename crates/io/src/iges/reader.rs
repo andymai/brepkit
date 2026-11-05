@@ -172,8 +172,18 @@ impl Params {
             .ok_or_else(|| IoError::ParseError {
                 reason: "an IGES entity has too few parameters".to_string(),
             })?;
+        if !value.is_finite() {
+            return Err(IoError::ParseError {
+                reason: format!("an IGES entity has a parameter of {value}"),
+            });
+        }
         self.next += 1;
         Ok(value)
+    }
+
+    /// How many parameters are left to read.
+    fn remaining(&self) -> usize {
+        self.values.len().saturating_sub(self.next)
     }
 
     fn reals(&mut self, count: usize) -> Result<Vec<f64>, IoError> {
@@ -184,12 +194,19 @@ impl Params {
         Ok(Point3::new(self.real()?, self.real()?, self.real()?))
     }
 
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    /// A count of things the entity goes on to list. It can be no more than the
+    /// parameters the entity holds, which keeps a malformed file from asking
+    /// for more memory than its own size accounts for.
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        clippy::cast_precision_loss
+    )]
     fn count(&mut self) -> Result<usize, IoError> {
         let value = self.real()?;
-        if value < 0.0 {
+        if value < 0.0 || value.fract().abs() > 1e-9 || value > self.values.len() as f64 {
             return Err(IoError::ParseError {
-                reason: format!("an IGES entity has a negative count, {value}"),
+                reason: format!("an IGES entity has a count of {value}"),
             });
         }
         Ok(value as usize)
@@ -241,6 +258,7 @@ struct SewnEdge {
     start: VertexId,
     quarter: Point3,
     middle: Point3,
+    three_quarters: Point3,
 }
 
 /// The file's entities by directory entry, and what has been sewn so far.
@@ -302,17 +320,24 @@ impl<'a> Sewing<'a> {
         } else {
             (end.index(), start.index())
         };
-        let (quarter, middle) = (stretch.at(0.25), stretch.at(0.5));
+        let (quarter, middle, three_quarters) =
+            (stretch.at(0.25), stretch.at(0.5), stretch.at(0.75));
         let near = |p: Point3, q: Point3| (p - q).length() <= 10.0 * SEW_TOL;
         if let Some(sewn) = self.edges.get(&key) {
             for edge in sewn {
-                if near(edge.middle, middle) {
-                    let forward = if start == end {
-                        near(edge.quarter, quarter)
-                    } else {
-                        edge.start == start
-                    };
-                    return OrientedEdge::new(edge.id, forward);
+                if !near(edge.middle, middle) {
+                    continue;
+                }
+                if start != end {
+                    return OrientedEdge::new(edge.id, edge.start == start);
+                }
+                // Two closed curves can share a start and a far point: each
+                // way round, the points either side must match as well.
+                if near(edge.quarter, quarter) && near(edge.three_quarters, three_quarters) {
+                    return OrientedEdge::new(edge.id, true);
+                }
+                if near(edge.quarter, three_quarters) && near(edge.three_quarters, quarter) {
+                    return OrientedEdge::new(edge.id, false);
                 }
             }
         }
@@ -322,31 +347,99 @@ impl<'a> Sewing<'a> {
             start,
             quarter,
             middle,
+            three_quarters,
         });
         OrientedEdge::new(id, true)
     }
 
     /// The stretches of a curve entity, in the order they run.
     fn stretches(&self, pointer: u32) -> Result<Vec<Stretch>, IoError> {
+        let mut out = Vec::new();
+        self.expand(pointer, &mut Vec::new(), &mut out)?;
+        Ok(out)
+    }
+
+    /// Adds a curve's stretches to `out`. A composite holding itself, directly or
+    /// not, or holding more stretches than the file has entities, is refused: a
+    /// file is not trusted to end its own recursion.
+    fn expand(
+        &self,
+        pointer: u32,
+        path: &mut Vec<u32>,
+        out: &mut Vec<Stretch>,
+    ) -> Result<(), IoError> {
+        if path.contains(&pointer) || out.len() > self.entities.len() {
+            return Err(IoError::ParseError {
+                reason: format!("IGES composite curve {pointer} does not end"),
+            });
+        }
         let entity = self.entity(pointer)?;
         let mut params = Params::of(entity);
-        Ok(match entity.entity_type {
+        match entity.entity_type {
             102 => {
                 let count = params.count()?;
-                let mut out = Vec::new();
+                path.push(pointer);
                 for _ in 0..count {
-                    out.extend(self.stretches(params.pointer()?)?);
+                    self.expand(params.pointer()?, path, out)?;
                 }
-                out
+                path.pop();
             }
-            110 => vec![Stretch::Line(params.point()?, params.point()?)],
-            126 => vec![read_curve(&mut params)?],
+            110 => out.push(Stretch::Line(params.point()?, params.point()?)),
+            126 => out.push(read_curve(&mut params)?),
             other => {
                 return Err(IoError::ParseError {
                     reason: format!("IGES curve entity {other} is not read"),
                 });
             }
-        })
+        }
+        Ok(())
+    }
+
+    /// The boundary of a surface closed both ways: the two seams at its one
+    /// corner, each used both ways, which enclose nothing.
+    fn natural_boundary(
+        &mut self,
+        topo: &mut Topology,
+        surface: &FaceSurface,
+    ) -> Result<WireId, IoError> {
+        let not_closed = || IoError::ParseError {
+            reason: "an IGES trimmed surface uses a boundary of its own that is not read"
+                .to_string(),
+        };
+        let nurbs = match surface {
+            FaceSurface::Nurbs(nurbs) => nurbs,
+            FaceSurface::Plane { .. }
+            | FaceSurface::Cylinder(_)
+            | FaceSurface::Cone(_)
+            | FaceSurface::Sphere(_)
+            | FaceSurface::Torus(_) => return Err(not_closed()),
+        };
+        let ((u0, u1), (v0, v1)) = (nurbs.domain_u(), nurbs.domain_v());
+        for k in 0..=8 {
+            let f = f64::from(k) / 8.0;
+            let (u, v) = (u0 + (u1 - u0) * f, v0 + (v1 - v0) * f);
+            let along_v = (nurbs.evaluate(u0, v) - nurbs.evaluate(u1, v)).length();
+            let along_u = (nurbs.evaluate(u, v0) - nurbs.evaluate(u, v1)).length();
+            if along_u > SEW_TOL || along_v > SEW_TOL {
+                return Err(not_closed());
+            }
+        }
+        let corner = self.vertex(topo, nurbs.evaluate(u0, v0));
+        let first = topo.add_edge(Edge::new(corner, corner, EdgeCurve::Line));
+        let second = topo.add_edge(Edge::new(corner, corner, EdgeCurve::Line));
+        let wire = Wire::new(
+            vec![
+                OrientedEdge::new(first, true),
+                OrientedEdge::new(second, true),
+                OrientedEdge::new(first, false),
+                OrientedEdge::new(second, false),
+            ],
+            true,
+        )
+        .map_err(|e| IoError::ParseError {
+            reason: format!("a closed surface's seams do not close: {e}"),
+        })?;
+        Ok(topo.add_wire(wire))
     }
 
     /// A boundary as a wire, from a curve on a surface or a curve itself.
@@ -379,18 +472,17 @@ impl<'a> Sewing<'a> {
         let bounded = params.count()?;
         let holes = params.count()?;
         let outer = params.pointer()?;
-        if bounded == 0 || outer == 0 {
-            return Err(IoError::ParseError {
-                reason: "an IGES trimmed surface uses its surface's own boundary".to_string(),
-            });
-        }
         let mut hole_pointers = Vec::with_capacity(holes);
         for _ in 0..holes {
             hole_pointers.push(params.pointer()?);
         }
 
         let surface = self.surface(surface)?;
-        let outer = self.boundary(topo, outer)?;
+        let outer = if bounded == 0 || outer == 0 {
+            self.natural_boundary(topo, &surface)?
+        } else {
+            self.boundary(topo, outer)?
+        };
         let mut inner = Vec::with_capacity(holes);
         for hole in hole_pointers {
             inner.push(self.boundary(topo, hole)?);
@@ -454,6 +546,16 @@ fn read_surface(params: &mut Params) -> Result<FaceSurface, IoError> {
     let knots_u = params.reals(last_u + degree_u + 2)?;
     let knots_v = params.reals(last_v + degree_v + 2)?;
 
+    // A weight and three coordinates per point must already be in the file.
+    let fits = (last_u + 1)
+        .checked_mul(last_v + 1)
+        .and_then(|points| points.checked_mul(4))
+        .is_some_and(|needed| needed <= params.remaining());
+    if !fits {
+        return Err(IoError::ParseError {
+            reason: "an IGES surface lists too few points".to_string(),
+        });
+    }
     let mut weights = vec![vec![0.0; last_v + 1]; last_u + 1];
     for j in 0..=last_v {
         for row in &mut weights {
@@ -526,7 +628,7 @@ fn root(parent: &mut [usize], mut i: usize) -> usize {
 }
 
 /// Sets of faces connected through shared edges, as solids. A set facing
-/// inward is a cavity of the solid whose box holds it.
+/// inward is a cavity of the solid with the smallest box holding it.
 fn assemble_solids(topo: &mut Topology, face_ids: &[FaceId]) -> Result<Vec<SolidId>, IoError> {
     let mut parent: Vec<usize> = (0..face_ids.len()).collect();
     let mut first_use: HashMap<EdgeId, usize> = HashMap::new();
@@ -573,8 +675,11 @@ fn assemble_solids(topo: &mut Topology, face_ids: &[FaceId]) -> Result<Vec<Solid
 
     let mut held: HashMap<SolidId, Vec<ShellId>> = HashMap::new();
     for (cavity, shell) in cavities {
+        // The smallest box around it: a solid standing inside another's void
+        // has a box inside that void too, and only its own cavity is inside it.
         let inner = brepkit_operations::measure::solid_bounding_box(topo, cavity)?;
         let mut holder = None;
+        let mut smallest = f64::INFINITY;
         for &(solid, _) in &outers {
             let outer = brepkit_operations::measure::solid_bounding_box(topo, solid)?;
             let holds = outer.min.x() <= inner.min.x()
@@ -583,9 +688,11 @@ fn assemble_solids(topo: &mut Topology, face_ids: &[FaceId]) -> Result<Vec<Solid
                 && outer.max.x() >= inner.max.x()
                 && outer.max.y() >= inner.max.y()
                 && outer.max.z() >= inner.max.z();
-            if holds {
+            let span = outer.max - outer.min;
+            let size = span.x() * span.y() * span.z();
+            if holds && size < smallest {
                 holder = Some(solid);
-                break;
+                smallest = size;
             }
         }
         match holder {

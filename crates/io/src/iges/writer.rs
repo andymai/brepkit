@@ -210,15 +210,28 @@ impl IgesWriteContext {
             }
         };
 
-        let outer = self.write_boundary(topo, face.outer_wire(), reversed, surface)?;
+        // A surface closed both ways, a whole ring, has an outer wire of seams
+        // collapsed to its one vertex, which bound nothing a file can hold: such
+        // a face takes its surface's own boundary (0).
+        let mut natural = true;
+        for oe in topo.wire(face.outer_wire()).map_err(topo_err)?.edges() {
+            let edge = topo.edge(oe.edge()).map_err(topo_err)?;
+            natural &= edge.start() == edge.end() && matches!(edge.curve(), EdgeCurve::Line);
+        }
+        let outer = if natural {
+            0
+        } else {
+            self.write_boundary(topo, face.outer_wire(), reversed, surface)?
+        };
         let mut holes = Vec::with_capacity(face.inner_wires().len());
         for &wire in face.inner_wires() {
             holes.push(self.write_boundary(topo, wire, reversed, surface)?);
         }
 
-        // Surface, its own boundary not the one used (1), how many holes, the
-        // outer boundary, then each hole.
-        let mut params = format!("144,{surface},1,{},{outer}", holes.len());
+        // Surface, whether its outer boundary is given (1) or its own (0), how
+        // many holes, the outer boundary, then each hole.
+        let given = u32::from(!natural);
+        let mut params = format!("144,{surface},{given},{},{outer}", holes.len());
         for hole in holes {
             let _ = write!(params, ",{hole}");
         }
@@ -289,16 +302,16 @@ impl IgesWriteContext {
                 if from <= to {
                     self.write_nurbs_curve_entity(nurbs, from, to)
                 } else {
-                    // Running down its knots: mirrored, each knot `k` becomes
-                    // `first + last - k`, and so does the span.
+                    // Running down its knots: mirrored about its domain, as
+                    // `reversed` does, and so is the span.
                     let mirrored = curve.reversed().map_err(math_err)?;
                     let EdgeCurve::NurbsCurve(mirrored) = mirrored else {
                         return Err(IoError::InvalidTopology {
                             reason: "a reversed B-spline edge is no B-spline".to_string(),
                         });
                     };
-                    let knots = nurbs.knots();
-                    let sum = knots[0] + knots[knots.len() - 1];
+                    let (lo, hi) = nurbs.domain();
+                    let sum = lo + hi;
                     self.write_nurbs_curve_entity(&mirrored, sum - from, sum - to)
                 }
             }
@@ -438,14 +451,22 @@ impl IgesWriteContext {
                 );
             }
         }
-        let kv = nurbs.knots_v();
+        let (u0, u1) = nurbs.domain_u();
+        let (u0, u1) = if turned {
+            let source = nurbs.knots_u();
+            let sum = source[0] + source[source.len() - 1];
+            (sum - u1, sum - u0)
+        } else {
+            (u0, u1)
+        };
+        let (v0, v1) = nurbs.domain_v();
         let _ = write!(
             params,
             "{},{},{},{};",
-            fmt_f(knots_u[0]),
-            fmt_f(knots_u[knots_u.len() - 1]),
-            fmt_f(kv[0]),
-            fmt_f(kv[kv.len() - 1])
+            fmt_f(u0),
+            fmt_f(u1),
+            fmt_f(v0),
+            fmt_f(v1)
         );
 
         Ok(self.add_entity(128, &params, SUBORDINATE))
@@ -568,9 +589,6 @@ fn split_param_data(params: &str, de_num: u32, next_pd: &mut u32) -> Vec<String>
 /// Format a float for IGES output, with every digit it takes to read back the
 /// same: `E` for an exponent and always a decimal point, as IGES reals have.
 fn fmt_f(v: f64) -> String {
-    if v == 0.0 {
-        return "0.".to_string();
-    }
     let shortest = format!("{v:?}");
     match shortest.split_once('e') {
         Some((mantissa, exponent)) => {

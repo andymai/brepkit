@@ -42,9 +42,11 @@ is correct output. Do not file it as analytic degradation.
 **IGES keeps solids, not analytic surfaces.** The writer sends each face as a 144 over its
 108 or 128, each boundary as a 142 holding a 102 of 110s and 126s, arcs as exact rational
 quadratics and curved analytic faces as the exact B-splines `convert_to_bspline` gives. The
-reader sews 144s and bounded 108s by position into solids, so a cylinder reads back as NURBS.
-It skips other entities, and solids sharing an edge in one file come back as one. Use STEP when
-analytic faces matter.
+reader sews 144s and bounded 108s by position into solids. The writer sends a cylinder as a 128,
+so it reads back as NURBS. The reader skips other entities, solids sharing an edge in one file
+come back as one, and the output is checked against this reader only. Use STEP when analytic
+faces matter. A document's entities refer to each other by number, so documents cannot be joined
+by appending them: `exportIgesSolids` writes several solids into one.
 
 `StlFormat` has variants `Binary` and `Ascii` (`rg -n 'enum StlFormat'
 crates/io/src/stl/writer.rs`). `PlyFormat` has variants `Ascii` and
@@ -175,7 +177,7 @@ wrong:
 | STEP surfaces all came in as NURBS | Reader bug | The file likely stored B-splines. Confirm in a viewer, then `convert_to_elementary`. |
 | `UnsupportedEntity` error | The file is corrupt | The reader hit a surface/curve type with no arm. It is a reader gap; the file may be fine. |
 | Fixture volume matches, so the fixture is faithful | Fixture reproduces the bug | If it round-tripped to NURBS you are debugging a different solid. Assert the surface *type*, or use the arena dump. |
-| IGES import read a cylinder | It came back analytic | It reads as NURBS: the writer sends curved faces as B-splines, and the reader recognizes nothing. Use STEP or arena for analytic faces. |
+| IGES import read a cylinder | It came back analytic | It reads as NURBS: the writer sends curved faces as 128 B-splines, and the reader does not recognize analytic surfaces in them. Use STEP or arena for analytic faces. |
 | A part shows up several times | Reader duplicated geometry | The assembly uses it several times; each placement is its own solid. |
 | Coordinates look 25.4x off | Reader ignores units | Output is always mm; a tool that assumed the file's own unit needs converting. |
 
