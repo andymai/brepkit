@@ -3586,11 +3586,11 @@ fn planar_face_centroid(topo: &Topology, fid: FaceId) -> Option<Point3> {
         .then_some(centroid)
 }
 
-/// A component's surface, meshed once finely for its size: each face's
-/// triangles, the whole surface's, and its box.
+/// A component's surface, meshed once finely for its size: its triangles,
+/// each face's run of them, and the box they span.
 struct ComponentMesh {
-    faces: Vec<Vec<[Point3; 3]>>,
     triangles: Vec<[Point3; 3]>,
+    faces: Vec<std::ops::Range<usize>>,
     min: Point3,
     max: Point3,
 }
@@ -3599,22 +3599,32 @@ impl ComponentMesh {
     fn new(topo: &Topology, comp: &[FaceId]) -> Option<Self> {
         let (min, max) = component_aabb(topo, comp)?;
         let deflection = ((max - min).length() * 1e-3).min(0.01);
+        let mut triangles: Vec<[Point3; 3]> = Vec::new();
         let mut faces = Vec::with_capacity(comp.len());
         for &fid in comp {
             let mesh = crate::tessellate::tessellate_with_uvs(topo, fid, deflection).ok()?;
             let pos = &mesh.mesh.positions;
-            faces.push(
+            let from = triangles.len();
+            triangles.extend(
                 mesh.mesh
                     .indices
                     .chunks_exact(3)
-                    .map(|t| [pos[t[0] as usize], pos[t[1] as usize], pos[t[2] as usize]])
-                    .collect::<Vec<_>>(),
+                    .map(|t| [pos[t[0] as usize], pos[t[1] as usize], pos[t[2] as usize]]),
             );
+            faces.push(from..triangles.len());
         }
-        let triangles = faces.iter().flatten().copied().collect();
+        // The box of the triangles themselves, which the ray reads: a curved
+        // face can bulge past the box of the component's sampled edges.
+        let (min, max) = if triangles.is_empty() {
+            (min, max)
+        } else {
+            let bounds =
+                brepkit_math::aabb::Aabb3::from_points(triangles.iter().flatten().copied());
+            (bounds.min, bounds.max)
+        };
         Some(Self {
-            faces,
             triangles,
+            faces,
             min,
             max,
         })
@@ -3640,7 +3650,7 @@ fn face_witnesses(mesh: &ComponentMesh) -> Option<Vec<Point3>> {
     let extent = (mesh.max - mesh.min).length();
     let mut out = Vec::with_capacity(mesh.faces.len());
     for face in &mesh.faces {
-        let [a, b, c] = *face.iter().max_by(|p, q| {
+        let [a, b, c] = *mesh.triangles[face.clone()].iter().max_by(|p, q| {
             let area = |[a, b, c]: &[Point3; 3]| (*b - *a).cross(*c - *a).length();
             area(p).total_cmp(&area(q))
         })?;
