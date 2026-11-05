@@ -403,6 +403,13 @@ pub(crate) fn revolution_band_surface(
     }
 
     let tol = 1e-9;
+    // A line askew of the axis sweeps a hyperboloid, which the NURBS band is
+    // exactly; the radial and axial readings below would make it a cone.
+    let along = p1_start - p0_start;
+    let askew = along.cross(axis).dot(p0_start - axis_origin).abs();
+    if askew > Tolerance::new().linear * along.length().max(1.0) {
+        return Ok((FaceSurface::Nurbs(nurbs), false));
+    }
     // The profile edge runs `p0_start → p1_start` (vertex i to vertex i+1 on the
     // SAME segment ring); `p0_start → p0_end` is the swept-arc direction. Decompose
     // both edge endpoints into (radial, axial) coordinates about the axis.
@@ -757,26 +764,6 @@ fn classify_profile_edge(
     }
 }
 
-/// Fast exact path: a FULL revolution of a fully-analytic planar profile (every
-/// edge a line or circular arc) built as ONE periodic face per profile edge —
-/// matching `make_cylinder`/`make_cone`/`make_torus` — instead of the segmented
-/// NURBS path's 4×90° bands.
-///
-/// Each profile vertex off the axis becomes a shared rim `Circle3D` edge (on
-/// the ORIGINAL wire vertex); each non-degenerate profile edge becomes one
-/// periodic wall (cylinder/cone/torus, closed by reusing the profile edge
-/// itself as the seam) or one planar disc/annulus cap (bounded by its rim
-/// circle(s), an annulus keeping the smaller rim as a hole). Adjacent faces
-/// reuse the same rim circle, so the shell is watertight with no segment seams.
-///
-/// Face orientation comes from the profile's traversal winding in the
-/// (radial, axial) chart, so inward-facing walls (a washer's bore) and cap
-/// normals are exact for both CCW- and CW-wound profiles.
-///
-/// Returns `Ok(None)` (fall back to the segmented revolve) unless the
-/// revolution is full, the profile is planar with the axis in its plane, has no
-/// inner wires, and every edge classifies analytically (no spline, no
-/// axis-touching arc). The closed-circle→torus and degenerate cases defer too.
 /// The ball a half disc sweeps turned whole about its diameter, built as
 /// [`crate::primitives::make_sphere`] builds one, or `None` for any other
 /// profile. Its arc may be cut into pieces of one circle, all on one side of
@@ -882,6 +869,26 @@ fn try_ball_revolution(
     Ok(Some(solid))
 }
 
+/// Fast exact path: a FULL revolution of a fully-analytic planar profile (every
+/// edge a line or circular arc) built as ONE periodic face per profile edge —
+/// matching `make_cylinder`/`make_cone`/`make_torus` — instead of the segmented
+/// NURBS path's 4×90° bands.
+///
+/// Each profile vertex off the axis becomes a shared rim `Circle3D` edge (on
+/// the ORIGINAL wire vertex); each non-degenerate profile edge becomes one
+/// periodic wall (cylinder/cone/torus, closed by reusing the profile edge
+/// itself as the seam) or one planar disc/annulus cap (bounded by its rim
+/// circle(s), an annulus keeping the smaller rim as a hole). Adjacent faces
+/// reuse the same rim circle, so the shell is watertight with no segment seams.
+///
+/// Face orientation comes from the profile's traversal winding in the
+/// (radial, axial) chart, so inward-facing walls (a washer's bore) and cap
+/// normals are exact for both CCW- and CW-wound profiles.
+///
+/// Returns `Ok(None)` (fall back to the segmented revolve) unless the
+/// revolution is full, the profile is planar with the axis in its plane, has no
+/// inner wires, and every edge classifies analytically (no spline, no
+/// axis-touching arc). The closed-circle→torus and degenerate cases defer too.
 fn try_analytic_full_revolution(
     topo: &mut Topology,
     face: FaceId,
@@ -1556,10 +1563,13 @@ fn profile_chart_is_ccw(
         return Ok(None); // whole profile on the axis
     };
 
+    // Measured from the profile, not the axis origin: the winding of a loop
+    // has nothing to do with how far along the axis that origin was placed.
+    let anchor = pts[0];
     let chart: Vec<(f64, f64)> = pts
         .iter()
         .map(|p| {
-            let v = *p - axis_origin;
+            let v = *p - anchor;
             (v.dot(e_r), v.dot(axis))
         })
         .collect();
@@ -2108,12 +2118,19 @@ pub fn revolve(
     // quarters: merged past half a turn, a cone or ball face around its apex
     // meshes open.
     let mut touches_axis = false;
-    for vertex in std::iter::once(&outer)
-        .chain(&inner_data)
-        .flat_map(|wire_data| &wire_data.ring_verts[0])
-    {
-        let p = topo.vertex(*vertex)?.point();
-        touches_axis |= radial_axial(p, axis_origin, axis).0 <= tol.linear;
+    for wire_data in std::iter::once(&outer).chain(&inner_data) {
+        for vertex in &wire_data.ring_verts[0] {
+            let p = topo.vertex(*vertex)?.point();
+            touches_axis |= radial_axial(p, axis_origin, axis).0 <= tol.linear;
+        }
+        // An arc can reach the axis between its ends; a straight edge whose
+        // ends clear it, on one side of it, cannot.
+        for oe in &wire_data.input_oriented {
+            if let EdgeCurve::Circle(c) = topo.edge(oe.edge())?.curve() {
+                let reach = radial_axial(c.center(), axis_origin, axis).0;
+                touches_axis |= reach <= c.radius() + tol.linear;
+            }
+        }
     }
     if !is_full && num_segs > 1 && !touches_axis {
         crate::heal::unify_faces(topo, solid)?;

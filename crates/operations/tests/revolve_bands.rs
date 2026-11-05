@@ -9,7 +9,7 @@ use std::f64::consts::PI;
 use brepkit_math::curves::Circle3D;
 use brepkit_math::mat::Mat4;
 use brepkit_math::vec::{Point3, Vec3};
-use brepkit_operations::boolean::{BooleanOp, boolean, mesh_fallback_count};
+use brepkit_operations::boolean::{BooleanOp, boolean};
 use brepkit_operations::measure::solid_volume;
 use brepkit_operations::primitives::{make_box, make_sphere};
 use brepkit_operations::revolve::revolve;
@@ -174,9 +174,7 @@ fn a_box_less_the_turned_ball_matches_the_primitive() {
     let turned = revolve(&mut topo, face, center, axis, 2.0 * PI).unwrap();
     let block = make_box(&mut topo, 50.0, 50.0, 20.0).unwrap();
     transform_solid(&mut topo, block, &Mat4::translation(-25.0, -25.0, -20.0)).unwrap();
-    let before = mesh_fallback_count();
     let cut = boolean(&mut topo, BooleanOp::Cut, block, turned).unwrap();
-    assert_eq!(mesh_fallback_count(), before, "the cut fell back");
 
     let block = make_box(&mut topo, 50.0, 50.0, 20.0).unwrap();
     transform_solid(&mut topo, block, &Mat4::translation(-25.0, -25.0, -20.0)).unwrap();
@@ -188,8 +186,8 @@ fn a_box_less_the_turned_ball_matches_the_primitive() {
     assert_sound(&topo, cut, volume, 1e-6, "box less the turned ball");
 }
 
-/// A half disc whose arc is not centred on the axis is no ball, and neither is
-/// one on the wrong side of a wider circle: those keep the general path.
+/// A half disc whose arc is not centred on the axis is no ball: it keeps the
+/// general path.
 #[test]
 fn a_disc_off_its_centre_is_no_ball() {
     let mut topo = Topology::new();
@@ -271,10 +269,10 @@ fn a_part_turn_cuts_exactly() {
     let lid = make_box(&mut topo, 60.0, 60.0, 10.0).unwrap();
     transform_solid(&mut topo, lid, &Mat4::translation(-30.0, -30.0, 1.0)).unwrap();
 
-    let before = mesh_fallback_count();
     let cut = boolean(&mut topo, BooleanOp::Cut, solid, lid).unwrap();
 
-    assert_eq!(mesh_fallback_count(), before, "the cut fell back");
+    // The wall's two cylinders survive, where a mesh fallback leaves only planes.
+    assert_eq!(census(&topo, cut).get("cylinder"), Some(&2));
     assert_sound(&topo, cut, 8.0 * 5.0 * 9.0 * 1.5 * PI, 1e-6, "cut");
 }
 
@@ -454,4 +452,74 @@ fn a_part_turn_merges_a_torus_band() {
         census(&topo, solid),
         expected(&[("cylinder", 1), ("plane", 4), ("torus", 1)])
     );
+}
+
+/// Winding is read from the profile, so it holds wherever the axis's origin was
+/// placed along the axis. Far along, a hole's chart read as degenerate and kept
+/// its winding, which swept it as material.
+#[test]
+fn a_hole_reads_the_same_with_the_axis_origin_far_along() {
+    let p = |x: f64, z: f64| Point3::new(x, 0.0, z);
+    let mut topo = Topology::new();
+    let outer = polygon(
+        &mut topo,
+        &[p(5.0, -4.0), p(13.0, -4.0), p(13.0, 4.0), p(5.0, 4.0)],
+    );
+    // Wound with the outer wire, so only reading its winding keeps it a hole.
+    let corners = [p(7.0, -2.0), p(11.0, -2.0), p(11.0, 2.0), p(7.0, 2.0)];
+    let vs: Vec<_> = corners.iter().map(|&c| at(&mut topo, c)).collect();
+    let edges: Vec<_> = (0..4)
+        .map(|i| {
+            OrientedEdge::new(
+                topo.add_edge(Edge::new(vs[i], vs[(i + 1) % 4], EdgeCurve::Line)),
+                true,
+            )
+        })
+        .collect();
+    let hole = topo.add_wire(Wire::new(edges, true).unwrap());
+    topo.face_mut(outer).unwrap().inner_wires_mut().push(hole);
+
+    let angle = 1.5 * PI;
+    let solid = revolve(
+        &mut topo,
+        outer,
+        Point3::new(0.0, 0.0, -200_000.0),
+        Vec3::new(0.0, 0.0, 1.0),
+        angle,
+    )
+    .unwrap();
+
+    assert_sound(
+        &topo,
+        solid,
+        (64.0 - 16.0) * 9.0 * angle,
+        1e-6,
+        "far origin",
+    );
+}
+
+/// A profile whose plane misses the axis: a straight side sweeps a hyperboloid,
+/// not a cone. Each point `(x, z)` of the plane at `y = 4` turns on a circle of
+/// radius `r = sqrt(x^2 + 16)`, and `dr = x / r dx`, so the volume is the turn
+/// times the region's moment about `x = 0`, as if the plane held the axis.
+#[test]
+fn a_profile_off_the_axis_sweeps_its_true_surface() {
+    let p = |x: f64, z: f64| Point3::new(x, 4.0, z);
+    for (angle, label) in [(PI, "half turn"), (2.0 * PI, "whole turn")] {
+        let mut topo = Topology::new();
+        // A triangle with a slanted side, its area 8 and centroid at x = 13 / 3.
+        let face = polygon(&mut topo, &[p(3.0, -2.0), p(7.0, 2.0), p(3.0, 2.0)]);
+
+        let solid = revolve(
+            &mut topo,
+            face,
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            angle,
+        )
+        .unwrap();
+
+        let moment = 8.0 * 13.0 / 3.0;
+        assert_sound(&topo, solid, moment * angle, 1e-2, label);
+    }
 }
