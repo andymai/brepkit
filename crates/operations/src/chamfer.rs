@@ -359,10 +359,13 @@ fn chamfer_core(
 
     // A hole the chamfer leaves alone goes through as its corners. One it
     // reaches would need its own set-back, which the rebuild only does for an
-    // outer wire.
+    // outer wire: a hole's own edge or vertex being chamfered, or a hole lying
+    // within a bevel's set-back of a chamfered edge or corner on its face.
+    let reach = distances.max_distance() + tol.linear;
     let mut holes: HashMap<usize, Vec<Vec<Point3>>> = HashMap::new();
     for &face_id in &shell_face_ids {
         let face = topo.face(face_id)?;
+        let planar = face_polygons.get(&face_id.index());
         for &wire in face.inner_wires() {
             let mut corners = Vec::new();
             for oe in topo.wire(wire)?.edges() {
@@ -377,8 +380,29 @@ fn chamfer_core(
                 }
                 corners.push(topo.vertex(vertex)?.point());
             }
-            if face.is_reversed() {
-                corners.reverse();
+            if let Some(poly) = planar {
+                let n = poly.positions.len();
+                for i in 0..n {
+                    let (p, q) = (poly.positions[i], poly.positions[(i + 1) % n]);
+                    let edge_cut = target_set.contains(&poly.wire_edge_ids[i].index());
+                    let corner_cut = vertex_chamfer_endpoints.contains(&poly.vertex_ids[i].index());
+                    for j in 0..corners.len() {
+                        let (a, b) = (corners[j], corners[(j + 1) % corners.len()]);
+                        let within = |u: Point3, v: Point3| {
+                            brepkit_geometry::extrema::segment_segment_distance(u, v, a, b).0
+                                <= reach
+                        };
+                        if (edge_cut && within(p, q)) || (corner_cut && within(p, p)) {
+                            return Err(crate::OperationsError::InvalidInput {
+                                reason: "the planar chamfer cannot reach a face's hole".into(),
+                            });
+                        }
+                    }
+                }
+                // A rebuilt plane reads as it faces, as its outer wire does.
+                if face.is_reversed() {
+                    corners.reverse();
+                }
             }
             holes.entry(face_id.index()).or_default().push(corners);
         }
@@ -408,7 +432,7 @@ fn chamfer_core(
                 vertices: verts,
                 surface: face.surface().clone(),
                 reversed: face.is_reversed(),
-                inner_wires: vec![],
+                inner_wires: holes.remove(&face_id.index()).unwrap_or_default(),
             });
             continue;
         };

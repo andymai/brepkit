@@ -75,10 +75,20 @@ fn example_gridfinity_bin() {
     // Shell: remove top face, offset inward by 1.5 mm wall thickness
     let hollowed = brepkit_operations::shell_op::shell(&mut topo, solid, 1.5, &[top_face]).unwrap();
 
-    // Chamfer bottom edges (first 4 edges)
-    let bottom_edges = brepkit_topology::explorer::solid_edges(&topo, hollowed).unwrap();
+    // Chamfer the four outer edges of the bin's underside.
+    let bottom_edges: Vec<_> = brepkit_topology::explorer::solid_edges(&topo, hollowed)
+        .unwrap()
+        .into_iter()
+        .filter(|&e| {
+            let edge = topo.edge(e).unwrap();
+            [edge.start(), edge.end()]
+                .iter()
+                .all(|&v| topo.vertex(v).unwrap().point().z().abs() < 1e-9)
+        })
+        .collect();
+    assert_eq!(bottom_edges.len(), 4);
     let chamfered =
-        brepkit_operations::chamfer::chamfer(&mut topo, hollowed, &bottom_edges[..4], 0.8).unwrap();
+        brepkit_operations::chamfer::chamfer(&mut topo, hollowed, &bottom_edges, 0.8).unwrap();
 
     // The bin keeps its opening, and the chamfer takes off a mitred ring: at
     // height `s` under the top of its bevel the outline is `2 s` short of the

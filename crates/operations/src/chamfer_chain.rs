@@ -12,10 +12,11 @@
 use std::collections::{BTreeMap, HashMap};
 use std::f64::consts::TAU;
 
+use brepkit_geometry::extrema::segment_segment_distance;
 use brepkit_math::curves::Circle3D;
 use brepkit_math::frame::Frame3;
 use brepkit_math::region2d::point_in_region;
-use brepkit_math::surfaces::ConicalSurface;
+use brepkit_math::surfaces::{ConicalSurface, CylindricalSurface};
 use brepkit_math::tolerance::Tolerance;
 use brepkit_math::vec::{Point2, Point3, Vec3};
 use brepkit_topology::Topology;
@@ -36,8 +37,9 @@ const JOIN_TOL: f64 = 1e-7;
 /// Samples along an edge when testing it against a chamfer's strip.
 const STRIP_SAMPLES: u32 = 32;
 
-/// How far apart the exact change in volume and the chain's closed form may
-/// lie, as a fraction of the closed form. Far looser than either reads: a face
+/// How far apart the change in volume and its closed form may lie, as a
+/// fraction of all the volume the chains sweep, so a convex chain and a concave
+/// one cancelling leave the margin intact. Far looser than either reads: a face
 /// without an exact reader elsewhere on the solid makes both volumes meshes.
 const VOLUME_MARGIN: f64 = 0.01;
 
@@ -196,39 +198,6 @@ impl Plan {
         }
         Ok(false)
     }
-
-    /// Points along this chain's edges and the edges it leaves on its cap.
-    fn cap_samples(&self, d: f64) -> Result<Vec<Point3>, OperationsError> {
-        let mut out = Vec::new();
-        for piece in &self.pieces {
-            out.extend(edge_samples(
-                &piece.curve,
-                piece.start_point,
-                piece.end_point,
-            ));
-            let (Some(a), Some(b)) = (self.section(piece.start), self.section(piece.end)) else {
-                continue;
-            };
-            match &piece.curve {
-                EdgeCurve::Line => {
-                    for k in 0..=STRIP_SAMPLES {
-                        let t = f64::from(k) / f64::from(STRIP_SAMPLES);
-                        out.push(a.cap + (b.cap - a.cap) * t);
-                    }
-                }
-                EdgeCurve::Circle(c) => {
-                    let radial = (piece.start_point - c.center()).normalize()?;
-                    let radius = c.radius() + a.cap_dir.dot(radial) * d;
-                    for p in edge_samples(&piece.curve, piece.start_point, piece.end_point) {
-                        let out_dir = (p - c.center()).normalize()?;
-                        out.push(c.center() + out_dir * radius);
-                    }
-                }
-                EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_) => {}
-            }
-        }
-        Ok(out)
-    }
 }
 
 fn edge_samples(curve: &EdgeCurve, start: Point3, end: Point3) -> Vec<Point3> {
@@ -241,11 +210,105 @@ fn edge_samples(curve: &EdgeCurve, start: Point3, end: Point3) -> Vec<Point3> {
         .collect()
 }
 
+/// A stretch of a chain's new boundary, or of another edge on its cap.
+enum Span {
+    Segment(Point3, Point3),
+    Arc {
+        circle: Circle3D,
+        t0: f64,
+        sweep: f64,
+    },
+}
+
+impl Span {
+    /// `None` for an ellipse or NURBS edge, which is not read exactly here.
+    fn of(curve: &EdgeCurve, start: Point3, end: Point3) -> Option<Self> {
+        match curve {
+            EdgeCurve::Line => Some(Self::Segment(start, end)),
+            EdgeCurve::Circle(circle) => {
+                let (t0, t1) = curve.domain_with_endpoints(start, end);
+                Some(Self::Arc {
+                    circle: circle.clone(),
+                    t0,
+                    sweep: t1 - t0,
+                })
+            }
+            EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_) => None,
+        }
+    }
+
+    fn holds(circle: &Circle3D, t0: f64, sweep: f64, p: Point3, tol: f64) -> bool {
+        let slack = tol / circle.radius();
+        (circle.project(p) - t0 + slack).rem_euclid(TAU) <= sweep + 2.0 * slack
+    }
+
+    /// Where two spans on one plane touch, exactly: a crossing between any
+    /// two samples of them still counts.
+    fn touches(&self, other: &Self, tol: f64) -> Vec<Point3> {
+        match (self, other) {
+            (Self::Segment(a, b), Self::Segment(c, d)) => {
+                let (distance, p, _) = segment_segment_distance(*a, *b, *c, *d);
+                if distance <= tol { vec![p] } else { Vec::new() }
+            }
+            (Self::Segment(a, b), Self::Arc { circle, t0, sweep })
+            | (Self::Arc { circle, t0, sweep }, Self::Segment(a, b)) => circle
+                .intersect_segment(*a, *b, tol)
+                .into_iter()
+                .map(|(p, _)| p)
+                .filter(|&p| Self::holds(circle, *t0, *sweep, p, tol))
+                .collect(),
+            (
+                Self::Arc { circle, t0, sweep },
+                Self::Arc {
+                    circle: other,
+                    t0: other_t0,
+                    sweep: other_sweep,
+                },
+            ) => {
+                // One circle: read as touching rather than work out the overlap.
+                if (circle.center() - other.center()).length() <= tol
+                    && (circle.radius() - other.radius()).abs() <= tol
+                {
+                    return vec![circle.evaluate(*t0 + 0.5 * *sweep)];
+                }
+                circle
+                    .intersect_circle(other, tol)
+                    .into_iter()
+                    .map(|(p, _)| p)
+                    .filter(|&p| {
+                        Self::holds(circle, *t0, *sweep, p, tol)
+                            && Self::holds(other, *other_t0, *other_sweep, p, tol)
+                    })
+                    .collect()
+            }
+        }
+    }
+}
+
 /// The plane normal of a face that is a plane.
 fn plane_normal(topo: &Topology, face: FaceId) -> Result<Option<Vec3>, OperationsError> {
     Ok(match topo.face(face)?.surface() {
         FaceSurface::Plane { normal, .. } => Some(*normal),
-        _ => None,
+        FaceSurface::Cylinder(_)
+        | FaceSurface::Cone(_)
+        | FaceSurface::Sphere(_)
+        | FaceSurface::Torus(_)
+        | FaceSurface::Nurbs(_) => None,
+    })
+}
+
+/// The cylinder of a face that is one.
+fn cylinder_of(
+    topo: &Topology,
+    face: FaceId,
+) -> Result<Option<CylindricalSurface>, OperationsError> {
+    Ok(match topo.face(face)?.surface() {
+        FaceSurface::Cylinder(cylinder) => Some(cylinder.clone()),
+        FaceSurface::Plane { .. }
+        | FaceSurface::Cone(_)
+        | FaceSurface::Sphere(_)
+        | FaceSurface::Torus(_)
+        | FaceSurface::Nurbs(_) => None,
     })
 }
 
@@ -389,7 +452,7 @@ fn plan_chain(
                 if start == end {
                     return Ok(None);
                 }
-                let FaceSurface::Cylinder(cylinder) = topo.face(wall)?.surface() else {
+                let Some(cylinder) = cylinder_of(topo, wall)? else {
                     return Ok(None);
                 };
                 let axis = cylinder.axis();
@@ -622,7 +685,46 @@ fn plan_chain(
         curved,
     };
 
-    // Nothing else on the cap may lie in the strip the chamfer takes.
+    // The chain's new boundary on the cap must meet nothing else there: not
+    // an edge it crosses, which an exact test finds wherever it happens, nor
+    // one lying wholly in the strip, which crosses nothing. A cross edge starts
+    // on the neighbouring edge it is allowed to touch.
+    let mut new_spans: Vec<(Span, Option<Point3>)> = Vec::new();
+    for piece in &plan.pieces {
+        let (Some(a), Some(b)) = (plan.section(piece.start), plan.section(piece.end)) else {
+            return Ok(None);
+        };
+        let span = match &piece.curve {
+            EdgeCurve::Line => Span::Segment(a.cap, b.cap),
+            EdgeCurve::Circle(c) => {
+                let (t0, t1) = piece
+                    .curve
+                    .domain_with_endpoints(piece.start_point, piece.end_point);
+                let radial = (piece.start_point - c.center()).normalize()?;
+                let radius = c.radius() + a.cap_dir.dot(radial) * d;
+                Span::Arc {
+                    circle: Circle3D::with_axes(
+                        c.center(),
+                        c.normal(),
+                        radius,
+                        c.u_axis(),
+                        c.v_axis(),
+                    )?,
+                    t0,
+                    sweep: t1 - t0,
+                }
+            }
+            EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_) => return Ok(None),
+        };
+        new_spans.push((span, None));
+    }
+    for end in &plan.ends {
+        let Some(section) = plan.section(end.vertex) else {
+            return Ok(None);
+        };
+        let at = topo.vertex(end.vertex)?.point();
+        new_spans.push((Span::Segment(at, section.cap), Some(at)));
+    }
     let cap_data = topo.face(cap)?;
     for wid in std::iter::once(cap_data.outer_wire()).chain(cap_data.inner_wires().iter().copied())
     {
@@ -633,8 +735,55 @@ fn plan_chain(
             let edge = topo.edge(oe.edge())?;
             let a = topo.vertex(edge.start())?.point();
             let b = topo.vertex(edge.end())?.point();
+            let Some(span) = Span::of(edge.curve(), a, b) else {
+                return Ok(None);
+            };
+            for (new_span, allowed) in &new_spans {
+                for p in new_span.touches(&span, tol) {
+                    if allowed.is_none_or(|at| (p - at).length() > 10.0 * tol) {
+                        return Ok(None);
+                    }
+                }
+            }
             for p in edge_samples(edge.curve(), a, b) {
                 if plan.strip_holds(p, d, tol)? {
+                    return Ok(None);
+                }
+            }
+        }
+    }
+
+    // Nor on a wall, whose rim rises by `d` and which keeps every other edge
+    // and hole where it was. A line stays clear if its ends do, and a circle
+    // on the wall's cylinder runs at one height.
+    for piece in &plan.pieces {
+        let Some(section) = plan.section(piece.start) else {
+            return Ok(None);
+        };
+        let wall = topo.face(piece.wall)?;
+        if !wall.inner_wires().is_empty() {
+            return Ok(None);
+        }
+        for oe in topo.wire(wall.outer_wire())?.edges() {
+            let rim_or_ruling = plan.pieces.iter().any(|p| p.edge == oe.edge())
+                || plan.joints.iter().any(|j| j.ruling == oe.edge())
+                || plan.ends.iter().any(|e| e.ruling == oe.edge());
+            if rim_or_ruling {
+                continue;
+            }
+            let edge = topo.edge(oe.edge())?;
+            match edge.curve() {
+                EdgeCurve::Line => {}
+                EdgeCurve::Circle(c) => {
+                    if c.normal().cross(section.wall_dir).length() > JOIN_TOL {
+                        return Ok(None);
+                    }
+                }
+                EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_) => return Ok(None),
+            }
+            for v in [edge.start(), edge.end()] {
+                let height = (topo.vertex(v)?.point() - piece.start_point).dot(section.wall_dir);
+                if height <= d + tol {
                     return Ok(None);
                 }
             }
@@ -838,12 +987,8 @@ fn build_chain(
     // takes the band between.
     let mut new_faces = Vec::with_capacity(plan.pieces.len() + plan.ends.len());
     let mut across_uses: HashMap<VertexId, bool> = HashMap::new();
-    let cap_face = topo.face(plan.cap)?;
-    let (cap_reversed, cap_surface) = (cap_face.is_reversed(), cap_face.surface().clone());
-    let FaceSurface::Plane {
-        normal: cap_normal, ..
-    } = cap_surface
-    else {
+    let cap_reversed = topo.face(plan.cap)?.is_reversed();
+    let Some(cap_normal) = plane_normal(topo, plan.cap)? else {
         return Ok(None);
     };
     let cap_out = if cap_reversed {
@@ -861,8 +1006,7 @@ fn build_chain(
         ) else {
             return Ok(None);
         };
-        let wall_data = topo.face(piece.wall)?;
-        let wall_reversed = wall_data.is_reversed();
+        let wall_reversed = topo.face(piece.wall)?.is_reversed();
         let cap_use = cap_flag != cap_reversed;
         let wall_use = wall_flag != wall_reversed;
         if cap_use == wall_use {
@@ -893,7 +1037,7 @@ fn build_chain(
                 let height = (c.center() - apex).dot(toward).abs();
                 let cone = ConicalSurface::new(apex, toward, height.atan2(r1))?;
                 let wall_normal = {
-                    let FaceSurface::Cylinder(cylinder) = wall_data.surface() else {
+                    let Some(cylinder) = cylinder_of(topo, piece.wall)? else {
                         return Ok(None);
                     };
                     let (u, v) = cylinder.project_point(piece.start_point);
@@ -1018,6 +1162,10 @@ fn build_chain(
     }
 
     for (face, face_swaps) in swaps.into_values() {
+        // An edge this face no longer uses keeps no trim on it.
+        for &edge in face_swaps.keys() {
+            topo.pcurves_mut().remove(edge, face);
+        }
         let data = topo.face(face)?;
         let (outer, inners) = (data.outer_wire(), data.inner_wires().to_vec());
         let new_outer = rewrite_wire(topo, outer, &face_swaps)?;
@@ -1058,7 +1206,6 @@ pub fn chamfer_tangent_chains(
     if d <= 0.0 || edges.is_empty() {
         return Ok(None);
     }
-    let tol = Tolerance::new().linear;
     let outer_faces = topo
         .shell(topo.solid(solid)?.outer_shell())?
         .faces()
@@ -1074,19 +1221,8 @@ pub fn chamfer_tangent_chains(
     if !plans.iter().any(|p| p.curved) {
         return Ok(None);
     }
-    // Two chains on one cap must not reach into each other's strips.
-    for (i, a) in plans.iter().enumerate() {
-        for (j, b) in plans.iter().enumerate() {
-            if i != j && a.cap == b.cap {
-                for p in b.cap_samples(d)? {
-                    if a.strip_holds(p, d, tol)? {
-                        return Ok(None);
-                    }
-                }
-            }
-        }
-    }
     let change: f64 = plans.iter().map(|p| p.volume_change).sum();
+    let swept: f64 = plans.iter().map(|p| p.volume_change.abs()).sum();
 
     let copy = crate::copy::copy_solid(topo, solid)?;
     let Some(images) = edge_images(topo, solid, copy)? else {
@@ -1094,6 +1230,18 @@ pub fn chamfer_tangent_chains(
     };
     let data = topo.solid(copy)?;
     let (outer, inners) = (data.outer_shell(), data.inner_shells().to_vec());
+    // A copy leaves its pcurves behind, and a face this chamfer never touches
+    // keeps its trims.
+    let source = topo.solid(solid)?;
+    let source_shells: Vec<_> = std::iter::once(source.outer_shell())
+        .chain(source.inner_shells().iter().copied())
+        .collect();
+    let copied_shells: Vec<_> = std::iter::once(outer)
+        .chain(inners.iter().copied())
+        .collect();
+    for (&from, &to) in source_shells.iter().zip(&copied_shells) {
+        crate::cavities::copy_pcurves(topo, from, to)?;
+    }
     let mut faces = topo.shell(outer)?.faces().to_vec();
     let mut made = Vec::new();
     for group in &groups {
@@ -1105,7 +1253,7 @@ pub fn chamfer_tangent_chains(
             image.push(e);
         }
         // Read after the chains before it, which shorten rulings this one
-        // shares.
+        // shares and leave new edges on a cap it shares, which it must clear.
         let Some(plan) = plan_chain(topo, &faces, &image, d)? else {
             return Ok(None);
         };
@@ -1124,7 +1272,7 @@ pub fn chamfer_tangent_chains(
     let before = crate::measure::solid_volume(topo, solid, deflection)?;
     let after = crate::measure::solid_volume(topo, result, deflection)?;
     let oriented = crate::measure::oriented_solid_volume(topo, result, deflection)?;
-    if oriented <= 0.0 || (after - before - change).abs() > VOLUME_MARGIN * change.abs() {
+    if oriented <= 0.0 || (after - before - change).abs() > VOLUME_MARGIN * swept {
         log::debug!(
             "chamfer chain: volume went {before} to {after}, a change of {}, expected {change}",
             after - before

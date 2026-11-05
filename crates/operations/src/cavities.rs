@@ -245,7 +245,7 @@ fn on_source_face(
 /// Registers on `copy`'s faces the pcurves of `original`'s, which
 /// `copy_shells` leaves behind: a curved cavity face keeps its UV trims.
 /// The copy lists faces, wires and edges in the original's order.
-fn copy_pcurves(
+pub(crate) fn copy_pcurves(
     topo: &mut Topology,
     original: ShellId,
     copy: ShellId,

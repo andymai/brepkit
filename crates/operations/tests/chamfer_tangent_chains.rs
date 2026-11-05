@@ -460,3 +460,98 @@ fn the_planar_rebuild_refuses_a_hole_it_reaches() {
 
     assert!(chamfer(&mut topo, drilled, &rim, 0.5).is_err());
 }
+
+/// A hole within a bevel's set-back of its edge, though the bevel shares no
+/// edge or vertex with it: the rebuild would leave the hole's walls crossing
+/// the new face.
+#[test]
+fn the_planar_rebuild_refuses_a_hole_inside_the_bevel() {
+    let mut topo = Topology::new();
+    let plate = make_box(&mut topo, 20.0, 20.0, 4.0).unwrap();
+    let inner = make_box(&mut topo, 4.0, 0.5, 8.0).unwrap();
+    transform_solid(&mut topo, inner, &Mat4::translation(8.0, 0.25, -2.0)).unwrap();
+    let drilled = boolean(&mut topo, BooleanOp::Cut, plate, inner).unwrap();
+    let edge = edges_at(&topo, drilled, 4.0, |a, b| a.y() < 1e-9 && b.y() < 1e-9)[0];
+
+    assert!(chamfer(&mut topo, drilled, &[edge], 1.0).is_err());
+}
+
+/// A straight wall opened just above the rim the chain would raise past the
+/// opening: refused, not built with the opening under its new rim.
+#[test]
+fn a_chain_refuses_a_wall_opening_inside_the_bevel() {
+    let mut topo = Topology::new();
+    let solid = obround(&mut topo, false, 0.0, HEIGHT);
+    let edge = edges_at(&topo, solid, 0.0, |a, b| a.y() > 0.0 && b.y() > 0.0)[0];
+    assert!(is_line(&topo, edge));
+    let window = make_box(&mut topo, 4.0, 4.0, 0.4).unwrap();
+    transform_solid(&mut topo, window, &Mat4::translation(18.0, 6.0, 0.3)).unwrap();
+    let opened = boolean(&mut topo, BooleanOp::Cut, solid, window).unwrap();
+    let edge = edges_at(&topo, opened, 0.0, |a, b| {
+        a.y() > 0.0 && b.y() > 0.0 && (a.x() - b.x()).abs() > 1.0
+    })[0];
+
+    assert!(chamfer(&mut topo, opened, &[edge], 1.0).is_err());
+}
+
+/// A shaft through the cap inside the strip the chain would take.
+#[test]
+fn a_chain_refuses_a_cap_hole_inside_the_bevel() {
+    let mut topo = Topology::new();
+    let solid = obround(&mut topo, false, 0.0, HEIGHT);
+    let shaft = make_box(&mut topo, 4.0, 1.0, HEIGHT + 4.0).unwrap();
+    transform_solid(&mut topo, shaft, &Mat4::translation(18.0, 6.5, -2.0)).unwrap();
+    let opened = boolean(&mut topo, BooleanOp::Cut, solid, shaft).unwrap();
+    let edge = edges_at(&topo, opened, 0.0, |a, b| {
+        a.y() > 7.5 && b.y() > 7.5 && (a.x() - b.x()).abs() > 1.0
+    })[0];
+
+    assert!(chamfer(&mut topo, opened, &[edge], 1.0).is_err());
+}
+
+/// Two chains on one cap whose strips overlap: the second finds the first's
+/// new edge in its way.
+#[test]
+fn two_chains_must_clear_each_other() {
+    let mut topo = Topology::new();
+    let solid = obround(&mut topo, false, 0.0, HEIGHT);
+    let edges: Vec<_> = edges_at(&topo, solid, 0.0, |_, _| true)
+        .into_iter()
+        .filter(|&e| is_line(&topo, e))
+        .collect();
+    // The straight sides stand 16 apart, so at 8.5 their strips overlap by 1.
+    assert!(chamfer(&mut topo, solid, &edges, 8.5).is_err());
+}
+
+/// A chain keeps a cavity, and the cavity's faces keep their trims.
+#[test]
+fn a_chain_keeps_a_cavity_and_its_pcurves() {
+    use brepkit_math::curves2d::{Curve2D, Line2D};
+    use brepkit_math::vec::{Point2, Vec2};
+    use brepkit_topology::pcurve::PCurve;
+
+    let mut topo = Topology::new();
+    let solid = obround(&mut topo, false, 0.0, HEIGHT);
+    let edges = edges_at(&topo, solid, 0.0, |_, _| true);
+    let core = make_box(&mut topo, 4.0, 4.0, 4.0).unwrap();
+    transform_solid(&mut topo, core, &Mat4::translation(18.0, -2.0, 3.0)).unwrap();
+    let hollow = boolean(&mut topo, BooleanOp::Cut, solid, core).unwrap();
+    let cavity = topo.solid(hollow).unwrap().inner_shells()[0];
+    let face = topo.shell(cavity).unwrap().faces()[0];
+    let rim = brepkit_topology::explorer::face_edges(&topo, face).unwrap()[0];
+    let line = Line2D::new(Point2::new(0.0, 0.0), Vec2::new(1.0, 0.0)).unwrap();
+    topo.pcurves_mut()
+        .set(rim, face, PCurve::new(Curve2D::Line(line), 0.0, 1.0));
+    // The boolean's cut can split the rim; it is the same four-sided loop.
+    let loop_edges = edges_at(&topo, hollow, 0.0, |_, _| true);
+    assert!(loop_edges.len() >= edges.len());
+
+    let result = chamfer(&mut topo, hollow, &loop_edges, 1.0).unwrap();
+
+    let removed = 40.0 + 2.0 * half_turn(RADIUS - 1.0 / 3.0);
+    assert_exact(&topo, result, AREA * HEIGHT - 64.0 - removed, "hollow");
+    let kept = topo.solid(result).unwrap().inner_shells()[0];
+    assert_ne!(kept, cavity);
+    let copied_face = topo.shell(kept).unwrap().faces()[0];
+    assert_eq!(topo.pcurves().pcurves_for_face(copied_face).len(), 1);
+}
