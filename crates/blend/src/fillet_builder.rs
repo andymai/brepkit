@@ -1574,6 +1574,9 @@ impl<'a> FilletBuilder<'a> {
             brepkit_topology::orientation::propagate_orientation(topo, &result_faces, &seeds)?;
             boundary_registry.refresh_owner_orientations(topo)?;
         }
+        if align_seamed_faces_with_tangent_neighbours(topo, &new_faces, &result_faces)? {
+            boundary_registry.refresh_owner_orientations(topo)?;
+        }
         let postassembly = if force_postassembly_failure {
             Err("forced postassembly incidence gate failure".to_owned())
         } else {
@@ -2632,6 +2635,139 @@ fn path_enters_triangle(path: &[(f64, f64)], triangle: [(f64, f64); 3]) -> bool 
         })
 }
 
+/// A face's normal at `p`, outward as the face is used.
+fn effective_normal(
+    topo: &Topology,
+    face_id: FaceId,
+    p: Point3,
+) -> Result<Option<Vec3>, BlendError> {
+    let face = topo.face(face_id)?;
+    let normal = match face.surface() {
+        FaceSurface::Plane { normal, .. } => *normal,
+        surface => {
+            let Some((u, v)) = surface.project_point(p) else {
+                return Ok(None);
+            };
+            surface.normal(u, v)
+        }
+    };
+    Ok(Some(if face.is_reversed() { -normal } else { normal }))
+}
+
+/// Sets each built face whose wire runs along a seam edge both ways (a
+/// closed band) facing as the neighbours it meets tangentially do.
+///
+/// The normal pass reads a face's winding from its boundary and skips any
+/// face that uses an edge twice, so a band round a closed spine keeps
+/// whichever normal its sections gave it, and may face into the solid. A
+/// blend meets its supports tangentially along its contacts, so its outward
+/// normal must agree with theirs there: it is turned (wire reversed, edge
+/// senses and reversal flag toggled, so shared edges keep their senses) when
+/// the tangent neighbours disagree with it. Only faces already settled vote,
+/// so a seamed wall and the band beside it are not judged by each other
+/// first; they settle in rounds outward from the other faces.
+fn align_seamed_faces_with_tangent_neighbours(
+    topo: &mut Topology,
+    new_faces: &[FaceId],
+    result_faces: &[FaceId],
+) -> Result<bool, BlendError> {
+    const TANGENT_COS: f64 = 0.985;
+    let mut pending: Vec<FaceId> = Vec::new();
+    for &face_id in new_faces {
+        let face = topo.face(face_id)?;
+        if matches!(face.surface(), FaceSurface::Plane { .. }) || !face.inner_wires().is_empty() {
+            continue;
+        }
+        let edges = topo.wire(face.outer_wire())?.edges();
+        let mut seen = HashSet::new();
+        if !edges.iter().all(|oe| seen.insert(oe.edge())) {
+            pending.push(face_id);
+        }
+    }
+    let mut edge_faces: std::collections::HashMap<EdgeId, Vec<FaceId>> =
+        std::collections::HashMap::new();
+    for &face_id in result_faces {
+        let face = topo.face(face_id)?;
+        let mut wires = vec![face.outer_wire()];
+        wires.extend_from_slice(face.inner_wires());
+        for w in wires {
+            for oe in topo.wire(w)?.edges() {
+                let faces = edge_faces.entry(oe.edge()).or_default();
+                if !faces.contains(&face_id) {
+                    faces.push(face_id);
+                }
+            }
+        }
+    }
+    let mut turned_any = false;
+    while !pending.is_empty() {
+        let mut settled = Vec::new();
+        for &face_id in &pending {
+            let edges = topo
+                .wire(topo.face(face_id)?.outer_wire())?
+                .edges()
+                .to_vec();
+            let uses = |e: EdgeId| edges.iter().filter(|oe| oe.edge() == e).count();
+            let mut votes = (0_u32, 0_u32);
+            for oe in edges.iter().filter(|oe| uses(oe.edge()) == 1) {
+                let edge = topo.edge(oe.edge())?;
+                let (a, b) = (
+                    topo.vertex(edge.start())?.point(),
+                    topo.vertex(edge.end())?.point(),
+                );
+                let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
+                let p = edge
+                    .curve()
+                    .evaluate_with_endpoints(f64::midpoint(t0, t1), a, b);
+                let Some(mine) = effective_normal(topo, face_id, p)? else {
+                    continue;
+                };
+                for &other in edge_faces.get(&oe.edge()).map_or(&[][..], Vec::as_slice) {
+                    if other == face_id || pending.contains(&other) {
+                        continue;
+                    }
+                    let Some(theirs) = effective_normal(topo, other, p)? else {
+                        continue;
+                    };
+                    let cos = mine.dot(theirs);
+                    if cos >= TANGENT_COS {
+                        votes.0 += 1;
+                    } else if cos <= -TANGENT_COS {
+                        votes.1 += 1;
+                    }
+                }
+            }
+            if votes == (0, 0) {
+                continue;
+            }
+            settled.push(face_id);
+            if votes.1 <= votes.0 {
+                continue;
+            }
+            log::debug!("seamed face {face_id:?} faced away from its tangent neighbours: turned");
+            let wire_id = topo.face(face_id)?.outer_wire();
+            let wire = topo.wire_mut(wire_id)?;
+            let turned: Vec<OrientedEdge> = wire
+                .edges()
+                .iter()
+                .rev()
+                .map(|oe| OrientedEdge::new(oe.edge(), !oe.is_forward()))
+                .collect();
+            for (slot, oe) in wire.edges_mut().iter_mut().zip(turned) {
+                *slot = oe;
+            }
+            let face = topo.face_mut(face_id)?;
+            face.set_reversed(!face.is_reversed());
+            turned_any = true;
+        }
+        if settled.is_empty() {
+            break;
+        }
+        pending.retain(|f| !settled.contains(f));
+    }
+    Ok(turned_any)
+}
+
 fn succeeded_candidates(
     plan: Option<&FilletPlan>,
     stripe_results: &[StripeResult],
@@ -3082,32 +3218,69 @@ fn compute_stripe_for_spine(
     // faces the ball: into the material at a convex edge, where the other
     // face reaches into that side of its plane, and out of it at a concave
     // one.
-    let p0 = spine.evaluate(topo, 0.0)?;
-    let toward_ball = |surf: brepkit_topology::face::FaceSurface,
-                       reversed: bool,
-                       other: FaceId|
-     -> Result<brepkit_topology::face::FaceSurface, BlendError> {
-        let brepkit_topology::face::FaceSurface::Plane { normal, .. } = &surf else {
-            return Ok(surf);
+    // A curved surface is turned the same way, through a view that negates
+    // its normal: left as it was, a B-spline wall's outward normal put the
+    // ball outside the wall at a convex rim. Its normal is read at the
+    // edge's middle, where `into_face_from_edge` reads the other face.
+    let middle = {
+        let e = topo.edge(spine.edges()[0])?;
+        let (ps, pe) = (
+            topo.vertex(e.start())?.point(),
+            topo.vertex(e.end())?.point(),
+        );
+        let (t0, t1) = e.curve().domain_with_endpoints(ps, pe);
+        e.curve()
+            .evaluate_with_endpoints(f64::midpoint(t0, t1), ps, pe)
+    };
+    let flips_toward_ball = |surf: &brepkit_topology::face::FaceSurface,
+                             reversed: bool,
+                             other: FaceId|
+     -> Result<bool, BlendError> {
+        let normal = if let brepkit_topology::face::FaceSurface::Plane { normal, .. } = surf {
+            *normal
+        } else {
+            let (u, v) = surf.project_point(middle).unwrap_or((0.0, 0.0));
+            surf.normal(u, v)
         };
-        let outward = if reversed { -*normal } else { *normal };
+        let outward = if reversed { -normal } else { normal };
         let convex = match into_face_from_edge(topo, other, spine.edges()[0])? {
             Some(into_other) => into_other.dot(-outward) > 0.0,
-            None => analytic::material_side_witness(topo, other, -outward, p0)? > 1e-9,
+            None => analytic::material_side_witness(topo, other, -outward, middle)? > 1e-9,
         };
-        Ok(if reversed == convex {
-            surf
-        } else {
-            orient_plane_surface(&surf)
-        })
+        Ok(reversed != convex)
     };
-    let oriented_surf1 = toward_ball(surf1, face1_reversed, face2)?;
-    let oriented_surf2 = toward_ball(surf2, face2_reversed, face1)?;
+    let flip1 = flips_toward_ball(&surf1, face1_reversed, face2)?;
+    let flip2 = flips_toward_ball(&surf2, face2_reversed, face1)?;
+    let is_plane = |surf: &brepkit_topology::face::FaceSurface| {
+        matches!(surf, brepkit_topology::face::FaceSurface::Plane { .. })
+    };
+    let oriented_surf1 = if flip1 && is_plane(&surf1) {
+        orient_plane_surface(&surf1)
+    } else {
+        surf1
+    };
+    let oriented_surf2 = if flip2 && is_plane(&surf2) {
+        orient_plane_surface(&surf2)
+    } else {
+        surf2
+    };
     let mut adapter1 = None;
     let mut adapter2 = None;
 
-    let ps1 = surface_ref_or_adapter(&oriented_surf1, &mut adapter1);
-    let ps2 = surface_ref_or_adapter(&oriented_surf2, &mut adapter2);
+    let base1 = surface_ref_or_adapter(&oriented_surf1, &mut adapter1);
+    let base2 = surface_ref_or_adapter(&oriented_surf2, &mut adapter2);
+    let flipped1 = FlippedNormalSurface::new(base1);
+    let flipped2 = FlippedNormalSurface::new(base2);
+    let ps1: &dyn brepkit_math::traits::ParametricSurface = if flip1 && !is_plane(&oriented_surf1) {
+        &flipped1
+    } else {
+        base1
+    };
+    let ps2: &dyn brepkit_math::traits::ParametricSurface = if flip2 && !is_plane(&oriented_surf2) {
+        &flipped2
+    } else {
+        base2
+    };
 
     let config = WalkerConfig::default();
 
@@ -3125,6 +3298,9 @@ fn compute_stripe_for_spine(
         walker.walk(start, 0.0, spine.length())?
     };
 
+    if spine.is_closed() {
+        check_contacts_on_faces(topo, face1, face2, &walk_result.sections)?;
+    }
     let blend_surface = approximate_blend_surface(&walk_result.sections)?;
     // The band's sides are its own boundary rows: a polyline through the
     // sections' contact points leaves the band wherever they do not lie on a
@@ -3154,6 +3330,70 @@ fn compute_stripe_for_spine(
         new_edges: Vec::new(),
     })
 }
+
+/// Refuses a walked band round a closed spine whose contacts leave their
+/// faces: a ball too big for a rim (a bore's mouth wider than its plate is
+/// thick, a wall shorter than the round) still solves on the faces' whole
+/// surfaces, past the faces themselves. Each contact must lie within the box
+/// round its face's own edges.
+fn check_contacts_on_faces(
+    topo: &Topology,
+    face1: FaceId,
+    face2: FaceId,
+    sections: &[crate::section::CircSection],
+) -> Result<(), BlendError> {
+    let extent = |face: FaceId| -> Result<brepkit_math::aabb::Aabb3, BlendError> {
+        let f = topo.face(face)?;
+        let mut points = Vec::new();
+        for wire in std::iter::once(f.outer_wire()).chain(f.inner_wires().iter().copied()) {
+            for oriented in topo.wire(wire)?.edges() {
+                let edge = topo.edge(oriented.edge())?;
+                let (a, b) = (
+                    topo.vertex(edge.start())?.point(),
+                    topo.vertex(edge.end())?.point(),
+                );
+                points.extend([a, b]);
+                match edge.curve() {
+                    // A B-spline lies within its control points' hull: samples
+                    // fall short of its bulges, where a wall's contact lies.
+                    EdgeCurve::NurbsCurve(curve) => {
+                        points.extend(curve.control_points().iter().copied());
+                    }
+                    EdgeCurve::Line => {}
+                    curve @ (EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_)) => {
+                        let (t0, t1) = curve.domain_with_endpoints(a, b);
+                        for k in 0..=CONTACT_EXTENT_SAMPLES {
+                            let t =
+                                t0 + (t1 - t0) * f64::from(k) / f64::from(CONTACT_EXTENT_SAMPLES);
+                            points.push(curve.evaluate_with_endpoints(t, a, b));
+                        }
+                    }
+                }
+            }
+        }
+        let bbox = brepkit_math::aabb::Aabb3::from_points(points);
+        let size = (bbox.max - bbox.min).length();
+        // A conic sampled this finely falls short of its extent by under
+        // 1e-4 of its size.
+        Ok(bbox.expanded(1e-4 * size.max(1.0)))
+    };
+    let (box1, box2) = (extent(face1)?, extent(face2)?);
+    if let Some(section) = sections
+        .iter()
+        .find(|s| !box1.contains_point(s.p1) || !box2.contains_point(s.p2))
+    {
+        return Err(BlendError::PlanningFailure {
+            reason: format!(
+                "the fillet's contact at spine t = {:.3} would land past its face",
+                section.t
+            ),
+        });
+    }
+    Ok(())
+}
+
+/// Samples per boundary edge when bounding a face's extent.
+const CONTACT_EXTENT_SAMPLES: u32 = 256;
 
 /// A single cross-section of a rolling-ball blend: the two surface contact
 /// points, the rational-quadratic arc apex (middle control point), and its

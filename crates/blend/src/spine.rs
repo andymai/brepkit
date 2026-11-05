@@ -27,12 +27,35 @@ pub struct Spine {
     is_closed: bool,
 }
 
-/// Get the chord-length endpoints of an edge.
-fn edge_endpoints(topo: &Topology, edge_id: EdgeId) -> Result<(Point3, Point3), BlendError> {
+/// Samples per curved edge when its length is summed from chords.
+const LENGTH_SAMPLES: u32 = 256;
+
+/// The length of an edge along its curve: a line's chord, a circular arc's
+/// exactly, any other curve's as the sum of short chords. Measured by its
+/// chord, a closed edge (one vertex at both ends) was zero long, so a
+/// closed B-spline rim had no spine to walk.
+fn edge_length(topo: &Topology, edge_id: EdgeId) -> Result<f64, BlendError> {
+    use brepkit_topology::edge::EdgeCurve;
     let edge = topo.edge(edge_id)?;
     let p_start = topo.vertex(edge.start())?.point();
     let p_end = topo.vertex(edge.end())?.point();
-    Ok((p_start, p_end))
+    let curve = edge.curve();
+    let (t0, t1) = curve.domain_with_endpoints(p_start, p_end);
+    Ok(match curve {
+        EdgeCurve::Line => (p_end - p_start).length(),
+        EdgeCurve::Circle(c) => c.radius() * (t1 - t0).abs(),
+        EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_) => {
+            let mut length = 0.0;
+            let mut prev = curve.evaluate_with_endpoints(t0, p_start, p_end);
+            for k in 1..=LENGTH_SAMPLES {
+                let t = t0 + (t1 - t0) * f64::from(k) / f64::from(LENGTH_SAMPLES);
+                let p = curve.evaluate_with_endpoints(t, p_start, p_end);
+                length += (p - prev).length();
+                prev = p;
+            }
+            length
+        }
+    })
 }
 
 impl Spine {
@@ -41,8 +64,7 @@ impl Spine {
     /// # Errors
     /// Returns `BlendError` if the edge or its vertices cannot be found.
     pub fn from_single_edge(topo: &Topology, edge_id: EdgeId) -> Result<Self, BlendError> {
-        let (p_start, p_end) = edge_endpoints(topo, edge_id)?;
-        let length = (p_end - p_start).length();
+        let length = edge_length(topo, edge_id)?;
 
         Ok(Self {
             edges: vec![edge_id],
@@ -97,8 +119,7 @@ impl Spine {
         params.push(0.0);
         let mut cumulative = 0.0;
         for &eid in &edges {
-            let (p_start, p_end) = edge_endpoints(topo, eid)?;
-            cumulative += (p_end - p_start).length();
+            cumulative += edge_length(topo, eid)?;
             params.push(cumulative);
         }
         let first = topo.edge(edges[0])?;
