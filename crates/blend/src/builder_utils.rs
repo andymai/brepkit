@@ -685,6 +685,14 @@ impl ParametricSurface for FlippedNormalSurface<'_> {
     fn partial_v(&self, u: f64, v: f64) -> Vec3 {
         self.inner.partial_v(u, v)
     }
+
+    fn closed_u(&self) -> Option<(f64, f64)> {
+        self.inner.closed_u()
+    }
+
+    fn closed_v(&self) -> Option<(f64, f64)> {
+        self.inner.closed_v()
+    }
 }
 
 /// Extract a `&dyn ParametricSurface` from a `FaceSurface`, or build a

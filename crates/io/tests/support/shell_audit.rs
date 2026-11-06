@@ -14,7 +14,10 @@ use brepkit_topology::solid::SolidId;
 pub struct EdgeAudit {
     pub edge: EdgeId,
     pub uses: usize,
+    // Read only through `Debug`, when a test prints an audit that fails.
+    #[allow(dead_code)]
     pub owners: Vec<(FaceId, String)>,
+    #[allow(dead_code)]
     pub category: &'static str,
 }
 
