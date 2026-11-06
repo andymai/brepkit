@@ -2066,8 +2066,11 @@ type Flat = (f64, f64);
 const HOLE_SAMPLES: u32 = 64;
 
 /// A curve sampled in a plane face's frame: its polyline, and how far the
-/// curve can stray from it (the largest gap between the curve's middle and
-/// the chord of any one span, doubled to cover the span).
+/// curve can stray from it (the largest gap between the curve, read at a
+/// span's quarter points and middle, and that span's chord, doubled for what
+/// falls between them). The bound is sampled, not proven: it takes spans
+/// short against the curve's bends, as a closed contact sampled at 1024
+/// points and a hole's edge at 64 are.
 struct FlatPolyline {
     points: Vec<Flat>,
     sag: f64,
@@ -2193,14 +2196,15 @@ fn check_holes_clear_of_closed_contacts(
             flat(curve.evaluate_with_endpoints((t1 - t0).mul_add(k / f64::from(n), t0), a, b))
         };
         for k in 0..n {
-            let (p, middle, q) = (
-                at(f64::from(k)),
-                at(f64::from(k) + 0.5),
-                at(f64::from(k + 1)),
-            );
-            line.sag = line
-                .sag
-                .max(2.0 * flat_segment_distance(p, q, middle, middle));
+            let (p, q) = (at(f64::from(k)), at(f64::from(k + 1)));
+            // The span's deviation from its chord, read at its quarter
+            // points and middle, doubled for what falls between them.
+            for f in [0.25, 0.5, 0.75] {
+                let inner = at(f64::from(k) + f);
+                line.sag = line
+                    .sag
+                    .max(2.0 * flat_segment_distance(p, q, inner, inner));
+            }
             line.points.push(p);
         }
     };
@@ -4213,7 +4217,9 @@ mod tests {
             pcurve: None,
             source_edges: edges,
         };
-        assert!(check_holes_clear_of_closed_contacts(&topo, face, std::slice::from_ref(&own)).is_ok());
+        assert!(
+            check_holes_clear_of_closed_contacts(&topo, face, std::slice::from_ref(&own)).is_ok()
+        );
         assert!(check_holes_clear_of_closed_contacts(&topo, face, &[rim, own]).is_err());
     }
 
