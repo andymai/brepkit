@@ -77,6 +77,17 @@ const SQUARE_COS: f64 = 1e-7;
 /// own faces put them, for a corner it takes as square (see [`SQUARE_COS`]).
 const MITRE_SLIP: f64 = 1e-6;
 
+/// Whether the sharp mitre takes two stripes leaving a corner along `ex` and
+/// `ey` as square. The mitre places its points as if the corner were exactly
+/// square, so a corner off square by `cos` moves them by about
+/// `radius * cos`. The plan's junction finder and the corner pass both ask
+/// this, so a junction the corner pass would decline is never planned as a
+/// mitre.
+fn mitre_takes_square(ex: Vec3, ey: Vec3, radius: f64) -> bool {
+    let cos = ex.dot(ey).abs();
+    cos <= SQUARE_COS && cos * radius <= MITRE_SLIP
+}
+
 /// Return the indices (into `stripes`) of stripes whose spine touches `vertex_id`.
 fn stripes_at_vertex(vertex_id: VertexId, stripes: &[Stripe], topo: &Topology) -> Vec<usize> {
     let mut result = Vec::new();
@@ -453,6 +464,9 @@ pub fn find_equal_two_edge_miter_junctions(
                 Ok(Some(direction)) => directions.push(direction),
                 _ => continue 'junctions,
             }
+        }
+        if !mitre_takes_square(directions[0], directions[1], *ra) {
+            continue;
         }
         for &edge_id in &junction.unselected_sharp_edges {
             let Some(direction) = topo
@@ -2922,9 +2936,7 @@ fn detect_equal_two_edge_miter(
     let ey = (topo.vertex(far_b)?.point() - vertex_point)
         .normalize()
         .map_err(BlendError::Math)?;
-    // The mitre places its points as if the corner were exactly square: a
-    // corner off square by `cos` moves them by about `radius * cos`.
-    if ex.dot(ey).abs() > SQUARE_COS || ex.dot(ey).abs() * radius > MITRE_SLIP {
+    if !mitre_takes_square(ex, ey, radius) {
         return Ok(None);
     }
     let mut directions = vec![ex, ey];
@@ -5357,6 +5369,51 @@ mod tests {
             error,
             BlendError::CornerFailure { vertex: failed } if failed == vertex
         ));
+    }
+
+    /// The plan's junction finder declines a corner the mitre's slip rules
+    /// out, as the corner pass does: two stripes off square by a cosine of
+    /// 8e-8 (inside `SQUARE_COS`) are a mitre at r = 10 (a slip of 8e-7) but
+    /// not at r = 20 (1.6e-6), where planning one would leave the corner pass
+    /// without the cross-section boundaries it omits for a mitre.
+    #[test]
+    fn miter_finder_declines_what_the_corner_pass_declines() {
+        let finds_mitre = |radius: f64, skew: f64| {
+            let mut topo = Topology::new();
+            let solid = make_box(&mut topo, Vec3::new(100.0, 100.0, 100.0));
+            let (origin, edges) = box_edges_at_origin(&topo, solid);
+            let flat: Vec<EdgeId> = edges
+                .into_iter()
+                .filter(|&edge_id| {
+                    let edge = topo.edge(edge_id).unwrap();
+                    let far = if edge.start() == origin {
+                        edge.end()
+                    } else {
+                        edge.start()
+                    };
+                    topo.vertex(far).unwrap().point().z().abs() <= TOL
+                })
+                .collect();
+            assert_eq!(flat.len(), 2);
+            let far_y = brepkit_topology::explorer::solid_vertices(&topo, solid)
+                .unwrap()
+                .into_iter()
+                .find(|&v| {
+                    (topo.vertex(v).unwrap().point() - Point3::new(0.0, 100.0, 0.0)).length() <= TOL
+                })
+                .unwrap();
+            topo.vertex_mut(far_y)
+                .unwrap()
+                .set_point(Point3::new(100.0 * skew, 100.0, 0.0));
+            let plan = plan_box_edges(&topo, solid, flat, radius);
+            find_equal_two_edge_miter_junctions(&topo, &plan)
+                .iter()
+                .any(|miter| miter.vertex == origin)
+        };
+        assert!(finds_mitre(10.0, 0.0));
+        assert!(finds_mitre(20.0, 0.0));
+        assert!(finds_mitre(10.0, 8e-8));
+        assert!(!finds_mitre(20.0, 8e-8));
     }
 
     /// The exact `Ellipse3D` frame that carries the sharp-mitered two-edge
