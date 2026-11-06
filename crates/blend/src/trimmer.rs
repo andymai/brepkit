@@ -1625,6 +1625,7 @@ fn rebuild_mapped_parametric_face(
     // support wires before their own trims run and leaves those junction
     // boundaries singly used.
     let mut new_vertices = Vec::new();
+    let mut closed_vertices = std::collections::HashSet::new();
     let mut contact_edges = Vec::with_capacity(restrictions.len());
     for restriction in restrictions {
         if restriction.contact_3d.len() < 2
@@ -1650,6 +1651,7 @@ fn rebuild_mapped_parametric_face(
         let start_vertex =
             mapped_vertex_for_point(topo, &mut known_vertices, &mut new_vertices, start);
         let end_vertex = if closed {
+            closed_vertices.insert(start_vertex);
             start_vertex
         } else {
             mapped_vertex_for_point(topo, &mut known_vertices, &mut new_vertices, end)
@@ -1669,9 +1671,21 @@ fn rebuild_mapped_parametric_face(
                     }
                     let edge = topo.edge(oriented.edge())?;
                     let (s, t) = (edge.start(), edge.end());
+                    // A closed contact round a periodic support crosses the
+                    // face's own seam, which no other face shares: the seam
+                    // is cut there whatever the policy, or with two such
+                    // contacts (both rims of a wall) the seam stays whole
+                    // and the walk bridges each contact loop to the rim.
+                    let own_seam = closed_vertices.contains(&vertex_id)
+                        && wire
+                            .edges()
+                            .iter()
+                            .filter(|other| other.edge() == oriented.edge())
+                            .count()
+                            > 1;
                     if s == vertex_id
                         || t == vertex_id
-                        || !split_policy.allows(single_contact, s, t)
+                        || !(own_seam || split_policy.allows(single_contact, s, t))
                     {
                         continue;
                     }

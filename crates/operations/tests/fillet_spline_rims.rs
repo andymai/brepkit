@@ -149,6 +149,11 @@ fn centroid_from_corner(r: f64) -> f64 {
 /// valid, watertight, rounded off by its walls, and short by the strip the
 /// fillet removes, to 0.1%.
 fn assert_rim_rounds_off(z: f64, r: f64) {
+    assert_rims_round_off(&[z], r);
+}
+
+/// As [`assert_rim_rounds_off`], filleting the rims at all of `zs` at once.
+fn assert_rims_round_off(zs: &[f64], r: f64) {
     let mut topo = Topology::new();
     let solid = slab(&mut topo);
     assert!(
@@ -175,9 +180,9 @@ fn assert_rim_rounds_off(z: f64, r: f64) {
         is_watertight(&input_mesh),
         "the slab's own mesh is not watertight"
     );
-    let edge = rim_at(&topo, solid, z);
+    let edges: Vec<EdgeId> = zs.iter().map(|&z| rim_at(&topo, solid, z)).collect();
     let before = solid_volume(&topo, solid, 0.001).unwrap();
-    let result = fillet_v2(&mut topo, solid, &[edge], r).unwrap();
+    let result = fillet_v2(&mut topo, solid, &edges, r).unwrap();
     assert!(result.failed.is_empty(), "r = {r}: {:?}", result.failed);
     assert_ne!(result.solid, solid, "r = {r}: the fillet changed nothing");
     let report = validate_solid(&topo, result.solid).unwrap();
@@ -189,13 +194,17 @@ fn assert_rim_rounds_off(z: f64, r: f64) {
         brepkit_operations::tessellate::boundary_edge_count(&mesh),
         brepkit_operations::tessellate::non_manifold_edge_count(&mesh)
     );
-    let removed =
-        (1.0 - PI / 4.0) * r * r * 2.0f64.mul_add(-PI * centroid_from_corner(r), perimeter());
+    #[allow(clippy::cast_precision_loss)]
+    let removed = zs.len() as f64
+        * (1.0 - PI / 4.0)
+        * r
+        * r
+        * 2.0f64.mul_add(-PI * centroid_from_corner(r), perimeter());
     let after = solid_volume(&topo, result.solid, 0.001).unwrap();
     let truth = before - removed;
     assert!(
         (after - truth).abs() < 1e-3 * truth,
-        "r = {r}, z = {z}: volume {after}, expected {truth} (removed {removed})"
+        "r = {r}, z = {zs:?}: volume {after}, expected {truth} (removed {removed})"
     );
 }
 
@@ -218,5 +227,12 @@ fn an_elliptic_slabs_top_rim_rounds_off() {
 fn an_elliptic_slabs_bottom_rim_rounds_off() {
     for r in [0.5, 1.0, 2.0] {
         assert_rim_rounds_off(0.0, r);
+    }
+}
+
+#[test]
+fn an_elliptic_slabs_two_rims_round_off_together() {
+    for r in [0.5, 1.0] {
+        assert_rims_round_off(&[0.0, HEIGHT], r);
     }
 }

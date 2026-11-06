@@ -89,6 +89,23 @@ pub trait BlendFunction {
     ) -> CircSection;
 }
 
+/// `(u, v)` moved by whole periods into the domain of a surface closed in
+/// either direction (a finite-difference probe a step past the seam), so
+/// it is evaluated where the surface is defined rather than extrapolated.
+fn on_surface(surf: &dyn ParametricSurface, u: f64, v: f64) -> (f64, f64) {
+    let wrap = |x: f64, range: Option<(f64, f64)>| {
+        range.map_or(x, |(a, b)| {
+            let period = b - a;
+            if period > 0.0 {
+                (x - a).rem_euclid(period) + a
+            } else {
+                x
+            }
+        })
+    };
+    (wrap(u, surf.closed_u()), wrap(v, surf.closed_v()))
+}
+
 /// Project a surface normal into the section plane perpendicular to `nplan`.
 ///
 /// Computes the component of `normal` that is perpendicular to `nplan`,
@@ -257,8 +274,10 @@ impl ConstRadBlend {
         dv: f64,
         nplan: Vec3,
     ) -> Vec3 {
-        let n_plus = surf.normal(u + du, v + dv);
-        let n_minus = surf.normal(u - du, v - dv);
+        let (up, vp) = on_surface(surf, u + du, v + dv);
+        let (um, vm) = on_surface(surf, u - du, v - dv);
+        let n_plus = surf.normal(up, vp);
+        let n_minus = surf.normal(um, vm);
         let npn_plus = project_normal_to_section(n_plus, nplan);
         let npn_minus = project_normal_to_section(n_minus, nplan);
 
