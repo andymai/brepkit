@@ -2235,7 +2235,8 @@ fn assemble_closed_rim(
         ],
     )?;
     let seam_curve = crate::builder_utils::seam_curve(
-        stripe,
+        &stripe.surface,
+        &stripe.sections,
         topo.vertex(plate_v)?.point(),
         topo.vertex(wall_v)?.point(),
     );

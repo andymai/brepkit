@@ -45,9 +45,15 @@ pub fn cross_section_curve(
 /// standing off the band by up to `r (1 - cos(θ/2))` for a section of angle
 /// `θ`. A torus band's seam is its tube circle through both points; a
 /// walked band's is the section through them. Falls back to that line only
-/// when neither passes through both points.
+/// when neither passes through both points. `surface` and `sections` are
+/// the stripe's.
 #[must_use]
-pub fn seam_curve(stripe: &crate::stripe::Stripe, a: Point3, b: Point3) -> EdgeCurve {
+pub fn seam_curve(
+    surface: &FaceSurface,
+    sections: &[crate::section::CircSection],
+    a: Point3,
+    b: Point3,
+) -> EdgeCurve {
     let arc = |center: Point3, radius: f64| {
         let tol = 1e-6_f64.max(1e-4 * radius);
         let on = |p: Point3| ((p - center).length() - radius).abs() <= tol;
@@ -57,7 +63,7 @@ pub fn seam_curve(stripe: &crate::stripe::Stripe, a: Point3, b: Point3) -> EdgeC
             .flatten()
             .map(EdgeCurve::Circle)
     };
-    if let FaceSurface::Torus(torus) = &stripe.surface {
+    if let FaceSurface::Torus(torus) = surface {
         let (u, _) = ParametricSurface::project_point(torus, a);
         let center = torus.center()
             + (torus.x_axis() * u.cos() + torus.y_axis() * u.sin()) * torus.major_radius();
@@ -74,8 +80,7 @@ pub fn seam_curve(stripe: &crate::stripe::Stripe, a: Point3, b: Point3) -> EdgeC
         ((sec.p1 - a).length() + (sec.p2 - b).length())
             .min((sec.p1 - b).length() + (sec.p2 - a).length())
     };
-    stripe
-        .sections
+    sections
         .iter()
         .filter(|sec| on_section(sec))
         .min_by(|x, y| gap(x).total_cmp(&gap(y)))
@@ -132,7 +137,12 @@ pub fn create_periodic_blend_face(
     }
     let contact1_oriented = registry.oriented_edge(topo, contact1, 1)?;
     let contact2_oriented = registry.oriented_edge(topo, contact2, 1)?;
-    let seam_curve = seam_curve(stripe, topo.vertex(v1)?.point(), topo.vertex(v2)?.point());
+    let seam_curve = seam_curve(
+        &stripe.surface,
+        &stripe.sections,
+        topo.vertex(v1)?.point(),
+        topo.vertex(v2)?.point(),
+    );
     let seam = topo.add_edge(Edge::new(v1, v2, seam_curve));
     let wire = Wire::new(
         vec![
@@ -1110,6 +1120,81 @@ mod tests {
     use brepkit_topology::edge::EdgeCurve;
     use brepkit_topology::face::FaceSurface;
     use brepkit_topology::vertex::Vertex;
+
+    /// A quarter section of radius 2 about `center` in the plane `y = 0`,
+    /// from `+x` to `+z`.
+    fn quarter_section(center: Point3) -> crate::section::CircSection {
+        crate::section::CircSection {
+            p1: center + Vec3::new(2.0, 0.0, 0.0),
+            p2: center + Vec3::new(0.0, 0.0, 2.0),
+            center,
+            radius: 2.0,
+            uv1: (0.0, 0.0),
+            uv2: (0.0, 0.0),
+            t: 0.0,
+        }
+    }
+
+    /// The point `f` of the way along `curve` from `a` to `b`, and its
+    /// distance from `center`.
+    fn along(curve: &EdgeCurve, a: Point3, b: Point3, f: f64, center: Point3) -> f64 {
+        let (t0, t1) = curve.domain_with_endpoints(a, b);
+        (curve.evaluate_with_endpoints((t1 - t0).mul_add(f, t0), a, b) - center).length()
+    }
+
+    #[test]
+    fn a_walked_bands_seam_is_its_sections_arc() {
+        let far = quarter_section(Point3::new(9.0, 9.0, 9.0));
+        let near = quarter_section(Point3::new(1.0, 0.0, 1.0));
+        let (a, b) = (near.p1, near.p2);
+        let surface = FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: 0.0,
+        };
+        let curve = seam_curve(&surface, &[far, near.clone()], a, b);
+        assert!(
+            matches!(curve, EdgeCurve::Circle(_)),
+            "{}",
+            curve.type_tag()
+        );
+        for f in [0.25, 0.5, 0.75] {
+            assert!((along(&curve, a, b, f, near.center) - 2.0).abs() < 1e-9);
+        }
+        // The shorter arc: a quarter turn, its middle toward the corner.
+        let (t0, t1) = curve.domain_with_endpoints(a, b);
+        assert!(((t1 - t0).abs() - std::f64::consts::FRAC_PI_2).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_torus_bands_seam_is_its_tube_circle() {
+        let torus =
+            brepkit_math::surfaces::ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), 5.0, 2.0)
+                .unwrap();
+        let (a, b) = (Point3::new(7.0, 0.0, 0.0), Point3::new(5.0, 0.0, 2.0));
+        let curve = seam_curve(&FaceSurface::Torus(torus), &[], a, b);
+        assert!(
+            matches!(curve, EdgeCurve::Circle(_)),
+            "{}",
+            curve.type_tag()
+        );
+        for f in [0.25, 0.5, 0.75] {
+            assert!((along(&curve, a, b, f, Point3::new(5.0, 0.0, 0.0)) - 2.0).abs() < 1e-9);
+        }
+    }
+
+    #[test]
+    fn a_seam_no_section_passes_through_stays_a_line() {
+        let section = quarter_section(Point3::new(0.0, 0.0, 0.0));
+        let surface = FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: 0.0,
+        };
+        let (a, b) = (Point3::new(3.0, 0.0, 0.0), Point3::new(0.0, 0.0, 3.0));
+        assert!(matches!(
+            seam_curve(&surface, &[section], a, b),
+            EdgeCurve::Line
+        ));
+    }
 
     #[test]
     fn registry_faces_reuse_edges_without_geometric_welding() {
