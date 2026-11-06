@@ -474,18 +474,24 @@ fn assert_sound_and_changed_by(topo: &Topology, solid: SolidId, before: f64, cha
 }
 
 /// A rod drilled through at `offset` from its axis by a hole of radius
-/// `hole`, its top rim then rounded by `r`.
-fn round_a_drilled_rods_top(offset: f64, hole: f64, r: f64) -> Result<(), String> {
+/// `hole`, its top rim then rounded by `r`: the rounded solid, or why the
+/// round was not built.
+fn round_a_drilled_rods_top(
+    offset: f64,
+    hole: f64,
+    r: f64,
+) -> Result<(Topology, SolidId, f64), String> {
     let mut topo = Topology::new();
     let rod = make_cylinder(&mut topo, RADIUS, HEIGHT).unwrap();
     let pin = make_cylinder(&mut topo, hole, HEIGHT + 2.0).unwrap();
     transform_solid(&mut topo, pin, &Mat4::translation(offset, 0.0, -1.0)).unwrap();
     let drilled = boolean(&mut topo, BooleanOp::Cut, rod, pin).unwrap();
+    let before = solid_volume(&topo, drilled, 0.001).unwrap();
     let edge = rim_at(&topo, drilled, RADIUS, HEIGHT);
     match fillet_v2(&mut topo, drilled, &[edge], r) {
         Err(e) => Err(e.to_string()),
         Ok(result) if !result.failed.is_empty() => Err(format!("{:?}", result.failed)),
-        Ok(_) => Ok(()),
+        Ok(result) => Ok((topo, result.solid, before)),
     }
 }
 
@@ -503,8 +509,10 @@ fn a_rods_top_rim_round_over_a_hole_is_refused() {
     }
 }
 
-/// The same hole wholly inside the contact's circle keeps the round.
+/// The same hole wholly inside the contact's circle keeps the round, and the
+/// result is sound: short of the drilled rod by the rim's strip.
 #[test]
 fn a_rods_top_rim_rounds_off_beside_a_hole() {
-    round_a_drilled_rods_top(1.5, 0.8, 2.0).unwrap();
+    let (topo, solid, before) = round_a_drilled_rods_top(1.5, 0.8, 2.0).unwrap();
+    assert_sound_and_changed_by(&topo, solid, before, -rounded_off(RADIUS, 2.0));
 }
