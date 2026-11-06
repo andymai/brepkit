@@ -15,6 +15,7 @@
 use std::f64::consts::PI;
 
 use brepkit_math::mat::Mat4;
+use brepkit_math::vec::Point3;
 use brepkit_operations::blend_ops::fillet_v2;
 use brepkit_operations::boolean::{BooleanOp, boolean};
 use brepkit_operations::measure::{oriented_solid_volume, solid_volume};
@@ -25,6 +26,7 @@ use brepkit_operations::validate::validate_solid;
 use brepkit_topology::Topology;
 use brepkit_topology::edge::{EdgeCurve, EdgeId};
 use brepkit_topology::explorer::solid_edges;
+use brepkit_topology::face::FaceSurface;
 use brepkit_topology::solid::SolidId;
 
 const RADIUS: f64 = 5.0;
@@ -77,6 +79,7 @@ fn assert_rim_fillet_changes_by(
     assert!(result.failed.is_empty(), "r = {r}: {:?}", result.failed);
     let report = validate_solid(topo, result.solid).unwrap();
     assert!(report.is_valid(), "r = {r}: {:?}", report.issues);
+    assert_edges_lie_on_their_faces(topo, result.solid, r);
     let mesh = tessellate_solid(topo, result.solid, 0.01).unwrap();
     assert!(is_watertight(&mesh), "r = {r}: mesh not watertight");
     let changed = solid_volume(topo, result.solid, 0.001).unwrap() - before;
@@ -84,6 +87,41 @@ fn assert_rim_fillet_changes_by(
         (changed - change).abs() < 1e-6 * before,
         "r = {r}: changed by {changed}, truth {change}"
     );
+}
+
+/// Every edge of `solid` lies on each face that uses it, sampled at three
+/// points inside it: the torus band's seam is its meridian arc, not the
+/// chord across the round.
+fn assert_edges_lie_on_their_faces(topo: &Topology, solid: SolidId, r: f64) {
+    let faces_of = brepkit_topology::explorer::edge_to_face_map(topo, solid).unwrap();
+    for edge_id in solid_edges(topo, solid).unwrap() {
+        let edge = topo.edge(edge_id).unwrap();
+        let (a, b) = (
+            topo.vertex(edge.start()).unwrap().point(),
+            topo.vertex(edge.end()).unwrap().point(),
+        );
+        let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
+        for face_id in &faces_of[&edge_id.index()] {
+            let surface = topo.face(*face_id).unwrap().surface();
+            for f in [0.25, 0.5, 0.75] {
+                let p = edge
+                    .curve()
+                    .evaluate_with_endpoints((t1 - t0).mul_add(f, t0), a, b);
+                let off = if let FaceSurface::Plane { normal, d } = surface {
+                    (normal.dot(p - Point3::new(0.0, 0.0, 0.0)) - d).abs()
+                } else {
+                    let (u, v) = surface.project_point(p).unwrap();
+                    (surface.evaluate(u, v).unwrap() - p).length()
+                };
+                assert!(
+                    off < 1e-6,
+                    "r = {r}: a {} edge stands {off} off its {} face",
+                    edge.curve().type_tag(),
+                    surface.type_tag()
+                );
+            }
+        }
+    }
 }
 
 #[test]

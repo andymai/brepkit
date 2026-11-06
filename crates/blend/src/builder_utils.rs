@@ -39,6 +39,50 @@ pub fn cross_section_curve(
     Some(EdgeCurve::Circle(circle))
 }
 
+/// The seam of a closed stripe's band between its contact points `a` and
+/// `b`: the arc of the stripe's cross-section through both, which is the
+/// band's own curve there. A line between them would cut across the round,
+/// standing off the band by up to `r (1 - cos(θ/2))` for a section of angle
+/// `θ`. A torus band's seam is its tube circle through both points; a
+/// walked band's is the section through them. Falls back to that line only
+/// when neither passes through both points.
+#[must_use]
+pub fn seam_curve(stripe: &crate::stripe::Stripe, a: Point3, b: Point3) -> EdgeCurve {
+    let arc = |center: Point3, radius: f64| {
+        let tol = 1e-6_f64.max(1e-4 * radius);
+        let on = |p: Point3| ((p - center).length() - radius).abs() <= tol;
+        let normal = (a - center).cross(b - center).normalize().ok()?;
+        (on(a) && on(b))
+            .then(|| brepkit_math::curves::Circle3D::new(center, normal, radius).ok())
+            .flatten()
+            .map(EdgeCurve::Circle)
+    };
+    if let FaceSurface::Torus(torus) = &stripe.surface {
+        let (u, _) = ParametricSurface::project_point(torus, a);
+        let center = torus.center()
+            + (torus.x_axis() * u.cos() + torus.y_axis() * u.sin()) * torus.major_radius();
+        if let Some(curve) = arc(center, torus.minor_radius()) {
+            return curve;
+        }
+    }
+    let on_section = |sec: &crate::section::CircSection| {
+        let tol = 1e-6_f64.max(1e-4 * sec.radius);
+        ((a - sec.center).length() - sec.radius).abs() <= tol
+            && ((b - sec.center).length() - sec.radius).abs() <= tol
+    };
+    let gap = |sec: &crate::section::CircSection| {
+        ((sec.p1 - a).length() + (sec.p2 - b).length())
+            .min((sec.p1 - b).length() + (sec.p2 - a).length())
+    };
+    stripe
+        .sections
+        .iter()
+        .filter(|sec| on_section(sec))
+        .min_by(|x, y| gap(x).total_cmp(&gap(y)))
+        .and_then(|sec| cross_section_curve(sec, a, b))
+        .unwrap_or(EdgeCurve::Line)
+}
+
 /// Create the blend face for a periodic (closed rim) stripe.
 ///
 /// The stripe is one full-revolution roll: both contacts are closed edges
@@ -88,7 +132,8 @@ pub fn create_periodic_blend_face(
     }
     let contact1_oriented = registry.oriented_edge(topo, contact1, 1)?;
     let contact2_oriented = registry.oriented_edge(topo, contact2, 1)?;
-    let seam = topo.add_edge(Edge::new(v1, v2, EdgeCurve::Line));
+    let seam_curve = seam_curve(stripe, topo.vertex(v1)?.point(), topo.vertex(v2)?.point());
+    let seam = topo.add_edge(Edge::new(v1, v2, seam_curve));
     let wire = Wire::new(
         vec![
             contact1_oriented,
