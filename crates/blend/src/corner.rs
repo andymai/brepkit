@@ -73,6 +73,10 @@ const ORTHO_COS_TOL: f64 = 0.1;
 /// mitre's points by about the radius times that.
 const SQUARE_COS: f64 = 1e-7;
 
+/// Largest distance the sharp mitre's points may move from where the corner's
+/// own faces put them, for a corner it takes as square (see [`SQUARE_COS`]).
+const MITRE_SLIP: f64 = 1e-6;
+
 /// Return the indices (into `stripes`) of stripes whose spine touches `vertex_id`.
 fn stripes_at_vertex(vertex_id: VertexId, stripes: &[Stripe], topo: &Topology) -> Vec<usize> {
     let mut result = Vec::new();
@@ -2918,7 +2922,9 @@ fn detect_equal_two_edge_miter(
     let ey = (topo.vertex(far_b)?.point() - vertex_point)
         .normalize()
         .map_err(BlendError::Math)?;
-    if ex.dot(ey).abs() > SQUARE_COS {
+    // The mitre places its points as if the corner were exactly square: a
+    // corner off square by `cos` moves them by about `radius * cos`.
+    if ex.dot(ey).abs() > SQUARE_COS || ex.dot(ey).abs() * radius > MITRE_SLIP {
         return Ok(None);
     }
     let mut directions = vec![ex, ey];
