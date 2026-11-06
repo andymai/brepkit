@@ -428,7 +428,10 @@ mod tests {
         turn_inside_out(&mut topo, faces[0]);
         turn_inside_out(&mut topo, faces[2]);
         let seeds = [faces[0], faces[1]];
-        assert_eq!(normalize_face_normals(&mut topo, &faces[2..], &seeds).unwrap(), 0);
+        assert_eq!(
+            normalize_face_normals(&mut topo, &faces[2..], &seeds).unwrap(),
+            0
+        );
     }
 
     #[test]
