@@ -472,3 +472,39 @@ fn assert_sound_and_changed_by(topo: &Topology, solid: SolidId, before: f64, cha
         "changed by {changed}, truth {change}"
     );
 }
+
+/// A rod drilled through at `offset` from its axis by a hole of radius
+/// `hole`, its top rim then rounded by `r`.
+fn round_a_drilled_rods_top(offset: f64, hole: f64, r: f64) -> Result<(), String> {
+    let mut topo = Topology::new();
+    let rod = make_cylinder(&mut topo, RADIUS, HEIGHT).unwrap();
+    let pin = make_cylinder(&mut topo, hole, HEIGHT + 2.0).unwrap();
+    transform_solid(&mut topo, pin, &Mat4::translation(offset, 0.0, -1.0)).unwrap();
+    let drilled = boolean(&mut topo, BooleanOp::Cut, rod, pin).unwrap();
+    let edge = rim_at(&topo, drilled, RADIUS, HEIGHT);
+    match fillet_v2(&mut topo, drilled, &[edge], r) {
+        Err(e) => Err(e.to_string()),
+        Ok(result) if !result.failed.is_empty() => Err(format!("{:?}", result.failed)),
+        Ok(_) => Ok(()),
+    }
+}
+
+/// A hole on the top under the round, crossing the circle its contact runs
+/// along or lying between that circle and the rim: the band would cut
+/// through the hole, which the fillet does not build, so it is refused,
+/// not built as a top whose outline crosses or leaves out its hole.
+#[test]
+fn a_rods_top_rim_round_over_a_hole_is_refused() {
+    for (offset, hole) in [(3.5, 0.8), (4.2, 0.3)] {
+        assert!(
+            round_a_drilled_rods_top(offset, hole, 2.0).is_err(),
+            "a round over the hole at {offset} was built"
+        );
+    }
+}
+
+/// The same hole wholly inside the contact's circle keeps the round.
+#[test]
+fn a_rods_top_rim_rounds_off_beside_a_hole() {
+    round_a_drilled_rods_top(1.5, 0.8, 2.0).unwrap();
+}

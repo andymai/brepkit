@@ -2058,6 +2058,113 @@ fn rebuild_mapped_parametric_face(
     }))
 }
 
+/// A point in a plane face's own 2D frame.
+type Flat = (f64, f64);
+
+/// Samples per edge of a plane face's hole when testing it against a
+/// closed contact (the contact takes sixteen times as many).
+const HOLE_SAMPLES: u32 = 64;
+
+/// Refuses a closed contact on a plane face unless each of the face's holes
+/// (other than the rim the contact rounds) lies wholly on the side it
+/// keeps, away from the rim. A hole the contact runs through puts the band
+/// across the hole, whose wall would have to be cut by the band and the
+/// hole opened into the trimmed outline; one beyond the contact lies under
+/// the band, its wall standing through it. Neither trim path builds that,
+/// and kept whole the hole would cross the trimmed outline or lie outside
+/// it.
+fn check_holes_clear_of_closed_contacts(
+    topo: &Topology,
+    face_id: FaceId,
+    restrictions: &[ParametricRestriction],
+) -> Result<(), BlendError> {
+    let face = topo.face(face_id)?;
+    let FaceSurface::Plane { normal, .. } = face.surface() else {
+        return Ok(());
+    };
+    if face.inner_wires().is_empty() {
+        return Ok(());
+    }
+    let u_axis = normal
+        .cross(brepkit_math::vec::Vec3::new(1.0, 0.0, 0.0))
+        .normalize()
+        .or_else(|_| {
+            normal
+                .cross(brepkit_math::vec::Vec3::new(0.0, 1.0, 0.0))
+                .normalize()
+        })
+        .map_err(|_| BlendError::TrimmingFailure { face: face_id })?;
+    let v_axis = normal.cross(u_axis);
+    let flat = |p: Point3| {
+        let q = p - Point3::new(0.0, 0.0, 0.0);
+        (u_axis.dot(q), v_axis.dot(q))
+    };
+    let sample = |curve: &EdgeCurve, a: Point3, b: Point3, n: u32| -> Vec<(f64, f64)> {
+        let (t0, t1) = curve.domain_with_endpoints(a, b);
+        (0..n)
+            .map(|k| {
+                let t = (t1 - t0).mul_add(f64::from(k) / f64::from(n), t0);
+                flat(curve.evaluate_with_endpoints(t, a, b))
+            })
+            .collect()
+    };
+    let outlines: Vec<(Flat, Vec<Flat>)> = restrictions
+        .iter()
+        .filter_map(|r| {
+            let (first, last) = (*r.contact_3d.first()?, *r.contact_3d.last()?);
+            let curve = r.curve.as_ref()?;
+            let TrimKeep::AwayFrom(rim) = r.keep else {
+                return None;
+            };
+            ((first - last).length() <= VERTEX_TOL)
+                .then(|| (flat(rim), sample(curve, first, last, 16 * HOLE_SAMPLES)))
+        })
+        .collect();
+    let rounded: std::collections::HashSet<EdgeId> = restrictions
+        .iter()
+        .flat_map(|r| r.source_edges.iter().copied())
+        .collect();
+    if outlines.is_empty() {
+        return Ok(());
+    }
+    let inside = |p: (f64, f64), outline: &[(f64, f64)]| {
+        let mut odd = false;
+        for (k, &a) in outline.iter().enumerate() {
+            let b = outline[(k + 1) % outline.len()];
+            if (a.1 > p.1) != (b.1 > p.1) && p.0 < (b.0 - a.0) * (p.1 - a.1) / (b.1 - a.1) + a.0 {
+                odd = !odd;
+            }
+        }
+        odd
+    };
+    for &hole in face.inner_wires() {
+        if topo
+            .wire(hole)?
+            .edges()
+            .iter()
+            .any(|oe| rounded.contains(&oe.edge()))
+        {
+            continue;
+        }
+        let mut points = Vec::new();
+        for oe in topo.wire(hole)?.edges() {
+            let edge = topo.edge(oe.edge())?;
+            let (a, b) = (
+                topo.vertex(edge.start())?.point(),
+                topo.vertex(edge.end())?.point(),
+            );
+            points.extend(sample(edge.curve(), a, b, HOLE_SAMPLES));
+        }
+        for (rim, outline) in &outlines {
+            let rim_inside = inside(*rim, outline);
+            if points.iter().any(|&p| inside(p, outline) == rim_inside) {
+                return Err(BlendError::TrimmingFailure { face: face_id });
+            }
+        }
+    }
+    Ok(())
+}
+
 fn trim_parametric_face_batch_in_place(
     topo: &mut Topology,
     face_id: FaceId,
@@ -2067,6 +2174,7 @@ fn trim_parametric_face_batch_in_place(
     if restrictions.is_empty() {
         return Err(BlendError::TrimmingFailure { face: face_id });
     }
+    check_holes_clear_of_closed_contacts(topo, face_id, restrictions)?;
     let fast = rebuild_mapped_parametric_face(topo, face_id, restrictions, split_policy)?;
     if let Some(result) = fast {
         return Ok(result);
