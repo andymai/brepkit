@@ -236,3 +236,21 @@ fn an_elliptic_slabs_two_rims_round_off_together() {
         assert_rims_round_off(&[0.0, HEIGHT], r);
     }
 }
+
+/// Rounds on both rims whose radii add up to more than the wall's height
+/// would cross on the wall: refused, not built as faces that overlap.
+#[test]
+fn crossing_rounds_on_both_rims_are_refused() {
+    for r in [2.0, 2.5] {
+        let mut topo = Topology::new();
+        let solid = slab(&mut topo);
+        let edges = [rim_at(&topo, solid, 0.0), rim_at(&topo, solid, HEIGHT)];
+        match fillet_v2(&mut topo, solid, &edges, r) {
+            Err(_) => {}
+            Ok(result) => assert!(
+                !result.failed.is_empty(),
+                "r = {r}: two rounds of {r} on a wall {HEIGHT} high were built"
+            ),
+        }
+    }
+}

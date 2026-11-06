@@ -586,6 +586,11 @@ impl<'a> FilletBuilder<'a> {
         };
         let mut restriction_faces: Vec<FaceId> = restrictions_by_face.keys().copied().collect();
         restriction_faces.sort_unstable_by_key(|face| face.index());
+        for face_id in &restriction_faces {
+            if let Some(restrictions) = restrictions_by_face.get(face_id) {
+                check_closed_contacts_do_not_cross(*face_id, restrictions)?;
+            }
+        }
         for face_id in restriction_faces {
             let restrictions = restrictions_by_face
                 .remove(&face_id)
@@ -3407,6 +3412,63 @@ fn check_contacts_on_faces(
                 section.t
             ),
         });
+    }
+    Ok(())
+}
+
+/// Refuses two closed contacts on one face that cross: both rims of a wall
+/// rounded by radii that add up to more than the wall's height. Each closed
+/// contact must lie nearer the rim it rounds than the other contact does;
+/// otherwise the two bands overlap, and the wall between them is trimmed
+/// to nothing yet still kept, as a solid whose faces cross.
+fn check_closed_contacts_do_not_cross(
+    face_id: FaceId,
+    restrictions: &[(usize, trimmer::ParametricRestriction)],
+) -> Result<(), BlendError> {
+    const SAMPLES: u32 = 256;
+    const GAP: f64 = 1e-4;
+    // A closed contact is a loop: its ends meet, and it runs far further
+    // than the gap between them (a fillet near half a box's size leaves
+    // contacts a few microns long whose ends also meet).
+    let closed: Vec<(Point3, &brepkit_math::nurbs::curve::NurbsCurve)> = restrictions
+        .iter()
+        .filter_map(|(_, r)| {
+            let (first, last) = (r.contact_3d.first()?, r.contact_3d.last()?);
+            let trimmer::TrimKeep::AwayFrom(rim) = r.keep else {
+                return None;
+            };
+            let Some(EdgeCurve::NurbsCurve(curve)) = r.curve.as_ref() else {
+                return None;
+            };
+            let (t0, t1) = curve.domain();
+            let t = |k: u32| t0 + (t1 - t0) * f64::from(k) / f64::from(SAMPLES);
+            let length: f64 = (0..SAMPLES)
+                .map(|k| (curve.evaluate(t(k + 1)) - curve.evaluate(t(k))).length())
+                .sum();
+            ((*first - *last).length() <= GAP && length > 100.0 * GAP).then_some((rim, curve))
+        })
+        .collect();
+    let distance = |p: Point3, nurbs: &brepkit_math::nurbs::curve::NurbsCurve| -> f64 {
+        let (t0, t1) = nurbs.domain();
+        (0..=SAMPLES)
+            .map(|k| {
+                let t = t0 + (t1 - t0) * f64::from(k) / f64::from(SAMPLES);
+                (nurbs.evaluate(t) - p).length()
+            })
+            .fold(f64::INFINITY, f64::min)
+    };
+    for (i, &(rim, own)) in closed.iter().enumerate() {
+        let near = distance(rim, own);
+        for (j, &(_, other)) in closed.iter().enumerate() {
+            if i != j && distance(rim, other) <= near {
+                return Err(BlendError::PlanningFailure {
+                    reason: format!(
+                        "two fillets on face {} cross: their radii are too large for the face between them",
+                        face_id.index()
+                    ),
+                });
+            }
+        }
     }
     Ok(())
 }
