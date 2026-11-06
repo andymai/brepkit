@@ -3371,6 +3371,25 @@ fn check_contacts_on_faces(
                 }
             }
         }
+        // A ruled face (plane, cylinder, cone) lies within its boundary's
+        // box. A sphere, torus or B-spline face can bulge past it (a cap
+        // bounded only by its equator): add the surface's own bound, its
+        // ball or its control net, so no contact on the face is refused.
+        match f.surface() {
+            FaceSurface::Plane { .. } | FaceSurface::Cylinder(_) | FaceSurface::Cone(_) => {}
+            FaceSurface::Sphere(sphere) => {
+                points.extend(cube_about(sphere.center(), sphere.radius()));
+            }
+            FaceSurface::Torus(torus) => {
+                points.extend(cube_about(
+                    torus.center(),
+                    torus.major_radius() + torus.minor_radius(),
+                ));
+            }
+            FaceSurface::Nurbs(surface) => {
+                points.extend(surface.control_points().iter().flatten().copied());
+            }
+        }
         let bbox = brepkit_math::aabb::Aabb3::from_points(points);
         let size = (bbox.max - bbox.min).length();
         // A conic sampled this finely falls short of its extent by under

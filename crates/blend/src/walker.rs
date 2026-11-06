@@ -362,7 +362,11 @@ impl<'a, F: BlendFunction> Walker<'a, F> {
                     && nplan.dot(ctx.nplan) < self.config.max_turn.cos()
             };
             if turns_too_far(&ctx_next) {
+                // Not a step: the halving stops at its floor, so these
+                // retries are bounded without drawing on `max_steps`, which
+                // a long curved spine would otherwise run out of.
                 step = 0.5 * clamped_step;
+                step_count -= 1;
                 continue;
             }
             if let Some(converged) = self.newton_solve(predicted, &ctx_next) {
