@@ -3427,9 +3427,9 @@ fn check_closed_contacts_do_not_cross(
 ) -> Result<(), BlendError> {
     const SAMPLES: u32 = 256;
     const GAP: f64 = 1e-4;
-    // A closed contact is a loop: its ends meet, and it runs far further
-    // than the gap between them (a fillet near half a box's size leaves
-    // contacts a few microns long whose ends also meet).
+    // A closed contact is a loop: its ends meet, within a small fraction of
+    // its own length (a fillet near half a box's size leaves contacts a few
+    // microns long whose ends lie a few microns apart).
     let closed: Vec<(Point3, &brepkit_math::nurbs::curve::NurbsCurve)> = restrictions
         .iter()
         .filter_map(|(_, r)| {
@@ -3445,17 +3445,12 @@ fn check_closed_contacts_do_not_cross(
             let length: f64 = (0..SAMPLES)
                 .map(|k| (curve.evaluate(t(k + 1)) - curve.evaluate(t(k))).length())
                 .sum();
-            ((*first - *last).length() <= GAP && length > 100.0 * GAP).then_some((rim, curve))
+            ((*first - *last).length() <= GAP.min(1e-3 * length)).then_some((rim, curve))
         })
         .collect();
-    let distance = |p: Point3, nurbs: &brepkit_math::nurbs::curve::NurbsCurve| -> f64 {
-        let (t0, t1) = nurbs.domain();
-        (0..=SAMPLES)
-            .map(|k| {
-                let t = t0 + (t1 - t0) * f64::from(k) / f64::from(SAMPLES);
-                (nurbs.evaluate(t) - p).length()
-            })
-            .fold(f64::INFINITY, f64::min)
+    let distance = |p: Point3, curve: &brepkit_math::nurbs::curve::NurbsCurve| {
+        brepkit_math::nurbs::projection::project_point_to_curve(curve, p, 1e-9)
+            .map_or(f64::INFINITY, |found| found.distance)
     };
     for (i, &(rim, own)) in closed.iter().enumerate() {
         let near = distance(rim, own);

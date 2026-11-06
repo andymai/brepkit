@@ -238,7 +238,9 @@ fn an_elliptic_slabs_two_rims_round_off_together() {
 }
 
 /// Rounds on both rims whose radii add up to more than the wall's height
-/// would cross on the wall: refused, not built as faces that overlap.
+/// would cross on the wall: refused, not built as faces that overlap. At
+/// exactly half the height (r = 2) the two contacts meet along one line and
+/// leave the wall no width, which is refused as well.
 #[test]
 fn crossing_rounds_on_both_rims_are_refused() {
     for r in [2.0, 2.5] {
