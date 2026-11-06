@@ -205,7 +205,8 @@ pub fn normalize_face_normals(
 ) -> Result<usize, crate::TopologyError> {
     let seed_set: DetHashSet<FaceId> = seeds.iter().copied().collect();
     let mut convention = 0.0;
-    let mut readings: Vec<(FaceId, f64)> = Vec::new();
+    let mut seed_read = false;
+    let mut readings: Vec<(FaceId, bool)> = Vec::new();
 
     for &face_id in seeds.iter().chain(faces.iter()) {
         let face = topo.face(face_id)?;
@@ -313,25 +314,35 @@ pub fn normalize_face_normals(
             Some(area) => area,
             None => integral,
         };
+        // A zero reading (exactly; small ones were skipped above) says
+        // nothing either way.
+        if integral == 0.0 {
+            continue;
+        }
         if seed_set.contains(&face_id) {
             convention += integral.signum();
+            seed_read = true;
         } else {
-            readings.push((face_id, integral.signum()));
+            readings.push((face_id, integral > 0.0));
         }
     }
     // With no seed to read the convention from (every input face around the
     // result was rebuilt), the result's own faces vote: a closed shell walks
     // every face's boundary the same way about its effective normal, so the
-    // few that disagree are the ones built backwards.
-    if convention == 0.0 {
-        convention = readings.iter().map(|&(_, sign)| sign).sum();
+    // few that disagree are the ones built backwards. Seeds that read but
+    // disagree among themselves still decide nothing.
+    if !seed_read {
+        convention = readings
+            .iter()
+            .map(|&(_, positive)| if positive { 1.0 } else { -1.0 })
+            .sum();
     }
     let flips: Vec<FaceId> = if convention == 0.0 {
         Vec::new()
     } else {
         readings
             .iter()
-            .filter(|&&(_, sign)| (sign > 0.0) != (convention > 0.0))
+            .filter(|&&(_, positive)| positive != (convention > 0.0))
             .map(|&(face_id, _)| face_id)
             .collect()
     };
@@ -405,6 +416,19 @@ mod tests {
         turn_inside_out(&mut topo, faces[2]);
         assert_eq!(normalize_face_normals(&mut topo, &faces, &[]).unwrap(), 1);
         assert_eq!(flags(&topo), before);
+    }
+
+    #[test]
+    fn seeds_that_disagree_decide_nothing() {
+        let mut topo = Topology::new();
+        let cube = make_unit_cube_manifold(&mut topo);
+        let faces = solid_faces(&topo, cube).unwrap();
+        // Two seeds reading opposite ways, and a result face turned: the
+        // seeds read, so the result faces do not vote, and nothing turns.
+        turn_inside_out(&mut topo, faces[0]);
+        turn_inside_out(&mut topo, faces[2]);
+        let seeds = [faces[0], faces[1]];
+        assert_eq!(normalize_face_normals(&mut topo, &faces[2..], &seeds).unwrap(), 0);
     }
 
     #[test]
