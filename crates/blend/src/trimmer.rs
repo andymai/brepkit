@@ -1497,17 +1497,46 @@ pub enum BoundarySplitPolicy<'a> {
     /// A face with several contacts splits only edges touching a
     /// `notchable` terminal vertex, whose planar cap takes the arc; its
     /// contacts elsewhere already close through shared junction edges.
+    /// Either face also splits a straight piece of an edge in `spokes`,
+    /// listed by its two ends, where a contact ends on it: a sharp mitre's
+    /// retained edge, which the mitre shortens to there, and a smooth edge
+    /// two stripes run on round on one section, which their shared section
+    /// then ends on. Both need the split on a side face that a second
+    /// contact crosses too (a slab rounded round both its faces' outlines).
     Selective {
         unsplit: &'a std::collections::HashSet<VertexId>,
         notchable: &'a std::collections::HashSet<VertexId>,
+        spokes: &'a [(Point3, Point3)],
     },
 }
 
 impl BoundarySplitPolicy<'_> {
+    /// Whether the straight edge from `start` to `end` lies along one of the
+    /// policy's spokes.
+    fn on_spoke(self, start: Point3, end: Point3) -> bool {
+        let Self::Selective { spokes, .. } = self else {
+            return false;
+        };
+        let on = |p: Point3, (a, b): (Point3, Point3)| {
+            let ab = b - a;
+            let length = ab.length();
+            if length <= 1e-9 {
+                return false;
+            }
+            let t = (p - a).dot(ab) / (length * length);
+            (-1e-9..=1.0 + 1e-9).contains(&t) && (a + ab * t - p).length() <= 1e-6
+        };
+        spokes
+            .iter()
+            .any(|&spoke| on(start, spoke) && on(end, spoke))
+    }
+
     fn allows(self, single_contact: bool, start: VertexId, end: VertexId) -> bool {
         match self {
             Self::All => true,
-            Self::Selective { unsplit, notchable } => {
+            Self::Selective {
+                unsplit, notchable, ..
+            } => {
                 if single_contact {
                     !unsplit.contains(&start) && !unsplit.contains(&end)
                 } else {
@@ -1669,15 +1698,16 @@ fn rebuild_mapped_parametric_face(
                     }
                     let edge = topo.edge(oriented.edge())?;
                     let (s, t) = (edge.start(), edge.end());
-                    if s == vertex_id
-                        || t == vertex_id
-                        || !split_policy.allows(single_contact, s, t)
-                    {
+                    if s == vertex_id || t == vertex_id {
                         continue;
                     }
                     let sp = topo.vertex(s)?.point();
                     let tp = topo.vertex(t)?.point();
                     let curve = edge.curve();
+                    let spoke = matches!(curve, EdgeCurve::Line) && split_policy.on_spoke(sp, tp);
+                    if !(spoke || split_policy.allows(single_contact, s, t)) {
+                        continue;
+                    }
                     let (d0, d1) = curve.domain_with_endpoints(sp, tp);
                     if (d1 - d0).abs() <= 1e-12 {
                         continue;

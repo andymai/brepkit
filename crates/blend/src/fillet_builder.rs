@@ -576,12 +576,46 @@ impl<'a> FilletBuilder<'a> {
                 .flat_map(|edge| [edge.start(), edge.end()])
                 .collect();
         }
+        // Straight edges a trim splits whatever its policy, by their two
+        // ends: a sharp mitre's retained edge, and the smooth edge two
+        // stripes run on round on one section (see the policy's `spokes`).
+        let mut spokes: Vec<(brepkit_math::vec::Point3, brepkit_math::vec::Point3)> = Vec::new();
+        if let Some(fillet_plan) = plan.as_ref() {
+            for miter in corner::find_equal_two_edge_miter_junctions(topo, fillet_plan) {
+                let Some(junction) = fillet_plan
+                    .junctions
+                    .iter()
+                    .find(|junction| junction.vertex == miter.vertex)
+                else {
+                    continue;
+                };
+                for &edge_id in &junction.unselected_sharp_edges {
+                    let edge = topo.edge(edge_id)?;
+                    if matches!(edge.curve(), EdgeCurve::Line) {
+                        spokes.push((
+                            topo.vertex(edge.start())?.point(),
+                            topo.vertex(edge.end())?.point(),
+                        ));
+                    }
+                }
+            }
+            let stripes: Vec<&Stripe> = regular_results
+                .iter()
+                .map(|result| &result.stripe)
+                .collect();
+            for spoke in corner::tangent_junction_spokes(topo, fillet_plan, &stripes)? {
+                if !spokes.contains(&spoke) {
+                    spokes.push(spoke);
+                }
+            }
+        }
         let split_policy = if single_planar_stripe {
             trimmer::BoundarySplitPolicy::All
         } else {
             trimmer::BoundarySplitPolicy::Selective {
                 unsplit: &unsplit_vertices,
                 notchable: &notchable_vertices,
+                spokes: &spokes,
             }
         };
         let mut restriction_faces: Vec<FaceId> = restrictions_by_face.keys().copied().collect();

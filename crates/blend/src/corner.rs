@@ -67,6 +67,12 @@ const TOL: f64 = 1e-7;
 /// Tolerance for angular comparisons (cosine of angle threshold ~10°).
 const ORTHO_COS_TOL: f64 = 0.1;
 
+/// Largest cosine between two directions the sharp mitre takes as square.
+/// Planes read from a file are square only to the digits it stores: a part
+/// written to eight or nine digits leaves cosines near 1e-8, which moves the
+/// mitre's points by about the radius times that.
+const SQUARE_COS: f64 = 1e-7;
+
 /// Return the indices (into `stripes`) of stripes whose spine touches `vertex_id`.
 fn stripes_at_vertex(vertex_id: VertexId, stripes: &[Stripe], topo: &Topology) -> Vec<usize> {
     let mut result = Vec::new();
@@ -466,6 +472,86 @@ pub fn find_equal_two_edge_miter_junctions(
     miters
 }
 
+/// The straight edges, other than the two stripes' own, leaving each
+/// two-stripe junction where both stripes end on one section: two fillets
+/// running on round a smooth edge between their side faces (a slab's
+/// outline where a straight side meets a round one tangentially). Both
+/// side contacts end on that edge at the same point, so each side face's
+/// trim splits it there and the two stripes then share one cross-section
+/// edge; left whole, each face kept a twin vertex there, and the gap
+/// between the twin sections was closed by a patch of no area.
+pub fn tangent_junction_spokes(
+    topo: &Topology,
+    plan: &FilletPlan,
+    stripes: &[&Stripe],
+) -> Result<Vec<(Point3, Point3)>, BlendError> {
+    const SAME: f64 = 1e-6;
+    let stripe_of = |contour: usize| {
+        let edges = plan.contours.get(contour)?.spine.edges();
+        stripes
+            .iter()
+            .copied()
+            .find(|stripe| stripe.spine_edges() == edges)
+    };
+    let mut spokes = Vec::new();
+    for junction in &plan.junctions {
+        if junction.classification != CornerClassification::Junction
+            || junction.incident_contours.len() != 2
+        {
+            continue;
+        }
+        let (Some(a), Some(b)) = (
+            stripe_of(junction.incident_contours[0]),
+            stripe_of(junction.incident_contours[1]),
+        ) else {
+            continue;
+        };
+        let (Some(sa), Some(sb)) = (
+            contact_section_at_vertex(junction.vertex, a, topo),
+            contact_section_at_vertex(junction.vertex, b, topo),
+        ) else {
+            continue;
+        };
+        let near = |p: Point3, q: Point3| (p - q).length() <= SAME;
+        let same_section = near(sa.center, sb.center)
+            && ((near(sa.p1, sb.p1) && near(sa.p2, sb.p2))
+                || (near(sa.p1, sb.p2) && near(sa.p2, sb.p1)));
+        if !same_section {
+            continue;
+        }
+        let own: std::collections::HashSet<EdgeId> = a
+            .spine_edges()
+            .iter()
+            .chain(b.spine_edges())
+            .copied()
+            .collect();
+        for &face_id in &junction.face_fan {
+            let face = topo.face(face_id)?;
+            for wire_id in
+                std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied())
+            {
+                for oriented in topo.wire(wire_id)?.edges() {
+                    let edge = topo.edge(oriented.edge())?;
+                    if own.contains(&oriented.edge())
+                        || !matches!(edge.curve(), EdgeCurve::Line)
+                        || (edge.start() != junction.vertex && edge.end() != junction.vertex)
+                    {
+                        continue;
+                    }
+                    let spoke = (
+                        topo.vertex(edge.start())?.point(),
+                        topo.vertex(edge.end())?.point(),
+                    );
+                    if !spokes.contains(&spoke) {
+                        spokes.push(spoke);
+                    }
+                }
+            }
+        }
+    }
+    Ok(spokes)
+}
+
 /// Outward normals of a three-face planar fan, `None` when any face is not
 /// planar or the three planes are not mutually perpendicular.
 fn orthogonal_fan_outward_normals(topo: &Topology, faces: &[FaceId]) -> Option<[Vec3; 3]> {
@@ -476,10 +562,12 @@ fn orthogonal_fan_outward_normals(topo: &Topology, faces: &[FaceId]) -> Option<[
     for (slot, &face) in normals.iter_mut().zip(faces) {
         *slot = topo.face(face).ok()?.effective_plane_normal()?;
     }
-    let orthogonal = normals
-        .iter()
-        .enumerate()
-        .all(|(i, n)| normals.iter().skip(i + 1).all(|m| n.dot(*m).abs() <= 1e-10));
+    let orthogonal = normals.iter().enumerate().all(|(i, n)| {
+        normals
+            .iter()
+            .skip(i + 1)
+            .all(|m| n.dot(*m).abs() <= SQUARE_COS)
+    });
     orthogonal.then_some(normals)
 }
 
@@ -490,7 +578,7 @@ fn orthogonal_fan_outward_normals(topo: &Topology, faces: &[FaceId]) -> Option<[
 fn trihedral_corner_is_convex(normals: &[Vec3], directions: &[Vec3]) -> bool {
     directions
         .iter()
-        .all(|d| normals.iter().all(|n| d.dot(*n) <= 1e-10))
+        .all(|d| normals.iter().all(|n| d.dot(*n) <= SQUARE_COS))
 }
 
 /// Whether `edge_id` lies on any wire of `face_id`.
@@ -2830,7 +2918,7 @@ fn detect_equal_two_edge_miter(
     let ey = (topo.vertex(far_b)?.point() - vertex_point)
         .normalize()
         .map_err(BlendError::Math)?;
-    if ex.dot(ey).abs() > 1e-10 {
+    if ex.dot(ey).abs() > SQUARE_COS {
         return Ok(None);
     }
     let mut directions = vec![ex, ey];
