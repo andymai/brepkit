@@ -184,7 +184,8 @@ fn uv_winding(surface: &FaceSurface, points: &[Point3]) -> Option<f64> {
 /// Orientation propagation can make edge senses consistent while leaving a
 /// reconstructed face's effective surface normal backwards. This pass
 /// calibrates the solid's boundary-walk convention from authoritative input
-/// `seeds`, then triple-flips disagreeing result faces: reverse each wire,
+/// `seeds` (or, when no seed reads one, from the majority of `faces`), then
+/// triple-flips disagreeing result faces: reverse each wire,
 /// invert its raw edge senses, and toggle the face reversal flag. The triple
 /// flip changes the effective normal without disturbing shared-edge senses.
 ///
@@ -204,7 +205,7 @@ pub fn normalize_face_normals(
 ) -> Result<usize, crate::TopologyError> {
     let seed_set: DetHashSet<FaceId> = seeds.iter().copied().collect();
     let mut convention = 0.0;
-    let mut flips = Vec::new();
+    let mut readings: Vec<(FaceId, f64)> = Vec::new();
 
     for &face_id in seeds.iter().chain(faces.iter()) {
         let face = topo.face(face_id)?;
@@ -314,10 +315,26 @@ pub fn normalize_face_normals(
         };
         if seed_set.contains(&face_id) {
             convention += integral.signum();
-        } else if convention != 0.0 && integral.signum() != convention.signum() {
-            flips.push(face_id);
+        } else {
+            readings.push((face_id, integral.signum()));
         }
     }
+    // With no seed to read the convention from (every input face around the
+    // result was rebuilt), the result's own faces vote: a closed shell walks
+    // every face's boundary the same way about its effective normal, so the
+    // few that disagree are the ones built backwards.
+    if convention == 0.0 {
+        convention = readings.iter().map(|&(_, sign)| sign).sum();
+    }
+    let flips: Vec<FaceId> = if convention == 0.0 {
+        Vec::new()
+    } else {
+        readings
+            .iter()
+            .filter(|&&(_, sign)| (sign > 0.0) != (convention > 0.0))
+            .map(|&(face_id, _)| face_id)
+            .collect()
+    };
 
     for face_id in &flips {
         let face = topo.face(*face_id)?;
@@ -339,4 +356,67 @@ pub fn normalize_face_normals(
     }
 
     Ok(flips.len())
+}
+
+#[cfg(all(test, feature = "test-utils"))]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use super::normalize_face_normals;
+    use crate::Topology;
+    use crate::explorer::solid_faces;
+    use crate::face::FaceId;
+    use crate::test_utils::make_unit_cube_manifold;
+    use crate::wire::OrientedEdge;
+
+    /// Turn a face's effective normal round without changing the senses its
+    /// edges are used in: the state of a face built with its wire backwards
+    /// and then flagged to agree with its neighbours.
+    fn turn_inside_out(topo: &mut Topology, face_id: FaceId) {
+        let wire_id = topo.face(face_id).unwrap().outer_wire();
+        let wire = topo.wire_mut(wire_id).unwrap();
+        let turned: Vec<OrientedEdge> = wire
+            .edges()
+            .iter()
+            .rev()
+            .map(|oe| OrientedEdge::new(oe.edge(), !oe.is_forward()))
+            .collect();
+        for (slot, oe) in wire.edges_mut().iter_mut().zip(turned) {
+            *slot = oe;
+        }
+        let face = topo.face_mut(face_id).unwrap();
+        face.set_reversed(!face.is_reversed());
+    }
+
+    #[test]
+    fn without_seeds_the_faces_vote_on_the_convention() {
+        let mut topo = Topology::new();
+        let cube = make_unit_cube_manifold(&mut topo);
+        let faces = solid_faces(&topo, cube).unwrap();
+        assert_eq!(normalize_face_normals(&mut topo, &faces, &[]).unwrap(), 0);
+
+        let flags = |topo: &Topology| -> Vec<bool> {
+            faces
+                .iter()
+                .map(|&f| topo.face(f).unwrap().is_reversed())
+                .collect()
+        };
+        let before = flags(&topo);
+        turn_inside_out(&mut topo, faces[2]);
+        assert_eq!(normalize_face_normals(&mut topo, &faces, &[]).unwrap(), 1);
+        assert_eq!(flags(&topo), before);
+    }
+
+    #[test]
+    fn seeds_still_set_the_convention() {
+        let mut topo = Topology::new();
+        let cube = make_unit_cube_manifold(&mut topo);
+        let faces = solid_faces(&topo, cube).unwrap();
+        // Turn five of the six: the one seed outvotes them.
+        for &face_id in &faces[1..] {
+            turn_inside_out(&mut topo, face_id);
+        }
+        let flipped = normalize_face_normals(&mut topo, &faces[1..], &faces[..1]).unwrap();
+        assert_eq!(flipped, 5);
+    }
 }
