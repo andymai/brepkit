@@ -96,10 +96,8 @@ mod tests {
 
         // Thin boxes crossing the axis at a slant, their stretch of the axis a
         // few hundredths long, are not inside the torus either: the hole takes
-        // about a tenth of each. The general boolean falls back to a mesh on
-        // these slivers, so only the intersect's volume is read here, and
-        // these run after the exact cases above, whose fallback counter they
-        // would otherwise disturb.
+        // about a tenth of each, and the torus splits into bands at the two
+        // loops each face of the box leaves around its ring.
         for (lo, hi, turn, about) in [
             ((-2.0, -2.0, -0.01), (5.5, 2.0, 0.01), 0.5, (0.0, 0.0, 0.0)),
             (
@@ -109,20 +107,34 @@ mod tests {
                 (2.0, 0.0, 0.0),
             ),
         ] {
-            let case = format!("box {lo:?}..{hi:?} turned {turn} about {about:?}");
             let box_volume = (hi.0 - lo.0) * (hi.1 - lo.1) * (hi.2 - lo.2);
-            let mut topo = Topology::new();
-            let torus = make_torus(&mut topo, 5.0, 4.0, 16).unwrap();
-            let tool = placed_box(&mut topo, lo, hi);
-            let m = Mat4::translation(about.0, about.1, about.2)
-                * Mat4::rotation_y(turn)
-                * Mat4::translation(-about.0, -about.1, -about.2);
-            transform_solid(&mut topo, tool, &m).unwrap();
-            let result = boolean(&mut topo, BooleanOp::Intersect, torus, tool).unwrap();
-            let volume = solid_volume(&topo, result, 0.0001).unwrap();
+            let mut sum = 0.0;
+            for op in [BooleanOp::Intersect, BooleanOp::Cut] {
+                let case = format!("box {lo:?}..{hi:?} turned {turn} about {about:?}, {op:?}");
+                let mut topo = Topology::new();
+                let torus = make_torus(&mut topo, 5.0, 4.0, 16).unwrap();
+                let tool = placed_box(&mut topo, lo, hi);
+                let m = Mat4::translation(about.0, about.1, about.2)
+                    * Mat4::rotation_y(turn)
+                    * Mat4::translation(-about.0, -about.1, -about.2);
+                transform_solid(&mut topo, tool, &m).unwrap();
+                let before = mesh_fallback_count();
+                let result = boolean(&mut topo, op, torus, tool).unwrap();
+                assert_eq!(mesh_fallback_count(), before, "{case}: mesh fallback");
+                let report = validate_solid(&topo, result).unwrap();
+                assert!(report.is_valid(), "{case}: {:?}", report.issues);
+                let volume = solid_volume(&topo, result, 0.0001).unwrap();
+                if op == BooleanOp::Intersect {
+                    assert!(
+                        volume < 0.95 * box_volume && volume > 0.75 * box_volume,
+                        "{case}: volume {volume} of a box of {box_volume}"
+                    );
+                }
+                sum += volume;
+            }
             assert!(
-                volume < 0.95 * box_volume && volume > 0.75 * box_volume,
-                "{case}: volume {volume} of a box of {box_volume}"
+                (sum - torus_volume).abs() < 1e-6 * torus_volume,
+                "intersect and cut sum to {sum}, the torus holds {torus_volume}"
             );
         }
     }

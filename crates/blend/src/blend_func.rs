@@ -143,8 +143,13 @@ pub fn project_normal_to_section(normal: Vec3, nplan: Vec3) -> Vec3 {
 /// Constant-radius fillet blend function.
 ///
 /// Constraint system:
-/// - `f1 = nplan · (midpoint - guide)` (planarity)
-/// - `f2..f4 = (P1 + R·npn1) - (P2 + R·npn2)` (equidistance)
+/// - `f1 = nplan · (midpoint - guide)` (the section's station along the spine)
+/// - `f2..f4 = (P1 + R·n1) - (P2 + R·n2)` (one ball tangent to both faces)
+///
+/// The ball's centre lies along each face's own normal, so each contact is a
+/// true tangency: where a face's normal leans along the spine (a saddle between
+/// two cylinders), the section's plane leans with it and stands square to the
+/// ball's path, not the spine.
 #[derive(Debug, Clone)]
 pub struct ConstRadBlend {
     /// Fillet radius.
@@ -171,11 +176,8 @@ impl ConstRadBlend {
     ) -> [f64; 4] {
         let p1 = surf1.evaluate(params.u1, params.v1);
         let p2 = surf2.evaluate(params.u2, params.v2);
-        let n1 = surf1.normal(params.u1, params.v1);
-        let n2 = surf2.normal(params.u2, params.v2);
-
-        let npn1 = project_normal_to_section(n1, ctx.nplan);
-        let npn2 = project_normal_to_section(n2, ctx.nplan);
+        let npn1 = surf1.normal(params.u1, params.v1);
+        let npn2 = surf2.normal(params.u2, params.v2);
 
         // f1: planarity — midpoint lies on the section plane through guide_point
         let mid = Point3::new(
@@ -210,10 +212,10 @@ impl ConstRadBlend {
 
         // dnpn/du terms for improved convergence
         let h = 1e-7;
-        let dnpn1_du1 = Self::finite_diff_npn(surf1, params.u1, params.v1, h, 0.0, ctx.nplan);
-        let dnpn1_dv1 = Self::finite_diff_npn(surf1, params.u1, params.v1, 0.0, h, ctx.nplan);
-        let dnpn2_du2 = Self::finite_diff_npn(surf2, params.u2, params.v2, h, 0.0, ctx.nplan);
-        let dnpn2_dv2 = Self::finite_diff_npn(surf2, params.u2, params.v2, 0.0, h, ctx.nplan);
+        let dnpn1_du1 = Self::finite_diff_normal(surf1, params.u1, params.v1, h, 0.0);
+        let dnpn1_dv1 = Self::finite_diff_normal(surf1, params.u1, params.v1, 0.0, h);
+        let dnpn2_du2 = Self::finite_diff_normal(surf2, params.u2, params.v2, h, 0.0);
+        let dnpn2_dv2 = Self::finite_diff_normal(surf2, params.u2, params.v2, 0.0, h);
 
         let nplan = ctx.nplan;
 
@@ -265,6 +267,17 @@ impl ConstRadBlend {
         ]
     }
 
+    /// Finite-difference approximation of ∂n/∂u or ∂n/∂v.
+    fn finite_diff_normal(surf: &dyn ParametricSurface, u: f64, v: f64, du: f64, dv: f64) -> Vec3 {
+        let (up, vp) = on_surface(surf, u + du, v + dv);
+        let (um, vm) = on_surface(surf, u - du, v - dv);
+        let h2 = 2.0 * (du * du + dv * dv).sqrt();
+        if h2 < 1e-30 {
+            return Vec3::new(0.0, 0.0, 0.0);
+        }
+        (surf.normal(up, vp) - surf.normal(um, vm)) * (1.0 / h2)
+    }
+
     /// Finite-difference approximation of ∂npn/∂u or ∂npn/∂v.
     pub(crate) fn finite_diff_npn(
         surf: &dyn ParametricSurface,
@@ -302,9 +315,7 @@ impl ConstRadBlend {
     ) -> CircSection {
         let p1 = surf1.evaluate(params.u1, params.v1);
         let p2 = surf2.evaluate(params.u2, params.v2);
-        let n1 = surf1.normal(params.u1, params.v1);
-        let npn1 = project_normal_to_section(n1, ctx.nplan);
-        let center = Self::ball_center_from(p1, npn1, r);
+        let center = Self::ball_center_from(p1, surf1.normal(params.u1, params.v1), r);
 
         CircSection {
             p1,
