@@ -6180,6 +6180,17 @@ fn split_face_2d_impl(
             face_id,
             tol.linear,
         )
+        .or_else(|| {
+            special_cases::split_torus_by_ring_loops(
+                &surface,
+                &boundary_edges,
+                sections,
+                rank,
+                reversed,
+                face_id,
+                tol.linear,
+            )
+        })
     {
         return bands;
     }
