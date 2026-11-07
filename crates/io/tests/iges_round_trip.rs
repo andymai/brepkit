@@ -966,24 +966,6 @@ fn a_closed_curves_span_is_read_safely() {
     assert_eq!(read(4.000_000_1, -1e-7), 1);
 }
 
-/// Knots too close together to tell apart cannot be split between, however the
-/// file asks: the read refuses the face rather than panics.
-#[test]
-fn a_span_cut_from_knots_too_close_to_tell_apart_is_read_safely() {
-    let entities = vec![
-        (108, "108,0.,0.,1.,0.,0,0.,0.,0.;".to_string()),
-        (
-            126,
-            "126,4,1,0,0,0,0,0.,0.,1E-16,2E-16,3E-16,4E-16,4E-16,1.,1.,1.,1.,1.,\
-             0.,0.,0.,1.,0.,0.,1.,1.,0.,0.,1.,0.,0.,0.,0.,1E-16,3E-16,0.,0.,1.;"
-                .to_string(),
-        ),
-        (144, "144,1,1,0,3;".to_string()),
-    ];
-    let mut topo = Topology::new();
-    assert!(read_iges(&iges_file(&entities), &mut topo).is_ok());
-}
-
 /// A knot repeated past the degree + 1 leaves a span no point on the curve can
 /// be split at, and refusing it keeps a file off that path.
 #[test]

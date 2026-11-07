@@ -557,6 +557,27 @@ pub fn curve_split(curve: &NurbsCurve, u: f64) -> Result<(NurbsCurve, NurbsCurve
 mod tests {
     use super::*;
 
+    /// Knots closer than the split can tell apart read as one, past the degree
+    /// + 1, and the split refuses them rather than underflows.
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn a_split_among_knots_too_close_to_tell_apart_is_refused() {
+        let curve = NurbsCurve::new(
+            1,
+            vec![0.0, 0.0, 1e-16, 2e-16, 3e-16, 4e-16, 4e-16],
+            vec![
+                Point3::new(0.0, 0.0, 0.0),
+                Point3::new(1.0, 0.0, 0.0),
+                Point3::new(1.0, 1.0, 0.0),
+                Point3::new(0.0, 1.0, 0.0),
+                Point3::new(0.0, 0.0, 0.0),
+            ],
+            vec![1.0; 5],
+        )
+        .unwrap();
+        assert!(curve_split(&curve, 2e-16).is_err());
+    }
+
     fn cubic_bezier() -> NurbsCurve {
         NurbsCurve::new(
             3,
