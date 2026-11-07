@@ -1,0 +1,23 @@
+crates/operations/tests/blend_surface.rs
+  s_649261a24df31b::t_8f9f80966de9ae 1056-1059,1061,1064,1071,1073,1082,1088,1091-1148,1151-1185,1189-1199,1207-1240
+  s_649261a24df31b::t_20ac29fd586ae8 1069,1200-1206
+  s_649261a24df31b::t_146c7055feaa1a 1241
+crates/operations/src/blend_surface/match_edge.rs
+  s_649261a24df31b::t_7b64a006a6a708 307
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "0719d429166eb4ec6cc4b71adf55db6bf34b8e27",
+  "prompts": {},
+  "sessions": {
+    "s_649261a24df31b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d8bbbba4-0431-4f6a-a622-e632a6659779",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
