@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794077473072,
+  "lastUpdate": 1794079473134,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -66581,6 +66581,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 28076711,
             "range": "± 221456",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "7ddebe420889428d24403ad740abcf71b3e4e091",
+          "message": "fix(blend): keep a rebuilt fillet shell facing out wherever the part sits (#2327)",
+          "timestamp": "2026-11-07T11:20:53-08:00",
+          "tree_id": "b2f0d7e18beff5a864f6acf8127e38d5053dbcf4",
+          "url": "https://github.com/andymai/brepkit/commit/7ddebe420889428d24403ad740abcf71b3e4e091"
+        },
+        "date": 1794079463586,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1055172,
+            "range": "± 3973",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1134966,
+            "range": "± 1181",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12864,
+            "range": "± 357",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 857991,
+            "range": "± 1520",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 28652160,
+            "range": "± 75938",
             "unit": "ns/iter"
           }
         ]
