@@ -309,6 +309,39 @@ impl<'a> FilletBuilder<'a> {
         } else {
             HashSet::new()
         };
+        let tilted_caps = if let Some(plan) = plan.as_ref() {
+            run_stripes_to_tilted_caps(topo, plan, &mut stripe_results)?
+        } else {
+            TiltedCaps::new()
+        };
+        // Running a round on to a tilted cap carries its contacts past where
+        // the cavity check above read them.
+        if !tilted_caps.is_empty() && !inner_shells.is_empty() {
+            let cavities = inner_shells
+                .iter()
+                .map(|&shell| shell_bounds(topo, shell))
+                .collect::<Result<Vec<_>, _>>()?;
+            for sr in &stripe_results {
+                let removed = removed_material_bounds(topo, &sr.stripe)?;
+                if cavities.iter().any(|cavity| cavity.intersects(removed)) {
+                    for edge_id in succeeded_candidates(plan.as_ref(), &stripe_results, &all_edges)
+                    {
+                        failed.push((
+                            edge_id,
+                            BlendError::PlanningFailure {
+                                reason: "the fillet reaches a cavity".to_owned(),
+                            },
+                        ));
+                    }
+                    return Ok(BlendResult {
+                        solid: self.solid,
+                        succeeded: Vec::new(),
+                        failed,
+                        is_partial: true,
+                    });
+                }
+            }
+        }
         // through the trim + corner + blend-face path below.
         let mut boundary_registry = BoundaryRegistry::new();
         let mut blend_face_ids: Vec<FaceId> = Vec::new();
@@ -836,6 +869,7 @@ impl<'a> FilletBuilder<'a> {
                 let (p1_start, p1_end) = contact_vertices(contact1)?;
                 let (p2_start, p2_end) = contact_vertices(contact2)?;
                 let mut section_curve = |section: Option<&crate::section::CircSection>,
+                                         cap: Option<&(Vec3, f64)>,
                                          start: VertexId,
                                          end: VertexId|
                  -> Result<
@@ -847,15 +881,25 @@ impl<'a> FilletBuilder<'a> {
                     }
                     let start_point = topo.vertex(start)?.point();
                     let end_point = topo.vertex(end)?.point();
-                    let curve = section
-                        .and_then(|section| {
+                    let curve = match (cap, &stripe.surface) {
+                        (Some(&(normal, d)), FaceSurface::Cylinder(cylinder)) => {
+                            crate::builder_utils::cylinder_plane_arc(
+                                cylinder,
+                                normal,
+                                d,
+                                start_point,
+                                end_point,
+                            )
+                        }
+                        _ => section.and_then(|section| {
                             crate::builder_utils::cross_section_curve(
                                 section,
                                 start_point,
                                 end_point,
                             )
-                        })
-                        .unwrap_or(EdgeCurve::Line);
+                        }),
+                    }
+                    .unwrap_or(EdgeCurve::Line);
                     // Two stripes meeting tangentially across a seam between
                     // faces on one surface end at the same section. The
                     // second band becomes the second owner of the first
@@ -964,12 +1008,22 @@ impl<'a> FilletBuilder<'a> {
                     let cross_start = if miter_vertices.contains(&spine_start_v) {
                         None
                     } else {
-                        section_curve(stripe.sections.first(), p2_end, p1_start)?
+                        section_curve(
+                            stripe.sections.first(),
+                            tilted_caps.get(&(stripe.spine_edges()[0], 0)),
+                            p2_end,
+                            p1_start,
+                        )?
                     };
                     let cross_end = if miter_vertices.contains(&spine_end_v) {
                         None
                     } else {
-                        section_curve(stripe.sections.last(), p1_end, p2_start)?
+                        section_curve(
+                            stripe.sections.last(),
+                            tilted_caps.get(&(stripe.spine_edges()[0], 1)),
+                            p1_end,
+                            p2_start,
+                        )?
                     };
                     let info = crate::builder_utils::create_blend_face_from_registry(
                         topo,
@@ -1677,6 +1731,17 @@ impl<'a> FilletBuilder<'a> {
         })
     }
 }
+
+/// A planar face's outward normal and offset, its reversal applied.
+fn outward_plane(topo: &Topology, face_id: FaceId) -> Result<Option<(Vec3, f64)>, BlendError> {
+    let face = topo.face(face_id)?;
+    let FaceSurface::Plane { d, .. } = face.surface() else {
+        return Ok(None);
+    };
+    let sign = if face.is_reversed() { -1.0 } else { 1.0 };
+    Ok(face.effective_plane_normal().map(|n| (n, d * sign)))
+}
+
 fn face_edge_forward(topo: &Topology, face_id: FaceId, edge_id: EdgeId) -> Option<bool> {
     let face = topo.face(face_id).ok()?;
     std::iter::once(face.outer_wire())
@@ -2394,6 +2459,218 @@ fn assemble_closed_rim(
     Ok(band_face_id)
 }
 
+/// Whether a stripe's spine ends (rather than starts) at `vertex`.
+fn spine_ends_at(topo: &Topology, stripe: &Stripe, vertex: Point3) -> Result<bool, BlendError> {
+    let length = stripe.spine.length();
+    Ok((stripe.spine.evaluate(topo, length)? - vertex).length()
+        < (stripe.spine.evaluate(topo, 0.0)? - vertex).length())
+}
+
+/// A stripe's cross-section at its spine's end at `vertex`.
+fn end_section<'s>(
+    topo: &Topology,
+    stripe: &'s Stripe,
+    vertex: Point3,
+) -> Result<Option<&'s crate::section::CircSection>, BlendError> {
+    Ok(if spine_ends_at(topo, stripe, vertex)? {
+        stripe.sections.last()
+    } else {
+        stripe.sections.first()
+    })
+}
+
+/// A contact curve's end nearer `point`, and whether it is the curve's end
+/// (rather than its start).
+fn contact_end_at(
+    contact: &brepkit_math::nurbs::curve::NurbsCurve,
+    point: Point3,
+) -> (Point3, bool) {
+    let (t0, t1) = contact.domain();
+    let (start, end) = (contact.evaluate(t0), contact.evaluate(t1));
+    if (end - point).length() < (start - point).length() {
+        (end, true)
+    } else {
+        (start, false)
+    }
+}
+
+/// A stripe end's tilted cap plane (outward normal and offset), keyed by the
+/// stripe's first spine edge and its end (0 at the spine's start, 1 at its
+/// end).
+type TiltedCaps = std::collections::HashMap<(EdgeId, usize), (Vec3, f64)>;
+
+/// Runs a straight round's ends on to tilted end caps.
+///
+/// A round of a straight edge between two planes is a cylinder whose
+/// sections stand square to the edge. Where the edge ends on a single planar
+/// cap square to it, the end section lies in the cap and the cap takes the
+/// notch. Where the cap is tilted, the end section stands off it, the
+/// contacts end short of the cap's corner edges, and the end was closed by a
+/// runout patch in the section plane instead. Each contact (a straight line
+/// on its plane) is run on, or back, to where it meets the cap's plane,
+/// which lies on that support face's corner edge with the cap; the band's
+/// end is then the cylinder's section by the cap's plane, an ellipse, and
+/// the cap takes the notch as a square cap does.
+fn run_stripes_to_tilted_caps(
+    topo: &Topology,
+    plan: &crate::fillet_plan::FilletPlan,
+    stripe_results: &mut [StripeResult],
+) -> Result<TiltedCaps, BlendError> {
+    // Below this the cap is square to the band's axis.
+    const SQUARE: f64 = 1e-9;
+    // A cap this oblique to the axis is left to the runout.
+    const OBLIQUE: f64 = 0.05;
+    let mut caps = TiltedCaps::new();
+    for junction in &plan.junctions {
+        if !matches!(
+            junction.classification,
+            crate::fillet_plan::CornerClassification::Terminal
+        ) {
+            continue;
+        }
+        let [contour_index] = junction.incident_contours.as_slice() else {
+            continue;
+        };
+        let Some(contour) = plan.contours.get(*contour_index) else {
+            continue;
+        };
+        let Some(result) = stripe_results
+            .iter_mut()
+            .find(|result| result.stripe.spine_edges() == contour.spine.edges())
+        else {
+            continue;
+        };
+        let stripe = &result.stripe;
+        let FaceSurface::Cylinder(cylinder) = &stripe.surface else {
+            continue;
+        };
+        if stripe.sections.len() != 2 {
+            continue;
+        }
+        let fan: Vec<FaceId> = junction
+            .face_fan
+            .iter()
+            .copied()
+            .filter(|&face| face != contour.side1 && face != contour.side2)
+            .collect();
+        let [cap] = fan.as_slice() else {
+            continue;
+        };
+        let Some((normal, d)) = outward_plane(topo, *cap)? else {
+            continue;
+        };
+        let tilt = normal.dot(cylinder.axis()).abs();
+        if tilt >= 1.0 - SQUARE || tilt <= OBLIQUE {
+            continue;
+        }
+        let vertex = topo.vertex(junction.vertex)?.point();
+        let end = usize::from(spine_ends_at(topo, stripe, vertex)?);
+        let section = stripe.sections[end].clone();
+        // The cap's two straight edges at the corner.
+        let face = topo.face(*cap)?;
+        let mut corner_edges: Vec<(Point3, Point3)> = Vec::new();
+        for wire_id in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied())
+        {
+            for oriented in topo.wire(wire_id)?.edges() {
+                let edge = topo.edge(oriented.edge())?;
+                if edge.start() != junction.vertex && edge.end() != junction.vertex {
+                    continue;
+                }
+                if !matches!(edge.curve(), EdgeCurve::Line) {
+                    corner_edges.clear();
+                    break;
+                }
+                corner_edges.push((
+                    topo.vertex(edge.start())?.point(),
+                    topo.vertex(edge.end())?.point(),
+                ));
+            }
+        }
+        if corner_edges.len() != 2 {
+            continue;
+        }
+        let scale = (stripe.sections[0].p1 - stripe.sections[0].p2).length();
+        let on_corner = |point: Point3| {
+            corner_edges.iter().any(|&(a, b)| {
+                let ab = b - a;
+                let len2 = ab.dot(ab);
+                len2 > 1e-18 && {
+                    let t = (point - a).dot(ab) / len2;
+                    (-1e-9..=1.0 + 1e-9).contains(&t)
+                        && (a + ab * t - point).length() <= 1e-6 * scale.max(1.0)
+                }
+            })
+        };
+        // Each contact run to the cap's plane, kept running from the same
+        // end as before; the stripe is left alone unless both reach the
+        // cap's corner edges.
+        let mut contacts = Vec::with_capacity(2);
+        for (contact, at) in [
+            (&stripe.contact1, section.p1),
+            (&stripe.contact2, section.p2),
+        ] {
+            let (t0, t1) = contact.domain();
+            let (a, b) = (contact.evaluate(t0), contact.evaluate(t1));
+            let straight = contact
+                .control_points()
+                .iter()
+                .all(|&p| (p - a).cross(b - a).length() <= 1e-9 * (b - a).length_squared());
+            // The end at this end of the spine and the far one.
+            let (near, at_end) = contact_end_at(contact, at);
+            let far = if at_end { a } else { b };
+            let run = near - far;
+            let along = normal.dot(run);
+            if !straight || along.abs() <= 1e-12 {
+                break;
+            }
+            let fraction = (d - normal.dot(Vec3::new(far.x(), far.y(), far.z()))) / along;
+            let reached = far + run * fraction;
+            if fraction <= 0.05 || !on_corner(reached) {
+                break;
+            }
+            let points = if at_end {
+                vec![far, reached]
+            } else {
+                vec![reached, far]
+            };
+            contacts.push((
+                brepkit_math::nurbs::curve::NurbsCurve::new(
+                    1,
+                    vec![t0, t0, t1, t1],
+                    points,
+                    vec![1.0, 1.0],
+                )?,
+                reached,
+            ));
+        }
+        let Ok([(contact1, p1), (contact2, p2)]) = <[_; 2]>::try_from(contacts) else {
+            continue;
+        };
+        // The axis meets the cap's plane at the ellipse's centre.
+        let axis = cylinder.axis();
+        let origin = cylinder.origin();
+        let centre = origin
+            + axis
+                * ((d - normal.dot(Vec3::new(origin.x(), origin.y(), origin.z())))
+                    / normal.dot(axis));
+        let edge = stripe.spine_edges()[0];
+        let result_stripe = &mut result.stripe;
+        result_stripe.contact1 = contact1;
+        result_stripe.contact2 = contact2;
+        let section = &mut result_stripe.sections[end];
+        section.p1 = p1;
+        section.p2 = p2;
+        section.center = centre;
+        log::debug!(
+            "terminal {:?}: round runs on to its tilted cap {:?} (axis cosine {tilt:.6})",
+            junction.vertex,
+            cap
+        );
+        caps.insert((edge, end), (normal, d));
+    }
+    Ok(caps)
+}
+
 /// Whether a stripe's terminal vertex sits on a planar cap whose two edges
 /// at the vertex are straight or B-splines (a spline profile's rim): the
 /// end-cap notch can replace that corner path with the stripe's
@@ -2476,18 +2753,19 @@ fn terminal_cap_is_notchable(
             (a + ab * t - point).length() <= 1e-5
         })
     };
-    let near_ends: Vec<Point3> = [&stripe.contact1, &stripe.contact2]
-        .into_iter()
-        .map(|contact| {
-            let (t0, t1) = contact.domain();
-            let (start, end) = (contact.evaluate(t0), contact.evaluate(t1));
-            if (start - vertex).length() <= (end - vertex).length() {
-                start
-            } else {
-                end
-            }
-        })
-        .collect();
+    // Each contact's end at this end of the spine: the one at the end
+    // section's contact point (the end nearer the corner need not be, where
+    // the round is wider than the edge is long).
+    let Some(section) = end_section(topo, stripe, vertex)? else {
+        return Ok(false);
+    };
+    let near_ends: Vec<Point3> = [
+        (&stripe.contact1, section.p1),
+        (&stripe.contact2, section.p2),
+    ]
+    .into_iter()
+    .map(|(contact, at)| contact_end_at(contact, at).0)
+    .collect();
     if !near_ends.iter().all(|&point| on_segment(point)) {
         return Ok(false);
     }
