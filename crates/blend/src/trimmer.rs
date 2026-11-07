@@ -59,6 +59,14 @@ pub struct TrimResult {
 /// Default vertex tolerance used when creating intersection vertices.
 const VERTEX_TOL: f64 = 1e-7;
 
+/// Distance within which two contact ends on one face are one vertex, the
+/// allowance the edge-hit tests already use. Two stripes meeting at a
+/// junction that is tangent only to the file's precision (a line running on
+/// round an arc, kinked by 4e-8 rad) end their contacts `radius * kink`
+/// apart: 2e-7 at r = 5. Read as two vertices, their cross-sections were not
+/// shared and a zero-area runout patch closed the gap.
+const CONTACT_END_TOL: f64 = 1e-6;
+
 /// Tolerance for the 2D segment intersection parameter test.
 const PARAM_TOL: f64 = 1e-10;
 /// Number of carrier-curve samples used to locate UV boundary crossings.
@@ -1286,10 +1294,13 @@ fn mapped_vertex_for_point(
     new_vertices: &mut Vec<VertexId>,
     point: Point3,
 ) -> VertexId {
-    if let Some((_, vertex)) = known
-        .iter()
-        .find(|(candidate, _)| (*candidate - point).length() <= VERTEX_TOL)
-    {
+    // The face's own vertices match at `VERTEX_TOL` only: a round just short
+    // of its limit ends its contacts that close to a corner it does not
+    // reach. Contact ends minted on this face match each other more loosely.
+    if let Some((_, vertex)) = known.iter().find(|(candidate, vertex)| {
+        let distance = (*candidate - point).length();
+        distance <= VERTEX_TOL || distance <= CONTACT_END_TOL && new_vertices.contains(vertex)
+    }) {
         return *vertex;
     }
     let vertex = topo.add_vertex(Vertex::new(point, VERTEX_TOL));
