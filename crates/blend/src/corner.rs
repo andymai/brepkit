@@ -751,7 +751,9 @@ fn unselected_edge_seam_continuation(
 /// so a caller can recover `max_radius`. Only a genuine overshoot is refused:
 /// at the exact limit the rule's length is fully consumed, and
 /// `close_collapsed_miter_corner` builds the corner around the material that
-/// vanishing consumed.
+/// vanishing consumed. A radius past a length by no more than the linear
+/// tolerance is at the limit: a file stores the length to its own digits, so
+/// an edge drawn as long as the radius can read a few 1e-12 short of it.
 pub fn check_equal_two_edge_admissibility(
     topo: &Topology,
     plan: &FilletPlan,
@@ -779,7 +781,7 @@ pub fn check_equal_two_edge_admissibility(
         }
         let r = by_contour_r[ci];
         let length = contour.spine.length();
-        if (m as f64) * r > length {
+        if (m as f64) * r > length + TOL {
             return Err(BlendError::RadiusTooLarge {
                 edge: contour.edges[0],
                 max_radius: (length / (m as f64)).max(0.0),
@@ -801,7 +803,7 @@ pub fn check_equal_two_edge_admissibility(
         };
         let edge = topo.edge(retained)?;
         let h = vertex_length(edge.start(), edge.end())?;
-        if miter.radius > h {
+        if miter.radius > h + TOL {
             return Err(BlendError::RadiusTooLarge {
                 edge: retained,
                 max_radius: h.max(0.0),
@@ -859,7 +861,7 @@ pub fn check_equal_two_edge_admissibility(
                 Some(continuation) => length + continuation,
                 None => length,
             };
-            if r > run {
+            if r > run + TOL {
                 return Err(BlendError::RadiusTooLarge {
                     edge: edge_id,
                     max_radius: run.max(0.0),
