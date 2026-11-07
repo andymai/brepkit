@@ -10206,6 +10206,64 @@ mod tests {
         );
     }
 
+    /// A square plate split by a T of two sections, a square hole clear of both
+    /// in one of its three parts. That part keeps the hole, the others stay
+    /// whole: however many pieces a face splits into, an untouched hole survives.
+    #[test]
+    fn a_t_of_sections_leaves_a_hole_clear_of_it_in_its_own_piece() {
+        use brepkit_topology::edge::Edge;
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        let mut topo = Topology::new();
+        let mut loop_of = |corners: [(f64, f64); 4]| {
+            let vertices =
+                corners.map(|(x, y)| topo.add_vertex(Vertex::new(Point3::new(x, y, 0.0), 1e-7)));
+            let edges: Vec<_> = (0..4)
+                .map(|i| {
+                    let edge = Edge::new(vertices[i], vertices[(i + 1) % 4], EdgeCurve::Line);
+                    OrientedEdge::new(topo.add_edge(edge), true)
+                })
+                .collect();
+            topo.add_wire(Wire::new(edges, true).unwrap())
+        };
+        let outer = loop_of([(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)]);
+        let hole = loop_of([(1.0, 1.0), (1.0, 2.0), (2.0, 2.0), (2.0, 1.0)]);
+        let face = topo.add_face(Face::new(
+            outer,
+            vec![hole],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: 0.0,
+            },
+        ));
+        let sections = [
+            line_section(Point3::new(0.0, 8.0, 0.0), Point3::new(10.0, 8.0, 0.0)),
+            line_section(Point3::new(5.0, 8.0, 0.0), Point3::new(5.0, 0.0, 0.0)),
+        ];
+        let subs = split_face_2d(
+            &topo,
+            face,
+            &sections,
+            Rank::A,
+            &brepkit_math::tolerance::Tolerance::new(),
+            None,
+            None,
+            &std::collections::HashMap::new(),
+            &std::collections::BTreeSet::new(),
+            None,
+        );
+        assert_eq!(subs.len(), 3);
+        let holed: Vec<_> = subs.iter().filter(|s| !s.inner_wires.is_empty()).collect();
+        assert_eq!(holed.len(), 1, "the hole must land in exactly one piece");
+        let lower_left = holed[0]
+            .outer_wire
+            .iter()
+            .all(|e| e.start_3d.x() <= 5.0 + 1e-9 && e.start_3d.y() <= 8.0 + 1e-9);
+        assert!(lower_left, "the hole belongs to the piece around it");
+    }
+
     fn line_section(start: Point3, end: Point3) -> SectionEdge {
         SectionEdge {
             curve_3d: EdgeCurve::Line,
