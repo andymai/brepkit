@@ -23,6 +23,15 @@ const MAX_DEPTH: u8 = 6;
 /// Initial grid resolution (cells per direction).
 const INITIAL_CELLS: usize = 4;
 
+/// Most crease lines the root grid takes per direction. A surface with more, such
+/// as a faceted sheet, keeps the even grid there: each line multiplies the roots
+/// the other way, and this many keeps them in the hundreds.
+const MAX_CREASE_LINES: usize = 16;
+
+/// Cells a quadtree stops growing at. An even grid's tree cannot reach it, only one
+/// on many crease-lined roots.
+const MAX_CELLS: usize = 200_000;
+
 /// Compute the v-parameter range for a surface by projecting boundary vertices.
 ///
 /// `project_v` maps a 3D point to its v-parameter on the surface.
@@ -485,6 +494,24 @@ fn lerp_point(a: Point3, b: Point3) -> Point3 {
     )
 }
 
+/// The root cells' lines, laid out in `cells` by `u` span then `v` span.
+struct RootGrid {
+    u: Vec<f64>,
+    v: Vec<f64>,
+}
+
+impl RootGrid {
+    /// The first root holding `(u, v)`, a point on a shared line reading the lower.
+    fn holding(&self, u: f64, v: f64) -> Option<usize> {
+        let span = |lines: &[f64], at: f64| {
+            let (&first, &last) = (lines.first()?, lines.last()?);
+            (at >= first && at <= last)
+                .then(|| lines.partition_point(|&line| line < at).saturating_sub(1))
+        };
+        Some(span(&self.u, u)? * (self.v.len() - 1) + span(&self.v, v)?)
+    }
+}
+
 /// A surface's creases along knot lines, by parameter.
 struct Creases {
     u: Vec<f64>,
@@ -540,9 +567,16 @@ fn creases(surface: &brepkit_math::nurbs::surface::NurbsSurface) -> Creases {
             })
         })
         .collect();
+    let capped = |lines: Vec<f64>| {
+        if lines.len() > MAX_CREASE_LINES {
+            Vec::new()
+        } else {
+            lines
+        }
+    };
     Creases {
-        u: u_lines,
-        v: v_lines,
+        u: capped(u_lines),
+        v: capped(v_lines),
     }
 }
 
@@ -595,7 +629,7 @@ fn build_quadtree(
     creases: &Creases,
 ) {
     let cell = &cells[cell_idx];
-    if cell.depth >= MAX_DEPTH {
+    if cell.depth >= MAX_DEPTH || cells.len() >= MAX_CELLS {
         return;
     }
 
@@ -661,7 +695,7 @@ fn build_quadtree(
 fn conforming_pass(
     surface: &brepkit_math::nurbs::surface::NurbsSurface,
     cells: &mut Vec<AdaptiveCell>,
-    n_roots: usize,
+    roots: &RootGrid,
 ) {
     for _pass in 0..MAX_DEPTH {
         let mut to_subdivide = Vec::new();
@@ -678,7 +712,7 @@ fn conforming_pass(
             let v_min = cells[i].v_min;
             let v_max = cells[i].v_max;
 
-            if needs_conforming_subdivision(cells, n_roots, depth, u_min, u_max, v_min, v_max) {
+            if needs_conforming_subdivision(cells, roots, depth, u_min, u_max, v_min, v_max) {
                 to_subdivide.push(i);
             }
         }
@@ -700,7 +734,7 @@ fn conforming_pass(
 #[allow(clippy::similar_names)]
 fn needs_conforming_subdivision(
     cells: &[AdaptiveCell],
-    n_roots: usize,
+    roots: &RootGrid,
     depth: u8,
     u_min: f64,
     u_max: f64,
@@ -719,7 +753,7 @@ fn needs_conforming_subdivision(
     ];
 
     for &(pu, pv) in &probes {
-        if let Some(neighbor_depth) = find_leaf_depth_at(cells, n_roots, pu, pv)
+        if let Some(neighbor_depth) = find_leaf_depth_at(cells, roots, pu, pv)
             && neighbor_depth > depth + 1
         {
             return true;
@@ -729,13 +763,9 @@ fn needs_conforming_subdivision(
 }
 
 /// Find the depth of the leaf cell containing the given parameter point.
-fn find_leaf_depth_at(cells: &[AdaptiveCell], n_roots: usize, u: f64, v: f64) -> Option<u8> {
-    for root_idx in 0..n_roots.min(cells.len()) {
-        if let Some(depth) = find_leaf_depth_recursive(cells, root_idx, u, v) {
-            return Some(depth);
-        }
-    }
-    None
+fn find_leaf_depth_at(cells: &[AdaptiveCell], roots: &RootGrid, u: f64, v: f64) -> Option<u8> {
+    let root = roots.holding(u, v)?;
+    find_leaf_depth_recursive(cells, root, u, v)
 }
 
 /// Recursively find the leaf depth at a given point within a cell subtree.
@@ -1364,12 +1394,14 @@ pub(super) fn tessellate_nurbs(
         handedness = -1.0;
     }
     let creases = creases(surface);
-    let u_lines = root_lines(u_lo, u_hi, &creases.u);
-    let v_lines = root_lines(v_lo, v_hi, &creases.v);
+    let roots = RootGrid {
+        u: root_lines(u_lo, u_hi, &creases.u),
+        v: root_lines(v_lo, v_hi, &creases.v),
+    };
     let mut cells = Vec::with_capacity(256);
 
-    for u_span in u_lines.windows(2) {
-        for v_span in v_lines.windows(2) {
+    for u_span in roots.u.windows(2) {
+        for v_span in roots.v.windows(2) {
             cells.push(AdaptiveCell {
                 u_min: u_span[0],
                 u_max: u_span[1],
@@ -1386,7 +1418,7 @@ pub(super) fn tessellate_nurbs(
         build_quadtree(surface, &mut cells, i, deflection, angular_tol, &creases);
     }
 
-    conforming_pass(surface, &mut cells, n_roots);
+    conforming_pass(surface, &mut cells, &roots);
 
     let leaf_count = cells.iter().filter(|c| c.children.is_none()).count();
     let mut eval_cache: DetHashMap<(u64, u64), (Point3, Vec3)> = DetHashMap::default();
