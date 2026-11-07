@@ -1,0 +1,22 @@
+crates/check/src/classify/boundary.rs
+  s_649261a24df31b::t_a87f5d04b80527 8,42,99,103
+  s_649261a24df31b::t_aaf72a498c8b8d 79-80,82-85,87-88,94-98,100-102,104-112
+crates/operations/tests/torus_cut_by_a_tilted_plane.rs
+  s_649261a24df31b::t_a87f5d04b80527 16,46-71,137-157
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "01d9d9dad12449e298cd52aff6d69f641ba035c0",
+  "prompts": {},
+  "sessions": {
+    "s_649261a24df31b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d8bbbba4-0431-4f6a-a622-e632a6659779",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
