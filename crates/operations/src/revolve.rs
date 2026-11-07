@@ -1268,7 +1268,8 @@ pub(crate) fn revolution_wall_surface(
 /// Returns `Ok(None)` — fall back to the general revolve — unless the profile
 /// is a closed circle, with any holes closed circles too, the axis lies in the
 /// profile plane, and every circle clears the axis (`major > minor`, so no
-/// torus self-intersects; the sphere and spindle cases fall back).
+/// torus self-intersects; the sphere and spindle cases fall back) or, for a
+/// full turn, touches it (`major == minor`, a horn torus pinched on the axis).
 ///
 /// A full revolution builds one doubly-periodic `Torus` face per circle like
 /// `primitives::make_torus`, each hole's facing into it as a cavity. A
@@ -1330,19 +1331,22 @@ fn try_circle_revolution_torus(
         };
         // Major radius = perpendicular distance from the circle center to the
         // axis. The circle must clear the axis; otherwise the revolution is a
-        // sphere (center on axis) or a self-intersecting spindle — both fall
-        // back.
+        // sphere (center on axis) or a self-intersecting spindle, and both
+        // fall back. A circle touching the axis sweeps a horn torus, whole
+        // only for a full turn: a partial turn's two caps would meet at the
+        // pinch.
         let to_center = center - axis_origin;
         let along = to_center.dot(axis);
         let major_radius = (to_center - axis * along).length();
-        if major_radius <= radius + tol.linear {
+        let horn = (major_radius - radius).abs() <= tol.linear;
+        if major_radius < radius - tol.linear || (horn && !is_full) {
             return Ok(None);
         }
         let torus_center = axis_origin + axis * along;
         let surface = brepkit_math::surfaces::ToroidalSurface::with_axis(
             torus_center,
             major_radius,
-            radius,
+            if horn { major_radius } else { radius },
             axis,
         )
         .map_err(crate::OperationsError::Math)?;
