@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794051669311,
+  "lastUpdate": 1794053825836,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -65285,6 +65285,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 27783754,
             "range": "± 104079",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b9075662619fb9b6572d7517e7fc43f7551c3b0b",
+          "message": "chore(main): release 4.6.27 (#2306)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[4.6.27](https://github.com/andymai/brepkit/compare/v4.6.26...v4.6.27)\n(2026-11-07)\n\n\n### Bug Fixes\n\n* **blend:** a cap notch splits a B-spline rim\n([#2303](https://github.com/andymai/brepkit/issues/2303))\n([601c65c](https://github.com/andymai/brepkit/commit/601c65cbb840add70bb678556aef8824b2d828f2))\n* **blend:** a closed fillet band's seam is its round's arc, not a chord\n([#2296](https://github.com/andymai/brepkit/issues/2296))\n([3a00729](https://github.com/andymai/brepkit/commit/3a007296303557da5d24f22a2ba064dc1bc59dbd))\n* **blend:** a radius at a mitre's limit to a file's digits builds\n([#2304](https://github.com/andymai/brepkit/issues/2304))\n([c314845](https://github.com/andymai/brepkit/commit/c314845b6ea6b8f1cacc963086ebf3ccb76d2b55))\n* **blend:** mitre square corners read from files; one section where\nfillets run on round\n([#2298](https://github.com/andymai/brepkit/issues/2298))\n([869ea38](https://github.com/andymai/brepkit/commit/869ea38075617d61388e0d1c765883be272cbed3))\n* **blend:** one vertex for contact ends a file's kink apart\n([#2302](https://github.com/andymai/brepkit/issues/2302))\n([8e270ea](https://github.com/andymai/brepkit/commit/8e270ea3377c642f8b789944a01c76b141c3d8ac))\n* **blend:** refuse a closed contact on a plane face that a hole crosses\n([#2297](https://github.com/andymai/brepkit/issues/2297))\n([6ba576f](https://github.com/andymai/brepkit/commit/6ba576fd924d629afbc46bf34dfdf5326d1a259f))\n* **blend:** set back trihedral corners whose stripes differ in length\n([#2301](https://github.com/andymai/brepkit/issues/2301))\n([ab645b5](https://github.com/andymai/brepkit/commit/ab645b51c5a54923f439978e21e2c2d5edcc29b6))\n* **operations:** fuse solids that only touch into separate pieces\n([#2289](https://github.com/andymai/brepkit/issues/2289))\n([158db58](https://github.com/andymai/brepkit/commit/158db58b62fcbe1e4b4706766abc9449a958d0ce))\n* **topology:** with no seed, a shell's faces vote on its boundary-walk\nconvention ([#2299](https://github.com/andymai/brepkit/issues/2299))\n([adbee8d](https://github.com/andymai/brepkit/commit/adbee8db68755660eaebad21d4730735cecc0525))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-11-07T12:13:49Z",
+          "tree_id": "814f8b89b14b602ad152675467fa31b17ecf5ea2",
+          "url": "https://github.com/andymai/brepkit/commit/b9075662619fb9b6572d7517e7fc43f7551c3b0b"
+        },
+        "date": 1794053816037,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1053110,
+            "range": "± 1483",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1125070,
+            "range": "± 1417",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12830,
+            "range": "± 129",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 675844,
+            "range": "± 1389",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 27945810,
+            "range": "± 60714",
             "unit": "ns/iter"
           }
         ]
