@@ -1,0 +1,22 @@
+crates/operations/tests/loft_rails.rs
+  s_649261a24df31b::t_f50ace6e0a23a1 1048-1114
+crates/operations/src/loft/network.rs
+  s_649261a24df31b::t_f50ace6e0a23a1 1016-1019
+  s_649261a24df31b::t_cd4dc805f194ea 2424-2426,2431-2437,2440,2443
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "8db13557c3caff2c53ec472410a6fd154982acea",
+  "prompts": {},
+  "sessions": {
+    "s_649261a24df31b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d8bbbba4-0431-4f6a-a622-e632a6659779",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
