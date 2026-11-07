@@ -162,11 +162,12 @@ fn connected_pieces<U: AsRef<[brepkit_topology::face::FaceId]>>(
 /// pinch, where they touch at a point), or a piece inside another that faces the same way with no piece
 /// facing the other way between them (a lump inside a lump; an island in a
 /// cavity kept in the outer shell has the cavity between). A piece is inside
-/// another when, at the first of up to eight of its vertices that no other piece
-/// shares and that lies off the other piece, most of three rays cross the other
-/// an odd number of times (one ray can leave through an edge or a corner). A
-/// vertex on the other piece has no parity to read: each ray and its opposite
-/// disagree there, one heading in and one out. A piece with no vertex off the
+/// another when, at the first point of it that lies off the other piece, most of
+/// three rays cross the other an odd number of times (one ray can leave through
+/// an edge or a corner). The points are its vertices that no other piece shares,
+/// then its edges' middles, for a piece whose every vertex lies on the other. A
+/// point on the other piece has no parity to read: each ray and its opposite
+/// disagree there, one heading in and one out. A piece with no point off the
 /// other reads as outside it. The rays are the engine's ray cast, which reads a sphere face that is no
 /// intersection of half-spaces (a ball less a column's corner) by its wires.
 /// Only pieces facing the same way are tested: a cavity kept in the outer
@@ -174,8 +175,8 @@ fn connected_pieces<U: AsRef<[brepkit_topology::face::FaceId]>>(
 /// How near a vertex of one piece lies to another piece's vertex to be the
 /// same point of contact.
 const TOUCH_TOL: f64 = 1e-6;
-/// How many of a piece's vertices are read against another piece.
-const CORNERS_READ: usize = 8;
+/// How many of a piece's vertices, or faces' edges, are read against another.
+const POINTS_READ: usize = 32;
 
 fn piece_issues(
     topo: &Topology,
@@ -217,13 +218,13 @@ fn piece_issues(
             .collect::<Result<Vec<_>, _>>()?;
         points.insert(p, pts);
     }
+    // Spread over each piece's vertices, which run a face at a time: a piece
+    // lying on a wall visits that whole face first.
     let mut corners: HashMap<usize, Vec<brepkit_math::vec::Point3>> = HashMap::new();
-    for (&p, vids) in &piece_vertices {
+    for (&p, pts) in &points {
+        let stride = pts.len().div_ceil(POINTS_READ).max(1);
         let mut clear: Vec<brepkit_math::vec::Point3> = Vec::new();
-        for &q in &points[&p] {
-            if clear.len() == CORNERS_READ {
-                break;
-            }
+        for &q in pts.iter().step_by(stride) {
             let apart = clear.iter().all(|&c| (c - q).length() > TOUCH_TOL)
                 && points
                     .iter()
@@ -232,9 +233,6 @@ fn piece_issues(
             if apart {
                 clear.push(q);
             }
-        }
-        if clear.is_empty() {
-            clear.push(topo.vertex(vids[0])?.point());
         }
         corners.insert(p, clear);
     }
@@ -313,7 +311,30 @@ fn piece_issues(
             }
             Some(odd >= 2)
         };
-        let within = corners[&a].iter().find_map(|&c| read(c)).unwrap_or(false);
+        let mut within = corners[&a].iter().find_map(|&c| read(c));
+        if within.is_none() {
+            for &face in members[&a].iter().take(POINTS_READ) {
+                for edge_id in explorer::face_edges(topo, face)? {
+                    let edge = topo.edge(edge_id)?;
+                    let (start, end) = (
+                        topo.vertex(edge.start())?.point(),
+                        topo.vertex(edge.end())?.point(),
+                    );
+                    let (t0, t1) = edge.curve().domain_with_endpoints(start, end);
+                    let middle =
+                        edge.curve()
+                            .evaluate_with_endpoints(f64::midpoint(t0, t1), start, end);
+                    within = read(middle);
+                    if within.is_some() {
+                        break;
+                    }
+                }
+                if within.is_some() {
+                    break;
+                }
+            }
+        }
+        let within = within.unwrap_or(false);
         inside_memo.insert((a, b), within);
         Ok(within)
     };
