@@ -1045,6 +1045,73 @@ fn rails_round_a_u_bend_wind_the_far_profile_for_them() {
     }
 }
 
+/// Rails turning three quarters of the way round: the chord between the end
+/// profiles then points against the way the rails run, which must not wind them.
+#[test]
+fn rails_round_three_quarters_of_a_turn_keep_the_solid_outward() {
+    let (near, far, half_y) = (5.0, 9.0, 3.0);
+    let area = (far - near) * 2.0 * half_y;
+    let want = area * 1.5 * std::f64::consts::PI * f64::midpoint(near, far);
+    let turn = 1.5 * std::f64::consts::PI;
+    let (c, s) = (turn.cos(), turn.sin());
+    for (name, pose) in poses() {
+        let mut topo = Topology::new();
+        let at = |rho: f64, y: f64, cos: f64, sin: f64| p(rho * cos, y, rho * sin);
+        let first = polygon(
+            &mut topo,
+            pose,
+            &[
+                at(near, -half_y, 1.0, 0.0),
+                at(far, -half_y, 1.0, 0.0),
+                at(far, half_y, 1.0, 0.0),
+                at(near, half_y, 1.0, 0.0),
+            ],
+        );
+        let last = polygon(
+            &mut topo,
+            pose,
+            &[
+                at(near, -half_y, c, s),
+                at(far, -half_y, c, s),
+                at(far, half_y, c, s),
+                at(near, half_y, c, s),
+            ],
+        );
+        let mut rails = Vec::new();
+        let middle = 0.5 * turn;
+        for (radius, y) in [
+            (near, -half_y),
+            (far, -half_y),
+            (far, half_y),
+            (near, half_y),
+        ] {
+            let arc = circle_through(
+                pose,
+                at(radius, y, 1.0, 0.0),
+                at(radius, y, middle.cos(), middle.sin()),
+                at(radius, y, c, s),
+            );
+            let (a, b) = (
+                pose.mul_point(at(radius, y, 1.0, 0.0)),
+                pose.mul_point(at(radius, y, c, s)),
+            );
+            let (va, vb) = (
+                topo.add_vertex(Vertex::new(a, TOL)),
+                topo.add_vertex(Vertex::new(b, TOL)),
+            );
+            let edge = topo.add_edge(Edge::new(va, vb, EdgeCurve::Circle(arc)));
+            rails.push(LoftRail::Edge(edge));
+        }
+        let options = LoftOptions {
+            rails,
+            ..LoftOptions::default()
+        };
+        let solid = loft_with_options(&mut topo, &[first, last], &options).unwrap();
+        let exact = assert_solid(&topo, solid, name);
+        assert_close(exact, want, 1e-7, name);
+    }
+}
+
 /// Rails kinking sideways half way up and back keep the square's section all the
 /// way, and do not read as a surface turned inside out at the kink.
 #[test]

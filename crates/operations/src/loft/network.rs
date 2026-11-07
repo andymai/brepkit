@@ -1013,8 +1013,10 @@ fn orient_rings(
             let side = profile_outward(topo, profiles[s], normal)? * (along * weight.signum());
             Ok(reads(side, 1e-6))
         };
-        let sign = reads(chord, 1e-3)
-            .or_else(|| reads(along_rails, 1e-6))
+        // The rails say which way the loft runs where there are any: the chord
+        // between neighbouring profiles points back on a bend past a half turn.
+        let sign = reads(along_rails, 1e-6)
+            .or_else(|| reads(chord, 1e-3))
             .map_or_else(from_condition, |sign| Ok(Some(sign)))?
             .or_else(|| reads(chord, 1e-9))
             .ok_or_else(|| {
@@ -2419,24 +2421,26 @@ fn with_deviation(
 }
 
 /// The side's plane when all of its control net lies in one, facing as
-/// `Su × Sv` does.
+/// `Su × Sv` does. The way round is read from the net's whole boundary: its four
+/// corners alone take the short way between the rails' ends, which is the wrong
+/// way round on a bend past a half turn.
 fn flat_side(net: &[Vec<Point3>]) -> Option<FaceSurface> {
     const FLAT: f64 = 1e-9;
     let last_u = net.len() - 1;
     let last_v = net[0].len() - 1;
-    let corners = [
-        net[0][0],
-        net[last_u][0],
-        net[last_u][last_v],
-        net[0][last_v],
-    ];
-    let normal = crate::winding::newell_normal(&corners).normalize().ok()?;
+    let boundary: Vec<Point3> = (0..last_u)
+        .map(|i| net[i][0])
+        .chain((0..last_v).map(|j| net[last_u][j]))
+        .chain((1..=last_u).rev().map(|i| net[i][last_v]))
+        .chain((1..=last_v).rev().map(|j| net[0][j]))
+        .collect();
+    let normal = crate::winding::newell_normal(&boundary).normalize().ok()?;
     net.iter()
         .flatten()
-        .all(|&p| (p - corners[0]).dot(normal).abs() <= FLAT)
+        .all(|&p| (p - net[0][0]).dot(normal).abs() <= FLAT)
         .then(|| FaceSurface::Plane {
             normal,
-            d: dot_normal_point(normal, corners[0]),
+            d: dot_normal_point(normal, net[0][0]),
         })
 }
 
