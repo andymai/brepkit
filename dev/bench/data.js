@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794051441457,
+  "lastUpdate": 1794051669311,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -65231,6 +65231,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 22222833,
             "range": "± 134934",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "66281732+Robokan@users.noreply.github.com",
+            "name": "Eric Vaughan",
+            "username": "Robokan"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "158db58b62fcbe1e4b4706766abc9449a958d0ce",
+          "message": "fix(operations): fuse solids that only touch into separate pieces (#2289)\n\n## Problem\n\nTwo solids that only touch, along an edge or at a corner, fused into one\nshell whose contact edge carries four faces (or whose contact vertex\njoins two cones of faces). The result gate rightly refuses that\nnon-manifold union, so the fuse went to the mesh fallback and every\nsurface type was lost: two unit boxes offset by `(1, 1, 0)` came back as\na faceted mesh.\n\n## Change\n\n- `boolean/assembly.rs`: `separate_touching_pieces` groups the union's\nfaces through edges with exactly two uses. Every piece after the first\ntakes its own copies of the vertices and edges it shares with another\npiece (pcurves copied with them), so each piece is a closed manifold\nshell on its own.\n- `boolean/mod.rs`: before falling back, a fuse or cut whose union\nseparates into two or more pieces this way is kept when the pieces only\ntouch, the result is closed and manifold, the pieces' Euler\ncharacteristics balance, and it validates. \"Only touch\": a point inside\neach piece, and a point just inside each of its faces, lies outside\nevery other piece. The builder splits faces along every section, so a\nface of a piece that overlapped another would lie wholly inside it.\n- `heal.rs`: `unify_faces` no longer merges faces across an edge with\nmore than two uses, straight or curved. Merging them pinched the pieces\nback together through the contact edge.\n- `boolean/mod.rs`, containment shortcut: separate pieces exposed a gap.\nA solid in several pieces that fill recesses of the other has every\nvertex and edge on the other's boundary and its centre between the\npieces, so every witness read it as inside, and the fuse returned the\nouter solid alone. A point inside each piece (pieces read through edges\nwith exactly two uses) is now classified against the other solid too.\n\n## Tests\n\n- `touching_blocks_fuse_exactly_into_separate_pieces`: unit boxes\ntouching along an edge and at a corner fuse into two valid pieces of\nvolume 2; coincident and overlapping boxes still fuse into one.\n- `pieces_filling_pockets_fuse_into_the_whole_block`: a 10 x 10 x 10\nblock with two 2 x 2 x 2 pockets in its top, fused with a two-piece\nsolid filling them, gives the whole block (1000) as one valid piece.\nWithout the piece witness it returns the holed block (984).\n- `mesh_fallback_counter_records_fallbacks` used the edge-touching fuse\nas its fallback case; it now cuts a rod through a torus's wall (the case\n`compound_cut_cuts_the_exact_piece_and_defers_the_other` relies on),\nwhich falls back when run alone.\n- `pinched_and_nested_pieces_are_invalid` builds its pinched union with\nthe GFA builder directly, as the boolean now separates it.\n- `cargo test -p brepkit-operations -p brepkit-algo -p brepkit-heal -p\nbrepkit-io` passes; clippy is clean. The pose sweep and truth audit\noutputs are identical to `main`'s.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\n---------\n\nCo-authored-by: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-11-07T03:35:35-08:00",
+          "tree_id": "2dfa6ebf88e9b62b6ff4f92130d62aa012b29037",
+          "url": "https://github.com/andymai/brepkit/commit/158db58b62fcbe1e4b4706766abc9449a958d0ce"
+        },
+        "date": 1794051661109,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1052933,
+            "range": "± 2741",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1132626,
+            "range": "± 4699",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12943,
+            "range": "± 415",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 674530,
+            "range": "± 1642",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 27783754,
+            "range": "± 104079",
             "unit": "ns/iter"
           }
         ]
