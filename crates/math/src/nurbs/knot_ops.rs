@@ -521,14 +521,17 @@ pub fn curve_split(curve: &NurbsCurve, u: f64) -> Result<(NurbsCurve, NurbsCurve
 
     // The split control point index: with multiplicity p, the curve passes
     // through the CP at index (last_u - p). Both halves share this point.
-    let split_cp = last_u - p;
+    let split_cp = last_u.checked_sub(p).ok_or(MathError::EmptyInput)?;
 
     // Left curve: CPs 0..=split_cp, knots up to first_u then add p+1-mult
     // copies of u to form a proper clamped end.
     let mult = last_u - first_u + 1;
+    // Knots closer than `KNOT_EPS` read as one, past the degree + 1 in a span
+    // too narrow to tell them apart.
+    let padding = (p + 1).checked_sub(mult).ok_or(MathError::EmptyInput)?;
     let mut left_knots: Vec<f64> = knots[..=last_u].to_vec();
     // Need p+1 copies of u at the end; we have `mult` already.
-    for _ in 0..(p + 1 - mult) {
+    for _ in 0..padding {
         left_knots.push(u);
     }
     let left_cps: Vec<Point3> = cps[..=split_cp].to_vec();
@@ -536,7 +539,7 @@ pub fn curve_split(curve: &NurbsCurve, u: f64) -> Result<(NurbsCurve, NurbsCurve
 
     // Right curve: p+1 copies of u, then remaining knots. CPs from split_cp onward.
     let mut right_knots: Vec<f64> = Vec::new();
-    for _ in 0..(p + 1 - mult) {
+    for _ in 0..padding {
         right_knots.push(u);
     }
     right_knots.extend_from_slice(&knots[first_u..]);
@@ -553,6 +556,27 @@ pub fn curve_split(curve: &NurbsCurve, u: f64) -> Result<(NurbsCurve, NurbsCurve
 #[allow(clippy::expect_used, clippy::cast_lossless, clippy::suboptimal_flops)]
 mod tests {
     use super::*;
+
+    /// Knots closer than the split can tell apart read as one, past the degree
+    /// + 1, and the split refuses them rather than underflows.
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn a_split_among_knots_too_close_to_tell_apart_is_refused() {
+        let curve = NurbsCurve::new(
+            1,
+            vec![0.0, 0.0, 1e-16, 2e-16, 3e-16, 4e-16, 4e-16],
+            vec![
+                Point3::new(0.0, 0.0, 0.0),
+                Point3::new(1.0, 0.0, 0.0),
+                Point3::new(1.0, 1.0, 0.0),
+                Point3::new(0.0, 1.0, 0.0),
+                Point3::new(0.0, 0.0, 0.0),
+            ],
+            vec![1.0; 5],
+        )
+        .unwrap();
+        assert!(curve_split(&curve, 2e-16).is_err());
+    }
 
     fn cubic_bezier() -> NurbsCurve {
         NurbsCurve::new(

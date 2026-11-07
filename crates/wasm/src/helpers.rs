@@ -308,10 +308,11 @@ fn refuse_edges_off_the_outer_shell(
 }
 
 /// Chamfer edges at an equal `distance` on both faces, as [`try_fillet`]
-/// fillets them: the walking engine's chamfer is kept when it is a changed,
-/// closed, outward-oriented solid, and the planar chamfer, which rebuilds
-/// every face from its polygon and so cannot carry a curved one, is the
-/// fallback.
+/// fillets them. Tangent chains of lines and arcs are built exactly first,
+/// since the walking engine closes a stripe's end at a tangent neighbour with
+/// an approximate patch. Past that the walking engine's chamfer is kept when
+/// it is a changed, closed, outward-oriented solid, and the planar chamfer,
+/// which refuses a solid with curved edges, is the fallback.
 ///
 /// # Errors
 ///
@@ -324,6 +325,12 @@ pub fn try_chamfer(
 ) -> Result<brepkit_topology::solid::SolidId, brepkit_operations::OperationsError> {
     refuse_edges_off_the_outer_shell(topo, solid_id, edge_ids, "chamfering")?;
     let orientation_deflection = gate_deflection(topo, solid_id, distance)?;
+    if let Ok(Some(s)) = brepkit_operations::chamfer_chain::chamfer_tangent_chains(
+        topo, solid_id, edge_ids, distance,
+    ) && blend_result_holds(topo, s, orientation_deflection)
+    {
+        return Ok(s);
+    }
     if let Ok(r) =
         brepkit_operations::blend_ops::chamfer_v2(topo, solid_id, edge_ids, distance, distance)
         && r.solid != solid_id
@@ -919,6 +926,75 @@ mod fillet_tests {
                 .is_valid(),
             "rounded rim solid must be watertight"
         );
+    }
+
+    // An obround prism whose ends are single half circles, its profile wound
+    // as brepjs winds it: one straight bottom edge alone takes off its prism,
+    // flat at both tangent arcs, and the whole bottom loop its ring, through
+    // the same path the binding takes.
+    #[test]
+    fn try_chamfer_follows_an_obrounds_tangent_edges() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::vec::{Point3, Vec3};
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::{Face, FaceSurface};
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        use std::f64::consts::PI;
+
+        let obround = |topo: &mut Topology| {
+            let mut p = |x, y| topo.add_vertex(Vertex::new(Point3::new(x, y, 0.0), 1e-7));
+            let (a, b, c, d) = (p(0.0, -8.0), p(0.0, 8.0), p(40.0, 8.0), p(40.0, -8.0));
+            let arc = |cx| {
+                let down = Vec3::new(0.0, 0.0, -1.0);
+                EdgeCurve::Circle(Circle3D::new(Point3::new(cx, 0.0, 0.0), down, 8.0).unwrap())
+            };
+            let sides = [
+                (a, b, arc(0.0)),
+                (b, c, EdgeCurve::Line),
+                (c, d, arc(40.0)),
+                (d, a, EdgeCurve::Line),
+            ];
+            let edges = sides
+                .into_iter()
+                .map(|(s, e, curve)| OrientedEdge::new(topo.add_edge(Edge::new(s, e, curve)), true))
+                .collect();
+            let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+            let plane = FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, -1.0),
+                d: 0.0,
+            };
+            let face = topo.add_face(Face::new(wire, vec![], plane));
+            let up = Vec3::new(0.0, 0.0, 1.0);
+            brepkit_operations::extrude::extrude(topo, face, up, 10.0).unwrap()
+        };
+        let plain = (640.0 + 64.0 * PI) * 10.0;
+
+        let mut topo = Topology::new();
+        let solid = obround(&mut topo);
+        let at_z0 = |topo: &Topology, e| {
+            let edge = topo.edge(e).unwrap();
+            [edge.start(), edge.end()]
+                .iter()
+                .all(|&v| topo.vertex(v).unwrap().point().z().abs() < 1e-9)
+        };
+        let loop_edges: Vec<_> = solid_edge_ids(&topo, solid)
+            .into_iter()
+            .filter(|&e| at_z0(&topo, e))
+            .collect();
+        let line = *loop_edges
+            .iter()
+            .find(|&&e| matches!(topo.edge(e).unwrap().curve(), EdgeCurve::Line))
+            .unwrap();
+
+        let one = try_chamfer(&mut topo, solid, &[line], 1.0).unwrap();
+        let volume = brepkit_operations::measure::solid_volume(&topo, one, 0.001).unwrap();
+        assert!((volume - (plain - 20.0)).abs() < 1e-6, "{volume}");
+
+        let ring = try_chamfer(&mut topo, solid, &loop_edges, 1.0).unwrap();
+        let volume = brepkit_operations::measure::solid_volume(&topo, ring, 0.001).unwrap();
+        let removed = 40.0 + PI * (8.0 - 1.0 / 3.0);
+        assert!((volume - (plain - removed)).abs() < 1e-6, "{volume}");
     }
 
     // An L bracket whose inside edge is filleted at 5, then two outer corner

@@ -271,6 +271,26 @@ impl BrepKernel {
         Ok(iges_str.into_bytes())
     }
 
+    /// Export several solids to one IGES document, each of its faces a trimmed
+    /// surface that refers to its other entities by number, so documents written
+    /// one solid at a time cannot simply be joined. A handle given twice is
+    /// written once.
+    ///
+    /// Returns the IGES file as a UTF-8 encoded byte vector.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a solid handle is invalid or export fails.
+    #[wasm_bindgen(js_name = "exportIgesSolids")]
+    pub fn export_iges_solids(&self, solids: Vec<u32>) -> Result<Vec<u8>, JsError> {
+        let solid_ids = solids
+            .into_iter()
+            .map(|solid| self.resolve_solid(solid))
+            .collect::<Result<Vec<_>, _>>()?;
+        let iges_str = brepkit_io::iges::writer::write_iges(&self.topo, &solid_ids)?;
+        Ok(iges_str.into_bytes())
+    }
+
     /// Import an IGES file and return solid handles.
     ///
     /// # Errors
