@@ -1,0 +1,22 @@
+crates/operations/tests/whole_torus_in_a_larger_solid.rs
+  s_649261a24df31b::t_c80623116ba16b 1-121
+  s_649261a24df31b::t_a141e00c14cb50 122-125
+crates/algo/src/classifier/ray_cast.rs
+  s_649261a24df31b::t_c80623116ba16b 1450-1455
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "13d7bb07f069933fadd5606f9fb283033a7aa654",
+  "prompts": {},
+  "sessions": {
+    "s_649261a24df31b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d8bbbba4-0431-4f6a-a622-e632a6659779",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
