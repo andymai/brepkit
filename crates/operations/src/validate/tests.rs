@@ -656,6 +656,24 @@ fn a_nested_piece_reads_nested_however_few_points_clear_the_other() {
     assert!(nested(&mut topo, small, large), "a rod between the caps");
 
     let mut topo = Topology::new();
+    let tall = crate::primitives::make_box(&mut topo, 2.0, 2.0, 10.0).unwrap();
+    let place = Mat4::translation(4.0, 4.0, 0.0);
+    crate::transform::transform_solid(&mut topo, tall, &place).unwrap();
+    let block = crate::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+    assert!(nested(&mut topo, tall, block), "a post from floor to roof");
+
+    // A ring's lone vertex sends its first ray through the block's far edge, at
+    // (2, 2.5, 1.5): the other two rays still read it.
+    let mut topo = Topology::new();
+    let ring = crate::primitives::make_torus(&mut topo, 0.6, 0.2, 16).unwrap();
+    let place = Mat4::translation(0.2, 1.0, 1.0);
+    crate::transform::transform_solid(&mut topo, ring, &place).unwrap();
+    let block = crate::primitives::make_box(&mut topo, 4.0, 4.5, 5.0).unwrap();
+    let place = Mat4::translation(-2.0, -2.0, -2.0);
+    crate::transform::transform_solid(&mut topo, block, &place).unwrap();
+    assert!(nested(&mut topo, ring, block), "a ring, one ray on an edge");
+
+    let mut topo = Topology::new();
     let small = crate::primitives::make_cylinder(&mut topo, 1.0, 2.0).unwrap();
     let large = crate::primitives::make_cylinder(&mut topo, 2.0, 2.0).unwrap();
     let apart = Mat4::translation(9.0, 0.0, 0.0);

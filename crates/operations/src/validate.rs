@@ -300,16 +300,22 @@ fn piece_issues(
             ),
         };
         let read = |corner: brepkit_math::vec::Point3| -> Option<bool> {
-            let mut odd = 0;
+            let (mut odd, mut clean) = (0, 0);
             for &ray in &rays {
-                let (along, _) = brepkit_algo::classifier::ray_parity_cached(g, corner, ray);
-                let (against, _) = brepkit_algo::classifier::ray_parity_cached(g, corner, -ray);
+                let (along, glanced) = brepkit_algo::classifier::ray_parity_cached(g, corner, ray);
+                let (against, glanced_back) =
+                    brepkit_algo::classifier::ray_parity_cached(g, corner, -ray);
+                // A ray through a far edge says nothing about this point.
+                if glanced || glanced_back {
+                    continue;
+                }
                 if along != against {
                     return None;
                 }
+                clean += 1;
                 odd += usize::from(along);
             }
-            Some(odd >= 2)
+            (clean >= 2 && 2 * odd != clean).then_some(2 * odd > clean)
         };
         let mut within = corners[&a].iter().find_map(|&c| read(c));
         if within.is_none() {
