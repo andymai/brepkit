@@ -1,0 +1,21 @@
+crates/operations/src/revolve.rs
+  s_649261a24df31b::t_f3d1fb67294364 408-409,413
+crates/operations/tests/revolve_bands.rs
+  s_649261a24df31b::t_1448f973cf43aa 634-658
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6b728febea8d5b7aa28f9843019be94254d07ae8",
+  "prompts": {},
+  "sessions": {
+    "s_649261a24df31b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d8bbbba4-0431-4f6a-a622-e632a6659779",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
