@@ -1053,25 +1053,24 @@ fn spline_chains_and_knots_keep_their_continuity() {
 }
 
 /// A cap of a sphere above a circle: one closed edge, and curvature worth
-/// matching. The wire keeps the face on its left about the outward normal.
-fn sphere_cap(topo: &mut Topology, center: Point3, at_z: f64, axis_up: bool) -> Sheet {
+/// matching. A wire winding round a surface bounds nothing in `(u, v)`, so it
+/// goes by the kernel's rule that it keeps its face on its left about the
+/// outward normal, and a mirrored one has to be walked the other way to do so.
+fn sphere_cap(topo: &mut Topology, pose: Pose, center: Point3, at_z: f64, up: bool) -> Sheet {
     let radius: f64 = 5.0;
-    let sign = if axis_up { 1.0 } else { -1.0 };
+    let sign = if up { 1.0 } else { -1.0 };
     let ring = (radius * radius - at_z * at_z).sqrt();
     let level = center + Vec3::new(0.0, 0.0, sign * at_z);
-    let mut b = Builder {
-        topo,
-        pose: Pose::upright(),
-    };
+    let mut b = Builder { topo, pose };
     let start = b.vertex(level + Vec3::new(ring, 0.0, 0.0));
     let edge = b.arc(level, Vec3::new(0.0, 0.0, sign), ring, start, start);
     let wire = b
         .topo
-        .add_wire(Wire::new(vec![OrientedEdge::new(edge, true)], true).unwrap());
+        .add_wire(Wire::new(vec![OrientedEdge::new(edge, !pose.flips())], true).unwrap());
     let surface = brepkit_math::surfaces::SphericalSurface::with_axis(
-        center,
+        pose.point(center),
         radius,
-        Vec3::new(0.0, 0.0, 1.0),
+        pose.vector(Vec3::new(0.0, 0.0, 1.0)),
     )
     .unwrap();
     let face = b
@@ -1080,36 +1079,164 @@ fn sphere_cap(topo: &mut Topology, center: Point3, at_z: f64, axis_up: bool) -> 
     Sheet {
         face,
         chain: vec![edge],
-        inside: center + Vec3::new(0.0, 0.0, sign * radius),
+        inside: pose.point(center + Vec3::new(0.0, 0.0, sign * radius)),
         boundary: vec![edge],
     }
 }
 
 /// Closed rims with real curvature across them: two caps of spheres face to
-/// face, whose wires wind round the surface and bound nothing in `(u, v)`.
+/// face.
 #[test]
 fn closed_chains_keep_curvature_on_a_sphere() {
-    for continuity in [BlendContinuity::G1, BlendContinuity::G2] {
-        let mut topo = Topology::new();
-        let a = sphere_cap(&mut topo, Point3::new(0.0, 0.0, 0.0), 4.0, false);
-        let b = sphere_cap(&mut topo, Point3::new(0.0, 0.0, 12.0), 4.0, true);
-        let face = blend_surface(
-            &mut topo,
-            &a.chain,
-            a.face,
-            &b.chain,
-            b.face,
-            &BlendSurfaceOptions::new(continuity),
+    for (pose_name, pose) in POSES {
+        for continuity in [BlendContinuity::G1, BlendContinuity::G2] {
+            let mut topo = Topology::new();
+            let a = sphere_cap(&mut topo, pose(), Point3::new(0.0, 0.0, 0.0), 4.0, false);
+            let b = sphere_cap(&mut topo, pose(), Point3::new(0.0, 0.0, 12.0), 4.0, true);
+            let face = blend_surface(
+                &mut topo,
+                &a.chain,
+                a.face,
+                &b.chain,
+                b.face,
+                &BlendSurfaceOptions::new(continuity),
+            )
+            .unwrap_or_else(|e| panic!("{pose_name}: {e}"));
+            let result = nurbs_of(&topo, face);
+            let (seam_a, seam_b) = both_seams(&topo, &result, &a, &b);
+            println!("sphere caps {pose_name} {continuity:?}: {seam_a:?}");
+            assert_seams("sphere caps", continuity, &[seam_a, seam_b]);
+            assert!(leaves_the_face(&result, 0.0, a.inside), "{pose_name}");
+            assert!(leaves_the_face(&result, 1.0, b.inside), "{pose_name}");
+            assert!(seam_a.curvature > 0.1, "{seam_a:?}");
+            for i in 0..=20 {
+                let v = f64::from(i) / 20.0;
+                let gap = (result.evaluate(0.0, v) - result.evaluate(1.0, v)).length();
+                assert!(gap < 1e-12, "{pose_name}: seam open by {gap}");
+            }
+        }
+    }
+}
+
+/// A whole wall of a cylinder as a sheet, in a pose: a rim and a seam, and a
+/// bridge from its top rim to the bottom rim of another, seams apart.
+#[test]
+fn closed_chains_on_whole_walls_hold_in_every_pose() {
+    let wall = |topo: &mut Topology, pose: Pose, base: f64, turn: f64| -> Sheet {
+        let mut b = Builder { topo, pose };
+        let up = Vec3::new(0.0, 0.0, 1.0);
+        let at = |z: f64| Point3::new(3.0 * turn.cos(), 3.0 * turn.sin(), z);
+        let (low, high) = (b.vertex(at(base)), b.vertex(at(base + 4.0)));
+        let bottom = b.arc(Point3::new(0.0, 0.0, base), up, 3.0, low, low);
+        let top = b.arc(Point3::new(0.0, 0.0, base + 4.0), up, 3.0, high, high);
+        let seam = b.line(low, high);
+        let wire = b.topo.add_wire(
+            Wire::new(
+                vec![
+                    OrientedEdge::new(bottom, true),
+                    OrientedEdge::new(seam, true),
+                    OrientedEdge::new(top, false),
+                    OrientedEdge::new(seam, false),
+                ],
+                true,
+            )
+            .unwrap(),
+        );
+        let surface = brepkit_math::surfaces::CylindricalSurface::new(
+            pose.point(Point3::new(0.0, 0.0, base)),
+            pose.vector(up),
+            3.0,
         )
         .unwrap();
-        let result = nurbs_of(&topo, face);
-        let (seam_a, seam_b) = both_seams(&topo, &result, &a, &b);
-        println!("sphere caps {continuity:?}: {seam_a:?} {seam_b:?}");
-        assert_seams("sphere caps", continuity, &[seam_a, seam_b]);
-        assert!(leaves_the_face(&result, 0.0, a.inside));
-        assert!(leaves_the_face(&result, 1.0, b.inside));
-        assert!(seam_a.curvature > 0.1, "{seam_a:?}");
+        let face = b
+            .topo
+            .add_face(Face::new(wire, Vec::new(), FaceSurface::Cylinder(surface)));
+        Sheet {
+            face,
+            chain: vec![top, bottom],
+            inside: pose.point(Point3::new(3.0, 0.0, base + 2.0)),
+            boundary: vec![bottom, seam, top],
+        }
+    };
+    for (pose_name, pose) in POSES {
+        for continuity in [BlendContinuity::G1, BlendContinuity::G2] {
+            let mut topo = Topology::new();
+            let mut a = wall(&mut topo, pose(), 0.0, 0.0);
+            let mut b = wall(&mut topo, pose(), 7.0, 1.3);
+            a.chain.truncate(1);
+            b.chain.remove(0);
+            let face = blend_surface(
+                &mut topo,
+                &a.chain,
+                a.face,
+                &b.chain,
+                b.face,
+                &BlendSurfaceOptions::new(continuity),
+            )
+            .unwrap_or_else(|e| panic!("{pose_name}: {e}"));
+            assert_wire_sound(&topo, face);
+            let result = nurbs_of(&topo, face);
+            let (seam_a, seam_b) = both_seams(&topo, &result, &a, &b);
+            assert_seams(pose_name, continuity, &[seam_a, seam_b]);
+            assert!(leaves_the_face(&result, 0.0, a.inside), "{pose_name}");
+            assert!(leaves_the_face(&result, 1.0, b.inside), "{pose_name}");
+            let wire = topo.wire(topo.face(face).unwrap().outer_wire()).unwrap();
+            assert_eq!(wire.edges().len(), 4, "{pose_name}");
+        }
     }
+}
+
+/// A chain that turns straight back has no direction off its face to agree on
+/// at the turn.
+#[test]
+fn a_chain_doubling_back_is_refused() {
+    let mut topo = Topology::new();
+    let other = sheet(&mut topo, "plane", across_pose("plane", Pose::upright()));
+    let mut b = Builder {
+        topo: &mut topo,
+        pose: Pose::upright(),
+    };
+    let p = |x: f64, y: f64| Point3::new(x, y, 0.0);
+    let corners = [
+        p(0.0, 0.0),
+        p(0.0, 10.0),
+        p(-0.1, 0.0),
+        p(-5.0, 0.0),
+        p(-5.0, 10.0),
+    ];
+    let v: Vec<_> = corners.iter().map(|&c| b.vertex(c)).collect();
+    let out = b.line(v[0], v[1]);
+    let back = b.line(v[1], v[2]);
+    let e2 = b.line(v[2], v[3]);
+    let e3 = b.line(v[3], v[4]);
+    let e4 = b.line(v[4], v[0]);
+    let wire = b.topo.add_wire(
+        Wire::new(
+            [out, back, e2, e3, e4]
+                .iter()
+                .map(|&e| OrientedEdge::new(e, true))
+                .collect(),
+            true,
+        )
+        .unwrap(),
+    );
+    let face = b.topo.add_face(Face::new(
+        wire,
+        Vec::new(),
+        FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: 0.0,
+        },
+    ));
+    let reason = refused(blend_surface(
+        &mut topo,
+        &[out, back],
+        face,
+        &other.chain,
+        other.face,
+        &BlendSurfaceOptions::new(BlendContinuity::G1),
+    ));
+    assert!(reason.contains("doubles back"), "{reason}");
 }
 
 /// A sheet and a solid: the top of a box, along one edge, against a spline

@@ -304,6 +304,7 @@ fn match_onto(
             None => knots_s.push((*b, q_s)),
         }
     }
+    breaks_s.dedup();
     knots_s.sort_by(|a, b| a.0.total_cmp(&b.0));
 
     let mut ramps = Ramps::measure(&breaks_s, bottom.closed, tolerance, |_, lo, hi, s| {
