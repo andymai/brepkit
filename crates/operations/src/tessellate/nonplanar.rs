@@ -920,8 +920,23 @@ pub(super) fn tessellate_torus_two_rim_band(
         let (ua, va) = project(merged.positions[a as usize]);
         let (ub, vb) = project(merged.positions[b as usize]);
         let (uc, vc) = project(merged.positions[c as usize]);
+        // A horn torus's pinch lies on the axis, where `u` means nothing: a
+        // corner there reads the `u` of the triangle's other corners.
+        let on_axis = |i: u32| {
+            let from_center = merged.positions[i as usize] - torus.center();
+            (from_center - torus.z_axis() * from_center.dot(torus.z_axis())).length() <= 1e-9
+        };
         let (bu, bv) = (wrap(ub - ua), wrap(vb - va));
         let (cu, cv) = (wrap(uc - ua), wrap(vc - va));
+        let (bu, cu) = if on_axis(a) {
+            (0.0, wrap(uc - ub))
+        } else if on_axis(b) {
+            (0.0, cu)
+        } else if on_axis(c) {
+            (bu, 0.0)
+        } else {
+            (bu, cu)
+        };
         let area = bu.mul_add(cv, -(bv * cu));
         if area.abs() < 1e-18 {
             return;
@@ -4028,8 +4043,13 @@ fn whole_ring_rectangle(
             })
             .unwrap_or(0.0)
     };
-    let (u0, v0) = (clear_of(&spans.0), clear_of(&spans.1));
     let (major, minor) = (torus.major_radius(), torus.minor_radius());
+    // A horn torus's inner equator is one point, the pinch: seamed there, the
+    // rectangle's sides would close on it and bound nothing.
+    if major - minor <= brepkit_math::tolerance::Tolerance::new().linear {
+        spans.1.push((std::f64::consts::PI, 0.0));
+    }
+    let (u0, v0) = (clear_of(&spans.0), clear_of(&spans.1));
     let nu =
         segments_for_chord_deviation_a(major + minor, TAU, deflection, angular_tol, circle_floor)
             .max(8);
