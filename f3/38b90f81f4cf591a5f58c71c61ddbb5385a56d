@@ -1,0 +1,22 @@
+crates/algo/src/pave_filler/mod.rs
+  s_649261a24df31b::t_368da1b7ec4ee0 259-262,264-270,272-273,275-276,278-292,294-315,317-332,368-372
+  s_649261a24df31b::t_041d2c97b5dd8d 126,257-258,263,271,274,277,293,316,333-367,482
+crates/operations/tests/flat_cut_across_a_half_ellipse.rs
+  s_649261a24df31b::t_368da1b7ec4ee0 1-156
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f338b90f81f4cf591a5f58c71c61ddbb5385a56d",
+  "prompts": {},
+  "sessions": {
+    "s_649261a24df31b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d8bbbba4-0431-4f6a-a622-e632a6659779",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
