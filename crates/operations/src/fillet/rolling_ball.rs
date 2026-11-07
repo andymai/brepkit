@@ -334,6 +334,22 @@ pub fn fillet_rolling_ball(
         }
     }
 
+    // A closed edge (a rim with one vertex at both ends) has no corners to
+    // build this engine's polygonal strips between; refuse it before any
+    // allocation, so the dispatcher falls through to the walking engine.
+    // (The degenerate-face guard at the end caught these only while the
+    // walker's cross-sections failed on a closed edge.)
+    for &edge_id in &filtered_edges {
+        let edge = topo.edge(edge_id)?;
+        if edge.start() == edge.end() {
+            return Err(crate::OperationsError::InvalidInput {
+                reason: "a closed edge would leave a degenerate face: \
+                         closed circular edges are not supported by the rolling-ball engine"
+                    .into(),
+            });
+        }
+    }
+
     // Phase 2d: Detect adjacent fillet overlap on planar faces.
     // When two target edges share a vertex on a common planar face, the rolling
     // ball on each edge creates a contact setback along the other edge from that
