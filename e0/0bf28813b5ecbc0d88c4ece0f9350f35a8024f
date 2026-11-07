@@ -1,0 +1,23 @@
+crates/operations/tests/torus_cut_by_a_tilted_plane.rs
+  s_649261a24df31b::t_1f3256cefabaff 16,45-52,58-59,64-67,69,110-120
+  s_649261a24df31b::t_9e45fe8437d720 53-57,60-63,68,70-72,121
+crates/algo/src/builder/face_splitter/special_cases.rs
+  s_649261a24df31b::t_9e45fe8437d720 2837-2876,2955,3009-3024,3026,3028,3039-3040,3045-3046
+  s_649261a24df31b::t_31920b944474a1 2956,3025
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e00bf28813b5ecbc0d88c4ece0f9350f35a8024f",
+  "prompts": {},
+  "sessions": {
+    "s_649261a24df31b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d8bbbba4-0431-4f6a-a622-e632a6659779",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
