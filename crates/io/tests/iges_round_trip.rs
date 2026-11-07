@@ -946,6 +946,22 @@ fn a_closed_curves_span_is_read_safely() {
         .len()
     };
     assert_eq!(read(2.0, 2.0), 0);
+    // A parameter range this small is still a whole unit square.
+    let entities = vec![
+        (108, "108,0.,0.,1.,0.,0,0.,0.,0.;".to_string()),
+        (
+            126,
+            "126,4,1,0,0,0,0,0.,0.,1E-10,2E-10,3E-10,4E-10,4E-10,1.,1.,1.,1.,1.,\
+             0.,0.,0.,1.,0.,0.,1.,1.,0.,0.,1.,0.,0.,0.,0.,0.,4E-10,0.,0.,1.;"
+                .to_string(),
+        ),
+        (144, "144,1,1,0,3;".to_string()),
+    ];
+    let mut topo = Topology::new();
+    assert_eq!(
+        read_iges(&iges_file(&entities), &mut topo).unwrap().len(),
+        1
+    );
     assert_eq!(read(-1e-7, 4.000_000_1), 1);
     assert_eq!(read(4.000_000_1, -1e-7), 1);
 }

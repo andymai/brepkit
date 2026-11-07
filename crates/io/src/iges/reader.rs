@@ -269,7 +269,7 @@ impl Stretch {
             from.min(to).clamp(start, end),
             from.max(to).clamp(start, end),
         );
-        let margin = 1e-9 * (end - start).abs().max(1.0);
+        let margin = 1e-9 * (end - start).abs();
         if high - low <= margin {
             return Err(IoError::ParseError {
                 reason: "an IGES closed curve runs over no span".to_string(),
