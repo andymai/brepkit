@@ -2161,3 +2161,129 @@ fn a_straight_spline_along_a_line_section_stays_whole() {
     .unwrap();
     assert_eq!(arena.curves.len(), 2);
 }
+
+/// A straight spline running along its line at an uneven speed is the same path,
+/// though its parameter's middle lies two thirds of the way along.
+#[test]
+fn a_weighted_straight_spline_along_a_line_stays_whole() {
+    let mut topo = Topology::new();
+    let mut arena = GfaArena::new();
+    let (start, end) = (Point3::new(0.0, 5.0, 0.0), Point3::new(0.0, -5.0, 0.0));
+    let spline = brepkit_math::nurbs::curve::NurbsCurve::new(
+        1,
+        vec![0.0, 0.0, 1.0, 1.0],
+        vec![start, end],
+        vec![1.0, 2.0],
+    )
+    .unwrap();
+    recorded_section(
+        &mut topo,
+        &mut arena,
+        EdgeCurve::NurbsCurve(spline),
+        (start, end),
+        (0.0, 1.0),
+    );
+    recorded_section(
+        &mut topo,
+        &mut arena,
+        EdgeCurve::Line,
+        (start, end),
+        (-5.0, 5.0),
+    );
+    super::split_co_endpoint_sections(
+        &mut topo,
+        brepkit_math::tolerance::Tolerance::new(),
+        &mut arena,
+    )
+    .unwrap();
+    assert_eq!(arena.curves.len(), 2);
+}
+
+/// The weld band stays the assembler's at a tighter tolerance.
+#[test]
+fn a_tight_tolerance_still_matches_ends_the_weld_will_join() {
+    let mut topo = Topology::new();
+    let mut arena = GfaArena::new();
+    let (arc, start, end) = half_ellipse_arc();
+    recorded_section(
+        &mut topo,
+        &mut arena,
+        arc,
+        (start, end),
+        (0.0, std::f64::consts::PI),
+    );
+    let apart = Vec3::new(4e-7, 0.0, 0.0);
+    recorded_section(
+        &mut topo,
+        &mut arena,
+        EdgeCurve::Line,
+        (start + apart, end + apart),
+        (-5.0, 5.0),
+    );
+    super::split_co_endpoint_sections(
+        &mut topo,
+        brepkit_math::tolerance::Tolerance::tight(),
+        &mut arena,
+    )
+    .unwrap();
+    assert_eq!(arena.curves.len(), 3);
+}
+
+/// An arc and its own NURBS copy run at different speeds along one path, and
+/// neither divides.
+#[test]
+fn an_arc_and_its_spline_copy_stay_whole() {
+    let mut topo = Topology::new();
+    let mut arena = GfaArena::new();
+    let ellipse = brepkit_math::curves::Ellipse3D::new(
+        Point3::new(0.0, 0.0, 0.0),
+        Vec3::new(0.0, 0.0, 1.0),
+        5.0,
+        3.0,
+    )
+    .unwrap();
+    let (start, end) = (
+        ellipse.evaluate(0.0),
+        ellipse.evaluate(std::f64::consts::PI),
+    );
+    let copy = brepkit_math::nurbs::curve::NurbsCurve::new(
+        2,
+        vec![0.0, 0.0, 0.0, 0.5, 0.5, 1.0, 1.0, 1.0],
+        vec![
+            start,
+            start + Vec3::new(-3.0, 0.0, 0.0),
+            ellipse.evaluate(std::f64::consts::FRAC_PI_2),
+            end + Vec3::new(-3.0, 0.0, 0.0),
+            end,
+        ],
+        vec![
+            1.0,
+            std::f64::consts::FRAC_1_SQRT_2,
+            1.0,
+            std::f64::consts::FRAC_1_SQRT_2,
+            1.0,
+        ],
+    )
+    .unwrap();
+    recorded_section(
+        &mut topo,
+        &mut arena,
+        EdgeCurve::Ellipse(ellipse),
+        (start, end),
+        (0.0, std::f64::consts::PI),
+    );
+    recorded_section(
+        &mut topo,
+        &mut arena,
+        EdgeCurve::NurbsCurve(copy),
+        (start, end),
+        (0.0, 1.0),
+    );
+    super::split_co_endpoint_sections(
+        &mut topo,
+        brepkit_math::tolerance::Tolerance::new(),
+        &mut arena,
+    )
+    .unwrap();
+    assert_eq!(arena.curves.len(), 2);
+}

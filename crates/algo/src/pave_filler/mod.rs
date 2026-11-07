@@ -260,11 +260,14 @@ fn pave_co_endpoint_curves(
 /// assembler keys duplicate edges on their endpoint pair and would weld the two,
 /// leaving the wall bounded by the chord. A circle's arc has that split later,
 /// in the face splitter, which reads its middle exactly.
+#[allow(clippy::too_many_lines)]
 fn split_co_endpoint_sections(
     topo: &mut Topology,
     tol: Tolerance,
     arena: &mut GfaArena,
 ) -> Result<(), AlgoError> {
+    use std::collections::HashMap;
+
     use brepkit_math::vec::Point3;
     use brepkit_topology::edge::{Edge, EdgeCurve};
     use brepkit_topology::vertex::Vertex;
@@ -277,12 +280,24 @@ fn split_co_endpoint_sections(
         at: f64,
         start: Point3,
         end: Point3,
-        middle: Point3,
+        path: Vec<Point3>,
     }
 
-    // Matched by distance, the way the assembler later welds ends: a grid would
-    // part two ends either side of a cell's boundary.
-    let near = tol.linear * 100.0;
+    /// Ends match by distance within the band the assembler later welds them at,
+    /// whatever the boolean's own tolerance: a coarser reading here would leave
+    /// the pair for the weld to join.
+    const WELD: f64 = 1e-5;
+    /// Chords a section's path is read through.
+    const PATH_SAMPLES: u32 = 32;
+    /// How far off another's path a section must run to be a different path,
+    /// at the least: past a fit's error.
+    const PATH_APART: f64 = 1e-3;
+
+    let point_to_chord = |p: Point3, a: Point3, b: Point3| {
+        let ab = b - a;
+        let along = (p - a).dot(ab) / ab.dot(ab).max(f64::MIN_POSITIVE);
+        (p - (a + ab * along.clamp(0.0, 1.0))).length()
+    };
     let mut sections: Vec<Section> = Vec::new();
     for (index, curve) in arena.curves.iter().enumerate() {
         let &[pb_id] = curve.pave_blocks.as_slice() else {
@@ -294,17 +309,25 @@ fn split_co_endpoint_sections(
         let edge = topo.edge(pb.original_edge)?;
         let start = topo.vertex(arena.resolve_vertex(pb.start.vertex))?.point();
         let end = topo.vertex(arena.resolve_vertex(pb.end.vertex))?.point();
-        if (start - end).length() <= near {
+        if (start - end).length() <= WELD {
             continue;
         }
         let at = 0.5 * (pb.start.parameter + pb.end.parameter);
         // A line section's parameter is a distance along its raw line, not the
-        // fraction its edge reads.
-        let middle = if matches!(edge.curve(), EdgeCurve::Line) {
-            start + (end - start) * 0.5
-        } else {
-            edge.curve().evaluate_with_endpoints(at, start, end)
-        };
+        // fraction its edge reads, so a path is sampled in fractions of its span.
+        let is_line = matches!(edge.curve(), EdgeCurve::Line);
+        let (t0, t1) = (pb.start.parameter, pb.end.parameter);
+        let path: Vec<Point3> = (0..=PATH_SAMPLES)
+            .map(|k| {
+                let f = f64::from(k) / f64::from(PATH_SAMPLES);
+                if is_line {
+                    start + (end - start) * f
+                } else {
+                    edge.curve()
+                        .evaluate_with_endpoints((t1 - t0).mul_add(f, t0), start, end)
+                }
+            })
+            .collect();
         sections.push(Section {
             index,
             curved: matches!(
@@ -314,33 +337,75 @@ fn split_co_endpoint_sections(
             at,
             start,
             end,
-            middle,
+            path,
         });
     }
-    sections.sort_by(|p, q| (p.start.x() + p.end.x()).total_cmp(&(q.start.x() + q.end.x())));
-    let sum_x = |section: &Section| section.start.x() + section.end.x();
+    // Candidates by their chord's middle: sections sharing ends share it to
+    // within the band, and a neighbouring cell catches it across a cell's edge.
+    let cell_of = |p: Point3| {
+        #[allow(clippy::cast_possible_truncation)]
+        (
+            (p.x() / (2.0 * WELD)).floor() as i64,
+            (p.y() / (2.0 * WELD)).floor() as i64,
+            (p.z() / (2.0 * WELD)).floor() as i64,
+        )
+    };
+    let middle_of = |s: &Section| s.start + (s.end - s.start) * 0.5;
+    let mut cells: HashMap<(i64, i64, i64), Vec<usize>> = HashMap::new();
+    for (i, section) in sections.iter().enumerate() {
+        cells
+            .entry(cell_of(middle_of(section)))
+            .or_default()
+            .push(i);
+    }
     let same_ends = |p: &Section, q: &Section| {
-        let close = |a: Point3, b: Point3| (a - b).length() <= near;
+        let close = |a: Point3, b: Point3| (a - b).length() <= WELD;
         (close(p.start, q.start) && close(p.end, q.end))
             || (close(p.start, q.end) && close(p.end, q.start))
+    };
+    // Off the other's path anywhere: read as paths, since two copies of one path
+    // need not run at the same speed, nor their samples land alike. A sample can
+    // lie off the other's chords by their sag, bounded here by the sag of chords
+    // twice as long.
+    let leaves = |p: &Section, q: &Section| {
+        let sag = q
+            .path
+            .windows(3)
+            .step_by(2)
+            .map(|w| point_to_chord(w[1], w[0], w[2]))
+            .fold(0.0, f64::max);
+        p.path.iter().any(|&sample| {
+            q.path
+                .windows(2)
+                .map(|w| point_to_chord(sample, w[0], w[1]))
+                .fold(f64::INFINITY, f64::min)
+                > PATH_APART.max(sag)
+        })
     };
     let mut to_split: Vec<(usize, f64, Point3)> = Vec::new();
     for (i, section) in sections.iter().enumerate() {
         if !section.curved {
             continue;
         }
-        let before = sections[..i]
-            .iter()
-            .rev()
-            .take_while(|other| sum_x(section) - sum_x(other) <= 2.0 * near);
-        let after = sections[i + 1..]
-            .iter()
-            .take_while(|other| sum_x(other) - sum_x(section) <= 2.0 * near);
-        let shares_its_ends = before.chain(after).any(|other| {
-            same_ends(section, other) && (section.middle - other.middle).length() > near
+        let (cx, cy, cz) = cell_of(middle_of(section));
+        let shares_its_ends = (-1..=1).any(|dx| {
+            (-1..=1).any(|dy| {
+                (-1..=1).any(|dz| {
+                    cells
+                        .get(&(cx + dx, cy + dy, cz + dz))
+                        .is_some_and(|candidates| {
+                            candidates.iter().any(|&j| {
+                                j != i
+                                    && same_ends(section, &sections[j])
+                                    && leaves(section, &sections[j])
+                            })
+                        })
+                })
+            })
         });
         if shares_its_ends {
-            to_split.push((section.index, section.at, section.middle));
+            let middle = section.path[section.path.len() / 2];
+            to_split.push((section.index, section.at, middle));
         }
     }
     for (index, at, at_point) in to_split {
