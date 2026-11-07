@@ -418,8 +418,10 @@ fn read_wall_edge(
     wall: &DraftedWall,
     (pull, neutral_d): (Vec3, f64),
 ) -> Option<WallEdge> {
-    const SAMPLES: u32 = 16;
-    const FIT: f64 = 1e-6;
+    const SAMPLES: u32 = 64;
+    // A fit's own error, widened far from the origin as the point checks are.
+    let far = a.x().abs().max(a.y().abs()).max(a.z().abs());
+    let fit = 1e-6 + 64.0 * f64::EPSILON * far;
     let (t0, t1) = curve.domain_with_endpoints(a, b);
     let points: Vec<Point3> = (0..=SAMPLES)
         .map(|k| {
@@ -428,27 +430,24 @@ fn read_wall_edge(
         })
         .collect();
     let height = |p: Point3| dot_normal_point(pull, p) - neutral_d;
-    if let Ok(along) = (b - a).normalize() {
-        let on_chord = |p: &Point3| (*p - a).cross(along).length() <= FIT;
-        if points.iter().all(on_chord) {
-            return Some(WallEdge::Ruling);
-        }
-    }
     let foot = |p: Point3| wall.axis_point + pull * height(p);
     let radius = (a - foot(a)).length();
     let on_rim = |p: &Point3| {
-        (height(*p) - height(a)).abs() <= FIT && ((*p - foot(*p)).length() - radius).abs() <= FIT
+        (height(*p) - height(a)).abs() <= fit && ((*p - foot(*p)).length() - radius).abs() <= fit
     };
-    if !points.iter().all(on_rim) {
-        return None;
+    if points.iter().all(on_rim) {
+        // Which way the curve runs round the axis, by its first sample's turn.
+        let swing = (points[0] - foot(points[0]))
+            .cross(points[1] - foot(points[1]))
+            .dot(pull);
+        return Some(WallEdge::Rim {
+            turn: if swing < 0.0 { -1.0 } else { 1.0 },
+        });
     }
-    // Which way the curve runs round the axis, by its first sample's turn.
-    let swing = (points[0] - foot(points[0]))
-        .cross(points[1] - foot(points[1]))
-        .dot(pull);
-    Some(WallEdge::Rim {
-        turn: if swing < 0.0 { -1.0 } else { 1.0 },
-    })
+    // A ruling runs along the pull, its points all on one straight line.
+    let along = (b - a).normalize().ok()?;
+    let on_chord = |p: &Point3| (*p - a).cross(along).length() <= fit;
+    (along.cross(pull).length() <= 1e-6 && points.iter().all(on_chord)).then_some(WallEdge::Ruling)
 }
 
 /// Where a vertex of a drafted wall goes: along the wall's ruling through it to
@@ -658,6 +657,44 @@ mod tests {
         let bottom = find_faces(&topo, result, Vec3::new(0.0, 0.0, -1.0));
         assert_eq!(top.len(), 1, "should still have top face");
         assert_eq!(bottom.len(), 1, "should still have bottom face");
+    }
+
+    /// A short rim stored as a spline stays a rim, however straight it reads,
+    /// a straight spline along the pull is a ruling, and one across the wall
+    /// is neither.
+    #[test]
+    fn a_wall_edge_reads_by_where_it_runs() {
+        use brepkit_geometry::convert::curve_to_nurbs::{circle_to_nurbs, line_to_nurbs};
+
+        let pull = Vec3::new(0.0, 0.0, 1.0);
+        let wall = DraftedWall {
+            axis_point: Point3::new(0.0, 0.0, 0.0),
+            radius: 10.0,
+            slope: 0.1,
+        };
+        let circle = Circle3D::new(Point3::new(0.0, 0.0, 5.0), pull, 10.0).unwrap();
+        let (t0, t1) = (-1e-3, 1e-3);
+        let arc = EdgeCurve::NurbsCurve(circle_to_nurbs(&circle, t0, t1).unwrap());
+        let (a, b) = (circle.evaluate(t0), circle.evaluate(t1));
+        assert!(matches!(
+            read_wall_edge(&arc, a, b, &wall, (pull, 0.0)),
+            Some(WallEdge::Rim { turn }) if turn > 0.0
+        ));
+        assert!(matches!(
+            read_wall_edge(&arc, b, a, &wall, (pull, 0.0)),
+            Some(WallEdge::Rim { turn }) if turn < 0.0
+        ));
+
+        let (low, high) = (Point3::new(10.0, 0.0, 0.0), Point3::new(10.0, 0.0, 5.0));
+        let ruling = EdgeCurve::NurbsCurve(line_to_nurbs(low, high).unwrap());
+        assert!(matches!(
+            read_wall_edge(&ruling, low, high, &wall, (pull, 0.0)),
+            Some(WallEdge::Ruling)
+        ));
+
+        let far = Point3::new(0.0, 10.0, 5.0);
+        let across = EdgeCurve::NurbsCurve(line_to_nurbs(low, far).unwrap());
+        assert!(read_wall_edge(&across, low, far, &wall, (pull, 0.0)).is_none());
     }
 
     fn assert_drafted(topo: &Topology, solid: SolidId, truth: f64, what: &str) {
