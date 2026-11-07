@@ -68,7 +68,7 @@ pub fn perform(
 
 /// Check each vertex against each edge and record VE interferences.
 #[allow(clippy::too_many_lines)]
-fn check_vertex_edge_pairs(
+pub(super) fn check_vertex_edge_pairs(
     topo: &Topology,
     vertices: &[VertexId],
     edges: &[EdgeId],

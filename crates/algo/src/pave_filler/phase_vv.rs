@@ -6,6 +6,7 @@
 use brepkit_math::tolerance::Tolerance;
 use brepkit_topology::Topology;
 use brepkit_topology::solid::SolidId;
+use brepkit_topology::vertex::VertexId;
 
 use crate::ds::{GfaArena, Interference};
 use crate::error::AlgoError;
@@ -40,13 +41,30 @@ pub fn perform(
 
     let verts_a = brepkit_topology::explorer::solid_vertices(topo, solid_a)?;
     let verts_b = brepkit_topology::explorer::solid_vertices(topo, solid_b)?;
+    merge_coincident(topo, &verts_a, &verts_b, tol, arena)
+}
 
-    for &va in &verts_a {
+/// Merge every vertex of `verts_a` with those of `verts_b` it coincides with.
+///
+/// # Errors
+///
+/// Returns [`AlgoError`] if any topology lookup fails.
+pub(super) fn merge_coincident(
+    topo: &Topology,
+    verts_a: &[VertexId],
+    verts_b: &[VertexId],
+    tol: Tolerance,
+    arena: &mut GfaArena,
+) -> Result<(), AlgoError> {
+    for &va in verts_a {
         let vertex_a = topo.vertex(va)?;
         let pos_a = vertex_a.point();
         let tol_a = vertex_a.tolerance();
 
-        for &vb in &verts_b {
+        for &vb in verts_b {
+            if va == vb {
+                continue;
+            }
             let vertex_b = topo.vertex(vb)?;
             let pos_b = vertex_b.point();
             let tol_b = vertex_b.tolerance();

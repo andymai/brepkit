@@ -155,6 +155,18 @@ impl FaceLoops2d {
                 let sp = topo.vertex(e.start())?.point();
                 let ep = topo.vertex(e.end())?.point();
                 let (t0, t1) = e.curve().domain_with_endpoints(sp, ep);
+                // A closed conic's domain starts at its own origin, wherever
+                // its vertex is: walked from there, a rim leaves the loop's
+                // corner and comes back to it at the wrong end of the seam.
+                let (t0, t1) = if e.start() == e.end() {
+                    match e.curve() {
+                        EdgeCurve::Circle(c) => (c.project(sp), c.project(sp) + (t1 - t0)),
+                        EdgeCurve::Ellipse(el) => (el.project(sp), el.project(sp) + (t1 - t0)),
+                        EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => (t0, t1),
+                    }
+                } else {
+                    (t0, t1)
+                };
                 let n = if matches!(e.curve(), EdgeCurve::Line) {
                     2
                 } else {
@@ -205,6 +217,9 @@ impl FaceLoops2d {
                     };
                     out.push(q);
                 }
+            }
+            if matches!(&surface, FaceSurface::Sphere(_)) {
+                close_loop_across_pole(&mut out);
             }
             Ok(out)
         };
@@ -285,6 +300,32 @@ impl FaceLoops2d {
                 .any(|h| h.len() >= 3 && point_in_polygon_2d(q, h))
     }
 
+    /// [`Self::contains`], reading a loop on a sphere that winds once round the
+    /// axis as what it is: the boundary of a cap over a pole, not a polygon, which
+    /// has the wrong side or no area at all. A face lies on the left of each of its
+    /// loops in `(u, v)` unless `reversed`, so a winding loop keeps the cap on that
+    /// side, for a hole as for the outer loop.
+    #[must_use]
+    pub fn contains_over_pole(&self, q: brepkit_math::vec::Point2, reversed: bool) -> bool {
+        use crate::builder::classify_2d::point_in_polygon_2d;
+
+        if !matches!(self.surface, FaceSurface::Sphere(_)) {
+            return self.contains(q);
+        }
+        let in_outer = match winding_cap(&self.outer, reversed) {
+            Some(cap) => cap.holds(q),
+            None => self.outer.len() >= 3 && point_in_polygon_2d(q, &self.outer),
+        };
+        in_outer
+            && self
+                .holes
+                .iter()
+                .all(|hole| match winding_cap(hole, reversed) {
+                    Some(cap) => cap.holds(q),
+                    None => hole.len() < 3 || !point_in_polygon_2d(q, hole),
+                })
+    }
+
     /// Distance from `p` to the face's supporting surface.
     #[must_use]
     pub fn distance_to_surface(&self, p: Point3) -> Option<f64> {
@@ -296,6 +337,87 @@ impl FaceLoops2d {
                 let (u, v) = surface.project_point(p)?;
                 surface.evaluate(u, v).map(|q| (q - p).length())
             }
+        }
+    }
+}
+
+/// A loop winding once round a sphere's axis, closed over the pole on its left.
+struct WindingCap {
+    polygon: Vec<brepkit_math::vec::Point2>,
+    low_u: f64,
+}
+
+impl WindingCap {
+    fn holds(&self, q: brepkit_math::vec::Point2) -> bool {
+        use crate::builder::classify_2d::point_in_polygon_2d;
+        let u = self.low_u + (q.x() - self.low_u).rem_euclid(std::f64::consts::TAU);
+        point_in_polygon_2d(brepkit_math::vec::Point2::new(u, q.y()), &self.polygon)
+    }
+}
+
+fn winding_cap(samples: &[brepkit_math::vec::Point2], reversed: bool) -> Option<WindingCap> {
+    use brepkit_math::vec::Point2;
+    use std::f64::consts::{FRAC_PI_2, PI, TAU};
+
+    let step = |a: Point2, b: Point2| (b.x() - a.x() + PI).rem_euclid(TAU) - PI;
+    let first = *samples.first()?;
+    let mut u = first.x();
+    let mut polygon = Vec::with_capacity(samples.len() + 3);
+    polygon.push(first);
+    for pair in samples.windows(2) {
+        u += step(pair[0], pair[1]);
+        polygon.push(Point2::new(u, pair[1].y()));
+    }
+    u += step(*samples.last()?, first);
+    let turn = u - first.x();
+    if (turn.abs() - TAU).abs() > 1e-6 {
+        return None;
+    }
+    let pole = if (turn > 0.0) == reversed {
+        -FRAC_PI_2
+    } else {
+        FRAC_PI_2
+    };
+    polygon.push(Point2::new(u, first.y()));
+    polygon.push(Point2::new(u, pole));
+    polygon.push(Point2::new(first.x(), pole));
+    Some(WindingCap {
+        polygon,
+        low_u: first.x().min(u),
+    })
+}
+
+/// A sphere's pole has no `u`, so a loop through it jumps half a turn there,
+/// either way, and only its closing says which: a wrong guess leaves the walk a
+/// turn off where it set out, and the polygon covers the far side of the seam.
+fn close_loop_across_pole(samples: &mut [brepkit_math::vec::Point2]) {
+    use brepkit_math::vec::Point2;
+    use std::f64::consts::{FRAC_PI_2, PI, TAU};
+
+    let at_pole = |q: Point2| FRAC_PI_2 - q.y().abs() < 1e-9;
+    let Some(pole) = samples.iter().position(|&q| at_pole(q)) else {
+        return;
+    };
+    for k in 0..samples.len() {
+        if at_pole(samples[k]) {
+            let beside = if k == 0 {
+                samples.get(1)
+            } else {
+                samples.get(k - 1)
+            };
+            if let Some(&beside) = beside {
+                samples[k] = Point2::new(beside.x(), samples[k].y());
+            }
+        }
+    }
+    let (Some(&first), Some(&last)) = (samples.first(), samples.last()) else {
+        return;
+    };
+    let closes_at = last.x() + (first.x() - last.x() + PI).rem_euclid(TAU) - PI;
+    let off = closes_at - first.x();
+    if pole > 0 && off.abs() > PI {
+        for q in &mut samples[pole + 1..] {
+            *q = Point2::new(q.x() - off, q.y());
         }
     }
 }
