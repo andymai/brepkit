@@ -603,7 +603,7 @@ fn an_arc_stopping_short_of_the_axis_merges() {
     assert!(is_watertight(&mesh));
 }
 
-/// A profile all but square to the axis: its caps stand 2e-4 off the flat band
+/// A profile all but square to the axis: its caps rise 4e-4 off the flat band
 /// they meet at an edge, too near for `unify_faces` to tell them apart, and
 /// the bands stay where they are rather than take a cap into their plane.
 #[test]
