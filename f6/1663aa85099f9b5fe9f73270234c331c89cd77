@@ -1,0 +1,24 @@
+crates/operations/tests/chamfer_tangent_chains.rs
+  s_649261a24df31b::t_44a9cd465b63d1 774-776
+  s_649261a24df31b::t_7ad9e0ff040ec4 18,710-773,777-788
+crates/operations/src/chamfer.rs
+  s_649261a24df31b::t_b4c8c60e37d7dc 363-365,389-392,396,400-402
+crates/operations/src/chamfer_chain.rs
+  s_649261a24df31b::t_88084018b68b8c 240-249,778-793
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f61663aa85099f9b5fe9f73270234c331c89cd77",
+  "prompts": {},
+  "sessions": {
+    "s_649261a24df31b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d8bbbba4-0431-4f6a-a622-e632a6659779",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
