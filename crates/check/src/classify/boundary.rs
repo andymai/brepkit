@@ -5,7 +5,7 @@
 //! for analytic surfaces and 3D polygon containment for surfaces with
 //! pole singularities (spheres).
 
-use std::f64::consts::PI;
+use std::f64::consts::{PI, TAU};
 
 use smallvec::SmallVec;
 
@@ -38,9 +38,8 @@ const COINCIDENT_SQ: f64 = 1e-12;
 /// returns the next value adjusted so the step is continuous.
 #[inline]
 fn unwrap_angle(prev: f64, next: f64) -> f64 {
-    let tau = std::f64::consts::TAU;
     let diff = next - prev;
-    prev + diff - tau * ((diff + PI) / tau).floor()
+    prev + diff - TAU * ((diff + PI) / TAU).floor()
 }
 
 /// Build a UV boundary polygon from 3D face boundary vertices,
@@ -77,41 +76,40 @@ fn point_in_uv_boundary(
     uv_boundary: &[(f64, f64)],
     v_periodic: bool,
 ) -> bool {
-    let u_min = uv_boundary
-        .iter()
-        .map(|(u, _)| *u)
-        .fold(f64::INFINITY, f64::min);
-    let u_max = uv_boundary
-        .iter()
-        .map(|(u, _)| *u)
-        .fold(f64::NEG_INFINITY, f64::max);
-    let u_center = (u_min + u_max) * 0.5;
-
-    // Shift hit_u to be closest to the polygon's u center.
-    let hu = unwrap_angle(u_center, hit_u);
-
-    // For doubly-periodic surfaces (torus), also shift hit_v.
-    let hv = if v_periodic {
-        let v_min = uv_boundary
+    let bounds = |pick: fn(&(f64, f64)) -> f64| {
+        uv_boundary
             .iter()
-            .map(|(_, v)| *v)
-            .fold(f64::INFINITY, f64::min);
-        let v_max = uv_boundary
-            .iter()
-            .map(|(_, v)| *v)
-            .fold(f64::NEG_INFINITY, f64::max);
-        let v_center = (v_min + v_max) * 0.5;
-        unwrap_angle(v_center, hit_v)
-    } else {
-        hit_v
+            .map(pick)
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), x| {
+                (lo.min(x), hi.max(x))
+            })
     };
+    let (u_min, u_max) = bounds(|p| p.0);
+    let (v_min, v_max) = bounds(|p| p.1);
 
     let poly: Vec<Point2> = uv_boundary
         .iter()
         .map(|(u, v)| Point2::new(*u, *v))
         .collect();
-    let test = Point2::new(hu, hv);
-    point_in_polygon(test, &poly)
+    // The copies of `hit` the boundary's range reaches. A band whose seam runs
+    // slantwise spans more than a period, with its two ends each a piece of
+    // the same turn, so the copy nearest its centre can miss it while another
+    // lies inside.
+    let copies = |hit: f64, lo: f64, hi: f64| {
+        let nearest = unwrap_angle((lo + hi) * 0.5, hit);
+        let reach = ((hi - lo) * 0.5 / TAU).ceil() as i32;
+        (-reach..=reach)
+            .map(move |k| nearest + f64::from(k) * TAU)
+            .filter(move |x| (lo..=hi).contains(x))
+    };
+    let in_v = |hu: f64| {
+        if v_periodic {
+            copies(hit_v, v_min, v_max).any(|hv| point_in_polygon(Point2::new(hu, hv), &poly))
+        } else {
+            point_in_polygon(Point2::new(hu, hit_v), &poly)
+        }
+    };
+    copies(hit_u, u_min, u_max).any(in_v)
 }
 
 /// Compute the normal of a polygon via Newell's method.

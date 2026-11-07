@@ -13,6 +13,7 @@ mod tests {
     use brepkit_math::mat::Mat4;
     use brepkit_math::vec::{Point3, Vec3};
     use brepkit_operations::boolean::{BooleanOp, boolean, mesh_fallback_count};
+    use brepkit_operations::classify::{PointClassification, classify_point};
     use brepkit_operations::measure::{solid_center_of_mass, solid_volume};
     use brepkit_operations::mirror::mirror;
     use brepkit_operations::primitives::{make_box, make_torus};
@@ -39,6 +40,32 @@ mod tests {
             )
             .unwrap(),
             _ => s,
+        }
+    }
+
+    /// The upright point `depth` in from the tube's own circle at ring angle
+    /// `u` and tube angle `v`, and which side of the plane it lies: negative
+    /// below.
+    fn tube_point(u: f64, v: f64, depth: f64, tilt: f64, lift: f64) -> (Point3, f64) {
+        let radial = 5.0 + depth * v.cos();
+        let p = Point3::new(radial * u.cos(), radial * u.sin(), depth * v.sin());
+        (p, tilt.sin() * p.x() + tilt.cos() * (p.z() - lift))
+    }
+
+    /// An upright point where `posed` puts it.
+    fn model_point(p: Point3, pose: &str) -> Point3 {
+        match pose {
+            "turned" => {
+                let m = Mat4::translation(1.0, -2.0, 0.5)
+                    * Mat4::rotation_x(0.6)
+                    * Mat4::rotation_z(0.4);
+                m.mul_point(p)
+            }
+            "mirrored" => {
+                let normal = Vec3::new(1.0, 0.3, 0.2).normalize().unwrap();
+                p - normal * (2.0 * normal.dot(p - Point3::new(0.3, 0.0, 0.0)))
+            }
+            _ => p,
         }
     }
 
@@ -107,6 +134,27 @@ mod tests {
                     let mesh = tessellate_solid(&topo, result, 0.01).unwrap();
                     assert!(is_watertight(&mesh), "{case}: open or non-manifold mesh");
                     let volume = solid_volume(&topo, result, 0.001).unwrap();
+                    // Round the tube, a point reads as held only on the side
+                    // its op keeps: the band's seam runs slantwise, and the
+                    // classifier has to find it across a whole turn.
+                    for (&u, &v) in [0.3, 1.9, 3.3, 4.1, 5.7]
+                        .iter()
+                        .flat_map(|u| [0.5, 2.0, 3.0, 4.3].iter().map(move |v| (u, v)))
+                    {
+                        let (p, side) = tube_point(u, v, 2.0, tilt, lift);
+                        if side.abs() < 0.1 {
+                            continue;
+                        }
+                        let held = side < 0.0;
+                        let read = classify_point(&topo, result, model_point(p, pose), 0.01, 1e-7)
+                            .unwrap();
+                        let want = if held == (op == BooleanOp::Intersect) {
+                            PointClassification::Inside
+                        } else {
+                            PointClassification::Outside
+                        };
+                        assert_eq!(read, want, "{case}: tube ({u}, {v})");
+                    }
                     // Each op keeps its own side: the kept piece's centre of
                     // mass lies on it.
                     let centre = solid_center_of_mass(&topo, result, 0.01).unwrap();
