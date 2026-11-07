@@ -181,6 +181,7 @@ fn a_box_less_the_turned_ball_matches_the_primitive() {
     let primitive = make_sphere(&mut topo, 15.0, 32).unwrap();
     let plain = boolean(&mut topo, BooleanOp::Cut, block, primitive).unwrap();
 
+    assert_eq!(census(&topo, cut), expected(&[("plane", 6), ("sphere", 1)]));
     assert_eq!(census(&topo, cut), census(&topo, plain));
     let volume = solid_volume(&topo, plain, 0.001).unwrap();
     assert_sound(&topo, cut, volume, 1e-6, "box less the turned ball");
@@ -541,4 +542,92 @@ fn a_profile_off_the_axis_sweeps_its_true_surface() {
         let moment = 8.0 * 13.0 / 3.0;
         assert_sound(&topo, solid, moment * angle, 1e-2, label);
     }
+}
+
+/// A profile's far side square to the axis and its plane missing the axis: the
+/// flat edge sweeps its plane, and only the slanted ones sweep hyperboloids.
+#[test]
+fn a_flat_edge_off_the_axis_sweeps_its_plane() {
+    let mut topo = Topology::new();
+    let face = polygon(
+        &mut topo,
+        &[
+            Point3::new(3.0, 4.0, -1.0),
+            Point3::new(7.0, 4.0, -1.0),
+            Point3::new(7.0, 4.0, 1.0),
+            Point3::new(3.0, 4.0, 1.0),
+        ],
+    );
+    let origin = Point3::new(0.0, 0.0, 0.0);
+    let solid = revolve(&mut topo, face, origin, Vec3::new(0.0, 0.0, 1.0), PI).unwrap();
+    let faces = census(&topo, solid);
+    assert_eq!(faces.get("plane"), Some(&4), "{faces:?}");
+    assert!(validate_solid(&topo, solid).unwrap().is_valid());
+    let mesh = tessellate_solid(&topo, solid, 0.01).unwrap();
+    assert!(is_watertight(&mesh));
+}
+
+/// An arc centred on the axis that stops short of it clears the axis, so its
+/// bands merge like any other: the circle it lies on reaches the axis, it
+/// does not.
+#[test]
+fn an_arc_stopping_short_of_the_axis_merges() {
+    let mut topo = Topology::new();
+    let normal = Vec3::new(0.0, -1.0, 0.0);
+    let center = Point3::new(0.0, 0.0, 0.0);
+    let r: f64 = 2.0;
+    let side = r * r - 1.0;
+    let (low, high) = (
+        at(&mut topo, Point3::new(side.sqrt(), 0.0, -1.0)),
+        at(&mut topo, Point3::new(side.sqrt(), 0.0, 1.0)),
+    );
+    let circle = EdgeCurve::Circle(Circle3D::new(center, normal, r).unwrap());
+    let arc = topo.add_edge(Edge::new(low, high, circle));
+    let chord = topo.add_edge(Edge::new(high, low, EdgeCurve::Line));
+    let wire = topo.add_wire(
+        Wire::new(
+            vec![OrientedEdge::new(arc, true), OrientedEdge::new(chord, true)],
+            true,
+        )
+        .unwrap(),
+    );
+    let face = topo.add_face(Face::new(
+        wire,
+        Vec::new(),
+        FaceSurface::Plane { normal, d: 0.0 },
+    ));
+    let solid = revolve(&mut topo, face, center, Vec3::new(0.0, 0.0, 1.0), 1.5 * PI).unwrap();
+    assert_eq!(solid_faces(&topo, solid).unwrap().len(), 4);
+    assert!(validate_solid(&topo, solid).unwrap().is_valid());
+    let mesh = tessellate_solid(&topo, solid, 0.01).unwrap();
+    assert!(is_watertight(&mesh));
+}
+
+/// A profile all but square to the axis: its caps stand 2e-4 off the flat band
+/// they meet at an edge, too near for `unify_faces` to tell them apart, and
+/// the bands stay where they are rather than take a cap into their plane.
+#[test]
+fn a_cap_all_but_flat_on_its_band_stays_its_own_face() {
+    let mut topo = Topology::new();
+    let tilt = 1e-4;
+    let face = polygon(
+        &mut topo,
+        &[
+            Point3::new(5.0, 0.0, 0.0),
+            Point3::new(13.0, 0.0, 0.0),
+            Point3::new(13.0, 4.0, 4.0 * tilt),
+            Point3::new(5.0, 4.0, 4.0 * tilt),
+        ],
+    );
+    let origin = Point3::new(0.0, 0.0, 0.0);
+    let solid = revolve(&mut topo, face, origin, Vec3::new(0.0, 0.0, 1.0), PI).unwrap();
+    let caps = solid_faces(&topo, solid)
+        .unwrap()
+        .iter()
+        .filter(|&&f| {
+            matches!(topo.face(f).unwrap().surface(), FaceSurface::Plane { normal, .. }
+                if normal.dot(Vec3::new(0.0, 0.0, 1.0)).abs() < 1.0 - 1e-12)
+        })
+        .count();
+    assert_eq!(caps, 2);
 }

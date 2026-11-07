@@ -404,10 +404,13 @@ pub(crate) fn revolution_band_surface(
 
     let tol = 1e-9;
     // A line askew of the axis sweeps a hyperboloid, which the NURBS band is
-    // exactly; the radial and axial readings below would make it a cone.
+    // exactly; the radial and axial readings below would make it a cone. One
+    // square to the axis sweeps its plane whatever its reach, which they read
+    // as such.
     let along = p1_start - p0_start;
     let askew = along.cross(axis).dot(p0_start - axis_origin).abs();
-    if askew > Tolerance::new().linear * along.length().max(1.0) {
+    let linear = Tolerance::new().linear * along.length().max(1.0);
+    if askew > linear && along.dot(axis).abs() > linear {
         return Ok((FaceSurface::Nurbs(nurbs), false));
     }
     // The profile edge runs `p0_start → p1_start` (vertex i to vertex i+1 on the
@@ -2116,27 +2119,58 @@ pub fn revolve(
     // Each quarter turn built its own faces. A band of one surface is one
     // face, as the primitives have it. A band reaching the axis stays in its
     // quarters: merged past half a turn, a cone or ball face around its apex
-    // meshes open.
+    // meshes open. So do the bands beside a cap all but square to the axis:
+    // `unify_faces` reads planes within a fraction of a degree as one, and
+    // would join the cap to the flat bands it stands off.
     let mut touches_axis = false;
     for wire_data in std::iter::once(&outer).chain(&inner_data) {
         for vertex in &wire_data.ring_verts[0] {
             let p = topo.vertex(*vertex)?.point();
             touches_axis |= radial_axial(p, axis_origin, axis).0 <= tol.linear;
         }
-        // An arc can reach the axis between its ends; a straight edge whose
-        // ends clear it, on one side of it, cannot.
         for oe in &wire_data.input_oriented {
-            if let EdgeCurve::Circle(c) = topo.edge(oe.edge())?.curve() {
-                let reach = radial_axial(c.center(), axis_origin, axis).0;
-                touches_axis |= reach <= c.radius() + tol.linear;
-            }
+            touches_axis |= curved_edge_reaches_axis(topo, oe.edge(), axis_origin, axis)?;
         }
     }
-    if !is_full && num_segs > 1 && !touches_axis {
+    let cap_across_axis = (input_normal.dot(axis).abs() - 1.0).abs() < CAP_ACROSS_AXIS;
+    if !is_full && num_segs > 1 && !touches_axis && !cap_across_axis {
         crate::heal::unify_faces(topo, solid)?;
     }
 
     Ok(solid)
+}
+
+/// How near 1 a cap's normal may read along the axis before its plane could
+/// pass for the flat bands beside it, past the 1e-4 `unify_faces` allows.
+const CAP_ACROSS_AXIS: f64 = 1e-3;
+
+/// Whether a curved profile edge comes to the axis along its own span, its
+/// samples read with the chord between them to spare. A straight edge whose
+/// ends clear the axis, on one side of it, cannot.
+fn curved_edge_reaches_axis(
+    topo: &Topology,
+    edge_id: brepkit_topology::edge::EdgeId,
+    axis_origin: Point3,
+    axis: Vec3,
+) -> Result<bool, crate::OperationsError> {
+    const SAMPLES: u32 = 256;
+    let edge = topo.edge(edge_id)?;
+    let curve = edge.curve();
+    if matches!(curve, EdgeCurve::Line) {
+        return Ok(false);
+    }
+    let (a, b) = (
+        topo.vertex(edge.start())?.point(),
+        topo.vertex(edge.end())?.point(),
+    );
+    let (t0, t1) = curve.domain_with_endpoints(a, b);
+    let at = |k: u32| {
+        curve.evaluate_with_endpoints(t0 + (t1 - t0) * f64::from(k) / f64::from(SAMPLES), a, b)
+    };
+    Ok((0..SAMPLES).any(|k| {
+        let (p, q) = (at(k), at(k + 1));
+        radial_axial(p, axis_origin, axis).0 <= (q - p).length() + Tolerance::new().linear
+    }))
 }
 
 #[cfg(test)]
