@@ -1,0 +1,22 @@
+crates/operations/tests/extrude_off_its_normal.rs
+  s_649261a24df31b::t_4c8ec0c6634686 368-399
+crates/operations/src/extrude.rs
+  s_649261a24df31b::t_4c8ec0c6634686 425-437,439
+  s_649261a24df31b::t_5cffda281a14e6 443-447,549-588
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7ebdc2f00e5ea864f0c76e7bd6e8d01412605263",
+  "prompts": {},
+  "sessions": {
+    "s_649261a24df31b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d8bbbba4-0431-4f6a-a622-e632a6659779",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
