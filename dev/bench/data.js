@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794081490667,
+  "lastUpdate": 1794083603550,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -66689,6 +66689,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 27567631,
             "range": "± 87306",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "6c30fd7166e88c8fa31f1c795bcd47f6ffe0a2b7",
+          "message": "feat(operations): imprint faces and edges on a solid, and split it by faces (#2325)",
+          "timestamp": "2026-11-07T12:30:30-08:00",
+          "tree_id": "5043d30e3a7ea7bc6e37b82656d0cc3b6a623162",
+          "url": "https://github.com/andymai/brepkit/commit/6c30fd7166e88c8fa31f1c795bcd47f6ffe0a2b7"
+        },
+        "date": 1794083594722,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 875877,
+            "range": "± 578",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 944749,
+            "range": "± 1096",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10853,
+            "range": "± 13",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 702482,
+            "range": "± 3754",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 22907296,
+            "range": "± 244429",
             "unit": "ns/iter"
           }
         ]
