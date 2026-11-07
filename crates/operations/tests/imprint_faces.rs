@@ -1153,6 +1153,61 @@ mod tests {
         }
     }
 
+    /// Two curved sheets stopping inside the plate, which divide nothing alone and
+    /// cross twice, walling off the lens between them.
+    #[test]
+    #[ignore = "under-splits: only plane tools have the cell arrangement, see the roadmap"]
+    fn curved_sheets_crossing_cut_out_the_lens_between_them() {
+        let half = 32.0_f64.sqrt();
+        let lens = 2.0 * (4.0 * half - half.powi(3) / 24.0) * 10.0;
+        for (name, pose) in poses() {
+            let mut topo = Topology::new();
+            let body = plate(&mut topo, pose);
+            let sheet = |topo: &mut Topology, end: f64, middle: f64| {
+                let rows = [(-8.0, end), (0.0, middle), (8.0, end)]
+                    .iter()
+                    .map(|&(x, y)| vec![at(pose, [x, y, -5.0]), at(pose, [x, y, 15.0])])
+                    .collect();
+                let surface = NurbsSurface::new(
+                    2,
+                    1,
+                    vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+                    vec![0.0, 0.0, 1.0, 1.0],
+                    rows,
+                    vec![vec![1.0; 2]; 3],
+                )
+                .unwrap();
+                make_nurbs_face(topo, surface, 1e-7).unwrap()
+            };
+            let (over, under) = (sheet(&mut topo, -2.0, 6.0), sheet(&mut topo, 2.0, -6.0));
+
+            let alone = split_by_faces(&mut topo, body, &[over]).unwrap();
+            assert_eq!(alone.len(), 1, "{name}: one sheet");
+
+            let mut pieces = split_by_faces(&mut topo, body, &[over, under]).unwrap();
+            assert_eq!(pieces.len(), 2, "{name}: the two together");
+            by_volume(&topo, &mut pieces);
+            for (piece, volume) in pieces.iter().zip([lens, PLATE - lens]) {
+                let report = validate_solid(&topo, *piece).unwrap();
+                assert!(report.is_valid(), "{name}: {:?}", report.issues);
+                let mesh = tessellate_solid(&topo, *piece, 0.02).unwrap();
+                assert!(is_watertight(&mesh), "{name}: the mesh leaks");
+                let held = solid_volume(&topo, *piece, 0.005).unwrap();
+                assert!(
+                    (held - volume).abs() < 0.5,
+                    "{name}: holds {held}, not {volume}"
+                );
+            }
+            let inside = at(pose, [0.0, 0.0, 5.0]);
+            let holds_middle = |piece: SolidId, topo: &Topology| {
+                classify_point(topo, piece, inside, 0.01, 1e-7).unwrap()
+                    == PointClassification::Inside
+            };
+            assert!(holds_middle(pieces[0], &topo), "{name}: the lens's middle");
+            assert!(!holds_middle(pieces[1], &topo), "{name}: the rest's middle");
+        }
+    }
+
     /// A latitude circle on a ball marks the hemisphere it runs on.
     #[test]
     fn a_circle_on_a_ball_marks_its_hemisphere() {

@@ -252,8 +252,7 @@ pub fn split_by_faces(
     while let Some((piece, mut tools)) = open.pop() {
         let mut cut = None;
         for (i, &tool) in tools.iter().enumerate() {
-            let parts = split_piece(&mut scratch.topo, piece, &[tool], tol)?;
-            if parts.len() > 1 {
+            if let Some(parts) = split_piece(&mut scratch.topo, piece, &[tool], tol, false)? {
                 cut = Some((i, parts));
                 break;
             }
@@ -264,7 +263,8 @@ pub fn split_by_faces(
         } else if tools.is_empty() {
             pieces.push(piece);
         } else {
-            pieces.extend(split_piece(&mut scratch.topo, piece, &tools, tol)?);
+            let marked = split_piece(&mut scratch.topo, piece, &tools, tol, true)?;
+            pieces.extend(marked.into_iter().flatten());
         }
     }
     pieces
@@ -273,13 +273,15 @@ pub fn split_by_faces(
         .collect()
 }
 
-/// Split a piece by all of `tools` at once.
+/// A piece split by all of `tools` at once, or, unless `keep_whole`, `None` where
+/// they leave it in one: a trial that separates nothing copies nothing back.
 fn split_piece(
     topo: &mut Topology,
     piece: SolidId,
     tools: &[FaceId],
     tol: Tolerance,
-) -> Result<Vec<SolidId>, AlgoError> {
+    keep_whole: bool,
+) -> Result<Option<Vec<SolidId>>, AlgoError> {
     let groups: Vec<Vec<FaceId>> = tools.iter().map(|&f| vec![f]).collect();
     let mut store = GfaImprintStore::new(topo, piece, &groups, &[])?;
     let mut arena = GfaArena::new();
@@ -291,10 +293,14 @@ fn split_piece(
         tol,
     )?;
     store.topo = store_topo;
-    parts
+    if parts.len() < 2 && !keep_whole {
+        return Ok(None);
+    }
+    let exported = parts
         .into_iter()
         .map(|part| store.export_solid(topo, part))
-        .collect()
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(Some(exported))
 }
 
 /// Run a GFA boolean, also returning each result face's provenance.
