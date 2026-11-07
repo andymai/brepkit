@@ -123,6 +123,7 @@ impl<'a> PaveFiller<'a> {
         )?;
 
         pave_co_endpoint_curves(self.topo, &[self.solid_a, self.solid_b], self.tol, arena)?;
+        split_co_endpoint_sections(self.topo, self.tol, arena)?;
 
         Ok(())
     }
@@ -253,6 +254,122 @@ fn pave_co_endpoint_curves(
     Ok(())
 }
 
+/// Divide at its middle every section arc other than a circle's that shares
+/// both ends with another section along a different path (a plane across a half
+/// ellipse prism meets its wall in the arc and its flat side in the chord). The
+/// assembler keys duplicate edges on their endpoint pair and would weld the two,
+/// leaving the wall bounded by the chord. A circle's arc has that split later,
+/// in the face splitter, which reads its middle exactly.
+fn split_co_endpoint_sections(
+    topo: &mut Topology,
+    tol: Tolerance,
+    arena: &mut GfaArena,
+) -> Result<(), AlgoError> {
+    use std::collections::BTreeMap;
+
+    use brepkit_math::vec::Point3;
+    use brepkit_topology::edge::{Edge, EdgeCurve};
+    use brepkit_topology::vertex::Vertex;
+
+    use crate::ds::{Interference, Pave, PaveBlock};
+
+    struct Section {
+        index: usize,
+        curved: bool,
+        at: f64,
+        middle: Point3,
+    }
+
+    let cell = tol.linear * 100.0;
+    #[allow(clippy::cast_possible_truncation)]
+    let snap = |p: Point3| {
+        (
+            (p.x() / cell).round() as i64,
+            (p.y() / cell).round() as i64,
+            (p.z() / cell).round() as i64,
+        )
+    };
+    let mut by_ends: BTreeMap<_, Vec<Section>> = BTreeMap::new();
+    for (index, curve) in arena.curves.iter().enumerate() {
+        let &[pb_id] = curve.pave_blocks.as_slice() else {
+            continue;
+        };
+        let Some(pb) = arena.pave_blocks.get(pb_id) else {
+            continue;
+        };
+        let edge = topo.edge(pb.original_edge)?;
+        let a = topo.vertex(arena.resolve_vertex(pb.start.vertex))?.point();
+        let b = topo.vertex(arena.resolve_vertex(pb.end.vertex))?.point();
+        let (ends_a, ends_b) = (snap(a), snap(b));
+        if ends_a == ends_b {
+            continue;
+        }
+        let at = 0.5 * (pb.start.parameter + pb.end.parameter);
+        by_ends
+            .entry(if ends_a <= ends_b {
+                (ends_a, ends_b)
+            } else {
+                (ends_b, ends_a)
+            })
+            .or_default()
+            .push(Section {
+                index,
+                curved: matches!(
+                    edge.curve(),
+                    EdgeCurve::NurbsCurve(_) | EdgeCurve::Ellipse(_)
+                ),
+                at,
+                middle: edge.curve().evaluate_with_endpoints(at, a, b),
+            });
+    }
+    for group in by_ends.values().filter(|group| group.len() > 1) {
+        let different_paths = group
+            .iter()
+            .any(|section| (section.middle - group[0].middle).length() > cell);
+        if !different_paths {
+            continue;
+        }
+        for section in group.iter().filter(|section| section.curved) {
+            let original = arena.curves[section.index].clone();
+            let Some(&pb_id) = original.pave_blocks.first() else {
+                continue;
+            };
+            let Some(pb) = arena.pave_blocks.get(pb_id) else {
+                continue;
+            };
+            let (start, end) = (pb.start, pb.end);
+            let middle = topo.add_vertex(Vertex::new(section.middle, tol.linear));
+            let mid_pave = Pave::new(middle, section.at);
+            let first_edge = topo.add_edge(Edge::new(start.vertex, middle, original.curve.clone()));
+            let second_edge = topo.add_edge(Edge::new(middle, end.vertex, original.curve.clone()));
+            let first_pb = arena
+                .pave_blocks
+                .alloc(PaveBlock::new(first_edge, start, mid_pave));
+            let second_pb = arena
+                .pave_blocks
+                .alloc(PaveBlock::new(second_edge, mid_pave, end));
+
+            let second_index = arena.curves.len();
+            let mut second = original.clone();
+            second.pave_blocks = vec![second_pb];
+            second.t_range = (section.at, original.t_range.1);
+            arena.curves.push(second);
+            arena.interference.ff.push(Interference::FF {
+                f1: original.face_a,
+                f2: original.face_b,
+                curve_index: second_index,
+            });
+            if let Some(skipped) = arena.curve_skip_faces.get(&section.index).cloned() {
+                arena.curve_skip_faces.insert(second_index, skipped);
+            }
+            let first = &mut arena.curves[section.index];
+            first.pave_blocks = vec![first_pb];
+            first.t_range = (original.t_range.0, section.at);
+        }
+    }
+    Ok(())
+}
+
 /// Run the complete PaveFiller pipeline (both stages).
 ///
 /// **Stage 1 — Intersection** (reads `&Topology`):
@@ -362,6 +479,7 @@ pub fn run_pave_filler_n(
         phase_ff_coplanar::perform(topo, sources[i], sources[j], tol, arena)?;
     }
     pave_co_endpoint_curves(topo, sources, tol, arena)?;
+    split_co_endpoint_sections(topo, tol, arena)?;
 
     // Stage 2: Resolution (solid-agnostic — reads the accumulated arena).
     make_blocks::perform(topo, arena)?;
