@@ -521,14 +521,17 @@ pub fn curve_split(curve: &NurbsCurve, u: f64) -> Result<(NurbsCurve, NurbsCurve
 
     // The split control point index: with multiplicity p, the curve passes
     // through the CP at index (last_u - p). Both halves share this point.
-    let split_cp = last_u - p;
+    let split_cp = last_u.checked_sub(p).ok_or(MathError::EmptyInput)?;
 
     // Left curve: CPs 0..=split_cp, knots up to first_u then add p+1-mult
     // copies of u to form a proper clamped end.
     let mult = last_u - first_u + 1;
+    // Knots closer than `KNOT_EPS` read as one, past the degree + 1 in a span
+    // too narrow to tell them apart.
+    let padding = (p + 1).checked_sub(mult).ok_or(MathError::EmptyInput)?;
     let mut left_knots: Vec<f64> = knots[..=last_u].to_vec();
     // Need p+1 copies of u at the end; we have `mult` already.
-    for _ in 0..(p + 1 - mult) {
+    for _ in 0..padding {
         left_knots.push(u);
     }
     let left_cps: Vec<Point3> = cps[..=split_cp].to_vec();
@@ -536,7 +539,7 @@ pub fn curve_split(curve: &NurbsCurve, u: f64) -> Result<(NurbsCurve, NurbsCurve
 
     // Right curve: p+1 copies of u, then remaining knots. CPs from split_cp onward.
     let mut right_knots: Vec<f64> = Vec::new();
-    for _ in 0..(p + 1 - mult) {
+    for _ in 0..padding {
         right_knots.push(u);
     }
     right_knots.extend_from_slice(&knots[first_u..]);
