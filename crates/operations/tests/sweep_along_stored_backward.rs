@@ -186,6 +186,44 @@ mod tests {
         assert!(error.to_string().contains("does not meet"), "{error}");
     }
 
+    /// A gap off to the side, within the band, does not bow the path: a fit
+    /// through both ends of it would swing well clear of the line.
+    #[test]
+    fn a_gap_across_the_path_does_not_bend_it() {
+        let mut topo = Topology::new();
+        let face = square(&mut topo);
+        let v: Vec<_> = [(0.0, 0.0), (10.0, 0.0), (10.0, 5e-6), (30.0, 5e-6)]
+            .iter()
+            .map(|&(x, y)| topo.add_vertex(Vertex::new(Point3::new(x, y, 0.0), 1e-7)))
+            .collect();
+        let first = topo.add_edge(Edge::new(v[0], v[1], EdgeCurve::Line));
+        let second = topo.add_edge(Edge::new(v[2], v[3], EdgeCurve::Line));
+        let solid = sweep_along_edges(&mut topo, face, &[first, second]).unwrap();
+        assert_holds(&topo, solid, 120.0, "a 5e-6 gap across the path");
+    }
+
+    /// An edge shorter than the band stored backward continues from its nearer
+    /// end, as it does stored forward.
+    #[test]
+    fn a_tiny_edge_continues_from_its_nearer_end() {
+        let read = |flip: bool| {
+            let mut topo = Topology::new();
+            let face = square(&mut topo);
+            let v: Vec<_> = [0.0, 10.0, 10.000_006, 10.000_012, 30.0]
+                .iter()
+                .map(|&x| topo.add_vertex(Vertex::new(Point3::new(x, 0.0, 0.0), 1e-7)))
+                .collect();
+            let first = topo.add_edge(Edge::new(v[0], v[1], EdgeCurve::Line));
+            let (a, b) = if flip { (v[2], v[1]) } else { (v[1], v[2]) };
+            let tiny = topo.add_edge(Edge::new(a, b, EdgeCurve::Line));
+            let last = topo.add_edge(Edge::new(v[3], v[4], EdgeCurve::Line));
+            let solid = sweep_along_edges(&mut topo, face, &[first, tiny, last]).unwrap();
+            assert_holds(&topo, solid, 120.0, &format!("flipped: {flip}"));
+        };
+        read(false);
+        read(true);
+    }
+
     /// A gap within the band ends weld at is no gap, on the path either way.
     #[test]
     fn a_gap_within_the_weld_band_is_taken() {

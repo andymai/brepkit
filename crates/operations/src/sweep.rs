@@ -2945,10 +2945,13 @@ pub fn sweep_along_edges(
         if against {
             along.reverse();
         }
-        for p in along {
+        // An edge's first sample stands for the previous edge's last across a
+        // gap the chain accepts: a fit through both would bow the whole path.
+        for (k, p) in along.into_iter().enumerate() {
+            let apart = if k == 0 { PATH_JOIN } else { tol.linear };
             if points
                 .last()
-                .is_none_or(|q: &Point3| (*q - p).length() > tol.linear)
+                .is_none_or(|q: &Point3| (*q - p).length() > apart)
             {
                 points.push(p);
             }
@@ -2973,6 +2976,10 @@ pub fn sweep_along_edges(
     sweep(topo, profile, &path_curve)
 }
 
+/// How far apart a path chain's edges may end and still join: the analytic
+/// spine's own band, so that a gap cannot pass one path and fail the other.
+const PATH_JOIN: f64 = 1e-5;
+
 /// Which edges of a path chain are stored against the way it runs. The chain
 /// runs edge to edge in the order given, and the first edge runs towards the
 /// second.
@@ -2985,9 +2992,6 @@ fn chain_directions(
     topo: &Topology,
     edges: &[brepkit_topology::edge::EdgeId],
 ) -> Result<Vec<bool>, crate::OperationsError> {
-    // The analytic spine's own join tolerance, so that a gap cannot pass one path
-    // and fail the other.
-    const JOIN: f64 = 1e-5;
     let mut ends = Vec::with_capacity(edges.len());
     for &eid in edges {
         let edge = topo.edge(eid)?;
@@ -2996,13 +3000,16 @@ fn chain_directions(
             topo.vertex(edge.end())?.point(),
         ));
     }
-    let meet = |p: Point3, q: Point3| (p - q).length() <= JOIN;
+    let meet = |p: Point3, q: Point3| (p - q).length() <= PATH_JOIN;
     let mut backward = Vec::with_capacity(ends.len());
     let mut tail = None;
     for (i, &(start, end)) in ends.iter().enumerate() {
         let against = match tail {
-            Some(at) if meet(start, at) => false,
-            Some(at) if meet(end, at) => true,
+            // Both ends can meet it on an edge shorter than the band: the
+            // nearer is the one it continues from.
+            Some(at) if meet(start, at) || meet(end, at) => {
+                (end - at).length() < (start - at).length()
+            }
             Some(_) => {
                 return Err(crate::OperationsError::InvalidInput {
                     reason: format!(
