@@ -526,9 +526,11 @@ pub fn perform(
                             // overlap, so trim to it — keeping the raw curve
                             // here produced over-long chords that crossed
                             // the partner's arc sections mid-edge.
-                            (FaceClip::Range(r), FaceClip::Indeterminate)
-                            | (FaceClip::Indeterminate, FaceClip::Range(r)) => {
-                                trim_raw_line(&raw, r.0, r.1, tol)
+                            (FaceClip::Range(r), FaceClip::Indeterminate) => {
+                                trim_line_short_of_hole(topo, fb, fa, &raw, r, tol)
+                            }
+                            (FaceClip::Indeterminate, FaceClip::Range(r)) => {
+                                trim_line_short_of_hole(topo, fa, fb, &raw, r, tol)
                             }
                             // Neither face could build a usable polygon.
                             // Conservatively keep the raw curve and leave
@@ -8509,11 +8511,49 @@ fn clip_trimmed_line_to_planes(
         (FaceClip::Range(a), FaceClip::Range(b)) => {
             trim_raw_line(&raw, a.0.max(b.0), a.1.min(b.1), tol)
         }
-        (FaceClip::Range(r), FaceClip::Indeterminate)
-        | (FaceClip::Indeterminate, FaceClip::Range(r)) => trim_raw_line(&raw, r.0, r.1, tol),
+        (FaceClip::Range(r), FaceClip::Indeterminate) => {
+            trim_line_short_of_hole(topo, fb, fa, &raw, r, tol)
+        }
+        (FaceClip::Indeterminate, FaceClip::Range(r)) => {
+            trim_line_short_of_hole(topo, fa, fb, &raw, r, tol)
+        }
         (FaceClip::Indeterminate, FaceClip::Indeterminate) => {
             (!exact_runs_disjoint(topo, fa, fb, &raw, tol.linear)).then_some(raw)
         }
+    }
+}
+
+/// `raw` trimmed to `range`, the extent the polygon clip read on `partner`, and
+/// further to where `curved` (whose arcs that clip cannot read) actually runs, if
+/// the part beyond would cross a hole in `partner`. Such a section stops short of
+/// the hole, which it would otherwise cut through where no face meets it. Any
+/// other runs on past `curved`: the splits downstream are calibrated on the whole
+/// line, and trim against the true arc themselves. A face that cannot be read (a
+/// NURBS boundary) leaves the range as it stands.
+fn trim_line_short_of_hole(
+    topo: &Topology,
+    curved: FaceId,
+    partner: FaceId,
+    raw: &RawCurve,
+    range: (f64, f64),
+    tol: Tolerance,
+) -> Option<RawCurve> {
+    let whole = trim_raw_line(raw, range.0, range.1, tol);
+    let (Some(on_curved), Some(on_partner)) = (
+        line_face_intervals(topo, curved, raw.p_start, raw.p_end, tol.linear),
+        line_face_intervals(topo, partner, raw.p_start, raw.p_end, tol.linear),
+    ) else {
+        return whole;
+    };
+    let (Some(first), Some(last)) = (on_curved.first(), on_curved.last()) else {
+        return whole;
+    };
+    let (lo, hi) = (range.0.max(first.0), range.1.min(last.1));
+    let overruns_a_hole = on_partner.windows(2).any(|w| w[0].1 < lo || hi < w[1].0);
+    if overruns_a_hole && lo < hi {
+        trim_raw_line(raw, lo, hi, tol)
+    } else {
+        whole
     }
 }
 
@@ -8860,6 +8900,9 @@ fn line_face_intervals(
     }
     let cross = |x: Vec2, y: Vec2| x.x().mul_add(y.y(), -(x.y() * y.x()));
     let mut cuts = vec![0.0, 1.0];
+    // An arc ending on the line divides it there however it arrives: one
+    // tangent to the line at its end has a root pair rounding can lose.
+    let foot = |p: Vec2| (cross(p, d).abs() <= tol * len).then(|| p.dot(d) / (len * len));
     for piece in &pieces {
         match *piece {
             Boundary2::Segment(a, b) => {
@@ -8884,6 +8927,11 @@ fn line_face_intervals(
                 t0,
                 t1,
             } => {
+                for t in [t0, t1] {
+                    let on_arc =
+                        Vec2::new(center.x(), center.y()) + u * (a * t.cos()) + v * (b * t.sin());
+                    cuts.extend(foot(on_arc));
+                }
                 let q = Vec2::new(-center.x(), -center.y());
                 let (x0, y0) = (q.dot(u) / a, q.dot(v) / b);
                 let (dx, dy) = (d.dot(u) / a, d.dot(v) / b);
