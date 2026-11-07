@@ -98,21 +98,8 @@ pub(super) fn sweep_exact(
             let (from, to) = (topo.vertex(start)?.point(), topo.vertex(end)?.point());
             let curve = e.curve().clone();
             let is_line = matches!(curve, EdgeCurve::Line);
-            let span = match crate::revolve::edge_span_nurbs(&curve, oe.is_forward(), (from, to))? {
-                Some(span) => {
-                    // An unclamped curve's end control points are not its
-                    // ends, and moving them would change the curve.
-                    let cps = span.control_points();
-                    let (t0, t1) = span.domain();
-                    let reach = 10.0 * tol.linear;
-                    if (span.evaluate(t0) - cps[0]).length() > reach
-                        || (span.evaluate(t1) - cps[cps.len() - 1]).length() > reach
-                    {
-                        return Ok(None);
-                    }
-                    with_ends(&span, from, to)?
-                }
-                None => NurbsCurve::new(1, vec![0.0, 0.0, 1.0, 1.0], vec![from, to], vec![1.0; 2])?,
+            let Some(span) = clamped_edge_span(&curve, oe.is_forward(), (from, to))? else {
+                return Ok(None);
             };
             edges.push(LoopEdge {
                 edge: oe,
@@ -446,6 +433,89 @@ pub(super) fn sweep_exact(
 
     let shell = topo.add_shell(Shell::new(faces)?);
     Ok(Some(topo.add_solid(Solid::new(shell, vec![]))))
+}
+
+/// An edge's own curve from `from` to `to` as a NURBS with its end control
+/// points on them, a line as the degree-one curve between them. `None` for an
+/// unclamped curve, whose end control points are not its ends and could not
+/// be moved without changing it.
+pub fn clamped_edge_span(
+    curve: &EdgeCurve,
+    forward: bool,
+    (from, to): (Point3, Point3),
+) -> Result<Option<NurbsCurve>, crate::OperationsError> {
+    let Some(span) = crate::revolve::edge_span_nurbs(curve, forward, (from, to))? else {
+        return Ok(Some(NurbsCurve::new(
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![from, to],
+            vec![1.0; 2],
+        )?));
+    };
+    let cps = span.control_points();
+    let (t0, t1) = span.domain();
+    let reach = 10.0 * Tolerance::new().linear;
+    if (span.evaluate(t0) - cps[0]).length() > reach
+        || (span.evaluate(t1) - cps[cps.len() - 1]).length() > reach
+    {
+        return Ok(None);
+    }
+    Ok(Some(with_ends(&span, from, to)?))
+}
+
+/// Where `points` run as a rigid body carried along the open, kink-free `path`
+/// on rotation-minimizing frames, from where they lie: one fitted trajectory
+/// per point, all on one knot vector, and the map to the path's end.
+///
+/// # Errors
+///
+/// Returns an error if the path has a knot span too narrow for the fit to
+/// sample, or a trajectory cannot be fitted.
+pub fn path_trajectories(
+    path: &NurbsCurve,
+    points: &[Point3],
+) -> Result<(Vec<NurbsCurve>, Mat4), crate::OperationsError> {
+    let (d0, d1) = path.domain();
+    let tangent = path.tangent(d0)?;
+    let up_hint = orthogonalize(pick_reference_axis(tangent), tangent);
+    let at = |t: f64| (d1 - d0).mul_add(t, d0);
+    let firsts = frames_at(path, &[d0], up_hint)?;
+    let first = &firsts[0];
+    let (reference, basis) = (first.origin, [first.right, first.up, first.tangent]);
+    let maps_for = |ts: &[f64]| -> Result<Vec<Mat4>, crate::OperationsError> {
+        let params: Vec<f64> = ts.iter().map(|&t| at(t)).collect();
+        Ok(frames_at(path, &params, up_hint)?
+            .iter()
+            .map(|frame| section_map(frame, reference, basis, 1.0))
+            .collect())
+    };
+    let mut breaks: Vec<f64> = path
+        .knots()
+        .iter()
+        .map(|&k| (k - d0) / (d1 - d0))
+        .filter(|&t| t > 0.0 && t < 1.0)
+        .collect();
+    breaks.dedup_by(|a, b| a.to_bits() == b.to_bits());
+    let narrow = std::iter::once(0.0)
+        .chain(breaks.iter().copied())
+        .chain(std::iter::once(1.0))
+        .collect::<Vec<f64>>()
+        .windows(2)
+        .any(|w| w[1] - w[0] < MIN_SPAN);
+    if narrow {
+        return Err(crate::OperationsError::InvalidInput {
+            reason: "the sweep path has a knot span too narrow to fit a sweep along".into(),
+        });
+    }
+    let (rails, _, last) = fit_trajectories(
+        points,
+        &breaks,
+        (path.control_points().len() * 2).max(4),
+        diagonal(points),
+        Tolerance::new(),
+        &maps_for,
+    )?;
+    Ok((rails, last))
 }
 
 /// The edge's own curve with its first and last control points on its

@@ -64,18 +64,34 @@ pub fn tessellate_with_uvs_a(
 /// Whether a sphere face's outer wire has an edge that is neither a latitude
 /// nor a meridian, or reaches a pole (where the grid's u range means
 /// nothing), or has fewer than three edges (a cap's one rim circle), whose
-/// vertices are too few for the grid to read its v range from. Chords (a
-/// primitive's hemispheres meet on them) keep the grid.
+/// vertices are too few for the grid to read its v range from, or curves
+/// between latitudes, since the grid runs from one latitude to a pole. Chords
+/// (a primitive's hemispheres meet on them) keep the grid.
 fn sphere_face_is_trimmed(
     topo: &Topology,
     face_data: &brepkit_topology::face::Face,
     sphere: &brepkit_math::surfaces::SphericalSurface,
 ) -> Result<bool, crate::OperationsError> {
-    if topo.wire(face_data.outer_wire())?.edges().len() < 3 {
+    let edges = topo.wire(face_data.outer_wire())?.edges();
+    if edges.len() < 3 {
         return Ok(true);
     }
     let (off_grid, at_pole) = sphere_outer_wire_shape(topo, face_data, sphere)?;
-    Ok(off_grid || at_pole)
+    if off_grid || at_pole {
+        return Ok(true);
+    }
+    let mut curved = false;
+    let mut latitudes: Option<(f64, f64)> = None;
+    for oe in edges {
+        let edge = topo.edge(oe.edge())?;
+        curved |= !matches!(edge.curve(), EdgeCurve::Line);
+        for vertex in [edge.start(), edge.end()] {
+            let (_, v) = sphere.project_point(topo.vertex(vertex)?.point());
+            let (lo, hi) = latitudes.unwrap_or((v, v));
+            latitudes = Some((lo.min(v), hi.max(v)));
+        }
+    }
+    Ok(curved && latitudes.is_some_and(|(lo, hi)| hi - lo > 1e-7))
 }
 
 /// Whether a sphere face's outer wire has an edge that is neither a latitude,

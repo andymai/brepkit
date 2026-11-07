@@ -785,7 +785,12 @@ fn analytic_cone_face_area(
             for &vid in &[edge.start(), edge.end()] {
                 if let Ok(vtx) = topo.vertex(vid) {
                     let (u, v) = cone.project_point(vtx.point());
-                    u_vals.push(u);
+                    // The apex has no angle of its own to widen the span with.
+                    if (vtx.point() - cone.apex()).length()
+                        > brepkit_math::tolerance::Tolerance::new().linear
+                    {
+                        u_vals.push(u);
+                    }
                     v_vals.push(v);
                 }
             }

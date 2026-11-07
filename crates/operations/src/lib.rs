@@ -160,6 +160,7 @@ pub mod offset_wire;
 pub mod draft;
 pub mod fill_face;
 pub mod section;
+pub mod sheet;
 pub mod shell_op;
 pub mod split;
 pub mod thicken;
