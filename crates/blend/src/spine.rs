@@ -245,6 +245,30 @@ mod tests {
     use brepkit_topology::edge::{Edge, EdgeCurve};
     use brepkit_topology::vertex::Vertex;
 
+    /// An edge's length runs along its curve, not across its chord: a whole
+    /// circle has one vertex at both ends, and an arc is longer than its chord.
+    #[test]
+    fn a_curved_edges_length_runs_along_it() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::vec::{Point3, Vec3};
+
+        let mut topo = Topology::new();
+        let circle =
+            Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 2.0).unwrap();
+        let (a, b) = (
+            circle.evaluate(0.0),
+            circle.evaluate(std::f64::consts::FRAC_PI_2),
+        );
+        let va = topo.add_vertex(Vertex::new(a, 1e-7));
+        let vb = topo.add_vertex(Vertex::new(b, 1e-7));
+        let arc = topo.add_edge(Edge::new(va, vb, EdgeCurve::Circle(circle.clone())));
+        let whole = topo.add_edge(Edge::new(va, va, EdgeCurve::Circle(circle)));
+        let quarter = edge_length(&topo, arc).unwrap();
+        assert!((quarter - std::f64::consts::PI).abs() < 1e-9, "{quarter}");
+        let full = edge_length(&topo, whole).unwrap();
+        assert!((full - 4.0 * std::f64::consts::PI).abs() < 1e-9, "{full}");
+    }
+
     fn make_line_edge(topo: &mut Topology, a: Point3, b: Point3) -> EdgeId {
         let v0 = topo.add_vertex(Vertex::new(a, 1e-7));
         let v1 = topo.add_vertex(Vertex::new(b, 1e-7));

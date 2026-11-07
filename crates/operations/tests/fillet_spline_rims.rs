@@ -249,10 +249,13 @@ fn crossing_rounds_on_both_rims_are_refused() {
         let edges = [rim_at(&topo, solid, 0.0), rim_at(&topo, solid, HEIGHT)];
         match fillet_v2(&mut topo, solid, &edges, r) {
             Err(_) => {}
-            Ok(result) => assert!(
-                !result.failed.is_empty(),
-                "r = {r}: two rounds of {r} on a wall {HEIGHT} high were built"
-            ),
+            Ok(result) => {
+                assert!(
+                    !result.failed.is_empty() && result.succeeded.is_empty(),
+                    "r = {r}: two rounds of {r} on a wall {HEIGHT} high were built"
+                );
+                assert_eq!(result.solid, solid, "r = {r}: the solid was changed");
+            }
         }
     }
 }

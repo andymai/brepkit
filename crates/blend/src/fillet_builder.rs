@@ -3414,10 +3414,10 @@ fn check_contacts_on_faces(
                 );
                 points.extend([a, b]);
                 match edge.curve() {
-                    // A B-spline lies within its control points' hull: samples
-                    // fall short of its bulges, where a wall's contact lies.
+                    // A B-spline lies within its hull: samples fall short of
+                    // its bulges, where a wall's contact lies.
                     EdgeCurve::NurbsCurve(curve) => {
-                        points.extend(curve.control_points().iter().copied());
+                        points.extend(nurbs_curve_hull(curve));
                     }
                     EdgeCurve::Line => {}
                     curve @ (EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_)) => {
@@ -3457,10 +3457,59 @@ fn check_contacts_on_faces(
         Ok(bbox.expanded(1e-4 * size.max(1.0)))
     };
     let (box1, box2) = (extent(face1)?, extent(face2)?);
-    if let Some(section) = sections
-        .iter()
-        .find(|s| !box1.contains_point(s.p1) || !box2.contains_point(s.p2))
-    {
+    // A B-spline face's control net bounds its whole surface, which can run far
+    // past its boundary. In `(u, v)` its boundary bounds it, across each
+    // direction the surface does not close in.
+    let trim = |face: FaceId| -> Result<Option<UvWindow>, BlendError> {
+        let f = topo.face(face)?;
+        let FaceSurface::Nurbs(surface) = f.surface() else {
+            return Ok(None);
+        };
+        let mut window = UvWindow::empty(surface);
+        for oriented in topo.wire(f.outer_wire())?.edges() {
+            let edge = topo.edge(oriented.edge())?;
+            let (a, b) = (
+                topo.vertex(edge.start())?.point(),
+                topo.vertex(edge.end())?.point(),
+            );
+            let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
+            for k in 0..=CONTACT_EXTENT_SAMPLES {
+                let t = t0 + (t1 - t0) * f64::from(k) / f64::from(CONTACT_EXTENT_SAMPLES);
+                let p = edge.curve().evaluate_with_endpoints(t, a, b);
+                window.take(brepkit_math::traits::ParametricSurface::project_point(
+                    surface, p,
+                ));
+            }
+        }
+        Ok(Some(window))
+    };
+    let (trim1, trim2) = (trim(face1)?, trim(face2)?);
+    let on_trim =
+        |window: &Option<UvWindow>, face: FaceId, p: Point3| -> Result<bool, BlendError> {
+            let Some(window) = window else {
+                return Ok(true);
+            };
+            let FaceSurface::Nurbs(surface) = topo.face(face)?.surface() else {
+                return Ok(true);
+            };
+            Ok(
+                window.holds(brepkit_math::traits::ParametricSurface::project_point(
+                    surface, p,
+                )),
+            )
+        };
+    let mut past_trim = None;
+    for section in sections {
+        if !on_trim(&trim1, face1, section.p1)? || !on_trim(&trim2, face2, section.p2)? {
+            past_trim = Some(section);
+            break;
+        }
+    }
+    if let Some(section) = past_trim.or_else(|| {
+        sections
+            .iter()
+            .find(|s| !box1.contains_point(s.p1) || !box2.contains_point(s.p2))
+    }) {
         return Err(BlendError::PlanningFailure {
             reason: format!(
                 "the fillet's contact at spine t = {:.3} would land past its face",
@@ -3469,6 +3518,77 @@ fn check_contacts_on_faces(
         });
     }
     Ok(())
+}
+
+/// Whether the segments `a0 a1` and `b0 b1` come within `gap` of each other.
+fn segments_within(a0: Point3, a1: Point3, b0: Point3, b1: Point3, gap: f64) -> bool {
+    let (d1, d2, r) = (a1 - a0, b1 - b0, a0 - b0);
+    let (aa, ee, ff) = (d1.dot(d1), d2.dot(d2), d2.dot(r));
+    let (s, t) = if aa <= f64::EPSILON && ee <= f64::EPSILON {
+        (0.0, 0.0)
+    } else if aa <= f64::EPSILON {
+        (0.0, (ff / ee).clamp(0.0, 1.0))
+    } else {
+        let c = d1.dot(r);
+        if ee <= f64::EPSILON {
+            ((-c / aa).clamp(0.0, 1.0), 0.0)
+        } else {
+            let bb = d1.dot(d2);
+            let denom = aa * ee - bb * bb;
+            let s = if denom > f64::EPSILON {
+                ((bb * ff - c * ee) / denom).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            let t = (bb * s + ff) / ee;
+            if t < 0.0 {
+                ((-c / aa).clamp(0.0, 1.0), 0.0)
+            } else if t > 1.0 {
+                (((bb - c) / aa).clamp(0.0, 1.0), 1.0)
+            } else {
+                (s, t)
+            }
+        }
+    };
+    ((a0 + d1 * s) - (b0 + d2 * t)).length() <= gap
+}
+
+/// The `(u, v)` box a B-spline face's boundary reaches, along each direction
+/// its surface does not close in.
+struct UvWindow {
+    u: Option<(f64, f64)>,
+    v: Option<(f64, f64)>,
+    margin: (f64, f64),
+}
+
+impl UvWindow {
+    fn empty(surface: &brepkit_math::nurbs::surface::NurbsSurface) -> Self {
+        use brepkit_math::traits::ParametricSurface;
+        let (u0, u1) = surface.domain_u();
+        let (v0, v1) = surface.domain_v();
+        let empty = (f64::INFINITY, f64::NEG_INFINITY);
+        Self {
+            u: surface.closed_u().is_none().then_some(empty),
+            v: surface.closed_v().is_none().then_some(empty),
+            margin: (1e-3 * (u1 - u0), 1e-3 * (v1 - v0)),
+        }
+    }
+
+    fn take(&mut self, (u, v): (f64, f64)) {
+        if let Some((lo, hi)) = &mut self.u {
+            (*lo, *hi) = (lo.min(u), hi.max(u));
+        }
+        if let Some((lo, hi)) = &mut self.v {
+            (*lo, *hi) = (lo.min(v), hi.max(v));
+        }
+    }
+
+    fn holds(&self, (u, v): (f64, f64)) -> bool {
+        let within = |x: f64, range: Option<(f64, f64)>, margin: f64| {
+            range.is_none_or(|(lo, hi)| x >= lo - margin && x <= hi + margin)
+        };
+        within(u, self.u, self.margin.0) && within(v, self.v, self.margin.1)
+    }
 }
 
 /// Refuses two closed contacts on one face that cross: both rims of a wall
@@ -3507,6 +3627,33 @@ fn check_closed_contacts_do_not_cross(
         brepkit_math::nurbs::projection::project_point_to_curve(curve, p, 1e-9)
             .map_or(f64::INFINITY, |found| found.distance)
     };
+    // Anywhere round the loops, not just where each rim's seam reads them: a
+    // wall can be tall at its seam and thin elsewhere.
+    let sampled: Vec<Vec<Point3>> = closed
+        .iter()
+        .map(|&(_, curve)| {
+            let (t0, t1) = curve.domain();
+            (0..=SAMPLES)
+                .map(|k| curve.evaluate(t0 + (t1 - t0) * f64::from(k) / f64::from(SAMPLES)))
+                .collect()
+        })
+        .collect();
+    for (i, a) in sampled.iter().enumerate() {
+        for b in &sampled[i + 1..] {
+            let meet = a.windows(2).any(|p| {
+                b.windows(2)
+                    .any(|q| segments_within(p[0], p[1], q[0], q[1], GAP))
+            });
+            if meet {
+                return Err(BlendError::PlanningFailure {
+                    reason: format!(
+                        "two fillets on face {} cross: their radii are too large for the face between them",
+                        face_id.index()
+                    ),
+                });
+            }
+        }
+    }
     for (i, &(rim, own)) in closed.iter().enumerate() {
         let near = distance(rim, own);
         for (j, &(_, other)) in closed.iter().enumerate() {

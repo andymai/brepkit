@@ -237,7 +237,7 @@ fn rolling_ball_fillet_single_edge() {
 }
 
 #[test]
-fn rolling_ball_rejects_closed_rim_so_dispatcher_falls_through() {
+fn rolling_ball_rejects_a_closed_rim() {
     // A cylinder's closed circular rim has no corners for this engine's
     // strips, and `try_fillet` relies on the error to fall through to the
     // walking engine. The engine refuses a closed edge outright; before the
