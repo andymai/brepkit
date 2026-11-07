@@ -1031,9 +1031,36 @@ pub fn validate_solid_with_options(
                 });
             }
         }
+        if outer_shell_faces_inward(topo, solid)? {
+            issues.push(ValidationIssue {
+                severity: Severity::Error,
+                description: "the outer shell's faces point inward".into(),
+            });
+        }
     }
 
     Ok(ValidationReport { issues })
+}
+
+/// Whether a solid is inside out: its faces agree with each other, which the
+/// edge checks read, but all point into the material. The mesh confirms the
+/// faces' integral, whose few Gauss points can misread a thin curved part.
+fn outer_shell_faces_inward(
+    topo: &Topology,
+    solid: SolidId,
+) -> Result<bool, crate::OperationsError> {
+    let outer = topo.solid(solid)?.outer_shell();
+    let mut enclosed = 0.0;
+    for &face in topo.shell(outer)?.faces() {
+        enclosed +=
+            brepkit_check::properties::face_integrator::integrate_face(topo, face, 4)?.volume;
+    }
+    if enclosed >= 0.0 {
+        return Ok(false);
+    }
+    let size = crate::measure::solid_bounding_box(topo, solid)?;
+    let deflection = 0.01 * (size.max - size.min).length();
+    Ok(crate::measure::oriented_solid_volume(topo, solid, deflection).is_ok_and(|v| v < 0.0))
 }
 
 /// Validate a solid with relaxed checks suitable for assembled geometry.
