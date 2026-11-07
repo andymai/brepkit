@@ -192,7 +192,8 @@ impl BrepKernel {
     /// # Errors
     ///
     /// Returns an error if a handle is invalid, fewer than two wires are given,
-    /// their edge counts differ, or a wire is closed.
+    /// their edge counts differ, a wire is closed, meets itself or breaks, two
+    /// wires touch where they would be joined, or two lines cross or fold over.
     #[wasm_bindgen(js_name = "loftWires")]
     #[allow(clippy::needless_pass_by_value)]
     pub fn loft_wires(&mut self, wires: Vec<u32>) -> Result<u32, JsError> {
@@ -412,7 +413,8 @@ impl BrepKernel {
     /// # Errors
     ///
     /// Returns an error if an input is non-finite, the wire handle is invalid,
-    /// the extrusion has no length, or the wire is closed.
+    /// the extrusion has no length, the wire is closed, meets itself or breaks,
+    /// or a line runs along the extrusion.
     #[wasm_bindgen(js_name = "extrudeWire")]
     pub fn extrude_wire(
         &mut self,
@@ -493,8 +495,8 @@ impl BrepKernel {
     /// # Errors
     ///
     /// Returns an error if an input is non-finite, the wire handle is invalid,
-    /// the axis has no length, the wire lies along the axis, or the wire is
-    /// closed.
+    /// the axis has no length, the wire lies along the axis, an edge crosses the
+    /// axis, or the wire is closed, meets itself or breaks.
     #[wasm_bindgen(js_name = "revolveWire")]
     #[allow(clippy::too_many_arguments)]
     pub fn revolve_wire(
@@ -1961,6 +1963,26 @@ mod tests {
         for result in taken.as_array().unwrap() {
             let shell = u32::try_from(result["ok"].as_u64().expect("a shell")).unwrap();
             assert!(k.resolve_shell(shell).is_ok());
+        }
+
+        // A bad entry is refused, not dropped: a loft of what was left of the
+        // list would be a different surface than was asked for.
+        let bad = format!(
+            r#"[
+                {{"op": "loftWires", "args": {{"wires": [{open}, "bad", {far}]}}}},
+                {{"op": "loftWires", "args": {{"wires": [{open}, 4294967296]}}}},
+                {{"op": "loftWires", "args": {{"wires": 3}}}},
+                {{"op": "sweepWire", "args": {{"wire": {open}, "pathEdges": [{path}, null]}}}},
+                {{"op": "sweepWire", "args": {{"wire": {open}}}}}
+            ]"#
+        );
+        let refused: serde_json::Value = serde_json::from_str(&k.execute_batch(&bad)).unwrap();
+        for result in refused.as_array().unwrap() {
+            let reason = result["error"].as_str().unwrap_or_default();
+            assert!(
+                reason.contains("not a handle") || reason.contains("array"),
+                "{result}"
+            );
         }
     }
 

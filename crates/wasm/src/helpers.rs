@@ -120,6 +120,22 @@ pub fn get_u32(args: &serde_json::Value, key: &str) -> Result<u32, String> {
         .ok_or_else(|| format!("missing or invalid '{key}'"))
 }
 
+/// Extract an array of handles from batch args. Every entry must be one: an
+/// entry dropped or wrapped would build a different shape than was asked for.
+pub fn handles_in(args: &serde_json::Value, key: &str) -> Result<Vec<u32>, String> {
+    args[key]
+        .as_array()
+        .ok_or_else(|| format!("missing or invalid '{key}' array"))?
+        .iter()
+        .enumerate()
+        .map(|(i, v)| {
+            v.as_u64()
+                .and_then(|n| u32::try_from(n).ok())
+                .ok_or_else(|| format!("{key}[{i}] is not a handle"))
+        })
+        .collect()
+}
+
 /// Extract a `usize` from a JSON value.
 pub fn json_usize(val: &serde_json::Value, key: &str) -> Result<usize, JsError> {
     val[key].as_u64().map(|v| v as usize).ok_or_else(|| {

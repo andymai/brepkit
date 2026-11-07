@@ -21,7 +21,9 @@ use crate::handles::{
     compound_id_to_u32, edge_id_to_u32, face_id_to_u32, shell_id_to_u32, solid_id_to_u32,
     wire_id_to_u32,
 };
-use crate::helpers::{TOL, classify_to_string, get_f64, get_u32, panic_message, try_fillet};
+use crate::helpers::{
+    TOL, classify_to_string, get_f64, get_u32, handles_in, panic_message, try_fillet,
+};
 use crate::kernel::BrepKernel;
 
 #[wasm_bindgen]
@@ -678,14 +680,7 @@ impl BrepKernel {
                 Ok(serde_json::json!(shell_id_to_u32(shell)))
             }
             "loftWires" => {
-                let wire_handles: Vec<u32> = args["wires"]
-                    .as_array()
-                    .map(|arr| {
-                        arr.iter()
-                            .filter_map(|v| v.as_u64().map(|n| n as u32))
-                            .collect()
-                    })
-                    .unwrap_or_default();
+                let wire_handles = handles_in(args, "wires")?;
                 let wire_ids: Vec<_> = wire_handles
                     .iter()
                     .map(|&h| self.resolve_wire(h).map_err(|e| e.to_string()))
@@ -696,14 +691,7 @@ impl BrepKernel {
             }
             "sweepWire" => {
                 let w = get_u32(args, "wire")?;
-                let edge_handles: Vec<u32> = args["pathEdges"]
-                    .as_array()
-                    .map(|arr| {
-                        arr.iter()
-                            .filter_map(|v| v.as_u64().map(|n| n as u32))
-                            .collect()
-                    })
-                    .unwrap_or_default();
+                let edge_handles = handles_in(args, "pathEdges")?;
                 let wire_id = self.resolve_wire(w).map_err(|e| e.to_string())?;
                 let edge_ids: Vec<_> = edge_handles
                     .iter()

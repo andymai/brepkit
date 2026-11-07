@@ -1689,6 +1689,40 @@ mod tests {
             vec![Run::Line(Point3::new(0.0, 2.0, 0.0))],
         );
         refused(loft_wires(&mut topo, &[one, backward]), "cross");
+
+        // A reflex corner folds the ruled patch over itself, and a line ending
+        // in the middle of the other doubles its boundary back.
+        let reflex_low = open_wire(
+            &mut topo,
+            Point3::new(0.0, 0.0, 0.0),
+            vec![Run::Line(Point3::new(2.0, 0.0, 0.0))],
+        );
+        let reflex_high = open_wire(
+            &mut topo,
+            Point3::new(0.0, 2.0, 0.0),
+            vec![Run::Line(Point3::new(0.5, 0.5, 0.0))],
+        );
+        refused(loft_wires(&mut topo, &[reflex_low, reflex_high]), "cross");
+        let across = open_wire(
+            &mut topo,
+            Point3::new(2.0, -1.0, 0.0),
+            vec![Run::Line(Point3::new(2.0, 1.0, 0.0))],
+        );
+        refused(loft_wires(&mut topo, &[reflex_low, across]), "cross");
+    }
+
+    /// A curve that misses its edge's vertices would leave the shell's boundary
+    /// apart from its topology.
+    #[test]
+    fn every_op_refuses_an_edge_off_its_vertices() {
+        let up = Vec3::new(0.0, 0.0, 1.0);
+        let mut topo = Topology::new();
+        let a = topo.add_vertex(Vertex::new(Point3::new(5.0, 0.0, 0.0), TOL));
+        let b = topo.add_vertex(Vertex::new(Point3::new(-9.0, 0.0, 0.0), TOL));
+        let circle = Circle3D::new(Point3::new(0.0, 0.0, 0.0), up, 5.0).unwrap();
+        let edge = topo.add_edge(Edge::new(a, b, EdgeCurve::Circle(circle)));
+        let wire = topo.add_wire(Wire::new(vec![OrientedEdge::new(edge, true)], false).unwrap());
+        refused(extrude_wire(&mut topo, wire, up, 5.0), "reach");
     }
 
     // Sweep.

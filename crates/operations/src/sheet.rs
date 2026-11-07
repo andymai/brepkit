@@ -49,6 +49,8 @@ const PATH_JOIN_FACTOR: f64 = 100.0;
 
 /// Knots of two ruled curves within this of each other, on `[0, 1]`, are one.
 const KNOT_EPS: f64 = 1e-9;
+/// How far an edge's vertex may sit off its curve: a fitted curve's own error.
+const ON_CURVE: f64 = 1e-5;
 
 fn refuse(reason: impl Into<String>) -> OperationsError {
     OperationsError::InvalidInput {
@@ -153,6 +155,18 @@ fn open_chain(topo: &mut Topology, wire: WireId) -> Result<OpenChain, Operations
     }
     let mut runs = Vec::with_capacity(edges.len());
     for (i, oe) in edges.into_iter().enumerate() {
+        let edge = topo.edge(oe.edge())?;
+        let (start, end) = (
+            topo.vertex(edge.start())?.point(),
+            topo.vertex(edge.end())?.point(),
+        );
+        let (t0, t1) = edge.curve().domain_with_endpoints(start, end);
+        let misses = |t: f64, p: Point3| {
+            (edge.curve().evaluate_with_endpoints(t, start, end) - p).length() > ON_CURVE
+        };
+        if misses(t0, start) || misses(t1, end) {
+            return Err(refuse("an edge's curve does not reach its vertices"));
+        }
         normalize_edge_curve(topo, oe.edge(), tol)?;
         runs.push(EdgeRun {
             edge: oe,
@@ -815,7 +829,16 @@ pub fn loft_wires(topo: &mut Topology, wires: &[WireId]) -> Result<ShellId, Oper
                 (EdgeCurve::Line, EdgeCurve::Line) => {
                     ruled_lines(near.from, near.to, far.from, far.to)?
                 }
-                _ => FaceSurface::Nurbs(ruled_spans(&near.span()?, &far.span()?)?),
+                (
+                    EdgeCurve::Line
+                    | EdgeCurve::Circle(_)
+                    | EdgeCurve::Ellipse(_)
+                    | EdgeCurve::NurbsCurve(_),
+                    EdgeCurve::Line
+                    | EdgeCurve::Circle(_)
+                    | EdgeCurve::Ellipse(_)
+                    | EdgeCurve::NurbsCurve(_),
+                ) => FaceSurface::Nurbs(ruled_spans(&near.span()?, &far.span()?)?),
             };
             faces.push(band_face(
                 topo,
@@ -845,13 +868,16 @@ fn ruled_lines(
         .normalize()
         .map_err(|_| crossing())?;
     if corners.iter().all(|&c| (c - a0).dot(normal).abs() <= tol) {
-        let backward_turns = (0..4)
-            .filter(|&k| {
-                let (p, q, r) = (corners[k], corners[(k + 1) % 4], corners[(k + 2) % 4]);
-                (q - p).cross(r - q).dot(normal) < -tol * tol
-            })
-            .count();
-        if backward_turns >= 2 {
+        // The ruled patch between two lines only fills a convex quad: at a
+        // reflex corner it folds over itself, and one of its sides doubling
+        // back along the next retraces the boundary.
+        let folds = (0..4).any(|k| {
+            let (p, q, r) = (corners[k], corners[(k + 1) % 4], corners[(k + 2) % 4]);
+            let (along, next) = (q - p, r - q);
+            let turn = along.cross(next).dot(normal);
+            turn < -tol * tol || (turn.abs() <= tol * tol && along.dot(next) < 0.0)
+        });
+        if folds {
             return Err(crossing());
         }
         return Ok(FaceSurface::Plane {
