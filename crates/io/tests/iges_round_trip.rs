@@ -606,3 +606,321 @@ fn a_whole_ring_takes_its_surfaces_own_boundary() {
     let edges: BTreeSet<_> = wire.edges().iter().map(|oe| oe.edge().index()).collect();
     assert_eq!((wire.edges().len(), edges.len()), (4, 2));
 }
+
+/// A flat face over `corners`, in the order they run, appended to `entities`:
+/// its edges as lines in a composite, over the plane they lie in. The corners
+/// wind counter-clockwise about the face's outward normal, `(a, b, c)`, and
+/// `d` is the plane's offset along it.
+fn push_quad(entities: &mut Vec<(u32, String)>, corners: [[f64; 3]; 4], normal: [f64; 3], d: f64) {
+    let de = |index: usize| 2 * index + 1;
+    let first = entities.len();
+    for (i, a) in corners.iter().enumerate() {
+        let b = corners[(i + 1) % 4];
+        entities.push((
+            110,
+            format!(
+                "110,{:?},{:?},{:?},{:?},{:?},{:?};",
+                a[0], a[1], a[2], b[0], b[1], b[2]
+            ),
+        ));
+    }
+    let lines: Vec<String> = (first..first + 4).map(|i| de(i).to_string()).collect();
+    let composite = entities.len();
+    entities.push((102, format!("102,4,{};", lines.join(","))));
+    let plane = entities.len();
+    entities.push((
+        108,
+        format!(
+            "108,{:?},{:?},{:?},{d:?},0,0.,0.,0.;",
+            normal[0], normal[1], normal[2]
+        ),
+    ));
+    entities.push((144, format!("144,{},1,0,{};", de(plane), de(composite))));
+}
+
+/// The six faces of the box from `-half` to `half`, facing out.
+fn push_box(entities: &mut Vec<(u32, String)>, half: f64) {
+    let h = half;
+    push_quad(
+        entities,
+        [[-h, -h, h], [h, -h, h], [h, h, h], [-h, h, h]],
+        [0.0, 0.0, 1.0],
+        h,
+    );
+    push_quad(
+        entities,
+        [[-h, h, -h], [h, h, -h], [h, -h, -h], [-h, -h, -h]],
+        [0.0, 0.0, -1.0],
+        h,
+    );
+    push_quad(
+        entities,
+        [[h, -h, -h], [h, h, -h], [h, h, h], [h, -h, h]],
+        [1.0, 0.0, 0.0],
+        h,
+    );
+    push_quad(
+        entities,
+        [[-h, -h, h], [-h, h, h], [-h, h, -h], [-h, -h, -h]],
+        [-1.0, 0.0, 0.0],
+        h,
+    );
+    push_quad(
+        entities,
+        [[h, h, -h], [-h, h, -h], [-h, h, h], [h, h, h]],
+        [0.0, 1.0, 0.0],
+        h,
+    );
+    push_quad(
+        entities,
+        [[-h, -h, -h], [h, -h, -h], [h, -h, h], [-h, -h, h]],
+        [0.0, -1.0, 0.0],
+        h,
+    );
+}
+
+/// A closed polyline as a degree 1 curve through the square's corners, read
+/// over `from..to`, and the face it bounds in `z = 0`.
+fn closed_square_face(points: &[[f64; 3]], from: f64, to: f64) -> Vec<(u32, String)> {
+    let n = points.len();
+    let mut knots = vec![0.0_f64];
+    knots.extend((0..n).map(|i| i as f64));
+    knots.push((n - 1) as f64);
+    let list = |values: Vec<f64>| {
+        values
+            .iter()
+            .map(|v| format!("{v:?}"))
+            .collect::<Vec<_>>()
+            .join(",")
+    };
+    let weights = vec![1.0; n];
+    let coordinates: Vec<f64> = points.iter().flatten().copied().collect();
+    vec![
+        (108, "108,0.,0.,1.,0.,0,0.,0.,0.;".to_string()),
+        (
+            126,
+            format!(
+                "126,{},1,0,0,0,0,{},{},{},{from:?},{to:?},0.,0.,1.;",
+                n - 1,
+                list(knots),
+                list(weights),
+                list(coordinates)
+            ),
+        ),
+        (144, "144,1,1,0,3;".to_string()),
+    ]
+}
+
+/// The point `fraction` of the way along a face's first edge, the way the
+/// face's wire runs it.
+fn along_first_edge(topo: &Topology, solid: SolidId, fraction: f64) -> Point3 {
+    let shell = topo
+        .shell(topo.solid(solid).unwrap().outer_shell())
+        .unwrap();
+    let face = topo.face(shell.faces()[0]).unwrap();
+    let oriented = topo.wire(face.outer_wire()).unwrap().edges()[0];
+    let edge = topo.edge(oriented.edge()).unwrap();
+    let (a, b) = (
+        topo.vertex(edge.start()).unwrap().point(),
+        topo.vertex(edge.end()).unwrap().point(),
+    );
+    let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
+    let f = if oriented.is_forward() {
+        fraction
+    } else {
+        1.0 - fraction
+    };
+    edge.curve()
+        .evaluate_with_endpoints(t0 + (t1 - t0) * f, a, b)
+}
+
+/// A closed curve keeps the span a file reads it over, and the way it runs:
+/// both are lost when the edge stores the whole curve, which reads forward.
+#[test]
+fn a_closed_curve_keeps_its_span_and_direction() {
+    let square = [
+        [0.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0],
+        [1.0, 1.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [0.0, 0.0, 0.0],
+    ];
+    for (name, points, from, to, quarter) in [
+        ("forward", square.to_vec(), 0.0, 4.0, (1.0, 0.0)),
+        ("backward", square.to_vec(), 4.0, 0.0, (0.0, 1.0)),
+        (
+            "a tail past its closing point",
+            [&square[..], &[[5.0, 5.0, 0.0]]].concat(),
+            0.0,
+            4.0,
+            (1.0, 0.0),
+        ),
+        (
+            "a tail, run backward",
+            [&square[..], &[[5.0, 5.0, 0.0]]].concat(),
+            4.0,
+            0.0,
+            (0.0, 1.0),
+        ),
+    ] {
+        let mut topo = Topology::new();
+        let solids = read_iges(
+            &iges_file(&closed_square_face(&points, from, to)),
+            &mut topo,
+        )
+        .unwrap();
+        assert_eq!(solids.len(), 1, "{name}");
+        let at = along_first_edge(&topo, solids[0], 0.25);
+        assert!(
+            (at - Point3::new(quarter.0, quarter.1, 0.0)).length() < 1e-9,
+            "{name}: a quarter along reads {at:?}"
+        );
+    }
+}
+
+/// A line and an S across it share their ends and their middle, and are not
+/// one edge: the faces on them are separate solids.
+#[test]
+fn a_line_and_an_s_across_it_stay_apart() {
+    let mut entities = Vec::new();
+    push_quad(
+        &mut entities,
+        [
+            [0.0, 0.0, 0.0],
+            [3.0, 0.0, 0.0],
+            [3.0, 1.0, 0.0],
+            [0.0, 1.0, 0.0],
+        ],
+        [0.0, 0.0, 1.0],
+        0.0,
+    );
+    let curve = entities.len();
+    entities.push((
+        126,
+        "126,3,3,0,0,1,0,0.,0.,0.,0.,1.,1.,1.,1.,1.,1.,1.,1.,\
+         0.,0.,0.,1.,1.,0.,2.,-1.,0.,3.,0.,0.,0.,1.,0.,0.,1.;"
+            .to_string(),
+    ));
+    let mut side = |a: [f64; 3], b: [f64; 3]| {
+        entities.push((
+            110,
+            format!(
+                "110,{:?},{:?},{:?},{:?},{:?},{:?};",
+                a[0], a[1], a[2], b[0], b[1], b[2]
+            ),
+        ));
+        2 * (entities.len() - 1) + 1
+    };
+    let down = side([3.0, 0.0, 0.0], [3.0, -5.0, 0.0]);
+    let across = side([3.0, -5.0, 0.0], [0.0, -5.0, 0.0]);
+    let up = side([0.0, -5.0, 0.0], [0.0, 0.0, 0.0]);
+    let composite = entities.len();
+    entities.push((
+        102,
+        format!("102,4,{},{down},{across},{up};", 2 * curve + 1),
+    ));
+    let plane = entities.len();
+    entities.push((108, "108,0.,0.,1.,0.,0,0.,0.,0.;".to_string()));
+    entities.push((
+        144,
+        format!("144,{},1,0,{};", 2 * plane + 1, 2 * composite + 1),
+    ));
+
+    let mut topo = Topology::new();
+    let solids = read_iges(&iges_file(&entities), &mut topo).unwrap();
+    assert_eq!(solids.len(), 2);
+}
+
+/// An open sheet facing down inside a box reads a negative signed volume, but
+/// it has no inside: it stays its own solid, and not a cavity of the box.
+#[test]
+fn an_open_sheet_is_no_cavity() {
+    let mut entities = Vec::new();
+    push_box(&mut entities, 2.0);
+    push_quad(
+        &mut entities,
+        [
+            [-1.0, 1.0, 1.0],
+            [1.0, 1.0, 1.0],
+            [1.0, -1.0, 1.0],
+            [-1.0, -1.0, 1.0],
+        ],
+        [0.0, 0.0, -1.0],
+        -1.0,
+    );
+    let mut topo = Topology::new();
+    let solids = read_iges(&iges_file(&entities), &mut topo).unwrap();
+    assert_eq!(solids.len(), 2);
+    for &solid in &solids {
+        assert!(topo.solid(solid).unwrap().inner_shells().is_empty());
+    }
+}
+
+/// A hollow column through a ring's hole: its cavity lies in the ring's box,
+/// the smaller of the two, but not in the ring.
+#[test]
+fn a_cavity_in_a_rings_box_stays_with_its_own_solid() {
+    let mut topo = Topology::new();
+    let ring = make_torus(&mut topo, 4.0, 1.5, 16).unwrap();
+    let solid = make_box(&mut topo, 2.0, 2.0, 1000.0).unwrap();
+    transform_solid(&mut topo, solid, &Mat4::translation(-1.0, -1.0, -500.0)).unwrap();
+    let void = make_box(&mut topo, 0.5, 0.5, 0.5).unwrap();
+    transform_solid(&mut topo, void, &Mat4::translation(-0.25, -0.25, -0.25)).unwrap();
+    let column = boolean(&mut topo, BooleanOp::Cut, solid, void).unwrap();
+    assert_eq!(topo.solid(column).unwrap().inner_shells().len(), 1);
+
+    let (read, solids) = round_trip(&topo, &[column, ring]);
+    assert_eq!(solids.len(), 2);
+    for &solid in &solids {
+        let cavities = read.solid(solid).unwrap().inner_shells().len();
+        let bounds = brepkit_operations::measure::solid_bounding_box(&read, solid).unwrap();
+        let is_column = bounds.max.z() > 100.0;
+        assert_eq!(cavities, usize::from(is_column), "column: {is_column}");
+    }
+}
+
+/// Coordinates far past what a vertex's cell can count saturate it: the cells
+/// around it must not overflow.
+#[test]
+fn a_huge_coordinate_is_read_safely() {
+    let mut entities = Vec::new();
+    push_quad(
+        &mut entities,
+        [
+            [1e13, 1e13, 0.0],
+            [1e300, 1e13, 0.0],
+            [1e300, 1e300, 0.0],
+            [-1e300, 1e300, 0.0],
+        ],
+        [0.0, 0.0, 1.0],
+        0.0,
+    );
+    let mut topo = Topology::new();
+    assert!(read_iges(&iges_file(&entities), &mut topo).is_ok());
+}
+
+/// A boundary that does not close bounds nothing: an open line, and two lines
+/// that do not meet, leave no face.
+#[test]
+fn a_boundary_that_does_not_close_is_no_face() {
+    let line = |a: f64, b: f64| format!("110,{a:?},0.,0.,{b:?},0.,0.;");
+    for lines in [vec![line(0.0, 1.0)], vec![line(0.0, 1.0), line(5.0, 6.0)]] {
+        let mut entities = vec![(108, "108,0.,0.,1.,0.,0,0.,0.,0.;".to_string())];
+        let first = entities.len();
+        let count = lines.len();
+        entities.extend(lines.into_iter().map(|l| (110, l)));
+        let pointers: Vec<String> = (first..first + count)
+            .map(|i| (2 * i + 1).to_string())
+            .collect();
+        let composite = entities.len();
+        entities.push((102, format!("102,{count},{};", pointers.join(","))));
+        entities.push((144, format!("144,1,1,0,{};", 2 * composite + 1)));
+        let mut topo = Topology::new();
+        assert!(
+            read_iges(&iges_file(&entities), &mut topo)
+                .unwrap()
+                .is_empty(),
+            "{count} lines"
+        );
+    }
+}

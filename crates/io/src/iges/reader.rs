@@ -11,13 +11,17 @@
 
 use std::collections::{BTreeMap, HashMap};
 
+use brepkit_math::nurbs::knot_ops::curve_split;
 use brepkit_math::nurbs::{NurbsCurve, NurbsSurface};
 use brepkit_math::vec::{Point3, Vec3};
+use brepkit_operations::classify::{PointClassification, classify_point};
 use brepkit_topology::Topology;
 use brepkit_topology::edge::{Edge, EdgeCurve, EdgeId};
+use brepkit_topology::explorer::solid_vertices;
 use brepkit_topology::face::{Face, FaceId, FaceSurface};
 use brepkit_topology::shell::{Shell, ShellId};
 use brepkit_topology::solid::{Solid, SolidId};
+use brepkit_topology::validation::{validate_shell_closed, validate_wire_closed};
 use brepkit_topology::vertex::{Vertex, VertexId};
 use brepkit_topology::wire::{OrientedEdge, Wire, WireId};
 
@@ -243,10 +247,36 @@ impl Stretch {
         }
     }
 
-    fn into_curve(self) -> EdgeCurve {
-        match self {
-            Self::Line(..) => EdgeCurve::Line,
-            Self::Curve { curve, .. } => EdgeCurve::NurbsCurve(curve),
+    /// The curve an edge along this stretch stores. An open edge reads its
+    /// span off its two vertices, so it can hold the whole curve. A closed
+    /// one has one vertex to read, and a closed curve reads as its whole
+    /// domain run forward: it holds just its span, run the way the file runs it.
+    fn into_curve(self, closed: bool) -> Result<EdgeCurve, IoError> {
+        let malformed = |e: brepkit_math::MathError| IoError::ParseError {
+            reason: format!("an IGES curve's span cannot be cut out: {e}"),
+        };
+        let (curve, from, to) = match self {
+            Self::Line(..) => return Ok(EdgeCurve::Line),
+            Self::Curve { curve, from, to } => (curve, from, to),
+        };
+        if !closed {
+            return Ok(EdgeCurve::NurbsCurve(curve));
+        }
+        let (low, high) = (from.min(to), from.max(to));
+        let (start, end) = curve.domain();
+        let margin = 1e-9 * (end - start).abs().max(1.0);
+        let mut span = curve;
+        if low > start + margin {
+            span = curve_split(&span, low).map_err(malformed)?.1;
+        }
+        if high < end - margin {
+            span = curve_split(&span, high).map_err(malformed)?.0;
+        }
+        let span = EdgeCurve::NurbsCurve(span);
+        if from > to {
+            span.reversed().map_err(malformed)
+        } else {
+            Ok(span)
         }
     }
 }
@@ -300,7 +330,12 @@ impl<'a> Sewing<'a> {
         for i in -1..=1 {
             for j in -1..=1 {
                 for k in -1..=1 {
-                    if let Some(found) = self.vertices.get(&(x + i, y + j, z + k))
+                    let near_cell = (
+                        x.saturating_add(i),
+                        y.saturating_add(j),
+                        z.saturating_add(k),
+                    );
+                    if let Some(found) = self.vertices.get(&near_cell)
                         && let Some(&(_, id)) =
                             found.iter().find(|(q, _)| (*q - p).length() <= SEW_TOL)
                     {
@@ -316,7 +351,7 @@ impl<'a> Sewing<'a> {
 
     /// The edge along `stretch`, made when no other runs along it, and whether
     /// this use runs with it.
-    fn edge(&mut self, topo: &mut Topology, stretch: Stretch) -> OrientedEdge {
+    fn edge(&mut self, topo: &mut Topology, stretch: Stretch) -> Result<OrientedEdge, IoError> {
         let (a, b) = stretch.ends();
         let (start, end) = (self.vertex(topo, a), self.vertex(topo, b));
         let key = if start.index() <= end.index() {
@@ -332,20 +367,23 @@ impl<'a> Sewing<'a> {
                 if !near(edge.middle, middle) {
                     continue;
                 }
-                if start != end {
-                    return OrientedEdge::new(edge.id, edge.start == start);
+                // Two curves can share their ends and a middle point (a line
+                // and an S across it, two closed curves through one far
+                // point): the points either side must match as well. An open
+                // edge's ends say which way this use runs.
+                let with = near(edge.quarter, quarter) && near(edge.three_quarters, three_quarters);
+                let against =
+                    near(edge.quarter, three_quarters) && near(edge.three_quarters, quarter);
+                let forward = edge.start == start;
+                if (start == end || forward) && with {
+                    return Ok(OrientedEdge::new(edge.id, true));
                 }
-                // Two closed curves can share a start and a far point: each
-                // way round, the points either side must match as well.
-                if near(edge.quarter, quarter) && near(edge.three_quarters, three_quarters) {
-                    return OrientedEdge::new(edge.id, true);
-                }
-                if near(edge.quarter, three_quarters) && near(edge.three_quarters, quarter) {
-                    return OrientedEdge::new(edge.id, false);
+                if (start == end || !forward) && against {
+                    return Ok(OrientedEdge::new(edge.id, false));
                 }
             }
         }
-        let id = topo.add_edge(Edge::new(start, end, stretch.into_curve()));
+        let id = topo.add_edge(Edge::new(start, end, stretch.into_curve(start == end)?));
         self.edges.entry(key).or_default().push(SewnEdge {
             id,
             start,
@@ -353,7 +391,7 @@ impl<'a> Sewing<'a> {
             middle,
             three_quarters,
         });
-        OrientedEdge::new(id, true)
+        Ok(OrientedEdge::new(id, true))
     }
 
     /// The stretches of a curve entity, in the order they run.
@@ -467,10 +505,15 @@ impl<'a> Sewing<'a> {
             pointer
         };
         let stretches = self.stretches(curve)?;
-        let edges = stretches.into_iter().map(|s| self.edge(topo, s)).collect();
-        let wire = Wire::new(edges, true).map_err(|e| IoError::ParseError {
+        let edges = stretches
+            .into_iter()
+            .map(|s| self.edge(topo, s))
+            .collect::<Result<Vec<_>, _>>()?;
+        let does_not_close = |e: brepkit_topology::TopologyError| IoError::ParseError {
             reason: format!("an IGES boundary does not close: {e}"),
-        })?;
+        };
+        let wire = Wire::new(edges, true).map_err(does_not_close)?;
+        validate_wire_closed(&wire, topo).map_err(does_not_close)?;
         Ok(topo.add_wire(wire))
     }
 
@@ -681,8 +724,9 @@ fn root(parent: &mut [usize], mut i: usize) -> usize {
     i
 }
 
-/// Sets of faces connected through shared edges, as solids. A set facing
-/// inward is a cavity of the solid with the smallest box holding it.
+/// Sets of faces connected through shared edges, as solids. A closed set
+/// facing inward is a cavity of the smallest solid holding it. A set that does
+/// not close, an open sheet say, has no inside and is its own solid.
 fn assemble_solids(topo: &mut Topology, face_ids: &[FaceId]) -> Result<Vec<SolidId>, IoError> {
     let mut parent: Vec<usize> = (0..face_ids.len()).collect();
     let mut first_use: HashMap<EdgeId, usize> = HashMap::new();
@@ -717,7 +761,10 @@ fn assemble_solids(topo: &mut Topology, face_ids: &[FaceId]) -> Result<Vec<Solid
             reason: format!("failed to build shell: {e}"),
         })?);
         let solid = topo.add_solid(Solid::new(shell, Vec::new()));
-        // A set that cannot be measured, an open sheet say, is its own solid.
+        if validate_shell_closed(topo.shell(shell).map_err(topo_err)?, topo).is_err() {
+            lone.push(solid);
+            continue;
+        }
         let extent = brepkit_operations::measure::solid_bounding_box(topo, solid)
             .map_or(1.0, |b| (b.max - b.min).length());
         match brepkit_operations::measure::oriented_solid_volume(topo, solid, extent * 1e-3) {
@@ -729,9 +776,17 @@ fn assemble_solids(topo: &mut Topology, face_ids: &[FaceId]) -> Result<Vec<Solid
 
     let mut held: HashMap<SolidId, Vec<ShellId>> = HashMap::new();
     for (cavity, shell) in cavities {
-        // The smallest box around it: a solid standing inside another's void
-        // has a box inside that void too, and only its own cavity is inside it.
+        // The smallest solid around it, by box: a solid standing inside
+        // another's void is inside that solid's outer shell too, and only its
+        // own cavity is inside it. A box alone can hold a cavity its solid
+        // does not (a column's through a ring's hole).
         let inner = brepkit_operations::measure::solid_bounding_box(topo, cavity)?;
+        let probe = solid_vertices(topo, cavity)
+            .map_err(topo_err)?
+            .first()
+            .map(|&vertex| topo.vertex(vertex).map(Vertex::point))
+            .transpose()
+            .map_err(topo_err)?;
         let mut holder = None;
         let mut smallest = f64::INFINITY;
         for &(solid, _) in &outers {
@@ -744,7 +799,15 @@ fn assemble_solids(topo: &mut Topology, face_ids: &[FaceId]) -> Result<Vec<Solid
                 && outer.max.z() >= inner.max.z();
             let span = outer.max - outer.min;
             let size = span.x() * span.y() * span.z();
-            if holds && size < smallest {
+            let around = holds
+                && size < smallest
+                && probe.is_some_and(|point| {
+                    !matches!(
+                        classify_point(topo, solid, point, 0.0, SEW_TOL),
+                        Ok(PointClassification::Outside) | Err(_)
+                    )
+                });
+            if around {
                 holder = Some(solid);
                 smallest = size;
             }
