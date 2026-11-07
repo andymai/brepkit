@@ -1645,19 +1645,12 @@ impl<'a> FilletBuilder<'a> {
         // Without a seed the propagation anchors on an arbitrary face, so the
         // post-assembly shell may come out globally inverted (every face's
         // effective normal pointing inward) while still passing the
-        // incidence and closure gates. Detect that via the signed volume of
-        // the result shell and flip the whole shell when negative, then
-        // re-run the orientation passes so consistency is restored. Seeds
-        // carry the input's orientation, which the propagation never flips,
-        // and the estimate reads curved faces over their whole parameter
-        // domain, so it is not asked to overrule them.
-        let signed_volume = if seeds.is_empty() {
-            crate::signed_volume::signed_shell_volume(topo, &result_faces)?
-        } else {
-            1.0
-        };
-        if signed_volume < 0.0 {
-            log::debug!("orientation flip: signed shell volume {signed_volume} < 0");
+        // incidence and closure gates. Detect that and flip the whole shell,
+        // then re-run the orientation passes so consistency is restored.
+        // Seeds carry the input's orientation, which the propagation never
+        // flips, so nothing is asked to overrule them.
+        if seeds.is_empty() && shell_faces_inward(topo, &result_faces, &original_faces)? {
+            log::debug!("orientation flip: the rebuilt shell faces inward");
             for &face_id in &result_faces {
                 let face = topo.face_mut(face_id)?;
                 face.set_reversed(!face.is_reversed());
@@ -1733,6 +1726,45 @@ impl<'a> FilletBuilder<'a> {
 }
 
 /// A planar face's outward normal and offset, its reversal applied.
+/// Whether a shell rebuilt with no face of the input left came out inside out.
+/// A rebuilt plane lying in a plane of the input keeps that plane's outward side,
+/// which says so exactly. Only with no such plane is it left to the signed volume,
+/// which reads curved faces over their whole parameter domain and about the
+/// origin, so a part far from the origin can read the wrong way.
+fn shell_faces_inward(
+    topo: &Topology,
+    faces: &[FaceId],
+    input: &[FaceId],
+) -> Result<bool, BlendError> {
+    const SAME_NORMAL: f64 = 1e-6;
+    const SAME_OFFSET: f64 = 1e-6;
+    let mut planes = Vec::with_capacity(input.len());
+    for &face in input {
+        planes.extend(outward_plane(topo, face)?);
+    }
+    let (mut kept, mut turned) = (0_usize, 0_usize);
+    for &face in faces {
+        let Some((normal, d)) = outward_plane(topo, face)? else {
+            continue;
+        };
+        for &(input_normal, input_d) in &planes {
+            let along = normal.dot(input_normal);
+            if (along - 1.0).abs() <= SAME_NORMAL && (d - input_d).abs() <= SAME_OFFSET {
+                kept += 1;
+                break;
+            }
+            if (along + 1.0).abs() <= SAME_NORMAL && (d + input_d).abs() <= SAME_OFFSET {
+                turned += 1;
+                break;
+            }
+        }
+    }
+    if kept + turned > 0 {
+        return Ok(turned > kept);
+    }
+    Ok(crate::signed_volume::signed_shell_volume(topo, faces)? < 0.0)
+}
+
 fn outward_plane(topo: &Topology, face_id: FaceId) -> Result<Option<(Vec3, f64)>, BlendError> {
     let face = topo.face(face_id)?;
     let FaceSurface::Plane { d, .. } = face.surface() else {
