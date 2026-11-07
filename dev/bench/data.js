@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794060525052,
+  "lastUpdate": 1794060736725,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -65771,6 +65771,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 17333877,
             "range": "± 125083",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "0dd2f426af1572d6cddf28cc0506bba81967c345",
+          "message": "fix(operations): round an edge that ends at a concave corner (#2313)",
+          "timestamp": "2026-11-07T06:06:12-08:00",
+          "tree_id": "854c668d7bf547ca6a718ee492f08f2742dc4e41",
+          "url": "https://github.com/andymai/brepkit/commit/0dd2f426af1572d6cddf28cc0506bba81967c345"
+        },
+        "date": 1794060724708,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1061322,
+            "range": "± 25297",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1136485,
+            "range": "± 7493",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12842,
+            "range": "± 25",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 682093,
+            "range": "± 2320",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 28718228,
+            "range": "± 121069",
             "unit": "ns/iter"
           }
         ]
