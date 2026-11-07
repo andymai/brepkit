@@ -26,6 +26,7 @@
 //! representation (3 control points, weights [1, cos(α/2), 1]),
 //! giving mathematically exact G1 continuity with both adjacent faces.
 
+pub mod concave_end;
 mod g1_chain;
 mod geometry;
 mod helpers;
