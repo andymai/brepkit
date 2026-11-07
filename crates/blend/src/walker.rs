@@ -91,6 +91,10 @@ pub struct WalkerConfig {
     pub min_step: f64,
     /// Maximum number of walking steps.
     pub max_steps: usize,
+    /// Largest turn of the spine's direction across one step, in radians:
+    /// the band is fitted through the sections, so round a tight bend a
+    /// step of a fixed share of the spine left it far off the true round.
+    pub max_turn: f64,
 }
 
 impl Default for WalkerConfig {
@@ -101,6 +105,7 @@ impl Default for WalkerConfig {
             max_step_fraction: 0.05,
             min_step: 1e-10,
             max_steps: 1000,
+            max_turn: 0.025,
         }
     }
 }
@@ -180,6 +185,29 @@ impl<'a, F: BlendFunction> Walker<'a, F> {
         (f[0] * f[0] + f[1] * f[1] + f[2] * f[2] + f[3] * f[3]).sqrt()
     }
 
+    /// `params` with each surface's parameters moved by whole turns into
+    /// the range of a surface that closes on itself (a B-spline wall round
+    /// a closed outline). Off that range a B-spline surface is extrapolated,
+    /// so a ball rolling across the seam walked off the wall.
+    fn wrapped(&self, params: BlendParams) -> BlendParams {
+        let (u1, v1) = wrap_params(self.surf1, params.u1, params.v1);
+        let (u2, v2) = wrap_params(self.surf2, params.u2, params.v2);
+        BlendParams { u1, v1, u2, v2 }
+    }
+
+    /// `to - from` on each surface, the short way round a closed one.
+    fn step_between(&self, from: BlendParams, to: BlendParams) -> BlendParams {
+        let (u1, v1) = (
+            short_way(self.surf1.closed_u(), to.u1 - from.u1),
+            short_way(self.surf1.closed_v(), to.v1 - from.v1),
+        );
+        let (u2, v2) = (
+            short_way(self.surf2.closed_u(), to.u2 - from.u2),
+            short_way(self.surf2.closed_v(), to.v2 - from.v2),
+        );
+        BlendParams { u1, v1, u2, v2 }
+    }
+
     /// Run Newton-Raphson iteration to convergence from an initial guess.
     ///
     /// Returns the converged parameters, or `None` if convergence fails.
@@ -200,6 +228,7 @@ impl<'a, F: BlendFunction> Walker<'a, F> {
             params.v1 += delta[1];
             params.u2 += delta[2];
             params.v2 += delta[3];
+            params = self.wrapped(params);
         }
 
         let f = self.func.value(self.surf1, self.surf2, &params, ctx);
@@ -283,6 +312,7 @@ impl<'a, F: BlendFunction> Walker<'a, F> {
         let ctx0 = self.make_context(s)?;
         let sec0 = self.func.section(self.surf1, self.surf2, &params, &ctx0);
         sections.push(sec0);
+        let mut nplan = ctx0.nplan;
 
         // Previous params for linear extrapolation (predictor).
         let mut prev_params: Option<BlendParams> = None;
@@ -311,12 +341,13 @@ impl<'a, F: BlendFunction> Walker<'a, F> {
                 if ds_old.abs() > f64::EPSILON {
                     let ds_new = s_next - s;
                     let ratio = ds_new / ds_old;
-                    BlendParams {
-                        u1: params.u1 + ratio * (params.u1 - prev.u1),
-                        v1: params.v1 + ratio * (params.v1 - prev.v1),
-                        u2: params.u2 + ratio * (params.u2 - prev.u2),
-                        v2: params.v2 + ratio * (params.v2 - prev.v2),
-                    }
+                    let d = self.step_between(prev, params);
+                    self.wrapped(BlendParams {
+                        u1: params.u1 + ratio * d.u1,
+                        v1: params.v1 + ratio * d.v1,
+                        u2: params.u2 + ratio * d.u2,
+                        v2: params.v2 + ratio * d.v2,
+                    })
                 } else {
                     params
                 }
@@ -326,7 +357,20 @@ impl<'a, F: BlendFunction> Walker<'a, F> {
 
             // Corrector: Newton at the new spine station.
             let ctx_next = self.make_context(s_next)?;
+            let turns_too_far = |ctx: &BlendContext| {
+                clamped_step > MIN_TURN_STEP * span
+                    && nplan.dot(ctx.nplan) < self.config.max_turn.cos()
+            };
+            if turns_too_far(&ctx_next) {
+                // Not a step: the halving stops at its floor, so these
+                // retries are bounded without drawing on `max_steps`, which
+                // a long curved spine would otherwise run out of.
+                step = 0.5 * clamped_step;
+                step_count -= 1;
+                continue;
+            }
             if let Some(converged) = self.newton_solve(predicted, &ctx_next) {
+                nplan = ctx_next.nplan;
                 prev_params = Some(params);
                 prev_s = s;
                 params = converged;
@@ -355,6 +399,30 @@ impl<'a, F: BlendFunction> Walker<'a, F> {
             sections,
             end_params: params,
         })
+    }
+}
+
+/// The shortest step, as a share of the spine, that a turn of the spine's
+/// direction can refuse (a kink in a G1 chain read from a file must not
+/// halve the step for ever).
+const MIN_TURN_STEP: f64 = 1e-3;
+
+/// `(u, v)` moved by whole turns into the range of each direction in which
+/// `surface` closes on itself.
+fn wrap_params(surface: &dyn ParametricSurface, u: f64, v: f64) -> (f64, f64) {
+    let wrap = |x: f64, range: Option<(f64, f64)>| match range {
+        Some((a, b)) if b - a > f64::EPSILON => a + (x - a).rem_euclid(b - a),
+        _ => x,
+    };
+    (wrap(u, surface.closed_u()), wrap(v, surface.closed_v()))
+}
+
+/// A parameter step `d` the short way round a direction that closes over
+/// `range`, unchanged in an open one.
+fn short_way(range: Option<(f64, f64)>, d: f64) -> f64 {
+    match range {
+        Some((a, b)) if b - a > f64::EPSILON => d - (d / (b - a)).round() * (b - a),
+        _ => d,
     }
 }
 
