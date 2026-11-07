@@ -1,0 +1,28 @@
+crates/operations/tests/compound_cut_fallback_policy.rs
+  s_649261a24df31b::t_707844a08a1d21 1-4
+  s_649261a24df31b::t_70cf1bb99eed86 12,30-32,34-35
+  s_649261a24df31b::t_0fbffef3caf826 33
+crates/algo/src/builder/face_splitter/special_cases.rs
+  s_649261a24df31b::t_0fbffef3caf826 2696-2697,2721,2759-2764,2820-2836,2841,2885-2892,2925-2934
+  s_649261a24df31b::t_a2e2fe1cb96b7d 2935
+crates/operations/tests/torus_cut_by_a_tilted_plane.rs
+  s_649261a24df31b::t_0fbffef3caf826 26-35,39,42-45,62,64-66,76-79
+crates/check/src/classify/boundary.rs
+  s_649261a24df31b::t_0fbffef3caf826 77,99,103-105,107-116,118-121,254,266,412,414,524-526
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "fe23c0d2d78d9e178f67cca3a4daff58b7e6cd9f",
+  "prompts": {},
+  "sessions": {
+    "s_649261a24df31b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d8bbbba4-0431-4f6a-a622-e632a6659779",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
