@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794056609097,
+  "lastUpdate": 1794056826062,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -65501,6 +65501,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 16837861,
             "range": "± 624576",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c7eda33bdb82d73a600860f80d93f685b1af4b10",
+          "message": "fix(operations): draft a cylinder wall along the pull into a cone (#2308)\n\nCloses #2174.\n\nToday `draft` refuses any face that isn't a plane, so the walls of an\nobround pocket fail with `draft target faces must be planar`. With this\nchange a cylinder wall running along the pull turns into a cone, and the\npocket drafts with the same faces it had: its two half cylinders become\ncones and its two flat walls lean with them.\n\n## Change\n\nAll in `draft.rs`:\n\n- A drafted cylinder becomes the cone through its circle on the neutral\nplane, leaning the way a plane with the same normal would.\n- A vertex on such a wall moves along its ruling to the plane that\nruling crosses. Every other face around the vertex must pass through\nthat point.\n- A rim on the wall becomes the cone's circle at its height, and a\nclosed rim is no longer read as turning back on itself.\n\n## Refusals\n\nThese return an error and leave the source as it was:\n\n- a cylinder whose axis doesn't run along the pull\n- a neighbour that wouldn't meet the wall along a ruling: one meeting it\nat a sharp edge, or a tangent one left out of the drafted set\n- a rim that isn't a circle square to the pull\n- a wall whose radius runs out before its far rim\n\n## Tests\n\n`crates/operations/tests/draft_curved_walls.rs` checks validity, a\nwatertight mesh, positive orientation and the closed-form volume to\n1e-6, for:\n\n- the issue's pocket, upright, turned and mirrored\n- an obround prism with the angle either way\n- a whole cylinder, which becomes a frustum\n- a round bore, which becomes a tapered hole\n- each refusal, and that the source keeps its surfaces and vertices\n\n## Verification\n\nPassing locally: that file and the `draft` unit tests in\n`brepkit-operations` and `brepkit-wasm`. The pose sweep and truth audit\noutputs are identical to `main`'s, as they don't call `draft`. I did not\nrun the tool-side suite.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nLets `draft` taper cylinder walls that run along the pull, turning each\ninto the cone through its circle on the neutral plane. An obround\npocket's two half cylinders now draft into cones and its flat walls lean\nwith them, instead of failing with `draft target faces must be planar`.\nRims stored as splines are read by samples and lean like circles, and\nwalls far from the origin still draft within coordinate precision.\n\n**Refusals**\n\n- Returns an error and leaves the source unchanged when a cylinder's\naxis doesn't run along the pull, a neighbor wouldn't meet the wall along\na ruling (a sharp edge or a tangent face left undrafted), a rim isn't a\ncircle square to the pull, or a wall's radius runs out before its far\nrim.\n\nTests in `crates/operations/tests/draft_curved_walls.rs` verify\nvalidity, a watertight mesh, positive orientation, and closed-form\nvolume to 1e-6 for the issue's pocket in several poses, prisms, a\nfrustum, a tapered bore, spline-stored rims, a wall 1e5 from the origin,\nand each refusal.\n\n<sup>Written for commit 76b2e2cccf66d6d231fb68c7cf71d51c807bdc13.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2308?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2308?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2308&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-11-07T05:01:08-08:00",
+          "tree_id": "0caeeeeedf3ac3cb8dc36cdf51d7849ecbd9dd24",
+          "url": "https://github.com/andymai/brepkit/commit/c7eda33bdb82d73a600860f80d93f685b1af4b10"
+        },
+        "date": 1794056815446,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1066343,
+            "range": "± 19141",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1137891,
+            "range": "± 2436",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13066,
+            "range": "± 47",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 681459,
+            "range": "± 3714",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 28586491,
+            "range": "± 141408",
             "unit": "ns/iter"
           }
         ]
