@@ -5191,6 +5191,75 @@ mod tests {
         }
     }
 
+    /// A corner with a fourth face passing through it has no setback ball:
+    /// solving the three-plane offset there would cut through that face, so
+    /// its stripes keep their ends, whatever their lengths.
+    #[test]
+    fn convex_trihedral_with_an_extra_face_keeps_its_stripes() {
+        let mut topo = Topology::new();
+        let solid = make_box(&mut topo, Vec3::new(90.0, 60.0, 10.0));
+        let (vertex, selected) = box_edges_at_origin(&topo, solid);
+        let plan = plan_box_edges(&topo, solid, selected, 1.0);
+        let mut stripe_results = analytic_box_stripes(&topo, &plan, 1.0);
+        let before: Vec<_> = stripe_results
+            .iter()
+            .map(|r| [r.stripe.sections[0].center, r.stripe.sections[1].center])
+            .collect();
+
+        let far = [Point3::new(0.0, 5.0, 5.0), Point3::new(0.0, 0.0, 5.0)]
+            .map(|p| topo.add_vertex(Vertex::new(p, TOL)));
+        let edges = [(vertex, far[0]), (far[0], far[1]), (far[1], vertex)]
+            .map(|(a, b)| OrientedEdge::new(topo.add_edge(Edge::new(a, b, EdgeCurve::Line)), true));
+        let wire = topo.add_wire(Wire::new(edges.to_vec(), true).unwrap());
+        let rib = topo.add_face(Face::new(
+            wire,
+            Vec::new(),
+            FaceSurface::Plane {
+                normal: Vec3::new(1.0, 0.0, 0.0),
+                d: 0.0,
+            },
+        ));
+        let mut scope = solid_shell_faces(&topo, solid);
+        scope.push(rib);
+
+        let setback_edges =
+            set_back_convex_trihedral_stripes(&topo, &plan, &mut stripe_results, &scope).unwrap();
+
+        assert!(setback_edges.is_empty());
+        for (result, before) in stripe_results.iter().zip(before) {
+            assert_eq!(result.stripe.sections[0].center, before[0]);
+            assert_eq!(result.stripe.sections[1].center, before[1]);
+        }
+    }
+
+    /// A ball centre off a stripe's centreline cannot be reached by trimming
+    /// that stripe, so none of the corner's stripes moves.
+    #[test]
+    fn convex_trihedral_with_a_centre_off_a_stripe_keeps_its_stripes() {
+        let mut topo = Topology::new();
+        let solid = make_box(&mut topo, Vec3::new(90.0, 60.0, 10.0));
+        let (_vertex, selected) = box_edges_at_origin(&topo, solid);
+        let plan = plan_box_edges(&topo, solid, selected, 1.0);
+        let mut stripe_results = analytic_box_stripes(&topo, &plan, 1.0);
+        for section in &mut stripe_results[0].stripe.sections {
+            section.center = section.center + Vec3::new(0.0, 0.0, 0.01);
+        }
+        let before: Vec<_> = stripe_results
+            .iter()
+            .map(|r| [r.stripe.sections[0].center, r.stripe.sections[1].center])
+            .collect();
+
+        let scope = solid_shell_faces(&topo, solid);
+        let setback_edges =
+            set_back_convex_trihedral_stripes(&topo, &plan, &mut stripe_results, &scope).unwrap();
+
+        assert!(setback_edges.is_empty());
+        for (result, before) in stripe_results.iter().zip(before) {
+            assert_eq!(result.stripe.sections[0].center, before[0]);
+            assert_eq!(result.stripe.sections[1].center, before[1]);
+        }
+    }
+
     /// An un-set-back trihedral junction (the 90:60:10 corner, its stripes
     /// left untrimmed) classifies
     /// `Some(false)` and builds its cap on the geometrically determined
