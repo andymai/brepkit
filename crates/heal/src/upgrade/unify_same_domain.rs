@@ -11,12 +11,14 @@ use std::collections::{HashMap, HashSet};
 
 use brepkit_math::frame::Frame3;
 use brepkit_math::region2d::{Boundary2, point_in_region};
-use brepkit_math::vec::{Point2, Vec2};
+use brepkit_math::surfaces::SphericalSurface;
+use brepkit_math::vec::{Point2, Vec2, Vec3};
 use brepkit_topology::Topology;
-use brepkit_topology::edge::{Edge, EdgeCurve};
-use brepkit_topology::face::FaceId;
+use brepkit_topology::edge::{Edge, EdgeCurve, EdgeId};
+use brepkit_topology::face::{Face, FaceId, FaceSurface};
 use brepkit_topology::shell::Shell;
 use brepkit_topology::solid::SolidId;
+use brepkit_topology::vertex::VertexId;
 use brepkit_topology::wire::{OrientedEdge, Wire, WireId};
 
 use crate::HealError;
@@ -213,8 +215,18 @@ pub fn unify_same_domain(
             // The reassembly path keeps holes attached and correctly orders the
             // surviving loops; it is the only path that can merge groups with
             // inner wires. Periodic surfaces with holes are deferred (a hole
-            // touching a seam cannot be classified in UV yet).
+            // touching a seam cannot be classified in UV yet), except a sphere's
+            // two halves meeting on their whole outer wires, which have no seam
+            // left to touch.
             if has_holes && !surface.is_planar() {
+                if let Some(whole) = merge_whole_sphere(topo, &group_face_ids, &surface)? {
+                    for &fid in &group_face_ids {
+                        faces_to_remove.insert(fid);
+                    }
+                    total_merged += group_face_ids.len() - 1;
+                    new_faces_to_add.push(whole);
+                    continue;
+                }
                 log::warn!(
                     "unify_same_domain: skipping non-planar group with {} faces (holes on periodic surface)",
                     group.len()
@@ -344,6 +356,117 @@ fn unpaired_edge_count(topo: &Topology, faces: &[FaceId]) -> Result<usize, HealE
         }
     }
     Ok(uses.values().filter(|&&c| c != 2).count())
+}
+
+/// Two faces of a sphere that share edges of their outer wires, as a primitive's
+/// hemispheres share their equator, as one face. Their other edges close into
+/// loops, each with the face on its left as an outer wire has it, and these and
+/// their holes are all the boundary the sphere keeps, so the first serves as the
+/// outer wire and the rest as holes. The surface's axis turns to pass through
+/// that loop, which then winds the axis with neither pole on it, the layout the
+/// sphere mesher reads a band or a large cap in. `None` when the faces share no
+/// edge, or their other edges do not close into separate loops.
+fn merge_whole_sphere(
+    topo: &mut Topology,
+    group: &[FaceId],
+    surface: &FaceSurface,
+) -> Result<Option<FaceId>, HealError> {
+    /// Samples per edge when reading where a loop's cap lies.
+    const SAMPLES: u32 = 8;
+    let FaceSurface::Sphere(sphere) = surface else {
+        return Ok(None);
+    };
+    let &[first, second] = group else {
+        return Ok(None);
+    };
+    let (a, b) = (topo.face(first)?, topo.face(second)?);
+    let reversed = a.is_reversed();
+    if reversed != b.is_reversed() {
+        return Ok(None);
+    }
+    let mut holes: Vec<WireId> = a.inner_wires().to_vec();
+    holes.extend_from_slice(b.inner_wires());
+    let mut outer: Vec<OrientedEdge> = topo.wire(a.outer_wire())?.edges().to_vec();
+    let outer_a = outer.len();
+    outer.extend_from_slice(topo.wire(b.outer_wire())?.edges());
+
+    // Each face runs a shared edge the other way, and the edge goes.
+    let mut uses: HashMap<EdgeId, usize> = HashMap::new();
+    for oe in &outer {
+        *uses.entry(oe.edge()).or_insert(0) += 1;
+    }
+    if uses.values().any(|&n| n > 2) || !outer[..outer_a].iter().any(|oe| uses[&oe.edge()] == 2) {
+        return Ok(None);
+    }
+    let kept: Vec<OrientedEdge> = outer
+        .iter()
+        .copied()
+        .filter(|oe| uses[&oe.edge()] == 1)
+        .collect();
+
+    // Chain them, a vertex two loops pass through being no separate loop.
+    let mut leaving: HashMap<VertexId, usize> = HashMap::new();
+    for (i, oe) in kept.iter().enumerate() {
+        let start = oe.oriented_start(topo.edge(oe.edge())?);
+        if leaving.insert(start, i).is_some() {
+            return Ok(None);
+        }
+    }
+    let mut walked = vec![false; kept.len()];
+    let mut loops: Vec<Vec<OrientedEdge>> = Vec::new();
+    for from in 0..kept.len() {
+        if walked[from] {
+            continue;
+        }
+        let mut chain = Vec::new();
+        let mut at = from;
+        while !walked[at] {
+            walked[at] = true;
+            chain.push(kept[at]);
+            let end = kept[at].oriented_end(topo.edge(kept[at].edge())?);
+            let Some(&next) = leaving.get(&end) else {
+                return Ok(None);
+            };
+            at = next;
+        }
+        if at != from {
+            return Ok(None);
+        }
+        loops.push(chain);
+    }
+    for chain in loops {
+        holes.insert(0, topo.add_wire(Wire::new(chain, true)?));
+    }
+    let Some((&outer_wire, rest)) = holes.split_first() else {
+        return Ok(None);
+    };
+    let rest = rest.to_vec();
+
+    // The loop's cap lies along the mean of its samples from the centre.
+    let center = sphere.center();
+    let mut toward = Vec3::new(0.0, 0.0, 0.0);
+    for oe in topo.wire(outer_wire)?.edges() {
+        let edge = topo.edge(oe.edge())?;
+        let (p, q) = (
+            topo.vertex(edge.start())?.point(),
+            topo.vertex(edge.end())?.point(),
+        );
+        let (t0, t1) = edge.curve().domain_with_endpoints(p, q);
+        for k in 0..SAMPLES {
+            let t = (t1 - t0).mul_add(f64::from(k) / f64::from(SAMPLES), t0);
+            toward += edge.curve().evaluate_with_endpoints(t, p, q) - center;
+        }
+    }
+    let Ok(axis) = toward.normalize() else {
+        return Ok(None);
+    };
+    let turned = FaceSurface::Sphere(SphericalSurface::with_axis(center, sphere.radius(), axis)?);
+    let face = if reversed {
+        Face::new_reversed(outer_wire, rest, turned)
+    } else {
+        Face::new(outer_wire, rest, turned)
+    };
+    Ok(Some(topo.add_face(face)))
 }
 
 /// Merge a hole-free group on a curved (non-planar) surface.
