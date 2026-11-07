@@ -648,11 +648,8 @@ fn a_nearly_flat_edge_off_the_axis_keeps_its_true_surface() {
     );
     let origin = Point3::new(0.0, 0.0, 0.0);
     let solid = revolve(&mut topo, face, origin, Vec3::new(0.0, 0.0, 1.0), PI).unwrap();
-    let cones = solid_faces(&topo, solid)
-        .unwrap()
-        .iter()
-        .filter(|&&f| matches!(topo.face(f).unwrap().surface(), FaceSurface::Cone(_)))
-        .count();
-    assert_eq!(cones, 0);
+    let faces = census(&topo, solid);
+    assert_eq!(faces.get("cone"), None, "{faces:?}");
+    assert!(faces.contains_key("nurbs"), "{faces:?}");
     assert!(validate_solid(&topo, solid).unwrap().is_valid());
 }
