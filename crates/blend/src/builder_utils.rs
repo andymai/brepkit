@@ -530,9 +530,11 @@ fn notched_wire_edges(
         if !(fwd || rev) {
             continue;
         }
+        // The section arc notches straight corner edges, or B-splines (a
+        // spline wall's rim), only.
         let both_straight = [oes[i].edge(), oes[j].edge()].iter().all(|&eid| {
             topo.edge(eid)
-                .is_ok_and(|e| matches!(e.curve(), EdgeCurve::Line))
+                .is_ok_and(|e| matches!(e.curve(), EdgeCurve::Line | EdgeCurve::NurbsCurve(_)))
         });
         if !both_straight {
             continue;
