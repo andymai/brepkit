@@ -875,6 +875,62 @@ fn boolean_inner(
                     );
                     return Ok(result);
                 }
+                // Pieces that only touch (two boxes fused edge to edge, a cut
+                // leaving two pieces meeting at a corner) share their contact
+                // edges and vertices, so neither closes on its own and the
+                // whole reads as one non-manifold piece. With their own copies
+                // they are separate pieces, which the gate above accepts.
+                if op != BooleanOp::Intersect
+                    && crate::boolean::assembly::separate_touching_pieces(topo, result)? >= 2
+                {
+                    let pieces = crate::boolean::assembly::face_components(topo, result);
+                    let (f, e, v) = brepkit_topology::explorer::solid_entity_counts(topo, result)?;
+                    let count = |n: usize| i64::try_from(n).unwrap_or(i64::MAX);
+                    let euler = count(v) - count(e) + count(f);
+                    let holes = solid_inner_wire_count(topo, result)?;
+                    let cut_safe = op != BooleanOp::Cut
+                        || brepkit_algo::classifier::try_build_analytic_classifier(topo, b)
+                            .as_ref()
+                            .is_none_or(|cls_b| {
+                                all_component_centers_outside(topo, result, &pieces, cls_b, tol)
+                            });
+                    // Touching pieces share no volume: a point inside each,
+                    // and a point just inside each of its faces, lies outside
+                    // every other. The builder splits faces along every
+                    // section, so a face of a piece overlapping another lies
+                    // wholly inside it; a builder that kept both copies of
+                    // coincident solids leaves pieces that fail the first.
+                    let meshes: Vec<Option<ComponentMesh>> =
+                        pieces.iter().map(|p| ComponentMesh::new(topo, p)).collect();
+                    let only_touch = pieces.iter().enumerate().all(|(i, piece)| {
+                        let Some(own) = meshes[i].as_ref() else {
+                            return false;
+                        };
+                        let outside_others = |p: Point3| {
+                            meshes.iter().enumerate().all(|(j, mesh)| {
+                                i == j || mesh.as_ref().is_some_and(|m| !m.holds(p))
+                            })
+                        };
+                        component_interior_point(topo, piece).is_some_and(outside_others)
+                            && face_witnesses(own)
+                                .is_some_and(|ws| ws.into_iter().all(outside_others))
+                    });
+                    if pieces.len() >= 2
+                        && only_touch
+                        && euler_balanced(euler, holes, count(pieces.len()))
+                        && components_are_disjoint_pieces(topo, &pieces)
+                        && cut_safe
+                        && is_closed_manifold(topo, result)?
+                        && validate_boolean_result(topo, result).is_ok()
+                    {
+                        log::info!(
+                            "GFA touching pieces succeeded in {:.1}ms ({} pieces)",
+                            timer_elapsed_ms(gfa_start),
+                            pieces.len()
+                        );
+                        return Ok(result);
+                    }
+                }
                 // Which gate refused? Both acceptance paths are conjunctions,
                 // so the bare rejection below says nothing about the cause —
                 // and when `validate` is None the result is topologically fine
@@ -2917,6 +2973,31 @@ fn detect_trivial_relation(
     // can hold every vertex inside the blank while its rims leave it. A
     // container with a cavity holds nothing trivially: the other solid can
     // swallow the cavity with every vertex, probe and its centre in material.
+    // Piece witness: a point inside a piece of the inner solid that lies
+    // clear of the outer one refutes containment. The centre witness reads
+    // nothing when the inner solid is several pieces (the centre falls
+    // between them), and the boundary probes read nothing when the pieces
+    // fill a recess of the outer solid, every vertex and edge on its
+    // boundary: two touching blocks fused into a pocket they stand in read
+    // as inside the part, and the fuse returned the part alone.
+    let piece_outside = |topo: &Topology, inner: SolidId, outer: SolidId| -> bool {
+        let defl = |bb: &Option<(Point3, Point3)>| {
+            let Some((lo, hi)) = *bb else { return 1e-3 };
+            ((hi - lo).length() * 0.01).max(1e-6)
+        };
+        let d = defl(&aabb_a).min(defl(&aabb_b));
+        crate::boolean::assembly::manifold_pieces(topo, inner)
+            .iter()
+            .filter_map(|piece| component_interior_point(topo, piece))
+            .any(|p| {
+                matches!(
+                    crate::classify::classify_point(topo, outer, p, d, tol.linear),
+                    Ok(crate::classify::PointClassification::Outside)
+                ) && crate::distance::point_to_solid_distance(topo, p, outer)
+                    .is_ok_and(|dist| dist.distance > tol.linear * 10.0)
+            })
+    };
+
     // A NURBS face can bulge out of the other solid between every vertex,
     // probe and sampled box corner, so it is held inside only when proved.
     let hollow = |s: SolidId| topo.solid(s).is_ok_and(|s| !s.inner_shells().is_empty());
@@ -2928,7 +3009,8 @@ fn detect_trivial_relation(
         && nurbs_faces_proved_inside(topo, b, a, tol)
         && !center_outside(topo, b, a, &aabb_b)
         && !boundary_probe_outside(topo, b, a, &aabb_b)
-        && !axis_outside(topo, b, ca, &aabb_b);
+        && !axis_outside(topo, b, ca, &aabb_b)
+        && !piece_outside(topo, b, a);
     let a_in_b = !hollow(b)
         && ((all_a_verts_in_b && aabb_encloses(&aabb_a, &aabb_b))
             || (cb.is_none()
@@ -2937,7 +3019,8 @@ fn detect_trivial_relation(
         && nurbs_faces_proved_inside(topo, a, b, tol)
         && !center_outside(topo, a, b, &aabb_a)
         && !boundary_probe_outside(topo, a, b, &aabb_a)
-        && !axis_outside(topo, a, cb, &aabb_a);
+        && !axis_outside(topo, a, cb, &aabb_a)
+        && !piece_outside(topo, a, b);
 
     TrivialRelation {
         identical: aabbs_match && all_b_verts_in_a && all_a_verts_in_b,
@@ -3501,6 +3584,108 @@ fn planar_face_centroid(topo: &Topology, fid: FaceId) -> Option<Point3> {
     let centroid = base + sum * (1.0 / weight);
     brepkit_algo::classifier::point_in_planar_region(centroid, &outer, &holes, &normal)
         .then_some(centroid)
+}
+
+/// A component's surface, meshed once finely for its size: its triangles,
+/// each face's run of them, and the box they span.
+struct ComponentMesh {
+    triangles: Vec<[Point3; 3]>,
+    faces: Vec<std::ops::Range<usize>>,
+    min: Point3,
+    max: Point3,
+}
+
+impl ComponentMesh {
+    fn new(topo: &Topology, comp: &[FaceId]) -> Option<Self> {
+        let (min, max) = component_aabb(topo, comp)?;
+        let deflection = ((max - min).length() * 1e-3).min(0.01);
+        let mut triangles: Vec<[Point3; 3]> = Vec::new();
+        let mut faces = Vec::with_capacity(comp.len());
+        for &fid in comp {
+            let mesh = crate::tessellate::tessellate_with_uvs(topo, fid, deflection).ok()?;
+            let pos = &mesh.mesh.positions;
+            let from = triangles.len();
+            triangles.extend(
+                mesh.mesh
+                    .indices
+                    .chunks_exact(3)
+                    .map(|t| [pos[t[0] as usize], pos[t[1] as usize], pos[t[2] as usize]]),
+            );
+            faces.push(from..triangles.len());
+        }
+        // The box of the triangles themselves, which the ray reads: a curved
+        // face can bulge past the box of the component's sampled edges.
+        let (min, max) = if triangles.is_empty() {
+            (min, max)
+        } else {
+            let bounds =
+                brepkit_math::aabb::Aabb3::from_points(triangles.iter().flatten().copied());
+            (bounds.min, bounds.max)
+        };
+        Some(Self {
+            triangles,
+            faces,
+            min,
+            max,
+        })
+    }
+
+    /// Whether the component holds `p`. A point outside its box is outside
+    /// it, which spares the ray most of the pieces of a large fuse.
+    fn holds(&self, p: Point3) -> bool {
+        let pad = 1e-9 * (self.max - self.min).length().max(1.0);
+        let within = |v: f64, lo: f64, hi: f64| v >= lo - pad && v <= hi + pad;
+        within(p.x(), self.min.x(), self.max.x())
+            && within(p.y(), self.min.y(), self.max.y())
+            && within(p.z(), self.min.z(), self.max.z())
+            && triangles_hold(&self.triangles, p)
+    }
+}
+
+/// A point just inside a component off each of its faces: the centroid of
+/// the face's largest mesh triangle, stepped along the triangle's normal to
+/// the side the component holds. `None` when a face has no triangle or no
+/// such point.
+fn face_witnesses(mesh: &ComponentMesh) -> Option<Vec<Point3>> {
+    let extent = (mesh.max - mesh.min).length();
+    let mut out = Vec::with_capacity(mesh.faces.len());
+    for face in &mesh.faces {
+        let [a, b, c] = *mesh.triangles[face.clone()].iter().max_by(|p, q| {
+            let area = |[a, b, c]: &[Point3; 3]| (*b - *a).cross(*c - *a).length();
+            area(p).total_cmp(&area(q))
+        })?;
+        let normal = (b - a).cross(c - a).normalize().ok()?;
+        let centroid = Point3::new(
+            (a.x() + b.x() + c.x()) / 3.0,
+            (a.y() + b.y() + c.y()) / 3.0,
+            (a.z() + b.z() + c.z()) / 3.0,
+        );
+        let witness = [1e-6, 1e-5, 1e-4, 1e-3]
+            .into_iter()
+            .map(|f| f * extent)
+            .filter(|&step| step >= 1e-7)
+            .flat_map(|step| [centroid + normal * step, centroid - normal * step])
+            .find(|&p| mesh.holds(p))?;
+        out.push(witness);
+    }
+    Some(out)
+}
+
+/// Whether a closed set of triangles holds `p`, by the parity of a ray's
+/// crossings in a direction that cannot lie in a face or run along an edge.
+fn triangles_hold(triangles: &[[Point3; 3]], p: Point3) -> bool {
+    let Ok(dir) = Vec3::new(2.0_f64.sqrt(), 3.0_f64.sqrt(), 5.0_f64.sqrt()).normalize() else {
+        return false;
+    };
+    triangles
+        .iter()
+        .filter(|&&[a, b, c]| {
+            brepkit_math::ray_triangle::watertight_ray_triangle_intersect(p, dir, a, b, c)
+                .is_some_and(|hit| hit.t > 1e-9)
+        })
+        .count()
+        % 2
+        == 1
 }
 
 /// A point inside a face component: its box centre when the component holds
