@@ -1,0 +1,21 @@
+crates/io/src/iges/reader.rs
+  s_649261a24df31b::t_828d8893598aa9 265-266,268-271,273-277,590-591,597-599
+crates/io/tests/iges_round_trip.rs
+  s_649261a24df31b::t_828d8893598aa9 927-973
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "70cee23c52b487e327bda599f2e5fc421b36a113",
+  "prompts": {},
+  "sessions": {
+    "s_649261a24df31b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d8bbbba4-0431-4f6a-a622-e632a6659779",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
