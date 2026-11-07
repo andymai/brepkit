@@ -3656,14 +3656,15 @@ fn pieces_only_touch(topo: &Topology, pieces: &[Vec<FaceId>]) -> bool {
     })
 }
 
-/// A pair of points off each of a component's faces, the first just inside
-/// the component and the second outside it by at least `clear`: the centroid of
-/// the face's largest mesh triangle, stepped along the triangle's normal to
-/// each side. `None` when a face has no triangle or no step lands in the
-/// component.
+/// Points off each of a component's faces: one just inside the component, one
+/// just as far outside, which a neighbour thinner than `clear` still holds, and
+/// one outside by at least `clear`, past the sag of a curved neighbour's mesh.
+/// Each is the centroid of the face's largest mesh triangle, stepped along the
+/// triangle's normal. `None` when a face has no triangle or no step lands in
+/// the component.
 fn face_witnesses(mesh: &ComponentMesh, clear: f64) -> Option<Vec<Point3>> {
     let extent = (mesh.max - mesh.min).length();
-    let mut out = Vec::with_capacity(2 * mesh.faces.len());
+    let mut out = Vec::with_capacity(3 * mesh.faces.len());
     for face in &mesh.faces {
         let [a, b, c] = *mesh.triangles[face.clone()].iter().max_by(|p, q| {
             let area = |[a, b, c]: &[Point3; 3]| (*b - *a).cross(*c - *a).length();
@@ -3675,19 +3676,27 @@ fn face_witnesses(mesh: &ComponentMesh, clear: f64) -> Option<Vec<Point3>> {
             (a.y() + b.y() + c.y()) / 3.0,
             (a.z() + b.z() + c.z()) / 3.0,
         );
-        let (inside, outside) = [1e-6, 1e-5, 1e-4, 1e-3]
+        let (inside, near, far) = [1e-6, 1e-5, 1e-4, 1e-3]
             .into_iter()
             .map(|f| f * extent)
             .filter(|&step| step >= 1e-7)
             .flat_map(|step| {
-                let out = step.max(clear);
+                let reach = step.max(clear);
                 [
-                    (centroid + normal * step, centroid - normal * out),
-                    (centroid - normal * step, centroid + normal * out),
+                    (
+                        centroid + normal * step,
+                        centroid - normal * step,
+                        centroid - normal * reach,
+                    ),
+                    (
+                        centroid - normal * step,
+                        centroid + normal * step,
+                        centroid + normal * reach,
+                    ),
                 ]
             })
-            .find(|&(inside, _)| mesh.holds(inside))?;
-        out.extend([inside, outside]);
+            .find(|&(inside, _, _)| mesh.holds(inside))?;
+        out.extend([inside, near, far]);
     }
     Some(out)
 }

@@ -8501,14 +8501,17 @@ fn touching_blocks_fuse_exactly_into_separate_pieces() {
 /// edge or at a corner.
 #[test]
 fn pieces_sharing_a_face_do_not_only_touch() {
-    for (shift, touching) in [
-        ((1.0, 0.0, 0.0), false),
-        ((1.0, 1.0, 0.0), true),
-        ((1.0, 1.0, 1.0), true),
+    // The last pair is two thin plates, stacked: a step past the mesh's sag
+    // would go clean through the neighbour.
+    for (shift, height, touching) in [
+        ((1.0, 0.0, 0.0), 1.0, false),
+        ((1.0, 1.0, 0.0), 1.0, true),
+        ((1.0, 1.0, 1.0), 1.0, true),
+        ((0.0, 0.0, 0.001), 0.001, false),
     ] {
         let mut topo = Topology::new();
-        let a = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
-        let b = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+        let a = crate::primitives::make_box(&mut topo, 1.0, 1.0, height).unwrap();
+        let b = crate::primitives::make_box(&mut topo, 1.0, 1.0, height).unwrap();
         let m = brepkit_math::mat::Mat4::translation(shift.0, shift.1, shift.2);
         crate::transform::transform_solid(&mut topo, b, &m).unwrap();
         let pieces = [
