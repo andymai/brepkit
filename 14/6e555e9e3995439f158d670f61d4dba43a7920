@@ -1,0 +1,64 @@
+crates/operations/src/imprint.rs
+  s_649261a24df31b::t_2b22c3a692c5b1 1-126
+crates/algo/src/pave_filler/mod.rs
+  s_649261a24df31b::t_2b22c3a692c5b1 25,521-538,542,546-559,565-566,575-577,581-590,608,628,634-647,649
+  s_649261a24df31b::t_82497594aa8e7d 648,650
+crates/algo/src/builder/fill_images_faces.rs
+  s_649261a24df31b::t_2b22c3a692c5b1 51,59-64,71,398-403,459-475,1515-1548,2370-2374,2379-2380,6546-6778
+  s_649261a24df31b::t_f37c829c79174b 6779
+crates/algo/src/ds/shape_store.rs
+  s_649261a24df31b::t_2b22c3a692c5b1 163-252,263-268,270-280,319,322
+crates/wasm/src/bindings/batch.rs
+  s_649261a24df31b::t_2b22c3a692c5b1 1379-1413
+crates/algo/src/builder/face_splitter/mod.rs
+  s_649261a24df31b::t_2b22c3a692c5b1 2860-3127,3228,3282,3301,3306-3308,3310,3811-3819,4137-4225,10398-10511
+  s_649261a24df31b::t_e64899b310757b 10512
+crates/operations/src/lib.rs
+  s_649261a24df31b::t_2b22c3a692c5b1 116,162
+crates/operations/tests/imprint_faces.rs
+  s_649261a24df31b::t_2b22c3a692c5b1 1-1866
+crates/wasm/src/bindings/operations.rs
+  s_649261a24df31b::t_2b22c3a692c5b1 869-928,2397-2472,2476-2477
+  s_649261a24df31b::t_5c3364db257f5b 2473-2475,2478
+CLAUDE.md
+  s_649261a24df31b::t_2b22c3a692c5b1 152,293
+crates/algo/src/pave_filler/phase_vv.rs
+  s_649261a24df31b::t_2b22c3a692c5b1 9,44-45,47-59,64-67
+crates/algo/src/builder/builder_solid.rs
+  s_649261a24df31b::t_2b22c3a692c5b1 13,139,207-266,291-896,3630-3633,3635-3720,3849-3850,3852-3857,3863
+crates/algo/src/pave_filler/phase_ve.rs
+  s_649261a24df31b::t_2b22c3a692c5b1 71
+crates/wasm/src/helpers.rs
+  s_649261a24df31b::t_2b22c3a692c5b1 119
+crates/algo/src/gfa.rs
+  s_649261a24df31b::t_2b22c3a692c5b1 6-7,10-11,16,160-304
+  s_649261a24df31b::t_92feb9fa569e82 305
+crates/algo/src/builder/mod.rs
+  s_649261a24df31b::t_2b22c3a692c5b1 536,1016-1023,1141-1324
+  s_649261a24df31b::t_1994b4941ad6dd 1325
+crates/algo/src/classifier/mod.rs
+  s_649261a24df31b::t_2b22c3a692c5b1 158-169,221-223,303-328,344-423
+  s_649261a24df31b::t_1c25a5616a7f03 424
+crates/algo/src/pave_filler/phase_ee.rs
+  s_649261a24df31b::t_2b22c3a692c5b1 37-38,40-51,53-54
+crates/algo/src/ds/mod.rs
+  s_649261a24df31b::t_2b22c3a692c5b1 27
+crates/algo/src/pave_filler/tool_edges.rs
+  s_649261a24df31b::t_2b22c3a692c5b1 1-143
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "146e555e9e3995439f158d670f61d4dba43a7920",
+  "prompts": {},
+  "sessions": {
+    "s_649261a24df31b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d8bbbba4-0431-4f6a-a622-e632a6659779",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
