@@ -104,11 +104,12 @@ fn point_in_uv_boundary(
             .filter(|x| (lo..=hi).contains(x))
             .collect()
     };
-    // A NURBS face's `u` is a raw knot value, with no turn to add.
+    // A NURBS face's `u` runs in knot values, so no further copy is read. Its
+    // boundary is still unwrapped a turn at a time, and the point goes with it.
     let us = if u_periodic {
         copies(hit_u, u_min, u_max)
     } else {
-        vec![hit_u]
+        vec![unwrap_angle((u_min + u_max) * 0.5, hit_u)]
     };
     let vs = if v_periodic {
         copies(hit_v, v_min, v_max)
