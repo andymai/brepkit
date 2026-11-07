@@ -149,6 +149,7 @@ pub mod mesh_boolean;
 
 pub mod blend_ops;
 pub mod chamfer;
+pub mod chamfer_chain;
 pub mod fillet;
 
 pub mod offset_face;
@@ -159,6 +160,7 @@ pub mod offset_wire;
 pub mod draft;
 pub mod fill_face;
 pub mod section;
+pub mod sheet;
 pub mod shell_op;
 pub mod split;
 pub mod thicken;

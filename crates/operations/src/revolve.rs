@@ -44,7 +44,7 @@ pub(crate) fn rotate_point(point: Point3, origin: Point3, axis: Vec3, angle: f64
 }
 
 /// The rigid turn by `angle` about the line through `origin` along `axis`.
-fn rotation_about(origin: Point3, axis: Vec3, angle: f64) -> brepkit_math::mat::Mat4 {
+pub(crate) fn rotation_about(origin: Point3, axis: Vec3, angle: f64) -> brepkit_math::mat::Mat4 {
     let [x, y, z] = [
         Vec3::new(1.0, 0.0, 0.0),
         Vec3::new(0.0, 1.0, 0.0),
@@ -72,7 +72,7 @@ pub(crate) fn rotate_vec(dir: Vec3, axis: Vec3, angle: f64) -> Vec3 {
 /// Compute the number of arc segments needed and the angle per segment.
 ///
 /// Each segment spans at most π/2 (90°). Returns `(num_segments, segment_angle)`.
-fn arc_segmentation(total_angle: f64) -> (usize, f64) {
+pub(crate) fn arc_segmentation(total_angle: f64) -> (usize, f64) {
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let num_segs = ((total_angle / FRAC_PI_2).ceil() as usize).max(1);
     #[allow(clippy::cast_precision_loss)]
@@ -132,7 +132,7 @@ pub(crate) fn make_arc_curve(
 /// - v-direction: circular arc (degree 2, 3 control points)
 ///
 /// The result is a 2×3 tensor-product surface.
-fn make_revolution_surface(
+pub(crate) fn make_revolution_surface(
     p0_start: Point3,
     p0_end: Point3,
     p1_start: Point3,
@@ -164,7 +164,7 @@ fn make_revolution_surface(
 ///
 /// - u-direction: the profile curve (its own degree and knots)
 /// - v-direction: circular arc (degree 2, 3 control points)
-fn curve_revolution_surface(
+pub(crate) fn curve_revolution_surface(
     profile: &NurbsCurve,
     origin: Point3,
     axis: Vec3,
@@ -231,7 +231,7 @@ fn reversed_nurbs(curve: &NurbsCurve) -> Result<NurbsCurve, brepkit_math::MathEr
 /// The profile edge's own curve over the stretch one band sweeps, as a NURBS
 /// running `from` to `to` (the band's ring vertices, the profile turned
 /// `turn` about the axis). `None` for a line, whose chord is itself.
-fn profile_band_curve(
+pub(crate) fn profile_band_curve(
     curve: &EdgeCurve,
     forward: bool,
     (from, to): (Point3, Point3),
@@ -292,7 +292,7 @@ pub(crate) fn edge_span_nurbs(
 
 /// Decompose a point into `(radial_distance, axial_coordinate)` relative to the
 /// revolution axis (a line through `axis_origin` with unit direction `axis`).
-fn radial_axial(p: Point3, axis_origin: Point3, axis: Vec3) -> (f64, f64) {
+pub(crate) fn radial_axial(p: Point3, axis_origin: Point3, axis: Vec3) -> (f64, f64) {
     let v = p - axis_origin;
     let z = v.dot(axis);
     ((v - axis * z).length(), z)
@@ -403,6 +403,16 @@ pub(crate) fn revolution_band_surface(
     }
 
     let tol = 1e-9;
+    // A line askew of the axis sweeps a hyperboloid, which the NURBS band is
+    // exactly; the radial and axial readings below would make it a cone. One
+    // square to the axis, to the reading's own `tol`, sweeps its plane whatever
+    // its reach.
+    let along = p1_start - p0_start;
+    let askew = along.cross(axis).dot(p0_start - axis_origin).abs();
+    let linear = Tolerance::new().linear * along.length().max(1.0);
+    if askew > linear && along.dot(axis).abs() >= tol {
+        return Ok((FaceSurface::Nurbs(nurbs), false));
+    }
     // The profile edge runs `p0_start → p1_start` (vertex i to vertex i+1 on the
     // SAME segment ring); `p0_start → p0_end` is the swept-arc direction. Decompose
     // both edge endpoints into (radial, axial) coordinates about the axis.
@@ -503,7 +513,7 @@ fn revolution_cone_apex(
 /// (how circles are often constructed) is run through curve recognition. Returns
 /// `None` for lines, ellipses, and unrecognised splines. `p_start`/`p_end` are
 /// the arc endpoints, used only as the recognition tolerance scale.
-fn profile_arc_center_radius(
+pub(crate) fn profile_arc_center_radius(
     curve: &EdgeCurve,
     p_start: Point3,
     p_end: Point3,
@@ -637,7 +647,7 @@ fn revolution_sphere_band(
 
 /// Index of the next ring for a given segment, wrapping to 0 for the last
 /// segment of a full revolution.
-const fn next_ring_index(seg: usize, num_segs: usize, is_full: bool) -> usize {
+pub(crate) const fn next_ring_index(seg: usize, num_segs: usize, is_full: bool) -> usize {
     if is_full && seg == num_segs - 1 {
         0
     } else {
@@ -667,7 +677,7 @@ struct WireRevolveData {
 /// volume by ~2% (gh #968). A `Torus` face is integrated exactly.
 ///
 /// One profile edge classified for the analytic full-revolution fast path.
-enum RevEdge {
+pub(crate) enum RevEdge {
     /// Axis-parallel line at radius `r`, axial span `[z0, z1]` → cylinder wall.
     Cylinder { r: f64 },
     /// Oblique line → cone wall. `apex` on the axis, `half_angle` from `make_cone`.
@@ -703,7 +713,7 @@ struct ProfileEdge {
 /// Classify one profile edge for the analytic full-revolution path, or `None`
 /// when the edge has no unambiguous closed-form revolution face (spline,
 /// axis-touching arc, sphere/spindle arc, degenerate cone angle).
-fn classify_profile_edge(
+pub(crate) fn classify_profile_edge(
     curve: &EdgeCurve,
     sp: Point3,
     ep: Point3,
@@ -755,6 +765,111 @@ fn classify_profile_edge(
         }
         Some(RevEdge::Cone { apex, half_angle })
     }
+}
+
+/// The ball a half disc sweeps turned whole about its diameter, built as
+/// [`crate::primitives::make_sphere`] builds one, or `None` for any other
+/// profile. Its arc may be cut into pieces of one circle, all on one side of
+/// the axis, and every other edge lies along the axis.
+fn try_ball_revolution(
+    topo: &mut Topology,
+    face: FaceId,
+    axis_origin: Point3,
+    axis: Vec3,
+    is_full: bool,
+) -> Result<Option<SolidId>, crate::OperationsError> {
+    /// The chords of the equator `make_sphere` builds, as its callers ask.
+    const EQUATOR_SEGMENTS: usize = 32;
+
+    if !is_full {
+        return Ok(None);
+    }
+    let face_data = topo.face(face)?;
+    match face_data.surface() {
+        FaceSurface::Plane { .. } => {}
+        FaceSurface::Cylinder(_)
+        | FaceSurface::Cone(_)
+        | FaceSurface::Sphere(_)
+        | FaceSurface::Torus(_)
+        | FaceSurface::Nurbs(_) => return Ok(None),
+    }
+    if !face_data.inner_wires().is_empty() {
+        return Ok(None);
+    }
+    let lin = Tolerance::new().linear;
+    let mut ball: Option<(Point3, f64)> = None;
+    let mut side: Option<Vec3> = None;
+    let mut swept = 0.0;
+    for oe in topo.wire(face_data.outer_wire())?.edges() {
+        let edge = topo.edge(oe.edge())?;
+        let start = topo.vertex(edge.start())?.point();
+        let end = topo.vertex(edge.end())?.point();
+        match edge.curve() {
+            EdgeCurve::Line => {
+                if radial_axial(start, axis_origin, axis).0 > lin
+                    || radial_axial(end, axis_origin, axis).0 > lin
+                {
+                    return Ok(None);
+                }
+            }
+            EdgeCurve::Circle(circle) => {
+                if edge.start() == edge.end()
+                    || circle.normal().dot(axis).abs() > 1e-9
+                    || radial_axial(circle.center(), axis_origin, axis).0 > lin
+                {
+                    return Ok(None);
+                }
+                match ball {
+                    None => ball = Some((circle.center(), circle.radius())),
+                    Some((center, radius)) => {
+                        if (center - circle.center()).length() > lin
+                            || (radius - circle.radius()).abs() > lin
+                        {
+                            return Ok(None);
+                        }
+                    }
+                }
+                let (t0, t1) = edge.curve().domain_with_endpoints(start, end);
+                swept += t1 - t0;
+                let middle = edge
+                    .curve()
+                    .evaluate_with_endpoints(0.5 * (t0 + t1), start, end)
+                    - circle.center();
+                let radial = middle - axis * middle.dot(axis);
+                match side {
+                    None => side = Some(radial),
+                    Some(first) => {
+                        if first.dot(radial) <= 0.0 {
+                            return Ok(None);
+                        }
+                    }
+                }
+            }
+            EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_) => return Ok(None),
+        }
+    }
+    let Some((center, radius)) = ball else {
+        return Ok(None);
+    };
+    if (swept - PI).abs() > 1e-9 {
+        return Ok(None);
+    }
+
+    let solid = crate::primitives::make_sphere(topo, radius, EQUATOR_SEGMENTS)?;
+    // The primitive's poles run along z: turn them onto the axis.
+    let origin = Point3::new(0.0, 0.0, 0.0);
+    let up = Vec3::new(0.0, 0.0, 1.0);
+    let across = up.cross(axis);
+    let turn = if across.length() > 1e-12 {
+        rotation_about(origin, across.normalize()?, across.length().atan2(axis.z()))
+    } else if axis.z() > 0.0 {
+        rotation_about(origin, up, 0.0)
+    } else {
+        rotation_about(origin, Vec3::new(1.0, 0.0, 0.0), PI)
+    };
+    let place = brepkit_math::mat::Mat4::translation(center.x(), center.y(), center.z()) * turn;
+    crate::transform::transform_solid(topo, solid, &place)?;
+    Ok(Some(solid))
 }
 
 /// Fast exact path: a FULL revolution of a fully-analytic planar profile (every
@@ -1099,7 +1214,7 @@ fn build_analytic_revolution(
 /// Build the analytic wall surface (cylinder/cone/torus) for one classified
 /// profile edge, plus the `reversed` flag that aligns its natural normal with
 /// `outward` (the material-outward direction) at `probe`, a point ON the wall.
-fn revolution_wall_surface(
+pub(crate) fn revolution_wall_surface(
     class: &RevEdge,
     axis_origin: Point3,
     axis: Vec3,
@@ -1455,10 +1570,13 @@ fn profile_chart_is_ccw(
         return Ok(None); // whole profile on the axis
     };
 
+    // Measured from the profile, not the axis origin: the winding of a loop
+    // has nothing to do with how far along the axis that origin was placed.
+    let anchor = pts[0];
     let chart: Vec<(f64, f64)> = pts
         .iter()
         .map(|p| {
-            let v = *p - axis_origin;
+            let v = *p - anchor;
             (v.dot(e_r), v.dot(axis))
         })
         .collect();
@@ -1491,8 +1609,9 @@ fn profile_chart_is_ccw(
 /// - `angle_radians` — rotation angle in radians, must be in (0, 2π]
 ///
 /// When the input face has inner wires (holes), they are propagated:
-/// inner wire edges generate inward-facing revolution surfaces, and
-/// start/end cap faces include the inner wires as holes.
+/// inner wire edges generate revolution surfaces facing into the passage,
+/// whichever way each hole is wound, and start/end cap faces include the inner
+/// wires as holes.
 ///
 /// # Errors
 ///
@@ -1556,6 +1675,12 @@ pub fn revolve(
     // by ~2% (gh #968).
     if let Some(solid) = try_circle_revolution_torus(topo, face, axis_origin, axis, angle, is_full)?
     {
+        return Ok(solid);
+    }
+
+    // A half disc turned whole about its diameter is the ball `make_sphere`
+    // builds, whose two hemispheres the boolean engine reads exactly.
+    if let Some(solid) = try_ball_revolution(topo, face, axis_origin, axis, is_full)? {
         return Ok(solid);
     }
 
@@ -1652,7 +1777,8 @@ pub fn revolve(
     let num_boundaries = if is_full { num_segs } else { num_segs + 1 };
 
     let revolve_wire = |topo: &mut Topology,
-                        wire_id: brepkit_topology::wire::WireId|
+                        wire_id: brepkit_topology::wire::WireId,
+                        flip: bool|
      -> Result<WireRevolveData, crate::OperationsError> {
         let wire = topo.wire(wire_id)?;
         let original_oriented: Vec<_> = wire.edges().to_vec();
@@ -1661,7 +1787,7 @@ pub fn revolve(
         // exact pieces, each sweeping its own band.
         let split_oriented =
             crate::extrude::split_closed_wire_exact(topo, &original_oriented, tol.linear)?;
-        let input_oriented: Vec<OrientedEdge> = if flip_traversal {
+        let input_oriented: Vec<OrientedEdge> = if flip {
             split_oriented
                 .iter()
                 .rev()
@@ -1809,11 +1935,15 @@ pub fn revolve(
         })
     };
 
-    let outer = revolve_wire(topo, input_wire_id)?;
+    let outer = revolve_wire(topo, input_wire_id, flip_traversal)?;
 
+    // A hole runs against the normalized outer wire, whichever way the caller
+    // wound it: one running with it would sweep as material, not as a passage.
     let mut inner_data: Vec<WireRevolveData> = Vec::new();
     for &iw_id in &inner_wire_ids {
-        inner_data.push(revolve_wire(topo, iw_id)?);
+        let oes = topo.wire(iw_id)?.edges().to_vec();
+        let flip = profile_chart_is_ccw(topo, &oes, axis_origin, axis)? == Some(false);
+        inner_data.push(revolve_wire(topo, iw_id, flip)?);
     }
 
     // Collect input positions for outer wire (needed for cap face normals).
@@ -1864,106 +1994,69 @@ pub fn revolve(
         all_faces.push(fid);
     }
 
-    // Outer side NURBS faces.
-    for seg in 0..num_segs {
-        let next = next_ring_index(seg, num_segs, is_full);
-
-        for i in 0..outer.n {
-            let next_i = (i + 1) % outer.n;
-
-            let fwd_seg = outer.input_oriented[i].is_forward();
-            let fwd_next = fwd_seg;
-            // An edge along the axis sweeps nothing.
-            if outer.along_axis[i] {
-                continue;
-            }
-
-            let p0_start = topo.vertex(outer.ring_verts[seg][i])?.point();
-            let p0_end = topo.vertex(outer.ring_verts[next][i])?.point();
-            let p1_start = topo.vertex(outer.ring_verts[seg][next_i])?.point();
-            let p1_end = topo.vertex(outer.ring_verts[next][next_i])?.point();
-
-            let profile_curve = topo.edge(outer.input_oriented[i].edge())?.curve().clone();
-            #[allow(clippy::cast_precision_loss)]
-            let seg_start = seg_angle * seg as f64;
-            let (surface, reversed) = revolution_band_surface(
-                &profile_curve,
-                outer.input_oriented[i].is_forward(),
-                p0_start,
-                p0_end,
-                p1_start,
-                p1_end,
-                axis_origin,
-                axis,
-                seg_angle,
-                seg_start,
-            )?;
-
-            // A reversed face flips every edge's effective traversal, so the
-            // wire must be built reversed too (same idiom as the inner side
-            // faces below) or the face traverses its shared edges in the same
-            // effective sense as its neighbours.
-            // A vertex on the axis sweeps no circle, so the band closes at
-            // it: a wedge of three edges.
-            let arc = |k: usize, forward: bool| {
-                outer.arc_edges[seg][k].map(|e| OrientedEdge::new(e, forward))
-            };
-            let loop_edges: Vec<OrientedEdge> = if reversed {
-                [
-                    arc(i, true),
-                    Some(OrientedEdge::new(outer.ring_edges[next][i], fwd_next)),
-                    arc(next_i, false),
-                    Some(OrientedEdge::new(outer.ring_edges[seg][i], !fwd_seg)),
-                ]
-            } else {
-                [
-                    Some(OrientedEdge::new(outer.ring_edges[seg][i], fwd_seg)),
-                    arc(next_i, true),
-                    Some(OrientedEdge::new(outer.ring_edges[next][i], !fwd_next)),
-                    arc(i, false),
-                ]
-            }
-            .into_iter()
-            .flatten()
-            .collect();
-            let side_wire =
-                Wire::new(loop_edges, true).map_err(crate::OperationsError::Topology)?;
-
-            let side_wire_id = topo.add_wire(side_wire);
-
-            let fid = if reversed {
-                topo.add_face(Face::new_reversed(side_wire_id, vec![], surface))
-            } else {
-                topo.add_face(Face::new(side_wire_id, vec![], surface))
-            };
-            all_faces.push(fid);
-        }
-    }
-
-    // Inner side NURBS faces (reversed winding for inward-facing normals).
-    for iwd in &inner_data {
+    // The side faces, a wire at a time. Each reads which way it faces off its
+    // wire's traversal, so a hole's bands face into the passage.
+    for wire_data in std::iter::once(&outer).chain(&inner_data) {
         for seg in 0..num_segs {
             let next = next_ring_index(seg, num_segs, is_full);
 
-            for i in 0..iwd.n {
-                let next_i = (i + 1) % iwd.n;
+            for i in 0..wire_data.n {
+                let next_i = (i + 1) % wire_data.n;
 
-                let fwd_seg = iwd.input_oriented[i].is_forward();
+                let fwd_seg = wire_data.input_oriented[i].is_forward();
                 let fwd_next = fwd_seg;
-
-                if iwd.along_axis[i] {
+                // An edge along the axis sweeps nothing.
+                if wire_data.along_axis[i] {
                     continue;
                 }
-                // Reversed winding: swap the order so normals point inward.
+
+                let p0_start = topo.vertex(wire_data.ring_verts[seg][i])?.point();
+                let p0_end = topo.vertex(wire_data.ring_verts[next][i])?.point();
+                let p1_start = topo.vertex(wire_data.ring_verts[seg][next_i])?.point();
+                let p1_end = topo.vertex(wire_data.ring_verts[next][next_i])?.point();
+
+                let profile_curve = topo
+                    .edge(wire_data.input_oriented[i].edge())?
+                    .curve()
+                    .clone();
+                #[allow(clippy::cast_precision_loss)]
+                let seg_start = seg_angle * seg as f64;
+                let (surface, reversed) = revolution_band_surface(
+                    &profile_curve,
+                    wire_data.input_oriented[i].is_forward(),
+                    p0_start,
+                    p0_end,
+                    p1_start,
+                    p1_end,
+                    axis_origin,
+                    axis,
+                    seg_angle,
+                    seg_start,
+                )?;
+
+                // A reversed face flips every edge's effective traversal, so the
+                // wire must be built reversed too or the face traverses its
+                // shared edges in the same effective sense as its neighbours.
+                // A vertex on the axis sweeps no circle, so the band closes at
+                // it: a wedge of three edges.
                 let arc = |k: usize, forward: bool| {
-                    iwd.arc_edges[seg][k].map(|e| OrientedEdge::new(e, forward))
+                    wire_data.arc_edges[seg][k].map(|e| OrientedEdge::new(e, forward))
                 };
-                let loop_edges: Vec<OrientedEdge> = [
-                    arc(i, true),
-                    Some(OrientedEdge::new(iwd.ring_edges[next][i], fwd_next)),
-                    arc(next_i, false),
-                    Some(OrientedEdge::new(iwd.ring_edges[seg][i], !fwd_seg)),
-                ]
+                let loop_edges: Vec<OrientedEdge> = if reversed {
+                    [
+                        arc(i, true),
+                        Some(OrientedEdge::new(wire_data.ring_edges[next][i], fwd_next)),
+                        arc(next_i, false),
+                        Some(OrientedEdge::new(wire_data.ring_edges[seg][i], !fwd_seg)),
+                    ]
+                } else {
+                    [
+                        Some(OrientedEdge::new(wire_data.ring_edges[seg][i], fwd_seg)),
+                        arc(next_i, true),
+                        Some(OrientedEdge::new(wire_data.ring_edges[next][i], !fwd_next)),
+                        arc(i, false),
+                    ]
+                }
                 .into_iter()
                 .flatten()
                 .collect();
@@ -1972,38 +2065,11 @@ pub fn revolve(
 
                 let side_wire_id = topo.add_wire(side_wire);
 
-                let p0_start = topo.vertex(iwd.ring_verts[seg][i])?.point();
-                let p0_end = topo.vertex(iwd.ring_verts[next][i])?.point();
-                let p1_start = topo.vertex(iwd.ring_verts[seg][next_i])?.point();
-                let p1_end = topo.vertex(iwd.ring_verts[next][next_i])?.point();
-
-                let profile_curve = topo.edge(iwd.input_oriented[i].edge())?.curve().clone();
-                #[allow(clippy::cast_precision_loss)]
-                let seg_start = seg_angle * seg as f64;
-                let surface = match profile_band_curve(
-                    &profile_curve,
-                    fwd_seg,
-                    (p0_start, p1_start),
-                    axis_origin,
-                    axis,
-                    seg_start,
-                )? {
-                    Some(profile) => {
-                        curve_revolution_surface(&profile, axis_origin, axis, seg_angle)?
-                    }
-                    None => make_revolution_surface(
-                        p0_start,
-                        p0_end,
-                        p1_start,
-                        p1_end,
-                        axis_origin,
-                        axis,
-                        seg_angle,
-                    )?,
+                let fid = if reversed {
+                    topo.add_face(Face::new_reversed(side_wire_id, vec![], surface))
+                } else {
+                    topo.add_face(Face::new(side_wire_id, vec![], surface))
                 };
-
-                let fid =
-                    topo.add_face(Face::new(side_wire_id, vec![], FaceSurface::Nurbs(surface)));
                 all_faces.push(fid);
             }
         }
@@ -2054,7 +2120,61 @@ pub fn revolve(
     let shell_id = topo.add_shell(shell);
     let solid = topo.add_solid(Solid::new(shell_id, vec![]));
 
+    // Each quarter turn built its own faces. A band of one surface is one
+    // face, as the primitives have it. A band reaching the axis stays in its
+    // quarters: merged past half a turn, a cone or ball face around its apex
+    // meshes open. So do the bands beside a cap all but square to the axis:
+    // `unify_faces` reads planes within a fraction of a degree as one, and
+    // would join the cap to the flat bands it stands off.
+    let mut touches_axis = false;
+    for wire_data in std::iter::once(&outer).chain(&inner_data) {
+        for vertex in &wire_data.ring_verts[0] {
+            let p = topo.vertex(*vertex)?.point();
+            touches_axis |= radial_axial(p, axis_origin, axis).0 <= tol.linear;
+        }
+        for oe in &wire_data.input_oriented {
+            touches_axis |= curved_edge_reaches_axis(topo, oe.edge(), axis_origin, axis)?;
+        }
+    }
+    let cap_across_axis = (input_normal.dot(axis).abs() - 1.0).abs() < CAP_ACROSS_AXIS;
+    if !is_full && num_segs > 1 && !touches_axis && !cap_across_axis {
+        crate::heal::unify_faces(topo, solid)?;
+    }
+
     Ok(solid)
+}
+
+/// How near 1 a cap's normal may read along the axis before its plane could
+/// pass for the flat bands beside it, past the 1e-4 `unify_faces` allows.
+const CAP_ACROSS_AXIS: f64 = 1e-3;
+
+/// Whether a curved profile edge comes to the axis along its own span, its
+/// samples read with the chord between them to spare. A straight edge whose
+/// ends clear the axis, on one side of it, cannot.
+fn curved_edge_reaches_axis(
+    topo: &Topology,
+    edge_id: brepkit_topology::edge::EdgeId,
+    axis_origin: Point3,
+    axis: Vec3,
+) -> Result<bool, crate::OperationsError> {
+    const SAMPLES: u32 = 256;
+    let edge = topo.edge(edge_id)?;
+    let curve = edge.curve();
+    if matches!(curve, EdgeCurve::Line) {
+        return Ok(false);
+    }
+    let (a, b) = (
+        topo.vertex(edge.start())?.point(),
+        topo.vertex(edge.end())?.point(),
+    );
+    let (t0, t1) = curve.domain_with_endpoints(a, b);
+    let at = |k: u32| {
+        curve.evaluate_with_endpoints(t0 + (t1 - t0) * f64::from(k) / f64::from(SAMPLES), a, b)
+    };
+    Ok((0..SAMPLES).any(|k| {
+        let (p, q) = (at(k), at(k + 1));
+        radial_axial(p, axis_origin, axis).0 <= (q - p).length() + Tolerance::new().linear
+    }))
 }
 
 #[cfg(test)]
@@ -3287,14 +3407,12 @@ mod tests {
         let solid_data = topo.solid(solid).unwrap();
         let shell = topo.shell(solid_data.outer_shell()).unwrap();
 
-        // Outer: 4 edges × 2 segments = 8 NURBS side faces.
-        // Inner: 4 edges × 2 segments = 8 NURBS side faces.
-        // 2 planar caps (start + end) = 2.
-        // Total = 18.
+        // One side face per edge, however many quarter turns it spans.
+        // Outer: 4 edges, inner: 4 edges, and 2 planar caps (start + end).
         assert_eq!(
             shell.faces().len(),
-            18,
-            "half revolve with hole: 8 outer + 8 inner + 2 caps = 18 faces"
+            10,
+            "half revolve with hole: 4 outer + 4 inner + 2 caps = 10 faces"
         );
 
         // Caps should have inner wires (holes).

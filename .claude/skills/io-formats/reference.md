@@ -85,14 +85,20 @@ and transforms it once per chain of placements to a root, scaled to mm.
 `rg -n 'pub fn read_iges' crates/io/src/iges/reader.rs` and
 `rg -n 'pub fn write_iges' crates/io/src/iges/writer.rs`
 
-- Writer: emits Plane, NURBS surface (entity 128), NURBS curve (126), and lines. Analytic
-  Cylinder/Cone/Sphere/Torus are written only as a placeholder comment (dropped). Circle
-  edges are written as a 32-segment polyline approximation.
-- Reader: reconstructs only entity 108 (planes), building a fixed unit square face
-  (0.5 half-extent, spanning -0.5..+0.5 in u and v) per plane "for visualization."
-  Entities 110/126/128 are not reconstructed.
-- Net: IGES round-trip does not preserve real geometry. Treat it as write-partial /
-  read-stub. Use STEP or the arena format when fidelity matters.
+- Writer: each face is a 144 over its 108 or 128, each boundary a 142 holding a 102 of
+  110s and 126s. A surface always faces the way its face does (a 144 has no flip flag), so
+  a reversed plane negates its coefficients and a reversed B-spline runs its `u` backward.
+  Curved analytic faces take their exact B-splines from `convert_to_bspline` on a copy of
+  the arena. A closed conic's rational curve starts at its vertex, not its curve's origin.
+- Reader: sews 144s and bounded 108s by position (`SEW_TOL`). Each connected set of faces
+  is a solid, or a cavity of the solid whose box holds it when its signed volume is
+  negative, taking the smallest box that holds it. A bare 108 bounds nothing and is skipped,
+  and a closed-both-ways 128 under a 144 with no boundary of its own takes collapsed seams. Entities it does not read (100, 186,
+  analytic surfaces) cost the faces that need them.
+- Net: a solid survives the round trip, its curved faces as NURBS and so measured off a
+  mesh. Solids sharing an edge in one file merge, and the 142/144 output has been read
+  back by this reader only, not by another CAD system. Use STEP or the arena format when
+  analytic faces matter.
 
 ## 3. Mesh import path
 
@@ -173,7 +179,7 @@ map to real STEP entities). Floats via `fmt_f64` = `{:.15E}` with a `<1e-15 -> "
 
 `rg -n 'js_name' crates/wasm/src/bindings/io.rs`
 
-Import/export methods on `BrepKernel`: `exportStep`/`importStep`, `exportIges`/`importIges`,
+Import/export methods on `BrepKernel`: `exportStep`/`importStep`, `exportIges`/`exportIgesSolids`/`importIges`,
 `exportStl`/`exportStlAscii`/`importStl`, `export3mf`/`import3mf`, `exportObj`/`importObj`,
 `exportGlb`/`importGlb`, `exportPly`, `importIndexedMesh`,
 `serializeSolid`/`deserializeSolid`. The whole file is `#![cfg(feature = "io")]`; `io` is a

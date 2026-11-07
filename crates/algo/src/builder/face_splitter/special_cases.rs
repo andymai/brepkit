@@ -2951,9 +2951,11 @@ pub(super) fn split_torus_by_ring_loops(
     // The width of the band above loop `i` at `u`.
     let width = |i: usize, u: f64| (loops[(i + 1) % n].v_at(u) - loops[i].v_at(u)).rem_euclid(TAU);
     // Loops that touch leave a band pinched to a point: the general
-    // splitter's.
+    // splitter's. So does a band no wider than the loops' sampling can read,
+    // where a point or a seam placed between the walks could lie outside it.
     for i in 0..n {
-        if (0..32_u32).any(|k| width(i, TAU * f64::from(k) / 32.0) < 1e-6) {
+        let narrowest = 4.0 * (loops[i].sag + loops[(i + 1) % n].sag).max(2.5e-7);
+        if (0..32_u32).any(|k| width(i, TAU * f64::from(k) / 32.0) < narrowest) {
             return None;
         }
     }

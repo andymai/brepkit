@@ -15,7 +15,7 @@ There are three fillet code paths and two chamfer paths. "v1 vs v2" is a simplif
 
 ### Chamfer engines
 
-- **flat-bevel chamfer** `crates/operations/src/chamfer.rs`, `pub fn chamfer` → `chamfer_core` → `FaceSpec` assembly (`assemble_solid_mixed`). Planar-only. NOT the blend engine and NOT the same code as the v1 fillet bevel. If a `chamfer` (no V2) bug is "refuses NURBS faces," it is this engine.
+- **flat-bevel chamfer** `crates/operations/src/chamfer.rs`, `pub fn chamfer` → `chamfer_core` → `FaceSpec` assembly (`assemble_solid_mixed`). Planar-only: it refuses curved edges rather than rebuilding them as chords, after `chamfer` has offered the selection to the rim path and to `chamfer_chain.rs` (tangent chains of lines and arcs on one flat cap). NOT the blend engine and NOT the same code as the v1 fillet bevel. If a `chamfer` (no V2) bug is "refuses NURBS faces," it is this engine.
 - **v2 chamfer** `blend_ops::chamfer_v2` and `chamfer_distance_angle` in `crates/blend`.
 
 ### The dispatcher

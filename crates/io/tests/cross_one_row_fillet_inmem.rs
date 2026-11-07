@@ -626,44 +626,34 @@ fn rolling_reference_rejects_degenerate_face_without_source_mutation() {
     assert_eq!(source_fingerprint(&topo, solid), source);
 }
 
-/// The rolling-ball reference result is measurable as a diagnostic artifact:
-/// it leaves a detached, degenerate 10-component solid (372/853/412) that the
-/// production guard rejects. Kept as documentation of the reference engine's
-/// output shape; production never assembles it.
+/// The deprecated rolling-ball engine refuses this body's closed rims before
+/// it builds anything. (While the walker's cross-sections failed on a closed
+/// edge, it assembled a detached, degenerate 10-component solid, 372/853/412,
+/// and only its end-of-build guard refused that.)
 #[test]
 #[allow(deprecated)]
-fn rolling_reference_diagnostic_result_is_measurable() {
+fn rolling_reference_refuses_closed_rims_before_building() {
     let mut topo = Topology::new();
     let solid = load(&mut topo);
     let source = source_fingerprint(&topo, solid);
     let edges = filter_filletable_edges(&topo, solid, &all_edges(&topo, solid)).unwrap();
-    let solids_before = topo.num_solids();
+    let counts = |topo: &Topology| {
+        (
+            topo.num_vertices(),
+            topo.num_edges(),
+            topo.num_wires(),
+            topo.num_faces(),
+            topo.num_shells(),
+            topo.num_solids(),
+            topo.num_compounds(),
+            topo.num_compsolids(),
+        )
+    };
+    let before = counts(&topo);
     let error = brepkit_operations::fillet::fillet_rolling_ball(&mut topo, solid, &edges, RADIUS)
-        .expect_err("production guard should reject after assembling the diagnostic result");
-    assert!(error.to_string().contains("degenerate face"));
-    let diagnostic = topo.solid_id_from_index(solids_before).unwrap();
-    assert_eq!(
-        solid_entity_counts(&topo, diagnostic).unwrap(),
-        (372, 853, 412)
-    );
-    assert_eq!(shell_audit::shell_health(&topo, diagnostic), (177, 0));
-    assert_eq!(components(&topo, diagnostic), 10);
-    // Some of its planar faces have outlines that cross themselves, and each
-    // meshes only where its outline winds round once: this is the volume of
-    // that mesh, which no solid bounds.
-    let volume = oriented_solid_volume(&topo, diagnostic, DEFLECTION).unwrap();
-    assert!(
-        (volume - 32_006.274_577).abs() < 1e-3,
-        "rolling volume {volume}"
-    );
-    let audit = shell_audit::audit_shell(&topo, diagnostic);
-    assert_eq!(audit.len(), 177);
-    assert!(audit.iter().all(|entry| !entry.owners.is_empty()));
-    assert!(
-        audit
-            .iter()
-            .all(|entry| entry.category == "missing producer/consumer")
-    );
+        .expect_err("the rolling-ball engine must refuse closed rims");
+    assert!(error.to_string().contains("closed circular edges"));
+    assert_eq!(counts(&topo), before);
     assert_eq!(source_fingerprint(&topo, solid), source);
 }
 

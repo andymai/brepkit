@@ -284,6 +284,7 @@ Quick reference — find the right file for any task:
 | Extrude, Revolve, Sweep, Loft, Pipe | `extrude.rs`, `revolve.rs`, `sweep.rs`, `loft.rs`, `pipe.rs` |
 | Helical sweep | `helix.rs` |
 | Chamfer, Fillet | `chamfer.rs`, `fillet/` (mod, rolling_ball, g1_chain, geometry, radius_law, helpers, tests) |
+| Chamfer along tangent chains of lines and arcs | `chamfer_chain.rs` |
 | Shell (hollow solid) | `shell_op.rs` |
 | Draft (taper faces) | `draft.rs` |
 | Section / Split | `section.rs`, `split.rs` |
@@ -313,6 +314,7 @@ Quick reference — find the right file for any task:
 | Shared winding utilities | `winding.rs` |
 | Edge projection with hidden-line removal | `projection.rs` |
 | Shared loft/sweep/pipe/revolve end caps | `cap.rs` |
+| Open shells from open wires (extrude, revolve, loft, sweep) | `sheet.rs` |
 | Keep a solid's cavities through an outer-shell rebuild | `cavities.rs` |
 
 ### L3: io (`crates/io/src/`)
