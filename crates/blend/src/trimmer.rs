@@ -2069,6 +2069,243 @@ fn rebuild_mapped_parametric_face(
     }))
 }
 
+/// A point in a plane face's own 2D frame.
+type Flat = (f64, f64);
+
+/// Samples per edge of a plane face's hole when testing it against a
+/// closed contact (the contact takes sixteen times as many).
+const HOLE_SAMPLES: u32 = 64;
+
+/// A curve sampled in a plane face's frame: its polyline, and how far the
+/// curve can stray from it (the largest gap between the curve, read at a
+/// span's quarter points and middle, and that span's chord, doubled for what
+/// falls between them). The bound is sampled, not proven: it takes spans
+/// short against the curve's bends, as a closed contact sampled at 1024
+/// points and a hole's edge at 64 are.
+struct FlatPolyline {
+    points: Vec<Flat>,
+    sag: f64,
+}
+
+/// A closed contact on a plane face, in the face's frame.
+struct ClosedOutline {
+    line: FlatPolyline,
+    /// Whether the trim keeps the region the contact encloses.
+    keep_inside: bool,
+    /// The face's edges the contact rounds (a hole's rim it replaces).
+    rounds: std::collections::HashSet<EdgeId>,
+}
+
+/// Whether `p` lies inside the closed polygon `outline` (even-odd).
+fn inside_flat(p: Flat, outline: &[Flat]) -> bool {
+    let mut odd = false;
+    for (k, &a) in outline.iter().enumerate() {
+        let b = outline[(k + 1) % outline.len()];
+        if (a.1 > p.1) != (b.1 > p.1) && p.0 < (b.0 - a.0) * (p.1 - a.1) / (b.1 - a.1) + a.0 {
+            odd = !odd;
+        }
+    }
+    odd
+}
+
+/// The distance between the segments `a0 a1` and `b0 b1`, zero where they
+/// cross.
+fn flat_segment_distance(a0: Flat, a1: Flat, b0: Flat, b1: Flat) -> f64 {
+    let cross = |o: Flat, p: Flat, q: Flat| (p.0 - o.0) * (q.1 - o.1) - (p.1 - o.1) * (q.0 - o.0);
+    let (d1, d2) = (cross(a0, a1, b0), cross(a0, a1, b1));
+    let (d3, d4) = (cross(b0, b1, a0), cross(b0, b1, a1));
+    if d1 * d2 < 0.0 && d3 * d4 < 0.0 {
+        return 0.0;
+    }
+    let to_segment = |p: Flat, s0: Flat, s1: Flat| {
+        let (dx, dy) = (s1.0 - s0.0, s1.1 - s0.1);
+        let length2 = dx.mul_add(dx, dy * dy);
+        let t = if length2 > 0.0 {
+            ((p.0 - s0.0).mul_add(dx, (p.1 - s0.1) * dy) / length2).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        (p.0 - t.mul_add(dx, s0.0)).hypot(p.1 - t.mul_add(dy, s0.1))
+    };
+    to_segment(a0, b0, b1)
+        .min(to_segment(a1, b0, b1))
+        .min(to_segment(b0, a0, a1))
+        .min(to_segment(b1, a0, a1))
+}
+
+/// Whether two closed polylines stay further than `margin` apart.
+fn polylines_clear_by(a: &FlatPolyline, b: &FlatPolyline, margin: f64) -> bool {
+    let span =
+        |line: &FlatPolyline, k: usize| (line.points[k], line.points[(k + 1) % line.points.len()]);
+    for i in 0..a.points.len() {
+        let (a0, a1) = span(a, i);
+        for j in 0..b.points.len() {
+            let (b0, b1) = span(b, j);
+            if a0.0.min(a1.0) - margin > b0.0.max(b1.0)
+                || b0.0.min(b1.0) - margin > a0.0.max(a1.0)
+                || a0.1.min(a1.1) - margin > b0.1.max(b1.1)
+                || b0.1.min(b1.1) - margin > a0.1.max(a1.1)
+            {
+                continue;
+            }
+            if flat_segment_distance(a0, a1, b0, b1) <= margin {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+/// Refuses a closed contact on a plane face unless each of the face's holes
+/// (other than the rim the contact itself rounds) lies wholly on the side
+/// it keeps, clear of the contact, and unless the face's closed contacts
+/// stay clear of each other. A hole the contact runs through puts the band
+/// across the hole, whose wall would have to be cut by the band and the
+/// hole opened into the trimmed outline; one beyond the contact lies under
+/// the band, its wall standing through it. Neither trim path builds that,
+/// and kept whole the hole would cross the trimmed outline or lie outside
+/// it. Two closed contacts that meet (a rim's and a hole's, both rounded)
+/// cross in the same way.
+///
+/// The curves are compared as polylines, each kept further apart than the
+/// two can stray from their polylines, so a crossing between samples is
+/// still seen.
+fn check_holes_clear_of_closed_contacts(
+    topo: &Topology,
+    face_id: FaceId,
+    restrictions: &[ParametricRestriction],
+) -> Result<(), BlendError> {
+    let refuse = || BlendError::TrimmingFailure { face: face_id };
+    let face = topo.face(face_id)?;
+    let FaceSurface::Plane { normal, .. } = face.surface() else {
+        return Ok(());
+    };
+    let u_axis = normal
+        .cross(brepkit_math::vec::Vec3::new(1.0, 0.0, 0.0))
+        .normalize()
+        .or_else(|_| {
+            normal
+                .cross(brepkit_math::vec::Vec3::new(0.0, 1.0, 0.0))
+                .normalize()
+        })
+        .map_err(|_| refuse())?;
+    let v_axis = normal.cross(u_axis);
+    let flat = |p: Point3| {
+        let q = p - Point3::new(0.0, 0.0, 0.0);
+        (u_axis.dot(q), v_axis.dot(q))
+    };
+    // Appends the curve from `a` to `b` (its edge's own ends), run forward
+    // or backward, without its last point, which the next piece starts at.
+    let sample = |curve: &EdgeCurve,
+                  (a, b): (Point3, Point3),
+                  forward: bool,
+                  n: u32,
+                  line: &mut FlatPolyline| {
+        let (t0, t1) = curve.domain_with_endpoints(a, b);
+        let at = |k: f64| {
+            let k = if forward { k } else { f64::from(n) - k };
+            flat(curve.evaluate_with_endpoints((t1 - t0).mul_add(k / f64::from(n), t0), a, b))
+        };
+        for k in 0..n {
+            let (p, q) = (at(f64::from(k)), at(f64::from(k + 1)));
+            // The span's deviation from its chord, read at its quarter
+            // points and middle, doubled for what falls between them.
+            for f in [0.25, 0.5, 0.75] {
+                let inner = at(f64::from(k) + f);
+                line.sag = line
+                    .sag
+                    .max(2.0 * flat_segment_distance(p, q, inner, inner));
+            }
+            line.points.push(p);
+        }
+    };
+    let mut outlines = Vec::new();
+    for r in restrictions {
+        let (Some(&first), Some(&last), Some(curve)) =
+            (r.contact_3d.first(), r.contact_3d.last(), r.curve.as_ref())
+        else {
+            continue;
+        };
+        if (first - last).length() > VERTEX_TOL {
+            continue;
+        }
+        let mut line = FlatPolyline {
+            points: Vec::new(),
+            sag: 0.0,
+        };
+        sample(curve, (first, last), true, 16 * HOLE_SAMPLES, &mut line);
+        let keep_inside = match r.keep {
+            TrimKeep::AwayFrom(rim) => !inside_flat(flat(rim), &line.points),
+            // As the arrangement path reads a closed path's side: its
+            // interior is on its left where it runs counter-clockwise.
+            TrimKeep::Side(side) => {
+                let area: f64 = (0..line.points.len())
+                    .map(|k| {
+                        let (p, q) = (line.points[k], line.points[(k + 1) % line.points.len()]);
+                        p.0.mul_add(q.1, -(p.1 * q.0))
+                    })
+                    .sum();
+                (area > 0.0) == matches!(side, TrimSide::Left)
+            }
+        };
+        outlines.push(ClosedOutline {
+            line,
+            keep_inside,
+            rounds: r.source_edges.iter().copied().collect(),
+        });
+    }
+    if outlines.is_empty() {
+        return Ok(());
+    }
+    for (i, a) in outlines.iter().enumerate() {
+        for b in &outlines[i + 1..] {
+            if !polylines_clear_by(&a.line, &b.line, a.line.sag + b.line.sag + VERTEX_TOL) {
+                return Err(refuse());
+            }
+        }
+    }
+    for &hole in face.inner_wires() {
+        let mut line = FlatPolyline {
+            points: Vec::new(),
+            sag: 0.0,
+        };
+        let mut edges = std::collections::HashSet::new();
+        for oe in topo.wire(hole)?.edges() {
+            let edge = topo.edge(oe.edge())?;
+            let (a, b) = (
+                topo.vertex(edge.start())?.point(),
+                topo.vertex(edge.end())?.point(),
+            );
+            sample(
+                edge.curve(),
+                (a, b),
+                oe.is_forward(),
+                HOLE_SAMPLES,
+                &mut line,
+            );
+            edges.insert(oe.edge());
+        }
+        let Some(&probe) = line.points.first() else {
+            continue;
+        };
+        for outline in &outlines {
+            if outline.rounds.iter().any(|edge| edges.contains(edge)) {
+                continue;
+            }
+            if inside_flat(probe, &outline.line.points) != outline.keep_inside
+                || !polylines_clear_by(
+                    &line,
+                    &outline.line,
+                    line.sag + outline.line.sag + VERTEX_TOL,
+                )
+            {
+                return Err(refuse());
+            }
+        }
+    }
+    Ok(())
+}
+
 fn trim_parametric_face_batch_in_place(
     topo: &mut Topology,
     face_id: FaceId,
@@ -2078,6 +2315,7 @@ fn trim_parametric_face_batch_in_place(
     if restrictions.is_empty() {
         return Err(BlendError::TrimmingFailure { face: face_id });
     }
+    check_holes_clear_of_closed_contacts(topo, face_id, restrictions)?;
     let fast = rebuild_mapped_parametric_face(topo, face_id, restrictions, split_policy)?;
     if let Some(result) = fast {
         return Ok(result);
@@ -3848,6 +4086,152 @@ mod tests {
         let result = result.unwrap();
         assert_ne!(result.trimmed_face, face);
         assert_eq!(result.contact_edges.len(), 1);
+    }
+
+    /// A 20 x 20 plane face about the origin in `z = 0` with a round hole of
+    /// radius `hole` about each of `holes`, and its hole wires' edges.
+    fn face_with_round_holes(
+        topo: &mut Topology,
+        holes: &[((f64, f64), f64)],
+    ) -> (FaceId, Vec<EdgeId>) {
+        let corners = [(-10.0, -10.0), (10.0, -10.0), (10.0, 10.0), (-10.0, 10.0)];
+        let ids: Vec<_> = corners
+            .iter()
+            .map(|&(x, y)| topo.add_vertex(Vertex::new(Point3::new(x, y, 0.0), VERTEX_TOL)))
+            .collect();
+        let outer: Vec<_> = (0..4)
+            .map(|k| {
+                let edge = topo.add_edge(Edge::new(ids[k], ids[(k + 1) % 4], EdgeCurve::Line));
+                OrientedEdge::new(edge, true)
+            })
+            .collect();
+        let outer = topo.add_wire(Wire::new(outer, true).unwrap());
+        let mut inner = Vec::new();
+        let mut hole_edges = Vec::new();
+        for &((x, y), radius) in holes {
+            let circle = brepkit_math::curves::Circle3D::new(
+                Point3::new(x, y, 0.0),
+                Vec3::new(0.0, 0.0, -1.0),
+                radius,
+            )
+            .unwrap();
+            let v = topo.add_vertex(Vertex::new(circle.evaluate(0.0), VERTEX_TOL));
+            let edge = topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(circle)));
+            hole_edges.push(edge);
+            inner
+                .push(topo.add_wire(Wire::new(vec![OrientedEdge::new(edge, true)], true).unwrap()));
+        }
+        let face = topo.add_face(Face::new(
+            outer,
+            inner,
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: 0.0,
+            },
+        ));
+        (face, hole_edges)
+    }
+
+    /// A closed contact round the origin of radius `radius` in `z = 0`.
+    fn closed_contact(
+        radius: f64,
+        keep: TrimKeep,
+        source_edges: Vec<EdgeId>,
+    ) -> ParametricRestriction {
+        let circle = brepkit_math::curves::Circle3D::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            radius,
+        )
+        .unwrap();
+        let start = circle.evaluate(0.0);
+        ParametricRestriction {
+            contact_3d: vec![start, start],
+            keep,
+            curve: Some(EdgeCurve::Circle(circle)),
+            pcurve: None,
+            source_edges,
+        }
+    }
+
+    /// Whether the hole guard accepts a radius-3 contact keeping its inside
+    /// on a face with one hole of radius `hole` about `center`.
+    fn hole_guard_accepts(center: (f64, f64), hole: f64, keep: TrimKeep) -> bool {
+        let mut topo = Topology::new();
+        let (face, _) = face_with_round_holes(&mut topo, &[(center, hole)]);
+        check_holes_clear_of_closed_contacts(&topo, face, &[closed_contact(3.0, keep, vec![])])
+            .is_ok()
+    }
+
+    #[test]
+    fn hole_guard_takes_a_hole_wholly_on_the_kept_side() {
+        let away = TrimKeep::AwayFrom(Point3::new(9.0, 0.0, 0.0));
+        assert!(hole_guard_accepts((1.0, 0.0), 0.8, away));
+        // 0.01 clear of the contact.
+        assert!(hole_guard_accepts((2.19, 0.0), 0.8, away));
+        // The contact runs counter-clockwise about +z: its inside is on its
+        // left.
+        assert!(hole_guard_accepts(
+            (1.0, 0.0),
+            0.8,
+            TrimKeep::Side(TrimSide::Left)
+        ));
+    }
+
+    #[test]
+    fn hole_guard_refuses_a_hole_across_or_beyond_the_contact() {
+        let away = TrimKeep::AwayFrom(Point3::new(9.0, 0.0, 0.0));
+        assert!(!hole_guard_accepts((2.5, 0.0), 0.8, away));
+        assert!(!hole_guard_accepts((5.0, 0.0), 0.8, away));
+        assert!(!hole_guard_accepts(
+            (1.0, 0.0),
+            0.8,
+            TrimKeep::Side(TrimSide::Right)
+        ));
+    }
+
+    /// A hole reaching 2e-4 past the contact halfway between two of the
+    /// contact's samples, where every sample of both lies on the kept side.
+    #[test]
+    fn hole_guard_sees_a_crossing_between_samples() {
+        let half_step = std::f64::consts::PI / f64::from(16 * HOLE_SAMPLES);
+        let (sin, cos) = (half_step * 7.0).sin_cos();
+        let center = (2.2002 * cos, 2.2002 * sin);
+        assert!(!hole_guard_accepts(
+            center,
+            0.8,
+            TrimKeep::AwayFrom(Point3::new(9.0, 0.0, 0.0))
+        ));
+    }
+
+    /// A hole whose own rim a second contact rounds is exempt from that
+    /// contact alone: the rim's contact still sees it, and the two contacts
+    /// must stay clear of each other.
+    #[test]
+    fn hole_guard_exempts_a_hole_only_from_its_own_round() {
+        let mut topo = Topology::new();
+        let (face, edges) = face_with_round_holes(&mut topo, &[((2.5, 0.0), 0.8)]);
+        let rim = closed_contact(3.0, TrimKeep::AwayFrom(Point3::new(9.0, 0.0, 0.0)), vec![]);
+        // The hole's own round, a contact of radius 1.2 about the hole's
+        // centre, keeping its outside.
+        let circle = brepkit_math::curves::Circle3D::new(
+            Point3::new(2.5, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            1.2,
+        )
+        .unwrap();
+        let start = circle.evaluate(0.0);
+        let own = ParametricRestriction {
+            contact_3d: vec![start, start],
+            keep: TrimKeep::AwayFrom(Point3::new(2.5, 0.0, 0.0)),
+            curve: Some(EdgeCurve::Circle(circle)),
+            pcurve: None,
+            source_edges: edges,
+        };
+        assert!(
+            check_holes_clear_of_closed_contacts(&topo, face, std::slice::from_ref(&own)).is_ok()
+        );
+        assert!(check_holes_clear_of_closed_contacts(&topo, face, &[rim, own]).is_err());
     }
 
     #[test]
