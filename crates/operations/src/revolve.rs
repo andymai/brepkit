@@ -213,7 +213,7 @@ fn nurbs_span(curve: &NurbsCurve, t0: f64, t1: f64) -> Result<NurbsCurve, brepki
 }
 
 /// `curve` traced the other way.
-fn reversed_nurbs(curve: &NurbsCurve) -> Result<NurbsCurve, brepkit_math::MathError> {
+pub(crate) fn reversed_nurbs(curve: &NurbsCurve) -> Result<NurbsCurve, brepkit_math::MathError> {
     let knots = curve.knots();
     let (lo, hi) = (knots[0], knots[knots.len() - 1]);
     let mut points = curve.control_points().to_vec();

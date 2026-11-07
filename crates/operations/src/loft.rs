@@ -1,7 +1,8 @@
 //! Loft operation: create a solid by interpolating between profile faces.
 //!
 //! The loft connects two or more planar profiles by creating ruled (linear)
-//! surfaces between corresponding profile edges.
+//! surfaces between corresponding profile edges. [`loft_with_options`] lofts
+//! along guide rails and leaves its ends under end conditions.
 
 use brepkit_math::nurbs::surface::NurbsSurface;
 use brepkit_math::tolerance::Tolerance;
@@ -17,6 +18,13 @@ use brepkit_topology::wire::{OrientedEdge, Wire};
 use crate::boolean::face_polygon;
 use crate::dot_normal_point;
 use crate::winding::ensure_ccw_profiles;
+
+mod network;
+
+pub use network::{
+    LoftEnd, LoftOptions, LoftRail, POLYNOMIAL_TOLERANCE, RAIL_CONDITION_ANGLE,
+    RAIL_VERTEX_TOLERANCE, TANGENT_FACE_TOLERANCE, TANGENT_FIT_ANGLE, loft_with_options,
+};
 
 /// Resample a closed polygon to `target_count` evenly spaced points.
 ///
@@ -635,7 +643,20 @@ fn profile_oriented_edges(topo: &Topology, fid: FaceId) -> Option<Vec<ProfileEdg
     if !matches!(face.surface(), FaceSurface::Plane { .. }) || !face.inner_wires().is_empty() {
         return None;
     }
-    let wire = topo.wire(face.outer_wire()).ok()?;
+    Some(merge_cocircular_arcs(wire_oriented_edges(
+        topo,
+        face.outer_wire(),
+    )?))
+}
+
+/// A wire's edges in traversal order, each oriented so `start`→`end` follows
+/// the wire, its spline-encoded lines and circles recognized back to their
+/// analytic form. `None` if a lookup fails or the wire has no edges.
+fn wire_oriented_edges(
+    topo: &Topology,
+    wire: brepkit_topology::wire::WireId,
+) -> Option<Vec<ProfileEdgeGeom>> {
+    let wire = topo.wire(wire).ok()?;
     let oes = wire.edges();
     if oes.is_empty() {
         return None;
@@ -706,11 +727,12 @@ fn profile_oriented_edges(topo: &Topology, fid: FaceId) -> Option<Vec<ProfileEdg
                     )
                 }
             }
-            c => c,
+            c if oe.is_forward() => c,
+            c => c.reversed().ok()?,
         };
         out.push(ProfileEdgeGeom { curve, start, end });
     }
-    Some(merge_cocircular_arcs(out))
+    Some(out)
 }
 
 /// When two corner arcs are coaxial (same axis direction, centers differing
@@ -2129,32 +2151,9 @@ pub fn loft_sides(
             .is_some_and(|q| (q - p).length() <= tol),
     };
     let on_boundary = |edges: &[(EdgeCurve, Point3, Point3)], p: Point3| {
-        edges.iter().any(|(curve, a, b)| {
-            let distance = match curve {
-                EdgeCurve::Line => {
-                    let (ab, ap) = (*b - *a, p - *a);
-                    let w = (ap.dot(ab) / ab.dot(ab).max(f64::MIN_POSITIVE)).clamp(0.0, 1.0);
-                    (ap - ab * w).length()
-                }
-                other => {
-                    let (t0, t1) = other.domain_with_endpoints(*a, *b);
-                    let (lo, hi) = (t0.min(t1), t0.max(t1));
-                    match other {
-                        EdgeCurve::Circle(c) => {
-                            brepkit_geometry::extrema::point_to_curve(p, c, lo, hi).distance
-                        }
-                        EdgeCurve::Ellipse(e) => {
-                            brepkit_geometry::extrema::point_to_curve(p, e, lo, hi).distance
-                        }
-                        EdgeCurve::NurbsCurve(n) => {
-                            brepkit_geometry::extrema::point_to_curve(p, n, lo, hi).distance
-                        }
-                        EdgeCurve::Line => f64::INFINITY,
-                    }
-                }
-            };
-            distance <= tol
-        })
+        edges
+            .iter()
+            .any(|(curve, a, b)| edge_distance(curve, *a, *b, p) <= tol)
     };
     let mut sides = Vec::new();
     for fid in brepkit_topology::explorer::solid_faces(topo, solid)? {
@@ -2168,6 +2167,33 @@ pub fn loft_sides(
         }
     }
     Ok(topo.add_shell(Shell::new(sides)?))
+}
+
+/// How far `p` lies from the edge of `curve` between `a` and `b`.
+fn edge_distance(curve: &EdgeCurve, a: Point3, b: Point3, p: Point3) -> f64 {
+    match curve {
+        EdgeCurve::Line => {
+            let (ab, ap) = (b - a, p - a);
+            let w = (ap.dot(ab) / ab.dot(ab).max(f64::MIN_POSITIVE)).clamp(0.0, 1.0);
+            (ap - ab * w).length()
+        }
+        other => {
+            let (t0, t1) = other.domain_with_endpoints(a, b);
+            let (lo, hi) = (t0.min(t1), t0.max(t1));
+            match other {
+                EdgeCurve::Circle(c) => {
+                    brepkit_geometry::extrema::point_to_curve(p, c, lo, hi).distance
+                }
+                EdgeCurve::Ellipse(e) => {
+                    brepkit_geometry::extrema::point_to_curve(p, e, lo, hi).distance
+                }
+                EdgeCurve::NurbsCurve(n) => {
+                    brepkit_geometry::extrema::point_to_curve(p, n, lo, hi).distance
+                }
+                EdgeCurve::Line => f64::INFINITY,
+            }
+        }
+    }
 }
 
 #[cfg(test)]

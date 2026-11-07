@@ -282,6 +282,7 @@ Quick reference — find the right file for any task:
 | Boolean (union/cut/intersect) | `boolean/` (mod, types, classify, assembly, tests) |
 | Mesh boolean (co-refinement) | `mesh_boolean.rs` |
 | Extrude, Revolve, Sweep, Loft, Pipe | `extrude.rs`, `revolve.rs`, `sweep.rs`, `loft.rs`, `pipe.rs` |
+| Loft along guide rails and under end conditions | `loft/network.rs` |
 | Helical sweep | `helix.rs` |
 | Chamfer, Fillet | `chamfer.rs`, `fillet/` (mod, rolling_ball, g1_chain, geometry, radius_law, helpers, tests) |
 | Chamfer along tangent chains of lines and arcs | `chamfer_chain.rs` |

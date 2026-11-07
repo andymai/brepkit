@@ -897,7 +897,7 @@ fn ruled_lines(
 }
 
 /// `curve` on the parameter range `[0, 1]`.
-fn on_unit_domain(curve: &NurbsCurve) -> Result<NurbsCurve, OperationsError> {
+pub(crate) fn on_unit_domain(curve: &NurbsCurve) -> Result<NurbsCurve, OperationsError> {
     let (d0, d1) = curve.domain();
     Ok(NurbsCurve::new(
         curve.degree(),
