@@ -418,13 +418,42 @@ fn extrude_wire_vertices_with(
     // edge, stay exact: a circle passes through whole for one cylinder wall,
     // any other closed curve is cut into exact pieces (see
     // `maybe_split_closed_wire_with` and `inner_wire_is_single_closed_edge`).
-    let oriented = maybe_split_closed_wire_with(
-        topo,
-        &original_oriented,
-        tol.linear,
-        DEFAULT_DEFLECTION,
-        exact_closed,
-    )?;
+    // A closed circle swept off its normal has no cylinder to stay whole for.
+    let oblique_circle = exact_closed
+        && original_oriented.iter().any(|oe| {
+            topo.edge(oe.edge()).is_ok_and(|edge| {
+                let normal = match edge.curve() {
+                    EdgeCurve::Circle(circle) => Some(circle.normal()),
+                    EdgeCurve::NurbsCurve(spline) => {
+                        match brepkit_geometry::convert::recognize_curve(spline, tol.linear * 100.0)
+                        {
+                            brepkit_geometry::convert::RecognizedCurve::Circle {
+                                normal, ..
+                            } => Some(normal),
+                            _ => None,
+                        }
+                    }
+                    EdgeCurve::Line | EdgeCurve::Ellipse(_) => None,
+                };
+                edge.start() == edge.end()
+                    && normal.is_some_and(|normal| !swept_along_normal(normal, offset))
+            })
+        });
+    let oriented = if oblique_circle {
+        let as_circles = original_oriented
+            .iter()
+            .map(|&oe| closed_spline_as_circle(topo, oe, tol.linear))
+            .collect::<Result<Vec<_>, _>>()?;
+        split_closed_wire_exact(topo, &as_circles, tol.linear)?
+    } else {
+        maybe_split_closed_wire_with(
+            topo,
+            &original_oriented,
+            tol.linear,
+            DEFAULT_DEFLECTION,
+            exact_closed,
+        )?
+    };
 
     let mut verts: Vec<VertexId> = Vec::with_capacity(oriented.len());
     for oe in &oriented {
@@ -517,14 +546,61 @@ fn arc_wall_reversed(
     (inside - chord_mid).dot(expected) < 0.0
 }
 
+/// A closed spline recognized as a circle, as an edge on that circle from the
+/// same vertex, running the same way round. Its vertex need not lie on the
+/// spline's own seam, where cutting the spline by its parameter would start.
+fn closed_spline_as_circle(
+    topo: &mut Topology,
+    oe: OrientedEdge,
+    tol: f64,
+) -> Result<OrientedEdge, crate::OperationsError> {
+    let edge = topo.edge(oe.edge())?;
+    let vertex = edge.start();
+    let EdgeCurve::NurbsCurve(spline) = edge.curve() else {
+        return Ok(oe);
+    };
+    if vertex != edge.end() {
+        return Ok(oe);
+    }
+    let brepkit_geometry::convert::RecognizedCurve::Circle {
+        center,
+        normal,
+        radius,
+    } = brepkit_geometry::convert::recognize_curve(spline, tol * 100.0)
+    else {
+        return Ok(oe);
+    };
+    let (d0, _) = spline.domain();
+    let radial = spline.evaluate(d0) - center;
+    let normal = if radial.cross(spline.tangent(d0)?).dot(normal) < 0.0 {
+        -normal
+    } else {
+        normal
+    };
+    let circle = brepkit_math::curves::Circle3D::new(center, normal, radius)
+        .map_err(crate::OperationsError::Math)?;
+    let edge = topo.add_edge(Edge::new(vertex, vertex, EdgeCurve::Circle(circle)));
+    Ok(OrientedEdge::new(edge, oe.is_forward()))
+}
+
+/// Whether a circle with this normal sweeps a circular cylinder along `offset`.
+/// Off its normal it sweeps an oblique one, whose square section is an ellipse:
+/// a `Cylinder` about the sweep would leave the circle off its own surface.
+fn swept_along_normal(normal: Vec3, offset: Vec3) -> bool {
+    offset
+        .normalize()
+        .is_ok_and(|along| normal.cross(along).length() <= 1e-9)
+}
+
 /// Build the appropriate `FaceSurface` for a side face created by extruding
 /// the given edge curve along the offset direction.
 ///
 /// - `Line` edges produce planar faces.
-/// - `Circle` edges produce cylindrical faces (the cylinder axis is the
-///   extrusion direction, passing through the circle center).
-/// - `NurbsCurve` and `Ellipse` edges produce ruled NURBS surfaces
-///   interpolating between the bottom and translated-top curves.
+/// - `Circle` edges swept along their normal produce cylindrical faces (the
+///   cylinder axis is the extrusion direction, passing through the circle
+///   center).
+/// - Other `Circle` edges, and `NurbsCurve` and `Ellipse` edges, produce ruled
+///   NURBS surfaces interpolating between the bottom and translated-top curves.
 ///
 /// Returns `(surface, is_reversed)` — `is_reversed` is `true` when the
 /// surface's native normal points inward and the face needs flipping.
@@ -554,6 +630,16 @@ pub(crate) fn side_face_surface(
             Ok((FaceSurface::Plane { normal, d }, false))
         }
         EdgeCurve::Circle(circle) => {
+            if !swept_along_normal(circle.normal(), offset) {
+                let (t_start, t_end) = curve.domain_with_endpoints(curve_start, curve_end);
+                let nc = brepkit_geometry::convert::circle_to_nurbs(circle, t_start, t_end)
+                    .map_err(|e| crate::OperationsError::InvalidInput {
+                        reason: format!("circle_to_nurbs failed: {e}"),
+                    })?;
+                let surface = ruled_nurbs_surface(&nc, offset)?;
+                let reversed = nurbs_needs_reversal(&surface, p0, p1, offset, outer_is_cw);
+                return Ok((FaceSurface::Nurbs(surface), reversed));
+            }
             // The extruded circle sweeps out a cylinder whose axis is the
             // extrusion direction, passing through the circle center.
             let cyl = brepkit_math::surfaces::CylindricalSurface::new(
@@ -577,10 +663,48 @@ pub(crate) fn side_face_surface(
             let tol = brepkit_math::tolerance::Tolerance::new().linear;
             if let brepkit_geometry::convert::RecognizedCurve::Circle {
                 center,
-                normal: _,
+                normal,
                 radius,
             } = brepkit_geometry::convert::recognize_curve(nc, tol * 100.0)
             {
+                // Off its normal, as a circle, whose arm reads the edge's own
+                // span: its vertices can trim this spline to part of the circle.
+                // The arc runs counterclockwise about the circle's normal, and
+                // recognition leaves that normal's sign to the spline's points.
+                if !swept_along_normal(normal, offset) {
+                    let (t0, t1) = curve.domain_with_endpoints(curve_start, curve_end);
+                    let middle = curve.evaluate_with_endpoints(
+                        f64::midpoint(t0, t1),
+                        curve_start,
+                        curve_end,
+                    );
+                    let as_circle = |normal: Vec3| -> Result<EdgeCurve, crate::OperationsError> {
+                        Ok(EdgeCurve::Circle(
+                            brepkit_math::curves::Circle3D::new(center, normal, radius)
+                                .map_err(crate::OperationsError::Math)?,
+                        ))
+                    };
+                    let forward = as_circle(normal)?;
+                    let (c0, c1) = forward.domain_with_endpoints(curve_start, curve_end);
+                    let along_it = brepkit_math::curves::Circle3D::new(center, normal, radius)
+                        .map_err(crate::OperationsError::Math)?
+                        .project(middle);
+                    let turn = (along_it - c0).rem_euclid(std::f64::consts::TAU);
+                    let circle = if turn <= c1 - c0 {
+                        forward
+                    } else {
+                        as_circle(-normal)?
+                    };
+                    return side_face_surface(
+                        &circle,
+                        p0,
+                        p1,
+                        curve_start,
+                        curve_end,
+                        offset,
+                        outer_is_cw,
+                    );
+                }
                 let cyl = brepkit_math::surfaces::CylindricalSurface::new(
                     center,
                     offset.normalize().unwrap_or(Vec3::new(0.0, 0.0, 1.0)),
