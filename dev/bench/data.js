@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794060736725,
+  "lastUpdate": 1794062250895,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -65825,6 +65825,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 28718228,
             "range": "± 121069",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c82ca8e79d9e52658a4e4ad6727fb1ad3b3d55e4",
+          "message": "chore(main): release 4.6.29 (#2316)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[4.6.29](https://github.com/andymai/brepkit/compare/v4.6.28...v4.6.29)\n(2026-11-07)\n\n\n### Bug Fixes\n\n* **blend:** run a straight round's ends on to tilted end faces\n([#2309](https://github.com/andymai/brepkit/issues/2309))\n([0ffc2a1](https://github.com/andymai/brepkit/commit/0ffc2a13d497414cffb7284401b1cfde5935ccab))\n* **operations:** round an edge that ends at a concave corner\n([#2313](https://github.com/andymai/brepkit/issues/2313))\n([0dd2f42](https://github.com/andymai/brepkit/commit/0dd2f426af1572d6cddf28cc0506bba81967c345))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 4.6.29, bumping all workspace crate versions and updating the\nchangelog. Includes two rounding fixes:\n\n- Straight rounds now run their ends onto tilted end faces.\n- Edges ending at a concave corner can now be rounded.\n\n<sup>Written for commit ce0a9491ed32dbf4e2be416f1da01920776e2428.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2316?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2316?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2316&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-11-07T14:34:32Z",
+          "tree_id": "b439082285c03a811960b516b0c172691a403556",
+          "url": "https://github.com/andymai/brepkit/commit/c82ca8e79d9e52658a4e4ad6727fb1ad3b3d55e4"
+        },
+        "date": 1794062241006,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 893306,
+            "range": "± 9544",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 917262,
+            "range": "± 5822",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11091,
+            "range": "± 158",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 542856,
+            "range": "± 1461",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 22603279,
+            "range": "± 493227",
             "unit": "ns/iter"
           }
         ]
