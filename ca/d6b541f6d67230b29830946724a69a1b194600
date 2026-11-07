@@ -1,0 +1,166 @@
+crates/io/tests/support/shell_audit.rs
+  s_649261a24df31b::t_94c02d3854d5e8 17-18,20
+crates/operations/tests/fillet_spline_rims.rs
+  s_649261a24df31b::t_94c02d3854d5e8 1-261
+crates/operations/tests/fillet_saddle.rs
+  s_649261a24df31b::t_94c02d3854d5e8 1-140
+crates/operations/src/sweep.rs
+  s_649261a24df31b::t_94c02d3854d5e8 1942,2761
+  s_649261a24df31b::t_274c98e112bb13 2762
+crates/operations/tests/chamfer_tangent_chains.rs
+  s_649261a24df31b::t_94c02d3854d5e8 1-810
+crates/operations/tests/regress_fillet_variable_retry_seam_stub.rs
+  s_649261a24df31b::t_94c02d3854d5e8 208-214
+crates/operations/src/validate/tests.rs
+  s_649261a24df31b::t_94c02d3854d5e8 572-683
+crates/algo/src/classifier/ray_cast.rs
+  s_649261a24df31b::t_94c02d3854d5e8 1450-1452
+crates/operations/src/fillet/mod.rs
+  s_649261a24df31b::t_94c02d3854d5e8 29
+crates/operations/src/sheet.rs
+  s_649261a24df31b::t_94c02d3854d5e8 1-1187
+crates/algo/src/builder/face_splitter/mod.rs
+  s_649261a24df31b::t_94c02d3854d5e8 1109-1129,8104,8106,8111-8116,10247-10350
+  s_649261a24df31b::t_10894c06289907 10351
+crates/algo/src/pave_filler/phase_ff.rs
+  s_649261a24df31b::t_94c02d3854d5e8 529-533,8514-8519,8526-8559,8903-8905,8930-8934
+.claude/skills/io-formats/reference.md
+  s_649261a24df31b::t_94c02d3854d5e8 88-101,182
+crates/operations/src/fillet/tests.rs
+  s_649261a24df31b::t_94c02d3854d5e8 240-245,254,257-258
+crates/operations/tests/sheet_ops.rs
+  s_649261a24df31b::t_94c02d3854d5e8 1-2246
+crates/operations/src/measure/area.rs
+  s_649261a24df31b::t_94c02d3854d5e8 788-793
+crates/io/src/iges/writer.rs
+  s_649261a24df31b::t_94c02d3854d5e8 8-17,19,21-22,26-29,33,36,40-45,52-53,61-70,72-76,78-79,81-122,125-126,128-159,184-191,193,195,197-201,204-206,212-218,220,222-226,228-237,240-248,252-353,355,365,368-370,379,382-383,388,391,394,397,403,405,408-414,416-430,433-435,439,445-448,451-453,463-471,475-478,481,484-486,498,519,571-572,575,577,580-589,591-592,598-599,601-627,629,633-676
+  s_649261a24df31b::t_21bd379cf2c9ee 677
+crates/operations/tests/examples.rs
+  s_649261a24df31b::t_94c02d3854d5e8 78-108
+crates/blend/src/fillet_builder.rs
+  s_649261a24df31b::t_94c02d3854d5e8 312-344,656-660,872,884-894,900-902,1011-1016,1021-1026,1670-1672,1734-1744,2462-2673,2756-2768,2976-3108,3559-3581,3583,3586,3588-3603,3608-3621,3639-3641,3672-3952
+  s_649261a24df31b::t_fb15685dc778ef 3953
+crates/operations/tests/cut_beside_a_hole.rs
+  s_649261a24df31b::t_94c02d3854d5e8 1-163
+crates/operations/src/boolean/mod.rs
+  s_649261a24df31b::t_94c02d3854d5e8 902,3571,3606,3626-3665,3667,3679,3683-3699
+crates/math/src/traits.rs
+  s_649261a24df31b::t_94c02d3854d5e8 35-48,229-236
+CHANGELOG.md
+  s_649261a24df31b::t_94c02d3854d5e8 3-29
+crates/blend/src/walker.rs
+  s_649261a24df31b::t_94c02d3854d5e8 94-97,108,188-210,231,315,344-350,360-371,373,405-427
+  s_649261a24df31b::t_17131b59c1cb49 428
+crates/operations/src/fillet/concave_end.rs
+  s_649261a24df31b::t_94c02d3854d5e8 1-356
+CLAUDE.md
+  s_649261a24df31b::t_94c02d3854d5e8 287,317
+crates/operations/tests/fillet_tilted_end_caps.rs
+  s_649261a24df31b::t_94c02d3854d5e8 1-196
+crates/algo/src/builder/face_splitter/special_cases.rs
+  s_649261a24df31b::t_94c02d3854d5e8 2954-2955,2957-2958
+crates/operations/src/sweep/exact.rs
+  s_649261a24df31b::t_94c02d3854d5e8 101-102,438-519
+  s_649261a24df31b::t_7950dc630351a8 520
+crates/operations/tests/revolve_bands.rs
+  s_649261a24df31b::t_94c02d3854d5e8 1-655
+crates/operations/tests/revolve_curved_profiles.rs
+  s_649261a24df31b::t_94c02d3854d5e8 13,231-275
+  s_649261a24df31b::t_66b8f3b961b4c7 276-277
+crates/wasm/src/bindings/io.rs
+  s_649261a24df31b::t_94c02d3854d5e8 274-293
+README.md
+  s_649261a24df31b::t_94c02d3854d5e8 114,185,282
+crates/wasm/src/bindings/operations.rs
+  s_649261a24df31b::t_94c02d3854d5e8 17-19,185-205,409-439,488-538,1009-1031,1865-1987
+  s_649261a24df31b::t_28b769ad4dca28 1988
+crates/operations/src/measure/mod.rs
+  s_649261a24df31b::t_94c02d3854d5e8 45-88
+crates/operations/src/cavities.rs
+  s_649261a24df31b::t_94c02d3854d5e8 248
+crates/operations/tests/fillet_concave_ends.rs
+  s_649261a24df31b::t_94c02d3854d5e8 1-401
+crates/operations/tests/simplify_whole_sphere.rs
+  s_649261a24df31b::t_94c02d3854d5e8 1-346
+crates/blend/src/trimmer.rs
+  s_649261a24df31b::t_94c02d3854d5e8 1680,1706,1726-1737,1747
+crates/operations/src/revolve.rs
+  s_649261a24df31b::t_94c02d3854d5e8 47,75,135,167,234,295,406-415,516,650,680,716,770-874,1217,1573-1575,1579,1612-1614,1681-1686,1780-1781,1790,1938,1940-1941,1944-1946,1997-1999,2003-2004,2006,2008-2009,2012-2041,2043,2045-2059,2068-2071,2123-2143,2147-2179,3410-3411,3414-3415
+crates/io/tests/iges_round_trip.rs
+  s_649261a24df31b::t_94c02d3854d5e8 1-989
+.claude/skills/fillet-blend/reference.md
+  s_649261a24df31b::t_94c02d3854d5e8 18
+crates/blend/src/blend_func.rs
+  s_649261a24df31b::t_94c02d3854d5e8 92-108,146-152,179-180,215-218,270-280,290-293,318
+crates/blend/src/spine.rs
+  s_649261a24df31b::t_94c02d3854d5e8 30-38,42-58,67,122,248-270
+  s_649261a24df31b::t_0b55ed01f977a9 271
+crates/io/tests/cross_one_row_fillet_inmem.rs
+  s_649261a24df31b::t_94c02d3854d5e8 629-632,635,640-652,654-656
+crates/heal/src/upgrade/unify_same_domain.rs
+  s_649261a24df31b::t_94c02d3854d5e8 14-15,17-18,21,218-220,222-229,361-528
+  s_649261a24df31b::t_bcd615d485ed81 529-530
+crates/operations/src/fillet/rolling_ball.rs
+  s_649261a24df31b::t_94c02d3854d5e8 337-352
+crates/operations/tests/ray_index_matches_full_scan.rs
+  s_649261a24df31b::t_94c02d3854d5e8 187-188,208-209
+crates/wasm/src/bindings/batch.rs
+  s_649261a24df31b::t_94c02d3854d5e8 21-25,646-704
+crates/blend/src/builder_utils.rs
+  s_649261a24df31b::t_94c02d3854d5e8 42-99,668,670-685,817-824,1227-1250
+  s_649261a24df31b::t_bf1f45b5607da7 1251
+crates/math/src/nurbs/knot_ops.rs
+  s_649261a24df31b::t_94c02d3854d5e8 524,529-531,534,542,560-579
+  s_649261a24df31b::t_dce7f008bba6c3 580
+.release-please-manifest.json
+  s_649261a24df31b::t_94c02d3854d5e8 2
+crates/operations/src/extrude.rs
+  s_649261a24df31b::t_94c02d3854d5e8 531,676,721-753,755-784,787-792,794-797,1381
+crates/operations/src/tessellate/face.rs
+  s_649261a24df31b::t_94c02d3854d5e8 67-69,75-76,80-94
+crates/operations/tests/whole_torus_in_a_larger_solid.rs
+  s_649261a24df31b::t_94c02d3854d5e8 1-126
+crates/operations/src/draft.rs
+  s_649261a24df31b::t_94c02d3854d5e8 3-6,10-11,23-52,58-62,69-76,114,119-139,200,202-205,212-225,240,260-262,269-316,366-371,389-391,402-491,662-698
+  s_649261a24df31b::t_2807897036d372 699
+crates/wasm/src/helpers.rs
+  s_649261a24df31b::t_94c02d3854d5e8 123-138,238-246,336-340,353-358,956-1024,1429-1493
+  s_649261a24df31b::t_5bf06829c443f5 1494
+Cargo.toml
+  s_649261a24df31b::t_94c02d3854d5e8 15,58-68
+crates/operations/src/lib.rs
+  s_649261a24df31b::t_94c02d3854d5e8 152,163
+crates/operations/src/validate.rs
+  s_649261a24df31b::t_94c02d3854d5e8 165-171,178-179,221-237,302-345
+crates/operations/src/chamfer.rs
+  s_649261a24df31b::t_94c02d3854d5e8 32-35,58-62,77,226-250,293-304,360-417,441-442,662
+crates/operations/src/chamfer_chain.rs
+  s_649261a24df31b::t_94c02d3854d5e8 1-1353
+crates/operations/src/boolean/tests.rs
+  s_649261a24df31b::t_94c02d3854d5e8 8497-8547
+.claude/skills/io-formats/SKILL.md
+  s_649261a24df31b::t_94c02d3854d5e8 28,42-49,180
+crates/io/src/iges/reader.rs
+  s_649261a24df31b::t_94c02d3854d5e8 3-10,12,14-15,17,19-22,24-26,30-32,35-36,40,155-688,693,697-705,712,715-717,719-726,728-730,732-739,741-767,770-789,791-833,835-843,846-848,851-853,855,858,861,863-866,912-1001
+  s_649261a24df31b::t_412d3ea3a12120 1002
+crates/operations/tests/draft_curved_walls.rs
+  s_649261a24df31b::t_94c02d3854d5e8 1-477
+crates/operations/src/primitives/tests.rs
+  s_649261a24df31b::t_f7ccc23aec706e 279
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "cad6b541f6d67230b29830946724a69a1b194600",
+  "prompts": {},
+  "sessions": {
+    "s_649261a24df31b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d8bbbba4-0431-4f6a-a622-e632a6659779",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
