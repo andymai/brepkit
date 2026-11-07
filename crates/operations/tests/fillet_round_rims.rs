@@ -15,6 +15,7 @@
 use std::f64::consts::PI;
 
 use brepkit_math::mat::Mat4;
+use brepkit_math::vec::Point3;
 use brepkit_operations::blend_ops::fillet_v2;
 use brepkit_operations::boolean::{BooleanOp, boolean};
 use brepkit_operations::measure::{oriented_solid_volume, solid_volume};
@@ -25,6 +26,7 @@ use brepkit_operations::validate::validate_solid;
 use brepkit_topology::Topology;
 use brepkit_topology::edge::{EdgeCurve, EdgeId};
 use brepkit_topology::explorer::solid_edges;
+use brepkit_topology::face::FaceSurface;
 use brepkit_topology::solid::SolidId;
 
 const RADIUS: f64 = 5.0;
@@ -77,6 +79,7 @@ fn assert_rim_fillet_changes_by(
     assert!(result.failed.is_empty(), "r = {r}: {:?}", result.failed);
     let report = validate_solid(topo, result.solid).unwrap();
     assert!(report.is_valid(), "r = {r}: {:?}", report.issues);
+    assert_edges_lie_on_their_faces(topo, result.solid, r);
     let mesh = tessellate_solid(topo, result.solid, 0.01).unwrap();
     assert!(is_watertight(&mesh), "r = {r}: mesh not watertight");
     let changed = solid_volume(topo, result.solid, 0.001).unwrap() - before;
@@ -84,6 +87,41 @@ fn assert_rim_fillet_changes_by(
         (changed - change).abs() < 1e-6 * before,
         "r = {r}: changed by {changed}, truth {change}"
     );
+}
+
+/// Every edge of `solid` lies on each face that uses it, sampled at three
+/// points inside it: the torus band's seam is its meridian arc, not the
+/// chord across the round.
+fn assert_edges_lie_on_their_faces(topo: &Topology, solid: SolidId, r: f64) {
+    let faces_of = brepkit_topology::explorer::edge_to_face_map(topo, solid).unwrap();
+    for edge_id in solid_edges(topo, solid).unwrap() {
+        let edge = topo.edge(edge_id).unwrap();
+        let (a, b) = (
+            topo.vertex(edge.start()).unwrap().point(),
+            topo.vertex(edge.end()).unwrap().point(),
+        );
+        let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
+        for face_id in &faces_of[&edge_id.index()] {
+            let surface = topo.face(*face_id).unwrap().surface();
+            for f in [0.25, 0.5, 0.75] {
+                let p = edge
+                    .curve()
+                    .evaluate_with_endpoints((t1 - t0).mul_add(f, t0), a, b);
+                let off = if let FaceSurface::Plane { normal, d } = surface {
+                    (normal.dot(p - Point3::new(0.0, 0.0, 0.0)) - d).abs()
+                } else {
+                    let (u, v) = surface.project_point(p).unwrap();
+                    (surface.evaluate(u, v).unwrap() - p).length()
+                };
+                assert!(
+                    off < 1e-6,
+                    "r = {r}: a {} edge stands {off} off its {} face",
+                    edge.curve().type_tag(),
+                    surface.type_tag()
+                );
+            }
+        }
+    }
 }
 
 #[test]
@@ -471,4 +509,48 @@ fn assert_sound_and_changed_by(topo: &Topology, solid: SolidId, before: f64, cha
         (changed - change).abs() < 1e-6 * before,
         "changed by {changed}, truth {change}"
     );
+}
+
+/// A rod drilled through at `offset` from its axis by a hole of radius
+/// `hole`, its top rim then rounded by `r`: the rounded solid, or why the
+/// round was not built.
+fn round_a_drilled_rods_top(
+    offset: f64,
+    hole: f64,
+    r: f64,
+) -> Result<(Topology, SolidId, f64), String> {
+    let mut topo = Topology::new();
+    let rod = make_cylinder(&mut topo, RADIUS, HEIGHT).unwrap();
+    let pin = make_cylinder(&mut topo, hole, HEIGHT + 2.0).unwrap();
+    transform_solid(&mut topo, pin, &Mat4::translation(offset, 0.0, -1.0)).unwrap();
+    let drilled = boolean(&mut topo, BooleanOp::Cut, rod, pin).unwrap();
+    let before = solid_volume(&topo, drilled, 0.001).unwrap();
+    let edge = rim_at(&topo, drilled, RADIUS, HEIGHT);
+    match fillet_v2(&mut topo, drilled, &[edge], r) {
+        Err(e) => Err(e.to_string()),
+        Ok(result) if !result.failed.is_empty() => Err(format!("{:?}", result.failed)),
+        Ok(result) => Ok((topo, result.solid, before)),
+    }
+}
+
+/// A hole on the top under the round, crossing the circle its contact runs
+/// along or lying between that circle and the rim: the band would cut
+/// through the hole, which the fillet does not build, so it is refused,
+/// not built as a top whose outline crosses or leaves out its hole.
+#[test]
+fn a_rods_top_rim_round_over_a_hole_is_refused() {
+    for (offset, hole) in [(3.5, 0.8), (4.2, 0.3)] {
+        assert!(
+            round_a_drilled_rods_top(offset, hole, 2.0).is_err(),
+            "a round over the hole at {offset} was built"
+        );
+    }
+}
+
+/// The same hole wholly inside the contact's circle keeps the round, and the
+/// result is sound: short of the drilled rod by the rim's strip.
+#[test]
+fn a_rods_top_rim_rounds_off_beside_a_hole() {
+    let (topo, solid, before) = round_a_drilled_rods_top(1.5, 0.8, 2.0).unwrap();
+    assert_sound_and_changed_by(&topo, solid, before, -rounded_off(RADIUS, 2.0));
 }
