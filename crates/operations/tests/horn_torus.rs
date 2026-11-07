@@ -108,6 +108,25 @@ mod tests {
         }
     }
 
+    /// Radii equal within the tolerance make one horn torus, with no tube left
+    /// to cross the axis: its surface holds them exactly equal.
+    #[test]
+    fn radii_a_rounding_apart_are_equal() {
+        for minor in [R + 5e-8, R - 5e-8] {
+            let mut topo = Topology::new();
+            let solid = make_torus(&mut topo, R, minor, 16).unwrap();
+            let faces = brepkit_topology::explorer::solid_faces(&topo, solid).unwrap();
+            let FaceSurface::Torus(torus) = topo.face(faces[0]).unwrap().surface() else {
+                unreachable!("a torus face");
+            };
+            assert_eq!(
+                torus.major_radius().to_bits(),
+                torus.minor_radius().to_bits(),
+                "minor {minor}"
+            );
+        }
+    }
+
     /// Past the pinch the tube would pass through itself, which no solid does.
     #[test]
     fn a_spindle_past_the_horn_is_refused() {

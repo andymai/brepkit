@@ -574,7 +574,14 @@ pub fn make_torus(
             reason: format!("torus minor radius must be positive, got {minor_radius}"),
         });
     }
-    if minor_radius > major_radius + tol.linear {
+    // Within the tolerance the radii are one: past them the tube crosses itself,
+    // so a horn torus's surface must hold them exactly equal.
+    let minor_radius = if (minor_radius - major_radius).abs() <= tol.linear {
+        major_radius
+    } else {
+        minor_radius
+    };
+    if minor_radius > major_radius {
         return Err(crate::OperationsError::InvalidInput {
             reason: format!(
                 "torus minor radius ({minor_radius}) must not exceed major radius ({major_radius})"

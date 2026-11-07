@@ -1346,7 +1346,7 @@ fn try_circle_revolution_torus(
         let surface = brepkit_math::surfaces::ToroidalSurface::with_axis(
             torus_center,
             major_radius,
-            radius,
+            if horn { major_radius } else { radius },
             axis,
         )
         .map_err(crate::OperationsError::Math)?;
