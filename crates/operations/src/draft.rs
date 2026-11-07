@@ -287,8 +287,29 @@ pub fn draft(
                             )?),
                         );
                     }
-                    EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_) => {
-                        return Err(invalid("a drafted cylinder's rim must be a circle"));
+                    curve @ (EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_)) => {
+                        let (a, b) = (
+                            topo.vertex(edge.start())?.point(),
+                            topo.vertex(edge.end())?.point(),
+                        );
+                        match read_wall_edge(curve, a, b, wall, (pull, neutral_d)) {
+                            Some(WallEdge::Ruling) => {
+                                straighten.insert(eid);
+                            }
+                            Some(WallEdge::Rim { turn }) => {
+                                rims.insert(
+                                    eid,
+                                    EdgeCurve::Circle(Circle3D::new(
+                                        wall.axis_point + pull * height,
+                                        pull * turn,
+                                        wall.radius_at(height),
+                                    )?),
+                                );
+                            }
+                            None => {
+                                return Err(invalid("a drafted cylinder's rim must be a circle"));
+                            }
+                        }
                     }
                 }
                 continue;
@@ -378,6 +399,58 @@ pub fn draft(
     Ok(copy)
 }
 
+/// A curved edge's place on a wall it bounds, as fitted geometry stores it.
+enum WallEdge {
+    /// A straight ruling, stored as a curve.
+    Ruling,
+    /// A circle about the axis, running counter-clockwise about `turn` (1 or
+    /// -1) times the pull.
+    Rim { turn: f64 },
+}
+
+/// Reads a curve on a wall by samples along it from `a` to `b`, as the fits
+/// behind it hold: `None` when it is neither a ruling nor a circle about the
+/// axis.
+fn read_wall_edge(
+    curve: &EdgeCurve,
+    a: Point3,
+    b: Point3,
+    wall: &DraftedWall,
+    (pull, neutral_d): (Vec3, f64),
+) -> Option<WallEdge> {
+    const SAMPLES: u32 = 16;
+    const FIT: f64 = 1e-6;
+    let (t0, t1) = curve.domain_with_endpoints(a, b);
+    let points: Vec<Point3> = (0..=SAMPLES)
+        .map(|k| {
+            let t = (t1 - t0).mul_add(f64::from(k) / f64::from(SAMPLES), t0);
+            curve.evaluate_with_endpoints(t, a, b)
+        })
+        .collect();
+    let height = |p: Point3| dot_normal_point(pull, p) - neutral_d;
+    if let Ok(along) = (b - a).normalize() {
+        let on_chord = |p: &Point3| (*p - a).cross(along).length() <= FIT;
+        if points.iter().all(on_chord) {
+            return Some(WallEdge::Ruling);
+        }
+    }
+    let foot = |p: Point3| wall.axis_point + pull * height(p);
+    let radius = (a - foot(a)).length();
+    let on_rim = |p: &Point3| {
+        (height(*p) - height(a)).abs() <= FIT && ((*p - foot(*p)).length() - radius).abs() <= FIT
+    };
+    if !points.iter().all(on_rim) {
+        return None;
+    }
+    // Which way the curve runs round the axis, by its first sample's turn.
+    let swing = (points[0] - foot(points[0]))
+        .cross(points[1] - foot(points[1]))
+        .dot(pull);
+    Some(WallEdge::Rim {
+        turn: if swing < 0.0 { -1.0 } else { 1.0 },
+    })
+}
+
 /// Where a vertex of a drafted wall goes: along the wall's ruling through it to
 /// the plane the ruling crosses. Every other face around it has to pass through
 /// that point, as a tangent neighbour does. `None` when none crosses the ruling,
@@ -404,7 +477,10 @@ fn point_on_walls(
     }
     let point = base + run * ((d - dot_normal_point(normal, base)) / across);
     let height = height_of(point);
-    let miss = 10.0 * linear;
+    // Far from the origin the coordinates' own storage precision widens this,
+    // as it does for `meeting_point`.
+    let far = old.x().abs().max(old.y().abs()).max(old.z().abs());
+    let miss = 64.0f64.mul_add(f64::EPSILON * far, 10.0 * linear);
     let on_plane = |&(n, off): &(Vec3, f64)| (dot_normal_point(n, point) - off).abs() <= miss;
     let on_wall = |w: &DraftedWall| {
         let foot = w.axis_point + pull * height;

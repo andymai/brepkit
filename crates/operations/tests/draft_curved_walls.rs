@@ -85,7 +85,10 @@ mod tests {
                 let upright = match face.surface() {
                     FaceSurface::Plane { normal, .. } => normal.dot(pull).abs() < 1e-6,
                     FaceSurface::Cylinder(_) => true,
-                    _ => false,
+                    FaceSurface::Cone(_)
+                    | FaceSurface::Sphere(_)
+                    | FaceSurface::Torus(_)
+                    | FaceSurface::Nurbs(_) => false,
                 };
                 let wire = topo.wire(face.outer_wire()).unwrap();
                 upright
@@ -112,6 +115,34 @@ mod tests {
             (volume - truth).abs() < 1e-6 * truth,
             "{what}: volume {volume}, expected {truth}"
         );
+    }
+
+    /// What a refused draft must leave as it was: every vertex's place and every
+    /// face's surface.
+    fn fingerprint(topo: &Topology, solid: SolidId) -> Vec<String> {
+        let vertices = solid_vertices(topo, solid)
+            .unwrap()
+            .into_iter()
+            .map(|v| format!("{:?}", topo.vertex(v).unwrap().point()));
+        let faces = solid_faces(topo, solid)
+            .unwrap()
+            .into_iter()
+            .map(|f| format!("{:?}", topo.face(f).unwrap().surface()));
+        vertices.chain(faces).collect()
+    }
+
+    fn assert_refused(
+        topo: &mut Topology,
+        solid: SolidId,
+        walls: &[FaceId],
+        pull: Vec3,
+        neutral: Point3,
+        angle: f64,
+    ) {
+        let before = fingerprint(topo, solid);
+        let result = draft(topo, solid, walls, pull, neutral, angle);
+        assert!(result.is_err());
+        assert_eq!(fingerprint(topo, solid), before);
     }
 
     fn poses() -> Vec<(&'static str, Mat4, bool)> {
@@ -273,15 +304,8 @@ mod tests {
             .collect();
         assert_eq!(curved.len(), 2);
         let pull = Vec3::new(0.0, 0.0, 1.0);
-        let result = draft(
-            &mut topo,
-            prism,
-            &curved,
-            pull,
-            Point3::new(0.0, 0.0, 0.0),
-            0.05,
-        );
-        assert!(result.is_err());
+        let origin = Point3::new(0.0, 0.0, 0.0);
+        assert_refused(&mut topo, prism, &curved, pull, origin, 0.05);
     }
 
     /// A plane meeting a wall at a sharp edge leans into the cone along a
@@ -296,15 +320,8 @@ mod tests {
         let pull = Vec3::new(0.0, 0.0, 1.0);
         let walls = walls_above(&topo, flat, pull, 0.0);
         assert!(walls.len() >= 2);
-        let result = draft(
-            &mut topo,
-            flat,
-            &walls,
-            pull,
-            Point3::new(0.0, 0.0, 0.0),
-            0.05,
-        );
-        assert!(result.is_err());
+        let origin = Point3::new(0.0, 0.0, 0.0);
+        assert_refused(&mut topo, flat, &walls, pull, origin, 0.05);
     }
 
     /// A wall whose radius runs out before its far rim would pass through the
@@ -316,17 +333,14 @@ mod tests {
         let pull = Vec3::new(0.0, 0.0, 1.0);
         let walls = walls_above(&topo, rod, pull, 0.0);
         let origin = Point3::new(0.0, 0.0, 0.0);
-        assert!(draft(&mut topo, rod, &walls, pull, origin, 0.5).is_err());
-        assert!(
-            draft(
-                &mut topo,
-                rod,
-                &walls,
-                Vec3::new(1.0, 0.0, 0.0),
-                origin,
-                0.1
-            )
-            .is_err()
+        assert_refused(&mut topo, rod, &walls, pull, origin, 0.5);
+        assert_refused(
+            &mut topo,
+            rod,
+            &walls,
+            Vec3::new(1.0, 0.0, 0.0),
+            origin,
+            0.1,
         );
     }
 
@@ -364,5 +378,100 @@ mod tests {
             topo.face(walls[0]).unwrap().surface(),
             FaceSurface::Cylinder(_)
         ));
+    }
+
+    /// A wall cut by a tilted plane has an ellipse for a rim, which no circle of
+    /// the cone follows.
+    #[test]
+    fn a_rim_that_is_no_circle_is_refused() {
+        let mut topo = Topology::new();
+        let rod = make_cylinder(&mut topo, 5.0, 20.0).unwrap();
+        let cutter = make_box(&mut topo, 40.0, 40.0, 40.0).unwrap();
+        let m = Mat4::translation(0.0, 0.0, 10.0)
+            * Mat4::rotation_y(0.3)
+            * Mat4::translation(-20.0, -20.0, 0.0);
+        transform_solid(&mut topo, cutter, &m).unwrap();
+        let slanted = boolean(&mut topo, BooleanOp::Cut, rod, cutter).unwrap();
+        let walls: Vec<FaceId> = solid_faces(&topo, slanted)
+            .unwrap()
+            .into_iter()
+            .filter(|&f| matches!(topo.face(f).unwrap().surface(), FaceSurface::Cylinder(_)))
+            .collect();
+        assert!(!walls.is_empty());
+        let pull = Vec3::new(0.0, 0.0, 1.0);
+        let origin = Point3::new(0.0, 0.0, 0.0);
+        assert_refused(&mut topo, slanted, &walls, pull, origin, 0.05);
+    }
+
+    /// Far from the origin the coordinates' own precision stands in for the
+    /// tolerance: a wall still leans there.
+    #[test]
+    fn a_wall_far_from_the_origin_still_leans() {
+        let angle = 3.0_f64.to_radians();
+        for far in [1e6, 1e9] {
+            let mut topo = Topology::new();
+            let rod = make_cylinder(&mut topo, 5.0, 20.0).unwrap();
+            transform_solid(&mut topo, rod, &Mat4::translation(far, 0.0, 0.0)).unwrap();
+            let pull = Vec3::new(0.0, 0.0, 1.0);
+            let walls = walls_above(&topo, rod, pull, 0.0);
+            let neutral = Point3::new(far, 0.0, 0.0);
+            let drafted = draft(&mut topo, rod, &walls, pull, neutral, angle);
+            assert!(drafted.is_ok(), "{far}: {:?}", drafted.err());
+        }
+    }
+
+    /// An obround whose half circles are stored as rational B-splines: extrude
+    /// reads their walls as cylinders, and the rims and rulings on them are
+    /// the same circles and lines once drafted.
+    #[test]
+    fn rims_stored_as_splines_lean_like_circles() {
+        let angle = 5.0_f64.to_radians();
+        let mut topo = Topology::new();
+        let z0 = 0.0;
+        let at = |t: &mut Topology, x, y| t.add_vertex(Vertex::new(Point3::new(x, y, z0), 1e-7));
+        let a = at(&mut topo, 25.0, 20.0);
+        let b = at(&mut topo, 55.0, 20.0);
+        let c = at(&mut topo, 55.0, 40.0);
+        let d = at(&mut topo, 25.0, 40.0);
+        let half = |x: f64, start: f64| {
+            let circle =
+                Circle3D::new(Point3::new(x, 30.0, z0), Vec3::new(0.0, 0.0, 1.0), RADIUS).unwrap();
+            let arc = brepkit_geometry::convert::curve_to_nurbs::circle_to_nurbs(
+                &circle,
+                start,
+                start + PI,
+            )
+            .unwrap();
+            EdgeCurve::NurbsCurve(arc)
+        };
+        let (right, left) = (half(55.0, -PI / 2.0), half(25.0, PI / 2.0));
+        let edges: Vec<_> = [
+            (a, b, EdgeCurve::Line),
+            (b, c, right),
+            (c, d, EdgeCurve::Line),
+            (d, a, left),
+        ]
+        .into_iter()
+        .map(|(s, e, curve)| OrientedEdge::new(topo.add_edge(Edge::new(s, e, curve)), true))
+        .collect();
+        let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+        let plane = FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: z0,
+        };
+        let face = topo.add_face(Face::new(wire, Vec::new(), plane));
+        let prism = extrude(&mut topo, face, Vec3::new(0.0, 0.0, 1.0), 12.0).unwrap();
+        let pull = Vec3::new(0.0, 0.0, 1.0);
+        let walls = walls_above(&topo, prism, pull, 0.0);
+        assert_eq!(walls.len(), 4);
+        let neutral = Point3::new(0.0, 0.0, 4.0);
+        let drafted = draft(&mut topo, prism, &walls, pull, neutral, angle).unwrap();
+        let t = angle.tan();
+        let truth = obround_volume(
+            4.0_f64.mul_add(t, RADIUS),
+            8.0_f64.mul_add(-t, RADIUS),
+            12.0,
+        );
+        assert_sound(&topo, drafted, truth, "spline rims");
     }
 }
