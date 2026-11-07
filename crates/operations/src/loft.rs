@@ -2119,8 +2119,16 @@ pub fn loft_sides(
         for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
             for oe in topo.wire(wid)?.edges() {
                 let edge = topo.edge(oe.edge())?;
-                corners.push(topo.vertex(edge.start())?.point());
-                corners.push(topo.vertex(edge.end())?.point());
+                let (a, b) = (
+                    topo.vertex(edge.start())?.point(),
+                    topo.vertex(edge.end())?.point(),
+                );
+                corners.push(a);
+                corners.push(b);
+                // A side bending round from one profile's plane back to it has
+                // every vertex there, but not its edges' middles.
+                let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
+                corners.push(edge.curve().evaluate_with_endpoints(0.5 * (t0 + t1), a, b));
             }
         }
         Ok(corners)

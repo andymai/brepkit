@@ -13,7 +13,9 @@ use brepkit_math::nurbs::projection::project_point_to_surface;
 use brepkit_math::nurbs::surface::NurbsSurface;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_operations::OperationsError;
-use brepkit_operations::loft::{LoftEnd, LoftOptions, LoftRail, loft, loft_with_options};
+use brepkit_operations::loft::{
+    LoftEnd, LoftOptions, LoftRail, loft, loft_sides, loft_with_options,
+};
 use brepkit_operations::tessellate::{TriangleMesh, is_watertight, tessellate_solid};
 use brepkit_operations::validate::validate_solid;
 use brepkit_topology::Topology;
@@ -1035,6 +1037,86 @@ fn rails_round_a_u_bend_wind_the_far_profile_for_them() {
                 "{name}: at {q:?}"
             );
         }
+
+        // Every vertex of the curved sides lies in the plane of both caps, and the
+        // sides are still what is left without them.
+        let sides = loft_sides(&mut topo, solid, &[first, last]).unwrap();
+        assert_eq!(topo.shell(sides).unwrap().faces().len(), 4, "{name}");
+    }
+}
+
+/// Rails kinking sideways half way up and back keep the square's section all the
+/// way, and do not read as a surface turned inside out at the kink.
+#[test]
+fn rails_that_kink_sideways_and_back_are_a_sheared_prism() {
+    let half = 3.0;
+    let want = 4.0 * half * half * 10.0;
+    for (name, pose) in poses() {
+        let mut topo = Topology::new();
+        let first = square(&mut topo, pose, half, 0.0);
+        let last = square(&mut topo, pose, half, 10.0);
+        let mut rails = Vec::new();
+        for (x, y) in [(-half, -half), (half, -half), (half, half), (-half, half)] {
+            let points: Vec<Point3> = [p(x, y, 0.0), p(x + 20.0, y, 5.0), p(x, y, 10.0)]
+                .iter()
+                .map(|&q| pose.mul_point(q))
+                .collect();
+            let (a, b) = (
+                topo.add_vertex(Vertex::new(points[0], TOL)),
+                topo.add_vertex(Vertex::new(points[2], TOL)),
+            );
+            let curve =
+                NurbsCurve::new(1, vec![0.0, 0.0, 0.5, 1.0, 1.0], points, vec![1.0; 3]).unwrap();
+            rails.push(LoftRail::Edge(topo.add_edge(Edge::new(
+                a,
+                b,
+                EdgeCurve::NurbsCurve(curve),
+            ))));
+        }
+        let options = LoftOptions {
+            rails,
+            ..LoftOptions::default()
+        };
+        let solid = loft_with_options(&mut topo, &[first, last], &options).unwrap();
+        let exact = assert_solid(&topo, solid, name);
+        assert_close(exact, want, 1e-9, name);
+    }
+}
+
+/// A profile whose vertices all lie on the face, but one of whose straight edges
+/// crosses a hole in it.
+#[test]
+fn a_tangent_profile_across_a_hole_is_refused() {
+    for (_, pose) in poses() {
+        let mut topo = Topology::new();
+        let first = square(&mut topo, pose, 6.0, 0.0);
+        let last = square(&mut topo, pose, 4.0, 10.0);
+        let ground = square(&mut topo, pose, 50.0, 0.0);
+        let hole = polygon(
+            &mut topo,
+            pose,
+            &[
+                p(-1.0, -7.0, 0.0),
+                p(-1.0, -5.0, 0.0),
+                p(1.0, -5.0, 0.0),
+                p(1.0, -7.0, 0.0),
+            ],
+        );
+        let data = topo.face(ground).unwrap();
+        let (outer, surface) = (data.outer_wire(), data.surface().clone());
+        let hole_wire = topo.face(hole).unwrap().outer_wire();
+        let holed = topo.add_face(Face::new(outer, vec![hole_wire], surface));
+        let options = LoftOptions {
+            start: LoftEnd::Tangent {
+                face: holed,
+                weight: 1.0,
+            },
+            ..LoftOptions::default()
+        };
+        assert_refused(
+            loft_with_options(&mut topo, &[first, last], &options),
+            "off the face",
+        );
     }
 }
 

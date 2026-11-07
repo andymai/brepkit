@@ -861,6 +861,16 @@ fn ring_samples(ring: &[ProfileEdgeGeom]) -> Vec<Point3> {
     points
 }
 
+/// Points along each edge of a ring, its straight edges too: an edge can leave a
+/// face between two vertices that lie on it, across a hole or off a curved surface.
+#[allow(clippy::cast_precision_loss)]
+fn along_edges(ring: &[ProfileEdgeGeom]) -> Vec<Point3> {
+    const SAMPLES: usize = 16;
+    ring.iter()
+        .flat_map(|e| (0..SAMPLES).map(move |k| edge_point(e, k as f64 / SAMPLES as f64)))
+        .collect()
+}
+
 fn centre_of(points: &[Point3]) -> Point3 {
     crate::winding::polygon_centroid(points)
 }
@@ -1817,7 +1827,7 @@ fn end_field(
             (Direction::Normal(normal), vec![normal; n], tie)
         }
         LoftEnd::Tangent { face, .. } => {
-            let surface = lying_on(topo, face, &samples)?;
+            let surface = lying_on(topo, face, &along_edges(request.ring))?;
             let mut mitres = Vec::with_capacity(n);
             for i in 0..n {
                 let previous = (i + n - 1) % n;
@@ -2487,7 +2497,9 @@ fn turns_inside_out(surface: &NurbsSurface) -> bool {
     (0..=ACROSS).any(|i| {
         let u = (u1 - u0).mul_add(i as f64 / ACROSS as f64, u0);
         stops.windows(2).any(|w| {
-            let at = |k: usize| (w[1] - w[0]).mul_add(k as f64 / ALONG as f64, w[0]);
+            // A normal read on a full knot is the far side's, across the crease.
+            let end = w[1] - 1e-9 * (w[1] - w[0]);
+            let at = |k: usize| (end - w[0]).mul_add(k as f64 / ALONG as f64, w[0]);
             (0..ALONG).any(|k| normal(u, at(k)).dot(normal(u, at(k + 1))) < 0.0)
         })
     })
