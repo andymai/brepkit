@@ -155,6 +155,18 @@ impl FaceLoops2d {
                 let sp = topo.vertex(e.start())?.point();
                 let ep = topo.vertex(e.end())?.point();
                 let (t0, t1) = e.curve().domain_with_endpoints(sp, ep);
+                // A closed conic's domain starts at its own origin, wherever
+                // its vertex is: walked from there, a rim leaves the loop's
+                // corner and comes back to it at the wrong end of the seam.
+                let (t0, t1) = if e.start() == e.end() {
+                    match e.curve() {
+                        EdgeCurve::Circle(c) => (c.project(sp), c.project(sp) + (t1 - t0)),
+                        EdgeCurve::Ellipse(el) => (el.project(sp), el.project(sp) + (t1 - t0)),
+                        EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => (t0, t1),
+                    }
+                } else {
+                    (t0, t1)
+                };
                 let n = if matches!(e.curve(), EdgeCurve::Line) {
                     2
                 } else {
@@ -205,6 +217,9 @@ impl FaceLoops2d {
                     };
                     out.push(q);
                 }
+            }
+            if matches!(&surface, FaceSurface::Sphere(_)) {
+                close_loop_across_pole(&mut out);
             }
             Ok(out)
         };
@@ -296,6 +311,41 @@ impl FaceLoops2d {
                 let (u, v) = surface.project_point(p)?;
                 surface.evaluate(u, v).map(|q| (q - p).length())
             }
+        }
+    }
+}
+
+/// A sphere's pole has no `u`, so a loop through it jumps half a turn there,
+/// either way, and only its closing says which: a wrong guess leaves the walk a
+/// turn off where it set out, and the polygon covers the far side of the seam.
+fn close_loop_across_pole(samples: &mut [brepkit_math::vec::Point2]) {
+    use brepkit_math::vec::Point2;
+    use std::f64::consts::{FRAC_PI_2, PI, TAU};
+
+    let at_pole = |q: Point2| FRAC_PI_2 - q.y().abs() < 1e-9;
+    let Some(pole) = samples.iter().position(|&q| at_pole(q)) else {
+        return;
+    };
+    for k in 0..samples.len() {
+        if at_pole(samples[k]) {
+            let beside = if k == 0 {
+                samples.get(1)
+            } else {
+                samples.get(k - 1)
+            };
+            if let Some(&beside) = beside {
+                samples[k] = Point2::new(beside.x(), samples[k].y());
+            }
+        }
+    }
+    let (Some(&first), Some(&last)) = (samples.first(), samples.last()) else {
+        return;
+    };
+    let closes_at = last.x() + (first.x() - last.x() + PI).rem_euclid(TAU) - PI;
+    let off = closes_at - first.x();
+    if pole > 0 && off.abs() > PI {
+        for q in &mut samples[pole + 1..] {
+            *q = Point2::new(q.x() - off, q.y());
         }
     }
 }

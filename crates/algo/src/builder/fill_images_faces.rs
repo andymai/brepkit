@@ -48,7 +48,7 @@ use crate::ds::{GfaArena, PaveBlockId, Rank};
 
 use super::SubFace;
 use super::face_class::FaceClass;
-use super::face_splitter::split_face_2d;
+use super::face_splitter::{split_face_2d, split_plane_into_cells};
 use super::split_types::{SectionEdge, SurfaceInfo};
 
 /// Build sub-faces for all faces that have intersection data.
@@ -56,12 +56,19 @@ use super::split_types::{SectionEdge, SurfaceInfo};
 /// For faces with section edges (from FF intersection), calls the full
 /// face splitter to produce geometrically split sub-faces. Faces
 /// without intersection data pass through as single sub-faces.
+///
+/// While `imprinting`, rank A is the solid and rank B its tool faces, whose
+/// sections can meet mid-way: a plane tool comes apart into the cells of their
+/// arrangement. The solid's faces keep only the sections that divide them, so a
+/// cut from an outline to a hole, or a lone loop around a whole ring, leaves the
+/// face whole.
 #[allow(clippy::too_many_lines, clippy::type_complexity)]
 pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
     topo: &mut Topology,
     arena: &GfaArena,
     edge_images: &HashMap<EdgeId, Vec<EdgeId>, S>,
     face_ranks: &HashMap<FaceId, Rank, S2>,
+    imprinting: bool,
     tol: Tolerance,
 ) -> (Vec<SubFace>, Vec<FaceId>, Vec<(FaceId, Point3, Point3)>) {
     let mut sub_faces = Vec::new();
@@ -388,7 +395,12 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
                 );
             }
         }
-        if sections.is_empty() {
+        let sections = if imprinting && rank == Rank::A {
+            drop_sections_dividing_nothing(topo, face_id, sections, tol.linear)
+        } else {
+            sections
+        };
+        if sections.is_empty() || (imprinting && lone_loop_around_ring(topo, face_id, &sections)) {
             let expanded =
                 rebuild_face_with_edge_images(topo, face_id, edge_images).unwrap_or(face_id);
             sub_faces.push(SubFace {
@@ -444,18 +456,23 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
                 }
             }
         }
-        let split_results = split_face_2d(
-            topo,
-            face_id,
-            &sections,
-            rank,
-            &tol,
-            None, // PlaneFrame built internally by face_splitter
-            info.as_ref(),
-            edge_images,
-            &arena.co_endpoint_middles,
-            Some(&mut section_split_registry),
-        );
+        let cells = (imprinting && rank == Rank::B)
+            .then(|| split_plane_into_cells(topo, face_id, &sections, rank, tol.linear))
+            .flatten();
+        let split_results = cells.unwrap_or_else(|| {
+            split_face_2d(
+                topo,
+                face_id,
+                &sections,
+                rank,
+                &tol,
+                None, // PlaneFrame built internally by face_splitter
+                info.as_ref(),
+                edge_images,
+                &arena.co_endpoint_middles,
+                Some(&mut section_split_registry),
+            )
+        });
 
         if std::env::var("BK_SPLITW").is_ok_and(|v| v == format!("{}", face_id.index())) {
             if let Ok(face) = topo.face(face_id)
@@ -1495,6 +1512,40 @@ fn compute_seam_anchors(topo: &Topology, arena: &GfaArena) -> BTreeMap<usize, Se
     anchors
 }
 
+/// Whether a whole ring's only section is one closed loop winding around the
+/// ring or its tube: the surface stays in one piece on either side of it.
+fn lone_loop_around_ring(topo: &Topology, face_id: FaceId, sections: &[SectionEdge]) -> bool {
+    use std::f64::consts::{PI, TAU};
+    const STEPS: u32 = 64;
+    let [section] = sections else {
+        return false;
+    };
+    let Some(torus) = super::whole_ring(topo, face_id) else {
+        return false;
+    };
+    let (t0, t1) = section
+        .curve_3d
+        .domain_with_endpoints(section.start, section.end);
+    let at = |k: u32| {
+        let t = (t1 - t0).mul_add(f64::from(k) / f64::from(STEPS), t0);
+        torus.project_point(
+            section
+                .curve_3d
+                .evaluate_with_endpoints(t, section.start, section.end),
+        )
+    };
+    let wrap = |d: f64| (d + PI).rem_euclid(TAU) - PI;
+    let (mut turned_u, mut turned_v) = (0.0, 0.0);
+    let (mut u, mut v) = at(0);
+    for k in 1..=STEPS {
+        let (next_u, next_v) = at(k);
+        turned_u += wrap(next_u - u);
+        turned_v += wrap(next_v - v);
+        (u, v) = (next_u, next_v);
+    }
+    f64::abs(turned_u) > PI || f64::abs(turned_v) > PI
+}
+
 /// The u of `face`'s seam: the start of its first non-degenerate Line edge.
 fn face_seam_u(topo: &Topology, face: &Face) -> Option<f64> {
     let wire = topo.wire(face.outer_wire()).ok()?;
@@ -2316,14 +2367,17 @@ fn build_section_map(topo: &Topology, arena: &GfaArena) -> HashMap<FaceId, Vec<S
                 map.entry(curve.face_a)
                     .or_default()
                     .push(SectionSource::PaveBlock(pb_id, Some(curve.face_b)));
-                map.entry(curve.face_b)
-                    .or_default()
-                    .push(SectionSource::PaveBlock(pb_id, Some(curve.face_a)));
+                if curve.face_b != curve.face_a {
+                    map.entry(curve.face_b)
+                        .or_default()
+                        .push(SectionSource::PaveBlock(pb_id, Some(curve.face_a)));
+                }
             }
         } else {
             // Feed the complete curve — critical for closed curves (circles).
             let skipped = arena.curve_skip_faces.get(&idx);
-            for face in [curve.face_a, curve.face_b] {
+            let second = (curve.face_b != curve.face_a).then_some(curve.face_b);
+            for face in std::iter::once(curve.face_a).chain(second) {
                 if !skipped.is_some_and(|faces| faces.contains(&face)) {
                     map.entry(face).or_default().push(SectionSource::Curve(idx));
                 }
@@ -6487,6 +6541,197 @@ fn boundary_runs(topo: &Topology, face_id: FaceId, samples: u32) -> Vec<Vec<Poin
         }
     }
     boundary
+}
+
+/// Whether `p` lies on one of a wire's edges.
+fn point_on_wire(
+    topo: &Topology,
+    wid: brepkit_topology::wire::WireId,
+    p: Point3,
+    band: f64,
+) -> bool {
+    let Ok(wire) = topo.wire(wid) else {
+        return false;
+    };
+    wire.edges().iter().any(|oe| {
+        let Ok(edge) = topo.edge(oe.edge()) else {
+            return false;
+        };
+        let (Ok(a), Ok(b)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) else {
+            return false;
+        };
+        match edge.curve() {
+            // A section's end stands off a fitted edge by that edge's own fit.
+            EdgeCurve::NurbsCurve(n) => {
+                brepkit_math::nurbs::projection::project_point_to_curve(n, p, 1e-9)
+                    .is_ok_and(|foot| foot.distance <= crate::ds::shape_store::MAX_WIDEN)
+            }
+            curve => point_on_edge(curve, a.point(), b.point(), p, band),
+        }
+    })
+}
+
+/// `sections` without those on no cycle of the face's boundary and sections
+/// taken together: with the same region on both sides they divide nothing (a
+/// cut from a face's outline to a hole, and no other), and a face traced along
+/// one holds a slit.
+///
+/// Each boundary wire reads as one point, since it is a cycle already, and a
+/// section is broken where it meets another along the way. A section with a
+/// loose end the splitter prunes for itself stays when the rest of it divides.
+fn drop_sections_dividing_nothing(
+    topo: &Topology,
+    face_id: FaceId,
+    sections: Vec<SectionEdge>,
+    tol: f64,
+) -> Vec<SectionEdge> {
+    const CURVE_STEPS: u32 = 32;
+    let Ok(face) = topo.face(face_id) else {
+        return sections;
+    };
+    let band = tol * 1000.0;
+    let wires: Vec<brepkit_topology::wire::WireId> = std::iter::once(face.outer_wire())
+        .chain(face.inner_wires().iter().copied())
+        .collect();
+    let lines: Vec<Vec<Point3>> = sections
+        .iter()
+        .map(|s| {
+            if matches!(s.curve_3d, EdgeCurve::Line) {
+                return vec![s.start, s.end];
+            }
+            let (t0, t1) = s.curve_3d.domain_with_endpoints(s.start, s.end);
+            (0..=CURVE_STEPS)
+                .map(|k| {
+                    let t = (t1 - t0).mul_add(f64::from(k) / f64::from(CURVE_STEPS), t0);
+                    s.curve_3d.evaluate_with_endpoints(t, s.start, s.end)
+                })
+                .collect()
+        })
+        .collect();
+
+    // Nodes: one per wire, then one per point sections meet at.
+    let mut loose: Vec<Point3> = Vec::new();
+    let node_at = |p: Point3, loose: &mut Vec<Point3>| -> i64 {
+        let on_wire = wires.iter().position(|&w| point_on_wire(topo, w, p, band));
+        let at = on_wire.unwrap_or_else(|| {
+            let found = loose.iter().position(|&q| (q - p).length() <= band);
+            wires.len()
+                + found.unwrap_or_else(|| {
+                    loose.push(p);
+                    loose.len() - 1
+                })
+        });
+        i64::try_from(at).unwrap_or(i64::MAX)
+    };
+    let mut stops: Vec<Vec<(f64, i64)>> = sections
+        .iter()
+        .map(|s| {
+            vec![
+                (0.0, node_at(s.start, &mut loose)),
+                (1.0, node_at(s.end, &mut loose)),
+            ]
+        })
+        .collect();
+    for i in 0..sections.len() {
+        for j in i + 1..sections.len() {
+            for (spot, along_i, along_j) in polyline_meetings(&lines[i], &lines[j], band) {
+                let node = node_at(spot, &mut loose);
+                stops[i].push((along_i, node));
+                stops[j].push((along_j, node));
+            }
+        }
+    }
+
+    let mut pieces: Vec<((i64, i64), (i64, i64))> = Vec::new();
+    let mut owner: Vec<usize> = Vec::new();
+    for (i, line_stops) in stops.iter_mut().enumerate() {
+        line_stops.sort_by(|a, b| a.0.total_cmp(&b.0));
+        for w in line_stops.windows(2) {
+            // Two stops at one spot: a section ending where another does.
+            if w[1].0 - w[0].0 > 1e-6 {
+                pieces.push(((w[0].1, 0), (w[1].1, 0)));
+                owner.push(i);
+            }
+        }
+    }
+    let bridge = super::face_splitter::bridge_edges(&pieces);
+    let divides: Vec<bool> = (0..sections.len())
+        .map(|i| {
+            owner
+                .iter()
+                .zip(&bridge)
+                .any(|(&piece_of, &is_bridge)| piece_of == i && !is_bridge)
+        })
+        .collect();
+    sections
+        .into_iter()
+        .zip(divides)
+        .filter_map(|(section, divides)| divides.then_some(section))
+        .collect()
+}
+
+/// Where two polylines come within `band`, or within a curved one's chord
+/// error: the spot and how far along each it lies, as a fraction.
+fn polyline_meetings(a: &[Point3], b: &[Point3], band: f64) -> Vec<(Point3, f64, f64)> {
+    // A curved section's steps turn by a fifth of a radian at most, so a chord
+    // stands off its curve by no more than this share of its length.
+    const CHORD_ERROR: f64 = 0.03;
+    let reach = |line: &[Point3]| {
+        if line.len() <= 2 {
+            return band;
+        }
+        let longest = line
+            .windows(2)
+            .map(|w| (w[1] - w[0]).length())
+            .fold(0.0, f64::max);
+        band.max(CHORD_ERROR * longest)
+    };
+    let band = reach(a).max(reach(b));
+    let bounds = |line: &[Point3]| {
+        line.iter()
+            .fold(([f64::MAX; 3], [f64::MIN; 3]), |(lo, hi), p| {
+                let c = [p.x(), p.y(), p.z()];
+                (
+                    [lo[0].min(c[0]), lo[1].min(c[1]), lo[2].min(c[2])],
+                    [hi[0].max(c[0]), hi[1].max(c[1]), hi[2].max(c[2])],
+                )
+            })
+    };
+    let ((alo, ahi), (blo, bhi)) = (bounds(a), bounds(b));
+    if (0..3).any(|k| alo[k] > bhi[k] + band || blo[k] > ahi[k] + band) {
+        return Vec::new();
+    }
+    let closest = |p0: Point3, p1: Point3, q0: Point3, q1: Point3| {
+        let (d1, d2, r) = (p1 - p0, q1 - q0, p0 - q0);
+        let (aa, ee, ff) = (d1.dot(d1), d2.dot(d2), d2.dot(r));
+        if aa <= 0.0 || ee <= 0.0 {
+            return (0.0, 0.0);
+        }
+        let (cc, bb) = (d1.dot(r), d1.dot(d2));
+        let denom = aa.mul_add(ee, -(bb * bb));
+        let s = if denom > 0.0 {
+            ((bb * ff - cc * ee) / denom).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let t = ((bb * s + ff) / ee).clamp(0.0, 1.0);
+        let s = ((bb * t - cc) / aa).clamp(0.0, 1.0);
+        (s, t)
+    };
+    #[allow(clippy::cast_precision_loss)]
+    let fraction = |k: usize, s: f64, n: usize| (k as f64 + s) / n.saturating_sub(1).max(1) as f64;
+    let mut found: Vec<(Point3, f64, f64)> = Vec::new();
+    for (i, u) in a.windows(2).enumerate() {
+        for (j, v) in b.windows(2).enumerate() {
+            let (s, t) = closest(u[0], u[1], v[0], v[1]);
+            let (on_a, on_b) = (u[0] + (u[1] - u[0]) * s, v[0] + (v[1] - v[0]) * t);
+            if (on_a - on_b).length() <= band && found.iter().all(|m| (m.0 - on_a).length() > band)
+            {
+                found.push((on_a, fraction(i, s, a.len()), fraction(j, t, b.len())));
+            }
+        }
+    }
+    found
 }
 
 /// For each section running across a face from boundary to boundary through
