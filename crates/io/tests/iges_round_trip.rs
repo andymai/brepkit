@@ -924,3 +924,50 @@ fn a_boundary_that_does_not_close_is_no_face() {
         );
     }
 }
+
+/// A closed curve's span comes from the file: one running over nothing bounds
+/// no face, and one a hair past the domain still reads as the whole curve.
+#[test]
+fn a_closed_curves_span_is_read_safely() {
+    let square = [
+        [0.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0],
+        [1.0, 1.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [0.0, 0.0, 0.0],
+    ];
+    let read = |from: f64, to: f64| {
+        let mut topo = Topology::new();
+        read_iges(
+            &iges_file(&closed_square_face(&square, from, to)),
+            &mut topo,
+        )
+        .unwrap()
+        .len()
+    };
+    assert_eq!(read(2.0, 2.0), 0);
+    assert_eq!(read(-1e-7, 4.000_000_1), 1);
+    assert_eq!(read(4.000_000_1, -1e-7), 1);
+}
+
+/// A knot repeated past the degree + 1 leaves a span no point on the curve can
+/// be split at, and refusing it keeps a file off that path.
+#[test]
+fn a_knot_repeated_past_its_degree_is_refused() {
+    let entities = vec![
+        (108, "108,0.,0.,1.,0.,0,0.,0.,0.;".to_string()),
+        (
+            126,
+            "126,4,1,0,0,0,0,0.,0.,1.,1.,1.,2.,2.,1.,1.,1.,1.,1.,\
+             0.,0.,0.,1.,0.,0.,1.,1.,0.,0.,1.,0.,0.,0.,0.,0.,2.,0.,0.,1.;"
+                .to_string(),
+        ),
+        (144, "144,1,1,0,3;".to_string()),
+    ];
+    let mut topo = Topology::new();
+    assert!(
+        read_iges(&iges_file(&entities), &mut topo)
+            .unwrap()
+            .is_empty()
+    );
+}

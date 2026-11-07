@@ -262,9 +262,19 @@ impl Stretch {
         if !closed {
             return Ok(EdgeCurve::NurbsCurve(curve));
         }
-        let (low, high) = (from.min(to), from.max(to));
+        // A span may reach `SPAN_SLACK` past the domain, which splitting
+        // cannot take, and may be empty, which bounds nothing.
         let (start, end) = curve.domain();
+        let (low, high) = (
+            from.min(to).clamp(start, end),
+            from.max(to).clamp(start, end),
+        );
         let margin = 1e-9 * (end - start).abs().max(1.0);
+        if high - low <= margin {
+            return Err(IoError::ParseError {
+                reason: "an IGES closed curve runs over no span".to_string(),
+            });
+        }
         let mut span = curve;
         if low > start + margin {
             span = curve_split(&span, low).map_err(malformed)?.1;
@@ -577,12 +587,16 @@ fn read_plane(params: &mut Params) -> Result<FaceSurface, IoError> {
 
 /// Refuses knots evaluation could not walk, in one parameter direction, since
 /// `NurbsCurve::new` and `NurbsSurface::new` check only their counts. A degree
-/// past the points runs off the knots, and knots that fall can search forever.
+/// past the points runs off the knots, knots that fall can search forever, and
+/// a knot repeated past the degree + 1 cannot be split at.
 /// `knots` holds `points + degree + 1` values, as the file's counts ask for.
 fn check_knots(degree: usize, points: usize, knots: &[f64]) -> Result<(), IoError> {
     let sound = degree >= 1
         && degree < points
         && knots.windows(2).all(|pair| pair[0] <= pair[1])
+        && knots
+            .windows(degree + 2)
+            .all(|run| run[0] < run[degree + 1])
         && knots[degree] < knots[points];
     if sound {
         Ok(())
