@@ -1,5 +1,17 @@
 # Changelog
 
+## [4.8.0](https://github.com/andymai/brepkit/compare/v4.7.1...v4.8.0) (2026-11-07)
+
+
+### Features
+
+* **operations:** take a horn torus, its radii equal, as a primitive ([#2324](https://github.com/andymai/brepkit/issues/2324)) ([5638fe0](https://github.com/andymai/brepkit/commit/5638fe03d1c92057ebe8e75a4360366bfe234fb6))
+
+
+### Bug Fixes
+
+* **blend:** keep a rebuilt fillet shell facing out wherever the part sits ([#2327](https://github.com/andymai/brepkit/issues/2327)) ([7ddebe4](https://github.com/andymai/brepkit/commit/7ddebe420889428d24403ad740abcf71b3e4e091))
+
 ## [4.7.1](https://github.com/andymai/brepkit/compare/v4.7.0...v4.7.1) (2026-11-07)
 
 
