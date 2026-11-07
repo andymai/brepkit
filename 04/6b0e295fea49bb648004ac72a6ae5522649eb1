@@ -1,0 +1,22 @@
+crates/operations/tests/fillet_concave_ends.rs
+  s_649261a24df31b::t_c69b360d63e014 16,22,299-356,358
+  s_649261a24df31b::t_c9d8d1b65b6aa0 357
+crates/operations/src/fillet/concave_end.rs
+  s_649261a24df31b::t_c69b360d63e014 27-31,155-160,201-280,292-294,350-352
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "046b0e295fea49bb648004ac72a6ae5522649eb1",
+  "prompts": {},
+  "sessions": {
+    "s_649261a24df31b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d8bbbba4-0431-4f6a-a622-e632a6659779",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
