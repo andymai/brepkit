@@ -2871,17 +2871,15 @@ pub fn sweep_along_edges(
         }
     }
 
+    let backward = chain_directions(topo, edges)?;
+
     // Collect ordered points from the edge chain, sampling curved edges.
     let mut points: Vec<Point3> = Vec::new();
-    for &eid in edges {
+    for (&eid, &against) in edges.iter().zip(&backward) {
         let edge_data = topo.edge(eid)?;
         let start = topo.vertex(edge_data.start())?.point();
-        if points
-            .last()
-            .is_none_or(|p: &Point3| (*p - start).length() > tol.linear)
-        {
-            points.push(start);
-        }
+        // Each edge's samples run as it is stored, then as the chain runs it.
+        let mut along: Vec<Point3> = vec![start];
 
         match edge_data.curve() {
             EdgeCurve::NurbsCurve(curve)
@@ -2908,8 +2906,7 @@ pub fn sweep_along_edges(
                         if k == last && i == 8 {
                             continue;
                         }
-                        points
-                            .push(curve.evaluate((w[1] - w[0]).mul_add(f64::from(i) / 8.0, w[0])));
+                        along.push(curve.evaluate((w[1] - w[0]).mul_add(f64::from(i) / 8.0, w[0])));
                     }
                 }
             }
@@ -2924,7 +2921,7 @@ pub fn sweep_along_edges(
                 for i in 1..n_samples {
                     #[allow(clippy::cast_precision_loss)]
                     let t = t_start + (t_end - t_start) * (i as f64) / (n_samples as f64);
-                    points.push(circle.evaluate(t));
+                    along.push(circle.evaluate(t));
                 }
             }
             EdgeCurve::Ellipse(ellipse) => {
@@ -2938,14 +2935,24 @@ pub fn sweep_along_edges(
                 for i in 1..n_samples {
                     #[allow(clippy::cast_precision_loss)]
                     let t = t_start + (t_end - t_start) * (i as f64) / (n_samples as f64);
-                    points.push(ellipse.evaluate(t));
+                    along.push(ellipse.evaluate(t));
                 }
             }
             EdgeCurve::Line => {}
         }
 
-        let end = topo.vertex(edge_data.end())?.point();
-        points.push(end);
+        along.push(topo.vertex(edge_data.end())?.point());
+        if against {
+            along.reverse();
+        }
+        for p in along {
+            if points
+                .last()
+                .is_none_or(|q: &Point3| (*q - p).length() > tol.linear)
+            {
+                points.push(p);
+            }
+        }
     }
 
     if points.len() < 2 {
@@ -2964,6 +2971,52 @@ pub fn sweep_along_edges(
     let path_curve = brepkit_math::nurbs::fitting::interpolate(&points, degree)?;
 
     sweep(topo, profile, &path_curve)
+}
+
+/// Which edges of a path chain are stored against the way it runs. The chain
+/// runs edge to edge in the order given, and the first edge runs towards the
+/// second.
+///
+/// # Errors
+///
+/// Returns [`crate::OperationsError::InvalidInput`] if an edge does not meet the
+/// one before it, which a sweep could only cross by a segment nobody asked for.
+fn chain_directions(
+    topo: &Topology,
+    edges: &[brepkit_topology::edge::EdgeId],
+) -> Result<Vec<bool>, crate::OperationsError> {
+    const JOIN: f64 = 1e-6;
+    let mut ends = Vec::with_capacity(edges.len());
+    for &eid in edges {
+        let edge = topo.edge(eid)?;
+        ends.push((
+            topo.vertex(edge.start())?.point(),
+            topo.vertex(edge.end())?.point(),
+        ));
+    }
+    let meet = |p: Point3, q: Point3| (p - q).length() <= JOIN;
+    let mut backward = Vec::with_capacity(ends.len());
+    let mut tail = None;
+    for (i, &(start, end)) in ends.iter().enumerate() {
+        let against = match tail {
+            Some(at) if meet(start, at) => false,
+            Some(at) if meet(end, at) => true,
+            Some(_) => {
+                return Err(crate::OperationsError::InvalidInput {
+                    reason: format!(
+                        "sweep_along_edges: path edge {i} does not meet the one before it"
+                    ),
+                });
+            }
+            None => ends.get(1).is_some_and(|&(next_start, next_end)| {
+                let reaches = |p: Point3| meet(p, next_start) || meet(p, next_end);
+                !reaches(end) && reaches(start)
+            }),
+        };
+        tail = Some(if against { start } else { end });
+        backward.push(against);
+    }
+    Ok(backward)
 }
 
 #[cfg(test)]
