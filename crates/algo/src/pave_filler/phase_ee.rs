@@ -25,7 +25,6 @@ use crate::error::AlgoError;
 /// # Errors
 ///
 /// Returns [`AlgoError`] if any topology lookup fails.
-#[allow(clippy::too_many_lines)]
 pub fn perform(
     topo: &mut Topology,
     solid_a: SolidId,
@@ -35,10 +34,24 @@ pub fn perform(
 ) -> Result<(), AlgoError> {
     let edges_a = brepkit_topology::explorer::solid_edges(topo, solid_a)?;
     let edges_b = brepkit_topology::explorer::solid_edges(topo, solid_b)?;
+    check_edge_edge_pairs(topo, &edges_a, &edges_b, tol, arena)
+}
 
+/// Find where each edge of `edges_a` meets each of `edges_b`, paving both.
+///
+/// # Errors
+///
+/// Returns [`AlgoError`] if any topology lookup fails.
+pub(super) fn check_edge_edge_pairs(
+    topo: &mut Topology,
+    edges_a: &[EdgeId],
+    edges_b: &[EdgeId],
+    tol: Tolerance,
+    arena: &mut GfaArena,
+) -> Result<(), AlgoError> {
     // Collect edge data up front to avoid repeated lookups
-    let data_a = collect_edge_data(topo, &edges_a)?;
-    let data_b = collect_edge_data(topo, &edges_b)?;
+    let data_a = collect_edge_data(topo, edges_a)?;
+    let data_b = collect_edge_data(topo, edges_b)?;
 
     for (idx_a, (&ea_id, ea_data)) in edges_a.iter().zip(data_a.iter()).enumerate() {
         for (idx_b, (&eb_id, eb_data)) in edges_b.iter().zip(data_b.iter()).enumerate() {
