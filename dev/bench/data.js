@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794076826344,
+  "lastUpdate": 1794077473072,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -66527,6 +66527,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 28008836,
             "range": "± 1018364",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "5638fe03d1c92057ebe8e75a4360366bfe234fb6",
+          "message": "feat(operations): take a horn torus, its radii equal, as a primitive (#2324)",
+          "timestamp": "2026-11-07T10:47:52-08:00",
+          "tree_id": "475237ae0b8e183cff4de93e5809e22df31bb19f",
+          "url": "https://github.com/andymai/brepkit/commit/5638fe03d1c92057ebe8e75a4360366bfe234fb6"
+        },
+        "date": 1794077464867,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1065817,
+            "range": "± 721",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1134847,
+            "range": "± 4498",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12821,
+            "range": "± 28",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 678024,
+            "range": "± 1368",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 28076711,
+            "range": "± 221456",
             "unit": "ns/iter"
           }
         ]
