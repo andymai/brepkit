@@ -1,0 +1,21 @@
+crates/operations/tests/nurbs_crease_mesh.rs
+  s_649261a24df31b::t_cfa71d17065dd7 99-139
+crates/operations/src/tessellate/nurbs.rs
+  s_649261a24df31b::t_cfa71d17065dd7 26-34,497-514,570-576,578-579,632,698,715,737,756,766-768,1397-1400,1403-1404,1421
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "2c1a08e692e4ed46303e2ab7d75b398551967c67",
+  "prompts": {},
+  "sessions": {
+    "s_649261a24df31b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d8bbbba4-0431-4f6a-a622-e632a6659779",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
