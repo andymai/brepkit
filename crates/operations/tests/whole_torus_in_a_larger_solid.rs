@@ -32,8 +32,8 @@ mod tests {
         s
     }
 
-    /// Every ray from a point agrees, read with the analytic classifier out of
-    /// the way or in it.
+    /// Every ray from a point agrees on which side of a lone torus it lies. These
+    /// read the rays themselves, not the analytic classifier that answers first.
     #[test]
     fn a_ray_crosses_a_whole_torus() {
         let mut t = Topology::default();

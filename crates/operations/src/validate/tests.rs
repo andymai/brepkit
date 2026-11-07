@@ -569,6 +569,37 @@ fn pinched_and_nested_pieces_are_invalid() {
     assert!(!report.is_valid(), "a block inside a block reads valid");
 }
 
+/// A block inside another stays nested when one of its sides lies on the other's
+/// wall: its vertices there have no parity to read, and those clear of it do. A
+/// block beside the other, sharing that wall's plane, is no such thing.
+#[test]
+fn a_nested_block_on_its_parents_wall_is_still_nested() {
+    use brepkit_math::mat::Mat4;
+
+    let read = |at: (f64, f64, f64)| {
+        let mut topo = Topology::new();
+        let outer = crate::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+        let inner = crate::primitives::make_box(&mut topo, 2.0, 2.0, 2.0).unwrap();
+        let place = Mat4::translation(at.0, at.1, at.2);
+        crate::transform::transform_solid(&mut topo, inner, &place).unwrap();
+        let both = crate::compound_ops::merge_disjoint_solids(&mut topo, &[outer, inner]).unwrap();
+        validate_solid(&topo, both)
+            .unwrap()
+            .issues
+            .iter()
+            .any(|i| i.description.contains("inside another"))
+    };
+    assert!(read((4.0, 4.0, 4.0)), "clear inside");
+    assert!(read((8.0, 4.0, 4.0)), "on the x = 10 wall");
+    assert!(read((4.0, 4.0, 8.0)), "on the z = 10 wall");
+    assert!(read((8.0, 8.0, 8.0)), "in the far corner");
+    assert!(!read((14.0, 4.0, 4.0)), "clear outside");
+    assert!(
+        !read((12.0, 4.0, 8.0)),
+        "beside, its top in the wall's plane"
+    );
+}
+
 /// Two balls touching at a point, each with its own vertex there, gathered
 /// into one shell: neither reads as inside the other. Rays from the point
 /// where they touch run into the other ball.
