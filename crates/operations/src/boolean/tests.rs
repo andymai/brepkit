@@ -8433,10 +8433,9 @@ fn mesh_fallback_counter_records_fallbacks() {
     // tolerate concurrent increments from unrelated tests; only the
     // ordering within this test is load-bearing.
     //
-    // Phase 1: a clean overlapping-box fuse stays analytic. Phase 2:
-    // edge-touching boxes fuse into a non-manifold union (the shared
-    // vertical edge carries four faces), which the GFA validation gate
-    // rejects — the operation routes through the mesh fallback and the
+    // Phase 1: a clean overlapping-box fuse stays analytic. Phase 2: a rod
+    // cut through a torus's wall takes the mesh fallback (see
+    // `compound_cut_cuts_the_exact_piece_and_defers_the_other`), and the
     // counter must record it.
     let mut topo = Topology::new();
     let a = crate::primitives::make_box(&mut topo, 2.0, 2.0, 2.0).unwrap();
@@ -8446,16 +8445,87 @@ fn mesh_fallback_counter_records_fallbacks() {
     let clean = boolean(&mut topo, BooleanOp::Fuse, a, b).unwrap();
     assert!(crate::measure::solid_volume(&topo, clean, 0.1).unwrap() > 0.0);
 
-    let c = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
-    let d = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
-    let m = brepkit_math::mat::Mat4::translation(1.0, 1.0, 0.0);
-    crate::transform::transform_solid(&mut topo, d, &m).unwrap();
+    let torus = crate::primitives::make_torus(&mut topo, 4.0, 1.5, 32).unwrap();
+    let rod = crate::primitives::make_cylinder(&mut topo, 0.6, 20.0).unwrap();
+    let m = brepkit_math::mat::Mat4::translation(0.5, 10.0, 1.0)
+        * brepkit_math::mat::Mat4::rotation_x(std::f64::consts::FRAC_PI_2);
+    crate::transform::transform_solid(&mut topo, rod, &m).unwrap();
     let before = super::mesh_fallback_count();
-    let _ = boolean(&mut topo, BooleanOp::Fuse, c, d);
+    let _ = boolean(&mut topo, BooleanOp::Cut, torus, rod);
     assert!(
         super::mesh_fallback_count() > before,
-        "edge-touching fuse should route through the mesh fallback and increment the counter"
+        "the rod's cut should route through the mesh fallback and increment the counter"
     );
+}
+
+/// Blocks that only touch, along an edge or at a corner, fuse into
+/// separate pieces: the builder's union shares the contact edge (four
+/// faces) or vertex between them, and each piece takes its own copies
+/// rather than the union going to the mesh fallback. Coincident and
+/// overlapping blocks still fuse into one.
+#[test]
+fn touching_blocks_fuse_exactly_into_separate_pieces() {
+    for (shift, pieces, volume) in [
+        ((1.0, 1.0, 0.0), 2, 2.0),
+        ((1.0, 1.0, 1.0), 2, 2.0),
+        ((0.0, 0.0, 0.0), 1, 1.0),
+        ((0.5, 0.0, 0.0), 1, 1.5),
+    ] {
+        let mut topo = Topology::new();
+        let a = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+        let b = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+        let m = brepkit_math::mat::Mat4::translation(shift.0, shift.1, shift.2);
+        crate::transform::transform_solid(&mut topo, b, &m).unwrap();
+        // A mesh fallback would read as one non-manifold piece; the
+        // process-wide fallback counter races other tests.
+        let fused = boolean(&mut topo, BooleanOp::Fuse, a, b).unwrap();
+        assert_eq!(
+            super::assembly::face_components(&topo, fused).len(),
+            pieces,
+            "{shift:?}"
+        );
+        assert!(
+            crate::validate::validate_solid(&topo, fused)
+                .unwrap()
+                .is_valid(),
+            "{shift:?}"
+        );
+        assert_volume_near(&topo, fused, volume, 1e-9);
+    }
+}
+
+/// A solid in two pieces that fill two pockets in a block's top: every
+/// vertex and edge of the pieces lies on the block's boundary, and the
+/// pieces' common centre lies in the block's material, so no containment
+/// witness but a point inside a piece tells them apart from the block. The
+/// fuse is the whole block, not the holed block alone.
+#[test]
+fn pieces_filling_pockets_fuse_into_the_whole_block() {
+    use brepkit_math::mat::Mat4;
+
+    let mut topo = Topology::new();
+    let block = |topo: &mut Topology, (x, y, z): (f64, f64, f64), (dx, dy, dz): (f64, f64, f64)| {
+        let b = crate::primitives::make_box(topo, dx, dy, dz).unwrap();
+        crate::transform::transform_solid(topo, b, &Mat4::translation(x, y, z)).unwrap();
+        b
+    };
+    let mut part = block(&mut topo, (0.0, 0.0, 0.0), (10.0, 10.0, 10.0));
+    for at in [(1.0, 1.0, 8.0), (7.0, 7.0, 8.0)] {
+        let pocket = block(&mut topo, at, (2.0, 2.0, 2.0));
+        part = boolean(&mut topo, BooleanOp::Cut, part, pocket).unwrap();
+    }
+    let first = block(&mut topo, (1.0, 1.0, 8.0), (2.0, 2.0, 2.0));
+    let second = block(&mut topo, (7.0, 7.0, 8.0), (2.0, 2.0, 2.0));
+    let pieces = boolean(&mut topo, BooleanOp::Fuse, first, second).unwrap();
+    assert_eq!(super::assembly::face_components(&topo, pieces).len(), 2);
+    let fused = boolean(&mut topo, BooleanOp::Fuse, part, pieces).unwrap();
+    assert_eq!(super::assembly::face_components(&topo, fused).len(), 1);
+    assert!(
+        crate::validate::validate_solid(&topo, fused)
+            .unwrap()
+            .is_valid()
+    );
+    assert_volume_near(&topo, fused, 1000.0, 1e-9);
 }
 
 /// A gridfinity-style baseplate pocket: a ruled loft of rounded-rect

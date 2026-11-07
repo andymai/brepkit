@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.6.26](https://github.com/andymai/brepkit/compare/v4.6.25...v4.6.26) (2026-11-03)
+
+
+### Bug Fixes
+
+* **operations:** keep a box across a torus's hole from reading as inside the torus ([#2287](https://github.com/andymai/brepkit/issues/2287)) ([f56bfef](https://github.com/andymai/brepkit/commit/f56bfeffd48ba2736d3d4bc28d9f271d5a8b569d))
+
 ## [4.6.25](https://github.com/andymai/brepkit/compare/v4.6.24...v4.6.25) (2026-11-03)
 
 
