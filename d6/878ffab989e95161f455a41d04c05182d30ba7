@@ -1,0 +1,22 @@
+crates/io/tests/iges_round_trip.rs
+  s_649261a24df31b::t_d1db3625911967 609-915
+  s_649261a24df31b::t_5a0fc6457488a2 916-926
+crates/io/src/iges/reader.rs
+  s_649261a24df31b::t_db778627dce419 14,17,20,24,250-279,333-338,354,370-379,381-382,386,394,508-512,514-516,727-729,764-767,779-782,784-789,802-810
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d6878ffab989e95161f455a41d04c05182d30ba7",
+  "prompts": {},
+  "sessions": {
+    "s_649261a24df31b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d8bbbba4-0431-4f6a-a622-e632a6659779",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
