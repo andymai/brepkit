@@ -1,5 +1,17 @@
 # Changelog
 
+## [4.9.0](https://github.com/andymai/brepkit/compare/v4.8.0...v4.9.0) (2026-11-07)
+
+
+### Features
+
+* **operations:** imprint faces and edges on a solid, and split it by faces ([#2325](https://github.com/andymai/brepkit/issues/2325)) ([6c30fd7](https://github.com/andymai/brepkit/commit/6c30fd7166e88c8fa31f1c795bcd47f6ffe0a2b7))
+
+
+### Bug Fixes
+
+* **blend:** roll a ball in a pocket's inner corner ([#2330](https://github.com/andymai/brepkit/issues/2330)) ([81057e9](https://github.com/andymai/brepkit/commit/81057e93908b5d833fb9463aa474693ecb39c0c5))
+
 ## [4.8.0](https://github.com/andymai/brepkit/compare/v4.7.1...v4.8.0) (2026-11-07)
 
 
