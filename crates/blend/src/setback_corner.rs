@@ -643,6 +643,41 @@ fn edges_at(
     Ok(found)
 }
 
+/// Whether a hole in `face` reaches into the triangle `corners`, read at its
+/// vertices and along its edges. Its outline cannot cross the triangle's two
+/// sides on the face's old boundary, so a hole reaching the third has points
+/// inside.
+fn hole_reaches(topo: &Topology, face: FaceId, corners: [Point3; 3]) -> Result<bool, BlendError> {
+    const SAMPLES: u32 = 16;
+    let [a, b, c] = corners;
+    let normal = (b - a).cross(c - a);
+    let inside = |p: Point3| {
+        let sides = [
+            (b - a).cross(p - a).dot(normal),
+            (c - b).cross(p - b).dot(normal),
+            (a - c).cross(p - c).dot(normal),
+        ];
+        sides.iter().all(|&side| side > 0.0)
+    };
+    for &hole in topo.face(face)?.inner_wires() {
+        for oriented in topo.wire(hole)?.edges() {
+            let edge = topo.edge(oriented.edge())?;
+            let (from, to) = (
+                topo.vertex(edge.start())?.point(),
+                topo.vertex(edge.end())?.point(),
+            );
+            let (t0, t1) = edge.curve().domain_with_endpoints(from, to);
+            for k in 0..=SAMPLES {
+                let t = (t1 - t0).mul_add(f64::from(k) / f64::from(SAMPLES), t0);
+                if inside(edge.curve().evaluate_with_endpoints(t, from, to)) {
+                    return Ok(true);
+                }
+            }
+        }
+    }
+    Ok(false)
+}
+
 /// How far along `direction` from `vertex` a corner's rounds stop today, for
 /// each `direction`, or `None` when no ball corner stands at `vertex`.
 ///
@@ -762,6 +797,17 @@ pub fn set_back_corner(
     let ends: [StripeEnd; 3] = ends
         .try_into()
         .map_err(|_| refused("a corner has three stripe ends"))?;
+    // Each flat face's corner, between its two contact lines and the link, is
+    // cut away; a hole in the face there would be left outside its outline.
+    for k in 0..3 {
+        let at = topo.vertex(corner.arcs[k].from)?.point();
+        let (a, b) = (starts[k], stops[(k + 2) % 3]);
+        if hole_reaches(topo, corner.flats[k], [at, a, b])? {
+            return Err(refused(
+                "a hole in a flat face lies where the set-back corner's link would cut",
+            ));
+        }
+    }
     let patches =
         corner_patches(&ends)?.ok_or_else(|| refused("a stripe's end has no angle to read"))?;
 

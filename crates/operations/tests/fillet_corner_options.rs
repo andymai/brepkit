@@ -11,9 +11,9 @@ mod tests {
     use brepkit_operations::blend_ops::{CornerKind, FilletCorner, fillet_v2_with_corners};
     use brepkit_operations::boolean::{BooleanOp, boolean, mesh_fallback_count};
     use brepkit_operations::extrude::extrude;
-    use brepkit_operations::measure::solid_volume;
+    use brepkit_operations::measure::{face_area, solid_volume};
     use brepkit_operations::primitives::make_box;
-    use brepkit_operations::tessellate::{is_watertight, tessellate_solid};
+    use brepkit_operations::tessellate::{TriangleMesh, is_watertight, tessellate_solid};
     use brepkit_operations::transform::transform_solid;
     use brepkit_operations::validate::validate_solid;
     use brepkit_topology::Topology;
@@ -83,9 +83,69 @@ mod tests {
     fn assert_sound(topo: &Topology, solid: SolidId, case: &str) -> f64 {
         let report = validate_solid(topo, solid).unwrap();
         assert!(report.is_valid(), "{case}: {:?}", report.issues);
-        let mesh = tessellate_solid(topo, solid, 0.02).unwrap();
+        let mesh = tessellate_solid(topo, solid, 0.002).unwrap();
         assert!(is_watertight(&mesh), "{case}: the mesh leaks");
-        solid_volume(topo, solid, 0.01).unwrap()
+        // The mesh reads its curved faces by chords: a box with one rolled corner,
+        // whose faces hold its closed form 7949.8348, meshes 0.22 under it here,
+        // about 1.2e-3 for each unit of curved area. A patch built on the wrong
+        // side or out of place moves the volume by its own size, tens of units.
+        let curved: f64 = solid_faces(topo, solid)
+            .unwrap()
+            .into_iter()
+            .filter(|&f| !topo.face(f).unwrap().surface().is_planar())
+            .map(|f| face_area(topo, f, 0.01).unwrap())
+            .sum();
+        let held = solid_volume(topo, solid, 0.01).unwrap();
+        let meshed = mesh_volume(&mesh);
+        assert!(
+            (held - meshed).abs() < (3e-3 * curved).max(1e-6 * held.abs()),
+            "{case}: the faces hold {held}, the mesh {meshed}, over {curved} of curved area"
+        );
+        held
+    }
+
+    /// A closed mesh's volume, its triangles summed about its first point.
+    fn mesh_volume(mesh: &TriangleMesh) -> f64 {
+        let origin = mesh.positions[0];
+        mesh.indices
+            .chunks_exact(3)
+            .map(|t| {
+                let p = |i: u32| mesh.positions[i as usize] - origin;
+                p(t[0]).dot(p(t[1]).cross(p(t[2]))) / 6.0
+            })
+            .sum()
+    }
+
+    /// A hole through a flat face where the link would cut is refused; one clear
+    /// of it is kept.
+    #[test]
+    fn a_hole_where_the_link_would_cut_is_refused() {
+        let holed = |topo: &mut Topology, low: f64| {
+            let block = make_box(topo, 20.0, 20.0, 20.0).unwrap();
+            let bar = make_box(topo, 30.0, 1.0, 1.0).unwrap();
+            transform_solid(topo, bar, &Mat4::translation(-5.0, low, low)).unwrap();
+            boolean(topo, BooleanOp::Cut, block, bar).unwrap()
+        };
+        for (low, refused) in [(4.0, true), (15.5, false)] {
+            let mut topo = Topology::new();
+            let body = holed(&mut topo, low);
+            let corner = vertex_at(&topo, body, Point3::new(0.0, 0.0, 0.0));
+            let edges = edges_at(&topo, body, corner);
+            let corners = [FilletCorner {
+                vertex: corner,
+                setbacks: set_back(&edges, [14.0, 14.0, 14.0]),
+                kind: CornerKind::G2,
+            }];
+            let result = fillet_v2_with_corners(&mut topo, body, &edges, RADIUS, &corners);
+            if refused {
+                assert!(
+                    result.is_err_and(|e| e.to_string().contains("hole")),
+                    "a hole at {low}"
+                );
+            } else {
+                assert_sound(&topo, result.unwrap(), "a hole clear of the link");
+            }
+        }
     }
 
     /// A corner patch's parameters along the side its `k`th wire edge runs.
