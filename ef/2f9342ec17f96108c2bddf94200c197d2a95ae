@@ -1,0 +1,22 @@
+crates/blend/src/fillet_builder.rs
+  s_649261a24df31b::t_ab7193d31540a7 317-344
+crates/blend/src/builder_utils.rs
+  s_649261a24df31b::t_ab7193d31540a7 90-95,668,670-685,1219-1241
+  s_649261a24df31b::t_f66ad0240b4b8e 1242-1243
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ef2f9342ec17f96108c2bddf94200c197d2a95ae",
+  "prompts": {},
+  "sessions": {
+    "s_649261a24df31b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d8bbbba4-0431-4f6a-a622-e632a6659779",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
