@@ -606,20 +606,19 @@ fn inside_creases(lo: f64, hi: f64, creases: &[f64]) -> (f64, f64) {
 fn root_lines(lo: f64, hi: f64, creases: &[f64]) -> Vec<f64> {
     #[allow(clippy::cast_precision_loss)]
     let cell = (hi - lo) / INITIAL_CELLS as f64;
-    let mut lines: Vec<f64> = (0..=INITIAL_CELLS)
-        .map(|i| {
-            #[allow(clippy::cast_precision_loss)]
-            let even = lo + (i as f64) * cell;
-            even
-        })
-        .filter(|&even| {
-            even <= lo
-                || even >= hi
-                || creases
-                    .iter()
-                    .all(|&crease| (crease - even).abs() > 0.125 * cell)
-        })
-        .collect();
+    #[allow(clippy::cast_precision_loss)]
+    let even = |i: usize| lo + (i as f64) * cell;
+    if creases.is_empty() {
+        return (0..=INITIAL_CELLS).map(even).collect();
+    }
+    // The ends by value: `lo + 4 * cell` can fall a hair short of `hi`, and a
+    // crease near it would then take the face's last strip with it.
+    let mut lines = vec![lo, hi];
+    lines.extend((1..INITIAL_CELLS).map(even).filter(|&line| {
+        creases
+            .iter()
+            .all(|&crease| (crease - line).abs() > 0.125 * cell)
+    }));
     lines.extend_from_slice(creases);
     lines.sort_by(f64::total_cmp);
     lines
@@ -1400,30 +1399,39 @@ pub(super) fn tessellate_nurbs(
     if su.cross(sv).dot(nrm) < 0.0 {
         handedness = -1.0;
     }
-    let creases = creases(surface);
-    let roots = RootGrid {
-        u: root_lines(u_lo, u_hi, &creases.u),
-        v: root_lines(v_lo, v_hi, &creases.v),
-    };
-    let mut cells = Vec::with_capacity(256);
-
-    for u_span in roots.u.windows(2) {
-        for v_span in roots.v.windows(2) {
-            cells.push(AdaptiveCell {
-                u_min: u_span[0],
-                u_max: u_span[1],
-                v_min: v_span[0],
-                v_max: v_span[1],
-                depth: 0,
-                children: None,
-            });
+    let mut creases = creases(surface);
+    let (roots, mut cells) = loop {
+        let roots = RootGrid {
+            u: root_lines(u_lo, u_hi, &creases.u),
+            v: root_lines(v_lo, v_hi, &creases.v),
+        };
+        let mut cells = Vec::with_capacity(256);
+        for u_span in roots.u.windows(2) {
+            for v_span in roots.v.windows(2) {
+                cells.push(AdaptiveCell {
+                    u_min: u_span[0],
+                    u_max: u_span[1],
+                    v_min: v_span[0],
+                    v_max: v_span[1],
+                    depth: 0,
+                    children: None,
+                });
+            }
         }
-    }
-
-    let n_roots = cells.len();
-    for i in 0..n_roots {
-        build_quadtree(surface, &mut cells, i, deflection, angular_tol, &creases);
-    }
+        let n_roots = cells.len();
+        for i in 0..n_roots {
+            build_quadtree(surface, &mut cells, i, deflection, angular_tol, &creases);
+        }
+        // A tree that ran out of cells left its later roots unread, so it starts
+        // again on the even grid, whose tree the budget always holds.
+        if cells.len() < MAX_CELLS || (creases.u.is_empty() && creases.v.is_empty()) {
+            break (roots, cells);
+        }
+        creases = Creases {
+            u: Vec::new(),
+            v: Vec::new(),
+        };
+    };
 
     conforming_pass(surface, &mut cells, &roots);
 
@@ -1574,6 +1582,62 @@ mod crease_tests {
                 found.v
             );
         }
+    }
+
+    /// A bumpy sheet creased along eight knots each way: its crease grid holds
+    /// far more roots than the cell budget can refine.
+    fn creased_bumps() -> NurbsSurface {
+        let spans = 9_usize;
+        let knots = || {
+            let mut knots = vec![0.0; 3];
+            for k in 1..spans {
+                #[allow(clippy::cast_precision_loss)]
+                let at = k as f64 / spans as f64;
+                knots.extend([at, at]);
+            }
+            knots.extend([1.0; 3]);
+            knots
+        };
+        let count = 2 * spans + 1;
+        #[allow(clippy::cast_precision_loss)]
+        let rows: Vec<Vec<Point3>> = (0..count)
+            .map(|i| {
+                (0..count)
+                    .map(|j| {
+                        let z = if i % 2 == 1 && j % 2 == 1 { 1.0 } else { 0.0 };
+                        Point3::new(i as f64, j as f64, z)
+                    })
+                    .collect()
+            })
+            .collect();
+        NurbsSurface::new(2, 2, knots(), knots(), rows, vec![vec![1.0; count]; count]).unwrap()
+    }
+
+    #[test]
+    fn a_tree_out_of_cells_meshes_the_whole_face_evenly() {
+        let surface = creased_bumps();
+        let found = creases(&surface);
+        assert_eq!((found.u.len(), found.v.len()), (8, 8), "the creases");
+        let meshed = super::tessellate_nurbs(&surface, 1e-6, 0.0);
+        let (mesh, uvs) = (&meshed.mesh, &meshed.uvs);
+        let mut worst = 0.0_f64;
+        for t in mesh.indices.chunks_exact(3) {
+            let at = |i: u32| mesh.positions[i as usize];
+            let uv = |i: u32| uvs[i as usize];
+            let (u, v) = (
+                (uv(t[0])[0] + uv(t[1])[0] + uv(t[2])[0]) / 3.0,
+                (uv(t[0])[1] + uv(t[1])[1] + uv(t[2])[1]) / 3.0,
+            );
+            let flat = Point3::new(
+                (at(t[0]).x() + at(t[1]).x() + at(t[2]).x()) / 3.0,
+                (at(t[0]).y() + at(t[1]).y() + at(t[2]).y()) / 3.0,
+                (at(t[0]).z() + at(t[1]).z() + at(t[2]).z()) / 3.0,
+            );
+            worst = worst.max((surface.evaluate(u, v) - flat).length());
+        }
+        // Restarting on the even grid leaves 0.015 at worst. Left to the budget,
+        // the later roots stay whole and read 0.198.
+        assert!(worst < 0.05, "a triangle {worst} off the surface");
     }
 
     #[test]

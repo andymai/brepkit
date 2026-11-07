@@ -137,6 +137,44 @@ mod tests {
         assert!(started.elapsed().as_secs() < 60, "{:?}", started.elapsed());
     }
 
+    /// A crease close by the end of a domain that does not start at zero: the
+    /// even grid's last line is computed a hair short of the end, and must not be
+    /// what the crease leaves of it.
+    #[test]
+    fn a_crease_near_the_end_of_an_offset_domain_keeps_the_last_strip() {
+        let rows: Vec<Vec<Point3>> = [0.0, 10.0]
+            .iter()
+            .map(|&x| {
+                vec![
+                    Point3::new(x, 0.0, 0.0),
+                    Point3::new(x, 6.8, 0.0),
+                    Point3::new(x, 6.8, 0.2),
+                ]
+            })
+            .collect();
+        let sheet = NurbsSurface::new(
+            1,
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![0.2, 0.2, 0.88, 0.9, 0.9],
+            rows,
+            vec![vec![1.0; 3]; 2],
+        )
+        .unwrap();
+        let mut topo = Topology::new();
+        let face = make_nurbs_face(&mut topo, sheet, 1e-7).unwrap();
+        let mesh = tessellate(&topo, face, 0.05).unwrap();
+        let area: f64 = mesh
+            .indices
+            .chunks_exact(3)
+            .map(|t| {
+                let p = |i: u32| mesh.positions[i as usize];
+                (p(t[1]) - p(t[0])).cross(p(t[2]) - p(t[0])).length() / 2.0
+            })
+            .sum();
+        assert!((area - 70.0).abs() < 1e-9, "the mesh covers {area} of 70");
+    }
+
     /// A repeated knot on a smooth surface is no crease, and adds no cells.
     #[test]
     fn a_repeated_knot_on_a_flat_sheet_meshes_as_a_flat_sheet() {
