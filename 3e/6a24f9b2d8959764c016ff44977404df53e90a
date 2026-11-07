@@ -1,0 +1,14 @@
+crates/operations/tests/revolve_bands.rs
+  h_b755e1950659f4 651-653
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3e6a24f9b2d8959764c016ff44977404df53e90a",
+  "prompts": {},
+  "humans": {
+    "h_b755e1950659f4": {
+      "author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
