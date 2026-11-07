@@ -528,7 +528,7 @@ fn arc_wall_reversed(
 ///
 /// Returns `(surface, is_reversed)` — `is_reversed` is `true` when the
 /// surface's native normal points inward and the face needs flipping.
-fn side_face_surface(
+pub(crate) fn side_face_surface(
     curve: &EdgeCurve,
     p0: Point3,
     p1: Point3,
@@ -673,7 +673,7 @@ fn nurbs_needs_reversal(
 /// The result is a degree `(curve_degree, 1)` surface with two rows of
 /// control points: the original curve at `v=0` and the translated curve
 /// at `v=1`.
-fn ruled_nurbs_surface(
+pub(crate) fn ruled_nurbs_surface(
     nc: &brepkit_math::nurbs::curve::NurbsCurve,
     offset: Vec3,
 ) -> Result<NurbsSurface, crate::OperationsError> {
@@ -718,72 +718,83 @@ fn normalize_profile_wire_curves(
         .map(brepkit_topology::wire::OrientedEdge::edge)
         .collect();
     for eid in edge_ids {
-        let edge = topo.edge(eid)?;
-        let EdgeCurve::NurbsCurve(nc) = edge.curve() else {
-            continue;
-        };
-        let s3 = topo.vertex(edge.start())?.point();
-        let e3 = topo.vertex(edge.end())?.point();
-        let (d0, d1) = nc.domain();
-        let a3 = nc.evaluate(d0);
-        let b3 = nc.evaluate(d1);
-        let mid3 = nc.evaluate(f64::midpoint(d0, d1));
-        // Only convert when the spline's own endpoints coincide with the edge
-        // vertices (either order) — anything else is a malformed profile this
-        // pass must not reinterpret.
-        let fwd = (a3 - s3).length() <= tol && (b3 - e3).length() <= tol;
-        let rev = (a3 - e3).length() <= tol && (b3 - s3).length() <= tol;
-        if !fwd && !rev {
-            continue;
+        normalize_edge_curve(topo, eid, tol)?;
+    }
+    Ok(())
+}
+
+/// Recognize one spline-encoded edge back to its analytic form, in place (see
+/// [`normalize_profile_wire_curves`]).
+pub(crate) fn normalize_edge_curve(
+    topo: &mut Topology,
+    eid: EdgeId,
+    tol: f64,
+) -> Result<(), crate::OperationsError> {
+    let edge = topo.edge(eid)?;
+    let EdgeCurve::NurbsCurve(nc) = edge.curve() else {
+        return Ok(());
+    };
+    let s3 = topo.vertex(edge.start())?.point();
+    let e3 = topo.vertex(edge.end())?.point();
+    let (d0, d1) = nc.domain();
+    let a3 = nc.evaluate(d0);
+    let b3 = nc.evaluate(d1);
+    let mid3 = nc.evaluate(f64::midpoint(d0, d1));
+    // Only convert when the spline's own endpoints coincide with the edge
+    // vertices (either order) — anything else is a malformed profile this
+    // pass must not reinterpret.
+    let fwd = (a3 - s3).length() <= tol && (b3 - e3).length() <= tol;
+    let rev = (a3 - e3).length() <= tol && (b3 - s3).length() <= tol;
+    if !fwd && !rev {
+        return Ok(());
+    }
+    let new_curve = match brepkit_geometry::convert::recognize_curve(nc, tol * 100.0) {
+        brepkit_geometry::convert::RecognizedCurve::Line { .. } if (s3 - e3).length() > tol => {
+            Some(EdgeCurve::Line)
         }
-        let new_curve = match brepkit_geometry::convert::recognize_curve(nc, tol * 100.0) {
-            brepkit_geometry::convert::RecognizedCurve::Line { .. } if (s3 - e3).length() > tol => {
-                Some(EdgeCurve::Line)
-            }
-            brepkit_geometry::convert::RecognizedCurve::Circle {
-                center,
-                normal,
-                radius,
-            } => {
-                // Edges store arcs in the CCW convention: the span from the
-                // START vertex to the END vertex runs counter-clockwise about
-                // the curve normal. Pick the normal sign that puts the spline's
-                // own midpoint on the CCW span from the start VERTEX (using the
-                // curve-ordered endpoints, which lie exactly on the curve), or
-                // an open arc would flip to its complement.
-                let is_closed = (s3 - e3).length() <= tol;
-                let n = if is_closed {
+        brepkit_geometry::convert::RecognizedCurve::Circle {
+            center,
+            normal,
+            radius,
+        } => {
+            // Edges store arcs in the CCW convention: the span from the
+            // START vertex to the END vertex runs counter-clockwise about
+            // the curve normal. Pick the normal sign that puts the spline's
+            // own midpoint on the CCW span from the start VERTEX (using the
+            // curve-ordered endpoints, which lie exactly on the curve), or
+            // an open arc would flip to its complement.
+            let is_closed = (s3 - e3).length() <= tol;
+            let n = if is_closed {
+                normal
+            } else {
+                let (from, to) = if fwd { (a3, b3) } else { (b3, a3) };
+                let u = from - center;
+                let v = to - center;
+                let m = mid3 - center;
+                let ang = |w: Vec3| -> f64 {
+                    u.cross(w)
+                        .dot(normal)
+                        .atan2(u.dot(w))
+                        .rem_euclid(std::f64::consts::TAU)
+                };
+                let span = ang(v);
+                let mid_a = ang(m);
+                // Small buffer: for a near-full arc the midpoint's angle
+                // approaches the span itself and must not flip on rounding.
+                if span > 1e-12 && mid_a <= span + 1e-9 {
                     normal
                 } else {
-                    let (from, to) = if fwd { (a3, b3) } else { (b3, a3) };
-                    let u = from - center;
-                    let v = to - center;
-                    let m = mid3 - center;
-                    let ang = |w: Vec3| -> f64 {
-                        u.cross(w)
-                            .dot(normal)
-                            .atan2(u.dot(w))
-                            .rem_euclid(std::f64::consts::TAU)
-                    };
-                    let span = ang(v);
-                    let mid_a = ang(m);
-                    // Small buffer: for a near-full arc the midpoint's angle
-                    // approaches the span itself and must not flip on rounding.
-                    if span > 1e-12 && mid_a <= span + 1e-9 {
-                        normal
-                    } else {
-                        -normal
-                    }
-                };
-                brepkit_math::curves::Circle3D::new(center, n, radius)
-                    .ok()
-                    .map(EdgeCurve::Circle)
-            }
-            _ => None,
-        };
-        if let Some(c) = new_curve {
-            topo.edge_mut(eid)?.set_curve(c);
+                    -normal
+                }
+            };
+            brepkit_math::curves::Circle3D::new(center, n, radius)
+                .ok()
+                .map(EdgeCurve::Circle)
         }
+        _ => None,
+    };
+    if let Some(c) = new_curve {
+        topo.edge_mut(eid)?.set_curve(c);
     }
     Ok(())
 }
@@ -1367,7 +1378,7 @@ pub fn extrude(
 ///
 /// Returns an error if constructing the translated curve fails (should
 /// never happen when translating a valid curve).
-fn translate_edge_curve(
+pub(crate) fn translate_edge_curve(
     curve: &EdgeCurve,
     offset: Vec3,
 ) -> Result<EdgeCurve, crate::OperationsError> {

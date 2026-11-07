@@ -120,6 +120,22 @@ pub fn get_u32(args: &serde_json::Value, key: &str) -> Result<u32, String> {
         .ok_or_else(|| format!("missing or invalid '{key}'"))
 }
 
+/// Extract an array of handles from batch args. Every entry must be one: an
+/// entry dropped or wrapped would build a different shape than was asked for.
+pub fn handles_in(args: &serde_json::Value, key: &str) -> Result<Vec<u32>, String> {
+    args[key]
+        .as_array()
+        .ok_or_else(|| format!("missing or invalid '{key}' array"))?
+        .iter()
+        .enumerate()
+        .map(|(i, v)| {
+            v.as_u64()
+                .and_then(|n| u32::try_from(n).ok())
+                .ok_or_else(|| format!("{key}[{i}] is not a handle"))
+        })
+        .collect()
+}
+
 /// Extract a `usize` from a JSON value.
 pub fn json_usize(val: &serde_json::Value, key: &str) -> Result<usize, JsError> {
     val[key].as_u64().map(|v| v as usize).ok_or_else(|| {
@@ -218,6 +234,15 @@ pub fn try_fillet(
         && is_valid(topo, r.solid)
     {
         return Ok(r.solid);
+    }
+    // An edge ending at a concave corner stops against a tab the walking engine
+    // does not build, which a cut takes off exactly.
+    if let Ok(Some(s)) =
+        brepkit_operations::fillet::concave_end::fillet_concave_ends(topo, solid_id, edges, radius)
+        && s != solid_id
+        && is_valid(topo, s)
+    {
+        return Ok(s);
     }
     if let Ok(s) = brepkit_operations::fillet::fillet(topo, solid_id, edges, radius)
         && s != solid_id
@@ -1399,6 +1424,72 @@ mod fillet_tests {
         let volume = brepkit_operations::measure::solid_volume(&topo, cut, 1e-6).unwrap();
         let expected = 1e-12 - 0.5 * 2e-5 * 2e-5 * 1e-4;
         assert!((volume - expected).abs() < 1e-3 * expected, "{volume}");
+    }
+
+    // The issue's pen L: the walking engine cannot close an edge's end at a
+    // concave corner, and the cut path can.
+    #[test]
+    fn try_fillet_rounds_an_edge_ending_at_a_concave_corner() {
+        use brepkit_math::vec::{Point3, Vec3};
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::{Face, FaceSurface};
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        let mut topo = Topology::new();
+        let outline = [
+            (0.0, 0.0),
+            (60.0, 0.0),
+            (60.0, 8.0),
+            (8.0, 8.0),
+            (8.0, 40.0),
+            (0.0, 40.0),
+        ];
+        let vertices: Vec<_> = outline
+            .iter()
+            .map(|&(x, y)| topo.add_vertex(Vertex::new(Point3::new(x, y, 0.0), 1e-7)))
+            .collect();
+        let edges: Vec<_> = (0..vertices.len())
+            .map(|i| {
+                let next = vertices[(i + 1) % vertices.len()];
+                OrientedEdge::new(
+                    topo.add_edge(Edge::new(vertices[i], next, EdgeCurve::Line)),
+                    true,
+                )
+            })
+            .collect();
+        let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+        let face = topo.add_face(Face::new(
+            wire,
+            Vec::new(),
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: 0.0,
+            },
+        ));
+        let pen =
+            brepkit_operations::extrude::extrude(&mut topo, face, Vec3::new(0.0, 0.0, 1.0), 20.0)
+                .unwrap();
+        let edge: Vec<EdgeId> = solid_edge_ids(&topo, pen)
+            .into_iter()
+            .filter(|&e| {
+                let data = topo.edge(e).unwrap();
+                let (p, q) = (
+                    topo.vertex(data.start()).unwrap().point(),
+                    topo.vertex(data.end()).unwrap().point(),
+                );
+                let at = |u: Point3, x: f64, y: f64| {
+                    (u.x() - x).abs() < 1e-9 && (u.y() - y).abs() < 1e-9 && u.z().abs() < 1e-9
+                };
+                (at(p, 8.0, 8.0) && at(q, 8.0, 40.0)) || (at(q, 8.0, 8.0) && at(p, 8.0, 40.0))
+            })
+            .collect();
+        assert_eq!(edge.len(), 1);
+
+        let result = try_fillet(&mut topo, pen, &edge, 0.5).expect("a round to the concave corner");
+        let volume = brepkit_operations::measure::solid_volume(&topo, result, 0.001).unwrap();
+        let truth = 736.0 * 20.0 - (1.0 - std::f64::consts::FRAC_PI_4) * 0.25 * 32.0;
+        assert!((volume - truth).abs() < 1e-6 * truth, "{volume} vs {truth}");
     }
 
     // A wide rim's chord error alone reads past 1% at the gate's coarse

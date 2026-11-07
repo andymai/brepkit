@@ -1939,7 +1939,7 @@ pub fn sweep_with_options(
 /// paths, every internal knot is a kink where the line direction changes.
 ///
 /// Returns the kink parameter values (not including the path endpoints).
-fn detect_kinks(path: &NurbsCurve) -> Vec<f64> {
+pub(crate) fn detect_kinks(path: &NurbsCurve) -> Vec<f64> {
     /// Small epsilon for comparing knot parameter values (dimensionless).
     const KNOT_EPS: f64 = 1e-10;
     /// Angular threshold for tangent discontinuity detection (~1 degree).
@@ -2757,6 +2757,8 @@ pub fn sweep_guided(
 
 mod exact;
 mod spine;
+
+pub(crate) use exact::{clamped_edge_span, path_trajectories};
 
 /// `curve` from parameter `t0` to `t1`, traced backward when `t1 < t0`,
 /// over `[0, 1]` as `sweep` reads its path. The curve is cut over its domain
