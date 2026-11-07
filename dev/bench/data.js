@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794071797945,
+  "lastUpdate": 1794073644957,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -66365,6 +66365,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 16500681,
             "range": "± 29899",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "5692d115776343d01ff5154639a386baa01738dd",
+          "message": "chore(main): release 4.7.0 (#2322)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n## [4.7.0](https://github.com/andymai/brepkit/compare/v4.6.30...v4.7.0)\n(2026-11-07)\n\n\n### Features\n\n* **operations:** build open shells from open wires\n([#2317](https://github.com/andymai/brepkit/issues/2317))\n([9acb394](https://github.com/andymai/brepkit/commit/9acb39466160b886abfa077f8a6fe779a2ae9644))\n\n\n### Bug Fixes\n\n* **algo:** split a whole torus into bands at loops winding its ring\n([#2305](https://github.com/andymai/brepkit/issues/2305))\n([c1ad960](https://github.com/andymai/brepkit/commit/c1ad96073e4de041d13d91cb746ac096e4a3b7bd))\n* **algo:** stop a cut from filling holes in a face it splits\n([#2314](https://github.com/andymai/brepkit/issues/2314))\n([8132935](https://github.com/andymai/brepkit/commit/81329354d4ffda949c49b10e4abf1f32f13c30a1))\n* **algo:** stop a flat cut welding a curved wall's arc to a chord\n([#2319](https://github.com/andymai/brepkit/issues/2319))\n([39e32c2](https://github.com/andymai/brepkit/commit/39e32c25d77698596a6733b36aeeabab725cccd2))\n* **algo:** stop the classifier missing a whole torus inside a larger\nsolid ([#2315](https://github.com/andymai/brepkit/issues/2315))\n([a062651](https://github.com/andymai/brepkit/commit/a062651a1783682946988096df7d05bf19d6e12d))\n* **blend:** roll a true ball so a saddle fillet stays tangent\n([#2321](https://github.com/andymai/brepkit/issues/2321))\n([2645722](https://github.com/andymai/brepkit/commit/2645722261d8198624cb53acddcdffe6e5e4652c)),\ncloses [#2161](https://github.com/andymai/brepkit/issues/2161)\n* **operations:** follow a sweep's path chain whichever way its edges\nare stored ([#2323](https://github.com/andymai/brepkit/issues/2323))\n([80c980b](https://github.com/andymai/brepkit/commit/80c980b5c4512d452e59af16657229d323eae282))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-11-07T17:43:58Z",
+          "tree_id": "3d286b4926f427bbaa2fab4a3fee284c337fe34a",
+          "url": "https://github.com/andymai/brepkit/commit/5692d115776343d01ff5154639a386baa01738dd"
+        },
+        "date": 1794073636522,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1012566,
+            "range": "± 2453",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1093543,
+            "range": "± 33326",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11747,
+            "range": "± 218",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 673201,
+            "range": "± 2398",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26760875,
+            "range": "± 57513",
             "unit": "ns/iter"
           }
         ]
