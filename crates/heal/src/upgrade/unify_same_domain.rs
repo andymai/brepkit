@@ -386,22 +386,35 @@ fn merge_whole_sphere(
     }
     let mut holes: Vec<WireId> = a.inner_wires().to_vec();
     holes.extend_from_slice(b.inner_wires());
-    let mut outer: Vec<OrientedEdge> = topo.wire(a.outer_wire())?.edges().to_vec();
-    let outer_a = outer.len();
-    outer.extend_from_slice(topo.wire(b.outer_wire())?.edges());
-
-    // Each face runs a shared edge the other way, and the edge goes.
-    let mut uses: HashMap<EdgeId, usize> = HashMap::new();
-    for oe in &outer {
-        *uses.entry(oe.edge()).or_insert(0) += 1;
-    }
-    if uses.values().any(|&n| n > 2) || !outer[..outer_a].iter().any(|oe| uses[&oe.edge()] == 2) {
+    let (outer_a, outer_b) = (
+        topo.wire(a.outer_wire())?.edges(),
+        topo.wire(b.outer_wire())?.edges(),
+    );
+    // Each face runs a shared edge once and the other way, and the edge goes.
+    // An edge a wire runs twice is a seam, which this merge does not take.
+    let senses = |edges: &[OrientedEdge]| -> Option<HashMap<EdgeId, bool>> {
+        let mut seen = HashMap::new();
+        edges
+            .iter()
+            .all(|oe| seen.insert(oe.edge(), oe.is_forward()).is_none())
+            .then_some(seen)
+    };
+    let (Some(senses_a), Some(senses_b)) = (senses(outer_a), senses(outer_b)) else {
+        return Ok(None);
+    };
+    let shared: HashSet<EdgeId> = senses_a
+        .keys()
+        .copied()
+        .filter(|edge| senses_b.contains_key(edge))
+        .collect();
+    if shared.is_empty() || shared.iter().any(|edge| senses_a[edge] == senses_b[edge]) {
         return Ok(None);
     }
-    let kept: Vec<OrientedEdge> = outer
+    let kept: Vec<OrientedEdge> = outer_a
         .iter()
+        .chain(outer_b)
         .copied()
-        .filter(|oe| uses[&oe.edge()] == 1)
+        .filter(|oe| !shared.contains(&oe.edge()))
         .collect();
 
     // Chain them, a vertex two loops pass through being no separate loop.
@@ -442,9 +455,10 @@ fn merge_whole_sphere(
     };
     let rest = rest.to_vec();
 
-    // The loop's cap lies along the mean of its samples from the centre.
+    // The loop's cap lies along the mean of its samples from the centre, in the
+    // order the wire runs them.
     let center = sphere.center();
-    let mut toward = Vec3::new(0.0, 0.0, 0.0);
+    let mut samples: Vec<Vec3> = Vec::new();
     for oe in topo.wire(outer_wire)?.edges() {
         let edge = topo.edge(oe.edge())?;
         let (p, q) = (
@@ -453,13 +467,35 @@ fn merge_whole_sphere(
         );
         let (t0, t1) = edge.curve().domain_with_endpoints(p, q);
         for k in 0..SAMPLES {
-            let t = (t1 - t0).mul_add(f64::from(k) / f64::from(SAMPLES), t0);
-            toward += edge.curve().evaluate_with_endpoints(t, p, q) - center;
+            let fraction = f64::from(k) / f64::from(SAMPLES);
+            let along = if oe.is_forward() {
+                fraction
+            } else {
+                1.0 - fraction
+            };
+            let t = (t1 - t0).mul_add(along, t0);
+            samples.push(edge.curve().evaluate_with_endpoints(t, p, q) - center);
         }
     }
+    let toward = samples
+        .iter()
+        .fold(Vec3::new(0.0, 0.0, 0.0), |sum, &s| sum + s);
     let Ok(axis) = toward.normalize() else {
         return Ok(None);
     };
+    // The mesher wants the loop to wind this axis once. The mean of a concave
+    // or unevenly split loop can lie outside its cap, and then it does not.
+    let turned_by = |a: Vec3, b: Vec3| {
+        a.cross(b)
+            .dot(axis)
+            .atan2(a.dot(b) - a.dot(axis) * b.dot(axis))
+    };
+    let winding: f64 = (0..samples.len())
+        .map(|i| turned_by(samples[i], samples[(i + 1) % samples.len()]))
+        .sum();
+    if (winding.abs() - std::f64::consts::TAU).abs() > 1e-6 {
+        return Ok(None);
+    }
     let turned = FaceSurface::Sphere(SphericalSurface::with_axis(center, sphere.radius(), axis)?);
     let face = if reversed {
         Face::new_reversed(outer_wire, rest, turned)

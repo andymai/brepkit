@@ -46,6 +46,13 @@ mod tests {
         }
     }
 
+    fn as_built() -> BooleanOptions {
+        BooleanOptions {
+            unify_faces: false,
+            ..BooleanOptions::default()
+        }
+    }
+
     fn assert_sound(topo: &Topology, solid: SolidId, volume: f64, what: &str) {
         let report = validate_solid(topo, solid).unwrap();
         assert!(report.is_valid(), "{what}: {:?}", report.issues);
@@ -117,10 +124,11 @@ mod tests {
             let mut solid = make_sphere(&mut topo, 10.0, 32).unwrap();
             for (i, &at) in bites.iter().enumerate() {
                 let tool = bite(&mut topo, at);
+                // Only the last cut simplifies, so its merge meets every hole.
                 let options = if i + 1 == bites.len() {
                     simplified()
                 } else {
-                    BooleanOptions::default()
+                    as_built()
                 };
                 solid =
                     boolean_with_options(&mut topo, BooleanOp::Cut, solid, tool, options).unwrap();
@@ -151,23 +159,41 @@ mod tests {
                 boolean_with_options(&mut topo, BooleanOp::Intersect, cube, ball, options).unwrap();
             let half = make_box(&mut topo, 100.0, 100.0, 100.0).unwrap();
             transform_solid(&mut topo, half, &Mat4::translation(5.0, -50.0, -50.0)).unwrap();
-            let cut = boolean_with_options(
-                &mut topo,
-                BooleanOp::Cut,
-                solid,
-                half,
-                BooleanOptions::default(),
-            )
-            .unwrap();
+            let cut =
+                boolean_with_options(&mut topo, BooleanOp::Cut, solid, half, as_built()).unwrap();
             solid_volume(&topo, cut, 0.01).unwrap()
         };
-        let (merged, halves) = (
-            cut_after(simplified()),
-            cut_after(BooleanOptions::default()),
-        );
+        let (merged, halves) = (cut_after(simplified()), cut_after(as_built()));
         assert!(
             (merged - halves).abs() < 1e-3 * halves,
             "merged {merged}, halves {halves}"
+        );
+    }
+
+    /// A hole whose samples average outside it reads the axis wrong, so a U
+    /// bitten from the ball's top leaves the two halves as they are, whatever
+    /// the mesh then has to read.
+    #[test]
+    fn a_ball_with_a_u_shaped_bite_stays_sound() {
+        let mut topo = Topology::new();
+        let ball = make_sphere(&mut topo, 10.0, 32).unwrap();
+        let block = make_box(&mut topo, 6.0, 6.0, 4.0).unwrap();
+        transform_solid(&mut topo, block, &Mat4::translation(-3.0, -3.0, 7.0)).unwrap();
+        let notch = make_box(&mut topo, 2.0, 5.0, 6.0).unwrap();
+        transform_solid(&mut topo, notch, &Mat4::translation(-1.0, -1.5, 6.0)).unwrap();
+        let tool =
+            boolean_with_options(&mut topo, BooleanOp::Cut, block, notch, as_built()).unwrap();
+        let solid =
+            boolean_with_options(&mut topo, BooleanOp::Cut, ball, tool, simplified()).unwrap();
+        let report = validate_solid(&topo, solid).unwrap();
+        assert!(report.is_valid(), "{:?}", report.issues);
+        let mesh = tessellate_solid(&topo, solid, 0.02).unwrap();
+        assert!(is_watertight(&mesh), "open mesh");
+        let exact = solid_volume(&topo, solid, 0.001).unwrap();
+        let meshed = oriented_solid_volume(&topo, solid, 0.02).unwrap();
+        assert!(
+            (exact - meshed).abs() < 2e-3 * exact,
+            "{exact} exact, {meshed} meshed"
         );
     }
 }
