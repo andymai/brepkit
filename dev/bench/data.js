@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794069911509,
+  "lastUpdate": 1794071306031,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -66257,6 +66257,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 22575232,
             "range": "± 30511",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "39e32c25d77698596a6733b36aeeabab725cccd2",
+          "message": "fix(algo): stop a flat cut welding a curved wall's arc to a chord (#2319)",
+          "timestamp": "2026-11-07T09:04:52-08:00",
+          "tree_id": "b1e7af51a13d91e9fa93ba8839f826af2e37827e",
+          "url": "https://github.com/andymai/brepkit/commit/39e32c25d77698596a6733b36aeeabab725cccd2"
+        },
+        "date": 1794071299383,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1057936,
+            "range": "± 2661",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1131863,
+            "range": "± 4418",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12046,
+            "range": "± 27",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 696459,
+            "range": "± 1073",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 28076881,
+            "range": "± 77691",
             "unit": "ns/iter"
           }
         ]
