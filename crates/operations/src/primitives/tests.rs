@@ -277,7 +277,7 @@ fn make_torus_volume() {
 fn make_torus_self_intersecting_error() {
     let mut topo = Topology::new();
     // minor >= major → self-intersecting
-    assert!(make_torus(&mut topo, 1.0, 1.0, 8).is_err());
+    assert!(make_torus(&mut topo, 1.0, 1.1, 8).is_err());
     assert!(make_torus(&mut topo, 1.0, 2.0, 8).is_err());
 }
 

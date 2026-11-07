@@ -574,10 +574,10 @@ pub fn make_torus(
             reason: format!("torus minor radius must be positive, got {minor_radius}"),
         });
     }
-    if minor_radius >= major_radius {
+    if minor_radius > major_radius + tol.linear {
         return Err(crate::OperationsError::InvalidInput {
             reason: format!(
-                "torus minor radius ({minor_radius}) must be less than major radius ({major_radius})"
+                "torus minor radius ({minor_radius}) must not exceed major radius ({major_radius})"
             ),
         });
     }
