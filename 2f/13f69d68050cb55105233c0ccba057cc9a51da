@@ -1,0 +1,21 @@
+crates/operations/tests/imprint_faces.rs
+  s_649261a24df31b::t_3a833487d6973e 1156-1210
+crates/algo/src/gfa.rs
+  s_649261a24df31b::t_43fd6b8030202c 255,266-267,276-277,283-284,296-299,302-303
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "2f13f69d68050cb55105233c0ccba057cc9a51da",
+  "prompts": {},
+  "sessions": {
+    "s_649261a24df31b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d8bbbba4-0431-4f6a-a622-e632a6659779",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
