@@ -1385,6 +1385,41 @@ impl BrepKernel {
                     "negative": solid_id_to_u32(result.negative),
                 }))
             }
+            "imprintFaces" => {
+                use brepkit_operations::imprint::{ImprintTool, imprint_faces};
+
+                let s = get_u32(args, "solid")?;
+                let solid_id = self.resolve_solid(s).map_err(|e| e.to_string())?;
+                let mut tools = Vec::new();
+                if !args["faces"].is_null() {
+                    for handle in handles_in(args, "faces")? {
+                        let face = self.resolve_face(handle).map_err(|e| e.to_string())?;
+                        tools.push(ImprintTool::Face(face));
+                    }
+                }
+                if !args["edges"].is_null() {
+                    for handle in handles_in(args, "edges")? {
+                        let edge = self.resolve_edge(handle).map_err(|e| e.to_string())?;
+                        tools.push(ImprintTool::Edge(edge));
+                    }
+                }
+                let result =
+                    imprint_faces(self.topo_mut(), solid_id, &tools).map_err(|e| e.to_string())?;
+                Ok(serde_json::json!(solid_id_to_u32(result)))
+            }
+            "splitByFaces" => {
+                let s = get_u32(args, "solid")?;
+                let solid_id = self.resolve_solid(s).map_err(|e| e.to_string())?;
+                let faces = handles_in(args, "faces")?
+                    .iter()
+                    .map(|&h| self.resolve_face(h).map_err(|e| e.to_string()))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let pieces =
+                    brepkit_operations::imprint::split_by_faces(self.topo_mut(), solid_id, &faces)
+                        .map_err(|e| e.to_string())?;
+                let handles: Vec<u32> = pieces.into_iter().map(solid_id_to_u32).collect();
+                Ok(serde_json::json!(handles))
+            }
             "sewFaces" => {
                 let face_handles: Vec<u32> = args["faces"]
                     .as_array()

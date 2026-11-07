@@ -3,13 +3,17 @@
 //! Runs the complete General Fuse Algorithm pipeline:
 //! PaveFiller -> Builder -> BOP -> assemble.
 
+use std::collections::HashSet;
+
 use brepkit_math::tolerance::Tolerance;
 use brepkit_topology::Topology;
+use brepkit_topology::edge::EdgeId;
+use brepkit_topology::face::FaceId;
 use brepkit_topology::solid::SolidId;
 
 use crate::bop::BooleanOp;
 use crate::builder::Builder;
-use crate::ds::{GfaArena, GfaShapeStoreN};
+use crate::ds::{GfaArena, GfaImprintStore, GfaShapeStoreN};
 use crate::error::AlgoError;
 use crate::pave_filler;
 
@@ -151,6 +155,152 @@ pub fn fuse_n(topo: &mut Topology, sources: &[SolidId]) -> Result<SolidId, AlgoE
             store.export_solid(topo, store_result)
         }
     }
+}
+
+/// A copy of `solid` with its faces split along where the tools meet them.
+///
+/// A tool face is intersected as an open shell: the pave filler reads its
+/// faces and asks nothing of closure, which only a boolean's classification
+/// would need. Every piece of the solid's faces is kept. A section that
+/// separates no two regions of a face (it ends inside the face, or joins two
+/// of its boundaries only once) leaves the face whole.
+///
+/// # Errors
+///
+/// Returns [`AlgoError`] if a face cannot be split along its sections or the
+/// pieces do not assemble.
+pub fn imprint(
+    topo: &mut Topology,
+    solid: SolidId,
+    tool_faces: &[FaceId],
+    tool_edges: &[EdgeId],
+) -> Result<SolidId, AlgoError> {
+    let tol = Tolerance::default();
+    let groups: Vec<Vec<FaceId>> = if tool_faces.is_empty() {
+        Vec::new()
+    } else {
+        vec![tool_faces.to_vec()]
+    };
+    let mut store = GfaImprintStore::new(topo, solid, &groups, tool_edges)?;
+    let mut arena = GfaArena::new();
+    pave_filler::run_pave_filler_with_edges(
+        &mut store.topo,
+        &store.sources,
+        &store.tool_edges,
+        tol,
+        &mut arena,
+    )?;
+    let (store_topo, result) = crate::builder::build_imprint(
+        std::mem::take(&mut store.topo),
+        &arena,
+        store.sources[0],
+        tol,
+    )?;
+    store.topo = store_topo;
+    store.export_solid(topo, result)
+}
+
+/// `solid` in the pieces `tool_faces` separate it into.
+///
+/// A piece of a tool strictly inside the solid and bounded all around, by the
+/// solid's faces or by other such pieces, is a wall between two regions, and
+/// each region becomes a solid. A tool that divides nothing imprints instead;
+/// with no walls at all the result is one solid.
+///
+/// Each tool cuts the pieces the ones before it left, so tools that cross each
+/// other never meet on a face. Those that separated nothing alone then go
+/// together, for the walls only they close between them, meeting along shared
+/// sections as sources of their own.
+///
+/// # Errors
+///
+/// Returns [`AlgoError`] if a face cannot be split along its sections or the
+/// pieces do not assemble.
+pub fn split_by_faces(
+    topo: &mut Topology,
+    solid: SolidId,
+    tool_faces: &[FaceId],
+) -> Result<Vec<SolidId>, AlgoError> {
+    let tol = Tolerance::default();
+    let mut named = HashSet::new();
+    let groups: Vec<Vec<FaceId>> = tool_faces
+        .iter()
+        .filter(|&&f| named.insert(f))
+        .map(|&f| vec![f])
+        .collect();
+    let mut scratch = GfaImprintStore::new(topo, solid, &groups, &[])?;
+    let (body, tool_sources) = scratch
+        .sources
+        .split_first()
+        .map(|(&body, tools)| (body, tools.to_vec()))
+        .ok_or_else(|| AlgoError::AssemblyFailed("a split by faces needs a solid".into()))?;
+    let mut tools = Vec::with_capacity(tool_sources.len());
+    for source in tool_sources {
+        tools.extend(brepkit_topology::explorer::solid_faces(
+            &scratch.topo,
+            source,
+        )?);
+    }
+
+    // Whether a tool separates depends on the piece: one that cuts one piece can
+    // stop short in another, and one that stops short can reach across what a
+    // later tool leaves. So each piece keeps the tools it has not been cut by,
+    // tries them one at a time, and takes what is left together, which marks it
+    // and closes off what only those tools between them can.
+    let mut pieces = Vec::new();
+    let mut open = vec![(body, tools)];
+    while let Some((piece, mut tools)) = open.pop() {
+        let mut cut = None;
+        for (i, &tool) in tools.iter().enumerate() {
+            if let Some(parts) = split_piece(&mut scratch.topo, piece, &[tool], tol, false)? {
+                cut = Some((i, parts));
+                break;
+            }
+        }
+        if let Some((i, parts)) = cut {
+            tools.remove(i);
+            open.extend(parts.into_iter().map(|part| (part, tools.clone())));
+        } else if tools.is_empty() {
+            pieces.push(piece);
+        } else {
+            let marked = split_piece(&mut scratch.topo, piece, &tools, tol, true)?;
+            pieces.extend(marked.into_iter().flatten());
+        }
+    }
+    pieces
+        .into_iter()
+        .map(|piece| scratch.export_solid(topo, piece))
+        .collect()
+}
+
+/// A piece split by all of `tools` at once, or, unless `keep_whole`, `None` where
+/// they leave it in one: a trial that separates nothing copies nothing back.
+fn split_piece(
+    topo: &mut Topology,
+    piece: SolidId,
+    tools: &[FaceId],
+    tol: Tolerance,
+    keep_whole: bool,
+) -> Result<Option<Vec<SolidId>>, AlgoError> {
+    let groups: Vec<Vec<FaceId>> = tools.iter().map(|&f| vec![f]).collect();
+    let mut store = GfaImprintStore::new(topo, piece, &groups, &[])?;
+    let mut arena = GfaArena::new();
+    pave_filler::run_pave_filler_with_edges(&mut store.topo, &store.sources, &[], tol, &mut arena)?;
+    let (store_topo, parts) = crate::builder::build_split_by_faces(
+        std::mem::take(&mut store.topo),
+        &arena,
+        &store.sources,
+        tol,
+    )?;
+    store.topo = store_topo;
+    if parts.len() < 2 && !keep_whole {
+        return Ok(None);
+    }
+    let exported = parts
+        .into_iter()
+        .map(|part| store.export_solid(topo, part))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(Some(exported))
 }
 
 /// Run a GFA boolean, also returning each result face's provenance.

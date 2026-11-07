@@ -886,6 +886,66 @@ impl BrepKernel {
         ])
     }
 
+    /// A copy of a solid with its faces split where the given faces and edges
+    /// meet them.
+    ///
+    /// Returns a solid handle. The copy has the solid's volume.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a handle does not resolve, a face cannot be split
+    /// along its marks, or the result would not be a valid solid of the same
+    /// volume.
+    #[wasm_bindgen(js_name = "imprintFaces")]
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn imprint_faces(
+        &mut self,
+        solid: u32,
+        face_handles: Vec<u32>,
+        edge_handles: Vec<u32>,
+    ) -> Result<u32, JsError> {
+        use brepkit_operations::imprint::ImprintTool;
+
+        let solid_id = self.resolve_solid(solid)?;
+        let mut tools = Vec::with_capacity(face_handles.len() + edge_handles.len());
+        for &handle in &face_handles {
+            tools.push(ImprintTool::Face(self.resolve_face(handle)?));
+        }
+        for &handle in &edge_handles {
+            tools.push(ImprintTool::Edge(self.resolve_edge(handle)?));
+        }
+        let result = brepkit_operations::imprint::imprint_faces(self.topo_mut(), solid_id, &tools)?;
+        Ok(solid_id_to_u32(result))
+    }
+
+    /// A solid in the pieces the given faces separate it into. A face that
+    /// walls nothing off imprints instead, so a face that only dips in returns
+    /// one solid.
+    ///
+    /// Returns solid handles.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a handle does not resolve, a face cannot be split
+    /// along its marks, or the pieces would not be valid solids summing to the
+    /// solid's volume.
+    #[wasm_bindgen(js_name = "splitByFaces")]
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn split_by_faces(
+        &mut self,
+        solid: u32,
+        face_handles: Vec<u32>,
+    ) -> Result<Vec<u32>, JsError> {
+        let solid_id = self.resolve_solid(solid)?;
+        let faces: Vec<_> = face_handles
+            .iter()
+            .map(|&handle| self.resolve_face(handle))
+            .collect::<Result<_, _>>()?;
+        let pieces =
+            brepkit_operations::imprint::split_by_faces(self.topo_mut(), solid_id, &faces)?;
+        Ok(pieces.into_iter().map(solid_id_to_u32).collect())
+    }
+
     // ── Draft ─────────────────────────────────────────────────────
 
     /// Apply draft angle to faces of a solid.
@@ -2129,6 +2189,88 @@ mod tests {
                 reason.contains("not a handle") || reason.contains("array"),
                 "{result}"
             );
+        }
+    }
+
+    /// A dip, a face lying on the top and an edge along it mark a 20 x 20 x 10
+    /// box through the batch dispatcher, and a face across it cuts it in two; a
+    /// bad handle anywhere is refused.
+    #[test]
+    fn imprint_and_split_by_faces_through_the_batch() {
+        let mut k = crate::kernel::BrepKernel::new();
+        let body = k.make_box_solid(20.0, 20.0, 10.0).unwrap();
+        let dip = k
+            .make_polygon(vec![
+                -5.0, 10.0, 9.0, 25.0, 10.0, 9.0, 25.0, 10.0, 11.0, -5.0, 10.0, 11.0,
+            ])
+            .unwrap();
+        let lying = k
+            .make_polygon(vec![
+                -5.0, 10.0, 10.0, 25.0, 10.0, 10.0, 25.0, 25.0, 10.0, -5.0, 25.0, 10.0,
+            ])
+            .unwrap();
+        let across = k
+            .make_polygon(vec![
+                -5.0, 10.0, -5.0, 25.0, 10.0, -5.0, 25.0, 10.0, 15.0, -5.0, 10.0, 15.0,
+            ])
+            .unwrap();
+        let line = k.make_line_edge(0.0, 10.0, 10.0, 20.0, 10.0, 10.0).unwrap();
+
+        let batch = format!(
+            r#"[
+                {{"op": "imprintFaces", "args": {{"solid": {body}, "faces": [{dip}]}}}},
+                {{"op": "imprintFaces", "args": {{"solid": {body}, "faces": [{lying}]}}}},
+                {{"op": "imprintFaces", "args": {{"solid": {body}, "edges": [{line}]}}}},
+                {{"op": "imprintFaces", "args": {{"solid": {body}, "faces": [{across}], "edges": [{line}]}}}},
+                {{"op": "splitByFaces", "args": {{"solid": {body}, "faces": [{dip}]}}}},
+                {{"op": "splitByFaces", "args": {{"solid": {body}, "faces": [{across}]}}}}
+            ]"#
+        );
+        let results: serde_json::Value = serde_json::from_str(&k.execute_batch(&batch)).unwrap();
+        let results = results.as_array().unwrap();
+        let handle = |value: &serde_json::Value| u32::try_from(value.as_u64().unwrap()).unwrap();
+        for (result, faces) in results[..4].iter().zip([7, 7, 7, 10]) {
+            let solid = handle(&result["ok"]);
+            assert!(
+                (k.volume(solid, 0.01).unwrap() - 2000.0 * 2.0).abs() < 1e-6,
+                "{result}"
+            );
+            assert_eq!(k.get_solid_faces(solid).unwrap().len(), faces, "{result}");
+        }
+        let dipped = results[4]["ok"].as_array().expect("pieces");
+        assert_eq!(dipped.len(), 1, "a dip separates nothing");
+        assert!((k.volume(handle(&dipped[0]), 0.01).unwrap() - 4000.0).abs() < 1e-6);
+        let halves = results[5]["ok"].as_array().expect("pieces");
+        assert_eq!(halves.len(), 2, "a face across the box separates it");
+        for half in halves {
+            assert!((k.volume(handle(half), 0.01).unwrap() - 2000.0).abs() < 1e-6);
+        }
+
+        // The direct bindings agree.
+        let marked = k.imprint_faces(body, vec![dip], vec![]).unwrap();
+        assert_eq!(k.get_solid_faces(marked).unwrap().len(), 7);
+        let marked = k.imprint_faces(body, vec![], vec![line]).unwrap();
+        assert_eq!(k.get_solid_faces(marked).unwrap().len(), 7);
+        assert_eq!(k.split_by_faces(body, vec![across]).unwrap().len(), 2);
+        assert_eq!(k.split_by_faces(body, vec![dip]).unwrap().len(), 1);
+
+        let bad = format!(
+            r#"[
+                {{"op": "imprintFaces", "args": {{"solid": 999999, "faces": [{dip}]}}}},
+                {{"op": "imprintFaces", "args": {{"solid": {body}, "faces": [999999]}}}},
+                {{"op": "imprintFaces", "args": {{"solid": {body}, "edges": [999999]}}}},
+                {{"op": "imprintFaces", "args": {{"solid": {body}, "faces": [{dip}, "bad"]}}}},
+                {{"op": "imprintFaces", "args": {{"solid": {body}, "edges": [{line}, null]}}}},
+                {{"op": "imprintFaces", "args": {{"solid": {body}, "faces": 3}}}},
+                {{"op": "splitByFaces", "args": {{"solid": 999999, "faces": [{dip}]}}}},
+                {{"op": "splitByFaces", "args": {{"solid": {body}, "faces": [999999]}}}},
+                {{"op": "splitByFaces", "args": {{"solid": {body}, "faces": [{dip}, 4294967296]}}}},
+                {{"op": "splitByFaces", "args": {{"solid": {body}}}}}
+            ]"#
+        );
+        let refused: serde_json::Value = serde_json::from_str(&k.execute_batch(&bad)).unwrap();
+        for result in refused.as_array().unwrap() {
+            assert!(result["error"].is_string(), "{result}");
         }
     }
 
