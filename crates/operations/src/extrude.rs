@@ -422,13 +422,29 @@ fn extrude_wire_vertices_with(
     let oblique_circle = exact_closed
         && original_oriented.iter().any(|oe| {
             topo.edge(oe.edge()).is_ok_and(|edge| {
+                let normal = match edge.curve() {
+                    EdgeCurve::Circle(circle) => Some(circle.normal()),
+                    EdgeCurve::NurbsCurve(spline) => {
+                        match brepkit_geometry::convert::recognize_curve(spline, tol.linear * 100.0)
+                        {
+                            brepkit_geometry::convert::RecognizedCurve::Circle {
+                                normal, ..
+                            } => Some(normal),
+                            _ => None,
+                        }
+                    }
+                    EdgeCurve::Line | EdgeCurve::Ellipse(_) => None,
+                };
                 edge.start() == edge.end()
-                    && matches!(edge.curve(), EdgeCurve::Circle(circle)
-                        if !swept_along_normal(circle.normal(), offset))
+                    && normal.is_some_and(|normal| !swept_along_normal(normal, offset))
             })
         });
     let oriented = if oblique_circle {
-        split_closed_wire_exact(topo, &original_oriented, tol.linear)?
+        let as_circles = original_oriented
+            .iter()
+            .map(|&oe| closed_spline_as_circle(topo, oe, tol.linear))
+            .collect::<Result<Vec<_>, _>>()?;
+        split_closed_wire_exact(topo, &as_circles, tol.linear)?
     } else {
         maybe_split_closed_wire_with(
             topo,
@@ -528,6 +544,46 @@ fn arc_wall_reversed(
     let inside = curve.evaluate_with_endpoints(f64::midpoint(t0, t1), curve_start, curve_end);
     let chord_mid = p0 + edge_dir * 0.5;
     (inside - chord_mid).dot(expected) < 0.0
+}
+
+/// A closed spline recognized as a circle, as an edge on that circle from the
+/// same vertex, running the same way round. Its vertex need not lie on the
+/// spline's own seam, where cutting the spline by its parameter would start.
+fn closed_spline_as_circle(
+    topo: &mut Topology,
+    oe: OrientedEdge,
+    tol: f64,
+) -> Result<OrientedEdge, crate::OperationsError> {
+    let edge = topo.edge(oe.edge())?;
+    let vertex = edge.start();
+    let EdgeCurve::NurbsCurve(spline) = edge.curve() else {
+        return Ok(oe);
+    };
+    if vertex != edge.end() {
+        return Ok(oe);
+    }
+    let brepkit_geometry::convert::RecognizedCurve::Circle {
+        center,
+        normal,
+        radius,
+    } = brepkit_geometry::convert::recognize_curve(spline, tol * 100.0)
+    else {
+        return Ok(oe);
+    };
+    let (d0, d1) = spline.domain();
+    let (from, on) = (
+        spline.evaluate(d0) - center,
+        spline.evaluate((d1 - d0).mul_add(0.25, d0)) - center,
+    );
+    let normal = if from.cross(on).dot(normal) < 0.0 {
+        -normal
+    } else {
+        normal
+    };
+    let circle = brepkit_math::curves::Circle3D::new(center, normal, radius)
+        .map_err(crate::OperationsError::Math)?;
+    let edge = topo.add_edge(Edge::new(vertex, vertex, EdgeCurve::Circle(circle)));
+    Ok(OrientedEdge::new(edge, oe.is_forward()))
 }
 
 /// Whether a circle with this normal sweeps a circular cylinder along `offset`.

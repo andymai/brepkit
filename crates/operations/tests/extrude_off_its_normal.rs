@@ -365,6 +365,38 @@ mod tests {
         }
     }
 
+    /// A closed circular spline, as a rim or a hole, cut into pieces off its normal
+    /// just as a closed circle is, its vertex on the spline's seam or off it.
+    #[test]
+    fn a_closed_circular_spline_sweeps_an_oblique_wall() {
+        let along = Vec3::new(1.0, 0.0, 1.0).normalize().unwrap();
+        let spline = |center: Point3, r: f64| {
+            let circle = Circle3D::new(center, UP, r).unwrap();
+            brepkit_geometry::convert::circle_to_nurbs(&circle, 0.0, std::f64::consts::TAU).unwrap()
+        };
+        for off_seam in [false, true] {
+            let mut topo = Topology::new();
+            let hole_center = at(1.0, 0.5);
+            let hole_spline = spline(hole_center, 1.5);
+            let (d0, d1) = hole_spline.domain();
+            let hole_at = if off_seam {
+                hole_spline.evaluate(d0 + 0.3 * (d1 - d0))
+            } else {
+                hole_spline.evaluate(d0)
+            };
+            let v = topo.add_vertex(Vertex::new(hole_at, 1e-7));
+            let bore = topo.add_edge(Edge::new(v, v, EdgeCurve::NurbsCurve(hole_spline)));
+            let hole = loop_of(&mut topo, vec![bore]);
+            let rim = closed_circle(&mut topo, at(0.0, 0.0), 5.0);
+            let outer = loop_of(&mut topo, vec![rim]);
+            let face = plane_face(&mut topo, outer, vec![hole]);
+            let solid = extrude(&mut topo, face, along, 10.0).unwrap();
+            let area = PI * (25.0 - 2.25);
+            let what = format!("hole's vertex off its seam: {off_seam}");
+            assert_prism(&topo, solid, area * along.z() * 10.0, &what);
+        }
+    }
+
     /// A slanted body goes on to booleans: a box across it takes off what the
     /// body holds in that height.
     #[test]
