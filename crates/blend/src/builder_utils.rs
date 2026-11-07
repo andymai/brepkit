@@ -39,6 +39,60 @@ pub fn cross_section_curve(
     Some(EdgeCurve::Circle(circle))
 }
 
+/// The arc of a cylinder's section by a plane (outward `normal`, offset
+/// `d`) from `a` to `b`, the shorter way round: an ellipse, or a circle where
+/// the plane stands square to the axis. `None` where the plane runs along
+/// the axis or the points do not lie on the section.
+#[must_use]
+pub fn cylinder_plane_arc(
+    cylinder: &brepkit_math::surfaces::CylindricalSurface,
+    normal: brepkit_math::vec::Vec3,
+    d: f64,
+    a: Point3,
+    b: Point3,
+) -> Option<EdgeCurve> {
+    let axis = cylinder.axis();
+    let cosine = normal.dot(axis);
+    if cosine.abs() <= 1e-9 {
+        return None;
+    }
+    let origin = cylinder.origin();
+    let to = |p: Point3| brepkit_math::vec::Vec3::new(p.x(), p.y(), p.z());
+    let centre = origin + axis * ((d - normal.dot(to(origin))) / cosine);
+    let radius = cylinder.radius();
+    // The arc runs counter-clockwise about its normal from `a` to `b`.
+    let turn = (a - centre).cross(b - centre);
+    let plane_normal = if turn.dot(normal) >= 0.0 {
+        normal
+    } else {
+        -normal
+    };
+    let curve = if cosine.abs() >= 1.0 - 1e-12 {
+        EdgeCurve::Circle(brepkit_math::curves::Circle3D::new(centre, plane_normal, radius).ok()?)
+    } else {
+        // The minor axis lies square to the axis, the major one along the
+        // axis's slope in the plane.
+        let minor = normal.cross(axis).normalize().ok()?;
+        let major = minor.cross(normal).normalize().ok()?;
+        EdgeCurve::Ellipse(
+            brepkit_math::curves::Ellipse3D::new_with_ref(
+                centre,
+                plane_normal,
+                radius / cosine.abs(),
+                radius,
+                major,
+            )
+            .ok()?,
+        )
+    };
+    let tol = 1e-6 * radius.max(1.0);
+    let on = |p: Point3| {
+        let (t0, _) = curve.domain_with_endpoints(p, p);
+        (curve.evaluate_with_endpoints(t0, p, p) - p).length() <= tol
+    };
+    (on(a) && on(b)).then_some(curve)
+}
+
 /// Create the blend face for a periodic (closed rim) stripe.
 ///
 /// The stripe is one full-revolution roll: both contacts are closed edges
