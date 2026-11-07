@@ -894,33 +894,12 @@ fn boolean_inner(
                             .is_none_or(|cls_b| {
                                 all_component_centers_outside(topo, result, &pieces, cls_b, tol)
                             });
-                    // Touching pieces share no volume: a point inside each,
-                    // and a point just inside each of its faces, lies outside
-                    // every other. The builder splits faces along every
-                    // section, so a face of a piece overlapping another lies
-                    // wholly inside it; a builder that kept both copies of
-                    // coincident solids leaves pieces that fail the first.
-                    let meshes: Vec<Option<ComponentMesh>> =
-                        pieces.iter().map(|p| ComponentMesh::new(topo, p)).collect();
-                    let only_touch = pieces.iter().enumerate().all(|(i, piece)| {
-                        let Some(own) = meshes[i].as_ref() else {
-                            return false;
-                        };
-                        let outside_others = |p: Point3| {
-                            meshes.iter().enumerate().all(|(j, mesh)| {
-                                i == j || mesh.as_ref().is_some_and(|m| !m.holds(p))
-                            })
-                        };
-                        component_interior_point(topo, piece).is_some_and(outside_others)
-                            && face_witnesses(own)
-                                .is_some_and(|ws| ws.into_iter().all(outside_others))
-                    });
                     if pieces.len() >= 2
-                        && only_touch
                         && euler_balanced(euler, holes, count(pieces.len()))
                         && components_are_disjoint_pieces(topo, &pieces)
                         && cut_safe
                         && is_closed_manifold(topo, result)?
+                        && pieces_only_touch(topo, &pieces)
                         && validate_boolean_result(topo, result).is_ok()
                     {
                         log::info!(
@@ -3642,13 +3621,38 @@ impl ComponentMesh {
     }
 }
 
-/// A point just inside a component off each of its faces: the centroid of
-/// the face's largest mesh triangle, stepped along the triangle's normal to
-/// the side the component holds. `None` when a face has no triangle or no
-/// such point.
+/// Whether `pieces` share no volume and no face: each piece's interior point,
+/// and the points either side of each of its faces, lie outside every other
+/// piece. The builder splits faces along every section, so a face of a piece
+/// overlapping another lies wholly inside it, and a face pressed against
+/// another piece has that piece on its outer side; an edge or vertex contact
+/// has neither. A builder that kept both copies of coincident solids leaves
+/// pieces that fail the interior point.
+fn pieces_only_touch(topo: &Topology, pieces: &[Vec<FaceId>]) -> bool {
+    let meshes: Vec<Option<ComponentMesh>> =
+        pieces.iter().map(|p| ComponentMesh::new(topo, p)).collect();
+    pieces.iter().enumerate().all(|(i, piece)| {
+        let Some(own) = meshes[i].as_ref() else {
+            return false;
+        };
+        let outside_others = |p: Point3| {
+            meshes
+                .iter()
+                .enumerate()
+                .all(|(j, mesh)| i == j || mesh.as_ref().is_some_and(|m| !m.holds(p)))
+        };
+        component_interior_point(topo, piece).is_some_and(outside_others)
+            && face_witnesses(own).is_some_and(|ws| ws.into_iter().all(outside_others))
+    })
+}
+
+/// A pair of points off each of a component's faces, the first just inside
+/// the component and the second as far outside: the centroid of the face's
+/// largest mesh triangle, stepped along the triangle's normal to each side.
+/// `None` when a face has no triangle or no step lands in the component.
 fn face_witnesses(mesh: &ComponentMesh) -> Option<Vec<Point3>> {
     let extent = (mesh.max - mesh.min).length();
-    let mut out = Vec::with_capacity(mesh.faces.len());
+    let mut out = Vec::with_capacity(2 * mesh.faces.len());
     for face in &mesh.faces {
         let [a, b, c] = *mesh.triangles[face.clone()].iter().max_by(|p, q| {
             let area = |[a, b, c]: &[Point3; 3]| (*b - *a).cross(*c - *a).length();
@@ -3660,13 +3664,18 @@ fn face_witnesses(mesh: &ComponentMesh) -> Option<Vec<Point3>> {
             (a.y() + b.y() + c.y()) / 3.0,
             (a.z() + b.z() + c.z()) / 3.0,
         );
-        let witness = [1e-6, 1e-5, 1e-4, 1e-3]
+        let (inside, outside) = [1e-6, 1e-5, 1e-4, 1e-3]
             .into_iter()
             .map(|f| f * extent)
             .filter(|&step| step >= 1e-7)
-            .flat_map(|step| [centroid + normal * step, centroid - normal * step])
-            .find(|&p| mesh.holds(p))?;
-        out.push(witness);
+            .flat_map(|step| {
+                [
+                    (centroid + normal * step, centroid - normal * step),
+                    (centroid - normal * step, centroid + normal * step),
+                ]
+            })
+            .find(|&(inside, _)| mesh.holds(inside))?;
+        out.extend([inside, outside]);
     }
     Some(out)
 }

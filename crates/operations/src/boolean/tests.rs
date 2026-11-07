@@ -8494,6 +8494,35 @@ fn touching_blocks_fuse_exactly_into_separate_pieces() {
     }
 }
 
+/// Pieces pressed together across a face share no volume, but they do not
+/// only touch: kept apart, the wall between them would be doubled. Each
+/// piece's point just inside a face reads clear of the other, so only the
+/// point just outside the shared face tells them from pieces meeting along an
+/// edge or at a corner.
+#[test]
+fn pieces_sharing_a_face_do_not_only_touch() {
+    for (shift, touching) in [
+        ((1.0, 0.0, 0.0), false),
+        ((1.0, 1.0, 0.0), true),
+        ((1.0, 1.0, 1.0), true),
+    ] {
+        let mut topo = Topology::new();
+        let a = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+        let b = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+        let m = brepkit_math::mat::Mat4::translation(shift.0, shift.1, shift.2);
+        crate::transform::transform_solid(&mut topo, b, &m).unwrap();
+        let pieces = [
+            brepkit_topology::explorer::solid_faces(&topo, a).unwrap(),
+            brepkit_topology::explorer::solid_faces(&topo, b).unwrap(),
+        ];
+        assert_eq!(
+            super::pieces_only_touch(&topo, &pieces),
+            touching,
+            "{shift:?}"
+        );
+    }
+}
+
 /// A solid in two pieces that fill two pockets in a block's top: every
 /// vertex and edge of the pieces lies on the block's boundary, and the
 /// pieces' common centre lies in the block's material, so no containment
