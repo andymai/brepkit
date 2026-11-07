@@ -171,7 +171,7 @@ mod tests {
     }
 
     /// A gap in the chain is refused rather than crossed by a segment nobody
-    /// asked for, and neither are edges out of order taken as given.
+    /// asked for.
     #[test]
     fn a_broken_chain_is_refused() {
         let mut topo = Topology::new();
