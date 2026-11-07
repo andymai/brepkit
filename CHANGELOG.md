@@ -1,5 +1,20 @@
 # Changelog
 
+## [4.6.27](https://github.com/andymai/brepkit/compare/v4.6.26...v4.6.27) (2026-11-07)
+
+
+### Bug Fixes
+
+* **blend:** a cap notch splits a B-spline rim ([#2303](https://github.com/andymai/brepkit/issues/2303)) ([601c65c](https://github.com/andymai/brepkit/commit/601c65cbb840add70bb678556aef8824b2d828f2))
+* **blend:** a closed fillet band's seam is its round's arc, not a chord ([#2296](https://github.com/andymai/brepkit/issues/2296)) ([3a00729](https://github.com/andymai/brepkit/commit/3a007296303557da5d24f22a2ba064dc1bc59dbd))
+* **blend:** a radius at a mitre's limit to a file's digits builds ([#2304](https://github.com/andymai/brepkit/issues/2304)) ([c314845](https://github.com/andymai/brepkit/commit/c314845b6ea6b8f1cacc963086ebf3ccb76d2b55))
+* **blend:** mitre square corners read from files; one section where fillets run on round ([#2298](https://github.com/andymai/brepkit/issues/2298)) ([869ea38](https://github.com/andymai/brepkit/commit/869ea38075617d61388e0d1c765883be272cbed3))
+* **blend:** one vertex for contact ends a file's kink apart ([#2302](https://github.com/andymai/brepkit/issues/2302)) ([8e270ea](https://github.com/andymai/brepkit/commit/8e270ea3377c642f8b789944a01c76b141c3d8ac))
+* **blend:** refuse a closed contact on a plane face that a hole crosses ([#2297](https://github.com/andymai/brepkit/issues/2297)) ([6ba576f](https://github.com/andymai/brepkit/commit/6ba576fd924d629afbc46bf34dfdf5326d1a259f))
+* **blend:** set back trihedral corners whose stripes differ in length ([#2301](https://github.com/andymai/brepkit/issues/2301)) ([ab645b5](https://github.com/andymai/brepkit/commit/ab645b51c5a54923f439978e21e2c2d5edcc29b6))
+* **operations:** fuse solids that only touch into separate pieces ([#2289](https://github.com/andymai/brepkit/issues/2289)) ([158db58](https://github.com/andymai/brepkit/commit/158db58b62fcbe1e4b4706766abc9449a958d0ce))
+* **topology:** with no seed, a shell's faces vote on its boundary-walk convention ([#2299](https://github.com/andymai/brepkit/issues/2299)) ([adbee8d](https://github.com/andymai/brepkit/commit/adbee8db68755660eaebad21d4730735cecc0525))
+
 ## [4.6.26](https://github.com/andymai/brepkit/compare/v4.6.25...v4.6.26) (2026-11-03)
 
 
