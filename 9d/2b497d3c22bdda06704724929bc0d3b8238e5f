@@ -1,0 +1,59 @@
+crates/operations/tests/fillet_tangent_kink.rs
+  s_649261a24df31b::t_85bc059820a4a8 1-169
+crates/operations/src/boolean/tests.rs
+  s_649261a24df31b::t_85bc059820a4a8 8436-8438,8448-8452,8454,8457-8526,8528
+crates/operations/tests/fillet_slab_outlines.rs
+  s_649261a24df31b::t_85bc059820a4a8 1-181
+crates/blend/src/corner.rs
+  s_649261a24df31b::t_85bc059820a4a8 70-90,468-470,493-572,583-588,599,817-822,849,851,854,865-871,899,921,979,1178-1180,1309-1310,2933,5147-5149,5151,5164-5172,5179-5191,5263-5264,5317-5321,5437-5479
+  s_649261a24df31b::t_15b9db4c64dad6 5192,5194-5260,5480
+  s_649261a24df31b::t_ed45ae05504f12 5193,5481
+crates/operations/src/boolean/assembly.rs
+  s_649261a24df31b::t_85bc059820a4a8 932-1094
+crates/operations/tests/fillet_long_box_corners.rs
+  s_649261a24df31b::t_85bc059820a4a8 1-65
+crates/operations/src/boolean/mod.rs
+  s_649261a24df31b::t_85bc059820a4a8 878-933,2976-3000,3012-3013,3022-3023,3589-3689
+  s_649261a24df31b::t_968a6482895e3c 3690
+crates/operations/tests/regress_fillet_unset_back_trihedral_corner.rs
+  s_649261a24df31b::t_85bc059820a4a8 1,3-15,19-20,23-24,124-126,128,134,143-150,156-160,162-163,168-171
+crates/topology/src/orientation.rs
+  s_649261a24df31b::t_85bc059820a4a8 187-188,208-209,317-321,324-326,329-348,371-448
+  s_649261a24df31b::t_1802f864944cc3 449
+crates/blend/src/trimmer.rs
+  s_649261a24df31b::t_85bc059820a4a8 62-69,1297-1303,1511-1517,1521,1526-1556,1560-1562,1724,1730-1735,2116-2352,2362,4135-4279
+  s_649261a24df31b::t_a26252b7224459 4280
+crates/blend/src/builder_utils.rs
+  s_649261a24df31b::t_85bc059820a4a8 42-90,140-146,548-549,589-591,593,595,1127-1200
+  s_649261a24df31b::t_90b7e049add5e8 1201
+crates/blend/src/fillet_builder.rs
+  s_649261a24df31b::t_85bc059820a4a8 579-611,618,2271-2277,2390-2392,2421,2433-2439,2445,2453-2461
+crates/operations/tests/fillet_spline_cap_corners.rs
+  s_649261a24df31b::t_85bc059820a4a8 1-177
+crates/operations/src/validate/tests.rs
+  s_649261a24df31b::t_85bc059820a4a8 558-560
+crates/operations/tests/fillet_round_rims.rs
+  s_649261a24df31b::t_85bc059820a4a8 18,29,82,92-126,513-556
+crates/blend/src/spherical_triangle.rs
+  s_649261a24df31b::t_85bc059820a4a8 39-40,108-109,609
+crates/operations/src/heal.rs
+  s_649261a24df31b::t_85bc059820a4a8 1258-1261,1263,1293-1294,1296,1324-1325
+crates/operations/tests/regress_two_edge_exact_limit.rs
+  s_649261a24df31b::t_85bc059820a4a8 359-400
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9d2b497d3c22bdda06704724929bc0d3b8238e5f",
+  "prompts": {},
+  "sessions": {
+    "s_649261a24df31b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d8bbbba4-0431-4f6a-a622-e632a6659779",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
