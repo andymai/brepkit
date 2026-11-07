@@ -74,6 +74,7 @@ fn point_in_uv_boundary(
     hit_u: f64,
     hit_v: f64,
     uv_boundary: &[(f64, f64)],
+    u_periodic: bool,
     v_periodic: bool,
 ) -> bool {
     let bounds = |pick: fn(&(f64, f64)) -> f64| {
@@ -95,21 +96,29 @@ fn point_in_uv_boundary(
     // slantwise spans more than a period, with its two ends each a piece of
     // the same turn, so the copy nearest its centre can miss it while another
     // lies inside.
-    let copies = |hit: f64, lo: f64, hi: f64| {
+    let copies = |hit: f64, lo: f64, hi: f64| -> Vec<f64> {
         let nearest = unwrap_angle((lo + hi) * 0.5, hit);
         let reach = ((hi - lo) * 0.5 / TAU).ceil() as i32;
         (-reach..=reach)
-            .map(move |k| nearest + f64::from(k) * TAU)
-            .filter(move |x| (lo..=hi).contains(x))
+            .map(|k| nearest + f64::from(k) * TAU)
+            .filter(|x| (lo..=hi).contains(x))
+            .collect()
     };
-    let in_v = |hu: f64| {
-        if v_periodic {
-            copies(hit_v, v_min, v_max).any(|hv| point_in_polygon(Point2::new(hu, hv), &poly))
-        } else {
-            point_in_polygon(Point2::new(hu, hit_v), &poly)
-        }
+    // A NURBS face's `u` is a raw knot value, with no turn to add.
+    let us = if u_periodic {
+        copies(hit_u, u_min, u_max)
+    } else {
+        vec![hit_u]
     };
-    copies(hit_u, u_min, u_max).any(in_v)
+    let vs = if v_periodic {
+        copies(hit_v, v_min, v_max)
+    } else {
+        vec![hit_v]
+    };
+    us.iter().any(|&u| {
+        vs.iter()
+            .any(|&v| point_in_polygon(Point2::new(u, v), &poly))
+    })
 }
 
 /// Compute the normal of a polygon via Newell's method.
@@ -242,6 +251,7 @@ fn hit_in_inner_wire_uv<F>(
     hit_u: f64,
     hit_v: f64,
     project: &F,
+    u_periodic: bool,
     v_periodic: bool,
 ) -> Result<bool, CheckError>
 where
@@ -253,7 +263,7 @@ where
             continue;
         }
         let uv_hole = build_uv_boundary(&hole, project, v_periodic);
-        if point_in_uv_boundary(hit_u, hit_v, &uv_hole, v_periodic) {
+        if point_in_uv_boundary(hit_u, hit_v, &uv_hole, u_periodic, v_periodic) {
             return Ok(true);
         }
     }
@@ -399,9 +409,9 @@ where
 {
     let in_outer = match region {
         UvRegion::Whole => true,
-        UvRegion::Bounded(boundary) => point_in_uv_boundary(u, v, boundary, v_periodic),
+        UvRegion::Bounded(boundary) => point_in_uv_boundary(u, v, boundary, true, v_periodic),
     };
-    Ok(in_outer && !hit_in_inner_wire_uv(topo, face_id, u, v, project, v_periodic)?)
+    Ok(in_outer && !hit_in_inner_wire_uv(topo, face_id, u, v, project, true, v_periodic)?)
 }
 
 /// A `(u, v)` loop's enclosed area, by the shoelace sum.
@@ -511,8 +521,9 @@ pub fn face_contains_each(
                 .iter()
                 .map(|&p| {
                     let (u, v) = project(p);
-                    let in_outer = whole || point_in_uv_boundary(u, v, &boundary, false);
-                    Ok(in_outer && !hit_in_inner_wire_uv(topo, face_id, u, v, &project, false)?)
+                    let in_outer = whole || point_in_uv_boundary(u, v, &boundary, false, false);
+                    Ok(in_outer
+                        && !hit_in_inner_wire_uv(topo, face_id, u, v, &project, false, false)?)
                 })
                 .collect()
         }

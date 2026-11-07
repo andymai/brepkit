@@ -23,22 +23,26 @@ mod tests {
     use brepkit_topology::Topology;
     use brepkit_topology::solid::SolidId;
 
+    /// The turned pose.
+    fn turn() -> Mat4 {
+        Mat4::translation(1.0, -2.0, 0.5) * Mat4::rotation_x(0.6) * Mat4::rotation_z(0.4)
+    }
+
+    /// A point of the mirror plane, and its normal.
+    fn mirror_plane() -> (Point3, Vec3) {
+        (Point3::new(0.3, 0.0, 0.0), Vec3::new(1.0, 0.3, 0.2))
+    }
+
     fn posed(topo: &mut Topology, s: SolidId, pose: &str) -> SolidId {
         match pose {
             "turned" => {
-                let m = Mat4::translation(1.0, -2.0, 0.5)
-                    * Mat4::rotation_x(0.6)
-                    * Mat4::rotation_z(0.4);
-                transform_solid(topo, s, &m).unwrap();
+                transform_solid(topo, s, &turn()).unwrap();
                 s
             }
-            "mirrored" => mirror(
-                topo,
-                s,
-                Point3::new(0.3, 0.0, 0.0),
-                Vec3::new(1.0, 0.3, 0.2),
-            )
-            .unwrap(),
+            "mirrored" => {
+                let (origin, normal) = mirror_plane();
+                mirror(topo, s, origin, normal).unwrap()
+            }
             _ => s,
         }
     }
@@ -55,15 +59,11 @@ mod tests {
     /// An upright point where `posed` puts it.
     fn model_point(p: Point3, pose: &str) -> Point3 {
         match pose {
-            "turned" => {
-                let m = Mat4::translation(1.0, -2.0, 0.5)
-                    * Mat4::rotation_x(0.6)
-                    * Mat4::rotation_z(0.4);
-                m.mul_point(p)
-            }
+            "turned" => turn().mul_point(p),
             "mirrored" => {
-                let normal = Vec3::new(1.0, 0.3, 0.2).normalize().unwrap();
-                p - normal * (2.0 * normal.dot(p - Point3::new(0.3, 0.0, 0.0)))
+                let (origin, normal) = mirror_plane();
+                let normal = normal.normalize().unwrap();
+                p - normal * (2.0 * normal.dot(p - origin))
             }
             _ => p,
         }
@@ -73,28 +73,10 @@ mod tests {
     /// the normal pointing away from the half-space below it, where `posed`
     /// puts them.
     fn posed_plane(tilt: f64, lift: f64, pose: &str) -> (Point3, Vec3) {
-        let (on_plane, along) = (
-            Point3::new(0.0, 0.0, lift),
-            Vec3::new(tilt.sin(), 0.0, tilt.cos()),
-        );
-        match pose {
-            "turned" => {
-                let m = Mat4::translation(1.0, -2.0, 0.5)
-                    * Mat4::rotation_x(0.6)
-                    * Mat4::rotation_z(0.4);
-                let at = m.mul_point(on_plane);
-                (at, m.mul_point(on_plane + along) - at)
-            }
-            "mirrored" => {
-                let normal = Vec3::new(1.0, 0.3, 0.2).normalize().unwrap();
-                let origin = Point3::new(0.3, 0.0, 0.0);
-                (
-                    on_plane - normal * (2.0 * normal.dot(on_plane - origin)),
-                    along - normal * (2.0 * normal.dot(along)),
-                )
-            }
-            _ => (on_plane, along),
-        }
+        let on_plane = Point3::new(0.0, 0.0, lift);
+        let tip = on_plane + Vec3::new(tilt.sin(), 0.0, tilt.cos());
+        let at = model_point(on_plane, pose);
+        (at, model_point(tip, pose) - at)
     }
 
     #[test]

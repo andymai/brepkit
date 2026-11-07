@@ -2693,6 +2693,8 @@ fn split_torus_by_tube_loops(
 struct RingLoop {
     edges: Vec<OrientedPCurveEdge>,
     walk: Vec<(f64, f64)>,
+    /// How far the loop can stray in `v` from the walk's chords.
+    sag: f64,
 }
 
 impl RingLoop {
@@ -2716,7 +2718,7 @@ impl RingLoop {
                 }
                 curve => curve.domain_with_endpoints(from, to),
             };
-            let n = 32_u32;
+            let n = 128_u32;
             let mut pts: Vec<Point3> = (0..=n)
                 .map(|k| {
                     e.curve_3d.evaluate_with_endpoints(
@@ -2754,7 +2756,12 @@ impl RingLoop {
         if walk.windows(2).any(|w| (w[1].0 - w[0].0) * turn < -1e-9) {
             return None;
         }
-        Some(Self { edges, walk })
+        // A chord strays from its curve by an eighth of the second difference.
+        let sag = walk
+            .windows(3)
+            .map(|w| (w[0].1 - 2.0 * w[1].1 + w[2].1).abs() / 8.0)
+            .fold(0.0, f64::max);
+        Some(Self { edges, walk, sag })
     }
 
     /// Whether it runs the way `u` grows.
@@ -2810,30 +2817,31 @@ fn ring_seam_inside(
     span: f64,
 ) -> bool {
     use std::f64::consts::TAU;
-    let breaks = first.walk.iter().chain(&next.walk).filter_map(|&(w, _)| {
-        let d = if du > 0.0 {
-            (w - ua).rem_euclid(TAU)
-        } else {
-            (ua - w).rem_euclid(TAU)
-        };
-        (d > 1e-7 && d < du.abs() - 1e-7).then(|| d / du.abs())
-    });
+    // The seam can pass each angle of the walks more than once.
+    let turns = (du.abs() / TAU).ceil() as u32;
+    let breaks = first
+        .walk
+        .iter()
+        .chain(&next.walk)
+        .flat_map(|&(w, _)| {
+            let d = if du > 0.0 {
+                (w - ua).rem_euclid(TAU)
+            } else {
+                (ua - w).rem_euclid(TAU)
+            };
+            (0..turns).map(move |k| d + f64::from(k) * TAU)
+        })
+        .filter(|&d| d > 1e-7 && d < du.abs() - 1e-7)
+        .map(|d| d / du.abs());
+    let margin = first.sag + next.sag + 1e-9;
     (1..16).map(|k| f64::from(k) / 16.0).chain(breaks).all(|t| {
         let (u, v) = (du.mul_add(t, ua), span.mul_add(t, va));
         let off = (v - first.v_at(u)).rem_euclid(TAU);
         let width = (next.v_at(u) - first.v_at(u)).rem_euclid(TAU);
-        off > 1e-9 && off < width - 1e-9
+        off > margin && off < width - margin
     })
 }
 
-/// Split a whole torus into bands around the tube at closed chains of
-/// sections that each wind once around the ring and not around the tube (a
-/// plane tilted across the torus's hole, shallower than the tube's
-/// tangent, leaves two). Each band runs up a seam from a vertex of one loop
-/// to a vertex of the next, back along that loop, down the seam and along
-/// the first. The seam is a meridian arc where the two vertices share a ring
-/// angle, else the curve straight between them in `(u, v)`. `None`, for the
-/// general splitter, where a loop winds neither angle or two loops touch.
 /// A cubic through a seam `uv(t)` on a torus, `t` running from 0 to 1 and its
 /// ends held at `from` and `to`, sampled finer until it stays on the torus to
 /// `tol` between its samples, and those samples in `(u, v)`. `None` when no
@@ -2874,6 +2882,14 @@ fn fit_ring_seam(
     None
 }
 
+/// Split a whole torus into bands around the tube at closed chains of
+/// sections that each wind once around the ring and not around the tube (a
+/// plane tilted across the torus's hole, shallower than the tube's
+/// tangent, leaves two). Each band runs up a seam from a vertex of one loop
+/// to a vertex of the next, back along that loop, down the seam and along
+/// the first. The seam is a meridian arc where the two vertices share a ring
+/// angle, else the curve straight between them in `(u, v)`. `None`, for the
+/// general splitter, where a loop winds neither angle or two loops touch.
 pub(super) fn split_torus_by_ring_loops(
     surface: &FaceSurface,
     boundary_edges: &[OrientedPCurveEdge],
@@ -2905,6 +2921,17 @@ pub(super) fn split_torus_by_ring_loops(
     }
     if loops.len() < 2 {
         return None;
+    }
+    // Loops touching at a vertex leave a band pinched there, which no seam can
+    // cross, wherever the width probes below happen to read.
+    for (i, a) in loops.iter().enumerate() {
+        for b in &loops[i + 1..] {
+            for (_, p) in a.vertices() {
+                if b.vertices().any(|(_, q)| (p - q).length() <= close_tol) {
+                    return None;
+                }
+            }
+        }
     }
     // Order the loops around the tube along one meridian.
     let order = (0..8_u32).find_map(|j| {
