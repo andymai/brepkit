@@ -177,6 +177,7 @@ Quick reference — find the right file for any task:
 | Fillet builder (orchestration) | `fillet_builder.rs` |
 | Chamfer builder (orchestration) | `chamfer_builder.rs` |
 | Vertex blend / corner solver | `corner.rs` |
+| Corner set back along its rounds (patches and surgery) | `setback_corner.rs` |
 | Face trimming along contact curves | `trimmer.rs` |
 | Shared builder utilities | `builder_utils.rs` |
 

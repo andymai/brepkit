@@ -18,6 +18,7 @@ pub mod fillet_plan;
 pub(crate) mod g1_chain;
 pub mod radius_law;
 pub(crate) mod section;
+pub mod setback_corner;
 pub(crate) mod signed_volume;
 pub(crate) mod spherical_triangle;
 pub mod spine;
