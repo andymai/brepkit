@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794056244736,
+  "lastUpdate": 1794056609097,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -65447,6 +65447,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 27979908,
             "range": "± 265569",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "3d8b02fd45dca653db2782e6da9d09933ca9dc36",
+          "message": "fix(operations): refuse touching pieces pressed together across a face (#2307)\n\nToday the touching-pieces gate from #2289 can't tell two pieces meeting\nalong an edge from two pieces pressed together across a face. With this\nchange, pieces pressed together across a face are refused, so a fuse\nthat left both coincident faces in place would take the mesh fallback\nrather than keep a doubled internal wall. I haven't found a boolean that\nreaches this today, so nothing a user sees changes yet: it closes the\nquestion left on #2289's review.\n\n## Change\n\n`boolean/mod.rs`:\n\n- The gate's witnesses step just inside each face, which proves the\npieces share no volume. A point just outside each face now has to lie\noutside every other piece too. An edge or vertex contact passes that,\nand a shared face fails it.\n- The check moves to `pieces_only_touch`, and the cheap conditions\n(Euler balance, disjoint pieces, closed manifold) run first, so a result\nabout to be refused isn't meshed finely.\n\n## Tests\n\n`pieces_sharing_a_face_do_not_only_touch` calls the check on two unit\nboxes: sharing a face is refused, and touching along an edge or at a\ncorner is accepted. With the outside point removed, the shared-face case\nreads as touching and the test fails.\n\n## Verification\n\nPassing locally: the three touching-pieces tests in `boolean/tests.rs`.\nThe pose sweep and truth audit outputs are identical to `main`'s.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRefuses pieces pressed together across a face in the touching-pieces\ngate, so a fuse with coincident faces uses the mesh fallback instead of\nkeeping a doubled internal wall.\n\n- Face witnesses now check points just inside, just outside, and beyond\nthe mesh sag; edge and vertex contacts pass, while shared faces fail.\n- Cheap checks run before meshing, so results that fail the gate avoid\nfine meshing.\n- No boolean reaches this case today, so user behavior is unchanged.\n\n<sup>Written for commit af7bd254c539faf8f87556bc3009c6aa11342d32.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2307?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2307?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2307&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-11-07T05:01:01-08:00",
+          "tree_id": "3db6c0e6c5a426b596d956e9ef1ec10562519058",
+          "url": "https://github.com/andymai/brepkit/commit/3d8b02fd45dca653db2782e6da9d09933ca9dc36"
+        },
+        "date": 1794056603153,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 589057,
+            "range": "± 17434",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 638963,
+            "range": "± 32240",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 7500,
+            "range": "± 16",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 389990,
+            "range": "± 5754",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 16837861,
+            "range": "± 624576",
             "unit": "ns/iter"
           }
         ]
