@@ -2378,7 +2378,7 @@ fn terminal_cap_is_notchable(
     // The corner sits on the cap's outer wire (a convex fillet) or on one of
     // its holes (a concave one ending on a cup's rim); the notch replaces it
     // on whichever wire holds it.
-    let mut corner_edges: Vec<(Point3, Point3, brepkit_topology::edge::EdgeCurve)> = Vec::new();
+    let mut corner_edges: Vec<(Point3, Point3, &brepkit_topology::edge::EdgeCurve)> = Vec::new();
     let wires = std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied());
     for oriented in wires
         .filter_map(|wire| topo.wire(wire).ok())
@@ -2402,7 +2402,7 @@ fn terminal_cap_is_notchable(
         let (Ok(a), Ok(b)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) else {
             return Ok(false);
         };
-        corner_edges.push((a.point(), b.point(), edge.curve().clone()));
+        corner_edges.push((a.point(), b.point(), edge.curve()));
     }
     if corner_edges.len() != 2 {
         return Ok(false);
@@ -2410,8 +2410,7 @@ fn terminal_cap_is_notchable(
     // Both contacts must end on those corner edges, or the split lands on
     // the cap's edge while the notch can never match its corner path.
     let on_segment = |point: Point3| {
-        corner_edges.iter().any(|(a, b, curve)| {
-            let (a, b) = (*a, *b);
+        corner_edges.iter().any(|&(a, b, curve)| {
             if let brepkit_topology::edge::EdgeCurve::NurbsCurve(nurbs) = curve {
                 let (t0, t1) = curve.domain_with_endpoints(a, b);
                 let (low, high) = (t0.min(t1) - 1e-9, t0.max(t1) + 1e-9);
