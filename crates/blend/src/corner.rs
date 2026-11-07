@@ -916,23 +916,6 @@ pub fn set_back_convex_trihedral_stripes(
             })
             .collect::<Result<_, _>>()?;
 
-        // The setback ball must sit in a symmetric trihedral corner. When
-        // the incident stripes differ widely in length (e.g. a short rib
-        // edge against long runs: 90:60:10), the trims land at very
-        // different fractions and the rebuilt wall caps + corner patch do
-        // not re-close the shell within volume tolerance (measured vs the
-        // Reference-kernel oracle on the cross-one-row fixture: the equal-stripe box
-        // composes to within 0.1%, the mixed-stripe solid loses ~0.9%).
-        // Restrict setbacks to near-equal incident stripes.
-        let mut lengths: Vec<f64> = indices
-            .iter()
-            .map(|&i| original_stripes[i].spine.length())
-            .collect();
-        lengths.sort_by(f64::total_cmp);
-        if lengths.last().copied().unwrap_or(0.0) > lengths[0] * 2.0 + TOL {
-            continue;
-        }
-
         let Some(fractions) = convex_trihedral_setback(
             topo,
             junction.vertex,
@@ -1075,9 +1058,9 @@ fn convex_trihedral_setback(
         let fraction = (center - start).dot(direction) / length_squared;
         let projected = start + direction * fraction;
         // A setback trims the stripe end down to the rolling-ball center, so
-        // the center must lie on the bounded stripe centerline. Short-spine
-        // junctions (rib tops) are already excluded by the near-equal-stripe
-        // guard above, so no separate end-decile limit is needed here.
+        // the center must lie on the bounded stripe centerline. A short spine
+        // whose two ends' setbacks meet is refused when the trims are applied
+        // ("trihedral setbacks consume an entire stripe").
         if !(TOL..=1.0 - TOL).contains(&fraction) || (projected - center).length() > TOL * 100.0 {
             return Ok(None);
         }
@@ -1206,8 +1189,8 @@ fn trihedral_ball_centre(topo: &Topology, radius: f64, support_faces: &[FaceId])
 ///   stripe end down to the solved centre) reports all three centres at the
 ///   ball centre, and its contacts are the tangency points at `|contact −
 ///   centre| == radius`;
-/// - the un-set-back construction (the near-equal-stripe guard deliberately
-///   leaves the junction untrimmed) reports none of them at the centre, and
+/// - the un-set-back construction (a junction `convex_trihedral_setback`
+///   leaves untrimmed) reports none of them at the centre, and
 ///   its contacts are the vertex-plane section endpoints at `|contact −
 ///   vertex| == radius`.
 ///
@@ -5044,8 +5027,11 @@ mod tests {
         assert_all_cube_edges_consumed(15.0 - TOL * 2.0);
     }
 
+    /// Stripes of very different lengths (a short rib edge against long runs,
+    /// 90:60:10) are set back as equal ones are: the ball centre lies on
+    /// each stripe's centreline, and each end moves to it.
     #[test]
-    fn convex_trihedral_short_rib_still_skips_setback() {
+    fn convex_trihedral_short_rib_sets_back() {
         let mut topo = Topology::new();
         let solid = make_box(&mut topo, Vec3::new(90.0, 60.0, 10.0));
         let (_vertex, selected) = box_edges_at_origin(&topo, solid);
@@ -5073,18 +5059,23 @@ mod tests {
             set_back_convex_trihedral_stripes(&topo, &plan, &mut stripe_results, &solid_faces)
                 .unwrap();
 
-        assert!(
-            setback_edges.is_empty(),
-            "outer 2x gate must skip the setback"
-        );
+        assert_eq!(setback_edges.len(), 3, "every stripe is set back");
+        let centre = Point3::new(1.0, 1.0, 1.0);
         for (result, before) in stripe_results.iter().zip(centers_before) {
-            assert_eq!(result.stripe.sections[0].center, before[0]);
-            assert_eq!(result.stripe.sections[1].center, before[1]);
+            let moved: Vec<_> = (0..2)
+                .filter(|&i| result.stripe.sections[i].center != before[i])
+                .collect();
+            assert_eq!(moved.len(), 1, "one end of each stripe moves");
+            let end = result.stripe.sections[moved[0]].center;
+            assert!(
+                (end - centre).length() <= TOL * 100.0,
+                "set back to the ball centre, got {end:?}"
+            );
         }
     }
 
-    /// The un-set-back trihedral junction (the 90:60:10 corner the
-    /// near-equal-stripe guard deliberately leaves untrimmed) classifies
+    /// An un-set-back trihedral junction (the 90:60:10 corner, its stripes
+    /// left untrimmed) classifies
     /// `Some(false)` and builds its cap on the geometrically determined
     /// `r*sqrt(2)` sphere through contacts at exactly `r` from the vertex.
     /// The build-level half of this regression is
@@ -5107,15 +5098,7 @@ mod tests {
                 .unwrap();
             assert_eq!(junction.incident_contours.len(), 3);
             let indices: Vec<usize> = junction.incident_contours.clone();
-            let mut stripe_results = analytic_box_stripes(&topo, &plan, radius);
-            let solid_faces = solid_shell_faces(&topo, solid);
-            let setback_edges =
-                set_back_convex_trihedral_stripes(&topo, &plan, &mut stripe_results, &solid_faces)
-                    .unwrap();
-            assert!(
-                setback_edges.is_empty(),
-                "the 90:60:10 near-equal guard must skip the setback"
-            );
+            let stripe_results = analytic_box_stripes(&topo, &plan, radius);
             let stripes: Vec<Stripe> = stripe_results
                 .iter()
                 .map(|result| result.stripe.clone())
