@@ -570,10 +570,11 @@ fn closed_spline_as_circle(
     else {
         return Ok(oe);
     };
+    // A short step, since uneven knots can carry a long one past a half turn.
     let (d0, d1) = spline.domain();
     let (from, on) = (
         spline.evaluate(d0) - center,
-        spline.evaluate((d1 - d0).mul_add(0.25, d0)) - center,
+        spline.evaluate((d1 - d0).mul_add(1e-3, d0)) - center,
     );
     let normal = if from.cross(on).dot(normal) < 0.0 {
         -normal
