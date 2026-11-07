@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794053825836,
+  "lastUpdate": 1794053998264,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -65339,6 +65339,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 27945810,
             "range": "± 60714",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "951e265d41c9927065d2c4b4793bad2fa4ab1434",
+          "message": "test(operations): pin a box's fillet at any proportions against its closed form (#2294)\n\nPart of #2161. No behaviour changes here: #2301 landed the same fix this\nPR was opened for, removing the guard that left a box's corners\nun-set-back when its longest side was over twice its shortest. What\nremains is the coverage #2301 doesn't have, and the roadmap entries.\n\n## Tests\n\n- `crates/operations/tests/fillet_long_boxes.rs` runs 8 box proportions,\nplain and turned, against the Minkowski-sum closed form, with validity,\nwatertight meshes and 8 sphere corners. It also pins that a side too\nshort for its two balls is refused.\n- `corner.rs` pins the two conditions that now decide a corner on their\nown: `convex_trihedral_setback` keeps a corner's stripes whole when a\nfourth face passes through it, or when its ball centre lies off a\nstripe's centreline.\n\n## Roadmap\n\n- A Closed entry for the long-box fix.\n- An open row for the rest of #2161: both rims of a box with its upright\nedges sharp, a saddle edge, and an edge ending at a concave corner.\n\n## Verification\n\nPassing locally on this head: the `convex_trihedral` unit tests and\n`fillet_long_boxes`.",
+          "timestamp": "2026-11-07T04:16:47-08:00",
+          "tree_id": "7d1ad9a636362ed4a4f4fade245e3ce6bce14054",
+          "url": "https://github.com/andymai/brepkit/commit/951e265d41c9927065d2c4b4793bad2fa4ab1434"
+        },
+        "date": 1794053991507,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 857304,
+            "range": "± 525",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 917139,
+            "range": "± 1272",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10829,
+            "range": "± 10",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 543557,
+            "range": "± 2483",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 22712024,
+            "range": "± 316199",
             "unit": "ns/iter"
           }
         ]
