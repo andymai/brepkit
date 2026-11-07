@@ -3568,6 +3568,7 @@ fn planar_face_centroid(topo: &Topology, fid: FaceId) -> Option<Point3> {
 /// A component's surface, meshed once finely for its size: its triangles,
 /// each face's run of them, and the box they span.
 struct ComponentMesh {
+    deflection: f64,
     triangles: Vec<[Point3; 3]>,
     faces: Vec<std::ops::Range<usize>>,
     min: Point3,
@@ -3602,6 +3603,7 @@ impl ComponentMesh {
             (bounds.min, bounds.max)
         };
         Some(Self {
+            deflection,
             triangles,
             faces,
             min,
@@ -3631,6 +3633,14 @@ impl ComponentMesh {
 fn pieces_only_touch(topo: &Topology, pieces: &[Vec<FaceId>]) -> bool {
     let meshes: Vec<Option<ComponentMesh>> =
         pieces.iter().map(|p| ComponentMesh::new(topo, p)).collect();
+    // The other side of a curved face pressed against another piece lies in
+    // that piece only past the sag of its mesh.
+    let clear = 2.0
+        * meshes
+            .iter()
+            .flatten()
+            .map(|m| m.deflection)
+            .fold(0.0, f64::max);
     pieces.iter().enumerate().all(|(i, piece)| {
         let Some(own) = meshes[i].as_ref() else {
             return false;
@@ -3642,15 +3652,16 @@ fn pieces_only_touch(topo: &Topology, pieces: &[Vec<FaceId>]) -> bool {
                 .all(|(j, mesh)| i == j || mesh.as_ref().is_some_and(|m| !m.holds(p)))
         };
         component_interior_point(topo, piece).is_some_and(outside_others)
-            && face_witnesses(own).is_some_and(|ws| ws.into_iter().all(outside_others))
+            && face_witnesses(own, clear).is_some_and(|ws| ws.into_iter().all(outside_others))
     })
 }
 
 /// A pair of points off each of a component's faces, the first just inside
-/// the component and the second as far outside: the centroid of the face's
-/// largest mesh triangle, stepped along the triangle's normal to each side.
-/// `None` when a face has no triangle or no step lands in the component.
-fn face_witnesses(mesh: &ComponentMesh) -> Option<Vec<Point3>> {
+/// the component and the second outside it by at least `clear`: the centroid of
+/// the face's largest mesh triangle, stepped along the triangle's normal to
+/// each side. `None` when a face has no triangle or no step lands in the
+/// component.
+fn face_witnesses(mesh: &ComponentMesh, clear: f64) -> Option<Vec<Point3>> {
     let extent = (mesh.max - mesh.min).length();
     let mut out = Vec::with_capacity(2 * mesh.faces.len());
     for face in &mesh.faces {
@@ -3669,9 +3680,10 @@ fn face_witnesses(mesh: &ComponentMesh) -> Option<Vec<Point3>> {
             .map(|f| f * extent)
             .filter(|&step| step >= 1e-7)
             .flat_map(|step| {
+                let out = step.max(clear);
                 [
-                    (centroid + normal * step, centroid - normal * step),
-                    (centroid - normal * step, centroid + normal * step),
+                    (centroid + normal * step, centroid - normal * out),
+                    (centroid - normal * step, centroid + normal * out),
                 ]
             })
             .find(|&(inside, _)| mesh.holds(inside))?;

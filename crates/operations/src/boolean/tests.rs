@@ -8523,6 +8523,25 @@ fn pieces_sharing_a_face_do_not_only_touch() {
     }
 }
 
+/// A rod in the bore of a tube, pressed against it all round: the point just
+/// outside the rod's wall has to clear the sag of the tube's mesh to read as
+/// inside the tube.
+#[test]
+fn pieces_sharing_a_curved_face_do_not_only_touch() {
+    let mut topo = Topology::new();
+    let rod = crate::primitives::make_cylinder(&mut topo, 5.0, 10.0).unwrap();
+    let block = crate::primitives::make_cylinder(&mut topo, 7.0, 10.0).unwrap();
+    let bore = crate::primitives::make_cylinder(&mut topo, 5.0, 30.0).unwrap();
+    let m = brepkit_math::mat::Mat4::translation(0.0, 0.0, -10.0);
+    crate::transform::transform_solid(&mut topo, bore, &m).unwrap();
+    let tube = boolean(&mut topo, BooleanOp::Cut, block, bore).unwrap();
+    let pieces = [
+        brepkit_topology::explorer::solid_faces(&topo, rod).unwrap(),
+        brepkit_topology::explorer::solid_faces(&topo, tube).unwrap(),
+    ];
+    assert!(!super::pieces_only_touch(&topo, &pieces));
+}
+
 /// A solid in two pieces that fill two pockets in a block's top: every
 /// vertex and edge of the pieces lies on the block's boundary, and the
 /// pieces' common centre lies in the block's material, so no containment
