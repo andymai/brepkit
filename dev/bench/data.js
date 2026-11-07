@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794084434195,
+  "lastUpdate": 1794086866352,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -66797,6 +66797,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 28471078,
             "range": "± 47169",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "db5f310c8db10fe997f38319ec38317077ceb941",
+          "message": "chore(main): release 4.9.0 (#2333)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n## [4.9.0](https://github.com/andymai/brepkit/compare/v4.8.0...v4.9.0)\n(2026-11-07)\n\n\n### Features\n\n* **operations:** imprint faces and edges on a solid, and split it by\nfaces ([#2325](https://github.com/andymai/brepkit/issues/2325))\n([6c30fd7](https://github.com/andymai/brepkit/commit/6c30fd7166e88c8fa31f1c795bcd47f6ffe0a2b7))\n\n\n### Bug Fixes\n\n* **blend:** roll a ball in a pocket's inner corner\n([#2330](https://github.com/andymai/brepkit/issues/2330))\n([81057e9](https://github.com/andymai/brepkit/commit/81057e93908b5d833fb9463aa474693ecb39c0c5))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-11-07T21:24:57Z",
+          "tree_id": "4ec5fb63001537d4da5aef5d0f80a5be7fc49af4",
+          "url": "https://github.com/andymai/brepkit/commit/db5f310c8db10fe997f38319ec38317077ceb941"
+        },
+        "date": 1794086859414,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 875693,
+            "range": "± 990",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 941199,
+            "range": "± 956",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10847,
+            "range": "± 135",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 702656,
+            "range": "± 8299",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 22943816,
+            "range": "± 30332",
             "unit": "ns/iter"
           }
         ]
