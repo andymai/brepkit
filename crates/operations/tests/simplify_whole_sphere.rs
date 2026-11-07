@@ -11,18 +11,22 @@ mod tests {
     use std::f64::consts::PI;
 
     use brepkit_math::mat::Mat4;
-    use brepkit_math::vec::Point3;
+    use brepkit_math::vec::{Point3, Vec3};
     use brepkit_operations::boolean::{BooleanOp, BooleanOptions, boolean_with_options};
     use brepkit_operations::classify::{PointClassification, classify_point};
+    use brepkit_operations::extrude::extrude;
     use brepkit_operations::measure::{oriented_solid_volume, solid_volume};
-    use brepkit_operations::primitives::{make_box, make_sphere};
+    use brepkit_operations::primitives::{make_box, make_cylinder, make_sphere};
     use brepkit_operations::tessellate::{is_watertight, tessellate_solid};
     use brepkit_operations::transform::transform_solid;
     use brepkit_operations::validate::validate_solid;
     use brepkit_topology::Topology;
+    use brepkit_topology::edge::{Edge, EdgeCurve};
     use brepkit_topology::explorer::solid_faces;
-    use brepkit_topology::face::FaceSurface;
+    use brepkit_topology::face::{Face, FaceSurface};
     use brepkit_topology::solid::SolidId;
+    use brepkit_topology::vertex::Vertex;
+    use brepkit_topology::wire::{OrientedEdge, Wire};
 
     const RADIUS: f64 = 25.0;
     /// A ball of radius 25 less the six caps past `|x|, |y|, |z| = 20`.
@@ -196,5 +200,147 @@ mod tests {
             (exact - meshed).abs() < 2e-3 * exact,
             "{exact} exact, {meshed} meshed"
         );
+    }
+
+    /// As [`assert_sound`], for a radius 10 ball: chord sag under-reads the mesh
+    /// by more than the coarser read allows, and shrinks with the deflection.
+    fn assert_fine(topo: &Topology, solid: SolidId, volume: f64, what: &str) {
+        let report = validate_solid(topo, solid).unwrap();
+        assert!(report.is_valid(), "{what}: {:?}", report.issues);
+        let exact = solid_volume(topo, solid, 0.001).unwrap();
+        assert!(
+            (exact - volume).abs() < 1e-6 * volume,
+            "{what}: volume {exact}, expected {volume}"
+        );
+        let mesh = tessellate_solid(topo, solid, 0.005).unwrap();
+        assert!(is_watertight(&mesh), "{what}: open mesh");
+        let meshed = oriented_solid_volume(topo, solid, 0.005).unwrap();
+        assert!(
+            (meshed - volume).abs() < 1e-3 * volume,
+            "{what}: meshed volume {meshed}, expected {volume}"
+        );
+    }
+
+    /// A prism on `outline` in the plane at height `z`.
+    fn prism(topo: &mut Topology, outline: &[(f64, f64)], z: f64, height: f64) -> SolidId {
+        let vertices: Vec<_> = outline
+            .iter()
+            .map(|&(x, y)| topo.add_vertex(Vertex::new(Point3::new(x, y, z), 1e-7)))
+            .collect();
+        let edges: Vec<_> = (0..vertices.len())
+            .map(|i| {
+                let next = vertices[(i + 1) % vertices.len()];
+                OrientedEdge::new(
+                    topo.add_edge(Edge::new(vertices[i], next, EdgeCurve::Line)),
+                    true,
+                )
+            })
+            .collect();
+        let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+        let up = Vec3::new(0.0, 0.0, 1.0);
+        let face = topo.add_face(Face::new(
+            wire,
+            Vec::new(),
+            FaceSurface::Plane { normal: up, d: z },
+        ));
+        extrude(topo, face, up, height).unwrap()
+    }
+
+    /// A round bite at the top makes the merged axis's pole, and the bottom
+    /// bite's rim winds that axis at the far pole. The rim's shape decides it:
+    /// an hourglass runs round the axis in order and merges, a hook doubles back
+    /// and stays two faces. Either way the mesh closes.
+    #[test]
+    fn a_rim_round_the_far_pole_merges_only_if_it_runs_in_order() {
+        let hourglass = [
+            (-3.0, -3.0),
+            (3.0, -3.0),
+            (1.0, 0.0),
+            (3.0, 3.0),
+            (-3.0, 3.0),
+            (-1.0, 0.0),
+        ];
+        let hook = [
+            (-1.0, -1.0),
+            (5.0, -1.0),
+            (5.0, 5.0),
+            (-3.0, 5.0),
+            (-3.0, 1.0),
+            (-1.5, 1.0),
+            (-1.5, 3.5),
+            (3.5, 3.5),
+            (3.5, 0.5),
+            (-1.0, 0.5),
+        ];
+        for (name, outline, faces) in [("hourglass", &hourglass[..], 1), ("hook", &hook[..], 2)] {
+            let cut = |options: BooleanOptions| {
+                let mut topo = Topology::new();
+                let ball = make_sphere(&mut topo, 10.0, 16).unwrap();
+                let round = make_cylinder(&mut topo, 2.0, 4.0).unwrap();
+                let place = Mat4::translation(0.2, 0.1, 7.5);
+                transform_solid(&mut topo, round, &place).unwrap();
+                let bite = prism(&mut topo, outline, -11.5, 4.0);
+                let first =
+                    boolean_with_options(&mut topo, BooleanOp::Cut, ball, round, as_built())
+                        .unwrap();
+                let solid =
+                    boolean_with_options(&mut topo, BooleanOp::Cut, first, bite, options).unwrap();
+                (topo, solid)
+            };
+            let (topo, built) = cut(as_built());
+            let truth = solid_volume(&topo, built, 0.001).unwrap();
+            let (topo, solid) = cut(simplified());
+            assert_eq!(sphere_faces(&topo, solid), faces, "{name}");
+            assert_fine(&topo, solid, truth, name);
+            let mesh = tessellate_solid(&topo, solid, 0.1).unwrap();
+            assert!(is_watertight(&mesh), "{name}: open coarse mesh");
+        }
+    }
+
+    /// A merged face with a cap at its pole and a bite beside it reads the far
+    /// side of the ball as the halves do, and takes a cut there.
+    #[test]
+    fn the_far_side_of_a_merged_face_reads_true() {
+        let cut = |options: BooleanOptions| {
+            let mut topo = Topology::new();
+            let ball = make_sphere(&mut topo, 10.0, 16).unwrap();
+            let lid = make_box(&mut topo, 40.0, 40.0, 10.2).unwrap();
+            transform_solid(&mut topo, lid, &Mat4::translation(-20.0, -20.0, 9.8)).unwrap();
+            let bite = make_box(&mut topo, 2.0, 2.0, 4.0).unwrap();
+            transform_solid(&mut topo, bite, &Mat4::translation(3.0, 2.0, 7.0)).unwrap();
+            let capped =
+                boolean_with_options(&mut topo, BooleanOp::Cut, ball, lid, as_built()).unwrap();
+            let solid =
+                boolean_with_options(&mut topo, BooleanOp::Cut, capped, bite, options).unwrap();
+            (topo, solid)
+        };
+        let (topo, built) = cut(as_built());
+        let truth = solid_volume(&topo, built, 0.001).unwrap();
+        let (mut topo, solid) = cut(simplified());
+        assert_eq!(sphere_faces(&topo, solid), 1);
+        assert_fine(&topo, solid, truth, "capped and bitten");
+        for (point, expected) in [
+            (
+                Point3::new(4.0, 3.0, -(75.0_f64).sqrt()),
+                PointClassification::OnBoundary,
+            ),
+            (Point3::new(4.0, 3.0, -8.0), PointClassification::Inside),
+            (Point3::new(4.0, 3.0, -9.0), PointClassification::Outside),
+            (Point3::new(4.0, 3.0, 8.5), PointClassification::Outside),
+            (Point3::new(-4.0, 3.0, 8.0), PointClassification::Inside),
+        ] {
+            let read = classify_point(&topo, solid, point, 0.01, 1e-7).unwrap();
+            assert_eq!(read, expected, "{point:?}");
+        }
+        let tool = make_box(&mut topo, 1.0, 1.0, 4.0).unwrap();
+        transform_solid(&mut topo, tool, &Mat4::translation(3.5, 2.5, -11.0)).unwrap();
+        let later =
+            boolean_with_options(&mut topo, BooleanOp::Cut, solid, tool, as_built()).unwrap();
+        assert_eq!(sphere_faces(&topo, later), 1);
+        let report = validate_solid(&topo, later).unwrap();
+        assert!(report.is_valid(), "{:?}", report.issues);
+        assert!(is_watertight(
+            &tessellate_solid(&topo, later, 0.02).unwrap()
+        ));
     }
 }

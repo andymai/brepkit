@@ -455,28 +455,32 @@ fn merge_whole_sphere(
     };
     let rest = rest.to_vec();
 
-    // The loop's cap lies along the mean of its samples from the centre, in the
-    // order the wire runs them.
+    // The samples of a wire from the centre, in the order it runs them.
     let center = sphere.center();
-    let mut samples: Vec<Vec3> = Vec::new();
-    for oe in topo.wire(outer_wire)?.edges() {
-        let edge = topo.edge(oe.edge())?;
-        let (p, q) = (
-            topo.vertex(edge.start())?.point(),
-            topo.vertex(edge.end())?.point(),
-        );
-        let (t0, t1) = edge.curve().domain_with_endpoints(p, q);
-        for k in 0..SAMPLES {
-            let fraction = f64::from(k) / f64::from(SAMPLES);
-            let along = if oe.is_forward() {
-                fraction
-            } else {
-                1.0 - fraction
-            };
-            let t = (t1 - t0).mul_add(along, t0);
-            samples.push(edge.curve().evaluate_with_endpoints(t, p, q) - center);
+    let sampled = |wire: WireId| -> Result<Vec<Vec3>, HealError> {
+        let mut samples: Vec<Vec3> = Vec::new();
+        for oe in topo.wire(wire)?.edges() {
+            let edge = topo.edge(oe.edge())?;
+            let (p, q) = (
+                topo.vertex(edge.start())?.point(),
+                topo.vertex(edge.end())?.point(),
+            );
+            let (t0, t1) = edge.curve().domain_with_endpoints(p, q);
+            for k in 0..SAMPLES {
+                let fraction = f64::from(k) / f64::from(SAMPLES);
+                let along = if oe.is_forward() {
+                    fraction
+                } else {
+                    1.0 - fraction
+                };
+                let t = (t1 - t0).mul_add(along, t0);
+                samples.push(edge.curve().evaluate_with_endpoints(t, p, q) - center);
+            }
         }
-    }
+        Ok(samples)
+    };
+    // The loop's cap lies along the mean of its samples.
+    let samples = sampled(outer_wire)?;
     let toward = samples
         .iter()
         .fold(Vec3::new(0.0, 0.0, 0.0), |sum, &s| sum + s);
@@ -490,11 +494,30 @@ fn merge_whole_sphere(
             .dot(axis)
             .atan2(a.dot(b) - a.dot(axis) * b.dot(axis))
     };
-    let winding: f64 = (0..samples.len())
-        .map(|i| turned_by(samples[i], samples[(i + 1) % samples.len()]))
-        .sum();
-    if (winding.abs() - std::f64::consts::TAU).abs() > 1e-6 {
+    let steps = |samples: &[Vec3]| -> Vec<f64> {
+        (0..samples.len())
+            .map(|i| turned_by(samples[i], samples[(i + 1) % samples.len()]))
+            .collect()
+    };
+    let winds_once = |steps: &[f64]| {
+        let total: f64 = steps.iter().sum();
+        (total.abs() - std::f64::consts::TAU).abs() <= 1e-6
+    };
+    let doubles_back = |steps: &[f64]| {
+        let total: f64 = steps.iter().sum();
+        steps.iter().any(|step| step * total.signum() < -1e-9)
+    };
+    let outer_steps = steps(&samples);
+    if !winds_once(&outer_steps) || doubles_back(&outer_steps) {
         return Ok(None);
+    }
+    // So must any other loop round the axis, at the far pole: the mesher reads
+    // such a rim in order of longitude, and one that doubles back comes out open.
+    for &hole in &rest {
+        let hole_steps = steps(&sampled(hole)?);
+        if winds_once(&hole_steps) && doubles_back(&hole_steps) {
+            return Ok(None);
+        }
     }
     let turned = FaceSurface::Sphere(SphericalSurface::with_axis(center, sphere.radius(), axis)?);
     let face = if reversed {
