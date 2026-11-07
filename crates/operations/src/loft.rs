@@ -2113,9 +2113,11 @@ pub fn loft_sides(
     ends: &[FaceId],
 ) -> Result<brepkit_topology::shell::ShellId, crate::OperationsError> {
     let tol = Tolerance::new().linear;
-    let corners = |topo: &Topology, face: FaceId| -> Result<Vec<Point3>, crate::OperationsError> {
+    let corners = |topo: &Topology,
+                   face: FaceId|
+     -> Result<(Vec<Point3>, Vec<Point3>), crate::OperationsError> {
         let face = topo.face(face)?;
-        let mut corners = Vec::new();
+        let (mut corners, mut middles) = (Vec::new(), Vec::new());
         for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
             for oe in topo.wire(wid)?.edges() {
                 let edge = topo.edge(oe.edge())?;
@@ -2125,13 +2127,11 @@ pub fn loft_sides(
                 );
                 corners.push(a);
                 corners.push(b);
-                // A side bending round from one profile's plane back to it has
-                // every vertex there, but not its edges' middles.
                 let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
-                corners.push(edge.curve().evaluate_with_endpoints(0.5 * (t0 + t1), a, b));
+                middles.push(edge.curve().evaluate_with_endpoints(0.5 * (t0 + t1), a, b));
             }
         }
-        Ok(corners)
+        Ok((corners, middles))
     };
     // Each end profile's surface and boundary edges.
     let mut profiles = Vec::with_capacity(ends.len());
@@ -2165,10 +2165,13 @@ pub fn loft_sides(
     };
     let mut sides = Vec::new();
     for fid in brepkit_topology::explorer::solid_faces(topo, solid)? {
-        let samples = corners(topo, fid)?;
+        let (ends, middles) = corners(topo, fid)?;
+        // A side bending round from one profile's plane back into it has every
+        // vertex in that plane, but not its edges' middles. A cap on chords of a
+        // rim has its vertices on that one rim, and a side's straddle two.
         let cap = profiles.iter().any(|(surface, edges)| {
-            samples.iter().all(|&p| on_surface(surface, p))
-                || samples.iter().all(|&p| on_boundary(edges, p))
+            ends.iter().chain(&middles).all(|&p| on_surface(surface, p))
+                || ends.iter().all(|&p| on_boundary(edges, p))
         });
         if !cap {
             sides.push(fid);
