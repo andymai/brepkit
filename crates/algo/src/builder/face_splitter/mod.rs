@@ -1106,6 +1106,27 @@ fn uv_in_loop_any_turn(p: Point2, loop_uv: &[Point2], surface: &FaceSurface) -> 
     })
 }
 
+/// Whether any straight section crosses a hole's boundary or ends inside it, so
+/// the hole cannot stay whole in one piece.
+fn sections_reach_a_hole(
+    sections: &[SectionEdge],
+    holes: &[Vec<OrientedPCurveEdge>],
+    frame: &PlaneFrame,
+) -> bool {
+    holes.iter().any(|hole| {
+        let polygon = sampling::sample_wire_loop_uv_via_frame(hole, frame);
+        sections.iter().any(|section| {
+            let (a, b) = (frame.project(section.start), frame.project(section.end));
+            super::classify_2d::point_in_polygon_2d(a, &polygon)
+                || super::classify_2d::point_in_polygon_2d(b, &polygon)
+                || (0..polygon.len()).any(|i| {
+                    let (p, q) = (polygon[i], polygon[(i + 1) % polygon.len()]);
+                    seg_cross_param(a, b, p, q).is_some()
+                })
+        })
+    })
+}
+
 /// Attach each whole hole to the sub-face that geometrically contains it.
 ///
 /// A hole is assigned to the INNERMOST containing sub-face (the one whose own
@@ -8069,6 +8090,7 @@ fn split_face_2d_impl(
     if sections.len() >= 2
         && is_plane
         && !holes_integrated
+        && !sections_reach_a_hole(sections, &original_inner_wires, frame)
         && let Some(ref boundary) = boundary_edges_backup
         && let Some(mut result) = try_split_crossing_plane_face(
             &surface, boundary, sections, rank, reversed, face_id, frame, tol,
@@ -8076,6 +8098,11 @@ fn split_face_2d_impl(
         && result.len() > loops.len()
     {
         attach_whole_holes(&mut result, &original_inner_wires);
+        // Each piece's cached interior point was read off its outer wire alone,
+        // and can lie in the hole it now holds.
+        for piece in result.iter_mut().filter(|p| !p.inner_wires.is_empty()) {
+            piece.precomputed_interior = None;
+        }
         return result;
     }
 
@@ -10229,7 +10256,8 @@ mod tests {
             topo.add_wire(Wire::new(edges, true).unwrap())
         };
         let outer = loop_of([(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)]);
-        let hole = loop_of([(1.0, 1.0), (1.0, 2.0), (2.0, 2.0), (2.0, 1.0)]);
+        // Over the point the piece's outer corners average to, (2.5, 4).
+        let hole = loop_of([(2.0, 3.5), (2.0, 4.5), (3.0, 4.5), (3.0, 3.5)]);
         let face = topo.add_face(Face::new(
             outer,
             vec![hole],
@@ -10262,6 +10290,52 @@ mod tests {
             .iter()
             .all(|e| e.start_3d.x() <= 5.0 + 1e-9 && e.start_3d.y() <= 8.0 + 1e-9);
         assert!(lower_left, "the hole belongs to the piece around it");
+        assert!(
+            holed[0].precomputed_interior.is_none(),
+            "an interior point read without the hole can lie in it"
+        );
+    }
+
+    /// A section across a hole, or ending in it, leaves no piece that can hold
+    /// it whole, so the T path declines and the hole goes on to the general
+    /// splitter. One clear of it leaves it whole.
+    #[test]
+    fn a_section_across_a_hole_reaches_it() {
+        let frame =
+            PlaneFrame::from_normal_and_point(Vec3::new(0.0, 0.0, 1.0), Point3::new(0.0, 0.0, 0.0));
+        let corners = [(4.0, 7.0), (4.0, 9.0), (6.0, 9.0), (6.0, 7.0)];
+        let hole: Vec<OrientedPCurveEdge> = (0..4)
+            .map(|i| {
+                let (a, b) = (corners[i], corners[(i + 1) % 4]);
+                let (start_3d, end_3d) = (Point3::new(a.0, a.1, 0.0), Point3::new(b.0, b.1, 0.0));
+                OrientedPCurveEdge {
+                    curve_3d: EdgeCurve::Line,
+                    pcurve: dummy_pcurve(),
+                    start_uv: frame.project(start_3d),
+                    end_uv: frame.project(end_3d),
+                    start_3d,
+                    end_3d,
+                    forward: true,
+                    source_edge_idx: None,
+                    pave_block_id: None,
+                }
+            })
+            .collect();
+        let holes = [hole];
+        let reaches = |a: (f64, f64), b: (f64, f64)| {
+            sections_reach_a_hole(
+                &[line_section(
+                    Point3::new(a.0, a.1, 0.0),
+                    Point3::new(b.0, b.1, 0.0),
+                )],
+                &holes,
+                &frame,
+            )
+        };
+        assert!(reaches((0.0, 8.0), (10.0, 8.0)), "across it");
+        assert!(reaches((5.0, 8.0), (5.0, 0.0)), "ending in it");
+        assert!(!reaches((0.0, 2.0), (10.0, 2.0)), "clear below it");
+        assert!(!reaches((3.0, 0.0), (3.0, 10.0)), "clear beside it");
     }
 
     fn line_section(start: Point3, end: Point3) -> SectionEdge {

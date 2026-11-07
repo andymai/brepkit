@@ -8900,14 +8900,12 @@ fn line_face_intervals(
     }
     let cross = |x: Vec2, y: Vec2| x.x().mul_add(y.y(), -(x.y() * y.x()));
     let mut cuts = vec![0.0, 1.0];
-    // A piece ending on the line divides it there however it arrives: an arc
+    // An arc ending on the line divides it there however it arrives: one
     // tangent to the line at its end has a root pair rounding can lose.
     let foot = |p: Vec2| (cross(p, d).abs() <= tol * len).then(|| p.dot(d) / (len * len));
     for piece in &pieces {
         match *piece {
             Boundary2::Segment(a, b) => {
-                cuts.extend(foot(Vec2::new(a.x(), a.y())));
-                cuts.extend(foot(Vec2::new(b.x(), b.y())));
                 let ab = b - a;
                 let det = cross(d, ab);
                 if det.abs() <= 1e-12 * len * ab.length() {
