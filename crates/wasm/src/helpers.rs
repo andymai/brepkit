@@ -116,7 +116,7 @@ pub fn get_f64(args: &serde_json::Value, key: &str) -> Result<f64, String> {
 pub fn get_u32(args: &serde_json::Value, key: &str) -> Result<u32, String> {
     args[key]
         .as_u64()
-        .map(|v| v as u32)
+        .and_then(|v| u32::try_from(v).ok())
         .ok_or_else(|| format!("missing or invalid '{key}'"))
 }
 

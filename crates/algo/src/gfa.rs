@@ -235,17 +235,30 @@ pub fn split_by_faces(
         )?);
     }
 
-    let mut pieces = vec![body];
-    let mut together = Vec::new();
-    for &tool in &tools {
-        let (next, separated) = split_each(&mut scratch.topo, &pieces, &[tool], tol)?;
-        pieces = next;
-        if !separated {
-            together.push(tool);
+    // Whether a tool separates depends on the piece: one that cuts one piece can
+    // stop short in another, and one that stops short can reach across what a
+    // later tool leaves. So each piece keeps the tools it has not been cut by,
+    // tries them one at a time, and takes what is left together, which marks it
+    // and closes off what only those tools between them can.
+    let mut pieces = Vec::new();
+    let mut open = vec![(body, tools)];
+    while let Some((piece, mut tools)) = open.pop() {
+        let mut cut = None;
+        for (i, &tool) in tools.iter().enumerate() {
+            let parts = split_piece(&mut scratch.topo, piece, &[tool], tol)?;
+            if parts.len() > 1 {
+                cut = Some((i, parts));
+                break;
+            }
         }
-    }
-    if together.len() > 1 {
-        pieces = split_each(&mut scratch.topo, &pieces, &together, tol)?.0;
+        if let Some((i, parts)) = cut {
+            tools.remove(i);
+            open.extend(parts.into_iter().map(|part| (part, tools.clone())));
+        } else if tools.is_empty() {
+            pieces.push(piece);
+        } else {
+            pieces.extend(split_piece(&mut scratch.topo, piece, &tools, tol)?);
+        }
     }
     pieces
         .into_iter()
@@ -253,40 +266,28 @@ pub fn split_by_faces(
         .collect()
 }
 
-/// Split each of `pieces` by all of `tools` at once, and say whether any came
-/// apart.
-fn split_each(
+/// Split a piece by all of `tools` at once.
+fn split_piece(
     topo: &mut Topology,
-    pieces: &[SolidId],
+    piece: SolidId,
     tools: &[FaceId],
     tol: Tolerance,
-) -> Result<(Vec<SolidId>, bool), AlgoError> {
+) -> Result<Vec<SolidId>, AlgoError> {
     let groups: Vec<Vec<FaceId>> = tools.iter().map(|&f| vec![f]).collect();
-    let mut next = Vec::with_capacity(pieces.len());
-    let mut separated = false;
-    for &piece in pieces {
-        let mut store = GfaImprintStore::new(topo, piece, &groups, &[])?;
-        let mut arena = GfaArena::new();
-        pave_filler::run_pave_filler_with_edges(
-            &mut store.topo,
-            &store.sources,
-            &[],
-            tol,
-            &mut arena,
-        )?;
-        let (store_topo, parts) = crate::builder::build_split_by_faces(
-            std::mem::take(&mut store.topo),
-            &arena,
-            &store.sources,
-            tol,
-        )?;
-        store.topo = store_topo;
-        separated |= parts.len() > 1;
-        for part in parts {
-            next.push(store.export_solid(topo, part)?);
-        }
-    }
-    Ok((next, separated))
+    let mut store = GfaImprintStore::new(topo, piece, &groups, &[])?;
+    let mut arena = GfaArena::new();
+    pave_filler::run_pave_filler_with_edges(&mut store.topo, &store.sources, &[], tol, &mut arena)?;
+    let (store_topo, parts) = crate::builder::build_split_by_faces(
+        std::mem::take(&mut store.topo),
+        &arena,
+        &store.sources,
+        tol,
+    )?;
+    store.topo = store_topo;
+    parts
+        .into_iter()
+        .map(|part| store.export_solid(topo, part))
+        .collect()
 }
 
 /// Run a GFA boolean, also returning each result face's provenance.

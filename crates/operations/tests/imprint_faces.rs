@@ -746,6 +746,386 @@ mod tests {
         }
     }
 
+    /// The first tool halves the plate. The second then cuts one half outright,
+    /// but stops part way across the other, where only the third carries it on.
+    #[test]
+    fn a_tool_that_cut_one_piece_still_helps_cut_another() {
+        let from_the_left = [
+            [-15.0, 0.0, -5.0],
+            [5.0, 0.0, -5.0],
+            [5.0, 0.0, 15.0],
+            [-15.0, 0.0, 15.0],
+        ];
+        let on_to_the_right = [
+            [5.0, 0.0, -5.0],
+            [15.0, 0.0, -5.0],
+            [15.0, 0.0, 15.0],
+            [5.0, 0.0, 15.0],
+        ];
+        for (name, pose) in poses() {
+            let mut topo = Topology::new();
+            let body = plate(&mut topo, pose);
+            let across = rectangle(&mut topo, pose, ACROSS_Y);
+            let left = rectangle(&mut topo, pose, from_the_left);
+            let right = rectangle(&mut topo, pose, on_to_the_right);
+            let pieces = split_by_faces(&mut topo, body, &[across, left, right]).unwrap();
+            assert_eq!(pieces.len(), 4, "{name}");
+            for piece in pieces {
+                let held = solid_volume(&topo, piece, 0.01).unwrap();
+                assert!((held - 1000.0).abs() < 1e-6, "{name}: holds {held}");
+            }
+        }
+    }
+
+    /// A wall stopping short of the plate's far side reaches it once a later tool
+    /// has cut the rest away.
+    #[test]
+    fn a_wall_short_of_the_far_side_cuts_what_a_later_tool_leaves() {
+        let short = [
+            [-15.0, 0.0, -5.0],
+            [5.0, 0.0, -5.0],
+            [5.0, 0.0, 15.0],
+            [-15.0, 0.0, 15.0],
+        ];
+        let at_its_end = [
+            [5.0, -15.0, -5.0],
+            [5.0, 15.0, -5.0],
+            [5.0, 15.0, 15.0],
+            [5.0, -15.0, 15.0],
+        ];
+        for (name, pose) in poses() {
+            let mut topo = Topology::new();
+            let body = plate(&mut topo, pose);
+            let short = rectangle(&mut topo, pose, short);
+            let at_its_end = rectangle(&mut topo, pose, at_its_end);
+            let mut pieces = split_by_faces(&mut topo, body, &[short, at_its_end]).unwrap();
+            assert_eq!(pieces.len(), 3, "{name}");
+            by_volume(&topo, &mut pieces);
+            for (piece, volume) in pieces.into_iter().zip([1000.0, 1500.0, 1500.0]) {
+                let held = solid_volume(&topo, piece, 0.01).unwrap();
+                assert!((held - volume).abs() < 1e-6, "{name}: holds {held}");
+            }
+        }
+    }
+
+    /// A wall on the z axis out along `angle`, past a radius of 10.
+    fn wall_from_the_axis(topo: &mut Topology, pose: Mat4, angle: f64) -> FaceId {
+        let (x, y) = (15.0 * angle.cos(), 15.0 * angle.sin());
+        rectangle(
+            topo,
+            pose,
+            [
+                [0.0, 0.0, -5.0],
+                [x, y, -5.0],
+                [x, y, 15.0],
+                [0.0, 0.0, 15.0],
+            ],
+        )
+    }
+
+    /// Three walls meeting on the axis, where a cap's only boundary is one closed
+    /// circle.
+    #[test]
+    fn walls_meeting_on_a_round_cap_keep_its_rim() {
+        for (name, pose) in poses() {
+            let mut topo = Topology::new();
+            let body = cylinder(&mut topo, pose);
+            let walls = [0.0, 2.0 * PI / 3.0, 4.0 * PI / 3.0]
+                .map(|angle| wall_from_the_axis(&mut topo, pose, angle));
+            let pieces = split_by_faces(&mut topo, body, &walls).unwrap();
+            assert_eq!(pieces.len(), 3, "{name}");
+            for piece in pieces {
+                check(&topo, piece, 1000.0 * PI / 3.0, 0.5, 5, name);
+            }
+        }
+    }
+
+    /// Three walls meeting clear of the bore, which stays a hole in the one piece
+    /// around it.
+    #[test]
+    fn walls_meeting_beside_a_bore_keep_it_open() {
+        let beside: [[[f64; 3]; 4]; 3] = [
+            [
+                [0.0, -6.0, -5.0],
+                [-15.0, -6.0, -5.0],
+                [-15.0, -6.0, 15.0],
+                [0.0, -6.0, 15.0],
+            ],
+            [
+                [0.0, -6.0, -5.0],
+                [15.0, -6.0, -5.0],
+                [15.0, -6.0, 15.0],
+                [0.0, -6.0, 15.0],
+            ],
+            [
+                [0.0, -6.0, -5.0],
+                [0.0, -15.0, -5.0],
+                [0.0, -15.0, 15.0],
+                [0.0, -6.0, 15.0],
+            ],
+        ];
+        for (name, pose) in poses() {
+            let mut topo = Topology::new();
+            let body = holed_plate(&mut topo, pose);
+            let walls = beside.map(|corners| rectangle(&mut topo, pose, corners));
+            let mut pieces = split_by_faces(&mut topo, body, &walls).unwrap();
+            assert_eq!(pieces.len(), 3, "{name}");
+            by_volume(&topo, &mut pieces);
+            check(&topo, pieces[0], 400.0, 1e-6, 6, name);
+            check(&topo, pieces[1], 400.0, 1e-6, 6, name);
+            check(&topo, pieces[2], 3200.0 - 90.0 * PI, 0.5, 8, name);
+        }
+    }
+
+    fn dip_through_the_axis(topo: &mut Topology, pose: Mat4, angle: f64) -> FaceId {
+        let (x, y) = (15.0 * angle.cos(), 15.0 * angle.sin());
+        rectangle(
+            topo,
+            pose,
+            [[-x, -y, 9.0], [x, y, 9.0], [x, y, 11.0], [-x, -y, 11.0]],
+        )
+    }
+
+    /// Two dips crossing mid-way on a cap whose only boundary is a closed circle
+    /// quarter it, and the rim stays.
+    #[test]
+    fn dips_crossing_on_a_round_cap_quarter_it() {
+        for (name, pose) in poses() {
+            let mut topo = Topology::new();
+            let body = cylinder(&mut topo, pose);
+            let dips = [0.0, FRAC_PI_2].map(|angle| dip_through_the_axis(&mut topo, pose, angle));
+            let tools = dips.map(ImprintTool::Face);
+            let marked = imprint_faces(&mut topo, body, &tools).unwrap();
+            let areas = areas_in_plane(&topo, marked, pose, [0.0, 0.0, 10.0], [0.0, 0.0, 1.0]);
+            assert_eq!(areas.len(), 4, "{name}: {areas:?}");
+            for area in &areas {
+                assert!((area - 25.0 * PI).abs() < 1e-2, "{name}: {areas:?}");
+            }
+            let report = validate_solid(&topo, marked).unwrap();
+            assert!(report.is_valid(), "{name}: {:?}", report.issues);
+            let mesh = tessellate_solid(&topo, marked, 0.02).unwrap();
+            assert!(is_watertight(&mesh), "{name}: the mesh leaks");
+        }
+    }
+
+    /// Three dips crossing in a triangle on a cap whose only boundary is a closed
+    /// circle: the cells between them and the rim stay with the triangle.
+    #[test]
+    fn dips_in_a_triangle_on_a_round_cap_keep_its_rim() {
+        let lines = [
+            [[-15.0, -3.0], [15.0, -3.0]],
+            [[-15.0, -8.0], [15.0, 12.0]],
+            [[-15.0, 12.0], [15.0, -8.0]],
+        ];
+        for (name, pose) in poses() {
+            let mut topo = Topology::new();
+            let body = cylinder(&mut topo, pose);
+            let tools = lines.map(|[a, b]| {
+                ImprintTool::Face(rectangle(
+                    &mut topo,
+                    pose,
+                    [
+                        [a[0], a[1], 9.0],
+                        [b[0], b[1], 9.0],
+                        [b[0], b[1], 11.0],
+                        [a[0], a[1], 11.0],
+                    ],
+                ))
+            });
+            let marked = imprint_faces(&mut topo, body, &tools).unwrap();
+            let areas = areas_in_plane(&topo, marked, pose, [0.0, 0.0, 10.0], [0.0, 0.0, 1.0]);
+            assert_eq!(areas.len(), 7, "{name}: {areas:?}");
+            let total: f64 = areas.iter().sum();
+            assert!((total - 100.0 * PI).abs() < 1e-2, "{name}: {areas:?}");
+            let report = validate_solid(&topo, marked).unwrap();
+            assert!(report.is_valid(), "{name}: {:?}", report.issues);
+            let mesh = tessellate_solid(&topo, marked, 0.02).unwrap();
+            assert!(is_watertight(&mesh), "{name}: the mesh leaks");
+        }
+    }
+
+    /// Two dips crossing mid-way on a top with a bore clear of them: the bore stays
+    /// a hole in the part around it.
+    #[test]
+    fn dips_crossing_beside_a_bore_keep_it_open() {
+        let along_x = [
+            [-15.0, -6.0, 9.0],
+            [15.0, -6.0, 9.0],
+            [15.0, -6.0, 11.0],
+            [-15.0, -6.0, 11.0],
+        ];
+        let along_y = [
+            [6.0, -15.0, 9.0],
+            [6.0, 15.0, 9.0],
+            [6.0, 15.0, 11.0],
+            [6.0, -15.0, 11.0],
+        ];
+        for (name, pose) in poses() {
+            let mut topo = Topology::new();
+            let body = holed_plate(&mut topo, pose);
+            let tools = [along_x, along_y]
+                .map(|corners| ImprintTool::Face(rectangle(&mut topo, pose, corners)));
+            let marked = imprint_faces(&mut topo, body, &tools).unwrap();
+            let areas = areas_in_plane(&topo, marked, pose, [0.0, 0.0, 10.0], [0.0, 0.0, 1.0]);
+            assert_eq!(areas.len(), 4, "{name}: {areas:?}");
+            let expected = [16.0, 64.0, 64.0, 256.0 - 9.0 * PI];
+            for (area, expected) in areas.iter().zip(expected) {
+                assert!((area - expected).abs() < 1e-3, "{name}: {areas:?}");
+            }
+            let report = validate_solid(&topo, marked).unwrap();
+            assert!(report.is_valid(), "{name}: {:?}", report.issues);
+            let mesh = tessellate_solid(&topo, marked, 0.02).unwrap();
+            assert!(is_watertight(&mesh), "{name}: the mesh leaks");
+        }
+    }
+
+    /// A disc tool whose rim, one closed circle, the plate's walls cross, with a
+    /// wall crossing them in turn. The plate's corners stand clear of the rim, so
+    /// the two only mark it.
+    #[test]
+    fn a_disc_crossed_inside_the_plate_keeps_its_rim() {
+        let crossing = [
+            [0.0, -15.0, 4.0],
+            [0.0, 15.0, 4.0],
+            [0.0, 15.0, 6.0],
+            [0.0, -15.0, 6.0],
+        ];
+        for (name, pose) in poses() {
+            let mut topo = Topology::new();
+            let body = plate(&mut topo, pose);
+            let center = at(pose, [0.0, 0.0, 5.0]);
+            let normal = (at(pose, [0.0, 0.0, 6.0]) - center).normalize().unwrap();
+            let rim = circle(&mut topo, pose, 5.0, 12.0);
+            let rim = Wire::new(vec![OrientedEdge::new(rim, true)], true).unwrap();
+            let rim = topo.add_wire(rim);
+            let d = normal.dot(Vec3::new(center.x(), center.y(), center.z()));
+            let disc = topo.add_face(Face::new(rim, vec![], FaceSurface::Plane { normal, d }));
+            let wall = rectangle(&mut topo, pose, crossing);
+            let pieces = split_by_faces(&mut topo, body, &[disc, wall]).unwrap();
+            assert_eq!(pieces.len(), 1, "{name}");
+            let held = solid_volume(&topo, pieces[0], 0.01).unwrap();
+            assert!((held - PLATE).abs() < 1e-6, "{name}: holds {held}");
+            let report = validate_solid(&topo, pieces[0]).unwrap();
+            assert!(report.is_valid(), "{name}: {:?}", report.issues);
+        }
+    }
+
+    /// A can's faces and two walls across it make the can's quarters, each cap
+    /// quartered inside a rim that is one closed circle.
+    #[test]
+    fn walls_crossing_inside_a_can_quarter_its_caps() {
+        let along_x = [
+            [-8.0, 0.0, 0.0],
+            [8.0, 0.0, 0.0],
+            [8.0, 0.0, 10.0],
+            [-8.0, 0.0, 10.0],
+        ];
+        let along_y = [
+            [0.0, -8.0, 0.0],
+            [0.0, 8.0, 0.0],
+            [0.0, 8.0, 10.0],
+            [0.0, -8.0, 10.0],
+        ];
+        for (name, pose) in poses() {
+            let mut topo = Topology::new();
+            let body = plate(&mut topo, pose);
+            let can = make_cylinder(&mut topo, 5.0, 6.0).unwrap();
+            transform_solid(&mut topo, can, &(pose * Mat4::translation(0.0, 0.0, 2.0))).unwrap();
+            let mut tools = solid_faces(&topo, can).unwrap();
+            tools.push(rectangle(&mut topo, pose, along_x));
+            tools.push(rectangle(&mut topo, pose, along_y));
+            let mut pieces = split_by_faces(&mut topo, body, &tools).unwrap();
+            assert_eq!(pieces.len(), 5, "{name}");
+            by_volume(&topo, &mut pieces);
+            let quarter = 150.0 * PI / 4.0;
+            for (i, &piece) in pieces.iter().enumerate() {
+                let expected = if i < 4 { quarter } else { PLATE - 150.0 * PI };
+                let held = solid_volume(&topo, piece, 0.005).unwrap();
+                assert!(
+                    (held - expected).abs() < 0.5,
+                    "{name}: {held} for {expected}"
+                );
+                let report = validate_solid(&topo, piece).unwrap();
+                assert!(report.is_valid(), "{name}: {:?}", report.issues);
+            }
+        }
+    }
+
+    /// Three walls in a triangle inside a can: its caps' cells run to a rim that
+    /// is one closed circle, with more sections than the rim leaves room to ignore.
+    #[test]
+    fn walls_in_a_triangle_inside_a_can_cut_up_its_caps() {
+        let walls = [
+            [[-8.0, -2.0], [8.0, -2.0]],
+            [[-8.0, -6.0], [8.0, 6.0]],
+            [[-8.0, 6.0], [8.0, -6.0]],
+        ];
+        for (name, pose) in poses() {
+            let mut topo = Topology::new();
+            let body = plate(&mut topo, pose);
+            let can = make_cylinder(&mut topo, 5.0, 6.0).unwrap();
+            transform_solid(&mut topo, can, &(pose * Mat4::translation(0.0, 0.0, 2.0))).unwrap();
+            let mut tools = solid_faces(&topo, can).unwrap();
+            for [a, b] in walls {
+                tools.push(rectangle(
+                    &mut topo,
+                    pose,
+                    [
+                        [a[0], a[1], 0.0],
+                        [b[0], b[1], 0.0],
+                        [b[0], b[1], 10.0],
+                        [a[0], a[1], 10.0],
+                    ],
+                ));
+            }
+            let pieces = split_by_faces(&mut topo, body, &tools).unwrap();
+            assert_eq!(pieces.len(), 8, "{name}");
+            let held: f64 = pieces
+                .iter()
+                .map(|&piece| solid_volume(&topo, piece, 0.005).unwrap())
+                .sum();
+            assert!((held - PLATE).abs() < 0.5, "{name}: {held}");
+            for &piece in &pieces {
+                let report = validate_solid(&topo, piece).unwrap();
+                assert!(report.is_valid(), "{name}: {:?}", report.issues);
+            }
+        }
+    }
+
+    /// A cavity thinner than the step a shell's size suggests still reads as a
+    /// cavity, whichever of its faces is read first.
+    #[test]
+    fn a_thin_cavity_stays_with_the_piece_around_it() {
+        for (name, pose) in poses() {
+            let mut topo = Topology::new();
+            let block = make_box(&mut topo, 40.0, 40.0, 40.0).unwrap();
+            transform_solid(&mut topo, block, &Mat4::translation(-20.0, -20.0, 0.0)).unwrap();
+            let void = make_box(&mut topo, 20.0, 20.0, 0.001).unwrap();
+            transform_solid(&mut topo, void, &Mat4::translation(-10.0, -10.0, 20.0)).unwrap();
+            let hollow = boolean(&mut topo, BooleanOp::Cut, block, void).unwrap();
+            transform_solid(&mut topo, hollow, &pose).unwrap();
+
+            let beside = rectangle(
+                &mut topo,
+                pose,
+                [
+                    [15.0, -30.0, -5.0],
+                    [15.0, 30.0, -5.0],
+                    [15.0, 30.0, 45.0],
+                    [15.0, -30.0, 45.0],
+                ],
+            );
+            let mut pieces = split_by_faces(&mut topo, hollow, &[beside]).unwrap();
+            assert_eq!(pieces.len(), 2, "{name}");
+            by_volume(&topo, &mut pieces);
+            let held = solid_volume(&topo, pieces[1], 0.01).unwrap();
+            assert!(
+                (held - (35.0 * 40.0 * 40.0 - 0.4)).abs() < 1e-6,
+                "{name}: holds {held}"
+            );
+        }
+    }
+
     #[test]
     fn a_closed_set_of_faces_inside_cuts_out_what_it_holds() {
         for (name, pose) in poses() {

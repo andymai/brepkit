@@ -2955,8 +2955,10 @@ fn sections_meet_midway(sections: &[SectionEdge], frame: &PlaneFrame, tol: f64) 
 /// not or the arrangement cannot hold its edges: the general splitter then
 /// takes the face.
 ///
-/// A closed curve goes in as four arcs: the arrangement reads each input by its
-/// chord, and a closed curve has none.
+/// The arrangement reads each input by its chord, and a closed curve has none. A
+/// closed section goes in as four arcs. A closed boundary curve shares its edge
+/// with the face beside it, so it cannot take new vertices here, and such a face
+/// goes to the general splitter.
 #[must_use]
 pub fn split_plane_into_cells(
     topo: &Topology,
@@ -2976,6 +2978,15 @@ pub fn split_plane_into_cells(
         return None;
     }
     let edges_of = |wire| boundary_edges_to_pcurve(topo, wire, &surface, &wire_pts, Some(&frame));
+    let closed = |edge: &OrientedPCurveEdge| (edge.start_3d - edge.end_3d).length() <= tol;
+    if edges_of(face.outer_wire()).iter().any(closed)
+        || face
+            .inner_wires()
+            .iter()
+            .any(|&wire| edges_of(wire).iter().any(closed))
+    {
+        return None;
+    }
     let holes: Vec<Vec<OrientedPCurveEdge>> =
         face.inner_wires().iter().map(|&w| edges_of(w)).collect();
     let mut inputs: Vec<ArrInput> = edges_of(face.outer_wire())
@@ -2993,9 +3004,16 @@ pub fn split_plane_into_cells(
         let (t0, t1) = section
             .curve_3d
             .domain_with_endpoints(section.start, section.end);
+        // A closed circle's domain starts at its parameter origin, wherever its
+        // vertex sits.
+        let from = match &section.curve_3d {
+            EdgeCurve::Circle(circle) => circle.project(section.start),
+            EdgeCurve::Ellipse(ellipse) => ellipse.project(section.start),
+            EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => t0,
+        };
         let at = |f: f64| {
             section.curve_3d.evaluate_with_endpoints(
-                (t1 - t0).mul_add(f, t0),
+                (t1 - t0).mul_add(f, from),
                 section.start,
                 section.end,
             )
@@ -10371,6 +10389,68 @@ mod tests {
         brepkit_math::curves2d::Curve2D::Line(
             Line2D::new(Point2::new(0.0, 0.0), Vec2::new(1.0, 0.0)).unwrap(),
         )
+    }
+
+    /// A closed section whose vertex sits off its circle's parameter origin,
+    /// crossed by a line: two half discs and the square's two parts around them.
+    #[test]
+    fn a_circle_read_from_its_own_vertex_and_a_line_make_four_cells() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::curves2d::{Curve2D, Line2D};
+        use brepkit_math::vec::{Point2, Vec2};
+        use brepkit_topology::builder::make_planar_face;
+
+        let section = |curve_3d: EdgeCurve, start: Point3, end: Point3| {
+            let flat =
+                Curve2D::Line(Line2D::new(Point2::new(0.0, 0.0), Vec2::new(1.0, 0.0)).unwrap());
+            SectionEdge {
+                curve_3d,
+                pcurve_a: flat.clone(),
+                pcurve_b: flat,
+                start,
+                end,
+                start_uv_a: None,
+                end_uv_a: None,
+                start_uv_b: None,
+                end_uv_b: None,
+                target_face: None,
+                pave_block_id: None,
+            }
+        };
+        for start_at in [0.0, 2.4, 5.0] {
+            let mut topo = Topology::new();
+            let corners = [(-10.0, -10.0), (10.0, -10.0), (10.0, 10.0), (-10.0, 10.0)]
+                .map(|(x, y)| Point3::new(x, y, 0.0));
+            let face = make_planar_face(&mut topo, &corners, 1e-7).unwrap();
+            let round =
+                Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 4.0).unwrap();
+            let on_round = round.evaluate(start_at);
+            let (left, right) = (Point3::new(-10.0, 1.0, 0.0), Point3::new(10.0, 1.0, 0.0));
+            let sections = [
+                section(EdgeCurve::Circle(round), on_round, on_round),
+                section(EdgeCurve::Line, left, right),
+            ];
+            let cells = split_plane_into_cells(&topo, face, &sections, Rank::B, 1e-7).unwrap();
+            assert_eq!(cells.len(), 4, "from {start_at}");
+            let swept: f64 = cells
+                .iter()
+                .flat_map(|cell| &cell.outer_wire)
+                .filter(|edge| matches!(edge.curve_3d, EdgeCurve::Circle(_)))
+                .map(|edge| {
+                    let (from, to) = if edge.forward {
+                        (edge.start_3d, edge.end_3d)
+                    } else {
+                        (edge.end_3d, edge.start_3d)
+                    };
+                    let (t0, t1) = edge.curve_3d.domain_with_endpoints(from, to);
+                    t1 - t0
+                })
+                .sum();
+            assert!(
+                (swept - 4.0 * std::f64::consts::PI).abs() < 1e-6,
+                "from {start_at}: its cells run {swept} round the circle, not once each way"
+            );
+        }
     }
 
     /// The boundary of a cylinder wall 300 degrees round, one unit tall: run

@@ -472,8 +472,16 @@ pub fn build_regions(
 /// on a ball's hemispheres, cornered only on their shared rim, is rounding.
 fn encloses_its_own_front(topo: &Topology, shell: &[FaceId]) -> Result<bool, AlgoError> {
     let tol = brepkit_math::tolerance::Tolerance::new();
-    let reach = (shell_extent(topo, shell) * 1e-4).max(100.0 * tol.linear);
+    let widest_step = (shell_extent(topo, shell) * 1e-4).max(100.0 * tol.linear);
     let geoms = crate::classifier::RayCastGeoms::of_faces(topo, shell)?;
+    let held = |at: Point3| {
+        HOLD_RAYS
+            .iter()
+            .filter(|&&d| crate::classifier::ray_parity_cached(&geoms, at, d).0)
+            .count()
+            >= 2
+    };
+    let mut first_reading = None;
     for &fid in shell {
         let Ok(on_face) = super::sample_face_interior(topo, fid, tol) else {
             continue;
@@ -484,17 +492,21 @@ fn encloses_its_own_front(topo: &Topology, shell: &[FaceId]) -> Result<bool, Alg
         let Ok(normal) = normal.normalize() else {
             continue;
         };
-        let inside = HOLD_RAYS
-            .iter()
-            .filter(|&&d| {
-                crate::classifier::ray_parity_cached(&geoms, on_face + normal * reach, d).0
-            })
-            .count();
-        return Ok(inside >= 2);
+        // A step past a thin cavity's far wall reads outside on both sides, so
+        // only a step whose two sides differ says anything.
+        let mut step = widest_step;
+        for _ in 0..4 {
+            let front = held(on_face + normal * step);
+            if front != held(on_face - normal * step) {
+                return Ok(front);
+            }
+            first_reading.get_or_insert(front);
+            step *= 0.1;
+        }
     }
-    Err(AlgoError::AssemblyFailed(
-        "no face of a region's shell gave a point to read it from".into(),
-    ))
+    first_reading.ok_or_else(|| {
+        AlgoError::AssemblyFailed("no face of a region's shell gave a point to read it from".into())
+    })
 }
 
 /// The same face turned to face the other way, on the same wires.
