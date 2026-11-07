@@ -18,7 +18,8 @@ use brepkit_topology::edge::EdgeCurve;
 
 use crate::error::WasmError;
 use crate::handles::{
-    compound_id_to_u32, edge_id_to_u32, face_id_to_u32, solid_id_to_u32, wire_id_to_u32,
+    compound_id_to_u32, edge_id_to_u32, face_id_to_u32, shell_id_to_u32, solid_id_to_u32,
+    wire_id_to_u32,
 };
 use crate::helpers::{TOL, classify_to_string, get_f64, get_u32, panic_message, try_fillet};
 use crate::kernel::BrepKernel;
@@ -639,6 +640,79 @@ impl BrepKernel {
                 )
                 .map_err(|e| e.to_string())?;
                 Ok(serde_json::json!(solid_id_to_u32(solid)))
+            }
+            "extrudeWire" => {
+                let w = get_u32(args, "wire")?;
+                let dx = get_f64(args, "dx").unwrap_or(0.0);
+                let dy = get_f64(args, "dy").unwrap_or(0.0);
+                let dz = get_f64(args, "dz").unwrap_or(1.0);
+                let dist = get_f64(args, "distance").unwrap_or(1.0);
+                let wire_id = self.resolve_wire(w).map_err(|e| e.to_string())?;
+                let shell = brepkit_operations::sheet::extrude_wire(
+                    self.topo_mut(),
+                    wire_id,
+                    Vec3::new(dx, dy, dz),
+                    dist,
+                )
+                .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!(shell_id_to_u32(shell)))
+            }
+            "revolveWire" => {
+                let w = get_u32(args, "wire")?;
+                let angle_degrees = get_f64(args, "angle")?;
+                let ox = get_f64(args, "originX").unwrap_or(0.0);
+                let oy = get_f64(args, "originY").unwrap_or(0.0);
+                let oz = get_f64(args, "originZ").unwrap_or(0.0);
+                let ax = get_f64(args, "axisX").unwrap_or(0.0);
+                let ay = get_f64(args, "axisY").unwrap_or(0.0);
+                let az = get_f64(args, "axisZ").unwrap_or(1.0);
+                let wire_id = self.resolve_wire(w).map_err(|e| e.to_string())?;
+                let shell = brepkit_operations::sheet::revolve_wire(
+                    self.topo_mut(),
+                    wire_id,
+                    Point3::new(ox, oy, oz),
+                    Vec3::new(ax, ay, az),
+                    angle_degrees.to_radians(),
+                )
+                .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!(shell_id_to_u32(shell)))
+            }
+            "loftWires" => {
+                let wire_handles: Vec<u32> = args["wires"]
+                    .as_array()
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_u64().map(|n| n as u32))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let wire_ids: Vec<_> = wire_handles
+                    .iter()
+                    .map(|&h| self.resolve_wire(h).map_err(|e| e.to_string()))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let shell = brepkit_operations::sheet::loft_wires(self.topo_mut(), &wire_ids)
+                    .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!(shell_id_to_u32(shell)))
+            }
+            "sweepWire" => {
+                let w = get_u32(args, "wire")?;
+                let edge_handles: Vec<u32> = args["pathEdges"]
+                    .as_array()
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_u64().map(|n| n as u32))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let wire_id = self.resolve_wire(w).map_err(|e| e.to_string())?;
+                let edge_ids: Vec<_> = edge_handles
+                    .iter()
+                    .map(|&h| self.resolve_edge(h).map_err(|e| e.to_string()))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let shell =
+                    brepkit_operations::sheet::sweep_wire(self.topo_mut(), wire_id, &edge_ids)
+                        .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!(shell_id_to_u32(shell)))
             }
             "sweep" => {
                 let f = get_u32(args, "face")?;

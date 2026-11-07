@@ -14,7 +14,9 @@ use brepkit_topology::edge::Edge;
 use brepkit_topology::face::{Face, FaceSurface};
 
 use crate::error::{WasmError, validate_finite, validate_positive};
-use crate::handles::{edge_id_to_u32, face_id_to_u32, solid_id_to_u32, wire_id_to_u32};
+use crate::handles::{
+    edge_id_to_u32, face_id_to_u32, shell_id_to_u32, solid_id_to_u32, wire_id_to_u32,
+};
 use brepkit_geometry::extrema::point_to_nurbs_surface;
 
 use crate::helpers::{
@@ -180,7 +182,26 @@ impl BrepKernel {
         .copied()
         .collect();
         let shell = brepkit_operations::loft::loft_sides(self.topo_mut(), solid_id, &ends)?;
-        Ok(crate::handles::shell_id_to_u32(shell))
+        Ok(shell_id_to_u32(shell))
+    }
+
+    /// Loft two or more open wires of equal edge counts into an open shell.
+    ///
+    /// Returns a shell handle (`u32`).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a handle is invalid, fewer than two wires are given,
+    /// their edge counts differ, or a wire is closed.
+    #[wasm_bindgen(js_name = "loftWires")]
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn loft_wires(&mut self, wires: Vec<u32>) -> Result<u32, JsError> {
+        let wire_ids: Vec<brepkit_topology::wire::WireId> = wires
+            .iter()
+            .map(|&h| self.resolve_wire(h))
+            .collect::<Result<_, _>>()?;
+        let shell = brepkit_operations::sheet::loft_wires(self.topo_mut(), &wire_ids)?;
+        Ok(shell_id_to_u32(shell))
     }
 
     // ── Shell ─────────────────────────────────────────────────────
@@ -384,6 +405,36 @@ impl BrepKernel {
         Ok(solid_id_to_u32(solid_id))
     }
 
+    /// Extrude an open wire along a direction vector into an open shell.
+    ///
+    /// Returns a shell handle (`u32`).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if an input is non-finite, the wire handle is invalid,
+    /// the extrusion has no length, or the wire is closed.
+    #[wasm_bindgen(js_name = "extrudeWire")]
+    pub fn extrude_wire(
+        &mut self,
+        wire: u32,
+        dir_x: f64,
+        dir_y: f64,
+        dir_z: f64,
+        distance: f64,
+    ) -> Result<u32, JsError> {
+        validate_finite(dir_x, "dir_x")?;
+        validate_finite(dir_y, "dir_y")?;
+        validate_finite(dir_z, "dir_z")?;
+        validate_finite(distance, "distance")?;
+
+        let wire_id = self.resolve_wire(wire)?;
+        let direction = Vec3::new(dir_x, dir_y, dir_z);
+        let shell =
+            brepkit_operations::sheet::extrude_wire(self.topo_mut(), wire_id, direction, distance)?;
+
+        Ok(shell_id_to_u32(shell))
+    }
+
     /// Revolve a planar face around an axis to create a solid of revolution.
     ///
     /// The axis is defined by an origin point `(ox, oy, oz)` and a direction
@@ -430,6 +481,57 @@ impl BrepKernel {
         let solid_id = revolve(self.topo_mut(), face_id, origin, direction, angle_radians)?;
 
         Ok(solid_id_to_u32(solid_id))
+    }
+
+    /// Revolve an open wire around an axis into an open shell.
+    ///
+    /// The axis is defined by an origin point `(ox, oy, oz)` and a direction
+    /// `(dx, dy, dz)`. The angle is in degrees and must be in (0, 360].
+    ///
+    /// Returns a shell handle (`u32`).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if an input is non-finite, the wire handle is invalid,
+    /// the axis has no length, the wire lies along the axis, or the wire is
+    /// closed.
+    #[wasm_bindgen(js_name = "revolveWire")]
+    #[allow(clippy::too_many_arguments)]
+    pub fn revolve_wire(
+        &mut self,
+        wire: u32,
+        ox: f64,
+        oy: f64,
+        oz: f64,
+        dx: f64,
+        dy: f64,
+        dz: f64,
+        angle_degrees: f64,
+    ) -> Result<u32, JsError> {
+        validate_finite(ox, "ox")?;
+        validate_finite(oy, "oy")?;
+        validate_finite(oz, "oz")?;
+        validate_finite(dx, "dx")?;
+        validate_finite(dy, "dy")?;
+        validate_finite(dz, "dz")?;
+        validate_finite(angle_degrees, "angle_degrees")?;
+        if angle_degrees <= 0.0 || angle_degrees > 360.0 {
+            return Err(WasmError::InvalidInput {
+                reason: format!("angle_degrees must be in (0, 360], got {angle_degrees}"),
+            }
+            .into());
+        }
+
+        let wire_id = self.resolve_wire(wire)?;
+        let shell = brepkit_operations::sheet::revolve_wire(
+            self.topo_mut(),
+            wire_id,
+            Point3::new(ox, oy, oz),
+            Vec3::new(dx, dy, dz),
+            angle_degrees.to_radians(),
+        )?;
+
+        Ok(shell_id_to_u32(shell))
     }
 
     /// Sweep a planar face along a NURBS curve path to create a solid.
@@ -900,6 +1002,29 @@ impl BrepKernel {
         let solid_id =
             brepkit_operations::sweep::sweep_along_edges(self.topo_mut(), face_id, &edge_ids)?;
         Ok(solid_id_to_u32(solid_id))
+    }
+
+    /// Sweep an open wire along a chain of path edges into an open shell.
+    ///
+    /// A straight path extrudes the wire and one circle or arc revolves it;
+    /// any other open, kink-free chain sweeps a NURBS face per wire edge.
+    ///
+    /// Returns a shell handle (`u32`).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a handle is invalid, the chain has no edges, breaks,
+    /// closes or has a kink, or the wire is closed.
+    #[wasm_bindgen(js_name = "sweepWire")]
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn sweep_wire(&mut self, wire: u32, path_edges: Vec<u32>) -> Result<u32, JsError> {
+        let wire_id = self.resolve_wire(wire)?;
+        let edge_ids: Vec<brepkit_topology::edge::EdgeId> = path_edges
+            .iter()
+            .map(|&h| self.resolve_edge(h))
+            .collect::<Result<_, _>>()?;
+        let shell = brepkit_operations::sheet::sweep_wire(self.topo_mut(), wire_id, &edge_ids)?;
+        Ok(shell_id_to_u32(shell))
     }
 
     // ── Offset Solid ──────────────────────────────────────────────
@@ -1734,6 +1859,110 @@ impl BrepKernel {
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    /// A line 10 long then a half circle of radius 5, as a wire.
+    fn line_and_half_circle(k: &mut crate::kernel::BrepKernel) -> u32 {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::vec::{Point3, Vec3};
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+
+        let line = k.make_line_edge(0.0, 0.0, 0.0, 10.0, 0.0, 0.0).unwrap();
+        let circle =
+            Circle3D::new(Point3::new(15.0, 0.0, 0.0), Vec3::new(0.0, 0.0, -1.0), 5.0).unwrap();
+        let topo = k.topo_mut();
+        let start = topo.add_vertex(brepkit_topology::vertex::Vertex::new(
+            Point3::new(10.0, 0.0, 0.0),
+            1e-7,
+        ));
+        let end = topo.add_vertex(brepkit_topology::vertex::Vertex::new(
+            Point3::new(20.0, 0.0, 0.0),
+            1e-7,
+        ));
+        let arc = topo.add_edge(Edge::new(start, end, EdgeCurve::Circle(circle)));
+        let arc = crate::handles::edge_id_to_u32(arc);
+        k.make_wire(vec![line, arc], false).unwrap()
+    }
+
+    fn shell_area(k: &crate::kernel::BrepKernel, shell: u32) -> f64 {
+        let shell = k.resolve_shell(shell).unwrap();
+        k.topo
+            .shell(shell)
+            .unwrap()
+            .faces()
+            .iter()
+            .map(|&f| brepkit_operations::measure::face_area(&k.topo, f, 1e-3).unwrap())
+            .sum()
+    }
+
+    /// The bindings return shells of the areas their closed forms give: the
+    /// wire's length times the distance, the sphere its arc sweeps about the
+    /// line it starts along, and the rectangle between two lines.
+    #[test]
+    fn open_wire_bindings_return_shells_of_the_closed_form_areas() {
+        use std::f64::consts::PI;
+
+        let length = 10.0 + 5.0 * PI;
+        let mut k = crate::kernel::BrepKernel::new();
+        let wire = line_and_half_circle(&mut k);
+        let shell = k.extrude_wire(wire, 0.0, 0.0, 1.0, 20.0).unwrap();
+        assert!((shell_area(&k, shell) - 20.0 * length).abs() < 1e-9);
+
+        let shell = k
+            .revolve_wire(wire, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 360.0)
+            .unwrap();
+        assert!((shell_area(&k, shell) - 100.0 * PI).abs() < 1e-6);
+
+        let path = k.make_line_edge(0.0, 0.0, 0.0, 0.0, 0.0, 30.0).unwrap();
+        let shell = k.sweep_wire(wire, vec![path]).unwrap();
+        assert!((shell_area(&k, shell) - 30.0 * length).abs() < 1e-9);
+
+        let low = k.make_line_edge(0.0, 0.0, 0.0, 10.0, 0.0, 0.0).unwrap();
+        let high = k.make_line_edge(0.0, 5.0, 10.0, 10.0, 5.0, 10.0).unwrap();
+        let (low, high) = (
+            k.make_wire(vec![low], false).unwrap(),
+            k.make_wire(vec![high], false).unwrap(),
+        );
+        let shell = k.loft_wires(vec![low, high]).unwrap();
+        assert!((shell_area(&k, shell) - 10.0 * 125f64.sqrt()).abs() < 1e-9);
+    }
+
+    /// A closed wire is the solid operations' to take: every open-wire op in
+    /// the batch dispatcher refuses it, and takes the same wire left open.
+    #[test]
+    fn open_wire_batch_ops_refuse_a_closed_wire() {
+        let mut k = crate::kernel::BrepKernel::new();
+        let a = k.make_line_edge(0.0, 0.0, 0.0, 4.0, 0.0, 0.0).unwrap();
+        let b = k.make_line_edge(4.0, 0.0, 0.0, 4.0, 4.0, 0.0).unwrap();
+        let c = k.make_line_edge(4.0, 4.0, 0.0, 0.0, 0.0, 0.0).unwrap();
+        let closed = k.make_wire(vec![a, b, c], true).unwrap();
+        let path = k.make_line_edge(0.0, 0.0, 0.0, 0.0, 0.0, 9.0).unwrap();
+        let far = k.make_line_edge(0.0, 0.0, 5.0, 4.0, 0.0, 5.0).unwrap();
+        let far = k.make_wire(vec![far], false).unwrap();
+        let open = k.make_line_edge(0.0, 0.0, 0.0, 4.0, 0.0, 0.0).unwrap();
+        let open = k.make_wire(vec![open], false).unwrap();
+        let batch = |wire: u32| {
+            format!(
+                r#"[
+                    {{"op": "extrudeWire", "args": {{"wire": {wire}, "dz": 1, "distance": 5}}}},
+                    {{"op": "revolveWire", "args": {{"wire": {wire}, "originY": 7, "axisX": 1, "axisZ": 0, "angle": 90}}}},
+                    {{"op": "sweepWire", "args": {{"wire": {wire}, "pathEdges": [{path}]}}}},
+                    {{"op": "loftWires", "args": {{"wires": [{wire}, {far}]}}}}
+                ]"#
+            )
+        };
+        let refused: serde_json::Value =
+            serde_json::from_str(&k.execute_batch(&batch(closed))).unwrap();
+        for result in refused.as_array().unwrap() {
+            let reason = result["error"].as_str().unwrap_or_default();
+            assert!(reason.contains("closed"), "{result}");
+        }
+        let taken: serde_json::Value =
+            serde_json::from_str(&k.execute_batch(&batch(open))).unwrap();
+        for result in taken.as_array().unwrap() {
+            let shell = u32::try_from(result["ok"].as_u64().expect("a shell")).unwrap();
+            assert!(k.resolve_shell(shell).is_ok());
+        }
+    }
 
     /// Drafting a box side by 5 degrees about its base through the batch
     /// dispatcher cuts the exact wedge `d h^2 tan(a) / 2`; an angle of 90

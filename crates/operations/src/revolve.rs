@@ -44,7 +44,7 @@ pub(crate) fn rotate_point(point: Point3, origin: Point3, axis: Vec3, angle: f64
 }
 
 /// The rigid turn by `angle` about the line through `origin` along `axis`.
-fn rotation_about(origin: Point3, axis: Vec3, angle: f64) -> brepkit_math::mat::Mat4 {
+pub(crate) fn rotation_about(origin: Point3, axis: Vec3, angle: f64) -> brepkit_math::mat::Mat4 {
     let [x, y, z] = [
         Vec3::new(1.0, 0.0, 0.0),
         Vec3::new(0.0, 1.0, 0.0),
@@ -72,7 +72,7 @@ pub(crate) fn rotate_vec(dir: Vec3, axis: Vec3, angle: f64) -> Vec3 {
 /// Compute the number of arc segments needed and the angle per segment.
 ///
 /// Each segment spans at most π/2 (90°). Returns `(num_segments, segment_angle)`.
-fn arc_segmentation(total_angle: f64) -> (usize, f64) {
+pub(crate) fn arc_segmentation(total_angle: f64) -> (usize, f64) {
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let num_segs = ((total_angle / FRAC_PI_2).ceil() as usize).max(1);
     #[allow(clippy::cast_precision_loss)]
@@ -132,7 +132,7 @@ pub(crate) fn make_arc_curve(
 /// - v-direction: circular arc (degree 2, 3 control points)
 ///
 /// The result is a 2×3 tensor-product surface.
-fn make_revolution_surface(
+pub(crate) fn make_revolution_surface(
     p0_start: Point3,
     p0_end: Point3,
     p1_start: Point3,
@@ -164,7 +164,7 @@ fn make_revolution_surface(
 ///
 /// - u-direction: the profile curve (its own degree and knots)
 /// - v-direction: circular arc (degree 2, 3 control points)
-fn curve_revolution_surface(
+pub(crate) fn curve_revolution_surface(
     profile: &NurbsCurve,
     origin: Point3,
     axis: Vec3,
@@ -231,7 +231,7 @@ fn reversed_nurbs(curve: &NurbsCurve) -> Result<NurbsCurve, brepkit_math::MathEr
 /// The profile edge's own curve over the stretch one band sweeps, as a NURBS
 /// running `from` to `to` (the band's ring vertices, the profile turned
 /// `turn` about the axis). `None` for a line, whose chord is itself.
-fn profile_band_curve(
+pub(crate) fn profile_band_curve(
     curve: &EdgeCurve,
     forward: bool,
     (from, to): (Point3, Point3),
@@ -292,7 +292,7 @@ pub(crate) fn edge_span_nurbs(
 
 /// Decompose a point into `(radial_distance, axial_coordinate)` relative to the
 /// revolution axis (a line through `axis_origin` with unit direction `axis`).
-fn radial_axial(p: Point3, axis_origin: Point3, axis: Vec3) -> (f64, f64) {
+pub(crate) fn radial_axial(p: Point3, axis_origin: Point3, axis: Vec3) -> (f64, f64) {
     let v = p - axis_origin;
     let z = v.dot(axis);
     ((v - axis * z).length(), z)
@@ -503,7 +503,7 @@ fn revolution_cone_apex(
 /// (how circles are often constructed) is run through curve recognition. Returns
 /// `None` for lines, ellipses, and unrecognised splines. `p_start`/`p_end` are
 /// the arc endpoints, used only as the recognition tolerance scale.
-fn profile_arc_center_radius(
+pub(crate) fn profile_arc_center_radius(
     curve: &EdgeCurve,
     p_start: Point3,
     p_end: Point3,
@@ -637,7 +637,7 @@ fn revolution_sphere_band(
 
 /// Index of the next ring for a given segment, wrapping to 0 for the last
 /// segment of a full revolution.
-const fn next_ring_index(seg: usize, num_segs: usize, is_full: bool) -> usize {
+pub(crate) const fn next_ring_index(seg: usize, num_segs: usize, is_full: bool) -> usize {
     if is_full && seg == num_segs - 1 {
         0
     } else {
@@ -667,7 +667,7 @@ struct WireRevolveData {
 /// volume by ~2% (gh #968). A `Torus` face is integrated exactly.
 ///
 /// One profile edge classified for the analytic full-revolution fast path.
-enum RevEdge {
+pub(crate) enum RevEdge {
     /// Axis-parallel line at radius `r`, axial span `[z0, z1]` → cylinder wall.
     Cylinder { r: f64 },
     /// Oblique line → cone wall. `apex` on the axis, `half_angle` from `make_cone`.
@@ -703,7 +703,7 @@ struct ProfileEdge {
 /// Classify one profile edge for the analytic full-revolution path, or `None`
 /// when the edge has no unambiguous closed-form revolution face (spline,
 /// axis-touching arc, sphere/spindle arc, degenerate cone angle).
-fn classify_profile_edge(
+pub(crate) fn classify_profile_edge(
     curve: &EdgeCurve,
     sp: Point3,
     ep: Point3,
@@ -1099,7 +1099,7 @@ fn build_analytic_revolution(
 /// Build the analytic wall surface (cylinder/cone/torus) for one classified
 /// profile edge, plus the `reversed` flag that aligns its natural normal with
 /// `outward` (the material-outward direction) at `probe`, a point ON the wall.
-fn revolution_wall_surface(
+pub(crate) fn revolution_wall_surface(
     class: &RevEdge,
     axis_origin: Point3,
     axis: Vec3,
