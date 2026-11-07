@@ -296,6 +296,7 @@ Quick reference — find the right file for any task:
 | Offset face / solid | `offset_face.rs`, `offset_v2.rs` (delegates to brepkit-offset), `offset_trim.rs` |
 | Offset wire | `offset_wire.rs` |
 | Face filling (Coons patch) | `fill_face.rs` |
+| Blend, match and fair surfaces with G0/G1/G2 control | `blend_surface.rs`, `blend_surface/` (chain, neighbour, rows, spline, match_edge, fair) |
 | Shape healing | `heal.rs` |
 | Defeaturing | `defeature.rs` |
 | Feature recognition | `feature_recognition.rs` |
