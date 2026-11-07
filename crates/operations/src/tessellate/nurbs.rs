@@ -365,12 +365,17 @@ fn cell_exceeds_angular(
     v_min: f64,
     v_max: f64,
     angular_tol: f64,
+    creases: &Creases,
 ) -> bool {
     if angular_tol <= 0.0 {
         return false;
     }
     let u_mid = 0.5 * (u_min + u_max);
     let v_mid = 0.5 * (v_min + v_max);
+    // A normal read on a crease is the far side's half the time, so a cell's
+    // corners there are read just inside it.
+    let (u_min, u_max) = inside_creases(u_min, u_max, &creases.u);
+    let (v_min, v_max) = inside_creases(v_min, v_max, &creases.v);
     let normals = [
         safe_normal(surface, u_min, v_min),
         safe_normal(surface, u_max, v_min),
@@ -395,6 +400,7 @@ fn cell_refinement_error(
     u_max: f64,
     v_min: f64,
     v_max: f64,
+    creases: &Creases,
 ) -> f64 {
     let u_mid = 0.5 * (u_min + u_max);
     let v_mid = 0.5 * (v_min + v_max);
@@ -412,11 +418,13 @@ fn cell_refinement_error(
     );
     let sag = (p_mid - bilinear_mid).length();
 
+    let (u_in_lo, u_in_hi) = inside_creases(u_min, u_max, &creases.u);
+    let (v_in_lo, v_in_hi) = inside_creases(v_min, v_max, &creases.v);
     let normals = [
-        safe_normal(surface, u_min, v_min),
-        safe_normal(surface, u_max, v_min),
-        safe_normal(surface, u_max, v_max),
-        safe_normal(surface, u_min, v_max),
+        safe_normal(surface, u_in_lo, v_in_lo),
+        safe_normal(surface, u_in_hi, v_in_lo),
+        safe_normal(surface, u_in_hi, v_in_hi),
+        safe_normal(surface, u_in_lo, v_in_hi),
         safe_normal(surface, u_mid, v_mid),
     ];
 
@@ -477,6 +485,105 @@ fn lerp_point(a: Point3, b: Point3) -> Point3 {
     )
 }
 
+/// A surface's creases along knot lines, by parameter.
+struct Creases {
+    u: Vec<f64>,
+    v: Vec<f64>,
+}
+
+/// The knot lines a surface actually creases along, in `u` and in `v`.
+///
+/// A cell straddling a crease has normals that disagree however small it gets,
+/// so it would divide to the depth limit all along the line. Where the crease is
+/// a cell edge, each side is smooth. A knot repeated up to the degree is no
+/// crease by itself: a rational arc's is smooth, and meshes as it did.
+fn creases(surface: &brepkit_math::nurbs::surface::NurbsSurface) -> Creases {
+    const PROBES: u32 = 5;
+    const CREASE_ANGLE: f64 = 1e-3;
+    let lines = |knots: &[f64], degree: usize, lo: f64, hi: f64| -> Vec<f64> {
+        let mut found: Vec<f64> = Vec::new();
+        for run in knots.chunk_by(|a, b| (a - b).abs() <= 1e-12 * (hi - lo)) {
+            if run[0] > lo && run[0] < hi && run.len() >= degree {
+                found.push(run[0]);
+            }
+        }
+        found
+    };
+    let (u_lo, u_hi) = surface.domain_u();
+    let (v_lo, v_hi) = surface.domain_v();
+    let along =
+        |k: u32, lo: f64, hi: f64| lo + (hi - lo) * (f64::from(k) + 0.5) / f64::from(PROBES);
+    let bends = |a: Vec3, b: Vec3| a.cross(b).length() > CREASE_ANGLE || a.dot(b) < 0.0;
+    let step_u = 1e-6 * (u_hi - u_lo);
+    let step_v = 1e-6 * (v_hi - v_lo);
+    let u_lines = lines(surface.knots_u(), surface.degree_u(), u_lo, u_hi)
+        .into_iter()
+        .filter(|&u| {
+            (0..PROBES).any(|k| {
+                let v = along(k, v_lo, v_hi);
+                bends(
+                    safe_normal(surface, u - step_u, v),
+                    safe_normal(surface, u + step_u, v),
+                )
+            })
+        })
+        .collect();
+    let v_lines = lines(surface.knots_v(), surface.degree_v(), v_lo, v_hi)
+        .into_iter()
+        .filter(|&v| {
+            (0..PROBES).any(|k| {
+                let u = along(k, u_lo, u_hi);
+                bends(
+                    safe_normal(surface, u, v - step_v),
+                    safe_normal(surface, u, v + step_v),
+                )
+            })
+        })
+        .collect();
+    Creases {
+        u: u_lines,
+        v: v_lines,
+    }
+}
+
+/// `[lo, hi]`, each end on a crease moved a hair into the span.
+fn inside_creases(lo: f64, hi: f64, creases: &[f64]) -> (f64, f64) {
+    let hair = 1e-6 * (hi - lo);
+    let on_crease = |at: f64| {
+        creases
+            .iter()
+            .any(|&crease| (crease - at).abs() <= 1e-3 * hair)
+    };
+    (
+        if on_crease(lo) { lo + hair } else { lo },
+        if on_crease(hi) { hi - hair } else { hi },
+    )
+}
+
+/// The even root grid's lines across `[lo, hi]`, with `creases` among them. An even
+/// line beside a crease gives way to it, leaving no sliver between the two.
+fn root_lines(lo: f64, hi: f64, creases: &[f64]) -> Vec<f64> {
+    #[allow(clippy::cast_precision_loss)]
+    let cell = (hi - lo) / INITIAL_CELLS as f64;
+    let mut lines: Vec<f64> = (0..=INITIAL_CELLS)
+        .map(|i| {
+            #[allow(clippy::cast_precision_loss)]
+            let even = lo + (i as f64) * cell;
+            even
+        })
+        .filter(|&even| {
+            even <= lo
+                || even >= hi
+                || creases
+                    .iter()
+                    .all(|&crease| (crease - even).abs() > 0.125 * cell)
+        })
+        .collect();
+    lines.extend_from_slice(creases);
+    lines.sort_by(f64::total_cmp);
+    lines
+}
+
 /// Build the adaptive quadtree by recursive subdivision.
 #[allow(clippy::similar_names)]
 fn build_quadtree(
@@ -485,6 +592,7 @@ fn build_quadtree(
     cell_idx: usize,
     threshold: f64,
     angular_tol: f64,
+    creases: &Creases,
 ) {
     let cell = &cells[cell_idx];
     if cell.depth >= MAX_DEPTH {
@@ -497,8 +605,9 @@ fn build_quadtree(
     let v_max = cell.v_max;
     let depth = cell.depth;
 
-    let error = cell_refinement_error(surface, u_min, u_max, v_min, v_max);
-    let angular_exceeded = cell_exceeds_angular(surface, u_min, u_max, v_min, v_max, angular_tol);
+    let error = cell_refinement_error(surface, u_min, u_max, v_min, v_max, creases);
+    let angular_exceeded =
+        cell_exceeds_angular(surface, u_min, u_max, v_min, v_max, angular_tol, creases);
     if error <= threshold && !angular_exceeded {
         return;
     }
@@ -544,7 +653,7 @@ fn build_quadtree(
     cells[cell_idx].children = Some([c0, c0 + 1, c0 + 2, c0 + 3]);
 
     for i in 0..4 {
-        build_quadtree(surface, cells, c0 + i, threshold, angular_tol);
+        build_quadtree(surface, cells, c0 + i, threshold, angular_tol, creases);
     }
 }
 
@@ -552,6 +661,7 @@ fn build_quadtree(
 fn conforming_pass(
     surface: &brepkit_math::nurbs::surface::NurbsSurface,
     cells: &mut Vec<AdaptiveCell>,
+    n_roots: usize,
 ) {
     for _pass in 0..MAX_DEPTH {
         let mut to_subdivide = Vec::new();
@@ -568,7 +678,7 @@ fn conforming_pass(
             let v_min = cells[i].v_min;
             let v_max = cells[i].v_max;
 
-            if needs_conforming_subdivision(cells, i, depth, u_min, u_max, v_min, v_max) {
+            if needs_conforming_subdivision(cells, n_roots, depth, u_min, u_max, v_min, v_max) {
                 to_subdivide.push(i);
             }
         }
@@ -590,7 +700,7 @@ fn conforming_pass(
 #[allow(clippy::similar_names)]
 fn needs_conforming_subdivision(
     cells: &[AdaptiveCell],
-    _cell_idx: usize,
+    n_roots: usize,
     depth: u8,
     u_min: f64,
     u_max: f64,
@@ -609,7 +719,7 @@ fn needs_conforming_subdivision(
     ];
 
     for &(pu, pv) in &probes {
-        if let Some(neighbor_depth) = find_leaf_depth_at(cells, pu, pv)
+        if let Some(neighbor_depth) = find_leaf_depth_at(cells, n_roots, pu, pv)
             && neighbor_depth > depth + 1
         {
             return true;
@@ -619,8 +729,7 @@ fn needs_conforming_subdivision(
 }
 
 /// Find the depth of the leaf cell containing the given parameter point.
-fn find_leaf_depth_at(cells: &[AdaptiveCell], u: f64, v: f64) -> Option<u8> {
-    let n_roots = INITIAL_CELLS * INITIAL_CELLS;
+fn find_leaf_depth_at(cells: &[AdaptiveCell], n_roots: usize, u: f64, v: f64) -> Option<u8> {
     for root_idx in 0..n_roots.min(cells.len()) {
         if let Some(depth) = find_leaf_depth_recursive(cells, root_idx, u, v) {
             return Some(depth);
@@ -1254,40 +1363,30 @@ pub(super) fn tessellate_nurbs(
     if su.cross(sv).dot(nrm) < 0.0 {
         handedness = -1.0;
     }
-    #[allow(clippy::cast_precision_loss)]
-    let du = (u_hi - u_lo) / INITIAL_CELLS as f64;
-    #[allow(clippy::cast_precision_loss)]
-    let dv = (v_hi - v_lo) / INITIAL_CELLS as f64;
+    let creases = creases(surface);
+    let u_lines = root_lines(u_lo, u_hi, &creases.u);
+    let v_lines = root_lines(v_lo, v_hi, &creases.v);
     let mut cells = Vec::with_capacity(256);
 
-    for i in 0..INITIAL_CELLS {
-        for j in 0..INITIAL_CELLS {
-            #[allow(clippy::cast_precision_loss)]
-            let u_min = u_lo + (i as f64) * du;
-            #[allow(clippy::cast_precision_loss)]
-            let u_max = u_lo + ((i + 1) as f64) * du;
-            #[allow(clippy::cast_precision_loss)]
-            let v_min = v_lo + (j as f64) * dv;
-            #[allow(clippy::cast_precision_loss)]
-            let v_max = v_lo + ((j + 1) as f64) * dv;
-
+    for u_span in u_lines.windows(2) {
+        for v_span in v_lines.windows(2) {
             cells.push(AdaptiveCell {
-                u_min,
-                u_max,
-                v_min,
-                v_max,
+                u_min: u_span[0],
+                u_max: u_span[1],
+                v_min: v_span[0],
+                v_max: v_span[1],
                 depth: 0,
                 children: None,
             });
         }
     }
 
-    let n_roots = INITIAL_CELLS * INITIAL_CELLS;
+    let n_roots = cells.len();
     for i in 0..n_roots {
-        build_quadtree(surface, &mut cells, i, deflection, angular_tol);
+        build_quadtree(surface, &mut cells, i, deflection, angular_tol, &creases);
     }
 
-    conforming_pass(surface, &mut cells);
+    conforming_pass(surface, &mut cells, n_roots);
 
     let leaf_count = cells.iter().filter(|c| c.children.is_none()).count();
     let mut eval_cache: DetHashMap<(u64, u64), (Point3, Vec3)> = DetHashMap::default();
