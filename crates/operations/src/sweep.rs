@@ -2985,7 +2985,9 @@ fn chain_directions(
     topo: &Topology,
     edges: &[brepkit_topology::edge::EdgeId],
 ) -> Result<Vec<bool>, crate::OperationsError> {
-    const JOIN: f64 = 1e-6;
+    // The analytic spine's own join tolerance, so that a gap cannot pass one path
+    // and fail the other.
+    const JOIN: f64 = 1e-5;
     let mut ends = Vec::with_capacity(edges.len());
     for &eid in edges {
         let edge = topo.edge(eid)?;
