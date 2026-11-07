@@ -1,0 +1,28 @@
+crates/wasm/src/bindings/operations.rs
+  s_649261a24df31b::t_010a6b4da58985 1999-2000
+crates/operations/tests/fillet_corner_options.rs
+  s_649261a24df31b::t_3c4ac80bdc29d1 365,371
+  s_649261a24df31b::t_010a6b4da58985 349-364,366-367,369-370,372-388,391
+  s_649261a24df31b::t_5851cf0892728c 368
+  s_649261a24df31b::t_cc18c74382b185 389-390
+crates/wasm/src/handles.rs
+  s_649261a24df31b::t_010a6b4da58985 48-52
+crates/operations/src/blend_ops.rs
+  s_649261a24df31b::t_010a6b4da58985 3-4,11,231,233-239
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d36e28244e6e4e0aea1e25658e15b543fc032a22",
+  "prompts": {},
+  "sessions": {
+    "s_649261a24df31b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d8bbbba4-0431-4f6a-a622-e632a6659779",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
