@@ -62,10 +62,11 @@ mod tests {
         }
     }
 
-    /// Half of each tube, sunk in a plate's top face.
+    /// Half of each tube, sunk in a plate's top face, every ring clear of the
+    /// plate's sides.
     #[test]
     fn a_grid_of_tori_takes_every_cut() {
-        for n in [2_u32, 3, 6] {
+        for n in [2_u32, 3, 5] {
             let mut t = Topology::default();
             let plate = make_box(&mut t, 12.0, 12.0, 3.0).unwrap();
             let mut tools = Vec::new();
