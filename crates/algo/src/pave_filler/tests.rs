@@ -1996,3 +1996,168 @@ fn near_coincident_arcs_get_middles_on_their_own_curves() {
     }
     assert_ne!(middles[0], middles[1], "the arcs share one middle");
 }
+
+/// Records a section on `curve` between two new vertices, as phase FF does.
+fn recorded_section(
+    topo: &mut Topology,
+    arena: &mut GfaArena,
+    curve: EdgeCurve,
+    (start, end): (Point3, Point3),
+    t_range: (f64, f64),
+) -> usize {
+    use crate::ds::{IntersectionCurveDS, Pave, PaveBlock};
+    let (a, b) = (
+        topo.add_vertex(Vertex::new(start, 1e-7)),
+        topo.add_vertex(Vertex::new(end, 1e-7)),
+    );
+    let edge = topo.add_edge(Edge::new(a, b, curve.clone()));
+    let wire = topo.add_wire(Wire::new(vec![OrientedEdge::new(edge, true)], false).unwrap());
+    let face = topo.add_face(Face::new(
+        wire,
+        vec![],
+        FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: 0.0,
+        },
+    ));
+    let pb = arena.pave_blocks.alloc(PaveBlock::new(
+        edge,
+        Pave::new(a, t_range.0),
+        Pave::new(b, t_range.1),
+    ));
+    arena.curves.push(IntersectionCurveDS {
+        curve,
+        face_a: face,
+        face_b: face,
+        bbox: brepkit_math::aabb::Aabb3::from_points([start, end]),
+        pave_blocks: vec![pb],
+        t_range,
+    });
+    arena.curves.len() - 1
+}
+
+/// A half ellipse's arc, its ends at `(0, +-5, 0)`, its parameter 0 to pi.
+fn half_ellipse_arc() -> (EdgeCurve, Point3, Point3) {
+    let ellipse = brepkit_math::curves::Ellipse3D::new(
+        Point3::new(0.0, 0.0, 0.0),
+        Vec3::new(0.0, 0.0, 1.0),
+        5.0,
+        3.0,
+    )
+    .unwrap();
+    let (start, end) = (
+        ellipse.evaluate(0.0),
+        ellipse.evaluate(std::f64::consts::PI),
+    );
+    (EdgeCurve::Ellipse(ellipse), start, end)
+}
+
+/// An arc and a chord sharing both ends: the arc divides at its middle, in two
+/// curves meeting there, and the chord stays whole.
+#[test]
+fn a_section_arc_divides_where_a_chord_shares_its_ends() {
+    let mut topo = Topology::new();
+    let mut arena = GfaArena::new();
+    let (arc, start, end) = half_ellipse_arc();
+    let halves = recorded_section(
+        &mut topo,
+        &mut arena,
+        arc,
+        (start, end),
+        (0.0, std::f64::consts::PI),
+    );
+    recorded_section(
+        &mut topo,
+        &mut arena,
+        EdgeCurve::Line,
+        (start, end),
+        (-5.0, 5.0),
+    );
+    super::split_co_endpoint_sections(
+        &mut topo,
+        brepkit_math::tolerance::Tolerance::new(),
+        &mut arena,
+    )
+    .unwrap();
+
+    assert_eq!(arena.curves.len(), 3);
+    let first = arena.curves[halves].pave_blocks[0];
+    let second = arena.curves[2].pave_blocks[0];
+    let (first, second) = (
+        arena.pave_blocks.get(first).unwrap(),
+        arena.pave_blocks.get(second).unwrap(),
+    );
+    assert_eq!(first.end.vertex, second.start.vertex);
+    let middle = topo.vertex(first.end.vertex).unwrap().point();
+    assert!(
+        (middle - Point3::new(-3.0, 0.0, 0.0)).length() < 1e-9,
+        "{middle:?}"
+    );
+}
+
+/// Ends either side of a grid cell's boundary are still one pair of ends.
+#[test]
+fn ends_a_rounding_apart_still_share_a_chord() {
+    let mut topo = Topology::new();
+    let mut arena = GfaArena::new();
+    let (arc, start, end) = half_ellipse_arc();
+    recorded_section(
+        &mut topo,
+        &mut arena,
+        arc,
+        (start, end),
+        (0.0, std::f64::consts::PI),
+    );
+    let apart = Vec3::new(4e-7, 0.0, 0.0);
+    recorded_section(
+        &mut topo,
+        &mut arena,
+        EdgeCurve::Line,
+        (start + apart, end + apart),
+        (-5.0, 5.0),
+    );
+    super::split_co_endpoint_sections(
+        &mut topo,
+        brepkit_math::tolerance::Tolerance::new(),
+        &mut arena,
+    )
+    .unwrap();
+    assert_eq!(arena.curves.len(), 3);
+}
+
+/// A straight spline along a line section is one path, whatever range the line's
+/// parameter runs over, and neither divides.
+#[test]
+fn a_straight_spline_along_a_line_section_stays_whole() {
+    let mut topo = Topology::new();
+    let mut arena = GfaArena::new();
+    let (start, end) = (Point3::new(0.0, 5.0, 0.0), Point3::new(0.0, -5.0, 0.0));
+    let spline = brepkit_math::nurbs::curve::NurbsCurve::new(
+        1,
+        vec![0.0, 0.0, 1.0, 1.0],
+        vec![start, end],
+        vec![1.0, 1.0],
+    )
+    .unwrap();
+    recorded_section(
+        &mut topo,
+        &mut arena,
+        EdgeCurve::NurbsCurve(spline),
+        (start, end),
+        (0.0, 1.0),
+    );
+    recorded_section(
+        &mut topo,
+        &mut arena,
+        EdgeCurve::Line,
+        (start, end),
+        (-5.0, 5.0),
+    );
+    super::split_co_endpoint_sections(
+        &mut topo,
+        brepkit_math::tolerance::Tolerance::new(),
+        &mut arena,
+    )
+    .unwrap();
+    assert_eq!(arena.curves.len(), 2);
+}
