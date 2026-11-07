@@ -1,5 +1,22 @@
 # Changelog
 
+## [4.7.0](https://github.com/andymai/brepkit/compare/v4.6.30...v4.7.0) (2026-11-07)
+
+
+### Features
+
+* **operations:** build open shells from open wires ([#2317](https://github.com/andymai/brepkit/issues/2317)) ([9acb394](https://github.com/andymai/brepkit/commit/9acb39466160b886abfa077f8a6fe779a2ae9644))
+
+
+### Bug Fixes
+
+* **algo:** split a whole torus into bands at loops winding its ring ([#2305](https://github.com/andymai/brepkit/issues/2305)) ([c1ad960](https://github.com/andymai/brepkit/commit/c1ad96073e4de041d13d91cb746ac096e4a3b7bd))
+* **algo:** stop a cut from filling holes in a face it splits ([#2314](https://github.com/andymai/brepkit/issues/2314)) ([8132935](https://github.com/andymai/brepkit/commit/81329354d4ffda949c49b10e4abf1f32f13c30a1))
+* **algo:** stop a flat cut welding a curved wall's arc to a chord ([#2319](https://github.com/andymai/brepkit/issues/2319)) ([39e32c2](https://github.com/andymai/brepkit/commit/39e32c25d77698596a6733b36aeeabab725cccd2))
+* **algo:** stop the classifier missing a whole torus inside a larger solid ([#2315](https://github.com/andymai/brepkit/issues/2315)) ([a062651](https://github.com/andymai/brepkit/commit/a062651a1783682946988096df7d05bf19d6e12d))
+* **blend:** roll a true ball so a saddle fillet stays tangent ([#2321](https://github.com/andymai/brepkit/issues/2321)) ([2645722](https://github.com/andymai/brepkit/commit/2645722261d8198624cb53acddcdffe6e5e4652c)), closes [#2161](https://github.com/andymai/brepkit/issues/2161)
+* **operations:** follow a sweep's path chain whichever way its edges are stored ([#2323](https://github.com/andymai/brepkit/issues/2323)) ([80c980b](https://github.com/andymai/brepkit/commit/80c980b5c4512d452e59af16657229d323eae282))
+
 ## [4.6.30](https://github.com/andymai/brepkit/compare/v4.6.29...v4.6.30) (2026-11-07)
 
 
