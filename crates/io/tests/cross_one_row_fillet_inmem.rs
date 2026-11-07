@@ -641,8 +641,12 @@ fn rolling_reference_refuses_closed_rims_before_building() {
         (
             topo.num_vertices(),
             topo.num_edges(),
+            topo.num_wires(),
             topo.num_faces(),
+            topo.num_shells(),
             topo.num_solids(),
+            topo.num_compounds(),
+            topo.num_compsolids(),
         )
     };
     let before = counts(&topo);
