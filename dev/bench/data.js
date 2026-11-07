@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794068232035,
+  "lastUpdate": 1794069911509,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -66203,6 +66203,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 28300605,
             "range": "± 340193",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c1ad96073e4de041d13d91cb746ac096e4a3b7bd",
+          "message": "fix(algo): split a whole torus into bands at loops winding its ring (#2305)",
+          "timestamp": "2026-11-07T08:42:16-08:00",
+          "tree_id": "81285ad6a84bb8b48a8841691c51718893a76aa7",
+          "url": "https://github.com/andymai/brepkit/commit/c1ad96073e4de041d13d91cb746ac096e4a3b7bd"
+        },
+        "date": 1794069899333,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 890454,
+            "range": "± 1749",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 915896,
+            "range": "± 820",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10651,
+            "range": "± 49",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 541247,
+            "range": "± 1015",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 22575232,
+            "range": "± 30511",
             "unit": "ns/iter"
           }
         ]
