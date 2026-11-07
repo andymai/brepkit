@@ -527,11 +527,17 @@ struct Creases {
 fn creases(surface: &brepkit_math::nurbs::surface::NurbsSurface) -> Creases {
     const PROBES: u32 = 5;
     const CREASE_ANGLE: f64 = 1e-3;
-    let lines = |knots: &[f64], degree: usize, lo: f64, hi: f64| -> Vec<f64> {
-        let mut found: Vec<f64> = Vec::new();
-        for run in knots.chunk_by(|a, b| (a - b).abs() <= 1e-12 * (hi - lo)) {
-            if run[0] > lo && run[0] < hi && run.len() >= degree {
-                found.push(run[0]);
+    // Each full knot with the distinct knots either side, so a probe can step a
+    // share of its own span off the line: a share of the whole domain can pass
+    // through a narrow span, or over a second fold close by.
+    let lines = |knots: &[f64], degree: usize, lo: f64, hi: f64| -> Vec<(f64, f64, f64)> {
+        let runs: Vec<&[f64]> = knots
+            .chunk_by(|a, b| (a - b).abs() <= 1e-12 * (hi - lo))
+            .collect();
+        let mut found = Vec::new();
+        for (i, run) in runs.iter().enumerate() {
+            if run[0] > lo && run[0] < hi && run.len() >= degree && i > 0 && i + 1 < runs.len() {
+                found.push((runs[i - 1][0], run[0], runs[i + 1][0]));
             }
         }
         found
@@ -541,31 +547,32 @@ fn creases(surface: &brepkit_math::nurbs::surface::NurbsSurface) -> Creases {
     let along =
         |k: u32, lo: f64, hi: f64| lo + (hi - lo) * (f64::from(k) + 0.5) / f64::from(PROBES);
     let bends = |a: Vec3, b: Vec3| a.cross(b).length() > CREASE_ANGLE || a.dot(b) < 0.0;
-    let step_u = 1e-6 * (u_hi - u_lo);
-    let step_v = 1e-6 * (v_hi - v_lo);
+    let share = |width: f64| 1e-6 * width;
     let u_lines = lines(surface.knots_u(), surface.degree_u(), u_lo, u_hi)
         .into_iter()
-        .filter(|&u| {
+        .filter(|&(before, u, after)| {
             (0..PROBES).any(|k| {
                 let v = along(k, v_lo, v_hi);
                 bends(
-                    safe_normal(surface, u - step_u, v),
-                    safe_normal(surface, u + step_u, v),
+                    safe_normal(surface, u - share(u - before), v),
+                    safe_normal(surface, u + share(after - u), v),
                 )
             })
         })
+        .map(|(_, u, _)| u)
         .collect();
     let v_lines = lines(surface.knots_v(), surface.degree_v(), v_lo, v_hi)
         .into_iter()
-        .filter(|&v| {
+        .filter(|&(before, v, after)| {
             (0..PROBES).any(|k| {
                 let u = along(k, u_lo, u_hi);
                 bends(
-                    safe_normal(surface, u, v - step_v),
-                    safe_normal(surface, u, v + step_v),
+                    safe_normal(surface, u, v - share(v - before)),
+                    safe_normal(surface, u, v + share(after - v)),
                 )
             })
         })
+        .map(|(_, v, _)| v)
         .collect();
     let capped = |lines: Vec<f64>| {
         if lines.len() > MAX_CREASE_LINES {
@@ -1521,5 +1528,79 @@ pub(super) fn tessellate_nurbs(
             indices,
         },
         uvs,
+    }
+}
+
+#[cfg(test)]
+mod crease_tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use brepkit_math::nurbs::surface::NurbsSurface;
+    use brepkit_math::vec::Point3;
+
+    use super::creases;
+
+    /// A half cylinder of two quarter arcs joined at `split`, smooth across it
+    /// however narrow either span.
+    fn half_cylinder(split: f64) -> NurbsSurface {
+        let w = std::f64::consts::FRAC_1_SQRT_2;
+        let row = |x: f64| {
+            vec![
+                Point3::new(x, 5.0, 0.0),
+                Point3::new(x, 5.0, 5.0),
+                Point3::new(x, 0.0, 5.0),
+                Point3::new(x, -5.0, 5.0),
+                Point3::new(x, -5.0, 0.0),
+            ]
+        };
+        NurbsSurface::new(
+            1,
+            2,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![0.0, 0.0, 0.0, split, split, 1.0, 1.0, 1.0],
+            vec![row(0.0), row(10.0)],
+            vec![vec![1.0, w, 1.0, w, 1.0]; 2],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn a_smooth_join_in_a_narrow_span_is_no_crease() {
+        for split in [0.5, 0.0001, 0.9999] {
+            let found = creases(&half_cylinder(split));
+            assert!(
+                found.u.is_empty() && found.v.is_empty(),
+                "at {split}: {:?}",
+                found.v
+            );
+        }
+    }
+
+    #[test]
+    fn two_folds_a_hair_apart_are_two_creases() {
+        let (first, gap) = (4.3, 5e-6);
+        let rows: Vec<Vec<Point3>> = [0.0, 10.0]
+            .iter()
+            .map(|&x| {
+                vec![
+                    Point3::new(x, 0.0, 0.0),
+                    Point3::new(x, first, 0.0),
+                    Point3::new(x, first + gap, gap),
+                    Point3::new(x, 10.0, gap),
+                ]
+            })
+            .collect();
+        let knot = first / 10.0;
+        let next = knot + (2.0_f64 * gap * gap).sqrt() / 10.0;
+        let sheet = NurbsSurface::new(
+            1,
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![0.0, 0.0, knot, next, 1.0, 1.0],
+            rows,
+            vec![vec![1.0; 4]; 2],
+        )
+        .unwrap();
+        assert_eq!(creases(&sheet).v.len(), 2);
     }
 }
