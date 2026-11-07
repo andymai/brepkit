@@ -637,11 +637,19 @@ fn rolling_reference_refuses_closed_rims_before_building() {
     let solid = load(&mut topo);
     let source = source_fingerprint(&topo, solid);
     let edges = filter_filletable_edges(&topo, solid, &all_edges(&topo, solid)).unwrap();
-    let solids_before = topo.num_solids();
+    let counts = |topo: &Topology| {
+        (
+            topo.num_vertices(),
+            topo.num_edges(),
+            topo.num_faces(),
+            topo.num_solids(),
+        )
+    };
+    let before = counts(&topo);
     let error = brepkit_operations::fillet::fillet_rolling_ball(&mut topo, solid, &edges, RADIUS)
         .expect_err("the rolling-ball engine must refuse closed rims");
     assert!(error.to_string().contains("closed circular edges"));
-    assert_eq!(topo.num_solids(), solids_before);
+    assert_eq!(counts(&topo), before);
     assert_eq!(source_fingerprint(&topo, solid), source);
 }
 
