@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794056826062,
+  "lastUpdate": 1794057036185,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -65555,6 +65555,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 28586491,
             "range": "± 141408",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "78b895652f752d9fa127632ce9e4e7fc7894237a",
+          "message": "fix(io): write IGES faces as trimmed surfaces and sew them back into solids (#2293)\n\nCloses #2179.\n\n## Problem\n\nIGES export wrote each face as an unbounded plane (108) and its edges as\nloose lines (110), and import turned each plane into a 1 x 1 patch at\nthe plane's origin. So nothing survived a round trip: the issue's 40 x\n30 x 20 box read back as area 6 and volume 30, against 5200 and 24000.\nExport also skipped cylinders, cones, spheres and tori entirely, cut\narcs into 32 chords, and rounded coordinates to six decimals.\n\n## Change\n\n**Writer** (`iges/writer.rs`)\n- Each face is a trimmed surface (144) over a plane (108) or B-spline\nsurface (128). Each boundary is a curve on that surface (142) holding a\ncomposite (102) of lines (110) and B-spline curves (126).\n- Curved analytic faces go out as their exact rational B-splines, taken\nfrom `convert_to_bspline` on a copy of the arena. Planes and edges are\nwritten from the solid as it stands.\n- Arcs are exact rational quadratics. A closed circle's curve starts at\nits vertex, not at the curve's own origin, or the wire doesn't connect.\n- A 144 has no flip flag, so a surface always faces the way its face\ndoes: a reversed plane negates its coefficients, and a reversed B-spline\nruns its `u` backward.\n- Reals keep every digit, parameters no longer split across lines, and\nrational surface weights are written (they were hard-coded to 1).\n- Cavity faces are written too, and a solid named twice is written once.\n\n**Reader** (`iges/reader.rs`)\n- Reads 144s and bounded 108s, and sews faces by position into shared\nvertices and edges.\n- Treats a file as untrusted. A composite curve is refused when it holds\nitself, nests past 32, or makes its boundary visit more than twice the\nfile's entities, so neither a long chain nor composites holding each\nother twice over can exhaust the stack or stall the read. A count can't\nexceed what its entity holds.\n- A boundary that does not close is no face. A set of faces that does\nnot close is no cavity, and a cavity goes to the smallest solid holding\na point of it.\n- A spline must be one evaluation can walk, since `NurbsCurve::new` and\n`NurbsSurface::new` check only their counts: a degree of at least 1 and\nbelow its point count, knots that never fall and span a real domain,\nweights above zero, and a curve span on its domain.\n- Each connected set of faces is a solid, or a cavity of the solid with\nthe smallest box holding it when its signed volume is negative.\n- A bare plane with no boundary is now skipped rather than becoming a\nunit square, and a face that needs an unread entity is skipped with a\nwarning.\n\n## Required follow-up in brepjs\n\nbrepjs's `mergeIgesDocuments` joins per-solid documents by appending\nthem, and throws on any entity that refers to another. Faces are now\nsuch entities, so **multi-solid IGES export through brepjs will throw\nonce it bumps its kernel pin**. Single-solid export is unaffected, and\nnothing breaks until that bump.\n\nThis PR adds an `exportIgesSolids` binding that writes several solids\ninto one document. brepjs's `exportIGES` should call it in place of the\nmerge when it picks up this release.\n\n## Limits\n\nThese are stated in the README and the `io-formats` skill.\n\n- Curved faces come back as NURBS, not analytic surfaces, so their\nvolumes are measured off a mesh (the obround prism reads within about\n0.004%). STEP remains the format for keeping analytic faces.\n- It does not read analytic surface entities, entity 100 arcs or 186\nsolids. I tested round trips of its own output only, not files from\nother systems.\n- Solids that share an edge in one file come back as one.\n- I wrote the 142 and 144 structure from the IGES spec's field layout\nand have not opened the output in another CAD system.\n\n## Tests\n\n`crates/io/tests/iges_round_trip.rs` (26 tests; the first 10 were\ncommitted before the fix), and unit tests in `iges/reader.rs` for each\nspline rule alone and for the composite limits:\n- the issue's box, by volume and area, and which entity types the file\nholds\n- exact coordinates (a side of 1/3, to 1e-15)\n- a turned box\n- a hole, including a boolean's reversed walls\n- a cavity as an inner shell\n- separate solids\n- arcs, checking every sampled point lies on its circle to 1e-12\n- cylinder, frustum, ball and ring within 0.2%, watertight\n- a reversed curved bore\n- an unbounded plane\n- malformed files: self-referencing and mutually referencing composites,\nand absurd or invalid counts\n- two closed circles through the same points\n- a hollow box standing inside another's void, in either file order\n- a whole ring's seams\n- a degree past its points and falling knots, on a curve and on a\nsurface, each reached through a face\n- a chain of 50,000 composites, and 40 composites each holding the next\ntwice\n- a solid named twice\n\nBefore the fix, the hostile-file tests failed as a panic in `find_span`,\na stack overflow, and a read still running when killed after 60 s. With\nthe `count` guard disabled, the rerouted spline cases panic with a\ncapacity overflow, so they do reach the parsers.\n\nPassing locally on this head: `cargo test -p brepkit-io`, plus clippy on\nthe pinned 1.96 toolchain for `brepkit-io` and `brepkit-wasm`. `cargo\ntest -p brepkit-wasm --lib --features io` last ran locally on the\nprevious head; wasm has changed since only by one doc comment, and CI\nruns the workspace.",
+          "timestamp": "2026-11-07T05:04:08-08:00",
+          "tree_id": "66b41659ed4bfda2e94f54367467725485e9b081",
+          "url": "https://github.com/andymai/brepkit/commit/78b895652f752d9fa127632ce9e4e7fc7894237a"
+        },
+        "date": 1794057025785,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1056620,
+            "range": "± 2752",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1133522,
+            "range": "± 5878",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12858,
+            "range": "± 18",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 678707,
+            "range": "± 4467",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 28664071,
+            "range": "± 949293",
             "unit": "ns/iter"
           }
         ]
