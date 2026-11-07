@@ -212,16 +212,15 @@ pub fn fillet_v2_with_corners(
     }
     let mut result = all_blended(fillet_v2(topo, solid, edges, radius)?)?;
     for (kind, (at, directions, given)) in plans {
+        let rolling =
+            brepkit_blend::setback_corner::rolling_distances(topo, result, at, &directions)?
+                .ok_or_else(|| OperationsError::InvalidInput {
+                    reason: "corner options need a ball corner between three flat faces".into(),
+                })?;
         let distances = match (given, kind) {
             (Some(distances), _) => distances,
             (None, CornerKind::Rolling) => continue,
-            (None, CornerKind::G2) => {
-                brepkit_blend::setback_corner::rolling_distances(topo, result, at, &directions)?
-                    .ok_or_else(|| OperationsError::InvalidInput {
-                        reason: "corner options need a ball corner between three flat faces".into(),
-                    })?
-                    .map(|rolling| rolling + radius)
-            }
+            (None, CornerKind::G2) => rolling.map(|distance| distance + radius),
         };
         let setbacks = [
             (directions[0], distances[0]),

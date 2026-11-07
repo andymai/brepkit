@@ -346,6 +346,33 @@ mod tests {
         }
     }
 
+    /// A corner mixing convex and concave edges has no ball, so asking for one is
+    /// refused rather than answered with whatever closes it.
+    #[test]
+    fn a_rolling_corner_with_no_ball_is_refused() {
+        let mut topo = Topology::new();
+        let block = make_box(&mut topo, 40.0, 40.0, 40.0).unwrap();
+        let step = make_box(&mut topo, 20.0, 40.0, 20.0).unwrap();
+        transform_solid(&mut topo, step, &Mat4::translation(20.0, 0.0, 20.0)).unwrap();
+        let stepped = boolean(&mut topo, BooleanOp::Cut, block, step).unwrap();
+        let at = Point3::new(20.0, 0.0, 20.0);
+        let corner = vertex_at(&topo, stepped, at);
+        let edges = edges_at(&topo, stepped, corner);
+        assert_eq!(edges.len(), 3);
+        let plain = fillet_v2_with_corners(&mut topo, stepped, &edges, RADIUS, &[]);
+        assert!(plain.is_ok(), "the plain fillet closes it: {plain:?}");
+        let corners = [FilletCorner {
+            vertex: corner,
+            setbacks: Vec::new(),
+            kind: CornerKind::Rolling,
+        }];
+        let refused = fillet_v2_with_corners(&mut topo, stepped, &edges, RADIUS, &corners);
+        assert!(
+            refused.is_err_and(|e| e.to_string().contains("ball corner")),
+            "a mixed corner has no ball"
+        );
+    }
+
     /// A cavity the rolled corner clears but the set-back's patches could reach
     /// is refused, and one far off is kept.
     #[test]
