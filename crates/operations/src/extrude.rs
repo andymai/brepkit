@@ -633,12 +633,11 @@ pub(crate) fn side_face_surface(
                     };
                     let forward = as_circle(normal)?;
                     let (c0, c1) = forward.domain_with_endpoints(curve_start, curve_end);
-                    let reached = forward.evaluate_with_endpoints(
-                        f64::midpoint(c0, c1),
-                        curve_start,
-                        curve_end,
-                    );
-                    let circle = if (reached - middle).length() <= tol * 100.0 {
+                    let along_it = brepkit_math::curves::Circle3D::new(center, normal, radius)
+                        .map_err(crate::OperationsError::Math)?
+                        .project(middle);
+                    let turn = (along_it - c0).rem_euclid(std::f64::consts::TAU);
+                    let circle = if turn <= c1 - c0 {
                         forward
                     } else {
                         as_circle(-normal)?

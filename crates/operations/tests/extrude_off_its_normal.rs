@@ -332,6 +332,39 @@ mod tests {
         }
     }
 
+    /// A trim that is no half of the spline's domain: the arc's angular middle is
+    /// not its parameter's, and the wall must still follow this arc, not the rest
+    /// of the circle. The spline's own seam lies a quarter turn on from the first
+    /// vertex, and a trim stays short of it.
+    #[test]
+    fn a_short_trim_of_a_spline_sweeps_its_own_short_arc() {
+        let along = Vec3::new(1.0, 0.0, 1.0).normalize().unwrap();
+        for degrees in [20.0_f64, 45.0, 80.0] {
+            let turn = degrees.to_radians();
+            let mut topo = Topology::new();
+            let circle = Circle3D::new(at(0.0, 0.0), UP, 5.0).unwrap();
+            let whole =
+                brepkit_geometry::convert::circle_to_nurbs(&circle, 0.0, std::f64::consts::TAU)
+                    .unwrap();
+            let (a, b) = (
+                topo.add_vertex(Vertex::new(at(5.0, 0.0), 1e-7)),
+                topo.add_vertex(Vertex::new(at(5.0 * turn.cos(), 5.0 * turn.sin()), 1e-7)),
+            );
+            let arc = topo.add_edge(Edge::new(a, b, EdgeCurve::NurbsCurve(whole)));
+            let chord = topo.add_edge(Edge::new(b, a, EdgeCurve::Line));
+            let wire = loop_of(&mut topo, vec![arc, chord]);
+            let face = plane_face(&mut topo, wire, Vec::new());
+            let solid = extrude(&mut topo, face, along, 10.0).unwrap();
+            let area = 12.5 * (turn - turn.sin());
+            assert_prism(
+                &topo,
+                solid,
+                area * along.z() * 10.0,
+                &format!("{degrees} degrees"),
+            );
+        }
+    }
+
     /// A slanted body goes on to booleans: a box across it takes off what the
     /// body holds in that height.
     #[test]
