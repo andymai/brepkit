@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794066072590,
+  "lastUpdate": 1794068232035,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -66149,6 +66149,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 28262261,
             "range": "± 61656",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "2645722261d8198624cb53acddcdffe6e5e4652c",
+          "message": "fix(blend): roll a true ball so a saddle fillet stays tangent (#2321)\n\nCloses #2161",
+          "timestamp": "2026-11-07T08:13:55-08:00",
+          "tree_id": "71f0d5b43b38d26eaa874ce71a7ba1517cb6f3e5",
+          "url": "https://github.com/andymai/brepkit/commit/2645722261d8198624cb53acddcdffe6e5e4652c"
+        },
+        "date": 1794068225971,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1060043,
+            "range": "± 3492",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1134403,
+            "range": "± 45606",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12976,
+            "range": "± 100",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 678823,
+            "range": "± 3113",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 28300605,
+            "range": "± 340193",
             "unit": "ns/iter"
           }
         ]
