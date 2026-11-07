@@ -2834,6 +2834,46 @@ fn ring_seam_inside(
 /// the first. The seam is a meridian arc where the two vertices share a ring
 /// angle, else the curve straight between them in `(u, v)`. `None`, for the
 /// general splitter, where a loop winds neither angle or two loops touch.
+/// A cubic through a seam `uv(t)` on a torus, `t` running from 0 to 1 and its
+/// ends held at `from` and `to`, sampled finer until it stays on the torus to
+/// `tol` between its samples, and those samples in `(u, v)`. `None` when no
+/// sampling gets there.
+fn fit_ring_seam(
+    torus: &brepkit_math::surfaces::ToroidalSurface,
+    uv: &dyn Fn(f64) -> (f64, f64),
+    from: Point3,
+    to: Point3,
+    tol: f64,
+) -> Option<(brepkit_math::nurbs::curve::NurbsCurve, Vec<Point2>)> {
+    const MAX_SPANS: u32 = 256;
+    let mut spans = 16_u32;
+    while spans <= MAX_SPANS {
+        let flat: Vec<Point2> = (0..=spans)
+            .map(|k| {
+                let (u, v) = uv(f64::from(k) / f64::from(spans));
+                Point2::new(u, v)
+            })
+            .collect();
+        let mut pts: Vec<Point3> = flat.iter().map(|p| torus.evaluate(p.x(), p.y())).collect();
+        let last = pts.len() - 1;
+        (pts[0], pts[last]) = (from, to);
+        let curve = brepkit_math::nurbs::fitting::interpolate(&pts, 3).ok()?;
+        let (t0, t1) = curve.domain();
+        let off = |t: f64| {
+            let p = curve.evaluate(t);
+            let (u, v) = torus.project_point(p);
+            (torus.evaluate(u, v) - p).length()
+        };
+        let probes = 4 * spans;
+        if (0..=probes).all(|k| off((t1 - t0).mul_add(f64::from(k) / f64::from(probes), t0)) <= tol)
+        {
+            return Some((curve, flat));
+        }
+        spans *= 2;
+    }
+    None
+}
+
 pub(super) fn split_torus_by_ring_loops(
     surface: &FaceSurface,
     boundary_edges: &[OrientedPCurveEdge],
@@ -2912,13 +2952,8 @@ pub(super) fn split_torus_by_ring_loops(
             }
             EdgeCurve::Circle(meridian)
         } else {
-            let pts: Vec<Point3> = (0..=16_u32)
-                .map(|k| {
-                    let t = f64::from(k) / 16.0;
-                    torus.evaluate((u1 - u0).mul_add(t, u0), (v1 - v0).mul_add(t, v0))
-                })
-                .collect();
-            EdgeCurve::NurbsCurve(brepkit_math::nurbs::fitting::interpolate(&pts, 3).ok()?)
+            let line = |t: f64| ((u1 - u0).mul_add(t, u0), (v1 - v0).mul_add(t, v0));
+            EdgeCurve::NurbsCurve(fit_ring_seam(torus, &line, a, b, close_tol)?.0)
         };
         Some(OrientedPCurveEdge {
             curve_3d,
@@ -2971,25 +3006,26 @@ pub(super) fn split_torus_by_ring_loops(
             let ((ua, va), (ub, vb)) = (torus.project_point(a), torus.project_point(b));
             let du = wrap(ub - ua);
             let lo = first.v_at(ua);
-            let mut path: Vec<(f64, f64)> = (0..=32_u32)
-                .map(|k| {
-                    let t = f64::from(k) / 32.0;
-                    let u = du.mul_add(t, ua);
-                    (u, t.mul_add(width(i, u), va + first.v_at(u) - lo))
-                })
-                .collect();
-            let end = path[32].1;
-            path[0] = (ua, va);
-            path[32] = (ua + du, vb + ((end - vb) / TAU).round() * TAU);
-            let piece = |uvs: &[(f64, f64)], from: Point3, to: Point3| {
-                let mut pts: Vec<Point3> = uvs.iter().map(|&(u, v)| torus.evaluate(u, v)).collect();
-                let last = pts.len() - 1;
-                (pts[0], pts[last]) = (from, to);
-                let flat: Vec<Point2> = uvs.iter().map(|&(u, v)| Point2::new(u, v)).collect();
+            let on_band = |t: f64| {
+                let u = du.mul_add(t, ua);
+                (u, t.mul_add(width(i, u), va + first.v_at(u) - lo))
+            };
+            let far_v = vb + ((on_band(1.0).1 - vb) / TAU).round() * TAU;
+            let path = |t: f64| {
+                if t <= 0.0 {
+                    (ua, va)
+                } else if t >= 1.0 {
+                    (ua + du, far_v)
+                } else {
+                    on_band(t)
+                }
+            };
+            let piece = |t0: f64, t1: f64, from: Point3, to: Point3| {
+                let part = |t: f64| path((t1 - t0).mul_add(t, t0));
+                let (curve, flat) = fit_ring_seam(torus, &part, from, to, close_tol)?;
+                let last = flat.len() - 1;
                 Some(OrientedPCurveEdge {
-                    curve_3d: EdgeCurve::NurbsCurve(
-                        brepkit_math::nurbs::fitting::interpolate(&pts, 3).ok()?,
-                    ),
+                    curve_3d: EdgeCurve::NurbsCurve(curve),
                     pcurve: super::super::pcurve_compute::fit_nurbs2d_through_points(&flat),
                     start_uv: flat[0],
                     end_uv: flat[last],
@@ -3000,13 +3036,14 @@ pub(super) fn split_torus_by_ring_loops(
                     pave_block_id: None,
                 })
             };
-            let mid = torus.evaluate(path[16].0, path[16].1);
+            let middle = path(0.5);
+            let mid = torus.evaluate(middle.0, middle.1);
             (
                 ka,
                 (ua, va),
                 kb,
-                piece(&path[..=16], a, mid)?,
-                piece(&path[16..], mid, b)?,
+                piece(0.0, 0.5, a, mid)?,
+                piece(0.5, 1.0, mid, b)?,
             )
         };
         let down = reverse_loop(&[up_1.clone(), up_2.clone()]);

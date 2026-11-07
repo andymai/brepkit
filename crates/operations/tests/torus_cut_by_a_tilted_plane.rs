@@ -13,7 +13,7 @@ mod tests {
     use brepkit_math::mat::Mat4;
     use brepkit_math::vec::{Point3, Vec3};
     use brepkit_operations::boolean::{BooleanOp, boolean, mesh_fallback_count};
-    use brepkit_operations::measure::solid_volume;
+    use brepkit_operations::measure::{solid_center_of_mass, solid_volume};
     use brepkit_operations::mirror::mirror;
     use brepkit_operations::primitives::{make_box, make_torus};
     use brepkit_operations::tessellate::{is_watertight, tessellate_solid};
@@ -39,6 +39,34 @@ mod tests {
             )
             .unwrap(),
             _ => s,
+        }
+    }
+
+    /// A point of the plane through `(0, 0, lift)` tilted `tilt` about y, and
+    /// the normal pointing away from the half-space below it, where `posed`
+    /// puts them.
+    fn posed_plane(tilt: f64, lift: f64, pose: &str) -> (Point3, Vec3) {
+        let (on_plane, along) = (
+            Point3::new(0.0, 0.0, lift),
+            Vec3::new(tilt.sin(), 0.0, tilt.cos()),
+        );
+        match pose {
+            "turned" => {
+                let m = Mat4::translation(1.0, -2.0, 0.5)
+                    * Mat4::rotation_x(0.6)
+                    * Mat4::rotation_z(0.4);
+                let at = m.mul_point(on_plane);
+                (at, m.mul_point(on_plane + along) - at)
+            }
+            "mirrored" => {
+                let normal = Vec3::new(1.0, 0.3, 0.2).normalize().unwrap();
+                let origin = Point3::new(0.3, 0.0, 0.0);
+                (
+                    on_plane - normal * (2.0 * normal.dot(on_plane - origin)),
+                    along - normal * (2.0 * normal.dot(along)),
+                )
+            }
+            _ => (on_plane, along),
         }
     }
 
@@ -79,7 +107,18 @@ mod tests {
                     let mesh = tessellate_solid(&topo, result, 0.01).unwrap();
                     assert!(is_watertight(&mesh), "{case}: open or non-manifold mesh");
                     let volume = solid_volume(&topo, result, 0.001).unwrap();
-                    if lift == 0.0 {
+                    // Each op keeps its own side: the kept piece's centre of
+                    // mass lies on it.
+                    let centre = solid_center_of_mass(&topo, result, 0.01).unwrap();
+                    let (on_plane, along) = posed_plane(tilt, lift, pose);
+                    let side = along.dot(centre - on_plane);
+                    let keeps_below = op == BooleanOp::Intersect;
+                    assert_eq!(
+                        side < 0.0,
+                        keeps_below,
+                        "{case}: centre {centre:?}, side {side}"
+                    );
+                    if lift.abs() < 1e-12 {
                         let half = 0.5 * torus_volume;
                         assert!(
                             (volume - half).abs() < 1e-6 * half,
