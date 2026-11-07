@@ -1,0 +1,24 @@
+crates/heal/src/upgrade/unify_same_domain.rs
+  s_649261a24df31b::t_5843db6c3aaedb 21,361-368,374-375,389-440,448,465,467
+  s_649261a24df31b::t_95e00e0019ae3d 14-15,17-18,218-220,222-229,369-373,376-388,441-447,449-464,466,468-469
+  s_649261a24df31b::t_7f75b76c72c16d 470-471
+crates/operations/tests/simplify_whole_sphere.rs
+  s_649261a24df31b::t_5843db6c3aaedb 111-114
+  s_649261a24df31b::t_95e00e0019ae3d 1-110,115-173
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7c2a8e4eda151d263de15efdda58238a4153f746",
+  "prompts": {},
+  "sessions": {
+    "s_649261a24df31b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d8bbbba4-0431-4f6a-a622-e632a6659779",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
