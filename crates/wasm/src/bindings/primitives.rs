@@ -94,7 +94,7 @@ impl BrepKernel {
     ///
     /// # Errors
     ///
-    /// Returns an error if radii are non-positive or minor >= major.
+    /// Returns an error if radii are non-positive or minor > major.
     #[wasm_bindgen(js_name = "makeTorus")]
     pub fn make_torus_solid(
         &mut self,
@@ -289,12 +289,12 @@ mod tests {
     }
 
     #[test]
-    fn make_torus_minor_equals_major() {
+    fn make_torus_minor_equals_major_is_a_horn_torus() {
         let mut k = BrepKernel::new();
         let r = k.execute_batch(
             r#"[{"op": "makeTorus", "args": {"majorRadius": 2, "minorRadius": 2}}]"#,
         );
-        assert!(batch_has_error(&r, 0));
+        assert!(!batch_has_error(&r, 0), "{r}");
     }
 
     #[test]

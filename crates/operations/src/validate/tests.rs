@@ -681,6 +681,52 @@ fn a_nested_piece_reads_nested_however_few_points_clear_the_other() {
     assert!(!nested(&mut topo, small, large), "a rod beside it");
 }
 
+/// Every face of a solid turned over: its faces still agree with each other
+/// along every edge, so only the volume they enclose shows it is inside out.
+#[test]
+fn a_solid_turned_inside_out_is_invalid() {
+    type Maker = fn(&mut Topology) -> SolidId;
+    let inside_out = |topo: &mut Topology, solid: SolidId| -> SolidId {
+        let faces = explorer::solid_faces(topo, solid).unwrap();
+        let turned: Vec<_> = faces
+            .iter()
+            .map(|&f| {
+                let mut face = topo.face(f).unwrap().clone();
+                let reversed = face.is_reversed();
+                face.set_reversed(!reversed);
+                topo.add_face(face)
+            })
+            .collect();
+        let shell = topo.add_shell(brepkit_topology::shell::Shell::new(turned).unwrap());
+        topo.add_solid(brepkit_topology::solid::Solid::new(shell, Vec::new()))
+    };
+    let inward = |topo: &Topology, solid: SolidId| {
+        validate_solid(topo, solid)
+            .unwrap()
+            .issues
+            .iter()
+            .any(|i| i.description.contains("point inward"))
+    };
+    let makers: [(&str, Maker); 3] = [
+        ("box", |t| {
+            crate::primitives::make_box(t, 2.0, 3.0, 4.0).unwrap()
+        }),
+        ("cylinder", |t| {
+            crate::primitives::make_cylinder(t, 2.0, 3.0).unwrap()
+        }),
+        ("ball", |t| {
+            crate::primitives::make_sphere(t, 2.0, 16).unwrap()
+        }),
+    ];
+    for (name, make) in makers {
+        let mut topo = Topology::new();
+        let solid = make(&mut topo);
+        assert!(!inward(&topo, solid), "{name}, as made");
+        let turned = inside_out(&mut topo, solid);
+        assert!(inward(&topo, turned), "{name}, turned inside out");
+    }
+}
+
 /// Two balls touching at a point, each with its own vertex there, gathered
 /// into one shell: neither reads as inside the other. Rays from the point
 /// where they touch run into the other ball.
