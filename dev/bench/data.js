@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794064936459,
+  "lastUpdate": 1794065158785,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -65987,6 +65987,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 28102817,
             "range": "± 113981",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "81329354d4ffda949c49b10e4abf1f32f13c30a1",
+          "message": "fix(algo): stop a cut from filling holes in a face it splits (#2314)",
+          "timestamp": "2026-11-07T07:22:39-08:00",
+          "tree_id": "29b3917dde48454f235eb4533901a1099ea4a494",
+          "url": "https://github.com/andymai/brepkit/commit/81329354d4ffda949c49b10e4abf1f32f13c30a1"
+        },
+        "date": 1794065148801,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1060067,
+            "range": "± 7005",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1132434,
+            "range": "± 26345",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12613,
+            "range": "± 35",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 677613,
+            "range": "± 1305",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 28121056,
+            "range": "± 108371",
             "unit": "ns/iter"
           }
         ]
