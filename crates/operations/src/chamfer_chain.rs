@@ -237,6 +237,16 @@ impl Span {
         }
     }
 
+    /// Where the span starts and ends.
+    fn ends(&self) -> [Point3; 2] {
+        match self {
+            Self::Segment(a, b) => [*a, *b],
+            Self::Arc { circle, t0, sweep } => {
+                [circle.evaluate(*t0), circle.evaluate(*t0 + *sweep)]
+            }
+        }
+    }
+
     fn holds(circle: &Circle3D, t0: f64, sweep: f64, p: Point3, tol: f64) -> bool {
         let slack = tol / circle.radius();
         (circle.project(p) - t0 + slack).rem_euclid(TAU) <= sweep + 2.0 * slack
@@ -764,6 +774,22 @@ fn plan_on_cap(
         };
         let at = topo.vertex(end.vertex)?.point();
         new_spans.push((Span::Segment(at, section.cap), Some(at)));
+    }
+    // Nor may it meet itself away from where its pieces join: across a narrow
+    // neck, the two sides' new edges cross.
+    for (i, (first, _)) in new_spans.iter().enumerate() {
+        for (second, _) in &new_spans[i + 1..] {
+            for p in first.touches(second, tol) {
+                let joins = |span: &Span| {
+                    span.ends()
+                        .iter()
+                        .any(|&end| (p - end).length() <= 10.0 * tol)
+                };
+                if !(joins(first) && joins(second)) {
+                    return Ok(None);
+                }
+            }
+        }
     }
     let cap_data = topo.face(cap)?;
     for wid in std::iter::once(cap_data.outer_wire()).chain(cap_data.inner_wires().iter().copied())

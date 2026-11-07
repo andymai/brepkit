@@ -360,7 +360,9 @@ fn chamfer_core(
     // A hole the chamfer leaves alone goes through as its corners. One it
     // reaches would need its own set-back, which the rebuild only does for an
     // outer wire: a hole's own edge or vertex being chamfered, or a hole lying
-    // within a bevel's set-back of a chamfered edge or corner on its face.
+    // within a bevel's set-back of a chamfered edge or corner on its face. An
+    // edge sets back by its own distance on this face, and a corner by the
+    // larger of its edges'.
     let reach = distances.max_distance() + tol.linear;
     let mut holes: HashMap<usize, Vec<Vec<Point3>>> = HashMap::new();
     for &face_id in &shell_face_ids {
@@ -384,15 +386,20 @@ fn chamfer_core(
                 let n = poly.positions.len();
                 for i in 0..n {
                     let (p, q) = (poly.positions[i], poly.positions[(i + 1) % n]);
-                    let edge_cut = target_set.contains(&poly.wire_edge_ids[i].index());
+                    let edge_index = poly.wire_edge_ids[i].index();
+                    let edge_cut = target_set.contains(&edge_index);
+                    let edge_reach =
+                        distances.distance_for(edge_index, face_id, &edge_to_faces) + tol.linear;
                     let corner_cut = vertex_chamfer_endpoints.contains(&poly.vertex_ids[i].index());
                     for j in 0..corners.len() {
                         let (a, b) = (corners[j], corners[(j + 1) % corners.len()]);
-                        let within = |u: Point3, v: Point3| {
+                        let within = |u: Point3, v: Point3, reach: f64| {
                             brepkit_geometry::extrema::segment_segment_distance(u, v, a, b).0
                                 <= reach
                         };
-                        if (edge_cut && within(p, q)) || (corner_cut && within(p, p)) {
+                        if (edge_cut && within(p, q, edge_reach))
+                            || (corner_cut && within(p, p, reach))
+                        {
                             return Err(crate::OperationsError::InvalidInput {
                                 reason: "the planar chamfer cannot reach a face's hole".into(),
                             });

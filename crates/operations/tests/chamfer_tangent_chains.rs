@@ -15,7 +15,7 @@ use brepkit_math::curves::Circle3D;
 use brepkit_math::mat::Mat4;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_operations::boolean::{BooleanOp, boolean};
-use brepkit_operations::chamfer::chamfer;
+use brepkit_operations::chamfer::{chamfer, chamfer_asymmetric};
 use brepkit_operations::extrude::extrude;
 use brepkit_operations::measure::{oriented_solid_volume, solid_volume};
 use brepkit_operations::primitives::make_box;
@@ -706,4 +706,83 @@ fn a_rim_split_on_one_wall_shortens_its_seam() {
     let ring = 0.5 * 2.0 * PI * (r - 1.0 / 3.0);
     assert_exact(&topo, result, plain - ring, "split rim");
     assert_eq!(census(&topo, result), (3, 2));
+}
+
+/// A peanut prism: two lobes of radius 5 about `(+-8, 0)` joined by concave
+/// arcs of radius 5 about `(0, +-6)`, tangent at `(+-4, +-3)`, a neck 2 wide.
+fn peanut(topo: &mut Topology, height: f64) -> SolidId {
+    let p = |t: &mut Topology, x, y| t.add_vertex(Vertex::new(Point3::new(x, y, 0.0), 1e-7));
+    let a = p(topo, 4.0, -3.0);
+    let b = p(topo, 4.0, 3.0);
+    let c = p(topo, -4.0, 3.0);
+    let d = p(topo, -4.0, -3.0);
+    let circle = |x: f64, y: f64, turn: f64| {
+        EdgeCurve::Circle(
+            Circle3D::new(Point3::new(x, y, 0.0), Vec3::new(0.0, 0.0, turn), 5.0).unwrap(),
+        )
+    };
+    let sides = vec![
+        (a, b, circle(8.0, 0.0, 1.0)),
+        (b, c, circle(0.0, 6.0, -1.0)),
+        (c, d, circle(-8.0, 0.0, 1.0)),
+        (d, a, circle(0.0, -6.0, -1.0)),
+    ];
+    let edges: Vec<_> = sides
+        .into_iter()
+        .map(|(s, e, curve)| OrientedEdge::new(topo.add_edge(Edge::new(s, e, curve)), true))
+        .collect();
+    let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+    let plane = FaceSurface::Plane {
+        normal: Vec3::new(0.0, 0.0, 1.0),
+        d: 0.0,
+    };
+    let face = topo.add_face(Face::new(wire, Vec::new(), plane));
+    extrude(topo, face, Vec3::new(0.0, 0.0, 1.0), height).unwrap()
+}
+
+/// Round a neck 2 wide, the two sides' new edges cross once the chamfer's
+/// distance passes half the neck. Each piece clears its own arc's radius and
+/// the wall's height, and the volume alone cannot tell.
+#[test]
+fn a_chain_refuses_a_neck_its_new_edges_cross() {
+    for (d, built) in [(0.5, true), (1.5, false)] {
+        let mut topo = Topology::new();
+        let solid = peanut(&mut topo, 6.0);
+        let rim = edges_at(&topo, solid, 0.0, |_, _| true);
+        assert_eq!(rim.len(), 4);
+        let result = chamfer(&mut topo, solid, &rim, d);
+        assert_eq!(result.is_ok(), built, "d = {d}: {:?}", result.err());
+        if let Ok(solid) = result {
+            assert!(validate_solid(&topo, solid).unwrap().is_valid(), "d = {d}");
+            let mesh = tessellate_solid(&topo, solid, 0.01).unwrap();
+            assert!(is_watertight(&mesh), "d = {d}");
+        }
+    }
+}
+
+/// An asymmetric chamfer sets an edge back by its own distance on each face:
+/// a hole 2 from the edge clears a bevel 0.5 wide on that face, whatever the
+/// bevel's 3 on the other, and not one 3 wide.
+#[test]
+fn an_asymmetric_chamfer_reads_a_hole_by_its_own_faces_set_back() {
+    let cut = |d1: f64, d2: f64| {
+        let mut topo = Topology::new();
+        let plate = make_box(&mut topo, 20.0, 20.0, 4.0).unwrap();
+        let hole = make_box(&mut topo, 4.0, 2.0, 6.0).unwrap();
+        transform_solid(&mut topo, hole, &Mat4::translation(8.0, 2.0, -1.0)).unwrap();
+        let drilled = boolean(&mut topo, BooleanOp::Cut, plate, hole).unwrap();
+        let edge = edges_at(&topo, drilled, 4.0, |a, b| {
+            a.y().abs() < 1e-9 && b.y().abs() < 1e-9
+        });
+        assert_eq!(edge.len(), 1);
+        chamfer_asymmetric(&mut topo, drilled, &edge, d1, d2)
+            .ok()
+            .map(|s| oriented_solid_volume(&topo, s, 0.01).unwrap())
+    };
+    let drilled = 20.0 * 20.0 * 4.0 - 4.0 * 2.0 * 4.0;
+    let bevel = 0.5 * 0.5 * 3.0 * 20.0;
+    let readings = [cut(0.5, 3.0), cut(3.0, 0.5)];
+    let built: Vec<f64> = readings.iter().flatten().copied().collect();
+    assert_eq!(built.len(), 1, "{readings:?}");
+    assert!((built[0] - (drilled - bevel)).abs() < 1e-6, "{readings:?}");
 }
