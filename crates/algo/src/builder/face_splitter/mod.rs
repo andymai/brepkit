@@ -8070,11 +8070,12 @@ fn split_face_2d_impl(
         && is_plane
         && !holes_integrated
         && let Some(ref boundary) = boundary_edges_backup
-        && let Some(result) = try_split_crossing_plane_face(
+        && let Some(mut result) = try_split_crossing_plane_face(
             &surface, boundary, sections, rank, reversed, face_id, frame, tol,
         )
         && result.len() > loops.len()
     {
+        attach_whole_holes(&mut result, &original_inner_wires);
         return result;
     }
 

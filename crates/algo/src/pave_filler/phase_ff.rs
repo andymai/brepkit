@@ -526,17 +526,20 @@ pub fn perform(
                             // overlap, so trim to it — keeping the raw curve
                             // here produced over-long chords that crossed
                             // the partner's arc sections mid-edge.
-                            (FaceClip::Range(r), FaceClip::Indeterminate)
-                            | (FaceClip::Indeterminate, FaceClip::Range(r)) => {
-                                trim_raw_line(&raw, r.0, r.1, tol)
+                            (FaceClip::Range(r), FaceClip::Indeterminate) => {
+                                trim_line_to_exact_extent(topo, &[fb], &raw, r, tol)
                             }
-                            // Neither face could build a usable polygon.
-                            // Conservatively keep the raw curve and leave
-                            // trimming to a later phase, unless the faces'
-                            // own lines and arcs show they never meet on it.
+                            (FaceClip::Indeterminate, FaceClip::Range(r)) => {
+                                trim_line_to_exact_extent(topo, &[fa], &raw, r, tol)
+                            }
+                            // Neither face could build a usable polygon. Trim
+                            // to what their own lines and arcs show, and drop
+                            // the curve if they never meet on it.
                             (FaceClip::Indeterminate, FaceClip::Indeterminate) => {
-                                (!exact_runs_disjoint(topo, fa, fb, &raw, tol.linear))
-                                    .then_some(raw)
+                                if exact_runs_disjoint(topo, fa, fb, &raw, tol.linear) {
+                                    return None;
+                                }
+                                trim_line_to_exact_extent(topo, &[fa, fb], &raw, (0.0, 1.0), tol)
                             }
                         }
                     })
@@ -8509,12 +8512,47 @@ fn clip_trimmed_line_to_planes(
         (FaceClip::Range(a), FaceClip::Range(b)) => {
             trim_raw_line(&raw, a.0.max(b.0), a.1.min(b.1), tol)
         }
-        (FaceClip::Range(r), FaceClip::Indeterminate)
-        | (FaceClip::Indeterminate, FaceClip::Range(r)) => trim_raw_line(&raw, r.0, r.1, tol),
+        (FaceClip::Range(r), FaceClip::Indeterminate) => {
+            trim_line_to_exact_extent(topo, &[fb], &raw, r, tol)
+        }
+        (FaceClip::Indeterminate, FaceClip::Range(r)) => {
+            trim_line_to_exact_extent(topo, &[fa], &raw, r, tol)
+        }
         (FaceClip::Indeterminate, FaceClip::Indeterminate) => {
-            (!exact_runs_disjoint(topo, fa, fb, &raw, tol.linear)).then_some(raw)
+            if exact_runs_disjoint(topo, fa, fb, &raw, tol.linear) {
+                return None;
+            }
+            trim_line_to_exact_extent(topo, &[fa, fb], &raw, (0.0, 1.0), tol)
         }
     }
+}
+
+/// `raw` trimmed to `range`, then to the first entry and last exit of each of
+/// `faces` read on its own lines and arcs. An over-long section splits its
+/// partner where no face meets it, and cuts through any hole on the way. A face
+/// that cannot be read (a NURBS boundary) leaves the range as it stands.
+fn trim_line_to_exact_extent(
+    topo: &Topology,
+    faces: &[FaceId],
+    raw: &RawCurve,
+    range: (f64, f64),
+    tol: Tolerance,
+) -> Option<RawCurve> {
+    let (mut lo, mut hi) = range;
+    for &face in faces {
+        let Some(runs) = line_face_intervals(topo, face, raw.p_start, raw.p_end, tol.linear) else {
+            continue;
+        };
+        let (Some(first), Some(last)) = (runs.first(), runs.last()) else {
+            return None;
+        };
+        lo = lo.max(first.0);
+        hi = hi.min(last.1);
+    }
+    if hi <= lo {
+        return None;
+    }
+    trim_raw_line(raw, lo, hi, tol)
 }
 
 /// A section line on a plane face, split where it crosses that face's
