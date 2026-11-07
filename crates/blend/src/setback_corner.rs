@@ -413,18 +413,26 @@ fn traversed(topo: &Topology, oriented: OrientedEdge) -> Result<(VertexId, Verte
 }
 
 /// The arcs of a three-sided ball face, each with the cylinder stripe behind
-/// it, or `None` when the face is not that.
+/// it, or `None` when the face is not that. They run the way the face does once
+/// its reversal is applied, which a new face that is not reversed then follows.
 fn rolled_arcs(
     topo: &Topology,
     face: FaceId,
     by_edge: &HashMap<EdgeId, Vec<FaceId>>,
 ) -> Result<Option<[RolledArc; 3]>, BlendError> {
-    let wire = topo.wire(topo.face(face)?.outer_wire())?;
+    let data = topo.face(face)?;
+    let reversed = data.is_reversed();
+    let wire = topo.wire(data.outer_wire())?;
     if wire.edges().len() != 3 {
         return Ok(None);
     }
+    let mut uses = wire.edges().to_vec();
+    if reversed {
+        uses.reverse();
+    }
     let mut arcs = Vec::with_capacity(3);
-    for &oriented in wire.edges() {
+    for oriented in uses {
+        let oriented = OrientedEdge::new(oriented.edge(), oriented.is_forward() != reversed);
         let EdgeCurve::Circle(circle) = topo.edge(oriented.edge())?.curve().clone() else {
             return Ok(None);
         };
@@ -560,12 +568,13 @@ fn shortened(
 }
 
 /// A wire with each edge swapped as `swaps` says, and a link put in after the
-/// edge arriving at the vertex `insert` names.
+/// edge arriving at the vertex `insert` names, run on from where that edge now
+/// stops.
 fn rewired(
     topo: &mut Topology,
     wire: WireId,
     swaps: &HashMap<EdgeId, EdgeId>,
-    insert: Option<(VertexId, OrientedEdge)>,
+    insert: Option<(VertexId, EdgeId)>,
 ) -> Result<WireId, BlendError> {
     let data = topo.wire(wire)?;
     let closed = data.is_closed();
@@ -577,11 +586,13 @@ fn rewired(
             .get(&oriented.edge())
             .copied()
             .unwrap_or_else(|| oriented.edge());
-        edges.push(OrientedEdge::new(id, oriented.is_forward()));
+        let kept = OrientedEdge::new(id, oriented.is_forward());
+        edges.push(kept);
         if let Some((at, link)) = insert
             && arrives == at
         {
-            edges.push(link);
+            let (_, reached) = traversed(topo, kept)?;
+            edges.push(OrientedEdge::new(link, topo.edge(link)?.start() == reached));
         }
     }
     Ok(topo.add_wire(Wire::new(edges, closed)?))
@@ -591,7 +602,7 @@ fn rebuilt_face(
     topo: &mut Topology,
     face: FaceId,
     swaps: &HashMap<EdgeId, EdgeId>,
-    insert: Option<(VertexId, OrientedEdge)>,
+    insert: Option<(VertexId, EdgeId)>,
 ) -> Result<FaceId, BlendError> {
     let data = topo.face(face)?;
     let (outer, inner, surface, reversed) = (
@@ -824,12 +835,10 @@ pub fn set_back_corner(
         FaceSurface::Nurbs(patches.second),
     ));
 
-    // A flat face runs its link against the patch's direction, in from the
-    // stripe of the arc leaving its old vertex and out on the one arriving.
     let flat_links = [
-        (corner.arcs[0].from, OrientedEdge::new(third_link, true)),
-        (corner.arcs[1].from, OrientedEdge::new(first_link, false)),
-        (corner.arcs[2].from, OrientedEdge::new(second_link, false)),
+        (corner.arcs[0].from, third_link),
+        (corner.arcs[1].from, first_link),
+        (corner.arcs[2].from, second_link),
     ];
     let mut replaced: HashMap<FaceId, FaceId> = HashMap::new();
     for (&flat, &(at, link)) in corner.flats.iter().zip(&flat_links) {
