@@ -67,6 +67,27 @@ const TOL: f64 = 1e-7;
 /// Tolerance for angular comparisons (cosine of angle threshold ~10°).
 const ORTHO_COS_TOL: f64 = 0.1;
 
+/// Largest cosine between two directions the sharp mitre takes as square.
+/// Planes read from a file are square only to the digits it stores: a part
+/// written to eight or nine digits leaves cosines near 1e-8, which moves the
+/// mitre's points by about the radius times that.
+const SQUARE_COS: f64 = 1e-7;
+
+/// Largest distance the sharp mitre's points may move from where the corner's
+/// own faces put them, for a corner it takes as square (see [`SQUARE_COS`]).
+const MITRE_SLIP: f64 = 1e-6;
+
+/// Whether the sharp mitre takes two stripes leaving a corner along `ex` and
+/// `ey` as square. The mitre places its points as if the corner were exactly
+/// square, so a corner off square by `cos` moves them by about
+/// `radius * cos`. The plan's junction finder and the corner pass both ask
+/// this, so a junction the corner pass would decline is never planned as a
+/// mitre.
+fn mitre_takes_square(ex: Vec3, ey: Vec3, radius: f64) -> bool {
+    let cos = ex.dot(ey).abs();
+    cos <= SQUARE_COS && cos * radius <= MITRE_SLIP
+}
+
 /// Return the indices (into `stripes`) of stripes whose spine touches `vertex_id`.
 fn stripes_at_vertex(vertex_id: VertexId, stripes: &[Stripe], topo: &Topology) -> Vec<usize> {
     let mut result = Vec::new();
@@ -444,6 +465,9 @@ pub fn find_equal_two_edge_miter_junctions(
                 _ => continue 'junctions,
             }
         }
+        if !mitre_takes_square(directions[0], directions[1], *ra) {
+            continue;
+        }
         for &edge_id in &junction.unselected_sharp_edges {
             let Some(direction) = topo
                 .edge(edge_id)
@@ -466,6 +490,86 @@ pub fn find_equal_two_edge_miter_junctions(
     miters
 }
 
+/// The straight edges, other than the two stripes' own, leaving each
+/// two-stripe junction where both stripes end on one section: two fillets
+/// running on round a smooth edge between their side faces (a slab's
+/// outline where a straight side meets a round one tangentially). Both
+/// side contacts end on that edge at the same point, so each side face's
+/// trim splits it there and the two stripes then share one cross-section
+/// edge; left whole, each face kept a twin vertex there, and the gap
+/// between the twin sections was closed by a patch of no area.
+pub fn tangent_junction_spokes(
+    topo: &Topology,
+    plan: &FilletPlan,
+    stripes: &[&Stripe],
+) -> Result<Vec<(Point3, Point3)>, BlendError> {
+    const SAME: f64 = 1e-6;
+    let stripe_of = |contour: usize| {
+        let edges = plan.contours.get(contour)?.spine.edges();
+        stripes
+            .iter()
+            .copied()
+            .find(|stripe| stripe.spine_edges() == edges)
+    };
+    let mut spokes = Vec::new();
+    for junction in &plan.junctions {
+        if junction.classification != CornerClassification::Junction
+            || junction.incident_contours.len() != 2
+        {
+            continue;
+        }
+        let (Some(a), Some(b)) = (
+            stripe_of(junction.incident_contours[0]),
+            stripe_of(junction.incident_contours[1]),
+        ) else {
+            continue;
+        };
+        let (Some(sa), Some(sb)) = (
+            contact_section_at_vertex(junction.vertex, a, topo),
+            contact_section_at_vertex(junction.vertex, b, topo),
+        ) else {
+            continue;
+        };
+        let near = |p: Point3, q: Point3| (p - q).length() <= SAME;
+        let same_section = near(sa.center, sb.center)
+            && ((near(sa.p1, sb.p1) && near(sa.p2, sb.p2))
+                || (near(sa.p1, sb.p2) && near(sa.p2, sb.p1)));
+        if !same_section {
+            continue;
+        }
+        let own: std::collections::HashSet<EdgeId> = a
+            .spine_edges()
+            .iter()
+            .chain(b.spine_edges())
+            .copied()
+            .collect();
+        for &face_id in &junction.face_fan {
+            let face = topo.face(face_id)?;
+            for wire_id in
+                std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied())
+            {
+                for oriented in topo.wire(wire_id)?.edges() {
+                    let edge = topo.edge(oriented.edge())?;
+                    if own.contains(&oriented.edge())
+                        || !matches!(edge.curve(), EdgeCurve::Line)
+                        || (edge.start() != junction.vertex && edge.end() != junction.vertex)
+                    {
+                        continue;
+                    }
+                    let spoke = (
+                        topo.vertex(edge.start())?.point(),
+                        topo.vertex(edge.end())?.point(),
+                    );
+                    if !spokes.contains(&spoke) {
+                        spokes.push(spoke);
+                    }
+                }
+            }
+        }
+    }
+    Ok(spokes)
+}
+
 /// Outward normals of a three-face planar fan, `None` when any face is not
 /// planar or the three planes are not mutually perpendicular.
 fn orthogonal_fan_outward_normals(topo: &Topology, faces: &[FaceId]) -> Option<[Vec3; 3]> {
@@ -476,10 +580,12 @@ fn orthogonal_fan_outward_normals(topo: &Topology, faces: &[FaceId]) -> Option<[
     for (slot, &face) in normals.iter_mut().zip(faces) {
         *slot = topo.face(face).ok()?.effective_plane_normal()?;
     }
-    let orthogonal = normals
-        .iter()
-        .enumerate()
-        .all(|(i, n)| normals.iter().skip(i + 1).all(|m| n.dot(*m).abs() <= 1e-10));
+    let orthogonal = normals.iter().enumerate().all(|(i, n)| {
+        normals
+            .iter()
+            .skip(i + 1)
+            .all(|m| n.dot(*m).abs() <= SQUARE_COS)
+    });
     orthogonal.then_some(normals)
 }
 
@@ -490,7 +596,7 @@ fn orthogonal_fan_outward_normals(topo: &Topology, faces: &[FaceId]) -> Option<[
 fn trihedral_corner_is_convex(normals: &[Vec3], directions: &[Vec3]) -> bool {
     directions
         .iter()
-        .all(|d| normals.iter().all(|n| d.dot(*n) <= 1e-10))
+        .all(|d| normals.iter().all(|n| d.dot(*n) <= SQUARE_COS))
 }
 
 /// Whether `edge_id` lies on any wire of `face_id`.
@@ -2824,7 +2930,7 @@ fn detect_equal_two_edge_miter(
     let ey = (topo.vertex(far_b)?.point() - vertex_point)
         .normalize()
         .map_err(BlendError::Math)?;
-    if ex.dot(ey).abs() > 1e-10 {
+    if !mitre_takes_square(ex, ey, radius) {
         return Ok(None);
     }
     let mut directions = vec![ex, ey];
@@ -5257,6 +5363,51 @@ mod tests {
             error,
             BlendError::CornerFailure { vertex: failed } if failed == vertex
         ));
+    }
+
+    /// The plan's junction finder declines a corner the mitre's slip rules
+    /// out, as the corner pass does: two stripes off square by a cosine of
+    /// 8e-8 (inside `SQUARE_COS`) are a mitre at r = 10 (a slip of 8e-7) but
+    /// not at r = 20 (1.6e-6), where planning one would leave the corner pass
+    /// without the cross-section boundaries it omits for a mitre.
+    #[test]
+    fn miter_finder_declines_what_the_corner_pass_declines() {
+        let finds_mitre = |radius: f64, skew: f64| {
+            let mut topo = Topology::new();
+            let solid = make_box(&mut topo, Vec3::new(100.0, 100.0, 100.0));
+            let (origin, edges) = box_edges_at_origin(&topo, solid);
+            let flat: Vec<EdgeId> = edges
+                .into_iter()
+                .filter(|&edge_id| {
+                    let edge = topo.edge(edge_id).unwrap();
+                    let far = if edge.start() == origin {
+                        edge.end()
+                    } else {
+                        edge.start()
+                    };
+                    topo.vertex(far).unwrap().point().z().abs() <= TOL
+                })
+                .collect();
+            assert_eq!(flat.len(), 2);
+            let far_y = brepkit_topology::explorer::solid_vertices(&topo, solid)
+                .unwrap()
+                .into_iter()
+                .find(|&v| {
+                    (topo.vertex(v).unwrap().point() - Point3::new(0.0, 100.0, 0.0)).length() <= TOL
+                })
+                .unwrap();
+            topo.vertex_mut(far_y)
+                .unwrap()
+                .set_point(Point3::new(100.0 * skew, 100.0, 0.0));
+            let plan = plan_box_edges(&topo, solid, flat, radius);
+            find_equal_two_edge_miter_junctions(&topo, &plan)
+                .iter()
+                .any(|miter| miter.vertex == origin)
+        };
+        assert!(finds_mitre(10.0, 0.0));
+        assert!(finds_mitre(20.0, 0.0));
+        assert!(finds_mitre(10.0, 8e-8));
+        assert!(!finds_mitre(20.0, 8e-8));
     }
 
     /// The exact `Ellipse3D` frame that carries the sharp-mitered two-edge
