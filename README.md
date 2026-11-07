@@ -111,7 +111,7 @@ A few areas are still maturing. Worth knowing before you build on them:
 - **Boolean fallback.** Most booleans run on an exact path that preserves analytic and NURBS surfaces. Hard configurations fall back to a mesh-based boolean: coincident-face contact, coaxial analytic surfaces, razor-thin geometry, or very high face counts. The fallback returns a usable, non-degenerate solid, but it tessellates the curved faces and is not guaranteed watertight.
 - **Torus booleans.** Box-with-torus and coaxial-torus cases work and give correct volumes. General torus-to-torus and torus-with-other-surface intersections have known gaps and may fall back to meshing.
 - **Non-planar profiles.** Loft, sweep, and pipe accept profiles with non-planar surfaces, and close non-planar section boundaries with bilinear caps for four-sided rings (boundaries with more than four edges, or holes on a non-planar section, are not yet supported). Revolve accepts non-planar profile surfaces; a full revolution takes any boundary, but a partial revolution still requires a planar boundary for its caps. The smooth, scaled/guided, and multi-section sweep variants accept non-planar profiles too; only the miter-corner variant still requires planar profiles (its bisector-plane joint faces would otherwise be non-planar).
-- **IGES is experimental.** Export writes planar and NURBS surfaces but skips analytic surfaces and approximates circular and elliptical edges as polylines. Import reconstructs planar placeholder faces only. Use STEP for B-Rep exchange.
+- **IGES is experimental.** Export writes each face as a trimmed surface over its plane or rational B-spline surface, with arcs kept exact, and import sews those faces back into solids, so a solid survives the round trip. Cylinders, cones, spheres, and tori come back as B-splines, solids sharing an edge in one file come back as one, and a file holding other entities (analytic surfaces, or the 186 solid form) is read only as far as its trimmed surfaces go. The output has been checked against brepkit's own reader only. Use STEP when analytic faces matter.
 - **Inertia tensor.** Volume, area, bounding box, and center of mass are computed for any solid. A full inertia tensor exists only as closed-form formulas for analytic primitives and is not exposed through the modeling or WASM API.
 - **Beta subsystems.** Feature recognition, evolution tracking, and defeaturing work but are still maturing. Defeaturing handles planar faces only.
 
@@ -182,7 +182,7 @@ Booleans preserve analytic surfaces, so face counts stay low across chained oper
 | OBJ           | Mesh  | ✓       | ✓      |
 | PLY           | Mesh  | ✓\*     | ✓      |
 | glTF (`.glb`) | Mesh  | ✓       | ✓      |
-| IGES          | B-Rep | preview | lossy  |
+| IGES          | B-Rep | partial | lossy  |
 
 STEP preserves exact geometry on round-trip. Analytic surfaces (plane, cylinder, cone, sphere, torus) are written as native STEP surface entities rather than tessellated, and they read back to the same surface types. NURBS surfaces are preserved too, as are line, circle, ellipse, and NURBS edges.
 
@@ -279,7 +279,7 @@ Broad directions, no dates.
 - **Sweep generalization.** Extend non-planar profile support to the miter-corner sweep, to section boundaries with more than four edges, and to partial revolutions with non-planar boundaries.
 - **Parallel tessellation in WASM.** Native builds already parallelize per-face meshing. Bring it to the WASM target via threads.
 - **Assembly metadata.** Colors, layers, materials, and PMI for richer data exchange.
-- **Lossless IGES.** Real B-Rep import and analytic-surface export.
+- **Lossless IGES.** Analytic surface entities, and the 186 solid form.
 - **Documentation.** Worked examples and guides for the Rust API, beyond the per-crate reference.
 
 ## Projects Using brepkit

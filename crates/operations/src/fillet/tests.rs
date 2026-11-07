@@ -237,12 +237,12 @@ fn rolling_ball_fillet_single_edge() {
 }
 
 #[test]
-fn rolling_ball_rejects_closed_rim_so_dispatcher_falls_through() {
-    // The degeneracy guard's whole purpose: a cylinder's closed circular rim
-    // collapses its blend strip to zero area, and `try_fillet` relies on the
-    // error to fall through to the walking engine. The guard clears healthy
-    // faces via a cheap boundary-polygon area, so this pins that the shortcut
-    // cannot accept a collapsed face and silently ship the corrupt solid.
+fn rolling_ball_rejects_a_closed_rim() {
+    // A cylinder's closed circular rim has no corners for this engine's
+    // strips, and `try_fillet` relies on the error to fall through to the
+    // walking engine. The engine refuses a closed edge outright; before the
+    // walker's cross-sections ran on a closed edge, the strip collapsed to
+    // zero area and the end-of-build degeneracy guard refused it instead.
     let mut topo = Topology::new();
     let cyl = crate::primitives::make_cylinder(&mut topo, 10.0, 20.0).expect("cylinder");
     let edges = solid_edge_ids(&topo, cyl);
@@ -251,11 +251,11 @@ fn rolling_ball_rejects_closed_rim_so_dispatcher_falls_through() {
         .expect_err("rolling-ball must reject a closed circular rim");
     let reason = match &err {
         crate::OperationsError::InvalidInput { reason } => reason,
-        other => unreachable!("expected InvalidInput from the degeneracy guard, got: {other:?}"),
+        other => unreachable!("expected InvalidInput for the closed rim, got: {other:?}"),
     };
     assert!(
-        reason.contains("degenerate face"),
-        "expected the degeneracy guard to fire, got: {reason}"
+        reason.contains("closed circular edges are not supported"),
+        "expected the closed-rim refusal, got: {reason}"
     );
 }
 

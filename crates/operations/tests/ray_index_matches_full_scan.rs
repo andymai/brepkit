@@ -184,7 +184,8 @@ fn sphere_and_torus_pockets() {
     let s = grid_cut(
         &mut t,
         3.0,
-        |t| make_torus(t, 0.6, 0.2, 16).unwrap(),
+        // Clear of the plate's sides, so every ring cuts exactly.
+        |t| make_torus(t, 0.35, 0.1, 16).unwrap(),
         |x, y| Mat4::translation(x, y, 3.0),
     );
     assert_index_matches("tori", &t, s, 3.0, 1);
@@ -204,7 +205,8 @@ fn curved_faces_read_as_polygons() {
                 if tool == 0 {
                     make_sphere(t, 0.7, 16).unwrap()
                 } else {
-                    make_torus(t, 0.6, 0.2, 16).unwrap()
+                    // Clear of the plate's sides, so every ring cuts exactly.
+                    make_torus(t, 0.35, 0.1, 16).unwrap()
                 }
             },
             |x, y| Mat4::translation(x, y, 3.0),
