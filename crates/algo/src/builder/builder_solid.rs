@@ -3192,27 +3192,66 @@ fn merge_duplicate_edges(topo: &mut Topology, face_ids: &mut [FaceId]) -> Result
             continue; // Only one unique edge — no merge needed
         }
 
-        // Pick the first (lowest index) as canonical, or the arc a ball's
-        // equator chords stand for.
+        // The arc a ball's equator chords stand for is the canonical edge,
+        // so it goes first.
         let chords_of_arc = unique.iter().filter(|&&e| is_arc(e)).count() == 1
             && unique
                 .iter()
                 .all(|&e| is_arc(e) || (is_line(e) && on_sphere.contains(&e)));
-        let canonical = if chords_of_arc {
-            unique
-                .iter()
-                .copied()
-                .find(|&e| is_arc(e))
-                .unwrap_or(unique[0])
-        } else {
-            unique[0]
+        if chords_of_arc {
+            unique.sort_by_key(|&e| !is_arc(e));
+        }
+        // Edges sharing both ends are one edge only when they also run
+        // through the same middle: a hole's arc and the straight edge across
+        // it (a box's top crossing the hole) join the same two points, and
+        // merged they give the arc's wall and the box's strip one edge set,
+        // which then reads as a doubled face and drops both. Each edge joins
+        // the first edge before it that it runs alongside, else it is
+        // canonical.
+        // The middle of a line, circle or ellipse edge, with the edge's size;
+        // `None` where it cannot be trusted: a closed edge's middle hangs on
+        // its own parameter origin, and a fitted curve's span may resolve to
+        // its whole parent curve. Those keep matching by their ends alone.
+        let middle = |e: EdgeId| -> Result<Option<(Point3, f64)>, AlgoError> {
+            let edge = topo.edge(e)?;
+            let sp = topo.vertex(edge.start())?.point();
+            let ep = topo.vertex(edge.end())?.point();
+            if matches!(
+                edge.curve(),
+                brepkit_topology::edge::EdgeCurve::NurbsCurve(_)
+            ) || quantize_point(sp, tol) == quantize_point(ep, tol)
+            {
+                return Ok(None);
+            }
+            let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
+            let mid = edge
+                .curve()
+                .evaluate_with_endpoints(0.5 * (t0 + t1), sp, ep);
+            Ok(Some((mid, (ep - sp).length().max((mid - sp).length()))))
         };
-        let canon_start = topo.edge(canonical)?.start();
-        let canon_end = topo.edge(canonical)?.end();
-        let canon_qs = quantize_point(topo.vertex(canon_start)?.point(), tol);
-        let canon_qe = quantize_point(topo.vertex(canon_end)?.point(), tol);
-
-        for &dup in unique.iter().filter(|&&e| e != canonical) {
+        // How far apart two copies' middles may lie: a quarter of the edge's
+        // size, so a faceted ball's chord still joins the exact arc it stands
+        // for (2.5% apart at 32 segments), while an arc over a hole and the
+        // straight edge across it (98%) stay apart.
+        let alongside = |a: Option<(Point3, f64)>, b: Option<(Point3, f64)>| match (a, b) {
+            (Some((ma, sa)), Some((mb, sb))) => {
+                (ma - mb).length() <= 0.25 * sa.max(sb) + 10.0 * tol
+            }
+            _ => true,
+        };
+        let mut canonicals: Vec<(EdgeId, Option<(Point3, f64)>)> = Vec::new();
+        for &e in &unique {
+            let mid = middle(e)?;
+            let Some(&(canonical, _)) = canonicals.iter().find(|&&(_, cm)| alongside(mid, cm))
+            else {
+                canonicals.push((e, mid));
+                continue;
+            };
+            let dup = e;
+            let canon_start = topo.edge(canonical)?.start();
+            let canon_end = topo.edge(canonical)?.end();
+            let canon_qs = quantize_point(topo.vertex(canon_start)?.point(), tol);
+            let canon_qe = quantize_point(topo.vertex(canon_end)?.point(), tol);
             let dup_edge = topo.edge(dup)?;
             let dup_qs = quantize_point(topo.vertex(dup_edge.start())?.point(), tol);
             let dup_qe = quantize_point(topo.vertex(dup_edge.end())?.point(), tol);
