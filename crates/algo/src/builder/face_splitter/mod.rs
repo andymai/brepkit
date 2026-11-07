@@ -2857,6 +2857,274 @@ fn split_coendpoint_section_arc_inputs(inputs: &mut Vec<ArrInput>, frame: &Plane
     *inputs = rebuilt;
 }
 
+/// How [`arrangement_regions_from_inputs`] turns its traced cycles into regions.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ArrNesting {
+    /// Drop the largest cycle and emit the rest flat: faces with no integrated
+    /// holes.
+    DropLargest,
+    /// Depth-even cycles are solid, depth-odd ones their holes: a holed cap's
+    /// pre-woven edge list.
+    EvenOdd,
+    /// Every bounded face of the planar graph, holding the components nested in
+    /// it as holes, with what bounds no region pruned first.
+    Cells,
+}
+
+/// Whether two of a plane face's sections meet anywhere but end to end: a
+/// crossing, or an end on the other's interior.
+///
+/// The sections of one closed solid on a face run apart or end to end. Tools
+/// crossing each other, or a face's sections over a hole in the partner (whose
+/// whole chord a hole weave wants), make a graph the region-tracing paths
+/// read as one loop.
+fn sections_meet_midway(sections: &[SectionEdge], frame: &PlaneFrame, tol: f64) -> bool {
+    const CURVE_STEPS: u32 = 32;
+    let band = tol * 100.0;
+    let lines: Vec<Vec<Point2>> = sections
+        .iter()
+        .map(|s| {
+            if matches!(s.curve_3d, EdgeCurve::Line) {
+                return vec![frame.project(s.start), frame.project(s.end)];
+            }
+            let (t0, t1) = s.curve_3d.domain_with_endpoints(s.start, s.end);
+            (0..=CURVE_STEPS)
+                .map(|k| {
+                    let t = (t1 - t0).mul_add(f64::from(k) / f64::from(CURVE_STEPS), t0);
+                    frame.project(s.curve_3d.evaluate_with_endpoints(t, s.start, s.end))
+                })
+                .collect()
+        })
+        .collect();
+    let ends: Vec<[Point2; 2]> = sections
+        .iter()
+        .map(|s| [frame.project(s.start), frame.project(s.end)])
+        .collect();
+    let box_of = |line: &[Point2]| {
+        line.iter().fold(
+            (f64::MAX, f64::MAX, f64::MIN, f64::MIN),
+            |(lx, ly, hx, hy), p| (lx.min(p.x()), ly.min(p.y()), hx.max(p.x()), hy.max(p.y())),
+        )
+    };
+    let boxes: Vec<_> = lines.iter().map(|line| box_of(line)).collect();
+    let near_end = |p: Point2, e: &[Point2; 2]| e.iter().any(|&q| (p - q).length() <= band);
+    let lands_on = |p: Point2, line: &[Point2]| {
+        line.windows(2).any(|w| {
+            let d = w[1] - w[0];
+            let len2 = d.dot(d);
+            if len2 <= 0.0 {
+                return false;
+            }
+            let t = ((p - w[0]).dot(d) / len2).clamp(0.0, 1.0);
+            (p - (w[0] + d * t)).length() <= band
+        })
+    };
+    for i in 0..sections.len() {
+        for j in i + 1..sections.len() {
+            let (a, b) = (boxes[i], boxes[j]);
+            if a.0 > b.2 + band || b.0 > a.2 + band || a.1 > b.3 + band || b.1 > a.3 + band {
+                continue;
+            }
+            for p in ends[j] {
+                if !near_end(p, &ends[i]) && lands_on(p, &lines[i]) {
+                    return true;
+                }
+            }
+            for p in ends[i] {
+                if !near_end(p, &ends[j]) && lands_on(p, &lines[j]) {
+                    return true;
+                }
+            }
+            for u in lines[i].windows(2) {
+                for v in lines[j].windows(2) {
+                    let crosses = seg_cross_param(u[0], u[1], v[0], v[1]).is_some_and(|t| {
+                        let at = u[0] + (u[1] - u[0]) * t;
+                        !near_end(at, &ends[i]) && !near_end(at, &ends[j])
+                    });
+                    if crosses {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
+/// A plane face's cells when its sections meet mid-way, or `None` when they do
+/// not or the arrangement cannot hold its edges: the general splitter then
+/// takes the face.
+///
+/// The arrangement reads each input by its chord, and a closed curve has none. A
+/// closed circle or ellipse among the sections goes in as four arcs. A closed
+/// spline's arcs would each read back as the whole loop, and a closed boundary
+/// curve shares its edge with the face beside it, so it cannot take new vertices
+/// here: either way the general splitter takes the face.
+#[must_use]
+pub fn split_plane_into_cells(
+    topo: &Topology,
+    face_id: FaceId,
+    sections: &[SectionEdge],
+    rank: Rank,
+    tol: f64,
+) -> Option<Vec<SplitSubFace>> {
+    let face = topo.face(face_id).ok()?;
+    let surface = face.surface().clone();
+    if !matches!(surface, FaceSurface::Plane { .. }) {
+        return None;
+    }
+    let wire_pts = collect_wire_points(topo, face.outer_wire());
+    let frame = PlaneFrame::from_plane_face(extract_plane_normal(&surface), &wire_pts);
+    if !sections_meet_midway(sections, &frame, tol) {
+        return None;
+    }
+    let edges_of = |wire| boundary_edges_to_pcurve(topo, wire, &surface, &wire_pts, Some(&frame));
+    let closed = |edge: &OrientedPCurveEdge| (edge.start_3d - edge.end_3d).length() <= tol;
+    if edges_of(face.outer_wire()).iter().any(closed)
+        || face
+            .inner_wires()
+            .iter()
+            .any(|&wire| edges_of(wire).iter().any(closed))
+    {
+        return None;
+    }
+    let holes: Vec<Vec<OrientedPCurveEdge>> =
+        face.inner_wires().iter().map(|&w| edges_of(w)).collect();
+    let mut inputs: Vec<ArrInput> = edges_of(face.outer_wire())
+        .into_iter()
+        .chain(holes.iter().flatten().cloned())
+        .map(|edge| ArrInput {
+            a: edge.start_uv,
+            b: edge.end_uv,
+            is_arc: !matches!(edge.curve_3d, EdgeCurve::Line),
+            is_section: false,
+            edge,
+        })
+        .collect();
+    for section in sections {
+        let (t0, t1) = section
+            .curve_3d
+            .domain_with_endpoints(section.start, section.end);
+        // A closed circle's domain starts at its parameter origin, wherever its
+        // vertex sits.
+        let from = match &section.curve_3d {
+            EdgeCurve::Circle(circle) => circle.project(section.start),
+            EdgeCurve::Ellipse(ellipse) => ellipse.project(section.start),
+            EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => t0,
+        };
+        let at = |f: f64| {
+            section.curve_3d.evaluate_with_endpoints(
+                (t1 - t0).mul_add(f, from),
+                section.start,
+                section.end,
+            )
+        };
+        let closed = !matches!(section.curve_3d, EdgeCurve::Line)
+            && (section.start - section.end).length() <= tol;
+        if closed && matches!(section.curve_3d, EdgeCurve::NurbsCurve(_)) {
+            return None;
+        }
+        let knots: Vec<Point3> = if closed {
+            vec![section.start, at(0.25), at(0.5), at(0.75), section.end]
+        } else {
+            vec![section.start, section.end]
+        };
+        for span in knots.windows(2) {
+            let (from, to) = (span[0], span[1]);
+            let (a, b) = (frame.project(from), frame.project(to));
+            inputs.push(ArrInput {
+                a,
+                b,
+                edge: OrientedPCurveEdge {
+                    curve_3d: section.curve_3d.clone(),
+                    pcurve: compute_pcurve_on_surface(
+                        &section.curve_3d,
+                        from,
+                        to,
+                        &surface,
+                        &wire_pts,
+                        Some(&frame),
+                    ),
+                    start_uv: a,
+                    end_uv: b,
+                    start_3d: from,
+                    end_3d: to,
+                    forward: true,
+                    source_edge_idx: None,
+                    pave_block_id: None,
+                },
+                is_arc: !matches!(section.curve_3d, EdgeCurve::Line),
+                is_section: true,
+            });
+        }
+    }
+    split_coendpoint_section_arc_inputs(&mut inputs, &frame, tol);
+    arrangement_regions_from_inputs(
+        &surface,
+        inputs,
+        rank,
+        face.is_reversed(),
+        face_id,
+        &frame,
+        tol,
+        ArrNesting::Cells,
+        &holes,
+        None,
+    )
+}
+
+/// The undirected edges of a graph lying on no cycle.
+pub(super) fn bridge_edges(edges: &[(UvKey, UvKey)]) -> Vec<bool> {
+    let mut around: std::collections::HashMap<UvKey, Vec<(UvKey, usize)>> =
+        std::collections::HashMap::new();
+    for (i, &(a, b)) in edges.iter().enumerate() {
+        around.entry(a).or_default().push((b, i));
+        around.entry(b).or_default().push((a, i));
+    }
+    let mut bridge = vec![false; edges.len()];
+    let mut seen: std::collections::HashMap<UvKey, (usize, usize)> =
+        std::collections::HashMap::new();
+    let mut clock = 0;
+    for &(root, _) in edges {
+        if seen.contains_key(&root) {
+            continue;
+        }
+        seen.insert(root, (clock, clock));
+        clock += 1;
+        // Vertex, the edge it was reached by, and its next neighbour to visit.
+        let mut stack: Vec<(UvKey, usize, usize)> = vec![(root, usize::MAX, 0)];
+        while let Some(&mut (at, via, ref mut next)) = stack.last_mut() {
+            if let Some(&(to, edge)) = around[&at].get(*next) {
+                *next += 1;
+                if edge == via {
+                    continue;
+                }
+                if let Some(&(order, _)) = seen.get(&to) {
+                    if let Some(entry) = seen.get_mut(&at) {
+                        entry.1 = entry.1.min(order);
+                    }
+                } else {
+                    seen.insert(to, (clock, clock));
+                    clock += 1;
+                    stack.push((to, edge, 0));
+                }
+            } else {
+                stack.pop();
+                let low = seen[&at].1;
+                if let Some(&(parent, _, _)) = stack.last() {
+                    if let Some(entry) = seen.get_mut(&parent) {
+                        entry.1 = entry.1.min(low);
+                    }
+                    if low > seen[&parent].0 {
+                        bridge[via] = true;
+                    }
+                }
+            }
+        }
+    }
+    bridge
+}
+
 /// Decompose a planar face into its minimal interior regions via a 2D
 /// arrangement of its boundary and section edges.
 ///
@@ -2957,7 +3225,7 @@ fn split_plane_face_by_arrangement(
         face_id,
         frame,
         tol,
-        false,
+        ArrNesting::DropLargest,
         &[],
         split_registry,
     )
@@ -3011,7 +3279,7 @@ fn arrangement_regions_from_combined(
         face_id,
         frame,
         tol,
-        true,
+        ArrNesting::EvenOdd,
         inner_wires,
         None,
     )
@@ -3030,16 +3298,16 @@ fn arrangement_regions_from_inputs(
     face_id: FaceId,
     frame: &PlaneFrame,
     tol: f64,
-    // When true, resolve overlapping nested minimal faces (a holed cap whose
+    // `EvenOdd` resolves overlapping nested minimal faces (a holed cap whose
     // holes/sections form a component separate from the outer-boundary loop)
     // via even-odd containment nesting: depth-even faces are solid regions
     // emitted with their direct-child faces as holes, depth-odd faces are holes,
     // and solid regions filling an `original_holes` opening are dropped (air).
-    // False keeps the historical "drop only the max-area face, emit each as a
-    // flat outer wire" behaviour for the section-only entry point.
-    even_odd_nesting: bool,
+    // `DropLargest` keeps the historical "drop only the max-area face, emit each
+    // as a flat outer wire" behaviour for the section-only entry point.
+    nesting: ArrNesting,
     // The face's ORIGINAL holes (compartment openings) in this face's frame.
-    // Used by the even-odd path to drop solid regions that fill an opening.
+    // Used by the nesting paths to drop solid regions that fill an opening.
     // Empty for the section-only entry point.
     original_holes: &[Vec<OrientedPCurveEdge>],
     // When present, section-input interior break points are recorded per pave
@@ -3540,6 +3808,15 @@ fn arrangement_regions_from_inputs(
         let bk = if b.0 <= b.1 { (b.0, b.1) } else { (b.1, b.0) };
         ak == bk
     });
+    if nesting == ArrNesting::Cells {
+        let pairs: Vec<(UvKey, UvKey)> = sub_edges.iter().map(|&(a, b, _, _)| (a, b)).collect();
+        let bridge = bridge_edges(&pairs);
+        let mut at = 0;
+        sub_edges.retain(|_| {
+            at += 1;
+            !bridge[at - 1]
+        });
+    }
     if sub_edges.is_empty() {
         return None;
     }
@@ -3857,7 +4134,95 @@ fn arrangement_regions_from_inputs(
         pts
     };
 
-    if even_odd_nesting {
+    if nesting == ArrNesting::Cells {
+        // The trace turns as far right as it can, so a bounded face comes back
+        // clockwise and each connected component's outline counter-clockwise.
+        let mut component: std::collections::HashMap<UvKey, usize> =
+            std::collections::HashMap::new();
+        for (id, &(root, _)) in sub_edges.iter().enumerate() {
+            if component.contains_key(&root) {
+                continue;
+            }
+            let mut stack = vec![root];
+            while let Some(v) = stack.pop() {
+                if component.insert(v, id).is_none() {
+                    for &(a, b) in &sub_edges {
+                        if a == v {
+                            stack.push(b);
+                        } else if b == v {
+                            stack.push(a);
+                        }
+                    }
+                }
+            }
+        }
+        let component_of = |f: &[usize]| component.get(&halfs[f[0]].from).copied();
+        let cells: Vec<&Vec<usize>> = faces.iter().filter(|f| face_area(f) < -tol * tol).collect();
+        let polys: Vec<Vec<Point2>> = cells.iter().map(|f| face_poly(f)).collect();
+        let areas: Vec<f64> = cells.iter().map(|f| face_area(f).abs()).collect();
+        let mut holes_of: Vec<Vec<Vec<OrientedPCurveEdge>>> = vec![Vec::new(); cells.len()];
+        for outline in faces.iter().filter(|f| face_area(f) > tol * tol) {
+            let area = face_area(outline);
+            let ring = face_poly(outline);
+            let holder = (0..cells.len())
+                .filter(|&c| {
+                    let eps = super::classify_2d::boundary_eps(&polys[c]);
+                    component_of(cells[c]) != component_of(outline)
+                        && areas[c] > area
+                        && ring.iter().all(|&v| {
+                            super::classify_2d::point_in_polygon_2d(v, &polys[c])
+                                || super::classify_2d::distance_to_polygon_boundary(v, &polys[c])
+                                    <= eps
+                        })
+                })
+                .min_by(|&x, &y| areas[x].total_cmp(&areas[y]));
+            if let Some(holder) = holder
+                && let Some(mut wire) = build_ccw_wire(outline)
+            {
+                wire.reverse();
+                for e in &mut wire {
+                    std::mem::swap(&mut e.start_uv, &mut e.end_uv);
+                    std::mem::swap(&mut e.start_3d, &mut e.end_3d);
+                    e.forward = !e.forward;
+                }
+                holes_of[holder].push(wire);
+            }
+        }
+        let air: Vec<Vec<Point2>> = original_holes
+            .iter()
+            .map(|w| sample_wire_loop_uv(w))
+            .filter(|p| p.len() >= 3)
+            .collect();
+        let mut result = Vec::with_capacity(cells.len());
+        for (c, inner) in holes_of.into_iter().enumerate() {
+            let seed = if inner.is_empty() {
+                sample_interior_point(&polys[c])
+            } else {
+                find_point_outside_holes(&polys[c], &inner, Some(frame))
+            };
+            if air
+                .iter()
+                .any(|hole| super::classify_2d::point_in_polygon_2d(seed, hole))
+            {
+                continue;
+            }
+            let outer_wire = build_ccw_wire(cells[c])?;
+            let precomputed_interior =
+                (!inner.is_empty()).then(|| frame.evaluate(seed.x(), seed.y()));
+            result.push(SplitSubFace {
+                surface: surface.clone(),
+                outer_wire,
+                inner_wires: inner,
+                reversed,
+                parent: face_id,
+                rank,
+                precomputed_interior,
+            });
+        }
+        return (!result.is_empty()).then_some(result);
+    }
+
+    if nesting == ArrNesting::EvenOdd {
         // Even-odd nesting (holed-cap path). Minimal-face tracing of a
         // disconnected arrangement (a holed cap whose holes/sections form an
         // inner component separate from the outer boundary loop) yields nested
@@ -10028,6 +10393,121 @@ mod tests {
         brepkit_math::curves2d::Curve2D::Line(
             Line2D::new(Point2::new(0.0, 0.0), Vec2::new(1.0, 0.0)).unwrap(),
         )
+    }
+
+    /// A closed spline among the sections is the general splitter's: its quarters
+    /// would each read back as the whole loop.
+    #[test]
+    fn a_closed_spline_section_leaves_the_face_to_the_general_splitter() {
+        use brepkit_math::curves2d::{Curve2D, Line2D};
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        use brepkit_math::vec::{Point2, Vec2};
+        use brepkit_topology::builder::make_planar_face;
+
+        let section = |curve_3d: EdgeCurve, start: Point3, end: Point3| {
+            let flat =
+                Curve2D::Line(Line2D::new(Point2::new(0.0, 0.0), Vec2::new(1.0, 0.0)).unwrap());
+            SectionEdge {
+                curve_3d,
+                pcurve_a: flat.clone(),
+                pcurve_b: flat,
+                start,
+                end,
+                start_uv_a: None,
+                end_uv_a: None,
+                start_uv_b: None,
+                end_uv_b: None,
+                target_face: None,
+                pave_block_id: None,
+            }
+        };
+        let mut topo = Topology::new();
+        let corners = [(-10.0, -10.0), (10.0, -10.0), (10.0, 10.0), (-10.0, 10.0)]
+            .map(|(x, y)| Point3::new(x, y, 0.0));
+        let face = make_planar_face(&mut topo, &corners, 1e-7).unwrap();
+        let at = Point3::new(4.0, 0.0, 0.0);
+        let points = vec![
+            at,
+            Point3::new(4.0, 6.0, 0.0),
+            Point3::new(-4.0, 6.0, 0.0),
+            Point3::new(-4.0, -6.0, 0.0),
+            Point3::new(4.0, -6.0, 0.0),
+            at,
+        ];
+        let weights = vec![1.0; points.len()];
+        let knots = vec![0.0, 0.0, 0.0, 0.25, 0.5, 0.75, 1.0, 1.0, 1.0];
+        let loop_curve = NurbsCurve::new(2, knots, points, weights).unwrap();
+        let sections = [
+            section(EdgeCurve::NurbsCurve(loop_curve), at, at),
+            section(
+                EdgeCurve::Line,
+                Point3::new(-10.0, 1.0, 0.0),
+                Point3::new(10.0, 1.0, 0.0),
+            ),
+        ];
+        assert!(split_plane_into_cells(&topo, face, &sections, Rank::B, 1e-7).is_none());
+    }
+
+    /// A closed section whose vertex sits off its circle's parameter origin,
+    /// crossed by a line: two half discs and the square's two parts around them.
+    #[test]
+    fn a_circle_read_from_its_own_vertex_and_a_line_make_four_cells() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::curves2d::{Curve2D, Line2D};
+        use brepkit_math::vec::{Point2, Vec2};
+        use brepkit_topology::builder::make_planar_face;
+
+        let section = |curve_3d: EdgeCurve, start: Point3, end: Point3| {
+            let flat =
+                Curve2D::Line(Line2D::new(Point2::new(0.0, 0.0), Vec2::new(1.0, 0.0)).unwrap());
+            SectionEdge {
+                curve_3d,
+                pcurve_a: flat.clone(),
+                pcurve_b: flat,
+                start,
+                end,
+                start_uv_a: None,
+                end_uv_a: None,
+                start_uv_b: None,
+                end_uv_b: None,
+                target_face: None,
+                pave_block_id: None,
+            }
+        };
+        for start_at in [0.0, 2.4, 5.0] {
+            let mut topo = Topology::new();
+            let corners = [(-10.0, -10.0), (10.0, -10.0), (10.0, 10.0), (-10.0, 10.0)]
+                .map(|(x, y)| Point3::new(x, y, 0.0));
+            let face = make_planar_face(&mut topo, &corners, 1e-7).unwrap();
+            let round =
+                Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 4.0).unwrap();
+            let on_round = round.evaluate(start_at);
+            let (left, right) = (Point3::new(-10.0, 1.0, 0.0), Point3::new(10.0, 1.0, 0.0));
+            let sections = [
+                section(EdgeCurve::Circle(round), on_round, on_round),
+                section(EdgeCurve::Line, left, right),
+            ];
+            let cells = split_plane_into_cells(&topo, face, &sections, Rank::B, 1e-7).unwrap();
+            assert_eq!(cells.len(), 4, "from {start_at}");
+            let swept: f64 = cells
+                .iter()
+                .flat_map(|cell| &cell.outer_wire)
+                .filter(|edge| matches!(edge.curve_3d, EdgeCurve::Circle(_)))
+                .map(|edge| {
+                    let (from, to) = if edge.forward {
+                        (edge.start_3d, edge.end_3d)
+                    } else {
+                        (edge.end_3d, edge.start_3d)
+                    };
+                    let (t0, t1) = edge.curve_3d.domain_with_endpoints(from, to);
+                    t1 - t0
+                })
+                .sum();
+            assert!(
+                (swept - 4.0 * std::f64::consts::PI).abs() < 1e-6,
+                "from {start_at}: its cells run {swept} round the circle, not once each way"
+            );
+        }
     }
 
     /// The boundary of a cylinder wall 300 degrees round, one unit tall: run

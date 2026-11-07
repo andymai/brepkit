@@ -24,4 +24,4 @@ pub use pave_vertex_index::{PaveBallIndex, PaveVertexIndex};
 #[allow(unused_imports)]
 pub use pave::{CommonBlock, CommonBlockId};
 pub use shape_index::Rank;
-pub use shape_store::{GfaShapeStore, GfaShapeStoreN};
+pub use shape_store::{GfaImprintStore, GfaShapeStore, GfaShapeStoreN};
