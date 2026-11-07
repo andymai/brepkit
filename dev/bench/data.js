@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794073644957,
+  "lastUpdate": 1794074649301,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -66419,6 +66419,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26760875,
             "range": "± 57513",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "69952a72fb9aa2d8ff4727e2a1a7e6f3e34dfe95",
+          "message": "fix(operations): extrude a circle off its normal to an oblique wall (#2320)",
+          "timestamp": "2026-11-07T10:01:10-08:00",
+          "tree_id": "488f03291491539486270903abd3f021a46e23aa",
+          "url": "https://github.com/andymai/brepkit/commit/69952a72fb9aa2d8ff4727e2a1a7e6f3e34dfe95"
+        },
+        "date": 1794074641207,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 784168,
+            "range": "± 22274",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 850013,
+            "range": "± 23947",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 9500,
+            "range": "± 564",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 483614,
+            "range": "± 8851",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 21265584,
+            "range": "± 613292",
             "unit": "ns/iter"
           }
         ]
