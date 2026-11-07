@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.6.30](https://github.com/andymai/brepkit/compare/v4.6.29...v4.6.30) (2026-11-07)
+
+
+### Bug Fixes
+
+* **heal:** merge a sphere's two halves into one face when simplifying ([#2311](https://github.com/andymai/brepkit/issues/2311)) ([c4d72e5](https://github.com/andymai/brepkit/commit/c4d72e5245452aac53dfa8279d1715a5754ded74))
+
 ## [4.6.29](https://github.com/andymai/brepkit/compare/v4.6.28...v4.6.29) (2026-11-07)
 
 
