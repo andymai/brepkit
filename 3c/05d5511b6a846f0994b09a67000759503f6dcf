@@ -1,0 +1,89 @@
+crates/algo/src/builder/face_splitter/mod.rs
+  s_649261a24df31b::t_f64500eab59ef0 1109-1129,8104,8106,8111-8116,10247-10350
+  s_649261a24df31b::t_523941416a2e36 10351
+crates/heal/src/upgrade/unify_same_domain.rs
+  s_649261a24df31b::t_f64500eab59ef0 14-15,17-18,21,218-220,222-229,361-528
+  s_649261a24df31b::t_6d1e923dec23c8 529-530
+crates/operations/tests/simplify_whole_sphere.rs
+  s_649261a24df31b::t_f64500eab59ef0 1-346
+crates/wasm/src/helpers.rs
+  s_649261a24df31b::t_f64500eab59ef0 123-138,238-246,1429-1492
+  s_649261a24df31b::t_b64b7d4bdecf23 1493-1494
+crates/operations/src/lib.rs
+  s_649261a24df31b::t_f64500eab59ef0 163
+crates/operations/src/sheet.rs
+  s_649261a24df31b::t_f64500eab59ef0 1-1187
+crates/operations/tests/fillet_concave_ends.rs
+  s_649261a24df31b::t_f64500eab59ef0 1-401
+CHANGELOG.md
+  s_649261a24df31b::t_f64500eab59ef0 3-29
+crates/operations/src/fillet/concave_end.rs
+  s_649261a24df31b::t_f64500eab59ef0 1-356
+crates/operations/src/validate.rs
+  s_649261a24df31b::t_f64500eab59ef0 165-170,178-179,221-222,224-225,227,303,305-311,315,318,320-343
+crates/algo/src/pave_filler/phase_ff.rs
+  s_649261a24df31b::t_f64500eab59ef0 529-533,8514-8519,8526-8559,8903-8905,8930-8934
+crates/operations/src/validate/tests.rs
+  s_649261a24df31b::t_f64500eab59ef0 603-683
+crates/operations/tests/regress_fillet_variable_retry_seam_stub.rs
+  s_649261a24df31b::t_f64500eab59ef0 208-214
+crates/operations/src/measure/area.rs
+  s_649261a24df31b::t_f64500eab59ef0 788-793
+crates/operations/src/revolve.rs
+  s_649261a24df31b::t_f64500eab59ef0 47,75,135,167,234,295,516,650,680,716,1217
+Cargo.toml
+  s_649261a24df31b::t_f64500eab59ef0 15,58-68
+crates/operations/src/measure/mod.rs
+  s_649261a24df31b::t_f64500eab59ef0 45-88
+crates/operations/src/tessellate/face.rs
+  s_649261a24df31b::t_f64500eab59ef0 67-69,75-76,80-94
+crates/operations/src/fillet/mod.rs
+  s_649261a24df31b::t_f64500eab59ef0 29
+crates/blend/src/builder_utils.rs
+  s_649261a24df31b::t_f64500eab59ef0 42-99,668,670-685,1227-1250
+  s_649261a24df31b::t_0951e4720f7250 1251
+crates/blend/src/fillet_builder.rs
+  s_649261a24df31b::t_f64500eab59ef0 312-344,872,884-894,900-902,1011-1016,1021-1026,1734-1744,2462-2673,2756-2768
+crates/operations/src/sweep.rs
+  s_649261a24df31b::t_f64500eab59ef0 1942,2761
+  s_649261a24df31b::t_9f4a10408db189 2762
+crates/operations/tests/revolve_curved_profiles.rs
+  s_649261a24df31b::t_f64500eab59ef0 13,231-275
+  s_649261a24df31b::t_640da91980dfe8 276-277
+crates/wasm/src/bindings/operations.rs
+  s_649261a24df31b::t_f64500eab59ef0 17-19,185-205,409-439,488-538,1009-1031,1865-1987
+  s_649261a24df31b::t_6b1c9e1507a7e7 1988
+crates/operations/src/sweep/exact.rs
+  s_649261a24df31b::t_f64500eab59ef0 101-102,438-519
+  s_649261a24df31b::t_7bb573b9b01add 520
+.release-please-manifest.json
+  s_649261a24df31b::t_f64500eab59ef0 2
+CLAUDE.md
+  s_649261a24df31b::t_f64500eab59ef0 317
+crates/operations/tests/sheet_ops.rs
+  s_649261a24df31b::t_f64500eab59ef0 1-2246
+crates/wasm/src/bindings/batch.rs
+  s_649261a24df31b::t_f64500eab59ef0 21-25,646-704
+crates/operations/src/extrude.rs
+  s_649261a24df31b::t_f64500eab59ef0 531,676,721-753,755-784,787-792,794-797,1381
+crates/operations/tests/fillet_tilted_end_caps.rs
+  s_649261a24df31b::t_f64500eab59ef0 1-196
+crates/operations/tests/cut_beside_a_hole.rs
+  s_649261a24df31b::t_f64500eab59ef0 1-163
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3c05d5511b6a846f0994b09a67000759503f6dcf",
+  "prompts": {},
+  "sessions": {
+    "s_649261a24df31b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d8bbbba4-0431-4f6a-a622-e632a6659779",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
