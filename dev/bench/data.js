@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794053998264,
+  "lastUpdate": 1794056244736,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -65393,6 +65393,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 22712024,
             "range": "± 316199",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "4b0dbc5ef24c2bc3001555977b33ed6ad58f2811",
+          "message": "fix(operations): chamfer tangent chains of lines and arcs exactly (#2291)\n\nCloses #2163.\n\n## Problem\n\nChamfering a rounded prism gave wrong solids or errors, depending on the\nedges:\n\n| Repro (obround prism, d = 1) | Before | Expected |\n| --- | --- | --- |\n| One straight bottom edge | 4253.33, no error | 8390.62 |\n| Whole bottom loop | error: `missing chamfer point` | 8346.53 |\n\nThere were two causes:\n- **Planar chamfer:** it rebuilds every face from its corner vertices,\nso arcs become chords.\n- **Walking engine:** it fails on these arcs, and on a straight edge\nnext to a tangent arc it reads 0.41 off or, with the profile wound the\nother way, about 1157 off.\n\nMeasuring this also turned up a wrong result that a test was hiding.\n`example_gridfinity_bin` passed on an **invalid 17,978 mm³ solid from a\n7,384.5 mm³ input**, because it only asserted the input's volume. The\nplanar rebuild dropped every face's holes, which closed the bin's\nopening.\n\n## Change\n\n- **New `chamfer_chain.rs`:** builds a tangent chain on one flat cap\ndirectly, without a boolean.\n- Each edge moves into the cap and along its wall, and a plane (over a\nline) or a cone (over an arc) joins the two.\n  - A free end closes in a flat triangle.\n- The result must match the chain's closed-form volume before it's\nreturned; anything out of scope returns `None` and goes to the other\nengines.\n- **`try_chamfer`:** tries the chain path before the walking engine.\n- **Planar rebuild (`chamfer_core`):**\n  - keeps a straight-sided hole the chamfer doesn't reach\n- reads a reversed face as it actually faces (a boolean's hole walls\nwere coming back inside out)\n- refuses curved edges and holes it does reach, where it used to return\na wrong solid\n\nBuilding a closed chain from boolean tool cuts was tried first and\nrejected: a fused ring tool falls back to a mesh in 4 of 8 turned,\nmirrored and rewound poses.\n\n## Behaviour change to review\n\n`chamfer` and `chamfer_asymmetric` now return an error on selections\nthey used to \"succeed\" on with a wrong solid. For example, a straight\nedge with a tangent arc at one end and a sharp corner at the other still\nhas no exact path. Through `try_chamfer` it can still reach the walking\nengine, whose stripe end there is approximate; that remaining gap is\nrecorded in the roadmap.\n\n## Tests\n\n- `crates/operations/tests/chamfer_tangent_chains.rs` (11 tests,\ncommitted first and seen failing) checks closed-form volumes (Pappus for\narcs), validity, watertight meshes, face counts and point\nclassification. Coverage:\n  - one edge, two separate chains, one arc, a closed loop, both rims\n  - a pocket's concave floor, which adds material\n  - a pocket's mouth, where the chain is a hole of its cap\n- both profile windings; most cases also run upright, turned, tilted and\nmirrored\n  - refusals\n- `try_chamfer_follows_an_obrounds_tangent_edges` covers the issue's\nrepro through the path the binding uses.\n- `example_gridfinity_bin` is tightened to assert the result's\nclosed-form volume and validity.\n- Passing locally: `cargo test -p brepkit-operations` and `cargo test -p\nbrepkit-wasm --lib`. I did not run the rest of the workspace or the\ntool-side suite; this PR doesn't touch boolean or GFA code.",
+          "timestamp": "2026-11-07T04:54:00-08:00",
+          "tree_id": "c240f818d410abb8d5920a45351b62039a97157a",
+          "url": "https://github.com/andymai/brepkit/commit/4b0dbc5ef24c2bc3001555977b33ed6ad58f2811"
+        },
+        "date": 1794056236451,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1052561,
+            "range": "± 3387",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1124535,
+            "range": "± 1800",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12869,
+            "range": "± 42",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 673835,
+            "range": "± 1562",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 27979908,
+            "range": "± 265569",
             "unit": "ns/iter"
           }
         ]
