@@ -569,6 +569,118 @@ fn pinched_and_nested_pieces_are_invalid() {
     assert!(!report.is_valid(), "a block inside a block reads valid");
 }
 
+/// A block inside another stays nested when one of its sides lies on the other's
+/// wall: its vertices there have no parity to read, and those clear of it do. A
+/// block beside the other, sharing that wall's plane, is no such thing.
+#[test]
+fn a_nested_block_on_its_parents_wall_is_still_nested() {
+    use brepkit_math::mat::Mat4;
+
+    let read = |at: (f64, f64, f64)| {
+        let mut topo = Topology::new();
+        let outer = crate::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+        let inner = crate::primitives::make_box(&mut topo, 2.0, 2.0, 2.0).unwrap();
+        let place = Mat4::translation(at.0, at.1, at.2);
+        crate::transform::transform_solid(&mut topo, inner, &place).unwrap();
+        let both = crate::compound_ops::merge_disjoint_solids(&mut topo, &[outer, inner]).unwrap();
+        validate_solid(&topo, both)
+            .unwrap()
+            .issues
+            .iter()
+            .any(|i| i.description.contains("inside another"))
+    };
+    assert!(read((4.0, 4.0, 4.0)), "clear inside");
+    assert!(read((8.0, 4.0, 4.0)), "on the x = 10 wall");
+    assert!(read((4.0, 4.0, 8.0)), "on the z = 10 wall");
+    assert!(read((8.0, 8.0, 8.0)), "in the far corner");
+    assert!(!read((14.0, 4.0, 4.0)), "clear outside");
+    assert!(
+        !read((12.0, 4.0, 8.0)),
+        "beside, its top in the wall's plane"
+    );
+}
+
+/// A piece that reads nested through few usable points: a many-sided prism whose
+/// first face, and so its first vertices, lie on the parent's floor, and a
+/// cylinder whose only two vertices lie on the parent's caps.
+#[test]
+fn a_nested_piece_reads_nested_however_few_points_clear_the_other() {
+    use brepkit_math::mat::Mat4;
+    use brepkit_math::vec::{Point3, Vec3};
+    use brepkit_topology::edge::{Edge, EdgeCurve};
+    use brepkit_topology::face::{Face, FaceSurface};
+    use brepkit_topology::vertex::Vertex;
+    use brepkit_topology::wire::{OrientedEdge, Wire};
+
+    let nested = |topo: &mut Topology, inner, outer| {
+        let both = crate::compound_ops::merge_disjoint_solids(topo, &[outer, inner]).unwrap();
+        validate_solid(topo, both)
+            .unwrap()
+            .issues
+            .iter()
+            .any(|i| i.description.contains("inside another"))
+    };
+
+    let mut topo = Topology::new();
+    let sides = 40;
+    let vertices: Vec<_> = (0..sides)
+        .map(|k| {
+            let angle = std::f64::consts::TAU * f64::from(k) / f64::from(sides);
+            let at = Point3::new(5.0 + 2.0 * angle.cos(), 5.0 + 2.0 * angle.sin(), 0.0);
+            topo.add_vertex(Vertex::new(at, 1e-7))
+        })
+        .collect();
+    let edges: Vec<_> = (0..vertices.len())
+        .map(|i| {
+            let next = vertices[(i + 1) % vertices.len()];
+            OrientedEdge::new(
+                topo.add_edge(Edge::new(vertices[i], next, EdgeCurve::Line)),
+                true,
+            )
+        })
+        .collect();
+    let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+    let up = Vec3::new(0.0, 0.0, 1.0);
+    let face = topo.add_face(Face::new(
+        wire,
+        Vec::new(),
+        FaceSurface::Plane { normal: up, d: 0.0 },
+    ));
+    let prism = crate::extrude::extrude(&mut topo, face, up, 2.0).unwrap();
+    let block = crate::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+    assert!(nested(&mut topo, prism, block), "a prism on the floor");
+
+    let mut topo = Topology::new();
+    let small = crate::primitives::make_cylinder(&mut topo, 1.0, 2.0).unwrap();
+    let large = crate::primitives::make_cylinder(&mut topo, 2.0, 2.0).unwrap();
+    assert!(nested(&mut topo, small, large), "a rod between the caps");
+
+    let mut topo = Topology::new();
+    let tall = crate::primitives::make_box(&mut topo, 2.0, 2.0, 10.0).unwrap();
+    let place = Mat4::translation(4.0, 4.0, 0.0);
+    crate::transform::transform_solid(&mut topo, tall, &place).unwrap();
+    let block = crate::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+    assert!(nested(&mut topo, tall, block), "a post from floor to roof");
+
+    // A ring's lone vertex sends its first ray through the block's far edge, at
+    // (2, 2.5, 1.5): the other two rays still read it.
+    let mut topo = Topology::new();
+    let ring = crate::primitives::make_torus(&mut topo, 0.6, 0.2, 16).unwrap();
+    let place = Mat4::translation(0.2, 1.0, 1.0);
+    crate::transform::transform_solid(&mut topo, ring, &place).unwrap();
+    let block = crate::primitives::make_box(&mut topo, 4.0, 4.5, 5.0).unwrap();
+    let place = Mat4::translation(-2.0, -2.0, -2.0);
+    crate::transform::transform_solid(&mut topo, block, &place).unwrap();
+    assert!(nested(&mut topo, ring, block), "a ring, one ray on an edge");
+
+    let mut topo = Topology::new();
+    let small = crate::primitives::make_cylinder(&mut topo, 1.0, 2.0).unwrap();
+    let large = crate::primitives::make_cylinder(&mut topo, 2.0, 2.0).unwrap();
+    let apart = Mat4::translation(9.0, 0.0, 0.0);
+    crate::transform::transform_solid(&mut topo, small, &apart).unwrap();
+    assert!(!nested(&mut topo, small, large), "a rod beside it");
+}
+
 /// Two balls touching at a point, each with its own vertex there, gathered
 /// into one shell: neither reads as inside the other. Rays from the point
 /// where they touch run into the other ball.

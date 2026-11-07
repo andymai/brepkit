@@ -123,6 +123,7 @@ impl<'a> PaveFiller<'a> {
         )?;
 
         pave_co_endpoint_curves(self.topo, &[self.solid_a, self.solid_b], self.tol, arena)?;
+        split_co_endpoint_sections(self.topo, self.tol, arena)?;
 
         Ok(())
     }
@@ -253,6 +254,197 @@ fn pave_co_endpoint_curves(
     Ok(())
 }
 
+/// Divide at its middle every section arc other than a circle's that shares
+/// both ends with another section along a different path (a plane across a half
+/// ellipse prism meets its wall in the arc and its flat side in the chord). The
+/// assembler keys duplicate edges on their endpoint pair and would weld the two,
+/// leaving the wall bounded by the chord. A circle's arc has that split later,
+/// in the face splitter, which reads its middle exactly.
+#[allow(clippy::too_many_lines)]
+fn split_co_endpoint_sections(
+    topo: &mut Topology,
+    tol: Tolerance,
+    arena: &mut GfaArena,
+) -> Result<(), AlgoError> {
+    use std::collections::HashMap;
+
+    use brepkit_math::vec::Point3;
+    use brepkit_topology::edge::{Edge, EdgeCurve};
+    use brepkit_topology::vertex::Vertex;
+
+    use crate::ds::{Interference, Pave, PaveBlock};
+
+    struct Section {
+        index: usize,
+        curved: bool,
+        at: f64,
+        start: Point3,
+        end: Point3,
+        path: Vec<Point3>,
+    }
+
+    /// Ends match by distance within the band the assembler later welds them at,
+    /// whatever the boolean's own tolerance: a coarser reading here would leave
+    /// the pair for the weld to join.
+    const WELD: f64 = 1e-5;
+    /// Chords a section's path is read through.
+    const PATH_SAMPLES: u32 = 32;
+
+    let point_to_chord = |p: Point3, a: Point3, b: Point3| {
+        let ab = b - a;
+        let along = (p - a).dot(ab) / ab.dot(ab).max(f64::MIN_POSITIVE);
+        (p - (a + ab * along.clamp(0.0, 1.0))).length()
+    };
+    let mut sections: Vec<Section> = Vec::new();
+    for (index, curve) in arena.curves.iter().enumerate() {
+        let &[pb_id] = curve.pave_blocks.as_slice() else {
+            continue;
+        };
+        let Some(pb) = arena.pave_blocks.get(pb_id) else {
+            continue;
+        };
+        let edge = topo.edge(pb.original_edge)?;
+        let start = topo.vertex(arena.resolve_vertex(pb.start.vertex))?.point();
+        let end = topo.vertex(arena.resolve_vertex(pb.end.vertex))?.point();
+        if (start - end).length() <= WELD {
+            continue;
+        }
+        let at = 0.5 * (pb.start.parameter + pb.end.parameter);
+        // A line section's parameter is a distance along its raw line, not the
+        // fraction its edge reads, so a path is sampled in fractions of its span.
+        let is_line = matches!(edge.curve(), EdgeCurve::Line);
+        let (t0, t1) = (pb.start.parameter, pb.end.parameter);
+        let path: Vec<Point3> = (0..=PATH_SAMPLES)
+            .map(|k| {
+                let f = f64::from(k) / f64::from(PATH_SAMPLES);
+                if is_line {
+                    start + (end - start) * f
+                } else {
+                    edge.curve()
+                        .evaluate_with_endpoints((t1 - t0).mul_add(f, t0), start, end)
+                }
+            })
+            .collect();
+        sections.push(Section {
+            index,
+            curved: matches!(
+                edge.curve(),
+                EdgeCurve::NurbsCurve(_) | EdgeCurve::Ellipse(_)
+            ),
+            at,
+            start,
+            end,
+            path,
+        });
+    }
+    // Candidates by their chord's middle: sections sharing ends share it to
+    // within the band, and a neighbouring cell catches it across a cell's edge.
+    let cell_of = |p: Point3| {
+        #[allow(clippy::cast_possible_truncation)]
+        (
+            (p.x() / (2.0 * WELD)).floor() as i64,
+            (p.y() / (2.0 * WELD)).floor() as i64,
+            (p.z() / (2.0 * WELD)).floor() as i64,
+        )
+    };
+    let middle_of = |s: &Section| s.start + (s.end - s.start) * 0.5;
+    let mut cells: HashMap<(i64, i64, i64), Vec<usize>> = HashMap::new();
+    for (i, section) in sections.iter().enumerate() {
+        cells
+            .entry(cell_of(middle_of(section)))
+            .or_default()
+            .push(i);
+    }
+    let same_ends = |p: &Section, q: &Section| {
+        let close = |a: Point3, b: Point3| (a - b).length() <= WELD;
+        (close(p.start, q.start) && close(p.end, q.end))
+            || (close(p.start, q.end) && close(p.end, q.start))
+    };
+    // Off the other's path anywhere: read as paths, since two copies of one path
+    // need not run at the same speed, nor their samples land alike. A sample can
+    // lie off the other's chords by their sag, bounded here by the sag of chords
+    // twice as long.
+    let leaves = |p: &Section, q: &Section| {
+        let sag = q
+            .path
+            .windows(3)
+            .step_by(2)
+            .map(|w| point_to_chord(w[1], w[0], w[2]))
+            .fold(0.0, f64::max);
+        p.path.iter().any(|&sample| {
+            q.path
+                .windows(2)
+                .map(|w| point_to_chord(sample, w[0], w[1]))
+                .fold(f64::INFINITY, f64::min)
+                > WELD.max(sag)
+        })
+    };
+    let mut to_split: Vec<(usize, f64, Point3)> = Vec::new();
+    for (i, section) in sections.iter().enumerate() {
+        if !section.curved {
+            continue;
+        }
+        let (cx, cy, cz) = cell_of(middle_of(section));
+        let shares_its_ends = (-1..=1).any(|dx| {
+            (-1..=1).any(|dy| {
+                (-1..=1).any(|dz| {
+                    cells
+                        .get(&(cx + dx, cy + dy, cz + dz))
+                        .is_some_and(|candidates| {
+                            candidates.iter().any(|&j| {
+                                j != i
+                                    && same_ends(section, &sections[j])
+                                    && leaves(section, &sections[j])
+                            })
+                        })
+                })
+            })
+        });
+        if shares_its_ends {
+            let middle = section.path[section.path.len() / 2];
+            to_split.push((section.index, section.at, middle));
+        }
+    }
+    for (index, at, at_point) in to_split {
+        let original = arena.curves[index].clone();
+        let Some(&pb_id) = original.pave_blocks.first() else {
+            continue;
+        };
+        let Some(pb) = arena.pave_blocks.get(pb_id) else {
+            continue;
+        };
+        let (start, end) = (pb.start, pb.end);
+        let middle = topo.add_vertex(Vertex::new(at_point, tol.linear));
+        let mid_pave = Pave::new(middle, at);
+        let first_edge = topo.add_edge(Edge::new(start.vertex, middle, original.curve.clone()));
+        let second_edge = topo.add_edge(Edge::new(middle, end.vertex, original.curve.clone()));
+        let first_pb = arena
+            .pave_blocks
+            .alloc(PaveBlock::new(first_edge, start, mid_pave));
+        let second_pb = arena
+            .pave_blocks
+            .alloc(PaveBlock::new(second_edge, mid_pave, end));
+
+        let second_index = arena.curves.len();
+        let mut second = original.clone();
+        second.pave_blocks = vec![second_pb];
+        second.t_range = (at, original.t_range.1);
+        arena.curves.push(second);
+        arena.interference.ff.push(Interference::FF {
+            f1: original.face_a,
+            f2: original.face_b,
+            curve_index: second_index,
+        });
+        if let Some(skipped) = arena.curve_skip_faces.get(&index).cloned() {
+            arena.curve_skip_faces.insert(second_index, skipped);
+        }
+        let first = &mut arena.curves[index];
+        first.pave_blocks = vec![first_pb];
+        first.t_range = (original.t_range.0, at);
+    }
+    Ok(())
+}
+
 /// Run the complete PaveFiller pipeline (both stages).
 ///
 /// **Stage 1 — Intersection** (reads `&Topology`):
@@ -362,6 +554,7 @@ pub fn run_pave_filler_n(
         phase_ff_coplanar::perform(topo, sources[i], sources[j], tol, arena)?;
     }
     pave_co_endpoint_curves(topo, sources, tol, arena)?;
+    split_co_endpoint_sections(topo, tol, arena)?;
 
     // Stage 2: Resolution (solid-agnostic — reads the accumulated arena).
     make_blocks::perform(topo, arena)?;
