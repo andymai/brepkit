@@ -10,7 +10,7 @@ use brepkit_math::aabb::Aabb3;
 use brepkit_math::tolerance::Tolerance;
 use brepkit_topology::Topology;
 use brepkit_topology::edge::EdgeId;
-use brepkit_topology::face::{FaceId, FaceSurface};
+use brepkit_topology::face::{Face, FaceId, FaceSurface};
 use brepkit_topology::planar::PlanarRegion;
 use brepkit_topology::solid::SolidId;
 
@@ -110,7 +110,12 @@ pub(super) fn perform(
                     .iter()
                     .all(|&p| region.distance_to_surface(p).is_some_and(|d| d <= band));
                 let inside = exact.as_ref().map_or_else(
-                    || region.to_uv(middle).is_some_and(|q| region.contains(q)),
+                    || {
+                        let reversed = topo.face(face).is_ok_and(Face::is_reversed);
+                        region
+                            .to_uv(middle)
+                            .is_some_and(|q| region.contains_over_pole(q, reversed))
+                    },
                     |(frame, exact)| exact.contains_clear(frame.project(middle), tol.linear),
                 );
                 if !(on_surface && inside) {

@@ -6563,8 +6563,15 @@ fn point_on_wire(
         match edge.curve() {
             // A section's end stands off a fitted edge by that edge's own fit.
             EdgeCurve::NurbsCurve(n) => {
-                brepkit_math::nurbs::projection::project_point_to_curve(n, p, 1e-9)
-                    .is_ok_and(|foot| foot.distance <= crate::ds::shape_store::MAX_WIDEN)
+                let (t0, t1) = edge.curve().domain_with_endpoints(a.point(), b.point());
+                let room = 1e-9 * (t1 - t0).abs();
+                brepkit_math::nurbs::projection::project_point_to_curve(n, p, 1e-9).is_ok_and(
+                    |foot| {
+                        foot.distance <= crate::ds::shape_store::MAX_WIDEN
+                            && foot.parameter >= t0.min(t1) - room
+                            && foot.parameter <= t0.max(t1) + room
+                    },
+                )
             }
             curve => point_on_edge(curve, a.point(), b.point(), p, band),
         }

@@ -1153,6 +1153,24 @@ mod tests {
         }
     }
 
+    /// A latitude circle on a ball marks the hemisphere it runs on.
+    #[test]
+    fn a_circle_on_a_ball_marks_its_hemisphere() {
+        for (name, pose) in poses() {
+            let mut topo = Topology::new();
+            let ball = make_sphere(&mut topo, 10.0, 32).unwrap();
+            transform_solid(&mut topo, ball, &pose).unwrap();
+            let round = ImprintTool::Edge(circle(&mut topo, pose, 5.0, 75.0_f64.sqrt()));
+            let marked = imprint_faces(&mut topo, ball, &[round]).unwrap();
+            assert_eq!(solid_faces(&topo, marked).unwrap().len(), 3, "{name}");
+            let report = validate_solid(&topo, marked).unwrap();
+            assert!(report.is_valid(), "{name}: {:?}", report.issues);
+            let volume = solid_volume(&topo, marked, 0.01).unwrap();
+            let whole = 4000.0 * PI / 3.0;
+            assert!((volume - whole).abs() < 2.0, "{name}: holds {volume}");
+        }
+    }
+
     /// A chord close by a round cap's rim, its middle between where a coarse
     /// sampling of the rim would put two points.
     #[test]
