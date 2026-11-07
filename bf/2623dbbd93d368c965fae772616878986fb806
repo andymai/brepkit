@@ -1,0 +1,24 @@
+crates/operations/src/primitives.rs
+  s_649261a24df31b::t_c21a861dba184c 577-584
+crates/operations/src/revolve.rs
+  s_649261a24df31b::t_c21a861dba184c 1349
+crates/operations/tests/horn_torus.rs
+  s_649261a24df31b::t_c21a861dba184c 111-125,127
+  s_649261a24df31b::t_1b02fb10ec6695 126,128-129
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "bf2623dbbd93d368c965fae772616878986fb806",
+  "prompts": {},
+  "sessions": {
+    "s_649261a24df31b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d8bbbba4-0431-4f6a-a622-e632a6659779",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
