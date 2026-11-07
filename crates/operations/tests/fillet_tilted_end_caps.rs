@@ -77,31 +77,45 @@ fn edge_between(topo: &Topology, solid: SolidId, a: Point3, b: Point3) -> EdgeId
 
 /// Rounds `edge` of `solid` by `r`, and checks the result is valid,
 /// watertight, has the round and the notched ends' ellipses, and has lost
-/// `removed`.
-fn assert_rounds(mut topo: Topology, solid: SolidId, edge: EdgeId, r: f64, removed: f64) {
+/// `removed`. Each message names the lean `case`.
+fn assert_rounds(
+    case: &str,
+    mut topo: Topology,
+    solid: SolidId,
+    edge: EdgeId,
+    r: f64,
+    removed: f64,
+) {
     let before = solid_volume(&topo, solid, 1e-3).unwrap();
     let faces_before = solid_faces(&topo, solid).unwrap().len();
     let result = fillet_v2(&mut topo, solid, &[edge], r).unwrap();
-    assert!(result.failed.is_empty(), "r = {r}: {:?}", result.failed);
+    assert!(
+        result.failed.is_empty(),
+        "{case}, r = {r}: {:?}",
+        result.failed
+    );
     let report = validate_solid(&topo, result.solid).unwrap();
-    assert!(report.is_valid(), "r = {r}: {:?}", report.issues);
+    assert!(report.is_valid(), "{case}, r = {r}: {:?}", report.issues);
     let mesh = tessellate_solid(&topo, result.solid, 0.01).unwrap();
-    assert!(is_watertight(&mesh), "r = {r}: mesh not watertight");
+    assert!(is_watertight(&mesh), "{case}, r = {r}: mesh not watertight");
     assert_eq!(
         solid_faces(&topo, result.solid).unwrap().len(),
         faces_before + 1,
-        "r = {r}: the round alone is added"
+        "{case}, r = {r}: the round alone is added"
     );
     let ellipses = solid_edges(&topo, result.solid)
         .unwrap()
         .into_iter()
         .filter(|&e| matches!(topo.edge(e).unwrap().curve(), EdgeCurve::Ellipse(_)))
         .count();
-    assert_eq!(ellipses, 2, "r = {r}: each end notched along an ellipse");
+    assert_eq!(
+        ellipses, 2,
+        "{case}, r = {r}: each end notched along an ellipse"
+    );
     let lost = before - solid_volume(&topo, result.solid, 1e-3).unwrap();
     assert!(
         (lost - removed).abs() <= 1e-6 * before,
-        "r = {r}: lost {lost}, the strip {removed}"
+        "{case}, r = {r}: lost {lost}, the strip {removed}"
     );
 }
 
@@ -141,7 +155,8 @@ fn ends_leaning_across_the_round() {
             );
             let (area, offset) = strip(r);
             let length = L + (left + right) * offset / W;
-            assert_rounds(topo, solid, edge, r, area * length);
+            let case = format!("across, leaning ({left}, {right})");
+            assert_rounds(&case, topo, solid, edge, r, area * length);
         }
     }
 }
@@ -174,7 +189,8 @@ fn ends_leaning_along_the_round() {
             );
             let (area, offset) = strip(r);
             let length = L + (left + right) * (H - offset) / H;
-            assert_rounds(topo, solid, edge, r, area * length);
+            let case = format!("along, leaning ({left}, {right})");
+            assert_rounds(&case, topo, solid, edge, r, area * length);
         }
     }
 }
