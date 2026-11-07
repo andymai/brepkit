@@ -314,6 +314,34 @@ impl<'a> FilletBuilder<'a> {
         } else {
             TiltedCaps::new()
         };
+        // Running a round on to a tilted cap carries its contacts past where
+        // the cavity check above read them.
+        if !tilted_caps.is_empty() && !inner_shells.is_empty() {
+            let cavities = inner_shells
+                .iter()
+                .map(|&shell| shell_bounds(topo, shell))
+                .collect::<Result<Vec<_>, _>>()?;
+            for sr in &stripe_results {
+                let removed = removed_material_bounds(topo, &sr.stripe)?;
+                if cavities.iter().any(|cavity| cavity.intersects(removed)) {
+                    for edge_id in succeeded_candidates(plan.as_ref(), &stripe_results, &all_edges)
+                    {
+                        failed.push((
+                            edge_id,
+                            BlendError::PlanningFailure {
+                                reason: "the fillet reaches a cavity".to_owned(),
+                            },
+                        ));
+                    }
+                    return Ok(BlendResult {
+                        solid: self.solid,
+                        succeeded: Vec::new(),
+                        failed,
+                        is_partial: true,
+                    });
+                }
+            }
+        }
         // through the trim + corner + blend-face path below.
         let mut boundary_registry = BoundaryRegistry::new();
         let mut blend_face_ids: Vec<FaceId> = Vec::new();

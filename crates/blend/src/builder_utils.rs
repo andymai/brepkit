@@ -87,8 +87,12 @@ pub fn cylinder_plane_arc(
     };
     let tol = 1e-6 * radius.max(1.0);
     let on = |p: Point3| {
-        let (t0, _) = curve.domain_with_endpoints(p, p);
-        (curve.evaluate_with_endpoints(t0, p, p) - p).length() <= tol
+        let nearest = match &curve {
+            EdgeCurve::Circle(circle) => circle.evaluate(circle.project(p)),
+            EdgeCurve::Ellipse(ellipse) => ellipse.evaluate(ellipse.project(p)),
+            EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => return false,
+        };
+        (nearest - p).length() <= tol
     };
     (on(a) && on(b)).then_some(curve)
 }
@@ -661,11 +665,24 @@ fn notched_wire_edges(
         // alone would replace the kept side. Judge the candidate by the arc's
         // own circle instead: replace the path whose corner is outside it,
         // never the path through its center.
-        if let Ok(arc_edge) = topo.edge(arc_eid)
-            && let EdgeCurve::Circle(circle) = arc_edge.curve()
-        {
+        if let Ok(arc_edge) = topo.edge(arc_eid) {
             let corner = topo.vertex(e0)?.point();
-            if (corner - circle.center()).length() <= circle.radius() * (1.0 + 1e-6) {
+            let kept_side = match arc_edge.curve() {
+                EdgeCurve::Circle(circle) => {
+                    (corner - circle.center()).length() <= circle.radius() * (1.0 + 1e-6)
+                }
+                // A tilted cap's arc: the same test, in the ellipse's own axes.
+                EdgeCurve::Ellipse(ellipse) => {
+                    let d = corner - ellipse.center();
+                    let (x, y) = (
+                        d.dot(ellipse.u_axis()) / ellipse.semi_major(),
+                        d.dot(ellipse.v_axis()) / ellipse.semi_minor(),
+                    );
+                    x.hypot(y) <= 1.0 + 1e-6
+                }
+                EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => false,
+            };
+            if kept_side {
                 continue;
             }
         }
@@ -1197,6 +1214,31 @@ mod tests {
     fn along(curve: &EdgeCurve, a: Point3, b: Point3, f: f64, center: Point3) -> f64 {
         let (t0, t1) = curve.domain_with_endpoints(a, b);
         (curve.evaluate_with_endpoints((t1 - t0).mul_add(f, t0), a, b) - center).length()
+    }
+
+    /// A plane square to a cylinder cuts it in a circle, whichever two of the
+    /// circle's points the arc runs between, and a tilted one in an ellipse.
+    #[test]
+    fn a_cylinders_section_arc_holds_its_own_ends() {
+        let cylinder = brepkit_math::surfaces::CylindricalSurface::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            2.0,
+        )
+        .unwrap();
+        let square = Vec3::new(0.0, 0.0, 1.0);
+        let (a, b) = (Point3::new(2.0, 0.0, 3.0), Point3::new(0.0, 2.0, 3.0));
+        let circle = cylinder_plane_arc(&cylinder, square, 3.0, a, b);
+        assert!(matches!(circle, Some(EdgeCurve::Circle(_))));
+
+        let tilted = Vec3::new(0.6, 0.0, 0.8);
+        let at = |x: f64, y: f64| Point3::new(x, y, (3.0 - 0.6 * x) / 0.8);
+        let (a, b) = (at(2.0, 0.0), at(0.0, 2.0));
+        let ellipse = cylinder_plane_arc(&cylinder, tilted, 3.0, a, b);
+        assert!(matches!(ellipse, Some(EdgeCurve::Ellipse(_))));
+
+        let off = Point3::new(1.0, 0.0, 3.0);
+        assert!(cylinder_plane_arc(&cylinder, square, 3.0, off, b).is_none());
     }
 
     #[test]
