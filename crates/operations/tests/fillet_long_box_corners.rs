@@ -12,37 +12,17 @@ use brepkit_operations::primitives::make_box;
 use brepkit_operations::tessellate::{is_watertight, tessellate_solid};
 use brepkit_operations::validate::validate_solid;
 use brepkit_topology::Topology;
-use brepkit_topology::edge::EdgeId;
 use brepkit_topology::explorer::{solid_edges, solid_faces};
 use brepkit_topology::face::FaceSurface;
 
-/// The edges along `y` of the box `a x b x c` from `make_box`.
-fn edges_along_y(topo: &Topology, edges: &[EdgeId]) -> Vec<usize> {
-    edges
-        .iter()
-        .enumerate()
-        .filter(|&(_, &e)| {
-            let edge = topo.edge(e).unwrap();
-            let p = topo.vertex(edge.start()).unwrap().point();
-            let q = topo.vertex(edge.end()).unwrap().point();
-            (p.y() - q.y()).abs() > 1.0
-        })
-        .map(|(i, _)| i)
-        .collect()
-}
-
-/// Rounds the edges of the box `a x b x c` by `r`, with or without one
-/// edge along `y`, and checks the result has `balls` ball corners, is valid
-/// and watertight, and has the volume `truth`.
-fn assert_rounds(drop: bool, truth: f64, balls: usize) {
+/// Rounds every edge of the box `A x B x C` by `R`, and checks the result
+/// has `balls` ball corners, is valid and watertight, and has the volume
+/// `truth`.
+fn assert_rounds(truth: f64, balls: usize) {
     let (a, b, c, r) = (A, B, C, R);
     let mut topo = Topology::new();
     let block = make_box(&mut topo, a, b, c).unwrap();
-    let mut edges = solid_edges(&topo, block).unwrap();
-    if drop {
-        let along_y = edges_along_y(&topo, &edges);
-        edges.remove(along_y[0]);
-    }
+    let edges = solid_edges(&topo, block).unwrap();
     let result = fillet_v2(&mut topo, block, &edges, r).unwrap();
     assert!(result.failed.is_empty(), "{:?}", result.failed);
     let spheres = solid_faces(&topo, result.solid)
@@ -50,18 +30,15 @@ fn assert_rounds(drop: bool, truth: f64, balls: usize) {
         .into_iter()
         .filter(|&f| matches!(topo.face(f).unwrap().surface(), FaceSurface::Sphere(_)))
         .count();
-    assert_eq!(spheres, balls, "sharp edge {drop}: the ball corners");
+    assert_eq!(spheres, balls, "the ball corners");
     let report = validate_solid(&topo, result.solid).unwrap();
-    assert!(report.is_valid(), "sharp edge {drop}: {:?}", report.issues);
+    assert!(report.is_valid(), "{:?}", report.issues);
     let mesh = tessellate_solid(&topo, result.solid, 0.01).unwrap();
-    assert!(
-        is_watertight(&mesh),
-        "sharp edge {drop}: mesh not watertight"
-    );
+    assert!(is_watertight(&mesh), "mesh not watertight");
     let vol = solid_volume(&topo, result.solid, 0.001).unwrap();
     assert!(
         (vol - truth).abs() < 1e-7 * truth,
-        "sharp edge {drop}: volume {vol}, truth {truth}"
+        "volume {vol}, truth {truth}"
     );
 }
 
@@ -84,5 +61,5 @@ fn all_rounded() -> f64 {
 /// and the mesh was open with 184 too much volume.
 #[test]
 fn a_long_box_rounded_on_every_edge() {
-    assert_rounds(false, all_rounded(), 8);
+    assert_rounds(all_rounded(), 8);
 }
