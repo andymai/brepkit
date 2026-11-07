@@ -1,0 +1,19 @@
+crates/operations/tests/simplify_whole_sphere.rs
+  s_649261a24df31b::t_dd8c1b80c3479e 188
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "42dda8592f62bd27cec04a22367b0bf551cdd4ab",
+  "prompts": {},
+  "sessions": {
+    "s_649261a24df31b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d8bbbba4-0431-4f6a-a622-e632a6659779",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
