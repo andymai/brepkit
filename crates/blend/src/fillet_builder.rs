@@ -576,12 +576,46 @@ impl<'a> FilletBuilder<'a> {
                 .flat_map(|edge| [edge.start(), edge.end()])
                 .collect();
         }
+        // Straight edges a trim splits whatever its policy, by their two
+        // ends: a sharp mitre's retained edge, and the smooth edge two
+        // stripes run on round on one section (see the policy's `spokes`).
+        let mut spokes: Vec<(brepkit_math::vec::Point3, brepkit_math::vec::Point3)> = Vec::new();
+        if let Some(fillet_plan) = plan.as_ref() {
+            for miter in corner::find_equal_two_edge_miter_junctions(topo, fillet_plan) {
+                let Some(junction) = fillet_plan
+                    .junctions
+                    .iter()
+                    .find(|junction| junction.vertex == miter.vertex)
+                else {
+                    continue;
+                };
+                for &edge_id in &junction.unselected_sharp_edges {
+                    let edge = topo.edge(edge_id)?;
+                    if matches!(edge.curve(), EdgeCurve::Line) {
+                        spokes.push((
+                            topo.vertex(edge.start())?.point(),
+                            topo.vertex(edge.end())?.point(),
+                        ));
+                    }
+                }
+            }
+            let stripes: Vec<&Stripe> = regular_results
+                .iter()
+                .map(|result| &result.stripe)
+                .collect();
+            for spoke in corner::tangent_junction_spokes(topo, fillet_plan, &stripes)? {
+                if !spokes.contains(&spoke) {
+                    spokes.push(spoke);
+                }
+            }
+        }
         let split_policy = if single_planar_stripe {
             trimmer::BoundarySplitPolicy::All
         } else {
             trimmer::BoundarySplitPolicy::Selective {
                 unsplit: &unsplit_vertices,
                 notchable: &notchable_vertices,
+                spokes: &spokes,
             }
         };
         let mut restriction_faces: Vec<FaceId> = restrictions_by_face.keys().copied().collect();
@@ -2234,7 +2268,13 @@ fn assemble_closed_rim(
             BoundaryOwner::planned("closed-rim torus band", wall_sense),
         ],
     )?;
-    let seam_edge = topo.add_edge(Edge::new(plate_v, wall_v, EdgeCurve::Line));
+    let seam_curve = crate::builder_utils::seam_curve(
+        &stripe.surface,
+        &stripe.sections,
+        topo.vertex(plate_v)?.point(),
+        topo.vertex(wall_v)?.point(),
+    );
+    let seam_edge = topo.add_edge(Edge::new(plate_v, wall_v, seam_curve));
     let cap_boundary = registry.oriented_edge(topo, plate_handle, 0)?;
     let cap_wire = Wire::new(vec![cap_boundary], true)?;
     let cap_wire_id = topo.add_wire(cap_wire);
@@ -2347,8 +2387,9 @@ fn assemble_closed_rim(
 }
 
 /// Whether a stripe's terminal vertex sits on a planar cap whose two edges
-/// at the vertex are straight: the end-cap notch can replace that corner
-/// path with the stripe's cross-section arc.
+/// at the vertex are straight or B-splines (a spline profile's rim): the
+/// end-cap notch can replace that corner path with the stripe's
+/// cross-section arc.
 fn terminal_cap_is_notchable(
     topo: &Topology,
     junction: &crate::fillet_plan::VertexJunction,
@@ -2377,7 +2418,7 @@ fn terminal_cap_is_notchable(
     // The corner sits on the cap's outer wire (a convex fillet) or on one of
     // its holes (a concave one ending on a cup's rim); the notch replaces it
     // on whichever wire holds it.
-    let mut corner_edges: Vec<(Point3, Point3)> = Vec::new();
+    let mut corner_edges: Vec<(Point3, Point3, &brepkit_topology::edge::EdgeCurve)> = Vec::new();
     let wires = std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied());
     for oriented in wires
         .filter_map(|wire| topo.wire(wire).ok())
@@ -2389,13 +2430,19 @@ fn terminal_cap_is_notchable(
         if edge.start() != junction.vertex && edge.end() != junction.vertex {
             continue;
         }
-        if !matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Line) {
+        // A straight corner edge or a B-spline (a spline wall's rim): the
+        // trim splits either where the contact ends on it.
+        if !matches!(
+            edge.curve(),
+            brepkit_topology::edge::EdgeCurve::Line
+                | brepkit_topology::edge::EdgeCurve::NurbsCurve(_)
+        ) {
             return Ok(false);
         }
         let (Ok(a), Ok(b)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) else {
             return Ok(false);
         };
-        corner_edges.push((a.point(), b.point()));
+        corner_edges.push((a.point(), b.point(), edge.curve()));
     }
     if corner_edges.len() != 2 {
         return Ok(false);
@@ -2403,7 +2450,15 @@ fn terminal_cap_is_notchable(
     // Both contacts must end on those corner edges, or the split lands on
     // the cap's edge while the notch can never match its corner path.
     let on_segment = |point: Point3| {
-        corner_edges.iter().any(|&(a, b)| {
+        corner_edges.iter().any(|&(a, b, curve)| {
+            if let brepkit_topology::edge::EdgeCurve::NurbsCurve(nurbs) = curve {
+                let (t0, t1) = curve.domain_with_endpoints(a, b);
+                let (low, high) = (t0.min(t1) - 1e-9, t0.max(t1) + 1e-9);
+                return brepkit_math::nurbs::projection::project_point_to_curve(nurbs, point, 1e-9)
+                    .is_ok_and(|found| {
+                        found.distance <= 1e-5 && (low..=high).contains(&found.parameter)
+                    });
+            }
             let ab = b - a;
             let len2 = ab.length_squared();
             if len2 <= 1e-18 {
