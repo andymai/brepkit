@@ -1,0 +1,21 @@
+crates/operations/tests/draft_curved_walls.rs
+  s_649261a24df31b::t_601f5843ec2d48 88-91,120-147,307-308,323-324,336-343,382-476
+crates/operations/src/draft.rs
+  s_649261a24df31b::t_805357e9ad5ea2 290-312,402-453,480-483
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d659920308c6120726b92853f9fe8d38f6ab61d2",
+  "prompts": {},
+  "sessions": {
+    "s_649261a24df31b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d8bbbba4-0431-4f6a-a622-e632a6659779",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
