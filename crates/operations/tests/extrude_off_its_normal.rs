@@ -213,6 +213,125 @@ mod tests {
         assert_prism(&topo, solid, area * 10.0, "along the normal");
     }
 
+    /// The profile itself tilted: its circle's normal runs off the axes, and a
+    /// sweep along that normal is still a true cylinder, off it still oblique.
+    #[test]
+    fn the_test_reads_the_circles_own_normal() {
+        let tilt = Mat4::rotation_x(0.7) * Mat4::rotation_z(0.4);
+        let turn = |v: Vec3| {
+            let tip = Point3::new(v.x(), v.y(), v.z());
+            tilt.mul_point(tip) - tilt.mul_point(at(0.0, 0.0))
+        };
+        let normal = turn(UP);
+        let cylinders = |topo: &Topology, solid: SolidId| {
+            solid_faces(topo, solid)
+                .unwrap()
+                .iter()
+                .filter(|&&f| matches!(topo.face(f).unwrap().surface(), FaceSurface::Cylinder(_)))
+                .count()
+        };
+        // Built turned: the wire's circle carries the tilted normal.
+        let tilted_half_disc = |topo: &mut Topology| -> FaceId {
+            let center = tilt.mul_point(at(0.0, 0.0));
+            let (p, q) = (tilt.mul_point(at(5.0, 0.0)), tilt.mul_point(at(-5.0, 0.0)));
+            let (a, b) = (
+                topo.add_vertex(Vertex::new(p, 1e-7)),
+                topo.add_vertex(Vertex::new(q, 1e-7)),
+            );
+            let circle = Circle3D::new(center, normal, 5.0).unwrap();
+            let arc = topo.add_edge(Edge::new(a, b, EdgeCurve::Circle(circle)));
+            let chord = topo.add_edge(Edge::new(b, a, EdgeCurve::Line));
+            let wire = loop_of(topo, vec![arc, chord]);
+            topo.add_face(Face::new(
+                wire,
+                Vec::new(),
+                FaceSurface::Plane {
+                    normal,
+                    d: normal.dot(Vec3::new(center.x(), center.y(), center.z())),
+                },
+            ))
+        };
+        let area = PI * 25.0 / 2.0;
+
+        let mut topo = Topology::new();
+        let face = tilted_half_disc(&mut topo);
+        let solid = extrude(&mut topo, face, normal, 10.0).unwrap();
+        assert_eq!(cylinders(&topo, solid), 1, "along the tilted normal");
+        assert_prism(&topo, solid, area * 10.0, "along the tilted normal");
+
+        let lean = (normal + turn(Vec3::new(1.0, 0.0, 0.0)))
+            .normalize()
+            .unwrap();
+        let mut topo = Topology::new();
+        let face = tilted_half_disc(&mut topo);
+        let solid = extrude(&mut topo, face, lean, 10.0).unwrap();
+        assert_eq!(cylinders(&topo, solid), 0, "off the tilted normal");
+        assert_prism(
+            &topo,
+            solid,
+            area * lean.dot(normal) * 10.0,
+            "off the tilted normal",
+        );
+    }
+
+    /// An arc encoded as a spline, a whole circle's spline trimmed by its edge's
+    /// vertices to its first half, either way round.
+    #[test]
+    fn a_spline_drawn_arc_sweeps_its_own_span_off_the_normal() {
+        let along = Vec3::new(1.0, 0.0, 1.0).normalize().unwrap();
+        let area = PI * 25.0 / 2.0;
+        for stored_backward in [false, true] {
+            let mut topo = Topology::new();
+            let circle = Circle3D::new(at(0.0, 0.0), UP, 5.0).unwrap();
+            let whole =
+                brepkit_geometry::convert::circle_to_nurbs(&circle, 0.0, std::f64::consts::TAU)
+                    .unwrap();
+            let (a, b) = (
+                topo.add_vertex(Vertex::new(at(5.0, 0.0), 1e-7)),
+                topo.add_vertex(Vertex::new(at(-5.0, 0.0), 1e-7)),
+            );
+            let (arc, forward) = if stored_backward {
+                let (d0, d1) = whole.domain();
+                let mut points = whole.control_points().to_vec();
+                points.reverse();
+                let mut weights = whole.weights().to_vec();
+                weights.reverse();
+                let knots: Vec<f64> = whole.knots().iter().rev().map(|k| d0 + d1 - k).collect();
+                let reversed = brepkit_math::nurbs::curve::NurbsCurve::new(
+                    whole.degree(),
+                    knots,
+                    points,
+                    weights,
+                )
+                .unwrap();
+                (
+                    topo.add_edge(Edge::new(b, a, EdgeCurve::NurbsCurve(reversed))),
+                    false,
+                )
+            } else {
+                (
+                    topo.add_edge(Edge::new(a, b, EdgeCurve::NurbsCurve(whole))),
+                    true,
+                )
+            };
+            let chord = topo.add_edge(Edge::new(b, a, EdgeCurve::Line));
+            let wire = topo.add_wire(
+                Wire::new(
+                    vec![
+                        OrientedEdge::new(arc, forward),
+                        OrientedEdge::new(chord, true),
+                    ],
+                    true,
+                )
+                .unwrap(),
+            );
+            let face = plane_face(&mut topo, wire, Vec::new());
+            let solid = extrude(&mut topo, face, along, 10.0).unwrap();
+            let what = format!("stored backward: {stored_backward}");
+            assert_prism(&topo, solid, area * along.z() * 10.0, &what);
+        }
+    }
+
     /// A slanted body goes on to booleans: a box across it takes off what the
     /// body holds in that height.
     #[test]

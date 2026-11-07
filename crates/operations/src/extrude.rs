@@ -613,8 +613,46 @@ fn side_face_surface(
                 normal,
                 radius,
             } = brepkit_geometry::convert::recognize_curve(nc, tol * 100.0)
-                && swept_along_normal(normal, offset)
             {
+                // Off its normal, as a circle, whose arm reads the edge's own
+                // span: its vertices can trim this spline to part of the circle.
+                // The arc runs counterclockwise about the circle's normal, and
+                // recognition leaves that normal's sign to the spline's points.
+                if !swept_along_normal(normal, offset) {
+                    let (t0, t1) = curve.domain_with_endpoints(curve_start, curve_end);
+                    let middle = curve.evaluate_with_endpoints(
+                        f64::midpoint(t0, t1),
+                        curve_start,
+                        curve_end,
+                    );
+                    let as_circle = |normal: Vec3| -> Result<EdgeCurve, crate::OperationsError> {
+                        Ok(EdgeCurve::Circle(
+                            brepkit_math::curves::Circle3D::new(center, normal, radius)
+                                .map_err(crate::OperationsError::Math)?,
+                        ))
+                    };
+                    let forward = as_circle(normal)?;
+                    let (c0, c1) = forward.domain_with_endpoints(curve_start, curve_end);
+                    let reached = forward.evaluate_with_endpoints(
+                        f64::midpoint(c0, c1),
+                        curve_start,
+                        curve_end,
+                    );
+                    let circle = if (reached - middle).length() <= tol * 100.0 {
+                        forward
+                    } else {
+                        as_circle(-normal)?
+                    };
+                    return side_face_surface(
+                        &circle,
+                        p0,
+                        p1,
+                        curve_start,
+                        curve_end,
+                        offset,
+                        outer_is_cw,
+                    );
+                }
                 let cyl = brepkit_math::surfaces::CylindricalSurface::new(
                     center,
                     offset.normalize().unwrap_or(Vec3::new(0.0, 0.0, 1.0)),
