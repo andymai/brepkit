@@ -24,6 +24,11 @@ use crate::boolean::{BooleanOp, boolean};
 
 /// How near a cap's normal must lie to the edge to count as square to it.
 const SQUARE: f64 = 1e-9;
+/// How far past a strip's rim a boundary must reach to count as inside it, so
+/// the faces beside the strip and a contact line landing on a rim both pass.
+const STRIP_MARGIN: f64 = 1e-7;
+/// Chords a curved boundary is read through against a strip.
+const STRIP_SPANS: usize = 64;
 
 /// How an edge's end meets the cap past it.
 #[derive(Clone, Copy, PartialEq)]
@@ -147,6 +152,12 @@ fn plan(
 
     // The ball's centre stands `radius` inside both planes.
     let center_offset = (first + second) * (-radius / (1.0 + cosine));
+    for (face, normal) in [(side1, first), (side2, second)] {
+        let reach = center_offset + normal * radius;
+        if !strip_fits(topo, face, edge_id, start, along, length, reach)? {
+            return Ok(None);
+        }
+    }
     Ok(Some((
         Cut {
             start,
@@ -187,6 +198,86 @@ fn tool(topo: &mut Topology, cut: &Cut, radius: f64) -> Result<SolidId, Operatio
     crate::extrude::extrude(topo, face, cut.along, cut.length)
 }
 
+/// Whether the strip a round takes off `face` holds none of the face's other
+/// boundary: the rectangle from the edge at `origin`, `length` along and `reach`
+/// across (whose length is its width). A boundary inside it means the round's
+/// contact line leaves the face, which the volume it removes barely shows.
+fn strip_fits(
+    topo: &Topology,
+    face: FaceId,
+    edge_id: EdgeId,
+    origin: Point3,
+    along: Vec3,
+    length: f64,
+    reach: Vec3,
+) -> Result<bool, OperationsError> {
+    let width = reach.length();
+    let across = reach.normalize()?;
+    let local = |p: Point3| ((p - origin).dot(along), (p - origin).dot(across));
+    let enters = |p: Point3, q: Point3| {
+        let (from, to) = (local(p), local(q));
+        segment_enters_box(
+            from,
+            to,
+            (STRIP_MARGIN, length - STRIP_MARGIN),
+            (STRIP_MARGIN, width - STRIP_MARGIN),
+        )
+    };
+    let face = topo.face(face)?;
+    let wires = std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied());
+    for wire in wires {
+        for oe in topo.wire(wire)?.edges() {
+            if oe.edge() == edge_id {
+                continue;
+            }
+            let edge = topo.edge(oe.edge())?;
+            let (p, q) = (
+                topo.vertex(edge.start())?.point(),
+                topo.vertex(edge.end())?.point(),
+            );
+            if matches!(edge.curve(), EdgeCurve::Line) {
+                if enters(p, q) {
+                    return Ok(false);
+                }
+                continue;
+            }
+            let (t0, t1) = edge.curve().domain_with_endpoints(p, q);
+            let at = |i: usize| {
+                let t = t0 + (t1 - t0) * (i as f64) / (STRIP_SPANS as f64);
+                edge.curve().evaluate_with_endpoints(t, p, q)
+            };
+            if (0..STRIP_SPANS).any(|i| enters(at(i), at(i + 1))) {
+                return Ok(false);
+            }
+        }
+    }
+    Ok(true)
+}
+
+/// Whether the segment between two points reaches the box, by clipping its
+/// parameter range against each slab in turn.
+fn segment_enters_box(
+    from: (f64, f64),
+    to: (f64, f64),
+    first: (f64, f64),
+    second: (f64, f64),
+) -> bool {
+    let (mut low, mut high) = (0.0_f64, 1.0_f64);
+    for (start, end, (min, max)) in [(from.0, to.0, first), (from.1, to.1, second)] {
+        let delta = end - start;
+        if delta.abs() < f64::EPSILON {
+            if start < min || start > max {
+                return false;
+            }
+            continue;
+        }
+        let (a, b) = ((min - start) / delta, (max - start) / delta);
+        low = low.max(a.min(b));
+        high = high.min(a.max(b));
+    }
+    low <= high
+}
+
 /// The section's area: the kite between the corner and the ball's centre, less
 /// the ball's sector within it.
 fn section_area(cut: &Cut, radius: f64) -> f64 {
@@ -198,8 +289,9 @@ fn section_area(cut: &Cut, radius: f64) -> f64 {
 ///
 /// Each edge lies between two planes, with a square cap at each end, at least
 /// one of them across a concave corner, and no two edges touch. `None` where the
-/// selection is anything else, or where the cut takes off anything but the swept
-/// section (a part beyond a convex end, say).
+/// selection is anything else, where a contact line would leave its face, or
+/// where the cut takes off anything but the swept section (a part beyond a convex
+/// end, say).
 ///
 /// # Errors
 ///
@@ -255,7 +347,9 @@ pub fn fillet_concave_ends(
         current = result;
     }
     let after = crate::measure::solid_volume(topo, current, 0.001)?;
-    if ((before - after) - removed).abs() > 1e-6 * before.max(1.0) {
+    // Rounding in the two whole-part readings sets a floor far below any cut.
+    let allowed = 1e-6 * removed + 1e-14 * before.abs();
+    if ((before - after) - removed).abs() > allowed {
         return Ok(None);
     }
     Ok(Some(current))

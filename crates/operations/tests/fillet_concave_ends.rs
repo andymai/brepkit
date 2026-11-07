@@ -13,11 +13,13 @@ mod tests {
 
     use brepkit_math::mat::Mat4;
     use brepkit_math::vec::{Point3, Vec3};
+    use brepkit_operations::boolean::{BooleanOp, boolean};
     use brepkit_operations::classify::{PointClassification, classify_point};
     use brepkit_operations::extrude::extrude;
     use brepkit_operations::fillet::concave_end::fillet_concave_ends;
     use brepkit_operations::measure::{oriented_solid_volume, solid_volume};
     use brepkit_operations::mirror::mirror;
+    use brepkit_operations::primitives::make_cylinder;
     use brepkit_operations::tessellate::{is_watertight, tessellate_solid};
     use brepkit_operations::transform::transform_solid;
     use brepkit_operations::validate::validate_solid;
@@ -292,6 +294,66 @@ mod tests {
         assert!((turn - std::f64::consts::FRAC_PI_2).abs() > 0.1);
         let section = r * r * ((turn / 2.0).tan() - turn / 2.0);
         assert_sound(&topo, result, before - section * 32.0, "a leaning wall");
+    }
+
+    /// A contact line past its face's far side reaches the opposite wall. Just
+    /// over the wall's width the cut would remove nearly the section's volume,
+    /// and a tall part hides a wider ball's shortfall in its own size. A ball
+    /// exactly the wall's width lands its contact line on the far rim and fits.
+    #[test]
+    fn a_ball_wider_than_its_wall_is_refused_however_slightly() {
+        for (r, height) in [(8.1, 20.0), (9.0, 1000.0)] {
+            let mut topo = Topology::new();
+            let solid = prism(&mut topo, &PEN_L, height);
+            let edge = edge_between(
+                &topo,
+                solid,
+                Point3::new(8.0, 8.0, 0.0),
+                Point3::new(8.0, 40.0, 0.0),
+            );
+            assert!(
+                fillet_concave_ends(&mut topo, solid, &[edge], r)
+                    .unwrap()
+                    .is_none(),
+                "radius {r} at height {height}"
+            );
+        }
+
+        let mut topo = Topology::new();
+        let solid = prism(&mut topo, &PEN_L, 20.0);
+        let edge = edge_between(
+            &topo,
+            solid,
+            Point3::new(8.0, 8.0, 0.0),
+            Point3::new(8.0, 40.0, 0.0),
+        );
+        let result = fillet_concave_ends(&mut topo, solid, &[edge], 8.0)
+            .unwrap()
+            .unwrap();
+        let truth = PEN_L_VOLUME - square_section(8.0) * 32.0;
+        assert_sound(&topo, result, truth, "a ball the wall's width");
+    }
+
+    /// A hole in the strip is boundary the round would have to run across.
+    #[test]
+    fn a_hole_in_the_strip_is_refused() {
+        let mut topo = Topology::new();
+        let solid = prism(&mut topo, &PEN_L, 20.0);
+        let pin = make_cylinder(&mut topo, 0.25, 5.0).unwrap();
+        let place = Mat4::translation(7.0, 20.0, -1.0);
+        transform_solid(&mut topo, pin, &place).unwrap();
+        let drilled = boolean(&mut topo, BooleanOp::Cut, solid, pin).unwrap();
+        let edge = edge_between(
+            &topo,
+            drilled,
+            Point3::new(8.0, 8.0, 0.0),
+            Point3::new(8.0, 40.0, 0.0),
+        );
+        assert!(
+            fillet_concave_ends(&mut topo, drilled, &[edge], 2.0)
+                .unwrap()
+                .is_none()
+        );
     }
 
     /// Whatever this path cannot build, it hands back untouched: a convex end
