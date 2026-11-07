@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793718313294,
+  "lastUpdate": 1794051441457,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -65177,6 +65177,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 17040787,
             "range": "± 409206",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "66281732+Robokan@users.noreply.github.com",
+            "name": "Eric Vaughan",
+            "username": "Robokan"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "adbee8db68755660eaebad21d4730735cecc0525",
+          "message": "fix(topology): with no seed, a shell's faces vote on its boundary-walk convention (#2299)\n\n## Problem\n\n`normalize_face_normals` catches result faces whose effective normal is\nbackwards even though their edge senses agree with their neighbours.\nThis is the state of a face built with its wire running the wrong way\nround, after `propagate_orientation` toggles its flag to match the faces\nnext to it. The pass reads the convention (which way a face's boundary\nwalks about its effective normal) from the seed faces, then triple-flips\nthe result faces that disagree.\n\nWhen no seed gives a reading, the convention stays 0 and nothing is\nflipped. That is the usual case for a fillet that rebuilds every face\naround it: a part whose edges are all rounded at once has no untouched\ninput face left to seed from.\n\nIn the case that showed this, a part of planes and cylinders was rounded\nat r = 1 on 16 edges, among them both end faces' outlines, so every\ninput face was trimmed. One torus corner and one small cylinder band\ncame out facing into the solid:\n- The result passed `validate_solid`.\n- brepkit's own volume of it was 4% light.\n- Another reader took the torus face as the whole torus less the patch:\narea 442.6 where the patch is 31.2.\n\n## Change\n\n`orientation.rs`: when no seed sets the convention, the faces being\nnormalized vote. A closed shell walks every face's boundary the same way\nabout its effective normal, so the few faces that disagree are the ones\nbuilt backwards. They are triple-flipped as before (wire reversed, edge\nsenses inverted, flag toggled), which changes their effective normal\nwithout disturbing shared-edge senses. A tied vote flips nothing. When\nseeds are present, they still decide.\n\nThe fillet builder's signed-volume check, which runs after this pass,\nstill turns a whole shell that comes out inverted.\n\n## Tests\n\n- New unit tests in `orientation.rs`, on the manifold unit cube:\n- With no seeds, one face turned inside out (its wire reversed and its\nflag toggled) is turned back, and the other faces are left alone.\nWithout the change, nothing is flipped.\n- With one seed and the other five faces turned, the seed still decides.\n- `cargo test -p brepkit-topology --features test-utils`, `-p\nbrepkit-blend` and `-p brepkit-operations` pass, and clippy is clean.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\n`normalize_face_normals` now falls back to a majority vote from a\nshell's own faces when no seed face survives to set the boundary-walk\nconvention, so faces built with backwards wires still get\ntriple-flipped. Seeds keep precedence, and a tied vote flips nothing.\n\n<sup>Written for commit 44a56bad77518af431e1bae99939bf0a3a8e3cc2.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2299?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\n---------\n\nCo-authored-by: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-11-07T03:34:18-08:00",
+          "tree_id": "7ff10548a8a1b67558fd638d970c734c8bf20c4a",
+          "url": "https://github.com/andymai/brepkit/commit/adbee8db68755660eaebad21d4730735cecc0525"
+        },
+        "date": 1794051435423,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 808497,
+            "range": "± 17972",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 883135,
+            "range": "± 16407",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 9982,
+            "range": "± 557",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 536267,
+            "range": "± 6062",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 22222833,
+            "range": "± 134934",
             "unit": "ns/iter"
           }
         ]
