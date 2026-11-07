@@ -1,5 +1,20 @@
 # Changelog
 
+## [4.6.30](https://github.com/andymai/brepkit/compare/v4.6.29...v4.6.30) (2026-11-07)
+
+
+### Bug Fixes
+
+* **heal:** merge a sphere's two halves into one face when simplifying ([#2311](https://github.com/andymai/brepkit/issues/2311)) ([c4d72e5](https://github.com/andymai/brepkit/commit/c4d72e5245452aac53dfa8279d1715a5754ded74))
+
+## [4.6.29](https://github.com/andymai/brepkit/compare/v4.6.28...v4.6.29) (2026-11-07)
+
+
+### Bug Fixes
+
+* **blend:** run a straight round's ends on to tilted end faces ([#2309](https://github.com/andymai/brepkit/issues/2309)) ([0ffc2a1](https://github.com/andymai/brepkit/commit/0ffc2a13d497414cffb7284401b1cfde5935ccab))
+* **operations:** round an edge that ends at a concave corner ([#2313](https://github.com/andymai/brepkit/issues/2313)) ([0dd2f42](https://github.com/andymai/brepkit/commit/0dd2f426af1572d6cddf28cc0506bba81967c345))
+
 ## [4.6.28](https://github.com/andymai/brepkit/compare/v4.6.27...v4.6.28) (2026-11-07)
 
 

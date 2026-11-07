@@ -42,6 +42,50 @@ mod tests {
         );
     }
 
+    /// A quarter wedge of a cone from its apex to a rim arc holds a quarter of
+    /// `pi r s` wherever round the cone it lies: the apex, where every generator
+    /// meets, has no angle to read.
+    #[test]
+    fn pointed_cone_wedge_reads_only_its_own_span() {
+        use std::f64::consts::{FRAC_PI_2, PI};
+
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::ConicalSurface;
+        use brepkit_math::vec::{Point3, Vec3};
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        for quadrant in 0..4 {
+            let start = FRAC_PI_2 * f64::from(quadrant);
+            let on_rim = |a: f64| Point3::new(3.0 * a.cos(), 3.0 * a.sin(), 4.0);
+            let mut topo = Topology::new();
+            let apex = topo.add_vertex(Vertex::new(Point3::new(0.0, 0.0, 0.0), 1e-7));
+            let a = topo.add_vertex(Vertex::new(on_rim(start), 1e-7));
+            let b = topo.add_vertex(Vertex::new(on_rim(start + FRAC_PI_2), 1e-7));
+            let rim =
+                Circle3D::new(Point3::new(0.0, 0.0, 4.0), Vec3::new(0.0, 0.0, 1.0), 3.0).unwrap();
+            let edges = [
+                topo.add_edge(Edge::new(apex, a, EdgeCurve::Line)),
+                topo.add_edge(Edge::new(a, b, EdgeCurve::Circle(rim))),
+                topo.add_edge(Edge::new(b, apex, EdgeCurve::Line)),
+            ];
+            let wire = topo.add_wire(
+                Wire::new(edges.map(|e| OrientedEdge::new(e, true)).to_vec(), true).unwrap(),
+            );
+            let cone = ConicalSurface::new(
+                Point3::new(0.0, 0.0, 0.0),
+                Vec3::new(0.0, 0.0, 1.0),
+                4.0_f64.atan2(3.0),
+            )
+            .unwrap();
+            let face = topo.add_face(Face::new(wire, vec![], FaceSurface::Cone(cone)));
+            let area = face_area(&topo, face, 1e-3).unwrap();
+            assert_rel(area, 3.75 * PI, 1e-9, "quarter cone wedge");
+        }
+    }
+
     /// Assert that `aabb` contains the box `[min_x..max_x, min_y..max_y, min_z..max_z]`
     /// within a 1e-6 slack on each bound.
     fn assert_aabb_contains(

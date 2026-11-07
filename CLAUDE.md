@@ -314,6 +314,7 @@ Quick reference — find the right file for any task:
 | Shared winding utilities | `winding.rs` |
 | Edge projection with hidden-line removal | `projection.rs` |
 | Shared loft/sweep/pipe/revolve end caps | `cap.rs` |
+| Open shells from open wires (extrude, revolve, loft, sweep) | `sheet.rs` |
 | Keep a solid's cavities through an outer-shell rebuild | `cavities.rs` |
 
 ### L3: io (`crates/io/src/`)
