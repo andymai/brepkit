@@ -1255,8 +1255,12 @@ pub fn unify_faces(topo: &mut Topology, solid: SolidId) -> Result<usize, crate::
     // the same direction. This prevents merging faces on opposite sides of
     // the same surface (e.g., opposite cylinder walls, or coplanar faces
     // with opposite normals from a shelled solid).
+    // An edge with more than two faces is where pieces only touch (two
+    // solids meeting along a line): coplanar faces either side of it lie on
+    // different pieces, and merging them pinches one face through the edge
+    // and fuses the pieces into one non-manifold whole.
     for faces in edge_face_map.values() {
-        if faces.len() < 2 {
+        if faces.len() != 2 {
             continue;
         }
         for i in 0..faces.len() {
@@ -1286,9 +1290,10 @@ pub fn unify_faces(topo: &mut Topology, solid: SolidId) -> Result<usize, crate::
         }
     }
 
-    // Union faces sharing geometrically-equivalent curved edges on the same surface.
+    // Union faces sharing geometrically-equivalent curved edges on the same
+    // surface, two uses being a join and more a touch, as above.
     for faces in geom_edge_faces.values() {
-        if faces.len() < 2 {
+        if faces.len() != 2 {
             continue;
         }
         for i in 0..faces.len() {
@@ -1316,7 +1321,8 @@ pub fn unify_faces(topo: &mut Topology, solid: SolidId) -> Result<usize, crate::
     // This catches GFA sub-faces from different original faces that have
     // different EdgeIds at the same geometric position.
     for faces in pos_edge_faces.values() {
-        if faces.len() < 2 {
+        // Two edge uses at a place are one join; more are a touch.
+        if faces.len() != 2 {
             continue;
         }
         // Deduplicate face IDs (same face can appear multiple times)

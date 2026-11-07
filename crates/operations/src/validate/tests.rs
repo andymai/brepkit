@@ -551,13 +551,13 @@ fn validate_detects_zero_length_edge() {
 fn pinched_and_nested_pieces_are_invalid() {
     use brepkit_math::mat::Mat4;
 
-    use crate::boolean::{BooleanOp, boolean};
-
     let mut topo = Topology::new();
     let a = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
     let b = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
     crate::transform::transform_solid(&mut topo, b, &Mat4::translation(1.0, 1.0, 0.0)).unwrap();
-    let pinched = boolean(&mut topo, BooleanOp::Fuse, a, b).unwrap();
+    // The builder's own union, before the boolean separates the pieces.
+    let pinched =
+        brepkit_algo::gfa::boolean(&mut topo, brepkit_algo::bop::BooleanOp::Fuse, a, b).unwrap();
     let report = validate_solid(&topo, pinched).unwrap();
     assert!(!report.is_valid(), "pinched blocks read valid");
 

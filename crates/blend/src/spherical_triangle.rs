@@ -36,8 +36,8 @@ pub struct VertexContactData {
     /// trihedral ball centre, in which case the contacts must lie on the
     /// requested-radius sphere (`|contact - centre| == radius` is then a
     /// theorem of `convex_trihedral_setback`'s trim). `Some(false)` is the
-    /// deliberate un-set-back construction the near-equal-stripe guard
-    /// selects: contacts are the vertex-plane section endpoints at
+    /// un-set-back construction, a junction `convex_trihedral_setback`
+    /// leaves untrimmed: contacts are the vertex-plane section endpoints at
     /// `|contact - vertex| == radius`, and the cap radius is the
     /// geometrically determined `|contact - centre|`. `None`
     /// means no trihedral ball centre was solved at all (non-planar
@@ -105,7 +105,7 @@ fn compute_sphere_center(data: &VertexContactData) -> Result<(Point3, f64), Blen
     // caller's sections were set back to that ball's centre
     // (`convex_trihedral_setback` trims a stripe end down to the rolling-ball
     // centre, so `|contact - centre| == radius` is a theorem of that
-    // construction). A junction the near-equal-stripe guard leaves
+    // construction). A junction `convex_trihedral_setback` leaves
     // un-set-back builds the other construction: its contacts are
     // the vertex-plane section endpoints at `|contact - vertex| == radius`
     // and its cap radius is the geometrically determined `|contact - centre|`.
@@ -606,7 +606,7 @@ mod tests {
         let mut data = unit_cube_corner_data(vid);
         let r = data.radius;
 
-        // The 90:60:10 box's origin corner: contacts at distance r from the vertex,
+        // An un-set-back box corner: contacts at distance r from the vertex,
         // equidistant from the solved centre at r*sqrt(2).
         data.contact_points = vec![
             Point3::new(0.0, r, 0.0),
