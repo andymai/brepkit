@@ -358,11 +358,12 @@ fn the_limit_stripe_wire_is_the_collapsed_three_edge_loop() {
 }
 
 /// A radius past the limit by no more than a file's digits (a part whose edge
-/// is written 7e-12 shorter than the radius the user typed for it) builds as
-/// the limit does: the check takes the linear tolerance.
+/// is written 1.4e-11 shorter than the radius the user typed for it) builds as
+/// the limit does: the check allows the consumed length `5e-10` of the edge's
+/// past it, so up to just under that builds, and just over it is refused.
 #[test]
 fn a_radius_a_files_digits_past_the_limit_builds_as_the_limit() {
-    for over in [1e-11, 1e-9] {
+    for over in [1e-11, 1e-9, 4e-10 * S] {
         let radius = S + over;
         let mut topo = Topology::new();
         let solid = build_two_edge_fillet(&mut topo, radius, false);
@@ -375,4 +376,25 @@ fn a_radius_a_files_digits_past_the_limit_builds_as_the_limit() {
             "{case}: volume {volume} is not the limit's closed form {exact}"
         );
     }
+}
+
+/// Just over that allowance past the limit is a genuine overshoot, refused
+/// before any mutation.
+#[test]
+fn a_radius_just_over_the_allowance_past_the_limit_refuses() {
+    let mut topo = Topology::new();
+    let source = inch_cube(&mut topo);
+    let edges = adjacent_top_edges(&topo, source, false);
+    let before = source_snapshot(&topo, source);
+
+    let over = 6e-10 * S;
+    let refused = fillet_v2(&mut topo, source, &edges, S + over);
+    let error = refused.err().map(|e| format!("{e:?}"));
+    assert!(
+        error
+            .as_deref()
+            .is_some_and(|e| e.contains("RadiusTooLarge")),
+        "r = S + {over} overshoots the limit by more than the allowance: {error:?}"
+    );
+    assert_eq!(before, source_snapshot(&topo, source));
 }

@@ -708,6 +708,12 @@ fn unselected_edge_seam_continuation(
     Ok(None)
 }
 
+/// How far past an edge's length, relative to it, a mitre may consume it and
+/// still be at the limit. The cap's crossing test takes boundaries within
+/// 1e-9 of the triangle's size as touching it; half that keeps a radius the
+/// admissibility check admits one the build takes.
+const LIMIT_SLACK: f64 = 5e-10;
+
 /// Radius admissibility for the sharp-mitered two-edge corner, checked on
 /// real source-edge lengths **before any topology mutation**.
 ///
@@ -734,13 +740,12 @@ fn unselected_edge_seam_continuation(
 /// invariant under rigid placement and uniform scale):
 ///
 /// - a selected contour of length `L` with `m` mitered ends (1 or 2; a contour
-///   with 0 qualifying ends is out of scope here): `L >= m*r` (an exact tie is
-///   the admissible limit);
+///   with 0 qualifying ends is out of scope here): `m*r <= L (1 + LIMIT_SLACK)`;
 /// - the retained (unselected) third edge at each qualifying corner, length
-///   `H`: `H >= r`;
+///   `H`: `r <= H (1 + LIMIT_SLACK)`;
 /// - the unselected edge(s) at a runout terminal (the far, non-mitered end of
 ///   a contour whose *other* end is a qualifying corner), each length `L`:
-///   `L >= r`. This checks every `unselected_sharp_edges` entry at that
+///   `r <= L (1 + LIMIT_SLACK)`. This checks every `unselected_sharp_edges` entry at that
 ///   terminal, which is never more permissive than checking only the one edge
 ///   the runout construction ultimately consumes.
 ///
@@ -751,9 +756,13 @@ fn unselected_edge_seam_continuation(
 /// so a caller can recover `max_radius`. Only a genuine overshoot is refused:
 /// at the exact limit the rule's length is fully consumed, and
 /// `close_collapsed_miter_corner` builds the corner around the material that
-/// vanishing consumed. A radius past a length by no more than the linear
-/// tolerance is at the limit: a file stores the length to its own digits, so
-/// an edge drawn as long as the radius can read a few 1e-12 short of it.
+/// vanishing consumed. A consumed length past its edge's length by no more
+/// than [`LIMIT_SLACK`] of it is at the limit: a file stores the length to its
+/// own digits, so an edge drawn as long as the radius can read short of it (by
+/// 1.4e-11 in a 28 mm edge in the part that showed it). The allowance is on
+/// the consumed length, not the radius, because that overshoot is how far the
+/// fillet's end runs past the edge's far vertex, which is what the cap's
+/// crossing test (`terminal_cap_is_notchable`) measures.
 pub fn check_equal_two_edge_admissibility(
     topo: &Topology,
     plan: &FilletPlan,
@@ -781,7 +790,7 @@ pub fn check_equal_two_edge_admissibility(
         }
         let r = by_contour_r[ci];
         let length = contour.spine.length();
-        if (m as f64) * r > length + TOL {
+        if (m as f64) * r > length * (1.0 + LIMIT_SLACK) {
             return Err(BlendError::RadiusTooLarge {
                 edge: contour.edges[0],
                 max_radius: (length / (m as f64)).max(0.0),
@@ -803,7 +812,7 @@ pub fn check_equal_two_edge_admissibility(
         };
         let edge = topo.edge(retained)?;
         let h = vertex_length(edge.start(), edge.end())?;
-        if miter.radius > h + TOL {
+        if miter.radius > h * (1.0 + LIMIT_SLACK) {
             return Err(BlendError::RadiusTooLarge {
                 edge: retained,
                 max_radius: h.max(0.0),
@@ -861,7 +870,7 @@ pub fn check_equal_two_edge_admissibility(
                 Some(continuation) => length + continuation,
                 None => length,
             };
-            if r > run + TOL {
+            if r > run * (1.0 + LIMIT_SLACK) {
                 return Err(BlendError::RadiusTooLarge {
                     edge: edge_id,
                     max_radius: run.max(0.0),
