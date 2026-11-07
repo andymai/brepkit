@@ -1,0 +1,19 @@
+crates/operations/src/validate.rs
+  s_649261a24df31b::t_e2631af9dd8286 165-168,175-176,218,220-222,225-234,299-307
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "04a1aacb7265e152f4478918adba79125663724c",
+  "prompts": {},
+  "sessions": {
+    "s_649261a24df31b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d8bbbba4-0431-4f6a-a622-e632a6659779",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
