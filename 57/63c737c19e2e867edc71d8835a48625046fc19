@@ -1,0 +1,21 @@
+crates/operations/tests/fillet_corner_options.rs
+  s_649261a24df31b::t_a541f554ce7805 315-316,318-342,344-345
+crates/blend/src/setback_corner.rs
+  s_649261a24df31b::t_bc48cbc8188708 416-417,423-425,429-432,434-435,571-572,577,589-590,594-595,605,839-841
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5763c737c19e2e867edc71d8835a48625046fc19",
+  "prompts": {},
+  "sessions": {
+    "s_649261a24df31b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d8bbbba4-0431-4f6a-a622-e632a6659779",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
