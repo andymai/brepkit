@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794083603550,
+  "lastUpdate": 1794084434195,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -66743,6 +66743,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 22907296,
             "range": "± 244429",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "81057e93908b5d833fb9463aa474693ecb39c0c5",
+          "message": "fix(blend): roll a ball in a pocket's inner corner (#2330)",
+          "timestamp": "2026-11-07T12:43:58-08:00",
+          "tree_id": "77d8213eea4dce0a18f27a7583a129ff89828c5a",
+          "url": "https://github.com/andymai/brepkit/commit/81057e93908b5d833fb9463aa474693ecb39c0c5"
+        },
+        "date": 1794084424624,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1090040,
+            "range": "± 18257",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1165875,
+            "range": "± 85331",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13267,
+            "range": "± 125",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 885671,
+            "range": "± 1798",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 28471078,
+            "range": "± 47169",
             "unit": "ns/iter"
           }
         ]
