@@ -1,0 +1,14 @@
+crates/operations/src/extrude.rs
+  h_b755e1950659f4 573,577
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "8782f70bcfa418cab0a66b9d5e2349729dd1ea0e",
+  "prompts": {},
+  "humans": {
+    "h_b755e1950659f4": {
+      "author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
