@@ -162,10 +162,12 @@ fn connected_pieces<U: AsRef<[brepkit_topology::face::FaceId]>>(
 /// pinch, where they touch at a point), or a piece inside another that faces the same way with no piece
 /// facing the other way between them (a lump inside a lump; an island in a
 /// cavity kept in the outer shell has the cavity between). A piece is inside
-/// another when, at each of up to eight of its vertices that no other piece
-/// shares, most of three rays cross the other an odd number of times (one ray can
-/// leave through an edge or a corner, and a vertex can lie on the other piece,
-/// where a ray's parity is unread), by the engine's ray cast, which reads a sphere face that is no
+/// another when, at the first of up to eight of its vertices that no other piece
+/// shares and that lies off the other piece, most of three rays cross the other
+/// an odd number of times (one ray can leave through an edge or a corner). A
+/// vertex on the other piece has no parity to read: each ray and its opposite
+/// disagree there, one heading in and one out. A piece with no vertex off the
+/// other reads as outside it. The rays are the engine's ray cast, which reads a sphere face that is no
 /// intersection of half-spaces (a ball less a column's corner) by its wires.
 /// Only pieces facing the same way are tested: a cavity kept in the outer
 /// shell faces inward, against the piece around it.
@@ -219,19 +221,22 @@ fn piece_issues(
     for (&p, vids) in &piece_vertices {
         let mut clear: Vec<brepkit_math::vec::Point3> = Vec::new();
         for &q in &points[&p] {
-            let apart = points
-                .iter()
-                .filter(|&(&other, _)| other != p)
-                .all(|(_, others)| others.iter().all(|&o| (o - q).length() > TOUCH_TOL));
-            if apart && clear.iter().all(|&c| (c - q).length() > TOUCH_TOL) {
+            if clear.len() == CORNERS_READ {
+                break;
+            }
+            let apart = clear.iter().all(|&c| (c - q).length() > TOUCH_TOL)
+                && points
+                    .iter()
+                    .filter(|&(&other, _)| other != p)
+                    .all(|(_, others)| others.iter().all(|&o| (o - q).length() > TOUCH_TOL));
+            if apart {
                 clear.push(q);
             }
         }
         if clear.is_empty() {
             clear.push(topo.vertex(vids[0])?.point());
         }
-        let stride = clear.len().div_ceil(CORNERS_READ);
-        corners.insert(p, clear.into_iter().step_by(stride).collect());
+        corners.insert(p, clear);
     }
     let mut issues = Vec::new();
     if shared > 0 {
@@ -296,13 +301,19 @@ fn piece_issues(
                 brepkit_algo::classifier::RayCastGeoms::of_faces(topo, &members[&b])?,
             ),
         };
-        let within = corners[&a].iter().all(|&corner| {
-            let odd = rays
-                .iter()
-                .filter(|&&ray| brepkit_algo::classifier::ray_parity_cached(g, corner, ray).0)
-                .count();
-            odd >= 2
-        });
+        let read = |corner: brepkit_math::vec::Point3| -> Option<bool> {
+            let mut odd = 0;
+            for &ray in &rays {
+                let (along, _) = brepkit_algo::classifier::ray_parity_cached(g, corner, ray);
+                let (against, _) = brepkit_algo::classifier::ray_parity_cached(g, corner, -ray);
+                if along != against {
+                    return None;
+                }
+                odd += usize::from(along);
+            }
+            Some(odd >= 2)
+        };
+        let within = corners[&a].iter().find_map(|&c| read(c)).unwrap_or(false);
         inside_memo.insert((a, b), within);
         Ok(within)
     };
