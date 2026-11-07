@@ -361,8 +361,8 @@ fn chamfer_core(
     // reaches would need its own set-back, which the rebuild only does for an
     // outer wire: a hole's own edge or vertex being chamfered, or a hole lying
     // within a bevel's set-back of a chamfered edge or corner on its face. An
-    // edge sets back by its own distance on this face, and a corner by the
-    // larger of its edges'.
+    // edge sets back by its own distance on this face. A corner is held to the
+    // larger distance, since it moves along the faces either side.
     let reach = distances.max_distance() + tol.linear;
     let mut holes: HashMap<usize, Vec<Vec<Point3>>> = HashMap::new();
     for &face_id in &shell_face_ids {

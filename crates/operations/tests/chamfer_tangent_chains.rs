@@ -762,7 +762,9 @@ fn a_chain_refuses_a_neck_its_new_edges_cross() {
 
 /// An asymmetric chamfer sets an edge back by its own distance on each face:
 /// a hole 2 from the edge clears a bevel 0.5 wide on that face, whatever the
-/// bevel's 3 on the other, and not one 3 wide.
+/// bevel's 3 on the other, and not one 3 wide. The distances go to the faces
+/// in an order of the chamfer's own, so each reading says how far back the top
+/// came.
 #[test]
 fn an_asymmetric_chamfer_reads_a_hole_by_its_own_faces_set_back() {
     let cut = |d1: f64, d2: f64| {
@@ -777,12 +779,32 @@ fn an_asymmetric_chamfer_reads_a_hole_by_its_own_faces_set_back() {
         assert_eq!(edge.len(), 1);
         chamfer_asymmetric(&mut topo, drilled, &edge, d1, d2)
             .ok()
-            .map(|s| oriented_solid_volume(&topo, s, 0.01).unwrap())
+            .map(|result| {
+                let top_set_back = solid_edges(&topo, result)
+                    .unwrap()
+                    .iter()
+                    .flat_map(|&e| {
+                        let edge = topo.edge(e).unwrap();
+                        [edge.start(), edge.end()]
+                    })
+                    .map(|v| topo.vertex(v).unwrap().point())
+                    .filter(|p| (p.z() - 4.0).abs() < 1e-9)
+                    .map(Point3::y)
+                    .fold(f64::INFINITY, f64::min);
+                (
+                    top_set_back,
+                    oriented_solid_volume(&topo, result, 0.01).unwrap(),
+                )
+            })
     };
     let drilled = 20.0 * 20.0 * 4.0 - 4.0 * 2.0 * 4.0;
     let bevel = 0.5 * 0.5 * 3.0 * 20.0;
     let readings = [cut(0.5, 3.0), cut(3.0, 0.5)];
-    let built: Vec<f64> = readings.iter().flatten().copied().collect();
+    let built: Vec<(f64, f64)> = readings.iter().flatten().copied().collect();
     assert_eq!(built.len(), 1, "{readings:?}");
-    assert!((built[0] - (drilled - bevel)).abs() < 1e-6, "{readings:?}");
+    assert!((built[0].0 - 0.5).abs() < 1e-9, "{readings:?}");
+    assert!(
+        (built[0].1 - (drilled - bevel)).abs() < 1e-6,
+        "{readings:?}"
+    );
 }
