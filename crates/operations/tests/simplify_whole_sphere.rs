@@ -185,6 +185,7 @@ mod tests {
             boolean_with_options(&mut topo, BooleanOp::Cut, block, notch, as_built()).unwrap();
         let solid =
             boolean_with_options(&mut topo, BooleanOp::Cut, ball, tool, simplified()).unwrap();
+        assert_eq!(sphere_faces(&topo, solid), 2);
         let report = validate_solid(&topo, solid).unwrap();
         assert!(report.is_valid(), "{:?}", report.issues);
         let mesh = tessellate_solid(&topo, solid, 0.02).unwrap();
