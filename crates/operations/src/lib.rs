@@ -113,7 +113,7 @@
 //! | **Boolean** | [`boolean`], [`mesh_boolean`] | Set operations |
 //! | **Blend** | [`fillet`], [`chamfer`], [`blend_ops`] | Edge smoothing |
 //! | **Offset** | [`offset_face`], [`offset_trim`], [`offset_v2`], [`offset_wire`] | Wall thickness |
-//! | **Surface** | [`fill_face`], [`thicken`], [`shell_op`], [`draft`], [`section`], [`split`] | Surface/solid modification |
+//! | **Surface** | [`fill_face`], [`thicken`], [`shell_op`], [`draft`], [`section`], [`split`], [`imprint`] | Surface/solid modification |
 //! | **Repair** | [`heal`], [`defeature`], [`sew`], [`untrim`] | Shape fixing |
 //! | **Analysis** | [`measure`], [`distance`], [`classify`], [`validate`], [`query`], [`feature_recognition`] | Interrogation |
 //! | **Tessellation** | [`tessellate`] | Mesh generation |
@@ -159,6 +159,7 @@ pub mod offset_wire;
 
 pub mod draft;
 pub mod fill_face;
+pub mod imprint;
 pub mod section;
 pub mod sheet;
 pub mod shell_op;

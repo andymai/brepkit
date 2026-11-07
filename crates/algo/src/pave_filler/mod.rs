@@ -22,6 +22,7 @@ pub mod phase_ff_coplanar;
 pub mod phase_ve;
 pub mod phase_vf;
 pub mod phase_vv;
+mod tool_edges;
 
 #[cfg(test)]
 mod tests;
@@ -517,19 +518,52 @@ pub fn run_pave_filler_n(
     tol: Tolerance,
     arena: &mut GfaArena,
 ) -> Result<(), AlgoError> {
-    if sources.is_empty() {
+    run_pave_filler_with_edges(topo, sources, &[], tol, arena)
+}
+
+/// [`run_pave_filler_n`] with loose edges among the tools, for imprinting them
+/// on `sources[0]`: their vertices and edges meet that solid's and each
+/// other's, and each block lying in a face of the solid becomes its section.
+///
+/// # Errors
+///
+/// Returns [`AlgoError`] if `sources` is empty or any stage fails.
+pub fn run_pave_filler_with_edges(
+    topo: &mut Topology,
+    sources: &[SolidId],
+    tool_edges: &[brepkit_topology::edge::EdgeId],
+    tol: Tolerance,
+    arena: &mut GfaArena,
+) -> Result<(), AlgoError> {
+    let Some(&body) = sources.first() else {
         return Err(AlgoError::AssemblyFailed(
             "N-way pave filler needs at least one source solid".into(),
         ));
-    }
+    };
 
     // Stage 1: Intersection over interacting pairs, accumulating into one arena.
     init_pave_blocks_n(topo, sources, arena)?;
+    let mut tool_vertices = Vec::with_capacity(2 * tool_edges.len());
+    for &edge_id in tool_edges {
+        init_edge_pave_block(topo, edge_id, arena)?;
+        let edge = topo.edge(edge_id)?;
+        tool_vertices.extend([edge.start(), edge.end()]);
+    }
+    let (body_vertices, body_edges) = if tool_edges.is_empty() {
+        (Vec::new(), Vec::new())
+    } else {
+        (
+            brepkit_topology::explorer::solid_vertices(topo, body)?,
+            brepkit_topology::explorer::solid_edges(topo, body)?,
+        )
+    };
     let pairs = interacting_pairs(topo, sources, tol);
 
     for &(i, j) in &pairs {
         phase_vv::perform(topo, sources[i], sources[j], tol, arena)?;
     }
+    phase_vv::merge_coincident(topo, &tool_vertices, &body_vertices, tol, arena)?;
+    phase_vv::merge_coincident(topo, &tool_vertices, &tool_vertices, tol, arena)?;
     // VV is the only phase that registers same-domain vertices and the edge
     // pave blocks are fixed at init, so the coincidence index is stable for the
     // remaining phases — build it once, after every pair's VV (mirrors the
@@ -538,8 +572,21 @@ pub fn run_pave_filler_n(
     for &(i, j) in &pairs {
         phase_ve::perform(topo, sources[i], sources[j], tol, arena)?;
     }
+    phase_ve::check_vertex_edge_pairs(topo, &tool_vertices, &body_edges, tol, arena)?;
+    phase_ve::check_vertex_edge_pairs(topo, &body_vertices, tool_edges, tol, arena)?;
+    phase_ve::check_vertex_edge_pairs(topo, &tool_vertices, tool_edges, tol, arena)?;
     for &(i, j) in &pairs {
         phase_ee::perform(topo, sources[i], sources[j], tol, arena)?;
+    }
+    phase_ee::check_edge_edge_pairs(topo, tool_edges, &body_edges, tol, arena)?;
+    for (k, edge) in tool_edges.iter().enumerate() {
+        phase_ee::check_edge_edge_pairs(
+            topo,
+            std::slice::from_ref(edge),
+            &tool_edges[k + 1..],
+            tol,
+            arena,
+        )?;
     }
     for &(i, j) in &pairs {
         phase_vf::perform(topo, sources[i], sources[j], tol, arena)?;
@@ -558,6 +605,7 @@ pub fn run_pave_filler_n(
 
     // Stage 2: Resolution (solid-agnostic — reads the accumulated arena).
     make_blocks::perform(topo, arena)?;
+    tool_edges::perform(topo, body, tool_edges, tol, arena)?;
     force_interf_ee::perform(topo, tol, arena)?;
     link_existing::perform(topo, tol, arena)?;
     make_split_edges::perform(topo, arena)?;
@@ -577,16 +625,26 @@ fn init_pave_blocks_n(
 ) -> Result<(), AlgoError> {
     for &solid in sources {
         for edge_id in brepkit_topology::explorer::solid_edges(topo, solid)? {
-            if arena.edge_pave_blocks.contains_key(&edge_id) {
-                continue;
-            }
-            let edge = topo.edge(edge_id)?;
-            let start_pos = topo.vertex(edge.start())?.point();
-            let end_pos = topo.vertex(edge.end())?.point();
-            let (t0, t1) = edge_pave_span(edge.curve(), start_pos, end_pos);
-            arena.init_edge_pave_block(edge_id, edge.start(), t0, edge.end(), t1);
+            init_edge_pave_block(topo, edge_id, arena)?;
         }
     }
+    Ok(())
+}
+
+/// An edge's first pave block, unless the edge already has one.
+fn init_edge_pave_block(
+    topo: &Topology,
+    edge_id: brepkit_topology::edge::EdgeId,
+    arena: &mut GfaArena,
+) -> Result<(), AlgoError> {
+    if arena.edge_pave_blocks.contains_key(&edge_id) {
+        return Ok(());
+    }
+    let edge = topo.edge(edge_id)?;
+    let start_pos = topo.vertex(edge.start())?.point();
+    let end_pos = topo.vertex(edge.end())?.point();
+    let (t0, t1) = edge_pave_span(edge.curve(), start_pos, end_pos);
+    arena.init_edge_pave_block(edge_id, edge.start(), t0, edge.end(), t1);
     Ok(())
 }
 
