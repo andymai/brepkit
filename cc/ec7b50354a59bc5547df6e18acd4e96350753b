@@ -1,0 +1,16 @@
+crates/io/src/iges/reader.rs
+  h_b755e1950659f4 272
+crates/io/tests/iges_round_trip.rs
+  h_b755e1950659f4 949-964
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ccec7b50354a59bc5547df6e18acd4e96350753b",
+  "prompts": {},
+  "humans": {
+    "h_b755e1950659f4": {
+      "author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
