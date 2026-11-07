@@ -312,63 +312,50 @@ mod tests {
         }
     }
 
-    /// A pocket's inner corner, whose rounds add material and whose ball faces
-    /// the other way.
+    /// A pocket's inner corner is not rolled yet: its rounds run on to the flat
+    /// faces and a fan closes the gap, so a set-back has no ball to start from.
     #[test]
-    fn a_pockets_inner_corner_sets_back() {
-        for (name, pose) in poses().into_iter().filter(|(name, _)| *name != "far away") {
-            let mut topo = Topology::new();
-            let block = make_box(&mut topo, 40.0, 40.0, 40.0).unwrap();
-            let pocket = make_box(&mut topo, 20.0, 20.0, 40.0).unwrap();
-            transform_solid(&mut topo, pocket, &Mat4::translation(10.0, 10.0, 10.0)).unwrap();
-            let cut = boolean(&mut topo, BooleanOp::Cut, block, pocket).unwrap();
-            transform_solid(&mut topo, cut, &pose).unwrap();
-            let at = |x, y, z| pose.mul_point(Point3::new(x, y, z));
-            let inner: Vec<EdgeId> = solid_edges(&topo, cut)
-                .unwrap()
-                .into_iter()
-                .filter(|&e| {
-                    let edge = topo.edge(e).unwrap();
-                    let middle = topo.vertex(edge.start()).unwrap().point()
-                        + (topo.vertex(edge.end()).unwrap().point()
-                            - topo.vertex(edge.start()).unwrap().point())
-                            * 0.5;
-                    [
-                        at(20.0, 10.0, 10.0),
-                        at(20.0, 30.0, 10.0),
-                        at(10.0, 20.0, 10.0),
-                        at(30.0, 20.0, 10.0),
-                        at(10.0, 10.0, 25.0),
-                        at(30.0, 10.0, 25.0),
-                        at(10.0, 30.0, 25.0),
-                        at(30.0, 30.0, 25.0),
-                    ]
-                    .iter()
-                    .any(|&p| (p - middle).length() < 1e-6)
-                })
-                .collect();
-            assert_eq!(inner.len(), 8, "{name}");
-            let corner = vertex_at(&topo, cut, at(10.0, 10.0, 10.0));
-            let meeting: Vec<EdgeId> = edges_at(&topo, cut, corner);
-            let rolled = fillet_v2_with_corners(&mut topo, cut, &inner, RADIUS, &[]).unwrap();
-            let rolled_volume = solid_volume(&topo, rolled, 0.01).unwrap();
-
-            let corners = [FilletCorner {
-                vertex: corner,
-                setbacks: set_back(&meeting, [4.0, 5.0, 6.0]),
-                kind: CornerKind::G2,
-            }];
-            let result = fillet_v2_with_corners(&mut topo, cut, &inner, RADIUS, &corners).unwrap();
-            let report = validate_solid(&topo, result).unwrap();
-            assert!(report.is_valid(), "{name}: {:?}", report.issues);
-            let volume = solid_volume(&topo, result, 0.01).unwrap();
-            assert!(
-                volume > rolled_volume,
-                "{name}: {volume} from {rolled_volume}"
+    fn a_pockets_inner_corner_is_refused() {
+        let mut topo = Topology::new();
+        let block = make_box(&mut topo, 40.0, 40.0, 40.0).unwrap();
+        let pocket = make_box(&mut topo, 20.0, 20.0, 40.0).unwrap();
+        transform_solid(&mut topo, pocket, &Mat4::translation(10.0, 10.0, 10.0)).unwrap();
+        let cut = boolean(&mut topo, BooleanOp::Cut, block, pocket).unwrap();
+        let at = Point3::new(10.0, 10.0, 10.0);
+        let corner = vertex_at(&topo, cut, at);
+        let meeting = edges_at(&topo, cut, corner);
+        let far_side = |topo: &Topology, edge: EdgeId| {
+            let data = topo.edge(edge).unwrap();
+            let (a, b) = (
+                topo.vertex(data.start()).unwrap().point(),
+                topo.vertex(data.end()).unwrap().point(),
             );
-            let crease = largest_crease(&topo, result);
-            assert!(crease < 1e-5, "{name}: a crease of {crease}");
+            if (a - at).length() < 1e-6 { b } else { a }
+        };
+        let mut inner = meeting.clone();
+        for &edge in &meeting {
+            let far = far_side(&topo, edge);
+            let vertex = vertex_at(&topo, cut, far);
+            inner.extend(edges_at(&topo, cut, vertex).into_iter().filter(|e| {
+                let other = far_side(&topo, *e);
+                !meeting.contains(e)
+                    && other.z() >= 10.0
+                    && (10.0..=30.0).contains(&other.x())
+                    && (10.0..=30.0).contains(&other.y())
+            }));
         }
+        inner.sort_by_key(|e| e.index());
+        inner.dedup();
+        let corners = [FilletCorner {
+            vertex: corner,
+            setbacks: set_back(&meeting, [4.0, 5.0, 6.0]),
+            kind: CornerKind::G2,
+        }];
+        let refused = fillet_v2_with_corners(&mut topo, cut, &inner, RADIUS, &corners);
+        assert!(
+            refused.is_err_and(|e| e.to_string().contains("no ball corner")),
+            "the corner should be refused"
+        );
     }
 
     /// The patches do not depend on which way a wire happens to run, so a mirror
