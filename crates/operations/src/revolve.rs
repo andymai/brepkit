@@ -405,12 +405,12 @@ pub(crate) fn revolution_band_surface(
     let tol = 1e-9;
     // A line askew of the axis sweeps a hyperboloid, which the NURBS band is
     // exactly; the radial and axial readings below would make it a cone. One
-    // square to the axis sweeps its plane whatever its reach, which they read
-    // as such.
+    // square to the axis, to the reading's own `tol`, sweeps its plane whatever
+    // its reach.
     let along = p1_start - p0_start;
     let askew = along.cross(axis).dot(p0_start - axis_origin).abs();
     let linear = Tolerance::new().linear * along.length().max(1.0);
-    if askew > linear && along.dot(axis).abs() > linear {
+    if askew > linear && along.dot(axis).abs() >= tol {
         return Ok((FaceSurface::Nurbs(nurbs), false));
     }
     // The profile edge runs `p0_start → p1_start` (vertex i to vertex i+1 on the

@@ -631,3 +631,28 @@ fn a_cap_all_but_flat_on_its_band_stays_its_own_face() {
         .count();
     assert_eq!(caps, 2);
 }
+
+/// An edge a hair off square to the axis and clear of it is no plane and no
+/// cone: its band stays the exact hyperboloid, so the band holds its own edge.
+#[test]
+fn a_nearly_flat_edge_off_the_axis_keeps_its_true_surface() {
+    let mut topo = Topology::new();
+    let face = polygon(
+        &mut topo,
+        &[
+            Point3::new(3.0, 4.0, 0.0),
+            Point3::new(7.0, 4.0, 2e-7),
+            Point3::new(7.0, 4.0, 2.0),
+            Point3::new(3.0, 4.0, 2.0),
+        ],
+    );
+    let origin = Point3::new(0.0, 0.0, 0.0);
+    let solid = revolve(&mut topo, face, origin, Vec3::new(0.0, 0.0, 1.0), PI).unwrap();
+    let cones = solid_faces(&topo, solid)
+        .unwrap()
+        .iter()
+        .filter(|&&f| matches!(topo.face(f).unwrap().surface(), FaceSurface::Cone(_)))
+        .count();
+    assert_eq!(cones, 0);
+    assert!(validate_solid(&topo, solid).unwrap().is_valid());
+}
