@@ -2287,3 +2287,46 @@ fn an_arc_and_its_spline_copy_stay_whole() {
     .unwrap();
     assert_eq!(arena.curves.len(), 2);
 }
+
+/// An arc and its chord are two paths however small or shallow the arc, as long
+/// as the weld could not tell them apart only by their ends.
+#[test]
+fn a_small_or_shallow_arc_is_still_not_its_chord() {
+    for (major, minor) in [(5.0, 5e-4), (5e-4, 3e-4)] {
+        let mut topo = Topology::new();
+        let mut arena = GfaArena::new();
+        let ellipse = brepkit_math::curves::Ellipse3D::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            major,
+            minor,
+        )
+        .unwrap();
+        let (start, end) = (
+            ellipse.evaluate(0.0),
+            ellipse.evaluate(std::f64::consts::PI),
+        );
+        recorded_section(
+            &mut topo,
+            &mut arena,
+            EdgeCurve::Ellipse(ellipse),
+            (start, end),
+            (0.0, std::f64::consts::PI),
+        );
+        let half = (end - start).length() / 2.0;
+        recorded_section(
+            &mut topo,
+            &mut arena,
+            EdgeCurve::Line,
+            (start, end),
+            (-half, half),
+        );
+        super::split_co_endpoint_sections(
+            &mut topo,
+            brepkit_math::tolerance::Tolerance::new(),
+            &mut arena,
+        )
+        .unwrap();
+        assert_eq!(arena.curves.len(), 3, "semi-axes {major} and {minor}");
+    }
+}

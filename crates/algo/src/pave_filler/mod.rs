@@ -289,9 +289,6 @@ fn split_co_endpoint_sections(
     const WELD: f64 = 1e-5;
     /// Chords a section's path is read through.
     const PATH_SAMPLES: u32 = 32;
-    /// How far off another's path a section must run to be a different path,
-    /// at the least: past a fit's error.
-    const PATH_APART: f64 = 1e-3;
 
     let point_to_chord = |p: Point3, a: Point3, b: Point3| {
         let ab = b - a;
@@ -379,7 +376,7 @@ fn split_co_endpoint_sections(
                 .windows(2)
                 .map(|w| point_to_chord(sample, w[0], w[1]))
                 .fold(f64::INFINITY, f64::min)
-                > PATH_APART.max(sag)
+                > WELD.max(sag)
         })
     };
     let mut to_split: Vec<(usize, f64, Point3)> = Vec::new();
