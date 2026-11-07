@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.7.1](https://github.com/andymai/brepkit/compare/v4.7.0...v4.7.1) (2026-11-07)
+
+
+### Bug Fixes
+
+* **operations:** extrude a circle off its normal to an oblique wall ([#2320](https://github.com/andymai/brepkit/issues/2320)) ([69952a7](https://github.com/andymai/brepkit/commit/69952a72fb9aa2d8ff4727e2a1a7e6f3e34dfe95))
+
 ## [4.7.0](https://github.com/andymai/brepkit/compare/v4.6.30...v4.7.0) (2026-11-07)
 
 
