@@ -1447,7 +1447,12 @@ fn collect_geoms_of(
             && face.inner_wires().is_empty()
         {
             let verts = wire_polygon(topo, face.outer_wire())?;
-            if verts.len() < 3 {
+            // A whole torus's wire runs zero-length placeholders at one point,
+            // which the polygon keeps, however many of them there are.
+            let no_extent = verts
+                .first()
+                .is_none_or(|&p| verts.iter().all(|&q| (q - p).length() < 1e-9));
+            if verts.len() < 3 || no_extent {
                 // Degenerate boundary: the untrimmed whole torus.
                 result.push(FaceGeom::Torus {
                     surface: t.clone(),
