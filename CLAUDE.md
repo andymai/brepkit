@@ -149,6 +149,7 @@ Quick reference — find the right file for any task:
 | Face classification state | `ds/face_info.rs` |
 | PaveFiller orchestrator | `pave_filler/mod.rs` |
 | Phases VV/VE/EE/VF/EF/FF | `pave_filler/phase_*.rs` |
+| Sections along loose tool edges (imprint) | `pave_filler/tool_edges.rs` |
 | Pave block splitting + edge creation | `pave_filler/make_blocks.rs`, `make_split_edges.rs` |
 | FaceInfo population | `pave_filler/fill_face_info.rs` |
 | Builder (face splitting + assembly) | `builder/mod.rs`, `builder/assemble.rs` |
@@ -288,6 +289,7 @@ Quick reference — find the right file for any task:
 | Shell (hollow solid) | `shell_op.rs` |
 | Draft (taper faces) | `draft.rs` |
 | Section / Split | `section.rs`, `split.rs` |
+| Imprint faces and edges on a solid, split it by faces | `imprint.rs` |
 | Transform, Mirror, Copy | `transform.rs`, `mirror.rs`, `copy.rs` |
 | Measure (bbox, area, volume, CoM) | `measure/` (mod, volume, area, bounding_box, edge_length, helpers) |
 | Distance queries | `distance.rs` |

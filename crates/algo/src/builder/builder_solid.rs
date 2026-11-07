@@ -10,7 +10,7 @@
 //! 3. **`perform_areas`** — Growth vs Hole classification
 //! 4. **Assemble** — build final Solid from shells
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
@@ -136,55 +136,7 @@ pub fn build_solid_with_origins(
         sources.push(Some(sf.source_face));
     }
 
-    // Step 0a-pre: Drop degenerate sliver faces — all-Line outer wires with
-    // fewer than 3 distinct vertex positions enclose zero area (e.g. a loft
-    // band built over a duplicated profile point, giving [e, e-reversed]).
-    // Keeping them turns their edges non-manifold in an otherwise valid
-    // result. Faces with curved edges are exempt (two half-circles bound a
-    // real disc with only 2 vertices).
-    retain_aligned(&mut face_ids, &mut sources, |&fid| {
-        !is_degenerate_line_sliver(topo, fid)
-    });
-    if face_ids.is_empty() {
-        return Err(AlgoError::AssemblyFailed(
-            "all faces degenerate slivers".into(),
-        ));
-    }
-
-    // Step 0a-pre2: Strip zero-length Line edges from wires (duplicated
-    // input vertices produce them; their twin lives only on the degenerate
-    // slivers removed above, so they would survive as free edges).
-    remove_zero_length_edges(topo, &mut face_ids)?;
-
-    // Step 0a-pre3: Weld vertices that are coincident within snap tolerance.
-    // Intersection in the pavefiller can place a vertex a few ULPs short of an
-    // exact pre-existing vertex (e.g. a coincident-arc tangent point landing at
-    // -11.999999 vs the body's -12.0). Such near-duplicates quantize to
-    // different cells at MERGE_TOL, so the duplicate-edge merge never unifies
-    // the two faces' partitions and the shared boundary stays open. Snapping
-    // them to one canonical vertex (and dropping the resulting zero-length
-    // slivers) lets the merge below see identical partitions.
-    weld_coincident_vertices(topo, &mut face_ids)?;
-
-    // Step 0a: Split Line edges at intermediate collinear vertices.
-    // Adjacent faces can partition the same geometric boundary differently
-    // (one whole edge vs several sub-edges split at paves); refining every
-    // Line edge against the global vertex set gives both sides identical
-    // partitions so the merge below can unify them.
-    split_edges_at_collinear_vertices(topo, &mut face_ids)?;
-
-    // Step 0a2: The same refinement for curved (Circle/Ellipse) rims. A
-    // coincident rounded corner can arrive split at a seam vertex on one
-    // operand but whole on the other; splitting each arc at the global vertex
-    // set lets the merge below unify the shared rim.
-    split_arc_edges_at_collinear_vertices(topo, &mut face_ids)?;
-
-    // Step 0b: Merge duplicate edges across selected faces.
-    // Faces from different input solids may have separate edge entities for the
-    // same geometric boundary. Merge them by quantized endpoint position so that
-    // the BuilderSolid's connectivity flood-fill sees shared edges.
-    // This is operation-safe: only operates on BOP-selected faces.
-    merge_duplicate_edges(topo, &mut face_ids)?;
+    unify_boundaries(topo, &mut face_ids, &mut sources)?;
 
     // Step 0b2: Drop doubled faces — two (or more) selected faces whose outer
     // wires reference the identical set of (merged) edge entities. Such faces
@@ -252,6 +204,66 @@ pub fn build_solid_with_origins(
     Ok((solid_id, origins))
 }
 
+/// Bring the selected faces to one set of edges: weld what the pave filler
+/// left apart and split each edge where a neighbour does, then merge, so faces
+/// meeting along a boundary reference the same edge entity.
+fn unify_boundaries(
+    topo: &mut Topology,
+    face_ids: &mut Vec<FaceId>,
+    sources: &mut Vec<Option<FaceId>>,
+) -> Result<(), AlgoError> {
+    // Step 0a-pre: Drop degenerate sliver faces: all-Line outer wires with
+    // fewer than 3 distinct vertex positions enclose zero area (e.g. a loft
+    // band built over a duplicated profile point, giving [e, e-reversed]).
+    // Keeping them turns their edges non-manifold in an otherwise valid
+    // result. Faces with curved edges are exempt (two half-circles bound a
+    // real disc with only 2 vertices).
+    retain_aligned(face_ids, sources, |&fid| {
+        !is_degenerate_line_sliver(topo, fid)
+    });
+    if face_ids.is_empty() {
+        return Err(AlgoError::AssemblyFailed(
+            "all faces degenerate slivers".into(),
+        ));
+    }
+
+    // Step 0a-pre2: Strip zero-length Line edges from wires (duplicated
+    // input vertices produce them; their twin lives only on the degenerate
+    // slivers removed above, so they would survive as free edges).
+    remove_zero_length_edges(topo, face_ids)?;
+
+    // Step 0a-pre3: Weld vertices that are coincident within snap tolerance.
+    // Intersection in the pavefiller can place a vertex a few ULPs short of an
+    // exact pre-existing vertex (e.g. a coincident-arc tangent point landing at
+    // -11.999999 vs the body's -12.0). Such near-duplicates quantize to
+    // different cells at MERGE_TOL, so the duplicate-edge merge never unifies
+    // the two faces' partitions and the shared boundary stays open. Snapping
+    // them to one canonical vertex (and dropping the resulting zero-length
+    // slivers) lets the merge below see identical partitions.
+    weld_coincident_vertices(topo, face_ids)?;
+
+    // Step 0a: Split Line edges at intermediate collinear vertices.
+    // Adjacent faces can partition the same geometric boundary differently
+    // (one whole edge vs several sub-edges split at paves); refining every
+    // Line edge against the global vertex set gives both sides identical
+    // partitions so the merge below can unify them.
+    split_edges_at_collinear_vertices(topo, face_ids)?;
+
+    // Step 0a2: The same refinement for curved (Circle/Ellipse) rims. A
+    // coincident rounded corner can arrive split at a seam vertex on one
+    // operand but whole on the other; splitting each arc at the global vertex
+    // set lets the merge below unify the shared rim.
+    split_arc_edges_at_collinear_vertices(topo, face_ids)?;
+
+    // Step 0b: Merge duplicate edges across selected faces.
+    // Faces from different input solids may have separate edge entities for the
+    // same geometric boundary. Merge them by quantized endpoint position so that
+    // the BuilderSolid's connectivity flood-fill sees shared edges.
+    // This is operation-safe: only operates on BOP-selected faces.
+    merge_duplicate_edges(topo, face_ids)?;
+    Ok(())
+}
+
 /// Retain entries of `items` for which `keep` is true, dropping the same
 /// positions from the parallel `aligned` vector. The predicate runs exactly
 /// once per element (a precomputed mask), so side effects are not duplicated.
@@ -274,6 +286,599 @@ fn retain_aligned<T, U>(
         idx += 1;
         k
     });
+}
+
+// ── Regions ──────────────────────────────────────────────────────────
+
+/// One side of a face: `front` the way its effective normal points. A
+/// boundary face has material behind it only; a wall has material both ways.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct FaceSide {
+    face: usize,
+    front: bool,
+}
+
+impl FaceSide {
+    const fn index(self) -> usize {
+        2 * self.face + self.front as usize
+    }
+}
+
+/// Disjoint sets over the sides of a list of faces.
+struct SideSets {
+    parent: Vec<usize>,
+}
+
+impl SideSets {
+    fn new(faces: usize) -> Self {
+        Self {
+            parent: (0..2 * faces).collect(),
+        }
+    }
+
+    fn find(&mut self, side: FaceSide) -> usize {
+        let mut at = side.index();
+        while self.parent[at] != at {
+            self.parent[at] = self.parent[self.parent[at]];
+            at = self.parent[at];
+        }
+        at
+    }
+
+    fn union(&mut self, a: FaceSide, b: FaceSide) {
+        let (a, b) = (self.find(a), self.find(b));
+        self.parent[a] = b;
+    }
+}
+
+/// One use of an edge by a face, placed around the edge.
+struct RadialUse {
+    face: usize,
+    /// The angle about the edge at which the face leaves it.
+    angle: f64,
+    /// Whether the face's front looks toward increasing angle.
+    front_toward_increasing: bool,
+}
+
+/// The solids `partitions` divide the closed `boundary` into.
+///
+/// Around every edge the faces meeting there are put in order, and two faces
+/// neighbouring across a wedge of material bound one region, each on its side
+/// toward that wedge. A partition with an edge nothing else meets, or with one
+/// region on both sides, divides nothing and leaves the list. A shell touching
+/// no partition (a cavity beside the walls) goes to the region holding it.
+///
+/// Returns no solids when nothing is divided.
+///
+/// # Errors
+///
+/// Returns [`AlgoError`] if the faces around an edge cannot be ordered, a wedge
+/// of material is bounded on one side only, or a region does not assemble.
+pub fn build_regions(
+    topo: &mut Topology,
+    boundary: &[SelectedFace],
+    partitions: &[SelectedFace],
+) -> Result<Vec<SolidId>, AlgoError> {
+    let wall_sources: HashSet<FaceId> = partitions.iter().map(|sf| sf.source_face).collect();
+    let mut face_ids: Vec<FaceId> = boundary
+        .iter()
+        .chain(partitions)
+        .map(|sf| sf.face_id)
+        .collect();
+    let mut sources: Vec<Option<FaceId>> = boundary
+        .iter()
+        .chain(partitions)
+        .map(|sf| Some(sf.source_face))
+        .collect();
+    separate_arcs_sharing_ends(topo, &mut face_ids)?;
+    unify_boundaries(topo, &mut face_ids, &mut sources)?;
+    drop_doubled_boundary_faces(topo, &mut face_ids, &mut sources, &wall_sources)?;
+    excise_out_and_back_spurs(topo, &mut face_ids, &mut sources);
+
+    let walls: Vec<bool> = sources
+        .iter()
+        .map(|source| source.is_some_and(|f| wall_sources.contains(&f)))
+        .collect();
+    let mut active = vec![true; walls.len()];
+    let mut loops: HashMap<usize, crate::classifier::FaceLoops2d> = HashMap::new();
+
+    let mut sets = loop {
+        drop_walls_with_free_edges(topo, &face_ids, &walls, &mut active)?;
+        if !active.iter().zip(&walls).any(|(&on, &wall)| on && wall) {
+            return Ok(Vec::new());
+        }
+        let mut sets = SideSets::new(face_ids.len());
+        join_sides_around_edges(topo, &face_ids, &walls, &active, &mut loops, &mut sets)?;
+        let mut divides_nothing = Vec::new();
+        for wall in (0..walls.len()).filter(|&i| walls[i] && active[i]) {
+            let front = FaceSide {
+                face: wall,
+                front: true,
+            };
+            let back = FaceSide {
+                face: wall,
+                front: false,
+            };
+            if sets.find(front) == sets.find(back) {
+                divides_nothing.push(wall);
+            }
+        }
+        if divides_nothing.is_empty() {
+            break sets;
+        }
+        for wall in divides_nothing {
+            active[wall] = false;
+        }
+    };
+
+    let mut face_source: HashMap<FaceId, Option<FaceId>> = face_ids
+        .iter()
+        .copied()
+        .zip(sources.iter().copied())
+        .collect();
+    let mut shells: BTreeMap<usize, Vec<FaceId>> = BTreeMap::new();
+    for (i, &fid) in face_ids.iter().enumerate() {
+        if !active[i] {
+            continue;
+        }
+        let back = sets.find(FaceSide {
+            face: i,
+            front: false,
+        });
+        shells.entry(back).or_default().push(fid);
+        if walls[i] {
+            let front = sets.find(FaceSide {
+                face: i,
+                front: true,
+            });
+            let turned = turned_copy(topo, fid)?;
+            face_source.insert(turned, sources[i]);
+            shells.entry(front).or_default().push(turned);
+        }
+    }
+
+    let (mut growth, mut holes) = (Vec::new(), Vec::new());
+    for shell in shells.into_values() {
+        if encloses_its_own_front(topo, &shell)? {
+            holes.push(shell);
+        } else {
+            growth.push(shell);
+        }
+    }
+    if growth.is_empty() {
+        return Err(AlgoError::AssemblyFailed(
+            "no region of a split closes outward".into(),
+        ));
+    }
+    let mut held: Vec<Vec<Vec<FaceId>>> = vec![Vec::new(); growth.len()];
+    for hole in holes {
+        let holder = region_holding(topo, &growth, &hole).ok_or_else(|| {
+            AlgoError::AssemblyFailed("a cavity lies in no region of a split".into())
+        })?;
+        held[holder].push(hole);
+    }
+    growth
+        .into_iter()
+        .zip(held)
+        .map(|(region, cavities)| assemble(topo, vec![region], cavities, &face_source))
+        .collect()
+}
+
+/// Whether the space in front of a shell's faces, away from its material, is
+/// what the shell closes in: a cavity's shell, rather than a region's outside.
+///
+/// Every face of a region's shell looks away from the material, so a step off
+/// one says it directly. [`perform_areas`] reads the sign of a corner fan, which
+/// on a ball's hemispheres, cornered only on their shared rim, is rounding.
+fn encloses_its_own_front(topo: &Topology, shell: &[FaceId]) -> Result<bool, AlgoError> {
+    let tol = brepkit_math::tolerance::Tolerance::new();
+    let reach = (shell_extent(topo, shell) * 1e-4).max(100.0 * tol.linear);
+    let geoms = crate::classifier::RayCastGeoms::of_faces(topo, shell)?;
+    for &fid in shell {
+        let Ok(on_face) = super::sample_face_interior(topo, fid, tol) else {
+            continue;
+        };
+        let Some(normal) = face_normal_at(topo, fid, on_face) else {
+            continue;
+        };
+        let Ok(normal) = normal.normalize() else {
+            continue;
+        };
+        let inside = HOLD_RAYS
+            .iter()
+            .filter(|&&d| {
+                crate::classifier::ray_parity_cached(&geoms, on_face + normal * reach, d).0
+            })
+            .count();
+        return Ok(inside >= 2);
+    }
+    Err(AlgoError::AssemblyFailed(
+        "no face of a region's shell gave a point to read it from".into(),
+    ))
+}
+
+/// The same face turned to face the other way, on the same wires.
+fn turned_copy(topo: &mut Topology, fid: FaceId) -> Result<FaceId, AlgoError> {
+    let face = topo.face(fid)?;
+    let (surface, outer, inner) = (
+        face.surface().clone(),
+        face.outer_wire(),
+        face.inner_wires().to_vec(),
+    );
+    let turned = if face.is_reversed() {
+        Face::new(outer, inner, surface)
+    } else {
+        Face::new_reversed(outer, inner, surface)
+    };
+    Ok(topo.add_face(turned))
+}
+
+/// The smallest of `regions` holding `shell`. A region on the shell's far side
+/// (a tool's closed sheet bounds a piece and the cavity it leaves) shares its
+/// edges, and rays from one of those say nothing.
+fn region_holding(topo: &Topology, regions: &[Vec<FaceId>], shell: &[FaceId]) -> Option<usize> {
+    let at = shell_edge_point(topo, shell)?;
+    let edges_of = |faces: &[FaceId]| -> HashSet<EdgeId> {
+        faces
+            .iter()
+            .filter_map(|&fid| face_edge_uses(topo, fid).ok())
+            .flatten()
+            .map(|(edge, _)| edge)
+            .collect()
+    };
+    let shell_edges = edges_of(shell);
+    regions
+        .iter()
+        .enumerate()
+        .filter(|(_, region)| {
+            edges_of(region).is_disjoint(&shell_edges)
+                && crate::classifier::RayCastGeoms::of_faces(topo, region).is_ok_and(|geoms| {
+                    HOLD_RAYS
+                        .iter()
+                        .filter(|&&d| crate::classifier::ray_parity_cached(&geoms, at, d).0)
+                        .count()
+                        >= 2
+                })
+        })
+        .min_by(|(_, a), (_, b)| shell_extent(topo, a).total_cmp(&shell_extent(topo, b)))
+        .map(|(i, _)| i)
+}
+
+/// [`remove_doubled_faces`] for the boundary alone, with one piece kept where
+/// two tools lie in one place.
+///
+/// A wall can share its whole outline with a boundary face (a disc across a
+/// ball's equator, on the rim of both hemispheres) or with a copy of itself.
+/// Neither pair is a doubled face to cancel.
+fn drop_doubled_boundary_faces(
+    topo: &Topology,
+    face_ids: &mut Vec<FaceId>,
+    sources: &mut Vec<Option<FaceId>>,
+    wall_sources: &HashSet<FaceId>,
+) -> Result<(), AlgoError> {
+    let is_wall = |source: &Option<FaceId>| source.is_some_and(|f| wall_sources.contains(&f));
+    let mut seen: HashSet<Vec<EdgeId>> = HashSet::new();
+    let mut walls: Vec<(FaceId, Option<FaceId>)> = Vec::new();
+    let mut boundary: Vec<FaceId> = Vec::with_capacity(face_ids.len());
+    let mut boundary_sources: Vec<Option<FaceId>> = Vec::with_capacity(face_ids.len());
+    for (&fid, &source) in face_ids.iter().zip(sources.iter()) {
+        if !is_wall(&source) {
+            boundary.push(fid);
+            boundary_sources.push(source);
+            continue;
+        }
+        let mut key: Vec<EdgeId> = face_edge_uses(topo, fid)?
+            .into_iter()
+            .map(|(edge, _)| edge)
+            .collect();
+        key.sort_by_key(|e| e.index());
+        // A plane holds one region inside one outline; a ball's hemispheres
+        // are two faces on one rim.
+        if !topo.face(fid)?.surface().is_planar() || seen.insert(key) {
+            walls.push((fid, source));
+        }
+    }
+    remove_doubled_faces(topo, &mut boundary, &mut boundary_sources);
+    for (fid, source) in walls {
+        boundary.push(fid);
+        boundary_sources.push(source);
+    }
+    *face_ids = boundary;
+    *sources = boundary_sources;
+    Ok(())
+}
+
+/// Every use of an edge by a face's wires, with its direction.
+fn face_edge_uses(topo: &Topology, fid: FaceId) -> Result<Vec<(EdgeId, bool)>, AlgoError> {
+    let face = topo.face(fid)?;
+    let mut uses = Vec::new();
+    for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+        for oe in topo.wire(wid)?.edges() {
+            uses.push((oe.edge(), oe.is_forward()));
+        }
+    }
+    Ok(uses)
+}
+
+/// Per edge index: the edge, and each use of it as a position in the face list
+/// with the direction the face's wire runs it.
+type EdgeUses = BTreeMap<usize, (EdgeId, Vec<(usize, bool)>)>;
+
+/// Each active face's uses of each edge, in a fixed order.
+fn edge_uses(topo: &Topology, face_ids: &[FaceId], active: &[bool]) -> Result<EdgeUses, AlgoError> {
+    let mut map = EdgeUses::new();
+    for (i, &fid) in face_ids.iter().enumerate() {
+        if active[i] {
+            for (edge, forward) in face_edge_uses(topo, fid)? {
+                map.entry(edge.index())
+                    .or_insert_with(|| (edge, Vec::new()))
+                    .1
+                    .push((i, forward));
+            }
+        }
+    }
+    Ok(map)
+}
+
+/// Remove walls having an edge no other face uses, until none has.
+fn drop_walls_with_free_edges(
+    topo: &Topology,
+    face_ids: &[FaceId],
+    walls: &[bool],
+    active: &mut [bool],
+) -> Result<(), AlgoError> {
+    loop {
+        let uses = edge_uses(topo, face_ids, active)?;
+        let mut any = false;
+        for (_, faces) in uses.values() {
+            if let [(only, _)] = faces[..]
+                && walls[only]
+            {
+                active[only] = false;
+                any = true;
+            }
+        }
+        if !any {
+            return Ok(());
+        }
+    }
+}
+
+/// Join the sides of active faces that bound one wedge of material at an edge.
+fn join_sides_around_edges(
+    topo: &Topology,
+    face_ids: &[FaceId],
+    walls: &[bool],
+    active: &[bool],
+    loops: &mut HashMap<usize, crate::classifier::FaceLoops2d>,
+    sets: &mut SideSets,
+) -> Result<(), AlgoError> {
+    for (edge, uses) in edge_uses(topo, face_ids, active)?.into_values() {
+        // A seam, or a whole ring's collapsed one: the face meets only itself.
+        if uses.iter().all(|&(face, _)| face == uses[0].0) {
+            continue;
+        }
+        if let [(a, _), (b, _)] = uses[..]
+            && !walls[a]
+            && !walls[b]
+        {
+            sets.union(
+                FaceSide {
+                    face: a,
+                    front: false,
+                },
+                FaceSide {
+                    face: b,
+                    front: false,
+                },
+            );
+            continue;
+        }
+        let Some(mut around) = order_around_edge(topo, face_ids, edge, &uses, loops)? else {
+            continue;
+        };
+        around.sort_by(|p, q| p.angle.total_cmp(&q.angle));
+        for k in 0..around.len() {
+            let (lo, hi) = (&around[k], &around[(k + 1) % around.len()]);
+            let toward_hi = FaceSide {
+                face: lo.face,
+                front: lo.front_toward_increasing,
+            };
+            let toward_lo = FaceSide {
+                face: hi.face,
+                front: !hi.front_toward_increasing,
+            };
+            let holds_material = |side: FaceSide| walls[side.face] || !side.front;
+            match (holds_material(toward_hi), holds_material(toward_lo)) {
+                (true, true) => sets.union(toward_hi, toward_lo),
+                (false, false) => {}
+                _ => {
+                    return Err(AlgoError::AssemblyFailed(format!(
+                        "material on one side only of a wedge at {edge:?}"
+                    )));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Each use of `edge` placed around it, or `None` for an edge of no length.
+///
+/// Where a face leaves the edge is read a small step off it, inside the face,
+/// not from its tangent plane: a wall tangent to a curved face along their
+/// shared edge parts from it only away from the edge.
+fn order_around_edge(
+    topo: &Topology,
+    face_ids: &[FaceId],
+    edge: EdgeId,
+    uses: &[(usize, bool)],
+    loops: &mut HashMap<usize, crate::classifier::FaceLoops2d>,
+) -> Result<Option<Vec<RadialUse>>, AlgoError> {
+    let edge_data = topo.edge(edge)?;
+    let (sp, ep) = (
+        topo.vertex(edge_data.start())?.point(),
+        topo.vertex(edge_data.end())?.point(),
+    );
+    let curve = edge_data.curve();
+    let (t0, t1) = curve.domain_with_endpoints(sp, ep);
+    let t_mid = 0.5 * (t0 + t1);
+    let mid = curve.evaluate_with_endpoints(t_mid, sp, ep);
+    let Ok(tangent) = curve.tangent_with_endpoints(t_mid, sp, ep).normalize() else {
+        return Ok(None);
+    };
+
+    let mut leaves: Vec<(usize, Vec3)> = Vec::with_capacity(uses.len());
+    for (k, &(face, forward)) in uses.iter().enumerate() {
+        let fid = face_ids[face];
+        let region = match loops.entry(face) {
+            std::collections::hash_map::Entry::Occupied(slot) => slot.into_mut(),
+            std::collections::hash_map::Entry::Vacant(slot) => {
+                slot.insert(crate::classifier::FaceLoops2d::new(topo, fid)?)
+            }
+        };
+        // A face on both sides of an edge (a seam) leaves it each way once.
+        let again = uses[..k].iter().filter(|&&(f, _)| f == face).count();
+        let along = AlongEdge {
+            edge,
+            mid,
+            tangent,
+            forward,
+        };
+        let Some(direction) = direction_into_face(topo, fid, region, &along, again)? else {
+            return Err(AlgoError::AssemblyFailed(format!(
+                "could not tell which way {fid:?} leaves {edge:?}"
+            )));
+        };
+        leaves.push((face, direction));
+    }
+    let Some(&(_, x)) = leaves.first() else {
+        return Ok(None);
+    };
+    let y = tangent.cross(x);
+    let mut around = Vec::with_capacity(leaves.len());
+    for (face, direction) in leaves {
+        let normal = face_normal_at(topo, face_ids[face], mid).ok_or_else(|| {
+            AlgoError::AssemblyFailed(format!("no normal for {:?} at {edge:?}", face_ids[face]))
+        })?;
+        around.push(RadialUse {
+            face,
+            angle: direction
+                .dot(y)
+                .atan2(direction.dot(x))
+                .rem_euclid(std::f64::consts::TAU),
+            front_toward_increasing: tangent.cross(direction).dot(normal) > 0.0,
+        });
+    }
+    let mut angles: Vec<f64> = around.iter().map(|u| u.angle).collect();
+    angles.sort_by(f64::total_cmp);
+    if angles.windows(2).any(|w| w[1] - w[0] < RADIAL_TIE) {
+        return Err(AlgoError::AssemblyFailed(format!(
+            "faces around {edge:?} leave it together"
+        )));
+    }
+    Ok(Some(around))
+}
+
+/// Two faces leaving an edge closer than this cannot be ordered around it.
+const RADIAL_TIE: f64 = 1e-9;
+
+/// Where and how a face's wire runs one of its edges.
+struct AlongEdge {
+    edge: EdgeId,
+    mid: Point3,
+    tangent: Vec3,
+    forward: bool,
+}
+
+/// The unit direction, square to the edge, in which `fid` leaves the point
+/// `mid` of its boundary. `again` counts the face's earlier uses of this edge:
+/// a seam's second use takes the other way.
+///
+/// A face bounded by loops running right round its surface (a ball's
+/// hemisphere, a band between two latitudes) has no polygon in its parameters
+/// to hold a point. The rest of its boundary lies to one side of the edge, and
+/// failing that, with the whole boundary in one loop, its wire says: the face
+/// lies to the left, seen from outside.
+fn direction_into_face(
+    topo: &Topology,
+    fid: FaceId,
+    region: &crate::classifier::FaceLoops2d,
+    along: &AlongEdge,
+    again: usize,
+) -> Result<Option<Vec3>, AlgoError> {
+    let AlongEdge {
+        edge,
+        mid,
+        tangent,
+        forward,
+    } = *along;
+    let face = topo.face(fid)?;
+    let raw = match face.surface() {
+        FaceSurface::Plane { normal, .. } => *normal,
+        surface => {
+            let Some((u, v)) = surface.project_point(mid) else {
+                return Ok(None);
+            };
+            surface.normal(u, v)
+        }
+    };
+    let Ok(across) = raw.cross(tangent).normalize() else {
+        return Ok(None);
+    };
+    let extent = Vec3::new(
+        region.aabb[3] - region.aabb[0],
+        region.aabb[4] - region.aabb[1],
+        region.aabb[5] - region.aabb[2],
+    )
+    .length();
+    let probe = |step: f64| {
+        let q = region.to_uv(mid + across * step)?;
+        if !region.contains(q) {
+            return None;
+        }
+        let along = region.to_3d(q)? - mid;
+        (along - tangent * along.dot(tangent)).normalize().ok()
+    };
+    for fraction in [1e-3, 1e-4, 1e-5] {
+        let step = fraction * extent;
+        match (probe(step), probe(-step)) {
+            (Some(plus), Some(minus)) => {
+                return Ok(Some(if again.is_multiple_of(2) { plus } else { minus }));
+            }
+            (Some(one), None) | (None, Some(one)) => return Ok(Some(one)),
+            (None, None) => {}
+        }
+    }
+
+    let (mut most, mut least) = (0.0_f64, 0.0_f64);
+    for (other, _) in face_edge_uses(topo, fid)? {
+        if other == edge {
+            continue;
+        }
+        let data = topo.edge(other)?;
+        let (sp, ep) = (
+            topo.vertex(data.start())?.point(),
+            topo.vertex(data.end())?.point(),
+        );
+        let (t0, t1) = data.curve().domain_with_endpoints(sp, ep);
+        for k in 0..=8_u32 {
+            let t = (t1 - t0).mul_add(f64::from(k) / 8.0, t0);
+            let lean = (data.curve().evaluate_with_endpoints(t, sp, ep) - mid).dot(across);
+            most = most.max(lean);
+            least = least.min(lean);
+        }
+    }
+    let clear = 1e-3 * extent;
+    if most > clear && least > -clear {
+        return Ok(Some(across));
+    }
+    if least < -clear && most < clear {
+        return Ok(Some(-across));
+    }
+    let outward = if face.is_reversed() { -raw } else { raw };
+    let running = if forward { tangent } else { -tangent };
+    Ok(outward.cross(running).normalize().ok())
 }
 
 // ── Phase 1 ──────────────────────────────────────────────────────────
@@ -3009,8 +3614,97 @@ fn split_arc_edges_at_collinear_vertices(
         return Ok(());
     }
     let split_count = replacements.len();
+    replace_edges(topo, face_ids, &replacements)?;
+    log::debug!("split_arc_edges_at_collinear_vertices: split {split_count} arcs");
+    Ok(())
+}
 
-    // Rebuild faces whose wires reference a split arc.
+/// Split each curved edge in two where another curved edge joins the same two
+/// points along a different path.
+///
+/// A boolean keeps one side of a section, but an imprint keeps every piece, so a
+/// closed rim cut once beside its seam, or a ball's equator cut across, reaches
+/// assembly as two arcs [`merge_duplicate_edges`] would take for one edge.
+///
+/// # Errors
+///
+/// Returns [`AlgoError`] on a topology lookup failure.
+pub fn separate_arcs_sharing_ends(
+    topo: &mut Topology,
+    face_ids: &mut [FaceId],
+) -> Result<(), AlgoError> {
+    use brepkit_topology::edge::{Edge, EdgeCurve};
+    use brepkit_topology::vertex::Vertex;
+
+    let mut seen: HashSet<EdgeId> = HashSet::new();
+    let mut groups: BTreeMap<VPair, Vec<(EdgeId, Point3)>> = BTreeMap::new();
+    for &fid in face_ids.iter() {
+        for (edge_id, _) in face_edge_uses(topo, fid)? {
+            let edge = topo.edge(edge_id)?;
+            if !seen.insert(edge_id)
+                || matches!(edge.curve(), EdgeCurve::Line)
+                || edge.start() == edge.end()
+            {
+                continue;
+            }
+            let (sp, ep) = (
+                topo.vertex(edge.start())?.point(),
+                topo.vertex(edge.end())?.point(),
+            );
+            let (qs, qe) = (quantize_point(sp, MERGE_TOL), quantize_point(ep, MERGE_TOL));
+            let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
+            let mid = edge
+                .curve()
+                .evaluate_with_endpoints(0.5 * (t0 + t1), sp, ep);
+            groups
+                .entry(if qs <= qe { (qs, qe) } else { (qe, qs) })
+                .or_default()
+                .push((edge_id, mid));
+        }
+    }
+
+    let mut replacements: HashMap<EdgeId, Vec<OrientedEdge>> = HashMap::new();
+    for group in groups.values() {
+        let Some(&(_, first)) = group.first() else {
+            continue;
+        };
+        if group
+            .iter()
+            .all(|&(_, mid)| (mid - first).length() <= MERGE_TOL * 10.0)
+        {
+            continue;
+        }
+        let mut placed: Vec<(Point3, brepkit_topology::vertex::VertexId)> = Vec::new();
+        for &(edge_id, mid) in group {
+            let found = placed
+                .iter()
+                .find(|(at, _)| (*at - mid).length() <= MERGE_TOL * 10.0)
+                .map(|&(_, vertex)| vertex);
+            let middle = found.unwrap_or_else(|| {
+                let vertex = topo.add_vertex(Vertex::new(mid, MERGE_TOL));
+                placed.push((mid, vertex));
+                vertex
+            });
+            let edge = topo.edge(edge_id)?;
+            let (start, end, curve) = (edge.start(), edge.end(), edge.curve().clone());
+            let head = topo.add_edge(Edge::new(start, middle, curve.clone()));
+            let tail = topo.add_edge(Edge::new(middle, end, curve));
+            replacements.insert(
+                edge_id,
+                vec![OrientedEdge::new(head, true), OrientedEdge::new(tail, true)],
+            );
+        }
+    }
+    replace_edges(topo, face_ids, &replacements)
+}
+
+/// Rebuild the faces whose wires use a replaced edge, each replaced by its
+/// chain of pieces in the edge's own direction.
+fn replace_edges(
+    topo: &mut Topology,
+    face_ids: &mut [FaceId],
+    replacements: &HashMap<EdgeId, Vec<OrientedEdge>>,
+) -> Result<(), AlgoError> {
     for fid in face_ids.iter_mut() {
         let (surface, is_reversed, outer_oes, inner_oes_list) = {
             let face = topo.face(*fid)?;
@@ -3080,9 +3774,6 @@ fn split_arc_edges_at_collinear_vertices(
         }
         *fid = topo.add_face(new_face);
     }
-
-    log::debug!("split_arc_edges_at_collinear_vertices: split {split_count} arcs");
-
     Ok(())
 }
 
@@ -3142,16 +3833,21 @@ fn merge_duplicate_edges(topo: &mut Topology, face_ids: &mut [FaceId]) -> Result
         if qs != qe {
             return true;
         }
-        let zero_length_lines = edge_ids.iter().all(|&e| {
-            topo.edge(e)
+        let is_line = |e: &EdgeId| {
+            topo.edge(*e)
                 .is_ok_and(|edge| matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Line))
-        });
+        };
+        // A closed curve starting on such a seam's vertex is no copy of it.
+        if !edge_ids.iter().all(is_line) {
+            edge_ids.retain(|e| !is_line(e));
+            return true;
+        }
         let mut faces = entries
             .iter()
             .filter(|entry| edge_ids.contains(&entry.edge_id))
             .map(|entry| entry.face_idx);
         let first = faces.next();
-        !(zero_length_lines && faces.all(|f| Some(f) == first))
+        !faces.all(|f| Some(f) == first)
     });
 
     // A ball's equator is chords standing for arcs of its circle. Where a

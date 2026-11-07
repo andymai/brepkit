@@ -533,6 +533,7 @@ impl Builder {
             &self.arena,
             &edge_images,
             &self.face_ranks,
+            false,
             self.tol,
         );
         if let Some(face) = unsplit.first() {
@@ -1012,8 +1013,14 @@ pub fn build_fuse_n<S: std::hash::BuildHasher>(
     // is correct for all of them (see the doc comment).
     let edge_images = fill_images::fill_edge_images(&arena);
     let all_a_ranks: HashMap<FaceId, Rank> = face_source.keys().map(|&f| (f, Rank::A)).collect();
-    let (sub_faces, unsplit, whole) =
-        fill_images_faces::fill_images_faces(&mut topo, &arena, &edge_images, &all_a_ranks, tol);
+    let (sub_faces, unsplit, whole) = fill_images_faces::fill_images_faces(
+        &mut topo,
+        &arena,
+        &edge_images,
+        &all_a_ranks,
+        false,
+        tol,
+    );
     if let Some(face) = unsplit.first() {
         return Err(AlgoError::FaceSplitFailed(format!(
             "face {face:?} is cut by sections but split into nothing"
@@ -1129,6 +1136,191 @@ pub fn build_fuse_n<S: std::hash::BuildHasher>(
 
     let solid_id = assemble::assemble_solid(&mut topo, &selected, &[])?;
     Ok((topo, solid_id))
+}
+
+/// Split `body`'s faces along the arena's sections and keep every piece.
+///
+/// # Errors
+///
+/// Returns [`AlgoError`] if a face cannot be split or assembly fails.
+pub fn build_imprint(
+    mut topo: Topology,
+    arena: &GfaArena,
+    body: SolidId,
+    tol: Tolerance,
+) -> Result<(Topology, SolidId), AlgoError> {
+    if arena_is_untouched(arena) {
+        return Ok((topo, body));
+    }
+    let edge_images = fill_images::fill_edge_images(arena);
+    let ranks: HashMap<FaceId, Rank> = brepkit_topology::explorer::solid_faces(&topo, body)?
+        .into_iter()
+        .map(|face| (face, Rank::A))
+        .collect();
+    let (sub_faces, unsplit, whole) =
+        fill_images_faces::fill_images_faces(&mut topo, arena, &edge_images, &ranks, true, tol);
+    refuse_unsplit(&unsplit, &whole)?;
+    let solid = assemble_pieces(&mut topo, &select_all(&sub_faces))?;
+    Ok((topo, solid))
+}
+
+/// Split `sources[0]` by the tool faces in `sources[1..]` into the regions they
+/// wall off, or into one imprinted solid when no region is walled off.
+///
+/// # Errors
+///
+/// Returns [`AlgoError`] if a face cannot be split, a tool piece cannot be
+/// classified, or assembly fails.
+pub fn build_split_by_faces(
+    mut topo: Topology,
+    arena: &GfaArena,
+    sources: &[SolidId],
+    tol: Tolerance,
+) -> Result<(Topology, Vec<SolidId>), AlgoError> {
+    let Some((&body, tools)) = sources.split_first() else {
+        return Err(AlgoError::AssemblyFailed(
+            "a split by faces needs a solid".into(),
+        ));
+    };
+    let edge_images = fill_images::fill_edge_images(arena);
+    let mut ranks: HashMap<FaceId, Rank> = HashMap::new();
+    for face in brepkit_topology::explorer::solid_faces(&topo, body)? {
+        ranks.insert(face, Rank::A);
+    }
+    for &tool in tools {
+        for face in brepkit_topology::explorer::solid_faces(&topo, tool)? {
+            ranks.insert(face, Rank::B);
+        }
+    }
+    let (sub_faces, unsplit, whole) =
+        fill_images_faces::fill_images_faces(&mut topo, arena, &edge_images, &ranks, true, tol);
+    refuse_unsplit(&unsplit, &whole)?;
+
+    let (boundary, tool_pieces): (Vec<SubFace>, Vec<SubFace>) = sub_faces
+        .into_iter()
+        .partition(|sub_face| sub_face.rank == Rank::A);
+    let geoms = classifier::RayCastGeoms::new(&topo, body).ok();
+    let probe = classifier::BoundaryProbe::new(&topo, body)?;
+    let mut inside = Vec::new();
+    for piece in &tool_pieces {
+        if piece_lies_inside(&topo, body, geoms.as_ref(), &probe, piece, tol)? {
+            inside.push(piece.clone());
+        }
+    }
+
+    if inside.is_empty() && arena_is_untouched(arena) {
+        return Ok((topo, vec![body]));
+    }
+    let boundary = select_all(&boundary);
+    if !inside.is_empty() {
+        let regions = builder_solid::build_regions(&mut topo, &boundary, &select_all(&inside))?;
+        if regions.len() > 1 {
+            return Ok((topo, regions));
+        }
+    }
+    let solid = assemble_pieces(&mut topo, &boundary)?;
+    Ok((topo, vec![solid]))
+}
+
+/// One solid from every piece of its faces.
+fn assemble_pieces(
+    topo: &mut Topology,
+    selected: &[bop::SelectedFace],
+) -> Result<SolidId, AlgoError> {
+    let mut faces: Vec<FaceId> = selected.iter().map(|piece| piece.face_id).collect();
+    builder_solid::separate_arcs_sharing_ends(topo, &mut faces)?;
+    let selected: Vec<bop::SelectedFace> = faces
+        .into_iter()
+        .zip(selected)
+        .map(|(face_id, piece)| bop::SelectedFace {
+            face_id,
+            source_face: piece.source_face,
+            reversed: piece.reversed,
+        })
+        .collect();
+    assemble::assemble_solid(topo, &selected, &[])
+}
+
+/// No phase found anything between the solid and its tools.
+fn arena_is_untouched(arena: &GfaArena) -> bool {
+    let found = &arena.interference;
+    arena.curves.is_empty()
+        && found.vv.is_empty()
+        && found.ve.is_empty()
+        && found.ee.is_empty()
+        && found.vf.is_empty()
+        && found.ef.is_empty()
+        && found.ff.is_empty()
+}
+
+/// An imprint keeps every piece of a face without classifying it, so a face its
+/// sections could not split, or that stands whole across one, would come back
+/// looking finished with the imprint missing.
+fn refuse_unsplit(unsplit: &[FaceId], whole: &[(FaceId, Point3, Point3)]) -> Result<(), AlgoError> {
+    let face = unsplit
+        .first()
+        .copied()
+        .or_else(|| whole.first().map(|&(face, _, _)| face));
+    match face {
+        Some(face) => Err(AlgoError::FaceSplitFailed(format!(
+            "face {face:?} is cut by sections but split into nothing"
+        ))),
+        None => Ok(()),
+    }
+}
+
+fn select_all(sub_faces: &[SubFace]) -> Vec<bop::SelectedFace> {
+    sub_faces
+        .iter()
+        .map(|sub_face| bop::SelectedFace {
+            face_id: sub_face.face_id,
+            source_face: sub_face.source_face,
+            reversed: false,
+        })
+        .collect()
+}
+
+/// Whether a piece of a tool face lies strictly inside the solid, off its
+/// boundary: a piece lying on one of the solid's faces is no wall.
+fn piece_lies_inside(
+    topo: &Topology,
+    body: SolidId,
+    geoms: Option<&classifier::RayCastGeoms>,
+    probe: &classifier::BoundaryProbe,
+    piece: &SubFace,
+    tol: Tolerance,
+) -> Result<bool, AlgoError> {
+    let sample = if let Some(point) = piece.interior_point {
+        point
+    } else if piece.interior_unclear {
+        return Err(AlgoError::ClassificationFailed(format!(
+            "no point of {:?} stands clear of its curves",
+            piece.face_id
+        )));
+    } else {
+        sample_face_interior(topo, piece.face_id, tol)?
+    };
+    let reads = |point: Point3| -> Result<Option<bool>, AlgoError> {
+        if probe.point_on_boundary(point, tol.linear) {
+            return Ok(None);
+        }
+        Ok(
+            match classifier::classify_point_cached(topo, body, geoms, point)? {
+                FaceClass::Inside => Some(true),
+                FaceClass::Outside => Some(false),
+                _ => None,
+            },
+        )
+    };
+    if let Some(inside) = reads(sample)? {
+        return Ok(inside);
+    }
+    for point in face_interior_candidates(topo, piece.face_id, sample, tol)? {
+        if let Some(inside) = reads(point)? {
+            return Ok(inside);
+        }
+    }
+    Ok(false)
 }
 
 /// The class of a sub-face lying on the opposing solid's boundary, from the

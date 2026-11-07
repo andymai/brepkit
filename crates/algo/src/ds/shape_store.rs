@@ -160,27 +160,124 @@ impl GfaShapeStoreN {
     }
 }
 
+/// Isolated store for imprinting tools onto a solid.
+///
+/// `sources[0]` is the solid. Each group of tool faces follows as an open
+/// shell in a solid of its own: the pave filler reads a shell's faces and
+/// leaves closure to the builder, and only faces in different sources are
+/// intersected with each other. Tool edges have no face to live on and stay
+/// loose in the store.
+pub struct GfaImprintStore {
+    /// The store's own topology arena.
+    pub topo: Topology,
+    /// The solid first, then one open-shell source per group of tool faces.
+    pub sources: Vec<SolidId>,
+    /// Store-local copies of the tool edges.
+    pub tool_edges: Vec<EdgeId>,
+}
+
+impl GfaImprintStore {
+    /// Deep-copy `solid`, `tool_faces` and `tool_edges` into one topology.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AlgoError`] if any topology lookup fails.
+    pub fn new(
+        source: &Topology,
+        solid: SolidId,
+        tool_faces: &[Vec<FaceId>],
+        tool_edges: &[EdgeId],
+    ) -> Result<Self, AlgoError> {
+        let mut topo = Topology::default();
+        let mut sources = Vec::with_capacity(1 + tool_faces.len());
+
+        let (body, _) = deep_copy_solid(source, &mut topo, solid)?;
+        widen_tolerances(&mut topo, body)?;
+        sources.push(body);
+
+        for group in tool_faces {
+            let (tool, _) = copy_shells(source, &mut topo, std::slice::from_ref(group))?;
+            widen_tolerances(&mut topo, tool)?;
+            sources.push(tool);
+        }
+
+        let mut edges = Vec::with_capacity(tool_edges.len());
+        for &edge_id in tool_edges {
+            edges.push(copy_edge(source, &mut topo, edge_id)?);
+        }
+
+        Ok(Self {
+            topo,
+            sources,
+            tool_edges: edges,
+        })
+    }
+
+    /// Export a result solid from this store back to the caller's topology.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AlgoError`] if any topology lookup fails.
+    pub fn export_solid(
+        &self,
+        target: &mut Topology,
+        solid_id: SolidId,
+    ) -> Result<SolidId, AlgoError> {
+        Ok(deep_copy_solid(&self.topo, target, solid_id)?.0)
+    }
+}
+
+/// Copy one edge and its vertices, a closed edge keeping its single vertex.
+fn copy_edge(
+    source: &Topology,
+    target: &mut Topology,
+    edge_id: EdgeId,
+) -> Result<EdgeId, AlgoError> {
+    let edge = source.edge(edge_id)?;
+    let start = source.vertex(edge.start())?;
+    let new_start = target.add_vertex(Vertex::new(start.point(), start.tolerance()));
+    let new_end = if edge.start() == edge.end() {
+        new_start
+    } else {
+        let end = source.vertex(edge.end())?;
+        target.add_vertex(Vertex::new(end.point(), end.tolerance()))
+    };
+    Ok(target.add_edge(Edge::with_tolerance(
+        new_start,
+        new_end,
+        edge.curve().clone(),
+        edge.tolerance(),
+    )))
+}
+
 /// Deep-copy a solid from `source` topology into `target` topology.
 ///
 /// Creates new vertices, edges, wires, faces, shells, and solid in `target`
 /// with remapped IDs. Returns the new SolidId.
-///
-/// Uses the snapshot-then-allocate pattern to satisfy the borrow checker.
-#[allow(clippy::too_many_lines, clippy::items_after_statements)]
 fn deep_copy_solid(
     source: &Topology,
     target: &mut Topology,
     solid_id: SolidId,
 ) -> Result<(SolidId, HashMap<usize, FaceId>), AlgoError> {
-    // ── Snapshot phase ──────────────────────────────────────────────
-
     let solid = source.solid(solid_id)?;
-    let outer_shell_id = solid.outer_shell();
-    let inner_shell_ids: Vec<_> = solid.inner_shells().to_vec();
+    let shells = std::iter::once(solid.outer_shell())
+        .chain(solid.inner_shells().iter().copied())
+        .map(|shell_id| Ok(source.shell(shell_id)?.faces().to_vec()))
+        .collect::<Result<Vec<_>, AlgoError>>()?;
+    copy_shells(source, target, &shells)
+}
 
-    let all_shell_ids: Vec<_> = std::iter::once(outer_shell_id)
-        .chain(inner_shell_ids.iter().copied())
-        .collect();
+/// Copy `shells`, each a list of faces, into `target` as one solid whose first
+/// shell is the outer one.
+///
+/// Uses the snapshot-then-allocate pattern to satisfy the borrow checker.
+#[allow(clippy::too_many_lines, clippy::items_after_statements)]
+fn copy_shells(
+    source: &Topology,
+    target: &mut Topology,
+    shells: &[Vec<FaceId>],
+) -> Result<(SolidId, HashMap<usize, FaceId>), AlgoError> {
+    // ── Snapshot phase ──────────────────────────────────────────────
 
     struct VertexSnap {
         old_index: usize,
@@ -219,11 +316,10 @@ fn deep_copy_solid(
     let mut seen_edges = std::collections::HashSet::new();
     let mut seen_wires = std::collections::HashSet::new();
 
-    for &shell_id in &all_shell_ids {
-        let shell = source.shell(shell_id)?;
+    for shell in shells {
         let mut face_snaps = Vec::new();
 
-        for &face_id in shell.faces() {
+        for &face_id in shell {
             let face = source.face(face_id)?;
             let surface = face.surface().clone();
             let outer_wire_index = face.outer_wire().index();

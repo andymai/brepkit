@@ -5,11 +5,13 @@
 
 use brepkit_math::tolerance::Tolerance;
 use brepkit_topology::Topology;
+use brepkit_topology::edge::EdgeId;
+use brepkit_topology::face::FaceId;
 use brepkit_topology::solid::SolidId;
 
 use crate::bop::BooleanOp;
 use crate::builder::Builder;
-use crate::ds::{GfaArena, GfaShapeStoreN};
+use crate::ds::{GfaArena, GfaImprintStore, GfaShapeStoreN};
 use crate::error::AlgoError;
 use crate::pave_filler;
 
@@ -151,6 +153,140 @@ pub fn fuse_n(topo: &mut Topology, sources: &[SolidId]) -> Result<SolidId, AlgoE
             store.export_solid(topo, store_result)
         }
     }
+}
+
+/// A copy of `solid` with its faces split along where the tools meet them.
+///
+/// A tool face is intersected as an open shell: the pave filler reads its
+/// faces and asks nothing of closure, which only a boolean's classification
+/// would need. Every piece of the solid's faces is kept. A section that
+/// separates no two regions of a face (it ends inside the face, or joins two
+/// of its boundaries only once) leaves the face whole.
+///
+/// # Errors
+///
+/// Returns [`AlgoError`] if a face cannot be split along its sections or the
+/// pieces do not assemble.
+pub fn imprint(
+    topo: &mut Topology,
+    solid: SolidId,
+    tool_faces: &[FaceId],
+    tool_edges: &[EdgeId],
+) -> Result<SolidId, AlgoError> {
+    let tol = Tolerance::default();
+    let groups: Vec<Vec<FaceId>> = if tool_faces.is_empty() {
+        Vec::new()
+    } else {
+        vec![tool_faces.to_vec()]
+    };
+    let mut store = GfaImprintStore::new(topo, solid, &groups, tool_edges)?;
+    let mut arena = GfaArena::new();
+    pave_filler::run_pave_filler_with_edges(
+        &mut store.topo,
+        &store.sources,
+        &store.tool_edges,
+        tol,
+        &mut arena,
+    )?;
+    let (store_topo, result) = crate::builder::build_imprint(
+        std::mem::take(&mut store.topo),
+        &arena,
+        store.sources[0],
+        tol,
+    )?;
+    store.topo = store_topo;
+    store.export_solid(topo, result)
+}
+
+/// `solid` in the pieces `tool_faces` separate it into.
+///
+/// A piece of a tool strictly inside the solid and bounded all around, by the
+/// solid's faces or by other such pieces, is a wall between two regions, and
+/// each region becomes a solid. A tool that divides nothing imprints instead;
+/// with no walls at all the result is one solid.
+///
+/// Each tool cuts the pieces the ones before it left, so tools that cross each
+/// other never meet on a face. Those that separated nothing alone then go
+/// together, for the walls only they close between them, meeting along shared
+/// sections as sources of their own.
+///
+/// # Errors
+///
+/// Returns [`AlgoError`] if a face cannot be split along its sections or the
+/// pieces do not assemble.
+pub fn split_by_faces(
+    topo: &mut Topology,
+    solid: SolidId,
+    tool_faces: &[FaceId],
+) -> Result<Vec<SolidId>, AlgoError> {
+    let tol = Tolerance::default();
+    let groups: Vec<Vec<FaceId>> = tool_faces.iter().map(|&f| vec![f]).collect();
+    let mut scratch = GfaImprintStore::new(topo, solid, &groups, &[])?;
+    let (body, tool_sources) = scratch
+        .sources
+        .split_first()
+        .map(|(&body, tools)| (body, tools.to_vec()))
+        .ok_or_else(|| AlgoError::AssemblyFailed("a split by faces needs a solid".into()))?;
+    let mut tools = Vec::with_capacity(tool_sources.len());
+    for source in tool_sources {
+        tools.extend(brepkit_topology::explorer::solid_faces(
+            &scratch.topo,
+            source,
+        )?);
+    }
+
+    let mut pieces = vec![body];
+    let mut together = Vec::new();
+    for &tool in &tools {
+        let (next, separated) = split_each(&mut scratch.topo, &pieces, &[tool], tol)?;
+        pieces = next;
+        if !separated {
+            together.push(tool);
+        }
+    }
+    if together.len() > 1 {
+        pieces = split_each(&mut scratch.topo, &pieces, &together, tol)?.0;
+    }
+    pieces
+        .into_iter()
+        .map(|piece| scratch.export_solid(topo, piece))
+        .collect()
+}
+
+/// Split each of `pieces` by all of `tools` at once, and say whether any came
+/// apart.
+fn split_each(
+    topo: &mut Topology,
+    pieces: &[SolidId],
+    tools: &[FaceId],
+    tol: Tolerance,
+) -> Result<(Vec<SolidId>, bool), AlgoError> {
+    let groups: Vec<Vec<FaceId>> = tools.iter().map(|&f| vec![f]).collect();
+    let mut next = Vec::with_capacity(pieces.len());
+    let mut separated = false;
+    for &piece in pieces {
+        let mut store = GfaImprintStore::new(topo, piece, &groups, &[])?;
+        let mut arena = GfaArena::new();
+        pave_filler::run_pave_filler_with_edges(
+            &mut store.topo,
+            &store.sources,
+            &[],
+            tol,
+            &mut arena,
+        )?;
+        let (store_topo, parts) = crate::builder::build_split_by_faces(
+            std::mem::take(&mut store.topo),
+            &arena,
+            &store.sources,
+            tol,
+        )?;
+        store.topo = store_topo;
+        separated |= parts.len() > 1;
+        for part in parts {
+            next.push(store.export_solid(topo, part)?);
+        }
+    }
+    Ok((next, separated))
 }
 
 /// Run a GFA boolean, also returning each result face's provenance.
