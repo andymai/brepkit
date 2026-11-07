@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794059290618,
+  "lastUpdate": 1794060525052,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -65717,6 +65717,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 27994008,
             "range": "± 42196",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "0ffc2a13d497414cffb7284401b1cfde5935ccab",
+          "message": "fix(blend): run a straight round's ends on to tilted end faces (#2309)\n\nCo-authored-by: Eric Vaughan <eric.d.vaughan@gmail.com>",
+          "timestamp": "2026-11-07T06:06:06-08:00",
+          "tree_id": "6d027762fc59458450039565f644d78188523aa6",
+          "url": "https://github.com/andymai/brepkit/commit/0ffc2a13d497414cffb7284401b1cfde5935ccab"
+        },
+        "date": 1794060518172,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 623157,
+            "range": "± 7705",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 671832,
+            "range": "± 7244",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 8097,
+            "range": "± 44",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 398713,
+            "range": "± 6760",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 17333877,
+            "range": "± 125083",
             "unit": "ns/iter"
           }
         ]
