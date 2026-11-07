@@ -545,7 +545,8 @@ pub fn notch_face_corner_with_arc(
 }
 
 /// The wire's edges with its two-edge corner path `va -> corner -> vb`
-/// replaced by the arc, or `None` when the wire has no such path.
+/// replaced by the arc, or `None` when the wire has no such path. The
+/// path's edges are lines or B-splines (a spline wall's rim).
 fn notched_wire_edges(
     topo: &Topology,
     wire_id: brepkit_topology::wire::WireId,
@@ -585,11 +586,13 @@ fn notched_wire_edges(
         if !(fwd || rev) {
             continue;
         }
-        let both_straight = [oes[i].edge(), oes[j].edge()].iter().all(|&eid| {
+        // The section arc notches straight corner edges, or B-splines (a
+        // spline wall's rim), only.
+        let notchable_corner = [oes[i].edge(), oes[j].edge()].iter().all(|&eid| {
             topo.edge(eid)
-                .is_ok_and(|e| matches!(e.curve(), EdgeCurve::Line))
+                .is_ok_and(|e| matches!(e.curve(), EdgeCurve::Line | EdgeCurve::NurbsCurve(_)))
         });
-        if !both_straight {
+        if !notchable_corner {
             continue;
         }
         // The arc is the blend's own cross-section circle at this cap: the
