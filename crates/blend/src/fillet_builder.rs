@@ -2234,7 +2234,13 @@ fn assemble_closed_rim(
             BoundaryOwner::planned("closed-rim torus band", wall_sense),
         ],
     )?;
-    let seam_edge = topo.add_edge(Edge::new(plate_v, wall_v, EdgeCurve::Line));
+    let seam_curve = crate::builder_utils::seam_curve(
+        &stripe.surface,
+        &stripe.sections,
+        topo.vertex(plate_v)?.point(),
+        topo.vertex(wall_v)?.point(),
+    );
+    let seam_edge = topo.add_edge(Edge::new(plate_v, wall_v, seam_curve));
     let cap_boundary = registry.oriented_edge(topo, plate_handle, 0)?;
     let cap_wire = Wire::new(vec![cap_boundary], true)?;
     let cap_wire_id = topo.add_wire(cap_wire);
