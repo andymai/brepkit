@@ -1,11 +1,14 @@
 //! Draft angle operation for injection molding applications.
 //!
-//! Tapers selected planar faces of a solid relative to a pull direction by
-//! turning each face's plane about its neutral line and re-solving the
-//! vertices it moves, so the solid keeps its topology.
+//! Tapers selected faces of a solid relative to a pull direction by turning
+//! each plane about its neutral line, and each cylinder running along the pull
+//! into the cone through its neutral circle, then re-solving the vertices they
+//! move, so the solid keeps its topology.
 
 use std::collections::{HashMap, HashSet};
 
+use brepkit_math::curves::Circle3D;
+use brepkit_math::surfaces::ConicalSurface;
 use brepkit_math::tolerance::Tolerance;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
@@ -17,26 +20,60 @@ use brepkit_topology::vertex::VertexId;
 
 use crate::dot_normal_point;
 
-/// Apply a draft angle to selected planar faces of a solid.
+/// A drafted cylinder wall: the cone it becomes, read along the pull from the
+/// neutral plane.
+#[derive(Clone, Copy)]
+struct DraftedWall {
+    /// Where the axis meets the neutral plane.
+    axis_point: Point3,
+    /// The radius at the neutral plane.
+    radius: f64,
+    /// How fast the radius grows along the pull.
+    slope: f64,
+}
+
+impl DraftedWall {
+    fn radius_at(&self, height: f64) -> f64 {
+        self.slope.mul_add(height, self.radius)
+    }
+
+    /// The cone, its axis running from its apex toward its wider end.
+    fn cone(&self, pull: Vec3) -> Result<ConicalSurface, crate::OperationsError> {
+        let apex = self.axis_point + pull * (-self.radius / self.slope);
+        let axis = if self.slope < 0.0 { -pull } else { pull };
+        Ok(ConicalSurface::new(
+            apex,
+            axis,
+            self.slope.abs().recip().atan(),
+        )?)
+    }
+}
+
+/// Apply a draft angle to selected planar faces and cylinder walls of a solid.
 ///
 /// Each drafted face turns about its neutral line (where it crosses the
 /// neutral plane through `neutral_point` normal to `pull_direction`) until
 /// its outward normal `n` satisfies `n · pull = sin(angle)`: with a positive
 /// angle the face leans in toward the pull direction above the neutral
-/// plane and out below it, so the part releases along the pull. Every
-/// vertex of a drafted face moves to the meeting point of the planes around
-/// it; the rest of the solid, its faces and its topology are unchanged. The
-/// input solid is left as it was and the drafted copy returned.
+/// plane and out below it, so the part releases along the pull. A drafted
+/// cylinder turns into the cone that leans the same way through its circle
+/// on the neutral plane. Every vertex of a drafted face moves to where the
+/// faces around it meet; the rest of the solid, its faces and its topology are
+/// unchanged. The input solid is left as it was and the drafted copy returned.
 ///
 /// # Errors
 ///
 /// Returns an error if:
 /// - `angle_radians` is zero, not below a right angle in magnitude, or not
 ///   finite, or `pull_direction` is zero-length
-/// - a drafted face is not a planar face of the solid, or lies parallel to
-///   the neutral plane (it has no direction to lean in)
-/// - a vertex of a drafted face meets a non-planar face, or more planes
-///   than three that no longer share a point (the draft would split it)
+/// - a drafted face is not a plane or a cylinder of the solid, is a cylinder
+///   whose axis does not run along the pull, or lies parallel to the neutral
+///   plane (it has no direction to lean in)
+/// - a vertex of a drafted face meets a non-planar face other than a drafted
+///   cylinder, or faces that no longer share a point, as a cylinder's sharp
+///   neighbour does (the draft would split it)
+/// - a drafted cylinder's rim is not a circle square to the pull
+/// - a drafted cylinder's radius runs out before the wall ends
 /// - an edge of a moved vertex would turn back on itself (the angle is too
 ///   steep for the face)
 #[allow(clippy::too_many_lines)]
@@ -74,11 +111,32 @@ pub fn draft(
     // drafted faces get their turned planes.
     let (sin_a, cos_a) = angle_radians.sin_cos();
     let mut planes: HashMap<FaceId, (Vec3, f64)> = HashMap::new();
+    let mut walls: HashMap<FaceId, DraftedWall> = HashMap::new();
     for &fid in &faces {
         let face = topo.face(fid)?;
         let FaceSurface::Plane { normal, d } = face.surface() else {
             if draft_set.contains(&fid) {
-                return Err(invalid("draft target faces must be planar"));
+                let FaceSurface::Cylinder(cylinder) = face.surface() else {
+                    return Err(invalid("draft target faces must be planes or cylinders"));
+                };
+                let along = cylinder.axis().dot(pull);
+                if cylinder.axis().cross(pull).length() > 1e-9 {
+                    return Err(invalid("a drafted cylinder's axis must run along the pull"));
+                }
+                let origin = cylinder.origin();
+                // The turned normal `side * radial * cos + pull * sin` stands
+                // square to the ruling, which fixes how the radius runs.
+                let side = if face.is_reversed() { -1.0 } else { 1.0 };
+                walls.insert(
+                    fid,
+                    DraftedWall {
+                        axis_point: origin
+                            + cylinder.axis()
+                                * ((neutral_d - dot_normal_point(pull, origin)) / along),
+                        radius: cylinder.radius(),
+                        slope: -side * sin_a / cos_a,
+                    },
+                );
             }
             continue;
         };
@@ -139,17 +197,32 @@ pub fn draft(
                         continue;
                     }
                     let mut vertex_planes = Vec::new();
+                    let mut vertex_walls = Vec::new();
                     for f in &around[&vid] {
+                        if let Some(&wall) = walls.get(f) {
+                            vertex_walls.push(wall);
+                            continue;
+                        }
                         let Some(&plane) = planes.get(f) else {
                             return Err(invalid("a drafted face's vertex meets a non-planar face"));
                         };
                         vertex_planes.push(plane);
                     }
                     let old = topo.vertex(vid)?.point();
-                    let point =
-                        meeting_point(&vertex_planes, old, tol.linear).ok_or_else(|| {
-                            invalid("the draft would split a vertex whose planes no longer meet")
-                        })?;
+                    let point = if vertex_walls.is_empty() {
+                        meeting_point(&vertex_planes, old, tol.linear)
+                    } else {
+                        point_on_walls(
+                            &vertex_walls,
+                            &vertex_planes,
+                            old,
+                            (pull, neutral_d),
+                            tol.linear,
+                        )
+                    }
+                    .ok_or_else(|| {
+                        invalid("the draft would split a vertex whose faces no longer meet")
+                    })?;
                     moved.insert(vid, point);
                 }
             }
@@ -164,7 +237,7 @@ pub fn draft(
             {
                 for oe in topo.wire(wid)?.edges() {
                     let edge = topo.edge(oe.edge())?;
-                    if edge.start() != vid && edge.end() != vid {
+                    if (edge.start() != vid && edge.end() != vid) || edge.start() == edge.end() {
                         continue;
                     }
                     let at = |v: VertexId| -> Result<(Point3, Point3), crate::OperationsError> {
@@ -184,10 +257,40 @@ pub fn draft(
     // straight; a curve stored for it (a boolean's straight NURBS) would keep
     // the old span, and becomes a line.
     let mut straighten = HashSet::new();
+    // On a drafted cylinder, a ruling stays a line, and a rim is the circle of
+    // the cone at its new height.
+    let mut rims: HashMap<EdgeId, EdgeCurve> = HashMap::new();
     for &vid in moved.keys() {
         for (&eid, owners) in &edge_faces {
             let edge = topo.edge(eid)?;
             if edge.start() != vid && edge.end() != vid {
+                continue;
+            }
+            if let Some(wall) = owners.iter().find_map(|f| walls.get(f)) {
+                let height = dot_normal_point(pull, moved[&vid]) - neutral_d;
+                match edge.curve() {
+                    EdgeCurve::Line => {}
+                    EdgeCurve::Circle(circle) => {
+                        if circle.normal().cross(pull).length() > 1e-9 {
+                            return Err(invalid(
+                                "a drafted cylinder's rim must be square to the pull",
+                            ));
+                        }
+                        rims.insert(
+                            eid,
+                            EdgeCurve::Circle(Circle3D::with_axes(
+                                wall.axis_point + pull * height,
+                                circle.normal(),
+                                wall.radius_at(height),
+                                circle.u_axis(),
+                                circle.v_axis(),
+                            )?),
+                        );
+                    }
+                    EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_) => {
+                        return Err(invalid("a drafted cylinder's rim must be a circle"));
+                    }
+                }
                 continue;
             }
             if matches!(edge.curve(), EdgeCurve::Line) {
@@ -239,6 +342,12 @@ pub fn draft(
     let mut stale = HashSet::new();
     for &fid in &draft_set {
         let dst = face_map[&fid];
+        stale.insert(dst);
+        if let Some(wall) = walls.get(&fid) {
+            let cone = wall.cone(pull)?;
+            topo.face_mut(dst)?.set_surface(FaceSurface::Cone(cone));
+            continue;
+        }
         let (n, off) = planes[&fid];
         let face = topo.face_mut(dst)?;
         let sign = if face.is_reversed() { -1.0 } else { 1.0 };
@@ -246,7 +355,6 @@ pub fn draft(
             normal: n * sign,
             d: off * sign,
         });
-        stale.insert(dst);
     }
     for &vid in moved.keys() {
         for f in &around[&vid] {
@@ -257,6 +365,9 @@ pub fn draft(
         if straighten.contains(&src_edge) {
             topo.edge_mut(dst_edge)?.set_curve(EdgeCurve::Line);
         }
+        if let Some(rim) = rims.get(&src_edge) {
+            topo.edge_mut(dst_edge)?.set_curve(rim.clone());
+        }
         // `copy_solid` carries no pcurves; untouched faces keep theirs.
         if !stale.contains(&dst_face)
             && let Some(pcurve) = topo.pcurves().get(src_edge, src_face).cloned()
@@ -265,6 +376,42 @@ pub fn draft(
         }
     }
     Ok(copy)
+}
+
+/// Where a vertex of a drafted wall goes: along the wall's ruling through it to
+/// the plane the ruling crosses. Every other face around it has to pass through
+/// that point, as a tangent neighbour does. `None` when none crosses the ruling,
+/// when a neighbour misses the point, or when the wall's radius has run out.
+fn point_on_walls(
+    walls: &[DraftedWall],
+    planes: &[(Vec3, f64)],
+    old: Point3,
+    (pull, neutral_d): (Vec3, f64),
+    linear: f64,
+) -> Option<Point3> {
+    let wall = walls.first()?;
+    let height_of = |p: Point3| dot_normal_point(pull, p) - neutral_d;
+    let foot = wall.axis_point + pull * height_of(old);
+    let radial = (old - foot).normalize().ok()?;
+    let base = wall.axis_point + radial * wall.radius;
+    let run = pull + radial * wall.slope;
+    let &(normal, d) = planes
+        .iter()
+        .max_by(|a, b| a.0.dot(run).abs().total_cmp(&b.0.dot(run).abs()))?;
+    let across = normal.dot(run);
+    if across.abs() < 1e-9 {
+        return None;
+    }
+    let point = base + run * ((d - dot_normal_point(normal, base)) / across);
+    let height = height_of(point);
+    let miss = 10.0 * linear;
+    let on_plane = |&(n, off): &(Vec3, f64)| (dot_normal_point(n, point) - off).abs() <= miss;
+    let on_wall = |w: &DraftedWall| {
+        let foot = w.axis_point + pull * height;
+        w.radius_at(height) > linear
+            && ((point - foot).length() - w.radius_at(height)).abs() <= miss
+    };
+    (planes.iter().all(on_plane) && walls.iter().all(on_wall)).then_some(point)
 }
 
 /// The point where planes `(n, d)` (`n · p = d`, `n` unit) meet near `near`:
