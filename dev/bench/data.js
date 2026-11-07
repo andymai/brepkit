@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794057036185,
+  "lastUpdate": 1794057586739,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -65609,6 +65609,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 28664071,
             "range": "± 949293",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "41b7be5e6291adfe33a340cb4fcd6f806757d928",
+          "message": "fix(blend): fillet a closed rim between a flat face and a B-spline wall (#2310)\n\nCo-authored-by: Eric Vaughan <eric.d.vaughan@gmail.com>",
+          "timestamp": "2026-11-07T05:16:51-08:00",
+          "tree_id": "989f52006386ae6827c37c68f8c5fff6b71fa85a",
+          "url": "https://github.com/andymai/brepkit/commit/41b7be5e6291adfe33a340cb4fcd6f806757d928"
+        },
+        "date": 1794057576487,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 867050,
+            "range": "± 1321",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 930449,
+            "range": "± 3089",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10855,
+            "range": "± 18",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 544325,
+            "range": "± 1017",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 23042186,
+            "range": "± 102177",
             "unit": "ns/iter"
           }
         ]
