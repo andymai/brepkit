@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794057586739,
+  "lastUpdate": 1794059290618,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -65663,6 +65663,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 23042186,
             "range": "± 102177",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "88a41c0c9b58a4086c67e7642562d538c7ac343a",
+          "message": "chore(main): release 4.6.28 (#2312)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[4.6.28](https://github.com/andymai/brepkit/compare/v4.6.27...v4.6.28)\n(2026-11-07)\n\n\n### Bug Fixes\n\n* **blend:** fillet a closed rim between a flat face and a B-spline wall\n([#2310](https://github.com/andymai/brepkit/issues/2310))\n([41b7be5](https://github.com/andymai/brepkit/commit/41b7be5e6291adfe33a340cb4fcd6f806757d928))\n* **io:** write IGES faces as trimmed surfaces and sew them back into\nsolids ([#2293](https://github.com/andymai/brepkit/issues/2293))\n([78b8956](https://github.com/andymai/brepkit/commit/78b895652f752d9fa127632ce9e4e7fc7894237a))\n* **operations:** build a revolve one face per profile edge, and sweep\nholes as passages\n([#2292](https://github.com/andymai/brepkit/issues/2292))\n([75bdc26](https://github.com/andymai/brepkit/commit/75bdc2651ea6c8112abb76683d627a307bc689d7))\n* **operations:** chamfer tangent chains of lines and arcs exactly\n([#2291](https://github.com/andymai/brepkit/issues/2291))\n([4b0dbc5](https://github.com/andymai/brepkit/commit/4b0dbc5ef24c2bc3001555977b33ed6ad58f2811))\n* **operations:** draft a cylinder wall along the pull into a cone\n([#2308](https://github.com/andymai/brepkit/issues/2308))\n([c7eda33](https://github.com/andymai/brepkit/commit/c7eda33bdb82d73a600860f80d93f685b1af4b10))\n* **operations:** refuse touching pieces pressed together across a face\n([#2307](https://github.com/andymai/brepkit/issues/2307))\n([3d8b02f](https://github.com/andymai/brepkit/commit/3d8b02fd45dca653db2782e6da9d09933ca9dc36))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-11-07T13:44:47Z",
+          "tree_id": "7ac85c4b03aaf0df74eb400bf4a3e87c804d41ad",
+          "url": "https://github.com/andymai/brepkit/commit/88a41c0c9b58a4086c67e7642562d538c7ac343a"
+        },
+        "date": 1794059279873,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1055025,
+            "range": "± 6247",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1125010,
+            "range": "± 853",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12952,
+            "range": "± 245",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 674518,
+            "range": "± 2456",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 27994008,
+            "range": "± 42196",
             "unit": "ns/iter"
           }
         ]
