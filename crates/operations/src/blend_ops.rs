@@ -1,11 +1,14 @@
 //! Thin wrappers around `brepkit-blend` for the operations API.
 
+use std::collections::HashSet;
+
 use brepkit_blend::BlendResult;
 use brepkit_blend::chamfer_builder::ChamferBuilder;
 use brepkit_blend::fillet_builder::FilletBuilder;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
 use brepkit_topology::edge::{EdgeCurve, EdgeId};
+use brepkit_topology::explorer::solid_faces;
 use brepkit_topology::face::FaceId;
 use brepkit_topology::solid::SolidId;
 use brepkit_topology::vertex::VertexId;
@@ -225,7 +228,15 @@ pub fn fillet_v2_with_corners(
             (directions[1], distances[1]),
             (directions[2], distances[2]),
         ];
+        let before: HashSet<FaceId> = solid_faces(topo, result)?.into_iter().collect();
         result = brepkit_blend::setback_corner::set_back_corner(topo, result, at, &setbacks)?;
+        // The patches take off more than the fillet's own check of the cavities
+        // saw, and those rounds and flat faces are the rebuilt ones.
+        let made: Vec<FaceId> = solid_faces(topo, result)?
+            .into_iter()
+            .filter(|face| !before.contains(face))
+            .collect();
+        crate::cavities::clear_of_own_cavities(topo, result, &made, "fillet corner")?;
     }
     if !crate::validate::validate_solid(topo, result)?.is_valid() {
         return Err(OperationsError::NonManifoldResult);

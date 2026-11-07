@@ -45,10 +45,11 @@ impl BrepKernel {
                 let vertex = self
                     .resolve_vertex(handle(&corner["vertex"], "vertex")?)
                     .map_err(|e| e.to_string())?;
-                let kind = match corner["corner"].as_str() {
-                    None | Some("rolling") => CornerKind::Rolling,
-                    Some("g2") => CornerKind::G2,
-                    Some(other) => return Err(format!("unknown corner kind '{other}'")),
+                let kind = match &corner["corner"] {
+                    serde_json::Value::Null => CornerKind::Rolling,
+                    serde_json::Value::String(kind) if kind == "rolling" => CornerKind::Rolling,
+                    serde_json::Value::String(kind) if kind == "g2" => CornerKind::G2,
+                    other => return Err(format!("unknown corner kind {other}")),
                 };
                 let mut setbacks = Vec::new();
                 if !corner["setbacks"].is_null() {

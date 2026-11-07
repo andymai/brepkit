@@ -346,6 +346,49 @@ mod tests {
         }
     }
 
+    /// A cavity the rolled corner clears but the set-back's patches could reach
+    /// is refused, and one far off is kept.
+    #[test]
+    fn a_cavity_the_patches_could_reach_is_refused() {
+        let hollow = |topo: &mut Topology, at: f64| {
+            let block = make_box(topo, 40.0, 40.0, 40.0).unwrap();
+            let void = make_box(topo, 1.0, 1.0, 1.0).unwrap();
+            transform_solid(topo, void, &Mat4::translation(at, at, at)).unwrap();
+            boolean(topo, BooleanOp::Cut, block, void).unwrap()
+        };
+        let corner_of = |topo: &Topology, solid: SolidId| {
+            let corner = vertex_at(topo, solid, Point3::new(0.0, 0.0, 0.0));
+            let edges = edges_at(topo, solid, corner);
+            (corner, edges)
+        };
+        let mut topo = Topology::new();
+        let near = hollow(&mut topo, 9.0);
+        let (corner, edges) = corner_of(&topo, near);
+        let rolled = fillet_v2_with_corners(&mut topo, near, &edges, RADIUS, &[]);
+        assert!(
+            rolled.is_ok(),
+            "the rolled corner clears the cavity: {rolled:?}"
+        );
+        let corners = [FilletCorner {
+            vertex: corner,
+            setbacks: set_back(&edges, [14.0, 14.0, 14.0]),
+            kind: CornerKind::G2,
+        }];
+        let refused = fillet_v2_with_corners(&mut topo, near, &edges, RADIUS, &corners);
+        assert!(refused.is_err(), "the patches could reach the cavity");
+
+        let far = hollow(&mut topo, 20.0);
+        let (corner, edges) = corner_of(&topo, far);
+        let corners = [FilletCorner {
+            vertex: corner,
+            setbacks: set_back(&edges, [8.0, 8.0, 8.0]),
+            kind: CornerKind::G2,
+        }];
+        let kept = fillet_v2_with_corners(&mut topo, far, &edges, RADIUS, &corners).unwrap();
+        assert_eq!(topo.solid(kept).unwrap().inner_shells().len(), 1);
+        assert_sound(&topo, kept, "a cavity far off");
+    }
+
     /// The patches do not depend on which way a wire happens to run, so a mirror
     /// image holds what the part did, and so does one turned and moved far off.
     #[test]

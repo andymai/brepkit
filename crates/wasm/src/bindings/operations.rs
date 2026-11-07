@@ -1996,6 +1996,8 @@ mod tests {
         for bad in [
             serde_json::json!([{"vertex": corner, "setbacks": setbacks([1.0, 4.0, 5.0])}]),
             serde_json::json!([{"vertex": corner, "corner": "smooth"}]),
+            serde_json::json!([{"vertex": corner, "corner": true}]),
+            serde_json::json!([{"vertex": corner, "corner": 42}]),
             serde_json::json!([{"vertex": 4_294_967_296_u64}]),
             serde_json::json!([{"vertex": corner, "setbacks": [{"edge": edges[0], "distance": -1.0}]}]),
             serde_json::json!({"vertex": corner}),
