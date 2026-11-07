@@ -2956,9 +2956,10 @@ fn sections_meet_midway(sections: &[SectionEdge], frame: &PlaneFrame, tol: f64) 
 /// takes the face.
 ///
 /// The arrangement reads each input by its chord, and a closed curve has none. A
-/// closed section goes in as four arcs. A closed boundary curve shares its edge
-/// with the face beside it, so it cannot take new vertices here, and such a face
-/// goes to the general splitter.
+/// closed circle or ellipse among the sections goes in as four arcs. A closed
+/// spline's arcs would each read back as the whole loop, and a closed boundary
+/// curve shares its edge with the face beside it, so it cannot take new vertices
+/// here: either way the general splitter takes the face.
 #[must_use]
 pub fn split_plane_into_cells(
     topo: &Topology,
@@ -3020,6 +3021,9 @@ pub fn split_plane_into_cells(
         };
         let closed = !matches!(section.curve_3d, EdgeCurve::Line)
             && (section.start - section.end).length() <= tol;
+        if closed && matches!(section.curve_3d, EdgeCurve::NurbsCurve(_)) {
+            return None;
+        }
         let knots: Vec<Point3> = if closed {
             vec![section.start, at(0.25), at(0.5), at(0.75), section.end]
         } else {
@@ -10389,6 +10393,59 @@ mod tests {
         brepkit_math::curves2d::Curve2D::Line(
             Line2D::new(Point2::new(0.0, 0.0), Vec2::new(1.0, 0.0)).unwrap(),
         )
+    }
+
+    /// A closed spline among the sections is the general splitter's: its quarters
+    /// would each read back as the whole loop.
+    #[test]
+    fn a_closed_spline_section_leaves_the_face_to_the_general_splitter() {
+        use brepkit_math::curves2d::{Curve2D, Line2D};
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        use brepkit_math::vec::{Point2, Vec2};
+        use brepkit_topology::builder::make_planar_face;
+
+        let section = |curve_3d: EdgeCurve, start: Point3, end: Point3| {
+            let flat =
+                Curve2D::Line(Line2D::new(Point2::new(0.0, 0.0), Vec2::new(1.0, 0.0)).unwrap());
+            SectionEdge {
+                curve_3d,
+                pcurve_a: flat.clone(),
+                pcurve_b: flat,
+                start,
+                end,
+                start_uv_a: None,
+                end_uv_a: None,
+                start_uv_b: None,
+                end_uv_b: None,
+                target_face: None,
+                pave_block_id: None,
+            }
+        };
+        let mut topo = Topology::new();
+        let corners = [(-10.0, -10.0), (10.0, -10.0), (10.0, 10.0), (-10.0, 10.0)]
+            .map(|(x, y)| Point3::new(x, y, 0.0));
+        let face = make_planar_face(&mut topo, &corners, 1e-7).unwrap();
+        let at = Point3::new(4.0, 0.0, 0.0);
+        let points = vec![
+            at,
+            Point3::new(4.0, 6.0, 0.0),
+            Point3::new(-4.0, 6.0, 0.0),
+            Point3::new(-4.0, -6.0, 0.0),
+            Point3::new(4.0, -6.0, 0.0),
+            at,
+        ];
+        let weights = vec![1.0; points.len()];
+        let knots = vec![0.0, 0.0, 0.0, 0.25, 0.5, 0.75, 1.0, 1.0, 1.0];
+        let loop_curve = NurbsCurve::new(2, knots, points, weights).unwrap();
+        let sections = [
+            section(EdgeCurve::NurbsCurve(loop_curve), at, at),
+            section(
+                EdgeCurve::Line,
+                Point3::new(-10.0, 1.0, 0.0),
+                Point3::new(10.0, 1.0, 0.0),
+            ),
+        ];
+        assert!(split_plane_into_cells(&topo, face, &sections, Rank::B, 1e-7).is_none());
     }
 
     /// A closed section whose vertex sits off its circle's parameter origin,

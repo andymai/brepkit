@@ -1092,6 +1092,89 @@ mod tests {
         }
     }
 
+    /// A tool named twice is one tool.
+    #[test]
+    fn a_tool_named_twice_is_one_tool() {
+        for (name, pose) in poses() {
+            let mut topo = Topology::new();
+            let body = make_box(&mut topo, 30.0, 30.0, 30.0).unwrap();
+            transform_solid(
+                &mut topo,
+                body,
+                &(pose * Mat4::translation(-15.0, -15.0, -15.0)),
+            )
+            .unwrap();
+            let ball = make_sphere(&mut topo, 10.0, 16).unwrap();
+            transform_solid(&mut topo, ball, &pose).unwrap();
+            let halves = solid_faces(&topo, ball).unwrap();
+            let once = split_by_faces(&mut topo, body, &halves).unwrap();
+            assert_eq!(once.len(), 2, "{name}");
+            let twice: Vec<FaceId> = halves.iter().chain(&halves).copied().collect();
+            let pieces = split_by_faces(&mut topo, body, &twice).unwrap();
+            assert_eq!(pieces.len(), 2, "{name}: named twice");
+
+            let wall = rectangle(
+                &mut topo,
+                pose,
+                [
+                    [-20.0, 0.0, -20.0],
+                    [20.0, 0.0, -20.0],
+                    [20.0, 0.0, 20.0],
+                    [-20.0, 0.0, 20.0],
+                ],
+            );
+            let pieces = split_by_faces(&mut topo, body, &[wall, wall]).unwrap();
+            assert_eq!(pieces.len(), 2, "{name}: a flat wall named twice");
+        }
+    }
+
+    /// A plane off a ball's centre takes a cap, across the seam between its halves.
+    #[test]
+    fn a_plane_off_centre_takes_a_cap_off_a_ball() {
+        for (name, pose) in poses() {
+            let mut topo = Topology::new();
+            let ball = make_sphere(&mut topo, 10.0, 32).unwrap();
+            transform_solid(&mut topo, ball, &pose).unwrap();
+            let wall = rectangle(
+                &mut topo,
+                pose,
+                [
+                    [-15.0, 4.0, -15.0],
+                    [15.0, 4.0, -15.0],
+                    [15.0, 4.0, 15.0],
+                    [-15.0, 4.0, 15.0],
+                ],
+            );
+            let mut pieces = split_by_faces(&mut topo, ball, &[wall]).unwrap();
+            assert_eq!(pieces.len(), 2, "{name}");
+            by_volume(&topo, &mut pieces);
+            let cap = solid_volume(&topo, pieces[0], 0.005).unwrap();
+            assert!((cap - 288.0 * PI).abs() < 2.0, "{name}: a cap of {cap}");
+        }
+    }
+
+    /// A chord close by a round cap's rim, its middle between where a coarse
+    /// sampling of the rim would put two points.
+    #[test]
+    fn an_edge_close_by_a_caps_rim_marks_it() {
+        let turn = PI / 16.0;
+        let (c, s) = (turn.cos(), turn.sin());
+        let half = (100.0_f64 - 9.9 * 9.9).sqrt();
+        let (mx, my) = (9.9 * c, 9.9 * s);
+        let (a, b) = (
+            [mx - half * s, my + half * c, 10.0],
+            [mx + half * s, my - half * c, 10.0],
+        );
+        for (name, pose) in poses() {
+            let mut topo = Topology::new();
+            let body = cylinder(&mut topo, pose);
+            let chord = segment(&mut topo, pose, a, b);
+            let marked = imprint_faces(&mut topo, body, &[chord]).unwrap();
+            let areas = areas_in_plane(&topo, marked, pose, [0.0, 0.0, 10.0], [0.0, 0.0, 1.0]);
+            assert_eq!(areas.len(), 2, "{name}: {areas:?}");
+        }
+    }
+
     /// A cavity thinner than the step a shell's size suggests still reads as a
     /// cavity, whichever of its faces is read first.
     #[test]

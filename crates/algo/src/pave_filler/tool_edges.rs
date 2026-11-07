@@ -10,8 +10,11 @@ use brepkit_math::aabb::Aabb3;
 use brepkit_math::tolerance::Tolerance;
 use brepkit_topology::Topology;
 use brepkit_topology::edge::EdgeId;
+use brepkit_topology::face::{FaceId, FaceSurface};
+use brepkit_topology::planar::PlanarRegion;
 use brepkit_topology::solid::SolidId;
 
+use crate::builder::plane_frame::PlaneFrame;
 use crate::classifier::FaceLoops2d;
 use crate::ds::{GfaArena, Interference, IntersectionCurveDS};
 use crate::error::AlgoError;
@@ -22,6 +25,37 @@ const SAMPLES: u32 = 8;
 /// How far off a surface an edge may run, in linear tolerances, and still lie
 /// on it: the band fitted geometry keeps from a face it bounds.
 const ON_SURFACE_FACTOR: f64 = 100.0;
+
+/// A plane face's region as the curves it is, where it can be read so. A sampled
+/// polygon misses the sliver between each chord and its arc, and an edge close by
+/// a rim can run all its length in there.
+fn plane_region(
+    topo: &Topology,
+    face: FaceId,
+    tol: Tolerance,
+) -> Result<Option<(PlaneFrame, PlanarRegion)>, AlgoError> {
+    let data = topo.face(face)?;
+    let FaceSurface::Plane { normal, .. } = data.surface() else {
+        return Ok(None);
+    };
+    let normal = *normal;
+    let corners = topo
+        .wire(data.outer_wire())?
+        .edges()
+        .iter()
+        .map(|oriented| Ok(topo.vertex(topo.edge(oriented.edge())?.start())?.point()))
+        .collect::<Result<Vec<_>, AlgoError>>()?;
+    let frame = PlaneFrame::from_plane_face(normal, &corners);
+    let region = brepkit_topology::planar::face_region_2d(
+        topo,
+        face,
+        frame.origin(),
+        frame.u_axis(),
+        frame.v_axis(),
+        tol.linear,
+    )?;
+    Ok(region.map(|region| (frame, region)))
+}
 
 /// Register every leaf of `tool_edges` lying in a face of `body` as a section
 /// of that face alone. Runs after the blocks are cut and before they become
@@ -42,6 +76,10 @@ pub(super) fn perform(
         .map(|&face| FaceLoops2d::new(topo, face))
         .collect::<Result<Vec<_>, _>>()?;
     let band = ON_SURFACE_FACTOR * tol.linear;
+    let regions = faces
+        .iter()
+        .map(|&face| plane_region(topo, face, tol))
+        .collect::<Result<Vec<_>, _>>()?;
 
     for &edge_id in tool_edges {
         let edge = topo.edge(edge_id)?;
@@ -67,12 +105,15 @@ pub(super) fn perform(
                 })
                 .collect();
             let middle = samples[SAMPLES as usize / 2];
-            for (&face, region) in faces.iter().zip(&loops) {
-                let runs_in_face = samples
+            for ((&face, region), exact) in faces.iter().zip(&loops).zip(&regions) {
+                let on_surface = samples
                     .iter()
-                    .all(|&p| region.distance_to_surface(p).is_some_and(|d| d <= band))
-                    && region.to_uv(middle).is_some_and(|q| region.contains(q));
-                if !runs_in_face {
+                    .all(|&p| region.distance_to_surface(p).is_some_and(|d| d <= band));
+                let inside = exact.as_ref().map_or_else(
+                    || region.to_uv(middle).is_some_and(|q| region.contains(q)),
+                    |(frame, exact)| exact.contains_clear(frame.project(middle), tol.linear),
+                );
+                if !(on_surface && inside) {
                     continue;
                 }
                 let curve_index = arena.curves.len();

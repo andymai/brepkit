@@ -6571,6 +6571,35 @@ fn point_on_wire(
     })
 }
 
+/// Whether `p` lies by a wire's straight edges on a ball of this radius. They are
+/// chords: a ball's seam runs on the ball, and a section's end on the seam stands
+/// off the chord under it by as much as the chord's rise.
+fn point_by_chords(
+    topo: &Topology,
+    wid: brepkit_topology::wire::WireId,
+    p: Point3,
+    radius: f64,
+    band: f64,
+) -> bool {
+    let Ok(wire) = topo.wire(wid) else {
+        return false;
+    };
+    wire.edges().iter().any(|oe| {
+        let Ok(edge) = topo.edge(oe.edge()) else {
+            return false;
+        };
+        let (Ok(a), Ok(b)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) else {
+            return false;
+        };
+        if !matches!(edge.curve(), EdgeCurve::Line) {
+            return false;
+        }
+        let half = (b.point() - a.point()).length() / 2.0;
+        let rise = radius - (radius * radius - half * half).max(0.0).sqrt();
+        point_on_edge(edge.curve(), a.point(), b.point(), p, band + rise)
+    })
+}
+
 /// `sections` without those on no cycle of the face's boundary and sections
 /// taken together: with the same region on both sides they divide nothing (a
 /// cut from a face's outline to a hole, and no other), and a face traced along
@@ -6593,6 +6622,10 @@ fn drop_sections_dividing_nothing(
     let wires: Vec<brepkit_topology::wire::WireId> = std::iter::once(face.outer_wire())
         .chain(face.inner_wires().iter().copied())
         .collect();
+    let ball_radius = match face.surface() {
+        FaceSurface::Sphere(ball) => Some(ball.radius()),
+        _ => None,
+    };
     let lines: Vec<Vec<Point3>> = sections
         .iter()
         .map(|s| {
@@ -6612,7 +6645,10 @@ fn drop_sections_dividing_nothing(
     // Nodes: one per wire, then one per point sections meet at.
     let mut loose: Vec<Point3> = Vec::new();
     let node_at = |p: Point3, loose: &mut Vec<Point3>| -> i64 {
-        let on_wire = wires.iter().position(|&w| point_on_wire(topo, w, p, band));
+        let on_wire = wires.iter().position(|&w| {
+            point_on_wire(topo, w, p, band)
+                || ball_radius.is_some_and(|radius| point_by_chords(topo, w, p, radius, band))
+        });
         let at = on_wire.unwrap_or_else(|| {
             let found = loose.iter().position(|&q| (q - p).length() <= band);
             wires.len()

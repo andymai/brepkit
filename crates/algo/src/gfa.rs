@@ -3,6 +3,8 @@
 //! Runs the complete General Fuse Algorithm pipeline:
 //! PaveFiller -> Builder -> BOP -> assemble.
 
+use std::collections::HashSet;
+
 use brepkit_math::tolerance::Tolerance;
 use brepkit_topology::Topology;
 use brepkit_topology::edge::EdgeId;
@@ -220,7 +222,12 @@ pub fn split_by_faces(
     tool_faces: &[FaceId],
 ) -> Result<Vec<SolidId>, AlgoError> {
     let tol = Tolerance::default();
-    let groups: Vec<Vec<FaceId>> = tool_faces.iter().map(|&f| vec![f]).collect();
+    let mut named = HashSet::new();
+    let groups: Vec<Vec<FaceId>> = tool_faces
+        .iter()
+        .filter(|&&f| named.insert(f))
+        .map(|&f| vec![f])
+        .collect();
     let mut scratch = GfaImprintStore::new(topo, solid, &groups, &[])?;
     let (body, tool_sources) = scratch
         .sources

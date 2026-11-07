@@ -844,9 +844,10 @@ fn direction_into_face(
         region.aabb[5] - region.aabb[2],
     )
     .length();
+    let reversed = face.is_reversed();
     let probe = |step: f64| {
         let q = region.to_uv(mid + across * step)?;
-        if !region.contains(q) {
+        if !region.contains_over_pole(q, reversed) {
             return None;
         }
         let along = region.to_3d(q)? - mid;
