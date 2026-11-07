@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794062250895,
+  "lastUpdate": 1794062731870,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -65879,6 +65879,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 22603279,
             "range": "± 493227",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c4d72e5245452aac53dfa8279d1715a5754ded74",
+          "message": "fix(heal): merge a sphere's two halves into one face when simplifying (#2311)",
+          "timestamp": "2026-11-07T06:42:37-08:00",
+          "tree_id": "216a5bf3659a2270b42e144a26dc883f1a6a095d",
+          "url": "https://github.com/andymai/brepkit/commit/c4d72e5245452aac53dfa8279d1715a5754ded74"
+        },
+        "date": 1794062723478,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 876108,
+            "range": "± 20037",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 914491,
+            "range": "± 788",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11094,
+            "range": "± 167",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 540640,
+            "range": "± 817",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 22505421,
+            "range": "± 55793",
             "unit": "ns/iter"
           }
         ]
