@@ -988,13 +988,14 @@ pub fn check_equal_two_edge_admissibility(
     Ok(())
 }
 
-/// Shorten the three analytic stripes at a convex trihedral junction to
-/// their common rolling-ball center.
+/// Shorten the three analytic stripes at a trihedral junction to their common
+/// rolling-ball center.
 ///
-/// Concave and non-concurrent junctions retain the proven ordered-fan
-/// construction. Treating those as a convex setback removes valid material;
-/// a setback is therefore applied only when the three support-plane offsets
-/// intersect on every incident stripe centerline.
+/// Non-concurrent junctions and those mixing convex and concave edges retain
+/// the proven ordered-fan construction. A setback is applied only when the
+/// three support-plane offsets intersect on every incident stripe centerline,
+/// which holds on the material's side of a convex corner and in the air of a
+/// pocket's.
 ///
 /// `solid_faces` scopes the "clean trihedral corner" check to the faces of
 /// the solid this build actually operates on, which an arena shared across a
@@ -1158,32 +1159,38 @@ fn convex_trihedral_setback(
 
     // The setback ball centre is the three support planes' common offset by
     // the fillet radius — the same solve `multi_edge_corner_data` uses to
-    // classify a junction as set-back or un-set-back.
-    let Some(center) = trihedral_ball_centre(topo, radius, &support_faces) else {
-        return Ok(None);
-    };
-
-    let mut fractions = Vec::with_capacity(indices.len());
-    for &index in indices {
-        let stripe = &stripes[index];
-        let start = stripe.sections[0].center;
-        let direction = stripe.sections[1].center - start;
-        let length_squared = direction.dot(direction);
-        if length_squared <= TOL * TOL {
-            return Err(BlendError::CornerFailure { vertex });
-        }
-        let fraction = (center - start).dot(direction) / length_squared;
-        let projected = start + direction * fraction;
-        // A setback trims the stripe end down to the rolling-ball center, so
-        // the center must lie on the bounded stripe centerline. A short spine
-        // whose two ends' setbacks meet is refused when the trims are applied
-        // ("trihedral setbacks consume an entire stripe").
-        if !(TOL..=1.0 - TOL).contains(&fraction) || (projected - center).length() > TOL * 100.0 {
+    // classify a junction as set-back or un-set-back. The ball sits in the
+    // material at a convex corner and in the air at a pocket's, and only the
+    // right side's centre lies on the stripes' centerlines.
+    for signed_radius in [radius, -radius] {
+        let Some(center) = trihedral_ball_centre(topo, signed_radius, &support_faces) else {
             return Ok(None);
+        };
+        let mut fractions = Vec::with_capacity(indices.len());
+        for &index in indices {
+            let stripe = &stripes[index];
+            let start = stripe.sections[0].center;
+            let direction = stripe.sections[1].center - start;
+            let length_squared = direction.dot(direction);
+            if length_squared <= TOL * TOL {
+                return Err(BlendError::CornerFailure { vertex });
+            }
+            let fraction = (center - start).dot(direction) / length_squared;
+            let projected = start + direction * fraction;
+            // A setback trims the stripe end down to the rolling-ball center,
+            // so the center must lie on the bounded stripe centerline. A short
+            // spine whose two ends' setbacks meet is refused when the trims are
+            // applied ("trihedral setbacks consume an entire stripe").
+            if (TOL..=1.0 - TOL).contains(&fraction) && (projected - center).length() <= TOL * 100.0
+            {
+                fractions.push(fraction);
+            }
         }
-        fractions.push(fraction);
+        if fractions.len() == indices.len() {
+            return Ok(Some(fractions));
+        }
     }
-    Ok(Some(fractions))
+    Ok(None)
 }
 
 /// Environment-gated trace for the sharp-miter construction, matching this
@@ -1344,24 +1351,29 @@ fn setback_trimmed_classification(
             }
         }
     }
-    let Some(ball_centre) = trihedral_ball_centre(topo, radius, &support_faces) else {
-        return Ok(None);
-    };
-    let mut at_ball_centre = 0_usize;
-    for &index in indices {
-        let Some(section) = contact_section_at_vertex(vertex_id, &stripes[index], topo) else {
+    // A ball in the material is a convex corner's, one in the air a pocket's.
+    let mut most = None;
+    for signed_radius in [radius, -radius] {
+        let Some(ball_centre) = trihedral_ball_centre(topo, signed_radius, &support_faces) else {
             return Ok(None);
         };
-        // A set-back section centre is the solved ball centre itself, so the
-        // match band only needs to absorb round-off, scaled to the radius.
-        if (section.center - ball_centre).length() <= radius * 1e-6 {
-            at_ball_centre += 1;
+        let mut at_ball_centre = 0_usize;
+        for &index in indices {
+            let Some(section) = contact_section_at_vertex(vertex_id, &stripes[index], topo) else {
+                return Ok(None);
+            };
+            // A set-back section centre is the solved ball centre itself, so
+            // the match band only needs to absorb round-off, scaled to the radius.
+            if (section.center - ball_centre).length() <= radius * 1e-6 {
+                at_ball_centre += 1;
+            }
         }
+        most = most.max(Some(at_ball_centre));
     }
-    match at_ball_centre {
-        3 => Ok(Some(true)),
-        0 => Ok(Some(false)),
-        _ => Err(BlendError::CornerFailure { vertex: vertex_id }),
+    match most {
+        Some(3) => Ok(Some(true)),
+        Some(0) | None => Ok(Some(false)),
+        Some(_) => Err(BlendError::CornerFailure { vertex: vertex_id }),
     }
 }
 
