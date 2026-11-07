@@ -10,7 +10,7 @@ use brepkit_math::vec::{Point3, Vec3};
 use brepkit_operations::classify::{PointClassification, classify_point};
 use brepkit_operations::measure::{oriented_solid_volume, solid_volume};
 use brepkit_operations::revolve::revolve;
-use brepkit_operations::tessellate::{is_watertight, tessellate_solid};
+use brepkit_operations::tessellate::{is_watertight, tessellate, tessellate_solid};
 use brepkit_operations::validate::validate_solid;
 use brepkit_topology::Topology;
 use brepkit_topology::builder::{make_face_from_wire, make_polygon_wire};
@@ -226,5 +226,52 @@ fn a_profile_with_a_circular_hole_revolves_to_a_tunnelled_ring() {
             (Point3::new(0.0, 4.8, 0.0), true),
         ],
         "tunnelled ring",
+    );
+}
+
+/// A washer with a spherical outer wall, a quarter turned about its axis. The
+/// wall is a patch of a sphere between two latitudes and two meridians, a
+/// quarter of the zone `2 pi R h`, and its own mesh holds that patch alone.
+#[test]
+fn a_sphere_patch_between_latitudes_meshes_to_its_area() {
+    let mut topo = Topology::new();
+    let [a, b, c, d] = [(3.0, 0.0), (5.0, 0.0), (4.0, 3.0), (3.0, 3.0)]
+        .map(|(x, z)| topo.add_vertex(Vertex::new(Point3::new(x, 0.0, z), 1e-7)));
+    let circle = Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, -1.0, 0.0), 5.0).unwrap();
+    let edges = [
+        topo.add_edge(Edge::new(a, b, EdgeCurve::Line)),
+        topo.add_edge(Edge::new(b, c, EdgeCurve::Circle(circle))),
+        topo.add_edge(Edge::new(c, d, EdgeCurve::Line)),
+        topo.add_edge(Edge::new(d, a, EdgeCurve::Line)),
+    ];
+    let wire =
+        topo.add_wire(Wire::new(edges.map(|e| OrientedEdge::new(e, true)).to_vec(), true).unwrap());
+    let face = topo.add_face(Face::new(
+        wire,
+        vec![],
+        FaceSurface::Plane {
+            normal: Vec3::new(0.0, 1.0, 0.0),
+            d: 0.0,
+        },
+    ));
+    let solid = revolve(&mut topo, face, Point3::new(0.0, 0.0, 0.0), Z, PI / 2.0).unwrap();
+    let patch = solid_faces(&topo, solid)
+        .unwrap()
+        .into_iter()
+        .find(|&f| matches!(topo.face(f).unwrap().surface(), FaceSurface::Sphere(_)))
+        .unwrap();
+    let exact = TAU * 5.0 * 3.0 / 4.0;
+    let mesh = tessellate(&topo, patch, 1e-3).unwrap();
+    let meshed: f64 = mesh
+        .indices
+        .chunks_exact(3)
+        .map(|t| {
+            let [p, q, r] = [t[0], t[1], t[2]].map(|i| mesh.positions[i as usize]);
+            0.5 * (q - p).cross(r - p).length()
+        })
+        .sum();
+    assert!(
+        (meshed - exact).abs() < 1e-3 * exact,
+        "the patch's mesh holds {meshed}, its area is {exact}"
     );
 }
