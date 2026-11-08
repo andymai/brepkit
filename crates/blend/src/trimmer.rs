@@ -1784,9 +1784,18 @@ fn rebuild_mapped_parametric_face(
                         continue;
                     }
                     let step = (d1 - d0) / 64.0;
-                    let mut lo = (best_t - step).max(d0);
-                    let mut hi = (best_t + step).min(d1);
-                    for _ in 0..40 {
+                    let (low, high) = (d0.min(d1), d0.max(d1));
+                    let mut lo = (best_t - step.abs()).clamp(low, high);
+                    let mut hi = (best_t + step.abs()).clamp(low, high);
+                    // Refined until the bracket stops shrinking, not a fixed
+                    // count: forty thirds leave 1e-7 of the step, which on a
+                    // line's length domain is 3e-6 on a 4000 mm edge, past
+                    // the 1e-6 a contact's end must meet the edge by, and the
+                    // split was skipped.
+                    for _ in 0..200 {
+                        if hi - lo <= f64::EPSILON * lo.abs().max(hi.abs()).max(1.0) {
+                            break;
+                        }
                         let m1 = lo + (hi - lo) / 3.0;
                         let m2 = hi - (hi - lo) / 3.0;
                         if dist_at(m1) < dist_at(m2) {
