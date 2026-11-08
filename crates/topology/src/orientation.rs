@@ -118,14 +118,16 @@ pub fn propagate_orientation(
 /// the surface's natural normal: the signed area of their loop in `(u, v)`,
 /// positive when it runs counterclockwise about `∂u × ∂v` taken along the
 /// normal. A sample on the axis (a cone's apex, a horn torus's pinch) has no
-/// `u` of its own and takes its neighbour's. `None` for other surfaces, and
+/// `u` of its own and takes its neighbour's. A B-spline face is read in its
+/// own parameters ([`nurbs_uv_winding`]). `None` for other surfaces, and
 /// for a loop that does not close once unwrapped (a band around the axis).
 fn uv_winding(surface: &FaceSurface, points: &[Point3]) -> Option<f64> {
     use std::f64::consts::{PI, TAU};
     let v_periodic = match surface {
         FaceSurface::Cylinder(_) | FaceSurface::Cone(_) => false,
         FaceSurface::Torus(_) => true,
-        FaceSurface::Plane { .. } | FaceSurface::Sphere(_) | FaceSurface::Nurbs(_) => return None,
+        FaceSurface::Nurbs(nurbs) => return nurbs_uv_winding(surface, nurbs, points),
+        FaceSurface::Plane { .. } | FaceSurface::Sphere(_) => return None,
     };
     let wrap = |d: f64| d - TAU * (d / TAU).round();
     let h = 1e-6;
@@ -176,6 +178,75 @@ fn uv_winding(surface: &FaceSurface, points: &[Point3]) -> Option<f64> {
     let at = loop_uv[0];
     let dv = surface.evaluate(at.0, at.1 + h)? - surface.evaluate(at.0, at.1 - h)?;
     let sense = du(at)?.cross(dv).dot(surface.normal(at.0, at.1));
+    (sense != 0.0).then(|| area * sense.signum())
+}
+
+/// [`uv_winding`] on a B-spline surface: the signed area of the samples'
+/// loop in `(u, v)`, positive when it runs counterclockwise about
+/// `∂u × ∂v` taken along the normal. A long curved band (a round along a
+/// spline rim) bends its loop round a centroid that falls outside it, which
+/// the boundary integral misreads; its parameters do not bend. `None` where
+/// a sample's projection fails or lands where `∂u` or `∂v` vanishes (a
+/// patch collapsed to a pole, whose `u` there is anyone's), and for a loop
+/// that winds round a periodic direction.
+fn nurbs_uv_winding(
+    surface: &FaceSurface,
+    nurbs: &brepkit_math::nurbs::surface::NurbsSurface,
+    points: &[Point3],
+) -> Option<f64> {
+    let (u0, u1) = nurbs.domain_u();
+    let (v0, v1) = nurbs.domain_v();
+    let periods = (
+        nurbs.is_periodic_u().then_some(u1 - u0),
+        nurbs.is_periodic_v().then_some(v1 - v0),
+    );
+    let wrap = |d: f64, period: Option<f64>| period.map_or(d, |p| d - p * (d / p).round());
+    let raw: Vec<(f64, f64)> = points
+        .iter()
+        .map(|&p| surface.project_point(p))
+        .collect::<Option<_>>()?;
+    let speeds: Vec<(f64, f64)> = raw
+        .iter()
+        .map(|&(u, v)| {
+            let d = nurbs.derivatives(u, v, 1);
+            (d[1][0].length(), d[0][1].length())
+        })
+        .collect();
+    let scale = speeds
+        .iter()
+        .fold(0.0_f64, |m, &(su, sv)| m.max(su).max(sv));
+    if scale <= 0.0
+        || speeds
+            .iter()
+            .any(|&(su, sv)| su <= 1e-6 * scale || sv <= 1e-6 * scale)
+    {
+        return None;
+    }
+    let mut loop_uv: Vec<(f64, f64)> = Vec::with_capacity(raw.len());
+    for &(u, v) in &raw {
+        let Some(&(pu, pv)) = loop_uv.last() else {
+            loop_uv.push((u, v));
+            continue;
+        };
+        loop_uv.push((pu + wrap(u - pu, periods.0), pv + wrap(v - pv, periods.1)));
+    }
+    let (first, last) = (loop_uv[0], loop_uv[loop_uv.len() - 1]);
+    let closes = |a: f64, b: f64, period: Option<f64>| {
+        period.is_none_or(|p| (b + wrap(a - b, Some(p)) - a).abs() < 0.5 * p)
+    };
+    if !closes(first.0, last.0, periods.0) || !closes(first.1, last.1, periods.1) {
+        return None;
+    }
+    let area = 0.5
+        * (0..loop_uv.len())
+            .map(|k| {
+                let (a, b) = (loop_uv[k], loop_uv[(k + 1) % loop_uv.len()]);
+                a.0.mul_add(b.1, -(b.0 * a.1))
+            })
+            .sum::<f64>();
+    let (um, vm) = (f64::midpoint(u0, u1), f64::midpoint(v0, v1));
+    let d = nurbs.derivatives(um, vm, 1);
+    let sense = d[1][0].cross(d[0][1]).dot(surface.normal(um, vm));
     (sense != 0.0).then(|| area * sense.signum())
 }
 
