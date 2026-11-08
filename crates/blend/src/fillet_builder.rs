@@ -1687,6 +1687,8 @@ impl<'a> FilletBuilder<'a> {
                 is_partial: true,
             });
         }
+        let input_edges = input_edge_set(topo, &original_faces);
+        let result_faces = drop_contact_slivers(topo, result_faces, &input_edges)?;
         let new_shell = match Shell::new(result_faces) {
             Ok(shell) => shell,
             Err(error) => {
@@ -1772,6 +1774,165 @@ fn outward_plane(topo: &Topology, face_id: FaceId) -> Result<Option<(Vec3, f64)>
     };
     let sign = if face.is_reversed() { -1.0 } else { 1.0 };
     Ok(face.effective_plane_normal().map(|n| (n, d * sign)))
+}
+
+/// The edges of the input's faces, as the fillet found them.
+fn input_edge_set(topo: &Topology, original_faces: &[FaceId]) -> HashSet<EdgeId> {
+    let mut edges = HashSet::new();
+    for &face_id in original_faces {
+        let Ok(face) = topo.face(face_id) else {
+            continue;
+        };
+        for wire_id in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied())
+        {
+            if let Ok(wire) = topo.wire(wire_id) {
+                edges.extend(wire.edges().iter().map(OrientedEdge::edge));
+            }
+        }
+    }
+    edges
+}
+
+/// Drop the faces a round has left with no area: a wall exactly a radius
+/// high, its top rim rounded, keeps only the strip between the round's
+/// contact and the wall's own bottom edge, which the contact lies on. Such a
+/// face's wire is the contact and that edge alone, joining the same two
+/// vertices. The face goes, and the round takes the wall's edge in place of
+/// its contact, so it meets the face beyond the wall along it.
+fn drop_contact_slivers(
+    topo: &mut Topology,
+    faces: Vec<FaceId>,
+    input_edges: &HashSet<EdgeId>,
+) -> Result<Vec<FaceId>, BlendError> {
+    // How far the contact may stand off the wall's edge, for each unit of
+    // the edge's span: a walked contact is fitted through its sections (a
+    // round of 3 along a quarter arc of 4.5 stands 3.2e-4 off it).
+    const ON_EDGE: f64 = 1e-4;
+    let mut faces = faces;
+    'slivers: loop {
+        for (index, &face_id) in faces.iter().enumerate() {
+            let face = topo.face(face_id)?;
+            if !face.inner_wires().is_empty() {
+                continue;
+            }
+            let wire_id = face.outer_wire();
+            let [first, second] = topo.wire(wire_id)?.edges() else {
+                continue;
+            };
+            let (first, second) = (*first, *second);
+            let (own, contact) = match (
+                input_edges.contains(&first.edge()),
+                input_edges.contains(&second.edge()),
+            ) {
+                (true, false) => (first, second),
+                (false, true) => (second, first),
+                _ => continue,
+            };
+            let (own_edge, contact_edge) = (
+                topo.edge(own.edge())?.clone(),
+                topo.edge(contact.edge())?.clone(),
+            );
+            let ends = [contact_edge.start(), contact_edge.end()];
+            if own_edge.start() == own_edge.end()
+                || ([own_edge.start(), own_edge.end()] != ends
+                    && [own_edge.end(), own_edge.start()] != ends)
+            {
+                continue;
+            }
+            let span = (topo.vertex(own_edge.start())?.point()
+                - topo.vertex(own_edge.end())?.point())
+            .length();
+            if !edge_lies_on(topo, &contact_edge, &own_edge, ON_EDGE * span.max(1e-2))? {
+                continue;
+            }
+            // Each edge has one other use, in a face other than this one.
+            let mut contact_uses = Vec::new();
+            let mut own_uses = 0;
+            for &other in &faces {
+                if other == face_id {
+                    continue;
+                }
+                let f = topo.face(other)?;
+                for w in std::iter::once(f.outer_wire()).chain(f.inner_wires().iter().copied()) {
+                    for oe in topo.wire(w)?.edges() {
+                        if oe.edge() == contact.edge() {
+                            contact_uses.push(w);
+                        }
+                        own_uses += usize::from(oe.edge() == own.edge());
+                    }
+                }
+            }
+            let ([round_wire], 1) = (contact_uses.as_slice(), own_uses) else {
+                continue;
+            };
+            let round_wire = *round_wire;
+            log::debug!(
+                "contact sliver {face_id:?}: {:?} lies on {:?}",
+                contact.edge(),
+                own.edge()
+            );
+            // The round runs the wall's edge the way it ran the contact.
+            let closed = topo.wire(round_wire)?.is_closed();
+            let rewritten: Vec<OrientedEdge> = topo
+                .wire(round_wire)?
+                .edges()
+                .iter()
+                .map(|&oe| {
+                    if oe.edge() == contact.edge() {
+                        let from = oe.oriented_start(&contact_edge);
+                        OrientedEdge::new(own.edge(), own_edge.start() == from)
+                    } else {
+                        oe
+                    }
+                })
+                .collect();
+            *topo.wire_mut(round_wire)? = Wire::new(rewritten, closed)?;
+            faces.remove(index);
+            continue 'slivers;
+        }
+        return Ok(faces);
+    }
+}
+
+/// Whether every point of `edge` lies within `tol` of `on`'s curve.
+fn edge_lies_on(topo: &Topology, edge: &Edge, on: &Edge, tol: f64) -> Result<bool, BlendError> {
+    let (a, b) = (
+        topo.vertex(edge.start())?.point(),
+        topo.vertex(edge.end())?.point(),
+    );
+    let (p, q) = (
+        topo.vertex(on.start())?.point(),
+        topo.vertex(on.end())?.point(),
+    );
+    let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
+    let mut worst: f64 = 0.0;
+    for k in 1..16 {
+        let at = edge
+            .curve()
+            .evaluate_with_endpoints(t0 + (t1 - t0) * f64::from(k) / 16.0, a, b);
+        let off = match on.curve() {
+            EdgeCurve::Line => {
+                let chord = q - p;
+                let length2 = chord.dot(chord);
+                if length2 <= 1e-18 {
+                    return Ok(false);
+                }
+                let along = ((at - p).dot(chord) / length2).clamp(0.0, 1.0);
+                (p + chord * along - at).length()
+            }
+            EdgeCurve::Circle(circle) => (circle.evaluate(circle.project(at)) - at).length(),
+            EdgeCurve::Ellipse(ellipse) => (ellipse.evaluate(ellipse.project(at)) - at).length(),
+            EdgeCurve::NurbsCurve(nurbs) => {
+                match brepkit_math::nurbs::projection::project_point_to_curve(nurbs, at, 1e-9) {
+                    Ok(found) => found.distance,
+                    Err(_) => return Ok(false),
+                }
+            }
+        };
+        worst = worst.max(off);
+    }
+    log::debug!("edge lies within {worst:e} of its neighbour");
+    Ok(worst <= tol)
 }
 
 fn face_edge_forward(topo: &Topology, face_id: FaceId, edge_id: EdgeId) -> Option<bool> {
