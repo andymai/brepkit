@@ -382,7 +382,7 @@ impl<'a> FilletBuilder<'a> {
 
         // The closed-rim rebuild owns its cap: a cap another stripe also runs
         // along (a hole's rim filleted in the same call) takes the normal path.
-        let closed_rims: Vec<Option<ClosedRimInfo>> = recognized
+        let mut closed_rims: Vec<Option<ClosedRimInfo>> = recognized
             .into_iter()
             .enumerate()
             .map(|(stripe_index, rim)| {
@@ -395,6 +395,32 @@ impl<'a> FilletBuilder<'a> {
                 })
             })
             .collect();
+        // Nor may it own a wall that a stripe on the normal path trims too
+        // (the wall's other rim, its cap holed by a B-spline outline): that
+        // trim starts from the wall as it came, so it would drop the rebuild's
+        // contact circle and keep the rim it replaced. Such a rim takes the
+        // normal path as well, which trims both contacts on the one wall.
+        loop {
+            let normal_path_faces: HashSet<FaceId> = stripe_results
+                .iter()
+                .zip(&closed_rims)
+                .filter(|(_, rim)| rim.is_none())
+                .flat_map(|(sr, _)| [sr.stripe.face1, sr.stripe.face2])
+                .collect();
+            let mut changed = false;
+            for rim in &mut closed_rims {
+                if rim
+                    .as_ref()
+                    .is_some_and(|rim| normal_path_faces.contains(&rim.wall_face))
+                {
+                    *rim = None;
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
         let mut closed_rim_supports: HashSet<FaceId> = HashSet::new();
         for (stripe_index, (sr, closed_rim)) in stripe_results.iter().zip(closed_rims).enumerate() {
             if let Some(rim) = closed_rim {
