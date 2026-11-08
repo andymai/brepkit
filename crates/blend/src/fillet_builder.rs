@@ -30,7 +30,7 @@ use crate::radius_law::RadiusLaw;
 use crate::spine::Spine;
 use crate::stripe::{Stripe, StripeResult};
 use crate::trimmer;
-use crate::walker::{Walker, WalkerConfig, approximate_blend_surface};
+use crate::walker::{Walker, WalkerConfig, approximate_blend_surface, interpolate_blend_surface};
 use crate::{BlendError, BlendResult};
 type BlendCrossEdge = (EdgeId, VertexId, VertexId);
 type BlendCrossPair = (Option<BlendCrossEdge>, Option<BlendCrossEdge>);
@@ -3671,7 +3671,11 @@ fn compute_stripe_for_spine(
     if spine.is_closed() {
         check_contacts_on_faces(topo, face1, face2, &walk_result.sections)?;
     }
-    let blend_surface = approximate_blend_surface(&walk_result.sections)?;
+    // The band interpolates its sections: taking them as control points
+    // cut inside them along a curved edge (its contact on a B-spline wall
+    // stood 1e-3 inside the wall).
+    let blend_surface = interpolate_blend_surface(&walk_result.sections)
+        .or_else(|_| approximate_blend_surface(&walk_result.sections))?;
     // The band's sides are its own boundary rows: a polyline through the
     // sections' contact points leaves the band wherever they do not lie on a
     // line, since the band takes them as control points.
