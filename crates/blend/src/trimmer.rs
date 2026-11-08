@@ -2236,7 +2236,7 @@ fn check_holes_clear_of_closed_contacts(
     let refuse = || BlendError::TrimmingFailure { face: face_id };
     let face = topo.face(face_id)?;
     let FaceSurface::Plane { normal, .. } = face.surface() else {
-        return Ok(());
+        return check_holes_clear_in_space(topo, face_id, restrictions);
     };
     let u_axis = normal
         .cross(brepkit_math::vec::Vec3::new(1.0, 0.0, 0.0))
@@ -2358,6 +2358,168 @@ fn check_holes_clear_of_closed_contacts(
                 )
             {
                 return Err(refuse());
+            }
+        }
+    }
+    Ok(())
+}
+
+/// A curve sampled in space: its polyline, and how far the curve can stray
+/// from it, read as [`FlatPolyline`]'s is.
+struct SpacePolyline {
+    points: Vec<Point3>,
+    sag: f64,
+}
+
+/// The distance between the segments `a0 a1` and `b0 b1` in space.
+fn space_segment_distance(a0: Point3, a1: Point3, b0: Point3, b1: Point3) -> f64 {
+    let (d1, d2, r) = (a1 - a0, b1 - b0, a0 - b0);
+    let (a, e, f) = (d1.dot(d1), d2.dot(d2), d2.dot(r));
+    let (s, t) = if a <= f64::EPSILON && e <= f64::EPSILON {
+        (0.0, 0.0)
+    } else if a <= f64::EPSILON {
+        (0.0, (f / e).clamp(0.0, 1.0))
+    } else {
+        let c = d1.dot(r);
+        if e <= f64::EPSILON {
+            ((-c / a).clamp(0.0, 1.0), 0.0)
+        } else {
+            let b = d1.dot(d2);
+            let denom = a.mul_add(e, -(b * b));
+            let mut s = if denom > f64::EPSILON {
+                (b.mul_add(f, -(c * e)) / denom).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            let mut t = b.mul_add(s, f) / e;
+            if t < 0.0 {
+                t = 0.0;
+                s = (-c / a).clamp(0.0, 1.0);
+            } else if t > 1.0 {
+                t = 1.0;
+                s = ((b - c) / a).clamp(0.0, 1.0);
+            }
+            (s, t)
+        }
+    };
+    let p = a0 + d1 * s;
+    let q = b0 + d2 * t;
+    (p - q).length()
+}
+
+/// Whether two polylines (a closed one and any other) stay further than
+/// `margin` apart in space.
+fn space_polylines_clear_by(a: &SpacePolyline, b: &SpacePolyline, margin: f64) -> bool {
+    let span =
+        |line: &SpacePolyline, k: usize| (line.points[k], line.points[(k + 1) % line.points.len()]);
+    let apart = |p0: Point3, p1: Point3, q0: Point3, q1: Point3| {
+        p0.x().min(p1.x()) - margin > q0.x().max(q1.x())
+            || q0.x().min(q1.x()) - margin > p0.x().max(p1.x())
+            || p0.y().min(p1.y()) - margin > q0.y().max(q1.y())
+            || q0.y().min(q1.y()) - margin > p0.y().max(p1.y())
+            || p0.z().min(p1.z()) - margin > q0.z().max(q1.z())
+            || q0.z().min(q1.z()) - margin > p0.z().max(p1.z())
+    };
+    for i in 0..a.points.len() {
+        let (a0, a1) = span(a, i);
+        for j in 0..b.points.len() {
+            let (b0, b1) = span(b, j);
+            if !apart(a0, a1, b0, b1) && space_segment_distance(a0, a1, b0, b1) <= margin {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+/// The curved-face part of [`check_holes_clear_of_closed_contacts`]:
+/// refuses a closed contact that a hole of the face (other than a rim the
+/// contact rounds) touches or crosses. On a cylinder wall a round's contact
+/// can run over a hole where another feature joins the wall; the trim keeps
+/// the hole whole, so the face's outline and its hole would cross. The
+/// curves are compared in space, each kept further apart than the two can
+/// stray from their polylines. A hole wholly on the side the trim cuts off
+/// is not tested here (that needs the face's own frame).
+fn check_holes_clear_in_space(
+    topo: &Topology,
+    face_id: FaceId,
+    restrictions: &[ParametricRestriction],
+) -> Result<(), BlendError> {
+    let face = topo.face(face_id)?;
+    if face.inner_wires().is_empty() {
+        return Ok(());
+    }
+    // Appends the curve from `a` to `b`, run forward or backward, without
+    // its last point, which the next piece starts at.
+    let sample = |curve: &EdgeCurve,
+                  (a, b): (Point3, Point3),
+                  forward: bool,
+                  n: u32,
+                  line: &mut SpacePolyline| {
+        let (t0, t1) = curve.domain_with_endpoints(a, b);
+        let at = |k: f64| {
+            let k = if forward { k } else { f64::from(n) - k };
+            curve.evaluate_with_endpoints((t1 - t0).mul_add(k / f64::from(n), t0), a, b)
+        };
+        for k in 0..n {
+            let (p, q) = (at(f64::from(k)), at(f64::from(k + 1)));
+            for f in [0.25, 0.5, 0.75] {
+                let inner = at(f64::from(k) + f);
+                line.sag = line
+                    .sag
+                    .max(2.0 * space_segment_distance(p, q, inner, inner));
+            }
+            line.points.push(p);
+        }
+    };
+    let mut contacts = Vec::new();
+    for r in restrictions {
+        let (Some(&first), Some(&last), Some(curve)) =
+            (r.contact_3d.first(), r.contact_3d.last(), r.curve.as_ref())
+        else {
+            continue;
+        };
+        if (first - last).length() > VERTEX_TOL {
+            continue;
+        }
+        let mut line = SpacePolyline {
+            points: Vec::new(),
+            sag: 0.0,
+        };
+        sample(curve, (first, last), true, 16 * HOLE_SAMPLES, &mut line);
+        let rounds: std::collections::HashSet<EdgeId> = r.source_edges.iter().copied().collect();
+        contacts.push((line, rounds));
+    }
+    if contacts.is_empty() {
+        return Ok(());
+    }
+    for &hole in face.inner_wires() {
+        let mut line = SpacePolyline {
+            points: Vec::new(),
+            sag: 0.0,
+        };
+        let mut edges = std::collections::HashSet::new();
+        for oe in topo.wire(hole)?.edges() {
+            let edge = topo.edge(oe.edge())?;
+            let (a, b) = (
+                topo.vertex(edge.start())?.point(),
+                topo.vertex(edge.end())?.point(),
+            );
+            sample(
+                edge.curve(),
+                (a, b),
+                oe.is_forward(),
+                HOLE_SAMPLES,
+                &mut line,
+            );
+            edges.insert(oe.edge());
+        }
+        for (contact, rounds) in &contacts {
+            if rounds.iter().any(|edge| edges.contains(edge)) {
+                continue;
+            }
+            if !space_polylines_clear_by(&line, contact, line.sag + contact.sag + VERTEX_TOL) {
+                return Err(BlendError::TrimmingFailure { face: face_id });
             }
         }
     }
