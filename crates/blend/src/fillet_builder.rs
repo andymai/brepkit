@@ -1840,8 +1840,10 @@ fn drop_contact_slivers(
     input_edges: &HashSet<EdgeId>,
 ) -> Result<Vec<FaceId>, BlendError> {
     // How far the contact may stand off the wall's edge, for each unit of
-    // the edge's span: a walked contact is fitted through its sections (a
-    // round of 3 along a quarter arc of 4.5 stands 3.2e-4 off it).
+    // the edge's span. A walked band passes through its sections, so its
+    // contact stands off only between them: a round of 3 along a quarter arc
+    // of 4.5 stands 5.5e-9 off it. The fallback band, which takes the
+    // sections as its control points, stands 3.2e-4 off the same arc.
     const ON_EDGE: f64 = 1e-4;
     let mut faces = faces;
     'slivers: loop {
@@ -1929,7 +1931,9 @@ fn drop_contact_slivers(
     }
 }
 
-/// Whether every point of `edge` lies within `tol` of `on`'s curve.
+/// Whether every point of `edge` lies within `tol` of `on`'s curve. On a
+/// circle or an ellipse, a point whose foot falls outside `on`'s own arc is
+/// measured to the arc's nearer end, so the rest of the curve does not count.
 fn edge_lies_on(topo: &Topology, edge: &Edge, on: &Edge, tol: f64) -> Result<bool, BlendError> {
     let (a, b) = (
         topo.vertex(edge.start())?.point(),
@@ -1940,6 +1944,14 @@ fn edge_lies_on(topo: &Topology, edge: &Edge, on: &Edge, tol: f64) -> Result<boo
         topo.vertex(on.end())?.point(),
     );
     let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
+    let (s0, s1) = on.curve().domain_with_endpoints(p, q);
+    let off_arc = |at: Point3, angle: f64, foot: Point3| {
+        if (angle - s0).rem_euclid(std::f64::consts::TAU) <= s1 - s0 {
+            (foot - at).length()
+        } else {
+            (p - at).length().min((q - at).length())
+        }
+    };
     let mut worst: f64 = 0.0;
     for k in 1..16 {
         let at = edge
@@ -1955,8 +1967,14 @@ fn edge_lies_on(topo: &Topology, edge: &Edge, on: &Edge, tol: f64) -> Result<boo
                 let along = ((at - p).dot(chord) / length2).clamp(0.0, 1.0);
                 (p + chord * along - at).length()
             }
-            EdgeCurve::Circle(circle) => (circle.evaluate(circle.project(at)) - at).length(),
-            EdgeCurve::Ellipse(ellipse) => (ellipse.evaluate(ellipse.project(at)) - at).length(),
+            EdgeCurve::Circle(circle) => {
+                let angle = circle.project(at);
+                off_arc(at, angle, circle.evaluate(angle))
+            }
+            EdgeCurve::Ellipse(ellipse) => {
+                let angle = ellipse.project(at);
+                off_arc(at, angle, ellipse.evaluate(angle))
+            }
             EdgeCurve::NurbsCurve(nurbs) => {
                 match brepkit_math::nurbs::projection::project_point_to_curve(nurbs, at, 1e-9) {
                     Ok(found) => found.distance,
@@ -5725,5 +5743,40 @@ mod tests {
         assert!(result.failed.is_empty());
         assert!(!result.is_partial);
         assert_shell_edges_are_closed(&topo, result.solid);
+    }
+
+    /// Two arcs of one circle (or one ellipse) join the same two vertices:
+    /// each lies on itself, and neither lies on the other.
+    #[test]
+    fn an_arc_does_not_lie_on_the_rest_of_its_curve() {
+        let normal = Vec3::new(0.0, 0.0, 1.0);
+        let circle = Circle3D::new(Point3::new(0.0, 0.0, 0.0), normal, 2.0).unwrap();
+        let ellipse =
+            brepkit_math::curves::Ellipse3D::new(Point3::new(0.0, 0.0, 0.0), normal, 3.0, 2.0)
+                .unwrap();
+        let curves = [
+            (
+                EdgeCurve::Circle(circle.clone()),
+                circle.evaluate(0.3),
+                circle.evaluate(2.0),
+            ),
+            (
+                EdgeCurve::Ellipse(ellipse.clone()),
+                ellipse.evaluate(0.3),
+                ellipse.evaluate(2.0),
+            ),
+        ];
+        for (curve, from, to) in curves {
+            let mut topo = Topology::new();
+            let a = topo.add_vertex(Vertex::new(from, 1e-7));
+            let b = topo.add_vertex(Vertex::new(to, 1e-7));
+            let short = Edge::new(a, b, curve.clone());
+            let long = Edge::new(b, a, curve);
+            let tol = 1e-6;
+            assert!(edge_lies_on(&topo, &short, &short, tol).unwrap());
+            assert!(edge_lies_on(&topo, &long, &long, tol).unwrap());
+            assert!(!edge_lies_on(&topo, &short, &long, tol).unwrap());
+            assert!(!edge_lies_on(&topo, &long, &short, tol).unwrap());
+        }
     }
 }
