@@ -15,7 +15,7 @@ use brepkit_topology::face::{Face, FaceId, FaceSurface};
 use brepkit_topology::shell::{Shell, ShellId};
 use brepkit_topology::solid::{Solid, SolidId};
 use brepkit_topology::vertex::{Vertex, VertexId};
-use brepkit_topology::wire::{OrientedEdge, Wire};
+use brepkit_topology::wire::{OrientedEdge, Wire, WireId};
 
 use crate::analytic;
 use crate::blend_func::{ConstRadBlend, EvolRadBlend};
@@ -422,6 +422,9 @@ impl<'a> FilletBuilder<'a> {
             }
         }
         let mut closed_rim_supports: HashSet<FaceId> = HashSet::new();
+        // Walls a closed rim's round took whole (a wall exactly a radius
+        // high): left out of the result.
+        let mut vanished_walls: HashSet<FaceId> = HashSet::new();
         for (stripe_index, (sr, closed_rim)) in stripe_results.iter().zip(closed_rims).enumerate() {
             if let Some(rim) = closed_rim {
                 let contour_id =
@@ -442,6 +445,9 @@ impl<'a> FilletBuilder<'a> {
                 ) {
                     Ok(band) => {
                         blend_face_ids.push(band);
+                        if rim.far_rim.is_some() {
+                            vanished_walls.insert(rim.wall_face);
+                        }
                         closed_rim_supports.extend(
                             [rim.plane_face, rim.wall_face]
                                 .iter()
@@ -1571,7 +1577,7 @@ impl<'a> FilletBuilder<'a> {
         let mut result_faces: Vec<FaceId> = Vec::new();
 
         for &fid in &original_faces {
-            if !touched_faces.contains(&fid) {
+            if !touched_faces.contains(&fid) && !vanished_walls.contains(&fid) {
                 // An untouched face may still have been rebuilt by the
                 // end-cap notch pass.
                 result_faces.push(face_replacements.get(&fid).copied().unwrap_or(fid));
@@ -1584,6 +1590,9 @@ impl<'a> FilletBuilder<'a> {
         let mut touched: Vec<FaceId> = touched_faces.iter().copied().collect();
         touched.sort_unstable_by_key(|f| f.index());
         for &fid in &touched {
+            if vanished_walls.contains(&fid) {
+                continue;
+            }
             let replacement = face_replacements.get(&fid).copied();
             result_faces.push(replacement.unwrap_or(fid));
         }
@@ -2005,6 +2014,9 @@ struct ClosedRimInfo {
     /// The rim is one of the cap's holes (a post standing on a plate), not
     /// its whole outer wire (a disc cap).
     rim_is_hole: bool,
+    /// The wall's other rim, where the wall contact lands on it: a wall
+    /// exactly a radius high. The wall goes, and the band takes this rim.
+    far_rim: Option<EdgeId>,
 }
 
 /// The lowest height along `toward`, from `base`, of the wall boundary that
@@ -2189,16 +2201,22 @@ fn closed_rim_info(topo: &Topology, stripe: &Stripe) -> Result<Option<ClosedRimI
     // The wall contact circle must land on the wall, short of every point of
     // the boundary the rebuild keeps: a fillet wider than a plate is thick, or
     // a post whose sloped top dips below the contact, would carry it past.
+    // Landing on the wall's other rim (a wall exactly a radius high) leaves
+    // no wall: the band takes that rim.
     let rise = wall_center - plate_center;
-    if let Ok(toward) = rise.normalize()
-        && rise.length()
-            >= kept_wall_boundary_height(topo, wall_face, rim_edge, plate_center, toward)? - 1e-7
-    {
-        return Err(BlendError::PlanningFailure {
-            reason: format!(
-                "the fillet's wall contact would land past the wall bounding rim {rim_edge:?}"
-            ),
-        });
+    let mut far_rim = None;
+    if let Ok(toward) = rise.normalize() {
+        let height = kept_wall_boundary_height(topo, wall_face, rim_edge, plate_center, toward)?;
+        if rise.length() >= height - 1e-7 {
+            far_rim = landed_far_rim(topo, wall_face, rim_edge, axis, axis_origin, wall_center)?;
+            if far_rim.is_none() {
+                return Err(BlendError::PlanningFailure {
+                    reason: format!(
+                        "the fillet's wall contact would land past the wall bounding rim {rim_edge:?}"
+                    ),
+                });
+            }
+        }
     }
 
     if rim_is_hole {
@@ -2266,11 +2284,19 @@ fn closed_rim_info(topo: &Topology, stripe: &Stripe) -> Result<Option<ClosedRimI
     }
 
     // Both contact circles start where the rim's vertex is, so their
-    // vertices sit on the wall's seam.
-    let rim_point = topo.vertex(topo.edge(rim_edge)?.start())?.point();
+    // vertices sit on the wall's seam; where the wall goes, where its other
+    // rim's vertex is, which the band's seam then runs to.
+    let anchor = far_rim.unwrap_or(rim_edge);
+    let rim_point = topo.vertex(topo.edge(anchor)?.start())?.point();
     let reference = (rim_point - project_onto_axis(rim_point, axis_origin, axis)).normalize()?;
     let plate_circle = Circle3D::new_with_ref(plate_center, axis, plate_radius, reference)?;
-    let wall_circle = Circle3D::new_with_ref(wall_center, axis, wall_radius, reference)?;
+    let wall_circle = match far_rim.map(|edge| topo.edge(edge).map(|e| e.curve().clone())) {
+        Some(curve) => match curve? {
+            EdgeCurve::Circle(circle) => circle,
+            _ => return Ok(None),
+        },
+        None => Circle3D::new_with_ref(wall_center, axis, wall_radius, reference)?,
+    };
 
     Ok(Some(ClosedRimInfo {
         plane_face,
@@ -2279,7 +2305,65 @@ fn closed_rim_info(topo: &Topology, stripe: &Stripe) -> Result<Option<ClosedRimI
         plate_circle,
         wall_circle,
         rim_is_hole,
+        far_rim,
     }))
+}
+
+/// The wall's other rim, where a closed rim's wall contact lands exactly on
+/// it: one closed circle about the wall's axis through the contact's centre,
+/// of the contact's radius, the wall's wire otherwise only that rim, `rim`
+/// and the seam edges between their vertices, and no holes. `None` for any
+/// other wall.
+fn landed_far_rim(
+    topo: &Topology,
+    wall_face: FaceId,
+    rim: EdgeId,
+    axis: Vec3,
+    axis_origin: Point3,
+    contact_center: Point3,
+) -> Result<Option<EdgeId>, BlendError> {
+    // A file's digits: the wall's height and the round's radius each read
+    // to about 1e-7 of the part.
+    const ON: f64 = 1e-6;
+    let face = topo.face(wall_face)?;
+    if !face.inner_wires().is_empty() {
+        return Ok(None);
+    }
+    let FaceSurface::Cylinder(cylinder) = face.surface() else {
+        return Ok(None);
+    };
+    let tol = ON * cylinder.radius().max(1.0);
+    let rim_vertex = topo.edge(rim)?.start();
+    let mut far = None;
+    for oriented in topo.wire(face.outer_wire())?.edges() {
+        let id = oriented.edge();
+        if id == rim {
+            continue;
+        }
+        let edge = topo.edge(id)?;
+        if let EdgeCurve::Circle(circle) = edge.curve()
+            && edge.start() == edge.end()
+        {
+            let on_axis = radial_distance(circle.center(), axis_origin, axis);
+            if far.is_some_and(|f| f != id)
+                || on_axis > tol
+                || (circle.center() - contact_center).length() > tol
+                || (circle.radius() - cylinder.radius()).abs() > tol
+                || circle.normal().cross(axis).length() > ON
+            {
+                return Ok(None);
+            }
+            far = Some(id);
+            continue;
+        }
+        // A seam: a line from the rim's vertex up the wall.
+        if !matches!(edge.curve(), EdgeCurve::Line)
+            || ![edge.start(), edge.end()].contains(&rim_vertex)
+        {
+            return Ok(None);
+        }
+    }
+    Ok(far)
 }
 
 /// Assemble a full-revolution rim fillet: rebuild the disc cap bounded by the
@@ -2345,9 +2429,14 @@ fn assemble_closed_rim(
         .find(|oe| oe.edge() == rim.rim_edge)
         .is_some_and(OrientedEdge::is_forward);
 
-    // Vertices for the two closed contact circles (start == end → degenerate).
+    // Vertices for the two closed contact circles (start == end → degenerate);
+    // where the wall goes, the band's wall side is the wall's other rim, at
+    // its own vertex.
     let plate_v = topo.add_vertex(Vertex::new(rim.plate_circle.evaluate(0.0), TOL));
-    let wall_v = topo.add_vertex(Vertex::new(rim.wall_circle.evaluate(0.0), TOL));
+    let wall_v = match rim.far_rim {
+        Some(far) => topo.edge(far)?.start(),
+        None => topo.add_vertex(Vertex::new(rim.wall_circle.evaluate(0.0), TOL)),
+    };
 
     // Shared contact-circle edges are planned and materialized through the
     // same registry used by open contours.
@@ -2388,6 +2477,20 @@ fn assemble_closed_rim(
             BoundaryOwner::planned("closed-rim torus band", plate_sense),
         ],
     )?;
+    if let Some(far) = rim.far_rim {
+        return assemble_closed_rim_without_wall(
+            topo,
+            stripe,
+            rim,
+            far,
+            (plate_v, wall_v, plate_handle),
+            (band_reversed, wall_reversed),
+            &wall_oriented,
+            registry,
+            face_replacements,
+            (plane_surf, plane_reversed, cap_outer, cap_holes, rim_wire),
+        );
+    }
     let wall_handle = registry.register(
         BoundaryKey::contact(contour_id, 0, wall_side as u8),
         PlannedVertex::new(wall_v),
@@ -2514,6 +2617,82 @@ fn assemble_closed_rim(
     registry.install_pcurves(topo, plate_handle)?;
     registry.install_pcurves(topo, wall_handle)?;
 
+    Ok(band_face_id)
+}
+
+/// [`assemble_closed_rim`] where the wall contact lands on the wall's other
+/// rim: the cap is rebuilt as there, the wall goes (the caller leaves it out
+/// of the result), and the band runs from the plate contact to that rim,
+/// using it as the wall did.
+#[allow(clippy::too_many_arguments)]
+fn assemble_closed_rim_without_wall(
+    topo: &mut Topology,
+    stripe: &Stripe,
+    rim: &ClosedRimInfo,
+    far: EdgeId,
+    (plate_v, wall_v, plate_handle): (VertexId, VertexId, crate::boundary_registry::BoundaryHandle),
+    (band_reversed, wall_reversed): (bool, bool),
+    wall_oriented: &[OrientedEdge],
+    registry: &mut BoundaryRegistry,
+    face_replacements: &mut std::collections::HashMap<FaceId, FaceId>,
+    (plane_surf, plane_reversed, cap_outer, cap_holes, rim_wire): (
+        FaceSurface,
+        bool,
+        WireId,
+        Vec<WireId>,
+        WireId,
+    ),
+) -> Result<FaceId, BlendError> {
+    // The band takes the rim as the wall did, its sense read against its own
+    // surface: a wire runs about its surface's normal, which a reversed face
+    // turns.
+    let far_forward = wall_oriented
+        .iter()
+        .find(|oe| oe.edge() == far)
+        .map(|oe| oe.is_forward() != (wall_reversed != band_reversed))
+        .ok_or(BlendError::TrimmingFailure {
+            face: rim.wall_face,
+        })?;
+    let seam_curve = crate::builder_utils::seam_curve(
+        &stripe.surface,
+        &stripe.sections,
+        topo.vertex(plate_v)?.point(),
+        topo.vertex(wall_v)?.point(),
+    );
+    let seam_edge = topo.add_edge(Edge::new(plate_v, wall_v, seam_curve));
+    let cap_boundary = registry.oriented_edge(topo, plate_handle, 0)?;
+    let cap_wire_id = topo.add_wire(Wire::new(vec![cap_boundary], true)?);
+    let (cap_outer, cap_holes) = if rim.rim_is_hole {
+        let holes = cap_holes
+            .iter()
+            .map(|&w| if w == rim_wire { cap_wire_id } else { w })
+            .collect();
+        (cap_outer, holes)
+    } else {
+        (cap_wire_id, cap_holes)
+    };
+    let mut cap_face = Face::new(cap_outer, cap_holes, plane_surf);
+    cap_face.set_reversed(plane_reversed);
+    let cap_face_id = topo.add_face(cap_face);
+    registry.set_owner_face(plate_handle, 0, cap_face_id)?;
+    face_replacements.insert(rim.plane_face, cap_face_id);
+
+    let plate_boundary = registry.oriented_edge(topo, plate_handle, 1)?;
+    let band_wire = Wire::new(
+        vec![
+            plate_boundary,
+            OrientedEdge::new(seam_edge, true),
+            OrientedEdge::new(far, far_forward),
+            OrientedEdge::new(seam_edge, false),
+        ],
+        true,
+    )?;
+    let band_wire_id = topo.add_wire(band_wire);
+    let mut band_face = Face::new(band_wire_id, Vec::new(), stripe.surface.clone());
+    band_face.set_reversed(band_reversed);
+    let band_face_id = topo.add_face(band_face);
+    registry.set_owner_face(plate_handle, 1, band_face_id)?;
+    registry.install_pcurves(topo, plate_handle)?;
     Ok(band_face_id)
 }
 
