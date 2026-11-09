@@ -642,7 +642,10 @@ impl<'a> FilletBuilder<'a> {
                 }
             }
         }
-        let split_policy = if single_planar_stripe {
+        // A one-edge fillet splits every edge so its end caps take the notch,
+        // unless an end's cap cannot: that end keeps its runout closure,
+        // which expects the whole spoke, as it does in a fillet of several.
+        let split_policy = if single_planar_stripe && unsplit_vertices.is_empty() {
             trimmer::BoundarySplitPolicy::All
         } else {
             trimmer::BoundarySplitPolicy::Selective {
@@ -656,6 +659,7 @@ impl<'a> FilletBuilder<'a> {
         for face_id in &restriction_faces {
             if let Some(restrictions) = restrictions_by_face.get(face_id) {
                 check_closed_contacts_do_not_cross(*face_id, restrictions)?;
+                check_contacts_keep_their_edges(topo, *face_id, restrictions)?;
             }
         }
         for face_id in restriction_faces {
@@ -1687,6 +1691,7 @@ impl<'a> FilletBuilder<'a> {
                 is_partial: true,
             });
         }
+        fold_spoke_spurs(topo, &result_faces)?;
         let new_shell = match Shell::new(result_faces) {
             Ok(shell) => shell,
             Err(error) => {
@@ -1772,6 +1777,193 @@ fn outward_plane(topo: &Topology, face_id: FaceId) -> Result<Option<(Vec3, f64)>
     };
     let sign = if face.is_reversed() { -1.0 } else { 1.0 };
     Ok(face.effective_plane_normal().map(|n| (n, d * sign)))
+}
+
+/// Fold out a spur where a face's wire runs along a straight edge and back
+/// along a longer straight edge that overlaps it.
+///
+/// A terminal whose cap cannot be notched keeps the edge leaving the spine's
+/// end (the spoke) whole, and the trim bridges the contact's end to that
+/// vertex with a straight runout edge. When the contact ends on the spoke
+/// itself (a concave fillet ending on a plate's face, with another face of
+/// the fan beside it), the runout edge lies along the spoke: the support
+/// face's wire then runs out to the spine's end along the runout edge and
+/// back along the spoke. That is closed by edge count, but the face's mesh
+/// skips the doubled-back stretch while the spoke's other face meshes the
+/// spoke whole, which leaves the shell's mesh open along it.
+///
+/// The spoke is split where the runout edge ends, and the runout edge takes
+/// the piece it overlaps: the spur's face keeps only the far piece, and each
+/// other face along the spoke takes the runout edge and the far piece. Every
+/// edge keeps two uses. This runs after the registry audit, which has
+/// already checked each boundary's owners.
+fn fold_spoke_spurs(topo: &mut Topology, faces: &[FaceId]) -> Result<(), BlendError> {
+    const ON_LINE: f64 = 1e-6;
+    let point = |topo: &Topology, v: VertexId| topo.vertex(v).map(Vertex::point);
+    for &face_id in faces {
+        let face = topo.face(face_id)?;
+        let wire_ids: Vec<_> = std::iter::once(face.outer_wire())
+            .chain(face.inner_wires().iter().copied())
+            .collect();
+        for wire_id in wire_ids {
+            // Fold one spur at a time: each fold rewrites the wire.
+            'folds: loop {
+                let edges = topo.wire(wire_id)?.edges().to_vec();
+                let n = edges.len();
+                if n < 3 {
+                    break;
+                }
+                for i in 0..n {
+                    let (first, second) = (edges[i], edges[(i + 1) % n]);
+                    if first.edge() == second.edge() {
+                        continue;
+                    }
+                    let (e1, e2) = (topo.edge(first.edge())?, topo.edge(second.edge())?);
+                    if !matches!(e1.curve(), EdgeCurve::Line)
+                        || !matches!(e2.curve(), EdgeCurve::Line)
+                    {
+                        continue;
+                    }
+                    let (p, v) = (first.oriented_start(e1), first.oriented_end(e1));
+                    let (v2, q) = (second.oriented_start(e2), second.oriented_end(e2));
+                    if v != v2 || p == q {
+                        continue;
+                    }
+                    let (pp, vp, qp) = (point(topo, p)?, point(topo, v)?, point(topo, q)?);
+                    // Which of the two is the short one doubling back over
+                    // the other: its far end lies inside the long one.
+                    let inside = |far: Point3, along: Point3| {
+                        let span = along - vp;
+                        let length2 = span.dot(span);
+                        if length2 <= 1e-18 {
+                            return false;
+                        }
+                        let t = (far - vp).dot(span) / length2;
+                        t > 1e-9 && t < 1.0 - 1e-9 && (vp + span * t - far).length() <= ON_LINE
+                    };
+                    let (short, long, short_first) = if inside(pp, qp) {
+                        (first, second, true)
+                    } else if inside(qp, pp) {
+                        (second, first, false)
+                    } else {
+                        continue;
+                    };
+                    // The long edge must be shared with exactly one other
+                    // face, and only once here; the short edge too.
+                    let mut others = Vec::new();
+                    let mut short_faces = Vec::new();
+                    let mut here = 0;
+                    for &other in faces {
+                        let f = topo.face(other)?;
+                        for w in
+                            std::iter::once(f.outer_wire()).chain(f.inner_wires().iter().copied())
+                        {
+                            for oe in topo.wire(w)?.edges() {
+                                if oe.edge() == long.edge() {
+                                    if w == wire_id {
+                                        here += 1;
+                                    } else {
+                                        others.push((w, other));
+                                    }
+                                }
+                                if oe.edge() == short.edge() && w != wire_id {
+                                    short_faces.push(other);
+                                }
+                            }
+                        }
+                    }
+                    let ([(other_wire, beyond_long)], [beyond_short]) =
+                        (others.as_slice(), short_faces.as_slice())
+                    else {
+                        continue;
+                    };
+                    if here != 1 {
+                        continue;
+                    }
+                    // Only where the patch beyond the short edge carries on
+                    // the face beyond the long one, in its plane and facing
+                    // its way (the patch adds material there). A patch
+                    // standing in its own plane, or facing the other way,
+                    // covers material the fillet removed: folding it in
+                    // would only close a wrong shell.
+                    let plane =
+                        |topo: &Topology, f: FaceId| -> Result<Option<(Vec3, f64)>, BlendError> {
+                            let face = topo.face(f)?;
+                            let FaceSurface::Plane { d, .. } = face.surface() else {
+                                return Ok(None);
+                            };
+                            let sign = if face.is_reversed() { -1.0 } else { 1.0 };
+                            Ok(face.effective_plane_normal().map(|n| (n, d * sign)))
+                        };
+                    let (Some((n1, d1)), Some((n2, d2))) =
+                        (plane(topo, *beyond_long)?, plane(topo, *beyond_short)?)
+                    else {
+                        continue;
+                    };
+                    if n1.dot(n2) < 1.0 - 1e-9 || (d1 - d2).abs() > ON_LINE {
+                        continue;
+                    }
+                    let other_wire = *other_wire;
+                    // The short edge's far end, where the long edge splits.
+                    let split = if short_first { p } else { q };
+                    let long_edge = topo.edge(long.edge())?.clone();
+                    let short_edge = topo.edge(short.edge())?.clone();
+                    let far = if long_edge.start() == v {
+                        long_edge.end()
+                    } else {
+                        long_edge.start()
+                    };
+                    log::debug!(
+                        "spoke spur on face {face_id:?}: {:?} over {:?}, split at {:?}",
+                        short.edge(),
+                        long.edge(),
+                        point(topo, split)?
+                    );
+                    let rest = topo.add_edge(Edge::new(split, far, EdgeCurve::Line));
+                    // In this wire the pair becomes the far piece alone, run
+                    // the way the long edge was.
+                    let rest_here = OrientedEdge::new(rest, long.oriented_start(&long_edge) == v);
+                    let mut folded = Vec::with_capacity(n - 1);
+                    for (k, &oe) in edges.iter().enumerate() {
+                        if k == i {
+                            folded.push(rest_here);
+                        } else if k != (i + 1) % n {
+                            folded.push(oe);
+                        }
+                    }
+                    *topo.wire_mut(wire_id)? = Wire::new(folded, true)?;
+                    // The other face runs the long edge one way: from the
+                    // spine's end, the short edge (against its use here)
+                    // then the far piece; toward it, the reverse.
+                    let other_edges = topo.wire(other_wire)?.edges().to_vec();
+                    let closed = topo.wire(other_wire)?.is_closed();
+                    let mut rewritten = Vec::with_capacity(other_edges.len() + 1);
+                    for oe in other_edges {
+                        if oe.edge() != long.edge() {
+                            rewritten.push(oe);
+                            continue;
+                        }
+                        let from_v = oe.oriented_start(&long_edge) == v;
+                        let short_from_v = short.oriented_start(&short_edge) == v;
+                        let short_away =
+                            OrientedEdge::new(short.edge(), short.is_forward() == short_from_v);
+                        if from_v {
+                            rewritten.push(short_away);
+                            rewritten.push(OrientedEdge::new(rest, true));
+                        } else {
+                            rewritten.push(OrientedEdge::new(rest, false));
+                            rewritten
+                                .push(OrientedEdge::new(short.edge(), !short_away.is_forward()));
+                        }
+                    }
+                    *topo.wire_mut(other_wire)? = Wire::new(rewritten, closed)?;
+                    continue 'folds;
+                }
+                break;
+            }
+        }
+    }
+    Ok(())
 }
 
 fn face_edge_forward(topo: &Topology, face_id: FaceId, edge_id: EdgeId) -> Option<bool> {
@@ -3968,6 +4160,106 @@ fn check_closed_contacts_do_not_cross(
         let near = distance(rim, own);
         for (j, &(_, other)) in closed.iter().enumerate() {
             if i != j && distance(rim, other) <= near {
+                return Err(BlendError::PlanningFailure {
+                    reason: format!(
+                        "two fillets on face {} cross: their radii are too large for the face between them",
+                        face_id.index()
+                    ),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+/// How much nearer another contact must lie to an edge's middle than the
+/// edge's own contact for the two to read as passed each other.
+const SWAP_MARGIN: f64 = 0.9;
+
+/// How nearly a contact must run along an edge, as the cosine of the angle
+/// between them, to be read as passing it.
+const SWAP_PARALLEL: f64 = 0.9;
+
+/// Refuses two contacts on one face that have passed each other: two rounds
+/// along the two edges of a strip narrower than their setbacks together
+/// (a ridge between two walls). The contacts are then swapped, each lying
+/// nearer the other round's edge than its own, and the strip between them is
+/// trimmed to a loop that crosses itself, still kept. Two contacts that both
+/// run alongside the middles of both edges are refused when each lies nearer
+/// the other's edge than its own.
+fn check_contacts_keep_their_edges(
+    topo: &Topology,
+    face_id: FaceId,
+    restrictions: &[(usize, trimmer::ParametricRestriction)],
+) -> Result<(), BlendError> {
+    // The distance from `p` to a polyline, whether its nearest point lies
+    // alongside `p` (not at one of the polyline's ends), and the cosine of
+    // the angle between the polyline there and `tangent`.
+    let distance = |p: Point3, tangent: Vec3, points: &[Point3]| {
+        let last = points.len().saturating_sub(2);
+        points
+            .windows(2)
+            .enumerate()
+            .map(|(k, w)| {
+                let (a, b) = (w[0], w[1]);
+                let ab = b - a;
+                let len2 = ab.dot(ab);
+                let t = if len2 <= 1e-24 {
+                    0.0
+                } else {
+                    ((p - a).dot(ab) / len2).clamp(0.0, 1.0)
+                };
+                let alongside = !(k == 0 && t <= 0.0 || k == last && t >= 1.0);
+                let cos = ab.normalize().map_or(0.0, |d| d.dot(tangent).abs());
+                ((a + ab * t - p).length(), alongside, cos)
+            })
+            .fold((f64::INFINITY, false, 0.0), |best, d| {
+                if d.0 < best.0 { d } else { best }
+            })
+    };
+    let mut middles = Vec::with_capacity(restrictions.len());
+    for (_, restriction) in restrictions {
+        let edges = &restriction.source_edges;
+        let middle = if edges.is_empty() || restriction.contact_3d.len() < 2 {
+            None
+        } else {
+            let edge = topo.edge(edges[edges.len() / 2])?;
+            let (a, b) = (
+                topo.vertex(edge.start())?.point(),
+                topo.vertex(edge.end())?.point(),
+            );
+            let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
+            let t = f64::midpoint(t0, t1);
+            edge.curve()
+                .tangent_with_endpoints(t, a, b)
+                .normalize()
+                .ok()
+                .map(|tangent| (edge.curve().evaluate_with_endpoints(t, a, b), tangent))
+        };
+        middles.push(middle);
+    }
+    // Contacts that passed each other are each nearer the other's edge than
+    // their own, both running along it there. A contact merely nearer
+    // another's edge is no crossing: one running past a short edge in an
+    // acute corner, or across an edge's middle (four rounds meeting in a
+    // square face's middle); nor are two contacts that nearly coincide (two
+    // stripes' sections ending on one line), which `SWAP_MARGIN` leaves.
+    let swapped = |i: usize, j: usize| {
+        middles[i].is_some_and(|(middle, tangent)| {
+            let (own, own_alongside, own_cos) =
+                distance(middle, tangent, &restrictions[i].1.contact_3d);
+            let (other, other_alongside, other_cos) =
+                distance(middle, tangent, &restrictions[j].1.contact_3d);
+            own_alongside
+                && other_alongside
+                && own_cos >= SWAP_PARALLEL
+                && other_cos >= SWAP_PARALLEL
+                && other < SWAP_MARGIN * own
+        })
+    };
+    for i in 0..restrictions.len() {
+        for j in i + 1..restrictions.len() {
+            if swapped(i, j) && swapped(j, i) {
                 return Err(BlendError::PlanningFailure {
                     reason: format!(
                         "two fillets on face {} cross: their radii are too large for the face between them",
