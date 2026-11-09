@@ -1253,6 +1253,16 @@ impl BrepKernel {
                     .map_err(|e| e.to_string())?;
                 Ok(serde_json::json!(solid_id_to_u32(result)))
             }
+            "loftWithOptions" => {
+                let face_ids: Vec<_> = handles_in(args, "faces")?
+                    .iter()
+                    .map(|&h| self.resolve_face(h).map_err(|e| e.to_string()))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let handle = self
+                    .loft_from_options(&face_ids, args)
+                    .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!(handle))
+            }
             "circularPattern" => {
                 let s = get_u32(args, "solid")?;
                 let ax = get_f64(args, "ax").unwrap_or(0.0);
