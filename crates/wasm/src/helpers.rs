@@ -105,6 +105,51 @@ pub fn parse_boolean_op(op: &str) -> Result<BooleanOp, JsError> {
     }
 }
 
+/// Read `blendSurface` options: `{ continuity: 'g1' | 'g2', weights?: [a, b] }`.
+pub fn blend_surface_options(
+    args: &serde_json::Value,
+) -> Result<brepkit_operations::blend_surface::BlendSurfaceOptions, String> {
+    use brepkit_operations::blend_surface::{BlendContinuity, BlendSurfaceOptions};
+    let continuity = match args["continuity"].as_str() {
+        Some("g1") => BlendContinuity::G1,
+        Some("g2") => BlendContinuity::G2,
+        other => {
+            return Err(format!(
+                "a blend's continuity must be 'g1' or 'g2', got {other:?}"
+            ));
+        }
+    };
+    let mut options = BlendSurfaceOptions::new(continuity);
+    match &args["weights"] {
+        serde_json::Value::Null => {}
+        serde_json::Value::Array(weights) => {
+            let read: Option<Vec<f64>> = weights.iter().map(serde_json::Value::as_f64).collect();
+            let Some(&[a, b]) = read.as_deref() else {
+                return Err("a blend's weights must be two numbers".into());
+            };
+            options.weight_a = a;
+            options.weight_b = b;
+        }
+        _ => return Err("a blend's weights must be two numbers".into()),
+    }
+    Ok(options)
+}
+
+/// Read a `matchSurface` continuity: `'g0' | 'g1' | 'g2'`.
+pub fn match_continuity(
+    args: &serde_json::Value,
+) -> Result<brepkit_operations::blend_surface::MatchContinuity, String> {
+    use brepkit_operations::blend_surface::MatchContinuity;
+    match args["continuity"].as_str() {
+        Some("g0") => Ok(MatchContinuity::G0),
+        Some("g1") => Ok(MatchContinuity::G1),
+        Some("g2") => Ok(MatchContinuity::G2),
+        other => Err(format!(
+            "a match's continuity must be 'g0', 'g1' or 'g2', got {other:?}"
+        )),
+    }
+}
+
 /// Extract a required `f64` value from a JSON object.
 pub fn get_f64(args: &serde_json::Value, key: &str) -> Result<f64, String> {
     args[key]
