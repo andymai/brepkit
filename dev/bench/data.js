@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794255266199,
+  "lastUpdate": 1794255989994,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -67175,6 +67175,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 23017174,
             "range": "± 89781",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "092099bd8bdcc16b55bba9f2531a925feaf42579",
+          "message": "fix(blend): land four contributor fillet PRs with exact mitre and capped-corner curves and a scale-free hole guard (#2354)\n\nLands #2342, #2341, #2340 and #2336 with review fixes on top: the extruded mitre's radius limit measures what each corner takes along its whole contour, its crease is an exact ellipse or a fit held to an absolute tolerance, the capped corner's crease and notch are exact ellipses, and the hole guard on curved walls works at any scale and counts crossings through samples once.\n\nCo-authored-by: Eric Vaughan <eric.d.vaughan@gmail.com>",
+          "timestamp": "2026-11-09T12:23:17-08:00",
+          "tree_id": "d5da67cfe5debc5fd3d3f192a47c50ddae88a46d",
+          "url": "https://github.com/andymai/brepkit/commit/092099bd8bdcc16b55bba9f2531a925feaf42579"
+        },
+        "date": 1794255977265,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 658319,
+            "range": "± 77627",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 714053,
+            "range": "± 9170",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 8563,
+            "range": "± 161",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 541978,
+            "range": "± 20422",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 18166769,
+            "range": "± 486046",
             "unit": "ns/iter"
           }
         ]
