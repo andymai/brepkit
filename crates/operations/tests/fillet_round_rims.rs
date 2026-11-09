@@ -627,8 +627,8 @@ fn sloped_rods_round_is_refused_for_its_trim(z: f64, bore: f64, r: f64, tenths: 
 /// refused, not built as a wall whose outline crosses its holes (valid by
 /// edge count, but no wall at all there). A bore wholly between the contact
 /// and the rim lies under the band the round takes off, and is refused too:
-/// the wall kept its holes outside its trimmed outline. Each holds for the
-/// part a thousand times smaller, as one drawn in metres.
+/// the wall would keep its holes outside its trimmed outline. Each holds
+/// for the part a thousand times smaller, as one drawn in metres.
 #[test]
 fn a_rods_top_rim_round_over_a_bore_in_its_wall_is_refused() {
     for (z, bore) in [(5.2, 0.5), (4.7, 0.4), (6.0, 0.3)] {
