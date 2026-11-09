@@ -2395,7 +2395,7 @@ fn space_segment_distance(a0: Point3, a1: Point3, b0: Point3, b1: Point3) -> f64
         } else {
             let b = d1.dot(d2);
             let denom = a.mul_add(e, -(b * b));
-            let mut s = if denom > f64::EPSILON {
+            let mut s = if denom > f64::EPSILON * a * e {
                 (b.mul_add(f, -(c * e)) / denom).clamp(0.0, 1.0)
             } else {
                 0.0
@@ -2441,14 +2441,73 @@ fn space_polylines_clear_by(a: &SpacePolyline, b: &SpacePolyline, margin: f64) -
     true
 }
 
+/// Whether `p` and `q` lie on one side of the closed curve `outline` on a
+/// cylinder or cone `surface`: the straight path between them in its
+/// parameters crosses the curve, repeated a turn either way, an even
+/// number of times. The turn is unwrapped, so a curve running round the
+/// wall (a rim's contact) splits it as a curve closed in the parameters
+/// does. `None` on any other surface.
+fn same_side_on_wall(
+    surface: &FaceSurface,
+    outline: &[Point3],
+    p: Point3,
+    q: Point3,
+) -> Option<bool> {
+    if !matches!(surface, FaceSurface::Cylinder(_) | FaceSurface::Cone(_)) {
+        return None;
+    }
+    let turn = std::f64::consts::TAU;
+    let near = |u: f64, to: f64| u - turn * ((u - to) / turn).round();
+    let mut ring: Vec<Flat> = Vec::with_capacity(outline.len() + 1);
+    for &point in outline.iter().chain(outline.first()) {
+        let (u, v) = surface.project_point(point)?;
+        let u = ring.last().map_or(u, |&(previous, _)| near(u, previous));
+        ring.push((u, v));
+    }
+    let (pu, pv) = surface.project_point(p)?;
+    let (qu, qv) = surface.project_point(q)?;
+    let qu = near(qu, pu);
+    let (low, high) = ring
+        .iter()
+        .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), &(u, _)| {
+            (lo.min(u), hi.max(u))
+        });
+    if !(low.is_finite() && high.is_finite()) || high - low > 4.0 * turn {
+        return None;
+    }
+    let cross = |o: Flat, a: Flat, b: Flat| (a.0 - o.0) * (b.1 - o.1) - (a.1 - o.1) * (b.0 - o.0);
+    let (from, to) = ((pu, pv), (qu, qv));
+    // The path's ends and the ring's first point are read within a turn of
+    // each other and the ring spans at most four turns, so six turns either
+    // way reach every copy the path can cross.
+    let mut crossings = 0_usize;
+    for k in -6..=6 {
+        let shift = turn * f64::from(k);
+        for pair in ring.windows(2) {
+            let (a, b) = (
+                (pair[0].0 + shift, pair[0].1),
+                (pair[1].0 + shift, pair[1].1),
+            );
+            if cross(from, to, a) * cross(from, to, b) < 0.0
+                && cross(a, b, from) * cross(a, b, to) < 0.0
+            {
+                crossings += 1;
+            }
+        }
+    }
+    Some(crossings.is_multiple_of(2))
+}
+
 /// The curved-face part of [`check_holes_clear_of_closed_contacts`]:
 /// refuses a closed contact that a hole of the face (other than a rim the
-/// contact rounds) touches or crosses. On a cylinder wall a round's contact
-/// can run over a hole where another feature joins the wall; the trim keeps
-/// the hole whole, so the face's outline and its hole would cross. The
-/// curves are compared in space, each kept further apart than the two can
-/// stray from their polylines. A hole wholly on the side the trim cuts off
-/// is not tested here (that needs the face's own frame).
+/// contact rounds) touches or crosses, or that leaves a hole on the side
+/// the trim cuts off. On a cylinder wall a round's contact can run over a
+/// hole where another feature joins the wall, or above one under the band;
+/// the trim keeps the hole whole, so the face's outline and its hole would
+/// cross, or the hole would lie outside the outline. The curves are
+/// compared in space, each kept further apart than the two can stray from
+/// their polylines. Which side a hole lies on is read in the face's own
+/// parameters, on a cylinder or cone wall only.
 fn check_holes_clear_in_space(
     topo: &Topology,
     face_id: FaceId,
@@ -2497,7 +2556,7 @@ fn check_holes_clear_in_space(
         };
         sample(curve, (first, last), true, 16 * HOLE_SAMPLES, &mut line);
         let rounds: std::collections::HashSet<EdgeId> = r.source_edges.iter().copied().collect();
-        contacts.push((line, rounds));
+        contacts.push((line, rounds, r.keep));
     }
     if contacts.is_empty() {
         return Ok(());
@@ -2523,11 +2582,19 @@ fn check_holes_clear_in_space(
             );
             edges.insert(oe.edge());
         }
-        for (contact, rounds) in &contacts {
+        let Some(&probe) = line.points.first() else {
+            continue;
+        };
+        for (contact, rounds, keep) in &contacts {
             if rounds.iter().any(|edge| edges.contains(edge)) {
                 continue;
             }
             if !space_polylines_clear_by(&line, contact, line.sag + contact.sag + VERTEX_TOL) {
+                return Err(BlendError::TrimmingFailure { face: face_id });
+            }
+            if let TrimKeep::AwayFrom(rim) = *keep
+                && same_side_on_wall(face.surface(), &contact.points, probe, rim) == Some(true)
+            {
                 return Err(BlendError::TrimmingFailure { face: face_id });
             }
         }

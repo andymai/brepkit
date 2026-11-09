@@ -14,8 +14,10 @@
 
 use std::f64::consts::PI;
 
+use brepkit_blend::BlendError;
 use brepkit_math::mat::Mat4;
 use brepkit_math::vec::Point3;
+use brepkit_operations::OperationsError;
 use brepkit_operations::blend_ops::fillet_v2;
 use brepkit_operations::boolean::{BooleanOp, boolean};
 use brepkit_operations::measure::{oriented_solid_volume, solid_volume};
@@ -600,18 +602,42 @@ fn round_a_sloped_rods_top(z: f64, bore: f64, r: f64) -> Result<(Topology, Solid
     }
 }
 
+/// Whether rounding the sloped rod's top rim by `r`, cross-drilled as
+/// `sloped_rod` says and the whole part shrunk `tenths` times by a tenth,
+/// is refused for its trim: the wall's outline and a hole of it would
+/// cross.
+fn sloped_rods_round_is_refused_for_its_trim(z: f64, bore: f64, r: f64, tenths: i32) -> bool {
+    let mut topo = Topology::new();
+    let rod = sloped_rod(&mut topo, z, bore);
+    // `transform_solid` reads a determinant below its tolerance as
+    // degenerate, so the part shrinks a tenth at a time.
+    for _ in 0..tenths {
+        transform_solid(&mut topo, rod, &Mat4::scale(0.1, 0.1, 0.1)).unwrap();
+    }
+    let edge = sloped_rim(&topo, rod);
+    matches!(
+        fillet_v2(&mut topo, rod, &[edge], r * 0.1_f64.powi(tenths)),
+        Err(OperationsError::Blend(BlendError::TrimmingFailure { .. }))
+    )
+}
+
 /// A bore through the wall reaching above where the round's contact runs
 /// on the wall (about r below the rim where the bore meets it): the contact
 /// runs over the bore's holes, which the fillet does not cut, so it is
 /// refused, not built as a wall whose outline crosses its holes (valid by
-/// edge count, but no wall at all there).
+/// edge count, but no wall at all there). A bore wholly between the contact
+/// and the rim lies under the band the round takes off, and is refused too:
+/// the wall kept its holes outside its trimmed outline. Each holds for the
+/// part a thousand times smaller, as one drawn in metres.
 #[test]
 fn a_rods_top_rim_round_over_a_bore_in_its_wall_is_refused() {
-    for (z, bore) in [(5.2, 0.5), (4.7, 0.4)] {
-        assert!(
-            round_a_sloped_rods_top(z, bore, 2.0).is_err(),
-            "a round over the bore at {z} was built"
-        );
+    for (z, bore) in [(5.2, 0.5), (4.7, 0.4), (6.0, 0.3)] {
+        for tenths in [0, 3] {
+            assert!(
+                sloped_rods_round_is_refused_for_its_trim(z, bore, 2.0, tenths),
+                "the round over the bore at {z}, shrunk {tenths} tenths, was not refused for its trim"
+            );
+        }
     }
 }
 
