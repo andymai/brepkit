@@ -1,0 +1,120 @@
+crates/wasm/src/bindings/batch.rs
+  s_f8c761b717b79b::t_729dc1be707307 692-766,1035-1051,1053
+  s_f8c761b717b79b::t_618d139a04ae13 1052
+crates/operations/src/tessellate/nurbs.rs
+  s_f8c761b717b79b::t_729dc1be707307 26-34,377,384-387,412,430-431,433-436,497-626,635,638,648-650,696,704,721,743,762,772-774,1402-1419,1421-1434,1436,1541-1670
+Cargo.toml
+  s_f8c761b717b79b::t_729dc1be707307 44
+.github/workflows/publish.yml
+  s_f8c761b717b79b::t_729dc1be707307 94
+crates/operations/src/blend_ops.rs
+  s_f8c761b717b79b::t_729dc1be707307 3-4,8,10-11,14,90-253
+  s_f8c761b717b79b::t_12283caa8e6d53 254
+crates/io/tests/fillet_corner_step.rs
+  s_f8c761b717b79b::t_729dc1be707307 1-54
+crates/operations/src/blend_surface/rows.rs
+  s_f8c761b717b79b::t_729dc1be707307 1-170
+crates/blend/src/setback_corner.rs
+  s_f8c761b717b79b::t_729dc1be707307 1-1712
+.github/workflows/ci.yml
+  s_f8c761b717b79b::t_729dc1be707307 47,70,115,280
+crates/operations/src/blend_surface/match_edge.rs
+  s_f8c761b717b79b::t_729dc1be707307 1-1410
+crates/operations/src/tessellate/nonplanar.rs
+  s_f8c761b717b79b::t_729dc1be707307 1979-1986,1988,3324-3327,3331,3333,3344-3345,3351,3355
+crates/operations/tests/fillet_concave_corner_ends.rs
+  s_f8c761b717b79b::t_729dc1be707307 1-248
+crates/operations/tests/match_surface.rs
+  s_f8c761b717b79b::t_729dc1be707307 1-1136
+crates/blend/src/builder_utils.rs
+  s_f8c761b717b79b::t_729dc1be707307 651-658,1201-1238
+  s_f8c761b717b79b::t_bba734638d3b5d 1239-1240
+crates/operations/src/blend_surface/chain.rs
+  s_f8c761b717b79b::t_729dc1be707307 1-638
+crates/operations/src/blend_surface/spline.rs
+  s_f8c761b717b79b::t_729dc1be707307 1-565
+crates/operations/tests/fillet_reflex_corner.rs
+  s_f8c761b717b79b::t_729dc1be707307 1-263
+crates/operations/tests/surface_fixtures/mod.rs
+  s_f8c761b717b79b::t_729dc1be707307 1-944
+crates/wasm/src/bindings/operations.rs
+  s_f8c761b717b79b::t_729dc1be707307 1615-1739,1919-1969,2101-2204,2526-2671
+  s_f8c761b717b79b::t_6ee2cc65976588 2672
+crates/operations/src/blend_surface.rs
+  s_f8c761b717b79b::t_729dc1be707307 1-790
+crates/blend/src/fillet_builder.rs
+  s_f8c761b717b79b::t_8393b30f7f59d0 2128-2130
+  s_f8c761b717b79b::t_729dc1be707307 621,645-651,654-655,657,661,664-667,681-684,698,912,925,934-952,1754,1842-2087,3281-3475,3489-3493,3539-3541,3544,3548-3557,3562-3566,3568-3569,3589,3592-3604,3606,3627-3629,3632-3640,3650,3654,3660-3663,3669,3687-3709,3769,3773,3780-3800,3816,3826,4565-4566,4936-5035,5861-5906
+  s_f8c761b717b79b::t_46108aa654cf21 2104-2127
+  s_8c30bad7701dbb::t_6f6fb3c03629d1 5907
+crates/wasm/src/handles.rs
+  s_f8c761b717b79b::t_729dc1be707307 26-78
+crates/operations/tests/fillet_round_along_step_edge.rs
+  s_f8c761b717b79b::t_729dc1be707307 1-117
+.github/workflows/mutants.yml
+  s_f8c761b717b79b::t_729dc1be707307 26
+crates/blend/src/trimmer.rs
+  s_f8c761b717b79b::t_729dc1be707307 563,566-570,572,574-584,1520-1526
+crates/operations/src/blend_surface/neighbour.rs
+  s_f8c761b717b79b::t_729dc1be707307 1-817
+crates/operations/src/tessellate/tests.rs
+  s_f8c761b717b79b::t_729dc1be707307 4438-4521
+crates/operations/src/boolean/mod.rs
+  s_f8c761b717b79b::t_729dc1be707307 3627-3634,3657-3664,3668-3685,3687,3694-3706,3710-3722
+crates/check/src/properties/boundary.rs
+  s_f8c761b717b79b::t_729dc1be707307 34-41,43-46,49,68,1217-1221,1223,1228
+crates/operations/src/boolean/tests.rs
+  s_f8c761b717b79b::t_729dc1be707307 8548-8587
+crates/operations/tests/blend_surface.rs
+  s_f8c761b717b79b::t_729dc1be707307 1-1838
+crates/blend/src/analytic.rs
+  s_f8c761b717b79b::t_729dc1be707307 496-515
+CLAUDE.md
+  s_f8c761b717b79b::t_729dc1be707307 181,302
+crates/operations/tests/fillet_concave_edge_of_a_notched_wall.rs
+  s_f8c761b717b79b::t_729dc1be707307 1-127
+crates/operations/tests/fillet_curved_end_caps.rs
+  s_f8c761b717b79b::t_729dc1be707307 1-294
+crates/operations/src/cavities.rs
+  s_f8c761b717b79b::t_729dc1be707307 69-73,333-334,400-401,436-454,470,473-475,480,488
+crates/operations/src/lib.rs
+  s_f8c761b717b79b::t_729dc1be707307 116,160
+crates/operations/tests/fillet_corner_options.rs
+  s_f8c761b717b79b::t_729dc1be707307 1-832
+crates/operations/tests/fair_surface.rs
+  s_f8c761b717b79b::t_729dc1be707307 1-741
+crates/operations/tests/fillet_narrow_ridge.rs
+  s_f8c761b717b79b::t_729dc1be707307 1-100
+crates/operations/tests/nurbs_crease_mesh.rs
+  s_f8c761b717b79b::t_729dc1be707307 1-203
+crates/blend/src/lib.rs
+  s_f8c761b717b79b::t_729dc1be707307 21
+crates/operations/src/blend_surface/fair.rs
+  s_f8c761b717b79b::t_729dc1be707307 1-814
+crates/wasm/src/helpers.rs
+  s_f8c761b717b79b::t_729dc1be707307 108-152
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "dadcb15946555d134628280132fb304af52c632d",
+  "prompts": {},
+  "sessions": {
+    "s_8c30bad7701dbb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf6bbec0-c5d2-46fa-8e5b-d526f9012d5d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    },
+    "s_f8c761b717b79b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0161eb79-bcdb-4e67-ad8a-f056fadf98c2",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
