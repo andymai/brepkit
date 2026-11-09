@@ -132,7 +132,7 @@ fn over_the_round(r: f64, f: impl Fn(f64) -> f64) -> f64 {
 
 /// Rounds `edges` of `solid` by `r` and checks the result: valid,
 /// watertight, `faces` faces (the rounds alone added, no corner patch),
-/// and `volume` within `1e-6` of it.
+/// `volume` within `1e-6` of it, and every edge on the faces it bounds.
 fn assert_rounds_to(
     topo: &mut Topology,
     solid: SolidId,
@@ -158,6 +158,41 @@ fn assert_rounds_to(
         (got - volume).abs() <= 1e-6 * volume,
         "{case}: volume {got} against {volume}"
     );
+    assert_edges_on_faces(topo, result.solid, case);
+}
+
+/// Checks that no edge of `solid` strays further than `1e-7` from a face
+/// it bounds, sampled along its curve.
+fn assert_edges_on_faces(topo: &Topology, solid: SolidId, case: &str) {
+    for face_id in solid_faces(topo, solid).unwrap() {
+        let face = topo.face(face_id).unwrap();
+        let surface = face.surface();
+        for wire_id in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied())
+        {
+            for oriented in topo.wire(wire_id).unwrap().edges() {
+                let edge = topo.edge(oriented.edge()).unwrap();
+                let a = topo.vertex(edge.start()).unwrap().point();
+                let b = topo.vertex(edge.end()).unwrap().point();
+                let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
+                for k in 0..=256 {
+                    let t = t0 + (t1 - t0) * f64::from(k) / 256.0;
+                    let p = edge.curve().evaluate_with_endpoints(t, a, b);
+                    let off = if let FaceSurface::Plane { normal, d } = surface {
+                        (normal.dot(p - Point3::new(0.0, 0.0, 0.0)) - d).abs() / normal.length()
+                    } else {
+                        let (u, v) = surface.project_point(p).unwrap();
+                        (surface.evaluate(u, v).unwrap() - p).length()
+                    };
+                    assert!(
+                        off <= 1e-7,
+                        "{case}: a {} edge strays {off:e} off a {} face it bounds",
+                        edge.curve().type_tag(),
+                        surface.type_tag()
+                    );
+                }
+            }
+        }
+    }
 }
 
 /// The edges of `solid` along its top face.
@@ -209,6 +244,7 @@ fn rounds_meeting_at_a_corner_not_square_are_mitred() {
                 (lost - removed).abs() <= 1e-6 * before,
                 "{case}: lost {lost}, the mitred rounds {removed}"
             );
+            assert_edges_on_faces(&topo, result.solid, &case);
         }
     }
 }

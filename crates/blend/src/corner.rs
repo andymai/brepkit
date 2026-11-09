@@ -111,8 +111,12 @@ struct ExtrudedMitre {
     used: [f64; 2],
 }
 
-/// The number of crease points an extruded mitre takes along its quarter.
+/// The number of crease points an extruded mitre first takes along its
+/// quarter.
 const EXTRUDED_CREASE_POINTS: usize = 33;
+
+/// The most crease points an extruded mitre takes before its fit gives up.
+const MOST_CREASE_POINTS: usize = 2049;
 
 /// A face's outward normal at a point within `tol` of its surface.
 fn outward_normal_on(topo: &Topology, face_id: FaceId, point: Point3, tol: f64) -> Option<Vec3> {
@@ -217,9 +221,10 @@ fn wall_stands_square(
     })
 }
 
-/// The extruded mitre at `vertex` (see [`ExtrudedMitre`]), or `None` where
-/// the corner is not one. `a` and `b` are each stripe's two support faces
-/// and spine edges.
+/// The extruded mitre at `vertex` (see [`ExtrudedMitre`]), its crease taken
+/// at `points` points, or `None` where the corner is not one. `a` and `b`
+/// are each stripe's two support faces and spine edges.
+#[allow(clippy::too_many_arguments)]
 fn extruded_mitre(
     topo: &Topology,
     vertex: VertexId,
@@ -228,6 +233,7 @@ fn extruded_mitre(
     a: (FaceId, FaceId, &[EdgeId]),
     b: (FaceId, FaceId, &[EdgeId]),
     radius: f64,
+    points: usize,
 ) -> Option<ExtrudedMitre> {
     if face_fan.len() != 3 || radius <= TOL {
         return None;
@@ -281,9 +287,12 @@ fn extruded_mitre(
     let (mut sa, mut sb) = (0.0, 0.0);
     let h = 1e-7;
     let (ends_a, ends_b) = (walk_a.len() as f64, walk_b.len() as f64);
-    let mut crease = Vec::with_capacity(EXTRUDED_CREASE_POINTS);
-    for k in 0..EXTRUDED_CREASE_POINTS {
-        let phi = std::f64::consts::FRAC_PI_2 * (k as f64) / ((EXTRUDED_CREASE_POINTS - 1) as f64);
+    if points < 2 {
+        return None;
+    }
+    let mut crease = Vec::with_capacity(points);
+    for k in 0..points {
+        let phi = std::f64::consts::FRAC_PI_2 * (k as f64) / ((points - 1) as f64);
         let w = radius * (1.0 - phi.cos());
         let t = radius * (1.0 - phi.sin());
         if k == 0 {
@@ -495,6 +504,123 @@ fn crease_on_stripes(
     }
     crease.push(meeting);
     Some(crease)
+}
+
+/// The crease of an extruded mitre whose rounds are cylinders of `radius`
+/// with crossing axes (plane walls), from the pinch `p00` to the contacts'
+/// crossing `meeting` on the plane of outward normal `n`. Two cylinders of
+/// one radius whose axes cross meet in two ellipses, each about the crossing
+/// in a plane that bisects the axes. The crease is a quarter of the one
+/// through the pinch: from the pinch, level with the crossing, up to the
+/// point a radius above the crossing, on the plane. `None` where the rounds
+/// are not such cylinders.
+fn crossing_rounds_ellipse(
+    first: &FaceSurface,
+    second: &FaceSurface,
+    p00: Point3,
+    meeting: Point3,
+    n: Vec3,
+    radius: f64,
+) -> Option<brepkit_math::curves::Ellipse3D> {
+    let (FaceSurface::Cylinder(a), FaceSurface::Cylinder(b)) = (first, second) else {
+        return None;
+    };
+    let tol = 1e-9 * radius.max(1.0);
+    if (a.radius() - radius).abs() > tol || (b.radius() - radius).abs() > tol {
+        return None;
+    }
+    let (da, db) = (a.axis().normalize().ok()?, b.axis().normalize().ok()?);
+    let w = a.origin() - b.origin();
+    let (cos, along_a, along_b) = (da.dot(db), da.dot(w), db.dot(w));
+    let sin2 = cos.mul_add(-cos, 1.0);
+    if sin2 <= 1e-12 {
+        return None;
+    }
+    let pa = a.origin() + da * (cos.mul_add(along_b, -along_a) / sin2);
+    let pb = b.origin() + db * (cos.mul_add(-along_a, along_b) / sin2);
+    if (pa - pb).length() > tol {
+        return None;
+    }
+    let centre = pa + (pb - pa) * 0.5;
+    let toward = p00 - centre;
+    let semi = toward.length();
+    if toward.dot(n).abs() > tol || semi < radius - tol {
+        return None;
+    }
+    let u = toward * (1.0 / semi);
+    let ellipse = brepkit_math::curves::Ellipse3D::new_with_ref(
+        centre,
+        u.cross(n),
+        semi.max(radius),
+        radius,
+        u,
+    )
+    .ok()?;
+    let on_both = |p: Point3| {
+        [(a, da), (b, db)].iter().all(|&(c, d)| {
+            let r = p - c.origin();
+            ((r - d * r.dot(d)).length() - radius).abs() <= tol
+        })
+    };
+    let quarter = std::f64::consts::FRAC_PI_4;
+    ((ellipse.evaluate(2.0 * quarter) - meeting).length() <= 1e-7 * radius.max(1.0)
+        && on_both(ellipse.evaluate(quarter)))
+    .then_some(ellipse)
+}
+
+/// An extruded mitre's crease as a cubic through `sample(count)`, its points
+/// laid on both stripes' surfaces `first` and `second`, their count doubled
+/// until the cubic lies on both between them, read at the quarters between
+/// each two points within a tenth of the vertex tolerance. `None` where it
+/// never does.
+fn fitted_crease(
+    sample: impl Fn(usize) -> Option<Vec<Point3>>,
+    first: &FaceSurface,
+    second: &FaceSurface,
+    radius: f64,
+) -> Option<EdgeCurve> {
+    let tol = 0.1 * TOL * radius.max(1.0);
+    let off = |p: Point3| -> Option<f64> {
+        let on = |surface: &FaceSurface| -> Option<f64> {
+            let (u, v) = surface.project_point(p)?;
+            Some((surface.evaluate(u, v)? - p).length())
+        };
+        Some(on(first)?.max(on(second)?))
+    };
+    let mut count = EXTRUDED_CREASE_POINTS;
+    loop {
+        let points = sample(count)?;
+        let curve = brepkit_math::nurbs::fitting::interpolate(&points, 3).ok()?;
+        // The cubic takes its points at their chord-length parameters.
+        let mut lengths = Vec::with_capacity(points.len());
+        let mut total = 0.0;
+        lengths.push(0.0);
+        for pair in points.windows(2) {
+            total += (pair[1] - pair[0]).length();
+            lengths.push(total);
+        }
+        if total <= tol {
+            return None;
+        }
+        let (t0, t1) = curve.domain();
+        let mut on = true;
+        'check: for pair in lengths.windows(2) {
+            for quarter in [0.25, 0.5, 0.75] {
+                let along = (pair[1] - pair[0]).mul_add(quarter, pair[0]) / total;
+                if off(curve.evaluate((t1 - t0).mul_add(along, t0)))? > tol {
+                    on = false;
+                    break 'check;
+                }
+            }
+        }
+        if on {
+            return Some(EdgeCurve::NurbsCurve(curve));
+        }
+        if count >= MOST_CREASE_POINTS {
+            return None;
+        }
+        count = 2 * count - 1;
+    }
 }
 
 /// Return the indices (into `stripes`) of stripes whose spine touches `vertex_id`.
@@ -933,6 +1059,7 @@ fn mitre_spine_use(
         (ca.side1, ca.side2, ca.spine.edges()),
         (cb.side1, cb.side2, cb.spine.edges()),
         radius,
+        EXTRUDED_CREASE_POINTS,
     )?;
     Some((mitre.used, false))
 }
@@ -3321,8 +3448,8 @@ struct MiterCorner {
     vtop: Point3,
     /// An extruded corner's crease from `p00` to `vtop` (see
     /// [`ExtrudedMitre`]); `None` at a square corner, whose crease is an
-    /// exact ellipse.
-    crease: Option<Vec<Point3>>,
+    /// exact ellipse built from `ex` and `ey`.
+    crease: Option<EdgeCurve>,
 }
 
 /// Detect whether `junction` (already known to have exactly two incident
@@ -3333,8 +3460,12 @@ struct MiterCorner {
 /// common (top) face. Mirrors
 /// `check_equal_two_edge_admissibility`'s own qualifying test so detection
 /// is consistent with what was already refused or admitted before any
-/// mutation; this function performs no refusal itself, so a caller must not
+/// mutation; this function refuses no radius itself, so a caller must not
 /// have reached here for an inadmissible request.
+///
+/// # Errors
+/// [`BlendError::CornerFailure`] where an extruded corner's crease cannot
+/// be fitted on both stripes (see [`fitted_crease`]).
 fn detect_equal_two_edge_miter(
     topo: &Topology,
     junction: &VertexJunction,
@@ -3476,6 +3607,7 @@ fn detect_equal_two_edge_miter(
             (a.face1, a.face2, a.spine_edges()),
             (b.face1, b.face2, b.spine_edges()),
             radius,
+            EXTRUDED_CREASE_POINTS,
         ) else {
             return Ok(None);
         };
@@ -3528,10 +3660,29 @@ fn detect_equal_two_edge_miter(
             let Some(meeting) = contacts_crossing(topo, before, after, exact_meeting) else {
                 return Ok(None);
             };
-            let Some(crease) =
-                crease_on_stripes(&extruded.crease, meeting, n, &a.surface, &b.surface, radius)
-            else {
-                return Ok(None);
+            let crease = if let Some(ellipse) =
+                crossing_rounds_ellipse(&a.surface, &b.surface, p00, meeting, n, radius)
+            {
+                EdgeCurve::Ellipse(ellipse)
+            } else {
+                let sample = |points: usize| {
+                    let mitre = extruded_mitre(
+                        topo,
+                        junction.vertex,
+                        &junction.face_fan,
+                        &junction.unselected_sharp_edges,
+                        (a.face1, a.face2, a.spine_edges()),
+                        (b.face1, b.face2, b.spine_edges()),
+                        radius,
+                        points,
+                    )?;
+                    crease_on_stripes(&mitre.crease, meeting, n, &a.surface, &b.surface, radius)
+                };
+                fitted_crease(sample, &a.surface, &b.surface, radius).ok_or(
+                    BlendError::CornerFailure {
+                        vertex: junction.vertex,
+                    },
+                )?
             };
             (meeting, Some(crease))
         }
@@ -4078,8 +4229,8 @@ fn insert_miter_crease_into_stripe_face(
 
 /// Build the crease edge shared by both stripe faces of a sharp-mitered
 /// two-edge corner, from `p00_vertex` to `vtop_vertex`: an exact
-/// `Ellipse3D` at a square corner, a cubic through the crease points at an
-/// extruded one.
+/// `Ellipse3D` at a square corner, the curve worked out for an extruded
+/// one.
 fn miter_crease_edge(
     topo: &mut Topology,
     miter: &MiterCorner,
@@ -4087,12 +4238,7 @@ fn miter_crease_edge(
     vtop_vertex: VertexId,
 ) -> Result<EdgeId, BlendError> {
     if let Some(crease) = &miter.crease {
-        let curve = brepkit_math::nurbs::fitting::interpolate(crease, 3)?;
-        return Ok(topo.add_edge(Edge::new(
-            p00_vertex,
-            vtop_vertex,
-            EdgeCurve::NurbsCurve(curve),
-        )));
+        return Ok(topo.add_edge(Edge::new(p00_vertex, vtop_vertex, crease.clone())));
     }
     let center = miter.p00 + miter.ex * miter.radius + miter.ey * miter.radius;
     let u = (-(miter.ex + miter.ey))
