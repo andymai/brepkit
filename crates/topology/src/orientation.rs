@@ -880,4 +880,92 @@ mod tests {
         // The wall, a seed, is read but never turned.
         assert!(!topo.face(wall).unwrap().is_reversed());
     }
+
+    /// A wall round the B-spline cylinder between its two whole rims, its
+    /// wire up the seam and back, with the last control row moved `gap` off
+    /// the first along y.
+    fn bspline_seamed_wall(topo: &mut Topology, gap: f64) -> FaceId {
+        let rows = circle_rows();
+        let last = rows.len() - 1;
+        let surface = NurbsSurface::new(
+            2,
+            1,
+            circle_knots(),
+            vec![0.0, 0.0, 1.0, 1.0],
+            rows.iter()
+                .enumerate()
+                .map(|(k, &(x, y, _))| {
+                    let y = if k == last { y + gap } else { y };
+                    vec![Point3::new(x, y, 0.0), Point3::new(x, y, HEIGHT)]
+                })
+                .collect(),
+            rows.iter().map(|&(_, _, w)| vec![w, w]).collect(),
+        )
+        .unwrap();
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        let (low, high) = (
+            topo.add_vertex(Vertex::new(Point3::new(RADIUS, 0.0, 0.0), 1e-7)),
+            topo.add_vertex(Vertex::new(Point3::new(RADIUS, 0.0, HEIGHT), 1e-7)),
+        );
+        let rim = |height: f64| {
+            EdgeCurve::Circle(Circle3D::new(Point3::new(0.0, 0.0, height), z, RADIUS).unwrap())
+        };
+        let bottom = topo.add_edge(Edge::new(low, low, rim(0.0)));
+        let top = topo.add_edge(Edge::new(high, high, rim(HEIGHT)));
+        let seam = topo.add_edge(Edge::new(low, high, EdgeCurve::Line));
+        let wire = Wire::new(
+            vec![
+                OrientedEdge::new(bottom, true),
+                OrientedEdge::new(seam, true),
+                OrientedEdge::new(top, false),
+                OrientedEdge::new(seam, false),
+            ],
+            true,
+        )
+        .unwrap();
+        let wire = topo.add_wire(wire);
+        topo.add_face(Face::new(wire, vec![], FaceSurface::Nurbs(surface)))
+    }
+
+    /// A seamed wall on a closed B-spline cylinder, the only seed, reads its
+    /// winding across the seam: four of the cube's faces turned are all
+    /// turned back, where a vote would turn the other two.
+    #[test]
+    fn a_seamed_bspline_seed_sets_the_convention() {
+        let mut topo = Topology::new();
+        let cube = make_unit_cube_manifold(&mut topo);
+        let faces = solid_faces(&topo, cube).unwrap();
+        let wall = bspline_seamed_wall(&mut topo, 0.0);
+        for &face_id in &faces[..4] {
+            turn_inside_out(&mut topo, face_id);
+        }
+        assert_eq!(
+            normalize_face_normals(&mut topo, &faces, &[wall]).unwrap(),
+            4
+        );
+        assert!(!topo.face(wall).unwrap().is_reversed());
+    }
+
+    /// A B-spline wall whose last control row stands off its first is not
+    /// read as periodic, and its seam samples could fall at either end of
+    /// the domain. Such a seed gives no reading rather than a wrong one: with
+    /// two of the cube's faces turned, the vote turns those two back and
+    /// leaves the other four.
+    #[test]
+    fn a_seamed_bspline_seed_not_quite_closed_gives_no_reading() {
+        for gap in [1e-6, 1e-4] {
+            let mut topo = Topology::new();
+            let cube = make_unit_cube_manifold(&mut topo);
+            let faces = solid_faces(&topo, cube).unwrap();
+            let wall = bspline_seamed_wall(&mut topo, gap);
+            for &face_id in &faces[..2] {
+                turn_inside_out(&mut topo, face_id);
+            }
+            assert_eq!(
+                normalize_face_normals(&mut topo, &faces, &[wall]).unwrap(),
+                2,
+                "gap {gap}"
+            );
+        }
+    }
 }
