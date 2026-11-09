@@ -325,6 +325,14 @@ pub fn normalize_face_normals(
         if seamed && !seed_set.contains(&face_id) {
             continue;
         }
+        // A B-spline closed only to within a tolerance is not read as
+        // periodic, so its seam samples can land at either end of the domain
+        // and its loop need not close: such a seed gives no reading.
+        if seamed
+            && matches!(&surface, FaceSurface::Nurbs(n) if !n.is_periodic_u() && !n.is_periodic_v())
+        {
+            continue;
+        }
 
         let oriented_edges = if reversed {
             wire.edges().iter().rev().copied().collect::<Vec<_>>()
@@ -883,8 +891,8 @@ mod tests {
 
     /// A wall round the B-spline cylinder between its two whole rims, its
     /// wire up the seam and back, with the last control row moved `gap` off
-    /// the first along y.
-    fn bspline_seamed_wall(topo: &mut Topology, gap: f64) -> FaceId {
+    /// the first along y: the whole row, or only its top end at `corner`.
+    fn bspline_seamed_wall(topo: &mut Topology, gap: f64, corner: bool) -> FaceId {
         let rows = circle_rows();
         let last = rows.len() - 1;
         let surface = NurbsSurface::new(
@@ -895,8 +903,9 @@ mod tests {
             rows.iter()
                 .enumerate()
                 .map(|(k, &(x, y, _))| {
-                    let y = if k == last { y + gap } else { y };
-                    vec![Point3::new(x, y, 0.0), Point3::new(x, y, HEIGHT)]
+                    let lift = if k == last { gap } else { 0.0 };
+                    let low = if corner { y } else { y + lift };
+                    vec![Point3::new(x, low, 0.0), Point3::new(x, y + lift, HEIGHT)]
                 })
                 .collect(),
             rows.iter().map(|&(_, _, w)| vec![w, w]).collect(),
@@ -935,7 +944,7 @@ mod tests {
         let mut topo = Topology::new();
         let cube = make_unit_cube_manifold(&mut topo);
         let faces = solid_faces(&topo, cube).unwrap();
-        let wall = bspline_seamed_wall(&mut topo, 0.0);
+        let wall = bspline_seamed_wall(&mut topo, 0.0, false);
         for &face_id in &faces[..4] {
             turn_inside_out(&mut topo, face_id);
         }
@@ -946,26 +955,29 @@ mod tests {
         assert!(!topo.face(wall).unwrap().is_reversed());
     }
 
-    /// A B-spline wall whose last control row stands off its first is not
-    /// read as periodic, and its seam samples could fall at either end of
-    /// the domain. Such a seed gives no reading rather than a wrong one: with
-    /// two of the cube's faces turned, the vote turns those two back and
-    /// leaves the other four.
+    /// A B-spline wall whose last control row stands off its first, evenly
+    /// or at one corner only, is not read as periodic, and its seam samples
+    /// could fall at either end of the domain. Such a seed gives no reading,
+    /// so the faces vote: with two of the cube's faces turned the vote turns
+    /// those two back, and with four turned it turns the other two. A seed
+    /// reading of either sign would turn four in one of the two cases.
     #[test]
     fn a_seamed_bspline_seed_not_quite_closed_gives_no_reading() {
-        for gap in [1e-6, 1e-4] {
-            let mut topo = Topology::new();
-            let cube = make_unit_cube_manifold(&mut topo);
-            let faces = solid_faces(&topo, cube).unwrap();
-            let wall = bspline_seamed_wall(&mut topo, gap);
-            for &face_id in &faces[..2] {
-                turn_inside_out(&mut topo, face_id);
+        for (gap, corner) in [(1e-6, false), (1e-4, false), (1e-4, true)] {
+            for turned in [2, 4] {
+                let mut topo = Topology::new();
+                let cube = make_unit_cube_manifold(&mut topo);
+                let faces = solid_faces(&topo, cube).unwrap();
+                let wall = bspline_seamed_wall(&mut topo, gap, corner);
+                for &face_id in &faces[..turned] {
+                    turn_inside_out(&mut topo, face_id);
+                }
+                assert_eq!(
+                    normalize_face_normals(&mut topo, &faces, &[wall]).unwrap(),
+                    2,
+                    "gap {gap}, at one corner {corner}, {turned} turned"
+                );
             }
-            assert_eq!(
-                normalize_face_normals(&mut topo, &faces, &[wall]).unwrap(),
-                2,
-                "gap {gap}"
-            );
         }
     }
 }
