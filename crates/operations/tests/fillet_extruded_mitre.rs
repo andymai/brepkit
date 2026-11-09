@@ -4,9 +4,10 @@
 //! The rounds meet as a moulding mitred at the corner: each round is its
 //! cross-section swept along its edge up to the plane bisecting the
 //! corner, and the two meet along their section by that plane, from the
-//! top face down to the pinch a radius below the corner. Before, only a
-//! square corner was mitred, and other convex corners were closed with a
-//! corner patch meant for concave corners, which was wrong.
+//! top face down to the pinch a radius below the corner, and no corner
+//! patch closes it. Each round's contact on the top face ends where the
+//! two contacts cross, `r cot(theta / 2)` along its edge between plane
+//! walls: that much of the edge the corner takes.
 //!
 //! The prism is a kite: corner `V` of angle `theta` between the rounded
 //! edges, the edges' far ends square to the walls after them, so each
