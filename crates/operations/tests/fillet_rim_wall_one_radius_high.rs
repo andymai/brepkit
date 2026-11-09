@@ -3,10 +3,11 @@
 //! rounded. The round's contact on the wall lands on the wall's other rim,
 //! so no wall is left: the round runs from the cap to that rim.
 //!
-//! The rim's rebuild refused such a round (its contact "would land past the
-//! wall", to a file's digits either way), and the walked band the round
-//! fell back on left the wall a strip of no height: a face too many on the
-//! pin, and on a hole an edge the band used once.
+//! The radius is the height, or differs from it by a file's digits either
+//! way. Each case runs upright, turned and shifted off the axes, and
+//! mirrored. The pin keeps three faces and the holed plate eight; each
+//! result is valid and watertight, and its volume agrees to 1e-4 with the
+//! volume the round takes off.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::f64::consts::PI;
@@ -43,6 +44,24 @@ fn removed(r: f64, side: f64) -> f64 {
     2.0 * PI * area * (side * centroid_inset()).mul_add(r, RC)
 }
 
+/// The radii each case rounds by: the wall's height, and a file's digits
+/// short of it and past it.
+const RADII: [f64; 3] = [H, H * (1.0 - 1e-8), H * (1.0 + 1e-8)];
+
+fn poses() -> [(&'static str, Mat4); 3] {
+    [
+        ("upright", Mat4::identity()),
+        (
+            "turned",
+            Mat4::translation(3.0, -2.0, 1.0) * Mat4::rotation_x(0.4) * Mat4::rotation_z(0.6),
+        ),
+        (
+            "mirrored",
+            Mat4::translation(1.0, 0.5, -2.0) * Mat4::scale(-1.0, 1.0, 1.0),
+        ),
+    ]
+}
+
 /// The part's circle edges at height `z`.
 fn rims_at(topo: &Topology, part: SolidId, z: f64) -> Vec<EdgeId> {
     solid_edges(topo, part)
@@ -58,8 +77,15 @@ fn rims_at(topo: &Topology, part: SolidId, z: f64) -> Vec<EdgeId> {
 
 /// Rounds `rim` by `r` and checks the result has `faces` faces and the
 /// volume `truth`.
-fn round(topo: &mut Topology, part: SolidId, rim: &[EdgeId], r: f64, faces: usize, truth: f64) {
-    let case = format!("r = {r}");
+fn round(
+    topo: &mut Topology,
+    part: SolidId,
+    rim: &[EdgeId],
+    (r, name): (f64, &str),
+    faces: usize,
+    truth: f64,
+) {
+    let case = format!("{name}, r = {r}");
     assert_eq!(rim.len(), 1, "{case}");
     let result = fillet_v2(topo, part, rim, r).unwrap();
     assert!(result.failed.is_empty(), "{case}: {:?}", result.failed);
@@ -86,32 +112,39 @@ fn round(topo: &mut Topology, part: SolidId, rim: &[EdgeId], r: f64, faces: usiz
 
 #[test]
 fn a_pin_as_long_as_the_round_is_wide_is_rounded_to_its_far_rim() {
-    // Exactly the height, and short of it by a file's digits.
-    for r in [H, H * (1.0 - 1e-8)] {
-        let mut topo = Topology::new();
-        let pin = make_cylinder(&mut topo, RC, H).unwrap();
-        let rim = rims_at(&topo, pin, H);
-        let truth = PI * RC * RC * H - removed(r, -1.0);
-        // The end cap, now the round's flat top, the round and the base.
-        round(&mut topo, pin, &rim, r, 3, truth);
+    for (name, pose) in poses() {
+        for r in RADII {
+            let mut topo = Topology::new();
+            let pin = make_cylinder(&mut topo, RC, H).unwrap();
+            let rim = rims_at(&topo, pin, H);
+            transform_solid(&mut topo, pin, &pose).unwrap();
+            let truth = PI * RC * RC * H - removed(r, -1.0);
+            // The end cap, now the round's flat top, the round and the base.
+            round(&mut topo, pin, &rim, (r, name), 3, truth);
+        }
     }
 }
 
 #[test]
 fn a_blind_hole_as_deep_as_the_round_is_wide_is_rounded_to_its_floor() {
     let (side, thick) = (20.0, 10.0);
-    let mut topo = Topology::new();
-    let plate = make_box(&mut topo, side, side, thick).unwrap();
-    let drill = make_cylinder(&mut topo, RC, H + 1.0).unwrap();
-    transform_solid(
-        &mut topo,
-        drill,
-        &Mat4::translation(side / 2.0, side / 2.0, thick - H),
-    )
-    .unwrap();
-    let part = boolean(&mut topo, BooleanOp::Cut, plate, drill).unwrap();
-    let rim = rims_at(&topo, part, thick);
-    let truth = side * side * thick - PI * RC * RC * H - removed(H, 1.0);
-    // The plate's six faces, the hole's floor and the round.
-    round(&mut topo, part, &rim, H, 8, truth);
+    for (name, pose) in poses() {
+        for r in RADII {
+            let mut topo = Topology::new();
+            let plate = make_box(&mut topo, side, side, thick).unwrap();
+            let drill = make_cylinder(&mut topo, RC, H + 1.0).unwrap();
+            transform_solid(
+                &mut topo,
+                drill,
+                &Mat4::translation(side / 2.0, side / 2.0, thick - H),
+            )
+            .unwrap();
+            let part = boolean(&mut topo, BooleanOp::Cut, plate, drill).unwrap();
+            let rim = rims_at(&topo, part, thick);
+            transform_solid(&mut topo, part, &pose).unwrap();
+            let truth = side * side * thick - PI * RC * RC * H - removed(r, 1.0);
+            // The plate's six faces, the hole's floor and the round.
+            round(&mut topo, part, &rim, (r, name), 8, truth);
+        }
+    }
 }
