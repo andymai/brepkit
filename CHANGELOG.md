@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.11.1](https://github.com/andymai/brepkit/compare/v4.11.0...v4.11.1) (2026-11-09)
+
+
+### Bug Fixes
+
+* **topology:** let a seamed seed set the face-normal convention ([#2359](https://github.com/andymai/brepkit/issues/2359)) ([c30667e](https://github.com/andymai/brepkit/commit/c30667e85ac71b6eca3ec9791cece37e45b20e80))
+
 ## [4.11.0](https://github.com/andymai/brepkit/compare/v4.10.0...v4.11.0) (2026-11-09)
 
 
