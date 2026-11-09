@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794249846433,
+  "lastUpdate": 1794250100081,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -66905,6 +66905,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 28392960,
             "range": "± 36345",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "77f24a6579d5e050f33185571647e0c25648e272",
+          "message": "fix(operations): mesh a NURBS face along its crease (#2332)\n\nToday a NURBS face creased along a knot line takes far too many\ntriangles. A 10 x 10 sheet bent at a knot at 0.43 of its length meshes\nto 2296 triangles at a deflection of 0.05, against 32 for the same sheet\nflat. With this change it takes 40.\n\n## Why it happened\n\nThe mesher starts from an even 4 x 4 grid and divides a cell while its\nnormals disagree. A cell straddling a crease has normals that disagree\nhowever small it gets, so it divided to the depth limit all along the\nline.\n\n## Change\n\nIn `crates/operations/src/tessellate/nurbs.rs`:\n\n- A knot line the normals actually jump across, by more than 1e-3 rad,\nbecomes an edge of the root grid, so each side of it is smooth. Each\nside is read a millionth of its own knot span off the line, so a narrow\nspan is not stepped across and two folds close together are both found.\nAn even line within an eighth of a cell of a crease gives way to it,\nleaving no sliver.\n- The two cell tests read a corner on a crease just inside the cell,\nsince a normal read on the knot itself is one side's.\n\nMore than 16 crease lines in a direction, as on a faceted sheet, keep\nthe even grid there, since each line multiplies the root cells the other\nway. A tree that reaches 200,000 cells, which an even grid's cannot,\nstarts again on the even grid rather than leave its later roots coarse,\nand a root is found by its lines instead of a scan. With creases the\ngrid's two ends are taken by value: `lo` plus four cells can fall a hair\nshort of `hi`, and a crease beside it would take the face's last strip\nwith it.\n\nA knot repeated up to the degree is not a crease by itself: a rational\narc's is smooth. A surface with no crease gets the same root grid in the\nsame order and meshes exactly as it did.\n\n## Tests\n\n`crates/operations/tests/nurbs_crease_mesh.rs`, in upright, turned and\nfar-away poses:\n\n- sheets bent by 0.01, 0.5 and 1.5 rad, at knots including ones on and\njust beside an even grid line, each at most 64 triangles (32 to 40\nupright), with every triangle lying on one flat or the other\n- a flat sheet with a knot meshes to as many triangles as a flat sheet\nwithout one\n- a 60 x 60 sheet creased both ways stays bounded\n- a crease at 0.88 in a domain from 0.2 to 0.9 keeps the strip past it:\nthe mesh covers the sheet's 70, where the old ends left 68\n- a bumpy sheet creased eight times each way, past the cell budget,\nmeshes within 0.015 of its surface; left to the budget its later roots\nread 0.198\n- unit tests in `nurbs.rs`: a half cylinder whose quarter arcs join at\n0.0001 or 0.9999 has no crease, and two folds 5e-6 apart are two. Both\nfail when the probes step a share of the whole domain instead\n\n## Limits\n\nA vertex on a crease is shared by the cells either side and takes one\nside's normal, so shading there follows that side. The triangles are\nright.\n\nA spline can only crease at a knot repeated up to its degree, so those\nare the only lines read. Each is read at five places along it, so a\ncrease running only part of the way and missing all five stays as it is\ntoday.\n\n## Verification\n\n`cargo nextest` on every test matching tess, mesh, nurbs, watertight or\nloft across the operations, io and wasm crates: 405 passed. CI runs the\nrest.\n`pose_sweep` and `truth_audit` match `main` line for line. I did not run\nthe tool-side suite.",
+          "timestamp": "2026-11-09T10:41:54-08:00",
+          "tree_id": "5b3ad1c5b15c0abdec6df012da6ebb7fce6d9cae",
+          "url": "https://github.com/andymai/brepkit/commit/77f24a6579d5e050f33185571647e0c25648e272"
+        },
+        "date": 1794250091017,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1137224,
+            "range": "± 9536",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1225796,
+            "range": "± 899",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 14023,
+            "range": "± 44",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 921167,
+            "range": "± 7841",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 29471926,
+            "range": "± 19104",
             "unit": "ns/iter"
           }
         ]
