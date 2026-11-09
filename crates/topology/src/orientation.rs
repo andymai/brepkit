@@ -201,9 +201,14 @@ fn nurbs_uv_winding(
         nurbs.is_periodic_v().then_some(v1 - v0),
     );
     let wrap = |d: f64, period: Option<f64>| period.map_or(d, |p| d - p * (d / p).round());
+    let tol = brepkit_math::tolerance::Tolerance::new().linear;
     let raw: Vec<(f64, f64)> = points
         .iter()
-        .map(|&p| surface.project_point(p))
+        .map(|&p| {
+            brepkit_math::nurbs::projection::project_point_to_surface(nurbs, p, tol)
+                .ok()
+                .map(|found| (found.u, found.v))
+        })
         .collect::<Option<_>>()?;
     let speeds: Vec<(f64, f64)> = raw
         .iter()
@@ -244,9 +249,9 @@ fn nurbs_uv_winding(
                 a.0.mul_add(b.1, -(b.0 * a.1))
             })
             .sum::<f64>();
-    let (um, vm) = (f64::midpoint(u0, u1), f64::midpoint(v0, v1));
-    let d = nurbs.derivatives(um, vm, 1);
-    let sense = d[1][0].cross(d[0][1]).dot(surface.normal(um, vm));
+    let at = raw[0];
+    let d = nurbs.derivatives(at.0, at.1, 1);
+    let sense = d[1][0].cross(d[0][1]).dot(surface.normal(at.0, at.1));
     (sense != 0.0).then(|| area * sense.signum())
 }
 
@@ -444,12 +449,106 @@ pub fn normalize_face_normals(
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-    use super::normalize_face_normals;
+    use std::f64::consts::{FRAC_1_SQRT_2, FRAC_PI_4, PI, TAU};
+
+    use brepkit_math::curves::Circle3D;
+    use brepkit_math::nurbs::surface::NurbsSurface;
+    use brepkit_math::vec::{Point3, Vec3};
+
+    use super::{normalize_face_normals, uv_winding};
     use crate::Topology;
+    use crate::edge::{Edge, EdgeCurve};
     use crate::explorer::solid_faces;
-    use crate::face::FaceId;
+    use crate::face::{Face, FaceId, FaceSurface};
     use crate::test_utils::make_unit_cube_manifold;
-    use crate::wire::OrientedEdge;
+    use crate::vertex::Vertex;
+    use crate::wire::{OrientedEdge, Wire};
+
+    const RADIUS: f64 = 2.0;
+    const HEIGHT: f64 = 3.0;
+
+    /// The rows of a full circle of `RADIUS` about `+z` as a rational
+    /// quadratic, from `+x` counterclockwise, with the weight of each row.
+    fn circle_rows() -> Vec<(f64, f64, f64)> {
+        (0..9)
+            .map(|k| {
+                let angle = f64::from(k) * FRAC_PI_4;
+                let (reach, weight) = if k % 2 == 0 {
+                    (RADIUS, 1.0)
+                } else {
+                    (RADIUS / FRAC_1_SQRT_2, FRAC_1_SQRT_2)
+                };
+                (reach * angle.cos(), reach * angle.sin(), weight)
+            })
+            .collect()
+    }
+
+    fn circle_knots() -> Vec<f64> {
+        vec![
+            0.0, 0.0, 0.0, 0.25, 0.25, 0.5, 0.5, 0.75, 0.75, 1.0, 1.0, 1.0,
+        ]
+    }
+
+    /// A B-spline cylinder of `RADIUS` from `z = 0` to `HEIGHT`: `u` runs
+    /// counterclockwise about `+z` from `+x`, `v` up, so `∂u × ∂v` points
+    /// out.
+    fn nurbs_cylinder() -> NurbsSurface {
+        let rows = circle_rows();
+        NurbsSurface::new(
+            2,
+            1,
+            circle_knots(),
+            vec![0.0, 0.0, 1.0, 1.0],
+            rows.iter()
+                .map(|&(x, y, _)| vec![Point3::new(x, y, 0.0), Point3::new(x, y, HEIGHT)])
+                .collect(),
+            rows.iter().map(|&(_, _, w)| vec![w, w]).collect(),
+        )
+        .unwrap()
+    }
+
+    /// The cylinder's patch from `-half` to `half` radians about `+z`, its
+    /// wire counterclockwise about the outward normal.
+    fn seam_patch(topo: &mut Topology, half: f64, reversed: bool) -> FaceId {
+        let at = |angle: f64, z: f64| Point3::new(RADIUS * angle.cos(), RADIUS * angle.sin(), z);
+        let corners = [
+            at(-half, 0.0),
+            at(half, 0.0),
+            at(half, HEIGHT),
+            at(-half, HEIGHT),
+        ];
+        let [v0, v1, v2, v3] = corners.map(|p| topo.add_vertex(Vertex::new(p, 1e-7)));
+        let rim = |z: f64| {
+            EdgeCurve::Circle(
+                Circle3D::new_with_ref(
+                    Point3::new(0.0, 0.0, z),
+                    Vec3::new(0.0, 0.0, 1.0),
+                    RADIUS,
+                    Vec3::new(1.0, 0.0, 0.0),
+                )
+                .unwrap(),
+            )
+        };
+        let bottom = topo.add_edge(Edge::new(v0, v1, rim(0.0)));
+        let right = topo.add_edge(Edge::new(v1, v2, EdgeCurve::Line));
+        let top = topo.add_edge(Edge::new(v3, v2, rim(HEIGHT)));
+        let left = topo.add_edge(Edge::new(v3, v0, EdgeCurve::Line));
+        let wire = topo.add_wire(
+            Wire::new(
+                vec![
+                    OrientedEdge::new(bottom, true),
+                    OrientedEdge::new(right, true),
+                    OrientedEdge::new(top, false),
+                    OrientedEdge::new(left, true),
+                ],
+                true,
+            )
+            .unwrap(),
+        );
+        let mut face = Face::new(wire, vec![], FaceSurface::Nurbs(nurbs_cylinder()));
+        face.set_reversed(reversed);
+        topo.add_face(face)
+    }
 
     /// Turn a face's effective normal round without changing the senses its
     /// edges are used in: the state of a face built with its wire backwards
@@ -516,5 +615,99 @@ mod tests {
         }
         let flipped = normalize_face_normals(&mut topo, &faces[1..], &faces[..1]).unwrap();
         assert_eq!(flipped, 5);
+    }
+
+    /// A patch three quarters of a turn round a B-spline cylinder, across its
+    /// seam, read against a cube's faces: as built it agrees with them, and
+    /// turned inside out it is the one face turned back, plain and reversed
+    /// alike.
+    #[test]
+    fn a_bspline_patch_across_the_seam_reads_its_winding() {
+        for reversed in [false, true] {
+            let mut topo = Topology::new();
+            let cube = make_unit_cube_manifold(&mut topo);
+            let seeds = solid_faces(&topo, cube).unwrap();
+            let patch = seam_patch(&mut topo, 0.75 * PI, reversed);
+            assert_eq!(
+                normalize_face_normals(&mut topo, &[patch], &seeds).unwrap(),
+                0,
+                "reversed: {reversed}"
+            );
+
+            turn_inside_out(&mut topo, patch);
+            assert_eq!(
+                normalize_face_normals(&mut topo, &[patch], &seeds).unwrap(),
+                1,
+                "reversed: {reversed}"
+            );
+            assert_eq!(topo.face(patch).unwrap().is_reversed(), reversed);
+        }
+    }
+
+    /// The patch's samples, counterclockwise about the outward normal, wind
+    /// positive in `(u, v)` across the seam.
+    #[test]
+    fn a_bspline_patch_across_the_seam_winds_positive() {
+        let surface = FaceSurface::Nurbs(nurbs_cylinder());
+        let half = 0.75 * PI;
+        let mut points = Vec::new();
+        for k in 0..16 {
+            let angle = (f64::from(k) / 16.0).mul_add(2.0 * half, -half);
+            points.push(Point3::new(RADIUS * angle.cos(), RADIUS * angle.sin(), 0.0));
+        }
+        for k in 0..16 {
+            let angle = (f64::from(k) / 16.0).mul_add(-2.0 * half, half);
+            points.push(Point3::new(
+                RADIUS * angle.cos(),
+                RADIUS * angle.sin(),
+                HEIGHT,
+            ));
+        }
+        let area = uv_winding(&surface, &points).unwrap();
+        assert!(area > 0.0, "area {area}");
+    }
+
+    /// A loop once round the cylinder does not close in `(u, v)`: the winding
+    /// is left to the boundary integral.
+    #[test]
+    fn a_loop_once_round_a_bspline_cylinder_has_no_uv_winding() {
+        let surface = FaceSurface::Nurbs(nurbs_cylinder());
+        let points: Vec<Point3> = (0..32)
+            .map(|k| {
+                let angle = f64::from(k) / 32.0 * TAU;
+                let z = (0.25 * HEIGHT).mul_add(angle.sin(), 0.5 * HEIGHT);
+                Point3::new(RADIUS * angle.cos(), RADIUS * angle.sin(), z)
+            })
+            .collect();
+        assert_eq!(uv_winding(&surface, &points), None);
+    }
+
+    /// A double cone, its apex at the middle of the domain: the patch's sense
+    /// is read where its loop is, not at the apex, where `∂u` vanishes.
+    #[test]
+    fn a_bspline_patch_reads_its_sense_off_a_degenerate_middle() {
+        let rows = circle_rows();
+        let cone = NurbsSurface::new(
+            2,
+            1,
+            circle_knots(),
+            vec![0.0, 0.0, 1.0, 1.0],
+            rows.iter()
+                .map(|&(x, y, _)| vec![Point3::new(-x, -y, -RADIUS), Point3::new(x, y, RADIUS)])
+                .collect(),
+            rows.iter().map(|&(_, _, w)| vec![w, w]).collect(),
+        )
+        .unwrap();
+        let corners = [(0.1, 0.6), (0.3, 0.6), (0.3, 0.9), (0.1, 0.9)];
+        let mut points = Vec::new();
+        for (k, &(u0, v0)) in corners.iter().enumerate() {
+            let (u1, v1) = corners[(k + 1) % corners.len()];
+            for step in 0..8 {
+                let t = f64::from(step) / 8.0;
+                points.push(cone.evaluate(t.mul_add(u1 - u0, u0), t.mul_add(v1 - v0, v0)));
+            }
+        }
+        let area = uv_winding(&FaceSurface::Nurbs(cone), &points).unwrap();
+        assert!(area > 0.0, "area {area}");
     }
 }
