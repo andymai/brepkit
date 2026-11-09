@@ -2066,6 +2066,15 @@ mod tests {
                 serde_json::from_str(&k.execute_batch(&batch(&bad))).unwrap();
             assert!(reply[0].get("error").is_some(), "{bad}: {reply}");
         }
+
+        // A solid handle past `u32` names no solid, not the one it wraps to.
+        let wrapped = serde_json::json!([{"op": "filletV2Corners", "args": {
+            "solid": u64::from(body) + (1_u64 << 32), "edges": edges, "radius": 2.0,
+            "corners": corners
+        }}]);
+        let reply: serde_json::Value =
+            serde_json::from_str(&k.execute_batch(&wrapped.to_string())).unwrap();
+        assert!(reply[0].get("error").is_some(), "{reply}");
     }
 
     /// A line 10 long then a half circle of radius 5, as a wire.
