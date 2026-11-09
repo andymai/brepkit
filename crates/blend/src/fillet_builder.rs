@@ -610,25 +610,29 @@ impl<'a> FilletBuilder<'a> {
                 .collect();
         }
         // Straight edges a trim splits whatever its policy, by their two
-        // ends: a sharp mitre's retained edge, and the smooth edge two
-        // stripes run on round on one section (see the policy's `spokes`).
+        // ends (see the policy's `spokes`): the sharp edge left between two
+        // stripes' walls at their junction, and the smooth edge two stripes
+        // run on round on one section. The walls' contacts end on the sharp
+        // edge a radius from the corner: at a convex corner it is a mitre's
+        // retained edge, and at a reflex one the rounds pivot on it, through
+        // a horn torus pinching to a point on it. Left whole, each wall ran
+        // on along it to the corner and back.
         let mut spokes: Vec<(brepkit_math::vec::Point3, brepkit_math::vec::Point3)> = Vec::new();
         if let Some(fillet_plan) = plan.as_ref() {
-            for miter in corner::find_equal_two_edge_miter_junctions(topo, fillet_plan) {
-                let Some(junction) = fillet_plan
-                    .junctions
-                    .iter()
-                    .find(|junction| junction.vertex == miter.vertex)
-                else {
+            for junction in &fillet_plan.junctions {
+                if junction.incident_contours.len() != 2 {
                     continue;
-                };
+                }
                 for &edge_id in &junction.unselected_sharp_edges {
                     let edge = topo.edge(edge_id)?;
                     if matches!(edge.curve(), EdgeCurve::Line) {
-                        spokes.push((
+                        let spoke = (
                             topo.vertex(edge.start())?.point(),
                             topo.vertex(edge.end())?.point(),
-                        ));
+                        );
+                        if !spokes.contains(&spoke) {
+                            spokes.push(spoke);
+                        }
                     }
                 }
             }
