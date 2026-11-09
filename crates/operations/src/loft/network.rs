@@ -79,6 +79,11 @@ const CREASE_ANGLE: f64 = 1e-3;
 /// a sweep's path reads them.
 const WIRE_GAP: f64 = 1e-5;
 
+/// How far rails must cross a profile's plane, as the mean sine of the angles
+/// they make with it, to tell which way the loft runs there: well past the lean
+/// [`RAIL_CONDITION_ANGLE`] lets a rail keep at a tangent end.
+const RAILS_CROSS: f64 = 1e-3;
+
 /// Knots within this of each other on a unit domain are one.
 const KNOT_MERGE: f64 = 1e-9;
 
@@ -972,10 +977,11 @@ fn ring_index(ring: &[ProfileEdgeGeom], at: Point3) -> Result<usize, OperationsE
 }
 
 /// Turn every ring to run counterclockwise about the way the loft goes there,
-/// which makes each side's `Su × Sv` point out of the solid. That way is the
-/// chord between the neighbouring profiles, unless a profile's plane holds the
-/// chord, as a U-bend's does: then the rails say, or a `normal` condition's
-/// profile by its own normal.
+/// which makes each side's `Su × Sv` point out of the solid. The rails say
+/// where they cross the profile: the chord between the neighbouring profiles
+/// points back on a bend past a half turn. Otherwise the chord says, unless the
+/// profile's plane holds it, as a U-bend's does: then a `normal` condition's
+/// profile says by its own normal.
 fn orient_rings(
     topo: &Topology,
     rings: &mut [Vec<ProfileEdgeGeom>],
@@ -995,12 +1001,24 @@ fn orient_rings(
             (c.abs() > floor).then(|| c.signum())
         };
         let chord = centres[(s + 1).min(last)] - centres[s.saturating_sub(1)];
-        let along_rails = rails.iter().fold(Vec3::new(0.0, 0.0, 0.0), |sum, rail| {
-            sum + rail
-                .tangent_at(s)
-                .normalize()
-                .unwrap_or(Vec3::new(0.0, 0.0, 0.0))
-        });
+        // How far the rails cross the profile's plane, on average: rails leaving
+        // within it, as at a tangent end, may lean either way within their
+        // tolerance and say nothing.
+        #[allow(clippy::cast_precision_loss)]
+        let across_rails = (!rails.is_empty())
+            .then(|| {
+                rails
+                    .iter()
+                    .map(|rail| {
+                        rail.tangent_at(s)
+                            .normalize()
+                            .map_or(0.0, |t| normal.dot(t))
+                    })
+                    .sum::<f64>()
+                    / rails.len() as f64
+            })
+            .filter(|c| c.abs() > RAILS_CROSS)
+            .map(f64::signum);
         let from_condition = || -> Result<Option<f64>, OperationsError> {
             let (end, along) = match s {
                 0 => (&options.start, 1.0),
@@ -1013,9 +1031,7 @@ fn orient_rings(
             let side = profile_outward(topo, profiles[s], normal)? * (along * weight.signum());
             Ok(reads(side, 1e-6))
         };
-        // The rails say which way the loft runs where there are any: the chord
-        // between neighbouring profiles points back on a bend past a half turn.
-        let sign = reads(along_rails, 1e-6)
+        let sign = across_rails
             .or_else(|| reads(chord, 1e-3))
             .map_or_else(from_condition, |sign| Ok(Some(sign)))?
             .or_else(|| reads(chord, 1e-9))
