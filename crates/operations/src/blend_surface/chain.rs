@@ -487,6 +487,21 @@ impl Chain {
         segment.run.point(segment.fraction(s))
     }
 
+    /// The arc length of the chain from `from` to `to`.
+    pub fn length_between(&self, from: f64, to: f64) -> f64 {
+        self.segments
+            .iter()
+            .map(|segment| {
+                let (lo, hi) = (from.max(segment.s0), to.min(segment.s1));
+                if hi > lo {
+                    segment.length() * (hi - lo) / (segment.s1 - segment.s0)
+                } else {
+                    0.0
+                }
+            })
+            .sum()
+    }
+
     /// The point at `s`, the unit tangent there, and the point the tangent was
     /// read at, just inside the piece `(lo, hi)` that `s` is taken to belong
     /// to, so that what stands at a knot reads as this piece's side of it.

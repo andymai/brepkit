@@ -22,6 +22,7 @@ mod spline;
 pub use fair::fair_surface;
 pub use match_edge::{match_surface, match_surface_on};
 
+use brepkit_geometry::extrema::segment_segment_distance;
 use brepkit_math::nurbs::curve::NurbsCurve;
 use brepkit_math::nurbs::knot_ops::curve_split;
 use brepkit_math::nurbs::surface::NurbsSurface;
@@ -44,6 +45,13 @@ const ALONG_DEGREE: usize = 5;
 
 /// Vertices closer than this are one vertex.
 const WELD: f64 = 1e-9;
+
+/// The share of a chain's length its arc-length quadrature may be out by.
+const ARC_ROUNDING: f64 = 1e-12;
+
+/// Pairs of chain pieces found near each other past this many are refused as
+/// touching: the chains run that close for too long to prove apart.
+const MOST_NEAR_PAIRS: usize = 1 << 16;
 
 /// The continuity a blend surface keeps with the face beside each chain.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -371,8 +379,9 @@ fn pair_chains(a: &Chain, b: &mut Chain) -> bool {
     run_back
 }
 
-/// The smallest distance between the chains away from any end they share, and
-/// the largest coordinate on either.
+/// The smallest distance between the chains at the same `s` away from any end
+/// they share, and the largest coordinate on either. Chains that touch, at the
+/// same `s` or not, are refused.
 fn chain_gap(a: &Chain, b: &Chain) -> Result<(f64, f64), OperationsError> {
     let mut smallest = f64::INFINITY;
     let mut largest = 0.0_f64;
@@ -399,7 +408,114 @@ fn chain_gap(a: &Chain, b: &Chain) -> Result<(f64, f64), OperationsError> {
             reason: "the two chains lie on top of each other".into(),
         });
     }
+    if let Some(p) = chains_touch(a, b) {
+        return Err(OperationsError::InvalidInput {
+            reason: format!("the two chains touch at {p:?}, away from their ends"),
+        });
+    }
     Ok((smallest.max(1e-6 * widest), largest))
+}
+
+/// A piece of a chain between two of its points.
+#[derive(Clone, Copy)]
+struct Piece {
+    from: f64,
+    to: f64,
+    start: Point3,
+    end: Point3,
+    arc: f64,
+    /// How far the chain can stray from the chord: no point of the piece is
+    /// farther from its two ends together than the arc length, so the piece
+    /// lies in the ellipse round them.
+    reach: f64,
+}
+
+impl Piece {
+    fn new(chain: &Chain, (from, to): (f64, f64), (start, end): (Point3, Point3)) -> Self {
+        let arc = chain.length_between(from, to);
+        let chord = (end - start).length();
+        // An arc length short by `d` hides up to `sqrt(arc d)` of the reach.
+        let rounding = (arc * ARC_ROUNDING * chain.length).sqrt();
+        Self {
+            from,
+            to,
+            start,
+            end,
+            arc,
+            reach: 0.5 * (arc * arc - chord * chord).max(0.0).sqrt() + rounding,
+        }
+    }
+
+    fn halves(&self, chain: &Chain) -> [Self; 2] {
+        let middle = 0.5 * (self.from + self.to);
+        let at = chain.point(middle);
+        [
+            Self::new(chain, (self.from, middle), (self.start, at)),
+            Self::new(chain, (middle, self.to), (at, self.end)),
+        ]
+    }
+}
+
+/// Where the chains come within [`WELD`] of each other, each read at its own
+/// `s`, away from an end they share: chains can cross at different shares of
+/// their lengths. Pairs of pieces are halved until their chords and reaches
+/// prove them apart, or they meet.
+fn chains_touch(a: &Chain, b: &Chain) -> Option<Point3> {
+    const STEPS: usize = 128;
+    let pieces = |chain: &Chain| -> Vec<Piece> {
+        let at = |i: usize| i as f64 / STEPS as f64;
+        let points: Vec<Point3> = (0..=STEPS).map(|i| chain.point(at(i))).collect();
+        (0..STEPS)
+            .map(|i| Piece::new(chain, (at(i), at(i + 1)), (points[i], points[i + 1])))
+            .collect()
+    };
+    let (along_a, along_b) = (pieces(a), pieces(b));
+    let last = STEPS - 1;
+    let open = !a.closed;
+    let first_shared = open && (along_a[0].start - along_b[0].start).length() <= WELD;
+    let last_shared = open && (along_a[last].end - along_b[last].end).length() <= WELD;
+    let mut pairs = Vec::with_capacity(STEPS * STEPS);
+    for (i, piece_a) in along_a.iter().enumerate() {
+        for (j, piece_b) in along_b.iter().enumerate() {
+            let shared =
+                (first_shared && i == 0 && j == 0) || (last_shared && i == last && j == last);
+            if !shared {
+                pairs.push((*piece_a, *piece_b));
+            }
+        }
+    }
+    let mut near = 0;
+    while let Some((piece_a, piece_b)) = pairs.pop() {
+        let (gap, _, _) =
+            segment_segment_distance(piece_a.start, piece_a.end, piece_b.start, piece_b.end);
+        if gap > piece_a.reach + piece_b.reach + WELD {
+            continue;
+        }
+        let (closest, at) = [
+            (piece_a.start, piece_b.start),
+            (piece_a.start, piece_b.end),
+            (piece_a.end, piece_b.start),
+            (piece_a.end, piece_b.end),
+        ]
+        .into_iter()
+        .map(|(p, q)| ((p - q).length(), p))
+        .fold((f64::INFINITY, piece_a.start), |x, y| {
+            if y.0 < x.0 { y } else { x }
+        });
+        near += 1;
+        // Pieces no longer than the weld and not proved apart are as good as
+        // touching.
+        let unresolved = near > MOST_NEAR_PAIRS || piece_a.arc.max(piece_b.arc) <= WELD;
+        if closest <= WELD || unresolved {
+            return Some(at);
+        }
+        for half_a in piece_a.halves(a) {
+            for half_b in piece_b.halves(b) {
+                pairs.push((half_a, half_b));
+            }
+        }
+    }
+    None
 }
 
 fn surface_from_rows(
@@ -538,4 +654,42 @@ fn vertex_at(
     let id = topo.add_vertex(Vertex::new(point, 1e-7));
     vertices.push((point, id));
     id
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use brepkit_geometry::convert::circle_to_nurbs;
+    use brepkit_math::curves::Circle3D;
+
+    use super::*;
+
+    fn arc(circle: &Circle3D, from: f64, to: f64) -> Chain {
+        let curve = circle_to_nurbs(circle, from, to).unwrap();
+        Chain::from_curve(curve, circle.evaluate(from), circle.evaluate(to)).unwrap()
+    }
+
+    /// Two arcs that meet out of each other's plane, at different shares of
+    /// their lengths and between samples on both: no chord between samples
+    /// meets another, so only halving the pieces finds where the arcs meet.
+    /// Lifted 1e-6 apart, they do not touch.
+    #[test]
+    fn arcs_meeting_out_of_plane_touch_and_lifted_apart_do_not() {
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        let origin = Point3::new(0.0, 0.0, 0.0);
+        let rim = Circle3D::new_with_ref(origin, z, 5.0, Vec3::new(1.0, 0.0, 0.0)).unwrap();
+        let a = arc(&rim, 0.0, 2.1);
+        let meet = rim.evaluate(0.5);
+        for (lift, touches) in [(0.0, true), (1e-6, false)] {
+            let hoop =
+                Circle3D::new_with_ref(meet + z * (4.0 + lift), rim.tangent(0.5), 4.0, -z).unwrap();
+            let b = arc(&hoop, -2.4, 0.6);
+            let found = chains_touch(&a, &b);
+            assert_eq!(found.is_some(), touches, "lifted {lift}: {found:?}");
+            if let Some(p) = found {
+                assert!((p - meet).length() < 1e-6, "{p:?}");
+            }
+        }
+    }
 }

@@ -961,6 +961,53 @@ fn chains_touching_midway_are_refused() {
     assert!(reason.contains("touch"), "{reason}");
 }
 
+/// Chains that cross at different shares of their lengths, whichever way the
+/// crossing edge is stored: no two points at the same share meet.
+#[test]
+fn chains_crossing_at_different_shares_are_refused() {
+    for stored_back in [false, true] {
+        let mut topo = Topology::new();
+        let a = sheet(&mut topo, "plane", Pose::upright());
+        let mut b = Builder {
+            topo: &mut topo,
+            pose: Pose::upright(),
+        };
+        let corners = [
+            Point3::new(-2.0, 2.0, 0.0),
+            Point3::new(6.0, 2.0, 0.0),
+            Point3::new(6.0, -2.0, 3.0),
+            Point3::new(-2.0, -2.0, 3.0),
+        ];
+        let v: Vec<_> = corners.iter().map(|&p| b.vertex(p)).collect();
+        let crossing = if stored_back {
+            b.line(v[1], v[0])
+        } else {
+            b.line(v[0], v[1])
+        };
+        let rest: Vec<_> = (1..4).map(|i| b.line(v[i], v[(i + 1) % 4])).collect();
+        let mut walk = vec![OrientedEdge::new(crossing, !stored_back)];
+        walk.extend(rest.iter().map(|&e| OrientedEdge::new(e, true)));
+        let wire = b.topo.add_wire(Wire::new(walk, true).unwrap());
+        let face = b.topo.add_face(Face::new(
+            wire,
+            Vec::new(),
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, -0.6, -0.8),
+                d: -1.2,
+            },
+        ));
+        let reason = refused(blend_surface(
+            &mut topo,
+            &a.chain,
+            a.face,
+            &[crossing],
+            face,
+            &BlendSurfaceOptions::new(BlendContinuity::G1),
+        ));
+        assert!(reason.contains("touch"), "{stored_back}: {reason}");
+    }
+}
+
 /// A G1 surface shows its curvature gap, and a turned surface shows its angle:
 /// the measure is not reading zero for want of looking.
 #[test]
