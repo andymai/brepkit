@@ -126,7 +126,7 @@ fn uv_winding(surface: &FaceSurface, points: &[Point3]) -> Option<f64> {
     let v_periodic = match surface {
         FaceSurface::Cylinder(_) | FaceSurface::Cone(_) => false,
         FaceSurface::Torus(_) => true,
-        FaceSurface::Nurbs(nurbs) => return nurbs_uv_winding(surface, nurbs, points),
+        FaceSurface::Nurbs(nurbs) => return nurbs_uv_winding(surface, nurbs, points, false),
         FaceSurface::Plane { .. } | FaceSurface::Sphere(_) => return None,
     };
     let wrap = |d: f64| d - TAU * (d / TAU).round();
@@ -193,6 +193,7 @@ fn nurbs_uv_winding(
     surface: &FaceSurface,
     nurbs: &brepkit_math::nurbs::surface::NurbsSurface,
     points: &[Point3],
+    wraps: bool,
 ) -> Option<f64> {
     let (u0, u1) = nurbs.domain_u();
     let (v0, v1) = nurbs.domain_v();
@@ -233,11 +234,21 @@ fn nurbs_uv_winding(
         return None;
     }
     let mut loop_uv: Vec<(f64, f64)> = Vec::with_capacity(raw.len());
+    // A loop that runs along a seam both ways wraps one direction. Sampled
+    // densely along its edges, it steps across half of a direction only where
+    // it crosses that direction's seam, which only a periodic direction can
+    // unwrap: past a seam that is not periodic the area means nothing.
+    let crosses_seam = |d: f64, period: Option<f64>, width: f64| {
+        wraps && period.is_none() && d.abs() > 0.5 * width
+    };
     for &(u, v) in &raw {
         let Some(&(pu, pv)) = loop_uv.last() else {
             loop_uv.push((u, v));
             continue;
         };
+        if crosses_seam(u - pu, periods.0, u1 - u0) || crosses_seam(v - pv, periods.1, v1 - v0) {
+            return None;
+        }
         loop_uv.push((pu + wrap(u - pu, periods.0), pv + wrap(v - pv, periods.1)));
     }
     let (first, last) = (loop_uv[0], loop_uv[loop_uv.len() - 1]);
@@ -312,15 +323,18 @@ pub fn normalize_face_normals(
             continue;
         }
         let wire = topo.wire(wire_id)?;
-        {
+        // A wire running along a seam both ways (a wall round a closed rim)
+        // has no winding about its samples' centroid, but closes in `(u, v)`.
+        // Only a seed is read so, for the convention alone: a hole's wall
+        // left as it was may be every seed there is.
+        let seamed = {
             let mut seen = DetHashSet::default();
-            if wire
-                .edges()
+            wire.edges()
                 .iter()
                 .any(|oriented| !seen.insert(oriented.edge()))
-            {
-                continue;
-            }
+        };
+        if seamed && !seed_set.contains(&face_id) {
+            continue;
         }
 
         let oriented_edges = if reversed {
@@ -397,16 +411,22 @@ pub fn normalize_face_normals(
             integral += normal.cross(segment).dot(center - midpoint);
             total_length += length;
         }
-        if total_length < 1e-12 || integral.abs() < 1e-9 * total_length * total_length {
+        if !seamed && (total_length < 1e-12 || integral.abs() < 1e-9 * total_length * total_length)
+        {
             continue;
         }
         // Read against a reference point, the integral is a winding only on a
         // plane: on a curved band spanning more than half a turn the samples'
         // centroid falls outside the band and the sign can flip. A loop that
         // closes in `(u, v)` reads its winding there instead.
-        let integral = match uv_winding(&surface, &points) {
+        let reading = match &surface {
+            FaceSurface::Nurbs(nurbs) if seamed => nurbs_uv_winding(&surface, nurbs, &points, true),
+            _ => uv_winding(&surface, &points),
+        };
+        let integral = match reading {
             Some(area) if reversed => -area,
             Some(area) => area,
+            None if seamed => continue,
             None => integral,
         };
         // A zero reading (exactly; small ones were skipped above) says
@@ -819,5 +839,268 @@ mod tests {
         }
         let area = uv_winding(&FaceSurface::Nurbs(patch), &points).unwrap();
         assert!(area > 0.0, "area {area}");
+    }
+
+    /// A cylinder wall round the z axis between two whole rims, its wire
+    /// running up its seam and back: the wall of a hole left as it was.
+    fn seamed_wall(topo: &mut Topology) -> FaceId {
+        use crate::edge::{Edge, EdgeCurve};
+        use crate::face::{Face, FaceSurface};
+        use crate::vertex::Vertex;
+        use crate::wire::Wire;
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::CylindricalSurface;
+        use brepkit_math::vec::{Point3, Vec3};
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        let (low, high) = (
+            topo.add_vertex(Vertex::new(Point3::new(1.0, 0.0, 0.0), 1e-7)),
+            topo.add_vertex(Vertex::new(Point3::new(1.0, 0.0, 2.0), 1e-7)),
+        );
+        let rim = |height: f64| {
+            EdgeCurve::Circle(Circle3D::new(Point3::new(0.0, 0.0, height), z, 1.0).unwrap())
+        };
+        let bottom = topo.add_edge(Edge::new(low, low, rim(0.0)));
+        let top = topo.add_edge(Edge::new(high, high, rim(2.0)));
+        let seam = topo.add_edge(Edge::new(low, high, EdgeCurve::Line));
+        // Round the bottom with the axis, up the seam, back round the top.
+        let wire = Wire::new(
+            vec![
+                OrientedEdge::new(bottom, true),
+                OrientedEdge::new(seam, true),
+                OrientedEdge::new(top, false),
+                OrientedEdge::new(seam, false),
+            ],
+            true,
+        )
+        .unwrap();
+        let wire = topo.add_wire(wire);
+        let surface = CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), z, 1.0).unwrap();
+        topo.add_face(Face::new(wire, vec![], FaceSurface::Cylinder(surface)))
+    }
+
+    #[test]
+    fn a_seamed_seed_sets_the_convention() {
+        let mut topo = Topology::new();
+        let cube = make_unit_cube_manifold(&mut topo);
+        let faces = solid_faces(&topo, cube).unwrap();
+        let wall = seamed_wall(&mut topo);
+        // Four of the six turned: voting, they would turn the other two.
+        for &face_id in &faces[..4] {
+            turn_inside_out(&mut topo, face_id);
+        }
+        assert_eq!(
+            normalize_face_normals(&mut topo, &faces, &[wall]).unwrap(),
+            4
+        );
+        // The wall, a seed, is read but never turned.
+        assert!(!topo.face(wall).unwrap().is_reversed());
+    }
+
+    /// A wall round the B-spline cylinder between its two whole rims, its
+    /// wire up the seam and back, with the last control row moved `gap` off
+    /// the first along y: the whole row, or only its top end at `corner`.
+    fn bspline_seamed_wall(topo: &mut Topology, gap: f64, corner: bool) -> FaceId {
+        let rows = circle_rows();
+        let last = rows.len() - 1;
+        let surface = NurbsSurface::new(
+            2,
+            1,
+            circle_knots(),
+            vec![0.0, 0.0, 1.0, 1.0],
+            rows.iter()
+                .enumerate()
+                .map(|(k, &(x, y, _))| {
+                    let lift = if k == last { gap } else { 0.0 };
+                    let low = if corner { y } else { y + lift };
+                    vec![Point3::new(x, low, 0.0), Point3::new(x, y + lift, HEIGHT)]
+                })
+                .collect(),
+            rows.iter().map(|&(_, _, w)| vec![w, w]).collect(),
+        )
+        .unwrap();
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        let (low, high) = (
+            topo.add_vertex(Vertex::new(Point3::new(RADIUS, 0.0, 0.0), 1e-7)),
+            topo.add_vertex(Vertex::new(Point3::new(RADIUS, 0.0, HEIGHT), 1e-7)),
+        );
+        let rim = |height: f64| {
+            EdgeCurve::Circle(Circle3D::new(Point3::new(0.0, 0.0, height), z, RADIUS).unwrap())
+        };
+        let bottom = topo.add_edge(Edge::new(low, low, rim(0.0)));
+        let top = topo.add_edge(Edge::new(high, high, rim(HEIGHT)));
+        let seam = topo.add_edge(Edge::new(low, high, EdgeCurve::Line));
+        let wire = Wire::new(
+            vec![
+                OrientedEdge::new(bottom, true),
+                OrientedEdge::new(seam, true),
+                OrientedEdge::new(top, false),
+                OrientedEdge::new(seam, false),
+            ],
+            true,
+        )
+        .unwrap();
+        let wire = topo.add_wire(wire);
+        topo.add_face(Face::new(wire, vec![], FaceSurface::Nurbs(surface)))
+    }
+
+    /// A seamed wall on a closed B-spline cylinder, the only seed, reads its
+    /// winding across the seam: four of the cube's faces turned are all
+    /// turned back, where a vote would turn the other two.
+    #[test]
+    fn a_seamed_bspline_seed_sets_the_convention() {
+        let mut topo = Topology::new();
+        let cube = make_unit_cube_manifold(&mut topo);
+        let faces = solid_faces(&topo, cube).unwrap();
+        let wall = bspline_seamed_wall(&mut topo, 0.0, false);
+        for &face_id in &faces[..4] {
+            turn_inside_out(&mut topo, face_id);
+        }
+        assert_eq!(
+            normalize_face_normals(&mut topo, &faces, &[wall]).unwrap(),
+            4
+        );
+        assert!(!topo.face(wall).unwrap().is_reversed());
+    }
+
+    /// A B-spline wall whose last control row stands off its first, evenly
+    /// or at one corner only, is not read as periodic, and its seam samples
+    /// could fall at either end of the domain. Such a seed gives no reading,
+    /// so the faces vote: with two of the cube's faces turned the vote turns
+    /// those two back, and with four turned it turns the other two. A seed
+    /// reading of either sign would turn four in one of the two cases.
+    #[test]
+    fn a_seamed_bspline_seed_not_quite_closed_gives_no_reading() {
+        for (gap, corner) in [(1e-6, false), (1e-4, false), (1e-4, true)] {
+            for turned in [2, 4] {
+                let mut topo = Topology::new();
+                let cube = make_unit_cube_manifold(&mut topo);
+                let faces = solid_faces(&topo, cube).unwrap();
+                let wall = bspline_seamed_wall(&mut topo, gap, corner);
+                for &face_id in &faces[..turned] {
+                    turn_inside_out(&mut topo, face_id);
+                }
+                assert_eq!(
+                    normalize_face_normals(&mut topo, &faces, &[wall]).unwrap(),
+                    2,
+                    "gap {gap}, at one corner {corner}, {turned} turned"
+                );
+            }
+        }
+    }
+
+    /// A quarter of a B-spline torus (major radius 4, minor 1) between two
+    /// whole meridians, its wire round one meridian, along the outer equator
+    /// and back round the other: the loop wraps the tube's direction. The
+    /// surface is periodic round the axis; its last row round the tube
+    /// stands `gap` off its first along z.
+    fn bspline_torus_band(topo: &mut Topology, gap: f64) -> FaceId {
+        let (major, minor) = (4.0_f64, 1.0_f64);
+        let unit: Vec<(f64, f64, f64)> = circle_rows()
+            .into_iter()
+            .map(|(x, y, w)| (x / RADIUS, y / RADIUS, w))
+            .collect();
+        let last = unit.len() - 1;
+        let surface = NurbsSurface::new(
+            2,
+            2,
+            circle_knots(),
+            circle_knots(),
+            unit.iter()
+                .map(|&(ax, ay, _)| {
+                    unit.iter()
+                        .enumerate()
+                        .map(|(j, &(px, pz, _))| {
+                            let reach = minor.mul_add(px, major);
+                            let lift = if j == last { gap } else { 0.0 };
+                            Point3::new(reach * ax, reach * ay, minor.mul_add(pz, lift))
+                        })
+                        .collect()
+                })
+                .collect(),
+            unit.iter()
+                .map(|&(_, _, wu)| unit.iter().map(|&(_, _, wv)| wu * wv).collect())
+                .collect(),
+        )
+        .unwrap();
+        let outer = major + minor;
+        let (a, b) = (
+            topo.add_vertex(Vertex::new(Point3::new(outer, 0.0, 0.0), 1e-7)),
+            topo.add_vertex(Vertex::new(Point3::new(0.0, outer, 0.0), 1e-7)),
+        );
+        let meridian = |centre: Point3, normal: Vec3, start: Vec3| {
+            EdgeCurve::Circle(Circle3D::new_with_ref(centre, normal, minor, start).unwrap())
+        };
+        let first = topo.add_edge(Edge::new(
+            a,
+            a,
+            meridian(
+                Point3::new(major, 0.0, 0.0),
+                Vec3::new(0.0, -1.0, 0.0),
+                Vec3::new(1.0, 0.0, 0.0),
+            ),
+        ));
+        let second = topo.add_edge(Edge::new(
+            b,
+            b,
+            meridian(
+                Point3::new(0.0, major, 0.0),
+                Vec3::new(1.0, 0.0, 0.0),
+                Vec3::new(0.0, 1.0, 0.0),
+            ),
+        ));
+        let equator = topo.add_edge(Edge::new(
+            a,
+            b,
+            EdgeCurve::Circle(
+                Circle3D::new_with_ref(
+                    Point3::new(0.0, 0.0, 0.0),
+                    Vec3::new(0.0, 0.0, 1.0),
+                    outer,
+                    Vec3::new(1.0, 0.0, 0.0),
+                )
+                .unwrap(),
+            ),
+        ));
+        let wire = Wire::new(
+            vec![
+                OrientedEdge::new(first, true),
+                OrientedEdge::new(equator, true),
+                OrientedEdge::new(second, false),
+                OrientedEdge::new(equator, false),
+            ],
+            true,
+        )
+        .unwrap();
+        let wire = topo.add_wire(wire);
+        topo.add_face(Face::new(wire, vec![], FaceSurface::Nurbs(surface)))
+    }
+
+    /// The torus band's loop crosses the tube's seam. Round the axis the
+    /// surface is periodic, but round the tube it closes only to within
+    /// `gap`, so nothing unwraps that crossing: the seed gives no reading
+    /// and the faces vote, with two and with four of the cube's faces turned.
+    #[test]
+    fn a_seamed_seed_wrapping_a_direction_not_periodic_gives_no_reading() {
+        for gap in [1e-6, 1e-4] {
+            for turned in [2, 4] {
+                let mut topo = Topology::new();
+                let cube = make_unit_cube_manifold(&mut topo);
+                let faces = solid_faces(&topo, cube).unwrap();
+                let band = bspline_torus_band(&mut topo, gap);
+                let periodic = match topo.face(band).unwrap().surface() {
+                    FaceSurface::Nurbs(n) => (n.is_periodic_u(), n.is_periodic_v()),
+                    _ => (false, false),
+                };
+                assert_eq!(periodic, (true, false), "gap {gap}");
+                for &face_id in &faces[..turned] {
+                    turn_inside_out(&mut topo, face_id);
+                }
+                assert_eq!(
+                    normalize_face_normals(&mut topo, &faces, &[band]).unwrap(),
+                    2,
+                    "gap {gap}, {turned} turned"
+                );
+            }
+        }
     }
 }
