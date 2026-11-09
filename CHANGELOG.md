@@ -1,5 +1,18 @@
 # Changelog
 
+## [4.11.0](https://github.com/andymai/brepkit/compare/v4.10.0...v4.11.0) (2026-11-09)
+
+
+### Features
+
+* **operations:** loft along guide rails and under end conditions ([#2331](https://github.com/andymai/brepkit/issues/2331)) ([b79c36e](https://github.com/andymai/brepkit/commit/b79c36e39ec07cf26db886305646f4b6f69dff46))
+
+
+### Bug Fixes
+
+* **blend:** land five contributor fillet PRs with a regular-point B-spline winding and certified sliver edges ([#2355](https://github.com/andymai/brepkit/issues/2355)) ([09dfef8](https://github.com/andymai/brepkit/commit/09dfef8ff6d657cd557838c9cb4119bc9dbbddc0))
+* **blend:** land four contributor fillet PRs with exact mitre and capped-corner curves and a scale-free hole guard ([#2354](https://github.com/andymai/brepkit/issues/2354)) ([092099b](https://github.com/andymai/brepkit/commit/092099bd8bdcc16b55bba9f2531a925feaf42579))
+
 ## [4.10.0](https://github.com/andymai/brepkit/compare/v4.9.0...v4.10.0) (2026-11-09)
 
 
