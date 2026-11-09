@@ -127,9 +127,10 @@ fn held_points(
     let (v0, v1) = surface.domain_v();
     let samples = 64.max(4 * (n + m));
     let snap = |x: f64, lo: f64, hi: f64| {
-        if (x - lo).abs() < 1e-9 {
+        let near = 1e-9 * (hi - lo);
+        if (x - lo).abs() < near {
             lo
-        } else if (x - hi).abs() < 1e-9 {
+        } else if (x - hi).abs() < near {
             hi
         } else {
             x
@@ -234,16 +235,18 @@ fn hold_outside(
     Ok(())
 }
 
-/// An unclamped spline's knot vector runs past its domain.
+/// Every knot span of positive width inside the domain, however narrow the
+/// domain: an unclamped spline's knot vector runs past it.
 fn domain_spans(space: &Space) -> Vec<(f64, f64)> {
     let (lo, hi) = (
         space.knots[space.degree],
         space.knots[space.knots.len() - space.degree - 1],
     );
     space
-        .spans()
-        .into_iter()
-        .filter(|&(a, b)| a >= lo && b <= hi)
+        .knots
+        .windows(2)
+        .filter(|w| w[1] > w[0] && w[0] >= lo && w[1] <= hi)
+        .map(|w| (w[0], w[1]))
         .collect()
 }
 

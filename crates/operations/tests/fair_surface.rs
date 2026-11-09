@@ -133,6 +133,17 @@ fn cubic_sheet(
     count: usize,
     height: impl Fn(usize, usize, f64, f64) -> f64,
 ) -> FaceId {
+    cubic_sheet_over(topo, pose, count, height, 1.0)
+}
+
+/// As [`cubic_sheet`], with its knots running from 0 to `domain`.
+fn cubic_sheet_over(
+    topo: &mut Topology,
+    pose: Pose,
+    count: usize,
+    height: impl Fn(usize, usize, f64, f64) -> f64,
+    domain: f64,
+) -> FaceId {
     let net: Vec<Vec<Point3>> = (0..count)
         .map(|i| {
             let x = 10.0 * i as f64 / (count - 1) as f64;
@@ -145,7 +156,10 @@ fn cubic_sheet(
         })
         .collect();
     let weights = vec![vec![1.0; count]; count];
-    let knots = uniform_knots(count, 3);
+    let knots: Vec<f64> = uniform_knots(count, 3)
+        .into_iter()
+        .map(|k| k * domain)
+        .collect();
     let mut b = Builder { topo, pose };
     net_sheet(&mut b, (3, 3), (knots.clone(), knots), &net, &weights).0
 }
@@ -655,6 +669,41 @@ fn fairing_does_not_care_about_size() {
             "{size}: {other_moved} {moved}"
         );
     }
+}
+
+/// The width of the knot domain says nothing about the shape: a net over a
+/// domain 1e-10 wide fairs as the same net over one 1 wide.
+#[test]
+fn fairing_does_not_care_about_the_knot_domain() {
+    let run = |domain: f64| {
+        let mut topo = Topology::new();
+        let face = cubic_sheet_over(&mut topo, Pose::turned(), 15, bumpy(0.1), domain);
+        let before = nurbs_of(&topo, face);
+        let result = fair_surface(&mut topo, face, 0.12).unwrap();
+        (before, nurbs_of(&topo, result))
+    };
+    let (_, wide) = run(1.0);
+    let (before, narrow) = run(1e-10);
+    let mut moved = 0.0_f64;
+    let mut apart = 0.0_f64;
+    for ((original, faired), other) in before
+        .control_points()
+        .iter()
+        .flatten()
+        .zip(narrow.control_points().iter().flatten())
+        .zip(wide.control_points().iter().flatten())
+    {
+        moved = moved.max((*faired - *original).length());
+        apart = apart.max((*faired - *other).length());
+    }
+    let held = boundary_moved(&before, &narrow);
+    println!(
+        "narrow knot domain: control points moved {moved:.4}, {apart:.2e} from the wide, \
+         boundary moved {held:.2e}"
+    );
+    assert!(moved > 0.01, "nothing was faired: {moved}");
+    assert!(held < 1e-12, "{held}");
+    assert!(apart < 1e-6, "{apart}");
 }
 
 /// The measure reads what it should: a half-cylinder of radius `r` and length
