@@ -2067,28 +2067,25 @@ fn input_edge_set(topo: &Topology, original_faces: &[FaceId]) -> HashSet<EdgeId>
 
 /// Whether an edge is straight: a line, or a B-spline lying on the chord
 /// between its ends within `tol` (a contact fitted along a straight ruling).
+/// A B-spline is certified by its control points: with every weight
+/// positive the curve lies in their hull, so it lies within `tol` of the
+/// chord wherever they all do, however narrow a knot span is.
 fn straight_edge(topo: &Topology, edge: &Edge, tol: f64) -> Result<bool, BlendError> {
     match edge.curve() {
         EdgeCurve::Line => Ok(true),
-        EdgeCurve::NurbsCurve(_) => {
+        EdgeCurve::NurbsCurve(curve) => {
             let (a, b) = (
                 topo.vertex(edge.start())?.point(),
                 topo.vertex(edge.end())?.point(),
             );
             let chord = b - a;
             let length2 = chord.dot(chord);
-            if length2 <= 1e-18 {
+            if length2 <= 1e-18 || !curve.weights().iter().all(|w| w.is_finite() && *w > 0.0) {
                 return Ok(false);
             }
-            let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
-            Ok((1..16).all(|k| {
-                let at = edge.curve().evaluate_with_endpoints(
-                    t0 + (t1 - t0) * f64::from(k) / 16.0,
-                    a,
-                    b,
-                );
-                let along = (at - a).dot(chord) / length2;
-                (a + chord * along - at).length() <= tol
+            Ok(curve.control_points().iter().all(|&p| {
+                let along = ((p - a).dot(chord) / length2).clamp(0.0, 1.0);
+                (a + chord * along - p).length() <= tol
             }))
         }
         EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => Ok(false),
@@ -5368,6 +5365,53 @@ mod tests {
             "the samples step over the spike"
         );
         assert!(hull_overlaps_triangle(&points, NOTCH));
+    }
+
+    /// A degree-1 edge from the origin to `(10, 0, 0)` through `points`, its
+    /// interior knots `knots`.
+    fn polyline_edge(topo: &mut Topology, points: &[Point3], knots: &[f64]) -> Edge {
+        let mut all = vec![0.0, 0.0];
+        all.extend_from_slice(knots);
+        all.extend_from_slice(&[1.0, 1.0]);
+        let curve = brepkit_math::nurbs::curve::NurbsCurve::new(
+            1,
+            all,
+            points.to_vec(),
+            vec![1.0; points.len()],
+        )
+        .unwrap();
+        let a = topo.add_vertex(Vertex::new(points[0], 1e-7));
+        let b = topo.add_vertex(Vertex::new(points[points.len() - 1], 1e-7));
+        Edge::new(a, b, EdgeCurve::NurbsCurve(curve))
+    }
+
+    #[test]
+    fn a_spike_inside_a_narrow_knot_span_is_not_straight() {
+        // On its chord at every sixteenth of its domain, with an excursion 3
+        // off it in knot spans 0.0005 wide between two of them.
+        let mut topo = Topology::new();
+        let edge = polyline_edge(
+            &mut topo,
+            &[
+                Point3::new(0.0, 0.0, 0.0),
+                Point3::new(5.01, 0.0, 0.0),
+                Point3::new(5.015, 3.0, 0.0),
+                Point3::new(5.02, 0.0, 0.0),
+                Point3::new(10.0, 0.0, 0.0),
+            ],
+            &[0.501, 0.5015, 0.502],
+        );
+        assert!(!straight_edge(&topo, &edge, 1e-6).unwrap());
+        let straight = polyline_edge(
+            &mut topo,
+            &[
+                Point3::new(0.0, 0.0, 0.0),
+                Point3::new(5.01, 0.0, 0.0),
+                Point3::new(10.0, 0.0, 0.0),
+            ],
+            &[0.501],
+        );
+        assert!(straight_edge(&topo, &straight, 1e-6).unwrap());
     }
 
     #[test]
