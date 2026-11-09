@@ -1695,7 +1695,8 @@ impl<'a> FilletBuilder<'a> {
                 is_partial: true,
             });
         }
-        fold_spoke_spurs(topo, &result_faces)?;
+        let input_edges = input_edge_set(topo, &original_faces);
+        fold_spoke_spurs(topo, &result_faces, &input_edges)?;
         let new_shell = match Shell::new(result_faces) {
             Ok(shell) => shell,
             Err(error) => {
@@ -1801,7 +1802,17 @@ fn outward_plane(topo: &Topology, face_id: FaceId) -> Result<Option<(Vec3, f64)>
 /// other face along the spoke takes the runout edge and the far piece. Every
 /// edge keeps two uses. This runs after the registry audit, which has
 /// already checked each boundary's owners.
-fn fold_spoke_spurs(topo: &mut Topology, faces: &[FaceId]) -> Result<(), BlendError> {
+///
+/// The same spur arises where a round's contact runs exactly along the
+/// support face's own straight boundary edges (a round whose width lands on
+/// a step's edge): the face's wire runs along those edges and back along the
+/// contact. Folding one edge at a time, the contact takes the input's edges,
+/// and the round meets each face beyond them along its own edge.
+fn fold_spoke_spurs(
+    topo: &mut Topology,
+    faces: &[FaceId],
+    input_edges: &HashSet<EdgeId>,
+) -> Result<(), BlendError> {
     const ON_LINE: f64 = 1e-6;
     let point = |topo: &Topology, v: VertexId| topo.vertex(v).map(Vertex::point);
     for &face_id in faces {
@@ -1823,14 +1834,12 @@ fn fold_spoke_spurs(topo: &mut Topology, faces: &[FaceId]) -> Result<(), BlendEr
                         continue;
                     }
                     let (e1, e2) = (topo.edge(first.edge())?, topo.edge(second.edge())?);
-                    if !matches!(e1.curve(), EdgeCurve::Line)
-                        || !matches!(e2.curve(), EdgeCurve::Line)
-                    {
-                        continue;
-                    }
                     let (p, v) = (first.oriented_start(e1), first.oriented_end(e1));
                     let (v2, q) = (second.oriented_start(e2), second.oriented_end(e2));
                     if v != v2 || p == q {
+                        continue;
+                    }
+                    if !straight_edge(topo, e1, ON_LINE)? || !straight_edge(topo, e2, ON_LINE)? {
                         continue;
                     }
                     let (pp, vp, qp) = (point(topo, p)?, point(topo, v)?, point(topo, q)?);
@@ -1890,22 +1899,33 @@ fn fold_spoke_spurs(topo: &mut Topology, faces: &[FaceId]) -> Result<(), BlendEr
                     // standing in its own plane, or facing the other way,
                     // covers material the fillet removed: folding it in
                     // would only close a wrong shell.
-                    let plane =
-                        |topo: &Topology, f: FaceId| -> Result<Option<(Vec3, f64)>, BlendError> {
-                            let face = topo.face(f)?;
-                            let FaceSurface::Plane { d, .. } = face.surface() else {
-                                return Ok(None);
+                    //
+                    // Or where the short edge is one of the input's own and
+                    // the long one an edge the fillet made: a contact that
+                    // runs exactly along the face's own boundary (a round
+                    // whose width lands on a step's edge). The face beyond
+                    // the short edge is the input's, and the round meets it
+                    // along that edge.
+                    let own_boundary =
+                        input_edges.contains(&short.edge()) && !input_edges.contains(&long.edge());
+                    if !own_boundary {
+                        let plane =
+                            |topo: &Topology, f: FaceId| -> Result<Option<(Vec3, f64)>, BlendError> {
+                                let face = topo.face(f)?;
+                                let FaceSurface::Plane { d, .. } = face.surface() else {
+                                    return Ok(None);
+                                };
+                                let sign = if face.is_reversed() { -1.0 } else { 1.0 };
+                                Ok(face.effective_plane_normal().map(|n| (n, d * sign)))
                             };
-                            let sign = if face.is_reversed() { -1.0 } else { 1.0 };
-                            Ok(face.effective_plane_normal().map(|n| (n, d * sign)))
+                        let (Some((n1, d1)), Some((n2, d2))) =
+                            (plane(topo, *beyond_long)?, plane(topo, *beyond_short)?)
+                        else {
+                            continue;
                         };
-                    let (Some((n1, d1)), Some((n2, d2))) =
-                        (plane(topo, *beyond_long)?, plane(topo, *beyond_short)?)
-                    else {
-                        continue;
-                    };
-                    if n1.dot(n2) < 1.0 - 1e-9 || (d1 - d2).abs() > ON_LINE {
-                        continue;
+                        if n1.dot(n2) < 1.0 - 1e-9 || (d1 - d2).abs() > ON_LINE {
+                            continue;
+                        }
                     }
                     let other_wire = *other_wire;
                     // The short edge's far end, where the long edge splits.
@@ -1968,6 +1988,53 @@ fn fold_spoke_spurs(topo: &mut Topology, faces: &[FaceId]) -> Result<(), BlendEr
         }
     }
     Ok(())
+}
+
+/// The edges of the input's faces, as the fillet found them.
+fn input_edge_set(topo: &Topology, original_faces: &[FaceId]) -> HashSet<EdgeId> {
+    let mut edges = HashSet::new();
+    for &face_id in original_faces {
+        let Ok(face) = topo.face(face_id) else {
+            continue;
+        };
+        for wire_id in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied())
+        {
+            if let Ok(wire) = topo.wire(wire_id) {
+                edges.extend(wire.edges().iter().map(OrientedEdge::edge));
+            }
+        }
+    }
+    edges
+}
+
+/// Whether an edge is straight: a line, or a B-spline lying on the chord
+/// between its ends within `tol` (a contact fitted along a straight ruling).
+fn straight_edge(topo: &Topology, edge: &Edge, tol: f64) -> Result<bool, BlendError> {
+    match edge.curve() {
+        EdgeCurve::Line => Ok(true),
+        EdgeCurve::NurbsCurve(_) => {
+            let (a, b) = (
+                topo.vertex(edge.start())?.point(),
+                topo.vertex(edge.end())?.point(),
+            );
+            let chord = b - a;
+            let length2 = chord.dot(chord);
+            if length2 <= 1e-18 {
+                return Ok(false);
+            }
+            let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
+            Ok((1..16).all(|k| {
+                let at = edge.curve().evaluate_with_endpoints(
+                    t0 + (t1 - t0) * f64::from(k) / 16.0,
+                    a,
+                    b,
+                );
+                let along = (at - a).dot(chord) / length2;
+                (a + chord * along - at).length() <= tol
+            }))
+        }
+        EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => Ok(false),
+    }
 }
 
 fn face_edge_forward(topo: &Topology, face_id: FaceId, edge_id: EdgeId) -> Option<bool> {
