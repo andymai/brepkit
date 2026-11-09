@@ -644,13 +644,18 @@ fn notched_wire_edges(
         if !(fwd || rev) {
             continue;
         }
-        // The section arc notches straight corner edges, or B-splines (a
-        // spline wall's rim), only.
         let notchable_corner = [oes[i].edge(), oes[j].edge()].iter().all(|&eid| {
             topo.edge(eid)
                 .is_ok_and(|e| matches!(e.curve(), EdgeCurve::Line | EdgeCurve::NurbsCurve(_)))
         });
-        if !notchable_corner {
+        // A round run on to a curved cap ends on its intersection with the
+        // cap, a fitted curve, across the cap's corner edges, whatever they
+        // are; a section arc (circle or ellipse) notches straight edges, or
+        // B-splines (a spline wall's rim), only.
+        let fitted = topo
+            .edge(arc_eid)
+            .is_ok_and(|e| matches!(e.curve(), EdgeCurve::NurbsCurve(_)));
+        if !notchable_corner && !fitted {
             continue;
         }
         // The arc is the blend's own cross-section circle at this cap: the
@@ -1191,6 +1196,46 @@ pub fn copy_shells(topo: &mut Topology, shells: &[ShellId]) -> Result<Vec<ShellI
         copies.push(topo.add_shell(Shell::new(faces)?));
     }
     Ok(copies)
+}
+
+/// The direction from the middle of `edge` into `face`, across it in the
+/// face's tangent plane: the left of the edge as the face's wire runs along
+/// it. `None` when no wire of the face runs along the edge or the direction
+/// degenerates.
+pub fn into_face_from_edge(
+    topo: &Topology,
+    face: FaceId,
+    edge: EdgeId,
+) -> Result<Option<Vec3>, BlendError> {
+    let f = topo.face(face)?;
+    let mut forward = None;
+    for wid in std::iter::once(f.outer_wire()).chain(f.inner_wires().iter().copied()) {
+        if let Some(oe) = topo.wire(wid)?.edges().iter().find(|oe| oe.edge() == edge) {
+            forward = Some(oe.is_forward());
+            break;
+        }
+    }
+    let Some(forward) = forward else {
+        return Ok(None);
+    };
+    let e = topo.edge(edge)?;
+    let (ps, pe) = (
+        topo.vertex(e.start())?.point(),
+        topo.vertex(e.end())?.point(),
+    );
+    let (t0, t1) = e.curve().domain_with_endpoints(ps, pe);
+    let t = f64::midpoint(t0, t1);
+    let middle = e.curve().evaluate_with_endpoints(t, ps, pe);
+    // The curve's derivative runs backward along an edge whose domain runs down.
+    let mut along = e.curve().tangent_with_endpoints(t, ps, pe);
+    if (t1 < t0) == forward {
+        along = -along;
+    }
+    // A wire winds about its surface's normal, and a reversed face flips
+    // both, so the face lies on the left about the surface normal either way.
+    let surface = f.surface();
+    let (u, v) = surface.project_point(middle).unwrap_or((0.0, 0.0));
+    Ok(surface.normal(u, v).cross(along).normalize().ok())
 }
 
 #[cfg(test)]
