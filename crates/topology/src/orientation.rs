@@ -249,9 +249,17 @@ fn nurbs_uv_winding(
                 a.0.mul_add(b.1, -(b.0 * a.1))
             })
             .sum::<f64>();
-    let at = raw[0];
-    let d = nurbs.derivatives(at.0, at.1, 1);
-    let sense = d[1][0].cross(d[0][1]).dot(surface.normal(at.0, at.1));
+    // A pole or a collapsed edge can sit at the domain's middle or at any
+    // sample, and there the normal is a neighbour's or a fallback, of either
+    // sign. The sense is read where du x dv is largest.
+    let (cross, at) = std::iter::once((f64::midpoint(u0, u1), f64::midpoint(v0, v1)))
+        .chain(raw.iter().copied())
+        .map(|(u, v)| {
+            let d = nurbs.derivatives(u, v, 1);
+            (d[1][0].cross(d[0][1]), (u, v))
+        })
+        .max_by(|a, b| a.0.length_squared().total_cmp(&b.0.length_squared()))?;
+    let sense = cross.dot(surface.normal(at.0, at.1));
     (sense != 0.0).then(|| area * sense.signum())
 }
 
@@ -708,6 +716,37 @@ mod tests {
             }
         }
         let area = uv_winding(&FaceSurface::Nurbs(cone), &points).unwrap();
+        assert!(area > 0.0, "area {area}");
+    }
+
+    /// A flat patch whose corner at `(1, 0)` is a straight angle: there `∂u`
+    /// and `∂v` are both `(1, 0, 0)`, so the patch is regular everywhere
+    /// else but has no normal of its own at that corner. A loop that starts
+    /// there still reads its winding.
+    #[test]
+    fn a_bspline_patch_from_a_flat_corner_reads_its_winding() {
+        let patch = NurbsSurface::new(
+            1,
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![
+                vec![Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 1.0, 0.0)],
+                vec![Point3::new(1.0, 0.0, 0.0), Point3::new(2.0, 0.0, 0.0)],
+            ],
+            vec![vec![1.0, 1.0], vec![1.0, 1.0]],
+        )
+        .unwrap();
+        let corners = [(1.0, 0.0), (1.0, 1.0), (0.0, 1.0), (0.0, 0.0)];
+        let mut points = Vec::new();
+        for (k, &(u0, v0)) in corners.iter().enumerate() {
+            let (u1, v1) = corners[(k + 1) % corners.len()];
+            for step in 0..8 {
+                let t = f64::from(step) / 8.0;
+                points.push(patch.evaluate(t.mul_add(u1 - u0, u0), t.mul_add(v1 - v0, v0)));
+            }
+        }
+        let area = uv_winding(&FaceSurface::Nurbs(patch), &points).unwrap();
         assert!(area > 0.0, "area {area}");
     }
 }
