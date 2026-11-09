@@ -870,6 +870,50 @@ fn a_band_ending_on_a_source_knot_matches_as_without_it() {
     assert!(apart < 1e-6, "{apart}");
 }
 
+/// The width of a source's knot domain says nothing about its shape: a source
+/// over a domain 1e-10 wide matches as the same source over one 1 wide.
+#[test]
+fn a_match_does_not_care_about_the_source_knot_domain() {
+    let matched = |domain: f64| {
+        let mut topo = Topology::new();
+        let target = sheet(&mut topo, "plane", Pose::upright());
+        let (_, exit) = chain_exit("plane");
+        let lift = Vec3::new(0.0, 0.0, 0.5);
+        let (_, _, source) = source_near(&mut topo, target.chain[0], exit, lift, 4.0);
+        let scaled = |knots: &[f64]| knots.iter().map(|k| k * domain).collect::<Vec<_>>();
+        let mut b = Builder {
+            topo: &mut topo,
+            pose: Pose::upright(),
+        };
+        let (face, edges) = net_sheet(
+            &mut b,
+            (source.degree_u(), source.degree_v()),
+            (scaled(source.knots_u()), scaled(source.knots_v())),
+            source.control_points(),
+            source.weights(),
+        );
+        let result = match_surface(
+            &mut topo,
+            face,
+            edges[0],
+            target.chain[0],
+            MatchContinuity::G1,
+        );
+        nurbs_of(&topo, result.unwrap())
+    };
+    let (wide, narrow) = (matched(1.0), matched(1e-10));
+    let mut apart = 0.0_f64;
+    for i in 0..=20 {
+        for j in 0..=20 {
+            let (u, v) = (f64::from(i) / 20.0, f64::from(j) / 20.0);
+            let gap = (wide.evaluate(u, v) - narrow.evaluate(u, v)).length();
+            assert!(gap.is_finite(), "at {u} {v}");
+            apart = apart.max(gap);
+        }
+    }
+    assert!(apart < 1e-6, "{apart}");
+}
+
 /// A solid's edge bounds two faces, so the caller says which is meant.
 #[test]
 fn a_shared_target_edge_has_to_be_named() {

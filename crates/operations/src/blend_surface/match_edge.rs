@@ -104,10 +104,10 @@ fn h2_slope(x: f64) -> f64 {
 /// is closed and the edge open or the other way round, the target bounds no
 /// face (or several) when one is needed, `edge` is the face's whole boundary
 /// and winds round its surface with no hole inside it, the face's outline folds
-/// when mapped to a rectangle, a hole in it comes too close to the edge to fit
-/// a band between, or the move runs along the face farther than the band can
-/// take without folding the face back over itself. A topology lookup can also
-/// fail.
+/// or has no width when mapped to a rectangle, a hole in it comes too close to
+/// the edge to fit a band between, or the move runs along the face farther than
+/// the band can take without folding the face back over itself. A topology
+/// lookup can also fail.
 pub fn match_surface(
     topo: &mut Topology,
     face: FaceId,
@@ -767,7 +767,7 @@ impl Patch {
         let map = if ruled {
             None
         } else {
-            Rectangle::read(&bottom, &right, &top, &left)
+            Rectangle::read(&bottom, &right, &top, &left, parameter_reach(&neighbour))?
         };
         let scale = surface_extent(&neighbour, &bottom, &top);
         let tolerance = (1e-9 * scale.0.min(1.0)).max(1e-12 * scale.1);
@@ -1028,39 +1028,47 @@ struct Rectangle {
 }
 
 impl Rectangle {
+    /// The rectangle the four sides make, if they lie along parameter lines
+    /// to within `reach` in `u` and in `v`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OperationsError::InvalidInput`] if the sides make a
+    /// rectangle with no width.
     fn read(
         bottom: &SideTrace,
         right: &SideTrace,
         top: &SideTrace,
         left: &SideTrace,
-    ) -> Option<Self> {
-        let reach = 1e-7;
+        reach: (f64, f64),
+    ) -> Result<Option<Self>, OperationsError> {
+        let near = |read: usize| if read == 0 { reach.0 } else { reach.1 };
         let flat = |trace: &SideTrace, read: usize| {
             let value = |uv: (f64, f64)| if read == 0 { uv.0 } else { uv.1 };
             let first = value(trace.start());
             trace
                 .trace
                 .iter()
-                .all(|&(_, uv)| (value(uv) - first).abs() <= reach)
+                .all(|&(_, uv)| (value(uv) - first).abs() <= near(read))
+        };
+        let meet = |p: (f64, f64), q: (f64, f64)| {
+            (p.0 - q.0).abs() <= reach.0 && (p.1 - q.1).abs() <= reach.1
         };
         let swapped = flat(bottom, 0);
         if !swapped && !flat(bottom, 1) {
-            return None;
+            return Ok(None);
         }
         let (along, across) = if swapped { (1, 0) } else { (0, 1) };
         if !flat(top, across) || !flat(left, along) || !flat(right, along) {
-            return None;
+            return Ok(None);
         }
         let (a, b) = (bottom.start(), bottom.end());
         let c = left.end();
-        if (top.start().0 - c.0).abs() > reach || (top.start().1 - c.1).abs() > reach {
-            return None;
-        }
         let d = top.end();
-        if (right.end().0 - d.0).abs() > reach || (right.end().1 - d.1).abs() > reach {
-            return None;
+        if !meet(top.start(), c) || !meet(right.end(), d) {
+            return Ok(None);
         }
-        Some(if swapped {
+        let rectangle = if swapped {
             Self {
                 u0: a.0,
                 u1: c.0,
@@ -1076,7 +1084,15 @@ impl Rectangle {
                 v1: c.1,
                 swapped,
             }
-        })
+        };
+        if (rectangle.u1 - rectangle.u0).abs() <= reach.0
+            || (rectangle.v1 - rectangle.v0).abs() <= reach.1
+        {
+            return Err(OperationsError::InvalidInput {
+                reason: "the face to move has no width when mapped to a rectangle".into(),
+            });
+        }
+        Ok(Some(rectangle))
     }
 
     fn uv(&self, s: f64, t: f64) -> (f64, f64) {
@@ -1155,6 +1171,20 @@ where
     Ok(())
 }
 
+/// How near two parameters of the surface beside a face are one, in `u` and
+/// in `v`: a share of a spline's domain, and of the unit an analytic
+/// surface's angle and length come in.
+fn parameter_reach(neighbour: &Neighbour) -> (f64, f64) {
+    const REACH: f64 = 1e-7;
+    if let FaceSurface::Nurbs(surface) = &neighbour.surface {
+        let (u0, u1) = surface.domain_u();
+        let (v0, v1) = surface.domain_v();
+        (REACH * (u1 - u0), REACH * (v1 - v0))
+    } else {
+        (REACH, REACH)
+    }
+}
+
 /// A polynomial spline surface whose rectangle is its whole domain, with its
 /// net turned to run `s` along the edge and `t` away from it.
 fn whole_polynomial_net(neighbour: &Neighbour, map: &Rectangle) -> Option<NurbsSurface> {
@@ -1173,11 +1203,12 @@ fn whole_polynomial_net(neighbour: &Neighbour, map: &Rectangle) -> Option<NurbsS
     }
     let (du0, du1) = surface.domain_u();
     let (dv0, dv1) = surface.domain_v();
-    let close = |a: f64, b: f64| (a - b).abs() <= 1e-7;
-    let covers = |a: f64, b: f64, lo: f64, hi: f64| {
+    let (reach_u, reach_v) = parameter_reach(neighbour);
+    let covers = |a: f64, b: f64, lo: f64, hi: f64, reach: f64| {
+        let close = |x: f64, y: f64| (x - y).abs() <= reach;
         (close(a, lo) && close(b, hi)) || (close(a, hi) && close(b, lo))
     };
-    if !covers(map.u0, map.u1, du0, du1) || !covers(map.v0, map.v1, dv0, dv1) {
+    if !covers(map.u0, map.u1, du0, du1, reach_u) || !covers(map.v0, map.v1, dv0, dv1, reach_v) {
         return None;
     }
     let forward_u = map.u1 > map.u0;
