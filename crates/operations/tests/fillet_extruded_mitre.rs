@@ -19,9 +19,11 @@
 //! `2 L r^2 (1 - pi / 4) - 2 cot(theta / 2) r^3 (5 / 6 - pi / 4)`.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use std::f64::consts::PI;
+use std::f64::consts::{FRAC_PI_2, PI};
 
+use brepkit_blend::BlendError;
 use brepkit_math::vec::{Point3, Vec3};
+use brepkit_operations::OperationsError;
 use brepkit_operations::blend_ops::fillet_v2;
 use brepkit_operations::extrude::extrude;
 use brepkit_operations::measure::solid_volume;
@@ -76,16 +78,96 @@ fn edge_between(topo: &Topology, solid: SolidId, a: Point3, b: Point3) -> EdgeId
 }
 
 /// The kite with its corner `V` at the origin, of angle `theta` between
-/// its edges `V -> A` and `V -> B`, each `L` long, square to the walls
+/// its edges `V -> A` and `V -> B`, each `l` long, square to the walls
 /// `A -> C` and `B -> C`.
-fn kite(theta: f64) -> [Point3; 4] {
+fn kite(theta: f64, l: f64) -> [Point3; 4] {
     let h = theta / 2.0;
     [
         Point3::new(0.0, 0.0, 0.0),
-        Point3::new(L * h.cos(), -L * h.sin(), 0.0),
-        Point3::new(L / h.cos(), 0.0, 0.0),
-        Point3::new(L * h.cos(), L * h.sin(), 0.0),
+        Point3::new(l * h.cos(), -l * h.sin(), 0.0),
+        Point3::new(l / h.cos(), 0.0, 0.0),
+        Point3::new(l * h.cos(), l * h.sin(), 0.0),
     ]
+}
+
+/// What the two mitred rounds of radius `r` take off the kite of angle
+/// `theta` and edges `l` long.
+fn kite_rounds(theta: f64, l: f64, r: f64) -> f64 {
+    let cot = 1.0 / (theta / 2.0).tan();
+    2.0 * l * r * r * (1.0 - PI / 4.0) - 2.0 * cot * r.powi(3) * (5.0 / 6.0 - PI / 4.0)
+}
+
+/// `∫_0^r f(w) dt` over a round's quarter, where `w = r - sqrt(r^2 - (r -
+/// t)^2)` is how far the round is inset from its wall at depth `t` below
+/// the top: the volume between the top and a radius below it of the
+/// section whose area at inset `w` is `f(w)`.
+fn over_the_round(r: f64, f: impl Fn(f64) -> f64) -> f64 {
+    const NODES: [(f64, f64); 8] = [
+        (-0.960_289_856_497_536_2, 0.101_228_536_290_376_26),
+        (-0.796_666_477_413_626_7, 0.222_381_034_453_374_47),
+        (-0.525_532_409_916_329, 0.313_706_645_877_887_3),
+        (-0.183_434_642_495_649_8, 0.362_683_783_378_362),
+        (0.183_434_642_495_649_8, 0.362_683_783_378_362),
+        (0.525_532_409_916_329, 0.313_706_645_877_887_3),
+        (0.796_666_477_413_626_7, 0.222_381_034_453_374_47),
+        (0.960_289_856_497_536_2, 0.101_228_536_290_376_26),
+    ];
+    let panels = 64;
+    let width = FRAC_PI_2 / f64::from(panels);
+    let mut total = 0.0;
+    for panel in 0..panels {
+        let mid = width * (f64::from(panel) + 0.5);
+        for (x, weight) in NODES {
+            // `t = r (1 - sin phi)`, so `w = r (1 - cos phi)`.
+            let phi = mid + 0.5 * width * x;
+            total += 0.5 * width * weight * f(r * (1.0 - phi.cos())) * r * phi.cos();
+        }
+    }
+    total
+}
+
+/// Rounds `edges` of `solid` by `r` and checks the result: valid,
+/// watertight, `faces` faces (the rounds alone added, no corner patch),
+/// and `volume` within `1e-6` of it.
+fn assert_rounds_to(
+    topo: &mut Topology,
+    solid: SolidId,
+    edges: &[EdgeId],
+    r: f64,
+    faces: usize,
+    volume: f64,
+    case: &str,
+) {
+    let result = fillet_v2(topo, solid, edges, r).unwrap();
+    assert!(result.failed.is_empty(), "{case}: {:?}", result.failed);
+    let report = validate_solid(topo, result.solid).unwrap();
+    assert!(report.is_valid(), "{case}: {:?}", report.issues);
+    let mesh = tessellate_solid(topo, result.solid, 0.01).unwrap();
+    assert!(is_watertight(&mesh), "{case}: mesh not watertight");
+    assert_eq!(
+        solid_faces(topo, result.solid).unwrap().len(),
+        faces,
+        "{case}: face count"
+    );
+    let got = solid_volume(topo, result.solid, 1e-3).unwrap();
+    assert!(
+        (got - volume).abs() <= 1e-6 * volume,
+        "{case}: volume {got} against {volume}"
+    );
+}
+
+/// The edges of `solid` along its top face.
+fn top_edges(topo: &Topology, solid: SolidId) -> Vec<EdgeId> {
+    solid_edges(topo, solid)
+        .unwrap()
+        .into_iter()
+        .filter(|&edge_id| {
+            let edge = topo.edge(edge_id).unwrap();
+            [edge.start(), edge.end()]
+                .iter()
+                .all(|&v| (topo.vertex(v).unwrap().point().z() - H).abs() < 1e-9)
+        })
+        .collect()
 }
 
 #[test]
@@ -95,8 +177,8 @@ fn rounds_meeting_at_a_corner_not_square_are_mitred() {
         for r in [1.0, 2.0] {
             let case = format!("theta = {theta_deg}, r = {r}");
             let mut topo = Topology::new();
-            let [v, b, _, a] = kite(theta);
-            let solid = prism(&mut topo, &kite(theta));
+            let [v, b, _, a] = kite(theta, L);
+            let solid = prism(&mut topo, &kite(theta, L));
             let up = Vec3::new(0.0, 0.0, H);
             let edges = [
                 edge_between(&topo, solid, v + up, a + up),
@@ -117,9 +199,7 @@ fn rounds_meeting_at_a_corner_not_square_are_mitred() {
                 "{case}: the two rounds alone are added, no corner patch"
             );
 
-            let cot = 1.0 / (theta / 2.0).tan();
-            let removed =
-                2.0 * L * r * r * (1.0 - PI / 4.0) - 2.0 * cot * r.powi(3) * (5.0 / 6.0 - PI / 4.0);
+            let removed = kite_rounds(theta, L, r);
             let lost = before - solid_volume(&topo, result.solid, 1e-3).unwrap();
             assert!(
                 (lost - removed).abs() <= 1e-6 * before,
@@ -127,4 +207,87 @@ fn rounds_meeting_at_a_corner_not_square_are_mitred() {
             );
         }
     }
+}
+
+/// A regular hexagonal prism, side 2, all six top edges rounded: each
+/// round is mitred at both its ends, each end taking `r cot(60 deg)` of its
+/// edge, so a radius past half the side still fits. At inset `w` the
+/// section is the hexagon of inradius `sqrt(3) - w`.
+#[test]
+fn a_hexagon_s_top_rounds_mitre_at_both_ends() {
+    let hexagon: Vec<Point3> = (0..6)
+        .map(|k| {
+            let a = f64::from(k) * PI / 3.0;
+            Point3::new(2.0 * a.cos(), 2.0 * a.sin(), 0.0)
+        })
+        .collect();
+    let area = |w: f64| 2.0 * 3.0_f64.sqrt() * (3.0_f64.sqrt() - w).powi(2);
+    for r in [1.0, 1.5] {
+        let mut topo = Topology::new();
+        let solid = prism(&mut topo, &hexagon);
+        let edges = top_edges(&topo, solid);
+        assert_eq!(edges.len(), 6);
+        let volume = area(0.0) * (H - r) + over_the_round(r, area);
+        assert_rounds_to(&mut topo, solid, &edges, r, 14, volume, &format!("r = {r}"));
+    }
+}
+
+/// A kite of 140 deg, its rounded edges 1.5 long, rounded by 1.6: the
+/// mitre takes `1.6 cot(70 deg)`, about 0.58, of each edge, so the rounds
+/// fit though the radius is longer than the edges.
+#[test]
+fn a_short_obtuse_kite_takes_a_radius_longer_than_its_edges() {
+    let (theta, l, r) = (140.0_f64.to_radians(), 1.5, 1.6);
+    let mut topo = Topology::new();
+    let [v, b, _, a] = kite(theta, l);
+    let solid = prism(&mut topo, &kite(theta, l));
+    let up = Vec3::new(0.0, 0.0, H);
+    let edges = [
+        edge_between(&topo, solid, v + up, a + up),
+        edge_between(&topo, solid, v + up, b + up),
+    ];
+    let before = solid_volume(&topo, solid, 1e-3).unwrap();
+    let volume = before - kite_rounds(theta, l, r);
+    assert_rounds_to(&mut topo, solid, &edges, r, 8, volume, "kite");
+}
+
+/// A rhombus of side 10 and corners of 60 and 120 deg, its four top edges
+/// rounded: each edge's two ends take `r (cot(30 deg) + cot(60 deg))`, all
+/// of it at `r = 5 sqrt(3) / 2`, the rhombus's inradius. A radius past that
+/// is refused before the build starts, naming that limit.
+#[test]
+fn a_rhombus_refuses_a_radius_its_mitres_overrun() {
+    let s3 = 3.0_f64.sqrt();
+    let rhombus = [
+        Point3::new(0.0, 0.0, 0.0),
+        Point3::new(10.0, 0.0, 0.0),
+        Point3::new(15.0, 5.0 * s3, 0.0),
+        Point3::new(5.0, 5.0 * s3, 0.0),
+    ];
+    let limit = 2.5 * s3;
+    for r in [4.5, 6.0] {
+        let mut topo = Topology::new();
+        let solid = prism(&mut topo, &rhombus);
+        let edges = top_edges(&topo, solid);
+        assert_eq!(edges.len(), 4);
+        let result = fillet_v2(&mut topo, solid, &edges, r);
+        let max_radius = match &result {
+            Err(OperationsError::Blend(BlendError::RadiusTooLarge { max_radius, .. })) => {
+                Some(*max_radius)
+            }
+            _ => None,
+        };
+        assert!(
+            max_radius.is_some_and(|max| (max - limit).abs() <= 1e-9 * limit),
+            "r = {r}: {max_radius:?} against the limit {limit}, {:?}",
+            result.map(|built| built.failed)
+        );
+    }
+    let area = |w: f64| 10.0 * 5.0 * s3 * (1.0 - w / limit).powi(2);
+    let r = 4.0;
+    let mut topo = Topology::new();
+    let solid = prism(&mut topo, &rhombus);
+    let edges = top_edges(&topo, solid);
+    let volume = area(0.0) * (H - r) + over_the_round(r, area);
+    assert_rounds_to(&mut topo, solid, &edges, r, 10, volume, "r = 4");
 }

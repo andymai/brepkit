@@ -102,8 +102,13 @@ fn mitre_takes_square(ex: Vec3, ey: Vec3, radius: f64) -> bool {
 struct ExtrudedMitre {
     /// The plane face's outward normal.
     n: Vec3,
-    /// The crease from the pinch to the meeting point on the plane.
+    /// The crease from the pinch to the meeting point on the plane; empty
+    /// where the contacts cross past either spine edge's far end.
     crease: Vec<Point3>,
+    /// How far along each stripe's spine edge (`a`, then `b`) from the
+    /// corner the contacts on the plane cross: the length of its edge the
+    /// corner takes, infinite past the edge's far end.
+    used: [f64; 2],
 }
 
 /// The number of crease points an extruded mitre takes along its quarter.
@@ -274,6 +279,17 @@ fn extruded_mitre(
             }
             sa += (r0 * m11 - r1 * m01) / det;
             sb += (m00 * r1 - m01 * r0) / det;
+            let past_a = if fa > va { sa > high_a } else { sa < low_a };
+            let past_b = if fb > vb { sb > high_b } else { sb < low_b };
+            if past_a || past_b {
+                // The insets cross beyond a spine edge's far end: the
+                // corner takes more than the edge.
+                return Some(ExtrudedMitre {
+                    n,
+                    crease: Vec::new(),
+                    used: [f64::INFINITY; 2],
+                });
+            }
             if !(low_a..=high_a).contains(&sa) || !(low_b..=high_b).contains(&sb) {
                 return None;
             }
@@ -283,7 +299,39 @@ fn extruded_mitre(
         }
         crease.push(inset(wall_a, edge_a, sa, w)? - n * t);
     }
-    Some(ExtrudedMitre { n, crease })
+    let used = [
+        edge_run(topo, edge_a, va, sa)?,
+        edge_run(topo, edge_b, vb, sb)?,
+    ];
+    Some(ExtrudedMitre { n, crease, used })
+}
+
+/// The length of `edge` between its parameters `s0` and `s1`: a line's
+/// chord, a circular arc's exactly, any other curve's as the sum of short
+/// chords (as a spine measures its edges).
+fn edge_run(topo: &Topology, edge_id: EdgeId, s0: f64, s1: f64) -> Option<f64> {
+    const SAMPLES: u32 = 256;
+    let edge = topo.edge(edge_id).ok()?;
+    match edge.curve() {
+        EdgeCurve::Line => {
+            Some((edge_point(topo, edge_id, s1)? - edge_point(topo, edge_id, s0)?).length())
+        }
+        EdgeCurve::Circle(circle) => Some(circle.radius() * (s1 - s0).abs()),
+        EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_) => {
+            let mut length = 0.0;
+            let mut prev = edge_point(topo, edge_id, s0)?;
+            for k in 1..=SAMPLES {
+                let p = edge_point(
+                    topo,
+                    edge_id,
+                    s0 + (s1 - s0) * f64::from(k) / f64::from(SAMPLES),
+                )?;
+                length += (p - prev).length();
+                prev = p;
+            }
+            Some(length)
+        }
+    }
 }
 
 /// A curve's point at a parameter.
@@ -753,12 +801,19 @@ fn interpolate_section(start: &CircSection, end: &CircSection, fraction: f64) ->
 }
 
 /// A junction vertex qualifying for the sharp-mitered two-edge corner
-/// class: exactly two incident contours, equal constant radius, a
-/// trihedral (three-plane) orthogonal convex corner.
+/// class: exactly two incident contours, equal constant radius, and either
+/// a trihedral (three-plane) orthogonal convex corner or an extrusion's
+/// convex corner (see [`ExtrudedMitre`]).
 pub struct MiterJunction {
     pub vertex: VertexId,
     pub radius: f64,
     pub contours: [usize; 2],
+    /// The length of each contour's spine (in `contours` order) the corner
+    /// takes: the radius at a square corner, up to where the contacts on
+    /// the shared face cross at an extruded one.
+    pub used: [f64; 2],
+    /// Whether the corner is square, so `used` is the radius at any radius.
+    pub square: bool,
 }
 
 /// Find every junction in `plan` qualifying for the sharp-mitered
@@ -774,7 +829,7 @@ pub fn find_equal_two_edge_miter_junctions(
     plan: &FilletPlan,
 ) -> Vec<MiterJunction> {
     let mut miters = Vec::new();
-    'junctions: for junction in &plan.junctions {
+    for junction in &plan.junctions {
         if junction.classification != CornerClassification::Junction
             || junction.incident_contours.len() != 2
         {
@@ -790,54 +845,70 @@ pub fn find_equal_two_edge_miter_junctions(
         if (ra - rb).abs() > TOL || *ra <= TOL {
             continue;
         }
-        let square = || -> bool {
-            let Some(normals) = orthogonal_fan_outward_normals(topo, &junction.face_fan) else {
-                return false;
-            };
-            let mut directions = Vec::with_capacity(3);
-            for &contour in &[ia, ib] {
-                match contour_direction_away_from(topo, &plan.contours[contour], junction.vertex) {
-                    Ok(Some(direction)) => directions.push(direction),
-                    _ => return false,
-                }
-            }
-            if !mitre_takes_square(directions[0], directions[1], *ra) {
-                return false;
-            }
-            for &edge_id in &junction.unselected_sharp_edges {
-                let Some(direction) = topo
-                    .edge(edge_id)
-                    .ok()
-                    .and_then(|edge| edge_direction_away_from(topo, edge, junction.vertex))
-                else {
-                    return false;
-                };
-                directions.push(direction);
-            }
-            trihedral_corner_is_convex(&normals, &directions)
+        let Some((used, square)) = mitre_spine_use(topo, plan, junction, [ia, ib], *ra) else {
+            continue;
         };
-        let (ca, cb) = (&plan.contours[ia], &plan.contours[ib]);
-        if !square()
-            && extruded_mitre(
-                topo,
-                junction.vertex,
-                &junction.face_fan,
-                &junction.unselected_sharp_edges,
-                (ca.side1, ca.side2, ca.spine.edges()),
-                (cb.side1, cb.side2, cb.spine.edges()),
-                *ra,
-            )
-            .is_none()
-        {
-            continue 'junctions;
-        }
         miters.push(MiterJunction {
             vertex: junction.vertex,
             radius: *ra,
             contours: [ia, ib],
+            used,
+            square,
         });
     }
     miters
+}
+
+/// What a sharp mitre at `junction` of radius `radius` takes of each
+/// contour's spine (in `contours` order), and whether the corner is
+/// square; `None` where the junction is no mitre at that radius.
+fn mitre_spine_use(
+    topo: &Topology,
+    plan: &FilletPlan,
+    junction: &VertexJunction,
+    contours: [usize; 2],
+    radius: f64,
+) -> Option<([f64; 2], bool)> {
+    let square = || -> bool {
+        let Some(normals) = orthogonal_fan_outward_normals(topo, &junction.face_fan) else {
+            return false;
+        };
+        let mut directions = Vec::with_capacity(3);
+        for contour in contours {
+            match contour_direction_away_from(topo, &plan.contours[contour], junction.vertex) {
+                Ok(Some(direction)) => directions.push(direction),
+                _ => return false,
+            }
+        }
+        if !mitre_takes_square(directions[0], directions[1], radius) {
+            return false;
+        }
+        for &edge_id in &junction.unselected_sharp_edges {
+            let Some(direction) = topo
+                .edge(edge_id)
+                .ok()
+                .and_then(|edge| edge_direction_away_from(topo, edge, junction.vertex))
+            else {
+                return false;
+            };
+            directions.push(direction);
+        }
+        trihedral_corner_is_convex(&normals, &directions)
+    };
+    if square() {
+        return Some(([radius; 2], true));
+    }
+    let (ca, cb) = (&plan.contours[contours[0]], &plan.contours[contours[1]]);
+    let mitre = extruded_mitre(
+        topo,
+        junction.vertex,
+        &junction.face_fan,
+        &junction.unselected_sharp_edges,
+        (ca.side1, ca.side2, ca.spine.edges()),
+        (cb.side1, cb.side2, cb.spine.edges()),
+        radius,
+    )?;
+    Some((mitre.used, false))
 }
 
 /// The straight edges, other than the two stripes' own, leaving each
@@ -1170,33 +1241,72 @@ fn unselected_edge_seam_continuation(
 /// admissibility check admits one the build takes.
 const LIMIT_SLACK: f64 = 5e-10;
 
+/// The largest radius below `radius` at which the mitres `ends` (each a
+/// junction and the slot of the contour in it) take no more than `length`
+/// of their contour, found by halving: an extruded corner's take grows
+/// with the radius, in proportion only where its walls are planes.
+fn mitred_contour_max_radius(
+    topo: &Topology,
+    plan: &FilletPlan,
+    ends: &[(&MiterJunction, usize)],
+    length: f64,
+    radius: f64,
+) -> f64 {
+    let fits = |r: f64| {
+        let mut used = 0.0;
+        for &(miter, slot) in ends {
+            let Some(junction) = plan.junctions.iter().find(|j| j.vertex == miter.vertex) else {
+                return false;
+            };
+            match mitre_spine_use(topo, plan, junction, miter.contours, r) {
+                Some((taken, _)) => used += taken[slot],
+                None => return false,
+            }
+        }
+        used <= length
+    };
+    let (mut lo, mut hi) = (0.0, radius);
+    for _ in 0..60 {
+        let mid = 0.5 * (lo + hi);
+        if fits(mid) {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
+}
+
 /// Radius admissibility for the sharp-mitered two-edge corner, checked on
 /// real source-edge lengths **before any topology mutation**.
 ///
-/// The *exact* limit (`r == S`, remainder exactly zero) is admissible: the
-/// miter corner closes it without the vanished material, because
-/// `close_collapsed_miter_corner` detects that both shared-face contacts have
-/// collapsed (the same `TOL` this file compares lengths with), drops them, and
-/// closes each stripe's wire against the crease. The rules refuse a genuine
-/// overshoot, never an exact fit.
+/// At a square corner the *exact* limit (`r == S`, remainder exactly zero)
+/// is admissible: the miter corner closes it without the vanished material,
+/// because `close_collapsed_miter_corner` detects that both shared-face
+/// contacts have collapsed (the same `TOL` this file compares lengths with),
+/// drops them, and closes each stripe's wire against the crease. The rules
+/// refuse a genuine overshoot, never an exact fit there. An extruded corner
+/// has no such closure, so a contour with one refuses its exact limit too.
 ///
-/// Scope: only the equal-radius, orthogonal, convex, planar two-edge corner
-/// class the miter construction implements. The qualifying test here (Junction
-/// classification, exactly two incident contours, both constant-law with
-/// equal radius, a trihedral three-plane orthogonal corner) deliberately
-/// mirrors the miter recognizer rather than calling it, so this check can run,
-/// and refuse, before that recognizer does any construction work. A junction
-/// outside this class (mixed radius, non-trihedral, non-orthogonal, a variable
-/// radius law) is left to whatever other path handles it; this function never
-/// refuses those, and never falls through to the horn-torus path for a request
-/// it does refuse.
+/// Scope: only the equal-radius, convex two-edge corner class the miter
+/// construction implements, a trihedral three-plane orthogonal corner or an
+/// extrusion's corner of any angle (see [`ExtrudedMitre`]). The qualifying
+/// test is [`find_equal_two_edge_miter_junctions`], which the corner pass's
+/// recognizer mirrors, so this check can run, and refuse, before that
+/// recognizer does any construction work. A junction outside this class
+/// (mixed radius, non-trihedral, a variable radius law) is left to whatever
+/// other path handles it; this function never refuses those, and never falls
+/// through to the horn-torus path for a request it does refuse.
 ///
-/// Three rules, all measured as real 3D chord length between the actual
-/// source vertices (exact for the straight edges this scope covers, and
-/// invariant under rigid placement and uniform scale):
+/// Three rules, on lengths measured between the actual source vertices (a
+/// selected contour's along its spine, any other edge's as its chord), so
+/// invariant under rigid placement and uniform scale:
 ///
 /// - a selected contour of length `L` with `m` mitered ends (1 or 2; a contour
-///   with 0 qualifying ends is out of scope here): `m*r <= L (1 + LIMIT_SLACK)`;
+///   with 0 qualifying ends is out of scope here): the lengths its ends take
+///   (`r` at a square corner, `r cot(theta / 2)` at an extruded corner of
+///   angle `theta` between plane walls) sum to at most `L (1 + LIMIT_SLACK)`,
+///   or to less than `L (1 - LIMIT_SLACK)` with an extruded end;
 /// - the retained (unselected) third edge at each qualifying corner, length
 ///   `H`: `r <= H (1 + LIMIT_SLACK)`;
 /// - the unselected edge(s) at a runout terminal (the far, non-mitered end of
@@ -1230,26 +1340,41 @@ pub fn check_equal_two_edge_admissibility(
         Ok((topo.vertex(b)?.point() - topo.vertex(a)?.point()).length())
     };
 
-    // Rule 1: selected-edge remaining length, m mitered ends.
-    let mut by_contour_m = vec![0usize; plan.contours.len()];
-    let mut by_contour_r = vec![0.0_f64; plan.contours.len()];
-    for miter in &miters {
-        for &ci in &miter.contours {
-            by_contour_m[ci] += 1;
-            by_contour_r[ci] = miter.radius;
-        }
-    }
+    // Rule 1: selected-edge remaining length, the lengths its mitred ends
+    // take.
     for (ci, contour) in plan.contours.iter().enumerate() {
-        let m = by_contour_m[ci];
-        if m == 0 {
+        let ends: Vec<(&MiterJunction, usize)> = miters
+            .iter()
+            .flat_map(|miter| {
+                miter
+                    .contours
+                    .iter()
+                    .enumerate()
+                    .filter(move |&(_, &c)| c == ci)
+                    .map(move |(slot, _)| (miter, slot))
+            })
+            .collect();
+        let Some(&(first, _)) = ends.first() else {
+            continue;
+        };
+        let length = contour.spine.length();
+        let used: f64 = ends.iter().map(|&(miter, slot)| miter.used[slot]).sum();
+        if ends.iter().all(|(miter, _)| miter.square) {
+            let m = ends.len() as f64;
+            if used > length * (1.0 + LIMIT_SLACK) {
+                return Err(BlendError::RadiusTooLarge {
+                    edge: contour.edges[0],
+                    max_radius: (length / m).max(0.0),
+                });
+            }
             continue;
         }
-        let r = by_contour_r[ci];
-        let length = contour.spine.length();
-        if (m as f64) * r > length * (1.0 + LIMIT_SLACK) {
+        // An extruded corner closes no collapsed contact, so its contour
+        // keeps some of its contact: its exact limit is refused too.
+        if used >= length * (1.0 - LIMIT_SLACK) {
             return Err(BlendError::RadiusTooLarge {
                 edge: contour.edges[0],
-                max_radius: (length / (m as f64)).max(0.0),
+                max_radius: mitred_contour_max_radius(topo, plan, &ends, length, first.radius),
             });
         }
     }
@@ -3138,8 +3263,9 @@ fn orient_corner_cycle_against_existing_owner(
     Ok(())
 }
 
-/// A qualifying sharp-mitered two-edge corner: an equal-radius, orthogonal,
-/// convex, planar junction of exactly two selected-edge stripes.
+/// A qualifying sharp-mitered two-edge corner: an equal-radius convex
+/// junction of exactly two selected-edge stripes, either three square planes
+/// or an extrusion's corner (see [`ExtrudedMitre`]).
 struct MiterCorner {
     vertex: VertexId,
     /// Index into `stripes` (and `cross_boundaries`) for the `ex`-direction
@@ -3176,8 +3302,9 @@ struct MiterCorner {
 /// Detect whether `junction` (already known to have exactly two incident
 /// stripes, `indices`) qualifies for the sharp-mitered two-edge
 /// construction: both stripes constant-radius with equal radius, a
-/// trihedral (three-plane) orthogonal corner, both selected edges' stripes
-/// sharing exactly one common (top) face. Mirrors
+/// trihedral (three-plane) orthogonal corner or an extrusion's corner (see
+/// [`ExtrudedMitre`]), both selected edges' stripes sharing exactly one
+/// common (top) face. Mirrors
 /// `check_equal_two_edge_admissibility`'s own qualifying test so detection
 /// is consistent with what was already refused or admitted before any
 /// mutation; this function performs no refusal itself, so a caller must not
@@ -3619,33 +3746,6 @@ fn shorten_top_contacts_and_splice_top_face(
         let e = topo.edge(oe.edge())?.clone();
         let sp = topo.vertex(e.start())?.point();
         let ep = topo.vertex(e.end())?.point();
-        // An extruded corner's straight contact (along a straight edge's
-        // round) moves its near end to where the contacts meet.
-        if miter.crease.is_some() && matches!(e.curve(), EdgeCurve::Line) {
-            let near_is_start = (sp - vertex_point).length() <= (ep - vertex_point).length();
-            let (near, far) = if near_is_start { (sp, ep) } else { (ep, sp) };
-            let run = far - near;
-            let t = (miter.vtop - near).dot(run) / run.length_squared();
-            if (near + run * t - miter.vtop).length() > 1e-6 * miter.radius.max(1.0) {
-                return Err(fail());
-            }
-            if t >= 1.0 - 1e-9 {
-                return Err(BlendError::RadiusTooLarge {
-                    edge: oe.edge(),
-                    max_radius: miter.radius,
-                });
-            }
-            let edge_mut = topo.edge_mut(oe.edge())?;
-            if near_is_start {
-                edge_mut.set_start(vtop_vertex);
-            } else {
-                edge_mut.set_end(vtop_vertex);
-            }
-            return Ok(());
-        }
-        let EdgeCurve::NurbsCurve(curve) = e.curve() else {
-            return Err(fail());
-        };
         // The contact's corner-side endpoint is not at `vertex` itself: an
         // (unrestricted, full-length) shared-face contact is offset inward
         // by `radius` from the original edge, so its near end sits at
@@ -3660,34 +3760,57 @@ fn shorten_top_contacts_and_splice_top_face(
             };
         let far_point = if near_is_start { ep } else { sp };
         // An extruded corner's contacts cross where they meet: cut each
-        // there, keeping the piece running on to its far end.
+        // there, keeping the piece running on to its far end. Where they
+        // cross at or past that end the radius is too large; the crossing's
+        // run from the corner grows with the radius, so the radius that
+        // brings it to the far end is about `radius` times the contact's
+        // length over that run.
         if miter.crease.is_some() {
-            let found =
-                brepkit_math::nurbs::projection::project_point_to_curve(curve, miter.vtop, TOL)?;
-            if found.distance > 1e-6 * miter.radius.max(1.0) {
-                return Err(fail());
+            let near = if near_is_start { e.start() } else { e.end() };
+            match e.curve() {
+                EdgeCurve::Line => {
+                    let run = far_point - near_point;
+                    let t = (miter.vtop - near_point).dot(run) / run.length_squared();
+                    if (near_point + run * t - miter.vtop).length() > 1e-6 * miter.radius.max(1.0) {
+                        return Err(fail());
+                    }
+                    if t >= 1.0 - 1e-9 {
+                        return Err(BlendError::RadiusTooLarge {
+                            edge: oe.edge(),
+                            max_radius: miter.radius / t.max(1.0),
+                        });
+                    }
+                }
+                EdgeCurve::NurbsCurve(curve) => {
+                    let found = brepkit_math::nurbs::projection::project_point_to_curve(
+                        curve, miter.vtop, TOL,
+                    )?;
+                    if found.distance > 1e-6 * miter.radius.max(1.0) {
+                        return Err(fail());
+                    }
+                    let (d0, d1) = curve.domain();
+                    let far_parameter = if (curve.evaluate(d0) - far_point).length()
+                        <= (curve.evaluate(d1) - far_point).length()
+                    {
+                        d0
+                    } else {
+                        d1
+                    };
+                    if (found.parameter - far_parameter).abs() <= 1e-9 * (d1 - d0).abs() {
+                        let run = curve.arc_length(256);
+                        return Err(BlendError::RadiusTooLarge {
+                            edge: oe.edge(),
+                            max_radius: miter.radius * run / (run + found.distance),
+                        });
+                    }
+                }
+                EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => return Err(fail()),
             }
-            let (d0, d1) = curve.domain();
-            let far_is_low = (curve.evaluate(d0) - far_point).length()
-                <= (curve.evaluate(d1) - far_point).length();
-            let far_parameter = if far_is_low { d0 } else { d1 };
-            if (found.parameter - far_parameter).abs() <= 1e-9 * (d1 - d0).abs() {
-                return Err(BlendError::RadiusTooLarge {
-                    edge: oe.edge(),
-                    max_radius: miter.radius,
-                });
-            }
-            let (low, high) = curve_split(curve, found.parameter)?;
-            let trimmed = if far_is_low { low } else { high };
-            let edge_mut = topo.edge_mut(oe.edge())?;
-            if near_is_start {
-                edge_mut.set_start(vtop_vertex);
-            } else {
-                edge_mut.set_end(vtop_vertex);
-            }
-            edge_mut.set_curve(EdgeCurve::NurbsCurve(trimmed));
-            return Ok(());
+            return cut_edge_at(topo, oe.edge(), near, vtop_vertex, miter.vtop);
         }
+        let EdgeCurve::NurbsCurve(curve) = e.curve() else {
+            return Err(fail());
+        };
         let length = (far_point - near_point).length();
         // The trim consumes `radius` from the near end. When that is more
         // than the remaining length the request does not fit this contact at
