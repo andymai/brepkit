@@ -21,8 +21,9 @@
 
 use std::f64::consts::PI;
 
+use brepkit_blend::radius_law::RadiusLaw;
 use brepkit_math::vec::{Point3, Vec3};
-use brepkit_operations::blend_ops::fillet_v2;
+use brepkit_operations::blend_ops::{fillet_v2, fillet_v2_variable};
 use brepkit_operations::extrude::extrude;
 use brepkit_operations::measure::solid_volume;
 use brepkit_operations::tessellate::{is_watertight, tessellate_solid};
@@ -177,4 +178,46 @@ fn both_ends_of_a_concave_edge_pivot() {
         let one = section(r) * perimeter - mitres + 2.0 * pivot(r);
         round_top_outline(&[0, 1, 2, 3, 4, 5, 6, 7], true, &[0.0, H], r, 2.0 * one);
     }
+}
+
+/// Rounds the arch's whole outlines at the top and the bottom, the top of
+/// the channel's ceiling at `ceiling` and every other edge at `r`, and
+/// returns the volume taken off, or `None` where the fillet is refused.
+fn removed_with_ceiling(r: f64, ceiling: f64) -> Option<f64> {
+    let mut topo = Topology::new();
+    let solid = arch(&mut topo);
+    let mut laws = Vec::new();
+    for (z, top) in [(0.0, false), (H, true)] {
+        let at = |i: usize| Point3::new(OUTLINE[i].0, OUTLINE[i].1, z);
+        for k in 0..OUTLINE.len() {
+            let edge = edge_between(&topo, solid, at(k), at((k + 1) % OUTLINE.len()));
+            let radius = if top && k == 2 { ceiling } else { r };
+            laws.push((edge, RadiusLaw::Constant(radius)));
+        }
+    }
+    let result = fillet_v2_variable(&mut topo, solid, laws).ok()?;
+    if !result.failed.is_empty() {
+        return None;
+    }
+    let report = validate_solid(&topo, result.solid).unwrap();
+    assert!(report.is_valid(), "{r}/{ceiling}: {:?}", report.issues);
+    let mesh = tessellate_solid(&topo, result.solid, 0.01).unwrap();
+    assert!(is_watertight(&mesh), "{r}/{ceiling}: the mesh is open");
+    Some(H * (L * W - (B - A) * C) - solid_volume(&topo, result.solid, 0.01).unwrap())
+}
+
+#[test]
+fn a_reflex_corner_of_unequal_rounds_is_right_or_refused() {
+    // The ceiling's round at 2 meets the walls' at 1 at both reflex corners.
+    // The corners take off more than the even rounds' and less than that
+    // with the ceiling's wider section along its length and two wider pivots.
+    let Some(mixed) = removed_with_ceiling(1.0, 2.0) else {
+        return;
+    };
+    let even = removed_with_ceiling(1.0, 1.0).unwrap();
+    let bound = even + (section(2.0) - section(1.0)) * (B - A) + 2.0 * pivot(2.0);
+    assert!(
+        even < mixed && mixed < bound,
+        "removed {mixed}, between {even} and {bound}"
+    );
 }

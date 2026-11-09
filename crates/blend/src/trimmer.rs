@@ -1517,11 +1517,13 @@ pub enum BoundarySplitPolicy<'a> {
     /// contacts elsewhere already close through shared junction edges.
     /// A face with several contacts also splits a straight piece of an edge
     /// in `spokes`, listed by its two ends, where a contact ends on it (unless
-    /// the piece touches an `unsplit` vertex): a sharp mitre's
-    /// retained edge, which the mitre shortens to there, and a smooth edge
-    /// two stripes run on round on one section, which their shared section
-    /// then ends on. Both need the split on a side face that a second
-    /// contact crosses too (a slab rounded round both its faces' outlines).
+    /// the piece touches an `unsplit` vertex): a straight sharp edge left
+    /// unselected where two contours meet, on which the contacts of the rounds
+    /// on its two faces end (a convex corner's mitre shortens it to there,
+    /// and at a reflex corner the rounds pivot on it), and a smooth edge two
+    /// stripes run on round on one section, which their shared section then
+    /// ends on. Both need the split on a side face that a second contact
+    /// crosses too (a slab rounded round both its faces' outlines).
     Selective {
         unsplit: &'a std::collections::HashSet<VertexId>,
         notchable: &'a std::collections::HashSet<VertexId>,

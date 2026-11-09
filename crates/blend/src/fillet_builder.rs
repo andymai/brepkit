@@ -610,13 +610,13 @@ impl<'a> FilletBuilder<'a> {
                 .collect();
         }
         // Straight edges a trim splits whatever its policy, by their two
-        // ends (see the policy's `spokes`): the sharp edge left between two
-        // stripes' walls at their junction, and the smooth edge two stripes
-        // run on round on one section. The walls' contacts end on the sharp
-        // edge a radius from the corner: at a convex corner it is a mitre's
-        // retained edge, and at a reflex one the rounds pivot on it, through
-        // a horn torus pinching to a point on it. Left whole, each wall ran
-        // on along it to the corner and back.
+        // ends (see the policy's `spokes`): every straight sharp edge left
+        // unselected at a junction of two contours, and the smooth edge two
+        // stripes run on round on one section. The contacts of the rounds on
+        // a sharp edge's two faces end on it: at a convex corner it is a
+        // mitre's retained edge, and at a reflex one the rounds pivot on it.
+        // Whole, it would take each face's wire on along it to the corner and
+        // back.
         let mut spokes: Vec<(brepkit_math::vec::Point3, brepkit_math::vec::Point3)> = Vec::new();
         if let Some(fillet_plan) = plan.as_ref() {
             for junction in &fillet_plan.junctions {
@@ -2046,7 +2046,9 @@ fn fold_spoke_spurs(
     Ok(())
 }
 
-/// The edges of the input's faces, as the fillet found them.
+/// The edges of the input's faces after the trim: their own edges and the
+/// pieces the trim split them into, which lie along the input's boundary
+/// just the same.
 fn input_edge_set(topo: &Topology, original_faces: &[FaceId]) -> HashSet<EdgeId> {
     let mut edges = HashSet::new();
     for &face_id in original_faces {
