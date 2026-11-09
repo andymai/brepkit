@@ -400,3 +400,101 @@ fn a_flat_and_a_round_wall_s_rounds_are_mitred() {
         );
     }
 }
+
+/// Splits the edge of `solid` from `a` to `b` (either way round) at the
+/// point `along` from `a`, in every face it bounds, as a file can carry an
+/// edge in collinear pieces: the pieces keep the same two faces, so the
+/// fillet's plan joins them into one contour.
+fn split_edge(topo: &mut Topology, solid: SolidId, (a, b): (Point3, Point3), along: f64) {
+    let edge_id = edge_between(topo, solid, a, b);
+    let edge = topo.edge(edge_id).unwrap().clone();
+    let (start, end) = (
+        topo.vertex(edge.start()).unwrap().point(),
+        topo.vertex(edge.end()).unwrap().point(),
+    );
+    let from_a = (start - a).length() < 1e-9;
+    let split = a + (b - a) * (along / (b - a).length());
+    let middle = topo.add_vertex(Vertex::new(split, 1e-7));
+    let first = topo.add_edge(Edge::new(edge.start(), middle, EdgeCurve::Line));
+    let second = topo.add_edge(Edge::new(middle, edge.end(), EdgeCurve::Line));
+    assert!(from_a || (end - a).length() < 1e-9);
+    for face_id in solid_faces(topo, solid).unwrap() {
+        let wire_id = topo.face(face_id).unwrap().outer_wire();
+        let edges = topo.wire(wire_id).unwrap().edges().to_vec();
+        let Some(at) = edges.iter().position(|oe| oe.edge() == edge_id) else {
+            continue;
+        };
+        let pieces = if edges[at].is_forward() {
+            [
+                OrientedEdge::new(first, true),
+                OrientedEdge::new(second, true),
+            ]
+        } else {
+            [
+                OrientedEdge::new(second, false),
+                OrientedEdge::new(first, false),
+            ]
+        };
+        let mut split_edges = edges[..at].to_vec();
+        split_edges.extend(pieces);
+        split_edges.extend_from_slice(&edges[at + 1..]);
+        let wire = topo.add_wire(Wire::new(split_edges, true).unwrap());
+        topo.face_mut(face_id).unwrap().set_outer_wire(wire);
+    }
+}
+
+/// The kite of 120 deg, its edge `V -> A` carried in two pieces split 0.25
+/// from the corner: the mitre takes `cot(60 deg)`, about 0.58, of the edge
+/// at r = 1, past the first piece, and fits the whole edge as it does
+/// unsplit.
+#[test]
+fn a_kite_s_round_split_near_its_corner_is_mitred() {
+    let theta = 120.0_f64.to_radians();
+    for r in [1.0, 2.0] {
+        let mut topo = Topology::new();
+        let [v, b, _, a] = kite(theta, L);
+        let solid = prism(&mut topo, &kite(theta, L));
+        let up = Vec3::new(0.0, 0.0, H);
+        split_edge(&mut topo, solid, (v + up, a + up), 0.25);
+        let pieces: Vec<EdgeId> = top_edges(&topo, solid)
+            .into_iter()
+            .filter(|&edge_id| {
+                let edge = topo.edge(edge_id).unwrap();
+                let [p, q] =
+                    [edge.start(), edge.end()].map(|end| topo.vertex(end).unwrap().point());
+                let on = |s: Point3| ((s - (v + up)).cross(a - v)).length() < 1e-9;
+                on(p) && on(q)
+            })
+            .collect();
+        assert_eq!(pieces.len(), 2);
+        let mut edges = pieces;
+        edges.push(edge_between(&topo, solid, v + up, b + up));
+        let before = solid_volume(&topo, solid, 1e-3).unwrap();
+        let volume = before - kite_rounds(theta, L, r);
+        assert_rounds_to(&mut topo, solid, &edges, r, 8, volume, &format!("r = {r}"));
+    }
+}
+
+/// The hexagon of side 2 with one side carried in two pieces split 0.3
+/// from a corner: at r = 1.5 that corner's mitre takes about 0.87 of the
+/// side, past the short piece, and the rounds still fit.
+#[test]
+fn a_hexagon_with_a_split_side_rounds_as_whole() {
+    let hexagon: Vec<Point3> = (0..6)
+        .map(|k| {
+            let a = f64::from(k) * PI / 3.0;
+            Point3::new(2.0 * a.cos(), 2.0 * a.sin(), 0.0)
+        })
+        .collect();
+    let area = |w: f64| 2.0 * 3.0_f64.sqrt() * (3.0_f64.sqrt() - w).powi(2);
+    let up = Vec3::new(0.0, 0.0, H);
+    for r in [1.0, 1.5] {
+        let mut topo = Topology::new();
+        let solid = prism(&mut topo, &hexagon);
+        split_edge(&mut topo, solid, (hexagon[0] + up, hexagon[1] + up), 0.3);
+        let edges = top_edges(&topo, solid);
+        assert_eq!(edges.len(), 7);
+        let volume = area(0.0) * (H - r) + over_the_round(r, area);
+        assert_rounds_to(&mut topo, solid, &edges, r, 14, volume, &format!("r = {r}"));
+    }
+}

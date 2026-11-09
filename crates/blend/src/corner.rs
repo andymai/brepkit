@@ -103,11 +103,11 @@ struct ExtrudedMitre {
     /// The plane face's outward normal.
     n: Vec3,
     /// The crease from the pinch to the meeting point on the plane; empty
-    /// where the contacts cross past either spine edge's far end.
+    /// where the contacts cross past either spine's far end.
     crease: Vec<Point3>,
-    /// How far along each stripe's spine edge (`a`, then `b`) from the
-    /// corner the contacts on the plane cross: the length of its edge the
-    /// corner takes, infinite past the edge's far end.
+    /// How far along each stripe's spine (`a`, then `b`) from the corner
+    /// the contacts on the plane cross: the length of its contour the
+    /// corner takes, infinite past the spine's far end.
     used: [f64; 2],
 }
 
@@ -132,28 +132,56 @@ fn outward_normal_on(topo: &Topology, face_id: FaceId, point: Point3, tol: f64) 
     Some(if face.is_reversed() { -normal } else { normal })
 }
 
-/// The spine edge of `edges` incident at `vertex`, with its parameter there
-/// and at its other end.
-fn incident_spine_edge(
-    topo: &Topology,
-    edges: &[EdgeId],
-    vertex: VertexId,
-) -> Option<(EdgeId, f64, f64)> {
-    for &edge_id in edges {
+/// One edge of a spine walked away from a corner: the edge, and its
+/// parameter at the end nearer the corner and at its other end.
+type WalkedEdge = (EdgeId, f64, f64);
+
+/// The edges of the spine `edges` (a chain) in order away from `vertex`.
+/// A contour joins collinear or tangent pieces of one edge between the same
+/// two faces, so a corner's round can run on past the piece at the corner.
+fn spine_walk(topo: &Topology, edges: &[EdgeId], vertex: VertexId) -> Option<Vec<WalkedEdge>> {
+    let mut left = edges.to_vec();
+    let mut walk = Vec::with_capacity(edges.len());
+    let mut at = vertex;
+    while let Some(i) = left.iter().position(|&edge_id| {
+        topo.edge(edge_id)
+            .is_ok_and(|edge| edge.start() == at || edge.end() == at)
+    }) {
+        let edge_id = left.remove(i);
         let edge = topo.edge(edge_id).ok()?;
         let (a, b) = (
             topo.vertex(edge.start()).ok()?.point(),
             topo.vertex(edge.end()).ok()?.point(),
         );
         let (d0, d1) = edge.curve().domain_with_endpoints(a, b);
-        if edge.start() == vertex {
-            return Some((edge_id, d0, d1));
-        }
-        if edge.end() == vertex {
-            return Some((edge_id, d1, d0));
+        if edge.start() == at {
+            walk.push((edge_id, d0, d1));
+            at = edge.end();
+        } else {
+            walk.push((edge_id, d1, d0));
+            at = edge.start();
         }
     }
-    None
+    (!walk.is_empty()).then_some(walk)
+}
+
+/// The point of a spine walk at `sigma`: edge `k` of the walk at the
+/// fraction `sigma - k` of its parameter, the last edge run on past its end.
+fn walk_at(walk: &[WalkedEdge], sigma: f64) -> (EdgeId, f64) {
+    let k = (1..walk.len()).take_while(|&k| sigma > k as f64).count();
+    let (edge, s0, s1) = walk[k];
+    (edge, s0 + (s1 - s0) * (sigma - k as f64))
+}
+
+/// The length of a spine walk from the corner to `sigma`.
+fn walk_run(topo: &Topology, walk: &[WalkedEdge], sigma: f64) -> Option<f64> {
+    let k = (1..walk.len()).take_while(|&k| sigma > k as f64).count();
+    let mut run = 0.0;
+    for &(edge, s0, s1) in &walk[..k] {
+        run += edge_run(topo, edge, s0, s1)?;
+    }
+    let (edge, s) = walk_at(walk, sigma);
+    Some(run + edge_run(topo, edge, walk[k].1, s)?)
 }
 
 /// The point of `edge` at parameter `s`.
@@ -222,13 +250,16 @@ fn extruded_mitre(
     if (down + n).length() > 1e-6 {
         return None;
     }
-    let (edge_a, va, fa) = incident_spine_edge(topo, a.2, vertex)?;
-    let (edge_b, vb, fb) = incident_spine_edge(topo, b.2, vertex)?;
-    if !wall_stands_square(topo, wall_a, edge_a, (va, fa), n, radius)
-        || !wall_stands_square(topo, wall_b, edge_b, (vb, fb), n, radius)
-    {
+    let walk_a = spine_walk(topo, a.2, vertex)?;
+    let walk_b = spine_walk(topo, b.2, vertex)?;
+    let square = |wall: FaceId, walk: &[WalkedEdge]| {
+        walk.iter()
+            .all(|&(edge, s0, s1)| wall_stands_square(topo, wall, edge, (s0, s1), n, radius))
+    };
+    if !square(wall_a, &walk_a) || !square(wall_b, &walk_b) {
         return None;
     }
+    let (edge_a, edge_b) = (walk_a[0].0, walk_b[0].0);
     // Convex: each stripe's edge leaves the corner into the other wall's
     // material.
     let corner = topo.vertex(vertex).ok()?.point();
@@ -241,15 +272,15 @@ fn extruded_mitre(
         return None;
     }
 
-    // Each wall's trace inset by `w`, at parameter `s` of its edge.
-    let inset = |wall: FaceId, edge: EdgeId, s: f64, w: f64| -> Option<Point3> {
+    // Each wall's trace inset by `w`, at `sigma` along its spine walk.
+    let inset = |wall: FaceId, walk: &[WalkedEdge], sigma: f64, w: f64| -> Option<Point3> {
+        let (edge, s) = walk_at(walk, sigma);
         let p = edge_point(topo, edge, s)?;
         Some(p - outward_normal_on(topo, wall, p, tol)? * w)
     };
-    let (mut sa, mut sb) = (va, vb);
-    let (ha, hb) = ((fa - va) * 1e-7, (fb - vb) * 1e-7);
-    let (low_a, high_a) = (va.min(fa), va.max(fa));
-    let (low_b, high_b) = (vb.min(fb), vb.max(fb));
+    let (mut sa, mut sb) = (0.0, 0.0);
+    let h = 1e-7;
+    let (ends_a, ends_b) = (walk_a.len() as f64, walk_b.len() as f64);
     let mut crease = Vec::with_capacity(EXTRUDED_CREASE_POINTS);
     for k in 0..EXTRUDED_CREASE_POINTS {
         let phi = std::f64::consts::FRAC_PI_2 * (k as f64) / ((EXTRUDED_CREASE_POINTS - 1) as f64);
@@ -261,15 +292,15 @@ fn extruded_mitre(
         }
         let mut converged = false;
         for _ in 0..40 {
-            let pa = inset(wall_a, edge_a, sa, w)?;
-            let pb = inset(wall_b, edge_b, sb, w)?;
+            let pa = inset(wall_a, &walk_a, sa, w)?;
+            let pb = inset(wall_b, &walk_b, sb, w)?;
             let residual = pa - pb;
             if residual.length() <= 1e-11 * radius.max(1.0) {
                 converged = true;
                 break;
             }
-            let da = (inset(wall_a, edge_a, sa + ha, w)? - pa) * (1.0 / ha);
-            let db = (pb - inset(wall_b, edge_b, sb + hb, w)?) * (1.0 / hb);
+            let da = (inset(wall_a, &walk_a, sa + h, w)? - pa) * (1.0 / h);
+            let db = (pb - inset(wall_b, &walk_b, sb + h, w)?) * (1.0 / h);
             // Least squares on the two columns: [da db] (dsa, dsb) = -residual.
             let (m00, m01, m11) = (da.dot(da), da.dot(db), db.dot(db));
             let (r0, r1) = (-da.dot(residual), -db.dot(residual));
@@ -279,30 +310,25 @@ fn extruded_mitre(
             }
             sa += (r0 * m11 - r1 * m01) / det;
             sb += (m00 * r1 - m01 * r0) / det;
-            let past_a = if fa > va { sa > high_a } else { sa < low_a };
-            let past_b = if fb > vb { sb > high_b } else { sb < low_b };
-            if past_a || past_b {
-                // The insets cross beyond a spine edge's far end: the
-                // corner takes more than the edge.
+            if sa > ends_a || sb > ends_b {
+                // The insets cross beyond a spine's far end: the corner
+                // takes more than the contour.
                 return Some(ExtrudedMitre {
                     n,
                     crease: Vec::new(),
                     used: [f64::INFINITY; 2],
                 });
             }
-            if !(low_a..=high_a).contains(&sa) || !(low_b..=high_b).contains(&sb) {
+            if !(0.0..=ends_a).contains(&sa) || !(0.0..=ends_b).contains(&sb) {
                 return None;
             }
         }
         if !converged {
             return None;
         }
-        crease.push(inset(wall_a, edge_a, sa, w)? - n * t);
+        crease.push(inset(wall_a, &walk_a, sa, w)? - n * t);
     }
-    let used = [
-        edge_run(topo, edge_a, va, sa)?,
-        edge_run(topo, edge_b, vb, sb)?,
-    ];
+    let used = [walk_run(topo, &walk_a, sa)?, walk_run(topo, &walk_b, sb)?];
     Some(ExtrudedMitre { n, crease, used })
 }
 
