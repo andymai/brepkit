@@ -62,12 +62,13 @@ fn rounds_that_leave_a_strip_between_them() {
 
 #[test]
 fn rounds_whose_contacts_pass_each_other_are_refused() {
-    let r = 1.5;
-    let mut topo = Topology::new();
-    let (solid, edges) = ridge(&mut topo);
-    let refused = match fillet_v2(&mut topo, solid, &edges, r) {
-        Err(_) => true,
-        Ok(result) => !result.failed.is_empty(),
-    };
-    assert!(refused, "r = {r} on a top {W} wide must be refused");
+    for r in [1.02, 1.5] {
+        let mut topo = Topology::new();
+        let (solid, edges) = ridge(&mut topo);
+        let refused = match fillet_v2(&mut topo, solid, &edges, r) {
+            Err(_) => true,
+            Ok(result) => !result.failed.is_empty(),
+        };
+        assert!(refused, "r = {r} on a top {W} wide must be refused");
+    }
 }
