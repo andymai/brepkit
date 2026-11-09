@@ -1355,9 +1355,12 @@ impl RailThrough {
     }
 }
 
+/// `curve` from `a` to `b`. The curve is split at each unless it lies within
+/// rounding of the domain's end, where a split leaves no span: a rail left any
+/// longer would end off its vertex.
 fn trimmed(curve: &NurbsCurve, a: f64, b: f64) -> Result<NurbsCurve, OperationsError> {
     let (d0, d1) = curve.domain();
-    let eps = KNOT_MERGE * (d1 - d0);
+    let eps = 1e-12 * (d1 - d0);
     let mut out = curve.clone();
     if a > d0 + eps {
         out = curve_split(&out, a)?.1;
@@ -1446,9 +1449,10 @@ fn read_rails(
                     format!("rail {j} passes through more than one vertex of profile {s}")
                 }));
             };
-            at.push(snap_to_knot(&curve, *t));
+            at.push(*t);
             through.push(*vertex);
         }
+        let at = snapped_to_knots(&curve, &at, &through);
         let (curve, at) = if at.windows(2).all(|w| w[1] > w[0]) {
             (curve, at)
         } else if at.windows(2).all(|w| w[1] < w[0]) {
@@ -1477,18 +1481,35 @@ fn read_rails(
     Ok(out)
 }
 
-/// `t`, moved onto a knot it lies next to: a span of the width of a rounding
-/// error is one no later step can use.
-fn snap_to_knot(curve: &NurbsCurve, t: f64) -> f64 {
+/// Each of `at` moved onto a knot it lies next to, where the knot's point still
+/// meets the vertex the rail runs `through` there and the move leaves it on the
+/// same side of both its neighbours: a span of the width of a rounding error is
+/// one no later step can use, but a vertex the move left behind, or two
+/// profiles it put in one place, would no longer be the profiles asked for.
+fn snapped_to_knots(curve: &NurbsCurve, at: &[f64], through: &[Point3]) -> Vec<f64> {
     let (d0, d1) = curve.domain();
     let reach = 1e-7 * (d1 - d0);
-    curve
-        .knots()
-        .iter()
-        .copied()
-        .filter(|k| (k - t).abs() <= reach)
-        .min_by(|a, b| (a - t).abs().total_cmp(&(b - t).abs()))
-        .unwrap_or(t)
+    let mut out = at.to_vec();
+    for (s, &t) in at.iter().enumerate() {
+        let Some(knot) = curve
+            .knots()
+            .iter()
+            .copied()
+            .filter(|k| (k - t).abs() <= reach)
+            .min_by(|a, b| (a - t).abs().total_cmp(&(b - t).abs()))
+        else {
+            continue;
+        };
+        let same_side = |other: f64| (knot - other) * (t - other) > 0.0;
+        let meets = (curve.evaluate(knot) - through[s]).length() <= RAIL_VERTEX_TOLERANCE;
+        if meets
+            && (s == 0 || same_side(out[s - 1]))
+            && at.get(s + 1).is_none_or(|&next| same_side(next))
+        {
+            out[s] = knot;
+        }
+    }
+    out
 }
 
 /// The rail less the skin's spline through its own points and, at a

@@ -957,6 +957,39 @@ fn a_rail_running_past_the_profiles_is_followed_between_them() {
     }
 }
 
+/// Two squares 5e-6 apart at the far end of straight rails 100 long: the nearer
+/// meets its rails within a knot's reach of their ends in parameter, but farther
+/// from them than a vertex may lie, so it keeps its own place on them.
+#[test]
+fn profiles_just_short_of_a_rails_end_keep_their_own_places_on_it() {
+    let (half, below, end) = (3.0, 99.999_995, 100.0);
+    let want = 4.0 * half * half * (end - below);
+    for (name, pose) in poses() {
+        let mut topo = Topology::new();
+        let (first, last) = (
+            square(&mut topo, pose, half, below),
+            square(&mut topo, pose, half, end),
+        );
+        let rails = CORNERS
+            .map(|(x, y)| {
+                LoftRail::Edge(line_edge(
+                    &mut topo,
+                    pose,
+                    p(x * half, y * half, 0.0),
+                    p(x * half, y * half, end),
+                ))
+            })
+            .to_vec();
+        let options = LoftOptions {
+            rails,
+            ..LoftOptions::default()
+        };
+        let solid = loft_with_options(&mut topo, &[first, last], &options).unwrap();
+        let exact = assert_solid(&topo, solid, name);
+        assert_close(exact, want, 1e-6, name);
+    }
+}
+
 /// Four semicircular rails from one square round to another beside it in its
 /// plane, a U-bend: the chord between them lies in both their planes, so only
 /// the rails tell which way each square winds. The body is the square revolved
