@@ -41,7 +41,7 @@ use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
 use brepkit_topology::edge::{Edge, EdgeCurve, EdgeId};
 use brepkit_topology::face::{Face, FaceId, FaceSurface};
-use brepkit_topology::shell::Shell;
+use brepkit_topology::shell::{Shell, ShellId};
 use brepkit_topology::solid::{Solid, SolidId};
 use brepkit_topology::vertex::Vertex;
 use brepkit_topology::wire::{OrientedEdge, Wire, WireId};
@@ -158,6 +158,12 @@ pub struct LoftOptions {
     pub end: LoftEnd,
 }
 
+impl LoftOptions {
+    fn is_plain(&self) -> bool {
+        self.rails.is_empty() && self.start.is_free() && self.end.is_free()
+    }
+}
+
 /// Loft `profiles` along rails and under end conditions.
 ///
 /// Without rails or conditions this is [`super::loft_smooth`]. With them, one
@@ -190,15 +196,54 @@ pub struct LoftOptions {
 /// sides at one parameter, meets itself, as a weight too large for the distance
 /// to the next profile makes it. Sides that pass through each other otherwise
 /// are not looked for.
-#[allow(clippy::too_many_lines)]
 pub fn loft_with_options(
     topo: &mut Topology,
     profiles: &[FaceId],
     options: &LoftOptions,
 ) -> Result<SolidId, OperationsError> {
-    if options.rails.is_empty() && options.start.is_free() && options.end.is_free() {
+    if options.is_plain() {
         return super::loft_smooth(topo, profiles);
     }
+    Ok(network_loft(topo, profiles, options)?.0)
+}
+
+/// The faces of the loft [`loft_with_options`] makes but its two caps, as an
+/// open shell.
+///
+/// With rails or conditions the loft knows its caps as it builds them, so a
+/// side lying in a cap's plane stays a side. Without them this is
+/// [`super::loft_sides`] of [`super::loft_smooth`]'s loft on its first and last
+/// profiles.
+///
+/// # Errors
+///
+/// As [`loft_with_options`].
+pub fn loft_sides_with_options(
+    topo: &mut Topology,
+    profiles: &[FaceId],
+    options: &LoftOptions,
+) -> Result<ShellId, OperationsError> {
+    if options.is_plain() {
+        let solid = super::loft_smooth(topo, profiles)?;
+        let ends: Vec<FaceId> = profiles
+            .first()
+            .into_iter()
+            .chain(profiles.last())
+            .copied()
+            .collect();
+        return super::loft_sides(topo, solid, &ends);
+    }
+    let (_, sides) = network_loft(topo, profiles, options)?;
+    Ok(topo.add_shell(Shell::new(sides)?))
+}
+
+/// The loft along rails and under end conditions, and its faces but its caps.
+#[allow(clippy::too_many_lines)]
+fn network_loft(
+    topo: &mut Topology,
+    profiles: &[FaceId],
+    options: &LoftOptions,
+) -> Result<(SolidId, Vec<FaceId>), OperationsError> {
     if profiles.len() < 2 {
         return Err(refuse("loft requires at least 2 profiles"));
     }
@@ -408,14 +453,8 @@ pub fn loft_with_options(
         band_rails.push(edges);
     }
 
-    let mut faces = Vec::with_capacity(n * bands.len() + 2);
-    faces.push(cap_face(
-        topo,
-        &level_edges[0],
-        &rings[0],
-        profiles[0],
-        true,
-    )?);
+    let first_cap = cap_face(topo, &level_edges[0], &rings[0], profiles[0], true)?;
+    let mut sides = Vec::with_capacity(n * bands.len());
     for (level, surfaces) in band_surfaces.into_iter().enumerate() {
         for (i, surface) in surfaces.into_iter().enumerate() {
             let next = (i + 1) % n;
@@ -428,19 +467,23 @@ pub fn loft_with_options(
                 ],
                 true,
             )?);
-            faces.push(topo.add_face(Face::new(wire, vec![], surface)));
+            sides.push(topo.add_face(Face::new(wire, vec![], surface)));
         }
     }
-    faces.push(cap_face(
+    let last_cap = cap_face(
         topo,
         &level_edges[bands.len()],
         &rings[last],
         profiles[last],
         false,
-    )?);
+    )?;
 
+    let mut faces = Vec::with_capacity(sides.len() + 2);
+    faces.push(first_cap);
+    faces.extend_from_slice(&sides);
+    faces.push(last_cap);
     let shell = topo.add_shell(Shell::new(faces)?);
-    Ok(topo.add_solid(Solid::new(shell, vec![])))
+    Ok((topo.add_solid(Solid::new(shell, vec![])), sides))
 }
 
 fn refuse(reason: impl Into<String>) -> OperationsError {

@@ -1943,6 +1943,14 @@ impl BrepKernel {
                     reason: reason.into(),
                 });
             }
+            if !closed {
+                let shell = brepkit_operations::loft::loft_sides_with_options(
+                    self.topo_mut(),
+                    face_ids,
+                    &options,
+                )?;
+                return Ok(shell_id_to_u32(shell));
+            }
             brepkit_operations::loft::loft_with_options(self.topo_mut(), face_ids, &options)?
         };
         if closed {
@@ -2285,6 +2293,65 @@ mod tests {
             (got - frustum).abs() < 1e-9 * frustum,
             "{got}, want {frustum}"
         );
+    }
+
+    /// A U-bend under the plane of its two end profiles, through the batch
+    /// dispatcher: its inner rails run straight in that plane, narrowing from 6
+    /// apart to 4, and its outer rails are half circles below it. With
+    /// `solid: false` the shell keeps all four sides, the inner one lying flat
+    /// in the caps' plane between them, every corner and edge of it on that
+    /// plane.
+    #[test]
+    fn loft_with_options_batch_keeps_a_side_in_the_caps_plane() {
+        let mut k = crate::kernel::BrepKernel::new();
+        let a = k
+            .make_polygon(vec![
+                5.0, -3.0, 0.0, 9.0, -3.0, 0.0, 9.0, 3.0, 0.0, 5.0, 3.0, 0.0,
+            ])
+            .unwrap();
+        let b = k
+            .make_polygon(vec![
+                -5.0, -2.0, 0.0, -9.0, -3.0, 0.0, -9.0, 3.0, 0.0, -5.0, 2.0, 0.0,
+            ])
+            .unwrap();
+        let mut rails = Vec::new();
+        for y in [-3.0, 3.0] {
+            rails.push(
+                k.make_line_edge(5.0, y, 0.0, -5.0, y * 2.0 / 3.0, 0.0)
+                    .unwrap(),
+            );
+            rails.push(
+                k.make_circle_arc_3d(9.0, y, 0.0, -9.0, y, 0.0, 0.0, y, 0.0, 0.0, 1.0, 0.0)
+                    .unwrap(),
+            );
+        }
+        let ops = format!(
+            r#"[
+                {{"op": "loftWithOptions", "args": {{"faces": [{a}, {b}], "rails": {rails:?}}}}},
+                {{"op": "loftWithOptions", "args": {{"faces": [{a}, {b}], "rails": {rails:?}, "solid": false}}}}
+            ]"#
+        );
+        let results = batch_results(&mut k, &ops);
+        let solid = k.resolve_solid(handle_of(&results[0])).unwrap();
+        let faces = k
+            .topo
+            .shell(k.topo.solid(solid).unwrap().outer_shell())
+            .unwrap()
+            .faces()
+            .len();
+        assert_eq!(faces, 6, "four sides and two caps");
+
+        let shell = k.resolve_shell(handle_of(&results[1])).unwrap();
+        let faces = k.topo.shell(shell).unwrap().faces().to_vec();
+        assert_eq!(faces.len(), 4, "the sides alone");
+        let in_the_caps_plane = faces.iter().any(|&f| {
+            matches!(
+                k.topo.face(f).unwrap().surface(),
+                brepkit_topology::face::FaceSurface::Plane { normal, d }
+                    if normal.z().abs() > 1.0 - 1e-12 && d.abs() < 1e-12
+            )
+        });
+        assert!(in_the_caps_plane, "the inner side is kept");
     }
 
     /// Every bad entry is refused by name, not dropped: a loft along what was

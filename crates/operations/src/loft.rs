@@ -23,7 +23,8 @@ mod network;
 
 pub use network::{
     LoftEnd, LoftOptions, LoftRail, POLYNOMIAL_TOLERANCE, RAIL_CONDITION_ANGLE,
-    RAIL_VERTEX_TOLERANCE, TANGENT_FACE_TOLERANCE, TANGENT_FIT_ANGLE, loft_with_options,
+    RAIL_VERTEX_TOLERANCE, TANGENT_FACE_TOLERANCE, TANGENT_FIT_ANGLE, loft_sides_with_options,
+    loft_with_options,
 };
 
 /// Resample a closed polygon to `target_count` evenly spaced points.
