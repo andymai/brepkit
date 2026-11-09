@@ -23,6 +23,59 @@ impl BrepKernel {
             })
     }
 
+    /// Read `[{"vertex": h, "setbacks": [{"edge": h, "distance": d}], "corner": "g2"}]`,
+    /// `setbacks` and `corner` being optional and `corner` defaulting to rolling.
+    pub(crate) fn parse_fillet_corners(
+        &self,
+        corners: &serde_json::Value,
+    ) -> Result<Vec<brepkit_operations::blend_ops::FilletCorner>, String> {
+        use brepkit_operations::blend_ops::{CornerKind, FilletCorner};
+
+        let handle = |value: &serde_json::Value, what: &str| {
+            value
+                .as_u64()
+                .and_then(|n| u32::try_from(n).ok())
+                .ok_or_else(|| format!("a corner's {what} is not a handle"))
+        };
+        corners
+            .as_array()
+            .ok_or_else(|| "corners must be an array".to_string())?
+            .iter()
+            .map(|corner| {
+                let vertex = self
+                    .resolve_vertex(handle(&corner["vertex"], "vertex")?)
+                    .map_err(|e| e.to_string())?;
+                let kind = match &corner["corner"] {
+                    serde_json::Value::Null => CornerKind::Rolling,
+                    serde_json::Value::String(kind) if kind == "rolling" => CornerKind::Rolling,
+                    serde_json::Value::String(kind) if kind == "g2" => CornerKind::G2,
+                    other => return Err(format!("unknown corner kind {other}")),
+                };
+                let mut setbacks = Vec::new();
+                if !corner["setbacks"].is_null() {
+                    let given = corner["setbacks"]
+                        .as_array()
+                        .ok_or_else(|| "a corner's setbacks must be an array".to_string())?;
+                    for setback in given {
+                        let edge = self
+                            .resolve_edge(handle(&setback["edge"], "set-back edge")?)
+                            .map_err(|e| e.to_string())?;
+                        let distance = setback["distance"]
+                            .as_f64()
+                            .filter(|d| d.is_finite() && *d > 0.0)
+                            .ok_or_else(|| "a set-back's distance must be positive".to_string())?;
+                        setbacks.push((edge, distance));
+                    }
+                }
+                Ok(FilletCorner {
+                    vertex,
+                    setbacks,
+                    kind,
+                })
+            })
+            .collect()
+    }
+
     /// Resolve a `u32` vertex handle to a typed `VertexId`.
     pub fn resolve_vertex(
         &self,

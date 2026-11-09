@@ -957,6 +957,25 @@ impl BrepKernel {
                     .map_err(|e| e.to_string())?;
                 Ok(serde_json::json!(solid_id_to_u32(solid)))
             }
+            "filletV2Corners" => {
+                let s = get_u32(args, "solid")?;
+                let radius = get_f64(args, "radius")?;
+                let solid_id = self.resolve_solid(s).map_err(|e| e.to_string())?;
+                let edge_ids = handles_in(args, "edges")?
+                    .into_iter()
+                    .map(|h| self.resolve_edge(h).map_err(|e| e.to_string()))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let corners = self.parse_fillet_corners(&args["corners"])?;
+                let solid = brepkit_operations::blend_ops::fillet_v2_with_corners(
+                    self.topo_mut(),
+                    solid_id,
+                    &edge_ids,
+                    radius,
+                    &corners,
+                )
+                .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!(solid_id_to_u32(solid)))
+            }
             "chamferV2" => {
                 let s = get_u32(args, "solid")?;
                 let d1 = get_f64(args, "d1")?;

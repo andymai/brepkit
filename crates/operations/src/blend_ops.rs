@@ -1,12 +1,17 @@
 //! Thin wrappers around `brepkit-blend` for the operations API.
 
+use std::collections::HashSet;
+
 use brepkit_blend::BlendResult;
 use brepkit_blend::chamfer_builder::ChamferBuilder;
 use brepkit_blend::fillet_builder::FilletBuilder;
+use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
-use brepkit_topology::edge::EdgeId;
+use brepkit_topology::edge::{EdgeCurve, EdgeId};
+use brepkit_topology::explorer::solid_faces;
 use brepkit_topology::face::FaceId;
 use brepkit_topology::solid::SolidId;
+use brepkit_topology::vertex::VertexId;
 
 use crate::OperationsError;
 
@@ -80,6 +85,171 @@ pub fn fillet_v2(
     builder.add_edges(edges, radius);
     let built = builder.build()?;
     own_cavities(topo, solid, built, "fillet")
+}
+
+/// How the corner where three rounds meet is closed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CornerKind {
+    /// A ball rolled between the three faces, unless the corner is set back.
+    Rolling,
+    /// A patch curving like each round where it meets it, which needs room: with
+    /// no set-back given, each round stops one radius past where the ball stops it.
+    G2,
+}
+
+/// Corner options for one vertex where three rounds meet.
+#[derive(Debug, Clone)]
+pub struct FilletCorner {
+    /// The vertex the rounds meet at.
+    pub vertex: VertexId,
+    /// How far from the vertex each meeting edge's round stops. Either none or
+    /// one for each of the three edges. A corner set back is always closed by the
+    /// patch [`CornerKind::G2`] names, since no ball fits between its rounds.
+    pub setbacks: Vec<(EdgeId, f64)>,
+    /// How the corner is closed.
+    pub kind: CornerKind,
+}
+
+fn other_end_direction(
+    topo: &Topology,
+    edge: EdgeId,
+    vertex: VertexId,
+) -> Result<Vec3, OperationsError> {
+    let data = topo.edge(edge)?;
+    if !matches!(data.curve(), EdgeCurve::Line) {
+        return Err(OperationsError::InvalidInput {
+            reason: "corner options need straight edges meeting at the vertex".into(),
+        });
+    }
+    let far = if data.start() == vertex {
+        data.end()
+    } else {
+        data.start()
+    };
+    Ok((topo.vertex(far)?.point() - topo.vertex(vertex)?.point()).normalize()?)
+}
+
+/// A corner's position and each meeting edge's direction and given set-back.
+type CornerPlan = (Point3, [Vec3; 3], Option<[f64; 3]>);
+
+fn plan_corner(
+    topo: &Topology,
+    edges: &[EdgeId],
+    corner: &FilletCorner,
+) -> Result<CornerPlan, OperationsError> {
+    let mut meeting = Vec::new();
+    for &edge in edges {
+        let data = topo.edge(edge)?;
+        if data.start() == corner.vertex || data.end() == corner.vertex {
+            meeting.push(edge);
+        }
+    }
+    let [a, b, c] = meeting.as_slice() else {
+        return Err(OperationsError::InvalidInput {
+            reason: format!(
+                "corner options need three rounds meeting at the vertex, and {} do",
+                meeting.len()
+            ),
+        });
+    };
+    let meeting = [*a, *b, *c];
+    let mut directions = [Vec3::new(0.0, 0.0, 0.0); 3];
+    for (direction, &edge) in directions.iter_mut().zip(&meeting) {
+        *direction = other_end_direction(topo, edge, corner.vertex)?;
+    }
+    let distances = if corner.setbacks.is_empty() {
+        None
+    } else {
+        if corner.setbacks.len() != 3 {
+            return Err(OperationsError::InvalidInput {
+                reason: format!(
+                    "a corner takes a set-back for each of its three edges, not {}",
+                    corner.setbacks.len()
+                ),
+            });
+        }
+        let mut distances = [0.0; 3];
+        for (slot, edge) in distances.iter_mut().zip(meeting) {
+            let &(_, distance) = corner
+                .setbacks
+                .iter()
+                .find(|(given, _)| *given == edge)
+                .ok_or_else(|| OperationsError::InvalidInput {
+                    reason: "a corner's set-backs must name each edge meeting there".into(),
+                })?;
+            *slot = distance;
+        }
+        Some(distances)
+    };
+    Ok((topo.vertex(corner.vertex)?.point(), directions, distances))
+}
+
+/// Fillet edges with constant radius, with options at the corners where three
+/// of them meet: how far back along each edge its round stops, and what closes
+/// the hole that leaves.
+///
+/// A set-back corner is two faces meeting along a seam, tangent to each other,
+/// to the three rounds and to the three flat faces, with the rounds' own
+/// curvature where they meet it. Its rounds and flat faces keep their exact
+/// surfaces, and each flat face gains a link between its two rounds' contact
+/// lines, tangent to both.
+///
+/// # Errors
+/// Returns `OperationsError` if the fillet fails, if a corner is not three
+/// straight rounds rolled between flat faces, if a set-back is not past where
+/// the ball stops its round or not short of its edge's far end, or if the
+/// result does not validate.
+pub fn fillet_v2_with_corners(
+    topo: &mut Topology,
+    solid: SolidId,
+    edges: &[EdgeId],
+    radius: f64,
+    corners: &[FilletCorner],
+) -> Result<SolidId, OperationsError> {
+    let mut plans = Vec::with_capacity(corners.len());
+    for corner in corners {
+        plans.push((corner.kind, plan_corner(topo, edges, corner)?));
+    }
+    let mut result = all_blended(fillet_v2(topo, solid, edges, radius)?)?;
+    for (kind, (at, directions, given)) in plans {
+        let rolling =
+            brepkit_blend::setback_corner::rolling_distances(topo, result, at, &directions)?
+                .ok_or_else(|| OperationsError::InvalidInput {
+                    reason: "corner options need a ball corner between three flat faces".into(),
+                })?;
+        let distances = match (given, kind) {
+            (Some(distances), _) => distances,
+            (None, CornerKind::Rolling) => continue,
+            (None, CornerKind::G2) => rolling.map(|distance| distance + radius),
+        };
+        let setbacks = [
+            (directions[0], distances[0]),
+            (directions[1], distances[1]),
+            (directions[2], distances[2]),
+        ];
+        let before: HashSet<FaceId> = solid_faces(topo, result)?.into_iter().collect();
+        let (set_back, reach) =
+            brepkit_blend::setback_corner::set_back_corner(topo, result, at, &setbacks)?;
+        result = set_back;
+        // The patches take off more than the fillet's own check of the cavities
+        // saw. The rounds and flat faces rebuilt around them reach far past what
+        // changed, so the cavities are read against `reach` alone.
+        let made: Vec<FaceId> = solid_faces(topo, result)?
+            .into_iter()
+            .filter(|face| !before.contains(face))
+            .collect();
+        crate::cavities::clear_of_own_cavities_within(
+            topo,
+            result,
+            &made,
+            &[reach],
+            "fillet corner",
+        )?;
+    }
+    if !crate::validate::validate_solid(topo, result)?.is_valid() {
+        return Err(OperationsError::NonManifoldResult);
+    }
+    Ok(result)
 }
 
 /// Chamfer edges with two distances (v2 engine).

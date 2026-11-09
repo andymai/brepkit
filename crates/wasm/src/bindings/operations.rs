@@ -1791,6 +1791,57 @@ impl BrepKernel {
 
     // ── Blend V2 (walking engine) ────────────────────────────────
 
+    /// Fillet edges with options at corners where three of them meet: how far
+    /// back along each edge its round stops, and what closes the hole that
+    /// leaves. `corners_json` is an array of
+    /// `{"vertex": h, "setbacks": [{"edge": h, "distance": d}, ...], "corner": "rolling" | "g2"}`,
+    /// with `setbacks` and `corner` optional: no set-backs and `"g2"` stops each
+    /// round one radius past where a ball would.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a handle is invalid, the JSON is malformed, the blend
+    /// computation fails, or a corner is not three straight rounds between flat
+    /// faces with set-backs past the ball and short of each edge's far end.
+    #[wasm_bindgen(js_name = "filletV2Corners")]
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn fillet_v2_corners(
+        &mut self,
+        solid: u32,
+        edge_handles: Vec<u32>,
+        radius: f64,
+        corners_json: &str,
+    ) -> Result<u32, JsError> {
+        validate_positive(radius, "radius")?;
+        let solid_id = self.resolve_solid(solid)?;
+        let edge_ids: Vec<_> = edge_handles
+            .iter()
+            .map(|&h| self.resolve_edge(h))
+            .collect::<Result<_, _>>()?;
+        let parsed: serde_json::Value =
+            serde_json::from_str(corners_json).map_err(|e| WasmError::InvalidInput {
+                reason: format!("corners are not JSON: {e}"),
+            })?;
+        let corners = self
+            .parse_fillet_corners(&parsed)
+            .map_err(|reason| WasmError::InvalidInput { reason })?;
+        let outcome =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<u32, JsError> {
+                let result = brepkit_operations::blend_ops::fillet_v2_with_corners(
+                    self.topo_mut(),
+                    solid_id,
+                    &edge_ids,
+                    radius,
+                    &corners,
+                )?;
+                Ok(solid_id_to_u32(result))
+            }));
+        match outcome {
+            Ok(inner) => inner,
+            Err(panic_info) => Err(JsError::new(&panic_message(&panic_info, "FilletV2Corners"))),
+        }
+    }
+
     /// Fillet edges using the v2 walking-based blend engine.
     ///
     /// Returns a new solid handle.
@@ -1921,6 +1972,110 @@ impl BrepKernel {
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    /// A box's corner at the origin, and the three edges meeting there, as handles.
+    fn box_corner(k: &crate::kernel::BrepKernel, solid: u32) -> (u32, Vec<u32>) {
+        use brepkit_topology::explorer::{solid_edges, solid_vertices};
+
+        let id = k.resolve_solid(solid).unwrap();
+        let topo = k.topo();
+        let corner = solid_vertices(topo, id)
+            .unwrap()
+            .into_iter()
+            .find(|&v| {
+                let p = topo.vertex(v).unwrap().point();
+                p.x().abs() + p.y().abs() + p.z().abs() < 1e-9
+            })
+            .unwrap();
+        let edges = solid_edges(topo, id)
+            .unwrap()
+            .into_iter()
+            .filter(|&e| {
+                let edge = topo.edge(e).unwrap();
+                edge.start() == corner || edge.end() == corner
+            })
+            .map(crate::handles::edge_id_to_u32)
+            .collect();
+        (crate::handles::vertex_id_to_u32(corner), edges)
+    }
+
+    #[test]
+    fn a_fillets_corner_sets_back_through_the_batch_and_directly() {
+        let mut k = crate::kernel::BrepKernel::new();
+        let body = k.make_box_solid(20.0, 20.0, 20.0).unwrap();
+        let (corner, edges) = box_corner(&k, body);
+        let setbacks = |d: [f64; 3]| {
+            edges
+                .iter()
+                .zip(d)
+                .map(|(e, distance)| serde_json::json!({"edge": e, "distance": distance}))
+                .collect::<Vec<_>>()
+        };
+        let face_count = |k: &crate::kernel::BrepKernel, solid: u32| {
+            let id = k.resolve_solid(solid).unwrap();
+            brepkit_topology::explorer::solid_faces(k.topo(), id)
+                .unwrap()
+                .len()
+        };
+        let corners = serde_json::json!([
+            {"vertex": corner, "setbacks": setbacks([3.0, 4.0, 5.0]), "corner": "g2"}
+        ]);
+        let batch = |corners: &serde_json::Value| {
+            serde_json::json!([{"op": "filletV2Corners", "args": {
+                "solid": body, "edges": edges, "radius": 2.0, "corners": corners
+            }}])
+            .to_string()
+        };
+
+        let reply: serde_json::Value =
+            serde_json::from_str(&k.execute_batch(&batch(&corners))).unwrap();
+        let by_batch = u32::try_from(reply[0]["ok"].as_u64().unwrap()).unwrap();
+        assert_eq!(face_count(&k, by_batch), 11);
+
+        let direct = k
+            .fillet_v2_corners(body, edges.clone(), 2.0, &corners.to_string())
+            .unwrap();
+        assert_eq!(face_count(&k, direct), 11);
+
+        // No set-backs at a G2 corner still sets it back, and a rolling one keeps
+        // its ball, one face fewer.
+        let g2 = serde_json::json!([{"vertex": corner, "corner": "g2"}]);
+        let reply: serde_json::Value = serde_json::from_str(&k.execute_batch(&batch(&g2))).unwrap();
+        assert_eq!(
+            face_count(&k, u32::try_from(reply[0]["ok"].as_u64().unwrap()).unwrap()),
+            11
+        );
+        let rolling = serde_json::json!([{"vertex": corner}]);
+        let reply: serde_json::Value =
+            serde_json::from_str(&k.execute_batch(&batch(&rolling))).unwrap();
+        assert_eq!(
+            face_count(&k, u32::try_from(reply[0]["ok"].as_u64().unwrap()).unwrap()),
+            10
+        );
+
+        for bad in [
+            serde_json::json!([{"vertex": corner, "setbacks": setbacks([1.0, 4.0, 5.0])}]),
+            serde_json::json!([{"vertex": corner, "corner": "smooth"}]),
+            serde_json::json!([{"vertex": corner, "corner": true}]),
+            serde_json::json!([{"vertex": corner, "corner": 42}]),
+            serde_json::json!([{"vertex": 4_294_967_296_u64}]),
+            serde_json::json!([{"vertex": corner, "setbacks": [{"edge": edges[0], "distance": -1.0}]}]),
+            serde_json::json!({"vertex": corner}),
+        ] {
+            let reply: serde_json::Value =
+                serde_json::from_str(&k.execute_batch(&batch(&bad))).unwrap();
+            assert!(reply[0].get("error").is_some(), "{bad}: {reply}");
+        }
+
+        // A solid handle past `u32` names no solid, not the one it wraps to.
+        let wrapped = serde_json::json!([{"op": "filletV2Corners", "args": {
+            "solid": u64::from(body) + (1_u64 << 32), "edges": edges, "radius": 2.0,
+            "corners": corners
+        }}]);
+        let reply: serde_json::Value =
+            serde_json::from_str(&k.execute_batch(&wrapped.to_string())).unwrap();
+        assert!(reply[0].get("error").is_some(), "{reply}");
+    }
 
     /// A line 10 long then a half circle of radius 5, as a wire.
     fn line_and_half_circle(k: &mut crate::kernel::BrepKernel) -> u32 {
