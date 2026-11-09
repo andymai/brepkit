@@ -46,79 +46,132 @@ const R: f64 = 8.0;
 const X0: f64 = 10.0;
 const H: f64 = 6.0;
 
-/// The arc's centre on the x axis.
-fn centre() -> f64 {
-    X0 - (R * R - B * B).sqrt()
+/// A D's half width `b` and its arc's radius.
+#[derive(Clone, Copy, Debug)]
+struct Profile {
+    b: f64,
+    arc: f64,
 }
 
-/// The D, its arc counter-clockwise about `+z` from `(X0, -B)` to `(X0, B)`.
-fn d_prism(topo: &mut Topology) -> SolidId {
-    let corners = [(X0, -B), (X0, B), (0.0, B), (0.0, -B)];
-    let ids: Vec<_> = corners
-        .iter()
-        .map(|&(x, y)| topo.add_vertex(Vertex::new(Point3::new(x, y, 0.0), 1e-7)))
-        .collect();
-    let arc = Circle3D::new(Point3::new(centre(), 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), R).unwrap();
-    let edges: Vec<_> = (0..ids.len())
-        .map(|i| {
-            let curve = if i == 0 {
-                EdgeCurve::Circle(arc.clone())
-            } else {
-                EdgeCurve::Line
-            };
-            let edge = Edge::new(ids[i], ids[(i + 1) % ids.len()], curve);
-            OrientedEdge::new(topo.add_edge(edge), true)
-        })
-        .collect();
-    let wire = topo.add_wire(Wire::new(edges, true).unwrap());
-    let face = topo.add_face(Face::new(
-        wire,
-        vec![],
-        FaceSurface::Plane {
-            normal: Vec3::new(0.0, 0.0, 1.0),
-            d: 0.0,
-        },
-    ));
-    extrude(topo, face, Vec3::new(0.0, 0.0, 1.0), H).unwrap()
-}
+/// The D of most tests.
+const D: Profile = Profile { b: B, arc: R };
 
-/// The straight edge of `solid` along `x` at `y = B` and height `z`.
-fn side_edge(topo: &Topology, solid: SolidId, z: f64) -> EdgeId {
-    solid_edges(topo, solid)
-        .unwrap()
-        .into_iter()
-        .find(|&edge_id| {
-            let edge = topo.edge(edge_id).unwrap();
-            let [p, q] = [edge.start(), edge.end()].map(|v| topo.vertex(v).unwrap().point());
-            matches!(edge.curve(), EdgeCurve::Line)
-                && [p, q]
-                    .iter()
-                    .all(|p| (p.y() - B).abs() < 1e-9 && (p.z() - z).abs() < 1e-9)
-                && (p.x() - q.x()).abs() > 1.0
-        })
-        .expect("the edge")
-}
+/// A D whose arc meets its sides almost tangentially: the round's end on
+/// the cylinder bends hard near the side face.
+const NEAR_TANGENT: Profile = Profile { b: 5.0, arc: 5.01 };
 
-/// The volume the round of radius `r` takes off.
-fn removed(r: f64) -> f64 {
-    // Simpson's rule in `u`, where the integrand is smooth.
-    const N: usize = 2000;
-    let c = centre();
-    let f = |u: f64| {
-        let t = r * u.sin();
-        let depth = r * (1.0 - u.cos());
-        let y = B - r + t;
-        depth * (c + (R * R - y * y).sqrt()) * r * u.cos()
-    };
-    #[allow(clippy::cast_precision_loss)]
-    let h = FRAC_PI_2 / N as f64;
-    let mut sum = f(0.0) + f(FRAC_PI_2);
-    for k in 1..N {
-        #[allow(clippy::cast_precision_loss)]
-        let u = h * k as f64;
-        sum += if k % 2 == 1 { 4.0 } else { 2.0 } * f(u);
+impl Profile {
+    /// The arc's centre on the x axis.
+    fn centre(self) -> f64 {
+        X0 - self.arc.mul_add(self.arc, -self.b * self.b).sqrt()
     }
-    sum * h / 3.0
+
+    /// The D, its arc counter-clockwise about `+z` from `(X0, -b)` to
+    /// `(X0, b)`.
+    fn prism(self, topo: &mut Topology) -> SolidId {
+        let b = self.b;
+        let corners = [(X0, -b), (X0, b), (0.0, b), (0.0, -b)];
+        let ids: Vec<_> = corners
+            .iter()
+            .map(|&(x, y)| topo.add_vertex(Vertex::new(Point3::new(x, y, 0.0), 1e-7)))
+            .collect();
+        let arc = Circle3D::new(
+            Point3::new(self.centre(), 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            self.arc,
+        )
+        .unwrap();
+        let edges: Vec<_> = (0..ids.len())
+            .map(|i| {
+                let curve = if i == 0 {
+                    EdgeCurve::Circle(arc.clone())
+                } else {
+                    EdgeCurve::Line
+                };
+                let edge = Edge::new(ids[i], ids[(i + 1) % ids.len()], curve);
+                OrientedEdge::new(topo.add_edge(edge), true)
+            })
+            .collect();
+        let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+        let face = topo.add_face(Face::new(
+            wire,
+            vec![],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: 0.0,
+            },
+        ));
+        extrude(topo, face, Vec3::new(0.0, 0.0, 1.0), H).unwrap()
+    }
+
+    /// The straight edge of `solid` along `x` at `y = b` and height `z`.
+    fn side_edge(self, topo: &Topology, solid: SolidId, z: f64) -> EdgeId {
+        solid_edges(topo, solid)
+            .unwrap()
+            .into_iter()
+            .find(|&edge_id| {
+                let edge = topo.edge(edge_id).unwrap();
+                let [p, q] = [edge.start(), edge.end()].map(|v| topo.vertex(v).unwrap().point());
+                matches!(edge.curve(), EdgeCurve::Line)
+                    && [p, q]
+                        .iter()
+                        .all(|p| (p.y() - self.b).abs() < 1e-9 && (p.z() - z).abs() < 1e-9)
+                    && (p.x() - q.x()).abs() > 1.0
+            })
+            .expect("the edge")
+    }
+
+    /// The volume the round of radius `r` takes off.
+    fn removed(self, r: f64) -> f64 {
+        // Simpson's rule in `u`, where the integrand is smooth.
+        const N: usize = 2000;
+        let c = self.centre();
+        let f = |u: f64| {
+            let t = r * u.sin();
+            let depth = r * (1.0 - u.cos());
+            let y = self.b - r + t;
+            depth * (c + self.arc.mul_add(self.arc, -y * y).sqrt()) * r * u.cos()
+        };
+        #[allow(clippy::cast_precision_loss)]
+        let h = FRAC_PI_2 / N as f64;
+        let mut sum = f(0.0) + f(FRAC_PI_2);
+        for k in 1..N {
+            #[allow(clippy::cast_precision_loss)]
+            let u = h * k as f64;
+            sum += if k % 2 == 1 { 4.0 } else { 2.0 } * f(u);
+        }
+        sum * h / 3.0
+    }
+}
+
+/// The farthest any edge of `solid` lies off a face it bounds, from 64
+/// samples along each.
+fn edges_off_faces(topo: &Topology, solid: SolidId) -> f64 {
+    let mut farthest = 0.0_f64;
+    for face_id in solid_faces(topo, solid).unwrap() {
+        let face = topo.face(face_id).unwrap();
+        let surface = face.surface();
+        for wire_id in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied())
+        {
+            for oriented in topo.wire(wire_id).unwrap().edges() {
+                let edge = topo.edge(oriented.edge()).unwrap();
+                let [a, b] = [edge.start(), edge.end()].map(|v| topo.vertex(v).unwrap().point());
+                let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
+                for k in 0..=64 {
+                    let t = (t1 - t0).mul_add(f64::from(k) / 64.0, t0);
+                    let p = edge.curve().evaluate_with_endpoints(t, a, b);
+                    let off = if let FaceSurface::Plane { normal, d } = surface {
+                        (normal.dot(Vec3::new(p.x(), p.y(), p.z())) - d).abs()
+                    } else {
+                        let (u, v) = surface.project_point(p).unwrap();
+                        (surface.evaluate(u, v).unwrap() - p).length()
+                    };
+                    farthest = farthest.max(off);
+                }
+            }
+        }
+    }
+    farthest
 }
 
 /// The D turned about two axes and moved off the origin.
@@ -126,12 +179,16 @@ fn turned() -> Mat4 {
     Mat4::translation(37.0, 483.0, -11.0) * Mat4::rotation_z(0.4229) * Mat4::rotation_x(1.0)
 }
 
-fn assert_round_ends_on_the_curve(z: f64, r: f64, pose: Option<Mat4>) {
+/// Rounds the edge of the D `profile` at height `z` with radius `r`, the D
+/// moved by `pose`, and checks the result: valid, watertight, the round its
+/// only new face, every edge on the faces it bounds, and the strip out to
+/// the cylinder taken off.
+fn assert_round_ends_on_the_curve(profile: Profile, z: f64, r: f64, pose: Option<Mat4>) {
     let mut topo = Topology::new();
-    let solid = d_prism(&mut topo);
+    let solid = profile.prism(&mut topo);
     let before = solid_volume(&topo, solid, 1e-3).unwrap();
     let faces = solid_faces(&topo, solid).unwrap().len();
-    let edge = side_edge(&topo, solid, z);
+    let edge = profile.side_edge(&topo, solid, z);
     if let Some(pose) = pose {
         transform_solid(&mut topo, solid, &pose).unwrap();
     }
@@ -146,8 +203,10 @@ fn assert_round_ends_on_the_curve(z: f64, r: f64, pose: Option<Mat4>) {
         faces + 1,
         "z {z} r {r}: the round alone is new"
     );
+    let off = edges_off_faces(&topo, result.solid);
+    assert!(off <= 1e-6, "z {z} r {r}: an edge lies {off} off a face");
     let lost = before - solid_volume(&topo, result.solid, 1e-3).unwrap();
-    let expected = removed(r);
+    let expected = profile.removed(r);
     assert!(
         (lost - expected).abs() <= 1e-6 * before,
         "z {z} r {r}: removed {lost}, the strip out to the cylinder {expected}"
@@ -157,21 +216,28 @@ fn assert_round_ends_on_the_curve(z: f64, r: f64, pose: Option<Mat4>) {
 #[test]
 fn top_edge_ending_on_the_cylinder() {
     for r in [1.0, 2.0] {
-        assert_round_ends_on_the_curve(H, r, None);
+        assert_round_ends_on_the_curve(D, H, r, None);
     }
 }
 
 #[test]
 fn bottom_edge_ending_on_the_cylinder() {
     for r in [1.0, 2.0] {
-        assert_round_ends_on_the_curve(0.0, r, None);
+        assert_round_ends_on_the_curve(D, 0.0, r, None);
     }
 }
 
 #[test]
 fn edges_of_a_turned_d_ending_on_the_cylinder() {
     for z in [0.0, H] {
-        assert_round_ends_on_the_curve(z, 2.0, Some(turned()));
+        assert_round_ends_on_the_curve(D, z, 2.0, Some(turned()));
+    }
+}
+
+#[test]
+fn edges_ending_on_a_nearly_tangent_cylinder() {
+    for z in [0.0, H] {
+        assert_round_ends_on_the_curve(NEAR_TANGENT, z, 2.0, None);
     }
 }
 
@@ -179,11 +245,11 @@ fn edges_of_a_turned_d_ending_on_the_cylinder() {
 /// deep, its mouth centred where the arc is at `y`, at height `z`.
 fn d_prism_with_hole(topo: &mut Topology, y: f64, z: f64) -> SolidId {
     const HOLE: f64 = 0.15;
-    let solid = d_prism(topo);
+    let solid = D.prism(topo);
     let turn = (y / R).asin();
     let drill = make_cylinder(topo, HOLE, 1.5).unwrap();
     let place = Mat4::translation(
-        (R - 1.0).mul_add(turn.cos(), centre()),
+        (R - 1.0).mul_add(turn.cos(), D.centre()),
         (R - 1.0) * turn.sin(),
         z,
     ) * Mat4::rotation_z(turn)
@@ -198,7 +264,7 @@ fn a_round_whose_notch_would_cross_a_hole_in_its_curved_cap_is_refused() {
     // off the arc wall: the notch would cut through the hole's wall.
     let mut topo = Topology::new();
     let solid = d_prism_with_hole(&mut topo, 4.5, 5.6);
-    let edge = side_edge(&topo, solid, H);
+    let edge = D.side_edge(&topo, solid, H);
     let refused = match fillet_v2(&mut topo, solid, &[edge], 2.0) {
         Err(_) => true,
         Ok(result) => !result.failed.is_empty(),
@@ -212,7 +278,7 @@ fn a_hole_clear_of_the_notch_keeps_the_round() {
     let mut topo = Topology::new();
     let solid = d_prism_with_hole(&mut topo, 0.0, 3.0);
     let before = solid_volume(&topo, solid, 1e-3).unwrap();
-    let edge = side_edge(&topo, solid, H);
+    let edge = D.side_edge(&topo, solid, H);
     let result = fillet_v2(&mut topo, solid, &[edge], r).unwrap();
     assert!(result.failed.is_empty(), "{:?}", result.failed);
     let report = validate_solid(&topo, result.solid).unwrap();
@@ -220,7 +286,7 @@ fn a_hole_clear_of_the_notch_keeps_the_round() {
     let mesh = tessellate_solid(&topo, result.solid, 0.01).unwrap();
     assert!(is_watertight(&mesh), "mesh open");
     let lost = before - solid_volume(&topo, result.solid, 1e-3).unwrap();
-    let expected = removed(r);
+    let expected = D.removed(r);
     assert!(
         (lost - expected).abs() <= 1e-6 * before,
         "removed {lost}, the strip out to the cylinder {expected}"

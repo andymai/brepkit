@@ -2935,15 +2935,18 @@ fn line_meets_surface(
 
 /// The curve where a cylinder band meets a curved cap between the contact
 /// ends `a` and `b`: each ruling of the band, the shorter way round from `a`
-/// to `b`, cut by the cap's surface, and a cubic through those points.
-/// `None` where a ruling misses the cap.
+/// to `b`, cut by the cap's surface, and a cubic through those points. The
+/// rulings are doubled until the cubic lies on both the band and the cap
+/// between its points, within the cuts' tolerance. `None` where a ruling
+/// misses the cap, or the cubic stays off them.
 fn cylinder_meets_cap(
     cylinder: &brepkit_math::surfaces::CylindricalSurface,
     cap: &FaceSurface,
     a: Point3,
     b: Point3,
 ) -> Option<EdgeCurve> {
-    const SAMPLES: usize = 32;
+    const FIRST: usize = 32;
+    const MOST: usize = 2048;
     let axis = cylinder.axis();
     let origin = cylinder.origin();
     let radius = cylinder.radius();
@@ -2956,22 +2959,73 @@ fn cylinder_meets_cap(
     let across = axis.cross(ra);
     let angle = rb.dot(across).atan2(rb.dot(ra));
     let (sa, sb) = ((a - origin).dot(axis), (b - origin).dot(axis));
-    let mut points = Vec::with_capacity(SAMPLES + 1);
-    points.push(a);
-    let mut s = sa;
-    for k in 1..SAMPLES {
-        #[allow(clippy::cast_precision_loss)]
-        let f = k as f64 / SAMPLES as f64;
+    // The ruling `f` of the way round from `a`, cut by the cap from a guess
+    // of its height along the axis: the point and its height.
+    let cut = |f: f64, guess: f64| -> Option<(Point3, f64)> {
         let theta = angle * f;
         let foot = origin + (ra * theta.cos() + across * theta.sin()) * radius;
-        let guess = s + (sb - s) / ((SAMPLES - k + 1) as f64);
-        s = line_meets_surface(cap, foot, axis, guess, tol)?;
-        points.push(foot + axis * s);
+        let s = line_meets_surface(cap, foot, axis, guess, tol)?;
+        Some((foot + axis * s, s))
+    };
+    // How far a point lies off the band or the cap, whichever is farther.
+    let off = |p: Point3| -> Option<f64> {
+        let (u, v) = cap.project_point(p)?;
+        let on_cap = (cap.evaluate(u, v)? - p).length();
+        Some(on_cap.max((radial(p).length() - radius).abs()))
+    };
+    let mut cuts = Vec::with_capacity(FIRST + 1);
+    cuts.push((a, sa));
+    for k in 1..FIRST {
+        let s = cuts[k - 1].1;
+        #[allow(clippy::cast_precision_loss)]
+        let guess = s + (sb - s) / ((FIRST - k + 1) as f64);
+        #[allow(clippy::cast_precision_loss)]
+        cuts.push(cut(k as f64 / FIRST as f64, guess)?);
     }
-    points.push(b);
-    brepkit_math::nurbs::fitting::interpolate(&points, 3)
-        .ok()
-        .map(EdgeCurve::NurbsCurve)
+    cuts.push((b, sb));
+    loop {
+        let points: Vec<Point3> = cuts.iter().map(|&(p, _)| p).collect();
+        let curve = brepkit_math::nurbs::fitting::interpolate(&points, 3).ok()?;
+        // The cubic takes its points at their chord-length parameters: check
+        // it at the quarters between each two.
+        let mut lengths = Vec::with_capacity(points.len());
+        let mut total = 0.0;
+        lengths.push(0.0);
+        for pair in points.windows(2) {
+            total += (pair[1] - pair[0]).length();
+            lengths.push(total);
+        }
+        if total <= tol {
+            return None;
+        }
+        let (t0, t1) = curve.domain();
+        let mut on = true;
+        'check: for pair in lengths.windows(2) {
+            for quarter in [0.25, 0.5, 0.75] {
+                let along = (pair[1] - pair[0]).mul_add(quarter, pair[0]) / total;
+                if off(curve.evaluate((t1 - t0).mul_add(along, t0)))? > tol {
+                    on = false;
+                    break 'check;
+                }
+            }
+        }
+        if on {
+            return Some(EdgeCurve::NurbsCurve(curve));
+        }
+        let steps = cuts.len() - 1;
+        if steps >= MOST {
+            return None;
+        }
+        let mut finer = Vec::with_capacity(2 * steps + 1);
+        for (k, pair) in cuts.windows(2).enumerate() {
+            finer.push(pair[0]);
+            #[allow(clippy::cast_precision_loss)]
+            let f = (2 * k + 1) as f64 / (2 * steps) as f64;
+            finer.push(cut(f, f64::midpoint(pair[0].1, pair[1].1))?);
+        }
+        finer.push((b, sb));
+        cuts = finer;
+    }
 }
 
 /// The cap a stripe's end was run on to: a tilted plane (outward normal and
