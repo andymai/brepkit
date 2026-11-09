@@ -689,6 +689,81 @@ impl BrepKernel {
                     .map_err(|e| e.to_string())?;
                 Ok(serde_json::json!(shell_id_to_u32(shell)))
             }
+            "blendSurface" => {
+                let chain = |this: &Self, key: &str| -> Result<Vec<_>, String> {
+                    handles_in(args, key)?
+                        .iter()
+                        .map(|&h| this.resolve_edge(h).map_err(|e| e.to_string()))
+                        .collect()
+                };
+                let edges_a = chain(self, "chainA")?;
+                let edges_b = chain(self, "chainB")?;
+                let face_a = self
+                    .resolve_face(get_u32(args, "faceA")?)
+                    .map_err(|e| e.to_string())?;
+                let face_b = self
+                    .resolve_face(get_u32(args, "faceB")?)
+                    .map_err(|e| e.to_string())?;
+                let options = crate::helpers::blend_surface_options(args)?;
+                let face = brepkit_operations::blend_surface::blend_surface(
+                    self.topo_mut(),
+                    &edges_a,
+                    face_a,
+                    &edges_b,
+                    face_b,
+                    &options,
+                )
+                .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!(face_id_to_u32(face)))
+            }
+            "matchSurface" => {
+                let face = self
+                    .resolve_face(get_u32(args, "face")?)
+                    .map_err(|e| e.to_string())?;
+                let edge = self
+                    .resolve_edge(get_u32(args, "edge")?)
+                    .map_err(|e| e.to_string())?;
+                let target = self
+                    .resolve_edge(get_u32(args, "targetEdge")?)
+                    .map_err(|e| e.to_string())?;
+                let continuity = crate::helpers::match_continuity(args)?;
+                let result = if args["targetFace"].is_null() {
+                    brepkit_operations::blend_surface::match_surface(
+                        self.topo_mut(),
+                        face,
+                        edge,
+                        target,
+                        continuity,
+                    )
+                } else {
+                    let on = self
+                        .resolve_face(get_u32(args, "targetFace")?)
+                        .map_err(|e| e.to_string())?;
+                    brepkit_operations::blend_surface::match_surface_on(
+                        self.topo_mut(),
+                        face,
+                        edge,
+                        target,
+                        on,
+                        continuity,
+                    )
+                }
+                .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!(face_id_to_u32(result)))
+            }
+            "fairSurface" => {
+                let face = self
+                    .resolve_face(get_u32(args, "face")?)
+                    .map_err(|e| e.to_string())?;
+                let tolerance = get_f64(args, "tolerance")?;
+                let result = brepkit_operations::blend_surface::fair_surface(
+                    self.topo_mut(),
+                    face,
+                    tolerance,
+                )
+                .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!(face_id_to_u32(result)))
+            }
             "sweepWire" => {
                 let w = get_u32(args, "wire")?;
                 let edge_handles = handles_in(args, "pathEdges")?;
@@ -955,6 +1030,25 @@ impl BrepKernel {
                 .map_err(|e| e.to_string())?;
                 let solid = brepkit_operations::blend_ops::all_blended(result)
                     .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!(solid_id_to_u32(solid)))
+            }
+            "filletV2Corners" => {
+                let s = get_u32(args, "solid")?;
+                let radius = get_f64(args, "radius")?;
+                let solid_id = self.resolve_solid(s).map_err(|e| e.to_string())?;
+                let edge_ids = handles_in(args, "edges")?
+                    .into_iter()
+                    .map(|h| self.resolve_edge(h).map_err(|e| e.to_string()))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let corners = self.parse_fillet_corners(&args["corners"])?;
+                let solid = brepkit_operations::blend_ops::fillet_v2_with_corners(
+                    self.topo_mut(),
+                    solid_id,
+                    &edge_ids,
+                    radius,
+                    &corners,
+                )
+                .map_err(|e| e.to_string())?;
                 Ok(serde_json::json!(solid_id_to_u32(solid)))
             }
             "chamferV2" => {

@@ -560,21 +560,28 @@ pub(crate) fn split_edge_at(
     split_vertex: VertexId,
 ) -> Result<(OrientedEdge, OrientedEdge), BlendError> {
     let edge = topo.edge(oe.edge())?;
-    let start_vid = oe.oriented_start(edge);
-    let end_vid = oe.oriented_end(edge);
+    let (s_v, e_v) = (edge.start(), edge.end());
     let curve = edge.curve().clone();
 
-    let e1_id = topo.add_edge(Edge::new(start_vid, split_vertex, curve.clone()));
-    let e2_id = topo.add_edge(Edge::new(split_vertex, end_vid, curve));
+    // The sub-edges run in the edge's stored direction, so they keep its
+    // sense along the curve: a circle's arc built against it would run the
+    // long way round from the split.
+    let e1_id = topo.add_edge(Edge::new(s_v, split_vertex, curve.clone()));
+    let e2_id = topo.add_edge(Edge::new(split_vertex, e_v, curve));
 
-    propagate_split(topo, oe.edge(), oe.is_forward(), e1_id, e2_id)?;
+    propagate_split(topo, oe.edge(), true, e1_id, e2_id)?;
 
-    // Both sub-edges are traversed forward in the oriented direction
-    // because we constructed them S→V and V→E matching the traversal.
-    Ok((
-        OrientedEdge::new(e1_id, true),
-        OrientedEdge::new(e2_id, true),
-    ))
+    if oe.is_forward() {
+        Ok((
+            OrientedEdge::new(e1_id, true),
+            OrientedEdge::new(e2_id, true),
+        ))
+    } else {
+        Ok((
+            OrientedEdge::new(e2_id, false),
+            OrientedEdge::new(e1_id, false),
+        ))
+    }
 }
 
 /// Split an oriented boundary edge at a vertex, assigning each sub-edge its
@@ -1510,11 +1517,13 @@ pub enum BoundarySplitPolicy<'a> {
     /// contacts elsewhere already close through shared junction edges.
     /// A face with several contacts also splits a straight piece of an edge
     /// in `spokes`, listed by its two ends, where a contact ends on it (unless
-    /// the piece touches an `unsplit` vertex): a sharp mitre's
-    /// retained edge, which the mitre shortens to there, and a smooth edge
-    /// two stripes run on round on one section, which their shared section
-    /// then ends on. Both need the split on a side face that a second
-    /// contact crosses too (a slab rounded round both its faces' outlines).
+    /// the piece touches an `unsplit` vertex): a straight sharp edge left
+    /// unselected where two contours meet, on which the contacts of the rounds
+    /// on its two faces end (a convex corner's mitre shortens it to there,
+    /// and at a reflex corner the rounds pivot on it), and a smooth edge two
+    /// stripes run on round on one section, which their shared section then
+    /// ends on. Both need the split on a side face that a second contact
+    /// crosses too (a slab rounded round both its faces' outlines).
     Selective {
         unsplit: &'a std::collections::HashSet<VertexId>,
         notchable: &'a std::collections::HashSet<VertexId>,

@@ -1976,12 +1976,16 @@ fn cdt_in_surface_frame(
 
     let anchored = anchor_closed_edges_at_vertices(topo, wire, edge_global_indices, merged)?;
 
-    // A pointed cone's wall whose seam a hole notches is walked from a seam
-    // edge that follows another edge: every other stretch then runs between
-    // seam samples, and no seam run loses its samples to the loop's closure.
-    let notched_cone = notched_pointed_cone(topo, face_data, wire)?;
+    // A pointed cone's wall is walked from a seam edge that follows another
+    // edge: every other stretch then runs between seam samples, and no seam
+    // run loses its samples to the loop's closure. Walked from a rim, the
+    // stretch after the seam stays where the unwrap through the apex left
+    // it, a period off the seam copy it starts from. A wall whose seam a
+    // hole notches (more than one seam edge) is told apart below.
+    let cone_seams = pointed_cone_seams(topo, face_data, wire)?;
+    let notched_cone = cone_seams > 1;
     let mut edges = wire.edges().to_vec();
-    if notched_cone {
+    if cone_seams > 0 {
         let seam = |i: usize| {
             edges
                 .iter()
@@ -3317,15 +3321,16 @@ fn seam_span(
         .map(|(_, &(u, _))| (u, period))
 }
 
-/// Whether a cone face is a pointed cone's wall whose seam a hole notches:
-/// its wire runs more than one seam edge each way, and reaches the apex.
-fn notched_pointed_cone(
+/// How many seam edges a pointed cone's wall runs each way: the edges its
+/// wire runs both ways, when the wire reaches the apex (zero otherwise). A
+/// wall whose seam a hole notches runs more than one.
+fn pointed_cone_seams(
     topo: &Topology,
     face_data: &brepkit_topology::face::Face,
     wire: &brepkit_topology::wire::Wire,
-) -> Result<bool, crate::OperationsError> {
+) -> Result<usize, crate::OperationsError> {
     let FaceSurface::Cone(cone) = face_data.surface() else {
-        return Ok(false);
+        return Ok(0);
     };
     let edges = wire.edges();
     let twice = edges
@@ -3336,18 +3341,18 @@ fn notched_pointed_cone(
                 && edges[i + 1..].iter().any(|other| other.edge() == oe.edge())
         })
         .count();
-    if twice < 2 {
-        return Ok(false);
+    if twice == 0 {
+        return Ok(0);
     }
     for oe in edges {
         let edge = topo.edge(oe.edge())?;
         for v in [edge.start(), edge.end()] {
             if (topo.vertex(v)?.point() - cone.apex()).length() < 1e-9 {
-                return Ok(true);
+                return Ok(twice);
             }
         }
     }
-    Ok(false)
+    Ok(0)
 }
 
 /// The u of a cylinder's, cone's or u-closed NURBS face's seam, read off a

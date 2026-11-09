@@ -3624,12 +3624,14 @@ impl ComponentMesh {
 }
 
 /// Whether `pieces` share no volume and no face: each piece's interior point,
-/// and the points either side of each of its faces, lie outside every other
-/// piece. The builder splits faces along every section, so a face of a piece
-/// overlapping another lies wholly inside it, and a face pressed against
-/// another piece has that piece on its outer side; an edge or vertex contact
-/// has neither. A builder that kept both copies of coincident solids leaves
-/// pieces that fail the interior point.
+/// and a point just inside each of its faces, lie outside every other piece,
+/// and so, somewhere on each face, do the points just outside it. The builder
+/// splits faces along every section, so a face of a piece overlapping another
+/// lies wholly inside it, and a face pressed against another piece has that
+/// piece on its outer side all over; an edge or vertex contact has neither,
+/// though the gap beside a face may narrow to nothing where the pieces meet.
+/// A builder that kept both copies of coincident solids leaves pieces that
+/// fail the interior point.
 fn pieces_only_touch(topo: &Topology, pieces: &[Vec<FaceId>]) -> bool {
     let meshes: Vec<Option<ComponentMesh>> =
         pieces.iter().map(|p| ComponentMesh::new(topo, p)).collect();
@@ -3652,51 +3654,72 @@ fn pieces_only_touch(topo: &Topology, pieces: &[Vec<FaceId>]) -> bool {
                 .all(|(j, mesh)| i == j || mesh.as_ref().is_some_and(|m| !m.holds(p)))
         };
         component_interior_point(topo, piece).is_some_and(outside_others)
-            && face_witnesses(own, clear).is_some_and(|ws| ws.into_iter().all(outside_others))
+            && face_witnesses(own, clear).is_some_and(|ws| {
+                ws.into_iter().all(|w| {
+                    outside_others(w.inside)
+                        && w.outside
+                            .into_iter()
+                            .any(|[near, far]| outside_others(near) && outside_others(far))
+                })
+            })
     })
 }
 
-/// Points off each of a component's faces: one just inside the component, one
-/// just as far outside, which a neighbour thinner than `clear` still holds, and
-/// one outside by at least `clear`, past the sag of a curved neighbour's mesh.
-/// Each is the centroid of the face's largest mesh triangle, stepped along the
-/// triangle's normal. `None` when a face has no triangle or no step lands in
-/// the component.
-fn face_witnesses(mesh: &ComponentMesh, clear: f64) -> Option<Vec<Point3>> {
+/// How many of a face's mesh triangles carry points just outside it.
+const OUTSIDE_SAMPLES: usize = 8;
+
+/// Points off one face of a component.
+struct FaceWitness {
+    /// A point just inside the component, off the face's largest triangle.
+    inside: Point3,
+    /// Pairs of points outside the face, off triangles spread over it: one
+    /// as far out as `inside` is in, which a neighbour thinner than `clear`
+    /// still holds, and one out by at least `clear`, past the sag of a curved
+    /// neighbour's mesh.
+    outside: Vec<[Point3; 2]>,
+}
+
+/// Points off each of a component's faces, each stepped along a mesh
+/// triangle's normal from its centroid. `None` when a face has no triangle or
+/// no step lands in the component.
+fn face_witnesses(mesh: &ComponentMesh, clear: f64) -> Option<Vec<FaceWitness>> {
     let extent = (mesh.max - mesh.min).length();
-    let mut out = Vec::with_capacity(3 * mesh.faces.len());
-    for face in &mesh.faces {
-        let [a, b, c] = *mesh.triangles[face.clone()].iter().max_by(|p, q| {
-            let area = |[a, b, c]: &[Point3; 3]| (*b - *a).cross(*c - *a).length();
-            area(p).total_cmp(&area(q))
-        })?;
+    let centroid_and_normal = |[a, b, c]: [Point3; 3]| {
         let normal = (b - a).cross(c - a).normalize().ok()?;
         let centroid = Point3::new(
             (a.x() + b.x() + c.x()) / 3.0,
             (a.y() + b.y() + c.y()) / 3.0,
             (a.z() + b.z() + c.z()) / 3.0,
         );
-        let (inside, near, far) = [1e-6, 1e-5, 1e-4, 1e-3]
+        Some((centroid, normal))
+    };
+    let mut out = Vec::with_capacity(mesh.faces.len());
+    for face in &mesh.faces {
+        let run = &mesh.triangles[face.clone()];
+        let largest = run.iter().enumerate().max_by(|(_, p), (_, q)| {
+            let area = |[a, b, c]: &[Point3; 3]| (*b - *a).cross(*c - *a).length();
+            area(p).total_cmp(&area(q))
+        })?;
+        let (centroid, normal) = centroid_and_normal(*largest.1)?;
+        // The step, and the sign of the normal that points into the
+        // component; a face's triangles all wind the same way.
+        let (step, inward) = [1e-6, 1e-5, 1e-4, 1e-3]
             .into_iter()
             .map(|f| f * extent)
             .filter(|&step| step >= 1e-7)
-            .flat_map(|step| {
-                let reach = step.max(clear);
-                [
-                    (
-                        centroid + normal * step,
-                        centroid - normal * step,
-                        centroid - normal * reach,
-                    ),
-                    (
-                        centroid - normal * step,
-                        centroid + normal * step,
-                        centroid + normal * reach,
-                    ),
-                ]
-            })
-            .find(|&(inside, _, _)| mesh.holds(inside))?;
-        out.extend([inside, near, far]);
+            .flat_map(|step| [(step, 1.0), (step, -1.0)])
+            .find(|&(step, sign)| mesh.holds(centroid + normal * (sign * step)))?;
+        let reach = step.max(clear);
+        let stride = run.len().div_ceil(OUTSIDE_SAMPLES).max(1);
+        let outside = std::iter::once(largest.0)
+            .chain((stride / 2..run.len()).step_by(stride))
+            .filter_map(|k| centroid_and_normal(run[k]))
+            .map(|(c, n)| [c - n * (inward * step), c - n * (inward * reach)])
+            .collect();
+        out.push(FaceWitness {
+            inside: centroid + normal * (inward * step),
+            outside,
+        });
     }
     Some(out)
 }

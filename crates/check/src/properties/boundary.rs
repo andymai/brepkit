@@ -31,11 +31,22 @@ pub(super) fn integrand<S: ParametricSurface>(
 ) -> [f64; 8] {
     let p = surface.evaluate(u, v);
     let n = surface.partial_u(u, v).cross(surface.partial_v(u, v));
+    terms(Vec3::new(p.x(), p.y(), p.z()), n, about)
+}
+
+/// The integrands from a point and its normal. Summing about a point of its
+/// own means a solid far from the origin, and only its volume is read: the
+/// moments are left out there, as their coordinates' squares would swamp the
+/// halving's test of whether an integral has settled, and it would never stop.
+fn terms(p: Vec3, n: Vec3, about: Vec3) -> [f64; 8] {
     let n_len = n.length();
-    let pv = Vec3::new(p.x(), p.y(), p.z()) - about;
+    let flux = (p - about).dot(n) / 3.0;
+    if about.length_squared() > 0.0 {
+        return [n_len, flux, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+    }
     [
         n_len,
-        pv.dot(n) / 3.0,
+        flux,
         0.5 * p.x() * p.x() * n.x(),
         0.5 * p.y() * p.y() * n.y(),
         0.5 * p.z() * p.z() * n.z(),
@@ -54,19 +65,7 @@ fn nurbs_integrand(
     about: Vec3,
 ) -> [f64; 8] {
     let d = surface.derivatives(u, v, 1);
-    let (p, n) = (d[0][0], d[1][0].cross(d[0][1]));
-    let n_len = n.length();
-    let pv = p - about;
-    [
-        n_len,
-        pv.dot(n) / 3.0,
-        0.5 * p.x() * p.x() * n.x(),
-        0.5 * p.y() * p.y() * n.y(),
-        0.5 * p.z() * p.z() * n.z(),
-        p.x() * n_len,
-        p.y() * n_len,
-        p.z() * n_len,
-    ]
+    terms(d[0][0], d[1][0].cross(d[0][1]), about)
 }
 
 /// One edge of a wire in its traversal: its curve, end points, and the
@@ -1215,13 +1214,18 @@ pub(super) fn nurbs_face_by_boundary(
             // on the surface, else by a search of the whole surface.
             let on = |t: f64, seed: Option<(f64, f64)>| -> Option<(f64, f64)> {
                 let p = point(t);
+                // Far from the origin a point's own rounding passes a fixed
+                // tolerance: Newton could not settle, and every point of every
+                // edge would take the search.
+                let tolerance =
+                    1e-12_f64.max(2e-14 * p.x().abs().max(p.y().abs()).max(p.z().abs()));
                 if let Some(seed) = seed
-                    && let Ok(q) = project_point_to_surface_from(s, p, seed, 1e-12)
+                    && let Ok(q) = project_point_to_surface_from(s, p, seed, tolerance)
                     && q.distance <= reach
                 {
                     return Some((q.u, q.v));
                 }
-                project_point_to_surface(s, p, 1e-12)
+                project_point_to_surface(s, p, tolerance)
                     .ok()
                     .filter(|q| q.distance <= reach)
                     .map(|q| (q.u, q.v))

@@ -23,6 +23,15 @@ const MAX_DEPTH: u8 = 6;
 /// Initial grid resolution (cells per direction).
 const INITIAL_CELLS: usize = 4;
 
+/// Most crease lines the root grid takes per direction. A surface with more, such
+/// as a faceted sheet, keeps the even grid there: each line multiplies the roots
+/// the other way, and this many keeps them in the hundreds.
+const MAX_CREASE_LINES: usize = 16;
+
+/// Cells a quadtree stops growing at. An even grid's tree cannot reach it, only one
+/// on many crease-lined roots.
+const MAX_CELLS: usize = 200_000;
+
 /// Compute the v-parameter range for a surface by projecting boundary vertices.
 ///
 /// `project_v` maps a 3D point to its v-parameter on the surface.
@@ -365,12 +374,17 @@ fn cell_exceeds_angular(
     v_min: f64,
     v_max: f64,
     angular_tol: f64,
+    creases: &Creases,
 ) -> bool {
     if angular_tol <= 0.0 {
         return false;
     }
     let u_mid = 0.5 * (u_min + u_max);
     let v_mid = 0.5 * (v_min + v_max);
+    // A normal read on a crease is the far side's half the time, so a cell's
+    // corners there are read just inside it.
+    let (u_min, u_max) = inside_creases(u_min, u_max, &creases.u);
+    let (v_min, v_max) = inside_creases(v_min, v_max, &creases.v);
     let normals = [
         safe_normal(surface, u_min, v_min),
         safe_normal(surface, u_max, v_min),
@@ -395,6 +409,7 @@ fn cell_refinement_error(
     u_max: f64,
     v_min: f64,
     v_max: f64,
+    creases: &Creases,
 ) -> f64 {
     let u_mid = 0.5 * (u_min + u_max);
     let v_mid = 0.5 * (v_min + v_max);
@@ -412,11 +427,13 @@ fn cell_refinement_error(
     );
     let sag = (p_mid - bilinear_mid).length();
 
+    let (u_in_lo, u_in_hi) = inside_creases(u_min, u_max, &creases.u);
+    let (v_in_lo, v_in_hi) = inside_creases(v_min, v_max, &creases.v);
     let normals = [
-        safe_normal(surface, u_min, v_min),
-        safe_normal(surface, u_max, v_min),
-        safe_normal(surface, u_max, v_max),
-        safe_normal(surface, u_min, v_max),
+        safe_normal(surface, u_in_lo, v_in_lo),
+        safe_normal(surface, u_in_hi, v_in_lo),
+        safe_normal(surface, u_in_hi, v_in_hi),
+        safe_normal(surface, u_in_lo, v_in_hi),
         safe_normal(surface, u_mid, v_mid),
     ];
 
@@ -477,6 +494,136 @@ fn lerp_point(a: Point3, b: Point3) -> Point3 {
     )
 }
 
+/// The root cells' lines, laid out in `cells` by `u` span then `v` span.
+struct RootGrid {
+    u: Vec<f64>,
+    v: Vec<f64>,
+}
+
+impl RootGrid {
+    /// The first root holding `(u, v)`, a point on a shared line reading the lower.
+    fn holding(&self, u: f64, v: f64) -> Option<usize> {
+        let span = |lines: &[f64], at: f64| {
+            let (&first, &last) = (lines.first()?, lines.last()?);
+            (at >= first && at <= last)
+                .then(|| lines.partition_point(|&line| line < at).saturating_sub(1))
+        };
+        Some(span(&self.u, u)? * (self.v.len() - 1) + span(&self.v, v)?)
+    }
+}
+
+/// A surface's creases along knot lines, by parameter.
+struct Creases {
+    u: Vec<f64>,
+    v: Vec<f64>,
+}
+
+/// The knot lines a surface actually creases along, in `u` and in `v`.
+///
+/// A cell straddling a crease has normals that disagree however small it gets,
+/// so it would divide to the depth limit all along the line. Where the crease is
+/// a cell edge, each side is smooth. A knot repeated up to the degree is no
+/// crease by itself: a rational arc's is smooth, and meshes as it did.
+fn creases(surface: &brepkit_math::nurbs::surface::NurbsSurface) -> Creases {
+    const PROBES: u32 = 5;
+    const CREASE_ANGLE: f64 = 1e-3;
+    // Each full knot with the distinct knots either side, so a probe can step a
+    // share of its own span off the line: a share of the whole domain can pass
+    // through a narrow span, or over a second fold close by.
+    let lines = |knots: &[f64], degree: usize, lo: f64, hi: f64| -> Vec<(f64, f64, f64)> {
+        let runs: Vec<&[f64]> = knots
+            .chunk_by(|a, b| (a - b).abs() <= 1e-12 * (hi - lo))
+            .collect();
+        let mut found = Vec::new();
+        for (i, run) in runs.iter().enumerate() {
+            if run[0] > lo && run[0] < hi && run.len() >= degree && i > 0 && i + 1 < runs.len() {
+                found.push((runs[i - 1][0], run[0], runs[i + 1][0]));
+            }
+        }
+        found
+    };
+    let (u_lo, u_hi) = surface.domain_u();
+    let (v_lo, v_hi) = surface.domain_v();
+    let along =
+        |k: u32, lo: f64, hi: f64| lo + (hi - lo) * (f64::from(k) + 0.5) / f64::from(PROBES);
+    let bends = |a: Vec3, b: Vec3| a.cross(b).length() > CREASE_ANGLE || a.dot(b) < 0.0;
+    let share = |width: f64| 1e-6 * width;
+    let u_lines = lines(surface.knots_u(), surface.degree_u(), u_lo, u_hi)
+        .into_iter()
+        .filter(|&(before, u, after)| {
+            (0..PROBES).any(|k| {
+                let v = along(k, v_lo, v_hi);
+                bends(
+                    safe_normal(surface, u - share(u - before), v),
+                    safe_normal(surface, u + share(after - u), v),
+                )
+            })
+        })
+        .map(|(_, u, _)| u)
+        .collect();
+    let v_lines = lines(surface.knots_v(), surface.degree_v(), v_lo, v_hi)
+        .into_iter()
+        .filter(|&(before, v, after)| {
+            (0..PROBES).any(|k| {
+                let u = along(k, u_lo, u_hi);
+                bends(
+                    safe_normal(surface, u, v - share(v - before)),
+                    safe_normal(surface, u, v + share(after - v)),
+                )
+            })
+        })
+        .map(|(_, v, _)| v)
+        .collect();
+    let capped = |lines: Vec<f64>| {
+        if lines.len() > MAX_CREASE_LINES {
+            Vec::new()
+        } else {
+            lines
+        }
+    };
+    Creases {
+        u: capped(u_lines),
+        v: capped(v_lines),
+    }
+}
+
+/// `[lo, hi]`, each end on a crease moved a hair into the span.
+fn inside_creases(lo: f64, hi: f64, creases: &[f64]) -> (f64, f64) {
+    let hair = 1e-6 * (hi - lo);
+    let on_crease = |at: f64| {
+        creases
+            .iter()
+            .any(|&crease| (crease - at).abs() <= 1e-3 * hair)
+    };
+    (
+        if on_crease(lo) { lo + hair } else { lo },
+        if on_crease(hi) { hi - hair } else { hi },
+    )
+}
+
+/// The even root grid's lines across `[lo, hi]`, with `creases` among them. An even
+/// line beside a crease gives way to it, leaving no sliver between the two.
+fn root_lines(lo: f64, hi: f64, creases: &[f64]) -> Vec<f64> {
+    #[allow(clippy::cast_precision_loss)]
+    let cell = (hi - lo) / INITIAL_CELLS as f64;
+    #[allow(clippy::cast_precision_loss)]
+    let even = |i: usize| lo + (i as f64) * cell;
+    if creases.is_empty() {
+        return (0..=INITIAL_CELLS).map(even).collect();
+    }
+    // The ends by value: `lo + 4 * cell` can fall a hair short of `hi`, and a
+    // crease near it would then take the face's last strip with it.
+    let mut lines = vec![lo, hi];
+    lines.extend((1..INITIAL_CELLS).map(even).filter(|&line| {
+        creases
+            .iter()
+            .all(|&crease| (crease - line).abs() > 0.125 * cell)
+    }));
+    lines.extend_from_slice(creases);
+    lines.sort_by(f64::total_cmp);
+    lines
+}
+
 /// Build the adaptive quadtree by recursive subdivision.
 #[allow(clippy::similar_names)]
 fn build_quadtree(
@@ -485,9 +632,10 @@ fn build_quadtree(
     cell_idx: usize,
     threshold: f64,
     angular_tol: f64,
+    creases: &Creases,
 ) {
     let cell = &cells[cell_idx];
-    if cell.depth >= MAX_DEPTH {
+    if cell.depth >= MAX_DEPTH || cells.len() >= MAX_CELLS {
         return;
     }
 
@@ -497,8 +645,9 @@ fn build_quadtree(
     let v_max = cell.v_max;
     let depth = cell.depth;
 
-    let error = cell_refinement_error(surface, u_min, u_max, v_min, v_max);
-    let angular_exceeded = cell_exceeds_angular(surface, u_min, u_max, v_min, v_max, angular_tol);
+    let error = cell_refinement_error(surface, u_min, u_max, v_min, v_max, creases);
+    let angular_exceeded =
+        cell_exceeds_angular(surface, u_min, u_max, v_min, v_max, angular_tol, creases);
     if error <= threshold && !angular_exceeded {
         return;
     }
@@ -544,7 +693,7 @@ fn build_quadtree(
     cells[cell_idx].children = Some([c0, c0 + 1, c0 + 2, c0 + 3]);
 
     for i in 0..4 {
-        build_quadtree(surface, cells, c0 + i, threshold, angular_tol);
+        build_quadtree(surface, cells, c0 + i, threshold, angular_tol, creases);
     }
 }
 
@@ -552,6 +701,7 @@ fn build_quadtree(
 fn conforming_pass(
     surface: &brepkit_math::nurbs::surface::NurbsSurface,
     cells: &mut Vec<AdaptiveCell>,
+    roots: &RootGrid,
 ) {
     for _pass in 0..MAX_DEPTH {
         let mut to_subdivide = Vec::new();
@@ -568,7 +718,7 @@ fn conforming_pass(
             let v_min = cells[i].v_min;
             let v_max = cells[i].v_max;
 
-            if needs_conforming_subdivision(cells, i, depth, u_min, u_max, v_min, v_max) {
+            if needs_conforming_subdivision(cells, roots, depth, u_min, u_max, v_min, v_max) {
                 to_subdivide.push(i);
             }
         }
@@ -590,7 +740,7 @@ fn conforming_pass(
 #[allow(clippy::similar_names)]
 fn needs_conforming_subdivision(
     cells: &[AdaptiveCell],
-    _cell_idx: usize,
+    roots: &RootGrid,
     depth: u8,
     u_min: f64,
     u_max: f64,
@@ -609,7 +759,7 @@ fn needs_conforming_subdivision(
     ];
 
     for &(pu, pv) in &probes {
-        if let Some(neighbor_depth) = find_leaf_depth_at(cells, pu, pv)
+        if let Some(neighbor_depth) = find_leaf_depth_at(cells, roots, pu, pv)
             && neighbor_depth > depth + 1
         {
             return true;
@@ -619,14 +769,9 @@ fn needs_conforming_subdivision(
 }
 
 /// Find the depth of the leaf cell containing the given parameter point.
-fn find_leaf_depth_at(cells: &[AdaptiveCell], u: f64, v: f64) -> Option<u8> {
-    let n_roots = INITIAL_CELLS * INITIAL_CELLS;
-    for root_idx in 0..n_roots.min(cells.len()) {
-        if let Some(depth) = find_leaf_depth_recursive(cells, root_idx, u, v) {
-            return Some(depth);
-        }
-    }
-    None
+fn find_leaf_depth_at(cells: &[AdaptiveCell], roots: &RootGrid, u: f64, v: f64) -> Option<u8> {
+    let root = roots.holding(u, v)?;
+    find_leaf_depth_recursive(cells, root, u, v)
 }
 
 /// Recursively find the leaf depth at a given point within a cell subtree.
@@ -1254,40 +1399,41 @@ pub(super) fn tessellate_nurbs(
     if su.cross(sv).dot(nrm) < 0.0 {
         handedness = -1.0;
     }
-    #[allow(clippy::cast_precision_loss)]
-    let du = (u_hi - u_lo) / INITIAL_CELLS as f64;
-    #[allow(clippy::cast_precision_loss)]
-    let dv = (v_hi - v_lo) / INITIAL_CELLS as f64;
-    let mut cells = Vec::with_capacity(256);
-
-    for i in 0..INITIAL_CELLS {
-        for j in 0..INITIAL_CELLS {
-            #[allow(clippy::cast_precision_loss)]
-            let u_min = u_lo + (i as f64) * du;
-            #[allow(clippy::cast_precision_loss)]
-            let u_max = u_lo + ((i + 1) as f64) * du;
-            #[allow(clippy::cast_precision_loss)]
-            let v_min = v_lo + (j as f64) * dv;
-            #[allow(clippy::cast_precision_loss)]
-            let v_max = v_lo + ((j + 1) as f64) * dv;
-
-            cells.push(AdaptiveCell {
-                u_min,
-                u_max,
-                v_min,
-                v_max,
-                depth: 0,
-                children: None,
-            });
+    let mut creases = creases(surface);
+    let (roots, mut cells) = loop {
+        let roots = RootGrid {
+            u: root_lines(u_lo, u_hi, &creases.u),
+            v: root_lines(v_lo, v_hi, &creases.v),
+        };
+        let mut cells = Vec::with_capacity(256);
+        for u_span in roots.u.windows(2) {
+            for v_span in roots.v.windows(2) {
+                cells.push(AdaptiveCell {
+                    u_min: u_span[0],
+                    u_max: u_span[1],
+                    v_min: v_span[0],
+                    v_max: v_span[1],
+                    depth: 0,
+                    children: None,
+                });
+            }
         }
-    }
+        let n_roots = cells.len();
+        for i in 0..n_roots {
+            build_quadtree(surface, &mut cells, i, deflection, angular_tol, &creases);
+        }
+        // A tree that ran out of cells left its later roots unread, so it starts
+        // again on the even grid, whose tree the budget always holds.
+        if cells.len() < MAX_CELLS || (creases.u.is_empty() && creases.v.is_empty()) {
+            break (roots, cells);
+        }
+        creases = Creases {
+            u: Vec::new(),
+            v: Vec::new(),
+        };
+    };
 
-    let n_roots = INITIAL_CELLS * INITIAL_CELLS;
-    for i in 0..n_roots {
-        build_quadtree(surface, &mut cells, i, deflection, angular_tol);
-    }
-
-    conforming_pass(surface, &mut cells);
+    conforming_pass(surface, &mut cells, &roots);
 
     let leaf_count = cells.iter().filter(|c| c.children.is_none()).count();
     let mut eval_cache: DetHashMap<(u64, u64), (Point3, Vec3)> = DetHashMap::default();
@@ -1390,5 +1536,135 @@ pub(super) fn tessellate_nurbs(
             indices,
         },
         uvs,
+    }
+}
+
+#[cfg(test)]
+mod crease_tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use brepkit_math::nurbs::surface::NurbsSurface;
+    use brepkit_math::vec::Point3;
+
+    use super::creases;
+
+    /// A half cylinder of two quarter arcs joined at `split`, smooth across it
+    /// however narrow either span.
+    fn half_cylinder(split: f64) -> NurbsSurface {
+        let w = std::f64::consts::FRAC_1_SQRT_2;
+        let row = |x: f64| {
+            vec![
+                Point3::new(x, 5.0, 0.0),
+                Point3::new(x, 5.0, 5.0),
+                Point3::new(x, 0.0, 5.0),
+                Point3::new(x, -5.0, 5.0),
+                Point3::new(x, -5.0, 0.0),
+            ]
+        };
+        NurbsSurface::new(
+            1,
+            2,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![0.0, 0.0, 0.0, split, split, 1.0, 1.0, 1.0],
+            vec![row(0.0), row(10.0)],
+            vec![vec![1.0, w, 1.0, w, 1.0]; 2],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn a_smooth_join_in_a_narrow_span_is_no_crease() {
+        for split in [0.5, 0.0001, 0.9999] {
+            let found = creases(&half_cylinder(split));
+            assert!(
+                found.u.is_empty() && found.v.is_empty(),
+                "at {split}: {:?}",
+                found.v
+            );
+        }
+    }
+
+    /// A bumpy sheet creased along eight knots each way: its crease grid holds
+    /// far more roots than the cell budget can refine.
+    fn creased_bumps() -> NurbsSurface {
+        let spans = 9_usize;
+        let knots = || {
+            let mut knots = vec![0.0; 3];
+            for k in 1..spans {
+                #[allow(clippy::cast_precision_loss)]
+                let at = k as f64 / spans as f64;
+                knots.extend([at, at]);
+            }
+            knots.extend([1.0; 3]);
+            knots
+        };
+        let count = 2 * spans + 1;
+        #[allow(clippy::cast_precision_loss)]
+        let rows: Vec<Vec<Point3>> = (0..count)
+            .map(|i| {
+                (0..count)
+                    .map(|j| {
+                        let z = if i % 2 == 1 && j % 2 == 1 { 1.0 } else { 0.0 };
+                        Point3::new(i as f64, j as f64, z)
+                    })
+                    .collect()
+            })
+            .collect();
+        NurbsSurface::new(2, 2, knots(), knots(), rows, vec![vec![1.0; count]; count]).unwrap()
+    }
+
+    #[test]
+    fn a_tree_out_of_cells_meshes_the_whole_face_evenly() {
+        let surface = creased_bumps();
+        let found = creases(&surface);
+        assert_eq!((found.u.len(), found.v.len()), (8, 8), "the creases");
+        let meshed = super::tessellate_nurbs(&surface, 1e-6, 0.0);
+        let (mesh, uvs) = (&meshed.mesh, &meshed.uvs);
+        let mut worst = 0.0_f64;
+        for t in mesh.indices.chunks_exact(3) {
+            let at = |i: u32| mesh.positions[i as usize];
+            let uv = |i: u32| uvs[i as usize];
+            let (u, v) = (
+                (uv(t[0])[0] + uv(t[1])[0] + uv(t[2])[0]) / 3.0,
+                (uv(t[0])[1] + uv(t[1])[1] + uv(t[2])[1]) / 3.0,
+            );
+            let flat = Point3::new(
+                (at(t[0]).x() + at(t[1]).x() + at(t[2]).x()) / 3.0,
+                (at(t[0]).y() + at(t[1]).y() + at(t[2]).y()) / 3.0,
+                (at(t[0]).z() + at(t[1]).z() + at(t[2]).z()) / 3.0,
+            );
+            worst = worst.max((surface.evaluate(u, v) - flat).length());
+        }
+        // Restarting on the even grid leaves 0.015 at worst. Left to the budget,
+        // the later roots stay whole and read 0.198.
+        assert!(worst < 0.05, "a triangle {worst} off the surface");
+    }
+
+    #[test]
+    fn two_folds_a_hair_apart_are_two_creases() {
+        let (first, gap) = (4.3, 5e-6);
+        let rows: Vec<Vec<Point3>> = [0.0, 10.0]
+            .iter()
+            .map(|&x| {
+                vec![
+                    Point3::new(x, 0.0, 0.0),
+                    Point3::new(x, first, 0.0),
+                    Point3::new(x, first + gap, gap),
+                    Point3::new(x, 10.0, gap),
+                ]
+            })
+            .collect();
+        let knot = first / 10.0;
+        let next = knot + (2.0_f64 * gap * gap).sqrt() / 10.0;
+        let sheet = NurbsSurface::new(
+            1,
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![0.0, 0.0, knot, next, 1.0, 1.0],
+            rows,
+            vec![vec![1.0; 4]; 2],
+        )
+        .unwrap();
+        assert_eq!(creases(&sheet).v.len(), 2);
     }
 }

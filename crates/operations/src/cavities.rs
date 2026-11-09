@@ -66,6 +66,11 @@ fn face_bounds(topo: &Topology, face: FaceId) -> Result<Aabb3, OperationsError> 
     Ok(Aabb3::from_points(points))
 }
 
+/// A box holding each of `faces`.
+fn faces_bounds(topo: &Topology, faces: &[FaceId]) -> Result<Vec<Aabb3>, OperationsError> {
+    faces.iter().map(|&face| face_bounds(topo, face)).collect()
+}
+
 /// A box holding every face of `shell`.
 fn shell_bounds(topo: &Topology, shell: ShellId) -> Result<Aabb3, OperationsError> {
     let mut bounds: Option<Aabb3> = None;
@@ -325,7 +330,8 @@ pub fn keep_cavities(
             made.push(face);
         }
     }
-    clear_of_cavities(topo, &cavities, result, &made, what)?;
+    let reach = faces_bounds(topo, &made)?;
+    clear_of_cavities(topo, &cavities, result, &reach, what)?;
     // The result gets its own copy: a shell shared with the source would
     // move with it under an in-place transform of either.
     let copied = crate::copy::copy_shells(topo, &cavities)?;
@@ -391,7 +397,8 @@ pub fn detach_walked(
         // The cavities are read against the outer shell alone: the walked
         // result still holds them, so their vertices lie on its boundary.
         let bare = topo.add_solid(brepkit_topology::solid::Solid::new(outer, Vec::new()));
-        clear_of_cavities(topo, &cavities, bare, &made, what)?;
+        let reach = faces_bounds(topo, &made)?;
+        clear_of_cavities(topo, &cavities, bare, &reach, what)?;
     }
 
     let shells: Vec<ShellId> = std::iter::once(outer)
@@ -427,6 +434,25 @@ pub fn clear_of_own_cavities(
     made: &[FaceId],
     what: &str,
 ) -> Result<(), OperationsError> {
+    let reach = faces_bounds(topo, made)?;
+    clear_of_own_cavities_within(topo, result, made, &reach, what)
+}
+
+/// [`clear_of_own_cavities`] with the material the operation changed held in
+/// the boxes `reach` rather than in `made`'s own: a face rebuilt whole around
+/// a small change reaches far past it.
+///
+/// # Errors
+///
+/// Returns [`OperationsError::InvalidInput`] if a cavity could meet that
+/// material, and propagates topology and classification errors.
+pub fn clear_of_own_cavities_within(
+    topo: &mut Topology,
+    result: SolidId,
+    made: &[FaceId],
+    reach: &[Aabb3],
+    what: &str,
+) -> Result<(), OperationsError> {
     let data = topo.solid(result)?;
     let outer = data.outer_shell();
     let mut untouched = Vec::new();
@@ -441,30 +467,25 @@ pub fn clear_of_own_cavities(
     // The cavities are read against the outer shell alone: the result holds
     // them, so their vertices lie on its boundary.
     let bare = topo.add_solid(brepkit_topology::solid::Solid::new(outer, Vec::new()));
-    clear_of_cavities(topo, &untouched, bare, made, what)
+    clear_of_cavities(topo, &untouched, bare, reach, what)
 }
 
-/// Refuses an operation that made `made` on `result` if a cavity could
-/// meet the material it took off: a cavity whose box meets a made face's
-/// box, or whose vertex is not inside `result`.
+/// Refuses an operation on `result` if a cavity could meet the material it
+/// took off, which the boxes `reach` hold: a cavity whose box meets one of
+/// them, or whose vertex is not inside `result`.
 fn clear_of_cavities(
     topo: &Topology,
     cavities: &[ShellId],
     result: SolidId,
-    made: &[FaceId],
+    reach: &[Aabb3],
     what: &str,
 ) -> Result<(), OperationsError> {
-    let mut made_bounds = Vec::with_capacity(made.len());
-    for &face in made {
-        made_bounds.push(face_bounds(topo, face)?);
-    }
-    let made = made_bounds;
     let refused = || OperationsError::InvalidInput {
         reason: format!("the {what} would cut into a cavity of the solid"),
     };
     for &cavity in cavities {
         let bounds = shell_bounds(topo, cavity)?;
-        if made.iter().any(|m| m.intersects(bounds)) {
+        if reach.iter().any(|m| m.intersects(bounds)) {
             return Err(refused());
         }
         let face = topo.shell(cavity)?.faces().first().copied();

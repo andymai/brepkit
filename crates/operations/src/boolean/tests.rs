@@ -8545,6 +8545,46 @@ fn pieces_sharing_a_curved_face_do_not_only_touch() {
     assert!(!super::pieces_only_touch(&topo, &pieces));
 }
 
+/// A rod with a shallow flat along its side, and a block whose hollow
+/// follows the rod's round over the flat: they meet only along the flat's two
+/// edges, with a lens-shaped gap between the flat and the hollow that narrows
+/// to nothing at each. Near those edges the gap is thinner than the step past
+/// the mesh's sag, so a point that far out of the hollow lands in the rod;
+/// nearer its middle it does not, and the pieces only touch.
+#[test]
+fn pieces_meeting_along_a_flat_s_edges_only_touch() {
+    use brepkit_math::mat::Mat4;
+
+    for depth in [0.03, 0.065, 0.1] {
+        for turn in [0.0, 0.7, 2.0, 3.5] {
+            let mut topo = Topology::new();
+            let place = |topo: &mut Topology, s, x: f64, y: f64, z: f64| {
+                crate::transform::transform_solid(topo, s, &Mat4::translation(x, y, z)).unwrap();
+            };
+            let rod = crate::primitives::make_cylinder(&mut topo, 5.0, 10.0).unwrap();
+            let shave = crate::primitives::make_box(&mut topo, 2.0, 12.0, 12.0).unwrap();
+            place(&mut topo, shave, 5.0 - depth, -6.0, -1.0);
+            let rod = boolean(&mut topo, BooleanOp::Cut, rod, shave).unwrap();
+            let block = crate::primitives::make_box(&mut topo, 2.0, 6.0, 10.0).unwrap();
+            place(&mut topo, block, 5.0 - depth, -3.0, 0.0);
+            let bore = crate::primitives::make_cylinder(&mut topo, 5.0, 12.0).unwrap();
+            place(&mut topo, bore, 0.0, 0.0, -1.0);
+            let block = boolean(&mut topo, BooleanOp::Cut, block, bore).unwrap();
+            for s in [rod, block] {
+                crate::transform::transform_solid(&mut topo, s, &Mat4::rotation_z(turn)).unwrap();
+            }
+            let pieces = [
+                brepkit_topology::explorer::solid_faces(&topo, rod).unwrap(),
+                brepkit_topology::explorer::solid_faces(&topo, block).unwrap(),
+            ];
+            assert!(
+                super::pieces_only_touch(&topo, &pieces),
+                "flat {depth} deep, turned {turn}"
+            );
+        }
+    }
+}
+
 /// A solid in two pieces that fill two pockets in a block's top: every
 /// vertex and edge of the pieces lies on the block's boundary, and the
 /// pieces' common centre lies in the block's material, so no containment

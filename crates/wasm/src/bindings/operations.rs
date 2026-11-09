@@ -1612,6 +1612,131 @@ impl BrepKernel {
         Ok(face_id_to_u32(face_id))
     }
 
+    /// Bridge two edge chains with a surface G1 or G2 continuous to the face
+    /// beside each.
+    ///
+    /// Each chain lists its edges in running order, each stored either way.
+    /// `options` is JSON: `{ "continuity": "g1" | "g2", "weights"?: [a, b] }`.
+    /// Returns a face handle.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a handle or the options are invalid, a weight is not
+    /// positive, a chain breaks or leaves its face, or one chain is closed and
+    /// the other open.
+    #[wasm_bindgen(js_name = "blendSurface")]
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn blend_surface(
+        &mut self,
+        chain_a: Vec<u32>,
+        face_a: u32,
+        chain_b: Vec<u32>,
+        face_b: u32,
+        options: &str,
+    ) -> Result<u32, JsError> {
+        let opts: serde_json::Value =
+            serde_json::from_str(options).map_err(|e| WasmError::InvalidInput {
+                reason: format!("blend options are not JSON: {e}"),
+            })?;
+        let options = crate::helpers::blend_surface_options(&opts)
+            .map_err(|reason| WasmError::InvalidInput { reason })?;
+        let edges_a = chain_a
+            .iter()
+            .map(|&h| self.resolve_edge(h))
+            .collect::<Result<Vec<_>, _>>()?;
+        let edges_b = chain_b
+            .iter()
+            .map(|&h| self.resolve_edge(h))
+            .collect::<Result<Vec<_>, _>>()?;
+        let (face_a, face_b) = (self.resolve_face(face_a)?, self.resolve_face(face_b)?);
+        let face = brepkit_operations::blend_surface::blend_surface(
+            self.topo_mut(),
+            &edges_a,
+            face_a,
+            &edges_b,
+            face_b,
+            &options,
+        )?;
+        Ok(face_id_to_u32(face))
+    }
+
+    /// Move one surface's edge on to another's at G0, G1 or G2, keeping the
+    /// rest of the surface as close as the move allows.
+    ///
+    /// `options` is JSON: `{ "continuity": "g0" | "g1" | "g2", "targetFace"?: face }`.
+    /// `targetFace` names the face a solid's edge is matched to, since it
+    /// bounds two. Returns a new face handle.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a handle or the options are invalid, `edge` is not on
+    /// the face's outer boundary, or the target bounds no face or several when
+    /// a surface is needed and none is named.
+    #[wasm_bindgen(js_name = "matchSurface")]
+    pub fn match_surface(
+        &mut self,
+        face: u32,
+        edge: u32,
+        target_edge: u32,
+        options: &str,
+    ) -> Result<u32, JsError> {
+        let opts: serde_json::Value =
+            serde_json::from_str(options).map_err(|e| WasmError::InvalidInput {
+                reason: format!("match options are not JSON: {e}"),
+            })?;
+        let continuity = crate::helpers::match_continuity(&opts)
+            .map_err(|reason| WasmError::InvalidInput { reason })?;
+        let target_face = match &opts["targetFace"] {
+            serde_json::Value::Null => None,
+            value => {
+                let handle = value
+                    .as_u64()
+                    .and_then(|n| u32::try_from(n).ok())
+                    .ok_or_else(|| WasmError::InvalidInput {
+                        reason: "targetFace is not a face handle".into(),
+                    })?;
+                Some(self.resolve_face(handle)?)
+            }
+        };
+        let face = self.resolve_face(face)?;
+        let edge = self.resolve_edge(edge)?;
+        let target = self.resolve_edge(target_edge)?;
+        let result = match target_face {
+            Some(on) => brepkit_operations::blend_surface::match_surface_on(
+                self.topo_mut(),
+                face,
+                edge,
+                target,
+                on,
+                continuity,
+            )?,
+            None => brepkit_operations::blend_surface::match_surface(
+                self.topo_mut(),
+                face,
+                edge,
+                target,
+                continuity,
+            )?,
+        };
+        Ok(face_id_to_u32(result))
+    }
+
+    /// Smooth a surface, staying within `tolerance` of it, with its boundary
+    /// held. A surface with no bumps to remove comes back unchanged.
+    ///
+    /// Returns a new face handle.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the handle is invalid or `tolerance` is not positive.
+    #[wasm_bindgen(js_name = "fairSurface")]
+    pub fn fair_surface(&mut self, face: u32, tolerance: f64) -> Result<u32, JsError> {
+        let face = self.resolve_face(face)?;
+        let result =
+            brepkit_operations::blend_surface::fair_surface(self.topo_mut(), face, tolerance)?;
+        Ok(face_id_to_u32(result))
+    }
+
     /// Untrim a NURBS face by fitting a new surface to the trimmed region.
     ///
     /// Returns a new face handle.
@@ -1791,6 +1916,57 @@ impl BrepKernel {
 
     // ── Blend V2 (walking engine) ────────────────────────────────
 
+    /// Fillet edges with options at corners where three of them meet: how far
+    /// back along each edge its round stops, and what closes the hole that
+    /// leaves. `corners_json` is an array of
+    /// `{"vertex": h, "setbacks": [{"edge": h, "distance": d}, ...], "corner": "rolling" | "g2"}`,
+    /// with `setbacks` and `corner` optional: no set-backs and `"g2"` stops each
+    /// round one radius past where a ball would.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a handle is invalid, the JSON is malformed, the blend
+    /// computation fails, or a corner is not three straight rounds between flat
+    /// faces with set-backs past the ball and short of each edge's far end.
+    #[wasm_bindgen(js_name = "filletV2Corners")]
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn fillet_v2_corners(
+        &mut self,
+        solid: u32,
+        edge_handles: Vec<u32>,
+        radius: f64,
+        corners_json: &str,
+    ) -> Result<u32, JsError> {
+        validate_positive(radius, "radius")?;
+        let solid_id = self.resolve_solid(solid)?;
+        let edge_ids: Vec<_> = edge_handles
+            .iter()
+            .map(|&h| self.resolve_edge(h))
+            .collect::<Result<_, _>>()?;
+        let parsed: serde_json::Value =
+            serde_json::from_str(corners_json).map_err(|e| WasmError::InvalidInput {
+                reason: format!("corners are not JSON: {e}"),
+            })?;
+        let corners = self
+            .parse_fillet_corners(&parsed)
+            .map_err(|reason| WasmError::InvalidInput { reason })?;
+        let outcome =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<u32, JsError> {
+                let result = brepkit_operations::blend_ops::fillet_v2_with_corners(
+                    self.topo_mut(),
+                    solid_id,
+                    &edge_ids,
+                    radius,
+                    &corners,
+                )?;
+                Ok(solid_id_to_u32(result))
+            }));
+        match outcome {
+            Ok(inner) => inner,
+            Err(panic_info) => Err(JsError::new(&panic_message(&panic_info, "FilletV2Corners"))),
+        }
+    }
+
     /// Fillet edges using the v2 walking-based blend engine.
     ///
     /// Returns a new solid handle.
@@ -1921,6 +2097,110 @@ impl BrepKernel {
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    /// A box's corner at the origin, and the three edges meeting there, as handles.
+    fn box_corner(k: &crate::kernel::BrepKernel, solid: u32) -> (u32, Vec<u32>) {
+        use brepkit_topology::explorer::{solid_edges, solid_vertices};
+
+        let id = k.resolve_solid(solid).unwrap();
+        let topo = k.topo();
+        let corner = solid_vertices(topo, id)
+            .unwrap()
+            .into_iter()
+            .find(|&v| {
+                let p = topo.vertex(v).unwrap().point();
+                p.x().abs() + p.y().abs() + p.z().abs() < 1e-9
+            })
+            .unwrap();
+        let edges = solid_edges(topo, id)
+            .unwrap()
+            .into_iter()
+            .filter(|&e| {
+                let edge = topo.edge(e).unwrap();
+                edge.start() == corner || edge.end() == corner
+            })
+            .map(crate::handles::edge_id_to_u32)
+            .collect();
+        (crate::handles::vertex_id_to_u32(corner), edges)
+    }
+
+    #[test]
+    fn a_fillets_corner_sets_back_through_the_batch_and_directly() {
+        let mut k = crate::kernel::BrepKernel::new();
+        let body = k.make_box_solid(20.0, 20.0, 20.0).unwrap();
+        let (corner, edges) = box_corner(&k, body);
+        let setbacks = |d: [f64; 3]| {
+            edges
+                .iter()
+                .zip(d)
+                .map(|(e, distance)| serde_json::json!({"edge": e, "distance": distance}))
+                .collect::<Vec<_>>()
+        };
+        let face_count = |k: &crate::kernel::BrepKernel, solid: u32| {
+            let id = k.resolve_solid(solid).unwrap();
+            brepkit_topology::explorer::solid_faces(k.topo(), id)
+                .unwrap()
+                .len()
+        };
+        let corners = serde_json::json!([
+            {"vertex": corner, "setbacks": setbacks([3.0, 4.0, 5.0]), "corner": "g2"}
+        ]);
+        let batch = |corners: &serde_json::Value| {
+            serde_json::json!([{"op": "filletV2Corners", "args": {
+                "solid": body, "edges": edges, "radius": 2.0, "corners": corners
+            }}])
+            .to_string()
+        };
+
+        let reply: serde_json::Value =
+            serde_json::from_str(&k.execute_batch(&batch(&corners))).unwrap();
+        let by_batch = u32::try_from(reply[0]["ok"].as_u64().unwrap()).unwrap();
+        assert_eq!(face_count(&k, by_batch), 11);
+
+        let direct = k
+            .fillet_v2_corners(body, edges.clone(), 2.0, &corners.to_string())
+            .unwrap();
+        assert_eq!(face_count(&k, direct), 11);
+
+        // No set-backs at a G2 corner still sets it back, and a rolling one keeps
+        // its ball, one face fewer.
+        let g2 = serde_json::json!([{"vertex": corner, "corner": "g2"}]);
+        let reply: serde_json::Value = serde_json::from_str(&k.execute_batch(&batch(&g2))).unwrap();
+        assert_eq!(
+            face_count(&k, u32::try_from(reply[0]["ok"].as_u64().unwrap()).unwrap()),
+            11
+        );
+        let rolling = serde_json::json!([{"vertex": corner}]);
+        let reply: serde_json::Value =
+            serde_json::from_str(&k.execute_batch(&batch(&rolling))).unwrap();
+        assert_eq!(
+            face_count(&k, u32::try_from(reply[0]["ok"].as_u64().unwrap()).unwrap()),
+            10
+        );
+
+        for bad in [
+            serde_json::json!([{"vertex": corner, "setbacks": setbacks([1.0, 4.0, 5.0])}]),
+            serde_json::json!([{"vertex": corner, "corner": "smooth"}]),
+            serde_json::json!([{"vertex": corner, "corner": true}]),
+            serde_json::json!([{"vertex": corner, "corner": 42}]),
+            serde_json::json!([{"vertex": 4_294_967_296_u64}]),
+            serde_json::json!([{"vertex": corner, "setbacks": [{"edge": edges[0], "distance": -1.0}]}]),
+            serde_json::json!({"vertex": corner}),
+        ] {
+            let reply: serde_json::Value =
+                serde_json::from_str(&k.execute_batch(&batch(&bad))).unwrap();
+            assert!(reply[0].get("error").is_some(), "{bad}: {reply}");
+        }
+
+        // A solid handle past `u32` names no solid, not the one it wraps to.
+        let wrapped = serde_json::json!([{"op": "filletV2Corners", "args": {
+            "solid": u64::from(body) + (1_u64 << 32), "edges": edges, "radius": 2.0,
+            "corners": corners
+        }}]);
+        let reply: serde_json::Value =
+            serde_json::from_str(&k.execute_batch(&wrapped.to_string())).unwrap();
+        assert!(reply[0].get("error").is_some(), "{reply}");
+    }
 
     /// A line 10 long then a half circle of radius 5, as a wire.
     fn line_and_half_circle(k: &mut crate::kernel::BrepKernel) -> u32 {
@@ -2241,6 +2521,153 @@ mod tests {
         let out = k.execute_batch(&batch.to_string());
         let parsed: Vec<serde_json::Value> = serde_json::from_str(&out).unwrap();
         parsed[0].clone()
+    }
+
+    /// A flat square sheet at height `z`, its edges in order round the wire.
+    fn flat_sheet(k: &mut BrepKernel, x: f64, z: f64) -> (u32, Vec<u32>) {
+        let pts = [
+            Point3::new(x, 0.0, z),
+            Point3::new(x + 4.0, 0.0, z),
+            Point3::new(x + 4.0, 10.0, z),
+            Point3::new(x, 10.0, z),
+        ];
+        let wid = make_polygon_wire(k.topo_mut(), &pts, TOL).unwrap();
+        let face = brepkit_topology::builder::make_face_from_wire(k.topo_mut(), wid).unwrap();
+        let edges = k
+            .topo
+            .wire(wid)
+            .unwrap()
+            .edges()
+            .iter()
+            .map(|oe| crate::handles::edge_id_to_u32(oe.edge()))
+            .collect();
+        (crate::handles::face_id_to_u32(face), edges)
+    }
+
+    #[test]
+    fn batch_blends_two_sheets() {
+        let mut k = BrepKernel::new();
+        let (face_a, edges_a) = flat_sheet(&mut k, -4.0, 0.0);
+        let (face_b, edges_b) = flat_sheet(&mut k, 6.0, 2.0);
+        for continuity in ["g1", "g2"] {
+            let out = dispatch(
+                &mut k,
+                "blendSurface",
+                serde_json::json!({
+                    "chainA": [edges_a[1]],
+                    "faceA": face_a,
+                    "chainB": [edges_b[3]],
+                    "faceB": face_b,
+                    "continuity": continuity,
+                    "weights": [1.0, 1.5],
+                }),
+            );
+            assert!(out["ok"].is_u64(), "{out}");
+            let id = k.resolve_face(out["ok"].as_u64().unwrap() as u32).unwrap();
+            assert_eq!(k.topo.face(id).unwrap().surface().type_tag(), "nurbs");
+        }
+    }
+
+    #[test]
+    fn batch_refuses_a_bad_blend() {
+        let mut k = BrepKernel::new();
+        let (face_a, edges_a) = flat_sheet(&mut k, -4.0, 0.0);
+        let (face_b, edges_b) = flat_sheet(&mut k, 6.0, 2.0);
+        let args = |continuity: &str, weights: serde_json::Value| {
+            serde_json::json!({
+                "chainA": [edges_a[1]],
+                "faceA": face_a,
+                "chainB": [edges_b[3]],
+                "faceB": face_b,
+                "continuity": continuity,
+                "weights": weights,
+            })
+        };
+        for bad in [
+            args("g3", serde_json::Value::Null),
+            args("g1", serde_json::json!([0.0, 1.0])),
+            args("g1", serde_json::json!([1.0])),
+            args("g1", serde_json::json!("heavy")),
+        ] {
+            let out = dispatch(&mut k, "blendSurface", bad.clone());
+            assert!(out["error"].is_string(), "{bad} gave {out}");
+        }
+        let out = dispatch(
+            &mut k,
+            "blendSurface",
+            serde_json::json!({
+                "chainA": [edges_b[3]],
+                "faceA": face_a,
+                "chainB": [edges_b[3]],
+                "faceB": face_b,
+                "continuity": "g1",
+            }),
+        );
+        assert!(out["error"].is_string(), "{out}");
+    }
+
+    #[test]
+    fn batch_matches_an_edge() {
+        let mut k = BrepKernel::new();
+        let (target_face, target_edges) = flat_sheet(&mut k, -4.0, 0.0);
+        let (source_face, source_edges) = flat_sheet(&mut k, 0.3, 0.2);
+        for continuity in ["g0", "g1", "g2"] {
+            let out = dispatch(
+                &mut k,
+                "matchSurface",
+                serde_json::json!({
+                    "face": source_face,
+                    "edge": source_edges[3],
+                    "targetEdge": target_edges[1],
+                    "continuity": continuity,
+                }),
+            );
+            assert!(out["ok"].is_u64(), "{continuity}: {out}");
+            let named = dispatch(
+                &mut k,
+                "matchSurface",
+                serde_json::json!({
+                    "face": source_face,
+                    "edge": source_edges[3],
+                    "targetEdge": target_edges[1],
+                    "targetFace": target_face,
+                    "continuity": continuity,
+                }),
+            );
+            assert!(named["ok"].is_u64(), "{continuity}: {named}");
+        }
+        let out = dispatch(
+            &mut k,
+            "matchSurface",
+            serde_json::json!({
+                "face": source_face,
+                "edge": target_edges[1],
+                "targetEdge": target_edges[1],
+                "continuity": "g9",
+            }),
+        );
+        assert!(out["error"].is_string(), "{out}");
+    }
+
+    #[test]
+    fn batch_fairs_a_surface() {
+        let mut k = BrepKernel::new();
+        let (face, _) = flat_sheet(&mut k, 0.0, 0.0);
+        let out = dispatch(
+            &mut k,
+            "fairSurface",
+            serde_json::json!({ "face": face, "tolerance": 0.01 }),
+        );
+        assert!(out["ok"].is_u64(), "{out}");
+        assert_ne!(out["ok"].as_u64().unwrap(), u64::from(face));
+        let bad = dispatch(
+            &mut k,
+            "fairSurface",
+            serde_json::json!({ "face": face, "tolerance": 0.0 }),
+        );
+        assert!(bad["error"].is_string(), "{bad}");
+        let missing = dispatch(&mut k, "fairSurface", serde_json::json!({ "face": face }));
+        assert!(missing["error"].is_string(), "{missing}");
     }
 
     fn wire_perimeter(k: &BrepKernel, wire_handle: u32) -> f64 {
