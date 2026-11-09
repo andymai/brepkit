@@ -14,6 +14,7 @@
 
 use std::f64::consts::PI;
 
+use brepkit_math::curves::Circle3D;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_operations::blend_ops::fillet_v2;
 use brepkit_operations::boolean::{BooleanOp, boolean};
@@ -141,5 +142,89 @@ fn concave_corner_between_a_plate_and_a_flat_arm() {
 fn concave_corner_between_a_plate_and_a_rising_arm() {
     for r in [1.0, 2.0] {
         assert_corner_fills(1.0, r);
+    }
+}
+
+/// The plate with its top a cylinder about an axis along `y`, its radius
+/// `RHO`, through the plate's top edge at `x = CORNER.0`, where it leaves
+/// `z = 0` falling away at `kink` radians, and the flat arm fused along its
+/// side as in [`plate_with_arm`].
+fn curved_plate_with_arm(topo: &mut Topology, kink: f64) -> SolidId {
+    const RHO: f64 = 400.0;
+    const LENGTH: f64 = 40.0;
+    const Y_LOW: f64 = -35.0;
+    let (x0, y0) = CORNER;
+    let (cx, cz) = (RHO.mul_add(-kink.sin(), x0), -RHO * kink.cos());
+    let x1 = x0 + LENGTH;
+    let z1 = (RHO * RHO - (x1 - cx) * (x1 - cx)).sqrt() + cz;
+    // Counter-clockwise about `+y`: up the side, along the arc, down, back.
+    let corners = [(x0, -T), (x0, 0.0), (x1, z1), (x1, -T)];
+    let ids: Vec<_> = corners
+        .iter()
+        .map(|&(x, z)| topo.add_vertex(Vertex::new(Point3::new(x, Y_LOW, z), 1e-7)))
+        .collect();
+    let arc = Circle3D::new(Point3::new(cx, Y_LOW, cz), Vec3::new(0.0, 1.0, 0.0), RHO).unwrap();
+    let edges: Vec<_> = (0..ids.len())
+        .map(|i| {
+            let curve = if i == 1 {
+                EdgeCurve::Circle(arc.clone())
+            } else {
+                EdgeCurve::Line
+            };
+            let edge = Edge::new(ids[i], ids[(i + 1) % ids.len()], curve);
+            OrientedEdge::new(topo.add_edge(edge), true)
+        })
+        .collect();
+    let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+    let normal = Vec3::new(0.0, 1.0, 0.0);
+    let face = topo.add_face(Face::new(
+        wire,
+        vec![],
+        FaceSurface::Plane { normal, d: Y_LOW },
+    ));
+    let plate = extrude(topo, face, normal, 59.0 - Y_LOW).unwrap();
+    let arm = prism(
+        topo,
+        &[
+            Point3::new(x0, y0, -T),
+            Point3::new(x0 - 25.0, y0, -T),
+            Point3::new(x0 - 25.0, y0, 0.0),
+            Point3::new(x0, y0, 0.0),
+        ],
+        Vec3::new(0.0, 1.0, 0.0),
+        59.0 - y0,
+    );
+    boolean(topo, BooleanOp::Fuse, plate, arm).unwrap()
+}
+
+/// The fillet's top end is closed by a patch in `z = 0`, beside the plate's
+/// curved top across the plate's top edge. The plate's side runs along that
+/// edge once, the patch's edge then its far piece, where the patch carries
+/// on the curved top: level with it, or at a slight kink.
+#[test]
+fn concave_corner_beside_a_curved_plate_top() {
+    for kink in [0.0, 0.01] {
+        for r in [1.0, 2.0] {
+            let mut topo = Topology::new();
+            let solid = curved_plate_with_arm(&mut topo, kink);
+            let before = solid_volume(&topo, solid, 1e-3).unwrap();
+            let edge = corner_edge(&topo, solid);
+            let result = fillet_v2(&mut topo, solid, &[edge], r).unwrap();
+            assert!(
+                result.failed.is_empty(),
+                "kink {kink} r {r}: {:?}",
+                result.failed
+            );
+            let report = validate_solid(&topo, result.solid).unwrap();
+            assert!(report.is_valid(), "kink {kink} r {r}: {:?}", report.issues);
+            let mesh = tessellate_solid(&topo, result.solid, 0.01).unwrap();
+            assert!(is_watertight(&mesh), "kink {kink} r {r}: mesh open");
+            let added = solid_volume(&topo, result.solid, 1e-3).unwrap() - before;
+            let strip = T * r * r * (1.0 - PI / 4.0);
+            assert!(
+                (added - strip).abs() <= 1e-9 * before,
+                "kink {kink} r {r}: added {added}, the strip {strip}"
+            );
+        }
     }
 }
