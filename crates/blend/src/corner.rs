@@ -4779,41 +4779,19 @@ fn ruled_surface_to_apex_sampled(
     Ok(FaceSurface::Nurbs(surface))
 }
 
-/// A round's in-plane reach at the level of the end plane `P`, for the
-/// capped corner (see [`apply_capped_corner`]): the band's spine, a circle
-/// (a torus round) or a line (a cylinder round), at depth `r` below `P`,
-/// and the side its other face lies on.
-enum CapRoundSpine {
-    /// A torus round: its axis point, axis and major radius, and the sign
-    /// that makes the reach positive toward the wall.
-    Circle {
-        center: Point3,
-        axis: Vec3,
-        major: f64,
-        sign: f64,
-    },
-    /// A cylinder round: a point on its axis and the in-plane unit
-    /// normal to the axis pointing toward the wall.
-    Line { origin: Point3, toward: Vec3 },
+/// The capped corner's round along the end plane `P` (see
+/// [`apply_capped_corner`]), a cylinder: its axis, `r` below `P`, raised
+/// onto `P`, and the unit normal to it in `P` pointing toward the wall.
+struct CapRoundSpine {
+    origin: Point3,
+    toward: Vec3,
 }
 
 impl CapRoundSpine {
     /// How far `point` lies in the plane from the round's spine toward the
     /// wall: `r` on the wall's trace, `0` on the round's contact with `P`.
     fn reach(&self, point: Point3) -> f64 {
-        match self {
-            Self::Circle {
-                center,
-                axis,
-                major,
-                sign,
-            } => {
-                let d = point - *center;
-                let radial = d - *axis * d.dot(*axis);
-                sign * (radial.length() - major)
-            }
-            Self::Line { origin, toward } => (point - *origin).dot(*toward),
-        }
+        (point - self.origin).dot(self.toward)
     }
 }
 
@@ -4850,14 +4828,11 @@ struct CappedCorner {
     x: Point3,
     e: Point3,
     f: Point3,
-    crease: Vec<Point3>,
-    notch: Vec<Point3>,
-    /// The cap round's contact on `P` as rebuilt to end at `f`.
-    t_cap_curve: EdgeCurve,
+    /// The crease from `x` to `e` and the notch from `e` to `f`, each an
+    /// arc of an ellipse running up its angle.
+    crease: brepkit_math::curves::Ellipse3D,
+    notch: brepkit_math::curves::Ellipse3D,
 }
-
-/// The number of points the capped corner's crease and notch take.
-const CAPPED_POINTS: usize = 17;
 
 /// The edge of `face`'s outer wire whose two ends lie at `a` and `b`.
 fn wire_edge_between(
@@ -5095,9 +5070,6 @@ fn plan_capped_corner(
     let level = d / normal.length() * if cap_face.is_reversed() { -1.0 } else { 1.0 };
     let side_face = topo.face(side).ok()?;
     let m = side_face.effective_plane_normal()?.normalize().ok()?;
-    if m.dot(n).abs() > 1e-9 {
-        return None;
-    }
     let side_level = match side_face.surface() {
         FaceSurface::Plane { normal, d } => {
             d / normal.length() * if side_face.is_reversed() { -1.0 } else { 1.0 }
@@ -5114,6 +5086,12 @@ fn plan_capped_corner(
     };
     let r = k_cyl.radius();
     if r <= TOL || k_cyl.axis().normalize().ok()?.dot(n).abs() < 1.0 - 1e-9 {
+        return None;
+    }
+    // `Q` square to `P` as the sharp mitre takes it, its points moved by
+    // no more than `MITRE_SLIP`.
+    let cos = m.dot(n).abs();
+    if cos > SQUARE_COS || cos * r > MITRE_SLIP {
         return None;
     }
     let tol = 1e-6 * r.max(1.0);
@@ -5165,50 +5143,20 @@ fn plan_capped_corner(
         return None;
     }
 
-    // The round along `P`: a torus about an axis square to `P` or a
-    // cylinder along it, its spine a radius below `P`.
-    let spine = match &st.surface {
-        FaceSurface::Torus(torus) => {
-            let axis = torus.z_axis().normalize().ok()?;
-            if axis.dot(n).abs() < 1.0 - 1e-9 || (torus.minor_radius() - r).abs() > tol {
-                return None;
-            }
-            let c = torus.center();
-            if (n.dot(to_point(c)) - (level - r)).abs() > tol {
-                return None;
-            }
-            let lifted = c + n * r;
-            let probe = CapRoundSpine::Circle {
-                center: lifted,
-                axis,
-                major: torus.major_radius(),
-                sign: 1.0,
-            };
-            let sign = if probe.reach(k_wall_point) >= 0.0 {
-                1.0
-            } else {
-                -1.0
-            };
-            CapRoundSpine::Circle {
-                center: lifted,
-                axis,
-                major: torus.major_radius(),
-                sign,
-            }
-        }
-        FaceSurface::Cylinder(cylinder) => {
-            let axis = cylinder.axis().normalize().ok()?;
-            if axis.dot(n).abs() > 1e-9 || (cylinder.radius() - r).abs() > tol {
-                return None;
-            }
-            let o = cylinder.origin();
-            let o = o + n * (level - n.dot(to_point(o)));
-            let v = k_wall_point - o;
-            let toward = (v - axis * v.dot(axis) - n * v.dot(n)).normalize().ok()?;
-            CapRoundSpine::Line { origin: o, toward }
-        }
-        _ => return None,
+    // The round along `P`: a cylinder along it, its axis a radius below
+    // `P`.
+    let FaceSurface::Cylinder(cylinder) = &st.surface else {
+        return None;
     };
+    let axis = cylinder.axis().normalize().ok()?;
+    if axis.dot(n).abs() > 1e-9 || (cylinder.radius() - r).abs() > tol {
+        return None;
+    }
+    let o = cylinder.origin();
+    let o = o + n * (level - n.dot(to_point(o)));
+    let v = k_wall_point - o;
+    let toward = (v - axis * v.dot(axis) - n * v.dot(n)).normalize().ok()?;
+    let spine = CapRoundSpine { origin: o, toward };
     // The wall's trace is the spine's reach `r`: the wall stands square
     // to `P` along the round.
     if (spine.reach(k_wall_point) - r).abs() > tol || spine.reach(t_cap_point).abs() > tol {
@@ -5217,31 +5165,40 @@ fn plan_capped_corner(
 
     // The crease: the extrusion round's quarter, from its wall contact
     // round to its contact on `Q`, each ruling meeting the cap round
-    // `r - sqrt(r^2 - reach^2)` below `P`.
+    // `r - sqrt(r^2 - reach^2)` below `P`. The quarter's centre lies on the
+    // cap round's spine and its wall contact straight toward the wall, so
+    // at the quarter's angle `phi` the reach is `r cos phi` and the depth
+    // `r (1 - sin phi)`: the crease is an ellipse, where the two rounds'
+    // cylinders, of one radius and axes crossing square, meet.
     let u0 = (k_wall_point - centre).normalize().ok()?;
     let u1 = (k_side_point - centre).normalize().ok()?;
     let theta = u0.dot(u1).clamp(-1.0, 1.0).acos();
     if theta <= 1e-6 || theta >= std::f64::consts::PI - 1e-6 {
         return None;
     }
-    let w = (u1 - u0 * u0.dot(u1)).normalize().ok()?;
-    let depth = |reach: f64| r - (r * r - reach * reach).max(0.0).sqrt();
     let reach_side = spine.reach(k_side_point);
     // Only the corner whose crease meets `Q` below `P` (the wall and `Q`
     // meeting at more than a right angle) is built here.
-    if reach_side <= tol || reach_side > r {
+    if reach_side <= tol || reach_side > r || spine.reach(centre).abs() > tol {
         return None;
     }
-    let mut crease = Vec::with_capacity(CAPPED_POINTS);
-    for i in 0..CAPPED_POINTS {
-        let phi = theta * (i as f64) / ((CAPPED_POINTS - 1) as f64);
-        let p = centre + (u0 * phi.cos() + w * phi.sin()) * r;
-        let reach = spine.reach(p);
-        if !(-tol..=r + tol).contains(&reach) {
-            return None;
-        }
-        crease.push(p - n * depth(reach.clamp(0.0, r)));
-    }
+    let flat = |v: Vec3| (v - n * v.dot(n)).normalize().ok();
+    let toward_wall = flat(u0)?;
+    let round = flat(u1 - toward_wall * u1.dot(toward_wall))?;
+    let crease = brepkit_math::curves::Ellipse3D::new_with_ref(
+        centre - n * r,
+        (round + n).cross(-toward_wall),
+        r * std::f64::consts::SQRT_2,
+        r,
+        round + n,
+    )
+    .ok()?;
+    // `phi` is the ellipse's angle plus a right angle.
+    let half_turn = std::f64::consts::FRAC_PI_2;
+    let (x, e) = (
+        crease.evaluate(-half_turn),
+        crease.evaluate(theta - half_turn),
+    );
     // The notch: the cap round's trace on `Q`, from where the crease meets
     // `Q` along the retained edge to where the round's contact on `P` does.
     let start = (k_side_point - vertex).dot(along);
@@ -5269,14 +5226,22 @@ fn plan_capped_corner(
         }
     }
     let lambda_f = 0.5 * (lo + hi);
-    let mut notch = Vec::with_capacity(CAPPED_POINTS);
-    for i in 0..CAPPED_POINTS {
-        let lambda = start + (lambda_f - start) * (i as f64) / ((CAPPED_POINTS - 1) as f64);
-        let reach = reach_at(lambda).clamp(0.0, r);
-        notch.push(vertex + along * lambda - n * depth(reach));
-    }
-    let (x, e, f) = (crease[0], *crease.last()?, *notch.last()?);
-    if (notch[0] - e).length() > tol {
+    // At the cap round's angle `psi` the notch is `reach = r cos psi` from
+    // the spine and `r (1 - sin psi)` below `P`, and the reach falls in
+    // proportion along the retained edge: an ellipse about the point `r`
+    // below where the reach runs out, its long axis back along the edge.
+    let f = vertex + along * lambda_f;
+    let back = flat(-along)?;
+    let notch = brepkit_math::curves::Ellipse3D::new_with_ref(
+        f - n * r,
+        back.cross(n),
+        ((lambda_f - start) * r / reach_side).max(r),
+        r,
+        back,
+    )
+    .ok()?;
+    let psi_side = (reach_side / r).clamp(-1.0, 1.0).acos();
+    if (notch.evaluate(psi_side) - e).length() > tol {
         return None;
     }
 
@@ -5308,56 +5273,6 @@ fn plan_capped_corner(
     {
         return None;
     }
-    // The cap round's contact on `P`, run on (or back) to `f`.
-    let cap_edge = topo.edge(t_cap).ok()?;
-    let cap_far = topo
-        .vertex(if cap_edge.start() == t_cap_end {
-            cap_edge.end()
-        } else {
-            cap_edge.start()
-        })
-        .ok()?
-        .point();
-    let t_cap_curve = match &spine {
-        CapRoundSpine::Line { .. } => EdgeCurve::Line,
-        CapRoundSpine::Circle { center, axis, .. } => {
-            // A circle about the torus's axis through `f`, turning the way
-            // the old contact runs: a point just in from its far end lies
-            // on the new arc between its ends.
-            let axis_point = *center + *axis * (cap_far - *center).dot(*axis);
-            let (from, to) = if cap_edge.start() == t_cap_end {
-                (f, cap_far)
-            } else {
-                (cap_far, f)
-            };
-            let (a0, a1) = cap_edge.curve().domain_with_endpoints(
-                topo.vertex(cap_edge.start()).ok()?.point(),
-                topo.vertex(cap_edge.end()).ok()?.point(),
-            );
-            let s = if cap_edge.start() == t_cap_end {
-                a1 + (a0 - a1) * 0.01
-            } else {
-                a0 + (a1 - a0) * 0.01
-            };
-            let probe = cap_edge.curve().evaluate_with_endpoints(
-                s,
-                topo.vertex(cap_edge.start()).ok()?.point(),
-                topo.vertex(cap_edge.end()).ok()?.point(),
-            );
-            let radius = (f - axis_point).length();
-            if ((cap_far - axis_point).length() - radius).abs() > tol {
-                return None;
-            }
-            let turns = |circle: &brepkit_math::curves::Circle3D, p: Point3| {
-                (circle.project(p) - circle.project(from)).rem_euclid(std::f64::consts::TAU)
-            };
-            [*axis, -*axis].into_iter().find_map(|normal| {
-                let circle =
-                    brepkit_math::curves::Circle3D::new(axis_point, normal, radius).ok()?;
-                (turns(&circle, probe) < turns(&circle, to)).then_some(EdgeCurve::Circle(circle))
-            })?
-        }
-    };
     Some(CappedCorner {
         t_face,
         t_wall,
@@ -5380,7 +5295,6 @@ fn plan_capped_corner(
         f,
         crease,
         notch,
-        t_cap_curve,
     })
 }
 
@@ -5437,12 +5351,12 @@ fn drop_from_outer_wire(
     Ok(())
 }
 
-/// A two-stripe corner beside a sharp edge, where an extrusion's wall
-/// `C` meets an end plane `P` and a plane side `Q`, both standing square
-/// to `P`: `P ∩ C` is rounded (a torus, or a cylinder where `C` is a
-/// plane), `C ∩ Q` is rounded (the extrusion's round, a cylinder square
-/// to `P`), and `P ∩ Q` is left sharp, the wall meeting `Q` at more than
-/// a right angle.
+/// A two-stripe corner beside a sharp edge, where an extrusion's plane
+/// wall `C` meets an end plane `P` and a plane side `Q`, both standing
+/// square to `P`: `P ∩ C` is rounded (a cylinder), `C ∩ Q` is rounded
+/// (the extrusion's round, a cylinder square to `P`), and `P ∩ Q` is left
+/// sharp, the wall meeting `Q` at more than a right angle. A curved wall,
+/// whose round along `P` is a torus, is not built here.
 ///
 /// At depth `t` below `P` the cap round is the wall's trace inset by
 /// `w = r - sqrt(r^2 - (r - t)^2)`, and the extrusion round is its one
@@ -5450,9 +5364,9 @@ fn drop_from_outer_wire(
 /// on the wall cross (`t = r`) round the extrusion round's quarter, down
 /// to where it meets `Q`; from there the cap round runs on to `Q`,
 /// notching it, up to the retained edge, where its contact on `P` ends.
-/// The extrusion round never reaches `P`. Both rounds otherwise end on
-/// their own sections there, the gap closed by a patch through them,
-/// and the wall kept a loop crossing itself.
+/// The extrusion round never reaches `P`, so neither round ends on its
+/// own section at the corner: the crease and the notch take the place of
+/// the cap round's section, and the crease that of the extrusion round's.
 ///
 /// Returns whether the corner was built so.
 fn apply_capped_corner(
@@ -5517,7 +5431,7 @@ fn apply_capped_corner(
         } else {
             edge.set_end(vf);
         }
-        edge.set_curve(plan.t_cap_curve.clone());
+        edge.set_curve(EdgeCurve::Line);
     }
     for (edge, faces) in [
         (plan.t_wall, [plan.wall, plan.t_face]),
@@ -5530,16 +5444,8 @@ fn apply_capped_corner(
             topo.pcurves_mut().remove(edge, face);
         }
     }
-    let crease = topo.add_edge(Edge::new(
-        vx,
-        ve,
-        EdgeCurve::NurbsCurve(brepkit_math::nurbs::fitting::interpolate(&plan.crease, 3)?),
-    ));
-    let notch = topo.add_edge(Edge::new(
-        ve,
-        vf,
-        EdgeCurve::NurbsCurve(brepkit_math::nurbs::fitting::interpolate(&plan.notch, 3)?),
-    ));
+    let crease = topo.add_edge(Edge::new(vx, ve, EdgeCurve::Ellipse(plan.crease.clone())));
+    let notch = topo.add_edge(Edge::new(ve, vf, EdgeCurve::Ellipse(plan.notch.clone())));
 
     // The cap round's section ran from its contact on `P` to the wall's;
     // it is now the notch back from `f` to `e` and the crease on to `x`.
