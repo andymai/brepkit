@@ -30,10 +30,15 @@ fn block(topo: &mut Topology, at: [f64; 3], size: [f64; 3]) -> SolidId {
     solid
 }
 
+/// The part turned about two axes and moved off the origin.
+fn turned() -> Mat4 {
+    Mat4::translation(37.0, 483.0, -11.0) * Mat4::rotation_z(0.4229) * Mat4::rotation_x(1.0)
+}
+
 /// Rounds the block's edge along `z` at `x = 0, y = 20` by `R` after the
-/// notches `cuts` (each a low corner and a size) are cut from it, and checks
-/// the result against `truth`.
-fn round_beside(cuts: &[([f64; 3], [f64; 3])], truth: f64) {
+/// notches `cuts` (each a low corner and a size) are cut from it and the part
+/// is moved by `pose`, and checks the result against `truth`.
+fn round_beside(cuts: &[([f64; 3], [f64; 3])], pose: Option<Mat4>, truth: f64) {
     let mut topo = Topology::new();
     let mut part = block(&mut topo, [0.0; 3], [40.0, 20.0, HEIGHT]);
     for &(at, size) in cuts {
@@ -52,6 +57,9 @@ fn round_beside(cuts: &[([f64; 3], [f64; 3])], truth: f64) {
         })
         .collect();
     assert_eq!(edge.len(), 1, "{cuts:?}");
+    if let Some(pose) = pose {
+        transform_solid(&mut topo, part, &pose).unwrap();
+    }
     let result = fillet_v2(&mut topo, part, &edge, R).unwrap();
     assert!(result.failed.is_empty(), "{cuts:?}: {:?}", result.failed);
     let report = validate_solid(&topo, result.solid).unwrap();
@@ -76,23 +84,34 @@ fn rounded_off() -> f64 {
     (1.0 - PI / 4.0) * R * R * HEIGHT
 }
 
+/// One notch from the bottom, its wall a radius from the edge.
+const NOTCH: ([f64; 3], [f64; 3]) = ([R, 14.0, -5.0], [24.0, 11.0, 22.0]);
+/// A deeper notch at the bottom under [`NOTCH`].
+const LOWER: ([f64; 3], [f64; 3]) = ([R, 10.0, -5.0], [24.0, 15.0, 8.0]);
+
+fn notched() -> f64 {
+    40.0 * 20.0 * HEIGHT - 24.0 * 6.0 * 17.0 - rounded_off()
+}
+
+fn stepped() -> f64 {
+    24.0f64.mul_add(-4.0 * 3.0, notched())
+}
+
 #[test]
 fn a_round_whose_contact_runs_along_a_notch_wall() {
-    // One notch from the bottom, its wall a radius from the edge: the
-    // contact runs along the wall's edge, then on through the face.
-    let notch = ([R, 14.0, -5.0], [24.0, 11.0, 22.0]);
-    round_beside(
-        &[notch],
-        40.0 * 20.0 * HEIGHT - 24.0 * 6.0 * 17.0 - rounded_off(),
-    );
+    // The contact runs along the wall's edge, then on through the face.
+    round_beside(&[NOTCH], None, notched());
 }
 
 #[test]
 fn a_round_whose_contact_runs_along_a_stepped_notch_wall() {
-    // A deeper notch at the bottom under the first: the wall's edge along
-    // the contact is in two pieces, one to each notch's wall.
-    let upper = ([R, 14.0, -5.0], [24.0, 11.0, 22.0]);
-    let lower = ([R, 10.0, -5.0], [24.0, 15.0, 8.0]);
-    let truth = 40.0 * 20.0 * HEIGHT - 24.0 * 6.0 * 17.0 - 24.0 * 4.0 * 3.0 - rounded_off();
-    round_beside(&[upper, lower], truth);
+    // The wall's edge along the contact is in two pieces, one to each
+    // notch's wall.
+    round_beside(&[NOTCH, LOWER], None, stepped());
+}
+
+#[test]
+fn a_turned_round_whose_contact_runs_along_a_notch_wall() {
+    round_beside(&[NOTCH], Some(turned()), notched());
+    round_beside(&[NOTCH, LOWER], Some(turned()), stepped());
 }

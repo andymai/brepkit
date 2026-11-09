@@ -15,12 +15,14 @@
 use std::f64::consts::PI;
 
 use brepkit_math::curves::Circle3D;
+use brepkit_math::mat::Mat4;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_operations::blend_ops::fillet_v2;
 use brepkit_operations::boolean::{BooleanOp, boolean};
 use brepkit_operations::extrude::extrude;
 use brepkit_operations::measure::solid_volume;
 use brepkit_operations::tessellate::{is_watertight, tessellate_solid};
+use brepkit_operations::transform::transform_solid;
 use brepkit_operations::validate::validate_solid;
 use brepkit_topology::Topology;
 use brepkit_topology::edge::{Edge, EdgeCurve, EdgeId};
@@ -106,14 +108,23 @@ fn corner_edge(topo: &Topology, solid: SolidId) -> EdgeId {
         .expect("the corner's vertical edge")
 }
 
-/// Fillets the corner with radius `r` and checks the result is valid,
-/// watertight, and holds the corner's strip of `T r^2 (1 - pi / 4)` more,
-/// to within the caps' tilt against the arm's sloping faces.
-fn assert_corner_fills(rise: f64, r: f64) {
+/// The part turned about two axes and moved off the origin.
+fn turned() -> Mat4 {
+    Mat4::translation(37.0, 483.0, -11.0) * Mat4::rotation_z(0.4229) * Mat4::rotation_x(1.0)
+}
+
+/// Fillets the corner with radius `r`, the part moved by `pose`, and checks
+/// the result is valid, watertight, and holds the corner's strip of
+/// `T r^2 (1 - pi / 4)` more, to within the caps' tilt against the arm's
+/// sloping faces.
+fn assert_corner_fills(rise: f64, r: f64, pose: Option<Mat4>) {
     let mut topo = Topology::new();
     let solid = plate_with_arm(&mut topo, rise);
     let before = solid_volume(&topo, solid, 1e-3).unwrap();
     let edge = corner_edge(&topo, solid);
+    if let Some(pose) = pose {
+        transform_solid(&mut topo, solid, &pose).unwrap();
+    }
     let result = fillet_v2(&mut topo, solid, &[edge], r).unwrap();
     assert!(result.failed.is_empty(), "r = {r}: {:?}", result.failed);
     let report = validate_solid(&topo, result.solid).unwrap();
@@ -134,14 +145,21 @@ fn assert_corner_fills(rise: f64, r: f64) {
 #[test]
 fn concave_corner_between_a_plate_and_a_flat_arm() {
     for r in [1.0, 2.0] {
-        assert_corner_fills(0.0, r);
+        assert_corner_fills(0.0, r, None);
     }
 }
 
 #[test]
 fn concave_corner_between_a_plate_and_a_rising_arm() {
     for r in [1.0, 2.0] {
-        assert_corner_fills(1.0, r);
+        assert_corner_fills(1.0, r, None);
+    }
+}
+
+#[test]
+fn concave_corner_of_a_turned_plate_and_arm() {
+    for rise in [0.0, 1.0] {
+        assert_corner_fills(rise, 1.0, Some(turned()));
     }
 }
 

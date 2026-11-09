@@ -20,11 +20,13 @@
 use std::f64::consts::PI;
 
 use brepkit_blend::radius_law::RadiusLaw;
+use brepkit_math::mat::Mat4;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_operations::blend_ops::{fillet_v2, fillet_v2_variable};
 use brepkit_operations::extrude::extrude;
 use brepkit_operations::measure::solid_volume;
 use brepkit_operations::tessellate::{is_watertight, tessellate_solid};
+use brepkit_operations::transform::transform_solid;
 use brepkit_operations::validate::validate_solid;
 use brepkit_topology::Topology;
 use brepkit_topology::edge::{Edge, EdgeCurve, EdgeId};
@@ -91,10 +93,22 @@ fn edge_between(topo: &Topology, solid: SolidId, a: Point3, b: Point3) -> EdgeId
         .expect("the edge")
 }
 
+/// The arch turned about two axes and moved off the origin.
+fn turned() -> Mat4 {
+    Mat4::translation(37.0, 483.0, -11.0) * Mat4::rotation_z(0.4229) * Mat4::rotation_x(1.0)
+}
+
 /// Round the top face's edges between the outline's points `chain` (by
-/// index into [`OUTLINE`], in order, closed when `closed`) at `r`, and
-/// check the result against `removed`.
-fn round_top_outline(chain: &[usize], closed: bool, heights: &[f64], r: f64, removed: f64) {
+/// index into [`OUTLINE`], in order, closed when `closed`) at `r`, the arch
+/// moved by `pose`, and check the result against `removed`.
+fn round_top_outline(
+    chain: &[usize],
+    closed: bool,
+    heights: &[f64],
+    r: f64,
+    removed: f64,
+    pose: Option<Mat4>,
+) {
     let mut topo = Topology::new();
     let solid = arch(&mut topo);
     let pairs = chain.len() - usize::from(!closed);
@@ -106,6 +120,9 @@ fn round_top_outline(chain: &[usize], closed: bool, heights: &[f64], r: f64, rem
                 edge_between(&topo, solid, at(chain[k]), at(chain[(k + 1) % chain.len()]))
             }),
         );
+    }
+    if let Some(pose) = pose {
+        transform_solid(&mut topo, solid, &pose).unwrap();
     }
     let result = fillet_v2(&mut topo, solid, &edges, r).unwrap();
     assert!(result.failed.is_empty(), "r = {r}: {:?}", result.failed);
@@ -144,6 +161,7 @@ fn rounds_meeting_at_a_reflex_corner_pivot_on_its_concave_edge() {
             &[H],
             r,
             section(r) * (2.0 * C + (B - A)) + 2.0 * pivot(r),
+            None,
         );
     }
 }
@@ -162,6 +180,7 @@ fn a_whole_outline_rounded_pivots_at_its_reflex_corners() {
             &[H],
             r,
             section(r) * perimeter - mitres + 2.0 * pivot(r),
+            None,
         );
     }
 }
@@ -174,8 +193,31 @@ fn both_ends_of_a_concave_edge_pivot() {
         let perimeter = 2.0 * (L + W + C);
         let mitres = 6.0 * 2.0 * (5.0 / 6.0 - PI / 4.0) * r.powi(3);
         let one = section(r) * perimeter - mitres + 2.0 * pivot(r);
-        round_top_outline(&[0, 1, 2, 3, 4, 5, 6, 7], true, &[0.0, H], r, 2.0 * one);
+        round_top_outline(
+            &[0, 1, 2, 3, 4, 5, 6, 7],
+            true,
+            &[0.0, H],
+            r,
+            2.0 * one,
+            None,
+        );
     }
+}
+
+#[test]
+fn both_ends_of_a_turned_arch_concave_edge_pivot() {
+    let r = 1.0;
+    let perimeter = 2.0 * (L + W + C);
+    let mitres = 6.0 * 2.0 * (5.0 / 6.0 - PI / 4.0) * r * r * r;
+    let one = section(r) * perimeter - mitres + 2.0 * pivot(r);
+    round_top_outline(
+        &[0, 1, 2, 3, 4, 5, 6, 7],
+        true,
+        &[0.0, H],
+        r,
+        2.0 * one,
+        Some(turned()),
+    );
 }
 
 /// Rounds the arch's whole outlines at the top and the bottom, the top of

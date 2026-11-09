@@ -121,12 +121,20 @@ fn removed(r: f64) -> f64 {
     sum * h / 3.0
 }
 
-fn assert_round_ends_on_the_curve(z: f64, r: f64) {
+/// The D turned about two axes and moved off the origin.
+fn turned() -> Mat4 {
+    Mat4::translation(37.0, 483.0, -11.0) * Mat4::rotation_z(0.4229) * Mat4::rotation_x(1.0)
+}
+
+fn assert_round_ends_on_the_curve(z: f64, r: f64, pose: Option<Mat4>) {
     let mut topo = Topology::new();
     let solid = d_prism(&mut topo);
     let before = solid_volume(&topo, solid, 1e-3).unwrap();
     let faces = solid_faces(&topo, solid).unwrap().len();
     let edge = side_edge(&topo, solid, z);
+    if let Some(pose) = pose {
+        transform_solid(&mut topo, solid, &pose).unwrap();
+    }
     let result = fillet_v2(&mut topo, solid, &[edge], r).unwrap();
     assert!(result.failed.is_empty(), "z {z} r {r}: {:?}", result.failed);
     let report = validate_solid(&topo, result.solid).unwrap();
@@ -149,14 +157,21 @@ fn assert_round_ends_on_the_curve(z: f64, r: f64) {
 #[test]
 fn top_edge_ending_on_the_cylinder() {
     for r in [1.0, 2.0] {
-        assert_round_ends_on_the_curve(H, r);
+        assert_round_ends_on_the_curve(H, r, None);
     }
 }
 
 #[test]
 fn bottom_edge_ending_on_the_cylinder() {
     for r in [1.0, 2.0] {
-        assert_round_ends_on_the_curve(0.0, r);
+        assert_round_ends_on_the_curve(0.0, r, None);
+    }
+}
+
+#[test]
+fn edges_of_a_turned_d_ending_on_the_cylinder() {
+    for z in [0.0, H] {
+        assert_round_ends_on_the_curve(z, 2.0, Some(turned()));
     }
 }
 
