@@ -11,6 +11,7 @@ mod tests {
     use brepkit_operations::OperationsError;
     use brepkit_operations::blend_ops::{CornerKind, FilletCorner, fillet_v2_with_corners};
     use brepkit_operations::boolean::{BooleanOp, boolean, mesh_fallback_count};
+    use brepkit_operations::classify::{PointClassification, classify_point};
     use brepkit_operations::extrude::extrude;
     use brepkit_operations::measure::{face_area, solid_volume};
     use brepkit_operations::primitives::make_box;
@@ -206,6 +207,109 @@ mod tests {
                 .is_err_and(|e| e.to_string().contains("notch")),
             "the link crosses the notch: {result:?}"
         );
+    }
+
+    /// A blind hole from the far side whose floor lies in the material the
+    /// patches take off is refused, though no flat face at the corner shows it;
+    /// one whose floor stays clear is kept, and the corner takes off what it
+    /// takes off a block with no hole.
+    #[test]
+    fn a_blind_hole_the_patches_would_cut_is_refused() {
+        let set_back_at_origin = |topo: &mut Topology, body: SolidId| {
+            let corner = vertex_at(topo, body, Point3::new(0.0, 0.0, 0.0));
+            let edges = edges_at(topo, body, corner);
+            let corners = [FilletCorner {
+                vertex: corner,
+                setbacks: set_back(&edges, [14.0, 14.0, 14.0]),
+                kind: CornerKind::G2,
+            }];
+            fillet_v2_with_corners(topo, body, &edges, RADIUS, &corners)
+        };
+        let mut topo = Topology::new();
+        let plain = make_box(&mut topo, 20.0, 20.0, 20.0).unwrap();
+        let plain = set_back_at_origin(&mut topo, plain).unwrap();
+        let without = solid_volume(&topo, plain, 0.01).unwrap();
+        let floor = Point3::new(1.0, 3.0, 3.0);
+        assert_eq!(
+            classify_point(&topo, plain, floor, 0.0, 1e-7).unwrap(),
+            PointClassification::Outside,
+            "the set-back takes off the material at the floor's corner"
+        );
+
+        for (low, refused) in [(3.0, true), (8.0, false)] {
+            let block = make_box(&mut topo, 20.0, 20.0, 20.0).unwrap();
+            let bore = make_box(&mut topo, 30.0, 0.5, 0.5).unwrap();
+            transform_solid(&mut topo, bore, &Mat4::translation(1.0, low, low)).unwrap();
+            let body = boolean(&mut topo, BooleanOp::Cut, block, bore).unwrap();
+            let result = set_back_at_origin(&mut topo, body);
+            if refused {
+                assert!(
+                    result
+                        .as_ref()
+                        .is_err_and(|e| e.to_string().contains("patches")),
+                    "the patches cut the blind hole at {low}: {result:?}"
+                );
+            } else {
+                let kept = assert_sound(&topo, result.unwrap(), "a blind hole clear");
+                assert!(
+                    (without - 0.25 * 19.0 - kept).abs() < 1e-6,
+                    "{without} less the hole's 4.75 is not {kept}"
+                );
+            }
+        }
+    }
+
+    /// A round ending on a top face that rises away from its edge ends lowest in
+    /// its middle, at 16.23, though its contact lines run to 16.4. A set-back
+    /// below that is kept; one past it would take the new arc through the top
+    /// face, and is refused.
+    #[test]
+    fn a_round_ending_on_a_slanted_face_sets_back_only_below_it() {
+        for (along, refused) in [(16.0, false), (16.3, true)] {
+            let mut topo = Topology::new();
+            let block = make_box(&mut topo, 20.0, 20.0, 20.0).unwrap();
+            let above = make_box(&mut topo, 100.0, 100.0, 50.0).unwrap();
+            let rise = 0.2 / 0.2_f64.mul_add(0.2 * 2.0, 1.0).sqrt();
+            let tilt_x = rise.asin();
+            let tilt_y = (-rise / tilt_x.cos()).asin();
+            let pose = Mat4::translation(0.0, 0.0, 16.0)
+                * Mat4::rotation_y(tilt_y)
+                * Mat4::rotation_x(tilt_x)
+                * Mat4::translation(-50.0, -50.0, 0.0);
+            transform_solid(&mut topo, above, &pose).unwrap();
+            let body = boolean(&mut topo, BooleanOp::Cut, block, above).unwrap();
+            let corner = vertex_at(&topo, body, Point3::new(0.0, 0.0, 0.0));
+            let edges = edges_at(&topo, body, corner);
+            let distances = edges.iter().map(|&e| {
+                let edge = topo.edge(e).unwrap();
+                let far = if edge.start() == corner {
+                    edge.end()
+                } else {
+                    edge.start()
+                };
+                if topo.vertex(far).unwrap().point().z() > 1.0 {
+                    along
+                } else {
+                    4.0
+                }
+            });
+            let corners = [FilletCorner {
+                vertex: corner,
+                setbacks: edges.iter().copied().zip(distances).collect(),
+                kind: CornerKind::G2,
+            }];
+            let result = fillet_v2_with_corners(&mut topo, body, &edges, RADIUS, &corners);
+            if refused {
+                assert!(
+                    result
+                        .as_ref()
+                        .is_err_and(|e| e.to_string().contains("patches")),
+                    "a set-back of {along}: {result:?}"
+                );
+            } else {
+                assert_sound(&topo, result.unwrap(), "below the slanted end");
+            }
+        }
     }
 
     /// A block along z whose hole has a polyline spline side that runs out to

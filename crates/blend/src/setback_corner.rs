@@ -1009,6 +1009,291 @@ fn changed_bounds(
     Aabb3::try_from_points(points)
 }
 
+/// A rational Bezier piece of a corner patch, its control net held as
+/// `[w x, w y, w z, w]` with every weight positive, so the piece lies in the
+/// hull of its control points.
+#[derive(Debug, Clone)]
+struct PatchPiece(Vec<Vec<[f64; 4]>>);
+
+impl PatchPiece {
+    /// The whole of a single-span patch, or `None` when a weight is zero or less.
+    fn new(patch: &NurbsSurface) -> Option<Self> {
+        patch
+            .control_points()
+            .iter()
+            .zip(patch.weights())
+            .map(|(row, weights)| {
+                row.iter()
+                    .zip(weights)
+                    .map(|(p, &w)| (w > 0.0).then(|| [p.x() * w, p.y() * w, p.z() * w, w]))
+                    .collect()
+            })
+            .collect::<Option<_>>()
+            .map(Self)
+    }
+
+    fn points(&self) -> Vec<Point3> {
+        self.0
+            .iter()
+            .flatten()
+            .map(|&[x, y, z, w]| Point3::new(x / w, y / w, z / w))
+            .collect()
+    }
+
+    /// How far its net runs end to end along its first parameter and along its
+    /// second, the most of any line of it.
+    fn spans(&self) -> (f64, f64) {
+        let at = |&[x, y, z, w]: &[f64; 4]| Point3::new(x / w, y / w, z / w);
+        let (Some(first), Some(last)) = (self.0.first(), self.0.last()) else {
+            return (0.0, 0.0);
+        };
+        let across = first
+            .iter()
+            .zip(last)
+            .map(|(a, b)| (at(b) - at(a)).length())
+            .fold(0.0, f64::max);
+        let along = self
+            .0
+            .iter()
+            .filter_map(|row| Some((at(row.first()?) - at(row.last()?)).length()))
+            .fold(0.0, f64::max);
+        (across, along)
+    }
+
+    /// The piece split at the middle of its first parameter, or of its second.
+    fn halves(&self, first: bool) -> (Self, Self) {
+        if first {
+            let columns = self.0.first().map_or(0, Vec::len);
+            let (mut left, mut right) = (
+                vec![Vec::with_capacity(columns); self.0.len()],
+                vec![Vec::with_capacity(columns); self.0.len()],
+            );
+            for j in 0..columns {
+                let line: Vec<[f64; 4]> = self.0.iter().map(|row| row[j]).collect();
+                let (a, b) = halved(&line);
+                for (i, (p, q)) in a.into_iter().zip(b).enumerate() {
+                    left[i].push(p);
+                    right[i].push(q);
+                }
+            }
+            (Self(left), Self(right))
+        } else {
+            let (left, right) = self.0.iter().map(|row| halved(row)).unzip();
+            (Self(left), Self(right))
+        }
+    }
+}
+
+/// Points whose hull holds a face, and axes its own shape is told apart along.
+type FaceHull = (Vec<Point3>, Vec<Vec3>);
+
+/// Points whose hull holds `face`, and axes its own shape is best told apart
+/// along. A plane's face lies in the hull of its outline. A cylinder's, cone's,
+/// sphere's or torus's lies in a box of its own frame, as tall along the axis
+/// as its outline reaches; a spline surface's in its control points. `None`
+/// where a spline's weight is zero or less.
+fn face_hull(topo: &Topology, face: FaceId) -> Result<Option<FaceHull>, BlendError> {
+    let data = topo.face(face)?;
+    let mut outline = Vec::new();
+    for wire in face_wires(data) {
+        for oriented in topo.wire(wire)?.edges() {
+            let edge = topo.edge(oriented.edge())?;
+            let (from, to) = (
+                topo.vertex(edge.start())?.point(),
+                topo.vertex(edge.end())?.point(),
+            );
+            let Some(pieces) = curve_pieces(edge.curve(), from, to) else {
+                return Ok(None);
+            };
+            outline.extend(
+                pieces
+                    .into_iter()
+                    .flatten()
+                    .map(|[x, y, z, w]| Point3::new(x / w, y / w, z / w)),
+            );
+        }
+    }
+    let height = |origin: Point3, axis: Vec3| {
+        outline
+            .iter()
+            .map(|&p| (p - origin).dot(axis))
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), h| {
+                (lo.min(h), hi.max(h))
+            })
+    };
+    let boxed = |origin: Point3, axes: [Vec3; 3], lo: [f64; 3], hi: [f64; 3]| {
+        let points = (0..8)
+            .map(|corner: usize| {
+                (0..3).fold(origin, |p, k| {
+                    p + axes[k] * if (corner >> k) & 1 == 0 { lo[k] } else { hi[k] }
+                })
+            })
+            .collect();
+        (points, axes.to_vec())
+    };
+    Ok(Some(match data.surface() {
+        FaceSurface::Plane { normal, .. } => (outline, vec![*normal]),
+        FaceSurface::Cylinder(c) => {
+            let ((h0, h1), r) = (height(c.origin(), c.axis()), c.radius());
+            boxed(
+                c.origin(),
+                [c.x_axis(), c.y_axis(), c.axis()],
+                [-r, -r, h0],
+                [r, r, h1],
+            )
+        }
+        FaceSurface::Cone(k) => {
+            let (h0, h1) = height(k.apex(), k.axis());
+            let r = h0.abs().max(h1.abs()) / k.half_angle().tan();
+            boxed(
+                k.apex(),
+                [k.x_axis(), k.y_axis(), k.axis()],
+                [-r, -r, h0],
+                [r, r, h1],
+            )
+        }
+        FaceSurface::Sphere(b) => {
+            let r = b.radius();
+            boxed(
+                b.center(),
+                [b.x_axis(), b.y_axis(), b.z_axis()],
+                [-r; 3],
+                [r; 3],
+            )
+        }
+        FaceSurface::Torus(t) => {
+            let (wide, tall) = (t.major_radius() + t.minor_radius(), t.minor_radius());
+            boxed(
+                t.center(),
+                [t.x_axis(), t.y_axis(), t.z_axis()],
+                [-wide, -wide, -tall],
+                [wide, wide, tall],
+            )
+        }
+        FaceSurface::Nurbs(n) => {
+            if n.weights().iter().flatten().any(|&w| w <= 0.0) {
+                return Ok(None);
+            }
+            (
+                n.control_points().iter().flatten().copied().collect(),
+                Vec::new(),
+            )
+        }
+    }))
+}
+
+/// Whether the hulls of `a` and `b` lie more than `margin` apart along one of
+/// `axes` or the line between their centroids.
+fn apart_in_space(a: &[Point3], b: &[Point3], axes: &[Vec3], margin: f64) -> bool {
+    let centroid = |points: &[Point3]| {
+        let n = points.len().max(1) as f64;
+        let sum = points.iter().fold(Vec3::new(0.0, 0.0, 0.0), |sum, &p| {
+            sum + Vec3::new(p.x(), p.y(), p.z())
+        });
+        sum * (1.0 / n)
+    };
+    let extent = |points: &[Point3], axis: Vec3| {
+        points
+            .iter()
+            .map(|&p| Vec3::new(p.x(), p.y(), p.z()).dot(axis))
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), s| {
+                (lo.min(s), hi.max(s))
+            })
+    };
+    axes.iter()
+        .copied()
+        .chain([centroid(b) - centroid(a)])
+        .any(|axis| {
+            let Ok(axis) = axis.normalize() else {
+                return false;
+            };
+            let ((a0, a1), (b0, b1)) = (extent(a, axis), extent(b, axis));
+            a1 + margin < b0 || b1 + margin < a0
+        })
+}
+
+/// Whether one of `patches` could meet the face held in `hull`: a piece whose
+/// net cannot be told apart from the hull is halved until it can, and one no
+/// larger than `margin`, or a search that runs out of halvings, reads as
+/// meeting it.
+fn patches_reach(patches: &[PatchPiece], hull: &[Point3], axes: &[Vec3], margin: f64) -> bool {
+    const MAX_PIECES: usize = 1 << 14;
+    let mut pending = patches.to_vec();
+    let mut visited = 0_usize;
+    while let Some(piece) = pending.pop() {
+        visited += 1;
+        if visited > MAX_PIECES {
+            return true;
+        }
+        if apart_in_space(&piece.points(), hull, axes, margin) {
+            continue;
+        }
+        let (across, along) = piece.spans();
+        if across.max(along) <= margin {
+            return true;
+        }
+        let (first, second) = piece.halves(across >= along);
+        pending.push(first);
+        pending.push(second);
+    }
+    false
+}
+
+/// Whether the patches could meet a face of `solid` other than the corner's
+/// ball, stripes and flat faces. Another face cannot cross those, and the flat
+/// faces' outlines keep clear of their cut-away corners. So it reaches the
+/// changed material only through a patch, or, in a cavity, by lying wholly
+/// inside it, which the caller reads. A face that ends a stripe short of its
+/// new arc takes the arc, and so a patch, through it.
+fn patches_meet_other_faces(
+    topo: &Topology,
+    solid: SolidId,
+    corner: &RolledCorner,
+    directions: &[Vec3],
+    patches: &CornerPatches,
+) -> Result<bool, BlendError> {
+    let (Some(first), Some(second)) = (
+        PatchPiece::new(&patches.first),
+        PatchPiece::new(&patches.second),
+    ) else {
+        return Ok(true);
+    };
+    let pieces = [first, second];
+    let mut own: Vec<FaceId> = corner.arcs.iter().map(|arc| arc.stripe).collect();
+    own.push(corner.face);
+    own.extend(corner.flats);
+    let mut axes = vec![
+        Vec3::new(1.0, 0.0, 0.0),
+        Vec3::new(0.0, 1.0, 0.0),
+        Vec3::new(0.0, 0.0, 1.0),
+    ];
+    axes.extend_from_slice(directions);
+    for &flat in &corner.flats {
+        if let FaceSurface::Plane { normal, .. } = topo.face(flat)?.surface() {
+            axes.push(*normal);
+        }
+    }
+    let solid_data = topo.solid(solid)?;
+    let shells: Vec<ShellId> = std::iter::once(solid_data.outer_shell())
+        .chain(solid_data.inner_shells().iter().copied())
+        .collect();
+    for shell in shells {
+        for &face in topo.shell(shell)?.faces() {
+            if own.contains(&face) {
+                continue;
+            }
+            let Some((hull, own_axes)) = face_hull(topo, face)? else {
+                return Ok(true);
+            };
+            let face_axes: Vec<Vec3> = axes.iter().copied().chain(own_axes).collect();
+            if patches_reach(&pieces, &hull, &face_axes, TOL) {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
 /// How far along `direction` from `vertex` a corner's rounds stop today, for
 /// each `direction`, or `None` when no ball corner stands at `vertex`.
 ///
@@ -1038,8 +1323,8 @@ pub fn rolling_distances(
 ///
 /// Returns [`BlendError::PlanningFailure`] when no ball corner stands at
 /// `vertex`, a direction matches no stripe, a set-back is not past the ball or
-/// not short of the stripe's far end, or a flat face's outline reaches the part
-/// of it the corner cuts away.
+/// not short of the stripe's far end, a flat face's outline reaches the part
+/// of it the corner cuts away, or another face of the solid could meet a patch.
 #[allow(clippy::too_many_lines)]
 pub fn set_back_corner(
     topo: &mut Topology,
@@ -1151,6 +1436,12 @@ pub fn set_back_corner(
                 "a hole or notch in a flat face reaches where the set-back corner cuts it away",
             ));
         }
+    }
+    let directions: Vec<Vec3> = set_for.iter().map(|&(away, _)| away).collect();
+    if patches_meet_other_faces(topo, solid, &corner, &directions, &patches)? {
+        return Err(refused(
+            "a face of the solid lies where the set-back corner's patches would cut through it",
+        ));
     }
     let reach = changed_bounds(&corner, &ends, &patches)
         .ok_or_else(|| refused("a corner patch has a weight of zero or less"))?;
