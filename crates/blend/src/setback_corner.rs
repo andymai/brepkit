@@ -10,9 +10,12 @@
 use std::collections::HashMap;
 
 use brepkit_math::curves::Circle3D;
+use brepkit_math::frame::Frame3;
 use brepkit_math::nurbs::curve::NurbsCurve;
+use brepkit_math::nurbs::decompose::curve_bezier_between;
 use brepkit_math::nurbs::surface::NurbsSurface;
-use brepkit_math::vec::{Point3, Vec3};
+use brepkit_math::region2d::{Boundary2, point_in_region};
+use brepkit_math::vec::{Point2, Point3, Vec2, Vec3};
 use brepkit_topology::Topology;
 use brepkit_topology::edge::{Edge, EdgeCurve, EdgeId};
 use brepkit_topology::face::{Face, FaceId, FaceSurface};
@@ -643,36 +646,334 @@ fn edges_at(
     Ok(found)
 }
 
-/// Whether a hole in `face` reaches into the triangle `corners`, read at its
-/// vertices and along its edges. Its outline cannot cross the triangle's two
-/// sides on the face's old boundary, so a hole reaching the third has points
-/// inside.
-fn hole_reaches(topo: &Topology, face: FaceId, corners: [Point3; 3]) -> Result<bool, BlendError> {
-    const SAMPLES: u32 = 16;
-    let [a, b, c] = corners;
-    let normal = (b - a).cross(c - a);
-    let inside = |p: Point3| {
-        let sides = [
-            (b - a).cross(p - a).dot(normal),
-            (c - b).cross(p - b).dot(normal),
-            (a - c).cross(p - c).dot(normal),
-        ];
-        sides.iter().all(|&side| side > 0.0)
+/// A rational Bezier piece of a curve in a plane, its control points held as
+/// `[w x, w y, w]` with every weight positive, so the piece lies in their hull.
+#[derive(Debug, Clone)]
+struct Piece(Vec<[f64; 3]>);
+
+impl Piece {
+    fn points(&self) -> impl Iterator<Item = Point2> + '_ {
+        self.0.iter().map(|&[x, y, w]| Point2::new(x / w, y / w))
+    }
+
+    fn ends(&self) -> Option<(Point2, Point2)> {
+        let (&[x0, y0, w0], &[x1, y1, w1]) = (self.0.first()?, self.0.last()?);
+        Some((Point2::new(x0 / w0, y0 / w0), Point2::new(x1 / w1, y1 / w1)))
+    }
+
+    /// The least and greatest of its control points along `axis`.
+    fn extent(&self, axis: Vec2) -> (f64, f64) {
+        self.points()
+            .map(|p| axis.x().mul_add(p.x(), axis.y() * p.y()))
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), s| {
+                (lo.min(s), hi.max(s))
+            })
+    }
+
+    /// The diagonal of its control points' box.
+    fn size(&self) -> f64 {
+        let (x0, x1) = self.extent(Vec2::new(1.0, 0.0));
+        let (y0, y1) = self.extent(Vec2::new(0.0, 1.0));
+        (x1 - x0).hypot(y1 - y0)
+    }
+
+    fn centroid(&self) -> Point2 {
+        let n = self.0.len().max(1) as f64;
+        let (x, y) = self
+            .points()
+            .fold((0.0, 0.0), |(x, y), p| (x + p.x(), y + p.y()));
+        Point2::new(x / n, y / n)
+    }
+
+    /// The farthest a control point lies from the chord: the piece and the
+    /// sliver between it and its chord lie no farther.
+    fn bound(&self) -> f64 {
+        let Some((a, b)) = self.ends() else {
+            return f64::INFINITY;
+        };
+        self.points()
+            .map(|p| distance_to_segment(p, a, b))
+            .fold(0.0, f64::max)
+    }
+
+    fn halves(&self) -> (Self, Self) {
+        let (left, right) = halved(&self.0);
+        (Self(left), Self(right))
+    }
+}
+
+/// A rational Bezier's control points, in homogeneous form, split at its
+/// middle parameter by de Casteljau.
+fn halved<const N: usize>(line: &[[f64; N]]) -> (Vec<[f64; N]>, Vec<[f64; N]>) {
+    let mut work = line.to_vec();
+    let n = work.len();
+    let mut left = Vec::with_capacity(n);
+    let mut right = Vec::with_capacity(n);
+    for r in 0..n {
+        if r > 0 {
+            for j in 0..n - r {
+                let (a, b) = (work[j], work[j + 1]);
+                work[j] = std::array::from_fn(|k| 0.5 * (a[k] + b[k]));
+            }
+        }
+        left.push(work[0]);
+        right.push(work[n - 1 - r]);
+    }
+    right.reverse();
+    (left, right)
+}
+
+fn distance_to_segment(p: Point2, a: Point2, b: Point2) -> f64 {
+    let (ab, ap) = (b - a, p - a);
+    let len2 = ab.dot(ab);
+    let t = if len2 > 0.0 {
+        (ap.dot(ab) / len2).clamp(0.0, 1.0)
+    } else {
+        0.0
     };
-    for &hole in topo.face(face)?.inner_wires() {
-        for oriented in topo.wire(hole)?.edges() {
+    (ap - ab * t).length()
+}
+
+/// Whether the hulls of `a` and `b` lie more than `margin` apart along one of
+/// the axes that tell small pieces apart: the plane's own, each chord's normal,
+/// and the line between their centroids.
+fn apart(a: &Piece, b: &Piece, margin: f64) -> bool {
+    let normal = |piece: &Piece| {
+        piece.ends().map_or(Vec2::new(0.0, 0.0), |(s, e)| {
+            Vec2::new(s.y() - e.y(), e.x() - s.x())
+        })
+    };
+    [
+        Vec2::new(1.0, 0.0),
+        Vec2::new(0.0, 1.0),
+        normal(a),
+        normal(b),
+        b.centroid() - a.centroid(),
+    ]
+    .into_iter()
+    .any(|axis| {
+        let Ok(axis) = axis.normalize() else {
+            return false;
+        };
+        let ((a0, a1), (b0, b1)) = (a.extent(axis), b.extent(axis));
+        a1 + margin < b0 || b1 + margin < a0
+    })
+}
+
+/// Whether a piece of `curve` comes within `margin` of a piece of `region`:
+/// pairs whose hulls cannot be told apart are halved until they can, and a pair
+/// both no larger than `margin`, or a search that runs out of halvings, reads
+/// as near.
+fn near(curve: &[Piece], region: &[Piece], margin: f64) -> bool {
+    const MAX_PAIRS: usize = 1 << 16;
+    let mut pending: Vec<(Piece, Piece)> = curve
+        .iter()
+        .flat_map(|a| region.iter().map(move |b| (a.clone(), b.clone())))
+        .collect();
+    let mut visited = 0_usize;
+    while let Some((a, b)) = pending.pop() {
+        visited += 1;
+        if visited > MAX_PAIRS {
+            return true;
+        }
+        if apart(&a, &b, margin) {
+            continue;
+        }
+        let (size_a, size_b) = (a.size(), b.size());
+        if size_a <= margin && size_b <= margin {
+            return true;
+        }
+        if size_a >= size_b {
+            let (first, second) = a.halves();
+            pending.push((first, b.clone()));
+            pending.push((second, b));
+        } else {
+            let (first, second) = b.halves();
+            pending.push((a.clone(), first));
+            pending.push((a, second));
+        }
+    }
+    false
+}
+
+/// Whether `p`, more than `margin` from every piece of the closed loop
+/// `region`, lies inside it. A piece whose chord lies farther from `p` than
+/// `margin` plus the piece's bound winds about `p` as its chord does, so it
+/// stands as that chord; a nearer one is halved. A reading in doubt, or one
+/// that runs out of halvings, is inside.
+fn inside(region: &[Piece], p: Point2, margin: f64) -> bool {
+    const MAX_HALVINGS: usize = 4096;
+    let mut chords = Vec::new();
+    let mut pending: Vec<Piece> = region.to_vec();
+    let mut halvings = 0_usize;
+    while let Some(piece) = pending.pop() {
+        let Some((a, b)) = piece.ends() else {
+            return true;
+        };
+        if distance_to_segment(p, a, b) > margin + piece.bound() {
+            chords.push(Boundary2::Segment(a, b));
+        } else if halvings == MAX_HALVINGS {
+            return true;
+        } else {
+            halvings += 1;
+            let (first, second) = piece.halves();
+            pending.push(first);
+            pending.push(second);
+        }
+    }
+    point_in_region(&chords, p, margin) != Some(false)
+}
+
+/// The rational Bezier pieces of an edge from `from` to `to` along `curve`,
+/// each as control points `[w x, w y, w z, w]` whose hull holds it. A circle or
+/// ellipse is cut into arcs of a quarter turn at most, each exactly a rational
+/// quadratic; a spline into its knot spans. `None` where a spline's weight is
+/// zero or less, and its control points no longer hold it.
+fn curve_pieces(curve: &EdgeCurve, from: Point3, to: Point3) -> Option<Vec<Vec<[f64; 4]>>> {
+    let plain = |p: Point3| [p.x(), p.y(), p.z(), 1.0];
+    let (t0, t1) = curve.domain_with_endpoints(from, to);
+    let conic = |center: Point3, u: Vec3, v: Vec3, a: f64, b: f64| {
+        let at = |t: f64, scale: f64| center + (u * (a * t.cos()) + v * (b * t.sin())) * scale;
+        let turns = ((t1 - t0) / std::f64::consts::FRAC_PI_2).ceil().max(1.0);
+        let count = turns as usize;
+        (0..count)
+            .map(|i| {
+                let s0 = (t1 - t0).mul_add(i as f64 / turns, t0);
+                let s1 = (t1 - t0).mul_add((i + 1) as f64 / turns, t0);
+                let half = 0.5 * (s1 - s0);
+                let w = half.cos();
+                let peak = at(s0 + half, 1.0 / w);
+                vec![
+                    plain(at(s0, 1.0)),
+                    [peak.x() * w, peak.y() * w, peak.z() * w, w],
+                    plain(at(s1, 1.0)),
+                ]
+            })
+            .collect()
+    };
+    match curve {
+        EdgeCurve::Line => Some(vec![vec![plain(from), plain(to)]]),
+        EdgeCurve::Circle(c) => Some(conic(
+            c.center(),
+            c.u_axis(),
+            c.v_axis(),
+            c.radius(),
+            c.radius(),
+        )),
+        EdgeCurve::Ellipse(e) => Some(conic(
+            e.center(),
+            e.u_axis(),
+            e.v_axis(),
+            e.semi_major(),
+            e.semi_minor(),
+        )),
+        EdgeCurve::NurbsCurve(n) => {
+            let (d0, d1) = n.domain();
+            let (lo, hi) = (t0.min(t1).max(d0), t0.max(t1).min(d1));
+            let mut breaks: Vec<f64> = std::iter::once(lo)
+                .chain(n.knots().iter().copied().filter(|&k| k > lo && k < hi))
+                .chain(std::iter::once(hi))
+                .collect();
+            breaks.dedup();
+            if breaks.len() < 2 {
+                return None;
+            }
+            let mut pieces = Vec::with_capacity(breaks.len() - 1);
+            for span in breaks.windows(2) {
+                let bezier = curve_bezier_between(n, span[0], span[1]).ok()?;
+                if bezier.iter().any(|&[.., w]| w <= 0.0) {
+                    return None;
+                }
+                pieces.push(bezier);
+            }
+            Some(pieces)
+        }
+    }
+}
+
+/// [`curve_pieces`] taken into a plane by `flat`.
+fn edge_pieces(
+    curve: &EdgeCurve,
+    from: Point3,
+    to: Point3,
+    flat: impl Fn(Point3) -> Point2,
+) -> Option<Vec<Piece>> {
+    let pieces = curve_pieces(curve, from, to)?;
+    Some(
+        pieces
+            .into_iter()
+            .map(|piece| {
+                Piece(
+                    piece
+                        .into_iter()
+                        .map(|[x, y, z, w]| {
+                            let p = flat(Point3::new(x / w, y / w, z / w));
+                            [p.x() * w, p.y() * w, w]
+                        })
+                        .collect(),
+                )
+            })
+            .collect(),
+    )
+}
+
+/// Whether the outline of `flat` reaches what a set-back cuts away from it: the
+/// region between its corner `at`, the points `a` and `b` its contact lines are
+/// cut back to, and `link` between them.
+///
+/// Every edge but the two contact lines ending at `at` is read whole against
+/// the region's boundary, and each loop that keeps clear of it by a point of
+/// the loop: a hole may lie wholly inside, and the rest of the outline runs on
+/// from the contact lines' far ends, past `a` and `b`. A spline edge whose
+/// control points no longer hold it reads as reaching.
+fn cut_reaches(
+    topo: &Topology,
+    flat: FaceId,
+    contacts: [EdgeId; 2],
+    [at, a, b]: [Point3; 3],
+    link: &NurbsCurve,
+) -> Result<bool, BlendError> {
+    let data = topo.face(flat)?;
+    let FaceSurface::Plane { normal, .. } = data.surface() else {
+        return Ok(true);
+    };
+    let frame = Frame3::from_normal(at, *normal)?;
+    let to_plane = |p: Point3| {
+        let d = p - at;
+        Point2::new(d.dot(frame.x), d.dot(frame.y))
+    };
+    let Some(link) = edge_pieces(&EdgeCurve::NurbsCurve(link.clone()), a, b, to_plane) else {
+        return Ok(true);
+    };
+    let plain = |p: Point3| {
+        let q = to_plane(p);
+        [q.x(), q.y(), 1.0]
+    };
+    let mut region = vec![Piece(vec![plain(at), plain(a)])];
+    region.extend(link);
+    region.push(Piece(vec![plain(b), plain(at)]));
+
+    for wire in face_wires(data) {
+        let mut first = None;
+        for oriented in topo.wire(wire)?.edges() {
+            if contacts.contains(&oriented.edge()) {
+                continue;
+            }
             let edge = topo.edge(oriented.edge())?;
             let (from, to) = (
                 topo.vertex(edge.start())?.point(),
                 topo.vertex(edge.end())?.point(),
             );
-            let (t0, t1) = edge.curve().domain_with_endpoints(from, to);
-            for k in 0..=SAMPLES {
-                let t = (t1 - t0).mul_add(f64::from(k) / f64::from(SAMPLES), t0);
-                if inside(edge.curve().evaluate_with_endpoints(t, from, to)) {
-                    return Ok(true);
-                }
+            let Some(pieces) = edge_pieces(edge.curve(), from, to, to_plane) else {
+                return Ok(true);
+            };
+            if near(&pieces, &region, TOL) {
+                return Ok(true);
             }
+            first.get_or_insert_with(|| to_plane(from));
+        }
+        if first.is_some_and(|p| inside(&region, p, TOL)) {
+            return Ok(true);
         }
     }
     Ok(false)
@@ -704,8 +1005,9 @@ pub fn rolling_distances(
 /// # Errors
 ///
 /// Returns [`BlendError::PlanningFailure`] when no ball corner stands at
-/// `vertex`, a direction matches no stripe, or a set-back is not past the ball
-/// or not short of the stripe's far end.
+/// `vertex`, a direction matches no stripe, a set-back is not past the ball or
+/// not short of the stripe's far end, or a flat face's outline reaches the part
+/// of it the corner cuts away.
 #[allow(clippy::too_many_lines)]
 pub fn set_back_corner(
     topo: &mut Topology,
@@ -749,6 +1051,7 @@ pub fn set_back_corner(
     set_for.rotate_left((last + 1) % 3);
 
     let mut moves = [Vec3::new(0.0, 0.0, 0.0); 3];
+    let mut contacts = [[corner.arcs[0].edge; 2]; 3];
     let mut ends = Vec::with_capacity(3);
     let mut starts = Vec::with_capacity(3);
     let mut stops = Vec::with_capacity(3);
@@ -761,11 +1064,12 @@ pub fn set_back_corner(
                 "a set-back of {distance} is not past the ball, which stops its round at {rolling}"
             )));
         }
-        for at in [arc.from, arc.to] {
+        for (end, at) in [arc.from, arc.to].into_iter().enumerate() {
             let contact = edges_at(topo, arc.stripe, at, arc.edge)?;
             let [contact] = contact.as_slice() else {
                 return Err(refused("a stripe's end has no single contact edge"));
             };
+            contacts[i][end] = *contact;
             let edge = topo.edge(*contact)?;
             let far = if edge.start() == at {
                 edge.end()
@@ -797,19 +1101,25 @@ pub fn set_back_corner(
     let ends: [StripeEnd; 3] = ends
         .try_into()
         .map_err(|_| refused("a corner has three stripe ends"))?;
+    let patches =
+        corner_patches(&ends)?.ok_or_else(|| refused("a stripe's end has no angle to read"))?;
     // Each flat face's corner, between its two contact lines and the link, is
-    // cut away; a hole in the face there would be left outside its outline.
+    // cut away: the rest of its outline must keep clear of it.
+    let links = [
+        &patches.third_link,
+        &patches.first_link,
+        &patches.second_link,
+    ];
     for k in 0..3 {
         let at = topo.vertex(corner.arcs[k].from)?.point();
         let (a, b) = (starts[k], stops[(k + 2) % 3]);
-        if hole_reaches(topo, corner.flats[k], [at, a, b])? {
+        let meeting = [contacts[k][0], contacts[(k + 2) % 3][1]];
+        if cut_reaches(topo, corner.flats[k], meeting, [at, a, b], links[k])? {
             return Err(refused(
-                "a hole in a flat face lies where the set-back corner's link would cut",
+                "a hole or notch in a flat face reaches where the set-back corner cuts it away",
             ));
         }
     }
-    let patches =
-        corner_patches(&ends)?.ok_or_else(|| refused("a stripe's end has no angle to read"))?;
 
     let mut new_from = Vec::with_capacity(3);
     let mut new_to = Vec::with_capacity(3);

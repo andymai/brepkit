@@ -6,6 +6,7 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
 
     use brepkit_math::mat::Mat4;
+    use brepkit_math::nurbs::curve::NurbsCurve;
     use brepkit_math::vec::{Point3, Vec3};
     use brepkit_operations::OperationsError;
     use brepkit_operations::blend_ops::{CornerKind, FilletCorner, fillet_v2_with_corners};
@@ -17,12 +18,13 @@ mod tests {
     use brepkit_operations::transform::transform_solid;
     use brepkit_operations::validate::validate_solid;
     use brepkit_topology::Topology;
-    use brepkit_topology::builder::make_planar_face;
-    use brepkit_topology::edge::EdgeId;
+    use brepkit_topology::builder::{make_planar_face, make_polygon_wire};
+    use brepkit_topology::edge::{Edge, EdgeCurve, EdgeId};
     use brepkit_topology::explorer::{solid_edges, solid_faces, solid_vertices};
-    use brepkit_topology::face::FaceSurface;
+    use brepkit_topology::face::{Face, FaceSurface};
     use brepkit_topology::solid::SolidId;
-    use brepkit_topology::vertex::VertexId;
+    use brepkit_topology::vertex::{Vertex, VertexId};
+    use brepkit_topology::wire::{OrientedEdge, Wire};
 
     const RADIUS: f64 = 2.0;
 
@@ -146,6 +148,138 @@ mod tests {
                 assert_sound(&topo, result.unwrap(), "a hole clear of the link");
             }
         }
+    }
+
+    /// A hole past the link but short of the chord between its ends is kept,
+    /// and the corner takes off what it takes off a block with no hole.
+    #[test]
+    fn a_hole_between_the_link_and_its_chord_is_kept() {
+        let set_back_at_origin = |topo: &mut Topology, body: SolidId| {
+            let corner = vertex_at(topo, body, Point3::new(0.0, 0.0, 0.0));
+            let edges = edges_at(topo, body, corner);
+            let corners = [FilletCorner {
+                vertex: corner,
+                setbacks: set_back(&edges, [14.0, 14.0, 14.0]),
+                kind: CornerKind::G2,
+            }];
+            fillet_v2_with_corners(topo, body, &edges, RADIUS, &corners)
+        };
+        let mut topo = Topology::new();
+        let block = make_box(&mut topo, 20.0, 20.0, 20.0).unwrap();
+        let bar = make_box(&mut topo, 30.0, 1.0, 1.0).unwrap();
+        transform_solid(&mut topo, bar, &Mat4::translation(-5.0, 6.0, 6.0)).unwrap();
+        let holed = boolean(&mut topo, BooleanOp::Cut, block, bar).unwrap();
+        let kept = set_back_at_origin(&mut topo, holed).unwrap();
+        let with_hole = assert_sound(&topo, kept, "a hole past the link");
+
+        let plain = make_box(&mut topo, 20.0, 20.0, 20.0).unwrap();
+        let whole = set_back_at_origin(&mut topo, plain).unwrap();
+        let without = assert_sound(&topo, whole, "no hole");
+        assert!(
+            (without - 20.0 - with_hole).abs() < 1e-6,
+            "{without} less the hole's 20 is not {with_hole}"
+        );
+    }
+
+    /// A notch from a flat face's far side that the link would cross is
+    /// refused, though both contact lines run long enough.
+    #[test]
+    fn a_notch_the_link_would_cross_is_refused() {
+        let mut topo = Topology::new();
+        let block = make_box(&mut topo, 20.0, 20.0, 20.0).unwrap();
+        let slot = make_box(&mut topo, 2.0, 1.0, 30.0).unwrap();
+        transform_solid(&mut topo, slot, &Mat4::translation(-1.0, 4.0, 3.0)).unwrap();
+        let notched = boolean(&mut topo, BooleanOp::Cut, block, slot).unwrap();
+        let corner = vertex_at(&topo, notched, Point3::new(0.0, 0.0, 0.0));
+        let edges = edges_at(&topo, notched, corner);
+        let rolled = fillet_v2_with_corners(&mut topo, notched, &edges, RADIUS, &[]);
+        assert!(rolled.is_ok(), "the rolled corner clears the notch");
+        let corners = [FilletCorner {
+            vertex: corner,
+            setbacks: set_back(&edges, [14.0, 14.0, 14.0]),
+            kind: CornerKind::G2,
+        }];
+        let result = fillet_v2_with_corners(&mut topo, notched, &edges, RADIUS, &corners);
+        assert!(
+            result
+                .as_ref()
+                .is_err_and(|e| e.to_string().contains("notch")),
+            "the link crosses the notch: {result:?}"
+        );
+    }
+
+    /// A block along z whose hole has a polyline spline side that runs out to
+    /// a spike's tip at (3.5, 3.5) and back between its first two of every
+    /// sixteenth of its parameters, then zigzags so that no line or conic stands
+    /// for it.
+    fn spiked(topo: &mut Topology) -> SolidId {
+        let at = |x: f64, y: f64| Point3::new(x, y, 0.0);
+        let outer = make_polygon_wire(
+            topo,
+            &[at(0.0, 0.0), at(20.0, 0.0), at(20.0, 20.0), at(0.0, 20.0)],
+            1e-7,
+        )
+        .unwrap();
+        let corners = [at(9.0, 9.0), at(9.0, 11.0), at(11.0, 11.0), at(11.0, 9.0)]
+            .map(|p| topo.add_vertex(Vertex::new(p, 1e-7)));
+        let mut sides: Vec<OrientedEdge> = (0..3)
+            .map(|i| {
+                let edge = Edge::new(corners[i], corners[i + 1], EdgeCurve::Line);
+                OrientedEdge::new(topo.add_edge(edge), true)
+            })
+            .collect();
+        let spike = NurbsCurve::new(
+            1,
+            vec![0.0, 0.0, 0.02, 0.025, 0.03, 0.3, 0.5, 0.7, 1.0, 1.0],
+            vec![
+                at(11.0, 9.0),
+                at(10.9, 9.0),
+                at(3.5, 3.5),
+                at(10.8, 9.0),
+                at(10.5, 9.4),
+                at(10.0, 9.0),
+                at(9.5, 9.4),
+                at(9.0, 9.0),
+            ],
+            vec![1.0; 8],
+        )
+        .unwrap();
+        let last = Edge::new(corners[3], corners[0], EdgeCurve::NurbsCurve(spike));
+        sides.push(OrientedEdge::new(topo.add_edge(last), true));
+        let hole = topo.add_wire(Wire::new(sides, true).unwrap());
+        let face = topo.add_face(Face::new(
+            outer,
+            vec![hole],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: 0.0,
+            },
+        ));
+        extrude(topo, face, Vec3::new(0.0, 0.0, 1.0), 20.0).unwrap()
+    }
+
+    /// A hole whose spline side reaches into the cut between the points a fixed
+    /// sampling reads is refused.
+    #[test]
+    fn a_hole_reaching_the_cut_between_samples_is_refused() {
+        let mut topo = Topology::new();
+        let body = spiked(&mut topo);
+        let corner = vertex_at(&topo, body, Point3::new(0.0, 0.0, 0.0));
+        let edges = edges_at(&topo, body, corner);
+        let rolled = fillet_v2_with_corners(&mut topo, body, &edges, RADIUS, &[]);
+        assert!(rolled.is_ok(), "the rolled corner clears the spike");
+        let corners = [FilletCorner {
+            vertex: corner,
+            setbacks: set_back(&edges, [14.0, 14.0, 14.0]),
+            kind: CornerKind::G2,
+        }];
+        let result = fillet_v2_with_corners(&mut topo, body, &edges, RADIUS, &corners);
+        assert!(
+            result
+                .as_ref()
+                .is_err_and(|e| e.to_string().contains("hole")),
+            "the spike reaches the cut: {result:?}"
+        );
     }
 
     /// A corner patch's parameters along the side its `k`th wire edge runs.
