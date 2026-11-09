@@ -487,6 +487,26 @@ impl Chain {
         segment.run.point(segment.fraction(s))
     }
 
+    /// The `s` an arc length `along` in from the start, or from the end.
+    pub fn s_in_from(&self, along: f64, from_end: bool) -> f64 {
+        let count = self.segments.len();
+        let mut left = along;
+        for k in 0..count {
+            let segment = &self.segments[if from_end { count - 1 - k } else { k }];
+            let length = segment.length();
+            if left <= length {
+                let step = (segment.s1 - segment.s0) * (left / length);
+                return if from_end {
+                    segment.s1 - step
+                } else {
+                    segment.s0 + step
+                };
+            }
+            left -= length;
+        }
+        if from_end { 0.0 } else { 1.0 }
+    }
+
     /// The arc length of the chain from `from` to `to`.
     pub fn length_between(&self, from: f64, to: f64) -> f64 {
         self.segments

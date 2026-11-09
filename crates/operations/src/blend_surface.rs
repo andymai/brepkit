@@ -53,6 +53,11 @@ const ARC_ROUNDING: f64 = 1e-12;
 /// touching: the chains run that close for too long to prove apart.
 const MOST_NEAR_PAIRS: usize = 1 << 16;
 
+/// The least room an end the chains share takes along them, as a share of
+/// the longer chain's length, and the most, as a share of the shorter's.
+const SHARED_END_LEAST: f64 = 1e-6;
+const SHARED_END_MOST: f64 = 1e-3;
+
 /// The continuity a blend surface keeps with the face beside each chain.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BlendContinuity {
@@ -434,15 +439,14 @@ impl Piece {
     fn new(chain: &Chain, (from, to): (f64, f64), (start, end): (Point3, Point3)) -> Self {
         let arc = chain.length_between(from, to);
         let chord = (end - start).length();
-        // An arc length short by `d` hides up to `sqrt(arc d)` of the reach.
-        let rounding = (arc * ARC_ROUNDING * chain.length).sqrt();
         Self {
             from,
             to,
             start,
             end,
             arc,
-            reach: 0.5 * (arc * arc - chord * chord).max(0.0).sqrt() + rounding,
+            reach: 0.5 * (arc * arc - chord * chord).max(0.0).sqrt()
+                + rounding_reach(arc, chain.length),
         }
     }
 
@@ -474,31 +478,51 @@ fn chains_touch(a: &Chain, b: &Chain) -> Option<Point3> {
     let open = !a.closed;
     let first_shared = open && (along_a[0].start - along_b[0].start).length() <= WELD;
     let last_shared = open && (along_a[last].end - along_b[last].end).length() <= WELD;
+    let first_room = if first_shared {
+        shared_end_room(a, b, false)
+    } else {
+        0.0
+    };
+    let last_room = if last_shared {
+        shared_end_room(a, b, true)
+    } else {
+        0.0
+    };
+    let at_the_end = |piece_a: &Piece, piece_b: &Piece| {
+        let near_first =
+            |chain: &Chain, piece: &Piece| chain.length_between(0.0, piece.to) <= first_room;
+        let near_last =
+            |chain: &Chain, piece: &Piece| chain.length_between(piece.from, 1.0) <= last_room;
+        (first_shared && near_first(a, piece_a) && near_first(b, piece_b))
+            || (last_shared && near_last(a, piece_a) && near_last(b, piece_b))
+    };
     let mut pairs = Vec::with_capacity(STEPS * STEPS);
-    for (i, piece_a) in along_a.iter().enumerate() {
-        for (j, piece_b) in along_b.iter().enumerate() {
-            let shared =
-                (first_shared && i == 0 && j == 0) || (last_shared && i == last && j == last);
-            if !shared {
-                pairs.push((*piece_a, *piece_b));
-            }
+    for piece_a in &along_a {
+        for piece_b in &along_b {
+            pairs.push((*piece_a, *piece_b));
         }
     }
     let mut near = 0;
     while let Some((piece_a, piece_b)) = pairs.pop() {
+        if at_the_end(&piece_a, &piece_b) {
+            continue;
+        }
         let (gap, _, _) =
             segment_segment_distance(piece_a.start, piece_a.end, piece_b.start, piece_b.end);
         if gap > piece_a.reach + piece_b.reach + WELD {
             continue;
         }
+        let both_first = first_shared && piece_a.from <= 0.0 && piece_b.from <= 0.0;
+        let both_last = last_shared && piece_a.to >= 1.0 && piece_b.to >= 1.0;
         let (closest, at) = [
-            (piece_a.start, piece_b.start),
-            (piece_a.start, piece_b.end),
-            (piece_a.end, piece_b.start),
-            (piece_a.end, piece_b.end),
+            (piece_a.start, piece_b.start, both_first),
+            (piece_a.start, piece_b.end, false),
+            (piece_a.end, piece_b.start, false),
+            (piece_a.end, piece_b.end, both_last),
         ]
         .into_iter()
-        .map(|(p, q)| ((p - q).length(), p))
+        .filter(|&(_, _, shared_end)| !shared_end)
+        .map(|(p, q, _)| ((p - q).length(), p))
         .fold((f64::INFINITY, piece_a.start), |x, y| {
             if y.0 < x.0 { y } else { x }
         });
@@ -516,6 +540,35 @@ fn chains_touch(a: &Chain, b: &Chain) -> Option<Point3> {
         }
     }
     None
+}
+
+/// How far along the chains an end they share reaches: out to where the two,
+/// read at equal arc lengths in from it, first stand apart by more than a few
+/// welds and the rounding a piece that long can hide. Chains meeting at an
+/// angle `q` stay within the weld of each other out to about `WELD / q`, and
+/// chains meeting tangentially part only quadratically.
+fn shared_end_room(a: &Chain, b: &Chain, from_end: bool) -> f64 {
+    let longer = a.length.max(b.length);
+    let most = SHARED_END_MOST * a.length.min(b.length);
+    let mut along = SHARED_END_LEAST * longer;
+    for _ in 0..64 {
+        if along >= most {
+            break;
+        }
+        let p = a.point(a.s_in_from(along, from_end));
+        let q = b.point(b.s_in_from(along, from_end));
+        if (p - q).length() > 4.0 * (WELD + rounding_reach(along, longer)) {
+            return along;
+        }
+        along *= 2.0;
+    }
+    most
+}
+
+/// How much of a piece's reach an arc length `arc` on a chain `length` long
+/// can hide: one short by `d` hides up to `sqrt(arc d)`.
+fn rounding_reach(arc: f64, length: f64) -> f64 {
+    (arc * ARC_ROUNDING * length).sqrt()
 }
 
 fn surface_from_rows(
@@ -668,6 +721,48 @@ mod tests {
     fn arc(circle: &Circle3D, from: f64, to: f64) -> Chain {
         let curve = circle_to_nurbs(circle, from, to).unwrap();
         Chain::from_curve(curve, circle.evaluate(from), circle.evaluate(to)).unwrap()
+    }
+
+    fn bezier(points: &[Point3]) -> Chain {
+        let degree = points.len() - 1;
+        let mut knots = vec![0.0; degree + 1];
+        knots.extend(vec![1.0; degree + 1]);
+        let curve =
+            NurbsCurve::new(degree, knots, points.to_vec(), vec![1.0; points.len()]).unwrap();
+        Chain::from_curve(curve, points[0], points[degree]).unwrap()
+    }
+
+    fn at(x: f64, y: f64) -> Point3 {
+        Point3::new(x, y, 0.0)
+    }
+
+    /// `A(s) = (s, 0)` and `B(t) = (2t, t (t - 0.003))` share their start and
+    /// cross again at `(0.006, 0)`, inside the first piece of each.
+    #[test]
+    fn a_crossing_beside_a_shared_end_touches() {
+        let a = bezier(&[at(0.0, 0.0), at(1.0, 0.0)]);
+        let b = bezier(&[at(0.0, 0.0), at(1.0, -0.0015), at(2.0, 0.997)]);
+        for (a, b) in [(a.clone(), b.clone()), (a.reversed(), b.reversed())] {
+            let found = chains_touch(&a, &b);
+            assert!(
+                found.is_some_and(|p| (p - at(0.006, 0.0)).length() < 1e-6),
+                "{found:?}"
+            );
+        }
+    }
+
+    /// Chains that only meet where they end, at an angle or tangentially and
+    /// at either end, do not touch.
+    #[test]
+    fn chains_meeting_only_at_a_shared_end_do_not_touch() {
+        let a = bezier(&[at(0.0, 0.0), at(1.0, 0.0)]);
+        for b in [
+            bezier(&[at(0.0, 0.0), at(1.0, 0.3), at(2.0, 1.0)]),
+            bezier(&[at(0.0, 0.0), at(1.0, 0.0), at(2.0, 1.0)]),
+        ] {
+            assert_eq!(chains_touch(&a, &b), None);
+            assert_eq!(chains_touch(&a.reversed(), &b.reversed()), None);
+        }
     }
 
     /// Two arcs that meet out of each other's plane, at different shares of

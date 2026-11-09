@@ -11,6 +11,7 @@
 mod surface_fixtures;
 
 use brepkit_math::mat::Mat4;
+use brepkit_math::nurbs::curve::NurbsCurve;
 use brepkit_math::nurbs::surface::NurbsSurface;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_operations::OperationsError;
@@ -1006,6 +1007,72 @@ fn chains_crossing_at_different_shares_are_refused() {
         ));
         assert!(reason.contains("touch"), "{stored_back}: {reason}");
     }
+}
+
+/// Chains that share their start and cross again within the first 1/128 of
+/// both: `A(s) = (s, 0)` and `B(t) = (2t, t (t - 0.003))` meet again at
+/// `(0.006, 0)`.
+#[test]
+fn chains_crossing_beside_a_shared_end_are_refused() {
+    let mut topo = Topology::new();
+    let mut b = Builder {
+        topo: &mut topo,
+        pose: Pose::upright(),
+    };
+    let p = |x: f64, y: f64| Point3::new(x, y, 0.0);
+    let plane = FaceSurface::Plane {
+        normal: Vec3::new(0.0, 0.0, 1.0),
+        d: 0.0,
+    };
+    let below: Vec<_> = [p(0.0, 0.0), p(1.0, 0.0), p(1.0, -1.0), p(0.0, -1.0)]
+        .iter()
+        .map(|&q| b.vertex(q))
+        .collect();
+    let lines: Vec<_> = (0..4)
+        .map(|i| b.line(below[i], below[(i + 1) % 4]))
+        .collect();
+    let wire = b.topo.add_wire(
+        Wire::new(
+            lines.iter().map(|&e| OrientedEdge::new(e, true)).collect(),
+            true,
+        )
+        .unwrap(),
+    );
+    let face_a = b.topo.add_face(Face::new(wire, Vec::new(), plane.clone()));
+    let above: Vec<_> = [p(0.0, 0.0), p(2.0, 0.997), p(0.0, 0.997)]
+        .iter()
+        .map(|&q| b.vertex(q))
+        .collect();
+    let parabola = NurbsCurve::new(
+        2,
+        vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+        vec![p(0.0, 0.0), p(1.0, -0.0015), p(2.0, 0.997)],
+        vec![1.0; 3],
+    )
+    .unwrap();
+    let crossing = b.curve(parabola, above[0], above[1]);
+    let top = b.line(above[1], above[2]);
+    let side = b.line(above[2], above[0]);
+    let wire = b.topo.add_wire(
+        Wire::new(
+            [crossing, top, side]
+                .iter()
+                .map(|&e| OrientedEdge::new(e, true))
+                .collect(),
+            true,
+        )
+        .unwrap(),
+    );
+    let face_b = b.topo.add_face(Face::new(wire, Vec::new(), plane));
+    let reason = refused(blend_surface(
+        &mut topo,
+        &[lines[0]],
+        face_a,
+        &[crossing],
+        face_b,
+        &BlendSurfaceOptions::new(BlendContinuity::G1),
+    ));
+    assert!(reason.contains("touch"), "{reason}");
 }
 
 /// A G1 surface shows its curvature gap, and a turned surface shows its angle:
