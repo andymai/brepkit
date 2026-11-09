@@ -532,8 +532,9 @@ fn section_arc(sec: &CircSection) -> ([Point3; 3], f64) {
 /// # Errors
 ///
 /// Returns [`BlendError::Math`] with fewer than two sections, when the
-/// sections all lie at one place, when the collocation system is singular,
-/// or when a solved weight is not positive.
+/// sections all lie at one place, when the collocation system is singular
+/// or not finite (a run of sections at one place), or when a solved weight
+/// is not positive.
 pub fn interpolate_blend_surface(sections: &[CircSection]) -> Result<NurbsSurface, BlendError> {
     let n = sections.len();
     if n < 2 {
@@ -601,7 +602,7 @@ pub fn interpolate_blend_surface(sections: &[CircSection]) -> Result<NurbsSurfac
     let band = degree_v + 1;
     for k in 0..n {
         let pivot = matrix[k][k];
-        if pivot.abs() < 1e-14 {
+        if !pivot.is_finite() || pivot.abs() < 1e-14 {
             return Err(BlendError::Math(brepkit_math::MathError::EmptyInput));
         }
         for i in k + 1..n.min(k + band) {
@@ -631,6 +632,9 @@ pub fn interpolate_blend_surface(sections: &[CircSection]) -> Result<NurbsSurfac
             *out /= pivot;
         }
         rhs[k] = value;
+    }
+    if rhs.iter().flatten().any(|value| !value.is_finite()) {
+        return Err(BlendError::Math(brepkit_math::MathError::EmptyInput));
     }
     let mut control_points = (0..3).map(|_| Vec::with_capacity(n)).collect::<Vec<_>>();
     let mut weights = (0..3).map(|_| Vec::with_capacity(n)).collect::<Vec<_>>();
@@ -1072,6 +1076,17 @@ mod tests {
     #[test]
     fn interpolate_blend_surface_refuses_coincident_sections() {
         let sections = boss_foot_sections(&[0.4, 0.4]);
+        assert!(interpolate_blend_surface(&sections).is_err());
+        assert!(approximate_blend_surface(&sections).is_ok());
+    }
+
+    /// Four sections at one place and one beyond put four parameters at
+    /// zero, and the collocation basis there is not finite: the
+    /// interpolation refuses them, and the band built on them as control
+    /// points still stands.
+    #[test]
+    fn interpolate_blend_surface_refuses_a_run_of_coincident_sections() {
+        let sections = boss_foot_sections(&[0.4, 0.4, 0.4, 0.4, 0.5]);
         assert!(interpolate_blend_surface(&sections).is_err());
         assert!(approximate_blend_surface(&sections).is_ok());
     }
