@@ -1840,10 +1840,12 @@ fn drop_contact_slivers(
     input_edges: &HashSet<EdgeId>,
 ) -> Result<Vec<FaceId>, BlendError> {
     // How far the contact may stand off the wall's edge, for each unit of
-    // the edge's span. A walked band passes through its sections, so its
-    // contact stands off only between them: a round of 3 along a quarter arc
-    // of 4.5 stands 5.5e-9 off it. The fallback band, which takes the
-    // sections as its control points, stands 3.2e-4 off the same arc.
+    // the edge's span; `edge_lies_on` spends up to a quarter of it on the
+    // stretch between its samples. A walked band passes through its
+    // sections, so its contact stands off only between them: a round of 3
+    // along a quarter arc of 4.5 stands 1e-8 off it. The fallback band,
+    // which takes the sections as its control points, stands about 3.2e-4
+    // off the same arc.
     const ON_EDGE: f64 = 1e-4;
     let mut faces = faces;
     'slivers: loop {
@@ -1931,10 +1933,14 @@ fn drop_contact_slivers(
     }
 }
 
-/// Whether every point of `edge` lies within `tol` of `on`'s curve. On a
-/// circle, an ellipse or a B-spline, a point whose foot falls outside `on`'s
-/// own span (either way along the curve) is measured to the span's nearer
-/// end, so the rest of the curve does not count.
+/// Whether `edge` traces `on` within `tol`, certified rather than sampled.
+/// `on` must be a line or an arc of a circle short of a whole turn, so the
+/// distance to it is exact. Every point of `edge` is held within `tol` of
+/// `on` by a bound on `edge`'s speed along its parameter: between two
+/// samples, no point strays farther than that speed allows. `edge` runs
+/// between `on`'s ends, so the feet of its points on `on` sweep all of
+/// `on`, and every point of `on` then lies within `tol` of `edge` too. An
+/// ellipse or a B-spline `on` has no such sweep to stand on and is refused.
 fn edge_lies_on(topo: &Topology, edge: &Edge, on: &Edge, tol: f64) -> Result<bool, BlendError> {
     let (a, b) = (
         topo.vertex(edge.start())?.point(),
@@ -1944,52 +1950,110 @@ fn edge_lies_on(topo: &Topology, edge: &Edge, on: &Edge, tol: f64) -> Result<boo
         topo.vertex(on.start())?.point(),
         topo.vertex(on.end())?.point(),
     );
-    let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
     let (s0, s1) = on.curve().domain_with_endpoints(p, q);
-    let off_arc = |at: Point3, angle: f64, foot: Point3| {
-        if (angle - s0).rem_euclid(std::f64::consts::TAU) <= s1 - s0 {
-            (foot - at).length()
-        } else {
-            (p - at).length().min((q - at).length())
+    match on.curve() {
+        EdgeCurve::Line => {
+            if (q - p).length_squared() <= 1e-18 {
+                return Ok(false);
+            }
         }
+        // Points within `tol` of the arc must keep off the half-plane across
+        // its gap, where the nearer end (and so the foot) jumps.
+        EdgeCurve::Circle(circle) => {
+            let gap = std::f64::consts::TAU - (s1 - s0);
+            if circle.radius() * (0.5 * gap).min(std::f64::consts::FRAC_PI_2).sin() <= tol {
+                return Ok(false);
+            }
+        }
+        EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_) => return Ok(false),
+    }
+    let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
+    let Some(speed) = speed_bound(edge.curve(), a, b) else {
+        return Ok(false);
     };
+    // Samples close enough that every point lies within a quarter of `tol`
+    // of one.
+    let count = (2.0 * speed * (t1 - t0).abs() / tol).ceil().max(1.0);
+    if !count.is_finite() || count > 1e6 {
+        return Ok(false);
+    }
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let count = count as u32;
+    let step = (t1 - t0) / f64::from(count);
     let mut worst: f64 = 0.0;
-    for k in 1..16 {
+    for k in 0..=count {
         let at = edge
             .curve()
-            .evaluate_with_endpoints(t0 + (t1 - t0) * f64::from(k) / 16.0, a, b);
+            .evaluate_with_endpoints(f64::from(k).mul_add(step, t0), a, b);
         let off = match on.curve() {
             EdgeCurve::Line => {
                 let chord = q - p;
-                let length2 = chord.dot(chord);
-                if length2 <= 1e-18 {
-                    return Ok(false);
-                }
-                let along = ((at - p).dot(chord) / length2).clamp(0.0, 1.0);
+                let along = ((at - p).dot(chord) / chord.dot(chord)).clamp(0.0, 1.0);
                 (p + chord * along - at).length()
             }
             EdgeCurve::Circle(circle) => {
                 let angle = circle.project(at);
-                off_arc(at, angle, circle.evaluate(angle))
-            }
-            EdgeCurve::Ellipse(ellipse) => {
-                let angle = ellipse.project(at);
-                off_arc(at, angle, ellipse.evaluate(angle))
-            }
-            EdgeCurve::NurbsCurve(nurbs) => {
-                match brepkit_math::nurbs::projection::project_point_to_curve(nurbs, at, 1e-9) {
-                    Ok(found) if (found.parameter - s0) * (found.parameter - s1) <= 0.0 => {
-                        found.distance
-                    }
-                    Ok(_) => (p - at).length().min((q - at).length()),
-                    Err(_) => return Ok(false),
+                if (angle - s0).rem_euclid(std::f64::consts::TAU) <= s1 - s0 {
+                    (circle.evaluate(angle) - at).length()
+                } else {
+                    (p - at).length().min((q - at).length())
                 }
             }
+            EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_) => return Ok(false),
         };
         worst = worst.max(off);
     }
-    log::debug!("edge lies within {worst:e} of its neighbour");
-    Ok(worst <= tol)
+    let bound = (0.5 * speed).mul_add(step.abs(), worst);
+    log::debug!("edge lies within {bound:e} of its neighbour ({worst:e} at its samples)");
+    Ok(bound <= tol)
+}
+
+/// A bound on `curve`'s speed along its parameter: a line's length (its
+/// parameter runs from 0 to 1), a circle's radius, an ellipse's semi-major
+/// axis. A B-spline needs every weight positive (`None` otherwise). Its
+/// derivative is `sum_j N_{j,p-1} p [w_j (P_j - C) - w_{j-1} (P_{j-1} - C)]
+/// / ((u_{j+p} - u_j) w)`, where the `N_{j,p-1}` sum to one, `w` is at least
+/// the least weight and `C` lies in the control points' hull, so `|P - C|`
+/// is at most their spread.
+fn speed_bound(curve: &EdgeCurve, a: Point3, b: Point3) -> Option<f64> {
+    match curve {
+        EdgeCurve::Line => Some((b - a).length()),
+        EdgeCurve::Circle(circle) => Some(circle.radius()),
+        EdgeCurve::Ellipse(ellipse) => Some(ellipse.semi_major()),
+        EdgeCurve::NurbsCurve(nurbs) => {
+            let (points, weights, knots) = (nurbs.control_points(), nurbs.weights(), nurbs.knots());
+            let degree = nurbs.degree();
+            let first = *points.first()?;
+            if degree == 0 || !weights.iter().all(|w| w.is_finite() && *w > 0.0) {
+                return None;
+            }
+            let (least, most) = weights
+                .iter()
+                .fold((f64::INFINITY, 0.0_f64), |(lo, hi), &w| {
+                    (lo.min(w), hi.max(w))
+                });
+            let spread = 2.0
+                * points
+                    .iter()
+                    .map(|&point| (point - first).length())
+                    .fold(0.0, f64::max);
+            #[allow(clippy::cast_precision_loss)]
+            let degree_f = degree as f64;
+            let mut bound: f64 = 0.0;
+            for j in 1..points.len() {
+                let span = knots.get(j + degree)? - knots.get(j)?;
+                if span <= 0.0 {
+                    continue;
+                }
+                let lift = most.mul_add(
+                    (points[j] - points[j - 1]).length(),
+                    (weights[j] - weights[j - 1]).abs() * spread,
+                );
+                bound = bound.max(degree_f * lift / (span * least));
+            }
+            bound.is_finite().then_some(bound)
+        }
+    }
 }
 
 fn face_edge_forward(topo: &Topology, face_id: FaceId, edge_id: EdgeId) -> Option<bool> {
@@ -5749,45 +5813,119 @@ mod tests {
         assert_shell_edges_are_closed(&topo, result.solid);
     }
 
-    /// Two arcs of one circle (or one ellipse) join the same two vertices:
-    /// each lies on itself, and neither lies on the other.
+    /// Two arcs of one circle join the same two vertices: each lies on
+    /// itself, and neither lies on the other. A rational B-spline traced
+    /// along the shorter arc lies on it and not on the longer. An elliptical
+    /// wall edge is refused.
     #[test]
     fn an_arc_does_not_lie_on_the_rest_of_its_curve() {
         let normal = Vec3::new(0.0, 0.0, 1.0);
-        let circle = Circle3D::new(Point3::new(0.0, 0.0, 0.0), normal, 2.0).unwrap();
+        let circle = Circle3D::new_with_ref(
+            Point3::new(0.0, 0.0, 0.0),
+            normal,
+            2.0,
+            Vec3::new(1.0, 0.0, 0.0),
+        )
+        .unwrap();
+        let (from, to) = (0.3_f64, 2.0_f64);
+        let half = 0.5 * (to - from);
+        let middle = from + half;
+        let traced = brepkit_math::nurbs::curve::NurbsCurve::new(
+            2,
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            vec![
+                circle.evaluate(from),
+                Point3::new(
+                    2.0 * middle.cos() / half.cos(),
+                    2.0 * middle.sin() / half.cos(),
+                    0.0,
+                ),
+                circle.evaluate(to),
+            ],
+            vec![1.0, half.cos(), 1.0],
+        )
+        .unwrap();
+        let mut topo = Topology::new();
+        let a = topo.add_vertex(Vertex::new(circle.evaluate(from), 1e-7));
+        let b = topo.add_vertex(Vertex::new(circle.evaluate(to), 1e-7));
+        let short = Edge::new(a, b, EdgeCurve::Circle(circle.clone()));
+        let long = Edge::new(b, a, EdgeCurve::Circle(circle));
+        let spline = Edge::new(a, b, EdgeCurve::NurbsCurve(traced));
+        let tol = 1e-4;
+        assert!(edge_lies_on(&topo, &short, &short, tol).unwrap());
+        assert!(edge_lies_on(&topo, &long, &long, tol).unwrap());
+        assert!(!edge_lies_on(&topo, &short, &long, tol).unwrap());
+        assert!(!edge_lies_on(&topo, &long, &short, tol).unwrap());
+        assert!(edge_lies_on(&topo, &spline, &short, tol).unwrap());
+        assert!(!edge_lies_on(&topo, &spline, &long, tol).unwrap());
+
         let ellipse =
             brepkit_math::curves::Ellipse3D::new(Point3::new(0.0, 0.0, 0.0), normal, 3.0, 2.0)
                 .unwrap();
-        let curves = [
-            (
-                EdgeCurve::Circle(circle.clone()),
-                circle.evaluate(0.3),
-                circle.evaluate(2.0),
-            ),
-            (
-                EdgeCurve::Ellipse(ellipse.clone()),
-                ellipse.evaluate(0.3),
-                ellipse.evaluate(2.0),
-            ),
-        ];
-        for (curve, from, to) in curves {
-            let mut topo = Topology::new();
-            let a = topo.add_vertex(Vertex::new(from, 1e-7));
-            let b = topo.add_vertex(Vertex::new(to, 1e-7));
-            let short = Edge::new(a, b, curve.clone());
-            let long = Edge::new(b, a, curve);
-            let tol = 1e-6;
-            assert!(edge_lies_on(&topo, &short, &short, tol).unwrap());
-            assert!(edge_lies_on(&topo, &long, &long, tol).unwrap());
-            assert!(!edge_lies_on(&topo, &short, &long, tol).unwrap());
-            assert!(!edge_lies_on(&topo, &long, &short, tol).unwrap());
+        let mut topo = Topology::new();
+        let a = topo.add_vertex(Vertex::new(ellipse.evaluate(from), 1e-7));
+        let b = topo.add_vertex(Vertex::new(ellipse.evaluate(to), 1e-7));
+        let short = Edge::new(a, b, EdgeCurve::Ellipse(ellipse.clone()));
+        let long = Edge::new(b, a, EdgeCurve::Ellipse(ellipse));
+        for (edge, on) in [(&short, &short), (&long, &long), (&short, &long)] {
+            assert!(!edge_lies_on(&topo, edge, on, tol).unwrap());
         }
+    }
+
+    /// A degree-1 B-spline from `(0, 0)` to `(1, 0)` with knots at 0.52,
+    /// 0.53 and 0.54, its middle control point `bump` off the x axis.
+    fn bumped_polyline(bump: f64) -> brepkit_math::nurbs::curve::NurbsCurve {
+        let at = |x: f64, y: f64| Point3::new(x, y, 0.0);
+        brepkit_math::nurbs::curve::NurbsCurve::new(
+            1,
+            vec![0.0, 0.0, 0.52, 0.53, 0.54, 1.0, 1.0],
+            vec![
+                at(0.0, 0.0),
+                at(0.52, 0.0),
+                at(0.53, bump),
+                at(0.54, 0.0),
+                at(1.0, 0.0),
+            ],
+            vec![1.0; 5],
+        )
+        .unwrap()
+    }
+
+    /// A B-spline contact on its line at every sixteenth of its domain,
+    /// with a bump 0.75 high between 0.52 and 0.54: it does not lie on the
+    /// line. The same contact without the bump does.
+    #[test]
+    fn a_contact_bulging_between_samples_does_not_lie_on_its_line() {
+        let mut topo = Topology::new();
+        let va = topo.add_vertex(Vertex::new(Point3::new(0.0, 0.0, 0.0), 1e-7));
+        let vb = topo.add_vertex(Vertex::new(Point3::new(1.0, 0.0, 0.0), 1e-7));
+        let line = Edge::new(va, vb, EdgeCurve::Line);
+        let flat = Edge::new(va, vb, EdgeCurve::NurbsCurve(bumped_polyline(0.0)));
+        let bulging = Edge::new(va, vb, EdgeCurve::NurbsCurve(bumped_polyline(0.75)));
+        let tol = 1e-3;
+        assert!(edge_lies_on(&topo, &flat, &line, tol).unwrap());
+        assert!(!edge_lies_on(&topo, &bulging, &line, tol).unwrap());
+    }
+
+    /// A B-spline wall edge with a notch 0.75 deep between 0.52 and 0.54 of
+    /// its domain, and a straight contact between its ends: the edge lies
+    /// under the contact at every sixteenth, but the contact does not lie
+    /// on it.
+    #[test]
+    fn a_contact_does_not_lie_on_a_notched_spline() {
+        let mut topo = Topology::new();
+        let va = topo.add_vertex(Vertex::new(Point3::new(0.0, 0.0, 0.0), 1e-7));
+        let vb = topo.add_vertex(Vertex::new(Point3::new(1.0, 0.0, 0.0), 1e-7));
+        let notched = Edge::new(va, vb, EdgeCurve::NurbsCurve(bumped_polyline(-0.75)));
+        let line = Edge::new(va, vb, EdgeCurve::Line);
+        assert!(!edge_lies_on(&topo, &line, &notched, 1e-3).unwrap());
     }
 
     /// A closed B-spline square, an edge trimmed to one side of it (stored
     /// either way along the curve), and a contact along the other three
-    /// sides between the same two vertices: the side lies on itself, and the
-    /// contact does not lie on it.
+    /// sides between the same two vertices: the contact does not lie on the
+    /// side. A B-spline wall edge is refused, so neither does the side
+    /// itself.
     #[test]
     fn a_contact_does_not_lie_on_the_rest_of_a_closed_spline() {
         let corner = |x: f64, y: f64| Point3::new(x, y, 0.0);
@@ -5817,13 +5955,11 @@ mod tests {
         let side = Edge::new(vb, vc, EdgeCurve::NurbsCurve(square.clone()));
         let side_back = Edge::new(vc, vb, EdgeCurve::NurbsCurve(square));
         let contact = Edge::new(vc, vb, EdgeCurve::NurbsCurve(around));
-        let (s0, s1) = side_back.curve().domain_with_endpoints(c, b);
-        assert!(s0 > s1, "the side stored backward runs down its knots");
         let tol = 1e-6;
         for on in [&side, &side_back] {
-            assert!(edge_lies_on(&topo, &side, on, tol).unwrap());
-            assert!(edge_lies_on(&topo, &side_back, on, tol).unwrap());
-            assert!(!edge_lies_on(&topo, &contact, on, tol).unwrap());
+            for edge in [&contact, &side, &side_back] {
+                assert!(!edge_lies_on(&topo, edge, on, tol).unwrap());
+            }
         }
     }
 }
