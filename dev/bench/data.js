@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794250100081,
+  "lastUpdate": 1794250290988,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -66959,6 +66959,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 29471926,
             "range": "± 19104",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "be8b891a4cbbbf92d48b08961185ae854f7d64ff",
+          "message": "feat(operations): set a fillet's corner back along its rounds (#2329)\n\nPart of #2201. The issue stays open until the brepjs adapter calls this.\nThis includes #2330, which rolls a ball in a pocket's corner for these\npatches to start from, so that one should land first.\n\nToday the corner where three rounds meet is always a ball: you can't say\nhow far back each round stops, and nothing smoother than a ball is on\noffer. With this change `fillet_v2_with_corners` takes, per vertex, a\nset-back along each meeting edge and `rolling` or `g2`. A corner set\nback closes with two new faces, its rounds stop where you asked, and\neach flat face gains a smooth link between its two contact lines. Every\nother corner comes out as it does today.\n\nFor a 20 mm box with radius 2 rounds, set back 3, 4 and 5 along the\nthree edges at one corner:\n\n| Measured | Result |\n|---|---|\n| Faces | 11: six planes, three rounds, two patches |\n| Valid and watertight | yes, in all four poses tested |\n| Volume across upright, turned, far away and mirrored | the same to\n1e-6 |\n| Through a STEP file and back | 11 faces, valid, watertight, volume\nwithin 1e-4 |\n| A later cut well away from the corner | exact, no mesh fallback |\n\n## How the corner is built\n\nThe hole left is a hexagon: three round ends and three links. That has\nsix true corners, so it can't be one quad, and it splits along a seam\nfrom one corner to the opposite one.\n\nEach patch is a NURBS net whose weights vary across its columns only. A\nround's end stays an exact circle, shared with the round, and the\nderivative across a row becomes a plain difference of control points. So\nthe conditions below hold by how the net is built, not by fitting:\n\n- tangent to each flat face along its link, and to each round along its\nend\n- on each round's cylinder to second order: curvature along the axis is\n0, and around it 1/r\n- tangent across the seam, with the second patch's first row made from\nthe first patch's tangent field\n\nThe seam leans 1.6 arc lengths along each arc. I swept that value across\nset-backs from 0.1 to 4 past the ball: curvature on the patch is evenest\nthere, and ripples start on either side.\n\nWhich round the second patch holds moves the seam, so it is read from\nthe part: the round set back furthest, then the one turning through\nmost. A mirror image therefore holds what the part did.\n\n`g2` with no set-backs stops each round one radius past where the ball\nstops it, since a patch can't match three cylinders' curvature with no\nroom. `rolling` with no set-backs stays a ball. Set-backs on either kind\ngive the patch.\n\n## Also fixed: `solid_volume` on a NURBS face far from the origin\n\nToday `solid_volume` does not finish on such a solid: a corner patch at\n(370, 4830, -91) was still running after 20 minutes. The sum already\nanchors about the solid's centre there, but the moment integrals beside\nthe flux stayed in world coordinates, and their rounding kept the\nquadrature's halving from ever settling. An anchored sum only reads the\nflux, so it now leaves the moments out, and boundary points project to a\ntolerance their coordinates can hold. It now takes 9.5 s in a debug\nbuild and agrees with the same part at the origin to 1.6e-9. Solids\nwithin ten half-diagonals of the origin take the same path as before.\n\n## Limits\n\n- Corners must be three straight rounds of one radius rolled between\nflat faces, convex or a pocket's. Anything else is refused with an\nerror, including a corner on a curved face, four or more rounds, and a\ncorner mixing convex and concave edges.\n- A hole in a flat face where the link would cut is refused, rather than\nleft outside the face.\n- A cavity the patches could reach is refused, read by its bounding box\nagainst theirs, so a cavity that is actually clear but near a large\nset-back is refused too.\n- The patches meet the flat faces at G1, as the rounds do. G2 isn't\npossible there, because a round's end curves against the flat face's\nnormal.\n- The seam between the two patches is G1, so curvature jumps across it.\n- `fillet` and `filletVariable` don't take corner options. Only this new\noperation does.\n\n## Tests\n\n- `setback_corner.rs` measures the patches at 65 points along each side\nacross six set-back patterns: seam, link and round tangency, curvature\nalong and around each round, all within 1e-9, and no patch facing away.\n- `crates/operations/tests/fillet_corner_options.rs` runs real solids:\nfour poses, uneven set-backs, all eight corners of a box at once (34\nfaces), a corner off square, volumes shrinking as a set-back grows, a\ncrease under 1e-5 rad at every edge of every patch, a pocket's inner\ncorner, a cavity near and far, a hole where the link would cut and one\nclear of it, a later boolean, and each refusal. Every result's faces'\nintegral is held to an independent fine mesh, within 3e-3 for each unit\nof curved area: one rolled corner, whose faces hold its closed form\n7949.8348, meshes 0.22 under it, and a misplaced patch would move the\nvolume by tens.\n- `crates/io/tests/fillet_corner_step.rs` round-trips through STEP.\n- `a_fillets_corner_sets_back_through_the_batch_and_directly` covers the\nbinding, `filletV2Corners`, also in `executeBatch`, and refuses bad\nJSON, an unknown kind and a handle that does not fit.\n\n## Verification\n\n`cargo nextest run --no-fail-fast` on the blend, algo, io, operations,\nwasm, check and heal crates: 3318 passed, 19 skipped.\n`pose_sweep` and `truth_audit` match `main` line for line. They run no\nfillets, so this shows only that the change to `check` moves nothing\nthey read.\n`check-boundaries` and `check-doc-paths` pass. I did not run the\ntool-side suite.",
+          "timestamp": "2026-11-09T10:48:41-08:00",
+          "tree_id": "56098e4ac74b255eb29de2a0f02b165a7b14a93e",
+          "url": "https://github.com/andymai/brepkit/commit/be8b891a4cbbbf92d48b08961185ae854f7d64ff"
+        },
+        "date": 1794250278843,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 631250,
+            "range": "± 9456",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 677384,
+            "range": "± 36057",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 7761,
+            "range": "± 112",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 539272,
+            "range": "± 19118",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 17130897,
+            "range": "± 531697",
             "unit": "ns/iter"
           }
         ]
