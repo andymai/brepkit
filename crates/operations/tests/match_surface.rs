@@ -13,6 +13,7 @@ mod surface_fixtures;
 
 use brepkit_math::mat::Mat4;
 use brepkit_math::nurbs::curve::NurbsCurve;
+use brepkit_math::nurbs::knot_ops::surface_knot_insert_u;
 use brepkit_math::nurbs::surface::NurbsSurface;
 use brepkit_math::nurbs::surface_fitting::interpolate_surface;
 use brepkit_math::surfaces::CylindricalSurface;
@@ -780,6 +781,93 @@ fn a_move_along_the_face_past_its_far_side_is_refused() {
             }
         }
     }
+}
+
+/// A spline sheet whose last column, the edge returned, crosses three knot
+/// lines where the sheet's curvature jumps.
+fn jump_target(topo: &mut Topology) -> EdgeId {
+    let net: Vec<Vec<Point3>> = (0..5)
+        .map(|i| {
+            let x = -4.0 + f64::from(i);
+            (0..6)
+                .map(|j| {
+                    let y = 2.0 * f64::from(j);
+                    let bend = [0.0, 0.8, -0.6, 0.9, -0.4, 0.3][j as usize];
+                    Point3::new(x + 0.4 * y, y, bend * (1.0 + 0.1 * x))
+                })
+                .collect()
+        })
+        .collect();
+    let mut b = Builder {
+        topo,
+        pose: Pose::upright(),
+    };
+    let knots_u = vec![0.0, 0.0, 0.0, 0.0, 0.5, 1.0, 1.0, 1.0, 1.0];
+    let knots_v = vec![0.0, 0.0, 0.0, 0.25, 0.5, 0.75, 1.0, 1.0, 1.0];
+    net_sheet(
+        &mut b,
+        (3, 2),
+        (knots_u, knots_v),
+        &net,
+        &vec![vec![1.0; 6]; 5],
+    )
+    .1[1]
+}
+
+/// Where the target's curvature jumps, each jump gets a band of its own. A
+/// source with a knot where a band ends matches as the same source without
+/// it: the band's end lands on the knot.
+#[test]
+fn a_band_ending_on_a_source_knot_matches_as_without_it() {
+    let matched = |refine: &dyn Fn(NurbsSurface) -> NurbsSurface| {
+        let mut topo = Topology::new();
+        let target = jump_target(&mut topo);
+        let exit = Vec3::new(1.0, 0.0, 0.0);
+        let (_, _, source) = source_near(&mut topo, target, exit, Vec3::new(0.0, 0.3, 0.6), 4.0);
+        let source = refine(source);
+        let mut b = Builder {
+            topo: &mut topo,
+            pose: Pose::upright(),
+        };
+        let (face, edges) = net_sheet(
+            &mut b,
+            (source.degree_u(), source.degree_v()),
+            (source.knots_u().to_vec(), source.knots_v().to_vec()),
+            source.control_points(),
+            source.weights(),
+        );
+        let result = match_surface(&mut topo, face, edges[0], target, MatchContinuity::G2);
+        nurbs_of(&topo, result.unwrap())
+    };
+    let plain = matched(&|source| source);
+    let degree = plain.degree_u();
+    let mut runs: Vec<(f64, usize)> = Vec::new();
+    for &k in plain.knots_u() {
+        match runs.last_mut() {
+            Some(run) if (run.0 - k).abs() < 1e-12 => run.1 += 1,
+            _ => runs.push((k, 1)),
+        }
+    }
+    // The bands' ends, and the crossings they hold between them.
+    let full: Vec<f64> = runs
+        .iter()
+        .filter(|&&(k, m)| m == degree && k > 0.0 && k < 1.0)
+        .map(|&(k, _)| k)
+        .collect();
+    assert!(full.len() >= 6, "{runs:?}");
+    let knotted = matched(&|source| {
+        full.iter().fold(source, |surface, &k| {
+            surface_knot_insert_u(&surface, k, 1).unwrap()
+        })
+    });
+    let mut apart = 0.0_f64;
+    for i in 0..=40 {
+        for j in 0..=10 {
+            let (u, v) = (f64::from(i) / 40.0, f64::from(j) / 10.0);
+            apart = apart.max((plain.evaluate(u, v) - knotted.evaluate(u, v)).length());
+        }
+    }
+    assert!(apart < 1e-6, "{apart}");
 }
 
 /// A solid's edge bounds two faces, so the caller says which is meant.

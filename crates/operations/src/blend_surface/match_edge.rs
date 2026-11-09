@@ -306,33 +306,15 @@ fn match_onto(
         .collect();
     breaks_s.extend(knots_s.iter().filter(|(_, m)| *m >= q_s).map(|(k, _)| *k));
     dedup_breaks(&mut breaks_s);
-    // A break a hair from one of the source's knots lands on it: the span
-    // between them could not be fitted, and nothing lost in so short a step
-    // can show.
-    for b in &mut breaks_s {
-        match knots_s
-            .iter_mut()
-            .find(|(k, _)| (*k - *b).abs() < NEAR_KNOT)
-        {
-            Some(known) => {
-                known.1 = q_s;
-                *b = known.0;
-            }
-            None => knots_s.push((*b, q_s)),
-        }
-    }
+    land_on_knots(&mut breaks_s, &mut knots_s, q_s);
     breaks_s.dedup();
-    knots_s.sort_by(|a, b| a.0.total_cmp(&b.0));
 
     let mut ramps = Ramps::measure(&breaks_s, bottom.closed, tolerance, |_, lo, hi, s| {
         reads.displacements((lo, hi), s)
     })?;
     if ramps.needs_bands() {
-        let bands = ramps.band_breaks(&breaks_s);
-        for &b in &bands {
-            knots_s.push((b, q_s));
-        }
-        knots_s.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let mut bands = ramps.band_breaks(&breaks_s);
+        land_on_knots(&mut bands, &mut knots_s, q_s);
         breaks_s.extend(bands);
         dedup_breaks(&mut breaks_s);
         ramps = Ramps::measure(&breaks_s, bottom.closed, tolerance, |_, lo, hi, s| {
@@ -495,6 +477,22 @@ impl Reads<'_> {
         let w = g_tt + station.normal * (station.form.second_form(v) - station.normal.dot(g_tt));
         Ok(vec![d0, d1, w - g_tt])
     }
+}
+
+/// Make each of `breaks` a knot of multiplicity `q` in `knots`, sorted after.
+/// A break a hair from a knot lands on it: the span between them could not be
+/// fitted, and nothing lost in so short a step can show.
+fn land_on_knots(breaks: &mut [f64], knots: &mut Vec<(f64, usize)>, q: usize) {
+    for b in breaks.iter_mut() {
+        match knots.iter_mut().find(|(k, _)| (*k - *b).abs() < NEAR_KNOT) {
+            Some(known) => {
+                known.1 = q;
+                *b = known.0;
+            }
+            None => knots.push((*b, q)),
+        }
+    }
+    knots.sort_by(|a, b| a.0.total_cmp(&b.0));
 }
 
 /// A spline's knots raised from degree `p` to `q`: `(value, multiplicity)`,
