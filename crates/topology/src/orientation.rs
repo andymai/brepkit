@@ -247,10 +247,16 @@ fn nurbs_uv_winding(
     if !closes(first.0, last.0, periods.0) || !closes(first.1, last.1, periods.1) {
         return None;
     }
+    // Taken about the first point: far out in the knots, the products of
+    // raw parameters cancel to nothing.
     let area = 0.5
         * (0..loop_uv.len())
             .map(|k| {
                 let (a, b) = (loop_uv[k], loop_uv[(k + 1) % loop_uv.len()]);
+                let (a, b) = (
+                    (a.0 - first.0, a.1 - first.1),
+                    (b.0 - first.0, b.1 - first.1),
+                );
                 a.0.mul_add(b.1, -(b.0 * a.1))
             })
             .sum::<f64>();
@@ -699,6 +705,45 @@ mod tests {
         let surface = FaceSurface::Nurbs(nurbs_cylinder_on(knots_u));
         let area = uv_winding(&surface, &seam_samples(0.75 * PI)).unwrap();
         assert!(area > 0.0, "area {area}");
+    }
+
+    /// A unit square in a plane, its knots on `[1e8, 1e8 + 1]` in both
+    /// directions: its area in `(u, v)` is +1 counterclockwise and -1
+    /// clockwise.
+    #[test]
+    fn a_bspline_patch_far_out_in_its_knots_reads_its_area() {
+        let (lo, hi) = (1e8, 1e8 + 1.0);
+        let square = NurbsSurface::new(
+            1,
+            1,
+            vec![lo, lo, hi, hi],
+            vec![lo, lo, hi, hi],
+            vec![
+                vec![Point3::new(0.0, 0.0, 0.0), Point3::new(0.0, 1.0, 0.0)],
+                vec![Point3::new(1.0, 0.0, 0.0), Point3::new(1.0, 1.0, 0.0)],
+            ],
+            vec![vec![1.0, 1.0], vec![1.0, 1.0]],
+        )
+        .unwrap();
+        let corners = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)];
+        let mut points = Vec::new();
+        for (k, &(x0, y0)) in corners.iter().enumerate() {
+            let (x1, y1) = corners[(k + 1) % corners.len()];
+            for step in 0..8 {
+                let t = f64::from(step) / 8.0;
+                points.push(Point3::new(
+                    t.mul_add(x1 - x0, x0),
+                    t.mul_add(y1 - y0, y0),
+                    0.0,
+                ));
+            }
+        }
+        let surface = FaceSurface::Nurbs(square);
+        let forward = uv_winding(&surface, &points).unwrap();
+        points.reverse();
+        let backward = uv_winding(&surface, &points).unwrap();
+        assert!((forward - 1.0).abs() < 1e-6, "counterclockwise {forward}");
+        assert!((backward + 1.0).abs() < 1e-6, "clockwise {backward}");
     }
 
     /// A loop once round the cylinder does not close in `(u, v)`: the winding
