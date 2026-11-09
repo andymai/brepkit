@@ -1,0 +1,19 @@
+crates/blend/src/fillet_builder.rs
+  s_f8c761b717b79b::t_fc87294384ce73 1935-1937,1981-1984,5786-5828
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6afef4a4b2f76f4141b78d76e3be3e9ef7c28f2e",
+  "prompts": {},
+  "sessions": {
+    "s_f8c761b717b79b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0161eb79-bcdb-4e67-ad8a-f056fadf98c2",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
