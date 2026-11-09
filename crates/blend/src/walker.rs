@@ -10,7 +10,7 @@
 
 use brepkit_math::nurbs::surface::NurbsSurface;
 use brepkit_math::traits::ParametricSurface;
-use brepkit_math::vec::{Point3, Vec3};
+use brepkit_math::vec::Point3;
 use brepkit_topology::Topology;
 
 use crate::BlendError;
@@ -466,42 +466,7 @@ pub fn approximate_blend_surface(sections: &[CircSection]) -> Result<NurbsSurfac
     let mut w_end = Vec::with_capacity(n);
 
     for sec in sections {
-        let half_angle = sec.half_angle();
-        let w_mid = half_angle.cos();
-
-        let cp0 = sec.p1;
-        let cp2 = sec.p2;
-
-        // cp1 = apex (middle control point) of the rational quadratic arc.
-        // For the standard circular-arc representation (apex weight = cos θ),
-        // the apex is the tangent intersection at distance r/cos θ from the
-        // center along the chord-midpoint bisector. The chord midpoint M sits
-        // at distance r·cos θ from the center, so
-        //   apex = center + (M − center) / cos²θ = center + (M − center) / w_mid²
-        // Using 1/w_mid (instead of 1/w_mid²) places the apex on the arc and
-        // yields a non-circular conic.
-        let midpoint = Point3::new(
-            (cp0.x() + cp2.x()) * 0.5,
-            (cp0.y() + cp2.y()) * 0.5,
-            (cp0.z() + cp2.z()) * 0.5,
-        );
-
-        let cp1 = if w_mid.abs() > 1e-15 {
-            let center_to_mid = Vec3::new(
-                midpoint.x() - sec.center.x(),
-                midpoint.y() - sec.center.y(),
-                midpoint.z() - sec.center.z(),
-            );
-            let scale = 1.0 / (w_mid * w_mid);
-            Point3::new(
-                sec.center.x() + center_to_mid.x() * scale,
-                sec.center.y() + center_to_mid.y() * scale,
-                sec.center.z() + center_to_mid.z() * scale,
-            )
-        } else {
-            midpoint
-        };
-
+        let ([cp0, cp1, cp2], w_mid) = section_arc(sec);
         arc_start.push(cp0);
         arc_apex.push(cp1);
         arc_end.push(cp2);
@@ -523,6 +488,171 @@ pub fn approximate_blend_surface(sections: &[CircSection]) -> Result<NurbsSurfac
     )?;
 
     Ok(surf)
+}
+
+/// A section's arc as a rational quadratic: its three control points and
+/// the apex's weight.
+fn section_arc(sec: &CircSection) -> ([Point3; 3], f64) {
+    let half_angle = sec.half_angle();
+    let w_mid = half_angle.cos();
+    let cp0 = sec.p1;
+    let cp2 = sec.p2;
+    // cp1 = apex (middle control point) of the rational quadratic arc.
+    // For the standard circular-arc representation (apex weight = cos θ),
+    // the apex is the tangent intersection at distance r/cos θ from the
+    // center along the chord-midpoint bisector. The chord midpoint M sits
+    // at distance r·cos θ from the center, so
+    //   apex = center + (M − center) / cos²θ = center + (M − center) / w_mid²
+    // Using 1/w_mid (instead of 1/w_mid²) places the apex on the arc and
+    // yields a non-circular conic.
+    let midpoint = Point3::new(
+        (cp0.x() + cp2.x()) * 0.5,
+        (cp0.y() + cp2.y()) * 0.5,
+        (cp0.z() + cp2.z()) * 0.5,
+    );
+    let cp1 = if w_mid.abs() > 1e-15 {
+        sec.center + (midpoint - sec.center) * (1.0 / (w_mid * w_mid))
+    } else {
+        midpoint
+    };
+    ([cp0, cp1, cp2], w_mid)
+}
+
+/// Build a blend band that passes through every one of its sections.
+///
+/// As [`approximate_blend_surface`], each section is a rational quadratic
+/// arc across the band, but along it the band interpolates the sections'
+/// arcs (in homogeneous coordinates, each parameter step the farthest the
+/// centre or a contact moves, with averaged knots) rather than taking them
+/// as control points, so a section inside the band lies on it, contact
+/// points included.
+///
+/// # Errors
+///
+/// Returns [`BlendError::Math`] with fewer than two sections, or when the
+/// collocation system is singular.
+pub fn interpolate_blend_surface(sections: &[CircSection]) -> Result<NurbsSurface, BlendError> {
+    let n = sections.len();
+    if n < 2 {
+        return Err(BlendError::Math(brepkit_math::MathError::EmptyInput));
+    }
+    let degree_v = (n - 1).min(3);
+    // Chord-length parameters, each step the farthest the centre or a
+    // contact moves (a ball pivoting on its centre, rounding a round's rim
+    // at the round's own radius, keeps its centre still).
+    let mut params = Vec::with_capacity(n);
+    params.push(0.0);
+    for pair in sections.windows(2) {
+        let step = (pair[1].center - pair[0].center)
+            .length()
+            .max((pair[1].p1 - pair[0].p1).length())
+            .max((pair[1].p2 - pair[0].p2).length());
+        params.push(params.last().copied().unwrap_or(0.0) + step);
+    }
+    let total = params.last().copied().unwrap_or(0.0);
+    if total <= 0.0 {
+        return Err(BlendError::Math(brepkit_math::MathError::EmptyInput));
+    }
+    for param in &mut params {
+        *param /= total;
+    }
+    if let Some(last) = params.last_mut() {
+        *last = 1.0;
+    }
+    // Averaged knots (The NURBS Book, eq. 9.8).
+    let mut knots_v = vec![0.0; degree_v + 1];
+    for j in 1..n - degree_v {
+        #[allow(clippy::cast_precision_loss)]
+        let knot = params[j..j + degree_v].iter().sum::<f64>() / degree_v as f64;
+        knots_v.push(knot);
+    }
+    knots_v.extend(std::iter::repeat_n(1.0, degree_v + 1));
+    // The collocation matrix, banded: Gaussian elimination without pivoting
+    // is stable on it (it is totally positive).
+    let mut matrix = vec![vec![0.0; n]; n];
+    for (row, &param) in matrix.iter_mut().zip(&params) {
+        let span = brepkit_math::nurbs::basis::find_span(n, degree_v, param, &knots_v);
+        let basis = brepkit_math::nurbs::basis::basis_funs(span, param, degree_v, &knots_v);
+        for (k, value) in basis.into_iter().enumerate() {
+            if let Some(entry) = row.get_mut(span - degree_v + k) {
+                *entry = value;
+            }
+        }
+    }
+    // Twelve right-hand sides: three arc rows of homogeneous points.
+    let mut rhs: Vec<[f64; 12]> = sections
+        .iter()
+        .map(|sec| {
+            let (points, w_mid) = section_arc(sec);
+            let weights = [1.0, w_mid, 1.0];
+            let mut out = [0.0; 12];
+            for (k, (point, weight)) in points.iter().zip(weights).enumerate() {
+                out[4 * k] = point.x() * weight;
+                out[4 * k + 1] = point.y() * weight;
+                out[4 * k + 2] = point.z() * weight;
+                out[4 * k + 3] = weight;
+            }
+            out
+        })
+        .collect();
+    let band = degree_v + 1;
+    for k in 0..n {
+        let pivot = matrix[k][k];
+        if pivot.abs() < 1e-14 {
+            return Err(BlendError::Math(brepkit_math::MathError::EmptyInput));
+        }
+        for i in k + 1..n.min(k + band) {
+            let factor = matrix[i][k] / pivot;
+            if factor == 0.0 {
+                continue;
+            }
+            for j in k..n.min(k + band) {
+                matrix[i][j] -= factor * matrix[k][j];
+            }
+            let source = rhs[k];
+            for (value, &from) in rhs[i].iter_mut().zip(&source) {
+                *value -= factor * from;
+            }
+        }
+    }
+    for k in (0..n).rev() {
+        let mut value = rhs[k];
+        for j in k + 1..n.min(k + band) {
+            let factor = matrix[k][j];
+            for (out, &from) in value.iter_mut().zip(&rhs[j]) {
+                *out -= factor * from;
+            }
+        }
+        let pivot = matrix[k][k];
+        for out in &mut value {
+            *out /= pivot;
+        }
+        rhs[k] = value;
+    }
+    let mut control_points = (0..3).map(|_| Vec::with_capacity(n)).collect::<Vec<_>>();
+    let mut weights = (0..3).map(|_| Vec::with_capacity(n)).collect::<Vec<_>>();
+    for solved in &rhs {
+        for k in 0..3 {
+            let weight = solved[4 * k + 3];
+            if weight <= 1e-9 {
+                return Err(BlendError::Math(brepkit_math::MathError::EmptyInput));
+            }
+            control_points[k].push(Point3::new(
+                solved[4 * k] / weight,
+                solved[4 * k + 1] / weight,
+                solved[4 * k + 2] / weight,
+            ));
+            weights[k].push(weight);
+        }
+    }
+    Ok(NurbsSurface::new(
+        2,
+        degree_v,
+        vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+        knots_v,
+        control_points,
+        weights,
+    )?)
 }
 
 /// Build a uniform clamped knot vector for `n` control points and `degree`.
