@@ -1932,8 +1932,9 @@ fn drop_contact_slivers(
 }
 
 /// Whether every point of `edge` lies within `tol` of `on`'s curve. On a
-/// circle or an ellipse, a point whose foot falls outside `on`'s own arc is
-/// measured to the arc's nearer end, so the rest of the curve does not count.
+/// circle, an ellipse or a B-spline, a point whose foot falls outside `on`'s
+/// own span (either way along the curve) is measured to the span's nearer
+/// end, so the rest of the curve does not count.
 fn edge_lies_on(topo: &Topology, edge: &Edge, on: &Edge, tol: f64) -> Result<bool, BlendError> {
     let (a, b) = (
         topo.vertex(edge.start())?.point(),
@@ -1977,7 +1978,10 @@ fn edge_lies_on(topo: &Topology, edge: &Edge, on: &Edge, tol: f64) -> Result<boo
             }
             EdgeCurve::NurbsCurve(nurbs) => {
                 match brepkit_math::nurbs::projection::project_point_to_curve(nurbs, at, 1e-9) {
-                    Ok(found) => found.distance,
+                    Ok(found) if (found.parameter - s0) * (found.parameter - s1) <= 0.0 => {
+                        found.distance
+                    }
+                    Ok(_) => (p - at).length().min((q - at).length()),
                     Err(_) => return Ok(false),
                 }
             }
@@ -5777,6 +5781,49 @@ mod tests {
             assert!(edge_lies_on(&topo, &long, &long, tol).unwrap());
             assert!(!edge_lies_on(&topo, &short, &long, tol).unwrap());
             assert!(!edge_lies_on(&topo, &long, &short, tol).unwrap());
+        }
+    }
+
+    /// A closed B-spline square, an edge trimmed to one side of it (stored
+    /// either way along the curve), and a contact along the other three
+    /// sides between the same two vertices: the side lies on itself, and the
+    /// contact does not lie on it.
+    #[test]
+    fn a_contact_does_not_lie_on_the_rest_of_a_closed_spline() {
+        let corner = |x: f64, y: f64| Point3::new(x, y, 0.0);
+        let [a, b, c, d] = [
+            corner(0.0, 0.0),
+            corner(1.0, 0.0),
+            corner(1.0, 1.0),
+            corner(0.0, 1.0),
+        ];
+        let square = brepkit_math::nurbs::curve::NurbsCurve::new(
+            1,
+            vec![0.0, 0.0, 1.0, 2.0, 3.0, 4.0, 4.0],
+            vec![a, b, c, d, a],
+            vec![1.0; 5],
+        )
+        .unwrap();
+        let around = brepkit_math::nurbs::curve::NurbsCurve::new(
+            1,
+            vec![0.0, 0.0, 1.0, 2.0, 3.0, 3.0],
+            vec![c, d, a, b],
+            vec![1.0; 4],
+        )
+        .unwrap();
+        let mut topo = Topology::new();
+        let vb = topo.add_vertex(Vertex::new(b, 1e-7));
+        let vc = topo.add_vertex(Vertex::new(c, 1e-7));
+        let side = Edge::new(vb, vc, EdgeCurve::NurbsCurve(square.clone()));
+        let side_back = Edge::new(vc, vb, EdgeCurve::NurbsCurve(square));
+        let contact = Edge::new(vc, vb, EdgeCurve::NurbsCurve(around));
+        let (s0, s1) = side_back.curve().domain_with_endpoints(c, b);
+        assert!(s0 > s1, "the side stored backward runs down its knots");
+        let tol = 1e-6;
+        for on in [&side, &side_back] {
+            assert!(edge_lies_on(&topo, &side, on, tol).unwrap());
+            assert!(edge_lies_on(&topo, &side_back, on, tol).unwrap());
+            assert!(!edge_lies_on(&topo, &contact, on, tol).unwrap());
         }
     }
 }
