@@ -3,10 +3,9 @@
 //! A round of radius `r` along a right-angled edge sets its contact back by
 //! `r` on each face. With both edges of the top rounded, the two contacts on
 //! it meet at `2r = W`; past that, each lies nearer the other round's edge
-//! than its own. The top was then trimmed between the swapped contacts to a
-//! loop that crossed itself, and kept: a solid that validated, with too much
-//! area and too little volume. That is now refused; below it the two rounds
-//! leave a strip of the top between them.
+//! than its own, and the top between the swapped contacts would be a loop
+//! that crosses itself. Such rounds are refused; below `W / 2` the two
+//! rounds leave a strip of the top between them.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::f64::consts::PI;

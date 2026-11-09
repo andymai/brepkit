@@ -7,10 +7,8 @@
 //! on along the other, so the rounds join through a horn torus about that
 //! edge, which pinches to a point on it a radius below the top. The
 //! concave edge must end there: the walls' trims split it where their
-//! contacts end on it. Left whole, each wall ran on along it to the corner
-//! and back, and the torus out to the corner and back, so the faces met
-//! along slivers of no width: closed by edge count, open in the mesh, and
-//! read too large by brepkit's own volume.
+//! contacts end on it, so no wall and no torus runs along it to the corner
+//! and back.
 //!
 //! Each straight round takes off its cross-section, `r^2 (1 - pi / 4)`,
 //! along its edge. Past both edges at a corner the ball pivots: a point

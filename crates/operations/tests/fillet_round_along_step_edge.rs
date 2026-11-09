@@ -1,10 +1,9 @@
 //! A round whose width lands exactly on a step: a block's edge rounded
 //! where a notch cut into one of its faces stops a radius from the edge, so
 //! the round's contact on that face runs along the notch wall's own edges.
-//! The trim kept the face beyond the contact and closed its wire along the
-//! notch's edges and back along the contact, a spur of no area: closed by
-//! edge count, but the round's whole contact edge lay beside the notch
-//! wall's pieces, and the mesh was open along them.
+//! The face beyond the contact keeps no spur along those edges and back
+//! along the contact: the round meets the notch wall's faces along the
+//! wall's own edges, and the mesh is closed along them.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::f64::consts::PI;

@@ -4,17 +4,14 @@
 //! of a circle of radius `R` about `(C, 0)` bulging out to `x > X0`,
 //! extruded `H` up `z`. The edges along `x` where the top or bottom meets
 //! a side `y = B` end on the arc's cylinder, which is neither square to
-//! them nor flat. The round now runs on to that face: each contact to
-//! where its line meets the cylinder, on the cylinder's corner edges (the
-//! top or bottom arc and the vertical line), and the band ends on its
-//! intersection with the cylinder, which the cylinder is notched along. It
-//! had ended in the section plane, closed by a runout patch, and the result
-//! failed the assembly's incidence audit.
+//! them nor flat. The round runs on to that face: each contact to where its
+//! line meets the cylinder, on the cylinder's corner edges (the top or
+//! bottom arc and the vertical line), and the band ends on its intersection
+//! with the cylinder, which the cylinder is notched along.
 //!
 //! The bottom face walks its arc against the circle's sense. The trim
-//! splits that arc where the round's contact ends, and the piece kept had
-//! run the long way round from the split: the bottom read a whole disc too
-//! large.
+//! splits that arc where the round's contact ends, and the piece kept runs
+//! the short way round from the split, so the bottom keeps its own area.
 //!
 //! The round takes off, along the edge, the corner's strip outside the
 //! round, out to the cylinder: at a distance `t` in from the side face the

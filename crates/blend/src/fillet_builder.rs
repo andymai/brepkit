@@ -4456,8 +4456,8 @@ const SWAP_PARALLEL: f64 = 0.9;
 /// Refuses two contacts on one face that have passed each other: two rounds
 /// along the two edges of a strip narrower than their setbacks together
 /// (a ridge between two walls). The contacts are then swapped, each lying
-/// nearer the other round's edge than its own, and the strip between them is
-/// trimmed to a loop that crosses itself, still kept. Two contacts that both
+/// nearer the other round's edge than its own, and the strip between them
+/// would be trimmed to a loop that crosses itself. Two contacts that both
 /// run alongside the middles of both edges are refused when each lies nearer
 /// the other's edge than its own.
 fn check_contacts_keep_their_edges(

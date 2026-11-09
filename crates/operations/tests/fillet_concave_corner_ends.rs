@@ -7,9 +7,9 @@
 //! four faces: the plate's side, the arm's end, and the plate's and the
 //! arm's top (or bottom). Neither end's cap can be notched, so each end is
 //! closed by a runout patch, whose edge on the plate's side lies along the
-//! plate's bottom (or top) edge. The plate's side then ran out along that
-//! patch edge to the corner and back along its own edge, which its mesh
-//! skipped while the plate's bottom meshed the whole edge: a crack.
+//! plate's bottom (or top) edge. The plate's side runs along that edge
+//! once, on the patch's edge and then the edge's far piece, as the plate's
+//! bottom (or top) does, so their meshes meet along it.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::f64::consts::PI;
