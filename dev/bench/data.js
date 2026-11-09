@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794255989994,
+  "lastUpdate": 1794256194854,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -67229,6 +67229,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 18166769,
             "range": "± 486046",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b79c36e39ec07cf26db886305646f4b6f69dff46",
+          "message": "feat(operations): loft along guide rails and under end conditions (#2331)\n\nPart of #2199. The issue stays open until the brepjs adapter calls this.\n\nToday `loftWithOptions` takes `ruled`, `startPoint` and `endPoint`, and\nthe only way to steer a loft is to invent extra sections, which\napproximates a surface the kernel could define exactly. With this change\n`loft_with_options` takes rails (edges or wires, each through one vertex\nof every profile) and a start and end condition: `free`, `normal` to the\nprofile's plane, or `tangent` to a face the profile lies on, each with a\nweight. Calls without these options build what they did.\n\nEach case below holds in the upright, turned and mirrored poses, read by\nthe exact reader against a closed form:\n\n| Case | Closed form | Exact reader |\n|---|---|---|\n| Frustum with 4 straight rails: 6 planes and 12 lines, the same as\nplain `loft` | 2333.333333 | 2333.333333 |\n| Rails bowing out | 2645.333333 | 2645.333333 |\n| U-bend on semicircular rails, by Pappus | 527.787566 | 527.787566 |\n| `normal` at both ends, weight 1 | 1019.667691 | 1019.667691 |\n| `tangent` to a plane | 1226.938804 | 1226.938804 |\n| `tangent` to a cylinder, coaxial | 1147.529862 | 1147.529862 |\n| `tangent` to a sphere | 769.678566 | 769.678566 |\n| A cut of the bowed solid | 1467.666667 | 1467.666650 |\n| A round bore through its curved sides | 2411.097205 | 2411.096187 |\n| A tangent loft fused on to its cylinder | 1932.928025 | 1932.928025 |\n\nThe derivative at a conditioned end, measured by finite differences off\nthe surface, is at worst 2.2e-8 rad off square for `normal` and 1.4e-8\nrad off a plane for `tangent`. The same measure reads 0.39 rad on a free\nend, so it can fail. Rail and profile samples sit at worst 3.5e-9 off\nthe surface.\n\n## Change\n\n- `crates/operations/src/loft/network.rs` builds each side as a Gordon\nsurface on control nets: the skin through the profile curves with the\nend derivatives the conditions ask for, plus each rail's deviation from\nthat skin, blended along the edge.\n- A weight scales the derivative and keeps its direction: doubling one\nmeasures 1.99999992 and 1.99999996. A negative weight on `tangent`\nleaves on the other side of the profile.\n- `loftWithOptions` reads `rails`, `railWires`, `start` and `end`, and\n`executeBatch` gains an op of that name.\n- It refuses, with `InvalidInput`: a rail off a vertex or running\nthrough profiles out of order, rails the vertices cannot pair with, a\n`tangent` profile off its face or past its boundary, a rail leaving a\nconditioned end off the condition, a `tangent` profile any of whose\nedges leaves the face along its length (across a hole, say), `normal` on\na non-planar profile, a zero or non-finite weight, and a surface running\nback over itself.\n- `revolve.rs` and `sheet.rs` only widen one helper each to\n`pub(crate)`.\n\n## Limits\n\n- G2 end conditions are left out. They need a second-derivative row per\nend and a curvature field from the face. The issue's summary mentions\ncurvature continuity; its list of conditions does not.\n- Sides meet G0 across a rail wherever neighbouring deviations differ,\nsince the blend is linear along the edge. That is read from the\nconstruction, not measured.\n- Rails meeting a middle profile at different fractions of their\nparameters crease it: 0.075 rad at fractions 0.4, 0.5, 0.6 and 0.45. The\nrails stay exact and the faces end on an edge there. At equal fractions\none face runs across with no crease.\n- Rational rails, and rational edges paired with different weights (a\nline with an arc), use degree-7 polynomial stand-ins within 1e-8.\nSame-weight arcs stay exactly rational.\n- A closed profile edge has one vertex at its seam, so it takes one rail\nunless split into arcs. A closed spline's seam is not moved to line up,\nso a misaligned one twists.\n- The self-intersection checks are partial: a line across a side meeting\nitself, a normal reversal, and the loop round the sides crossing itself.\nSides passing through each other any other way go undetected.\n- Holes in profiles are ignored, as in `loft`.\n\n## Found nearby, not changed\n\n- A crease inside a NURBS face sends the tessellator's quadtree to its\ndepth limit: a degree (1,1) sheet bent 30 degrees at a knot gives 2360\ntriangles against 32 when flat. Faces here end at creases, so this path\ndoes not reach it.\n- `exact_solid_volume` takes the slow boundary path where a circle edge\nbounds a polynomial side, so\n`a_square_lofts_to_a_circle_under_a_normal_end` takes 55 s and\n`tangent_to_a_nurbs_face_follows_its_tangent_plane` 98 s in a debug\nbuild.\n\n## Tests\n\n`crates/operations/tests/loft_rails.rs` has 37 tests: straight, curved,\nwandering and fewer rails, rails stored backward, profiles of different\nvertex counts and curve kinds, each end condition against plane,\ncylinder, sphere and NURBS faces, rails and conditions together,\nbooleans on the result, and each refusal. Three more come from review:\nrails kinking sideways and back are taken, a profile edge crossing a\nhole in the tangent face is refused, and `loft_sides` keeps a U-bend's\ncurved sides, whose vertices all lie in the caps' plane. Each fails with\nits fix taken out. With the rails disabled in the code\n`rails_that_bow_out` reads 1013.33 instead of 2645.33, and with the\nconditions disabled 12 of the 14 condition tests fail, so these tests do\ndetect the feature's absence. The bindings have two contract tests\nthrough `executeBatch`.\n\n## Verification\n\n`cargo nextest run --no-fail-fast` on the algo, io, operations, wasm,\ncheck and heal crates: 3234 passed, 20 skipped.\n`pose_sweep` and `truth_audit` match `main` line for line.\n`check-boundaries` and `check-doc-paths` pass, and the wasm target\nchecks clean. I did not run the tool-side suite.",
+          "timestamp": "2026-11-09T12:24:23-08:00",
+          "tree_id": "7368d3c19f7142b3a3e69bb7454cb04e5fa02ce3",
+          "url": "https://github.com/andymai/brepkit/commit/b79c36e39ec07cf26db886305646f4b6f69dff46"
+        },
+        "date": 1794256183893,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 878705,
+            "range": "± 7943",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 947221,
+            "range": "± 1287",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10913,
+            "range": "± 19",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 710905,
+            "range": "± 21463",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 22988501,
+            "range": "± 215393",
             "unit": "ns/iter"
           }
         ]
