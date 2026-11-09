@@ -1,0 +1,21 @@
+crates/blend/src/corner.rs
+  s_f8c761b717b79b::t_ce5e6ef6cd6b21 121-125,463,533,571,579,585,3684-3686
+crates/operations/tests/fillet_extruded_mitre.rs
+  s_f8c761b717b79b::t_5dbcde4a203d85 368-370,373-387,418-421,425-427,431,439
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "68d55dd69d6d62f74cbf86b04e6976fa880c0566",
+  "prompts": {},
+  "sessions": {
+    "s_f8c761b717b79b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0161eb79-bcdb-4e67-ad8a-f056fadf98c2",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
