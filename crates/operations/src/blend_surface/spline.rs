@@ -390,50 +390,72 @@ where
             sum
         };
 
-        let mut stray_s = Vec::new();
+        // Error that vanishes on every line through a site is invisible to
+        // reads along those lines, so each cell is also read between them.
+        let (s_spans, t_spans) = (s_space.spans(), t_space.spans());
+        let between = |spans: &[(f64, f64)]| -> Vec<(usize, f64)> {
+            spans
+                .iter()
+                .enumerate()
+                .flat_map(|(k, &(a, b))| {
+                    points
+                        .iter()
+                        .map(move |point| (k, 0.5 * (a + b) + 0.5 * (b - a) * point.x))
+                })
+                .collect()
+        };
+        let (s_between, t_between) = (between(&s_spans), between(&t_spans));
+        let mut s_off = vec![false; s_spans.len()];
+        let mut t_off = vec![false; t_spans.len()];
         let mut worst = 0.0_f64;
-        for (a, b) in s_space.spans() {
-            let mut error = 0.0_f64;
-            for point in points {
-                let s = 0.5 * (a + b) + 0.5 * (b - a) * point.x;
-                for &t in &t_sites {
-                    error = error.max((at(s, t) - value(s, t)?).length());
-                }
-            }
+        let mut strays = |s: f64, t: f64| -> Result<bool, OperationsError> {
+            let error = (at(s, t) - value(s, t)?).length();
             worst = worst.max(error);
-            if error > tolerance {
-                stray_s.push((a, b));
+            Ok(error > tolerance)
+        };
+        for &(i, s) in &s_between {
+            for &t in &t_sites {
+                s_off[i] |= strays(s, t)?;
             }
         }
-        let mut stray_t = Vec::new();
-        for (a, b) in t_space.spans() {
-            let mut error = 0.0_f64;
-            for point in points {
-                let t = 0.5 * (a + b) + 0.5 * (b - a) * point.x;
-                for &s in &s_sites {
-                    error = error.max((at(s, t) - value(s, t)?).length());
-                }
-            }
-            worst = worst.max(error);
-            if error > tolerance {
-                stray_t.push((a, b));
+        for &(j, t) in &t_between {
+            for &s in &s_sites {
+                t_off[j] |= strays(s, t)?;
             }
         }
+        for &(i, s) in &s_between {
+            for &(j, t) in &t_between {
+                if strays(s, t)? {
+                    s_off[i] = true;
+                    t_off[j] = true;
+                }
+            }
+        }
+        let flagged = |spans: &[(f64, f64)], off: &[bool]| -> Vec<(f64, f64)> {
+            spans
+                .iter()
+                .zip(off)
+                .filter(|(_, off)| **off)
+                .map(|(span, _)| *span)
+                .collect()
+        };
+        let stray_s = flagged(&s_spans, &s_off);
+        let stray_t = flagged(&t_spans, &t_off);
         let at_the_floor = worst <= NOISE_ROOM * tolerance && worst >= 0.5 * last_worst;
         if (stray_s.is_empty() && stray_t.is_empty()) || at_the_floor {
             return Ok((s_space, t_space, net));
         }
         last_worst = worst;
-        let (s_spans, t_spans) = (s_space.spans().len(), t_space.spans().len());
-        if s_spans + stray_s.len() > MAX_SPANS
-            || t_spans + stray_t.len() > MAX_SPANS
+        let (s_count, t_count) = (s_spans.len(), t_spans.len());
+        if s_count + stray_s.len() > MAX_SPANS
+            || t_count + stray_t.len() > MAX_SPANS
             || s_origin.split_too_far(&stray_s)
             || t_origin.split_too_far(&stray_t)
         {
             return Err(OperationsError::InvalidInput {
                 reason: format!(
                     "{what} could not be fitted within {tolerance:.1e}: {worst:.1e} remains \
-                     over {s_spans} by {t_spans} spans"
+                     over {s_count} by {t_count} spans"
                 ),
             });
         }
@@ -447,6 +469,18 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
 
     use super::*;
+
+    fn grid_at(s_space: &Space, t_space: &Space, net: &[Vec<Vec3>], s: f64, t: f64) -> Vec3 {
+        let (fs, ns) = s_space.basis_at(s);
+        let (ft, nt) = t_space.basis_at(t);
+        let mut sum = Vec3::new(0.0, 0.0, 0.0);
+        for (a, na) in ns.iter().enumerate() {
+            for (b, nb) in nt.iter().enumerate() {
+                sum += net[fs + a][ft + b] * (*na * *nb);
+            }
+        }
+        sum
+    }
 
     #[test]
     fn collocation_reproduces_what_the_space_holds() {
@@ -497,16 +531,35 @@ mod tests {
         )
         .unwrap();
         for (s, t) in [(0.13, 0.91), (0.5, 0.5), (0.77, 0.21)] {
-            let (fs, ns) = s_space.basis_at(s);
-            let (ft, nt) = t_space.basis_at(t);
-            let mut sum = Vec3::new(0.0, 0.0, 0.0);
-            for (a, na) in ns.iter().enumerate() {
-                for (b, nb) in nt.iter().enumerate() {
-                    sum += net[fs + a][ft + b] * (*na * *nb);
-                }
-            }
+            let sum = grid_at(&s_space, &t_space, &net, s, t);
             let want = Vec3::new(s, t, (s * 3.0).sin() * (t * 2.0).cos());
             assert!((sum - want).length() < 1e-8);
         }
+    }
+
+    /// `P(s) P(t)`, with `P` zero at every site of the first spaces, is zero
+    /// wherever one parameter sits on a site line, and 0.10125 high in the
+    /// middle.
+    #[test]
+    fn a_grid_fit_sees_a_bump_between_the_site_lines() {
+        let p = |x: f64| (0..=5_u32).map(|i| x - f64::from(i) / 5.0).product::<f64>();
+        let f = |s: f64, t: f64| Vec3::new(s, t, 2e6 * p(s) * p(t));
+        let tolerance = 1e-6;
+        let (s_space, t_space, net) = fit_grid(
+            Space::c0_over(5, &[0.0, 1.0]),
+            Space::c0_over(5, &[0.0, 1.0]),
+            tolerance,
+            "test",
+            |s, t| Ok(f(s, t)),
+        )
+        .unwrap();
+        let mut worst = 0.0_f64;
+        for i in 0..=40 {
+            for j in 0..=40 {
+                let (s, t) = (f64::from(i) / 40.0, f64::from(j) / 40.0);
+                worst = worst.max((grid_at(&s_space, &t_space, &net, s, t) - f(s, t)).length());
+            }
+        }
+        assert!(worst < 10.0 * tolerance, "{worst}");
     }
 }
