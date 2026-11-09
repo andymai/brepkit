@@ -1,13 +1,11 @@
 //! A puck (radius 25, height 20) with a pocket sunk 5 into its top, the
 //! pocket's outline one closed B-spline edge, both rims rounded at once.
 //!
-//! The top cap's hole has a B-spline outline, so that rim's round takes the
-//! normal trim path, while the bottom rim's disc cap took the closed-rim
-//! rebuild, which rebuilds the wall with its own contact circle. The normal
-//! trim then started from the wall as it came: it dropped the rebuild's
-//! contact circle and kept the bottom rim, and the incidence audit refused
-//! the fillet. A rim whose wall a normal-path stripe also trims now takes the
-//! normal path too, which trims both contacts on the one wall.
+//! The top cap's hole has a B-spline outline, so the top rim's round takes
+//! the normal trim path. The bottom rim's round shares the puck's wall with
+//! it, so it takes the normal path too, and one trim cuts both contacts on
+//! that wall. At r = 3 and r = 7.5 the result is valid and watertight, and
+//! each round takes off the ring of its corner's section.
 //!
 //! Read back through STEP, as a file gives the part: a file starts each rim
 //! circle at its seam vertex.

@@ -7,9 +7,9 @@
 //! rounded: the band between the top and the B-spline wall is walked and
 //! fitted, and it ends square on the two radial walls.
 //!
-//! The band's orientation was read from its boundary's winding about the
-//! samples' centroid, which for a band bent that far lies outside it: the
-//! band was left facing into the part, and its mesh did not close.
+//! The centroid of the band's boundary lies outside the band. The band
+//! must still face out of the part: the result is valid, has six faces,
+//! and its mesh is watertight.
 //!
 //! The volume taken off: the top is a plane, the wall stands square to it
 //! and the round ends square on the radial walls, so the round takes the
@@ -118,9 +118,8 @@ fn round_the_arc(r: f64) {
     let removed = (1.0 - PI / 4.0) * r * r * length - (5.0 / 6.0 - PI / 4.0) * r.powi(3) * 1.5 * PI;
     let expected = H * area - removed;
     let volume = solid_volume(&topo, result.solid, 0.01).unwrap();
-    // The band is fitted through its walked sections, so it stands a little
-    // off them; facing into the part it would add its own volume, not take
-    // the corner's.
+    // A band that faces into the part adds its own volume and does not take
+    // the corner's off: the bound tells the two apart.
     assert!(
         (volume - expected).abs() < 0.05 * removed,
         "{case}: volume {volume}, expected {expected} ({removed} taken off)"

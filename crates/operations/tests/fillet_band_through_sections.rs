@@ -6,10 +6,9 @@
 //! top edge is rounded: the band between the top and the B-spline wall is
 //! walked and fitted, and it ends square on the two radial walls.
 //!
-//! The band took the walked sections as its control points, so along a
-//! curved edge it cut inside them: its contact on the wall stood inside the
-//! wall, and the part came out 0.2 light at r = 1. It now
-//! interpolates them.
+//! The band passes through its walked sections, so its contact lies on the
+//! wall. At r = 1 and r = 2 the result is valid, has six faces, its mesh is
+//! watertight, and its volume agrees to 1e-4 of the volume taken off.
 //!
 //! The volume taken off: the top is a plane, the wall stands square to it
 //! and the round ends square on the radial walls, so the round takes the

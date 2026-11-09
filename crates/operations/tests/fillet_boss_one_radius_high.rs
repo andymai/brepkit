@@ -1,10 +1,8 @@
 //! A boss exactly a radius high, its top outline rounded: each round's
-//! contact on the boss's wall lands on the wall's bottom edge, so the wall
-//! is left a strip of no area between the contact and that edge. The trim
-//! kept it as a face of two edges, the contact and the wall's edge, both
-//! joining the same two vertices; the result was closed by edge count, but
-//! a face too many for each wall, and the round's mesh met the plate's
-//! across the strip, not along one edge.
+//! contact on the boss's wall lands on the wall's bottom edge, so no wall
+//! is left. Each round meets the plate along that edge: the result is
+//! valid, has fifteen faces and no wall among them, its mesh is watertight,
+//! and its volume agrees with the volume the rounds take off.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::f64::consts::PI;
