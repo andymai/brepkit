@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794250535730,
+  "lastUpdate": 1794252825154,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -67067,6 +67067,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 22927485,
             "range": "± 129077",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "4d60291b52b54bdbb4aa3375b74c2e70d44500d6",
+          "message": "fix(blend): land five contributor fillet PRs and refuse a curved cap's notch that crosses its boundary (#2356)\n\nLands #2335, #2346, #2339, #2345 and #2337, with #2337's conflict with #2345 resolved and review fixes on top: a curved cap's notch that crosses its other boundaries is refused, a cap with no fitted curve is refused, the curved-cap notch fit is checked against the band and the cap, and a B-spline edge counts as straight only by its control points.\n\nCo-authored-by: Eric Vaughan <eric.d.vaughan@gmail.com>",
+          "timestamp": "2026-11-09T11:30:13-08:00",
+          "tree_id": "c447cdf22fe7eb912ceab8f7ce547bf9ec93ee5b",
+          "url": "https://github.com/andymai/brepkit/commit/4d60291b52b54bdbb4aa3375b74c2e70d44500d6"
+        },
+        "date": 1794252813379,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 877841,
+            "range": "± 7058",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 945658,
+            "range": "± 1398",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11182,
+            "range": "± 325",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 710153,
+            "range": "± 13220",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 23345433,
+            "range": "± 132537",
             "unit": "ns/iter"
           }
         ]
