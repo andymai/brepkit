@@ -586,7 +586,7 @@ impl<'a> FilletBuilder<'a> {
                 });
                 let notchable = match (contour, stripe) {
                     (Some(contour), Some(stripe)) => {
-                        terminal_cap_is_notchable(topo, junction, contour, stripe)?
+                        terminal_cap_is_notchable(topo, junction, contour, stripe, &tilted_caps)?
                     }
                     _ => false,
                 };
@@ -877,7 +877,7 @@ impl<'a> FilletBuilder<'a> {
                 let (p1_start, p1_end) = contact_vertices(contact1)?;
                 let (p2_start, p2_end) = contact_vertices(contact2)?;
                 let mut section_curve = |section: Option<&crate::section::CircSection>,
-                                         cap: Option<&(Vec3, f64)>,
+                                         cap: Option<&RunOnCap>,
                                          start: VertexId,
                                          end: VertexId|
                  -> Result<
@@ -890,11 +890,19 @@ impl<'a> FilletBuilder<'a> {
                     let start_point = topo.vertex(start)?.point();
                     let end_point = topo.vertex(end)?.point();
                     let curve = match (cap, &stripe.surface) {
-                        (Some(&(normal, d)), FaceSurface::Cylinder(cylinder)) => {
+                        (Some(&RunOnCap::Plane(normal, d)), FaceSurface::Cylinder(cylinder)) => {
                             crate::builder_utils::cylinder_plane_arc(
                                 cylinder,
                                 normal,
                                 d,
+                                start_point,
+                                end_point,
+                            )
+                        }
+                        (Some(&RunOnCap::Face(cap)), FaceSurface::Cylinder(cylinder)) => {
+                            cylinder_meets_cap(
+                                cylinder,
+                                topo.face(cap)?.surface(),
                                 start_point,
                                 end_point,
                             )
@@ -1784,6 +1792,33 @@ fn outward_plane(topo: &Topology, face_id: FaceId) -> Result<Option<(Vec3, f64)>
     Ok(face.effective_plane_normal().map(|n| (n, d * sign)))
 }
 
+/// A face's outward normal at a point on its surface (within `tol`), its
+/// reversal applied; `None` where the point is off the surface.
+fn outward_normal_at(
+    topo: &Topology,
+    face_id: FaceId,
+    point: Point3,
+    tol: f64,
+) -> Result<Option<Vec3>, BlendError> {
+    let face = topo.face(face_id)?;
+    if let Some((normal, d)) = outward_plane(topo, face_id)? {
+        let off = normal.dot(Vec3::new(point.x(), point.y(), point.z())) - d;
+        return Ok((off.abs() <= tol).then_some(normal));
+    }
+    let surface = face.surface();
+    let Some((u, v)) = surface.project_point(point) else {
+        return Ok(None);
+    };
+    let Some(on) = surface.evaluate(u, v) else {
+        return Ok(None);
+    };
+    if (on - point).length() > tol {
+        return Ok(None);
+    }
+    let normal = surface.normal(u, v);
+    Ok(Some(if face.is_reversed() { -normal } else { normal }))
+}
+
 /// Fold out a spur where a face's wire runs along a straight edge and back
 /// along a longer straight edge that overlaps it.
 ///
@@ -1814,6 +1849,9 @@ fn fold_spoke_spurs(
     input_edges: &HashSet<EdgeId>,
 ) -> Result<(), BlendError> {
     const ON_LINE: f64 = 1e-6;
+    // The angle (radians) a curved face beyond the spoke may turn from the
+    // patch and still be carried on by it.
+    const CURVED_CARRIES_ON: f64 = 0.05;
     let point = |topo: &Topology, v: VertexId| topo.vertex(v).map(Vertex::point);
     for &face_id in faces {
         let face = topo.face(face_id)?;
@@ -1894,10 +1932,11 @@ fn fold_spoke_spurs(
                         continue;
                     }
                     // Only where the patch beyond the short edge carries on
-                    // the face beyond the long one, in its plane and facing
-                    // its way (the patch adds material there). A patch
-                    // standing in its own plane, or facing the other way,
-                    // covers material the fillet removed: folding it in
+                    // the face beyond the long one, in its plane (or, on a
+                    // curved face, its tangent plane along the short edge)
+                    // and facing its way (the patch adds material there). A
+                    // patch standing in its own plane, or facing the other
+                    // way, covers material the fillet removed: folding it in
                     // would only close a wrong shell.
                     //
                     // Or where the short edge is one of the input's own and
@@ -1909,21 +1948,27 @@ fn fold_spoke_spurs(
                     let own_boundary =
                         input_edges.contains(&short.edge()) && !input_edges.contains(&long.edge());
                     if !own_boundary {
-                        let plane =
-                            |topo: &Topology, f: FaceId| -> Result<Option<(Vec3, f64)>, BlendError> {
-                                let face = topo.face(f)?;
-                                let FaceSurface::Plane { d, .. } = face.surface() else {
-                                    return Ok(None);
-                                };
-                                let sign = if face.is_reversed() { -1.0 } else { 1.0 };
-                                Ok(face.effective_plane_normal().map(|n| (n, d * sign)))
-                            };
-                        let (Some((n1, d1)), Some((n2, d2))) =
-                            (plane(topo, *beyond_long)?, plane(topo, *beyond_short)?)
-                        else {
+                        let Some((n2, _)) = outward_plane(topo, *beyond_short)? else {
                             continue;
                         };
-                        if n1.dot(n2) < 1.0 - 1e-9 || (d1 - d2).abs() > ON_LINE {
+                        let short_edge = topo.edge(short.edge())?;
+                        let (a, b) = (
+                            point(topo, short_edge.start())?,
+                            point(topo, short_edge.end())?,
+                        );
+                        // A curved face beyond may meet the patch at a slight
+                        // kink: a fitted surface rarely runs on exactly level.
+                        let alike = if topo.face(*beyond_long)?.surface().is_planar() {
+                            1.0 - 1e-9
+                        } else {
+                            CURVED_CARRIES_ON.cos()
+                        };
+                        let mut carries_on = true;
+                        for at in [a, b, a + (b - a) * 0.5] {
+                            carries_on &= outward_normal_at(topo, *beyond_long, at, ON_LINE)?
+                                .is_some_and(|n1| n1.dot(n2) >= alike);
+                        }
+                        if !carries_on {
                             continue;
                         }
                     }
@@ -2789,10 +2834,147 @@ fn contact_end_at(
     }
 }
 
-/// A stripe end's tilted cap plane (outward normal and offset), keyed by the
-/// stripe's first spine edge and its end (0 at the spine's start, 1 at its
-/// end).
-type TiltedCaps = std::collections::HashMap<(EdgeId, usize), (Vec3, f64)>;
+/// The edges of `cap`'s wires that end at `vertex`.
+fn cap_corner_edges(
+    topo: &Topology,
+    cap: FaceId,
+    vertex: VertexId,
+) -> Result<Vec<EdgeId>, BlendError> {
+    let face = topo.face(cap)?;
+    let mut edges = Vec::new();
+    for wire_id in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+        for oriented in topo.wire(wire_id)?.edges() {
+            let edge = topo.edge(oriented.edge())?;
+            if (edge.start() == vertex || edge.end() == vertex) && !edges.contains(&oriented.edge())
+            {
+                edges.push(oriented.edge());
+            }
+        }
+    }
+    Ok(edges)
+}
+
+/// Whether `point` lies on `edge` (between its ends) within `tol`.
+fn point_on_edge(
+    topo: &Topology,
+    edge_id: EdgeId,
+    point: Point3,
+    tol: f64,
+) -> Result<bool, BlendError> {
+    const SAMPLES: usize = 64;
+    let edge = topo.edge(edge_id)?;
+    let (a, b) = (
+        topo.vertex(edge.start())?.point(),
+        topo.vertex(edge.end())?.point(),
+    );
+    let curve = edge.curve();
+    let (t0, t1) = curve.domain_with_endpoints(a, b);
+    let at = |t: f64| (curve.evaluate_with_endpoints(t, a, b) - point).length();
+    #[allow(clippy::cast_precision_loss)]
+    let param = |k: usize| t0 + (t1 - t0) * (k as f64) / (SAMPLES as f64);
+    let nearest = (0..=SAMPLES)
+        .min_by(|&i, &j| at(param(i)).total_cmp(&at(param(j))))
+        .unwrap_or(0);
+    // Golden-section refinement between the nearest sample's neighbours.
+    let (mut lo, mut hi) = (
+        param(nearest.saturating_sub(1)),
+        param((nearest + 1).min(SAMPLES)),
+    );
+    let ratio = 0.5 * (5.0_f64.sqrt() - 1.0);
+    for _ in 0..80 {
+        let (x1, x2) = (hi - ratio * (hi - lo), lo + ratio * (hi - lo));
+        if at(x1) <= at(x2) {
+            hi = x2;
+        } else {
+            lo = x1;
+        }
+    }
+    Ok(at(f64::midpoint(lo, hi)) <= tol)
+}
+
+/// Where the line `origin + run * s` meets `surface`, by Newton steps from
+/// `s0` along the surface's normal at its nearest point; `None` where they
+/// do not converge to a point on the surface within `tol`.
+fn line_meets_surface(
+    surface: &FaceSurface,
+    origin: Point3,
+    run: Vec3,
+    s0: f64,
+    tol: f64,
+) -> Option<f64> {
+    let mut s = s0;
+    for _ in 0..60 {
+        let p = origin + run * s;
+        let (u, v) = surface.project_point(p)?;
+        let q = surface.evaluate(u, v)?;
+        let n = surface.normal(u, v);
+        let slope = run.dot(n);
+        if slope.abs() <= 1e-12 * run.length() {
+            return None;
+        }
+        let step = (p - q).dot(n) / slope;
+        s -= step;
+        if (step * run).length() <= 1e-3 * tol {
+            let p = origin + run * s;
+            let (u, v) = surface.project_point(p)?;
+            return ((surface.evaluate(u, v)? - p).length() <= tol).then_some(s);
+        }
+    }
+    None
+}
+
+/// The curve where a cylinder band meets a curved cap between the contact
+/// ends `a` and `b`: each ruling of the band, the shorter way round from `a`
+/// to `b`, cut by the cap's surface, and a cubic through those points.
+/// `None` where a ruling misses the cap.
+fn cylinder_meets_cap(
+    cylinder: &brepkit_math::surfaces::CylindricalSurface,
+    cap: &FaceSurface,
+    a: Point3,
+    b: Point3,
+) -> Option<EdgeCurve> {
+    const SAMPLES: usize = 32;
+    let axis = cylinder.axis();
+    let origin = cylinder.origin();
+    let radius = cylinder.radius();
+    let tol = 1e-7 * radius.max(1.0);
+    let radial = |p: Point3| {
+        let d = p - origin;
+        d - axis * d.dot(axis)
+    };
+    let (ra, rb) = (radial(a).normalize().ok()?, radial(b).normalize().ok()?);
+    let across = axis.cross(ra);
+    let angle = rb.dot(across).atan2(rb.dot(ra));
+    let (sa, sb) = ((a - origin).dot(axis), (b - origin).dot(axis));
+    let mut points = Vec::with_capacity(SAMPLES + 1);
+    points.push(a);
+    let mut s = sa;
+    for k in 1..SAMPLES {
+        #[allow(clippy::cast_precision_loss)]
+        let f = k as f64 / SAMPLES as f64;
+        let theta = angle * f;
+        let foot = origin + (ra * theta.cos() + across * theta.sin()) * radius;
+        let guess = s + (sb - s) / ((SAMPLES - k + 1) as f64);
+        s = line_meets_surface(cap, foot, axis, guess, tol)?;
+        points.push(foot + axis * s);
+    }
+    points.push(b);
+    brepkit_math::nurbs::fitting::interpolate(&points, 3)
+        .ok()
+        .map(EdgeCurve::NurbsCurve)
+}
+
+/// The cap a stripe's end was run on to: a tilted plane (outward normal and
+/// offset), or a curved face.
+#[derive(Debug, Clone, Copy)]
+enum RunOnCap {
+    Plane(Vec3, f64),
+    Face(FaceId),
+}
+
+/// The caps stripe ends were run on to, keyed by the stripe's first spine
+/// edge and its end (0 at the spine's start, 1 at its end).
+type TiltedCaps = std::collections::HashMap<(EdgeId, usize), RunOnCap>;
 
 /// Runs a straight round's ends on to tilted end caps.
 ///
@@ -2806,6 +2988,11 @@ type TiltedCaps = std::collections::HashMap<(EdgeId, usize), (Vec3, f64)>;
 /// which lies on that support face's corner edge with the cap; the band's
 /// end is then the cylinder's section by the cap's plane, an ellipse, and
 /// the cap takes the notch as a square cap does.
+///
+/// A curved cap (a round ending on an arc of the part's outline, or on a
+/// fitted face) is taken the same way: each contact runs to where it meets
+/// the cap's surface, on the cap's corner edge, and the band ends on its
+/// intersection with that surface, each of the band's rulings cut by it.
 fn run_stripes_to_tilted_caps(
     topo: &Topology,
     plan: &crate::fillet_plan::FilletPlan,
@@ -2851,50 +3038,37 @@ fn run_stripes_to_tilted_caps(
         let [cap] = fan.as_slice() else {
             continue;
         };
-        let Some((normal, d)) = outward_plane(topo, *cap)? else {
-            continue;
-        };
-        let tilt = normal.dot(cylinder.axis()).abs();
-        if tilt >= 1.0 - SQUARE || tilt <= OBLIQUE {
+        let plane = outward_plane(topo, *cap)?;
+        let tilt = plane.map_or(0.0, |(normal, _)| normal.dot(cylinder.axis()).abs());
+        if plane.is_some() && (tilt >= 1.0 - SQUARE || tilt <= OBLIQUE) {
             continue;
         }
+        let cap_surface = topo.face(*cap)?.surface().clone();
         let vertex = topo.vertex(junction.vertex)?.point();
         let end = usize::from(spine_ends_at(topo, stripe, vertex)?);
         let section = stripe.sections[end].clone();
-        // The cap's two straight edges at the corner.
-        let face = topo.face(*cap)?;
-        let mut corner_edges: Vec<(Point3, Point3)> = Vec::new();
-        for wire_id in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied())
+        // The cap's two edges at the corner: straight on a plane, any curve
+        // on a curved cap.
+        let corner_edges = cap_corner_edges(topo, *cap, junction.vertex)?;
+        if corner_edges.len() != 2
+            || (plane.is_some()
+                && corner_edges.iter().any(|&edge| {
+                    !topo
+                        .edge(edge)
+                        .is_ok_and(|e| matches!(e.curve(), EdgeCurve::Line))
+                }))
         {
-            for oriented in topo.wire(wire_id)?.edges() {
-                let edge = topo.edge(oriented.edge())?;
-                if edge.start() != junction.vertex && edge.end() != junction.vertex {
-                    continue;
-                }
-                if !matches!(edge.curve(), EdgeCurve::Line) {
-                    corner_edges.clear();
-                    break;
-                }
-                corner_edges.push((
-                    topo.vertex(edge.start())?.point(),
-                    topo.vertex(edge.end())?.point(),
-                ));
-            }
-        }
-        if corner_edges.len() != 2 {
             continue;
         }
         let scale = (stripe.sections[0].p1 - stripe.sections[0].p2).length();
-        let on_corner = |point: Point3| {
-            corner_edges.iter().any(|&(a, b)| {
-                let ab = b - a;
-                let len2 = ab.dot(ab);
-                len2 > 1e-18 && {
-                    let t = (point - a).dot(ab) / len2;
-                    (-1e-9..=1.0 + 1e-9).contains(&t)
-                        && (a + ab * t - point).length() <= 1e-6 * scale.max(1.0)
+        let tol = 1e-6 * scale.max(1.0);
+        let on_corner = |point: Point3| -> Result<bool, BlendError> {
+            for &edge in &corner_edges {
+                if point_on_edge(topo, edge, point, tol)? {
+                    return Ok(true);
                 }
-            })
+            }
+            Ok(false)
         };
         // Each contact run to the cap's plane, kept running from the same
         // end as before; the stripe is left alone unless both reach the
@@ -2914,13 +3088,24 @@ fn run_stripes_to_tilted_caps(
             let (near, at_end) = contact_end_at(contact, at);
             let far = if at_end { a } else { b };
             let run = near - far;
-            let along = normal.dot(run);
-            if !straight || along.abs() <= 1e-12 {
+            if !straight {
                 break;
             }
-            let fraction = (d - normal.dot(Vec3::new(far.x(), far.y(), far.z()))) / along;
+            let fraction = match plane {
+                Some((normal, d)) => {
+                    let along = normal.dot(run);
+                    if along.abs() <= 1e-12 {
+                        break;
+                    }
+                    (d - normal.dot(Vec3::new(far.x(), far.y(), far.z()))) / along
+                }
+                None => match line_meets_surface(&cap_surface, far, run, 1.0, tol) {
+                    Some(fraction) => fraction,
+                    None => break,
+                },
+            };
             let reached = far + run * fraction;
-            if fraction <= 0.05 || !on_corner(reached) {
+            if fraction <= 0.05 || !on_corner(reached)? {
                 break;
             }
             let points = if at_end {
@@ -2941,13 +3126,20 @@ fn run_stripes_to_tilted_caps(
         let Ok([(contact1, p1), (contact2, p2)]) = <[_; 2]>::try_from(contacts) else {
             continue;
         };
-        // The axis meets the cap's plane at the ellipse's centre.
+        // The section's centre: where the axis meets the cap's plane (the
+        // ellipse's centre), or, on a curved cap, the axis's point level with
+        // the two contact ends' middle.
         let axis = cylinder.axis();
         let origin = cylinder.origin();
-        let centre = origin
-            + axis
-                * ((d - normal.dot(Vec3::new(origin.x(), origin.y(), origin.z())))
-                    / normal.dot(axis));
+        let to = |p: Point3| Vec3::new(p.x(), p.y(), p.z());
+        let centre = match plane {
+            Some((normal, d)) => origin + axis * ((d - normal.dot(to(origin))) / normal.dot(axis)),
+            None => origin + axis * (p1 - origin + (p2 - origin)).dot(axis) * 0.5,
+        };
+        let run_on = match plane {
+            Some((normal, d)) => RunOnCap::Plane(normal, d),
+            None => RunOnCap::Face(*cap),
+        };
         let edge = stripe.spine_edges()[0];
         let result_stripe = &mut result.stripe;
         result_stripe.contact1 = contact1;
@@ -2957,11 +3149,11 @@ fn run_stripes_to_tilted_caps(
         section.p2 = p2;
         section.center = centre;
         log::debug!(
-            "terminal {:?}: round runs on to its tilted cap {:?} (axis cosine {tilt:.6})",
+            "terminal {:?}: round runs on to its cap {:?} ({run_on:?})",
             junction.vertex,
             cap
         );
-        caps.insert((edge, end), (normal, d));
+        caps.insert((edge, end), run_on);
     }
     Ok(caps)
 }
@@ -2975,6 +3167,7 @@ fn terminal_cap_is_notchable(
     junction: &crate::fillet_plan::VertexJunction,
     contour: &crate::fillet_plan::FilletContour,
     stripe: &Stripe,
+    run_on: &TiltedCaps,
 ) -> Result<bool, BlendError> {
     let caps: Vec<FaceId> = junction
         .face_fan
@@ -2988,13 +3181,19 @@ fn terminal_cap_is_notchable(
     let Ok(face) = topo.face(*cap) else {
         return Ok(false);
     };
-    if !face.surface().is_planar() {
-        return Ok(false);
-    }
     let Ok(vertex) = topo.vertex(junction.vertex) else {
         return Ok(false);
     };
     let vertex = vertex.point();
+    if !face.surface().is_planar() {
+        // A curved cap takes the notch only where the stripe was run on to
+        // it: its contacts then end on the cap's corner edges, checked there.
+        let end = usize::from(spine_ends_at(topo, stripe, vertex)?);
+        return Ok(matches!(
+            run_on.get(&(stripe.spine_edges()[0], end)),
+            Some(RunOnCap::Face(face)) if face == cap
+        ));
+    }
     // The corner sits on the cap's outer wire (a convex fillet) or on one of
     // its holes (a concave one ending on a cup's rim); the notch replaces it
     // on whichever wire holds it.
