@@ -150,8 +150,8 @@ impl BrepKernel {
     ///   size (default 1, negative for the profile's other side)
     ///
     /// Rails and conditions build a surface no ruled loft can, and close their
-    /// ends on the profiles: with them, `ruled: true`, `startPoint` and
-    /// `endPoint` are refused.
+    /// ends on the profiles: with them, `ruled` defaults to false, and an
+    /// explicit `ruled: true`, a `startPoint` or an `endPoint` is refused.
     #[wasm_bindgen(js_name = "loftWithOptions")]
     #[allow(clippy::needless_pass_by_value)]
     pub fn loft_with_options(&mut self, faces: Vec<u32>, options: &str) -> Result<u32, JsError> {
@@ -2013,9 +2013,13 @@ impl BrepKernel {
             "free" => Ok(LoftEnd::Free),
             "normal" => Ok(LoftEnd::Normal { weight }),
             "tangent" => {
-                let handle = value
-                    .get("face")
-                    .and_then(serde_json::Value::as_u64)
+                let face = value.get("face").ok_or_else(|| {
+                    refuse(format!(
+                        "'{key}' tangent end condition needs a 'face' handle"
+                    ))
+                })?;
+                let handle = face
+                    .as_u64()
                     .and_then(|n| u32::try_from(n).ok())
                     .ok_or_else(|| refuse(format!("'{key}' face is not a handle")))?;
                 Ok(LoftEnd::Tangent {
@@ -2423,7 +2427,7 @@ mod tests {
             ),
             (
                 format!(r#""faces": {faces}, "start": "tangent""#),
-                "'start' face is not a handle",
+                "'start' tangent end condition needs a 'face' handle",
             ),
             (
                 format!(r#""faces": {faces}, "end": {{"kind": "tangent", "face": "bad"}}"#),
