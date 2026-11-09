@@ -900,11 +900,22 @@ impl<'a> FilletBuilder<'a> {
                             )
                         }
                         (Some(&RunOnCap::Face(cap)), FaceSurface::Cylinder(cylinder)) => {
-                            cylinder_meets_cap(
-                                cylinder,
-                                topo.face(cap)?.surface(),
-                                start_point,
-                                end_point,
+                            // A chord would leave the band's end off the cap.
+                            Some(
+                                cylinder_meets_cap(
+                                    cylinder,
+                                    topo.face(cap)?.surface(),
+                                    start_point,
+                                    end_point,
+                                )
+                                .ok_or_else(|| {
+                                    BlendError::PlanningFailure {
+                                        reason: format!(
+                                            "the round's end on face {} cannot be traced",
+                                            cap.index()
+                                        ),
+                                    }
+                                })?,
                             )
                         }
                         _ => section.and_then(|section| {
@@ -3159,9 +3170,10 @@ fn run_stripes_to_tilted_caps(
 }
 
 /// Whether a stripe's terminal vertex sits on a planar cap whose two edges
-/// at the vertex are straight or B-splines (a spline profile's rim): the
-/// end-cap notch can replace that corner path with the stripe's
-/// cross-section arc.
+/// at the vertex are straight or B-splines (a spline profile's rim), or on a
+/// curved cap the stripe was run on to: the end-cap notch can replace that
+/// corner path with the stripe's end curve. A notch that would cross another
+/// boundary of its cap is an error.
 fn terminal_cap_is_notchable(
     topo: &Topology,
     junction: &crate::fillet_plan::VertexJunction,
@@ -3189,10 +3201,24 @@ fn terminal_cap_is_notchable(
         // A curved cap takes the notch only where the stripe was run on to
         // it: its contacts then end on the cap's corner edges, checked there.
         let end = usize::from(spine_ends_at(topo, stripe, vertex)?);
-        return Ok(matches!(
+        if !matches!(
             run_on.get(&(stripe.spine_edges()[0], end)),
             Some(RunOnCap::Face(face)) if face == cap
-        ));
+        ) {
+            return Ok(false);
+        }
+        // Seen along the band's axis, the notch lies in the triangle between
+        // its ends and the corner, as on a planar cap seen square to it.
+        let FaceSurface::Cylinder(cylinder) = &stripe.surface else {
+            return Ok(false);
+        };
+        let section = &stripe.sections[end];
+        let near_ends = [
+            (&stripe.contact1, section.p1),
+            (&stripe.contact2, section.p2),
+        ]
+        .map(|(contact, at)| contact_end_at(contact, at).0);
+        return notch_stays_clear(topo, face, junction.vertex, cylinder.axis(), near_ends);
     }
     // The corner sits on the cap's outer wire (a convex fillet) or on one of
     // its holes (a concave one ending on a cup's rim); the notch replaces it
@@ -3253,23 +3279,38 @@ fn terminal_cap_is_notchable(
     let Some(section) = end_section(topo, stripe, vertex)? else {
         return Ok(false);
     };
-    let near_ends: Vec<Point3> = [
+    let near_ends = [
         (&stripe.contact1, section.p1),
         (&stripe.contact2, section.p2),
     ]
-    .into_iter()
-    .map(|(contact, at)| contact_end_at(contact, at).0)
-    .collect();
+    .map(|(contact, at)| contact_end_at(contact, at).0);
     if !near_ends.iter().all(|&point| on_segment(point)) {
         return Ok(false);
     }
-    // The arc that replaces the corner path lies in the triangle between its
-    // ends and the corner, so no other boundary of the cap may reach into
-    // that triangle (a fillet wider than a cup's wall would cross its mouth).
     let FaceSurface::Plane { normal, .. } = face.surface() else {
         return Ok(false);
     };
-    let Ok(frame) = brepkit_math::frame::Frame3::from_normal(vertex, *normal) else {
+    notch_stays_clear(topo, face, junction.vertex, *normal, near_ends)
+}
+
+/// Whether a cap's notch at `corner`, ending at `near_ends`, stays clear of
+/// the cap's other boundaries, seen along `view` (the normal of a planar cap,
+/// or the axis of a band run on to a curved one). The notch lies in the
+/// triangle between its ends and the corner, so no other boundary of the cap
+/// may reach into that triangle (a fillet wider than a cup's wall would cross
+/// its mouth): that is an error. `Ok(false)` where the view cannot be read.
+fn notch_stays_clear(
+    topo: &Topology,
+    face: &Face,
+    corner: VertexId,
+    view: Vec3,
+    near_ends: [Point3; 2],
+) -> Result<bool, BlendError> {
+    let Ok(vertex) = topo.vertex(corner) else {
+        return Ok(false);
+    };
+    let vertex = vertex.point();
+    let Ok(frame) = brepkit_math::frame::Frame3::from_normal(vertex, view) else {
         return Ok(false);
     };
     let flat = |p: Point3| {
@@ -3285,7 +3326,7 @@ fn terminal_cap_is_notchable(
         let Ok(edge) = topo.edge(oriented.edge()) else {
             return Ok(false);
         };
-        if edge.start() == junction.vertex || edge.end() == junction.vertex {
+        if edge.start() == corner || edge.end() == corner {
             continue;
         }
         let (Ok(a), Ok(b)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) else {
@@ -3295,8 +3336,7 @@ fn terminal_cap_is_notchable(
         if cap_edge_reaches_triangle(edge, a, b, &flat, triangle) {
             return Err(BlendError::PlanningFailure {
                 reason: format!(
-                    "the fillet's end at {:?} would cross another boundary of its cap",
-                    junction.vertex
+                    "the fillet's end at {corner:?} would cross another boundary of its cap"
                 ),
             });
         }

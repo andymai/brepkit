@@ -26,11 +26,15 @@
 use std::f64::consts::FRAC_PI_2;
 
 use brepkit_math::curves::Circle3D;
+use brepkit_math::mat::Mat4;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_operations::blend_ops::fillet_v2;
+use brepkit_operations::boolean::{BooleanOp, boolean};
 use brepkit_operations::extrude::extrude;
 use brepkit_operations::measure::solid_volume;
+use brepkit_operations::primitives::make_cylinder;
 use brepkit_operations::tessellate::{is_watertight, tessellate_solid};
+use brepkit_operations::transform::transform_solid;
 use brepkit_operations::validate::validate_solid;
 use brepkit_topology::Topology;
 use brepkit_topology::edge::{Edge, EdgeCurve, EdgeId};
@@ -157,4 +161,56 @@ fn bottom_edge_ending_on_the_cylinder() {
     for r in [1.0, 2.0] {
         assert_round_ends_on_the_curve(0.0, r);
     }
+}
+
+/// The D with a blind radial hole in its arc wall, `HOLE` in radius and 1
+/// deep, its mouth centred where the arc is at `y`, at height `z`.
+fn d_prism_with_hole(topo: &mut Topology, y: f64, z: f64) -> SolidId {
+    const HOLE: f64 = 0.15;
+    let solid = d_prism(topo);
+    let turn = (y / R).asin();
+    let drill = make_cylinder(topo, HOLE, 1.5).unwrap();
+    let place = Mat4::translation(
+        (R - 1.0).mul_add(turn.cos(), centre()),
+        (R - 1.0) * turn.sin(),
+        z,
+    ) * Mat4::rotation_z(turn)
+        * Mat4::rotation_y(FRAC_PI_2);
+    transform_solid(topo, drill, &place).unwrap();
+    boolean(topo, BooleanOp::Cut, solid, drill).unwrap()
+}
+
+#[test]
+fn a_round_whose_notch_would_cross_a_hole_in_its_curved_cap_is_refused() {
+    // The hole's mouth lies in the corner the round of the top edge takes
+    // off the arc wall: the notch would cut through the hole's wall.
+    let mut topo = Topology::new();
+    let solid = d_prism_with_hole(&mut topo, 4.5, 5.6);
+    let edge = side_edge(&topo, solid, H);
+    let refused = match fillet_v2(&mut topo, solid, &[edge], 2.0) {
+        Err(_) => true,
+        Ok(result) => !result.failed.is_empty(),
+    };
+    assert!(refused, "the notch crosses the hole's mouth");
+}
+
+#[test]
+fn a_hole_clear_of_the_notch_keeps_the_round() {
+    let r = 2.0;
+    let mut topo = Topology::new();
+    let solid = d_prism_with_hole(&mut topo, 0.0, 3.0);
+    let before = solid_volume(&topo, solid, 1e-3).unwrap();
+    let edge = side_edge(&topo, solid, H);
+    let result = fillet_v2(&mut topo, solid, &[edge], r).unwrap();
+    assert!(result.failed.is_empty(), "{:?}", result.failed);
+    let report = validate_solid(&topo, result.solid).unwrap();
+    assert!(report.is_valid(), "{:?}", report.issues);
+    let mesh = tessellate_solid(&topo, result.solid, 0.01).unwrap();
+    assert!(is_watertight(&mesh), "mesh open");
+    let lost = before - solid_volume(&topo, result.solid, 1e-3).unwrap();
+    let expected = removed(r);
+    assert!(
+        (lost - expected).abs() <= 1e-6 * before,
+        "removed {lost}, the strip out to the cylinder {expected}"
+    );
 }
