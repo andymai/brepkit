@@ -22,12 +22,15 @@
 use std::f64::consts::{FRAC_PI_2, PI};
 
 use brepkit_blend::BlendError;
+use brepkit_math::curves::Circle3D;
+use brepkit_math::mat::Mat4;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_operations::OperationsError;
 use brepkit_operations::blend_ops::fillet_v2;
 use brepkit_operations::extrude::extrude;
 use brepkit_operations::measure::solid_volume;
 use brepkit_operations::tessellate::{is_watertight, tessellate_solid};
+use brepkit_operations::transform::transform_solid;
 use brepkit_operations::validate::validate_solid;
 use brepkit_topology::Topology;
 use brepkit_topology::edge::{Edge, EdgeCurve, EdgeId};
@@ -290,4 +293,109 @@ fn a_rhombus_refuses_a_radius_its_mitres_overrun() {
     let edges = top_edges(&topo, solid);
     let volume = area(0.0) * (H - r) + over_the_round(r, area);
     assert_rounds_to(&mut topo, solid, &edges, r, 10, volume, "r = 4");
+}
+
+/// The kite of 75 deg, turned off every axis and moved off the origin
+/// before its rounds: the mitre reads its corner in the part's own frame.
+#[test]
+fn a_turned_kite_s_rounds_are_mitred() {
+    let theta = 75.0_f64.to_radians();
+    let place = Mat4::translation(12.5, -4.25, 7.75)
+        * Mat4::rotation_x(0.7)
+        * Mat4::rotation_z(0.4)
+        * Mat4::rotation_y(-1.1);
+    for r in [1.0, 2.0] {
+        let mut topo = Topology::new();
+        let [v, b, _, a] = kite(theta, L);
+        let solid = prism(&mut topo, &kite(theta, L));
+        transform_solid(&mut topo, solid, &place).unwrap();
+        let up = Vec3::new(0.0, 0.0, H);
+        let at = |p: Point3| place.mul_point(p + up);
+        let edges = [
+            edge_between(&topo, solid, at(v), at(a)),
+            edge_between(&topo, solid, at(v), at(b)),
+        ];
+        let before = solid_volume(&topo, solid, 1e-3).unwrap();
+        let volume = before - kite_rounds(theta, L, r);
+        assert_rounds_to(&mut topo, solid, &edges, r, 8, volume, &format!("r = {r}"));
+    }
+}
+
+/// A prism whose corner `V` joins a flat wall and a round one: the
+/// profile runs from `V` along `x` to `A`, up to the round wall's axis `O`,
+/// out along a radius to `B`, and round the wall, a circle of radius 10
+/// about `O`, back to `V`, meeting the flat wall there at 120 deg. Both
+/// walls end square to their round's edge, at `A` and at `B`. At inset `w`
+/// the section is the profile with its flat wall moved to `y = w` and its
+/// round wall's radius cut by `w`: the triangle `V' A' O` and the sector of
+/// `O` from `B'` to `V'`.
+#[test]
+fn a_flat_and_a_round_wall_s_rounds_are_mitred() {
+    let (big, theta) = (10.0_f64, 120.0_f64.to_radians());
+    let centre = (big * theta.sin(), -big * theta.cos());
+    let to_b = theta + FRAC_PI_2 - PI / 3.0;
+    let b = (
+        big.mul_add(to_b.cos(), centre.0),
+        big.mul_add(to_b.sin(), centre.1),
+    );
+    let area = |w: f64| {
+        let reach = big - w;
+        let x = centre.0 - (reach * reach - (w - centre.1).powi(2)).sqrt();
+        let to_v = (w - centre.1).atan2(x - centre.0) + 2.0 * PI;
+        0.5 * (centre.0 - x) * (centre.1 - w) + 0.5 * reach * reach * (to_v - to_b)
+    };
+    for r in [1.0, 2.0] {
+        let mut topo = Topology::new();
+        let corner = |topo: &mut Topology, (x, y): (f64, f64)| {
+            topo.add_vertex(Vertex::new(Point3::new(x, y, 0.0), 1e-7))
+        };
+        let v = corner(&mut topo, (0.0, 0.0));
+        let a = corner(&mut topo, (centre.0, 0.0));
+        let o = corner(&mut topo, centre);
+        let b_id = corner(&mut topo, b);
+        let wall = Circle3D::new(
+            Point3::new(centre.0, centre.1, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            big,
+        )
+        .unwrap();
+        let edges: Vec<_> = [
+            (v, a, EdgeCurve::Line),
+            (a, o, EdgeCurve::Line),
+            (o, b_id, EdgeCurve::Line),
+            (b_id, v, EdgeCurve::Circle(wall)),
+        ]
+        .into_iter()
+        .map(|(s, e, curve)| OrientedEdge::new(topo.add_edge(Edge::new(s, e, curve)), true))
+        .collect();
+        let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+        let normal = Vec3::new(0.0, 0.0, 1.0);
+        let face = topo.add_face(Face::new(
+            wire,
+            vec![],
+            FaceSurface::Plane { normal, d: 0.0 },
+        ));
+        let solid = extrude(&mut topo, face, normal, H).unwrap();
+        let top_v = Point3::new(0.0, 0.0, H);
+        let rounded: Vec<EdgeId> = top_edges(&topo, solid)
+            .into_iter()
+            .filter(|&edge_id| {
+                let edge = topo.edge(edge_id).unwrap();
+                [edge.start(), edge.end()]
+                    .iter()
+                    .any(|&end| (topo.vertex(end).unwrap().point() - top_v).length() < 1e-9)
+            })
+            .collect();
+        assert_eq!(rounded.len(), 2);
+        let volume = area(0.0) * (H - r) + over_the_round(r, area);
+        assert_rounds_to(
+            &mut topo,
+            solid,
+            &rounded,
+            r,
+            8,
+            volume,
+            &format!("r = {r}"),
+        );
+    }
 }
