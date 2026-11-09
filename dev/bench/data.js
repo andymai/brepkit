@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794250290988,
+  "lastUpdate": 1794250535730,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -67013,6 +67013,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 17130897,
             "range": "± 531697",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "88ac749bc7a75c708ac965701eab0f0cd6e07c1f",
+          "message": "feat(operations): bridge edge chains with a blend surface, and match and fair surfaces (#2334)\n\nPart of #2200. The issue stays open until the brepjs adapter calls\nthese.\n\nToday the kernel has no way to bridge two edge chains with continuity\ncontrol, match one surface's edge to another, or fair a surface. A\nsmooth loft through sections can't promise continuity at its edges. With\nthis change `blend_surface`, `match_surface` and `fair_surface` do those\nthree things, and each continuity claim is measured in the tests.\n\n## What each does\n\n- `blend_surface(chain_a, face_a, chain_b, face_b, options)` returns a\nface bridging two edge chains, G1 or G2 to the face beside each, with\noptional tangent weights. A chain may be several edges of mixed kinds,\nstored either way round.\n- `match_surface(face, edge, target_edge, continuity)` moves a surface's\nedge on to another's at G0, G1 or G2, and leaves the rest of the surface\nalone past a band next to the edge. `match_surface_on` names the\ntarget's face, for a target edge that bounds two.\n- `fair_surface(face, tolerance)` smooths a surface, staying within\n`tolerance` and holding its boundary.\n\nThe bindings are `blendSurface`, `matchSurface` and `fairSurface`, also\nin `executeBatch`.\n\n## Measured\n\nEach seam gets 400 samples, upright, turned off the axes and mirrored.\nG0 is the distance to the neighbour, G1 the angle between normals in\nradians, and G2 the difference in normal curvature square to the seam.\nThe worst figures for `blend_surface`:\n\n| Neighbour | G0 | G1 | G2 |\n|---|---|---|---|\n| Plane | 1.1e-14 | 6.1e-13 | 2.2e-11 |\n| Cylinder | 2.0e-11 | 2.6e-10 | 6.6e-10 |\n| Cone | 1.2e-11 | 1.2e-10 | 7.0e-10 |\n| Sphere | 5.9e-11 | 6.5e-10 | 8.0e-10 |\n| Torus | 7.8e-12 | 2.6e-10 | 1.0e-9 |\n| NURBS | 5.3e-12 | 5.7e-10 | 5.9e-10 |\n\n`match_surface` measures the same order on each type, at worst G0\n2.6e-11, G1 6.6e-10 and G2 1.1e-8. The measure itself is checked against\nknown failures: a G1 blend reads a curvature gap of 0.35, and a plane\nturned 0.01 rad reads 0.01.\n\nFor `fair_surface`, a bumpy dome's bending energy (`integral (k1^2 +\nk2^2) dA`, read at Gauss points) falls from 4.493 to 1.449. The dome\nwithout its bumps reads 1.407. It moved 0.0248 of a tolerance of 0.12,\nand its boundary moved 0.0, identically in all three poses. Tightening\nthe tolerance to 0.01 and 0.001 leaves 62.2% and 95.9% of the energy.\nAlready-fair surfaces barely change: flat and tilted move 0, and a bowl\nat most 0.01.\n\n## Limits\n\n- G2 is not met where a neighbour is only G1 across a knot line the\nchain crosses, since it has no single curvature there. The blend closes\nthe jump over a band of 10% of the shorter piece either side: G1 holds\neverywhere (2.9e-10), and 190 of 1601 samples miss G2, by at most 0.047.\n- A blend or match returns its own new edges and vertices, lying on the\nchain to the figures above. Joining it to the neighbour needs sewing,\nwhich is untested.\n- Blend surfaces aren't checked for folds or self-intersection, and high\nweights can overshoot.\n- At a corner in a chain the surface is G1 or G2 to the neighbour on\nboth sides, but not smooth along itself across that parameter line.\n- A wire winding round a closed surface is assumed to keep its face on\nits left about the outward normal. That comes from the convention in\n`crates/check/src/classify/boundary.rs`, and the tests only use wires\nthat follow it. One breaking it would leave the face the wrong way with\nno error.\n- `fair_surface` moves control points along normals only, so it never\nevens out parameter speed, and it holds every control point that reaches\nthe boundary, so a bump within one row of the boundary stays partly in\nplace. The tolerance is a cap and is not spent: wavelength decides what\ngoes, so a long wobble stays even under a large tolerance. Its deviation\nis read at 8 samples per span with a 5% margin, not proved at every\nparameter. Analytic faces come back as exact copies.\n- `match_surface` takes a single target edge. The band it changes, 25%\nto 100% of the width, is a chosen rule, not a minimised deviation.\n- These are refused with `InvalidInput`: a neighbour creased where the\nchain crosses it, a chain doubling back past about 166 degrees, a match\nwhose outline folds when mapped to a rectangle, a match on a closed edge\nthat winds round its surface with no hole inside, and a match with a\nhole too close to the edge.\n\n## Tests\n\n`crates/operations/tests/blend_surface.rs` (33), `match_surface.rs` (15)\nand `fair_surface.rs` (14), sharing fixtures and measures in\n`surface_fixtures/mod.rs`, with 13 unit tests in `blend_surface/*.rs`\nand 4 contract tests through `executeBatch`. `crates/algo`,\n`crates/blend`, tessellation and `loft.rs` are untouched.\n\n## Verification\n\n`cargo nextest run --no-fail-fast` on the algo, io, operations, wasm,\ncheck and heal crates: 3223 passed, 19 skipped.\n`check-boundaries` and `check-doc-paths` pass, and the wasm target\nchecks clean. This adds new files and bindings only, so the pose sweep\nand truth audit have nothing new to read. I did not run the tool-side\nsuite.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nAdds `blend_surface`, `match_surface`, and `fair_surface` so the kernel\ncan bridge two edge chains with continuity control, move one surface's\nedge onto another's, and fair a surface. Part of #2200, which stays open\nuntil the `brepjs` adapter calls these operations. This also fixes\nseveral correctness issues in the fitting, fairing, chain crossing,\nmatching, and closed spline paths.\n\n**New Features**\n- `blend_surface(chain_a, face_a, chain_b, face_b, options)` returns a\nface bridging two chains at G1 or G2 to the face beside each, with\noptional tangent weights.\n- `match_surface(face, edge, target_edge, continuity)` moves a surface's\nedge onto another's at G0, G1, or G2, leaving the surface past a band\nunchanged.\n- `fair_surface(face, tolerance)` smooths a surface within `tolerance`,\nholding its boundary.\n- WASM bindings `blendSurface`, `matchSurface`, and `fairSurface` are\nadded, including `executeBatch` arms.\n- Tests measure seam gap, normal angle, and curvature difference on\nevery surface type in upright, rotated, and mirrored poses.\n\n**Bug Fixes**\n- Grid fitting now also reads error between site lines, so bumps that\nvanish on site lines refine the fit instead of disappearing.\n- Fairing handles knot domains narrower than `1e-9`, which previously\ndid nothing.\n- Blend chains that cross, including just beside a shared end, are now\nrefused instead of producing crossed boundaries.\n- Closed spline parameters are wrapped before reading, so a face chart\nover a wall seam edge stays correct.\n- A match whose move would fold its face is refused, its band ends land\non existing source knots, and its rectangle reach is a share of the knot\ndomain so a near-zero-width domain no longer maps to NaN.\n\nKnown limits: G2 is not met where a neighbor is only G1 across a knot\nline the chain crosses; the jump is closed over a band, with G1 holding\neverywhere. Blend and match surfaces return new edges and vertices;\nsewing them to neighbors is untested. Blends aren't checked for folds or\nself-intersection, and high weights can overshoot. `fair_surface` moves\ncontrol points along normals only, so it never evens out parameter\nspeed.\n\n<sup>Written for commit 0103942eb08e10e706fd63628c82f1bb55cd502b.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2334?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2334?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2334&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-11-09T10:48:50-08:00",
+          "tree_id": "9ea60fef166c7196a0d1e9cfa4ef1776d6ddcf68",
+          "url": "https://github.com/andymai/brepkit/commit/88ac749bc7a75c708ac965701eab0f0cd6e07c1f"
+        },
+        "date": 1794250523372,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 876002,
+            "range": "± 1876",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 944789,
+            "range": "± 1244",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11265,
+            "range": "± 136",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 710057,
+            "range": "± 16574",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 22927485,
+            "range": "± 129077",
             "unit": "ns/iter"
           }
         ]
