@@ -1,0 +1,22 @@
+crates/topology/src/orientation.rs
+  s_f8c761b717b79b::t_5e0b5c2d769ff4 241,243,249-251
+  s_f8c761b717b79b::t_25d5a27ec54dde 997
+  s_f8c761b717b79b::t_b410787a858f53 990-996,998-1105
+  s_f8c761b717b79b::t_8c170d8d17bb77 129,196,237-240,242,422-426
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "252580ac848063ddb5d7fdded6d97b9421686f96",
+  "prompts": {},
+  "sessions": {
+    "s_f8c761b717b79b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0161eb79-bcdb-4e67-ad8a-f056fadf98c2",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
