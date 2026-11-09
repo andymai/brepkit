@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794256194854,
+  "lastUpdate": 1794259074897,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -67283,6 +67283,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 22988501,
             "range": "± 215393",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "45413093d2eb1b79f18d3513248658dfacd28609",
+          "message": "chore(main): release 4.11.0 (#2358)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[4.11.0](https://github.com/andymai/brepkit/compare/v4.10.0...v4.11.0)\n(2026-11-09)\n\n\n### Features\n\n* **operations:** loft along guide rails and under end conditions\n([#2331](https://github.com/andymai/brepkit/issues/2331))\n([b79c36e](https://github.com/andymai/brepkit/commit/b79c36e39ec07cf26db886305646f4b6f69dff46))\n\n\n### Bug Fixes\n\n* **blend:** land five contributor fillet PRs with a regular-point\nB-spline winding and certified sliver edges\n([#2355](https://github.com/andymai/brepkit/issues/2355))\n([09dfef8](https://github.com/andymai/brepkit/commit/09dfef8ff6d657cd557838c9cb4119bc9dbbddc0))\n* **blend:** land four contributor fillet PRs with exact mitre and\ncapped-corner curves and a scale-free hole guard\n([#2354](https://github.com/andymai/brepkit/issues/2354))\n([092099b](https://github.com/andymai/brepkit/commit/092099bd8bdcc16b55bba9f2531a925feaf42579))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-11-09T21:14:22Z",
+          "tree_id": "49c51280f35a6b02da4f3a004a9e20773d8470b6",
+          "url": "https://github.com/andymai/brepkit/commit/45413093d2eb1b79f18d3513248658dfacd28609"
+        },
+        "date": 1794259067127,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1091764,
+            "range": "± 4938",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1170509,
+            "range": "± 6819",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12845,
+            "range": "± 154",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 884916,
+            "range": "± 24931",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 28723755,
+            "range": "± 77950",
             "unit": "ns/iter"
           }
         ]
