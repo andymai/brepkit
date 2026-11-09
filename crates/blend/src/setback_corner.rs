@@ -9,6 +9,7 @@
 
 use std::collections::HashMap;
 
+use brepkit_math::aabb::Aabb3;
 use brepkit_math::curves::Circle3D;
 use brepkit_math::frame::Frame3;
 use brepkit_math::nurbs::curve::NurbsCurve;
@@ -381,6 +382,7 @@ struct RolledCorner {
     shell: ShellId,
     face: FaceId,
     center: Point3,
+    radius: f64,
     arcs: [RolledArc; 3],
     flats: [FaceId; 3],
 }
@@ -504,7 +506,7 @@ fn find_rolled_corner(
             let FaceSurface::Sphere(ball) = topo.face(face)?.surface() else {
                 continue;
             };
-            let center = ball.center();
+            let (center, radius) = (ball.center(), ball.radius());
             let Some(arcs) = rolled_arcs(topo, face, &by_edge)? else {
                 continue;
             };
@@ -534,6 +536,7 @@ fn find_rolled_corner(
                     shell,
                     face,
                     center,
+                    radius,
                     arcs,
                     flats,
                 }));
@@ -979,6 +982,33 @@ fn cut_reaches(
     Ok(false)
 }
 
+/// A box holding what a set-back changes: the region the ball, the stripes'
+/// ends up to their new arcs, the flat faces' cut-away corners and the patches
+/// enclose. It lies in the hull of those faces: the ball and the old arcs on
+/// its sphere, the new arcs on their circles, each stripe's end between the
+/// two, and the patches and the links on them in their control points. `None`
+/// when a patch has a weight of zero or less.
+fn changed_bounds(
+    corner: &RolledCorner,
+    ends: &[StripeEnd; 3],
+    patches: &CornerPatches,
+) -> Option<Aabb3> {
+    let ball = Vec3::new(corner.radius, corner.radius, corner.radius);
+    let mut points = vec![corner.center - ball, corner.center + ball];
+    for (end, arc) in ends.iter().zip(&corner.arcs) {
+        let r = arc.circle.radius();
+        let round = Vec3::new(r, r, r);
+        points.extend([end.center - round, end.center + round]);
+    }
+    for patch in [&patches.first, &patches.second] {
+        if patch.weights().iter().flatten().any(|&w| w <= 0.0) {
+            return None;
+        }
+        points.extend(patch.control_points().iter().flatten().copied());
+    }
+    Aabb3::try_from_points(points)
+}
+
 /// How far along `direction` from `vertex` a corner's rounds stop today, for
 /// each `direction`, or `None` when no ball corner stands at `vertex`.
 ///
@@ -1001,6 +1031,8 @@ pub fn rolling_distances(
 ///
 /// `setbacks` says how far from `vertex` along each edge's direction. The hole
 /// that leaves is closed with [`corner_patches`] and a link on each flat face.
+/// Returns the new solid and a box holding all the material the change takes
+/// off or adds.
 ///
 /// # Errors
 ///
@@ -1014,7 +1046,7 @@ pub fn set_back_corner(
     solid: SolidId,
     vertex: Point3,
     setbacks: &[(Vec3, f64); 3],
-) -> Result<SolidId, BlendError> {
+) -> Result<(SolidId, Aabb3), BlendError> {
     let mut corner = find_rolled_corner(topo, solid, vertex)?
         .ok_or_else(|| refused("no ball corner between three flat faces stands at that vertex"))?;
 
@@ -1120,6 +1152,8 @@ pub fn set_back_corner(
             ));
         }
     }
+    let reach = changed_bounds(&corner, &ends, &patches)
+        .ok_or_else(|| refused("a corner patch has a weight of zero or less"))?;
 
     let mut new_from = Vec::with_capacity(3);
     let mut new_to = Vec::with_capacity(3);
@@ -1225,7 +1259,10 @@ pub fn set_back_corner(
         }
     };
     let new_inner = inner.into_iter().map(swap_shell).collect();
-    Ok(topo.add_solid(Solid::new(swap_shell(outer), new_inner)))
+    Ok((
+        topo.add_solid(Solid::new(swap_shell(outer), new_inner)),
+        reach,
+    ))
 }
 
 #[cfg(test)]

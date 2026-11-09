@@ -598,16 +598,27 @@ mod tests {
         let refused = fillet_v2_with_corners(&mut topo, near, &edges, RADIUS, &corners);
         assert!(refused.is_err(), "the patches could reach the cavity");
 
-        let far = hollow(&mut topo, 20.0);
-        let (corner, edges) = corner_of(&topo, far);
-        let corners = [FilletCorner {
-            vertex: corner,
-            setbacks: set_back(&edges, [8.0, 8.0, 8.0]),
-            kind: CornerKind::G2,
-        }];
-        let kept = fillet_v2_with_corners(&mut topo, far, &edges, RADIUS, &corners).unwrap();
-        assert_eq!(topo.solid(kept).unwrap().inner_shells().len(), 1);
-        assert_sound(&topo, kept, "a cavity far off");
+        let tilted = (
+            "tilted",
+            Mat4::rotation_y(std::f64::consts::FRAC_PI_4)
+                * Mat4::rotation_x(std::f64::consts::FRAC_PI_4),
+        );
+        for (name, pose) in poses().into_iter().chain([tilted]) {
+            let far = hollow(&mut topo, 20.0);
+            transform_solid(&mut topo, far, &pose).unwrap();
+            let corner = vertex_at(&topo, far, pose.mul_point(Point3::new(0.0, 0.0, 0.0)));
+            let edges = edges_at(&topo, far, corner);
+            let corners = [FilletCorner {
+                vertex: corner,
+                setbacks: set_back(&edges, [8.0, 8.0, 8.0]),
+                kind: CornerKind::G2,
+            }];
+            let kept = fillet_v2_with_corners(&mut topo, far, &edges, RADIUS, &corners);
+            assert!(kept.is_ok(), "{name}: {kept:?}");
+            let kept = kept.unwrap();
+            assert_eq!(topo.solid(kept).unwrap().inner_shells().len(), 1, "{name}");
+            assert_sound(&topo, kept, &format!("a cavity far off, {name}"));
+        }
     }
 
     /// The patches do not depend on which way a wire happens to run, so a mirror

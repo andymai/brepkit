@@ -228,14 +228,23 @@ pub fn fillet_v2_with_corners(
             (directions[2], distances[2]),
         ];
         let before: HashSet<FaceId> = solid_faces(topo, result)?.into_iter().collect();
-        result = brepkit_blend::setback_corner::set_back_corner(topo, result, at, &setbacks)?;
+        let (set_back, reach) =
+            brepkit_blend::setback_corner::set_back_corner(topo, result, at, &setbacks)?;
+        result = set_back;
         // The patches take off more than the fillet's own check of the cavities
-        // saw, and those rounds and flat faces are the rebuilt ones.
+        // saw. The rounds and flat faces rebuilt around them reach far past what
+        // changed, so the cavities are read against `reach` alone.
         let made: Vec<FaceId> = solid_faces(topo, result)?
             .into_iter()
             .filter(|face| !before.contains(face))
             .collect();
-        crate::cavities::clear_of_own_cavities(topo, result, &made, "fillet corner")?;
+        crate::cavities::clear_of_own_cavities_within(
+            topo,
+            result,
+            &made,
+            &[reach],
+            "fillet corner",
+        )?;
     }
     if !crate::validate::validate_solid(topo, result)?.is_valid() {
         return Err(OperationsError::NonManifoldResult);
