@@ -1282,6 +1282,48 @@ fn a_tangent_profile_across_a_hole_is_refused() {
     }
 }
 
+/// A hole 0.15 wide across a profile's straight side, which no sampling of the
+/// side 16 times lands in: the side crosses it, so the profile leaves the face.
+/// Moved to touch the side from within the profile, the hole leaves the side on
+/// the face, along its boundary.
+#[test]
+fn a_tangent_profile_across_a_narrow_hole_is_refused() {
+    for (name, pose) in poses() {
+        let mut topo = Topology::new();
+        let first = square(&mut topo, pose, 6.0, 0.0);
+        let last = square(&mut topo, pose, 4.0, 10.0);
+        let mut holed = |low: f64, high: f64| {
+            let ground = square(&mut topo, pose, 50.0, 0.0);
+            let hole = polygon(
+                &mut topo,
+                pose,
+                &[
+                    p(0.3, low, 0.0),
+                    p(0.3, high, 0.0),
+                    p(0.45, high, 0.0),
+                    p(0.45, low, 0.0),
+                ],
+            );
+            let data = topo.face(ground).unwrap();
+            let (outer, surface) = (data.outer_wire(), data.surface().clone());
+            let hole_wire = topo.face(hole).unwrap().outer_wire();
+            topo.add_face(Face::new(outer, vec![hole_wire], surface))
+        };
+        let across = holed(-6.1, -5.9);
+        let touching = holed(-6.0, -5.9);
+        let tangent = |face: FaceId| LoftOptions {
+            start: LoftEnd::Tangent { face, weight: 1.0 },
+            ..LoftOptions::default()
+        };
+        assert_refused(
+            loft_with_options(&mut topo, &[first, last], &tangent(across)),
+            "runs off the face",
+        );
+        let solid = loft_with_options(&mut topo, &[first, last], &tangent(touching)).unwrap();
+        assert_solid(&topo, solid, name);
+    }
+}
+
 /// A pillow at height `z`: four cubic edges bowing out by `bow` between the
 /// corners of a square of half-size `h`, the third stored backward.
 fn pillow(topo: &mut Topology, pose: Mat4, h: f64, z: f64, bow: f64) -> FaceId {

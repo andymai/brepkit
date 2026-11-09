@@ -52,7 +52,8 @@ use crate::{OperationsError, dot_normal_point};
 /// How far a rail may pass from a profile's vertex and still run through it.
 pub const RAIL_VERTEX_TOLERANCE: f64 = 1e-7;
 
-/// How far a profile may stand from a `tangent` face and still lie on it.
+/// How far a profile may stand from a `tangent` face, off its surface or past
+/// its boundary, and still lie on it.
 pub const TANGENT_FACE_TOLERANCE: f64 = 1e-6;
 
 /// How far off an end condition, in radians, a rail may leave its profile.
@@ -190,8 +191,9 @@ impl LoftOptions {
 /// share a vertex, or come round the profiles in different orders; a rail
 /// leaves a conditioned end more than [`RAIL_CONDITION_ANGLE`] off the
 /// condition; a weight is zero or not finite; a `normal` profile is not planar;
-/// a `tangent` profile stands off its face by more than
-/// [`TANGENT_FACE_TOLERANCE`] or a corner of it doubles back; the profiles do
+/// a `tangent` profile stands off its face or runs past its boundary by more
+/// than [`TANGENT_FACE_TOLERANCE`], runs beside the boundary too near to tell,
+/// or a corner of it doubles back; the profiles do
 /// not say which way they wind; or a line across a side, or the loop round the
 /// sides at one parameter, meets itself, as a weight too large for the distance
 /// to the next profile makes it. Sides that pass through each other otherwise
@@ -827,12 +829,7 @@ fn on_circle(curve: &NurbsCurve, circle: &Circle3D, tol: f64) -> bool {
         (1..=k).fold(1.0, |product, i| product * (m + 1 - i) as f64 / i as f64)
     };
     let (d0, d1) = curve.domain();
-    let mut breaks: Vec<f64> = std::iter::once(d0)
-        .chain(curve.knots().iter().copied().filter(|&k| k > d0 && k < d1))
-        .chain(std::iter::once(d1))
-        .collect();
-    breaks.dedup();
-    breaks.windows(2).all(|span| {
+    knot_breaks(curve, d0, d1).windows(2).all(|span| {
         let Ok(hull) = curve_bezier_between(curve, span[0], span[1]) else {
             return false;
         };
@@ -1002,7 +999,7 @@ fn ring_samples(ring: &[ProfileEdgeGeom]) -> Vec<Point3> {
 }
 
 /// Points along each edge of a ring, its straight edges too: an edge can leave a
-/// face between two vertices that lie on it, across a hole or off a curved surface.
+/// curved surface between two vertices that lie on it.
 #[allow(clippy::cast_precision_loss)]
 fn along_edges(ring: &[ProfileEdgeGeom]) -> Vec<Point3> {
     const SAMPLES: usize = 16;
@@ -2001,7 +1998,7 @@ fn end_field(
             (Direction::Normal(normal), vec![normal; n], tie)
         }
         LoftEnd::Tangent { face, .. } => {
-            let surface = lying_on(topo, face, &along_edges(request.ring))?;
+            let surface = lying_on(topo, face, request.ring, request.spans)?;
             let mut mitres = Vec::with_capacity(n);
             for i in 0..n {
                 let previous = (i + n - 1) % n;
@@ -2084,13 +2081,15 @@ fn check_rail_leaves(
     Ok(())
 }
 
-/// The surface of a `tangent` face, once each of `points` is shown to lie on
-/// it: within [`TANGENT_FACE_TOLERANCE`] of its surface, inside its boundary
-/// or on it.
+/// The surface of a `tangent` face, once the profile `ring` is shown to lie on
+/// it: within [`TANGENT_FACE_TOLERANCE`] of its surface at points along each
+/// edge, and every point of its edges' `spans` on the face by
+/// [`keeps_to_face`].
 fn lying_on(
     topo: &Topology,
     face: FaceId,
-    points: &[Point3],
+    ring: &[ProfileEdgeGeom],
+    spans: &[NurbsCurve],
 ) -> Result<FaceSurface, OperationsError> {
     let data = topo.face(face)?;
     let surface = data.surface().clone();
@@ -2106,37 +2105,350 @@ fn lying_on(
                 .map_or(f64::INFINITY, |q| (q - p).length()),
         }
     };
-    let off = points.iter().map(|&p| stand_off(p)).fold(0.0, f64::max);
+    let off = along_edges(ring)
+        .into_iter()
+        .map(stand_off)
+        .fold(0.0, f64::max);
     if off > TANGENT_FACE_TOLERANCE {
         return Err(refuse(format!(
             "a profile stands {off:.3e} off the face its end is tangent to"
         )));
     }
-    let wires: Vec<WireId> = std::iter::once(data.outer_wire())
-        .chain(data.inner_wires().iter().copied())
-        .collect();
-    let mut bounds = Vec::new();
-    for wire in wires {
-        for oe in topo.wire(wire)?.edges() {
-            let edge = topo.edge(oe.edge())?;
-            bounds.push((
-                edge.curve().clone(),
-                topo.vertex(edge.start())?.point(),
-                topo.vertex(edge.end())?.point(),
-            ));
-        }
-    }
-    let inside = brepkit_check::classify::face_contains_each(topo, face, points)?;
-    for (&p, &within) in points.iter().zip(&inside) {
-        if !within
-            && !bounds
-                .iter()
-                .any(|(curve, a, b)| edge_distance(curve, *a, *b, p) <= TANGENT_FACE_TOLERANCE)
-        {
-            return Err(refuse("a profile runs off the face its end is tangent to"));
-        }
+    if !keeps_to_face(topo, face, ring, spans)? {
+        return Err(refuse("a profile runs off the face its end is tangent to"));
     }
     Ok(surface)
+}
+
+// ── Keeping to a face ───────────────────────────────────────────────────────
+
+/// The most pieces [`keeps_to_face`] reads before it gives up.
+const MAX_FACE_PIECES: usize = 1 << 21;
+
+/// A Bezier piece of a curve, from parameter `from` to `to`, its control points
+/// in homogeneous form with every weight positive, so that the piece lies in
+/// their hull.
+#[derive(Clone)]
+struct HullPiece {
+    from: f64,
+    to: f64,
+    hull: Vec<[f64; 4]>,
+    /// The farthest a control point lies from the chord, so the farthest any
+    /// point of the piece does.
+    bound: f64,
+}
+
+impl HullPiece {
+    fn new(from: f64, to: f64, hull: Vec<[f64; 4]>) -> Option<Self> {
+        if hull.is_empty() || hull.iter().any(|h| h[3] <= 0.0) {
+            return None;
+        }
+        let mut piece = Self {
+            from,
+            to,
+            hull,
+            bound: 0.0,
+        };
+        piece.bound = piece.reach(piece.chord());
+        Some(piece)
+    }
+
+    fn points(&self) -> impl Iterator<Item = Point3> + '_ {
+        self.hull
+            .iter()
+            .map(|h| Point3::new(h[0] / h[3], h[1] / h[3], h[2] / h[3]))
+    }
+
+    fn chord(&self) -> (Point3, Point3) {
+        let at = |h: [f64; 4]| Point3::new(h[0] / h[3], h[1] / h[3], h[2] / h[3]);
+        (at(self.hull[0]), at(self.hull[self.hull.len() - 1]))
+    }
+
+    /// The farthest a control point lies from the segment `(a, b)`, so the
+    /// farthest any point of the piece does.
+    fn reach(&self, (a, b): (Point3, Point3)) -> f64 {
+        self.points()
+            .map(|q| edge_distance(&EdgeCurve::Line, a, b, q))
+            .fold(0.0, f64::max)
+    }
+
+    fn size(&self) -> f64 {
+        let (a, b) = self.chord();
+        (b - a).length() + self.bound
+    }
+
+    /// No more than the least distance between this piece and `other`.
+    fn gap(&self, other: &Self) -> f64 {
+        let ((a0, a1), (b0, b1)) = (self.chord(), other.chord());
+        segment_segment_distance(a0, a1, b0, b1).0 - self.bound - other.bound
+    }
+
+    /// The piece cut in two at its middle parameter, by de Casteljau in
+    /// homogeneous form.
+    fn halves(&self) -> Option<(Self, Self)> {
+        let n = self.hull.len();
+        let mut work = self.hull.clone();
+        let mut left = vec![work[0]];
+        let mut right = vec![work[n - 1]];
+        for r in 1..n {
+            for j in 0..n - r {
+                let (a, b) = (work[j], work[j + 1]);
+                work[j] = [
+                    0.5 * (a[0] + b[0]),
+                    0.5 * (a[1] + b[1]),
+                    0.5 * (a[2] + b[2]),
+                    0.5 * (a[3] + b[3]),
+                ];
+            }
+            left.push(work[0]);
+            right.push(work[n - 1 - r]);
+        }
+        right.reverse();
+        let middle = f64::midpoint(self.from, self.to);
+        Some((
+            Self::new(self.from, middle, left)?,
+            Self::new(middle, self.to, right)?,
+        ))
+    }
+
+    /// The same piece run the other way.
+    fn reversed(mut self) -> Self {
+        self.hull.reverse();
+        std::mem::swap(&mut self.from, &mut self.to);
+        self
+    }
+}
+
+/// `lo`, the knots of `curve` between `lo` and `hi`, and `hi`: where its knot
+/// spans in that stretch begin and end.
+fn knot_breaks(curve: &NurbsCurve, lo: f64, hi: f64) -> Vec<f64> {
+    let mut breaks: Vec<f64> = std::iter::once(lo)
+        .chain(curve.knots().iter().copied().filter(|&k| k > lo && k < hi))
+        .chain(std::iter::once(hi))
+        .collect();
+    breaks.dedup();
+    breaks
+}
+
+/// The Bezier pieces of `curve` from `t0` to `t1`, one per knot span, run from
+/// `t0`. `None` where a weight is zero or less, which can leave a piece outside
+/// its control points' hull.
+fn hull_pieces(curve: &NurbsCurve, t0: f64, t1: f64) -> Option<Vec<HullPiece>> {
+    let mut pieces = knot_breaks(curve, t0.min(t1), t0.max(t1))
+        .windows(2)
+        .map(|w| HullPiece::new(w[0], w[1], curve_bezier_between(curve, w[0], w[1]).ok()?))
+        .collect::<Option<Vec<_>>>()?;
+    if t0 > t1 {
+        pieces.reverse();
+        pieces = pieces.into_iter().map(HullPiece::reversed).collect();
+    }
+    Some(pieces)
+}
+
+/// The Bezier pieces of a face's edge from `a` to `b`, its vertices, run as the
+/// edge runs: a closed circle or ellipse a whole turn from its vertex, which its
+/// frame's own start need not be, and a spline its stretch between them.
+fn boundary_pieces(
+    curve: &EdgeCurve,
+    (a, b): (Point3, Point3),
+    closed: bool,
+) -> Result<Option<Vec<HullPiece>>, OperationsError> {
+    const TAU: f64 = std::f64::consts::TAU;
+    let range = |from: f64| {
+        if closed {
+            (from, from + TAU)
+        } else {
+            curve.domain_with_endpoints(a, b)
+        }
+    };
+    let (spline, (t0, t1)) = match curve {
+        EdgeCurve::Line => (
+            NurbsCurve::new(1, vec![0.0, 0.0, 1.0, 1.0], vec![a, b], vec![1.0; 2])?,
+            (0.0, 1.0),
+        ),
+        EdgeCurve::Circle(c) => {
+            let (t0, t1) = range(c.project(a));
+            (
+                brepkit_geometry::convert::circle_to_nurbs(c, t0, t1)?,
+                (0.0, 1.0),
+            )
+        }
+        EdgeCurve::Ellipse(e) => {
+            let (t0, t1) = range(e.project(a));
+            (
+                brepkit_geometry::convert::ellipse_to_nurbs(e, t0, t1)?,
+                (0.0, 1.0),
+            )
+        }
+        EdgeCurve::NurbsCurve(n) => (n.clone(), curve.domain_with_endpoints(a, b)),
+    };
+    Ok(hull_pieces(&spline, t0, t1))
+}
+
+/// Whether every point of `piece` lies within `near` of a run of the `nearby`
+/// pieces joined end to end: the piece's hull keeps that near the run's chord,
+/// less the run's own reach from the chord, which the run spans from end to
+/// end and so passes within its reach of every point of.
+fn lies_near(piece: &HullPiece, nearby: &[HullPiece], near: f64) -> bool {
+    let join = 0.125 * near;
+    let count = nearby.len();
+    let follows = |a: usize, b: usize| (nearby[a].chord().1 - nearby[b].chord().0).length() <= join;
+    let heads = (0..count).filter(|&b| !(0..count).any(|a| a != b && follows(a, b)));
+    let mut used = vec![false; count];
+    for head in heads.chain(0..count) {
+        if used[head] {
+            continue;
+        }
+        used[head] = true;
+        let mut run = vec![head];
+        while let Some(next) = (0..count).find(|&b| !used[b] && follows(run[run.len() - 1], b)) {
+            used[next] = true;
+            run.push(next);
+        }
+        let chord = (
+            nearby[run[0]].chord().0,
+            nearby[run[run.len() - 1]].chord().1,
+        );
+        let spread = run
+            .iter()
+            .map(|&k| nearby[k].reach(chord))
+            .fold(0.0, f64::max)
+            + join;
+        if piece.reach(chord) + spread <= near {
+            return true;
+        }
+    }
+    false
+}
+
+/// Whether the circles `a` and `b` are one, their centres, radii and the
+/// planes they turn in each within `tol` at the rim: every point of either then
+/// lies within three times that of the other.
+fn same_circle(a: &Circle3D, b: &Circle3D, tol: f64) -> bool {
+    (a.center() - b.center()).length() <= tol
+        && (a.radius() - b.radius()).abs() <= tol
+        && a.normal().cross(b.normal()).length() * a.radius() <= tol
+}
+
+/// Whether every point of `spans`, the curves of the edges of `ring`, keeps
+/// to `face`: inside it, or within [`TANGENT_FACE_TOLERANCE`] of its boundary.
+///
+/// An arc on a whole circle of the boundary, as a profile on a wall's rim is,
+/// lies on it. For the rest, Bezier pieces of the spans and of the face's edges
+/// are halved until each piece of a span either lies within that tolerance of
+/// the boundary, by [`lies_near`], or keeps more than half of it from every
+/// edge, read off the two hulls about their chords. A stretch of the latter
+/// cannot cross the boundary, so one point of each tells which side all of it
+/// lies on.
+///
+/// # Errors
+///
+/// Returns [`OperationsError::InvalidInput`] if an edge's spline has a weight
+/// of zero or less, or the pieces do not settle within [`MAX_FACE_PIECES`], as
+/// along a span running beside an edge just past the tolerance.
+fn keeps_to_face(
+    topo: &Topology,
+    face: FaceId,
+    ring: &[ProfileEdgeGeom],
+    spans: &[NurbsCurve],
+) -> Result<bool, OperationsError> {
+    let (near, clear) = (TANGENT_FACE_TOLERANCE, 0.5 * TANGENT_FACE_TOLERANCE);
+    let unsettled = || {
+        refuse(
+            "a profile runs too near the boundary of the face its end is tangent to to tell whether it stays on it",
+        )
+    };
+    let unbounded = || {
+        refuse(
+            "a spline weighted zero or less leaves its hull, so it cannot be told to keep to a face",
+        )
+    };
+    let data = topo.face(face)?;
+    let mut bounds = Vec::new();
+    let mut rims = Vec::new();
+    for wire in std::iter::once(data.outer_wire()).chain(data.inner_wires().iter().copied()) {
+        for oe in topo.wire(wire)?.edges() {
+            let edge = topo.edge(oe.edge())?;
+            let ends = (
+                topo.vertex(edge.start())?.point(),
+                topo.vertex(edge.end())?.point(),
+            );
+            let closed = edge.start() == edge.end();
+            if let (EdgeCurve::Circle(c), true) = (edge.curve(), closed) {
+                rims.push(c.clone());
+            }
+            let pieces = boundary_pieces(edge.curve(), ends, closed)?.ok_or_else(unbounded)?;
+            if oe.is_forward() {
+                bounds.extend(pieces);
+            } else {
+                bounds.extend(pieces.into_iter().rev().map(HullPiece::reversed));
+            }
+        }
+    }
+    let mut stretches: Vec<(usize, f64, f64)> = Vec::new();
+    let mut visits = 0_usize;
+    for (i, span) in spans.iter().enumerate() {
+        if let EdgeCurve::Circle(arc) = &ring[i].curve
+            && rims.iter().any(|rim| same_circle(arc, rim, 0.25 * near))
+        {
+            continue;
+        }
+        let (d0, d1) = span.domain();
+        let mut pending: Vec<(HullPiece, Vec<HullPiece>)> = hull_pieces(span, d0, d1)
+            .ok_or_else(unbounded)?
+            .into_iter()
+            .map(|piece| (piece, bounds.clone()))
+            .collect();
+        while let Some((piece, mut nearby)) = pending.pop() {
+            visits += 1;
+            if visits > MAX_FACE_PIECES {
+                return Err(unsettled());
+            }
+            nearby.retain(|b| piece.gap(b) <= clear);
+            if nearby.is_empty() {
+                stretches.push((i, piece.from, piece.to));
+                continue;
+            }
+            if lies_near(&piece, &nearby, near) {
+                continue;
+            }
+            let largest = nearby
+                .iter()
+                .map(HullPiece::size)
+                .enumerate()
+                .max_by(|a, b| a.1.total_cmp(&b.1));
+            match largest {
+                Some((k, size)) if size > piece.size() => {
+                    let (first, second) = nearby.swap_remove(k).halves().ok_or_else(unbounded)?;
+                    nearby.push(first);
+                    nearby.push(second);
+                    pending.push((piece, nearby));
+                }
+                _ => {
+                    let (first, second) = piece.halves().ok_or_else(unbounded)?;
+                    pending.push((second, nearby.clone()));
+                    pending.push((first, nearby));
+                }
+            }
+        }
+    }
+    stretches.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)));
+    let mut runs: Vec<(usize, f64, f64)> = Vec::new();
+    for (i, from, to) in stretches {
+        match runs.last_mut() {
+            Some(run) if run.0 == i && run.2.to_bits() == from.to_bits() => run.2 = to,
+            _ => runs.push((i, from, to)),
+        }
+    }
+    let points: Vec<Point3> = runs
+        .iter()
+        .map(|&(i, from, to)| spans[i].evaluate(f64::midpoint(from, to)))
+        .collect();
+    Ok(
+        brepkit_check::classify::face_contains_each(topo, face, &points)?
+            .into_iter()
+            .all(|inside| inside),
+    )
 }
 
 // ── Side faces ──────────────────────────────────────────────────────────────
