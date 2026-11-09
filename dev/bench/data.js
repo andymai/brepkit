@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794252825154,
+  "lastUpdate": 1794255266199,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -67121,6 +67121,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 23345433,
             "range": "± 132537",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "63b89fa627888836f2fb10b3aa160baaf3994be9",
+          "message": "chore(main): release 4.10.0 (#2357)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n## [4.10.0](https://github.com/andymai/brepkit/compare/v4.9.0...v4.10.0)\n(2026-11-09)\n\n\n### Features\n\n* **operations:** bridge edge chains with a blend surface, and match and\nfair surfaces ([#2334](https://github.com/andymai/brepkit/issues/2334))\n([88ac749](https://github.com/andymai/brepkit/commit/88ac749bc7a75c708ac965701eab0f0cd6e07c1f))\n* **operations:** set a fillet's corner back along its rounds\n([#2329](https://github.com/andymai/brepkit/issues/2329))\n([be8b891](https://github.com/andymai/brepkit/commit/be8b891a4cbbbf92d48b08961185ae854f7d64ff))\n\n\n### Bug Fixes\n\n* **blend:** land five contributor fillet PRs and refuse a curved cap's\nnotch that crosses its boundary\n([#2356](https://github.com/andymai/brepkit/issues/2356))\n([4d60291](https://github.com/andymai/brepkit/commit/4d60291b52b54bdbb4aa3375b74c2e70d44500d6))\n* **operations:** mesh a NURBS face along its crease\n([#2332](https://github.com/andymai/brepkit/issues/2332))\n([77f24a6](https://github.com/andymai/brepkit/commit/77f24a6579d5e050f33185571647e0c25648e272))\n* **operations:** read touching pieces whose gap narrows to an edge\n([#2338](https://github.com/andymai/brepkit/issues/2338))\n([47a2c6e](https://github.com/andymai/brepkit/commit/47a2c6e8ce1dbf63e12f14c18ad6578786a08e87))\n* **tessellate:** walk every pointed cone's wall from its seam\n([#2350](https://github.com/andymai/brepkit/issues/2350))\n([a244d6a](https://github.com/andymai/brepkit/commit/a244d6a44248ece1bbce2cced24053539203d69f))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-11-09T20:11:21Z",
+          "tree_id": "9593ca7e3a522a2a071f2715663e59eeaf70fe62",
+          "url": "https://github.com/andymai/brepkit/commit/63b89fa627888836f2fb10b3aa160baaf3994be9"
+        },
+        "date": 1794255253307,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 878079,
+            "range": "± 2646",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 944470,
+            "range": "± 1775",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10907,
+            "range": "± 186",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 710470,
+            "range": "± 1272",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 23017174,
+            "range": "± 89781",
             "unit": "ns/iter"
           }
         ]
