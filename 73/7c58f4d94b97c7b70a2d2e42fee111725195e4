@@ -1,0 +1,37 @@
+crates/io/tests/fillet_two_rims_one_wall.rs
+  s_f8c761b717b79b::t_27b6b194cec185 1-150
+crates/blend/src/analytic.rs
+  s_f8c761b717b79b::t_27b6b194cec185 821-832
+crates/blend/src/fillet_builder.rs
+  s_f8c761b717b79b::t_27b6b194cec185 18,33,385,398-423,425-427,448-450,1607,1620-1622,1753,2134-2293,2499-2501,2686-2687,2689-2701,2769-2772,2775-2781,2790,2794-2850,2914-2916,2918-2921,2962-2975,3105-3180,4505-4511,6294-6328
+crates/blend/src/walker.rs
+  s_f8c761b717b79b::t_27b6b194cec185 8-11,15,471,495-660,1008-1077
+crates/operations/tests/fillet_band_through_sections.rs
+  s_f8c761b717b79b::t_27f5f6db69afa1 1-123
+crates/operations/tests/fillet_boss_one_radius_high.rs
+  s_f8c761b717b79b::t_964a87db7ccf40 1-108
+crates/operations/tests/fillet_long_curved_band.rs
+  s_f8c761b717b79b::t_36126ac4d1a54e 1-134
+crates/operations/tests/fillet_rim_wall_one_radius_high.rs
+  s_f8c761b717b79b::t_13d8c68a27702d 1-150
+crates/operations/tests/regress_two_edge_exact_limit.rs
+  s_f8c761b717b79b::t_02b08e0a2af1cb 8-11,313-316,339-346
+crates/topology/src/orientation.rs
+  s_f8c761b717b79b::t_c3cfe95ec4afc5 121-122,129-130,184-257,452-458,460,462,464-551,619-712
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "737c58f4d94b97c7b70a2d2e42fee111725195e4",
+  "prompts": {},
+  "sessions": {
+    "s_f8c761b717b79b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0161eb79-bcdb-4e67-ad8a-f056fadf98c2",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
