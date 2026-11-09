@@ -365,23 +365,26 @@ fn a_turned_kite_s_rounds_are_mitred() {
 /// walls end square to their round's edge, at `A` and at `B`. At inset `w`
 /// the section is the profile with its flat wall moved to `y = w` and its
 /// round wall's radius cut by `w`: the triangle `V' A' O` and the sector of
-/// `O` from `B'` to `V'`.
+/// `O` from `B'` to `V'`. The part a thousand times larger, at a radius a
+/// thousand times larger, keeps its edges on its faces to the same
+/// absolute tolerance.
 #[test]
 fn a_flat_and_a_round_wall_s_rounds_are_mitred() {
-    let (big, theta) = (10.0_f64, 120.0_f64.to_radians());
-    let centre = (big * theta.sin(), -big * theta.cos());
-    let to_b = theta + FRAC_PI_2 - PI / 3.0;
-    let b = (
-        big.mul_add(to_b.cos(), centre.0),
-        big.mul_add(to_b.sin(), centre.1),
-    );
-    let area = |w: f64| {
-        let reach = big - w;
-        let x = centre.0 - (reach * reach - (w - centre.1).powi(2)).sqrt();
-        let to_v = (w - centre.1).atan2(x - centre.0) + 2.0 * PI;
-        0.5 * (centre.0 - x) * (centre.1 - w) + 0.5 * reach * reach * (to_v - to_b)
-    };
-    for r in [1.0, 2.0] {
+    for (scale, r) in [(1.0, 1.0), (1.0, 2.0), (1000.0, 1000.0)] {
+        let (big, theta) = (10.0 * scale, 120.0_f64.to_radians());
+        let height = H * scale;
+        let centre = (big * theta.sin(), -big * theta.cos());
+        let to_b = theta + FRAC_PI_2 - PI / 3.0;
+        let b = (
+            big.mul_add(to_b.cos(), centre.0),
+            big.mul_add(to_b.sin(), centre.1),
+        );
+        let area = |w: f64| {
+            let reach = big - w;
+            let x = centre.0 - (reach * reach - (w - centre.1).powi(2)).sqrt();
+            let to_v = (w - centre.1).atan2(x - centre.0) + 2.0 * PI;
+            0.5 * (centre.0 - x) * (centre.1 - w) + 0.5 * reach * reach * (to_v - to_b)
+        };
         let mut topo = Topology::new();
         let corner = |topo: &mut Topology, (x, y): (f64, f64)| {
             topo.add_vertex(Vertex::new(Point3::new(x, y, 0.0), 1e-7))
@@ -412,19 +415,20 @@ fn a_flat_and_a_round_wall_s_rounds_are_mitred() {
             vec![],
             FaceSurface::Plane { normal, d: 0.0 },
         ));
-        let solid = extrude(&mut topo, face, normal, H).unwrap();
-        let top_v = Point3::new(0.0, 0.0, H);
-        let rounded: Vec<EdgeId> = top_edges(&topo, solid)
+        let solid = extrude(&mut topo, face, normal, height).unwrap();
+        let top_v = Point3::new(0.0, 0.0, height);
+        let rounded: Vec<EdgeId> = solid_edges(&topo, solid)
+            .unwrap()
             .into_iter()
             .filter(|&edge_id| {
                 let edge = topo.edge(edge_id).unwrap();
-                [edge.start(), edge.end()]
-                    .iter()
-                    .any(|&end| (topo.vertex(end).unwrap().point() - top_v).length() < 1e-9)
+                let ends = [edge.start(), edge.end()].map(|end| topo.vertex(end).unwrap().point());
+                ends.iter().all(|p| (p.z() - height).abs() < 1e-9 * scale)
+                    && ends.iter().any(|&p| (p - top_v).length() < 1e-9 * scale)
             })
             .collect();
         assert_eq!(rounded.len(), 2);
-        let volume = area(0.0) * (H - r) + over_the_round(r, area);
+        let volume = area(0.0) * (height - r) + over_the_round(r, area);
         assert_rounds_to(
             &mut topo,
             solid,
@@ -432,7 +436,7 @@ fn a_flat_and_a_round_wall_s_rounds_are_mitred() {
             r,
             8,
             volume,
-            &format!("r = {r}"),
+            &format!("scale {scale}, r = {r}"),
         );
     }
 }

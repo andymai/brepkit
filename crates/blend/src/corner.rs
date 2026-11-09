@@ -118,6 +118,11 @@ const EXTRUDED_CREASE_POINTS: usize = 33;
 /// The most crease points an extruded mitre takes before its fit gives up.
 const MOST_CREASE_POINTS: usize = 2049;
 
+/// How far an extruded mitre's crease may stray from the rounds it bounds:
+/// a tenth of the vertex tolerance, an absolute length whatever the part's
+/// size, since its fit reads it only at sampled points.
+const CREASE_FIT: f64 = 0.1 * TOL;
+
 /// A face's outward normal at a point within `tol` of its surface.
 fn outward_normal_on(topo: &Topology, face_id: FaceId, point: Point3, tol: f64) -> Option<Vec3> {
     let face = topo.face(face_id).ok()?;
@@ -455,7 +460,7 @@ fn crease_on_stripes(
     second: &FaceSurface,
     radius: f64,
 ) -> Option<Vec<Point3>> {
-    let tol = 1e-9 * radius.max(1.0);
+    let tol = 0.1 * CREASE_FIT;
     let (Some(&pinch), Some(&exact_meeting)) = (exact.first(), exact.last()) else {
         return None;
     };
@@ -525,7 +530,7 @@ fn crossing_rounds_ellipse(
     let (FaceSurface::Cylinder(a), FaceSurface::Cylinder(b)) = (first, second) else {
         return None;
     };
-    let tol = 1e-9 * radius.max(1.0);
+    let tol = CREASE_FIT;
     if (a.radius() - radius).abs() > tol || (b.radius() - radius).abs() > tol {
         return None;
     }
@@ -563,7 +568,7 @@ fn crossing_rounds_ellipse(
         })
     };
     let quarter = std::f64::consts::FRAC_PI_4;
-    ((ellipse.evaluate(2.0 * quarter) - meeting).length() <= 1e-7 * radius.max(1.0)
+    ((ellipse.evaluate(2.0 * quarter) - meeting).length() <= TOL
         && on_both(ellipse.evaluate(quarter)))
     .then_some(ellipse)
 }
@@ -571,15 +576,13 @@ fn crossing_rounds_ellipse(
 /// An extruded mitre's crease as a cubic through `sample(count)`, its points
 /// laid on both stripes' surfaces `first` and `second`, their count doubled
 /// until the cubic lies on both between them, read at the quarters between
-/// each two points within a tenth of the vertex tolerance. `None` where it
-/// never does.
+/// each two points within [`CREASE_FIT`]. `None` where it never does.
 fn fitted_crease(
     sample: impl Fn(usize) -> Option<Vec<Point3>>,
     first: &FaceSurface,
     second: &FaceSurface,
-    radius: f64,
 ) -> Option<EdgeCurve> {
-    let tol = 0.1 * TOL * radius.max(1.0);
+    let tol = CREASE_FIT;
     let off = |p: Point3| -> Option<f64> {
         let on = |surface: &FaceSurface| -> Option<f64> {
             let (u, v) = surface.project_point(p)?;
@@ -3678,11 +3681,9 @@ fn detect_equal_two_edge_miter(
                     )?;
                     crease_on_stripes(&mitre.crease, meeting, n, &a.surface, &b.surface, radius)
                 };
-                fitted_crease(sample, &a.surface, &b.surface, radius).ok_or(
-                    BlendError::CornerFailure {
-                        vertex: junction.vertex,
-                    },
-                )?
+                fitted_crease(sample, &a.surface, &b.surface).ok_or(BlendError::CornerFailure {
+                    vertex: junction.vertex,
+                })?
             };
             (meeting, Some(crease))
         }
