@@ -27,9 +27,12 @@
 //! within [`POLYNOMIAL_TOLERANCE`], since the weights of a sum of rational
 //! curves are the product of theirs.
 
+use brepkit_geometry::convert::{RecognizedCurve, recognize_curve};
 use brepkit_geometry::extrema::segment_segment_distance;
+use brepkit_math::curves::Circle3D;
 use brepkit_math::nurbs::basis::{basis_funs, ders_basis_funs, find_span};
 use brepkit_math::nurbs::curve::NurbsCurve;
+use brepkit_math::nurbs::decompose::curve_bezier_between;
 use brepkit_math::nurbs::knot_ops::{curve_knot_insert, curve_split};
 use brepkit_math::nurbs::projection::project_point_to_curve;
 use brepkit_math::nurbs::surface::NurbsSurface;
@@ -703,8 +706,8 @@ fn read_ring(
     face: FaceId,
 ) -> Result<(Vec<ProfileEdgeGeom>, Vec<Point3>), OperationsError> {
     let outer = topo.face(face)?.outer_wire();
-    let edges =
-        wire_oriented_edges(topo, outer).ok_or_else(|| refuse("a profile's wire has no edges"))?;
+    let edges = wire_oriented_edges(topo, outer, recognized_exactly)
+        .ok_or_else(|| refuse("a profile's wire has no edges"))?;
     let count = edges.len();
     for (k, e) in edges.iter().enumerate() {
         if (e.end - edges[(k + 1) % count].start).length() > WIRE_GAP {
@@ -732,6 +735,95 @@ fn read_ring(
         ring.extend(cut_at_kinks(piece)?);
     }
     Ok((ring, vertices))
+}
+
+/// The line or circle `curve` is, where every point of it is shown to lie
+/// within [`POLYNOMIAL_TOLERANCE`] of one: a line when its control points all
+/// lie that near the chord between its vertices `a` and `b`, since the curve
+/// lies in their hull, and a circle by [`on_circle`] when its weights differ:
+/// no polynomial is a circle, though a flat one lies within rounding of a vast
+/// one. A spline that only comes near one at samples keeps its own curve.
+fn recognized_exactly(curve: &NurbsCurve, a: Point3, b: Point3) -> Option<EdgeCurve> {
+    let weights = curve.weights();
+    if weights.iter().any(|&w| w <= 0.0) {
+        return None;
+    }
+    let rational = weights
+        .iter()
+        .any(|w| (w - weights[0]).abs() > 1e-12 * weights[0]);
+    match recognize_curve(curve, POLYNOMIAL_TOLERANCE) {
+        RecognizedCurve::Line { .. } => curve
+            .control_points()
+            .iter()
+            .all(|&c| edge_distance(&EdgeCurve::Line, a, b, c) <= POLYNOMIAL_TOLERANCE)
+            .then_some(EdgeCurve::Line),
+        RecognizedCurve::Circle {
+            center,
+            normal,
+            radius,
+        } if rational => {
+            let circle = Circle3D::new(center, normal, radius).ok()?;
+            on_circle(curve, &circle, 0.5 * POLYNOMIAL_TOLERANCE)
+                .then_some(EdgeCurve::Circle(circle))
+        }
+        _ => None,
+    }
+}
+
+/// Whether every point of `curve` lies within `tol` of `circle`'s plane and
+/// of its radius. On a Bezier piece with weights `w_i` and control points
+/// `p_i`, writing `q_i = w_i (p_i - c)` and `W = Σ B_i w_i`, a point stands
+/// `Σ B_i n·q_i / W` off the plane and its squared distance from the centre
+/// exceeds the squared radius by `(|Σ B_i q_i|² - r² W²) / W²`. Each numerator
+/// is a polynomial in Bernstein form, which lies within its largest
+/// coefficient, and `W` is at least the least weight.
+#[allow(clippy::cast_precision_loss)]
+fn on_circle(curve: &NurbsCurve, circle: &Circle3D, tol: f64) -> bool {
+    let (c, n, r) = (circle.center(), circle.normal(), circle.radius());
+    let binomial = |m: usize, k: usize| {
+        (1..=k).fold(1.0, |product, i| product * (m + 1 - i) as f64 / i as f64)
+    };
+    let (d0, d1) = curve.domain();
+    let mut breaks: Vec<f64> = std::iter::once(d0)
+        .chain(curve.knots().iter().copied().filter(|&k| k > d0 && k < d1))
+        .chain(std::iter::once(d1))
+        .collect();
+    breaks.dedup();
+    breaks.windows(2).all(|span| {
+        let Ok(hull) = curve_bezier_between(curve, span[0], span[1]) else {
+            return false;
+        };
+        let least = hull.iter().map(|h| h[3]).fold(f64::INFINITY, f64::min);
+        if least <= 0.0 {
+            return false;
+        }
+        let q: Vec<Vec3> = hull
+            .iter()
+            .map(|h| {
+                Vec3::new(
+                    h[0] - h[3] * c.x(),
+                    h[1] - h[3] * c.y(),
+                    h[2] - h[3] * c.z(),
+                )
+            })
+            .collect();
+        let degree = hull.len() - 1;
+        let off_plane = q.iter().map(|v| v.dot(n).abs()).fold(0.0, f64::max) / least;
+        let excess = (0..=2 * degree)
+            .map(|k| {
+                let sum: f64 = (k.saturating_sub(degree)..=k.min(degree))
+                    .map(|i| {
+                        let j = k - i;
+                        binomial(degree, i)
+                            * binomial(degree, j)
+                            * (r * r).mul_add(-hull[i][3] * hull[j][3], q[i].dot(q[j]))
+                    })
+                    .sum();
+                (sum / binomial(2 * degree, k)).abs()
+            })
+            .fold(0.0, f64::max);
+        off_plane <= tol && excess / (least * least * r) <= tol
+    })
 }
 
 /// A NURBS edge cut at each full knot it turns at: a side running across a
@@ -2659,4 +2751,84 @@ fn cap_face(
         face.set_reversed(true);
     }
     Ok(topo.add_face(face))
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use super::*;
+
+    fn p(x: f64, y: f64, z: f64) -> Point3 {
+        Point3::new(x, y, z)
+    }
+
+    /// A spline is read as a line or circle only where every point of it lies
+    /// on one: a rational arc, a whole rational circle far from the origin and a
+    /// straight cubic are, and the same arc with a control point nudged by a
+    /// millionth, a quadratic bowed by a hair and a cubic fitted to a circle are
+    /// not.
+    #[test]
+    fn a_spline_is_read_as_a_line_or_circle_only_where_it_is_one() {
+        let circle = Circle3D::new(p(300.0, -200.0, 50.0), Vec3::new(1.0, 2.0, 2.0), 7.0).unwrap();
+        let arc = brepkit_geometry::convert::circle_to_nurbs(&circle, 0.3, 2.5).unwrap();
+        let whole = brepkit_geometry::convert::circle_to_nurbs(&circle, 0.0, std::f64::consts::TAU)
+            .unwrap();
+        let ends = |c: &NurbsCurve| {
+            let (t0, t1) = c.domain();
+            (c.evaluate(t0), c.evaluate(t1))
+        };
+        for curve in [&arc, &whole] {
+            let (a, b) = ends(curve);
+            let read = recognized_exactly(curve, a, b);
+            assert!(
+                matches!(&read, Some(EdgeCurve::Circle(c)) if (c.radius() - 7.0).abs() < 1e-9),
+                "{read:?}"
+            );
+        }
+
+        let mut nudged = arc.control_points().to_vec();
+        nudged[1] = nudged[1] + Vec3::new(0.0, 0.0, 1e-6);
+        let nudged = NurbsCurve::new(
+            arc.degree(),
+            arc.knots().to_vec(),
+            nudged,
+            arc.weights().to_vec(),
+        )
+        .unwrap();
+        let bowed = NurbsCurve::new(
+            2,
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            vec![
+                p(-6.0, -6.0, 0.0),
+                p(0.0, -6.0 - 1e-5, 0.0),
+                p(6.0, -6.0, 0.0),
+            ],
+            vec![1.0; 3],
+        )
+        .unwrap();
+        let fitted = polynomial_curve(&arc).unwrap();
+        for curve in [&nudged, &bowed, &fitted] {
+            let (a, b) = ends(curve);
+            assert!(recognized_exactly(curve, a, b).is_none());
+        }
+
+        let straight = NurbsCurve::new(
+            3,
+            vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+            vec![
+                p(1.0, 2.0, 3.0),
+                p(2.0, 4.0, 6.0),
+                p(4.0, 8.0, 12.0),
+                p(5.0, 10.0, 15.0),
+            ],
+            vec![1.0; 4],
+        )
+        .unwrap();
+        let (a, b) = ends(&straight);
+        assert!(matches!(
+            recognized_exactly(&straight, a, b),
+            Some(EdgeCurve::Line)
+        ));
+    }
 }

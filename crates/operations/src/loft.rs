@@ -646,22 +646,44 @@ fn profile_oriented_edges(topo: &Topology, fid: FaceId) -> Option<Vec<ProfileEdg
     Some(merge_cocircular_arcs(wire_oriented_edges(
         topo,
         face.outer_wire(),
+        recognized_loosely,
     )?))
 }
 
+/// The line or circle `curve` encodes to within a hundred times the linear
+/// tolerance at samples of it, if any.
+fn recognized_loosely(
+    curve: &brepkit_math::nurbs::curve::NurbsCurve,
+    _: Point3,
+    _: Point3,
+) -> Option<EdgeCurve> {
+    match brepkit_geometry::convert::recognize_curve(curve, Tolerance::new().linear * 100.0) {
+        brepkit_geometry::convert::RecognizedCurve::Circle {
+            center,
+            normal,
+            radius,
+        } => brepkit_math::curves::Circle3D::new(center, normal, radius)
+            .ok()
+            .map(EdgeCurve::Circle),
+        brepkit_geometry::convert::RecognizedCurve::Line { .. } => Some(EdgeCurve::Line),
+        _ => None,
+    }
+}
+
 /// A wire's edges in traversal order, each oriented so `start`→`end` follows
-/// the wire, its spline-encoded lines and circles recognized back to their
-/// analytic form. `None` if a lookup fails or the wire has no edges.
+/// the wire, a NURBS edge taking the analytic curve `recognize` finds for it
+/// between its start and end vertices. `None` if a lookup fails or the wire has
+/// no edges.
 fn wire_oriented_edges(
     topo: &Topology,
     wire: brepkit_topology::wire::WireId,
+    recognize: impl Fn(&brepkit_math::nurbs::curve::NurbsCurve, Point3, Point3) -> Option<EdgeCurve>,
 ) -> Option<Vec<ProfileEdgeGeom>> {
     let wire = topo.wire(wire).ok()?;
     let oes = wire.edges();
     if oes.is_empty() {
         return None;
     }
-    let recog_tol = Tolerance::new().linear * 100.0;
     let mut out = Vec::with_capacity(oes.len());
     for oe in oes {
         let edge = topo.edge(oe.edge()).ok()?;
@@ -670,16 +692,7 @@ fn wire_oriented_edges(
         let (start, end) = if oe.is_forward() { (s, e) } else { (e, s) };
         let curve = match edge.curve() {
             EdgeCurve::NurbsCurve(nc) => {
-                match brepkit_geometry::convert::recognize_curve(nc, recog_tol) {
-                    brepkit_geometry::convert::RecognizedCurve::Circle {
-                        center,
-                        normal,
-                        radius,
-                    } => brepkit_math::curves::Circle3D::new(center, normal, radius)
-                        .map_or_else(|_| edge.curve().clone(), EdgeCurve::Circle),
-                    brepkit_geometry::convert::RecognizedCurve::Line { .. } => EdgeCurve::Line,
-                    _ => edge.curve().clone(),
-                }
+                recognize(nc, s, e).unwrap_or_else(|| edge.curve().clone())
             }
             c => c.clone(),
         };

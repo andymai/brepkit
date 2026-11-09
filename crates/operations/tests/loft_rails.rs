@@ -216,6 +216,43 @@ fn from_surfaces(topo: &Topology, solid: SolidId, q: Point3) -> f64 {
         .fold(f64::INFINITY, f64::min)
 }
 
+/// How far `q` lies from the nearest of the solid's edges: a line's segment, a
+/// spline's curve, and an arc's curve sampled finely, which reads no nearer
+/// than it lies.
+fn from_edges(topo: &Topology, solid: SolidId, q: Point3) -> f64 {
+    solid_edges(topo, solid)
+        .unwrap()
+        .iter()
+        .map(|&e| {
+            let edge = topo.edge(e).unwrap();
+            let (a, b) = (
+                topo.vertex(edge.start()).unwrap().point(),
+                topo.vertex(edge.end()).unwrap().point(),
+            );
+            match edge.curve() {
+                EdgeCurve::Line => {
+                    let w = ((q - a).dot(b - a) / (b - a).dot(b - a)).clamp(0.0, 1.0);
+                    (q - a - (b - a) * w).length()
+                }
+                EdgeCurve::NurbsCurve(n) => {
+                    brepkit_math::nurbs::projection::project_point_to_curve(n, q, 1e-12)
+                        .unwrap()
+                        .distance
+                }
+                other => {
+                    let (t0, t1) = other.domain_with_endpoints(a, b);
+                    (0..=4000)
+                        .map(|k| {
+                            let t = (t1 - t0).mul_add(f64::from(k) / 4000.0, t0);
+                            (other.evaluate_with_endpoints(t, a, b) - q).length()
+                        })
+                        .fold(f64::INFINITY, f64::min)
+                }
+            }
+        })
+        .fold(f64::INFINITY, f64::min)
+}
+
 /// How far `q` lies from the triangles of `mesh`.
 fn from_mesh(mesh: &TriangleMesh, q: Point3) -> f64 {
     let on_triangle = |a: Point3, b: Point3, c: Point3| -> f64 {
@@ -1356,6 +1393,51 @@ fn spline_profiles_stored_either_way_pass_through_their_curves() {
             |_, _| up,
         );
         assert!(off < 1e-6, "{name}: {off} radians off square");
+    }
+}
+
+/// A square whose first side is a quadratic spline bowed out by a hair, 5e-6 at
+/// its middle, lofted under a normal end: to the loft the spline is no line, and
+/// the solid's edges pass through it.
+#[test]
+fn a_spline_side_bowed_by_a_hair_keeps_its_curve() {
+    let (half, h) = (6.0, 10.0);
+    for (name, pose) in poses() {
+        let mut topo = Topology::new();
+        let corners = CORNERS.map(|(x, y)| p(x * half, y * half, 0.0));
+        let verts = corners.map(|c| topo.add_vertex(Vertex::new(pose.mul_point(c), TOL)));
+        let bow = bezier(pose, &[corners[0], p(0.0, -half - 1e-5, 0.0), corners[1]]);
+        let mut edges = vec![OrientedEdge::new(
+            topo.add_edge(Edge::new(
+                verts[0],
+                verts[1],
+                EdgeCurve::NurbsCurve(bow.clone()),
+            )),
+            true,
+        )];
+        for i in 1..4 {
+            let edge = topo.add_edge(Edge::new(verts[i], verts[(i + 1) % 4], EdgeCurve::Line));
+            edges.push(OrientedEdge::new(edge, true));
+        }
+        let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+        let normal = outward_of(pose);
+        let d = normal.dot(pose.mul_point(p(0.0, 0.0, 0.0)) - p(0.0, 0.0, 0.0));
+        let first = topo.add_face(Face::new(wire, vec![], FaceSurface::Plane { normal, d }));
+        let last = square(&mut topo, pose, half, h);
+        let options = LoftOptions {
+            start: LoftEnd::Normal { weight: 1.0 },
+            ..LoftOptions::default()
+        };
+        let solid = loft_with_options(&mut topo, &[first, last], &options).unwrap();
+        assert_solid(&topo, solid, name);
+        let off = curve_samples(&bow, 16)
+            .iter()
+            .map(|&q| from_edges(&topo, solid, q))
+            .fold(0.0, f64::max);
+        assert!(
+            off < 1e-9,
+            "{name}: the spline lies {off} off the solid's edges"
+        );
     }
 }
 
