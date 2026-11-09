@@ -83,6 +83,10 @@ pub(super) struct Neighbour {
     pub reversed: bool,
     plane: Option<Frame3>,
     seed: Cell<Option<(f64, f64)>>,
+    /// The `u` domain of a spline that closes across `u`.
+    closed_u: Option<(f64, f64)>,
+    /// As `closed_u`, for `v`.
+    closed_v: Option<(f64, f64)>,
 }
 
 impl Neighbour {
@@ -95,12 +99,33 @@ impl Neighbour {
         } else {
             None
         };
+        let (closed_u, closed_v) = if let FaceSurface::Nurbs(spline) = &surface {
+            (
+                ParametricSurface::closed_u(spline),
+                ParametricSurface::closed_v(spline),
+            )
+        } else {
+            (None, None)
+        };
         Ok(Self {
             surface,
             reversed: data.is_reversed(),
             plane,
             seed: Cell::new(None),
+            closed_u,
+            closed_v,
         })
+    }
+
+    /// `(u, v)` wrapped on to a closed spline's domain. A chart runs on past
+    /// the seam to stay continuous, and a spline extrapolates there rather
+    /// than wrapping round.
+    fn on_domain(&self, u: f64, v: f64) -> (f64, f64) {
+        let wrap = |x: f64, closed: Option<(f64, f64)>| match closed {
+            Some((lo, hi)) if x < lo || x > hi => lo + (x - lo).rem_euclid(hi - lo),
+            _ => x,
+        };
+        (wrap(u, self.closed_u), wrap(v, self.closed_v))
     }
 
     pub fn jet(&self, u: f64, v: f64) -> Jet {
@@ -125,6 +150,7 @@ impl Neighbour {
                 svv: zero,
             },
             FaceSurface::Nurbs(surface) => {
+                let (u, v) = self.on_domain(u, v);
                 let d = surface.derivatives(u, v, 2);
                 Jet {
                     point: surface.evaluate(u, v),
@@ -200,6 +226,7 @@ impl Neighbour {
         if let Some(frame) = &self.plane {
             return frame.origin + frame.x * u + frame.y * v;
         }
+        let (u, v) = self.on_domain(u, v);
         self.surface
             .evaluate(u, v)
             .unwrap_or(Point3::new(0.0, 0.0, 0.0))
@@ -307,9 +334,9 @@ impl Neighbour {
                 (Some(TAU), None)
             }
             FaceSurface::Torus(_) => (Some(TAU), Some(TAU)),
-            FaceSurface::Nurbs(surface) => (
-                ParametricSurface::closed_u(surface).map(|(a, b)| b - a),
-                ParametricSurface::closed_v(surface).map(|(a, b)| b - a),
+            FaceSurface::Nurbs(_) => (
+                self.closed_u.map(|(a, b)| b - a),
+                self.closed_v.map(|(a, b)| b - a),
             ),
         }
     }
@@ -690,11 +717,53 @@ fn face_side(
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+    use brepkit_math::curves::Circle3D;
     use brepkit_math::surfaces::{
         ConicalSurface, CylindricalSurface, SphericalSurface, ToroidalSurface,
     };
+    use brepkit_topology::edge::{Edge, EdgeCurve};
+    use brepkit_topology::face::Face;
+    use brepkit_topology::vertex::Vertex;
+    use brepkit_topology::wire::{OrientedEdge, Wire};
 
     use super::*;
+
+    /// A chart run on past a closed spline's seam reads the spline a period
+    /// on, which has to be the same place with the same jet.
+    #[test]
+    fn a_closed_spline_reads_the_same_a_period_on() {
+        let origin = Point3::new(0.0, 0.0, 0.0);
+        let up = Vec3::new(0.0, 0.0, 1.0);
+        let spline = CylindricalSurface::new(origin, up, 3.0)
+            .unwrap()
+            .to_nurbs(0.0, 5.0)
+            .unwrap();
+        let mut topo = Topology::new();
+        let circle = Circle3D::new(origin, up, 3.0).unwrap();
+        let at = topo.add_vertex(Vertex::new(circle.evaluate(0.0), 1e-7));
+        let rim = topo.add_edge(Edge::new(at, at, EdgeCurve::Circle(circle)));
+        let wire = topo.add_wire(Wire::new(vec![OrientedEdge::new(rim, true)], true).unwrap());
+        let face = topo.add_face(Face::new(wire, Vec::new(), FaceSurface::Nurbs(spline)));
+        let neighbour = Neighbour::of(&topo, face).unwrap();
+        let period = neighbour.periods().0.unwrap();
+        for (u, v) in [(0.1, 0.3), (0.6, 0.8), (0.95, 0.5)] {
+            for turns in [-1.0, 1.0] {
+                let (here, there) = (u, u + turns * period);
+                let gap = (neighbour.point(here, v) - neighbour.point(there, v)).length();
+                assert!(gap < 1e-12, "{u} {turns}: {gap}");
+                let (a, b) = (neighbour.jet(here, v), neighbour.jet(there, v));
+                for (x, y) in [
+                    (a.su, b.su),
+                    (a.sv, b.sv),
+                    (a.suu, b.suu),
+                    (a.suv, b.suv),
+                    (a.svv, b.svv),
+                ] {
+                    assert!((x - y).length() < 1e-9, "{u} {turns}: {x:?} against {y:?}");
+                }
+            }
+        }
+    }
 
     /// The closed forms against central differences of the surface itself.
     fn jets_agree(surface: FaceSurface, (u, v): (f64, f64)) {
@@ -703,6 +772,8 @@ mod tests {
             reversed: false,
             plane: None,
             seed: Cell::new(None),
+            closed_u: None,
+            closed_v: None,
         };
         let h = 1e-4;
         let jet = neighbour.jet(u, v);

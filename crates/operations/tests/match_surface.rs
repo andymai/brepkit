@@ -15,6 +15,7 @@ use brepkit_math::mat::Mat4;
 use brepkit_math::nurbs::curve::NurbsCurve;
 use brepkit_math::nurbs::surface::NurbsSurface;
 use brepkit_math::nurbs::surface_fitting::interpolate_surface;
+use brepkit_math::surfaces::CylindricalSurface;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_operations::OperationsError;
 use brepkit_operations::blend_surface::{MatchContinuity, match_surface, match_surface_on};
@@ -529,6 +530,76 @@ fn a_whole_wall_matches_a_closed_edge() {
     assert_eq!(wire.edges()[1].edge(), wire.edges()[3].edge());
     let far = far_side_distance(&surface, &surface_of_face(&topo, wall), 1.0);
     assert!(far < 1e-7, "{far}");
+}
+
+/// As the whole wall, on a spline cylinder whose own seam is turned away from
+/// the face's seam edge: the walk round the rim crosses the spline's seam, and
+/// a spline does not wrap past it.
+#[test]
+fn a_spline_wall_seamed_elsewhere_matches_a_closed_edge() {
+    let mut topo = Topology::new();
+    let post = make_cylinder(&mut topo, 3.0, 5.0).unwrap();
+    let wall = solid_faces(&topo, post)
+        .unwrap()
+        .into_iter()
+        .find(|&f| matches!(topo.face(f).unwrap().surface(), FaceSurface::Cylinder(_)))
+        .unwrap();
+    let turn: f64 = 2.0;
+    let spline = CylindricalSurface::with_ref_dir(
+        Point3::new(0.0, 0.0, 0.0),
+        Vec3::new(0.0, 0.0, 1.0),
+        3.0,
+        Vec3::new(turn.cos(), turn.sin(), 0.0),
+    )
+    .unwrap()
+    .to_nurbs(0.0, 5.0)
+    .unwrap();
+    topo.face_mut(wall)
+        .unwrap()
+        .set_surface(FaceSurface::Nurbs(spline));
+    let rim = face_edges(&topo, wall)
+        .unwrap()
+        .into_iter()
+        .find(|&e| {
+            let data = topo.edge(e).unwrap();
+            matches!(data.curve(), EdgeCurve::Circle(_))
+                && (topo.vertex(data.start()).unwrap().point().z() - 5.0).abs() < 1e-9
+        })
+        .unwrap();
+    let top = make_cylinder(&mut topo, 3.5, 4.0).unwrap();
+    transform_solid(
+        &mut topo,
+        top,
+        &(Mat4::translation(0.0, 0.0, 6.0) * Mat4::rotation_z(0.9)),
+    )
+    .unwrap();
+    let upper = solid_faces(&topo, top)
+        .unwrap()
+        .into_iter()
+        .find(|&f| matches!(topo.face(f).unwrap().surface(), FaceSurface::Cylinder(_)))
+        .unwrap();
+    let target = face_edges(&topo, upper)
+        .unwrap()
+        .into_iter()
+        .find(|&e| {
+            let data = topo.edge(e).unwrap();
+            matches!(data.curve(), EdgeCurve::Circle(_))
+                && (topo.vertex(data.start()).unwrap().point().z() - 6.0).abs() < 1e-9
+        })
+        .unwrap();
+    let result =
+        match_surface_on(&mut topo, wall, rim, target, upper, MatchContinuity::G2).unwrap();
+    let surface = nurbs_of(&topo, result);
+    let seam = measure_seam(&surface, 0.0, &surface_of_face(&topo, upper), SAMPLES);
+    assert_seam("spline wall", MatchContinuity::G2, &seam);
+    assert_wire_sound(&topo, result);
+    let mut off_the_rim = 0.0_f64;
+    for i in 0..=120 {
+        let p = surface.evaluate(f64::from(i) / 120.0, 1.0);
+        let radial = (p.x() * p.x() + p.y() * p.y()).sqrt() - 3.0;
+        off_the_rim = off_the_rim.max(radial.abs()).max(p.z().abs());
+    }
+    assert!(off_the_rim < 1e-7, "{off_the_rim}");
 }
 
 /// A hole clear of the band stays, a copy on the new face; one in its way
