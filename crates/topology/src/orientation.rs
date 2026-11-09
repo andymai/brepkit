@@ -217,13 +217,18 @@ fn nurbs_uv_winding(
             (d[1][0].length(), d[0][1].length())
         })
         .collect();
-    let scale = speeds
+    // Each partial is read against its own direction's largest: rescaling
+    // one direction's knots changes that partial alone.
+    let (scale_u, scale_v) = speeds
         .iter()
-        .fold(0.0_f64, |m, &(su, sv)| m.max(su).max(sv));
-    if scale <= 0.0
+        .fold((0.0_f64, 0.0_f64), |(mu, mv), &(su, sv)| {
+            (mu.max(su), mv.max(sv))
+        });
+    if scale_u <= 0.0
+        || scale_v <= 0.0
         || speeds
             .iter()
-            .any(|&(su, sv)| su <= 1e-6 * scale || sv <= 1e-6 * scale)
+            .any(|&(su, sv)| su <= 1e-6 * scale_u || sv <= 1e-6 * scale_v)
     {
         return None;
     }
@@ -501,11 +506,16 @@ mod tests {
     /// counterclockwise about `+z` from `+x`, `v` up, so `∂u × ∂v` points
     /// out.
     fn nurbs_cylinder() -> NurbsSurface {
+        nurbs_cylinder_on(circle_knots())
+    }
+
+    /// [`nurbs_cylinder`] with its `u` knots `knots_u`.
+    fn nurbs_cylinder_on(knots_u: Vec<f64>) -> NurbsSurface {
         let rows = circle_rows();
         NurbsSurface::new(
             2,
             1,
-            circle_knots(),
+            knots_u,
             vec![0.0, 0.0, 1.0, 1.0],
             rows.iter()
                 .map(|&(x, y, _)| vec![Point3::new(x, y, 0.0), Point3::new(x, y, HEIGHT)])
@@ -652,12 +662,9 @@ mod tests {
         }
     }
 
-    /// The patch's samples, counterclockwise about the outward normal, wind
-    /// positive in `(u, v)` across the seam.
-    #[test]
-    fn a_bspline_patch_across_the_seam_winds_positive() {
-        let surface = FaceSurface::Nurbs(nurbs_cylinder());
-        let half = 0.75 * PI;
+    /// Samples of the cylinder's patch from `-half` to `half` radians about
+    /// `+z`, counterclockwise about the outward normal.
+    fn seam_samples(half: f64) -> Vec<Point3> {
         let mut points = Vec::new();
         for k in 0..16 {
             let angle = (f64::from(k) / 16.0).mul_add(2.0 * half, -half);
@@ -671,7 +678,26 @@ mod tests {
                 HEIGHT,
             ));
         }
-        let area = uv_winding(&surface, &points).unwrap();
+        points
+    }
+
+    /// The patch's samples, counterclockwise about the outward normal, wind
+    /// positive in `(u, v)` across the seam.
+    #[test]
+    fn a_bspline_patch_across_the_seam_winds_positive() {
+        let surface = FaceSurface::Nurbs(nurbs_cylinder());
+        let area = uv_winding(&surface, &seam_samples(0.75 * PI)).unwrap();
+        assert!(area > 0.0, "area {area}");
+    }
+
+    /// The same cylinder with its `u` knots scaled by 1e-8: `∂u` grows 1e8
+    /// times and `∂v` does not, and neither vanishes. The patch still winds
+    /// positive.
+    #[test]
+    fn a_bspline_patch_reads_its_winding_with_its_u_knots_rescaled() {
+        let knots_u = circle_knots().iter().map(|k| k * 1e-8).collect();
+        let surface = FaceSurface::Nurbs(nurbs_cylinder_on(knots_u));
+        let area = uv_winding(&surface, &seam_samples(0.75 * PI)).unwrap();
         assert!(area > 0.0, "area {area}");
     }
 
