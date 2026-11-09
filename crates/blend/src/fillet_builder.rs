@@ -4037,14 +4037,13 @@ fn compute_stripe_for_spine(
     if spine.is_closed() {
         check_contacts_on_faces(topo, face1, face2, &walk_result.sections)?;
     }
-    // The band interpolates its sections: taking them as control points
-    // cut inside them along a curved edge (its contact on a B-spline wall
-    // stood 1e-3 inside the wall).
+    // The band passes through its walked sections, so its boundary rows pass
+    // through the walked contacts. Where the interpolation is refused, the
+    // band takes the sections as its control points.
     let blend_surface = interpolate_blend_surface(&walk_result.sections)
         .or_else(|_| approximate_blend_surface(&walk_result.sections))?;
-    // The band's sides are its own boundary rows: a polyline through the
-    // sections' contact points leaves the band wherever they do not lie on a
-    // line, since the band takes them as control points.
+    // The band's sides are its own boundary rows: between two sections, a
+    // polyline through the contacts leaves the band.
     let contact1 = band_side(&blend_surface, 0)?;
     let contact2 = band_side(&blend_surface, blend_surface.control_points().len() - 1)?;
     let blend_face_surface = brepkit_topology::face::FaceSurface::Nurbs(blend_surface);
