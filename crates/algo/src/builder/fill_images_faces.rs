@@ -2883,6 +2883,15 @@ fn build_section_edges(
                                         && f.inner_wires().is_empty()
                                 })
                             });
+                        let clipped_list: Vec<(Point3, Point3)> = match opposing_face {
+                            Some(of) => clipped_list
+                                .into_iter()
+                                .flat_map(|(cs, ce)| {
+                                    split_runs_across_holes(topo, face_id, *of, cs, ce, tol)
+                                })
+                                .collect(),
+                            None => clipped_list,
+                        };
                         let mut finals = Vec::new();
                         for (cs, ce) in clipped_list {
                             match opposing_face.and_then(|of| {
@@ -3963,6 +3972,141 @@ fn arc_segment_crossings(
         rel <= span + eps || rel >= std::f64::consts::TAU - eps
     };
     hits.into_iter().filter(|(_, t)| on_arc(*t)).collect()
+}
+
+/// A plane x plane section line on `face_id`, split at the middle of each run
+/// it makes across a round hole of the opposing plane face: between two
+/// crossings with one circle or ellipse edge of the hole's rim. The section is
+/// left whole across the opposing face's holes, so this face alone holds that
+/// run, and the run shares both ends with the rim's arc between them, which
+/// the assembler's endpoint-keyed merge would weld it to.
+fn split_runs_across_holes(
+    topo: &Topology,
+    face_id: FaceId,
+    opposing: FaceId,
+    start: Point3,
+    end: Point3,
+    tol: f64,
+) -> Vec<(Point3, Point3)> {
+    /// Points closer than the band the assembler welds at are one point, and
+    /// a run within it of its arc is that arc.
+    const WELD: f64 = 1e-5;
+    /// Points sampled along each hole edge for the inside test.
+    const EDGE_SAMPLES: u32 = 16;
+
+    let whole = vec![(start, end)];
+    let (Ok(face), Ok(partner)) = (topo.face(face_id), topo.face(opposing)) else {
+        return whole;
+    };
+    let (FaceSurface::Plane { .. }, FaceSurface::Plane { normal, d }) =
+        (face.surface(), partner.surface())
+    else {
+        return whole;
+    };
+    let seg = end - start;
+    let len = seg.length();
+    let scale = normal.length().max(f64::MIN_POSITIVE);
+    let off_plane = |p: Point3| {
+        (normal.dot(brepkit_math::vec::Vec3::new(p.x(), p.y(), p.z())) - d).abs() / scale
+    };
+    if partner.inner_wires().is_empty()
+        || len <= 2.0 * WELD
+        || off_plane(start) > WELD
+        || off_plane(end) > WELD
+    {
+        return whole;
+    }
+    let frame = crate::builder::plane_frame::PlaneFrame::from_normal_and_point(*normal, start);
+    let mut middles: Vec<f64> = Vec::new();
+    for &hole in partner.inner_wires() {
+        let Ok(wire) = topo.wire(hole) else {
+            return whole;
+        };
+        let mut runs: Vec<f64> = Vec::new();
+        for oe in wire.edges() {
+            let Ok(edge) = topo.edge(oe.edge()) else {
+                return whole;
+            };
+            let (center, reach) = match edge.curve() {
+                EdgeCurve::Circle(c) => (c.center(), c.radius()),
+                EdgeCurve::Ellipse(e) => (e.center(), e.semi_major()),
+                EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => continue,
+            };
+            let to_center = center - start;
+            if (to_center - seg * (to_center.dot(seg) / (len * len))).length() >= reach {
+                continue;
+            }
+            let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) else {
+                return whole;
+            };
+            let mut hits: Vec<f64> = arc_segment_crossings(
+                edge.curve(),
+                sv.point(),
+                ev.point(),
+                edge.start() == edge.end(),
+                true,
+                start,
+                end,
+                tol,
+                Some(*normal),
+            )
+            .into_iter()
+            .map(|(p, _)| (p - start).dot(seg) / (len * len))
+            .filter(|&f| f * len > WELD && (1.0 - f) * len > WELD)
+            .collect();
+            hits.sort_by(f64::total_cmp);
+            hits.dedup_by(|b, a| (*b - *a) * len <= WELD);
+            let &[fa, fb] = hits.as_slice() else {
+                continue;
+            };
+            let f = 0.5 * (fa + fb);
+            let middle = start + seg * f;
+            let on_rim = match edge.curve() {
+                EdgeCurve::Circle(c) => c.evaluate(c.project(middle)),
+                EdgeCurve::Ellipse(e) => e.evaluate(e.project(middle)),
+                EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => continue,
+            };
+            if (on_rim - middle).length() > WELD {
+                runs.push(f);
+            }
+        }
+        if runs.is_empty() {
+            continue;
+        }
+        let mut rim: Vec<brepkit_math::vec::Point2> = Vec::new();
+        for oe in wire.edges() {
+            let Ok(edge) = topo.edge(oe.edge()) else {
+                return whole;
+            };
+            let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) else {
+                return whole;
+            };
+            let (sp, ep) = (sv.point(), ev.point());
+            let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
+            rim.extend((0..EDGE_SAMPLES).map(|k| {
+                let f = f64::from(k) / f64::from(EDGE_SAMPLES);
+                let f = if oe.is_forward() { f } else { 1.0 - f };
+                frame.project(edge.curve().evaluate_with_endpoints(
+                    (t1 - t0).mul_add(f, t0),
+                    sp,
+                    ep,
+                ))
+            }));
+        }
+        middles.extend(runs.into_iter().filter(|&f| {
+            let at = frame.project(start + seg * f);
+            crate::builder::classify_2d::point_in_polygon_2d(at, &rim)
+                && crate::builder::classify_2d::distance_to_polygon_boundary(at, &rim) > WELD
+        }));
+    }
+    if middles.is_empty() {
+        return whole;
+    }
+    middles.sort_by(f64::total_cmp);
+    let mut bounds = vec![start];
+    bounds.extend(middles.into_iter().map(|f| start + seg * f));
+    bounds.push(end);
+    bounds.windows(2).map(|w| (w[0], w[1])).collect()
 }
 
 /// Each input face's loops in its own parameter space, sampled the first

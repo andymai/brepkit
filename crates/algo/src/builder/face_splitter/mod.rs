@@ -7338,11 +7338,19 @@ fn split_face_2d_impl(
             let side = |a: Point2, b: Point2, p: Point2| -> f64 {
                 (b.x() - a.x()).mul_add(p.y() - a.y(), -((b.y() - a.y()) * (p.x() - a.x())))
             };
+            // A section's run across the hole between the ends of one rim arc
+            // lies on an edge of the vertex polygon and on the arc's chord,
+            // where the first two tests read it as outside the hole.
+            let exact = containment::exact_hole(orig_hole, frame);
             let in_region = |p: Point2| -> bool {
                 super::classify_2d::point_in_polygon_2d(p, &poly)
                     || arcs.iter().any(|&(c, r, u0, u1)| {
                         let d = ((p.x() - c.x()).powi(2) + (p.y() - c.y()).powi(2)).sqrt();
                         d < r && side(u0, u1, p) * side(u0, u1, c) < 0.0
+                    })
+                    || exact.as_ref().is_some_and(|pieces| {
+                        brepkit_math::region2d::point_in_region(pieces, p, tol.linear * 10.0)
+                            == Some(true)
                     })
             };
             let mut rebuilt: Vec<OrientedPCurveEdge> = Vec::new();

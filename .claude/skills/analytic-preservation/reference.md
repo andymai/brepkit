@@ -132,6 +132,12 @@ smarter.** Implementations in `phase_ff.rs`:
   endpoints.
 - Torus lens arcs are always split at their midpoint into two sub-arcs with a distinct
   middle vertex.
+- `pave_chords_across_conics` (`crates/algo/src/pave_filler/mod.rs`) paves a straight
+  edge's piece between two crossings with one circle or ellipse edge at its middle: a
+  slab's bottom edge across the round hole in the plate it stands on.
+- `split_runs_across_holes` (`crates/algo/src/builder/fill_images_faces.rs`) splits a
+  plane x plane section at the middle of its run across a round hole of the opposing
+  face: the face that holds the run keeps it in two pieces.
 
 ### 3e. Sequential booleans preserve analytic surfaces
 

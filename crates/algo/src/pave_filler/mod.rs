@@ -124,6 +124,7 @@ impl<'a> PaveFiller<'a> {
         )?;
 
         pave_co_endpoint_curves(self.topo, &[self.solid_a, self.solid_b], self.tol, arena)?;
+        pave_chords_across_conics(self.topo, self.tol, arena)?;
         split_co_endpoint_sections(self.topo, self.tol, arena)?;
 
         Ok(())
@@ -253,6 +254,176 @@ fn pave_co_endpoint_curves(
         }
     }
     Ok(())
+}
+
+/// Pave at its middle each straight edge's piece between two of its crossings
+/// with one circle or ellipse edge, where that conic's piece between the same
+/// two points is whole (a slab's bottom edge across the round hole in the
+/// plate it stands on). The piece is a chord of the conic: it runs through the
+/// conic's inside, so it is never the arc, but the assembler keys duplicate
+/// edges on their endpoint pair and would weld the two into one edge on four
+/// faces. Only crossings inside the line count: a straight edge that ends on
+/// the conic can stand for its arc. The face splitter keeps the line in
+/// pieces ([`GfaArena::co_endpoint_middles`]).
+fn pave_chords_across_conics(
+    topo: &mut Topology,
+    tol: Tolerance,
+    arena: &mut GfaArena,
+) -> Result<(), AlgoError> {
+    use std::collections::BTreeMap;
+
+    use brepkit_math::vec::Point3;
+    use brepkit_topology::edge::{EdgeCurve, EdgeId};
+    use brepkit_topology::vertex::{Vertex, VertexId};
+
+    use crate::ds::{Interference, Pave};
+
+    /// Points closer than the band the assembler welds at are one point, and
+    /// a chord within it of its arc is that arc.
+    const WELD: f64 = 1e-5;
+
+    let mut crossings: BTreeMap<(EdgeId, EdgeId), Vec<VertexId>> = BTreeMap::new();
+    for interference in &arena.interference.ee {
+        let Interference::EE {
+            e1,
+            e2,
+            new_vertex: Some(vertex),
+            ..
+        } = interference
+        else {
+            continue;
+        };
+        let conic = |c: &EdgeCurve| matches!(c, EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_));
+        let key = match (topo.edge(*e1)?.curve(), topo.edge(*e2)?.curve()) {
+            (EdgeCurve::Line, c) if conic(c) => (*e1, *e2),
+            (c, EdgeCurve::Line) if conic(c) => (*e2, *e1),
+            _ => continue,
+        };
+        crossings.entry(key).or_default().push(*vertex);
+    }
+
+    for ((line_id, conic_id), vertices) in crossings {
+        if vertices.len() < 2 {
+            continue;
+        }
+        let Some(&[pb_id]) = arena.edge_pave_blocks.get(&line_id).map(Vec::as_slice) else {
+            continue;
+        };
+        let Some(pb) = arena.pave_blocks.get(pb_id) else {
+            continue;
+        };
+        let line = topo.edge(line_id)?;
+        let start = topo.vertex(line.start())?.point();
+        let seg = topo.vertex(line.end())?.point() - start;
+        let len = seg.length();
+        if len <= WELD {
+            continue;
+        }
+        let along = |p: Point3| (p - start).dot(seg) / (len * len);
+        let (t0, t1) = (pb.start.parameter, pb.end.parameter);
+        let mut breaks: Vec<f64> = vec![0.0, 1.0];
+        for pave in &pb.extra_paves {
+            breaks.push(along(
+                topo.vertex(arena.resolve_vertex(pave.vertex))?.point(),
+            ));
+        }
+        let mut points: Vec<(f64, Point3)> = Vec::with_capacity(vertices.len());
+        for vertex in vertices {
+            let p = topo.vertex(arena.resolve_vertex(vertex))?.point();
+            points.push((along(p), p));
+        }
+        points.sort_by(|a, b| a.0.total_cmp(&b.0));
+        points.dedup_by(|b, a| (b.1 - a.1).length() <= WELD);
+        let band = WELD / len;
+
+        let mut middles: Vec<(f64, Point3)> = Vec::new();
+        for w in points.windows(2) {
+            let ((fa, pa), (fb, pq)) = (w[0], w[1]);
+            if fa <= band || fb >= 1.0 - band {
+                continue;
+            }
+            if breaks.iter().any(|&f| f > fa + band && f < fb - band) {
+                continue;
+            }
+            let Some(arc_middle) = whole_conic_arc_middle(topo, arena, conic_id, pa, pq, WELD)?
+            else {
+                continue;
+            };
+            let f = 0.5 * (fa + fb);
+            let middle = start + seg * f;
+            if (arc_middle - middle).length() > WELD {
+                middles.push(((t1 - t0).mul_add(f, t0), middle));
+            }
+        }
+        for (t, at) in middles {
+            let vertex = topo.add_vertex(Vertex::new(at, tol.linear));
+            arena.co_endpoint_middles.insert(vertex);
+            arena.add_extra_pave(topo, pb_id, Pave::new(vertex, t));
+        }
+    }
+    Ok(())
+}
+
+/// The middle of an arc of a circle or ellipse edge running from `a` to `b`
+/// with no pave or end of the edge strictly inside it, if there is one.
+fn whole_conic_arc_middle(
+    topo: &Topology,
+    arena: &GfaArena,
+    conic_id: brepkit_topology::edge::EdgeId,
+    a: brepkit_math::vec::Point3,
+    b: brepkit_math::vec::Point3,
+    weld: f64,
+) -> Result<Option<brepkit_math::vec::Point3>, AlgoError> {
+    use std::f64::consts::TAU;
+
+    use brepkit_topology::edge::EdgeCurve;
+
+    let edge = topo.edge(conic_id)?;
+    let (cs, ce) = (
+        topo.vertex(edge.start())?.point(),
+        topo.vertex(edge.end())?.point(),
+    );
+    let curve = edge.curve();
+    if !matches!(curve, EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_)) {
+        return Ok(None);
+    }
+    let project = |p| match curve {
+        EdgeCurve::Circle(c) => Some(c.project(p)),
+        EdgeCurve::Ellipse(e) => Some(e.project(p)),
+        EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => None,
+    };
+    let evaluate = |t| match curve {
+        EdgeCurve::Circle(c) => c.evaluate(t),
+        EdgeCurve::Ellipse(e) => e.evaluate(t),
+        EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => cs,
+    };
+    let (t0, t1) = curve.domain_with_endpoints(cs, ce);
+    let span = t1 - t0;
+    let closed = span >= TAU - 1e-9;
+    let rel = |p| project(p).map_or(0.0, |a| (a - t0).rem_euclid(TAU));
+    let (ra, rb) = (rel(a), rel(b));
+    let (lo, hi) = (ra.min(rb), ra.max(rb));
+
+    let mut breaks: Vec<brepkit_math::vec::Point3> = vec![cs, ce];
+    for &pb_id in arena.edge_pave_blocks.get(&conic_id).into_iter().flatten() {
+        if let Some(pb) = arena.pave_blocks.get(pb_id) {
+            for pave in &pb.extra_paves {
+                breaks.push(topo.vertex(arena.resolve_vertex(pave.vertex))?.point());
+            }
+        }
+    }
+    let inside: Vec<f64> = breaks
+        .into_iter()
+        .filter(|&p| (p - a).length() > weld && (p - b).length() > weld)
+        .map(rel)
+        .collect();
+    if hi <= span && !inside.iter().any(|&r| r > lo && r < hi) {
+        return Ok(Some(evaluate(t0 + 0.5 * (lo + hi))));
+    }
+    if closed && !inside.iter().any(|&r| r > hi || r < lo) {
+        return Ok(Some(evaluate(t0 + 0.5 * (hi + lo + TAU))));
+    }
+    Ok(None)
 }
 
 /// Divide at its middle every section arc other than a circle's that shares
@@ -601,6 +772,7 @@ pub fn run_pave_filler_with_edges(
         phase_ff_coplanar::perform(topo, sources[i], sources[j], tol, arena)?;
     }
     pave_co_endpoint_curves(topo, sources, tol, arena)?;
+    pave_chords_across_conics(topo, tol, arena)?;
     split_co_endpoint_sections(topo, tol, arena)?;
 
     // Stage 2: Resolution (solid-agnostic — reads the accumulated arena).
