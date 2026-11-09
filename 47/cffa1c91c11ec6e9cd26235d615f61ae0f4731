@@ -1,0 +1,18 @@
+crates/blend/src/fillet_builder.rs
+  h_b755e1950659f4 1753,2134-2275
+crates/operations/tests/fillet_boss_one_radius_high.rs
+  h_b755e1950659f4 1-110
+crates/operations/tests/regress_two_edge_exact_limit.rs
+  h_b755e1950659f4 8-11,313-316,339-346
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "47cffa1c91c11ec6e9cd26235d615f61ae0f4731",
+  "prompts": {},
+  "humans": {
+    "h_b755e1950659f4": {
+      "author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
