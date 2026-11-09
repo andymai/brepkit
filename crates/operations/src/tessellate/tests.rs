@@ -4435,3 +4435,87 @@ fn a_whole_twisted_face_meshes_its_twist_on_its_own() {
         }
     }
 }
+
+/// A pointed cone's wall walked from a rim, not from its seam (a file can
+/// start the wire anywhere), whose outline steps out across u = 0, away
+/// from the seam, along rulings a file writes as B-splines: the stretch
+/// after the seam was left a period off the seam copy it starts from, and
+/// the wall meshed over half as much again.
+#[test]
+fn pointed_cone_walked_from_a_rim_meshes_its_own_area() {
+    use brepkit_math::curves::Circle3D;
+    use brepkit_math::surfaces::ConicalSurface;
+    use std::f64::consts::PI;
+
+    let (half_angle, seam, tab, v1, v2) = (0.5_f64, 1.5_f64, 0.7_f64, 2.0_f64, 2.5_f64);
+    let z = Vec3::new(0.0, 0.0, 1.0);
+    let cone = ConicalSurface::with_ref_dir(
+        Point3::new(0.0, 0.0, 0.0),
+        z,
+        half_angle,
+        Vec3::new(1.0, 0.0, 0.0),
+    )
+    .unwrap();
+    let mut topo = Topology::new();
+    let mut vertex = |u: f64, v: f64| topo.add_vertex(Vertex::new(cone.evaluate(u, v), 1e-7));
+    let apex = vertex(0.0, 0.0);
+    let s = vertex(seam, v1);
+    let r = vertex(tab, v1);
+    let r2 = vertex(tab, v2);
+    let q2 = vertex(-tab, v2);
+    let q = vertex(-tab, v1);
+    let circle = |v: f64| {
+        let (sin_a, cos_a) = half_angle.sin_cos();
+        EdgeCurve::Circle(Circle3D::new(Point3::new(0.0, 0.0, v * sin_a), z, v * cos_a).unwrap())
+    };
+    // Each circle runs with u; the wire walks every arc the other way.
+    let mut edge = |a, b, curve| topo.add_edge(Edge::new(a, b, curve));
+    let seam_line = edge(apex, s, EdgeCurve::Line);
+    let rim_far = edge(s, q, circle(v1));
+    let rim_near = edge(r, s, circle(v1));
+    let ruling = |u: f64, from: f64, to: f64| {
+        EdgeCurve::NurbsCurve(
+            brepkit_math::nurbs::curve::NurbsCurve::new(
+                1,
+                vec![0.0, 0.0, 1.0, 1.0],
+                vec![cone.evaluate(u, from), cone.evaluate(u, to)],
+                vec![1.0, 1.0],
+            )
+            .unwrap(),
+        )
+    };
+    let step_up = edge(r, r2, ruling(tab, v1, v2));
+    let tab_rim = edge(q2, r2, circle(v2));
+    let step_down = edge(q2, q, ruling(-tab, v2, v1));
+    let wire = Wire::new(
+        vec![
+            OrientedEdge::new(rim_far, false),
+            OrientedEdge::new(seam_line, false),
+            OrientedEdge::new(seam_line, true),
+            OrientedEdge::new(rim_near, false),
+            OrientedEdge::new(step_up, true),
+            OrientedEdge::new(tab_rim, false),
+            OrientedEdge::new(step_down, true),
+        ],
+        true,
+    )
+    .unwrap();
+    let wire = topo.add_wire(wire);
+    let face = topo.add_face(Face::new(wire, vec![], FaceSurface::Cone(cone)));
+
+    let mesh = tessellate(&topo, face, 0.01).unwrap();
+    let area: f64 = mesh
+        .indices
+        .chunks_exact(3)
+        .map(|t| {
+            let [a, b, c] = [0, 1, 2].map(|k| mesh.positions[t[k] as usize]);
+            (b - a).cross(c - a).length() / 2.0
+        })
+        .sum();
+    // The surface's area element is v cos(a) du dv.
+    let want = half_angle.cos() * (PI * v1 * v1 + tab * (v2 * v2 - v1 * v1));
+    assert!(
+        (area - want).abs() <= 1e-2 * want,
+        "meshed {area}, the wall's area {want}"
+    );
+}
