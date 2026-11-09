@@ -15,7 +15,7 @@ use brepkit_topology::face::{Face, FaceId, FaceSurface};
 use brepkit_topology::shell::{Shell, ShellId};
 use brepkit_topology::solid::{Solid, SolidId};
 use brepkit_topology::vertex::{Vertex, VertexId};
-use brepkit_topology::wire::{OrientedEdge, Wire};
+use brepkit_topology::wire::{OrientedEdge, Wire, WireId};
 
 use crate::analytic;
 use crate::blend_func::{ConstRadBlend, EvolRadBlend};
@@ -30,7 +30,7 @@ use crate::radius_law::RadiusLaw;
 use crate::spine::Spine;
 use crate::stripe::{Stripe, StripeResult};
 use crate::trimmer;
-use crate::walker::{Walker, WalkerConfig, approximate_blend_surface};
+use crate::walker::{Walker, WalkerConfig, approximate_blend_surface, interpolate_blend_surface};
 use crate::{BlendError, BlendResult};
 type BlendCrossEdge = (EdgeId, VertexId, VertexId);
 type BlendCrossPair = (Option<BlendCrossEdge>, Option<BlendCrossEdge>);
@@ -382,7 +382,7 @@ impl<'a> FilletBuilder<'a> {
 
         // The closed-rim rebuild owns its cap: a cap another stripe also runs
         // along (a hole's rim filleted in the same call) takes the normal path.
-        let closed_rims: Vec<Option<ClosedRimInfo>> = recognized
+        let mut closed_rims: Vec<Option<ClosedRimInfo>> = recognized
             .into_iter()
             .enumerate()
             .map(|(stripe_index, rim)| {
@@ -395,7 +395,36 @@ impl<'a> FilletBuilder<'a> {
                 })
             })
             .collect();
+        // Nor may it own a wall that a stripe on the normal path trims too
+        // (the wall's other rim, its cap holed by a B-spline outline): that
+        // trim starts from the wall as it came, so it would drop the rebuild's
+        // contact circle and keep the rim it replaced. Such a rim takes the
+        // normal path as well, which trims both contacts on the one wall.
+        loop {
+            let normal_path_faces: HashSet<FaceId> = stripe_results
+                .iter()
+                .zip(&closed_rims)
+                .filter(|(_, rim)| rim.is_none())
+                .flat_map(|(sr, _)| [sr.stripe.face1, sr.stripe.face2])
+                .collect();
+            let mut changed = false;
+            for rim in &mut closed_rims {
+                if rim
+                    .as_ref()
+                    .is_some_and(|rim| normal_path_faces.contains(&rim.wall_face))
+                {
+                    *rim = None;
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
         let mut closed_rim_supports: HashSet<FaceId> = HashSet::new();
+        // Walls a closed rim's round took whole (a wall exactly a radius
+        // high): left out of the result.
+        let mut vanished_walls: HashSet<FaceId> = HashSet::new();
         for (stripe_index, (sr, closed_rim)) in stripe_results.iter().zip(closed_rims).enumerate() {
             if let Some(rim) = closed_rim {
                 let contour_id =
@@ -416,6 +445,9 @@ impl<'a> FilletBuilder<'a> {
                 ) {
                     Ok(band) => {
                         blend_face_ids.push(band);
+                        if rim.far_rim.is_some() {
+                            vanished_walls.insert(rim.wall_face);
+                        }
                         closed_rim_supports.extend(
                             [rim.plane_face, rim.wall_face]
                                 .iter()
@@ -1572,7 +1604,7 @@ impl<'a> FilletBuilder<'a> {
         let mut result_faces: Vec<FaceId> = Vec::new();
 
         for &fid in &original_faces {
-            if !touched_faces.contains(&fid) {
+            if !touched_faces.contains(&fid) && !vanished_walls.contains(&fid) {
                 // An untouched face may still have been rebuilt by the
                 // end-cap notch pass.
                 result_faces.push(face_replacements.get(&fid).copied().unwrap_or(fid));
@@ -1585,6 +1617,9 @@ impl<'a> FilletBuilder<'a> {
         let mut touched: Vec<FaceId> = touched_faces.iter().copied().collect();
         touched.sort_unstable_by_key(|f| f.index());
         for &fid in &touched {
+            if vanished_walls.contains(&fid) {
+                continue;
+            }
             let replacement = face_replacements.get(&fid).copied();
             result_faces.push(replacement.unwrap_or(fid));
         }
@@ -1715,6 +1750,7 @@ impl<'a> FilletBuilder<'a> {
             });
         }
         let input_edges = input_edge_set(topo, &original_faces);
+        let result_faces = drop_contact_slivers(topo, result_faces, &input_edges)?;
         fold_spoke_spurs(topo, &result_faces, &input_edges)?;
         let new_shell = match Shell::new(result_faces) {
             Ok(shell) => shell,
@@ -2092,6 +2128,234 @@ fn straight_edge(topo: &Topology, edge: &Edge, tol: f64) -> Result<bool, BlendEr
     }
 }
 
+/// Drop the faces a round has left with no area: a wall exactly a radius
+/// high, its top rim rounded, keeps only the strip between the round's
+/// contact and the wall's own bottom edge, which the contact lies on. Such a
+/// face's wire is the contact and that edge alone, joining the same two
+/// vertices. The face goes, and the round takes the wall's edge in place of
+/// its contact, so it meets the face beyond the wall along it.
+fn drop_contact_slivers(
+    topo: &mut Topology,
+    faces: Vec<FaceId>,
+    input_edges: &HashSet<EdgeId>,
+) -> Result<Vec<FaceId>, BlendError> {
+    // How far the contact may stand off the wall's edge, for each unit of
+    // the edge's span; `edge_lies_on` spends up to a quarter of it on the
+    // stretch between its samples. A walked band passes through its
+    // sections, so its contact stands off only between them: a round of 3
+    // along a quarter arc of 4.5 stands 1e-8 off it. The fallback band,
+    // which takes the sections as its control points, stands about 3.2e-4
+    // off the same arc.
+    const ON_EDGE: f64 = 1e-4;
+    let mut faces = faces;
+    'slivers: loop {
+        for (index, &face_id) in faces.iter().enumerate() {
+            let face = topo.face(face_id)?;
+            if !face.inner_wires().is_empty() {
+                continue;
+            }
+            let wire_id = face.outer_wire();
+            let [first, second] = topo.wire(wire_id)?.edges() else {
+                continue;
+            };
+            let (first, second) = (*first, *second);
+            let (own, contact) = match (
+                input_edges.contains(&first.edge()),
+                input_edges.contains(&second.edge()),
+            ) {
+                (true, false) => (first, second),
+                (false, true) => (second, first),
+                _ => continue,
+            };
+            let (own_edge, contact_edge) = (
+                topo.edge(own.edge())?.clone(),
+                topo.edge(contact.edge())?.clone(),
+            );
+            let ends = [contact_edge.start(), contact_edge.end()];
+            if own_edge.start() == own_edge.end()
+                || ([own_edge.start(), own_edge.end()] != ends
+                    && [own_edge.end(), own_edge.start()] != ends)
+            {
+                continue;
+            }
+            let span = (topo.vertex(own_edge.start())?.point()
+                - topo.vertex(own_edge.end())?.point())
+            .length();
+            if !edge_lies_on(topo, &contact_edge, &own_edge, ON_EDGE * span.max(1e-2))? {
+                continue;
+            }
+            // Each edge has one other use, in a face other than this one.
+            let mut contact_uses = Vec::new();
+            let mut own_uses = 0;
+            for &other in &faces {
+                if other == face_id {
+                    continue;
+                }
+                let f = topo.face(other)?;
+                for w in std::iter::once(f.outer_wire()).chain(f.inner_wires().iter().copied()) {
+                    for oe in topo.wire(w)?.edges() {
+                        if oe.edge() == contact.edge() {
+                            contact_uses.push(w);
+                        }
+                        own_uses += usize::from(oe.edge() == own.edge());
+                    }
+                }
+            }
+            let ([round_wire], 1) = (contact_uses.as_slice(), own_uses) else {
+                continue;
+            };
+            let round_wire = *round_wire;
+            log::debug!(
+                "contact sliver {face_id:?}: {:?} lies on {:?}",
+                contact.edge(),
+                own.edge()
+            );
+            // The round runs the wall's edge the way it ran the contact.
+            let closed = topo.wire(round_wire)?.is_closed();
+            let rewritten: Vec<OrientedEdge> = topo
+                .wire(round_wire)?
+                .edges()
+                .iter()
+                .map(|&oe| {
+                    if oe.edge() == contact.edge() {
+                        let from = oe.oriented_start(&contact_edge);
+                        OrientedEdge::new(own.edge(), own_edge.start() == from)
+                    } else {
+                        oe
+                    }
+                })
+                .collect();
+            *topo.wire_mut(round_wire)? = Wire::new(rewritten, closed)?;
+            faces.remove(index);
+            continue 'slivers;
+        }
+        return Ok(faces);
+    }
+}
+
+/// Whether `edge` traces `on` within `tol`, certified rather than sampled.
+/// `on` must be a line or an arc of a circle short of a whole turn, so the
+/// distance to it is exact. Every point of `edge` is held within `tol` of
+/// `on` by a bound on `edge`'s speed along its parameter: between two
+/// samples, no point strays farther than that speed allows. `edge` runs
+/// between `on`'s ends, so the feet of its points on `on` sweep all of
+/// `on`, and every point of `on` then lies within `tol` of `edge` too. An
+/// ellipse or a B-spline `on` has no such sweep to stand on and is refused.
+fn edge_lies_on(topo: &Topology, edge: &Edge, on: &Edge, tol: f64) -> Result<bool, BlendError> {
+    let (a, b) = (
+        topo.vertex(edge.start())?.point(),
+        topo.vertex(edge.end())?.point(),
+    );
+    let (p, q) = (
+        topo.vertex(on.start())?.point(),
+        topo.vertex(on.end())?.point(),
+    );
+    let (s0, s1) = on.curve().domain_with_endpoints(p, q);
+    match on.curve() {
+        EdgeCurve::Line => {
+            if (q - p).length_squared() <= 1e-18 {
+                return Ok(false);
+            }
+        }
+        // Points within `tol` of the arc must keep off the half-plane across
+        // its gap, where the nearer end (and so the foot) jumps.
+        EdgeCurve::Circle(circle) => {
+            let gap = std::f64::consts::TAU - (s1 - s0);
+            if circle.radius() * (0.5 * gap).min(std::f64::consts::FRAC_PI_2).sin() <= tol {
+                return Ok(false);
+            }
+        }
+        EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_) => return Ok(false),
+    }
+    let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
+    let Some(speed) = speed_bound(edge.curve(), a, b) else {
+        return Ok(false);
+    };
+    // Samples close enough that every point lies within a quarter of `tol`
+    // of one.
+    let count = (2.0 * speed * (t1 - t0).abs() / tol).ceil().max(1.0);
+    if !count.is_finite() || count > 1e6 {
+        return Ok(false);
+    }
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let count = count as u32;
+    let step = (t1 - t0) / f64::from(count);
+    let mut worst: f64 = 0.0;
+    for k in 0..=count {
+        let at = edge
+            .curve()
+            .evaluate_with_endpoints(f64::from(k).mul_add(step, t0), a, b);
+        let off = match on.curve() {
+            EdgeCurve::Line => {
+                let chord = q - p;
+                let along = ((at - p).dot(chord) / chord.dot(chord)).clamp(0.0, 1.0);
+                (p + chord * along - at).length()
+            }
+            EdgeCurve::Circle(circle) => {
+                let angle = circle.project(at);
+                if (angle - s0).rem_euclid(std::f64::consts::TAU) <= s1 - s0 {
+                    (circle.evaluate(angle) - at).length()
+                } else {
+                    (p - at).length().min((q - at).length())
+                }
+            }
+            EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_) => return Ok(false),
+        };
+        worst = worst.max(off);
+    }
+    let bound = (0.5 * speed).mul_add(step.abs(), worst);
+    log::debug!("edge lies within {bound:e} of its neighbour ({worst:e} at its samples)");
+    Ok(bound <= tol)
+}
+
+/// A bound on `curve`'s speed along its parameter: a line's length (its
+/// parameter runs from 0 to 1), a circle's radius, an ellipse's semi-major
+/// axis. A B-spline needs every weight positive (`None` otherwise). Its
+/// derivative is `sum_j N_{j,p-1} p [w_j (P_j - C) - w_{j-1} (P_{j-1} - C)]
+/// / ((u_{j+p} - u_j) w)`, where the `N_{j,p-1}` sum to one, `w` is at least
+/// the least weight and `C` lies in the control points' hull, so `|P - C|`
+/// is at most their spread.
+fn speed_bound(curve: &EdgeCurve, a: Point3, b: Point3) -> Option<f64> {
+    match curve {
+        EdgeCurve::Line => Some((b - a).length()),
+        EdgeCurve::Circle(circle) => Some(circle.radius()),
+        EdgeCurve::Ellipse(ellipse) => Some(ellipse.semi_major()),
+        EdgeCurve::NurbsCurve(nurbs) => {
+            let (points, weights, knots) = (nurbs.control_points(), nurbs.weights(), nurbs.knots());
+            let degree = nurbs.degree();
+            let first = *points.first()?;
+            if degree == 0 || !weights.iter().all(|w| w.is_finite() && *w > 0.0) {
+                return None;
+            }
+            let (least, most) = weights
+                .iter()
+                .fold((f64::INFINITY, 0.0_f64), |(lo, hi), &w| {
+                    (lo.min(w), hi.max(w))
+                });
+            let spread = 2.0
+                * points
+                    .iter()
+                    .map(|&point| (point - first).length())
+                    .fold(0.0, f64::max);
+            #[allow(clippy::cast_precision_loss)]
+            let degree_f = degree as f64;
+            let mut bound: f64 = 0.0;
+            for j in 1..points.len() {
+                let span = knots.get(j + degree)? - knots.get(j)?;
+                if span <= 0.0 {
+                    continue;
+                }
+                let lift = most.mul_add(
+                    (points[j] - points[j - 1]).length(),
+                    (weights[j] - weights[j - 1]).abs() * spread,
+                );
+                bound = bound.max(degree_f * lift / (span * least));
+            }
+            bound.is_finite().then_some(bound)
+        }
+    }
+}
+
 fn face_edge_forward(topo: &Topology, face_id: FaceId, edge_id: EdgeId) -> Option<bool> {
     let face = topo.face(face_id).ok()?;
     std::iter::once(face.outer_wire())
@@ -2297,6 +2561,9 @@ struct ClosedRimInfo {
     /// The rim is one of the cap's holes (a post standing on a plate), not
     /// its whole outer wire (a disc cap).
     rim_is_hole: bool,
+    /// The wall's other rim, where the wall contact lands on it: a wall
+    /// exactly a radius high. The wall goes, and the band takes this rim.
+    far_rim: Option<EdgeId>,
 }
 
 /// The lowest height along `toward`, from `base`, of the wall boundary that
@@ -2481,16 +2748,22 @@ fn closed_rim_info(topo: &Topology, stripe: &Stripe) -> Result<Option<ClosedRimI
     // The wall contact circle must land on the wall, short of every point of
     // the boundary the rebuild keeps: a fillet wider than a plate is thick, or
     // a post whose sloped top dips below the contact, would carry it past.
+    // Landing on the wall's other rim (a wall exactly a radius high) leaves
+    // no wall: the band takes that rim.
     let rise = wall_center - plate_center;
-    if let Ok(toward) = rise.normalize()
-        && rise.length()
-            >= kept_wall_boundary_height(topo, wall_face, rim_edge, plate_center, toward)? - 1e-7
-    {
-        return Err(BlendError::PlanningFailure {
-            reason: format!(
-                "the fillet's wall contact would land past the wall bounding rim {rim_edge:?}"
-            ),
-        });
+    let mut far_rim = None;
+    if let Ok(toward) = rise.normalize() {
+        let height = kept_wall_boundary_height(topo, wall_face, rim_edge, plate_center, toward)?;
+        if rise.length() >= height - 1e-7 {
+            far_rim = landed_far_rim(topo, wall_face, rim_edge, axis, axis_origin, wall_center)?;
+            if far_rim.is_none() {
+                return Err(BlendError::PlanningFailure {
+                    reason: format!(
+                        "the fillet's wall contact would land past the wall bounding rim {rim_edge:?}"
+                    ),
+                });
+            }
+        }
     }
 
     if rim_is_hole {
@@ -2558,11 +2831,19 @@ fn closed_rim_info(topo: &Topology, stripe: &Stripe) -> Result<Option<ClosedRimI
     }
 
     // Both contact circles start where the rim's vertex is, so their
-    // vertices sit on the wall's seam.
-    let rim_point = topo.vertex(topo.edge(rim_edge)?.start())?.point();
+    // vertices sit on the wall's seam; where the wall goes, where its other
+    // rim's vertex is, which the band's seam then runs to.
+    let anchor = far_rim.unwrap_or(rim_edge);
+    let rim_point = topo.vertex(topo.edge(anchor)?.start())?.point();
     let reference = (rim_point - project_onto_axis(rim_point, axis_origin, axis)).normalize()?;
     let plate_circle = Circle3D::new_with_ref(plate_center, axis, plate_radius, reference)?;
-    let wall_circle = Circle3D::new_with_ref(wall_center, axis, wall_radius, reference)?;
+    let wall_circle = match far_rim.map(|edge| topo.edge(edge).map(|e| e.curve().clone())) {
+        Some(curve) => match curve? {
+            EdgeCurve::Circle(circle) => circle,
+            _ => return Ok(None),
+        },
+        None => Circle3D::new_with_ref(wall_center, axis, wall_radius, reference)?,
+    };
 
     Ok(Some(ClosedRimInfo {
         plane_face,
@@ -2571,7 +2852,65 @@ fn closed_rim_info(topo: &Topology, stripe: &Stripe) -> Result<Option<ClosedRimI
         plate_circle,
         wall_circle,
         rim_is_hole,
+        far_rim,
     }))
+}
+
+/// The wall's other rim, where a closed rim's wall contact lands exactly on
+/// it: one closed circle about the wall's axis through the contact's centre,
+/// of the contact's radius, the wall's wire otherwise only that rim, `rim`
+/// and the seam edges between their vertices, and no holes. `None` for any
+/// other wall.
+fn landed_far_rim(
+    topo: &Topology,
+    wall_face: FaceId,
+    rim: EdgeId,
+    axis: Vec3,
+    axis_origin: Point3,
+    contact_center: Point3,
+) -> Result<Option<EdgeId>, BlendError> {
+    // A file's digits: the wall's height and the round's radius each read
+    // to about 1e-7 of the part.
+    const ON: f64 = 1e-6;
+    let face = topo.face(wall_face)?;
+    if !face.inner_wires().is_empty() {
+        return Ok(None);
+    }
+    let FaceSurface::Cylinder(cylinder) = face.surface() else {
+        return Ok(None);
+    };
+    let tol = ON * cylinder.radius().max(1.0);
+    let rim_vertex = topo.edge(rim)?.start();
+    let mut far = None;
+    for oriented in topo.wire(face.outer_wire())?.edges() {
+        let id = oriented.edge();
+        if id == rim {
+            continue;
+        }
+        let edge = topo.edge(id)?;
+        if let EdgeCurve::Circle(circle) = edge.curve()
+            && edge.start() == edge.end()
+        {
+            let on_axis = radial_distance(circle.center(), axis_origin, axis);
+            if far.is_some_and(|f| f != id)
+                || on_axis > tol
+                || (circle.center() - contact_center).length() > tol
+                || (circle.radius() - cylinder.radius()).abs() > tol
+                || circle.normal().cross(axis).length() > ON
+            {
+                return Ok(None);
+            }
+            far = Some(id);
+            continue;
+        }
+        // A seam: a line from the rim's vertex up the wall.
+        if !matches!(edge.curve(), EdgeCurve::Line)
+            || ![edge.start(), edge.end()].contains(&rim_vertex)
+        {
+            return Ok(None);
+        }
+    }
+    Ok(far)
 }
 
 /// Assemble a full-revolution rim fillet: rebuild the disc cap bounded by the
@@ -2637,9 +2976,14 @@ fn assemble_closed_rim(
         .find(|oe| oe.edge() == rim.rim_edge)
         .is_some_and(OrientedEdge::is_forward);
 
-    // Vertices for the two closed contact circles (start == end → degenerate).
+    // Vertices for the two closed contact circles (start == end → degenerate);
+    // where the wall goes, the band's wall side is the wall's other rim, at
+    // its own vertex.
     let plate_v = topo.add_vertex(Vertex::new(rim.plate_circle.evaluate(0.0), TOL));
-    let wall_v = topo.add_vertex(Vertex::new(rim.wall_circle.evaluate(0.0), TOL));
+    let wall_v = match rim.far_rim {
+        Some(far) => topo.edge(far)?.start(),
+        None => topo.add_vertex(Vertex::new(rim.wall_circle.evaluate(0.0), TOL)),
+    };
 
     // Shared contact-circle edges are planned and materialized through the
     // same registry used by open contours.
@@ -2680,6 +3024,20 @@ fn assemble_closed_rim(
             BoundaryOwner::planned("closed-rim torus band", plate_sense),
         ],
     )?;
+    if let Some(far) = rim.far_rim {
+        return assemble_closed_rim_without_wall(
+            topo,
+            stripe,
+            rim,
+            far,
+            (plate_v, wall_v, plate_handle),
+            (band_reversed, wall_reversed),
+            &wall_oriented,
+            registry,
+            face_replacements,
+            (plane_surf, plane_reversed, cap_outer, cap_holes, rim_wire),
+        );
+    }
     let wall_handle = registry.register(
         BoundaryKey::contact(contour_id, 0, wall_side as u8),
         PlannedVertex::new(wall_v),
@@ -2806,6 +3164,82 @@ fn assemble_closed_rim(
     registry.install_pcurves(topo, plate_handle)?;
     registry.install_pcurves(topo, wall_handle)?;
 
+    Ok(band_face_id)
+}
+
+/// [`assemble_closed_rim`] where the wall contact lands on the wall's other
+/// rim: the cap is rebuilt as there, the wall goes (the caller leaves it out
+/// of the result), and the band runs from the plate contact to that rim,
+/// using it as the wall did.
+#[allow(clippy::too_many_arguments)]
+fn assemble_closed_rim_without_wall(
+    topo: &mut Topology,
+    stripe: &Stripe,
+    rim: &ClosedRimInfo,
+    far: EdgeId,
+    (plate_v, wall_v, plate_handle): (VertexId, VertexId, crate::boundary_registry::BoundaryHandle),
+    (band_reversed, wall_reversed): (bool, bool),
+    wall_oriented: &[OrientedEdge],
+    registry: &mut BoundaryRegistry,
+    face_replacements: &mut std::collections::HashMap<FaceId, FaceId>,
+    (plane_surf, plane_reversed, cap_outer, cap_holes, rim_wire): (
+        FaceSurface,
+        bool,
+        WireId,
+        Vec<WireId>,
+        WireId,
+    ),
+) -> Result<FaceId, BlendError> {
+    // The band takes the rim as the wall did, its sense read against its own
+    // surface: a wire runs about its surface's normal, which a reversed face
+    // turns.
+    let far_forward = wall_oriented
+        .iter()
+        .find(|oe| oe.edge() == far)
+        .map(|oe| oe.is_forward() != (wall_reversed != band_reversed))
+        .ok_or(BlendError::TrimmingFailure {
+            face: rim.wall_face,
+        })?;
+    let seam_curve = crate::builder_utils::seam_curve(
+        &stripe.surface,
+        &stripe.sections,
+        topo.vertex(plate_v)?.point(),
+        topo.vertex(wall_v)?.point(),
+    );
+    let seam_edge = topo.add_edge(Edge::new(plate_v, wall_v, seam_curve));
+    let cap_boundary = registry.oriented_edge(topo, plate_handle, 0)?;
+    let cap_wire_id = topo.add_wire(Wire::new(vec![cap_boundary], true)?);
+    let (cap_outer, cap_holes) = if rim.rim_is_hole {
+        let holes = cap_holes
+            .iter()
+            .map(|&w| if w == rim_wire { cap_wire_id } else { w })
+            .collect();
+        (cap_outer, holes)
+    } else {
+        (cap_wire_id, cap_holes)
+    };
+    let mut cap_face = Face::new(cap_outer, cap_holes, plane_surf);
+    cap_face.set_reversed(plane_reversed);
+    let cap_face_id = topo.add_face(cap_face);
+    registry.set_owner_face(plate_handle, 0, cap_face_id)?;
+    face_replacements.insert(rim.plane_face, cap_face_id);
+
+    let plate_boundary = registry.oriented_edge(topo, plate_handle, 1)?;
+    let band_wire = Wire::new(
+        vec![
+            plate_boundary,
+            OrientedEdge::new(seam_edge, true),
+            OrientedEdge::new(far, far_forward),
+            OrientedEdge::new(seam_edge, false),
+        ],
+        true,
+    )?;
+    let band_wire_id = topo.add_wire(band_wire);
+    let mut band_face = Face::new(band_wire_id, Vec::new(), stripe.surface.clone());
+    band_face.set_reversed(band_reversed);
+    let band_face_id = topo.add_face(band_face);
+    registry.set_owner_face(plate_handle, 1, band_face_id)?;
+    registry.install_pcurves(topo, plate_handle)?;
     Ok(band_face_id)
 }
 
@@ -4187,10 +4621,13 @@ fn compute_stripe_for_spine(
     if spine.is_closed() {
         check_contacts_on_faces(topo, face1, face2, &walk_result.sections)?;
     }
-    let blend_surface = approximate_blend_surface(&walk_result.sections)?;
-    // The band's sides are its own boundary rows: a polyline through the
-    // sections' contact points leaves the band wherever they do not lie on a
-    // line, since the band takes them as control points.
+    // The band passes through its walked sections, so its boundary rows pass
+    // through the walked contacts. Where the interpolation is refused, the
+    // band takes the sections as its control points.
+    let blend_surface = interpolate_blend_surface(&walk_result.sections)
+        .or_else(|_| approximate_blend_surface(&walk_result.sections))?;
+    // The band's sides are its own boundary rows: between two sections, a
+    // polyline through the contacts leaves the band.
     let contact1 = band_side(&blend_surface, 0)?;
     let contact2 = band_side(&blend_surface, blend_surface.control_points().len() - 1)?;
     let blend_face_surface = brepkit_topology::face::FaceSurface::Nurbs(blend_surface);
@@ -6019,5 +6456,155 @@ mod tests {
         assert!(result.failed.is_empty());
         assert!(!result.is_partial);
         assert_shell_edges_are_closed(&topo, result.solid);
+    }
+
+    /// Two arcs of one circle join the same two vertices: each lies on
+    /// itself, and neither lies on the other. A rational B-spline traced
+    /// along the shorter arc lies on it and not on the longer. An elliptical
+    /// wall edge is refused.
+    #[test]
+    fn an_arc_does_not_lie_on_the_rest_of_its_curve() {
+        let normal = Vec3::new(0.0, 0.0, 1.0);
+        let circle = Circle3D::new_with_ref(
+            Point3::new(0.0, 0.0, 0.0),
+            normal,
+            2.0,
+            Vec3::new(1.0, 0.0, 0.0),
+        )
+        .unwrap();
+        let (from, to) = (0.3_f64, 2.0_f64);
+        let half = 0.5 * (to - from);
+        let middle = from + half;
+        let traced = brepkit_math::nurbs::curve::NurbsCurve::new(
+            2,
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            vec![
+                circle.evaluate(from),
+                Point3::new(
+                    2.0 * middle.cos() / half.cos(),
+                    2.0 * middle.sin() / half.cos(),
+                    0.0,
+                ),
+                circle.evaluate(to),
+            ],
+            vec![1.0, half.cos(), 1.0],
+        )
+        .unwrap();
+        let mut topo = Topology::new();
+        let a = topo.add_vertex(Vertex::new(circle.evaluate(from), 1e-7));
+        let b = topo.add_vertex(Vertex::new(circle.evaluate(to), 1e-7));
+        let short = Edge::new(a, b, EdgeCurve::Circle(circle.clone()));
+        let long = Edge::new(b, a, EdgeCurve::Circle(circle));
+        let spline = Edge::new(a, b, EdgeCurve::NurbsCurve(traced));
+        let tol = 1e-4;
+        assert!(edge_lies_on(&topo, &short, &short, tol).unwrap());
+        assert!(edge_lies_on(&topo, &long, &long, tol).unwrap());
+        assert!(!edge_lies_on(&topo, &short, &long, tol).unwrap());
+        assert!(!edge_lies_on(&topo, &long, &short, tol).unwrap());
+        assert!(edge_lies_on(&topo, &spline, &short, tol).unwrap());
+        assert!(!edge_lies_on(&topo, &spline, &long, tol).unwrap());
+
+        let ellipse =
+            brepkit_math::curves::Ellipse3D::new(Point3::new(0.0, 0.0, 0.0), normal, 3.0, 2.0)
+                .unwrap();
+        let mut topo = Topology::new();
+        let a = topo.add_vertex(Vertex::new(ellipse.evaluate(from), 1e-7));
+        let b = topo.add_vertex(Vertex::new(ellipse.evaluate(to), 1e-7));
+        let short = Edge::new(a, b, EdgeCurve::Ellipse(ellipse.clone()));
+        let long = Edge::new(b, a, EdgeCurve::Ellipse(ellipse));
+        for (edge, on) in [(&short, &short), (&long, &long), (&short, &long)] {
+            assert!(!edge_lies_on(&topo, edge, on, tol).unwrap());
+        }
+    }
+
+    /// A degree-1 B-spline from `(0, 0)` to `(1, 0)` with knots at 0.52,
+    /// 0.53 and 0.54, its middle control point `bump` off the x axis.
+    fn bumped_polyline(bump: f64) -> brepkit_math::nurbs::curve::NurbsCurve {
+        let at = |x: f64, y: f64| Point3::new(x, y, 0.0);
+        brepkit_math::nurbs::curve::NurbsCurve::new(
+            1,
+            vec![0.0, 0.0, 0.52, 0.53, 0.54, 1.0, 1.0],
+            vec![
+                at(0.0, 0.0),
+                at(0.52, 0.0),
+                at(0.53, bump),
+                at(0.54, 0.0),
+                at(1.0, 0.0),
+            ],
+            vec![1.0; 5],
+        )
+        .unwrap()
+    }
+
+    /// A B-spline contact on its line at every sixteenth of its domain,
+    /// with a bump 0.75 high between 0.52 and 0.54: it does not lie on the
+    /// line. The same contact without the bump does.
+    #[test]
+    fn a_contact_bulging_between_samples_does_not_lie_on_its_line() {
+        let mut topo = Topology::new();
+        let va = topo.add_vertex(Vertex::new(Point3::new(0.0, 0.0, 0.0), 1e-7));
+        let vb = topo.add_vertex(Vertex::new(Point3::new(1.0, 0.0, 0.0), 1e-7));
+        let line = Edge::new(va, vb, EdgeCurve::Line);
+        let flat = Edge::new(va, vb, EdgeCurve::NurbsCurve(bumped_polyline(0.0)));
+        let bulging = Edge::new(va, vb, EdgeCurve::NurbsCurve(bumped_polyline(0.75)));
+        let tol = 1e-3;
+        assert!(edge_lies_on(&topo, &flat, &line, tol).unwrap());
+        assert!(!edge_lies_on(&topo, &bulging, &line, tol).unwrap());
+    }
+
+    /// A B-spline wall edge with a notch 0.75 deep between 0.52 and 0.54 of
+    /// its domain, and a straight contact between its ends: the edge lies
+    /// under the contact at every sixteenth, but the contact does not lie
+    /// on it.
+    #[test]
+    fn a_contact_does_not_lie_on_a_notched_spline() {
+        let mut topo = Topology::new();
+        let va = topo.add_vertex(Vertex::new(Point3::new(0.0, 0.0, 0.0), 1e-7));
+        let vb = topo.add_vertex(Vertex::new(Point3::new(1.0, 0.0, 0.0), 1e-7));
+        let notched = Edge::new(va, vb, EdgeCurve::NurbsCurve(bumped_polyline(-0.75)));
+        let line = Edge::new(va, vb, EdgeCurve::Line);
+        assert!(!edge_lies_on(&topo, &line, &notched, 1e-3).unwrap());
+    }
+
+    /// A closed B-spline square, an edge trimmed to one side of it (stored
+    /// either way along the curve), and a contact along the other three
+    /// sides between the same two vertices: the contact does not lie on the
+    /// side. A B-spline wall edge is refused, so neither does the side
+    /// itself.
+    #[test]
+    fn a_contact_does_not_lie_on_the_rest_of_a_closed_spline() {
+        let corner = |x: f64, y: f64| Point3::new(x, y, 0.0);
+        let [a, b, c, d] = [
+            corner(0.0, 0.0),
+            corner(1.0, 0.0),
+            corner(1.0, 1.0),
+            corner(0.0, 1.0),
+        ];
+        let square = brepkit_math::nurbs::curve::NurbsCurve::new(
+            1,
+            vec![0.0, 0.0, 1.0, 2.0, 3.0, 4.0, 4.0],
+            vec![a, b, c, d, a],
+            vec![1.0; 5],
+        )
+        .unwrap();
+        let around = brepkit_math::nurbs::curve::NurbsCurve::new(
+            1,
+            vec![0.0, 0.0, 1.0, 2.0, 3.0, 3.0],
+            vec![c, d, a, b],
+            vec![1.0; 4],
+        )
+        .unwrap();
+        let mut topo = Topology::new();
+        let vb = topo.add_vertex(Vertex::new(b, 1e-7));
+        let vc = topo.add_vertex(Vertex::new(c, 1e-7));
+        let side = Edge::new(vb, vc, EdgeCurve::NurbsCurve(square.clone()));
+        let side_back = Edge::new(vc, vb, EdgeCurve::NurbsCurve(square));
+        let contact = Edge::new(vc, vb, EdgeCurve::NurbsCurve(around));
+        let tol = 1e-6;
+        for on in [&side, &side_back] {
+            for edge in [&contact, &side, &side_back] {
+                assert!(!edge_lies_on(&topo, edge, on, tol).unwrap());
+            }
+        }
     }
 }

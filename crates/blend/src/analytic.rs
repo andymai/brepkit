@@ -807,14 +807,6 @@ pub fn plane_cylinder_fillet(
     } else {
         n_p_inward
     };
-    // The wall contact must land on the wall, short of its far boundary.
-    if radius >= wall_reach(topo, face_cyl, p_axis_on_plane, z_axis_dir)? - tol_lin {
-        return Ok(None);
-    }
-    let torus_center = p_axis_on_plane + z_axis_dir * radius;
-    let major_radius = if inward { r_c - radius } else { r_c + radius };
-    let minor_radius = radius;
-
     // 6) Spine must span an arc to be useful. `Spine::from_single_edge`
     //    measures CHORD length, which is zero for a closed-circle spine
     //    (start vertex == end vertex), so we detect closure by walking the
@@ -826,6 +818,18 @@ pub fn plane_cylinder_fillet(
     } else {
         false
     };
+
+    // The wall contact must land on the wall, short of its far boundary; a
+    // closed rim's may land on the boundary itself (a wall exactly a radius
+    // high, which the rim's rebuild then drops), to a file's digits.
+    let reach = wall_reach(topo, face_cyl, p_axis_on_plane, z_axis_dir)?;
+    let on_far_rim = is_closed_spine && (radius - reach).abs() <= 1e-6 * r_c.max(1.0);
+    if radius >= reach - tol_lin && !on_far_rim {
+        return Ok(None);
+    }
+    let torus_center = p_axis_on_plane + z_axis_dir * radius;
+    let major_radius = if inward { r_c - radius } else { r_c + radius };
+    let minor_radius = radius;
     let spine_len = spine.length();
     if !is_closed_spine && spine_len < tol_lin {
         return Ok(None);

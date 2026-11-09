@@ -5,8 +5,10 @@
 //! shared-face contact and the shared face's remnant, so the corner closes on
 //! the two stripe faces alone, and each runout cap has to notch the blend's
 //! cross-section arc out of the right two-edge corner path (at the limit both
-//! of a cap's corner paths span the arc's endpoints). Each stripe is then the
-//! trimmed cylinder patch bounded by one NURBS side contact, the miter's exact
+//! of a cap's corner paths span the arc's endpoints). Each stripe's side
+//! contact lands on the cube's bottom edge, which leaves the side face no
+//! area: it goes, and the stripe takes that edge. Each stripe is then the
+//! trimmed cylinder patch bounded by the bottom edge, the miter's exact
 //! `Ellipse3D` crease and one terminal circle arc; its area is exactly `S^2`
 //! (untrimmed quarter cylinder `(pi/2)S^2` less the crease-plane trim
 //! `S^2(pi/2 - 1)`), and it must mesh and integrate as that patch.
@@ -308,9 +310,10 @@ fn the_limit_mesh_volume_agrees_with_its_analytic_volume() {
     }
 }
 
-/// The stripe patch is bounded by the collapsed 3-edge wire (one NURBS side
-/// contact, the miter's exact ellipse crease, one terminal circle arc) and
-/// one crease edge is shared by exactly the two stripe cylinders.
+/// The stripe patch is bounded by the collapsed 3-edge wire (the cube's
+/// bottom edge its side contact lands on, the miter's exact ellipse crease,
+/// one terminal circle arc) and one crease edge is shared by exactly the two
+/// stripe cylinders.
 #[test]
 fn the_limit_stripe_wire_is_the_collapsed_three_edge_loop() {
     let mut topo = Topology::new();
@@ -333,8 +336,14 @@ fn the_limit_stripe_wire_is_the_collapsed_three_edge_loop() {
         // at the limit and is not part of the patch's boundary.
         assert_eq!(wire.edges().len(), 3, "stripe {face:?} wire {wire:?}");
         assert!(
-            curves.iter().any(|c| matches!(c, EdgeCurve::NurbsCurve(_))),
-            "stripe {face:?} must carry its NURBS side contact"
+            wire.edges().iter().any(|oriented| {
+                let edge = topo.edge(oriented.edge()).unwrap();
+                matches!(edge.curve(), EdgeCurve::Line)
+                    && [edge.start(), edge.end()]
+                        .iter()
+                        .all(|&v| topo.vertex(v).unwrap().point().z().abs() < 1e-9)
+            }),
+            "stripe {face:?} must run along the cube's bottom edge"
         );
         assert!(
             curves.iter().any(|c| matches!(c, EdgeCurve::Circle(_))),
