@@ -1,5 +1,21 @@
 # Changelog
 
+## [4.10.0](https://github.com/andymai/brepkit/compare/v4.9.0...v4.10.0) (2026-11-09)
+
+
+### Features
+
+* **operations:** bridge edge chains with a blend surface, and match and fair surfaces ([#2334](https://github.com/andymai/brepkit/issues/2334)) ([88ac749](https://github.com/andymai/brepkit/commit/88ac749bc7a75c708ac965701eab0f0cd6e07c1f))
+* **operations:** set a fillet's corner back along its rounds ([#2329](https://github.com/andymai/brepkit/issues/2329)) ([be8b891](https://github.com/andymai/brepkit/commit/be8b891a4cbbbf92d48b08961185ae854f7d64ff))
+
+
+### Bug Fixes
+
+* **blend:** land five contributor fillet PRs and refuse a curved cap's notch that crosses its boundary ([#2356](https://github.com/andymai/brepkit/issues/2356)) ([4d60291](https://github.com/andymai/brepkit/commit/4d60291b52b54bdbb4aa3375b74c2e70d44500d6))
+* **operations:** mesh a NURBS face along its crease ([#2332](https://github.com/andymai/brepkit/issues/2332)) ([77f24a6](https://github.com/andymai/brepkit/commit/77f24a6579d5e050f33185571647e0c25648e272))
+* **operations:** read touching pieces whose gap narrows to an edge ([#2338](https://github.com/andymai/brepkit/issues/2338)) ([47a2c6e](https://github.com/andymai/brepkit/commit/47a2c6e8ce1dbf63e12f14c18ad6578786a08e87))
+* **tessellate:** walk every pointed cone's wall from its seam ([#2350](https://github.com/andymai/brepkit/issues/2350)) ([a244d6a](https://github.com/andymai/brepkit/commit/a244d6a44248ece1bbce2cced24053539203d69f))
+
 ## [4.9.0](https://github.com/andymai/brepkit/compare/v4.8.0...v4.9.0) (2026-11-07)
 
 
