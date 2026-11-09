@@ -1,0 +1,29 @@
+crates/blend/src/fillet_builder.rs
+  s_f8c761b717b79b::t_0b4979dbe223cc 4459-4460
+crates/operations/tests/fillet_concave_corner_ends.rs
+  s_f8c761b717b79b::t_059a7924eca9be 10-12
+crates/operations/tests/fillet_curved_end_caps.rs
+  s_f8c761b717b79b::t_55cf8ebc6611b5 7-10,13-14
+crates/operations/tests/fillet_narrow_ridge.rs
+  s_f8c761b717b79b::t_02db98ba2e0add 6-8
+crates/operations/tests/fillet_reflex_corner.rs
+  s_f8c761b717b79b::t_e75bb3a02f5b85 10-11
+crates/operations/tests/fillet_round_along_step_edge.rs
+  s_f8c761b717b79b::t_8d67c09b1247d0 4-6
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "8fc1fb6b089128a2a8ca31c785d05118a4d10a50",
+  "prompts": {},
+  "sessions": {
+    "s_f8c761b717b79b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0161eb79-bcdb-4e67-ad8a-f056fadf98c2",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
