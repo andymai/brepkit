@@ -1,0 +1,19 @@
+crates/blend/src/trimmer.rs
+  s_f8c761b717b79b::t_4104b4175a9e20 2479-2480,2492-2503,4785-4845
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6335f5346d2cf6179f4aac48491ab990ad752b53",
+  "prompts": {},
+  "sessions": {
+    "s_f8c761b717b79b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0161eb79-bcdb-4e67-ad8a-f056fadf98c2",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
