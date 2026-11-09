@@ -2476,6 +2476,8 @@ fn same_side_on_wall(
     }
     let cross = |o: Flat, a: Flat, b: Flat| (a.0 - o.0) * (b.1 - o.1) - (a.1 - o.1) * (b.0 - o.0);
     let (from, to) = ((pu, pv), (qu, qv));
+    let run = (to.0 - from.0, to.1 - from.1);
+    let length2 = run.0.mul_add(run.0, run.1 * run.1);
     // The path's ends and the ring's first point are read within a turn of
     // each other and the ring spans at most four turns, so six turns either
     // way reach every copy the path can cross.
@@ -2487,9 +2489,18 @@ fn same_side_on_wall(
                 (pair[0].0 + shift, pair[0].1),
                 (pair[1].0 + shift, pair[1].1),
             );
-            if cross(from, to, a) * cross(from, to, b) < 0.0
-                && cross(a, b, from) * cross(a, b, to) < 0.0
-            {
+            // Half-open: a sample on the path's line counts on its
+            // non-positive side, so the curve crossing the path at a sample
+            // crosses once, touching it there crosses twice or not at all,
+            // and a stretch along the path counts as one point.
+            let (side_a, side_b) = (cross(from, to, a), cross(from, to, b));
+            if (side_a > 0.0) == (side_b > 0.0) {
+                continue;
+            }
+            let f = side_a / (side_a - side_b);
+            let (x, y) = ((b.0 - a.0).mul_add(f, a.0), (b.1 - a.1).mul_add(f, a.1));
+            let t = (x - from.0).mul_add(run.0, (y - from.1) * run.1) / length2;
+            if (0.0..=1.0).contains(&t) {
                 crossings += 1;
             }
         }
@@ -4770,5 +4781,66 @@ mod tests {
         // Non-parallel but non-overlapping segments.
         let t = segment_intersect_2d((0.0, 0.0), (1.0, 0.0), (2.0, -1.0), (2.0, 1.0));
         assert!(t.is_none());
+    }
+
+    /// A unit cylinder wall about `z`, and the points of it at each `(u, v)`
+    /// of `samples`.
+    fn wall_with(samples: &[(f64, f64)]) -> (FaceSurface, Vec<Point3>) {
+        use brepkit_math::surfaces::CylindricalSurface;
+        let wall =
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0)
+                .unwrap();
+        let points = samples.iter().map(|&(u, v)| wall.evaluate(u, v)).collect();
+        (FaceSurface::Cylinder(wall), points)
+    }
+
+    /// The side of a contact round a wall at `v = 5`, sampled from `u = 0`,
+    /// read along a path straight through a sample: on the wall's seam
+    /// (its first and last sample) and inside the ring.
+    #[test]
+    fn wall_side_reads_a_path_through_a_sample() {
+        let ring: Vec<(f64, f64)> = (0..64)
+            .map(|k| (std::f64::consts::TAU * f64::from(k) / 64.0, 5.0))
+            .collect();
+        let (wall, contact) = wall_with(&ring);
+        let at = |u: f64, v: f64| wall.evaluate(u, v).unwrap();
+        let side = |p: Point3, q: Point3| same_side_on_wall(&wall, &contact, p, q);
+        for u in [0.0, std::f64::consts::TAU * 5.0 / 64.0] {
+            assert_eq!(side(at(u, 3.0), at(u, 7.0)), Some(false), "u = {u}");
+            assert_eq!(side(at(u, 7.0), at(u, 3.0)), Some(false), "u = {u}");
+            assert_eq!(side(at(u, 3.0), at(u, 4.0)), Some(true), "u = {u}");
+            assert_eq!(side(at(u, 7.0), at(u, 6.0)), Some(true), "u = {u}");
+        }
+    }
+
+    /// A contact touching a path at one sample leaves both its ends on one
+    /// side, whichever way the path runs; a contact running a stretch along
+    /// the path, from one side of it to the other, crosses it once.
+    #[test]
+    fn wall_side_reads_a_touch_and_a_run_along_the_path() {
+        let tau = std::f64::consts::TAU;
+        // `v = 5 + cos u / 2`, peaking at the sample `u = 0`.
+        let wave: Vec<(f64, f64)> = (0..64)
+            .map(|k| {
+                let u = tau * f64::from(k) / 64.0;
+                (u, 0.5f64.mul_add(u.cos(), 5.0))
+            })
+            .collect();
+        let (wall, contact) = wall_with(&wave);
+        let at = |u: f64, v: f64| wall.evaluate(u, v).unwrap();
+        let side = |p: Point3, q: Point3| same_side_on_wall(&wall, &contact, p, q);
+        assert_eq!(side(at(-0.3, 5.5), at(0.3, 5.5)), Some(true));
+        assert_eq!(side(at(0.3, 5.5), at(-0.3, 5.5)), Some(true));
+        assert_eq!(side(at(-0.3, 5.5), at(0.3, 4.0)), Some(false));
+
+        // Round the wall at `v = 5.2`, then down the seam to `v = 5`.
+        let mut step: Vec<(f64, f64)> = vec![(0.0, 5.0)];
+        step.extend((0..64).map(|k| (tau * f64::from(k) / 64.0, 5.2)));
+        let (wall, contact) = wall_with(&step);
+        let at = |u: f64, v: f64| wall.evaluate(u, v).unwrap();
+        let side = |p: Point3, q: Point3| same_side_on_wall(&wall, &contact, p, q);
+        assert_eq!(side(at(0.0, 3.0), at(0.0, 7.0)), Some(false));
+        assert_eq!(side(at(0.0, 7.0), at(0.0, 3.0)), Some(false));
+        assert_eq!(side(at(0.0, 3.0), at(0.0, 4.0)), Some(true));
     }
 }
