@@ -1483,6 +1483,61 @@ fn a_spline_side_bowed_by_a_hair_keeps_its_curve() {
     }
 }
 
+/// A square whose first side is a cubic with knots at 0.01, 0.02, 0.03 and 0.04,
+/// its fourth control point raised 0.1 off the square's plane: the side leaves
+/// the plane by 0.0667 near u = 0.02, and lies in it at every sixteenth of its
+/// parameter. Along rails no plane caps it, and a normal end finds it not
+/// planar.
+#[test]
+fn a_profile_side_leaving_its_plane_between_samples_is_refused() {
+    let (half, h): (f64, f64) = (6.0, 10.0);
+    let mut knots = vec![0.0; 4];
+    knots.extend([0.01, 0.02, 0.03, 0.04]);
+    knots.extend([1.0; 4]);
+    for (_, pose) in poses() {
+        let mut topo = Topology::new();
+        let points: Vec<Point3> = (0..8)
+            .map(|i| {
+                let along = knots[i + 1..=i + 3].iter().sum::<f64>() / 3.0;
+                let lift = if i == 3 { 0.1 } else { 0.0 };
+                pose.mul_point(p((2.0 * half).mul_add(along, -half), -half, lift))
+            })
+            .collect();
+        let side = NurbsCurve::new(3, knots.clone(), points, vec![1.0; 8]).unwrap();
+        let corners = CORNERS.map(|(x, y)| p(x * half, y * half, 0.0));
+        let verts = corners.map(|c| topo.add_vertex(Vertex::new(pose.mul_point(c), TOL)));
+        let mut edges = vec![OrientedEdge::new(
+            topo.add_edge(Edge::new(verts[0], verts[1], EdgeCurve::NurbsCurve(side))),
+            true,
+        )];
+        for i in 1..4 {
+            let edge = topo.add_edge(Edge::new(verts[i], verts[(i + 1) % 4], EdgeCurve::Line));
+            edges.push(OrientedEdge::new(edge, true));
+        }
+        let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+        let normal = outward_of(pose);
+        let d = normal.dot(pose.mul_point(p(0.0, 0.0, 0.0)) - p(0.0, 0.0, 0.0));
+        let first = topo.add_face(Face::new(wire, vec![], FaceSurface::Plane { normal, d }));
+        let last = square(&mut topo, pose, half, h);
+        let railed = LoftOptions {
+            rails: straight_rails(&mut topo, pose, half, half, h),
+            ..LoftOptions::default()
+        };
+        assert_refused(
+            loft_with_options(&mut topo, &[first, last], &railed),
+            "leave the plane of its face",
+        );
+        let normal_end = LoftOptions {
+            start: LoftEnd::Normal { weight: 1.0 },
+            ..LoftOptions::default()
+        };
+        assert_refused(
+            loft_with_options(&mut topo, &[first, last], &normal_end),
+            "needs a planar profile",
+        );
+    }
+}
+
 /// A square side that is one degree-1 NURBS with a kink in the middle: the sides
 /// end on the kink, so no crease lies inside a face for the mesh to chase.
 #[test]

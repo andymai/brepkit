@@ -190,7 +190,8 @@ impl LoftOptions {
 /// through the profiles out of order; rails outnumber a profile's vertices,
 /// share a vertex, or come round the profiles in different orders; a rail
 /// leaves a conditioned end more than [`RAIL_CONDITION_ANGLE`] off the
-/// condition; a weight is zero or not finite; a `normal` profile is not planar;
+/// condition; a weight is zero or not finite; a profile's face is planar but its
+/// edges leave its plane, or a `normal` profile is not planar;
 /// a `tangent` profile stands off its face or runs past its boundary by more
 /// than [`TANGENT_FACE_TOLERANCE`], runs beside the boundary too near to tell,
 /// or a corner of it doubles back; the profiles do
@@ -326,6 +327,8 @@ fn network_loft(
                 .collect::<Vec<_>>(),
         },
     )?;
+    let first_cap = cap_surface(topo, &rings[0], &spans[0], profiles[0], true)?;
+    let last_cap = cap_surface(topo, &rings[last], &spans[last], profiles[last], false)?;
 
     // The rails' deviations from the skin, in the space that holds them both.
     let mut spaces: Vec<(usize, &[f64])> = vec![(skin.degree, skin.knots.as_slice())];
@@ -455,7 +458,7 @@ fn network_loft(
         band_rails.push(edges);
     }
 
-    let first_cap = cap_face(topo, &level_edges[0], &rings[0], profiles[0], true)?;
+    let first_cap = cap_face(topo, &level_edges[0], first_cap, true)?;
     let mut sides = Vec::with_capacity(n * bands.len());
     for (level, surfaces) in band_surfaces.into_iter().enumerate() {
         for (i, surface) in surfaces.into_iter().enumerate() {
@@ -472,13 +475,7 @@ fn network_loft(
             sides.push(topo.add_face(Face::new(wire, vec![], surface)));
         }
     }
-    let last_cap = cap_face(
-        topo,
-        &level_edges[bands.len()],
-        &rings[last],
-        profiles[last],
-        false,
-    )?;
+    let last_cap = cap_face(topo, &level_edges[bands.len()], last_cap, false)?;
 
     let mut faces = Vec::with_capacity(sides.len() + 2);
     faces.push(first_cap);
@@ -1986,11 +1983,7 @@ fn end_field(
             let normal = crate::winding::newell_normal(&samples)
                 .normalize()
                 .map_err(|_| refuse("a profile has no area"))?;
-            let tol = Tolerance::new().linear;
-            if samples
-                .iter()
-                .any(|&p| (p - samples[0]).dot(normal).abs() > tol)
-            {
+            if !in_plane(request.spans, normal, samples[0], Tolerance::new().linear) {
                 return Err(refuse("a normal end condition needs a planar profile"));
             }
             let own = profile_outward(topo, request.profile, normal)?;
@@ -3059,38 +3052,65 @@ fn row_curve(row: &[[f64; 3]], degree: usize, knots: &[f64]) -> Result<EdgeCurve
     )?))
 }
 
-/// One end's cap: its plane when the ring lies in one, and otherwise the
+/// Whether every point of `spans` lies within `tol` of the plane through `on`
+/// square to the unit `normal`: each curve's control points do, and a curve
+/// whose weights are all positive lies in their hull. Samples of a curve can all
+/// lie in a plane that a knot span between them leaves.
+fn in_plane(spans: &[NurbsCurve], normal: Vec3, on: Point3, tol: f64) -> bool {
+    spans.iter().all(|span| {
+        span.weights().iter().all(|&w| w > 0.0)
+            && span
+                .control_points()
+                .iter()
+                .all(|&c| (c - on).dot(normal).abs() <= tol)
+    })
+}
+
+/// The surface of one end's cap, and whether the cap faces against it: a plane
+/// when the ring's curves `spans` are shown to lie in one, and otherwise the
 /// profile's own surface, which the ring bounds.
-fn cap_face(
-    topo: &mut Topology,
-    edges: &[EdgeId],
+///
+/// # Errors
+///
+/// Returns [`OperationsError::InvalidInput`] if the profile's face is planar but
+/// its edges are not shown to lie in a plane, which no cap could then hold.
+fn cap_surface(
+    topo: &Topology,
     ring: &[ProfileEdgeGeom],
+    spans: &[NurbsCurve],
     profile: FaceId,
     start: bool,
-) -> Result<FaceId, OperationsError> {
+) -> Result<(bool, FaceSurface), OperationsError> {
     let samples = ring_samples(ring);
     let normal = crate::winding::newell_normal(&samples).normalize()?;
     let outward = if start { -normal } else { normal };
-    let tol = Tolerance::new().linear;
-    let flat = samples
-        .iter()
-        .all(|&p| (p - samples[0]).dot(normal).abs() <= tol);
-    let surface = topo.face(profile)?.surface().clone();
-    let (reversed, surface) = if flat || surface.is_planar() {
-        (
+    if in_plane(spans, normal, samples[0], Tolerance::new().linear) {
+        return Ok((
             false,
             FaceSurface::Plane {
                 normal: outward,
                 d: dot_normal_point(outward, samples[0]),
             },
-        )
-    } else {
-        let centre = centre_of(&samples);
-        let (u, v) = surface
-            .project_point(centre)
-            .ok_or_else(|| refuse("a profile's boundary does not project onto its surface"))?;
-        (surface.normal(u, v).dot(outward) < 0.0, surface)
-    };
+        ));
+    }
+    let surface = topo.face(profile)?.surface().clone();
+    if surface.is_planar() {
+        return Err(refuse("a profile's edges leave the plane of its face"));
+    }
+    let centre = centre_of(&samples);
+    let (u, v) = surface
+        .project_point(centre)
+        .ok_or_else(|| refuse("a profile's boundary does not project onto its surface"))?;
+    Ok((surface.normal(u, v).dot(outward) < 0.0, surface))
+}
+
+/// One end's cap on its ring of `edges`, on the surface [`cap_surface`] chose.
+fn cap_face(
+    topo: &mut Topology,
+    edges: &[EdgeId],
+    (reversed, surface): (bool, FaceSurface),
+    start: bool,
+) -> Result<FaceId, OperationsError> {
     let runs: Vec<OrientedEdge> = if start == reversed {
         edges.iter().map(|&e| OrientedEdge::new(e, true)).collect()
     } else {
