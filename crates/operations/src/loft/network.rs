@@ -2460,15 +2460,30 @@ fn flat_side(net: &[Vec<Point3>]) -> Option<FaceSurface> {
         })
 }
 
-/// Whether two segments of `line` that are not neighbours meet.
+/// Whether two segments of `line` that are not neighbours meet: come within the
+/// linear tolerance of each other, and within half the length of line between
+/// them, which two pieces of a straight line stay apart by however short it is.
 fn line_meets_itself(line: &[Point3], closed: bool) -> bool {
+    let tol = Tolerance::new().linear;
     let count = line.len() - usize::from(!closed);
     let at = |k: usize| line[k % line.len()];
-    let length: f64 = (0..count).map(|k| (at(k + 1) - at(k)).length()).sum();
+    let mut run = vec![0.0; count + 1];
+    for k in 0..count {
+        run[k + 1] = run[k] + (at(k + 1) - at(k)).length();
+    }
+    let between = |a: usize, b: usize| {
+        let ahead = run[b] - run[a + 1];
+        if closed {
+            ahead.min(run[count] - run[b + 1] + run[a])
+        } else {
+            ahead
+        }
+    };
     (0..count).any(|a| {
         (a + 2..count).any(|b| {
             !(closed && a == 0 && b == count - 1)
-                && segment_segment_distance(at(a), at(a + 1), at(b), at(b + 1)).0 <= 1e-6 * length
+                && segment_segment_distance(at(a), at(a + 1), at(b), at(b + 1)).0
+                    <= tol.min(0.5 * between(a, b))
         })
     })
 }

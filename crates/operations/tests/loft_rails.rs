@@ -1150,6 +1150,31 @@ fn rails_that_kink_sideways_and_back_are_a_sheared_prism() {
     }
 }
 
+/// A prism 1000 long and 0.001 wide along four straight rails: its long sides
+/// lie closer together than a millionth of the section's perimeter, and they do
+/// not meet.
+#[test]
+fn a_thin_prism_along_straight_rails_does_not_meet_itself() {
+    let (long, thin, h) = (500.0, 0.0005, 10.0);
+    let want = 4.0 * long * thin * h;
+    for (name, pose) in poses() {
+        let mut topo = Topology::new();
+        let at = |(x, y): (f64, f64), z: f64| p(x * long, y * thin, z);
+        let first = polygon(&mut topo, pose, &CORNERS.map(|c| at(c, 0.0)));
+        let last = polygon(&mut topo, pose, &CORNERS.map(|c| at(c, h)));
+        let rails = CORNERS
+            .map(|c| LoftRail::Edge(line_edge(&mut topo, pose, at(c, 0.0), at(c, h))))
+            .to_vec();
+        let options = LoftOptions {
+            rails,
+            ..LoftOptions::default()
+        };
+        let solid = loft_with_options(&mut topo, &[first, last], &options).unwrap();
+        let exact = assert_solid(&topo, solid, name);
+        assert_close(exact, want, 1e-9, name);
+    }
+}
+
 /// A profile whose vertices all lie on the face, but one of whose straight edges
 /// crosses a hole in it.
 #[test]
