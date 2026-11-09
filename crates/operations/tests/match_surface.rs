@@ -736,6 +736,52 @@ fn a_target_that_bounds_no_face_is_only_good_for_position() {
     assert!(gap_to_chain(&topo, &surface, 0.0, &[loose], 100) < 1e-8);
 }
 
+/// A move along the face past its own far side cannot fade out inside it: the
+/// face would run back over itself, so it is refused. The same move straight
+/// off the face only tilts it, and stands.
+#[test]
+fn a_move_along_the_face_past_its_far_side_is_refused() {
+    for (off, along) in [
+        (Vec3::new(-8.0, 0.0, 0.0), true),
+        (Vec3::new(0.0, 0.0, 8.0), false),
+    ] {
+        let mut topo = Topology::new();
+        let source = sheet(&mut topo, "plane", Pose::upright());
+        let mut b = Builder {
+            topo: &mut topo,
+            pose: Pose::upright(),
+        };
+        let v = [
+            b.vertex(Point3::new(0.0, 0.0, 0.0) + off),
+            b.vertex(Point3::new(0.0, 10.0, 0.0) + off),
+        ];
+        let loose = b.line(v[0], v[1]);
+        let moved = match_surface(
+            &mut topo,
+            source.face,
+            source.chain[0],
+            loose,
+            MatchContinuity::G0,
+        );
+        if along {
+            let reason = refusal(moved);
+            assert!(reason.contains("fold"), "{reason}");
+            continue;
+        }
+        let surface = nurbs_of(&topo, moved.unwrap());
+        let middle = surface.derivatives(0.5, 0.5, 1);
+        let facing = middle[1][0].cross(middle[0][1]);
+        for i in 0..=30 {
+            for j in 0..=30 {
+                let (u, v) = (f64::from(i) / 30.0, f64::from(j) / 30.0);
+                let d = surface.derivatives(u, v, 1);
+                let normal = d[1][0].cross(d[0][1]);
+                assert!(normal.dot(facing) > 0.0, "turns over at {u} {v}");
+            }
+        }
+    }
+}
+
 /// A solid's edge bounds two faces, so the caller says which is meant.
 #[test]
 fn a_shared_target_edge_has_to_be_named() {

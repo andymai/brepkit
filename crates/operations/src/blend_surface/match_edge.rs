@@ -63,6 +63,21 @@ fn h2(x: f64) -> f64 {
     0.5 * x * x * (1.0 - x * (3.0 + x * (x - 3.0)))
 }
 
+/// `h0'`: `-30 x^2 (1 - x)^2`.
+fn h0_slope(x: f64) -> f64 {
+    -30.0 * x * x * (1.0 - x) * (1.0 - x)
+}
+
+/// `h1'`: `1 - 18x^2 + 32x^3 - 15x^4`.
+fn h1_slope(x: f64) -> f64 {
+    1.0 - x * x * (18.0 - x * (32.0 - 15.0 * x))
+}
+
+/// `h2'`: `x - 4.5x^2 + 6x^3 - 2.5x^4`.
+fn h2_slope(x: f64) -> f64 {
+    x * (1.0 - x * (4.5 - x * (6.0 - 2.5 * x)))
+}
+
 /// Move `edge` of `face` on to `target_edge`, keeping `continuity` with the
 /// face that edge bounds, and return a new face. Neither input face changes.
 ///
@@ -89,8 +104,10 @@ fn h2(x: f64) -> f64 {
 /// is closed and the edge open or the other way round, the target bounds no
 /// face (or several) when one is needed, `edge` is the face's whole boundary
 /// and winds round its surface with no hole inside it, the face's outline folds
-/// when mapped to a rectangle, or a hole in it comes too close to the edge to
-/// fit a band between. A topology lookup can also fail.
+/// when mapped to a rectangle, a hole in it comes too close to the edge to fit
+/// a band between, or the move runs along the face farther than the band can
+/// take without folding the face back over itself. A topology lookup can also
+/// fail.
 pub fn match_surface(
     topo: &mut Topology,
     face: FaceId,
@@ -350,6 +367,7 @@ fn match_onto(
     }
 
     let band = band_width(g, &moves, &s_space, patch.hole_clear)?;
+    check_fade_keeps_direction(g, &moves, &s_space, band)?;
     let q_t = g.degree_v().max(5);
     let mut knots_t = elevated_knots(g.knots_v(), g.degree_v(), q_t);
     if band < 1.0 - 1e-9 {
@@ -528,6 +546,41 @@ fn band_width(
         });
     }
     Ok(band)
+}
+
+/// Refuse a move that the band cannot fade out without folding: across the
+/// band its position term must not turn the surface's own way across, with
+/// the tangent and curvature terms added, back on itself. A band held to the
+/// surface's width, or by a hole, can be too narrow for a move along it.
+fn check_fade_keeps_direction(
+    g: &NurbsSurface,
+    moves: &[Vec<Vec3>],
+    s_space: &Space,
+    band: f64,
+) -> Result<(), OperationsError> {
+    const ACROSS: u32 = 64;
+    let zero = Vec3::new(0.0, 0.0, 0.0);
+    for i in 0..=32 {
+        let s = f64::from(i) / 32.0;
+        let row = |k: usize| moves.get(k).map_or(zero, |row| s_space.evaluate(row, s));
+        let (d0, d1, d2) = (row(0), row(1), row(2));
+        for j in 1..ACROSS {
+            let x = f64::from(j) / f64::from(ACROSS);
+            let rest =
+                g.derivatives(s, x * band, 1)[0][1] + d1 * h1_slope(x) + d2 * (band * h2_slope(x));
+            let moved = rest + d0 * (h0_slope(x) / band);
+            if moved.dot(rest) <= 0.0 {
+                return Err(OperationsError::InvalidInput {
+                    reason: format!(
+                        "the move runs along the face farther than a band {:.0}% of its width \
+                         can take, so it would fold the face back over itself",
+                        100.0 * band
+                    ),
+                });
+            }
+        }
+    }
+    Ok(())
 }
 
 fn displaced_net(
@@ -1290,6 +1343,22 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
 
     use super::*;
+
+    #[test]
+    fn hermite_slopes_are_the_shapes_derivatives() {
+        let h = 1e-6;
+        for i in 0..=20 {
+            let x = f64::from(i) / 20.0;
+            for (shape, slope) in [
+                (h0 as fn(f64) -> f64, h0_slope as fn(f64) -> f64),
+                (h1, h1_slope),
+                (h2, h2_slope),
+            ] {
+                let want = (shape(x + h) - shape(x - h)) / (2.0 * h);
+                assert!((slope(x) - want).abs() < 1e-8, "{x}: {} {want}", slope(x));
+            }
+        }
+    }
 
     #[test]
     fn hermite_shapes_have_their_end_conditions() {
