@@ -493,13 +493,26 @@ fn plane_plane_fillet(
 
     // The inward normals alone cannot distinguish a convex edge from a
     // concave (notch) one — both wedges share the same bounding planes.
-    // The tie-breaker is the faces' extent: a convex neighbour face lies on
-    // the material (inward) side of the other plane, a concave one on the
-    // void side. On a concave edge the fillet centre and contacts sit up the
-    // OUTWARD bisector, and the in-plane contact projections then follow the
-    // real walls instead of their extensions.
-    let w1 = material_side_witness(topo, face1, n2, p_start)?;
-    let w2 = material_side_witness(topo, face2, n1, p_start)?;
+    // The tie-breaker is which side of the other plane each face runs to
+    // from the edge: a convex neighbour face lies on the material (inward)
+    // side of the other plane, a concave one on the void side. On a concave
+    // edge the fillet centre and contacts sit up the OUTWARD bisector, and
+    // the in-plane contact projections then follow the real walls instead of
+    // their extensions. The side is read at the edge, across it into the
+    // face: a wide face notched at the edge (a wall running on past a step)
+    // can reach the other plane's far side elsewhere. Where no wire of the
+    // face runs along the spine's edge, the face's farthest vertex decides.
+    let side = |face: FaceId, n_other: Vec3| -> Result<f64, BlendError> {
+        match spine.edges().first() {
+            Some(&edge) => match crate::builder_utils::into_face_from_edge(topo, face, edge)? {
+                Some(into_face) => Ok(into_face.dot(n_other)),
+                None => material_side_witness(topo, face, n_other, p_start),
+            },
+            None => material_side_witness(topo, face, n_other, p_start),
+        }
+    };
+    let w1 = side(face1, n2)?;
+    let w2 = side(face2, n1)?;
     let bisector = if w1 < -ANALYTIC_TOL_LIN && w2 < -ANALYTIC_TOL_LIN {
         -bisector
     } else {
