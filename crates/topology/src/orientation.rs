@@ -312,15 +312,18 @@ pub fn normalize_face_normals(
             continue;
         }
         let wire = topo.wire(wire_id)?;
-        {
+        // A wire running along a seam both ways (a wall round a closed rim)
+        // has no winding about its samples' centroid, but closes in `(u, v)`.
+        // Only a seed is read so, for the convention alone: a hole's wall
+        // left as it was may be every seed there is.
+        let seamed = {
             let mut seen = DetHashSet::default();
-            if wire
-                .edges()
+            wire.edges()
                 .iter()
                 .any(|oriented| !seen.insert(oriented.edge()))
-            {
-                continue;
-            }
+        };
+        if seamed && !seed_set.contains(&face_id) {
+            continue;
         }
 
         let oriented_edges = if reversed {
@@ -397,7 +400,8 @@ pub fn normalize_face_normals(
             integral += normal.cross(segment).dot(center - midpoint);
             total_length += length;
         }
-        if total_length < 1e-12 || integral.abs() < 1e-9 * total_length * total_length {
+        if !seamed && (total_length < 1e-12 || integral.abs() < 1e-9 * total_length * total_length)
+        {
             continue;
         }
         // Read against a reference point, the integral is a winding only on a
@@ -407,6 +411,7 @@ pub fn normalize_face_normals(
         let integral = match uv_winding(&surface, &points) {
             Some(area) if reversed => -area,
             Some(area) => area,
+            None if seamed => continue,
             None => integral,
         };
         // A zero reading (exactly; small ones were skipped above) says
@@ -819,5 +824,60 @@ mod tests {
         }
         let area = uv_winding(&FaceSurface::Nurbs(patch), &points).unwrap();
         assert!(area > 0.0, "area {area}");
+    }
+
+    /// A cylinder wall round the z axis between two whole rims, its wire
+    /// running up its seam and back: the wall of a hole left as it was.
+    fn seamed_wall(topo: &mut Topology) -> FaceId {
+        use crate::edge::{Edge, EdgeCurve};
+        use crate::face::{Face, FaceSurface};
+        use crate::vertex::Vertex;
+        use crate::wire::Wire;
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::CylindricalSurface;
+        use brepkit_math::vec::{Point3, Vec3};
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        let (low, high) = (
+            topo.add_vertex(Vertex::new(Point3::new(1.0, 0.0, 0.0), 1e-7)),
+            topo.add_vertex(Vertex::new(Point3::new(1.0, 0.0, 2.0), 1e-7)),
+        );
+        let rim = |height: f64| {
+            EdgeCurve::Circle(Circle3D::new(Point3::new(0.0, 0.0, height), z, 1.0).unwrap())
+        };
+        let bottom = topo.add_edge(Edge::new(low, low, rim(0.0)));
+        let top = topo.add_edge(Edge::new(high, high, rim(2.0)));
+        let seam = topo.add_edge(Edge::new(low, high, EdgeCurve::Line));
+        // Round the bottom with the axis, up the seam, back round the top.
+        let wire = Wire::new(
+            vec![
+                OrientedEdge::new(bottom, true),
+                OrientedEdge::new(seam, true),
+                OrientedEdge::new(top, false),
+                OrientedEdge::new(seam, false),
+            ],
+            true,
+        )
+        .unwrap();
+        let wire = topo.add_wire(wire);
+        let surface = CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), z, 1.0).unwrap();
+        topo.add_face(Face::new(wire, vec![], FaceSurface::Cylinder(surface)))
+    }
+
+    #[test]
+    fn a_seamed_seed_sets_the_convention() {
+        let mut topo = Topology::new();
+        let cube = make_unit_cube_manifold(&mut topo);
+        let faces = solid_faces(&topo, cube).unwrap();
+        let wall = seamed_wall(&mut topo);
+        // Four of the six turned: voting, they would turn the other two.
+        for &face_id in &faces[..4] {
+            turn_inside_out(&mut topo, face_id);
+        }
+        assert_eq!(
+            normalize_face_normals(&mut topo, &faces, &[wall]).unwrap(),
+            4
+        );
+        // The wall, a seed, is read but never turned.
+        assert!(!topo.face(wall).unwrap().is_reversed());
     }
 }
