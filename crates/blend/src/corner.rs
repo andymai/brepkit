@@ -88,6 +88,544 @@ fn mitre_takes_square(ex: Vec3, ey: Vec3, radius: f64) -> bool {
     cos <= SQUARE_COS && cos * radius <= MITRE_SLIP
 }
 
+/// The sharp mitre of an extrusion's corner: two equal rounds along the
+/// edges where a plane face meets two walls standing square to it, meeting
+/// at a convex corner whose third edge, left sharp, runs straight down the
+/// plane's normal. The walls may be any surfaces containing that direction
+/// (planes, cylinders, a spline profile's wall) and meet at any angle.
+///
+/// At depth `t` below the plane each round is its wall's trace inset by
+/// `w`, where `(w - r)^2 + (t - r)^2 = r^2`, so the two rounds meet where
+/// the two insets cross: the crease runs from the pinch `vertex - n*r` on
+/// the sharp edge (`w = 0`) to where the two contacts on the plane cross
+/// (`w = r`, `t = 0`).
+struct ExtrudedMitre {
+    /// The plane face's outward normal.
+    n: Vec3,
+    /// The crease from the pinch to the meeting point on the plane; empty
+    /// where the contacts cross past either spine's far end.
+    crease: Vec<Point3>,
+    /// How far along each stripe's spine (`a`, then `b`) from the corner
+    /// the contacts on the plane cross: the length of its contour the
+    /// corner takes, infinite past the spine's far end.
+    used: [f64; 2],
+}
+
+/// The number of crease points an extruded mitre first takes along its
+/// quarter.
+const EXTRUDED_CREASE_POINTS: usize = 33;
+
+/// The most crease points an extruded mitre takes before its fit gives up.
+const MOST_CREASE_POINTS: usize = 2049;
+
+/// How far an extruded mitre's crease may stray from the rounds it bounds:
+/// a tenth of the vertex tolerance, an absolute length whatever the part's
+/// size, since its fit reads it only at sampled points.
+const CREASE_FIT: f64 = 0.1 * TOL;
+
+/// A face's outward normal at a point within `tol` of its surface.
+fn outward_normal_on(topo: &Topology, face_id: FaceId, point: Point3, tol: f64) -> Option<Vec3> {
+    let face = topo.face(face_id).ok()?;
+    let surface = face.surface();
+    if let FaceSurface::Plane { normal, d } = surface {
+        let off = normal.dot(Vec3::new(point.x(), point.y(), point.z())) - d;
+        let normal = normal.normalize().ok()?;
+        return (off.abs() <= tol).then_some(if face.is_reversed() { -normal } else { normal });
+    }
+    let (u, v) = surface.project_point(point)?;
+    let on = surface.evaluate(u, v)?;
+    if (on - point).length() > tol {
+        return None;
+    }
+    let normal = surface.normal(u, v).normalize().ok()?;
+    Some(if face.is_reversed() { -normal } else { normal })
+}
+
+/// One edge of a spine walked away from a corner: the edge, and its
+/// parameter at the end nearer the corner and at its other end.
+type WalkedEdge = (EdgeId, f64, f64);
+
+/// The edges of the spine `edges` (a chain) in order away from `vertex`.
+/// A contour joins collinear or tangent pieces of one edge between the same
+/// two faces, so a corner's round can run on past the piece at the corner.
+fn spine_walk(topo: &Topology, edges: &[EdgeId], vertex: VertexId) -> Option<Vec<WalkedEdge>> {
+    let mut left = edges.to_vec();
+    let mut walk = Vec::with_capacity(edges.len());
+    let mut at = vertex;
+    while let Some(i) = left.iter().position(|&edge_id| {
+        topo.edge(edge_id)
+            .is_ok_and(|edge| edge.start() == at || edge.end() == at)
+    }) {
+        let edge_id = left.remove(i);
+        let edge = topo.edge(edge_id).ok()?;
+        let (a, b) = (
+            topo.vertex(edge.start()).ok()?.point(),
+            topo.vertex(edge.end()).ok()?.point(),
+        );
+        let (d0, d1) = edge.curve().domain_with_endpoints(a, b);
+        if edge.start() == at {
+            walk.push((edge_id, d0, d1));
+            at = edge.end();
+        } else {
+            walk.push((edge_id, d1, d0));
+            at = edge.start();
+        }
+    }
+    (!walk.is_empty()).then_some(walk)
+}
+
+/// The point of a spine walk at `sigma`: edge `k` of the walk at the
+/// fraction `sigma - k` of its parameter, the last edge run on past its end.
+fn walk_at(walk: &[WalkedEdge], sigma: f64) -> (EdgeId, f64) {
+    let k = (1..walk.len()).take_while(|&k| sigma > k as f64).count();
+    let (edge, s0, s1) = walk[k];
+    (edge, s0 + (s1 - s0) * (sigma - k as f64))
+}
+
+/// The length of a spine walk from the corner to `sigma`.
+fn walk_run(topo: &Topology, walk: &[WalkedEdge], sigma: f64) -> Option<f64> {
+    let k = (1..walk.len()).take_while(|&k| sigma > k as f64).count();
+    let mut run = 0.0;
+    for &(edge, s0, s1) in &walk[..k] {
+        run += edge_run(topo, edge, s0, s1)?;
+    }
+    let (edge, s) = walk_at(walk, sigma);
+    Some(run + edge_run(topo, edge, walk[k].1, s)?)
+}
+
+/// The point of `edge` at parameter `s`.
+fn edge_point(topo: &Topology, edge_id: EdgeId, s: f64) -> Option<Point3> {
+    let edge = topo.edge(edge_id).ok()?;
+    let (a, b) = (
+        topo.vertex(edge.start()).ok()?.point(),
+        topo.vertex(edge.end()).ok()?.point(),
+    );
+    Some(edge.curve().evaluate_with_endpoints(s, a, b))
+}
+
+/// Whether `wall` stands square to the plane of outward normal `n` along
+/// its edge `edge` (from `s0` to `s1`): every sample of the edge, and the
+/// sample moved `depth` into the material, lies on the wall, whose normal
+/// there is square to `n`.
+fn wall_stands_square(
+    topo: &Topology,
+    wall: FaceId,
+    edge: EdgeId,
+    (s0, s1): (f64, f64),
+    n: Vec3,
+    depth: f64,
+) -> bool {
+    let tol = 1e-6 * depth.max(1.0);
+    (0..=8).all(|k| {
+        let s = s0 + (s1 - s0) * f64::from(k) / 8.0;
+        edge_point(topo, edge, s).is_some_and(|p| {
+            [p, p - n * depth].iter().all(|&q| {
+                outward_normal_on(topo, wall, q, tol).is_some_and(|m| m.dot(n).abs() <= 1e-6)
+            })
+        })
+    })
+}
+
+/// The extruded mitre at `vertex` (see [`ExtrudedMitre`]), its crease taken
+/// at `points` points, or `None` where the corner is not one. `a` and `b`
+/// are each stripe's two support faces and spine edges.
+#[allow(clippy::too_many_arguments)]
+fn extruded_mitre(
+    topo: &Topology,
+    vertex: VertexId,
+    face_fan: &[FaceId],
+    unselected_sharp_edges: &[EdgeId],
+    a: (FaceId, FaceId, &[EdgeId]),
+    b: (FaceId, FaceId, &[EdgeId]),
+    radius: f64,
+    points: usize,
+) -> Option<ExtrudedMitre> {
+    if face_fan.len() != 3 || radius <= TOL {
+        return None;
+    }
+    let [retained] = unselected_sharp_edges else {
+        return None;
+    };
+    let top = [a.0, a.1].into_iter().find(|&f| f == b.0 || f == b.1)?;
+    let wall_a = if a.0 == top { a.1 } else { a.0 };
+    let wall_b = if b.0 == top { b.1 } else { b.0 };
+    if wall_a == wall_b || [top, wall_a, wall_b].iter().any(|f| !face_fan.contains(f)) {
+        return None;
+    }
+    let n = topo.face(top).ok()?.effective_plane_normal()?;
+    let retained_edge = topo.edge(*retained).ok()?;
+    if !matches!(retained_edge.curve(), EdgeCurve::Line) {
+        return None;
+    }
+    let down = edge_direction_away_from(topo, retained_edge, vertex)?;
+    if (down + n).length() > 1e-6 {
+        return None;
+    }
+    let walk_a = spine_walk(topo, a.2, vertex)?;
+    let walk_b = spine_walk(topo, b.2, vertex)?;
+    let square = |wall: FaceId, walk: &[WalkedEdge]| {
+        walk.iter()
+            .all(|&(edge, s0, s1)| wall_stands_square(topo, wall, edge, (s0, s1), n, radius))
+    };
+    if !square(wall_a, &walk_a) || !square(wall_b, &walk_b) {
+        return None;
+    }
+    let (edge_a, edge_b) = (walk_a[0].0, walk_b[0].0);
+    // Convex: each stripe's edge leaves the corner into the other wall's
+    // material.
+    let corner = topo.vertex(vertex).ok()?.point();
+    let tol = 1e-6 * radius.max(1.0);
+    let normal_a = outward_normal_on(topo, wall_a, corner, tol)?;
+    let normal_b = outward_normal_on(topo, wall_b, corner, tol)?;
+    let ex = edge_direction_away_from(topo, topo.edge(edge_a).ok()?, vertex)?;
+    let ey = edge_direction_away_from(topo, topo.edge(edge_b).ok()?, vertex)?;
+    if ex.dot(normal_b) >= -1e-3 || ey.dot(normal_a) >= -1e-3 {
+        return None;
+    }
+
+    // Each wall's trace inset by `w`, at `sigma` along its spine walk.
+    let inset = |wall: FaceId, walk: &[WalkedEdge], sigma: f64, w: f64| -> Option<Point3> {
+        let (edge, s) = walk_at(walk, sigma);
+        let p = edge_point(topo, edge, s)?;
+        Some(p - outward_normal_on(topo, wall, p, tol)? * w)
+    };
+    let (mut sa, mut sb) = (0.0, 0.0);
+    let h = 1e-7;
+    let (ends_a, ends_b) = (walk_a.len() as f64, walk_b.len() as f64);
+    if points < 2 {
+        return None;
+    }
+    let mut crease = Vec::with_capacity(points);
+    for k in 0..points {
+        let phi = std::f64::consts::FRAC_PI_2 * (k as f64) / ((points - 1) as f64);
+        let w = radius * (1.0 - phi.cos());
+        let t = radius * (1.0 - phi.sin());
+        if k == 0 {
+            crease.push(corner - n * radius);
+            continue;
+        }
+        let mut converged = false;
+        for _ in 0..40 {
+            let pa = inset(wall_a, &walk_a, sa, w)?;
+            let pb = inset(wall_b, &walk_b, sb, w)?;
+            let residual = pa - pb;
+            if residual.length() <= 1e-11 * radius.max(1.0) {
+                converged = true;
+                break;
+            }
+            let da = (inset(wall_a, &walk_a, sa + h, w)? - pa) * (1.0 / h);
+            let db = (pb - inset(wall_b, &walk_b, sb + h, w)?) * (1.0 / h);
+            // Least squares on the two columns: [da db] (dsa, dsb) = -residual.
+            let (m00, m01, m11) = (da.dot(da), da.dot(db), db.dot(db));
+            let (r0, r1) = (-da.dot(residual), -db.dot(residual));
+            let det = m00 * m11 - m01 * m01;
+            if det.abs() <= 1e-300 {
+                return None;
+            }
+            sa += (r0 * m11 - r1 * m01) / det;
+            sb += (m00 * r1 - m01 * r0) / det;
+            if sa > ends_a || sb > ends_b {
+                // The insets cross beyond a spine's far end: the corner
+                // takes more than the contour.
+                return Some(ExtrudedMitre {
+                    n,
+                    crease: Vec::new(),
+                    used: [f64::INFINITY; 2],
+                });
+            }
+            if !(0.0..=ends_a).contains(&sa) || !(0.0..=ends_b).contains(&sb) {
+                return None;
+            }
+        }
+        if !converged {
+            return None;
+        }
+        crease.push(inset(wall_a, &walk_a, sa, w)? - n * t);
+    }
+    let used = [walk_run(topo, &walk_a, sa)?, walk_run(topo, &walk_b, sb)?];
+    Some(ExtrudedMitre { n, crease, used })
+}
+
+/// The length of `edge` between its parameters `s0` and `s1`: a line's
+/// chord, a circular arc's exactly, any other curve's as the sum of short
+/// chords (as a spine measures its edges).
+fn edge_run(topo: &Topology, edge_id: EdgeId, s0: f64, s1: f64) -> Option<f64> {
+    const SAMPLES: u32 = 256;
+    let edge = topo.edge(edge_id).ok()?;
+    match edge.curve() {
+        EdgeCurve::Line => {
+            Some((edge_point(topo, edge_id, s1)? - edge_point(topo, edge_id, s0)?).length())
+        }
+        EdgeCurve::Circle(circle) => Some(circle.radius() * (s1 - s0).abs()),
+        EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_) => {
+            let mut length = 0.0;
+            let mut prev = edge_point(topo, edge_id, s0)?;
+            for k in 1..=SAMPLES {
+                let p = edge_point(
+                    topo,
+                    edge_id,
+                    s0 + (s1 - s0) * f64::from(k) / f64::from(SAMPLES),
+                )?;
+                length += (p - prev).length();
+                prev = p;
+            }
+            Some(length)
+        }
+    }
+}
+
+/// A curve's point at a parameter.
+type CurvePoint<'a> = Box<dyn Fn(f64) -> Point3 + 'a>;
+
+/// A straight or B-spline edge as a curve: its domain and its point at a
+/// parameter. `None` for a conic, which a contact on a plane never is here.
+fn edge_curve_eval(topo: &Topology, edge_id: EdgeId) -> Option<((f64, f64), CurvePoint<'_>)> {
+    let edge = topo.edge(edge_id).ok()?;
+    match edge.curve() {
+        EdgeCurve::Line => {
+            let a = topo.vertex(edge.start()).ok()?.point();
+            let b = topo.vertex(edge.end()).ok()?.point();
+            Some(((0.0, 1.0), Box::new(move |t| a + (b - a) * t)))
+        }
+        EdgeCurve::NurbsCurve(curve) => Some((curve.domain(), Box::new(|t| curve.evaluate(t)))),
+        EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => None,
+    }
+}
+
+/// The point where two contact edges on one plane cross, from `guess`: each
+/// edge's parameter nearest `guess`, then Gauss-Newton on the two
+/// parameters (alternating projections crawl where the contacts meet at a
+/// shallow angle, at a narrow corner).
+fn contacts_crossing(topo: &Topology, a: EdgeId, b: EdgeId, guess: Point3) -> Option<Point3> {
+    let ((a0, a1), curve_a) = edge_curve_eval(topo, a)?;
+    let ((b0, b1), curve_b) = edge_curve_eval(topo, b)?;
+    let nearest = |curve: &dyn Fn(f64) -> Point3, (t0, t1): (f64, f64)| {
+        const SAMPLES: usize = 64;
+        #[allow(clippy::cast_precision_loss)]
+        let at = |k: usize| t0 + (t1 - t0) * (k as f64) / (SAMPLES as f64);
+        (0..=SAMPLES)
+            .map(at)
+            .min_by(|&p, &q| {
+                (curve(p) - guess)
+                    .length()
+                    .total_cmp(&(curve(q) - guess).length())
+            })
+            .unwrap_or(t0)
+    };
+    let (mut s, mut t) = (nearest(&*curve_a, (a0, a1)), nearest(&*curve_b, (b0, b1)));
+    let (ha, hb) = ((a1 - a0) * 1e-7, (b1 - b0) * 1e-7);
+    for _ in 0..60 {
+        let gap = curve_a(s) - curve_b(t);
+        if gap.length() <= 1e-11 {
+            break;
+        }
+        let da = (curve_a(s + ha) - curve_a(s - ha)) * (0.5 / ha);
+        let db = (curve_b(t + hb) - curve_b(t - hb)) * (-0.5 / hb);
+        // Least squares on `da * ds + db * dt = -gap`.
+        let (m11, m12, m22) = (da.dot(da), da.dot(db), db.dot(db));
+        let det = m11.mul_add(m22, -(m12 * m12));
+        if det.abs() <= 1e-24 * (m11 * m22).max(1e-300) {
+            return None;
+        }
+        let (r1, r2) = (-gap.dot(da), -gap.dot(db));
+        s += (r1 * m22 - r2 * m12) / det;
+        t += (m11 * r2 - m12 * r1) / det;
+        let slack = 1e-9;
+        if !(a0 - slack..=a1 + slack).contains(&s) || !(b0 - slack..=b1 + slack).contains(&t) {
+            return None;
+        }
+    }
+    let (p, q) = (curve_a(s), curve_b(t));
+    ((p - q).length() <= 1e-9).then(|| p + (q - p) * 0.5)
+}
+
+/// `point`'s signed distance from `surface`, along the surface normal.
+fn signed_distance(surface: &FaceSurface, point: Point3) -> Option<f64> {
+    let (u, v) = surface.project_point(point)?;
+    let foot = surface.evaluate(u, v)?;
+    Some((point - foot).dot(surface.normal(u, v).normalize().ok()?))
+}
+
+/// An extruded mitre's crease laid on the two stripes' own surfaces: each
+/// point at its exact estimate's depth below the plane, on `first` and on
+/// `second`. A walked stripe is fitted through its sections and runs a
+/// little off the exact round between them, and the crease must lie on
+/// both faces it bounds. The ends are kept: the pinch is on both stripes'
+/// wall contacts, and the meeting point is where their contacts cross.
+fn crease_on_stripes(
+    exact: &[Point3],
+    meeting: Point3,
+    n: Vec3,
+    first: &FaceSurface,
+    second: &FaceSurface,
+    radius: f64,
+) -> Option<Vec<Point3>> {
+    let tol = 0.1 * CREASE_FIT;
+    let (Some(&pinch), Some(&exact_meeting)) = (exact.first(), exact.last()) else {
+        return None;
+    };
+    let mut crease = Vec::with_capacity(exact.len());
+    crease.push(pinch);
+    for &target in &exact[1..exact.len() - 1] {
+        // Depth below the plane through the exact meeting point.
+        let depth = n.dot(exact_meeting - target);
+        let residual = |u: f64, v: f64| -> Option<(Point3, [f64; 2])> {
+            let p = first.evaluate(u, v)?;
+            Some((
+                p,
+                [
+                    n.dot(exact_meeting - p) - depth,
+                    signed_distance(second, p)?,
+                ],
+            ))
+        };
+        let (mut u, mut v) = first.project_point(target)?;
+        let mut done = None;
+        for _ in 0..40 {
+            let (p, f) = residual(u, v)?;
+            if f[0].abs().max(f[1].abs()) <= tol {
+                done = Some(p);
+                break;
+            }
+            let h = 1e-7;
+            let (_, fu) = residual(u + h, v)?;
+            let (_, fv) = residual(u, v + h)?;
+            let j = [
+                [(fu[0] - f[0]) / h, (fv[0] - f[0]) / h],
+                [(fu[1] - f[1]) / h, (fv[1] - f[1]) / h],
+            ];
+            let det = j[0][0] * j[1][1] - j[0][1] * j[1][0];
+            if det.abs() <= 1e-300 {
+                return None;
+            }
+            u -= (f[0] * j[1][1] - f[1] * j[0][1]) / det;
+            v -= (j[0][0] * f[1] - j[1][0] * f[0]) / det;
+        }
+        let p = done?;
+        if (p - target).length() > 0.05 * radius {
+            return None;
+        }
+        crease.push(p);
+    }
+    crease.push(meeting);
+    Some(crease)
+}
+
+/// The crease of an extruded mitre whose rounds are cylinders of `radius`
+/// with crossing axes (plane walls), from the pinch `p00` to the contacts'
+/// crossing `meeting` on the plane of outward normal `n`. Two cylinders of
+/// one radius whose axes cross meet in two ellipses, each about the crossing
+/// in a plane that bisects the axes. The crease is a quarter of the one
+/// through the pinch: from the pinch, level with the crossing, up to the
+/// point a radius above the crossing, on the plane. `None` where the rounds
+/// are not such cylinders.
+fn crossing_rounds_ellipse(
+    first: &FaceSurface,
+    second: &FaceSurface,
+    p00: Point3,
+    meeting: Point3,
+    n: Vec3,
+    radius: f64,
+) -> Option<brepkit_math::curves::Ellipse3D> {
+    let (FaceSurface::Cylinder(a), FaceSurface::Cylinder(b)) = (first, second) else {
+        return None;
+    };
+    let tol = CREASE_FIT;
+    if (a.radius() - radius).abs() > tol || (b.radius() - radius).abs() > tol {
+        return None;
+    }
+    let (da, db) = (a.axis().normalize().ok()?, b.axis().normalize().ok()?);
+    let w = a.origin() - b.origin();
+    let (cos, along_a, along_b) = (da.dot(db), da.dot(w), db.dot(w));
+    let sin2 = cos.mul_add(-cos, 1.0);
+    if sin2 <= 1e-12 {
+        return None;
+    }
+    let pa = a.origin() + da * (cos.mul_add(along_b, -along_a) / sin2);
+    let pb = b.origin() + db * (cos.mul_add(-along_a, along_b) / sin2);
+    if (pa - pb).length() > tol {
+        return None;
+    }
+    let centre = pa + (pb - pa) * 0.5;
+    let toward = p00 - centre;
+    let semi = toward.length();
+    if toward.dot(n).abs() > tol || semi < radius - tol {
+        return None;
+    }
+    let u = toward * (1.0 / semi);
+    let ellipse = brepkit_math::curves::Ellipse3D::new_with_ref(
+        centre,
+        u.cross(n),
+        semi.max(radius),
+        radius,
+        u,
+    )
+    .ok()?;
+    let on_both = |p: Point3| {
+        [(a, da), (b, db)].iter().all(|&(c, d)| {
+            let r = p - c.origin();
+            ((r - d * r.dot(d)).length() - radius).abs() <= tol
+        })
+    };
+    let quarter = std::f64::consts::FRAC_PI_4;
+    ((ellipse.evaluate(2.0 * quarter) - meeting).length() <= TOL
+        && on_both(ellipse.evaluate(quarter)))
+    .then_some(ellipse)
+}
+
+/// An extruded mitre's crease as a cubic through `sample(count)`, its points
+/// laid on both stripes' surfaces `first` and `second`, their count doubled
+/// until the cubic lies on both between them, read at the quarters between
+/// each two points within [`CREASE_FIT`]. `None` where it never does.
+fn fitted_crease(
+    sample: impl Fn(usize) -> Option<Vec<Point3>>,
+    first: &FaceSurface,
+    second: &FaceSurface,
+) -> Option<EdgeCurve> {
+    let tol = CREASE_FIT;
+    let off = |p: Point3| -> Option<f64> {
+        let on = |surface: &FaceSurface| -> Option<f64> {
+            let (u, v) = surface.project_point(p)?;
+            Some((surface.evaluate(u, v)? - p).length())
+        };
+        Some(on(first)?.max(on(second)?))
+    };
+    let mut count = EXTRUDED_CREASE_POINTS;
+    loop {
+        let points = sample(count)?;
+        let curve = brepkit_math::nurbs::fitting::interpolate(&points, 3).ok()?;
+        // The cubic takes its points at their chord-length parameters.
+        let mut lengths = Vec::with_capacity(points.len());
+        let mut total = 0.0;
+        lengths.push(0.0);
+        for pair in points.windows(2) {
+            total += (pair[1] - pair[0]).length();
+            lengths.push(total);
+        }
+        if total <= tol {
+            return None;
+        }
+        let (t0, t1) = curve.domain();
+        let mut on = true;
+        'check: for pair in lengths.windows(2) {
+            for quarter in [0.25, 0.5, 0.75] {
+                let along = (pair[1] - pair[0]).mul_add(quarter, pair[0]) / total;
+                if off(curve.evaluate((t1 - t0).mul_add(along, t0)))? > tol {
+                    on = false;
+                    break 'check;
+                }
+            }
+        }
+        if on {
+            return Some(EdgeCurve::NurbsCurve(curve));
+        }
+        if count >= MOST_CREASE_POINTS {
+            return None;
+        }
+        count = 2 * count - 1;
+    }
+}
+
 /// Return the indices (into `stripes`) of stripes whose spine touches `vertex_id`.
 fn stripes_at_vertex(vertex_id: VertexId, stripes: &[Stripe], topo: &Topology) -> Vec<usize> {
     let mut result = Vec::new();
@@ -418,12 +956,19 @@ fn interpolate_section(start: &CircSection, end: &CircSection, fraction: f64) ->
 }
 
 /// A junction vertex qualifying for the sharp-mitered two-edge corner
-/// class: exactly two incident contours, equal constant radius, a
-/// trihedral (three-plane) orthogonal convex corner.
+/// class: exactly two incident contours, equal constant radius, and either
+/// a trihedral (three-plane) orthogonal convex corner or an extrusion's
+/// convex corner (see [`ExtrudedMitre`]).
 pub struct MiterJunction {
     pub vertex: VertexId,
     pub radius: f64,
     pub contours: [usize; 2],
+    /// The length of each contour's spine (in `contours` order) the corner
+    /// takes: the radius at a square corner, up to where the contacts on
+    /// the shared face cross at an extruded one.
+    pub used: [f64; 2],
+    /// Whether the corner is square, so `used` is the radius at any radius.
+    pub square: bool,
 }
 
 /// Find every junction in `plan` qualifying for the sharp-mitered
@@ -439,7 +984,7 @@ pub fn find_equal_two_edge_miter_junctions(
     plan: &FilletPlan,
 ) -> Vec<MiterJunction> {
     let mut miters = Vec::new();
-    'junctions: for junction in &plan.junctions {
+    for junction in &plan.junctions {
         if junction.classification != CornerClassification::Junction
             || junction.incident_contours.len() != 2
         {
@@ -455,18 +1000,43 @@ pub fn find_equal_two_edge_miter_junctions(
         if (ra - rb).abs() > TOL || *ra <= TOL {
             continue;
         }
-        let Some(normals) = orthogonal_fan_outward_normals(topo, &junction.face_fan) else {
+        let Some((used, square)) = mitre_spine_use(topo, plan, junction, [ia, ib], *ra) else {
             continue;
         };
+        miters.push(MiterJunction {
+            vertex: junction.vertex,
+            radius: *ra,
+            contours: [ia, ib],
+            used,
+            square,
+        });
+    }
+    miters
+}
+
+/// What a sharp mitre at `junction` of radius `radius` takes of each
+/// contour's spine (in `contours` order), and whether the corner is
+/// square; `None` where the junction is no mitre at that radius.
+fn mitre_spine_use(
+    topo: &Topology,
+    plan: &FilletPlan,
+    junction: &VertexJunction,
+    contours: [usize; 2],
+    radius: f64,
+) -> Option<([f64; 2], bool)> {
+    let square = || -> bool {
+        let Some(normals) = orthogonal_fan_outward_normals(topo, &junction.face_fan) else {
+            return false;
+        };
         let mut directions = Vec::with_capacity(3);
-        for &contour in &[ia, ib] {
+        for contour in contours {
             match contour_direction_away_from(topo, &plan.contours[contour], junction.vertex) {
                 Ok(Some(direction)) => directions.push(direction),
-                _ => continue 'junctions,
+                _ => return false,
             }
         }
-        if !mitre_takes_square(directions[0], directions[1], *ra) {
-            continue;
+        if !mitre_takes_square(directions[0], directions[1], radius) {
+            return false;
         }
         for &edge_id in &junction.unselected_sharp_edges {
             let Some(direction) = topo
@@ -474,20 +1044,27 @@ pub fn find_equal_two_edge_miter_junctions(
                 .ok()
                 .and_then(|edge| edge_direction_away_from(topo, edge, junction.vertex))
             else {
-                continue 'junctions;
+                return false;
             };
             directions.push(direction);
         }
-        if !trihedral_corner_is_convex(&normals, &directions) {
-            continue;
-        }
-        miters.push(MiterJunction {
-            vertex: junction.vertex,
-            radius: *ra,
-            contours: [ia, ib],
-        });
+        trihedral_corner_is_convex(&normals, &directions)
+    };
+    if square() {
+        return Some(([radius; 2], true));
     }
-    miters
+    let (ca, cb) = (&plan.contours[contours[0]], &plan.contours[contours[1]]);
+    let mitre = extruded_mitre(
+        topo,
+        junction.vertex,
+        &junction.face_fan,
+        &junction.unselected_sharp_edges,
+        (ca.side1, ca.side2, ca.spine.edges()),
+        (cb.side1, cb.side2, cb.spine.edges()),
+        radius,
+        EXTRUDED_CREASE_POINTS,
+    )?;
+    Some((mitre.used, false))
 }
 
 /// The straight edges, other than the two stripes' own, leaving each
@@ -820,33 +1397,72 @@ fn unselected_edge_seam_continuation(
 /// admissibility check admits one the build takes.
 const LIMIT_SLACK: f64 = 5e-10;
 
+/// The largest radius below `radius` at which the mitres `ends` (each a
+/// junction and the slot of the contour in it) take no more than `length`
+/// of their contour, found by halving: an extruded corner's take grows
+/// with the radius, in proportion only where its walls are planes.
+fn mitred_contour_max_radius(
+    topo: &Topology,
+    plan: &FilletPlan,
+    ends: &[(&MiterJunction, usize)],
+    length: f64,
+    radius: f64,
+) -> f64 {
+    let fits = |r: f64| {
+        let mut used = 0.0;
+        for &(miter, slot) in ends {
+            let Some(junction) = plan.junctions.iter().find(|j| j.vertex == miter.vertex) else {
+                return false;
+            };
+            match mitre_spine_use(topo, plan, junction, miter.contours, r) {
+                Some((taken, _)) => used += taken[slot],
+                None => return false,
+            }
+        }
+        used <= length
+    };
+    let (mut lo, mut hi) = (0.0, radius);
+    for _ in 0..60 {
+        let mid = 0.5 * (lo + hi);
+        if fits(mid) {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
+}
+
 /// Radius admissibility for the sharp-mitered two-edge corner, checked on
 /// real source-edge lengths **before any topology mutation**.
 ///
-/// The *exact* limit (`r == S`, remainder exactly zero) is admissible: the
-/// miter corner closes it without the vanished material, because
-/// `close_collapsed_miter_corner` detects that both shared-face contacts have
-/// collapsed (the same `TOL` this file compares lengths with), drops them, and
-/// closes each stripe's wire against the crease. The rules refuse a genuine
-/// overshoot, never an exact fit.
+/// At a square corner the *exact* limit (`r == S`, remainder exactly zero)
+/// is admissible: the miter corner closes it without the vanished material,
+/// because `close_collapsed_miter_corner` detects that both shared-face
+/// contacts have collapsed (the same `TOL` this file compares lengths with),
+/// drops them, and closes each stripe's wire against the crease. The rules
+/// refuse a genuine overshoot, never an exact fit there. An extruded corner
+/// has no such closure, so a contour with one refuses its exact limit too.
 ///
-/// Scope: only the equal-radius, orthogonal, convex, planar two-edge corner
-/// class the miter construction implements. The qualifying test here (Junction
-/// classification, exactly two incident contours, both constant-law with
-/// equal radius, a trihedral three-plane orthogonal corner) deliberately
-/// mirrors the miter recognizer rather than calling it, so this check can run,
-/// and refuse, before that recognizer does any construction work. A junction
-/// outside this class (mixed radius, non-trihedral, non-orthogonal, a variable
-/// radius law) is left to whatever other path handles it; this function never
-/// refuses those, and never falls through to the horn-torus path for a request
-/// it does refuse.
+/// Scope: only the equal-radius, convex two-edge corner class the miter
+/// construction implements, a trihedral three-plane orthogonal corner or an
+/// extrusion's corner of any angle (see [`ExtrudedMitre`]). The qualifying
+/// test is [`find_equal_two_edge_miter_junctions`], which the corner pass's
+/// recognizer mirrors, so this check can run, and refuse, before that
+/// recognizer does any construction work. A junction outside this class
+/// (mixed radius, non-trihedral, a variable radius law) is left to whatever
+/// other path handles it; this function never refuses those, and never falls
+/// through to the horn-torus path for a request it does refuse.
 ///
-/// Three rules, all measured as real 3D chord length between the actual
-/// source vertices (exact for the straight edges this scope covers, and
-/// invariant under rigid placement and uniform scale):
+/// Three rules, on lengths measured between the actual source vertices (a
+/// selected contour's along its spine, any other edge's as its chord), so
+/// invariant under rigid placement and uniform scale:
 ///
 /// - a selected contour of length `L` with `m` mitered ends (1 or 2; a contour
-///   with 0 qualifying ends is out of scope here): `m*r <= L (1 + LIMIT_SLACK)`;
+///   with 0 qualifying ends is out of scope here): the lengths its ends take
+///   (`r` at a square corner, `r cot(theta / 2)` at an extruded corner of
+///   angle `theta` between plane walls) sum to at most `L (1 + LIMIT_SLACK)`,
+///   or to less than `L (1 - LIMIT_SLACK)` with an extruded end;
 /// - the retained (unselected) third edge at each qualifying corner, length
 ///   `H`: `r <= H (1 + LIMIT_SLACK)`;
 /// - the unselected edge(s) at a runout terminal (the far, non-mitered end of
@@ -880,26 +1496,41 @@ pub fn check_equal_two_edge_admissibility(
         Ok((topo.vertex(b)?.point() - topo.vertex(a)?.point()).length())
     };
 
-    // Rule 1: selected-edge remaining length, m mitered ends.
-    let mut by_contour_m = vec![0usize; plan.contours.len()];
-    let mut by_contour_r = vec![0.0_f64; plan.contours.len()];
-    for miter in &miters {
-        for &ci in &miter.contours {
-            by_contour_m[ci] += 1;
-            by_contour_r[ci] = miter.radius;
-        }
-    }
+    // Rule 1: selected-edge remaining length, the lengths its mitred ends
+    // take.
     for (ci, contour) in plan.contours.iter().enumerate() {
-        let m = by_contour_m[ci];
-        if m == 0 {
+        let ends: Vec<(&MiterJunction, usize)> = miters
+            .iter()
+            .flat_map(|miter| {
+                miter
+                    .contours
+                    .iter()
+                    .enumerate()
+                    .filter(move |&(_, &c)| c == ci)
+                    .map(move |(slot, _)| (miter, slot))
+            })
+            .collect();
+        let Some(&(first, _)) = ends.first() else {
+            continue;
+        };
+        let length = contour.spine.length();
+        let used: f64 = ends.iter().map(|&(miter, slot)| miter.used[slot]).sum();
+        if ends.iter().all(|(miter, _)| miter.square) {
+            let m = ends.len() as f64;
+            if used > length * (1.0 + LIMIT_SLACK) {
+                return Err(BlendError::RadiusTooLarge {
+                    edge: contour.edges[0],
+                    max_radius: (length / m).max(0.0),
+                });
+            }
             continue;
         }
-        let r = by_contour_r[ci];
-        let length = contour.spine.length();
-        if (m as f64) * r > length * (1.0 + LIMIT_SLACK) {
+        // An extruded corner closes no collapsed contact, so its contour
+        // keeps some of its contact: its exact limit is refused too.
+        if used >= length * (1.0 - LIMIT_SLACK) {
             return Err(BlendError::RadiusTooLarge {
                 edge: contour.edges[0],
-                max_radius: (length / (m as f64)).max(0.0),
+                max_radius: mitred_contour_max_radius(topo, plan, &ends, length, first.radius),
             });
         }
     }
@@ -2788,8 +3419,9 @@ fn orient_corner_cycle_against_existing_owner(
     Ok(())
 }
 
-/// A qualifying sharp-mitered two-edge corner: an equal-radius, orthogonal,
-/// convex, planar junction of exactly two selected-edge stripes.
+/// A qualifying sharp-mitered two-edge corner: an equal-radius convex
+/// junction of exactly two selected-edge stripes, either three square planes
+/// or an extrusion's corner (see [`ExtrudedMitre`]).
 struct MiterCorner {
     vertex: VertexId,
     /// Index into `stripes` (and `cross_boundaries`) for the `ex`-direction
@@ -2814,19 +3446,29 @@ struct MiterCorner {
     side_b: FaceId,
     /// The retained-edge top vertex `vertex - n*r`.
     p00: Point3,
-    /// The top-contact meeting vertex `vertex + ex*r + ey*r`.
+    /// The top-contact meeting vertex: `vertex + ex*r + ey*r` at a square
+    /// corner, where the two contacts cross at an extruded one.
     vtop: Point3,
+    /// An extruded corner's crease from `p00` to `vtop` (see
+    /// [`ExtrudedMitre`]); `None` at a square corner, whose crease is an
+    /// exact ellipse built from `ex` and `ey`.
+    crease: Option<EdgeCurve>,
 }
 
 /// Detect whether `junction` (already known to have exactly two incident
 /// stripes, `indices`) qualifies for the sharp-mitered two-edge
 /// construction: both stripes constant-radius with equal radius, a
-/// trihedral (three-plane) orthogonal corner, both selected edges' stripes
-/// sharing exactly one common (top) face. Mirrors
+/// trihedral (three-plane) orthogonal corner or an extrusion's corner (see
+/// [`ExtrudedMitre`]), both selected edges' stripes sharing exactly one
+/// common (top) face. Mirrors
 /// `check_equal_two_edge_admissibility`'s own qualifying test so detection
 /// is consistent with what was already refused or admitted before any
-/// mutation; this function performs no refusal itself, so a caller must not
+/// mutation; this function refuses no radius itself, so a caller must not
 /// have reached here for an inadmissible request.
+///
+/// # Errors
+/// [`BlendError::CornerFailure`] where an extruded corner's crease cannot
+/// be fitted on both stripes (see [`fitted_crease`]).
 fn detect_equal_two_edge_miter(
     topo: &Topology,
     junction: &VertexJunction,
@@ -2863,16 +3505,16 @@ fn detect_equal_two_edge_miter(
     let mut faces = vec![a.face1, a.face2, b.face1, b.face2];
     faces.sort_unstable_by_key(|face| face.index());
     faces.dedup();
-    if faces.len() != 3
-        || faces
-            .iter()
-            .any(|&f| !topo.face(f).is_ok_and(|face| face.surface().is_planar()))
-    {
+    if faces.len() != 3 {
         return Ok(None);
     }
-    let Some(normals) = orthogonal_fan_outward_normals(topo, &faces) else {
-        return Ok(None);
-    };
+    // Three square planes take the exact construction; any other corner
+    // must be an extrusion's (`ExtrudedMitre`).
+    let normals = faces
+        .iter()
+        .all(|&f| topo.face(f).is_ok_and(|face| face.surface().is_planar()))
+        .then(|| orthogonal_fan_outward_normals(topo, &faces))
+        .flatten();
     // The shared top face is whichever of a's two faces also appears among
     // b's two faces.
     let Some(top_face) = [a.face1, a.face2]
@@ -2942,20 +3584,38 @@ fn detect_equal_two_edge_miter(
     let ey = (topo.vertex(far_b)?.point() - vertex_point)
         .normalize()
         .map_err(BlendError::Math)?;
-    if !mitre_takes_square(ex, ey, radius) {
-        return Ok(None);
-    }
-    let mut directions = vec![ex, ey];
-    for &edge_id in &junction.unselected_sharp_edges {
-        let Some(direction) = edge_direction_away_from(topo, topo.edge(edge_id)?, junction.vertex)
-        else {
+    let square = match normals {
+        Some(normals) if mitre_takes_square(ex, ey, radius) => {
+            let mut directions = vec![ex, ey];
+            for &edge_id in &junction.unselected_sharp_edges {
+                let Some(direction) =
+                    edge_direction_away_from(topo, topo.edge(edge_id)?, junction.vertex)
+                else {
+                    return Ok(None);
+                };
+                directions.push(direction);
+            }
+            trihedral_corner_is_convex(&normals, &directions)
+        }
+        _ => false,
+    };
+    let extruded = if square {
+        None
+    } else {
+        let Some(extruded) = extruded_mitre(
+            topo,
+            junction.vertex,
+            &junction.face_fan,
+            &junction.unselected_sharp_edges,
+            (a.face1, a.face2, a.spine_edges()),
+            (b.face1, b.face2, b.spine_edges()),
+            radius,
+            EXTRUDED_CREASE_POINTS,
+        ) else {
             return Ok(None);
         };
-        directions.push(direction);
-    }
-    if !trihedral_corner_is_convex(&normals, &directions) {
-        return Ok(None);
-    }
+        Some(extruded)
+    };
     let Some(n) = topo.face(top_face)?.effective_plane_normal() else {
         return Ok(None);
     };
@@ -2969,7 +3629,66 @@ fn detect_equal_two_edge_miter(
     // convention would instead desynchronize `ex`/`ey` from
     // `side_a`/`side_b`/`far_a`/`far_b`.
     let p00 = vertex_point - n * radius;
-    let vtop = vertex_point + ex * radius + ey * radius;
+    let (vtop, crease) = match extruded {
+        Some(extruded) => {
+            if (extruded.n - n).length() > 1e-9 {
+                return Ok(None);
+            }
+            let Some(&exact_meeting) = extruded.crease.last() else {
+                return Ok(None);
+            };
+            // The contacts on the plane, either side of the corner-fill arc
+            // round the vertex, cross where the crease meets the plane.
+            let edges = topo
+                .wire(topo.face(top_face)?.outer_wire())?
+                .edges()
+                .to_vec();
+            let count = edges.len();
+            let arc = edges.iter().position(|oe| {
+                topo.edge(oe.edge()).is_ok_and(|e| {
+                    matches!(e.curve(), EdgeCurve::Circle(_))
+                        && [e.start(), e.end()].iter().all(|&v| {
+                            topo.vertex(v)
+                                .is_ok_and(|v| (v.point() - vertex_point).length() <= radius + TOL)
+                        })
+                })
+            });
+            let Some(arc) = arc else {
+                return Ok(None);
+            };
+            let (before, after) = (
+                edges[(arc + count - 1) % count].edge(),
+                edges[(arc + 1) % count].edge(),
+            );
+            let Some(meeting) = contacts_crossing(topo, before, after, exact_meeting) else {
+                return Ok(None);
+            };
+            let crease = if let Some(ellipse) =
+                crossing_rounds_ellipse(&a.surface, &b.surface, p00, meeting, n, radius)
+            {
+                EdgeCurve::Ellipse(ellipse)
+            } else {
+                let sample = |points: usize| {
+                    let mitre = extruded_mitre(
+                        topo,
+                        junction.vertex,
+                        &junction.face_fan,
+                        &junction.unselected_sharp_edges,
+                        (a.face1, a.face2, a.spine_edges()),
+                        (b.face1, b.face2, b.spine_edges()),
+                        radius,
+                        points,
+                    )?;
+                    crease_on_stripes(&mitre.crease, meeting, n, &a.surface, &b.surface, radius)
+                };
+                fitted_crease(sample, &a.surface, &b.surface).ok_or(BlendError::CornerFailure {
+                    vertex: junction.vertex,
+                })?
+            };
+            (meeting, Some(crease))
+        }
+        None => (vertex_point + ex * radius + ey * radius, None),
+    };
     Ok(Some(MiterCorner {
         vertex: junction.vertex,
         stripe_a: *ia,
@@ -2983,6 +3702,7 @@ fn detect_equal_two_edge_miter(
         side_b,
         p00,
         vtop,
+        crease,
     }))
 }
 
@@ -3202,9 +3922,6 @@ fn shorten_top_contacts_and_splice_top_face(
     let mut shorten = |topo: &mut Topology, pos: usize| -> Result<(), BlendError> {
         let oe = edges[pos];
         let e = topo.edge(oe.edge())?.clone();
-        let EdgeCurve::NurbsCurve(curve) = e.curve() else {
-            return Err(fail());
-        };
         let sp = topo.vertex(e.start())?.point();
         let ep = topo.vertex(e.end())?.point();
         // The contact's corner-side endpoint is not at `vertex` itself: an
@@ -3220,6 +3937,58 @@ fn shorten_top_contacts_and_splice_top_face(
                 (false, ep)
             };
         let far_point = if near_is_start { ep } else { sp };
+        // An extruded corner's contacts cross where they meet: cut each
+        // there, keeping the piece running on to its far end. Where they
+        // cross at or past that end the radius is too large; the crossing's
+        // run from the corner grows with the radius, so the radius that
+        // brings it to the far end is about `radius` times the contact's
+        // length over that run.
+        if miter.crease.is_some() {
+            let near = if near_is_start { e.start() } else { e.end() };
+            match e.curve() {
+                EdgeCurve::Line => {
+                    let run = far_point - near_point;
+                    let t = (miter.vtop - near_point).dot(run) / run.length_squared();
+                    if (near_point + run * t - miter.vtop).length() > 1e-6 * miter.radius.max(1.0) {
+                        return Err(fail());
+                    }
+                    if t >= 1.0 - 1e-9 {
+                        return Err(BlendError::RadiusTooLarge {
+                            edge: oe.edge(),
+                            max_radius: miter.radius / t.max(1.0),
+                        });
+                    }
+                }
+                EdgeCurve::NurbsCurve(curve) => {
+                    let found = brepkit_math::nurbs::projection::project_point_to_curve(
+                        curve, miter.vtop, TOL,
+                    )?;
+                    if found.distance > 1e-6 * miter.radius.max(1.0) {
+                        return Err(fail());
+                    }
+                    let (d0, d1) = curve.domain();
+                    let far_parameter = if (curve.evaluate(d0) - far_point).length()
+                        <= (curve.evaluate(d1) - far_point).length()
+                    {
+                        d0
+                    } else {
+                        d1
+                    };
+                    if (found.parameter - far_parameter).abs() <= 1e-9 * (d1 - d0).abs() {
+                        let run = curve.arc_length(256);
+                        return Err(BlendError::RadiusTooLarge {
+                            edge: oe.edge(),
+                            max_radius: miter.radius * run / (run + found.distance),
+                        });
+                    }
+                }
+                EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => return Err(fail()),
+            }
+            return cut_edge_at(topo, oe.edge(), near, vtop_vertex, miter.vtop);
+        }
+        let EdgeCurve::NurbsCurve(curve) = e.curve() else {
+            return Err(fail());
+        };
         let length = (far_point - near_point).length();
         // The trim consumes `radius` from the near end. When that is more
         // than the remaining length the request does not fit this contact at
@@ -3459,14 +4228,19 @@ fn insert_miter_crease_into_stripe_face(
     Ok(())
 }
 
-/// Build the exact `Ellipse3D` crease edge shared by both stripe faces of a
-/// sharp-mitered two-edge corner, from `p00_vertex` to `vtop_vertex`.
+/// Build the crease edge shared by both stripe faces of a sharp-mitered
+/// two-edge corner, from `p00_vertex` to `vtop_vertex`: an exact
+/// `Ellipse3D` at a square corner, the curve worked out for an extruded
+/// one.
 fn miter_crease_edge(
     topo: &mut Topology,
     miter: &MiterCorner,
     p00_vertex: VertexId,
     vtop_vertex: VertexId,
 ) -> Result<EdgeId, BlendError> {
+    if let Some(crease) = &miter.crease {
+        return Ok(topo.add_edge(Edge::new(p00_vertex, vtop_vertex, crease.clone())));
+    }
     let center = miter.p00 + miter.ex * miter.radius + miter.ey * miter.radius;
     let u = (-(miter.ex + miter.ey))
         .normalize()
@@ -4178,6 +4952,731 @@ fn ruled_surface_to_apex_sampled(
     Ok(FaceSurface::Nurbs(surface))
 }
 
+/// The capped corner's round along the end plane `P` (see
+/// [`apply_capped_corner`]), a cylinder: its axis, `r` below `P`, raised
+/// onto `P`, and the unit normal to it in `P` pointing toward the wall.
+struct CapRoundSpine {
+    origin: Point3,
+    toward: Vec3,
+}
+
+impl CapRoundSpine {
+    /// How far `point` lies in the plane from the round's spine toward the
+    /// wall: `r` on the wall's trace, `0` on the round's contact with `P`.
+    fn reach(&self, point: Point3) -> f64 {
+        (point - self.origin).dot(self.toward)
+    }
+}
+
+/// Everything [`apply_capped_corner`] changes, worked out before it
+/// changes anything.
+struct CappedCorner {
+    /// The cap round's face, its contact on the wall and on `P`, and its
+    /// end section between them.
+    t_face: FaceId,
+    t_wall: EdgeId,
+    t_cap: EdgeId,
+    t_section: EdgeId,
+    /// The extrusion round's face, its contact on the wall and on `Q`,
+    /// and its end section on `P`.
+    k_face: FaceId,
+    k_wall: EdgeId,
+    k_side: EdgeId,
+    k_section: EdgeId,
+    /// The wall, `P` and `Q`, as trimmed.
+    wall: FaceId,
+    cap: FaceId,
+    side: FaceId,
+    /// The retained sharp edge's piece the extrusion round's contact on
+    /// `Q` ends on.
+    retained: EdgeId,
+    /// The vertices the corner's old edges end at: the cap round's ends
+    /// on the wall and on `P`, the extrusion round's on the wall and on `Q`.
+    t_wall_end: VertexId,
+    t_cap_end: VertexId,
+    k_wall_end: VertexId,
+    k_side_end: VertexId,
+    /// The contacts' crossing on the wall, where the crease meets `Q`'s
+    /// contact, and where the notch meets the retained edge.
+    x: Point3,
+    e: Point3,
+    f: Point3,
+    /// The crease from `x` to `e` and the notch from `e` to `f`, each an
+    /// arc of an ellipse running up its angle.
+    crease: brepkit_math::curves::Ellipse3D,
+    notch: brepkit_math::curves::Ellipse3D,
+}
+
+/// The edge of `face`'s outer wire whose two ends lie at `a` and `b`.
+fn wire_edge_between(
+    topo: &Topology,
+    face: FaceId,
+    a: Point3,
+    b: Point3,
+    tol: f64,
+) -> Option<(EdgeId, VertexId, VertexId)> {
+    let wire = topo.wire(topo.face(face).ok()?.outer_wire()).ok()?;
+    let mut found = None;
+    for oe in wire.edges() {
+        let edge = topo.edge(oe.edge()).ok()?;
+        let (s, e) = (edge.start(), edge.end());
+        let (ps, pe) = (topo.vertex(s).ok()?.point(), topo.vertex(e).ok()?.point());
+        let hit = if (ps - a).length() <= tol && (pe - b).length() <= tol {
+            Some((s, e))
+        } else if (ps - b).length() <= tol && (pe - a).length() <= tol {
+            Some((e, s))
+        } else {
+            None
+        };
+        if let Some((va, vb)) = hit {
+            if found.is_some() {
+                return None;
+            }
+            found = Some((oe.edge(), va, vb));
+        }
+    }
+    found
+}
+
+/// The other edge of `face`'s outer wire that ends at `vertex`, besides
+/// `edge`.
+fn wire_neighbour_at(
+    topo: &Topology,
+    face: FaceId,
+    edge: EdgeId,
+    vertex: VertexId,
+) -> Option<EdgeId> {
+    let wire = topo.wire(topo.face(face).ok()?.outer_wire()).ok()?;
+    let mut found = None;
+    for oe in wire.edges() {
+        if oe.edge() == edge {
+            continue;
+        }
+        let other = topo.edge(oe.edge()).ok()?;
+        if other.start() == vertex || other.end() == vertex {
+            if found.is_some() {
+                return None;
+            }
+            found = Some(oe.edge());
+        }
+    }
+    found
+}
+
+/// Whether `edge` is in `face`'s outer wire.
+fn in_outer_wire(topo: &Topology, face: FaceId, edge: EdgeId) -> bool {
+    topo.face(face)
+        .and_then(|f| topo.wire(f.outer_wire()))
+        .is_ok_and(|w| w.edges().iter().any(|oe| oe.edge() == edge))
+}
+
+/// The edges of `face`'s outer wire strictly between `from_edge`, at its
+/// end `from`, and `to_edge`, at its end `to`, walking away from
+/// `from_edge` through `from`; `None` when the wire does not run so.
+fn wire_run_between(
+    topo: &Topology,
+    face: FaceId,
+    (from_edge, from): (EdgeId, VertexId),
+    (to_edge, to): (EdgeId, VertexId),
+) -> Option<Vec<EdgeId>> {
+    let edges = topo
+        .wire(topo.face(face).ok()?.outer_wire())
+        .ok()?
+        .edges()
+        .to_vec();
+    let count = edges.len();
+    let ends = |oe: &OrientedEdge| -> Option<(VertexId, VertexId)> {
+        let edge = topo.edge(oe.edge()).ok()?;
+        Some((oe.oriented_start(edge), oe.oriented_end(edge)))
+    };
+    let i = edges.iter().position(|oe| oe.edge() == from_edge)?;
+    let (start, end) = ends(&edges[i])?;
+    let step = if end == from {
+        1
+    } else if start == from {
+        count - 1
+    } else {
+        return None;
+    };
+    let mut run = Vec::new();
+    for k in 1..count {
+        let oe = &edges[(i + step * k) % count];
+        if oe.edge() == to_edge {
+            let (s, e) = ends(oe)?;
+            let reached = if step == 1 { s } else { e };
+            return (reached == to).then_some(run);
+        }
+        if run.len() == 4 {
+            return None;
+        }
+        run.push(oe.edge());
+    }
+    None
+}
+
+/// Whether a straight, circular or B-spline edge passes through `point`.
+fn edge_passes(topo: &Topology, edge_id: EdgeId, point: Point3, tol: f64) -> bool {
+    let Ok(edge) = topo.edge(edge_id) else {
+        return false;
+    };
+    let (Ok(a), Ok(b)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) else {
+        return false;
+    };
+    let (a, b) = (a.point(), b.point());
+    match edge.curve() {
+        EdgeCurve::Line => {
+            let run = b - a;
+            let t = (point - a).dot(run) / run.length_squared().max(1e-300);
+            (-1e-9..=1.0 + 1e-9).contains(&t) && (a + run * t - point).length() <= tol
+        }
+        EdgeCurve::NurbsCurve(curve) => {
+            brepkit_math::nurbs::projection::project_point_to_curve(curve, point, tol)
+                .is_ok_and(|found| found.distance <= tol)
+        }
+        EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => {
+            let (d0, d1) = edge.curve().domain_with_endpoints(a, b);
+            (0..=256).any(|k| {
+                let s = d0 + (d1 - d0) * f64::from(k) / 256.0;
+                (edge.curve().evaluate_with_endpoints(s, a, b) - point).length() <= tol * 1e3
+            })
+        }
+    }
+}
+
+/// Cut `edge` at `point`, keeping the piece away from `near`, whose end
+/// moves to `to`.
+fn cut_edge_at(
+    topo: &mut Topology,
+    edge_id: EdgeId,
+    near: VertexId,
+    to: VertexId,
+    point: Point3,
+) -> Result<(), BlendError> {
+    let edge = topo.edge(edge_id)?.clone();
+    let near_is_start = edge.start() == near;
+    if !near_is_start && edge.end() != near {
+        return Err(BlendError::CornerFailure { vertex: near });
+    }
+    if let EdgeCurve::NurbsCurve(curve) = edge.curve() {
+        let far_point = topo
+            .vertex(if near_is_start {
+                edge.end()
+            } else {
+                edge.start()
+            })?
+            .point();
+        let found = brepkit_math::nurbs::projection::project_point_to_curve(curve, point, TOL)?;
+        let (d0, d1) = curve.domain();
+        let far_is_low =
+            (curve.evaluate(d0) - far_point).length() <= (curve.evaluate(d1) - far_point).length();
+        let (low, high) = curve_split(curve, found.parameter)?;
+        let kept = if far_is_low { low } else { high };
+        topo.edge_mut(edge_id)?
+            .set_curve(EdgeCurve::NurbsCurve(kept));
+    }
+    let edge_mut = topo.edge_mut(edge_id)?;
+    if near_is_start {
+        edge_mut.set_start(to);
+    } else {
+        edge_mut.set_end(to);
+    }
+    Ok(())
+}
+
+/// Work out the capped corner at `junction` (see [`apply_capped_corner`]),
+/// with `t` the round along the end plane and `k` the extrusion's round.
+#[allow(clippy::too_many_lines, clippy::too_many_arguments)]
+fn plan_capped_corner(
+    topo: &Topology,
+    junction: &VertexJunction,
+    stripes: &[Stripe],
+    (t, k): (usize, usize),
+    support_faces: &[(FaceId, FaceId)],
+    stripe_faces: &[Option<FaceId>],
+) -> Option<CappedCorner> {
+    let (st, sk) = (stripes.get(t)?, stripes.get(k)?);
+    let (t_face, k_face) = ((*stripe_faces.get(t)?)?, (*stripe_faces.get(k)?)?);
+    let &[retained_source] = junction.unselected_sharp_edges.as_slice() else {
+        return None;
+    };
+    if !matches!(topo.edge(retained_source).ok()?.curve(), EdgeCurve::Line) {
+        return None;
+    }
+    // The shared wall, and each round's own face, as trimmed.
+    let wall_source = [st.face1, st.face2]
+        .into_iter()
+        .find(|&f| f == sk.face1 || f == sk.face2)?;
+    let current = |stripe: usize, s: &Stripe, source: FaceId| -> Option<FaceId> {
+        let &(f1, f2) = support_faces.get(stripe)?;
+        if source == s.face1 {
+            Some(f1)
+        } else if source == s.face2 {
+            Some(f2)
+        } else {
+            None
+        }
+    };
+    let cap_source = if st.face1 == wall_source {
+        st.face2
+    } else {
+        st.face1
+    };
+    let side_source = if sk.face1 == wall_source {
+        sk.face2
+    } else {
+        sk.face1
+    };
+    if cap_source == side_source {
+        return None;
+    }
+    let wall = current(t, st, wall_source)?;
+    if current(k, sk, wall_source)? != wall {
+        return None;
+    }
+    let cap = current(t, st, cap_source)?;
+    let side = current(k, sk, side_source)?;
+    let cap_face = topo.face(cap).ok()?;
+    let n = cap_face.effective_plane_normal()?.normalize().ok()?;
+    let FaceSurface::Plane { normal, d } = cap_face.surface() else {
+        return None;
+    };
+    let level = d / normal.length() * if cap_face.is_reversed() { -1.0 } else { 1.0 };
+    let side_face = topo.face(side).ok()?;
+    let m = side_face.effective_plane_normal()?.normalize().ok()?;
+    let side_level = match side_face.surface() {
+        FaceSurface::Plane { normal, d } => {
+            d / normal.length() * if side_face.is_reversed() { -1.0 } else { 1.0 }
+        }
+        _ => return None,
+    };
+    let to_point = |p: Point3| Vec3::new(p.x(), p.y(), p.z());
+    let on_cap = |p: Point3, tol: f64| (n.dot(to_point(p)) - level).abs() <= tol;
+    let on_side = |p: Point3, tol: f64| (m.dot(to_point(p)) - side_level).abs() <= tol;
+
+    // The extrusion's round: a cylinder standing square to `P`.
+    let FaceSurface::Cylinder(k_cyl) = &sk.surface else {
+        return None;
+    };
+    let r = k_cyl.radius();
+    if r <= TOL || k_cyl.axis().normalize().ok()?.dot(n).abs() < 1.0 - 1e-9 {
+        return None;
+    }
+    // `Q` square to `P` as the sharp mitre takes it, its points moved by
+    // no more than `MITRE_SLIP`.
+    let cos = m.dot(n).abs();
+    if cos > SQUARE_COS || cos * r > MITRE_SLIP {
+        return None;
+    }
+    let tol = 1e-6 * r.max(1.0);
+    let vertex = topo.vertex(junction.vertex).ok()?.point();
+    if !on_cap(vertex, tol) || !on_side(vertex, tol) {
+        return None;
+    }
+    // The retained edge runs along `P` and `Q` from the corner.
+    let retained = topo.edge(retained_source).ok()?;
+    let far = if retained.start() == junction.vertex {
+        retained.end()
+    } else if retained.end() == junction.vertex {
+        retained.start()
+    } else {
+        return None;
+    };
+    let far_point = topo.vertex(far).ok()?.point();
+    if !on_cap(far_point, tol) || !on_side(far_point, tol) {
+        return None;
+    }
+    let along = (far_point - vertex).normalize().ok()?;
+    let length = (far_point - vertex).length();
+
+    // The end sections at the corner: the extrusion round's lies in `P`.
+    let section_t = contact_section_at_vertex(junction.vertex, st, topo)?;
+    let section_k = contact_section_at_vertex(junction.vertex, sk, topo)?;
+    if (section_t.radius - r).abs() > tol || (section_k.radius - r).abs() > tol {
+        return None;
+    }
+    let (t_cap_point, t_wall_point) = if on_cap(section_t.p1, tol) {
+        (section_t.p1, section_t.p2)
+    } else if on_cap(section_t.p2, tol) {
+        (section_t.p2, section_t.p1)
+    } else {
+        return None;
+    };
+    let (k_side_point, k_wall_point) = if on_side(section_k.p1, tol) {
+        (section_k.p1, section_k.p2)
+    } else if on_side(section_k.p2, tol) {
+        (section_k.p2, section_k.p1)
+    } else {
+        return None;
+    };
+    let centre = section_k.center;
+    if ![k_side_point, k_wall_point, centre]
+        .iter()
+        .all(|&p| on_cap(p, tol))
+    {
+        return None;
+    }
+
+    // The round along `P`: a cylinder along it, its axis a radius below
+    // `P`.
+    let FaceSurface::Cylinder(cylinder) = &st.surface else {
+        return None;
+    };
+    let axis = cylinder.axis().normalize().ok()?;
+    if axis.dot(n).abs() > 1e-9 || (cylinder.radius() - r).abs() > tol {
+        return None;
+    }
+    let o = cylinder.origin();
+    let o = o + n * (level - n.dot(to_point(o)));
+    let v = k_wall_point - o;
+    let toward = (v - axis * v.dot(axis) - n * v.dot(n)).normalize().ok()?;
+    let spine = CapRoundSpine { origin: o, toward };
+    // The wall's trace is the spine's reach `r`: the wall stands square
+    // to `P` along the round.
+    if (spine.reach(k_wall_point) - r).abs() > tol || spine.reach(t_cap_point).abs() > tol {
+        return None;
+    }
+
+    // The crease: the extrusion round's quarter, from its wall contact
+    // round to its contact on `Q`, each ruling meeting the cap round
+    // `r - sqrt(r^2 - reach^2)` below `P`. The quarter's centre lies on the
+    // cap round's spine and its wall contact straight toward the wall, so
+    // at the quarter's angle `phi` the reach is `r cos phi` and the depth
+    // `r (1 - sin phi)`: the crease is an ellipse, where the two rounds'
+    // cylinders, of one radius and axes crossing square, meet.
+    let u0 = (k_wall_point - centre).normalize().ok()?;
+    let u1 = (k_side_point - centre).normalize().ok()?;
+    let theta = u0.dot(u1).clamp(-1.0, 1.0).acos();
+    if theta <= 1e-6 || theta >= std::f64::consts::PI - 1e-6 {
+        return None;
+    }
+    let reach_side = spine.reach(k_side_point);
+    // Only the corner whose crease meets `Q` below `P` (the wall and `Q`
+    // meeting at more than a right angle) is built here.
+    if reach_side <= tol || reach_side > r || spine.reach(centre).abs() > tol {
+        return None;
+    }
+    let flat = |v: Vec3| (v - n * v.dot(n)).normalize().ok();
+    let toward_wall = flat(u0)?;
+    let round = flat(u1 - toward_wall * u1.dot(toward_wall))?;
+    let crease = brepkit_math::curves::Ellipse3D::new_with_ref(
+        centre - n * r,
+        (round + n).cross(-toward_wall),
+        r * std::f64::consts::SQRT_2,
+        r,
+        round + n,
+    )
+    .ok()?;
+    // `phi` is the ellipse's angle plus a right angle.
+    let half_turn = std::f64::consts::FRAC_PI_2;
+    let (x, e) = (
+        crease.evaluate(-half_turn),
+        crease.evaluate(theta - half_turn),
+    );
+    // The notch: the cap round's trace on `Q`, from where the crease meets
+    // `Q` along the retained edge to where the round's contact on `P` does.
+    let start = (k_side_point - vertex).dot(along);
+    if (vertex + along * start - k_side_point).length() > tol || start >= length {
+        return None;
+    }
+    let reach_at = |lambda: f64| spine.reach(vertex + along * lambda);
+    // The first point past `start` where the reach runs out.
+    let step = r / 32.0;
+    let steps = ((length - start) / step).ceil();
+    if !steps.is_finite() || steps > 1e6 {
+        return None;
+    }
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let hi = (1..=steps as usize)
+        .map(|i| (start + step * i as f64).min(length))
+        .find(|&lambda| reach_at(lambda) <= 0.0)?;
+    let (mut lo, mut hi) = ((hi - step).max(start), hi);
+    for _ in 0..200 {
+        let mid = 0.5 * (lo + hi);
+        if reach_at(mid) > 0.0 {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    let lambda_f = 0.5 * (lo + hi);
+    // At the cap round's angle `psi` the notch is `reach = r cos psi` from
+    // the spine and `r (1 - sin psi)` below `P`, and the reach falls in
+    // proportion along the retained edge: an ellipse about the point `r`
+    // below where the reach runs out, its long axis back along the edge.
+    let f = vertex + along * lambda_f;
+    let back = flat(-along)?;
+    let notch = brepkit_math::curves::Ellipse3D::new_with_ref(
+        f - n * r,
+        back.cross(n),
+        ((lambda_f - start) * r / reach_side).max(r),
+        r,
+        back,
+    )
+    .ok()?;
+    let psi_side = (reach_side / r).clamp(-1.0, 1.0).acos();
+    if (notch.evaluate(psi_side) - e).length() > tol {
+        return None;
+    }
+
+    // The edges at the corner as the trim left them.
+    let (t_section, t_cap_end, t_wall_end) =
+        wire_edge_between(topo, t_face, t_cap_point, t_wall_point, tol)?;
+    let (k_section, k_wall_end, k_side_end) =
+        wire_edge_between(topo, k_face, k_wall_point, k_side_point, tol)?;
+    let t_wall = wire_neighbour_at(topo, t_face, t_section, t_wall_end)?;
+    let t_cap = wire_neighbour_at(topo, t_face, t_section, t_cap_end)?;
+    let k_wall = wire_neighbour_at(topo, k_face, k_section, k_wall_end)?;
+    let k_side = wire_neighbour_at(topo, k_face, k_section, k_side_end)?;
+    if !in_outer_wire(topo, wall, t_wall)
+        || !in_outer_wire(topo, wall, k_wall)
+        || !in_outer_wire(topo, cap, t_cap)
+        || !in_outer_wire(topo, side, k_side)
+    {
+        return None;
+    }
+    let retained_piece = wire_neighbour_at(topo, side, k_side, k_side_end)?;
+    let piece = topo.edge(retained_piece).ok()?;
+    if !matches!(piece.curve(), EdgeCurve::Line) || !in_outer_wire(topo, cap, retained_piece) {
+        return None;
+    }
+    if !edge_passes(topo, retained_piece, f, tol)
+        || !edge_passes(topo, t_wall, x, tol)
+        || !edge_passes(topo, k_wall, x, tol)
+        || !edge_passes(topo, k_side, e, tol)
+    {
+        return None;
+    }
+    Some(CappedCorner {
+        t_face,
+        t_wall,
+        t_cap,
+        t_section,
+        k_face,
+        k_wall,
+        k_side,
+        k_section,
+        wall,
+        cap,
+        side,
+        retained: retained_piece,
+        t_wall_end,
+        t_cap_end,
+        k_wall_end,
+        k_side_end,
+        x,
+        e,
+        f,
+        crease,
+        notch,
+    })
+}
+
+/// Replace the oriented edge `old` in `face`'s outer wire by `new`, each
+/// `(edge, runs_from_old_start)`: `new` runs from where `old` started to
+/// where it ended.
+fn replace_in_outer_wire(
+    topo: &mut Topology,
+    face: FaceId,
+    old: EdgeId,
+    new: &[(EdgeId, bool)],
+) -> Result<(), BlendError> {
+    let fail = || BlendError::TrimmingFailure { face };
+    let edges = topo.wire(topo.face(face)?.outer_wire())?.edges().to_vec();
+    let at = edges
+        .iter()
+        .position(|oe| oe.edge() == old)
+        .ok_or_else(fail)?;
+    let forward = edges[at].is_forward();
+    let mut replaced: Vec<OrientedEdge> = new
+        .iter()
+        .map(|&(edge, same)| OrientedEdge::new(edge, same == forward))
+        .collect();
+    if !forward {
+        replaced.reverse();
+    }
+    let mut out = Vec::with_capacity(edges.len() + new.len());
+    out.extend_from_slice(&edges[..at]);
+    out.extend(replaced);
+    out.extend_from_slice(&edges[at + 1..]);
+    let wire = topo.add_wire(Wire::new(out, true)?);
+    topo.face_mut(face)?.set_outer_wire(wire);
+    Ok(())
+}
+
+/// Drop `run` from `face`'s outer wire.
+fn drop_from_outer_wire(
+    topo: &mut Topology,
+    face: FaceId,
+    run: &[EdgeId],
+) -> Result<(), BlendError> {
+    if run.is_empty() {
+        return Ok(());
+    }
+    let edges: Vec<OrientedEdge> = topo
+        .wire(topo.face(face)?.outer_wire())?
+        .edges()
+        .iter()
+        .copied()
+        .filter(|oe| !run.contains(&oe.edge()))
+        .collect();
+    let wire = topo.add_wire(Wire::new(edges, true)?);
+    topo.face_mut(face)?.set_outer_wire(wire);
+    Ok(())
+}
+
+/// A two-stripe corner beside a sharp edge, where an extrusion's plane
+/// wall `C` meets an end plane `P` and a plane side `Q`, both standing
+/// square to `P`: `P ∩ C` is rounded (a cylinder), `C ∩ Q` is rounded
+/// (the extrusion's round, a cylinder square to `P`), and `P ∩ Q` is left
+/// sharp, the wall meeting `Q` at more than a right angle. A curved wall,
+/// whose round along `P` is a torus, is not built here.
+///
+/// At depth `t` below `P` the cap round is the wall's trace inset by
+/// `w = r - sqrt(r^2 - (r - t)^2)`, and the extrusion round is its one
+/// circle. So the rounds meet along a crease from where their contacts
+/// on the wall cross (`t = r`) round the extrusion round's quarter, down
+/// to where it meets `Q`; from there the cap round runs on to `Q`,
+/// notching it, up to the retained edge, where its contact on `P` ends.
+/// The extrusion round never reaches `P`, so neither round ends on its
+/// own section at the corner: the crease and the notch take the place of
+/// the cap round's section, and the crease that of the extrusion round's.
+///
+/// Returns whether the corner was built so.
+fn apply_capped_corner(
+    topo: &mut Topology,
+    junction: &VertexJunction,
+    stripes: &[Stripe],
+    indices: &[usize],
+    support_faces: &[(FaceId, FaceId)],
+    stripe_faces: &[Option<FaceId>],
+    registry: &mut BoundaryRegistry,
+) -> Result<bool, BlendError> {
+    let &[a, b] = indices else {
+        return Ok(false);
+    };
+    if junction.face_fan.len() != 3 {
+        return Ok(false);
+    }
+    let Some(plan) = [(a, b), (b, a)].into_iter().find_map(|pair| {
+        plan_capped_corner(topo, junction, stripes, pair, support_faces, stripe_faces)
+    }) else {
+        return Ok(false);
+    };
+    let fail = || BlendError::CornerFailure {
+        vertex: junction.vertex,
+    };
+    let wall_run = wire_run_between(
+        topo,
+        plan.wall,
+        (plan.t_wall, plan.t_wall_end),
+        (plan.k_wall, plan.k_wall_end),
+    )
+    .ok_or_else(fail)?;
+    let cap_run = wire_run_between(
+        topo,
+        plan.cap,
+        (plan.t_cap, plan.t_cap_end),
+        (plan.retained, plan.k_side_end),
+    )
+    .ok_or_else(fail)?;
+    if wire_run_between(
+        topo,
+        plan.side,
+        (plan.k_side, plan.k_side_end),
+        (plan.retained, plan.k_side_end),
+    )
+    .is_none_or(|run| !run.is_empty())
+    {
+        return Err(fail());
+    }
+
+    let vx = topo.add_vertex(Vertex::new(plan.x, TOL));
+    let ve = topo.add_vertex(Vertex::new(plan.e, TOL));
+    let vf = topo.add_vertex(Vertex::new(plan.f, TOL));
+    cut_edge_at(topo, plan.t_wall, plan.t_wall_end, vx, plan.x)?;
+    cut_edge_at(topo, plan.k_wall, plan.k_wall_end, vx, plan.x)?;
+    cut_edge_at(topo, plan.k_side, plan.k_side_end, ve, plan.e)?;
+    cut_edge_at(topo, plan.retained, plan.k_side_end, vf, plan.f)?;
+    {
+        let edge = topo.edge_mut(plan.t_cap)?;
+        if edge.start() == plan.t_cap_end {
+            edge.set_start(vf);
+        } else {
+            edge.set_end(vf);
+        }
+        edge.set_curve(EdgeCurve::Line);
+    }
+    for (edge, faces) in [
+        (plan.t_wall, [plan.wall, plan.t_face]),
+        (plan.k_wall, [plan.wall, plan.k_face]),
+        (plan.k_side, [plan.side, plan.k_face]),
+        (plan.t_cap, [plan.cap, plan.t_face]),
+        (plan.retained, [plan.cap, plan.side]),
+    ] {
+        for face in faces {
+            topo.pcurves_mut().remove(edge, face);
+        }
+    }
+    let crease = topo.add_edge(Edge::new(vx, ve, EdgeCurve::Ellipse(plan.crease.clone())));
+    let notch = topo.add_edge(Edge::new(ve, vf, EdgeCurve::Ellipse(plan.notch.clone())));
+
+    // The cap round's section ran from its contact on `P` to the wall's;
+    // it is now the notch back from `f` to `e` and the crease on to `x`.
+    let t_runs_from_cap = topo.edge(plan.t_section)?.start() == plan.t_cap_end;
+    let t_new = if t_runs_from_cap {
+        vec![(notch, false), (crease, false)]
+    } else {
+        vec![(crease, true), (notch, true)]
+    };
+    replace_in_outer_wire(topo, plan.t_face, plan.t_section, &t_new)?;
+    let k_runs_from_wall = topo.edge(plan.k_section)?.start() == plan.k_wall_end;
+    replace_in_outer_wire(
+        topo,
+        plan.k_face,
+        plan.k_section,
+        &[(crease, k_runs_from_wall)],
+    )?;
+    drop_from_outer_wire(topo, plan.wall, &wall_run)?;
+    drop_from_outer_wire(topo, plan.cap, &cap_run)?;
+    // `Q` runs from its round's contact, now ending at `e`, through the
+    // notch to the retained edge, now ending at `f`, or back.
+    let side_edges = topo
+        .wire(topo.face(plan.side)?.outer_wire())?
+        .edges()
+        .to_vec();
+    let count = side_edges.len();
+    let at = side_edges
+        .iter()
+        .position(|oe| oe.edge() == plan.k_side)
+        .ok_or_else(fail)?;
+    let k_side_edge = topo.edge(plan.k_side)?;
+    let mut out = side_edges.clone();
+    if side_edges[at].oriented_end(k_side_edge) == ve
+        && side_edges[(at + 1) % count].edge() == plan.retained
+    {
+        out.insert(at + 1, OrientedEdge::new(notch, true));
+    } else if side_edges[at].oriented_start(k_side_edge) == ve
+        && side_edges[(at + count - 1) % count].edge() == plan.retained
+    {
+        out.insert(at, OrientedEdge::new(notch, false));
+    } else {
+        return Err(fail());
+    }
+    let wire = topo.add_wire(Wire::new(out, true)?);
+    topo.face_mut(plan.side)?.set_outer_wire(wire);
+
+    for edge in [plan.t_section, plan.k_section]
+        .into_iter()
+        .chain(wall_run)
+        .chain(cap_run)
+    {
+        if let Some(handle) = registry.handle_for_edge(edge) {
+            registry.retire(handle);
+        }
+    }
+    Ok(true)
+}
+
 /// Solve every original planned junction exactly once.
 ///
 /// Periodic contours have no endpoint junction. G1 continuation produces no
@@ -4281,6 +5780,17 @@ pub fn compute_ordered_corners(
             return Err(BlendError::CornerFailure {
                 vertex: junction.vertex,
             });
+        }
+        if apply_capped_corner(
+            topo,
+            junction,
+            stripes,
+            &indices,
+            support_faces,
+            stripe_faces,
+            registry,
+        )? {
+            continue;
         }
         let junction_results = build_junction_fan(
             topo,
@@ -5446,13 +6956,14 @@ mod tests {
         ));
     }
 
-    /// The plan's junction finder declines a corner the mitre's slip rules
-    /// out, as the corner pass does: two stripes off square by a cosine of
-    /// 8e-8 (inside `SQUARE_COS`) are a mitre at r = 10 (a slip of 8e-7) but
-    /// not at r = 20 (1.6e-6), where planning one would leave the corner pass
-    /// without the cross-section boundaries it omits for a mitre.
+    /// The plan's junction finder on a corner the square mitre's slip rules
+    /// out: two stripes off square by a cosine of 8e-8 (inside `SQUARE_COS`)
+    /// are a square mitre at r = 10 (a slip of 8e-7) but not at r = 20
+    /// (1.6e-6). There the walls still stand square to the top face, so the
+    /// finder takes the corner as an extruded mitre, as the corner pass does
+    /// (`detect_equal_two_edge_miter` falls back to it the same way).
     #[test]
-    fn miter_finder_declines_what_the_corner_pass_declines() {
+    fn miter_finder_takes_an_off_square_corner_as_extruded() {
         let finds_mitre = |radius: f64, skew: f64| {
             let mut topo = Topology::new();
             let solid = make_box(&mut topo, Vec3::new(100.0, 100.0, 100.0));
@@ -5488,7 +6999,7 @@ mod tests {
         assert!(finds_mitre(10.0, 0.0));
         assert!(finds_mitre(20.0, 0.0));
         assert!(finds_mitre(10.0, 8e-8));
-        assert!(!finds_mitre(20.0, 8e-8));
+        assert!(finds_mitre(20.0, 8e-8));
     }
 
     /// The exact `Ellipse3D` frame that carries the sharp-mitered two-edge

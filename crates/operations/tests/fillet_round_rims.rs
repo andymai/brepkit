@@ -14,8 +14,10 @@
 
 use std::f64::consts::PI;
 
+use brepkit_blend::BlendError;
 use brepkit_math::mat::Mat4;
 use brepkit_math::vec::Point3;
+use brepkit_operations::OperationsError;
 use brepkit_operations::blend_ops::fillet_v2;
 use brepkit_operations::boolean::{BooleanOp, boolean};
 use brepkit_operations::measure::{oriented_solid_volume, solid_volume};
@@ -553,4 +555,98 @@ fn a_rods_top_rim_round_over_a_hole_is_refused() {
 fn a_rods_top_rim_rounds_off_beside_a_hole() {
     let (topo, solid, before) = round_a_drilled_rods_top(1.5, 0.8, 2.0).unwrap();
     assert_sound_and_changed_by(&topo, solid, before, -rounded_off(RADIUS, 2.0));
+}
+
+/// A rod 10 tall, its top cut by the plane rising 0.3 along x through the
+/// point 7 above its axis's foot, so its top rim is an ellipse (a walked
+/// round), and cross-drilled along y at height `z` by a bore of radius
+/// `bore` (none at 0), which leaves two holes in its wall where the rim is
+/// at height 7.
+fn sloped_rod(topo: &mut Topology, z: f64, bore: f64) -> SolidId {
+    let rod = make_cylinder(topo, RADIUS, 10.0).unwrap();
+    let above = make_box(topo, 30.0, 30.0, 20.0).unwrap();
+    let tilt = Mat4::translation(0.0, 0.0, 7.0)
+        * Mat4::rotation_y(-0.3_f64.atan())
+        * Mat4::translation(-15.0, -15.0, 0.0);
+    transform_solid(topo, above, &tilt).unwrap();
+    let rod = boolean(topo, BooleanOp::Cut, rod, above).unwrap();
+    if bore == 0.0 {
+        return rod;
+    }
+    let pin = make_cylinder(topo, bore, 3.0 * RADIUS).unwrap();
+    let across = Mat4::translation(0.0, 1.5 * RADIUS, z) * Mat4::rotation_x(PI / 2.0);
+    transform_solid(topo, pin, &across).unwrap();
+    boolean(topo, BooleanOp::Cut, rod, pin).unwrap()
+}
+
+/// The sloped rod's top rim.
+fn sloped_rim(topo: &Topology, solid: SolidId) -> EdgeId {
+    solid_edges(topo, solid)
+        .unwrap()
+        .into_iter()
+        .find(|&e| matches!(topo.edge(e).unwrap().curve(), EdgeCurve::Ellipse(_)))
+        .unwrap()
+}
+
+/// Rounds the sloped rod's top rim by `r`, cross-drilled as `sloped_rod`
+/// says: the rounded solid and the volume before, or why it was not built.
+fn round_a_sloped_rods_top(z: f64, bore: f64, r: f64) -> Result<(Topology, SolidId, f64), String> {
+    let mut topo = Topology::new();
+    let rod = sloped_rod(&mut topo, z, bore);
+    let before = solid_volume(&topo, rod, 0.001).unwrap();
+    let edge = sloped_rim(&topo, rod);
+    match fillet_v2(&mut topo, rod, &[edge], r) {
+        Err(e) => Err(e.to_string()),
+        Ok(result) if !result.failed.is_empty() => Err(format!("{:?}", result.failed)),
+        Ok(result) => Ok((topo, result.solid, before)),
+    }
+}
+
+/// Whether rounding the sloped rod's top rim by `r`, cross-drilled as
+/// `sloped_rod` says and the whole part shrunk `tenths` times by a tenth,
+/// is refused for its trim: the wall's outline and a hole of it would
+/// cross.
+fn sloped_rods_round_is_refused_for_its_trim(z: f64, bore: f64, r: f64, tenths: i32) -> bool {
+    let mut topo = Topology::new();
+    let rod = sloped_rod(&mut topo, z, bore);
+    // `transform_solid` reads a determinant below its tolerance as
+    // degenerate, so the part shrinks a tenth at a time.
+    for _ in 0..tenths {
+        transform_solid(&mut topo, rod, &Mat4::scale(0.1, 0.1, 0.1)).unwrap();
+    }
+    let edge = sloped_rim(&topo, rod);
+    matches!(
+        fillet_v2(&mut topo, rod, &[edge], r * 0.1_f64.powi(tenths)),
+        Err(OperationsError::Blend(BlendError::TrimmingFailure { .. }))
+    )
+}
+
+/// A bore through the wall reaching above where the round's contact runs
+/// on the wall (about r below the rim where the bore meets it): the contact
+/// runs over the bore's holes, which the fillet does not cut, so it is
+/// refused, not built as a wall whose outline crosses its holes (valid by
+/// edge count, but no wall at all there). A bore wholly between the contact
+/// and the rim lies under the band the round takes off, and is refused too:
+/// the wall would keep its holes outside its trimmed outline. Each holds
+/// for the part a thousand times smaller, as one drawn in metres.
+#[test]
+fn a_rods_top_rim_round_over_a_bore_in_its_wall_is_refused() {
+    for (z, bore) in [(5.2, 0.5), (4.7, 0.4), (6.0, 0.3)] {
+        for tenths in [0, 3] {
+            assert!(
+                sloped_rods_round_is_refused_for_its_trim(z, bore, 2.0, tenths),
+                "the round over the bore at {z}, shrunk {tenths} tenths, was not refused for its trim"
+            );
+        }
+    }
+}
+
+/// The same bore wholly below the contact keeps the round, and the result
+/// is sound: the round takes off what it takes off the undrilled rod.
+#[test]
+fn a_rods_top_rim_rounds_off_above_a_bore_in_its_wall() {
+    let (plain, plain_solid, plain_before) = round_a_sloped_rods_top(0.0, 0.0, 2.0).unwrap();
+    let removed = plain_before - solid_volume(&plain, plain_solid, 0.001).unwrap();
+    let (topo, solid, before) = round_a_sloped_rods_top(3.0, 0.5, 2.0).unwrap();
+    assert_sound_and_changed_by(&topo, solid, before, -removed);
 }

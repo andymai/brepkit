@@ -1793,9 +1793,17 @@ fn rebuild_mapped_parametric_face(
                         continue;
                     }
                     let step = (d1 - d0) / 64.0;
-                    let mut lo = (best_t - step).max(d0);
-                    let mut hi = (best_t + step).min(d1);
-                    for _ in 0..40 {
+                    let (low, high) = (d0.min(d1), d0.max(d1));
+                    let mut lo = (best_t - step.abs()).clamp(low, high);
+                    let mut hi = (best_t + step.abs()).clamp(low, high);
+                    // Refined until the bracket stops shrinking: a parameter
+                    // error on a line grows with the line's length, and a
+                    // contact's end must meet the edge within 1e-6 however
+                    // long the edge is.
+                    for _ in 0..200 {
+                        if hi - lo <= f64::EPSILON * lo.abs().max(hi.abs()).max(1.0) {
+                            break;
+                        }
                         let m1 = lo + (hi - lo) / 3.0;
                         let m2 = hi - (hi - lo) / 3.0;
                         if dist_at(m1) < dist_at(m2) {
@@ -2245,7 +2253,7 @@ fn check_holes_clear_of_closed_contacts(
     let refuse = || BlendError::TrimmingFailure { face: face_id };
     let face = topo.face(face_id)?;
     let FaceSurface::Plane { normal, .. } = face.surface() else {
-        return Ok(());
+        return check_holes_clear_in_space(topo, face_id, restrictions);
     };
     let u_axis = normal
         .cross(brepkit_math::vec::Vec3::new(1.0, 0.0, 0.0))
@@ -2367,6 +2375,246 @@ fn check_holes_clear_of_closed_contacts(
                 )
             {
                 return Err(refuse());
+            }
+        }
+    }
+    Ok(())
+}
+
+/// A curve sampled in space: its polyline, and how far the curve can stray
+/// from it, read as [`FlatPolyline`]'s is.
+struct SpacePolyline {
+    points: Vec<Point3>,
+    sag: f64,
+}
+
+/// The distance between the segments `a0 a1` and `b0 b1` in space.
+fn space_segment_distance(a0: Point3, a1: Point3, b0: Point3, b1: Point3) -> f64 {
+    let (d1, d2, r) = (a1 - a0, b1 - b0, a0 - b0);
+    let (a, e, f) = (d1.dot(d1), d2.dot(d2), d2.dot(r));
+    let (s, t) = if a <= f64::EPSILON && e <= f64::EPSILON {
+        (0.0, 0.0)
+    } else if a <= f64::EPSILON {
+        (0.0, (f / e).clamp(0.0, 1.0))
+    } else {
+        let c = d1.dot(r);
+        if e <= f64::EPSILON {
+            ((-c / a).clamp(0.0, 1.0), 0.0)
+        } else {
+            let b = d1.dot(d2);
+            let denom = a.mul_add(e, -(b * b));
+            let mut s = if denom > f64::EPSILON * a * e {
+                (b.mul_add(f, -(c * e)) / denom).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            let mut t = b.mul_add(s, f) / e;
+            if t < 0.0 {
+                t = 0.0;
+                s = (-c / a).clamp(0.0, 1.0);
+            } else if t > 1.0 {
+                t = 1.0;
+                s = ((b - c) / a).clamp(0.0, 1.0);
+            }
+            (s, t)
+        }
+    };
+    let p = a0 + d1 * s;
+    let q = b0 + d2 * t;
+    (p - q).length()
+}
+
+/// Whether two polylines (a closed one and any other) stay further than
+/// `margin` apart in space.
+fn space_polylines_clear_by(a: &SpacePolyline, b: &SpacePolyline, margin: f64) -> bool {
+    let span =
+        |line: &SpacePolyline, k: usize| (line.points[k], line.points[(k + 1) % line.points.len()]);
+    let apart = |p0: Point3, p1: Point3, q0: Point3, q1: Point3| {
+        p0.x().min(p1.x()) - margin > q0.x().max(q1.x())
+            || q0.x().min(q1.x()) - margin > p0.x().max(p1.x())
+            || p0.y().min(p1.y()) - margin > q0.y().max(q1.y())
+            || q0.y().min(q1.y()) - margin > p0.y().max(p1.y())
+            || p0.z().min(p1.z()) - margin > q0.z().max(q1.z())
+            || q0.z().min(q1.z()) - margin > p0.z().max(p1.z())
+    };
+    for i in 0..a.points.len() {
+        let (a0, a1) = span(a, i);
+        for j in 0..b.points.len() {
+            let (b0, b1) = span(b, j);
+            if !apart(a0, a1, b0, b1) && space_segment_distance(a0, a1, b0, b1) <= margin {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+/// Whether `p` and `q` lie on one side of the closed curve `outline` on a
+/// cylinder or cone `surface`: the straight path between them in its
+/// parameters crosses the curve, repeated a turn either way, an even
+/// number of times. The turn is unwrapped, so a curve running round the
+/// wall (a rim's contact) splits it as a curve closed in the parameters
+/// does. `None` on any other surface.
+fn same_side_on_wall(
+    surface: &FaceSurface,
+    outline: &[Point3],
+    p: Point3,
+    q: Point3,
+) -> Option<bool> {
+    if !matches!(surface, FaceSurface::Cylinder(_) | FaceSurface::Cone(_)) {
+        return None;
+    }
+    let turn = std::f64::consts::TAU;
+    let near = |u: f64, to: f64| u - turn * ((u - to) / turn).round();
+    let mut ring: Vec<Flat> = Vec::with_capacity(outline.len() + 1);
+    for &point in outline.iter().chain(outline.first()) {
+        let (u, v) = surface.project_point(point)?;
+        let u = ring.last().map_or(u, |&(previous, _)| near(u, previous));
+        ring.push((u, v));
+    }
+    let (pu, pv) = surface.project_point(p)?;
+    let (qu, qv) = surface.project_point(q)?;
+    let qu = near(qu, pu);
+    let (low, high) = ring
+        .iter()
+        .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), &(u, _)| {
+            (lo.min(u), hi.max(u))
+        });
+    if !(low.is_finite() && high.is_finite()) || high - low > 4.0 * turn {
+        return None;
+    }
+    let cross = |o: Flat, a: Flat, b: Flat| (a.0 - o.0) * (b.1 - o.1) - (a.1 - o.1) * (b.0 - o.0);
+    let (from, to) = ((pu, pv), (qu, qv));
+    let run = (to.0 - from.0, to.1 - from.1);
+    let length2 = run.0.mul_add(run.0, run.1 * run.1);
+    // The path's ends and the ring's first point are read within a turn of
+    // each other and the ring spans at most four turns, so six turns either
+    // way reach every copy the path can cross.
+    let mut crossings = 0_usize;
+    for k in -6..=6 {
+        let shift = turn * f64::from(k);
+        for pair in ring.windows(2) {
+            let (a, b) = (
+                (pair[0].0 + shift, pair[0].1),
+                (pair[1].0 + shift, pair[1].1),
+            );
+            // Half-open: a sample on the path's line counts on its
+            // non-positive side, so the curve crossing the path at a sample
+            // crosses once, touching it there crosses twice or not at all,
+            // and a stretch along the path counts as one point.
+            let (side_a, side_b) = (cross(from, to, a), cross(from, to, b));
+            if (side_a > 0.0) == (side_b > 0.0) {
+                continue;
+            }
+            let f = side_a / (side_a - side_b);
+            let (x, y) = ((b.0 - a.0).mul_add(f, a.0), (b.1 - a.1).mul_add(f, a.1));
+            let t = (x - from.0).mul_add(run.0, (y - from.1) * run.1) / length2;
+            if (0.0..=1.0).contains(&t) {
+                crossings += 1;
+            }
+        }
+    }
+    Some(crossings.is_multiple_of(2))
+}
+
+/// The curved-face part of [`check_holes_clear_of_closed_contacts`]:
+/// refuses a closed contact that a hole of the face (other than a rim the
+/// contact rounds) touches or crosses, or that leaves a hole on the side
+/// the trim cuts off. On a cylinder wall a round's contact can run over a
+/// hole where another feature joins the wall, or above one under the band;
+/// the trim keeps the hole whole, so the face's outline and its hole would
+/// cross, or the hole would lie outside the outline. The curves are
+/// compared in space, each kept further apart than the two can stray from
+/// their polylines. Which side a hole lies on is read in the face's own
+/// parameters, on a cylinder or cone wall only.
+fn check_holes_clear_in_space(
+    topo: &Topology,
+    face_id: FaceId,
+    restrictions: &[ParametricRestriction],
+) -> Result<(), BlendError> {
+    let face = topo.face(face_id)?;
+    if face.inner_wires().is_empty() {
+        return Ok(());
+    }
+    // Appends the curve from `a` to `b`, run forward or backward, without
+    // its last point, which the next piece starts at.
+    let sample = |curve: &EdgeCurve,
+                  (a, b): (Point3, Point3),
+                  forward: bool,
+                  n: u32,
+                  line: &mut SpacePolyline| {
+        let (t0, t1) = curve.domain_with_endpoints(a, b);
+        let at = |k: f64| {
+            let k = if forward { k } else { f64::from(n) - k };
+            curve.evaluate_with_endpoints((t1 - t0).mul_add(k / f64::from(n), t0), a, b)
+        };
+        for k in 0..n {
+            let (p, q) = (at(f64::from(k)), at(f64::from(k + 1)));
+            for f in [0.25, 0.5, 0.75] {
+                let inner = at(f64::from(k) + f);
+                line.sag = line
+                    .sag
+                    .max(2.0 * space_segment_distance(p, q, inner, inner));
+            }
+            line.points.push(p);
+        }
+    };
+    let mut contacts = Vec::new();
+    for r in restrictions {
+        let (Some(&first), Some(&last), Some(curve)) =
+            (r.contact_3d.first(), r.contact_3d.last(), r.curve.as_ref())
+        else {
+            continue;
+        };
+        if (first - last).length() > VERTEX_TOL {
+            continue;
+        }
+        let mut line = SpacePolyline {
+            points: Vec::new(),
+            sag: 0.0,
+        };
+        sample(curve, (first, last), true, 16 * HOLE_SAMPLES, &mut line);
+        let rounds: std::collections::HashSet<EdgeId> = r.source_edges.iter().copied().collect();
+        contacts.push((line, rounds, r.keep));
+    }
+    if contacts.is_empty() {
+        return Ok(());
+    }
+    for &hole in face.inner_wires() {
+        let mut line = SpacePolyline {
+            points: Vec::new(),
+            sag: 0.0,
+        };
+        let mut edges = std::collections::HashSet::new();
+        for oe in topo.wire(hole)?.edges() {
+            let edge = topo.edge(oe.edge())?;
+            let (a, b) = (
+                topo.vertex(edge.start())?.point(),
+                topo.vertex(edge.end())?.point(),
+            );
+            sample(
+                edge.curve(),
+                (a, b),
+                oe.is_forward(),
+                HOLE_SAMPLES,
+                &mut line,
+            );
+            edges.insert(oe.edge());
+        }
+        let Some(&probe) = line.points.first() else {
+            continue;
+        };
+        for (contact, rounds, keep) in &contacts {
+            if rounds.iter().any(|edge| edges.contains(edge)) {
+                continue;
+            }
+            if !space_polylines_clear_by(&line, contact, line.sag + contact.sag + VERTEX_TOL) {
+                return Err(BlendError::TrimmingFailure { face: face_id });
+            }
+            if let TrimKeep::AwayFrom(rim) = *keep
+                && same_side_on_wall(face.surface(), &contact.points, probe, rim) == Some(true)
+            {
+                return Err(BlendError::TrimmingFailure { face: face_id });
             }
         }
     }
@@ -4542,5 +4790,66 @@ mod tests {
         // Non-parallel but non-overlapping segments.
         let t = segment_intersect_2d((0.0, 0.0), (1.0, 0.0), (2.0, -1.0), (2.0, 1.0));
         assert!(t.is_none());
+    }
+
+    /// A unit cylinder wall about `z`, and the points of it at each `(u, v)`
+    /// of `samples`.
+    fn wall_with(samples: &[(f64, f64)]) -> (FaceSurface, Vec<Point3>) {
+        use brepkit_math::surfaces::CylindricalSurface;
+        let wall =
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0)
+                .unwrap();
+        let points = samples.iter().map(|&(u, v)| wall.evaluate(u, v)).collect();
+        (FaceSurface::Cylinder(wall), points)
+    }
+
+    /// The side of a contact round a wall at `v = 5`, sampled from `u = 0`,
+    /// read along a path straight through a sample: on the wall's seam
+    /// (its first and last sample) and inside the ring.
+    #[test]
+    fn wall_side_reads_a_path_through_a_sample() {
+        let ring: Vec<(f64, f64)> = (0..64)
+            .map(|k| (std::f64::consts::TAU * f64::from(k) / 64.0, 5.0))
+            .collect();
+        let (wall, contact) = wall_with(&ring);
+        let at = |u: f64, v: f64| wall.evaluate(u, v).unwrap();
+        let side = |p: Point3, q: Point3| same_side_on_wall(&wall, &contact, p, q);
+        for u in [0.0, std::f64::consts::TAU * 5.0 / 64.0] {
+            assert_eq!(side(at(u, 3.0), at(u, 7.0)), Some(false), "u = {u}");
+            assert_eq!(side(at(u, 7.0), at(u, 3.0)), Some(false), "u = {u}");
+            assert_eq!(side(at(u, 3.0), at(u, 4.0)), Some(true), "u = {u}");
+            assert_eq!(side(at(u, 7.0), at(u, 6.0)), Some(true), "u = {u}");
+        }
+    }
+
+    /// A contact touching a path at one sample leaves both its ends on one
+    /// side, whichever way the path runs; a contact running a stretch along
+    /// the path, from one side of it to the other, crosses it once.
+    #[test]
+    fn wall_side_reads_a_touch_and_a_run_along_the_path() {
+        let tau = std::f64::consts::TAU;
+        // `v = 5 + cos u / 2`, peaking at the sample `u = 0`.
+        let wave: Vec<(f64, f64)> = (0..64)
+            .map(|k| {
+                let u = tau * f64::from(k) / 64.0;
+                (u, 0.5f64.mul_add(u.cos(), 5.0))
+            })
+            .collect();
+        let (wall, contact) = wall_with(&wave);
+        let at = |u: f64, v: f64| wall.evaluate(u, v).unwrap();
+        let side = |p: Point3, q: Point3| same_side_on_wall(&wall, &contact, p, q);
+        assert_eq!(side(at(-0.3, 5.5), at(0.3, 5.5)), Some(true));
+        assert_eq!(side(at(0.3, 5.5), at(-0.3, 5.5)), Some(true));
+        assert_eq!(side(at(-0.3, 5.5), at(0.3, 4.0)), Some(false));
+
+        // Round the wall at `v = 5.2`, then down the seam to `v = 5`.
+        let mut step: Vec<(f64, f64)> = vec![(0.0, 5.0)];
+        step.extend((0..64).map(|k| (tau * f64::from(k) / 64.0, 5.2)));
+        let (wall, contact) = wall_with(&step);
+        let at = |u: f64, v: f64| wall.evaluate(u, v).unwrap();
+        let side = |p: Point3, q: Point3| same_side_on_wall(&wall, &contact, p, q);
+        assert_eq!(side(at(0.0, 3.0), at(0.0, 7.0)), Some(false));
+        assert_eq!(side(at(0.0, 7.0), at(0.0, 3.0)), Some(false));
+        assert_eq!(side(at(0.0, 3.0), at(0.0, 4.0)), Some(true));
     }
 }
