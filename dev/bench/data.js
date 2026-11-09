@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794259074897,
+  "lastUpdate": 1794265077285,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -67337,6 +67337,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 28723755,
             "range": "± 77950",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c30667e85ac71b6eca3ec9791cece37e45b20e80",
+          "message": "fix(topology): let a seamed seed set the face-normal convention (#2359)\n\nLands #2353. A seed whose wire runs along a seam both ways reads its winding from its boundary's signed area in the surface's (u, v), sets the convention, and is never turned. On a B-spline, such a seed gives no reading when its loop crosses a seam that no period unwraps, so the faces vote as before.\n\nCo-authored-by: Eric Vaughan <eric.d.vaughan@gmail.com>",
+          "timestamp": "2026-11-09T14:54:53-08:00",
+          "tree_id": "83cb2463bcf0841362d2b817199372a4e781edb7",
+          "url": "https://github.com/andymai/brepkit/commit/c30667e85ac71b6eca3ec9791cece37e45b20e80"
+        },
+        "date": 1794265068382,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 915555,
+            "range": "± 1467",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 942693,
+            "range": "± 17027",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10838,
+            "range": "± 35",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 713619,
+            "range": "± 9507",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 22940915,
+            "range": "± 39153",
             "unit": "ns/iter"
           }
         ]
