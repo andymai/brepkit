@@ -2883,6 +2883,15 @@ fn build_section_edges(
                                         && f.inner_wires().is_empty()
                                 })
                             });
+                        let clipped_list: Vec<(Point3, Point3)> = match opposing_face {
+                            Some(of) => clipped_list
+                                .into_iter()
+                                .flat_map(|(cs, ce)| {
+                                    split_runs_across_holes(topo, face_id, *of, cs, ce, tol)
+                                })
+                                .collect(),
+                            None => clipped_list,
+                        };
                         let mut finals = Vec::new();
                         for (cs, ce) in clipped_list {
                             match opposing_face.and_then(|of| {
@@ -3860,9 +3869,39 @@ fn arc_segment_crossings(
     };
     let circle = match curve {
         EdgeCurve::Circle(c) => c,
+        // An ellipse arc (a tilted earlier cut's trace on a cylinder) puts
+        // the signed side ((C(t) - S) x D) . n = A + B cos t + E sin t, whose
+        // roots solve exactly: sampling the side loses both crossings of a
+        // run that passes just inside the ellipse between two samples.
+        EdgeCurve::Ellipse(e) => {
+            let Some(n) = plane_normal else {
+                return Vec::new();
+            };
+            let w = (line_end - line_start).cross(n);
+            let a = (e.center() - line_start).dot(w);
+            let b = e.semi_major() * e.u_axis().dot(w);
+            let c = e.semi_minor() * e.v_axis().dot(w);
+            let reach = b.hypot(c);
+            if !a.is_finite() || !reach.is_finite() || a.abs() >= reach {
+                return Vec::new();
+            }
+            let (phase, half) = (c.atan2(b), (-a / reach).acos());
+            let (t0, t1) = curve.domain_with_endpoints(stored_start, stored_end);
+            let eps = 1e-6;
+            let mut hits: Vec<(Point3, f64)> = Vec::new();
+            for t in [phase - half, phase + half] {
+                let rel = (t - t0).rem_euclid(std::f64::consts::TAU);
+                let p = e.evaluate(t);
+                if (closed || rel <= t1 - t0 + eps || rel >= std::f64::consts::TAU - eps)
+                    && hits.iter().all(|(q, _)| (*q - p).length() >= tol)
+                {
+                    hits.push((p, t));
+                }
+            }
+            return hits;
+        }
         // A NURBS boundary edge (e.g. a revolve's arc, which serializes as
-        // NurbsCurve rather than Circle) or an ellipse arc (a tilted earlier
-        // cut's trace on a cylinder) is intersected with the section line
+        // NurbsCurve rather than Circle) is intersected with the section line
         // by sampled sign-change bisection in the face plane: the signed side
         // function s(t) = ((C(t) - S) x D) . n has a root at each crossing.
         // Bounded cost (33 evaluations plus ~48 bisection steps per root);
@@ -3874,27 +3913,14 @@ fn arc_segment_crossings(
         // put a coaxial revolve cut's section endpoints 0.75 mm inside the
         // face, where the splitter could not anchor them and declined every
         // split.
-        EdgeCurve::NurbsCurve(_) | EdgeCurve::Ellipse(_) => {
+        EdgeCurve::NurbsCurve(_) => {
             let Some(n) = plane_normal else {
                 return Vec::new();
             };
-            let _ = tol;
             let dir = line_end - line_start;
             let side = |p: Point3| (p - line_start).cross(dir).dot(n);
-            // An ellipse arc is sampled over its native span from its stored
-            // start, as the classification polygon below samples it, so a
-            // major arc is walked the long way round.
-            let span = matches!(curve, EdgeCurve::Ellipse(_))
-                .then(|| curve.domain_with_endpoints(stored_start, stored_end));
-            let eval = |f: f64| match span {
-                Some((t0, t1)) => curve.evaluate_with_endpoints(
-                    (t1 - t0).mul_add(f, t0),
-                    stored_start,
-                    stored_end,
-                ),
-                None => {
-                    super::pcurve_compute::evaluate_edge_at_t(curve, stored_start, stored_end, f)
-                }
+            let eval = |f: f64| {
+                super::pcurve_compute::evaluate_edge_at_t(curve, stored_start, stored_end, f)
             };
             let mut hits = Vec::new();
             let mut prev_f = 0.0_f64;
@@ -3963,6 +3989,127 @@ fn arc_segment_crossings(
         rel <= span + eps || rel >= std::f64::consts::TAU - eps
     };
     hits.into_iter().filter(|(_, t)| on_arc(*t)).collect()
+}
+
+/// A plane x plane section line on `face_id`, split at the middle of each run
+/// it makes across a round hole of the opposing plane face: between two
+/// crossings with one circle or ellipse edge of the hole's rim. The section is
+/// left whole across the opposing face's holes, so this face alone holds that
+/// run, and the run shares both ends with the rim's arc between them, which
+/// the assembler's endpoint-keyed merge would weld it to.
+fn split_runs_across_holes(
+    topo: &Topology,
+    face_id: FaceId,
+    opposing: FaceId,
+    start: Point3,
+    end: Point3,
+    tol: f64,
+) -> Vec<(Point3, Point3)> {
+    /// Points closer than the band the assembler welds at are one point, and
+    /// a run within it of its arc is that arc.
+    const WELD: f64 = 1e-5;
+
+    let whole = vec![(start, end)];
+    let (Ok(face), Ok(partner)) = (topo.face(face_id), topo.face(opposing)) else {
+        return whole;
+    };
+    let (FaceSurface::Plane { .. }, FaceSurface::Plane { normal, d }) =
+        (face.surface(), partner.surface())
+    else {
+        return whole;
+    };
+    let seg = end - start;
+    let len = seg.length();
+    let scale = normal.length().max(f64::MIN_POSITIVE);
+    let off_plane = |p: Point3| {
+        (normal.dot(brepkit_math::vec::Vec3::new(p.x(), p.y(), p.z())) - d).abs() / scale
+    };
+    if partner.inner_wires().is_empty()
+        || len <= 2.0 * WELD
+        || off_plane(start) > WELD
+        || off_plane(end) > WELD
+    {
+        return whole;
+    }
+    let frame = crate::builder::plane_frame::PlaneFrame::from_normal_and_point(*normal, start);
+    let mut middles: Vec<f64> = Vec::new();
+    for &hole in partner.inner_wires() {
+        let Ok(wire) = topo.wire(hole) else {
+            return whole;
+        };
+        let mut runs: Vec<f64> = Vec::new();
+        for oe in wire.edges() {
+            let Ok(edge) = topo.edge(oe.edge()) else {
+                return whole;
+            };
+            let (center, reach) = match edge.curve() {
+                EdgeCurve::Circle(c) => (c.center(), c.radius()),
+                EdgeCurve::Ellipse(e) => (e.center(), e.semi_major()),
+                EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => continue,
+            };
+            let to_center = center - start;
+            if (to_center - seg * (to_center.dot(seg) / (len * len))).length() >= reach {
+                continue;
+            }
+            let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) else {
+                return whole;
+            };
+            let mut hits: Vec<f64> = arc_segment_crossings(
+                edge.curve(),
+                sv.point(),
+                ev.point(),
+                edge.start() == edge.end(),
+                true,
+                start,
+                end,
+                tol,
+                Some(*normal),
+            )
+            .into_iter()
+            .map(|(p, _)| (p - start).dot(seg) / (len * len))
+            .filter(|&f| f * len > WELD && (1.0 - f) * len > WELD)
+            .collect();
+            hits.sort_by(f64::total_cmp);
+            hits.dedup_by(|b, a| (*b - *a) * len <= WELD);
+            let &[fa, fb] = hits.as_slice() else {
+                continue;
+            };
+            let f = 0.5 * (fa + fb);
+            let middle = start + seg * f;
+            let on_rim = match edge.curve() {
+                EdgeCurve::Circle(c) => c.evaluate(c.project(middle)),
+                EdgeCurve::Ellipse(e) => e.evaluate(e.project(middle)),
+                EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => continue,
+            };
+            if (on_rim - middle).length() > WELD {
+                runs.push(f);
+            }
+        }
+        if runs.is_empty() {
+            continue;
+        }
+        let Ok(Some(rim)) = brepkit_topology::planar::wire_boundary_2d(
+            topo,
+            hole,
+            frame.origin(),
+            frame.u_axis(),
+            frame.v_axis(),
+        ) else {
+            continue;
+        };
+        middles.extend(runs.into_iter().filter(|&f| {
+            brepkit_math::region2d::point_in_region(&rim, frame.project(start + seg * f), WELD)
+                == Some(true)
+        }));
+    }
+    if middles.is_empty() {
+        return whole;
+    }
+    middles.sort_by(f64::total_cmp);
+    let mut bounds = vec![start];
+    bounds.extend(middles.into_iter().map(|f| start + seg * f));
+    bounds.push(end);
+    bounds.windows(2).map(|w| (w[0], w[1])).collect()
 }
 
 /// Each input face's loops in its own parameter space, sampled the first
@@ -6176,6 +6323,79 @@ mod tests {
                 line_end,
                 1e-7,
                 None,
+            );
+            assert_eq!(hits.len(), 1, "forward={forward}: {hits:?}");
+            assert!(
+                (hits[0].0 - on_arc).length() < 1e-9,
+                "forward={forward}: {hits:?}"
+            );
+        }
+    }
+
+    /// A run 0.001 inside the top of a closed ellipse seamed a 64th of a
+    /// turn from its major axis: both crossings fall between two of 32
+    /// samples taken from the seam, and both are found.
+    #[test]
+    fn a_shallow_run_across_a_seamed_ellipse_finds_both_crossings() {
+        use brepkit_math::curves::Ellipse3D;
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        let origin = Point3::new(0.0, 0.0, 0.0);
+        let ellipse =
+            Ellipse3D::new_with_ref(origin, z, 3.4, 1.7, Vec3::new(1.0, 0.0, 0.0)).unwrap();
+        let seam = ellipse.evaluate(std::f64::consts::PI / 32.0);
+        let top = ellipse.evaluate(std::f64::consts::FRAC_PI_2);
+        let y = top.y() * (1.699 / 1.7);
+        let hits = arc_segment_crossings(
+            &EdgeCurve::Ellipse(ellipse),
+            seam,
+            seam,
+            true,
+            true,
+            Point3::new(-4.0, y, 0.0),
+            Point3::new(4.0, y, 0.0),
+            1e-7,
+            Some(z),
+        );
+        let x = 3.4 * (1.0 - (1.699_f64 / 1.7).powi(2)).sqrt();
+        let mut xs: Vec<f64> = hits.iter().map(|(p, _)| p.x()).collect();
+        xs.sort_by(f64::total_cmp);
+        assert_eq!(xs.len(), 2, "{hits:?}");
+        assert!(
+            (xs[0] + x).abs() < 1e-9 && (xs[1] - x).abs() < 1e-9,
+            "{xs:?}, want +-{x}"
+        );
+        assert!(
+            hits.iter().all(|(p, _)| (p.y() - y).abs() < 1e-9),
+            "{hits:?}"
+        );
+    }
+
+    /// Half an ellipse, stored from 0 to pi, crossed by the line x = 1,
+    /// which meets the whole ellipse on both halves: only the crossing on
+    /// the stored half is kept, whichever way the wire runs the edge.
+    #[test]
+    fn a_half_ellipse_keeps_only_crossings_on_its_own_half() {
+        use brepkit_math::curves::Ellipse3D;
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        let origin = Point3::new(0.0, 0.0, 0.0);
+        let ellipse =
+            Ellipse3D::new_with_ref(origin, z, 3.0, 2.0, Vec3::new(1.0, 0.0, 0.0)).unwrap();
+        let (start, end) = (
+            ellipse.evaluate(0.0),
+            ellipse.evaluate(std::f64::consts::PI),
+        );
+        let on_arc = ellipse.evaluate((1.0_f64 / 3.0).acos());
+        for (a, b, forward) in [(start, end, true), (end, start, false)] {
+            let hits = arc_segment_crossings(
+                &EdgeCurve::Ellipse(ellipse.clone()),
+                a,
+                b,
+                false,
+                forward,
+                Point3::new(1.0, -3.0, 0.0),
+                Point3::new(1.0, 3.0, 0.0),
+                1e-7,
+                Some(z),
             );
             assert_eq!(hits.len(), 1, "forward={forward}: {hits:?}");
             assert!(

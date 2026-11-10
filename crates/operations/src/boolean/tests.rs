@@ -9491,3 +9491,76 @@ fn a_ball_with_its_equator_on_a_box_face_meets_it_exactly() {
         assert_volume_near(&topo, result, volume, 1e-6);
     }
 }
+
+/// A box fused into a holed plate, its top face crossing the hole: the
+/// hole's wall above the box and the strip of the box's top face inside the
+/// hole are both outside the plate and the box, so both stay. With the
+/// hole's seam below the box's top, the wall's arc over the hole and the
+/// box's straight edge across it join the same two points, and stay two
+/// edges. The box's top sits 1 below the hole's axis, and 1.5 above it,
+/// where the arc over the hole is shallow: both fuses are exact.
+#[test]
+fn fuse_box_top_crossing_plate_hole_keeps_the_open_part() {
+    use brepkit_math::mat::Mat4;
+    use std::f64::consts::{FRAC_PI_2, PI};
+
+    for top in [9.0, 11.5] {
+        let mut topo = Topology::new();
+        // plate x [-10, 10], y [0, 3], z [0, 20]
+        let plate = crate::primitives::make_box(&mut topo, 20.0, 3.0, 20.0).unwrap();
+        crate::transform::transform_solid(&mut topo, plate, &Mat4::translation(-10.0, 0.0, 0.0))
+            .unwrap();
+        // hole r = 1.7 along Y at z = 10, its seam along its bottom
+        let pin = crate::primitives::make_cylinder(&mut topo, 1.7, 5.0).unwrap();
+        for m in [
+            Mat4::rotation_z(FRAC_PI_2),
+            Mat4::rotation_x(-FRAC_PI_2),
+            Mat4::translation(0.0, -1.0, 10.0),
+        ] {
+            crate::transform::transform_solid(&mut topo, pin, &m).unwrap();
+        }
+        let holed = boolean(&mut topo, BooleanOp::Cut, plate, pin).unwrap();
+        // box x [-4, 4], y [-6, 2], z [-5, top]: 2 deep into the plate
+        let block = crate::primitives::make_box(&mut topo, 8.0, 8.0, top + 5.0).unwrap();
+        crate::transform::transform_solid(&mut topo, block, &Mat4::translation(-4.0, -6.0, -5.0))
+            .unwrap();
+
+        let res = boolean(&mut topo, BooleanOp::Fuse, holed, block).unwrap();
+
+        // exact, not the mesh fallback: the hole's wall is still a cylinder
+        let cylinders = brepkit_topology::explorer::solid_faces(&topo, res)
+            .unwrap()
+            .into_iter()
+            .filter(|&f| matches!(topo.face(f).unwrap().surface(), FaceSurface::Cylinder(_)))
+            .count();
+        assert!(cylinders >= 1, "top {top}: the fuse fell back to a mesh");
+
+        // the hole's part below the box's top, a chord `d` off its axis,
+        // 2 deep
+        let (r, d) = (1.7_f64, top - 10.0);
+        let below = r * r * (-d / r).acos() + d * (r * r - d * d).sqrt();
+        let plate_v = 20.0 * 3.0 * 20.0 - PI * r * r * 3.0;
+        let overlap = 8.0 * 2.0 * top - 2.0 * below;
+        assert_volume_near(
+            &topo,
+            res,
+            plate_v + 8.0 * 8.0 * (top + 5.0) - overlap,
+            1e-6,
+        );
+
+        let opts = brepkit_check::classify::ClassifyOptions::default();
+        let at = |p: Point3| brepkit_check::classify::classify_point(&topo, res, p, &opts).unwrap();
+        // in the hole, just above the box's top, within the box's depth: empty
+        assert_eq!(
+            at(Point3::new(0.3, 1.0, top + 0.1)),
+            brepkit_check::classify::PointClassification::Outside,
+            "top {top}"
+        );
+        // in the hole, just below the box's top: the box fills it
+        assert_eq!(
+            at(Point3::new(0.3, 1.0, top - 0.1)),
+            brepkit_check::classify::PointClassification::Inside,
+            "top {top}"
+        );
+    }
+}
