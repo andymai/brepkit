@@ -3991,8 +3991,6 @@ fn split_runs_across_holes(
     /// Points closer than the band the assembler welds at are one point, and
     /// a run within it of its arc is that arc.
     const WELD: f64 = 1e-5;
-    /// Points sampled along each hole edge for the inside test.
-    const EDGE_SAMPLES: u32 = 16;
 
     let whole = vec![(start, end)];
     let (Ok(face), Ok(partner)) = (topo.face(face_id), topo.face(opposing)) else {
@@ -4073,30 +4071,18 @@ fn split_runs_across_holes(
         if runs.is_empty() {
             continue;
         }
-        let mut rim: Vec<brepkit_math::vec::Point2> = Vec::new();
-        for oe in wire.edges() {
-            let Ok(edge) = topo.edge(oe.edge()) else {
-                return whole;
-            };
-            let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) else {
-                return whole;
-            };
-            let (sp, ep) = (sv.point(), ev.point());
-            let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
-            rim.extend((0..EDGE_SAMPLES).map(|k| {
-                let f = f64::from(k) / f64::from(EDGE_SAMPLES);
-                let f = if oe.is_forward() { f } else { 1.0 - f };
-                frame.project(edge.curve().evaluate_with_endpoints(
-                    (t1 - t0).mul_add(f, t0),
-                    sp,
-                    ep,
-                ))
-            }));
-        }
+        let Ok(Some(rim)) = brepkit_topology::planar::wire_boundary_2d(
+            topo,
+            hole,
+            frame.origin(),
+            frame.u_axis(),
+            frame.v_axis(),
+        ) else {
+            continue;
+        };
         middles.extend(runs.into_iter().filter(|&f| {
-            let at = frame.project(start + seg * f);
-            crate::builder::classify_2d::point_in_polygon_2d(at, &rim)
-                && crate::builder::classify_2d::distance_to_polygon_boundary(at, &rim) > WELD
+            brepkit_math::region2d::point_in_region(&rim, frame.project(start + seg * f), WELD)
+                == Some(true)
         }));
     }
     if middles.is_empty() {

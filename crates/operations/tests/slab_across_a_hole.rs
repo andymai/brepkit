@@ -105,7 +105,9 @@ fn check(
             .any(|s| matches!(s, FaceSurface::Cylinder(_))),
         "{case}: the hole lost its wall"
     );
-    let mesh = tessellate_solid(topo, fused, 0.01).unwrap();
+    // Finer than the shallowest arc's 0.01 sag over its chord: at that
+    // deflection the hole's wall above the box meshes onto the chord.
+    let mesh = tessellate_solid(topo, fused, 0.002).unwrap();
     assert!(is_watertight(&mesh), "{case}: the mesh leaks");
     let volume = solid_volume(topo, fused, 0.001).unwrap();
     assert!(
@@ -236,7 +238,7 @@ fn fuse_box_across(pose: &str, spin: f64, top: f64) {
         want,
         pose,
         &[
-            Point3::new(0.3, 1.0, top + 0.1),
+            Point3::new(0.0, 1.0, 0.5 * (top + 10.0 + r)),
             Point3::new(0.0, 2.5, 10.0),
         ],
         &[
@@ -250,8 +252,10 @@ fn fuse_box_across(pose: &str, spin: f64, top: f64) {
 #[test]
 fn a_box_whose_top_crosses_a_hole_fuses_exactly() {
     for pose in POSES {
-        for spin in [0.0_f64, 90.0, 180.0, 270.0] {
-            for top in [9.0, 11.5] {
+        // At 11.69 the top runs 0.01 below the rim, its run's middle between
+        // two of a 16-gon's corners with the seam turned 11.25 degrees.
+        for spin in [0.0_f64, 11.25, 90.0, 180.0, 270.0] {
+            for top in [9.0, 11.5, 11.69] {
                 fuse_box_across(pose, spin, top);
             }
         }

@@ -109,6 +109,36 @@ pub fn face_boundary_2d(
     Ok(Some(pieces))
 }
 
+/// One wire flattened into the plane through `origin` spanned by the
+/// orthonormal `x` and `y`, each line a segment and each circle or ellipse
+/// arc the arc it is. `None` when an edge is a NURBS curve.
+///
+/// # Errors
+///
+/// Returns [`TopologyError`] if an entity lookup fails.
+pub fn wire_boundary_2d(
+    topo: &Topology,
+    wire: WireId,
+    origin: Point3,
+    x: Vec3,
+    y: Vec3,
+) -> Result<Option<Vec<Boundary2>>, TopologyError> {
+    let plane = Plane2 { origin, x, y };
+    let mut pieces = Vec::new();
+    for oe in topo.wire(wire)?.edges() {
+        let edge = topo.edge(oe.edge())?;
+        let (a, b) = (
+            topo.vertex(edge.start())?.point(),
+            topo.vertex(edge.end())?.point(),
+        );
+        let Some(piece) = plane.exact_piece(edge.curve(), a, b) else {
+            return Ok(None);
+        };
+        pieces.push(piece);
+    }
+    Ok(Some(pieces))
+}
+
 /// The signed area a wire encloses in the plane spanned by the orthonormal
 /// `x` and `y`: positive when it winds counterclockwise about `x × y`.
 ///
