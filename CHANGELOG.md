@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.11.2](https://github.com/andymai/brepkit/compare/v4.11.1...v4.11.2) (2026-11-10)
+
+
+### Bug Fixes
+
+* **algo:** keep a chord across a round hole apart from the hole's arc ([#2361](https://github.com/andymai/brepkit/issues/2361)) ([e51b193](https://github.com/andymai/brepkit/commit/e51b19310b6b2fdb2b96a6f1b2820fb43e3c77cb))
+
 ## [4.11.1](https://github.com/andymai/brepkit/compare/v4.11.0...v4.11.1) (2026-11-09)
 
 
