@@ -3869,9 +3869,39 @@ fn arc_segment_crossings(
     };
     let circle = match curve {
         EdgeCurve::Circle(c) => c,
+        // An ellipse arc (a tilted earlier cut's trace on a cylinder) puts
+        // the signed side ((C(t) - S) x D) . n = A + B cos t + E sin t, whose
+        // roots solve exactly: sampling the side loses both crossings of a
+        // run that passes just inside the ellipse between two samples.
+        EdgeCurve::Ellipse(e) => {
+            let Some(n) = plane_normal else {
+                return Vec::new();
+            };
+            let w = (line_end - line_start).cross(n);
+            let a = (e.center() - line_start).dot(w);
+            let b = e.semi_major() * e.u_axis().dot(w);
+            let c = e.semi_minor() * e.v_axis().dot(w);
+            let reach = b.hypot(c);
+            if !a.is_finite() || !reach.is_finite() || a.abs() >= reach {
+                return Vec::new();
+            }
+            let (phase, half) = (c.atan2(b), (-a / reach).acos());
+            let (t0, t1) = curve.domain_with_endpoints(stored_start, stored_end);
+            let eps = 1e-6;
+            let mut hits: Vec<(Point3, f64)> = Vec::new();
+            for t in [phase - half, phase + half] {
+                let rel = (t - t0).rem_euclid(std::f64::consts::TAU);
+                let p = e.evaluate(t);
+                if (closed || rel <= t1 - t0 + eps || rel >= std::f64::consts::TAU - eps)
+                    && hits.iter().all(|(q, _)| (*q - p).length() >= tol)
+                {
+                    hits.push((p, t));
+                }
+            }
+            return hits;
+        }
         // A NURBS boundary edge (e.g. a revolve's arc, which serializes as
-        // NurbsCurve rather than Circle) or an ellipse arc (a tilted earlier
-        // cut's trace on a cylinder) is intersected with the section line
+        // NurbsCurve rather than Circle) is intersected with the section line
         // by sampled sign-change bisection in the face plane: the signed side
         // function s(t) = ((C(t) - S) x D) . n has a root at each crossing.
         // Bounded cost (33 evaluations plus ~48 bisection steps per root);
@@ -3883,27 +3913,14 @@ fn arc_segment_crossings(
         // put a coaxial revolve cut's section endpoints 0.75 mm inside the
         // face, where the splitter could not anchor them and declined every
         // split.
-        EdgeCurve::NurbsCurve(_) | EdgeCurve::Ellipse(_) => {
+        EdgeCurve::NurbsCurve(_) => {
             let Some(n) = plane_normal else {
                 return Vec::new();
             };
-            let _ = tol;
             let dir = line_end - line_start;
             let side = |p: Point3| (p - line_start).cross(dir).dot(n);
-            // An ellipse arc is sampled over its native span from its stored
-            // start, as the classification polygon below samples it, so a
-            // major arc is walked the long way round.
-            let span = matches!(curve, EdgeCurve::Ellipse(_))
-                .then(|| curve.domain_with_endpoints(stored_start, stored_end));
-            let eval = |f: f64| match span {
-                Some((t0, t1)) => curve.evaluate_with_endpoints(
-                    (t1 - t0).mul_add(f, t0),
-                    stored_start,
-                    stored_end,
-                ),
-                None => {
-                    super::pcurve_compute::evaluate_edge_at_t(curve, stored_start, stored_end, f)
-                }
+            let eval = |f: f64| {
+                super::pcurve_compute::evaluate_edge_at_t(curve, stored_start, stored_end, f)
             };
             let mut hits = Vec::new();
             let mut prev_f = 0.0_f64;
@@ -6306,6 +6323,79 @@ mod tests {
                 line_end,
                 1e-7,
                 None,
+            );
+            assert_eq!(hits.len(), 1, "forward={forward}: {hits:?}");
+            assert!(
+                (hits[0].0 - on_arc).length() < 1e-9,
+                "forward={forward}: {hits:?}"
+            );
+        }
+    }
+
+    /// A run 0.001 inside the top of a closed ellipse seamed a 64th of a
+    /// turn from its major axis: both crossings fall between two of 32
+    /// samples taken from the seam, and both are found.
+    #[test]
+    fn a_shallow_run_across_a_seamed_ellipse_finds_both_crossings() {
+        use brepkit_math::curves::Ellipse3D;
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        let origin = Point3::new(0.0, 0.0, 0.0);
+        let ellipse =
+            Ellipse3D::new_with_ref(origin, z, 3.4, 1.7, Vec3::new(1.0, 0.0, 0.0)).unwrap();
+        let seam = ellipse.evaluate(std::f64::consts::PI / 32.0);
+        let top = ellipse.evaluate(std::f64::consts::FRAC_PI_2);
+        let y = top.y() * (1.699 / 1.7);
+        let hits = arc_segment_crossings(
+            &EdgeCurve::Ellipse(ellipse),
+            seam,
+            seam,
+            true,
+            true,
+            Point3::new(-4.0, y, 0.0),
+            Point3::new(4.0, y, 0.0),
+            1e-7,
+            Some(z),
+        );
+        let x = 3.4 * (1.0 - (1.699_f64 / 1.7).powi(2)).sqrt();
+        let mut xs: Vec<f64> = hits.iter().map(|(p, _)| p.x()).collect();
+        xs.sort_by(f64::total_cmp);
+        assert_eq!(xs.len(), 2, "{hits:?}");
+        assert!(
+            (xs[0] + x).abs() < 1e-9 && (xs[1] - x).abs() < 1e-9,
+            "{xs:?}, want +-{x}"
+        );
+        assert!(
+            hits.iter().all(|(p, _)| (p.y() - y).abs() < 1e-9),
+            "{hits:?}"
+        );
+    }
+
+    /// Half an ellipse, stored from 0 to pi, crossed by the line x = 1,
+    /// which meets the whole ellipse on both halves: only the crossing on
+    /// the stored half is kept, whichever way the wire runs the edge.
+    #[test]
+    fn a_half_ellipse_keeps_only_crossings_on_its_own_half() {
+        use brepkit_math::curves::Ellipse3D;
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        let origin = Point3::new(0.0, 0.0, 0.0);
+        let ellipse =
+            Ellipse3D::new_with_ref(origin, z, 3.0, 2.0, Vec3::new(1.0, 0.0, 0.0)).unwrap();
+        let (start, end) = (
+            ellipse.evaluate(0.0),
+            ellipse.evaluate(std::f64::consts::PI),
+        );
+        let on_arc = ellipse.evaluate((1.0_f64 / 3.0).acos());
+        for (a, b, forward) in [(start, end, true), (end, start, false)] {
+            let hits = arc_segment_crossings(
+                &EdgeCurve::Ellipse(ellipse.clone()),
+                a,
+                b,
+                false,
+                forward,
+                Point3::new(1.0, -3.0, 0.0),
+                Point3::new(1.0, 3.0, 0.0),
+                1e-7,
+                Some(z),
             );
             assert_eq!(hits.len(), 1, "forward={forward}: {hits:?}");
             assert!(
