@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794267858224,
+  "lastUpdate": 1794276355757,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -67445,6 +67445,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 18314803,
             "range": "± 176142",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "e51b19310b6b2fdb2b96a6f1b2820fb43e3c77cb",
+          "message": "fix(algo): keep a chord across a round hole apart from the hole's arc (#2361)\n\nA slab standing on a plate across a round through hole, the same slab\nsunk into the plate, and a box whose top crosses the hole fell back to\nthe mesh boolean. A straight chord across the hole shared both ends with\nthe rim's arc on the far side of the seam, and merge_duplicate_edges\nwelded the two into one edge on four faces. Three per-case splits keep\nthem apart, and the merge does not change:\n\n- pave_chords_across_conics paves a straight edge's piece between two\n  crossings with one circle or ellipse edge.\n- split_runs_across_holes splits a plane x plane section at the middle\n  of its run across a round hole of the opposing face, reading the rim\n  exactly through planar::wire_boundary_2d.\n- The hole weave reads a promoted hole exactly.\n\narc_segment_crossings finds a line's crossings with an ellipse arc in\nclosed form.\n\nCo-authored-by: Eric Vaughan <eric.d.vaughan@gmail.com>",
+          "timestamp": "2026-11-09T18:02:20-08:00",
+          "tree_id": "3401e12c8b9160f4933f9363013ffcfa0f117fd9",
+          "url": "https://github.com/andymai/brepkit/commit/e51b19310b6b2fdb2b96a6f1b2820fb43e3c77cb"
+        },
+        "date": 1794276343672,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1080044,
+            "range": "± 14631",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1156512,
+            "range": "± 2905",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12622,
+            "range": "± 427",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 881159,
+            "range": "± 16437",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 28361107,
+            "range": "± 38114",
             "unit": "ns/iter"
           }
         ]
