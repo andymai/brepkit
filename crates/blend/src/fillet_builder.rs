@@ -3705,7 +3705,14 @@ fn terminal_cap_is_notchable(
             (&stripe.contact2, section.p2),
         ]
         .map(|(contact, at)| contact_end_at(contact, at).0);
-        return notch_stays_clear(topo, face, junction.vertex, cylinder.axis(), near_ends);
+        return notch_stays_clear(
+            topo,
+            face,
+            junction.vertex,
+            cylinder.axis(),
+            near_ends,
+            Some(cylinder.radius()),
+        );
     }
     // The corner sits on the cap's outer wire (a convex fillet) or on one of
     // its holes (a concave one ending on a cup's rim); the notch replaces it
@@ -3777,7 +3784,7 @@ fn terminal_cap_is_notchable(
     let FaceSurface::Plane { normal, .. } = face.surface() else {
         return Ok(false);
     };
-    notch_stays_clear(topo, face, junction.vertex, *normal, near_ends)
+    notch_stays_clear(topo, face, junction.vertex, *normal, near_ends, None)
 }
 
 /// Whether a cap's notch at `corner`, ending at `near_ends`, stays clear of
@@ -3786,12 +3793,18 @@ fn terminal_cap_is_notchable(
 /// triangle between its ends and the corner, so no other boundary of the cap
 /// may reach into that triangle (a fillet wider than a cup's wall would cross
 /// its mouth): that is an error. `Ok(false)` where the view cannot be read.
+///
+/// On a curved cap, seen along a band's axis, the notch also lies along
+/// the axis within `depth` (the band's radius) and the notch's own size of
+/// its ends and the corner; a boundary wholly beyond that slab cannot
+/// reach it, however it lies when seen along the axis.
 fn notch_stays_clear(
     topo: &Topology,
     face: &Face,
     corner: VertexId,
     view: Vec3,
     near_ends: [Point3; 2],
+    depth: Option<f64>,
 ) -> Result<bool, BlendError> {
     let Ok(vertex) = topo.vertex(corner) else {
         return Ok(false);
@@ -3805,6 +3818,21 @@ fn notch_stays_clear(
         (d.dot(frame.x), d.dot(frame.y))
     };
     let triangle = [flat(near_ends[0]), (0.0, 0.0), flat(near_ends[1])];
+    let slab = depth.map(|depth| {
+        let along = |p: Point3| (p - vertex).dot(frame.z);
+        let (lo, hi) = near_ends
+            .iter()
+            .map(|&p| along(p))
+            .fold((0.0_f64, 0.0_f64), |(lo, hi), t| (lo.min(t), hi.max(t)));
+        // The end curve between the contacts' ends may bow along the axis
+        // as the cap curves: allow the notch's own size too.
+        let size = near_ends
+            .iter()
+            .map(|&p| (p - vertex).length())
+            .fold((near_ends[0] - near_ends[1]).length(), f64::max);
+        let depth = depth + size;
+        (frame.z, vertex, lo - depth, hi + depth)
+    });
     let wires = std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied());
     for oriented in wires
         .filter_map(|wire| topo.wire(wire).ok())
@@ -3820,6 +3848,9 @@ fn notch_stays_clear(
             return Ok(false);
         };
         let (a, b) = (a.point(), b.point());
+        if slab.is_some_and(|slab| cap_edge_beyond_slab(edge, a, b, slab)) {
+            continue;
+        }
         if cap_edge_reaches_triangle(edge, a, b, &flat, triangle) {
             return Err(BlendError::PlanningFailure {
                 reason: format!(
@@ -3829,6 +3860,52 @@ fn notch_stays_clear(
         }
     }
     Ok(true)
+}
+
+/// Whether a cap edge lies wholly to one side of the slab `lo..=hi` along
+/// `axis` from `origin`, certified: a line by its ends, a circle or an
+/// ellipse by samples clear of it by their sag, a B-spline by its control
+/// hull (only while every weight is positive).
+fn cap_edge_beyond_slab(
+    edge: &brepkit_topology::edge::Edge,
+    a: Point3,
+    b: Point3,
+    (axis, origin, lo, hi): (Vec3, Point3, f64, f64),
+) -> bool {
+    use brepkit_topology::edge::EdgeCurve;
+    const SAMPLES: u32 = 64;
+    let along = |p: Point3| (p - origin).dot(axis);
+    let beyond = |values: &mut dyn Iterator<Item = f64>, margin: f64| {
+        let (mut below, mut above) = (true, true);
+        for t in values {
+            below &= t < lo - margin;
+            above &= t > hi + margin;
+        }
+        below || above
+    };
+    let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
+    let step = (t1 - t0).abs() / f64::from(SAMPLES);
+    let mut samples = (0..=SAMPLES).map(|k| {
+        let t = t0 + (t1 - t0) * f64::from(k) / f64::from(SAMPLES);
+        along(edge.curve().evaluate_with_endpoints(t, a, b))
+    });
+    match edge.curve() {
+        EdgeCurve::Line => beyond(&mut [along(a), along(b)].into_iter(), 0.0),
+        EdgeCurve::Circle(circle) => {
+            beyond(&mut samples, circle.radius() * step * step / 8.0 * 1.01)
+        }
+        EdgeCurve::Ellipse(ellipse) => {
+            let (major, minor) = (ellipse.semi_major(), ellipse.semi_minor());
+            beyond(
+                &mut samples,
+                major.powi(3) / (minor * minor) * step * step / 8.0 * 1.01,
+            )
+        }
+        EdgeCurve::NurbsCurve(curve) => {
+            curve.weights().iter().all(|w| w.is_finite() && *w > 0.0)
+                && beyond(&mut curve.control_points().iter().map(|&p| along(p)), 0.0)
+        }
+    }
 }
 
 /// Whether a cap edge may pass inside the notch triangle, certified: a line
