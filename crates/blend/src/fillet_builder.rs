@@ -6724,4 +6724,86 @@ mod tests {
             }
         }
     }
+
+    /// A round r = 1 along x ends at the corner (0, 0, 0) of a curved cap,
+    /// its contacts ending 1 from the corner on the cap's edges along -y and
+    /// -z. A steep cap carries its end curve to 3 along the axis between
+    /// them. The check reads only the cap's wires, so a plane stands in for
+    /// the cap's surface. `hole` gives the corners of the cap's one hole.
+    fn notch_clear_of_hole(hole: [(f64, f64, f64); 3]) -> Result<bool, BlendError> {
+        let mut topo = Topology::new();
+        let mut vertex =
+            |(x, y, z): (f64, f64, f64)| topo.add_vertex(Vertex::new(Point3::new(x, y, z), 1e-7));
+        let corner = vertex((0.0, 0.0, 0.0));
+        let outer = [corner, vertex((0.0, -2.0, 0.0)), vertex((0.0, 0.0, -2.0))];
+        let hole = hole.map(vertex);
+        let mut loop_of = |vs: &[VertexId]| {
+            (0..vs.len())
+                .map(|i| {
+                    let e =
+                        topo.add_edge(Edge::new(vs[i], vs[(i + 1) % vs.len()], EdgeCurve::Line));
+                    OrientedEdge::new(e, true)
+                })
+                .collect::<Vec<_>>()
+        };
+        let (outer, hole) = (loop_of(&outer), loop_of(&hole));
+        let outer = topo.add_wire(Wire::new(outer, true).unwrap());
+        let hole = topo.add_wire(Wire::new(hole, true).unwrap());
+        let face = Face::new(
+            outer,
+            vec![hole],
+            FaceSurface::Plane {
+                normal: Vec3::new(1.0, 0.0, 0.0),
+                d: 0.0,
+            },
+        );
+        let near_ends = [Point3::new(0.0, -1.0, 0.0), Point3::new(0.0, 0.0, -1.0)];
+        let end_hull = [
+            near_ends[0],
+            Point3::new(3.0, -0.6, -0.3),
+            Point3::new(3.0, -0.3, -0.6),
+            near_ends[1],
+        ];
+        notch_stays_clear(
+            &topo,
+            &face,
+            corner,
+            Vec3::new(1.0, 0.0, 0.0),
+            near_ends,
+            Some(&end_hull),
+        )
+    }
+
+    /// The radius and the notch's size, the ends' span widened by both, put
+    /// every hole below past 1 + sqrt(2) along the axis.
+    fn past_radius_and_size(hole: [(f64, f64, f64); 3]) -> bool {
+        hole.iter().all(|&(x, _, _)| x > 1.0 + 2.0_f64.sqrt())
+    }
+
+    #[test]
+    fn a_hole_within_the_end_curves_span_crossing_the_triangle_is_refused() {
+        // One corner seen in the triangle, two outside it.
+        let hole = [(2.6, -0.3, -0.3), (2.8, -1.6, -0.3), (2.9, -0.3, -1.6)];
+        assert!(past_radius_and_size(hole));
+        assert!(matches!(
+            notch_clear_of_hole(hole),
+            Err(BlendError::PlanningFailure { .. })
+        ));
+    }
+
+    #[test]
+    fn a_hole_past_the_end_curve_wholly_in_the_triangle_is_refused() {
+        let hole = [(5.0, -0.2, -0.2), (5.5, -0.6, -0.2), (6.0, -0.2, -0.6)];
+        assert!(past_radius_and_size(hole));
+        assert!(matches!(
+            notch_clear_of_hole(hole),
+            Err(BlendError::PlanningFailure { .. })
+        ));
+    }
+
+    #[test]
+    fn a_hole_past_the_end_curve_reaching_outside_the_triangle_is_passed_over() {
+        let hole = [(5.0, -0.2, -0.2), (5.5, -1.6, -0.2), (6.0, -0.2, -1.6)];
+        assert!(notch_clear_of_hole(hole).unwrap());
+    }
 }
