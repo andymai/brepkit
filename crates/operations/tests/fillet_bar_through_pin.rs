@@ -12,6 +12,12 @@
 //! behind the corner along that axis, `2 sqrt(R^2 - W^2)` away, and so
 //! seen along it reaches into the notch; it is not in the notch's way.
 //!
+//! A pin only a little wider than the bar puts that opening closer behind
+//! the corner than the round is wide, and a seam at `2` rad splits the
+//! opening's top edge where it lies on the notch's side seen along the
+//! axis. The result must not change when the whole part is turned or
+//! mirrored.
+//!
 //! The round takes off, along the edge, the corner's strip outside the
 //! round, out to the pin's wall: at a height `s` above the round's axis
 //! side, `y = W - r + s`, the strip is `r - sqrt(r^2 - s^2)` deep and runs
@@ -21,6 +27,7 @@
 use std::f64::consts::FRAC_PI_2;
 
 use brepkit_math::mat::Mat4;
+use brepkit_math::vec::Vec3;
 use brepkit_operations::blend_ops::fillet_v2;
 use brepkit_operations::boolean::{BooleanOp, boolean};
 use brepkit_operations::measure::solid_volume;
@@ -36,14 +43,13 @@ use brepkit_topology::solid::SolidId;
 const L: f64 = 20.0;
 const W: f64 = 3.0;
 const H: f64 = 4.0;
-const R: f64 = 5.0;
 
-/// The bar fused through the pin, the pin turned `turn` about its axis
-/// (which moves its seam).
-fn bar_through_pin(topo: &mut Topology, turn: f64) -> SolidId {
+/// The bar fused through a pin of radius `pin`, the pin turned `turn` about
+/// its axis (which moves its seam).
+fn bar_through_pin(topo: &mut Topology, pin: f64, turn: f64) -> SolidId {
     let bar = make_box(topo, 2.0 * L, 2.0 * W, H).unwrap();
     transform_solid(topo, bar, &Mat4::translation(-L, -W, 0.0)).unwrap();
-    let pin = make_cylinder(topo, R, H + 4.0).unwrap();
+    let pin = make_cylinder(topo, pin, H + 4.0).unwrap();
     transform_solid(
         topo,
         pin,
@@ -69,8 +75,9 @@ fn arm_edge(topo: &Topology, solid: SolidId) -> EdgeId {
         .expect("the arm's edge")
 }
 
-/// The volume the round of radius `r` takes off.
-fn removed(r: f64) -> f64 {
+/// The volume the round of radius `r` takes off, out to a pin of radius
+/// `pin`.
+fn removed(r: f64, pin: f64) -> f64 {
     // Simpson's rule in `u`, with `s = r sin u`, where the integrand is
     // smooth.
     const N: usize = 2000;
@@ -78,7 +85,7 @@ fn removed(r: f64) -> f64 {
         let s = r * u.sin();
         let depth = r * (1.0 - u.cos());
         let y = W - r + s;
-        depth * (L - R.mul_add(R, -y * y).sqrt()) * r * u.cos()
+        depth * (L - pin.mul_add(pin, -y * y).sqrt()) * r * u.cos()
     };
     let h = FRAC_PI_2 / N as f64;
     let mut sum = f(0.0) + f(FRAC_PI_2);
@@ -88,34 +95,61 @@ fn removed(r: f64) -> f64 {
     sum * h / 3.0
 }
 
+/// A mirror through a plane of no special direction.
+fn mirror() -> Mat4 {
+    let n = Vec3::new(0.3, -0.5, 0.81).normalize().unwrap();
+    let n = [n.x(), n.y(), n.z()];
+    let through = 2.0 * (1.0 * n[0] + 2.0 * n[1] - 0.5 * n[2]);
+    let mut m = [[0.0; 4]; 4];
+    for i in 0..3 {
+        for j in 0..3 {
+            m[i][j] = if i == j { 1.0 } else { 0.0 } - 2.0 * n[i] * n[j];
+        }
+        m[i][3] = through * n[i];
+    }
+    m[3][3] = 1.0;
+    Mat4(m)
+}
+
 #[test]
 fn a_round_ending_on_a_pin_the_bar_runs_through_is_built() {
-    for turn in [FRAC_PI_2, 2.0] {
-        for r in [1.0, 2.0] {
-            let mut topo = Topology::new();
-            let solid = bar_through_pin(&mut topo, turn);
-            let before = solid_volume(&topo, solid, 1e-3).unwrap();
-            let edge = arm_edge(&topo, solid);
-            let result = fillet_v2(&mut topo, solid, &[edge], r).unwrap();
-            assert!(
-                result.failed.is_empty(),
-                "turn {turn}, r = {r}: {:?}",
-                result.failed
-            );
-            let report = validate_solid(&topo, result.solid).unwrap();
-            assert!(
-                report.is_valid(),
-                "turn {turn}, r = {r}: {:?}",
-                report.issues
-            );
-            let mesh = tessellate_solid(&topo, result.solid, 0.01).unwrap();
-            assert!(is_watertight(&mesh), "turn {turn}, r = {r}: mesh open");
-            let lost = before - solid_volume(&topo, result.solid, 1e-3).unwrap();
-            let expected = removed(r);
-            assert!(
-                (lost - expected).abs() <= 1e-6 * before,
-                "turn {turn}, r = {r}: removed {lost}, the strip out to the pin {expected}"
-            );
+    let poses = [
+        ("upright", Mat4::identity()),
+        (
+            "turned",
+            Mat4::translation(3.1, -1.7, 2.3)
+                * Mat4::rotation_z(1.1)
+                * Mat4::rotation_y(0.4)
+                * Mat4::rotation_x(0.7),
+        ),
+        ("mirrored", mirror()),
+    ];
+    for pin in [5.0, 3.2] {
+        for turn in [FRAC_PI_2, 2.0] {
+            for r in [1.0, 2.0] {
+                for (pose, matrix) in &poses {
+                    let case = format!("pin {pin}, turn {turn}, r = {r}, {pose}");
+                    let mut topo = Topology::new();
+                    let solid = bar_through_pin(&mut topo, pin, turn);
+                    let edge = arm_edge(&topo, solid);
+                    transform_solid(&mut topo, solid, matrix).unwrap();
+                    let before = solid_volume(&topo, solid, 1e-3).unwrap();
+                    let result = fillet_v2(&mut topo, solid, &[edge], r)
+                        .map_err(|e| format!("{case}: {e}"))
+                        .unwrap();
+                    assert!(result.failed.is_empty(), "{case}: {:?}", result.failed);
+                    let report = validate_solid(&topo, result.solid).unwrap();
+                    assert!(report.is_valid(), "{case}: {:?}", report.issues);
+                    let mesh = tessellate_solid(&topo, result.solid, 0.01).unwrap();
+                    assert!(is_watertight(&mesh), "{case}: mesh open");
+                    let lost = before - solid_volume(&topo, result.solid, 1e-3).unwrap();
+                    let expected = removed(r, pin);
+                    assert!(
+                        (lost - expected).abs() <= 1e-6 * before,
+                        "{case}: removed {lost}, the strip out to the pin {expected}"
+                    );
+                }
+            }
         }
     }
 }

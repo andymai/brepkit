@@ -3705,13 +3705,22 @@ fn terminal_cap_is_notchable(
             (&stripe.contact2, section.p2),
         ]
         .map(|(contact, at)| contact_end_at(contact, at).0);
+        let end_curve = cylinder_meets_cap(cylinder, face.surface(), near_ends[0], near_ends[1]);
+        let end_hull = match &end_curve {
+            Some(EdgeCurve::NurbsCurve(curve))
+                if curve.weights().iter().all(|w| w.is_finite() && *w > 0.0) =>
+            {
+                Some(curve.control_points())
+            }
+            _ => None,
+        };
         return notch_stays_clear(
             topo,
             face,
             junction.vertex,
             cylinder.axis(),
             near_ends,
-            Some(cylinder.radius()),
+            end_hull,
         );
     }
     // The corner sits on the cap's outer wire (a convex fillet) or on one of
@@ -3794,17 +3803,24 @@ fn terminal_cap_is_notchable(
 /// may reach into that triangle (a fillet wider than a cup's wall would cross
 /// its mouth): that is an error. `Ok(false)` where the view cannot be read.
 ///
-/// On a curved cap, seen along a band's axis, the notch also lies along
-/// the axis within `depth` (the band's radius) and the notch's own size of
-/// its ends and the corner; a boundary wholly beyond that slab cannot
-/// reach it, however it lies when seen along the axis.
+/// On a curved cap, the notch lies in the triangle only while the cap does
+/// not turn parallel to the axis over it, and the checks below take that
+/// as given. `end_hull` is the control hull of the notch's end curve
+/// across the band. An edge wholly beyond that hull along the axis cannot
+/// meet the end curve, and on a valid face no edge crosses the corner's own
+/// edges. So a wire whose every edge is beyond the hull or clear of the
+/// triangle lies wholly inside the notch or wholly outside it. The corner's
+/// own wire runs on outside the notch past the near ends, and any other
+/// wire is outside once one of its vertices is seen outside the triangle.
+/// Its edges beyond the hull are then passed over, however they lie when
+/// seen along the axis.
 fn notch_stays_clear(
     topo: &Topology,
     face: &Face,
     corner: VertexId,
     view: Vec3,
     near_ends: [Point3; 2],
-    depth: Option<f64>,
+    end_hull: Option<&[Point3]>,
 ) -> Result<bool, BlendError> {
     let Ok(vertex) = topo.vertex(corner) else {
         return Ok(false);
@@ -3818,45 +3834,69 @@ fn notch_stays_clear(
         (d.dot(frame.x), d.dot(frame.y))
     };
     let triangle = [flat(near_ends[0]), (0.0, 0.0), flat(near_ends[1])];
-    let slab = depth.map(|depth| {
+    let slab = end_hull.filter(|hull| !hull.is_empty()).map(|hull| {
         let along = |p: Point3| (p - vertex).dot(frame.z);
-        let (lo, hi) = near_ends
+        let (lo, hi) = hull
             .iter()
             .map(|&p| along(p))
-            .fold((0.0_f64, 0.0_f64), |(lo, hi), t| (lo.min(t), hi.max(t)));
-        // The end curve between the contacts' ends may bow along the axis
-        // as the cap curves: allow the notch's own size too.
-        let size = near_ends
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), t| {
+                (lo.min(t), hi.max(t))
+            });
+        // The end edge is rebuilt later from the trimmer's vertices, which
+        // may sit 1e-6 off these ends; on a steep cap that moves the curve
+        // along the axis by that times the slope.
+        let size = hull
             .iter()
             .map(|&p| (p - vertex).length())
-            .fold((near_ends[0] - near_ends[1]).length(), f64::max);
-        let depth = depth + size;
-        (frame.z, vertex, lo - depth, hi + depth)
+            .fold(0.0_f64, f64::max);
+        let slack = 1e-4 * size.max(1.0);
+        (frame.z, vertex, lo - slack, hi + slack)
     });
+    let outside_triangle = |p: (f64, f64)| {
+        let cross = |o: (f64, f64), a: (f64, f64), b: (f64, f64)| {
+            (a.0 - o.0) * (b.1 - o.1) - (a.1 - o.1) * (b.0 - o.0)
+        };
+        let scale = triangle
+            .iter()
+            .map(|&(x, y)| x.abs().max(y.abs()))
+            .fold(0.0_f64, f64::max);
+        let eps = 1e-9 * scale * scale;
+        let area = cross(triangle[0], triangle[1], triangle[2]);
+        (0..3).any(|i| cross(triangle[i], triangle[(i + 1) % 3], p) * area.signum() < -eps)
+    };
     let wires = std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied());
-    for oriented in wires
-        .filter_map(|wire| topo.wire(wire).ok())
-        .flat_map(|wire| wire.edges().iter())
-    {
-        let Ok(edge) = topo.edge(oriented.edge()) else {
-            return Ok(false);
-        };
-        if edge.start() == corner || edge.end() == corner {
-            continue;
+    for wire in wires.filter_map(|wire| topo.wire(wire).ok()) {
+        let mut edges = Vec::with_capacity(wire.edges().len());
+        for oriented in wire.edges() {
+            let Ok(edge) = topo.edge(oriented.edge()) else {
+                return Ok(false);
+            };
+            let (Ok(a), Ok(b)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) else {
+                return Ok(false);
+            };
+            edges.push((edge, a.point(), b.point()));
         }
-        let (Ok(a), Ok(b)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) else {
-            return Ok(false);
-        };
-        let (a, b) = (a.point(), b.point());
-        if slab.is_some_and(|slab| cap_edge_beyond_slab(edge, a, b, slab)) {
-            continue;
-        }
-        if cap_edge_reaches_triangle(edge, a, b, &flat, triangle) {
-            return Err(BlendError::PlanningFailure {
-                reason: format!(
-                    "the fillet's end at {corner:?} would cross another boundary of its cap"
-                ),
+        let outside_notch = slab.is_some()
+            && edges.iter().any(|&(edge, a, b)| {
+                edge.start() == corner
+                    || edge.end() == corner
+                    || outside_triangle(flat(a))
+                    || outside_triangle(flat(b))
             });
+        for (edge, a, b) in edges {
+            if edge.start() == corner || edge.end() == corner {
+                continue;
+            }
+            if outside_notch && slab.is_some_and(|slab| cap_edge_beyond_slab(edge, a, b, slab)) {
+                continue;
+            }
+            if cap_edge_reaches_triangle(edge, a, b, &flat, triangle) {
+                return Err(BlendError::PlanningFailure {
+                    reason: format!(
+                        "the fillet's end at {corner:?} would cross another boundary of its cap"
+                    ),
+                });
+            }
         }
     }
     Ok(true)
