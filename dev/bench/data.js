@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794278620821,
+  "lastUpdate": 1794366652883,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -67553,6 +67553,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 18480175,
             "range": "± 176710",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "794335439ea1a03d2e269278798f862464635f0f",
+          "message": "fix(blend): let a round end on a curved wall with an opening behind it (#2364)\n\nA round that ends on a curved wall notches the wall at the corner. The\nnotch check looked along the round's axis, so any boundary straight\nbehind the corner read as in the notch, however far away. A bar fused\nthrough a wider pin had its round refused on that account.\n\nOn a curved cap, the check now passes over an edge wholly beyond the\nalong-axis span of the end curve's control hull, which\n`cylinder_meets_cap` traces, widened by 1e-4 of the notch's size. It\ndoes so only when the edge's wire holds the corner or has a vertex seen\noutside the notch triangle.\n\nThe ellipse sag bound now takes the larger semi-axis in either order,\nfor this check and for the triangle test. With the axes given as\n(1, 10), the old margin was a thousandth of the true bound.\n\nCo-authored-by: Eric Vaughan <eric.d.vaughan@gmail.com>",
+          "timestamp": "2026-11-10T19:07:50-08:00",
+          "tree_id": "fe6c9434fcc7354d5b6ad17c720f906af67e1f68",
+          "url": "https://github.com/andymai/brepkit/commit/794335439ea1a03d2e269278798f862464635f0f"
+        },
+        "date": 1794366645608,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 876510,
+            "range": "± 1503",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 945378,
+            "range": "± 15779",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10862,
+            "range": "± 128",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 710579,
+            "range": "± 1246",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 22877713,
+            "range": "± 111633",
             "unit": "ns/iter"
           }
         ]
