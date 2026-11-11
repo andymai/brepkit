@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.11.3](https://github.com/andymai/brepkit/compare/v4.11.2...v4.11.3) (2026-11-11)
+
+
+### Bug Fixes
+
+* **blend:** let a round end on a curved wall with an opening behind it ([#2364](https://github.com/andymai/brepkit/issues/2364)) ([7943354](https://github.com/andymai/brepkit/commit/794335439ea1a03d2e269278798f862464635f0f))
+
 ## [4.11.2](https://github.com/andymai/brepkit/compare/v4.11.1...v4.11.2) (2026-11-10)
 
 
