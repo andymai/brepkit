@@ -3934,18 +3934,21 @@ fn cap_edge_beyond_slab(
         EdgeCurve::Circle(circle) => {
             beyond(&mut samples, circle.radius() * step * step / 8.0 * 1.01)
         }
-        EdgeCurve::Ellipse(ellipse) => {
-            let (major, minor) = (ellipse.semi_major(), ellipse.semi_minor());
-            beyond(
-                &mut samples,
-                major.powi(3) / (minor * minor) * step * step / 8.0 * 1.01,
-            )
-        }
+        EdgeCurve::Ellipse(ellipse) => beyond(&mut samples, ellipse_sag(ellipse, step) * 1.01),
         EdgeCurve::NurbsCurve(curve) => {
             curve.weights().iter().all(|w| w.is_finite() && *w > 0.0)
                 && beyond(&mut curve.control_points().iter().map(|&p| along(p)), 0.0)
         }
     }
+}
+
+/// How far an ellipse strays from its chords over `step` of its angle. The
+/// curve's second derivative in its angle is at most its larger semi-axis,
+/// and `Ellipse3D::with_axes` takes the two in either order.
+fn ellipse_sag(ellipse: &brepkit_math::curves::Ellipse3D, step: f64) -> f64 {
+    let big = ellipse.semi_major().max(ellipse.semi_minor());
+    let small = ellipse.semi_major().min(ellipse.semi_minor());
+    big.powi(3) / (small * small) * step * step / 8.0
 }
 
 /// Whether a cap edge may pass inside the notch triangle, certified: a line
@@ -3978,9 +3981,7 @@ fn cap_edge_reaches_triangle(
             path_within_of_triangle(&polyline(), triangle, sag * 1.01)
         }
         EdgeCurve::Ellipse(ellipse) => {
-            let (major, minor) = (ellipse.semi_major(), ellipse.semi_minor());
-            let sag = major.powi(3) / (minor * minor) * step * step / 8.0;
-            path_within_of_triangle(&polyline(), triangle, sag * 1.01)
+            path_within_of_triangle(&polyline(), triangle, ellipse_sag(ellipse, step) * 1.01)
         }
         // The hull bounds a rational curve only while every weight is
         // positive; any other curve cannot be certified clear.
@@ -6798,6 +6799,35 @@ mod tests {
         assert!(matches!(
             notch_clear_of_hole(hole),
             Err(BlendError::PlanningFailure { .. })
+        ));
+    }
+
+    /// An ellipse given its longer semi-axis second, along the slab's axis,
+    /// closed at a quarter of a sample step off its low point: every sample
+    /// lies above the slab, and the curve dips into it between two of them.
+    #[test]
+    fn an_ellipse_with_its_axes_given_short_first_is_not_beyond_a_slab_it_dips_into() {
+        let axis = Vec3::new(1.0, 0.0, 0.0);
+        let ellipse = brepkit_math::curves::Ellipse3D::with_axes(
+            Point3::new(9.994, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, -1.0),
+            1.0,
+            10.0,
+            Vec3::new(0.0, 1.0, 0.0),
+            axis,
+        )
+        .unwrap();
+        let at = ellipse.evaluate(std::f64::consts::PI * (1.0 + 1.0 / 64.0));
+        let mut topo = Topology::new();
+        let vertex = topo.add_vertex(Vertex::new(at, 1e-7));
+        let low = ellipse.evaluate(1.5 * std::f64::consts::PI).x();
+        assert!(low < -0.002);
+        let edge = Edge::new(vertex, vertex, EdgeCurve::Ellipse(ellipse));
+        assert!(!cap_edge_beyond_slab(
+            &edge,
+            at,
+            at,
+            (axis, Point3::new(0.0, 0.0, 0.0), -0.002, 0.002),
         ));
     }
 
