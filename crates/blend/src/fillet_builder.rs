@@ -6803,8 +6803,9 @@ mod tests {
     }
 
     /// An ellipse given its longer semi-axis second, along the slab's axis,
-    /// closed at a quarter of a sample step off its low point: every sample
-    /// lies above the slab, and the curve dips into it between two of them.
+    /// closed where its samples fall half a step either side of its low
+    /// point: every sample lies above the slab, and the curve dips into it
+    /// between two of them.
     #[test]
     fn an_ellipse_with_its_axes_given_short_first_is_not_beyond_a_slab_it_dips_into() {
         let axis = Vec3::new(1.0, 0.0, 0.0);
