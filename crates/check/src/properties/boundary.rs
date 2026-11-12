@@ -10,6 +10,7 @@
 //! `2π H` there, taken toward growing `v`. Nothing is sampled into a polygon, so the result is
 //! exact to quadrature precision however an edge bows.
 
+use brepkit_math::nurbs::surface::{NurbsRow, UBasis};
 use brepkit_math::quadrature::gauss_legendre_points;
 use brepkit_math::surfaces::SphericalSurface;
 use brepkit_math::traits::ParametricSurface;
@@ -67,6 +68,17 @@ fn nurbs_integrand(
 ) -> [f64; 8] {
     let d = surface.derivatives(u, v, 1);
     terms(d[0][0], d[1][0].cross(d[0][1]), about)
+}
+
+/// [`integrand`] on a NURBS surface's line of constant `v`, alike bit for bit.
+fn row_integrand(row: &NurbsRow<'_>, u: f64, about: Vec3) -> [f64; 8] {
+    terms_at(row.point_and_partials(u), about)
+}
+
+/// [`integrand`] from a point and its first partials.
+fn terms_at((p, su, sv): (Point3, Vec3, Vec3), about: Vec3) -> [f64; 8] {
+    let n = su.cross(sv);
+    terms(Vec3::new(p.x(), p.y(), p.z()), n, about)
 }
 
 /// One edge of a wire in its traversal: its curve, end points, and the
@@ -1189,12 +1201,55 @@ pub(super) fn nurbs_face_by_boundary(
     // Each integral is halved until it settles: a rational surface can
     // crowd its area into a sliver of its parameter.
     let gauss_u = gauss_legendre_points(10);
+    // A whole knot span is integrated at the same `u` for every point of the
+    // boundary, unless its integral halves past the first step: its points'
+    // basis functions in `u` are worked out once, and taken where a point is
+    // the very same number.
+    let span_points: Vec<std::cell::OnceCell<(Vec<u64>, Vec<UBasis>)>> =
+        u_knots.iter().map(|_| std::cell::OnceCell::new()).collect();
+    let points_of = |i: usize, from: f64, to: f64| {
+        let span_from = if i == 0 { u0 } else { u_knots[i - 1] };
+        if i >= u_knots.len()
+            || from.to_bits() != span_from.to_bits()
+            || to.to_bits() != u_knots[i].to_bits()
+        {
+            return None;
+        }
+        Some(span_points[i].get_or_init(|| {
+            let mut us = Vec::new();
+            let mut record = |x: f64| {
+                us.push(x);
+                Some([0.0; 8])
+            };
+            adaptive(&mut record, from, to, gauss_u, 0, 0.0);
+            let bases: Vec<UBasis> = us.iter().filter_map(|&x| s.u_basis(x)).collect();
+            (bases.iter().map(|b| b.u.to_bits()).collect(), bases)
+        }))
+    };
     let antiderivative = |u: f64, v: f64| -> Option<[f64; 8]> {
+        // Every point of the integral lies on one line of constant `v`.
+        let row = s.at_v(v);
         let mut acc = [0.0; 8];
         let mut from = u0;
-        for to in u_knots.iter().copied().filter(|&k| k < u).chain([u]) {
+        for (i, to) in u_knots
+            .iter()
+            .copied()
+            .filter(|&k| k < u)
+            .chain([u])
+            .enumerate()
+        {
             if to > from {
-                let mut g = |s_u: f64| Some(integrand(s, s_u, v, about));
+                let points = points_of(i, from, to);
+                let mut g = |s_u: f64| {
+                    let known = points.and_then(|(bits, bases)| {
+                        let at = bits.iter().position(|&b| b == s_u.to_bits())?;
+                        Some(&bases[at])
+                    });
+                    Some(match known {
+                        Some(b) => terms_at(row.point_and_partials_with(b), about),
+                        None => row_integrand(&row, s_u, about),
+                    })
+                };
                 add(
                     &mut acc,
                     &adaptive(&mut g, from, to, gauss_u, DEPTH, floor)?,
