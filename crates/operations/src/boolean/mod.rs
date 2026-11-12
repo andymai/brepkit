@@ -46,6 +46,18 @@ pub fn mesh_fallback_count() -> u64 {
     MESH_FALLBACK_COUNT.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+static MESH_FALLBACK_DECLINED_COUNT: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+/// Number of booleans since process start that declined the mesh fallback.
+///
+/// Such a boolean returned an error because it needed the fallback and
+/// [`BooleanOptions::mesh_fallback`] was `false`. Snapshot the count around a
+/// call to tell that error from others.
+pub fn mesh_fallback_declined_count() -> u64 {
+    MESH_FALLBACK_DECLINED_COUNT.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 thread_local! {
     /// Whether the innermost `boolean_inner` call routed through the mesh
     /// fallback. Set at the fallback site, consumed by the callers that
@@ -1031,7 +1043,20 @@ pub fn boolean_with_options(
     b: SolidId,
     opts: BooleanOptions,
 ) -> Result<SolidId, crate::OperationsError> {
-    let result = boolean(topo, op, a, b)?;
+    let result = if opts.mesh_fallback {
+        boolean(topo, op, a, b)?
+    } else {
+        // A helper may swallow the declined fallback's error and return
+        // without the piece it was for, so any decline fails the boolean.
+        let (result, declined) = without_mesh_fallback(|| boolean(topo, op, a, b));
+        if declined {
+            MESH_FALLBACK_DECLINED_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            return Err(crate::OperationsError::InvalidInput {
+                reason: "boolean needs the mesh fallback, which the options decline".into(),
+            });
+        }
+        result?
+    };
     if opts.unify_faces {
         let unify_opts = brepkit_heal::upgrade::unify_same_domain::UnifyOptions::default();
         if let Err(e) =
