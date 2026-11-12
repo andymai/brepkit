@@ -26,6 +26,7 @@ enum FaceGeom {
         profile: brepkit_math::nurbs::curve::NurbsCurve,
         along: Vec3,
         trim: Option<ExtrusionTrim>,
+        samples: Box<ProfileSamples>,
     },
     /// Any other open NURBS face, crossed where the ray meets its surface,
     /// found through the surface's Bezier patches, and on the face when its
@@ -1746,6 +1747,7 @@ fn extrusion_geom(
     }
     if whole {
         return Ok(Some(FaceGeom::Extrusion {
+            samples: Box::new(ProfileSamples::new(&profile)),
             profile,
             along,
             trim: None,
@@ -1753,6 +1755,7 @@ fn extrusion_geom(
     }
     Ok(
         ExtrusionTrim::new(topo, face, &profile, along)?.map(|trim| FaceGeom::Extrusion {
+            samples: Box::new(ProfileSamples::new(&profile)),
             profile,
             along,
             trim: Some(trim),
@@ -2590,7 +2593,16 @@ fn ray_geom_crossings(
             profile,
             along,
             trim,
-        } => ray_extrusion_crossings(origin, ray_dir, profile, *along, trim.as_ref(), tol),
+            samples,
+        } => ray_extrusion_crossings(
+            origin,
+            ray_dir,
+            profile,
+            samples,
+            *along,
+            trim.as_ref(),
+            tol,
+        ),
         FaceGeom::Nurbs { surface, trim } => {
             ray_nurbs_crossings(origin, ray_dir, surface, trim, tol)
         }
@@ -2623,6 +2635,48 @@ fn ray_nurbs_crossings(
     (crossings, suspicious)
 }
 
+/// Samples of an extrusion's profile every ray reads the same: the first
+/// intervals' bounds (even steps and the interior knots), the profile's
+/// points there and at each interval's middle, and its two ends.
+struct ProfileSamples {
+    breaks: Vec<f64>,
+    at_breaks: Vec<Point3>,
+    at_middles: Vec<Point3>,
+    ends: [Point3; 2],
+}
+
+impl ProfileSamples {
+    const SAMPLES: usize = 64;
+
+    fn new(profile: &brepkit_math::nurbs::curve::NurbsCurve) -> Self {
+        const SAMPLES: usize = ProfileSamples::SAMPLES;
+        let (v0, v1) = profile.domain();
+        let at = |k: usize| v0 + (v1 - v0) * (k as f64 / SAMPLES as f64);
+        // The samples and the profile's interior knots bound the first
+        // intervals, so a narrow knot span is never read through one coarse
+        // interval's chords.
+        let mut breaks: Vec<f64> = (0..=SAMPLES).map(at).collect();
+        breaks.extend(
+            profile
+                .knots()
+                .iter()
+                .copied()
+                .filter(|&k| k > v0 && k < v1),
+        );
+        breaks.sort_by(f64::total_cmp);
+        breaks.dedup_by(|a, b| (*a - *b).abs() <= 1e-12 * (v1 - v0).abs());
+        Self {
+            at_breaks: breaks.iter().map(|&v| profile.evaluate(v)).collect(),
+            at_middles: breaks
+                .windows(2)
+                .map(|w| profile.evaluate(f64::midpoint(w[0], w[1])))
+                .collect(),
+            ends: [profile.evaluate(v0), profile.evaluate(v1)],
+            breaks,
+        }
+    }
+}
+
 /// Count ray crossings with an extrusion `profile(v) + s along`, `s` in
 /// `[0, 1]`: across `along` the ray is a line in the profile's projection,
 /// and each place the profile crosses that line is a hit, on the face when
@@ -2631,11 +2685,12 @@ fn ray_extrusion_crossings(
     origin: Point3,
     ray_dir: Vec3,
     profile: &brepkit_math::nurbs::curve::NurbsCurve,
+    samples: &ProfileSamples,
     along: Vec3,
     trim: Option<&ExtrusionTrim>,
     tol: Tolerance,
 ) -> (i32, bool) {
-    const SAMPLES: usize = 64;
+    const SAMPLES: usize = ProfileSamples::SAMPLES;
     const MAX_DEPTH: u32 = 8;
     let near = 10.0 * tol.linear;
     let Ok(axis) = along.normalize() else {
@@ -2651,8 +2706,9 @@ fn ray_extrusion_crossings(
         let grazes = (0..=SAMPLES).any(|k| flat(profile.evaluate(at(k)) - origin).length() <= near);
         return (0, grazes);
     }
-    let side = |v: f64| flat(profile.evaluate(v) - origin).cross(rp).dot(axis) / rp_len;
-    let ends = [profile.evaluate(v0), profile.evaluate(v1)];
+    let side_of = |p: Point3| flat(p - origin).cross(rp).dot(axis) / rp_len;
+    let side = |v: f64| side_of(profile.evaluate(v));
+    let ends = samples.ends;
     let along_len2 = along.dot(along);
     // Two crossings inside one sample interval leave its ends on one side of
     // the ray. The distance to the ray's line changes no faster than the
@@ -2660,30 +2716,35 @@ fn ray_extrusion_crossings(
     // than its length holds no crossing; any other is halved down to a leaf
     // (or until both ends lie on the line), and each leaf is read by its sign
     // change.
-    // The samples and the profile's interior knots bound the first
-    // intervals, so a narrow knot span is never read through one coarse
-    // interval's chords.
-    let mut breaks: Vec<f64> = (0..=SAMPLES).map(at).collect();
-    breaks.extend(
-        profile
-            .knots()
-            .iter()
-            .copied()
-            .filter(|&k| k > v0 && k < v1),
-    );
-    breaks.sort_by(f64::total_cmp);
-    breaks.dedup_by(|a, b| (*a - *b).abs() <= 1e-12 * (v1 - v0).abs());
-    let flat_at = |v: f64| flat(profile.evaluate(v) - origin);
+    // The first intervals are the samples' (see `ProfileSamples`); each
+    // interval carries the profile's points at its ends, and the first ones
+    // their middles too.
+    let breaks = &samples.breaks;
     let mut leaves: Vec<(f64, f64, f64, f64)> = Vec::new();
-    let mut stack: Vec<(f64, f64, f64, f64, u32)> = breaks
-        .windows(2)
-        .rev()
-        .map(|w| (w[0], w[1], side(w[0]), side(w[1]), 0))
-        .collect();
-    while let Some((a, b, fa, fb, depth)) = stack.pop() {
+    #[allow(clippy::type_complexity)]
+    let mut stack: Vec<(f64, f64, f64, f64, u32, Point3, Point3, Option<Point3>)> =
+        (0..breaks.len().saturating_sub(1))
+            .rev()
+            .map(|i| {
+                let (pa, pb) = (samples.at_breaks[i], samples.at_breaks[i + 1]);
+                let mid = Some(samples.at_middles[i]);
+                (
+                    breaks[i],
+                    breaks[i + 1],
+                    side_of(pa),
+                    side_of(pb),
+                    0,
+                    pa,
+                    pb,
+                    mid,
+                )
+            })
+            .collect();
+    while let Some((a, b, fa, fb, depth, pa, pb, mid)) = stack.pop() {
         let m = f64::midpoint(a, b);
-        let length =
-            1.5 * ((flat_at(m) - flat_at(a)).length() + (flat_at(b) - flat_at(m)).length());
+        let pm = mid.unwrap_or_else(|| profile.evaluate(m));
+        let (flat_a, flat_m, flat_b) = (flat(pa - origin), flat(pm - origin), flat(pb - origin));
+        let length = 1.5 * ((flat_m - flat_a).length() + (flat_b - flat_m).length());
         if fa.abs().max(fb.abs()) > length + near {
             continue;
         }
@@ -2691,9 +2752,9 @@ fn ray_extrusion_crossings(
             leaves.push((a, b, fa, fb));
             continue;
         }
-        let fm = side(m);
-        stack.push((m, b, fm, fb, depth + 1));
-        stack.push((a, m, fa, fm, depth + 1));
+        let fm = side_of(pm);
+        stack.push((m, b, fm, fb, depth + 1, pm, pb, None));
+        stack.push((a, m, fa, fm, depth + 1, pa, pm, None));
     }
     let reach = near / along_len2.sqrt();
     let count = |v: f64, crossings: &mut i32, suspicious: &mut bool| {
@@ -4444,6 +4505,7 @@ mod tests {
             Point3::new(0.5, 0.007, 0.0),
             Vec3::new(0.0, 1.0, 0.0),
             &profile,
+            &ProfileSamples::new(&profile),
             Vec3::new(1.0, 0.0, 0.0),
             None,
             Tolerance::new(),
@@ -4473,6 +4535,7 @@ mod tests {
             Point3::new(0.5, 0.0, -5.0),
             Vec3::new(0.0, 0.0, 1.0),
             &profile,
+            &ProfileSamples::new(&profile),
             along,
             None,
             Tolerance::new(),
@@ -4482,6 +4545,7 @@ mod tests {
             Point3::new(0.5, -5.0, 0.0),
             Vec3::new(0.0, 1.0, 0.0),
             &profile,
+            &ProfileSamples::new(&profile),
             along,
             None,
             Tolerance::new(),
@@ -4513,6 +4577,7 @@ mod tests {
             Point3::new(0.5, 0.001, 0.0),
             Vec3::new(0.0, 1.0, 0.0),
             &profile,
+            &ProfileSamples::new(&profile),
             Vec3::new(1.0, 0.0, 0.0),
             None,
             Tolerance::new(),
