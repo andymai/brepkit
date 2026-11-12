@@ -334,6 +334,46 @@ fn chamfer_core(
 
     let target_set: HashSet<usize> = filtered_edges.iter().map(|e| e.index()).collect();
 
+    // Each bevel lands on its faces at its distance from the edge: a face
+    // reaching no farther than that from the edge has no room for it (a box
+    // 20 high chamfered 25 along its top would land below its sides), and
+    // the rebuild would come back as a valid solid of the wrong volume.
+    for &edge_id in &filtered_edges {
+        let edge = topo.edge(edge_id)?;
+        let (a, b) = (
+            topo.vertex(edge.start())?.point(),
+            topo.vertex(edge.end())?.point(),
+        );
+        let Ok(along) = (b - a).normalize() else {
+            continue;
+        };
+        for &face_id in edge_to_faces
+            .get(&edge_id.index())
+            .map_or(&[][..], Vec::as_slice)
+        {
+            let Some(poly) = face_polygons.get(&face_id.index()) else {
+                continue;
+            };
+            let reach = poly
+                .positions
+                .iter()
+                .map(|&p| {
+                    let d = p - a;
+                    (d - along * d.dot(along)).length()
+                })
+                .fold(0.0_f64, f64::max);
+            let distance = distances.distance_for(edge_id.index(), face_id, &edge_to_faces);
+            if reach < distance + tol.linear {
+                return Err(crate::OperationsError::InvalidInput {
+                    reason: format!(
+                        "chamfer distance {distance} does not fit on face {}: it reaches {reach:.6} from the edge",
+                        face_id.index()
+                    ),
+                });
+            }
+        }
+    }
+
     // Vertices at endpoints of chamfered edges (used to detect side-face corners).
     let mut vertex_chamfer_endpoints: HashSet<usize> = HashSet::new();
     // For side-face corners, compute max distance from any chamfered edge meeting
