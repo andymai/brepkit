@@ -171,8 +171,29 @@ pub fn chamfer_two_on(
     if let Some(result) = chamfer_circular_rims(topo, solid, &ids, &split)? {
         return Ok(result);
     }
-    let result = crate::blend_ops::chamfer_v2_on(topo, solid, edges, d1, d2)?;
-    crate::blend_ops::all_blended(result)
+    let blended = crate::blend_ops::chamfer_v2_on(topo, solid, edges, d1, d2)
+        .and_then(crate::blend_ops::all_blended);
+    // The blend engine's chamfer cannot close two chamfers meeting at a
+    // corner (a box's top edges all chamfered). A body of planes alone is
+    // rebuilt with flat bevels instead, as the equal chamfer rebuilds it,
+    // each edge taking `d1` on its reference face.
+    match blended {
+        Ok(result) => Ok(result),
+        Err(error) => {
+            let faces = brepkit_topology::explorer::solid_faces(topo, solid)?;
+            if has_curved_edge(topo, &faces)? {
+                return Err(error);
+            }
+            let reference = edges.iter().map(|&(e, f)| (e.index(), f)).collect();
+            chamfer_core(
+                topo,
+                solid,
+                &ids,
+                ChamferDistances::Referenced { d1, d2, reference },
+            )
+            .map_err(|_| error)
+        }
+    }
 }
 
 /// How chamfer distances are assigned to edges.
@@ -181,6 +202,12 @@ enum ChamferDistances {
     Symmetric(f64),
     /// `d1` on face\[0\], `d2` on face\[1\] (per `edge_to_faces` order).
     Asymmetric { d1: f64, d2: f64 },
+    /// `d1` on each edge's reference face (by edge index), `d2` on its other.
+    Referenced {
+        d1: f64,
+        d2: f64,
+        reference: HashMap<usize, FaceId>,
+    },
 }
 
 impl ChamferDistances {
@@ -207,6 +234,13 @@ impl ChamferDistances {
                 // Fallback (shouldn't happen for filtered manifold edges).
                 *d1
             }
+            Self::Referenced { d1, d2, reference } => {
+                if reference.get(&edge_index) == Some(&face_id) {
+                    *d1
+                } else {
+                    *d2
+                }
+            }
         }
     }
 
@@ -214,7 +248,7 @@ impl ChamferDistances {
     fn max_distance(&self) -> f64 {
         match self {
             Self::Symmetric(d) => *d,
-            Self::Asymmetric { d1, d2 } => d1.max(*d2),
+            Self::Asymmetric { d1, d2 } | Self::Referenced { d1, d2, .. } => d1.max(*d2),
         }
     }
 }
