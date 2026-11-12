@@ -1205,32 +1205,32 @@ pub(super) fn nurbs_face_by_boundary(
         Some(acc)
     };
     let gauss = gauss_legendre_points(8);
-    let mut total = [0.0; 8];
+    // A point's `(u, v)` by Newton from a neighbour's where that lands on the
+    // surface, else by a search of the whole surface.
+    let on = |edge: &BoundaryEdge<'_>, t: f64, seed: Option<(f64, f64)>| -> Option<(f64, f64)> {
+        let p = edge.curve.evaluate_with_endpoints(t, edge.start, edge.end);
+        // Far from the origin a point's own rounding passes a fixed
+        // tolerance: Newton could not settle, and every point of every edge
+        // would take the search.
+        let tolerance = 1e-12_f64.max(2e-14 * p.x().abs().max(p.y().abs()).max(p.z().abs()));
+        if let Some(seed) = seed
+            && let Ok(q) = project_point_to_surface_from(s, p, seed, tolerance)
+            && q.distance <= reach
+        {
+            return Some((q.u, q.v));
+        }
+        project_point_to_surface(s, p, tolerance)
+            .ok()
+            .filter(|q| q.distance <= reach)
+            .map(|q| (q.u, q.v))
+    };
+    // Every edge cut into pieces, with the wire it is in: each piece is
+    // integrated on its own, from its own seed, so the pieces can be taken at
+    // once and summed in their order after.
+    let mut pieces: Vec<Piece<'_, '_>> = Vec::new();
     for (k, wire) in wires.iter().enumerate() {
-        let mut region = [0.0; 8];
         for edge in wire {
-            let point = |t: f64| edge.curve.evaluate_with_endpoints(t, edge.start, edge.end);
-            // A point's `(u, v)` by Newton from a neighbour's where that lands
-            // on the surface, else by a search of the whole surface.
-            let on = |t: f64, seed: Option<(f64, f64)>| -> Option<(f64, f64)> {
-                let p = point(t);
-                // Far from the origin a point's own rounding passes a fixed
-                // tolerance: Newton could not settle, and every point of every
-                // edge would take the search.
-                let tolerance =
-                    1e-12_f64.max(2e-14 * p.x().abs().max(p.y().abs()).max(p.z().abs()));
-                if let Some(seed) = seed
-                    && let Ok(q) = project_point_to_surface_from(s, p, seed, tolerance)
-                    && q.distance <= reach
-                {
-                    return Some((q.u, q.v));
-                }
-                project_point_to_surface(s, p, tolerance)
-                    .ok()
-                    .filter(|q| q.distance <= reach)
-                    .map(|q| (q.u, q.v))
-            };
-            let mut pieces = Vec::new();
+            let on = |t: f64, seed: Option<(f64, f64)>| on(edge, t, seed);
             for (ta, tb) in edge_pieces(edge) {
                 // Where the edge crosses a knot line the integrand bends:
                 // cut there, found by bisection between samples astride it.
@@ -1285,35 +1285,69 @@ pub(super) fn nurbs_face_by_boundary(
                 }
                 cuts.dedup_by(|x, y| (*x - *y).abs() <= 1e-12 * (tb - ta).abs());
                 let start = samples[0].1;
-                pieces.extend(cuts.windows(2).map(|w| (w[0], w[1], start)));
+                pieces.extend(cuts.windows(2).map(|w| Piece {
+                    wire: k,
+                    edge,
+                    from: w[0],
+                    to: w[1],
+                    start,
+                }));
             }
-            for (ta, tb, start) in pieces {
-                let mut seed = start;
-                let mut along = |t: f64| -> Option<[f64; 8]> {
-                    let c = on(t, Some(seed))?;
-                    seed = c;
-                    // `dv/dt` from the curve's velocity in the surface's
-                    // tangent plane, by the first fundamental form.
-                    let velocity = edge_velocity(edge.curve, t, edge.start, edge.end);
-                    let d = s.derivatives(c.0, c.1, 1);
-                    let (su, sv) = (d[1][0], d[0][1]);
-                    let (e, f, g) = (su.dot(su), su.dot(sv), sv.dot(sv));
-                    let det = e.mul_add(g, -f * f);
-                    if det <= 1e-24 * (e * g).max(1e-300) {
-                        return None;
-                    }
-                    let dv = e.mul_add(sv.dot(velocity), -f * su.dot(velocity)) / det;
-                    let mut term = antiderivative(c.0, c.1)?;
-                    for x in &mut term {
-                        *x *= dv;
-                    }
-                    Some(term)
-                };
-                let Some(piece) = adaptive(&mut along, ta, tb, gauss, DEPTH, floor) else {
-                    return Ok(None);
-                };
-                add(&mut region, &piece, 1.0);
+        }
+    }
+    // One piece failing fails the face: pieces not yet begun are passed over.
+    let failed = std::sync::atomic::AtomicBool::new(false);
+    let integrate = |piece: &Piece<'_, '_>| -> Option<[f64; 8]> {
+        use std::sync::atomic::Ordering::Relaxed;
+        if failed.load(Relaxed) {
+            return None;
+        }
+        let edge = piece.edge;
+        let mut seed = piece.start;
+        let mut along = |t: f64| -> Option<[f64; 8]> {
+            let c = on(edge, t, Some(seed))?;
+            seed = c;
+            // `dv/dt` from the curve's velocity in the surface's tangent
+            // plane, by the first fundamental form.
+            let velocity = edge_velocity(edge.curve, t, edge.start, edge.end);
+            let d = s.derivatives(c.0, c.1, 1);
+            let (su, sv) = (d[1][0], d[0][1]);
+            let (e, f, g) = (su.dot(su), su.dot(sv), sv.dot(sv));
+            let det = e.mul_add(g, -f * f);
+            if det <= 1e-24 * (e * g).max(1e-300) {
+                return None;
             }
+            let dv = e.mul_add(sv.dot(velocity), -f * su.dot(velocity)) / det;
+            let mut term = antiderivative(c.0, c.1)?;
+            for x in &mut term {
+                *x *= dv;
+            }
+            Some(term)
+        };
+        let integral = adaptive(&mut along, piece.from, piece.to, gauss, DEPTH, floor);
+        if integral.is_none() {
+            failed.store(true, Relaxed);
+        }
+        integral
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    let integrals: Vec<Option<[f64; 8]>> = {
+        use rayon::prelude::*;
+        pieces.par_iter().map(integrate).collect()
+    };
+    #[cfg(target_arch = "wasm32")]
+    let integrals: Vec<Option<[f64; 8]>> = pieces.iter().map(integrate).collect();
+    let mut total = [0.0; 8];
+    for k in 0..wires.len() {
+        let mut region = [0.0; 8];
+        for (piece, integral) in pieces.iter().zip(&integrals) {
+            if piece.wire != k {
+                continue;
+            }
+            let Some(integral) = integral else {
+                return Ok(None);
+            };
+            add(&mut region, integral, 1.0);
         }
         // Each wire counts the region it bounds, whichever way it runs in
         // `(u, v)`; holes are taken away.
@@ -1333,6 +1367,16 @@ pub(super) fn nurbs_face_by_boundary(
         centroid_y: total[6],
         centroid_z: total[7],
     }))
+}
+
+/// A stretch of a boundary edge between two cuts, and where its first point
+/// lies in `(u, v)`.
+struct Piece<'e, 'a> {
+    wire: usize,
+    edge: &'e BoundaryEdge<'a>,
+    from: f64,
+    to: f64,
+    start: (f64, f64),
 }
 
 /// `d/dt` of `curve` at `t` as `evaluate_with_endpoints` runs it from

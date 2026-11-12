@@ -18,6 +18,7 @@ all-features = true
 brepkit-geometry.workspace = true
 brepkit-math.workspace = true
 brepkit-topology.workspace = true
+rayon.workspace = true
 smallvec.workspace = true
 thiserror.workspace = true
 
