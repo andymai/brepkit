@@ -3007,26 +3007,28 @@ fn detect_trivial_relation(
     // A NURBS face can bulge out of the other solid between every vertex,
     // probe and sampled box corner, so it is held inside only when proved.
     let hollow = |s: SolidId| topo.solid(s).is_ok_and(|s| !s.inner_shells().is_empty());
+    // The volume witness meshes both solids, so it is read last, and only
+    // where the AABB-only fallback is what admits the containment: the same
+    // answer as `(vertices || (fallback && !volume)) && witnesses`, since
+    // every term reads `topo` alone.
+    let b_vertex_term = all_b_verts_in_a && aabb_encloses(&aabb_b, &aabb_a);
     let b_in_a = !hollow(a)
-        && ((all_b_verts_in_a && aabb_encloses(&aabb_b, &aabb_a))
-            || (ca.is_none()
-                && aabb_strictly_contains(&aabb_b, &aabb_a)
-                && !volume_refutes(topo, b, a)))
+        && (b_vertex_term || (ca.is_none() && aabb_strictly_contains(&aabb_b, &aabb_a)))
         && nurbs_faces_proved_inside(topo, b, a, tol)
         && !center_outside(topo, b, a, &aabb_b)
         && !boundary_probe_outside(topo, b, a, &aabb_b)
         && !axis_outside(topo, b, ca, &aabb_b)
-        && !piece_outside(topo, b, a);
+        && !piece_outside(topo, b, a)
+        && (b_vertex_term || !volume_refutes(topo, b, a));
+    let a_vertex_term = all_a_verts_in_b && aabb_encloses(&aabb_a, &aabb_b);
     let a_in_b = !hollow(b)
-        && ((all_a_verts_in_b && aabb_encloses(&aabb_a, &aabb_b))
-            || (cb.is_none()
-                && aabb_strictly_contains(&aabb_a, &aabb_b)
-                && !volume_refutes(topo, a, b)))
+        && (a_vertex_term || (cb.is_none() && aabb_strictly_contains(&aabb_a, &aabb_b)))
         && nurbs_faces_proved_inside(topo, a, b, tol)
         && !center_outside(topo, a, b, &aabb_a)
         && !boundary_probe_outside(topo, a, b, &aabb_a)
         && !axis_outside(topo, a, cb, &aabb_a)
-        && !piece_outside(topo, a, b);
+        && !piece_outside(topo, a, b)
+        && (a_vertex_term || !volume_refutes(topo, a, b));
 
     TrivialRelation {
         identical: aabbs_match && all_b_verts_in_a && all_a_verts_in_b,
