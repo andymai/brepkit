@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.11.5](https://github.com/andymai/brepkit/compare/v4.11.4...v4.11.5) (2026-11-12)
+
+
+### Bug Fixes
+
+* **io:** count the global section's lines in the IGES terminate line ([#2368](https://github.com/andymai/brepkit/issues/2368)) ([0bdefe7](https://github.com/andymai/brepkit/commit/0bdefe795edb9946709cd86722123d69cd64a025))
+
 ## [4.11.4](https://github.com/andymai/brepkit/compare/v4.11.3...v4.11.4) (2026-11-12)
 
 
