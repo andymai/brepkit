@@ -401,8 +401,7 @@ pub fn render_cylinder_compute_offscreen(
     // count (and the u32 index cast) provably within range.
     let tess = TessFactor::new(tess.n_u, tess.n_v);
 
-    let instance = wgpu::Instance::default();
-    let (_adapter, device, queue) = pipeline::acquire_device(&instance, None)?;
+    let (_adapter, device, queue) = pipeline::acquire_offscreen_device()?;
 
     // Reject oversized targets with a clean error rather than tripping wgpu's
     // internal validation (mirrors the solid path).

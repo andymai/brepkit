@@ -41,14 +41,26 @@ pub const ID_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R32Uint;
 /// headless environments. Returns the adapter backend/name on success.
 #[must_use]
 pub fn probe_adapter() -> Option<String> {
-    let instance = wgpu::Instance::default();
-    candidate_adapters(&instance, None).first().map(|adapter| {
+    offscreen_adapters().first().map(|adapter| {
         let info = adapter.get_info();
         format!(
             "{:?} / {} ({:?})",
             info.backend, info.name, info.device_type
         )
     })
+}
+
+/// The candidate adapters for offscreen work, found once per process.
+///
+/// Every offscreen render makes its own device from these. Finding them anew
+/// for each render raced when renders ran on several threads (parallel tests):
+/// creating instances at once crashed inside the Vulkan loader, and on a shared
+/// instance the GL backend's adapter enumeration makes the instance's one EGL
+/// context current without a lock (`BadAccess`). The adapters keep their
+/// instance alive.
+fn offscreen_adapters() -> &'static [wgpu::Adapter] {
+    static ADAPTERS: std::sync::OnceLock<Vec<wgpu::Adapter>> = std::sync::OnceLock::new();
+    ADAPTERS.get_or_init(|| candidate_adapters(&wgpu::Instance::default(), None))
 }
 
 /// Request the preferred (real GPU) adapter, then the software fallback.
@@ -97,7 +109,20 @@ pub fn acquire_device(
     instance: &wgpu::Instance,
     surface: Option<&wgpu::Surface<'_>>,
 ) -> Result<(wgpu::Adapter, wgpu::Device, wgpu::Queue), RenderError> {
-    let adapters = candidate_adapters(instance, surface);
+    device_from(candidate_adapters(instance, surface))
+}
+
+/// Acquire a device for offscreen work from the process's shared adapters
+/// (see [`offscreen_adapters`]).
+pub fn acquire_offscreen_device() -> Result<(wgpu::Adapter, wgpu::Device, wgpu::Queue), RenderError>
+{
+    device_from(offscreen_adapters().to_vec())
+}
+
+/// Create a device on the first of `adapters` that can make one.
+fn device_from(
+    adapters: Vec<wgpu::Adapter>,
+) -> Result<(wgpu::Adapter, wgpu::Device, wgpu::Queue), RenderError> {
     if adapters.is_empty() {
         return Err(RenderError::NoAdapter(
             "request_adapter returned no adapter".into(),
@@ -120,7 +145,8 @@ pub fn acquire_device(
 
 /// A wgpu adapter/device/queue, set up once and shared across frames.
 ///
-/// The instance used to obtain these is dropped after device creation — wgpu's
+/// The instance used to obtain these is dropped after device creation (the
+/// offscreen path's lives on in its shared adapters) — wgpu's
 /// adapter/device/surface keep their own handles to the backend.
 pub struct GpuContext {
     // Read by the viewer (surface capabilities) but not by the offscreen path.
@@ -143,8 +169,12 @@ impl GpuContext {
     /// [`RenderError::NoAdapter`] if no adapter exists, or
     /// [`RenderError::DeviceRequest`] if the device cannot be created.
     pub fn new() -> Result<Self, RenderError> {
-        let instance = wgpu::Instance::default();
-        Self::with_instance(instance, None)
+        let (adapter, device, queue) = acquire_offscreen_device()?;
+        Ok(Self {
+            adapter,
+            device,
+            queue,
+        })
     }
 
     /// Build a context from an existing instance, optionally constraining the
@@ -157,6 +187,7 @@ impl GpuContext {
     /// # Errors
     ///
     /// See [`GpuContext::new`].
+    #[cfg_attr(not(feature = "window"), allow(dead_code))]
     pub fn with_instance(
         instance: wgpu::Instance,
         surface: Option<&wgpu::Surface<'_>>,
