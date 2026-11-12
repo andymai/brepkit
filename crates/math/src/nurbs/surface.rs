@@ -297,10 +297,20 @@ impl NurbsSurface {
     /// [`Self::derivatives`] to order 1, worked out alike, without allocating.
     #[must_use]
     pub fn first_derivatives(&self, u: f64, v: f64) -> (Vec3, Vec3, Vec3) {
-        let zero = Vec3::new(0.0, 0.0, 0.0);
-        let (mut aw, mut skl) = ([[0.0f64; 4]; 4], [zero; 4]);
-        self.derivatives_into(u, v, 1, &mut aw, &mut skl);
-        (skl[0], skl[2], skl[1])
+        let (pu, pv) = (self.degree_u, self.degree_v);
+        let span_u = basis::find_span(self.control_points.len(), pu, u, &self.knots_u);
+        let span_v = basis::find_span(self.control_points[0].len(), pv, v, &self.knots_v);
+        let (du, dv) = (1.min(pu), 1.min(pv));
+        let mut ders_u_stack = [0.0f64; 2 * (basis::MAX_STACK_OUTPUT + 1)];
+        let mut ders_u_heap = Vec::new();
+        let ders_u = basis::scratch(&mut ders_u_stack, &mut ders_u_heap, (du + 1) * (pu + 1));
+        basis::ders_basis_funs_into(span_u, u, pu, du, &self.knots_u, ders_u);
+        let mut ders_v_stack = [0.0f64; 2 * (basis::MAX_STACK_OUTPUT + 1)];
+        let mut ders_v_heap = Vec::new();
+        let ders_v = basis::scratch(&mut ders_v_stack, &mut ders_v_heap, (dv + 1) * (pv + 1));
+        basis::ders_basis_funs_into(span_v, v, pv, dv, &self.knots_v, ders_v);
+        let (_, s, su, sv) = self.first_order_from::<false>(span_u, ders_u, span_v, &[], ders_v);
+        (s, su, sv)
     }
 
     /// `u`'s span and basis functions with their first derivatives, for
@@ -457,21 +467,26 @@ impl NurbsSurface {
         let mut ders_u_heap = Vec::new();
         let ders_u = basis::scratch(&mut ders_u_stack, &mut ders_u_heap, (du + 1) * stride_u);
         basis::ders_basis_funs_into(span_u, u, pu, du, &self.knots_u, ders_u);
-        self.point_and_partials_from(span_u, ders_u, span_v, nv, ders_v)
+        let (point, _, su, sv) = self.first_order_from::<true>(span_u, ders_u, span_v, nv, ders_v);
+        (point, su, sv)
     }
 
-    /// The point and first partials from `u`'s span and basis derivatives
-    /// (to order `1.min(degree_u)`) and `v`'s, as
-    /// [`Self::point_and_partials_on_row`] takes them.
+    /// From `u`'s span and basis derivatives (to order `1.min(degree_u)`)
+    /// and `v`'s: [`Self::derivatives_into`] to order 1, `(S, S_u, S_v)`,
+    /// its homogeneous sums taken in one pass over the span's control points,
+    /// each in the order it takes them; and with `POINT`, the point as
+    /// [`Self::evaluate_on_row`] gives it from `v`'s basis functions `nv`
+    /// (`u`'s read off the first row of their derivatives, which
+    /// `basis_funs_into` works out by the same operations), else the origin.
     #[allow(clippy::many_single_char_names)]
-    fn point_and_partials_from(
+    fn first_order_from<const POINT: bool>(
         &self,
         span_u: usize,
         ders_u: &[f64],
         span_v: usize,
         nv: &[f64],
         ders_v: &[f64],
-    ) -> (Point3, Vec3, Vec3) {
+    ) -> (Point3, Vec3, Vec3, Vec3) {
         let pu = self.degree_u;
         let pv = self.degree_v;
         let du = 1.min(pu);
@@ -483,15 +498,17 @@ impl NurbsSurface {
             let u_idx = span_u - pu + i;
             let (du_0i, du_1i) = (ders_u[i], ders_u[(du * stride_u) + i]);
             let (mut row_x, mut row_y, mut row_z, mut row_w) = (0.0, 0.0, 0.0, 0.0);
-            for (j, &nv_j) in nv.iter().enumerate().take(pv + 1) {
+            for j in 0..=pv {
                 let v_idx = span_v - pv + j;
                 let pt = &self.control_points[u_idx][v_idx];
                 let w = self.weights[u_idx][v_idx];
-                let bw = nv_j * w;
-                row_x += bw * pt.x();
-                row_y += bw * pt.y();
-                row_z += bw * pt.z();
-                row_w += bw;
+                if POINT {
+                    let bw = nv[j] * w;
+                    row_x += bw * pt.x();
+                    row_y += bw * pt.y();
+                    row_z += bw * pt.z();
+                    row_w += bw;
+                }
                 let dv_0j = ders_v[j];
                 let accumulate = |a: &mut [f64; 4], coeff: f64| {
                     a[0] += coeff * pt.x() * w;
@@ -523,8 +540,8 @@ impl NurbsSurface {
         } else {
             (du, dv)
         };
-        let (su, sv) = first_order_quotient(top_u, top_v, &aw);
-        (point, su, sv)
+        let (s, su, sv) = first_order_quotient(top_u, top_v, &aw);
+        (point, s, su, sv)
     }
 
     /// Compute the unit normal vector at parameters `(u, v)`.
@@ -631,31 +648,39 @@ impl NurbsRow<'_> {
     /// at, from it.
     #[must_use]
     pub fn point_and_partials_with(&self, basis: &UBasis) -> (Point3, Vec3, Vec3) {
-        self.surface.point_and_partials_from(
+        let (point, _, su, sv) = self.surface.first_order_from::<true>(
             basis.span,
             &basis.ders,
             self.span_v,
             &self.basis_v,
             &self.ders_v,
-        )
+        );
+        (point, su, sv)
     }
 
     /// The point and first partials at `u`, as
     /// [`NurbsSurface::first_derivatives`] gives them.
     #[must_use]
     pub fn first_derivatives(&self, u: f64) -> (Vec3, Vec3, Vec3) {
-        let zero = Vec3::new(0.0, 0.0, 0.0);
-        let (mut aw, mut skl) = ([[0.0f64; 4]; 4], [zero; 4]);
-        self.surface
-            .derivatives_on_row(u, 1, self.span_v, &self.ders_v, &mut aw, &mut skl);
-        (skl[0], skl[2], skl[1])
+        let pu = self.surface.degree_u;
+        let n_rows = self.surface.control_points.len();
+        let span_u = basis::find_span(n_rows, pu, u, &self.surface.knots_u);
+        let du = 1.min(pu);
+        let mut ders_u_stack = [0.0f64; 2 * (basis::MAX_STACK_OUTPUT + 1)];
+        let mut ders_u_heap = Vec::new();
+        let ders_u = basis::scratch(&mut ders_u_stack, &mut ders_u_heap, (du + 1) * (pu + 1));
+        basis::ders_basis_funs_into(span_u, u, pu, du, &self.surface.knots_u, ders_u);
+        let (_, s, su, sv) =
+            self.surface
+                .first_order_from::<false>(span_u, ders_u, self.span_v, &[], &self.ders_v);
+        (s, su, sv)
     }
 }
 
-/// [`rational_quotient`] to order 1, `aw` laid out as it lays it out: the
-/// partials `(S_u, S_v)`, by its operations less those that leave a value
-/// as it is (a product by a binomial of 1, a difference with a sum of none).
-fn first_order_quotient(top_u: usize, top_v: usize, aw: &[[f64; 4]; 4]) -> (Vec3, Vec3) {
+/// [`rational_quotient`] to order 1, `aw` laid out as it lays it out:
+/// `(S, S_u, S_v)`, by its operations less those that leave a value as it
+/// is (a product by a binomial of 1, a difference with a sum of none).
+fn first_order_quotient(top_u: usize, top_v: usize, aw: &[[f64; 4]; 4]) -> (Vec3, Vec3, Vec3) {
     let w0 = aw[0][3];
     let over_w0 = |v3: [f64; 3]| {
         if w0 == 0.0 {
@@ -678,7 +703,7 @@ fn first_order_quotient(top_u: usize, top_v: usize, aw: &[[f64; 4]; 4]) -> (Vec3
     } else {
         zero
     };
-    (su, sv)
+    (s, su, sv)
 }
 
 /// The rational quotient rule (NURBS Book A4.4): `skl`'s derivatives of the
@@ -835,8 +860,9 @@ mod tests {
     }
 
     /// Along a line of constant `v`, the row's points and partials are the
-    /// surface's own, bit for bit: rational and polynomial patches, degrees 1
-    /// to 5, at knots, ends and between.
+    /// surface's own, bit for bit, and the surface's first derivatives are
+    /// its order-1 table's: rational and polynomial patches, degrees 1 to 5,
+    /// at knots, ends and between.
     #[test]
     fn a_row_evaluates_as_the_surface_does() {
         let rational = NurbsSurface::new(
@@ -922,6 +948,12 @@ mod tests {
                 for &u in &us {
                     let p = s.evaluate(u, v);
                     let (q, su, sv) = s.first_derivatives(u, v);
+                    let table = s.derivatives(u, v, 1);
+                    assert_eq!(
+                        [bits(q), bits(su), bits(sv)],
+                        [bits(table[0][0]), bits(table[1][0]), bits(table[0][1])],
+                        "first derivatives at ({u}, {v})"
+                    );
                     let (rp, rsu, rsv) = row.point_and_partials(u);
                     let at = format!("({u}, {v}), degrees {:?}", (s.degree_u(), s.degree_v()));
                     assert_eq!(point_bits(rp), point_bits(p), "point at {at}");
