@@ -29,9 +29,10 @@ use crate::dot_normal_point;
 /// Returns an error if:
 /// - `distance` is zero or negative
 /// - any edge is not shared by exactly two faces in the solid
-/// - a face has a curved edge, unless the edges are closed circular rims or
-///   tangent chains of lines and arcs (see
-///   [`crate::chamfer_chain::chamfer_tangent_chains`])
+/// - on a body with a curved edge (other than closed circular rims or
+///   tangent chains of lines and arcs, see
+///   [`crate::chamfer_chain::chamfer_tangent_chains`]), the blend engine's
+///   chamfer fails on an edge
 /// - a chamfered edge reaches a face's hole
 /// - the result cannot be assembled into a valid solid
 pub fn chamfer(
@@ -59,6 +60,14 @@ pub fn chamfer(
         crate::chamfer_chain::chamfer_tangent_chains(topo, solid, edges, distance)?
     {
         return Ok(result);
+    }
+    // The flat-bevel rebuild writes every face from its corners, so a body
+    // with a curved edge anywhere (a hole, a rounded side) goes to the blend
+    // engine's chamfer, which keeps the faces it does not touch as they are.
+    let faces = brepkit_topology::explorer::solid_faces(topo, solid)?;
+    if has_curved_edge(topo, &faces)? {
+        let result = crate::blend_ops::chamfer_v2(topo, solid, edges, distance, distance)?;
+        return crate::blend_ops::all_blended(result);
     }
     chamfer_core(topo, solid, edges, ChamferDistances::Symmetric(distance))
 }
@@ -210,6 +219,24 @@ impl ChamferDistances {
     }
 }
 
+/// Whether any of the faces is bounded by an edge other than a line.
+fn has_curved_edge(topo: &Topology, faces: &[FaceId]) -> Result<bool, crate::OperationsError> {
+    for &face_id in faces {
+        let face = topo.face(face_id)?;
+        for wire in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            for oe in topo.wire(wire)?.edges() {
+                if !matches!(
+                    topo.edge(oe.edge())?.curve(),
+                    brepkit_topology::edge::EdgeCurve::Line
+                ) {
+                    return Ok(true);
+                }
+            }
+        }
+    }
+    Ok(false)
+}
+
 #[allow(clippy::too_many_lines)]
 fn chamfer_core(
     topo: &mut Topology,
@@ -226,26 +253,10 @@ fn chamfer_core(
     // This rebuild writes each face from its corners, as straight sides. A
     // curved edge would come back as its chord, which reads as a valid solid
     // of the wrong volume.
-    let straight = |topo: &Topology, wire| -> Result<bool, crate::OperationsError> {
-        for oe in topo.wire(wire)?.edges() {
-            if !matches!(
-                topo.edge(oe.edge())?.curve(),
-                brepkit_topology::edge::EdgeCurve::Line
-            ) {
-                return Ok(false);
-            }
-        }
-        Ok(true)
-    };
-    for &face_id in &shell_face_ids {
-        let face = topo.face(face_id)?;
-        for wire in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
-            if !straight(topo, wire)? {
-                return Err(crate::OperationsError::InvalidInput {
-                    reason: "the planar chamfer cannot rebuild a curved edge".into(),
-                });
-            }
-        }
+    if has_curved_edge(topo, &shell_face_ids)? {
+        return Err(crate::OperationsError::InvalidInput {
+            reason: "the planar chamfer cannot rebuild a curved edge".into(),
+        });
     }
 
     let mut edge_to_faces: HashMap<usize, Vec<FaceId>> = HashMap::new();
