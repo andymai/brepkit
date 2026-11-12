@@ -178,12 +178,18 @@ fn curve_coarse_search(curve: &NurbsCurve, point: Point3) -> Vec<(f64, f64, f64)
         }
         let (u_start, u_end) = (knots[k], knots[k + 1]);
         let top = if u_end < hi { u_end.next_down() } else { u_end };
-        let samples: Vec<(f64, f64)> = (0..=n_samples)
-            .map(|i| {
-                let t = i as f64 / n_samples as f64;
-                let u = t.mul_add(u_end - u_start, u_start).min(top);
-                (u, (curve.evaluate(u) - point).length_squared())
+        let samples: Vec<(f64, f64)> = curve
+            .span_samples(k, || {
+                (0..=n_samples)
+                    .map(|i| {
+                        let t = i as f64 / n_samples as f64;
+                        let u = t.mul_add(u_end - u_start, u_start).min(top);
+                        (u, curve.evaluate(u))
+                    })
+                    .collect()
             })
+            .iter()
+            .map(|&(u, at)| (u, (at - point).length_squared()))
             .collect();
         best = samples.iter().map(|s| s.1).fold(best, f64::min);
         sampled.push((k, (u_start, top, samples)));
