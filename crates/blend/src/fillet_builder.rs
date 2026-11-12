@@ -1752,6 +1752,7 @@ impl<'a> FilletBuilder<'a> {
         let input_edges = input_edge_set(topo, &original_faces);
         let result_faces = drop_contact_slivers(topo, result_faces, &input_edges)?;
         fold_spoke_spurs(topo, &result_faces, &input_edges)?;
+        let result_faces = split_pinched_faces(topo, result_faces, &input_edges)?;
         let new_shell = match Shell::new(result_faces) {
             Ok(shell) => shell,
             Err(error) => {
@@ -2080,6 +2081,197 @@ fn fold_spoke_spurs(
         }
     }
     Ok(())
+}
+
+/// Split a face pinched along a contact that runs over one of the face's
+/// own straight edges in its middle.
+///
+/// A round whose width lands exactly on a step (a slab between two uprights
+/// exactly a radius high, its bottom edge rounded) runs its contact along
+/// the step's edge, which lies wholly inside the contact. The side face's
+/// wire then runs along the step's edge and, further on, back along the
+/// contact over it: two regions joined by a strip of no width. That is
+/// closed by edge count, but the face's mesh skips the strip while the
+/// face beyond the step's edge meshes it, so the shell's mesh is open.
+///
+/// The contact is split at the step edge's ends and the round takes the
+/// step's edge in place of the middle piece, so it meets the face beyond
+/// along it; the side face's wire, then running the step's edge both
+/// ways, is cut there into its two regions, each a face of its own. This
+/// is the spur `fold_spoke_spurs` folds, with the short edge inside the
+/// long one rather than at its end.
+fn split_pinched_faces(
+    topo: &mut Topology,
+    mut faces: Vec<FaceId>,
+    input_edges: &HashSet<EdgeId>,
+) -> Result<Vec<FaceId>, BlendError> {
+    const ON_LINE: f64 = 1e-6;
+    let point = |topo: &Topology, v: VertexId| topo.vertex(v).map(Vertex::point);
+    let mut k = 0;
+    'faces: while k < faces.len() {
+        let face_id = faces[k];
+        let face = topo.face(face_id)?;
+        if !face.inner_wires().is_empty() {
+            k += 1;
+            continue;
+        }
+        let wire_id = face.outer_wire();
+        let edges = topo.wire(wire_id)?.edges().to_vec();
+        let n = edges.len();
+        for (i, &long) in edges.iter().enumerate() {
+            if input_edges.contains(&long.edge())
+                || edges.iter().filter(|oe| oe.edge() == long.edge()).count() != 1
+            {
+                continue;
+            }
+            let long_edge = topo.edge(long.edge())?.clone();
+            if !straight_edge(topo, &long_edge, ON_LINE)? {
+                continue;
+            }
+            let (from, to) = (
+                long.oriented_start(&long_edge),
+                long.oriented_end(&long_edge),
+            );
+            let (fp, tp) = (point(topo, from)?, point(topo, to)?);
+            let span = tp - fp;
+            let length2 = span.dot(span);
+            if length2 <= 1e-18 {
+                continue;
+            }
+            // Where a point lies along the contact, strictly inside it.
+            let along = |p: Point3| {
+                let t = (p - fp).dot(span) / length2;
+                (t > 1e-9 && t < 1.0 - 1e-9 && (fp + span * t - p).length() <= ON_LINE).then_some(t)
+            };
+            for (j, &short) in edges.iter().enumerate() {
+                if j == i
+                    || !input_edges.contains(&short.edge())
+                    || edges.iter().filter(|oe| oe.edge() == short.edge()).count() != 1
+                {
+                    continue;
+                }
+                let short_edge = topo.edge(short.edge())?.clone();
+                if !straight_edge(topo, &short_edge, ON_LINE)? {
+                    continue;
+                }
+                // Run here against the contact: from its far end back.
+                let (b, a) = (
+                    short.oriented_start(&short_edge),
+                    short.oriented_end(&short_edge),
+                );
+                let (Some(ta), Some(tb)) = (along(point(topo, a)?), along(point(topo, b)?)) else {
+                    continue;
+                };
+                if ta >= tb {
+                    continue;
+                }
+                // The contact is shared with one other face, the short edge
+                // with one other face too.
+                let mut long_others = Vec::new();
+                let mut short_others = 0;
+                for &other in &faces {
+                    if other == face_id {
+                        continue;
+                    }
+                    let f = topo.face(other)?;
+                    for w in std::iter::once(f.outer_wire()).chain(f.inner_wires().iter().copied())
+                    {
+                        for oe in topo.wire(w)?.edges() {
+                            if oe.edge() == long.edge() {
+                                long_others.push(w);
+                            }
+                            if oe.edge() == short.edge() {
+                                short_others += 1;
+                            }
+                        }
+                    }
+                }
+                let [other_wire] = long_others.as_slice() else {
+                    continue;
+                };
+                if short_others != 1 {
+                    continue;
+                }
+                let other_wire = *other_wire;
+                // This wire with the contact cut at a and b, the short edge
+                // run a to b in place of the middle, then cut where it runs
+                // the short edge both ways.
+                let first = topo.add_edge(Edge::new(from, a, EdgeCurve::Line));
+                let last = topo.add_edge(Edge::new(b, to, EdgeCurve::Line));
+                let short_ab = OrientedEdge::new(short.edge(), !short.is_forward());
+                let mut cycle = Vec::with_capacity(n + 2);
+                for (m, &oe) in edges.iter().enumerate() {
+                    if m == i {
+                        cycle.push(OrientedEdge::new(first, true));
+                        cycle.push(short_ab);
+                        cycle.push(OrientedEdge::new(last, true));
+                    } else {
+                        cycle.push(oe);
+                    }
+                }
+                let positions: Vec<usize> = cycle
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, oe)| oe.edge() == short.edge())
+                    .map(|(m, _)| m)
+                    .collect();
+                let [p0, p1] = positions.as_slice() else {
+                    continue;
+                };
+                let len = cycle.len();
+                let take = |start: usize, end: usize| -> Vec<OrientedEdge> {
+                    let mut out = Vec::new();
+                    let mut m = (start + 1) % len;
+                    while m != end {
+                        out.push(cycle[m]);
+                        m = (m + 1) % len;
+                    }
+                    out
+                };
+                let (one, two) = (take(*p0, *p1), take(*p1, *p0));
+                if one.len() < 3 || two.len() < 3 {
+                    continue;
+                }
+                log::debug!(
+                    "pinched face {face_id:?}: {:?} inside {:?}, split in two",
+                    short.edge(),
+                    long.edge()
+                );
+                // The other face runs the contact one way or the other.
+                let other_edges = topo.wire(other_wire)?.edges().to_vec();
+                let closed = topo.wire(other_wire)?.is_closed();
+                let mut rewritten = Vec::with_capacity(other_edges.len() + 2);
+                for oe in other_edges {
+                    if oe.edge() != long.edge() {
+                        rewritten.push(oe);
+                    } else if oe.oriented_start(&long_edge) == from {
+                        rewritten.push(OrientedEdge::new(first, true));
+                        rewritten.push(short_ab);
+                        rewritten.push(OrientedEdge::new(last, true));
+                    } else {
+                        rewritten.push(OrientedEdge::new(last, false));
+                        rewritten.push(OrientedEdge::new(short.edge(), short.is_forward()));
+                        rewritten.push(OrientedEdge::new(first, false));
+                    }
+                }
+                *topo.wire_mut(other_wire)? = Wire::new(rewritten, closed)?;
+                *topo.wire_mut(wire_id)? = Wire::new(one, true)?;
+                let second_wire = topo.add_wire(Wire::new(two, true)?);
+                let face = topo.face(face_id)?;
+                let surface = face.surface().clone();
+                let twin = if face.is_reversed() {
+                    Face::new_reversed(second_wire, Vec::new(), surface)
+                } else {
+                    Face::new(second_wire, Vec::new(), surface)
+                };
+                let twin_id = topo.add_face(twin);
+                faces.push(twin_id);
+                continue 'faces;
+            }
+        }
+        k += 1;
+    }
+    Ok(faces)
 }
 
 /// The edges of the input's faces after the trim: their own edges and the
