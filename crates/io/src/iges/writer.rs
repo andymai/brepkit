@@ -557,7 +557,7 @@ impl IgesWriteContext {
             out,
             "{:>8}{:>8}{:>8}{:>8}{:>40}T{:>7}",
             format!("S{:>7}", 1),
-            format!("G{:>7}", 1),
+            format!("G{:>7}", g_seq - 1),
             format!("D{:>7}", self.dir_entries.len()),
             format!("P{:>7}", self.param_data.len()),
             " ",
@@ -701,6 +701,30 @@ mod tests {
         assert!(iges_str.contains("D      "));
         assert!(iges_str.contains("P      "));
         assert!(iges_str.contains("T      1"));
+    }
+
+    #[test]
+    fn terminate_line_counts_the_lines_of_each_section() {
+        let mut topo = Topology::new();
+        let solid = make_unit_cube_non_manifold(&mut topo);
+
+        let iges_str = write_iges(&topo, &[solid]).unwrap();
+
+        let count = |letter: char| {
+            iges_str
+                .lines()
+                .filter(|line| line.chars().nth(72) == Some(letter))
+                .count()
+        };
+        let terminate = iges_str
+            .lines()
+            .find(|line| line.chars().nth(72) == Some('T'))
+            .unwrap();
+        let want = ['S', 'G', 'D', 'P']
+            .map(|letter| format!("{letter}{:>7}", count(letter)))
+            .concat();
+        assert!(count('G') > 1, "the global section should span lines");
+        assert_eq!(&terminate[..32], want);
     }
 
     #[test]
