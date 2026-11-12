@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794369593317,
+  "lastUpdate": 1794478802480,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -67661,6 +67661,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 23023339,
             "range": "± 24515",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "66281732+Robokan@users.noreply.github.com",
+            "name": "Eric Vaughan",
+            "username": "Robokan"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "69c9f8a9aa151517c85c79b537d656998e16e96f",
+          "message": "fix(render): find offscreen adapters once per process (#2366)\n\n## Problem\n\n`cargo test --release -p brepkit-render` segfaults (SIGSEGV) in about\nhalf of all runs on a Linux machine with two NVIDIA RTX 4090s (driver\n615.71.10). With `-- --test-threads=1` it always passes. Over 10 to 20\nparallel runs of each test file on 4.6.26, `compute_mesh_lod` crashed 12\ntimes in 20, `offscreen_render` 5 in 10 and `compute_mesh_render` 1 in\n10. The render crate is unchanged from there to `main`.\n\nEvery offscreen render (`probe_adapter`, `GpuContext::new`,\n`render_cylinder_compute_offscreen`) built its own `wgpu::Instance` and\nsearched it for adapters. Run on several threads, that races twice:\n\n- **Creating instances at once crashes in the Vulkan loader.** Under\ngdb, three test threads are inside `Instance::default()` →\n`vkEnumerateInstanceExtensionProperties`. One jumps to address 0 inside\n`libvulkan` while another is still loading the NVIDIA driver into it.\nPinning the adapter (`WGPU_ADAPTER_NAME`) or the backend\n(`WGPU_BACKEND=vulkan`) doesn't help, because the crash comes before any\nadapter is chosen.\n- **Sharing one instance instead panics in the GL backend.** wgpu-hal's\nEGL `enumerate_adapters` makes the instance's one EGL context current\nwithout a lock, so concurrent `request_adapter` calls fail with\n`BadAccess` (`gles/egl.rs`, `EglContext::make_current`).\n\n## Change\n\n`pipeline.rs`: the offscreen path finds its candidate adapters once per\nprocess, in a `OnceLock` (`offscreen_adapters`). Each render still makes\nits own device from them (`acquire_offscreen_device`), so renders don't\nshare a device or its error scopes. The adapters keep their instance\nalive. `probe_adapter`, `GpuContext::new` and\n`render_cylinder_compute_offscreen` use it.\n\nThe viewer is unchanged: it needs an instance that its window surface\ncomes from, so it keeps `GpuContext::with_instance` and `acquire_device`\n(marked `dead_code`-allowed without the `window` feature, like the other\nviewer-only items).\n\n## Tests\n\n- On the same machine, `compute_mesh_lod`, `compute_mesh_render` and\n`offscreen_render` each passed 20 of 20 parallel runs (before: 12, 1 and\n5 of 10–20 crashed). The tests ran on the GPU (`Vulkan / NVIDIA GeForce\nRTX 4090`), not their no-adapter skip path.\n- `cargo test --release -p brepkit-render` passes.\n- clippy (`-D warnings`) is clean with and without `--features window`;\nfmt and rustdoc are clean.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes segfaults in parallel offscreen rendering by finding GPU adapters\nonce per process instead of per render. Previously, concurrent renders\ncreated wgpu instances that raced inside the Vulkan loader (crashes),\nand shared-instance GL enumeration panicked with `BadAccess`. Now\noffscreen renders use shared adapters from a `OnceLock` but still create\ntheir own devices. The viewer keeps its own instance derived from its\nwindow surface.\n\n- Offscreen adapters are cached per process; each render still creates\nits own device from them.\n- Changes affect `pipeline.rs` and `compute_mesh.rs`; the viewer path is\nunchanged.\n- Tested 20/20 parallel runs of the previously flaky tests on the same\ndual-GPU machine.\n\n<sup>Written for commit da511303ba06fc64f49b89f8b2b9ecd208fafba3.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2366?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-11-12T02:16:57-08:00",
+          "tree_id": "4c1b3242b93bc61f10dfb28c8f9158e15b9e04af",
+          "url": "https://github.com/andymai/brepkit/commit/69c9f8a9aa151517c85c79b537d656998e16e96f"
+        },
+        "date": 1794478792252,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 880931,
+            "range": "± 2215",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 951089,
+            "range": "± 3339",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11021,
+            "range": "± 160",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 716648,
+            "range": "± 4679",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 23149931,
+            "range": "± 213346",
             "unit": "ns/iter"
           }
         ]
