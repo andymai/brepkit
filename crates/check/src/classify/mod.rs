@@ -208,7 +208,7 @@ fn is_on_boundary(
     point: Point3,
     tolerance: f64,
 ) -> Result<bool, CheckError> {
-    for (&fid, aabb) in faces.faces.iter().zip(&faces.aabbs) {
+    for (i, (&fid, aabb)) in faces.faces.iter().zip(&faces.aabbs).enumerate() {
         // A face whose box is farther than the tolerance cannot hold the
         // point; the trimmed distance below is costly.
         if aabb.distance_squared_to_point(point) > tolerance * tolerance {
@@ -226,13 +226,35 @@ fn is_on_boundary(
         if to_surface >= tolerance {
             continue;
         }
-        if let Some((dist, _)) = crate::distance::point_to_face(topo, point, fid)?
+        if let Some((dist, _)) = point_to_face(topo, faces, i, point)?
             && dist < tolerance
         {
             return Ok(true);
         }
     }
     Ok(false)
+}
+
+/// [`crate::distance::point_to_face`] for the `i`-th face, a NURBS face's
+/// region built once and kept in its cache.
+fn point_to_face(
+    topo: &Topology,
+    faces: &FaceBvh,
+    i: usize,
+    point: Point3,
+) -> Result<Option<(f64, Point3)>, CheckError> {
+    let fid = faces.faces[i];
+    if let FaceSurface::Nurbs(nurbs) = topo.face(fid)?.surface() {
+        let region = faces.caches[i]
+            .nurbs_region
+            .get_or_init(|| boundary::NurbsFaceRegion::of(topo, fid, nurbs).ok());
+        if let Some(region) = region {
+            return crate::distance::point_to_nurbs_face(topo, point, fid, nurbs, |q| {
+                Ok(region.contains(nurbs, q))
+            });
+        }
+    }
+    crate::distance::point_to_face(topo, point, fid)
 }
 
 /// Classify a point relative to a solid using generalized winding numbers.
