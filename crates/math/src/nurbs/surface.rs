@@ -271,8 +271,36 @@ impl NurbsSurface {
     ///
     /// Uses NURBS Book A3.6 + A4.4 (rational quotient rule).
     #[must_use]
-    #[allow(clippy::many_single_char_names, clippy::cast_precision_loss)]
     pub fn derivatives(&self, u: f64, v: f64, d: usize) -> Vec<Vec<Vec3>> {
+        let n = d + 1;
+        let zero = Vec3::new(0.0, 0.0, 0.0);
+        let (mut aw_stack, mut skl_stack) = ([[0.0f64; 4]; 9], [zero; 9]);
+        let (mut aw_heap, mut skl_heap) = (Vec::new(), Vec::new());
+        let (aw, skl) = if n * n <= 9 {
+            (&mut aw_stack[..n * n], &mut skl_stack[..n * n])
+        } else {
+            aw_heap.resize(n * n, [0.0f64; 4]);
+            skl_heap.resize(n * n, zero);
+            (&mut aw_heap[..], &mut skl_heap[..])
+        };
+        self.derivatives_into(u, v, d, aw, skl);
+        skl.chunks(n).map(<[Vec3]>::to_vec).collect()
+    }
+
+    /// The point and its first partials `(S, ∂S/∂u, ∂S/∂v)` at `(u, v)`:
+    /// [`Self::derivatives`] to order 1, worked out alike, without allocating.
+    #[must_use]
+    pub fn first_derivatives(&self, u: f64, v: f64) -> (Vec3, Vec3, Vec3) {
+        let zero = Vec3::new(0.0, 0.0, 0.0);
+        let (mut aw, mut skl) = ([[0.0f64; 4]; 4], [zero; 4]);
+        self.derivatives_into(u, v, 1, &mut aw, &mut skl);
+        (skl[0], skl[2], skl[1])
+    }
+
+    /// [`Self::derivatives`] into zeroed `(d + 1)^2` buffers, row `k` of
+    /// `skl` holding the `k`-th derivative in `u` against each order in `v`.
+    #[allow(clippy::many_single_char_names, clippy::cast_precision_loss)]
+    fn derivatives_into(&self, u: f64, v: f64, d: usize, aw: &mut [[f64; 4]], skl: &mut [Vec3]) {
         let pu = self.degree_u;
         let pv = self.degree_v;
         let n_rows = self.control_points.len();
@@ -305,7 +333,7 @@ impl NurbsSurface {
             .iter()
             .any(|row| row[span_v - pv..=span_v].iter().any(|w| w.to_bits() != w0));
         let (top_u, top_v) = if varies { (d, d) } else { (du, dv) };
-        let mut aw = vec![vec![[0.0f64; 4]; d + 1]; d + 1];
+        let n = d + 1;
         for k in 0..=du {
             for l in 0..=dv {
                 if k + l > d {
@@ -320,43 +348,42 @@ impl NurbsSurface {
                         let pt = &self.control_points[u_idx][v_idx];
                         let w = self.weights[u_idx][v_idx];
                         let coeff = du_ki * dv_lj;
-                        aw[k][l][0] += coeff * pt.x() * w;
-                        aw[k][l][1] += coeff * pt.y() * w;
-                        aw[k][l][2] += coeff * pt.z() * w;
-                        aw[k][l][3] += coeff * w;
+                        aw[k * n + l][0] += coeff * pt.x() * w;
+                        aw[k * n + l][1] += coeff * pt.y() * w;
+                        aw[k * n + l][2] += coeff * pt.z() * w;
+                        aw[k * n + l][3] += coeff * w;
                     }
                 }
             }
         }
 
         // Apply rational quotient rule (A4.4).
-        let zero = Vec3::new(0.0, 0.0, 0.0);
-        let mut skl = vec![vec![zero; d + 1]; d + 1];
-        let w0 = aw[0][0][3];
+        let w0 = aw[0][3];
 
         for k in 0..=top_u {
             for l in 0..=top_v.min(d - k) {
-                let mut v3 = [aw[k][l][0], aw[k][l][1], aw[k][l][2]];
+                let [x, y, z, _] = aw[k * n + l];
+                let mut v3 = [x, y, z];
 
                 for j in 1..=l {
                     let bin = binomial(l, j) as f64;
-                    v3[0] -= bin * aw[0][j][3] * skl[k][l - j].x();
-                    v3[1] -= bin * aw[0][j][3] * skl[k][l - j].y();
-                    v3[2] -= bin * aw[0][j][3] * skl[k][l - j].z();
+                    v3[0] -= bin * aw[j][3] * skl[k * n + l - j].x();
+                    v3[1] -= bin * aw[j][3] * skl[k * n + l - j].y();
+                    v3[2] -= bin * aw[j][3] * skl[k * n + l - j].z();
                 }
 
                 for i in 1..=k {
                     let bin = binomial(k, i) as f64;
-                    v3[0] -= bin * aw[i][0][3] * skl[k - i][l].x();
-                    v3[1] -= bin * aw[i][0][3] * skl[k - i][l].y();
-                    v3[2] -= bin * aw[i][0][3] * skl[k - i][l].z();
+                    v3[0] -= bin * aw[i * n][3] * skl[(k - i) * n + l].x();
+                    v3[1] -= bin * aw[i * n][3] * skl[(k - i) * n + l].y();
+                    v3[2] -= bin * aw[i * n][3] * skl[(k - i) * n + l].z();
 
                     let mut v2 = [0.0f64; 3];
                     for j in 1..=l {
                         let bin2 = binomial(l, j) as f64;
-                        v2[0] += bin2 * aw[i][j][3] * skl[k - i][l - j].x();
-                        v2[1] += bin2 * aw[i][j][3] * skl[k - i][l - j].y();
-                        v2[2] += bin2 * aw[i][j][3] * skl[k - i][l - j].z();
+                        v2[0] += bin2 * aw[i * n + j][3] * skl[(k - i) * n + l - j].x();
+                        v2[1] += bin2 * aw[i * n + j][3] * skl[(k - i) * n + l - j].y();
+                        v2[2] += bin2 * aw[i * n + j][3] * skl[(k - i) * n + l - j].z();
                     }
                     v3[0] -= bin * v2[0];
                     v3[1] -= bin * v2[1];
@@ -364,14 +391,12 @@ impl NurbsSurface {
                 }
 
                 if w0 == 0.0 {
-                    skl[k][l] = Vec3::new(v3[0], v3[1], v3[2]);
+                    skl[k * n + l] = Vec3::new(v3[0], v3[1], v3[2]);
                 } else {
-                    skl[k][l] = Vec3::new(v3[0] / w0, v3[1] / w0, v3[2] / w0);
+                    skl[k * n + l] = Vec3::new(v3[0] / w0, v3[1] / w0, v3[2] / w0);
                 }
             }
         }
-
-        skl
     }
 
     /// Compute the unit normal vector at parameters `(u, v)`.
@@ -386,9 +411,7 @@ impl NurbsSurface {
     /// Returns [`MathError::ZeroVector`] if the surface is degenerate at
     /// this point and all fallback perturbations also fail.
     pub fn normal(&self, u: f64, v: f64) -> Result<Vec3, MathError> {
-        let d = self.derivatives(u, v, 1);
-        let du = d[1][0];
-        let dv = d[0][1];
+        let (_, du, dv) = self.first_derivatives(u, v);
         let cross = du.cross(dv);
 
         if cross.length_squared() > 1e-30 {
@@ -411,9 +434,7 @@ impl NurbsSurface {
         for (pu, pv) in perturbations {
             let pu = pu.clamp(u0, u1);
             let pv = pv.clamp(v0, v1);
-            let pd = self.derivatives(pu, pv, 1);
-            let pdu = pd[1][0];
-            let pdv = pd[0][1];
+            let (_, pdu, pdv) = self.first_derivatives(pu, pv);
             let pcross = pdu.cross(pdv);
             if pcross.length_squared() > 1e-30 {
                 return pcross.normalize();
@@ -497,6 +518,55 @@ mod tests {
                 "S_({k},{l}) = {:?}",
                 d[k][l]
             );
+        }
+    }
+
+    /// `first_derivatives` is `derivatives(u, v, 1)` to the bit, on a
+    /// rational patch and a polynomial one, at knots and between them; and
+    /// past the stack buffers' order the table keeps its lower terms.
+    #[test]
+    fn first_derivatives_are_the_order_one_table() {
+        let rational = NurbsSurface::new(
+            2,
+            1,
+            vec![0.0, 0.0, 0.0, 0.5, 1.0, 1.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            (0..4)
+                .map(|i| {
+                    let x = f64::from(i);
+                    vec![Point3::new(x, 0.0, x * x * 0.1), Point3::new(x, 1.0, 0.3)]
+                })
+                .collect(),
+            vec![
+                vec![1.0, 2.0],
+                vec![0.5, 1.5],
+                vec![3.0, 1.0],
+                vec![1.0, 0.7],
+            ],
+        )
+        .expect("valid patch");
+        let bits = |p: Vec3| [p.x().to_bits(), p.y().to_bits(), p.z().to_bits()];
+        for s in [&rational, &bicubic_surface()] {
+            for (u, v) in [
+                (0.0, 0.0),
+                (0.5, 0.25),
+                (0.3, 1.0),
+                (1.0, 0.7),
+                (0.77, 0.13),
+            ] {
+                let table = s.derivatives(u, v, 1);
+                let (p, su, sv) = s.first_derivatives(u, v);
+                assert_eq!(bits(p), bits(table[0][0]), "S at ({u}, {v})");
+                assert_eq!(bits(su), bits(table[1][0]), "S_u at ({u}, {v})");
+                assert_eq!(bits(sv), bits(table[0][1]), "S_v at ({u}, {v})");
+                let (pu, pv) = crate::traits::ParametricSurface::partials(s, u, v);
+                assert_eq!(bits(pu), bits(table[1][0]), "partials' S_u at ({u}, {v})");
+                assert_eq!(bits(pv), bits(table[0][1]), "partials' S_v at ({u}, {v})");
+                let deep = s.derivatives(u, v, 3);
+                for (k, l) in [(0, 0), (1, 0), (0, 1)] {
+                    assert_eq!(bits(deep[k][l]), bits(table[k][l]), "order 3 ({k}, {l})");
+                }
+            }
         }
     }
 

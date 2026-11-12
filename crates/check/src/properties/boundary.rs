@@ -30,7 +30,8 @@ pub(super) fn integrand<S: ParametricSurface>(
     about: Vec3,
 ) -> [f64; 8] {
     let p = surface.evaluate(u, v);
-    let n = surface.partial_u(u, v).cross(surface.partial_v(u, v));
+    let (su, sv) = surface.partials(u, v);
+    let n = su.cross(sv);
     terms(Vec3::new(p.x(), p.y(), p.z()), n, about)
 }
 

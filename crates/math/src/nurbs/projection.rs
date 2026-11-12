@@ -574,10 +574,8 @@ fn surface_newton_refine(
     );
 
     for _ in 0..MAX_ITERATIONS {
-        let ders = surface.derivatives(u, v, 1);
-        let s_pt = Point3::new(ders[0][0].x(), ders[0][0].y(), ders[0][0].z());
-        let deriv_u = ders[1][0]; // ∂S/∂u
-        let deriv_v = ders[0][1]; // ∂S/∂v
+        let (s, deriv_u, deriv_v) = surface.first_derivatives(u, v); // S, ∂S/∂u, ∂S/∂v
+        let s_pt = Point3::new(s.x(), s.y(), s.z());
         let r = s_pt - point; // S(u,v) - P
 
         // Convergence check 1: point coincidence.
@@ -875,8 +873,7 @@ fn surface_descend(
         if dist < tolerance {
             break;
         }
-        let ders = surface.derivatives(u, v, 1);
-        let (deriv_u, deriv_v) = (ders[1][0], ders[0][1]);
+        let (_, deriv_u, deriv_v) = surface.first_derivatives(u, v);
         let r = at - point;
         let (dot_du_r, dot_dv_r) = (deriv_u.dot(r), deriv_v.dot(r));
         let (du_len, dv_len) = (deriv_u.length(), deriv_v.length());
