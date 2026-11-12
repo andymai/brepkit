@@ -486,26 +486,14 @@ fn surface_coarse_search(
     surface: &NurbsSurface,
     point: Point3,
 ) -> ((f64, f64), Option<(f64, f64)>) {
-    let knots_u = surface.knots_u();
-    let knots_v = surface.knots_v();
-    let pu = surface.degree_u();
-    let pv = surface.degree_v();
-    let u_min = knots_u[pu];
-    let u_max = knots_u[knots_u.len() - pu - 1];
-    let v_min = knots_v[pv];
-    let v_max = knots_v[knots_v.len() - pv - 1];
-
     let n = SURFACE_GRID_SIZE;
-    let us: Vec<f64> = (0..=n)
-        .map(|i| (i as f64 / n as f64).mul_add(u_max - u_min, u_min))
-        .collect();
-    let vs: Vec<f64> = (0..=n)
-        .map(|j| (j as f64 / n as f64).mul_add(v_max - v_min, v_min))
-        .collect();
-    let grid: Vec<Vec<Point3>> = us
-        .iter()
-        .map(|&u| vs.iter().map(|&v| surface.evaluate(u, v)).collect())
-        .collect();
+    let CoarseGrid {
+        us,
+        vs,
+        grid,
+        extent,
+    } = surface.coarse_grid();
+    let extent = *extent;
     let dist_sq = |i: usize, j: usize| (grid[i][j] - point).length_squared();
 
     let (mut best_i, mut best_j) = (0, 0);
@@ -517,10 +505,6 @@ fn surface_coarse_search(
         }
     }
 
-    let extent = grid
-        .iter()
-        .flatten()
-        .fold(0.0_f64, |m, p| m.max((*p - grid[0][0]).length()));
     let one_point = |pts: &mut dyn Iterator<Item = Point3>| {
         let mut pts = pts.peekable();
         let first = pts.peek().copied();
@@ -546,6 +530,52 @@ fn surface_coarse_search(
     };
 
     ((us[best_i], vs[best_j]), beside_pole)
+}
+
+/// A surface's points at `SURFACE_GRID_SIZE` even steps of each parameter,
+/// which every projection onto it seeds from, and how far they spread from
+/// the first. A surface is never changed once made, so it keeps its grid.
+#[derive(Debug)]
+pub(crate) struct CoarseGrid {
+    us: Vec<f64>,
+    vs: Vec<f64>,
+    grid: Vec<Vec<Point3>>,
+    extent: f64,
+}
+
+impl CoarseGrid {
+    pub(crate) fn new(surface: &NurbsSurface) -> Self {
+        let knots_u = surface.knots_u();
+        let knots_v = surface.knots_v();
+        let pu = surface.degree_u();
+        let pv = surface.degree_v();
+        let u_min = knots_u[pu];
+        let u_max = knots_u[knots_u.len() - pu - 1];
+        let v_min = knots_v[pv];
+        let v_max = knots_v[knots_v.len() - pv - 1];
+
+        let n = SURFACE_GRID_SIZE;
+        let us: Vec<f64> = (0..=n)
+            .map(|i| (i as f64 / n as f64).mul_add(u_max - u_min, u_min))
+            .collect();
+        let vs: Vec<f64> = (0..=n)
+            .map(|j| (j as f64 / n as f64).mul_add(v_max - v_min, v_min))
+            .collect();
+        let grid: Vec<Vec<Point3>> = us
+            .iter()
+            .map(|&u| vs.iter().map(|&v| surface.evaluate(u, v)).collect())
+            .collect();
+        let extent = grid
+            .iter()
+            .flatten()
+            .fold(0.0_f64, |m, p| m.max((*p - grid[0][0]).length()));
+        Self {
+            us,
+            vs,
+            grid,
+            extent,
+        }
+    }
 }
 
 /// 2D Newton–Raphson refinement for surface point projection.

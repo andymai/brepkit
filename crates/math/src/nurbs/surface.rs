@@ -10,7 +10,7 @@ use crate::vec::{Point3, Vec3};
 ///
 /// The surface is defined by degrees in the u and v directions, two knot
 /// vectors, a 2D grid of control points, and matching weights.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct NurbsSurface {
     /// Polynomial degree in the u direction.
@@ -25,6 +25,23 @@ pub struct NurbsSurface {
     control_points: Vec<Vec<Point3>>,
     /// Weight grid matching `control_points` dimensions.
     weights: Vec<Vec<f64>>,
+    /// The grid every projection seeds from, evaluated on first use.
+    #[cfg_attr(feature = "serde", serde(skip))]
+    coarse_grid: std::sync::OnceLock<std::sync::Arc<crate::nurbs::projection::CoarseGrid>>,
+    /// The control points' box, taken on first use.
+    #[cfg_attr(feature = "serde", serde(skip))]
+    control_box: std::sync::OnceLock<std::sync::Arc<Aabb3>>,
+}
+
+impl PartialEq for NurbsSurface {
+    fn eq(&self, other: &Self) -> bool {
+        self.degree_u == other.degree_u
+            && self.degree_v == other.degree_v
+            && self.knots_u == other.knots_u
+            && self.knots_v == other.knots_v
+            && self.control_points == other.control_points
+            && self.weights == other.weights
+    }
 }
 
 impl NurbsSurface {
@@ -102,6 +119,8 @@ impl NurbsSurface {
             knots_v,
             control_points,
             weights,
+            coarse_grid: std::sync::OnceLock::new(),
+            control_box: std::sync::OnceLock::new(),
         })
     }
 
@@ -426,11 +445,19 @@ impl NurbsSurface {
     /// Compute an axis-aligned bounding box from control point extrema.
     #[must_use]
     pub fn aabb(&self) -> Aabb3 {
-        Aabb3::from_points(
-            self.control_points
-                .iter()
-                .flat_map(|row| row.iter().copied()),
-        )
+        **self.control_box.get_or_init(|| {
+            std::sync::Arc::new(Aabb3::from_points(
+                self.control_points
+                    .iter()
+                    .flat_map(|row| row.iter().copied()),
+            ))
+        })
+    }
+
+    /// The surface's coarse grid for projections, evaluated on first use.
+    pub(crate) fn coarse_grid(&self) -> &crate::nurbs::projection::CoarseGrid {
+        self.coarse_grid
+            .get_or_init(|| std::sync::Arc::new(crate::nurbs::projection::CoarseGrid::new(self)))
     }
 
     /// Create a cached evaluator for repeated evaluation.
