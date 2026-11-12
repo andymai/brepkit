@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794481232115,
+  "lastUpdate": 1794502340206,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -67769,6 +67769,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 27051765,
             "range": "± 85859",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "0bdefe795edb9946709cd86722123d69cd64a025",
+          "message": "fix(io): count the global section's lines in the IGES terminate line (#2368)\n\nToday the terminate line of an IGES file from `write_iges` says the\nglobal section has one line, and the section has two. A reader that\ncompares the terminate line against the sections sees a mismatch. With\nthis change the terminate line gives the number of global lines that the\nwriter wrote.\n\nI found this through a brepjs test that compares each section of an\nexported file against its terminate line. `exportIges` on a box gave `S\n1`, `G 1`, `D 96`, `P 48` for a file with 2 global lines.\n\n## Change\n\n`finish` in `crates/io/src/iges/writer.rs` wrote a fixed `G 1`. It now\nwrites the count from the loop that splits the global section into\nlines.\n\n## Tests\n\n`terminate_line_counts_the_lines_of_each_section` counts the lines of\neach section of a cube's file and compares them with the terminate line.\nIt also makes sure that the global section spans more than one line.\n\n## Verification\n\n`cargo test -p brepkit-io --lib iges` passes: 17 tests. The change\ntouches the IGES writer only, so I did not run the pose sweep or the\ntruth audit.\n\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes the IGES terminate line so it reports the actual number of global\nsection lines instead of a hardcoded count of 1.\n\n- Readers that compare the terminate line against each section's line\ncount now see a consistent file for global sections spanning multiple\nlines.\n- Adds a test that counts the lines of each section in a cube's IGES\nfile and compares them with the terminate line.\n\n<sup>Written for commit 6ccde8158205d75133ccaf799cb83674d9a4dd2c.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2368?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2368?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2368&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-11-12T16:49:03Z",
+          "tree_id": "09ba83cfc678c12faa7961d0f9be62a874209d50",
+          "url": "https://github.com/andymai/brepkit/commit/0bdefe795edb9946709cd86722123d69cd64a025"
+        },
+        "date": 1794502328718,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 797356,
+            "range": "± 959",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 867195,
+            "range": "± 1418",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 9199,
+            "range": "± 18",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 661556,
+            "range": "± 1525",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 21228193,
+            "range": "± 29050",
             "unit": "ns/iter"
           }
         ]
