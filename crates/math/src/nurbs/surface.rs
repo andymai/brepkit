@@ -212,21 +212,27 @@ impl NurbsSurface {
     /// Uses tensor-product basis function evaluation (NURBS Book A3.5).
     #[must_use]
     pub fn evaluate(&self, u: f64, v: f64) -> Point3 {
-        let pu = self.degree_u;
         let pv = self.degree_v;
-        let n_rows = self.control_points.len();
         let n_cols = self.control_points[0].len();
-
-        let span_u = basis::find_span(n_rows, pu, u, &self.knots_u);
         let span_v = basis::find_span(n_cols, pv, v, &self.knots_v);
-        let mut nu_stack = [0.0f64; basis::MAX_STACK_OUTPUT + 1];
-        let mut nu_heap = Vec::new();
-        let nu = basis::scratch(&mut nu_stack, &mut nu_heap, pu + 1);
-        basis::basis_funs_into(span_u, u, pu, &self.knots_u, nu);
         let mut nv_stack = [0.0f64; basis::MAX_STACK_OUTPUT + 1];
         let mut nv_heap = Vec::new();
         let nv = basis::scratch(&mut nv_stack, &mut nv_heap, pv + 1);
         basis::basis_funs_into(span_v, v, pv, &self.knots_v, nv);
+        self.evaluate_on_row(u, span_v, nv)
+    }
+
+    /// [`Self::evaluate`] at `u`, given `v`'s span and basis functions.
+    fn evaluate_on_row(&self, u: f64, span_v: usize, nv: &[f64]) -> Point3 {
+        let pu = self.degree_u;
+        let pv = self.degree_v;
+        let n_rows = self.control_points.len();
+
+        let span_u = basis::find_span(n_rows, pu, u, &self.knots_u);
+        let mut nu_stack = [0.0f64; basis::MAX_STACK_OUTPUT + 1];
+        let mut nu_heap = Vec::new();
+        let nu = basis::scratch(&mut nu_stack, &mut nu_heap, pu + 1);
+        basis::basis_funs_into(span_u, u, pu, &self.knots_u, nu);
 
         // Contract along v first for each relevant u-row, then along u.
         let mut wx = 0.0;
@@ -297,17 +303,83 @@ impl NurbsSurface {
         (skl[0], skl[2], skl[1])
     }
 
+    /// `u`'s span and basis functions with their first derivatives, for
+    /// [`NurbsRow::point_and_partials_with`] to take at many `v`. `None` past
+    /// [`basis::MAX_STACK_OUTPUT`] in `u`.
+    #[must_use]
+    pub fn u_basis(&self, u: f64) -> Option<UBasis> {
+        let pu = self.degree_u;
+        if pu > basis::MAX_STACK_OUTPUT {
+            return None;
+        }
+        let span = basis::find_span(self.control_points.len(), pu, u, &self.knots_u);
+        let mut ders = [0.0; 2 * (basis::MAX_STACK_OUTPUT + 1)];
+        let du = 1.min(pu);
+        basis::ders_basis_funs_into(
+            span,
+            u,
+            pu,
+            du,
+            &self.knots_u,
+            &mut ders[..(du + 1) * (pu + 1)],
+        );
+        Some(UBasis { u, span, ders })
+    }
+
+    /// The surface along its line of constant `v`, for evaluating many `u`
+    /// there: `v`'s span and basis functions are worked out once, and each
+    /// point and partial is the one [`Self::evaluate`] and
+    /// [`Self::first_derivatives`] give, bit for bit.
+    #[must_use]
+    pub fn at_v(&self, v: f64) -> NurbsRow<'_> {
+        let pv = self.degree_v;
+        let span_v = basis::find_span(self.control_points[0].len(), pv, v, &self.knots_v);
+        let mut basis_v = vec![0.0; pv + 1];
+        basis::basis_funs_into(span_v, v, pv, &self.knots_v, &mut basis_v);
+        let dv = 1.min(pv);
+        let mut ders_v = vec![0.0; (dv + 1) * (pv + 1)];
+        basis::ders_basis_funs_into(span_v, v, pv, dv, &self.knots_v, &mut ders_v);
+        NurbsRow {
+            surface: self,
+            span_v,
+            basis_v,
+            ders_v,
+        }
+    }
+
     /// [`Self::derivatives`] into zeroed `(d + 1)^2` buffers, row `k` of
     /// `skl` holding the `k`-th derivative in `u` against each order in `v`.
     #[allow(clippy::many_single_char_names, clippy::cast_precision_loss)]
     fn derivatives_into(&self, u: f64, v: f64, d: usize, aw: &mut [[f64; 4]], skl: &mut [Vec3]) {
+        let pv = self.degree_v;
+        let n_cols = self.control_points[0].len();
+        let span_v = basis::find_span(n_cols, pv, v, &self.knots_v);
+        let dv = d.min(pv);
+        let mut ders_v_stack =
+            [0.0f64; (basis::MAX_STACK_OUTPUT + 1) * (basis::MAX_STACK_OUTPUT + 1)];
+        let mut ders_v_heap = Vec::new();
+        let ders_v_buf = basis::scratch(&mut ders_v_stack, &mut ders_v_heap, (dv + 1) * (pv + 1));
+        basis::ders_basis_funs_into(span_v, v, pv, dv, &self.knots_v, ders_v_buf);
+        self.derivatives_on_row(u, d, span_v, ders_v_buf, aw, skl);
+    }
+
+    /// [`Self::derivatives_into`] at `u`, given `v`'s span and the
+    /// derivatives of its basis functions to order `d.min(degree_v)`.
+    #[allow(clippy::many_single_char_names, clippy::cast_precision_loss)]
+    fn derivatives_on_row(
+        &self,
+        u: f64,
+        d: usize,
+        span_v: usize,
+        ders_v_buf: &[f64],
+        aw: &mut [[f64; 4]],
+        skl: &mut [Vec3],
+    ) {
         let pu = self.degree_u;
         let pv = self.degree_v;
         let n_rows = self.control_points.len();
-        let n_cols = self.control_points[0].len();
 
         let span_u = basis::find_span(n_rows, pu, u, &self.knots_u);
-        let span_v = basis::find_span(n_cols, pv, v, &self.knots_v);
         let du = d.min(pu);
         let dv = d.min(pv);
         let stride_u = pu + 1;
@@ -317,22 +389,17 @@ impl NurbsSurface {
         let ders_u_buf = basis::scratch(&mut ders_u_stack, &mut ders_u_heap, (du + 1) * stride_u);
         basis::ders_basis_funs_into(span_u, u, pu, du, &self.knots_u, ders_u_buf);
         let stride_v = pv + 1;
-        let mut ders_v_stack =
-            [0.0f64; (basis::MAX_STACK_OUTPUT + 1) * (basis::MAX_STACK_OUTPUT + 1)];
-        let mut ders_v_heap = Vec::new();
-        let ders_v_buf = basis::scratch(&mut ders_v_stack, &mut ders_v_heap, (dv + 1) * stride_v);
-        basis::ders_basis_funs_into(span_v, v, pv, dv, &self.knots_v, ders_v_buf);
 
         // Compute homogeneous derivatives Aw[k][l] = (wx, wy, wz, w). Those
         // above the degrees are zero, but a rational surface's are not (a
         // polynomial one's are, and the quotient would only add rounding).
         // Only the span's own weights say which: equal ones make the surface
         // polynomial there, and reading every weight costs the whole net.
-        let w0 = self.weights[span_u - pu][span_v - pv].to_bits();
-        let varies = self.weights[span_u - pu..=span_u]
-            .iter()
-            .any(|row| row[span_v - pv..=span_v].iter().any(|w| w.to_bits() != w0));
-        let (top_u, top_v) = if varies { (d, d) } else { (du, dv) };
+        let (top_u, top_v) = if self.row_varies(span_u, span_v) {
+            (d, d)
+        } else {
+            (du, dv)
+        };
         let n = d + 1;
         for k in 0..=du {
             for l in 0..=dv {
@@ -357,46 +424,107 @@ impl NurbsSurface {
             }
         }
 
-        // Apply rational quotient rule (A4.4).
-        let w0 = aw[0][3];
+        rational_quotient(d, top_u, top_v, aw, skl);
+    }
 
-        for k in 0..=top_u {
-            for l in 0..=top_v.min(d - k) {
-                let [x, y, z, _] = aw[k * n + l];
-                let mut v3 = [x, y, z];
+    /// The span's weights all alike: the surface is polynomial there, and its
+    /// derivatives past the degrees are zero (see `derivatives_on_row`).
+    fn row_varies(&self, span_u: usize, span_v: usize) -> bool {
+        let (pu, pv) = (self.degree_u, self.degree_v);
+        let w0 = self.weights[span_u - pu][span_v - pv].to_bits();
+        self.weights[span_u - pu..=span_u]
+            .iter()
+            .any(|row| row[span_v - pv..=span_v].iter().any(|w| w.to_bits() != w0))
+    }
 
-                for j in 1..=l {
-                    let bin = binomial(l, j) as f64;
-                    v3[0] -= bin * aw[j][3] * skl[k * n + l - j].x();
-                    v3[1] -= bin * aw[j][3] * skl[k * n + l - j].y();
-                    v3[2] -= bin * aw[j][3] * skl[k * n + l - j].z();
+    /// [`NurbsRow::point_and_partials`]: [`Self::evaluate_on_row`] and
+    /// [`Self::derivatives_on_row`] to order 1 in one pass over the span's
+    /// control points, each sum taken in the order those take it, and `u`'s
+    /// basis functions read off the first row of their derivatives (which
+    /// `basis_funs_into` works out by the same operations).
+    fn point_and_partials_on_row(
+        &self,
+        u: f64,
+        span_v: usize,
+        nv: &[f64],
+        ders_v: &[f64],
+    ) -> (Point3, Vec3, Vec3) {
+        let pu = self.degree_u;
+        let span_u = basis::find_span(self.control_points.len(), pu, u, &self.knots_u);
+        let du = 1.min(pu);
+        let stride_u = pu + 1;
+        let mut ders_u_stack = [0.0f64; 2 * (basis::MAX_STACK_OUTPUT + 1)];
+        let mut ders_u_heap = Vec::new();
+        let ders_u = basis::scratch(&mut ders_u_stack, &mut ders_u_heap, (du + 1) * stride_u);
+        basis::ders_basis_funs_into(span_u, u, pu, du, &self.knots_u, ders_u);
+        self.point_and_partials_from(span_u, ders_u, span_v, nv, ders_v)
+    }
+
+    /// The point and first partials from `u`'s span and basis derivatives
+    /// (to order `1.min(degree_u)`) and `v`'s, as
+    /// [`Self::point_and_partials_on_row`] takes them.
+    #[allow(clippy::many_single_char_names)]
+    fn point_and_partials_from(
+        &self,
+        span_u: usize,
+        ders_u: &[f64],
+        span_v: usize,
+        nv: &[f64],
+        ders_v: &[f64],
+    ) -> (Point3, Vec3, Vec3) {
+        let pu = self.degree_u;
+        let pv = self.degree_v;
+        let du = 1.min(pu);
+        let dv = 1.min(pv);
+        let (stride_u, stride_v) = (pu + 1, pv + 1);
+        let (mut wx, mut wy, mut wz, mut ww) = (0.0, 0.0, 0.0, 0.0);
+        let mut aw = [[0.0f64; 4]; 4];
+        for i in 0..=pu {
+            let u_idx = span_u - pu + i;
+            let (du_0i, du_1i) = (ders_u[i], ders_u[(du * stride_u) + i]);
+            let (mut row_x, mut row_y, mut row_z, mut row_w) = (0.0, 0.0, 0.0, 0.0);
+            for (j, &nv_j) in nv.iter().enumerate().take(pv + 1) {
+                let v_idx = span_v - pv + j;
+                let pt = &self.control_points[u_idx][v_idx];
+                let w = self.weights[u_idx][v_idx];
+                let bw = nv_j * w;
+                row_x += bw * pt.x();
+                row_y += bw * pt.y();
+                row_z += bw * pt.z();
+                row_w += bw;
+                let dv_0j = ders_v[j];
+                let accumulate = |a: &mut [f64; 4], coeff: f64| {
+                    a[0] += coeff * pt.x() * w;
+                    a[1] += coeff * pt.y() * w;
+                    a[2] += coeff * pt.z() * w;
+                    a[3] += coeff * w;
+                };
+                accumulate(&mut aw[0], du_0i * dv_0j);
+                if dv >= 1 {
+                    accumulate(&mut aw[1], du_0i * ders_v[stride_v + j]);
                 }
-
-                for i in 1..=k {
-                    let bin = binomial(k, i) as f64;
-                    v3[0] -= bin * aw[i * n][3] * skl[(k - i) * n + l].x();
-                    v3[1] -= bin * aw[i * n][3] * skl[(k - i) * n + l].y();
-                    v3[2] -= bin * aw[i * n][3] * skl[(k - i) * n + l].z();
-
-                    let mut v2 = [0.0f64; 3];
-                    for j in 1..=l {
-                        let bin2 = binomial(l, j) as f64;
-                        v2[0] += bin2 * aw[i * n + j][3] * skl[(k - i) * n + l - j].x();
-                        v2[1] += bin2 * aw[i * n + j][3] * skl[(k - i) * n + l - j].y();
-                        v2[2] += bin2 * aw[i * n + j][3] * skl[(k - i) * n + l - j].z();
-                    }
-                    v3[0] -= bin * v2[0];
-                    v3[1] -= bin * v2[1];
-                    v3[2] -= bin * v2[2];
-                }
-
-                if w0 == 0.0 {
-                    skl[k * n + l] = Vec3::new(v3[0], v3[1], v3[2]);
-                } else {
-                    skl[k * n + l] = Vec3::new(v3[0] / w0, v3[1] / w0, v3[2] / w0);
+                if du >= 1 {
+                    accumulate(&mut aw[2], du_1i * dv_0j);
                 }
             }
+            wx += ders_u[i] * row_x;
+            wy += ders_u[i] * row_y;
+            wz += ders_u[i] * row_z;
+            ww += ders_u[i] * row_w;
         }
+        let point = if ww == 0.0 {
+            Point3::new(wx, wy, wz)
+        } else {
+            Point3::new(wx / ww, wy / ww, wz / ww)
+        };
+
+        let (top_u, top_v) = if self.row_varies(span_u, span_v) {
+            (1, 1)
+        } else {
+            (du, dv)
+        };
+        let (su, sv) = first_order_quotient(top_u, top_v, &aw);
+        (point, su, sv)
     }
 
     /// Compute the unit normal vector at parameters `(u, v)`.
@@ -461,6 +589,142 @@ impl NurbsSurface {
     #[must_use]
     pub fn evaluator(&self) -> SurfaceEvaluator<'_> {
         SurfaceEvaluator::new(self)
+    }
+}
+
+/// A NURBS surface's span and basis functions at one `u`: see
+/// [`NurbsSurface::u_basis`].
+#[derive(Debug, Clone, Copy)]
+pub struct UBasis {
+    /// The parameter they were worked out at.
+    pub u: f64,
+    span: usize,
+    ders: [f64; 2 * (basis::MAX_STACK_OUTPUT + 1)],
+}
+
+/// A NURBS surface along a line of constant `v`: see [`NurbsSurface::at_v`].
+#[derive(Debug, Clone)]
+pub struct NurbsRow<'a> {
+    surface: &'a NurbsSurface,
+    span_v: usize,
+    basis_v: Vec<f64>,
+    ders_v: Vec<f64>,
+}
+
+impl NurbsRow<'_> {
+    /// The point at `u`, as [`NurbsSurface::evaluate`] gives it.
+    #[must_use]
+    pub fn evaluate(&self, u: f64) -> Point3 {
+        self.surface.evaluate_on_row(u, self.span_v, &self.basis_v)
+    }
+
+    /// The point at `u` as [`Self::evaluate`] gives it, with its first
+    /// partials as [`Self::first_derivatives`] gives them, at about the
+    /// cost of the partials alone.
+    #[must_use]
+    pub fn point_and_partials(&self, u: f64) -> (Point3, Vec3, Vec3) {
+        self.surface
+            .point_and_partials_on_row(u, self.span_v, &self.basis_v, &self.ders_v)
+    }
+
+    /// [`Self::point_and_partials`] at the `u` that `basis` was worked out
+    /// at, from it.
+    #[must_use]
+    pub fn point_and_partials_with(&self, basis: &UBasis) -> (Point3, Vec3, Vec3) {
+        self.surface.point_and_partials_from(
+            basis.span,
+            &basis.ders,
+            self.span_v,
+            &self.basis_v,
+            &self.ders_v,
+        )
+    }
+
+    /// The point and first partials at `u`, as
+    /// [`NurbsSurface::first_derivatives`] gives them.
+    #[must_use]
+    pub fn first_derivatives(&self, u: f64) -> (Vec3, Vec3, Vec3) {
+        let zero = Vec3::new(0.0, 0.0, 0.0);
+        let (mut aw, mut skl) = ([[0.0f64; 4]; 4], [zero; 4]);
+        self.surface
+            .derivatives_on_row(u, 1, self.span_v, &self.ders_v, &mut aw, &mut skl);
+        (skl[0], skl[2], skl[1])
+    }
+}
+
+/// [`rational_quotient`] to order 1, `aw` laid out as it lays it out: the
+/// partials `(S_u, S_v)`, by its operations less those that leave a value
+/// as it is (a product by a binomial of 1, a difference with a sum of none).
+fn first_order_quotient(top_u: usize, top_v: usize, aw: &[[f64; 4]; 4]) -> (Vec3, Vec3) {
+    let w0 = aw[0][3];
+    let over_w0 = |v3: [f64; 3]| {
+        if w0 == 0.0 {
+            Vec3::new(v3[0], v3[1], v3[2])
+        } else {
+            Vec3::new(v3[0] / w0, v3[1] / w0, v3[2] / w0)
+        }
+    };
+    let zero = Vec3::new(0.0, 0.0, 0.0);
+    let s = over_w0([aw[0][0], aw[0][1], aw[0][2]]);
+    let less =
+        |a: [f64; 4], w: f64| over_w0([a[0] - w * s.x(), a[1] - w * s.y(), a[2] - w * s.z()]);
+    let sv = if top_v >= 1 {
+        less(aw[1], aw[1][3])
+    } else {
+        zero
+    };
+    let su = if top_u >= 1 {
+        less(aw[2], aw[2][3])
+    } else {
+        zero
+    };
+    (su, sv)
+}
+
+/// The rational quotient rule (NURBS Book A4.4): `skl`'s derivatives of the
+/// surface from `aw`'s homogeneous ones, to order `d`, `top_u` and `top_v`
+/// in `u` and `v`.
+#[allow(clippy::cast_precision_loss)]
+fn rational_quotient(d: usize, top_u: usize, top_v: usize, aw: &[[f64; 4]], skl: &mut [Vec3]) {
+    let n = d + 1;
+    let w0 = aw[0][3];
+
+    for k in 0..=top_u {
+        for l in 0..=top_v.min(d - k) {
+            let [x, y, z, _] = aw[k * n + l];
+            let mut v3 = [x, y, z];
+
+            for j in 1..=l {
+                let bin = binomial(l, j) as f64;
+                v3[0] -= bin * aw[j][3] * skl[k * n + l - j].x();
+                v3[1] -= bin * aw[j][3] * skl[k * n + l - j].y();
+                v3[2] -= bin * aw[j][3] * skl[k * n + l - j].z();
+            }
+
+            for i in 1..=k {
+                let bin = binomial(k, i) as f64;
+                v3[0] -= bin * aw[i * n][3] * skl[(k - i) * n + l].x();
+                v3[1] -= bin * aw[i * n][3] * skl[(k - i) * n + l].y();
+                v3[2] -= bin * aw[i * n][3] * skl[(k - i) * n + l].z();
+
+                let mut v2 = [0.0f64; 3];
+                for j in 1..=l {
+                    let bin2 = binomial(l, j) as f64;
+                    v2[0] += bin2 * aw[i * n + j][3] * skl[(k - i) * n + l - j].x();
+                    v2[1] += bin2 * aw[i * n + j][3] * skl[(k - i) * n + l - j].y();
+                    v2[2] += bin2 * aw[i * n + j][3] * skl[(k - i) * n + l - j].z();
+                }
+                v3[0] -= bin * v2[0];
+                v3[1] -= bin * v2[1];
+                v3[2] -= bin * v2[2];
+            }
+
+            if w0 == 0.0 {
+                skl[k * n + l] = Vec3::new(v3[0], v3[1], v3[2]);
+            } else {
+                skl[k * n + l] = Vec3::new(v3[0] / w0, v3[1] / w0, v3[2] / w0);
+            }
+        }
     }
 }
 
@@ -565,6 +829,115 @@ mod tests {
                 let deep = s.derivatives(u, v, 3);
                 for (k, l) in [(0, 0), (1, 0), (0, 1)] {
                     assert_eq!(bits(deep[k][l]), bits(table[k][l]), "order 3 ({k}, {l})");
+                }
+            }
+        }
+    }
+
+    /// Along a line of constant `v`, the row's points and partials are the
+    /// surface's own, bit for bit: rational and polynomial patches, degrees 1
+    /// to 5, at knots, ends and between.
+    #[test]
+    fn a_row_evaluates_as_the_surface_does() {
+        let rational = NurbsSurface::new(
+            2,
+            1,
+            vec![0.0, 0.0, 0.0, 0.5, 1.0, 1.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            (0..4)
+                .map(|i| {
+                    let x = f64::from(i);
+                    vec![Point3::new(x, 0.0, x * x * 0.1), Point3::new(x, 1.0, 0.3)]
+                })
+                .collect(),
+            vec![
+                vec![1.0, 2.0],
+                vec![0.5, 1.5],
+                vec![3.0, 1.0],
+                vec![1.0, 0.7],
+            ],
+        )
+        .expect("valid patch");
+        // A net of `n` by `m` points, clamped knots with interior ones at
+        // uneven steps, weights varying or not.
+        let net = |pu: usize, pv: usize, n: usize, m: usize, rational: bool| {
+            let knots = |p: usize, n: usize| {
+                let mut k = vec![0.0; p + 1];
+                for i in 1..n - p {
+                    let t = i as f64 / (n - p) as f64;
+                    k.push(t * t.mul_add(0.3, 0.7));
+                }
+                k.extend(vec![1.0; p + 1]);
+                k
+            };
+            let points = (0..n)
+                .map(|i| {
+                    (0..m)
+                        .map(|j| {
+                            let (x, y) = (i as f64, j as f64);
+                            Point3::new(x, y, (x * 0.7 + y * 1.3).sin())
+                        })
+                        .collect()
+                })
+                .collect();
+            let weights = (0..n)
+                .map(|i| {
+                    (0..m)
+                        .map(|j| {
+                            if rational {
+                                1.0 + 0.5 * ((i * 3 + j * 5) % 7) as f64 / 7.0
+                            } else {
+                                1.0
+                            }
+                        })
+                        .collect()
+                })
+                .collect();
+            NurbsSurface::new(pu, pv, knots(pu, n), knots(pv, m), points, weights)
+                .expect("valid net")
+        };
+        let surfaces = [
+            rational,
+            bicubic_surface(),
+            net(1, 3, 5, 6, false),
+            net(3, 1, 6, 4, true),
+            net(5, 2, 9, 5, true),
+            net(4, 4, 8, 8, false),
+        ];
+        let bits = |p: Vec3| [p.x().to_bits(), p.y().to_bits(), p.z().to_bits()];
+        let point_bits = |p: Point3| [p.x().to_bits(), p.y().to_bits(), p.z().to_bits()];
+        for s in &surfaces {
+            let (u0, u1) = s.domain_u();
+            let (v0, v1) = s.domain_v();
+            let mut us: Vec<f64> = (0..=40)
+                .map(|i| (u1 - u0).mul_add(f64::from(i) / 40.0, u0))
+                .collect();
+            us.extend(s.knots_u().iter().copied());
+            let mut vs: Vec<f64> = (0..=12)
+                .map(|i| (v1 - v0).mul_add(f64::from(i) / 12.0, v0))
+                .collect();
+            vs.extend(s.knots_v().iter().copied());
+            for &v in &vs {
+                let row = s.at_v(v);
+                for &u in &us {
+                    let p = s.evaluate(u, v);
+                    let (q, su, sv) = s.first_derivatives(u, v);
+                    let (rp, rsu, rsv) = row.point_and_partials(u);
+                    let at = format!("({u}, {v}), degrees {:?}", (s.degree_u(), s.degree_v()));
+                    assert_eq!(point_bits(rp), point_bits(p), "point at {at}");
+                    assert_eq!(bits(rsu), bits(su), "S_u at {at}");
+                    assert_eq!(bits(rsv), bits(sv), "S_v at {at}");
+                    assert_eq!(
+                        point_bits(row.evaluate(u)),
+                        point_bits(p),
+                        "row point at {at}"
+                    );
+                    let (rq, ru, rv) = row.first_derivatives(u);
+                    assert_eq!(
+                        [bits(rq), bits(ru), bits(rv)],
+                        [bits(q), bits(su), bits(sv)],
+                        "row partials at {at}"
+                    );
                 }
             }
         }
