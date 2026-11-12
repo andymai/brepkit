@@ -428,6 +428,341 @@ pub fn trim_face(
     })
 }
 
+/// Trim a planar face along a straight contact line, as [`trim_face`]
+/// does, where the blended edge's end vertices `corners` may be inside
+/// corners of the face.
+///
+/// At an inside (reflex) corner the face runs on past the blended edge's
+/// end: an L's floor, the edge along the L's arm ending where the arm
+/// meets the wider leg. The contact then ends inside the face, and the
+/// contact line, run on to the boundary, would cut the wider leg off too.
+/// There the face is trimmed back to the corner instead: its outline runs
+/// from the corner to the contact's end and along the contact. Each corner
+/// is matched to the contact end nearer it; a corner that is not an inside
+/// corner of the face, or whose contact end lies on the face's boundary,
+/// is trimmed as [`trim_face`] trims it.
+///
+/// # Errors
+///
+/// As [`trim_face`], and [`BlendError::TrimmingFailure`] if the contact
+/// leaves the face before its end, or a hole lies in the strip cut off.
+pub fn trim_face_to_corners(
+    topo: &mut Topology,
+    face_id: FaceId,
+    contact_3d: &[Point3],
+    contact_uv: &[(f64, f64)],
+    keep: TrimKeep,
+    corners: &[VertexId],
+) -> Result<TrimResult, BlendError> {
+    if let Some(result) = trim_to_inside_corners(topo, face_id, contact_3d, corners)? {
+        return Ok(result);
+    }
+    trim_face(topo, face_id, contact_3d, contact_uv, keep)
+}
+
+/// The inside-corner trim of [`trim_face_to_corners`], or `None` where no
+/// corner is an inside corner with its contact end off the boundary.
+#[allow(clippy::too_many_lines)]
+fn trim_to_inside_corners(
+    topo: &mut Topology,
+    face_id: FaceId,
+    contact_3d: &[Point3],
+    corners: &[VertexId],
+) -> Result<Option<TrimResult>, BlendError> {
+    let fail = || BlendError::TrimmingFailure { face: face_id };
+    let face = topo.face(face_id)?;
+    if !face.surface().is_planar() || contact_3d.len() < 2 || corners.is_empty() {
+        return Ok(None);
+    }
+    let surface = face.surface().clone();
+    let reversed = face.is_reversed();
+    let holes = face.inner_wires().to_vec();
+    let oriented_edges: Vec<OrientedEdge> = topo.wire(face.outer_wire())?.edges().to_vec();
+    let n = oriented_edges.len();
+    let mut edge_data: Vec<(OrientedEdge, Point3, Point3)> = Vec::with_capacity(n);
+    let mut starts: Vec<VertexId> = Vec::with_capacity(n);
+    for &oe in &oriented_edges {
+        let edge = topo.edge(oe.edge())?;
+        let (sv, ev) = (oe.oriented_start(edge), oe.oriented_end(edge));
+        starts.push(sv);
+        edge_data.push((oe, topo.vertex(sv)?.point(), topo.vertex(ev)?.point()));
+    }
+    if n < 3 {
+        return Ok(None);
+    }
+    let (origin, u_axis, v_axis) = plane_local_frame(&surface, &edge_data, face_id)?;
+    let project = |pt: Point3| -> (f64, f64) {
+        let d = pt - origin;
+        (u_axis.dot(d), v_axis.dot(d))
+    };
+    let cross2 = |a: (f64, f64), b: (f64, f64)| a.0 * b.1 - a.1 * b.0;
+    let sub2 = |a: (f64, f64), b: (f64, f64)| (a.0 - b.0, a.1 - b.1);
+    let chords: Vec<((f64, f64), (f64, f64))> = edge_data
+        .iter()
+        .map(|&(_, a, b)| (project(a), project(b)))
+        .collect();
+    let winding: f64 = chords.iter().map(|&(a, b)| cross2(a, b)).sum();
+    let ends = [contact_3d[0], contact_3d[contact_3d.len() - 1]];
+    let along = ends[1] - ends[0];
+    let span = along.length();
+    if span < CONTACT_END_TOL {
+        return Ok(None);
+    }
+
+    // Each contact end's inside corner: the wire position whose edge starts
+    // at it.
+    let mut inside: [Option<usize>; 2] = [None, None];
+    for &cv in corners {
+        let Some(k) = starts.iter().position(|&v| v == cv) else {
+            continue;
+        };
+        let (prev, next) = (&edge_data[(k + n - 1) % n], &edge_data[k]);
+        let is_line = |oe: &OrientedEdge| {
+            topo.edge(oe.edge())
+                .is_ok_and(|e| matches!(e.curve(), EdgeCurve::Line))
+        };
+        if !is_line(&prev.0) || !is_line(&next.0) {
+            continue;
+        }
+        let corner = topo.vertex(cv)?.point();
+        let d_in = sub2(project(corner), project(prev.1));
+        let d_out = sub2(project(next.2), project(corner));
+        let turn = cross2(d_in, d_out);
+        let scale = d_in.0.hypot(d_in.1) * d_out.0.hypot(d_out.1);
+        if turn * winding.signum() >= -1e-9 * scale {
+            continue;
+        }
+        let j = usize::from((ends[1] - corner).length() < (ends[0] - corner).length());
+        // A contact end on the boundary is trimmed the usual way.
+        let p = project(ends[j]);
+        let on_boundary = chords.iter().any(|&(a, b)| {
+            let ab = sub2(b, a);
+            let len2 = ab.0.mul_add(ab.0, ab.1 * ab.1);
+            let t = if len2 > 0.0 {
+                (sub2(p, a).0.mul_add(ab.0, sub2(p, a).1 * ab.1) / len2).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            let q = (a.0 + ab.0 * t, a.1 + ab.1 * t);
+            sub2(p, q).0.hypot(sub2(p, q).1) <= CONTACT_END_TOL
+        });
+        if !on_boundary {
+            inside[j] = Some(k);
+        }
+    }
+    if inside.iter().all(Option::is_none) {
+        return Ok(None);
+    }
+
+    // A contact end not at an inside corner ends where the contact, run on
+    // from the other end, first meets the boundary at or past it.
+    let (a2, b2) = (project(ends[0]), project(ends[1]));
+    let mut hits: Vec<BoundaryHit> = Vec::with_capacity(2);
+    let mut contact_ends: [Point3; 2] = ends;
+    for j in 0..2 {
+        if let Some(k) = inside[j] {
+            hits.push(BoundaryHit {
+                edge_idx: k,
+                t: 0.0,
+                point_3d: edge_data[k].1,
+            });
+            continue;
+        }
+        let from = ends[1 - j];
+        let dir = ends[j] - from;
+        let mut best: Option<(f64, BoundaryHit)> = None;
+        for (idx, &(_, sp, ep)) in edge_data.iter().enumerate() {
+            let Some(t) = line_segment_intersect_2d(project(sp), project(ep), a2, b2) else {
+                continue;
+            };
+            let pt = sp + (ep - sp) * t;
+            let s = dir.dot(pt - from) / dir.dot(dir);
+            if s > CONTACT_END_TOL / span && best.as_ref().is_none_or(|(b, _)| s < *b) {
+                best = Some((
+                    s,
+                    BoundaryHit {
+                        edge_idx: idx,
+                        t,
+                        point_3d: pt,
+                    },
+                ));
+            }
+        }
+        let Some((s, hit)) = best else {
+            return Err(fail());
+        };
+        if s < 1.0 - CONTACT_END_TOL / span {
+            return Err(fail());
+        }
+        contact_ends[j] = hit.point_3d;
+        hits.push(hit);
+    }
+    // The stretch from each inside corner to its contact end crosses no
+    // boundary edge but the two at the corner.
+    for j in 0..2 {
+        let Some(k) = inside[j] else { continue };
+        let (c, p) = (project(edge_data[k].1), project(contact_ends[j]));
+        for (idx, &(a, b)) in chords.iter().enumerate() {
+            if idx == k || idx == (k + n - 1) % n {
+                continue;
+            }
+            let (d1, d2) = (
+                cross2(sub2(b, a), sub2(c, a)),
+                cross2(sub2(b, a), sub2(p, a)),
+            );
+            let (d3, d4) = (
+                cross2(sub2(p, c), sub2(a, c)),
+                cross2(sub2(p, c), sub2(b, c)),
+            );
+            if d1 * d2 <= 0.0 && d3 * d4 <= 0.0 {
+                return Err(fail());
+            }
+        }
+    }
+
+    // Order the ends in wire order, as the trim does.
+    let [ja, jb] = if (hits[1].edge_idx, hits[1].t) < (hits[0].edge_idx, hits[0].t) {
+        [1, 0]
+    } else {
+        [0, 1]
+    };
+    let (hit_a, hit_b) = (&hits[ja], &hits[jb]);
+    if hit_a.edge_idx == hit_b.edge_idx && inside[ja].is_none() && inside[jb].is_none() {
+        return Err(fail());
+    }
+
+    // The chain cut off holds the blended edge, the edge at an inside
+    // corner that runs along the contact.
+    let parallel = |idx: usize| {
+        let (_, sp, ep) = edge_data[idx];
+        let d = ep - sp;
+        (d.dot(along) / (d.length() * span)).abs()
+    };
+    let keep_chain1 = if let Some(k) = inside[ja] {
+        parallel(k) < parallel((k + n - 1) % n)
+    } else if let Some(k) = inside[jb] {
+        parallel(k) > parallel((k + n - 1) % n)
+    } else {
+        return Err(fail());
+    };
+
+    let ends_a = resolve_hit_ends(topo, edge_data[hit_a.edge_idx].0, hit_a)?;
+    let ends_b = resolve_hit_ends(topo, edge_data[hit_b.edge_idx].0, hit_b)?;
+    let mut chain1: Vec<OrientedEdge> = Vec::new();
+    let mut chain2: Vec<OrientedEdge> = Vec::new();
+    chain1.extend(ends_a.post);
+    chain1.extend((hit_a.edge_idx + 1..hit_b.edge_idx).map(|i| oriented_edges[i]));
+    chain1.extend(ends_b.pre);
+    chain2.extend(ends_b.post);
+    chain2.extend((hit_b.edge_idx + 1..n).map(|i| oriented_edges[i]));
+    chain2.extend((0..hit_a.edge_idx).map(|i| oriented_edges[i]));
+    chain2.extend(ends_a.pre);
+    if hit_a.edge_idx == hit_b.edge_idx {
+        // Both on one edge: only an inside corner at its start and a hit on
+        // it further on, which leaves chain 1 the piece between them.
+        chain1 = ends_b.pre.into_iter().collect();
+        chain2 = ends_b.post.into_iter().collect();
+        chain2.extend((hit_b.edge_idx + 1..n).map(|i| oriented_edges[i]));
+        chain2.extend((0..hit_a.edge_idx).map(|i| oriented_edges[i]));
+    }
+
+    let mut new_vertices = Vec::new();
+    let mut new_edges = ends_a.minted_edges.clone();
+    new_edges.extend(ends_b.minted_edges.iter().copied());
+    new_vertices.extend(ends_a.minted_vertex);
+    new_vertices.extend(ends_b.minted_vertex);
+    // Each end's vertex on the contact, and the edge from an inside corner
+    // to it.
+    let mut contact_vertex = |end: &HitEnds, j: usize| -> (VertexId, Option<EdgeId>) {
+        if inside[j].is_some() {
+            let v = topo.add_vertex(Vertex::new(contact_ends[j], VERTEX_TOL));
+            let e = topo.add_edge(Edge::new(end.vertex, v, EdgeCurve::Line));
+            new_vertices.push(v);
+            new_edges.push(e);
+            (v, Some(e))
+        } else {
+            (end.vertex, None)
+        }
+    };
+    let (pa, close_a) = contact_vertex(&ends_a, ja);
+    let (pb, close_b) = contact_vertex(&ends_b, jb);
+    let contact_edge_id = topo.add_edge(Edge::new(pa, pb, EdgeCurve::Line));
+
+    // The kept chain closes back through the contact: chain 1 runs a to b
+    // and returns b, contact, a; chain 2 runs b to a and returns a,
+    // contact, b.
+    let (mut loop_edges, dropped) = if keep_chain1 {
+        (chain1, chain2)
+    } else {
+        (chain2, chain1)
+    };
+    if keep_chain1 {
+        loop_edges.extend(close_b.map(|e| OrientedEdge::new(e, true)));
+        loop_edges.push(OrientedEdge::new(contact_edge_id, false));
+        loop_edges.extend(close_a.map(|e| OrientedEdge::new(e, false)));
+    } else {
+        loop_edges.extend(close_a.map(|e| OrientedEdge::new(e, true)));
+        loop_edges.push(OrientedEdge::new(contact_edge_id, true));
+        loop_edges.extend(close_b.map(|e| OrientedEdge::new(e, false)));
+    }
+
+    // No hole may lie in the strip cut off: its outline is the dropped
+    // chain closed through the contact.
+    let mut cut: Vec<(f64, f64)> = Vec::new();
+    for oe in &dropped {
+        let e = topo.edge(oe.edge())?;
+        cut.push(project(topo.vertex(oe.oriented_start(e))?.point()));
+    }
+    let (first, second) = if keep_chain1 { (ja, jb) } else { (jb, ja) };
+    cut.push(project(contact_ends[first]));
+    cut.push(project(contact_ends[second]));
+    for &hole in &holes {
+        for oe in topo.wire(hole)?.edges() {
+            let e = topo.edge(oe.edge())?;
+            let (sp, ep) = (
+                topo.vertex(e.start())?.point(),
+                topo.vertex(e.end())?.point(),
+            );
+            let (t0, t1) = e.curve().domain_with_endpoints(sp, ep);
+            let mid = e
+                .curve()
+                .evaluate_with_endpoints(f64::midpoint(t0, t1), sp, ep);
+            if [sp, mid]
+                .iter()
+                .any(|&p| inside_polygon_2d(project(p), &cut))
+            {
+                return Err(fail());
+            }
+        }
+    }
+
+    let trimmed_wire = Wire::new(loop_edges, true).map_err(|_| fail())?;
+    let trimmed_wire_id = topo.add_wire(trimmed_wire);
+    let mut trimmed_face = Face::new(trimmed_wire_id, holes, surface);
+    if reversed {
+        trimmed_face.set_reversed(true);
+    }
+    let trimmed_face_id = topo.add_face(trimmed_face);
+    Ok(Some(TrimResult {
+        trimmed_face: trimmed_face_id,
+        new_edges,
+        new_vertices,
+        contact_edge: Some(contact_edge_id),
+    }))
+}
+
+/// Whether `p` lies inside the polygon `poly` (even-odd rule).
+fn inside_polygon_2d(p: (f64, f64), poly: &[(f64, f64)]) -> bool {
+    let mut inside = false;
+    for (i, &a) in poly.iter().enumerate() {
+        let b = poly[(i + 1) % poly.len()];
+        if (a.1 > p.1) != (b.1 > p.1) && p.0 < a.0 + (b.0 - a.0) * (p.1 - a.1) / (b.1 - a.1) {
+            inside = !inside;
+        }
+    }
+    inside
+}
+
 /// The least and greatest of `across · (p - origin)` over an edge's points
 /// `p`: their signed distance from the contact line through `origin`, whose
 /// unit normal in the face's plane is `across`. It is linear in `p`, so a
