@@ -962,9 +962,9 @@ fn solve_pinned(
             return None;
         }
 
-        let d1 = s1.derivatives(state[0], state[1], 1);
-        let d2 = s2.derivatives(state[2], state[3], 1);
-        let cols = [d1[1][0], d1[0][1], -d2[1][0], -d2[0][1]];
+        let (_, su1, sv1) = s1.first_derivatives(state[0], state[1]);
+        let (_, su2, sv2) = s2.first_derivatives(state[2], state[3]);
+        let cols = [su1, sv1, -su2, -sv2];
 
         // Normal equations over the free columns: (JtJ) d = -Jt r.
         let m = free.len();
