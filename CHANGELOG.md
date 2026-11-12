@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.11.4](https://github.com/andymai/brepkit/compare/v4.11.3...v4.11.4) (2026-11-12)
+
+
+### Bug Fixes
+
+* **render:** find offscreen adapters once per process ([#2366](https://github.com/andymai/brepkit/issues/2366)) ([69c9f8a](https://github.com/andymai/brepkit/commit/69c9f8a9aa151517c85c79b537d656998e16e96f))
+
 ## [4.11.3](https://github.com/andymai/brepkit/compare/v4.11.2...v4.11.3) (2026-11-11)
 
 
