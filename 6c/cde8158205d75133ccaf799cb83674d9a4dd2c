@@ -1,0 +1,20 @@
+crates/io/src/iges/writer.rs
+  s_81e0220acef924::t_6a4cfcf8f96716 560,706-727
+  s_81e0220acef924::t_919fda06ea848e 728-729
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6ccde8158205d75133ccaf799cb83674d9a4dd2c",
+  "prompts": {},
+  "sessions": {
+    "s_81e0220acef924": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2b26411a-0202-4d23-8ca5-4bfa4ebdb323",
+        "model": "claude-fable-5-2"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
