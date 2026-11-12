@@ -1246,6 +1246,14 @@ pub(super) fn near_existing_segment(
             if d < dist {
                 return true;
             }
+            // The sag test below holds only within `sqrt((dist + sag)^2 +
+            // dist^2)` of the chord, and the sag is at most `0.134 * chord`
+            // (a turn of `MAX_SAG_TURN`), so a chord farther than this
+            // cannot pass it and its bulge is not worked out.
+            let chord = (w[1].point - w[0].point).length();
+            if d > 2.0f64.mul_add(dist, 0.5 * chord) + 1e-9 * (1.0 + d) {
+                continue;
+            }
             // Off the chord by its sag, toward the side the arc bulges.
             if let Some((outward, sag)) = chord_bulge(seg, i) {
                 let (a, b) = (w[0].point, w[1].point);
@@ -1274,7 +1282,7 @@ const MAX_SAG_TURN: f64 = std::f64::consts::FRAC_PI_3;
 /// `a` stands `chord * tan(a / 4) / 2` off each, on the side away from the
 /// turn; the turn is the larger of the chord's turns at its two ends. `None`
 /// for a chord the trace does not turn at.
-fn chord_bulge(seg: &[IntersectionPoint], i: usize) -> Option<(Vec3, f64)> {
+pub(super) fn chord_bulge(seg: &[IntersectionPoint], i: usize) -> Option<(Vec3, f64)> {
     let (a, b) = (seg[i].point, seg[i + 1].point);
     let chord = b - a;
     let turn = |u: Vec3, v: Vec3| u.cross(v).length().atan2(u.dot(v));
