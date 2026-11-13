@@ -818,7 +818,7 @@ impl NurbsSurface {
 
     /// A hash of the surface's degrees, knots, control points and weights,
     /// bit for bit.
-    fn content_key(&self) -> u64 {
+    pub(crate) fn content_key(&self) -> u64 {
         use std::hash::{Hash, Hasher};
         let mut h = std::collections::hash_map::DefaultHasher::new();
         (self.degree_u, self.degree_v).hash(&mut h);
@@ -835,7 +835,7 @@ impl NurbsSurface {
     }
 
     /// Whether `other` has this surface's data, bit for bit.
-    fn same_bits(&self, other: &Self) -> bool {
+    pub(crate) fn same_bits(&self, other: &Self) -> bool {
         let bits = |a: &[f64], b: &[f64]| {
             a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x.to_bits() == y.to_bits())
         };
@@ -863,7 +863,7 @@ impl NurbsSurface {
     }
 
     /// The surface's data without anything it keeps.
-    fn data_only(&self) -> Self {
+    pub(crate) fn data_only(&self) -> Self {
         Self {
             degree_u: self.degree_u,
             degree_v: self.degree_v,

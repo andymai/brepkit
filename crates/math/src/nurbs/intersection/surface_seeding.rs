@@ -162,7 +162,30 @@ pub(super) fn planar_patch_sections(
     Ok(Some(curves))
 }
 
+/// What the sections kept by [`intersect_nurbs_nurbs`] may hold in all: their
+/// surfaces' control points and their curves' points together.
+const SECTIONS_KEPT: usize = 1 << 19;
+
+/// A pair of surfaces intersected lately, anywhere: both surfaces' content
+/// keys and data, the call's grid and step, and the sections found.
+struct KeptSections {
+    keys: (u64, u64),
+    surfaces: (NurbsSurface, NurbsSurface),
+    samples: usize,
+    step: u64,
+    curves: Vec<IntersectionCurve>,
+    size: usize,
+}
+
+/// The sections worked out lately, the most lately used last.
+static SECTIONS: std::sync::Mutex<Vec<KeptSections>> = std::sync::Mutex::new(Vec::new());
+
 /// Intersect two NURBS surfaces.
+///
+/// A pair already intersected lately with the same grid and step (the same
+/// surfaces bit for bit: faces of one fitted body often share a surface, and
+/// a boolean meets each pair of them) takes the sections found then, which
+/// are what intersecting it again would find.
 ///
 /// Uses a subdivision + marching approach:
 /// 1. Sample both surfaces on grids to find seed points where they are close
@@ -181,8 +204,66 @@ pub(super) fn planar_patch_sections(
 /// # Errors
 ///
 /// Returns an error if NURBS evaluation or curve fitting fails.
-#[allow(clippy::too_many_lines)]
 pub fn intersect_nurbs_nurbs(
+    surface1: &NurbsSurface,
+    surface2: &NurbsSurface,
+    samples: usize,
+    march_step: f64,
+) -> Result<Vec<IntersectionCurve>, MathError> {
+    let keys = (surface1.content_key(), surface2.content_key());
+    let step = march_step.to_bits();
+    let found = SECTIONS.lock().ok().and_then(|mut kept| {
+        let at = kept.iter().position(|e| {
+            e.keys == keys
+                && e.samples == samples
+                && e.step == step
+                && e.surfaces.0.same_bits(surface1)
+                && e.surfaces.1.same_bits(surface2)
+        })?;
+        let entry = kept.remove(at);
+        let curves = entry.curves.clone();
+        kept.push(entry); // the most lately used last
+        Some(curves)
+    });
+    if let Some(curves) = found {
+        return Ok(curves);
+    }
+    let curves = sections_of(surface1, surface2, samples, march_step)?;
+    let size = surface1
+        .control_points()
+        .iter()
+        .map(Vec::len)
+        .sum::<usize>()
+        + surface2
+            .control_points()
+            .iter()
+            .map(Vec::len)
+            .sum::<usize>()
+        + curves
+            .iter()
+            .map(|c| c.points.len() + c.curve.control_points().len())
+            .sum::<usize>();
+    if size <= SECTIONS_KEPT
+        && let Ok(mut kept) = SECTIONS.lock()
+    {
+        while kept.iter().map(|e| e.size).sum::<usize>() + size > SECTIONS_KEPT {
+            kept.remove(0);
+        }
+        kept.push(KeptSections {
+            keys,
+            surfaces: (surface1.data_only(), surface2.data_only()),
+            samples,
+            step,
+            curves: curves.clone(),
+            size,
+        });
+    }
+    Ok(curves)
+}
+
+/// [`intersect_nurbs_nurbs`] worked out.
+#[allow(clippy::too_many_lines)]
+fn sections_of(
     surface1: &NurbsSurface,
     surface2: &NurbsSurface,
     samples: usize,
@@ -1186,6 +1267,54 @@ impl Ord for ClosePair {
     }
 }
 
+/// The seeds kept so far, bucketed by cells twice the merge distance wide,
+/// so a new seed is checked against those in its own and the neighbouring
+/// cells only: any seed nearer than the merge distance lies in one of them.
+struct SeedCells {
+    distance: f64,
+    cells: std::collections::HashMap<[i64; 3], Vec<usize>>,
+}
+
+impl SeedCells {
+    fn new(distance: f64) -> Self {
+        Self {
+            distance,
+            cells: std::collections::HashMap::new(),
+        }
+    }
+
+    #[allow(clippy::cast_possible_truncation)]
+    fn cell(&self, p: Point3) -> [i64; 3] {
+        let size = 2.0 * self.distance;
+        [
+            (p.x() / size).floor() as i64,
+            (p.y() / size).floor() as i64,
+            (p.z() / size).floor() as i64,
+        ]
+    }
+
+    /// Whether `seed` is new among `seeds` (none nearer than the merge
+    /// distance); a new one is recorded as `seeds`' next index.
+    fn insert(&mut self, seeds: &[IntersectionPoint], seed: IntersectionPoint) -> bool {
+        let c = self.cell(seed.point);
+        for dx in -1..=1 {
+            for dy in -1..=1 {
+                for dz in -1..=1 {
+                    let near = self.cells.get(&[c[0] + dx, c[1] + dy, c[2] + dz]);
+                    if near.is_some_and(|near| {
+                        near.iter()
+                            .any(|&at| (seeds[at].point - seed.point).length() < self.distance)
+                    }) {
+                        return false;
+                    }
+                }
+            }
+        }
+        self.cells.entry(c).or_default().push(seeds.len());
+        true
+    }
+}
+
 /// Find seed points for NURBS-NURBS intersection by grid sampling (fallback).
 ///
 /// Strategy: sample both surfaces on an n x n grid and try Newton
@@ -1274,52 +1403,60 @@ pub(super) fn find_ssi_seeds_grid(
             }
         }
     }
-    // 100x dedup: multiple grid samples may converge to the same intersection
-    let push_seed = |seeds: &mut Vec<IntersectionPoint>, refined: IntersectionPoint| {
-        let dup = seeds
-            .iter()
-            .any(|s: &IntersectionPoint| (s.point - refined.point).length() < tolerance * 100.0);
-        if !dup {
-            seeds.push(refined);
-        }
-    };
-    for (i, &(k, dist)) in nearest_in_2.iter().enumerate() {
-        if dist < threshold
-            && nearest_in_1[k].0 == i
-            && let Some(refined) = refine_ssi_point(
+    // Refine the grid pairs given, each from its two samples. Refinements
+    // are independent, so they run in parallel; their seeds are taken in the
+    // pairs' order, as one after another would take them.
+    let refine_pairs = |pairs: &[(usize, usize)]| -> Vec<Option<IntersectionPoint>> {
+        let refine = |&(i, k): &(usize, usize)| {
+            refine_ssi_point(
                 s1, s2, pts1[i].0, pts1[i].1, pts2[k].0, pts2[k].1, tolerance,
             )
+        };
+        // Tests count refinements on their own thread.
+        #[cfg(not(any(target_arch = "wasm32", test)))]
         {
-            push_seed(&mut seeds, refined);
+            use rayon::prelude::*;
+            pairs.par_iter().map(refine).collect()
         }
-    }
-    let closest = closest.into_sorted_vec();
-    for pair in &closest {
-        if let Some(refined) = refine_ssi_point(
-            s1,
-            s2,
-            pts1[pair.i].0,
-            pts1[pair.i].1,
-            pts2[pair.k].0,
-            pts2[pair.k].1,
-            tolerance,
-        ) {
-            push_seed(&mut seeds, refined);
+        #[cfg(any(target_arch = "wasm32", test))]
+        {
+            pairs.iter().map(refine).collect()
         }
-    }
+    };
+    // 100x dedup: multiple grid samples may converge to the same intersection
+    let mut kept = SeedCells::new(tolerance * 100.0);
+    let mut take = |seeds: &mut Vec<IntersectionPoint>, refined: Vec<Option<IntersectionPoint>>| {
+        for refined in refined.into_iter().flatten() {
+            if kept.insert(seeds, refined) {
+                seeds.push(refined);
+            }
+        }
+    };
+    let mutual: Vec<(usize, usize)> = nearest_in_2
+        .iter()
+        .enumerate()
+        .filter(|&(i, &(k, dist))| dist < threshold && nearest_in_1[k].0 == i)
+        .map(|(i, &(k, _))| (i, k))
+        .collect();
+    take(&mut seeds, refine_pairs(&mutual));
+    let closest: Vec<(usize, usize)> = closest
+        .into_sorted_vec()
+        .iter()
+        .map(|pair| (pair.i, pair.k))
+        .collect();
+    take(&mut seeds, refine_pairs(&closest));
     if seeds.is_empty() {
         return seeds;
     }
-    for &(u1, v1, p1) in &pts1 {
-        for &(u2, v2, p2) in &pts2 {
-            let dist = (p1 - p2).length();
-            if dist < threshold
-                && let Some(refined) = refine_ssi_point(s1, s2, u1, v1, u2, v2, tolerance)
-            {
-                push_seed(&mut seeds, refined);
+    let mut close = Vec::new();
+    for (i, &(_, _, p1)) in pts1.iter().enumerate() {
+        for (k, &(_, _, p2)) in pts2.iter().enumerate() {
+            if (p1 - p2).length() < threshold {
+                close.push((i, k));
             }
         }
     }
+    take(&mut seeds, refine_pairs(&close));
 
     seeds
 }
