@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794549192390,
+  "lastUpdate": 1794550710661,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -68093,6 +68093,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 22832910,
             "range": "± 107619",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "87d3e445a9576e7d28980906b3853289b52d9a55",
+          "message": "fix(algo): split a plane face along a NURBS face's edge that lies in it (#2402)\n\n## What does this PR do?\n\nToday a cut can lose a face. It happens when a flat face of the tool\nlies in a plane that holds an edge of a NURBS face of the blank. The\nplane then meets the NURBS face along that edge.\n\nThe face-face phase drops the section because it runs along the face's\nown edge. The edge-face phase skips the edge because it lies on the\nplane, and leaves it to a coplanar pair of faces. When the blank has no\nface in that plane, nothing splits the tool's face. The result is an\nopen shell, and the boolean falls back to a mesh.\n\nThe case in #2397 is a revolve of a spline profile. A wedge cuts it,\nwith a face in the plane of the revolve's first meridian. It took 55 s\nand returned 37,792 flat facets.\n\nAfter this PR, the edge-face phase records such an edge where it runs\nthrough the plane's face, and the builder splits the face along it. The\nsame cut takes 157 ms and returns 12 NURBS faces and 2 planes. The rule\napplies to an edge of a NURBS face whose own faces do not lie in the\nplane. Edges of other faces, and coplanar pairs, keep their current\npaths.\n\nThe containment test for such an edge reads the plane face's holes and\nits curved rim. An edge inside a hole, or along the rim, does not count\nas inside the face.\n\nCloses #2397.\n\n## How I checked it\n\n- `crates/io/tests/revolve_seam_cut_inmem.rs` replays the operands\ncaptured from brepjs, with the wedge at the seam and 10 degrees off it.\nEach case requires no mesh fallback, a valid solid, the face count of\neach type, and ray-cast points inside the gap and in the wall.\n- A unit test in `fill_face_info.rs` covers a point on the rim of a\nplane face.\n- `crates/operations/tests/plane_through_nurbs_edges.rs` has two tests\nfor a plane through the edges of a spline face. Both have the\n`#[ignore]` attribute, because they need the fix for #2404.\n- `cargo test -p brepkit-algo` passes (381 tests).\n- `cargo test --release -p brepkit-io` passes (115 test programs).\n- `cargo test -p brepkit-operations` passes (2,130 tests).\n- The pose sweep and the truth audit give the same output on main\n(`f8b27b644`) and on this branch before its rebase.",
+          "timestamp": "2026-11-12T22:14:47-08:00",
+          "tree_id": "18b7d4be213d79d34f9617c1e62583a9fb4b5749",
+          "url": "https://github.com/andymai/brepkit/commit/87d3e445a9576e7d28980906b3853289b52d9a55"
+        },
+        "date": 1794550702210,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1021365,
+            "range": "± 6654",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1088150,
+            "range": "± 3694",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12002,
+            "range": "± 92",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 680869,
+            "range": "± 3076",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26815181,
+            "range": "± 244105",
             "unit": "ns/iter"
           }
         ]
