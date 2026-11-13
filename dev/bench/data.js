@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794563612662,
+  "lastUpdate": 1794573814743,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -68309,6 +68309,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 22422369,
             "range": "± 34420",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "a34c38483258dc81862ee6f634cbf0cf91ee8071",
+          "message": "perf(math): multiply then add in two steps, with no call to a software fma (#2409)\n\n## What does this PR do?\n\n`f64::mul_add` rounds once, and that needs a fused multiply-add\ninstruction. WebAssembly has no such instruction, so each call in the\nwasm build goes to a software routine. In the wasm build one call takes\n10.5 ns. A multiply and an add take 3 ns.\n\nLibrary code called `mul_add` in 1,220 places, in NURBS evaluation, in\nthe intersection code, and in the boolean engine. This PR adds\n`brepkit_math::madd::Madd`, whose `madd` is `self * a + b`, and uses it\nin each of those places. The change is mechanical: `.mul_add(` becomes\n`.madd(`, and each file imports the trait.\n\nThe brepjs `turbofan-engine` example (1,904 solids, closed) builds in 95\nms with this change. On main it builds in 205 ms. I measured both in\nnode with a local wasm build, best of five runs.\n\nNative and wasm builds stay bit-identical to each other, because both\nnow do the same two operations. Results differ from the previous release\nin the last bits.\n\nIntegration tests, examples and benches keep `mul_add`. So does\n`crates/math/src/nurbs/intersection/tests.rs`, because two of its\nfixtures build exactly tangent surfaces with it. `CLAUDE.md` has the\nrule.\n\nThree area sums gate a polygon, a parameter loop, and a wire orbit on a\nshoelace sum of raw coordinates. Far from the origin, two rounded\nproducts lose the area of a small shape. These sums now work from the\nfirst vertex.\n\n## How I checked it\n\n- `cargo test` passes for `brepkit-math` (646 tests), `brepkit-algo`\n(381 tests), and `brepkit-operations` (2,130 tests).\n- It also passes for `brepkit-io` in release (468 tests) and\n`brepkit-wasm` (275 tests).\n- It also passes for `brepkit-topology`, `brepkit-geometry`,\n`brepkit-check`, `brepkit-heal`, `brepkit-blend` and `brepkit-offset`.\n- Two unit tests give a unit triangle and a unit square at 1e8 from the\norigin. Each must keep its area.\n- `cargo clippy --workspace --all-targets -- -D warnings` passes.\n- The truth audit gives the same rows as main. Only error figures below\n1e-9 differ.\n- The pose sweep gives the same face counts, validity, volumes and\nmisread counts as main on all 495 lines. Its error figures differ, and\nthe largest is 7.2e-10 on both.\n- The engine example returns 1,904 solids and 7,672 faces on the wasm\nbuild, as on main, and no invalid shape.",
+          "timestamp": "2026-11-13T04:40:30-08:00",
+          "tree_id": "5f7a2351bf43222e45d33fb8dc9685b6f1884fea",
+          "url": "https://github.com/andymai/brepkit/commit/a34c38483258dc81862ee6f634cbf0cf91ee8071"
+        },
+        "date": 1794573803822,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 761752,
+            "range": "± 2409",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 809930,
+            "range": "± 2737",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10322,
+            "range": "± 44",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 450748,
+            "range": "± 1446",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 19387525,
+            "range": "± 60292",
             "unit": "ns/iter"
           }
         ]
