@@ -1810,6 +1810,26 @@ pub(super) struct BandStack<'a> {
     /// How a separator in the lower role (the bottom of the band above it)
     /// runs at the seam.
     pub(super) lower_tan: brepkit_math::vec::Vec3,
+    /// On a torus, which is periodic in `v` too, the `v` the band's own
+    /// `v` lie within a half turn of (its seam's middle, as the face lays
+    /// it out); `None` elsewhere.
+    pub(super) v_mid: Option<f64>,
+}
+
+/// `v` moved by whole turns to within a half turn of `v_mid`, where a
+/// surface is periodic in `v` (a torus).
+pub(super) fn unwrap_band_v(v: f64, v_mid: Option<f64>) -> f64 {
+    use std::f64::consts::{PI, TAU};
+    v_mid.map_or(v, |mid| (v - mid + PI).rem_euclid(TAU) - PI + mid)
+}
+
+/// The `u` a band stack spans: [`band_period`]'s, or a torus's turn about
+/// its axis (a round's band about a rim, cut by a coaxial bore).
+fn stack_period(surface: &FaceSurface) -> Option<(f64, f64)> {
+    match surface {
+        FaceSurface::Torus(_) => Some((0.0, std::f64::consts::TAU)),
+        _ => band_period(surface),
+    }
 }
 
 impl BandEnd<'_> {
@@ -1872,7 +1892,8 @@ pub(super) fn band_stack<'a>(
     close_tol: f64,
 ) -> Option<BandStack<'a>> {
     const RIM_SAMPLES: u32 = 64;
-    let (u_start, period) = band_period(surface)?;
+    let (u_start, period) = stack_period(surface)?;
+    let is_torus = matches!(surface, FaceSurface::Torus(_));
     let half = 0.5 * period;
     let wrap = |d: f64| (d + half).rem_euclid(period) - half;
     // A closed curve's `(u, v)` samples along its own domain, in its sense.
@@ -1895,10 +1916,19 @@ pub(super) fn band_stack<'a>(
 
     let mut rims: Vec<&OrientedPCurveEdge> = Vec::new();
     let mut seam_points: Vec<Point3> = Vec::new();
+    let mut seam_vs: Vec<f64> = Vec::new();
     let mut reaches_apex = false;
     for e in boundary_edges {
         let is_closed = (e.start_3d - e.end_3d).length() < close_tol;
         match (&e.curve_3d, is_closed) {
+            // A torus band's seam is a meridian arc, under a half turn.
+            (EdgeCurve::Circle(_), false) if is_torus => {
+                if (e.end_uv.y() - e.start_uv.y()).abs() >= std::f64::consts::PI {
+                    return None;
+                }
+                seam_points.extend([e.start_3d, e.end_3d]);
+                seam_vs.extend([e.start_uv.y(), e.end_uv.y()]);
+            }
             (EdgeCurve::Circle(_), true) => rims.push(e),
             (EdgeCurve::NurbsCurve(_) | EdgeCurve::Ellipse(_), true)
                 if turn_of(&rim_samples(e)?).abs() > half =>
@@ -1926,8 +1956,20 @@ pub(super) fn band_stack<'a>(
         }
     }
 
+    // A torus's seam, from its pcurves, sets the band's turn of `v`.
+    let v_mid = if is_torus {
+        let lo = seam_vs.iter().copied().fold(f64::INFINITY, f64::min);
+        let hi = seam_vs.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+        if hi - lo >= std::f64::consts::PI || hi < lo {
+            return None;
+        }
+        Some(f64::midpoint(lo, hi))
+    } else {
+        None
+    };
     let rim_v = |e: &OrientedPCurveEdge| -> Option<f64> {
         let (_, v) = surface.project_point(e.start_3d)?;
+        let v = unwrap_band_v(v, v_mid);
         let on_seam = surface.evaluate(seam_u, v)?;
         ((on_seam - e.start_3d).length() < close_tol).then_some(v)
     };
@@ -1977,6 +2019,7 @@ pub(super) fn band_stack<'a>(
                 q_bot: rim_q(bot, v_bot)?,
                 q_top: rim_q(top, v_top)?,
                 lower_tan: traversal_tangent(bot)?,
+                v_mid,
             }
         }
         // A cone's apex sits at v = 0; its rim is on either side of it.
@@ -1994,6 +2037,7 @@ pub(super) fn band_stack<'a>(
                     q_bot: 0.0,
                     q_top: q,
                     lower_tan: -lower_tan,
+                    v_mid,
                 }
             } else {
                 BandStack {
@@ -2005,6 +2049,7 @@ pub(super) fn band_stack<'a>(
                     q_bot: q,
                     q_top: 0.0,
                     lower_tan,
+                    v_mid,
                 }
             }
         }
@@ -3136,7 +3181,7 @@ pub(super) fn split_periodic_face_into_bands(
     use brepkit_math::vec::{Point2, Vec2};
 
     let close_tol = tol * 100.0;
-    let (u_start, period) = band_period(surface)?;
+    let (u_start, period) = stack_period(surface)?;
     let half = 0.5 * period;
     let BandStack {
         seam_u,
@@ -3147,6 +3192,7 @@ pub(super) fn split_periodic_face_into_bands(
         q_bot,
         q_top,
         lower_tan: ref_tan,
+        v_mid,
     } = band_stack(surface, boundary_edges, close_tol)?;
 
     if std::env::var("BK_BAND_TRACE").is_ok() {
@@ -3211,6 +3257,7 @@ pub(super) fn split_periodic_face_into_bands(
             _ => return None,
         };
         let (_, v) = surface.project_point(s.start)?;
+        let v = unwrap_band_v(v, v_mid);
         let on_seam = surface.evaluate(seam_u, v)?;
         if (on_seam - s.start).length() > close_tol {
             return None;
@@ -3308,13 +3355,30 @@ pub(super) fn split_periodic_face_into_bands(
         }
     }
 
+    // A torus's seam is a meridian, the tube's circle at `seam_u`, run the
+    // short way from `pa` to `pb` (its two copies, up and down, one arc).
+    let seam_curve = |pa: Point3, pb: Point3| -> Option<EdgeCurve> {
+        let FaceSurface::Torus(torus) = surface else {
+            return Some(EdgeCurve::Line);
+        };
+        let ring = surface.evaluate(seam_u, 0.0)? - torus.center();
+        let ring = ring * (1.0 / ring.length());
+        let centre = torus.center() + ring * torus.major_radius();
+        let mut normal = torus.z_axis().cross(ring);
+        if normal.cross(pa - centre).dot(pb - pa) < 0.0 {
+            normal = -normal;
+        }
+        Some(EdgeCurve::Circle(
+            brepkit_math::curves::Circle3D::new(centre, normal, torus.minor_radius()).ok()?,
+        ))
+    };
     let mk_seam = |va: f64, vb: f64| -> Option<OrientedPCurveEdge> {
         let pa = surface.evaluate(seam_u, va)?;
         let pb = surface.evaluate(seam_u, vb)?;
         let dir = Vec2::new(0.0, if vb > va { 1.0 } else { -1.0 });
         let pcurve = Curve2D::Line(Line2D::new(Point2::new(seam_u, va), dir).ok()?);
         Some(OrientedPCurveEdge {
-            curve_3d: EdgeCurve::Line,
+            curve_3d: seam_curve(pa, pb)?,
             pcurve,
             start_uv: Point2::new(seam_u, va),
             end_uv: Point2::new(seam_u, vb),

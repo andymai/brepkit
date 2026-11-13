@@ -515,7 +515,8 @@ fn assert_sound_and_changed_by(topo: &Topology, solid: SolidId, before: f64, cha
 
 /// A rod drilled through at `offset` from its axis by a hole of radius
 /// `hole`, its top rim then rounded by `r`: the rounded solid, or why the
-/// round was not built.
+/// round was not built. The hole stands a radian round from the rod's seam
+/// (a hole the round cuts back is meshed clear of the band's seam).
 fn round_a_drilled_rods_top(
     offset: f64,
     hole: f64,
@@ -524,7 +525,8 @@ fn round_a_drilled_rods_top(
     let mut topo = Topology::new();
     let rod = make_cylinder(&mut topo, RADIUS, HEIGHT).unwrap();
     let pin = make_cylinder(&mut topo, hole, HEIGHT + 2.0).unwrap();
-    transform_solid(&mut topo, pin, &Mat4::translation(offset, 0.0, -1.0)).unwrap();
+    let (x, y) = (offset * 1.0_f64.cos(), offset * 1.0_f64.sin());
+    transform_solid(&mut topo, pin, &Mat4::translation(x, y, -1.0)).unwrap();
     let drilled = boolean(&mut topo, BooleanOp::Cut, rod, pin).unwrap();
     let before = solid_volume(&topo, drilled, 0.001).unwrap();
     let edge = rim_at(&topo, drilled, RADIUS, HEIGHT);
@@ -535,18 +537,57 @@ fn round_a_drilled_rods_top(
     }
 }
 
-/// A hole on the top under the round, crossing the circle its contact runs
-/// along or lying between that circle and the rim: the band would cut
-/// through the hole, which the fillet does not build, so it is refused,
-/// not built as a top whose outline crosses or leaves out its hole.
-#[test]
-fn a_rods_top_rim_round_over_a_hole_is_refused() {
-    for (offset, hole) in [(3.5, 0.8), (4.2, 0.3)] {
-        assert!(
-            round_a_drilled_rods_top(offset, hole, 2.0).is_err(),
-            "a round over the hole at {offset} was built"
-        );
+/// The part of a rim round's strip on a rod's top (its depth
+/// `r - sqrt(r^2 - (s - (rim - r))^2)` at `s` from the axis, past
+/// `rim - r`) inside a hole of radius `hole` drilled `offset` from the axis.
+fn strip_in_hole(rim: f64, r: f64, offset: f64, hole: f64) -> f64 {
+    let depth = |s: f64| {
+        let t = s - (rim - r);
+        if t <= 0.0 {
+            0.0
+        } else {
+            r - (r * r - t * t).max(0.0).sqrt()
+        }
+    };
+    // Midpoints in polar steps about the hole's axis.
+    let (n_rho, n_phi) = (1500, 1500);
+    let (d_rho, d_phi) = (hole / f64::from(n_rho), 2.0 * PI / f64::from(n_phi));
+    let mut sum = 0.0;
+    for i in 0..n_rho {
+        let rho = d_rho * (f64::from(i) + 0.5);
+        for j in 0..n_phi {
+            let phi = d_phi * (f64::from(j) + 0.5);
+            let (x, y) = (offset + rho * phi.cos(), rho * phi.sin());
+            sum += depth(x.hypot(y)) * rho;
+        }
     }
+    sum * d_rho * d_phi
+}
+
+/// A hole on the top between the circle the round's contact runs along and
+/// the rim: the round is made as on the undrilled rod and the hole cut back
+/// through it (it was refused: no trim builds the top round the hole), so
+/// the result is short of the drilled rod by the rim's strip less the part
+/// of it in the hole.
+#[test]
+fn a_rods_top_rim_round_over_a_hole_cuts_it_back() {
+    let (offset, hole) = (4.2, 0.3);
+    let (topo, solid, before) =
+        round_a_drilled_rods_top(offset, hole, 2.0).expect("the round over the hole builds");
+    let change = -(rounded_off(RADIUS, 2.0) - strip_in_hole(RADIUS, 2.0, offset, hole));
+    assert_sound_and_changed_by(&topo, solid, before, change);
+}
+
+/// A hole crossing the circle the round's contact runs along notches the
+/// round's band from its edge on the top, which the cut back does not yet
+/// build, so the round is refused, not built as a top whose outline
+/// crosses its hole.
+#[test]
+fn a_rods_top_rim_round_across_a_hole_is_refused() {
+    assert!(
+        round_a_drilled_rods_top(3.5, 0.8, 2.0).is_err(),
+        "a round across the hole was built"
+    );
 }
 
 /// The same hole wholly inside the contact's circle keeps the round, and the
