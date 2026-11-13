@@ -79,9 +79,19 @@ pub(super) fn nurbs_face_box(
         for i in 0..=SAMPLES {
             let t = t0 + (t1 - t0) * f64::from(i) / f64::from(SAMPLES);
             let p = edge.curve().evaluate_with_endpoints(t, sp, ep);
-            let Ok(foot) =
+            // Newton from the sample before, a step along the edge away; a
+            // foot off the sample sends it to a search of the whole surface.
+            let near = last.and_then(|from| {
+                brepkit_math::nurbs::projection::project_point_to_surface_from(
+                    surface, p, from, tol.linear,
+                )
+                .ok()
+                .filter(|foot| foot.distance <= tol.linear)
+            });
+            let Some(foot) = near.or_else(|| {
                 brepkit_math::nurbs::projection::project_point_to_surface(surface, p, tol.linear)
-            else {
+                    .ok()
+            }) else {
                 return Ok(bounds.union(whole));
             };
             (u0, u1, v0, v1) = (

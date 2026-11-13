@@ -105,6 +105,31 @@ pub struct FaceLoops2d {
     pub aabb: [f64; 6],
 }
 
+/// `surface`'s `(u, v)` for `point`, one of a run of points that follow one
+/// another along a curve on it, with `last` the one before.
+///
+/// On a NURBS surface Newton starts from `last`, a step along the curve
+/// away, and a foot that lands off the point is some other part of the
+/// surface: the whole surface is searched for that point, as for the first.
+pub(crate) fn project_following(
+    surface: &FaceSurface,
+    point: Point3,
+    last: &mut Option<(f64, f64)>,
+) -> Option<(f64, f64)> {
+    let near = match (surface, *last) {
+        (FaceSurface::Nurbs(n), Some(from)) => {
+            brepkit_math::nurbs::projection::project_point_to_surface_from(n, point, from, 1e-7)
+                .ok()
+                .filter(|foot| foot.distance <= 1e-7)
+                .map(|foot| (foot.u, foot.v))
+        }
+        _ => None,
+    };
+    let found = near.or_else(|| surface.project_point(point));
+    *last = found;
+    found
+}
+
 impl FaceLoops2d {
     /// Sample `face_id`'s loops: two points per line, sixteen per curved edge,
     /// each edge walked in its traversal direction and excluding the traversal
@@ -150,6 +175,7 @@ impl FaceLoops2d {
          -> Result<Vec<Point2>, AlgoError> {
             let wire = topo.wire(wid)?;
             let mut out: Vec<Point2> = Vec::new();
+            let mut last = None;
             for oe in wire.edges() {
                 let e = topo.edge(oe.edge())?;
                 let sp = topo.vertex(e.start())?.point();
@@ -191,7 +217,8 @@ impl FaceLoops2d {
                     }
                     let Some(q) = (match frame.as_ref() {
                         Some(f) => Some(f.project(p3)),
-                        None => surface.project_point(p3).map(|(u, v)| Point2::new(u, v)),
+                        None => project_following(&surface, p3, &mut last)
+                            .map(|(u, v)| Point2::new(u, v)),
                     }) else {
                         continue;
                     };

@@ -5434,11 +5434,11 @@ fn wire_uv_polygon(
         if (pts[0] - start).length() > (pts[n] - start).length() {
             pts.reverse();
         }
+        let mut last = None;
         let uv: Vec<brepkit_math::vec::Point2> = pts
             .iter()
             .map(|p| {
-                surface
-                    .project_point(*p)
+                crate::classifier::project_following(surface, *p, &mut last)
                     .map(|(u, v)| brepkit_math::vec::Point2::new(rebase_u(u, u_base), v))
             })
             .collect::<Option<_>>()?;
@@ -5802,6 +5802,7 @@ fn face_v_range(topo: &Topology, face_id: FaceId, surface: &FaceSurface) -> Opti
     // puts the north pole there.
     let mut u_progress = 0.0;
     let mut u_last: Option<f64> = None;
+    let mut foot_last = None;
     for oe in wire.edges() {
         let edge = topo.edge(oe.edge()).ok()?;
         let sp = topo.vertex(edge.start()).ok()?.point();
@@ -5816,7 +5817,8 @@ fn face_v_range(topo: &Topology, face_id: FaceId, surface: &FaceSurface) -> Opti
         for frac in fracs {
             let t = t0 + (t1 - t0) * frac;
             let pt = edge.curve().evaluate_with_endpoints(t, sp, ep);
-            if let Some((u, v)) = surface.project_point(pt) {
+            if let Some((u, v)) = crate::classifier::project_following(surface, pt, &mut foot_last)
+            {
                 v_min = v_min.min(v);
                 v_max = v_max.max(v);
                 if v.abs() < std::f64::consts::FRAC_PI_2 - 1e-6 {
