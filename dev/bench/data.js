@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794553431230,
+  "lastUpdate": 1794561085737,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -68201,6 +68201,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 20760593,
             "range": "± 36546",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "206ec368098e160eec6eb6cbc7f9049547d5d69c",
+          "message": "perf(algo): cut a revolved spline solid through its axis without a fit or a search per sample (#2408)\n\n## What does this PR do?\n\nA cut of a revolved spline solid by a wedge through its axis spent most\nof its time on work with a known answer. This PR removes four such\ncosts. The results are the same solids.\n\n- A plane through the axis cuts a surface of revolution along a\nmeridian, and the surface holds that curve itself.\n`intersect_plane_nurbs` fitted a new curve through 32 points to 1e-7, at\n1.3 ms to 3.6 ms for each section. It now takes the parameter curve from\nthe control net. The chain must run along that curve from end to end,\nand the plane must hold its control points. The curve must also pass\nwithin 1e-7 of each point of the chain.\n- `intersect_plane_nurbs` returns no section when all control points of\na surface with positive weights lie on one side of the plane.\n- `project_point_to_surface` evaluated the surface at 81 grid points for\neach call to find a seed. `NurbsSurface` now keeps that grid after the\nfirst call. The seeds and the results do not change.\n- Four places projected each sample of a face boundary with a search of\nthe whole surface. They are the face extent and the face box in the\nface-face phase, the ray-cast trim, and the classifier's boundary probe.\nEach sample now starts Newton from the sample before it. Newton runs to\n1e-12. A foot more than 1e-10 from the sample sends that sample to the\nfull search.\n\nTimes on the operands captured from the brepjs `turbofan-engine`\nexample, native release build, one cut each:\n\n| Cut | Before | After |\n|---|---|---|\n| Nacelle (16 NURBS faces) by the wedge | 118 ms | 27 ms |\n| Hollow liner (32 NURBS faces) by the wedge | 183 ms | 45 ms |\n\n## How I checked it\n\n- Four unit tests in `crates/math/src/nurbs/intersection/tests.rs`. A\nplane through the axis of a turned surface must return the profile's own\ndegree and 4 control points, all on the plane. A plane across the axis\nmust return a rational quadratic arc with 3 control points. Both tests\nfail when the new route is off. A tilted plane must still give a fitted\nsection within 1e-6 of the plane. A surface whose control points clear\nthe plane must give no section.\n- A fifth unit test there has a section that drifts 8e-4 across a\nstretched parameter. Its curve must end where its chain ends.\n- A unit test in `crates/algo/src/classifier/mod.rs` has a patch 5e-8\nacross. A point on its far side must get its own parameters.\n- `crates/io/tests/spline_liner_wedge_cut_inmem.rs` replays the liner\ncut. It requires no mesh fallback, 32 NURBS faces and 2 planes, and a\nvalid solid. It also requires ray-cast points in the removed wall, in\nboth walls, and in the cavity.\n- `cargo test` passes for `brepkit-math` (651 tests), `brepkit-algo`\n(382 tests), and `brepkit-io` in release (471 tests).\n`brepkit-operations` (2,130 tests) passed before the rebase onto #2402.\n- `cargo clippy --all-targets -- -D warnings` passes for `brepkit-math`\nand `brepkit-algo`.\n- The pose sweep and the truth audit gave the same output on main\n(`f8b27b644`) and on this branch before that rebase.",
+          "timestamp": "2026-11-13T01:08:25-08:00",
+          "tree_id": "e64824da56da71e8519587bf3dc115438f957484",
+          "url": "https://github.com/andymai/brepkit/commit/206ec368098e160eec6eb6cbc7f9049547d5d69c"
+        },
+        "date": 1794561076727,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 847462,
+            "range": "± 3369",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 897689,
+            "range": "± 669",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11409,
+            "range": "± 255",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 538774,
+            "range": "± 1524",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 22364740,
+            "range": "± 51699",
             "unit": "ns/iter"
           }
         ]
