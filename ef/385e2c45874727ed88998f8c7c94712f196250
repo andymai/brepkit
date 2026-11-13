@@ -1,0 +1,70 @@
+crates/operations/src/tessellate/planar.rs
+  s_385aefe07faf61::t_53da682bc82c8a 8
+  s_385aefe07faf61::t_54a4475284b586 385-387,399
+crates/operations/tests/bspline_conversion_mesh.rs
+  s_385aefe07faf61::t_a90d820039dfdc 98-100
+crates/wasm/src/helpers.rs
+  s_385aefe07faf61::t_a893395f285d8f 1593,1607-1611
+crates/operations/tests/regress_fillet_variable_retry_seam_stub.rs
+  s_385aefe07faf61::t_44afaf08c4ac95 199-211
+crates/operations/src/tessellate/nurbs.rs
+  s_385aefe07faf61::t_fd503724b359f4 1292-1294,1297-1301,1304,1307-1314,1318,1338,1341-1347,1351,1353-1354
+  s_385aefe07faf61::t_edd2965d68b059 1201-1205,1209-1213
+  s_385aefe07faf61::t_4cd92f81e3037c 1107-1147,1149-1181,1184-1200,1206-1208,1214-1232,1267,1271-1272,1276-1291,1295-1296,1302-1303,1305-1306,1319-1337,1339-1340,1348-1350,1352,1355-1357
+  s_385aefe07faf61::t_a130942a35f914 1182-1183
+  s_385aefe07faf61::t_53da682bc82c8a 966-970,1315-1317
+  s_385aefe07faf61::t_86f03694690776 952-965,971-979,1148,1233-1266,1268-1270,1273-1275
+crates/io/tests/step_freeform_panel.rs
+  s_385aefe07faf61::t_a893395f285d8f 65-66,69
+crates/io/tests/spline_mesh_density.rs
+  s_385aefe07faf61::t_53da682bc82c8a 34-35
+  s_385aefe07faf61::t_e76479c67fc2df 1-33,36-70
+crates/io/tests/kumiko_wrap_first_band_cut_inmem.rs
+  s_385aefe07faf61::t_ead402f43c3c0a 30,34,47
+crates/io/tests/kumiko_wrap_slot_cut_inmem.rs
+  s_385aefe07faf61::t_f28f1a38c048fa 25
+  s_385aefe07faf61::t_ead402f43c3c0a 32-33,37
+crates/operations/src/tessellate/tests.rs
+  s_385aefe07faf61::t_44afaf08c4ac95 3098
+  s_385aefe07faf61::t_7c43f056faea1d 3046-3047,3049,3090-3091,3093
+  s_385aefe07faf61::t_4f568ece9f69c2 4527-4592
+crates/io/tests/scoop_taper_clip_inmem.rs
+  s_385aefe07faf61::t_a90d820039dfdc 97-98,101
+crates/io/tests/data/lofted_stator_blade.bin
+  s_385aefe07faf61::t_e76479c67fc2df 1
+crates/operations/src/tessellate/nonplanar.rs
+  s_385aefe07faf61::t_4cd92f81e3037c 2794,2932-2934,2937-2951,2955-2961,4541-4545,4551-4552,4554,4561-4562,4567,4574-4575,4579-4580,4587-4590,5222-5223,5278-5280
+  s_385aefe07faf61::t_86f03694690776 2936
+  s_385aefe07faf61::t_fd503724b359f4 2935
+  s_385aefe07faf61::t_53da682bc82c8a 2801,4581-4586
+crates/operations/src/tessellate/edge_sampling.rs
+  s_385aefe07faf61::t_4f568ece9f69c2 683-710,715-723,726-733,738-748
+  s_385aefe07faf61::t_86f03694690776 156,210-247,250-252
+  s_385aefe07faf61::t_4cd92f81e3037c 144,181,186,189-194,196-205,207
+  s_385aefe07faf61::t_53da682bc82c8a 429-432,711-714,734-737
+  s_385aefe07faf61::t_3e37a8bbe0e993 724-725
+  s_385aefe07faf61::t_54a4475284b586 138,143,145-148,150-155,157-160,162-180,182-183,185,187-188,195,206,208-209,387-391,609-610,620
+  s_385aefe07faf61::t_a130942a35f914 184
+crates/operations/src/tessellate/solid.rs
+  s_385aefe07faf61::t_8915357f75c309 294-407,492
+crates/io/tests/data/spline_nacelle.bin
+  s_385aefe07faf61::t_e76479c67fc2df 1
+crates/operations/tests/extrude_off_its_normal.rs
+  s_385aefe07faf61::t_7c43f056faea1d 136-138,140
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ef385e2c45874727ed88998f8c7c94712f196250",
+  "prompts": {},
+  "sessions": {
+    "s_385aefe07faf61": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7ba532a8-609c-4534-9316-9e8d54346633",
+        "model": "claude-fable-5-2"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
