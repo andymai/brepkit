@@ -81,10 +81,275 @@ pub fn fillet_v2(
             reason: "no edges specified".into(),
         });
     }
+    if let Ok(Some(result)) = fillet_over_bores(topo, solid, edges, radius) {
+        return Ok(result);
+    }
     let mut builder = FilletBuilder::new(topo, solid);
     builder.add_edges(edges, radius);
     let built = builder.build()?;
     own_cavities(topo, solid, built, "fillet")
+}
+
+/// A straight through-bore: a cylinder wall from a circle that is a hole in
+/// one plane face to a circle that is a hole in another.
+struct Bore {
+    wall: FaceId,
+    mouths: [(FaceId, brepkit_topology::wire::WireId); 2],
+    centres: [Point3; 2],
+    radius: f64,
+}
+
+/// The through-bores opening on `faces` whose mouth comes within `reach`
+/// of a point of `near`.
+fn bores_opening_on(
+    topo: &Topology,
+    solid: SolidId,
+    faces: &HashSet<FaceId>,
+    near: &[Point3],
+    reach: f64,
+) -> Result<Vec<Bore>, OperationsError> {
+    use brepkit_topology::face::FaceSurface;
+    // Each single-circle hole of a plane face, by its edge.
+    let mut holes = std::collections::HashMap::new();
+    let all = solid_faces(topo, solid)?;
+    for &face_id in &all {
+        let face = topo.face(face_id)?;
+        if !matches!(face.surface(), FaceSurface::Plane { .. }) {
+            continue;
+        }
+        for &wire_id in face.inner_wires() {
+            let wire = topo.wire(wire_id)?;
+            if let [oe] = wire.edges()
+                && let EdgeCurve::Circle(circle) = topo.edge(oe.edge())?.curve()
+            {
+                holes.insert(
+                    oe.edge(),
+                    (face_id, wire_id, circle.center(), circle.radius()),
+                );
+            }
+        }
+    }
+    let mut bores = Vec::new();
+    for &face_id in &all {
+        let face = topo.face(face_id)?;
+        let FaceSurface::Cylinder(cylinder) = face.surface() else {
+            continue;
+        };
+        if !face.inner_wires().is_empty() {
+            continue;
+        }
+        let mut circles = Vec::new();
+        let mut other = false;
+        for oe in topo.wire(face.outer_wire())?.edges() {
+            match topo.edge(oe.edge())?.curve() {
+                EdgeCurve::Circle(_) => circles.push(oe.edge()),
+                EdgeCurve::Line => {}
+                _ => other = true,
+            }
+        }
+        let [a, b] = circles[..] else { continue };
+        if other || a == b {
+            continue;
+        }
+        let (Some(&ha), Some(&hb)) = (holes.get(&a), holes.get(&b)) else {
+            continue;
+        };
+        if !(faces.contains(&ha.0) || faces.contains(&hb.0)) {
+            continue;
+        }
+        let radius = cylinder.radius();
+        let along = hb.2 - ha.2;
+        let tol = 1e-7 * (1.0 + radius + along.length());
+        if (ha.3 - radius).abs() > tol
+            || (hb.3 - radius).abs() > tol
+            || along.cross(cylinder.axis()).length() > tol
+            || along.length() <= tol
+        {
+            continue;
+        }
+        let gap = |centre: Point3| {
+            near.iter()
+                .map(|&p| (p - centre).length())
+                .fold(f64::INFINITY, f64::min)
+                - radius
+        };
+        if gap(ha.2).min(gap(hb.2)) > reach {
+            continue;
+        }
+        bores.push(Bore {
+            wall: face_id,
+            mouths: [(ha.0, ha.1), (hb.0, hb.1)],
+            centres: [ha.2, hb.2],
+            radius,
+        });
+    }
+    Ok(bores)
+}
+
+/// A fillet over through-bores, as when the bores were filled: a round
+/// running over a bore's mouth (a bracket's edge rounded past a hole near
+/// it) trims the face round the hole, which the trimmer refuses, or, where
+/// the hole straddles the round's contact, crosses the trimmed outline.
+/// Each bore opening within the round's reach on a face of the picked edges
+/// is filled, the solid rounded, and the bore cut back through the round.
+/// `None` when there is no such bore, or the round or the cut does not
+/// build exactly.
+fn fillet_over_bores(
+    topo: &mut Topology,
+    solid: SolidId,
+    edges: &[EdgeId],
+    radius: f64,
+) -> Result<Option<BlendResult>, OperationsError> {
+    use brepkit_topology::explorer::face_edges;
+    use brepkit_topology::face::Face;
+    use brepkit_topology::shell::Shell;
+    use brepkit_topology::solid::Solid;
+
+    let picked: HashSet<EdgeId> = edges.iter().copied().collect();
+    let mut beside = HashSet::new();
+    for face_id in solid_faces(topo, solid)? {
+        if face_edges(topo, face_id)?
+            .iter()
+            .any(|e| picked.contains(e))
+        {
+            beside.insert(face_id);
+        }
+    }
+    // Points along the picked edges: a round reaches a few radii from its
+    // edge at most (r cot(a / 2) on a face at an acute corner a).
+    let mut near = Vec::new();
+    for &edge_id in edges {
+        let edge = topo.edge(edge_id)?;
+        let (start, end) = (
+            topo.vertex(edge.start())?.point(),
+            topo.vertex(edge.end())?.point(),
+        );
+        let (t0, t1) = edge.curve().domain_with_endpoints(start, end);
+        for i in 0..=64 {
+            let t = t0 + (t1 - t0) * f64::from(i) / 64.0;
+            near.push(edge.curve().evaluate_with_endpoints(t, start, end));
+        }
+    }
+    let bores = bores_opening_on(topo, solid, &beside, &near, 4.0 * radius)?;
+    if bores.is_empty() {
+        return Ok(None);
+    }
+    log::debug!("fillet over bores: {} bore(s) in reach", bores.len());
+    // The solid with the bores filled: their walls left out, their mouths
+    // no longer holes.
+    let walls: HashSet<FaceId> = bores.iter().map(|b| b.wall).collect();
+    let mut filled: std::collections::HashMap<FaceId, Vec<_>> = std::collections::HashMap::new();
+    for bore in &bores {
+        for &(face, wire) in &bore.mouths {
+            filled.entry(face).or_default().push(wire);
+        }
+    }
+    let (outer, inner) = {
+        let data = topo.solid(solid)?;
+        (data.outer_shell(), data.inner_shells().to_vec())
+    };
+    let mut shell_faces = Vec::new();
+    for face_id in topo.shell(outer)?.faces().to_vec() {
+        if walls.contains(&face_id) {
+            continue;
+        }
+        let Some(gone) = filled.get(&face_id) else {
+            shell_faces.push(face_id);
+            continue;
+        };
+        let face = topo.face(face_id)?;
+        let holes: Vec<_> = face
+            .inner_wires()
+            .iter()
+            .copied()
+            .filter(|w| !gone.contains(w))
+            .collect();
+        let mut plain = Face::new(face.outer_wire(), holes, face.surface().clone());
+        plain.set_reversed(face.is_reversed());
+        shell_faces.push(topo.add_face(plain));
+    }
+    if shell_faces.len() + walls.len() != topo.shell(outer)?.faces().len() {
+        // A bore's wall in a cavity shell: left alone.
+        return Ok(None);
+    }
+    let shell = topo.add_shell(Shell::new(shell_faces)?);
+    let plugged = topo.add_solid(Solid::new(shell, inner));
+
+    let mut builder = FilletBuilder::new(topo, plugged);
+    builder.add_edges(edges, radius);
+    let built = match builder.build() {
+        Ok(built) if built.failed.is_empty() => built,
+        Ok(built) => {
+            log::debug!(
+                "fillet over bores: the filled solid's round failed: {:?}",
+                built.failed.first()
+            );
+            return Ok(None);
+        }
+        Err(e) => {
+            log::debug!("fillet over bores: the filled solid's round failed: {e}");
+            return Ok(None);
+        }
+    };
+    let succeeded = built.succeeded.clone();
+    let built = own_cavities(topo, plugged, built, "fillet")?;
+
+    // Each bore cut back, a little past both mouths (outside the solid
+    // there, as the bore opens on both).
+    let mut result = built.solid;
+    for bore in &bores {
+        let [start, end] = bore.centres;
+        let along = end - start;
+        let length = along.length();
+        let axis = along * (1.0 / length);
+        let margin = 0.1 * bore.radius;
+        let tool = crate::primitives::make_cylinder(topo, bore.radius, length + 2.0 * margin)?;
+        let x = axis.cross(if axis.x().abs() < 0.9 {
+            Vec3::new(1.0, 0.0, 0.0)
+        } else {
+            Vec3::new(0.0, 1.0, 0.0)
+        });
+        let x = x * (1.0 / x.length());
+        let y = axis.cross(x);
+        let base = start - axis * margin;
+        let frame = brepkit_math::mat::Mat4([
+            [x.x(), y.x(), axis.x(), base.x()],
+            [x.y(), y.y(), axis.y(), base.y()],
+            [x.z(), y.z(), axis.z(), base.z()],
+            [0.0, 0.0, 0.0, 1.0],
+        ]);
+        crate::transform::transform_solid(topo, tool, &frame)?;
+        let opts = crate::boolean::BooleanOptions {
+            mesh_fallback: false,
+            ..crate::boolean::BooleanOptions::default()
+        };
+        match crate::boolean::boolean_with_options(
+            topo,
+            crate::boolean::BooleanOp::Cut,
+            result,
+            tool,
+            opts,
+        ) {
+            Ok(cut) => result = cut,
+            Err(e) => {
+                log::debug!("fillet over bores: the bore's cut failed: {e}");
+                return Ok(None);
+            }
+        }
+    }
+    // A cut that leaves the solid unsound (faces disagreeing about an edge's
+    // sense where the bore runs through a band) is not taken; the round is
+    // then made as it is.
+    if !crate::validate::validate_solid(topo, result)?.is_valid() {
+        log::debug!("fillet over bores: the cut back is not a valid solid");
+        return Ok(None);
+    }
+    Ok(Some(BlendResult {
+        solid: result,
+        succeeded,
+        failed: Vec::new(),
+        is_partial: false,
+    }))
 }
 
 /// How the corner where three rounds meet is closed.
