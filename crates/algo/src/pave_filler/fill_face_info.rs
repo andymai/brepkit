@@ -239,10 +239,15 @@ impl PlaneRegion {
     fn reads(&self, p: brepkit_math::vec::Point3, near: f64) -> (bool, bool) {
         let d = p - self.origin;
         let flat = brepkit_math::vec::Point2::new(d.dot(self.x), d.dot(self.y));
-        match brepkit_math::region2d::point_in_region(&self.pieces, flat, near) {
-            Some(inside) => (inside, false),
-            None => (true, true),
-        }
+        // `None` is a point near the boundary, or one whose every trial ray
+        // grazed a piece: only the first holds the point.
+        brepkit_math::region2d::point_in_region(&self.pieces, flat, near).map_or_else(
+            || {
+                let close = brepkit_math::region2d::on_boundary(&self.pieces, flat, near);
+                (close, close)
+            },
+            |inside| (inside, false),
+        )
     }
 
     /// Whether `p`, in the face's plane, lies on the face: within `near` of
@@ -501,6 +506,28 @@ mod tests {
     /// An edge lying in part of a face, cut into pieces within that part
     /// after its run was found: every piece of the run lies in the face, and
     /// none outside it.
+    #[test]
+    fn a_plane_region_holds_its_inside_and_its_boundary_only() {
+        let mut topo = Topology::new();
+        let cube =
+            brepkit_topology::test_utils::make_unit_cube_manifold_at(&mut topo, 0.0, 0.0, 0.0);
+        let bottom = brepkit_topology::explorer::solid_faces(&topo, cube)
+            .unwrap()
+            .into_iter()
+            .find(|&f| {
+                matches!(topo.face(f).unwrap().surface(), FaceSurface::Plane { normal, .. } if normal.z() < -0.5)
+            })
+            .unwrap();
+        let region = PlaneRegion::of(&topo, bottom).unwrap();
+        let near = 1e-6;
+        let inside = Point3::new(0.5, 0.5, 0.0);
+        let on_edge = Point3::new(0.5, 0.0, 0.0);
+        let outside = Point3::new(0.5, -0.5, 0.0);
+        assert!(region.holds(inside, near) && region.holds_clear(inside, near));
+        assert!(region.holds(on_edge, near) && !region.holds_clear(on_edge, near));
+        assert!(!region.holds(outside, near) && !region.holds_clear(outside, near));
+    }
+
     #[test]
     fn every_piece_of_a_run_lies_in_the_face() {
         let mut topo = Topology::new();

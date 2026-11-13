@@ -111,7 +111,24 @@ struct FaceContainment {
 struct PlanarContainment {
     frame: PlaneFrame,
     polygon: Vec<Point2>,
+    /// The face's inner wires, sampled as the outer one is.
+    holes: Vec<Vec<Point2>>,
     margin: f64,
+}
+
+impl PlanarContainment {
+    /// Whether `p`, in the face's plane, lies in the face, and whether it
+    /// lies within `near` of the face's boundary, which the sampled loops
+    /// stand off by up to the margin.
+    fn reads(&self, p: Point3, near: f64) -> (bool, bool) {
+        let q = self.frame.project(p);
+        let inside = point_in_polygon_2d(q, &self.polygon)
+            && !self.holes.iter().any(|hole| point_in_polygon_2d(q, hole));
+        let close = std::iter::once(&self.polygon)
+            .chain(&self.holes)
+            .any(|ring| distance_to_polygon_boundary(q, ring) <= near + self.margin);
+        (inside, close)
+    }
 }
 
 impl FaceContainment {
@@ -199,20 +216,41 @@ fn build_face_containment(
     }
     all_points.extend_from_slice(&outer_points);
 
+    let mut hole_points: Vec<Vec<Point3>> = Vec::new();
     for &inner_wid in face.inner_wires() {
         let inner_wire = topo.wire(inner_wid)?;
         let inner_edges: Vec<_> = inner_wire.edges().to_vec();
+        let mut ring = Vec::new();
         for oe in &inner_edges {
             let edge = topo.edge(oe.edge())?;
             let start_pos = topo.vertex(edge.start())?.point();
             let end_pos = topo.vertex(edge.end())?.point();
             let (t0, t1) = edge.curve().domain_with_endpoints(start_pos, end_pos);
+            let is_curved = !matches!(edge.curve(), EdgeCurve::Line);
             let n = N_BOUNDARY_SAMPLES;
-            for i in 0..=n {
-                let t = t0 + (t1 - t0) * (i as f64 / n as f64);
-                all_points.push(edge.curve().evaluate_with_endpoints(t, start_pos, end_pos));
+            let at = |i: usize| {
+                let frac = i as f64 / n as f64;
+                let frac = if oe.is_forward() { frac } else { 1.0 - frac };
+                t0 + (t1 - t0) * frac
+            };
+            // Up to the edge's end, which the next edge's first sample is.
+            for i in 0..n {
+                let (t, next) = (at(i), at(i + 1));
+                let pt = edge.curve().evaluate_with_endpoints(t, start_pos, end_pos);
+                if is_curved {
+                    let end = edge
+                        .curve()
+                        .evaluate_with_endpoints(next, start_pos, end_pos);
+                    let mid =
+                        edge.curve()
+                            .evaluate_with_endpoints(0.5 * (t + next), start_pos, end_pos);
+                    max_sag = max_sag.max(point_to_segment(mid, pt, end));
+                }
+                ring.push(pt);
             }
         }
+        all_points.extend_from_slice(&ring);
+        hole_points.push(ring);
     }
 
     let Some(bbox) = Aabb3::try_from_points(all_points) else {
@@ -233,11 +271,16 @@ fn build_face_containment(
             let margin = (2.0 * max_sag).max(tol.linear * 10.0);
             let frame = PlaneFrame::from_normal_and_point(*normal, outer_points[0]);
             let polygon: Vec<Point2> = outer_points.iter().map(|&p| frame.project(p)).collect();
+            let holes = hole_points
+                .iter()
+                .map(|ring| ring.iter().map(|&p| frame.project(p)).collect())
+                .collect();
             return Ok(FaceContainment {
                 bbox: bbox.expanded(margin),
                 planar: Some(PlanarContainment {
                     frame,
                     polygon,
+                    holes,
                     margin,
                 }),
             });
@@ -272,13 +315,14 @@ fn point_to_segment(p: Point3, a: Point3, b: Point3) -> f64 {
     (p - (a + ab * f)).length()
 }
 
-/// Check each edge against each face.
-#[allow(clippy::too_many_lines)]
 /// A face's own trim, to read where a point of its surface lies on it.
 #[derive(Clone, Copy)]
 enum OnFace<'a> {
     Lateral(&'a crate::classifier::LateralTrim),
+    /// A plane face bounded by lines and arcs, read on them exactly.
     Plane(&'a super::fill_face_info::PlaneRegion),
+    /// A plane face with a NURBS edge in its boundary, read on sampled loops.
+    Sampled(&'a PlanarContainment),
 }
 
 impl OnFace<'_> {
@@ -287,6 +331,10 @@ impl OnFace<'_> {
         match self {
             Self::Lateral(trim) => trim.holds(p, near),
             Self::Plane(region) => region.holds(p, near),
+            Self::Sampled(region) => {
+                let (on, close) = region.reads(p, near);
+                on || close
+            }
         }
     }
 
@@ -295,6 +343,10 @@ impl OnFace<'_> {
         match self {
             Self::Lateral(trim) => trim.holds_clear(p, near),
             Self::Plane(region) => region.holds_clear(p, near),
+            Self::Sampled(region) => {
+                let (on, close) = region.reads(p, near);
+                on && !close
+            }
         }
     }
 }
@@ -333,6 +385,7 @@ fn stands_in_for_a_section(
     on_nurbs
 }
 
+/// Check each edge against each face.
 #[allow(clippy::too_many_lines)]
 fn check_edge_face_pairs(
     topo: &mut Topology,
@@ -474,6 +527,7 @@ fn check_edge_face_pairs(
                             })
                             .as_ref()
                             .map(OnFace::Plane)
+                            .or_else(|| containments[face_idx].planar.as_ref().map(OnFace::Sampled))
                     };
                     let at = |k: u32| {
                         let t = (t1 - t0).mul_add(f64::from(k) / f64::from(n_chk), t0);
@@ -488,6 +542,9 @@ fn check_edge_face_pairs(
                             && (1..n_chk).all(|k| trim.holds(at(k), near))
                     }) {
                         log::debug!("EF: edge {eid:?} lies inside face {fid:?}");
+                        if planar {
+                            arena.plane_section_edges.insert(eid);
+                        }
                         arena.interference.ef.push(Interference::EF {
                             edge: eid,
                             face: fid,
@@ -560,6 +617,9 @@ fn check_edge_face_pairs(
                                 log::debug!(
                                     "EF: edge {eid:?} lies inside face {fid:?} around t={t_mid:.6}"
                                 );
+                                if planar {
+                                    arena.plane_section_edges.insert(eid);
+                                }
                                 arena.interference.ef.push(Interference::EF {
                                     edge: eid,
                                     face: fid,
