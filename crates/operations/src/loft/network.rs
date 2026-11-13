@@ -207,7 +207,22 @@ pub fn loft_with_options(
     if options.is_plain() {
         return super::loft_smooth(topo, profiles);
     }
-    Ok(network_loft(topo, profiles, options)?.0)
+    Ok(network_loft(topo, profiles, options, false)?.0)
+}
+
+/// The loft through `profiles` that keeps their edges' curves: one face along
+/// each pair of paired edges, smooth across the profiles, or `ruled`, straight
+/// from each profile to the next with an edge along every profile between.
+///
+/// # Errors
+///
+/// As [`loft_with_options`] without rails or conditions.
+pub(super) fn skin_loft(
+    topo: &mut Topology,
+    profiles: &[FaceId],
+    ruled: bool,
+) -> Result<SolidId, OperationsError> {
+    Ok(network_loft(topo, profiles, &LoftOptions::default(), ruled)?.0)
 }
 
 /// The faces of the loft [`loft_with_options`] makes but its two caps, as an
@@ -236,7 +251,7 @@ pub fn loft_sides_with_options(
             .collect();
         return super::loft_sides(topo, solid, &ends);
     }
-    let (_, sides) = network_loft(topo, profiles, options)?;
+    let (_, sides) = network_loft(topo, profiles, options, false)?;
     Ok(topo.add_shell(Shell::new(sides)?))
 }
 
@@ -246,6 +261,7 @@ fn network_loft(
     topo: &mut Topology,
     profiles: &[FaceId],
     options: &LoftOptions,
+    ruled: bool,
 ) -> Result<(SolidId, Vec<FaceId>), OperationsError> {
     if profiles.len() < 2 {
         return Err(refuse("loft requires at least 2 profiles"));
@@ -283,7 +299,12 @@ fn network_loft(
     let last = rings.len() - 1;
 
     let params = section_params(&rings, &rails)?;
-    let skin = SkinSpace::new(params, !options.start.is_free(), !options.end.is_free())?;
+    let skin = SkinSpace::new(
+        params,
+        !options.start.is_free(),
+        !options.end.is_free(),
+        ruled,
+    )?;
     let rail_curves = rails
         .iter()
         .map(|rail| rail.on_params(&skin.params))
@@ -400,7 +421,7 @@ fn network_loft(
             "the loft's surface runs back over itself: a weight or a rail carries it past where it comes back through",
         ));
     }
-    let bands = v_bands(v_degree, &v_knots, &sides);
+    let bands = v_bands(v_degree, &v_knots, &sides, ruled && v_degree == 1);
     let mut band_surfaces = Vec::with_capacity(bands.len());
     for band in &bands {
         let surfaces: Vec<FaceSurface> = sides
@@ -1724,7 +1745,9 @@ struct SkinSpace {
 }
 
 impl SkinSpace {
-    fn new(params: Vec<f64>, start: bool, end: bool) -> Result<Self, OperationsError> {
+    /// `ruled` runs straight from each profile to the next: degree one, which
+    /// no end condition can bend.
+    fn new(params: Vec<f64>, start: bool, end: bool, ruled: bool) -> Result<Self, OperationsError> {
         let mut sites = Vec::with_capacity(params.len() + 2);
         if start {
             sites.push(params[0]);
@@ -1734,7 +1757,11 @@ impl SkinSpace {
             sites.push(params[params.len() - 1]);
         }
         let n = sites.len();
-        let degree = (n - 1).min(3);
+        let degree = if ruled && !start && !end {
+            1
+        } else {
+            (n - 1).min(3)
+        };
         let mut knots = vec![params[0]; degree + 1];
         for j in 1..n - degree {
             #[allow(clippy::cast_precision_loss)]
@@ -2795,8 +2822,10 @@ struct Band {
 /// different fractions of their parameters. A crease inside a NURBS face has
 /// no edge to tell it by, and no mesh of the face that follows the deflection
 /// settles around it. A full knot the sides run smoothly through, as a fitted
-/// rail's joints have, stays inside its band.
-fn v_bands(degree: usize, knots: &[f64], sides: &[SideNet]) -> Vec<Band> {
+/// rail's joints have, stays inside its band. A ruled loft's bands end
+/// `at_every_profile`, creased there or not, as a loft of lines and arcs has
+/// an edge along each of its profiles.
+fn v_bands(degree: usize, knots: &[f64], sides: &[SideNet], at_every_profile: bool) -> Vec<Band> {
     let mut cuts = Vec::new();
     let mut first = degree + 1;
     let interior_end = knots.len() - degree - 1;
@@ -2807,7 +2836,7 @@ fn v_bands(degree: usize, knots: &[f64], sides: &[SideNet]) -> Vec<Band> {
             .count();
         if count >= degree {
             let r = first + count - degree - 1;
-            if sides.iter().any(|side| side.creases_at(r)) {
+            if at_every_profile || sides.iter().any(|side| side.creases_at(r)) {
                 cuts.push((first, r));
             }
         }

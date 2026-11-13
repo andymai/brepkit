@@ -135,6 +135,19 @@ pub fn loft(topo: &mut Topology, profiles: &[FaceId]) -> Result<SolidId, crate::
         return Ok(curved_solid);
     }
 
+    // Profiles with a spline edge are skinned along their edges' own curves.
+    // The polygon path below reads such an edge as the chord between its
+    // vertices, and refuses a profile of two of them. Lines and arcs the path
+    // above does not pair keep the polygon path.
+    let skin_error = if curved_profiles(topo, profiles) == CurvedProfiles::Free {
+        match network::skin_loft(topo, profiles, true) {
+            Ok(solid) => return Ok(solid),
+            Err(e) => Some(e),
+        }
+    } else {
+        None
+    };
+
     let mut profile_verts: Vec<Vec<Point3>> = Vec::with_capacity(profiles.len());
     for &fid in profiles {
         let verts = face_polygon(topo, fid)?;
@@ -145,9 +158,11 @@ pub fn loft(topo: &mut Topology, profiles: &[FaceId]) -> Result<SolidId, crate::
     // between different-resolution profiles (e.g. rectangle ↔ circle) works.
     let n = profile_verts.iter().map(Vec::len).max().unwrap_or(0);
     if n < 3 {
-        return Err(crate::OperationsError::InvalidInput {
-            reason: "loft profiles must have at least 3 vertices".into(),
-        });
+        return Err(
+            skin_error.unwrap_or_else(|| crate::OperationsError::InvalidInput {
+                reason: "loft profiles must have at least 3 vertices".into(),
+            }),
+        );
     }
     for verts in &mut profile_verts {
         if verts.len() != n {
@@ -649,6 +664,73 @@ fn profile_oriented_edges(topo: &Topology, fid: FaceId) -> Option<Vec<ProfileEdg
         face.outer_wire(),
         recognized_loosely,
     )?))
+}
+
+/// What of planar profiles' outer wires the polygon paths cannot follow.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CurvedProfiles {
+    /// Every edge is a straight line, or a profile is not a planar face: a
+    /// profile on a curved face has its own caps to fill, which the polygon
+    /// paths do.
+    No,
+    /// Some edge is an arc of a circle, and the rest are lines or arcs.
+    Arcs,
+    /// Some edge is a spline or an arc of an ellipse, which the polygon paths
+    /// read as the chord between its vertices, or a profile is a lens of two
+    /// curved edges, whose vertices bound nothing.
+    Free,
+}
+
+/// The curved edges of `profiles`, a spline that encodes a line or a circle
+/// to the linear tolerance counting as one.
+fn curved_profiles(topo: &Topology, profiles: &[FaceId]) -> CurvedProfiles {
+    let mut found = CurvedProfiles::No;
+    for &fid in profiles {
+        let Ok(face) = topo.face(fid) else {
+            return CurvedProfiles::No;
+        };
+        if !matches!(face.surface(), FaceSurface::Plane { .. }) {
+            return CurvedProfiles::No;
+        }
+        // Read to the linear tolerance: a spline a looser reading takes for
+        // its chord is still the curve the loft should follow.
+        let Some(edges) = wire_oriented_edges(topo, face.outer_wire(), recognized_closely) else {
+            return CurvedProfiles::No;
+        };
+        let all_lines = edges.iter().all(|e| matches!(e.curve, EdgeCurve::Line));
+        let lone_circle =
+            matches!(edges.as_slice(), [e] if matches!(e.curve, EdgeCurve::Circle(_)));
+        if edges
+            .iter()
+            .any(|e| !matches!(e.curve, EdgeCurve::Line | EdgeCurve::Circle(_)))
+            || (edges.len() < 3 && !all_lines && !lone_circle)
+        {
+            found = CurvedProfiles::Free;
+        } else if !all_lines && found == CurvedProfiles::No {
+            found = CurvedProfiles::Arcs;
+        }
+    }
+    found
+}
+
+/// The line or circle `curve` encodes to within the linear tolerance at
+/// samples of it, if any.
+fn recognized_closely(
+    curve: &brepkit_math::nurbs::curve::NurbsCurve,
+    _: Point3,
+    _: Point3,
+) -> Option<EdgeCurve> {
+    match brepkit_geometry::convert::recognize_curve(curve, Tolerance::new().linear) {
+        brepkit_geometry::convert::RecognizedCurve::Circle {
+            center,
+            normal,
+            radius,
+        } => brepkit_math::curves::Circle3D::new(center, normal, radius)
+            .ok()
+            .map(EdgeCurve::Circle),
+        brepkit_geometry::convert::RecognizedCurve::Line { .. } => Some(EdgeCurve::Line),
+        _ => None,
+    }
 }
 
 /// The line or circle `curve` encodes to within a hundred times the linear
@@ -1836,6 +1918,20 @@ fn smooth_rails_loft(
 ) -> Result<SolidId, crate::OperationsError> {
     let tol = Tolerance::new();
 
+    // Profiles with a curved edge are skinned along their edges' own curves:
+    // the rails below run through the profiles' vertices alone.
+    let skin_error = if start.is_none()
+        && end.is_none()
+        && curved_profiles(topo, profiles) != CurvedProfiles::No
+    {
+        match network::skin_loft(topo, profiles, false) {
+            Ok(solid) => return Ok(solid),
+            Err(e) => Some(e),
+        }
+    } else {
+        None
+    };
+
     let mut profile_verts: Vec<Vec<Point3>> = Vec::with_capacity(profiles.len());
     for &fid in profiles {
         let verts = face_polygon(topo, fid)?;
@@ -1844,9 +1940,11 @@ fn smooth_rails_loft(
 
     let n = profile_verts.iter().map(Vec::len).max().unwrap_or(0);
     if n < 3 {
-        return Err(crate::OperationsError::InvalidInput {
-            reason: "loft profiles must have at least 3 vertices".into(),
-        });
+        return Err(
+            skin_error.unwrap_or_else(|| crate::OperationsError::InvalidInput {
+                reason: "loft profiles must have at least 3 vertices".into(),
+            }),
+        );
     }
     for verts in &mut profile_verts {
         if verts.len() != n {

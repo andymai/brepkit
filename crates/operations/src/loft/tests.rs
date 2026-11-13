@@ -1286,3 +1286,277 @@ fn rail_interpolation_hits_every_point_across_many_profiles() {
         assert!((at - q).length() < 1e-9, "rail misses {q:?} at {t}: {at:?}");
     }
 }
+
+/// An aerofoil section in the plane `x = r`: an upper and a lower spline
+/// from the leading edge to the trailing edge and back.
+fn make_aerofoil_at(topo: &mut Topology, r: f64, chord: f64, stagger: f64) -> FaceId {
+    let n = 12;
+    let at = |x: f64, side: f64| {
+        let yc = 0.36 * x * (1.0 - x);
+        let yt = 0.425
+            * (0.2969 * x.sqrt() - 0.126 * x - 0.3516 * x * x + 0.2843 * x.powi(3)
+                - 0.1036 * x.powi(4));
+        let a = (x - 0.5) * chord;
+        let b = (yc + side * yt) * chord;
+        Point3::new(
+            r,
+            a * stagger.sin() + b * stagger.cos(),
+            22.0 + a * stagger.cos() - b * stagger.sin(),
+        )
+    };
+    let xs: Vec<f64> = (0..=n)
+        .map(|i| 0.5 * (1.0 - (std::f64::consts::PI * f64::from(i) / f64::from(n)).cos()))
+        .collect();
+    let upper: Vec<Point3> = xs.iter().map(|&x| at(x, 1.0)).collect();
+    let lower: Vec<Point3> = xs.iter().rev().map(|&x| at(x, -1.0)).collect();
+    let le = topo.add_vertex(Vertex::new(upper[0], 1e-7));
+    let te = topo.add_vertex(Vertex::new(upper[n as usize], 1e-7));
+    let up = brepkit_math::nurbs::fitting::interpolate(&upper, 3).unwrap();
+    let lo = brepkit_math::nurbs::fitting::interpolate(&lower, 3).unwrap();
+    let e_up = topo.add_edge(Edge::new(le, te, EdgeCurve::NurbsCurve(up)));
+    let e_lo = topo.add_edge(Edge::new(te, le, EdgeCurve::NurbsCurve(lo)));
+    let wire = Wire::new(
+        vec![OrientedEdge::new(e_up, true), OrientedEdge::new(e_lo, true)],
+        true,
+    )
+    .unwrap();
+    let wid = topo.add_wire(wire);
+    topo.add_face(Face::new(
+        wid,
+        vec![],
+        FaceSurface::Plane {
+            normal: Vec3::new(1.0, 0.0, 0.0),
+            d: r,
+        },
+    ))
+}
+
+/// The area a section of `make_aerofoil_at` bounds, from a fine polygon of it.
+fn aerofoil_area(chord: f64) -> f64 {
+    // The section is its unit shape scaled by the chord, whatever its stagger.
+    let n = 20_000;
+    let half = |x: f64| {
+        0.425
+            * (0.2969 * x.sqrt() - 0.126 * x - 0.3516 * x * x + 0.2843 * x.powi(3)
+                - 0.1036 * x.powi(4))
+    };
+    let unit: f64 = (0..n)
+        .map(|i| {
+            let x = (f64::from(i) + 0.5) / f64::from(n);
+            2.0 * half(x) / f64::from(n)
+        })
+        .sum();
+    unit * chord * chord
+}
+
+fn surface_kinds(topo: &Topology, solid: SolidId) -> Vec<&'static str> {
+    brepkit_topology::explorer::solid_faces(topo, solid)
+        .unwrap()
+        .iter()
+        .map(|&f| topo.face(f).unwrap().surface().type_tag())
+        .collect()
+}
+
+#[test]
+fn loft_smooth_keeps_the_splines_of_two_edge_profiles() {
+    // Three identical aerofoil sections, each an upper and a lower spline:
+    // the loft is the prism on the section, which a loft through the two
+    // vertices alone cannot be.
+    let mut topo = Topology::new();
+    let faces = [
+        make_aerofoil_at(&mut topo, 0.0, 40.0, 0.5),
+        make_aerofoil_at(&mut topo, 30.0, 40.0, 0.5),
+        make_aerofoil_at(&mut topo, 60.0, 40.0, 0.5),
+    ];
+    let solid = loft_smooth(&mut topo, &faces).unwrap();
+
+    assert_eq!(
+        surface_kinds(&topo, solid),
+        ["plane", "nurbs", "nurbs", "plane"]
+    );
+    assert!(
+        crate::validate::validate_solid(&topo, solid)
+            .unwrap()
+            .is_valid()
+    );
+    let volume = crate::measure::solid_volume(&topo, solid, 0.005).unwrap();
+    let expected = aerofoil_area(40.0) * 60.0;
+    assert!(
+        (volume - expected).abs() < 2e-3 * expected,
+        "volume {volume} should be the prism's {expected}"
+    );
+}
+
+#[test]
+fn loft_smooth_through_twisted_aerofoil_sections_is_a_valid_blade() {
+    let mut topo = Topology::new();
+    let faces = [
+        make_aerofoil_at(&mut topo, 28.0, 40.0, 0.42),
+        make_aerofoil_at(&mut topo, 63.0, 41.0, 0.76),
+        make_aerofoil_at(&mut topo, 99.0, 42.0, 1.1),
+    ];
+    let solid = loft_smooth(&mut topo, &faces).unwrap();
+
+    assert_eq!(
+        surface_kinds(&topo, solid),
+        ["plane", "nurbs", "nurbs", "plane"]
+    );
+    assert!(
+        crate::validate::validate_solid(&topo, solid)
+            .unwrap()
+            .is_valid()
+    );
+    // Between the prisms on its smallest and largest sections.
+    let volume = crate::measure::solid_volume(&topo, solid, 0.005).unwrap();
+    assert!(volume > aerofoil_area(40.0) * 71.0 && volume < aerofoil_area(42.0) * 71.0);
+}
+
+#[test]
+fn loft_ruled_keeps_the_splines_of_two_edge_profiles() {
+    // Two sections, the second the first scaled by a half about a point on
+    // the stacking axis: a frustum of the section's cone.
+    let mut topo = Topology::new();
+    let faces = [
+        make_aerofoil_at(&mut topo, 0.0, 40.0, 0.5),
+        make_aerofoil_at(&mut topo, 50.0, 20.0, 0.5),
+    ];
+    let solid = loft(&mut topo, &faces).unwrap();
+
+    assert_eq!(
+        surface_kinds(&topo, solid),
+        ["plane", "nurbs", "nurbs", "plane"]
+    );
+    assert!(
+        crate::validate::validate_solid(&topo, solid)
+            .unwrap()
+            .is_valid()
+    );
+    let (a0, a1) = (aerofoil_area(40.0), aerofoil_area(20.0));
+    let expected = 50.0 / 3.0 * (a0 + a1 + (a0 * a1).sqrt());
+    let volume = crate::measure::solid_volume(&topo, solid, 0.005).unwrap();
+    assert!(
+        (volume - expected).abs() < 2e-3 * expected,
+        "volume {volume} should be the frustum's {expected}"
+    );
+}
+
+#[test]
+fn loft_ruled_through_three_spline_profiles_has_an_edge_along_the_middle_one() {
+    let mut topo = Topology::new();
+    let faces = [
+        make_aerofoil_at(&mut topo, 0.0, 40.0, 0.5),
+        make_aerofoil_at(&mut topo, 30.0, 20.0, 0.5),
+        make_aerofoil_at(&mut topo, 60.0, 40.0, 0.5),
+    ];
+    let solid = loft(&mut topo, &faces).unwrap();
+
+    // Two side faces to each band, straight from one section to the next.
+    assert_eq!(
+        surface_kinds(&topo, solid),
+        ["plane", "nurbs", "nurbs", "nurbs", "nurbs", "plane"]
+    );
+    assert!(
+        crate::validate::validate_solid(&topo, solid)
+            .unwrap()
+            .is_valid()
+    );
+    let (a0, a1) = (aerofoil_area(40.0), aerofoil_area(20.0));
+    let expected = 2.0 * 30.0 / 3.0 * (a0 + a1 + (a0 * a1).sqrt());
+    let volume = crate::measure::solid_volume(&topo, solid, 0.005).unwrap();
+    assert!(
+        (volume - expected).abs() < 2e-3 * expected,
+        "volume {volume} should be the two frusta's {expected}"
+    );
+}
+
+#[test]
+fn loft_ruled_through_identical_spline_profiles_has_a_band_to_each_pair() {
+    // Nothing creases at the middle section, and it still ends the faces.
+    let mut topo = Topology::new();
+    let faces = [
+        make_aerofoil_at(&mut topo, 0.0, 40.0, 0.5),
+        make_aerofoil_at(&mut topo, 30.0, 40.0, 0.5),
+        make_aerofoil_at(&mut topo, 60.0, 40.0, 0.5),
+    ];
+    let solid = loft(&mut topo, &faces).unwrap();
+
+    assert_eq!(
+        surface_kinds(&topo, solid),
+        ["plane", "nurbs", "nurbs", "nurbs", "nurbs", "plane"]
+    );
+    assert!(
+        crate::validate::validate_solid(&topo, solid)
+            .unwrap()
+            .is_valid()
+    );
+    let expected = aerofoil_area(40.0) * 60.0;
+    let volume = crate::measure::solid_volume(&topo, solid, 0.005).unwrap();
+    assert!(
+        (volume - expected).abs() < 2e-3 * expected,
+        "volume {volume} should be the prism's {expected}"
+    );
+}
+
+/// A lens in the plane `z`: two quadratic splines from (-10, 0) to (10, 0)
+/// and back, bowed `bow` to either side of the chord between them.
+fn make_lens_at(topo: &mut Topology, z: f64, bow: f64) -> FaceId {
+    let a = topo.add_vertex(Vertex::new(Point3::new(-10.0, 0.0, z), 1e-7));
+    let b = topo.add_vertex(Vertex::new(Point3::new(10.0, 0.0, z), 1e-7));
+    let arc = |from: f64, side: f64| {
+        brepkit_math::nurbs::curve::NurbsCurve::new(
+            2,
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            vec![
+                Point3::new(from, 0.0, z),
+                // A quadratic's middle point stands twice its bow off the chord.
+                Point3::new(0.0, 2.0 * side * bow, z),
+                Point3::new(-from, 0.0, z),
+            ],
+            vec![1.0; 3],
+        )
+        .unwrap()
+    };
+    let lower = topo.add_edge(Edge::new(a, b, EdgeCurve::NurbsCurve(arc(-10.0, -1.0))));
+    let upper = topo.add_edge(Edge::new(b, a, EdgeCurve::NurbsCurve(arc(10.0, 1.0))));
+    let wire = Wire::new(
+        vec![
+            OrientedEdge::new(lower, true),
+            OrientedEdge::new(upper, true),
+        ],
+        true,
+    )
+    .unwrap();
+    let wid = topo.add_wire(wire);
+    topo.add_face(Face::new(
+        wid,
+        vec![],
+        FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: z,
+        },
+    ))
+}
+
+#[test]
+fn loft_follows_splines_a_loose_reading_takes_for_lines() {
+    // Each edge stands 5e-6 off its chord: a line to a hundred times the
+    // linear tolerance, and a spline to the tolerance itself.
+    for smooth in [false, true] {
+        let mut topo = Topology::new();
+        let faces = [
+            make_lens_at(&mut topo, 0.0, 5e-6),
+            make_lens_at(&mut topo, 5.0, 5e-6),
+            make_lens_at(&mut topo, 10.0, 5e-6),
+        ];
+        let solid = if smooth {
+            loft_smooth(&mut topo, &faces)
+        } else {
+            loft(&mut topo, &faces)
+        }
+        .unwrap();
+        assert!(
+            surface_kinds(&topo, solid).contains(&"nurbs"),
+            "smooth {smooth}"
+        );
+    }
+}
