@@ -7,6 +7,7 @@
 //! logic. Bug fixes should be applied here first; the operations copy
 //! will be deleted during the GFA step 5 switchover.
 
+use brepkit_math::madd::Madd;
 use brepkit_math::predicates::point_in_polygon;
 use brepkit_math::tolerance::Tolerance;
 use brepkit_math::vec::{Point2, Point3, Vec3};
@@ -247,7 +248,7 @@ impl CurvePiece {
         let pieces: u32 = if closed { 64 } else { 32 };
         let mut samples: Vec<(f64, f64, f64)> = (0..=pieces)
             .map(|k| {
-                let t = (t1 - t0).mul_add(f64::from(k) / f64::from(pieces), t0);
+                let t = (t1 - t0).madd(f64::from(k) / f64::from(pieces), t0);
                 let q = rim_flat(&frame, curve.evaluate_with_endpoints(t, start, end));
                 (t, q.x(), q.y())
             })
@@ -291,7 +292,7 @@ impl CurvePiece {
             && let (Some(&a), Some(&b)) = (self.samples.last(), self.samples.first())
             && crosses(a, b)
         {
-            let x = (b.1 - a.1).mul_add((q.y() - a.2) / (b.2 - a.2), a.1);
+            let x = (b.1 - a.1).madd((q.y() - a.2) / (b.2 - a.2), a.1);
             if x > q.x() {
                 odd = !odd;
             }
@@ -304,13 +305,13 @@ impl CurvePiece {
         self.samples.windows(2).any(|w| {
             let (ax, ay, bx, by) = (w[0].1, w[0].2, w[1].1, w[1].2);
             let (sx, sy, px, py) = (bx - ax, by - ay, q.x() - ax, q.y() - ay);
-            let len2 = sx.mul_add(sx, sy * sy);
+            let len2 = sx.madd(sx, sy * sy);
             let s = if len2 > 0.0 {
-                (px.mul_add(sx, py * sy) / len2).clamp(0.0, 1.0)
+                (px.madd(sx, py * sy) / len2).clamp(0.0, 1.0)
             } else {
                 0.0
             };
-            sx.mul_add(-s, px).hypot(sy.mul_add(-s, py)) <= near
+            sx.madd(-s, px).hypot(sy.madd(-s, py)) <= near
         })
     }
 
@@ -353,7 +354,7 @@ impl CurvePiece {
                 side = 1;
             }
         }
-        (x_hi - x_lo).mul_add(g_lo / (g_lo - g_hi), x_lo)
+        (x_hi - x_lo).madd(g_lo / (g_lo - g_hi), x_lo)
     }
 }
 
@@ -1126,9 +1127,9 @@ fn dist_to_polygon_boundary(p: Point3, verts: &[Point3]) -> f64 {
             0.0
         };
         let foot = Point3::new(
-            ab.x().mul_add(t, a.x()),
-            ab.y().mul_add(t, a.y()),
-            ab.z().mul_add(t, a.z()),
+            ab.x().madd(t, a.x()),
+            ab.y().madd(t, a.y()),
+            ab.z().madd(t, a.z()),
         );
         best = best.min((p - foot).length());
     }
@@ -1738,7 +1739,7 @@ fn extrusion_geom(
         let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
         whole &= (1..8).all(|k| {
             on_patch_edge(edge.curve().evaluate_with_endpoints(
-                (t1 - t0).mul_add(f64::from(k) / 8.0, t0),
+                (t1 - t0).madd(f64::from(k) / 8.0, t0),
                 sp,
                 ep,
             ))
@@ -1807,7 +1808,7 @@ fn nurbs_geom(
     if !(u1 > u0 && v1 > v0) {
         return Ok(None);
     }
-    let lerp = |a: f64, b: f64, k: u32| (b - a).mul_add(f64::from(k) / f64::from(SAMPLES), a);
+    let lerp = |a: f64, b: f64, k: u32| (b - a).madd(f64::from(k) / f64::from(SAMPLES), a);
     let iso_u = |u: f64| -> Vec<Point3> {
         (0..=SAMPLES)
             .map(|k| surface.evaluate(u, lerp(v0, v1, k)))
@@ -1853,8 +1854,24 @@ fn nurbs_geom(
         u_len,
         v_len,
     };
-    let Some(uv) = UvTrim::new_bending(topo, face, &|p| trim.project(surface, p), &|_| u_len)?
-    else {
+    // The wires' samples follow one another along each edge, so Newton from
+    // the sample before lands on the next. On this surface a point has one
+    // `(u, v)`, so a foot at the sample is the one a search of the whole
+    // surface finds; a foot off it sends that sample to the search.
+    let last = std::cell::Cell::new(None::<(f64, f64)>);
+    let project = |p: Point3| {
+        let warm = last.get().and_then(|from| {
+            brepkit_math::nurbs::projection::project_point_to_surface_from(surface, p, from, 1e-12)
+                .ok()
+                .filter(|q| q.distance <= 64.0 * f64::EPSILON * size.max(1.0))
+        });
+        let found = warm.or_else(|| {
+            brepkit_math::nurbs::projection::project_point_to_surface(surface, p, 1e-12).ok()
+        });
+        last.set(found.map(|q| (q.u, q.v)));
+        found.map_or_else(|| trim.scaled(u0, v0), |q| trim.scaled(q.u, q.v))
+    };
+    let Some(uv) = UvTrim::new_bending(topo, face, &project, &|_| u_len)? else {
         return Ok(None);
     };
     trim.trim = uv;
@@ -1933,8 +1950,7 @@ impl ExtrusionTrim {
         ) else {
             return Ok(None);
         };
-        let at =
-            |k: i32| flat.evaluate((domain.1 - domain.0).mul_add(f64::from(k) / 64.0, domain.0));
+        let at = |k: i32| flat.evaluate((domain.1 - domain.0).madd(f64::from(k) / 64.0, domain.0));
         let length = (1..=64).map(|k| (at(k) - at(k - 1)).length()).sum::<f64>() / turn;
         if length <= 1e-12 {
             return Ok(None);
@@ -2033,7 +2049,7 @@ impl UvTrim {
                 let pieces = if is_line && !bends { 1 } else { PIECES };
                 let mut samples: Vec<(f64, f64, f64)> = (0..=pieces)
                     .map(|i| {
-                        let t = (t1 - t0).mul_add(f64::from(i) / f64::from(pieces), t0);
+                        let t = (t1 - t0).madd(f64::from(i) / f64::from(pieces), t0);
                         let (u, v) = at(t);
                         (t, u, v)
                     })
@@ -2185,13 +2201,13 @@ impl UvTrim {
                 // Beside the piece: its chord's distance in `(u·r, v)`.
                 let (px, py) = (-g.0 * radius, v - a.2);
                 let (sx, sy) = ((g.1 - g.0) * radius, b.2 - a.2);
-                let len2 = sx.mul_add(sx, sy * sy);
+                let len2 = sx.madd(sx, sy * sy);
                 let s = if len2 > 0.0 {
-                    (px.mul_add(sx, py * sy) / len2).clamp(0.0, 1.0)
+                    (px.madd(sx, py * sy) / len2).clamp(0.0, 1.0)
                 } else {
                     0.0
                 };
-                suspicious |= sx.mul_add(-s, px).hypot(sy.mul_add(-s, py)) <= near;
+                suspicious |= sx.madd(-s, px).hypot(sy.madd(-s, py)) <= near;
             }
         }
         (crossings % 2 == 1, suspicious)
@@ -2267,16 +2283,16 @@ fn u_turn(at: &dyn Fn(f64) -> (f64, f64), ta: f64, tb: f64, peak: bool) -> (f64,
     };
     let g = 0.5 * (5.0_f64.sqrt() - 1.0);
     let (mut a, mut b) = (ta, tb);
-    let (mut c, mut d) = (g.mul_add(a - b, b), g.mul_add(b - a, a));
+    let (mut c, mut d) = (g.madd(a - b, b), g.madd(b - a, a));
     let (mut kc, mut kd) = (key(c), key(d));
     for _ in 0..60 {
         if kc < kd {
             (b, d, kd) = (d, c, kc);
-            c = g.mul_add(a - b, b);
+            c = g.madd(a - b, b);
             kc = key(c);
         } else {
             (a, c, kc) = (c, d, kd);
-            d = g.mul_add(b - a, a);
+            d = g.madd(b - a, a);
             kd = key(d);
         }
     }
@@ -2410,7 +2426,7 @@ impl UvEdge {
                 side = 1;
             }
         }
-        (v_hi - v_lo).mul_add(g_lo / (g_lo - g_hi), v_lo)
+        (v_hi - v_lo).madd(g_lo / (g_lo - g_hi), v_lo)
     }
 }
 
@@ -2840,8 +2856,8 @@ fn sphere_hits(
     let m = origin - surface.center();
     let a = ray_dir.dot(ray_dir);
     let b = 2.0 * m.dot(ray_dir);
-    let c = r.mul_add(-r, m.dot(m));
-    let disc = b.mul_add(b, -4.0 * a * c);
+    let c = r.madd(-r, m.dot(m));
+    let disc = b.madd(b, -4.0 * a * c);
     if disc < 1e-12 * a * r * r {
         return [None, None];
     }
@@ -2966,7 +2982,7 @@ fn sphere_wire_turns(wires: &[Vec<Point3>], frame: &SphereFrame) -> Option<Vec<(
                 if du.abs() > std::f64::consts::FRAC_PI_4 {
                     return None;
                 }
-                twice_area += u.mul_add(b.1, -(u + du) * a.1);
+                twice_area += u.madd(b.1, -(u + du) * a.1);
                 u += du;
                 turn += du;
             }
@@ -3010,7 +3026,7 @@ fn sphere_trim(
             let (t0, t1) = curve.domain_with_endpoints(start, end);
             let mut run: Vec<Point3> = (0..=SAMPLES)
                 .map(|k| {
-                    let t = (t1 - t0).mul_add(f64::from(k) / f64::from(SAMPLES), t0);
+                    let t = (t1 - t0).madd(f64::from(k) / f64::from(SAMPLES), t0);
                     curve.evaluate_with_endpoints(t, start, end)
                 })
                 .collect();
@@ -3514,10 +3530,8 @@ fn ray_cylinder_crossings(
         return (0, false);
     }
     let b = 2.0 * m_perp.dot(d_perp);
-    let c = surface
-        .radius()
-        .mul_add(-surface.radius(), m_perp.dot(m_perp));
-    let disc = b.mul_add(b, -4.0 * a * c);
+    let c = surface.radius().madd(-surface.radius(), m_perp.dot(m_perp));
+    let disc = b.madd(b, -4.0 * a * c);
     // Treat near-tangent rays as misses: counting one graze flips parity.
     if disc < 1e-12 * a * surface.radius() * surface.radius() {
         return (0, false);
@@ -3702,11 +3716,10 @@ pub fn partial_revolution_band(
         let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
         let u_at = |f: f64| {
             surface
-                .project_point(edge.curve().evaluate_with_endpoints(
-                    (t1 - t0).mul_add(f, t0),
-                    sp,
-                    ep,
-                ))
+                .project_point(
+                    edge.curve()
+                        .evaluate_with_endpoints((t1 - t0).madd(f, t0), sp, ep),
+                )
                 .0
         };
         let m = u_at(0.5);
@@ -3747,9 +3760,7 @@ fn torus_patch_uv(
 
 /// The distance from the torus axis at tube angle `v`.
 fn torus_radius_at(surface: &brepkit_math::surfaces::ToroidalSurface, v: f64) -> f64 {
-    surface
-        .minor_radius()
-        .mul_add(v.cos(), surface.major_radius())
+    surface.minor_radius().madd(v.cos(), surface.major_radius())
 }
 
 /// A [`FaceGeom::TorusTrim`] for a torus face whose tube angles stay well
@@ -3858,9 +3869,9 @@ fn ray_cone_crossings(
     // `h² − sin²a·|w|² = 0` for w around the apex.
     let d_a = ray_dir.dot(axis);
     let m_a = m.dot(axis);
-    let a = sin2.mul_add(-ray_dir.dot(ray_dir), d_a * d_a);
-    let half_b = sin2.mul_add(-ray_dir.dot(m), d_a * m_a);
-    let c = sin2.mul_add(-m.dot(m), m_a * m_a);
+    let a = sin2.madd(-ray_dir.dot(ray_dir), d_a * d_a);
+    let half_b = sin2.madd(-ray_dir.dot(m), d_a * m_a);
+    let c = sin2.madd(-m.dot(m), m_a * m_a);
 
     let r_max = surface.radius_at(v_min.abs().max(v_max.abs()));
     let mut roots = [None, None];
@@ -3870,7 +3881,7 @@ fn ray_cone_crossings(
         }
         roots[0] = Some(-c / (2.0 * half_b));
     } else {
-        let disc = half_b.mul_add(half_b, -(a * c));
+        let disc = half_b.madd(half_b, -(a * c));
         if disc < 1e-12 * a.abs() * r_max * r_max {
             // A ray through the apex meets the cone in a double root there:
             // it passes the solid's boundary at a point, which no crossing
@@ -4265,7 +4276,7 @@ mod tests {
             vec![vec![1.0; 4]; 2],
         )
         .unwrap();
-        let x = |u: f64, v: f64| v.mul_add(17.0 / 16.0 - v, u);
+        let x = |u: f64, v: f64| v.madd(17.0 / 16.0 - v, u);
         for (u, v) in [(0.2, 0.3), (0.9, 0.7)] {
             let s = surface.evaluate(u, v);
             assert!((s - p(x(u, v), v, v * x(u, v))).length() < 1e-12);
@@ -4623,7 +4634,7 @@ mod tests {
         let mut topo = Topology::default();
         // A thin column's far dome is tiny.
         for w in [3.0, 0.1] {
-            let h = 2.0f64.mul_add(-w * w, 25.0).sqrt();
+            let h = 2.0f64.madd(-w * w, 25.0).sqrt();
             let dome = sphere_patch(
                 &mut topo,
                 5.0,

@@ -4,6 +4,7 @@
 //! this phase creates the corresponding topology: vertices at the intersection
 //! line endpoints and edges connecting them.
 
+use brepkit_math::madd::Madd;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
 use brepkit_topology::edge::{Edge, EdgeCurve, EdgeId};
@@ -87,7 +88,7 @@ fn dist_sq(a: Point3, b: Point3) -> f64 {
     let dx = a.x() - b.x();
     let dy = a.y() - b.y();
     let dz = a.z() - b.z();
-    dx.mul_add(dx, dy.mul_add(dy, dz * dz))
+    dx.madd(dx, dy.madd(dy, dz * dz))
 }
 
 /// Fit a `Circle3D` to sampled points if they lie on a circle within tolerance.
@@ -147,9 +148,9 @@ fn fit_circle_3d(points: &[Point3], tol: f64) -> Option<(brepkit_math::curves::C
     if d_val.abs() < 1e-15 {
         return None;
     }
-    let ax2 = ax.mul_add(ax, ay * ay);
-    let bx2 = bx.mul_add(bx, by * by);
-    let cx2 = cx_l.mul_add(cx_l, cy_l * cy_l);
+    let ax2 = ax.madd(ax, ay * ay);
+    let bx2 = bx.madd(bx, by * by);
+    let cx2 = cx_l.madd(cx_l, cy_l * cy_l);
     let ux = (ax2 * (by - cy_l) + bx2 * (cy_l - ay) + cx2 * (ay - by)) / d_val;
     let uy = (ax2 * (cx_l - bx) + bx2 * (ax - cx_l) + cx2 * (bx - ax)) / d_val;
 

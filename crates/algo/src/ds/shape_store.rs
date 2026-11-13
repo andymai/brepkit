@@ -5,6 +5,7 @@
 //! back to the caller's Topology. This eliminates vertex/edge identity
 //! conflicts between input solids and the GFA result.
 
+use brepkit_math::madd::Madd;
 use std::collections::HashMap;
 
 use brepkit_math::vec::Point3;
@@ -500,7 +501,7 @@ fn widen_tolerances(topo: &mut Topology, solid: SolidId) -> Result<(), AlgoError
                 let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
                 let gap = (1..EDGE_SAMPLES)
                     .map(|k| {
-                        let t = (t1 - t0).mul_add(f64::from(k) / f64::from(EDGE_SAMPLES), t0);
+                        let t = (t1 - t0).madd(f64::from(k) / f64::from(EDGE_SAMPLES), t0);
                         gap_to(edge.curve().evaluate_with_endpoints(t, sp, ep))
                     })
                     .fold(0.0, f64::max);

@@ -4,6 +4,7 @@
 //! surfaces between corresponding profile edges. [`loft_with_options`] lofts
 //! along guide rails and leaves its ends under end conditions.
 
+use brepkit_math::madd::Madd;
 use brepkit_math::nurbs::surface::NurbsSurface;
 use brepkit_math::tolerance::Tolerance;
 use brepkit_math::vec::{Point3, Vec3};
@@ -807,7 +808,7 @@ fn wire_oriented_edges(
                 if leaves.length() <= 1e-12 * run.abs().max(1.0) {
                     leaves = edge
                         .curve()
-                        .evaluate_with_endpoints(run.mul_add(1e-3, from), s, e)
+                        .evaluate_with_endpoints(run.madd(1e-3, from), s, e)
                         - at;
                 }
                 if leaves.dot(c.normal().cross(at - c.center())) >= 0.0 {
@@ -1098,7 +1099,7 @@ fn ray_meets_profile(
                     2.0 * f.dot(dir),
                     f.length_squared() - c.radius() * c.radius(),
                 );
-                let disc = b.mul_add(b, -4.0 * a * k);
+                let disc = b.madd(b, -4.0 * a * k);
                 if a > 0.0 && disc >= 0.0 {
                     let (t0, t1) = e.curve.domain_with_endpoints(e.start, e.end);
                     for s in [
@@ -1273,12 +1274,12 @@ fn turns_one_way_about(p: &[ProfileEdgeGeom], centre: Point3, up: Vec3, tol: f64
             );
             let sense = u.cross(v).dot(up).signum();
             let (a, b) = ((c.center() - centre).dot(u), (c.center() - centre).dot(v));
-            let rate = |t: f64| sense * (r + a.mul_add(t.cos(), b * t.sin()));
+            let rate = |t: f64| sense * (r + a.madd(t.cos(), b * t.sin()));
             let phi = b.atan2(a);
             let first = ((t0 - phi) / std::f64::consts::PI).ceil();
             // An arc spans at most a turn, so holds at most three such t.
             (0..3_u8)
-                .map(|k| (first + f64::from(k)).mul_add(std::f64::consts::PI, phi))
+                .map(|k| (first + f64::from(k)).madd(std::f64::consts::PI, phi))
                 .filter(|&t| t <= t1)
                 .map(rate)
                 .fold(rate(t0).min(rate(t1)), f64::min)
@@ -1665,21 +1666,21 @@ fn rodrigues_rotation(axis: Vec3, angle: f64) -> brepkit_math::mat::Mat4 {
     let (ax, ay, az) = (axis.x(), axis.y(), axis.z());
     brepkit_math::mat::Mat4([
         [
-            omc.mul_add(ax * ax, cos_a),
-            ax.mul_add(ay * omc, -(sin_a * az)),
-            ax.mul_add(az * omc, sin_a * ay),
+            omc.madd(ax * ax, cos_a),
+            ax.madd(ay * omc, -(sin_a * az)),
+            ax.madd(az * omc, sin_a * ay),
             0.0,
         ],
         [
-            ax.mul_add(ay * omc, sin_a * az),
-            omc.mul_add(ay * ay, cos_a),
-            ay.mul_add(az * omc, -(sin_a * ax)),
+            ax.madd(ay * omc, sin_a * az),
+            omc.madd(ay * ay, cos_a),
+            ay.madd(az * omc, -(sin_a * ax)),
             0.0,
         ],
         [
-            ax.mul_add(az * omc, -(sin_a * ay)),
-            ay.mul_add(az * omc, sin_a * ax),
-            omc.mul_add(az * az, cos_a),
+            ax.madd(az * omc, -(sin_a * ay)),
+            ay.madd(az * omc, sin_a * ax),
+            omc.madd(az * az, cos_a),
             0.0,
         ],
         [0.0, 0.0, 0.0, 1.0],

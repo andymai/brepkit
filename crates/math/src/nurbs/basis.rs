@@ -3,6 +3,8 @@
 //! Free functions extracted from curve/surface types so both can share them.
 //! Algorithm numbers refer to Piegl & Tiller, *The NURBS Book*.
 
+use crate::madd::Madd;
+
 /// Maximum degree that uses stack-allocated temporaries in basis functions.
 ///
 /// CAD practice uses at most degree 7 (cubic and quartic are by far the most
@@ -132,7 +134,7 @@ pub fn basis_funs_into(span: usize, u: f64, degree: usize, knots: &[f64], out: &
         let mut saved = 0.0;
         for r in 0..j {
             let temp = out[r] / (right[r + 1] + left[j - r]);
-            out[r] = right[r + 1].mul_add(temp, saved);
+            out[r] = right[r + 1].madd(temp, saved);
             saved = left[j - r] * temp;
         }
         out[j] = saved;
@@ -164,6 +166,73 @@ pub fn basis_funs(span: usize, u: f64, degree: usize, knots: &[f64]) -> Vec<f64>
     clippy::too_many_lines
 )]
 pub fn ders_basis_funs_into(
+    span: usize,
+    u: f64,
+    degree: usize,
+    n_derivs: usize,
+    knots: &[f64],
+    out: &mut [f64],
+) {
+    if n_derivs == 1 && (1..=MAX_STACK_DEGREE).contains(&degree) {
+        first_ders_basis_funs_into(span, u, degree, knots, out);
+        return;
+    }
+    general_ders_basis_funs_into(span, u, degree, n_derivs, knots, out);
+}
+
+/// [`ders_basis_funs_into`] to the first derivative, for a degree from 1 to
+/// `MAX_STACK_DEGREE`: the general algorithm's operations, with the loops
+/// that do nothing at first order left out, so its values bit for bit.
+#[allow(clippy::cast_precision_loss)]
+fn first_ders_basis_funs_into(span: usize, u: f64, p: usize, knots: &[f64], out: &mut [f64]) {
+    let stride = p + 1;
+    let mut ndu = [0.0_f64; (MAX_STACK_DEGREE + 1) * (MAX_STACK_DEGREE + 1)];
+    let mut left = [0.0_f64; MAX_STACK_DEGREE + 1];
+    let mut right = [0.0_f64; MAX_STACK_DEGREE + 1];
+    ndu[0] = 1.0;
+    for j in 1..=p {
+        left[j] = u - knots[span + 1 - j];
+        right[j] = knots[span + j] - u;
+        let mut saved = 0.0;
+        for r in 0..j {
+            ndu[j * stride + r] = right[r + 1] + left[j - r];
+            let temp = ndu[r * stride + j - 1] / ndu[j * stride + r];
+            ndu[r * stride + j] = right[r + 1].madd(temp, saved);
+            saved = left[j - r] * temp;
+        }
+        ndu[j * stride + j] = saved;
+    }
+    for j in 0..=p {
+        out[j] = ndu[j * stride + p];
+    }
+    // The general algorithm at k = 1, from a[0][0] = 1: its inner loop runs
+    // over no j, as r - 1 <= p - 1 for every r.
+    let pk = p - 1;
+    for r in 0..=p {
+        let mut d = if r >= 1 {
+            let a0 = 1.0 / ndu[p * stride + r - 1];
+            a0 * ndu[(r - 1) * stride + pk]
+        } else {
+            0.0
+        };
+        if r <= pk {
+            let a1 = -1.0 / ndu[p * stride + r];
+            d += a1 * ndu[r * stride + pk];
+        }
+        out[stride + r] = d;
+    }
+    let factor = p as f64;
+    for j in 0..=p {
+        out[stride + j] *= factor;
+    }
+}
+
+#[allow(
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::too_many_lines
+)]
+fn general_ders_basis_funs_into(
     span: usize,
     u: f64,
     degree: usize,
@@ -208,7 +277,7 @@ pub fn ders_basis_funs_into(
             ndu[j * stride + r] = right[r + 1] + left[j - r];
             let temp = ndu[r * stride + j - 1] / ndu[j * stride + r];
             // Upper triangle: ndu[r][j]
-            ndu[r * stride + j] = right[r + 1].mul_add(temp, saved);
+            ndu[r * stride + j] = right[r + 1].madd(temp, saved);
             saved = left[j - r] * temp;
         }
         ndu[j * stride + j] = saved;
@@ -332,6 +401,31 @@ mod tests {
 
     // Uniform cubic knot vector: [0, 0, 0, 0, 1, 2, 3, 3, 3, 3]
     // 6 control points, degree 3
+
+    /// The first-order path gives the general algorithm's values bit for
+    /// bit, at every degree it takes, on uneven knots.
+    #[test]
+    fn first_derivatives_match_the_general_algorithm() {
+        for p in 1..=MAX_STACK_DEGREE {
+            let n = p + 6;
+            let mut knots = vec![0.0; p + 1];
+            for i in 1..n - p {
+                let t = i as f64 / (n - p) as f64;
+                knots.push(t * t.madd(0.4, 0.6));
+            }
+            knots.extend(vec![1.0; p + 1]);
+            for i in 0..=200 {
+                let u = f64::from(i) / 200.0;
+                let span = find_span(n, p, u, &knots);
+                let mut fast = vec![0.0; 2 * (p + 1)];
+                let mut general = vec![0.0; 2 * (p + 1)];
+                ders_basis_funs_into(span, u, p, 1, &knots, &mut fast);
+                general_ders_basis_funs_into(span, u, p, 1, &knots, &mut general);
+                let bits = |x: &[f64]| x.iter().map(|v| v.to_bits()).collect::<Vec<_>>();
+                assert_eq!(bits(&fast), bits(&general), "degree {p} at {u}");
+            }
+        }
+    }
     fn cubic_knots() -> Vec<f64> {
         vec![0.0, 0.0, 0.0, 0.0, 1.0, 2.0, 3.0, 3.0, 3.0, 3.0]
     }

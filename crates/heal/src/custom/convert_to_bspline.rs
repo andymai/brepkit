@@ -17,6 +17,7 @@
 //! silently misalign without re-projection. Callers that need pcurves should
 //! recompute them after this op.
 
+use brepkit_math::madd::Madd;
 use std::f64::consts::{FRAC_PI_2, PI, TAU};
 
 use crate::construct::convert_surface::{
@@ -241,7 +242,7 @@ pub fn patch_start_angle(
             let at = |f: f64| {
                 angle_of(
                     edge.curve()
-                        .evaluate_with_endpoints((t1 - t0).mul_add(f, t0), start, end),
+                        .evaluate_with_endpoints((t1 - t0).madd(f, t0), start, end),
                 )
             };
             let (Some(a), Some(b), Some(c)) = (at(0.25), at(0.5), at(0.75)) else {
@@ -276,7 +277,7 @@ pub fn patch_start_angle(
             (width, from) = (w[1] - w[0], w[0]);
         }
     }
-    Ok(width.mul_add(0.5, from).rem_euclid(TAU))
+    Ok(width.madd(0.5, from).rem_euclid(TAU))
 }
 
 fn cone_angle(cone: &ConicalSurface, p: Point3) -> Option<f64> {

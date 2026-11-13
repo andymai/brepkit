@@ -1,5 +1,6 @@
 //! Axis-aligned bounding boxes for spatial queries.
 
+use crate::madd::Madd;
 use crate::vec::{Point2, Point3, Vec2, Vec3};
 
 /// A 2D axis-aligned bounding box.
@@ -204,16 +205,16 @@ impl Aabb3 {
     #[must_use]
     pub fn surface_area(self) -> f64 {
         let d = self.max - self.min;
-        2.0 * d.x().mul_add(d.y(), d.y().mul_add(d.z(), d.z() * d.x()))
+        2.0 * d.x().madd(d.y(), d.y().madd(d.z(), d.z() * d.x()))
     }
 
     /// Center point of the bounding box.
     #[must_use]
     pub fn center(self) -> Point3 {
         Point3::new(
-            self.min.x().mul_add(0.5, self.max.x() * 0.5),
-            self.min.y().mul_add(0.5, self.max.y() * 0.5),
-            self.min.z().mul_add(0.5, self.max.z() * 0.5),
+            self.min.x().madd(0.5, self.max.x() * 0.5),
+            self.min.y().madd(0.5, self.max.y() * 0.5),
+            self.min.z().madd(0.5, self.max.z() * 0.5),
         )
     }
 
@@ -273,7 +274,7 @@ impl Aabb3 {
         let dx = (self.min.x() - p.x()).max(0.0).max(p.x() - self.max.x());
         let dy = (self.min.y() - p.y()).max(0.0).max(p.y() - self.max.y());
         let dz = (self.min.z() - p.z()).max(0.0).max(p.z() - self.max.z());
-        dx.mul_add(dx, dy.mul_add(dy, dz * dz))
+        dx.madd(dx, dy.madd(dy, dz * dz))
     }
 }
 

@@ -29,9 +29,10 @@ use crate::dot_normal_point;
 /// Returns an error if:
 /// - `distance` is zero or negative
 /// - any edge is not shared by exactly two faces in the solid
-/// - a face has a curved edge, unless the edges are closed circular rims or
-///   tangent chains of lines and arcs (see
-///   [`crate::chamfer_chain::chamfer_tangent_chains`])
+/// - on a body with a curved edge (other than closed circular rims or
+///   tangent chains of lines and arcs, see
+///   [`crate::chamfer_chain::chamfer_tangent_chains`]), the blend engine's
+///   chamfer fails on an edge
 /// - a chamfered edge reaches a face's hole
 /// - the result cannot be assembled into a valid solid
 pub fn chamfer(
@@ -59,6 +60,14 @@ pub fn chamfer(
         crate::chamfer_chain::chamfer_tangent_chains(topo, solid, edges, distance)?
     {
         return Ok(result);
+    }
+    // The flat-bevel rebuild writes every face from its corners, so a body
+    // with a curved edge anywhere (a hole, a rounded side) goes to the blend
+    // engine's chamfer, which keeps the faces it does not touch as they are.
+    let faces = brepkit_topology::explorer::solid_faces(topo, solid)?;
+    if has_curved_edge(topo, &faces)? {
+        let result = crate::blend_ops::chamfer_v2(topo, solid, edges, distance, distance)?;
+        return crate::blend_ops::all_blended(result);
     }
     chamfer_core(topo, solid, edges, ChamferDistances::Symmetric(distance))
 }
@@ -162,8 +171,29 @@ pub fn chamfer_two_on(
     if let Some(result) = chamfer_circular_rims(topo, solid, &ids, &split)? {
         return Ok(result);
     }
-    let result = crate::blend_ops::chamfer_v2_on(topo, solid, edges, d1, d2)?;
-    crate::blend_ops::all_blended(result)
+    let blended = crate::blend_ops::chamfer_v2_on(topo, solid, edges, d1, d2)
+        .and_then(crate::blend_ops::all_blended);
+    // The blend engine's chamfer cannot close two chamfers meeting at a
+    // corner (a box's top edges all chamfered). A body of planes alone is
+    // rebuilt with flat bevels instead, as the equal chamfer rebuilds it,
+    // each edge taking `d1` on its reference face.
+    match blended {
+        Ok(result) => Ok(result),
+        Err(error) => {
+            let faces = brepkit_topology::explorer::solid_faces(topo, solid)?;
+            if has_curved_edge(topo, &faces)? {
+                return Err(error);
+            }
+            let reference = edges.iter().map(|&(e, f)| (e.index(), f)).collect();
+            chamfer_core(
+                topo,
+                solid,
+                &ids,
+                ChamferDistances::Referenced { d1, d2, reference },
+            )
+            .map_err(|_| error)
+        }
+    }
 }
 
 /// How chamfer distances are assigned to edges.
@@ -172,6 +202,12 @@ enum ChamferDistances {
     Symmetric(f64),
     /// `d1` on face\[0\], `d2` on face\[1\] (per `edge_to_faces` order).
     Asymmetric { d1: f64, d2: f64 },
+    /// `d1` on each edge's reference face (by edge index), `d2` on its other.
+    Referenced {
+        d1: f64,
+        d2: f64,
+        reference: HashMap<usize, FaceId>,
+    },
 }
 
 impl ChamferDistances {
@@ -198,6 +234,13 @@ impl ChamferDistances {
                 // Fallback (shouldn't happen for filtered manifold edges).
                 *d1
             }
+            Self::Referenced { d1, d2, reference } => {
+                if reference.get(&edge_index) == Some(&face_id) {
+                    *d1
+                } else {
+                    *d2
+                }
+            }
         }
     }
 
@@ -205,9 +248,27 @@ impl ChamferDistances {
     fn max_distance(&self) -> f64 {
         match self {
             Self::Symmetric(d) => *d,
-            Self::Asymmetric { d1, d2 } => d1.max(*d2),
+            Self::Asymmetric { d1, d2 } | Self::Referenced { d1, d2, .. } => d1.max(*d2),
         }
     }
+}
+
+/// Whether any of the faces is bounded by an edge other than a line.
+fn has_curved_edge(topo: &Topology, faces: &[FaceId]) -> Result<bool, crate::OperationsError> {
+    for &face_id in faces {
+        let face = topo.face(face_id)?;
+        for wire in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            for oe in topo.wire(wire)?.edges() {
+                if !matches!(
+                    topo.edge(oe.edge())?.curve(),
+                    brepkit_topology::edge::EdgeCurve::Line
+                ) {
+                    return Ok(true);
+                }
+            }
+        }
+    }
+    Ok(false)
 }
 
 #[allow(clippy::too_many_lines)]
@@ -226,26 +287,10 @@ fn chamfer_core(
     // This rebuild writes each face from its corners, as straight sides. A
     // curved edge would come back as its chord, which reads as a valid solid
     // of the wrong volume.
-    let straight = |topo: &Topology, wire| -> Result<bool, crate::OperationsError> {
-        for oe in topo.wire(wire)?.edges() {
-            if !matches!(
-                topo.edge(oe.edge())?.curve(),
-                brepkit_topology::edge::EdgeCurve::Line
-            ) {
-                return Ok(false);
-            }
-        }
-        Ok(true)
-    };
-    for &face_id in &shell_face_ids {
-        let face = topo.face(face_id)?;
-        for wire in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
-            if !straight(topo, wire)? {
-                return Err(crate::OperationsError::InvalidInput {
-                    reason: "the planar chamfer cannot rebuild a curved edge".into(),
-                });
-            }
-        }
+    if has_curved_edge(topo, &shell_face_ids)? {
+        return Err(crate::OperationsError::InvalidInput {
+            reason: "the planar chamfer cannot rebuild a curved edge".into(),
+        });
     }
 
     let mut edge_to_faces: HashMap<usize, Vec<FaceId>> = HashMap::new();
@@ -333,6 +378,46 @@ fn chamfer_core(
     }
 
     let target_set: HashSet<usize> = filtered_edges.iter().map(|e| e.index()).collect();
+
+    // Each bevel lands on its faces at its distance from the edge: a face
+    // reaching no farther than that from the edge has no room for it (a box
+    // 20 high chamfered 25 along its top would land below its sides), and
+    // the rebuild would come back as a valid solid of the wrong volume.
+    for &edge_id in &filtered_edges {
+        let edge = topo.edge(edge_id)?;
+        let (a, b) = (
+            topo.vertex(edge.start())?.point(),
+            topo.vertex(edge.end())?.point(),
+        );
+        let Ok(along) = (b - a).normalize() else {
+            continue;
+        };
+        for &face_id in edge_to_faces
+            .get(&edge_id.index())
+            .map_or(&[][..], Vec::as_slice)
+        {
+            let Some(poly) = face_polygons.get(&face_id.index()) else {
+                continue;
+            };
+            let reach = poly
+                .positions
+                .iter()
+                .map(|&p| {
+                    let d = p - a;
+                    (d - along * d.dot(along)).length()
+                })
+                .fold(0.0_f64, f64::max);
+            let distance = distances.distance_for(edge_id.index(), face_id, &edge_to_faces);
+            if reach < distance + tol.linear {
+                return Err(crate::OperationsError::InvalidInput {
+                    reason: format!(
+                        "chamfer distance {distance} does not fit on face {}: it reaches {reach:.6} from the edge",
+                        face_id.index()
+                    ),
+                });
+            }
+        }
+    }
 
     // Vertices at endpoints of chamfered edges (used to detect side-face corners).
     let mut vertex_chamfer_endpoints: HashSet<usize> = HashSet::new();
@@ -944,14 +1029,28 @@ fn find_rim(
 }
 
 /// Whether `wall` is a band of its surface between the rim `edge` and one
-/// other closed circle (or the cone's apex), joined by a seam line.
+/// other closed circle (or the cone's apex), joined by a seam line. The far
+/// rim may also come in arcs of circles about the wall's axis (where the
+/// wall runs on into a torus round its end, say): it then still lies at one
+/// height on the wall, which the chamfer leaves alone.
 fn plain_wall(topo: &Topology, wall: FaceId, edge: EdgeId) -> Result<bool, crate::OperationsError> {
     use brepkit_topology::edge::EdgeCurve;
     let face = topo.face(wall)?;
     if !face.inner_wires().is_empty() {
         return Ok(false);
     }
+    let (origin, axis) = match face.surface() {
+        FaceSurface::Cylinder(c) => (c.origin(), c.axis()),
+        FaceSurface::Cone(c) => (c.apex(), c.axis()),
+        _ => return Ok(false),
+    };
+    let about_axis = |c: &brepkit_math::curves::Circle3D| {
+        let offset = c.center() - origin;
+        let off_axis = (offset - axis * offset.dot(axis)).length();
+        c.normal().dot(axis).abs() > 1.0 - 1e-9 && off_axis < 1e-9 * c.radius().max(1.0)
+    };
     let mut circles = 0;
+    let mut arcs = 0;
     let mut seams = HashSet::new();
     for oe in topo.wire(face.outer_wire())?.edges() {
         let data = topo.edge(oe.edge())?;
@@ -961,13 +1060,14 @@ fn plain_wall(topo: &Topology, wall: FaceId, edge: EdgeId) -> Result<bool, crate
                     circles += 1;
                 }
             }
+            EdgeCurve::Circle(c) if about_axis(c) => arcs += 1,
             EdgeCurve::Line => {
                 seams.insert(oe.edge());
             }
             _ => return Ok(false),
         }
     }
-    Ok(circles <= 1 && seams.len() == 1)
+    Ok(circles + usize::from(arcs > 0) <= 1 && seams.len() == 1)
 }
 
 /// Whether every edge of `cap` is a line or a circle, whose distances from
@@ -1079,6 +1179,7 @@ fn chamfer_circular_rims(
     let copy = crate::copy::copy_solid(topo, solid)?;
     let tol = Tolerance::new().linear;
     let mut bands = Vec::with_capacity(circles.len());
+    let mut dropped = Vec::new();
     for &(ref circle, cap_d, wall_d) in &circles {
         // The copy's image of the rim: the closed circle edge on the same
         // circle.
@@ -1124,7 +1225,14 @@ fn chamfer_circular_rims(
             cap_radius.min(rim.circle.radius()),
             cap_radius.max(rim.circle.radius()),
         );
-        let mut ring_clear = cap_radius > tol;
+        // A disc cap exactly the distance in radius (to a file's digits)
+        // closes to a point: the band is a pointed cone, the cap gone.
+        let point = on_outer
+            && cap.inner_wires().is_empty()
+            && topo.wire(cap.outer_wire())?.edges().len() == 1
+            && cap_radius.abs() <= 1e-6 * rim.circle.radius().max(1.0);
+        let cap_radius = if point { 0.0 } else { cap_radius };
+        let mut ring_clear = point || cap_radius > tol;
         for wid in std::iter::once(cap.outer_wire()).chain(cap.inner_wires().iter().copied()) {
             for oe in topo.wire(wid)?.edges() {
                 if oe.edge() == rim.edge {
@@ -1162,12 +1270,25 @@ fn chamfer_circular_rims(
                 }
             }
         }
-        if (v_far - v_rim).abs() <= wall_d + tol {
+        // A wall exactly the distance high (to a file's digits) goes whole:
+        // the band runs from the cap to the wall's far rim.
+        let reach = (v_far - v_rim).abs();
+        let whole = (reach - wall_d).abs() <= 1e-6 * rim.circle.radius().max(1.0);
+        if !whole && reach <= wall_d + tol {
             return Err(crate::OperationsError::InvalidInput {
                 reason: format!("chamfer distance {wall_d} consumes the wall"),
             });
         }
-        let v_new = v_rim + wall_d * (v_far - v_rim).signum();
+        if point && whole {
+            return Err(crate::OperationsError::InvalidInput {
+                reason: format!("chamfer distance {cap_d} consumes the cap and the wall"),
+            });
+        }
+        let v_new = if whole {
+            v_far
+        } else {
+            v_rim + wall_d * (v_far - v_rim).signum()
+        };
         let (wall_center, wall_radius) = match &wall_surface {
             FaceSurface::Cylinder(c) => (c.origin() + c.axis() * v_new, c.radius()),
             FaceSurface::Cone(c) => {
@@ -1182,19 +1303,48 @@ fn chamfer_circular_rims(
         let cap_point = center + radial * cap_radius;
         let wall_point = wall_center + radial * wall_radius;
         let cap_vertex = topo.add_vertex(Vertex::new(cap_point, tol));
-        let wall_vertex = topo.add_vertex(Vertex::new(wall_point, tol));
-        let cap_circle = Circle3D::new_with_ref(center, normal, cap_radius, radial)?;
+        // The wall's seam: a ruling from the rim vertex, its far end on the
+        // far rim at the rim vertex's angle.
+        let mut old_seam_ends = None;
+        for oe in topo.wire(topo.face(rim.wall)?.outer_wire())?.edges() {
+            let edge = topo.edge(oe.edge())?;
+            if matches!(edge.curve(), EdgeCurve::Line)
+                && (edge.start() == rim_vertex || edge.end() == rim_vertex)
+            {
+                old_seam_ends = Some((edge.start(), edge.end()));
+                break;
+            }
+        }
+        let Some(old_seam_ends) = old_seam_ends else {
+            return Ok(None);
+        };
+        let wall_vertex = if whole {
+            if old_seam_ends.0 == rim_vertex {
+                old_seam_ends.1
+            } else {
+                old_seam_ends.0
+            }
+        } else {
+            topo.add_vertex(Vertex::new(wall_point, tol))
+        };
         let wall_circle = Circle3D::new_with_ref(wall_center, normal, wall_radius, radial)?;
-        let cap_edge = topo.add_edge(Edge::new(
-            cap_vertex,
-            cap_vertex,
-            EdgeCurve::Circle(cap_circle),
-        ));
-        let wall_edge = topo.add_edge(Edge::new(
-            wall_vertex,
-            wall_vertex,
-            EdgeCurve::Circle(wall_circle),
-        ));
+        let cap_edge = if point {
+            None
+        } else {
+            let cap_circle = Circle3D::new_with_ref(center, normal, cap_radius, radial)?;
+            Some(topo.add_edge(Edge::new(
+                cap_vertex,
+                cap_vertex,
+                EdgeCurve::Circle(cap_circle),
+            )))
+        };
+        let wall_edge = (!whole).then(|| {
+            topo.add_edge(Edge::new(
+                wall_vertex,
+                wall_vertex,
+                EdgeCurve::Circle(wall_circle),
+            ))
+        });
         let band_seam = topo.add_edge(Edge::new(cap_vertex, wall_vertex, EdgeCurve::Line));
 
         // The cap takes its new circle.
@@ -1211,15 +1361,17 @@ fn chamfer_circular_rims(
                     .map(brepkit_topology::wire::OrientedEdge::is_forward)
             })
             .unwrap_or(true);
-        let swaps = [(rim.edge, cap_edge)];
-        let new_outer = replace_in_wire(topo, cap_outer, &swaps)?;
-        let mut new_inners = Vec::with_capacity(cap_inners.len());
-        for w in cap_inners {
-            new_inners.push(replace_in_wire(topo, w, &swaps)?);
+        if let Some(cap_edge) = cap_edge {
+            let swaps = [(rim.edge, cap_edge)];
+            let new_outer = replace_in_wire(topo, cap_outer, &swaps)?;
+            let mut new_inners = Vec::with_capacity(cap_inners.len());
+            for w in cap_inners {
+                new_inners.push(replace_in_wire(topo, w, &swaps)?);
+            }
+            let cap_face = topo.face_mut(rim.cap)?;
+            cap_face.set_outer_wire(new_outer);
+            *cap_face.inner_wires_mut() = new_inners;
         }
-        let cap_face = topo.face_mut(rim.cap)?;
-        cap_face.set_outer_wire(new_outer);
-        *cap_face.inner_wires_mut() = new_inners;
 
         // The wall takes its new rim, and its seam now ends there.
         let wall = topo.face(rim.wall)?;
@@ -1242,13 +1394,15 @@ fn chamfer_circular_rims(
         let Some((old_seam, from, to, _)) = seam_swap else {
             return Ok(None);
         };
-        let new_seam = topo.add_edge(Edge::new(from, to, EdgeCurve::Line));
-        let new_wall_outer = replace_in_wire(
-            topo,
-            wall_outer,
-            &[(rim.edge, wall_edge), (old_seam, new_seam)],
-        )?;
-        topo.face_mut(rim.wall)?.set_outer_wire(new_wall_outer);
+        if let Some(wall_edge) = wall_edge {
+            let new_seam = topo.add_edge(Edge::new(from, to, EdgeCurve::Line));
+            let new_wall_outer = replace_in_wire(
+                topo,
+                wall_outer,
+                &[(rim.edge, wall_edge), (old_seam, new_seam)],
+            )?;
+            topo.face_mut(rim.wall)?.set_outer_wire(new_wall_outer);
+        }
 
         // The band: a cone through both new circles.
         let (r1, r2) = (cap_radius, wall_radius);
@@ -1258,8 +1412,14 @@ fn chamfer_circular_rims(
         let t0 = -r1 / (r2 - r1);
         let apex = center + (wall_center - center) * t0;
         let toward = ((center + (wall_center - center) * 0.5) - apex).normalize()?;
-        let height = (center - apex).dot(toward).abs();
-        let cone = ConicalSurface::new(apex, toward, height.atan2(r1))?;
+        // A pointed band reads its angle at the wall's end.
+        let cone = if point {
+            let height = (wall_center - apex).dot(toward).abs();
+            ConicalSurface::new(apex, toward, height.atan2(r2))?
+        } else {
+            let height = (center - apex).dot(toward).abs();
+            ConicalSurface::new(apex, toward, height.atan2(r1))?
+        };
         // Outward is away from both the cap's and the wall's material.
         let cap_face = topo.face(rim.cap)?;
         let cap_out = match cap_face.surface() {
@@ -1290,18 +1450,51 @@ fn chamfer_circular_rims(
             cap_flag != cap_face.is_reversed(),
             wall_flag != wall_face.is_reversed(),
         );
-        let band_wire = topo.add_wire(Wire::new(
+        let band_edges = if let (Some(cap_edge), Some(wall_edge)) = (cap_edge, wall_edge) {
             vec![
                 OrientedEdge::new(cap_edge, cap_use == reversed),
                 OrientedEdge::new(band_seam, true),
                 OrientedEdge::new(wall_edge, wall_use == reversed),
                 OrientedEdge::new(band_seam, false),
-            ],
-            true,
-        )?);
+            ]
+        } else if let Some(wall_edge) = wall_edge {
+            // The cap closed to a point: the band runs from its apex.
+            vec![
+                OrientedEdge::new(band_seam, true),
+                OrientedEdge::new(wall_edge, wall_use == reversed),
+                OrientedEdge::new(band_seam, false),
+            ]
+        } else {
+            // The wall goes whole: the band is its wire, the rim swapped for
+            // the cap's circle and the seam for the band's, each edge run as
+            // the wall ran it.
+            let flip = wall_face.is_reversed() != reversed;
+            let seam_flip = topo.edge(old_seam)?.end() == rim_vertex;
+            topo.wire(wall_face.outer_wire())?
+                .edges()
+                .iter()
+                .map(|oe| {
+                    let (edge, forward) = if oe.edge() == rim.edge {
+                        (cap_edge.unwrap_or(rim.edge), oe.is_forward())
+                    } else if oe.edge() == old_seam {
+                        (band_seam, oe.is_forward() != seam_flip)
+                    } else {
+                        (oe.edge(), oe.is_forward())
+                    };
+                    OrientedEdge::new(edge, forward != flip)
+                })
+                .collect()
+        };
+        let band_wire = topo.add_wire(Wire::new(band_edges, true)?);
         let mut band = Face::new(band_wire, vec![], FaceSurface::Cone(cone));
         band.set_reversed(reversed);
         bands.push((rim.cap, topo.add_face(band)));
+        if wall_edge.is_none() {
+            dropped.push(rim.wall);
+        }
+        if cap_edge.is_none() {
+            dropped.push(rim.cap);
+        }
     }
 
     // Each band joins the shell holding its cap.
@@ -1315,6 +1508,7 @@ fn chamfer_circular_rims(
                 faces.push(band);
             }
         }
+        faces.retain(|f| !dropped.contains(f));
         rebuilt.push(topo.add_shell(Shell::new(faces)?));
     }
     let outer = rebuilt.remove(0);

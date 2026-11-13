@@ -26,6 +26,7 @@ pub mod same_domain;
 pub mod split_types;
 pub mod wire_builder;
 
+use brepkit_math::madd::Madd;
 pub use face_class::FaceClass;
 
 use std::collections::HashMap;
@@ -261,9 +262,9 @@ fn log_subfaces_in_box(topo: &Topology, subs: &[SubFace], selected: &[bop::Selec
                     };
                     let (sp, ep) = (sv.point(), ev.point());
                     let (t0, t1) = e.curve().domain_with_endpoints(sp, ep);
-                    let mid =
-                        e.curve()
-                            .evaluate_with_endpoints(0.5_f64.mul_add(t1 - t0, t0), sp, ep);
+                    let mid = e
+                        .curve()
+                        .evaluate_with_endpoints(0.5_f64.madd(t1 - t0, t0), sp, ep);
                     parts.push(format!(
                         "e{}({:.2},{:.2},{:.2})->({:.2},{:.2},{:.2})mid({:.2},{:.2},{:.2})",
                         oe.edge().index(),
@@ -1446,7 +1447,7 @@ fn ring_hole_polygons(
             let (a, b) = if oe.is_forward() { (t0, t1) } else { (t1, t0) };
 
             for k in 0..32_u32 {
-                let t = (b - a).mul_add(f64::from(k) / 32.0, a);
+                let t = (b - a).madd(f64::from(k) / 32.0, a);
                 push(edge.curve().evaluate_with_endpoints(t, sp, ep));
             }
         }
@@ -1533,7 +1534,7 @@ fn partial_revolution_middle(
         }
         let (_, seam_v) = torus.project_point(topo.vertex(e.start())?.point());
         return Ok(Some(torus.evaluate(
-            0.5_f64.mul_add(span, u_start),
+            0.5_f64.madd(span, u_start),
             seam_v + std::f64::consts::PI,
         )));
     }
@@ -1584,7 +1585,7 @@ fn sample_face_interior(
             let (t0, t1) = e.curve().domain_with_endpoints(sp, ep);
             let mid = e
                 .curve()
-                .evaluate_with_endpoints(0.5_f64.mul_add(t1 - t0, t0), sp, ep);
+                .evaluate_with_endpoints(0.5_f64.madd(t1 - t0, t0), sp, ep);
             if e.start() == e.end()
                 && !matches!(e.curve(), brepkit_topology::edge::EdgeCurve::Line)
                 && closed_mid.is_none()
@@ -1628,7 +1629,7 @@ fn sample_face_interior(
         let (t0, t1) = e.curve().domain_with_endpoints(sp, ep);
         let mid = e
             .curve()
-            .evaluate_with_endpoints(0.5_f64.mul_add(t1 - t0, t0), sp, ep);
+            .evaluate_with_endpoints(0.5_f64.madd(t1 - t0, t0), sp, ep);
         for p in [sp, ep, mid] {
             min_pt = Point3::new(
                 min_pt.x().min(p.x()),
@@ -1671,7 +1672,7 @@ fn sample_face_interior(
     let start_pos = topo.vertex(edge.start())?.point();
     let end_pos = topo.vertex(edge.end())?.point();
     let (t0, t1) = edge.curve().domain_with_endpoints(start_pos, end_pos);
-    let t_mid = 0.5_f64.mul_add(t1 - t0, t0);
+    let t_mid = 0.5_f64.madd(t1 - t0, t0);
     let mid_pt = edge
         .curve()
         .evaluate_with_endpoints(t_mid, start_pos, end_pos);
@@ -1738,7 +1739,7 @@ fn sample_face_interior(
             let (d0, d1) = e.curve().domain_with_endpoints(ns, ne);
             let mut samples: Vec<Point3> = (1..8)
                 .map(|k| {
-                    let t = (d1 - d0).mul_add(f64::from(k) / 8.0, d0);
+                    let t = (d1 - d0).madd(f64::from(k) / 8.0, d0);
                     e.curve().evaluate_with_endpoints(t, ns, ne)
                 })
                 .collect();
@@ -2110,7 +2111,7 @@ mod tests {
         knots.extend([1.0; 3]);
         let (points, weights) = (0..=2 * quarters)
             .map(|k| {
-                let angle = FRAC_PI_4.mul_add(f64::from(k), from);
+                let angle = FRAC_PI_4.madd(f64::from(k), from);
                 let (radius, weight) = if k % 2 == 0 {
                     (r, 1.0)
                 } else {

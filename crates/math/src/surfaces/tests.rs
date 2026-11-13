@@ -1,4 +1,5 @@
 use super::*;
+use crate::madd::Madd;
 use std::f64::consts::{FRAC_PI_2, PI};
 
 const TOL: f64 = 1e-10;
@@ -649,8 +650,8 @@ fn rational_torus_lies_on_the_torus() {
     for i in 0..=40 {
         for j in 0..=40 {
             let p = nurbs.evaluate(
-                (u1 - u0).mul_add(f64::from(i) / 40.0, u0),
-                (v1 - v0).mul_add(f64::from(j) / 40.0, v0),
+                (u1 - u0).madd(f64::from(i) / 40.0, u0),
+                (v1 - v0).madd(f64::from(j) / 40.0, v0),
             );
             let d = p - Point3::new(1.0, -2.0, 0.5);
             let ring = d.x().hypot(d.y()) - 4.0;
@@ -678,8 +679,8 @@ fn rational_sphere_lies_on_the_sphere() {
     for i in 0..=40 {
         for j in 0..=40 {
             let p = nurbs.evaluate(
-                (u1 - u0).mul_add(f64::from(i) / 40.0, u0),
-                (v1 - v0).mul_add(f64::from(j) / 40.0, v0),
+                (u1 - u0).madd(f64::from(i) / 40.0, u0),
+                (v1 - v0).madd(f64::from(j) / 40.0, v0),
             );
             let off = (p - centre).length() - 2.0;
             assert!(off.abs() < 1e-12, "({i}, {j}) lies {off} off the sphere");
@@ -743,8 +744,8 @@ fn rational_cone_lies_on_the_cone() {
     for i in 0..=40 {
         for j in 0..=40 {
             let p = nurbs.evaluate(
-                (u1 - u0).mul_add(f64::from(i) / 40.0, u0),
-                (v1 - v0).mul_add(f64::from(j) / 40.0, v0),
+                (u1 - u0).madd(f64::from(i) / 40.0, u0),
+                (v1 - v0).madd(f64::from(j) / 40.0, v0),
             );
             let d = p - apex;
             let off = d.x().hypot(d.y()) - d.z() / 0.6_f64.tan();

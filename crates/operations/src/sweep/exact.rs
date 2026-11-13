@@ -11,6 +11,7 @@
 //! basis, so the surface stays within the trajectories' fit error of the
 //! true sweep.
 
+use brepkit_math::madd::Madd;
 use std::collections::HashMap;
 
 use brepkit_math::mat::Mat4;
@@ -138,7 +139,7 @@ pub(super) fn sweep_exact(
         .flat_map(|le| le.span.control_points().iter())
         .map(|&p| (p - anchor).dot(input_normal).abs())
         .fold(0.0, f64::max);
-    if off_plane > 10.0f64.mul_add(tol.linear, 1e-9 * extent) {
+    if off_plane > 10.0f64.madd(tol.linear, 1e-9 * extent) {
         return Ok(None);
     }
     for (lp, pts) in loops.iter_mut().zip(&samples) {
@@ -146,7 +147,7 @@ pub(super) fn sweep_exact(
     }
 
     let up_hint = orthogonalize(input_normal, path_tangent_0);
-    let at = |t: f64| (d1 - d0).mul_add(t, d0);
+    let at = |t: f64| (d1 - d0).madd(t, d0);
     let frames_for = |ts: &[f64]| -> Result<Vec<Frame>, crate::OperationsError> {
         if let Some(aux) = options.aux_spine.as_ref() {
             let (a0, a1) = aux.domain();
@@ -155,7 +156,7 @@ pub(super) fn sweep_exact(
             for &t in ts {
                 let origin = path.evaluate(at(t));
                 let tangent = path.tangent(at(t)).unwrap_or(path_tangent_0);
-                let guide_dir = aux.evaluate((a1 - a0).mul_add(t, a0)) - origin;
+                let guide_dir = aux.evaluate((a1 - a0).madd(t, a0)) - origin;
                 // Where the guide meets the spine its direction is undefined;
                 // the previous frame's up carries on.
                 let up = if guide_dir.length() < 1e-9 {
@@ -478,7 +479,7 @@ pub fn path_trajectories(
     let (d0, d1) = path.domain();
     let tangent = path.tangent(d0)?;
     let up_hint = orthogonalize(pick_reference_axis(tangent), tangent);
-    let at = |t: f64| (d1 - d0).mul_add(t, d0);
+    let at = |t: f64| (d1 - d0).madd(t, d0);
     let firsts = frames_at(path, &[d0], up_hint)?;
     let first = &firsts[0];
     let (reference, basis) = (first.origin, [first.right, first.up, first.tangent]);
@@ -547,7 +548,7 @@ fn loop_samples(lp: &ProfileLoop) -> Vec<Point3> {
         for k in 0..n {
             #[allow(clippy::cast_precision_loss)]
             let f = k as f64 / n as f64;
-            out.push(le.span.evaluate((t1 - t0).mul_add(f, t0)));
+            out.push(le.span.evaluate((t1 - t0).madd(f, t0)));
         }
     }
     out
@@ -678,7 +679,7 @@ fn fit_trajectories(
             let k = per_span(total, (a, b));
             #[allow(clippy::cast_precision_loss)]
             let mut piece: Vec<f64> = (0..=k)
-                .map(|j| (b - a).mul_add(j as f64 / k as f64, a))
+                .map(|j| (b - a).madd(j as f64 / k as f64, a))
                 .collect();
             piece[0] = a;
             piece[k] = b;

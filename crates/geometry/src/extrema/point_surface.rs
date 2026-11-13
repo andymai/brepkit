@@ -5,6 +5,7 @@
 //! [`ToroidalSurface`]) and a generic Newton-Raphson solver for any
 //! [`ParametricSurface`].
 
+use brepkit_math::madd::Madd;
 use brepkit_math::surfaces::{
     ConicalSurface, CylindricalSurface, SphericalSurface, ToroidalSurface,
 };
@@ -157,7 +158,7 @@ pub fn point_to_cone(point: Point3, cone: &ConicalSurface) -> SurfaceProjection 
 
     // Project onto the cone's generatrix direction.
     let (sin_a, cos_a) = cone.half_angle().sin_cos();
-    let v = h.mul_add(sin_a, r_len * cos_a);
+    let v = h.madd(sin_a, r_len * cos_a);
 
     if v <= 0.0 {
         // Closest point is the apex.
@@ -374,7 +375,7 @@ pub fn point_to_nurbs_surface(
             let dx = pt.x() - point.x();
             let dy = pt.y() - point.y();
             let dz = pt.z() - point.z();
-            let dist_sq = dx.mul_add(dx, dy.mul_add(dy, dz * dz));
+            let dist_sq = dx.madd(dx, dy.madd(dy, dz * dz));
             if dist_sq < best_dist_sq {
                 best_dist_sq = dist_sq;
                 best_u = u;

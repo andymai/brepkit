@@ -8,6 +8,7 @@
 //! we integrate the surface directly in parametric space using Gauss
 //! quadrature.
 
+use crate::madd::Madd;
 use crate::vec::{Point3, Vec3};
 
 /// Maximum supported Gauss-Legendre order.
@@ -60,9 +61,9 @@ pub(crate) fn gauss_surface_area(
 
     let mut area = 0.0;
     for gu in pts_u {
-        let u = u_half.mul_add(gu.x, u_mid);
+        let u = u_half.madd(gu.x, u_mid);
         for gv in pts_v {
-            let v = v_half.mul_add(gv.x, v_mid);
+            let v = v_half.madd(gv.x, v_mid);
             let (_pt, normal) = f(u, v);
             // ||normal|| = ||∂S/∂u × ∂S/∂v|| is the surface element dA
             area += normal.length() * gu.w * gv.w;
@@ -95,9 +96,9 @@ pub(crate) fn gauss_surface_volume(
 
     let mut vol = 0.0;
     for gu in pts_u {
-        let u = u_half.mul_add(gu.x, u_mid);
+        let u = u_half.madd(gu.x, u_mid);
         for gv in pts_v {
-            let v = v_half.mul_add(gv.x, v_mid);
+            let v = v_half.madd(gv.x, v_mid);
             let (pt, normal) = f(u, v);
             // P · N where N is unnormalized (includes Jacobian)
             let p_dot_n = pt.x() * normal.x() + pt.y() * normal.y() + pt.z() * normal.z();

@@ -10,6 +10,8 @@
 //! `2π H` there, taken toward growing `v`. Nothing is sampled into a polygon, so the result is
 //! exact to quadrature precision however an edge bows.
 
+use brepkit_math::madd::Madd;
+use brepkit_math::nurbs::surface::{NurbsRow, UBasis};
 use brepkit_math::quadrature::gauss_legendre_points;
 use brepkit_math::surfaces::SphericalSurface;
 use brepkit_math::traits::ParametricSurface;
@@ -30,7 +32,8 @@ pub(super) fn integrand<S: ParametricSurface>(
     about: Vec3,
 ) -> [f64; 8] {
     let p = surface.evaluate(u, v);
-    let n = surface.partial_u(u, v).cross(surface.partial_v(u, v));
+    let (su, sv) = surface.partials(u, v);
+    let n = su.cross(sv);
     terms(Vec3::new(p.x(), p.y(), p.z()), n, about)
 }
 
@@ -64,8 +67,19 @@ fn nurbs_integrand(
     v: f64,
     about: Vec3,
 ) -> [f64; 8] {
-    let d = surface.derivatives(u, v, 1);
-    terms(d[0][0], d[1][0].cross(d[0][1]), about)
+    let d = surface.first_derivatives(u, v);
+    terms(d.0, d.1.cross(d.2), about)
+}
+
+/// [`integrand`] on a NURBS surface's line of constant `v`, alike bit for bit.
+fn row_integrand(row: &NurbsRow<'_>, u: f64, about: Vec3) -> [f64; 8] {
+    terms_at(row.point_and_partials(u), about)
+}
+
+/// [`integrand`] from a point and its first partials.
+fn terms_at((p, su, sv): (Point3, Vec3, Vec3), about: Vec3) -> [f64; 8] {
+    let n = su.cross(sv);
+    terms(Vec3::new(p.x(), p.y(), p.z()), n, about)
 }
 
 /// One edge of a wire in its traversal: its curve, end points, and the
@@ -122,7 +136,7 @@ fn adaptive(
         let (half, mid) = (0.5 * (b - a), 0.5 * (a + b));
         let mut acc = [0.0; 8];
         for gp in rule {
-            add(&mut acc, &f(half.mul_add(gp.x, mid))?, half * gp.w);
+            add(&mut acc, &f(half.madd(gp.x, mid))?, half * gp.w);
         }
         Some(acc)
     };
@@ -177,9 +191,9 @@ fn antiderivative<S: ParametricSurface>(surface: &S, u: f64, v: f64, about: Vec3
     let panels = (rest / std::f64::consts::FRAC_PI_2).ceil().max(1.0) as u32;
     let width = rest / f64::from(panels);
     for i in 0..panels {
-        let mid = width.mul_add(f64::from(i) + 0.5, 0.0);
+        let mid = width.madd(f64::from(i) + 0.5, 0.0);
         for gp in gauss {
-            let s = (0.5 * width).mul_add(gp.x, mid);
+            let s = (0.5 * width).madd(gp.x, mid);
             add(
                 &mut acc,
                 &integrand(surface, s, v, about),
@@ -201,9 +215,9 @@ fn mean_integral<S: ParametricSurface>(chart: &Chart<'_, S>, v: f64, about: Vec3
     let width = span / f64::from(panels);
     let mut acc = [0.0; 8];
     for i in 0..panels {
-        let mid = width.mul_add(f64::from(i) + 0.5, chart.v_ref);
+        let mid = width.madd(f64::from(i) + 0.5, chart.v_ref);
         for gp in gauss {
-            let w = (0.5 * width).mul_add(gp.x, mid);
+            let w = (0.5 * width).madd(gp.x, mid);
             add(
                 &mut acc,
                 &turn_integral(chart.surface, w, about),
@@ -223,8 +237,8 @@ fn edge_pieces(edge: &BoundaryEdge<'_>) -> Vec<(f64, f64)> {
         (0..n)
             .map(|i| {
                 (
-                    span.mul_add(f64::from(i) / f64::from(n), edge.from),
-                    span.mul_add(f64::from(i + 1) / f64::from(n), edge.from),
+                    span.madd(f64::from(i) / f64::from(n), edge.from),
+                    span.madd(f64::from(i + 1) / f64::from(n), edge.from),
                 )
             })
             .collect()
@@ -323,7 +337,7 @@ pub(super) fn integrate_by_boundary<S: ParametricSurface>(
                     let (half, centre) = (0.5 * (b - a), f64::midpoint(a, b));
                     let mut nodes = [(0.0, 0.0, 0.0, 0.0); 8];
                     for (node, gp) in nodes.iter_mut().zip(gauss) {
-                        let t = half.mul_add(gp.x, centre);
+                        let t = half.madd(gp.x, centre);
                         let (un, vn) = at(t);
                         *node = (
                             t,
@@ -357,8 +371,8 @@ pub(super) fn integrate_by_boundary<S: ParametricSurface>(
                     for (t, un, vn, w) in nodes {
                         let [(u1, v1), (u2, v2), (u3, v3), (u4, v4)] =
                             [t + h, t - h, t + 2.0 * h, t - 2.0 * h].map(at);
-                        let du = 8.0f64.mul_add(wrap_pi(u1 - u2), -wrap_pi(u3 - u4)) / (12.0 * h);
-                        let dv = 8.0f64.mul_add(v_wrap(v1 - v2), -v_wrap(v3 - v4)) / (12.0 * h);
+                        let du = 8.0f64.madd(wrap_pi(u1 - u2), -wrap_pi(u3 - u4)) / (12.0 * h);
+                        let dv = 8.0f64.madd(v_wrap(v1 - v2), -v_wrap(v3 - v4)) / (12.0 * h);
                         // Each difference rounds by an ulp of its coordinate.
                         let (nu, nv) = (
                             1.5 * f64::EPSILON * (1.0 + un.abs()) / h.abs(),
@@ -603,7 +617,7 @@ fn wire_samples(wires: &[Vec<BoundaryEdge<'_>>]) -> Vec<Point3> {
         .flatten()
         .flat_map(|e| {
             (0..=64).map(move |k| {
-                let t = (e.to - e.from).mul_add(f64::from(k) / 64.0, e.from);
+                let t = (e.to - e.from).madd(f64::from(k) / 64.0, e.from);
                 e.curve.evaluate_with_endpoints(t, e.start, e.end)
             })
         })
@@ -1188,12 +1202,55 @@ pub(super) fn nurbs_face_by_boundary(
     // Each integral is halved until it settles: a rational surface can
     // crowd its area into a sliver of its parameter.
     let gauss_u = gauss_legendre_points(10);
+    // A whole knot span is integrated at the same `u` for every point of the
+    // boundary, unless its integral halves past the first step: its points'
+    // basis functions in `u` are worked out once, and taken where a point is
+    // the very same number.
+    let span_points: Vec<std::sync::OnceLock<(Vec<u64>, Vec<UBasis>)>> =
+        u_knots.iter().map(|_| std::sync::OnceLock::new()).collect();
+    let points_of = |i: usize, from: f64, to: f64| {
+        let span_from = if i == 0 { u0 } else { u_knots[i - 1] };
+        if i >= u_knots.len()
+            || from.to_bits() != span_from.to_bits()
+            || to.to_bits() != u_knots[i].to_bits()
+        {
+            return None;
+        }
+        Some(span_points[i].get_or_init(|| {
+            let mut us = Vec::new();
+            let mut record = |x: f64| {
+                us.push(x);
+                Some([0.0; 8])
+            };
+            adaptive(&mut record, from, to, gauss_u, 0, 0.0);
+            let bases: Vec<UBasis> = us.iter().filter_map(|&x| s.u_basis(x)).collect();
+            (bases.iter().map(|b| b.u.to_bits()).collect(), bases)
+        }))
+    };
     let antiderivative = |u: f64, v: f64| -> Option<[f64; 8]> {
+        // Every point of the integral lies on one line of constant `v`.
+        let row = s.at_v(v);
         let mut acc = [0.0; 8];
         let mut from = u0;
-        for to in u_knots.iter().copied().filter(|&k| k < u).chain([u]) {
+        for (i, to) in u_knots
+            .iter()
+            .copied()
+            .filter(|&k| k < u)
+            .chain([u])
+            .enumerate()
+        {
             if to > from {
-                let mut g = |s_u: f64| Some(integrand(s, s_u, v, about));
+                let points = points_of(i, from, to);
+                let mut g = |s_u: f64| {
+                    let known = points.and_then(|(bits, bases)| {
+                        let at = bits.iter().position(|&b| b == s_u.to_bits())?;
+                        Some(&bases[at])
+                    });
+                    Some(match known {
+                        Some(b) => terms_at(row.point_and_partials_with(b), about),
+                        None => row_integrand(&row, s_u, about),
+                    })
+                };
                 add(
                     &mut acc,
                     &adaptive(&mut g, from, to, gauss_u, DEPTH, floor)?,
@@ -1205,39 +1262,39 @@ pub(super) fn nurbs_face_by_boundary(
         Some(acc)
     };
     let gauss = gauss_legendre_points(8);
-    let mut total = [0.0; 8];
+    // A point's `(u, v)` by Newton from a neighbour's where that lands on the
+    // surface, else by a search of the whole surface.
+    let on = |edge: &BoundaryEdge<'_>, t: f64, seed: Option<(f64, f64)>| -> Option<(f64, f64)> {
+        let p = edge.curve.evaluate_with_endpoints(t, edge.start, edge.end);
+        // Far from the origin a point's own rounding passes a fixed
+        // tolerance: Newton could not settle, and every point of every edge
+        // would take the search.
+        let tolerance = 1e-12_f64.max(2e-14 * p.x().abs().max(p.y().abs()).max(p.z().abs()));
+        if let Some(seed) = seed
+            && let Ok(q) = project_point_to_surface_from(s, p, seed, tolerance)
+            && q.distance <= reach
+        {
+            return Some((q.u, q.v));
+        }
+        project_point_to_surface(s, p, tolerance)
+            .ok()
+            .filter(|q| q.distance <= reach)
+            .map(|q| (q.u, q.v))
+    };
+    // Every edge cut into pieces, with the wire it is in: each piece is
+    // integrated on its own, from its own seed, so the pieces can be taken at
+    // once and summed in their order after.
+    let mut pieces: Vec<Piece<'_, '_>> = Vec::new();
     for (k, wire) in wires.iter().enumerate() {
-        let mut region = [0.0; 8];
         for edge in wire {
-            let point = |t: f64| edge.curve.evaluate_with_endpoints(t, edge.start, edge.end);
-            // A point's `(u, v)` by Newton from a neighbour's where that lands
-            // on the surface, else by a search of the whole surface.
-            let on = |t: f64, seed: Option<(f64, f64)>| -> Option<(f64, f64)> {
-                let p = point(t);
-                // Far from the origin a point's own rounding passes a fixed
-                // tolerance: Newton could not settle, and every point of every
-                // edge would take the search.
-                let tolerance =
-                    1e-12_f64.max(2e-14 * p.x().abs().max(p.y().abs()).max(p.z().abs()));
-                if let Some(seed) = seed
-                    && let Ok(q) = project_point_to_surface_from(s, p, seed, tolerance)
-                    && q.distance <= reach
-                {
-                    return Some((q.u, q.v));
-                }
-                project_point_to_surface(s, p, tolerance)
-                    .ok()
-                    .filter(|q| q.distance <= reach)
-                    .map(|q| (q.u, q.v))
-            };
-            let mut pieces = Vec::new();
+            let on = |t: f64, seed: Option<(f64, f64)>| on(edge, t, seed);
             for (ta, tb) in edge_pieces(edge) {
                 // Where the edge crosses a knot line the integrand bends:
                 // cut there, found by bisection between samples astride it.
                 let mut samples: Vec<(f64, (f64, f64))> = Vec::with_capacity(9);
                 let mut seed = None;
                 for k in 0..=8 {
-                    let t = (tb - ta).mul_add(f64::from(k) / 8.0, ta);
+                    let t = (tb - ta).madd(f64::from(k) / 8.0, ta);
                     let Some(q) = on(t, seed) else {
                         return Ok(None);
                     };
@@ -1285,35 +1342,69 @@ pub(super) fn nurbs_face_by_boundary(
                 }
                 cuts.dedup_by(|x, y| (*x - *y).abs() <= 1e-12 * (tb - ta).abs());
                 let start = samples[0].1;
-                pieces.extend(cuts.windows(2).map(|w| (w[0], w[1], start)));
+                pieces.extend(cuts.windows(2).map(|w| Piece {
+                    wire: k,
+                    edge,
+                    from: w[0],
+                    to: w[1],
+                    start,
+                }));
             }
-            for (ta, tb, start) in pieces {
-                let mut seed = start;
-                let mut along = |t: f64| -> Option<[f64; 8]> {
-                    let c = on(t, Some(seed))?;
-                    seed = c;
-                    // `dv/dt` from the curve's velocity in the surface's
-                    // tangent plane, by the first fundamental form.
-                    let velocity = edge_velocity(edge.curve, t, edge.start, edge.end);
-                    let d = s.derivatives(c.0, c.1, 1);
-                    let (su, sv) = (d[1][0], d[0][1]);
-                    let (e, f, g) = (su.dot(su), su.dot(sv), sv.dot(sv));
-                    let det = e.mul_add(g, -f * f);
-                    if det <= 1e-24 * (e * g).max(1e-300) {
-                        return None;
-                    }
-                    let dv = e.mul_add(sv.dot(velocity), -f * su.dot(velocity)) / det;
-                    let mut term = antiderivative(c.0, c.1)?;
-                    for x in &mut term {
-                        *x *= dv;
-                    }
-                    Some(term)
-                };
-                let Some(piece) = adaptive(&mut along, ta, tb, gauss, DEPTH, floor) else {
-                    return Ok(None);
-                };
-                add(&mut region, &piece, 1.0);
+        }
+    }
+    // One piece failing fails the face: pieces not yet begun are passed over.
+    let failed = std::sync::atomic::AtomicBool::new(false);
+    let integrate = |piece: &Piece<'_, '_>| -> Option<[f64; 8]> {
+        use std::sync::atomic::Ordering::Relaxed;
+        if failed.load(Relaxed) {
+            return None;
+        }
+        let edge = piece.edge;
+        let mut seed = piece.start;
+        let mut along = |t: f64| -> Option<[f64; 8]> {
+            let c = on(edge, t, Some(seed))?;
+            seed = c;
+            // `dv/dt` from the curve's velocity in the surface's tangent
+            // plane, by the first fundamental form.
+            let velocity = edge_velocity(edge.curve, t, edge.start, edge.end);
+            let d = s.first_derivatives(c.0, c.1);
+            let (su, sv) = (d.1, d.2);
+            let (e, f, g) = (su.dot(su), su.dot(sv), sv.dot(sv));
+            let det = e.madd(g, -f * f);
+            if det <= 1e-24 * (e * g).max(1e-300) {
+                return None;
             }
+            let dv = e.madd(sv.dot(velocity), -f * su.dot(velocity)) / det;
+            let mut term = antiderivative(c.0, c.1)?;
+            for x in &mut term {
+                *x *= dv;
+            }
+            Some(term)
+        };
+        let integral = adaptive(&mut along, piece.from, piece.to, gauss, DEPTH, floor);
+        if integral.is_none() {
+            failed.store(true, Relaxed);
+        }
+        integral
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    let integrals: Vec<Option<[f64; 8]>> = {
+        use rayon::prelude::*;
+        pieces.par_iter().map(integrate).collect()
+    };
+    #[cfg(target_arch = "wasm32")]
+    let integrals: Vec<Option<[f64; 8]>> = pieces.iter().map(integrate).collect();
+    let mut total = [0.0; 8];
+    // The pieces lie in the order of their wires, so one pass meets each
+    // wire's run of them in turn.
+    let mut rest = pieces.iter().zip(&integrals).peekable();
+    for k in 0..wires.len() {
+        let mut region = [0.0; 8];
+        while let Some((_, integral)) = rest.next_if(|(piece, _)| piece.wire == k) {
+            let Some(integral) = integral else {
+                return Ok(None);
+            };
+            add(&mut region, integral, 1.0);
         }
         // Each wire counts the region it bounds, whichever way it runs in
         // `(u, v)`; holes are taken away.
@@ -1335,6 +1426,16 @@ pub(super) fn nurbs_face_by_boundary(
     }))
 }
 
+/// A stretch of a boundary edge between two cuts, and where its first point
+/// lies in `(u, v)`.
+struct Piece<'e, 'a> {
+    wire: usize,
+    edge: &'e BoundaryEdge<'a>,
+    from: f64,
+    to: f64,
+    start: (f64, f64),
+}
+
 /// `d/dt` of `curve` at `t` as `evaluate_with_endpoints` runs it from
 /// `start` to `end`.
 fn edge_velocity(curve: &EdgeCurve, t: f64, start: Point3, end: Point3) -> Vec3 {
@@ -1352,7 +1453,7 @@ fn open_and_poleless(s: &brepkit_math::nurbs::surface::NurbsSurface) -> bool {
     const N: u32 = 8;
     let (u0, u1) = s.domain_u();
     let (v0, v1) = s.domain_v();
-    let lerp = |a: f64, b: f64, k: u32| (b - a).mul_add(f64::from(k) / f64::from(N), a);
+    let lerp = |a: f64, b: f64, k: u32| (b - a).madd(f64::from(k) / f64::from(N), a);
     let side = |along_u: bool, at: f64| -> Vec<Point3> {
         (0..=N)
             .map(|k| {

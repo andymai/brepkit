@@ -7,6 +7,7 @@
 //! own primitives do, and its meshers and booleans rely on that seam. Once a
 //! shell's faces are built, [`close_seams`] adds the seam each one lacks.
 
+use brepkit_math::madd::Madd;
 use std::collections::{HashMap, HashSet};
 use std::f64::consts::{PI, TAU};
 
@@ -159,7 +160,7 @@ fn edge_samples(topo: &Topology, oe: OrientedEdge, n: u32) -> Result<Vec<Point3>
     let (t0, t1) = e.curve().domain_with_endpoints(a, b);
     let mut points: Vec<Point3> = (0..=n)
         .map(|k| {
-            let t = (t1 - t0).mul_add(f64::from(k) / f64::from(n), t0);
+            let t = (t1 - t0).madd(f64::from(k) / f64::from(n), t0);
             e.curve().evaluate_with_endpoints(t, a, b)
         })
         .collect();
@@ -378,7 +379,7 @@ fn vertex_on_rim(
         let point_at = |t: f64| e.curve().evaluate_with_endpoints(t, a, b);
         let mut lo = t0;
         for k in 1..=CROSSING_SAMPLES {
-            let hi = (t1 - t0).mul_add(f64::from(k) / f64::from(CROSSING_SAMPLES), t0);
+            let hi = (t1 - t0).madd(f64::from(k) / f64::from(CROSSING_SAMPLES), t0);
             let (f_lo, f_hi) = (off(point_at(lo)), off(point_at(hi)));
             // A sign change across the far side of the circle is the wrap of
             // the angle, not a crossing.

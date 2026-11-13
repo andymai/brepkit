@@ -1,5 +1,6 @@
 //! Affine transforms applied to topological shapes.
 
+use brepkit_math::madd::Madd;
 use std::collections::HashSet;
 
 use brepkit_math::mat::Mat4;
@@ -228,9 +229,9 @@ fn sphere_face_v_range(
 fn linear(matrix: &Mat4, v: Vec3) -> Vec3 {
     let m = &matrix.0;
     Vec3::new(
-        m[0][0].mul_add(v.x(), m[0][1].mul_add(v.y(), m[0][2] * v.z())),
-        m[1][0].mul_add(v.x(), m[1][1].mul_add(v.y(), m[1][2] * v.z())),
-        m[2][0].mul_add(v.x(), m[2][1].mul_add(v.y(), m[2][2] * v.z())),
+        m[0][0].madd(v.x(), m[0][1].madd(v.y(), m[0][2] * v.z())),
+        m[1][0].madd(v.x(), m[1][1].madd(v.y(), m[1][2] * v.z())),
+        m[2][0].madd(v.x(), m[2][1].madd(v.y(), m[2][2] * v.z())),
     )
 }
 
