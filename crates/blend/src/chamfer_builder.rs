@@ -286,6 +286,7 @@ impl<'a> ChamferBuilder<'a> {
         // Each stripe that trims both its faces, with the contact edges the
         // trims left on them.
         let mut trimmed: Vec<(EdgeId, StripeResult, [Option<EdgeId>; 2])> = Vec::new();
+        let mut consumed: HashSet<FaceId> = HashSet::new();
         for (edge_id, sr) in stripe_results {
             let stripe = &sr.stripe;
 
@@ -309,6 +310,7 @@ impl<'a> ChamferBuilder<'a> {
             let before = faces.map(|f| face_replacements.get(&f).copied());
             let mut contacts = [None, None];
             let mut failure = None;
+            let mut slivers = Vec::new();
             let chamfered = topo.edge(edge_id)?;
             let corners = [chamfered.start(), chamfered.end()];
             for (slot, (face, contact)) in faces
@@ -327,6 +329,17 @@ impl<'a> ChamferBuilder<'a> {
                 ) {
                     Ok(tr) if tr.trimmed_face != current => {
                         contacts[slot] = tr.contact_edge;
+                        // A distance that reaches exactly across the face
+                        // (a side as high as the chamfer is wide) leaves it
+                        // its far edge and the contact along it, with no
+                        // area: the face goes, and the chamfer meets its
+                        // neighbour across that edge.
+                        if let Some(far) =
+                            consumed_face_edge(topo, tr.trimmed_face, tr.contact_edge)?
+                        {
+                            contacts[slot] = Some(far);
+                            slivers.push(tr.trimmed_face);
+                        }
                         face_replacements.insert(face, tr.trimmed_face);
                     }
                     Ok(_) => {
@@ -349,6 +362,7 @@ impl<'a> ChamferBuilder<'a> {
                 failed.push((edge_id, error));
                 continue;
             }
+            consumed.extend(slivers);
             succeeded.push(edge_id);
             trimmed.push((edge_id, sr, contacts));
         }
@@ -400,6 +414,7 @@ impl<'a> ChamferBuilder<'a> {
         let mut result_faces: Vec<FaceId> = original_faces
             .iter()
             .map(|fid| face_replacements.get(fid).copied().unwrap_or(*fid))
+            .filter(|fid| !consumed.contains(fid))
             .collect();
 
         close_chamfer_ends(topo, &result_faces, &cross_edges)?;
@@ -418,6 +433,37 @@ impl<'a> ChamferBuilder<'a> {
             is_partial,
         })
     }
+}
+
+/// The far edge of a trimmed face left as that edge and the contact along
+/// it: a two-edge loop whose edges share their ends and both lie on one
+/// line. `None` for any other face.
+fn consumed_face_edge(
+    topo: &Topology,
+    face: FaceId,
+    contact: Option<EdgeId>,
+) -> Result<Option<EdgeId>, BlendError> {
+    let Some(contact) = contact else {
+        return Ok(None);
+    };
+    let edges = topo.wire(topo.face(face)?.outer_wire())?.edges();
+    let [a, b] = edges else {
+        return Ok(None);
+    };
+    let far = if a.edge() == contact {
+        b.edge()
+    } else {
+        a.edge()
+    };
+    let (c, f) = (topo.edge(contact)?, topo.edge(far)?);
+    if !matches!(c.curve(), brepkit_topology::edge::EdgeCurve::Line)
+        || !matches!(f.curve(), brepkit_topology::edge::EdgeCurve::Line)
+    {
+        return Ok(None);
+    }
+    let same_ends = (c.start() == f.start() && c.end() == f.end())
+        || (c.start() == f.end() && c.end() == f.start());
+    Ok(same_ends.then_some(far))
 }
 
 /// A flat chamfer's contacts end in the section square to its edge at each
