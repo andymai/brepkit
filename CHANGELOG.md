@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.11.6](https://github.com/andymai/brepkit/compare/v4.11.5...v4.11.6) (2026-11-13)
+
+
+### Bug Fixes
+
+* **operations:** loft profiles with spline edges along their curves ([#2399](https://github.com/andymai/brepkit/issues/2399)) ([3de6c91](https://github.com/andymai/brepkit/commit/3de6c917db754d8ea514bdc57914ae8c7cdfc60d))
+
 ## [4.11.5](https://github.com/andymai/brepkit/compare/v4.11.4...v4.11.5) (2026-11-12)
 
 
