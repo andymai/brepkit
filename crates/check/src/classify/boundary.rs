@@ -520,6 +520,7 @@ pub fn face_contains_each(
         FaceSurface::Nurbs(surface) => {
             let project = |q: Point3| -> (f64, f64) { surface.project_point(q) };
             let verts = face_polygon(topo, face_id)?;
+            // `NurbsFaceRegion` reads the same test, built once.
             let boundary = build_uv_boundary(&verts, &project, false);
             // A closed surface's seam copies project to one `u`, folding its
             // loop flat: such a face is the whole surface.
@@ -534,6 +535,62 @@ pub fn face_contains_each(
                 })
                 .collect()
         }
+    }
+}
+
+/// A NURBS face's outer loop and holes in its patch's parameters, as
+/// [`face_contains_each`] reads them, built once for a face tested at many
+/// points. Built only when every loop samples: a hole that fails to sample
+/// is reached by `face_contains_each` only for points inside the outer loop.
+pub struct NurbsFaceRegion {
+    boundary: Vec<(f64, f64)>,
+    whole: bool,
+    holes: Vec<Vec<(f64, f64)>>,
+}
+
+impl NurbsFaceRegion {
+    /// The region of a NURBS face on `surface`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a loop of the face cannot be sampled.
+    pub fn of(
+        topo: &Topology,
+        face_id: FaceId,
+        surface: &brepkit_math::nurbs::surface::NurbsSurface,
+    ) -> Result<Self, CheckError> {
+        let project = |q: Point3| -> (f64, f64) { surface.project_point(q) };
+        let verts = face_polygon(topo, face_id)?;
+        let boundary = build_uv_boundary(&verts, &project, false);
+        let whole = verts.len() < 3 || uv_area(&boundary) <= 1e-9 * uv_extent(&boundary);
+        let mut holes = Vec::new();
+        for &iw in topo.face(face_id)?.inner_wires() {
+            let hole = crate::util::wire_polygon(topo, iw)?;
+            if hole.len() >= 3 {
+                holes.push(build_uv_boundary(&hole, &project, false));
+            }
+        }
+        Ok(Self {
+            boundary,
+            whole,
+            holes,
+        })
+    }
+
+    /// Whether `p`, read on `surface`, lies in the face: what
+    /// [`face_contains_each`] answers for a NURBS face.
+    #[must_use]
+    pub fn contains(
+        &self,
+        surface: &brepkit_math::nurbs::surface::NurbsSurface,
+        p: Point3,
+    ) -> bool {
+        let (u, v) = surface.project_point(p);
+        (self.whole || point_in_uv_boundary(u, v, &self.boundary, false, false))
+            && !self
+                .holes
+                .iter()
+                .any(|hole| point_in_uv_boundary(u, v, hole, false, false))
     }
 }
 
@@ -1029,15 +1086,9 @@ pub fn count_face_ray_crossings(
                 apex,
             )
         }
-        FaceSurface::Nurbs(surface) => ray_crossings_nurbs(
-            topo,
-            face_id,
-            origin,
-            direction,
-            surface,
-            &cache.nurbs,
-            unsure,
-        ),
+        FaceSurface::Nurbs(surface) => {
+            ray_crossings_nurbs(topo, face_id, origin, direction, surface, cache, unsure)
+        }
     }
 }
 
@@ -1103,11 +1154,23 @@ pub fn plane_hit_inside(
 
 /// What a face's ray crossings build once and keep from one ray to the
 /// next: a sphere face's region, or a NURBS face's surface cut into the
-/// Bezier patches the ray is tested against.
+/// Bezier patches the ray is tested against and its boundary in the patch's
+/// parameters.
 #[derive(Default)]
 pub struct FaceRayCache {
     sphere: std::cell::OnceCell<Option<SphereRegion>>,
     nurbs: std::cell::OnceCell<Option<brepkit_math::nurbs::intersection::RaySurface>>,
+    nurbs_uv: std::cell::OnceCell<Option<NurbsUvBoundary>>,
+    /// A NURBS face's region for the on-boundary test, `None` where it did
+    /// not build.
+    pub(crate) nurbs_region: std::cell::OnceCell<Option<NurbsFaceRegion>>,
+}
+
+/// A NURBS face's outer and hole polygons in its patch's parameters; `None`
+/// in the cache for a face whose outer polygon has under three points.
+struct NurbsUvBoundary {
+    outer: Vec<Point2>,
+    holes: Vec<Vec<Point2>>,
 }
 
 /// Count ray crossings for a NURBS face using ray-surface intersection.
@@ -1123,11 +1186,12 @@ fn ray_crossings_nurbs(
     origin: Point3,
     direction: Vec3,
     surface: &brepkit_math::nurbs::surface::NurbsSurface,
-    patches: &std::cell::OnceCell<Option<brepkit_math::nurbs::intersection::RaySurface>>,
+    cache: &FaceRayCache,
     unsure: &mut bool,
 ) -> Result<u32, CheckError> {
-    let patches =
-        patches.get_or_init(|| brepkit_math::nurbs::intersection::RaySurface::new(surface));
+    let patches = cache
+        .nurbs
+        .get_or_init(|| brepkit_math::nurbs::intersection::RaySurface::new(surface));
     let hits = if let Some(patches) = patches {
         let found = patches.hits(origin, direction, NURBS_HIT_REACH);
         *unsure |= found.grazed;
@@ -1148,26 +1212,38 @@ fn ray_crossings_nurbs(
         return Ok(0);
     }
 
-    let verts = face_polygon(topo, face_id)?;
-    if verts.len() < 3 {
+    let periods = nurbs_periods(surface);
+    // The boundary is projected once per face, on its first hit: it does not
+    // depend on the ray.
+    let uv = &cache.nurbs_uv;
+    let boundary = if let Some(boundary) = uv.get() {
+        boundary
+    } else {
+        let verts = face_polygon(topo, face_id)?;
+        let boundary = if verts.len() < 3 {
+            None
+        } else {
+            let outer = nurbs_uv_polygon(&verts, surface, periods);
+            let mut holes = Vec::new();
+            for &iw in topo.face(face_id)?.inner_wires() {
+                let hole = crate::util::wire_polygon(topo, iw)?;
+                if hole.len() >= 3 {
+                    holes.push(nurbs_uv_polygon(&hole, surface, periods));
+                }
+            }
+            Some(NurbsUvBoundary { outer, holes })
+        };
+        uv.get_or_init(|| boundary)
+    };
+    let Some(NurbsUvBoundary { outer, holes }) = boundary else {
         // Full-surface face — every forward hit is a crossing.
         #[allow(clippy::cast_possible_truncation)]
         return Ok(hits.len() as u32);
-    }
-
-    let periods = nurbs_periods(surface);
-    let outer = nurbs_uv_polygon(&verts, surface, periods);
-    let mut holes = Vec::new();
-    for &iw in topo.face(face_id)?.inner_wires() {
-        let hole = crate::util::wire_polygon(topo, iw)?;
-        if hole.len() >= 3 {
-            holes.push(nurbs_uv_polygon(&hole, surface, periods));
-        }
-    }
+    };
 
     let mut crossings = 0u32;
     for &(_, hit_u, hit_v) in &hits {
-        if in_nurbs_uv_polygon(hit_u, hit_v, &outer, periods)
+        if in_nurbs_uv_polygon(hit_u, hit_v, outer, periods)
             && !holes
                 .iter()
                 .any(|hole| in_nurbs_uv_polygon(hit_u, hit_v, hole, periods))
@@ -1443,6 +1519,63 @@ mod tests {
         )
         .unwrap();
         assert!(unsure);
+    }
+
+    /// A NURBS face's region, built once, answers as `face_contains` does,
+    /// in its holes, inside it, past its edges and off its surface.
+    #[test]
+    fn a_nurbs_region_built_once_answers_as_face_contains() {
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        let (mut topo, bump) = bump_face(0.05);
+        let (outer, surface) = {
+            let f = topo.face(bump).unwrap();
+            (f.outer_wire(), f.surface().clone())
+        };
+        // A square hole on the flat part of the patch, where it is z = 0.
+        let v: Vec<_> = [(0.3, 0.3), (0.3, 0.7), (0.8, 0.7), (0.8, 0.3)]
+            .iter()
+            .map(|&(x, y)| topo.add_vertex(Vertex::new(Point3::new(x, y, 0.0), 1e-7)))
+            .collect();
+        let edges = (0..4)
+            .map(|i| {
+                let e = topo.add_edge(Edge::new(v[i], v[(i + 1) % 4], EdgeCurve::Line));
+                OrientedEdge::new(e, true)
+            })
+            .collect();
+        let hole = topo.add_wire(Wire::new(edges, true).unwrap());
+        let face = topo.add_face(Face::new(outer, vec![hole], surface));
+        let FaceSurface::Nurbs(nurbs) = topo.face(face).unwrap().surface().clone() else {
+            unreachable!()
+        };
+        let region = NurbsFaceRegion::of(&topo, face, &nurbs).unwrap();
+
+        let (mut inside, mut outside) = (0, 0);
+        for i in 0..=20 {
+            for j in 0..=6 {
+                for z in [-0.4, 0.0, 0.3] {
+                    let p = Point3::new(
+                        0.45f64.madd(f64::from(i), -0.5),
+                        0.24f64.madd(f64::from(j), -0.2),
+                        z,
+                    );
+                    let want = face_contains(&topo, face, p).unwrap();
+                    assert_eq!(region.contains(&nurbs, p), want, "{p:?}");
+                    if want {
+                        inside += 1;
+                    } else {
+                        outside += 1;
+                    }
+                }
+            }
+        }
+        assert!(inside > 40 && outside > 40, "{inside} in, {outside} out");
+        // The hole itself reads outside.
+        assert!(!region.contains(&nurbs, Point3::new(0.55, 0.5, 0.0)));
+        assert!(region.contains(&nurbs, Point3::new(2.0, 0.5, 0.0)));
     }
 
     /// The face of [`crosses_a_bump`], its bump inside knot spans `width`

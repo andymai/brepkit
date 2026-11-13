@@ -304,9 +304,9 @@ fn surface_newton_step_self(surface: &NurbsSurface, u: f64, v: f64, target: Poin
     let r = target - pt;
     let r_vec = Vec3::new(r.x(), r.y(), r.z());
 
-    let derivs = surface.derivatives(u, v, 1);
-    let su = derivs[1][0];
-    let sv = derivs[0][1];
+    let derivs = surface.first_derivatives(u, v);
+    let su = derivs.1;
+    let sv = derivs.2;
 
     let a11 = su.dot(su);
     let a12 = su.dot(sv);

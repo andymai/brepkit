@@ -13,7 +13,7 @@ use crate::vec::Point3;
 /// Set near machine epsilon — knot vectors are dimensionless parameters in
 /// [0, 1] (or similar small ranges), so a tolerance of 1e-15 catches
 /// floating-point coincidence without false positives.
-const KNOT_EPS: f64 = 1e-15;
+pub(crate) const KNOT_EPS: f64 = 1e-15;
 
 /// Insert knot `u` into the curve `r` times (Boehm's algorithm, A5.1).
 ///

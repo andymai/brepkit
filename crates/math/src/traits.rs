@@ -33,6 +33,13 @@ pub trait ParametricSurface {
     /// Partial derivative ∂S/∂v at (u, v).
     fn partial_v(&self, u: f64, v: f64) -> Vec3;
 
+    /// Both partials `(∂S/∂u, ∂S/∂v)` at (u, v), as `partial_u` and
+    /// `partial_v` give them; a surface that works both out at once
+    /// overrides it.
+    fn partials(&self, u: f64, v: f64) -> (Vec3, Vec3) {
+        (self.partial_u(u, v), self.partial_v(u, v))
+    }
+
     /// The u range `(start, end)` of a surface that closes on itself across
     /// it, so that u wraps round by `end - start`. `None` (the default) for
     /// a surface open in u, or one whose evaluation is already periodic in
@@ -217,14 +224,18 @@ impl ParametricSurface for NurbsSurface {
 
     #[inline]
     fn partial_u(&self, u: f64, v: f64) -> Vec3 {
-        let d = self.derivatives(u, v, 1);
-        d[1][0]
+        self.first_derivatives(u, v).1
     }
 
     #[inline]
     fn partial_v(&self, u: f64, v: f64) -> Vec3 {
-        let d = self.derivatives(u, v, 1);
-        d[0][1]
+        self.first_derivatives(u, v).2
+    }
+
+    #[inline]
+    fn partials(&self, u: f64, v: f64) -> (Vec3, Vec3) {
+        let (_, su, sv) = self.first_derivatives(u, v);
+        (su, sv)
     }
 
     fn closed_u(&self) -> Option<(f64, f64)> {

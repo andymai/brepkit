@@ -157,9 +157,9 @@ fn refine_curve_surface_point(
             return None;
         };
 
-        let s_derivs = surface.derivatives(u, v, 1);
-        let su = s_derivs[1][0];
-        let sv = s_derivs[0][1];
+        let s_derivs = surface.first_derivatives(u, v);
+        let su = s_derivs.1;
+        let sv = s_derivs.2;
 
         // J = [ct | -su | -sv], F = residual (as Vec3)
         // Solve J * [dt, du, dv]^T = -F

@@ -4,7 +4,7 @@ use crate::MathError;
 use crate::aabb::Aabb3;
 use crate::madd::Madd;
 use crate::nurbs::curve::NurbsCurve;
-use crate::nurbs::knot_ops::{surface_knot_insert_u, surface_knot_insert_v};
+use crate::nurbs::knot_ops::KNOT_EPS;
 use crate::nurbs::surface::NurbsSurface;
 use crate::vec::Point3;
 
@@ -195,42 +195,8 @@ pub fn surface_to_bezier_patches(surface: &NurbsSurface) -> Result<Vec<BezierPat
     let pu = surface.degree_u();
     let pv = surface.degree_v();
 
-    // Step 1: Insert u-knots to full multiplicity.
-    let mut refined = surface.clone();
-    {
-        let knots_u = refined.knots_u().to_vec();
-        let mut i = pu + 1;
-        while i < knots_u.len() - pu - 1 {
-            let u = knots_u[i];
-            let mut mult = 1;
-            while i + mult < knots_u.len() - pu - 1 && (knots_u[i + mult] - u).abs() < 1e-15 {
-                mult += 1;
-            }
-            let deficit = pu.saturating_sub(mult);
-            if deficit > 0 {
-                refined = surface_knot_insert_u(&refined, u, deficit)?;
-            }
-            i += mult;
-        }
-    }
-
-    // Step 2: Insert v-knots to full multiplicity.
-    {
-        let knots_v = refined.knots_v().to_vec();
-        let mut i = pv + 1;
-        while i < knots_v.len() - pv - 1 {
-            let v = knots_v[i];
-            let mut mult = 1;
-            while i + mult < knots_v.len() - pv - 1 && (knots_v[i + mult] - v).abs() < 1e-15 {
-                mult += 1;
-            }
-            let deficit = pv.saturating_sub(mult);
-            if deficit > 0 {
-                refined = surface_knot_insert_v(&refined, v, deficit)?;
-            }
-            i += mult;
-        }
-    }
+    // Steps 1 and 2: insert u- then v-knots to full multiplicity.
+    let refined = refine_to_full_multiplicity(surface)?;
 
     // Step 3: Extract unique knot spans in u and v.
     let ref_knots_u = refined.knots_u();
@@ -303,6 +269,139 @@ pub fn surface_to_bezier_patches(surface: &NurbsSurface) -> Result<Vec<BezierPat
     }
 
     Ok(patches)
+}
+
+/// The knots `surface_to_bezier_patches` inserts along one direction, in
+/// order, each with the count it asks for: every interior knot of `knots`
+/// short of multiplicity `p`.
+fn full_multiplicity_insertions(knots: &[f64], p: usize) -> Vec<(f64, usize)> {
+    let mut out = Vec::new();
+    let mut i = p + 1;
+    while i < knots.len() - p - 1 {
+        let u = knots[i];
+        let mut mult = 1;
+        while i + mult < knots.len() - p - 1 && (knots[i + mult] - u).abs() < 1e-15 {
+            mult += 1;
+        }
+        let deficit = p.saturating_sub(mult);
+        if deficit > 0 {
+            out.push((u, deficit));
+        }
+        i += mult;
+    }
+    out
+}
+
+/// `surface` with every interior knot raised to full multiplicity, u then
+/// v: what inserting each with [`surface_knot_insert_u`] and
+/// [`surface_knot_insert_v`] gives, bit for bit, on one grid rather than a
+/// curve per row or column and a surface per knot.
+fn refine_to_full_multiplicity(surface: &NurbsSurface) -> Result<NurbsSurface, MathError> {
+    let (pu, pv) = (surface.degree_u(), surface.degree_v());
+    let mut cps = surface.control_points().to_vec();
+    let mut ws = surface.weights().to_vec();
+    let mut knots_u = surface.knots_u().to_vec();
+    let mut knots_v = surface.knots_v().to_vec();
+    let along_u = full_multiplicity_insertions(&knots_u, pu);
+    let along_v = full_multiplicity_insertions(&knots_v, pv);
+    if cps.first().is_none_or(Vec::is_empty) && !(along_u.is_empty() && along_v.is_empty()) {
+        return Err(MathError::EmptyInput);
+    }
+    for (u, r) in along_u {
+        insert_along_rows(&mut cps, &mut ws, &mut knots_u, pu, u, r);
+    }
+    if !along_v.is_empty() {
+        let (mut cols, mut wcols) = (transpose(&cps), transpose(&ws));
+        for (v, r) in along_v {
+            insert_along_rows(&mut cols, &mut wcols, &mut knots_v, pv, v, r);
+        }
+        cps = transpose(&cols);
+        ws = transpose(&wcols);
+    }
+    NurbsSurface::new(pu, pv, knots_u, knots_v, cps, ws)
+}
+
+fn transpose<T: Copy>(grid: &[Vec<T>]) -> Vec<Vec<T>> {
+    let n = grid.first().map_or(0, Vec::len);
+    (0..n)
+        .map(|j| grid.iter().map(|row| row[j]).collect())
+        .collect()
+}
+
+/// [`crate::nurbs::knot_ops::curve_knot_insert`] of `u`, `r` times, on
+/// every column of the grid at once (its rows run along the curves): the
+/// same multiplicity cap, homogeneous points, blends and knot vector.
+fn insert_along_rows(
+    cps: &mut Vec<Vec<Point3>>,
+    ws: &mut Vec<Vec<f64>>,
+    knots: &mut Vec<f64>,
+    p: usize,
+    u: f64,
+    r: usize,
+) {
+    let s = knots
+        .iter()
+        .filter(|&&kv| (kv - u).abs() < KNOT_EPS)
+        .count();
+    let r = r.min(p.saturating_sub(s));
+    if r == 0 {
+        return;
+    }
+    let mut h: Vec<Vec<[f64; 4]>> = cps
+        .iter()
+        .zip(ws.iter())
+        .map(|(row, wrow)| {
+            row.iter()
+                .zip(wrow)
+                .map(|(pt, &w)| [pt.x() * w, pt.y() * w, pt.z() * w, w])
+                .collect()
+        })
+        .collect();
+    for _ in 0..r {
+        let ck = crate::nurbs::basis::find_span(h.len(), p, u, knots);
+        let new_rows: Vec<Vec<[f64; 4]>> = ((ck - p + 1)..=ck)
+            .map(|i| {
+                let denom = knots[i + p] - knots[i];
+                let alpha = if denom.abs() < KNOT_EPS {
+                    0.0
+                } else {
+                    (u - knots[i]) / denom
+                };
+                h[i - 1]
+                    .iter()
+                    .zip(&h[i])
+                    .map(|(prev, curr)| {
+                        [
+                            alpha * curr[0] + (1.0 - alpha) * prev[0],
+                            alpha * curr[1] + (1.0 - alpha) * prev[1],
+                            alpha * curr[2] + (1.0 - alpha) * prev[2],
+                            alpha * curr[3] + (1.0 - alpha) * prev[3],
+                        ]
+                    })
+                    .collect()
+            })
+            .collect();
+        h.splice((ck - p + 1)..ck, new_rows);
+        knots.insert(ck + 1, u);
+    }
+    *cps = h
+        .iter()
+        .map(|row| {
+            row.iter()
+                .map(|h| {
+                    if h[3] == 0.0 {
+                        Point3::new(h[0], h[1], h[2])
+                    } else {
+                        Point3::new(h[0] / h[3], h[1] / h[3], h[2] / h[3])
+                    }
+                })
+                .collect()
+        })
+        .collect();
+    *ws = h
+        .iter()
+        .map(|row| row.iter().map(|h| h[3]).collect())
+        .collect();
 }
 
 /// Elevate the degree of a NURBS curve by `t` (A5.9).
@@ -453,6 +552,129 @@ use super::basis::binomial;
 #[allow(clippy::expect_used, clippy::cast_lossless, clippy::suboptimal_flops)]
 mod tests {
     use super::*;
+
+    /// Steps 1 and 2 of `surface_to_bezier_patches` as they were: a
+    /// surface rebuilt per knot inserted.
+    fn refine_by_insertion(surface: &NurbsSurface) -> NurbsSurface {
+        use crate::nurbs::knot_ops::{surface_knot_insert_u, surface_knot_insert_v};
+        let (pu, pv) = (surface.degree_u(), surface.degree_v());
+        // Step 1: Insert u-knots to full multiplicity.
+        let mut refined = surface.clone();
+        {
+            let knots_u = refined.knots_u().to_vec();
+            let mut i = pu + 1;
+            while i < knots_u.len() - pu - 1 {
+                let u = knots_u[i];
+                let mut mult = 1;
+                while i + mult < knots_u.len() - pu - 1 && (knots_u[i + mult] - u).abs() < 1e-15 {
+                    mult += 1;
+                }
+                let deficit = pu.saturating_sub(mult);
+                if deficit > 0 {
+                    refined = surface_knot_insert_u(&refined, u, deficit).expect("inserted");
+                }
+                i += mult;
+            }
+        }
+
+        // Step 2: Insert v-knots to full multiplicity.
+        {
+            let knots_v = refined.knots_v().to_vec();
+            let mut i = pv + 1;
+            while i < knots_v.len() - pv - 1 {
+                let v = knots_v[i];
+                let mut mult = 1;
+                while i + mult < knots_v.len() - pv - 1 && (knots_v[i + mult] - v).abs() < 1e-15 {
+                    mult += 1;
+                }
+                let deficit = pv.saturating_sub(mult);
+                if deficit > 0 {
+                    refined = surface_knot_insert_v(&refined, v, deficit).expect("inserted");
+                }
+                i += mult;
+            }
+        }
+
+        refined
+    }
+
+    /// The grid refinement is the knot-by-knot insertion's, bit for bit:
+    /// rational and polynomial nets, degrees 1 to 4, knots already at full
+    /// multiplicity or past half of it, uneven spans.
+    #[test]
+    fn refinement_matches_insertion_knot_by_knot() {
+        let net = |pu: usize, pv: usize, n: usize, m: usize, rational: bool, double: bool| {
+            let knots = |p: usize, n: usize| {
+                let mut k = vec![0.0; p + 1];
+                let mut i = 1;
+                while k.len() < n {
+                    let t = i as f64 / (n - p) as f64;
+                    let t = t * t.madd(0.3, 0.7);
+                    k.push(t);
+                    if double && i % 3 == 0 && k.len() < n {
+                        k.push(t);
+                    }
+                    i += 1;
+                }
+                k.extend(vec![1.0; p + 1]);
+                k
+            };
+            let points = (0..n)
+                .map(|i| {
+                    (0..m)
+                        .map(|j| {
+                            let (x, y) = (i as f64, j as f64);
+                            Point3::new(x * 1.7, y * 0.3, (x * 0.7 + y * 1.3).sin())
+                        })
+                        .collect()
+                })
+                .collect();
+            let weights = (0..n)
+                .map(|i| {
+                    (0..m)
+                        .map(|j| {
+                            if rational {
+                                0.3 + 1.4 * ((i * 3 + j * 5) % 7) as f64 / 7.0
+                            } else {
+                                1.0
+                            }
+                        })
+                        .collect()
+                })
+                .collect();
+            NurbsSurface::new(pu, pv, knots(pu, n), knots(pv, m), points, weights)
+                .expect("valid net")
+        };
+        let bits = |s: &NurbsSurface| {
+            let pts: Vec<u64> = s
+                .control_points()
+                .iter()
+                .flatten()
+                .flat_map(|p| [p.x().to_bits(), p.y().to_bits(), p.z().to_bits()])
+                .collect();
+            let ws: Vec<u64> = s.weights().iter().flatten().map(|w| w.to_bits()).collect();
+            let k: Vec<u64> = s
+                .knots_u()
+                .iter()
+                .chain(s.knots_v())
+                .map(|k| k.to_bits())
+                .collect();
+            (pts, ws, k)
+        };
+        for (pu, pv) in [(1, 1), (2, 3), (3, 2), (3, 3), (4, 1), (1, 4)] {
+            for rational in [false, true] {
+                for double in [false, true] {
+                    let s = net(pu, pv, pu + 9, pv + 7, rational, double);
+                    let fast = refine_to_full_multiplicity(&s).expect("refined");
+                    assert_eq!(
+                        bits(&fast),
+                        bits(&refine_by_insertion(&s)),
+                        "degrees ({pu}, {pv}), rational {rational}, double {double}"
+                    );
+                }
+            }
+        }
+    }
 
     fn cubic_bezier() -> NurbsCurve {
         NurbsCurve::new(

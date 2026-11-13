@@ -131,9 +131,9 @@ fn refine_line_surface_point(
             });
         }
 
-        let derivs = surface.derivatives(u, v, 1);
-        let su = derivs[1][0];
-        let sv = derivs[0][1];
+        let derivs = surface.first_derivatives(u, v);
+        let su = derivs.1;
+        let sv = derivs.2;
 
         let r = Vec3::new(residual.x(), residual.y(), residual.z());
 

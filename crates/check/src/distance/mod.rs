@@ -155,18 +155,30 @@ pub fn point_to_face(
                 Ok(closest_point_on_wire_edges(topo, face_id, point)?)
             }
         }
-        FaceSurface::Nurbs(nurbs) => {
-            match brepkit_math::nurbs::projection::project_point_to_surface(nurbs, point, 1e-7) {
-                Ok(proj) => {
-                    if is_point_in_face_boundary(topo, face_id, proj.point)? {
-                        Ok(Some((proj.distance, proj.point)))
-                    } else {
-                        closest_point_on_wire_edges(topo, face_id, point)
-                    }
-                }
-                Err(_) => Ok(None),
+        FaceSurface::Nurbs(nurbs) => point_to_nurbs_face(topo, point, face_id, nurbs, |q| {
+            is_point_in_face_boundary(topo, face_id, q)
+        }),
+    }
+}
+
+/// [`point_to_face`] for a NURBS face, `inside` telling whether a point on
+/// the surface lies in the face.
+pub(crate) fn point_to_nurbs_face(
+    topo: &Topology,
+    point: Point3,
+    face_id: FaceId,
+    nurbs: &brepkit_math::nurbs::surface::NurbsSurface,
+    inside: impl Fn(Point3) -> Result<bool, CheckError>,
+) -> Result<Option<(f64, Point3)>, CheckError> {
+    match brepkit_math::nurbs::projection::project_point_to_surface(nurbs, point, 1e-7) {
+        Ok(proj) => {
+            if inside(proj.point)? {
+                Ok(Some((proj.distance, proj.point)))
+            } else {
+                closest_point_on_wire_edges(topo, face_id, point)
             }
         }
+        Err(_) => Ok(None),
     }
 }
 

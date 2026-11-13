@@ -499,9 +499,9 @@ fn refine_in_domain(
                 param2: (state[2], state[3]),
             });
         }
-        let d1 = s1.derivatives(state[0], state[1], 1);
-        let d2 = s2.derivatives(state[2], state[3], 1);
-        let j = [d1[1][0], d1[0][1], -d2[1][0], -d2[0][1]];
+        let d1 = s1.first_derivatives(state[0], state[1]);
+        let d2 = s2.first_derivatives(state[2], state[3]);
+        let j = [d1.1, d1.2, -d2.1, -d2.2];
         let r_vec = Vec3::new(r.x(), r.y(), r.z());
         let jtr: [f64; 4] = std::array::from_fn(|i| -j[i].dot(r_vec));
         let mut jtj: [[f64; 4]; 4] =
@@ -1356,8 +1356,10 @@ pub(super) fn refine_ssi_point(
 
     for iteration in 0..MAX_NEWTON_ITER {
         let cstate = constrain_state(&state, s1, s2);
-        let p1 = s1.evaluate(cstate[0], cstate[1]);
-        let p2 = s2.evaluate(cstate[2], cstate[3]);
+        // Each point and its partials in one pass (the same numbers as
+        // `evaluate` and `derivatives(.., 1)`).
+        let (p1, d1u, d1v) = s1.point_and_first_derivatives(cstate[0], cstate[1]);
+        let (p2, d2u, d2v) = s2.point_and_first_derivatives(cstate[2], cstate[3]);
         let r = p1 - p2;
         let residual = r.length();
 
@@ -1378,9 +1380,7 @@ pub(super) fn refine_ssi_point(
         prev_residual = residual;
 
         // Build 3x4 Jacobian: J = [dS1/du1, dS1/dv1, -dS2/du2, -dS2/dv2]
-        let d1 = s1.derivatives(cstate[0], cstate[1], 1);
-        let d2 = s2.derivatives(cstate[2], cstate[3], 1);
-        let j = [d1[1][0], d1[0][1], -d2[1][0], -d2[0][1]]; // 4 column vectors (Vec3)
+        let j = [d1u, d1v, -d2u, -d2v]; // 4 column vectors (Vec3)
 
         // Normal equations: JtJ (4x4) * d = -Jtr (4x1)
         // Use only the well-conditioned 4x4 system.

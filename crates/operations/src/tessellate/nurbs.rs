@@ -876,8 +876,8 @@ pub(super) fn tessellate_periodic_nurbs_grid(
     );
     let (n_u, n_v) = (n_u.max(3), n_v.max(3));
     let (um, vm) = (0.5 * (u_lo + u_hi), 0.5 * (v_lo + v_hi));
-    let duv = surface.derivatives(um, vm, 1);
-    let right_handed = duv[1][0].cross(duv[0][1]).dot(safe_normal(surface, um, vm)) >= 0.0;
+    let duv = surface.first_derivatives(um, vm);
+    let right_handed = duv.1.cross(duv.2).dot(safe_normal(surface, um, vm)) >= 0.0;
 
     let mut positions = Vec::with_capacity((n_u + 1) * (n_v + 1));
     let mut normals = Vec::with_capacity(positions.capacity());
@@ -1389,9 +1389,9 @@ pub(super) fn tessellate_nurbs(
     // Sample the parametric handedness at a safe interior point.
     let (um, vm) = (u_lo + (u_hi - u_lo) * 0.5, v_lo + (v_hi - v_lo) * 0.5);
     let mut handedness = 1.0_f64;
-    let duv = surface.derivatives(um, vm, 1);
-    let su = duv[1][0];
-    let sv = duv[0][1];
+    let duv = surface.first_derivatives(um, vm);
+    let su = duv.1;
+    let sv = duv.2;
     let nrm = safe_normal(surface, um, vm);
     if su.cross(sv).dot(nrm) < 0.0 {
         handedness = -1.0;

@@ -1382,9 +1382,9 @@ pub(super) fn refine_plane_surface_point(
         }
 
         // Compute gradient of f w.r.t. (u, v).
-        let derivs = surface.derivatives(u, v, 1);
-        let du = derivs[1][0]; // dS/du
-        let dv = derivs[0][1]; // dS/dv
+        let derivs = surface.first_derivatives(u, v);
+        let du = derivs.1; // dS/du
+        let dv = derivs.2; // dS/dv
 
         let grad_u = match pin {
             Some(Pin::U) => 0.0,
