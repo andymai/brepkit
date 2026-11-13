@@ -3948,6 +3948,23 @@ fn terminal_cap_is_notchable(
     if corner_edges.len() != 2 {
         return Ok(false);
     }
+    // A file's corner edge can stand off the side face it bounds (a B-spline
+    // skin's edges 3e-3 off it), and the contact on that face ends off the
+    // edge by as much: the ends are read on the edges within that too.
+    let sides = [contour.side1, contour.side2]
+        .map(|side| topo.face(side).map(|f| f.surface().clone()))
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()?;
+    let slack = corner_edges
+        .iter()
+        .map(|&(a, b, curve)| {
+            sides
+                .iter()
+                .map(|surface| edge_off_surface(curve, a, b, surface))
+                .fold(f64::INFINITY, f64::min)
+        })
+        .fold(0.0_f64, f64::max);
+    let reach = 1e-5 + if slack.is_finite() { slack } else { 0.0 };
     // Both contacts must end on those corner edges, or the split lands on
     // the cap's edge while the notch can never match its corner path.
     let on_segment = |point: Point3| {
@@ -3957,7 +3974,7 @@ fn terminal_cap_is_notchable(
                 let (low, high) = (t0.min(t1) - 1e-9, t0.max(t1) + 1e-9);
                 return brepkit_math::nurbs::projection::project_point_to_curve(nurbs, point, 1e-9)
                     .is_ok_and(|found| {
-                        found.distance <= 1e-5 && (low..=high).contains(&found.parameter)
+                        found.distance <= reach && (low..=high).contains(&found.parameter)
                     });
             }
             let ab = b - a;
@@ -3966,7 +3983,7 @@ fn terminal_cap_is_notchable(
                 return false;
             }
             let t = ((point - a).dot(ab) / len2).clamp(0.0, 1.0);
-            (a + ab * t - point).length() <= 1e-5
+            (a + ab * t - point).length() <= reach
         })
     };
     // Each contact's end at this end of the spine: the one at the end
@@ -3987,6 +4004,38 @@ fn terminal_cap_is_notchable(
         return Ok(false);
     };
     notch_stays_clear(topo, face, junction.vertex, *normal, near_ends, None)
+}
+
+/// How far the edge from `a` to `b` along `curve` stands off `surface`, read
+/// at its ends and at points along it (infinite where the surface cannot
+/// be read).
+fn edge_off_surface(
+    curve: &brepkit_topology::edge::EdgeCurve,
+    a: Point3,
+    b: Point3,
+    surface: &FaceSurface,
+) -> f64 {
+    const SAMPLES: u32 = 8;
+    let (t0, t1) = curve.domain_with_endpoints(a, b);
+    let mut farthest: f64 = 0.0;
+    for k in 0..=SAMPLES {
+        let t = (t1 - t0).mul_add(f64::from(k) / f64::from(SAMPLES), t0);
+        let p = curve.evaluate_with_endpoints(t, a, b);
+        let off = match surface {
+            FaceSurface::Plane { normal, d } => {
+                (normal.dot(Vec3::new(p.x(), p.y(), p.z())) - d).abs()
+            }
+            _ => match surface
+                .project_point(p)
+                .and_then(|(u, v)| surface.evaluate(u, v))
+            {
+                Some(q) => (q - p).length(),
+                None => return f64::INFINITY,
+            },
+        };
+        farthest = farthest.max(off);
+    }
+    farthest
 }
 
 /// Whether a cap's notch at `corner`, ending at `near_ends`, stays clear of
