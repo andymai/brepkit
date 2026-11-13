@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.11.9](https://github.com/andymai/brepkit/compare/v4.11.8...v4.11.9) (2026-11-13)
+
+
+### Performance
+
+* **algo:** cut a revolved spline solid through its axis without a fit or a search per sample ([#2408](https://github.com/andymai/brepkit/issues/2408)) ([206ec36](https://github.com/andymai/brepkit/commit/206ec368098e160eec6eb6cbc7f9049547d5d69c))
+
 ## [4.11.8](https://github.com/andymai/brepkit/compare/v4.11.7...v4.11.8) (2026-11-13)
 
 
