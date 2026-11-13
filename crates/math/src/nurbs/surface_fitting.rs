@@ -11,6 +11,7 @@
 )]
 
 use crate::MathError;
+use crate::madd::Madd;
 use crate::nurbs::basis::basis_funs;
 use crate::nurbs::fitting;
 use crate::nurbs::fitting::interpolate;
@@ -263,9 +264,9 @@ pub fn approximate_surface_lspia(
         for i in 0..mu {
             for j in 0..mv {
                 cps[i][j] = Point3::new(
-                    step.mul_add(deltas[i][j].0, cps[i][j].x()),
-                    step.mul_add(deltas[i][j].1, cps[i][j].y()),
-                    step.mul_add(deltas[i][j].2, cps[i][j].z()),
+                    step.madd(deltas[i][j].0, cps[i][j].x()),
+                    step.madd(deltas[i][j].1, cps[i][j].y()),
+                    step.madd(deltas[i][j].2, cps[i][j].z()),
                 );
             }
         }

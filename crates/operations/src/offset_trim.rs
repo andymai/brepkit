@@ -14,6 +14,7 @@
 //!    on degenerate surfaces or very tight folds), fall back to grid sampling
 //!    with distance checks against the original surface.
 
+use brepkit_math::madd::Madd;
 use brepkit_math::nurbs::projection::project_point_to_surface;
 use brepkit_math::nurbs::self_intersection::detect_self_intersection;
 use brepkit_math::nurbs::surface::NurbsSurface;
@@ -270,7 +271,7 @@ fn distance_tolerance(tolerance: f64, expected_dist: f64) -> f64 {
 
 /// Linearly interpolate between `a` and `b` at parameter `t`.
 fn lerp(a: f64, b: f64, t: f64) -> f64 {
-    t.mul_add(b - a, a)
+    t.madd(b - a, a)
 }
 
 /// Sample the offset surface on a grid and classify each sample as valid
@@ -513,9 +514,9 @@ mod tests {
                 let pt = surface.evaluate(u, v);
                 let normal = surface.normal(u, v).unwrap();
                 row.push(P::new(
-                    normal.x().mul_add(distance, pt.x()),
-                    normal.y().mul_add(distance, pt.y()),
-                    normal.z().mul_add(distance, pt.z()),
+                    normal.x().madd(distance, pt.x()),
+                    normal.y().madd(distance, pt.y()),
+                    normal.z().madd(distance, pt.z()),
                 ));
             }
             grid.push(row);

@@ -1,5 +1,7 @@
 //! Fillet radius law definitions for variable-radius fillets.
 
+use brepkit_math::madd::Madd;
+
 /// Law governing how fillet radius varies along an edge.
 #[derive(Debug, Clone)]
 pub enum FilletRadiusLaw {
@@ -28,11 +30,11 @@ impl FilletRadiusLaw {
         let t = t.clamp(0.0, 1.0);
         match self {
             Self::Constant(r) => *r,
-            Self::Linear { start, end } => (end - start).mul_add(t, *start),
+            Self::Linear { start, end } => (end - start).madd(t, *start),
             Self::SCurve { start, end } => {
                 // Smooth step: 3t² - 2t³ (Hermite interpolation)
-                let s = t * t * (-2.0f64).mul_add(t, 3.0);
-                (end - start).mul_add(s, *start)
+                let s = t * t * (-2.0f64).madd(t, 3.0);
+                (end - start).madd(s, *start)
             }
         }
     }

@@ -7,6 +7,7 @@
 //! vertices. This builds that image directly and declines (`None`) wherever
 //! the premise fails, so the caller can take another route.
 
+use brepkit_math::madd::Madd;
 use std::collections::{BTreeMap, BTreeSet};
 use std::f64::consts::TAU;
 
@@ -573,7 +574,7 @@ fn wire_points(topo: &Topology, wire: WireId) -> Option<Vec<(Point3, f64)>> {
             let f = k as f64 / steps as f64;
             let f = if oe.is_forward() { f } else { 1.0 - f };
             points.push((
-                curve.evaluate_with_endpoints((t1 - t0).mul_add(f, t0), a, b),
+                curve.evaluate_with_endpoints((t1 - t0).madd(f, t0), a, b),
                 sag,
             ));
         }
@@ -584,7 +585,7 @@ fn wire_points(topo: &Topology, wire: WireId) -> Option<Vec<(Point3, f64)>> {
 /// The distance between two 2D segments.
 fn segment_distance(p: (f64, f64), q: (f64, f64), r: (f64, f64), s: (f64, f64)) -> f64 {
     let cross = |o: (f64, f64), a: (f64, f64), b: (f64, f64)| {
-        (a.0 - o.0).mul_add(b.1 - o.1, -((a.1 - o.1) * (b.0 - o.0)))
+        (a.0 - o.0).madd(b.1 - o.1, -((a.1 - o.1) * (b.0 - o.0)))
     };
     let (d1, d2) = (cross(p, q, r), cross(p, q, s));
     let (d3, d4) = (cross(r, s, p), cross(r, s, q));
@@ -593,13 +594,13 @@ fn segment_distance(p: (f64, f64), q: (f64, f64), r: (f64, f64), s: (f64, f64)) 
     }
     let to_segment = |x: (f64, f64), a: (f64, f64), b: (f64, f64)| {
         let (dx, dy) = (b.0 - a.0, b.1 - a.1);
-        let len2 = dx.mul_add(dx, dy * dy);
+        let len2 = dx.madd(dx, dy * dy);
         let t = if len2 > 0.0 {
-            ((x.0 - a.0).mul_add(dx, (x.1 - a.1) * dy) / len2).clamp(0.0, 1.0)
+            ((x.0 - a.0).madd(dx, (x.1 - a.1) * dy) / len2).clamp(0.0, 1.0)
         } else {
             0.0
         };
-        (x.0 - t.mul_add(dx, a.0)).hypot(x.1 - t.mul_add(dy, a.1))
+        (x.0 - t.madd(dx, a.0)).hypot(x.1 - t.madd(dy, a.1))
     };
     to_segment(p, r, s)
         .min(to_segment(q, r, s))
@@ -613,7 +614,7 @@ fn inside(x: (f64, f64), poly: &[(f64, f64)]) -> bool {
     for i in 0..poly.len() {
         let (a, b) = (poly[i], poly[(i + 1) % poly.len()]);
         if (a.1 > x.1) != (b.1 > x.1) {
-            let at = (b.0 - a.0).mul_add((x.1 - a.1) / (b.1 - a.1), a.0);
+            let at = (b.0 - a.0).madd((x.1 - a.1) / (b.1 - a.1), a.0);
             if x.0 < at {
                 odd = !odd;
             }

@@ -3,6 +3,7 @@
 //! Takes a set of independent faces and merges coincident edges/vertices
 //! to create a topologically connected shell.
 
+use brepkit_math::madd::Madd;
 use std::collections::HashMap;
 
 use brepkit_math::tolerance::Tolerance;
@@ -330,11 +331,8 @@ impl Span {
 
     /// The point a fraction `f` of the way along the parameter range.
     fn at(&self, f: f64) -> Point3 {
-        self.curve.evaluate_with_endpoints(
-            f.mul_add(self.t1 - self.t0, self.t0),
-            self.start,
-            self.end,
-        )
+        self.curve
+            .evaluate_with_endpoints(f.madd(self.t1 - self.t0, self.t0), self.start, self.end)
     }
 
     /// The fractions that decide whether this span lies on another curve:
@@ -343,7 +341,7 @@ impl Span {
         self.pieces.iter().flat_map(|piece| {
             let n = f64::from(piece.inside + 1);
             (0..=piece.inside + 1)
-                .map(move |k| (piece.to - piece.from).mul_add(f64::from(k) / n, piece.from))
+                .map(move |k| (piece.to - piece.from).madd(f64::from(k) / n, piece.from))
         })
     }
 
@@ -376,14 +374,14 @@ impl Span {
             // between a few samples: start from the least of them.
             let n = piece.inside + 1;
             let fs: Vec<f64> = (0..=n)
-                .map(|k| (piece.to - piece.from).mul_add(f64::from(k) / f64::from(n), piece.from))
+                .map(|k| (piece.to - piece.from).madd(f64::from(k) / f64::from(n), piece.from))
                 .collect();
             let ds: Vec<f64> = fs.iter().map(|&f| dist(f)).collect();
             let i = (0..ds.len())
                 .min_by(|&a, &b| ds[a].total_cmp(&ds[b]))
                 .unwrap_or(0);
             let (mut a, mut b) = (fs[i.saturating_sub(1)], fs[(i + 1).min(fs.len() - 1)]);
-            let (mut c, mut e) = (b - golden * (b - a), golden.mul_add(b - a, a));
+            let (mut c, mut e) = (b - golden * (b - a), golden.madd(b - a, a));
             let (mut dc, mut de) = (dist(c), dist(e));
             for _ in 0..80 {
                 if dc <= de {
@@ -392,7 +390,7 @@ impl Span {
                     dc = dist(c);
                 } else {
                     (a, c, dc) = (c, e, de);
-                    e = golden.mul_add(b - a, a);
+                    e = golden.madd(b - a, a);
                     de = dist(e);
                 }
             }
@@ -565,7 +563,7 @@ fn split_bezier(pts: &[[f64; 4]], s: f64) -> (Vec<[f64; 4]>, Vec<[f64; 4]>) {
     for r in 1..n {
         for k in 0..n - r {
             for c in 0..4 {
-                work[k][c] = (work[k + 1][c] - work[k][c]).mul_add(s, work[k][c]);
+                work[k][c] = (work[k + 1][c] - work[k][c]).madd(s, work[k][c]);
             }
         }
         left.push(work[0]);
@@ -1096,7 +1094,7 @@ mod tests {
         let (a, b) = (span(&curve), span(&curve));
         for piece in &a.pieces {
             for k in 0..=8 {
-                let f = (piece.to - piece.from).mul_add(f64::from(k) / 8.0, piece.from);
+                let f = (piece.to - piece.from).madd(f64::from(k) / 8.0, piece.from);
                 assert!((a.at(f) - piece.centre).length() <= piece.radius + 1e-12);
             }
         }
@@ -1268,12 +1266,12 @@ mod tests {
         let mut topo = Topology::new();
         let up = Vec3::new(0.0, 0.0, 1.0);
         let spiral = |theta: f64| {
-            let r = 6e-9_f64.mul_add(theta, 1.0);
+            let r = 6e-9_f64.madd(theta, 1.0);
             Point3::new(r * theta.cos(), r * theta.sin(), 0.0)
         };
         let quarter = std::f64::consts::FRAC_PI_2;
         let points: Vec<Point3> = (0..=80)
-            .map(|k| spiral((5.0 * quarter).mul_add(f64::from(k) / 80.0, -quarter)))
+            .map(|k| spiral((5.0 * quarter).madd(f64::from(k) / 80.0, -quarter)))
             .collect();
         let fit = brepkit_math::nurbs::fitting::interpolate(&points, 3).unwrap();
         let curve = brepkit_math::nurbs::curve::NurbsCurve::new(
@@ -1320,7 +1318,7 @@ mod tests {
         let length: f64 = (0..2000)
             .map(|k| {
                 let at = |k: i32| {
-                    let t = (t1 - t0).mul_add(f64::from(k) / 2000.0, t0);
+                    let t = (t1 - t0).madd(f64::from(k) / 2000.0, t0);
                     edge.curve().evaluate_with_endpoints(t, p, p)
                 };
                 (at(k + 1) - at(k)).length()

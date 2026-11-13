@@ -11,6 +11,7 @@ mod sampling;
 mod special_cases;
 pub(in crate::builder) use special_cases::cylinder_cone_remainder_interior;
 
+use brepkit_math::madd::Madd;
 pub use conversion::collect_wire_points;
 
 use brepkit_math::region2d::point_in_region;
@@ -64,7 +65,7 @@ const ARR_ARC_SAMPLES: usize = 32;
 fn seg_cross_param(a0: Point2, a1: Point2, b0: Point2, b1: Point2) -> Option<f64> {
     let (rx, ry) = (a1.x() - a0.x(), a1.y() - a0.y());
     let (sx, sy) = (b1.x() - b0.x(), b1.y() - b0.y());
-    let denom = rx.mul_add(sy, -(ry * sx));
+    let denom = rx.madd(sy, -(ry * sx));
     // `denom = |r x s| = |r||s| sin(theta)`; test it relative to the segment
     // lengths so near-parallel rejection is independent of model scale.
     let scale = (rx.hypot(ry) * sx.hypot(sy)).max(f64::MIN_POSITIVE);
@@ -72,8 +73,8 @@ fn seg_cross_param(a0: Point2, a1: Point2, b0: Point2, b1: Point2) -> Option<f64
         return None;
     }
     let (qx, qy) = (b0.x() - a0.x(), b0.y() - a0.y());
-    let t = qx.mul_add(sy, -(qy * sx)) / denom;
-    let u = qx.mul_add(ry, -(qy * rx)) / denom;
+    let t = qx.madd(sy, -(qy * sx)) / denom;
+    let u = qx.madd(ry, -(qy * rx)) / denom;
     // `t`/`u` are normalized [0,1] parameters, so these epsilons are already
     // scale-invariant fractions of each segment.
     (t > 1e-6 && t < 1.0 - 1e-6 && u > -1e-6 && u < 1.0 + 1e-6).then_some(t)
@@ -87,12 +88,12 @@ fn seg_cross_param(a0: Point2, a1: Point2, b0: Point2, b1: Point2) -> Option<f64
 fn collinear_overlap_span(a0: Point2, a1: Point2, b0: Point2, b1: Point2) -> Option<(f64, f64)> {
     let (rx, ry) = (a1.x() - a0.x(), a1.y() - a0.y());
     let (sx, sy) = (b1.x() - b0.x(), b1.y() - b0.y());
-    let len2 = rx.mul_add(rx, ry * ry);
+    let len2 = rx.madd(rx, ry * ry);
     if len2 < 1e-18 {
         return None;
     }
     let scale = (rx.hypot(ry) * sx.hypot(sy)).max(f64::MIN_POSITIVE);
-    if rx.mul_add(sy, -(ry * sx)).abs() > 1e-9 * scale {
+    if rx.madd(sy, -(ry * sx)).abs() > 1e-9 * scale {
         return None;
     }
     let len = len2.sqrt();
@@ -586,7 +587,7 @@ pub fn edge_curve_is_straight(curve: &EdgeCurve) -> bool {
             pts.iter().all(|p| {
                 let v = *p - *first;
                 let along = v.dot(chord) / len;
-                let dev_sq = along.mul_add(-along, v.dot(v));
+                let dev_sq = along.madd(-along, v.dot(v));
                 dev_sq < 1e-14
             })
         }
@@ -653,15 +654,15 @@ fn integrate_holes_plane(
     // weld band for the two to meet as one vertex.
     let ends_on = |p: Point2, h0: Point2, h1: Point2| -> Option<f64> {
         let (dx, dy) = (h1.x() - h0.x(), h1.y() - h0.y());
-        let len2 = dx.mul_add(dx, dy * dy);
+        let len2 = dx.madd(dx, dy * dy);
         if len2 < 1e-24 {
             return None;
         }
-        let t = (p.x() - h0.x()).mul_add(dx, (p.y() - h0.y()) * dy) / len2;
+        let t = (p.x() - h0.x()).madd(dx, (p.y() - h0.y()) * dy) / len2;
         if !(1e-6..=1.0 - 1e-6).contains(&t) {
             return None;
         }
-        let q = Point2::new(dx.mul_add(t, h0.x()), dy.mul_add(t, h0.y()));
+        let q = Point2::new(dx.madd(t, h0.x()), dy.madd(t, h0.y()));
         ((q - p).length() < 1e-8).then_some(t)
     };
     // The weave reads regions by chords, so an arc whose chord lies along the
@@ -960,15 +961,15 @@ fn integrate_holes_plane(
 fn segments_cross_at(a0: Point2, a1: Point2, b0: Point2, b1: Point2) -> Option<Point2> {
     let (rx, ry) = (a1.x() - a0.x(), a1.y() - a0.y());
     let (sx, sy) = (b1.x() - b0.x(), b1.y() - b0.y());
-    let denom = rx.mul_add(sy, -(ry * sx));
+    let denom = rx.madd(sy, -(ry * sx));
     if denom.abs() <= 1e-12 * rx.hypot(ry) * sx.hypot(sy) {
         return None;
     }
     let (qx, qy) = (b0.x() - a0.x(), b0.y() - a0.y());
-    let t = qx.mul_add(sy, -(qy * sx)) / denom;
-    let u = qx.mul_add(ry, -(qy * rx)) / denom;
+    let t = qx.madd(sy, -(qy * sx)) / denom;
+    let u = qx.madd(ry, -(qy * rx)) / denom;
     ((0.0..=1.0).contains(&t) && (0.0..=1.0).contains(&u))
-        .then(|| Point2::new(rx.mul_add(t, a0.x()), ry.mul_add(t, a0.y())))
+        .then(|| Point2::new(rx.madd(t, a0.x()), ry.madd(t, a0.y())))
 }
 
 /// Whether the chord `a`-`b` lies along the line through `h0`-`h1`.
@@ -2890,7 +2891,7 @@ fn sections_meet_midway(sections: &[SectionEdge], frame: &PlaneFrame, tol: f64) 
             let (t0, t1) = s.curve_3d.domain_with_endpoints(s.start, s.end);
             (0..=CURVE_STEPS)
                 .map(|k| {
-                    let t = (t1 - t0).mul_add(f64::from(k) / f64::from(CURVE_STEPS), t0);
+                    let t = (t1 - t0).madd(f64::from(k) / f64::from(CURVE_STEPS), t0);
                     frame.project(s.curve_3d.evaluate_with_endpoints(t, s.start, s.end))
                 })
                 .collect()
@@ -3014,7 +3015,7 @@ pub fn split_plane_into_cells(
         };
         let at = |f: f64| {
             section.curve_3d.evaluate_with_endpoints(
-                (t1 - t0).mul_add(f, from),
+                (t1 - t0).madd(f, from),
                 section.start,
                 section.end,
             )
@@ -3511,7 +3512,7 @@ fn arrangement_regions_from_inputs(
         let d = b - a;
         let len = d.length().max(f64::MIN_POSITIVE);
         poly.iter()
-            .map(|(_, p)| (d.x().mul_add(p.y() - a.y(), -(d.y() * (p.x() - a.x()))) / len).abs())
+            .map(|(_, p)| (d.x().madd(p.y() - a.y(), -(d.y() * (p.x() - a.x()))) / len).abs())
             .fold(0.0, f64::max)
     };
     let line_arc_crossings = |la: Point2, lb: Point2, ai: usize| -> Vec<Point2> {
@@ -3530,8 +3531,7 @@ fn arrangement_regions_from_inputs(
                 || (p - lb).length() <= guard
         };
         let ld = lb - la;
-        let side =
-            |p: Point2| -> f64 { ld.x().mul_add(p.y() - la.y(), -(ld.y() * (p.x() - la.x()))) };
+        let side = |p: Point2| -> f64 { ld.x().madd(p.y() - la.y(), -(ld.y() * (p.x() - la.x()))) };
         let mut out = Vec::new();
         for w in poly.windows(2) {
             let ((t0, p0), (t1, p1)) = (w[0], w[1]);
@@ -4253,7 +4253,7 @@ fn arrangement_regions_from_inputs(
         let outer_area = face_area(&faces[outer_idx]).abs();
         let interior_area_sum: f64 = areas.iter().sum();
         let clean_tiling =
-            (interior_area_sum - outer_area).abs() <= outer_area.mul_add(1e-6, tol * tol);
+            (interior_area_sum - outer_area).abs() <= outer_area.madd(1e-6, tol * tol);
         // `outer` contains `inner` when EVERY one of inner's polygon vertices
         // lies inside (or on) outer's polygon AND outer is strictly larger.
         // A probe-only test is symmetric for the concentric disks that
@@ -4672,7 +4672,7 @@ fn split_cylinder_band_by_arrangement(
                 if i >= n_boundary_edges {
                     let (t0, t1) = e.curve_3d.domain_with_endpoints(e.start_3d, e.end_3d);
                     let mid = e.curve_3d.evaluate_with_endpoints(
-                        0.5_f64.mul_add(t1 - t0, t0),
+                        0.5_f64.madd(t1 - t0, t0),
                         e.start_3d,
                         e.end_3d,
                     );
@@ -5119,7 +5119,7 @@ fn clip_sections_to_outer_region(
         #[allow(clippy::cast_precision_loss)]
         let mut pts3: Vec<Point3> = (0..=CURVE_SAMPLES)
             .map(|k| {
-                let t = (t1 - t0).mul_add(k as f64 / CURVE_SAMPLES as f64, t0);
+                let t = (t1 - t0).madd(k as f64 / CURVE_SAMPLES as f64, t0);
                 e.curve_3d.evaluate_with_endpoints(t, s3, e3)
             })
             .collect();
@@ -5169,7 +5169,7 @@ fn clip_sections_to_outer_region(
         // Test the 2-pi translates and keep the one nearest the polygon.
         let best = [-1.0f64, 0.0, 1.0]
             .iter()
-            .map(|k| Point2::new(k.mul_add(TAU, u), v))
+            .map(|k| Point2::new(k.madd(TAU, u), v))
             .min_by(|a, b| {
                 super::classify_2d::distance_to_polygon_boundary(*a, &poly)
                     .partial_cmp(&super::classify_2d::distance_to_polygon_boundary(*b, &poly))
@@ -5191,7 +5191,7 @@ fn clip_sections_to_outer_region(
             let mut last: Option<Point3> = None;
             for k in 0..=n {
                 #[allow(clippy::cast_precision_loss)]
-                let t = (t1 - t0).mul_add(k as f64 / n as f64, t0);
+                let t = (t1 - t0).madd(k as f64 / n as f64, t0);
                 let q = eval(t);
                 let d = (q - p).length();
                 if d < bd {
@@ -5205,13 +5205,13 @@ fn clip_sections_to_outer_region(
             }
             // The nearest sample can sit half a sample step from a point on
             // the curve itself.
-            if bd > FIT_BAND.mul_add(4.0, spacing) {
+            if bd > FIT_BAND.madd(4.0, spacing) {
                 continue;
             }
             #[allow(clippy::cast_precision_loss)]
             let (mut lo, mut hi) = (
-                (t1 - t0).mul_add(bi.saturating_sub(1) as f64 / n as f64, t0),
-                (t1 - t0).mul_add(((bi + 1).min(n)) as f64 / n as f64, t0),
+                (t1 - t0).madd(bi.saturating_sub(1) as f64 / n as f64, t0),
+                (t1 - t0).madd(((bi + 1).min(n)) as f64 / n as f64, t0),
             );
             for _ in 0..48 {
                 let m1 = lo + (hi - lo) / 3.0;
@@ -5653,7 +5653,7 @@ fn interior_loop_center(
     let pts: Vec<Point3> = (0..n)
         .map(|k| {
             section.curve_3d.evaluate_with_endpoints(
-                (t1 - t0).mul_add(f64::from(k) / f64::from(n), t0),
+                (t1 - t0).madd(f64::from(k) / f64::from(n), t0),
                 section.start,
                 section.end,
             )
@@ -5822,7 +5822,7 @@ fn walk_boundary_from_closed_rim(edges: &mut [OrientedPCurveEdge]) -> bool {
             e.end_uv = Point2::new(e.end_uv.x() + shift, e.end_uv.y());
         }
         cur = if closed(e) && !e.forward {
-            2.0f64.mul_add(e.start_uv.x(), -e.end_uv.x())
+            2.0f64.madd(e.start_uv.x(), -e.end_uv.x())
         } else {
             e.end_uv.x()
         };
@@ -5857,7 +5857,7 @@ fn place_section_in_turn(e: &mut OrientedPCurveEdge, surface: &FaceSurface, lo: 
     let (t0, t1) = e.curve_3d.domain_with_endpoints(s3, e3);
     let Some(mut path) = (0..=SAMPLES)
         .map(|k| {
-            let t = (t1 - t0).mul_add(f64::from(k) / f64::from(SAMPLES), t0);
+            let t = (t1 - t0).madd(f64::from(k) / f64::from(SAMPLES), t0);
             surface
                 .project_point(e.curve_3d.evaluate_with_endpoints(t, s3, e3))
                 .map(|(u, _)| u)
@@ -6851,7 +6851,7 @@ fn split_face_2d_impl(
                     if taken && matches!(surface, FaceSurface::Cone(_)) {
                         for quarter in [0.5, 1.5] {
                             if let Some(p) =
-                                surface.evaluate(std::f64::consts::PI.mul_add(quarter, seam_u), v)
+                                surface.evaluate(std::f64::consts::PI.madd(quarter, seam_u), v)
                             {
                                 split_pts_3d.push(p);
                             }
@@ -7200,7 +7200,7 @@ fn split_face_2d_impl(
                     let (d0, d1) = sct.curve_3d.domain_with_endpoints(sct.start, sct.end);
                     let pts: Vec<Point2> = (0..=STEPS)
                         .map(|k| {
-                            let t = (d1 - d0).mul_add(f64::from(k) / f64::from(STEPS), d0);
+                            let t = (d1 - d0).madd(f64::from(k) / f64::from(STEPS), d0);
                             frame.project(
                                 sct.curve_3d.evaluate_with_endpoints(t, sct.start, sct.end),
                             )
@@ -7336,7 +7336,7 @@ fn split_face_2d_impl(
                 })
                 .collect();
             let side = |a: Point2, b: Point2, p: Point2| -> f64 {
-                (b.x() - a.x()).mul_add(p.y() - a.y(), -((b.y() - a.y()) * (p.x() - a.x())))
+                (b.x() - a.x()).madd(p.y() - a.y(), -((b.y() - a.y()) * (p.x() - a.x())))
             };
             // A section's run across the hole between the ends of one rim arc
             // lies on an edge of the vertex polygon and on the arc's chord,
@@ -8268,10 +8268,7 @@ fn split_face_2d_impl(
                 let (s, t) = (e.start_uv, e.end_uv);
                 !(0..=8).all(|k| {
                     let f = f64::from(k) / 8.0;
-                    let p = Point2::new(
-                        f.mul_add(t.x() - s.x(), s.x()),
-                        f.mul_add(t.y() - s.y(), s.y()),
-                    );
+                    let p = Point2::new(f.madd(t.x() - s.x(), s.x()), f.madd(t.y() - s.y(), s.y()));
                     super::classify_2d::distance_to_polygon_boundary(p, &boundary_poly) <= eps
                 })
             })
@@ -10107,7 +10104,7 @@ fn rescue_hole_dangling_loops(
             if !matches!(e.curve_3d, EdgeCurve::Line) {
                 let (t0, t1) = e.curve_3d.domain_with_endpoints(e.start_3d, e.end_3d);
                 for k in 1..32 {
-                    let t = (t1 - t0).mul_add(f64::from(k) / 32.0, t0);
+                    let t = (t1 - t0).madd(f64::from(k) / 32.0, t0);
                     poly.push(
                         frame.project(e.curve_3d.evaluate_with_endpoints(t, e.start_3d, e.end_3d)),
                     );
@@ -10167,7 +10164,7 @@ fn rescue_hole_dangling_loops(
                     let qa = d2.dot(d2);
                     let qb = 2.0 * f.dot(d2);
                     let qc = f.dot(f) - r * r;
-                    let disc = qb.mul_add(qb, -4.0 * qa * qc);
+                    let disc = qb.madd(qb, -4.0 * qa * qc);
                     if disc < 0.0 || qa.abs() < 1e-30 {
                         continue;
                     }
@@ -10196,13 +10193,13 @@ fn rescue_hole_dangling_loops(
                     let s2 = frame.project(e.start_3d);
                     let e2 = frame.project(e.end_3d);
                     let sd = e2 - s2;
-                    let det = d2.x().mul_add(sd.y(), -(d2.y() * sd.x()));
+                    let det = d2.x().madd(sd.y(), -(d2.y() * sd.x()));
                     if det.abs() < 1e-14 {
                         continue;
                     }
                     let dx = s2 - a2;
-                    let t = dx.x().mul_add(sd.y(), -(dx.y() * sd.x())) / det;
-                    let u = dx.x().mul_add(d2.y(), -(dx.y() * d2.x())) / det;
+                    let t = dx.x().madd(sd.y(), -(dx.y() * sd.x())) / det;
+                    let u = dx.x().madd(d2.y(), -(dx.y() * d2.x())) / det;
                     if (0.0..=1.0).contains(&t) && (-1e-9..=1.0 + 1e-9).contains(&u) {
                         let p3 = sec_start + (sec_end - sec_start) * t;
                         match best {
@@ -11348,8 +11345,8 @@ mod tests {
             let turn = f64::from(degree).to_radians();
             let on = |c: Point3, at: f64| {
                 Point3::new(
-                    r.mul_add((turn + at).cos(), c.x()),
-                    r.mul_add((turn + at).sin(), c.y()),
+                    r.madd((turn + at).cos(), c.x()),
+                    r.madd((turn + at).sin(), c.y()),
                     0.0,
                 )
             };
@@ -11410,7 +11407,7 @@ mod tests {
             let turn = f64::from(degrees).to_radians();
             let (c, s) = (turn.cos(), turn.sin());
             let at = |x: f64, y: f64| Point3::new(c * x - s * y, s * x + c * y, 0.0);
-            let reach = gap.mul_add(-gap * 0.25, r * r).sqrt();
+            let reach = gap.madd(-gap * 0.25, r * r).sqrt();
             let (kept, cut) = (at(0.0, 0.0), at(gap, 0.0));
             let (top, bottom) = (at(gap * 0.5, reach), at(gap * 0.5, -reach));
             let arc =

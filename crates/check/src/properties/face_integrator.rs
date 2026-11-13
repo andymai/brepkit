@@ -5,6 +5,7 @@
 //! (cylinder, cone, sphere, torus, NURBS) use tensor-product Gauss-Legendre
 //! quadrature over the UV domain.
 
+use brepkit_math::madd::Madd;
 use brepkit_math::quadrature::gauss_legendre_points;
 use brepkit_math::tolerance::Tolerance;
 use brepkit_math::traits::ParametricSurface;
@@ -323,7 +324,7 @@ fn face_uv_bounds<S: ParametricSurface>(
                 };
                 let p = edge
                     .curve()
-                    .evaluate_with_endpoints((t1 - t0).mul_add(f, t0), sp, ep);
+                    .evaluate_with_endpoints((t1 - t0).madd(f, t0), sp, ep);
                 uvs.push(surface.project_point(p));
             }
         }
@@ -493,7 +494,7 @@ pub(super) fn planar_face_by_edges(
         // are taken away.
         let sign = w[0].signum() * if k == 0 { 1.0 } else { -1.0 };
         for (total, part) in m.iter_mut().zip(w) {
-            *total = sign.mul_add(part, *total);
+            *total = sign.madd(part, *total);
         }
     }
     let [area, ix, iy, ixx, ixy, iyy] = m;
@@ -501,11 +502,11 @@ pub(super) fn planar_face_by_edges(
     // The integral over the region of the square of one coordinate
     // `oc + c1 x + c2 y`.
     let square = |oc: f64, c1: f64, c2: f64| {
-        (oc * oc).mul_add(
+        (oc * oc).madd(
             area,
-            (2.0 * oc).mul_add(
-                c1.mul_add(ix, c2 * iy),
-                (c1 * c1).mul_add(ixx, (2.0 * c1 * c2).mul_add(ixy, c2 * c2 * iyy)),
+            (2.0 * oc).madd(
+                c1.madd(ix, c2 * iy),
+                (c1 * c1).madd(ixx, (2.0 * c1 * c2).madd(ixy, c2 * c2 * iyy)),
             ),
         )
     };
@@ -516,9 +517,9 @@ pub(super) fn planar_face_by_edges(
         volume_moment_x: 0.5 * normal.x() * square(o.x(), e1.x(), e2.x()),
         volume_moment_y: 0.5 * normal.y() * square(o.y(), e1.y(), e2.y()),
         volume_moment_z: 0.5 * normal.z() * square(o.z(), e1.z(), e2.z()),
-        centroid_x: o.x().mul_add(area, e1.x().mul_add(ix, e2.x() * iy)),
-        centroid_y: o.y().mul_add(area, e1.y().mul_add(ix, e2.y() * iy)),
-        centroid_z: o.z().mul_add(area, e1.z().mul_add(ix, e2.z() * iy)),
+        centroid_x: o.x().madd(area, e1.x().madd(ix, e2.x() * iy)),
+        centroid_y: o.y().madd(area, e1.y().madd(ix, e2.y() * iy)),
+        centroid_z: o.z().madd(area, e1.z().madd(ix, e2.z() * iy)),
     }))
 }
 
@@ -572,7 +573,7 @@ fn wire_plane_moments(
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
             EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => {
                 let n = ((t1 - t0).abs() / FRAC_PI_8).ceil().max(1.0) as u32;
-                breaks.extend((1..n).map(|k| (t1 - t0).mul_add(f64::from(k) / f64::from(n), t0)));
+                breaks.extend((1..n).map(|k| (t1 - t0).madd(f64::from(k) / f64::from(n), t0)));
             }
             EdgeCurve::NurbsCurve(c) => {
                 let (lo, hi) = (t0.min(t1), t0.max(t1));
@@ -590,7 +591,7 @@ fn wire_plane_moments(
         for piece in breaks.windows(2) {
             let (step, mid) = (piece[1] - piece[0], f64::midpoint(piece[0], piece[1]));
             for gp in gauss {
-                let t = (0.5 * step).mul_add(gp.x, mid);
+                let t = (0.5 * step).madd(gp.x, mid);
                 let w = 0.5 * step * gp.w;
                 let p = curve.evaluate_with_endpoints(t, sp, ep) - frame.origin;
                 let d = match curve {
@@ -601,7 +602,7 @@ fn wire_plane_moments(
                 };
                 let (x, y) = (p.dot(frame.x), p.dot(frame.y));
                 let (dx, dy) = (d.dot(frame.x), d.dot(frame.y));
-                m[0] += w * 0.5 * x.mul_add(dy, -(y * dx));
+                m[0] += w * 0.5 * x.madd(dy, -(y * dx));
                 m[1] += w * 0.5 * x * x * dy;
                 m[2] -= w * 0.5 * y * y * dx;
                 m[3] += w * x * x * x * dy / 3.0;
@@ -759,13 +760,13 @@ fn integrate_parametric<S: ParametricSurface>(
     let mut cz = 0.0;
 
     for iu in 0..nu {
-        let u_mid = du_patch.mul_add(iu as f64, u_range.0) + u_scale;
+        let u_mid = du_patch.madd(iu as f64, u_range.0) + u_scale;
         for iv in 0..nv {
-            let v_mid = dv_patch.mul_add(iv as f64, v_range.0) + v_scale;
+            let v_mid = dv_patch.madd(iv as f64, v_range.0) + v_scale;
             for gpu in gauss_pts {
-                let u = u_scale.mul_add(gpu.x, u_mid);
+                let u = u_scale.madd(gpu.x, u_mid);
                 for gpv in gauss_pts {
-                    let v = v_scale.mul_add(gpv.x, v_mid);
+                    let v = v_scale.madd(gpv.x, v_mid);
                     let w = gpu.w * gpv.w * u_scale * v_scale;
 
                     let p = surface.evaluate(u, v);
@@ -1018,13 +1019,13 @@ fn integrate_parametric_trimmed<S: ParametricSurface>(
     let points = (0..nu)
         .flat_map(|iu| (0..nv).map(move |iv| (iu, iv)))
         .flat_map(|(iu, iv)| {
-            let u_mid = du_patch.mul_add(iu as f64, u_range.0) + u_scale;
-            let v_mid = dv_patch.mul_add(iv as f64, v_range.0) + v_scale;
+            let u_mid = du_patch.madd(iu as f64, u_range.0) + u_scale;
+            let v_mid = dv_patch.madd(iv as f64, v_range.0) + v_scale;
             gauss_pts.iter().flat_map(move |gpu| {
                 gauss_pts.iter().map(move |gpv| {
                     (
-                        u_scale.mul_add(gpu.x, u_mid),
-                        v_scale.mul_add(gpv.x, v_mid),
+                        u_scale.madd(gpu.x, u_mid),
+                        v_scale.madd(gpv.x, v_mid),
                         gpu.w * gpv.w * u_scale * v_scale,
                     )
                 })
@@ -1341,7 +1342,7 @@ mod tests {
             let weights = vec![1.0, 0.5, 1.0, 0.5, 1.0, 0.5, 1.0];
             NurbsCurve::new(2, knots, points, weights).unwrap()
         };
-        let (floor, slant) = (rim(&|_| 0.0), rim(&|x| 0.5f64.mul_add(x, 3.0)));
+        let (floor, slant) = (rim(&|_| 0.0), rim(&|x| 0.5f64.madd(x, 3.0)));
         let mut topo = Topology::new();
         let v0 = topo.add_vertex(Vertex::new(Point3::new(1.0, 0.0, 0.0), 1e-7));
         let v1 = topo.add_vertex(Vertex::new(Point3::new(1.0, 0.0, 3.5), 1e-7));
@@ -1498,8 +1499,8 @@ mod tests {
             let plane = FaceSurface::Plane { normal: up, d: 3.0 };
             let face = topo.add_face(Face::new(wire, vec![], plane));
             let c = integrate_face(&topo, face, 5).unwrap();
-            let x = area * reach.mul_add(toward.x(), centre.x());
-            let y = area * reach.mul_add(toward.y(), centre.y());
+            let x = area * reach.madd(toward.x(), centre.x());
+            let y = area * reach.madd(toward.y(), centre.y());
             for (what, got, truth) in [
                 ("area", c.area, area),
                 ("volume", c.volume, area),

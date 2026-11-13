@@ -7,6 +7,7 @@
 //! derivative across any row a plain difference of control points. Tangency and
 //! the second order on a stripe's cylinder then hold by construction.
 
+use brepkit_math::madd::Madd;
 use std::collections::HashMap;
 
 use brepkit_math::aabb::Aabb3;
@@ -667,7 +668,7 @@ impl Piece {
     /// The least and greatest of its control points along `axis`.
     fn extent(&self, axis: Vec2) -> (f64, f64) {
         self.points()
-            .map(|p| axis.x().mul_add(p.x(), axis.y() * p.y()))
+            .map(|p| axis.x().madd(p.x(), axis.y() * p.y()))
             .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), s| {
                 (lo.min(s), hi.max(s))
             })
@@ -841,8 +842,8 @@ fn curve_pieces(curve: &EdgeCurve, from: Point3, to: Point3) -> Option<Vec<Vec<[
         let count = turns as usize;
         (0..count)
             .map(|i| {
-                let s0 = (t1 - t0).mul_add(i as f64 / turns, t0);
-                let s1 = (t1 - t0).mul_add((i + 1) as f64 / turns, t0);
+                let s0 = (t1 - t0).madd(i as f64 / turns, t0);
+                let s1 = (t1 - t0).madd((i + 1) as f64 / turns, t0);
                 let half = 0.5 * (s1 - s0);
                 let w = half.cos();
                 let peak = at(s0 + half, 1.0 / w);

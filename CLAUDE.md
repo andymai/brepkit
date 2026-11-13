@@ -513,6 +513,14 @@ solid-scoped (counting, recognition, type-conversion). The
 `heal::fix::small_face` pattern (top-level loop over shells +
 per-shell helper with its own guard) is the template for those.
 
+### `mul_add` in library code
+`f64::mul_add` needs a fused multiply-add instruction. WebAssembly has none, so
+each call goes to a software routine, about 10 ns against 3 ns for a multiply
+and an add: it was more than half the running time of the wasm build. Library
+code uses `brepkit_math::madd::Madd::madd` (`self * a + b`), which gives the
+same bits on every target. Test fixtures can keep `mul_add`: some build exactly
+tangent surfaces with it.
+
 ### Dev-dependency cycles
 Never add `brepkit-operations` as a dev-dependency of `brepkit-topology` — this
 creates a "two versions" error. Use the `test-utils` feature flag instead.

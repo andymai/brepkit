@@ -2,6 +2,7 @@
 //!
 //! Performs structural and geometric validation on solids.
 
+use brepkit_math::madd::Madd;
 use brepkit_math::tolerance::Tolerance;
 use brepkit_topology::Topology;
 use brepkit_topology::TopologyError;
@@ -462,7 +463,7 @@ impl<'a> EdgeTrace<'a> {
 
     #[allow(clippy::cast_precision_loss)]
     fn param(&self, k: usize) -> f64 {
-        (self.span.1 - self.span.0).mul_add(k as f64 / TRACE_STEPS as f64, self.span.0)
+        (self.span.1 - self.span.0).madd(k as f64 / TRACE_STEPS as f64, self.span.0)
     }
 
     /// The parameter of the edge's point nearest `p`, and its distance.
@@ -484,7 +485,7 @@ impl<'a> EdgeTrace<'a> {
         for (i, j) in brackets {
             let (mut a, mut b) = (self.param(i), self.param(j));
             for _ in 0..60 {
-                let (m1, m2) = ((b - a).mul_add(0.381_966, a), (a - b).mul_add(0.381_966, b));
+                let (m1, m2) = ((b - a).madd(0.381_966, a), (a - b).madd(0.381_966, b));
                 if gap(m1) < gap(m2) {
                     b = m2;
                 } else {
@@ -530,7 +531,7 @@ impl<'a> EdgeTrace<'a> {
                 let (tp, tq) = (self.nearest(p).0, self.nearest(q).0);
                 let on_other = [0.25, 0.5, 0.75]
                     .into_iter()
-                    .all(|s: f64| other.holds(self.at((tq - tp).mul_add(s, tp))));
+                    .all(|s: f64| other.holds(self.at((tq - tp).madd(s, tp))));
                 if on_other {
                     return true;
                 }

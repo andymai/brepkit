@@ -6,6 +6,7 @@
 //! each side between an edge and its image is the ruled surface the normals
 //! sweep.
 
+use brepkit_math::madd::Madd;
 use std::collections::HashMap;
 
 use brepkit_math::curves::Circle3D;
@@ -404,10 +405,7 @@ fn keep_off_the_axis(
                 least_on_boundary(topo, face, |p| t.project_point(p).1.cos())?
             };
             let (big, small) = (t.major_radius(), t.minor_radius());
-            (
-                small.mul_add(cos_v, big),
-                (small + distance).mul_add(cos_v, big),
-            )
+            (small.madd(cos_v, big), (small + distance).madd(cos_v, big))
         }
         FaceSurface::Cone(c) => {
             // A point v along a generator from the apex lies v cos a from the
@@ -424,7 +422,7 @@ fn keep_off_the_axis(
             }
             let v = least_on_boundary(topo, face, |p| c.project_point(p).1)?;
             let (sin, cos) = c.half_angle().sin_cos();
-            (v * cos, v.mul_add(cos, distance * sin))
+            (v * cos, v.madd(cos, distance * sin))
         }
         FaceSurface::Plane { .. }
         | FaceSurface::Cylinder(_)
@@ -473,7 +471,7 @@ fn turns_about_axis(
             let (from, to) = if oe.is_forward() { (t0, t1) } else { (t1, t0) };
             let at = |k: u32| {
                 angle(curve.evaluate_with_endpoints(
-                    (to - from).mul_add(f64::from(k) / f64::from(SAMPLES), from),
+                    (to - from).madd(f64::from(k) / f64::from(SAMPLES), from),
                     a,
                     b,
                 ))

@@ -9,6 +9,7 @@
 
 use brepkit_math::aabb::Aabb3;
 use brepkit_math::analytic_intersection;
+use brepkit_math::madd::Madd;
 use brepkit_math::nurbs::intersection as nurbs_isect;
 use brepkit_math::tolerance::Tolerance;
 use brepkit_math::traits::ParametricCurve;
@@ -1120,7 +1121,7 @@ fn edge_chords(topo: &Topology, edge: &brepkit_topology::edge::Edge) -> Option<(
     let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
     let at = |f: f64| {
         edge.curve()
-            .evaluate_with_endpoints((t1 - t0).mul_add(f, t0), a, b)
+            .evaluate_with_endpoints((t1 - t0).madd(f, t0), a, b)
     };
     let along: Vec<Point3> = (0..=CHORDS)
         .map(|k| at(f64::from(k) / f64::from(CHORDS)))
@@ -1207,7 +1208,7 @@ fn onto_lying_boundary_edge(
     let probes: Vec<Point3> = (0..=PROBES)
         .map(|k| {
             let t = (raw.t_range.1 - raw.t_range.0)
-                .mul_add(f64::from(k) / f64::from(PROBES), raw.t_range.0);
+                .madd(f64::from(k) / f64::from(PROBES), raw.t_range.0);
             raw.curve.evaluate_with_endpoints(t, raw.p_start, raw.p_end)
         })
         .collect();
@@ -1251,7 +1252,7 @@ fn onto_lying_boundary_edge(
             let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
             let at = |f: f64| {
                 edge.curve()
-                    .evaluate_with_endpoints((t1 - t0).mul_add(f, t0), a, b)
+                    .evaluate_with_endpoints((t1 - t0).madd(f, t0), a, b)
             };
             let (f_lo, f_hi) = {
                 let (fs, fe) = (
@@ -1272,7 +1273,7 @@ fn onto_lying_boundary_edge(
             let t_range = if matches!(edge.curve(), EdgeCurve::Line) {
                 (0.0, 1.0)
             } else {
-                ((t1 - t0).mul_add(f_lo, t0), (t1 - t0).mul_add(f_hi, t0))
+                ((t1 - t0).madd(f_lo, t0), (t1 - t0).madd(f_hi, t0))
             };
             return Some(RawCurve {
                 curve: edge.curve().clone(),
@@ -1841,8 +1842,8 @@ impl FaceExtent {
             // projects half a turn round. Such a patch keeps no gap.
             let own_side = match surface {
                 FaceSurface::Torus(t) => (0..=64).all(|k| {
-                    let v = (v1 - v0).mul_add(f64::from(k) / 64.0, v0);
-                    t.minor_radius().mul_add(v.cos(), t.major_radius()) > 0.0
+                    let v = (v1 - v0).madd(f64::from(k) / 64.0, v0);
+                    t.minor_radius().madd(v.cos(), t.major_radius()) > 0.0
                 }),
                 _ => true,
             };
@@ -1865,7 +1866,7 @@ impl FaceExtent {
                 });
             let uv_base = match (surface, u_gap) {
                 (FaceSurface::Cylinder(_) | FaceSurface::Cone(_), Some((lo, hi))) => {
-                    Some(0.5f64.mul_add((hi - lo).rem_euclid(std::f64::consts::TAU), lo))
+                    Some(0.5f64.madd((hi - lo).rem_euclid(std::f64::consts::TAU), lo))
                 }
                 _ => None,
             };
@@ -1876,7 +1877,7 @@ impl FaceExtent {
                     }),
                 None => (nurbs_face_uv_polygon(topo, face_id, surface), Vec::new()),
             };
-            let uv_poly = uv_poly.map(|(poly, sag)| (poly, 2.0f64.mul_add(sag, 1e-7)));
+            let uv_poly = uv_poly.map(|(poly, sag)| (poly, 2.0f64.madd(sag, 1e-7)));
             Some(Self::Analytic {
                 surface: surface.clone(),
                 v0,
@@ -2122,7 +2123,7 @@ fn face_circumferential_u_gap(
 /// for a negative one), read modulo a turn from `v0` when `periodic`.
 fn in_window(v: f64, (v0, v1): (f64, f64), margin: f64, periodic: bool) -> bool {
     if periodic {
-        (v - (v0 - margin)).rem_euclid(std::f64::consts::TAU) <= 2.0f64.mul_add(margin, v1 - v0)
+        (v - (v0 - margin)).rem_euclid(std::f64::consts::TAU) <= 2.0f64.madd(margin, v1 - v0)
     } else {
         v >= v0 - margin && v <= v1 + margin
     }
@@ -2306,7 +2307,7 @@ fn point_on_face_edges(topo: &Topology, face: FaceId, p: Point3, near: f64) -> b
             let (a, b) = (sv.point(), ev.point());
             let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
             let at = |k: f64| {
-                let t = (t1 - t0).mul_add(k / 256.0, t0);
+                let t = (t1 - t0).madd(k / 256.0, t0);
                 edge.curve().evaluate_with_endpoints(t, a, b)
             };
             (0..256).any(|k| {
@@ -2680,7 +2681,7 @@ fn start_outside_windows(
         return None;
     }
     #[allow(clippy::cast_precision_loss)]
-    let t_at = |i: usize| (i as f64 / n as f64).mul_add(span, raw.t_range.0);
+    let t_at = |i: usize| (i as f64 / n as f64).madd(span, raw.t_range.0);
     let inside = |t: f64| {
         let p = nurbs.evaluate(t);
         ext_a.contains(p) && ext_b.contains(p)
@@ -2804,7 +2805,7 @@ fn trim_torus_oval_to_box_face(
         // Whole on both faces → keep whole; otherwise the caller's
         // sample-clip reads it against both.
         let on_both = (0..32).all(|k| {
-            let t = (raw.t_range.1 - raw.t_range.0).mul_add(f64::from(k) / 32.0, raw.t_range.0);
+            let t = (raw.t_range.1 - raw.t_range.0).madd(f64::from(k) / 32.0, raw.t_range.0);
             let p = raw.curve.evaluate_with_endpoints(t, raw.p_start, raw.p_end);
             plane_ext.contains(p) && torus_ext.contains(p)
         });
@@ -3765,19 +3766,19 @@ fn trim_ellipse_to_boundary_crossings(
                 let (x1, y1) = (c(ring[(i + 1) % n], ax0), c(ring[(i + 1) % n], ax1));
                 if (y0 > py) != (y1 > py) {
                     let t = (py - y0) / (y1 - y0);
-                    if px < (x1 - x0).mul_add(t, x0) {
+                    if px < (x1 - x0).madd(t, x0) {
                         inside = !inside;
                     }
                 }
                 let (dx, dy) = (x1 - x0, y1 - y0);
-                let len2 = dx.mul_add(dx, dy * dy);
+                let len2 = dx.madd(dx, dy * dy);
                 let t = if len2 > 1e-18 {
-                    ((px - x0).mul_add(dx, (py - y0) * dy) / len2).clamp(0.0, 1.0)
+                    ((px - x0).madd(dx, (py - y0) * dy) / len2).clamp(0.0, 1.0)
                 } else {
                     0.0
                 };
-                let (ex, ey) = (dx.mul_add(t, x0) - px, dy.mul_add(t, y0) - py);
-                min_d2 = min_d2.min(ex.mul_add(ex, ey * ey));
+                let (ex, ey) = (dx.madd(t, x0) - px, dy.madd(t, y0) - py);
+                min_d2 = min_d2.min(ex.madd(ex, ey * ey));
             }
         }
         inside || min_d2 < 1e-12
@@ -4005,7 +4006,7 @@ fn conic_arc_plane_crossings(
         let p = evaluate(t);
         normal
             .x()
-            .mul_add(p.x(), normal.y().mul_add(p.y(), normal.z() * p.z()))
+            .madd(p.x(), normal.y().madd(p.y(), normal.z() * p.z()))
             - d
     };
     let (f0, fq, fp) = (f(0.0), f(FRAC_PI_2), f(PI));
@@ -4213,7 +4214,7 @@ fn edge_surface_crossings(
             EdgeCurve::Ellipse(e) => e.semi_major().max(e.semi_minor()) * (b - a),
             EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => {
                 let pts: Vec<Point3> = (0..=8)
-                    .map(|k| at((b - a).mul_add(f64::from(k) / 8.0, a)))
+                    .map(|k| at((b - a).madd(f64::from(k) / 8.0, a)))
                     .collect();
                 1.5 * pts.windows(2).map(|w| (w[1] - w[0]).length()).sum::<f64>()
             }
@@ -4246,8 +4247,8 @@ fn edge_surface_crossings(
     for w in breaks.windows(2) {
         let (s0, s1) = (w[0], w[1]);
         for k in 0..per_span {
-            let a = (s1 - s0).mul_add(f64::from(k) / f64::from(per_span), s0);
-            let b = (s1 - s0).mul_add(f64::from(k + 1) / f64::from(per_span), s0);
+            let a = (s1 - s0).madd(f64::from(k) / f64::from(per_span), s0);
+            let b = (s1 - s0).madd(f64::from(k + 1) / f64::from(per_span), s0);
             stack.push((a, b, f(a), f(b), 0));
         }
     }
@@ -4344,7 +4345,7 @@ fn edge_lies_on_surface(
 ) -> bool {
     let (t0, t1) = curve.domain_with_endpoints(sp, ep);
     (0..=32).all(|k| {
-        let t = (t1 - t0).mul_add(f64::from(k) / 32.0, t0);
+        let t = (t1 - t0).madd(f64::from(k) / 32.0, t0);
         analytic_signed_distance(surface, curve.evaluate_with_endpoints(t, sp, ep)).abs()
             <= 4.0 * tol
     })
@@ -4365,8 +4366,8 @@ fn sample_edge_to_tolerance(
     let mut stack: Vec<(f64, f64, u32)> = (0..8)
         .rev()
         .map(|k| {
-            let a = (t1 - t0).mul_add(f64::from(k) / 8.0, t0);
-            let b = (t1 - t0).mul_add(f64::from(k + 1) / 8.0, t0);
+            let a = (t1 - t0).madd(f64::from(k) / 8.0, t0);
+            let b = (t1 - t0).madd(f64::from(k + 1) / 8.0, t0);
             (a, b, 0)
         })
         .collect();
@@ -4616,7 +4617,7 @@ fn trim_open_curve_to_plane_face_lines(
     // Signed side of a boundary segment's carrier line at a point of the
     // plane, and at curve parameter t.
     let side_at = |uv: Point2, a: Point2, b: Point2| -> f64 {
-        (b.x() - a.x()).mul_add(uv.y() - a.y(), -((b.y() - a.y()) * (uv.x() - a.x())))
+        (b.x() - a.x()).madd(uv.y() - a.y(), -((b.y() - a.y()) * (uv.x() - a.x())))
     };
     let side = |t: f64, a: Point2, b: Point2| -> f64 { side_at(frame.project(eval_at(t)), a, b) };
     // The samples in the plane, taken once for every boundary segment.
@@ -5005,8 +5006,8 @@ fn trim_open_curve_to_plane_face_lines(
                 sample_t((best_i + 1).min(n_samples)),
             );
             for _ in 0..80 {
-                let m1 = (hi - lo).mul_add(1.0 / 3.0, lo);
-                let m2 = (hi - lo).mul_add(2.0 / 3.0, lo);
+                let m1 = (hi - lo).madd(1.0 / 3.0, lo);
+                let m2 = (hi - lo).madd(2.0 / 3.0, lo);
                 if (eval_at(m1) - x).length() < (eval_at(m2) - x).length() {
                     hi = m2;
                 } else {
@@ -5026,7 +5027,7 @@ fn trim_open_curve_to_plane_face_lines(
             // An edge lying in the plane is the section itself, not a
             // crossing of it.
             let in_plane = (0..=8).all(|k| {
-                let t = (e1 - e0).mul_add(f64::from(k) / 8.0, e0);
+                let t = (e1 - e0).madd(f64::from(k) / 8.0, e0);
                 on_plane(edge.curve().evaluate_with_endpoints(t, sp, ep)) < tol.linear
             });
             if in_plane {
@@ -5083,7 +5084,7 @@ fn trim_open_curve_to_plane_face_lines(
     // A section riding the partner's boundary keeps a midpoint within the
     // sampled polygon's chord sag of it.
     let partner_band = partner_poly.as_ref().map_or(0.0, |(poly, sag)| {
-        sag.mul_add(2.0, crate::builder::classify_2d::boundary_eps(poly))
+        sag.madd(2.0, crate::builder::classify_2d::boundary_eps(poly))
     });
     let inside_partner = |p: Point3| -> bool {
         match &partner_poly {
@@ -5151,7 +5152,7 @@ fn trim_open_curve_to_plane_face_lines(
                     .map(|k| {
                         let f = f64::from(k) / f64::from(CHORDS * PER_CHORD);
                         edge.curve()
-                            .evaluate_with_endpoints((d1 - d0).mul_add(f, d0), sp, ep)
+                            .evaluate_with_endpoints((d1 - d0).madd(f, d0), sp, ep)
                     })
                     .collect();
                 let sag = pts
@@ -5202,7 +5203,7 @@ fn trim_open_curve_to_plane_face_lines(
                     let f = f64::from(k) / f64::from(DENSE);
                     let f = if oe.is_forward() { f } else { 1.0 - f };
                     loop_uv.push(frame.project(edge.curve().evaluate_with_endpoints(
-                        (d1 - d0).mul_add(f, d0),
+                        (d1 - d0).madd(f, d0),
                         sp,
                         ep,
                     )));
@@ -5380,7 +5381,7 @@ fn lateral_face_uv_polygon(
     let area = poly
         .iter()
         .zip(poly.iter().cycle().skip(1))
-        .map(|(a, b)| a.x().mul_add(b.y(), -(b.x() * a.y())))
+        .map(|(a, b)| a.x().madd(b.y(), -(b.x() * a.y())))
         .sum::<f64>()
         .abs()
         * 0.5;
@@ -5432,18 +5433,18 @@ fn wire_uv_polygon(
             .map(|k| {
                 let f = k as f64 / n as f64;
                 edge.curve()
-                    .evaluate_with_endpoints((t1 - t0).mul_add(f, t0), sp, ep)
+                    .evaluate_with_endpoints((t1 - t0).madd(f, t0), sp, ep)
             })
             .collect();
         let start = if oe.is_forward() { sp } else { ep };
         if (pts[0] - start).length() > (pts[n] - start).length() {
             pts.reverse();
         }
+        let mut last = None;
         let uv: Vec<brepkit_math::vec::Point2> = pts
             .iter()
             .map(|p| {
-                surface
-                    .project_point(*p)
+                crate::classifier::project_following(surface, *p, &mut last)
                     .map(|(u, v)| brepkit_math::vec::Point2::new(rebase_u(u, u_base), v))
             })
             .collect::<Option<_>>()?;
@@ -5807,6 +5808,7 @@ fn face_v_range(topo: &Topology, face_id: FaceId, surface: &FaceSurface) -> Opti
     // puts the north pole there.
     let mut u_progress = 0.0;
     let mut u_last: Option<f64> = None;
+    let mut foot_last = None;
     for oe in wire.edges() {
         let edge = topo.edge(oe.edge()).ok()?;
         let sp = topo.vertex(edge.start()).ok()?.point();
@@ -5821,7 +5823,8 @@ fn face_v_range(topo: &Topology, face_id: FaceId, surface: &FaceSurface) -> Opti
         for frac in fracs {
             let t = t0 + (t1 - t0) * frac;
             let pt = edge.curve().evaluate_with_endpoints(t, sp, ep);
-            if let Some((u, v)) = surface.project_point(pt) {
+            if let Some((u, v)) = crate::classifier::project_following(surface, pt, &mut foot_last)
+            {
                 v_min = v_min.min(v);
                 v_max = v_max.max(v);
                 if v.abs() < std::f64::consts::FRAC_PI_2 - 1e-6 {
@@ -5858,7 +5861,7 @@ fn face_v_range(topo: &Topology, face_id: FaceId, surface: &FaceSurface) -> Opti
                     .map(|(_, v)| v)
             };
             let ts: Vec<f64> = (0..=N)
-                .map(|k| (t1 - t0).mul_add(f64::from(k) / f64::from(N), t0))
+                .map(|k| (t1 - t0).madd(f64::from(k) / f64::from(N), t0))
                 .collect();
             let vs: Vec<Option<f64>> = ts.iter().map(|&t| v_at(t)).collect();
             for v in vs.iter().flatten() {
@@ -6634,7 +6637,7 @@ fn split_cone_section_at_vertices(
             }
             vec![-qc / qb]
         } else {
-            let disc = qb.mul_add(qb, -4.0 * qa * qc);
+            let disc = qb.madd(qb, -4.0 * qa * qc);
             if disc < 0.0 {
                 return None;
             }
@@ -6996,13 +6999,13 @@ fn gap_to_others(
                     ay + short((pair[1].param1.1 - pair[0].param1.1) / tall, v_closed),
                 );
                 let (dx, dy) = (bx - ax, by - ay);
-                let length = dx.mul_add(dx, dy * dy);
+                let length = dx.madd(dx, dy * dy);
                 let t = if length > 0.0 {
-                    (-ax.mul_add(dx, ay * dy) / length).clamp(0.0, 1.0)
+                    (-ax.madd(dx, ay * dy) / length).clamp(0.0, 1.0)
                 } else {
                     0.0
                 };
-                t.mul_add(dx, ax).hypot(t.mul_add(dy, ay))
+                t.madd(dx, ax).hypot(t.madd(dy, ay))
             });
             single
                 .into_iter()
@@ -7079,18 +7082,8 @@ fn touches_along(
     };
     let (u_closed, v_closed) = (nurbs.is_periodic_u(), nurbs.is_periodic_v());
     let side = |reach: f64| {
-        let u = wrap(
-            (reach * wide).mul_add(-tv / len, mid.0),
-            u_lo,
-            u_hi,
-            u_closed,
-        );
-        let v = wrap(
-            (reach * tall).mul_add(tu / len, mid.1),
-            v_lo,
-            v_hi,
-            v_closed,
-        );
+        let u = wrap((reach * wide).madd(-tv / len, mid.0), u_lo, u_hi, u_closed);
+        let v = wrap((reach * tall).madd(tu / len, mid.1), v_lo, v_hi, v_closed);
         let p = nurbs.evaluate(u, v);
         normal.dot(Vec3::new(p.x(), p.y(), p.z())) - d
     };
@@ -7206,7 +7199,7 @@ fn analytic_nurbs_intersection(
                 hi = hi.max(v);
             }
         }
-        let pad = (hi - lo).abs().mul_add(0.1, 1.0);
+        let pad = (hi - lo).abs().madd(0.1, 1.0);
         (lo - pad, hi + pad)
     };
     // The partner's control points hold it, so they bound where along the
@@ -7630,7 +7623,7 @@ fn circle_face_hits(
                         0.0
                     };
                     (step * step / (8.0 * bc.radius().max(tol.linear)))
-                        .mul_add(2.0, tol.linear * 100.0)
+                        .madd(2.0, tol.linear * 100.0)
                 };
                 for (p, t) in cand {
                     let on_arc = full
@@ -8903,7 +8896,7 @@ fn line_face_intervals(
     if len <= tol {
         return None;
     }
-    let cross = |x: Vec2, y: Vec2| x.x().mul_add(y.y(), -(x.y() * y.x()));
+    let cross = |x: Vec2, y: Vec2| x.x().madd(y.y(), -(x.y() * y.x()));
     let mut cuts = vec![0.0, 1.0];
     // An arc ending on the line divides it there however it arrives: one
     // tangent to the line at its end has a root pair rounding can lose.
@@ -8940,10 +8933,10 @@ fn line_face_intervals(
                 let q = Vec2::new(-center.x(), -center.y());
                 let (x0, y0) = (q.dot(u) / a, q.dot(v) / b);
                 let (dx, dy) = (d.dot(u) / a, d.dot(v) / b);
-                let qa = dx.mul_add(dx, dy * dy);
-                let qb = 2.0 * x0.mul_add(dx, y0 * dy);
-                let qc = x0.mul_add(x0, y0 * y0) - 1.0;
-                let disc = qb.mul_add(qb, -4.0 * qa * qc);
+                let qa = dx.madd(dx, dy * dy);
+                let qb = 2.0 * x0.madd(dx, y0 * dy);
+                let qc = x0.madd(x0, y0 * y0) - 1.0;
+                let disc = qb.madd(qb, -4.0 * qa * qc);
                 if disc < 0.0 {
                     continue;
                 }
@@ -8951,7 +8944,7 @@ fn line_face_intervals(
                     (-qb - disc.sqrt()) / (2.0 * qa),
                     (-qb + disc.sqrt()) / (2.0 * qa),
                 ] {
-                    let t = s.mul_add(dy, y0).atan2(s.mul_add(dx, x0));
+                    let t = s.madd(dy, y0).atan2(s.madd(dx, x0));
                     if t0 + (t - t0).rem_euclid(std::f64::consts::TAU) <= t1 + 1e-9 {
                         cuts.push(s);
                     }
@@ -9220,7 +9213,7 @@ fn piece_side(
         } => {
             let q = p - center;
             let (x, y) = (q.dot(u) / a, q.dot(v) / b);
-            (x.mul_add(x, y * y) - 1.0, unit(u * (x / a) + v * (y / b)))
+            (x.madd(x, y * y) - 1.0, unit(u * (x / a) + v * (y / b)))
         }
     }
 }
@@ -9266,7 +9259,7 @@ mod tests {
         for raw in &curves {
             let (t0, t1) = raw.t_range;
             for k in 0..=8 {
-                let t = (t1 - t0).mul_add(f64::from(k) / 8.0, t0);
+                let t = (t1 - t0).madd(f64::from(k) / 8.0, t0);
                 let p = raw.curve.evaluate_with_endpoints(t, raw.p_start, raw.p_end);
                 // A marched section, fitted through its points.
                 assert!(
@@ -9399,7 +9392,7 @@ mod tests {
             for raw in &curves {
                 let (t0, t1) = raw.t_range;
                 for k in 0..=8 {
-                    let t = (t1 - t0).mul_add(f64::from(k) / 8.0, t0);
+                    let t = (t1 - t0).madd(f64::from(k) / 8.0, t0);
                     let p = raw.curve.evaluate_with_endpoints(t, raw.p_start, raw.p_end);
                     let r = p.x().hypot(p.y());
                     assert!(
@@ -11220,11 +11213,7 @@ mod tests {
     fn a_plane_crossing_a_nearly_flat_nurbs_sheet_twice_close_by_splits_it_twice() {
         // Round a node of the 32-sample grid, so that the grid sees both.
         let (a, b) = (15.0 / 31.0 - 4e-7, 15.0 / 31.0 + 4e-7);
-        let heights = [
-            a * b,
-            0.5f64.mul_add(-(a + b), a * b),
-            1.0 - (a + b) + a * b,
-        ];
+        let heights = [a * b, 0.5f64.madd(-(a + b), a * b), 1.0 - (a + b) + a * b];
         let rows = heights
             .iter()
             .zip([0.0, 500.0, 1000.0])
@@ -11371,7 +11360,7 @@ mod tests {
             // `(2u − 1)ⁿ` has Bernstein coefficients `(−1)ⁿ⁻ᵏ`.
             let rows = (0..=power)
                 .map(|k| {
-                    let x = 2.0f64.mul_add(f64::from(k) / f64::from(power), -1.0);
+                    let x = 2.0f64.madd(f64::from(k) / f64::from(power), -1.0);
                     let z = if (power - k) % 2 == 0 { 1.0 } else { -1.0 };
                     vec![Point3::new(x, -1.0, z), Point3::new(x, 1.0, z)]
                 })

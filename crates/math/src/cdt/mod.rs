@@ -36,6 +36,7 @@ mod locate;
 mod tests;
 
 use crate::det_hash::DetHashSet;
+use crate::madd::Madd;
 
 use crate::MathError;
 use crate::predicates::{in_circle, orient2d};
@@ -275,7 +276,7 @@ impl Cdt {
         let (min, max) = bounds;
         let dx = max.x() - min.x();
         let dy = max.y() - min.y();
-        let margin = (dx.max(dy)).mul_add(10.0, 1.0);
+        let margin = (dx.max(dy)).madd(10.0, 1.0);
         let cx = 0.5 * (min.x() + max.x());
         let cy = 0.5 * (min.y() + max.y());
 
@@ -838,10 +839,7 @@ fn segment_intersection_point(a0: Point2, a1: Point2, b0: Point2, b1: Point2) ->
     let t = (dx_ab * dy_b - dy_ab * dx_b) / denom;
     let u = (dx_ab * dy_a - dy_ab * dx_a) / denom;
     if t > 0.0 && t < 1.0 && u > 0.0 && u < 1.0 {
-        Some(Point2::new(
-            dx_a.mul_add(t, a0.x()),
-            dy_a.mul_add(t, a0.y()),
-        ))
+        Some(Point2::new(dx_a.madd(t, a0.x()), dy_a.madd(t, a0.y())))
     } else {
         None
     }

@@ -13,6 +13,7 @@
     clippy::expect_used
 )]
 
+use brepkit_math::madd::Madd;
 use std::rc::Rc;
 
 use brepkit_math::curves::{Circle3D, Ellipse3D};
@@ -441,7 +442,7 @@ impl BrepKernel {
         let p0 = points[0];
         let d = normal
             .x()
-            .mul_add(p0.x(), normal.y().mul_add(p0.y(), normal.z() * p0.z()));
+            .madd(p0.x(), normal.y().madd(p0.y(), normal.z() * p0.z()));
         Ok(FaceSurface::Plane { normal, d })
     }
 

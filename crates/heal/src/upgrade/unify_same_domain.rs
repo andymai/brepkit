@@ -7,6 +7,7 @@
 //! detects adjacent faces on the same plane/cylinder/cone/sphere/torus
 //! and merges them back, dramatically reducing face count.
 
+use brepkit_math::madd::Madd;
 use std::collections::{HashMap, HashSet};
 
 use brepkit_math::frame::Frame3;
@@ -473,7 +474,7 @@ fn merge_whole_sphere(
                 } else {
                     1.0 - fraction
                 };
-                let t = (t1 - t0).mul_add(along, t0);
+                let t = (t1 - t0).madd(along, t0);
                 samples.push(edge.curve().evaluate_with_endpoints(t, p, q) - center);
             }
         }

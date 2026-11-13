@@ -9,6 +9,7 @@ mod classify;
 mod types;
 use assembly::validate_boolean_result;
 pub(crate) use assembly::{assemble_solid, assemble_solid_mixed};
+use brepkit_math::madd::Madd;
 pub use types::{BooleanOp, BooleanOptions, FaceSpec};
 
 // WASM-compatible timer: `std::time::Instant` panics on wasm32 targets.
@@ -2480,11 +2481,11 @@ fn xform_from_canonical_z(
     let kx = -axis.y() / sin_t;
     let ky = axis.x() / sin_t;
     let one_minus_cos = 1.0 - dot;
-    let r00 = one_minus_cos.mul_add(kx * kx, dot);
+    let r00 = one_minus_cos.madd(kx * kx, dot);
     let r01 = one_minus_cos * kx * ky;
     let r02 = sin_t * ky;
     let r10 = one_minus_cos * kx * ky;
-    let r11 = one_minus_cos.mul_add(ky * ky, dot);
+    let r11 = one_minus_cos.madd(ky * ky, dot);
     let r12 = -sin_t * kx;
     let r20 = -sin_t * ky;
     let r21 = sin_t * kx;
@@ -2679,7 +2680,7 @@ fn detect_trivial_relation(
                 0.5 * (lo.z() + hi.z()),
             );
             let (dx, dy, dz) = (hi.x() - lo.x(), hi.y() - lo.y(), hi.z() - lo.z());
-            let defl = (dx.mul_add(dx, dy.mul_add(dy, dz * dz)).sqrt() * 0.01).max(1e-6);
+            let defl = (dx.madd(dx, dy.madd(dy, dz * dz)).sqrt() * 0.01).max(1e-6);
             // Conservative by design: when the AABB center falls in `inner`'s own
             // concavity (a C/U-shaped solid), `inside_inner` is false and the
             // witness is disabled, so a false-positive containment could still
@@ -2712,7 +2713,7 @@ fn detect_trivial_relation(
         let defl = |bb: &Option<(Point3, Point3)>| {
             let Some((lo, hi)) = *bb else { return 1e-3 };
             let (dx, dy, dz) = (hi.x() - lo.x(), hi.y() - lo.y(), hi.z() - lo.z());
-            (dx.mul_add(dx, dy.mul_add(dy, dz * dz)).sqrt() * 0.01).max(1e-6)
+            (dx.madd(dx, dy.madd(dy, dz * dz)).sqrt() * 0.01).max(1e-6)
         };
         let d = defl(&aabb_a).min(defl(&aabb_b));
         let (Ok(vi), Ok(vo)) = (
@@ -2822,7 +2823,7 @@ fn detect_trivial_relation(
                 let at = |k: u8| {
                     let f = f64::from(k) / 4.0;
                     e.curve()
-                        .evaluate_with_endpoints((t1 - t0).mul_add(f, t0), ps, pe)
+                        .evaluate_with_endpoints((t1 - t0).madd(f, t0), ps, pe)
                 };
                 (0..4).map(|k| (at(k + 1) - at(k)).length()).sum::<f64>()
             };
@@ -2842,7 +2843,7 @@ fn detect_trivial_relation(
                     } else {
                         let f = f64::from(k) / 4.0;
                         e.curve()
-                            .evaluate_with_endpoints((t1 - t0).mul_add(f, t0), ps, pe)
+                            .evaluate_with_endpoints((t1 - t0).madd(f, t0), ps, pe)
                     };
                     clear_outside(p)
                 }) || {
@@ -2988,7 +2989,7 @@ fn detect_trivial_relation(
         };
         cuts.windows(2).any(|w| {
             [0.25, 0.5, 0.75].into_iter().any(|f| {
-                let t = (w[1] - w[0]).mul_add(f, w[0]);
+                let t = (w[1] - w[0]).madd(f, w[0]);
                 major_radius.hypot(t) - minor_radius > tol.linear * 10.0
                     && matches!(
                         classifier.classify(*center + *axis * t, &options),
@@ -3640,7 +3641,7 @@ fn all_component_centers_outside(
                         let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
                         corners.extend([0.25, 0.5, 0.75].map(|f| {
                             edge.curve()
-                                .evaluate_with_endpoints((t1 - t0).mul_add(f, t0), a, b)
+                                .evaluate_with_endpoints((t1 - t0).madd(f, t0), a, b)
                         }));
                     }
                     for vid in [edge.start(), edge.end()] {
@@ -3679,7 +3680,7 @@ fn all_component_centers_outside(
         // A point on an edge counts only when clearly outside: a stray
         // piece's edges lie on the tool, off it by the sections' own error.
         let clear = brepkit_math::tolerance::Tolerance {
-            linear: 1e-4f64.mul_add((max - min).length(), 100.0 * tol.linear),
+            linear: 1e-4f64.madd((max - min).length(), 100.0 * tol.linear),
             ..tol
         };
         let outside = corners

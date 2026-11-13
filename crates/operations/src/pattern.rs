@@ -2,6 +2,7 @@
 //!
 //! Creates multiple copies of a solid arranged in a pattern.
 
+use brepkit_math::madd::Madd;
 use brepkit_math::mat::Mat4;
 use brepkit_math::tolerance::Tolerance;
 use brepkit_math::vec::Vec3;
@@ -192,21 +193,21 @@ fn rotation_matrix(axis: Vec3, angle: f64) -> Mat4 {
 
     Mat4([
         [
-            omc.mul_add(ax * ax, cos_a),
-            ax.mul_add(ay * omc, -(sin_a * az)),
-            ax.mul_add(az * omc, sin_a * ay),
+            omc.madd(ax * ax, cos_a),
+            ax.madd(ay * omc, -(sin_a * az)),
+            ax.madd(az * omc, sin_a * ay),
             0.0,
         ],
         [
-            ax.mul_add(ay * omc, sin_a * az),
-            omc.mul_add(ay * ay, cos_a),
-            ay.mul_add(az * omc, -(sin_a * ax)),
+            ax.madd(ay * omc, sin_a * az),
+            omc.madd(ay * ay, cos_a),
+            ay.madd(az * omc, -(sin_a * ax)),
             0.0,
         ],
         [
-            ax.mul_add(az * omc, -(sin_a * ay)),
-            ay.mul_add(az * omc, sin_a * ax),
-            omc.mul_add(az * az, cos_a),
+            ax.madd(az * omc, -(sin_a * ay)),
+            ay.madd(az * omc, sin_a * ax),
+            omc.madd(az * az, cos_a),
             0.0,
         ],
         [0.0, 0.0, 0.0, 1.0],

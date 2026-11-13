@@ -2,6 +2,7 @@
 
 use crate::MathError;
 use crate::aabb::Aabb3;
+use crate::madd::Madd;
 use crate::nurbs::curve::NurbsCurve;
 use crate::nurbs::knot_ops::{surface_knot_insert_u, surface_knot_insert_v};
 use crate::nurbs::surface::NurbsSurface;
@@ -124,7 +125,7 @@ pub fn curve_bezier_between(
                 let alpha = (u - left) / (right - left);
                 let prev = d[j - 1];
                 for (c, q) in d[j].iter_mut().zip(prev) {
-                    *c = (1.0 - alpha).mul_add(q, alpha * *c);
+                    *c = (1.0 - alpha).madd(q, alpha * *c);
                 }
             }
         }
@@ -164,7 +165,7 @@ impl BezierPatch {
         let dx = aabb.max.x() - aabb.min.x();
         let dy = aabb.max.y() - aabb.min.y();
         let dz = aabb.max.z() - aabb.min.z();
-        dx.mul_add(dx, dy.mul_add(dy, dz * dz)).sqrt()
+        dx.madd(dx, dy.madd(dy, dz * dz)).sqrt()
     }
 
     /// Compute the midpoint in the u parameter range.
@@ -769,7 +770,7 @@ mod tests {
         for seg in &segs {
             let (a, b) = seg.domain();
             for k in 1..8 {
-                let t = (b - a).mul_add(f64::from(k) / 8.0, a);
+                let t = (b - a).madd(f64::from(k) / 8.0, a);
                 let off = (seg.evaluate(t) - c.evaluate(t)).length();
                 assert!(off < 1e-12, "at {t}: {off}");
             }

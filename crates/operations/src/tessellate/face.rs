@@ -1,5 +1,6 @@
 //! Face tessellation dispatcher with UV computation.
 
+use brepkit_math::madd::Madd;
 use brepkit_topology::Topology;
 use brepkit_topology::edge::EdgeCurve;
 use brepkit_topology::face::{FaceId, FaceSurface};
@@ -126,7 +127,7 @@ fn sphere_outer_wire_shape(
         let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
         let samples: Vec<(f64, f64)> = (0..=8)
             .map(|i| {
-                let t = (t1 - t0).mul_add(f64::from(i) / 8.0, t0);
+                let t = (t1 - t0).madd(f64::from(i) / 8.0, t0);
                 sphere.project_point(edge.curve().evaluate_with_endpoints(t, sp, ep))
             })
             .collect();

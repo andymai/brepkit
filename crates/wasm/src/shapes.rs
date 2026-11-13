@@ -1,5 +1,6 @@
 //! JS-facing shape types via `wasm-bindgen`.
 
+use brepkit_math::madd::Madd;
 use brepkit_operations::tessellate::{EdgeLines, TriangleMesh};
 use wasm_bindgen::prelude::*;
 
@@ -52,7 +53,7 @@ impl JsVec3 {
     #[must_use]
     pub fn length(&self) -> f64 {
         self.x
-            .mul_add(self.x, self.y.mul_add(self.y, self.z * self.z))
+            .madd(self.x, self.y.madd(self.y, self.z * self.z))
             .sqrt()
     }
 }

@@ -1,6 +1,7 @@
 //! SSI seed finding: subdivision-based and grid-based approaches, plus the
 //! main `intersect_nurbs_nurbs` entry point.
 
+use crate::madd::Madd;
 use std::collections::VecDeque;
 
 use crate::MathError;
@@ -140,7 +141,7 @@ pub(super) fn planar_patch_sections(
             #[allow(clippy::cast_precision_loss)]
             let q = curve
                 .curve
-                .evaluate((t1 - t0).mul_add(k as f64 / checks as f64, t0));
+                .evaluate((t1 - t0).madd(k as f64 / checks as f64, t0));
             let Some(&(_, near)) = feet
                 .iter()
                 .min_by(|a, b| (a.0 - q).length().total_cmp(&(b.0 - q).length()))

@@ -5,6 +5,7 @@
 //! geometric sub-faces. Faces without intersection data pass through
 //! unchanged.
 
+use brepkit_math::madd::Madd;
 use std::collections::{BTreeMap, HashMap};
 use std::hash::BuildHasher;
 use std::sync::LazyLock;
@@ -1104,7 +1105,7 @@ fn cb_edge_runs_along(
     let (t0, t1) = curve.domain_with_endpoints(start, end);
     let mid = curve.evaluate_with_endpoints(0.5 * (t0 + t1), start, end);
     let (c0, c1) = cb.curve().domain_with_endpoints(cs, ce);
-    let at = |k: f64| (c1 - c0).mul_add(k / 32.0, c0);
+    let at = |k: f64| (c1 - c0).madd(k / 32.0, c0);
     let on_cb = |t: f64| cb.curve().evaluate_with_endpoints(t, cs, ce);
     let samples: Vec<Point3> = (0..=32).map(|k| on_cb(at(f64::from(k)))).collect();
     // The nearest chord only brackets the foot: a coincident arc
@@ -1527,7 +1528,7 @@ fn lone_loop_around_ring(topo: &Topology, face_id: FaceId, sections: &[SectionEd
         .curve_3d
         .domain_with_endpoints(section.start, section.end);
     let at = |k: u32| {
-        let t = (t1 - t0).mul_add(f64::from(k) / f64::from(STEPS), t0);
+        let t = (t1 - t0).madd(f64::from(k) / f64::from(STEPS), t0);
         torus.project_point(
             section
                 .curve_3d
@@ -1689,7 +1690,7 @@ fn winds_once(face: &Face, nurbs: &brepkit_math::nurbs::curve::NurbsCurve) -> bo
     let (t0, t1) = nurbs.domain();
     let Some(angles) = (0..=SAMPLES)
         .map(|k| {
-            let t = (t1 - t0).mul_add(f64::from(k) / f64::from(SAMPLES), t0);
+            let t = (t1 - t0).madd(f64::from(k) / f64::from(SAMPLES), t0);
             surface.project_point(nurbs.evaluate(t)).map(|(u, _)| u)
         })
         .collect::<Option<Vec<f64>>>()
@@ -2149,7 +2150,7 @@ fn chorded_boundary(
                     let n =
                         ((64.0 * (t1 - t0).abs() / std::f64::consts::TAU).ceil() as usize).max(4);
                     #[allow(clippy::cast_precision_loss)]
-                    let at = |k: usize| (t1 - t0).mul_add(k as f64 / n as f64, t0);
+                    let at = |k: usize| (t1 - t0).madd(k as f64 / n as f64, t0);
                     for k in 0..n {
                         let (p, q) = (
                             curve.evaluate_with_endpoints(at(k), a, b),
@@ -2177,7 +2178,7 @@ fn chorded_boundary(
                     let mut from = lo;
                     for end in ends {
                         for j in 1..=8 {
-                            cuts.push((end - from).mul_add(f64::from(j) / 8.0, from));
+                            cuts.push((end - from).madd(f64::from(j) / 8.0, from));
                         }
                         from = end;
                     }
@@ -2470,7 +2471,7 @@ fn pb_on_sections(
         let (t0, t1) = pb.parameter_range();
         Some(
             edge.curve()
-                .evaluate_with_endpoints((t1 - t0).mul_add(f, t0), sp, ep),
+                .evaluate_with_endpoints((t1 - t0).madd(f, t0), sp, ep),
         )
     };
     let Some(mid) = point_of(pb_id, 0.5) else {
@@ -3024,7 +3025,7 @@ fn build_section_edges(
                                 #[allow(clippy::cast_precision_loss)]
                                 let frac = k as f64 / SAMPLES as f64;
                                 edge.curve().evaluate_with_endpoints(
-                                    (t1 - t0).mul_add(frac, t0),
+                                    (t1 - t0).madd(frac, t0),
                                     start,
                                     end,
                                 )
@@ -3143,7 +3144,7 @@ fn circle_inside_face(
             let frac = k as f64 / 8.0;
             let p = edge
                 .curve()
-                .evaluate_with_endpoints((t1 - t0).mul_add(frac, t0), sp, ep);
+                .evaluate_with_endpoints((t1 - t0).madd(frac, t0), sp, ep);
             min = Point3::new(min.x().min(p.x()), min.y().min(p.y()), min.z().min(p.z()));
             max = Point3::new(max.x().max(p.x()), max.y().max(p.y()), max.z().max(p.z()));
             have = true;
@@ -3160,7 +3161,7 @@ fn circle_inside_face(
     for k in 0..16 {
         #[allow(clippy::cast_precision_loss)]
         let frac = k as f64 / 16.0;
-        let p = curve.evaluate_with_endpoints((t1 - t0).mul_add(frac, t0), origin, origin);
+        let p = curve.evaluate_with_endpoints((t1 - t0).madd(frac, t0), origin, origin);
         if p.x() < min.x() - tol
             || p.x() > max.x() + tol
             || p.y() < min.y() - tol
@@ -3484,7 +3485,7 @@ fn sample_curve_interior(curve_ds: &crate::ds::IntersectionCurveDS) -> Vec<Point
         pts.push(
             curve_ds
                 .curve
-                .evaluate_with_endpoints((t1 - t0).mul_add(frac, t0), dummy, dummy),
+                .evaluate_with_endpoints((t1 - t0).madd(frac, t0), dummy, dummy),
         );
     }
     pts
@@ -4487,13 +4488,13 @@ fn clip_line_to_face_boundary(
                 if *closed && let EdgeCurve::Circle(c) = curve {
                     let a_seam = c.project(*asp);
                     for k in 1..96 {
-                        let a = std::f64::consts::TAU.mul_add(f64::from(k) / 96.0, a_seam);
+                        let a = std::f64::consts::TAU.madd(f64::from(k) / 96.0, a_seam);
                         poly.push(frame.project(c.evaluate(a)));
                     }
                 } else if *closed && let EdgeCurve::Ellipse(el) = curve {
                     let a_seam = el.project(*asp);
                     for k in 1..96 {
-                        let a = std::f64::consts::TAU.mul_add(f64::from(k) / 96.0, a_seam);
+                        let a = std::f64::consts::TAU.madd(f64::from(k) / 96.0, a_seam);
                         poly.push(frame.project(el.evaluate(a)));
                     }
                 } else {
@@ -4505,7 +4506,7 @@ fn clip_line_to_face_boundary(
                     for k in 1..96 {
                         let f = f64::from(k) / 96.0;
                         let f = if *forward { f } else { 1.0 - f };
-                        let p3 = curve.evaluate_with_endpoints((t1 - t0).mul_add(f, t0), ss, se);
+                        let p3 = curve.evaluate_with_endpoints((t1 - t0).madd(f, t0), ss, se);
                         poly.push(frame.project(p3));
                     }
                 }
@@ -4717,12 +4718,12 @@ fn hole_loops_along_line(
                     let (h0, h1) = (frame.project(sp), frame.project(ep));
                     let (rx, ry) = (l1.x() - l0.x(), l1.y() - l0.y());
                     let (sx, sy) = (h1.x() - h0.x(), h1.y() - h0.y());
-                    let denom = rx.mul_add(sy, -(ry * sx));
+                    let denom = rx.madd(sy, -(ry * sx));
                     let scale = (rx.hypot(ry) * sx.hypot(sy)).max(f64::MIN_POSITIVE);
                     if denom.abs() > 1e-9 * scale {
                         let (qx, qy) = (h0.x() - l0.x(), h0.y() - l0.y());
-                        let t = qx.mul_add(sy, -(qy * sx)) / denom;
-                        let u = qx.mul_add(ry, -(qy * rx)) / denom;
+                        let t = qx.madd(sy, -(qy * sx)) / denom;
+                        let u = qx.madd(ry, -(qy * rx)) / denom;
                         if (-1e-9..=1.0 + 1e-9).contains(&t) && (-1e-6..=1.0 + 1e-6).contains(&u) {
                             crossings.push(t);
                         }
@@ -4752,13 +4753,13 @@ fn hole_loops_along_line(
                     if closed && let EdgeCurve::Circle(c) = curve {
                         let a_seam = c.project(sp);
                         for k in 1..96 {
-                            let a = std::f64::consts::TAU.mul_add(f64::from(k) / 96.0, a_seam);
+                            let a = std::f64::consts::TAU.madd(f64::from(k) / 96.0, a_seam);
                             poly.push(frame.project(c.evaluate(a)));
                         }
                     } else if closed && let EdgeCurve::Ellipse(el) = curve {
                         let a_seam = el.project(sp);
                         for k in 1..96 {
-                            let a = std::f64::consts::TAU.mul_add(f64::from(k) / 96.0, a_seam);
+                            let a = std::f64::consts::TAU.madd(f64::from(k) / 96.0, a_seam);
                             poly.push(frame.project(el.evaluate(a)));
                         }
                     } else {
@@ -4771,7 +4772,7 @@ fn hole_loops_along_line(
                         let (t0, t1) = curve.domain_with_endpoints(ns, ne);
                         let mut samples: Vec<Point2> = (1..96)
                             .map(|k| {
-                                let t = (t1 - t0).mul_add(f64::from(k) / 96.0, t0);
+                                let t = (t1 - t0).madd(f64::from(k) / 96.0, t0);
                                 frame.project(curve.evaluate_with_endpoints(t, ns, ne))
                             })
                             .collect();
@@ -6459,7 +6460,7 @@ mod tests {
             .collect();
         let n = brepkit_math::nurbs::fitting::interpolate(&pts, 3).unwrap();
         let (d0, d1) = n.domain();
-        let (t0, t1) = (0.25_f64.mul_add(d1 - d0, d0), 0.6_f64.mul_add(d1 - d0, d0));
+        let (t0, t1) = (0.25_f64.madd(d1 - d0, d0), 0.6_f64.madd(d1 - d0, d0));
         let (a, b) = (n.evaluate(t0), n.evaluate(t1));
         let curve = EdgeCurve::NurbsCurve(n);
         assert!(window_curve(&curve, (t0, t1), (a, b)).is_none());
@@ -6718,7 +6719,7 @@ fn crossing_points(
             let (t0, t1) = s.curve_3d.domain_with_endpoints(s.start, s.end);
             [0.25, 0.5, 0.75].map(|f| {
                 s.curve_3d
-                    .evaluate_with_endpoints((t1 - t0).mul_add(f, t0), s.start, s.end)
+                    .evaluate_with_endpoints((t1 - t0).madd(f, t0), s.start, s.end)
             })
         })
         .filter(|&p| distance_to_runs(p, &boundary) > clear)
@@ -6759,7 +6760,7 @@ fn boundary_runs(topo: &Topology, face_id: FaceId, samples: u32) -> Vec<Vec<Poin
                 (0..=samples)
                     .map(|k| {
                         edge.curve().evaluate_with_endpoints(
-                            (t1 - t0).mul_add(f64::from(k) / f64::from(samples), t0),
+                            (t1 - t0).madd(f64::from(k) / f64::from(samples), t0),
                             sp,
                             ep,
                         )
@@ -6870,7 +6871,7 @@ fn drop_sections_dividing_nothing(
             let (t0, t1) = s.curve_3d.domain_with_endpoints(s.start, s.end);
             (0..=CURVE_STEPS)
                 .map(|k| {
-                    let t = (t1 - t0).mul_add(f64::from(k) / f64::from(CURVE_STEPS), t0);
+                    let t = (t1 - t0).madd(f64::from(k) / f64::from(CURVE_STEPS), t0);
                     s.curve_3d.evaluate_with_endpoints(t, s.start, s.end)
                 })
                 .collect()
@@ -6979,7 +6980,7 @@ fn polyline_meetings(a: &[Point3], b: &[Point3], band: f64) -> Vec<(Point3, f64,
             return (0.0, 0.0);
         }
         let (cc, bb) = (d1.dot(r), d1.dot(d2));
-        let denom = aa.mul_add(ee, -(bb * bb));
+        let denom = aa.madd(ee, -(bb * bb));
         let s = if denom > 0.0 {
             ((bb * ff - cc * ee) / denom).clamp(0.0, 1.0)
         } else {

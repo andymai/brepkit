@@ -4,6 +4,7 @@
 //! by summing the signed solid angles of triangulated faces. More robust
 //! than ray casting for imperfect geometry (small gaps, T-junctions).
 
+use brepkit_math::madd::Madd;
 use std::f64::consts::PI;
 
 use brepkit_math::vec::Point3;
@@ -93,8 +94,8 @@ fn solid_angle(p: Point3, a: Point3, b: Point3, c: Point3) -> f64 {
 
     // Denominator
     let den = la
-        .mul_add(lb * lc, pa.dot(pb) * lc)
-        .mul_add(1.0, pa.dot(pc) * lb + pb.dot(pc) * la);
+        .madd(lb * lc, pa.dot(pb) * lc)
+        .madd(1.0, pa.dot(pc) * lb + pb.dot(pc) * la);
 
     2.0 * num.atan2(den)
 }

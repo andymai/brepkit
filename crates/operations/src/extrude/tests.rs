@@ -1,5 +1,6 @@
 #![allow(clippy::unwrap_used, clippy::print_stderr)]
 
+use brepkit_math::madd::Madd;
 use std::collections::HashMap;
 
 use brepkit_math::tolerance::Tolerance;
@@ -1830,8 +1831,8 @@ fn a_holed_nurbs_face_extrudes_with_caps_facing_out() {
             (0..3)
                 .map(|j| {
                     Point3::new(
-                        2.6f64.mul_add(i as f64 / 3.0, -1.3),
-                        1.3f64.mul_add(j as f64, -1.3),
+                        2.6f64.madd(i as f64 / 3.0, -1.3),
+                        1.3f64.madd(j as f64, -1.3),
                         zs[j],
                     )
                 })
