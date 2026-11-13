@@ -1,5 +1,25 @@
 # Changelog
 
+## [4.11.10](https://github.com/andymai/brepkit/compare/v4.11.9...v4.11.10) (2026-11-13)
+
+
+### Bug Fixes
+
+* **blend:** a chamfer ending at a face's inside corner trims back to the corner ([#2381](https://github.com/andymai/brepkit/issues/2381)) ([0eafbb9](https://github.com/andymai/brepkit/commit/0eafbb9dab9911f39cc1c7c8eede96b03a43e679))
+* **blend:** a chamfer reaching exactly across a face takes its far edge ([#2416](https://github.com/andymai/brepkit/issues/2416)) ([1b9bd63](https://github.com/andymai/brepkit/commit/1b9bd63c8e9dab702011bafdb7042cd2f0f0c530))
+* **blend:** a flat chamfer runs its contacts to a slanted end face's plane ([#2382](https://github.com/andymai/brepkit/issues/2382)) ([187b122](https://github.com/andymai/brepkit/commit/187b12240215ded92f86441fde068d3fa15aefb7))
+* **blend:** split a face pinched along a contact over its own edge ([#2373](https://github.com/andymai/brepkit/issues/2373)) ([a350cdb](https://github.com/andymai/brepkit/commit/a350cdb7d18f9b65f585c855db9eaeb721f18ddd))
+* **operations:** a two-distance chamfer the blend engine refuses rebuilds planes with flat bevels ([#2384](https://github.com/andymai/brepkit/issues/2384)) ([70f7982](https://github.com/andymai/brepkit/commit/70f7982e93e0eeb24354d13d6ba4e6cc93c90c41))
+* **operations:** chamfer a body with curved edges through the blend engine ([#2379](https://github.com/andymai/brepkit/issues/2379)) ([66e2b61](https://github.com/andymai/brepkit/commit/66e2b616016d2ef62fa50c1354d9cd0c08274c68))
+* **operations:** chamfer a rim whose wall or cap goes whole ([#2380](https://github.com/andymai/brepkit/issues/2380)) ([1183628](https://github.com/andymai/brepkit/commit/11836285487e5c2f02fc55ab42b5754c5b4b996b))
+* **operations:** refuse a chamfer distance no face can hold ([#2378](https://github.com/andymai/brepkit/issues/2378)) ([88c1cd7](https://github.com/andymai/brepkit/commit/88c1cd7617700aa5dee5bf7bff35bd349861e6cc))
+
+
+### Performance
+
+* faster B-spline evaluation, derivatives and exact volume ([#2414](https://github.com/andymai/brepkit/issues/2414)) ([9ea56d9](https://github.com/andymai/brepkit/commit/9ea56d9fe5dac919c790d78394c070893db8f201))
+* **math:** multiply then add in two steps, with no call to a software fma ([a34c384](https://github.com/andymai/brepkit/commit/a34c38483258dc81862ee6f634cbf0cf91ee8071))
+
 ## [4.11.9](https://github.com/andymai/brepkit/compare/v4.11.8...v4.11.9) (2026-11-13)
 
 
