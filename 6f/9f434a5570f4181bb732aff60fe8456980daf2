@@ -1,0 +1,21 @@
+crates/math/src/nurbs/surface.rs
+  s_385aefe07faf61::t_a19e6b8e1e31b6 814,1445-1467,1469-1471,1474-1483,1486-1487,1489-1551
+  s_385aefe07faf61::t_591635319e4b61 1468,1472-1473,1484-1485,1488
+  s_385aefe07faf61::t_0e34c66e9fc371 68-119,791-792,804-813,815-816
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6f9f434a5570f4181bb732aff60fe8456980daf2",
+  "prompts": {},
+  "sessions": {
+    "s_385aefe07faf61": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7ba532a8-609c-4534-9316-9e8d54346633",
+        "model": "claude-fable-5-2"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
