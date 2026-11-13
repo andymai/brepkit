@@ -1,0 +1,22 @@
+crates/blend/src/chamfer_builder.rs
+  s_385aefe07faf61::t_2578e98eb21860 289,315,332-342,365,417,543-571
+  s_385aefe07faf61::t_4aa7a9acfdfeae 572-573
+crates/operations/tests/chamfer_consumes_a_side.rs
+  s_385aefe07faf61::t_a90d4acc4d68a7 1-78
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ff115b6cc2715ea86ea865beb3db9a7bc28004d2",
+  "prompts": {},
+  "sessions": {
+    "s_385aefe07faf61": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7ba532a8-609c-4534-9316-9e8d54346633",
+        "model": "claude-fable-5-2"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
