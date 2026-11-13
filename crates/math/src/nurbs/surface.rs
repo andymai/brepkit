@@ -34,7 +34,7 @@ pub struct NurbsSurface {
 /// surface is never changed once made. Boxed, so the surface stays small
 /// (enums hold surfaces by value), and cloned with it, not shared (the ray
 /// patches hold a clone of their surface, which must not hold them back).
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 struct Caches {
     /// The grid every projection seeds from.
     coarse_grid: std::sync::OnceLock<std::sync::Arc<crate::nurbs::projection::CoarseGrid>>,
@@ -76,6 +76,14 @@ static SPLIT: std::sync::Mutex<
 
 /// How many Bezier patches [`SPLIT`] keeps in all.
 const SPLIT_PATCHES: usize = 50_000;
+
+/// What a surface keeps is no part of its value: it prints as nothing, so
+/// a surface prints the same whatever it has worked out.
+impl std::fmt::Debug for Caches {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("..")
+    }
+}
 
 impl PartialEq for NurbsSurface {
     fn eq(&self, other: &Self) -> bool {

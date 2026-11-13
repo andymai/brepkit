@@ -23,11 +23,22 @@ pub struct NurbsCurve {
     /// Each knot span's points where a projection samples it, evaluated on
     /// first use.
     #[cfg_attr(feature = "serde", serde(skip))]
-    span_samples: std::sync::OnceLock<std::sync::Arc<Vec<SpanSamples>>>,
+    span_samples: SpanSampleCache,
 }
 
 /// A knot span's sampled points, `(parameter, point)`, made on first use.
 type SpanSamples = std::sync::OnceLock<Vec<(f64, Point3)>>;
+
+/// Each knot span's sample points (see [`NurbsCurve::span_samples`]): no
+/// part of the curve's value, so it prints as nothing.
+#[derive(Clone, Default)]
+struct SpanSampleCache(std::sync::OnceLock<std::sync::Arc<Vec<SpanSamples>>>);
+
+impl std::fmt::Debug for SpanSampleCache {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("..")
+    }
+}
 
 impl PartialEq for NurbsCurve {
     fn eq(&self, other: &Self) -> bool {
@@ -73,7 +84,7 @@ impl NurbsCurve {
             knots,
             control_points,
             weights,
-            span_samples: std::sync::OnceLock::new(),
+            span_samples: SpanSampleCache::default(),
         })
     }
 
@@ -84,7 +95,7 @@ impl NurbsCurve {
         k: usize,
         sample: impl FnOnce() -> Vec<(f64, Point3)>,
     ) -> &[(f64, Point3)] {
-        let spans = self.span_samples.get_or_init(|| {
+        let spans = self.span_samples.0.get_or_init(|| {
             std::sync::Arc::new(
                 (0..self.knots.len().saturating_sub(1))
                     .map(|_| std::sync::OnceLock::new())
