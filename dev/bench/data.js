@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794590107090,
+  "lastUpdate": 1794590619467,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -68849,6 +68849,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 14966297,
             "range": "± 170256",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f9d453e965b66964693ac36beb46fd5fd5edbe66",
+          "message": "perf(blend): multiply then add in two steps in the new chamfer code (#2421)\n\n## What does this PR do?\n\nFour calls to `mul_add` came into library code with the chamfer fixes\nthat merged after #2409. This PR changes them to `Madd::madd` in\n`crates/blend/src/trimmer.rs` and `crates/blend/src/chamfer_builder.rs`.\n\nIt also adds `scripts/check-mul-add.sh`. The script fails when a file in\n`crates/*/src` calls `mul_add`. It skips\n`crates/math/src/nurbs/intersection/tests.rs`, whose fixtures need the\nsingle rounding. The `Layer Boundaries` job in CI runs the script, and\n`CLAUDE.md` names it.\n\n## How I checked it\n\n- `./scripts/check-mul-add.sh` passes on this branch and fails on main.\n- `cargo clippy -p brepkit-blend --all-targets -- -D warnings` passes.\n- `cargo test -p brepkit-blend` passes (176 tests).\n- `./scripts/check-doc-paths.sh` passes.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nReplaces four `mul_add` calls in the blend crate with `Madd::madd` and\nadds a CI check that rejects `mul_add` in library code.\n\n- `mul_add` rounds once and relies on a fused multiply-add instruction,\nwhich WebAssembly lacks; each call falls back to a software routine\nseveral times slower than a multiply and add.\n- The new `scripts/check-mul-add.sh` fails CI on any `mul_add` call, in\nboth the method and path forms, in `crates/*/src`. It runs in the `Layer\nBoundaries` job and allows one test fixture file whose surfaces need the\nsingle rounding.\n- `CLAUDE.md` documents the script and why the rule exists.\n\n<sup>Written for commit 84b9b8eedbc39c2f3721e498d1a6656d1d92f7c7.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2421?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2421?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2421&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-11-13T17:20:33Z",
+          "tree_id": "2c2daf2622d460e395ee0c749f5d01fae5e4d9e4",
+          "url": "https://github.com/andymai/brepkit/commit/f9d453e965b66964693ac36beb46fd5fd5edbe66"
+        },
+        "date": 1794590610948,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 765781,
+            "range": "± 3723",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 809240,
+            "range": "± 1902",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10028,
+            "range": "± 40",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 447305,
+            "range": "± 7972",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 19434540,
+            "range": "± 138857",
             "unit": "ns/iter"
           }
         ]
