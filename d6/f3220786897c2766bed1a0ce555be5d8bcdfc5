@@ -1,0 +1,23 @@
+crates/io/tests/spline_liner_wedge_cut_inmem.rs
+  s_385aefe07faf61::t_dc0ed4702194db 1-87
+crates/io/tests/data/spline_liner.bin
+  s_385aefe07faf61::t_dc0ed4702194db 1
+crates/io/tests/data/wedge_across_seam.bin
+  s_385aefe07faf61::t_dc0ed4702194db 1
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d6f3220786897c2766bed1a0ce555be5d8bcdfc5",
+  "prompts": {},
+  "sessions": {
+    "s_385aefe07faf61": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7ba532a8-609c-4534-9316-9e8d54346633",
+        "model": "claude-fable-5-2"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
