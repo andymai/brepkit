@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794540903402,
+  "lastUpdate": 1794546493378,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -67985,6 +67985,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 21411795,
             "range": "± 105978",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "0a1454523e43794d76f269ee05957d0118783933",
+          "message": "perf(operations): cut a NURBS tool out of a NURBS blank it lies inside without a section search (#2403)\n\n## What does this PR do?\n\nToday a cut of one NURBS solid out of another that it lies inside takes\n1.7 s for two solids of 16 faces each. No pair of their faces meets. The\nboolean still searches each pair with overlapping boxes for a section,\nby grid and along each boundary curve. Then it meshes the faces of the\nresult to validate it, and the findings go only to the log.\n\nAfter this PR the same cut takes 10 ms. Four changes do this:\n\n- `intersect_nurbs_nurbs` first tries to prove the two surfaces apart.\nIt halves their Bezier patches and tests the control points, by their\nboxes and along the direction that a patch faces. It picks the direction\nto halve by the size of the control net, because one parameter can be an\nangle and the other a length. On the captured operands the face-face\nphase goes from 1,362 ms to 42 ms.\n- `boolean` returns the blank with the tool's shell as a cavity. Every\nface of both solids must be a NURBS face. The proof must hold for each\npair of surfaces. A vertex of the tool must classify inside the blank.\n- `boolean_with_evolution` takes the same route, and maps each input\nface to its copy in the result. brepjs calls this entry by default, and\nit ran the engine before it looked at the shortcut.\n- `validate_boolean_result_lenient` runs `validate_solid` only when a\nlogger takes warnings. That call took 60 ms on the 32 faces of this\nresult.\n\nCloses #2398.\n\n## How I checked it\n\n- Three unit tests for the proof in\n`crates/math/src/nurbs/intersection/tests.rs`: coaxial walls one unit\napart, walls that cross or touch, and walls nearer than the margin.\n- `crates/io/tests/spline_can_cut_inmem.rs` replays the operands\ncaptured from brepjs through `boolean` and through the raw engine. Both\nmust give 32 NURBS faces, one inner shell, a valid solid, and ray-cast\npoints in the cavity, in both walls, and outside.\n- A fourth test in that file replays the operands through\n`boolean_with_evolution`. Each of the 32 input faces must have one\nimage, with the same surface, and the history must mark no face as\ndeleted.\n- `cargo test` passes for `brepkit-math`, `brepkit-algo`,\n`brepkit-operations`, and `brepkit-io` (release).\n- `cargo clippy --all-targets -- -D warnings` passes for those four\ncrates.\n- The pose sweep and the truth audit give the same output on main\n(`f8b27b644`) and on this branch.",
+          "timestamp": "2026-11-12T21:05:17-08:00",
+          "tree_id": "44002b63790ecba696f7c475601b6de31e1ff8b5",
+          "url": "https://github.com/andymai/brepkit/commit/0a1454523e43794d76f269ee05957d0118783933"
+        },
+        "date": 1794546484542,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 617893,
+            "range": "± 1613",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 661347,
+            "range": "± 19218",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 8248,
+            "range": "± 80",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 395243,
+            "range": "± 8291",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 17449099,
+            "range": "± 54622",
             "unit": "ns/iter"
           }
         ]
