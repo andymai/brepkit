@@ -1,0 +1,32 @@
+crates/operations/tests/plane_through_nurbs_edges.rs
+  s_385aefe07faf61::t_3acf08ed2f7e0f 10-13,149,206
+  s_385aefe07faf61::t_67fbc5fbd689b0 1-9,14-148,150-205,207-215
+crates/algo/src/pave_filler/phase_ef.rs
+  s_385aefe07faf61::t_1eb05a7c3fd245 530,545-547,620-622
+  s_385aefe07faf61::t_0ed3315a6e6e2f 114-115,119-133,219,223,229,231-249,252-253,274-277,283,322,324-325,334-337,346-349,388
+crates/algo/src/builder/fill_images_faces.rs
+  s_385aefe07faf61::t_1eb05a7c3fd245 2394-2395,2423-2434
+crates/algo/src/ds/arena.rs
+  s_385aefe07faf61::t_1eb05a7c3fd245 52-55,83
+crates/algo/src/pave_filler/fill_face_info.rs
+  s_385aefe07faf61::t_e9557758de7ac1 242-245,248-250
+  s_385aefe07faf61::t_1eb05a7c3fd245 246-247
+  s_385aefe07faf61::t_f1055cbbe00436 510-530
+  s_385aefe07faf61::t_77aa2e957ed2c2 509
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "2ec294587f989e3582aa970c7d6dc51309f9d39a",
+  "prompts": {},
+  "sessions": {
+    "s_385aefe07faf61": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7ba532a8-609c-4534-9316-9e8d54346633",
+        "model": "claude-fable-5-2"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
