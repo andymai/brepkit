@@ -1,0 +1,28 @@
+CLAUDE.md
+  s_385aefe07faf61::t_53b92a1adcd238 522-523,617
+scripts/check-mul-add.sh
+  s_385aefe07faf61::t_53b92a1adcd238 1-22
+crates/blend/src/chamfer_builder.rs
+  s_385aefe07faf61::t_622dd8d8321ef5 742
+  s_385aefe07faf61::t_53b92a1adcd238 7
+.github/workflows/ci.yml
+  s_385aefe07faf61::t_53b92a1adcd238 210
+crates/blend/src/trimmer.rs
+  s_385aefe07faf61::t_622dd8d8321ef5 541,543
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c98a092e98971b3f9139abdf11ac0f4ec56791e6",
+  "prompts": {},
+  "sessions": {
+    "s_385aefe07faf61": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7ba532a8-609c-4534-9316-9e8d54346633",
+        "model": "claude-fable-5-2"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
