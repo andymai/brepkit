@@ -1,0 +1,32 @@
+crates/algo/src/pave_filler/fill_face_info.rs
+  s_385aefe07faf61::t_8a05619f1ae7ba 199,208,236-260
+crates/algo/src/pave_filler/phase_ef.rs
+  s_385aefe07faf61::t_8a05619f1ae7ba 67-84,276-335,340,382-383,452-477
+  s_385aefe07faf61::t_fe3ef0518a8753 1535,1667
+crates/io/tests/data/revolve_seam_nacelle.bin
+  s_385aefe07faf61::t_98853a3dcaf857 1
+crates/io/tests/data/revolve_seam_wedge_at_seam.bin
+  s_385aefe07faf61::t_98853a3dcaf857 1
+crates/io/tests/data/revolve_seam_wedge_off_seam.bin
+  s_385aefe07faf61::t_98853a3dcaf857 1
+crates/io/tests/revolve_seam_cut_inmem.rs
+  s_385aefe07faf61::t_03023b37d7e25e 1-17,24,26-27,41-42,45-51,53-69,71-78,80-85,90-98
+  s_385aefe07faf61::t_98853a3dcaf857 18-23,25,28-40,43-44,52,70,89,99
+  s_385aefe07faf61::t_3a52ee21ff4675 79,86-88
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "648ce601087de297b6c96260baaf88575429ea72",
+  "prompts": {},
+  "sessions": {
+    "s_385aefe07faf61": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7ba532a8-609c-4534-9316-9e8d54346633",
+        "model": "claude-fable-5-2"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
