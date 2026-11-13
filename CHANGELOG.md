@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.11.8](https://github.com/andymai/brepkit/compare/v4.11.7...v4.11.8) (2026-11-13)
+
+
+### Bug Fixes
+
+* **algo:** split a plane face along a NURBS face's edge that lies in it ([#2402](https://github.com/andymai/brepkit/issues/2402)) ([87d3e44](https://github.com/andymai/brepkit/commit/87d3e445a9576e7d28980906b3853289b52d9a55))
+
 ## [4.11.7](https://github.com/andymai/brepkit/compare/v4.11.6...v4.11.7) (2026-11-13)
 
 
