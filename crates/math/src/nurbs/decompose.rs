@@ -328,6 +328,33 @@ fn transpose<T: Copy>(grid: &[Vec<T>]) -> Vec<Vec<T>> {
         .collect()
 }
 
+/// A row of the grid [`insert_along_rows`] works on: one of the grid's
+/// rows as it came, or a blended row in homogeneous form.
+enum Row {
+    Kept(usize),
+    Blended(Vec<[f64; 4]>),
+}
+
+/// A row in homogeneous form.
+fn homogeneous(row: &[Point3], wrow: &[f64]) -> Vec<[f64; 4]> {
+    row.iter()
+        .zip(wrow)
+        .map(|(pt, &w)| [pt.x() * w, pt.y() * w, pt.z() * w, w])
+        .collect()
+}
+
+/// `row` in homogeneous form, a kept row read from `cps` and `ws`.
+fn row_view<'a>(
+    row: &'a Row,
+    cps: &[Vec<Point3>],
+    ws: &[Vec<f64>],
+) -> std::borrow::Cow<'a, [[f64; 4]]> {
+    match row {
+        Row::Kept(at) => std::borrow::Cow::Owned(homogeneous(&cps[*at], &ws[*at])),
+        Row::Blended(h) => std::borrow::Cow::Borrowed(h),
+    }
+}
+
 /// [`crate::nurbs::knot_ops::curve_knot_insert`] of `u`, `r` times, on
 /// every column of the grid at once (its rows run along the curves): the
 /// same multiplicity cap, homogeneous points, blends and knot vector.
@@ -347,19 +374,15 @@ fn insert_along_rows(
     if r == 0 {
         return;
     }
-    let mut h: Vec<Vec<[f64; 4]>> = cps
-        .iter()
-        .zip(ws.iter())
-        .map(|(row, wrow)| {
-            row.iter()
-                .zip(wrow)
-                .map(|(pt, &w)| [pt.x() * w, pt.y() * w, pt.z() * w, w])
-                .collect()
-        })
-        .collect();
+    // Each row is blended in homogeneous form and written back; a row the
+    // blends do not touch is only taken there and back, which leaves a row
+    // whose weights are all exactly 1 as it was, so such a row stays in
+    // place (on a surface of many spans the round trips were most of the
+    // work, as they repeat for every knot).
+    let mut rows: Vec<Row> = (0..cps.len()).map(Row::Kept).collect();
     for _ in 0..r {
-        let ck = crate::nurbs::basis::find_span(h.len(), p, u, knots);
-        let new_rows: Vec<Vec<[f64; 4]>> = ((ck - p + 1)..=ck)
+        let ck = crate::nurbs::basis::find_span(rows.len(), p, u, knots);
+        let new_rows: Vec<Row> = ((ck - p + 1)..=ck)
             .map(|i| {
                 let denom = knots[i + p] - knots[i];
                 let alpha = if denom.abs() < KNOT_EPS {
@@ -367,41 +390,57 @@ fn insert_along_rows(
                 } else {
                     (u - knots[i]) / denom
                 };
-                h[i - 1]
-                    .iter()
-                    .zip(&h[i])
-                    .map(|(prev, curr)| {
-                        [
-                            alpha * curr[0] + (1.0 - alpha) * prev[0],
-                            alpha * curr[1] + (1.0 - alpha) * prev[1],
-                            alpha * curr[2] + (1.0 - alpha) * prev[2],
-                            alpha * curr[3] + (1.0 - alpha) * prev[3],
-                        ]
-                    })
-                    .collect()
+                Row::Blended(
+                    row_view(&rows[i - 1], cps, ws)
+                        .iter()
+                        .zip(row_view(&rows[i], cps, ws).iter())
+                        .map(|(prev, curr)| {
+                            [
+                                alpha * curr[0] + (1.0 - alpha) * prev[0],
+                                alpha * curr[1] + (1.0 - alpha) * prev[1],
+                                alpha * curr[2] + (1.0 - alpha) * prev[2],
+                                alpha * curr[3] + (1.0 - alpha) * prev[3],
+                            ]
+                        })
+                        .collect(),
+                )
             })
             .collect();
-        h.splice((ck - p + 1)..ck, new_rows);
+        rows.splice((ck - p + 1)..ck, new_rows);
         knots.insert(ck + 1, u);
     }
-    *cps = h
-        .iter()
-        .map(|row| {
-            row.iter()
-                .map(|h| {
-                    if h[3] == 0.0 {
-                        Point3::new(h[0], h[1], h[2])
-                    } else {
-                        Point3::new(h[0] / h[3], h[1] / h[3], h[2] / h[3])
-                    }
-                })
-                .collect()
-        })
+    let back = |h: &[[f64; 4]]| -> (Vec<Point3>, Vec<f64>) {
+        let row = h
+            .iter()
+            .map(|h| {
+                if h[3] == 0.0 {
+                    Point3::new(h[0], h[1], h[2])
+                } else {
+                    Point3::new(h[0] / h[3], h[1] / h[3], h[2] / h[3])
+                }
+            })
+            .collect();
+        (row, h.iter().map(|h| h[3]).collect())
+    };
+    let mut old: Vec<Option<(Vec<Point3>, Vec<f64>)>> = std::mem::take(cps)
+        .into_iter()
+        .zip(std::mem::take(ws))
+        .map(Some)
         .collect();
-    *ws = h
-        .iter()
-        .map(|row| row.iter().map(|h| h[3]).collect())
-        .collect();
+    for row in rows {
+        let (row, wrow) = match row {
+            Row::Kept(at) => match old[at].take() {
+                Some((row, wrow)) if wrow.iter().all(|&w| w.to_bits() == 1.0_f64.to_bits()) => {
+                    (row, wrow)
+                }
+                Some((row, wrow)) => back(&homogeneous(&row, &wrow)),
+                None => continue,
+            },
+            Row::Blended(h) => back(&h),
+        };
+        cps.push(row);
+        ws.push(wrow);
+    }
 }
 
 /// Elevate the degree of a NURBS curve by `t` (A5.9).
@@ -670,6 +709,32 @@ mod tests {
                         bits(&fast),
                         bits(&refine_by_insertion(&s)),
                         "degrees ({pu}, {pv}), rational {rational}, double {double}"
+                    );
+                    // Rows whose weights are all 1 among rows whose are not
+                    // (a refinement keeps the former in place).
+                    let mixed = NurbsSurface::new(
+                        pu,
+                        pv,
+                        s.knots_u().to_vec(),
+                        s.knots_v().to_vec(),
+                        s.control_points().to_vec(),
+                        s.weights()
+                            .iter()
+                            .enumerate()
+                            .map(|(i, row)| {
+                                if i % 3 == 0 {
+                                    vec![1.0; row.len()]
+                                } else {
+                                    row.clone()
+                                }
+                            })
+                            .collect(),
+                    )
+                    .expect("valid net");
+                    assert_eq!(
+                        bits(&refine_to_full_multiplicity(&mixed).expect("refined")),
+                        bits(&refine_by_insertion(&mixed)),
+                        "degrees ({pu}, {pv}), mixed rows, double {double}"
                     );
                 }
             }
