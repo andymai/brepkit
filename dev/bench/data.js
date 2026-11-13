@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794610756179,
+  "lastUpdate": 1794612984295,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -69065,6 +69065,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24169168,
             "range": "± 289370",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "47692ff307d35b1a74576dbdfe5eb9f8fb675d9c",
+          "message": "perf(tessellate): a spline edge or face is divided where it turns (#2428)\n\n## TL;DR\n\nA spline edge or face is now divided where it turns, not evenly. The\nturbofan example meshes to 418,942 triangles in 2.8 s through brepjs. On\n4.11.10 it took 2,891,862 triangles and 16.5 s.\n\nFixes #2420.\n\n## Why\n\nA spline edge was sampled at even steps, and a spline face took an even\ngrid. The tightest place of a curve or surface set the spacing for all\nof it. The nacelle of the turbofan example is a spline profile revolved\none turn. Its trailing lip gave one face 512 columns, and one profile\nedge 385 points.\n\n## What\n\n- `nurbs_edge_breaks` gives the sample parameters of a spline edge. It\ncuts a span until the span holds the deflection and half of the angular\ntolerance. The number of parts comes from the sag and the turn of the\nspan, with a limit of 8 for each cut.\n- `iso_breaks_over` gives the grid lines of a spline face in each\ndirection by the same rule, read across 8 rows. `untwist_lines` halves\nthe two spans of a cell that is twisted, and only those spans.\n- `share_doubled_back_samples` gives two straight edges that overlap in\none wire the same sample points. A round that ends part of the way along\na wall's edge makes such a pair. Before this change, the mesh closed\nthere only because even sampling put the same points on the two edges.\n- Spans are cut level by level. If the span limit stops the cuts, each\npart of the edge or face has the same depth.\n\n## How verified\n\nEngine mesh through brepjs in node, tolerance 0.1 and angular tolerance\n0.3, one run for each row:\n\n| Kernel | Time | Triangles |\n|---|---|---|\n| brepkit-wasm 4.11.10 | 16.5 s | 2,891,862 |\n| This branch | 2.8 s | 418,942 |\n| Default brepjs kernel | 4.6 s | 516,074 |\n\nNative, deflection 0.1 and angular tolerance 0.3:\n\n| Solid | Triangles on main | Triangles on this branch |\n|---|---|---|\n| Nacelle, 16 NURBS faces | 211,504 | 22,312 |\n| One stator blade | 1,228 | 162 |\n\nThe two meshes on this branch are closed and manifold. On main, the\nblade mesh had 2 edges with more than 2 triangles.\n\n- `cargo nextest run --workspace`: 4,651 tests passed at the commit\nbefore the new tests. The 8 new tests pass.\n- `cargo clippy --all-targets -- -D warnings`: no findings.\n- The pose sweep and the truth audit give the same lines as main, apart\nfrom rounding in the last digits of the error columns.\n\nTests that changed:\n\n- `regress_fillet_variable_retry_seam_stub`: three fixtures had a pinned\nmesh gap of 3 or 4 open edges. The gap is now 0.\n- `try_fillet_second_pass_does_not_break_solid`: no second fillet is\nrefused now, because each result's mesh is closed. The test now checks\nthat each success changed the volume.\n- `kumiko_wrap_slot_cut_inmem` and `kumiko_wrap_first_band_cut_inmem`:\nthe pinned volumes are readings of a mesh at a set deflection. They move\nby at most 0.17 in 383. At a deflection of 0.05 the new reading of one\ncut is 384.793 and the old one was 384.626. The value at a deflection of\n0.0001 is 385.24.\n- `scoop_taper_clip_inmem`: the error of the intersect volume goes from\n0.13 to 0.52. The errors of the cut and the fuse go from 0.31 and 0.33\nto 0.07 and 0.10.\n- `bspline_conversion_mesh`, the two dome tests in\n`tessellate/tests.rs`, `step_freeform_panel`, `extrude_off_its_normal`:\neach bound now follows from the deflection of the mesh that the test\nasks for.\n\n## Release and monitoring\n\nThe volume of a solid with NURBS faces comes from its mesh at a\ndeflection of 5e-5 of its size. The old mesh was finer than that\ndeflection asked for. For the kumiko cut above, `solid_volume` now reads\n385.263 and read 385.243 before.\n\n## Next steps\n\nAfter the release, brepjs can remove the\n`playgroundExamples.turbofanEngine` skip for brepkit.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nSpline edges and faces are now divided where they turn instead of being\nsampled evenly, cutting the turbofan example from 2,891,862 triangles in\n16.5 s to 418,942 triangles in 2.8 s. Fixes #2420.\n\n- A spline span is cut until it holds the deflection and angular\ntolerance, reading each polynomial piece between knots so tight bumps\nare caught; closed splines keep at least three spans no matter how\nsmall.\n- A spline arc that stays within the deflection of its chord keeps its\nmiddle points, so a face between it and a straight edge has enough\nboundary samples to mesh.\n- A spline face's grid lines follow the same rule, and twisted cells are\nsplit only where they twist; the grid is capped before the twist pass\nruns.\n- A planar face's spline boundary now uses the caller's angular\ntolerance.\n- Overlapping straight edges share sample points round by round until\nnone takes a point, keeping meshes closed where they previously closed\nonly by even sampling.\n- Solid volume readings for NURBS faces come from a coarser mesh than\nbefore, so pinned test values shift slightly, all within the requested\ndeflection.\n\n<sup>Written for commit 267cd7994d5f483877b8bc364a6d02952440559e.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2428?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2428?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2428&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-11-13T23:32:47Z",
+          "tree_id": "70d47aebefcdcf218fcee6a9e3b26369d0bd65cc",
+          "url": "https://github.com/andymai/brepkit/commit/47692ff307d35b1a74576dbdfe5eb9f8fb675d9c"
+        },
+        "date": 1794612972839,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 948046,
+            "range": "± 18885",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1002753,
+            "range": "± 3853",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12456,
+            "range": "± 76",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 580548,
+            "range": "± 2040",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24215287,
+            "range": "± 99100",
             "unit": "ns/iter"
           }
         ]
