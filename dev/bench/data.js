@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794577764739,
+  "lastUpdate": 1794577992826,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -68417,6 +68417,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 19406906,
             "range": "± 81108",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "66281732+Robokan@users.noreply.github.com",
+            "name": "Eric Vaughan",
+            "username": "Robokan"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "0eafbb9dab9911f39cc1c7c8eede96b03a43e679",
+          "message": "fix(blend): a chamfer ending at a face's inside corner trims back to the corner (#2381)\n\n## What\n\nA straight edge chamfered by the blend engine where the edge ends at an\ninside corner of one of its faces failed with `TrimmingFailure`. Take an\nL-shaped floor, with the edge running along the L's arm and ending where\nthe arm meets the wider leg. The chamfer's contact on the floor then\nends\ninside the floor, over the wider leg's side.\n\nThe trimmer ran that contact line on to the floor's boundary, which cut\nthe\nwider leg off as well. The end-closing step then found no run in an end\nface from one contact point through the corner to the other, so the\nchamfer\nwas refused.\n\nTwo changes:\n\n- `trimmer::trim_face_to_corners` trims a planar face as `trim_face`\ndoes.\nThe difference is at an inside (reflex) corner of the face, where a\nblended\nedge's end vertex sits and its contact end lies off the boundary. There\nthe\nface is trimmed back to the corner: its outline runs from the corner to\nthe\n  contact's end, then along the contact. The chamfer builder passes the\n  edge's two vertices. A corner that is not an inside corner, or whose\n  contact end lies on the boundary, is trimmed as before.\n- In `close_chamfer_ends`, where no run passes the corner, the wedge the\nchamfer takes off leaves a triangle of the end face bare: the corner and\n  the two contact points. The end face's edge from the corner to its\ncontact point gives way to the floor's new edge from the corner and the\nchamfer's cross edge. This applies only when both edges are used once\nand\n  the end face is a plane that holds the cross edge.\n\n## Test\n\n`crates/operations/tests/chamfer_into_an_inside_corner.rs` builds a bar\non\nan L-shaped profile and chamfers the arm's edge with two distances: 2.5\nand\n12.86, 1 and 1, and 2 and 30. It also checks a turned and moved copy.\nEach\nresult must be valid and watertight, have one face more than the bar,\nand\ntake off d1 d2 / 2 per unit length to 1e-6. Without the change, every\ncase\nfails with `TrimmingFailure`.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes `TrimmingFailure` when a chamfered straight edge ends at an inside\n(reflex) corner of one of its faces, such as an edge along the arm of an\nL-shaped floor. The trimmer used to run the chamfer's contact line onto\nthe floor's boundary, cutting the wider leg off; now the face is trimmed\nback to the corner.\n\n**Bug Fixes**\n\n- `trimmer::trim_face_to_corners` trims a planar face like `trim_face`,\nexcept at an inside corner it runs the face's outline from the corner to\nthe contact's end instead of on to the boundary.\n- `close_chamfer_ends` splices in the bare triangle of the end face that\nthe chamfer's wedge leaves, replacing the end face's corner edge with\nthe floor's new edge and the chamfer's cross edge.\n- Adds `chamfer_into_an_inside_corner` tests that check valid,\nwatertight results and correct removed volume across several chamfer\nsizes and a transformed copy.\n\n<sup>Written for commit c36098d2ffe48d83314d01154c0276b964c092e1.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2381?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-11-13T05:47:40-08:00",
+          "tree_id": "8c1091a7f9d18258b3c7b9bcaaa976423a909f2a",
+          "url": "https://github.com/andymai/brepkit/commit/0eafbb9dab9911f39cc1c7c8eede96b03a43e679"
+        },
+        "date": 1794577981848,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 921084,
+            "range": "± 1842",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 979117,
+            "range": "± 1285",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11876,
+            "range": "± 172",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 573241,
+            "range": "± 1115",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 23692622,
+            "range": "± 42024",
             "unit": "ns/iter"
           }
         ]
