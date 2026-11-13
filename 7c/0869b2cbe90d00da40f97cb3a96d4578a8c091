@@ -1,0 +1,332 @@
+crates/math/src/cdt/tests.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 4,858-859
+crates/algo/src/ds/shape_store.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 8,504
+crates/io/tests/chamfer_rod_end_into_torus.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 1-68
+crates/math/src/nurbs/basis.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 6-7,137,213
+crates/math/src/aabb.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 3,208,215-217,277
+crates/math/src/nurbs/power_basis.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 12,123,125,152,185-186,188
+crates/math/src/plane.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 3,40-41,44-46
+crates/math/src/polygon_boolean.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 41,190-192,195-197,205,213,228,451,455,471,477-478,612,726-727,1173-1185
+  s_385aefe07faf61::t_3445749297f33f 1186
+crates/math/src/surfaces/tests.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 2,653-654,682-683,747-748
+crates/offset/src/inter3d.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 6,401
+crates/operations/src/fillet/radius_law.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 3-4,33,36-37
+crates/heal/src/custom/convert_to_bspline.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 20,245,280
+crates/math/src/cdt/mod.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 39,279,842
+crates/math/src/nurbs/intersection/plane.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 4,36-56,126-127,141-142,423-433,477-595,640,735-736,742-743,882,884,888,943-945,987,1005-1006,1026,1031,1158,1171-1172,1178-1180,1185-1186,1317-1318,1321-1322,1398
+crates/math/src/ray_triangle.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 9,117-119,150
+crates/math/src/madd.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 1-30
+crates/math/src/nurbs/surface_fitting.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 14,267-269
+crates/algo/src/builder/builder_solid.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 13,880,1249-1252,1300,1453-1455,1677
+crates/blend/src/chamfer_builder.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 7,275-278,312-313,320,326,423-527,591-593,618-744
+  s_385aefe07faf61::t_470e354e6d00ce 745
+crates/algo/src/pave_filler/phase_ef.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 7,534,572,812,888,956,996,1228,1253,1894-1895,1897
+crates/blend/src/fillet_builder.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 7,1756,2087-2277,2480,2499,2541,3632-3633,4196,4200,4202,4617,6376
+crates/io/src/stl/import.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 7,133
+CHANGELOG.md
+  s_385aefe07faf61::t_5697764d0c2eaf 3-9
+crates/algo/src/builder/same_domain.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 17,1031,1099,1210,1226-1227,1240-1241,1336,1360-1361,1372-1373,1733,1745-1746,1768
+crates/check/src/properties/mod.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 252,652,663,665,1068,1144,1147
+crates/geometry/src/convert/recognize_surface.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 8,919-921
+crates/math/src/nurbs/decompose.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 5,128,168,773
+.release-please-manifest.json
+  s_385aefe07faf61::t_5697764d0c2eaf 2
+crates/math/src/nurbs/intersection/chaining.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 4,249,309
+crates/io/tests/spline_liner_wedge_cut_inmem.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 1-87
+crates/io/tests/data/spline_liner.bin
+  s_385aefe07faf61::t_5697764d0c2eaf 1
+crates/check/src/classify/winding.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 7,97-98
+crates/algo/src/builder/wire_builder.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 9,465-468,472-475,751
+crates/algo/src/builder/face_splitter/sampling.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 3,61,106,112,119-120
+crates/math/src/analytic_intersection.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 7,106-108,143,162,408,510,512-514,552,556,818,942,944-946,1230,1232-1234,1463,1475,1502,1623,1627,1643,1660,1670,1686,1727,1777-1779,1781,1786-1788,1793-1795,1925,1989-1990,1998,2000-2001,2469-2470,2625,2726,2728,2791,2799,2803,3190,3192,3269,3484,3640-3641,3936,3984-3985,4056-4058,4125,4722-4724,5333,5369,5418,5492,5533,5599,5641,5808,5863,5897
+crates/algo/src/builder/face_splitter/edge_splitting.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 3,171,180,188,201,227,404,487,1061
+crates/check/src/util.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 4,29
+crates/math/src/nurbs/intersection/surface_marching.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 4,1140,1145-1146,1174,1186,1199-1200,1204-1205
+  s_385aefe07faf61::t_307f5a402547ce 1255
+crates/math/src/nurbs/curve.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 5,107
+crates/algo/src/builder/mod.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 29,265-267,1450,1537,1588,1632,1675,1742,2114
+crates/algo/src/builder/fill_images_faces.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 8,1108,1531,1693,2153,2181,2474,3028,3147,3164,3488,4491,4497,4509,4721,4725-4726,4756,4762,4775,6463,6722,6763,6874,6983
+crates/math/src/lib.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 229
+crates/math/src/nurbs/projection.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 12,165,185,491-492,689,697,708-709,714-715,738,740
+crates/algo/src/classifier/ray_cast.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 10,252,296,309,311,315,358,1131-1133,1743,1814,1860-1877,1956,2055,2207,2209,2213,2289,2294,2298,2432,2920-2921,3046,3090,3594-3595,3780-3783,3824,3933-3935,3945,4340,4702
+crates/math/src/surfaces.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 10,904,1106,1199,1203
+crates/io/tests/data/rod_end_into_torus.step
+  s_385aefe07faf61::t_5697764d0c2eaf 1-113
+crates/math/src/bvh.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 7,303
+crates/algo/src/pave_filler/fill_face_info.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 10,407,545
+crates/blend/src/trimmer.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 11,432-766,827,2533,2535,2539,2618,2656,2741,2743,2747,2825,2846-2847,2885,5171
+crates/geometry/src/extrema/point_surface.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 8,161,378
+crates/math/src/nurbs/fitting.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 17,192-193,730-732,856-858,1037
+crates/io/tests/data/wedge_across_seam.bin
+  s_385aefe07faf61::t_5697764d0c2eaf 1
+crates/blend/src/setback_corner.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 10,671,845-846
+crates/math/src/curves.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 6,544,549,611,796,965,1141
+crates/math/src/quadrature.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 11,64,66,99,101
+crates/blend/src/corner.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 15,427,541,545-546,613-614
+crates/algo/src/builder/face_splitter/special_cases.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 3,848,906-907,910,936-937,1851,1883,2201,2301,2319,2328,2332,2334,2338,2483,2496,2668,2724,2837,2875,2982,3037-3038,3051,3088,3182,3496,3581,5397,5651,5725,5779,5783-5784,5966-5967,5981,6016,6036,6123,6129-6130,6370,6468,6474,6633,6637,6639,6643,6645,6649,6978,6983-6984,6999,7335,7440,7763,8765,8894,9069
+crates/offset/src/image.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 10,577,588,597,599,603,617
+crates/algo/src/builder/pcurve_compute.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 8,376,428,435
+crates/algo/src/classifier/mod.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 108-138,184,226-227,837-861
+  s_385aefe07faf61::t_d68ffbae36b8d5 862
+crates/check/src/properties/face_integrator.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 8,327,497,505,507-509,520-522,576,594,605,763,765,767,769,1022-1023,1027-1028,1345,1502-1503
+crates/heal/src/upgrade/unify_same_domain.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 10,477
+crates/io/src/step/revolution.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 11,60,399,450
+crates/math/src/nurbs/intersection/tests.rs
+  s_385aefe07faf61::t_e69f1aa5cab976 3155
+  s_385aefe07faf61::t_5697764d0c2eaf 3156-3299
+crates/algo/src/pave_filler/helpers.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 82-91,93-94
+crates/check/src/distance/mod.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 12,512-514,524
+crates/math/src/polygon2d.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 3,158-159
+crates/math/src/nurbs/intersection/line.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 4,67-69,120-122,162,170,182-183,188-189,205-207
+CLAUDE.md
+  s_385aefe07faf61::t_5697764d0c2eaf 516-523
+crates/check/src/classify/boundary.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 8,203-205,422-426,430,712,723,1196,1376,1459,1498-1508
+  s_385aefe07faf61::t_d286c853eb4a9b 1509
+crates/blend/src/builder_utils.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 1244,1270
+crates/check/src/properties/boundary.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 13,126,181,183,205,207,227-228,327,361-362,607,1241,1302,1306,1356
+crates/algo/src/classifier/analytic.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 12,120,204
+crates/io/src/step/reader.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 8,465,1511,1521,1595,1662,2686,2800
+crates/algo/src/pave_filler/phase_ff_coplanar.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 10,426-427,452-454,526,570,848,865,881-882,886,965,1000-1001,1152,1198
+crates/algo/src/pave_filler/tool_edges.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 10,104
+crates/math/src/curves2d.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 7,201,210,243
+crates/offset/src/inter2d.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 7,91,151-153
+Cargo.toml
+  s_385aefe07faf61::t_5697764d0c2eaf 15,58-68
+crates/math/src/curves/tests.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 3,454,538,684
+crates/math/src/nurbs/intersection/surface_seeding.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 4,144
+crates/math/src/region2d.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 6,117,142,146,148,150,190,235-237,265,633
+crates/math/src/nurbs/bezier_clip.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 9,335,746
+crates/math/src/filtered.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 19,185-186,296-297,305-308
+crates/math/src/nurbs/intersection/curve_surface.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 4,102,139,141,227,229
+crates/algo/src/pave_filler/phase_ee.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 8,317,366,398,406-407,426-427,461,469-470,479-480
+crates/algo/src/builder/face_splitter/mod.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 14,68,76-77,91,96,590,657,661,665,964,969-970,972,2894,3018,3515,3534,4256,4675,5122,5172,5194,5208,5213-5214,5656,5825,5860,6854,7203,7339,8271,10107,10167,10196,10201-10202,11348-11349,11410
+crates/math/src/mat.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 5,42-46,136-138,160-174,176,190-204,206,238-241,244-247,250-253,256-259,274,276
+crates/io/src/step/seam.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 10,163,382
+crates/math/src/nurbs/self_intersection.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 25,317,322-323
+crates/algo/src/pave_filler/phase_ff.rs
+  s_385aefe07faf61::t_307f5a402547ce 4620
+  s_385aefe07faf61::t_5697764d0c2eaf 12,1124,1211,1255,1276,1845-1846,1869,1880,2126,2310,2684,2808,3769,3774,3776,3780-3781,4009,4217,4250-4251,4348,4369-4370,5009-5010,5030,5087,5155,5206,5384,5436,5443,5447,5811,5826-5827,5864,6640,7002,7004,7008,7085-7086,7202,7626,8899,8936-8939,8947,9216,9262,9395,11216,11363
+crates/math/src/nurbs/intersection/ray.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 4,309,314-315,353
+crates/math/src/nurbs/surface.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 5,29-68,146-177
+crates/math/src/vec.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 16,46,101,137,144-146
+crates/algo/src/pave_filler/mod.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 30,356,497
+crates/algo/src/builder/face_splitter/containment.rs
+  s_385aefe07faf61::t_5697764d0c2eaf 4,265
+crates/operations/src/boolean/classify.rs
+  s_385aefe07faf61::t_c9fadc6be655b3 11,184-186,258-266
+crates/operations/src/boolean/mod.rs
+  s_385aefe07faf61::t_e984faf508410b 12,2484,2488,2683,2716,2826,2846,2992,3644,3683
+crates/operations/src/boolean/tests.rs
+  s_385aefe07faf61::t_028713785f8c7b 10,307,366,883,885,933,2638,2702,2771,5242,5300,5318,5670,5807,9000,9105,9153,9172,9199,9281,9284,9289,9336
+crates/operations/src/chamfer.rs
+  s_385aefe07faf61::t_66ce2e0071c16a 32-35,64-71,174-196,205-210,237-243,251-268,271,290-293,382-421,1032-1035,1042-1051,1053,1063,1070,1182,1228-1235,1273-1277,1282-1291,1306-1329,1331-1347,1364-1373,1397-1405,1415-1422,1453,1459-1488,1492-1497,1511
+crates/operations/src/compound_ops.rs
+  s_385aefe07faf61::t_8b4f9c2903bc4c 424,788,804
+crates/operations/src/draft.rs
+  s_385aefe07faf61::t_ab4bfd9bf4123b 8,38,160-161,426,480,520
+crates/operations/src/evolution.rs
+  s_385aefe07faf61::t_16f7dc5eb67f58 7,121,156
+crates/operations/src/extrude.rs
+  s_385aefe07faf61::t_115c3be2ed87ff 7,959,1018
+crates/operations/src/extrude/tests.rs
+  s_385aefe07faf61::t_e824c3954f4ed7 3,1834-1835
+crates/operations/src/feature_recognition.rs
+  s_385aefe07faf61::t_e1fd01eb26cdfa 32,456,460
+crates/operations/src/fill_face.rs
+  s_385aefe07faf61::t_2d7818b01082c5 6,204-206
+crates/operations/src/fillet/geometry.rs
+  s_385aefe07faf61::t_3683c17ad8e0ff 3,22-24
+crates/operations/src/heal.rs
+  s_385aefe07faf61::t_51284494157ad8 6,1765
+crates/operations/src/helix.rs
+  s_385aefe07faf61::t_0083bb59ad7502 8,188,190,193,195,198,200
+crates/operations/src/loft.rs
+  s_385aefe07faf61::t_a495235702a7be 7,811,1102,1277,1282,1669-1671,1675-1677,1681-1683
+crates/operations/src/loft/network.rs
+  s_385aefe07faf61::t_d8768a7d643c6d 33,707,712,878,960,982,1001,1089,1485,1724,1903,2618,2786,2881,2923,2992,2994,3024,3028,3047,3049
+crates/operations/src/measure/area.rs
+  s_385aefe07faf61::t_1a87cc5200e988 3,493,1008-1010,1013
+crates/operations/src/measure/bounding_box.rs
+  s_385aefe07faf61::t_28df0d1de892b1 3,263-264,391,959-960
+crates/operations/src/measure/helpers.rs
+  s_385aefe07faf61::t_5f234835dc50e6 3,258
+crates/operations/src/measure/volume.rs
+  s_385aefe07faf61::t_9ae616ad00dc98 3,140,2004,2008,2010,2063,2687,2730,4032,4656-4657
+crates/operations/src/mesh_boolean.rs
+  s_385aefe07faf61::t_d6d18945e8a516 17,651,723-725,1310-1312,1333,1339-1340,1574,1587,1593,1603-1605,1644
+crates/operations/src/mirror.rs
+  s_385aefe07faf61::t_3bc6f15b2b4fc3 5,55,57,64,71,78
+crates/operations/src/offset_face.rs
+  s_385aefe07faf61::t_b836d19dbd09a2 8,179-180,202-203,232-234,766-768
+crates/operations/src/offset_trim.rs
+  s_385aefe07faf61::t_8470b7674b5136 17,274,517-519
+crates/operations/src/offset_wire.rs
+  s_385aefe07faf61::t_b4541f2aa5894f 7,199-201
+crates/operations/src/pattern.rs
+  s_385aefe07faf61::t_9d8b49d8c0b011 5,196-198,202-204,208-210
+crates/operations/src/primitives.rs
+  s_385aefe07faf61::t_58a013c7731237 10,757,768
+crates/operations/src/projection.rs
+  s_385aefe07faf61::t_cafb3c2f186f54 10,210,217
+crates/operations/src/revolve.rs
+  s_385aefe07faf61::t_fb227cb972bc51 8,958,1023,1528,1589,1638,1644,2510
+crates/operations/src/section.rs
+  s_385aefe07faf61::t_0edb7a9b88dd54 8,84,86,90,167-168,672-674,1206,1366
+crates/operations/src/sew.rs
+  s_385aefe07faf61::t_c272a6d3e8faec 6,334-335,344,377,384,393,566,1097,1269,1274,1321
+crates/operations/src/sheet.rs
+  s_385aefe07faf61::t_58020d2526e9b3 9,85
+crates/operations/src/sweep.rs
+  s_385aefe07faf61::t_d42747cf01c78f 8,80,263,284,302-303,335,2910
+crates/operations/src/sweep/exact.rs
+  s_385aefe07faf61::t_ca98df637f944d 14,142,150,159,482,551,682
+crates/operations/src/sweep/tests.rs
+  s_385aefe07faf61::t_1409ff5d628194 3,507,2473,2479
+crates/operations/src/tessellate/face.rs
+  s_385aefe07faf61::t_7adb874615148c 3,130
+crates/operations/src/tessellate/nonplanar.rs
+  s_385aefe07faf61::t_5a8b275982e1f9 4,941,961,2290,2510,2534,4155,4673,4676-4677,4901
+crates/operations/src/tessellate/nurbs.rs
+  s_385aefe07faf61::t_30a2370a1fab13 4,225-226,479-480,1125,1150-1151,1288,1306
+crates/operations/src/tessellate/planar.rs
+  s_385aefe07faf61::t_5bc53da76fdef9 4,1014,1080,1106
+crates/operations/src/tessellate/tests.rs
+  s_385aefe07faf61::t_d260ae75511255 6,3124,3126,3130,3965
+crates/operations/src/thicken.rs
+  s_385aefe07faf61::t_d27682236f84d1 9,408,425,474
+crates/operations/src/transform.rs
+  s_385aefe07faf61::t_9a3a012a805a90 3,232-234
+crates/operations/src/untrim.rs
+  s_385aefe07faf61::t_26d27c2a3d1095 28,283,290,295,352-353
+crates/operations/src/validate.rs
+  s_385aefe07faf61::t_85e8973f645b6f 5,466,488,534
+crates/operations/tests/chamfer_beside_a_hole.rs
+  s_385aefe07faf61::t_c712e95d3c68c3 1-82
+crates/operations/tests/chamfer_box_top_two_distances.rs
+  s_385aefe07faf61::t_dd8c5d450d5ca1 1-85
+crates/operations/tests/chamfer_into_an_inside_corner.rs
+  s_385aefe07faf61::t_a463755063e5d5 1-129
+crates/operations/tests/chamfer_past_its_face.rs
+  s_385aefe07faf61::t_2b3c0aa9f0b9ac 1-68
+crates/operations/tests/chamfer_slanted_end.rs
+  s_385aefe07faf61::t_38dc6a0b768737 1-117
+crates/operations/tests/chamfer_whole_face.rs
+  s_385aefe07faf61::t_01d21ace542194 1-139
+crates/operations/tests/fillet_floor_one_radius_thick.rs
+  s_385aefe07faf61::t_8d9751f67d896b 1-101
+crates/topology/src/orientation.rs
+  s_385aefe07faf61::t_1a10a6c4512a92 3,176,272,491,698,702,756,775,804,835,1011,1013
+crates/topology/src/planar.rs
+  s_385aefe07faf61::t_5ebf69281d0999 3,284,298
+crates/wasm/src/bindings/assembly_probe_tests.rs
+  s_385aefe07faf61::t_3795d415db6707 16,329
+crates/wasm/src/bindings/operations.rs
+  s_385aefe07faf61::t_a680811c942353 2216,2528,3223
+crates/wasm/src/helpers.rs
+  s_385aefe07faf61::t_f1cbea374da328 9,454,868,1202,1225,1560
+crates/wasm/src/kernel.rs
+  s_385aefe07faf61::t_8ae0fa6db98b85 16,445
+crates/wasm/src/shapes.rs
+  s_385aefe07faf61::t_0eb887a06bf084 3,56
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7c0869b2cbe90d00da40f97cb3a96d4578a8c091",
+  "prompts": {},
+  "sessions": {
+    "s_385aefe07faf61": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7ba532a8-609c-4534-9316-9e8d54346633",
+        "model": "claude-fable-5-2"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
