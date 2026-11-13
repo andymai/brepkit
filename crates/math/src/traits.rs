@@ -204,15 +204,17 @@ impl ParametricSurface for NurbsSurface {
 
     #[inline]
     fn project_point(&self, point: Point3) -> (f64, f64) {
-        // Use default linear tolerance (1e-7) for the Newton projection.
-        if let Ok(proj) = project_point_to_surface(self, point, 1e-7) {
-            (proj.u, proj.v)
-        } else {
-            // Fallback: return domain midpoint if Newton fails.
-            let (u0, u1) = self.domain_u();
-            let (v0, v1) = self.domain_v();
-            ((u0 + u1) * 0.5, (v0 + v1) * 0.5)
-        }
+        self.projected(point, || {
+            // Use default linear tolerance (1e-7) for the Newton projection.
+            if let Ok(proj) = project_point_to_surface(self, point, 1e-7) {
+                (proj.u, proj.v)
+            } else {
+                // Fallback: return domain midpoint if Newton fails.
+                let (u0, u1) = self.domain_u();
+                let (v0, v1) = self.domain_v();
+                ((u0 + u1) * 0.5, (v0 + v1) * 0.5)
+            }
+        })
     }
 
     #[inline]
