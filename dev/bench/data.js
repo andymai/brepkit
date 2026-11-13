@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794582386129,
+  "lastUpdate": 1794584816756,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -68579,6 +68579,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 19139290,
             "range": "± 44668",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f65715e0849507b411cb4dfb1b894cb80e08b9c4",
+          "message": "chore(main): release 4.11.10 (#2415)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[4.11.10](https://github.com/andymai/brepkit/compare/v4.11.9...v4.11.10)\n(2026-11-13)\n\n\n### Bug Fixes\n\n* **blend:** a chamfer ending at a face's inside corner trims back to\nthe corner ([#2381](https://github.com/andymai/brepkit/issues/2381))\n([0eafbb9](https://github.com/andymai/brepkit/commit/0eafbb9dab9911f39cc1c7c8eede96b03a43e679))\n* **blend:** a chamfer reaching exactly across a face takes its far edge\n([#2416](https://github.com/andymai/brepkit/issues/2416))\n([1b9bd63](https://github.com/andymai/brepkit/commit/1b9bd63c8e9dab702011bafdb7042cd2f0f0c530))\n* **blend:** a flat chamfer runs its contacts to a slanted end face's\nplane ([#2382](https://github.com/andymai/brepkit/issues/2382))\n([187b122](https://github.com/andymai/brepkit/commit/187b12240215ded92f86441fde068d3fa15aefb7))\n* **blend:** split a face pinched along a contact over its own edge\n([#2373](https://github.com/andymai/brepkit/issues/2373))\n([a350cdb](https://github.com/andymai/brepkit/commit/a350cdb7d18f9b65f585c855db9eaeb721f18ddd))\n* **operations:** a two-distance chamfer the blend engine refuses\nrebuilds planes with flat bevels\n([#2384](https://github.com/andymai/brepkit/issues/2384))\n([70f7982](https://github.com/andymai/brepkit/commit/70f7982e93e0eeb24354d13d6ba4e6cc93c90c41))\n* **operations:** chamfer a body with curved edges through the blend\nengine ([#2379](https://github.com/andymai/brepkit/issues/2379))\n([66e2b61](https://github.com/andymai/brepkit/commit/66e2b616016d2ef62fa50c1354d9cd0c08274c68))\n* **operations:** chamfer a rim whose wall or cap goes whole\n([#2380](https://github.com/andymai/brepkit/issues/2380))\n([1183628](https://github.com/andymai/brepkit/commit/11836285487e5c2f02fc55ab42b5754c5b4b996b))\n* **operations:** refuse a chamfer distance no face can hold\n([#2378](https://github.com/andymai/brepkit/issues/2378))\n([88c1cd7](https://github.com/andymai/brepkit/commit/88c1cd7617700aa5dee5bf7bff35bd349861e6cc))\n\n\n### Performance\n\n* faster B-spline evaluation, derivatives and exact volume\n([#2414](https://github.com/andymai/brepkit/issues/2414))\n([9ea56d9](https://github.com/andymai/brepkit/commit/9ea56d9fe5dac919c790d78394c070893db8f201))\n* **math:** multiply then add in two steps, with no call to a software\nfma\n([a34c384](https://github.com/andymai/brepkit/commit/a34c38483258dc81862ee6f634cbf0cf91ee8071))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-11-13T15:44:02Z",
+          "tree_id": "381ae603dc4a704e75355484fee95c627698e460",
+          "url": "https://github.com/andymai/brepkit/commit/f65715e0849507b411cb4dfb1b894cb80e08b9c4"
+        },
+        "date": 1794584808925,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 535269,
+            "range": "± 3527",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 567408,
+            "range": "± 83887",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 7384,
+            "range": "± 96",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 308183,
+            "range": "± 10071",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 14653225,
+            "range": "± 729942",
             "unit": "ns/iter"
           }
         ]
