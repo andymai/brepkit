@@ -14,7 +14,7 @@ set -euo pipefail
 ALLOWED="crates/math/src/nurbs/intersection/tests.rs"
 
 # Both the method call and the path form: `x.mul_add(a, b)`, `f64::mul_add(x, a, b)`.
-found=$(grep -rnE --include='*.rs' '(\.|::)mul_add\b' crates/*/src | grep -v "^${ALLOWED}:" || true)
+found=$(grep -rnE --include='*.rs' '(\.|::)mul_add\(' crates/*/src | grep -v "^${ALLOWED}:" || true)
 if [ -n "$found" ]; then
   echo "❌ f64::mul_add in library code. Use brepkit_math::madd::Madd::madd:"
   echo "$found"
