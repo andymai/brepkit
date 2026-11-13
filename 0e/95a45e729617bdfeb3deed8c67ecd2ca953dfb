@@ -1,0 +1,25 @@
+crates/algo/src/builder/wire_builder.rs
+  s_385aefe07faf61::t_2f22476781e805 465-468,472-475
+crates/check/src/classify/boundary.rs
+  s_385aefe07faf61::t_2f22476781e805 422-426,430
+  s_385aefe07faf61::t_92f2ffcdfd1bdf 1498-1509
+crates/math/src/polygon_boolean.rs
+  s_385aefe07faf61::t_92f2ffcdfd1bdf 1173-1186
+  s_385aefe07faf61::t_2f22476781e805 190-192,195-196
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "0e95a45e729617bdfeb3deed8c67ecd2ca953dfb",
+  "prompts": {},
+  "sessions": {
+    "s_385aefe07faf61": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7ba532a8-609c-4534-9316-9e8d54346633",
+        "model": "claude-fable-5-2"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
