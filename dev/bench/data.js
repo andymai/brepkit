@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794590619467,
+  "lastUpdate": 1794593082544,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -68903,6 +68903,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 19434540,
             "range": "± 138857",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "6afd727de0189b225b38c8d6f556ea0aa57049c0",
+          "message": "docs(readme): add the engine film (#2423)\n\n## What does this PR do?\n\nThis PR adds a 34 second film to the top of the README, with one line\nbelow it.\n\nThe film shows the brepjs `turbofan-engine` example built by\nbrepkit-wasm 4.11.10. It has seven scenes:\n\n1. The build time, beside the default brepjs kernel's.\n2. The crate layers.\n3. One cut in four steps.\n4. The faces of the result.\n5. The time for each step.\n6. Four facts about the code.\n7. The install command.\n\nEach solid in it is kernel output, and each number comes from a run in\nnode.\n\nThe line below the film gives the engine's size and build time: 1,904\nsolids, 237 lines, 82 ms. It gives the default kernel's time beside it.\nIt links to the example in the brepjs playground.\n\n## How I checked it\n\n- The film plays from the `user-attachments` URL in the rendered README\nof this branch.\n- The playground link returns HTTP 200.",
+          "timestamp": "2026-11-13T18:01:58Z",
+          "tree_id": "b3132cbcc491c009cdae88e99442a628cc19d67e",
+          "url": "https://github.com/andymai/brepkit/commit/6afd727de0189b225b38c8d6f556ea0aa57049c0"
+        },
+        "date": 1794593075557,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 512419,
+            "range": "± 24706",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 547412,
+            "range": "± 18428",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 7365,
+            "range": "± 198",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 303664,
+            "range": "± 4336",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 14953456,
+            "range": "± 143014",
             "unit": "ns/iter"
           }
         ]
