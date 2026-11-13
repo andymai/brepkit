@@ -343,8 +343,8 @@ impl RaySurface {
         let mut t = dir.dot(self.surface.evaluate(u, v) - origin);
         let mut stalled = None;
         for _ in 0..32 {
-            let d = self.surface.derivatives(u, v, 1);
-            let (s, su, sv) = (d[0][0], d[1][0], d[0][1]);
+            let d = self.surface.first_derivatives(u, v);
+            let (s, su, sv) = (d.0, d.1, d.2);
             let f = s - Vec3::new(origin.x(), origin.y(), origin.z()) - dir * t;
             if f.length() <= 1e-12 * self.scale {
                 return self.record(leaf, (u, v, t), origin, dir, reach, reach, (out, radii));
