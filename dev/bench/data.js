@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794584816756,
+  "lastUpdate": 1794585154909,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -68633,6 +68633,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 14653225,
             "range": "± 729942",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "13142acdb6aa5c1db8148416806cee46b20e0211",
+          "message": "perf: faster boolean steps on B-spline geometry (#2417)\n\nThis PR carries #2411 by @Robokan onto the current main. The four\ncommits are the contributor's, with no change. One merge commit follows\nthem.\n\nThe merge commit does three things:\n\n- In `crates/algo/src/pave_filler/phase_ff.rs`, it keeps the branch's\nside test for a section's trim.\n- In `crates/math/src/nurbs/intersection/tests.rs`, it keeps the new\ntests of the branch and the new tests of main.\n- It applies the rule from #2409 to the new code. Two library files\ncalled `mul_add`, and they now call `Madd::madd`.\n\n## How I checked it\n\n- `cargo clippy --all-targets -- -D warnings` passes for `brepkit-math`,\n`brepkit-algo` and `brepkit-operations`.\n- `cargo test` passes for `brepkit-math` (653 tests) and `brepkit-algo`\n(382 tests).\n\n## The description from #2411\n\nSpeeds up boolean steps on B-spline geometry (a section's trim and an\nextrusion's rays, the containment test's witnesses, chaining), and lets\na caller decline the mesh fallback.\n\nEach change is its own commit, with its reasoning and numbers in the\ncommit message; every result is unchanged (values compared bit for bit,\noutputs line for line, as each message says). Times were taken one case\nat a time, before and after, on a tree where that change is the only\ndifference.\n\n## Commits\n\n- **perf(algo): a B-spline section's trim and an extrusion's rays reuse\ntheir samples**\n  Two loops evaluated the same curve points over and over:  \n_Every point is the one evaluated before, so every crossing is\nunchanged. A cut of fitted-loft bodies from a real design (the mesh\nfallback declined): 128 s -> 59 s, its output line for line the same._\n- **perf(operations): read the volume witness last in the containment\ntest**\n`detect_trivial_relation` tells whether one operand holds the other\nbefore every boolean. Where the containing solid has no analytic\nclassifier and its box holds the other's, it measured both solids'\nvolumes first, then read the cheap witnesses (a NURBS face not proved\ninside, the centre, the boundary probes, the axis, the pieces), any of\nwhich refutes containment alone. The volumes are now read last, and only\nwhere the box test is what admits the containment: `P || (Q && !V)` with\nevery other witness `R` is `(P || Q) && R && (P || !V)`, and every term\nreads `topo` alone, so the answer is the same.\n_Exactly measuring a B-spline body is slow: on the slowest booleans of a\nset from real designs this was most of their time (one cut 73 s -> 6.6\ns, another 2.2 s -> 0.59 s, with the mesh fallback declined)._\n- **perf(math): pass over chords too far to take a point by their sag**\n`near_existing_segment` asks whether a point lies near any chord of the\ntraced intersection curves. Past the plain distance test, each chord's\nsag test worked out its bulge (two `atan2` and a `tan`) whatever the\ndistance. That test holds only within `sqrt((dist + sag)^2 + dist^2)` of\nthe chord, and the sag is at most `0.134 * chord` (a turn of\n`MAX_SAG_TURN`), so a chord farther than `2 * dist + 0.5 * chord` cannot\npass it and is passed over. The answer is the same; a test compares it\nwith the old reading on points scattered round curved and kinked traces.\n_On a B-spline boolean whose time was NURBS x NURBS chaining: 21 s -> 12\ns._\n- **perf(operations): a boolean can decline the mesh fallback**  \n`BooleanOptions::mesh_fallback` (default `true`, so behaviour is\nunchanged) lets a caller that refuses a faceted result anyway have the\nboolean return an error once the exact attempt gives up, instead of\nbuilding the mesh boolean first. A boolean that needs a fallback\nanywhere inside it fails, so a helper swallowing the declined fallback\ncannot return a result missing a piece. `mesh_fallback_declined_count`\ncounts such errors, as `mesh_fallback_count` counts fallbacks, so a\ncaller can tell them apart.\n_Building the mesh result took most of the time of a boolean that fell\nback: one cut that ran 590 s with the fallback returns in 4.3 s\ndeclined._\n\n## Test plan\n\n- [x] `cargo test --release -p brepkit-math -p brepkit-check -p\nbrepkit-algo -p brepkit-operations -p brepkit-io` on this branch (3733\npassed)\n- [x] pose sweep and truth audit print the same as on `main`\n- [x] clippy and fmt clean\n\nThis gathers #2386, #2388, #2389 and #2392 into one PR, so there are\nfewer to review; those are closed in its favour.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nSpeeds up boolean steps on B-spline geometry by reusing sampled curve\npoints, reading the volume witness last in the containment test, and\nskipping chords that cannot take a point; also lets callers decline the\nmesh fallback. The perf changes keep all outputs unchanged, with up to\n~10x time reductions on real cases.\n\n**Changes**\n- A B-spline section's trim and an extrusion's rays evaluate the profile\nonce and reuse the samples.\n- The containment test reads the volume witness last, only when the AABB\ntest admits containment, with an equivalent result.\n- `near_existing_segment` passes over chords farther than `2 * dist +\n0.5 * chord` before computing their bulge.\n- Adds `BooleanOptions::mesh_fallback` (default `true`) so a boolean can\nreturn an error instead of building the mesh;\n`mesh_fallback_declined_count` counts such errors.\n\n**Test plan**\n- 3733 tests pass, pose sweep and truth audit print identical to main,\nclippy/fmt clean, and a randomized test confirms the chord skip matches\nthe previous reading.\n\n<sup>Written for commit 091420a3118506c8fc5acec5a629c86724555e5a.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2411?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\n---------\n\nCo-authored-by: Robokan <eric.d.vaughan@gmail.com>\nCo-authored-by: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-11-13T07:49:29-08:00",
+          "tree_id": "132f6b4b64b5751500521f89e4293bc51f74b59e",
+          "url": "https://github.com/andymai/brepkit/commit/13142acdb6aa5c1db8148416806cee46b20e0211"
+        },
+        "date": 1794585142895,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 762066,
+            "range": "± 1031",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 807700,
+            "range": "± 9344",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10348,
+            "range": "± 181",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 453005,
+            "range": "± 1161",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 19523804,
+            "range": "± 367166",
             "unit": "ns/iter"
           }
         ]
