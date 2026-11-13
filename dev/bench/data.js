@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794593298113,
+  "lastUpdate": 1794610756179,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -69011,6 +69011,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24643603,
             "range": "± 68850",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "16e72088cec1fa5de5b99ac4122aa516437d36f9",
+          "message": "docs: drop the stale 2.x version, and link the open bugs from Known Limitations (#2426)\n\n## What does this PR do?\n\nThis PR fixes the version that the docs give for the crates, and it adds\ntwo facts to Known Limitations in the README.\n\n`STABILITY.md` and the README said that the crates ship at a shared\n`2.x` version. The workspace version in `Cargo.toml` is `4.11.13`. Both\nfiles now say \"one shared version\", with no number, so they stay true\nafter the next major release.\n\nThe \"Boolean fallback\" item now says that the flat faces change measured\nvalues. Its example comes from #2374: the intersection of a box and a\nring of two coaxial cylinders has 0.36% less volume.\n\nA new \"Open bugs\" item links the open issues with the `bug` label. It\nalso links `tests/knownFailures/brepkit.json` in brepjs, which lists\neach brepjs test that still fails on brepkit, with its brepkit issue.\n\nThe feature ratings in the Status table stay as they are.\n\n## How I checked it\n\n- `./scripts/check-doc-paths.sh` passes.\n- `grep -rn '2\\.x' --include=*.md` finds no other mention outside\n`CHANGELOG.md`.\n- The issue search link and the brepjs file link return HTTP 200.\n\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes the docs' stale crate version and expands Known Limitations with\ntwo new items.\n\n- `STABILITY.md` and the README said crates ship at a shared `2.x`\nversion; the workspace version is `4.11.13`. Both now say \"one shared\nversion\" without a number.\n- Known Limitations now notes that the Boolean fallback's flat faces\nslightly change measured values, with an example from #2374.\n- Adds an \"Open bugs\" item linking bug-labeled issues and the brepjs\n`tests/knownFailures/brepkit.json` list.\n\n**Bug Fixes**\n- Prevents the version claim from going stale again after the next major\nrelease.\n\n<sup>Written for commit 65c5b0b890789da7c335f0ce79031d992d6ee657.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2426?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2426?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2426&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-11-13T14:55:40-08:00",
+          "tree_id": "41bce0bd5fe56eadeecce29c26d87cd91fd7ed6d",
+          "url": "https://github.com/andymai/brepkit/commit/16e72088cec1fa5de5b99ac4122aa516437d36f9"
+        },
+        "date": 1794610746977,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 949805,
+            "range": "± 6436",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1002903,
+            "range": "± 3895",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11783,
+            "range": "± 107",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 581724,
+            "range": "± 5835",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24169168,
+            "range": "± 289370",
             "unit": "ns/iter"
           }
         ]
