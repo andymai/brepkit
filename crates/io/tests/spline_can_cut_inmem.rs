@@ -109,3 +109,65 @@ fn the_engine_finds_the_same_cavity_with_no_section_to_find() {
             .unwrap();
     hollow(&topo, liner);
 }
+
+#[test]
+fn a_tool_in_two_pieces_takes_no_cavity_for_the_piece_outside_the_liner() {
+    // One shell holding the tool and a fifth-size copy of the blank about the
+    // axis: a ring in the liner's bore, inside its box and outside its wall.
+    // A vertex of the first piece lies inside the liner, which says nothing
+    // of the second.
+    let mut topo = Topology::new();
+    let blank = load(&mut topo, "spline_can_outer.bin");
+    let inside = load(&mut topo, "spline_can_inner.bin");
+    let in_the_bore = brepkit_operations::copy::copy_solid(&mut topo, blank).unwrap();
+    let about = |m: brepkit_math::mat::Mat4| {
+        brepkit_math::mat::Mat4::translation(0.0, 0.0, 250.0)
+            * m
+            * brepkit_math::mat::Mat4::translation(0.0, 0.0, -250.0)
+    };
+    brepkit_operations::transform::transform_solid(
+        &mut topo,
+        in_the_bore,
+        &about(brepkit_math::mat::Mat4::scale(0.2, 0.2, 0.2)),
+    )
+    .unwrap();
+    let faces: Vec<_> = [inside, in_the_bore]
+        .into_iter()
+        .flat_map(|s| brepkit_topology::explorer::solid_faces(&topo, s).unwrap())
+        .collect();
+    let shell = topo.add_shell(brepkit_topology::shell::Shell::new(faces).unwrap());
+    let tool = topo.add_solid(brepkit_topology::solid::Solid::new(shell, vec![]));
+
+    let liner = boolean::boolean(&mut topo, BooleanOp::Cut, blank, tool).unwrap();
+    for degrees in [10.0, 100.0, 190.0, 280.0] {
+        let class = |radius: f64| {
+            classify_point(&topo, liner, at_radius(radius, degrees), 0.01, 1e-7).unwrap()
+        };
+        assert_eq!(
+            class(28.0),
+            PointClassification::Outside,
+            "the cavity at {degrees}"
+        );
+        assert_eq!(
+            class(32.5),
+            PointClassification::Inside,
+            "the outer wall at {degrees}"
+        );
+        assert_eq!(
+            class(23.5),
+            PointClassification::Inside,
+            "the inner wall at {degrees}"
+        );
+        // In the wall of the ring in the bore, and beside it.
+        assert_eq!(
+            class(5.6),
+            PointClassification::Outside,
+            "the ring in the bore at {degrees}"
+        );
+        assert_eq!(
+            class(10.0),
+            PointClassification::Outside,
+            "the bore at {degrees}"
+        );
+    }
+}

@@ -3290,7 +3290,7 @@ fn solid_strictly_inside(
     saw_vertex
 }
 
-/// Whether `tool`, a solid of one shell, lies inside `blank` with no point
+/// Whether `tool`, a solid of one shell in one piece, lies inside `blank` with no point
 /// of its boundary on the blank's: every face of both is a NURBS face, each
 /// pair of their surfaces is proved apart, and a vertex of the tool
 /// classifies inside the blank. Boundaries that never meet leave a connected
@@ -3313,6 +3313,11 @@ fn nurbs_tool_strictly_inside(
     };
     let simple = |solid: SolidId| topo.solid(solid).is_ok_and(|s| s.inner_shells().is_empty());
     if !simple(blank) || !simple(tool) {
+        return false;
+    }
+    // One shell can hold several pieces, and a vertex of one says nothing of
+    // where another lies.
+    if crate::boolean::assembly::face_components(topo, tool).len() != 1 {
         return false;
     }
     let (Ok(blank_box), Ok(tool_box)) = (

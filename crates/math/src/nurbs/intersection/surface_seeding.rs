@@ -662,6 +662,9 @@ const APART_BUDGET: usize = 512;
 /// not part within the budget.
 #[must_use]
 pub fn surfaces_apart(s1: &NurbsSurface, s2: &NurbsSurface, margin: f64) -> bool {
+    if !holds_its_hull(s1) || !holds_its_hull(s2) {
+        return false;
+    }
     let (Ok(patches_a), Ok(patches_b)) =
         (surface_to_bezier_patches(s1), surface_to_bezier_patches(s2))
     else {
@@ -673,6 +676,51 @@ pub fn surfaces_apart(s1: &NurbsSurface, s2: &NurbsSurface, margin: f64) -> bool
             .iter()
             .all(|pb| patches_apart(pa, pb, margin, 0, &mut budget))
     })
+}
+
+/// Whether a surface's Bezier patches are sure to hold it inside their
+/// control points: every weight positive and finite, which keeps a rational
+/// patch in its hull, and both knot vectors clamped with no interior knot
+/// repeated past the degree, which is all the decomposition reads.
+fn holds_its_hull(surface: &NurbsSurface) -> bool {
+    let weights_hold = surface
+        .weights()
+        .iter()
+        .flatten()
+        .all(|&w| w.is_finite() && w > 0.0);
+    let points_hold = surface
+        .control_points()
+        .iter()
+        .flatten()
+        .all(|p| p.x().is_finite() && p.y().is_finite() && p.z().is_finite());
+    let knots_hold = |knots: &[f64], degree: usize| {
+        let n = knots.len();
+        if n < 2 * (degree + 1) || knots.iter().any(|k| !k.is_finite()) {
+            return false;
+        }
+        let clamped = knots[..=degree]
+            .iter()
+            .all(|&k| k.to_bits() == knots[0].to_bits())
+            && knots[n - degree - 1..]
+                .iter()
+                .all(|&k| k.to_bits() == knots[n - 1].to_bits());
+        let interior = &knots[degree + 1..n - degree - 1];
+        let mut run = 0;
+        let mut repeats_hold = true;
+        for (i, k) in interior.iter().enumerate() {
+            run = if i > 0 && k.to_bits() == interior[i - 1].to_bits() {
+                run + 1
+            } else {
+                1
+            };
+            repeats_hold &= run <= degree;
+        }
+        clamped && repeats_hold
+    };
+    weights_hold
+        && points_hold
+        && knots_hold(surface.knots_u(), surface.degree_u())
+        && knots_hold(surface.knots_v(), surface.degree_v())
 }
 
 fn patches_apart(

@@ -3014,3 +3014,39 @@ fn walls_nearer_than_the_margin_are_not_proved_apart() {
     let near = quarter_wall(0.0, 28.0 - 5e-6);
     assert!(!surfaces_apart(&outer, &near, 1e-5));
 }
+
+#[test]
+fn a_surface_that_can_leave_its_control_points_is_not_proved_apart() {
+    // With the middle weight negative the wall bulges the other way, out of
+    // its control points' box and through the wall inside it.
+    let inner = quarter_wall(0.0, 27.0);
+    let mut weights = inner.weights().to_vec();
+    weights[1] = vec![-0.5, -0.5];
+    let bulging = NurbsSurface::new(
+        inner.degree_u(),
+        inner.degree_v(),
+        inner.knots_u().to_vec(),
+        inner.knots_v().to_vec(),
+        inner.control_points().to_vec(),
+        weights,
+    )
+    .unwrap();
+    assert!(!surfaces_apart(&quarter_wall(0.0, 28.0), &bulging, 1e-5));
+    assert!(!surfaces_apart(&bulging, &quarter_wall(0.0, 28.0), 1e-5));
+}
+
+#[test]
+fn a_surface_with_unclamped_knots_is_not_proved_apart() {
+    let outer = quarter_wall(0.0, 28.0);
+    let inner = quarter_wall(0.0, 27.0);
+    let unclamped = NurbsSurface::new(
+        inner.degree_u(),
+        inner.degree_v(),
+        inner.knots_u().to_vec(),
+        vec![-100.0, 0.0, 100.0, 200.0],
+        inner.control_points().to_vec(),
+        inner.weights().to_vec(),
+    )
+    .unwrap();
+    assert!(!surfaces_apart(&outer, &unclamped, 1e-5));
+}
