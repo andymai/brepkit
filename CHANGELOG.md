@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.11.11](https://github.com/andymai/brepkit/compare/v4.11.10...v4.11.11) (2026-11-13)
+
+
+### Performance
+
+* faster boolean steps on B-spline geometry ([#2417](https://github.com/andymai/brepkit/issues/2417)) ([13142ac](https://github.com/andymai/brepkit/commit/13142acdb6aa5c1db8148416806cee46b20e0211))
+
 ## [4.11.10](https://github.com/andymai/brepkit/compare/v4.11.9...v4.11.10) (2026-11-13)
 
 
