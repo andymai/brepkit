@@ -2213,6 +2213,7 @@ impl BrepKernel {
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
+    use brepkit_math::madd::Madd;
 
     /// A box's corner at the origin, and the three edges meeting there, as handles.
     fn box_corner(k: &crate::kernel::BrepKernel, solid: u32) -> (u32, Vec<u32>) {
@@ -2524,7 +2525,7 @@ mod tests {
             let steps = 2000;
             let f = |t: f64| {
                 let half = 6.0 - 2.0 * (3.0 * t * t - 2.0 * t * t * t);
-                let up = w.mul_add(
+                let up = w.madd(
                     chord * (3.0 * t * t - 4.0 * t + 1.0),
                     10.0 * (6.0 * t - 6.0 * t * t),
                 ) + w * chord * (3.0 * t * t - 2.0 * t);
@@ -3219,7 +3220,7 @@ mod tests {
         }
         let solid = k.sew_faces(sides, 1e-6).unwrap();
         let volume = k.volume(solid, 0.001).unwrap();
-        let want = 4.0f64.mul_add(-std::f64::consts::PI, 100.0) * 10.0;
+        let want = 4.0f64.madd(-std::f64::consts::PI, 100.0) * 10.0;
         assert!(
             (volume - want).abs() < 1e-6 * want,
             "volume {volume}, want {want}"

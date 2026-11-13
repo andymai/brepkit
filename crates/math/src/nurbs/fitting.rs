@@ -14,6 +14,7 @@
 )]
 
 use crate::MathError;
+use crate::madd::Madd;
 use crate::nurbs::basis::basis_funs;
 use crate::nurbs::curve::NurbsCurve;
 use crate::vec::Point3;
@@ -188,9 +189,8 @@ pub(crate) fn build_approximation_knots(params: &[f64], p: usize, m: usize, n: u
                 clippy::cast_sign_loss
             )]
             let i = (j as f64 * d) as usize;
-            let alpha = (j as f64).mul_add(d, -(i as f64));
-            let knot =
-                (1.0 - alpha).mul_add(params[i.min(n - 1)], alpha * params[(i + 1).min(n - 1)]);
+            let alpha = (j as f64).madd(d, -(i as f64));
+            let knot = (1.0 - alpha).madd(params[i.min(n - 1)], alpha * params[(i + 1).min(n - 1)]);
             knots.push(knot);
         }
     }
@@ -727,9 +727,9 @@ pub fn approximate_lspia(
         // Update control points: P_j += mu * delta_j
         for j in 0..m {
             control_points[j] = Point3::new(
-                mu.mul_add(deltas[j].0, control_points[j].x()),
-                mu.mul_add(deltas[j].1, control_points[j].y()),
-                mu.mul_add(deltas[j].2, control_points[j].z()),
+                mu.madd(deltas[j].0, control_points[j].x()),
+                mu.madd(deltas[j].1, control_points[j].y()),
+                mu.madd(deltas[j].2, control_points[j].z()),
             );
         }
 
@@ -853,9 +853,9 @@ pub(crate) fn approximate_lspia_weighted(
         // Update control points: P_j += mu * delta_j
         for j in 0..m {
             control_points[j] = Point3::new(
-                mu.mul_add(deltas[j].0, control_points[j].x()),
-                mu.mul_add(deltas[j].1, control_points[j].y()),
-                mu.mul_add(deltas[j].2, control_points[j].z()),
+                mu.madd(deltas[j].0, control_points[j].x()),
+                mu.madd(deltas[j].1, control_points[j].y()),
+                mu.madd(deltas[j].2, control_points[j].z()),
             );
         }
 
@@ -1034,7 +1034,7 @@ mod tests {
         let points: Vec<Point3> = (0..10)
             .map(|i| {
                 let t = i as f64 / 9.0;
-                Point3::new(t, 2.0f64.mul_add(t, 1.0), 0.0)
+                Point3::new(t, 2.0f64.madd(t, 1.0), 0.0)
             })
             .collect();
         let curve = approximate_lspia(&points, 3, 6, 1e-6, 100).unwrap();

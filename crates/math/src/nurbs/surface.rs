@@ -2,6 +2,7 @@
 
 use crate::MathError;
 use crate::aabb::Aabb3;
+use crate::madd::Madd;
 use crate::nurbs::basis;
 use crate::nurbs::evaluator::SurfaceEvaluator;
 use crate::vec::{Point3, Vec3};
@@ -25,6 +26,46 @@ pub struct NurbsSurface {
     control_points: Vec<Vec<Point3>>,
     /// Weight grid matching `control_points` dimensions.
     weights: Vec<Vec<f64>>,
+    /// The points a projection onto the surface starts its search from.
+    #[cfg_attr(feature = "serde", serde(skip))]
+    seed_grid: Derived<SeedGrid>,
+}
+
+/// A value worked out from a surface on first use. Equal surfaces work out
+/// equal values, so it takes no part in comparing them.
+#[derive(Clone)]
+struct Derived<T>(std::sync::OnceLock<T>);
+
+impl<T> std::fmt::Debug for Derived<T> {
+    // Whether the value is worked out yet says nothing of the surface.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Derived")
+    }
+}
+
+impl<T> Default for Derived<T> {
+    fn default() -> Self {
+        Self(std::sync::OnceLock::new())
+    }
+}
+
+impl<T> PartialEq for Derived<T> {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+/// The surface at a uniform grid over its domain.
+#[derive(Debug, Clone)]
+pub(crate) struct SeedGrid {
+    /// The grid's parameters along `u`.
+    pub(crate) us: Vec<f64>,
+    /// The grid's parameters along `v`.
+    pub(crate) vs: Vec<f64>,
+    /// The surface at `(us[i], vs[j])`, as `points[i][j]`.
+    pub(crate) points: Vec<Vec<Point3>>,
+    /// The farthest any grid point lies from the first.
+    pub(crate) extent: f64,
 }
 
 impl NurbsSurface {
@@ -102,6 +143,38 @@ impl NurbsSurface {
             knots_v,
             control_points,
             weights,
+            seed_grid: Derived::default(),
+        })
+    }
+
+    /// The surface at a uniform grid of `n + 1` parameters each way, worked
+    /// out once.
+    #[allow(clippy::cast_precision_loss)]
+    pub(crate) fn seed_grid(&self, n: usize) -> &SeedGrid {
+        self.seed_grid.0.get_or_init(|| {
+            let (u_min, u_max) = self.domain_u();
+            let (v_min, v_max) = self.domain_v();
+            let us: Vec<f64> = (0..=n)
+                .map(|i| (i as f64 / n as f64).madd(u_max - u_min, u_min))
+                .collect();
+            let vs: Vec<f64> = (0..=n)
+                .map(|j| (j as f64 / n as f64).madd(v_max - v_min, v_min))
+                .collect();
+            let points: Vec<Vec<Point3>> = us
+                .iter()
+                .map(|&u| vs.iter().map(|&v| self.evaluate(u, v)).collect())
+                .collect();
+            let first = points[0][0];
+            let extent = points
+                .iter()
+                .flatten()
+                .fold(0.0_f64, |m, p| m.max((*p - first).length()));
+            SeedGrid {
+                us,
+                vs,
+                points,
+                extent,
+            }
         })
     }
 
@@ -914,7 +987,7 @@ mod tests {
                 let mut k = vec![0.0; p + 1];
                 for i in 1..n - p {
                     let t = i as f64 / (n - p) as f64;
-                    k.push(t * t.mul_add(0.3, 0.7));
+                    k.push(t * t.madd(0.3, 0.7));
                 }
                 k.extend(vec![1.0; p + 1]);
                 k
@@ -959,11 +1032,11 @@ mod tests {
             let (u0, u1) = s.domain_u();
             let (v0, v1) = s.domain_v();
             let mut us: Vec<f64> = (0..=40)
-                .map(|i| (u1 - u0).mul_add(f64::from(i) / 40.0, u0))
+                .map(|i| (u1 - u0).madd(f64::from(i) / 40.0, u0))
                 .collect();
             us.extend(s.knots_u().iter().copied());
             let mut vs: Vec<f64> = (0..=12)
-                .map(|i| (v1 - v0).mul_add(f64::from(i) / 12.0, v0))
+                .map(|i| (v1 - v0).madd(f64::from(i) / 12.0, v0))
                 .collect();
             vs.extend(s.knots_v().iter().copied());
             for &v in &vs {

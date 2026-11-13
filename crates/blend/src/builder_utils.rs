@@ -1241,6 +1241,7 @@ pub fn into_face_from_edge(
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]
+    use brepkit_math::madd::Madd;
 
     use super::*;
     use brepkit_math::vec::{Point3, Vec3};
@@ -1266,7 +1267,7 @@ mod tests {
     /// distance from `center`.
     fn along(curve: &EdgeCurve, a: Point3, b: Point3, f: f64, center: Point3) -> f64 {
         let (t0, t1) = curve.domain_with_endpoints(a, b);
-        (curve.evaluate_with_endpoints((t1 - t0).mul_add(f, t0), a, b) - center).length()
+        (curve.evaluate_with_endpoints((t1 - t0).madd(f, t0), a, b) - center).length()
     }
 
     /// A plane square to a cylinder cuts it in a circle, whichever two of the

@@ -38,6 +38,7 @@
 //! the geometry in question (e.g. `Tolerance::default().linear`, or a looser
 //! value for coarse data).
 
+use crate::madd::Madd;
 use crate::predicates::winding_number;
 use crate::vec::Point2;
 
@@ -186,11 +187,14 @@ pub fn signed_area(polygon: &[Point2]) -> f64 {
     if n < 3 {
         return 0.0;
     }
+    // Taken from the first vertex: far from the origin the products of raw
+    // coordinates round away a small polygon's whole area.
+    let origin = polygon[0];
     let mut sum = 0.0;
     for i in 0..n {
-        let p = polygon[i];
-        let q = polygon[(i + 1) % n];
-        sum += p.x().mul_add(q.y(), -(q.x() * p.y()));
+        let p = polygon[i] - origin;
+        let q = polygon[(i + 1) % n] - origin;
+        sum += p.x().madd(q.y(), -(q.x() * p.y()));
     }
     sum * 0.5
 }
@@ -198,7 +202,7 @@ pub fn signed_area(polygon: &[Point2]) -> f64 {
 fn dist_sq(a: Point2, b: Point2) -> f64 {
     let dx = a.x() - b.x();
     let dy = a.y() - b.y();
-    dx.mul_add(dx, dy * dy)
+    dx.madd(dx, dy * dy)
 }
 
 /// Distance squared from `p` to the *segment* `[a, b]` (clamped to the
@@ -206,7 +210,7 @@ fn dist_sq(a: Point2, b: Point2) -> f64 {
 fn point_segment_dist_sq(p: Point2, a: Point2, b: Point2) -> f64 {
     let abx = b.x() - a.x();
     let aby = b.y() - a.y();
-    let len_sq = abx.mul_add(abx, aby * aby);
+    let len_sq = abx.madd(abx, aby * aby);
     if len_sq < f64::MIN_POSITIVE {
         return dist_sq(p, a);
     }
@@ -221,7 +225,7 @@ fn point_segment_dist_sq(p: Point2, a: Point2, b: Point2) -> f64 {
 fn project_param(p: Point2, a: Point2, b: Point2) -> f64 {
     let abx = b.x() - a.x();
     let aby = b.y() - a.y();
-    let len_sq = abx.mul_add(abx, aby * aby);
+    let len_sq = abx.madd(abx, aby * aby);
     if len_sq < f64::MIN_POSITIVE {
         return 0.0;
     }
@@ -444,11 +448,11 @@ fn collect_edge_split_params(
 fn point_line_dist_sq(p: Point2, a: Point2, b: Point2) -> f64 {
     let dx = b.x() - a.x();
     let dy = b.y() - a.y();
-    let len_sq = dx.mul_add(dx, dy * dy);
+    let len_sq = dx.madd(dx, dy * dy);
     if len_sq < f64::MIN_POSITIVE {
         return dist_sq(p, a);
     }
-    let cross = (p.x() - a.x()).mul_add(dy, -((p.y() - a.y()) * dx));
+    let cross = (p.x() - a.x()).madd(dy, -((p.y() - a.y()) * dx));
     (cross * cross) / len_sq
 }
 
@@ -464,14 +468,14 @@ fn segment_intersection_params(
     let day = a2.y() - a1.y();
     let dbx = b2.x() - b1.x();
     let dby = b2.y() - b1.y();
-    let denom = dax.mul_add(dby, -(day * dbx));
+    let denom = dax.madd(dby, -(day * dbx));
     if denom.abs() < f64::MIN_POSITIVE {
         return None;
     }
     let rx = b1.x() - a1.x();
     let ry = b1.y() - a1.y();
-    let ta = rx.mul_add(dby, -(ry * dbx)) / denom;
-    let tb = rx.mul_add(day, -(ry * dax)) / denom;
+    let ta = rx.madd(dby, -(ry * dbx)) / denom;
+    let tb = rx.madd(day, -(ry * dax)) / denom;
     if (0.0..=1.0).contains(&tb) {
         Some((ta, tb))
     } else {
@@ -605,7 +609,7 @@ fn classify_midpoint(e: &SubEdge, other: &Polygon, snapper: &Snapper, tol: f64) 
         if point_segment_dist_sq(mid, b1, b2) <= tol_sq {
             // Same direction iff the dot of edge directions is positive.
             let bdir = b2 - b1;
-            let dot = edir.x().mul_add(bdir.x(), edir.y() * bdir.y());
+            let dot = edir.x().madd(bdir.x(), edir.y() * bdir.y());
             on_boundary = Some(dot >= 0.0);
             break;
         }
@@ -719,8 +723,8 @@ fn turn_score(incoming: crate::vec::Vec2, outgoing: crate::vec::Vec2) -> f64 {
     let iny = incoming.y();
     let outx = outgoing.x();
     let outy = outgoing.y();
-    let dot = inx.mul_add(outx, iny * outy);
-    let cross = inx.mul_add(outy, -(iny * outx));
+    let dot = inx.madd(outx, iny * outy);
+    let cross = inx.madd(outy, -(iny * outx));
     cross.atan2(dot)
 }
 
@@ -1165,5 +1169,19 @@ mod tests {
         let i = polygon_boolean(&square, &diamond, BooleanOp::Intersection, TOL);
         assert!(!u.is_empty() && !i.is_empty());
         assert_area_close(u.area() + i.area(), area_sq + area_di, 1e-6);
+    }
+
+    #[test]
+    fn a_small_polygon_far_from_the_origin_keeps_its_area() {
+        let far = 1e8;
+        let triangle = [
+            Point2::new(far, far),
+            Point2::new(far + 1.0, far),
+            Point2::new(far, far + 1.0),
+        ];
+        assert_area_close(signed_area(&triangle), 0.5, 1e-12);
+        let mut clockwise = triangle;
+        clockwise.reverse();
+        assert_area_close(signed_area(&clockwise), -0.5, 1e-12);
     }
 }

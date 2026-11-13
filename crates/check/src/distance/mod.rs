@@ -9,6 +9,7 @@
 pub(crate) mod analytic;
 pub(crate) mod edge;
 
+use brepkit_math::madd::Madd;
 use std::collections::HashSet;
 
 use brepkit_math::aabb::Aabb3;
@@ -520,9 +521,9 @@ fn point_to_segment(point: Point3, a: Point3, b: Point3) -> (f64, Point3) {
     }
     let t = (ap.dot(ab) / len_sq).clamp(0.0, 1.0);
     let closest = Point3::new(
-        ab.x().mul_add(t, a.x()),
-        ab.y().mul_add(t, a.y()),
-        ab.z().mul_add(t, a.z()),
+        ab.x().madd(t, a.x()),
+        ab.y().madd(t, a.y()),
+        ab.z().madd(t, a.z()),
     );
     ((point - closest).length(), closest)
 }
@@ -532,7 +533,7 @@ fn aabb_distance(a: &Aabb3, b: &Aabb3) -> f64 {
     let dx = (a.min.x() - b.max.x()).max(b.min.x() - a.max.x()).max(0.0);
     let dy = (a.min.y() - b.max.y()).max(b.min.y() - a.max.y()).max(0.0);
     let dz = (a.min.z() - b.max.z()).max(b.min.z() - a.max.z()).max(0.0);
-    (dx.mul_add(dx, dy.mul_add(dy, dz * dz))).sqrt()
+    (dx.madd(dx, dy.madd(dy, dz * dz))).sqrt()
 }
 
 #[cfg(test)]

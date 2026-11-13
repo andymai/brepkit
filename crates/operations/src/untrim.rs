@@ -25,6 +25,7 @@
     clippy::tuple_array_conversions
 )]
 
+use brepkit_math::madd::Madd;
 use brepkit_math::nurbs::surface::NurbsSurface;
 use brepkit_math::nurbs::surface_fitting::{approximate_surface_lspia, interpolate_surface};
 use brepkit_math::vec::{Point2, Point3};
@@ -279,22 +280,19 @@ fn closest_point_on_polyline(point: Point2, polyline: &[Point2]) -> Point2 {
 
         let ab_x = b.x() - a.x();
         let ab_y = b.y() - a.y();
-        let len_sq = ab_x.mul_add(ab_x, ab_y * ab_y);
+        let len_sq = ab_x.madd(ab_x, ab_y * ab_y);
 
         let candidate = if len_sq < 1e-30 {
             a
         } else {
             let t = ((point.x() - a.x()) * ab_x + (point.y() - a.y()) * ab_y) / len_sq;
             let t_clamped = t.clamp(0.0, 1.0);
-            Point2::new(
-                ab_x.mul_add(t_clamped, a.x()),
-                ab_y.mul_add(t_clamped, a.y()),
-            )
+            Point2::new(ab_x.madd(t_clamped, a.x()), ab_y.madd(t_clamped, a.y()))
         };
 
         let dx = point.x() - candidate.x();
         let dy = point.y() - candidate.y();
-        let dist = dx.mul_add(dx, dy * dy);
+        let dist = dx.madd(dx, dy * dy);
         if dist < best_dist {
             best_dist = dist;
             best = candidate;
@@ -351,8 +349,8 @@ mod tests {
         for k in 0..n_points {
             let angle = 2.0 * std::f64::consts::PI * (k as f64) / (n_points as f64);
             pts.push(Point2::new(
-                r.mul_add(angle.cos(), cx),
-                r.mul_add(angle.sin(), cy),
+                r.madd(angle.cos(), cx),
+                r.madd(angle.sin(), cy),
             ));
         }
         vec![TrimCurve { curve: pts }]

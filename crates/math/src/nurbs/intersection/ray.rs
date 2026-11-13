@@ -1,6 +1,7 @@
 //! Every crossing of a ray with a NURBS surface.
 
 use crate::frame::Frame3;
+use crate::madd::Madd;
 use crate::nurbs::decompose::surface_to_bezier_patches;
 use crate::nurbs::surface::NurbsSurface;
 use crate::vec::{Point3, Vec3};
@@ -305,13 +306,13 @@ impl RaySurface {
         }
         let w = dir - n * slant;
         let (guu, guv, gvv) = (su.dot(su), su.dot(sv), sv.dot(sv));
-        let det = guu.mul_add(gvv, -guv * guv);
+        let det = guu.madd(gvv, -guv * guv);
         if det <= 0.0 || w.length() <= GRAZE_COS {
             return false;
         }
         let (wu, wv) = (su.dot(w), sv.dot(w));
-        let a = gvv.mul_add(wu, -guv * wv) / det;
-        let b = guu.mul_add(wv, -guv * wu) / det;
+        let a = gvv.madd(wu, -guv * wv) / det;
+        let b = guu.madd(wv, -guv * wu) / det;
         let bend = n.dot(d[2][0] * (a * a) + d[1][1] * (2.0 * a * b) + d[0][2] * (b * b));
         2.0 * slant.abs() <= SEPARATION * LEAF * self.scale * bend.abs()
     }
@@ -349,7 +350,7 @@ impl RaySurface {
             if f.length() <= 1e-12 * self.scale {
                 return self.record(leaf, (u, v, t), origin, dir, reach, reach, (out, radii));
             }
-            let spacing = 4.0 * f64::EPSILON * su.length().mul_add(u.abs(), sv.length() * v.abs());
+            let spacing = 4.0 * f64::EPSILON * su.length().madd(u.abs(), sv.length() * v.abs());
             stalled = (f.length() <= spacing).then_some((u, v, t, spacing));
             let normal = su.cross(sv);
             let det = -normal.dot(dir);

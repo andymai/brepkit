@@ -16,6 +16,7 @@
     clippy::similar_names
 )]
 
+use crate::madd::Madd;
 use crate::vec::{Point2, Point3};
 
 /// Filtered orient2d: fast f64 path with exact fallback.
@@ -181,8 +182,8 @@ pub fn segment_intersection(a1: Point2, a2: Point2, b1: Point2, b2: Point2) -> S
         let u =
             ((b1.x() - a1.x()) * (a2.y() - a1.y()) - (b1.y() - a1.y()) * (a2.x() - a1.x())) / denom;
 
-        let px = (a2.x() - a1.x()).mul_add(t, a1.x());
-        let py = (a2.y() - a1.y()).mul_add(t, a1.y());
+        let px = (a2.x() - a1.x()).madd(t, a1.x());
+        let py = (a2.y() - a1.y()).madd(t, a1.y());
 
         return SegmentIntersection::Point {
             point: Point2::new(px, py),
@@ -292,8 +293,8 @@ fn collinear_overlap(a1: Point2, a2: Point2, b1: Point2, b2: Point2) -> SegmentI
         SegmentIntersection::None
     } else if (hi - lo).abs() < f64::EPSILON {
         // Single point overlap
-        let px = (a2.x() - a1.x()).mul_add(lo, a1.x());
-        let py = (a2.y() - a1.y()).mul_add(lo, a1.y());
+        let px = (a2.x() - a1.x()).madd(lo, a1.x());
+        let py = (a2.y() - a1.y()).madd(lo, a1.y());
         let pt = Point2::new(px, py);
         SegmentIntersection::Point {
             point: pt,
@@ -301,10 +302,10 @@ fn collinear_overlap(a1: Point2, a2: Point2, b1: Point2, b2: Point2) -> SegmentI
             t2: segment_param(b1, b2, pt),
         }
     } else {
-        let sx = (a2.x() - a1.x()).mul_add(lo, a1.x());
-        let sy = (a2.y() - a1.y()).mul_add(lo, a1.y());
-        let ex = (a2.x() - a1.x()).mul_add(hi, a1.x());
-        let ey = (a2.y() - a1.y()).mul_add(hi, a1.y());
+        let sx = (a2.x() - a1.x()).madd(lo, a1.x());
+        let sy = (a2.y() - a1.y()).madd(lo, a1.y());
+        let ex = (a2.x() - a1.x()).madd(hi, a1.x());
+        let ey = (a2.y() - a1.y()).madd(hi, a1.y());
         SegmentIntersection::Overlap {
             start: Point2::new(sx, sy),
             end: Point2::new(ex, ey),

@@ -14,6 +14,7 @@
 //! images with a single representative face) is not yet implemented.
 //! Currently only pairwise SD records are emitted.
 
+use brepkit_math::madd::Madd;
 use std::collections::{HashMap, HashSet};
 use std::hash::BuildHasher;
 
@@ -1027,7 +1028,7 @@ fn compute_edge_set_quantized(
         let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
         let mid = edge
             .curve()
-            .evaluate_with_endpoints(0.5_f64.mul_add(t1 - t0, t0), sp, ep);
+            .evaluate_with_endpoints(0.5_f64.madd(t1 - t0, t0), sp, ep);
         // quantize_point MULTIPLIES by the scale, so the 100x-coarser
         // midpoint bucket (fit-error tolerance for marched geometry) needs
         // scale / 100, not scale * 100.
@@ -1095,7 +1096,7 @@ fn face_loop_samples(
                 let f = k / 32.0;
                 let f = if oe.is_forward() { f } else { 1.0 - f };
                 edge.curve()
-                    .evaluate_with_endpoints((t1 - t0).mul_add(f, t0), sp, ep)
+                    .evaluate_with_endpoints((t1 - t0).madd(f, t0), sp, ep)
             };
             for k in 0..32 {
                 let (p, q, m) = (
@@ -1206,7 +1207,7 @@ fn regions_apart(ra: &PlanarRegion, rb: &PlanarRegion) -> bool {
                 .map(|i| {
                     lp[i]
                         .x()
-                        .mul_add(lp[(i + 1) % n].y(), -(lp[(i + 1) % n].x() * lp[i].y()))
+                        .madd(lp[(i + 1) % n].y(), -(lp[(i + 1) % n].x() * lp[i].y()))
                 })
                 .sum();
             // Material lies left of a counter-clockwise outer loop and of a
@@ -1222,8 +1223,8 @@ fn regions_apart(ra: &PlanarRegion, rb: &PlanarRegion) -> bool {
                 let step = reach / len;
                 let (nx, ny) = if left { (-dy, dx) } else { (dy, -dx) };
                 let m = Point2::new(
-                    nx.mul_add(step, 0.5 * (p.x() + q.x())),
-                    ny.mul_add(step, 0.5 * (p.y() + q.y())),
+                    nx.madd(step, 0.5 * (p.x() + q.x())),
+                    ny.madd(step, 0.5 * (p.y() + q.y())),
                 );
                 if clear_inside(m, r, 0.0) {
                     out.push(m);
@@ -1236,8 +1237,8 @@ fn regions_apart(ra: &PlanarRegion, rb: &PlanarRegion) -> bool {
                 .flat_map(|i| (0..16).map(move |j| (i, j)))
                 .map(|(i, j)| {
                     Point2::new(
-                        (hi.x() - lo.x()).mul_add(f(i), lo.x()),
-                        (hi.y() - lo.y()).mul_add(f(j), lo.y()),
+                        (hi.x() - lo.x()).madd(f(i), lo.x()),
+                        (hi.y() - lo.y()).madd(f(j), lo.y()),
                     )
                 })
                 .filter(|&q| clear_inside(q, r, 0.0)),
@@ -1332,7 +1333,7 @@ fn boundaries_cross(
         }
     }
     let side = |a: Point2, b: Point2, c: Point2| {
-        (b.x() - a.x()).mul_add(c.y() - a.y(), -((b.y() - a.y()) * (c.x() - a.x())))
+        (b.x() - a.x()).madd(c.y() - a.y(), -((b.y() - a.y()) * (c.x() - a.x())))
     };
     let mut seen: Vec<usize> = Vec::new();
     for &(p, q) in &sa {
@@ -1356,8 +1357,8 @@ fn boundaries_cross(
             }
             let t = d3 / (d3 - d4);
             let x = Point2::new(
-                (q.x() - p.x()).mul_add(t, p.x()),
-                (q.y() - p.y()).mul_add(t, p.y()),
+                (q.x() - p.x()).madd(t, p.x()),
+                (q.y() - p.y()).madd(t, p.y()),
             );
             let unit = |a: Point2, b: Point2| {
                 let (dx, dy) = (b.x() - a.x(), b.y() - a.y());
@@ -1368,8 +1369,8 @@ fn boundaries_cross(
             let step = 1e-4 * w.hypot(h);
             for (sa_, sb_) in [(1.0, 1.0), (1.0, -1.0), (-1.0, 1.0), (-1.0, -1.0)] {
                 let m = Point2::new(
-                    (sa_ * ax + sb_ * bx).mul_add(step, x.x()),
-                    (sa_ * ay + sb_ * by).mul_add(step, x.y()),
+                    (sa_ * ax + sb_ * bx).madd(step, x.x()),
+                    (sa_ * ay + sb_ * by).madd(step, x.y()),
                 );
                 if in_both(m) {
                     return true;
@@ -1729,7 +1730,7 @@ fn convex_outlines_apart(
                 let (p, q, r) = (poly[(k + n - 1) % n], poly[k], poly[(k + 1) % n]);
                 let (u, w) = (r - p, q - p);
                 let len = u.length();
-                len <= slack || u.x().mul_add(w.y(), -(u.y() * w.x())).abs() > slack * len
+                len <= slack || u.x().madd(w.y(), -(u.y() * w.x())).abs() > slack * len
             })
             .map(|k| poly[k])
             .collect()
@@ -1741,8 +1742,8 @@ fn convex_outlines_apart(
             && (0..n)
                 .map(|k| {
                     let (p, q, r) = (poly[k], poly[(k + 1) % n], poly[(k + 2) % n]);
-                    let cross = (q.x() - p.x())
-                        .mul_add(r.y() - q.y(), -((q.y() - p.y()) * (r.x() - q.x())));
+                    let cross =
+                        (q.x() - p.x()).madd(r.y() - q.y(), -((q.y() - p.y()) * (r.x() - q.x())));
                     cross > 0.0
                 })
                 .try_fold(None, |turn: Option<bool>, left| {
@@ -1764,7 +1765,7 @@ fn convex_outlines_apart(
     let reach = diameter(a).max(diameter(b));
     let range = |poly: &[Point2], ax: f64, ay: f64| {
         poly.iter().fold((f64::MAX, f64::MIN), |(lo, hi), p| {
-            let d = p.x().mul_add(ax, p.y() * ay);
+            let d = p.x().madd(ax, p.y() * ay);
             (lo.min(d), hi.max(d))
         })
     };

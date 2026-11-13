@@ -4,6 +4,7 @@
 //! for exact surface trimming and boolean operations.
 
 use crate::MathError;
+use crate::madd::Madd;
 use crate::vec::{Point2, Vec2};
 
 /// A 2D line defined by origin and direction.
@@ -197,7 +198,7 @@ impl Ellipse2D {
         let (sin_r, cos_r) = self.rotation.sin_cos();
         let x = self.semi_major * t.cos();
         let y = self.semi_minor * t.sin();
-        self.center + Vec2::new(x.mul_add(cos_r, -(y * sin_r)), x.mul_add(sin_r, y * cos_r))
+        self.center + Vec2::new(x.madd(cos_r, -(y * sin_r)), x.madd(sin_r, y * cos_r))
     }
 
     /// Returns the tangent vector at parameter `t`.
@@ -206,10 +207,7 @@ impl Ellipse2D {
         let (sin_r, cos_r) = self.rotation.sin_cos();
         let dx = -self.semi_major * t.sin();
         let dy = self.semi_minor * t.cos();
-        Vec2::new(
-            dx.mul_add(cos_r, -(dy * sin_r)),
-            dx.mul_add(sin_r, dy * cos_r),
-        )
+        Vec2::new(dx.madd(cos_r, -(dy * sin_r)), dx.madd(sin_r, dy * cos_r))
     }
 
     /// Returns the center.
@@ -242,7 +240,7 @@ impl Ellipse2D {
         let a = self.semi_major;
         let b = self.semi_minor;
         let h = ((a - b) * (a - b)) / ((a + b) * (a + b));
-        std::f64::consts::PI * (a + b) * (1.0 + 3.0 * h / (10.0 + 3.0f64.mul_add(-h, 4.0).sqrt()))
+        std::f64::consts::PI * (a + b) * (1.0 + 3.0 * h / (10.0 + 3.0f64.madd(-h, 4.0).sqrt()))
     }
 }
 

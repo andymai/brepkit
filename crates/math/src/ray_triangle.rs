@@ -6,6 +6,7 @@
 //! axis-aligned along +Z, then evaluate edge functions using identical
 //! floating-point operations on shared vertices.
 
+use crate::madd::Madd;
 use crate::vec::{Point3, Vec3};
 
 /// Result of a watertight ray-triangle intersection test.
@@ -113,9 +114,9 @@ pub fn watertight_ray_triangle_intersect(
     let cy = c[ky] - sy * c[kz];
 
     // Step 5: Edge function values (2D cross products).
-    let mut u = cx.mul_add(by, -(cy * bx));
-    let mut v = ax.mul_add(cy, -(ay * cx));
-    let mut w = bx.mul_add(ay, -(by * ax));
+    let mut u = cx.madd(by, -(cy * bx));
+    let mut v = ax.madd(cy, -(ay * cx));
+    let mut w = bx.madd(ay, -(by * ax));
 
     // Step 6: Deterministic tie-breaking for zero edge functions.
     // When an edge function is exactly zero, assign a deterministic sign
@@ -146,7 +147,7 @@ pub fn watertight_ray_triangle_intersect(
     let az = sz * a[kz];
     let bz = sz * b[kz];
     let cz = sz * c[kz];
-    let t_scaled = u.mul_add(az, v.mul_add(bz, w * cz));
+    let t_scaled = u.madd(az, v.madd(bz, w * cz));
 
     // Step 10: Check that t is positive (ray goes forward).
     // If det > 0, t_scaled must be > 0; if det < 0, t_scaled must be < 0.

@@ -13,6 +13,7 @@
     clippy::cast_precision_loss
 )]
 
+use brepkit_math::madd::Madd;
 use std::collections::{HashMap, HashSet};
 
 use brepkit_math::mat::Mat4;
@@ -325,7 +326,7 @@ fn prism_vertical_corner_fillets_are_watertight() {
     let volume = solid_volume(&topo, eased, 0.01).unwrap();
     // The box less four corners, each `(1 - pi/4) r²` of cross-section.
     let full = height + SINK;
-    let truth = (width * depth).mul_add(
+    let truth = (width * depth).madd(
         full,
         -4.0 * (1.0 - std::f64::consts::FRAC_PI_4) * CORNER_FILLET_MM.powi(2) * full,
     );

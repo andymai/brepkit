@@ -7,6 +7,7 @@
 //! the given [`Topology`]. The solids are built with correct manifold
 //! topology and outward-pointing face normals.
 
+use brepkit_math::madd::Madd;
 use std::collections::{HashMap, HashSet};
 use std::f64::consts::{FRAC_PI_2, PI, TAU};
 
@@ -753,7 +754,7 @@ pub fn make_convex_hull(
         let normal = cross.normalize().unwrap_or(Vec3::new(0.0, 0.0, 1.0));
         let d = normal
             .x()
-            .mul_add(pa.x(), normal.y().mul_add(pa.y(), normal.z() * pa.z()));
+            .madd(pa.x(), normal.y().madd(pa.y(), normal.z() * pa.z()));
         (normal, d, cross.length())
     };
     let planes: Vec<(Vec3, f64, f64)> = hull.faces.iter().map(plane_of).collect();
@@ -764,7 +765,7 @@ pub fn make_convex_hull(
         .fold(1.0_f64, f64::max);
     let on_plane = |t: usize, v: usize| {
         let ((n, d, _), p) = (planes[t], hull.vertices[v]);
-        (n.x().mul_add(p.x(), n.y().mul_add(p.y(), n.z() * p.z())) - d).abs() <= 1e-9 * scale
+        (n.x().madd(p.x(), n.y().madd(p.y(), n.z() * p.z())) - d).abs() <= 1e-9 * scale
     };
     let far_corner = |t: usize, a: usize, b: usize| {
         hull.faces[t]

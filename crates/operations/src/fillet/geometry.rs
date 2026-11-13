@@ -1,5 +1,6 @@
 //! Edge sampling and surface normal utilities for fillet operations.
 
+use brepkit_math::madd::Madd;
 use brepkit_math::nurbs::projection::project_point_to_surface;
 use brepkit_math::tolerance::Tolerance;
 use brepkit_math::vec::{Point3, Vec3};
@@ -18,9 +19,9 @@ pub(super) fn sample_edge_point(
 ) -> Point3 {
     match curve {
         EdgeCurve::Line => Point3::new(
-            p_start.x().mul_add(1.0 - t, p_end.x() * t),
-            p_start.y().mul_add(1.0 - t, p_end.y() * t),
-            p_start.z().mul_add(1.0 - t, p_end.z() * t),
+            p_start.x().madd(1.0 - t, p_end.x() * t),
+            p_start.y().madd(1.0 - t, p_end.y() * t),
+            p_start.z().madd(1.0 - t, p_end.z() * t),
         ),
         EdgeCurve::Circle(circle) => {
             let ts = circle.project(p_start);

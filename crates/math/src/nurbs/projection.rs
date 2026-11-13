@@ -9,6 +9,7 @@
 
 use crate::MathError;
 use crate::aabb::Aabb3;
+use crate::madd::Madd;
 use crate::nurbs::curve::NurbsCurve;
 use crate::nurbs::surface::NurbsSurface;
 use crate::vec::{Point3, Vec3};
@@ -161,7 +162,7 @@ fn curve_coarse_search(curve: &NurbsCurve, point: Point3) -> Vec<(f64, f64, f64)
             axis(Point3::y, point.y()),
             axis(Point3::z, point.z()),
         );
-        dx.mul_add(dx, dy.mul_add(dy, dz * dz))
+        dx.madd(dx, dy.madd(dy, dz * dz))
     };
     let mut order: Vec<(usize, f64)> = knots
         .windows(2)
@@ -181,7 +182,7 @@ fn curve_coarse_search(curve: &NurbsCurve, point: Point3) -> Vec<(f64, f64, f64)
         let samples: Vec<(f64, f64)> = (0..=n_samples)
             .map(|i| {
                 let t = i as f64 / n_samples as f64;
-                let u = t.mul_add(u_end - u_start, u_start).min(top);
+                let u = t.madd(u_end - u_start, u_start).min(top);
                 (u, (curve.evaluate(u) - point).length_squared())
             })
             .collect();
@@ -486,26 +487,9 @@ fn surface_coarse_search(
     surface: &NurbsSurface,
     point: Point3,
 ) -> ((f64, f64), Option<(f64, f64)>) {
-    let knots_u = surface.knots_u();
-    let knots_v = surface.knots_v();
-    let pu = surface.degree_u();
-    let pv = surface.degree_v();
-    let u_min = knots_u[pu];
-    let u_max = knots_u[knots_u.len() - pu - 1];
-    let v_min = knots_v[pv];
-    let v_max = knots_v[knots_v.len() - pv - 1];
-
     let n = SURFACE_GRID_SIZE;
-    let us: Vec<f64> = (0..=n)
-        .map(|i| (i as f64 / n as f64).mul_add(u_max - u_min, u_min))
-        .collect();
-    let vs: Vec<f64> = (0..=n)
-        .map(|j| (j as f64 / n as f64).mul_add(v_max - v_min, v_min))
-        .collect();
-    let grid: Vec<Vec<Point3>> = us
-        .iter()
-        .map(|&u| vs.iter().map(|&v| surface.evaluate(u, v)).collect())
-        .collect();
+    let seeds = surface.seed_grid(n);
+    let (us, vs, grid, extent) = (&seeds.us, &seeds.vs, &seeds.points, seeds.extent);
     let dist_sq = |i: usize, j: usize| (grid[i][j] - point).length_squared();
 
     let (mut best_i, mut best_j) = (0, 0);
@@ -517,10 +501,6 @@ fn surface_coarse_search(
         }
     }
 
-    let extent = grid
-        .iter()
-        .flatten()
-        .fold(0.0_f64, |m, p| m.max((*p - grid[0][0]).length()));
     let one_point = |pts: &mut dyn Iterator<Item = Point3>| {
         let mut pts = pts.peekable();
         let first = pts.peek().copied();
@@ -704,7 +684,7 @@ fn gauss_newton_step(
 
     // Use a relative threshold so the singularity test stays meaningful
     // near surface poles / cone apex where both derivatives shrink to zero.
-    let det = j00.mul_add(j11, -(j01 * j01));
+    let det = j00.madd(j11, -(j01 * j01));
     if det.abs() < (j00 + j11).max(1e-30) * 1e-12 {
         // Near-singular: Tikhonov (Levenberg–Marquardt) regularisation
         // biases the step toward zero rather than blowing up near poles
@@ -712,7 +692,7 @@ fn gauss_newton_step(
         let lambda = (j00 + j11).max(1e-10) * 1e-4;
         let j00r = j00 + lambda;
         let j11r = j11 + lambda;
-        let det_r = j00r.mul_add(j11r, -(j01 * j01));
+        let det_r = j00r.madd(j11r, -(j01 * j01));
         if det_r.abs() < 1e-30 {
             if j00 > j11 {
                 Some((rhs0 / j00.max(1e-30), 0.0))
@@ -723,14 +703,14 @@ fn gauss_newton_step(
             }
         } else {
             Some((
-                rhs0.mul_add(j11r, -(rhs1 * j01)) / det_r,
-                j00r.mul_add(rhs1, -(j01 * rhs0)) / det_r,
+                rhs0.madd(j11r, -(rhs1 * j01)) / det_r,
+                j00r.madd(rhs1, -(j01 * rhs0)) / det_r,
             ))
         }
     } else {
         Some((
-            rhs0.mul_add(j11, -(rhs1 * j01)) / det,
-            j00.mul_add(rhs1, -(j01 * rhs0)) / det,
+            rhs0.madd(j11, -(rhs1 * j01)) / det,
+            j00.madd(rhs1, -(j01 * rhs0)) / det,
         ))
     }
 }
@@ -753,9 +733,9 @@ impl SpanPatch {
     fn nearest_sample(&self, surface: &NurbsSurface, point: Point3) -> (f64, f64) {
         let mut best = (f64::INFINITY, self.u.0, self.v.0);
         for fu in [0.0_f64, 0.5, 1.0] {
-            let u = fu.mul_add(self.u.1 - self.u.0, self.u.0);
+            let u = fu.madd(self.u.1 - self.u.0, self.u.0);
             for fv in [0.0_f64, 0.5, 1.0] {
-                let v = fv.mul_add(self.v.1 - self.v.0, self.v.0);
+                let v = fv.madd(self.v.1 - self.v.0, self.v.0);
                 let d = (surface.evaluate(u, v) - point).length_squared();
                 if d < best.0 {
                     best = (d, u, v);

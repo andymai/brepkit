@@ -1,6 +1,7 @@
 //! Curve-surface intersection.
 
 use crate::MathError;
+use crate::madd::Madd;
 use crate::nurbs::curve::NurbsCurve;
 use crate::nurbs::decompose::{curve_to_bezier_segments, surface_to_bezier_patches};
 use crate::nurbs::surface::NurbsSurface;
@@ -98,7 +99,7 @@ pub fn intersect_curve_surface(
                     // Deduplicate against existing hits.
                     let dup = hits.iter().any(|h: &CurveSurfaceHit| {
                         let d = h.point - hit.point;
-                        d.x().mul_add(d.x(), d.y().mul_add(d.y(), d.z() * d.z())) < dedup_sq
+                        d.x().madd(d.x(), d.y().madd(d.y(), d.z() * d.z())) < dedup_sq
                     });
                     if !dup {
                         hits.push(hit);
@@ -135,11 +136,9 @@ fn refine_curve_surface_point(
         let c_pt = curve.evaluate(t);
         let s_pt = surface.evaluate(u, v);
         let residual = c_pt - s_pt;
-        let dist_sq = residual.x().mul_add(
+        let dist_sq = residual.x().madd(
             residual.x(),
-            residual
-                .y()
-                .mul_add(residual.y(), residual.z() * residual.z()),
+            residual.y().madd(residual.y(), residual.z() * residual.z()),
         );
 
         if dist_sq < tolerance * tolerance {
@@ -225,11 +224,9 @@ fn refine_curve_surface_point(
     let c_pt = curve.evaluate(t);
     let s_pt = surface.evaluate(u, v);
     let residual = c_pt - s_pt;
-    let dist_sq = residual.x().mul_add(
+    let dist_sq = residual.x().madd(
         residual.x(),
-        residual
-            .y()
-            .mul_add(residual.y(), residual.z() * residual.z()),
+        residual.y().madd(residual.y(), residual.z() * residual.z()),
     );
 
     // 10x relaxation: seed points may be imprecise

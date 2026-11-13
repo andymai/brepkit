@@ -5,6 +5,7 @@
 //! a [`RecognizedSurface`] enum describing the best-fit analytic surface, or
 //! [`RecognizedSurface::NotRecognized`] when no match is found.
 
+use brepkit_math::madd::Madd;
 use brepkit_math::nurbs::surface::NurbsSurface;
 use brepkit_math::vec::{Point3, Vec3};
 
@@ -915,9 +916,9 @@ fn estimate_cylinder_axis(points: &[Point3], center: Point3) -> Option<Vec3> {
     let mut v = Vec3::new(1.0, 0.0, 0.0);
     for _ in 0..20 {
         let new_v = Vec3::new(
-            v.x().mul_add(cxx, v.y().mul_add(cxy, v.z() * cxz)),
-            v.x().mul_add(cxy, v.y().mul_add(cyy, v.z() * cyz)),
-            v.x().mul_add(cxz, v.y().mul_add(cyz, v.z() * czz)),
+            v.x().madd(cxx, v.y().madd(cxy, v.z() * cxz)),
+            v.x().madd(cxy, v.y().madd(cyy, v.z() * cyz)),
+            v.x().madd(cxz, v.y().madd(cyz, v.z() * czz)),
         );
         let len = new_v.length();
         if len < 1e-15 {

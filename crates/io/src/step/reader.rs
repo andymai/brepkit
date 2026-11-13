@@ -5,6 +5,7 @@
 //! `MANIFOLD_SOLID_BREP`, `CLOSED_SHELL`, `ADVANCED_FACE`, `PLANE`,
 //! `EDGE_CURVE`, `LINE`, `CARTESIAN_POINT`, `DIRECTION`, etc.
 
+use brepkit_math::madd::Madd;
 use std::collections::HashMap;
 
 use brepkit_math::frame::Frame3;
@@ -461,7 +462,7 @@ impl<'a> StepBuilder<'a> {
             let (v0, v1) = n.domain_v();
             let (u0, u1) = n.domain_u();
             let closed = (0..=8).all(|k| {
-                let u = (u1 - u0).mul_add(f64::from(k) / 8.0, u0);
+                let u = (u1 - u0).madd(f64::from(k) / 8.0, u0);
                 (n.evaluate(u, v0) - n.evaluate(u, v1)).length() <= 1e-9 * scale
             });
             pole(first) && pole(last) && closed
@@ -1507,7 +1508,7 @@ fn nurbs_as_sphere(
             f64::from(i) / f64::from(GRID),
             f64::from(j) / f64::from(GRID),
         );
-        n.evaluate((u1 - u0).mul_add(fu, u0), (v1 - v0).mul_add(fv, v0))
+        n.evaluate((u1 - u0).madd(fu, u0), (v1 - v0).madd(fv, v0))
     };
     let pts: Vec<Point3> = (0..=GRID)
         .flat_map(|i| (0..=GRID).map(move |j| (i, j)))
@@ -1517,7 +1518,7 @@ fn nurbs_as_sphere(
     let mut m = [[0.0_f64; 5]; 4];
     for p in &pts {
         let row = [2.0 * p.x(), 2.0 * p.y(), 2.0 * p.z(), 1.0];
-        let rhs = p.x().mul_add(p.x(), p.y().mul_add(p.y(), p.z() * p.z()));
+        let rhs = p.x().madd(p.x(), p.y().madd(p.y(), p.z() * p.z()));
         for a in 0..4 {
             for b in 0..4 {
                 m[a][b] += row[a] * row[b];
@@ -1591,7 +1592,7 @@ fn spans_lie_on_sphere(
         (0..m)
             .map(|k| {
                 let c = (std::f64::consts::PI * k as f64 / (m - 1) as f64).cos();
-                (0.5 * (b - a)).mul_add(-c, 0.5 * (a + b))
+                (0.5 * (b - a)).madd(-c, 0.5 * (a + b))
             })
             .collect()
     };
@@ -1658,7 +1659,7 @@ fn edge_height_span(curve: &EdgeCurve, start: Point3, end: Point3, along: Vec3) 
 /// peak at `atan2(b, a)` and trough half a turn on wherever they fall inside.
 fn conic_height_span(h0: f64, a: f64, b: f64, (t0, t1): (f64, f64)) -> (f64, f64) {
     use std::f64::consts::{PI, TAU};
-    let at = |t: f64| b.mul_add(t.sin(), a.mul_add(t.cos(), h0));
+    let at = |t: f64| b.madd(t.sin(), a.madd(t.cos(), h0));
     let mut span = (at(t0).min(at(t1)), at(t0).max(at(t1)));
     let (peak, reach) = (b.atan2(a), a.hypot(b));
     for (t, h) in [(peak, h0 + reach), (peak + PI, h0 - reach)] {
@@ -2682,7 +2683,7 @@ mod tests {
             assert!(area > 0.0, "a face of negative area: its loops are swapped");
         }
         let volume = brepkit_operations::measure::solid_volume(&read, solids[0], 0.001).unwrap();
-        let expected = 2.0f64.mul_add(-std::f64::consts::PI, 200.0);
+        let expected = 2.0f64.madd(-std::f64::consts::PI, 200.0);
         assert!(
             (volume - expected).abs() < 1e-3 * expected,
             "{volume} vs {expected}"
@@ -2796,7 +2797,7 @@ mod tests {
                 };
                 for k in 0..=8 {
                     let p = edge.curve().evaluate_with_endpoints(
-                        (t1 - t0).mul_add(f64::from(k) / 8.0, t0),
+                        (t1 - t0).madd(f64::from(k) / 8.0, t0),
                         a,
                         b,
                     );

@@ -3,6 +3,7 @@
 use brepkit_math::analytic_intersection::{
     AnalyticSurface, intersect_analytic_analytic, intersect_plane_analytic,
 };
+use brepkit_math::madd::Madd;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
 use brepkit_topology::face::{FaceId, FaceSurface};
@@ -397,7 +398,7 @@ fn project_point_onto_surface(p: Point3, surface: &FaceSurface) -> Point3 {
             let dx = p.x() - c.x();
             let dy = p.y() - c.y();
             let dz = p.z() - c.z();
-            let dist = (dx.mul_add(dx, dy.mul_add(dy, dz * dz))).sqrt();
+            let dist = (dx.madd(dx, dy.madd(dy, dz * dz))).sqrt();
             if dist < 1e-15 {
                 return p;
             }

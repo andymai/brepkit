@@ -1,5 +1,6 @@
 #![allow(clippy::unwrap_used)]
 
+use brepkit_math::madd::Madd;
 use std::collections::HashMap;
 
 use brepkit_math::nurbs::curve::NurbsCurve;
@@ -503,7 +504,7 @@ fn sweep_with_linear_scale() {
     .unwrap();
 
     let options = SweepOptions {
-        scale_law: Some(Box::new(|t| 0.5f64.mul_add(-t, 1.0))), // taper from 1.0 to 0.5
+        scale_law: Some(Box::new(|t| 0.5f64.madd(-t, 1.0))), // taper from 1.0 to 0.5
         segments: 8,
         ..Default::default()
     };
@@ -2469,13 +2470,13 @@ fn a_single_edge_follows_a_bend_inside_narrow_knot_spans() {
     for width in [1e-4_f64, 1e-13] {
         let mut topo = Topology::new();
         let mut knots = vec![0.0; 4];
-        knots.extend((1..=5).map(|k| width.mul_add(f64::from(k), 0.5)));
+        knots.extend((1..=5).map(|k| width.madd(f64::from(k), 0.5)));
         knots.extend([1.0; 4]);
         let points: Vec<Point3> = (0..9)
             .map(|k| Point3::new(f64::from(k), if k == 4 { 1.0 } else { 0.0 }, 0.0))
             .collect();
         let bend = NurbsCurve::new(3, knots, points, vec![1.0; 9]).unwrap();
-        let peak = bend.evaluate(width.mul_add(3.0, 0.5));
+        let peak = bend.evaluate(width.madd(3.0, 0.5));
         assert!(peak.y() > 0.5, "width {width}: peak {peak:?}");
         let [a, b] = [Point3::new(0.0, 0.0, 0.0), Point3::new(8.0, 0.0, 0.0)]
             .map(|p| topo.add_vertex(Vertex::new(p, 1e-7)));

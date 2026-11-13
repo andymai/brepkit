@@ -5,6 +5,7 @@
 //! the 3D curve, projects via `surface.project_point()`, unwraps periodicity,
 //! and fits a [`NurbsCurve2D`] (or a `Line2D` if collinear in UV).
 
+use brepkit_math::madd::Madd;
 use std::f64::consts::TAU;
 
 use brepkit_math::curves2d::{Curve2D, Line2D, NurbsCurve2D};
@@ -372,7 +373,7 @@ pub(super) fn sample_edge_uniform_native(
     for k in 0..n {
         let f = k as f64 / n as f64;
         let f = if forward { f } else { 1.0 - f };
-        out.push(curve.evaluate_with_endpoints(f.mul_add(span, t0), start, end));
+        out.push(curve.evaluate_with_endpoints(f.madd(span, t0), start, end));
     }
 }
 
@@ -424,14 +425,14 @@ fn unwrap_periodic_params(pts: &mut [Point2], u_period: Option<f64>, v_period: O
             let du = pts[i].x() - pts[i - 1].x();
             let k = (du / period).round();
             if k != 0.0 {
-                pts[i] = Point2::new(period.mul_add(-k, pts[i].x()), pts[i].y());
+                pts[i] = Point2::new(period.madd(-k, pts[i].x()), pts[i].y());
             }
         }
         if let Some(period) = v_period {
             let dv = pts[i].y() - pts[i - 1].y();
             let k = (dv / period).round();
             if k != 0.0 {
-                pts[i] = Point2::new(pts[i].x(), period.mul_add(-k, pts[i].y()));
+                pts[i] = Point2::new(pts[i].x(), period.madd(-k, pts[i].y()));
             }
         }
     }

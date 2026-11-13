@@ -8,6 +8,7 @@
 //! wrappers over pre-extracted face data.
 
 use super::types::{FaceData, FaceFragment};
+use brepkit_math::madd::Madd;
 
 use brepkit_algo::FaceClass;
 use brepkit_math::aabb::Aabb3;
@@ -180,9 +181,9 @@ pub(super) fn classify_point(
 #[inline]
 fn point_along_line(pt: &Point3, dir: &Vec3, t: f64) -> Point3 {
     Point3::new(
-        dir.x().mul_add(t, pt.x()),
-        dir.y().mul_add(t, pt.y()),
-        dir.z().mul_add(t, pt.z()),
+        dir.x().madd(t, pt.x()),
+        dir.y().madd(t, pt.y()),
+        dir.z().madd(t, pt.z()),
     )
 }
 
@@ -254,18 +255,15 @@ fn multiray_classify(
                 let dot = axis.dot(normal);
                 let cross = axis.cross(normal);
                 Vec3::new(
-                    normal.x().mul_add(
-                        cos_a,
-                        cross.x().mul_add(sin_a, axis.x() * dot * (1.0 - cos_a)),
-                    ),
-                    normal.y().mul_add(
-                        cos_a,
-                        cross.y().mul_add(sin_a, axis.y() * dot * (1.0 - cos_a)),
-                    ),
-                    normal.z().mul_add(
-                        cos_a,
-                        cross.z().mul_add(sin_a, axis.z() * dot * (1.0 - cos_a)),
-                    ),
+                    normal
+                        .x()
+                        .madd(cos_a, cross.x().madd(sin_a, axis.x() * dot * (1.0 - cos_a))),
+                    normal
+                        .y()
+                        .madd(cos_a, cross.y().madd(sin_a, axis.y() * dot * (1.0 - cos_a))),
+                    normal
+                        .z()
+                        .madd(cos_a, cross.z().madd(sin_a, axis.z() * dot * (1.0 - cos_a))),
                 )
             };
             // cos(55°) ≈ 0.574, sin(55°) ≈ 0.819

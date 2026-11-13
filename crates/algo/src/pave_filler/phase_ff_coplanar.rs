@@ -7,6 +7,7 @@
 //! to the other face's region.
 
 use brepkit_math::aabb::Aabb3;
+use brepkit_math::madd::Madd;
 use brepkit_math::tolerance::Tolerance;
 use brepkit_math::vec::{Point2, Point3, Vec3};
 use brepkit_topology::Topology;
@@ -422,8 +423,8 @@ fn arc_point(arc: &Arc2, s: f64) -> Point2 {
         arc.a0 - s
     };
     Point2::new(
-        arc.radius.mul_add(phi.cos(), arc.center.x()),
-        arc.radius.mul_add(phi.sin(), arc.center.y()),
+        arc.radius.madd(phi.cos(), arc.center.x()),
+        arc.radius.madd(phi.sin(), arc.center.y()),
     )
 }
 
@@ -448,9 +449,9 @@ fn arc_offset_of(arc: &Arc2, phi: f64, ang_tol: f64) -> Option<f64> {
 
 fn lerp3(a: Point3, b: Point3, t: f64) -> Point3 {
     Point3::new(
-        (b.x() - a.x()).mul_add(t, a.x()),
-        (b.y() - a.y()).mul_add(t, a.y()),
-        (b.z() - a.z()).mul_add(t, a.z()),
+        (b.x() - a.x()).madd(t, a.x()),
+        (b.y() - a.y()).madd(t, a.y()),
+        (b.z() - a.z()).madd(t, a.z()),
     )
 }
 
@@ -522,7 +523,7 @@ fn face_region_2d(
                     let (t0, t1) = edge.curve().domain_with_endpoints(v_start, v_end);
                     let mut samples: Vec<Point2> = (1..POLY_SAMPLES)
                         .map(|k| {
-                            let t = (t1 - t0).mul_add(k as f64 / POLY_SAMPLES as f64, t0);
+                            let t = (t1 - t0).madd(k as f64 / POLY_SAMPLES as f64, t0);
                             frame.project(edge.curve().evaluate_with_endpoints(t, v_start, v_end))
                         })
                         .collect();
@@ -566,10 +567,7 @@ fn inside_region(pt: Point2, region: &Region2, tol: f64) -> bool {
     // one is clear of every vertex and tangency.
     for k in 0..16 {
         let ang = 0.3_f64 + 0.71 * f64::from(k);
-        let end = Point2::new(
-            reach.mul_add(ang.cos(), pt.x()),
-            reach.mul_add(ang.sin(), pt.y()),
-        );
+        let end = Point2::new(reach.madd(ang.cos(), pt.x()), reach.madd(ang.sin(), pt.y()));
         if let Some(n) = ray_crossings(pt, end, region, tol) {
             return n % 2 == 1;
         }
@@ -847,7 +845,7 @@ fn seg_circle(a: Point2, b: Point2, center: Point2, radius: f64, tol: f64) -> Ve
     let fx = a.x() - center.x();
     let fy = a.y() - center.y();
     let t_foot = -(fx * dx + fy * dy) / qa;
-    let foot = Point2::new(dx.mul_add(t_foot, a.x()), dy.mul_add(t_foot, a.y()));
+    let foot = Point2::new(dx.madd(t_foot, a.x()), dy.madd(t_foot, a.y()));
     let h = (foot.x() - center.x()).hypot(foot.y() - center.y());
     if h > radius + tol {
         return Vec::new();
@@ -864,7 +862,7 @@ fn seg_circle(a: Point2, b: Point2, center: Point2, radius: f64, tol: f64) -> Ve
         .filter(|t| (-eps_t..=1.0 + eps_t).contains(t))
         .map(|t| {
             let t = t.clamp(0.0, 1.0);
-            (t, Point2::new(dx.mul_add(t, a.x()), dy.mul_add(t, a.y())))
+            (t, Point2::new(dx.madd(t, a.x()), dy.madd(t, a.y())))
         })
         .collect()
 }
@@ -880,12 +878,12 @@ fn circle_circle(c1: Point2, r1: f64, c2: Point2, r2: f64, tol: f64) -> Vec<Poin
     }
     let a = (r1 * r1 - r2 * r2 + d * d) / (2.0 * d);
     let (ex, ey) = (dx / d, dy / d);
-    let mx = ex.mul_add(a, c1.x());
-    let my = ey.mul_add(a, c1.y());
+    let mx = ex.madd(a, c1.x());
+    let my = ey.madd(a, c1.y());
     if d >= r1 + r2 - tol || d <= (r1 - r2).abs() + tol {
         return vec![Point2::new(mx, my)];
     }
-    let h = r1.mul_add(r1, -(a * a)).max(0.0).sqrt();
+    let h = r1.madd(r1, -(a * a)).max(0.0).sqrt();
     vec![
         Point2::new(mx - h * ey, my + h * ex),
         Point2::new(mx + h * ey, my - h * ex),
@@ -964,7 +962,7 @@ fn clip_to_region(
                     continue;
                 }
                 let tm = 0.5 * (ta + tb);
-                let mid = Point2::new(d.x().mul_add(tm, a.x()), d.y().mul_add(tm, a.y()));
+                let mid = Point2::new(d.x().madd(tm, a.x()), d.y().madd(tm, a.y()));
                 if on_boundary(mid, &target.edges, tol) || !inside_region(mid, target, tol) {
                     continue;
                 }
@@ -999,8 +997,8 @@ fn clip_to_region(
                 let f = s - k as f64;
                 let (c, d) = (poly[k], poly[k + 1]);
                 Point2::new(
-                    (d.x() - c.x()).mul_add(f, c.x()),
-                    (d.y() - c.y()).mul_add(f, c.y()),
+                    (d.x() - c.x()).madd(f, c.x()),
+                    (d.y() - c.y()).madd(f, c.y()),
                 )
             };
             let dist = |s0: f64, s1: f64| {
@@ -1151,7 +1149,7 @@ fn create_arc_section_edges(
         let t = if k == n_sub {
             t1
         } else {
-            span.mul_add(k as f64 / n_sub as f64, t0)
+            span.madd(k as f64 / n_sub as f64, t0)
         };
         let p = if k == n_sub { p1 } else { circle.evaluate(t) };
         create_arc_section_edge(
@@ -1197,7 +1195,7 @@ fn create_arc_section_edge(
 
     let n: usize = 16;
     let bbox = Aabb3::from_points(
-        (0..=n).map(|k| circle.evaluate((t_e - t_s).mul_add(k as f64 / n as f64, t_s))),
+        (0..=n).map(|k| circle.evaluate((t_e - t_s).madd(k as f64 / n as f64, t_s))),
     );
     let curve_index = arena.curves.len();
     arena.curves.push(IntersectionCurveDS {

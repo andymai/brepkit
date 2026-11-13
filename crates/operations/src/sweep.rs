@@ -5,6 +5,7 @@
 //! point. Uses rotation-minimizing frames (double-reflection method) to avoid
 //! Frenet-frame singularities on straight segments and inflection points.
 
+use brepkit_math::madd::Madd;
 use brepkit_math::mat::Mat4;
 use brepkit_math::nurbs::curve::NurbsCurve;
 use brepkit_math::nurbs::surface::NurbsSurface;
@@ -76,7 +77,7 @@ fn frame_params(path: &NurbsCurve, num_segments: usize, is_closed: bool) -> Vec<
     for w in knots.windows(2) {
         let width = w[1] - w[0];
         if width > 0.0 && width < step {
-            params.extend((0..=4).map(|j| width.mul_add(f64::from(j) / 4.0, w[0])));
+            params.extend((0..=4).map(|j| width.madd(f64::from(j) / 4.0, w[0])));
         }
     }
     // Only samples at one point merge: a span narrow in parameter can still
@@ -259,7 +260,7 @@ pub(crate) fn region_centroid(
             }
             Piece::Curve(c, a, b) => {
                 for k in 0..=16 {
-                    let t = (b - a).mul_add(f64::from(k) / 16.0, *a);
+                    let t = (b - a).madd(f64::from(k) / 16.0, *a);
                     size = size.max((c.evaluate(t) - origin).length());
                 }
             }
@@ -280,7 +281,7 @@ pub(crate) fn region_centroid(
         let (half, mid) = (0.5 * (b - a), 0.5 * (a + b));
         let mut acc = [0.0_f64; 3];
         for gp in rule {
-            let d = curve.derivatives(half.mul_add(gp.x, mid), 1);
+            let d = curve.derivatives(half.madd(gp.x, mid), 1);
             let (x, y) = plane(Point3::new(d[0].x(), d[0].y(), d[0].z()));
             let (dx, dy) = (d[1].dot(r), d[1].dot(u));
             let w = half * gp.w;
@@ -298,8 +299,8 @@ pub(crate) fn region_centroid(
                 Piece::Line(from, to) => {
                     let ((ax, ay), (bx, by)) = (plane(*from), plane(*to));
                     acc[0] += 0.5 * (ax + bx) * (by - ay);
-                    acc[1] += (by - ay) * ax.mul_add(ax, ax.mul_add(bx, bx * bx)) / 6.0;
-                    acc[2] -= (bx - ax) * ay.mul_add(ay, ay.mul_add(by, by * by)) / 6.0;
+                    acc[1] += (by - ay) * ax.madd(ax, ax.madd(bx, bx * bx)) / 6.0;
+                    acc[2] -= (bx - ax) * ay.madd(ay, ay.madd(by, by * by)) / 6.0;
                 }
                 Piece::Curve(curve, a0, b0) => {
                     let mut stack = vec![(*a0, *b0, over(curve, *a0, *b0), 0_u32)];
@@ -331,7 +332,7 @@ pub(crate) fn region_centroid(
     }
     // The plane the exact sweep reads a profile in: within ten linear
     // tolerances and 1e-9 of its reach.
-    if stray.get() > 10.0f64.mul_add(Tolerance::new().linear, 1e-9 * size)
+    if stray.get() > 10.0f64.madd(Tolerance::new().linear, 1e-9 * size)
         || !(total[0].abs() > 0.0 && total.iter().all(|x| x.is_finite()))
     {
         return Ok(None);
@@ -2906,7 +2907,7 @@ pub fn sweep_along_edges(
                         if k == last && i == 8 {
                             continue;
                         }
-                        along.push(curve.evaluate((w[1] - w[0]).mul_add(f64::from(i) / 8.0, w[0])));
+                        along.push(curve.evaluate((w[1] - w[0]).madd(f64::from(i) / 8.0, w[0])));
                     }
                 }
             }

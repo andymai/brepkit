@@ -3,6 +3,8 @@
 //! Free functions extracted from curve/surface types so both can share them.
 //! Algorithm numbers refer to Piegl & Tiller, *The NURBS Book*.
 
+use crate::madd::Madd;
+
 /// Maximum degree that uses stack-allocated temporaries in basis functions.
 ///
 /// CAD practice uses at most degree 7 (cubic and quartic are by far the most
@@ -132,7 +134,7 @@ pub fn basis_funs_into(span: usize, u: f64, degree: usize, knots: &[f64], out: &
         let mut saved = 0.0;
         for r in 0..j {
             let temp = out[r] / (right[r + 1] + left[j - r]);
-            out[r] = right[r + 1].mul_add(temp, saved);
+            out[r] = right[r + 1].madd(temp, saved);
             saved = left[j - r] * temp;
         }
         out[j] = saved;
@@ -195,7 +197,7 @@ fn first_ders_basis_funs_into(span: usize, u: f64, p: usize, knots: &[f64], out:
         for r in 0..j {
             ndu[j * stride + r] = right[r + 1] + left[j - r];
             let temp = ndu[r * stride + j - 1] / ndu[j * stride + r];
-            ndu[r * stride + j] = right[r + 1].mul_add(temp, saved);
+            ndu[r * stride + j] = right[r + 1].madd(temp, saved);
             saved = left[j - r] * temp;
         }
         ndu[j * stride + j] = saved;
@@ -275,7 +277,7 @@ fn general_ders_basis_funs_into(
             ndu[j * stride + r] = right[r + 1] + left[j - r];
             let temp = ndu[r * stride + j - 1] / ndu[j * stride + r];
             // Upper triangle: ndu[r][j]
-            ndu[r * stride + j] = right[r + 1].mul_add(temp, saved);
+            ndu[r * stride + j] = right[r + 1].madd(temp, saved);
             saved = left[j - r] * temp;
         }
         ndu[j * stride + j] = saved;
@@ -409,7 +411,7 @@ mod tests {
             let mut knots = vec![0.0; p + 1];
             for i in 1..n - p {
                 let t = i as f64 / (n - p) as f64;
-                knots.push(t * t.mul_add(0.4, 0.6));
+                knots.push(t * t.madd(0.4, 0.6));
             }
             knots.extend(vec![1.0; p + 1]);
             for i in 0..=200 {
