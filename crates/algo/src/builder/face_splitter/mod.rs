@@ -1780,6 +1780,7 @@ fn split_periodic_face_by_winding_chain(
         q_bot,
         q_top,
         lower_tan: ref_tan,
+        ..
     } = special_cases::band_stack(surface, boundary_edges, close_tol)?;
     let wrap_pi = |d: f64| -> f64 { (d + half).rem_euclid(period) - half };
     let u_opposite = (seam_u + half - u_start).rem_euclid(period) + u_start;
