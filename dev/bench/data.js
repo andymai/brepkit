@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794505221808,
+  "lastUpdate": 1794538017235,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -67877,6 +67877,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 23082789,
             "range": "± 60828",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "3de6c917db754d8ea514bdc57914ae8c7cdfc60d",
+          "message": "fix(operations): loft profiles with spline edges along their curves (#2399)\n\n## What does this PR do?\n\nToday `loft` and `loft_smooth` read only the vertices of a profile whose\nedges are splines. A profile of two spline edges (an aerofoil section:\nan upper and a lower spline) fails with `loft profiles must have at\nleast 3 vertices`. A profile of four spline edges lofts, but each edge\nbecomes the chord between its vertices, so the solid has the wrong\nshape.\n\nAfter this PR, planar profiles with a spline or ellipse edge loft along\nthe curves of their edges. `loft_smooth` also does this for profiles\nwith arcs. The skin that `loft_with_options` already builds for rails\nand end conditions does the work. A new `ruled` mode gives that skin\ndegree one across the profiles, so `loft` gets a face from each profile\nto the next.\n\nThe polygon path stays as the fallback when the skin refuses the\nprofiles. Profiles on curved faces, and lines and arcs that `loft` does\nnot pair, keep their current paths.\n\nCloses #2396.\n\n## How I checked it\n\n- Four new tests in `crates/operations/src/loft/tests.rs`. Each one\nstates the face types and runs `validate_solid`. Three of them compare\nthe volume with a closed form: a prism, a frustum, and two frusta on the\nsection's area.\n- `cargo test -p brepkit-operations -j 2` passes.\n- `cargo clippy -p brepkit-operations --all-targets -- -D warnings`\npasses.\n- Through the brepjs adapter with a local wasm build, the lofts in #2396\nreturn volume 6,906 (two edges) and 6,909 (four edges). The default\nbrepjs kernel returns 6,908 and 6,907.\n- The `turbofan-engine` playground example in brepjs, which lofts about\n1,800 such blades, now builds on this kernel: 1,904 solids, all valid.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes `loft` and `loft_smooth` so planar profiles with spline or ellipse\nedges loft along the edges' curves instead of the chords between their\nvertices.\n\nPreviously, a profile of two spline edges (an aerofoil section) failed\nwith \"loft profiles must have at least 3 vertices\", and a profile of\nfour lofted through the wrong shape. The skin `loft_with_options` builds\nfor rails now does the work, with a new `ruled` mode that runs degree\none across the profiles so `loft` gets straight faces from profile to\nprofile. A ruled loft's faces end at every profile, creased there or\nnot, and a lens of two curved edges also takes the skin path. The path\ncheck reads a spline as a line or circle only to the linear tolerance,\nso a spline a loose reading would call a line is still lofted along its\ncurve. The polygon path stays the fallback when the skin refuses the\nprofiles; profiles on curved faces and unmatched lines and arcs keep\ntheir current paths.\n\nCloses #2396.\n\n<sup>Written for commit 522418cdfa2db813b128154aa3b7f88b95b51aa3.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2399?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2399?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2399&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-11-13T02:43:15Z",
+          "tree_id": "f3ce9b83a9f31b98e6bed6d9ccc0a6010f60500c",
+          "url": "https://github.com/andymai/brepkit/commit/3de6c917db754d8ea514bdc57914ae8c7cdfc60d"
+        },
+        "date": 1794538010799,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1050159,
+            "range": "± 9450",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1136784,
+            "range": "± 4014",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12116,
+            "range": "± 69",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 917763,
+            "range": "± 24878",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 27448739,
+            "range": "± 111611",
             "unit": "ns/iter"
           }
         ]
