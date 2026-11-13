@@ -419,10 +419,15 @@ where
 /// A `(u, v)` loop's enclosed area, by the shoelace sum.
 fn uv_area(loop_uv: &[(f64, f64)]) -> f64 {
     let n = loop_uv.len();
+    // Taken from the first point: far from the origin the products of raw
+    // parameters round away a small loop's whole area.
+    let Some(&(u0, v0)) = loop_uv.first() else {
+        return 0.0;
+    };
     (0..n)
         .map(|i| {
             let (a, b) = (loop_uv[i], loop_uv[(i + 1) % n]);
-            a.0.madd(b.1, -(b.0 * a.1))
+            (a.0 - u0).madd(b.1 - v0, -((b.0 - u0) * (a.1 - v0)))
         })
         .sum::<f64>()
         .abs()
@@ -1489,5 +1494,17 @@ mod tests {
         let wire = topo.add_wire(Wire::new(edges, true).unwrap());
         let face = topo.add_face(Face::new(wire, vec![], FaceSurface::Nurbs(surface)));
         (topo, face)
+    }
+
+    #[test]
+    fn a_small_loop_far_from_the_parameter_origin_keeps_its_area() {
+        let far = 1e8;
+        let square = [
+            (far, far),
+            (far + 1.0, far),
+            (far + 1.0, far + 1.0),
+            (far, far + 1.0),
+        ];
+        assert!((uv_area(&square) - 1.0).abs() < 1e-12);
     }
 }

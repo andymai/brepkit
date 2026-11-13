@@ -187,10 +187,13 @@ pub fn signed_area(polygon: &[Point2]) -> f64 {
     if n < 3 {
         return 0.0;
     }
+    // Taken from the first vertex: far from the origin the products of raw
+    // coordinates round away a small polygon's whole area.
+    let origin = polygon[0];
     let mut sum = 0.0;
     for i in 0..n {
-        let p = polygon[i];
-        let q = polygon[(i + 1) % n];
+        let p = polygon[i] - origin;
+        let q = polygon[(i + 1) % n] - origin;
         sum += p.x().madd(q.y(), -(q.x() * p.y()));
     }
     sum * 0.5
@@ -1166,5 +1169,19 @@ mod tests {
         let i = polygon_boolean(&square, &diamond, BooleanOp::Intersection, TOL);
         assert!(!u.is_empty() && !i.is_empty());
         assert_area_close(u.area() + i.area(), area_sq + area_di, 1e-6);
+    }
+
+    #[test]
+    fn a_small_polygon_far_from_the_origin_keeps_its_area() {
+        let far = 1e8;
+        let triangle = [
+            Point2::new(far, far),
+            Point2::new(far + 1.0, far),
+            Point2::new(far, far + 1.0),
+        ];
+        assert_area_close(signed_area(&triangle), 0.5, 1e-12);
+        let mut clockwise = triangle;
+        clockwise.reverse();
+        assert_area_close(signed_area(&clockwise), -0.5, 1e-12);
     }
 }
