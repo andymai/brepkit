@@ -1,0 +1,23 @@
+crates/io/tests/spline_can_cut_inmem.rs
+  s_385aefe07faf61::t_98bc6d75d1c899 101-122,130-137
+  s_385aefe07faf61::t_d38d4a35d2bf78 123-129
+  s_385aefe07faf61::t_32798f8733b85e 138
+crates/operations/src/boolean/mod.rs
+  s_385aefe07faf61::t_d38d4a35d2bf78 1472-1487,3399-3410,3412-3417,3428-3435,3442
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d39265017c92945667a2708a027ef4cee89c7e07",
+  "prompts": {},
+  "sessions": {
+    "s_385aefe07faf61": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7ba532a8-609c-4534-9316-9e8d54346633",
+        "model": "claude-fable-5-2"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
