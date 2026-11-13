@@ -98,6 +98,44 @@ fn a_tool_inside_the_liner_leaves_a_cavity() {
     hollow(&topo, liner);
 }
 
+/// The cut that records where each face came from takes the same route: the
+/// result's faces are the operands' own, one for one.
+#[test]
+fn the_cut_with_face_history_copies_every_face_once() {
+    let mut topo = Topology::new();
+    let blank = load(&mut topo, "spline_can_outer.bin");
+    let tool = load(&mut topo, "spline_can_inner.bin");
+    let inputs: Vec<usize> = [blank, tool]
+        .into_iter()
+        .flat_map(|s| brepkit_topology::explorer::solid_faces(&topo, s).unwrap())
+        .map(brepkit_topology::arena::Id::index)
+        .collect();
+
+    let (liner, history) =
+        boolean::boolean_with_evolution(&mut topo, BooleanOp::Cut, blank, tool).unwrap();
+    hollow(&topo, liner);
+
+    assert!(history.deleted.is_empty(), "{:?}", history.deleted);
+    let mut images: Vec<usize> = Vec::new();
+    for input in &inputs {
+        let image = history.modified.get(input).expect("an image for each face");
+        assert_eq!(image.len(), 1, "face {input}");
+        let from = topo.face(topo.face_id_from_index(*input).unwrap()).unwrap();
+        let to = topo
+            .face(topo.face_id_from_index(image[0]).unwrap())
+            .unwrap();
+        assert_eq!(
+            format!("{:?}", from.surface()),
+            format!("{:?}", to.surface()),
+            "face {input}"
+        );
+        images.push(image[0]);
+    }
+    images.sort_unstable();
+    images.dedup();
+    assert_eq!(images.len(), 32);
+}
+
 #[test]
 fn the_engine_finds_the_same_cavity_with_no_section_to_find() {
     let mut topo = Topology::new();

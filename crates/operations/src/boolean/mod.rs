@@ -1469,6 +1469,22 @@ pub fn boolean_with_evolution(
 ) -> Result<(SolidId, crate::evolution::EvolutionMap), crate::OperationsError> {
     use brepkit_topology::explorer::solid_faces;
 
+    // A tool of NURBS faces wholly inside the blank: each face of the result
+    // is a copy of one input face, so the provenance is exact with no engine
+    // run.
+    if op == BooleanOp::Cut
+        && a != b
+        && nurbs_tool_strictly_inside(topo, a, b, brepkit_math::tolerance::Tolerance::new())
+        && let Ok((result, origins)) = build_contained_cut_hollow_with_origins(topo, a, b)
+        && validate_boolean_result(topo, result).is_ok()
+    {
+        let mut evo = crate::evolution::EvolutionMap::new();
+        for (input, output) in origins {
+            evo.add_modified(input, output);
+        }
+        return Ok((result, evo));
+    }
+
     // Faithful path: the GFA reports each result face's true input source.
     // Identical/contained operand pairs must NOT take it: those are the
     // fully-coincident-boundary configurations `boolean` short-circuits
@@ -3380,7 +3396,25 @@ fn build_contained_cut_hollow(
     blank: SolidId,
     tool: SolidId,
 ) -> Result<SolidId, crate::OperationsError> {
+    build_contained_cut_hollow_with_origins(topo, blank, tool).map(|(result, _)| result)
+}
+
+/// [`build_contained_cut_hollow`], with the `(input, result)` face index pair
+/// of every face it copies.
+fn build_contained_cut_hollow_with_origins(
+    topo: &mut Topology,
+    blank: SolidId,
+    tool: SolidId,
+) -> Result<(SolidId, Vec<(usize, usize)>), crate::OperationsError> {
+    use brepkit_topology::explorer::solid_faces;
+
     let result = crate::copy::copy_solid(topo, blank)?;
+    // `copy_solid` keeps the order of shells and of the faces in each.
+    let mut origins: Vec<(usize, usize)> = solid_faces(topo, blank)?
+        .into_iter()
+        .zip(solid_faces(topo, result)?)
+        .map(|(from, to)| (from.index(), to.index()))
+        .collect();
 
     // Deep-copy the tool as a whole solid so the cavity shell shares edges and
     // vertices between adjacent faces (a per-face copy would duplicate shared
@@ -3391,13 +3425,21 @@ fn build_contained_cut_hollow(
     let tool_copy = crate::copy::copy_solid(topo, tool)?;
     let cavity_shell = topo.solid(tool_copy)?.outer_shell();
     let cavity_faces = topo.shell(cavity_shell)?.faces().to_vec();
+    let tool_shell = topo.solid(tool)?.outer_shell();
+    origins.extend(
+        topo.shell(tool_shell)?
+            .faces()
+            .iter()
+            .zip(&cavity_faces)
+            .map(|(from, to)| (from.index(), to.index())),
+    );
     for fid in cavity_faces {
         let face = topo.face_mut(fid)?;
         let flipped = !face.is_reversed();
         face.set_reversed(flipped);
     }
     topo.solid_mut(result)?.add_inner_shell(cavity_shell);
-    Ok(result)
+    Ok((result, origins))
 }
 
 /// Best-effort mesh boolean fallback for high face-count solids.
