@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794573814743,
+  "lastUpdate": 1794577764739,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -68363,6 +68363,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 19387525,
             "range": "± 60292",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "66281732+Robokan@users.noreply.github.com",
+            "name": "Eric Vaughan",
+            "username": "Robokan"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "a350cdb7d18f9b65f585c855db9eaeb721f18ddd",
+          "message": "fix(blend): split a face pinched along a contact over its own edge (#2373)\n\n## What\n\nA round whose width lands exactly on a step in the middle of its side\nface\nleft that face pinched shut along a strip of no width. Take a U-shaped\npart:\ntwo uprights joined by a floor exactly a radius thick, with its long\nbottom\nedges rounded. On each side face, the round's contact runs along the\nfloor's\ntop edge, and that edge lies wholly inside the contact. The side face's\nwire\nthen ran along that edge and, further on, back along the contact over\nit.\nThe result was two uprights joined by a strip of no width. Counting\nedges,\nthe shell is closed. In the mesh it is open: the side face's mesh skips\nthe\nstrip, while the floor's top face meshes along the edge.\n\n`split_pinched_faces` handles this after `fold_spoke_spurs`:\n\n- It splits the contact at the step edge's two ends, and the round takes\nthe\nstep's edge in place of the middle piece, so the round meets the floor's\n  top face along that edge.\n- The side face's wire now runs the step's edge both ways. It is cut\nthere\n  into its two regions, and each region becomes a face of its own.\n\n`fold_spoke_spurs` already folds this spur when the short edge sits at\none end\nof the long one. This change handles the short edge lying inside it.\n\n## Test\n\n`crates/operations/tests/fillet_floor_one_radius_thick.rs` builds the U\npart\nwith a floor exactly a radius thick and rounds its bottom edges, both\nupright\nand turned. It checks that the result:\n\n- is valid;\n- has 14 faces;\n- has a watertight mesh at 0.5 and 0.05;\n- has the closed-form volume to 1e-9.\n\nWithout the change it fails on the face count. With the round thinner\nthan\nthe floor, the side faces stay whole: a guard.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes the fillet builder leaving a side face pinched shut along a\nno-width strip when a round lands exactly on a step in the middle of\nthat face. The shell was closed by edge count but open in the mesh; the\nface now splits into its two regions.\n\n**What changed**\n\n- When the round's width equals a step in the side face (e.g. a U-shaped\npart with a floor exactly a radius thick), the contact ran along the\nstep's edge entirely inside it, leaving a no-width strip that the mesh\nskipped.\n- `split_pinched_faces` now splits the contact at the step edge's ends,\ntakes the step edge in place of the middle piece, and cuts the side\nface's wire there into two faces.\n- This complements `fold_spoke_spurs`, which already folded the spur\nwhen the short edge sat at the end of the long one but not inside it.\n\n**Tests**\n\n- New test rounds the bottom edges of a U-shaped part with a floor\nexactly a radius thick and checks validity, 14 faces, a watertight mesh,\nand the closed-form volume.\n- A guard asserts the side faces stay whole when the round is thinner\nthan the floor.\n\n<sup>Written for commit 8f5a6e397c3f9b2c4a5a657fc7fbcec689526c59.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2373?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-11-13T05:46:17-08:00",
+          "tree_id": "a115613fcf9174e35f69920fb492856573a0bd1e",
+          "url": "https://github.com/andymai/brepkit/commit/a350cdb7d18f9b65f585c855db9eaeb721f18ddd"
+        },
+        "date": 1794577757498,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 760722,
+            "range": "± 14861",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 808017,
+            "range": "± 20532",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10139,
+            "range": "± 25",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 452530,
+            "range": "± 917",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 19406906,
+            "range": "± 81108",
             "unit": "ns/iter"
           }
         ]
