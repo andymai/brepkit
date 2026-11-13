@@ -133,9 +133,11 @@ mod tests {
             (exact - volume).abs() < 1e-6 * volume,
             "{what}: volume {exact}, expected {volume}"
         );
-        let mesh = tessellate_solid(topo, solid, 0.01).unwrap();
+        // The thinnest profile here is a 20 degree sliver 0.076 high, so the
+        // mesh that holds its volume to 5e-3 stands much closer than that.
+        let mesh = tessellate_solid(topo, solid, 0.001).unwrap();
         assert!(is_watertight(&mesh), "{what}: open mesh");
-        let meshed = oriented_solid_volume(topo, solid, 0.01).unwrap();
+        let meshed = oriented_solid_volume(topo, solid, 0.001).unwrap();
         assert!(
             (meshed - volume).abs() < 5e-3 * volume,
             "{what}: meshed volume {meshed}, expected {volume}"

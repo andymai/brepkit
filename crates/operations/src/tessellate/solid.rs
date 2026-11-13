@@ -291,6 +291,139 @@ pub(super) struct CoreMesh {
     pub(super) unmeshed: Vec<FaceId>,
 }
 
+/// Gives two straight edges that overlap in one wire the same sample points
+/// along their shared stretch.
+///
+/// A wire can run out along a short straight edge and back along a longer one
+/// that lies over it (a round ending part way along a wall's edge leaves such
+/// a pair on the wall beside it). The face with that wire meshes nothing in
+/// the doubled-back stretch, and the faces beyond the two edges meet along
+/// it: one carries the short edge's samples and the other the long edge's.
+/// Each edge is sampled by its own shape, so without this the two faces take
+/// different points on one line and the mesh opens between them.
+fn share_doubled_back_samples(
+    topo: &Topology,
+    faces: &[FaceId],
+    edge_points: &mut DetHashMap<usize, Vec<Point3>>,
+) -> Result<(), crate::OperationsError> {
+    const ON_LINE: f64 = 1e-6;
+    const MAX_ROUNDS: usize = 16;
+    // Whether every sample lies on the chord between the first and the last.
+    let straight = |points: &[Point3]| {
+        let (Some(&a), Some(&b)) = (points.first(), points.last()) else {
+            return false;
+        };
+        let chord = b - a;
+        let length2 = chord.dot(chord);
+        length2 > 1e-18
+            && points.iter().all(|&p| {
+                let along = ((p - a).dot(chord) / length2).clamp(0.0, 1.0);
+                (a + chord * along - p).length() <= ON_LINE
+            })
+    };
+    // `points` with each of `more` that lies strictly inside its chord, in
+    // the order `points` runs.
+    let merged = |points: &[Point3], more: &[Point3]| -> Option<Vec<Point3>> {
+        let (a, b) = (*points.first()?, *points.last()?);
+        let chord = b - a;
+        let length2 = chord.dot(chord);
+        let place = |p: Point3| (p - a).dot(chord) / length2;
+        let apart = ON_LINE / length2.sqrt();
+        let mut placed: Vec<(f64, Point3)> = points.iter().map(|&p| (place(p), p)).collect();
+        let before = placed.len();
+        for &p in more {
+            let t = place(p);
+            if t <= apart || t >= 1.0 - apart || (a + chord * t - p).length() > ON_LINE {
+                continue;
+            }
+            if placed.iter().all(|&(s, _)| (s - t).abs() > apart) {
+                placed.push((t, p));
+            }
+        }
+        if placed.len() == before {
+            return None;
+        }
+        placed.sort_by(|x, y| x.0.total_cmp(&y.0));
+        Some(placed.into_iter().map(|(_, p)| p).collect())
+    };
+    // The overlapping pairs, found once: sharing changes no edge's line.
+    let mut pairs: Vec<(usize, usize)> = Vec::new();
+    for &face_id in faces {
+        let face = topo.face(face_id)?;
+        for wire_id in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied())
+        {
+            let edges = topo.wire(wire_id)?.edges();
+            let n = edges.len();
+            if n < 3 {
+                continue;
+            }
+            for i in 0..n {
+                let (first, second) = (edges[i], edges[(i + 1) % n]);
+                if first.edge() == second.edge() {
+                    continue;
+                }
+                let (e1, e2) = (topo.edge(first.edge())?, topo.edge(second.edge())?);
+                // The two edges leave their shared vertex `v` for `p` and `q`.
+                let (p, v) = (first.oriented_start(e1), first.oriented_end(e1));
+                let (v2, q) = (second.oriented_start(e2), second.oriented_end(e2));
+                if v != v2 || p == q {
+                    continue;
+                }
+                let (i1, i2) = (first.edge().index(), second.edge().index());
+                let (Some(s1), Some(s2)) = (edge_points.get(&i1), edge_points.get(&i2)) else {
+                    continue;
+                };
+                if !straight(s1) || !straight(s2) {
+                    continue;
+                }
+                let (vp, pp, qp) = (
+                    topo.vertex(v)?.point(),
+                    topo.vertex(p)?.point(),
+                    topo.vertex(q)?.point(),
+                );
+                // One edge doubles back over the other when its far end lies
+                // on the other between `v` and that one's far end.
+                let inside = |far: Point3, along: Point3| {
+                    let span = along - vp;
+                    let length2 = span.dot(span);
+                    if length2 <= 1e-18 {
+                        return false;
+                    }
+                    let t = (far - vp).dot(span) / length2;
+                    t > 0.0 && t <= 1.0 && (vp + span * t - far).length() <= ON_LINE
+                };
+                if !inside(pp, qp) && !inside(qp, pp) {
+                    continue;
+                }
+                pairs.push((i1, i2));
+            }
+        }
+    }
+    // A point one pair hands to an edge is new to that edge's other pairs,
+    // so the pairs are shared round until none takes a point.
+    for _ in 0..MAX_ROUNDS {
+        let mut changed = false;
+        for &(i1, i2) in &pairs {
+            let (Some(s1), Some(s2)) = (edge_points.get(&i1), edge_points.get(&i2)) else {
+                continue;
+            };
+            let (new1, new2) = (merged(s1, s2), merged(s2, s1));
+            if let Some(points) = new1 {
+                edge_points.insert(i1, points);
+                changed = true;
+            }
+            if let Some(points) = new2 {
+                edge_points.insert(i2, points);
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    Ok(())
+}
+
 /// Core watertight tessellation pipeline.
 ///
 /// When `track_faces` is set, also returns a parallel `tri -> face` array (one
@@ -375,6 +508,7 @@ pub(super) fn tessellate_solid_core(
         map
     };
 
+    share_doubled_back_samples(topo, &all_faces, &mut edge_points)?;
     phase("edge_sampling", &mut phase_t);
     // Synchronize circle edge samples with face grid density so a face's rim
     // points line up with its own analytic grid columns.
