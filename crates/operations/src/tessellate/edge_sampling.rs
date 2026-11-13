@@ -249,6 +249,16 @@ pub(super) fn nurbs_edge_breaks(
             break;
         }
     }
+    // A curved edge keeps its middle however shallow it is: a face between
+    // it and a straight edge, or between two such arcs, has three boundary
+    // points to mesh between.
+    if let [(a, b, _)] = spans[..] {
+        let mid = 0.5 * (a + b);
+        let (pa, pb) = (nurbs.evaluate(a), nurbs.evaluate(b));
+        if off_chord(nurbs.evaluate(mid), pa, pb) > 1e-9 * (1.0 + (pb - pa).length()) {
+            return vec![a, mid, b];
+        }
+    }
     std::iter::once(t0)
         .chain(spans.into_iter().map(|(_, b, _)| b))
         .collect()
@@ -795,5 +805,26 @@ mod tests {
         let (t0, t1) = spline.domain();
         let breaks = nurbs_edge_breaks(&spline, t0, t1, 0.1, 0.0);
         assert!(breaks.len() >= 4, "{breaks:?}");
+    }
+
+    /// An arc shallower than the deflection keeps its middle, so the face
+    /// between it and its chord has three points.
+    #[test]
+    fn a_shallow_arc_keeps_its_middle() {
+        let arc = NurbsCurve::new(
+            2,
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            vec![
+                Point3::new(0.0, 0.0, 0.0),
+                Point3::new(0.5, 0.01, 0.0),
+                Point3::new(1.0, 0.0, 0.0),
+            ],
+            vec![1.0; 3],
+        )
+        .unwrap();
+        assert_eq!(
+            nurbs_edge_breaks(&arc, 0.0, 1.0, 0.01, 0.3),
+            vec![0.0, 0.5, 1.0]
+        );
     }
 }
