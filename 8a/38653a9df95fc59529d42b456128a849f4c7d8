@@ -1,0 +1,30 @@
+crates/operations/src/loft.rs
+  s_385aefe07faf61::t_f12ebcf7240c10 161-165,687-688,690-691,693,706,1917-1921
+  s_385aefe07faf61::t_c5932808c405e0 142,669-677,680-686,689,692,694-705,707-708,1897-1907
+  s_385aefe07faf61::t_da033054f88d51 138-141,678-679
+  s_385aefe07faf61::t_e622313ddc809d 143-150,1895-1896
+  s_385aefe07faf61::t_8ccebc80774f6b 709,1908
+crates/operations/src/loft/network.rs
+  s_385aefe07faf61::t_e622313ddc809d 210-225,254,264,302-307,1748-1749,1760-1764
+  s_385aefe07faf61::t_f12ebcf7240c10 1750
+crates/operations/src/loft/tests.rs
+  s_385aefe07faf61::t_1214d73880caa1 1289-1333,1360,1470
+  s_385aefe07faf61::t_e622313ddc809d 1334-1359,1361-1372,1382-1399,1409-1424,1434-1456,1462-1469
+  s_385aefe07faf61::t_f12ebcf7240c10 1373-1381,1400-1408,1425-1433,1457-1461
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "8a38653a9df95fc59529d42b456128a849f4c7d8",
+  "prompts": {},
+  "sessions": {
+    "s_385aefe07faf61": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7ba532a8-609c-4534-9316-9e8d54346633",
+        "model": "claude-fable-5-2"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
