@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794582194213,
+  "lastUpdate": 1794582386129,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -68525,6 +68525,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24204407,
             "range": "± 84646",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "1b9bd63c8e9dab702011bafdb7042cd2f0f0c530",
+          "message": "fix(blend): a chamfer reaching exactly across a face takes its far edge (#2416)\n\nThis PR carries #2383 by @Robokan onto the current main. The commit is\nthe contributor's, with no change. One merge commit follows it.\n\nThe merge commit resolves one conflict in\n`crates/blend/src/chamfer_builder.rs`. Main gained `run_to_end_planes`\nfrom #2382 at the place where this branch adds `consumed_face_edge`.\nBoth functions stay.\n\n## How I checked it\n\n- `cargo clippy --all-targets -- -D warnings` passes for `brepkit-blend`\nand `brepkit-operations`.\n- `cargo test -p brepkit-blend` passes (176 tests).\n- The chamfer tests of `brepkit-operations` pass (56 tests).\n- Before the merge of #2373 to #2384, I tested the eight branches\ntogether on main. The blend, operations and wasm suites passed (2,600\ntests), and the pose sweep and the truth audit matched main.\n\n## The description from #2383\n\n## What\n\nA blend-engine chamfer whose distance reaches exactly across one of its\nfaces failed brepkit's own validity check. Take a plate's end edge\nchamfered by the plate's thickness: the trim left the end face as its\nfar\nedge plus the contact along it, a face of two vertices and no area.\n\nThe face now goes. When a trim leaves a face as just two straight edges\nwith\nthe same ends, the chamfer adopts the face's far edge as its contact, so\nit\nmeets the neighbour across that edge, and the face is left out of the\nresult. The ends close as before: the side faces lose their triangles,\nand\nthe end face's vertical edges drop out with it.\n\n## Test\n\n`crates/operations/tests/chamfer_consumes_a_side.rs` chamfers both\nbottom\nend edges of a drilled 200 x 69 x 10 plate by 10, and the same plate\nturned\nand moved. The hole sends the chamfer to the blend engine. Each result\nmust\nbe valid and watertight, keep its face count (two end faces go, two\nchamfer\nfaces come), and match the closed-form volume to 1e-6. Without the\nchange,\nvalidation reports both end faces with only 2 vertices.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes a chamfer failure when the chamfer distance reaches exactly across\none of its faces — e.g., an end edge of a plate chamfered by the plate's\nthickness. The trim left the end face as its far edge plus the contact\nalong it, a two-vertex face with no area that failed `brepkit`'s own\nvalidity check. The face is now consumed: the chamfer adopts the face's\nfar edge as its contact and the face is dropped from the result, so the\nchamfer meets the neighbor across that edge.\n\n- Detects when a trim leaves a face as two collinear edges sharing their\nends, extends the contact to the far edge, and removes the consumed\nface.\n- Adds a test chamfering both bottom end edges of a drilled plate by\nexactly its thickness, checking validity, watertightness, face count,\nand closed-form volume.\n\n<sup>Written for commit 2452e2da8a9e76e49b5d5b27cd0cf10229a2e1a5.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2383?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: Eric Vaughan <eric.d.vaughan@gmail.com>\nCo-authored-by: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-11-13T06:59:23-08:00",
+          "tree_id": "dca12df53f641c3114a4c11e0f8c7208f8e71ce4",
+          "url": "https://github.com/andymai/brepkit/commit/1b9bd63c8e9dab702011bafdb7042cd2f0f0c530"
+        },
+        "date": 1794582375862,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 761522,
+            "range": "± 3781",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 816085,
+            "range": "± 42402",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 9274,
+            "range": "± 188",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 478489,
+            "range": "± 4527",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 19139290,
+            "range": "± 44668",
             "unit": "ns/iter"
           }
         ]
