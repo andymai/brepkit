@@ -3162,3 +3162,36 @@ fn a_surface_whose_control_points_clear_the_plane_has_no_section() {
     let curves = intersect_plane_nurbs(&surface, Vec3::new(1.0, 0.0, 0.0), 3.45, 32).unwrap();
     assert!(curves.is_empty());
 }
+
+/// A sheet a million long in `y` and tilted a part in a billion in `x`: the
+/// plane `z = 0` cuts it along a line that keeps `v` to within a part in
+/// 1e9 of its span, yet drifts 8e-4 in `y` from one end to the other. The
+/// curve at one `v` is not that line.
+#[test]
+fn a_section_that_drifts_across_a_stretched_parameter_ends_where_its_chain_does() {
+    let at = |u: f64, v: f64| Point3::new(u, 1e6 * v, 8e-10f64.mul_add(-u, v - 0.25));
+    let sheet = NurbsSurface::new(
+        1,
+        1,
+        vec![0.0, 0.0, 1.0, 1.0],
+        vec![0.0, 0.0, 1.0, 1.0],
+        vec![
+            vec![at(0.0, 0.0), at(0.0, 1.0)],
+            vec![at(1.0, 0.0), at(1.0, 1.0)],
+        ],
+        vec![vec![1.0, 1.0], vec![1.0, 1.0]],
+    )
+    .unwrap();
+    let curves = intersect_plane_nurbs(&sheet, Vec3::new(0.0, 0.0, 1.0), 0.0, 32).unwrap();
+    assert_eq!(curves.len(), 1);
+    let (t0, t1) = curves[0].curve.domain();
+    let ends = [curves[0].curve.evaluate(t0), curves[0].curve.evaluate(t1)];
+    for chain_end in [curves[0].points.first(), curves[0].points.last()] {
+        let p = chain_end.unwrap().point;
+        let gap = ends
+            .iter()
+            .map(|e| (*e - p).length())
+            .fold(f64::MAX, f64::min);
+        assert!(gap < 1e-6, "the curve ends {gap:e} from the chain's end");
+    }
+}

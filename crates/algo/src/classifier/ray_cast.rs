@@ -1862,7 +1862,7 @@ fn nurbs_geom(
         let warm = last.get().and_then(|from| {
             brepkit_math::nurbs::projection::project_point_to_surface_from(surface, p, from, 1e-12)
                 .ok()
-                .filter(|q| q.distance <= near)
+                .filter(|q| q.distance <= 64.0 * f64::EPSILON * size.max(1.0))
         });
         let found = warm.or_else(|| {
             brepkit_math::nurbs::projection::project_point_to_surface(surface, p, 1e-12).ok()

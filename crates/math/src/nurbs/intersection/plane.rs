@@ -576,6 +576,15 @@ fn iso_section(
         (surface.degree_v(), surface.knots_v())
     };
     let curve = NurbsCurve::new(run_degree, run_knots.to_vec(), points, weights).ok()?;
+    // The chain's points held the other parameter only to a part in 1e9 of
+    // its span, which a surface stretched along it turns into a distance:
+    // the curve stands for the chain only where it passes through it.
+    let through_chain = chain
+        .iter()
+        .all(|p| (curve.evaluate(run(p)) - p.point).length() <= FIT_TOLERANCE);
+    if !through_chain {
+        return None;
+    }
     let mut points = chain.to_vec();
     if !rising {
         points.reverse();

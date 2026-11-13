@@ -83,10 +83,10 @@ pub(super) fn nurbs_face_box(
             // foot off the sample sends it to a search of the whole surface.
             let near = last.and_then(|from| {
                 brepkit_math::nurbs::projection::project_point_to_surface_from(
-                    surface, p, from, tol.linear,
+                    surface, p, from, 1e-12,
                 )
                 .ok()
-                .filter(|foot| foot.distance <= tol.linear)
+                .filter(|foot| foot.distance <= crate::classifier::WARM_FOOT)
             });
             let Some(foot) = near.or_else(|| {
                 brepkit_math::nurbs::projection::project_point_to_surface(surface, p, tol.linear)

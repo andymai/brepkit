@@ -32,8 +32,15 @@ pub struct NurbsSurface {
 
 /// A value worked out from a surface on first use. Equal surfaces work out
 /// equal values, so it takes no part in comparing them.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 struct Derived<T>(std::sync::OnceLock<T>);
+
+impl<T> std::fmt::Debug for Derived<T> {
+    // Whether the value is worked out yet says nothing of the surface.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Derived")
+    }
+}
 
 impl<T> Default for Derived<T> {
     fn default() -> Self {
