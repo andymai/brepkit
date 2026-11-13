@@ -32,6 +32,27 @@ pub fn intersect_plane_nurbs(
 ) -> Result<Vec<IntersectionCurve>, MathError> {
     let n = samples.max(10);
 
+    // A surface with positive weights lies in the hull of its control
+    // points: with those all off the plane on one side, so is the surface,
+    // and it neither crosses the plane nor touches it.
+    if surface
+        .weights()
+        .iter()
+        .flatten()
+        .all(|&w| w.is_finite() && w > 0.0)
+    {
+        let (mut lo, mut hi, mut reach) = (f64::INFINITY, f64::NEG_INFINITY, 0.0_f64);
+        for &p in surface.control_points().iter().flatten() {
+            let dist = plane_normal.dot(Vec3::new(p.x(), p.y(), p.z())) - plane_d;
+            (lo, hi) = (lo.min(dist), hi.max(dist));
+            reach = reach.max(plane_terms(plane_normal, plane_d, p));
+        }
+        let clear = 1024.0 * f64::EPSILON * reach;
+        if lo > clear || hi < -clear {
+            return Ok(Vec::new());
+        }
+    }
+
     // Phase 1: Sample the signed distance field on a grid.
     let mut distances = vec![vec![0.0_f64; n]; n];
 
@@ -398,7 +419,17 @@ pub fn intersect_plane_nurbs(
         off: &off,
         settle: &settle,
     };
-    let mut curves = build_curves_from_chains(&ordered_chains, FIT_TOLERANCE, &section)?;
+    // A chain along one of the surface's own parameter curves is that curve:
+    // nothing to fit.
+    let mut curves = Vec::with_capacity(ordered_chains.len());
+    let mut to_fit: Vec<Vec<IntersectionPoint>> = Vec::new();
+    for chain in ordered_chains {
+        match iso_section(surface, plane_normal, plane_d, &chain) {
+            Some(curve) => curves.push(curve),
+            None => to_fit.push(chain),
+        }
+    }
+    curves.extend(build_curves_from_chains(&to_fit, FIT_TOLERANCE, &section)?);
     // A tiny loop runs where the plane all but touches the surface, so a
     // point can lie close to both well off the loop: its stray is how far
     // settling moves it onto the section.
@@ -441,6 +472,125 @@ pub fn intersect_plane_nurbs(
 
 /// How far a fitted section may stray from the plane or the surface.
 const FIT_TOLERANCE: f64 = 1e-7;
+
+/// The surface's curve at one value of a parameter, where `chain` runs along
+/// it from one end of the patch to the other and the plane holds it: a
+/// meridian of a surface of revolution cut through its axis, a ruling of an
+/// extrusion cut along its direction.
+///
+/// The curve's control points are the surface's rows blended at that value.
+/// With positive weights the curve lies in their hull, so control points
+/// within the fit's tolerance of the plane keep the curve as near it, and
+/// the curve is on the surface exactly.
+fn iso_section(
+    surface: &NurbsSurface,
+    normal: Vec3,
+    d: f64,
+    chain: &[IntersectionPoint],
+) -> Option<IntersectionCurve> {
+    let first = chain.first()?.param1;
+    let (u_lo, u_hi) = surface.domain_u();
+    let (v_lo, v_hi) = surface.domain_v();
+    let steady = |at: fn(&IntersectionPoint) -> f64, value: f64, span: f64| {
+        chain.iter().all(|p| (at(p) - value).abs() <= 1e-9 * span)
+    };
+    // `along_u`: the chain holds `v` and runs in `u`.
+    let along_u = if steady(|p| p.param1.1, first.1, v_hi - v_lo) {
+        true
+    } else if steady(|p| p.param1.0, first.0, u_hi - u_lo) {
+        false
+    } else {
+        return None;
+    };
+    let run = |p: &IntersectionPoint| if along_u { p.param1.0 } else { p.param1.1 };
+    let (lo, hi) = if along_u { (u_lo, u_hi) } else { (v_lo, v_hi) };
+    let (from, to) = (run(chain.first()?), run(chain.last()?));
+    let rising = to > from;
+    let ordered = chain.windows(2).all(|w| {
+        if rising {
+            run(&w[1]) > run(&w[0])
+        } else {
+            run(&w[1]) < run(&w[0])
+        }
+    });
+    let reach = 1e-9 * (hi - lo);
+    let spans_patch = (from.min(to) - lo).abs() <= reach && (from.max(to) - hi).abs() <= reach;
+    if chain.len() < 2 || !ordered || !spans_patch {
+        return None;
+    }
+
+    let held = if along_u { first.1 } else { first.0 };
+    let (degree, knots, count) = if along_u {
+        (
+            surface.degree_v(),
+            surface.knots_v(),
+            surface.control_points().first()?.len(),
+        )
+    } else {
+        (
+            surface.degree_u(),
+            surface.knots_u(),
+            surface.control_points().len(),
+        )
+    };
+    let span = crate::nurbs::basis::find_span(count, degree, held, knots);
+    let basis = crate::nurbs::basis::basis_funs(span, held, degree, knots);
+    let rows = if along_u {
+        surface.control_points().len()
+    } else {
+        surface.control_points().first()?.len()
+    };
+    let len = normal.length();
+    let mut points = Vec::with_capacity(rows);
+    let mut weights = Vec::with_capacity(rows);
+    for row in 0..rows {
+        let (mut x, mut y, mut z, mut w) = (0.0, 0.0, 0.0, 0.0);
+        for (k, &b) in basis.iter().enumerate() {
+            let col = span - degree + k;
+            let (i, j) = if along_u { (row, col) } else { (col, row) };
+            let weight = *surface.weights().get(i)?.get(j)?;
+            if !(weight.is_finite() && weight > 0.0) {
+                return None;
+            }
+            let p = *surface.control_points().get(i)?.get(j)?;
+            let bw = b * weight;
+            x += bw * p.x();
+            y += bw * p.y();
+            z += bw * p.z();
+            w += bw;
+        }
+        if !(w.is_finite() && w > 0.0) {
+            return None;
+        }
+        let point = Point3::new(x / w, y / w, z / w);
+        let off = (normal.dot(Vec3::new(point.x(), point.y(), point.z())) - d).abs() / len;
+        if off.is_nan() || off > FIT_TOLERANCE {
+            return None;
+        }
+        points.push(point);
+        weights.push(w);
+    }
+    let (run_degree, run_knots) = if along_u {
+        (surface.degree_u(), surface.knots_u())
+    } else {
+        (surface.degree_v(), surface.knots_v())
+    };
+    let curve = NurbsCurve::new(run_degree, run_knots.to_vec(), points, weights).ok()?;
+    // The chain's points held the other parameter only to a part in 1e9 of
+    // its span, which a surface stretched along it turns into a distance:
+    // the curve stands for the chain only where it passes through it.
+    let through_chain = chain
+        .iter()
+        .all(|p| (curve.evaluate(run(p)) - p.point).length() <= FIT_TOLERANCE);
+    if !through_chain {
+        return None;
+    }
+    let mut points = chain.to_vec();
+    if !rising {
+        points.reverse();
+    }
+    Some(IntersectionCurve { curve, points })
+}
 
 /// Points round each loop [`tiny_loops`] finds.
 const TINY_LOOP_POINTS: usize = 32;
