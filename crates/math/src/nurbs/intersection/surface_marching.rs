@@ -1159,9 +1159,9 @@ pub(super) fn surface_newton_step(
     let r = target - pt;
     let r_vec = Vec3::new(r.x(), r.y(), r.z());
 
-    let derivs = surface.derivatives(u, v, 1);
-    let su = derivs[1][0];
-    let sv = derivs[0][1];
+    let derivs = surface.first_derivatives(u, v);
+    let su = derivs.1;
+    let sv = derivs.2;
 
     // Solve: [su*su, su*sv; su*sv, sv*sv] [du; dv] = [su*r; sv*r]
     let a11 = su.dot(su);

@@ -66,8 +66,8 @@ fn nurbs_integrand(
     v: f64,
     about: Vec3,
 ) -> [f64; 8] {
-    let d = surface.derivatives(u, v, 1);
-    terms(d[0][0], d[1][0].cross(d[0][1]), about)
+    let d = surface.first_derivatives(u, v);
+    terms(d.0, d.1.cross(d.2), about)
 }
 
 /// [`integrand`] on a NURBS surface's line of constant `v`, alike bit for bit.
@@ -1351,8 +1351,8 @@ pub(super) fn nurbs_face_by_boundary(
                     // `dv/dt` from the curve's velocity in the surface's
                     // tangent plane, by the first fundamental form.
                     let velocity = edge_velocity(edge.curve, t, edge.start, edge.end);
-                    let d = s.derivatives(c.0, c.1, 1);
-                    let (su, sv) = (d[1][0], d[0][1]);
+                    let d = s.first_derivatives(c.0, c.1);
+                    let (su, sv) = (d.1, d.2);
                     let (e, f, g) = (su.dot(su), su.dot(sv), sv.dot(sv));
                     let det = e.mul_add(g, -f * f);
                     if det <= 1e-24 * (e * g).max(1e-300) {

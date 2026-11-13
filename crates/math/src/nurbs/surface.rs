@@ -313,6 +313,29 @@ impl NurbsSurface {
         (s, su, sv)
     }
 
+    /// The point at `(u, v)` as [`Self::evaluate`] gives it and the first
+    /// partials as [`Self::first_derivatives`] gives them, from one pass
+    /// over the span's control points: the basis functions' values are the
+    /// first row of their derivatives, the same numbers either way.
+    #[must_use]
+    pub fn point_and_first_derivatives(&self, u: f64, v: f64) -> (Point3, Vec3, Vec3) {
+        let (pu, pv) = (self.degree_u, self.degree_v);
+        let span_u = basis::find_span(self.control_points.len(), pu, u, &self.knots_u);
+        let span_v = basis::find_span(self.control_points[0].len(), pv, v, &self.knots_v);
+        let (du, dv) = (1.min(pu), 1.min(pv));
+        let mut ders_u_stack = [0.0f64; 2 * (basis::MAX_STACK_OUTPUT + 1)];
+        let mut ders_u_heap = Vec::new();
+        let ders_u = basis::scratch(&mut ders_u_stack, &mut ders_u_heap, (du + 1) * (pu + 1));
+        basis::ders_basis_funs_into(span_u, u, pu, du, &self.knots_u, ders_u);
+        let mut ders_v_stack = [0.0f64; 2 * (basis::MAX_STACK_OUTPUT + 1)];
+        let mut ders_v_heap = Vec::new();
+        let ders_v = basis::scratch(&mut ders_v_stack, &mut ders_v_heap, (dv + 1) * (pv + 1));
+        basis::ders_basis_funs_into(span_v, v, pv, dv, &self.knots_v, ders_v);
+        let (point, _, su, sv) =
+            self.first_order_from::<true>(span_u, ders_u, span_v, &ders_v[..=pv], ders_v);
+        (point, su, sv)
+    }
+
     /// `u`'s span and basis functions with their first derivatives, for
     /// [`NurbsRow::point_and_partials_with`] to take at many `v`. `None` past
     /// [`basis::MAX_STACK_OUTPUT`] in `u`.
@@ -956,6 +979,13 @@ mod tests {
                     );
                     let (rp, rsu, rsv) = row.point_and_partials(u);
                     let at = format!("({u}, {v}), degrees {:?}", (s.degree_u(), s.degree_v()));
+                    let (fp, fsu, fsv) = s.point_and_first_derivatives(u, v);
+                    assert_eq!(point_bits(fp), point_bits(p), "fused point at {at}");
+                    assert_eq!(
+                        [bits(fsu), bits(fsv)],
+                        [bits(su), bits(sv)],
+                        "fused partials at {at}"
+                    );
                     assert_eq!(point_bits(rp), point_bits(p), "point at {at}");
                     assert_eq!(bits(rsu), bits(su), "S_u at {at}");
                     assert_eq!(bits(rsv), bits(sv), "S_v at {at}");
