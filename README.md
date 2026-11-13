@@ -16,7 +16,7 @@ Solid modeling kernel for Rust and WebAssembly.
 
 </div>
 
-https://github.com/user-attachments/assets/1c0df006-14b7-492a-bb1b-4db6f626e5d8
+https://github.com/user-attachments/assets/a223b7e9-f64f-49a2-9430-728741efd27c
 
 The engine in the film is 1,904 solids from one 237-line file. brepkit builds it in 82 ms in WebAssembly, against 284 ms for OpenCascade. **[Run it in your browser](https://brepjs.dev/playground/examples/turbofan-engine)**, where it is a [brepjs](https://github.com/andymai/brepjs) example.
 
