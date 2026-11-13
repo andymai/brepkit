@@ -7,7 +7,7 @@ use super::surface_marching::march_intersection;
 use super::surface_marching::{near_existing_segment, second_order_tangent};
 use super::surface_seeding::{
     REFINE_CALLS, find_ssi_seeds_grid, find_ssi_seeds_subdivision, planar_patch_sections, plane_of,
-    refine_ssi_point,
+    refine_ssi_point, surfaces_apart,
 };
 use super::*;
 
@@ -2953,4 +2953,245 @@ fn a_flat_patch_whose_section_leaves_it_between_points_is_declined() {
             .unwrap()
             .is_none()
     );
+}
+
+// -- Surfaces proved apart --
+
+/// A quarter of a cylinder about the z axis through `(cx, 0)`, of `radius`
+/// and height 5: `u` an exact rational arc, `v` running to 100 over that
+/// height, so the patch is nine times longer round than up while its `v`
+/// range is sixty times its `u` range.
+fn quarter_wall(cx: f64, radius: f64) -> NurbsSurface {
+    let w = std::f64::consts::FRAC_1_SQRT_2;
+    let column = |x: f64, y: f64| vec![Point3::new(cx + x, y, 0.0), Point3::new(cx + x, y, 5.0)];
+    NurbsSurface::new(
+        2,
+        1,
+        vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+        vec![0.0, 0.0, 100.0, 100.0],
+        vec![
+            column(radius, 0.0),
+            column(radius, radius),
+            column(0.0, radius),
+        ],
+        vec![vec![1.0, 1.0], vec![w, w], vec![1.0, 1.0]],
+    )
+    .unwrap()
+}
+
+#[test]
+fn coaxial_walls_a_unit_apart_are_proved_apart() {
+    // Their boxes overlap whole, and halving by parameter range would cut
+    // only the short way up: the proof needs the long way round halved.
+    let (outer, inner) = (quarter_wall(0.0, 28.0), quarter_wall(0.0, 27.0));
+    assert!(surfaces_apart(&outer, &inner, 1e-5));
+    assert!(surfaces_apart(&inner, &outer, 1e-5));
+    assert!(
+        intersect_nurbs_nurbs(&outer, &inner, 20, 0.0)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn walls_that_cross_or_touch_are_not_proved_apart() {
+    // A wall of radius 27 about (2, 0) crosses the wall of radius 28 about
+    // the origin; one of radius 26 about it touches that wall at (28, 0).
+    let outer = quarter_wall(0.0, 28.0);
+    assert!(!surfaces_apart(&outer, &quarter_wall(2.0, 27.0), 1e-5));
+    assert!(!surfaces_apart(&outer, &quarter_wall(2.0, 26.0), 1e-5));
+    assert!(!surfaces_apart(&outer, &outer, 1e-5));
+    assert!(
+        !intersect_nurbs_nurbs(&outer, &quarter_wall(2.0, 27.0), 20, 0.0)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn walls_nearer_than_the_margin_are_not_proved_apart() {
+    let outer = quarter_wall(0.0, 28.0);
+    let near = quarter_wall(0.0, 28.0 - 5e-6);
+    assert!(!surfaces_apart(&outer, &near, 1e-5));
+}
+
+#[test]
+fn a_surface_that_can_leave_its_control_points_is_not_proved_apart() {
+    // With the middle weight negative the wall bulges the other way, out of
+    // its control points' box and through the wall inside it.
+    let inner = quarter_wall(0.0, 27.0);
+    let mut weights = inner.weights().to_vec();
+    weights[1] = vec![-0.5, -0.5];
+    let bulging = NurbsSurface::new(
+        inner.degree_u(),
+        inner.degree_v(),
+        inner.knots_u().to_vec(),
+        inner.knots_v().to_vec(),
+        inner.control_points().to_vec(),
+        weights,
+    )
+    .unwrap();
+    assert!(!surfaces_apart(&quarter_wall(0.0, 28.0), &bulging, 1e-5));
+    assert!(!surfaces_apart(&bulging, &quarter_wall(0.0, 28.0), 1e-5));
+}
+
+#[test]
+fn a_surface_with_unclamped_knots_is_not_proved_apart() {
+    let outer = quarter_wall(0.0, 28.0);
+    let inner = quarter_wall(0.0, 27.0);
+    let unclamped = NurbsSurface::new(
+        inner.degree_u(),
+        inner.degree_v(),
+        inner.knots_u().to_vec(),
+        vec![-100.0, 0.0, 100.0, 200.0],
+        inner.control_points().to_vec(),
+        inner.weights().to_vec(),
+    )
+    .unwrap();
+    assert!(!surfaces_apart(&outer, &unclamped, 1e-5));
+}
+
+// -- Sections along a parameter curve --
+
+/// A quarter turn about the z axis of a cubic profile that bows out from
+/// the axis: `u` runs along the profile and `v` round the turn.
+fn quarter_turn_of_a_bowed_profile() -> NurbsSurface {
+    let profile = [(2.0, 0.0), (3.5, 1.0), (3.0, 2.5), (2.2, 3.0)];
+    let w = std::f64::consts::FRAC_1_SQRT_2;
+    let rows = profile
+        .iter()
+        .map(|&(r, z)| {
+            vec![
+                Point3::new(r, 0.0, z),
+                Point3::new(r, r, z),
+                Point3::new(0.0, r, z),
+            ]
+        })
+        .collect();
+    NurbsSurface::new(
+        3,
+        2,
+        vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+        vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+        rows,
+        vec![vec![1.0, w, 1.0]; 4],
+    )
+    .unwrap()
+}
+
+#[test]
+fn a_plane_through_the_axis_of_a_turned_surface_cuts_its_own_meridian() {
+    let surface = quarter_turn_of_a_bowed_profile();
+    let angle = 0.4_f64;
+    let normal = Vec3::new(-angle.sin(), angle.cos(), 0.0);
+
+    let curves = intersect_plane_nurbs(&surface, normal, 0.0, 32).unwrap();
+    assert_eq!(curves.len(), 1);
+    let curve = &curves[0].curve;
+
+    // The meridian is the profile turned to the plane: the profile's own
+    // degree, knots and count of control points, where a fit through the
+    // chain's points has one for each.
+    assert_eq!(curve.degree(), 3);
+    assert_eq!(curve.control_points().len(), 4);
+    for p in curve.control_points() {
+        let off = normal.dot(Vec3::new(p.x(), p.y(), p.z()));
+        assert!(off.abs() < 1e-9, "control point {off:e} off the plane");
+    }
+    let v = curves[0].points[0].param1.1;
+    let (t0, t1) = curve.domain();
+    for k in 0..=20 {
+        let t = (t1 - t0).mul_add(f64::from(k) / 20.0, t0);
+        let gap = (curve.evaluate(t) - surface.evaluate(t, v)).length();
+        assert!(gap < 1e-9, "the curve leaves the surface by {gap:e} at {t}");
+    }
+    let params: Vec<f64> = curves[0].points.iter().map(|p| p.param1.0).collect();
+    assert!(params.windows(2).all(|w| w[1] > w[0]), "{params:?}");
+}
+
+#[test]
+fn a_plane_across_the_axis_of_a_turned_surface_cuts_its_own_parallel() {
+    let surface = quarter_turn_of_a_bowed_profile();
+    let height = 1.7;
+
+    let curves = intersect_plane_nurbs(&surface, Vec3::new(0.0, 0.0, 1.0), height, 32).unwrap();
+    assert_eq!(curves.len(), 1);
+    let curve = &curves[0].curve;
+
+    // The parallel is an exact quarter circle: the turn's own rational
+    // quadratic, which no fit through points gives.
+    assert_eq!(curve.degree(), 2);
+    assert_eq!(curve.control_points().len(), 3);
+    let radius = curve.evaluate(curve.domain().0).x();
+    let (t0, t1) = curve.domain();
+    for k in 0..=20 {
+        let p = curve.evaluate((t1 - t0).mul_add(f64::from(k) / 20.0, t0));
+        assert!((p.z() - height).abs() < 1e-9);
+        assert!((p.x().hypot(p.y()) - radius).abs() < 1e-9);
+    }
+}
+
+#[test]
+fn a_plane_that_holds_no_parameter_curve_of_the_surface_is_fitted_as_before() {
+    let surface = quarter_turn_of_a_bowed_profile();
+    let normal = Vec3::new(0.3, 0.2, 1.0);
+    let d = 2.4;
+
+    let curves = intersect_plane_nurbs(&surface, normal, d, 32).unwrap();
+    assert!(!curves.is_empty());
+    for section in &curves {
+        let (t0, t1) = section.curve.domain();
+        for k in 0..=40 {
+            let p = section
+                .curve
+                .evaluate((t1 - t0).mul_add(f64::from(k) / 40.0, t0));
+            let off = (normal.dot(Vec3::new(p.x(), p.y(), p.z())) - d) / normal.length();
+            assert!(off.abs() < 1e-6, "{off:e} off the plane");
+        }
+    }
+}
+
+#[test]
+fn a_surface_whose_control_points_clear_the_plane_has_no_section() {
+    let surface = quarter_turn_of_a_bowed_profile();
+    for d in [-0.5, 3.6] {
+        let curves = intersect_plane_nurbs(&surface, Vec3::new(0.0, 0.0, 1.0), d, 32).unwrap();
+        assert!(curves.is_empty(), "z = {d}");
+    }
+    // The control points reach x = 3.5 where the surface stops short of it.
+    let curves = intersect_plane_nurbs(&surface, Vec3::new(1.0, 0.0, 0.0), 3.45, 32).unwrap();
+    assert!(curves.is_empty());
+}
+
+/// A sheet a million long in `y` and tilted a part in a billion in `x`: the
+/// plane `z = 0` cuts it along a line that keeps `v` to within a part in
+/// 1e9 of its span, yet drifts 8e-4 in `y` from one end to the other. The
+/// curve at one `v` is not that line.
+#[test]
+fn a_section_that_drifts_across_a_stretched_parameter_ends_where_its_chain_does() {
+    let at = |u: f64, v: f64| Point3::new(u, 1e6 * v, 8e-10f64.mul_add(-u, v - 0.25));
+    let sheet = NurbsSurface::new(
+        1,
+        1,
+        vec![0.0, 0.0, 1.0, 1.0],
+        vec![0.0, 0.0, 1.0, 1.0],
+        vec![
+            vec![at(0.0, 0.0), at(0.0, 1.0)],
+            vec![at(1.0, 0.0), at(1.0, 1.0)],
+        ],
+        vec![vec![1.0, 1.0], vec![1.0, 1.0]],
+    )
+    .unwrap();
+    let curves = intersect_plane_nurbs(&sheet, Vec3::new(0.0, 0.0, 1.0), 0.0, 32).unwrap();
+    assert_eq!(curves.len(), 1);
+    let (t0, t1) = curves[0].curve.domain();
+    let ends = [curves[0].curve.evaluate(t0), curves[0].curve.evaluate(t1)];
+    for chain_end in [curves[0].points.first(), curves[0].points.last()] {
+        let p = chain_end.unwrap().point;
+        let gap = ends
+            .iter()
+            .map(|e| (*e - p).length())
+            .fold(f64::MAX, f64::min);
+        assert!(gap < 1e-6, "the curve ends {gap:e} from the chain's end");
+    }
 }

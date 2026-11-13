@@ -8,6 +8,7 @@
 //! surface that carries each of the profile's control points round a full
 //! rational circle, which is the same surface exactly.
 
+use brepkit_math::madd::Madd;
 use std::f64::consts::{FRAC_1_SQRT_2, FRAC_PI_4, TAU};
 
 use brepkit_math::MathError;
@@ -56,7 +57,7 @@ impl Profile {
             Self::Spline(n) => {
                 let (d0, d1) = n.domain();
                 (1..8)
-                    .map(|k| (d1 - d0).mul_add(f64::from(k) / 8.0, d0))
+                    .map(|k| (d1 - d0).madd(f64::from(k) / 8.0, d0))
                     .collect()
             }
         }
@@ -395,7 +396,7 @@ fn face_parameters(profile: &Profile, axis: Axis, boundary: &Boundary) -> Vec<f6
             .filter_map(|&(start, end)| {
                 let t0 = c.project(start);
                 let span = (c.project(end) - t0).rem_euclid(TAU);
-                (span > 1e-9).then_some(0.5f64.mul_add(span, t0))
+                (span > 1e-9).then_some(0.5f64.madd(span, t0))
             })
             .collect(),
         Profile::Spline(n) => boundary
@@ -446,7 +447,7 @@ mod tests {
             assert!(!inverted, "{kind}: a spline surface keeps the STEP sense");
             let (v0, v1) = n.domain_v();
             for k in 1..16 {
-                let v = (v1 - v0).mul_add(f64::from(k) / 16.0, v0);
+                let v = (v1 - v0).madd(f64::from(k) / 16.0, v0);
                 let p = n.evaluate(0.0, v);
                 let t = match profile {
                     Profile::Circle(c) => c.project(p),

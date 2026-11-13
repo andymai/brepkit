@@ -226,6 +226,7 @@ pub mod curves2d;
 pub mod det_hash;
 pub mod filtered;
 pub mod frame;
+pub mod madd;
 pub mod mat;
 pub mod nurbs;
 pub mod obb;

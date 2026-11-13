@@ -4,6 +4,7 @@
 //! edge crosses or touches the face surface. Records EF interferences
 //! and adds extra paves to the edge for later splitting.
 
+use brepkit_math::madd::Madd;
 use std::collections::HashSet;
 
 use crate::builder::classify_2d::{distance_to_polygon_boundary, point_in_polygon_2d};
@@ -64,8 +65,24 @@ pub fn perform(
     let face_boundary_edges_b = collect_face_boundary_edges(topo, &faces_b)?;
     let face_boundary_edges_a = collect_face_boundary_edges(topo, &faces_a)?;
 
-    check_edge_face_pairs(topo, &edges_a, &faces_b, &face_boundary_edges_b, tol, arena)?;
-    check_edge_face_pairs(topo, &edges_b, &faces_a, &face_boundary_edges_a, tol, arena)?;
+    check_edge_face_pairs(
+        topo,
+        &edges_a,
+        (&faces_a, &face_boundary_edges_a),
+        &faces_b,
+        &face_boundary_edges_b,
+        tol,
+        arena,
+    )?;
+    check_edge_face_pairs(
+        topo,
+        &edges_b,
+        (&faces_b, &face_boundary_edges_b),
+        &faces_a,
+        &face_boundary_edges_a,
+        tol,
+        arena,
+    )?;
 
     Ok(())
 }
@@ -95,7 +112,24 @@ struct FaceContainment {
 struct PlanarContainment {
     frame: PlaneFrame,
     polygon: Vec<Point2>,
+    /// The face's inner wires, sampled as the outer one is.
+    holes: Vec<Vec<Point2>>,
     margin: f64,
+}
+
+impl PlanarContainment {
+    /// Whether `p`, in the face's plane, lies in the face, and whether it
+    /// lies within `near` of the face's boundary, which the sampled loops
+    /// stand off by up to the margin.
+    fn reads(&self, p: Point3, near: f64) -> (bool, bool) {
+        let q = self.frame.project(p);
+        let inside = point_in_polygon_2d(q, &self.polygon)
+            && !self.holes.iter().any(|hole| point_in_polygon_2d(q, hole));
+        let close = std::iter::once(&self.polygon)
+            .chain(&self.holes)
+            .any(|ring| distance_to_polygon_boundary(q, ring) <= near + self.margin);
+        (inside, close)
+    }
 }
 
 impl FaceContainment {
@@ -183,20 +217,41 @@ fn build_face_containment(
     }
     all_points.extend_from_slice(&outer_points);
 
+    let mut hole_points: Vec<Vec<Point3>> = Vec::new();
     for &inner_wid in face.inner_wires() {
         let inner_wire = topo.wire(inner_wid)?;
         let inner_edges: Vec<_> = inner_wire.edges().to_vec();
+        let mut ring = Vec::new();
         for oe in &inner_edges {
             let edge = topo.edge(oe.edge())?;
             let start_pos = topo.vertex(edge.start())?.point();
             let end_pos = topo.vertex(edge.end())?.point();
             let (t0, t1) = edge.curve().domain_with_endpoints(start_pos, end_pos);
+            let is_curved = !matches!(edge.curve(), EdgeCurve::Line);
             let n = N_BOUNDARY_SAMPLES;
-            for i in 0..=n {
-                let t = t0 + (t1 - t0) * (i as f64 / n as f64);
-                all_points.push(edge.curve().evaluate_with_endpoints(t, start_pos, end_pos));
+            let at = |i: usize| {
+                let frac = i as f64 / n as f64;
+                let frac = if oe.is_forward() { frac } else { 1.0 - frac };
+                t0 + (t1 - t0) * frac
+            };
+            // Up to the edge's end, which the next edge's first sample is.
+            for i in 0..n {
+                let (t, next) = (at(i), at(i + 1));
+                let pt = edge.curve().evaluate_with_endpoints(t, start_pos, end_pos);
+                if is_curved {
+                    let end = edge
+                        .curve()
+                        .evaluate_with_endpoints(next, start_pos, end_pos);
+                    let mid =
+                        edge.curve()
+                            .evaluate_with_endpoints(0.5 * (t + next), start_pos, end_pos);
+                    max_sag = max_sag.max(point_to_segment(mid, pt, end));
+                }
+                ring.push(pt);
             }
         }
+        all_points.extend_from_slice(&ring);
+        hole_points.push(ring);
     }
 
     let Some(bbox) = Aabb3::try_from_points(all_points) else {
@@ -217,11 +272,16 @@ fn build_face_containment(
             let margin = (2.0 * max_sag).max(tol.linear * 10.0);
             let frame = PlaneFrame::from_normal_and_point(*normal, outer_points[0]);
             let polygon: Vec<Point2> = outer_points.iter().map(|&p| frame.project(p)).collect();
+            let holes = hole_points
+                .iter()
+                .map(|ring| ring.iter().map(|&p| frame.project(p)).collect())
+                .collect();
             return Ok(FaceContainment {
                 bbox: bbox.expanded(margin),
                 planar: Some(PlanarContainment {
                     frame,
                     polygon,
+                    holes,
                     margin,
                 }),
             });
@@ -256,11 +316,82 @@ fn point_to_segment(p: Point3, a: Point3, b: Point3) -> f64 {
     (p - (a + ab * f)).length()
 }
 
+/// A face's own trim, to read where a point of its surface lies on it.
+#[derive(Clone, Copy)]
+enum OnFace<'a> {
+    Lateral(&'a crate::classifier::LateralTrim),
+    /// A plane face bounded by lines and arcs, read on them exactly.
+    Plane(&'a super::fill_face_info::PlaneRegion),
+    /// A plane face with a NURBS edge in its boundary, read on sampled loops.
+    Sampled(&'a PlanarContainment),
+}
+
+impl OnFace<'_> {
+    /// Whether `p` lies on the face, within `near` of its boundary counting.
+    fn holds(self, p: Point3, near: f64) -> bool {
+        match self {
+            Self::Lateral(trim) => trim.holds(p, near),
+            Self::Plane(region) => region.holds(p, near),
+            Self::Sampled(region) => {
+                let (on, close) = region.reads(p, near);
+                on || close
+            }
+        }
+    }
+
+    /// Whether `p` lies inside the face farther than `near` from its boundary.
+    fn holds_clear(self, p: Point3, near: f64) -> bool {
+        match self {
+            Self::Lateral(trim) => trim.holds_clear(p, near),
+            Self::Plane(region) => region.holds_clear(p, near),
+            Self::Sampled(region) => {
+                let (on, close) = region.reads(p, near);
+                on && !close
+            }
+        }
+    }
+}
+
+/// Whether `eid`, lying in the plane `normal · p = d` of the other solid's
+/// face, is what splits that face: an edge of a NURBS face none of whose own
+/// faces lies in the plane. The face-face phase drops a plane's section
+/// along a NURBS face's own edge as being that edge, and where one of the
+/// edge's faces shares the plane the coplanar pair splits the face instead.
+fn stands_in_for_a_section(
+    topo: &Topology,
+    eid: EdgeId,
+    (own_faces, own_boundaries): (&[FaceId], &[HashSet<EdgeId>]),
+    normal: Vec3,
+    d: f64,
+    tol: Tolerance,
+) -> bool {
+    let mut on_nurbs = false;
+    for (&fid, boundary) in own_faces.iter().zip(own_boundaries) {
+        if !boundary.contains(&eid) {
+            continue;
+        }
+        match topo.face(fid).map(brepkit_topology::face::Face::surface) {
+            Ok(FaceSurface::Nurbs(_)) => on_nurbs = true,
+            Ok(FaceSurface::Plane { normal: n, d: own }) => {
+                let along = n.dot(normal);
+                if along.abs() > 1.0 - tol.angular.max(1e-9)
+                    && (own * along.signum() - d).abs() < tol.linear
+                {
+                    return false;
+                }
+            }
+            _ => {}
+        }
+    }
+    on_nurbs
+}
+
 /// Check each edge against each face.
 #[allow(clippy::too_many_lines)]
 fn check_edge_face_pairs(
     topo: &mut Topology,
     edges: &[EdgeId],
+    own: (&[FaceId], &[HashSet<EdgeId>]),
     faces: &[FaceId],
     face_boundary_edges: &[HashSet<EdgeId>],
     tol: Tolerance,
@@ -301,6 +432,8 @@ fn check_edge_face_pairs(
         .collect::<Result<_, _>>()?;
 
     let mut trims: Vec<Option<Option<crate::classifier::LateralTrim>>> =
+        (0..faces.len()).map(|_| None).collect();
+    let mut regions: Vec<Option<Option<super::fill_face_info::PlaneRegion>>> =
         (0..faces.len()).map(|_| None).collect();
     for &eid in edges {
         // Snapshot edge data to avoid holding immutable borrow across add_vertex
@@ -370,16 +503,35 @@ fn check_edge_face_pairs(
                 let near = 10.0 * tol.linear;
                 let lateral = matches!(surface, FaceSurface::Cylinder(_) | FaceSurface::Cone(_))
                     && matches!(curve, EdgeCurve::Line | EdgeCurve::Circle(_));
-                if lateral {
-                    let trim = trims[face_idx]
-                        .get_or_insert_with(|| {
-                            crate::classifier::LateralTrim::new(topo, fid)
-                                .ok()
-                                .flatten()
-                        })
-                        .as_ref();
+                // In a plane, the edge of a NURBS face is the section the
+                // plane's face is split along, where it runs through the face.
+                let planar = match surface {
+                    FaceSurface::Plane { normal, d } => {
+                        stands_in_for_a_section(topo, eid, own, *normal, *d, tol)
+                    }
+                    _ => false,
+                };
+                if lateral || planar {
+                    let trim = if lateral {
+                        trims[face_idx]
+                            .get_or_insert_with(|| {
+                                crate::classifier::LateralTrim::new(topo, fid)
+                                    .ok()
+                                    .flatten()
+                            })
+                            .as_ref()
+                            .map(OnFace::Lateral)
+                    } else {
+                        regions[face_idx]
+                            .get_or_insert_with(|| {
+                                super::fill_face_info::PlaneRegion::of(topo, fid)
+                            })
+                            .as_ref()
+                            .map(OnFace::Plane)
+                            .or_else(|| containments[face_idx].planar.as_ref().map(OnFace::Sampled))
+                    };
                     let at = |k: u32| {
-                        let t = (t1 - t0).mul_add(f64::from(k) / f64::from(n_chk), t0);
+                        let t = (t1 - t0).madd(f64::from(k) / f64::from(n_chk), t0);
                         curve.evaluate_with_endpoints(t, start_pos, end_pos)
                     };
                     // Every sample on the face: a circle can run through a
@@ -391,6 +543,9 @@ fn check_edge_face_pairs(
                             && (1..n_chk).all(|k| trim.holds(at(k), near))
                     }) {
                         log::debug!("EF: edge {eid:?} lies inside face {fid:?}");
+                        if planar {
+                            arena.plane_section_edges.insert(eid);
+                        }
                         arena.interference.ef.push(Interference::EF {
                             edge: eid,
                             face: fid,
@@ -414,7 +569,7 @@ fn check_edge_face_pairs(
                                     .chain(pb.extra_paves.iter().map(|p| p.parameter))
                             })
                             .collect();
-                        let t_at = |k: u32| (t1 - t0).mul_add(f64::from(k) / f64::from(n_chk), t0);
+                        let t_at = |k: u32| (t1 - t0).madd(f64::from(k) / f64::from(n_chk), t0);
                         let eps = (t1 - t0).abs() * 1e-9;
                         let paved = |a: u32, b: u32| {
                             let (lo, hi) = (t_at(a).min(t_at(b)), t_at(a).max(t_at(b)));
@@ -463,6 +618,9 @@ fn check_edge_face_pairs(
                                 log::debug!(
                                     "EF: edge {eid:?} lies inside face {fid:?} around t={t_mid:.6}"
                                 );
+                                if planar {
+                                    arena.plane_section_edges.insert(eid);
+                                }
                                 arena.interference.ef.push(Interference::EF {
                                     edge: eid,
                                     face: fid,
@@ -651,7 +809,7 @@ fn check_edge_face_pairs(
                             return None;
                         }
                         let s = ((vp - start_pos).dot(d) / len_sq).clamp(0.0, 1.0);
-                        let t_new = (t1 - t0).mul_add(s, t0);
+                        let t_new = (t1 - t0).madd(s, t0);
                         let on_curve = (curve.evaluate_with_endpoints(t_new, start_pos, end_pos)
                             - vp)
                             .length()
@@ -727,7 +885,7 @@ fn check_edge_face_pairs(
                                         let len_sq = dir.dot(dir);
                                         if len_sq > 0.0 {
                                             let along = (v.point() - start_pos).dot(dir) / len_sq;
-                                            (t1 - t0).mul_add(along, t0)
+                                            (t1 - t0).madd(along, t0)
                                         } else {
                                             t
                                         }
@@ -795,7 +953,7 @@ pub(super) fn find_edge_plane_crossings(
 
         let s_clamped = s.clamp(0.0, 1.0);
         let pt = start_pos + dir * s_clamped;
-        let t = s_clamped.mul_add(t1 - t0, t0);
+        let t = s_clamped.madd(t1 - t0, t0);
         vec![(t, pt)]
     } else if matches!(curve, EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_)) {
         conic_plane_crossings(curve, start_pos, end_pos, t0, t1, normal, d, tol)
@@ -835,7 +993,7 @@ fn conic_plane_crossings(
         let p = at(t);
         normal
             .x()
-            .mul_add(p.x(), normal.y().mul_add(p.y(), normal.z() * p.z()))
+            .madd(p.x(), normal.y().madd(p.y(), normal.z() * p.z()))
             - d
     };
     let (f0, fq, fp) = (f(0.0), f(FRAC_PI_2), f(PI));
@@ -1067,7 +1225,7 @@ fn line_crossings(
     }
     super::phase_ff::line_segment_surface_crossings(start_pos, end_pos, surface)
         .into_iter()
-        .map(|p| ((t1 - t0).mul_add((p - start_pos).dot(d) / len_sq, t0), p))
+        .map(|p| ((t1 - t0).madd((p - start_pos).dot(d) / len_sq, t0), p))
         .collect()
 }
 
@@ -1092,7 +1250,7 @@ fn find_side_flips(
     let mut out = Vec::new();
     let mut prev: Option<(f64, f64)> = None;
     for i in 0..=N_SAMPLES {
-        let t = (t1 - t0).mul_add(i as f64 / N_SAMPLES as f64, t0);
+        let t = (t1 - t0).madd(i as f64 / N_SAMPLES as f64, t0);
         let Some(s) = side(t) else {
             prev = None;
             continue;
@@ -1435,6 +1593,7 @@ mod tests {
         check_edge_face_pairs(
             &mut topo,
             &[ring],
+            (&[], &[]),
             &[band],
             &[HashSet::new()],
             Tolerance::new(),
@@ -1566,6 +1725,7 @@ mod tests {
         check_edge_face_pairs(
             &mut topo,
             &[line],
+            (&[], &[]),
             &[band],
             &[HashSet::new()],
             Tolerance::new(),
@@ -1731,10 +1891,10 @@ mod tests {
         let hull = saddle.aabb();
         let surface = FaceSurface::Nurbs(saddle);
         let (y, step) = (0.0005, 0.01);
-        let x = (0.999 - y) / 2.0f64.mul_add(-y, 1.0);
-        let z_top = 3.5f64.mul_add(tol.linear, 1.0) + step;
+        let x = (0.999 - y) / 2.0f64.madd(-y, 1.0);
+        let z_top = 3.5f64.madd(tol.linear, 1.0) + step;
         let (a, b) = (
-            Point3::new(x, y, 64.0f64.mul_add(-step, z_top)),
+            Point3::new(x, y, 64.0f64.madd(-step, z_top)),
             Point3::new(x, y, z_top),
         );
         let plain =

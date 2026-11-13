@@ -1,6 +1,7 @@
 //! Chaining intersection points into curves.
 
 use crate::MathError;
+use crate::madd::Madd;
 use crate::nurbs::curve::NurbsCurve;
 use crate::nurbs::fitting::{chord_length_params, interpolate};
 use crate::vec::Point3;
@@ -245,7 +246,7 @@ pub fn chain_intersection_points(
     for i in 0..n {
         for j in (i + 1)..n {
             let d = points[i].point - points[j].point;
-            if d.x().mul_add(d.x(), d.y().mul_add(d.y(), d.z() * d.z())) < threshold_sq {
+            if d.x().madd(d.x(), d.y().madd(d.y(), d.z() * d.z())) < threshold_sq {
                 adj[i].push(j);
                 adj[j].push(i);
             }
@@ -305,7 +306,7 @@ pub fn chain_intersection_points(
                     continue;
                 }
                 let d = points[current].point - points[idx].point;
-                let dist_sq = d.x().mul_add(d.x(), d.y().mul_add(d.y(), d.z() * d.z()));
+                let dist_sq = d.x().madd(d.x(), d.y().madd(d.y(), d.z() * d.z()));
                 if dist_sq < best_dist {
                     best_dist = dist_sq;
                     best_idx = Some(idx);

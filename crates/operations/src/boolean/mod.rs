@@ -9,6 +9,7 @@ mod classify;
 mod types;
 use assembly::validate_boolean_result;
 pub(crate) use assembly::{assemble_solid, assemble_solid_mixed};
+use brepkit_math::madd::Madd;
 pub use types::{BooleanOp, BooleanOptions, FaceSpec};
 
 // WASM-compatible timer: `std::time::Instant` panics on wasm32 targets.
@@ -119,6 +120,17 @@ fn boolean_inner(
 ) -> Result<SolidId, crate::OperationsError> {
     LAST_USED_MESH_FALLBACK.with(|f| f.set(false));
     let tol = brepkit_math::tolerance::Tolerance::new();
+
+    // A tool of NURBS faces wholly inside a blank of them, the two
+    // boundaries proved apart: the cut is the blank with the tool's shell for
+    // a cavity, and no face pair has a section to look for.
+    if op == BooleanOp::Cut
+        && nurbs_tool_strictly_inside(topo, a, b, tol)
+        && let Ok(result) = build_contained_cut_hollow(topo, a, b)
+        && validate_boolean_result(topo, result).is_ok()
+    {
+        return Ok(result);
+    }
 
     // Detect A⊂B or B⊂A (including A=B) and handle directly.
     // Only applies when BOTH solids have simple analytic classifiers.
@@ -1458,6 +1470,22 @@ pub fn boolean_with_evolution(
 ) -> Result<(SolidId, crate::evolution::EvolutionMap), crate::OperationsError> {
     use brepkit_topology::explorer::solid_faces;
 
+    // A tool of NURBS faces wholly inside the blank: each face of the result
+    // is a copy of one input face, so the provenance is exact with no engine
+    // run.
+    if op == BooleanOp::Cut
+        && a != b
+        && nurbs_tool_strictly_inside(topo, a, b, brepkit_math::tolerance::Tolerance::new())
+        && let Ok((result, origins)) = build_contained_cut_hollow_with_origins(topo, a, b)
+        && validate_boolean_result(topo, result).is_ok()
+    {
+        let mut evo = crate::evolution::EvolutionMap::new();
+        for (input, output) in origins {
+            evo.add_modified(input, output);
+        }
+        return Ok((result, evo));
+    }
+
     // Faithful path: the GFA reports each result face's true input source.
     // Identical/contained operand pairs must NOT take it: those are the
     // fully-coincident-boundary configurations `boolean` short-circuits
@@ -2428,11 +2456,11 @@ fn xform_from_canonical_z(
     let kx = -axis.y() / sin_t;
     let ky = axis.x() / sin_t;
     let one_minus_cos = 1.0 - dot;
-    let r00 = one_minus_cos.mul_add(kx * kx, dot);
+    let r00 = one_minus_cos.madd(kx * kx, dot);
     let r01 = one_minus_cos * kx * ky;
     let r02 = sin_t * ky;
     let r10 = one_minus_cos * kx * ky;
-    let r11 = one_minus_cos.mul_add(ky * ky, dot);
+    let r11 = one_minus_cos.madd(ky * ky, dot);
     let r12 = -sin_t * kx;
     let r20 = -sin_t * ky;
     let r21 = sin_t * kx;
@@ -2627,7 +2655,7 @@ fn detect_trivial_relation(
                 0.5 * (lo.z() + hi.z()),
             );
             let (dx, dy, dz) = (hi.x() - lo.x(), hi.y() - lo.y(), hi.z() - lo.z());
-            let defl = (dx.mul_add(dx, dy.mul_add(dy, dz * dz)).sqrt() * 0.01).max(1e-6);
+            let defl = (dx.madd(dx, dy.madd(dy, dz * dz)).sqrt() * 0.01).max(1e-6);
             // Conservative by design: when the AABB center falls in `inner`'s own
             // concavity (a C/U-shaped solid), `inside_inner` is false and the
             // witness is disabled, so a false-positive containment could still
@@ -2660,7 +2688,7 @@ fn detect_trivial_relation(
         let defl = |bb: &Option<(Point3, Point3)>| {
             let Some((lo, hi)) = *bb else { return 1e-3 };
             let (dx, dy, dz) = (hi.x() - lo.x(), hi.y() - lo.y(), hi.z() - lo.z());
-            (dx.mul_add(dx, dy.mul_add(dy, dz * dz)).sqrt() * 0.01).max(1e-6)
+            (dx.madd(dx, dy.madd(dy, dz * dz)).sqrt() * 0.01).max(1e-6)
         };
         let d = defl(&aabb_a).min(defl(&aabb_b));
         let (Ok(vi), Ok(vo)) = (
@@ -2770,7 +2798,7 @@ fn detect_trivial_relation(
                 let at = |k: u8| {
                     let f = f64::from(k) / 4.0;
                     e.curve()
-                        .evaluate_with_endpoints((t1 - t0).mul_add(f, t0), ps, pe)
+                        .evaluate_with_endpoints((t1 - t0).madd(f, t0), ps, pe)
                 };
                 (0..4).map(|k| (at(k + 1) - at(k)).length()).sum::<f64>()
             };
@@ -2790,7 +2818,7 @@ fn detect_trivial_relation(
                     } else {
                         let f = f64::from(k) / 4.0;
                         e.curve()
-                            .evaluate_with_endpoints((t1 - t0).mul_add(f, t0), ps, pe)
+                            .evaluate_with_endpoints((t1 - t0).madd(f, t0), ps, pe)
                     };
                     clear_outside(p)
                 }) || {
@@ -2936,7 +2964,7 @@ fn detect_trivial_relation(
         };
         cuts.windows(2).any(|w| {
             [0.25, 0.5, 0.75].into_iter().any(|f| {
-                let t = (w[1] - w[0]).mul_add(f, w[0]);
+                let t = (w[1] - w[0]).madd(f, w[0]);
                 major_radius.hypot(t) - minor_radius > tol.linear * 10.0
                     && matches!(
                         classifier.classify(*center + *axis * t, &options),
@@ -3279,6 +3307,85 @@ fn solid_strictly_inside(
     saw_vertex
 }
 
+/// Whether `tool`, a solid of one shell in one piece, lies inside `blank` with no point
+/// of its boundary on the blank's: every face of both is a NURBS face, each
+/// pair of their surfaces is proved apart, and a vertex of the tool
+/// classifies inside the blank. Boundaries that never meet leave a connected
+/// tool wholly on one side of the blank's.
+fn nurbs_tool_strictly_inside(
+    topo: &Topology,
+    blank: SolidId,
+    tool: SolidId,
+    tol: brepkit_math::tolerance::Tolerance,
+) -> bool {
+    let surfaces = |solid: SolidId| -> Option<Vec<&brepkit_math::nurbs::surface::NurbsSurface>> {
+        brepkit_topology::explorer::solid_faces(topo, solid)
+            .ok()?
+            .into_iter()
+            .map(|fid| match topo.face(fid).ok()?.surface() {
+                FaceSurface::Nurbs(surface) => Some(surface),
+                _ => None,
+            })
+            .collect()
+    };
+    let simple = |solid: SolidId| topo.solid(solid).is_ok_and(|s| s.inner_shells().is_empty());
+    if !simple(blank) || !simple(tool) {
+        return false;
+    }
+    // One shell can hold several pieces, and a vertex of one says nothing of
+    // where another lies.
+    if crate::boolean::assembly::face_components(topo, tool).len() != 1 {
+        return false;
+    }
+    let (Ok(blank_box), Ok(tool_box)) = (
+        crate::measure::solid_bounding_box(topo, blank),
+        crate::measure::solid_bounding_box(topo, tool),
+    ) else {
+        return false;
+    };
+    let within = |lo: f64, hi: f64, out_lo: f64, out_hi: f64| lo >= out_lo && hi <= out_hi;
+    if !(within(
+        tool_box.min.x(),
+        tool_box.max.x(),
+        blank_box.min.x(),
+        blank_box.max.x(),
+    ) && within(
+        tool_box.min.y(),
+        tool_box.max.y(),
+        blank_box.min.y(),
+        blank_box.max.y(),
+    ) && within(
+        tool_box.min.z(),
+        tool_box.max.z(),
+        blank_box.min.z(),
+        blank_box.max.z(),
+    )) {
+        return false;
+    }
+    let (Some(blank_surfaces), Some(tool_surfaces)) = (surfaces(blank), surfaces(tool)) else {
+        return false;
+    };
+    let margin = 100.0 * tol.linear;
+    if !blank_surfaces.iter().all(|sa| {
+        tool_surfaces
+            .iter()
+            .all(|sb| brepkit_math::nurbs::intersection::surfaces_apart(sa, sb, margin))
+    }) {
+        return false;
+    }
+    let Some(vertex) = brepkit_topology::explorer::solid_vertices(topo, tool)
+        .ok()
+        .and_then(|vs| vs.first().copied())
+        .and_then(|vid| topo.vertex(vid).ok())
+    else {
+        return false;
+    };
+    matches!(
+        crate::classify::classify_point(topo, blank, vertex.point(), 0.01, tol.linear),
+        Ok(crate::classify::PointClassification::Inside)
+    )
+}
+
 /// Build `Cut(blank, tool)` for a tool strictly contained in the blank: the
 /// result is the blank with a tool-shaped internal cavity. Deep-copies the
 /// blank and the tool, reverses every copied tool face in place so the cavity
@@ -3290,7 +3397,25 @@ fn build_contained_cut_hollow(
     blank: SolidId,
     tool: SolidId,
 ) -> Result<SolidId, crate::OperationsError> {
+    build_contained_cut_hollow_with_origins(topo, blank, tool).map(|(result, _)| result)
+}
+
+/// [`build_contained_cut_hollow`], with the `(input, result)` face index pair
+/// of every face it copies.
+fn build_contained_cut_hollow_with_origins(
+    topo: &mut Topology,
+    blank: SolidId,
+    tool: SolidId,
+) -> Result<(SolidId, Vec<(usize, usize)>), crate::OperationsError> {
+    use brepkit_topology::explorer::solid_faces;
+
     let result = crate::copy::copy_solid(topo, blank)?;
+    // `copy_solid` keeps the order of shells and of the faces in each.
+    let mut origins: Vec<(usize, usize)> = solid_faces(topo, blank)?
+        .into_iter()
+        .zip(solid_faces(topo, result)?)
+        .map(|(from, to)| (from.index(), to.index()))
+        .collect();
 
     // Deep-copy the tool as a whole solid so the cavity shell shares edges and
     // vertices between adjacent faces (a per-face copy would duplicate shared
@@ -3301,13 +3426,21 @@ fn build_contained_cut_hollow(
     let tool_copy = crate::copy::copy_solid(topo, tool)?;
     let cavity_shell = topo.solid(tool_copy)?.outer_shell();
     let cavity_faces = topo.shell(cavity_shell)?.faces().to_vec();
+    let tool_shell = topo.solid(tool)?.outer_shell();
+    origins.extend(
+        topo.shell(tool_shell)?
+            .faces()
+            .iter()
+            .zip(&cavity_faces)
+            .map(|(from, to)| (from.index(), to.index())),
+    );
     for fid in cavity_faces {
         let face = topo.face_mut(fid)?;
         let flipped = !face.is_reversed();
         face.set_reversed(flipped);
     }
     topo.solid_mut(result)?.add_inner_shell(cavity_shell);
-    Ok(result)
+    Ok((result, origins))
 }
 
 /// Best-effort mesh boolean fallback for high face-count solids.
@@ -3481,7 +3614,7 @@ fn all_component_centers_outside(
                         let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
                         corners.extend([0.25, 0.5, 0.75].map(|f| {
                             edge.curve()
-                                .evaluate_with_endpoints((t1 - t0).mul_add(f, t0), a, b)
+                                .evaluate_with_endpoints((t1 - t0).madd(f, t0), a, b)
                         }));
                     }
                     for vid in [edge.start(), edge.end()] {
@@ -3520,7 +3653,7 @@ fn all_component_centers_outside(
         // A point on an edge counts only when clearly outside: a stray
         // piece's edges lie on the tool, off it by the sections' own error.
         let clear = brepkit_math::tolerance::Tolerance {
-            linear: 1e-4f64.mul_add((max - min).length(), 100.0 * tol.linear),
+            linear: 1e-4f64.madd((max - min).length(), 100.0 * tol.linear),
             ..tol
         };
         let outside = corners

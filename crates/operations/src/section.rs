@@ -5,6 +5,7 @@
 
 #![allow(clippy::too_many_lines, clippy::doc_markdown)]
 
+use brepkit_math::madd::Madd;
 use brepkit_math::tolerance::Tolerance;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
@@ -80,13 +81,13 @@ fn gap_to_others(
                     ay + short((pair[1].param1.1 - pair[0].param1.1) / tall, v_closed),
                 );
                 let (dx, dy) = (bx - ax, by - ay);
-                let length = dx.mul_add(dx, dy * dy);
+                let length = dx.madd(dx, dy * dy);
                 let t = if length > 0.0 {
-                    (-ax.mul_add(dx, ay * dy) / length).clamp(0.0, 1.0)
+                    (-ax.madd(dx, ay * dy) / length).clamp(0.0, 1.0)
                 } else {
                     0.0
                 };
-                t.mul_add(dx, ax).hypot(t.mul_add(dy, ay))
+                t.madd(dx, ax).hypot(t.madd(dy, ay))
             });
             single
                 .into_iter()
@@ -163,18 +164,8 @@ fn touches_along(
     };
     let (u_closed, v_closed) = (nurbs.is_periodic_u(), nurbs.is_periodic_v());
     let side = |reach: f64| {
-        let u = wrap(
-            (reach * wide).mul_add(-tv / len, mid.0),
-            u_lo,
-            u_hi,
-            u_closed,
-        );
-        let v = wrap(
-            (reach * tall).mul_add(tu / len, mid.1),
-            v_lo,
-            v_hi,
-            v_closed,
-        );
+        let u = wrap((reach * wide).madd(-tv / len, mid.0), u_lo, u_hi, u_closed);
+        let v = wrap((reach * tall).madd(tu / len, mid.1), v_lo, v_hi, v_closed);
         let p = nurbs.evaluate(u, v);
         normal.dot(Vec3::new(p.x(), p.y(), p.z())) - d
     };
@@ -678,9 +669,9 @@ fn intersect_planar_face_with_plane(
             let pi = verts[i];
             let pj = verts[j];
             let ix = Point3::new(
-                (pj.x() - pi.x()).mul_add(t, pi.x()),
-                (pj.y() - pi.y()).mul_add(t, pi.y()),
-                (pj.z() - pi.z()).mul_add(t, pi.z()),
+                (pj.x() - pi.x()).madd(t, pi.x()),
+                (pj.y() - pi.y()).madd(t, pi.y()),
+                (pj.z() - pi.z()).madd(t, pi.z()),
             );
             crossings.push(ix);
         }
@@ -1212,11 +1203,7 @@ mod tests {
     fn a_nurbs_face_crossing_the_plane_twice_close_by_bounds_both() {
         // Round a node of the 50-sample grid, so that the grid sees both.
         let (a, b) = (24.0 / 49.0 - 4e-7, 24.0 / 49.0 + 4e-7);
-        let heights = [
-            a * b,
-            0.5f64.mul_add(-(a + b), a * b),
-            1.0 - (a + b) + a * b,
-        ];
+        let heights = [a * b, 0.5f64.madd(-(a + b), a * b), 1.0 - (a + b) + a * b];
         let rows = heights
             .iter()
             .enumerate()
@@ -1376,7 +1363,7 @@ mod tests {
             let odd = sheet(
                 (0..=power)
                     .map(|k| {
-                        let x = 2.0f64.mul_add(f64::from(k) / f64::from(power), -1.0);
+                        let x = 2.0f64.madd(f64::from(k) / f64::from(power), -1.0);
                         row(x, if (power - k) % 2 == 0 { 1.0 } else { -1.0 })
                     })
                     .collect(),

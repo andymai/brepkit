@@ -4,7 +4,7 @@
 //! planar face pairs (v1). Reuses the analytic fast path and face trimming
 //! infrastructure from the fillet pipeline.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
@@ -272,7 +272,10 @@ impl<'a> ChamferBuilder<'a> {
 
         for &(edge_id, d1, d2) in &all_edges {
             match compute_chamfer_stripe(topo, &adjacency, edge_id, d1, d2) {
-                Ok(sr) => stripe_results.push((edge_id, sr)),
+                Ok(mut sr) => {
+                    run_to_end_planes(topo, &original_faces, edge_id, &mut sr.stripe)?;
+                    stripe_results.push((edge_id, sr));
+                }
                 Err(e) => failed.push((edge_id, e)),
             }
         }
@@ -308,18 +311,21 @@ impl<'a> ChamferBuilder<'a> {
             let mut contacts = [None, None];
             let mut failure = None;
             let mut slivers = Vec::new();
+            let chamfered = topo.edge(edge_id)?;
+            let corners = [chamfered.start(), chamfered.end()];
             for (slot, (face, contact)) in faces
                 .into_iter()
                 .zip([&stripe.contact1, &stripe.contact2])
                 .enumerate()
             {
                 let current = face_replacements.get(&face).copied().unwrap_or(face);
-                match trimmer::trim_face(
+                match trimmer::trim_face_to_corners(
                     topo,
                     current,
                     &sample_nurbs_endpoints(contact),
                     &[(0.0, 0.0), (1.0, 0.0)],
                     keep,
+                    &corners,
                 ) {
                     Ok(tr) if tr.trimmed_face != current => {
                         contacts[slot] = tr.contact_edge;
@@ -460,6 +466,111 @@ fn consumed_face_edge(
     Ok(same_ends.then_some(far))
 }
 
+/// A flat chamfer's contacts end in the section square to its edge at each
+/// end, which is the end face's plane only where that face stands square to
+/// the edge. Where one plane face closes the edge's end at a slant (a prism
+/// whose next side turns off at an angle), each contact line is run on, or
+/// back, to that face's plane: the chamfer plane then ends on its line in
+/// the end face, which the end face takes as it does at a square end.
+fn run_to_end_planes(
+    topo: &Topology,
+    faces: &[FaceId],
+    edge_id: EdgeId,
+    stripe: &mut crate::stripe::Stripe,
+) -> Result<(), BlendError> {
+    if !matches!(stripe.surface, FaceSurface::Plane { .. }) || stripe.spine.is_closed() {
+        return Ok(());
+    }
+    let line_ends = |c: &brepkit_math::nurbs::curve::NurbsCurve| {
+        (c.degree() == 1 && c.control_points().len() == 2)
+            .then(|| (c.control_points()[0], c.control_points()[1]))
+    };
+    let (Some(mut c1), Some(mut c2)) = (line_ends(&stripe.contact1), line_ends(&stripe.contact2))
+    else {
+        return Ok(());
+    };
+    let edge = topo.edge(edge_id)?;
+    let spine_start = stripe.spine.evaluate(topo, 0.0)?;
+    let (sp, ep) = (
+        topo.vertex(edge.start())?.point(),
+        topo.vertex(edge.end())?.point(),
+    );
+    let ends = if (sp - spine_start).length() <= (ep - spine_start).length() {
+        [edge.start(), edge.end()]
+    } else {
+        [edge.end(), edge.start()]
+    };
+    let mut changed = false;
+    for (slot, corner) in ends.into_iter().enumerate() {
+        // The faces through the corner other than the chamfer's two.
+        let mut others = Vec::new();
+        for &fid in faces {
+            if fid == stripe.face1 || fid == stripe.face2 {
+                continue;
+            }
+            let face = topo.face(fid)?;
+            let mut through = false;
+            for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied())
+            {
+                for oe in topo.wire(wid)?.edges() {
+                    let e = topo.edge(oe.edge())?;
+                    through |= e.start() == corner || e.end() == corner;
+                }
+            }
+            if through {
+                others.push(fid);
+            }
+        }
+        let [end_face] = others[..] else {
+            continue;
+        };
+        let FaceSurface::Plane { normal, d } = *topo.face(end_face)?.surface() else {
+            continue;
+        };
+        let to_plane = |(a, b): (Point3, Point3)| -> Option<Point3> {
+            let dir = b - a;
+            let along = normal.dot(dir);
+            if along.abs() <= 1e-9 * dir.length() {
+                return None;
+            }
+            let from = if slot == 0 { b } else { a };
+            let s = (d - normal.dot(Vec3::new(from.x(), from.y(), from.z()))) / along;
+            Some(from + dir * s)
+        };
+        let (Some(q1), Some(q2)) = (to_plane(c1), to_plane(c2)) else {
+            continue;
+        };
+        let moved = |(a, b): (Point3, Point3), q: Point3| if slot == 0 { (q, b) } else { (a, q) };
+        c1 = moved(c1, q1);
+        c2 = moved(c2, q2);
+        changed = true;
+    }
+    if !changed {
+        return Ok(());
+    }
+    let line = |(a, b): (Point3, Point3)| {
+        brepkit_math::nurbs::curve::NurbsCurve::new(
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![a, b],
+            vec![1.0, 1.0],
+        )
+    };
+    stripe.contact1 = line(c1)?;
+    stripe.contact2 = line(c2)?;
+    for section in &mut stripe.sections {
+        let (p1, p2) = if section.t < 0.5 {
+            (c1.0, c2.0)
+        } else {
+            (c1.1, c2.1)
+        };
+        section.p1 = p1;
+        section.p2 = p2;
+        section.center = p1 + (p2 - p1) * 0.5;
+    }
+    Ok(())
+}
+
 /// A chamfer surface's normal follows the spine tangent and the order of the
 /// contacts, not the material, so on a concave edge it points into the
 /// solid. On either kind of edge the face's outward side leans the way its
@@ -523,6 +634,9 @@ fn close_chamfer_ends(
 ) -> Result<(), BlendError> {
     for cross in cross_edges {
         let Some(detour) = corner_detour(topo, faces, cross)? else {
+            if splice_inside_corner(topo, faces, cross)? {
+                continue;
+            }
             return Err(BlendError::TrimmingFailure {
                 face: cross.chamfer,
             });
@@ -545,6 +659,134 @@ fn close_chamfer_ends(
         }
     }
     Ok(())
+}
+
+/// A chamfer whose edge ends at an inside corner of one of its faces (an
+/// L's floor, the edge along the L's arm) takes off a wedge whose end
+/// bares a triangle of the end face beyond: the corner, the contact point
+/// on that face, and the contact point on the other face. The trim left
+/// that face running from the corner to its contact point, and the end
+/// face from the corner up to its own, each edge now used once. The end
+/// face, which holds the cross edge, swaps its edge for the face's edge and
+/// the cross edge, taking the triangle. Returns whether it spliced.
+fn splice_inside_corner(
+    topo: &mut Topology,
+    faces: &[FaceId],
+    cross: &CrossEdge,
+) -> Result<bool, BlendError> {
+    let mut uses: HashMap<EdgeId, usize> = HashMap::new();
+    for &fid in faces {
+        let face = topo.face(fid)?;
+        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            for oe in topo.wire(wid)?.edges() {
+                *uses.entry(oe.edge()).or_default() += 1;
+            }
+        }
+    }
+    let joins = |eid: EdgeId, a: VertexId, b: VertexId| -> Result<bool, BlendError> {
+        let e = topo.edge(eid)?;
+        Ok((e.start() == a && e.end() == b) || (e.start() == b && e.end() == a))
+    };
+    // The edges from the corner to the two contact points, each used once:
+    // one the face's (beside the triangle), one the end face's.
+    let mut to_point: [Option<EdgeId>; 2] = [None, None];
+    for (&eid, &n) in &uses {
+        if n != 1 {
+            continue;
+        }
+        for (slot, point) in [cross.from, cross.to].into_iter().enumerate() {
+            if joins(eid, cross.corner, point)? {
+                if to_point[slot].is_some() {
+                    return Ok(false);
+                }
+                to_point[slot] = Some(eid);
+            }
+        }
+    }
+    let [Some(to_from), Some(to_to)] = to_point else {
+        return Ok(false);
+    };
+    for (beside, near, far, end_edge) in [
+        (to_from, cross.from, cross.to, to_to),
+        (to_to, cross.to, cross.from, to_from),
+    ] {
+        if splice_end_face(topo, faces, cross, beside, near, far, end_edge)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Splices the triangle into the end face whose wire holds `end_edge`
+/// (from the corner to `far`), on a plane holding the cross edge: the edge
+/// gives way to `beside` (from the corner to `near`) and the cross edge.
+fn splice_end_face(
+    topo: &mut Topology,
+    faces: &[FaceId],
+    cross: &CrossEdge,
+    beside: EdgeId,
+    near: VertexId,
+    far: VertexId,
+    end_edge: EdgeId,
+) -> Result<bool, BlendError> {
+    // The end face's edge from the corner to the other point, used once,
+    // on a plane that holds the cross edge.
+    for &fid in faces {
+        let face = topo.face(fid)?;
+        let on_plane = |p: Point3| match face.surface() {
+            FaceSurface::Plane { normal, d } => {
+                let scale = 1.0 + p.x().abs().max(p.y().abs()).max(p.z().abs());
+                (normal
+                    .x()
+                    .mul_add(p.x(), normal.y().mul_add(p.y(), normal.z() * p.z()))
+                    - d)
+                    .abs()
+                    <= 1e-6 * scale
+            }
+            FaceSurface::Nurbs(_)
+            | FaceSurface::Cylinder(_)
+            | FaceSurface::Cone(_)
+            | FaceSurface::Sphere(_)
+            | FaceSurface::Torus(_) => false,
+        };
+        if !on_plane(topo.vertex(cross.from)?.point()) || !on_plane(topo.vertex(cross.to)?.point())
+        {
+            continue;
+        }
+        let wires: Vec<WireId> = std::iter::once(face.outer_wire())
+            .chain(face.inner_wires().iter().copied())
+            .collect();
+        for wid in wires {
+            let edges = topo.wire(wid)?.edges().to_vec();
+            let Some(i) = edges.iter().position(|oe| oe.edge() == end_edge) else {
+                continue;
+            };
+            let e = topo.edge(edges[i].edge())?;
+            let from_corner = edges[i].oriented_start(e) == cross.corner;
+            let b = topo.edge(beside)?;
+            let beside_out = OrientedEdge::new(beside, b.start() == cross.corner);
+            let beside_in = OrientedEdge::new(beside, b.end() == cross.corner);
+            // The cross edge runs `from` to `to`.
+            let cross_from = |start: VertexId| OrientedEdge::new(cross.edge, start == cross.from);
+            let replacement = if from_corner {
+                [beside_out, cross_from(near)]
+            } else {
+                [cross_from(far), beside_in]
+            };
+            let mut spliced = edges[..i].to_vec();
+            spliced.extend(replacement);
+            spliced.extend_from_slice(&edges[i + 1..]);
+            let new_wire = topo.add_wire(Wire::new(spliced, true)?);
+            let face = topo.face_mut(fid)?;
+            if face.outer_wire() == wid {
+                face.set_outer_wire(new_wire);
+            } else if let Some(slot) = face.inner_wires_mut().iter_mut().find(|w| **w == wid) {
+                *slot = new_wire;
+            }
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// A run of edges in an end face's wire: `len` edges from position `first`.

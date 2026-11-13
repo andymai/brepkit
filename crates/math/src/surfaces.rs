@@ -7,6 +7,7 @@
 use crate::MathError;
 use crate::aabb::Aabb3;
 use crate::frame::Frame3;
+use crate::madd::Madd;
 use crate::nurbs::surface::NurbsSurface;
 use crate::vec::{Point3, Vec3};
 
@@ -900,7 +901,7 @@ impl ToroidalSurface {
     pub fn evaluate(&self, u: f64, v: f64) -> Point3 {
         let (sin_u, cos_u) = u.sin_cos();
         let (sin_v, cos_v) = v.sin_cos();
-        let tube_radius = self.minor_radius.mul_add(cos_v, self.major_radius);
+        let tube_radius = self.minor_radius.madd(cos_v, self.major_radius);
         self.center
             + self.x_axis * (tube_radius * cos_u)
             + self.y_axis * (tube_radius * sin_u)
@@ -1102,7 +1103,7 @@ impl ToroidalSurface {
             let mut row = Vec::with_capacity(9);
             let mut w_row = Vec::with_capacity(9);
             for (j, &(dx, dy)) in dirs.iter().enumerate() {
-                let radial = dx.mul_add(self.minor_radius, self.major_radius);
+                let radial = dx.madd(self.minor_radius, self.major_radius);
                 row.push(
                     self.center
                         + self.x_axis * (ux * radial)
@@ -1195,11 +1196,11 @@ impl RevolutionSurface {
         let idx = (param as usize).min(num_pts - 2);
         let frac = param - idx as f64;
 
-        let r = frac.mul_add(
+        let r = frac.madd(
             self.generatrix_radii[idx + 1] - self.generatrix_radii[idx],
             self.generatrix_radii[idx],
         );
-        let height = frac.mul_add(
+        let height = frac.madd(
             self.generatrix_heights[idx + 1] - self.generatrix_heights[idx],
             self.generatrix_heights[idx],
         );

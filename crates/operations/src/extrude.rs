@@ -4,6 +4,7 @@
 //! extrusion translates all control points, preserving the exact surface
 //! representation for both caps.
 
+use brepkit_math::madd::Madd;
 use brepkit_math::nurbs::surface::NurbsSurface;
 use brepkit_math::tolerance::Tolerance;
 
@@ -955,7 +956,7 @@ fn cap_face(
                 let (from, to) = if oe.is_forward() { (t0, t1) } else { (t1, t0) };
                 points.extend((0..per_edge).map(|k| {
                     edge.curve().evaluate_with_endpoints(
-                        (to - from).mul_add(f64::from(k) / f64::from(per_edge), from),
+                        (to - from).madd(f64::from(k) / f64::from(per_edge), from),
                         sp,
                         ep,
                     )
@@ -1014,7 +1015,7 @@ fn cap_face(
             let area: f64 = (0..uv.len())
                 .map(|i| {
                     let (a, b) = (uv[i], uv[(i + 1) % uv.len()]);
-                    (a.0 - first.0).mul_add(b.1 - first.1, -((b.0 - first.0) * (a.1 - first.1)))
+                    (a.0 - first.0).madd(b.1 - first.1, -((b.0 - first.0) * (a.1 - first.1)))
                 })
                 .sum();
             if area == 0.0

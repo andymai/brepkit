@@ -5,6 +5,7 @@
 //! into the cone through its neutral circle, then re-solving the vertices they
 //! move, so the solid keeps its topology.
 
+use brepkit_math::madd::Madd;
 use std::collections::{HashMap, HashSet};
 
 use brepkit_math::curves::Circle3D;
@@ -34,7 +35,7 @@ struct DraftedWall {
 
 impl DraftedWall {
     fn radius_at(&self, height: f64) -> f64 {
-        self.slope.mul_add(height, self.radius)
+        self.slope.madd(height, self.radius)
     }
 
     /// The cone, its axis running from its apex toward its wider end.
@@ -156,11 +157,8 @@ pub fn draft(
         // A point of the neutral line: on the face's plane and the neutral
         // plane, in the span of their normals.
         let c = n.dot(pull);
-        let det = c.mul_add(-c, 1.0);
-        let (a, b) = (
-            c.mul_add(-neutral_d, off) / det,
-            c.mul_add(-off, neutral_d) / det,
-        );
+        let det = c.madd(-c, 1.0);
+        let (a, b) = (c.madd(-neutral_d, off) / det, c.madd(-off, neutral_d) / det);
         let on_line = n * a + pull * b;
         let turned = across * cos_a + pull * sin_a;
         planes.insert(fid, (turned, turned.dot(on_line)));
@@ -425,7 +423,7 @@ fn read_wall_edge(
     let (t0, t1) = curve.domain_with_endpoints(a, b);
     let points: Vec<Point3> = (0..=SAMPLES)
         .map(|k| {
-            let t = (t1 - t0).mul_add(f64::from(k) / f64::from(SAMPLES), t0);
+            let t = (t1 - t0).madd(f64::from(k) / f64::from(SAMPLES), t0);
             curve.evaluate_with_endpoints(t, a, b)
         })
         .collect();
@@ -479,7 +477,7 @@ fn point_on_walls(
     // Far from the origin the coordinates' own storage precision widens this,
     // as it does for `meeting_point`.
     let far = old.x().abs().max(old.y().abs()).max(old.z().abs());
-    let miss = 64.0f64.mul_add(f64::EPSILON * far, 10.0 * linear);
+    let miss = 64.0f64.madd(f64::EPSILON * far, 10.0 * linear);
     let on_plane = |&(n, off): &(Vec3, f64)| (dot_normal_point(n, point) - off).abs() <= miss;
     let on_wall = |w: &DraftedWall| {
         let foot = w.axis_point + pull * height;
@@ -519,7 +517,7 @@ fn meeting_point(planes: &[(Vec3, f64)], near: Point3, linear: f64) -> Option<Po
         .map(|&(_, d)| d.abs())
         .fold(v.length(), f64::max);
     let far = near.x().abs().max(near.y().abs()).max(near.z().abs());
-    let miss = 64.0f64.mul_add(f64::EPSILON * (far + reach), 10.0 * linear);
+    let miss = 64.0f64.madd(f64::EPSILON * (far + reach), 10.0 * linear);
     local
         .iter()
         .all(|&(n, d)| (n.dot(v) - d).abs() <= miss)

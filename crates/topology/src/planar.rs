@@ -1,5 +1,6 @@
 //! A planar face's boundary flattened into its plane.
 
+use brepkit_math::madd::Madd;
 use brepkit_math::nurbs::curve::NurbsCurve;
 use brepkit_math::nurbs::decompose::curve_bezier_between;
 use brepkit_math::quadrature;
@@ -280,7 +281,7 @@ fn nurbs_swept(
         points
             .iter()
             .map(|g| {
-                let d = curve.derivatives(half.mul_add(g.x, mid), 1);
+                let d = curve.derivatives(half.madd(g.x, mid), 1);
                 let (Some(&q), Some(&dq)) = (d.first(), d.get(1)) else {
                     return 0.0;
                 };
@@ -294,7 +295,7 @@ fn nurbs_swept(
         let (pa, pb) = (curve.evaluate(a), curve.evaluate(b));
         let chord = (pb - pa).length();
         [0.25_f64, 0.5, 0.75].iter().all(|&f| {
-            let on = curve.evaluate(f.mul_add(b - a, a));
+            let on = curve.evaluate(f.madd(b - a, a));
             (on - (pa + (pb - pa) * f)).length() <= 0.5 * chord
         })
     };

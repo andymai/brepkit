@@ -10,6 +10,7 @@
 //! 3. **`perform_areas`** — Growth vs Hole classification
 //! 4. **Assemble** — build final Solid from shells
 
+use brepkit_math::madd::Madd;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 use brepkit_math::vec::{Point3, Vec3};
@@ -876,7 +877,7 @@ fn direction_into_face(
         );
         let (t0, t1) = data.curve().domain_with_endpoints(sp, ep);
         for k in 0..=8_u32 {
-            let t = (t1 - t0).mul_add(f64::from(k) / 8.0, t0);
+            let t = (t1 - t0).madd(f64::from(k) / 8.0, t0);
             let lean = (data.curve().evaluate_with_endpoints(t, sp, ep) - mid).dot(across);
             most = most.max(lean);
             least = least.min(lean);
@@ -1245,11 +1246,10 @@ fn shell_is_outward_oriented(topo: &Topology, faces: &[FaceId]) -> Option<bool> 
                 for k in 0..4 {
                     let f = f64::from(k) / 4.0;
                     let f = if oe.is_forward() { f } else { 1.0 - f };
-                    pts.push(edge.curve().evaluate_with_endpoints(
-                        (d1 - d0).mul_add(f, d0),
-                        sp,
-                        ep,
-                    ));
+                    pts.push(
+                        edge.curve()
+                            .evaluate_with_endpoints((d1 - d0).madd(f, d0), sp, ep),
+                    );
                 }
             }
             if pts.len() < 3 {
@@ -1297,7 +1297,7 @@ fn shell_is_outward_oriented(topo: &Topology, faces: &[FaceId]) -> Option<bool> 
                     let f = if oe.is_forward() { f } else { 1.0 - f };
                     let p = edge
                         .curve()
-                        .evaluate_with_endpoints((d1 - d0).mul_add(f, d0), sp, ep);
+                        .evaluate_with_endpoints((d1 - d0).madd(f, d0), sp, ep);
                     if let Some((u, v)) = surface.project_point(p) {
                         if trace && (v.abs() > 1e6 || u.abs() > 1e6) {
                             log::debug!(
@@ -1450,11 +1450,9 @@ fn shell_is_outward_oriented(topo: &Topology, faces: &[FaceId]) -> Option<bool> 
                     {
                         let (sp, ep) = (sv.point(), ev.point());
                         let (d0, d1) = edge.curve().domain_with_endpoints(sp, ep);
-                        let mid = edge.curve().evaluate_with_endpoints(
-                            (d1 - d0).mul_add(0.5, d0),
-                            sp,
-                            ep,
-                        );
+                        let mid =
+                            edge.curve()
+                                .evaluate_with_endpoints((d1 - d0).madd(0.5, d0), sp, ep);
                         log::debug!(
                             "  FLUXEDGE {:?} {} ({:.3},{:.3},{:.3})->({:.3},{:.3},{:.3}) mid=({:.3},{:.3},{:.3})",
                             oe.edge(),
@@ -1676,7 +1674,7 @@ fn shell_extent(topo: &Topology, faces: &[FaceId]) -> f64 {
                 let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
                 let at = |f: f64| {
                     edge.curve()
-                        .evaluate_with_endpoints((t1 - t0).mul_add(f, t0), a, b)
+                        .evaluate_with_endpoints((t1 - t0).madd(f, t0), a, b)
                 };
                 [a, b, at(0.25), at(0.5), at(0.75)]
             })

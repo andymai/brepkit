@@ -2,6 +2,7 @@
 
 use crate::MathError;
 use crate::aabb::Aabb3;
+use crate::madd::Madd;
 use crate::nurbs::basis;
 use crate::vec::{Point3, Vec3};
 
@@ -103,7 +104,7 @@ impl NurbsCurve {
             let v_mid = self.derivatives(t_mid, 1)[1].length();
             let v1 = self.derivatives(t1, 1)[1].length();
 
-            length += (dt / 6.0) * v_mid.mul_add(4.0, v0 + v1);
+            length += (dt / 6.0) * v_mid.madd(4.0, v0 + v1);
         }
 
         length

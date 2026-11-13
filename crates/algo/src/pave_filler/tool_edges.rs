@@ -7,6 +7,7 @@
 //! already paved there for the faces on their far side.
 
 use brepkit_math::aabb::Aabb3;
+use brepkit_math::madd::Madd;
 use brepkit_math::tolerance::Tolerance;
 use brepkit_topology::Topology;
 use brepkit_topology::edge::EdgeId;
@@ -100,7 +101,7 @@ pub(super) fn perform(
             let (t0, t1) = pb.parameter_range();
             let samples: Vec<_> = (0..=SAMPLES)
                 .map(|k| {
-                    let t = (t1 - t0).mul_add(f64::from(k) / f64::from(SAMPLES), t0);
+                    let t = (t1 - t0).madd(f64::from(k) / f64::from(SAMPLES), t0);
                     curve.evaluate_with_endpoints(t, sp, ep)
                 })
                 .collect();

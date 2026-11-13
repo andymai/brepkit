@@ -105,6 +105,37 @@ pub struct FaceLoops2d {
     pub aabb: [f64; 6],
 }
 
+/// How far from its point a foot found by Newton from the sample before
+/// may land and still stand for the point.
+pub(crate) const WARM_FOOT: f64 = 1e-10;
+
+/// `surface`'s `(u, v)` for `point`, one of a run of points that follow one
+/// another along a curve on it, with `last` the one before.
+///
+/// On a NURBS surface Newton starts from `last`, a step along the curve
+/// away, and runs to rounding, so that it does not stop at `last` for a
+/// point close to it. A foot that lands off the point is some other part of
+/// the surface, or the point is off the surface: the whole surface is
+/// searched for that point, as for the first.
+pub(crate) fn project_following(
+    surface: &FaceSurface,
+    point: Point3,
+    last: &mut Option<(f64, f64)>,
+) -> Option<(f64, f64)> {
+    let near = match (surface, *last) {
+        (FaceSurface::Nurbs(n), Some(from)) => {
+            brepkit_math::nurbs::projection::project_point_to_surface_from(n, point, from, 1e-12)
+                .ok()
+                .filter(|foot| foot.distance <= WARM_FOOT)
+                .map(|foot| (foot.u, foot.v))
+        }
+        _ => None,
+    };
+    let found = near.or_else(|| surface.project_point(point));
+    *last = found;
+    found
+}
+
 impl FaceLoops2d {
     /// Sample `face_id`'s loops: two points per line, sixteen per curved edge,
     /// each edge walked in its traversal direction and excluding the traversal
@@ -150,6 +181,7 @@ impl FaceLoops2d {
          -> Result<Vec<Point2>, AlgoError> {
             let wire = topo.wire(wid)?;
             let mut out: Vec<Point2> = Vec::new();
+            let mut last = None;
             for oe in wire.edges() {
                 let e = topo.edge(oe.edge())?;
                 let sp = topo.vertex(e.start())?.point();
@@ -191,7 +223,8 @@ impl FaceLoops2d {
                     }
                     let Some(q) = (match frame.as_ref() {
                         Some(f) => Some(f.project(p3)),
-                        None => surface.project_point(p3).map(|(u, v)| Point2::new(u, v)),
+                        None => project_following(&surface, p3, &mut last)
+                            .map(|(u, v)| Point2::new(u, v)),
                     }) else {
                         continue;
                     };
@@ -800,5 +833,31 @@ mod tests {
         assert!(holds(0.5, 3.0));
         assert!(!holds(0.5, 6.1));
         assert!(!holds(0.9, 3.0));
+    }
+
+    /// A patch 5e-8 across in `v`: the far side lies nearer the near side
+    /// than a linear tolerance, and Newton from the near side must still
+    /// cross to it.
+    #[test]
+    fn a_point_closer_to_the_sample_before_than_tolerance_gets_its_own_parameters() {
+        use brepkit_math::nurbs::surface::NurbsSurface;
+        let thin = NurbsSurface::new(
+            1,
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![
+                vec![Point3::new(0.0, 0.0, 0.0), Point3::new(0.0, 5e-8, 0.0)],
+                vec![Point3::new(1.0, 0.0, 0.0), Point3::new(1.0, 5e-8, 0.0)],
+            ],
+            vec![vec![1.0, 1.0], vec![1.0, 1.0]],
+        )
+        .unwrap();
+        let surface = FaceSurface::Nurbs(thin);
+        let mut last = None;
+        let near = project_following(&surface, Point3::new(0.5, 0.0, 0.0), &mut last).unwrap();
+        let far = project_following(&surface, Point3::new(0.5, 5e-8, 0.0), &mut last).unwrap();
+        assert!(near.1.abs() < 1e-3, "near side at v = {}", near.1);
+        assert!((far.1 - 1.0).abs() < 1e-3, "far side at v = {}", far.1);
     }
 }

@@ -1,5 +1,6 @@
 //! Special topology handlers for face splitting edge cases.
 
+use brepkit_math::madd::Madd;
 use brepkit_math::vec::{Point2, Point3, Vec2};
 use brepkit_topology::edge::EdgeCurve;
 use brepkit_topology::face::{FaceId, FaceSurface};
@@ -844,7 +845,7 @@ fn as_hole(section: &[OrientedPCurveEdge], parent_net_u: f64) -> Vec<OrientedPCu
         let area: f64 = (0..unwrapped.len())
             .map(|i| {
                 let (a, b) = (unwrapped[i], unwrapped[(i + 1) % unwrapped.len()]);
-                a.0.mul_add(b.1, -(b.0 * a.1))
+                a.0.madd(b.1, -(b.0 * a.1))
             })
             .sum();
         area > 0.0
@@ -902,13 +903,11 @@ fn region_sample(
         for k in 0..poly.len() {
             let (a, b) = (poly[k], poly[(k + 1) % poly.len()]);
             let (ab, aq) = (b - a, q - a);
-            let t = (aq.x().mul_add(ab.x(), aq.y() * ab.y())
-                / ab.x()
-                    .mul_add(ab.x(), ab.y() * ab.y())
-                    .max(f64::MIN_POSITIVE))
+            let t = (aq.x().madd(ab.x(), aq.y() * ab.y())
+                / ab.x().madd(ab.x(), ab.y() * ab.y()).max(f64::MIN_POSITIVE))
             .clamp(0.0, 1.0);
             let (dx, dy) = (aq.x() - ab.x() * t, aq.y() - ab.y() * t);
-            near = near.min(dx.mul_add(dx, dy * dy));
+            near = near.min(dx.madd(dx, dy * dy));
             if near <= floor {
                 break;
             }
@@ -934,8 +933,8 @@ fn region_sample(
             for j in 0..nv {
                 #[allow(clippy::cast_precision_loss)]
                 let p = Point2::new(
-                    (u1 - u0).mul_add((i as f64 + 0.5) / nu as f64, u0),
-                    (v1 - v0).mul_add((j as f64 + 0.5) / nv as f64, v0),
+                    (u1 - u0).madd((i as f64 + 0.5) / nu as f64, u0),
+                    (v1 - v0).madd((j as f64 + 0.5) / nv as f64, v0),
                 );
                 let Some(q) = inside(&outer_uv, p) else {
                     continue;
@@ -1849,7 +1848,7 @@ fn winds_once(
     let (t0, t1) = curve.domain_with_endpoints(start, end);
     let us: Vec<f64> = (0..=SAMPLES)
         .map(|k| {
-            let t = (t1 - t0).mul_add(f64::from(k) / f64::from(SAMPLES), t0);
+            let t = (t1 - t0).madd(f64::from(k) / f64::from(SAMPLES), t0);
             surface
                 .project_point(curve.evaluate_with_endpoints(t, start, end))
                 .map(|(u, _)| u)
@@ -1881,7 +1880,7 @@ pub(super) fn band_stack<'a>(
         let (t0, t1) = e.curve_3d.domain_with_endpoints(e.start_3d, e.end_3d);
         (0..=RIM_SAMPLES)
             .map(|k| {
-                let t = (t1 - t0).mul_add(f64::from(k) / f64::from(RIM_SAMPLES), t0);
+                let t = (t1 - t0).madd(f64::from(k) / f64::from(RIM_SAMPLES), t0);
                 surface.project_point(e.curve_3d.evaluate_with_endpoints(t, e.start_3d, e.end_3d))
             })
             .collect()
@@ -2199,7 +2198,7 @@ impl TubeLoop {
             let mut pts: Vec<Point3> = (0..=n)
                 .map(|k| {
                     e.curve_3d.evaluate_with_endpoints(
-                        (t1 - t0).mul_add(f64::from(k) / f64::from(n), t0),
+                        (t1 - t0).madd(f64::from(k) / f64::from(n), t0),
                         from,
                         to,
                     )
@@ -2299,7 +2298,7 @@ fn seam_inside(
         (d > 1e-7 && d < dv.abs() - 1e-7).then(|| d / dv.abs())
     });
     (1..16).map(|k| f64::from(k) / 16.0).chain(breaks).all(|t| {
-        let (u, v) = (span.mul_add(t, ua), dv.mul_add(t, va));
+        let (u, v) = (span.madd(t, ua), dv.madd(t, va));
         let off = (u - first.u_at(v)).rem_euclid(TAU);
         let width = (next.u_at(v) - first.u_at(v)).rem_euclid(TAU);
         off > 1e-9 && off < width - 1e-9
@@ -2317,7 +2316,7 @@ fn seam_clear_of(lobe: &[(f64, f64)], (ua, va): (f64, f64), span: f64, dv: f64) 
     const CLEARANCE: f64 = 1e-6;
     let at = |k: u32| {
         let t = f64::from(k) / f64::from(STEPS);
-        (span.mul_add(t, ua), dv.mul_add(t, va))
+        (span.madd(t, ua), dv.madd(t, va))
     };
     if (0..=STEPS).any(|k| {
         let (u, v) = at(k);
@@ -2326,17 +2325,17 @@ fn seam_clear_of(lobe: &[(f64, f64)], (ua, va): (f64, f64), span: f64, dv: f64) 
         return false;
     }
     let orient = |a: (f64, f64), b: (f64, f64), c: (f64, f64)| {
-        (b.0 - a.0).mul_add(c.1 - a.1, -((b.1 - a.1) * (c.0 - a.0)))
+        (b.0 - a.0).madd(c.1 - a.1, -((b.1 - a.1) * (c.0 - a.0)))
     };
     let to_segment = |p: (f64, f64), a: (f64, f64), b: (f64, f64)| {
         let (dx, dy) = (b.0 - a.0, b.1 - a.1);
-        let len2 = dx.mul_add(dx, dy * dy);
+        let len2 = dx.madd(dx, dy * dy);
         let t = if len2 > 0.0 {
-            ((p.0 - a.0).mul_add(dx, (p.1 - a.1) * dy) / len2).clamp(0.0, 1.0)
+            ((p.0 - a.0).madd(dx, (p.1 - a.1) * dy) / len2).clamp(0.0, 1.0)
         } else {
             0.0
         };
-        (p.0 - dx.mul_add(t, a.0)).hypot(p.1 - dy.mul_add(t, a.1))
+        (p.0 - dx.madd(t, a.0)).hypot(p.1 - dy.madd(t, a.1))
     };
     let crosses = |p: (f64, f64), q: (f64, f64), a: (f64, f64), b: (f64, f64)| {
         (orient(p, q, a) * orient(p, q, b) < 0.0 && orient(a, b, p) * orient(a, b, q) < 0.0)
@@ -2481,7 +2480,7 @@ fn split_torus_by_tube_loops(
             let latitude = Circle3D::with_axes(
                 torus.center() + torus.z_axis() * (torus.minor_radius() * sin_v),
                 torus.z_axis(),
-                torus.minor_radius().mul_add(cos_v, torus.major_radius()),
+                torus.minor_radius().madd(cos_v, torus.major_radius()),
                 torus.x_axis(),
                 torus.y_axis(),
             )
@@ -2494,7 +2493,7 @@ fn split_torus_by_tube_loops(
             let pts: Vec<Point3> = (0..=16_u32)
                 .map(|k| {
                     let t = f64::from(k) / 16.0;
-                    torus.evaluate((u1 - u0).mul_add(t, u0), (v1 - v0).mul_add(t, v0))
+                    torus.evaluate((u1 - u0).madd(t, u0), (v1 - v0).madd(t, v0))
                 })
                 .collect();
             EdgeCurve::NurbsCurve(brepkit_math::nurbs::fitting::interpolate(&pts, 3).ok()?)
@@ -2666,7 +2665,7 @@ fn split_torus_by_tube_loops(
         let best = (0..32_u32)
             .filter_map(|j| {
                 let v = TAU * (f64::from(j) + 0.5) / 32.0;
-                let u = 0.5f64.mul_add(width(i, v), loops[i].u_at(v));
+                let u = 0.5f64.madd(width(i, v), loops[i].u_at(v));
                 if lobe_ids
                     .iter()
                     .any(|&k| torus_polygon_holds(&lobes[k].1, u, v))
@@ -2722,7 +2721,7 @@ impl RingLoop {
             let mut pts: Vec<Point3> = (0..=n)
                 .map(|k| {
                     e.curve_3d.evaluate_with_endpoints(
-                        (t1 - t0).mul_add(f64::from(k) / f64::from(n), t0),
+                        (t1 - t0).madd(f64::from(k) / f64::from(n), t0),
                         from,
                         to,
                     )
@@ -2835,7 +2834,7 @@ fn ring_seam_inside(
         .map(|d| d / du.abs());
     let margin = first.sag + next.sag + 1e-9;
     (1..16).map(|k| f64::from(k) / 16.0).chain(breaks).all(|t| {
-        let (u, v) = (du.mul_add(t, ua), span.mul_add(t, va));
+        let (u, v) = (du.madd(t, ua), span.madd(t, va));
         let off = (v - first.v_at(u)).rem_euclid(TAU);
         let width = (next.v_at(u) - first.v_at(u)).rem_euclid(TAU);
         off > margin && off < width - margin
@@ -2873,8 +2872,7 @@ fn fit_ring_seam(
             (torus.evaluate(u, v) - p).length()
         };
         let probes = 4 * spans;
-        if (0..=probes).all(|k| off((t1 - t0).mul_add(f64::from(k) / f64::from(probes), t0)) <= tol)
-        {
+        if (0..=probes).all(|k| off((t1 - t0).madd(f64::from(k) / f64::from(probes), t0)) <= tol) {
             return Some((curve, flat));
         }
         spans *= 2;
@@ -2981,7 +2979,7 @@ pub(super) fn split_torus_by_ring_loops(
             }
             EdgeCurve::Circle(meridian)
         } else {
-            let line = |t: f64| ((u1 - u0).mul_add(t, u0), (v1 - v0).mul_add(t, v0));
+            let line = |t: f64| ((u1 - u0).madd(t, u0), (v1 - v0).madd(t, v0));
             EdgeCurve::NurbsCurve(fit_ring_seam(torus, &line, a, b, close_tol)?.0)
         };
         Some(OrientedPCurveEdge {
@@ -3036,8 +3034,8 @@ pub(super) fn split_torus_by_ring_loops(
             let du = wrap(ub - ua);
             let lo = first.v_at(ua);
             let on_band = |t: f64| {
-                let u = du.mul_add(t, ua);
-                (u, t.mul_add(width(i, u), va + first.v_at(u) - lo))
+                let u = du.madd(t, ua);
+                (u, t.madd(width(i, u), va + first.v_at(u) - lo))
             };
             let far_v = vb + ((on_band(1.0).1 - vb) / TAU).round() * TAU;
             let path = |t: f64| {
@@ -3050,7 +3048,7 @@ pub(super) fn split_torus_by_ring_loops(
                 }
             };
             let piece = |t0: f64, t1: f64, from: Point3, to: Point3| {
-                let part = |t: f64| path((t1 - t0).mul_add(t, t0));
+                let part = |t: f64| path((t1 - t0).madd(t, t0));
                 let (curve, flat) = fit_ring_seam(torus, &part, from, to, close_tol)?;
                 let last = flat.len() - 1;
                 Some(OrientedPCurveEdge {
@@ -3087,7 +3085,7 @@ pub(super) fn split_torus_by_ring_loops(
         // Inside, half a turn round the ring from the seam.
         let u_far = at_a.0 + PI;
         let v_lo = first.v_at(u_far);
-        let interior = torus.evaluate(u_far, 0.5f64.mul_add(width(i, u_far), v_lo));
+        let interior = torus.evaluate(u_far, 0.5f64.madd(width(i, u_far), v_lo));
         bands.push(SplitSubFace {
             surface: surface.clone(),
             outer_wire: wire,
@@ -3181,7 +3179,7 @@ pub(super) fn split_periodic_face_into_bands(
         let (t0, t1) = s.curve_3d.domain_with_endpoints(s.start, s.end);
         (0..=64)
             .map(|k| {
-                let t = (t1 - t0).mul_add(f64::from(k) / 64.0, t0);
+                let t = (t1 - t0).madd(f64::from(k) / 64.0, t0);
                 surface.project_point(s.curve_3d.evaluate_with_endpoints(t, s.start, s.end))
             })
             .collect::<Option<Vec<_>>>()?
@@ -3495,7 +3493,7 @@ fn notch_rim(
     };
     let u_of = |p: Point3| -> Option<f64> {
         let (u, _) = surface.project_point(p)?;
-        Some(sense.mul_add((sense * (u - seam_u)).rem_euclid(period), seam_u))
+        Some(sense.madd((sense * (u - seam_u)).rem_euclid(period), seam_u))
     };
     let uv_of =
         |p: Point3| -> Option<Point2> { Some(Point2::new(u_of(p)?, surface.project_point(p)?.1)) };
@@ -3580,7 +3578,7 @@ fn notch_rim(
             start_uv: uv_of(from)?,
             // the arc back to the seam ends a whole turn on
             end_uv: if (to - rim.start_3d).length() < close_tol {
-                Point2::new(sense.mul_add(period, seam_u), end_uv.y())
+                Point2::new(sense.madd(period, seam_u), end_uv.y())
             } else {
                 end_uv
             },
@@ -5396,7 +5394,7 @@ fn outline_samples(e: &OrientedPCurveEdge, n: usize) -> Vec<Point3> {
     let mut pts: Vec<Point3> = (0..=n)
         .map(|k| {
             #[allow(clippy::cast_precision_loss)]
-            let t = std::f64::consts::TAU.mul_add(k as f64 / n as f64, a0);
+            let t = std::f64::consts::TAU.madd(k as f64 / n as f64, a0);
             c.evaluate(t)
         })
         .collect();
@@ -5650,7 +5648,7 @@ fn loop_polygon_uv(
         }
         let mut pts: Vec<Point2> = (0..=2 * steps)
             .map(|k| {
-                let t = (t1 - t0).mul_add(f64::from(k) / f64::from(2 * steps), t0);
+                let t = (t1 - t0).madd(f64::from(k) / f64::from(2 * steps), t0);
                 frame.project(e.curve_3d.evaluate_with_endpoints(t, from, to))
             })
             .collect();
@@ -5724,7 +5722,7 @@ fn nurbs_hull_polygon(
                 rest.clone()
             } else {
                 #[allow(clippy::cast_precision_loss)]
-                let at = (b1 - b0).mul_add(k as f64 / per as f64, b0);
+                let at = (b1 - b0).madd(k as f64 / per as f64, b0);
                 let (head, tail) = curve_split(&rest, at).ok()?;
                 rest = tail;
                 head
@@ -5778,12 +5776,12 @@ fn internal_loop_hole_interact(
         for &(b0, b1) in &hs {
             let (rx, ry) = (a1.x() - a0.x(), a1.y() - a0.y());
             let (sx, sy) = (b1.x() - b0.x(), b1.y() - b0.y());
-            let denom = rx.mul_add(sy, -(ry * sx));
+            let denom = rx.madd(sy, -(ry * sx));
             let scale = (rx.hypot(ry) * sx.hypot(sy)).max(f64::MIN_POSITIVE);
             if denom.abs() > 1e-9 * scale {
                 let (qx, qy) = (b0.x() - a0.x(), b0.y() - a0.y());
-                let t = qx.mul_add(sy, -(qy * sx)) / denom;
-                let u = qx.mul_add(ry, -(qy * rx)) / denom;
+                let t = qx.madd(sy, -(qy * sx)) / denom;
+                let u = qx.madd(ry, -(qy * rx)) / denom;
                 if t > 1e-6 && t < 1.0 - 1e-6 && u > 1e-6 && u < 1.0 - 1e-6 {
                     return true;
                 }
@@ -5965,11 +5963,8 @@ fn crossing_witnesses(path: &[Point2], region: &ChordOutline) -> Vec<Point2> {
         cuts.sort_by(f64::total_cmp);
         for w in cuts.windows(2) {
             for f in [0.25, 0.5, 0.75] {
-                let t = (w[1] - w[0]).mul_add(f, w[0]);
-                out.push(Point2::new(
-                    ab.x().mul_add(t, a.x()),
-                    ab.y().mul_add(t, a.y()),
-                ));
+                let t = (w[1] - w[0]).madd(f, w[0]);
+                out.push(Point2::new(ab.x().madd(t, a.x()), ab.y().madd(t, a.y())));
             }
         }
     }
@@ -5983,7 +5978,7 @@ fn segment_piece_crossings(
     piece: &brepkit_math::region2d::Boundary2,
 ) -> Vec<f64> {
     use brepkit_math::region2d::Boundary2;
-    let cross = |u: Vec2, v: Vec2| u.x().mul_add(v.y(), -(u.y() * v.x()));
+    let cross = |u: Vec2, v: Vec2| u.x().madd(v.y(), -(u.y() * v.x()));
     let ab = Vec2::new(b.x() - a.x(), b.y() - a.y());
     match *piece {
         Boundary2::Segment(c, d) => {
@@ -6018,7 +6013,7 @@ fn segment_piece_crossings(
             if qa <= 0.0 {
                 return Vec::new();
             }
-            let disc = qb.mul_add(qb, -4.0 * qa * qc);
+            let disc = qb.madd(qb, -4.0 * qa * qc);
             if disc < 0.0 {
                 return Vec::new();
             }
@@ -6038,7 +6033,7 @@ fn segment_piece_crossings(
 
 fn point_seg_dist_2d(p: Point2, a: Point2, b: Point2) -> f64 {
     let (dx, dy) = (b.x() - a.x(), b.y() - a.y());
-    let len2 = dx.mul_add(dx, dy * dy);
+    let len2 = dx.madd(dx, dy * dy);
     if len2 < 1e-30 {
         return (p.x() - a.x()).hypot(p.y() - a.y());
     }
@@ -6125,14 +6120,14 @@ fn union_internal_loop_with_hole(
             let mut ts = vec![0.0, 1.0];
             for &(b0, b1) in other {
                 let (sx, sy) = (b1.x() - b0.x(), b1.y() - b0.y());
-                let denom = rx.mul_add(sy, -(ry * sx));
+                let denom = rx.madd(sy, -(ry * sx));
                 let scale = (la * sx.hypot(sy)).max(f64::MIN_POSITIVE);
                 if denom.abs() <= 1e-9 * scale {
                     continue;
                 }
                 let (qx, qy) = (b0.x() - a0.x(), b0.y() - a0.y());
-                let t = qx.mul_add(sy, -(qy * sx)) / denom;
-                let u = qx.mul_add(ry, -(qy * rx)) / denom;
+                let t = qx.madd(sy, -(qy * sx)) / denom;
+                let u = qx.madd(ry, -(qy * rx)) / denom;
                 if t > 1e-9 && t < 1.0 - 1e-9 && u > -1e-6 && u < 1.0 + 1e-6 {
                     ts.push(t);
                 }
@@ -6372,7 +6367,7 @@ fn stands_clear<'a>(
 ) -> bool {
     chords
         .into_iter()
-        .all(|c| c.distance(u, v) > 2.0f64.mul_add(c.stray, clearance))
+        .all(|c| c.distance(u, v) > 2.0f64.madd(c.stray, clearance))
 }
 
 impl UvChord {
@@ -6470,13 +6465,13 @@ fn loop_chords(
 /// The distance from `p` to the segment `a`, `b`.
 fn segment_distance_2d(p: (f64, f64), a: (f64, f64), b: (f64, f64)) -> f64 {
     let (dx, dy) = (b.0 - a.0, b.1 - a.1);
-    let len2 = dx.mul_add(dx, dy * dy);
+    let len2 = dx.madd(dx, dy * dy);
     let t = if len2 > 0.0 {
         (((p.0 - a.0) * dx + (p.1 - a.1) * dy) / len2).clamp(0.0, 1.0)
     } else {
         0.0
     };
-    (p.0 - t.mul_add(dx, a.0)).hypot(p.1 - t.mul_add(dy, a.1))
+    (p.0 - t.madd(dx, a.0)).hypot(p.1 - t.madd(dy, a.1))
 }
 
 /// Whether `(u, v)` lies inside the region bounded by the combined inner-loop
@@ -6635,23 +6630,23 @@ pub(super) fn try_split_crossing_plane_face(
         let az = normal.z().abs();
         #[allow(clippy::similar_names)]
         let t0 = if az >= ax && az >= ay {
-            let det = d0.x().mul_add(d1.y(), -(d0.y() * d1.x()));
+            let det = d0.x().madd(d1.y(), -(d0.y() * d1.x()));
             if det.abs() < ptol {
                 return None;
             }
-            d.x().mul_add(d1.y(), -(d.y() * d1.x())) / det
+            d.x().madd(d1.y(), -(d.y() * d1.x())) / det
         } else if ay >= ax {
-            let det = d0.x().mul_add(d1.z(), -(d0.z() * d1.x()));
+            let det = d0.x().madd(d1.z(), -(d0.z() * d1.x()));
             if det.abs() < ptol {
                 return None;
             }
-            d.x().mul_add(d1.z(), -(d.z() * d1.x())) / det
+            d.x().madd(d1.z(), -(d.z() * d1.x())) / det
         } else {
-            let det = d0.y().mul_add(d1.z(), -(d0.z() * d1.y()));
+            let det = d0.y().madd(d1.z(), -(d0.z() * d1.y()));
             if det.abs() < ptol {
                 return None;
             }
-            d.y().mul_add(d1.z(), -(d.z() * d1.y())) / det
+            d.y().madd(d1.z(), -(d.z() * d1.y())) / det
         };
         cross_3d = s0.start + d0 * t0;
         let t1 = (cross_3d - s1.start).dot(d1) / d1.dot(d1);
@@ -6980,13 +6975,13 @@ pub(super) fn try_split_disk_by_chords(
     let seg_param = |a: Point2, b: Point2, c: Point2, d: Point2| -> Option<f64> {
         let rr = b - a;
         let ss = d - c;
-        let denom = rr.x().mul_add(ss.y(), -(rr.y() * ss.x()));
+        let denom = rr.x().madd(ss.y(), -(rr.y() * ss.x()));
         if denom.abs() < 1e-12 {
             return None;
         }
         let ac = c - a;
-        let t = ac.x().mul_add(ss.y(), -(ac.y() * ss.x())) / denom;
-        let u = ac.x().mul_add(rr.y(), -(ac.y() * rr.x())) / denom;
+        let t = ac.x().madd(ss.y(), -(ac.y() * ss.x())) / denom;
+        let u = ac.x().madd(rr.y(), -(ac.y() * rr.x())) / denom;
         let unit = -1e-9..=1.0 + 1e-9;
         (unit.contains(&t) && unit.contains(&u)).then(|| t.clamp(0.0, 1.0))
     };
@@ -7001,7 +6996,7 @@ pub(super) fn try_split_disk_by_chords(
         }
         let bb = 2.0 * f.dot(d);
         let cc = f.dot(f) - r * r;
-        let disc = bb.mul_add(bb, -(4.0 * aa * cc));
+        let disc = bb.madd(bb, -(4.0 * aa * cc));
         if disc < 0.0 {
             return Vec::new();
         }
@@ -7337,7 +7332,7 @@ pub(super) fn try_split_disk_by_chords(
         return None;
     }
     let interior_sum: f64 = interior.iter().map(|&i| face_area(&faces[i]).abs()).sum();
-    if (interior_sum - outer_area).abs() > outer_area.mul_add(1e-4, tol * tol) {
+    if (interior_sum - outer_area).abs() > outer_area.madd(1e-4, tol * tol) {
         return None;
     }
 
@@ -7442,6 +7437,7 @@ mod tests {
     };
     use brepkit_math::curves::Circle3D;
     use brepkit_math::curves2d::{Curve2D, Line2D};
+    use brepkit_math::madd::Madd;
     use brepkit_math::surfaces::CylindricalSurface;
     use brepkit_math::vec::{Point2, Point3, Vec2, Vec3};
     use brepkit_topology::edge::EdgeCurve;
@@ -7764,7 +7760,7 @@ mod tests {
             "{p:?} off the wall"
         );
         assert!(
-            p.z() > 0.0 && p.z() < 1.5f64.mul_add(p.x(), 2.0),
+            p.z() > 0.0 && p.z() < 1.5f64.madd(p.x(), 2.0),
             "{p:?} outside the wall's outline"
         );
     }
@@ -8766,7 +8762,7 @@ mod tests {
         let rim = |p: Point3| Point3::new(p.x(), p.y(), 1.0);
         let in_notch = |p: Point3| {
             let deg = p.y().atan2(p.x()).to_degrees().rem_euclid(360.0);
-            (120.0..250.0).contains(&deg) && p.z() > 0.3_f64.mul_add(p.x(), 0.5)
+            (120.0..250.0).contains(&deg) && p.z() > 0.3_f64.madd(p.x(), 0.5)
         };
         for (z, splits) in [(0.19998, true), (0.199_995, false)] {
             let sections = vec![
@@ -8895,7 +8891,7 @@ mod tests {
             (0..n)
                 .map(|k| {
                     let t = std::f64::consts::TAU * f64::from(k) / f64::from(n);
-                    Point2::new(r.mul_add(t.cos(), cx), r.mul_add(t.sin(), cy))
+                    Point2::new(r.madd(t.cos(), cx), r.madd(t.sin(), cy))
                 })
                 .collect()
         };
@@ -9070,7 +9066,7 @@ mod tests {
         let poly = (0..64)
             .map(|k| {
                 let a = -TAU * f64::from(k) / 64.0;
-                Point2::new(r.mul_add(a.cos(), cx), r.mul_add(a.sin(), cy))
+                Point2::new(r.madd(a.cos(), cx), r.madd(a.sin(), cy))
             })
             .collect();
         let arc = brepkit_math::region2d::Boundary2::Arc {

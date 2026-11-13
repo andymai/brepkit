@@ -3,6 +3,7 @@
 //! Fills an N-sided boundary with a surface patch. For 4-sided boundaries,
 //! uses Coons patch interpolation.
 
+use brepkit_math::madd::Madd;
 use brepkit_math::nurbs::curve::NurbsCurve;
 use brepkit_math::nurbs::surface::NurbsSurface;
 use brepkit_math::vec::Point3;
@@ -200,9 +201,9 @@ fn chain_loop(curves: &[Vec<Point3>]) -> Result<Vec<Vec<Point3>>, OperationsErro
 /// Linear blend: (1-t)*a + t*b
 fn blend(a: Point3, b: Point3, t: f64) -> Point3 {
     Point3::new(
-        a.x().mul_add(1.0 - t, b.x() * t),
-        a.y().mul_add(1.0 - t, b.y() * t),
-        a.z().mul_add(1.0 - t, b.z() * t),
+        a.x().madd(1.0 - t, b.x() * t),
+        a.y().madd(1.0 - t, b.y() * t),
+        a.z().madd(1.0 - t, b.z() * t),
     )
 }
 

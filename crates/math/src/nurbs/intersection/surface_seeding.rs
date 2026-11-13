@@ -1,6 +1,7 @@
 //! SSI seed finding: subdivision-based and grid-based approaches, plus the
 //! main `intersect_nurbs_nurbs` entry point.
 
+use crate::madd::Madd;
 use std::collections::VecDeque;
 
 use crate::MathError;
@@ -140,7 +141,7 @@ pub(super) fn planar_patch_sections(
             #[allow(clippy::cast_precision_loss)]
             let q = curve
                 .curve
-                .evaluate((t1 - t0).mul_add(k as f64 / checks as f64, t0));
+                .evaluate((t1 - t0).madd(k as f64 / checks as f64, t0));
             let Some(&(_, near)) = feet
                 .iter()
                 .min_by(|a, b| (a.0 - q).length().total_cmp(&(b.0 - q).length()))
@@ -195,6 +196,12 @@ pub fn intersect_nurbs_nurbs(
     }
     let n = samples.max(5);
     let tolerance = 1e-6;
+
+    // Surfaces whose control hulls part under subdivision meet nowhere: no
+    // seed search, by grid or along a boundary, has anything to find.
+    if surfaces_apart(surface1, surface2, 10.0 * tolerance) {
+        return Ok(Vec::new());
+    }
 
     // Compute adaptive initial step if not explicitly provided.
     let march_step = if march_step <= 0.0 || march_step > 1.0 {
@@ -643,6 +650,147 @@ pub(super) fn find_ssi_seeds_subdivision(
     seeds
 }
 
+/// How many halvings [`surfaces_apart`] tries on one pair of patches, and
+/// how many pairs it halves in all, before it gives up on a proof.
+const APART_DEPTH: usize = 10;
+const APART_BUDGET: usize = 512;
+
+/// Whether no point of `s1` is proved to lie within `margin` of `s2`.
+///
+/// The proof is by their Bezier patches' control points: a patch lies in the
+/// box of its control points, and between their extremes along any axis, and
+/// halves of it lie in smaller ones. `false` says only that the patches did
+/// not part within the budget.
+#[must_use]
+pub fn surfaces_apart(s1: &NurbsSurface, s2: &NurbsSurface, margin: f64) -> bool {
+    if !holds_its_hull(s1) || !holds_its_hull(s2) {
+        return false;
+    }
+    let (Ok(patches_a), Ok(patches_b)) =
+        (surface_to_bezier_patches(s1), surface_to_bezier_patches(s2))
+    else {
+        return false;
+    };
+    let mut budget = APART_BUDGET;
+    patches_a.iter().all(|pa| {
+        patches_b
+            .iter()
+            .all(|pb| patches_apart(pa, pb, margin, 0, &mut budget))
+    })
+}
+
+/// Whether a surface's Bezier patches are sure to hold it inside their
+/// control points: every weight positive and finite, which keeps a rational
+/// patch in its hull, and both knot vectors clamped with no interior knot
+/// repeated past the degree, which is all the decomposition reads.
+fn holds_its_hull(surface: &NurbsSurface) -> bool {
+    let weights_hold = surface
+        .weights()
+        .iter()
+        .flatten()
+        .all(|&w| w.is_finite() && w > 0.0);
+    let points_hold = surface
+        .control_points()
+        .iter()
+        .flatten()
+        .all(|p| p.x().is_finite() && p.y().is_finite() && p.z().is_finite());
+    let knots_hold = |knots: &[f64], degree: usize| {
+        let n = knots.len();
+        if n < 2 * (degree + 1) || knots.iter().any(|k| !k.is_finite()) {
+            return false;
+        }
+        let clamped = knots[..=degree]
+            .iter()
+            .all(|&k| k.to_bits() == knots[0].to_bits())
+            && knots[n - degree - 1..]
+                .iter()
+                .all(|&k| k.to_bits() == knots[n - 1].to_bits());
+        let interior = &knots[degree + 1..n - degree - 1];
+        let mut run = 0;
+        let mut repeats_hold = true;
+        for (i, k) in interior.iter().enumerate() {
+            run = if i > 0 && k.to_bits() == interior[i - 1].to_bits() {
+                run + 1
+            } else {
+                1
+            };
+            repeats_hold &= run <= degree;
+        }
+        clamped && repeats_hold
+    };
+    weights_hold
+        && points_hold
+        && knots_hold(surface.knots_u(), surface.degree_u())
+        && knots_hold(surface.knots_v(), surface.degree_v())
+}
+
+fn patches_apart(
+    pa: &BezierPatch,
+    pb: &BezierPatch,
+    margin: f64,
+    depth: usize,
+    budget: &mut usize,
+) -> bool {
+    if !pa.aabb().expanded(margin).intersects(pb.aabb()) {
+        return true;
+    }
+    // Two sheets running side by side part along the way either one faces
+    // long before their boxes do.
+    if [pa, pb]
+        .into_iter()
+        .filter_map(facing)
+        .any(|axis| parted_along(pa, pb, axis, margin))
+    {
+        return true;
+    }
+    if depth >= APART_DEPTH || *budget == 0 {
+        return false;
+    }
+    *budget -= 1;
+    if pa.diagonal() >= pb.diagonal() {
+        let halves = halve_bezier_patch(pa, longer_along_u(pa));
+        halves.len() == 2
+            && halves
+                .iter()
+                .all(|half| patches_apart(half, pb, margin, depth + 1, budget))
+    } else {
+        let halves = halve_bezier_patch(pb, longer_along_u(pb));
+        halves.len() == 2
+            && halves
+                .iter()
+                .all(|half| patches_apart(pa, half, margin, depth + 1, budget))
+    }
+}
+
+/// The way a patch faces, read off its corner control points: the cross of
+/// its two diagonals. `None` for a patch whose corners lie on a line.
+fn facing(patch: &BezierPatch) -> Option<Vec3> {
+    let net = patch.surface.control_points();
+    let (first, last) = (net.first()?, net.last()?);
+    let across = *last.last()? - *first.first()?;
+    let back = *first.last()? - *last.first()?;
+    across.cross(back).normalize().ok()
+}
+
+/// Whether the two patches' control points, and so the patches, lie more
+/// than `margin` apart along `axis`.
+fn parted_along(pa: &BezierPatch, pb: &BezierPatch, axis: Vec3, margin: f64) -> bool {
+    let reach = |patch: &BezierPatch| {
+        patch
+            .surface
+            .control_points()
+            .iter()
+            .flatten()
+            .map(|p| axis.dot(Vec3::new(p.x(), p.y(), p.z())))
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), d| {
+                (lo.min(d), hi.max(d))
+            })
+    };
+    let (a_lo, a_hi) = reach(pa);
+    let (b_lo, b_hi) = reach(pb);
+    a_lo > b_hi + margin || b_lo > a_hi + margin
+}
+
 /// Recursive helper: subdivide overlapping Bezier patch pairs to find SSI seeds.
 #[allow(clippy::too_many_arguments)]
 fn subdivide_for_seeds(
@@ -786,11 +934,43 @@ fn subdivide_patch_b_check_overlap(
 fn subdivide_bezier_patch(patch: &BezierPatch) -> Vec<BezierPatch> {
     let u_span = patch.u_range.1 - patch.u_range.0;
     let v_span = patch.v_range.1 - patch.v_range.0;
+    halve_bezier_patch(patch, u_span >= v_span)
+}
 
-    let (split_u, split_param) = if u_span >= v_span {
-        (true, patch.u_mid())
+/// Whether a patch's control net runs farther along `u` than along `v`: the
+/// longest row of control points against the longest column. Parameter spans
+/// do not say, with one parameter an angle and the other a length.
+fn longer_along_u(patch: &BezierPatch) -> bool {
+    let net = patch.surface.control_points();
+    let run = |points: &mut dyn Iterator<Item = Point3>| {
+        let mut length = 0.0;
+        let mut last: Option<Point3> = None;
+        for p in points {
+            if let Some(q) = last {
+                length += (p - q).length();
+            }
+            last = Some(p);
+        }
+        length
+    };
+    let columns = net.first().map_or(0, Vec::len);
+    let along_u = (0..columns)
+        .map(|j| run(&mut net.iter().filter_map(|row| row.get(j).copied())))
+        .fold(0.0, f64::max);
+    let along_v = net
+        .iter()
+        .map(|row| run(&mut row.iter().copied()))
+        .fold(0.0, f64::max);
+    along_u >= along_v
+}
+
+/// A Bezier patch's two halves about the middle of its `u` range, or of its
+/// `v` range.
+fn halve_bezier_patch(patch: &BezierPatch, split_u: bool) -> Vec<BezierPatch> {
+    let split_param = if split_u {
+        patch.u_mid()
     } else {
-        (false, patch.v_mid())
+        patch.v_mid()
     };
 
     // Insert the midpoint knot to full multiplicity and split.

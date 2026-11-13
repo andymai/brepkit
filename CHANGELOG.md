@@ -1,5 +1,33 @@
 # Changelog
 
+## [4.11.9](https://github.com/andymai/brepkit/compare/v4.11.8...v4.11.9) (2026-11-13)
+
+
+### Performance
+
+* **algo:** cut a revolved spline solid through its axis without a fit or a search per sample ([#2408](https://github.com/andymai/brepkit/issues/2408)) ([206ec36](https://github.com/andymai/brepkit/commit/206ec368098e160eec6eb6cbc7f9049547d5d69c))
+
+## [4.11.8](https://github.com/andymai/brepkit/compare/v4.11.7...v4.11.8) (2026-11-13)
+
+
+### Bug Fixes
+
+* **algo:** split a plane face along a NURBS face's edge that lies in it ([#2402](https://github.com/andymai/brepkit/issues/2402)) ([87d3e44](https://github.com/andymai/brepkit/commit/87d3e445a9576e7d28980906b3853289b52d9a55))
+
+## [4.11.7](https://github.com/andymai/brepkit/compare/v4.11.6...v4.11.7) (2026-11-13)
+
+
+### Performance
+
+* **operations:** cut a NURBS tool out of a NURBS blank it lies inside without a section search ([#2403](https://github.com/andymai/brepkit/issues/2403)) ([0a14545](https://github.com/andymai/brepkit/commit/0a1454523e43794d76f269ee05957d0118783933))
+
+## [4.11.6](https://github.com/andymai/brepkit/compare/v4.11.5...v4.11.6) (2026-11-13)
+
+
+### Bug Fixes
+
+* **operations:** loft profiles with spline edges along their curves ([#2399](https://github.com/andymai/brepkit/issues/2399)) ([3de6c91](https://github.com/andymai/brepkit/commit/3de6c917db754d8ea514bdc57914ae8c7cdfc60d))
+
 ## [4.11.5](https://github.com/andymai/brepkit/compare/v4.11.4...v4.11.5) (2026-11-12)
 
 

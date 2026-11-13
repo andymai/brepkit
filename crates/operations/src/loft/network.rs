@@ -30,6 +30,7 @@
 use brepkit_geometry::convert::{RecognizedCurve, recognize_curve};
 use brepkit_geometry::extrema::segment_segment_distance;
 use brepkit_math::curves::Circle3D;
+use brepkit_math::madd::Madd;
 use brepkit_math::nurbs::basis::{basis_funs, ders_basis_funs, find_span};
 use brepkit_math::nurbs::curve::NurbsCurve;
 use brepkit_math::nurbs::decompose::curve_bezier_between;
@@ -207,7 +208,22 @@ pub fn loft_with_options(
     if options.is_plain() {
         return super::loft_smooth(topo, profiles);
     }
-    Ok(network_loft(topo, profiles, options)?.0)
+    Ok(network_loft(topo, profiles, options, false)?.0)
+}
+
+/// The loft through `profiles` that keeps their edges' curves: one face along
+/// each pair of paired edges, smooth across the profiles, or `ruled`, straight
+/// from each profile to the next with an edge along every profile between.
+///
+/// # Errors
+///
+/// As [`loft_with_options`] without rails or conditions.
+pub(super) fn skin_loft(
+    topo: &mut Topology,
+    profiles: &[FaceId],
+    ruled: bool,
+) -> Result<SolidId, OperationsError> {
+    Ok(network_loft(topo, profiles, &LoftOptions::default(), ruled)?.0)
 }
 
 /// The faces of the loft [`loft_with_options`] makes but its two caps, as an
@@ -236,7 +252,7 @@ pub fn loft_sides_with_options(
             .collect();
         return super::loft_sides(topo, solid, &ends);
     }
-    let (_, sides) = network_loft(topo, profiles, options)?;
+    let (_, sides) = network_loft(topo, profiles, options, false)?;
     Ok(topo.add_shell(Shell::new(sides)?))
 }
 
@@ -246,6 +262,7 @@ fn network_loft(
     topo: &mut Topology,
     profiles: &[FaceId],
     options: &LoftOptions,
+    ruled: bool,
 ) -> Result<(SolidId, Vec<FaceId>), OperationsError> {
     if profiles.len() < 2 {
         return Err(refuse("loft requires at least 2 profiles"));
@@ -283,7 +300,12 @@ fn network_loft(
     let last = rings.len() - 1;
 
     let params = section_params(&rings, &rails)?;
-    let skin = SkinSpace::new(params, !options.start.is_free(), !options.end.is_free())?;
+    let skin = SkinSpace::new(
+        params,
+        !options.start.is_free(),
+        !options.end.is_free(),
+        ruled,
+    )?;
     let rail_curves = rails
         .iter()
         .map(|rail| rail.on_params(&skin.params))
@@ -400,7 +422,7 @@ fn network_loft(
             "the loft's surface runs back over itself: a weight or a rail carries it past where it comes back through",
         ));
     }
-    let bands = v_bands(v_degree, &v_knots, &sides);
+    let bands = v_bands(v_degree, &v_knots, &sides, ruled && v_degree == 1);
     let mut band_surfaces = Vec::with_capacity(bands.len());
     for band in &bands {
         let surfaces: Vec<FaceSurface> = sides
@@ -682,12 +704,12 @@ fn fit_polynomial(curve: &NurbsCurve, a: f64, b: f64) -> Result<NurbsCurve, Oper
     while spans <= 1024 {
         let step = (b - a) / spans as f64;
         let mut knots = vec![a; degree + 1];
-        knots.extend((1..spans).map(|k| (k as f64).mul_add(step, a)));
+        knots.extend((1..spans).map(|k| (k as f64).madd(step, a)));
         knots.extend(std::iter::repeat_n(b, degree + 1));
         let values = greville(degree, &knots).into_iter().map(target).collect();
         let coefs: Vec<[f64; 3]> = spline_through_greville(degree, &knots, values)?;
         let worst = (0..spans * 4)
-            .map(|k| ((k as f64 + 0.5) / 4.0).mul_add(step, a))
+            .map(|k| ((k as f64 + 0.5) / 4.0).madd(step, a))
             .map(|u| {
                 let at = spline_value(degree, &knots, &coefs, u);
                 (point(at) - point(target(u))).length()
@@ -853,7 +875,7 @@ fn on_circle(curve: &NurbsCurve, circle: &Circle3D, tol: f64) -> bool {
                         let j = k - i;
                         binomial(degree, i)
                             * binomial(degree, j)
-                            * (r * r).mul_add(-hull[i][3] * hull[j][3], q[i].dot(q[j]))
+                            * (r * r).madd(-hull[i][3] * hull[j][3], q[i].dot(q[j]))
                     })
                     .sum();
                 (sum / binomial(2 * degree, k)).abs()
@@ -935,7 +957,7 @@ fn split_closed(e: &ProfileEdgeGeom) -> Result<Vec<ProfileEdgeGeom>, OperationsE
             let mut rest = c.clone();
             let mut out = Vec::with_capacity(4);
             for k in 1..4 {
-                let t = (k as f64).mul_add((d1 - d0) / 4.0, d0);
+                let t = (k as f64).madd((d1 - d0) / 4.0, d0);
                 let (piece, tail) = curve_split(&rest, t)?;
                 out.push(piece);
                 rest = tail;
@@ -957,7 +979,7 @@ fn split_closed(e: &ProfileEdgeGeom) -> Result<Vec<ProfileEdgeGeom>, OperationsE
         EdgeCurve::Line => return Err(refuse("a straight edge cannot close on itself")),
     };
     let at = |k: usize| -> Point3 {
-        let t = (k as f64).mul_add(quarter, a0);
+        let t = (k as f64).madd(quarter, a0);
         match &e.curve {
             EdgeCurve::Circle(c) => c.evaluate(t),
             EdgeCurve::Ellipse(c) => c.evaluate(t),
@@ -976,7 +998,7 @@ fn split_closed(e: &ProfileEdgeGeom) -> Result<Vec<ProfileEdgeGeom>, OperationsE
 fn edge_point(e: &ProfileEdgeGeom, fraction: f64) -> Point3 {
     let (t0, t1) = e.curve.domain_with_endpoints(e.start, e.end);
     e.curve
-        .evaluate_with_endpoints((t1 - t0).mul_add(fraction, t0), e.start, e.end)
+        .evaluate_with_endpoints((t1 - t0).madd(fraction, t0), e.start, e.end)
 }
 
 /// Points round a ring, each curved edge sampled along its span.
@@ -1064,7 +1086,7 @@ fn cut_edge(e: &ProfileEdgeGeom, at: &[f64]) -> Result<Vec<ProfileEdgeGeom>, Ope
         let mut rest = curve.clone();
         let mut from = e.start;
         for &length in at {
-            let t = (t1 - t0).mul_add(fraction(length), t0);
+            let t = (t1 - t0).madd(fraction(length), t0);
             let (piece, tail) = curve_split(&rest, t)?;
             let to = tail.evaluate(tail.domain().0);
             out.push(ProfileEdgeGeom {
@@ -1460,7 +1482,7 @@ impl RailThrough {
                 .partition_point(|&x| x <= t)
                 .saturating_sub(1)
                 .min(last - 1);
-            (t - self.at[s]).mul_add(slope(s), params[s])
+            (t - self.at[s]).madd(slope(s), params[s])
         };
         let mapped: Vec<f64> = knots
             .iter()
@@ -1699,7 +1721,7 @@ fn vertex_deviations(
                 .zip(rail_deviations[a].iter().zip(&rail_deviations[b]))
             {
                 for axis in 0..3 {
-                    c[axis] = (1.0 - w).mul_add(da[axis], w * db[axis]);
+                    c[axis] = (1.0 - w).madd(da[axis], w * db[axis]);
                 }
             }
             along += lengths[i];
@@ -1724,7 +1746,9 @@ struct SkinSpace {
 }
 
 impl SkinSpace {
-    fn new(params: Vec<f64>, start: bool, end: bool) -> Result<Self, OperationsError> {
+    /// `ruled` runs straight from each profile to the next: degree one, which
+    /// no end condition can bend.
+    fn new(params: Vec<f64>, start: bool, end: bool, ruled: bool) -> Result<Self, OperationsError> {
         let mut sites = Vec::with_capacity(params.len() + 2);
         if start {
             sites.push(params[0]);
@@ -1734,7 +1758,11 @@ impl SkinSpace {
             sites.push(params[params.len() - 1]);
         }
         let n = sites.len();
-        let degree = (n - 1).min(3);
+        let degree = if ruled && !start && !end {
+            1
+        } else {
+            (n - 1).min(3)
+        };
         let mut knots = vec![params[0]; degree + 1];
         for j in 1..n - degree {
             #[allow(clippy::cast_precision_loss)]
@@ -1872,7 +1900,7 @@ impl EndField {
     /// from the condition's.
     fn desired(&self, i: usize, u: f64) -> Result<Vec3, OperationsError> {
         let next = (i + 1) % self.corners.len();
-        let lerp = |a: f64, b: f64| (1.0 - u).mul_add(a, u * b);
+        let lerp = |a: f64, b: f64| (1.0 - u).madd(a, u * b);
         let (at_start, at_end) = (self.square(i, 0.0)?, self.square(i, 1.0)?);
         let blend = self.corners[i] * (1.0 - u) + self.corners[next] * u;
         let here = self.square(i, u)?;
@@ -2587,7 +2615,7 @@ impl EdgeSpace {
             .collect();
         for span in self.knots.windows(2).filter(|w| w[1] > w[0]) {
             for k in 1..=4 {
-                let u = (k as f64 / 5.0).mul_add(span[1] - span[0], span[0]);
+                let u = (k as f64 / 5.0).madd(span[1] - span[0], span[0]);
                 let t = vector(spline_value(self.degree, &self.knots, &weighted, u))
                     * (1.0 / self.weight_at(u));
                 let wanted = field.desired(edge, u)?;
@@ -2755,7 +2783,7 @@ impl SideNet {
         let (before, after) = (legs(r - 1, r), legs(r, r + 1));
         let (u0, u1) = (self.knots[0], self.knots[self.knots.len() - 1]);
         (0..=ALONG).any(|k| {
-            let u = (u1 - u0).mul_add(k as f64 / ALONG as f64, u0);
+            let u = (u1 - u0).madd(k as f64 / ALONG as f64, u0);
             let leg = |coefs: &[[f64; 3]]| {
                 vector(spline_value(self.degree, &self.knots, coefs, u)).normalize()
             };
@@ -2795,8 +2823,10 @@ struct Band {
 /// different fractions of their parameters. A crease inside a NURBS face has
 /// no edge to tell it by, and no mesh of the face that follows the deflection
 /// settles around it. A full knot the sides run smoothly through, as a fitted
-/// rail's joints have, stays inside its band.
-fn v_bands(degree: usize, knots: &[f64], sides: &[SideNet]) -> Vec<Band> {
+/// rail's joints have, stays inside its band. A ruled loft's bands end
+/// `at_every_profile`, creased there or not, as a loft of lines and arcs has
+/// an edge along each of its profiles.
+fn v_bands(degree: usize, knots: &[f64], sides: &[SideNet], at_every_profile: bool) -> Vec<Band> {
     let mut cuts = Vec::new();
     let mut first = degree + 1;
     let interior_end = knots.len() - degree - 1;
@@ -2807,7 +2837,7 @@ fn v_bands(degree: usize, knots: &[f64], sides: &[SideNet]) -> Vec<Band> {
             .count();
         if count >= degree {
             let r = first + count - degree - 1;
-            if sides.iter().any(|side| side.creases_at(r)) {
+            if at_every_profile || sides.iter().any(|side| side.creases_at(r)) {
                 cuts.push((first, r));
             }
         }
@@ -2848,7 +2878,7 @@ fn with_deviation(
         for (column, &g) in net.iter_mut().zip(&sites) {
             for (c, (da, db)) in column.iter_mut().zip(a.iter().zip(b)) {
                 for axis in 0..3 {
-                    c[axis] += (1.0 - g).mul_add(da[axis], g * db[axis]);
+                    c[axis] += (1.0 - g).madd(da[axis], g * db[axis]);
                 }
             }
         }
@@ -2890,7 +2920,7 @@ fn with_deviation(
         let c0 = w - c1;
         for (c, (da, db)) in column.iter_mut().zip(a.iter().zip(b)) {
             for axis in 0..3 {
-                c[axis] = (c0.mul_add(da[axis], c1 * db[axis]) + c[axis]) / w;
+                c[axis] = (c0.madd(da[axis], c1 * db[axis]) + c[axis]) / w;
             }
         }
     }
@@ -2959,9 +2989,9 @@ fn doubles_back(surface: &NurbsSurface) -> bool {
     let (u0, u1) = surface.domain_u();
     let (v0, v1) = surface.domain_v();
     (0..=ACROSS).any(|i| {
-        let u = (u1 - u0).mul_add(i as f64 / ACROSS as f64, u0);
+        let u = (u1 - u0).madd(i as f64 / ACROSS as f64, u0);
         let line: Vec<Point3> = (0..=ALONG)
-            .map(|k| surface.evaluate(u, (v1 - v0).mul_add(k as f64 / ALONG as f64, v0)))
+            .map(|k| surface.evaluate(u, (v1 - v0).madd(k as f64 / ALONG as f64, v0)))
             .collect();
         line_meets_itself(&line, false)
     })
@@ -2991,11 +3021,11 @@ fn turns_inside_out(surface: &NurbsSurface) -> bool {
         d[1][0].cross(d[0][1])
     };
     (0..=ACROSS).any(|i| {
-        let u = (u1 - u0).mul_add(i as f64 / ACROSS as f64, u0);
+        let u = (u1 - u0).madd(i as f64 / ACROSS as f64, u0);
         stops.windows(2).any(|w| {
             // A normal read on a full knot is the far side's, across the crease.
             let end = w[1] - 1e-9 * (w[1] - w[0]);
-            let at = |k: usize| (end - w[0]).mul_add(k as f64 / ALONG as f64, w[0]);
+            let at = |k: usize| (end - w[0]).madd(k as f64 / ALONG as f64, w[0]);
             (0..ALONG).any(|k| normal(u, at(k)).dot(normal(u, at(k + 1))) < 0.0)
         })
     })
@@ -3014,9 +3044,9 @@ fn sections_cross(sides: &[NurbsSurface]) -> bool {
             .flat_map(|side| {
                 let (u0, u1) = side.domain_u();
                 let (v0, v1) = side.domain_v();
-                let v = (v1 - v0).mul_add(level as f64 / LEVELS as f64, v0);
+                let v = (v1 - v0).madd(level as f64 / LEVELS as f64, v0);
                 (0..ALONG)
-                    .map(move |k| side.evaluate((u1 - u0).mul_add(k as f64 / ALONG as f64, u0), v))
+                    .map(move |k| side.evaluate((u1 - u0).madd(k as f64 / ALONG as f64, u0), v))
             })
             .collect();
         line_meets_itself(&ring, true)

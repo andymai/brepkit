@@ -14,6 +14,7 @@ use brepkit_math::aabb::Aabb3;
 use brepkit_math::bvh::Bvh;
 use brepkit_math::cdt::Cdt;
 use brepkit_math::det_hash::DetHashMap;
+use brepkit_math::madd::Madd;
 use brepkit_math::predicates::orient3d;
 use brepkit_math::vec::{Point2, Point3, Vec3};
 
@@ -647,7 +648,7 @@ fn interp_param(p_a: f64, p_b: f64, d_a: f64, d_b: f64) -> f64 {
     if denom.abs() < 1e-30 {
         0.5 * (p_a + p_b)
     } else {
-        (p_b - p_a).mul_add(d_a / denom, p_a)
+        (p_b - p_a).madd(d_a / denom, p_a)
     }
 }
 
@@ -719,9 +720,9 @@ fn point_on_intersection_line(
 /// Linear interpolation between two points.
 fn lerp_point(a: Point3, b: Point3, t: f64) -> Point3 {
     Point3::new(
-        (b.x() - a.x()).mul_add(t, a.x()),
-        (b.y() - a.y()).mul_add(t, a.y()),
-        (b.z() - a.z()).mul_add(t, a.z()),
+        (b.x() - a.x()).madd(t, a.x()),
+        (b.y() - a.y()).madd(t, a.y()),
+        (b.z() - a.z()).madd(t, a.z()),
     )
 }
 
@@ -1306,9 +1307,9 @@ fn point_on_edge(pt: Point3, v0: Point3, v1: Point3, v2: Point3, tolerance: f64)
             continue;
         }
         let closest = Point3::new(
-            edge.x().mul_add(t, ea.x()),
-            edge.y().mul_add(t, ea.y()),
-            edge.z().mul_add(t, ea.z()),
+            edge.x().madd(t, ea.x()),
+            edge.y().madd(t, ea.y()),
+            edge.z().madd(t, ea.z()),
         );
         if dist_sq(pt, closest) < tolerance * tolerance {
             return Some(i);
@@ -1329,14 +1330,14 @@ fn barycentric(v0: Point3, v1: Point3, v2: Point3, p: Point3) -> (f64, f64, f64)
     let d20 = ep.dot(e0);
     let d21 = ep.dot(e1);
 
-    let denom = d00.mul_add(d11, -(d01 * d01));
+    let denom = d00.madd(d11, -(d01 * d01));
     if denom.abs() < 1e-30 {
         return (-1.0, -1.0, -1.0); // Degenerate triangle.
     }
 
     let inv = 1.0 / denom;
-    let v = d11.mul_add(d20, -(d01 * d21)) * inv;
-    let w = d00.mul_add(d21, -(d01 * d20)) * inv;
+    let v = d11.madd(d20, -(d01 * d21)) * inv;
+    let w = d00.madd(d21, -(d01 * d20)) * inv;
     let u = 1.0 - v - w;
 
     (u, v, w)
@@ -1570,7 +1571,7 @@ fn closest_point_on_triangle(p: Point3, a: Point3, b: Point3, c: Point3) -> Poin
         return b;
     }
 
-    let vc = d1.mul_add(d4, -(d3 * d2));
+    let vc = d1.madd(d4, -(d3 * d2));
     if vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0 {
         let t = d1 / (d1 - d3);
         return lerp_point(a, b, t);
@@ -1583,13 +1584,13 @@ fn closest_point_on_triangle(p: Point3, a: Point3, b: Point3, c: Point3) -> Poin
         return c;
     }
 
-    let vb = d5.mul_add(d2, -(d1 * d6));
+    let vb = d5.madd(d2, -(d1 * d6));
     if vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0 {
         let t = d2 / (d2 - d6);
         return lerp_point(a, c, t);
     }
 
-    let va = d3.mul_add(d6, -(d5 * d4));
+    let va = d3.madd(d6, -(d5 * d4));
     if va <= 0.0 && (d4 - d3) >= 0.0 && (d5 - d6) >= 0.0 {
         let t = (d4 - d3) / ((d4 - d3) + (d5 - d6));
         return lerp_point(b, c, t);
@@ -1599,9 +1600,9 @@ fn closest_point_on_triangle(p: Point3, a: Point3, b: Point3, c: Point3) -> Poin
     let v = vb * denom;
     let w = vc * denom;
     Point3::new(
-        ac.x().mul_add(w, ab.x().mul_add(v, a.x())),
-        ac.y().mul_add(w, ab.y().mul_add(v, a.y())),
-        ac.z().mul_add(w, ab.z().mul_add(v, a.z())),
+        ac.x().madd(w, ab.x().madd(v, a.x())),
+        ac.y().madd(w, ab.y().madd(v, a.y())),
+        ac.z().madd(w, ab.z().madd(v, a.z())),
     )
 }
 
@@ -1640,7 +1641,7 @@ pub(crate) fn winding_number_at_point(point: Point3, mesh: &TriangleMesh) -> f64
         let numerator = a.dot(b.cross(c));
         let denominator = c
             .dot(a)
-            .mul_add(lb, a.dot(b).mul_add(lc, b.dot(c).mul_add(la, la * lb * lc)));
+            .madd(lb, a.dot(b).madd(lc, b.dot(c).madd(la, la * lb * lc)));
 
         // atan2 gives the half solid angle; multiply by 2 at the end.
         total_solid_angle += 2.0 * numerator.atan2(denominator);

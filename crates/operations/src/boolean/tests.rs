@@ -7,6 +7,7 @@
     clippy::cast_possible_wrap
 )]
 
+use brepkit_math::madd::Madd;
 use brepkit_math::tolerance::Tolerance;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
@@ -303,7 +304,7 @@ fn fuse_disjoint_tapered_feet_grid_keeps_all_pieces() {
     // result falls back to tessellation (the analytic detector bails on more
     // than one cone face), so the summed-volume check below uses a 1% chord
     // tolerance — the documented accuracy for tessellated curved solids.
-    let v_one = PI * h / 3.0 * r_top.mul_add(r_top, r_bot.mul_add(r_bot, r_bot * r_top));
+    let v_one = PI * h / 3.0 * r_top.madd(r_top, r_bot.madd(r_bot, r_bot * r_top));
     let count = feet.len();
 
     // Pairwise accumulate (the brepkit-kernel adapter's loop).
@@ -362,7 +363,7 @@ fn fuse_overlapping_tapered_feet_welds_via_gfa() {
     )
     .unwrap();
 
-    let v_one = PI * h / 3.0 * r_top.mul_add(r_top, r_bot.mul_add(r_bot, r_bot * r_top));
+    let v_one = PI * h / 3.0 * r_top.madd(r_top, r_bot.madd(r_bot, r_bot * r_top));
     let fused = boolean(&mut topo, BooleanOp::Fuse, a, b).unwrap();
     // Overlapping feet weld into a single connected component (the fast path
     // would have wrongly left two).
@@ -879,9 +880,9 @@ fn fuse_l_with_a_rib_whose_sides_are_split_into_collinear_edges() {
     let outline = |pieces: u32| {
         let mut pts = vec![(3.0, 47.0), (5.0, 45.0), (45.0, 5.0), (47.0, 3.0)];
         let step = 44.0 / f64::from(pieces);
-        pts.extend((1..pieces).map(|k| (f64::from(k).mul_add(-step, 47.0), 3.0)));
+        pts.extend((1..pieces).map(|k| (f64::from(k).madd(-step, 47.0), 3.0)));
         pts.push((3.0, 3.0));
-        pts.extend((1..pieces).map(|k| (3.0, f64::from(k).mul_add(step, 3.0))));
+        pts.extend((1..pieces).map(|k| (3.0, f64::from(k).madd(step, 3.0))));
         pts
     };
     for pieces in [1, 2, 3, 4, 8] {
@@ -929,10 +930,7 @@ fn fuse_l_with_a_prism_whose_longest_edges_all_lie_inside() {
     let along = |from: (f64, f64), to: (f64, f64)| {
         (0..pieces).map(move |k| {
             let f = f64::from(k) / f64::from(pieces);
-            (
-                f.mul_add(to.0 - from.0, from.0),
-                f.mul_add(to.1 - from.1, from.1),
-            )
+            (f.madd(to.0 - from.0, from.0), f.madd(to.1 - from.1, from.1))
         })
     };
     let points: Vec<Point3> = along((2.0, 2.0), (7.0, 4.0))
@@ -2637,7 +2635,7 @@ fn compound_cut_matches_sequential_2x2_grid() {
     let compound_vol = crate::measure::solid_volume(&topo, result, 0.05).unwrap();
 
     // 4x4x2 box minus four full-height r=0.3 cylinders.
-    let expected = 2.0f64.mul_add(4.0 * 4.0, -(4.0 * std::f64::consts::PI * r * r * 2.0));
+    let expected = 2.0f64.madd(4.0 * 4.0, -(4.0 * std::f64::consts::PI * r * r * 2.0));
     let seq_rel = (seq_vol - expected).abs() / expected;
     assert!(
         seq_rel < 0.01,
@@ -2701,7 +2699,7 @@ fn compound_cut_matches_sequential_3x3_grid() {
     // 10x10x2 box minus nine full-height r=0.5 cylinders.
     #[allow(clippy::cast_precision_loss)]
     let n_tools = tools.len() as f64;
-    let expected = 2.0f64.mul_add(10.0 * 10.0, -(n_tools * std::f64::consts::PI * r * r * 2.0));
+    let expected = 2.0f64.madd(10.0 * 10.0, -(n_tools * std::f64::consts::PI * r * r * 2.0));
     let seq_rel = (seq_vol - expected).abs() / expected;
     assert!(
         seq_rel < 0.01,
@@ -2770,7 +2768,7 @@ fn compound_cut_matches_sequential_4x4_grid() {
     // 20x20x2 box minus sixteen full-height r=0.5 cylinders.
     #[allow(clippy::cast_precision_loss)]
     let n_tools = tools.len() as f64;
-    let expected = 2.0f64.mul_add(20.0 * 20.0, -(n_tools * std::f64::consts::PI * r * r * 2.0));
+    let expected = 2.0f64.madd(20.0 * 20.0, -(n_tools * std::f64::consts::PI * r * r * 2.0));
     let seq_rel = (seq_vol - expected).abs() / expected;
     assert!(
         seq_rel < 0.01,
@@ -5241,7 +5239,7 @@ fn fuse_slotted_plate_onto_a_cell_reaching_into_the_slot_is_exact() {
         cylinders > 0,
         "the fuse lost the rounded corners' cylinders"
     );
-    let slot_area = 4.0f64.mul_add(10.0 * 5.0, std::f64::consts::PI * 25.0);
+    let slot_area = 4.0f64.madd(10.0 * 5.0, std::f64::consts::PI * 25.0);
     let expected = 4.0
         * (rounded_rect_area(41.75, 41.75, 3.75) - slot_area
             + rounded_rect_area(20.75, 20.75, 3.75));
@@ -5299,7 +5297,7 @@ fn fuse_polygon_prism_standing_on_a_frustum_rim_is_exact() {
     #[allow(clippy::cast_precision_loss)]
     let polygon = 0.5 * sides as f64 * r_top * r_top * (std::f64::consts::TAU / sides as f64).sin();
     let frustum_volume =
-        std::f64::consts::PI * 3.0 / 3.0 * (18.0_f64.mul_add(18.0, 18.0 * r_top) + r_top * r_top);
+        std::f64::consts::PI * 3.0 / 3.0 * (18.0_f64.madd(18.0, 18.0 * r_top) + r_top * r_top);
     let expected = frustum_volume + polygon;
     let vol = crate::measure::oriented_solid_volume(&topo, result, 0.001).unwrap();
     assert!(
@@ -5317,7 +5315,7 @@ fn fuse_polygon_prism_standing_on_a_frustum_rim_is_exact() {
         })
         .map(|f| crate::measure::face_area(&topo, f, 0.001).unwrap())
         .sum();
-    let slivers = std::f64::consts::PI.mul_add(r_top * r_top, -polygon);
+    let slivers = std::f64::consts::PI.madd(r_top * r_top, -polygon);
     assert!(
         (at_contact - slivers).abs() < 1e-3 * slivers,
         "faces at the contact plane cover {at_contact:.4}, the slivers {slivers:.4}"
@@ -5669,7 +5667,7 @@ fn fuse_a_rod_with_a_flush_slot_bar_crossing_its_rim() {
         };
         let n = 4000;
         (0..n)
-            .map(|i| f((x1 - x0).mul_add((i as f64 + 0.5) / n as f64, x0)))
+            .map(|i| f((x1 - x0).madd((i as f64 + 0.5) / n as f64, x0)))
             .sum::<f64>()
             * (x1 - x0)
             / n as f64
@@ -5806,7 +5804,7 @@ fn cut_a_pin_bore_and_slot_through_a_knuckle_flush_with_its_bracket() {
     // x = 0.3), along the whole rod.
     let half = 0.3_f64;
     let r = 0.9_f64;
-    let quarter = half.mul_add((r * r - half * half).sqrt(), r * r * (half / r).asin()) / 2.0;
+    let quarter = half.madd((r * r - half * half).sqrt(), r * r * (half / r).asin()) / 2.0;
     let bore_in_slot = 2.0 * quarter - 2.0 * half * 0.3;
     let removed = (1.2 * 0.6 - bore_in_slot) * 8.0;
     assert_watertight_with_volume(&topo, slotted, 2, bored_volume - removed);
@@ -8999,11 +8997,7 @@ fn make_rounded_rect_split_corner_prism(
     for &(cx, cy, quarter) in &corners {
         for k in 0..3 {
             let a = (quarter + f64::from(k) * 0.5) * 2.0 * FRAC_PI_4;
-            pts.push(Point3::new(
-                r.mul_add(a.cos(), cx),
-                r.mul_add(a.sin(), cy),
-                z0,
-            ));
+            pts.push(Point3::new(r.madd(a.cos(), cx), r.madd(a.sin(), cy), z0));
         }
     }
     let vids: Vec<_> = pts
@@ -9108,7 +9102,7 @@ fn cylinder_cut_wall_bands_split_by_full_circles_beside_a_window() {
     let segment: f64 = (0..n)
         .map(|i| {
             let x = -10.0 + 20.0 * (f64::from(i) + 0.5) / f64::from(n);
-            (39.0f64.mul_add(39.0, -x * x).sqrt() - 30.0) * 20.0 / f64::from(n)
+            (39.0f64.madd(39.0, -x * x).sqrt() - 30.0) * 20.0 / f64::from(n)
         })
         .sum();
     assert_volume_near(&topo, result, 42450.0 - disc - segment, 1e-3);
@@ -9156,7 +9150,7 @@ fn cut_by_a_rim_notched_cylinder(
 
 /// The area under the circle `y = sqrt(r^2 - x^2)` from 0 to `x`.
 fn area_under_circle(r: f64, x: f64) -> f64 {
-    0.5 * x.mul_add(r.mul_add(r, -x * x).sqrt(), r * r * (x / r).asin())
+    0.5 * x.madd(r.madd(r, -x * x).sqrt(), r * r * (x / r).asin())
 }
 
 /// A cylinder cut through a plate, one rim inside a block that takes all of
@@ -9175,7 +9169,7 @@ fn cylinder_cut_wall_keeps_a_rim_notch_wider_than_half_a_turn() {
     let body = 40_000.0 + 18_000.0 + 48.0;
     // the plate loses a disc, the block the disc's part where x < 10, 1 deep
     let disc = std::f64::consts::PI * r * r;
-    let notch = 0.5f64.mul_add(disc, 2.0 * area_under_circle(r, 10.0));
+    let notch = 0.5f64.madd(disc, 2.0 * area_under_circle(r, 10.0));
     for flip in [false, true] {
         let mut topo = Topology::new();
         let result = cut_by_a_rim_notched_cylinder(&mut topo, &boxes, flip);
@@ -9202,7 +9196,7 @@ fn cylinder_cut_wall_keeps_a_stepped_rim_notch() {
     let disc = std::f64::consts::PI * r * r;
     // the disc's segments beyond y = -20 for |x| < 25, 0.1 deep, and beyond
     // y = -32 for 8 < x < 12, 1 deeper
-    let shallow = 0.1 * 2.0f64.mul_add(area_under_circle(r, 25.0), -20.0 * 50.0);
+    let shallow = 0.1 * 2.0f64.madd(area_under_circle(r, 25.0), -20.0 * 50.0);
     let deep = area_under_circle(r, 12.0) - area_under_circle(r, 8.0) - 32.0 * 4.0;
     for flip in [false, true] {
         let mut topo = Topology::new();
@@ -9284,15 +9278,15 @@ fn cone_cut_wall_keeps_a_rim_notch_beside_full_circles() {
     let (r_in, r_out) = (10.0_f64, 60.0_f64);
     let (a0, a1) = (150.0_f64.to_radians(), 210.0_f64.to_radians());
     let spread = a1 - a0;
-    let radius = |z: f64| 1.5f64.mul_add(-z, 39.0);
+    let radius = |z: f64| 1.5f64.madd(-z, 39.0);
     // plate 40000, the wedge's 60-degree ring section 3 deep, and the
     // post's 88 less its 8 in the plate and 32 in the wedge
-    let wedge = 1.5 * spread.sin() * r_out.mul_add(r_out, -r_in * r_in);
+    let wedge = 1.5 * spread.sin() * r_out.madd(r_out, -r_in * r_in);
     let body = 40_000.0 + wedge + 48.0;
     // the cone's volume from z0 to z1 over a whole turn
     let slab = |z0: f64, z1: f64| {
         let (p, q) = (radius(z0), radius(z1));
-        std::f64::consts::PI * (z1 - z0) * p.mul_add(p, q.mul_add(q, p * q)) / 3.0
+        std::f64::consts::PI * (z1 - z0) * p.madd(p, q.madd(q, p * q)) / 3.0
     };
 
     for wide in [false, true] {
@@ -9339,7 +9333,7 @@ fn cone_cut_wall_keeps_a_rim_notch_beside_full_circles() {
         };
         let disc = slab(plate_z.0, plate_z.1);
         let sector = spread / std::f64::consts::TAU * slab(notch_z.0, notch_z.1);
-        let notch = (0.5 * r_in * r_in).mul_add(-spread.sin(), sector);
+        let notch = (0.5 * r_in * r_in).madd(-spread.sin(), sector);
         assert_volume_near(&topo, result, body - disc - notch, 1e-6);
     }
 }

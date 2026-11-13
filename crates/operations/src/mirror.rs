@@ -2,6 +2,7 @@
 //!
 //! Creates a new copy of the solid reflected across the specified plane.
 
+use brepkit_math::madd::Madd;
 use brepkit_math::mat::Mat4;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
@@ -51,30 +52,30 @@ pub fn mirror(
     let nz = normal.z();
 
     // d = P · n (signed distance from origin to plane)
-    let d = nx.mul_add(
+    let d = nx.madd(
         plane_point.x(),
-        ny.mul_add(plane_point.y(), nz * plane_point.z()),
+        ny.madd(plane_point.y(), nz * plane_point.z()),
     );
 
     // Build the full reflection matrix including translation.
     // T(P) * Reflect * T(-P) = Reflect + 2d * n column
     let mat = Mat4([
         [
-            (2.0 * nx).mul_add(-nx, 1.0),
+            (2.0 * nx).madd(-nx, 1.0),
             -2.0 * nx * ny,
             -2.0 * nx * nz,
             2.0 * d * nx,
         ],
         [
             -2.0 * nx * ny,
-            (2.0 * ny).mul_add(-ny, 1.0),
+            (2.0 * ny).madd(-ny, 1.0),
             -2.0 * ny * nz,
             2.0 * d * ny,
         ],
         [
             -2.0 * nx * nz,
             -2.0 * ny * nz,
-            (2.0 * nz).mul_add(-nz, 1.0),
+            (2.0 * nz).madd(-nz, 1.0),
             2.0 * d * nz,
         ],
         [0.0, 0.0, 0.0, 1.0],

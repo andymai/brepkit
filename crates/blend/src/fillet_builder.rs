@@ -4,6 +4,7 @@
 //! and solid assembly. Supports constant and variable radius fillets on
 //! planar face pairs (v1).
 
+use brepkit_math::madd::Madd;
 use std::collections::HashSet;
 
 use brepkit_math::aabb::Aabb3;
@@ -1752,6 +1753,7 @@ impl<'a> FilletBuilder<'a> {
         let input_edges = input_edge_set(topo, &original_faces);
         let result_faces = drop_contact_slivers(topo, result_faces, &input_edges)?;
         fold_spoke_spurs(topo, &result_faces, &input_edges)?;
+        let result_faces = split_pinched_faces(topo, result_faces, &input_edges)?;
         let new_shell = match Shell::new(result_faces) {
             Ok(shell) => shell,
             Err(error) => {
@@ -2082,6 +2084,197 @@ fn fold_spoke_spurs(
     Ok(())
 }
 
+/// Split a face pinched along a contact that runs over one of the face's
+/// own straight edges in its middle.
+///
+/// A round whose width lands exactly on a step (a slab between two uprights
+/// exactly a radius high, its bottom edge rounded) runs its contact along
+/// the step's edge, which lies wholly inside the contact. The side face's
+/// wire then runs along the step's edge and, further on, back along the
+/// contact over it: two regions joined by a strip of no width. That is
+/// closed by edge count, but the face's mesh skips the strip while the
+/// face beyond the step's edge meshes it, so the shell's mesh is open.
+///
+/// The contact is split at the step edge's ends and the round takes the
+/// step's edge in place of the middle piece, so it meets the face beyond
+/// along it; the side face's wire, then running the step's edge both
+/// ways, is cut there into its two regions, each a face of its own. This
+/// is the spur `fold_spoke_spurs` folds, with the short edge inside the
+/// long one rather than at its end.
+fn split_pinched_faces(
+    topo: &mut Topology,
+    mut faces: Vec<FaceId>,
+    input_edges: &HashSet<EdgeId>,
+) -> Result<Vec<FaceId>, BlendError> {
+    const ON_LINE: f64 = 1e-6;
+    let point = |topo: &Topology, v: VertexId| topo.vertex(v).map(Vertex::point);
+    let mut k = 0;
+    'faces: while k < faces.len() {
+        let face_id = faces[k];
+        let face = topo.face(face_id)?;
+        if !face.inner_wires().is_empty() {
+            k += 1;
+            continue;
+        }
+        let wire_id = face.outer_wire();
+        let edges = topo.wire(wire_id)?.edges().to_vec();
+        let n = edges.len();
+        for (i, &long) in edges.iter().enumerate() {
+            if input_edges.contains(&long.edge())
+                || edges.iter().filter(|oe| oe.edge() == long.edge()).count() != 1
+            {
+                continue;
+            }
+            let long_edge = topo.edge(long.edge())?.clone();
+            if !straight_edge(topo, &long_edge, ON_LINE)? {
+                continue;
+            }
+            let (from, to) = (
+                long.oriented_start(&long_edge),
+                long.oriented_end(&long_edge),
+            );
+            let (fp, tp) = (point(topo, from)?, point(topo, to)?);
+            let span = tp - fp;
+            let length2 = span.dot(span);
+            if length2 <= 1e-18 {
+                continue;
+            }
+            // Where a point lies along the contact, strictly inside it.
+            let along = |p: Point3| {
+                let t = (p - fp).dot(span) / length2;
+                (t > 1e-9 && t < 1.0 - 1e-9 && (fp + span * t - p).length() <= ON_LINE).then_some(t)
+            };
+            for (j, &short) in edges.iter().enumerate() {
+                if j == i
+                    || !input_edges.contains(&short.edge())
+                    || edges.iter().filter(|oe| oe.edge() == short.edge()).count() != 1
+                {
+                    continue;
+                }
+                let short_edge = topo.edge(short.edge())?.clone();
+                if !straight_edge(topo, &short_edge, ON_LINE)? {
+                    continue;
+                }
+                // Run here against the contact: from its far end back.
+                let (b, a) = (
+                    short.oriented_start(&short_edge),
+                    short.oriented_end(&short_edge),
+                );
+                let (Some(ta), Some(tb)) = (along(point(topo, a)?), along(point(topo, b)?)) else {
+                    continue;
+                };
+                if ta >= tb {
+                    continue;
+                }
+                // The contact is shared with one other face, the short edge
+                // with one other face too.
+                let mut long_others = Vec::new();
+                let mut short_others = 0;
+                for &other in &faces {
+                    if other == face_id {
+                        continue;
+                    }
+                    let f = topo.face(other)?;
+                    for w in std::iter::once(f.outer_wire()).chain(f.inner_wires().iter().copied())
+                    {
+                        for oe in topo.wire(w)?.edges() {
+                            if oe.edge() == long.edge() {
+                                long_others.push(w);
+                            }
+                            if oe.edge() == short.edge() {
+                                short_others += 1;
+                            }
+                        }
+                    }
+                }
+                let [other_wire] = long_others.as_slice() else {
+                    continue;
+                };
+                if short_others != 1 {
+                    continue;
+                }
+                let other_wire = *other_wire;
+                // This wire with the contact cut at a and b, the short edge
+                // run a to b in place of the middle, then cut where it runs
+                // the short edge both ways.
+                let first = topo.add_edge(Edge::new(from, a, EdgeCurve::Line));
+                let last = topo.add_edge(Edge::new(b, to, EdgeCurve::Line));
+                let short_ab = OrientedEdge::new(short.edge(), !short.is_forward());
+                let mut cycle = Vec::with_capacity(n + 2);
+                for (m, &oe) in edges.iter().enumerate() {
+                    if m == i {
+                        cycle.push(OrientedEdge::new(first, true));
+                        cycle.push(short_ab);
+                        cycle.push(OrientedEdge::new(last, true));
+                    } else {
+                        cycle.push(oe);
+                    }
+                }
+                let positions: Vec<usize> = cycle
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, oe)| oe.edge() == short.edge())
+                    .map(|(m, _)| m)
+                    .collect();
+                let [p0, p1] = positions.as_slice() else {
+                    continue;
+                };
+                let len = cycle.len();
+                let take = |start: usize, end: usize| -> Vec<OrientedEdge> {
+                    let mut out = Vec::new();
+                    let mut m = (start + 1) % len;
+                    while m != end {
+                        out.push(cycle[m]);
+                        m = (m + 1) % len;
+                    }
+                    out
+                };
+                let (one, two) = (take(*p0, *p1), take(*p1, *p0));
+                if one.len() < 3 || two.len() < 3 {
+                    continue;
+                }
+                log::debug!(
+                    "pinched face {face_id:?}: {:?} inside {:?}, split in two",
+                    short.edge(),
+                    long.edge()
+                );
+                // The other face runs the contact one way or the other.
+                let other_edges = topo.wire(other_wire)?.edges().to_vec();
+                let closed = topo.wire(other_wire)?.is_closed();
+                let mut rewritten = Vec::with_capacity(other_edges.len() + 2);
+                for oe in other_edges {
+                    if oe.edge() != long.edge() {
+                        rewritten.push(oe);
+                    } else if oe.oriented_start(&long_edge) == from {
+                        rewritten.push(OrientedEdge::new(first, true));
+                        rewritten.push(short_ab);
+                        rewritten.push(OrientedEdge::new(last, true));
+                    } else {
+                        rewritten.push(OrientedEdge::new(last, false));
+                        rewritten.push(OrientedEdge::new(short.edge(), short.is_forward()));
+                        rewritten.push(OrientedEdge::new(first, false));
+                    }
+                }
+                *topo.wire_mut(other_wire)? = Wire::new(rewritten, closed)?;
+                *topo.wire_mut(wire_id)? = Wire::new(one, true)?;
+                let second_wire = topo.add_wire(Wire::new(two, true)?);
+                let face = topo.face(face_id)?;
+                let surface = face.surface().clone();
+                let twin = if face.is_reversed() {
+                    Face::new_reversed(second_wire, Vec::new(), surface)
+                } else {
+                    Face::new(second_wire, Vec::new(), surface)
+                };
+                let twin_id = topo.add_face(twin);
+                faces.push(twin_id);
+                continue 'faces;
+            }
+        }
+        k += 1;
+    }
+    Ok(faces)
+}
+
 /// The edges of the input's faces after the trim: their own edges and the
 /// pieces the trim split them into, which lie along the input's boundary
 /// just the same.
@@ -2284,7 +2477,7 @@ fn edge_lies_on(topo: &Topology, edge: &Edge, on: &Edge, tol: f64) -> Result<boo
     for k in 0..=count {
         let at = edge
             .curve()
-            .evaluate_with_endpoints(f64::from(k).mul_add(step, t0), a, b);
+            .evaluate_with_endpoints(f64::from(k).madd(step, t0), a, b);
         let off = match on.curve() {
             EdgeCurve::Line => {
                 let chord = q - p;
@@ -2303,7 +2496,7 @@ fn edge_lies_on(topo: &Topology, edge: &Edge, on: &Edge, tol: f64) -> Result<boo
         };
         worst = worst.max(off);
     }
-    let bound = (0.5 * speed).mul_add(step.abs(), worst);
+    let bound = (0.5 * speed).madd(step.abs(), worst);
     log::debug!("edge lies within {bound:e} of its neighbour ({worst:e} at its samples)");
     Ok(bound <= tol)
 }
@@ -2345,7 +2538,7 @@ fn speed_bound(curve: &EdgeCurve, a: Point3, b: Point3) -> Option<f64> {
                 if span <= 0.0 {
                     continue;
                 }
-                let lift = most.mul_add(
+                let lift = most.madd(
                     (points[j] - points[j - 1]).length(),
                     (weights[j] - weights[j - 1]).abs() * spread,
                 );
@@ -3436,8 +3629,8 @@ fn cylinder_meets_cap(
         let mut on = true;
         'check: for pair in lengths.windows(2) {
             for quarter in [0.25, 0.5, 0.75] {
-                let along = (pair[1] - pair[0]).mul_add(quarter, pair[0]) / total;
-                if off(curve.evaluate((t1 - t0).mul_add(along, t0)))? > tol {
+                let along = (pair[1] - pair[0]).madd(quarter, pair[0]) / total;
+                if off(curve.evaluate((t1 - t0).madd(along, t0)))? > tol {
                     on = false;
                     break 'check;
                 }
@@ -4000,13 +4193,13 @@ fn cap_edge_reaches_triangle(
 fn path_within_of_triangle(path: &[(f64, f64)], triangle: [(f64, f64); 3], margin: f64) -> bool {
     let to_segment = |p: (f64, f64), a: (f64, f64), b: (f64, f64)| {
         let (dx, dy) = (b.0 - a.0, b.1 - a.1);
-        let len2 = dx.mul_add(dx, dy * dy);
+        let len2 = dx.madd(dx, dy * dy);
         let t = if len2 <= 0.0 {
             0.0
         } else {
-            ((p.0 - a.0).mul_add(dx, (p.1 - a.1) * dy) / len2).clamp(0.0, 1.0)
+            ((p.0 - a.0).madd(dx, (p.1 - a.1) * dy) / len2).clamp(0.0, 1.0)
         };
-        (p.0 - t.mul_add(dx, a.0)).hypot(p.1 - t.mul_add(dy, a.1))
+        (p.0 - t.madd(dx, a.0)).hypot(p.1 - t.madd(dy, a.1))
     };
     let sides = [
         (triangle[0], triangle[1]),
@@ -4421,8 +4614,7 @@ fn removed_material_bounds(topo: &Topology, stripe: &Stripe) -> Result<Aabb3, Bl
         points.extend(nurbs_curve_hull(contact));
         let (t0, t1) = contact.domain();
         for k in 0..=CONTACT_SAMPLES {
-            let c =
-                contact.evaluate((t1 - t0).mul_add(f64::from(k) / f64::from(CONTACT_SAMPLES), t0));
+            let c = contact.evaluate((t1 - t0).madd(f64::from(k) / f64::from(CONTACT_SAMPLES), t0));
             let mut near = f64::INFINITY;
             for &edge_id in stripe.spine.edges() {
                 near = near.min(distance_to_edge(topo, edge_id, c)?);
@@ -6181,7 +6373,7 @@ mod tests {
             for contact in [&result.stripe.contact1, &result.stripe.contact2] {
                 let (t0, t1) = contact.domain();
                 for k in 0..=8 {
-                    let p = contact.evaluate((t1 - t0).mul_add(f64::from(k) / 8.0, t0));
+                    let p = contact.evaluate((t1 - t0).madd(f64::from(k) / 8.0, t0));
                     let on_plate = p.z().abs() < 1e-6 && (5.9..7.1).contains(&p.x());
                     let on_wall = (p.x() - 5.0).abs() < 1e-6 && (0.9..2.1).contains(&p.z());
                     assert!(on_plate || on_wall, "a contact at {p:?}");

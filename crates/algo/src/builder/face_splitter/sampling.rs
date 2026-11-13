@@ -1,5 +1,6 @@
 //! Wire and surface sampling functions for UV space.
 
+use brepkit_math::madd::Madd;
 use brepkit_math::vec::Point2;
 
 use super::super::split_types::OrientedPCurveEdge;
@@ -57,7 +58,7 @@ pub(super) fn sample_wire_loop_uv_via_frame(
         #[allow(clippy::cast_precision_loss)]
         let mut samples: Vec<Point2> = (1..CURVE_SAMPLES)
             .map(|k| {
-                let t = (t1 - t0).mul_add(k as f64 / CURVE_SAMPLES as f64, t0);
+                let t = (t1 - t0).madd(k as f64 / CURVE_SAMPLES as f64, t0);
                 frame.project(e.curve_3d.evaluate_with_endpoints(t, s3, e3))
             })
             .collect();
@@ -102,24 +103,21 @@ pub(super) fn sample_wire_loop_uv_on_surface(
             EdgeCurve::Circle(c) if closed => {
                 let (a0, turn) = (c.project(e.start_3d), if e.forward { TAU } else { -TAU });
                 (1..CURVE_SAMPLES)
-                    .map(|k| c.evaluate(turn.mul_add(fraction(k), a0)))
+                    .map(|k| c.evaluate(turn.madd(fraction(k), a0)))
                     .collect()
             }
             EdgeCurve::Ellipse(el) if closed => {
                 let (a0, turn) = (el.project(e.start_3d), if e.forward { TAU } else { -TAU });
                 (1..CURVE_SAMPLES)
-                    .map(|k| el.evaluate(turn.mul_add(fraction(k), a0)))
+                    .map(|k| el.evaluate(turn.madd(fraction(k), a0)))
                     .collect()
             }
             _ => {
                 let (t0, t1) = e.curve_3d.domain_with_endpoints(s3, e3);
                 let mut samples: Vec<_> = (1..CURVE_SAMPLES)
                     .map(|k| {
-                        e.curve_3d.evaluate_with_endpoints(
-                            (t1 - t0).mul_add(fraction(k), t0),
-                            s3,
-                            e3,
-                        )
+                        e.curve_3d
+                            .evaluate_with_endpoints((t1 - t0).madd(fraction(k), t0), s3, e3)
                     })
                     .collect();
                 // A marched curve's domain can run from either end: orient by
