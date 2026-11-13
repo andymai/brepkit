@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.11.12](https://github.com/andymai/brepkit/compare/v4.11.11...v4.11.12) (2026-11-13)
+
+
+### Performance
+
+* **math:** a B-spline surface or curve keeps what it has worked out ([#2418](https://github.com/andymai/brepkit/issues/2418)) ([4b250e5](https://github.com/andymai/brepkit/commit/4b250e557bf2ed7994f73460c14eb3385197d5ac))
+
 ## [4.11.11](https://github.com/andymai/brepkit/compare/v4.11.10...v4.11.11) (2026-11-13)
 
 
