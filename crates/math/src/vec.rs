@@ -13,6 +13,7 @@
 //! | [`Point2`] | `Position<2>` |
 //! | [`Point3`] | `Position<3>` |
 
+use crate::madd::Madd;
 use std::ops::{Add, AddAssign, Mul, Neg, Sub, SubAssign};
 
 use crate::MathError;
@@ -42,7 +43,7 @@ impl<const N: usize> Vector<N> {
         let mut sum = 0.0;
         let mut i = 0;
         while i < N {
-            sum = self.0[i].mul_add(self.0[i], sum);
+            sum = self.0[i].madd(self.0[i], sum);
             i += 1;
         }
         sum
@@ -97,7 +98,7 @@ impl Vector<2> {
     /// Dot product of two 2D vectors.
     #[must_use]
     pub fn dot(self, rhs: Self) -> f64 {
-        self.0[0].mul_add(rhs.0[0], self.0[1] * rhs.0[1])
+        self.0[0].madd(rhs.0[0], self.0[1] * rhs.0[1])
     }
 }
 
@@ -133,16 +134,16 @@ impl Vector<3> {
     /// Dot product of two 3D vectors.
     #[must_use]
     pub fn dot(self, rhs: Self) -> f64 {
-        self.0[0].mul_add(rhs.0[0], self.0[1].mul_add(rhs.0[1], self.0[2] * rhs.0[2]))
+        self.0[0].madd(rhs.0[0], self.0[1].madd(rhs.0[1], self.0[2] * rhs.0[2]))
     }
 
     /// Cross product of two 3D vectors.
     #[must_use]
     pub fn cross(self, rhs: Self) -> Self {
         Self([
-            self.0[1].mul_add(rhs.0[2], -(self.0[2] * rhs.0[1])),
-            self.0[2].mul_add(rhs.0[0], -(self.0[0] * rhs.0[2])),
-            self.0[0].mul_add(rhs.0[1], -(self.0[1] * rhs.0[0])),
+            self.0[1].madd(rhs.0[2], -(self.0[2] * rhs.0[1])),
+            self.0[2].madd(rhs.0[0], -(self.0[0] * rhs.0[2])),
+            self.0[0].madd(rhs.0[1], -(self.0[1] * rhs.0[0])),
         ])
     }
 }

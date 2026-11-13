@@ -1,6 +1,7 @@
 //! Planar and simple analytic face tessellation.
 
 use brepkit_math::det_hash::{DetHashMap, DetHashSet};
+use brepkit_math::madd::Madd;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
 
@@ -1010,7 +1011,7 @@ pub(super) fn polygon_self_crosses(pts: &[brepkit_math::vec::Point2]) -> bool {
     let orient = |a: brepkit_math::vec::Point2,
                   b: brepkit_math::vec::Point2,
                   c: brepkit_math::vec::Point2| {
-        (b.x() - a.x()).mul_add(c.y() - a.y(), -((b.y() - a.y()) * (c.x() - a.x())))
+        (b.x() - a.x()).madd(c.y() - a.y(), -((b.y() - a.y()) * (c.x() - a.x())))
     };
     // Sweep the sides by their x extent, testing only those that overlap.
     let mut order: Vec<usize> = (0..n).collect();
@@ -1076,7 +1077,7 @@ pub(super) fn cover_by_winding(
         let (a, b) = side(i);
         lo = lo.min(a.y());
         hi = hi.max(a.y());
-        area += a.x().mul_add(b.y(), -(b.x() * a.y()));
+        area += a.x().madd(b.y(), -(b.x() * a.y()));
     }
     let sense = if area < 0.0 { -1 } else { 1 };
     // Sides bucketed by the rows of y they span, so each test reads a few.
@@ -1102,7 +1103,7 @@ pub(super) fn cover_by_winding(
         for &s in &buckets[row_of(y)] {
             let (p, q) = side(s);
             if (p.y() > y) != (q.y() > y)
-                && (q.x() - p.x()).mul_add((y - p.y()) / (q.y() - p.y()), p.x()) > x
+                && (q.x() - p.x()).madd((y - p.y()) / (q.y() - p.y()), p.x()) > x
             {
                 w += if q.y() > p.y() { 1 } else { -1 };
             }

@@ -1,5 +1,6 @@
 //! Volume, center of mass, and related computations for B-rep solids.
 
+use brepkit_math::madd::Madd;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
 use brepkit_topology::face::{FaceId, FaceSurface};
@@ -136,7 +137,7 @@ fn torus_wire_wraps_tube(
             let f = f64::from(k) / 8.0;
             let p = e
                 .curve()
-                .evaluate_with_endpoints((t1 - t0).mul_add(f, t0), sp, ep);
+                .evaluate_with_endpoints((t1 - t0).madd(f, t0), sp, ep);
             vs.push(torus.project_point(p).1);
         }
     }
@@ -2000,13 +2001,13 @@ fn planar_face_flux(
     };
     let (ex, ey) = (frame.x, frame.y);
     let flat = |v: Vec3| (v.dot(ex), v.dot(ey));
-    let cross = |(ax, ay): (f64, f64), (bx, by): (f64, f64)| ax.mul_add(by, -(ay * bx));
+    let cross = |(ax, ay): (f64, f64), (bx, by): (f64, f64)| ax.madd(by, -(ay * bx));
     // `∫ (P − Q) × P′ dt` over `[t0, t1]` for `P(t) = c + A cos t + B sin t`.
     let conic = |c: Point3, a: Vec3, b: Vec3, t0: f64, t1: f64, q: Point3| {
         let (c, a, b) = (flat(c - q), flat(a), flat(b));
-        cross(c, a).mul_add(
+        cross(c, a).madd(
             t1.cos() - t0.cos(),
-            cross(c, b).mul_add(t1.sin() - t0.sin(), cross(a, b) * (t1 - t0)),
+            cross(c, b).madd(t1.sin() - t0.sin(), cross(a, b) * (t1 - t0)),
         )
     };
     let gauss = brepkit_math::quadrature::gauss_legendre_points(16);
@@ -2059,7 +2060,7 @@ fn planar_face_flux(
                         for w in cuts.windows(2) {
                             let (mid, half) = (0.5 * (w[0] + w[1]), 0.5 * (w[1] - w[0]));
                             for g in gauss {
-                                let ders = n.derivatives(half.mul_add(g.x, mid), 1);
+                                let ders = n.derivatives(half.madd(g.x, mid), 1);
                                 part += g.w * half * cross(flat(ders[0] - q_vec), flat(ders[1]));
                             }
                         }
@@ -2683,7 +2684,7 @@ fn sphere_wire_u_progress(
         );
         for (from, to) in traversal_spans(edge, oe.is_forward(), sp, ep) {
             for i in 0..=16 {
-                let t = (to - from).mul_add(f64::from(i) / 16.0, from);
+                let t = (to - from).madd(f64::from(i) / 16.0, from);
                 let (u, v) = sphere.project_point(edge.curve().evaluate_with_endpoints(t, sp, ep));
                 if v.abs() >= FRAC_PI_2 - 1e-6 {
                     continue;
@@ -2726,7 +2727,7 @@ fn sphere_wire_on_box_sides(
         let mut samples: Vec<(f64, f64)> = Vec::new();
         for (from, to) in traversal_spans(edge, oe.is_forward(), sp, ep) {
             samples.extend((0..=8).map(|i| {
-                let t = (to - from).mul_add(f64::from(i) / 8.0, from);
+                let t = (to - from).madd(f64::from(i) / 8.0, from);
                 sphere.project_point(edge.curve().evaluate_with_endpoints(t, sp, ep))
             }));
         }
@@ -4028,7 +4029,7 @@ mod regression_tests {
 
         // The merged solid has 2 cone walls + 2 closed-circle disc caps; the top
         // cap's closed circle must contribute (1/3)·12·π·2² to the volume.
-        let fr = |rb: f64, rt: f64, h: f64| PI * h / 3.0 * rb.mul_add(rb, rb.mul_add(rt, rt * rt));
+        let fr = |rb: f64, rt: f64, h: f64| PI * h / 3.0 * rb.madd(rb, rb.madd(rt, rt * rt));
         let expected = fr(6.0, 4.0, 6.0) + fr(4.0, 2.0, 6.0);
 
         let v_fine = solid_volume(&topo, solid, 0.0001).unwrap();
@@ -4652,8 +4653,8 @@ mod tests {
                     .iter()
                     .map(|&(x, y): &(f64, f64)| {
                         Point3::new(
-                            x.mul_add(a.cos(), -y * a.sin()),
-                            x.mul_add(a.sin(), y * a.cos()),
+                            x.madd(a.cos(), -y * a.sin()),
+                            x.madd(a.sin(), y * a.cos()),
                             z,
                         )
                     })

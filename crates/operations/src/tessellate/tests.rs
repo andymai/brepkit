@@ -3,6 +3,7 @@
 #![allow(clippy::unwrap_used, deprecated)]
 
 use brepkit_math::det_hash::{DetHashMap, DetHashSet};
+use brepkit_math::madd::Madd;
 use brepkit_math::nurbs::surface::NurbsSurface;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
@@ -3120,13 +3121,13 @@ fn distance_to_revolved_polyline(polyline: &[(f64, f64)], p: Point3) -> f64 {
     let q = (p.x().hypot(p.y()), p.z());
     let to_segment = |a: (f64, f64), b: (f64, f64)| {
         let (dr, dz) = (b.0 - a.0, b.1 - a.1);
-        let len2 = dr.mul_add(dr, dz * dz);
+        let len2 = dr.madd(dr, dz * dz);
         let f = if len2 > 0.0 {
-            ((q.0 - a.0).mul_add(dr, (q.1 - a.1) * dz) / len2).clamp(0.0, 1.0)
+            ((q.0 - a.0).madd(dr, (q.1 - a.1) * dz) / len2).clamp(0.0, 1.0)
         } else {
             0.0
         };
-        (q.0 - f.mul_add(dr, a.0)).hypot(q.1 - f.mul_add(dz, a.1))
+        (q.0 - f.madd(dr, a.0)).hypot(q.1 - f.madd(dz, a.1))
     };
     let near = (0..polyline.len())
         .step_by(STRIDE)
@@ -3961,7 +3962,7 @@ fn a_flat_trapezoid_needs_no_grid_for_its_twist() {
 /// triangles along either diagonal, read at 8 by 8 points inside it.
 fn cell_strays(at: &dyn Fn(f64, f64) -> Point3, (u0, v0): (f64, f64), (du, dv): (f64, f64)) -> f64 {
     use super::nurbs::point_triangle_distance;
-    let corner = |a: f64, b: f64| at(du.mul_add(a, u0), dv.mul_add(b, v0));
+    let corner = |a: f64, b: f64| at(du.madd(a, u0), dv.madd(b, v0));
     let (p00, p10, p01, p11) = (
         corner(0.0, 0.0),
         corner(1.0, 0.0),

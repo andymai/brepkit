@@ -1,6 +1,7 @@
 //! Shared utility functions for the check crate.
 
 use brepkit_math::aabb::Aabb3;
+use brepkit_math::madd::Madd;
 use brepkit_math::vec::{Point2, Point3, Vec3};
 use brepkit_topology::Topology;
 use brepkit_topology::edge::EdgeCurve;
@@ -25,7 +26,7 @@ pub fn polygon_normal(verts: &[Point3]) -> Vec3 {
         ny += (vi.z() - vj.z()) * (vi.x() + vj.x());
         nz += (vi.x() - vj.x()) * (vi.y() + vj.y());
     }
-    let len = (nx.mul_add(nx, ny.mul_add(ny, nz * nz))).sqrt();
+    let len = (nx.madd(nx, ny.madd(ny, nz * nz))).sqrt();
     if len < 1e-30 {
         Vec3::new(0.0, 0.0, 1.0)
     } else {

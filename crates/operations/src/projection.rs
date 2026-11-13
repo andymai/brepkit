@@ -7,6 +7,7 @@
 //! drawing is inherently polygonal.
 
 use brepkit_check::classify::SolidClassifier;
+use brepkit_math::madd::Madd;
 use brepkit_math::vec::{Point2, Point3, Vec3};
 use brepkit_topology::Topology;
 use brepkit_topology::solid::SolidId;
@@ -206,14 +207,14 @@ pub fn project_solids_edges(
         let steps = (seen.len() - 1).max((seen_length / resolution).ceil() as usize);
         #[allow(clippy::cast_precision_loss)]
         let mut params: Vec<f64> = (0..=steps)
-            .map(|k| (t1 - t0).mul_add(k as f64 / steps as f64, t0))
+            .map(|k| (t1 - t0).madd(k as f64 / steps as f64, t0))
             .collect();
         let grid_view: Vec<Point2> = params.iter().map(|&t| project(at(t))).collect();
         let aside = 1e-4 / steps.max(1) as f64 * (t1 - t0);
         let mut extra = Vec::new();
         for (k, w) in grid_view.windows(2).enumerate() {
             for f in views.crossings(w[0], w[1], index) {
-                let t = (params[k + 1] - params[k]).mul_add(f, params[k]);
+                let t = (params[k + 1] - params[k]).madd(f, params[k]);
                 extra.extend([t - aside, t + aside]);
             }
         }

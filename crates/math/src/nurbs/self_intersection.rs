@@ -22,6 +22,7 @@
 use crate::MathError;
 use crate::aabb::Aabb3;
 use crate::bvh::Bvh;
+use crate::madd::Madd;
 use crate::nurbs::curve::NurbsCurve;
 use crate::nurbs::surface::NurbsSurface;
 use crate::vec::{Point3, Vec3};
@@ -313,13 +314,13 @@ fn surface_newton_step_self(surface: &NurbsSurface, u: f64, v: f64, target: Poin
     let b1 = su.dot(r_vec);
     let b2 = sv.dot(r_vec);
 
-    let det = a11.mul_add(a22, -(a12 * a12));
+    let det = a11.madd(a22, -(a12 * a12));
     if det.abs() < 1e-20 {
         return (0.0, 0.0);
     }
 
-    let du = b1.mul_add(a22, -(b2 * a12)) / det;
-    let dv = a11.mul_add(b2, -(a12 * b1)) / det;
+    let du = b1.madd(a22, -(b2 * a12)) / det;
+    let dv = a11.madd(b2, -(a12 * b1)) / det;
 
     (du, dv)
 }

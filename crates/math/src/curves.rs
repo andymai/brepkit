@@ -3,6 +3,7 @@
 //! These provide exact evaluation (no NURBS approximation) for the
 //! most common curve types in CAD.
 
+use crate::madd::Madd;
 use std::f64::consts::PI;
 
 use crate::MathError;
@@ -540,12 +541,12 @@ impl Circle3D {
             )),
         );
         let (a, b, c) = (n1.dot(n1), n2.dot(n2), n1.dot(n2));
-        let det = a.mul_add(b, -(c * c));
+        let det = a.madd(b, -(c * c));
         let base = n1 * ((h1 * b - h2 * c) / det) + n2 * ((h2 * a - h1 * c) / det);
         let base = Point3::new(base.x(), base.y(), base.z());
         let off = base - self.center;
         let half_b = dir.dot(off);
-        let disc = half_b.mul_add(half_b, -(off.dot(off) - self.radius * self.radius));
+        let disc = half_b.madd(half_b, -(off.dot(off) - self.radius * self.radius));
         let well = 2.0 * self.radius * tol;
         if disc < -well {
             return out;
@@ -607,7 +608,7 @@ impl Circle3D {
                 const STEPS: u32 = 256;
                 let g = |s: f64| {
                     let d = ellipse.evaluate(s) - self.center;
-                    self.radius.mul_add(-self.radius, d.dot(d))
+                    self.radius.madd(-self.radius, d.dot(d))
                 };
                 let mut prev = (0.0, g(0.0));
                 for k in 1..=STEPS {
@@ -792,7 +793,7 @@ impl Ellipse3D {
         let a = self.semi_major;
         let b = self.semi_minor;
         let h = (a - b) * (a - b) / ((a + b) * (a + b));
-        PI * (a + b) * (1.0 + 3.0 * h / (10.0 + (3.0f64.mul_add(-h, 4.0)).sqrt()))
+        PI * (a + b) * (1.0 + 3.0 * h / (10.0 + (3.0f64.madd(-h, 4.0)).sqrt()))
     }
 
     /// Project a point onto the ellipse, returning the angle parameter.
@@ -961,7 +962,7 @@ impl Parabola3D {
     pub fn curvature(&self, t: f64) -> f64 {
         let two_f = 2.0 * self.focal_length;
         let ratio = t / two_f;
-        let denom = ratio.mul_add(ratio, 1.0);
+        let denom = ratio.madd(ratio, 1.0);
         1.0 / (two_f * denom.powf(1.5))
     }
 
@@ -1137,7 +1138,7 @@ impl Hyperbola3D {
     #[must_use]
     pub fn eccentricity(&self) -> f64 {
         let ratio = self.semi_minor / self.semi_major;
-        ratio.mul_add(ratio, 1.0).sqrt()
+        ratio.madd(ratio, 1.0).sqrt()
     }
 
     /// Returns the two foci.

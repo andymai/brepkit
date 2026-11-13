@@ -5,6 +5,7 @@
 //! Bezier segments (same technique used for circular arcs). The profile
 //! face is then swept along this path using the existing sweep operation.
 
+use brepkit_math::madd::Madd;
 use std::f64::consts::PI;
 
 use brepkit_math::nurbs::curve::NurbsCurve;
@@ -184,19 +185,19 @@ fn helix_point(
 
     Point3::new(
         origin.x()
-            + u_dir.x().mul_add(
+            + u_dir.x().madd(
                 radius * cos_t,
-                v_dir.x().mul_add(radius * sin_t, axis.x() * height),
+                v_dir.x().madd(radius * sin_t, axis.x() * height),
             ),
         origin.y()
-            + u_dir.y().mul_add(
+            + u_dir.y().madd(
                 radius * cos_t,
-                v_dir.y().mul_add(radius * sin_t, axis.y() * height),
+                v_dir.y().madd(radius * sin_t, axis.y() * height),
             ),
         origin.z()
-            + u_dir.z().mul_add(
+            + u_dir.z().madd(
                 radius * cos_t,
-                v_dir.z().mul_add(radius * sin_t, axis.z() * height),
+                v_dir.z().madd(radius * sin_t, axis.z() * height),
             ),
     )
 }

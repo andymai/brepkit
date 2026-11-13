@@ -4,6 +4,7 @@
 //! and torus surfaces with planes, as well as a general marching approach
 //! for analytic-analytic surface intersections.
 
+use crate::madd::Madd;
 use std::f64::consts::{FRAC_PI_2, TAU};
 
 use crate::MathError;
@@ -102,9 +103,9 @@ pub fn exact_plane_section(
             let r = sphere.radius();
             if (r - h.abs()).abs() <= TOUCH * r {
                 return Ok(vec![PlaneSection::Point(Point3::new(
-                    h.mul_add(-normal.x(), sphere.center().x()),
-                    h.mul_add(-normal.y(), sphere.center().y()),
-                    h.mul_add(-normal.z(), sphere.center().z()),
+                    h.madd(-normal.x(), sphere.center().x()),
+                    h.madd(-normal.y(), sphere.center().y()),
+                    h.madd(-normal.z(), sphere.center().z()),
                 ))]);
             }
         }
@@ -139,7 +140,7 @@ fn plane_cone_open_section(
 ) -> Result<Option<Vec<PlaneSection>>, MathError> {
     let axis = cone.axis();
     let c = normal.dot(axis);
-    let p2 = c.mul_add(-c, 1.0).max(0.0);
+    let p2 = c.madd(-c, 1.0).max(0.0);
     let p = p2.sqrt();
     let rise = cone.half_angle().sin();
     let k = rise * rise;
@@ -158,7 +159,7 @@ fn plane_cone_open_section(
     let origin = apex + normal * e;
     // A point `s` along `e1` from `origin` lies `e·c + s·p` up the axis from
     // the apex, which the real nappe keeps non-negative.
-    let real = |s: f64| e.mul_add(c, s * p) >= 0.0;
+    let real = |s: f64| e.madd(c, s * p) >= 0.0;
     // On the one nappe a point's height up the axis is `rise` times its
     // distance from the apex.
     let holds = |q: Point3| {
@@ -404,7 +405,7 @@ fn exact_plane_torus(
                 middle, n, big,
             )?)]));
         }
-        let reach = small.mul_add(small, -(height * height)).sqrt();
+        let reach = small.madd(small, -(height * height)).sqrt();
         if big - reach <= 1e-10 * big {
             return Ok(None);
         }
@@ -506,11 +507,11 @@ fn exact_plane_sphere(
         return Ok(vec![]);
     }
 
-    let circle_r = (r.mul_add(r, -(h * h))).sqrt();
+    let circle_r = (r.madd(r, -(h * h))).sqrt();
     let circle_center = Point3::new(
-        h.mul_add(-normal.x(), sphere.center().x()),
-        h.mul_add(-normal.y(), sphere.center().y()),
-        h.mul_add(-normal.z(), sphere.center().z()),
+        h.madd(-normal.x(), sphere.center().x()),
+        h.madd(-normal.y(), sphere.center().y()),
+        h.madd(-normal.z(), sphere.center().z()),
     );
 
     let circle = Circle3D::new(circle_center, normal, circle_r)?;
@@ -548,11 +549,11 @@ pub fn exact_sphere_sphere(
     } else {
         (s2.center(), -normal, r2, r1)
     };
-    let along = d.mul_add(d, r_small.mul_add(r_small, -(r_big * r_big))) / (2.0 * d);
+    let along = d.madd(d, r_small.madd(r_small, -(r_big * r_big))) / (2.0 * d);
     if along.abs() > r_small - 1e-10 * scale.max(1.0) {
         return Ok(Some(Vec::new()));
     }
-    let radius = r_small.mul_add(r_small, -(along * along)).sqrt();
+    let radius = r_small.madd(r_small, -(along * along)).sqrt();
     let circle = Circle3D::new(centre + toward * along, normal, radius)?;
     Ok(Some(vec![ExactIntersectionCurve::Circle(circle)]))
 }
@@ -814,7 +815,7 @@ pub fn plane_cone_conic_arc(
         let h = w.dot(axis);
         (w - axis * h)
             .length()
-            .mul_add(sin_a, -(h.abs() * cos_a))
+            .madd(sin_a, -(h.abs() * cos_a))
             .abs()
     };
     for i in 0..pieces {
@@ -938,11 +939,11 @@ fn sample_plane_sphere(
         return Ok(vec![]);
     }
 
-    let circle_r = (r.mul_add(r, -(h * h))).sqrt();
+    let circle_r = (r.madd(r, -(h * h))).sqrt();
     let circle_center = Point3::new(
-        h.mul_add(-normal.x(), sphere.center().x()),
-        h.mul_add(-normal.y(), sphere.center().y()),
-        h.mul_add(-normal.z(), sphere.center().z()),
+        h.madd(-normal.x(), sphere.center().x()),
+        h.madd(-normal.y(), sphere.center().y()),
+        h.madd(-normal.z(), sphere.center().z()),
     );
 
     let basis = Frame3::from_normal(circle_center, normal)?;
@@ -1226,11 +1227,11 @@ pub fn intersect_plane_sphere(
         return Ok(vec![]);
     }
 
-    let circle_r = (r.mul_add(r, -(h * h))).sqrt();
+    let circle_r = (r.madd(r, -(h * h))).sqrt();
     let circle_center = Point3::new(
-        h.mul_add(-normal.x(), sphere.center().x()),
-        h.mul_add(-normal.y(), sphere.center().y()),
-        h.mul_add(-normal.z(), sphere.center().z()),
+        h.madd(-normal.x(), sphere.center().x()),
+        h.madd(-normal.y(), sphere.center().y()),
+        h.madd(-normal.z(), sphere.center().z()),
     );
 
     // Build a local frame on the plane.
@@ -1459,7 +1460,7 @@ impl<F: Fn(Point3) -> f64> TorusSection<'_, F> {
         let [n0, n1, n2] = self.num;
         let [d0, d1] = self.den;
         let (sin, cos) = v.sin_cos();
-        n2.mul_add(sin, n1.mul_add(cos, n0)) / d1.mul_add(cos, d0)
+        n2.madd(sin, n1.madd(cos, n0)) / d1.madd(cos, d0)
     }
 
     fn point(&self, u: f64, v: f64) -> IntersectionPoint {
@@ -1471,10 +1472,7 @@ impl<F: Fn(Point3) -> f64> TorusSection<'_, F> {
     }
 
     fn branch(&self, v: f64, sign: f64) -> IntersectionPoint {
-        self.point(
-            sign.mul_add(self.rhs(v).clamp(-1.0, 1.0).acos(), self.phi),
-            v,
-        )
+        self.point(sign.madd(self.rhs(v).clamp(-1.0, 1.0).acos(), self.phi), v)
     }
 
     /// Where both branches meet at `v`: `acos` is 0 or π there.
@@ -1501,7 +1499,7 @@ impl<F: Fn(Point3) -> f64> TorusSection<'_, F> {
         let [d0, d1] = self.den;
         let mut roots = Vec::with_capacity(4);
         for c in [1.0_f64, -1.0] {
-            let (alpha, beta, gamma) = (c.mul_add(-d0, n0), c.mul_add(-d1, n1), n2);
+            let (alpha, beta, gamma) = (c.madd(-d0, n0), c.madd(-d1, n1), n2);
             let m = beta.hypot(gamma);
             let ratio = -alpha / m;
             if !ratio.is_finite() || ratio.abs() > 1.0 + 1e-12 {
@@ -1622,12 +1620,11 @@ impl<F: Fn(Point3) -> f64> TorusSection<'_, F> {
                     loops.push(closed(match at_node {
                         Some(v_node) => std::iter::once(self.node(v_node))
                             .chain(
-                                (1..n_v)
-                                    .map(|i| self.branch((i as f64).mul_add(step, v_node), sign)),
+                                (1..n_v).map(|i| self.branch((i as f64).madd(step, v_node), sign)),
                             )
                             .collect(),
                         None => (0..n_v)
-                            .map(|i| self.branch((i as f64 + 0.5).mul_add(step, t_lo), sign))
+                            .map(|i| self.branch((i as f64 + 0.5).madd(step, t_lo), sign))
                             .collect(),
                     }));
                 }
@@ -1643,7 +1640,7 @@ impl<F: Fn(Point3) -> f64> TorusSection<'_, F> {
             let len = ((t_hi - t_lo) / step).ceil();
             let probes = (len as usize).max(8);
             let (u_lo, u_hi) = (0..=probes)
-                .map(|k| (t_hi - t_lo).mul_add(k as f64 / probes as f64, t_lo))
+                .map(|k| (t_hi - t_lo).madd(k as f64 / probes as f64, t_lo))
                 .map(|v| self.rhs(v).clamp(-1.0, 1.0).acos())
                 .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), u| {
                     (lo.min(u), hi.max(u))
@@ -1660,7 +1657,7 @@ impl<F: Fn(Point3) -> f64> TorusSection<'_, F> {
                 for (from, to) in [(v_node, t_lo), (v_node, t_hi)] {
                     let along = |k: usize| {
                         let f = 0.5 * (1.0 - (std::f64::consts::PI * k as f64 / m).cos());
-                        (to - from).mul_add(f, from)
+                        (to - from).madd(f, from)
                     };
                     let mut pts = vec![self.node(v_node)];
                     pts.extend((1..=steps).map(|k| self.branch(along(k), 1.0)));
@@ -1670,7 +1667,7 @@ impl<F: Fn(Point3) -> f64> TorusSection<'_, F> {
             } else {
                 let at = |k: usize| {
                     let f = 0.5 * (1.0 - (std::f64::consts::PI * k as f64 / m).cos());
-                    (t_hi - t_lo).mul_add(f, t_lo)
+                    (t_hi - t_lo).madd(f, t_lo)
                 };
                 let mut pts: Vec<IntersectionPoint> =
                     (0..=steps).map(|k| self.branch(at(k), 1.0)).collect();
@@ -1686,7 +1683,7 @@ impl<F: Fn(Point3) -> f64> TorusSection<'_, F> {
     fn between(&self, a: (f64, f64), b: (f64, f64)) -> IntersectionPoint {
         let half = |from: f64, to: f64| {
             let gap = (to - from + std::f64::consts::PI).rem_euclid(TAU) - std::f64::consts::PI;
-            0.5_f64.mul_add(gap, from)
+            0.5_f64.madd(gap, from)
         };
         let (u, v) = (half(a.0, b.0), half(a.1, b.1));
         let off = self.rhs(v).clamp(-1.0, 1.0).acos();
@@ -1727,7 +1724,7 @@ fn plane_torus_winding_loops(
     }
     let phi = b.atan2(a);
     let d_local = d - dot_np(normal, torus.center());
-    let rhs = |v: f64| (d_local - small_r * c * v.sin()) / (s * small_r.mul_add(v.cos(), big_r));
+    let rhs = |v: f64| (d_local - small_r * c * v.sin()) / (s * small_r.madd(v.cos(), big_r));
     let dense = 8 * n_v;
     if (0..dense).any(|i| rhs(TAU * i as f64 / dense as f64).abs() > 1.0 - 1e-3) {
         return None;
@@ -1777,25 +1774,25 @@ pub fn intersect_line_torus(torus: &ToroidalSurface, origin: Point3, dir: Vec3) 
     let (c0, c1) = (za.dot(o), za.dot(dir));
 
     // G(t) = a² + b² + c² + R² − r²  (quadratic: g2 t² + g1 t + g0)
-    let g2 = a1.mul_add(a1, b1.mul_add(b1, c1 * c1));
-    let g1 = 2.0 * a1.mul_add(a0, b1.mul_add(b0, c1 * c0));
-    let g0 = a0.mul_add(
+    let g2 = a1.madd(a1, b1.madd(b1, c1 * c1));
+    let g1 = 2.0 * a1.madd(a0, b1.madd(b0, c1 * c0));
+    let g0 = a0.madd(
         a0,
-        b0.mul_add(b0, c0.mul_add(c0, big_r.mul_add(big_r, -small_r * small_r))),
+        b0.madd(b0, c0.madd(c0, big_r.madd(big_r, -small_r * small_r))),
     );
 
     // H(t) = 4R² (a² + b²)  (quadratic: h2 t² + h1 t + h0)
     let four_rr = 4.0 * big_r * big_r;
-    let h2 = four_rr * a1.mul_add(a1, b1 * b1);
-    let h1 = four_rr * (2.0 * a1.mul_add(a0, b1 * b0));
-    let h0 = four_rr * a0.mul_add(a0, b0 * b0);
+    let h2 = four_rr * a1.madd(a1, b1 * b1);
+    let h1 = four_rr * (2.0 * a1.madd(a0, b1 * b0));
+    let h0 = four_rr * a0.madd(a0, b0 * b0);
 
     // Quartic G² − H = 0:  e4 t⁴ + e3 t³ + e2 t² + e1 t + e0.
     let e4 = g2 * g2;
     let e3 = 2.0 * g2 * g1;
-    let e2 = g1.mul_add(g1, 2.0 * g2 * g0) - h2;
-    let e1 = 2.0f64.mul_add(g1 * g0, -h1);
-    let e0 = g0.mul_add(g0, -h0);
+    let e2 = g1.madd(g1, 2.0 * g2 * g0) - h2;
+    let e1 = 2.0f64.madd(g1 * g0, -h1);
+    let e0 = g0.madd(g0, -h0);
 
     let mut roots = real_roots_quartic(e4, e3, e2, e1, e0);
     // The quartic also holds a spindle torus's tube swung across the axis
@@ -1925,7 +1922,7 @@ fn real_roots_cubic(a: f64, b: f64, c: f64, d: f64) -> Vec<f64> {
         let theta = (3.0 * q / (p * m)).clamp(-1.0, 1.0).acos() / 3.0;
         (0..3)
             .map(|k| {
-                m.mul_add(
+                m.madd(
                     (theta - 2.0 * std::f64::consts::PI * f64::from(k) / 3.0).cos(),
                     shift,
                 )
@@ -1989,8 +1986,8 @@ impl std::ops::Mul for Complex {
     type Output = Self;
     fn mul(self, o: Self) -> Self {
         Self::new(
-            self.re.mul_add(o.re, -(self.im * o.im)),
-            self.re.mul_add(o.im, self.im * o.re),
+            self.re.madd(o.re, -(self.im * o.im)),
+            self.re.madd(o.im, self.im * o.re),
         )
     }
 }
@@ -1998,10 +1995,10 @@ impl std::ops::Mul for Complex {
 impl std::ops::Div for Complex {
     type Output = Self;
     fn div(self, o: Self) -> Self {
-        let den = o.re.mul_add(o.re, o.im * o.im);
+        let den = o.re.madd(o.re, o.im * o.im);
         Self::new(
-            self.re.mul_add(o.re, self.im * o.im) / den,
-            self.im.mul_add(o.re, -(self.re * o.im)) / den,
+            self.re.madd(o.re, self.im * o.im) / den,
+            self.im.madd(o.re, -(self.re * o.im)) / den,
         )
     }
 }
@@ -2469,8 +2466,8 @@ fn meridian_crossings(
     if dist > r1 + r2 + rounding || dist < (r1 - r2).abs() - rounding {
         return Some(Vec::new());
     }
-    let along = r2.mul_add(-r2, r1.mul_add(r1, dist * dist)) / (2.0 * dist);
-    let across = r1.mul_add(r1, -(along * along)).max(0.0).sqrt();
+    let along = r2.madd(-r2, r1.madd(r1, dist * dist)) / (2.0 * dist);
+    let across = r1.madd(r1, -(along * along)).max(0.0).sqrt();
     let (ux, uz) = (dx / dist, dz / dist);
     let sides: &[f64] = if 2.0 * across <= Tolerance::new().linear {
         &[0.0]
@@ -2625,7 +2622,7 @@ pub fn exact_cylinder_torus(
     if gap.abs() > small {
         return Ok(Some(Vec::new()));
     }
-    let height = small.mul_add(small, -(gap * gap)).sqrt();
+    let height = small.madd(small, -(gap * gap)).sqrt();
     circles_about_axis(
         torus.center(),
         axis,
@@ -2726,9 +2723,9 @@ fn sphere_torus_section<'a>(
         torus,
         phi: b.atan2(a),
         num: [
-            big.mul_add(
+            big.madd(
                 big,
-                small.mul_add(small, h.mul_add(h, s.mul_add(s, -radius * radius))),
+                small.madd(small, h.madd(h, s.madd(s, -radius * radius))),
             ),
             2.0 * big * small,
             -2.0 * h * small,
@@ -2791,7 +2788,7 @@ fn sphere_torus_curves(
             let gap = (section.clearance)(best.point);
             let (sin_u, cos_u) = u.sin_cos();
             let (sin_v, cos_v) = v.sin_cos();
-            let rho = small.mul_add(cos_v, big);
+            let rho = small.madd(cos_v, big);
             let outward = torus.x_axis() * cos_u + torus.y_axis() * sin_u;
             let p_u = (torus.y_axis() * cos_u - torus.x_axis() * sin_u) * rho;
             let p_v = outward * (-small * sin_v) + torus.z_axis() * (small * cos_v);
@@ -2799,11 +2796,11 @@ fn sphere_torus_curves(
             let normal = away * (1.0 / away.length());
             let (g_u, g_v) = (normal.dot(p_u), normal.dot(p_v));
             let (w_u, w_v) = (g_u / (rho * rho), g_v / (small * small));
-            let reach = g_u.mul_add(w_u, g_v * w_v);
+            let reach = g_u.madd(w_u, g_v * w_v);
             if reach <= f64::MIN_POSITIVE {
                 break;
             }
-            let next = section.point(gap.mul_add(-w_u / reach, u), gap.mul_add(-w_v / reach, v));
+            let next = section.point(gap.madd(-w_u / reach, u), gap.madd(-w_v / reach, v));
             if (section.clearance)(next.point).abs() >= gap.abs() {
                 break;
             }
@@ -3190,9 +3187,9 @@ fn shared_apex_cones(
     let mut curves = Vec::new();
     for nappe in [1.0, -1.0] {
         let t2 = nappe * s2;
-        let side = cos.mul_add(-s1, t2) / sin;
+        let side = cos.madd(-s1, t2) / sin;
         let foot = a1 * s1 + toward * side;
-        let lift_sq = s1.mul_add(-s1, side.mul_add(-side, 1.0));
+        let lift_sq = s1.madd(-s1, side.madd(-side, 1.0));
         let rounding = 4.0 * f64::EPSILON;
         let lifts = if lift_sq.abs() <= rounding {
             // Within rounding of touching: the rulings that rounding could
@@ -3269,7 +3266,7 @@ fn crossing_equal_cylinders(
     let normal = across * (1.0 / sin);
     let w = c1.origin() - c2.origin();
     let cos = d1.dot(d2);
-    let along = cos.mul_add(d2.dot(w), -d1.dot(w)) / (sin * sin);
+    let along = cos.madd(d2.dot(w), -d1.dot(w)) / (sin * sin);
     let centre = c1.origin() + d1 * along;
     // The miss is read at the crossing's own scale: origins far along
     // their axes leave it more rounding than that, and are left to the
@@ -3484,7 +3481,7 @@ pub fn exact_cone_sphere(
     let (disc, far, near) = ruling_quadratic(1.0, b, far_sq - radius_sq);
     // At a tangent ball `b² − 4c` cancels to a few ulps of its terms, which
     // can land below zero: that is a touch, not a miss.
-    let noise = 16.0 * f64::EPSILON * 4.0f64.mul_add(far_sq + radius_sq, b * b);
+    let noise = 16.0 * f64::EPSILON * 4.0f64.madd(far_sq + radius_sq, b * b);
     if disc < -noise {
         return Ok(Some(vec![]));
     }
@@ -3640,8 +3637,8 @@ fn parallel_cylinders(
     }
     let toward = across * (1.0 / d);
     let side = axis.cross(toward);
-    let x = r2.mul_add(-r2, d.mul_add(d, r1 * r1)) / (2.0 * d);
-    let y = r1.mul_add(r1, -(x * x)).max(0.0).sqrt();
+    let x = r2.madd(-r2, d.madd(d, r1 * r1)) / (2.0 * d);
+    let y = r1.madd(r1, -(x * x)).max(0.0).sqrt();
     let linear = Tolerance::new().linear;
     let feet = if 2.0 * y <= linear {
         vec![toward * x]
@@ -3936,7 +3933,7 @@ fn ruling_cone_sphere(
     if radius - offset.length() > lin_tol {
         let exit = |u: f64| {
             let h = (cone.evaluate(u, 1.0) - apex).dot(offset);
-            let root = h.mul_add(h, -k).sqrt();
+            let root = h.madd(h, -k).sqrt();
             cone.evaluate(u, if h > 0.0 { -k / (h + root) } else { root - h })
         };
         // A ball that barely holds the apex turns the loop sharply where it
@@ -3984,8 +3981,8 @@ fn ruling_cone_sphere(
     // nearer root out, so every generator crosses when the two extreme ones
     // do.
     let (sin_a, cos_a) = cone.half_angle().sin_cos();
-    if crossing(sin_a.mul_add(along, cos_a * across)).is_none()
-        || crossing(sin_a.mul_add(along, -cos_a * across)).is_none()
+    if crossing(sin_a.madd(along, cos_a * across)).is_none()
+        || crossing(sin_a.madd(along, -cos_a * across)).is_none()
     {
         return window_cone_sphere(cone, sphere, cone_first);
     }
@@ -4056,9 +4053,9 @@ fn window_cone_sphere(
         .map(|i| {
             #[allow(clippy::cast_precision_loss)]
             let theta = TAU * i as f64 / n as f64;
-            let u = half.mul_add(-theta.cos(), mid);
-            let h = a.mul_add((u - mid + std::f64::consts::PI).cos(), c);
-            let split = h.mul_add(h, -k).max(0.0).sqrt();
+            let u = half.madd(-theta.cos(), mid);
+            let h = a.madd((u - mid + std::f64::consts::PI).cos(), c);
+            let split = h.madd(h, -k).max(0.0).sqrt();
             cone.evaluate(u, -h - split.copysign(theta.sin()))
         })
         .collect();
@@ -4125,7 +4122,7 @@ fn closed_ruling_loops(
             (0..count)
                 .map(|i| {
                     let t = i as f64 / count as f64;
-                    let u = TAU.mul_add(t - 0.9 * (TAU * t).sin() / TAU, neck);
+                    let u = TAU.madd(t - 0.9 * (TAU * t).sin() / TAU, neck);
                     let (_, vp, vm) = roots(u);
                     if i == 0 && touching {
                         let at = sweep.evaluate(u, 0.5 * (vp + vm));
@@ -4722,9 +4719,9 @@ fn march_analytic_intersection(
             prev_tangent = Some(t_dir);
 
             let next = Point3::new(
-                h.mul_add(t_dir.x(), current.x()),
-                h.mul_add(t_dir.y(), current.y()),
-                h.mul_add(t_dir.z(), current.z()),
+                h.madd(t_dir.x(), current.x()),
+                h.madd(t_dir.y(), current.y()),
+                h.madd(t_dir.z(), current.z()),
             );
 
             let (ua2, va2) = project_analytic(a, next, u_range_a, v_range_a);
@@ -5333,7 +5330,7 @@ mod tests {
                 for c in &curves {
                     let (t0, t1) = c.curve.domain();
                     for k in 0..=64 {
-                        let t = (t1 - t0).mul_add(f64::from(k) / 64.0, t0);
+                        let t = (t1 - t0).madd(f64::from(k) / 64.0, t0);
                         let p = ParametricCurve::evaluate(&c.curve, t);
                         // A cubic through the ruling samples, bent most at the
                         // loop's branch points.
@@ -5369,7 +5366,7 @@ mod tests {
             let (t0, t1) = c.curve.domain();
             for k in 0..=64 {
                 let p =
-                    ParametricCurve::evaluate(&c.curve, (t1 - t0).mul_add(f64::from(k) / 64.0, t0));
+                    ParametricCurve::evaluate(&c.curve, (t1 - t0).madd(f64::from(k) / 64.0, t0));
                 let on_rod = (p.x() - 0.5).hypot(p.z() - 0.3) - 0.6;
                 let on_ring = (p.x().hypot(p.y()) - 4.0).hypot(p.z()) - 1.5;
                 assert!(
@@ -5418,7 +5415,7 @@ mod tests {
                 for k in 0..=64 {
                     let p = ParametricCurve::evaluate(
                         &c.curve,
-                        (t1 - t0).mul_add(f64::from(k) / 64.0, t0),
+                        (t1 - t0).madd(f64::from(k) / 64.0, t0),
                     );
                     let on_ball = (p - Point3::new(0.0, 0.0, 0.0)).length() - 3.0;
                     let axial = apex.z() - p.z();
@@ -5492,7 +5489,7 @@ mod tests {
             for k in 0..=64 {
                 let p = ParametricCurve::evaluate(
                     &curves[0].curve,
-                    (t1 - t0).mul_add(f64::from(k) / 64.0, t0),
+                    (t1 - t0).madd(f64::from(k) / 64.0, t0),
                 );
                 let on_ball = (p - centre).length() - radius;
                 let on_cone = p.x().hypot(p.y()) - (3.0 - p.z()) / 2.0;
@@ -5533,7 +5530,7 @@ mod tests {
             for k in 0..=4096 {
                 let p = ParametricCurve::evaluate(
                     &curves[0].curve,
-                    (t1 - t0).mul_add(f64::from(k) / 4096.0, t0),
+                    (t1 - t0).madd(f64::from(k) / 4096.0, t0),
                 );
                 let on_ball = (p - centre).length() - radius;
                 let on_cone = p.x().hypot(p.y()) - (3.0 - p.z()) / 2.0;
@@ -5599,7 +5596,7 @@ mod tests {
         for c in &curves {
             let (t0, t1) = c.curve.domain();
             for k in 0..=32 {
-                let t = (t1 - t0).mul_add(f64::from(k) / 32.0, t0);
+                let t = (t1 - t0).madd(f64::from(k) / 32.0, t0);
                 let p = ParametricCurve::evaluate(&c.curve, t);
                 // On the cylinder: radial distance from its axis is the radius.
                 let radial = ((p.x() + 8.0).powi(2) + (p.y() + 34.0).powi(2)).sqrt();
@@ -5641,7 +5638,7 @@ mod tests {
             for k in 0..=64 {
                 let p = ParametricCurve::evaluate(
                     &curves[0].curve,
-                    (t1 - t0).mul_add(f64::from(k) / 64.0, t0),
+                    (t1 - t0).madd(f64::from(k) / 64.0, t0),
                 );
                 let on_rod = (p.x() - x).hypot(p.y() - y) - 0.6;
                 let on_cone = p.x().hypot(p.y()) - (3.0 - p.z()) / 2.0;
@@ -5808,7 +5805,7 @@ mod tests {
             .map(Point3::z)
             .collect::<Vec<_>>();
         let gap = (2.0001_f64 - 2.0)
-            .mul_add(2.0, -(2.0001_f64 - 2.0).powi(2))
+            .madd(2.0, -(2.0001_f64 - 2.0).powi(2))
             .sqrt();
         assert!(
             low.iter().any(|z| (z - gap).abs() < 1e-6)
@@ -5863,7 +5860,7 @@ mod tests {
                     std::cmp::Ordering::Less => ((major - minor) * f64::from(k) / 100.0, 2),
                     // Past it, short of the outer equator: one loop.
                     std::cmp::Ordering::Greater => (
-                        2.0f64.mul_add(minor * f64::from(k - 100) / 100.0, major - minor),
+                        2.0f64.madd(minor * f64::from(k - 100) / 100.0, major - minor),
                         1,
                     ),
                     std::cmp::Ordering::Equal => continue,
@@ -5897,9 +5894,7 @@ mod tests {
                 let (t0, t1) = c.curve.domain();
                 let off = (0..=400)
                     .map(|k| {
-                        let p = c
-                            .curve
-                            .evaluate((t1 - t0).mul_add(f64::from(k) / 400.0, t0));
+                        let p = c.curve.evaluate((t1 - t0).madd(f64::from(k) / 400.0, t0));
                         (p.x().hypot(p.y()) - major).hypot(p.z()) - minor
                     })
                     .fold(0.0_f64, |m, e| m.max(e.abs()));

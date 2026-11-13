@@ -249,6 +249,7 @@ pub fn axial_v_range(
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    use brepkit_math::madd::Madd;
     use brepkit_math::vec::Point3;
     use brepkit_topology::Topology;
     use brepkit_topology::test_utils::make_unit_cube_manifold;
@@ -648,7 +649,7 @@ mod tests {
             let c = Circle3D::new_with_ref(
                 Point3::new(0.0, 0.0, small * v.sin()),
                 Vec3::new(0.0, 0.0, 1.0),
-                small.mul_add(v.cos(), big),
+                small.madd(v.cos(), big),
                 Vec3::new(from.cos(), from.sin(), 0.0),
             )
             .unwrap();
@@ -659,9 +660,9 @@ mod tests {
         let starts = [0.0, FRAC_PI_2, PI, 3.0 * FRAC_PI_2];
         for (v0, v1) in [(3.0_f64, 3.3_f64), (0.3, 0.5), (-0.5, 2.0)] {
             let dv = v1 - v0;
-            let area = TAU * small * big.mul_add(dv, small * (v1.sin() - v0.sin()));
+            let area = TAU * small * big.madd(dv, small * (v1.sin() - v0.sin()));
             let volume = TAU * small / 3.0
-                * (big.mul_add(big, small * small) * (v1.sin() - v0.sin())
+                * (big.madd(big, small * small) * (v1.sin() - v0.sin())
                     + big * small * (dv / 2.0 + ((2.0 * v1).sin() - (2.0 * v0).sin()) / 4.0)
                     + small * big * dv);
             for (a, b) in starts
@@ -1064,7 +1065,7 @@ mod tests {
                         Point3::new(
                             i as f64 / 3.0,
                             j as f64 / 3.0,
-                            0.4 * rise(i).mul_add(rise(j), 2.5),
+                            0.4 * rise(i).madd(rise(j), 2.5),
                         )
                     })
                     .collect()
@@ -1140,10 +1141,10 @@ mod tests {
         let mut brute = 0.0;
         for &(u0, u1) in &panels {
             for gu in rule {
-                let u = (0.5 * (u1 - u0)).mul_add(gu.x, 0.5 * (u0 + u1));
+                let u = (0.5 * (u1 - u0)).madd(gu.x, 0.5 * (u0 + u1));
                 for &(v0, v1) in &panels {
                     for gv in rule {
-                        let v = (0.5 * (v1 - v0)).mul_add(gv.x, 0.5 * (v0 + v1));
+                        let v = (0.5 * (v1 - v0)).madd(gv.x, 0.5 * (v0 + v1));
                         let d = surface.derivatives(u, v, 1);
                         let w = 0.25 * (u1 - u0) * (v1 - v0) * gu.w * gv.w;
                         brute += w * d[1][0].cross(d[0][1]).length();

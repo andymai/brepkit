@@ -1,5 +1,6 @@
 //! Plane intersection utilities.
 
+use crate::madd::Madd;
 use crate::vec::{Point3, Vec3};
 
 /// Compute the intersection line of two planes.
@@ -36,13 +37,13 @@ pub fn plane_plane_intersection(
     let n2n2 = n2.dot(n2);
     let n1n2 = n1.dot(n2);
 
-    let a = d1.mul_add(n2n2, -(d2 * n1n2)) / det;
-    let b = d2.mul_add(n1n1, -(d1 * n1n2)) / det;
+    let a = d1.madd(n2n2, -(d2 * n1n2)) / det;
+    let b = d2.madd(n1n1, -(d1 * n1n2)) / det;
 
     let point = Point3::new(
-        n1.x().mul_add(a, n2.x() * b),
-        n1.y().mul_add(a, n2.y() * b),
-        n1.z().mul_add(a, n2.z() * b),
+        n1.x().madd(a, n2.x() * b),
+        n1.y().madd(a, n2.y() * b),
+        n1.z().madd(a, n2.z() * b),
     );
 
     // Normalize direction (det > 0 so length > 0).

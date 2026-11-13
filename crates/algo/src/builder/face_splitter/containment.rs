@@ -1,6 +1,7 @@
 //! Point containment tests for UV-space hole detection.
 
 use brepkit_math::curves2d::Curve2D;
+use brepkit_math::madd::Madd;
 use brepkit_math::region2d::{Boundary2, distance_to_boundary, point_in_region};
 use brepkit_math::vec::{Point2, Vec2, Vec3};
 use brepkit_topology::edge::EdgeCurve;
@@ -261,7 +262,7 @@ pub(super) fn find_point_outside_holes(
                     // 0.29r sagitta gap accepts seeds well inside the hole.
                     let mut samples: Vec<Point2> = (1..16)
                         .map(|k| {
-                            let t = (t1 - t0).mul_add(f64::from(k) / 16.0, t0);
+                            let t = (t1 - t0).madd(f64::from(k) / 16.0, t0);
                             f.project(e.curve_3d.evaluate_with_endpoints(t, s3, e3))
                         })
                         .collect();

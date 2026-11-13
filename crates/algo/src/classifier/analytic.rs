@@ -9,6 +9,7 @@
 //! logic. Bug fixes should be applied here first; the operations copy
 //! will be deleted during the GFA step 5 switchover.
 
+use brepkit_math::madd::Madd;
 use brepkit_math::tolerance::Tolerance;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
@@ -116,7 +117,7 @@ impl AnalyticClassifier {
                 let dx = centroid.x() - center.x();
                 let dy = centroid.y() - center.y();
                 let dz = centroid.z() - center.z();
-                let dist_sq = dx.mul_add(dx, dy.mul_add(dy, dz * dz));
+                let dist_sq = dx.madd(dx, dy.madd(dy, dz * dz));
                 if dist_sq < (radius - tol.linear) * (radius - tol.linear) {
                     Some(FaceClass::Inside)
                 } else if dist_sq > (radius + tol.linear) * (radius + tol.linear) {
@@ -200,7 +201,7 @@ impl AnalyticClassifier {
                 let radial_vec = diff - *axis * axial;
                 let rho = radial_vec.length();
                 let dr = rho - *major_radius;
-                let tube_dist_sq = dr.mul_add(dr, axial * axial);
+                let tube_dist_sq = dr.madd(dr, axial * axial);
                 let r_in = *minor_radius - tol.linear;
                 let r_out = *minor_radius + tol.linear;
                 if tube_dist_sq < r_in.max(0.0) * r_in.max(0.0) {

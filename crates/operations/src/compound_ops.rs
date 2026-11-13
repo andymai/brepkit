@@ -421,6 +421,7 @@ pub fn solid_pieces(
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]
+    use brepkit_math::madd::Madd;
 
     use brepkit_math::tolerance::Tolerance;
     use brepkit_topology::Topology;
@@ -784,7 +785,7 @@ mod tests {
         let mut topo = Topology::new();
         let wall = 5e-7;
         let outer = centred_box(&mut topo, 10.0, [0.0, 0.0, 0.0]);
-        let cavity = centred_box(&mut topo, 2.0f64.mul_add(-wall, 10.0), [0.0, 0.0, 0.0]);
+        let cavity = centred_box(&mut topo, 2.0f64.madd(-wall, 10.0), [0.0, 0.0, 0.0]);
         for f in brepkit_topology::explorer::solid_faces(&topo, cavity).unwrap() {
             let face = topo.face_mut(f).unwrap();
             face.set_reversed(!face.is_reversed());
@@ -800,7 +801,7 @@ mod tests {
         let pieces = solid_pieces(&mut topo, all).unwrap();
         let census = piece_census(&topo, &pieces);
         assert_eq!(census.len(), 2, "{census:?}");
-        let hollow = 1000.0 - 2.0f64.mul_add(-wall, 10.0).powi(3);
+        let hollow = 1000.0 - 2.0f64.madd(-wall, 10.0).powi(3);
         assert_eq!(census[0].0, 2);
         assert!((census[0].1 - hollow).abs() < 1e-9, "{census:?}");
         assert_eq!(census[1].0, 1);

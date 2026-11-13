@@ -4,6 +4,7 @@
 //! enabling downstream consumers to track face provenance (e.g., for applying
 //! persistent attributes like color or constraints).
 
+use brepkit_math::madd::Madd;
 use std::collections::{HashMap, HashSet};
 
 use brepkit_math::vec::{Point3, Vec3};
@@ -117,7 +118,7 @@ pub fn build_evolution_by_geometry(
             let dx = out_centroid.x() - in_centroid.x();
             let dy = out_centroid.y() - in_centroid.y();
             let dz = out_centroid.z() - in_centroid.z();
-            let dist_sq = dx.mul_add(dx, dy.mul_add(dy, dz * dz));
+            let dist_sq = dx.madd(dx, dy.madd(dy, dz * dz));
             if dist_sq > centroid_dist_sq_max {
                 continue;
             }
@@ -152,7 +153,7 @@ pub fn build_evolution_by_geometry(
             let dx = out_centroid.x() - in_centroid.x();
             let dy = out_centroid.y() - in_centroid.y();
             let dz = out_centroid.z() - in_centroid.z();
-            let dist_sq = dx.mul_add(dx, dy.mul_add(dy, dz * dz));
+            let dist_sq = dx.madd(dx, dy.madd(dy, dz * dz));
             if dist_sq < best_dist_sq {
                 best_dist_sq = dist_sq;
                 best_input = Some(in_idx);

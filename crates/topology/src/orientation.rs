@@ -1,5 +1,6 @@
 //! Face-orientation propagation and normal alignment.
 
+use brepkit_math::madd::Madd;
 use std::collections::VecDeque;
 
 use brepkit_math::det_hash::{DetHashMap, DetHashSet};
@@ -172,7 +173,7 @@ fn uv_winding(surface: &FaceSurface, points: &[Point3]) -> Option<f64> {
         * (0..loop_uv.len())
             .map(|k| {
                 let (a, b) = (loop_uv[k], loop_uv[(k + 1) % loop_uv.len()]);
-                a.0.mul_add(b.1, -(b.0 * a.1))
+                a.0.madd(b.1, -(b.0 * a.1))
             })
             .sum::<f64>();
     let at = loop_uv[0];
@@ -268,7 +269,7 @@ fn nurbs_uv_winding(
                     (a.0 - first.0, a.1 - first.1),
                     (b.0 - first.0, b.1 - first.1),
                 );
-                a.0.mul_add(b.1, -(b.0 * a.1))
+                a.0.madd(b.1, -(b.0 * a.1))
             })
             .sum::<f64>();
     // A pole or a collapsed edge can sit at the domain's middle or at any
@@ -487,6 +488,7 @@ pub fn normalize_face_normals(
 #[cfg(all(test, feature = "test-utils"))]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
+    use brepkit_math::madd::Madd;
 
     use std::f64::consts::{FRAC_1_SQRT_2, FRAC_PI_4, PI, TAU};
 
@@ -693,11 +695,11 @@ mod tests {
     fn seam_samples(half: f64) -> Vec<Point3> {
         let mut points = Vec::new();
         for k in 0..16 {
-            let angle = (f64::from(k) / 16.0).mul_add(2.0 * half, -half);
+            let angle = (f64::from(k) / 16.0).madd(2.0 * half, -half);
             points.push(Point3::new(RADIUS * angle.cos(), RADIUS * angle.sin(), 0.0));
         }
         for k in 0..16 {
-            let angle = (f64::from(k) / 16.0).mul_add(-2.0 * half, half);
+            let angle = (f64::from(k) / 16.0).madd(-2.0 * half, half);
             points.push(Point3::new(
                 RADIUS * angle.cos(),
                 RADIUS * angle.sin(),
@@ -751,11 +753,7 @@ mod tests {
             let (x1, y1) = corners[(k + 1) % corners.len()];
             for step in 0..8 {
                 let t = f64::from(step) / 8.0;
-                points.push(Point3::new(
-                    t.mul_add(x1 - x0, x0),
-                    t.mul_add(y1 - y0, y0),
-                    0.0,
-                ));
+                points.push(Point3::new(t.madd(x1 - x0, x0), t.madd(y1 - y0, y0), 0.0));
             }
         }
         let surface = FaceSurface::Nurbs(square);
@@ -774,7 +772,7 @@ mod tests {
         let points: Vec<Point3> = (0..32)
             .map(|k| {
                 let angle = f64::from(k) / 32.0 * TAU;
-                let z = (0.25 * HEIGHT).mul_add(angle.sin(), 0.5 * HEIGHT);
+                let z = (0.25 * HEIGHT).madd(angle.sin(), 0.5 * HEIGHT);
                 Point3::new(RADIUS * angle.cos(), RADIUS * angle.sin(), z)
             })
             .collect();
@@ -803,7 +801,7 @@ mod tests {
             let (u1, v1) = corners[(k + 1) % corners.len()];
             for step in 0..8 {
                 let t = f64::from(step) / 8.0;
-                points.push(cone.evaluate(t.mul_add(u1 - u0, u0), t.mul_add(v1 - v0, v0)));
+                points.push(cone.evaluate(t.madd(u1 - u0, u0), t.madd(v1 - v0, v0)));
             }
         }
         let area = uv_winding(&FaceSurface::Nurbs(cone), &points).unwrap();
@@ -834,7 +832,7 @@ mod tests {
             let (u1, v1) = corners[(k + 1) % corners.len()];
             for step in 0..8 {
                 let t = f64::from(step) / 8.0;
-                points.push(patch.evaluate(t.mul_add(u1 - u0, u0), t.mul_add(v1 - v0, v0)));
+                points.push(patch.evaluate(t.madd(u1 - u0, u0), t.madd(v1 - v0, v0)));
             }
         }
         let area = uv_winding(&FaceSurface::Nurbs(patch), &points).unwrap();
@@ -1010,9 +1008,9 @@ mod tests {
                     unit.iter()
                         .enumerate()
                         .map(|(j, &(px, pz, _))| {
-                            let reach = minor.mul_add(px, major);
+                            let reach = minor.madd(px, major);
                             let lift = if j == last { gap } else { 0.0 };
-                            Point3::new(reach * ax, reach * ay, minor.mul_add(pz, lift))
+                            Point3::new(reach * ax, reach * ay, minor.madd(pz, lift))
                         })
                         .collect()
                 })

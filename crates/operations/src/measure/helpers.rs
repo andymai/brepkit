@@ -1,5 +1,6 @@
 //! Shared helpers for measurement operations.
 
+use brepkit_math::madd::Madd;
 use std::collections::HashSet;
 
 use brepkit_math::vec::{Point3, Vec3};
@@ -254,7 +255,7 @@ pub(super) fn angular_range_from_wire_arcs(
         }
         let point_at = |f: f64| -> Point3 {
             edge.curve()
-                .evaluate_with_endpoints((t1 - t0).mul_add(f, t0), sp, ep)
+                .evaluate_with_endpoints((t1 - t0).madd(f, t0), sp, ep)
         };
         let mut prev: Option<f64> = None;
         let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);

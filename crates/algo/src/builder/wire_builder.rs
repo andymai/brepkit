@@ -6,6 +6,7 @@
 //!
 //! Uses the minimum clockwise angle traversal algorithm for face splitting.
 
+use brepkit_math::madd::Madd;
 use std::collections::HashMap;
 use std::f64::consts::TAU;
 
@@ -461,7 +462,7 @@ pub fn build_wire_loops_dcel_measured(
             if k + 1 == orbit.len() {
                 lifted_first = b;
             }
-            area += prev.x().mul_add(b.y(), -(b.x() * prev.y()));
+            area += prev.x().madd(b.y(), -(b.x() * prev.y()));
             perimeter += (b - prev).length();
             prev = b;
         }
@@ -740,7 +741,7 @@ fn pcurve_tangent_at_endpoint(edge: &OrientedPCurveEdge, at_start: bool) -> (f64
     // For NURBS pcurves, sample near the endpoint for tangent direction.
     if let Some((nurbs, t, inward, span)) = nurbs_endpoint(edge, at_start) {
         let p0 = nurbs.evaluate(t);
-        let p1 = nurbs.evaluate(inward.mul_add(span * 0.01, t));
+        let p1 = nurbs.evaluate(inward.madd(span * 0.01, t));
         return (p1.x() - p0.x(), p1.y() - p0.y());
     }
 

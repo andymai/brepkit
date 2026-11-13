@@ -7,6 +7,7 @@
 //!
 //! [`FaceInfo`]: crate::ds::FaceInfo
 
+use brepkit_math::madd::Madd;
 use std::collections::HashSet;
 
 use brepkit_topology::Topology;
@@ -403,7 +404,7 @@ fn fill_ef_in(topo: &Topology, arena: &mut GfaArena) {
                     let span = t1 - t0;
                     let interior = [0.25_f64, 0.5, 0.75].map(|f| {
                         edge.curve()
-                            .evaluate_with_endpoints(f.mul_add(span, t0), osp, oep)
+                            .evaluate_with_endpoints(f.madd(span, t0), osp, oep)
                     });
                     let mut ends: f64 = 0.0;
                     let mut middle: f64 = 0.0;
@@ -541,7 +542,7 @@ mod tests {
             })
             .unwrap();
         // x = -1 + 3t along y = 0.5 on z = 0: in the face for t in [1/3, 2/3].
-        let at = |t: f64| Point3::new(3.0_f64.mul_add(t, -1.0), 0.5, 0.0);
+        let at = |t: f64| Point3::new(3.0_f64.madd(t, -1.0), 0.5, 0.0);
         let ts = [0.0, 1.0 / 3.0, 0.4, 0.5, 0.6, 2.0 / 3.0, 1.0];
         let verts: Vec<_> = ts
             .iter()

@@ -5,6 +5,7 @@
 //! For NURBS faces, the offset is approximated by sampling the surface
 //! normal field and refitting via surface interpolation.
 
+use brepkit_math::madd::Madd;
 use brepkit_math::nurbs::surface_fitting::interpolate_surface;
 use brepkit_math::tolerance::Tolerance;
 use brepkit_math::vec::{Point3, Vec3};
@@ -175,8 +176,8 @@ fn offset_nurbs_face(
                 let mid = 0.5 * (u0 + u1);
                 u_params.push(mid);
                 if cell_metric > threshold * 3.0 {
-                    u_params.push(0.25_f64.mul_add(u1 - u0, u0));
-                    u_params.push(0.75_f64.mul_add(u1 - u0, u0));
+                    u_params.push(0.25_f64.madd(u1 - u0, u0));
+                    u_params.push(0.75_f64.madd(u1 - u0, u0));
                 }
             }
         }
@@ -198,8 +199,8 @@ fn offset_nurbs_face(
                 let mid = 0.5 * (v0 + v1);
                 v_params.push(mid);
                 if cell_metric > threshold * 3.0 {
-                    v_params.push(0.25_f64.mul_add(v1 - v0, v0));
-                    v_params.push(0.75_f64.mul_add(v1 - v0, v0));
+                    v_params.push(0.25_f64.madd(v1 - v0, v0));
+                    v_params.push(0.75_f64.madd(v1 - v0, v0));
                 }
             }
         }
@@ -228,9 +229,9 @@ fn offset_nurbs_face(
                 })?;
 
             let offset_pt = Point3::new(
-                normal.x().mul_add(distance, pt.x()),
-                normal.y().mul_add(distance, pt.y()),
-                normal.z().mul_add(distance, pt.z()),
+                normal.x().madd(distance, pt.x()),
+                normal.y().madd(distance, pt.y()),
+                normal.z().madd(distance, pt.z()),
             );
             row.push(offset_pt);
         }
@@ -762,9 +763,9 @@ fn offset_point_on_surface(
         })?;
 
     Ok(Point3::new(
-        normal.x().mul_add(distance, point.x()),
-        normal.y().mul_add(distance, point.y()),
-        normal.z().mul_add(distance, point.z()),
+        normal.x().madd(distance, point.x()),
+        normal.y().madd(distance, point.y()),
+        normal.z().madd(distance, point.z()),
     ))
 }
 

@@ -3,6 +3,7 @@
 //! The curves themselves are read, not a chord polygon, which misreads every
 //! point between an arc and its chords.
 
+use crate::madd::Madd;
 use std::f64::consts::TAU;
 
 use crate::vec::{Point2, Vec2};
@@ -113,7 +114,7 @@ pub fn distance_to_piece(piece: &Boundary2, p: Point2) -> f64 {
             if t0 + (y0.atan2(x0) - t0).rem_euclid(TAU) <= t1 {
                 return (x0.hypot(y0) - a).abs();
             }
-            let end = |t: f64| (a.mul_add(-t.cos(), x0)).hypot(b.mul_add(-t.sin(), y0));
+            let end = |t: f64| (a.madd(-t.cos(), x0)).hypot(b.madd(-t.sin(), y0));
             end(t0).min(end(t1))
         }
     }
@@ -138,15 +139,15 @@ fn ellipse_arc_distance(x0: f64, y0: f64, a: f64, b: f64, t0: f64, t1: f64) -> f
     }
     let squared = |t: f64| {
         let (s, c) = t.sin_cos();
-        a.mul_add(c, -x0).powi(2) + b.mul_add(s, -y0).powi(2)
+        a.madd(c, -x0).powi(2) + b.madd(s, -y0).powi(2)
     };
     let slope = |t: f64| {
         let (s, c) = t.sin_cos();
-        2.0 * (a.mul_add(c, -x0) * (-a * s) + b.mul_add(s, -y0) * (b * c))
+        2.0 * (a.madd(c, -x0) * (-a * s) + b.madd(s, -y0) * (b * c))
     };
-    let k = 2.0 * (a.mul_add(a, -b * b).abs() + a * x0.abs() + b * y0.abs());
+    let k = 2.0 * (a.madd(a, -b * b).abs() + a * x0.abs() + b * y0.abs());
     let noise = (1e-15 * a.max(b).max(x0.hypot(y0))).powi(2);
-    let slack = |best: f64| 1e-6_f64.mul_add(best, noise);
+    let slack = |best: f64| 1e-6_f64.madd(best, noise);
     let mut best = squared(t0).min(squared(t1));
     let mut unsettled = f64::INFINITY;
     let mut pending = vec![(t0, t1, 0_u32)];
@@ -186,7 +187,7 @@ enum Crossing {
 
 /// How the ray from `p` along `d` meets `piece`.
 fn crossings(piece: &Boundary2, p: Point2, d: Vec2, tol: f64) -> Crossing {
-    let cross = |x: Vec2, y: Vec2| x.x().mul_add(y.y(), -(x.y() * y.x()));
+    let cross = |x: Vec2, y: Vec2| x.x().madd(y.y(), -(x.y() * y.x()));
     match *piece {
         Boundary2::Segment(a, b) => {
             let (ab, ap) = (b - a, p - a);
@@ -231,9 +232,9 @@ fn crossings(piece: &Boundary2, p: Point2, d: Vec2, tol: f64) -> Crossing {
             let q = p - center;
             let (x0, y0) = (q.dot(u) / a, q.dot(v) / b);
             let (dx, dy) = (d.dot(u) / a, d.dot(v) / b);
-            let qa = dx.mul_add(dx, dy * dy);
-            let qb = 2.0 * x0.mul_add(dx, y0 * dy);
-            let qc = x0.mul_add(x0, y0 * y0) - 1.0;
+            let qa = dx.madd(dx, dy * dy);
+            let qb = 2.0 * x0.madd(dx, y0 * dy);
+            let qc = x0.madd(x0, y0 * y0) - 1.0;
             let size = a.max(b);
             let on_arc = |t: f64| t0 + (t - t0).rem_euclid(TAU) <= t1;
             // On the ellipse (within tol) and on the arc: on the boundary. The
@@ -261,7 +262,7 @@ fn crossings(piece: &Boundary2, p: Point2, d: Vec2, tol: f64) -> Crossing {
             {
                 return Crossing::OnBoundary;
             }
-            let disc = qb.mul_add(qb, -4.0 * qa * qc);
+            let disc = qb.madd(qb, -4.0 * qa * qc);
             if disc < 0.0 {
                 return Crossing::Count(0);
             }
@@ -629,7 +630,7 @@ mod tests {
         let step = (t1 - t0) / f64::from(n);
         let mut best = (at(t0), t0);
         for k in 1..=n {
-            let t = step.mul_add(f64::from(k), t0);
+            let t = step.madd(f64::from(k), t0);
             if at(t) < best.0 {
                 best = (at(t), t);
             }

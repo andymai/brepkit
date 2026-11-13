@@ -4,6 +4,7 @@
 //! specified distance.
 
 use brepkit_math::curves::Circle3D;
+use brepkit_math::madd::Madd;
 use brepkit_math::tolerance::Tolerance;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
@@ -195,9 +196,9 @@ fn build_intersection_wire(
         } else {
             let t = diff.cross(d_curr).dot(cross) / cross_len_sq;
             let intersection = Point3::new(
-                d_prev.x().mul_add(t, p0_prev.x()),
-                d_prev.y().mul_add(t, p0_prev.y()),
-                d_prev.z().mul_add(t, p0_prev.z()),
+                d_prev.x().madd(t, p0_prev.x()),
+                d_prev.y().madd(t, p0_prev.y()),
+                d_prev.z().madd(t, p0_prev.z()),
             );
             offset_verts.push(intersection);
         }

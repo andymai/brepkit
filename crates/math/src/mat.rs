@@ -2,6 +2,7 @@
 //!
 //! [`Mat3`] is a 3x3 matrix and [`Mat4`] is a 4x4 affine transform matrix.
 
+use crate::madd::Madd;
 use std::ops::Mul;
 
 use crate::MathError;
@@ -38,11 +39,11 @@ impl Mat3 {
     #[must_use]
     pub fn determinant(self) -> f64 {
         let m = &self.0;
-        m[0][0].mul_add(
-            m[1][1].mul_add(m[2][2], -(m[1][2] * m[2][1])),
-            m[0][1].mul_add(
-                m[1][2].mul_add(m[2][0], -(m[1][0] * m[2][2])),
-                m[0][2] * m[1][0].mul_add(m[2][1], -(m[1][1] * m[2][0])),
+        m[0][0].madd(
+            m[1][1].madd(m[2][2], -(m[1][2] * m[2][1])),
+            m[0][1].madd(
+                m[1][2].madd(m[2][0], -(m[1][0] * m[2][2])),
+                m[0][2] * m[1][0].madd(m[2][1], -(m[1][1] * m[2][0])),
             ),
         )
     }
@@ -132,18 +133,9 @@ impl Mat4 {
     pub fn mul_point(self, p: Point3) -> Point3 {
         let m = &self.0;
         Point3::new(
-            m[0][0].mul_add(
-                p.x(),
-                m[0][1].mul_add(p.y(), m[0][2].mul_add(p.z(), m[0][3])),
-            ),
-            m[1][0].mul_add(
-                p.x(),
-                m[1][1].mul_add(p.y(), m[1][2].mul_add(p.z(), m[1][3])),
-            ),
-            m[2][0].mul_add(
-                p.x(),
-                m[2][1].mul_add(p.y(), m[2][2].mul_add(p.z(), m[2][3])),
-            ),
+            m[0][0].madd(p.x(), m[0][1].madd(p.y(), m[0][2].madd(p.z(), m[0][3]))),
+            m[1][0].madd(p.x(), m[1][1].madd(p.y(), m[1][2].madd(p.z(), m[1][3]))),
+            m[2][0].madd(p.x(), m[2][1].madd(p.y(), m[2][2].madd(p.z(), m[2][3]))),
         )
     }
 
@@ -165,26 +157,23 @@ impl Mat4 {
     pub fn determinant(self) -> f64 {
         let m = &self.0;
 
-        let s0 = m[0][0].mul_add(m[1][1], -(m[1][0] * m[0][1]));
-        let s1 = m[0][0].mul_add(m[1][2], -(m[1][0] * m[0][2]));
-        let s2 = m[0][0].mul_add(m[1][3], -(m[1][0] * m[0][3]));
-        let s3 = m[0][1].mul_add(m[1][2], -(m[1][1] * m[0][2]));
-        let s4 = m[0][1].mul_add(m[1][3], -(m[1][1] * m[0][3]));
-        let s5 = m[0][2].mul_add(m[1][3], -(m[1][2] * m[0][3]));
+        let s0 = m[0][0].madd(m[1][1], -(m[1][0] * m[0][1]));
+        let s1 = m[0][0].madd(m[1][2], -(m[1][0] * m[0][2]));
+        let s2 = m[0][0].madd(m[1][3], -(m[1][0] * m[0][3]));
+        let s3 = m[0][1].madd(m[1][2], -(m[1][1] * m[0][2]));
+        let s4 = m[0][1].madd(m[1][3], -(m[1][1] * m[0][3]));
+        let s5 = m[0][2].madd(m[1][3], -(m[1][2] * m[0][3]));
 
-        let c5 = m[2][2].mul_add(m[3][3], -(m[3][2] * m[2][3]));
-        let c4 = m[2][1].mul_add(m[3][3], -(m[3][1] * m[2][3]));
-        let c3 = m[2][1].mul_add(m[3][2], -(m[3][1] * m[2][2]));
-        let c2 = m[2][0].mul_add(m[3][3], -(m[3][0] * m[2][3]));
-        let c1 = m[2][0].mul_add(m[3][2], -(m[3][0] * m[2][2]));
-        let c0 = m[2][0].mul_add(m[3][1], -(m[3][0] * m[2][1]));
+        let c5 = m[2][2].madd(m[3][3], -(m[3][2] * m[2][3]));
+        let c4 = m[2][1].madd(m[3][3], -(m[3][1] * m[2][3]));
+        let c3 = m[2][1].madd(m[3][2], -(m[3][1] * m[2][2]));
+        let c2 = m[2][0].madd(m[3][3], -(m[3][0] * m[2][3]));
+        let c1 = m[2][0].madd(m[3][2], -(m[3][0] * m[2][2]));
+        let c0 = m[2][0].madd(m[3][1], -(m[3][0] * m[2][1]));
 
-        s0.mul_add(
+        s0.madd(
             c5,
-            (-s1).mul_add(
-                c4,
-                s2.mul_add(c3, s3.mul_add(c2, (-s4).mul_add(c1, s5 * c0))),
-            ),
+            (-s1).madd(c4, s2.madd(c3, s3.madd(c2, (-s4).madd(c1, s5 * c0)))),
         )
     }
 
@@ -198,26 +187,23 @@ impl Mat4 {
         let m = &self.0;
 
         // Reuse the 2x2 minor pattern from determinant().
-        let s0 = m[0][0].mul_add(m[1][1], -(m[1][0] * m[0][1]));
-        let s1 = m[0][0].mul_add(m[1][2], -(m[1][0] * m[0][2]));
-        let s2 = m[0][0].mul_add(m[1][3], -(m[1][0] * m[0][3]));
-        let s3 = m[0][1].mul_add(m[1][2], -(m[1][1] * m[0][2]));
-        let s4 = m[0][1].mul_add(m[1][3], -(m[1][1] * m[0][3]));
-        let s5 = m[0][2].mul_add(m[1][3], -(m[1][2] * m[0][3]));
+        let s0 = m[0][0].madd(m[1][1], -(m[1][0] * m[0][1]));
+        let s1 = m[0][0].madd(m[1][2], -(m[1][0] * m[0][2]));
+        let s2 = m[0][0].madd(m[1][3], -(m[1][0] * m[0][3]));
+        let s3 = m[0][1].madd(m[1][2], -(m[1][1] * m[0][2]));
+        let s4 = m[0][1].madd(m[1][3], -(m[1][1] * m[0][3]));
+        let s5 = m[0][2].madd(m[1][3], -(m[1][2] * m[0][3]));
 
-        let c5 = m[2][2].mul_add(m[3][3], -(m[3][2] * m[2][3]));
-        let c4 = m[2][1].mul_add(m[3][3], -(m[3][1] * m[2][3]));
-        let c3 = m[2][1].mul_add(m[3][2], -(m[3][1] * m[2][2]));
-        let c2 = m[2][0].mul_add(m[3][3], -(m[3][0] * m[2][3]));
-        let c1 = m[2][0].mul_add(m[3][2], -(m[3][0] * m[2][2]));
-        let c0 = m[2][0].mul_add(m[3][1], -(m[3][0] * m[2][1]));
+        let c5 = m[2][2].madd(m[3][3], -(m[3][2] * m[2][3]));
+        let c4 = m[2][1].madd(m[3][3], -(m[3][1] * m[2][3]));
+        let c3 = m[2][1].madd(m[3][2], -(m[3][1] * m[2][2]));
+        let c2 = m[2][0].madd(m[3][3], -(m[3][0] * m[2][3]));
+        let c1 = m[2][0].madd(m[3][2], -(m[3][0] * m[2][2]));
+        let c0 = m[2][0].madd(m[3][1], -(m[3][0] * m[2][1]));
 
-        let det = s0.mul_add(
+        let det = s0.madd(
             c5,
-            (-s1).mul_add(
-                c4,
-                s2.mul_add(c3, s3.mul_add(c2, (-s4).mul_add(c1, s5 * c0))),
-            ),
+            (-s1).madd(c4, s2.madd(c3, s3.madd(c2, (-s4).madd(c1, s5 * c0)))),
         );
 
         // Scale-relative singularity check.  The determinant is computed as a
@@ -249,28 +235,28 @@ impl Mat4 {
 
         Ok(Self([
             [
-                m[1][1].mul_add(c5, m[1][3].mul_add(c3, -(m[1][2] * c4))) * inv_det,
-                (-m[0][1]).mul_add(c5, m[0][2].mul_add(c4, -(m[0][3] * c3))) * inv_det,
-                m[3][1].mul_add(s5, m[3][3].mul_add(s3, -(m[3][2] * s4))) * inv_det,
-                (-m[2][1]).mul_add(s5, m[2][2].mul_add(s4, -(m[2][3] * s3))) * inv_det,
+                m[1][1].madd(c5, m[1][3].madd(c3, -(m[1][2] * c4))) * inv_det,
+                (-m[0][1]).madd(c5, m[0][2].madd(c4, -(m[0][3] * c3))) * inv_det,
+                m[3][1].madd(s5, m[3][3].madd(s3, -(m[3][2] * s4))) * inv_det,
+                (-m[2][1]).madd(s5, m[2][2].madd(s4, -(m[2][3] * s3))) * inv_det,
             ],
             [
-                (-m[1][0]).mul_add(c5, m[1][2].mul_add(c2, -(m[1][3] * c1))) * inv_det,
-                m[0][0].mul_add(c5, m[0][3].mul_add(c1, -(m[0][2] * c2))) * inv_det,
-                (-m[3][0]).mul_add(s5, m[3][2].mul_add(s2, -(m[3][3] * s1))) * inv_det,
-                m[2][0].mul_add(s5, m[2][3].mul_add(s1, -(m[2][2] * s2))) * inv_det,
+                (-m[1][0]).madd(c5, m[1][2].madd(c2, -(m[1][3] * c1))) * inv_det,
+                m[0][0].madd(c5, m[0][3].madd(c1, -(m[0][2] * c2))) * inv_det,
+                (-m[3][0]).madd(s5, m[3][2].madd(s2, -(m[3][3] * s1))) * inv_det,
+                m[2][0].madd(s5, m[2][3].madd(s1, -(m[2][2] * s2))) * inv_det,
             ],
             [
-                m[1][0].mul_add(c4, m[1][3].mul_add(c0, -(m[1][1] * c2))) * inv_det,
-                (-m[0][0]).mul_add(c4, m[0][1].mul_add(c2, -(m[0][3] * c0))) * inv_det,
-                m[3][0].mul_add(s4, m[3][3].mul_add(s0, -(m[3][1] * s2))) * inv_det,
-                (-m[2][0]).mul_add(s4, m[2][1].mul_add(s2, -(m[2][3] * s0))) * inv_det,
+                m[1][0].madd(c4, m[1][3].madd(c0, -(m[1][1] * c2))) * inv_det,
+                (-m[0][0]).madd(c4, m[0][1].madd(c2, -(m[0][3] * c0))) * inv_det,
+                m[3][0].madd(s4, m[3][3].madd(s0, -(m[3][1] * s2))) * inv_det,
+                (-m[2][0]).madd(s4, m[2][1].madd(s2, -(m[2][3] * s0))) * inv_det,
             ],
             [
-                (-m[1][0]).mul_add(c3, m[1][1].mul_add(c1, -(m[1][2] * c0))) * inv_det,
-                m[0][0].mul_add(c3, m[0][2].mul_add(c0, -(m[0][1] * c1))) * inv_det,
-                (-m[3][0]).mul_add(s3, m[3][1].mul_add(s1, -(m[3][2] * s0))) * inv_det,
-                m[2][0].mul_add(s3, m[2][2].mul_add(s0, -(m[2][1] * s1))) * inv_det,
+                (-m[1][0]).madd(c3, m[1][1].madd(c1, -(m[1][2] * c0))) * inv_det,
+                m[0][0].madd(c3, m[0][2].madd(c0, -(m[0][1] * c1))) * inv_det,
+                (-m[3][0]).madd(s3, m[3][1].madd(s1, -(m[3][2] * s0))) * inv_det,
+                m[2][0].madd(s3, m[2][2].madd(s0, -(m[2][1] * s1))) * inv_det,
             ],
         ]))
     }
@@ -285,9 +271,9 @@ impl Mul for Mat4 {
         let mut out = [[0.0_f64; 4]; 4];
         for i in 0..4 {
             for j in 0..4 {
-                out[i][j] = a[i][0].mul_add(
+                out[i][j] = a[i][0].madd(
                     b[0][j],
-                    a[i][1].mul_add(b[1][j], a[i][2].mul_add(b[2][j], a[i][3] * b[3][j])),
+                    a[i][1].madd(b[1][j], a[i][2].madd(b[2][j], a[i][3] * b[3][j])),
                 );
             }
         }

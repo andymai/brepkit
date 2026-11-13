@@ -9,6 +9,7 @@
 //! (e.g. tessellation grids), since the O(p^2) conversion cost is amortised.
 
 use super::basis::basis_funs_into;
+use crate::madd::Madd;
 
 /// Precomputed polynomial coefficients for a 1-D B-spline basis.
 ///
@@ -119,9 +120,9 @@ impl PowerBasis1D {
                     // Process from high to low to avoid overwriting.
                     for k in (1..=p - m).rev() {
                         // c[k] = c[k-1] + c[k] * (-t_pts[m])
-                        c[k] = (-t_pts[m]).mul_add(c[k], c[k - 1]);
+                        c[k] = (-t_pts[m]).madd(c[k], c[k - 1]);
                     }
-                    c[0] = (-t_pts[m]).mul_add(c[0], samples[m]);
+                    c[0] = (-t_pts[m]).madd(c[0], samples[m]);
                 }
             }
         }
@@ -148,7 +149,7 @@ impl PowerBasis1D {
             let coeff_base = base + j * (p + 1);
             let mut val = self.coeffs[coeff_base + p];
             for k in (0..p).rev() {
-                val = val.mul_add(t, self.coeffs[coeff_base + k]);
+                val = val.madd(t, self.coeffs[coeff_base + k]);
             }
             out[j] = val;
         }
@@ -181,10 +182,10 @@ impl PowerBasis1D {
             let mut dval = self.coeffs[coeff_base + p] * p as f64;
 
             for k in (1..p).rev() {
-                val = val.mul_add(t, self.coeffs[coeff_base + k]);
-                dval = dval.mul_add(t, self.coeffs[coeff_base + k] * k as f64);
+                val = val.madd(t, self.coeffs[coeff_base + k]);
+                dval = dval.madd(t, self.coeffs[coeff_base + k] * k as f64);
             }
-            val = val.mul_add(t, self.coeffs[coeff_base]);
+            val = val.madd(t, self.coeffs[coeff_base]);
 
             vals[j] = val;
             derivs[j] = dval;

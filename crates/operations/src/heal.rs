@@ -3,6 +3,7 @@
 //! Provides repair operations for common geometry issues encountered
 //! in imported CAD files and boolean results.
 
+use brepkit_math::madd::Madd;
 use std::collections::{HashMap, HashSet};
 
 use brepkit_math::tolerance::Tolerance;
@@ -1761,7 +1762,7 @@ fn seamless_band(
             };
             let mut samples: Vec<Point3> = (0..8)
                 .map(|k| {
-                    let t = (t1 - t0).mul_add(f64::from(k) / 8.0, t0);
+                    let t = (t1 - t0).madd(f64::from(k) / 8.0, t0);
                     e.curve().evaluate_with_endpoints(t, a, b)
                 })
                 .collect();

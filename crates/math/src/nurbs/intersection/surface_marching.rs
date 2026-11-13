@@ -1,6 +1,7 @@
 //! SSI marching: tracing intersection curves from seed points, including
 //! branch detection, RKF45 adaptive stepping, and singular tangent analysis.
 
+use crate::madd::Madd;
 use crate::nurbs::surface::NurbsSurface;
 use crate::vec::{Point3, Vec3};
 
@@ -1136,13 +1137,13 @@ fn project_tangent_to_params(derivs: &[Vec<Vec3>], tangent: Vec3, step: f64) -> 
     let b1 = su.dot(t);
     let b2 = sv.dot(t);
 
-    let det = a11.mul_add(a22, -(a12 * a12));
+    let det = a11.madd(a22, -(a12 * a12));
     if det.abs() < 1e-20 {
         return (0.0, 0.0);
     }
 
-    let du = b1.mul_add(a22, -(b2 * a12)) / det;
-    let dv = a11.mul_add(b2, -(a12 * b1)) / det;
+    let du = b1.madd(a22, -(b2 * a12)) / det;
+    let dv = a11.madd(b2, -(a12 * b1)) / det;
 
     (du, dv)
 }
@@ -1170,7 +1171,7 @@ pub(super) fn surface_newton_step(
     let b1 = su.dot(r_vec);
     let b2 = sv.dot(r_vec);
 
-    let det = a11.mul_add(a22, -(a12 * a12));
+    let det = a11.madd(a22, -(a12 * a12));
 
     // Relative singularity threshold scales with the Jacobian magnitude,
     // catching singularities near surface poles/apex where derivatives
@@ -1182,7 +1183,7 @@ pub(super) fn surface_newton_step(
         let lambda = (a11 + a22).max(1e-10) * 1e-4;
         let a11r = a11 + lambda;
         let a22r = a22 + lambda;
-        let det_r = a11r.mul_add(a22r, -(a12 * a12));
+        let det_r = a11r.madd(a22r, -(a12 * a12));
         if det_r.abs() < 1e-30 {
             // Still degenerate -- try stepping along whichever derivative is non-zero.
             let su_len = su.dot(su);
@@ -1195,13 +1196,13 @@ pub(super) fn surface_newton_step(
             }
             return (0.0, 0.0);
         }
-        let du = b1.mul_add(a22r, -(b2 * a12)) / det_r;
-        let dv = a11r.mul_add(b2, -(a12 * b1)) / det_r;
+        let du = b1.madd(a22r, -(b2 * a12)) / det_r;
+        let dv = a11r.madd(b2, -(a12 * b1)) / det_r;
         return (du, dv);
     }
 
-    let du = b1.mul_add(a22, -(b2 * a12)) / det;
-    let dv = a11.mul_add(b2, -(a12 * b1)) / det;
+    let du = b1.madd(a22, -(b2 * a12)) / det;
+    let dv = a11.madd(b2, -(a12 * b1)) / det;
 
     (du, dv)
 }

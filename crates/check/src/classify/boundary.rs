@@ -5,6 +5,7 @@
 //! for analytic surfaces and 3D polygon containment for surfaces with
 //! pole singularities (spheres).
 
+use brepkit_math::madd::Madd;
 use std::f64::consts::{PI, TAU};
 
 use smallvec::SmallVec;
@@ -199,9 +200,9 @@ fn wire_runs_out_and_back(
             // land there.
             let (t0, t1) = edge.curve().domain_with_endpoints(start, start);
             let at_vertex = [0.25, 0.5, 0.75].iter().all(|f| {
-                let p =
-                    edge.curve()
-                        .evaluate_with_endpoints((t1 - t0).mul_add(*f, t0), start, start);
+                let p = edge
+                    .curve()
+                    .evaluate_with_endpoints((t1 - t0).madd(*f, t0), start, start);
                 (p - start).length() <= brepkit_math::tolerance::Tolerance::new().linear
             });
             if at_vertex {
@@ -421,7 +422,7 @@ fn uv_area(loop_uv: &[(f64, f64)]) -> f64 {
     (0..n)
         .map(|i| {
             let (a, b) = (loop_uv[i], loop_uv[(i + 1) % n]);
-            a.0.mul_add(b.1, -(b.0 * a.1))
+            a.0.madd(b.1, -(b.0 * a.1))
         })
         .sum::<f64>()
         .abs()
@@ -703,7 +704,7 @@ impl SphereRims {
                                 t0
                             };
                             for f in [0.25, 0.5, 0.75] {
-                                let t = (t1 - t0).mul_add(f, from);
+                                let t = (t1 - t0).madd(f, from);
                                 marks.push((
                                     c.radius() * (t1 - t0),
                                     c.evaluate(t),
@@ -714,7 +715,7 @@ impl SphereRims {
                     }
                     curve @ (EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_)) => {
                         let (t0, t1) = curve.domain_with_endpoints(a, b);
-                        let at = |f: f64| (t1 - t0).mul_add(f, t0);
+                        let at = |f: f64| (t1 - t0).madd(f, t0);
                         let mut from = a;
                         let mut length = 0.0;
                         for i in 1..=CURVE_CHORDS {
@@ -1187,7 +1188,7 @@ fn nurbs_periods(
 
 /// `next` moved by whole periods to lie within half a period of `prev`.
 fn unwrap_by(prev: f64, next: f64, period: Option<f64>) -> f64 {
-    period.map_or(next, |p| p.mul_add(-((next - prev) / p).round(), next))
+    period.map_or(next, |p| p.madd(-((next - prev) / p).round(), next))
 }
 
 /// A wire's polygon in a NURBS patch's parameters, each point unwrapped
@@ -1367,7 +1368,7 @@ mod tests {
             _ => None,
         }
         .unwrap();
-        let top = surface.evaluate(0.5, width.mul_add(3.0, 0.5));
+        let top = surface.evaluate(0.5, width.madd(3.0, 0.5));
         let along = Vec3::new(0.0, 1.0, 0.0);
         let mut unsure = false;
         let from = Point3::new(top.x(), -0.5, top.z());
@@ -1450,7 +1451,7 @@ mod tests {
         use brepkit_topology::wire::{OrientedEdge, Wire};
 
         let mut knots_v = vec![0.0; 4];
-        knots_v.extend((1..=5).map(|k| width.mul_add(f64::from(k), 0.5)));
+        knots_v.extend((1..=5).map(|k| width.madd(f64::from(k), 0.5)));
         knots_v.extend([1.0; 4]);
         let z = |k: usize| if k == 4 { 1.0 } else { 0.0 };
         #[allow(clippy::cast_precision_loss)]

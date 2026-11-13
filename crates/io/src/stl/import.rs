@@ -4,6 +4,7 @@
 //! and builds topology entities: one planar face per triangle, assembled
 //! into a shell and solid.
 
+use brepkit_math::madd::Madd;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_operations::tessellate::TriangleMesh;
 use brepkit_topology::Topology;
@@ -129,7 +130,7 @@ fn build_vertex_map(
             let dx = p.x() - pos.x();
             let dy = p.y() - pos.y();
             let dz = p.z() - pos.z();
-            dx.mul_add(dx, dy.mul_add(dy, dz * dz)) < tol_sq
+            dx.madd(dx, dy.madd(dy, dz * dz)) < tol_sq
         });
 
         if let Some(&(_, vid)) = existing {
