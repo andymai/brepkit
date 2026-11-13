@@ -1,9 +1,10 @@
 # Stability Policy
 
-brepkit publishes its crates to crates.io at a shared `2.x` version. That number
-comes from the `brepkit-wasm` npm release line, which the crates were unified
-onto so there is one version across the workspace. **It is not a claim that the
-Rust APIs have settled.** This document says what the version actually promises.
+brepkit publishes every crate to crates.io at one shared version, the same as
+the `brepkit-wasm` npm package. The major number comes from the npm release
+line, which the crates joined so that the workspace has one version. **It is not
+a claim that the Rust APIs are settled.** This document says what the version
+actually promises.
 
 ## What the shared version means
 
