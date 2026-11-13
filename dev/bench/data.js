@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794577992826,
+  "lastUpdate": 1794582194213,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -68471,6 +68471,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 23692622,
             "range": "± 42024",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "9ea56d9fe5dac919c790d78394c070893db8f201",
+          "message": "perf: faster B-spline evaluation, derivatives and exact volume (#2414)\n\nThis PR carries #2410 by @Robokan onto the current main. The seven\ncommits are the contributor's, with no change. One merge commit follows\nthem.\n\nThe merge commit does two things:\n\n- It keeps the branch's side of the one conflict, in\n`crates/check/src/properties/boundary.rs`.\n- It applies the rule from #2409 to the new code. Five library files\ncalled `mul_add` in 10 places, and they now call `Madd::madd`.\n\n## How I checked it\n\n- `cargo clippy --all-targets -- -D warnings` passes for `brepkit-math`\nand `brepkit-check`.\n- `cargo test` passes for `brepkit-math` (656 tests) and `brepkit-check`\n(84 tests).\n\n## The description from #2410\n\nSpeeds up B-spline evaluation, derivatives, the Bezier split and the\nexact volume of B-spline faces.\n\nEach change is its own commit, with its reasoning and numbers in the\ncommit message; every result is unchanged (values compared bit for bit,\noutputs line for line, as each message says). Times were taken one case\nat a time, before and after, on a tree where that change is the only\ndifference.\n\n## Commits\n\n- **perf(math): a NURBS surface's first derivatives without allocating**\n`NurbsSurface::derivatives` built its homogeneous and quotient tables as\nnested `Vec`s on every call, and Gauss-Newton projections and the\nmarcher called it at order 1 to read three terms. The arithmetic now\nruns in one core over flat buffers (on the stack to order 2),\n`derivatives` builds its table from them as before, and\n`first_derivatives` returns `(S, S_u, S_v)` with no allocation; the hot\norder-1 callers take it. `ParametricSurface::partials` returns both\npartials (defaulting to `partial_u` and `partial_v`), and the exact\nboundary integral reads them from one call where it made two, each\nworking out both. The values are the same to the bit, which a test\nchecks against the table.\n_A boolean whose time was the containment test's exact volume of a\nB-spline body: 230 s -> 134 s._\n- **perf(check): a B-spline face's volume integral reuses its basis\nfunctions**\nThe exact volume of a solid with B-spline faces integrates each face by\nGreen's theorem: at every point of its boundary, the surface from the\nstart of u through every knot span before it, ten-point Gauss in each\nspan. On a fitted surface of hundreds of spans that is nearly all of a\nmeasure's time.\n_Every value is the one the surface's own evaluate and first_derivatives\ngive, bit for bit (each sum keeps its order; the skipped operations are\nproducts by 1 and differences with 0): tested on rational and polynomial\npatches of degrees 1 to 5, and the first-order basis against the general\nalgorithm at degrees 1 to 10. The volumes of 226 slow solids from real\ndesigns come out bit for bit the same; one taking 25.2 s takes 7.5 s._\n- **perf(math): a NURBS surface's first derivatives in one pass**  \n`first_derivatives` (every projection's Newton step, the surface\nmarcher) took the general derivative table to order 1: a pass over the\nspan's control points for each of the point and its two partials, and\nthe quotient rule's loops over binomials. It now sums the three in one\npass, each sum in the order the table takes it, and applies the quotient\nrule's first-order steps alone (the ones it leaves out multiply by 1 or\nsubtract a sum of nothing), so its values are the table's, bit for bit:\ntested against `derivatives(u, v, 1)` on rational and polynomial patches\nof degrees 1 to 5, at knots, ends and between.\n_A boolean of fitted B-spline bodies that falls back after its exact\nattempt (40.8 s -> 29.7 s there) spends most of its time projecting\npoints on to such surfaces._\n- **perf(math): a surface's point and first partials in one pass where\nonly they are read**\nRefining a seed of two B-spline surfaces' intersection (the Newton step\nof `refine_ssi_point`, most of a fitted-loft boolean's seeding)\nevaluated each surface's point, then built the general derivative table\nto order one (nested `Vec`s, allocated on every call) to read its two\npartials. `NurbsSurface::point_and_first_derivatives` gives both from\none pass over the span's control points: the point as `evaluate` gives\nit and the partials as `first_derivatives` does (a test checks both bit\nfor bit on rational and polynomial patches of degrees 1 to 5). Other\nplaces that built the order-one table and read only the point and\npartials (ray hits, line and plane sections, the marcher's tangent,\ncurve-surface crossings, the self-intersection test, tessellation's\norientation, the exact volume's integrand) take `first_derivatives`, the\nsame numbers without the allocation.\n_Two fitted-loft booleans from real designs that spend most of their\ntime seeding (the mesh fallback declined), best of three runs taken in\nturn with the tree without this change on a quiet machine: 5.75 s ->\n4.05 s and 5.86 s -> 4.14 s, their output line for line the same; 60\nslow solids' volumes the same to the last bit._\n- **perf(math): a surface's Bezier refinement on one grid**  \n`surface_to_bezier_patches` raises every interior knot to full\nmultiplicity before cutting the patches out, and did it a knot at a time\nthrough `surface_knot_insert_u`/`_v`: for each knot, a curve built per\ncolumn (or row), the knot inserted into each, and a new surface\nassembled from them. On a fitted surface of hundreds of spans that is\nquadratic in allocations, and it ran for every surface-surface\nintersection seeded (a quarter of one fitted-loft boolean's time).\n_The knots are now inserted into one homogeneous grid, row by row, with\nthe same multiplicity cap, the same blends and the same round trip\nthrough homogeneous points per knot as the curve insertion, so the\nrefined surface is the knot-by-knot one bit for bit (tested on rational\nand polynomial nets of degrees 1 to 4, with knots already doubled)._\n- **perf(check): integrate a B-spline face's boundary pieces in\nparallel**\nThe exact volume of a B-spline face integrates along its boundary, each\nedge cut where it crosses a knot line, each piece by adaptive Gauss from\nits own first point's (u, v). The pieces share nothing, so they now run\non rayon's pool (outside wasm, as tessellation does), and their\nintegrals are summed in the order the edges ran, wire by wire, as\nbefore: the volume is the same to the last bit. Where one piece fails\nthe face fails, as before; pieces not yet begun are then passed over.\n_Five solids of fitted B-spline faces, the volume alone: 219-295 s each\n-> 7.6-36 s, volumes unchanged to the last bit._\n- **perf(check): a NURBS face's boundary in its parameters is built\nonce**\nThe point classifier projected every vertex of a NURBS face's boundary\non to the surface for each ray that hit the face, and again in its\non-the-boundary test for each point, though the boundary does not depend\non either. `FaceRayCache` now keeps both: the face's outer and hole\npolygons for the ray crossings, and a `NurbsFaceRegion` for the\non-the-boundary test, which reads `point_to_face` with that region in\nplace of `face_contains`. A region whose loops do not all sample is not\nkept, and the old path runs as before, so an error reaches the caller as\nit did. A test compares the region with `face_contains` in and round a\nholed face.\n_On the slowest passing B-spline booleans of a set from real designs,\nalready sped up by the containment test's reorder, five took 43.7 s and\nnow take 17.0 s._\n\n## Test plan\n\n- [x] `cargo test --release -p brepkit-math -p brepkit-check -p\nbrepkit-algo -p brepkit-operations -p brepkit-io` on this branch (3735\npassed)\n- [x] pose sweep and truth audit print the same as on `main`\n- [x] clippy and fmt clean\n\nThis gathers #2377, #2390, #2391, #2393, #2394, #2395 and #2405 into one\nPR, so there are fewer to review; those are closed in its favour.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nSpeeds up NURBS/B-spline evaluation, derivatives, Bezier decomposition,\nand exact volume computation, cutting boolean and volume-check times by\nroughly 2x to 16x while keeping every value bit-for-bit identical to\nbefore.\n\n**What changed**\n- Point and first-partial evaluation now runs in a single pass over\ncontrol points with no per-call allocation (`first_derivatives`,\n`point_and_first_derivatives`, `at_v`, `u_basis`).\n- `surface_to_bezier_patches` inserts knots into one homogeneous grid\ninstead of rebuilding a curve per row and a surface per knot.\n- The exact volume of B-spline faces reuses basis functions across\nboundary points and integrates boundary pieces in parallel with rayon\n(serial on wasm), summing each wire's pieces in one pass in their\noriginal order.\n- `FaceRayCache` now caches a NURBS face's UV boundary and a\n`NurbsFaceRegion`, so containment tests stop reprojecting boundary\nvertices per ray and per point.\n- The merged arithmetic uses `Madd::madd` per main's rule (#2409).\n\n**Correctness**\n- Tests verify first derivatives match the general derivative table bit\nfor bit, refined surfaces match knot-by-knot insertion, and\n`NurbsFaceRegion` answers as `face_contains` does.\n- Volumes of 226 slow solids and boolean outputs from real designs are\nunchanged to the last bit.\n- 3735 tests pass; clippy and fmt are clean.\n\n<sup>Written for commit 138f603a93298f5528583695c440d9a84a31166b.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2414?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2414?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2414&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\n---------\n\nCo-authored-by: Robokan <eric.d.vaughan@gmail.com>\nCo-authored-by: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-11-13T06:59:14-08:00",
+          "tree_id": "121d51a34f5d61d785e2714d28dd46c482e23209",
+          "url": "https://github.com/andymai/brepkit/commit/9ea56d9fe5dac919c790d78394c070893db8f201"
+        },
+        "date": 1794582182479,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 926966,
+            "range": "± 5525",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 981374,
+            "range": "± 1290",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11999,
+            "range": "± 475",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 575412,
+            "range": "± 1321",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24204407,
+            "range": "± 84646",
             "unit": "ns/iter"
           }
         ]
