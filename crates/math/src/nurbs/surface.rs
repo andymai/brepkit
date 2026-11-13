@@ -62,6 +62,21 @@ impl Clone for ProjectionMemo {
     }
 }
 
+/// The surfaces split into Bezier patches lately, anywhere: each one's
+/// content key, its data, and its patches, the most lately used last, at most
+/// [`SPLIT_PATCHES`] patches in all.
+#[allow(clippy::type_complexity)]
+static SPLIT: std::sync::Mutex<
+    Vec<(
+        u64,
+        NurbsSurface,
+        std::sync::Arc<Vec<crate::nurbs::decompose::BezierPatch>>,
+    )>,
+> = std::sync::Mutex::new(Vec::new());
+
+/// How many Bezier patches [`SPLIT`] keeps in all.
+const SPLIT_PATCHES: usize = 50_000;
+
 impl PartialEq for NurbsSurface {
     fn eq(&self, other: &Self) -> bool {
         self.degree_u == other.degree_u
@@ -528,6 +543,108 @@ impl NurbsSurface {
             m.insert(key, uv);
         }
         uv
+    }
+
+    /// The surface split into Bezier patches
+    /// ([`surface_to_bezier_patches`](crate::nurbs::decompose::surface_to_bezier_patches)),
+    /// kept among the last few split anywhere (at most [`SPLIT_PATCHES`]
+    /// patches in all) and found again by the surface's data bit for bit: a
+    /// boolean's result rebuilds its faces' surfaces, so a body cut by one
+    /// tool after another would otherwise split the same surface for each.
+    /// Not kept on the surface, which can outlive its use by far.
+    ///
+    /// # Errors
+    ///
+    /// As `surface_to_bezier_patches`.
+    pub fn bezier_patches(
+        &self,
+    ) -> Result<std::sync::Arc<Vec<crate::nurbs::decompose::BezierPatch>>, MathError> {
+        let key = self.content_key();
+        let found = SPLIT.lock().ok().and_then(|mut kept| {
+            let at = kept
+                .iter()
+                .position(|(k, surface, _)| *k == key && surface.same_bits(self))?;
+            let entry = kept.remove(at);
+            let patches = entry.2.clone();
+            kept.push(entry); // the most lately used last
+            Some(patches)
+        });
+        let patches = if let Some(patches) = found {
+            patches
+        } else {
+            let patches =
+                std::sync::Arc::new(crate::nurbs::decompose::surface_to_bezier_patches(self)?);
+            if patches.len() <= SPLIT_PATCHES
+                && let Ok(mut kept) = SPLIT.lock()
+            {
+                while kept.iter().map(|e| e.2.len()).sum::<usize>() + patches.len() > SPLIT_PATCHES
+                {
+                    kept.remove(0);
+                }
+                kept.push((key, self.data_only(), patches.clone()));
+            }
+            patches
+        };
+        Ok(patches)
+    }
+
+    /// A hash of the surface's degrees, knots, control points and weights,
+    /// bit for bit.
+    fn content_key(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        (self.degree_u, self.degree_v).hash(&mut h);
+        for &k in self.knots_u.iter().chain(&self.knots_v) {
+            k.to_bits().hash(&mut h);
+        }
+        for p in self.control_points.iter().flatten() {
+            [p.x().to_bits(), p.y().to_bits(), p.z().to_bits()].hash(&mut h);
+        }
+        for &w in self.weights.iter().flatten() {
+            w.to_bits().hash(&mut h);
+        }
+        h.finish()
+    }
+
+    /// Whether `other` has this surface's data, bit for bit.
+    fn same_bits(&self, other: &Self) -> bool {
+        let bits = |a: &[f64], b: &[f64]| {
+            a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x.to_bits() == y.to_bits())
+        };
+        let point_bits = |a: &Point3, b: &Point3| {
+            a.x().to_bits() == b.x().to_bits()
+                && a.y().to_bits() == b.y().to_bits()
+                && a.z().to_bits() == b.z().to_bits()
+        };
+        self.degree_u == other.degree_u
+            && self.degree_v == other.degree_v
+            && bits(&self.knots_u, &other.knots_u)
+            && bits(&self.knots_v, &other.knots_v)
+            && self.control_points.len() == other.control_points.len()
+            && self
+                .control_points
+                .iter()
+                .zip(&other.control_points)
+                .all(|(a, b)| a.len() == b.len() && a.iter().zip(b).all(|(p, q)| point_bits(p, q)))
+            && self.weights.len() == other.weights.len()
+            && self
+                .weights
+                .iter()
+                .zip(&other.weights)
+                .all(|(a, b)| bits(a, b))
+    }
+
+    /// The surface's data without anything it keeps.
+    fn data_only(&self) -> Self {
+        Self {
+            degree_u: self.degree_u,
+            degree_v: self.degree_v,
+            knots_u: self.knots_u.clone(),
+            knots_v: self.knots_v.clone(),
+            control_points: self.control_points.clone(),
+            weights: self.weights.clone(),
+            caches: Box::default(),
+        }
     }
 
     /// The surface's coarse grid for projections, evaluated on first use.
