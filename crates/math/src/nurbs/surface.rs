@@ -2,7 +2,6 @@
 
 use crate::MathError;
 use crate::aabb::Aabb3;
-use crate::madd::Madd;
 use crate::nurbs::basis;
 use crate::nurbs::evaluator::SurfaceEvaluator;
 use crate::vec::{Point3, Vec3};
@@ -11,7 +10,7 @@ use crate::vec::{Point3, Vec3};
 ///
 /// The surface is defined by degrees in the u and v directions, two knot
 /// vectors, a 2D grid of control points, and matching weights.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct NurbsSurface {
     /// Polynomial degree in the u direction.
@@ -26,46 +25,119 @@ pub struct NurbsSurface {
     control_points: Vec<Vec<Point3>>,
     /// Weight grid matching `control_points` dimensions.
     weights: Vec<Vec<f64>>,
-    /// The points a projection onto the surface starts its search from.
+    /// What the surface keeps once worked out (see [`Caches`]).
     #[cfg_attr(feature = "serde", serde(skip))]
-    seed_grid: Derived<SeedGrid>,
+    caches: Box<Caches>,
 }
 
-/// A value worked out from a surface on first use. Equal surfaces work out
-/// equal values, so it takes no part in comparing them.
-#[derive(Clone)]
-struct Derived<T>(std::sync::OnceLock<T>);
+/// What a surface keeps once worked out, each part made on first use: a
+/// surface is never changed once made. Boxed, so the surface stays small
+/// (enums hold surfaces by value), and cloned with it, not shared (the ray
+/// patches hold a clone of their surface, which must not hold them back).
+#[derive(Clone, Default)]
+struct Caches {
+    /// The grid every projection seeds from.
+    coarse_grid: std::sync::OnceLock<std::sync::Arc<crate::nurbs::projection::CoarseGrid>>,
+    /// The control points' box.
+    control_box: std::sync::OnceLock<Aabb3>,
+    /// The Bezier patches rays are cast against.
+    ray_surface:
+        std::sync::OnceLock<Option<std::sync::Arc<crate::nurbs::intersection::RaySurface>>>,
+    /// Points projected onto the surface (see [`NurbsSurface::projected`]).
+    projections: ProjectionMemo,
+}
 
-impl<T> std::fmt::Debug for Derived<T> {
-    // Whether the value is worked out yet says nothing of the surface.
+/// Points already projected onto a surface, by their coordinates' bits, at
+/// most [`ProjectionMemo::LIMIT`] of them. A clone starts empty.
+#[derive(Debug, Default)]
+struct ProjectionMemo(std::sync::Mutex<std::collections::HashMap<[u64; 3], (f64, f64)>>);
+
+impl ProjectionMemo {
+    const LIMIT: usize = 1 << 14;
+}
+
+impl Clone for ProjectionMemo {
+    fn clone(&self) -> Self {
+        Self::default()
+    }
+}
+
+/// The surfaces split into Bezier patches lately, anywhere: each one's
+/// content key, its data, and its patches, the most lately used last, at most
+/// [`SPLIT_PATCHES`] patches in all.
+static SPLIT: std::sync::Mutex<Vec<SplitEntry>> = std::sync::Mutex::new(Vec::new());
+
+/// A surface's content key, its data, and its Bezier patches.
+type SplitEntry = (
+    u64,
+    NurbsSurface,
+    std::sync::Arc<Vec<crate::nurbs::decompose::BezierPatch>>,
+);
+
+/// The entry of `kept` for the surface `key` and `surface` name, moved to
+/// the end as the most lately used.
+fn split_kept(
+    kept: &mut Vec<SplitEntry>,
+    key: u64,
+    surface: &NurbsSurface,
+) -> Option<std::sync::Arc<Vec<crate::nurbs::decompose::BezierPatch>>> {
+    let at = kept
+        .iter()
+        .position(|(k, held, _)| *k == key && held.same_bits(surface))?;
+    let entry = kept.remove(at);
+    let patches = entry.2.clone();
+    kept.push(entry);
+    Some(patches)
+}
+
+/// Keeps `entry` in `kept` as the most lately used, within `limit` patches
+/// in all, and returns the patches to use: those `kept` already holds for
+/// the same surface, where another caller split it meanwhile, else the
+/// entry's own. The least lately used entries go first to make room, in
+/// one pass; an entry over the limit by itself is not kept.
+fn keep_split(
+    kept: &mut Vec<SplitEntry>,
+    entry: SplitEntry,
+    limit: usize,
+) -> std::sync::Arc<Vec<crate::nurbs::decompose::BezierPatch>> {
+    if let Some(held) = split_kept(kept, entry.0, &entry.1) {
+        return held;
+    }
+    let patches = entry.2.clone();
+    if patches.len() > limit {
+        return patches;
+    }
+    let mut total: usize = kept.iter().map(|e| e.2.len()).sum();
+    let mut gone = 0;
+    while total + patches.len() > limit {
+        total -= kept[gone].2.len();
+        gone += 1;
+    }
+    kept.drain(..gone);
+    kept.push(entry);
+    patches
+}
+
+/// How many Bezier patches [`SPLIT`] keeps in all.
+const SPLIT_PATCHES: usize = 50_000;
+
+/// What a surface keeps is no part of its value: it prints as nothing, so
+/// a surface prints the same whatever it has worked out.
+impl std::fmt::Debug for Caches {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("Derived")
+        f.write_str("..")
     }
 }
 
-impl<T> Default for Derived<T> {
-    fn default() -> Self {
-        Self(std::sync::OnceLock::new())
+impl PartialEq for NurbsSurface {
+    fn eq(&self, other: &Self) -> bool {
+        self.degree_u == other.degree_u
+            && self.degree_v == other.degree_v
+            && self.knots_u == other.knots_u
+            && self.knots_v == other.knots_v
+            && self.control_points == other.control_points
+            && self.weights == other.weights
     }
-}
-
-impl<T> PartialEq for Derived<T> {
-    fn eq(&self, _: &Self) -> bool {
-        true
-    }
-}
-
-/// The surface at a uniform grid over its domain.
-#[derive(Debug, Clone)]
-pub(crate) struct SeedGrid {
-    /// The grid's parameters along `u`.
-    pub(crate) us: Vec<f64>,
-    /// The grid's parameters along `v`.
-    pub(crate) vs: Vec<f64>,
-    /// The surface at `(us[i], vs[j])`, as `points[i][j]`.
-    pub(crate) points: Vec<Vec<Point3>>,
-    /// The farthest any grid point lies from the first.
-    pub(crate) extent: f64,
 }
 
 impl NurbsSurface {
@@ -143,38 +215,7 @@ impl NurbsSurface {
             knots_v,
             control_points,
             weights,
-            seed_grid: Derived::default(),
-        })
-    }
-
-    /// The surface at a uniform grid of `n + 1` parameters each way, worked
-    /// out once.
-    #[allow(clippy::cast_precision_loss)]
-    pub(crate) fn seed_grid(&self, n: usize) -> &SeedGrid {
-        self.seed_grid.0.get_or_init(|| {
-            let (u_min, u_max) = self.domain_u();
-            let (v_min, v_max) = self.domain_v();
-            let us: Vec<f64> = (0..=n)
-                .map(|i| (i as f64 / n as f64).madd(u_max - u_min, u_min))
-                .collect();
-            let vs: Vec<f64> = (0..=n)
-                .map(|j| (j as f64 / n as f64).madd(v_max - v_min, v_min))
-                .collect();
-            let points: Vec<Vec<Point3>> = us
-                .iter()
-                .map(|&u| vs.iter().map(|&v| self.evaluate(u, v)).collect())
-                .collect();
-            let first = points[0][0];
-            let extent = points
-                .iter()
-                .flatten()
-                .fold(0.0_f64, |m, p| m.max((*p - first).length()));
-            SeedGrid {
-                us,
-                vs,
-                points,
-                extent,
-            }
+            caches: Box::default(),
         })
     }
 
@@ -688,11 +729,157 @@ impl NurbsSurface {
     /// Compute an axis-aligned bounding box from control point extrema.
     #[must_use]
     pub fn aabb(&self) -> Aabb3 {
-        Aabb3::from_points(
-            self.control_points
+        *self.caches.control_box.get_or_init(|| {
+            Aabb3::from_points(
+                self.control_points
+                    .iter()
+                    .flat_map(|row| row.iter().copied()),
+            )
+        })
+    }
+
+    /// The surface split into Bezier patches for casting rays at it
+    /// ([`RaySurface::new`](crate::nurbs::intersection::RaySurface::new)),
+    /// made on first use and shared from then on: a surface is never
+    /// changed once made. `None` where `RaySurface::new` declines it.
+    #[must_use]
+    pub fn ray_surface(&self) -> Option<std::sync::Arc<crate::nurbs::intersection::RaySurface>> {
+        self.caches
+            .ray_surface
+            .get_or_init(|| {
+                crate::nurbs::intersection::RaySurface::new(self).map(std::sync::Arc::new)
+            })
+            .clone()
+    }
+
+    /// `(u, v)` of `point`'s projection by `project`, kept for the same
+    /// point (its coordinates bit for bit): a surface's projection of a
+    /// point does not change, and several classifiers project the same
+    /// boundary points onto it in turn.
+    pub(crate) fn projected(
+        &self,
+        point: Point3,
+        project: impl FnOnce() -> (f64, f64),
+    ) -> (f64, f64) {
+        let key = [
+            point.x().to_bits(),
+            point.y().to_bits(),
+            point.z().to_bits(),
+        ];
+        if let Some(&uv) = self
+            .caches
+            .projections
+            .0
+            .lock()
+            .ok()
+            .as_ref()
+            .and_then(|m| m.get(&key))
+        {
+            return uv;
+        }
+        let uv = project();
+        if let Ok(mut m) = self.caches.projections.0.lock()
+            && m.len() < ProjectionMemo::LIMIT
+        {
+            m.insert(key, uv);
+        }
+        uv
+    }
+
+    /// The surface split into Bezier patches
+    /// ([`surface_to_bezier_patches`](crate::nurbs::decompose::surface_to_bezier_patches)),
+    /// kept among the last few split anywhere (at most 50,000 patches in
+    /// all) and found again by the surface's data bit for bit: a
+    /// boolean's result rebuilds its faces' surfaces, so a body cut by one
+    /// tool after another would otherwise split the same surface for each.
+    /// Not kept on the surface, which can outlive its use by far.
+    ///
+    /// # Errors
+    ///
+    /// As `surface_to_bezier_patches`.
+    pub fn bezier_patches(
+        &self,
+    ) -> Result<std::sync::Arc<Vec<crate::nurbs::decompose::BezierPatch>>, MathError> {
+        let key = self.content_key();
+        let found = SPLIT
+            .lock()
+            .ok()
+            .and_then(|mut kept| split_kept(&mut kept, key, self));
+        if let Some(patches) = found {
+            return Ok(patches);
+        }
+        let patches =
+            std::sync::Arc::new(crate::nurbs::decompose::surface_to_bezier_patches(self)?);
+        Ok(match SPLIT.lock() {
+            Ok(mut kept) => keep_split(&mut kept, (key, self.data_only(), patches), SPLIT_PATCHES),
+            Err(_) => patches,
+        })
+    }
+
+    /// A hash of the surface's degrees, knots, control points and weights,
+    /// bit for bit.
+    fn content_key(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        (self.degree_u, self.degree_v).hash(&mut h);
+        for &k in self.knots_u.iter().chain(&self.knots_v) {
+            k.to_bits().hash(&mut h);
+        }
+        for p in self.control_points.iter().flatten() {
+            [p.x().to_bits(), p.y().to_bits(), p.z().to_bits()].hash(&mut h);
+        }
+        for &w in self.weights.iter().flatten() {
+            w.to_bits().hash(&mut h);
+        }
+        h.finish()
+    }
+
+    /// Whether `other` has this surface's data, bit for bit.
+    fn same_bits(&self, other: &Self) -> bool {
+        let bits = |a: &[f64], b: &[f64]| {
+            a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x.to_bits() == y.to_bits())
+        };
+        let point_bits = |a: &Point3, b: &Point3| {
+            a.x().to_bits() == b.x().to_bits()
+                && a.y().to_bits() == b.y().to_bits()
+                && a.z().to_bits() == b.z().to_bits()
+        };
+        self.degree_u == other.degree_u
+            && self.degree_v == other.degree_v
+            && bits(&self.knots_u, &other.knots_u)
+            && bits(&self.knots_v, &other.knots_v)
+            && self.control_points.len() == other.control_points.len()
+            && self
+                .control_points
                 .iter()
-                .flat_map(|row| row.iter().copied()),
-        )
+                .zip(&other.control_points)
+                .all(|(a, b)| a.len() == b.len() && a.iter().zip(b).all(|(p, q)| point_bits(p, q)))
+            && self.weights.len() == other.weights.len()
+            && self
+                .weights
+                .iter()
+                .zip(&other.weights)
+                .all(|(a, b)| bits(a, b))
+    }
+
+    /// The surface's data without anything it keeps.
+    fn data_only(&self) -> Self {
+        Self {
+            degree_u: self.degree_u,
+            degree_v: self.degree_v,
+            knots_u: self.knots_u.clone(),
+            knots_v: self.knots_v.clone(),
+            control_points: self.control_points.clone(),
+            weights: self.weights.clone(),
+            caches: Box::default(),
+        }
+    }
+
+    /// The surface's coarse grid for projections, evaluated on first use.
+    pub(crate) fn coarse_grid(&self) -> &crate::nurbs::projection::CoarseGrid {
+        self.caches
+            .coarse_grid
+            .get_or_init(|| std::sync::Arc::new(crate::nurbs::projection::CoarseGrid::new(self)))
     }
 
     /// Create a cached evaluator for repeated evaluation.
@@ -855,6 +1042,7 @@ use super::basis::binomial;
 #[allow(clippy::expect_used, clippy::cast_lossless, clippy::suboptimal_flops)]
 mod tests {
     use super::*;
+    use crate::madd::Madd;
 
     /// A bilinear surface (degree 1x1): a flat quadrilateral.
     fn bilinear_surface() -> NurbsSurface {
@@ -1253,5 +1441,112 @@ mod tests {
             prop_assert!((p.y() - u).abs() < 1e-12, "y: {} vs {}", p.y(), u);
             prop_assert!(p.z().abs() < 1e-12);
         }
+    }
+
+    /// A bilinear sheet of `spans` knot spans along `u`, lifted by `lift`:
+    /// it splits into `spans` Bezier patches.
+    fn sheet(spans: usize, lift: f64) -> NurbsSurface {
+        let mut knots_u = vec![0.0, 0.0];
+        knots_u.extend((1..spans).map(|i| i as f64));
+        knots_u.extend([spans as f64, spans as f64]);
+        let rows = (0..=spans)
+            .map(|i| {
+                vec![
+                    Point3::new(i as f64, 0.0, lift),
+                    Point3::new(i as f64, 1.0, lift),
+                ]
+            })
+            .collect();
+        NurbsSurface::new(
+            1,
+            1,
+            knots_u,
+            vec![0.0, 0.0, 1.0, 1.0],
+            rows,
+            vec![vec![1.0, 1.0]; spans + 1],
+        )
+        .expect("valid sheet")
+    }
+
+    fn entry(surface: &NurbsSurface) -> SplitEntry {
+        let patches =
+            crate::nurbs::decompose::surface_to_bezier_patches(surface).expect("clamped knots");
+        (
+            surface.content_key(),
+            surface.data_only(),
+            std::sync::Arc::new(patches),
+        )
+    }
+
+    #[test]
+    fn kept_patches_are_the_fresh_split_bit_for_bit() {
+        let surface = sheet(3, 0.25);
+        let fresh =
+            crate::nurbs::decompose::surface_to_bezier_patches(&surface).expect("clamped knots");
+        // Twice: the second call reads what the first kept.
+        for _ in 0..2 {
+            let kept = surface.bezier_patches().expect("clamped knots");
+            assert_eq!(kept.len(), fresh.len());
+            for (a, b) in kept.iter().zip(&fresh) {
+                assert!(a.surface.same_bits(&b.surface));
+                assert_eq!(a.u_range.0.to_bits(), b.u_range.0.to_bits());
+                assert_eq!(a.u_range.1.to_bits(), b.u_range.1.to_bits());
+                assert_eq!(a.v_range.0.to_bits(), b.v_range.0.to_bits());
+                assert_eq!(a.v_range.1.to_bits(), b.v_range.1.to_bits());
+            }
+        }
+    }
+
+    #[test]
+    fn a_surface_made_again_from_the_same_data_finds_its_kept_patches() {
+        let mut kept = Vec::new();
+        let first = keep_split(&mut kept, entry(&sheet(3, 0.5)), 100);
+        // The same data, made anew: the entry already kept is the one used.
+        let again = keep_split(&mut kept, entry(&sheet(3, 0.5)), 100);
+        assert!(std::sync::Arc::ptr_eq(&first, &again));
+        assert_eq!(kept.len(), 1);
+        let found = split_kept(&mut kept, sheet(3, 0.5).content_key(), &sheet(3, 0.5));
+        assert!(found.is_some_and(|p| std::sync::Arc::ptr_eq(&p, &first)));
+    }
+
+    #[test]
+    fn surfaces_of_different_data_keep_their_own_patches() {
+        let mut kept = Vec::new();
+        let low = keep_split(&mut kept, entry(&sheet(3, 0.5)), 100);
+        let high = keep_split(&mut kept, entry(&sheet(3, 0.75)), 100);
+        assert!(!std::sync::Arc::ptr_eq(&low, &high));
+        assert_eq!(kept.len(), 2);
+        let other = sheet(3, 1.0);
+        assert!(split_kept(&mut kept, other.content_key(), &other).is_none());
+    }
+
+    #[test]
+    fn the_least_lately_used_patches_go_first_to_make_room() {
+        let (a, b, c) = (sheet(4, 0.0), sheet(4, 1.0), sheet(4, 2.0));
+        let mut kept = Vec::new();
+        keep_split(&mut kept, entry(&a), 10);
+        keep_split(&mut kept, entry(&b), 10);
+        // Using `a` again leaves `b` the least lately used.
+        assert!(split_kept(&mut kept, a.content_key(), &a).is_some());
+        keep_split(&mut kept, entry(&c), 10);
+        assert!(kept.iter().map(|e| e.2.len()).sum::<usize>() <= 10);
+        assert!(split_kept(&mut kept, b.content_key(), &b).is_none());
+        assert!(split_kept(&mut kept, a.content_key(), &a).is_some());
+        assert!(split_kept(&mut kept, c.content_key(), &c).is_some());
+
+        // Both fit beside what is kept: neither puts the other out.
+        let mut kept = Vec::new();
+        keep_split(&mut kept, entry(&a), 10);
+        keep_split(&mut kept, entry(&sheet(2, 5.0)), 10);
+        keep_split(&mut kept, entry(&sheet(2, 5.0)), 10);
+        assert_eq!(kept.len(), 2);
+        assert!(split_kept(&mut kept, a.content_key(), &a).is_some());
+
+        // A surface over the limit by itself is used and not kept.
+        let mut kept = Vec::new();
+        keep_split(&mut kept, entry(&a), 10);
+        let big = keep_split(&mut kept, entry(&sheet(11, 0.0)), 10);
+        assert_eq!(big.len(), 11);
+        assert_eq!(kept.len(), 1);
     }
 }

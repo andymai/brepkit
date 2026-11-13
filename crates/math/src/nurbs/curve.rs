@@ -10,7 +10,7 @@ use crate::vec::{Point3, Vec3};
 ///
 /// The curve is defined by its degree, a knot vector, control points, and
 /// per-control-point weights (1.0 for non-rational curves).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct NurbsCurve {
     /// Polynomial degree of the basis functions.
@@ -21,6 +21,33 @@ pub struct NurbsCurve {
     control_points: Vec<Point3>,
     /// Weights for rational curves (same length as `control_points`).
     weights: Vec<f64>,
+    /// Each knot span's points where a projection samples it, evaluated on
+    /// first use.
+    #[cfg_attr(feature = "serde", serde(skip))]
+    span_samples: SpanSampleCache,
+}
+
+/// A knot span's sampled points, `(parameter, point)`, made on first use.
+type SpanSamples = std::sync::OnceLock<Vec<(f64, Point3)>>;
+
+/// Each knot span's sample points (see [`NurbsCurve::span_samples`]): no
+/// part of the curve's value, so it prints as nothing.
+#[derive(Clone, Default)]
+struct SpanSampleCache(std::sync::OnceLock<std::sync::Arc<Vec<SpanSamples>>>);
+
+impl std::fmt::Debug for SpanSampleCache {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("..")
+    }
+}
+
+impl PartialEq for NurbsCurve {
+    fn eq(&self, other: &Self) -> bool {
+        self.degree == other.degree
+            && self.knots == other.knots
+            && self.control_points == other.control_points
+            && self.weights == other.weights
+    }
 }
 
 impl NurbsCurve {
@@ -58,7 +85,25 @@ impl NurbsCurve {
             knots,
             control_points,
             weights,
+            span_samples: SpanSampleCache::default(),
         })
+    }
+
+    /// The points of knot span `k` (between `knots[k]` and `knots[k + 1]`)
+    /// that `sample` gives, kept: a curve is never changed once made.
+    pub(crate) fn span_samples(
+        &self,
+        k: usize,
+        sample: impl FnOnce() -> Vec<(f64, Point3)>,
+    ) -> &[(f64, Point3)] {
+        let spans = self.span_samples.0.get_or_init(|| {
+            std::sync::Arc::new(
+                (0..self.knots.len().saturating_sub(1))
+                    .map(|_| std::sync::OnceLock::new())
+                    .collect(),
+            )
+        });
+        spans[k].get_or_init(sample)
     }
 
     /// The polynomial degree of the curve.

@@ -1159,7 +1159,8 @@ pub fn plane_hit_inside(
 #[derive(Default)]
 pub struct FaceRayCache {
     sphere: std::cell::OnceCell<Option<SphereRegion>>,
-    nurbs: std::cell::OnceCell<Option<brepkit_math::nurbs::intersection::RaySurface>>,
+    nurbs:
+        std::cell::OnceCell<Option<std::sync::Arc<brepkit_math::nurbs::intersection::RaySurface>>>,
     nurbs_uv: std::cell::OnceCell<Option<NurbsUvBoundary>>,
     /// A NURBS face's region for the on-boundary test, `None` where it did
     /// not build.
@@ -1189,9 +1190,7 @@ fn ray_crossings_nurbs(
     cache: &FaceRayCache,
     unsure: &mut bool,
 ) -> Result<u32, CheckError> {
-    let patches = cache
-        .nurbs
-        .get_or_init(|| brepkit_math::nurbs::intersection::RaySurface::new(surface));
+    let patches = cache.nurbs.get_or_init(|| surface.ray_surface());
     let hits = if let Some(patches) = patches {
         let found = patches.hits(origin, direction, NURBS_HIT_REACH);
         *unsure |= found.grazed;

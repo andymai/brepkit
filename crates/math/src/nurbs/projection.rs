@@ -179,12 +179,18 @@ fn curve_coarse_search(curve: &NurbsCurve, point: Point3) -> Vec<(f64, f64, f64)
         }
         let (u_start, u_end) = (knots[k], knots[k + 1]);
         let top = if u_end < hi { u_end.next_down() } else { u_end };
-        let samples: Vec<(f64, f64)> = (0..=n_samples)
-            .map(|i| {
-                let t = i as f64 / n_samples as f64;
-                let u = t.madd(u_end - u_start, u_start).min(top);
-                (u, (curve.evaluate(u) - point).length_squared())
+        let samples: Vec<(f64, f64)> = curve
+            .span_samples(k, || {
+                (0..=n_samples)
+                    .map(|i| {
+                        let t = i as f64 / n_samples as f64;
+                        let u = t.madd(u_end - u_start, u_start).min(top);
+                        (u, curve.evaluate(u))
+                    })
+                    .collect()
             })
+            .iter()
+            .map(|&(u, at)| (u, (at - point).length_squared()))
             .collect();
         best = samples.iter().map(|s| s.1).fold(best, f64::min);
         sampled.push((k, (u_start, top, samples)));
@@ -488,8 +494,13 @@ fn surface_coarse_search(
     point: Point3,
 ) -> ((f64, f64), Option<(f64, f64)>) {
     let n = SURFACE_GRID_SIZE;
-    let seeds = surface.seed_grid(n);
-    let (us, vs, grid, extent) = (&seeds.us, &seeds.vs, &seeds.points, seeds.extent);
+    let CoarseGrid {
+        us,
+        vs,
+        grid,
+        extent,
+    } = surface.coarse_grid();
+    let extent = *extent;
     let dist_sq = |i: usize, j: usize| (grid[i][j] - point).length_squared();
 
     let (mut best_i, mut best_j) = (0, 0);
@@ -526,6 +537,52 @@ fn surface_coarse_search(
     };
 
     ((us[best_i], vs[best_j]), beside_pole)
+}
+
+/// A surface's points at `SURFACE_GRID_SIZE` even steps of each parameter,
+/// which every projection onto it seeds from, and how far they spread from
+/// the first. A surface is never changed once made, so it keeps its grid.
+#[derive(Debug)]
+pub(crate) struct CoarseGrid {
+    us: Vec<f64>,
+    vs: Vec<f64>,
+    grid: Vec<Vec<Point3>>,
+    extent: f64,
+}
+
+impl CoarseGrid {
+    pub(crate) fn new(surface: &NurbsSurface) -> Self {
+        let knots_u = surface.knots_u();
+        let knots_v = surface.knots_v();
+        let pu = surface.degree_u();
+        let pv = surface.degree_v();
+        let u_min = knots_u[pu];
+        let u_max = knots_u[knots_u.len() - pu - 1];
+        let v_min = knots_v[pv];
+        let v_max = knots_v[knots_v.len() - pv - 1];
+
+        let n = SURFACE_GRID_SIZE;
+        let us: Vec<f64> = (0..=n)
+            .map(|i| (i as f64 / n as f64).madd(u_max - u_min, u_min))
+            .collect();
+        let vs: Vec<f64> = (0..=n)
+            .map(|j| (j as f64 / n as f64).madd(v_max - v_min, v_min))
+            .collect();
+        let grid: Vec<Vec<Point3>> = us
+            .iter()
+            .map(|&u| vs.iter().map(|&v| surface.evaluate(u, v)).collect())
+            .collect();
+        let extent = grid
+            .iter()
+            .flatten()
+            .fold(0.0_f64, |m, p| m.max((*p - grid[0][0]).length()));
+        Self {
+            us,
+            vs,
+            grid,
+            extent,
+        }
+    }
 }
 
 /// 2D Newton–Raphson refinement for surface point projection.

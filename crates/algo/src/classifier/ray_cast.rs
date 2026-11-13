@@ -34,7 +34,7 @@ enum FaceGeom {
     /// wires hold the hit. A flat polygon through its boundary stands where
     /// a bulging face does not.
     Nurbs {
-        surface: brepkit_math::nurbs::intersection::RaySurface,
+        surface: std::sync::Arc<brepkit_math::nurbs::intersection::RaySurface>,
         trim: NurbsTrim,
     },
     /// A planar (or planar-approximated) face: boundary polygon, hole
@@ -1803,7 +1803,7 @@ fn nurbs_geom(
     surface: &brepkit_math::nurbs::surface::NurbsSurface,
 ) -> Result<Option<FaceGeom>, AlgoError> {
     const SAMPLES: u32 = 8;
-    let Some(ray_surface) = brepkit_math::nurbs::intersection::RaySurface::new(surface) else {
+    let Some(ray_surface) = surface.ray_surface() else {
         return Ok(None);
     };
     let (u0, u1) = surface.domain_u();
