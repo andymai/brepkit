@@ -135,6 +135,19 @@ pub fn loft(topo: &mut Topology, profiles: &[FaceId]) -> Result<SolidId, crate::
         return Ok(curved_solid);
     }
 
+    // Profiles with a spline edge are skinned along their edges' own curves.
+    // The polygon path below reads such an edge as the chord between its
+    // vertices, and refuses a profile of two of them. Lines and arcs the path
+    // above does not pair keep the polygon path.
+    let skin_error = if curved_profiles(topo, profiles) == CurvedProfiles::Free {
+        match network::skin_loft(topo, profiles, true) {
+            Ok(solid) => return Ok(solid),
+            Err(e) => Some(e),
+        }
+    } else {
+        None
+    };
+
     let mut profile_verts: Vec<Vec<Point3>> = Vec::with_capacity(profiles.len());
     for &fid in profiles {
         let verts = face_polygon(topo, fid)?;
@@ -145,9 +158,11 @@ pub fn loft(topo: &mut Topology, profiles: &[FaceId]) -> Result<SolidId, crate::
     // between different-resolution profiles (e.g. rectangle ↔ circle) works.
     let n = profile_verts.iter().map(Vec::len).max().unwrap_or(0);
     if n < 3 {
-        return Err(crate::OperationsError::InvalidInput {
-            reason: "loft profiles must have at least 3 vertices".into(),
-        });
+        return Err(
+            skin_error.unwrap_or_else(|| crate::OperationsError::InvalidInput {
+                reason: "loft profiles must have at least 3 vertices".into(),
+            }),
+        );
     }
     for verts in &mut profile_verts {
         if verts.len() != n {
@@ -649,6 +664,47 @@ fn profile_oriented_edges(topo: &Topology, fid: FaceId) -> Option<Vec<ProfileEdg
         face.outer_wire(),
         recognized_loosely,
     )?))
+}
+
+/// What of planar profiles' outer wires the polygon paths cannot follow.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CurvedProfiles {
+    /// Every edge is a straight line, or a profile is not a planar face: a
+    /// profile on a curved face has its own caps to fill, which the polygon
+    /// paths do.
+    No,
+    /// Some edge is an arc of a circle, and the rest are lines or arcs.
+    Arcs,
+    /// Some edge is a spline or an arc of an ellipse, which the polygon paths
+    /// read as the chord between its vertices.
+    Free,
+}
+
+/// The curved edges of `profiles`, a spline that encodes a line or a circle
+/// counting as one.
+fn curved_profiles(topo: &Topology, profiles: &[FaceId]) -> CurvedProfiles {
+    let mut found = CurvedProfiles::No;
+    for &fid in profiles {
+        let Ok(face) = topo.face(fid) else {
+            return CurvedProfiles::No;
+        };
+        if !matches!(face.surface(), FaceSurface::Plane { .. }) {
+            return CurvedProfiles::No;
+        }
+        let Some(edges) = wire_oriented_edges(topo, face.outer_wire(), recognized_loosely) else {
+            return CurvedProfiles::No;
+        };
+        let all_lines = edges.iter().all(|e| matches!(e.curve, EdgeCurve::Line));
+        if edges
+            .iter()
+            .any(|e| !matches!(e.curve, EdgeCurve::Line | EdgeCurve::Circle(_)))
+        {
+            found = CurvedProfiles::Free;
+        } else if !all_lines && found == CurvedProfiles::No {
+            found = CurvedProfiles::Arcs;
+        }
+    }
+    found
 }
 
 /// The line or circle `curve` encodes to within a hundred times the linear
@@ -1836,6 +1892,20 @@ fn smooth_rails_loft(
 ) -> Result<SolidId, crate::OperationsError> {
     let tol = Tolerance::new();
 
+    // Profiles with a curved edge are skinned along their edges' own curves:
+    // the rails below run through the profiles' vertices alone.
+    let skin_error = if start.is_none()
+        && end.is_none()
+        && curved_profiles(topo, profiles) != CurvedProfiles::No
+    {
+        match network::skin_loft(topo, profiles, false) {
+            Ok(solid) => return Ok(solid),
+            Err(e) => Some(e),
+        }
+    } else {
+        None
+    };
+
     let mut profile_verts: Vec<Vec<Point3>> = Vec::with_capacity(profiles.len());
     for &fid in profiles {
         let verts = face_polygon(topo, fid)?;
@@ -1844,9 +1914,11 @@ fn smooth_rails_loft(
 
     let n = profile_verts.iter().map(Vec::len).max().unwrap_or(0);
     if n < 3 {
-        return Err(crate::OperationsError::InvalidInput {
-            reason: "loft profiles must have at least 3 vertices".into(),
-        });
+        return Err(
+            skin_error.unwrap_or_else(|| crate::OperationsError::InvalidInput {
+                reason: "loft profiles must have at least 3 vertices".into(),
+            }),
+        );
     }
     for verts in &mut profile_verts {
         if verts.len() != n {
