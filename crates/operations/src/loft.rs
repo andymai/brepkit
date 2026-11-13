@@ -676,12 +676,13 @@ enum CurvedProfiles {
     /// Some edge is an arc of a circle, and the rest are lines or arcs.
     Arcs,
     /// Some edge is a spline or an arc of an ellipse, which the polygon paths
-    /// read as the chord between its vertices.
+    /// read as the chord between its vertices, or a profile is a lens of two
+    /// curved edges, whose vertices bound nothing.
     Free,
 }
 
 /// The curved edges of `profiles`, a spline that encodes a line or a circle
-/// counting as one.
+/// to the linear tolerance counting as one.
 fn curved_profiles(topo: &Topology, profiles: &[FaceId]) -> CurvedProfiles {
     let mut found = CurvedProfiles::No;
     for &fid in profiles {
@@ -691,13 +692,18 @@ fn curved_profiles(topo: &Topology, profiles: &[FaceId]) -> CurvedProfiles {
         if !matches!(face.surface(), FaceSurface::Plane { .. }) {
             return CurvedProfiles::No;
         }
-        let Some(edges) = wire_oriented_edges(topo, face.outer_wire(), recognized_loosely) else {
+        // Read to the linear tolerance: a spline a looser reading takes for
+        // its chord is still the curve the loft should follow.
+        let Some(edges) = wire_oriented_edges(topo, face.outer_wire(), recognized_closely) else {
             return CurvedProfiles::No;
         };
         let all_lines = edges.iter().all(|e| matches!(e.curve, EdgeCurve::Line));
+        let lone_circle =
+            matches!(edges.as_slice(), [e] if matches!(e.curve, EdgeCurve::Circle(_)));
         if edges
             .iter()
             .any(|e| !matches!(e.curve, EdgeCurve::Line | EdgeCurve::Circle(_)))
+            || (edges.len() < 3 && !all_lines && !lone_circle)
         {
             found = CurvedProfiles::Free;
         } else if !all_lines && found == CurvedProfiles::No {
@@ -705,6 +711,26 @@ fn curved_profiles(topo: &Topology, profiles: &[FaceId]) -> CurvedProfiles {
         }
     }
     found
+}
+
+/// The line or circle `curve` encodes to within the linear tolerance at
+/// samples of it, if any.
+fn recognized_closely(
+    curve: &brepkit_math::nurbs::curve::NurbsCurve,
+    _: Point3,
+    _: Point3,
+) -> Option<EdgeCurve> {
+    match brepkit_geometry::convert::recognize_curve(curve, Tolerance::new().linear) {
+        brepkit_geometry::convert::RecognizedCurve::Circle {
+            center,
+            normal,
+            radius,
+        } => brepkit_math::curves::Circle3D::new(center, normal, radius)
+            .ok()
+            .map(EdgeCurve::Circle),
+        brepkit_geometry::convert::RecognizedCurve::Line { .. } => Some(EdgeCurve::Line),
+        _ => None,
+    }
 }
 
 /// The line or circle `curve` encodes to within a hundred times the linear

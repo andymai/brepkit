@@ -1468,3 +1468,95 @@ fn loft_ruled_through_three_spline_profiles_has_an_edge_along_the_middle_one() {
         "volume {volume} should be the two frusta's {expected}"
     );
 }
+
+#[test]
+fn loft_ruled_through_identical_spline_profiles_has_a_band_to_each_pair() {
+    // Nothing creases at the middle section, and it still ends the faces.
+    let mut topo = Topology::new();
+    let faces = [
+        make_aerofoil_at(&mut topo, 0.0, 40.0, 0.5),
+        make_aerofoil_at(&mut topo, 30.0, 40.0, 0.5),
+        make_aerofoil_at(&mut topo, 60.0, 40.0, 0.5),
+    ];
+    let solid = loft(&mut topo, &faces).unwrap();
+
+    assert_eq!(
+        surface_kinds(&topo, solid),
+        ["plane", "nurbs", "nurbs", "nurbs", "nurbs", "plane"]
+    );
+    assert!(
+        crate::validate::validate_solid(&topo, solid)
+            .unwrap()
+            .is_valid()
+    );
+    let expected = aerofoil_area(40.0) * 60.0;
+    let volume = crate::measure::solid_volume(&topo, solid, 0.005).unwrap();
+    assert!(
+        (volume - expected).abs() < 2e-3 * expected,
+        "volume {volume} should be the prism's {expected}"
+    );
+}
+
+/// A lens in the plane `z`: two quadratic splines from (-10, 0) to (10, 0)
+/// and back, bowed `bow` to either side of the chord between them.
+fn make_lens_at(topo: &mut Topology, z: f64, bow: f64) -> FaceId {
+    let a = topo.add_vertex(Vertex::new(Point3::new(-10.0, 0.0, z), 1e-7));
+    let b = topo.add_vertex(Vertex::new(Point3::new(10.0, 0.0, z), 1e-7));
+    let arc = |from: f64, side: f64| {
+        brepkit_math::nurbs::curve::NurbsCurve::new(
+            2,
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            vec![
+                Point3::new(from, 0.0, z),
+                // A quadratic's middle point stands twice its bow off the chord.
+                Point3::new(0.0, 2.0 * side * bow, z),
+                Point3::new(-from, 0.0, z),
+            ],
+            vec![1.0; 3],
+        )
+        .unwrap()
+    };
+    let lower = topo.add_edge(Edge::new(a, b, EdgeCurve::NurbsCurve(arc(-10.0, -1.0))));
+    let upper = topo.add_edge(Edge::new(b, a, EdgeCurve::NurbsCurve(arc(10.0, 1.0))));
+    let wire = Wire::new(
+        vec![
+            OrientedEdge::new(lower, true),
+            OrientedEdge::new(upper, true),
+        ],
+        true,
+    )
+    .unwrap();
+    let wid = topo.add_wire(wire);
+    topo.add_face(Face::new(
+        wid,
+        vec![],
+        FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: z,
+        },
+    ))
+}
+
+#[test]
+fn loft_follows_splines_a_loose_reading_takes_for_lines() {
+    // Each edge stands 5e-6 off its chord: a line to a hundred times the
+    // linear tolerance, and a spline to the tolerance itself.
+    for smooth in [false, true] {
+        let mut topo = Topology::new();
+        let faces = [
+            make_lens_at(&mut topo, 0.0, 5e-6),
+            make_lens_at(&mut topo, 5.0, 5e-6),
+            make_lens_at(&mut topo, 10.0, 5e-6),
+        ];
+        let solid = if smooth {
+            loft_smooth(&mut topo, &faces)
+        } else {
+            loft(&mut topo, &faces)
+        }
+        .unwrap();
+        assert!(
+            surface_kinds(&topo, solid).contains(&"nurbs"),
+            "smooth {smooth}"
+        );
+    }
+}

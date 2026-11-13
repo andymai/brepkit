@@ -421,7 +421,7 @@ fn network_loft(
             "the loft's surface runs back over itself: a weight or a rail carries it past where it comes back through",
         ));
     }
-    let bands = v_bands(v_degree, &v_knots, &sides);
+    let bands = v_bands(v_degree, &v_knots, &sides, ruled && v_degree == 1);
     let mut band_surfaces = Vec::with_capacity(bands.len());
     for band in &bands {
         let surfaces: Vec<FaceSurface> = sides
@@ -2822,8 +2822,10 @@ struct Band {
 /// different fractions of their parameters. A crease inside a NURBS face has
 /// no edge to tell it by, and no mesh of the face that follows the deflection
 /// settles around it. A full knot the sides run smoothly through, as a fitted
-/// rail's joints have, stays inside its band.
-fn v_bands(degree: usize, knots: &[f64], sides: &[SideNet]) -> Vec<Band> {
+/// rail's joints have, stays inside its band. A ruled loft's bands end
+/// `at_every_profile`, creased there or not, as a loft of lines and arcs has
+/// an edge along each of its profiles.
+fn v_bands(degree: usize, knots: &[f64], sides: &[SideNet], at_every_profile: bool) -> Vec<Band> {
     let mut cuts = Vec::new();
     let mut first = degree + 1;
     let interior_end = knots.len() - degree - 1;
@@ -2834,7 +2836,7 @@ fn v_bands(degree: usize, knots: &[f64], sides: &[SideNet]) -> Vec<Band> {
             .count();
         if count >= degree {
             let r = first + count - degree - 1;
-            if sides.iter().any(|side| side.creases_at(r)) {
+            if at_every_profile || sides.iter().any(|side| side.creases_at(r)) {
                 cuts.push((first, r));
             }
         }
