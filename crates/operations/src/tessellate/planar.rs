@@ -383,7 +383,7 @@ pub(super) fn tessellate_planar(
                 let (u0, u1) = nurbs.domain();
                 let is_subspan = (t0 - u0).abs() > 1e-12 || (t1 - u1).abs() > 1e-12;
                 let breaks =
-                    super::edge_sampling::nurbs_edge_breaks(nurbs, t0, t1, deflection, 0.0);
+                    super::edge_sampling::nurbs_edge_breaks(nurbs, t0, t1, deflection, angular_tol);
                 let n_samples = breaks.len() - 1;
                 // A sub-span is already endpoint-ordered (start→end); only a
                 // full-domain curve may run end→start.

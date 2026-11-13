@@ -1124,6 +1124,30 @@ pub(super) fn parts_needed(sag_ratio: f64, turn_ratio: f64) -> usize {
     parts
 }
 
+/// Where a span from `a` to `b` is read against its chord: at even
+/// fractions, at each knot inside it, and at the quarter points of each
+/// piece between those knots. A curve is one polynomial between two knots,
+/// and a bump that fills one such piece can lie between the even fractions.
+pub(super) fn span_probes(a: f64, b: f64, knots: &[f64]) -> Vec<f64> {
+    const FRACTIONS: [f64; 7] = [0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875];
+    let mut probes: Vec<f64> = FRACTIONS.iter().map(|&f| a + (b - a) * f).collect();
+    if knots.is_empty() {
+        return probes;
+    }
+    probes.extend_from_slice(knots);
+    let (lo, hi) = (a.min(b), a.max(b));
+    let ends = std::iter::once(lo)
+        .chain(knots.iter().copied())
+        .chain(std::iter::once(hi))
+        .collect::<Vec<_>>();
+    for piece in ends.windows(2) {
+        for f in [0.25, 0.5, 0.75] {
+            probes.push(piece[0] + (piece[1] - piece[0]) * f);
+        }
+    }
+    probes
+}
+
 /// The parameters of one direction's grid lines across a parameter box, both
 /// ends included: a span is cut until every iso-line chord of a few sampled
 /// rows lies within half the deflection (a grid cell's diagonal sags further
@@ -1147,7 +1171,6 @@ pub(super) fn iso_breaks_over(
     const ROWS: usize = 8;
     const MAX_DEPTH: usize = 12;
     const MAX_KNOTS: usize = 8;
-    const FRACTIONS: [f64; 7] = [0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875];
     let point = |t: f64, o: f64| if along_u { at(t, o) } else { at(o, t) };
     let normal = |t: f64, o: f64| {
         if along_u {
@@ -1184,16 +1207,13 @@ pub(super) fn iso_breaks_over(
         if to - from > MAX_KNOTS {
             return 2;
         }
+        let probes = span_probes(a, b, &knots[from..to]);
         let (mut sag, mut turn) = (0.0_f64, 0.0_f64);
         for row in 0..ROWS {
             #[allow(clippy::cast_precision_loss)]
             let o = o_lo + (o_hi - o_lo) * (row as f64 + 0.5) / ROWS as f64;
             let (pa, pb) = (point(a, o), point(b, o));
-            let probes = FRACTIONS
-                .iter()
-                .map(|&f| a + (b - a) * f)
-                .chain(knots[from..to].iter().copied());
-            for t in probes {
+            for &t in &probes {
                 sag = sag.max(off_chord(point(t, o), pa, pb));
             }
             if angular_tol > 0.0 {

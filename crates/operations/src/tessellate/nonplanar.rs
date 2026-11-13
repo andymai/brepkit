@@ -2932,8 +2932,10 @@ fn cdt_in_surface_frame(
         // A NURBS face's grid lines follow its surface; the others are even.
         let (us, vs) = if let Some((mut us, mut vs)) = lines.take() {
             let surface = face_data.surface();
-            untwist_grid_lines(surface, &mut us, &mut vs, deflection);
+            // Capped first: the twist pass reads every cell, and keeps to
+            // the same budget itself.
             super::nurbs::cap_lines(&mut us, &mut vs, super::nurbs::GRID_MAX_CELLS);
+            untwist_grid_lines(surface, &mut us, &mut vs, deflection);
             (us, vs)
         } else {
             let (n_u, n_v) = interior_grid_resolution(

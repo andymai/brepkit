@@ -307,6 +307,7 @@ fn share_doubled_back_samples(
     edge_points: &mut DetHashMap<usize, Vec<Point3>>,
 ) -> Result<(), crate::OperationsError> {
     const ON_LINE: f64 = 1e-6;
+    const MAX_ROUNDS: usize = 16;
     // Whether every sample lies on the chord between the first and the last.
     let straight = |points: &[Point3]| {
         let (Some(&a), Some(&b)) = (points.first(), points.last()) else {
@@ -345,6 +346,8 @@ fn share_doubled_back_samples(
         placed.sort_by(|x, y| x.0.total_cmp(&y.0));
         Some(placed.into_iter().map(|(_, p)| p).collect())
     };
+    // The overlapping pairs, found once: sharing changes no edge's line.
+    let mut pairs: Vec<(usize, usize)> = Vec::new();
     for &face_id in faces {
         let face = topo.face(face_id)?;
         for wire_id in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied())
@@ -392,14 +395,30 @@ fn share_doubled_back_samples(
                 if !inside(pp, qp) && !inside(qp, pp) {
                     continue;
                 }
-                let (new1, new2) = (merged(s1, s2), merged(s2, s1));
-                if let Some(points) = new1 {
-                    edge_points.insert(i1, points);
-                }
-                if let Some(points) = new2 {
-                    edge_points.insert(i2, points);
-                }
+                pairs.push((i1, i2));
             }
+        }
+    }
+    // A point one pair hands to an edge is new to that edge's other pairs,
+    // so the pairs are shared round until none takes a point.
+    for _ in 0..MAX_ROUNDS {
+        let mut changed = false;
+        for &(i1, i2) in &pairs {
+            let (Some(s1), Some(s2)) = (edge_points.get(&i1), edge_points.get(&i2)) else {
+                continue;
+            };
+            let (new1, new2) = (merged(s1, s2), merged(s2, s1));
+            if let Some(points) = new1 {
+                edge_points.insert(i1, points);
+                changed = true;
+            }
+            if let Some(points) = new2 {
+                edge_points.insert(i2, points);
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
         }
     }
     Ok(())

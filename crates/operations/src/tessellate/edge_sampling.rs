@@ -157,7 +157,6 @@ pub(super) fn nurbs_edge_breaks(
     // A span holding more knots than this is halved unread: its probes could
     // step over a polynomial piece.
     const MAX_KNOTS: usize = 8;
-    const FRACTIONS: [f64; 7] = [0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875];
 
     let (lo, hi) = (t0.min(t1), t0.max(t1));
     let mut knots: Vec<f64> = nurbs
@@ -186,12 +185,15 @@ pub(super) fn nurbs_edge_breaks(
             return 2;
         }
         let (pa, pb) = (nurbs.evaluate(a), nurbs.evaluate(b));
-        let sag = FRACTIONS
-            .iter()
-            .map(|&f| a + (b - a) * f)
-            .chain(knots[from..to].iter().copied())
+        let sag = super::nurbs::span_probes(a, b, &knots[from..to])
+            .into_iter()
             .map(|t| off_chord(nurbs.evaluate(t), pa, pb))
             .fold(0.0, f64::max);
+        // A closed curve has no chord: however small, it takes three spans
+        // to enclose anything.
+        if (pb - pa).length() <= 1e-9 && sag > 0.0 {
+            return super::nurbs::parts_needed(sag / deflection, 0.0).max(3);
+        }
         let mut turned = 0.0;
         if turn_limit > 0.0 {
             let mut last = nurbs.tangent(a).ok();
@@ -745,5 +747,53 @@ mod tests {
         let breaks = nurbs_edge_breaks(&curve, 3.0, 0.0, 0.01, 0.3);
         assert_eq!((breaks.first(), breaks.last()), (Some(&3.0), Some(&0.0)));
         assert!(breaks.windows(2).all(|pair| pair[1] < pair[0]));
+    }
+
+    /// A cubic that is straight but for one polynomial piece, between the
+    /// knots 0.51 and 0.54, which bumps 0.75 off the line: the knots lie on
+    /// the line and no even fraction of the whole falls inside the piece.
+    #[test]
+    fn a_bump_between_two_knots_is_read() {
+        let knots = vec![
+            0.0, 0.0, 0.0, 0.0, 0.51, 0.51, 0.51, 0.54, 0.54, 0.54, 1.0, 1.0, 1.0, 1.0,
+        ];
+        let x = |t: f64| 100.0 * t;
+        let straight =
+            |from: f64, to: f64, k: f64| Point3::new(x(from + (to - from) * k / 3.0), 0.0, 0.0);
+        let lift = |p: Point3| Point3::new(p.x(), 1.0, 0.0);
+        let points = vec![
+            straight(0.0, 0.51, 0.0),
+            straight(0.0, 0.51, 1.0),
+            straight(0.0, 0.51, 2.0),
+            straight(0.51, 0.54, 0.0),
+            lift(straight(0.51, 0.54, 1.0)),
+            lift(straight(0.51, 0.54, 2.0)),
+            straight(0.54, 1.0, 0.0),
+            straight(0.54, 1.0, 1.0),
+            straight(0.54, 1.0, 2.0),
+            straight(0.54, 1.0, 3.0),
+        ];
+        let curve = NurbsCurve::new(3, knots, points, vec![1.0; 10]).unwrap();
+        assert!((curve.evaluate(0.525).y() - 0.75).abs() < 1e-9);
+        let breaks = nurbs_edge_breaks(&curve, 0.0, 1.0, 0.01, 0.0);
+        let on_bump = breaks.iter().filter(|&&t| t > 0.51 && t < 0.54).count();
+        assert!(on_bump >= 4, "{on_bump} breaks on the bump: {breaks:?}");
+    }
+
+    /// A closed spline smaller than the deflection still encloses its disc.
+    #[test]
+    fn a_closed_spline_smaller_than_the_deflection_keeps_three_spans() {
+        let circle = brepkit_math::curves::Circle3D::new(
+            Point3::new(0.0, 0.0, 0.0),
+            brepkit_math::vec::Vec3::new(0.0, 0.0, 1.0),
+            0.01,
+        )
+        .unwrap();
+        let spline =
+            brepkit_geometry::convert::circle_to_nurbs(&circle, 0.0, std::f64::consts::TAU)
+                .unwrap();
+        let (t0, t1) = spline.domain();
+        let breaks = nurbs_edge_breaks(&spline, t0, t1, 0.1, 0.0);
+        assert!(breaks.len() >= 4, "{breaks:?}");
     }
 }
