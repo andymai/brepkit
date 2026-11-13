@@ -949,6 +949,34 @@ pub(super) fn cap_grid(n_u: usize, n_v: usize, max_cells: usize) -> (usize, usiz
     (shrink(n_u), shrink(n_v))
 }
 
+/// Thins grid lines until they hold at most `max_cells` cells: the longer
+/// list loses every second inner line. The thinned grid no longer meets the
+/// deflection it was sized for, so this says so.
+pub(super) fn cap_lines(us: &mut Vec<f64>, vs: &mut Vec<f64>, max_cells: usize) {
+    let cells = |us: &[f64], vs: &[f64]| (us.len() - 1).saturating_mul(vs.len() - 1);
+    if cells(us, vs) <= max_cells {
+        return;
+    }
+    log::warn!(
+        "NURBS grid of {} x {} cells exceeds {max_cells}; meshing it coarser than the requested deflection",
+        us.len() - 1,
+        vs.len() - 1
+    );
+    while cells(us, vs) > max_cells {
+        let lines = if us.len() >= vs.len() {
+            &mut *us
+        } else {
+            &mut *vs
+        };
+        let last = lines.len() - 1;
+        let mut k = 0;
+        lines.retain(|_| {
+            k += 1;
+            k == 1 || k == last + 1 || k % 2 == 1
+        });
+    }
+}
+
 /// Divisions of one parameter direction that keep every iso-line chord of a
 /// few sampled rows within half the deflection (a grid cell's diagonal sags
 /// further than its sides) and within the angular tolerance.
@@ -1074,6 +1102,257 @@ pub(super) fn iso_chords_hold(
         })
     };
     fits(n)
+}
+
+/// The equal parts a span is cut into when it sags `sag_ratio` times its
+/// limit and turns `turn_ratio` times its limit: one when it holds both. A
+/// sag falls with the square of a span's length and a turn with the length.
+/// The count is bounded, so one tight place in a long span does not size the
+/// rest of it; each part is read again.
+pub(super) fn parts_needed(sag_ratio: f64, turn_ratio: f64) -> usize {
+    const MOST: f64 = 8.0;
+    const SPARE: f64 = 1.03;
+    if sag_ratio <= 1.0 && turn_ratio <= 1.0 {
+        return 1;
+    }
+    let parts = (SPARE * sag_ratio.sqrt())
+        .max(SPARE * turn_ratio)
+        .ceil()
+        .clamp(2.0, MOST);
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let parts = parts as usize;
+    parts
+}
+
+/// The parameters of one direction's grid lines across a parameter box, both
+/// ends included: a span is cut until every iso-line chord of a few sampled
+/// rows lies within half the deflection (a grid cell's diagonal sags further
+/// than its sides) and turns its normal within the angular tolerance. The
+/// spans follow the surface: a straight run takes one and a tight nose many.
+///
+/// `ranges` is the span divided and the span its rows sit across, `at` /
+/// `normal_at` take `(u, v)`, and `knots` are the divided direction's knots,
+/// sorted: a span holding many is cut unread, and each one in a span is read.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn iso_breaks_over(
+    at: &dyn Fn(f64, f64) -> Point3,
+    normal_at: &dyn Fn(f64, f64) -> Vec3,
+    along_u: bool,
+    ((lo, hi), (o_lo, o_hi)): ((f64, f64), (f64, f64)),
+    knots: &[f64],
+    deflection: f64,
+    angular_tol: f64,
+    max_divisions: usize,
+) -> Vec<f64> {
+    const ROWS: usize = 8;
+    const MAX_DEPTH: usize = 12;
+    const MAX_KNOTS: usize = 8;
+    const FRACTIONS: [f64; 7] = [0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875];
+    let point = |t: f64, o: f64| if along_u { at(t, o) } else { at(o, t) };
+    let normal = |t: f64, o: f64| {
+        if along_u {
+            normal_at(t, o)
+        } else {
+            normal_at(o, t)
+        }
+    };
+    // An end of the span whose cross iso-line collapses to a point is a
+    // pole: the surface has no normal there.
+    let pole = |t: f64| {
+        let (a, b, c) = (
+            point(t, o_lo),
+            point(t, 0.5 * (o_lo + o_hi)),
+            point(t, o_hi),
+        );
+        let reach = a.x().abs().max(a.y().abs()).max(a.z().abs());
+        (b - a).length().max((c - a).length()) <= 1e3 * f64::EPSILON * (1.0 + reach)
+    };
+    let (pole_lo, pole_hi) = (pole(lo), pole(hi));
+    let off_chord = |p: Point3, a: Point3, b: Point3| {
+        let chord = b - a;
+        let len2 = chord.dot(chord);
+        let f = if len2 > 0.0 {
+            ((p - a).dot(chord) / len2).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        (p - (a + chord * f)).length()
+    };
+    let parts = |a: f64, b: f64| {
+        let from = knots.partition_point(|&k| k <= a.min(b));
+        let to = knots.partition_point(|&k| k < a.max(b)).max(from);
+        if to - from > MAX_KNOTS {
+            return 2;
+        }
+        let (mut sag, mut turn) = (0.0_f64, 0.0_f64);
+        for row in 0..ROWS {
+            #[allow(clippy::cast_precision_loss)]
+            let o = o_lo + (o_hi - o_lo) * (row as f64 + 0.5) / ROWS as f64;
+            let (pa, pb) = (point(a, o), point(b, o));
+            let probes = FRACTIONS
+                .iter()
+                .map(|&f| a + (b - a) * f)
+                .chain(knots[from..to].iter().copied());
+            for t in probes {
+                sag = sag.max(off_chord(point(t, o), pa, pb));
+            }
+            if angular_tol > 0.0 {
+                let ends = [
+                    if a.to_bits() == lo.to_bits() && pole_lo {
+                        0.25
+                    } else {
+                        0.0
+                    },
+                    0.25,
+                    0.5,
+                    0.75,
+                    if b.to_bits() == hi.to_bits() && pole_hi {
+                        0.75
+                    } else {
+                        1.0
+                    },
+                ];
+                let mut turned = 0.0;
+                let mut last = normal(a + (b - a) * ends[0], o);
+                for f in &ends[1..] {
+                    let next = normal(a + (b - a) * f, o);
+                    turned += last.dot(next).clamp(-1.0, 1.0).acos();
+                    last = next;
+                }
+                turn = turn.max(turned);
+            }
+        }
+        let turn_ratio = if angular_tol > 0.0 {
+            turn / angular_tol
+        } else {
+            0.0
+        };
+        parts_needed(sag / (0.5 * deflection), turn_ratio)
+    };
+
+    // Level by level, so a budget that runs out leaves every part of the
+    // span equally read, not its start fine and its end whole.
+    let mut spans = vec![(lo, hi, false)];
+    for _ in 0..MAX_DEPTH {
+        let mut next = Vec::with_capacity(spans.len() * 2);
+        let mut cut = false;
+        for (k, &(a, b, held)) in spans.iter().enumerate() {
+            let room = max_divisions.saturating_sub(next.len() + (spans.len() - k));
+            let n = if held || room == 0 {
+                1
+            } else {
+                parts(a, b).min(room + 1)
+            };
+            if n == 1 {
+                next.push((a, b, true));
+                continue;
+            }
+            cut = true;
+            for part in 0..n {
+                #[allow(clippy::cast_precision_loss)]
+                let (from, to) = (
+                    if part == 0 {
+                        a
+                    } else {
+                        a + (b - a) * part as f64 / n as f64
+                    },
+                    if part + 1 == n {
+                        b
+                    } else {
+                        a + (b - a) * (part + 1) as f64 / n as f64
+                    },
+                );
+                next.push((from, to, false));
+            }
+        }
+        spans = next;
+        if !cut {
+            break;
+        }
+    }
+    std::iter::once(lo)
+        .chain(spans.into_iter().map(|(_, b, _)| b))
+        .collect()
+}
+
+/// Cuts the grid lines `us` by `vs` until no cell strays past the deflection
+/// from the triangles it splits into along either diagonal
+/// ([`probe_strays`]). Lines sized by [`iso_breaks_over`] hold each
+/// direction's chords within half the deflection, so a cell curved both ways
+/// already lies within the whole of it; what is left is a twisted cell, whose
+/// sides are straight and whose middle stands off its triangles. A cell that
+/// strays has its two spans halved, and no other cell's.
+pub(super) fn untwist_lines(
+    at: &dyn Fn(f64, f64) -> Point3,
+    us: &mut Vec<f64>,
+    vs: &mut Vec<f64>,
+    deflection: f64,
+) {
+    const MAX_PASSES: usize = 10;
+    // A span is read again only after a cut made it: a cell between two
+    // spans that both held stays as it was read.
+    let (mut fresh_u, mut fresh_v) = (vec![true; us.len() - 1], vec![true; vs.len() - 1]);
+    for _ in 0..MAX_PASSES {
+        let (mut cut_u, mut cut_v) = (vec![false; us.len() - 1], vec![false; vs.len() - 1]);
+        // Each grid point is a corner of four cells: read once.
+        let corners: Vec<Vec<Point3>> = us
+            .iter()
+            .map(|&u| vs.iter().map(|&v| at(u, v)).collect())
+            .collect();
+        for i in 0..us.len() - 1 {
+            for j in 0..vs.len() - 1 {
+                if (cut_u[i] && cut_v[j]) || !(fresh_u[i] || fresh_v[j]) {
+                    continue;
+                }
+                let cell = [
+                    corners[i][j],
+                    corners[i + 1][j],
+                    corners[i][j + 1],
+                    corners[i + 1][j + 1],
+                ];
+                let (u0, v0) = (us[i], vs[j]);
+                let (du, dv) = (us[i + 1] - u0, vs[j + 1] - v0);
+                let strays = PROBES.iter().any(|&(a, b)| {
+                    split_stray(cell, &[at(du.madd(a, u0), dv.madd(b, v0))]) > deflection
+                });
+                if strays {
+                    cut_u[i] = true;
+                    cut_v[j] = true;
+                }
+            }
+        }
+        let more = |cut: &[bool]| cut.len() + cut.iter().filter(|&&c| c).count();
+        if !cut_u.contains(&true) {
+            return;
+        }
+        if more(&cut_u) * more(&cut_v) > GRID_MAX_CELLS {
+            log::warn!(
+                "twisted NURBS grid stops at {} x {} cells, its budget; it may stand off its surface by more than the requested deflection",
+                us.len() - 1,
+                vs.len() - 1
+            );
+            return;
+        }
+        let halve = |lines: &mut Vec<f64>, cut: &[bool]| {
+            let mut next = Vec::with_capacity(lines.len() + cut.len());
+            let mut fresh = Vec::with_capacity(lines.len() + cut.len());
+            for (k, &line) in lines.iter().enumerate() {
+                next.push(line);
+                match cut.get(k) {
+                    Some(&true) => {
+                        next.push(0.5 * (line + lines[k + 1]));
+                        fresh.extend([true, true]);
+                    }
+                    Some(&false) => fresh.push(false),
+                    None => {}
+                }
+            }
+            *lines = next;
+            fresh
+        };
+        fresh_u = halve(us, &cut_u);
+        fresh_v = halve(vs, &cut_v);
+    }
 }
 
 /// Refine an `(n_u, n_v)` grid over `u_span` by `v_span` until each checked

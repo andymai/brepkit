@@ -3043,8 +3043,10 @@ fn a_nurbs_dome_meshes_its_pole_closure_on_the_sphere() {
             worst <= deflection,
             "deflection {deflection}: dome mesh {worst} off the sphere"
         );
+        // A mesh within `deflection` of a sphere loses that part of its
+        // radius, and about as much of its area.
         assert!(
-            (area - truth).abs() <= 0.01 * truth,
+            (area - truth).abs() <= (deflection / r).max(0.01) * truth,
             "deflection {deflection}: dome mesh area {area}, truth {truth}"
         );
     }
@@ -3085,13 +3087,15 @@ fn a_seamed_nurbs_dome_meshes_through_its_pole() {
                 worst <= deflection,
                 "{case}: dome mesh {worst} off the sphere"
             );
+            // A mesh within `deflection` of a sphere loses that part of its
+            // radius, and about as much of its area.
             assert!(
-                (meshed - area).abs() <= 0.01 * area,
+                (meshed - area).abs() <= (deflection / r).max(0.01) * area,
                 "{case}: dome mesh area {meshed}, truth {area}"
             );
             let enclosed = signed_volume_raw(&mesh);
             assert!(
-                (enclosed - volume).abs() <= 0.02 * volume,
+                (enclosed - volume).abs() <= (1.5 * deflection / r).max(0.02) * volume,
                 "{case}: mesh volume {enclosed}, truth {volume}"
             );
         }
@@ -4519,4 +4523,70 @@ fn pointed_cone_walked_from_a_rim_meshes_its_own_area() {
         (area - want).abs() <= 1e-2 * want,
         "meshed {area}, the wall's area {want}"
     );
+}
+
+/// A sheet that runs straight along `u` for most of its length and then
+/// curls tight, extruded along `v`: its grid lines stand close in the curl
+/// alone, and the straight direction takes one span.
+#[test]
+fn grid_lines_stand_close_only_where_the_surface_turns() {
+    // x runs 0..100 straight, then a curl of radius 0.5 over the last tenth
+    // of the parameter.
+    let at = |u: f64, v: f64| {
+        if u <= 0.9 {
+            Point3::new(u / 0.9 * 100.0, 0.0, 10.0 * v)
+        } else {
+            let turn = (u - 0.9) / 0.1 * std::f64::consts::PI;
+            Point3::new(100.0 + 0.5 * turn.sin(), 0.5 * (1.0 - turn.cos()), 10.0 * v)
+        }
+    };
+    let normal_at = |u: f64, _v: f64| {
+        if u <= 0.9 {
+            Vec3::new(0.0, -1.0, 0.0)
+        } else {
+            let turn = (u - 0.9) / 0.1 * std::f64::consts::PI;
+            Vec3::new(turn.sin(), -turn.cos(), 0.0)
+        }
+    };
+    let unit = ((0.0, 1.0), (0.0, 1.0));
+    let us = super::nurbs::iso_breaks_over(&at, &normal_at, true, unit, &[], 0.01, 0.3, 1024);
+    let vs = super::nurbs::iso_breaks_over(&at, &normal_at, false, unit, &[], 0.01, 0.3, 1024);
+    assert_eq!(vs, vec![0.0, 1.0], "the extruded direction is straight");
+    let on_run = us.iter().filter(|&&u| u < 0.85).count();
+    let on_curl = us.iter().filter(|&&u| u > 0.9).count();
+    assert!(on_run <= 8, "{on_run} lines on the straight run: {us:?}");
+    assert!(on_curl >= 10, "{on_curl} lines on the curl: {us:?}");
+    // Even lines at the curl's spacing would take ten times as many.
+    assert!(us.len() < 40, "{} lines", us.len());
+}
+
+#[test]
+fn a_span_is_cut_by_what_it_needs() {
+    use super::nurbs::parts_needed;
+    assert_eq!(parts_needed(1.0, 1.0), 1);
+    assert_eq!(parts_needed(0.2, 0.0), 1);
+    // Four times the sag is twice the length; twice the turn is twice too.
+    assert_eq!(parts_needed(3.9, 0.0), 3);
+    assert_eq!(parts_needed(0.0, 1.9), 2);
+    // One tight place does not size a long span: the count is bounded.
+    assert_eq!(parts_needed(1e6, 0.0), 8);
+}
+
+/// A twisted cell between straight sides is cut, and a flat grid is left as
+/// it is.
+#[test]
+fn only_twisted_cells_are_cut() {
+    let flat = |u: f64, v: f64| Point3::new(10.0 * u, 10.0 * v, 0.0);
+    let (mut us, mut vs) = (vec![0.0, 0.5, 1.0], vec![0.0, 1.0]);
+    super::nurbs::untwist_lines(&flat, &mut us, &mut vs, 0.01);
+    assert_eq!((us.len(), vs.len()), (3, 2));
+
+    let twisted = |u: f64, v: f64| Point3::new(10.0 * u, 10.0 * v, 4.0 * u * v);
+    let (mut us, mut vs) = (vec![0.0, 1.0], vec![0.0, 1.0]);
+    super::nurbs::untwist_lines(&twisted, &mut us, &mut vs, 0.01);
+    assert!(us.len() > 2 && vs.len() > 2, "{} x {}", us.len(), vs.len());
+    // A bilinear cell's middle stands a quarter of its twist off its
+    // triangles: 4 du dv / 4 here.
+    let widest = |lines: &[f64]| lines.windows(2).map(|p| p[1] - p[0]).fold(0.0, f64::max);
+    assert!(widest(&us) * widest(&vs) <= 0.01 + 1e-12);
 }

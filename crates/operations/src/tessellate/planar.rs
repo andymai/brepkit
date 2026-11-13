@@ -5,9 +5,7 @@ use brepkit_math::madd::Madd;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
 
-use super::edge_sampling::{
-    measure_max_chord_deviation, sample_edge, sample_wire_positions, segments_for_chord_deviation_a,
-};
+use super::edge_sampling::{sample_edge, sample_wire_positions, segments_for_chord_deviation_a};
 use super::{AnalyticKind, MERGE_GRID, TriangleMesh, TriangleMeshUV, point_merge_key};
 
 /// Tessellate a cylindrical face using its actual boundary polygon (CDT-based).
@@ -384,20 +382,9 @@ pub(super) fn tessellate_planar(
                 let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
                 let (u0, u1) = nurbs.domain();
                 let is_subspan = (t0 - u0).abs() > 1e-12 || (t1 - u1).abs() > 1e-12;
-                let n_spans = nurbs
-                    .control_points()
-                    .len()
-                    .saturating_sub(nurbs.degree())
-                    .max(1);
-                let coarse_n = (n_spans * 4).clamp(8, 128);
-                let max_dev = measure_max_chord_deviation(nurbs, t0, t1, coarse_n);
-                #[allow(clippy::cast_sign_loss)]
-                let n_samples = if max_dev <= deflection {
-                    coarse_n
-                } else {
-                    ((coarse_n as f64) * (max_dev / deflection).sqrt()).ceil() as usize
-                }
-                .clamp(8, 4096);
+                let breaks =
+                    super::edge_sampling::nurbs_edge_breaks(nurbs, t0, t1, deflection, 0.0);
+                let n_samples = breaks.len() - 1;
                 // A sub-span is already endpoint-ordered (start→end); only a
                 // full-domain curve may run end→start.
                 let forward = if is_subspan {
@@ -409,7 +396,7 @@ pub(super) fn tessellate_planar(
                 #[allow(clippy::cast_precision_loss)]
                 sample_curve(
                     &|t| nurbs.evaluate(t),
-                    &|i| t0 + (t1 - t0) * (i as f64) / (n_samples as f64),
+                    &|i| breaks[i],
                     n_samples,
                     forward,
                     &mut positions,

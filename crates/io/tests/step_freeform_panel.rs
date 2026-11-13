@@ -62,10 +62,11 @@ fn the_folded_freeform_panel_meshes_within_four_deflections_of_its_faces() {
             DEFAULT_ANGULAR_TOL,
         )
         .unwrap();
-        // Every wall is trimmed between its rims, not meshed whole.
+        // Every wall is trimmed between its rims, not meshed whole: a
+        // vertex inside a curved rim's chords can stand a deflection past it.
         for p in &mesh.positions {
             assert!(
-                (-1e-6..=44.0 + 1e-6).contains(&p.z()),
+                (-deflection..=44.0 + deflection).contains(&p.z()),
                 "{deflection}: a vertex at z = {} lies off the part",
                 p.z()
             );

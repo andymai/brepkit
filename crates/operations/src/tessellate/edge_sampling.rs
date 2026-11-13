@@ -128,8 +128,6 @@ pub(super) fn edge_sample_count(
             .min(4096)
         }
         EdgeCurve::NurbsCurve(nurbs) => {
-            // Adaptive: coarse-pass deviation measurement, then refine if the
-            // chord sag OR the per-segment turn exceeds tolerance.
             // Endpoint-trimmed convention: a section edge can be a validated
             // sub-span of its stored curve; measuring the FULL knot domain
             // would size (and later sample) the whole parent curve.
@@ -137,88 +135,121 @@ pub(super) fn edge_sample_count(
                 (Ok(sv), Ok(ev)) => edge.curve().domain_with_endpoints(sv.point(), ev.point()),
                 _ => nurbs.domain(),
             };
-            let n_spans = nurbs
-                .control_points()
-                .len()
-                .saturating_sub(nurbs.degree())
-                .max(1);
-            let coarse_n = (n_spans * 4).clamp(8, 128);
-            let max_dev = measure_max_chord_deviation(nurbs, u0, u1, coarse_n);
-            let max_turn = measure_max_segment_turn(nurbs, u0, u1, coarse_n);
-            let sag_ok = max_dev <= deflection;
-            let turn_ok = angular_tol <= 0.0 || max_turn <= angular_tol * 0.5;
-            if sag_ok && turn_ok {
-                coarse_n
+            nurbs_edge_breaks(nurbs, u0, u1, deflection, angular_tol).len() - 1
+        }
+    }
+}
+
+/// The parameters at which a NURBS edge from `t0` to `t1` is sampled, both
+/// ends included: a span is cut until its curve stays within `deflection`
+/// of its chord and turns by no more than half of `angular_tol` (`0.0` for no
+/// limit). A straight run takes one span and a tight turn takes many, so the
+/// count follows the curve and not its tightest place.
+pub(super) fn nurbs_edge_breaks(
+    nurbs: &brepkit_math::nurbs::curve::NurbsCurve,
+    t0: f64,
+    t1: f64,
+    deflection: f64,
+    angular_tol: f64,
+) -> Vec<f64> {
+    const MAX_SPANS: usize = 4096;
+    const MAX_DEPTH: usize = 12;
+    // A span holding more knots than this is halved unread: its probes could
+    // step over a polynomial piece.
+    const MAX_KNOTS: usize = 8;
+    const FRACTIONS: [f64; 7] = [0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875];
+
+    let (lo, hi) = (t0.min(t1), t0.max(t1));
+    let mut knots: Vec<f64> = nurbs
+        .knots()
+        .iter()
+        .copied()
+        .filter(|&k| k > lo && k < hi)
+        .collect();
+    knots.dedup();
+    let turn_limit = 0.5 * angular_tol;
+    let off_chord = |p: Point3, a: Point3, b: Point3| {
+        let chord = b - a;
+        let len2 = chord.dot(chord);
+        let f = if len2 > 0.0 {
+            ((p - a).dot(chord) / len2).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        (p - (a + chord * f)).length()
+    };
+    let parts = |a: f64, b: f64| {
+        let (span_lo, span_hi) = (a.min(b), a.max(b));
+        let from = knots.partition_point(|&k| k <= span_lo);
+        let to = knots.partition_point(|&k| k < span_hi).max(from);
+        if to - from > MAX_KNOTS {
+            return 2;
+        }
+        let (pa, pb) = (nurbs.evaluate(a), nurbs.evaluate(b));
+        let sag = FRACTIONS
+            .iter()
+            .map(|&f| a + (b - a) * f)
+            .chain(knots[from..to].iter().copied())
+            .map(|t| off_chord(nurbs.evaluate(t), pa, pb))
+            .fold(0.0, f64::max);
+        let mut turned = 0.0;
+        if turn_limit > 0.0 {
+            let mut last = nurbs.tangent(a).ok();
+            for f in [0.25, 0.5, 0.75, 1.0] {
+                let next = nurbs.tangent(a + (b - a) * f).ok();
+                if let (Some(p), Some(q)) = (last, next) {
+                    turned += p.dot(q).clamp(-1.0, 1.0).acos();
+                }
+                last = next.or(last);
+            }
+            turned /= turn_limit;
+        }
+        super::nurbs::parts_needed(sag / deflection, turned)
+    };
+
+    // Level by level, so a budget that runs out leaves every part of the
+    // span equally read, not its start fine and its end whole.
+    let mut spans = vec![(t0, t1, false)];
+    for _ in 0..MAX_DEPTH {
+        let mut next = Vec::with_capacity(spans.len() * 2);
+        let mut cut = false;
+        for (k, &(a, b, held)) in spans.iter().enumerate() {
+            let room = MAX_SPANS.saturating_sub(next.len() + (spans.len() - k));
+            let n = if held || room == 0 {
+                1
             } else {
-                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                let sag_n = if sag_ok {
-                    coarse_n
-                } else {
-                    ((coarse_n as f64) * (max_dev / deflection).sqrt()).ceil() as usize
-                };
-                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                let turn_n = if turn_ok {
-                    coarse_n
-                } else {
-                    ((coarse_n as f64) * (max_turn / (angular_tol * 0.5))).ceil() as usize
-                };
-                sag_n.max(turn_n).clamp(8, 4096)
+                parts(a, b).min(room + 1)
+            };
+            if n == 1 {
+                next.push((a, b, true));
+                continue;
+            }
+            cut = true;
+            for part in 0..n {
+                #[allow(clippy::cast_precision_loss)]
+                let (from, to) = (
+                    if part == 0 {
+                        a
+                    } else {
+                        a + (b - a) * part as f64 / n as f64
+                    },
+                    if part + 1 == n {
+                        b
+                    } else {
+                        a + (b - a) * (part + 1) as f64 / n as f64
+                    },
+                );
+                next.push((from, to, false));
             }
         }
-    }
-}
-
-/// Measure the maximum midpoint chord deviation across `n` segments of a NURBS curve.
-///
-/// For each segment `[u_i, u_{i+1}]`, evaluates the curve at the midpoint and
-/// measures its distance from the chord midpoint. Returns the maximum deviation.
-pub(super) fn measure_max_chord_deviation(
-    nurbs: &brepkit_math::nurbs::curve::NurbsCurve,
-    u0: f64,
-    u1: f64,
-    n: usize,
-) -> f64 {
-    let mut max_dev: f64 = 0.0;
-    #[allow(clippy::cast_precision_loss)]
-    for i in 0..n {
-        let t0 = u0 + (u1 - u0) * (i as f64) / (n as f64);
-        let t1 = u0 + (u1 - u0) * ((i + 1) as f64) / (n as f64);
-        let p0 = nurbs.evaluate(t0);
-        let p1 = nurbs.evaluate(t1);
-        let mid_chord = Point3::new(
-            (p0.x() + p1.x()) * 0.5,
-            (p0.y() + p1.y()) * 0.5,
-            (p0.z() + p1.z()) * 0.5,
-        );
-        let mid_curve = nurbs.evaluate((t0 + t1) * 0.5);
-        let dev = (mid_curve - mid_chord).length();
-        max_dev = max_dev.max(dev);
-    }
-    max_dev
-}
-
-/// Measure the maximum tangent turn angle (radians) at segment midpoints of a
-/// NURBS curve sampled over `n` uniform segments.
-///
-/// For each segment the curve tangent is compared at the segment endpoints; the
-/// angle between them is the swing across that segment.
-pub(super) fn measure_max_segment_turn(
-    nurbs: &brepkit_math::nurbs::curve::NurbsCurve,
-    u0: f64,
-    u1: f64,
-    n: usize,
-) -> f64 {
-    let mut max_turn: f64 = 0.0;
-    #[allow(clippy::cast_precision_loss)]
-    for i in 0..n {
-        let t0 = u0 + (u1 - u0) * (i as f64) / (n as f64);
-        let t1 = u0 + (u1 - u0) * ((i + 1) as f64) / (n as f64);
-        if let (Ok(a), Ok(b)) = (nurbs.tangent(t0), nurbs.tangent(t1)) {
-            let dot = a.dot(b).clamp(-1.0, 1.0);
-            max_turn = max_turn.max(dot.acos());
+        spans = next;
+        if !cut {
+            break;
         }
     }
-    max_turn
+    std::iter::once(t0)
+        .chain(spans.into_iter().map(|(_, b, _)| b))
+        .collect()
 }
 
 /// Get the parameter range for a circle edge.
@@ -353,7 +384,11 @@ pub(super) fn sample_edge(
     use brepkit_geometry::sampling::sample_uniform;
     use brepkit_topology::edge::EdgeCurve;
 
-    let n = edge_sample_count(topo, edge, deflection, angular_tol, circle_floor);
+    let n = if matches!(edge.curve(), EdgeCurve::NurbsCurve(_)) {
+        0
+    } else {
+        edge_sample_count(topo, edge, deflection, angular_tol, circle_floor)
+    };
 
     let points = match edge.curve() {
         EdgeCurve::Line => {
@@ -391,7 +426,10 @@ pub(super) fn sample_edge(
             let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
             let (u0, u1) = nurbs.domain();
             let is_subspan = (t0 - u0).abs() > 1e-12 || (t1 - u1).abs() > 1e-12;
-            let mut pts = sample_uniform(nurbs, t0, t1, n);
+            let mut pts: Vec<Point3> = nurbs_edge_breaks(nurbs, t0, t1, deflection, angular_tol)
+                .into_iter()
+                .map(|t| nurbs.evaluate(t))
+                .collect();
             // Normalize to edge (start→end vertex) order so every consumer's
             // `is_forward` walk holds even for section edges whose stored
             // curve runs end→start. Sub-spans are already endpoint-ordered.
@@ -568,33 +606,8 @@ pub(super) fn sample_wire_positions(
                 let (u0, u1) = edge.curve().domain_with_endpoints(sp, ep);
                 let full = nurbs.domain();
                 let is_subspan = (u0 - full.0).abs() > 1e-12 || (u1 - full.1).abs() > 1e-12;
-                let n_spans = nurbs
-                    .control_points()
-                    .len()
-                    .saturating_sub(nurbs.degree())
-                    .max(1);
-                let coarse_n = (n_spans * 4).clamp(8, 128);
-                let max_dev = measure_max_chord_deviation(nurbs, u0, u1, coarse_n);
-                let max_turn = measure_max_segment_turn(nurbs, u0, u1, coarse_n);
-                let sag_ok = max_dev <= deflection;
-                let turn_ok = angular_tol <= 0.0 || max_turn <= angular_tol * 0.5;
-                #[allow(clippy::cast_sign_loss)]
-                let n_samples = if sag_ok && turn_ok {
-                    coarse_n
-                } else {
-                    let sag_n = if sag_ok {
-                        coarse_n
-                    } else {
-                        ((coarse_n as f64) * (max_dev / deflection).sqrt()).ceil() as usize
-                    };
-                    let turn_n = if turn_ok {
-                        coarse_n
-                    } else {
-                        ((coarse_n as f64) * (max_turn / (angular_tol * 0.5))).ceil() as usize
-                    };
-                    sag_n.max(turn_n)
-                }
-                .clamp(8, 4096);
+                let breaks = nurbs_edge_breaks(nurbs, u0, u1, deflection, angular_tol);
+                let n_samples = breaks.len() - 1;
                 let forward = if is_subspan {
                     // Sub-spans are already endpoint-ordered start→end.
                     oe.is_forward()
@@ -604,7 +617,7 @@ pub(super) fn sample_wire_positions(
                 #[allow(clippy::cast_precision_loss)]
                 sample_curve_into(
                     &|t| nurbs.evaluate(t),
-                    &|i| u0 + (u1 - u0) * (i as f64) / (n_samples as f64),
+                    &|i| breaks[i],
                     n_samples,
                     forward,
                     &mut positions,
@@ -666,5 +679,71 @@ mod tests {
         let edge = topo.add_edge(Edge::new(va, vb, EdgeCurve::NurbsCurve(curve)));
         let points = sample_edge(&topo, topo.edge(edge).unwrap(), 0.01, 0.3, false).unwrap();
         assert_eq!((points.first(), points.last()), (Some(&a), Some(&b)));
+    }
+
+    /// A long straight run that ends in a tight hook: a degree 2 curve whose
+    /// last span turns back within a hundredth of its length.
+    fn hooked_curve() -> NurbsCurve {
+        NurbsCurve::new(
+            2,
+            vec![0.0, 0.0, 0.0, 1.0, 2.0, 3.0, 3.0, 3.0],
+            vec![
+                Point3::new(0.0, 0.0, 0.0),
+                Point3::new(50.0, 0.0, 0.0),
+                Point3::new(100.0, 0.0, 0.0),
+                Point3::new(101.0, 0.5, 0.0),
+                Point3::new(100.0, 1.0, 0.0),
+            ],
+            vec![1.0; 5],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn a_straight_spline_edge_takes_one_span() {
+        let line = NurbsCurve::new(
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![Point3::new(0.0, 0.0, 0.0), Point3::new(8.0, 0.0, 0.0)],
+            vec![1.0, 1.0],
+        )
+        .unwrap();
+        assert_eq!(
+            nurbs_edge_breaks(&line, 0.0, 1.0, 0.01, 0.3),
+            vec![0.0, 1.0]
+        );
+    }
+
+    #[test]
+    fn a_tight_hook_does_not_size_the_straight_run_before_it() {
+        let curve = hooked_curve();
+        let (deflection, angular) = (0.01, 0.3);
+        let breaks = nurbs_edge_breaks(&curve, 0.0, 3.0, deflection, angular);
+        let on_run = breaks.iter().filter(|&&t| t < 1.0).count();
+        let on_hook = breaks.iter().filter(|&&t| t > 2.0).count();
+        assert!(on_run <= 4, "{on_run} breaks on the straight run");
+        assert!(on_hook > 2 * on_run, "{on_hook} breaks on the hook");
+        // Every span keeps its curve within the deflection of its chord.
+        for pair in breaks.windows(2) {
+            let (a, b) = (curve.evaluate(pair[0]), curve.evaluate(pair[1]));
+            let chord = b - a;
+            for k in 1..16 {
+                let p = curve.evaluate(pair[0] + (pair[1] - pair[0]) * f64::from(k) / 16.0);
+                let along = ((p - a).dot(chord) / chord.dot(chord)).clamp(0.0, 1.0);
+                let off = (p - (a + chord * along)).length();
+                assert!(
+                    off <= deflection,
+                    "span {pair:?} stands {off} off its chord"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn breaks_run_the_way_the_edge_does() {
+        let curve = hooked_curve();
+        let breaks = nurbs_edge_breaks(&curve, 3.0, 0.0, 0.01, 0.3);
+        assert_eq!((breaks.first(), breaks.last()), (Some(&3.0), Some(&0.0)));
+        assert!(breaks.windows(2).all(|pair| pair[1] < pair[0]));
     }
 }
