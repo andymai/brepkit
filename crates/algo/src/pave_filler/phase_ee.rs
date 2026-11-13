@@ -460,11 +460,28 @@ fn closest_segment_pair(
 
     let denom = a.madd(c, -(b * b));
 
-    // 1e-20 checks for mathematical degeneracy (near-zero determinant),
-    // not geometric tolerance.
-    let (s, t) = if denom.abs() < 1e-20 {
-        // Parallel segments — use midpoints
+    // `a c - b^2` is `a c sin^2` of the angle between the segments, and
+    // for segments all but parallel (two curves running alongside each
+    // other) it is lost in rounding: `s` and `t` would be noise. There the
+    // closest approach is at an end of one segment, its foot on the other.
+    let (s, t) = if a <= 0.0 || c <= 0.0 {
         (0.5, 0.5)
+    } else if denom <= 1e-12 * a * c {
+        let foot = |u: f64| u.clamp(0.0, 1.0);
+        // An end of `a` at `s`, its foot on `b`; an end of `b` at `t`, its
+        // foot on `a` (`w` runs from `b`'s start to `a`'s).
+        [
+            (0.0, foot(e / c)),
+            (1.0, foot((b + e) / c)),
+            (foot(-d / a), 0.0),
+            (foot((b - d) / a), 1.0),
+        ]
+        .into_iter()
+        .min_by(|p, q| {
+            let gap = |(s, t): (f64, f64)| (w + da * s - db * t).length_squared();
+            gap(*p).total_cmp(&gap(*q))
+        })
+        .unwrap_or((0.5, 0.5))
     } else {
         let s = (b.madd(e, -(c * d)) / denom).clamp(0.0, 1.0);
         let t = (a.madd(e, -(b * d)) / denom).clamp(0.0, 1.0);
@@ -496,6 +513,62 @@ mod tests {
     use super::*;
     use brepkit_math::curves::Circle3D;
     use brepkit_math::vec::Vec3;
+
+    /// Two edges on one curve, running opposite ways, sample to chords that
+    /// lie on each other: `a c - b^2` is zero or rounding noise there. Read
+    /// as a crossing at their middles (when it came out exactly zero) or at
+    /// noise, it minted a vertex inside a shared edge; their closest
+    /// approach is read from their ends, the same whichever way it rounds.
+    #[test]
+    fn chords_lying_on_each_other_meet_only_at_their_ends() {
+        let mut seed = 0x9e37_79b9_7f4a_7c15_u64;
+        let mut rand = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed >> 11) as f64 / (1u64 << 53) as f64
+        };
+        let p = |v: Vec3| Point3::new(v.x(), v.y(), v.z());
+        for _ in 0..20_000 {
+            let scale = 10f64.powf(3.0 * rand() - 1.0);
+            let from = Vec3::new(rand() - 0.5, rand() - 0.5, rand() - 0.5) * (100.0 * scale);
+            let dir = Vec3::new(rand() - 0.5, rand() - 0.5, rand() - 0.5) * scale;
+            // The second chord's ends a rounding off the first's, as two
+            // edges sampled from one curve land.
+            let mut jiggle = |v: Vec3| {
+                Vec3::new(
+                    v.x() * (1.0 + 2e-16 * (rand() - 0.5)),
+                    v.y() * (1.0 + 2e-16 * (rand() - 0.5)),
+                    v.z() * (1.0 + 2e-16 * (rand() - 0.5)),
+                )
+            };
+            let a = [
+                SegmentEndpoint {
+                    t: 0.0,
+                    pos: p(from),
+                },
+                SegmentEndpoint {
+                    t: 1.0,
+                    pos: p(from + dir),
+                },
+            ];
+            let b = [
+                SegmentEndpoint {
+                    t: 5.0,
+                    pos: p(jiggle(from + dir)),
+                },
+                SegmentEndpoint {
+                    t: 6.0,
+                    pos: p(jiggle(from)),
+                },
+            ];
+            let tol = 1e-7 * scale.max(1.0);
+            let (ta, tb, _) = closest_segment_pair([&a[0], &a[1]], [&b[0], &b[1]], tol)
+                .expect("the chords lie on each other");
+            let at_end = |t: f64, t0: f64| (t - t0).abs() < 1e-9 || (t - t0 - 1.0).abs() < 1e-9;
+            assert!(at_end(ta, 0.0) && at_end(tb, 5.0), "read at {ta}, {tb}");
+        }
+    }
 
     fn line_data(start: Point3, end: Point3) -> EdgeData {
         EdgeData {
