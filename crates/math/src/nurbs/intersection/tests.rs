@@ -7,7 +7,7 @@ use super::surface_marching::march_intersection;
 use super::surface_marching::{near_existing_segment, second_order_tangent};
 use super::surface_seeding::{
     REFINE_CALLS, find_ssi_seeds_grid, find_ssi_seeds_subdivision, planar_patch_sections, plane_of,
-    refine_ssi_point,
+    refine_ssi_point, surfaces_apart,
 };
 use super::*;
 
@@ -2953,4 +2953,100 @@ fn a_flat_patch_whose_section_leaves_it_between_points_is_declined() {
             .unwrap()
             .is_none()
     );
+}
+
+// -- Surfaces proved apart --
+
+/// A quarter of a cylinder about the z axis through `(cx, 0)`, of `radius`
+/// and height 5: `u` an exact rational arc, `v` running to 100 over that
+/// height, so the patch is nine times longer round than up while its `v`
+/// range is sixty times its `u` range.
+fn quarter_wall(cx: f64, radius: f64) -> NurbsSurface {
+    let w = std::f64::consts::FRAC_1_SQRT_2;
+    let column = |x: f64, y: f64| vec![Point3::new(cx + x, y, 0.0), Point3::new(cx + x, y, 5.0)];
+    NurbsSurface::new(
+        2,
+        1,
+        vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+        vec![0.0, 0.0, 100.0, 100.0],
+        vec![
+            column(radius, 0.0),
+            column(radius, radius),
+            column(0.0, radius),
+        ],
+        vec![vec![1.0, 1.0], vec![w, w], vec![1.0, 1.0]],
+    )
+    .unwrap()
+}
+
+#[test]
+fn coaxial_walls_a_unit_apart_are_proved_apart() {
+    // Their boxes overlap whole, and halving by parameter range would cut
+    // only the short way up: the proof needs the long way round halved.
+    let (outer, inner) = (quarter_wall(0.0, 28.0), quarter_wall(0.0, 27.0));
+    assert!(surfaces_apart(&outer, &inner, 1e-5));
+    assert!(surfaces_apart(&inner, &outer, 1e-5));
+    assert!(
+        intersect_nurbs_nurbs(&outer, &inner, 20, 0.0)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn walls_that_cross_or_touch_are_not_proved_apart() {
+    // A wall of radius 27 about (2, 0) crosses the wall of radius 28 about
+    // the origin; one of radius 26 about it touches that wall at (28, 0).
+    let outer = quarter_wall(0.0, 28.0);
+    assert!(!surfaces_apart(&outer, &quarter_wall(2.0, 27.0), 1e-5));
+    assert!(!surfaces_apart(&outer, &quarter_wall(2.0, 26.0), 1e-5));
+    assert!(!surfaces_apart(&outer, &outer, 1e-5));
+    assert!(
+        !intersect_nurbs_nurbs(&outer, &quarter_wall(2.0, 27.0), 20, 0.0)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn walls_nearer_than_the_margin_are_not_proved_apart() {
+    let outer = quarter_wall(0.0, 28.0);
+    let near = quarter_wall(0.0, 28.0 - 5e-6);
+    assert!(!surfaces_apart(&outer, &near, 1e-5));
+}
+
+#[test]
+fn a_surface_that_can_leave_its_control_points_is_not_proved_apart() {
+    // With the middle weight negative the wall bulges the other way, out of
+    // its control points' box and through the wall inside it.
+    let inner = quarter_wall(0.0, 27.0);
+    let mut weights = inner.weights().to_vec();
+    weights[1] = vec![-0.5, -0.5];
+    let bulging = NurbsSurface::new(
+        inner.degree_u(),
+        inner.degree_v(),
+        inner.knots_u().to_vec(),
+        inner.knots_v().to_vec(),
+        inner.control_points().to_vec(),
+        weights,
+    )
+    .unwrap();
+    assert!(!surfaces_apart(&quarter_wall(0.0, 28.0), &bulging, 1e-5));
+    assert!(!surfaces_apart(&bulging, &quarter_wall(0.0, 28.0), 1e-5));
+}
+
+#[test]
+fn a_surface_with_unclamped_knots_is_not_proved_apart() {
+    let outer = quarter_wall(0.0, 28.0);
+    let inner = quarter_wall(0.0, 27.0);
+    let unclamped = NurbsSurface::new(
+        inner.degree_u(),
+        inner.degree_v(),
+        inner.knots_u().to_vec(),
+        vec![-100.0, 0.0, 100.0, 200.0],
+        inner.control_points().to_vec(),
+        inner.weights().to_vec(),
+    )
+    .unwrap();
+    assert!(!surfaces_apart(&outer, &unclamped, 1e-5));
 }

@@ -120,6 +120,17 @@ fn boolean_inner(
     LAST_USED_MESH_FALLBACK.with(|f| f.set(false));
     let tol = brepkit_math::tolerance::Tolerance::new();
 
+    // A tool of NURBS faces wholly inside a blank of them, the two
+    // boundaries proved apart: the cut is the blank with the tool's shell for
+    // a cavity, and no face pair has a section to look for.
+    if op == BooleanOp::Cut
+        && nurbs_tool_strictly_inside(topo, a, b, tol)
+        && let Ok(result) = build_contained_cut_hollow(topo, a, b)
+        && validate_boolean_result(topo, result).is_ok()
+    {
+        return Ok(result);
+    }
+
     // Detect A⊂B or B⊂A (including A=B) and handle directly.
     // Only applies when BOTH solids have simple analytic classifiers.
     {
@@ -1457,6 +1468,22 @@ pub fn boolean_with_evolution(
     b: SolidId,
 ) -> Result<(SolidId, crate::evolution::EvolutionMap), crate::OperationsError> {
     use brepkit_topology::explorer::solid_faces;
+
+    // A tool of NURBS faces wholly inside the blank: each face of the result
+    // is a copy of one input face, so the provenance is exact with no engine
+    // run.
+    if op == BooleanOp::Cut
+        && a != b
+        && nurbs_tool_strictly_inside(topo, a, b, brepkit_math::tolerance::Tolerance::new())
+        && let Ok((result, origins)) = build_contained_cut_hollow_with_origins(topo, a, b)
+        && validate_boolean_result(topo, result).is_ok()
+    {
+        let mut evo = crate::evolution::EvolutionMap::new();
+        for (input, output) in origins {
+            evo.add_modified(input, output);
+        }
+        return Ok((result, evo));
+    }
 
     // Faithful path: the GFA reports each result face's true input source.
     // Identical/contained operand pairs must NOT take it: those are the
@@ -3279,6 +3306,85 @@ fn solid_strictly_inside(
     saw_vertex
 }
 
+/// Whether `tool`, a solid of one shell in one piece, lies inside `blank` with no point
+/// of its boundary on the blank's: every face of both is a NURBS face, each
+/// pair of their surfaces is proved apart, and a vertex of the tool
+/// classifies inside the blank. Boundaries that never meet leave a connected
+/// tool wholly on one side of the blank's.
+fn nurbs_tool_strictly_inside(
+    topo: &Topology,
+    blank: SolidId,
+    tool: SolidId,
+    tol: brepkit_math::tolerance::Tolerance,
+) -> bool {
+    let surfaces = |solid: SolidId| -> Option<Vec<&brepkit_math::nurbs::surface::NurbsSurface>> {
+        brepkit_topology::explorer::solid_faces(topo, solid)
+            .ok()?
+            .into_iter()
+            .map(|fid| match topo.face(fid).ok()?.surface() {
+                FaceSurface::Nurbs(surface) => Some(surface),
+                _ => None,
+            })
+            .collect()
+    };
+    let simple = |solid: SolidId| topo.solid(solid).is_ok_and(|s| s.inner_shells().is_empty());
+    if !simple(blank) || !simple(tool) {
+        return false;
+    }
+    // One shell can hold several pieces, and a vertex of one says nothing of
+    // where another lies.
+    if crate::boolean::assembly::face_components(topo, tool).len() != 1 {
+        return false;
+    }
+    let (Ok(blank_box), Ok(tool_box)) = (
+        crate::measure::solid_bounding_box(topo, blank),
+        crate::measure::solid_bounding_box(topo, tool),
+    ) else {
+        return false;
+    };
+    let within = |lo: f64, hi: f64, out_lo: f64, out_hi: f64| lo >= out_lo && hi <= out_hi;
+    if !(within(
+        tool_box.min.x(),
+        tool_box.max.x(),
+        blank_box.min.x(),
+        blank_box.max.x(),
+    ) && within(
+        tool_box.min.y(),
+        tool_box.max.y(),
+        blank_box.min.y(),
+        blank_box.max.y(),
+    ) && within(
+        tool_box.min.z(),
+        tool_box.max.z(),
+        blank_box.min.z(),
+        blank_box.max.z(),
+    )) {
+        return false;
+    }
+    let (Some(blank_surfaces), Some(tool_surfaces)) = (surfaces(blank), surfaces(tool)) else {
+        return false;
+    };
+    let margin = 100.0 * tol.linear;
+    if !blank_surfaces.iter().all(|sa| {
+        tool_surfaces
+            .iter()
+            .all(|sb| brepkit_math::nurbs::intersection::surfaces_apart(sa, sb, margin))
+    }) {
+        return false;
+    }
+    let Some(vertex) = brepkit_topology::explorer::solid_vertices(topo, tool)
+        .ok()
+        .and_then(|vs| vs.first().copied())
+        .and_then(|vid| topo.vertex(vid).ok())
+    else {
+        return false;
+    };
+    matches!(
+        crate::classify::classify_point(topo, blank, vertex.point(), 0.01, tol.linear),
+        Ok(crate::classify::PointClassification::Inside)
+    )
+}
+
 /// Build `Cut(blank, tool)` for a tool strictly contained in the blank: the
 /// result is the blank with a tool-shaped internal cavity. Deep-copies the
 /// blank and the tool, reverses every copied tool face in place so the cavity
@@ -3290,7 +3396,25 @@ fn build_contained_cut_hollow(
     blank: SolidId,
     tool: SolidId,
 ) -> Result<SolidId, crate::OperationsError> {
+    build_contained_cut_hollow_with_origins(topo, blank, tool).map(|(result, _)| result)
+}
+
+/// [`build_contained_cut_hollow`], with the `(input, result)` face index pair
+/// of every face it copies.
+fn build_contained_cut_hollow_with_origins(
+    topo: &mut Topology,
+    blank: SolidId,
+    tool: SolidId,
+) -> Result<(SolidId, Vec<(usize, usize)>), crate::OperationsError> {
+    use brepkit_topology::explorer::solid_faces;
+
     let result = crate::copy::copy_solid(topo, blank)?;
+    // `copy_solid` keeps the order of shells and of the faces in each.
+    let mut origins: Vec<(usize, usize)> = solid_faces(topo, blank)?
+        .into_iter()
+        .zip(solid_faces(topo, result)?)
+        .map(|(from, to)| (from.index(), to.index()))
+        .collect();
 
     // Deep-copy the tool as a whole solid so the cavity shell shares edges and
     // vertices between adjacent faces (a per-face copy would duplicate shared
@@ -3301,13 +3425,21 @@ fn build_contained_cut_hollow(
     let tool_copy = crate::copy::copy_solid(topo, tool)?;
     let cavity_shell = topo.solid(tool_copy)?.outer_shell();
     let cavity_faces = topo.shell(cavity_shell)?.faces().to_vec();
+    let tool_shell = topo.solid(tool)?.outer_shell();
+    origins.extend(
+        topo.shell(tool_shell)?
+            .faces()
+            .iter()
+            .zip(&cavity_faces)
+            .map(|(from, to)| (from.index(), to.index())),
+    );
     for fid in cavity_faces {
         let face = topo.face_mut(fid)?;
         let flipped = !face.is_reversed();
         face.set_reversed(flipped);
     }
     topo.solid_mut(result)?.add_inner_shell(cavity_shell);
-    Ok(result)
+    Ok((result, origins))
 }
 
 /// Best-effort mesh boolean fallback for high face-count solids.

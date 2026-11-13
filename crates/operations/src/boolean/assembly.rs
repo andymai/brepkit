@@ -812,6 +812,11 @@ pub(super) fn validate_boolean_result_lenient(
     // minor topological imperfections (e.g., boundary edges on analytic faces)
     // that don't prevent downstream use. Hard-failing here would reject ~25%
     // of currently working booleans. The long-term fix is post-boolean healing.
+    // Its findings go to the log alone, and it meshes every curved face to
+    // measure it, so it runs only when something is listening.
+    if !log::log_enabled!(log::Level::Warn) {
+        return Ok(());
+    }
     match crate::validate::validate_solid(topo, solid) {
         Ok(report) if !report.is_valid() => {
             let errors: Vec<_> = report

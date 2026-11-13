@@ -37,7 +37,7 @@ pub use curve_surface::{CurveSurfaceHit, intersect_curve_surface};
 pub use line::intersect_line_nurbs;
 pub use plane::intersect_plane_nurbs;
 pub use ray::{RayHit, RayHits, RaySurface};
-pub use surface_seeding::intersect_nurbs_nurbs;
+pub use surface_seeding::{intersect_nurbs_nurbs, surfaces_apart};
 
 /// Maximum work-queue entries for the branch-aware SSI marcher.
 const MAX_QUEUE_SIZE: usize = 100;
