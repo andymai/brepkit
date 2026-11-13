@@ -64,8 +64,24 @@ pub fn perform(
     let face_boundary_edges_b = collect_face_boundary_edges(topo, &faces_b)?;
     let face_boundary_edges_a = collect_face_boundary_edges(topo, &faces_a)?;
 
-    check_edge_face_pairs(topo, &edges_a, &faces_b, &face_boundary_edges_b, tol, arena)?;
-    check_edge_face_pairs(topo, &edges_b, &faces_a, &face_boundary_edges_a, tol, arena)?;
+    check_edge_face_pairs(
+        topo,
+        &edges_a,
+        (&faces_a, &face_boundary_edges_a),
+        &faces_b,
+        &face_boundary_edges_b,
+        tol,
+        arena,
+    )?;
+    check_edge_face_pairs(
+        topo,
+        &edges_b,
+        (&faces_b, &face_boundary_edges_b),
+        &faces_a,
+        &face_boundary_edges_a,
+        tol,
+        arena,
+    )?;
 
     Ok(())
 }
@@ -258,9 +274,70 @@ fn point_to_segment(p: Point3, a: Point3, b: Point3) -> f64 {
 
 /// Check each edge against each face.
 #[allow(clippy::too_many_lines)]
+/// A face's own trim, to read where a point of its surface lies on it.
+#[derive(Clone, Copy)]
+enum OnFace<'a> {
+    Lateral(&'a crate::classifier::LateralTrim),
+    Plane(&'a super::fill_face_info::PlaneRegion),
+}
+
+impl OnFace<'_> {
+    /// Whether `p` lies on the face, within `near` of its boundary counting.
+    fn holds(self, p: Point3, near: f64) -> bool {
+        match self {
+            Self::Lateral(trim) => trim.holds(p, near),
+            Self::Plane(region) => region.holds(p, near),
+        }
+    }
+
+    /// Whether `p` lies inside the face farther than `near` from its boundary.
+    fn holds_clear(self, p: Point3, near: f64) -> bool {
+        match self {
+            Self::Lateral(trim) => trim.holds_clear(p, near),
+            Self::Plane(region) => region.holds_clear(p, near),
+        }
+    }
+}
+
+/// Whether `eid`, lying in the plane `normal · p = d` of the other solid's
+/// face, is what splits that face: an edge of a NURBS face none of whose own
+/// faces lies in the plane. The face-face phase drops a plane's section
+/// along a NURBS face's own edge as being that edge, and where one of the
+/// edge's faces shares the plane the coplanar pair splits the face instead.
+fn stands_in_for_a_section(
+    topo: &Topology,
+    eid: EdgeId,
+    (own_faces, own_boundaries): (&[FaceId], &[HashSet<EdgeId>]),
+    normal: Vec3,
+    d: f64,
+    tol: Tolerance,
+) -> bool {
+    let mut on_nurbs = false;
+    for (&fid, boundary) in own_faces.iter().zip(own_boundaries) {
+        if !boundary.contains(&eid) {
+            continue;
+        }
+        match topo.face(fid).map(brepkit_topology::face::Face::surface) {
+            Ok(FaceSurface::Nurbs(_)) => on_nurbs = true,
+            Ok(FaceSurface::Plane { normal: n, d: own }) => {
+                let along = n.dot(normal);
+                if along.abs() > 1.0 - tol.angular.max(1e-9)
+                    && (own * along.signum() - d).abs() < tol.linear
+                {
+                    return false;
+                }
+            }
+            _ => {}
+        }
+    }
+    on_nurbs
+}
+
+#[allow(clippy::too_many_lines)]
 fn check_edge_face_pairs(
     topo: &mut Topology,
     edges: &[EdgeId],
+    own: (&[FaceId], &[HashSet<EdgeId>]),
     faces: &[FaceId],
     face_boundary_edges: &[HashSet<EdgeId>],
     tol: Tolerance,
@@ -301,6 +378,8 @@ fn check_edge_face_pairs(
         .collect::<Result<_, _>>()?;
 
     let mut trims: Vec<Option<Option<crate::classifier::LateralTrim>>> =
+        (0..faces.len()).map(|_| None).collect();
+    let mut regions: Vec<Option<Option<super::fill_face_info::PlaneRegion>>> =
         (0..faces.len()).map(|_| None).collect();
     for &eid in edges {
         // Snapshot edge data to avoid holding immutable borrow across add_vertex
@@ -370,14 +449,32 @@ fn check_edge_face_pairs(
                 let near = 10.0 * tol.linear;
                 let lateral = matches!(surface, FaceSurface::Cylinder(_) | FaceSurface::Cone(_))
                     && matches!(curve, EdgeCurve::Line | EdgeCurve::Circle(_));
-                if lateral {
-                    let trim = trims[face_idx]
-                        .get_or_insert_with(|| {
-                            crate::classifier::LateralTrim::new(topo, fid)
-                                .ok()
-                                .flatten()
-                        })
-                        .as_ref();
+                // In a plane, the edge of a NURBS face is the section the
+                // plane's face is split along, where it runs through the face.
+                let planar = match surface {
+                    FaceSurface::Plane { normal, d } => {
+                        stands_in_for_a_section(topo, eid, own, *normal, *d, tol)
+                    }
+                    _ => false,
+                };
+                if lateral || planar {
+                    let trim = if lateral {
+                        trims[face_idx]
+                            .get_or_insert_with(|| {
+                                crate::classifier::LateralTrim::new(topo, fid)
+                                    .ok()
+                                    .flatten()
+                            })
+                            .as_ref()
+                            .map(OnFace::Lateral)
+                    } else {
+                        regions[face_idx]
+                            .get_or_insert_with(|| {
+                                super::fill_face_info::PlaneRegion::of(topo, fid)
+                            })
+                            .as_ref()
+                            .map(OnFace::Plane)
+                    };
                     let at = |k: u32| {
                         let t = (t1 - t0).mul_add(f64::from(k) / f64::from(n_chk), t0);
                         curve.evaluate_with_endpoints(t, start_pos, end_pos)
@@ -1435,6 +1532,7 @@ mod tests {
         check_edge_face_pairs(
             &mut topo,
             &[ring],
+            (&[], &[]),
             &[band],
             &[HashSet::new()],
             Tolerance::new(),
@@ -1566,6 +1664,7 @@ mod tests {
         check_edge_face_pairs(
             &mut topo,
             &[line],
+            (&[], &[]),
             &[band],
             &[HashSet::new()],
             Tolerance::new(),

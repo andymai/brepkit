@@ -196,7 +196,7 @@ fn dist_to_surface(
 }
 
 /// A planar face's boundary in its own plane, read on its lines and arcs.
-struct PlaneRegion {
+pub(super) struct PlaneRegion {
     origin: brepkit_math::vec::Point3,
     x: brepkit_math::vec::Vec3,
     y: brepkit_math::vec::Vec3,
@@ -205,7 +205,7 @@ struct PlaneRegion {
 
 impl PlaneRegion {
     /// `None` for a face that is not a plane or has a NURBS edge.
-    fn of(topo: &Topology, face_id: FaceId) -> Option<Self> {
+    pub(super) fn of(topo: &Topology, face_id: FaceId) -> Option<Self> {
         let face = topo.face(face_id).ok()?;
         let brepkit_topology::face::FaceSurface::Plane { normal, .. } = face.surface() else {
             return None;
@@ -232,6 +232,31 @@ impl PlaneRegion {
         let d = p - self.origin;
         let flat = brepkit_math::vec::Point2::new(d.dot(self.x), d.dot(self.y));
         brepkit_math::region2d::on_boundary(&self.pieces, flat, tol)
+    }
+
+    /// Whether `p`, in the face's plane, lies in the face, and whether it
+    /// lies within `near` of the face's boundary.
+    fn reads(&self, p: brepkit_math::vec::Point3, near: f64) -> (bool, bool) {
+        let d = p - self.origin;
+        let flat = brepkit_math::vec::Point2::new(d.dot(self.x), d.dot(self.y));
+        match brepkit_math::region2d::point_in_region(&self.pieces, flat, near) {
+            Some(inside) => (inside, false),
+            None => (true, true),
+        }
+    }
+
+    /// Whether `p`, in the face's plane, lies on the face: within `near` of
+    /// its boundary counts as on it.
+    pub(super) fn holds(&self, p: brepkit_math::vec::Point3, near: f64) -> bool {
+        let (on, close) = self.reads(p, near);
+        on || close
+    }
+
+    /// Whether `p`, in the face's plane, lies inside the face farther than
+    /// `near` from its boundary.
+    pub(super) fn holds_clear(&self, p: brepkit_math::vec::Point3, near: f64) -> bool {
+        let (on, close) = self.reads(p, near);
+        on && !close
     }
 }
 
