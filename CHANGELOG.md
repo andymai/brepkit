@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.11.14](https://github.com/andymai/brepkit/compare/v4.11.13...v4.11.14) (2026-11-13)
+
+
+### Performance
+
+* **tessellate:** a spline edge or face is divided where it turns ([#2428](https://github.com/andymai/brepkit/issues/2428)) ([47692ff](https://github.com/andymai/brepkit/commit/47692ff307d35b1a74576dbdfe5eb9f8fb675d9c))
+
 ## [4.11.13](https://github.com/andymai/brepkit/compare/v4.11.12...v4.11.13) (2026-11-13)
 
 
