@@ -65,14 +65,58 @@ impl Clone for ProjectionMemo {
 /// The surfaces split into Bezier patches lately, anywhere: each one's
 /// content key, its data, and its patches, the most lately used last, at most
 /// [`SPLIT_PATCHES`] patches in all.
-#[allow(clippy::type_complexity)]
-static SPLIT: std::sync::Mutex<
-    Vec<(
-        u64,
-        NurbsSurface,
-        std::sync::Arc<Vec<crate::nurbs::decompose::BezierPatch>>,
-    )>,
-> = std::sync::Mutex::new(Vec::new());
+static SPLIT: std::sync::Mutex<Vec<SplitEntry>> = std::sync::Mutex::new(Vec::new());
+
+/// A surface's content key, its data, and its Bezier patches.
+type SplitEntry = (
+    u64,
+    NurbsSurface,
+    std::sync::Arc<Vec<crate::nurbs::decompose::BezierPatch>>,
+);
+
+/// The entry of `kept` for the surface `key` and `surface` name, moved to
+/// the end as the most lately used.
+fn split_kept(
+    kept: &mut Vec<SplitEntry>,
+    key: u64,
+    surface: &NurbsSurface,
+) -> Option<std::sync::Arc<Vec<crate::nurbs::decompose::BezierPatch>>> {
+    let at = kept
+        .iter()
+        .position(|(k, held, _)| *k == key && held.same_bits(surface))?;
+    let entry = kept.remove(at);
+    let patches = entry.2.clone();
+    kept.push(entry);
+    Some(patches)
+}
+
+/// Keeps `entry` in `kept` as the most lately used, within `limit` patches
+/// in all, and returns the patches to use: those `kept` already holds for
+/// the same surface, where another caller split it meanwhile, else the
+/// entry's own. The least lately used entries go first to make room, in
+/// one pass; an entry over the limit by itself is not kept.
+fn keep_split(
+    kept: &mut Vec<SplitEntry>,
+    entry: SplitEntry,
+    limit: usize,
+) -> std::sync::Arc<Vec<crate::nurbs::decompose::BezierPatch>> {
+    if let Some(held) = split_kept(kept, entry.0, &entry.1) {
+        return held;
+    }
+    let patches = entry.2.clone();
+    if patches.len() > limit {
+        return patches;
+    }
+    let mut total: usize = kept.iter().map(|e| e.2.len()).sum();
+    let mut gone = 0;
+    while total + patches.len() > limit {
+        total -= kept[gone].2.len();
+        gone += 1;
+    }
+    kept.drain(..gone);
+    kept.push(entry);
+    patches
+}
 
 /// How many Bezier patches [`SPLIT`] keeps in all.
 const SPLIT_PATCHES: usize = 50_000;
@@ -744,8 +788,8 @@ impl NurbsSurface {
 
     /// The surface split into Bezier patches
     /// ([`surface_to_bezier_patches`](crate::nurbs::decompose::surface_to_bezier_patches)),
-    /// kept among the last few split anywhere (at most [`SPLIT_PATCHES`]
-    /// patches in all) and found again by the surface's data bit for bit: a
+    /// kept among the last few split anywhere (at most 50,000 patches in
+    /// all) and found again by the surface's data bit for bit: a
     /// boolean's result rebuilds its faces' surfaces, so a body cut by one
     /// tool after another would otherwise split the same surface for each.
     /// Not kept on the surface, which can outlive its use by far.
@@ -757,32 +801,19 @@ impl NurbsSurface {
         &self,
     ) -> Result<std::sync::Arc<Vec<crate::nurbs::decompose::BezierPatch>>, MathError> {
         let key = self.content_key();
-        let found = SPLIT.lock().ok().and_then(|mut kept| {
-            let at = kept
-                .iter()
-                .position(|(k, surface, _)| *k == key && surface.same_bits(self))?;
-            let entry = kept.remove(at);
-            let patches = entry.2.clone();
-            kept.push(entry); // the most lately used last
-            Some(patches)
-        });
-        let patches = if let Some(patches) = found {
-            patches
-        } else {
-            let patches =
-                std::sync::Arc::new(crate::nurbs::decompose::surface_to_bezier_patches(self)?);
-            if patches.len() <= SPLIT_PATCHES
-                && let Ok(mut kept) = SPLIT.lock()
-            {
-                while kept.iter().map(|e| e.2.len()).sum::<usize>() + patches.len() > SPLIT_PATCHES
-                {
-                    kept.remove(0);
-                }
-                kept.push((key, self.data_only(), patches.clone()));
-            }
-            patches
-        };
-        Ok(patches)
+        let found = SPLIT
+            .lock()
+            .ok()
+            .and_then(|mut kept| split_kept(&mut kept, key, self));
+        if let Some(patches) = found {
+            return Ok(patches);
+        }
+        let patches =
+            std::sync::Arc::new(crate::nurbs::decompose::surface_to_bezier_patches(self)?);
+        Ok(match SPLIT.lock() {
+            Ok(mut kept) => keep_split(&mut kept, (key, self.data_only(), patches), SPLIT_PATCHES),
+            Err(_) => patches,
+        })
     }
 
     /// A hash of the surface's degrees, knots, control points and weights,
@@ -1410,5 +1441,112 @@ mod tests {
             prop_assert!((p.y() - u).abs() < 1e-12, "y: {} vs {}", p.y(), u);
             prop_assert!(p.z().abs() < 1e-12);
         }
+    }
+
+    /// A bilinear sheet of `spans` knot spans along `u`, lifted by `lift`:
+    /// it splits into `spans` Bezier patches.
+    fn sheet(spans: usize, lift: f64) -> NurbsSurface {
+        let mut knots_u = vec![0.0, 0.0];
+        knots_u.extend((1..spans).map(|i| i as f64));
+        knots_u.extend([spans as f64, spans as f64]);
+        let rows = (0..=spans)
+            .map(|i| {
+                vec![
+                    Point3::new(i as f64, 0.0, lift),
+                    Point3::new(i as f64, 1.0, lift),
+                ]
+            })
+            .collect();
+        NurbsSurface::new(
+            1,
+            1,
+            knots_u,
+            vec![0.0, 0.0, 1.0, 1.0],
+            rows,
+            vec![vec![1.0, 1.0]; spans + 1],
+        )
+        .expect("valid sheet")
+    }
+
+    fn entry(surface: &NurbsSurface) -> SplitEntry {
+        let patches =
+            crate::nurbs::decompose::surface_to_bezier_patches(surface).expect("clamped knots");
+        (
+            surface.content_key(),
+            surface.data_only(),
+            std::sync::Arc::new(patches),
+        )
+    }
+
+    #[test]
+    fn kept_patches_are_the_fresh_split_bit_for_bit() {
+        let surface = sheet(3, 0.25);
+        let fresh =
+            crate::nurbs::decompose::surface_to_bezier_patches(&surface).expect("clamped knots");
+        // Twice: the second call reads what the first kept.
+        for _ in 0..2 {
+            let kept = surface.bezier_patches().expect("clamped knots");
+            assert_eq!(kept.len(), fresh.len());
+            for (a, b) in kept.iter().zip(&fresh) {
+                assert!(a.surface.same_bits(&b.surface));
+                assert_eq!(a.u_range.0.to_bits(), b.u_range.0.to_bits());
+                assert_eq!(a.u_range.1.to_bits(), b.u_range.1.to_bits());
+                assert_eq!(a.v_range.0.to_bits(), b.v_range.0.to_bits());
+                assert_eq!(a.v_range.1.to_bits(), b.v_range.1.to_bits());
+            }
+        }
+    }
+
+    #[test]
+    fn a_surface_made_again_from_the_same_data_finds_its_kept_patches() {
+        let mut kept = Vec::new();
+        let first = keep_split(&mut kept, entry(&sheet(3, 0.5)), 100);
+        // The same data, made anew: the entry already kept is the one used.
+        let again = keep_split(&mut kept, entry(&sheet(3, 0.5)), 100);
+        assert!(std::sync::Arc::ptr_eq(&first, &again));
+        assert_eq!(kept.len(), 1);
+        let found = split_kept(&mut kept, sheet(3, 0.5).content_key(), &sheet(3, 0.5));
+        assert!(found.is_some_and(|p| std::sync::Arc::ptr_eq(&p, &first)));
+    }
+
+    #[test]
+    fn surfaces_of_different_data_keep_their_own_patches() {
+        let mut kept = Vec::new();
+        let low = keep_split(&mut kept, entry(&sheet(3, 0.5)), 100);
+        let high = keep_split(&mut kept, entry(&sheet(3, 0.75)), 100);
+        assert!(!std::sync::Arc::ptr_eq(&low, &high));
+        assert_eq!(kept.len(), 2);
+        let other = sheet(3, 1.0);
+        assert!(split_kept(&mut kept, other.content_key(), &other).is_none());
+    }
+
+    #[test]
+    fn the_least_lately_used_patches_go_first_to_make_room() {
+        let (a, b, c) = (sheet(4, 0.0), sheet(4, 1.0), sheet(4, 2.0));
+        let mut kept = Vec::new();
+        keep_split(&mut kept, entry(&a), 10);
+        keep_split(&mut kept, entry(&b), 10);
+        // Using `a` again leaves `b` the least lately used.
+        assert!(split_kept(&mut kept, a.content_key(), &a).is_some());
+        keep_split(&mut kept, entry(&c), 10);
+        assert!(kept.iter().map(|e| e.2.len()).sum::<usize>() <= 10);
+        assert!(split_kept(&mut kept, b.content_key(), &b).is_none());
+        assert!(split_kept(&mut kept, a.content_key(), &a).is_some());
+        assert!(split_kept(&mut kept, c.content_key(), &c).is_some());
+
+        // Both fit beside what is kept: neither puts the other out.
+        let mut kept = Vec::new();
+        keep_split(&mut kept, entry(&a), 10);
+        keep_split(&mut kept, entry(&sheet(2, 5.0)), 10);
+        keep_split(&mut kept, entry(&sheet(2, 5.0)), 10);
+        assert_eq!(kept.len(), 2);
+        assert!(split_kept(&mut kept, a.content_key(), &a).is_some());
+
+        // A surface over the limit by itself is used and not kept.
+        let mut kept = Vec::new();
+        keep_split(&mut kept, entry(&a), 10);
+        let big = keep_split(&mut kept, entry(&sheet(11, 0.0)), 10);
+        assert_eq!(big.len(), 11);
+        assert_eq!(kept.len(), 1);
     }
 }
