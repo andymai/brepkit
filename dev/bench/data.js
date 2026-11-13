@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794587333202,
+  "lastUpdate": 1794587862022,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -68741,6 +68741,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 19569552,
             "range": "± 77804",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "4b250e557bf2ed7994f73460c14eb3385197d5ac",
+          "message": "perf(math): a B-spline surface or curve keeps what it has worked out (#2418)\n\nThis PR carries #2412 by @Robokan onto the current main. The six commits\nare the contributor's, with no change. One merge commit follows them.\n\nThe merge commit does three things:\n\n- In `crates/math/src/nurbs/surface.rs` and `projection.rs`, it keeps\nthe branch's `Caches` and removes the `seed_grid` field that #2408\nadded. The branch keeps the same grid, and more, in one place.\n- In `crates/check/src/classify/boundary.rs`, `FaceRayCache` keeps the\nboundary polygons from #2414 and takes its ray patches from the surface,\nas the branch does.\n- It applies the rule from #2409 to the new code. `projection.rs` called\n`mul_add` in 3 places, and it now calls `Madd::madd`.\n\n## How I checked it\n\n- `cargo clippy --workspace --all-targets -- -D warnings` passes.\n- `cargo test` passes for `brepkit-math` (656 tests), `brepkit-check`\n(84 tests) and `brepkit-algo` (382 tests).\n\n## The description from #2412\n\nA B-spline surface or curve keeps what it has worked out (projection\ngrid, control box, sample points, ray patches, projected points, Bezier\nsplits), so the same work is not redone.\n\nEach change is its own commit, with its reasoning and numbers in the\ncommit message; every result is unchanged (values compared bit for bit,\noutputs line for line, as each message says). Times were taken one case\nat a time, before and after, on a tree where that change is the only\ndifference. What a surface or curve keeps is no part of its value: it is\nnot compared, and prints as nothing.\n\n## Commits\n\n- **perf(math): a B-spline surface keeps its projection grid and control\nbox**\nEvery projection onto a B-spline surface seeds Newton from a 9 x 9 grid\nof the surface's points, and evaluated that grid again for each point;\n`aabb` (read by the classifier and the face boxes) took the control\npoints' box again each time. A boolean classifying regions against\nfitted lofts projects thousands of points onto the same few surfaces,\nand spent a third of its time on those grids. A surface is never changed\nonce made, so it now keeps both, made on first use: the grid is the same\npoints as before, and every projection is unchanged.\n_A fuse of fitted-loft bodies from a real design (the mesh fallback\ndeclined): 91 s -> 48 s, its output line for line the same._\n- **perf(math): a B-spline curve keeps the points a projection samples**\nProjecting a point onto a B-spline curve samples the knot spans nearest\nit, each at the same few parameters whatever the point, and evaluated\nthem again for every point; an edge's parameter at its ends, read in\nevery boolean phase, projects onto its curve each time. A curve is never\nchanged once made, so each span's sample points are now kept, made the\nfirst time a projection reads that span. Distances are taken from the\nsame points as before, so every projection is unchanged. Equality still\ncompares the curve alone.\n- **perf(math): a B-spline surface keeps the patches rays are cast\nagainst**\nBoth point classifiers (the check crate's, which the containment test\nbefore every boolean uses, and the boolean's own) cast rays at a\nB-spline face through a `RaySurface`: the surface split into Bezier\npatches. Each classifier built one per face, and a boolean builds\nseveral classifiers over the same faces, so the split ran again and\nagain. The surface now keeps its `RaySurface`, made on first use and\nshared from then on (`NurbsSurface::ray_surface`): a surface is never\nchanged once made, and the patches are the ones `RaySurface::new` makes.\n_Five slow booleans of fitted-loft parts from real designs (the mesh\nfallback declined), each the best of three runs taken in turn with the\ntree without this change on a quiet machine: 14.75 s -> 8.50 s, 4.85 ->\n2.48, 2.54 -> 1.77, 2.65 -> 1.86, 6.26 -> 5.80 (31.1 s -> 20.4 s in\nall)._\n- **perf(math): a B-spline surface keeps the points it has projected**  \nClassifying points against a B-spline face projects its boundary into\nthe surface's (u, v), and several classifiers do it in turn over the\nsame faces in one boolean (the containment test's, the face region's,\nthe ray crossings' polygon, the hole test), each projecting the very\nsame boundary points again: a third of the slowest fitted-loft booleans'\ntime was that. `ParametricSurface::project_point` for a B-spline surface\nnow keeps each point's (u, v), by the point's coordinates bit for bit,\nat most 16384 points a surface (behind a lock; a clone starts empty). A\nprojection of a point onto a surface is the same every time, so every\n(u, v) is the same number.\n_132 passing booleans from real designs, inputs loaded, best of two runs\neach: 48.1 s -> 38.4 s, none over 5 ms slower by more than 10%. Seven\nslow fitted-loft booleans, best of three taken in turn with main: three\n1.77 -> 0.97 s, 2.04 -> 1.07 s, 1.86 -> 1.08 s, the rest within 2%;\ntheir output line for line the same._\n- **perf(math): keep the last few B-spline surfaces' Bezier splits,\nfound by their data**\nSeeding two B-spline surfaces' intersection splits both into Bezier\npatches (inserting every interior knot to full multiplicity), for every\npair of faces, and a boolean's result rebuilds its faces' surfaces: a\nbody of fitted faces cut by one tool after another split the same\n12,719-patch surfaces again for every tool (52 times for 13 cutters,\nhalf of that cut's time). `NurbsSurface::bezier_patches` keeps the last\nsurfaces split anywhere, at most 50,000 patches in all, the least lately\nused dropped first, and finds a surface among them by a hash of its\ndegrees, knots, control points and weights, taken only when all of them\nare equal bit for bit; the patches are the ones a fresh split makes.\nKept apart from the surface, which can outlive its use by far.\n_A body cut by 13 tools one after another, from a real design (the whole\nrun, its measures of the result included): 29.8 s -> 24.0 s, its output\nline for line the same. 132 passing booleans from real designs, best of\ntwo runs each: 38.4 s -> 36.6 s (with one other sharing change), none\nover 5 ms slower by more than 10%._\n- **fix(math): what a B-spline surface or curve keeps prints as\nnothing**\nThe caches the commits before this one add (the projection grid and\ncontrol box, the ray patches, the projected points, a curve's span\nsamples) derived `Debug`, so a surface printed differently once it had\nworked something out: a face copied from another, the same surface,\nprinted differently from its source, and a test comparing faces by their\nprinted surfaces failed. The caches now print as `..`.\n\n## Test plan\n\n- [x] `cargo test --release -p brepkit-math -p brepkit-check -p\nbrepkit-algo -p brepkit-operations -p brepkit-io` on this branch (3730\npassed)\n- [x] pose sweep and truth audit print the same as on `main`\n- [x] clippy and fmt clean\n\nThis gathers #2385, #2387 and #2401 into one PR, so there are fewer to\nreview; those are closed in its favour.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nCaches repeated computations on B-spline surfaces and curves so the same\nwork is not redone. Projections onto the same few surfaces, ray casts\nthrough the same faces, and repeated Bezier splits were each recomputed\nmany times per boolean; keeping them cuts time on real fitted-loft\ndesigns by a third to a half (91 s -> 48 s, 14.75 s -> 8.50 s, 48.1 s ->\n38.4 s), with every result unchanged bit for bit.\n\n**Changes**\n- Surfaces keep their projection grid, control box, `RaySurface`, and\nprojected points, all made on first use.\n- Surfaces and curves keep Bezier splits and span samples; the split\ncache is a global LRU found by the surface's data, so rebuilt clones of\nthe same surface reuse it. Splitting the same surface from two callers\nnow shares one copy, and eviction keeps the least lately used within the\npatch limit in a single pass.\n- Caches print as `..`, so a surface prints the same whether or not it\nhas worked something out; equality still compares only the surface's\ndata.\n\n<sup>Written for commit cbf2151722ee731ee60c0c7951113f7bca03a158.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2418?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2418?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2418&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\n---------\n\nCo-authored-by: Robokan <eric.d.vaughan@gmail.com>\nCo-authored-by: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-11-13T16:34:53Z",
+          "tree_id": "42dbecdf2bdf013ab444aba231d39e3a29fb107f",
+          "url": "https://github.com/andymai/brepkit/commit/4b250e557bf2ed7994f73460c14eb3385197d5ac"
+        },
+        "date": 1794587850783,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 516920,
+            "range": "± 5829",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 547186,
+            "range": "± 9352",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 7263,
+            "range": "± 38",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 307545,
+            "range": "± 9182",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 14193692,
+            "range": "± 397726",
             "unit": "ns/iter"
           }
         ]
