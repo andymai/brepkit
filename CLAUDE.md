@@ -519,7 +519,8 @@ each call goes to a software routine, about 10 ns against 3 ns for a multiply
 and an add: it was more than half the running time of the wasm build. Library
 code uses `brepkit_math::madd::Madd::madd` (`self * a + b`), which gives the
 same bits on every target. Test fixtures can keep `mul_add`: some build exactly
-tangent surfaces with it.
+tangent surfaces with it. `scripts/check-mul-add.sh` fails CI on a call in
+`crates/*/src`.
 
 ### Dev-dependency cycles
 Never add `brepkit-operations` as a dev-dependency of `brepkit-topology` — this
@@ -613,6 +614,7 @@ cargo fmt --all                            # Format
 cargo build -p brepkit-wasm --target wasm32-unknown-unknown  # WASM
 ./scripts/check-boundaries.sh              # Verify layer deps
 ./scripts/check-doc-paths.sh               # Verify doc file paths still resolve
+./scripts/check-mul-add.sh                 # Verify library code has no f64::mul_add
 ./scripts/check-versions.sh                # Verify all crates share one version
 cargo publish --workspace --dry-run        # Verify the workspace is publishable
 ```

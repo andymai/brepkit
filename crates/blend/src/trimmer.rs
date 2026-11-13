@@ -538,9 +538,9 @@ fn trim_to_inside_corners(
         let p = project(ends[j]);
         let on_boundary = chords.iter().any(|&(a, b)| {
             let ab = sub2(b, a);
-            let len2 = ab.0.mul_add(ab.0, ab.1 * ab.1);
+            let len2 = ab.0.madd(ab.0, ab.1 * ab.1);
             let t = if len2 > 0.0 {
-                (sub2(p, a).0.mul_add(ab.0, sub2(p, a).1 * ab.1) / len2).clamp(0.0, 1.0)
+                (sub2(p, a).0.madd(ab.0, sub2(p, a).1 * ab.1) / len2).clamp(0.0, 1.0)
             } else {
                 0.0
             };
