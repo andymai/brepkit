@@ -1,0 +1,40 @@
+crates/algo/src/classifier/ray_cast.rs
+  s_385aefe07faf61::t_fedbaa8e94b54c 1856-1866,1872-1873
+  s_385aefe07faf61::t_964630cd0c9e77 1867-1871
+crates/algo/src/classifier/mod.rs
+  s_385aefe07faf61::t_fedbaa8e94b54c 108-132,178,220-221
+crates/math/src/nurbs/intersection/plane.rs
+  s_385aefe07faf61::t_6bc81996cdeead 509-515
+  s_385aefe07faf61::t_fedbaa8e94b54c 35-37,44-55,422-431,476-508,516-584
+  s_385aefe07faf61::t_d6d2677a5b42c0 38-43,432
+  s_385aefe07faf61::t_41029d16d72743 585
+crates/math/src/nurbs/projection.rs
+  s_385aefe07faf61::t_fedbaa8e94b54c 490-491
+crates/math/src/nurbs/intersection/tests.rs
+  s_385aefe07faf61::t_d6d2677a5b42c0 3145-3147
+  s_385aefe07faf61::t_98d70070c4e52f 2957,3056-3144,3148-3164
+crates/math/src/nurbs/surface.rs
+  s_385aefe07faf61::t_fedbaa8e94b54c 28-60,138-169
+crates/algo/src/pave_filler/phase_ff.rs
+  s_385aefe07faf61::t_fedbaa8e94b54c 5437,5441,5805,5821
+  s_385aefe07faf61::t_d6d2677a5b42c0 5820
+crates/algo/src/pave_filler/helpers.rs
+  s_385aefe07faf61::t_fedbaa8e94b54c 82-90
+  s_385aefe07faf61::t_964630cd0c9e77 91,93-94
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "92f4bc13300100544491e34fec59ae1f495026a5",
+  "prompts": {},
+  "sessions": {
+    "s_385aefe07faf61": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7ba532a8-609c-4534-9316-9e8d54346633",
+        "model": "claude-fable-5-2"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
