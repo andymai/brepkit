@@ -6,6 +6,7 @@
 #![allow(clippy::similar_names, clippy::suspicious_operation_groupings)]
 
 use crate::MathError;
+use crate::madd::Madd;
 use crate::nurbs::curve::NurbsCurve;
 use crate::nurbs::decompose::curve_to_bezier_segments;
 use crate::vec::{Point3, Vec3};
@@ -331,7 +332,7 @@ fn lower_hull(pts: &[(f64, f64)]) -> Vec<(f64, f64)> {
 
 /// 2D cross product for convex hull computation.
 fn cross_2d(o: (f64, f64), a: (f64, f64), b: (f64, f64)) -> f64 {
-    (a.0 - o.0).mul_add(b.1 - o.1, -((a.1 - o.1) * (b.0 - o.0)))
+    (a.0 - o.0).madd(b.1 - o.1, -((a.1 - o.1) * (b.0 - o.0)))
 }
 
 /// Find the first (or last) t where the hull crosses a horizontal line at `d`.
@@ -742,7 +743,7 @@ fn newton_refine(
         }
 
         let du1 = (j22 * r1 - j12 * r2) / det;
-        let du2 = (-j12).mul_add(r1, j11 * r2) / det;
+        let du2 = (-j12).madd(r1, j11 * r2) / det;
 
         u1 = (u1 + du1).clamp(a_lo, a_hi);
         u2 = (u2 + du2).clamp(b_lo, b_hi);

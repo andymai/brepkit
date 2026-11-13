@@ -1,5 +1,6 @@
 //! Curve-specific edge splitting at 3D intersection points.
 
+use brepkit_math::madd::Madd;
 use brepkit_math::vec::Point3;
 use brepkit_topology::edge::EdgeCurve;
 use brepkit_topology::face::FaceSurface;
@@ -167,7 +168,7 @@ pub(super) fn split_boundary_edges_at_3d_points(
                 f.project(split_3d)
             } else if let Some(dir) = closed_ring_dir {
                 brepkit_math::vec::Point2::new(
-                    std::f64::consts::TAU.mul_add(dir * t, edge.start_uv.x()),
+                    std::f64::consts::TAU.madd(dir * t, edge.start_uv.x()),
                     edge.start_uv.y(),
                 )
             } else if circle_iso_v_rim {
@@ -176,7 +177,7 @@ pub(super) fn split_boundary_edges_at_3d_points(
                 // would break phase coherence with the neighbouring
                 // boundary edges' unwrapped u.
                 brepkit_math::vec::Point2::new(
-                    (edge.end_uv.x() - edge.start_uv.x()).mul_add(t, edge.start_uv.x()),
+                    (edge.end_uv.x() - edge.start_uv.x()).madd(t, edge.start_uv.x()),
                     edge.start_uv.y(),
                 )
             } else if let (EdgeCurve::Line, FaceSurface::Cylinder(_)) = (&edge.curve_3d, surface) {
@@ -184,7 +185,7 @@ pub(super) fn split_boundary_edges_at_3d_points(
                 // seam copy keeps that copy's u, and only v runs along it.
                 brepkit_math::vec::Point2::new(
                     edge.start_uv.x(),
-                    (edge.end_uv.y() - edge.start_uv.y()).mul_add(t, edge.start_uv.y()),
+                    (edge.end_uv.y() - edge.start_uv.y()).madd(t, edge.start_uv.y()),
                 )
             } else if let (EdgeCurve::Line, FaceSurface::Cone(cone)) = (&edge.curve_3d, surface) {
                 // A line on a cone is a ruling at one u: a split on a seam
@@ -197,7 +198,7 @@ pub(super) fn split_boundary_edges_at_3d_points(
                 };
                 brepkit_math::vec::Point2::new(
                     u,
-                    (edge.end_uv.y() - edge.start_uv.y()).mul_add(t, edge.start_uv.y()),
+                    (edge.end_uv.y() - edge.start_uv.y()).madd(t, edge.start_uv.y()),
                 )
             } else {
                 project_point_on_surface(split_3d, surface, &[], None)
@@ -223,7 +224,7 @@ pub(super) fn split_boundary_edges_at_3d_points(
         // would close a period on the wrong side of its own start.
         let tail_end_uv = match closed_ring_dir {
             Some(dir) => brepkit_math::vec::Point2::new(
-                std::f64::consts::TAU.mul_add(dir, edge.start_uv.x()),
+                std::f64::consts::TAU.madd(dir, edge.start_uv.x()),
                 edge.start_uv.y(),
             ),
             None => edge.end_uv,
@@ -400,7 +401,7 @@ pub(super) fn find_splits_on_circle(
             };
             let mid = f64::midpoint(edge.start_uv.x(), edge.end_uv.x());
             let turns = ((mid - u_raw) / std::f64::consts::TAU).round();
-            let u = std::f64::consts::TAU.mul_add(turns, u_raw);
+            let u = std::f64::consts::TAU.madd(turns, u_raw);
             (u - edge.start_uv.x()) / u_span
         } else if matches!(surface, FaceSurface::Plane { .. } | FaceSurface::Torus(_))
             && !edge.forward
@@ -483,7 +484,7 @@ pub(super) fn find_splits_on_nurbs_section(
     let dom_span = dom1 - dom0;
     let eval_at = |t: f64| -> Point3 {
         edge.curve_3d
-            .evaluate_with_endpoints(t.mul_add(dom_span, dom0), edge.start_3d, edge.end_3d)
+            .evaluate_with_endpoints(t.madd(dom_span, dom0), edge.start_3d, edge.end_3d)
     };
     let samples: Vec<Point3> = (0..=n_samples)
         .map(|i| {
@@ -1057,7 +1058,7 @@ mod tests {
             // Forward, the rim runs down u; reversed, up.
             let sign: f64 = if forward { -1.0 } else { 1.0 };
             assert!(
-                (pieces[3].end_uv.x() - sign.mul_add(TAU, start_u)).abs() < 1e-9,
+                (pieces[3].end_uv.x() - sign.madd(TAU, start_u)).abs() < 1e-9,
                 "forward {forward}: the rim closes at {}",
                 pieces[3].end_uv.x()
             );

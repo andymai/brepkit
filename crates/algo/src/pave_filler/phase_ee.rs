@@ -5,6 +5,7 @@
 //! adds extra paves to both edges.
 
 use crate::ds::{GfaArena, Interference, Pave};
+use brepkit_math::madd::Madd;
 use brepkit_math::tolerance::Tolerance;
 use brepkit_math::vec::Point3;
 use brepkit_topology::Topology;
@@ -313,7 +314,7 @@ fn refine_on_curves(
             * (-1.0 / ((tb + hb).min(hi_b) - (tb - hb).max(lo_b)));
         let (a11, a12, a22) = (da.dot(da), da.dot(db), db.dot(db));
         let (g1, g2) = (da.dot(r), db.dot(r));
-        let det = a11.mul_add(a22, -(a12 * a12));
+        let det = a11.madd(a22, -(a12 * a12));
         if det.abs() <= 1e-12 * a11 * a22 {
             return None;
         }
@@ -362,7 +363,7 @@ fn line_circle_intersection(
             continue;
         }
         let s = ((pt - line.start_pos).dot(dir) / len_sq).clamp(0.0, 1.0);
-        let t_line = s.mul_add(line.t1 - line.t0, line.t0);
+        let t_line = s.madd(line.t1 - line.t0, line.t0);
 
         let triple = if circle_is_a {
             (t_arc, t_line, pt)
@@ -394,7 +395,7 @@ fn line_line_intersection(ea: &EdgeData, eb: &EdgeData, tol: Tolerance) -> Vec<(
     let d = da.dot(w);
     let e = db.dot(w);
 
-    let denom = a.mul_add(c, -(b * b));
+    let denom = a.madd(c, -(b * b));
 
     // Parallel lines — 1e-20 checks for mathematical degeneracy
     // (near-zero determinant), not geometric tolerance.
@@ -402,8 +403,8 @@ fn line_line_intersection(ea: &EdgeData, eb: &EdgeData, tol: Tolerance) -> Vec<(
         return Vec::new();
     }
 
-    let s = b.mul_add(e, -(c * d)) / denom;
-    let t = a.mul_add(e, -(b * d)) / denom;
+    let s = b.madd(e, -(c * d)) / denom;
+    let t = a.madd(e, -(b * d)) / denom;
 
     // Check if within edge domains [0, 1] for lines
     let range = -tol.linear..=1.0 + tol.linear;
@@ -422,8 +423,8 @@ fn line_line_intersection(ea: &EdgeData, eb: &EdgeData, tol: Tolerance) -> Vec<(
             f64::midpoint(pt_a.z(), pt_b.z()),
         );
         // Map s,t from [0,1] to actual edge parameter domains
-        let param_a = s.mul_add(ea.t1 - ea.t0, ea.t0);
-        let param_b = t.mul_add(eb.t1 - eb.t0, eb.t0);
+        let param_a = s.madd(ea.t1 - ea.t0, ea.t0);
+        let param_b = t.madd(eb.t1 - eb.t0, eb.t0);
         vec![(param_a, param_b, midpoint)]
     } else {
         Vec::new()
@@ -457,7 +458,7 @@ fn closest_segment_pair(
     let d = da.dot(w);
     let e = db.dot(w);
 
-    let denom = a.mul_add(c, -(b * b));
+    let denom = a.madd(c, -(b * b));
 
     // 1e-20 checks for mathematical degeneracy (near-zero determinant),
     // not geometric tolerance.
@@ -465,8 +466,8 @@ fn closest_segment_pair(
         // Parallel segments — use midpoints
         (0.5, 0.5)
     } else {
-        let s = (b.mul_add(e, -(c * d)) / denom).clamp(0.0, 1.0);
-        let t = (a.mul_add(e, -(b * d)) / denom).clamp(0.0, 1.0);
+        let s = (b.madd(e, -(c * d)) / denom).clamp(0.0, 1.0);
+        let t = (a.madd(e, -(b * d)) / denom).clamp(0.0, 1.0);
         (s, t)
     };
 
@@ -475,8 +476,8 @@ fn closest_segment_pair(
     let dist = (pt_a - pt_b).length();
 
     if dist <= tol {
-        let param_a = s.mul_add(seg_a[1].t - seg_a[0].t, seg_a[0].t);
-        let param_b = t.mul_add(seg_b[1].t - seg_b[0].t, seg_b[0].t);
+        let param_a = s.madd(seg_a[1].t - seg_a[0].t, seg_a[0].t);
+        let param_b = t.madd(seg_b[1].t - seg_b[0].t, seg_b[0].t);
         let midpoint = Point3::new(
             f64::midpoint(pt_a.x(), pt_b.x()),
             f64::midpoint(pt_a.y(), pt_b.y()),

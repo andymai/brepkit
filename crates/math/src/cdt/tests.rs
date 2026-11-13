@@ -1,6 +1,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::print_stderr)]
 
 use super::*;
+use crate::madd::Madd;
 
 #[test]
 fn cdt_simple_square() {
@@ -854,8 +855,8 @@ fn cdt_crossing_fan_stays_inside_the_recovery_budget() {
             // sweep, so no two chords share a midpoint and the whole family
             // avoids becoming a pencil through one point (whose crossings
             // would all weld onto a single vertex).
-            let left = Point2::new(-50.0, 80.0f64.mul_add(t, -40.0) + jitter);
-            let right = Point2::new(50.0, 80.0f64.mul_add(-(t * t), 40.0) - jitter);
+            let left = Point2::new(-50.0, 80.0f64.madd(t, -40.0) + jitter);
+            let right = Point2::new(50.0, 80.0f64.madd(-(t * t), 40.0) - jitter);
             (
                 cdt.insert_point(left).unwrap(),
                 cdt.insert_point(right).unwrap(),

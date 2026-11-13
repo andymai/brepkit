@@ -27,6 +27,7 @@ mod tool_edges;
 #[cfg(test)]
 mod tests;
 
+use brepkit_math::madd::Madd;
 use brepkit_math::tolerance::Tolerance;
 use brepkit_topology::Topology;
 use brepkit_topology::solid::SolidId;
@@ -352,7 +353,7 @@ fn pave_chords_across_conics(
             let f = 0.5 * (fa + fb);
             let middle = start + seg * f;
             if (arc_middle - middle).length() > WELD {
-                middles.push(((t1 - t0).mul_add(f, t0), middle));
+                middles.push(((t1 - t0).madd(f, t0), middle));
             }
         }
         for (t, at) in middles {
@@ -493,7 +494,7 @@ fn split_co_endpoint_sections(
                     start + (end - start) * f
                 } else {
                     edge.curve()
-                        .evaluate_with_endpoints((t1 - t0).mul_add(f, t0), start, end)
+                        .evaluate_with_endpoints((t1 - t0).madd(f, t0), start, end)
                 }
             })
             .collect();

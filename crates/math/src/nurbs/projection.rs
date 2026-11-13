@@ -9,6 +9,7 @@
 
 use crate::MathError;
 use crate::aabb::Aabb3;
+use crate::madd::Madd;
 use crate::nurbs::curve::NurbsCurve;
 use crate::nurbs::surface::NurbsSurface;
 use crate::vec::{Point3, Vec3};
@@ -161,7 +162,7 @@ fn curve_coarse_search(curve: &NurbsCurve, point: Point3) -> Vec<(f64, f64, f64)
             axis(Point3::y, point.y()),
             axis(Point3::z, point.z()),
         );
-        dx.mul_add(dx, dy.mul_add(dy, dz * dz))
+        dx.madd(dx, dy.madd(dy, dz * dz))
     };
     let mut order: Vec<(usize, f64)> = knots
         .windows(2)
@@ -181,7 +182,7 @@ fn curve_coarse_search(curve: &NurbsCurve, point: Point3) -> Vec<(f64, f64, f64)
         let samples: Vec<(f64, f64)> = (0..=n_samples)
             .map(|i| {
                 let t = i as f64 / n_samples as f64;
-                let u = t.mul_add(u_end - u_start, u_start).min(top);
+                let u = t.madd(u_end - u_start, u_start).min(top);
                 (u, (curve.evaluate(u) - point).length_squared())
             })
             .collect();
@@ -685,7 +686,7 @@ fn gauss_newton_step(
 
     // Use a relative threshold so the singularity test stays meaningful
     // near surface poles / cone apex where both derivatives shrink to zero.
-    let det = j00.mul_add(j11, -(j01 * j01));
+    let det = j00.madd(j11, -(j01 * j01));
     if det.abs() < (j00 + j11).max(1e-30) * 1e-12 {
         // Near-singular: Tikhonov (Levenberg–Marquardt) regularisation
         // biases the step toward zero rather than blowing up near poles
@@ -693,7 +694,7 @@ fn gauss_newton_step(
         let lambda = (j00 + j11).max(1e-10) * 1e-4;
         let j00r = j00 + lambda;
         let j11r = j11 + lambda;
-        let det_r = j00r.mul_add(j11r, -(j01 * j01));
+        let det_r = j00r.madd(j11r, -(j01 * j01));
         if det_r.abs() < 1e-30 {
             if j00 > j11 {
                 Some((rhs0 / j00.max(1e-30), 0.0))
@@ -704,14 +705,14 @@ fn gauss_newton_step(
             }
         } else {
             Some((
-                rhs0.mul_add(j11r, -(rhs1 * j01)) / det_r,
-                j00r.mul_add(rhs1, -(j01 * rhs0)) / det_r,
+                rhs0.madd(j11r, -(rhs1 * j01)) / det_r,
+                j00r.madd(rhs1, -(j01 * rhs0)) / det_r,
             ))
         }
     } else {
         Some((
-            rhs0.mul_add(j11, -(rhs1 * j01)) / det,
-            j00.mul_add(rhs1, -(j01 * rhs0)) / det,
+            rhs0.madd(j11, -(rhs1 * j01)) / det,
+            j00.madd(rhs1, -(j01 * rhs0)) / det,
         ))
     }
 }
@@ -734,9 +735,9 @@ impl SpanPatch {
     fn nearest_sample(&self, surface: &NurbsSurface, point: Point3) -> (f64, f64) {
         let mut best = (f64::INFINITY, self.u.0, self.v.0);
         for fu in [0.0_f64, 0.5, 1.0] {
-            let u = fu.mul_add(self.u.1 - self.u.0, self.u.0);
+            let u = fu.madd(self.u.1 - self.u.0, self.u.0);
             for fv in [0.0_f64, 0.5, 1.0] {
-                let v = fv.mul_add(self.v.1 - self.v.0, self.v.0);
+                let v = fv.madd(self.v.1 - self.v.0, self.v.0);
                 let d = (surface.evaluate(u, v) - point).length_squared();
                 if d < best.0 {
                     best = (d, u, v);

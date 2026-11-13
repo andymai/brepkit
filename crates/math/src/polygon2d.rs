@@ -1,5 +1,6 @@
 //! 2D polygon operations: clipping, filleting, chamfering, and segment detection.
 
+use crate::madd::Madd;
 use crate::vec::Point2;
 
 /// Cross product of vectors (b-a) and (c-a).
@@ -154,8 +155,8 @@ pub fn fillet_polygon_2d(polygon: &[Point2], radius: f64) -> Vec<Point2> {
         // Generate arc points from t1 to t2
         for k in 0..=arc_segments {
             let t = k as f64 / arc_segments as f64;
-            let x = t2.x().mul_add(t, t1.x() * (1.0 - t));
-            let y = t2.y().mul_add(t, t1.y() * (1.0 - t));
+            let x = t2.x().madd(t, t1.x() * (1.0 - t));
+            let y = t2.y().madd(t, t1.y() * (1.0 - t));
 
             // Push point toward the arc center for a circular approximation
             let mid_x = f64::midpoint(t1.x(), t2.x());

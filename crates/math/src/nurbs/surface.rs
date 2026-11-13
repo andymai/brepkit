@@ -2,6 +2,7 @@
 
 use crate::MathError;
 use crate::aabb::Aabb3;
+use crate::madd::Madd;
 use crate::nurbs::basis;
 use crate::nurbs::evaluator::SurfaceEvaluator;
 use crate::vec::{Point3, Vec3};
@@ -154,10 +155,10 @@ impl NurbsSurface {
             let (u_min, u_max) = self.domain_u();
             let (v_min, v_max) = self.domain_v();
             let us: Vec<f64> = (0..=n)
-                .map(|i| (i as f64 / n as f64).mul_add(u_max - u_min, u_min))
+                .map(|i| (i as f64 / n as f64).madd(u_max - u_min, u_min))
                 .collect();
             let vs: Vec<f64> = (0..=n)
-                .map(|j| (j as f64 / n as f64).mul_add(v_max - v_min, v_min))
+                .map(|j| (j as f64 / n as f64).madd(v_max - v_min, v_min))
                 .collect();
             let points: Vec<Vec<Point3>> = us
                 .iter()

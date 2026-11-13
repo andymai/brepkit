@@ -5,6 +5,7 @@
 //! surfaces are represented as rational NURBS (degree-2 in the circular
 //! direction), which exactly represent circular arcs.
 
+use brepkit_math::madd::Madd;
 use std::f64::consts::{FRAC_PI_2, PI};
 
 use brepkit_math::nurbs::curve::NurbsCurve;
@@ -954,7 +955,7 @@ fn try_analytic_full_revolution(
             let (t0, t1) = curve.domain_with_endpoints(ns, ne);
             let mut pts: Vec<Point3> = [0.25, 0.5, 0.75]
                 .iter()
-                .map(|f| curve.evaluate_with_endpoints((t1 - t0).mul_add(*f, t0), ns, ne))
+                .map(|f| curve.evaluate_with_endpoints((t1 - t0).madd(*f, t0), ns, ne))
                 .collect();
             if !oe.is_forward() {
                 pts.reverse();
@@ -1019,7 +1020,7 @@ fn try_analytic_full_revolution(
     for i in 0..pts2.len() {
         let (x0, y0) = pts2[i];
         let (x1, y1) = pts2[(i + 1) % pts2.len()];
-        area2 += x0.mul_add(y1, -(x1 * y0));
+        area2 += x0.madd(y1, -(x1 * y0));
         scale = scale.max(x0.abs()).max(y0.abs());
     }
     if area2.abs() <= scale * scale * 1e-9 {
@@ -1524,7 +1525,7 @@ fn traversal_samples(
             // first put in the edge's own order.
             let mut interior: Vec<Point3> = [0.25, 0.5, 0.75]
                 .iter()
-                .map(|f| curve.evaluate_with_endpoints((t1 - t0).mul_add(*f, t0), ns, ne))
+                .map(|f| curve.evaluate_with_endpoints((t1 - t0).madd(*f, t0), ns, ne))
                 .collect();
             let head = curve.evaluate_with_endpoints(t0, ns, ne);
             if (head - ns).length() > (head - ne).length() {
@@ -1585,7 +1586,7 @@ fn profile_chart_is_ccw(
     for i in 0..chart.len() {
         let (x0, y0) = chart[i];
         let (x1, y1) = chart[(i + 1) % chart.len()];
-        area2 += x0.mul_add(y1, -(x1 * y0));
+        area2 += x0.madd(y1, -(x1 * y0));
         scale = scale.max(x0.abs()).max(y0.abs());
     }
     if area2.abs() <= scale * scale * 1e-9 {
@@ -1634,13 +1635,13 @@ pub fn revolve(
     }
     let axis = axis_direction.normalize()?;
 
-    if angle_radians <= 0.0 || angle_radians > 2.0f64.mul_add(PI, tol.angular) {
+    if angle_radians <= 0.0 || angle_radians > 2.0f64.madd(PI, tol.angular) {
         return Err(crate::OperationsError::InvalidInput {
             reason: format!("revolve angle must be in (0, 2π], got {angle_radians}"),
         });
     }
 
-    let is_full = angle_radians >= 2.0f64.mul_add(PI, -tol.angular);
+    let is_full = angle_radians >= 2.0f64.madd(PI, -tol.angular);
     let angle = if is_full { 2.0 * PI } else { angle_radians };
 
     let face_data = topo.face(face)?;
@@ -2506,7 +2507,7 @@ mod tests {
 
         // One periodic cone wall + analytic planar disc caps ⇒ exact volume.
         let vol = crate::measure::solid_volume(&topo, solid, 0.01).unwrap();
-        let expected = PI * h / 3.0 * r_bot.mul_add(r_bot, r_bot.mul_add(r_top, r_top * r_top));
+        let expected = PI * h / 3.0 * r_bot.madd(r_bot, r_bot.madd(r_top, r_top * r_top));
         assert!(
             (vol - expected).abs() / expected < 1e-9,
             "frustum volume {expected}, got {vol}"

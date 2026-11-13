@@ -4,6 +4,7 @@
 //! with the arena-based patterns used in the topology crate.
 
 use crate::aabb::Aabb3;
+use crate::madd::Madd;
 use crate::vec::Point3;
 
 /// A node in the flat-array BVH.
@@ -299,7 +300,7 @@ fn build_recursive(
             left_aabb = left_aabb.union(aabbs[indices[split - 1]].1);
             let right_aabb = suffix[split];
 
-            let cost = (split as f64).mul_add(
+            let cost = (split as f64).madd(
                 left_aabb.surface_area(),
                 (n - split) as f64 * right_aabb.surface_area(),
             ) / parent_area;

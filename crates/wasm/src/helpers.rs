@@ -6,6 +6,7 @@
     clippy::cast_precision_loss
 )]
 
+use brepkit_math::madd::Madd;
 use brepkit_math::mat::Mat4;
 use brepkit_math::vec::{Point2, Point3, Vec3};
 use brepkit_operations::boolean::BooleanOp;
@@ -450,7 +451,7 @@ fn least_extent(
         let curve = edge.curve();
         let (t0, t1) = curve.domain_with_endpoints(start, end);
         points.extend((0..=SAMPLES).map(|k| {
-            let t = (t1 - t0).mul_add(f64::from(k) / f64::from(SAMPLES), t0);
+            let t = (t1 - t0).madd(f64::from(k) / f64::from(SAMPLES), t0);
             curve.evaluate_with_endpoints(t, start, end)
         }));
     }
@@ -864,6 +865,7 @@ pub fn segments_intersect_2d(a1: Point2, a2: Point2, b1: Point2, b2: Point2) -> 
 #[cfg(test)]
 mod fillet_tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
+    use brepkit_math::madd::Madd;
 
     use std::collections::HashSet;
 
@@ -1197,7 +1199,7 @@ mod fillet_tests {
                 let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
                 for k in 1..8 {
                     let p = edge.curve().evaluate_with_endpoints(
-                        (t1 - t0).mul_add(f64::from(k) / 8.0, t0),
+                        (t1 - t0).madd(f64::from(k) / 8.0, t0),
                         a,
                         b,
                     );
@@ -1220,11 +1222,7 @@ mod fillet_tests {
         use std::f64::consts::FRAC_PI_4;
 
         // Simpson's rule over the step's square, a polynomial of degree six.
-        let stepped = |t: f64| {
-            3.0_f64
-                .mul_add(t * t * 2.0_f64.mul_add(-t, 3.0), 2.0)
-                .powi(2)
-        };
+        let stepped = |t: f64| 3.0_f64.madd(t * t * 2.0_f64.madd(-t, 3.0), 2.0).powi(2);
         let steps = 600;
         let simpson: f64 = (0..=steps)
             .map(|k| {
@@ -1559,7 +1557,7 @@ mod fillet_tests {
         let result = try_fillet(&mut topo, cyl, &top, 2.0).expect("rim fillet");
         let vol = brepkit_operations::measure::solid_volume(&topo, result, 0.001).unwrap();
         let section = (1.0 - PI / 4.0) * 4.0;
-        let centroid = 2.0 * 3.0f64.mul_add(-PI, 10.0) / (3.0 * (4.0 - PI));
+        let centroid = 2.0 * 3.0f64.madd(-PI, 10.0) / (3.0 * (4.0 - PI));
         let truth = PI * 100.0 * 20.0 - 2.0 * PI * (10.0 - centroid) * section;
         assert!((vol - truth).abs() < 1e-6 * truth, "{vol} vs {truth}");
     }

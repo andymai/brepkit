@@ -1,5 +1,6 @@
 //! Face and solid surface area computation.
 
+use brepkit_math::madd::Madd;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
 use brepkit_topology::face::{FaceId, FaceSurface};
@@ -489,7 +490,7 @@ fn torus_face_uv_area(
         let ((sin_u, cos_u), (sin_v, cos_v)) = (u.sin_cos(), v.sin_cos());
         ((ex * cos_u + ey * sin_u) * -sin_v + ez * cos_v) * (1.0 / small)
     };
-    let weight = |v: f64| small * small.mul_add(v.cos(), big);
+    let weight = |v: f64| small * small.madd(v.cos(), big);
     let metric = RevolutionMetric {
         project: &project,
         grad_v: &grad_v,
@@ -1004,12 +1005,12 @@ fn newell_area(positions: &[Point3]) -> f64 {
         let j = (i + 1) % n;
         let vi = positions[i];
         let vj = positions[j];
-        sx = vi.z().mul_add(-vj.y(), vi.y().mul_add(vj.z(), sx));
-        sy = vi.x().mul_add(-vj.z(), vi.z().mul_add(vj.x(), sy));
-        sz = vi.y().mul_add(-vj.x(), vi.x().mul_add(vj.y(), sz));
+        sx = vi.z().madd(-vj.y(), vi.y().madd(vj.z(), sx));
+        sy = vi.x().madd(-vj.z(), vi.z().madd(vj.x(), sy));
+        sz = vi.y().madd(-vj.x(), vi.x().madd(vj.y(), sz));
     }
 
-    0.5 * sz.mul_add(sz, sx.mul_add(sx, sy * sy)).sqrt()
+    0.5 * sz.madd(sz, sx.madd(sx, sy * sy)).sqrt()
 }
 
 /// Newell's normal of a closed polygon: twice its vector area.

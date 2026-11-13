@@ -4,6 +4,7 @@
 //! and solid assembly. Supports constant and variable radius fillets on
 //! planar face pairs (v1).
 
+use brepkit_math::madd::Madd;
 use std::collections::HashSet;
 
 use brepkit_math::aabb::Aabb3;
@@ -2284,7 +2285,7 @@ fn edge_lies_on(topo: &Topology, edge: &Edge, on: &Edge, tol: f64) -> Result<boo
     for k in 0..=count {
         let at = edge
             .curve()
-            .evaluate_with_endpoints(f64::from(k).mul_add(step, t0), a, b);
+            .evaluate_with_endpoints(f64::from(k).madd(step, t0), a, b);
         let off = match on.curve() {
             EdgeCurve::Line => {
                 let chord = q - p;
@@ -2303,7 +2304,7 @@ fn edge_lies_on(topo: &Topology, edge: &Edge, on: &Edge, tol: f64) -> Result<boo
         };
         worst = worst.max(off);
     }
-    let bound = (0.5 * speed).mul_add(step.abs(), worst);
+    let bound = (0.5 * speed).madd(step.abs(), worst);
     log::debug!("edge lies within {bound:e} of its neighbour ({worst:e} at its samples)");
     Ok(bound <= tol)
 }
@@ -2345,7 +2346,7 @@ fn speed_bound(curve: &EdgeCurve, a: Point3, b: Point3) -> Option<f64> {
                 if span <= 0.0 {
                     continue;
                 }
-                let lift = most.mul_add(
+                let lift = most.madd(
                     (points[j] - points[j - 1]).length(),
                     (weights[j] - weights[j - 1]).abs() * spread,
                 );
@@ -3436,8 +3437,8 @@ fn cylinder_meets_cap(
         let mut on = true;
         'check: for pair in lengths.windows(2) {
             for quarter in [0.25, 0.5, 0.75] {
-                let along = (pair[1] - pair[0]).mul_add(quarter, pair[0]) / total;
-                if off(curve.evaluate((t1 - t0).mul_add(along, t0)))? > tol {
+                let along = (pair[1] - pair[0]).madd(quarter, pair[0]) / total;
+                if off(curve.evaluate((t1 - t0).madd(along, t0)))? > tol {
                     on = false;
                     break 'check;
                 }
@@ -4000,13 +4001,13 @@ fn cap_edge_reaches_triangle(
 fn path_within_of_triangle(path: &[(f64, f64)], triangle: [(f64, f64); 3], margin: f64) -> bool {
     let to_segment = |p: (f64, f64), a: (f64, f64), b: (f64, f64)| {
         let (dx, dy) = (b.0 - a.0, b.1 - a.1);
-        let len2 = dx.mul_add(dx, dy * dy);
+        let len2 = dx.madd(dx, dy * dy);
         let t = if len2 <= 0.0 {
             0.0
         } else {
-            ((p.0 - a.0).mul_add(dx, (p.1 - a.1) * dy) / len2).clamp(0.0, 1.0)
+            ((p.0 - a.0).madd(dx, (p.1 - a.1) * dy) / len2).clamp(0.0, 1.0)
         };
-        (p.0 - t.mul_add(dx, a.0)).hypot(p.1 - t.mul_add(dy, a.1))
+        (p.0 - t.madd(dx, a.0)).hypot(p.1 - t.madd(dy, a.1))
     };
     let sides = [
         (triangle[0], triangle[1]),
@@ -4421,8 +4422,7 @@ fn removed_material_bounds(topo: &Topology, stripe: &Stripe) -> Result<Aabb3, Bl
         points.extend(nurbs_curve_hull(contact));
         let (t0, t1) = contact.domain();
         for k in 0..=CONTACT_SAMPLES {
-            let c =
-                contact.evaluate((t1 - t0).mul_add(f64::from(k) / f64::from(CONTACT_SAMPLES), t0));
+            let c = contact.evaluate((t1 - t0).madd(f64::from(k) / f64::from(CONTACT_SAMPLES), t0));
             let mut near = f64::INFINITY;
             for &edge_id in stripe.spine.edges() {
                 near = near.min(distance_to_edge(topo, edge_id, c)?);
@@ -6181,7 +6181,7 @@ mod tests {
             for contact in [&result.stripe.contact1, &result.stripe.contact2] {
                 let (t0, t1) = contact.domain();
                 for k in 0..=8 {
-                    let p = contact.evaluate((t1 - t0).mul_add(f64::from(k) / 8.0, t0));
+                    let p = contact.evaluate((t1 - t0).madd(f64::from(k) / 8.0, t0));
                     let on_plate = p.z().abs() < 1e-6 && (5.9..7.1).contains(&p.x());
                     let on_wall = (p.x() - 5.0).abs() < 1e-6 && (0.9..2.1).contains(&p.z());
                     assert!(on_plate || on_wall, "a contact at {p:?}");

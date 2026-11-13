@@ -12,6 +12,7 @@
 //!   cross-section and support boundaries.
 //! - **None** — 0-1 stripes; no corner needed.
 
+use brepkit_math::madd::Madd;
 use brepkit_math::nurbs::curve::NurbsCurve;
 use brepkit_math::nurbs::knot_ops::curve_split;
 use brepkit_math::nurbs::surface::NurbsSurface;
@@ -423,7 +424,7 @@ fn contacts_crossing(topo: &Topology, a: EdgeId, b: EdgeId, guess: Point3) -> Op
         let db = (curve_b(t + hb) - curve_b(t - hb)) * (-0.5 / hb);
         // Least squares on `da * ds + db * dt = -gap`.
         let (m11, m12, m22) = (da.dot(da), da.dot(db), db.dot(db));
-        let det = m11.mul_add(m22, -(m12 * m12));
+        let det = m11.madd(m22, -(m12 * m12));
         if det.abs() <= 1e-24 * (m11 * m22).max(1e-300) {
             return None;
         }
@@ -537,12 +538,12 @@ fn crossing_rounds_ellipse(
     let (da, db) = (a.axis().normalize().ok()?, b.axis().normalize().ok()?);
     let w = a.origin() - b.origin();
     let (cos, along_a, along_b) = (da.dot(db), da.dot(w), db.dot(w));
-    let sin2 = cos.mul_add(-cos, 1.0);
+    let sin2 = cos.madd(-cos, 1.0);
     if sin2 <= 1e-12 {
         return None;
     }
-    let pa = a.origin() + da * (cos.mul_add(along_b, -along_a) / sin2);
-    let pb = b.origin() + db * (cos.mul_add(-along_a, along_b) / sin2);
+    let pa = a.origin() + da * (cos.madd(along_b, -along_a) / sin2);
+    let pb = b.origin() + db * (cos.madd(-along_a, along_b) / sin2);
     if (pa - pb).length() > tol {
         return None;
     }
@@ -609,8 +610,8 @@ fn fitted_crease(
         let mut on = true;
         'check: for pair in lengths.windows(2) {
             for quarter in [0.25, 0.5, 0.75] {
-                let along = (pair[1] - pair[0]).mul_add(quarter, pair[0]) / total;
-                if off(curve.evaluate((t1 - t0).mul_add(along, t0)))? > tol {
+                let along = (pair[1] - pair[0]).madd(quarter, pair[0]) / total;
+                if off(curve.evaluate((t1 - t0).madd(along, t0)))? > tol {
                     on = false;
                     break 'check;
                 }

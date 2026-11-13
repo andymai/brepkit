@@ -1,6 +1,7 @@
 //! NURBS adaptive quadtree tessellation.
 
 use brepkit_math::det_hash::DetHashMap;
+use brepkit_math::madd::Madd;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
 
@@ -221,8 +222,8 @@ where
         };
         let points: Vec<Point3> = (0..=pieces)
             .map(|k| {
-                let f = (1.0 - 2.0 * INSET).mul_add(f64::from(k) / f64::from(pieces), INSET);
-                curve.evaluate_with_endpoints((t1 - t0).mul_add(f, t0), sp, ep)
+                let f = (1.0 - 2.0 * INSET).madd(f64::from(k) / f64::from(pieces), INSET);
+                curve.evaluate_with_endpoints((t1 - t0).madd(f, t0), sp, ep)
             })
             .collect();
         // An edge collapsed to one point has no `u` of its own.
@@ -475,8 +476,8 @@ fn cell_refinement_error(
             p_mid
         } else {
             surface.evaluate(
-                (u_max - u_min).mul_add(a, u_min),
-                (v_max - v_min).mul_add(b, v_min),
+                (u_max - u_min).madd(a, u_min),
+                (v_max - v_min).madd(b, v_min),
             )
         }
     });
@@ -1121,7 +1122,7 @@ pub(super) fn untwisted_grid(
         for i in 0..n_u {
             for j in 0..n_v {
                 #[allow(clippy::cast_precision_loss)]
-                let corner = (du.mul_add(i as f64, u_lo), dv.mul_add(j as f64, v_lo));
+                let corner = (du.madd(i as f64, u_lo), dv.madd(j as f64, v_lo));
                 for (stray, uv) in probe_strays(at, corner, (du, dv)) {
                     worst = worst.max(stray);
                     if stray > half {
@@ -1146,12 +1147,8 @@ pub(super) fn untwisted_grid(
         };
         let (i, j) = (cell(u, u_lo, du, n_u), cell(v, v_lo, dv, n_v));
         #[allow(clippy::cast_precision_loss)]
-        let corner = |a: usize, b: usize| {
-            at(
-                du.mul_add((i + a) as f64, u_lo),
-                dv.mul_add((j + b) as f64, v_lo),
-            )
-        };
+        let corner =
+            |a: usize, b: usize| at(du.madd((i + a) as f64, u_lo), dv.madd((j + b) as f64, v_lo));
         split_stray(
             [corner(0, 0), corner(1, 0), corner(0, 1), corner(1, 1)],
             &[at(u, v)],
@@ -1288,7 +1285,7 @@ pub(super) fn cell_twist(
     (u0, v0): (f64, f64),
     (du, dv): (f64, f64),
 ) -> f64 {
-    let corner = |a: f64, b: f64| at(du.mul_add(a, u0), dv.mul_add(b, v0));
+    let corner = |a: f64, b: f64| at(du.madd(a, u0), dv.madd(b, v0));
     let corners = [
         corner(0.0, 0.0),
         corner(1.0, 0.0),
@@ -1306,7 +1303,7 @@ fn probe_strays(
     (u0, v0): (f64, f64),
     (du, dv): (f64, f64),
 ) -> [(f64, (f64, f64)); 5] {
-    let uv = |a: f64, b: f64| (du.mul_add(a, u0), dv.mul_add(b, v0));
+    let uv = |a: f64, b: f64| (du.madd(a, u0), dv.madd(b, v0));
     let corner = |a: f64, b: f64| {
         let (u, v) = uv(a, b);
         at(u, v)

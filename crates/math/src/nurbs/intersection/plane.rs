@@ -1,6 +1,7 @@
 //! Plane-NURBS surface intersection.
 
 use crate::MathError;
+use crate::madd::Madd;
 use crate::nurbs::curve::NurbsCurve;
 use crate::nurbs::projection::{project_point_to_surface, project_point_to_surface_from};
 use crate::nurbs::surface::NurbsSurface;
@@ -122,8 +123,8 @@ pub fn intersect_plane_nurbs(
                         _ if j + 1 == n => (v_max, Some(Pin::V)),
                         _ => (v0, None),
                     };
-                    let t = edge_root(|t| at(t.mul_add(u_step, u0), v), on_plane, da, db);
-                    let u = t.mul_add(u_step, u0);
+                    let t = edge_root(|t| at(t.madd(u_step, u0), v), on_plane, da, db);
+                    let u = t.madd(u_step, u0);
                     horiz[i][j] = Some(crossings.len());
                     crossings.push((u, v));
                     pinned.push(pin);
@@ -137,8 +138,8 @@ pub fn intersect_plane_nurbs(
                         _ if i + 1 == n => (u_max, Some(Pin::U)),
                         _ => (u0, None),
                     };
-                    let t = edge_root(|t| at(u, t.mul_add(v_step, v0)), on_plane, da, db);
-                    let v = t.mul_add(v_step, v0);
+                    let t = edge_root(|t| at(u, t.madd(v_step, v0)), on_plane, da, db);
+                    let v = t.madd(v_step, v0);
                     vert[i][j] = Some(crossings.len());
                     crossings.push((u, v));
                     pinned.push(pin);
@@ -636,7 +637,7 @@ fn tiny_loops(
     // Along `from + t·dir`, where the distance first loses the sign it
     // has at `from`; `None` when the ray leaves the patch before that.
     let crossing = |from: (f64, f64), inner: f64, dir: (f64, f64), start: f64| {
-        let along = |t: f64| (dir.0.mul_add(t, from.0), dir.1.mul_add(t, from.1));
+        let along = |t: f64| (dir.0.madd(t, from.0), dir.1.madd(t, from.1));
         let on_patch =
             |(u, v): (f64, f64)| (u_lo..=u_hi).contains(&u) && (v_lo..=v_hi).contains(&v);
         let (mut lo, mut hi) = (0.0, start);
@@ -731,15 +732,15 @@ fn tiny_loops(
                     let (mut du, mut dv) = (0.0, 0.0);
                     for (lambda, e) in [b.major, b.minor] {
                         if lambda * near > 0.0 {
-                            let s = b.grad.0.mul_add(e.0, b.grad.1 * e.1) / lambda;
-                            (du, dv) = (s.mul_add(e.0, du), s.mul_add(e.1, dv));
+                            let s = b.grad.0.madd(e.0, b.grad.1 * e.1) / lambda;
+                            (du, dv) = (s.madd(e.0, du), s.madd(e.1, dv));
                         }
                     }
                     let mut t = 1.0;
                     let moved = loop {
                         let q = (
-                            (t * du).mul_add(-wide, u).clamp(u_lo, u_hi),
-                            (t * dv).mul_add(-tall, v).clamp(v_lo, v_hi),
+                            (t * du).madd(-wide, u).clamp(u_lo, u_hi),
+                            (t * dv).madd(-tall, v).clamp(v_lo, v_hi),
                         );
                         let h = height(q);
                         if h < best {
@@ -878,13 +879,13 @@ fn beside(
     curve.windows(2).any(|pair| {
         let ((ax, ay), (bx, by)) = (from(&pair[0]), from(&pair[1]));
         let (dx, dy) = (bx - ax, by - ay);
-        let length = dx.mul_add(dx, dy * dy);
+        let length = dx.madd(dx, dy * dy);
         let t = if length > 0.0 {
-            (-ax.mul_add(dx, ay * dy) / length).clamp(0.0, 1.0)
+            (-ax.madd(dx, ay * dy) / length).clamp(0.0, 1.0)
         } else {
             0.0
         };
-        t.mul_add(dx, ax).hypot(t.mul_add(dy, ay)) <= reach
+        t.madd(dx, ax).hypot(t.madd(dy, ay)) <= reach
     })
 }
 
@@ -939,9 +940,9 @@ fn trace_valley(
             if lambda == 0.0 {
                 return None;
             }
-            let s = grad.0.mul_add(e.0, grad.1 * e.1) / lambda;
-            u = (s * e.0).mul_add(-wide, u).clamp(u_lo, u_hi);
-            v = (s * e.1).mul_add(-tall, v).clamp(v_lo, v_hi);
+            let s = grad.0.madd(e.0, grad.1 * e.1) / lambda;
+            u = (s * e.0).madd(-wide, u).clamp(u_lo, u_hi);
+            v = (s * e.1).madd(-tall, v).clamp(v_lo, v_hi);
             if stalled(s.abs(), last, step) {
                 settled = true;
                 break;
@@ -983,10 +984,7 @@ fn trace_valley(
             if t <= 1e-9 * step {
                 return Some(false);
             }
-            let mut ahead = (
-                (t * dir.0).mul_add(wide, p.0),
-                (t * dir.1).mul_add(tall, p.1),
-            );
+            let mut ahead = ((t * dir.0).madd(wide, p.0), (t * dir.1).madd(tall, p.1));
             let pin = if t < h && across <= along {
                 ahead.0 = if dir.0 > 0.0 { u_hi } else { u_lo };
                 Some(Pin::U)
@@ -1004,8 +1002,8 @@ fn trace_valley(
                 Some(next) => Some((next, pin.is_some())),
                 None if pin.is_some() => {
                     let whole = (
-                        (h * dir.0).mul_add(wide, p.0).clamp(u_lo, u_hi),
-                        (h * dir.1).mul_add(tall, p.1).clamp(v_lo, v_hi),
+                        (h * dir.0).madd(wide, p.0).clamp(u_lo, u_hi),
+                        (h * dir.1).madd(tall, p.1).clamp(v_lo, v_hi),
                     );
                     settle(whole, None)
                         .filter(|&next| apart(next, p) > 1e-3 * h)
@@ -1025,12 +1023,12 @@ fn trace_valley(
                 return Some(false);
             }
             let e = flat(next);
-            let e = if e.0.mul_add(dir.0, e.1 * dir.1) >= 0.0 {
+            let e = if e.0.madd(dir.0, e.1 * dir.1) >= 0.0 {
                 e
             } else {
                 (-e.0, -e.1)
             };
-            let turn = e.0.mul_add(dir.0, e.1 * dir.1).clamp(-1.0, 1.0).acos();
+            let turn = e.0.madd(dir.0, e.1 * dir.1).clamp(-1.0, 1.0).acos();
             if turn > MAX_VALLEY_TURN {
                 h = (0.5 * h).max(1e-4 * step);
             } else if turn < 0.25 * MAX_VALLEY_TURN {
@@ -1157,7 +1155,7 @@ fn self_crossings(
     // Curving both ways, not only along a valley, by the ratio of the
     // eigenvalues' product to their squares' sum.
     let saddle = |(fuu, fuv, fvv): (f64, f64, f64)| {
-        -fuu.mul_add(fvv, -(fuv * fuv)) > 1e-6 * fuu.mul_add(fuu, fvv.mul_add(fvv, 2.0 * fuv * fuv))
+        -fuu.madd(fvv, -(fuv * fuv)) > 1e-6 * fuu.madd(fuu, fvv.madd(fvv, 2.0 * fuv * fuv))
     };
     let mut found: Vec<(f64, f64)> = Vec::new();
     for i in 1..n - 1 {
@@ -1170,22 +1168,22 @@ fn self_crossings(
             // Differences in steps, and the stationary point they model.
             let fu = 0.5 * (f(i + 1, j) - f(i - 1, j));
             let fv = 0.5 * (f(i, j + 1) - f(i, j - 1));
-            let fuu = f(i, j).mul_add(-2.0, f(i + 1, j) + f(i - 1, j));
-            let fvv = f(i, j).mul_add(-2.0, f(i, j + 1) + f(i, j - 1));
+            let fuu = f(i, j).madd(-2.0, f(i + 1, j) + f(i - 1, j));
+            let fvv = f(i, j).madd(-2.0, f(i, j + 1) + f(i, j - 1));
             let fuv =
                 0.25 * (f(i + 1, j + 1) - f(i + 1, j - 1) - f(i - 1, j + 1) + f(i - 1, j - 1));
             if !saddle((fuu, fuv, fvv)) {
                 continue;
             }
-            let det = fuu.mul_add(fvv, -(fuv * fuv));
-            let du = fuv.mul_add(fv, -(fvv * fu)) / det;
-            let dv = fuv.mul_add(fu, -(fuu * fv)) / det;
+            let det = fuu.madd(fvv, -(fuv * fuv));
+            let du = fuv.madd(fv, -(fvv * fu)) / det;
+            let dv = fuv.madd(fu, -(fuu * fv)) / det;
             if du.abs() > 1.5 || dv.abs() > 1.5 {
                 continue;
             }
             let seed = (
-                du.mul_add(u_step, u_min + i as f64 * u_step),
-                dv.mul_add(v_step, v_min + j as f64 * v_step),
+                du.madd(u_step, u_min + i as f64 * u_step),
+                dv.madd(v_step, v_min + j as f64 * v_step),
             );
             let Some(Extremum {
                 at: (u, v),
@@ -1316,12 +1314,12 @@ fn extremum(surface: &NurbsSurface, normal: Vec3, (mut u, mut v): (f64, f64)) ->
         let (mut du, mut dv) = (0.0, 0.0);
         for (lambda, e) in [b.major, b.minor] {
             if lambda.abs() > 1e-3 * b.major.0.abs() {
-                let s = b.grad.0.mul_add(e.0, b.grad.1 * e.1) / lambda;
-                (du, dv) = (s.mul_add(e.0, du), s.mul_add(e.1, dv));
+                let s = b.grad.0.madd(e.0, b.grad.1 * e.1) / lambda;
+                (du, dv) = (s.madd(e.0, du), s.madd(e.1, dv));
             }
         }
-        u = du.mul_add(-(u_hi - u_lo), u).clamp(u_lo, u_hi);
-        v = dv.mul_add(-(v_hi - v_lo), v).clamp(v_lo, v_hi);
+        u = du.madd(-(u_hi - u_lo), u).clamp(u_lo, u_hi);
+        v = dv.madd(-(v_hi - v_lo), v).clamp(v_lo, v_hi);
         let size = du.abs().max(dv.abs());
         let settled = stalled(size, last, 1.0);
         last = size;
@@ -1397,7 +1395,7 @@ pub(super) fn refine_plane_surface_point(
             _ => plane_normal.dot(dv),
         };
 
-        let grad_len_sq = grad_u.mul_add(grad_u, grad_v * grad_v);
+        let grad_len_sq = grad_u.madd(grad_u, grad_v * grad_v);
         let rounding = f64::EPSILON * plane_normal.length() * (du.length() + dv.length());
         if grad_len_sq <= rounding * rounding {
             break; // Singular.

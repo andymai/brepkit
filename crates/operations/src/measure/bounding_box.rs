@@ -1,5 +1,6 @@
 //! Bounding box computation for B-rep solids.
 
+use brepkit_math::madd::Madd;
 use std::collections::HashSet;
 
 use brepkit_math::aabb::Aabb3;
@@ -259,8 +260,8 @@ fn expand_aabb_for_face(
                 let h = [0, 1, 2].map(|k| {
                     let d = placement.row(k);
                     let along = d.dot(axis);
-                    let perp = along.mul_add(-along, d.dot(d)).max(0.0).sqrt();
-                    r_major.mul_add(perp, r_minor * d.length())
+                    let perp = along.madd(-along, d.dot(d)).max(0.0).sqrt();
+                    r_major.madd(perp, r_minor * d.length())
                 });
                 aabb_include(aabb, Point3::new(c.x() - h[0], c.y() - h[1], c.z() - h[2]));
                 aabb_include(aabb, Point3::new(c.x() + h[0], c.y() + h[1], c.z() + h[2]));
@@ -387,7 +388,7 @@ impl Rim {
                     let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
                     let pts: Vec<Point3> = (0..=RIM_STEPS)
                         .map(|k| {
-                            let t = (t1 - t0).mul_add(f64::from(k) / f64::from(RIM_STEPS), t0);
+                            let t = (t1 - t0).madd(f64::from(k) / f64::from(RIM_STEPS), t0);
                             edge.curve().evaluate_with_endpoints(t, a, b)
                         })
                         .collect();
@@ -955,8 +956,8 @@ mod tests {
         // surface's support in the direction of row k of the linear part.
         let sphere_support = |d: Vec3| 2.0 * d.length();
         let torus_support = |d: Vec3| {
-            let perp = d.z().mul_add(-d.z(), d.dot(d)).max(0.0).sqrt();
-            6.0f64.mul_add(perp, 1.5 * d.length())
+            let perp = d.z().madd(-d.z(), d.dot(d)).max(0.0).sqrt();
+            6.0f64.madd(perp, 1.5 * d.length())
         };
         let supported_box = |m: &Mat4, support: &dyn Fn(Vec3) -> f64| {
             let c = m.mul_point(Point3::new(0.0, 0.0, 0.0));

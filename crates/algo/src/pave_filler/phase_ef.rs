@@ -4,6 +4,7 @@
 //! edge crosses or touches the face surface. Records EF interferences
 //! and adds extra paves to the edge for later splitting.
 
+use brepkit_math::madd::Madd;
 use std::collections::HashSet;
 
 use crate::builder::classify_2d::{distance_to_polygon_boundary, point_in_polygon_2d};
@@ -530,7 +531,7 @@ fn check_edge_face_pairs(
                             .or_else(|| containments[face_idx].planar.as_ref().map(OnFace::Sampled))
                     };
                     let at = |k: u32| {
-                        let t = (t1 - t0).mul_add(f64::from(k) / f64::from(n_chk), t0);
+                        let t = (t1 - t0).madd(f64::from(k) / f64::from(n_chk), t0);
                         curve.evaluate_with_endpoints(t, start_pos, end_pos)
                     };
                     // Every sample on the face: a circle can run through a
@@ -568,7 +569,7 @@ fn check_edge_face_pairs(
                                     .chain(pb.extra_paves.iter().map(|p| p.parameter))
                             })
                             .collect();
-                        let t_at = |k: u32| (t1 - t0).mul_add(f64::from(k) / f64::from(n_chk), t0);
+                        let t_at = |k: u32| (t1 - t0).madd(f64::from(k) / f64::from(n_chk), t0);
                         let eps = (t1 - t0).abs() * 1e-9;
                         let paved = |a: u32, b: u32| {
                             let (lo, hi) = (t_at(a).min(t_at(b)), t_at(a).max(t_at(b)));
@@ -808,7 +809,7 @@ fn check_edge_face_pairs(
                             return None;
                         }
                         let s = ((vp - start_pos).dot(d) / len_sq).clamp(0.0, 1.0);
-                        let t_new = (t1 - t0).mul_add(s, t0);
+                        let t_new = (t1 - t0).madd(s, t0);
                         let on_curve = (curve.evaluate_with_endpoints(t_new, start_pos, end_pos)
                             - vp)
                             .length()
@@ -884,7 +885,7 @@ fn check_edge_face_pairs(
                                         let len_sq = dir.dot(dir);
                                         if len_sq > 0.0 {
                                             let along = (v.point() - start_pos).dot(dir) / len_sq;
-                                            (t1 - t0).mul_add(along, t0)
+                                            (t1 - t0).madd(along, t0)
                                         } else {
                                             t
                                         }
@@ -952,7 +953,7 @@ pub(super) fn find_edge_plane_crossings(
 
         let s_clamped = s.clamp(0.0, 1.0);
         let pt = start_pos + dir * s_clamped;
-        let t = s_clamped.mul_add(t1 - t0, t0);
+        let t = s_clamped.madd(t1 - t0, t0);
         vec![(t, pt)]
     } else if matches!(curve, EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_)) {
         conic_plane_crossings(curve, start_pos, end_pos, t0, t1, normal, d, tol)
@@ -992,7 +993,7 @@ fn conic_plane_crossings(
         let p = at(t);
         normal
             .x()
-            .mul_add(p.x(), normal.y().mul_add(p.y(), normal.z() * p.z()))
+            .madd(p.x(), normal.y().madd(p.y(), normal.z() * p.z()))
             - d
     };
     let (f0, fq, fp) = (f(0.0), f(FRAC_PI_2), f(PI));
@@ -1224,7 +1225,7 @@ fn line_crossings(
     }
     super::phase_ff::line_segment_surface_crossings(start_pos, end_pos, surface)
         .into_iter()
-        .map(|p| ((t1 - t0).mul_add((p - start_pos).dot(d) / len_sq, t0), p))
+        .map(|p| ((t1 - t0).madd((p - start_pos).dot(d) / len_sq, t0), p))
         .collect()
 }
 
@@ -1249,7 +1250,7 @@ fn find_side_flips(
     let mut out = Vec::new();
     let mut prev: Option<(f64, f64)> = None;
     for i in 0..=N_SAMPLES {
-        let t = (t1 - t0).mul_add(i as f64 / N_SAMPLES as f64, t0);
+        let t = (t1 - t0).madd(i as f64 / N_SAMPLES as f64, t0);
         let Some(s) = side(t) else {
             prev = None;
             continue;
@@ -1890,10 +1891,10 @@ mod tests {
         let hull = saddle.aabb();
         let surface = FaceSurface::Nurbs(saddle);
         let (y, step) = (0.0005, 0.01);
-        let x = (0.999 - y) / 2.0f64.mul_add(-y, 1.0);
-        let z_top = 3.5f64.mul_add(tol.linear, 1.0) + step;
+        let x = (0.999 - y) / 2.0f64.madd(-y, 1.0);
+        let z_top = 3.5f64.madd(tol.linear, 1.0) + step;
         let (a, b) = (
-            Point3::new(x, y, 64.0f64.mul_add(-step, z_top)),
+            Point3::new(x, y, 64.0f64.madd(-step, z_top)),
             Point3::new(x, y, z_top),
         );
         let plain =

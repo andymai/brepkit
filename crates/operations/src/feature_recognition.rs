@@ -29,6 +29,7 @@
     clippy::used_underscore_binding
 )]
 
+use brepkit_math::madd::Madd;
 use std::collections::{HashMap, HashSet};
 
 use brepkit_math::vec::{Point3, Vec3};
@@ -452,11 +453,11 @@ fn replaces_an_edge(
         return false;
     };
     let c = na.dot(nb);
-    let det = c.mul_add(-c, 1.0);
+    let det = c.madd(-c, 1.0);
     if det < 1e-12 {
         return false;
     }
-    let meet = na * (c.mul_add(-db, da) / det) + nb * (c.mul_add(-da, db) / det);
+    let meet = na * (c.madd(-db, da) / det) + nb * (c.madd(-da, db) / det);
     let side = nf.dot(meet) - df;
     let both = |kind: ConcavityType| edge_a.concavity == kind && edge_b.concavity == kind;
     (both(ConcavityType::Convex) && side > 1e-9) || (both(ConcavityType::Concave) && side < -1e-9)

@@ -1,5 +1,6 @@
 #![allow(clippy::unwrap_used)]
 
+use crate::madd::Madd;
 use std::f64::consts::{FRAC_PI_2, PI};
 
 use crate::tolerance::Tolerance;
@@ -450,7 +451,7 @@ fn circle3d_project_at_three_quarter() {
     // atan2 wraps to -π/2, so recovered angle differs by 2π
     let tol = Tolerance::new();
     let diff = (t_proj - t_orig).abs() % (2.0 * PI);
-    let diff_wrapped = diff.min(2.0f64.mul_add(PI, -diff));
+    let diff_wrapped = diff.min(2.0f64.madd(PI, -diff));
     assert!(
         diff_wrapped < tol.linear * 1000.0,
         "angle mismatch after wrapping: t_orig={t_orig}, t_proj={t_proj}"
@@ -534,7 +535,7 @@ fn hyperbola_evaluate_nonzero_t() {
     let h = Hyperbola3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), a, b).unwrap();
     let pt = h.evaluate(t);
     let dist_sq = (pt - h.center()).length_squared();
-    let expected_sq = (a * t.cosh()).mul_add(a * t.cosh(), (b * t.sinh()).powi(2));
+    let expected_sq = (a * t.cosh()).madd(a * t.cosh(), (b * t.sinh()).powi(2));
     assert!(
         (dist_sq - expected_sq).abs() < 1e-10,
         "|P-center|² should be {expected_sq}, got {dist_sq}"
@@ -680,7 +681,7 @@ fn circle_intersect_ellipse_in_its_plane() {
         let d = *p - ellipse.center();
         let (x, y) = (d.dot(ellipse.u_axis()) / 2.0, d.dot(ellipse.v_axis()));
         assert!(
-            (x.mul_add(x, y * y) - 1.0).abs() < 1e-9,
+            (x.madd(x, y * y) - 1.0).abs() < 1e-9,
             "{p:?} is off the ellipse"
         );
         assert!(

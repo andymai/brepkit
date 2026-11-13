@@ -1,6 +1,7 @@
 //! Non-planar CDT and fallback paths for face tessellation.
 
 use brepkit_math::det_hash::{DetHashMap, DetHashSet};
+use brepkit_math::madd::Madd;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
 use brepkit_topology::edge::EdgeCurve;
@@ -937,7 +938,7 @@ pub(super) fn tessellate_torus_two_rim_band(
         } else {
             (bu, cu)
         };
-        let area = bu.mul_add(cv, -(bv * cu));
+        let area = bu.madd(cv, -(bv * cu));
         if area.abs() < 1e-18 {
             return;
         }
@@ -957,7 +958,7 @@ pub(super) fn tessellate_torus_two_rim_band(
             let (u, v) = if lat_mode {
                 (a, level)
             } else {
-                (span_at(a).mul_add(t, u_at(0, a)), a)
+                (span_at(a).madd(t, u_at(0, a)), a)
             };
             let p = surf_eval(u, v);
             let key = point_merge_key(p, MERGE_GRID);
@@ -2286,7 +2287,7 @@ fn cdt_in_surface_frame(
             let (u_min_bnd, u_max_bnd) = seam_vertex_u.map_or((u_min_bnd, u_max_bnd), |seam_u| {
                 let lo = ((u_min_bnd - seam_u) / u_period)
                     .round()
-                    .mul_add(u_period, seam_u);
+                    .madd(u_period, seam_u);
                 (lo, lo + u_period)
             });
             // A rim's seam vertex joins whichever run the wire reaches it in,
@@ -2506,7 +2507,7 @@ fn cdt_in_surface_frame(
                     let mut j = i;
                     while off_seam(j) {
                         let u = boundary_uv[j].0;
-                        last = ((last - u) / period).round().mul_add(period, u);
+                        last = ((last - u) / period).round().madd(period, u);
                         boundary_uv[j].0 = last;
                         j = (j + 1) % n_boundary;
                         if j == i {
@@ -2530,8 +2531,7 @@ fn cdt_in_surface_frame(
                 for i in (0..n_boundary).filter(|&i| off_seam(i)) {
                     if on_seam.contains(&boundary_3d[i].1) && !at_apex(boundary_3d[i].0) {
                         let u = boundary_uv[i].0;
-                        boundary_uv[i].0 =
-                            ((u - seam_u) / u_period).round().mul_add(u_period, seam_u);
+                        boundary_uv[i].0 = ((u - seam_u) / u_period).round().madd(u_period, seam_u);
                     }
                 }
             }
@@ -4152,7 +4152,7 @@ fn start_loop_clear_of_holes(
     let mut next = 0;
     for &i in &order {
         let (u, v) = boundary_uv[i];
-        while next < n && boundary_uv[order[next]].1 * toward > v.mul_add(toward, 1e-12) {
+        while next < n && boundary_uv[order[next]].1 * toward > v.madd(toward, 1e-12) {
             beyond.insert(key(boundary_uv[order[next]].0));
             next += 1;
         }
@@ -4670,11 +4670,11 @@ fn join_winding_hole(
     let clearance = |a: (f64, f64), b: (f64, f64), rotate: usize, start: usize| {
         let mid = f64::midpoint(a.0, b.0);
         let (du, dv) = (b.0 - a.0, b.1 - a.1);
-        let len2 = du.mul_add(du, dv * dv).max(1e-300);
+        let len2 = du.madd(du, dv * dv).max(1e-300);
         let away = |(u, v): (f64, f64)| {
             let u = u + ((mid - u) / period).round() * period;
-            let f = ((u - a.0).mul_add(du, (v - a.1) * dv) / len2).clamp(0.0, 1.0);
-            (u - f.mul_add(du, a.0)).hypot(v - f.mul_add(dv, a.1))
+            let f = ((u - a.0).madd(du, (v - a.1) * dv) / len2).clamp(0.0, 1.0);
+            (u - f.madd(du, a.0)).hypot(v - f.madd(dv, a.1))
         };
         let outer = boundary_uv
             .iter()
@@ -4898,7 +4898,7 @@ fn surface_path_parameters(
 /// Whether the open segments `a b` and `c d` cross in the plane.
 fn segments_cross(a: (f64, f64), b: (f64, f64), c: (f64, f64), d: (f64, f64)) -> bool {
     let side = |p: (f64, f64), q: (f64, f64), r: (f64, f64)| {
-        (q.0 - p.0).mul_add(r.1 - p.1, -((q.1 - p.1) * (r.0 - p.0)))
+        (q.0 - p.0).madd(r.1 - p.1, -((q.1 - p.1) * (r.0 - p.0)))
     };
     let (d1, d2) = (side(a, b, c), side(a, b, d));
     let (d3, d4) = (side(c, d, a), side(c, d, b));

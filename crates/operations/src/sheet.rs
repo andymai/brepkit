@@ -6,6 +6,7 @@
 //! the edge's direction crossed with the sweep's, so one orientation holds
 //! across the whole shell.
 
+use brepkit_math::madd::Madd;
 use std::f64::consts::TAU;
 
 use brepkit_math::curves::Circle3D;
@@ -81,7 +82,7 @@ impl EdgeRun {
         };
         let (t0, t1) = self.curve.domain_with_endpoints(start, end);
         self.curve
-            .evaluate_with_endpoints((t1 - t0).mul_add(fraction, t0), start, end)
+            .evaluate_with_endpoints((t1 - t0).madd(fraction, t0), start, end)
     }
 
     fn samples(&self) -> Vec<Point3> {
