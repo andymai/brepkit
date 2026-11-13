@@ -4,6 +4,7 @@
 //! planar face pairs (v1). Reuses the analytic fast path and face trimming
 //! infrastructure from the fillet pipeline.
 
+use brepkit_math::madd::Madd;
 use std::collections::{HashMap, HashSet};
 
 use brepkit_math::vec::{Point3, Vec3};
@@ -738,7 +739,7 @@ fn splice_end_face(
                 let scale = 1.0 + p.x().abs().max(p.y().abs()).max(p.z().abs());
                 (normal
                     .x()
-                    .mul_add(p.x(), normal.y().mul_add(p.y(), normal.z() * p.z()))
+                    .madd(p.x(), normal.y().madd(p.y(), normal.z() * p.z()))
                     - d)
                     .abs()
                     <= 1e-6 * scale
