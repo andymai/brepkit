@@ -47,6 +47,18 @@ pub fn mesh_fallback_count() -> u64 {
     MESH_FALLBACK_COUNT.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+static MESH_FALLBACK_DECLINED_COUNT: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+/// Number of booleans since process start that declined the mesh fallback.
+///
+/// Such a boolean returned an error because it needed the fallback and
+/// [`BooleanOptions::mesh_fallback`] was `false`. Snapshot the count around a
+/// call to tell that error from others.
+pub fn mesh_fallback_declined_count() -> u64 {
+    MESH_FALLBACK_DECLINED_COUNT.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 thread_local! {
     /// Whether the innermost `boolean_inner` call routed through the mesh
     /// fallback. Set at the fallback site, consumed by the callers that
@@ -1043,7 +1055,20 @@ pub fn boolean_with_options(
     b: SolidId,
     opts: BooleanOptions,
 ) -> Result<SolidId, crate::OperationsError> {
-    let result = boolean(topo, op, a, b)?;
+    let result = if opts.mesh_fallback {
+        boolean(topo, op, a, b)?
+    } else {
+        // A helper may swallow the declined fallback's error and return
+        // without the piece it was for, so any decline fails the boolean.
+        let (result, declined) = without_mesh_fallback(|| boolean(topo, op, a, b));
+        if declined {
+            MESH_FALLBACK_DECLINED_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            return Err(crate::OperationsError::InvalidInput {
+                reason: "boolean needs the mesh fallback, which the options decline".into(),
+            });
+        }
+        result?
+    };
     if opts.unify_faces {
         let unify_opts = brepkit_heal::upgrade::unify_same_domain::UnifyOptions::default();
         if let Err(e) =
@@ -3008,26 +3033,28 @@ fn detect_trivial_relation(
     // A NURBS face can bulge out of the other solid between every vertex,
     // probe and sampled box corner, so it is held inside only when proved.
     let hollow = |s: SolidId| topo.solid(s).is_ok_and(|s| !s.inner_shells().is_empty());
+    // The volume witness meshes both solids, so it is read last, and only
+    // where the AABB-only fallback is what admits the containment: the same
+    // answer as `(vertices || (fallback && !volume)) && witnesses`, since
+    // every term reads `topo` alone.
+    let b_vertex_term = all_b_verts_in_a && aabb_encloses(&aabb_b, &aabb_a);
     let b_in_a = !hollow(a)
-        && ((all_b_verts_in_a && aabb_encloses(&aabb_b, &aabb_a))
-            || (ca.is_none()
-                && aabb_strictly_contains(&aabb_b, &aabb_a)
-                && !volume_refutes(topo, b, a)))
+        && (b_vertex_term || (ca.is_none() && aabb_strictly_contains(&aabb_b, &aabb_a)))
         && nurbs_faces_proved_inside(topo, b, a, tol)
         && !center_outside(topo, b, a, &aabb_b)
         && !boundary_probe_outside(topo, b, a, &aabb_b)
         && !axis_outside(topo, b, ca, &aabb_b)
-        && !piece_outside(topo, b, a);
+        && !piece_outside(topo, b, a)
+        && (b_vertex_term || !volume_refutes(topo, b, a));
+    let a_vertex_term = all_a_verts_in_b && aabb_encloses(&aabb_a, &aabb_b);
     let a_in_b = !hollow(b)
-        && ((all_a_verts_in_b && aabb_encloses(&aabb_a, &aabb_b))
-            || (cb.is_none()
-                && aabb_strictly_contains(&aabb_a, &aabb_b)
-                && !volume_refutes(topo, a, b)))
+        && (a_vertex_term || (cb.is_none() && aabb_strictly_contains(&aabb_a, &aabb_b)))
         && nurbs_faces_proved_inside(topo, a, b, tol)
         && !center_outside(topo, a, b, &aabb_a)
         && !boundary_probe_outside(topo, a, b, &aabb_a)
         && !axis_outside(topo, a, cb, &aabb_a)
-        && !piece_outside(topo, a, b);
+        && !piece_outside(topo, a, b)
+        && (a_vertex_term || !volume_refutes(topo, a, b));
 
     TrivialRelation {
         identical: aabbs_match && all_b_verts_in_a && all_a_verts_in_b,

@@ -4,7 +4,9 @@ use crate::nurbs::surface::NurbsSurface;
 use crate::vec::{Point3, Vec3};
 
 use super::surface_marching::march_intersection;
-use super::surface_marching::{near_existing_segment, second_order_tangent};
+use super::surface_marching::{
+    chord_bulge, near_existing_segment, point_to_segment_dist, second_order_tangent,
+};
 use super::surface_seeding::{
     REFINE_CALLS, find_ssi_seeds_grid, find_ssi_seeds_subdivision, planar_patch_sections, plane_of,
     refine_ssi_point, surfaces_apart,
@@ -3049,6 +3051,106 @@ fn a_surface_with_unclamped_knots_is_not_proved_apart() {
     )
     .unwrap();
     assert!(!surfaces_apart(&outer, &unclamped, 1e-5));
+}
+
+/// `near_existing_segment` as it read before chords far from the point were
+/// passed over: every chord's sag test is worked out.
+fn near_existing_segment_every_chord(
+    segments: &[Vec<IntersectionPoint>],
+    point: &IntersectionPoint,
+    dist: f64,
+) -> bool {
+    segments.iter().any(|seg| {
+        if seg.len() < 2 {
+            return seg
+                .first()
+                .is_some_and(|p| (p.point - point.point).length() < dist);
+        }
+        seg.windows(2).enumerate().any(|(i, w)| {
+            if point_to_segment_dist(point.point, w[0].point, w[1].point) < dist {
+                return true;
+            }
+            chord_bulge(seg, i).is_some_and(|(outward, sag)| {
+                let (a, b) = (w[0].point, w[1].point);
+                let ab = b - a;
+                let f = ((point.point - a).dot(ab) / ab.dot(ab)).clamp(0.0, 1.0);
+                let off = point.point - (a + ab * f);
+                let out = off.dot(outward);
+                let lateral = (off - outward * out).length();
+                out > -dist && out < dist + sag && lateral < dist
+            })
+        })
+    })
+}
+
+/// Passing over the chords that stand too far from a point to take it by
+/// their sag changes no answer: traces bending gently and sharply, with
+/// short and long steps and a repeated point, against points scattered
+/// round them at several reaches.
+#[test]
+fn far_chords_passed_over_change_no_answer() {
+    let mut seed = 0x2545_f491_4f6c_dd1d_u64;
+    let mut rand = move || {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        (seed >> 11) as f64 / (1u64 << 53) as f64
+    };
+    let pt = |x: f64, y: f64, z: f64| IntersectionPoint {
+        point: Point3::new(x, y, z),
+        param1: (0.0, 0.0),
+        param2: (0.0, 0.0),
+    };
+    let arc = |r: f64, step_deg: f64, n: usize| -> Vec<IntersectionPoint> {
+        (0..n)
+            .map(|k| {
+                let a = (step_deg * k as f64).to_radians();
+                pt(r * a.cos(), r * a.sin(), 0.1 * k as f64)
+            })
+            .collect()
+    };
+    let mut zigzag = arc(3.0, 70.0, 6);
+    zigzag.insert(2, zigzag[2]);
+    let traces = vec![
+        arc(5.0, 2.0, 60),
+        arc(1.0, 25.0, 14),
+        zigzag,
+        vec![pt(-2.0, -2.0, 0.0)],
+        vec![pt(0.0, 0.0, 0.0), pt(10.0, 0.0, 0.0)],
+    ];
+    let mut checked = 0;
+    let mut near = 0;
+    for &dist in &[1e-4_f64, 5e-3, 0.05, 0.5] {
+        for _ in 0..4000 {
+            let p = pt(
+                12.0f64.mul_add(rand(), -6.0),
+                12.0f64.mul_add(rand(), -6.0),
+                3.0f64.mul_add(rand(), -0.5),
+            );
+            // also points close to a trace, where the answer turns
+            let trace = &traces[(rand() * 3.0) as usize];
+            let on = &trace[(rand() * (trace.len() - 1) as f64) as usize].point;
+            let close = pt(
+                (4.0 * dist).mul_add(rand() - 0.5, on.x()),
+                (4.0 * dist).mul_add(rand() - 0.5, on.y()),
+                (4.0 * dist).mul_add(rand() - 0.5, on.z()),
+            );
+            for q in [p, close] {
+                let want = near_existing_segment_every_chord(&traces, &q, dist);
+                assert_eq!(
+                    near_existing_segment(&traces, &q, dist),
+                    want,
+                    "{q:?} at {dist}"
+                );
+                checked += 1;
+                near += usize::from(want);
+            }
+        }
+    }
+    assert!(
+        near > checked / 20,
+        "too few points near a trace ({near} of {checked})"
+    );
 }
 
 // -- Sections along a parameter curve --

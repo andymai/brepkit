@@ -4614,11 +4614,16 @@ fn trim_open_curve_to_plane_face_lines(
         }
     }
 
-    // Signed side of a boundary segment's carrier line at curve parameter t.
-    let side = |t: f64, a: Point2, b: Point2| -> f64 {
-        let uv = frame.project(eval_at(t));
+    // Signed side of a boundary segment's carrier line at a point of the
+    // plane, and at curve parameter t.
+    let side_at = |uv: Point2, a: Point2, b: Point2| -> f64 {
         (b.x() - a.x()).madd(uv.y() - a.y(), -((b.y() - a.y()) * (uv.x() - a.x())))
     };
+    let side = |t: f64, a: Point2, b: Point2| -> f64 { side_at(frame.project(eval_at(t)), a, b) };
+    // The samples in the plane, taken once for every boundary segment.
+    let sample_uv: Vec<Point2> = (0..=n_samples)
+        .map(|i| frame.project(eval_at(sample_t(i))))
+        .collect();
 
     // Collect refined crossing parameters against every boundary segment
     // (outer polygon + hole polygons).
@@ -4637,7 +4642,7 @@ fn trim_open_curve_to_plane_face_lines(
             let on_eps = seg_len * 1e-12;
             for i in 0..n_samples {
                 let (t_lo, t_hi) = (sample_t(i), sample_t(i + 1));
-                let (s_lo, s_hi) = (side(t_lo, a, b), side(t_hi, a, b));
+                let (s_lo, s_hi) = (side_at(sample_uv[i], a, b), side_at(sample_uv[i + 1], a, b));
                 let t_star = if s_lo.abs() <= on_eps {
                     t_lo
                 } else if s_hi.abs() <= on_eps {
