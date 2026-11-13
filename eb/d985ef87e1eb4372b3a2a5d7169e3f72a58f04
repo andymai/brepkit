@@ -1,0 +1,39 @@
+crates/math/src/nurbs/intersection/tests.rs
+  s_385aefe07faf61::t_ca558b91d0e2c5 10,2957-3016
+crates/operations/src/boolean/assembly.rs
+  s_385aefe07faf61::t_ced5163df63774 815-819
+crates/io/tests/spline_can_cut_inmem.rs
+  s_385aefe07faf61::t_7c8edee12b5bab 1-111
+crates/math/src/nurbs/intersection/surface_seeding.rs
+  s_385aefe07faf61::t_40a71e99dadcc4 199-204,652-656,665-685,695-701,703-707,709-713
+  s_385aefe07faf61::t_165da6f23ee737 663-664
+  s_385aefe07faf61::t_e9ffbda8243d21 686-694,714-742
+  s_385aefe07faf61::t_b0caddda4bf927 702,708,743,888-916,918-922,924
+  s_385aefe07faf61::t_f540a5eeef1229 657-662
+  s_385aefe07faf61::t_2674a414904af1 744
+crates/io/tests/data/spline_can_inner.bin
+  s_385aefe07faf61::t_ae24b763020bd2 1
+crates/io/tests/data/spline_can_outer.bin
+  s_385aefe07faf61::t_ae24b763020bd2 1
+crates/math/src/nurbs/intersection/mod.rs
+  s_385aefe07faf61::t_165da6f23ee737 40
+crates/operations/src/boolean/mod.rs
+  s_385aefe07faf61::t_165da6f23ee737 123-133,3293-3364
+  s_385aefe07faf61::t_3239ada075bf4f 3365-3366
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ebd985ef87e1eb4372b3a2a5d7169e3f72a58f04",
+  "prompts": {},
+  "sessions": {
+    "s_385aefe07faf61": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7ba532a8-609c-4534-9316-9e8d54346633",
+        "model": "claude-fable-5-2"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
