@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.11.7](https://github.com/andymai/brepkit/compare/v4.11.6...v4.11.7) (2026-11-13)
+
+
+### Performance
+
+* **operations:** cut a NURBS tool out of a NURBS blank it lies inside without a section search ([#2403](https://github.com/andymai/brepkit/issues/2403)) ([0a14545](https://github.com/andymai/brepkit/commit/0a1454523e43794d76f269ee05957d0118783933))
+
 ## [4.11.6](https://github.com/andymai/brepkit/compare/v4.11.5...v4.11.6) (2026-11-13)
 
 
