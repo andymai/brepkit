@@ -1395,12 +1395,12 @@ pub(super) fn nurbs_face_by_boundary(
     #[cfg(target_arch = "wasm32")]
     let integrals: Vec<Option<[f64; 8]>> = pieces.iter().map(integrate).collect();
     let mut total = [0.0; 8];
+    // The pieces lie in the order of their wires, so one pass meets each
+    // wire's run of them in turn.
+    let mut rest = pieces.iter().zip(&integrals).peekable();
     for k in 0..wires.len() {
         let mut region = [0.0; 8];
-        for (piece, integral) in pieces.iter().zip(&integrals) {
-            if piece.wire != k {
-                continue;
-            }
+        while let Some((_, integral)) = rest.next_if(|(piece, _)| piece.wire == k) {
             let Some(integral) = integral else {
                 return Ok(None);
             };
