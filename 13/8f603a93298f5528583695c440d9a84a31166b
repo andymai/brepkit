@@ -1,0 +1,19 @@
+crates/check/src/properties/boundary.rs
+  s_385aefe07faf61::t_4f07e0c6146fbc 1398-1400,1403
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "138f603a93298f5528583695c440d9a84a31166b",
+  "prompts": {},
+  "sessions": {
+    "s_385aefe07faf61": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7ba532a8-609c-4534-9316-9e8d54346633",
+        "model": "claude-fable-5-2"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
