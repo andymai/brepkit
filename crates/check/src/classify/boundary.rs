@@ -1101,7 +1101,8 @@ pub fn plane_hit_inside(
 #[derive(Default)]
 pub struct FaceRayCache {
     sphere: std::cell::OnceCell<Option<SphereRegion>>,
-    nurbs: std::cell::OnceCell<Option<brepkit_math::nurbs::intersection::RaySurface>>,
+    nurbs:
+        std::cell::OnceCell<Option<std::sync::Arc<brepkit_math::nurbs::intersection::RaySurface>>>,
 }
 
 /// Count ray crossings for a NURBS face using ray-surface intersection.
@@ -1117,11 +1118,12 @@ fn ray_crossings_nurbs(
     origin: Point3,
     direction: Vec3,
     surface: &brepkit_math::nurbs::surface::NurbsSurface,
-    patches: &std::cell::OnceCell<Option<brepkit_math::nurbs::intersection::RaySurface>>,
+    patches: &std::cell::OnceCell<
+        Option<std::sync::Arc<brepkit_math::nurbs::intersection::RaySurface>>,
+    >,
     unsure: &mut bool,
 ) -> Result<u32, CheckError> {
-    let patches =
-        patches.get_or_init(|| brepkit_math::nurbs::intersection::RaySurface::new(surface));
+    let patches = patches.get_or_init(|| surface.ray_surface());
     let hits = if let Some(patches) = patches {
         let found = patches.hits(origin, direction, NURBS_HIT_REACH);
         *unsure |= found.grazed;
