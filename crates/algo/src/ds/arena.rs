@@ -49,6 +49,10 @@ pub struct GfaArena {
     /// faceted sphere's equator arc on a coplanar box face) is emitted once
     /// but splits both.
     pub curve_extra_faces: BTreeMap<usize, Vec<FaceId>>,
+    /// Edges of one operand's NURBS faces lying in a plane face of the
+    /// other, which they split as a section would: the face-face phase drops
+    /// a plane's section along a NURBS face's own edge.
+    pub plane_section_edges: std::collections::BTreeSet<EdgeId>,
     /// Faces of a curve's own pair it does not section, by curve index: a
     /// closed circle running along a face's inscribed boundary (a faceted
     /// sphere's equator in a plane through it) splits only the plane.
@@ -76,6 +80,7 @@ impl GfaArena {
             pave_vertex_index: None,
             pave_ball_index: None,
             curve_extra_faces: BTreeMap::new(),
+            plane_section_edges: std::collections::BTreeSet::new(),
             curve_skip_faces: BTreeMap::new(),
             co_endpoint_middles: BTreeSet::new(),
         }

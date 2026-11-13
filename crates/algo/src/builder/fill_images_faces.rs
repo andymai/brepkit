@@ -2391,7 +2391,8 @@ fn build_section_map(topo: &Topology, arena: &GfaArena) -> HashMap<FaceId, Vec<S
     // that already has a curved (non-Line) FF curve, an IN PB lying along
     // one of its FF sections is that section again (28 arc fragments of the
     // one complete circle); an IN PB elsewhere on the face (a wall's seam
-    // ruling across a coaxial corner) still splits it.
+    // ruling across a coaxial corner, a NURBS face's edge in a plane) still
+    // splits it.
     let ff_on_face: HashMap<usize, Vec<&SectionSource>> = map
         .iter()
         .filter(|(_, sources)| sources.iter().any(|s| matches!(s, SectionSource::Curve(_))))
@@ -2419,11 +2420,18 @@ fn build_section_map(topo: &Topology, arena: &GfaArena) -> HashMap<FaceId, Vec<S
             {
                 continue;
             }
-            if ff.is_some_and(|ff| {
-                !lateral
-                    || !pb_is_line_or_circle(topo, arena, pb_id)
-                    || pb_on_sections(topo, arena, pb_id, ff)
-            }) {
+            // Off a cylinder or cone, the one IN edge a face with a section
+            // keeps is a NURBS face's edge lying in a plane: no section runs
+            // along it, the face-face phase having dropped that one.
+            let stands_in = if lateral {
+                pb_is_line_or_circle(topo, arena, pb_id)
+            } else {
+                arena
+                    .pave_blocks
+                    .get(pb_id)
+                    .is_some_and(|pb| arena.plane_section_edges.contains(&pb.original_edge))
+            };
+            if ff.is_some_and(|ff| !stands_in || pb_on_sections(topo, arena, pb_id, ff)) {
                 continue;
             }
             kept.push(pb_id);
