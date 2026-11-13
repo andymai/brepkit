@@ -164,6 +164,17 @@ pub struct BooleanOptions {
     ///
     /// Default: `false`.
     pub heal_after_boolean: bool,
+    /// Fall back to the mesh (co-refinement) boolean when the exact one fails.
+    ///
+    /// Read by [`crate::boolean::boolean_with_options`]: with `false`, a
+    /// boolean that would need the fallback returns an error
+    /// instead, in the time the exact attempt takes, and is counted by
+    /// [`crate::boolean::mesh_fallback_declined_count`]. For callers that
+    /// refuse a faceted result anyway: building it can take several times
+    /// as long as the exact attempt.
+    ///
+    /// Default: `true`.
+    pub mesh_fallback: bool,
 }
 
 impl Default for BooleanOptions {
@@ -173,6 +184,7 @@ impl Default for BooleanOptions {
             tolerance: Tolerance::new(),
             unify_faces: true,
             heal_after_boolean: false,
+            mesh_fallback: true,
         }
     }
 }
