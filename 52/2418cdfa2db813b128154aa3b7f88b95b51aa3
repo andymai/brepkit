@@ -1,0 +1,24 @@
+crates/operations/src/loft/network.rs
+  s_385aefe07faf61::t_c1e62394fc1221 424,2825-2828,2839
+crates/operations/src/loft/tests.rs
+  s_385aefe07faf61::t_c1e62394fc1221 1471-1562
+crates/operations/src/loft.rs
+  s_385aefe07faf61::t_c1e62394fc1221 679-680,685,695-697,701-702,706,716-733
+  s_385aefe07faf61::t_499201faee0f7b 734-735
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "522418cdfa2db813b128154aa3b7f88b95b51aa3",
+  "prompts": {},
+  "sessions": {
+    "s_385aefe07faf61": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7ba532a8-609c-4534-9316-9e8d54346633",
+        "model": "claude-fable-5-2"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
