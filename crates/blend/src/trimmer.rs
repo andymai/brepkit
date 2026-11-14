@@ -1591,6 +1591,45 @@ fn edge_curve_for_span(
     ))
 }
 
+/// A spline edge spanning `t0` to `t1` of `curve`, split at `t`: the piece
+/// before the split and the piece after it, each running the edge's way,
+/// moved to meet at `point` (a contact's end off the edge, within a file's
+/// tolerance of it). `None` where a piece cannot be cut.
+fn spline_pieces_meeting_at(
+    curve: &EdgeCurve,
+    (t0, t, t1): (f64, f64, f64),
+    point: Point3,
+) -> Option<(
+    brepkit_math::nurbs::curve::NurbsCurve,
+    brepkit_math::nurbs::curve::NurbsCurve,
+)> {
+    let (EdgeCurve::NurbsCurve(before), EdgeCurve::NurbsCurve(after)) = (
+        edge_curve_for_span(curve, t0, t).ok()?,
+        edge_curve_for_span(curve, t, t1).ok()?,
+    ) else {
+        return None;
+    };
+    // Each piece is clamped where it was cut, so it passes through its end
+    // control point there.
+    let moved = |piece: &brepkit_math::nurbs::curve::NurbsCurve, at_end: bool| {
+        let mut control_points = piece.control_points().to_vec();
+        let index = if at_end {
+            control_points.len().checked_sub(1)?
+        } else {
+            0
+        };
+        *control_points.get_mut(index)? = point;
+        brepkit_math::nurbs::curve::NurbsCurve::new(
+            piece.degree(),
+            piece.knots().to_vec(),
+            control_points,
+            piece.weights().to_vec(),
+        )
+        .ok()
+    };
+    Some((moved(&before, true)?, moved(&after, false)?))
+}
+
 fn mapped_surface_uv(
     surface: &FaceSurface,
     point: Point3,
@@ -2221,7 +2260,32 @@ fn rebuild_mapped_parametric_face(
                     if f <= 1e-9 || f >= 1.0 - 1e-9 {
                         continue;
                     }
-                    let (e1, e2) = split_edge_at(topo, &oriented, vertex_id)?;
+                    // Off its curve, the vertex no longer picks out each
+                    // piece's span of a shared spline, so each piece takes
+                    // its own. A piece of a circle or an ellipse cannot end
+                    // at a vertex off it, and the edge left whole would be
+                    // walked out to its far end and back.
+                    let pieces = match curve {
+                        EdgeCurve::Line => None,
+                        EdgeCurve::NurbsCurve(_) | EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_)
+                            if gap <= 1e-6 =>
+                        {
+                            None
+                        }
+                        EdgeCurve::NurbsCurve(_) => Some(
+                            spline_pieces_meeting_at(curve, (d0, tt, d1), point)
+                                .ok_or(BlendError::TrimmingFailure { face: face_id })?,
+                        ),
+                        EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => {
+                            return Err(BlendError::TrimmingFailure { face: face_id });
+                        }
+                    };
+                    let (e1, e2) = match pieces {
+                        Some((before, after)) => {
+                            split_edge_at_with_curves(topo, &oriented, vertex_id, before, after)?
+                        }
+                        None => split_edge_at(topo, &oriented, vertex_id)?,
+                    };
                     if let Some(owner) = restriction_for_edge.get(&oriented.edge()).copied() {
                         restriction_for_edge.insert(e1.edge(), owner);
                         restriction_for_edge.insert(e2.edge(), owner);
@@ -5184,6 +5248,143 @@ mod tests {
         }
         assert!(found, "batch result must retain a split circle sub-edge");
     }
+
+    /// A quarter of a cylinder's wall whose rims, at z = 0 and z = 1 and
+    /// made by `rim` from their center, start and end, have radius 1 and
+    /// stand `off` inside its surface, cut on its surface from rim to rim
+    /// halfway round: the contact replaces the wall's far side, and its ends
+    /// stand `off` off the rims.
+    fn trim_a_wall_off_its_rims(
+        off: f64,
+        rim: impl Fn(Point3, Point3, Point3) -> EdgeCurve,
+    ) -> (Topology, FaceId, Result<BatchTrimResult, BlendError>) {
+        use brepkit_math::surfaces::CylindricalSurface;
+        use std::f64::consts::{FRAC_PI_2, FRAC_PI_4};
+
+        let mut topo = Topology::new();
+        let (origin, axis) = (Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0));
+        let wall = CylindricalSurface::new(origin, axis, 1.0 + off).unwrap();
+        let rims = CylindricalSurface::new(origin, axis, 1.0).unwrap();
+        let at = |u: f64, z: f64| rims.evaluate(u, z);
+        let center = |z: f64| Point3::new(0.0, 0.0, z);
+        let face = add_parametric_quad(
+            &mut topo,
+            FaceSurface::Cylinder(wall.clone()),
+            [
+                at(0.0, 0.0),
+                at(FRAC_PI_2, 0.0),
+                at(FRAC_PI_2, 1.0),
+                at(0.0, 1.0),
+            ],
+            [
+                rim(center(0.0), at(0.0, 0.0), at(FRAC_PI_2, 0.0)),
+                EdgeCurve::Line,
+                rim(center(1.0), at(0.0, 1.0), at(FRAC_PI_2, 1.0)),
+                EdgeCurve::Line,
+            ],
+        );
+        let far_side = topo
+            .wire(topo.face(face).unwrap().outer_wire())
+            .unwrap()
+            .edges()[1]
+            .edge();
+        let restriction = ParametricRestriction {
+            contact_3d: vec![wall.evaluate(FRAC_PI_4, 0.0), wall.evaluate(FRAC_PI_4, 1.0)],
+            keep: TrimKeep::AwayFrom(at(FRAC_PI_2, 0.5)),
+            curve: Some(EdgeCurve::Line),
+            pcurve: None,
+            source_edges: vec![far_side],
+        };
+        let result =
+            trim_parametric_face_batch(&mut topo, face, &[restriction], BoundarySplitPolicy::All);
+        (topo, face, result)
+    }
+
+    /// Each edge of the trimmed wall's outer wire: its curve, how far the
+    /// ends of the span it reads fall from its vertices, and that span's
+    /// length along 64 chords.
+    fn wall_pieces(topo: &Topology, result: &BatchTrimResult) -> Vec<(EdgeCurve, f64, f64)> {
+        let wire = topo
+            .wire(topo.face(result.trimmed_face).unwrap().outer_wire())
+            .unwrap();
+        wire.edges()
+            .iter()
+            .map(|oriented| {
+                let edge = topo.edge(oriented.edge()).unwrap();
+                let a = topo.vertex(edge.start()).unwrap().point();
+                let b = topo.vertex(edge.end()).unwrap().point();
+                let curve = edge.curve();
+                let (t0, t1) = curve.domain_with_endpoints(a, b);
+                let at = |k: u32| {
+                    curve.evaluate_with_endpoints((t1 - t0).madd(f64::from(k) / 64.0, t0), a, b)
+                };
+                let miss = (at(0) - a).length().max((at(64) - b).length());
+                let length = (0..64).map(|k| (at(k + 1) - at(k)).length()).sum();
+                (curve.clone(), miss, length)
+            })
+            .collect()
+    }
+
+    /// A spline rim split where a contact ends off it keeps, in each piece,
+    /// its own share of the rim, from the rim's vertex to the contact's end.
+    #[test]
+    fn a_spline_rim_off_its_wall_splits_into_its_own_pieces() {
+        let quarter = |center: Point3, from: Point3, to: Point3| {
+            EdgeCurve::NurbsCurve(
+                brepkit_math::nurbs::curve::NurbsCurve::new(
+                    2,
+                    vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+                    vec![from, from + (to - center), to],
+                    vec![1.0, std::f64::consts::FRAC_1_SQRT_2, 1.0],
+                )
+                .unwrap(),
+            )
+        };
+        for off in [0.0, 1e-3] {
+            let (topo, _, result) = trim_a_wall_off_its_rims(off, quarter);
+            let pieces = wall_pieces(&topo, &result.unwrap());
+            assert_eq!(
+                pieces.len(),
+                4,
+                "off {off}: the contact, a side and two rims"
+            );
+            for (curve, miss, length) in pieces {
+                assert!(
+                    miss <= 1e-9,
+                    "off {off}: a piece's ends miss its vertices by {miss}"
+                );
+                // 64 chords of an eighth of a turn fall 5e-6 short of it.
+                if matches!(curve, EdgeCurve::NurbsCurve(_)) {
+                    assert!(
+                        (length - std::f64::consts::FRAC_PI_4).abs() <= off + 1e-5,
+                        "off {off}: a rim's piece reads {length} long"
+                    );
+                }
+            }
+        }
+    }
+
+    /// A circle cannot be cut to end at a contact's end off it, so a wall
+    /// whose circular rims stand off it refuses the trim, as it would walk
+    /// each rim out to its far end and back.
+    #[test]
+    fn a_circular_rim_off_its_wall_refuses_the_trim() {
+        let circle = |center: Point3, _: Point3, _: Point3| {
+            EdgeCurve::Circle(
+                brepkit_math::curves::Circle3D::new(center, Vec3::new(0.0, 0.0, 1.0), 1.0).unwrap(),
+            )
+        };
+        let (topo, _, result) = trim_a_wall_off_its_rims(0.0, circle);
+        let pieces = wall_pieces(&topo, &result.unwrap());
+        assert_eq!(pieces.len(), 4);
+        assert!(pieces.iter().all(|(_, miss, _)| *miss <= 1e-9));
+        let (_, face, result) = trim_a_wall_off_its_rims(1e-3, circle);
+        assert!(
+            matches!(result, Err(BlendError::TrimmingFailure { face: failed }) if failed == face),
+            "a circular rim 1e-3 off the wall must refuse the trim"
+        );
+    }
+
     #[test]
     fn segment_intersect_2d_parallel() {
         // Parallel segments — no intersection.
