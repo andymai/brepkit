@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794679911719,
+  "lastUpdate": 1794681886357,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -69227,6 +69227,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24226751,
             "range": "± 513780",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "daa4ace6ce9afecb44f698b32fc4e3b41aa0da9b",
+          "message": "fix(math): split a constraint at a lone vertex lying on it (#2436)\n\nThis PR carries #2433 by @Robokan onto the current main. The commit is\nthe contributor's, with no change. One commit follows it.\n\nThe second commit changes how `lone_vertex_on_segment` tells one vertex\nfrom a cluster. It counted the vertices that `orient2d` reads exactly on\nthe line. Along a slanted line, rounding leaves most vertices of a\ncluster a hair off the line. The count then read a cluster as one\nvertex, and recovery split the constraint through it.\n\nThe count now takes each vertex in the band that `insert_constraint`\nchains through (1e-6 of the segment's length). The split still needs the\none vertex to be exactly on the line.\n\n## How I checked it\n\n- `constraint_is_not_chained_through_a_cluster_on_it` has a third\ndirection, (0.25, 1.25). Without the second commit, it fails there: the\nconstraint has a piece shorter than 1e-7.\n- `cargo nextest run -p brepkit-math cdt` passes (25 tests).\n- I tested this branch together with #2434 on main. `cargo nextest run`\nfor `brepkit-math`, `brepkit-algo`, `brepkit-blend`, `brepkit-io`,\n`brepkit-operations`, `brepkit-wasm`, `brepkit-check` and `brepkit-heal`\npasses (4,327 tests).\n- The pose sweep and the truth audit match main line for line.\n- `cargo clippy --all-targets --all-features -- -D warnings` passes.\n\n## The description from #2433\n\n## Summary\n\nConstraint recovery in the CDT flips edges across a constraint until it\nbecomes an edge, then bisects. A vertex lying exactly on the constraint,\nstrictly between its ends, is crossed by no edge, so no flip makes the\nconstraint an edge: it runs through the vertex. When that vertex sits a\nhair from an end (a face boundary with two vertices 2e-7 apart on one\nline), bisection cannot pass it either. The recovery gave up after its\ninsert budget, the face fell back to the grid mesher, whose mesh is\nwrong there, and imported bodies measured wrong (volume and area).\n\n- When flips do not converge, recovery now splits the constraint at such\na vertex, as it already splits at a crossing constraint, before\nbisecting.\n- Only a lone vertex. Several on the constraint a hair apart are a\ncluster of near-duplicates. Splitting through them would chain the\nconstraint into slivers, and the region's fill reads those wrong (a\nB-spline face came out a fan of 13 triangles). Such a constraint goes to\nthe bisection, as before.\n\n## Tests\n\n- `constraint_splits_at_a_vertex_on_it_beside_its_end`: a vertex 2e-7\nfrom a constraint's end, along an axis and a diagonal. Fails without the\nchange (`ConvergenceFailure` after 280 iterations).\n- `constraint_is_not_chained_through_a_cluster_on_it`: five vertices\n1.5e-8 apart on a constraint beside its end; no constraint piece shorter\nthan 1e-7 may be made.\n\nmath, check, operations, io, algo, blend and topology tests pass; clippy\nis clean; the pose sweep and truth audit match `main` line for line.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\n\n\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes CDT constraint recovery failing when a vertex lies exactly on a\nconstraint, a hair from its end. Previously no flip or bisection could\npass it, recovery gave up, and the face fell back to the grid mesher,\nwhich produced wrong measurements.\n\nRecovery now splits the constraint at a lone vertex lying on it, before\nbisecting, just as it splits at a crossing constraint. A cluster of\nnear-duplicates a hair apart is not split through; such constraints\nstill go to bisection.\n\n- Cluster detection now counts vertices in the band `insert_constraint`\nchains through (1e-6 of the segment's length), not just vertices\n`orient2d` reads exactly on the line, which rounding distorts on slanted\nlines.\n\n<sup>Written for commit b73a53b186aaabbcc0419f65f4d08d969d09c4d7.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2436?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2436?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2436&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\n---------\n\nCo-authored-by: Robokan <eric.d.vaughan@gmail.com>\nCo-authored-by: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-11-14T18:41:45Z",
+          "tree_id": "64caab1fc5f5d111b945f248af5c9f259857b789",
+          "url": "https://github.com/andymai/brepkit/commit/daa4ace6ce9afecb44f698b32fc4e3b41aa0da9b"
+        },
+        "date": 1794681879598,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 760189,
+            "range": "± 1094",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 806566,
+            "range": "± 1083",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10237,
+            "range": "± 16",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 449672,
+            "range": "± 694",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 19536344,
+            "range": "± 64852",
             "unit": "ns/iter"
           }
         ]
