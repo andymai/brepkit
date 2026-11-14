@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794694016916,
+  "lastUpdate": 1794696930827,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -69551,6 +69551,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24467185,
             "range": "± 427105",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "6a4783fd8609d7d7307c5258b4a1d10de0690475",
+          "message": "fix(algo): edges that run along each other do not cross (#2438)\n\nThis PR carries #2429 by @Robokan onto the current main. The commit is\nthe contributor's, with no change. One merge commit and seven new\ncommits follow it.\n\nThe contributor's commit reads two chords that are all but parallel from\ntheir ends. The result is then the same for each way that the divisor\nrounds, which is the aim of #2429. But the end of a chord is a sample\npoint inside its edge. Take a `Line` edge and a degree-1 B-spline edge\non the same line. They got a crossing at the sample points of their\noverlap, and each crossing split the two edges.\n\nOne pair of chords cannot tell an overlap from a shallow crossing:\ninside the tolerance, the two look the same. The new commits make that\ndecision for the two edges, in the sampled path of\n`find_edge_edge_crossings` (`crates/algo/src/pave_filler/phase_ee.rs`):\n\n- For chords that are all but parallel, `closest_segment_pair` reads how\nfar one chord stands off the line of the other. That standoff comes from\nthe part of the chord across the line, which rounding does not lose. The\nanswer is the same for each way that `a c - b^2` rounds. A change of the\nstandoff counts as rounding only below half the tolerance, so the place\nof the edges does not lose a crossing.\n- The hits of such chords go into ribbons of neighbour chord pairs, and\neach ribbon gets one decision.\n- A ribbon is an overlap when each of its two ends stops at an end of an\nedge. A corner where the edges part at a real angle also stops a ribbon.\nThe code finds the two ends by their place along the edge, and each end\nneeds its own stop. An overlap gives no crossing. The VE phase paves the\nends of the edges.\n- Each other ribbon is one contact, and gives one crossing where the\nchords are nearest. A shallow crossing, a grazing crossing and a\ntangency are contacts.\n- A chord of no length is a point. It now meets the other chord at its\nfoot, not at the middle of the two chords.\n\nTwo cases stay open. Two curved edges on one curve still cross at the\nsample points that they share. Some ribbons stop at an end of an edge on\none side only, and leave the other edge smoothly. Such a ribbon gives\none crossing, and rounding can move its place.\n\n## How I checked it\n\n- Overlaps give no crossing inside the two edges:\n`a_line_and_a_nurbs_along_it_do_not_cross_inside_their_overlap` (8\nlayouts) and\n`edges_on_one_line_running_opposite_ways_do_not_cross_inside`.\n- Contacts give one crossing:\n`a_shallow_crossing_of_long_edges_is_read_once`,\n`a_shallow_crossing_between_short_chords_is_read_once`,\n`a_shallow_tangency_is_read_once`, `a_grazing_crossing_is_not_a_cluster`\nand `a_shallow_crossing_far_from_the_origin_is_read_once`.\n- A short edge against one chord of a long edge has 4 tests. They cover\na crossing, a crossing after a common start, an overlap, and an edge\nthat leaves from its start.\n- `two_crossings_in_neighbouring_chords_stay_two`,\n`a_spline_leaving_a_line_at_a_corner_crosses_it_only_there` and\n`edges_meeting_end_to_end_meet_only_at_that_end` cover crossings at a\nreal angle, a corner and an end.\n- The contributor's 20,000 pairs of chords are now in\n`chords_lying_on_each_other_are_read_alike_a_rounding_step_apart`.\n- With the contributor's `closest_segment_pair`, the overlap test and\nthe grazing test failed.\n- I tested this branch together with #2427 and the second commit of\n#2430 on main. `cargo nextest run` for `brepkit-math`, `brepkit-algo`,\n`brepkit-blend`, `brepkit-io`, `brepkit-operations`, `brepkit-wasm`,\n`brepkit-check` and `brepkit-heal` passes (4,382 tests).\n- The pose sweep and the truth audit match main line for line.\n- `cargo clippy --all-targets --all-features -- -D warnings` passes.\n\n## The description from #2429\n\n## Summary\n\nThe edge-edge phase samples two edges into chords and finds each pair's\nclosest approach. That divides by `a c - b^2`. If two edges lie on one\ncurve and run opposite ways, their chords lie on each other, and that\ndivisor is exactly zero or rounding noise.\n\n- When it is exactly zero, the parallel test (an absolute 1e-20) caught\nit and took the chords' middles. That reported a crossing inside a\nshared edge.\n- When it is noise, the crossing could land anywhere along the chords.\n\nWhich of the two happened depended on how the products rounded. Booleans\nwhose edges lie on each other moved between an exact result and the mesh\nfallback whenever a multiply-add's rounding changed. Moving from a fused\nmultiply-add to plain multiply-then-add moved several such cases. One\nwas a fuse whose shared edge picked up a phantom split.\n\nNow, when two chords are all but parallel (`a c - b^2` under 1e-12 of `a\nc`), they meet at an end of one chord and that end's foot on the other.\nOf the four end-and-foot pairs, the closest is taken.\n\n## Test\n\n`phase_ee::tests::chords_lying_on_each_other_meet_only_at_their_ends`\nbuilds 20,000 pairs of antiparallel chords lying on each other, in many\nsizes and directions. One chord's ends are a rounding off the other's.\nThe test requires each pair to meet at their ends only. Without the\nchange it fails: a pair meets at 0.667 along a chord.\n\nalgo tests pass; clippy is clean.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\n---------\n\nCo-authored-by: Eric Vaughan <eric.d.vaughan@gmail.com>\nCo-authored-by: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-11-14T14:52:09-08:00",
+          "tree_id": "57f9d9572b0405f071cc865519433baf3ab02434",
+          "url": "https://github.com/andymai/brepkit/commit/6a4783fd8609d7d7307c5258b4a1d10de0690475"
+        },
+        "date": 1794696923537,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1089973,
+            "range": "± 4810",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1140084,
+            "range": "± 5429",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11915,
+            "range": "± 65",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 695193,
+            "range": "± 6940",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24473027,
+            "range": "± 69144",
             "unit": "ns/iter"
           }
         ]
