@@ -399,3 +399,26 @@ fn a_round_over_a_bore_keeps_the_marks_round_it() {
         "removed {removed}, want {want}"
     );
 }
+
+/// The box slit through along y between z = 7 and 7.1, from x = 5 to 35,
+/// and bored from the top down to the slit at (20, 6) by a bore of radius
+/// 2. The bore's lower mouth opens onto the slit, thinner than the tenth of
+/// the bore's radius the cut back runs past it, so the cut back would cut
+/// into the slit's floor: the round is the direct fillet's.
+#[test]
+fn a_bore_onto_a_thin_slit_is_left_to_the_direct_fillet() {
+    let mut topo = Topology::new();
+    let block = make_box(&mut topo, LENGTH, WIDTH, HEIGHT).unwrap();
+    let slit = make_box(&mut topo, 30.0, WIDTH + 2.0, 0.1).unwrap();
+    transform_solid(&mut topo, slit, &Mat4::translation(5.0, -1.0, 7.0)).unwrap();
+    let slit = boolean(&mut topo, BooleanOp::Cut, block, slit).unwrap();
+    let solid = drill(
+        &mut topo,
+        slit,
+        (0.5 * LENGTH, 6.0),
+        2.0,
+        (7.05, HEIGHT + 1.0),
+    );
+    let edge = line_edge(&topo, solid, [0.0, 0.0, HEIGHT], [LENGTH, 0.0, HEIGHT]);
+    round_as_the_direct_fillet(&mut topo, solid, &[edge], 7.0);
+}
