@@ -574,6 +574,7 @@ fn fillet_over_bores(
         crate::transform::transform_solid(topo, tool, &frame)?;
         let opts = crate::boolean::BooleanOptions {
             mesh_fallback: false,
+            unify_faces: false,
             ..crate::boolean::BooleanOptions::default()
         };
         match crate::boolean::boolean_with_options(

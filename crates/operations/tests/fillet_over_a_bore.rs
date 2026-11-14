@@ -24,6 +24,7 @@ use brepkit_topology::Topology;
 use brepkit_topology::builder::make_line_edge;
 use brepkit_topology::edge::{EdgeCurve, EdgeId};
 use brepkit_topology::explorer::{solid_edges, solid_faces};
+use brepkit_topology::face::FaceSurface;
 use brepkit_topology::solid::SolidId;
 
 const LENGTH: f64 = 40.0;
@@ -271,24 +272,62 @@ fn a_concave_round_over_a_bore_is_the_direct_fillets() {
     round_as_the_direct_fillet(&mut topo, solid, &[corner], 6.0);
 }
 
-/// The box drilled at (20, 8) by a bore of radius 2, its top marked along
-/// y = 15 into two faces, and the top edge at y = 0 rounded. A round of 2
+/// The box drilled at (20, `cy`) by a bore of radius `rho`, its top marked
+/// along y = 15 into two faces, and its top edge along x at y = 0.
+fn marked_box(topo: &mut Topology, cy: f64, rho: f64) -> (SolidId, EdgeId) {
+    let (drilled, _) = drilled_box(topo, 0.5 * LENGTH, cy, rho);
+    let mark = make_line_edge(
+        topo,
+        Point3::new(-1.0, 15.0, HEIGHT),
+        Point3::new(LENGTH + 1.0, 15.0, HEIGHT),
+        1e-7,
+    )
+    .unwrap();
+    let marked = imprint_faces(topo, drilled, &[ImprintTool::Edge(mark)]).unwrap();
+    let edge = line_edge(topo, marked, [0.0, 0.0, HEIGHT], [LENGTH, 0.0, HEIGHT]);
+    (marked, edge)
+}
+
+/// The marked box drilled at (20, 8) by a bore of radius 2. A round of 2
 /// reaches 2 into the top, short of the bore 6 away, and one of 1 reaches 1:
 /// each is the direct fillet's, and keeps the mark.
 #[test]
 fn a_round_short_of_a_bore_is_the_direct_fillets() {
     for r in [2.0, 1.0] {
         let mut topo = Topology::new();
-        let (drilled, _) = drilled_box(&mut topo, 0.5 * LENGTH, 8.0, 2.0);
-        let mark = make_line_edge(
-            &mut topo,
-            Point3::new(-1.0, 15.0, HEIGHT),
-            Point3::new(LENGTH + 1.0, 15.0, HEIGHT),
-            1e-7,
-        )
-        .unwrap();
-        let marked = imprint_faces(&mut topo, drilled, &[ImprintTool::Edge(mark)]).unwrap();
-        let edge = line_edge(&topo, marked, [0.0, 0.0, HEIGHT], [LENGTH, 0.0, HEIGHT]);
+        let (marked, edge) = marked_box(&mut topo, 8.0, 2.0);
         round_as_the_direct_fillet(&mut topo, marked, &[edge], r);
     }
+}
+
+/// The marked box drilled at (20, 6) by a bore of radius 2, under a round
+/// of 7: the bore is cut back through the round, and the cut merges no
+/// faces of the solid, so the top keeps its mark.
+#[test]
+fn a_round_over_a_bore_keeps_the_marks_round_it() {
+    let (cy, rho, r) = (6.0, 2.0, 7.0);
+    let mut topo = Topology::new();
+    let (marked, edge) = marked_box(&mut topo, cy, rho);
+    let before = solid_volume(&topo, marked, 0.01).unwrap();
+    let result = fillet_v2(&mut topo, marked, &[edge], r)
+        .and_then(all_blended)
+        .unwrap();
+    assert!(validate_solid(&topo, result).unwrap().is_valid());
+    let mesh = tessellate_solid(&topo, result, 0.05).unwrap();
+    assert!(is_watertight(&mesh), "mesh not watertight");
+    let tops = solid_faces(&topo, result)
+        .unwrap()
+        .into_iter()
+        .filter(|&f| {
+            matches!(topo.face(f).unwrap().surface(), FaceSurface::Plane { normal, d }
+                if (normal.z().abs() - 1.0).abs() < 1e-9 && (d.abs() - HEIGHT).abs() < 1e-9)
+        })
+        .count();
+    assert_eq!(tops, 2, "the top's faces");
+    let removed = before - solid_volume(&topo, result, 0.01).unwrap();
+    let want = (1.0 - FRAC_PI_4) * r * r * LENGTH - strip_in_bore(r, cy, rho);
+    assert!(
+        (removed - want).abs() <= 1e-4 * want,
+        "removed {removed}, want {want}"
+    );
 }
