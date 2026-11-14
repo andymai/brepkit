@@ -499,8 +499,9 @@ fn opens_past_its_mouths(
 /// Each bore whose mouth the round's band reaches, on a face of a picked
 /// edge, is filled, the solid rounded, and the bore cut back through the
 /// round.
-/// `None` when there is no such bore, or the round or the cut does not
-/// build exactly.
+/// `None` when there is no such bore, a picked edge is not convex, a bore
+/// does not open onto space past its mouths, a cut back would cross a seam,
+/// or the round or the cut does not build exactly.
 fn fillet_over_bores(
     topo: &mut Topology,
     solid: SolidId,
