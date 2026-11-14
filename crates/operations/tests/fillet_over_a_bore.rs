@@ -79,22 +79,35 @@ fn check(cy: f64, rho: f64, r: f64, pose: &Mat4) {
     let mut topo = Topology::new();
     let (solid, edge) = drilled_box(&mut topo, 0.5 * LENGTH, cy, rho);
     transform_solid(&mut topo, solid, pose).unwrap();
-    let before = solid_volume(&topo, solid, 0.01).unwrap();
-    let faces = solid_faces(&topo, solid).unwrap().len();
-    let result = fillet_v2(&mut topo, solid, &[edge], r)
+    let want = (1.0 - FRAC_PI_4) * r * r * LENGTH - strip_in_bore(r, cy, rho);
+    assert_rounds_off(&label, &mut topo, solid, edge, r, want);
+}
+
+/// Rounds `edge` of `solid` by `r`, and checks the result is valid and
+/// watertight, has one face more, and is short by `want`.
+fn assert_rounds_off(
+    label: &str,
+    topo: &mut Topology,
+    solid: SolidId,
+    edge: EdgeId,
+    r: f64,
+    want: f64,
+) {
+    let before = solid_volume(topo, solid, 0.01).unwrap();
+    let faces = solid_faces(topo, solid).unwrap().len();
+    let result = fillet_v2(topo, solid, &[edge], r)
         .and_then(all_blended)
         .unwrap_or_else(|e| panic!("{label}: {e}"));
-    let report = validate_solid(&topo, result).unwrap();
+    let report = validate_solid(topo, result).unwrap();
     assert!(report.is_valid(), "{label}: invalid: {report:?}");
-    let mesh = tessellate_solid(&topo, result, 0.05).unwrap();
+    let mesh = tessellate_solid(topo, result, 0.05).unwrap();
     assert!(is_watertight(&mesh), "{label}: mesh not watertight");
     assert_eq!(
-        solid_faces(&topo, result).unwrap().len(),
+        solid_faces(topo, result).unwrap().len(),
         faces + 1,
         "{label}: faces"
     );
-    let removed = before - solid_volume(&topo, result, 0.01).unwrap();
-    let want = (1.0 - std::f64::consts::FRAC_PI_4) * r * r * LENGTH - strip_in_bore(r, cy, rho);
+    let removed = before - solid_volume(topo, result, 0.01).unwrap();
     assert!(
         (removed - want).abs() <= 1e-4 * want,
         "{label}: removed {removed}, want {want}"
@@ -114,6 +127,61 @@ fn a_turned_bore_rounds_alike() {
     let pose =
         Mat4::translation(-37.2, 5.5, 140.0) * Mat4::rotation_z(0.7) * Mat4::rotation_x(-0.9);
     check(6.0, 2.0, 7.0, &pose);
+}
+
+/// A mirror turns each face's boundary the other way round its normal.
+#[test]
+fn a_mirrored_bore_rounds_alike() {
+    check(6.0, 2.0, 7.0, &Mat4::scale(-1.0, 1.0, 1.0));
+}
+
+/// `solid` less a cylinder of radius `rho` standing on (`cx`, `cy`) from
+/// height `z0` to `z1`.
+fn drill(
+    topo: &mut Topology,
+    solid: SolidId,
+    centre: (f64, f64),
+    rho: f64,
+    z: (f64, f64),
+) -> SolidId {
+    let drill = make_cylinder(topo, rho, z.1 - z.0).unwrap();
+    transform_solid(topo, drill, &Mat4::translation(centre.0, centre.1, z.0)).unwrap();
+    boolean(topo, BooleanOp::Cut, solid, drill).unwrap()
+}
+
+/// Two bores on the top under the round are both cut back through it. Of a
+/// bore under the round and one past it, only the first is filled, and the
+/// trimmed top keeps the other as its hole.
+#[test]
+fn a_round_over_two_bores_cuts_back_each_it_reaches() {
+    let r = 7.0;
+    let strip = (1.0 - FRAC_PI_4) * r * r * LENGTH;
+    for (far, under) in [((5.0, 1.5), true), ((14.0, 1.5), false)] {
+        let mut topo = Topology::new();
+        let (solid, _) = drilled_box(&mut topo, 12.0, 6.0, 2.0);
+        let solid = drill(&mut topo, solid, (28.0, far.0), far.1, (-1.0, HEIGHT + 1.0));
+        let edge = line_edge(&topo, solid, [0.0, 0.0, HEIGHT], [LENGTH, 0.0, HEIGHT]);
+        let mut want = strip - strip_in_bore(r, 6.0, 2.0);
+        if under {
+            want -= strip_in_bore(r, far.0, far.1);
+        }
+        let label = format!("second bore at {}", far.0);
+        assert_rounds_off(&label, &mut topo, solid, edge, r, want);
+    }
+}
+
+/// A counterbore, wide from below up to z = 7 and narrow from there to the
+/// top: the narrow part is a bore from the step to the top, and the round of
+/// the top edge, which stays above the wide part, cuts it back.
+#[test]
+fn a_round_over_a_counterbores_narrow_part_cuts_it_back() {
+    let (cy, rho, r) = (6.0, 2.0, 7.0);
+    let mut topo = Topology::new();
+    let (solid, _) = drilled_box(&mut topo, 0.5 * LENGTH, cy, rho);
+    let solid = drill(&mut topo, solid, (0.5 * LENGTH, cy), 3.5, (-1.0, 7.0));
+    let edge = line_edge(&topo, solid, [0.0, 0.0, HEIGHT], [LENGTH, 0.0, HEIGHT]);
+    let want = (1.0 - FRAC_PI_4) * r * r * LENGTH - strip_in_bore(r, cy, rho);
+    assert_rounds_off("counterbore", &mut topo, solid, edge, r, want);
 }
 
 /// The straight edge of `solid` from `a` to `b`.
