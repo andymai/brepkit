@@ -19,6 +19,7 @@ brepkit-math.workspace = true
 brepkit-topology.workspace = true
 
 log.workspace = true
+rayon.workspace = true
 thiserror.workspace = true
 
 [features]

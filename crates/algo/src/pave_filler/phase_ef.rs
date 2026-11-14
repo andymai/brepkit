@@ -435,7 +435,16 @@ fn check_edge_face_pairs(
         (0..faces.len()).map(|_| None).collect();
     let mut regions: Vec<Option<Option<super::fill_face_info::PlaneRegion>>> =
         (0..faces.len()).map(|_| None).collect();
-    for &eid in edges {
+    let mut surveys = survey_pairs(
+        topo,
+        edges,
+        faces,
+        face_boundary_edges,
+        &face_aabbs,
+        &hulls,
+        tol,
+    );
+    for (edge_idx, &eid) in edges.iter().enumerate() {
         // Snapshot edge data to avoid holding immutable borrow across add_vertex
         let (curve, start_pos, end_pos, t0, t1) = {
             let edge = topo.edge(eid)?;
@@ -490,12 +499,10 @@ fn check_edge_face_pairs(
             // crossings; sampling it here would emit dozens of fake paves
             // (e.g. a cap circle lying in the opposing cap's plane).
             let n_chk = 16;
-            let edge_on_surface = (0..=n_chk).all(|i| {
-                let t = t0 + (t1 - t0) * (f64::from(i) / f64::from(n_chk));
-                let pt = curve.evaluate_with_endpoints(t, start_pos, end_pos);
-                distance_to_surface_near(pt, surface, hull, tol) < tol.linear
-            });
-            if edge_on_surface {
+            let survey = surveys[edge_idx]
+                .remove(&face_idx)
+                .unwrap_or_else(|| survey(&curve, start_pos, end_pos, t0, t1, surface, hull, tol));
+            if survey.is_none() {
                 // Through the inside of a cylinder or cone face, the edge
                 // bounds a region the two solids share there (a bin wall's
                 // top arc on the coaxial air wall of a fillet that reaches
@@ -636,14 +643,7 @@ fn check_edge_face_pairs(
                 continue;
             }
 
-            let mut crossings = match surface {
-                FaceSurface::Plane { normal, d } => {
-                    find_edge_plane_crossings(&curve, start_pos, end_pos, t0, t1, *normal, *d, tol)
-                }
-                _ => find_edge_surface_crossings(
-                    &curve, start_pos, end_pos, t0, t1, surface, hull, tol,
-                ),
-            };
+            let mut crossings = survey.unwrap_or_default();
             // A curved edge crossing a cylinder or cone between two samples
             // (an envelope's corner curve through a pocket's floor fillet, a
             // half-disc's rim just poking through a frustum's wall) shows only
@@ -1028,6 +1028,150 @@ fn conic_plane_crossings(
     }
     out.sort_by(|x, y| x.0.total_cmp(&y.0));
     out
+}
+
+/// What an edge's pass over a face finds before anything is added: `None`
+/// when the edge lies on the face's surface (16 samples within the
+/// tolerance), else where it crosses the surface.
+type Survey = Option<Vec<(f64, Point3)>>;
+
+/// [`Survey`] of one edge and one face's surface.
+#[allow(clippy::too_many_arguments)]
+fn survey(
+    curve: &EdgeCurve,
+    start_pos: Point3,
+    end_pos: Point3,
+    t0: f64,
+    t1: f64,
+    surface: &FaceSurface,
+    hull: Option<Aabb3>,
+    tol: Tolerance,
+) -> Survey {
+    let n_chk = 16;
+    let edge_on_surface = (0..=n_chk).all(|i| {
+        let t = t0 + (t1 - t0) * (f64::from(i) / f64::from(n_chk));
+        let pt = curve.evaluate_with_endpoints(t, start_pos, end_pos);
+        distance_to_surface_near(pt, surface, hull, tol) < tol.linear
+    });
+    if edge_on_surface {
+        return None;
+    }
+    Some(match surface {
+        FaceSurface::Plane { normal, d } => {
+            find_edge_plane_crossings(curve, start_pos, end_pos, t0, t1, *normal, *d, tol)
+        }
+        _ => find_edge_surface_crossings(curve, start_pos, end_pos, t0, t1, surface, hull, tol),
+    })
+}
+
+/// The [`Survey`] of every edge and face pair that [`check_edge_face_pairs`]
+/// examines, by edge index and then face index. A survey reads only the
+/// edge's curve and the face's surface, which adding vertices leaves as they
+/// are, so the pairs are surveyed in parallel up front; the pass then takes
+/// them in its own order.
+#[allow(clippy::too_many_arguments)]
+fn survey_pairs(
+    topo: &Topology,
+    edges: &[EdgeId],
+    faces: &[FaceId],
+    face_boundary_edges: &[HashSet<EdgeId>],
+    face_aabbs: &[Aabb3],
+    hulls: &[Option<Aabb3>],
+    tol: Tolerance,
+) -> Vec<std::collections::HashMap<usize, Survey>> {
+    /// An edge and a face to survey, with the edge's curve and ends.
+    struct Pair<'a> {
+        edge_idx: usize,
+        face_idx: usize,
+        curve: &'a EdgeCurve,
+        start_pos: Point3,
+        end_pos: Point3,
+        t0: f64,
+        t1: f64,
+        surface: &'a FaceSurface,
+    }
+    let surfaces: Vec<Option<&FaceSurface>> = faces
+        .iter()
+        .map(|&fid| {
+            topo.face(fid)
+                .ok()
+                .map(brepkit_topology::face::Face::surface)
+        })
+        .collect();
+    let mut pairs = Vec::new();
+    for (edge_idx, &eid) in edges.iter().enumerate() {
+        let Some((curve, start_pos, end_pos, t0, t1)) = topo.edge(eid).ok().and_then(|edge| {
+            let sp = topo.vertex(edge.start()).ok()?.point();
+            let ep = topo.vertex(edge.end()).ok()?.point();
+            let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
+            Some((edge.curve(), sp, ep, t0, t1))
+        }) else {
+            continue;
+        };
+        // The same box and the same rejections as the pass.
+        let edge_aabb = {
+            let mut pts = Vec::with_capacity(N_SAMPLES + 1);
+            for i in 0..=N_SAMPLES {
+                let t = t0 + (t1 - t0) * (i as f64 / N_SAMPLES as f64);
+                pts.push(curve.evaluate_with_endpoints(t, start_pos, end_pos));
+            }
+            Aabb3::try_from_points(pts).map(|a| a.expanded(tol.linear))
+        };
+        for (face_idx, surface) in surfaces.iter().enumerate() {
+            let Some(surface) = surface else {
+                continue;
+            };
+            if face_boundary_edges[face_idx].contains(&eid) {
+                continue;
+            }
+            if let Some(ea) = &edge_aabb
+                && !ea.intersects(face_aabbs[face_idx])
+            {
+                continue;
+            }
+            if let (Some(ea), Some(hull), EdgeCurve::Line) = (&edge_aabb, hulls[face_idx], curve)
+                && !ea.intersects(hull.expanded(tol.linear))
+            {
+                continue;
+            }
+            pairs.push(Pair {
+                edge_idx,
+                face_idx,
+                curve,
+                start_pos,
+                end_pos,
+                t0,
+                t1,
+                surface,
+            });
+        }
+    }
+    let run = |pair: &Pair<'_>| {
+        survey(
+            pair.curve,
+            pair.start_pos,
+            pair.end_pos,
+            pair.t0,
+            pair.t1,
+            pair.surface,
+            hulls[pair.face_idx],
+            tol,
+        )
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    let found: Vec<Survey> = {
+        use rayon::prelude::*;
+        pairs.par_iter().map(run).collect()
+    };
+    #[cfg(target_arch = "wasm32")]
+    let found: Vec<Survey> = pairs.iter().map(run).collect();
+    let mut surveys: Vec<std::collections::HashMap<usize, Survey>> = (0..edges.len())
+        .map(|_| std::collections::HashMap::new())
+        .collect();
+    for (pair, found) in pairs.iter().zip(found) {
+        surveys[pair.edge_idx].insert(pair.face_idx, found);
+    }
+    surveys
 }
 
 /// Find edge-surface crossings by sampling the distance to the surface and refining.

@@ -16,6 +16,7 @@ all-features = true
 
 [dependencies]
 log.workspace = true
+rayon.workspace = true
 robust.workspace = true
 serde = {workspace = true, optional = true}
 thiserror.workspace = true
