@@ -1,0 +1,21 @@
+crates/blend/src/fillet_builder.rs
+  s_0d4c8a45463599::t_e2ae7472cc41a9 4022
+crates/blend/src/trimmer.rs
+  s_0d4c8a45463599::t_e01cb7fd202285 1662
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "69ff9f71c354941c1d529101d670d484a211d752",
+  "prompts": {},
+  "sessions": {
+    "s_0d4c8a45463599": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "08f6c499-3e63-406f-8604-1a39493c163d",
+        "model": "claude-fable-5-2"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
