@@ -1,5 +1,17 @@
 # Changelog
 
+## [4.11.16](https://github.com/andymai/brepkit/compare/v4.11.15...v4.11.16) (2026-11-14)
+
+
+### Bug Fixes
+
+* **algo:** split a round's torus band at a coaxial circle ([#2439](https://github.com/andymai/brepkit/issues/2439)) ([eb5697e](https://github.com/andymai/brepkit/commit/eb5697e1e9494a1ebf6c4988d50a4523f9d78528))
+
+
+### Performance
+
+* B-spline surface pairs' sections kept, seeds and edge-face checks in parallel ([#2437](https://github.com/andymai/brepkit/issues/2437)) ([37dadc9](https://github.com/andymai/brepkit/commit/37dadc9480c477e36f757028ed324a02537d7e53))
+
 ## [4.11.15](https://github.com/andymai/brepkit/compare/v4.11.14...v4.11.15) (2026-11-14)
 
 
