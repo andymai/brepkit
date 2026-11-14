@@ -1024,7 +1024,13 @@ fn constraint_splits_at_a_vertex_on_it_beside_its_end() {
 /// out a fan. The constraint is left to the bisection, as before.
 #[test]
 fn constraint_is_not_chained_through_a_cluster_on_it() {
-    for dir in [Point2::new(0.0, 1.0), Point2::new(1.0, 1.0)] {
+    // Along the third direction, rounding leaves only one of the five exactly
+    // on the line.
+    for dir in [
+        Point2::new(0.0, 1.0),
+        Point2::new(1.0, 1.0),
+        Point2::new(0.25, 1.25),
+    ] {
         let at = |s: f64| Point2::new(dir.x() * s, dir.y() * s);
         let mut cdt = Cdt::new((Point2::new(-20.0, -20.0), Point2::new(20.0, 20.0)));
         let v0 = cdt.insert_point(at(0.0)).unwrap();

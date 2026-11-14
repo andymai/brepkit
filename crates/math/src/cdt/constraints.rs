@@ -201,23 +201,33 @@ impl Cdt {
 
     /// The one vertex lying exactly on the open segment from `v0` to `v1`
     /// (`orient2d` reads it on the line, and it falls strictly between the
-    /// ends), if exactly one does.
+    /// ends), if no other vertex lies beside the segment.
+    ///
+    /// Beside is the band `insert_constraint` chains through, 1e-6 of the
+    /// segment's length. A cluster is counted by it, not by `orient2d`:
+    /// rounding leaves most of a cluster's vertices a hair off a slanted
+    /// line, and a count of the exact ones would read the cluster as one.
     fn lone_vertex_on_segment(&self, v0: usize, v1: usize) -> Option<usize> {
         let (p0, p1) = (self.vertices[v0], self.vertices[v1]);
         let d = p1 - p0;
         let len_sq = d.dot(d);
-        let mut on = self
+        let mut beside = self
             .vertices
             .iter()
             .enumerate()
             .skip(self.super_count)
             .filter(|&(i, &q)| {
-                let t = (q - p0).dot(d);
-                i != v0 && i != v1 && orient2d(p0, p1, q) == 0.0 && t > 0.0 && t < len_sq
-            })
-            .map(|(i, _)| i);
-        match (on.next(), on.next()) {
-            (Some(i), None) => Some(i),
+                let r = q - p0;
+                let t = r.dot(d);
+                let cross = r.x() * d.y() - r.y() * d.x();
+                i != v0
+                    && i != v1
+                    && t > 0.0
+                    && t < len_sq
+                    && cross * cross < 1e-12 * len_sq * len_sq
+            });
+        match (beside.next(), beside.next()) {
+            (Some((i, &q)), None) if orient2d(p0, p1, q) == 0.0 => Some(i),
             _ => None,
         }
     }
