@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794686302590,
+  "lastUpdate": 1794686968621,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -69389,6 +69389,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24145181,
             "range": "± 214022",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "37dadc9480c477e36f757028ed324a02537d7e53",
+          "message": "perf: B-spline surface pairs' sections kept, seeds and edge-face checks in parallel (#2437)\n\nThis PR carries #2425 by @Robokan onto the current main. The three\ncommits are the contributor's, with no change. One merge commit and two\nnew commits follow them.\n\nThe new commits do three things in\n`crates/math/src/nurbs/intersection/surface_seeding.rs`:\n\n- The last pass of `find_ssi_seeds_grid` held each close pair and each\nrefinement in memory before it took the seeds. Two dense patches within\nthe threshold have a million close pairs. The pass now refines 8,192\npairs at a time. The seeds are the same, in the same order.\n- The sections that `intersect_nurbs_nurbs` keeps now follow\n`keep_split` in `surface.rs`. The code counts the total once, and the\nleast lately used entries leave in one pass. When another thread kept\nthe same call meanwhile, the code does not keep it twice.\n- The cell indices beside a seed's cell now saturate. A seed at about\n2e15 has a cell index at the end of the range of `i64`, and the index\nbeside it overflowed.\n\n## How I checked it\n\n- New tests cover the kept sections and the seed cells against a scan of\nevery seed. One more test compares the seeds for 1, 7 and 64 pairs at a\ntime, and one puts a seed at 2e15.\n- I tested this branch together with #2429, #2427 and the torus band\ncommit of #2430 on main. `cargo nextest run` for `brepkit-math`,\n`brepkit-algo`, `brepkit-blend`, `brepkit-io`, `brepkit-operations`,\n`brepkit-wasm`, `brepkit-check` and `brepkit-heal` passes (4,345 tests).\n- The pose sweep and the truth audit match main line for line.\n- `cargo clippy --all-targets --all-features -- -D warnings` passes.\n- `cargo build -p brepkit-wasm --target wasm32-unknown-unknown` passes.\n- `RUSTDOCFLAGS=\"-D warnings\" cargo doc` passes for `brepkit-math` and\n`brepkit-algo`.\n\n## The description from #2425\n\nThree speedups for booleans of fitted B-spline bodies, the cases where\nbrepkit took seconds against a reference kernel's tenths. Every result\nis unchanged: the outputs of 210 booleans from real designs are the same\nbyte for byte, written as STEP, before and after; the pose sweep and\ntruth audit match `main` line for line; the Bezier split is tested bit\nfor bit against inserting knot by knot.\n\nEach change is its own commit, with its reasoning in the commit message.\n\n## Commits\n\n- **perf(math): two B-spline surfaces' sections are kept, their grid\nseeds refined in parallel**\nA boolean of fitted bodies meets the same pair of B-spline surfaces\nagain and again (faces of one body share a surface); on one real fuse\neach meeting seeded the pair on a 32 x 32 grid against another and\nrefined 163,000 close grid pairs by Newton, six times over.\n`intersect_nurbs_nurbs` now keeps the last few pairs' sections\nprocess-wide, found again by both surfaces' data bit for bit, the grid\nand the step (at most 2^19 control points and section points in all).\nThe grid's refinements are independent, so they run on rayon's pool\n(sequentially on wasm and under test) and their seeds are taken in their\npairs' order; a seed's duplicates are looked for among the seeds within\na cell of it, which gives the same yes or no as the scan of every seed.\n- **perf(algo): the edge-face pass surveys its pairs in parallel first**\nFor each edge and face it examines, the pass asks whether the edge lies\non the face's surface and, if not, where it crosses it: projections,\nwhich on B-spline faces are most of the pass. Those answers read only\nthe edge's curve and the face's surface, and the pass only adds\nvertices, so every pair it would examine (the same broad-phase\nrejections) is surveyed on rayon's pool before it starts (sequentially\non wasm), and the pass takes each survey in its own order.\n- **perf(math): a Bezier split leaves rows of unit weights in place**\nRaising every knot to full multiplicity took the whole control grid to\nhomogeneous form and back for each knot inserted. A row the blends do\nnot touch is only taken there and back, which leaves a row whose weights\nare all exactly 1 as it was, so such rows now stay in place; every other\nrow still takes the round trip. The existing bit-for-bit test against\nknot-by-knot insertion now also covers rows of unit weights among rows\nof others.\n\n## Timings\n\nBooleans with their inputs loaded, one process each, the old and new\nbuilds in turn on a quiet machine (a thread started first in both, as an\napp would have: a process that never started one allocates without\nlocks).\n\n| | before | after |\n|---|---|---|\n| two fitted-loft booleans from real designs | 4.07 s, 4.02 s | 0.51 s,\n0.46 s |\n| two more | 1.29 s, 1.29 s | 0.22 s, 0.23 s |\n| a small boolean of B-spline bodies (the Bezier split) | 0.29 s | 0.10\ns |\n| 180 booleans from real designs, in all | 37.0 s | 25.8 s |\n\n## How I checked it\n\n- `cargo test --release` for math, check, blend, operations, io, algo\nand topology on this branch\n- pose sweep and truth audit: the same as `main`, line for line\n- `cargo clippy -p brepkit-math -p brepkit-algo --all-targets -- -D\nwarnings`, `cargo fmt --check`, `RUSTDOCFLAGS=\"-D warnings\" cargo doc`\nfor math and algo\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\n---------\n\nCo-authored-by: Robokan <eric.d.vaughan@gmail.com>\nCo-authored-by: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-11-14T20:05:30Z",
+          "tree_id": "d6e213007fc690026c41e7538b3b6d59fdfcf0c7",
+          "url": "https://github.com/andymai/brepkit/commit/37dadc9480c477e36f757028ed324a02537d7e53"
+        },
+        "date": 1794686957090,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1067732,
+            "range": "± 103038",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1116527,
+            "range": "± 11360",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11746,
+            "range": "± 68",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 704911,
+            "range": "± 33788",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24844885,
+            "range": "± 73648",
             "unit": "ns/iter"
           }
         ]
