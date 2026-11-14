@@ -1,5 +1,14 @@
 # Changelog
 
+## [4.11.17](https://github.com/andymai/brepkit/compare/v4.11.16...v4.11.17) (2026-11-14)
+
+
+### Bug Fixes
+
+* **algo:** edges that run along each other do not cross ([#2438](https://github.com/andymai/brepkit/issues/2438)) ([6a4783f](https://github.com/andymai/brepkit/commit/6a4783fd8609d7d7307c5258b4a1d10de0690475))
+* **blend:** round along a face whose edges stand off its surface ([#2440](https://github.com/andymai/brepkit/issues/2440)) ([25e8f47](https://github.com/andymai/brepkit/commit/25e8f4787f6f7c026d8c3ceeebce327ed29f5a46))
+* **operations:** round over a through-bore, then cut the bore back ([#2442](https://github.com/andymai/brepkit/issues/2442)) ([d360d50](https://github.com/andymai/brepkit/commit/d360d501e3f01c7e617e9f1062d87e8b17875ac8))
+
 ## [4.11.16](https://github.com/andymai/brepkit/compare/v4.11.15...v4.11.16) (2026-11-14)
 
 
