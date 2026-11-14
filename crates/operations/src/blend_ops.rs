@@ -393,6 +393,65 @@ fn into_face(
     Ok(surface.normal(u, v).cross(along).normalize().ok())
 }
 
+/// Points along a seam at which it is tested against a cutter.
+const SEAM_SAMPLES: u32 = 64;
+
+/// Whether a seam of `solid` (an edge that one wire runs both ways) passes
+/// through the bore's cutter: the cut makes a hole across the seam but
+/// leaves the seam whole, so it runs through the hole, and the solid is
+/// valid but its face's outline crosses its hole.
+fn cutter_meets_a_seam(
+    topo: &Topology,
+    solid: SolidId,
+    bore: &Bore,
+) -> Result<bool, OperationsError> {
+    let [start, end] = bore.centres;
+    let axis = (end - start).normalize()?;
+    let margin = MOUTH_MARGIN * bore.radius;
+    let base = start - axis * margin;
+    let length = (end - start).length() + 2.0 * margin;
+    for face_id in solid_faces(topo, solid)? {
+        let face = topo.face(face_id)?;
+        for wire_id in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied())
+        {
+            let edges = topo.wire(wire_id)?.edges();
+            for (i, oe) in edges.iter().enumerate() {
+                if !edges[i + 1..].iter().any(|later| later.edge() == oe.edge()) {
+                    continue;
+                }
+                let edge = topo.edge(oe.edge())?;
+                let (a, b) = (
+                    topo.vertex(edge.start())?.point(),
+                    topo.vertex(edge.end())?.point(),
+                );
+                let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
+                let points: Vec<Point3> = (0..=SEAM_SAMPLES)
+                    .map(|k| {
+                        let t = t0 + (t1 - t0) * f64::from(k) / f64::from(SEAM_SAMPLES);
+                        edge.curve().evaluate_with_endpoints(t, a, b)
+                    })
+                    .collect();
+                // A sample within a step of the cutter counts, so a seam
+                // that passes through it between two samples is found.
+                let step = points
+                    .windows(2)
+                    .map(|pair| (pair[1] - pair[0]).length())
+                    .fold(0.0, f64::max);
+                for p in points {
+                    let h = (p - base).dot(axis);
+                    if h >= -step
+                        && h <= length + step
+                        && ((p - base) - axis * h).length() <= bore.radius + step
+                    {
+                        return Ok(true);
+                    }
+                }
+            }
+        }
+    }
+    Ok(false)
+}
+
 /// Two unit directions square to `axis` and to each other.
 fn square_to(axis: Vec3) -> Result<(Vec3, Vec3), OperationsError> {
     let x = axis
@@ -553,6 +612,12 @@ fn fillet_over_bores(
     };
     let succeeded = built.succeeded.clone();
     let built = own_cavities(topo, plugged, built, "fillet")?;
+    for bore in &bores {
+        if cutter_meets_a_seam(topo, built.solid, bore)? {
+            log::debug!("fillet over bores: a bore's cut back would cross a seam");
+            return Ok(None);
+        }
+    }
 
     // Each bore cut back, a little past both mouths, where it opens onto
     // space.

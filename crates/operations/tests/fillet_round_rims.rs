@@ -513,19 +513,19 @@ fn assert_sound_and_changed_by(topo: &Topology, solid: SolidId, before: f64, cha
     );
 }
 
-/// A rod drilled through at `offset` from its axis by a hole of radius
-/// `hole`, its top rim then rounded by `r`: the rounded solid, or why the
-/// round was not built. The hole stands a radian round from the rod's seam
-/// (a hole the round cuts back is meshed clear of the band's seam).
+/// A rod drilled through at `offset` from its axis, `angle` round from its
+/// seam, by a hole of radius `hole`, its top rim then rounded by `r`: the
+/// rounded solid, or why the round was not built.
 fn round_a_drilled_rods_top(
     offset: f64,
+    angle: f64,
     hole: f64,
     r: f64,
 ) -> Result<(Topology, SolidId, f64), String> {
     let mut topo = Topology::new();
     let rod = make_cylinder(&mut topo, RADIUS, HEIGHT).unwrap();
     let pin = make_cylinder(&mut topo, hole, HEIGHT + 2.0).unwrap();
-    let (x, y) = (offset * 1.0_f64.cos(), offset * 1.0_f64.sin());
+    let (x, y) = (offset * angle.cos(), offset * angle.sin());
     transform_solid(&mut topo, pin, &Mat4::translation(x, y, -1.0)).unwrap();
     let drilled = boolean(&mut topo, BooleanOp::Cut, rod, pin).unwrap();
     let before = solid_volume(&topo, drilled, 0.001).unwrap();
@@ -573,9 +573,21 @@ fn strip_in_hole(rim: f64, r: f64, offset: f64, hole: f64) -> f64 {
 fn a_rods_top_rim_round_over_a_hole_cuts_it_back() {
     let (offset, hole) = (4.2, 0.3);
     let (topo, solid, before) =
-        round_a_drilled_rods_top(offset, hole, 2.0).expect("the round over the hole builds");
+        round_a_drilled_rods_top(offset, 1.0, hole, 2.0).expect("the round over the hole builds");
     let change = -(rounded_off(RADIUS, 2.0) - strip_in_hole(RADIUS, 2.0, offset, hole));
     assert_sound_and_changed_by(&topo, solid, before, change);
+}
+
+/// The same hole on the rod's seam lies across the seam of the round's
+/// torus band. Cut back, it would cross that seam, which the cut leaves
+/// whole through the hole: a valid solid whose mesh is open. The cut back
+/// is not taken there, and the direct fillet refuses the round.
+#[test]
+fn a_rods_top_rim_round_over_a_hole_on_its_seam_is_refused() {
+    assert!(
+        round_a_drilled_rods_top(4.2, 0.0, 0.3, 2.0).is_err(),
+        "a round over the hole on the seam was built"
+    );
 }
 
 /// A hole crossing the circle the round's contact runs along notches the
@@ -585,7 +597,7 @@ fn a_rods_top_rim_round_over_a_hole_cuts_it_back() {
 #[test]
 fn a_rods_top_rim_round_across_a_hole_is_refused() {
     assert!(
-        round_a_drilled_rods_top(3.5, 0.8, 2.0).is_err(),
+        round_a_drilled_rods_top(3.5, 1.0, 0.8, 2.0).is_err(),
         "a round across the hole was built"
     );
 }
@@ -594,7 +606,7 @@ fn a_rods_top_rim_round_across_a_hole_is_refused() {
 /// result is sound: short of the drilled rod by the rim's strip.
 #[test]
 fn a_rods_top_rim_rounds_off_beside_a_hole() {
-    let (topo, solid, before) = round_a_drilled_rods_top(1.5, 0.8, 2.0).unwrap();
+    let (topo, solid, before) = round_a_drilled_rods_top(1.5, 1.0, 0.8, 2.0).unwrap();
     assert_sound_and_changed_by(&topo, solid, before, -rounded_off(RADIUS, 2.0));
 }
 
