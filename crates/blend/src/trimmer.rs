@@ -1671,21 +1671,24 @@ fn mapped_surface_uv(
     Ok(projected)
 }
 
-/// How far a point mapped onto a curved face may stand off its surface. A
-/// contact ends on the face's boundary, and a face read from a file can
-/// have its edges stand off its surface by more than the 1e-4 a point
-/// otherwise may (a B-spline skin's edges 3e-3 off it): the allowance
-/// grows by the farthest the boundary stands off, read at its vertices and
-/// at points along each edge.
+/// How far a point inside a contact, mapped onto a curved face, may stand
+/// off its surface.
+const MAPPED_UV_TOL: f64 = 1e-4;
+
+/// How far a contact's end or a vertex on the boundary, mapped onto a curved
+/// face, may stand off its surface. A contact ends on the face's boundary,
+/// and a face read from a file can have its edges stand off its surface by
+/// more than [`MAPPED_UV_TOL`] (a B-spline skin's edges 3e-3 off it): the
+/// allowance grows by the farthest the boundary stands off, read at its
+/// vertices and at points along each edge.
 fn mapped_uv_allowance(
     topo: &Topology,
     face_id: FaceId,
     surface: &FaceSurface,
 ) -> Result<f64, BlendError> {
-    const BASE: f64 = 1e-4;
     const SAMPLES: u32 = 8;
     if surface.is_planar() {
-        return Ok(BASE);
+        return Ok(MAPPED_UV_TOL);
     }
     let face = topo.face(face_id)?;
     let mut farthest: f64 = 0.0;
@@ -1709,7 +1712,7 @@ fn mapped_uv_allowance(
             }
         }
     }
-    Ok(BASE + farthest)
+    Ok(MAPPED_UV_TOL + farthest)
 }
 
 fn mapped_vertex_for_point(
@@ -2109,12 +2112,20 @@ fn rebuild_mapped_parametric_face(
     let mut closed_vertices = std::collections::HashSet::new();
     let mut contact_edges = Vec::with_capacity(restrictions.len());
     for restriction in restrictions {
-        if restriction.contact_3d.len() < 2
+        let last = restriction.contact_3d.len().saturating_sub(1);
+        if last == 0
             || restriction
                 .contact_3d
                 .iter()
-                .copied()
-                .any(|point| mapped_surface_uv(&surface, point, face_id, allowance).is_err())
+                .enumerate()
+                .any(|(index, &point)| {
+                    let reach = if index == 0 || index == last {
+                        allowance
+                    } else {
+                        MAPPED_UV_TOL
+                    };
+                    mapped_surface_uv(&surface, point, face_id, reach).is_err()
+                })
         {
             return Err(BlendError::TrimmingFailure { face: face_id });
         }
@@ -5298,6 +5309,88 @@ mod tests {
         let result =
             trim_parametric_face_batch(&mut topo, face, &[restriction], BoundarySplitPolicy::All);
         (topo, face, result)
+    }
+
+    /// A flat B-spline face over the unit square in z = 0 with a square hole
+    /// whose edges stand `lift` above it, trimmed along x = 0.3, cut off its
+    /// x = 0 side, by a contact whose middle point stands `bulge` off the
+    /// face.
+    fn trim_beside_a_lifted_hole(lift: f64, bulge: f64) -> Result<BatchTrimResult, BlendError> {
+        use brepkit_math::nurbs::surface::NurbsSurface;
+
+        let mut topo = Topology::new();
+        let surface = NurbsSurface::new(
+            1,
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![
+                vec![Point3::new(0.0, 0.0, 0.0), Point3::new(0.0, 1.0, 0.0)],
+                vec![Point3::new(1.0, 0.0, 0.0), Point3::new(1.0, 1.0, 0.0)],
+            ],
+            vec![vec![1.0, 1.0], vec![1.0, 1.0]],
+        )
+        .unwrap();
+        let mut wire = |corners: [(f64, f64, f64); 4]| {
+            let vertices = corners
+                .map(|(x, y, z)| topo.add_vertex(Vertex::new(Point3::new(x, y, z), VERTEX_TOL)));
+            let edges: Vec<OrientedEdge> = (0..4)
+                .map(|k| {
+                    let edge = Edge::new(vertices[k], vertices[(k + 1) % 4], EdgeCurve::Line);
+                    OrientedEdge::new(topo.add_edge(edge), true)
+                })
+                .collect();
+            (
+                topo.add_wire(Wire::new(edges.clone(), true).unwrap()),
+                edges,
+            )
+        };
+        let (outer, outer_edges) = wire([
+            (0.0, 0.0, 0.0),
+            (1.0, 0.0, 0.0),
+            (1.0, 1.0, 0.0),
+            (0.0, 1.0, 0.0),
+        ]);
+        let (hole, _) = wire([
+            (0.6, 0.4, lift),
+            (0.6, 0.6, lift),
+            (0.8, 0.6, lift),
+            (0.8, 0.4, lift),
+        ]);
+        let face = topo.add_face(Face::new(outer, vec![hole], FaceSurface::Nurbs(surface)));
+        let restriction = ParametricRestriction {
+            contact_3d: vec![
+                Point3::new(0.3, 0.0, 0.0),
+                Point3::new(0.3, 0.5, bulge),
+                Point3::new(0.3, 1.0, 0.0),
+            ],
+            keep: TrimKeep::AwayFrom(Point3::new(0.0, 0.5, 0.0)),
+            curve: None,
+            pcurve: None,
+            source_edges: vec![outer_edges[3].edge()],
+        };
+        trim_parametric_face_batch(&mut topo, face, &[restriction], BoundarySplitPolicy::All)
+    }
+
+    /// A hole whose edges stand well off a curved face lets a contact end
+    /// or a boundary vertex stand as far off it, but not the points along a
+    /// contact elsewhere on the face: one 1e-3 off it refuses the trim, as
+    /// it does on a face whose edges lie on it.
+    #[test]
+    fn an_edge_off_the_face_does_not_let_a_contact_off_it() {
+        for lift in [0.0, 0.05] {
+            assert!(
+                trim_beside_a_lifted_hole(lift, 0.0).is_ok(),
+                "hole {lift} off: a contact on the face trims it"
+            );
+            assert!(
+                matches!(
+                    trim_beside_a_lifted_hole(lift, 1e-3),
+                    Err(BlendError::TrimmingFailure { .. })
+                ),
+                "hole {lift} off: a contact 1e-3 off the face must refuse the trim"
+            );
+        }
     }
 
     /// Each edge of the trimmed wall's outer wire: its curve, how far the
