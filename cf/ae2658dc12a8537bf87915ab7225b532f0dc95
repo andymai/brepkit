@@ -1,0 +1,21 @@
+crates/blend/src/trimmer.rs
+  s_0d4c8a45463599::t_dd9f6378d7dcc1 1594-1620,2267-2310,2312-2314,2316,2318,2321-2322,5533,5536,5581,5624,5634-5748
+crates/operations/tests/fillet_skin_edges_off_surface.rs
+  s_0d4c8a45463599::t_fddcd53ae475e0 34-58,71-75,81,84-85,92-93,135,165-168,170,173,181-184,208,215,223,229,238,247,262,267,277,289-314
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "cfae2658dc12a8537bf87915ab7225b532f0dc95",
+  "prompts": {},
+  "sessions": {
+    "s_0d4c8a45463599": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "08f6c499-3e63-406f-8604-1a39493c163d",
+        "model": "claude-fable-5-2"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
