@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794696930827,
+  "lastUpdate": 1794697547906,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -69605,6 +69605,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24473027,
             "range": "± 69144",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "d360d501e3f01c7e617e9f1062d87e8b17875ac8",
+          "message": "fix(operations): round over a through-bore, then cut the bore back (#2442)\n\nThis PR carries the second commit of #2430 by @Robokan onto the current\nmain. The first commit is in #2439. The commit is the contributor's,\nwith no change. Two merge commits and thirteen new commits follow it.\n\nThe contributor's commit fills a through-bore under a round, rounds the\nsolid, and cuts the bore back. The new commits keep that path to the\ncases where its result is exact. In each other case, the direct fillet\nruns, as on main.\n\n- A wall is a bore only when the material is round it. A pin across a\nslot, or the hub of a spool, has the same shape as a bore. The path took\nit for one, and the cut back removed it.\n- The cut back must not remove material past a mouth. After the cut, the\npath declines when a vertex of the result is in the part of the cutter\npast a mouth.\n- Only a convex edge takes the path. A concave round adds material over\nthe mouth, and the cut back left a ledge there.\n- The path runs only where the band of the round gets to the mouth. The\nreach is `r tan(b / 2)` for the turn `b` between the two faces. Where\nthe other face curves across the edge, the reach is at least four radii,\nas in the contributor's commit.\n- The cut back does not merge other faces of the solid. It declines when\nthe boolean must merge faces to repair its result.\n- The round on the filled solid no longer changes the part. It dropped\npcurves of the mouth faces where it split an edge of the part. The path\nnow saves them before the round and puts them back after it.\n- The path declines where the cutter meets a seam of the rounded solid.\nThere, the boolean leaves the seam edge whole through the hole. The\nsolid is valid, but its mesh is open. The test is exact for a line seam.\nFor an arc or a B-spline seam, it uses a box that holds the curve.\n- The gap from an edge to a mouth comes from the foot of the mouth's\ncentre on the edge, not from 65 samples.\n\n## How I checked it\n\n- 7 of the new tests fail with the contributor's `blend_ops.rs`:\n`a_pin_under_a_round_is_kept`,\n`a_spools_flange_rounds_off_and_keeps_its_hub`,\n`a_concave_round_over_a_bore_is_the_direct_fillets`,\n`a_round_short_of_a_bore_is_the_direct_fillets`,\n`a_round_over_a_bore_keeps_the_marks_round_it`,\n`a_bore_onto_a_thin_slit_is_left_to_the_direct_fillet` and\n`a_rods_top_rim_round_over_a_hole_on_its_seam_is_refused`.\n- `a_bore_onto_a_shelf_between_two_slits_is_left_to_the_direct_fillet`\ncovers a thin shelf past a mouth.\n- `a_round_over_a_bore_leaves_the_part_as_it_was` compares the faces,\nwires, edges, vertices and pcurves of the part before and after.\n- More new tests cover two bores on one face, a counterbore and a\nmirrored pose.\n- I tested this branch together with #2427 and #2429 on main. `cargo\nnextest run` for `brepkit-math`, `brepkit-algo`, `brepkit-blend`,\n`brepkit-io`, `brepkit-operations`, `brepkit-wasm`, `brepkit-check` and\n`brepkit-heal` passes (4,382 tests).\n- The pose sweep and the truth audit match main line for line.\n- `cargo clippy --all-targets --all-features -- -D warnings` passes.\n\n## The part of the description from #2430 for this commit\n\n## Summary\n\nWhen a round's band runs over the mouth of a through-bore, the round has\nto trim its face round the hole.\n\n- A closed contact with a hole in its way is refused by the trimmer's\nhole guard.\n- With the hole straddling the round's contact, the result was valid,\nbut the face's outline crossed its hole and the mesh was open.\n\nThe round is now made around the bore, with the bore cut back through it\nafterwards (`blend_ops::fillet_over_bores`). This applies to each\nthrough-bore opening within four radii of a picked edge, on one of that\nedge's faces. A through-bore here is one cylinder wall between circle\nholes in two plane faces.\n\n1. The bore is filled: its wall is left out, and its mouths are no\nlonger holes.\n2. The solid is rounded.\n3. The bore is cut back through the round, a tenth of its radius past\neach mouth, with the exact boolean.\n\nIf the cut back is not exact, or is not a valid solid, it is dropped and\nthe round is made as before.\n\n## Tests\n\n- `crates/operations/tests/fillet_over_a_bore.rs`: a drilled box's top\nedge rounded over a bore lying wholly within the round's reach, and over\none straddling the contact, upright and turned. Each is checked against\nthe removed strip less its part in the bore, to 1e-4. Both fail on\n`main`.\n- `crates/operations/tests/fillet_round_rims.rs`: the rounds that pinned\na refusal where a hole lay in the round's way now check the cut-back\nsolid against its closed form. A hole across the round's contact on the\nrod's top, which notches the torus band from its edge, is still refused.\n\n---------\n\nCo-authored-by: Eric Vaughan <eric.d.vaughan@gmail.com>\nCo-authored-by: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-11-14T23:02:19Z",
+          "tree_id": "b02b2f38758c8a44ee54b5441dfb2bc41e09476e",
+          "url": "https://github.com/andymai/brepkit/commit/d360d501e3f01c7e617e9f1062d87e8b17875ac8"
+        },
+        "date": 1794697536358,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1091047,
+            "range": "± 3466",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1143255,
+            "range": "± 80798",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11709,
+            "range": "± 209",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 694736,
+            "range": "± 3636",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24615848,
+            "range": "± 126913",
             "unit": "ns/iter"
           }
         ]
