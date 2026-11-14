@@ -2193,10 +2193,13 @@ fn rebuild_mapped_parametric_face(
         let single_contact = restrictions.len() == 1;
         for &vertex_id in &new_vertices.clone() {
             let point = topo.vertex(vertex_id)?.point();
-            // Whether the contact's end lies beside an edge the policy splits,
-            // within the allowance of a point inside it, and whether it split
-            // an edge: beside one and unsplit, the edge stays whole and the
-            // wire runs on along it past the end and back.
+            // Whether an open contact's end lies beside an edge the policy
+            // splits, within the allowance of a point inside it, and whether
+            // it split an edge: beside one and unsplit, the edge stays whole
+            // and the wire runs on along it past the end and back. A closed
+            // contact does not end on the boundary: its vertex is only where
+            // the loop starts.
+            let open_end = !closed_vertices.contains(&vertex_id);
             let (mut beside, mut split) = (false, false);
             'edges: for &wire_id in &wire_ids {
                 let wire = topo.wire(wire_id)?;
@@ -2318,7 +2321,7 @@ fn rebuild_mapped_parametric_face(
                             }
                         }
                         let tt = refined_minimum(miss_at, best_t, step, span);
-                        beside |= inside(tt);
+                        beside |= open_end && inside(tt);
                         if miss_at(tt) > 1e-6 {
                             continue;
                         }
@@ -2328,11 +2331,14 @@ fn rebuild_mapped_parametric_face(
                         continue;
                     }
                     // On the edge's trace and inside it, but farther off the
-                    // edge than the face's allowance: it can neither be split
-                    // there nor be left whole.
+                    // edge than the face's allowance: an open contact's end
+                    // can neither split it there nor leave it whole.
                     let gap = dist_at(tt);
                     if gap > allowance {
-                        return Err(BlendError::TrimmingFailure { face: face_id });
+                        if open_end {
+                            return Err(BlendError::TrimmingFailure { face: face_id });
+                        }
+                        continue;
                     }
                     // Off its curve, the vertex no longer picks out each
                     // piece's span of a shared spline, so each piece takes
@@ -5461,10 +5467,15 @@ mod tests {
 
     /// A flat B-spline face over the unit square in z = 0 with a round hole
     /// of radius 0.1 in its middle, trimmed round the hole by a closed
-    /// contact of radius 0.2 given as a round's builder gives it: both its
-    /// points at its start, on the face, and its circle, turned by `tilt`
-    /// about its tangent there.
-    fn trim_round_a_hole(tilt: f64) -> Result<BatchTrimResult, BlendError> {
+    /// contact of radius `radius` about the middle given as a round's
+    /// builder gives it: both its points at its start, on the face at
+    /// `angle` round the middle, and its circle, turned by `tilt` about its
+    /// tangent there.
+    fn trim_round_a_hole(
+        radius: f64,
+        angle: f64,
+        tilt: f64,
+    ) -> Result<BatchTrimResult, BlendError> {
         use brepkit_math::curves::Circle3D;
 
         let mut topo = Topology::new();
@@ -5483,13 +5494,18 @@ mod tests {
         let rim_edge = topo.add_edge(Edge::new(rim_vertex, rim_vertex, EdgeCurve::Circle(rim)));
         let hole = topo.add_wire(Wire::new(vec![OrientedEdge::new(rim_edge, true)], true).unwrap());
         let face = topo.add_face(Face::new(outer, vec![hole], flat_unit_skin()));
-        let start = Point3::new(0.7, 0.5, 0.0);
+        let out = {
+            let (sin, cos) = angle.sin_cos();
+            Vec3::new(cos, sin, 0.0)
+        };
+        let start = middle + out * radius;
         let (sin, cos) = tilt.sin_cos();
-        let center = Point3::new(0.2f64.madd(-cos, 0.7), 0.5, 0.2 * sin);
-        let contact =
-            Circle3D::new_with_ref(center, Vec3::new(sin, 0.0, cos), 0.2, start - center).unwrap();
+        let up = Vec3::new(0.0, 0.0, 1.0);
+        let center = start + (up * sin - out * cos) * radius;
+        let normal = up * cos + out * sin;
+        let contact = Circle3D::new_with_ref(center, normal, radius, start - center).unwrap();
         let pcurve =
-            brepkit_math::curves2d::Circle2D::new(brepkit_math::vec::Point2::new(0.5, 0.5), 0.2)
+            brepkit_math::curves2d::Circle2D::new(brepkit_math::vec::Point2::new(0.5, 0.5), radius)
                 .unwrap();
         let restriction = ParametricRestriction {
             contact_3d: vec![start, start],
@@ -5497,8 +5513,8 @@ mod tests {
             curve: Some(EdgeCurve::Circle(contact)),
             pcurve: Some(brepkit_topology::pcurve::PCurve::new(
                 brepkit_math::curves2d::Curve2D::Circle(pcurve),
-                0.0,
-                std::f64::consts::TAU,
+                angle,
+                angle + std::f64::consts::TAU,
             )),
             source_edges: vec![rim_edge],
         };
@@ -5534,16 +5550,28 @@ mod tests {
     #[test]
     fn a_closed_contact_off_the_face_refuses_the_trim() {
         assert!(
-            trim_round_a_hole(0.0).is_ok(),
+            trim_round_a_hole(0.2, 0.0, 0.0).is_ok(),
             "a closed contact on the face trims it"
         );
         assert!(
             matches!(
-                trim_round_a_hole(0.01),
+                trim_round_a_hole(0.2, 0.0, 0.01),
                 Err(BlendError::TrimmingFailure { .. })
             ),
             "a closed contact 4e-3 off the face must refuse the trim"
         );
+    }
+
+    /// A closed contact does not end on the face's boundary: one 5e-5 inside
+    /// the face's sides trims it wherever it starts, by a side or not.
+    #[test]
+    fn a_closed_contact_near_the_boundary_trims_wherever_it_starts() {
+        for angle in [0.0, std::f64::consts::FRAC_PI_4] {
+            assert!(
+                trim_round_a_hole(0.49995, angle, 0.0).is_ok(),
+                "a closed contact starting at {angle} round the middle must trim"
+            );
+        }
     }
 
     /// Each edge of the trimmed face's outer wire: its curve, how far the
