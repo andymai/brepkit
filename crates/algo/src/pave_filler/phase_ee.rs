@@ -260,6 +260,7 @@ fn find_edge_edge_crossings(
 
     let mut alongside: Vec<(usize, usize)> = Vec::new();
     let mut alongside_hits: Vec<ChordApproach> = Vec::new();
+    let mut crossed = vec![false; n * n];
     for i in 0..n {
         for j in 0..n {
             // Quick distance check: if minimum endpoint distance exceeds
@@ -288,6 +289,7 @@ fn find_edge_edge_crossings(
                     alongside.push((i, j));
                     alongside_hits.push(hit);
                 } else {
+                    crossed[i * n + j] = true;
                     read(&mut crossings, &hit);
                 }
             }
@@ -296,7 +298,8 @@ fn find_edge_edge_crossings(
 
     // Chords all but parallel and within tolerance form ribbons on the grid
     // of chord pairs. Where a ribbon stops at both of its extremes because
-    // an edge ends, the edges overlap. The VE phase paves those ends; a
+    // an edge ends or the edges part at a corner, the edges overlap. The VE
+    // phase paves those ends and the corner is a crossing read above; a
     // crossing read along the ribbon would split both edges where nothing
     // meets them. Else the edges come together and part again while both
     // go on, and the ribbon holds one crossing, at its closest place.
@@ -311,13 +314,18 @@ fn find_edge_edge_crossings(
             || (j == 0 && on_chord(&pts_b[0], chord_a))
             || (j + 1 == n && on_chord(&pts_b[n], chord_a))
     };
+    let corner_by = |(i, j): (usize, usize)| {
+        (i.saturating_sub(1)..=(i + 1).min(n - 1))
+            .any(|ni| (j.saturating_sub(1)..=(j + 1).min(n - 1)).any(|nj| crossed[ni * n + nj]))
+    };
     for ribbon in ribbons(&alongside, n) {
         let rows = ribbon.iter().map(|&k| alongside[k].0);
         let (first, last) = (rows.clone().min(), rows.max());
         let ends_at = |row: Option<usize>| {
-            ribbon
-                .iter()
-                .any(|&k| Some(alongside[k].0) == row && edge_end_in(alongside[k]))
+            ribbon.iter().any(|&k| {
+                Some(alongside[k].0) == row
+                    && (edge_end_in(alongside[k]) || corner_by(alongside[k]))
+            })
         };
         if ends_at(first) && ends_at(last) {
             continue;
@@ -964,6 +972,42 @@ mod tests {
                 (xs[0] - 1.62).abs() < 1e-9 && (xs[1] - 1.74).abs() < 1e-9,
                 "{xs:?}"
             );
+        }
+    }
+
+    /// A spline that runs along a line from x = 2 to x = 6 and leaves it
+    /// there at a corner. The stretch along the line is an overlap: the VE
+    /// phase paves the spline's end at x = 2, and the crossing at the corner,
+    /// read at a real angle, bounds it at x = 6. Nothing else is a crossing.
+    #[test]
+    fn a_spline_leaving_a_line_at_a_corner_crosses_it_only_there() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+
+        for (origin, dir) in [
+            (Point3::new(0.0, 0.0, 0.0), Vec3::new(1.0, 0.0, 0.0)),
+            (Point3::new(1.3, -2.7, 0.4), Vec3::new(0.6, 0.48, 0.64)),
+        ] {
+            let side = dir.cross(Vec3::new(0.0, 0.0, 1.0)).normalize().unwrap();
+            let corner = origin + dir * 6.0;
+            let poles = vec![origin + dir * 2.0, corner, origin + dir * 8.0 + side * 3.0];
+            let mut topo = Topology::new();
+            let line = add_edge(&mut topo, origin, origin + dir * 10.0, EdgeCurve::Line);
+            let nurbs = NurbsCurve::new(
+                1,
+                vec![0.0, 0.0, 0.5, 1.0, 1.0],
+                poles.clone(),
+                vec![1.0; 3],
+            )
+            .unwrap();
+            let spline = add_edge(&mut topo, poles[0], poles[2], EdgeCurve::NurbsCurve(nurbs));
+            for (ea, eb) in [(line, spline), (spline, line)] {
+                let hits = crossings(&topo, ea, eb);
+                assert_eq!(hits.len(), 1, "along {dir:?}: {hits:?}");
+                assert!(
+                    (hits[0].2 - corner).length() < 1e-9,
+                    "along {dir:?}: {hits:?}"
+                );
+            }
         }
     }
 
