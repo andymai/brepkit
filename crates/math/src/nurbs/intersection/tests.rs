@@ -8,8 +8,9 @@ use super::surface_marching::{
     chord_bulge, near_existing_segment, point_to_segment_dist, second_order_tangent,
 };
 use super::surface_seeding::{
-    REFINE_CALLS, find_ssi_seeds_grid, find_ssi_seeds_subdivision, planar_patch_sections, plane_of,
-    refine_ssi_point, surfaces_apart,
+    KeptSections, REFINE_CALLS, SeedCells, find_ssi_seeds_grid, find_ssi_seeds_subdivision,
+    grid_seeds, keep_sections, planar_patch_sections, plane_of, refine_ssi_point, sections_kept,
+    surfaces_apart,
 };
 use super::*;
 
@@ -3295,5 +3296,135 @@ fn a_section_that_drifts_across_a_stretched_parameter_ends_where_its_chain_does(
             .map(|e| (*e - p).length())
             .fold(f64::MAX, f64::min);
         assert!(gap < 1e-6, "the curve ends {gap:e} from the chain's end");
+    }
+}
+
+/// The sections of the flat and the saddle surface at `samples`, as
+/// `intersect_nurbs_nurbs` keeps them: 4 + 9 control points and the curves.
+fn kept(samples: usize, march_step: f64) -> KeptSections {
+    let (flat, saddle) = (flat_surface(), saddle_surface());
+    let curves = intersect_nurbs_nurbs(&flat, &saddle, 12, 0.0).unwrap();
+    KeptSections::new((&flat, &saddle), samples, march_step, curves)
+}
+
+/// Kept sections come back for the same surfaces, grid and step only, with
+/// the bits a fresh run gives.
+#[test]
+fn kept_sections_come_back_for_the_same_call_only() {
+    let (flat, saddle) = (flat_surface(), saddle_surface());
+    let fresh = intersect_nurbs_nurbs(&flat, &saddle, 12, 0.0).unwrap();
+    assert!(!fresh.is_empty(), "the saddle crosses the flat surface");
+    let mut held = Vec::new();
+    keep_sections(&mut held, kept(12, 0.0), usize::MAX);
+
+    let wanted = |a: &NurbsSurface, b: &NurbsSurface, samples, step| {
+        KeptSections::new((a, b), samples, step, Vec::new())
+    };
+    let found = sections_kept(&mut held, &wanted(&flat, &saddle, 12, 0.0)).unwrap();
+    assert_eq!(found.len(), fresh.len());
+    for (a, b) in found.iter().zip(&fresh) {
+        assert_eq!(a.points.len(), b.points.len());
+        for (p, q) in a.points.iter().zip(&b.points) {
+            assert_eq!(
+                [p.point.x(), p.point.y(), p.point.z()].map(f64::to_bits),
+                [q.point.x(), q.point.y(), q.point.z()].map(f64::to_bits)
+            );
+        }
+    }
+
+    assert!(sections_kept(&mut held, &wanted(&flat, &saddle, 13, 0.0)).is_none());
+    assert!(sections_kept(&mut held, &wanted(&flat, &saddle, 12, 0.5)).is_none());
+    assert!(sections_kept(&mut held, &wanted(&saddle, &flat, 12, 0.0)).is_none());
+    assert!(sections_kept(&mut held, &wanted(&flat, &flat_surface_offset(), 12, 0.0)).is_none());
+}
+
+/// The kept sections stay within the limit: the least lately used go first,
+/// one over the limit by itself is not kept, and a call is kept once.
+#[test]
+fn kept_sections_stay_within_their_limit() {
+    let size = kept(1, 0.0).size();
+    let limit = 2 * size + size / 2;
+    let total = |held: &[KeptSections]| held.iter().map(KeptSections::size).sum::<usize>();
+    let has =
+        |held: &mut Vec<KeptSections>, samples| sections_kept(held, &kept(samples, 0.0)).is_some();
+    let mut held = Vec::new();
+
+    keep_sections(&mut held, kept(1, 0.0), limit);
+    keep_sections(&mut held, kept(2, 0.0), limit);
+    keep_sections(&mut held, kept(2, 0.0), limit);
+    assert_eq!(held.len(), 2, "the same call is kept once");
+
+    // The first is used again, so the second is now the least lately used.
+    assert!(has(&mut held, 1));
+    keep_sections(&mut held, kept(3, 0.0), limit);
+    assert!(total(&held) <= limit);
+    assert!(has(&mut held, 1) && has(&mut held, 3) && !has(&mut held, 2));
+
+    keep_sections(&mut held, kept(4, 0.0), size - 1);
+    assert!(!has(&mut held, 4), "an entry over the limit is not kept");
+    assert_eq!(held.len(), 2, "and it pushes nothing out");
+}
+
+/// The cells answer as a scan of every kept seed does, also for seeds beside
+/// a cell's edge and on both sides of zero.
+#[test]
+fn seed_cells_answer_as_a_scan_of_every_seed() {
+    let distance = 1e-4;
+    let mut state: u64 = 0x9E37_79B9_7F4A_7C15;
+    let mut next = || {
+        state = state
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        #[allow(clippy::cast_precision_loss)]
+        let unit = (state >> 11) as f64 / (1u64 << 53) as f64;
+        unit
+    };
+    // Coordinates on a lattice a third of the distance apart, a hair off it,
+    // so many seeds fall within the distance of one another and beside the
+    // cells' edges, which lie 2 * distance apart.
+    let mut coord = || {
+        let step = (next() * 40.0).floor() - 20.0;
+        step * distance / 3.0 + (next() - 0.5) * distance * 1e-3
+    };
+    let mut cells = SeedCells::new(distance);
+    let mut seeds: Vec<IntersectionPoint> = Vec::new();
+    let mut refused = 0;
+    for _ in 0..4000 {
+        let seed = IntersectionPoint {
+            point: Point3::new(coord(), coord(), coord()),
+            param1: (0.0, 0.0),
+            param2: (0.0, 0.0),
+        };
+        let new = !seeds
+            .iter()
+            .any(|s| (s.point - seed.point).length() < distance);
+        assert_eq!(cells.insert(&seeds, seed), new);
+        if new {
+            seeds.push(seed);
+        } else {
+            refused += 1;
+        }
+    }
+    assert!(
+        refused > 100 && seeds.len() > 100,
+        "both answers are exercised"
+    );
+}
+
+/// The grid seeder's last pass gives the same seeds however many close pairs
+/// it refines at a time.
+#[test]
+fn grid_seeds_do_not_depend_on_how_many_pairs_are_refined_at_once() {
+    let (s1, s2) = (flat_surface(), tilted_surface());
+    let bits = |at_once: usize| -> Vec<[u64; 3]> {
+        grid_seeds(&s1, &s2, 10, 1e-6, at_once)
+            .iter()
+            .map(|s| [s.point.x(), s.point.y(), s.point.z()].map(f64::to_bits))
+            .collect()
+    };
+    let whole = bits(usize::MAX);
+    assert!(whole.len() > 1, "the pass past the first seeds is reached");
+    for at_once in [1, 7, 64] {
+        assert_eq!(bits(at_once), whole, "{at_once} at a time");
     }
 }

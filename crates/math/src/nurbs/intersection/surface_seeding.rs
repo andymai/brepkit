@@ -168,7 +168,7 @@ const SECTIONS_KEPT: usize = 1 << 19;
 
 /// A pair of surfaces intersected lately, anywhere: both surfaces' content
 /// keys and data, the call's grid and step, and the sections found.
-struct KeptSections {
+pub(super) struct KeptSections {
     keys: (u64, u64),
     surfaces: (NurbsSurface, NurbsSurface),
     samples: usize,
@@ -179,6 +179,75 @@ struct KeptSections {
 
 /// The sections worked out lately, the most lately used last.
 static SECTIONS: std::sync::Mutex<Vec<KeptSections>> = std::sync::Mutex::new(Vec::new());
+
+impl KeptSections {
+    pub(super) fn new(
+        surfaces: (&NurbsSurface, &NurbsSurface),
+        samples: usize,
+        march_step: f64,
+        curves: Vec<IntersectionCurve>,
+    ) -> Self {
+        let points = |s: &NurbsSurface| s.control_points().iter().map(Vec::len).sum::<usize>();
+        let size = points(surfaces.0)
+            + points(surfaces.1)
+            + curves
+                .iter()
+                .map(|c| c.points.len() + c.curve.control_points().len())
+                .sum::<usize>();
+        Self {
+            keys: (surfaces.0.content_key(), surfaces.1.content_key()),
+            surfaces: (surfaces.0.data_only(), surfaces.1.data_only()),
+            samples,
+            step: march_step.to_bits(),
+            curves,
+            size,
+        }
+    }
+
+    fn is_for(&self, other: &Self) -> bool {
+        self.keys == other.keys
+            && self.samples == other.samples
+            && self.step == other.step
+            && self.surfaces.0.same_bits(&other.surfaces.0)
+            && self.surfaces.1.same_bits(&other.surfaces.1)
+    }
+
+    #[cfg(test)]
+    pub(super) const fn size(&self) -> usize {
+        self.size
+    }
+}
+
+/// The sections `kept` holds for the call `wanted` names, their entry moved
+/// to the end as the most lately used.
+pub(super) fn sections_kept(
+    kept: &mut Vec<KeptSections>,
+    wanted: &KeptSections,
+) -> Option<Vec<IntersectionCurve>> {
+    let at = kept.iter().position(|e| e.is_for(wanted))?;
+    let entry = kept.remove(at);
+    let curves = entry.curves.clone();
+    kept.push(entry);
+    Some(curves)
+}
+
+/// Keeps `entry` in `kept` as the most lately used, within `limit` points in
+/// all. The least lately used entries go first to make room, in one pass. An
+/// entry over the limit by itself is not kept, nor is one whose call `kept`
+/// already holds, where another caller worked it out meanwhile.
+pub(super) fn keep_sections(kept: &mut Vec<KeptSections>, entry: KeptSections, limit: usize) {
+    if entry.size > limit || kept.iter().any(|e| e.is_for(&entry)) {
+        return;
+    }
+    let mut total: usize = kept.iter().map(|e| e.size).sum();
+    let mut gone = 0;
+    while total + entry.size > limit {
+        total -= kept[gone].size;
+        gone += 1;
+    }
+    kept.drain(..gone);
+    kept.push(entry);
+}
 
 /// Intersect two NURBS surfaces.
 ///
@@ -210,53 +279,24 @@ pub fn intersect_nurbs_nurbs(
     samples: usize,
     march_step: f64,
 ) -> Result<Vec<IntersectionCurve>, MathError> {
-    let keys = (surface1.content_key(), surface2.content_key());
-    let step = march_step.to_bits();
-    let found = SECTIONS.lock().ok().and_then(|mut kept| {
-        let at = kept.iter().position(|e| {
-            e.keys == keys
-                && e.samples == samples
-                && e.step == step
-                && e.surfaces.0.same_bits(surface1)
-                && e.surfaces.1.same_bits(surface2)
-        })?;
-        let entry = kept.remove(at);
-        let curves = entry.curves.clone();
-        kept.push(entry); // the most lately used last
-        Some(curves)
-    });
+    let mut entry = KeptSections::new((surface1, surface2), samples, march_step, Vec::new());
+    let found = SECTIONS
+        .lock()
+        .ok()
+        .and_then(|mut kept| sections_kept(&mut kept, &entry));
     if let Some(curves) = found {
         return Ok(curves);
     }
     let curves = sections_of(surface1, surface2, samples, march_step)?;
-    let size = surface1
-        .control_points()
+    entry.size += curves
         .iter()
-        .map(Vec::len)
-        .sum::<usize>()
-        + surface2
-            .control_points()
-            .iter()
-            .map(Vec::len)
-            .sum::<usize>()
-        + curves
-            .iter()
-            .map(|c| c.points.len() + c.curve.control_points().len())
-            .sum::<usize>();
-    if size <= SECTIONS_KEPT
+        .map(|c| c.points.len() + c.curve.control_points().len())
+        .sum::<usize>();
+    if entry.size <= SECTIONS_KEPT
         && let Ok(mut kept) = SECTIONS.lock()
     {
-        while kept.iter().map(|e| e.size).sum::<usize>() + size > SECTIONS_KEPT {
-            kept.remove(0);
-        }
-        kept.push(KeptSections {
-            keys,
-            surfaces: (surface1.data_only(), surface2.data_only()),
-            samples,
-            step,
-            curves: curves.clone(),
-            size,
-        });
+        entry.curves.clone_from(&curves);
+        keep_sections(&mut kept, entry, SECTIONS_KEPT);
     }
     Ok(curves)
 }
@@ -1242,6 +1282,10 @@ fn find_split_row(knots: &[f64], split_val: f64, degree: usize, n_cps: usize) ->
 /// non-intersecting when none of them (and no mutual nearest pair) converges.
 const MAX_FAILED_SEED_ATTEMPTS: usize = 256;
 
+/// Close grid sample pairs the grid seeder refines at once in its last pass,
+/// which bounds what it holds of them however many there are.
+const CLOSE_PAIRS_AT_ONCE: usize = 8192;
+
 /// A close sample pair kept in the bounded max-heap of closest candidates.
 #[derive(Clone, Copy, PartialEq)]
 struct ClosePair {
@@ -1270,13 +1314,13 @@ impl Ord for ClosePair {
 /// The seeds kept so far, bucketed by cells twice the merge distance wide,
 /// so a new seed is checked against those in its own and the neighbouring
 /// cells only: any seed nearer than the merge distance lies in one of them.
-struct SeedCells {
+pub(super) struct SeedCells {
     distance: f64,
     cells: std::collections::HashMap<[i64; 3], Vec<usize>>,
 }
 
 impl SeedCells {
-    fn new(distance: f64) -> Self {
+    pub(super) fn new(distance: f64) -> Self {
         Self {
             distance,
             cells: std::collections::HashMap::new(),
@@ -1295,7 +1339,7 @@ impl SeedCells {
 
     /// Whether `seed` is new among `seeds` (none nearer than the merge
     /// distance); a new one is recorded as `seeds`' next index.
-    fn insert(&mut self, seeds: &[IntersectionPoint], seed: IntersectionPoint) -> bool {
+    pub(super) fn insert(&mut self, seeds: &[IntersectionPoint], seed: IntersectionPoint) -> bool {
         let c = self.cell(seed.point);
         for dx in -1..=1 {
             for dy in -1..=1 {
@@ -1320,12 +1364,24 @@ impl SeedCells {
 /// Strategy: sample both surfaces on an n x n grid and try Newton
 /// refinement for all cell-center pairs whose 3D positions are within
 /// a generous distance threshold.
-#[allow(clippy::cast_precision_loss)]
 pub(super) fn find_ssi_seeds_grid(
     s1: &NurbsSurface,
     s2: &NurbsSurface,
     n: usize,
     tolerance: f64,
+) -> Vec<IntersectionPoint> {
+    grid_seeds(s1, s2, n, tolerance, CLOSE_PAIRS_AT_ONCE)
+}
+
+/// [`find_ssi_seeds_grid`], its last pass refining `at_once` close pairs at
+/// a time. The seeds do not depend on `at_once`.
+#[allow(clippy::cast_precision_loss)]
+pub(super) fn grid_seeds(
+    s1: &NurbsSurface,
+    s2: &NurbsSurface,
+    n: usize,
+    tolerance: f64,
+    at_once: usize,
 ) -> Vec<IntersectionPoint> {
     let (u1_min, u1_max) = s1.domain_u();
     let (v1_min, v1_max) = s1.domain_v();
@@ -1381,8 +1437,8 @@ pub(super) fn find_ssi_seeds_grid(
     // closest samples, so when none of them converges the pair is grazing
     // without meeting (or touching tangentially, which the marcher cannot
     // trace either) and the search stops. Once any seed exists the full
-    // close-pair pass streams as before, so a second branch that has no
-    // mutual nearest pair is still found.
+    // close-pair pass runs, CLOSE_PAIRS_AT_ONCE pairs at a time, so a second
+    // branch that has no mutual nearest pair is still found.
     let mut nearest_in_2: Vec<(usize, f64)> = vec![(usize::MAX, f64::MAX); pts1.len()];
     let mut nearest_in_1: Vec<(usize, f64)> = vec![(usize::MAX, f64::MAX); pts2.len()];
     let mut closest: std::collections::BinaryHeap<ClosePair> = std::collections::BinaryHeap::new();
@@ -1453,6 +1509,10 @@ pub(super) fn find_ssi_seeds_grid(
         for (k, &(_, _, p2)) in pts2.iter().enumerate() {
             if (p1 - p2).length() < threshold {
                 close.push((i, k));
+                if close.len() == at_once {
+                    take(&mut seeds, refine_pairs(&close));
+                    close.clear();
+                }
             }
         }
     }
