@@ -588,9 +588,13 @@ fn closest_segment_pair(
         let t = if lo > hi {
             // No overlap: the end of `b` that faces `a`.
             if t0.max(t1) < 0.0 { 0.0 } else { 1.0 }
-        } else if drift2 <= (64.0 * f64::EPSILON * size).powi(2) {
+        } else if drift2 <= (64.0 * f64::EPSILON * size).min(0.5 * tol).powi(2) {
             // A standoff that changes by rounding alone is the same all
             // along the overlap: its middle reads it whichever way it rounds.
+            // Far from the origin rounding moves it more, but never past
+            // half the tolerance here: a crossing whose standoff changes
+            // more is read where it is, not at the middle, where it could
+            // stand out of tolerance.
             f64::midpoint(lo, hi)
         } else {
             (-start.dot(drift) / drift2).clamp(lo, hi)
@@ -1075,6 +1079,45 @@ mod tests {
             assert_eq!(hits.len(), 1, "from {from}: {hits:?}");
             let gap = (hits[0].2 - at(0.0)).length();
             assert!(gap < 1e-6, "from {from}: read {gap:e} from the crossing");
+        }
+    }
+
+    /// Far from the origin, rounding moves a standoff by more than the
+    /// tolerance allows a crossing to stand off. A crossing a fifth of the
+    /// way along a chord of both edges, whose standoff changes by six
+    /// tolerances along that chord, stands out of tolerance at the chord's
+    /// middle and at both its ends. It is still read, once, where it is.
+    #[test]
+    fn a_shallow_crossing_far_from_the_origin_is_read_once() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+
+        let far = 1e8;
+        let at = |x: f64| Point3::new(far + x, 1.92e-9 * (x - 60.0), 0.0);
+        let mut topo = Topology::new();
+        let line = add_edge(
+            &mut topo,
+            Point3::new(far - 5000.0, 0.0, 0.0),
+            Point3::new(far + 5000.0, 0.0, 0.0),
+            EdgeCurve::Line,
+        );
+        let nurbs = NurbsCurve::new(
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![at(-5000.0), at(5000.0)],
+            vec![1.0; 2],
+        )
+        .unwrap();
+        let spline = add_edge(
+            &mut topo,
+            at(-5000.0),
+            at(5000.0),
+            EdgeCurve::NurbsCurve(nurbs),
+        );
+        for (ea, eb) in [(line, spline), (spline, line)] {
+            let hits = crossings(&topo, ea, eb);
+            assert_eq!(hits.len(), 1, "{hits:?}");
+            let gap = (hits[0].2 - at(60.0)).length();
+            assert!(gap < 1e-3, "read {gap:e} from the crossing");
         }
     }
 
