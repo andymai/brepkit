@@ -9,6 +9,9 @@
 use std::f64::consts::{FRAC_PI_2, FRAC_PI_4, PI};
 
 use brepkit_blend::fillet_builder::FilletBuilder;
+use brepkit_heal::context::HealContext;
+use brepkit_heal::fix::config::FixConfig;
+use brepkit_heal::fix::edge::fix_same_parameter_on_face;
 use brepkit_math::mat::Mat4;
 use brepkit_math::vec::Point3;
 use brepkit_operations::blend_ops::{all_blended, fillet_v2};
@@ -23,7 +26,7 @@ use brepkit_operations::validate::validate_solid;
 use brepkit_topology::Topology;
 use brepkit_topology::builder::make_line_edge;
 use brepkit_topology::edge::{EdgeCurve, EdgeId};
-use brepkit_topology::explorer::{solid_edges, solid_faces};
+use brepkit_topology::explorer::{face_edges, solid_edges, solid_faces, solid_vertices};
 use brepkit_topology::face::FaceSurface;
 use brepkit_topology::solid::SolidId;
 
@@ -439,4 +442,111 @@ fn a_bore_onto_a_shelf_between_two_slits_is_left_to_the_direct_fillet() {
         inside(&topo, result, [0.5 * LENGTH, 6.0, 6.975]),
         "shelf cut"
     );
+}
+
+/// Each shell, face, wire, pcurve, edge and vertex of `solid`, as text.
+fn state_of(topo: &Topology, solid: SolidId) -> Vec<String> {
+    let data = topo.solid(solid).unwrap();
+    let mut state = vec![format!("{data:?}")];
+    for shell in std::iter::once(data.outer_shell()).chain(data.inner_shells().iter().copied()) {
+        state.push(format!("{:?}", topo.shell(shell).unwrap()));
+    }
+    for face_id in solid_faces(topo, solid).unwrap() {
+        let face = topo.face(face_id).unwrap();
+        state.push(format!("face {} {face:?}", face_id.index()));
+        for wire in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            state.push(format!(
+                "wire {} {:?}",
+                wire.index(),
+                topo.wire(wire).unwrap()
+            ));
+        }
+        let mut pcurves = topo.pcurves().pcurves_for_face(face_id);
+        pcurves.sort_by_key(|(edge, _)| edge.index());
+        for (edge, pcurve) in pcurves {
+            state.push(format!(
+                "pcurve {} {} {pcurve:?}",
+                edge.index(),
+                face_id.index()
+            ));
+        }
+    }
+    for edge in solid_edges(topo, solid).unwrap() {
+        state.push(format!(
+            "edge {} {:?}",
+            edge.index(),
+            topo.edge(edge).unwrap()
+        ));
+    }
+    for vertex in solid_vertices(topo, solid).unwrap() {
+        state.push(format!(
+            "vertex {} {:?}",
+            vertex.index(),
+            topo.vertex(vertex).unwrap()
+        ));
+    }
+    state
+}
+
+/// Gives each edge of each face of `solid` its pcurve on that face, as an
+/// imported part carries them.
+fn with_pcurves(topo: &mut Topology, solid: SolidId) {
+    for face in solid_faces(topo, solid).unwrap() {
+        for edge in face_edges(topo, face).unwrap() {
+            fix_same_parameter_on_face(
+                topo,
+                edge,
+                face,
+                &mut HealContext::new(),
+                &FixConfig::default(),
+            )
+            .unwrap();
+        }
+    }
+}
+
+/// Rounds `edges` of `solid` by `r`, its pcurves given, and checks the part
+/// comes through exactly as it was: the filled solid's round splits the
+/// mouth face's edges, and the trimmer drops each pcurve of a split edge
+/// from every face that holds it.
+fn assert_left_as_it_was(label: &str, topo: &mut Topology, solid: SolidId, edges: &[EdgeId]) {
+    with_pcurves(topo, solid);
+    let before = state_of(topo, solid);
+    let _ = fillet_v2(topo, solid, edges, 7.0);
+    let after = state_of(topo, solid);
+    let changed: Vec<&String> = before.iter().filter(|line| !after.contains(line)).collect();
+    assert!(
+        changed.is_empty() && before.len() == after.len(),
+        "{label}: {} line(s) changed or gone, the first {:?}",
+        changed.len(),
+        changed.first().map(|line| &line[..line.len().min(60)])
+    );
+}
+
+/// The part is left as it was when the bore path builds the round, when it
+/// declines after its cut (the shelf under the slits), and when the filled
+/// solid's round fails (the bore's own rim, picked with the edge, gone from
+/// the filled solid).
+#[test]
+fn a_round_over_a_bore_leaves_the_part_as_it_was() {
+    let mut topo = Topology::new();
+    let (solid, edge) = drilled_box(&mut topo, 0.5 * LENGTH, 6.0, 2.0);
+    assert_left_as_it_was("built", &mut topo, solid, &[edge]);
+
+    let mut topo = Topology::new();
+    let (solid, edge) = slit_box(&mut topo, &[(7.0, 7.1), (6.8, 6.95)]);
+    assert_left_as_it_was("declined after the cut", &mut topo, solid, &[edge]);
+
+    let mut topo = Topology::new();
+    let (solid, edge) = drilled_box(&mut topo, 0.5 * LENGTH, 6.0, 2.0);
+    let rim = solid_edges(&topo, solid)
+        .unwrap()
+        .into_iter()
+        .find(|&e| {
+            let edge = topo.edge(e).unwrap();
+            matches!(edge.curve(), EdgeCurve::Circle(_))
+                && topo.vertex(edge.start()).unwrap().point().z().abs() < 1e-9
+        })
+        .unwrap();
+    assert_left_as_it_was("round failed", &mut topo, solid, &[edge, rim]);
 }

@@ -594,9 +594,25 @@ fn fillet_over_bores(
     let shell = topo.add_shell(Shell::new(shell_faces)?);
     let plugged = topo.add_solid(Solid::new(shell, inner));
 
+    // The trimmer drops each pcurve of an edge it splits, whatever face
+    // holds it, and the builder puts back only the filled solid's. The
+    // faces the filled solid leaves out share its edges, so their pcurves
+    // are put back here, whatever the round comes to.
+    let left_out: HashSet<FaceId> = walls.iter().chain(filled.keys()).copied().collect();
+    let mut saved = Vec::new();
+    for &face in &left_out {
+        for (edge, pcurve) in topo.pcurves().pcurves_for_face(face) {
+            saved.push((edge, face, pcurve.clone()));
+        }
+    }
     let mut builder = FilletBuilder::new(topo, plugged);
     builder.add_edges(edges, radius);
-    let built = match builder.build() {
+    let built = builder.build();
+    topo.pcurves_mut().remove_faces(&left_out);
+    for (edge, face, pcurve) in saved {
+        topo.pcurves_mut().set(edge, face, pcurve);
+    }
+    let built = match built {
         Ok(built) if built.failed.is_empty() => built,
         Ok(built) => {
             log::debug!(
