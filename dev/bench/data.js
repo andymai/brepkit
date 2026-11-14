@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794684452911,
+  "lastUpdate": 1794686302590,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -69335,6 +69335,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 22931382,
             "range": "± 210473",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "eb5697e1e9494a1ebf6c4988d50a4523f9d78528",
+          "message": "fix(algo): split a round's torus band at a coaxial circle (#2439)\n\nThis PR carries one of the two commits of #2430 by @Robokan onto the\ncurrent main: the torus band split in the face splitter. The commit is\nthe contributor's, with no change. One commit follows it, which names\nthe torus band in two doc comments.\n\nThe second commit of #2430 (a round over a through-bore) stays in #2430.\n\n## How I checked it\n\n- `crates/operations/tests/coaxial_bore_through_a_round.rs` passes. It\nis the contributor's test for this commit.\n- I tested this branch together with #2433, #2425 and #2429 on main.\n`cargo nextest run` for `brepkit-math`, `brepkit-algo`, `brepkit-blend`,\n`brepkit-io`, `brepkit-operations`, `brepkit-wasm`, `brepkit-check` and\n`brepkit-heal` passes (4,338 tests).\n- The pose sweep and the truth audit match main line for line.\n- `cargo clippy --all-targets --all-features -- -D warnings` passes.\n\n## The part of the description from #2430 for this commit\n\nA coaxial bore wider than a rounded rim's flat top cuts the round's\ntorus band round its axis along one circle. The band split took only\ncylinder, cone and closed B-spline walls, so the torus band split into\nnothing and the cut fell back to a mesh. It now takes a torus band too:\n- the band's seam is a meridian arc, each copy built the short way from\nits own start, so the two copies merge into one edge;\n- its `v` is read within a half turn of the seam's, since the torus is\nperiodic in `v` as well.\n\n`crates/operations/tests/coaxial_bore_through_a_round.rs`: a rounded rod\nbored coaxially at r 1 and 2, upright and turned, checked against its\nsolid of revolution to 1e-5. Both fail on `main` with the mesh fallback.\n\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes the face splitter so a coaxial bore wider than a rounded rim's\nflat top splits the round's torus band along the cut circle instead of\nfalling back to a mesh. The band stack previously handled only cylinder,\ncone, and closed B-spline walls; it now takes a torus band too, and the\ndocs name the torus band in the band stack's comments.\n\n- A torus band's seam is a meridian arc, with the two copies built the\nshort way from their own starts so they merge into one edge.\n- `v` is read within a half turn of the seam's, since the torus is\nperiodic in `v` as well.\n- Adds a regression test boring a rounded rod coaxially at r 1 and 2,\nupright and turned, checked against its solid of revolution to 1e-5.\n\n<sup>Written for commit 3bc299a88f3bb3124f20ad52d96325133fdc1a5f.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2439?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2439?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2439&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\n---------\n\nCo-authored-by: Eric Vaughan <eric.d.vaughan@gmail.com>\nCo-authored-by: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-11-14T19:54:48Z",
+          "tree_id": "cf7f1f4d9aba8cb21024e9186638e8a8a79765fb",
+          "url": "https://github.com/andymai/brepkit/commit/eb5697e1e9494a1ebf6c4988d50a4523f9d78528"
+        },
+        "date": 1794686291151,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 949910,
+            "range": "± 23100",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1003531,
+            "range": "± 2845",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11774,
+            "range": "± 19",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 586329,
+            "range": "± 2579",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24145181,
+            "range": "± 214022",
             "unit": "ns/iter"
           }
         ]
