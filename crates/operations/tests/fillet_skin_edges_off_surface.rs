@@ -31,6 +31,31 @@ use brepkit_topology::wire::OrientedEdge;
 
 const SIDE: f64 = 10.0;
 
+/// A box of side `side` whose top is a flat B-spline standing `front` above
+/// the top's edge at y = 0 and `back` above its edge at y = `side`.
+#[derive(Clone, Copy, Debug)]
+struct Skin {
+    side: f64,
+    front: f64,
+    back: f64,
+}
+
+impl Skin {
+    /// The box of side `SIDE` under a skin `off` above all its top's edges.
+    const fn level(off: f64) -> Self {
+        Self {
+            side: SIDE,
+            front: off,
+            back: off,
+        }
+    }
+
+    /// The most the skin stands off the top's edges.
+    fn farthest(self) -> f64 {
+        self.front.abs().max(self.back.abs())
+    }
+}
+
 /// How the top's edges are stored.
 #[derive(Clone, Copy, Debug)]
 enum Edges {
@@ -43,29 +68,29 @@ enum Edges {
     },
 }
 
-/// A box whose top face is a flat B-spline `off` above its edges, which are
-/// stored as `edges` says, turned into `pose`, and its top edge along x at
-/// y = 0.
-fn skinned_box(topo: &mut Topology, off: f64, pose: &Mat4, edges: Edges) -> (SolidId, EdgeId) {
-    let solid = make_box(topo, SIDE, SIDE, SIDE).unwrap();
+/// The box `skin` describes, its top's edges stored as `edges` says, turned
+/// into `pose`, and its top edge along x at y = 0.
+fn skinned_box(topo: &mut Topology, skin: Skin, pose: &Mat4, edges: Edges) -> (SolidId, EdgeId) {
+    let side = skin.side;
+    let solid = make_box(topo, side, side, side).unwrap();
     let top = solid_faces(topo, solid)
         .unwrap()
         .into_iter()
         .find(|&f| {
             matches!(topo.face(f).unwrap().surface(),
-                FaceSurface::Plane { normal, d } if normal.z() > 0.5 && (d - SIDE).abs() < 1e-9)
+                FaceSurface::Plane { normal, d } if normal.z() > 0.5 && (d - side).abs() < 1e-9)
         })
         .unwrap();
-    let z = SIDE + off;
-    let (lo, hi) = (-1.0, SIDE + 1.0);
+    let z = |y: f64| side + skin.front + (skin.back - skin.front) * (y / side);
+    let (lo, hi) = (-0.1 * side, 1.1 * side);
     let skin = NurbsSurface::new(
         1,
         1,
         vec![0.0, 0.0, 1.0, 1.0],
         vec![0.0, 0.0, 1.0, 1.0],
         vec![
-            vec![Point3::new(lo, lo, z), Point3::new(lo, hi, z)],
-            vec![Point3::new(hi, lo, z), Point3::new(hi, hi, z)],
+            vec![Point3::new(lo, lo, z(lo)), Point3::new(lo, hi, z(hi))],
+            vec![Point3::new(hi, lo, z(lo)), Point3::new(hi, hi, z(hi))],
         ],
         vec![vec![1.0, 1.0], vec![1.0, 1.0]],
     )
@@ -107,7 +132,7 @@ fn skinned_box(topo: &mut Topology, off: f64, pose: &Mat4, edges: Edges) -> (Sol
             let edge = topo.edge(e).unwrap();
             [edge.start(), edge.end()].iter().all(|&v| {
                 let p = topo.vertex(v).unwrap().point();
-                p.y().abs() < 1e-9 && (p.z() - SIDE).abs() < 1e-9
+                p.y().abs() < 1e-9 && (p.z() - side).abs() < 1e-9
             })
         })
         .unwrap();
@@ -137,13 +162,15 @@ fn read_edge(topo: &Topology, edge: EdgeId) -> (f64, f64) {
     (length, miss)
 }
 
-fn check(off: f64, r: f64, pose: &Mat4, edges: Edges) {
-    let label = format!("off {off}, r {r}, {edges:?}");
+fn check(skin: Skin, r: f64, pose: &Mat4, edges: Edges) {
+    let label = format!("{skin:?}, r {r}, {edges:?}");
+    let (side, off) = (skin.side, skin.farthest());
+    let deflection = 0.005 * side;
     let mut topo = Topology::new();
-    let (solid, edge) = skinned_box(&mut topo, off, pose, edges);
+    let (solid, edge) = skinned_box(&mut topo, skin, pose, edges);
     let before = solid_volume(&topo, solid, 0.01).unwrap();
     assert!(
-        is_watertight(&tessellate_solid(&topo, solid, 0.05).unwrap()),
+        is_watertight(&tessellate_solid(&topo, solid, deflection).unwrap()),
         "{label}: input mesh not watertight"
     );
     let faces = solid_faces(&topo, solid).unwrap().len();
@@ -151,9 +178,10 @@ fn check(off: f64, r: f64, pose: &Mat4, edges: Edges) {
         .and_then(all_blended)
         .unwrap_or_else(|e| panic!("{label}: {e}"));
     // Each edge reads its own piece of its curve, from vertex to vertex. The
-    // top keeps the contact and its back edge, `SIDE` long, and the far
-    // pieces of its two side edges, `SIDE - r` each: a piece read as its
-    // whole edge adds `r`.
+    // top keeps the contact and its back edge, `side` long, and the far
+    // pieces of its two side edges, `side - r` each: a piece read as its
+    // whole edge adds `r`. A tilted skin moves the contact by `r` times its
+    // slope, less than its standoff.
     for edge in solid_edges(&topo, result).unwrap() {
         let (_, miss) = read_edge(&topo, edge);
         assert!(
@@ -177,14 +205,14 @@ fn check(off: f64, r: f64, pose: &Mat4, edges: Edges) {
         .iter()
         .map(|oriented| read_edge(&topo, oriented.edge()).0)
         .sum();
-    let around = 2.0f64.mul_add(-r, 4.0 * SIDE);
+    let around = 2.0f64.mul_add(-r, 4.0 * side);
     assert!(
         (perimeter - around).abs() <= off + 1e-6,
         "{label}: the top's boundary reads {perimeter} long, want {around}"
     );
     let report = validate_solid(&topo, result).unwrap();
     assert!(report.is_valid(), "{label}: invalid: {report:?}");
-    let mesh = tessellate_solid(&topo, result, 0.05).unwrap();
+    let mesh = tessellate_solid(&topo, result, deflection).unwrap();
     assert!(is_watertight(&mesh), "{label}: mesh not watertight");
     assert_eq!(
         solid_faces(&topo, result).unwrap().len(),
@@ -192,13 +220,13 @@ fn check(off: f64, r: f64, pose: &Mat4, edges: Edges) {
         "{label}: faces"
     );
     let removed = before - solid_volume(&topo, result, 0.01).unwrap();
-    let want = (1.0 - std::f64::consts::FRAC_PI_4) * r * r * SIDE;
+    let want = (1.0 - std::f64::consts::FRAC_PI_4) * r * r * side;
     // The contact on the top runs on its surface, `off` above the edges the
     // end faces keep, and the skin's volume is read through its corners,
     // two of them now on that contact: the strip and the skin's reading
     // each move by about `off` times their area.
     assert!(
-        (removed - want).abs() <= off * SIDE * (SIDE + 2.0 * r) + 1e-6,
+        (removed - want).abs() <= off * side * 2.0f64.mul_add(r, side) + 1e-6,
         "{label}: removed {removed}, want {want}"
     );
 }
@@ -207,7 +235,7 @@ fn check(off: f64, r: f64, pose: &Mat4, edges: Edges) {
 fn a_round_along_a_skin_whose_edges_stand_off_it() {
     for off in [0.0, 1e-5, 3e-4, 2e-3] {
         for r in [1.0, 2.5] {
-            check(off, r, &Mat4::identity(), Edges::Lines);
+            check(Skin::level(off), r, &Mat4::identity(), Edges::Lines);
         }
     }
 }
@@ -216,7 +244,7 @@ fn a_round_along_a_skin_whose_edges_stand_off_it() {
 fn a_turned_skin_rounds_alike() {
     let pose =
         Mat4::translation(-37.2, 5.5, 140.0) * Mat4::rotation_z(0.7) * Mat4::rotation_x(-0.9);
-    check(3e-4, 1.0, &pose, Edges::Lines);
+    check(Skin::level(3e-4), 1.0, &pose, Edges::Lines);
 }
 
 /// The side edges a contact ends on are split where it ends, off them by as
@@ -231,12 +259,12 @@ fn a_skin_with_spline_edges_rounds_alike() {
     };
     for off in [0.0, 1e-5, 3e-4, 2e-3] {
         for r in [1.0, 2.5] {
-            check(off, r, &Mat4::identity(), along);
+            check(Skin::level(off), r, &Mat4::identity(), along);
         }
     }
     for off in [3e-4, 2e-3] {
         check(
-            off,
+            Skin::level(off),
             2.5,
             &Mat4::identity(),
             Edges::Splines {
@@ -246,7 +274,7 @@ fn a_skin_with_spline_edges_rounds_alike() {
         );
         for backward in [false, true] {
             check(
-                off,
+                Skin::level(off),
                 1.0,
                 &Mat4::identity(),
                 Edges::Splines {
@@ -258,5 +286,30 @@ fn a_skin_with_spline_edges_rounds_alike() {
     }
     let pose =
         Mat4::translation(-37.2, 5.5, 140.0) * Mat4::rotation_z(0.7) * Mat4::rotation_x(-0.9);
-    check(2e-3, 1.0, &pose, along);
+    check(Skin::level(2e-3), 1.0, &pose, along);
+}
+
+/// A skin tilted over a box of side 1, its standoff over the side edges
+/// falling from 3e-3 at the rounded edge to nothing at the far one, or
+/// rising from nothing to 3e-3. The contact ends where it meets a side
+/// edge's trace on the skin, a little along the edge from the edge's point
+/// nearest it (the standoff times its slope, 3e-3).
+#[test]
+fn a_tilted_skin_rounds_alike() {
+    for (front, back, r) in [(3e-3, 0.0, 0.1), (3e-3, 0.0, 0.25), (0.0, 3e-3, 0.25)] {
+        for edges in [
+            Edges::Lines,
+            Edges::Splines {
+                degree: 1,
+                backward: false,
+            },
+        ] {
+            let skin = Skin {
+                side: 1.0,
+                front,
+                back,
+            };
+            check(skin, r, &Mat4::identity(), edges);
+        }
+    }
 }

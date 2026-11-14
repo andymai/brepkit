@@ -1591,6 +1591,33 @@ fn edge_curve_for_span(
     ))
 }
 
+/// The parameter within `step` of `around`, and within `span`, where
+/// `reading` is least. It is refined until the bracket stops shrinking: a
+/// parameter error on a line grows with the line's length, and a contact's
+/// end must meet the edge within 1e-6 however long the edge is.
+fn refined_minimum(
+    reading: impl Fn(f64) -> f64,
+    around: f64,
+    step: f64,
+    (low, high): (f64, f64),
+) -> f64 {
+    let mut lo = (around - step.abs()).clamp(low, high);
+    let mut hi = (around + step.abs()).clamp(low, high);
+    for _ in 0..200 {
+        if hi - lo <= f64::EPSILON * lo.abs().max(hi.abs()).max(1.0) {
+            break;
+        }
+        let m1 = lo + (hi - lo) / 3.0;
+        let m2 = hi - (hi - lo) / 3.0;
+        if reading(m1) < reading(m2) {
+            hi = m2;
+        } else {
+            lo = m1;
+        }
+    }
+    0.5 * (lo + hi)
+}
+
 /// A spline edge spanning `t0` to `t1` of `curve`, split at `t`: the piece
 /// before the split and the piece after it, each running the edge's way,
 /// moved to meet at `point` (a contact's end off the edge, within a file's
@@ -2237,51 +2264,62 @@ fn rebuild_mapped_parametric_face(
                         continue;
                     }
                     let step = (d1 - d0) / 64.0;
-                    let (low, high) = (d0.min(d1), d0.max(d1));
-                    let mut lo = (best_t - step.abs()).clamp(low, high);
-                    let mut hi = (best_t + step.abs()).clamp(low, high);
-                    // Refined until the bracket stops shrinking: a parameter
-                    // error on a line grows with the line's length, and a
-                    // contact's end must meet the edge within 1e-6 however
-                    // long the edge is.
-                    for _ in 0..200 {
-                        if hi - lo <= f64::EPSILON * lo.abs().max(hi.abs()).max(1.0) {
-                            break;
-                        }
-                        let m1 = lo + (hi - lo) / 3.0;
-                        let m2 = hi - (hi - lo) / 3.0;
-                        if dist_at(m1) < dist_at(m2) {
-                            hi = m2;
-                        } else {
-                            lo = m1;
-                        }
-                    }
-                    let tt = 0.5 * (lo + hi);
-                    // A file's edge may stand off its face by its digits
-                    // (8e-5 off a plane on a 500 mm part, a fitted section
-                    // 3e-5 off a cylinder): a contact on the face ends on it
-                    // where it meets the edge's trace on the face, the edge
-                    // itself within a file's tolerance.
-                    let on_face = |q: Point3| match &surface {
-                        FaceSurface::Plane { normal, d } => {
-                            q - *normal
-                                * ((normal.dot(brepkit_math::vec::Vec3::new(q.x(), q.y(), q.z()))
-                                    - d)
-                                    / normal.length_squared())
-                        }
-                        other => other
-                            .project_point(q)
-                            .and_then(|(u, v)| other.evaluate(u, v))
-                            .unwrap_or(q),
+                    let span = (d0.min(d1), d0.max(d1));
+                    let inside = |tt: f64| {
+                        let f = (tt - d0) / (d1 - d0);
+                        f > 1e-9 && f < 1.0 - 1e-9
                     };
-                    let on_edge = curve.evaluate_with_endpoints(tt, sp, tp);
-                    let gap = dist_at(tt);
-                    if gap > 1e-6 && (gap > allowance || (on_face(on_edge) - point).length() > 1e-6)
-                    {
+                    let tt = refined_minimum(dist_at, best_t, step, span);
+                    let tt = if dist_at(tt) <= 1e-6 {
+                        tt
+                    } else if dist_at(tt) > allowance {
+                        continue;
+                    } else {
+                        // A file's edge may stand off its face by its digits
+                        // (8e-5 off a plane on a 500 mm part, a fitted
+                        // section 3e-5 off a cylinder): a contact on the face
+                        // ends on it where it meets the edge's trace on the
+                        // face, the edge itself within a file's tolerance.
+                        // Where the standoff varies along the edge, the
+                        // edge's point nearest the end lies off that place,
+                        // so the trace is searched itself.
+                        let on_face = |q: Point3| match &surface {
+                            FaceSurface::Plane { normal, d } => {
+                                q - *normal
+                                    * ((normal.dot(brepkit_math::vec::Vec3::new(
+                                        q.x(),
+                                        q.y(),
+                                        q.z(),
+                                    )) - d)
+                                        / normal.length_squared())
+                            }
+                            other => other
+                                .project_point(q)
+                                .and_then(|(u, v)| other.evaluate(u, v))
+                                .unwrap_or(q),
+                        };
+                        let miss_at = |tt: f64| {
+                            (on_face(curve.evaluate_with_endpoints(tt, sp, tp)) - point).length()
+                        };
+                        let (mut best_t, mut best_miss) = (d0, miss_at(d0));
+                        for i in 1..=64 {
+                            let tt = (d1 - d0).madd(f64::from(i) / 64.0, d0);
+                            let miss = miss_at(tt);
+                            if miss < best_miss {
+                                (best_t, best_miss) = (tt, miss);
+                            }
+                        }
+                        let tt = refined_minimum(miss_at, best_t, step, span);
+                        if miss_at(tt) > 1e-6 {
+                            continue;
+                        }
+                        tt
+                    };
+                    if !inside(tt) {
                         continue;
                     }
-                    let f = (tt - d0) / (d1 - d0);
-                    if f <= 1e-9 || f >= 1.0 - 1e-9 {
+                    let gap = dist_at(tt);
+                    if gap > allowance {
                         continue;
                     }
                     // Off its curve, the vertex no longer picks out each
@@ -5492,10 +5530,10 @@ mod tests {
         );
     }
 
-    /// Each edge of the trimmed wall's outer wire: its curve, how far the
+    /// Each edge of the trimmed face's outer wire: its curve, how far the
     /// ends of the span it reads fall from its vertices, and that span's
     /// length along 64 chords.
-    fn wall_pieces(topo: &Topology, result: &BatchTrimResult) -> Vec<(EdgeCurve, f64, f64)> {
+    fn outer_pieces(topo: &Topology, result: &BatchTrimResult) -> Vec<(EdgeCurve, f64, f64)> {
         let wire = topo
             .wire(topo.face(result.trimmed_face).unwrap().outer_wire())
             .unwrap();
@@ -5540,7 +5578,7 @@ mod tests {
         for (radius, off) in WALL_RIMS {
             let label = format!("radius {radius}, off {off}");
             let (topo, _, result) = trim_a_wall_off_its_rims(radius, off, quarter);
-            let pieces = wall_pieces(&topo, &result.unwrap());
+            let pieces = outer_pieces(&topo, &result.unwrap());
             assert_eq!(pieces.len(), 4, "{label}: the contact, a side and two rims");
             for (curve, miss, length) in pieces {
                 assert!(
@@ -5583,7 +5621,7 @@ mod tests {
                     "{label}: a circular rim off the wall must refuse the trim"
                 );
             } else {
-                let pieces = wall_pieces(&topo, &result.unwrap());
+                let pieces = outer_pieces(&topo, &result.unwrap());
                 assert_eq!(pieces.len(), 4, "{label}");
                 assert!(
                     pieces.iter().all(|(_, miss, _)| *miss <= 1e-9),
@@ -5591,6 +5629,121 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// How a sloped edge is stored.
+    #[derive(Clone, Copy, Debug)]
+    enum Slope {
+        Line,
+        Spline,
+        Arc,
+    }
+
+    /// A square of side 0.01 on a flat B-spline in z = 0 whose edges along x
+    /// rise from 0.001 above it at x = 0 to 0.003 at x = 0.01, stored as
+    /// `slope` says (an arc bulges 2.6e-4 above the chord), cut on the face
+    /// along x = 0.005, its x = 0 side cut off. Each contact end is the
+    /// trace on the face of its edge's middle, 0.002 or more below it; the
+    /// edge's point nearest the end lies at 0.46 of the edge, whose trace
+    /// misses the end by 3.8e-4.
+    fn trim_off_sloped_edges(
+        slope: Slope,
+    ) -> (Topology, FaceId, Result<BatchTrimResult, BlendError>) {
+        let mut topo = Topology::new();
+        let corners = [
+            Point3::new(0.0, 0.0, 0.001),
+            Point3::new(0.01, 0.0, 0.003),
+            Point3::new(0.01, 0.01, 0.003),
+            Point3::new(0.0, 0.01, 0.001),
+        ];
+        let vertices = corners.map(|p| topo.add_vertex(Vertex::new(p, VERTEX_TOL)));
+        let sloped = |a: Point3, b: Point3| match slope {
+            Slope::Line => EdgeCurve::Line,
+            Slope::Spline => EdgeCurve::NurbsCurve(
+                brepkit_math::nurbs::curve::NurbsCurve::new(
+                    1,
+                    vec![0.0, 0.0, 1.0, 1.0],
+                    vec![a, b],
+                    vec![1.0, 1.0],
+                )
+                .unwrap(),
+            ),
+            Slope::Arc => {
+                let radius = 0.05;
+                let middle = a + (b - a) * 0.5;
+                let up = Vec3::new(a.z() - b.z(), 0.0, b.x() - a.x())
+                    .normalize()
+                    .unwrap();
+                let up = if up.z() < 0.0 { -up } else { up };
+                let half = (b - a).length() * 0.5;
+                let center = middle - up * radius.madd(radius, -(half * half)).sqrt();
+                [Vec3::new(0.0, 1.0, 0.0), Vec3::new(0.0, -1.0, 0.0)]
+                    .into_iter()
+                    .map(|normal| {
+                        EdgeCurve::Circle(
+                            brepkit_math::curves::Circle3D::new(center, normal, radius).unwrap(),
+                        )
+                    })
+                    .find(|arc| {
+                        let (t0, t1) = arc.domain_with_endpoints(a, b);
+                        (t1 - t0).abs() < std::f64::consts::PI
+                    })
+                    .unwrap()
+            }
+        };
+        let curves = [
+            sloped(corners[0], corners[1]),
+            EdgeCurve::Line,
+            sloped(corners[2], corners[3]),
+            EdgeCurve::Line,
+        ];
+        let edges: Vec<OrientedEdge> = (0..4)
+            .map(|k| {
+                let edge = Edge::new(vertices[k], vertices[(k + 1) % 4], curves[k].clone());
+                OrientedEdge::new(topo.add_edge(edge), true)
+            })
+            .collect();
+        let side = edges[3].edge();
+        let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+        let face = topo.add_face(Face::new(wire, Vec::new(), flat_unit_skin()));
+        let restriction = ParametricRestriction {
+            contact_3d: vec![Point3::new(0.005, 0.0, 0.0), Point3::new(0.005, 0.01, 0.0)],
+            keep: TrimKeep::AwayFrom(Point3::new(0.0, 0.005, 0.0)),
+            curve: Some(EdgeCurve::Line),
+            pcurve: None,
+            source_edges: vec![side],
+        };
+        let result =
+            trim_parametric_face_batch(&mut topo, face, &[restriction], BoundarySplitPolicy::All);
+        (topo, face, result)
+    }
+
+    /// A contact ends where it meets the trace of an edge on the face, not at
+    /// the edge's point nearest it: where the edge's standoff varies, the
+    /// two differ. A line or a spline is split there into pieces that meet
+    /// the contact's ends; an arc cannot end there and refuses the trim.
+    #[test]
+    fn a_contact_ending_under_a_sloped_edge_splits_it_where_it_ends() {
+        for slope in [Slope::Line, Slope::Spline] {
+            let (topo, _, result) = trim_off_sloped_edges(slope);
+            let pieces = outer_pieces(&topo, &result.unwrap());
+            assert_eq!(
+                pieces.len(),
+                4,
+                "{slope:?}: the contact, a side and two pieces of the sloped edges"
+            );
+            for (_, miss, _) in pieces {
+                assert!(
+                    miss <= 1e-9,
+                    "{slope:?}: a piece's ends miss its vertices by {miss}"
+                );
+            }
+        }
+        let (_, face, result) = trim_off_sloped_edges(Slope::Arc);
+        assert!(
+            matches!(result, Err(BlendError::TrimmingFailure { face: failed }) if failed == face),
+            "an arc a contact ends off must refuse the trim"
+        );
     }
 
     #[test]
