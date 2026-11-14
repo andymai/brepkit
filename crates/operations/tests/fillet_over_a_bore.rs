@@ -400,25 +400,43 @@ fn a_round_over_a_bore_keeps_the_marks_round_it() {
     );
 }
 
-/// The box slit through along y between z = 7 and 7.1, from x = 5 to 35,
-/// and bored from the top down to the slit at (20, 6) by a bore of radius
-/// 2. The bore's lower mouth opens onto the slit, thinner than the tenth of
-/// the bore's radius the cut back runs past it, so the cut back would cut
-/// into the slit's floor: the round is the direct fillet's.
+/// The box slit through along y between each pair of heights in `slits`,
+/// from x = 5 to 35, and bored from the top down to z = 7.05 at (20, 6) by
+/// a bore of radius 2, with its top edge along x at y = 0.
+fn slit_box(topo: &mut Topology, slits: &[(f64, f64)]) -> (SolidId, EdgeId) {
+    let mut solid = make_box(topo, LENGTH, WIDTH, HEIGHT).unwrap();
+    for &(low, high) in slits {
+        let slit = make_box(topo, 30.0, WIDTH + 2.0, high - low).unwrap();
+        transform_solid(topo, slit, &Mat4::translation(5.0, -1.0, low)).unwrap();
+        solid = boolean(topo, BooleanOp::Cut, solid, slit).unwrap();
+    }
+    let solid = drill(topo, solid, (0.5 * LENGTH, 6.0), 2.0, (7.05, HEIGHT + 1.0));
+    let edge = line_edge(topo, solid, [0.0, 0.0, HEIGHT], [LENGTH, 0.0, HEIGHT]);
+    (solid, edge)
+}
+
+/// A slit between z = 7 and 7.1, onto which the bore's lower mouth opens:
+/// the slit is thinner than the tenth of the bore's radius the cut back
+/// runs past the mouth, so the cut back would cut into the slit's floor.
+/// The round is the direct fillet's.
 #[test]
 fn a_bore_onto_a_thin_slit_is_left_to_the_direct_fillet() {
     let mut topo = Topology::new();
-    let block = make_box(&mut topo, LENGTH, WIDTH, HEIGHT).unwrap();
-    let slit = make_box(&mut topo, 30.0, WIDTH + 2.0, 0.1).unwrap();
-    transform_solid(&mut topo, slit, &Mat4::translation(5.0, -1.0, 7.0)).unwrap();
-    let slit = boolean(&mut topo, BooleanOp::Cut, block, slit).unwrap();
-    let solid = drill(
-        &mut topo,
-        slit,
-        (0.5 * LENGTH, 6.0),
-        2.0,
-        (7.05, HEIGHT + 1.0),
-    );
-    let edge = line_edge(&topo, solid, [0.0, 0.0, HEIGHT], [LENGTH, 0.0, HEIGHT]);
+    let (solid, edge) = slit_box(&mut topo, &[(7.0, 7.1)]);
     round_as_the_direct_fillet(&mut topo, solid, &[edge], 7.0);
+}
+
+/// The same slit with a second one below it, between z = 6.8 and 6.95: the
+/// cut back ends at z = 6.9, in the second slit, but on its way crosses the
+/// shelf between the two. The round is the direct fillet's, and the shelf
+/// keeps its material under the bore.
+#[test]
+fn a_bore_onto_a_shelf_between_two_slits_is_left_to_the_direct_fillet() {
+    let mut topo = Topology::new();
+    let (solid, edge) = slit_box(&mut topo, &[(7.0, 7.1), (6.8, 6.95)]);
+    let result = round_as_the_direct_fillet(&mut topo, solid, &[edge], 7.0);
+    assert!(
+        inside(&topo, result, [0.5 * LENGTH, 6.0, 6.975]),
+        "shelf cut"
+    );
 }

@@ -464,32 +464,37 @@ fn square_to(axis: Vec3) -> Result<(Vec3, Vec3), OperationsError> {
     Ok((x, axis.cross(x)))
 }
 
-/// Whether the bore opens onto space at each mouth: the disc that closes it
-/// `margin` past the mouth, where its cut back ends, is outside the solid
-/// at its centre and round its rim.
-fn opens_past_its_mouths(
+/// Whether the cut back carved material past one of the bore's mouths: a
+/// vertex of the cut `solid` lies in the cutter's stretch past a mouth (past
+/// the mouth's plane, up to the cutter's end, within its radius). Material
+/// carved there leaves the cut's boundary on the cutter's wall or end there,
+/// and each edge of that boundary has a vertex, a closed edge too. A vertex
+/// there that no carve made bounds material that was there already.
+fn carved_past_a_mouth(
     topo: &Topology,
     solid: SolidId,
     bore: &Bore,
-    margin: f64,
 ) -> Result<bool, OperationsError> {
-    use crate::classify::{PointClassification, classify_point};
+    use brepkit_topology::explorer::solid_vertices;
     let [start, end] = bore.centres;
     let axis = (end - start).normalize()?;
-    let (x, y) = square_to(axis)?;
-    let tol = Tolerance::new().linear;
-    for past in [start - axis * margin, end + axis * margin] {
-        let rim = (0..8).map(|k| {
-            let (sin, cos) = (std::f64::consts::FRAC_PI_4 * f64::from(k)).sin_cos();
-            past + (x * cos + y * sin) * bore.radius
-        });
-        for point in std::iter::once(past).chain(rim) {
-            if classify_point(topo, solid, point, 0.0, tol)? != PointClassification::Outside {
-                return Ok(false);
+    let margin = MOUTH_MARGIN * bore.radius;
+    let linear = Tolerance::new().linear;
+    for vertex_id in solid_vertices(topo, solid)? {
+        let vertex = topo.vertex(vertex_id)?;
+        let tol = linear.max(vertex.tolerance());
+        for (centre, out) in [(start, -axis), (end, axis)] {
+            let from = vertex.point() - centre;
+            let past = from.dot(out);
+            if past > tol
+                && past <= margin + tol
+                && (from - out * past).length() <= bore.radius + tol
+            {
+                return Ok(true);
             }
         }
     }
-    Ok(true)
+    Ok(false)
 }
 
 /// A fillet over through-bores, as when the bores were filled: a round
@@ -499,9 +504,9 @@ fn opens_past_its_mouths(
 /// Each bore whose mouth the round's band reaches, on a face of a picked
 /// edge, is filled, the solid rounded, and the bore cut back through the
 /// round.
-/// `None` when there is no such bore, a picked edge is not convex, a bore
-/// does not open onto space past its mouths, a cut back would cross a seam,
-/// or the round or the cut does not build exactly.
+/// `None` when there is no such bore, a picked edge is not convex, a cut
+/// back would cross a seam or carves material past a mouth, or the round or
+/// the cut does not build exactly.
 fn fillet_over_bores(
     topo: &mut Topology,
     solid: SolidId,
@@ -546,12 +551,6 @@ fn fillet_over_bores(
         };
         if !convex {
             log::debug!("fillet over bores: edge {} is not convex", edge.index());
-            return Ok(None);
-        }
-    }
-    for bore in &bores {
-        if !opens_past_its_mouths(topo, solid, bore, MOUTH_MARGIN * bore.radius)? {
-            log::debug!("fillet over bores: a bore does not open onto space past its mouths");
             return Ok(None);
         }
     }
@@ -620,8 +619,7 @@ fn fillet_over_bores(
         }
     }
 
-    // Each bore cut back, a little past both mouths, where it opens onto
-    // space.
+    // Each bore cut back, a little past both mouths.
     let mut result = built.solid;
     for bore in &bores {
         let [start, end] = bore.centres;
@@ -655,6 +653,12 @@ fn fillet_over_bores(
                 log::debug!("fillet over bores: the bore's cut failed: {e}");
                 return Ok(None);
             }
+        }
+    }
+    for bore in &bores {
+        if carved_past_a_mouth(topo, result, bore)? {
+            log::debug!("fillet over bores: the cut back carved material past a mouth");
+            return Ok(None);
         }
     }
     // A cut that leaves the solid unsound (faces disagreeing about an edge's
