@@ -393,10 +393,7 @@ fn into_face(
     Ok(surface.normal(u, v).cross(along).normalize().ok())
 }
 
-/// Points along a seam at which it is tested against a cutter.
-const SEAM_SAMPLES: u32 = 64;
-
-/// Whether a seam of `solid` (an edge that one wire runs both ways) passes
+/// Whether a seam of `solid` (an edge that one wire runs both ways) may pass
 /// through the bore's cutter: the cut makes a hole across the seam but
 /// leaves the seam whole, so it runs through the hole, and the solid is
 /// valid but its face's outline crosses its hole.
@@ -405,11 +402,7 @@ fn cutter_meets_a_seam(
     solid: SolidId,
     bore: &Bore,
 ) -> Result<bool, OperationsError> {
-    let [start, end] = bore.centres;
-    let axis = (end - start).normalize()?;
-    let margin = MOUTH_MARGIN * bore.radius;
-    let base = start - axis * margin;
-    let length = (end - start).length() + 2.0 * margin;
+    let cutter = Cutter::of(bore.centres, bore.radius)?;
     for face_id in solid_faces(topo, solid)? {
         let face = topo.face(face_id)?;
         for wire_id in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied())
@@ -424,32 +417,162 @@ fn cutter_meets_a_seam(
                     topo.vertex(edge.start())?.point(),
                     topo.vertex(edge.end())?.point(),
                 );
-                let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
-                let points: Vec<Point3> = (0..=SEAM_SAMPLES)
-                    .map(|k| {
-                        let t = t0 + (t1 - t0) * f64::from(k) / f64::from(SEAM_SAMPLES);
-                        edge.curve().evaluate_with_endpoints(t, a, b)
-                    })
-                    .collect();
-                // A sample within a step of the cutter counts, so a seam
-                // that passes through it between two samples is found.
-                let step = points
-                    .windows(2)
-                    .map(|pair| (pair[1] - pair[0]).length())
-                    .fold(0.0, f64::max);
-                for p in points {
-                    let h = (p - base).dot(axis);
-                    if h >= -step
-                        && h <= length + step
-                        && ((p - base) - axis * h).length() <= bore.radius + step
-                    {
-                        return Ok(true);
-                    }
+                if cutter.may_meet(edge.curve(), a, b) {
+                    return Ok(true);
                 }
             }
         }
     }
     Ok(false)
+}
+
+/// A bore's cutter in its own frame: a point's coordinates are its offsets
+/// along `x` and `y`, across the axis, and along `axis` from `base`. The
+/// cutter is the points at most `radius` from the axis with an axial
+/// coordinate from 0 to `length`, each grown by `tol`.
+struct Cutter {
+    base: Point3,
+    x: Vec3,
+    y: Vec3,
+    axis: Vec3,
+    length: f64,
+    radius: f64,
+    tol: f64,
+}
+
+impl Cutter {
+    /// The cutter of a bore from mouth centre to mouth centre, `MOUTH_MARGIN`
+    /// radii past each.
+    fn of(centres: [Point3; 2], radius: f64) -> Result<Self, OperationsError> {
+        let [start, end] = centres;
+        let axis = (end - start).normalize()?;
+        let (x, y) = square_to(axis)?;
+        let margin = MOUTH_MARGIN * radius;
+        Ok(Self {
+            base: start - axis * margin,
+            x,
+            y,
+            axis,
+            length: (end - start).length() + 2.0 * margin,
+            radius,
+            tol: Tolerance::new().linear,
+        })
+    }
+
+    fn coords(&self, p: Point3) -> [f64; 3] {
+        let d = p - self.base;
+        [d.dot(self.x), d.dot(self.y), d.dot(self.axis)]
+    }
+
+    /// Whether a curve from `a` to `b` may meet the cutter: exactly for a
+    /// segment, and by a box in the cutter's frame that holds the curve for
+    /// the others.
+    fn may_meet(&self, curve: &EdgeCurve, a: Point3, b: Point3) -> bool {
+        let span = || {
+            let (t0, t1) = curve.domain_with_endpoints(a, b);
+            (t0.min(t1), t0.max(t1))
+        };
+        match curve {
+            EdgeCurve::Line => self.segment_meets(a, b),
+            EdgeCurve::Circle(circle) => self.box_meets(self.arc_box(
+                circle.center(),
+                circle.u_axis() * circle.radius(),
+                circle.v_axis() * circle.radius(),
+                span(),
+            )),
+            EdgeCurve::Ellipse(ellipse) => self.box_meets(self.arc_box(
+                ellipse.center(),
+                ellipse.u_axis() * ellipse.semi_major(),
+                ellipse.v_axis() * ellipse.semi_minor(),
+                span(),
+            )),
+            // A curve with positive weights lies in its control points'
+            // hull; with any other weight, nothing bounds it here.
+            EdgeCurve::NurbsCurve(nurbs) => {
+                !nurbs.weights().iter().all(|&w| w > 0.0)
+                    || self.box_meets(self.points_box(nurbs.control_points()))
+            }
+        }
+    }
+
+    /// Whether a set lying in the box `[lo, hi]` of the cutter's frame may
+    /// meet the cutter: its axial span meets the cutter's, and the box's
+    /// span across the axis comes within the radius of it.
+    fn box_meets(&self, (lo, hi): ([f64; 3], [f64; 3])) -> bool {
+        if hi[2] < -self.tol || lo[2] > self.length + self.tol {
+            return false;
+        }
+        let off = |k: usize| lo[k].max(-hi[k]).max(0.0);
+        off(0).hypot(off(1)) <= self.radius + self.tol
+    }
+
+    fn points_box(&self, points: &[Point3]) -> ([f64; 3], [f64; 3]) {
+        let mut lo = [f64::INFINITY; 3];
+        let mut hi = [f64::NEG_INFINITY; 3];
+        for &p in points {
+            for (k, c) in self.coords(p).into_iter().enumerate() {
+                lo[k] = lo[k].min(c);
+                hi[k] = hi[k].max(c);
+            }
+        }
+        (lo, hi)
+    }
+
+    /// The box in the cutter's frame of the arc `centre + u cos t + v sin t`
+    /// for `t` in `span`: each coordinate is `c + p cos t + q sin t`, which
+    /// is `c + m cos(t - f)` with `m = hypot(p, q)` and `f = atan2(q, p)`, so
+    /// its extremes are at the ends of the span and at each `t` in it where
+    /// `t - f` is a whole number of half turns.
+    fn arc_box(&self, centre: Point3, u: Vec3, v: Vec3, span: (f64, f64)) -> ([f64; 3], [f64; 3]) {
+        use std::f64::consts::{PI, TAU};
+        let c = self.coords(centre);
+        let (t0, t1) = span;
+        let mut lo = [0.0; 3];
+        let mut hi = [0.0; 3];
+        for (k, w) in [self.x, self.y, self.axis].into_iter().enumerate() {
+            let (p, q) = (u.dot(w), v.dot(w));
+            let at = |t: f64| c[k] + p * t.cos() + q * t.sin();
+            let (mut low, mut high) = (at(t0).min(at(t1)), at(t0).max(at(t1)));
+            let (m, f) = (p.hypot(q), q.atan2(p));
+            for (turn, value) in [(f, c[k] + m), (f + PI, c[k] - m)] {
+                if t0 + (turn - t0).rem_euclid(TAU) <= t1 {
+                    low = low.min(value);
+                    high = high.max(value);
+                }
+            }
+            lo[k] = low;
+            hi[k] = high;
+        }
+        (lo, hi)
+    }
+
+    /// Whether the segment from `a` to `b` meets the cutter: the part of it
+    /// within the cutter's axial span, then the point of that part nearest
+    /// the axis.
+    fn segment_meets(&self, a: Point3, b: Point3) -> bool {
+        let p = self.coords(a);
+        let q = self.coords(b);
+        let d = [q[0] - p[0], q[1] - p[1], q[2] - p[2]];
+        let (low, high) = (-self.tol, self.length + self.tol);
+        let (mut s0, mut s1) = (0.0_f64, 1.0_f64);
+        if d[2].abs() > 0.0 {
+            let (e0, e1) = ((low - p[2]) / d[2], (high - p[2]) / d[2]);
+            s0 = s0.max(e0.min(e1));
+            s1 = s1.min(e0.max(e1));
+            if s0 > s1 {
+                return false;
+            }
+        } else if p[2] < low || p[2] > high {
+            return false;
+        }
+        let across = d[0] * d[0] + d[1] * d[1];
+        let s = if across > 0.0 {
+            (-(p[0] * d[0] + p[1] * d[1]) / across).clamp(s0, s1)
+        } else {
+            s0
+        };
+        (p[0] + d[0] * s).hypot(p[1] + d[1] * s) <= self.radius + self.tol
+    }
 }
 
 /// Two unit directions square to `axis` and to each other.
@@ -1082,13 +1205,14 @@ fn chain_extends_tangently(topo: &Topology, chain: &[EdgeId], cand: EdgeId) -> b
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-    use brepkit_math::curves::Circle3D;
+    use brepkit_math::curves::{Circle3D, Ellipse3D};
+    use brepkit_math::nurbs::curve::NurbsCurve;
     use brepkit_math::vec::{Point3, Vec3};
     use brepkit_topology::Topology;
     use brepkit_topology::edge::{Edge, EdgeCurve, EdgeId};
     use brepkit_topology::vertex::Vertex;
 
-    use super::nearest_on_edge;
+    use super::{Cutter, nearest_on_edge};
 
     fn edge(topo: &mut Topology, a: Point3, b: Point3, curve: EdgeCurve) -> EdgeId {
         let a = topo.add_vertex(Vertex::new(a, 1e-7));
@@ -1133,5 +1257,96 @@ mod tests {
         assert_nearest(&topo, arc, [1.0, 1.0], [diagonal, diagonal]);
         assert_nearest(&topo, arc, [0.0, -2.0], [5.0, 0.0]);
         assert_nearest(&topo, arc, [-2.0, 0.5], [0.0, 5.0]);
+    }
+
+    fn p(x: f64, y: f64, z: f64) -> Point3 {
+        Point3::new(x, y, z)
+    }
+
+    /// A cutter of radius 0.5 standing on (0, 10) from z = -0.05 to 10.05.
+    fn upright_cutter() -> Cutter {
+        Cutter::of([p(0.0, 10.0, 0.0), p(0.0, 10.0, 10.0)], 0.5).unwrap()
+    }
+
+    /// A polyline spline along y = 0 at z = 5 from x = -32 to 32, with a
+    /// spike out to `tip` over the parameters 0.501 to 0.503.
+    fn spiked(tip: Point3) -> (EdgeCurve, Point3, Point3) {
+        let (a, b) = (p(-32.0, 0.0, 5.0), p(32.0, 0.0, 5.0));
+        let points = vec![a, p(-0.1, 0.0, 5.0), tip, p(0.1, 0.0, 5.0), b];
+        let knots = vec![0.0, 0.0, 0.501, 0.502, 0.503, 1.0, 1.0];
+        let curve = NurbsCurve::new(1, knots, points, vec![1.0; 5]).unwrap();
+        (EdgeCurve::NurbsCurve(curve), a, b)
+    }
+
+    /// The spike reaches the cutter's axis between two of 65 even samples,
+    /// each farther from the axis than the radius and the longest chord
+    /// between samples together. The spline's control points bound it, so
+    /// it is found; a spike that stops short of the cutter is not.
+    #[test]
+    fn a_spline_seam_through_the_cutter_between_samples_meets_it() {
+        let cutter = upright_cutter();
+        let (seam, a, b) = spiked(p(0.0, 10.0, 5.0));
+        let (t0, t1) = seam.domain_with_endpoints(a, b);
+        let samples: Vec<Point3> = (0..=64)
+            .map(|k| seam.evaluate_with_endpoints(t0 + (t1 - t0) * f64::from(k) / 64.0, a, b))
+            .collect();
+        let chord = samples
+            .windows(2)
+            .map(|pair| (pair[1] - pair[0]).length())
+            .fold(0.0, f64::max);
+        let off_axis = |q: Point3| q.x().hypot(q.y() - 10.0);
+        assert!(samples.iter().all(|&q| off_axis(q) > 0.5 + chord));
+        assert!(cutter.may_meet(&seam, a, b));
+
+        let (seam, a, b) = spiked(p(0.0, 5.0, 5.0));
+        assert!(!cutter.may_meet(&seam, a, b));
+    }
+
+    /// A segment meets the cutter exactly where some point of it lies within
+    /// the radius of the axis inside the cutter's length.
+    #[test]
+    fn a_line_seam_meets_the_cutter_exactly() {
+        let cutter = upright_cutter();
+        let line = EdgeCurve::Line;
+        assert!(cutter.may_meet(&line, p(-5.0, 10.0, 5.0), p(5.0, 10.0, 5.0)));
+        assert!(!cutter.may_meet(&line, p(-5.0, 10.6, 2.0), p(5.0, 10.6, 8.0)));
+        assert!(cutter.may_meet(&line, p(-5.0, 10.4, 2.0), p(5.0, 10.4, 8.0)));
+        assert!(!cutter.may_meet(&line, p(-5.0, 10.0, 11.0), p(5.0, 10.0, 12.0)));
+        assert!(cutter.may_meet(&line, p(0.0, 10.0, 12.0), p(0.0, 10.3, -3.0)));
+    }
+
+    /// A rod's top rim rounded by 2: the band's seam is the quarter circle
+    /// about (3, 0, 4) from (5, 0, 4) to (3, 0, 6). A cutter on (4.2, 0)
+    /// crosses it, one a radian round the rod does not, and one on (1.8, 0)
+    /// meets the whole circle but not the quarter.
+    #[test]
+    fn a_circle_seam_meets_the_cutter_within_its_span() {
+        let rim = Circle3D::new(p(3.0, 0.0, 4.0), Vec3::new(0.0, 1.0, 0.0), 2.0).unwrap();
+        let (a, b) = (p(5.0, 0.0, 4.0), p(3.0, 0.0, 6.0));
+        let quarter =
+            if (rim.evaluate(rim.project(a) + std::f64::consts::FRAC_PI_2) - b).length() < 1e-9 {
+                (EdgeCurve::Circle(rim), a, b)
+            } else {
+                (EdgeCurve::Circle(rim), b, a)
+            };
+        let cutter = |x: f64, y: f64| Cutter::of([p(x, y, 0.0), p(x, y, 6.0)], 0.3).unwrap();
+        let (seam, a, b) = quarter;
+        assert!(cutter(4.2, 0.0).may_meet(&seam, a, b));
+        assert!(!cutter(4.2 * 1.0_f64.cos(), 4.2 * 1.0_f64.sin()).may_meet(&seam, a, b));
+        assert!(!cutter(1.8, 0.0).may_meet(&seam, a, b));
+    }
+
+    /// A closed ellipse in the plane x = 0 about a point on the cutter's axis
+    /// crosses the axis, and one in z = 5 whose centre is 4 off the axis, its
+    /// semi-major axis 3, stays clear.
+    #[test]
+    fn an_ellipse_seam_meets_the_cutter_by_its_box() {
+        let cutter = upright_cutter();
+        let across = Ellipse3D::new(p(0.0, 10.0, 5.0), Vec3::new(1.0, 0.0, 0.0), 3.0, 1.0).unwrap();
+        let at = across.evaluate(0.0);
+        assert!(cutter.may_meet(&EdgeCurve::Ellipse(across), at, at));
+        let beside = Ellipse3D::new(p(0.0, 14.0, 5.0), Vec3::new(0.0, 0.0, 1.0), 3.0, 1.0).unwrap();
+        let at = beside.evaluate(0.0);
+        assert!(!cutter.may_meet(&EdgeCurve::Ellipse(beside), at, at));
     }
 }
