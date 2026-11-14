@@ -2303,8 +2303,11 @@ fn rebuild_mapped_parametric_face(
                                 .and_then(|(u, v)| other.evaluate(u, v))
                                 .unwrap_or(q),
                         };
+                        // The end itself may stand off the face within the
+                        // band a contact's points may: its foot is read.
+                        let foot = on_face(point);
                         let miss_at = |tt: f64| {
-                            (on_face(curve.evaluate_with_endpoints(tt, sp, tp)) - point).length()
+                            (on_face(curve.evaluate_with_endpoints(tt, sp, tp)) - foot).length()
                         };
                         let (mut best_t, mut best_miss) = (d0, miss_at(d0));
                         for i in 1..=64 {
@@ -5659,10 +5662,11 @@ mod tests {
     /// trace on the face of its edge's middle, 0.002 or more below it; the
     /// edge's point nearest the end lies at 0.46 of the edge, whose trace
     /// misses the end by 3.8e-4. The contact's first end is moved `inset`
-    /// into the face.
+    /// into the face, and the contact `lift` above it.
     fn trim_off_sloped_edges(
         slope: Slope,
         inset: f64,
+        lift: f64,
     ) -> (Topology, FaceId, Result<BatchTrimResult, BlendError>) {
         let mut topo = Topology::new();
         let corners = [
@@ -5723,8 +5727,8 @@ mod tests {
         let face = topo.add_face(Face::new(wire, Vec::new(), flat_unit_skin()));
         let restriction = ParametricRestriction {
             contact_3d: vec![
-                Point3::new(0.005, inset, 0.0),
-                Point3::new(0.005, 0.01, 0.0),
+                Point3::new(0.005, inset, lift),
+                Point3::new(0.005, 0.01, lift),
             ],
             keep: TrimKeep::AwayFrom(Point3::new(0.0, 0.005, 0.0)),
             curve: Some(EdgeCurve::Line),
@@ -5736,32 +5740,37 @@ mod tests {
         (topo, face, result)
     }
 
-    /// A contact ends where it meets the trace of an edge on the face, not at
-    /// the edge's point nearest it: where the edge's standoff varies, the
-    /// two differ. A line or a spline is split there into pieces that meet
-    /// the contact's ends; an arc cannot end there and refuses the trim.
+    /// A contact ends where its foot on the face meets the trace of an edge
+    /// on the face, not at the edge's point nearest it: where the edge's
+    /// standoff varies, the two differ. A line or a spline is split there
+    /// into pieces that meet the contact's ends; an arc cannot end there and
+    /// refuses the trim. A contact 5e-5 above the face, within the 1e-4 it
+    /// may stand off it, ends alike.
     #[test]
     fn a_contact_ending_under_a_sloped_edge_splits_it_where_it_ends() {
-        for slope in [Slope::Line, Slope::Spline] {
-            let (topo, _, result) = trim_off_sloped_edges(slope, 0.0);
-            let pieces = outer_pieces(&topo, &result.unwrap());
-            assert_eq!(
-                pieces.len(),
-                4,
-                "{slope:?}: the contact, a side and two pieces of the sloped edges"
-            );
-            for (_, miss, _) in pieces {
-                assert!(
-                    miss <= 1e-9,
-                    "{slope:?}: a piece's ends miss its vertices by {miss}"
+        for lift in [0.0, 5e-5] {
+            for slope in [Slope::Line, Slope::Spline] {
+                let label = format!("{slope:?}, contact {lift} above the face");
+                let (topo, _, result) = trim_off_sloped_edges(slope, 0.0, lift);
+                let pieces = outer_pieces(&topo, &result.unwrap());
+                assert_eq!(
+                    pieces.len(),
+                    4,
+                    "{label}: the contact, a side and two pieces of the sloped edges"
                 );
+                for (_, miss, _) in pieces {
+                    assert!(
+                        miss <= 1e-9,
+                        "{label}: a piece's ends miss its vertices by {miss}"
+                    );
+                }
             }
+            let (_, face, result) = trim_off_sloped_edges(Slope::Arc, 0.0, lift);
+            assert!(
+                matches!(result, Err(BlendError::TrimmingFailure { face: failed }) if failed == face),
+                "contact {lift} above the face: an arc a contact ends off must refuse the trim"
+            );
         }
-        let (_, face, result) = trim_off_sloped_edges(Slope::Arc, 0.0);
-        assert!(
-            matches!(result, Err(BlendError::TrimmingFailure { face: failed }) if failed == face),
-            "an arc a contact ends off must refuse the trim"
-        );
     }
 
     /// A contact's end within the allowance of a point inside an edge, but
@@ -5770,7 +5779,7 @@ mod tests {
     #[test]
     fn a_contact_ending_beside_an_edge_it_does_not_meet_refuses_the_trim() {
         for slope in [Slope::Line, Slope::Spline, Slope::Arc] {
-            let (_, face, result) = trim_off_sloped_edges(slope, 2e-5);
+            let (_, face, result) = trim_off_sloped_edges(slope, 2e-5, 0.0);
             assert!(
                 matches!(result, Err(BlendError::TrimmingFailure { face: failed }) if failed == face),
                 "{slope:?}: a contact ending beside an edge must refuse the trim"
