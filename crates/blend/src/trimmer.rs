@@ -2193,6 +2193,11 @@ fn rebuild_mapped_parametric_face(
         let single_contact = restrictions.len() == 1;
         for &vertex_id in &new_vertices.clone() {
             let point = topo.vertex(vertex_id)?.point();
+            // Whether the contact's end lies beside an edge the policy splits,
+            // within the allowance of a point inside it, and whether it split
+            // an edge: beside one and unsplit, the edge stays whole and the
+            // wire runs on along it past the end and back.
+            let (mut beside, mut split) = (false, false);
             'edges: for &wire_id in &wire_ids {
                 let wire = topo.wire(wire_id)?;
                 for &oriented in wire.edges() {
@@ -2310,6 +2315,7 @@ fn rebuild_mapped_parametric_face(
                             }
                         }
                         let tt = refined_minimum(miss_at, best_t, step, span);
+                        beside |= inside(tt);
                         if miss_at(tt) > 1e-6 {
                             continue;
                         }
@@ -2318,9 +2324,12 @@ fn rebuild_mapped_parametric_face(
                     if !inside(tt) {
                         continue;
                     }
+                    // On the edge's trace and inside it, but farther off the
+                    // edge than the face's allowance: it can neither be split
+                    // there nor be left whole.
                     let gap = dist_at(tt);
                     if gap > allowance {
-                        continue;
+                        return Err(BlendError::TrimmingFailure { face: face_id });
                     }
                     // Off its curve, the vertex no longer picks out each
                     // piece's span of a shared spline, so each piece takes
@@ -2352,8 +2361,12 @@ fn rebuild_mapped_parametric_face(
                         restriction_for_edge.insert(e1.edge(), owner);
                         restriction_for_edge.insert(e2.edge(), owner);
                     }
+                    split = true;
                     break 'edges;
                 }
+            }
+            if beside && !split {
+                return Err(BlendError::TrimmingFailure { face: face_id });
             }
         }
     }
@@ -5645,9 +5658,11 @@ mod tests {
     /// along x = 0.005, its x = 0 side cut off. Each contact end is the
     /// trace on the face of its edge's middle, 0.002 or more below it; the
     /// edge's point nearest the end lies at 0.46 of the edge, whose trace
-    /// misses the end by 3.8e-4.
+    /// misses the end by 3.8e-4. The contact's first end is moved `inset`
+    /// into the face.
     fn trim_off_sloped_edges(
         slope: Slope,
+        inset: f64,
     ) -> (Topology, FaceId, Result<BatchTrimResult, BlendError>) {
         let mut topo = Topology::new();
         let corners = [
@@ -5707,7 +5722,10 @@ mod tests {
         let wire = topo.add_wire(Wire::new(edges, true).unwrap());
         let face = topo.add_face(Face::new(wire, Vec::new(), flat_unit_skin()));
         let restriction = ParametricRestriction {
-            contact_3d: vec![Point3::new(0.005, 0.0, 0.0), Point3::new(0.005, 0.01, 0.0)],
+            contact_3d: vec![
+                Point3::new(0.005, inset, 0.0),
+                Point3::new(0.005, 0.01, 0.0),
+            ],
             keep: TrimKeep::AwayFrom(Point3::new(0.0, 0.005, 0.0)),
             curve: Some(EdgeCurve::Line),
             pcurve: None,
@@ -5725,7 +5743,7 @@ mod tests {
     #[test]
     fn a_contact_ending_under_a_sloped_edge_splits_it_where_it_ends() {
         for slope in [Slope::Line, Slope::Spline] {
-            let (topo, _, result) = trim_off_sloped_edges(slope);
+            let (topo, _, result) = trim_off_sloped_edges(slope, 0.0);
             let pieces = outer_pieces(&topo, &result.unwrap());
             assert_eq!(
                 pieces.len(),
@@ -5739,11 +5757,25 @@ mod tests {
                 );
             }
         }
-        let (_, face, result) = trim_off_sloped_edges(Slope::Arc);
+        let (_, face, result) = trim_off_sloped_edges(Slope::Arc, 0.0);
         assert!(
             matches!(result, Err(BlendError::TrimmingFailure { face: failed }) if failed == face),
             "an arc a contact ends off must refuse the trim"
         );
+    }
+
+    /// A contact's end within the allowance of a point inside an edge, but
+    /// 2e-5 off its trace on the face, does not meet the edge: left whole,
+    /// the edge would run on past the end and back, so the trim refuses.
+    #[test]
+    fn a_contact_ending_beside_an_edge_it_does_not_meet_refuses_the_trim() {
+        for slope in [Slope::Line, Slope::Spline, Slope::Arc] {
+            let (_, face, result) = trim_off_sloped_edges(slope, 2e-5);
+            assert!(
+                matches!(result, Err(BlendError::TrimmingFailure { face: failed }) if failed == face),
+                "{slope:?}: a contact ending beside an edge must refuse the trim"
+            );
+        }
     }
 
     #[test]
