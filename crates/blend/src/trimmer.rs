@@ -2231,7 +2231,9 @@ fn rebuild_mapped_parametric_face(
                     // line, an angle for arcs) and rejected on-carrier points
                     // once the samples were further apart than 1.0 model unit,
                     // which silently skipped terminal splits on large solids.
-                    if best_d > max_step_len {
+                    // A contact's end may stand off the edge as far as the
+                    // allowance below, more than a short edge's step.
+                    if best_d > max_step_len + allowance {
                         continue;
                     }
                     let step = (d1 - d0) / 64.0;
@@ -5272,11 +5274,12 @@ mod tests {
     }
 
     /// A quarter of a cylinder's wall whose rims, at z = 0 and z = 1 and
-    /// made by `rim` from their center, start and end, have radius 1 and
-    /// stand `off` inside its surface, cut on its surface from rim to rim
-    /// halfway round: the contact replaces the wall's far side, and its ends
-    /// stand `off` off the rims.
+    /// made by `rim` from their center, start and end, have radius `radius`
+    /// and stand `off` inside its surface, cut on its surface from rim to
+    /// rim halfway round: the contact replaces the wall's far side, and its
+    /// ends stand `off` off the rims.
     fn trim_a_wall_off_its_rims(
+        radius: f64,
         off: f64,
         rim: impl Fn(Point3, Point3, Point3) -> EdgeCurve,
     ) -> (Topology, FaceId, Result<BatchTrimResult, BlendError>) {
@@ -5285,8 +5288,8 @@ mod tests {
 
         let mut topo = Topology::new();
         let (origin, axis) = (Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0));
-        let wall = CylindricalSurface::new(origin, axis, 1.0 + off).unwrap();
-        let rims = CylindricalSurface::new(origin, axis, 1.0).unwrap();
+        let wall = CylindricalSurface::new(origin, axis, radius + off).unwrap();
+        let rims = CylindricalSurface::new(origin, axis, radius).unwrap();
         let at = |u: f64, z: f64| rims.evaluate(u, z);
         let center = |z: f64| Point3::new(0.0, 0.0, z);
         let face = add_parametric_quad(
@@ -5514,6 +5517,11 @@ mod tests {
             .collect()
     }
 
+    /// Rims of radius 1 and 0.1, on their wall and off it. Off it, the
+    /// contact's end stands farther off the short rim than the rim's 64
+    /// samples stand apart (0.003 against 0.0025).
+    const WALL_RIMS: [(f64, f64); 4] = [(1.0, 0.0), (1.0, 1e-3), (0.1, 0.0), (0.1, 3e-3)];
+
     /// A spline rim split where a contact ends off it keeps, in each piece,
     /// its own share of the rim, from the rim's vertex to the contact's end.
     #[test]
@@ -5529,24 +5537,22 @@ mod tests {
                 .unwrap(),
             )
         };
-        for off in [0.0, 1e-3] {
-            let (topo, _, result) = trim_a_wall_off_its_rims(off, quarter);
+        for (radius, off) in WALL_RIMS {
+            let label = format!("radius {radius}, off {off}");
+            let (topo, _, result) = trim_a_wall_off_its_rims(radius, off, quarter);
             let pieces = wall_pieces(&topo, &result.unwrap());
-            assert_eq!(
-                pieces.len(),
-                4,
-                "off {off}: the contact, a side and two rims"
-            );
+            assert_eq!(pieces.len(), 4, "{label}: the contact, a side and two rims");
             for (curve, miss, length) in pieces {
                 assert!(
                     miss <= 1e-9,
-                    "off {off}: a piece's ends miss its vertices by {miss}"
+                    "{label}: a piece's ends miss its vertices by {miss}"
                 );
-                // 64 chords of an eighth of a turn fall 5e-6 short of it.
+                // 64 chords of an eighth of a turn fall 5e-6 of the radius
+                // short of it.
                 if matches!(curve, EdgeCurve::NurbsCurve(_)) {
                     assert!(
-                        (length - std::f64::consts::FRAC_PI_4).abs() <= off + 1e-5,
-                        "off {off}: a rim's piece reads {length} long"
+                        (length - radius * std::f64::consts::FRAC_PI_4).abs() <= off + 1e-5,
+                        "{label}: a rim's piece reads {length} long"
                     );
                 }
             }
@@ -5558,20 +5564,33 @@ mod tests {
     /// each rim out to its far end and back.
     #[test]
     fn a_circular_rim_off_its_wall_refuses_the_trim() {
-        let circle = |center: Point3, _: Point3, _: Point3| {
+        let circle = |center: Point3, from: Point3, _: Point3| {
             EdgeCurve::Circle(
-                brepkit_math::curves::Circle3D::new(center, Vec3::new(0.0, 0.0, 1.0), 1.0).unwrap(),
+                brepkit_math::curves::Circle3D::new(
+                    center,
+                    Vec3::new(0.0, 0.0, 1.0),
+                    (from - center).length(),
+                )
+                .unwrap(),
             )
         };
-        let (topo, _, result) = trim_a_wall_off_its_rims(0.0, circle);
-        let pieces = wall_pieces(&topo, &result.unwrap());
-        assert_eq!(pieces.len(), 4);
-        assert!(pieces.iter().all(|(_, miss, _)| *miss <= 1e-9));
-        let (_, face, result) = trim_a_wall_off_its_rims(1e-3, circle);
-        assert!(
-            matches!(result, Err(BlendError::TrimmingFailure { face: failed }) if failed == face),
-            "a circular rim 1e-3 off the wall must refuse the trim"
-        );
+        for (radius, off) in WALL_RIMS {
+            let label = format!("radius {radius}, off {off}");
+            let (topo, face, result) = trim_a_wall_off_its_rims(radius, off, circle);
+            if off > 0.0 {
+                assert!(
+                    matches!(result, Err(BlendError::TrimmingFailure { face: failed }) if failed == face),
+                    "{label}: a circular rim off the wall must refuse the trim"
+                );
+            } else {
+                let pieces = wall_pieces(&topo, &result.unwrap());
+                assert_eq!(pieces.len(), 4, "{label}");
+                assert!(
+                    pieces.iter().all(|(_, miss, _)| *miss <= 1e-9),
+                    "{label}: a piece's ends miss its vertices"
+                );
+            }
+        }
     }
 
     #[test]
