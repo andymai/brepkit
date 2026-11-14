@@ -196,22 +196,19 @@ fn same_sense_pair_count(topo: &Topology, solid: SolidId) -> usize {
         .count()
 }
 
-/// The blend-face tessellation gap, pinned per fixture so it can neither be
-/// mistaken for a pass nor grow silently: a terminal runout patch and the
-/// support face it closes against sample their shared contact line
-/// independently, so that line comes out as unmatched mesh half-edges even
-/// though the B-Rep itself is closed. A plain single-edge fillet and a bare
-/// two-edge miter corner both mesh watertight, which
-/// `tessellation_watertight_controls` pins.
-const SEAM_PRISM_RUNOUT_PATCH_GAP: usize = 4;
-/// Same class, the near-boundary fixture (`P4` at y = 12.0, a 12.05mm run
-/// against r = 8): the same support/patch contact sampling. One of its ends
-/// meets a tilted end face, which now takes the round's notch (the round run
-/// on to it) instead of a runout patch, so it is the gap of one patch less.
-const NEAR_BOUNDARY_RUNOUT_PATCH_GAP: usize = 4;
-/// Same class, the curved-continuation fixture (one runout patch, one arc
-/// trim; its other end, on a tilted end face, takes the notch).
-const CURVED_CONTINUATION_RUNOUT_PATCH_GAP: usize = 3;
+/// The blend-face tessellation gap, pinned per fixture so it cannot grow
+/// silently. A terminal runout patch and the support face it closes against
+/// meet along a contact line that lies over a longer straight edge; the
+/// solid mesher gives two such edges the same sample points, so the line
+/// meshes closed.
+const SEAM_PRISM_RUNOUT_PATCH_GAP: usize = 0;
+/// The near-boundary fixture (`P4` at y = 12.0, a 12.05mm run against
+/// r = 8). One of its ends meets a tilted end face, which takes the round's
+/// notch (the round run on to it) instead of a runout patch.
+const NEAR_BOUNDARY_RUNOUT_PATCH_GAP: usize = 0;
+/// The curved-continuation fixture (one runout patch, one arc trim; its
+/// other end, on a tilted end face, takes the notch).
+const CURVED_CONTINUATION_RUNOUT_PATCH_GAP: usize = 0;
 
 /// A built result is only a pass when every requested edge reports success,
 /// nothing is partial, the fillet surfaces are really present, the solid

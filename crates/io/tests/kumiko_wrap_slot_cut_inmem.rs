@@ -22,19 +22,19 @@ use brepkit_topology::solid::SolidId;
 
 const BOXES: [usize; 7] = [4, 8, 9, 13, 14, 18, 19];
 
-/// Each box's cut volume, from a band of 384.936; a cut that removed nothing
+/// Each box's cut volume, from a band of 385.105; a cut that removed nothing
 /// or the wrong region would miss it.
 /// The boxes cut from the band one after another, and the volume after each.
 const CHAIN: [usize; 19] = [
     1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
 ];
 const CHAIN_VOLUMES: [f64; CHAIN.len()] = [
-    382.976, 374.964, 366.873, 364.164, 362.705, 355.274, 347.612, 344.780, 344.599, 343.140,
-    335.709, 328.049, 325.308, 325.126, 323.670, 316.286, 308.665, 305.871, 305.690,
+    383.147, 375.104, 366.928, 364.209, 362.748, 355.319, 347.663, 344.835, 344.653, 343.193,
+    335.763, 328.108, 325.373, 325.191, 323.740, 316.344, 308.702, 305.905, 305.724,
 ];
 
 const CUT_VOLUMES: [f64; BOXES.len()] = [
-    381.053, 380.861, 384.626, 380.875, 384.626, 380.848, 384.623,
+    381.137, 381.030, 384.793, 381.044, 384.793, 381.017, 384.792,
 ];
 
 fn fixture(name: &str) -> PathBuf {

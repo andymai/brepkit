@@ -1590,8 +1590,8 @@ mod fillet_tests {
         // original box (the #813 bug grew it to 1000.30), or report that no
         // engine could construct one. Tangent result edges fail earlier.
         let r_edges = solid_edge_ids(&topo, first);
+        let before = brepkit_operations::measure::solid_volume(&topo, first, 0.05).unwrap();
         let mut attempted = 0usize;
-        let mut rejected = 0usize;
         for &e in &r_edges {
             if brepkit_operations::query::filter_filletable_edges(&topo, first, &[e])
                 .expect("filter second-pass edge")
@@ -1604,6 +1604,11 @@ mod fillet_tests {
             match try_fillet(&mut t, first, &[e], 0.5) {
                 Ok(s) => {
                     let v2 = brepkit_operations::measure::solid_volume(&t, s, 0.05).unwrap();
+                    assert!(
+                        (v2 - before).abs() > 1e-6,
+                        "second fillet on edge {} reported success and changed nothing",
+                        e.index()
+                    );
                     assert!(
                         v2 <= 1000.0 + 0.1,
                         "second fillet on edge {} inflated past the box: second={v2:.2}",
@@ -1621,15 +1626,10 @@ mod fillet_tests {
                         ),
                         "unexpected second-fillet error: {error}"
                     );
-                    rejected += 1;
                 }
             }
         }
         assert!(attempted > 0, "fixture should retain filter-eligible edges");
-        assert!(
-            rejected > 0,
-            "fixture should exercise explicit rejection instead of unchanged success"
-        );
     }
 
     #[test]

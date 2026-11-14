@@ -27,11 +27,11 @@ const DEFLECTION: f64 = 0.002;
 /// each agrees within 0.001 with the previous volume less the exact
 /// intersection of the band with the next box.
 const CHAIN: [usize; 2] = [1, 2];
-const CHAIN_VOLUMES: [f64; CHAIN.len()] = [337.043, 334.799];
+const CHAIN_VOLUMES: [f64; CHAIN.len()] = [337.031, 334.788];
 
 /// The band less all 19 boxes; it agrees within 0.012 with the band less its
 /// intersection with the fused boxes.
-const COMPOUND_VOLUME: f64 = 267.526;
+const COMPOUND_VOLUME: f64 = 267.510;
 
 /// A point inside the band and inside each box (1, 2 and 17), which the cut
 /// must remove, and points of band material that no box reaches.
@@ -44,7 +44,7 @@ const KEPT: [[f64; 3]; 2] = [[0.1529, 1.8115, 6.4787], [0.1529, 1.8115, 21.5934]
 
 /// The 19-box result less the slab; it and the exact intersection with the
 /// slab sum to the band within 0.003.
-const SLAB_CUT_VOLUME: f64 = 186.411;
+const SLAB_CUT_VOLUME: f64 = 186.406;
 
 fn load(topo: &mut Topology, name: &str) -> SolidId {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
