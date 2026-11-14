@@ -5431,7 +5431,7 @@ mod tests {
         let face = topo.add_face(Face::new(outer, vec![hole], flat_unit_skin()));
         let start = Point3::new(0.7, 0.5, 0.0);
         let (sin, cos) = tilt.sin_cos();
-        let center = Point3::new(0.2f64.mul_add(-cos, 0.7), 0.5, 0.2 * sin);
+        let center = Point3::new(0.2f64.madd(-cos, 0.7), 0.5, 0.2 * sin);
         let contact =
             Circle3D::new_with_ref(center, Vec3::new(sin, 0.0, cos), 0.2, start - center).unwrap();
         let pcurve =
