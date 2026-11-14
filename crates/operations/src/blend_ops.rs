@@ -657,14 +657,21 @@ fn fillet_over_bores(
             unify_faces: false,
             ..crate::boolean::BooleanOptions::default()
         };
-        match crate::boolean::boolean_with_options(
-            topo,
-            crate::boolean::BooleanOp::Cut,
-            result,
-            tool,
-            opts,
-        ) {
-            Ok(cut) => result = cut,
+        let (cut, repair_declined) = crate::boolean::without_repair_unify(|| {
+            crate::boolean::boolean_with_options(
+                topo,
+                crate::boolean::BooleanOp::Cut,
+                result,
+                tool,
+                opts,
+            )
+        });
+        match cut {
+            Ok(cut) if !repair_declined => result = cut,
+            Ok(_) => {
+                log::debug!("fillet over bores: the bore's cut needs its faces unified");
+                return Ok(None);
+            }
             Err(e) => {
                 log::debug!("fillet over bores: the bore's cut failed: {e}");
                 return Ok(None);
