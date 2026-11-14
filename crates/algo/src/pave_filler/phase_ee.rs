@@ -462,8 +462,14 @@ fn closest_segment_pair(
 
     let denom = a.madd(c, -(b * b));
 
-    let (s, t) = if a <= 0.0 || c <= 0.0 {
+    // A segment of no length is a point, and the closest pair is that point
+    // and its foot on the other segment (`w` runs from `b`'s start to `a`'s).
+    let (s, t) = if a <= 0.0 && c <= 0.0 {
         (0.5, 0.5)
+    } else if a <= 0.0 {
+        (0.0, (e / c).clamp(0.0, 1.0))
+    } else if c <= 0.0 {
+        ((-d / a).clamp(0.0, 1.0), 0.0)
     } else if denom <= 1e-12 * a * c {
         // `a c - b^2` is `a c sin^2` of the angle between the segments, and
         // for segments all but parallel (two curves running alongside each
@@ -587,6 +593,33 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// A chord of no length (a curve standing still between two samples)
+    /// meets the other chord at its foot on it, not at that chord's middle.
+    #[test]
+    fn a_point_chord_meets_the_other_chord_at_its_foot() {
+        let end = |t: f64, x: f64, y: f64| SegmentEndpoint {
+            t,
+            pos: Point3::new(x, y, 1.0),
+        };
+        let chord = [end(5.0, 1.0, 1.0), end(6.0, 3.0, 1.0)];
+        let on = [end(0.0, 1.4, 1.0), end(1.0, 1.4, 1.0)];
+        let off = [end(0.0, 1.4, 1.0 + 1e-6), end(1.0, 1.4, 1.0 + 1e-6)];
+        let tol = 1e-7;
+
+        let (tp, tc, p) = closest_segment_pair([&on[0], &on[1]], [&chord[0], &chord[1]], tol)
+            .expect("the point lies on the chord");
+        assert!(tp.abs() < 1e-12 && (tc - 5.2).abs() < 1e-12, "{tp}, {tc}");
+        assert!((p - on[0].pos).length() < 1e-12, "{p:?}");
+        let (tc, tp, _) = closest_segment_pair([&chord[0], &chord[1]], [&on[0], &on[1]], tol)
+            .expect("the point lies on the chord");
+        assert!((tc - 5.2).abs() < 1e-12 && tp.abs() < 1e-12, "{tc}, {tp}");
+
+        assert!(closest_segment_pair([&off[0], &off[1]], [&chord[0], &chord[1]], tol).is_none());
+        assert!(closest_segment_pair([&chord[0], &chord[1]], [&off[0], &off[1]], tol).is_none());
+        assert!(closest_segment_pair([&on[0], &on[1]], [&on[0], &on[1]], tol).is_some());
+        assert!(closest_segment_pair([&on[0], &on[1]], [&off[0], &off[1]], tol).is_none());
     }
 
     fn line_data(start: Point3, end: Point3) -> EdgeData {
