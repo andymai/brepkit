@@ -1659,7 +1659,7 @@ fn mapped_uv_allowance(
             );
             let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
             for k in 0..=SAMPLES {
-                let t = (t1 - t0).mul_add(f64::from(k) / f64::from(SAMPLES), t0);
+                let t = (t1 - t0).madd(f64::from(k) / f64::from(SAMPLES), t0);
                 let p = edge.curve().evaluate_with_endpoints(t, sp, ep);
                 if let Some(q) = surface
                     .project_point(p)

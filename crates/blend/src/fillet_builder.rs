@@ -4019,7 +4019,7 @@ fn edge_off_surface(
     let (t0, t1) = curve.domain_with_endpoints(a, b);
     let mut farthest: f64 = 0.0;
     for k in 0..=SAMPLES {
-        let t = (t1 - t0).mul_add(f64::from(k) / f64::from(SAMPLES), t0);
+        let t = (t1 - t0).madd(f64::from(k) / f64::from(SAMPLES), t0);
         let p = curve.evaluate_with_endpoints(t, a, b);
         let off = match surface {
             FaceSurface::Plane { normal, d } => {
