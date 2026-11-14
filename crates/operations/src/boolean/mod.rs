@@ -75,17 +75,26 @@ thread_local! {
     /// helper swallowed the error (the multi-region cut keeps a component
     /// whole on `InvalidInput`).
     static MESH_FALLBACK_DECLINED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Set while a caller declines the face unification that repairs a GFA
+    /// result whose Euler count or manifold check fails: it merges faces on
+    /// one surface anywhere in the result, not only where the boolean cut,
+    /// so such a boolean fails instead.
+    static DECLINE_REPAIR_UNIFY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Set when a declined repair fired, so the caller sees it even where a
+    /// helper swallowed the error.
+    static REPAIR_UNIFY_DECLINED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-/// Restores the decline switch on drop, so a panicking probe cannot leave it
+/// Restores a decline switch on drop, so a panicking probe cannot leave it
 /// set for every later boolean on the thread.
 struct DeclineGuard {
+    switch: &'static std::thread::LocalKey<std::cell::Cell<bool>>,
     prev: bool,
 }
 
 impl Drop for DeclineGuard {
     fn drop(&mut self) {
-        DECLINE_MESH_FALLBACK.with(|d| d.set(self.prev));
+        self.switch.with(|d| d.set(self.prev));
     }
 }
 
@@ -93,11 +102,26 @@ impl Drop for DeclineGuard {
 /// inside declined it: such a result may be missing a piece and is no batch.
 fn without_mesh_fallback<T>(f: impl FnOnce() -> T) -> (T, bool) {
     let _guard = DeclineGuard {
+        switch: &DECLINE_MESH_FALLBACK,
         prev: DECLINE_MESH_FALLBACK.with(|d| d.replace(true)),
     };
     let outer = MESH_FALLBACK_DECLINED.with(|d| d.replace(false));
     let out = f();
     let declined = MESH_FALLBACK_DECLINED.with(|d| d.replace(outer));
+    (out, declined)
+}
+
+/// Run `f` with the face unification that repairs a GFA result declined:
+/// a boolean that needs it fails instead. Also returns whether any boolean
+/// inside declined it.
+pub(crate) fn without_repair_unify<T>(f: impl FnOnce() -> T) -> (T, bool) {
+    let _guard = DeclineGuard {
+        switch: &DECLINE_REPAIR_UNIFY,
+        prev: DECLINE_REPAIR_UNIFY.with(|d| d.replace(true)),
+    };
+    let outer = REPAIR_UNIFY_DECLINED.with(|d| d.replace(false));
+    let out = f();
+    let declined = REPAIR_UNIFY_DECLINED.with(|d| d.replace(outer));
     (out, declined)
 }
 
@@ -701,6 +725,14 @@ fn boolean_inner(
                     || manifold_pre == Some(false);
                 let mut unified = false;
                 if needs_unify {
+                    if DECLINE_REPAIR_UNIFY.with(std::cell::Cell::get) {
+                        REPAIR_UNIFY_DECLINED.with(|d| d.set(true));
+                        return Err(crate::OperationsError::InvalidInput {
+                            reason:
+                                "boolean result needs its faces unified, which the caller declines"
+                                    .into(),
+                        });
+                    }
                     for _ in 0..3 {
                         if crate::heal::unify_faces(topo, result)? == 0 {
                             break;
