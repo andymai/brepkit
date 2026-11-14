@@ -1,5 +1,19 @@
 # Changelog
 
+## [4.11.14](https://github.com/andymai/brepkit/compare/v4.11.13...v4.11.14) (2026-11-13)
+
+
+### Performance
+
+* **tessellate:** a spline edge or face is divided where it turns ([#2428](https://github.com/andymai/brepkit/issues/2428)) ([47692ff](https://github.com/andymai/brepkit/commit/47692ff307d35b1a74576dbdfe5eb9f8fb675d9c))
+
+## [4.11.13](https://github.com/andymai/brepkit/compare/v4.11.12...v4.11.13) (2026-11-13)
+
+
+### Performance
+
+* **blend:** multiply then add in two steps in the new chamfer code ([#2421](https://github.com/andymai/brepkit/issues/2421)) ([f9d453e](https://github.com/andymai/brepkit/commit/f9d453e965b66964693ac36beb46fd5fd5edbe66))
+
 ## [4.11.12](https://github.com/andymai/brepkit/compare/v4.11.11...v4.11.12) (2026-11-13)
 
 
