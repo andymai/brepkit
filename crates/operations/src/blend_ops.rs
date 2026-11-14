@@ -95,8 +95,9 @@ pub fn fillet_v2(
     own_cavities(topo, solid, built, "fillet")
 }
 
-/// A straight through-bore: a cylinder wall from a circle that is a hole in
-/// one plane face to a circle that is a hole in another.
+/// A straight through-bore: a cylinder wall with the material round it, from
+/// a circle that is a hole in one plane face to a circle that is a hole in
+/// another.
 struct Bore {
     wall: FaceId,
     mouths: [(FaceId, brepkit_topology::wire::WireId); 2],
@@ -172,6 +173,12 @@ fn bores_opening_on(
         {
             continue;
         }
+        // A pin or a hub meets its faces in circles too, with its material
+        // inside its wall: a bore's wall faces its axis.
+        let on_wall = topo.vertex(topo.edge(a)?.start())?.point();
+        if outward_normal_at(topo, face_id, on_wall)?.is_none_or(|n| n.dot(on_wall - ha.2) >= 0.0) {
+            continue;
+        }
         let gap = |centre: Point3| {
             near.iter()
                 .map(|&p| (p - centre).length())
@@ -189,6 +196,62 @@ fn bores_opening_on(
         });
     }
     Ok(bores)
+}
+
+/// How far past each mouth the cut back runs, in bore radii.
+const MOUTH_MARGIN: f64 = 0.1;
+
+/// The outward unit normal of `face_id` at `point`, on it.
+fn outward_normal_at(
+    topo: &Topology,
+    face_id: FaceId,
+    point: Point3,
+) -> Result<Option<Vec3>, OperationsError> {
+    let face = topo.face(face_id)?;
+    let surface = face.surface();
+    let (u, v) = surface.project_point(point).unwrap_or((0.0, 0.0));
+    let normal = surface.normal(u, v).normalize().ok();
+    Ok(normal.map(|n| if face.is_reversed() { -n } else { n }))
+}
+
+/// Two unit directions square to `axis` and to each other.
+fn square_to(axis: Vec3) -> Result<(Vec3, Vec3), OperationsError> {
+    let x = axis
+        .cross(if axis.x().abs() < 0.9 {
+            Vec3::new(1.0, 0.0, 0.0)
+        } else {
+            Vec3::new(0.0, 1.0, 0.0)
+        })
+        .normalize()?;
+    Ok((x, axis.cross(x)))
+}
+
+/// Whether the bore opens onto space at each mouth: the disc that closes it
+/// `margin` past the mouth, where its cut back ends, is outside the solid
+/// at its centre and round its rim.
+fn opens_past_its_mouths(
+    topo: &Topology,
+    solid: SolidId,
+    bore: &Bore,
+    margin: f64,
+) -> Result<bool, OperationsError> {
+    use crate::classify::{PointClassification, classify_point};
+    let [start, end] = bore.centres;
+    let axis = (end - start).normalize()?;
+    let (x, y) = square_to(axis)?;
+    let tol = Tolerance::new().linear;
+    for past in [start - axis * margin, end + axis * margin] {
+        let rim = (0..8).map(|k| {
+            let (sin, cos) = (std::f64::consts::FRAC_PI_4 * f64::from(k)).sin_cos();
+            past + (x * cos + y * sin) * bore.radius
+        });
+        for point in std::iter::once(past).chain(rim) {
+            if classify_point(topo, solid, point, 0.0, tol)? != PointClassification::Outside {
+                return Ok(false);
+            }
+        }
+    }
+    Ok(true)
 }
 
 /// A fillet over through-bores, as when the bores were filled: a round
@@ -240,6 +303,12 @@ fn fillet_over_bores(
         return Ok(None);
     }
     log::debug!("fillet over bores: {} bore(s) in reach", bores.len());
+    for bore in &bores {
+        if !opens_past_its_mouths(topo, solid, bore, MOUTH_MARGIN * bore.radius)? {
+            log::debug!("fillet over bores: a bore does not open onto space past its mouths");
+            return Ok(None);
+        }
+    }
     // The solid with the bores filled: their walls left out, their mouths
     // no longer holes.
     let walls: HashSet<FaceId> = bores.iter().map(|b| b.wall).collect();
@@ -299,23 +368,16 @@ fn fillet_over_bores(
     let succeeded = built.succeeded.clone();
     let built = own_cavities(topo, plugged, built, "fillet")?;
 
-    // Each bore cut back, a little past both mouths (outside the solid
-    // there, as the bore opens on both).
+    // Each bore cut back, a little past both mouths, where it opens onto
+    // space.
     let mut result = built.solid;
     for bore in &bores {
         let [start, end] = bore.centres;
-        let along = end - start;
-        let length = along.length();
-        let axis = along * (1.0 / length);
-        let margin = 0.1 * bore.radius;
+        let length = (end - start).length();
+        let axis = (end - start).normalize()?;
+        let margin = MOUTH_MARGIN * bore.radius;
         let tool = crate::primitives::make_cylinder(topo, bore.radius, length + 2.0 * margin)?;
-        let x = axis.cross(if axis.x().abs() < 0.9 {
-            Vec3::new(1.0, 0.0, 0.0)
-        } else {
-            Vec3::new(0.0, 1.0, 0.0)
-        });
-        let x = x * (1.0 / x.length());
-        let y = axis.cross(x);
+        let (x, y) = square_to(axis)?;
         let base = start - axis * margin;
         let frame = brepkit_math::mat::Mat4([
             [x.x(), y.x(), axis.x(), base.x()],

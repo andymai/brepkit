@@ -6,16 +6,21 @@
 //! unit length, less the part of the strip already in the bore.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+use std::f64::consts::{FRAC_PI_2, FRAC_PI_4, PI};
+
+use brepkit_blend::fillet_builder::FilletBuilder;
 use brepkit_math::mat::Mat4;
+use brepkit_math::vec::Point3;
 use brepkit_operations::blend_ops::{all_blended, fillet_v2};
 use brepkit_operations::boolean::{BooleanOp, boolean};
+use brepkit_operations::classify::{PointClassification, classify_point};
 use brepkit_operations::measure::solid_volume;
 use brepkit_operations::primitives::{make_box, make_cylinder};
 use brepkit_operations::tessellate::{is_watertight, tessellate_solid};
 use brepkit_operations::transform::transform_solid;
 use brepkit_operations::validate::validate_solid;
 use brepkit_topology::Topology;
-use brepkit_topology::edge::EdgeId;
+use brepkit_topology::edge::{EdgeCurve, EdgeId};
 use brepkit_topology::explorer::{solid_edges, solid_faces};
 use brepkit_topology::solid::SolidId;
 
@@ -106,4 +111,138 @@ fn a_turned_bore_rounds_alike() {
     let pose =
         Mat4::translation(-37.2, 5.5, 140.0) * Mat4::rotation_z(0.7) * Mat4::rotation_x(-0.9);
     check(6.0, 2.0, 7.0, &pose);
+}
+
+/// The straight edge of `solid` from `a` to `b`.
+fn line_edge(topo: &Topology, solid: SolidId, a: [f64; 3], b: [f64; 3]) -> EdgeId {
+    let (a, b) = (Point3::new(a[0], a[1], a[2]), Point3::new(b[0], b[1], b[2]));
+    solid_edges(topo, solid)
+        .unwrap()
+        .into_iter()
+        .find(|&e| {
+            let edge = topo.edge(e).unwrap();
+            let (p, q) = (
+                topo.vertex(edge.start()).unwrap().point(),
+                topo.vertex(edge.end()).unwrap().point(),
+            );
+            matches!(edge.curve(), EdgeCurve::Line)
+                && (((p - a).length() < 1e-9 && (q - b).length() < 1e-9)
+                    || ((p - b).length() < 1e-9 && (q - a).length() < 1e-9))
+        })
+        .unwrap()
+}
+
+fn inside(topo: &Topology, solid: SolidId, p: [f64; 3]) -> bool {
+    classify_point(topo, solid, Point3::new(p[0], p[1], p[2]), 0.0, 1e-7).unwrap()
+        == PointClassification::Inside
+}
+
+/// A U channel 30 x 20 x 15, its slot between the walls at x = 10 and
+/// x = 20 down to z = 5, with a pin of radius 1.5 along x across the slot at
+/// height `z`, and the slot's top edge on the wall at x = 10.
+fn pinned_channel(topo: &mut Topology, z: f64) -> (SolidId, EdgeId) {
+    let block = make_box(topo, 30.0, 20.0, 15.0).unwrap();
+    let slot = make_box(topo, 10.0, 22.0, 11.0).unwrap();
+    transform_solid(topo, slot, &Mat4::translation(10.0, -1.0, 5.0)).unwrap();
+    let channel = boolean(topo, BooleanOp::Cut, block, slot).unwrap();
+    let pin = make_cylinder(topo, 1.5, 12.0).unwrap();
+    let across = Mat4::translation(9.0, 10.0, z) * Mat4::rotation_y(FRAC_PI_2);
+    transform_solid(topo, pin, &across).unwrap();
+    let solid = boolean(topo, BooleanOp::Fuse, channel, pin).unwrap();
+    let edge = line_edge(topo, solid, [10.0, 0.0, 15.0], [10.0, 20.0, 15.0]);
+    (solid, edge)
+}
+
+/// The volume and face count of the direct fillet's round of `edges`, with
+/// no bore filled: what `fillet_v2` gives when it leaves the bores alone.
+fn direct_round(topo: &mut Topology, solid: SolidId, edges: &[EdgeId], r: f64) -> (f64, usize) {
+    let mut builder = FilletBuilder::new(topo, solid);
+    builder.add_edges(edges, r);
+    let result = all_blended(builder.build().unwrap()).unwrap();
+    (
+        solid_volume(topo, result, 0.01).unwrap(),
+        solid_faces(topo, result).unwrap().len(),
+    )
+}
+
+/// A pin across a slot meets each wall in a circle, as a bore meets its
+/// faces, but its material lies inside its wall: it is no bore, and a round
+/// of the slot's edge keeps it. Clear of the band, the round takes off its
+/// strip alone. Under the band, the round is the direct fillet's.
+#[test]
+fn a_pin_under_a_round_is_kept() {
+    let mut topo = Topology::new();
+    let (solid, edge) = pinned_channel(&mut topo, 10.0);
+    let before = solid_volume(&topo, solid, 0.01).unwrap();
+    let result = fillet_v2(&mut topo, solid, &[edge], 1.0)
+        .and_then(all_blended)
+        .unwrap();
+    assert!(validate_solid(&topo, result).unwrap().is_valid());
+    let mesh = tessellate_solid(&topo, result, 0.05).unwrap();
+    assert!(is_watertight(&mesh), "mesh not watertight");
+    assert!(inside(&topo, result, [15.0, 10.0, 10.0]), "pin lost");
+    let removed = before - solid_volume(&topo, result, 0.01).unwrap();
+    let want = (1.0 - FRAC_PI_4) * WIDTH;
+    assert!(
+        (removed - want).abs() <= 1e-6 * before,
+        "removed {removed}, want {want}"
+    );
+
+    let mut topo = Topology::new();
+    let (solid, edge) = pinned_channel(&mut topo, 13.0);
+    let direct = direct_round(&mut topo, solid, &[edge], 4.0);
+    let result = fillet_v2(&mut topo, solid, &[edge], 4.0)
+        .and_then(all_blended)
+        .unwrap();
+    assert!(inside(&topo, result, [15.0, 10.0, 13.0]), "pin lost");
+    let made = (
+        solid_volume(&topo, result, 0.01).unwrap(),
+        solid_faces(&topo, result).unwrap().len(),
+    );
+    assert!(
+        (made.0 - direct.0).abs() <= 1e-9 * direct.0 && made.1 == direct.1,
+        "made {made:?}, the direct fillet {direct:?}"
+    );
+}
+
+/// A spool: a hub of radius 3 between two flanges of radius 10 meets each
+/// flange's inner face in a circle. Rounding a flange's rim by 2 takes off
+/// the rim's ring and keeps the hub.
+#[test]
+fn a_spools_flange_rounds_off_and_keeps_its_hub() {
+    let mut topo = Topology::new();
+    let near = make_cylinder(&mut topo, 10.0, 3.0).unwrap();
+    let far = make_cylinder(&mut topo, 10.0, 3.0).unwrap();
+    transform_solid(&mut topo, far, &Mat4::translation(0.0, 0.0, 9.0)).unwrap();
+    let hub = make_cylinder(&mut topo, 3.0, 8.0).unwrap();
+    transform_solid(&mut topo, hub, &Mat4::translation(0.0, 0.0, 2.0)).unwrap();
+    let flanges = boolean(&mut topo, BooleanOp::Fuse, near, far).unwrap();
+    let spool = boolean(&mut topo, BooleanOp::Fuse, flanges, hub).unwrap();
+    let rim = solid_edges(&topo, spool)
+        .unwrap()
+        .into_iter()
+        .find(|&e| {
+            let edge = topo.edge(e).unwrap();
+            matches!(edge.curve(), EdgeCurve::Circle(c) if (c.radius() - 10.0).abs() < 1e-9)
+                && (topo.vertex(edge.start()).unwrap().point().z() - 3.0).abs() < 1e-9
+        })
+        .unwrap();
+    let before = solid_volume(&topo, spool, 0.001).unwrap();
+    let result = fillet_v2(&mut topo, spool, &[rim], 2.0)
+        .and_then(all_blended)
+        .unwrap();
+    assert!(validate_solid(&topo, result).unwrap().is_valid());
+    let mesh = tessellate_solid(&topo, result, 0.02).unwrap();
+    assert!(is_watertight(&mesh), "mesh not watertight");
+    assert!(inside(&topo, result, [0.0, 0.0, 6.0]), "hub lost");
+    // The ring's section, the square of side r less a quarter disc, turned
+    // about the axis at its centroid's radius.
+    let r: f64 = 2.0;
+    let centroid = r * 3.0f64.mul_add(-PI, 10.0) / (3.0 * (4.0 - PI));
+    let want = 2.0 * PI * (10.0 - centroid) * (1.0 - FRAC_PI_4) * r * r;
+    let removed = before - solid_volume(&topo, result, 0.001).unwrap();
+    assert!(
+        (removed - want).abs() <= 1e-6 * before,
+        "removed {removed}, want {want}"
+    );
 }
