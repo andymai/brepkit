@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794615206531,
+  "lastUpdate": 1794679911719,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -69173,6 +69173,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 14266656,
             "range": "± 309152",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "66281732+Robokan@users.noreply.github.com",
+            "name": "Eric Vaughan",
+            "username": "Robokan"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "1a522765852cdffb7aed13c9e1db884daa86637d",
+          "message": "perf(check): a B-spline face's sides along its spline add nothing to its volume (#2434)\n\n## Summary\n\nA trimmed B-spline face's exact volume is Green's theorem along its\nboundary: the integral of F dv, where F(u, v) integrates the surface\nfrom the start of u through each knot span. An edge that is the\nsurface's own side v = 0 or v = 1 has dv = 0 all along it. Each of its\npoints still took that whole integral, and its integrand, rounding\nalone, need not settle, so the adaptive rule could halve it to its\ndepth.\n\nA wall extruded 1 mm from a 70-span spline and trimmed by a boolean took\n7 s a face to measure: 1.9 million evaluations on its two spline edges,\nagainst 192 on its two straight ones, which give the whole answer.\n\n- Such edges are now passed over. They are matched to the side as the\nwhole-face path (`nurbs_face_over_domain`) already matches them; that\ntest, `is_side`, moves into a function of its own, unchanged.\n- Only terms that are zero are dropped. Of 171 volumes of imported parts\nand boolean results, 168 come out the same to the last bit; 3 differ in\nthe 15th or 16th digit, the rounding those edges added.\n\n## Speed\n\nMeasured one at a time on 57 slow-to-measure boolean results and their\ninputs:\n\n| | before | after |\n|---|---|---|\n| the results' volumes | 120 s | 57 s |\n| the four worst | 10-14 s each | 10-18 ms each |\n| the inputs' volumes (not reached by this) | 81 s | 79 s |\n\n## Test\n\n`a_trimmed_extruded_wall_reads_its_straight_edges_alone`: a wall\nextruded from a 75-point degree-5 spline, trimmed across it, against a\nGauss rule over its (u, v), area and volume to 1e-10.\n\nmath, check, operations, io, algo, blend and topology tests pass; clippy\nis clean; the pose sweep and truth audit match `main` line for line.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nA trimmed B-spline face's volume uses Green's theorem along its\nboundary. Edges that are the surface's own sides `v = 0` or `v = 1` have\n`dv = 0` and add nothing, but each point was still integrated, causing\nthe adaptive rule to refine on rounding noise. These edges are now\ndetected and skipped, using the same side-matching logic as the\nwhole-face path, which is extracted into a shared `is_side` function.\n\nMeasuring 57 slow boolean-result faces and their inputs, the results'\nvolumes dropped from 120 s to 57 s total; the four worst went from 10–14\ns each to 10–18 ms. Of 171 imported and boolean volumes, 168 are\nbit-identical and 3 differ in the 15th or 16th digit, the rounding those\nedges previously added. A new test verifies a trimmed extruded wall\nagainst a fine quadrature over its `(u, v)` domain.\n\n<sup>Written for commit 9ec671807fbbd0dd01b658a47fbbb223d02d7ab0.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2434?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-11-14T10:08:24-08:00",
+          "tree_id": "d782d7a50c2e711b5a4083bdd94b5d5a86aff9cd",
+          "url": "https://github.com/andymai/brepkit/commit/1a522765852cdffb7aed13c9e1db884daa86637d"
+        },
+        "date": 1794679904404,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 941201,
+            "range": "± 3565",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1000853,
+            "range": "± 3347",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12215,
+            "range": "± 60",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 576870,
+            "range": "± 3937",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24226751,
+            "range": "± 513780",
             "unit": "ns/iter"
           }
         ]
