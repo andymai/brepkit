@@ -5,6 +5,7 @@ use std::collections::HashSet;
 use brepkit_blend::BlendResult;
 use brepkit_blend::chamfer_builder::ChamferBuilder;
 use brepkit_blend::fillet_builder::FilletBuilder;
+use brepkit_math::tolerance::Tolerance;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
 use brepkit_topology::edge::{EdgeCurve, EdgeId};
@@ -81,8 +82,12 @@ pub fn fillet_v2(
             reason: "no edges specified".into(),
         });
     }
-    if let Ok(Some(result)) = fillet_over_bores(topo, solid, edges, radius) {
-        return Ok(result);
+    // The bore path only takes a round it builds exactly: one it declines, or
+    // fails on, is left to the direct fillet, which reports its own errors.
+    match fillet_over_bores(topo, solid, edges, radius) {
+        Ok(Some(result)) => return Ok(result),
+        Ok(None) => {}
+        Err(e) => log::debug!("fillet over bores: {e}"),
     }
     let mut builder = FilletBuilder::new(topo, solid);
     builder.add_edges(edges, radius);
@@ -144,7 +149,7 @@ fn bores_opening_on(
             match topo.edge(oe.edge())?.curve() {
                 EdgeCurve::Circle(_) => circles.push(oe.edge()),
                 EdgeCurve::Line => {}
-                _ => other = true,
+                EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_) => other = true,
             }
         }
         let [a, b] = circles[..] else { continue };
@@ -159,7 +164,7 @@ fn bores_opening_on(
         }
         let radius = cylinder.radius();
         let along = hb.2 - ha.2;
-        let tol = 1e-7 * (1.0 + radius + along.length());
+        let tol = Tolerance::new().linear * (1.0 + radius + along.length());
         if (ha.3 - radius).abs() > tol
             || (hb.3 - radius).abs() > tol
             || along.cross(cylinder.axis()).length() > tol
