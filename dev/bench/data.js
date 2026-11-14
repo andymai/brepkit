@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794689191151,
+  "lastUpdate": 1794694016916,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -69497,6 +69497,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 20164518,
             "range": "± 124241",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "25e8f4787f6f7c026d8c3ceeebce327ed29f5a46",
+          "message": "fix(blend): round along a face whose edges stand off its surface (#2440)\n\nThis PR carries #2427 by @Robokan onto the current main. The commit is\nthe contributor's, with no change. One merge commit and ten new commits\nfollow it. They do eight things:\n\n- The two `mul_add` calls of the commit are now `Madd::madd`.\n`scripts/check-mul-add.sh` requires this.\n- Each piece of a B-spline edge that the trim splits now has its own\nspan. The trim can now split a boundary edge at a vertex that stands off\nthe edge. `split_edge_at` gives the two pieces the full curve, and each\npiece finds its span from its ends. For a B-spline edge, that works only\nwhen the ends are within 1e-5 of the curve. Farther off, each piece was\nthe full edge, and validation did not report it. The trim now cuts the\ncurve at the split, and each piece ends on the split vertex.\n- A circle or ellipse edge more than 1e-6 off the split vertex gives a\ntrimming failure.\n- The wider allowance on a curved face now applies only to the two ends\nof a contact. Before this change, one edge far off its face made the\nallowance wider for each contact point on that face.\n- The trim now reads a contact along its curve, at 15 points between its\nends, within 1e-4. The builder gives a contact as two points and a\ncurve, so the trim read nothing between the ends.\n- A short edge now gets to the split test. A coarse test with the sample\nstep skipped an edge whose standoff was larger than the step, and the\nedge stayed whole.\n- For a contact end off an edge, the trim now compares two points on the\nface. They are the trace of the edge and the foot of the end. The split\nis where they meet. The nearest point of the edge is at a different\nplace when the standoff changes along the edge.\n- An end of an open contact that is beside an edge, within the\nallowance, and splits no edge now gives a trimming failure. A closed\ncontact has no such end.\n\nThe description below has two statements that are not exact. Main read\nthe trim's split within 1e-6, not 1e-4. A planar face now accepts a\nsplit with a gap up to 1e-4 along its normal.\n\nThe allowance for the ends of a contact has no upper limit. This PR does\nnot change that.\n\n## How I checked it\n\n- `a_skin_with_spline_edges_rounds_alike` gives the skin's edges as\nB-splines of degree 1 and degree 3, in the two directions. With the\ncontributor's trimmer it fails: the ends of an edge's span are 1.0 from\nits vertices.\n- New tests in `trimmer.rs` cover a split B-spline rim and a circular\nrim off its wall, each at radius 1 and radius 0.1. They also cover a\nface with one edge far off it, and a closed contact that stands off its\nface.\n- `a_contact_ending_under_a_sloped_edge_splits_it_where_it_ends` and\n`a_tilted_skin_rounds_alike` cover a standoff that changes along the\nedge.\n`a_contact_ending_beside_an_edge_it_does_not_meet_refuses_the_trim`\ncovers the trimming failure.\n`a_closed_contact_near_the_boundary_trims_wherever_it_starts` covers a\nclosed contact 5e-5 from the boundary.\n- I tested this branch together with #2429 and the second commit of\n#2430 on main. `cargo nextest run` for `brepkit-math`, `brepkit-algo`,\n`brepkit-blend`, `brepkit-io`, `brepkit-operations`, `brepkit-wasm`,\n`brepkit-check` and `brepkit-heal` passes (4,382 tests).\n- The pose sweep and the truth audit match main line for line.\n- `cargo clippy --all-targets --all-features -- -D warnings` and\n`scripts/check-mul-add.sh` pass.\n\n## The description from #2427\n\n## Summary\n\nA face read from a file can have its edges stand off its surface: some\nSTEP writers leave a B-spline skin's boundary edges up to 3e-3 off the\nskin. A round's contact on such a face ends on that boundary, so the\ncontact's ends stand off the surface just as far.\n\n- The trimmer mapped contact points onto a curved face only within 1e-4,\nso a larger gap refused the round (\"trimming failure\").\n- The end-face notch read contact ends on their edges within 1e-5, and\nthe trim's split read them within 1e-4. A gap of 1e-5 left the end face\nwhole, closed by runout patches. The result was valid, but its mesh was\nopen.\n\nEach of these now allows as far as the face's own boundary stands off\nits surface, measured on the boundary edges (`mapped_uv_allowance` in\nthe trimmer, `edge_off_surface` in the notch check). Planes keep their\ntolerances.\n\n## Test\n\n`crates/operations/tests/fillet_skin_edges_off_surface.rs`: a box's top\nis replaced by a flat B-spline standing 0, 1e-5, 3e-4 or 2e-3 above its\nedges, and one top edge is rounded at r 1 and 2.5, upright and in a\nturned pose. The test checks that the result is valid and watertight,\nthat it has one face more than the input, and that the removed volume\nmatches (1 - pi/4) r^2 L up to the offset's share. On `main` it fails:\nat 1e-5 the mesh is open, and the turned pose at 3e-4 is a trimming\nfailure.\n\nblend and operations tests pass (2308); clippy is clean.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\n---------\n\nCo-authored-by: Eric Vaughan <eric.d.vaughan@gmail.com>\nCo-authored-by: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-11-14T14:03:19-08:00",
+          "tree_id": "de9b0662c7231e6b7040323b5d81534a8826ef04",
+          "url": "https://github.com/andymai/brepkit/commit/25e8f4787f6f7c026d8c3ceeebce327ed29f5a46"
+        },
+        "date": 1794694008447,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1091336,
+            "range": "± 21154",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1139806,
+            "range": "± 3574",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11902,
+            "range": "± 79",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 701685,
+            "range": "± 3435",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24467185,
+            "range": "± 427105",
             "unit": "ns/iter"
           }
         ]
