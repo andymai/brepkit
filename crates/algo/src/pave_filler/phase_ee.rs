@@ -442,6 +442,8 @@ struct SegmentEndpoint {
 /// Find closest approach between two line segments.
 ///
 /// Returns `(param_a, param_b, midpoint)` if distance is within tolerance.
+/// Segments all but parallel give `None`: they run along each other and do
+/// not cross.
 #[allow(clippy::similar_names)]
 fn closest_segment_pair(
     seg_a: [&SegmentEndpoint; 2],
@@ -460,28 +462,17 @@ fn closest_segment_pair(
 
     let denom = a.madd(c, -(b * b));
 
-    // `a c - b^2` is `a c sin^2` of the angle between the segments, and
-    // for segments all but parallel (two curves running alongside each
-    // other) it is lost in rounding: `s` and `t` would be noise. There the
-    // closest approach is at an end of one segment, its foot on the other.
     let (s, t) = if a <= 0.0 || c <= 0.0 {
         (0.5, 0.5)
     } else if denom <= 1e-12 * a * c {
-        let foot = |u: f64| u.clamp(0.0, 1.0);
-        // An end of `a` at `s`, its foot on `b`; an end of `b` at `t`, its
-        // foot on `a` (`w` runs from `b`'s start to `a`'s).
-        [
-            (0.0, foot(e / c)),
-            (1.0, foot((b + e) / c)),
-            (foot(-d / a), 0.0),
-            (foot((b - d) / a), 1.0),
-        ]
-        .into_iter()
-        .min_by(|p, q| {
-            let gap = |(s, t): (f64, f64)| (w + da * s - db * t).length_squared();
-            gap(*p).total_cmp(&gap(*q))
-        })
-        .unwrap_or((0.5, 0.5))
+        // `a c - b^2` is `a c sin^2` of the angle between the segments, and
+        // for segments all but parallel (two curves running alongside each
+        // other) it is lost in rounding: `s` and `t` would be noise. Such
+        // segments run along each other and do not cross, like parallel
+        // lines and coincident circles. The VE phase paves the ends of their
+        // overlap; a crossing read along it would split both edges where
+        // nothing meets them.
+        return None;
     } else {
         let s = (b.madd(e, -(c * d)) / denom).clamp(0.0, 1.0);
         let t = (a.madd(e, -(b * d)) / denom).clamp(0.0, 1.0);
@@ -517,10 +508,10 @@ mod tests {
     /// Two edges on one curve, running opposite ways, sample to chords that
     /// lie on each other: `a c - b^2` is zero or rounding noise there. Read
     /// as a crossing at their middles (when it came out exactly zero) or at
-    /// noise, it minted a vertex inside a shared edge; their closest
-    /// approach is read from their ends, the same whichever way it rounds.
+    /// noise, it minted a vertex inside a shared edge. The chords run along
+    /// each other and do not cross, whichever way it rounds.
     #[test]
-    fn chords_lying_on_each_other_meet_only_at_their_ends() {
+    fn chords_lying_on_each_other_do_not_cross() {
         let mut seed = 0x9e37_79b9_7f4a_7c15_u64;
         let mut rand = move || {
             seed ^= seed << 13;
@@ -563,10 +554,38 @@ mod tests {
                 },
             ];
             let tol = 1e-7 * scale.max(1.0);
-            let (ta, tb, _) = closest_segment_pair([&a[0], &a[1]], [&b[0], &b[1]], tol)
-                .expect("the chords lie on each other");
-            let at_end = |t: f64, t0: f64| (t - t0).abs() < 1e-9 || (t - t0 - 1.0).abs() < 1e-9;
-            assert!(at_end(ta, 0.0) && at_end(tb, 5.0), "read at {ta}, {tb}");
+            let hit = closest_segment_pair([&a[0], &a[1]], [&b[0], &b[1]], tol);
+            assert!(hit.is_none(), "read at {hit:?}");
+        }
+    }
+
+    /// Chords that meet at an end at a real angle meet there. Chords all but
+    /// parallel (under 1e-6 rad) run along each other, and meeting end to end
+    /// they give no crossing either: inside both edges that is two edges
+    /// along one curve, and at an edge's end the VE phase paves it.
+    #[test]
+    fn chords_meeting_at_an_end_meet_there_unless_they_run_along_each_other() {
+        let end = |t: f64, pos: Point3| SegmentEndpoint { t, pos };
+        let touch = Point3::new(1.0, 0.0, 0.0);
+        let a = [end(0.0, Point3::new(0.0, 0.0, 0.0)), end(1.0, touch)];
+        for angle in [1.0_f64, 1e-3, 1e-7, 0.0] {
+            let far = Point3::new(1.0 + angle.cos(), angle.sin(), 0.0);
+            let leaving = [end(5.0, touch), end(6.0, far)];
+            let arriving = [end(5.0, far), end(6.0, touch)];
+            for (b, tb_touch) in [(leaving, 5.0), (arriving, 6.0)] {
+                let hit = closest_segment_pair([&a[0], &a[1]], [&b[0], &b[1]], 1e-7);
+                if angle < 1e-6 {
+                    assert!(hit.is_none(), "angle {angle}: {hit:?}");
+                } else {
+                    let (ta, tb, p) = hit.expect("the chords meet at an end");
+                    assert!(
+                        (ta - 1.0).abs() < 1e-9
+                            && (tb - tb_touch).abs() < 1e-9
+                            && (p - touch).length() < 1e-9,
+                        "angle {angle}: {ta}, {tb}, {p:?}"
+                    );
+                }
+            }
         }
     }
 
@@ -637,6 +656,113 @@ mod tests {
             (p.y() + 16.963_564_789_203).abs() < 1e-9,
             "off the cubic: {p:?}"
         );
+    }
+
+    fn add_edge(topo: &mut Topology, start: Point3, end: Point3, curve: EdgeCurve) -> EdgeId {
+        let tol = Tolerance::default().linear;
+        let va = topo.add_vertex(Vertex::new(start, tol));
+        let vb = topo.add_vertex(Vertex::new(end, tol));
+        topo.add_edge(brepkit_topology::edge::Edge::new(va, vb, curve))
+    }
+
+    fn crossings(topo: &Topology, ea: EdgeId, eb: EdgeId) -> Vec<(f64, f64, Point3)> {
+        let data_a = collect_edge_data(topo, &[ea]).unwrap();
+        let data_b = collect_edge_data(topo, &[eb]).unwrap();
+        find_edge_edge_crossings(topo, ea, &data_a[0], eb, &data_b[0], Tolerance::default())
+            .unwrap()
+    }
+
+    /// The crossings of two edges that lie strictly inside both of them.
+    fn crossings_inside(topo: &Topology, ea: EdgeId, eb: EdgeId) -> Vec<(f64, f64, Point3)> {
+        let data_a = collect_edge_data(topo, &[ea]).unwrap();
+        let data_b = collect_edge_data(topo, &[eb]).unwrap();
+        let inside = |t: f64, d: &EdgeData| {
+            let (lo, hi) = (d.t0.min(d.t1), d.t0.max(d.t1));
+            let margin = 1e-9 * (hi - lo);
+            t > lo + margin && t < hi - margin
+        };
+        crossings(topo, ea, eb)
+            .into_iter()
+            .filter(|&(ta, tb, _)| inside(ta, &data_a[0]) && inside(tb, &data_b[0]))
+            .collect()
+    }
+
+    /// Heal turns a line into a degree-1 NURBS, so a line edge can meet a
+    /// NURBS edge along the same line. The two overlap and do not cross: the
+    /// VE phase paves the ends of the overlap, and a crossing inside it
+    /// splits both edges where nothing meets them.
+    #[test]
+    fn a_line_and_a_nurbs_along_it_do_not_cross_inside_their_overlap() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+
+        for (origin, dir) in [
+            (Point3::new(0.0, 0.0, 0.0), Vec3::new(1.0, 0.0, 0.0)),
+            (Point3::new(1.3, -2.7, 0.4), Vec3::new(0.6, 0.48, 0.64)),
+        ] {
+            let at = |s: f64| origin + dir * s;
+            // Inside the line, past one of its ends, past both, and on its
+            // span; each one both ways.
+            for (lo, hi) in [
+                (2.0, 7.0),
+                (7.0, 2.0),
+                (3.0, 15.0),
+                (15.0, 3.0),
+                (-4.0, 13.0),
+                (13.0, -4.0),
+                (0.0, 10.0),
+                (10.0, 0.0),
+            ] {
+                let mut topo = Topology::new();
+                let line = add_edge(&mut topo, at(0.0), at(10.0), EdgeCurve::Line);
+                let nurbs = NurbsCurve::new(
+                    1,
+                    vec![0.0, 0.0, 1.0, 1.0],
+                    vec![at(lo), at(hi)],
+                    vec![1.0; 2],
+                )
+                .unwrap();
+                let spline = add_edge(&mut topo, at(lo), at(hi), EdgeCurve::NurbsCurve(nurbs));
+                for (ea, eb) in [(line, spline), (spline, line)] {
+                    let hits = crossings_inside(&topo, ea, eb);
+                    assert!(hits.is_empty(), "{lo}..{hi} along {dir:?}: {hits:?}");
+                }
+            }
+        }
+    }
+
+    /// A straight cubic crossing a line at 1e-7 rad stays within the linear
+    /// tolerance of it for a unit each side, past several sample chords.
+    /// Those chords run along each other, and a crossing read at each of
+    /// their ends minted a cluster of vertices.
+    #[test]
+    fn a_grazing_crossing_is_not_a_cluster() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+
+        let angle = 1e-7_f64;
+        let at = |u: f64| Point3::new(1.65 + u * angle.cos(), u * angle.sin(), 0.0);
+        // The cubic's samples level with the line's, then off them.
+        for from in [-1.55, -1.62] {
+            let mut topo = Topology::new();
+            let line = add_edge(
+                &mut topo,
+                Point3::new(0.0, 0.0, 0.0),
+                Point3::new(3.2, 0.0, 0.0),
+                EdgeCurve::Line,
+            );
+            let poles: Vec<Point3> = (0..4)
+                .map(|k| at(from + 3.2 * f64::from(k) / 3.0))
+                .collect();
+            let cubic = NurbsCurve::new(
+                3,
+                vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+                poles.clone(),
+                vec![1.0; 4],
+            )
+            .unwrap();
+            let curve = add_edge(&mut topo, poles[0], poles[3], EdgeCurve::NurbsCurve(cubic));
+            let hits = crossings(&topo, line, curve);
+            assert!(hits.len() <= 1, "from {from}: {hits:?}");
+        }
     }
 
     #[test]
