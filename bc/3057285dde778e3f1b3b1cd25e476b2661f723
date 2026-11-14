@@ -1,0 +1,33 @@
+crates/operations/tests/fillet_skin_edges_off_surface.rs
+  s_0d4c8a45463599::t_08a3cced74ed14 34-46
+  s_0d4c8a45463599::t_0a2e7d6a697afe 210,219-225
+  s_0d4c8a45463599::t_97160c9eb4276a 76-81,83,95-99
+  s_0d4c8a45463599::t_5906e8dacfe617 48-49,100-101,118-141,143,153-177,226,230
+  s_0d4c8a45463599::t_829464fc527906 82,84-94
+  s_0d4c8a45463599::t_59f30f9bf775b9 16,26
+  s_0d4c8a45463599::t_b6c39a251528ad 30,47,102,178-184,227-229,231-261
+crates/blend/src/trimmer.rs
+  s_0d4c8a45463599::t_d11ec245808480 2267-2273
+  s_0d4c8a45463599::t_51edcade3854fb 2263
+  s_0d4c8a45463599::t_38a3d549d0a34a 2264-2266
+  s_0d4c8a45463599::t_f97598a1654e98 5251-5281,5367-5382
+  s_0d4c8a45463599::t_c037770d275d3f 1594-1632
+  s_0d4c8a45463599::t_bef6247937e06a 5282-5366
+  s_0d4c8a45463599::t_90aa3f377681b6 2274-2288,5383-5387
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "bc3057285dde778e3f1b3b1cd25e476b2661f723",
+  "prompts": {},
+  "sessions": {
+    "s_0d4c8a45463599": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "08f6c499-3e63-406f-8604-1a39493c163d",
+        "model": "claude-fable-5-2"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
