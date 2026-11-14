@@ -1,0 +1,19 @@
+crates/operations/tests/fillet_over_a_bore.rs
+  s_0d4c8a45463599::t_2c49f2fd263296 82-98,101,103,106,110,132-186
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e76632a7c7668c49a2dbde9486b1cb93192eef02",
+  "prompts": {},
+  "sessions": {
+    "s_0d4c8a45463599": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "08f6c499-3e63-406f-8604-1a39493c163d",
+        "model": "claude-fable-5-2"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
