@@ -1,6 +1,6 @@
 //! Thin wrappers around `brepkit-blend` for the operations API.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use brepkit_blend::BlendResult;
 use brepkit_blend::chamfer_builder::ChamferBuilder;
@@ -116,7 +116,7 @@ fn bores_opening_on(
 ) -> Result<Vec<Bore>, OperationsError> {
     use brepkit_topology::face::FaceSurface;
     // Each single-circle hole of a plane face, by its edge.
-    let mut holes = std::collections::HashMap::new();
+    let mut holes = HashMap::new();
     let all = solid_faces(topo, solid)?;
     for &face_id in &all {
         let face = topo.face(face_id)?;
@@ -214,6 +214,80 @@ fn outward_normal_at(
     Ok(normal.map(|n| if face.is_reversed() { -n } else { n }))
 }
 
+/// Points along an edge at which its convexity is read.
+const CONVEXITY_SAMPLES: u32 = 8;
+
+/// Whether the solid is convex all along `edge_id` between its faces `a`
+/// and `b`: at each sample, each face runs off the edge to the material's
+/// side of the other's tangent plane.
+fn is_convex(
+    topo: &Topology,
+    edge_id: EdgeId,
+    a: FaceId,
+    b: FaceId,
+) -> Result<bool, OperationsError> {
+    let edge = topo.edge(edge_id)?;
+    let (start, end) = (
+        topo.vertex(edge.start())?.point(),
+        topo.vertex(edge.end())?.point(),
+    );
+    let (t0, t1) = edge.curve().domain_with_endpoints(start, end);
+    let tol = Tolerance::new().angular;
+    for i in 0..CONVEXITY_SAMPLES {
+        let t = t0 + (t1 - t0) * (f64::from(i) + 0.5) / f64::from(CONVEXITY_SAMPLES);
+        let point = edge.curve().evaluate_with_endpoints(t, start, end);
+        let tangent = edge.curve().tangent_with_endpoints(t, start, end);
+        let along = if t1 < t0 { -tangent } else { tangent };
+        let (Some(into_a), Some(into_b), Some(out_a), Some(out_b)) = (
+            into_face(topo, a, edge_id, point, along)?,
+            into_face(topo, b, edge_id, point, along)?,
+            outward_normal_at(topo, a, point)?,
+            outward_normal_at(topo, b, point)?,
+        ) else {
+            return Ok(false);
+        };
+        if into_b.dot(out_a) >= -tol || into_a.dot(out_b) >= -tol {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// The unit direction from `point` on `edge_id` into `face_id`, square to the
+/// edge in the face's tangent plane, where `along` is the edge's direction
+/// from its start to its end. `None` where no wire of the face runs the edge.
+fn into_face(
+    topo: &Topology,
+    face_id: FaceId,
+    edge_id: EdgeId,
+    point: Point3,
+    along: Vec3,
+) -> Result<Option<Vec3>, OperationsError> {
+    let face = topo.face(face_id)?;
+    let mut forward = None;
+    for wire_id in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+        if let Some(oe) = topo
+            .wire(wire_id)?
+            .edges()
+            .iter()
+            .find(|oe| oe.edge() == edge_id)
+        {
+            forward = Some(oe.is_forward());
+            break;
+        }
+    }
+    let Some(forward) = forward else {
+        return Ok(None);
+    };
+    let along = if forward { along } else { -along };
+    // A wire winds about its surface's normal, and a reversed face turns
+    // both, so the face lies to the left of its wire about the surface
+    // normal either way.
+    let surface = face.surface();
+    let (u, v) = surface.project_point(point).unwrap_or((0.0, 0.0));
+    Ok(surface.normal(u, v).cross(along).normalize().ok())
+}
+
 /// Two unit directions square to `axis` and to each other.
 fn square_to(axis: Vec3) -> Result<(Vec3, Vec3), OperationsError> {
     let x = axis
@@ -274,15 +348,18 @@ fn fillet_over_bores(
     use brepkit_topology::solid::Solid;
 
     let picked: HashSet<EdgeId> = edges.iter().copied().collect();
-    let mut beside = HashSet::new();
+    let mut faces_of: HashMap<EdgeId, Vec<FaceId>> = HashMap::new();
     for face_id in solid_faces(topo, solid)? {
-        if face_edges(topo, face_id)?
-            .iter()
-            .any(|e| picked.contains(e))
-        {
-            beside.insert(face_id);
+        for edge in face_edges(topo, face_id)? {
+            if picked.contains(&edge) {
+                let faces = faces_of.entry(edge).or_default();
+                if !faces.contains(&face_id) {
+                    faces.push(face_id);
+                }
+            }
         }
     }
+    let beside: HashSet<FaceId> = faces_of.values().flatten().copied().collect();
     // Points along the picked edges: a round reaches a few radii from its
     // edge at most (r cot(a / 2) on a face at an acute corner a).
     let mut near = Vec::new();
@@ -303,6 +380,19 @@ fn fillet_over_bores(
         return Ok(None);
     }
     log::debug!("fillet over bores: {} bore(s) in reach", bores.len());
+    // A concave round adds material over a mouth, past where the cut back
+    // ends. A convex one only takes material off, so its filled solid has
+    // none in the bore past either mouth.
+    for &edge in edges {
+        let convex = match faces_of.get(&edge).map(Vec::as_slice) {
+            Some(&[a, b]) => is_convex(topo, edge, a, b)?,
+            _ => false,
+        };
+        if !convex {
+            log::debug!("fillet over bores: edge {} is not convex", edge.index());
+            return Ok(None);
+        }
+    }
     for bore in &bores {
         if !opens_past_its_mouths(topo, solid, bore, MOUTH_MARGIN * bore.radius)? {
             log::debug!("fillet over bores: a bore does not open onto space past its mouths");
@@ -312,7 +402,7 @@ fn fillet_over_bores(
     // The solid with the bores filled: their walls left out, their mouths
     // no longer holes.
     let walls: HashSet<FaceId> = bores.iter().map(|b| b.wall).collect();
-    let mut filled: std::collections::HashMap<FaceId, Vec<_>> = std::collections::HashMap::new();
+    let mut filled: HashMap<FaceId, Vec<_>> = HashMap::new();
     for bore in &bores {
         for &(face, wire) in &bore.mouths {
             filled.entry(face).or_default().push(wire);

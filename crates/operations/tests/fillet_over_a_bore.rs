@@ -246,3 +246,32 @@ fn a_spools_flange_rounds_off_and_keeps_its_hub() {
         "removed {removed}, want {want}"
     );
 }
+
+/// An L bracket: a base 20 x 20 x 5 and a wall 5 thick standing on it to
+/// z = 20, drilled through the base at (9, 10) by a bore of radius 2. The
+/// inner corner, concave, rounded by 6 adds material up to 1.5 over the
+/// bore's mouth, which a cut back a tenth of the bore's radius past the mouth
+/// leaves as a ledge in the bore: the round is the direct fillet's.
+#[test]
+fn a_concave_round_over_a_bore_is_the_direct_fillets() {
+    let mut topo = Topology::new();
+    let base = make_box(&mut topo, 20.0, 20.0, 5.0).unwrap();
+    let wall = make_box(&mut topo, 5.0, 20.0, 20.0).unwrap();
+    let bracket = boolean(&mut topo, BooleanOp::Fuse, base, wall).unwrap();
+    let drill = make_cylinder(&mut topo, 2.0, 7.0).unwrap();
+    transform_solid(&mut topo, drill, &Mat4::translation(9.0, 10.0, -1.0)).unwrap();
+    let solid = boolean(&mut topo, BooleanOp::Cut, bracket, drill).unwrap();
+    let corner = line_edge(&topo, solid, [5.0, 0.0, 5.0], [5.0, 20.0, 5.0]);
+    let direct = direct_round(&mut topo, solid, &[corner], 6.0);
+    let result = fillet_v2(&mut topo, solid, &[corner], 6.0)
+        .and_then(all_blended)
+        .unwrap();
+    let made = (
+        solid_volume(&topo, result, 0.01).unwrap(),
+        solid_faces(&topo, result).unwrap().len(),
+    );
+    assert!(
+        (made.0 - direct.0).abs() <= 1e-9 * direct.0 && made.1 == direct.1,
+        "made {made:?}, the direct fillet {direct:?}"
+    );
+}
