@@ -159,6 +159,22 @@ impl Cdt {
             }
         }
 
+        // A vertex lying exactly on the constraint, between its ends, is
+        // crossed by no edge, and no flip makes the constraint an edge: it
+        // runs through the vertex. Bisection cannot pass it either when it
+        // sits a hair from an end (a boundary's two vertices 2e-7 apart on
+        // one line). Split the constraint there, real progress like a
+        // crossing split. Only a lone vertex: several on it, a hair apart,
+        // are a cluster of near-duplicates, and splitting through them
+        // chains the constraint into slivers the region's fill reads wrong.
+        if let Some(on) = self.lone_vertex_on_segment(v0, v1) {
+            self.recover_edge_depth(v0, on, 0, level + 1)?;
+            self.constraints.insert(sorted_pair(v0, on));
+            self.recover_edge_depth(on, v1, 0, level + 1)?;
+            self.constraints.insert(sorted_pair(on, v1));
+            return Ok(());
+        }
+
         // Flip recovery did not converge. Bisect: insert the constraint's
         // midpoint and recover both (strictly shorter) halves.
         if depth >= MAX_SPLIT_DEPTH {
@@ -181,6 +197,29 @@ impl Cdt {
         self.recover_edge_depth(mid, v1, depth + 1, level + 1)?;
         self.constraints.insert(sorted_pair(mid, v1));
         Ok(())
+    }
+
+    /// The one vertex lying exactly on the open segment from `v0` to `v1`
+    /// (`orient2d` reads it on the line, and it falls strictly between the
+    /// ends), if exactly one does.
+    fn lone_vertex_on_segment(&self, v0: usize, v1: usize) -> Option<usize> {
+        let (p0, p1) = (self.vertices[v0], self.vertices[v1]);
+        let d = p1 - p0;
+        let len_sq = d.dot(d);
+        let mut on = self
+            .vertices
+            .iter()
+            .enumerate()
+            .skip(self.super_count)
+            .filter(|&(i, &q)| {
+                let t = (q - p0).dot(d);
+                i != v0 && i != v1 && orient2d(p0, p1, q) == 0.0 && t > 0.0 && t < len_sq
+            })
+            .map(|(i, _)| i);
+        match (on.next(), on.next()) {
+            (Some(i), None) => Some(i),
+            _ => None,
+        }
     }
 
     /// `insert_point` charged against the recovery budget.
