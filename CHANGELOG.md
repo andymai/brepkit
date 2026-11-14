@@ -1,5 +1,17 @@
 # Changelog
 
+## [4.11.15](https://github.com/andymai/brepkit/compare/v4.11.14...v4.11.15) (2026-11-14)
+
+
+### Bug Fixes
+
+* **math:** split a constraint at a lone vertex lying on it ([#2436](https://github.com/andymai/brepkit/issues/2436)) ([daa4ace](https://github.com/andymai/brepkit/commit/daa4ace6ce9afecb44f698b32fc4e3b41aa0da9b))
+
+
+### Performance
+
+* **check:** a B-spline face's sides along its spline add nothing to its volume ([#2434](https://github.com/andymai/brepkit/issues/2434)) ([1a52276](https://github.com/andymai/brepkit/commit/1a522765852cdffb7aed13c9e1db884daa86637d))
+
 ## [4.11.14](https://github.com/andymai/brepkit/compare/v4.11.13...v4.11.14) (2026-11-13)
 
 
