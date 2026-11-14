@@ -1,0 +1,21 @@
+crates/math/src/cdt/constraints.rs
+  s_0d4c8a45463599::t_70bc63fcc6f178 204-209,214,220-230
+crates/math/src/cdt/tests.rs
+  s_0d4c8a45463599::t_013bb604a4ec1f 1027-1033
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b73a53b186aaabbcc0419f65f4d08d969d09c4d7",
+  "prompts": {},
+  "sessions": {
+    "s_0d4c8a45463599": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "08f6c499-3e63-406f-8604-1a39493c163d",
+        "model": "claude-fable-5-2"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
