@@ -1675,6 +1675,10 @@ fn mapped_surface_uv(
 /// off its surface.
 const MAPPED_UV_TOL: f64 = 1e-4;
 
+/// Number of spans a contact's curve is read in, between its ends, for how
+/// far it stands off the face it trims.
+const CONTACT_SAMPLES: u32 = 16;
+
 /// How far a contact's end or a vertex on the boundary, mapped onto a curved
 /// face, may stand off its surface. A contact ends on the face's boundary,
 /// and a face read from a file can have its edges stand off its surface by
@@ -2113,24 +2117,31 @@ fn rebuild_mapped_parametric_face(
     let mut contact_edges = Vec::with_capacity(restrictions.len());
     for restriction in restrictions {
         let last = restriction.contact_3d.len().saturating_sub(1);
-        if last == 0
-            || restriction
-                .contact_3d
-                .iter()
-                .enumerate()
-                .any(|(index, &point)| {
-                    let reach = if index == 0 || index == last {
-                        allowance
-                    } else {
-                        MAPPED_UV_TOL
-                    };
-                    mapped_surface_uv(&surface, point, face_id, reach).is_err()
-                })
-        {
+        if last == 0 {
             return Err(BlendError::TrimmingFailure { face: face_id });
         }
         let start = restriction.contact_3d[0];
-        let end = restriction.contact_3d[restriction.contact_3d.len() - 1];
+        let end = restriction.contact_3d[last];
+        // A round's builder gives a contact by its two ends and its curve, so
+        // the points between them are read along the curve too.
+        let along_curve = restriction.curve.iter().flat_map(|curve| {
+            let (t0, t1) = curve.domain_with_endpoints(start, end);
+            (1..CONTACT_SAMPLES).map(move |k| {
+                let t = (t1 - t0).madd(f64::from(k) / f64::from(CONTACT_SAMPLES), t0);
+                curve.evaluate_with_endpoints(t, start, end)
+            })
+        });
+        if [start, end]
+            .into_iter()
+            .any(|point| mapped_surface_uv(&surface, point, face_id, allowance).is_err())
+            || restriction.contact_3d[1..last]
+                .iter()
+                .copied()
+                .chain(along_curve)
+                .any(|point| mapped_surface_uv(&surface, point, face_id, MAPPED_UV_TOL).is_err())
+        {
+            return Err(BlendError::TrimmingFailure { face: face_id });
+        }
         let pcurve_closed = restriction.pcurve.as_ref().is_some_and(|pcurve| {
             let a = pcurve.evaluate(pcurve.t_start());
             let b = pcurve.evaluate(pcurve.t_end());
@@ -5311,26 +5322,36 @@ mod tests {
         (topo, face, result)
     }
 
+    /// The unit square in z = 0 as a flat B-spline.
+    fn flat_unit_skin() -> FaceSurface {
+        FaceSurface::Nurbs(
+            brepkit_math::nurbs::surface::NurbsSurface::new(
+                1,
+                1,
+                vec![0.0, 0.0, 1.0, 1.0],
+                vec![0.0, 0.0, 1.0, 1.0],
+                vec![
+                    vec![Point3::new(0.0, 0.0, 0.0), Point3::new(0.0, 1.0, 0.0)],
+                    vec![Point3::new(1.0, 0.0, 0.0), Point3::new(1.0, 1.0, 0.0)],
+                ],
+                vec![vec![1.0, 1.0], vec![1.0, 1.0]],
+            )
+            .unwrap(),
+        )
+    }
+
     /// A flat B-spline face over the unit square in z = 0 with a square hole
     /// whose edges stand `lift` above it, trimmed along x = 0.3, cut off its
-    /// x = 0 side, by a contact whose middle point stands `bulge` off the
-    /// face.
-    fn trim_beside_a_lifted_hole(lift: f64, bulge: f64) -> Result<BatchTrimResult, BlendError> {
-        use brepkit_math::nurbs::surface::NurbsSurface;
-
+    /// x = 0 side, by a contact whose middle stands `bulge` off the face.
+    /// With `two_points`, the contact is given as a round's builder gives
+    /// it, by its two ends and its curve; otherwise by three points, its
+    /// middle among them.
+    fn trim_beside_a_lifted_hole(
+        lift: f64,
+        bulge: f64,
+        two_points: bool,
+    ) -> Result<BatchTrimResult, BlendError> {
         let mut topo = Topology::new();
-        let surface = NurbsSurface::new(
-            1,
-            1,
-            vec![0.0, 0.0, 1.0, 1.0],
-            vec![0.0, 0.0, 1.0, 1.0],
-            vec![
-                vec![Point3::new(0.0, 0.0, 0.0), Point3::new(0.0, 1.0, 0.0)],
-                vec![Point3::new(1.0, 0.0, 0.0), Point3::new(1.0, 1.0, 0.0)],
-            ],
-            vec![vec![1.0, 1.0], vec![1.0, 1.0]],
-        )
-        .unwrap();
         let mut wire = |corners: [(f64, f64, f64); 4]| {
             let vertices = corners
                 .map(|(x, y, z)| topo.add_vertex(Vertex::new(Point3::new(x, y, z), VERTEX_TOL)));
@@ -5357,17 +5378,72 @@ mod tests {
             (0.8, 0.6, lift),
             (0.8, 0.4, lift),
         ]);
-        let face = topo.add_face(Face::new(outer, vec![hole], FaceSurface::Nurbs(surface)));
+        let face = topo.add_face(Face::new(outer, vec![hole], flat_unit_skin()));
+        let (start, end) = (Point3::new(0.3, 0.0, 0.0), Point3::new(0.3, 1.0, 0.0));
+        let (contact_3d, curve) = if two_points {
+            let arch = brepkit_math::nurbs::curve::NurbsCurve::new(
+                2,
+                vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+                vec![start, Point3::new(0.3, 0.5, 2.0 * bulge), end],
+                vec![1.0; 3],
+            )
+            .unwrap();
+            (vec![start, end], Some(EdgeCurve::NurbsCurve(arch)))
+        } else {
+            (vec![start, Point3::new(0.3, 0.5, bulge), end], None)
+        };
         let restriction = ParametricRestriction {
-            contact_3d: vec![
-                Point3::new(0.3, 0.0, 0.0),
-                Point3::new(0.3, 0.5, bulge),
-                Point3::new(0.3, 1.0, 0.0),
-            ],
+            contact_3d,
             keep: TrimKeep::AwayFrom(Point3::new(0.0, 0.5, 0.0)),
-            curve: None,
+            curve,
             pcurve: None,
             source_edges: vec![outer_edges[3].edge()],
+        };
+        trim_parametric_face_batch(&mut topo, face, &[restriction], BoundarySplitPolicy::All)
+    }
+
+    /// A flat B-spline face over the unit square in z = 0 with a round hole
+    /// of radius 0.1 in its middle, trimmed round the hole by a closed
+    /// contact of radius 0.2 given as a round's builder gives it: both its
+    /// points at its start, on the face, and its circle, turned by `tilt`
+    /// about its tangent there.
+    fn trim_round_a_hole(tilt: f64) -> Result<BatchTrimResult, BlendError> {
+        use brepkit_math::curves::Circle3D;
+
+        let mut topo = Topology::new();
+        let corners = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]
+            .map(|(x, y)| topo.add_vertex(Vertex::new(Point3::new(x, y, 0.0), VERTEX_TOL)));
+        let outer: Vec<OrientedEdge> = (0..4)
+            .map(|k| {
+                let edge = Edge::new(corners[k], corners[(k + 1) % 4], EdgeCurve::Line);
+                OrientedEdge::new(topo.add_edge(edge), true)
+            })
+            .collect();
+        let outer = topo.add_wire(Wire::new(outer, true).unwrap());
+        let middle = Point3::new(0.5, 0.5, 0.0);
+        let rim = Circle3D::new(middle, Vec3::new(0.0, 0.0, -1.0), 0.1).unwrap();
+        let rim_vertex = topo.add_vertex(Vertex::new(rim.evaluate(0.0), VERTEX_TOL));
+        let rim_edge = topo.add_edge(Edge::new(rim_vertex, rim_vertex, EdgeCurve::Circle(rim)));
+        let hole = topo.add_wire(Wire::new(vec![OrientedEdge::new(rim_edge, true)], true).unwrap());
+        let face = topo.add_face(Face::new(outer, vec![hole], flat_unit_skin()));
+        let start = Point3::new(0.7, 0.5, 0.0);
+        let (sin, cos) = tilt.sin_cos();
+        let center = Point3::new(0.2f64.mul_add(-cos, 0.7), 0.5, 0.2 * sin);
+        let contact =
+            Circle3D::new_with_ref(center, Vec3::new(sin, 0.0, cos), 0.2, start - center).unwrap();
+        let pcurve =
+            brepkit_math::curves2d::Circle2D::new(brepkit_math::vec::Point2::new(0.5, 0.5), 0.2)
+                .unwrap();
+        let restriction = ParametricRestriction {
+            contact_3d: vec![start, start],
+            keep: TrimKeep::AwayFrom(middle),
+            curve: Some(EdgeCurve::Circle(contact)),
+            pcurve: Some(brepkit_topology::pcurve::PCurve::new(
+                brepkit_math::curves2d::Curve2D::Circle(pcurve),
+                0.0,
+                std::f64::consts::TAU,
+            )),
+            source_edges: vec![rim_edge],
         };
         trim_parametric_face_batch(&mut topo, face, &[restriction], BoundarySplitPolicy::All)
     }
@@ -5379,18 +5455,38 @@ mod tests {
     #[test]
     fn an_edge_off_the_face_does_not_let_a_contact_off_it() {
         for lift in [0.0, 0.05] {
-            assert!(
-                trim_beside_a_lifted_hole(lift, 0.0).is_ok(),
-                "hole {lift} off: a contact on the face trims it"
-            );
-            assert!(
-                matches!(
-                    trim_beside_a_lifted_hole(lift, 1e-3),
-                    Err(BlendError::TrimmingFailure { .. })
-                ),
-                "hole {lift} off: a contact 1e-3 off the face must refuse the trim"
-            );
+            for two_points in [false, true] {
+                let label = format!("hole {lift} off, two points {two_points}");
+                assert!(
+                    trim_beside_a_lifted_hole(lift, 0.0, two_points).is_ok(),
+                    "{label}: a contact on the face trims it"
+                );
+                assert!(
+                    matches!(
+                        trim_beside_a_lifted_hole(lift, 1e-3, two_points),
+                        Err(BlendError::TrimmingFailure { .. })
+                    ),
+                    "{label}: a contact 1e-3 off the face must refuse the trim"
+                );
+            }
         }
+    }
+
+    /// A closed contact is read along its curve as an open one is: tilted
+    /// so that its far side stands 4e-3 off the face, it refuses the trim.
+    #[test]
+    fn a_closed_contact_off_the_face_refuses_the_trim() {
+        assert!(
+            trim_round_a_hole(0.0).is_ok(),
+            "a closed contact on the face trims it"
+        );
+        assert!(
+            matches!(
+                trim_round_a_hole(0.01),
+                Err(BlendError::TrimmingFailure { .. })
+            ),
+            "a closed contact 4e-3 off the face must refuse the trim"
+        );
     }
 
     /// Each edge of the trimmed wall's outer wire: its curve, how far the
