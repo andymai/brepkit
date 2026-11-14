@@ -1344,7 +1344,12 @@ impl SeedCells {
         for dx in -1..=1 {
             for dy in -1..=1 {
                 for dz in -1..=1 {
-                    let near = self.cells.get(&[c[0] + dx, c[1] + dy, c[2] + dz]);
+                    // A cell index far out is an end of `i64`'s range.
+                    let near = self.cells.get(&[
+                        c[0].saturating_add(dx),
+                        c[1].saturating_add(dy),
+                        c[2].saturating_add(dz),
+                    ]);
                     if near.is_some_and(|near| {
                         near.iter()
                             .any(|&at| (seeds[at].point - seed.point).length() < self.distance)

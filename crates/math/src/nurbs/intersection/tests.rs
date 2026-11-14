@@ -3411,6 +3411,25 @@ fn seed_cells_answer_as_a_scan_of_every_seed() {
     );
 }
 
+/// A seed so far out that its cell index is an end of `i64`'s range is
+/// still answered: its neighbours' indices do not overflow.
+#[test]
+fn seed_cells_take_a_seed_far_out() {
+    let mut cells = SeedCells::new(1e-4);
+    let mut seeds: Vec<IntersectionPoint> = Vec::new();
+    for x in [2e15, -2e15, 2e15] {
+        let seed = IntersectionPoint {
+            point: Point3::new(x, -x, x),
+            param1: (0.0, 0.0),
+            param2: (0.0, 0.0),
+        };
+        if cells.insert(&seeds, seed) {
+            seeds.push(seed);
+        }
+    }
+    assert_eq!(seeds.len(), 2, "the third seed repeats the first");
+}
+
 /// The grid seeder's last pass gives the same seeds however many close pairs
 /// it refines at a time.
 #[test]
