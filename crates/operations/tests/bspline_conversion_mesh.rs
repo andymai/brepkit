@@ -95,7 +95,9 @@ fn converted_bored_sphere_keeps_its_tunnel() {
         ring,
         truth,
         &[(0.01, 3e-3)],
-        Some(3e-4),
+        // A converted sphere's volume is its mesh's at a deflection of 0.001:
+        // a shell that thin over a radius of 6 is 5e-4 of the ball.
+        Some(5e-4),
         "bored sphere",
     );
     // Each face's own mesh keeps to its trim.

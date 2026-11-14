@@ -11,7 +11,8 @@
 //! exact to quadrature precision however an edge bows.
 
 use brepkit_math::madd::Madd;
-use brepkit_math::nurbs::surface::{NurbsRow, UBasis};
+use brepkit_math::nurbs::curve::NurbsCurve;
+use brepkit_math::nurbs::surface::{NurbsRow, NurbsSurface, UBasis};
 use brepkit_math::quadrature::gauss_legendre_points;
 use brepkit_math::surfaces::SphericalSurface;
 use brepkit_math::traits::ParametricSurface;
@@ -850,6 +851,88 @@ fn whole_torus_less_holes(
 /// read as half its area.
 const MAX_WEIGHT_RATIO: f64 = 64.0;
 
+/// Side `k` of `s`'s domain, `v = v0`, `u = u1`, `v = v1` and `u = u0` in
+/// turn: the outer row of control points there, and their weights.
+fn side_row(s: &NurbsSurface, k: usize) -> (Vec<Point3>, Vec<f64>) {
+    let (cps, ws) = (s.control_points(), s.weights());
+    let (nu, nv) = (cps.len(), cps.first().map_or(0, Vec::len));
+    let at = |i: usize, j: usize| (cps[i][j], ws[i][j]);
+    match k {
+        0 => (0..nu).map(|i| at(i, 0)).unzip(),
+        1 => (0..nv).map(|j| at(nu - 1, j)).unzip(),
+        2 => (0..nu).map(|i| at(i, nv - 1)).unzip(),
+        _ => (0..nv).map(|j| at(0, j)).unzip(),
+    }
+}
+
+/// Whether `c` is side `k` of `s` (see [`side_row`]): the same curve, the
+/// side's degree and knots, up to scale and direction, on the side's
+/// control points within `reach` with the side's weights up to a common
+/// factor, which leaves the curve as it is.
+fn is_side(s: &NurbsSurface, c: &NurbsCurve, k: usize, reach: f64) -> bool {
+    let (degree, knots) = if k.is_multiple_of(2) {
+        (s.degree_u(), s.knots_u())
+    } else {
+        (s.degree_v(), s.knots_v())
+    };
+    let (row, side_w) = side_row(s, k);
+    let unit = |ks: &[f64]| -> Vec<f64> {
+        let (lo, hi) = (ks[0], ks[ks.len() - 1]);
+        ks.iter().map(|&x| (x - lo) / (hi - lo)).collect()
+    };
+    if c.degree() != degree
+        || c.control_points().len() != row.len()
+        || c.knots().len() != knots.len()
+    {
+        return false;
+    }
+    let ratios = |w: Vec<f64>| -> Vec<f64> { w.iter().map(|x| x / w[0]).collect() };
+    // A ratio that overflows would pass against any weight: the bound
+    // scales with it.
+    let same = |a: &[f64], b: &[f64]| {
+        a.iter().zip(b).all(|(x, y)| {
+            x.is_finite() && y.is_finite() && (x - y).abs() <= 1e-12 * x.abs().max(y.abs())
+        })
+    };
+    let side_w = ratios(side_w);
+    let weighs_forward = same(&ratios(c.weights().to_vec()), &side_w);
+    let weighs_backward = same(
+        &ratios(c.weights().iter().rev().copied().collect()),
+        &side_w,
+    );
+    let (mine, theirs) = (unit(c.knots()), unit(knots));
+    let close = |p: &Point3, q: &Point3| (*p - *q).length() <= reach;
+    // Knots match to rounding only: knots a hair apart can bound a
+    // different curve on the same control points.
+    let forward = weighs_forward
+        && c.control_points()
+            .iter()
+            .zip(&row)
+            .all(|(p, q)| close(p, q))
+        && mine
+            .iter()
+            .zip(&theirs)
+            .all(|(a, b)| a.to_bits() == b.to_bits());
+    let backward = weighs_backward
+        && c.control_points()
+            .iter()
+            .rev()
+            .zip(&row)
+            .all(|(p, q)| close(p, q))
+        && {
+            // Read reversed, each span against the side's at its own
+            // scale: mirroring rounds on the domain's scale, which can
+            // hide a knot moved inside a narrow span.
+            let back: Vec<f64> = mine.windows(2).rev().map(|w| w[1] - w[0]).collect();
+            theirs
+                .windows(2)
+                .map(|w| w[1] - w[0])
+                .zip(&back)
+                .all(|(a, &b)| (a - b).abs() <= 4.0 * f64::EPSILON * a.abs().max(b.abs()))
+        };
+    forward || backward
+}
+
 /// A face that is its whole open NURBS surface, its integrals over the
 /// surface's `(u, v)` domain directly, in panels between its knots. Green's
 /// theorem along its boundary comes to the same through a projection of
@@ -932,14 +1015,6 @@ pub(super) fn nurbs_face_over_domain(
         }
     };
     let ws = s.weights();
-    let side_weights = |k: usize| -> Vec<f64> {
-        match k {
-            0 => (0..nu).map(|i| ws[i][0]).collect(),
-            1 => (0..nv).map(|j| ws[nu - 1][j]).collect(),
-            2 => (0..nu).map(|i| ws[i][nv - 1]).collect(),
-            _ => (0..nv).map(|j| ws[0][j]).collect(),
-        }
-    };
     // Matched to the shortest side: a tolerance taken from the whole patch
     // would let a long thin one's trim pass for its side.
     let shortest = (0..4)
@@ -955,73 +1030,7 @@ pub(super) fn nurbs_face_over_domain(
         (ap - ab * w).length() <= reach
     };
     let corner_of = |p: Point3| corners.iter().position(|&c| (c - p).length() <= reach);
-    // A curved edge is its side when it is the same curve: the side's degree
-    // and knots, up to scale and direction, on the side's control points with
-    // the side's weights up to a common factor, which leaves the curve as it
-    // is.
-    let is_side = |c: &brepkit_math::nurbs::curve::NurbsCurve, k: usize| {
-        let (degree, knots) = if k.is_multiple_of(2) {
-            (s.degree_u(), s.knots_u())
-        } else {
-            (s.degree_v(), s.knots_v())
-        };
-        let row = side(k);
-        let unit = |ks: &[f64]| -> Vec<f64> {
-            let (lo, hi) = (ks[0], ks[ks.len() - 1]);
-            ks.iter().map(|&x| (x - lo) / (hi - lo)).collect()
-        };
-        if c.degree() != degree
-            || c.control_points().len() != row.len()
-            || c.knots().len() != knots.len()
-        {
-            return false;
-        }
-        let ratios = |w: Vec<f64>| -> Vec<f64> { w.iter().map(|x| x / w[0]).collect() };
-        // A ratio that overflows would pass against any weight: the bound
-        // scales with it.
-        let same = |a: &[f64], b: &[f64]| {
-            a.iter().zip(b).all(|(x, y)| {
-                x.is_finite() && y.is_finite() && (x - y).abs() <= 1e-12 * x.abs().max(y.abs())
-            })
-        };
-        let side_w = ratios(side_weights(k));
-        let weighs_forward = same(&ratios(c.weights().to_vec()), &side_w);
-        let weighs_backward = same(
-            &ratios(c.weights().iter().rev().copied().collect()),
-            &side_w,
-        );
-        let (mine, theirs) = (unit(c.knots()), unit(knots));
-        let close = |p: &Point3, q: &Point3| (*p - *q).length() <= reach;
-        // Knots match to rounding only: knots a hair apart can bound a
-        // different curve on the same control points.
-        let forward = weighs_forward
-            && c.control_points()
-                .iter()
-                .zip(&row)
-                .all(|(p, q)| close(p, q))
-            && mine
-                .iter()
-                .zip(&theirs)
-                .all(|(a, b)| a.to_bits() == b.to_bits());
-        let backward = weighs_backward
-            && c.control_points()
-                .iter()
-                .rev()
-                .zip(&row)
-                .all(|(p, q)| close(p, q))
-            && {
-                // Read reversed, each span against the side's at its own
-                // scale: mirroring rounds on the domain's scale, which can
-                // hide a knot moved inside a narrow span.
-                let back: Vec<f64> = mine.windows(2).rev().map(|w| w[1] - w[0]).collect();
-                theirs
-                    .windows(2)
-                    .map(|w| w[1] - w[0])
-                    .zip(&back)
-                    .all(|(a, &b)| (a - b).abs() <= 4.0 * f64::EPSILON * a.abs().max(b.abs()))
-            };
-        forward || backward
-    };
+    let is_side = |c: &NurbsCurve, k: usize| is_side(s, c, k, reach);
     let mut covered = [false; 4];
     for oe in topo.wire(face.outer_wire())?.edges() {
         let edge = topo.edge(oe.edge())?;
@@ -1284,9 +1293,40 @@ pub(super) fn nurbs_face_by_boundary(
     // Every edge cut into pieces, with the wire it is in: each piece is
     // integrated on its own, from its own seed, so the pieces can be taken at
     // once and summed in their order after.
+    // An edge that is the side `v = v0` or `v = v1` of the surface has
+    // `dv = 0` all along it, so it adds nothing to `∮ F dv`: its integrand is
+    // rounding alone, which the adaptive rule would halve to its depth. Sides
+    // are matched as `nurbs_face_over_domain` matches them, to the shortest
+    // side of the control net.
+    let side_reach = {
+        let cps = s.control_points();
+        let (nu, nv) = (cps.len(), cps.first().map_or(0, Vec::len));
+        if nu < 2 || nv < 2 {
+            0.0
+        } else {
+            let corners = [
+                cps[0][0],
+                cps[nu - 1][0],
+                cps[nu - 1][nv - 1],
+                cps[0][nv - 1],
+            ];
+            1e-9 * (0..4)
+                .map(|k| (corners[(k + 1) % 4] - corners[k]).length())
+                .fold(f64::INFINITY, f64::min)
+        }
+    };
+    let along_v_side = |curve: &EdgeCurve| {
+        side_reach.is_finite()
+            && side_reach > 0.0
+            && matches!(curve, EdgeCurve::NurbsCurve(c)
+                if is_side(s, c, 0, side_reach) || is_side(s, c, 2, side_reach))
+    };
     let mut pieces: Vec<Piece<'_, '_>> = Vec::new();
     for (k, wire) in wires.iter().enumerate() {
         for edge in wire {
+            if along_v_side(edge.curve) {
+                continue;
+            }
             let on = |t: f64, seed: Option<(f64, f64)>| on(edge, t, seed);
             for (ta, tb) in edge_pieces(edge) {
                 // Where the edge crosses a knot line the integrand bends:

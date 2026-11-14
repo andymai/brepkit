@@ -1660,4 +1660,116 @@ mod tests {
             c.volume
         );
     }
+
+    /// A wall extruded a little way from a long B-spline of many spans, off
+    /// the origin and trimmed across it (an imported part's thin rib, cut by
+    /// a boolean). Its sides along the spline are the surface's own rows
+    /// `v = 0` and `v = 1`, where `dv` is zero but for rounding: they add
+    /// nothing, and the face holds what a rule over its `(u, v)` gives (the
+    /// integrand is linear in `v`).
+    #[test]
+    fn a_trimmed_extruded_wall_reads_its_straight_edges_alone() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        use brepkit_math::nurbs::surface::NurbsSurface;
+        use brepkit_math::vec::Vec3;
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::{Face, FaceSurface};
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        const N: usize = 75;
+        let (ua, ub) = (0.23, 0.71);
+        #[allow(clippy::cast_precision_loss)]
+        let at = |i: usize, x: f64| {
+            let t = i as f64 / (N - 1) as f64;
+            Point3::new(
+                x,
+                45.0f64.madd((9.0 * t).sin(), -50.0),
+                475.0f64.madd(t, -20.0),
+            )
+        };
+        let (bottom, top): (Vec<Point3>, Vec<Point3>) =
+            (0..N).map(|i| (at(i, -201.0), at(i, -200.0))).unzip();
+        #[allow(clippy::cast_precision_loss)]
+        let knots: Vec<f64> = std::iter::repeat_n(0.0, 6)
+            .chain((1..N - 5).map(|k| k as f64 / (N - 5) as f64))
+            .chain(std::iter::repeat_n(1.0, 6))
+            .collect();
+        let surface = NurbsSurface::new(
+            5,
+            1,
+            knots.clone(),
+            vec![0.0, 0.0, 1.0, 1.0],
+            bottom.iter().zip(&top).map(|(a, b)| vec![*a, *b]).collect(),
+            vec![vec![1.0; 2]; N],
+        )
+        .unwrap();
+        let row = |points: Vec<Point3>| {
+            EdgeCurve::NurbsCurve(NurbsCurve::new(5, knots.clone(), points, vec![1.0; N]).unwrap())
+        };
+        let mut topo = Topology::new();
+        let mut corner =
+            |u: f64, v: f64| topo.add_vertex(Vertex::new(surface.evaluate(u, v), 1e-7));
+        let c = [
+            corner(ua, 0.0),
+            corner(ub, 0.0),
+            corner(ub, 1.0),
+            corner(ua, 1.0),
+        ];
+        let mut edge = |a, b, curve, forward| {
+            OrientedEdge::new(topo.add_edge(Edge::new(a, b, curve)), forward)
+        };
+        let edges = vec![
+            edge(c[0], c[1], row(bottom), true),
+            edge(c[1], c[2], EdgeCurve::Line, true),
+            edge(c[3], c[2], row(top), false),
+            edge(c[3], c[0], EdgeCurve::Line, true),
+        ];
+        let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+        let face = Face::new(wire, vec![], FaceSurface::Nurbs(surface.clone()));
+        let got = boundary::nurbs_face_by_boundary(&topo, &face, 1.0, Vec3::new(0.0, 0.0, 0.0))
+            .unwrap()
+            .unwrap();
+
+        // Over (u, v), span by span along the spline, each span in fine panels.
+        let mut cuts: Vec<f64> = knots
+            .iter()
+            .copied()
+            .filter(|&k| k > ua && k < ub)
+            .collect();
+        cuts.insert(0, ua);
+        cuts.push(ub);
+        cuts.dedup();
+        let rule = brepkit_math::quadrature::gauss_legendre_points(16);
+        let across = brepkit_math::quadrature::gauss_legendre_points(2);
+        let (mut area, mut volume) = (0.0, 0.0);
+        for w in cuts.windows(2) {
+            for k in 0..8 {
+                let (a, b) = (
+                    (w[1] - w[0]).madd(f64::from(k) / 8.0, w[0]),
+                    (w[1] - w[0]).madd(f64::from(k + 1) / 8.0, w[0]),
+                );
+                for g in rule {
+                    let u = (0.5 * (b - a)).madd(g.x, 0.5 * (a + b));
+                    for h in across {
+                        let v = 0.5f64.madd(h.x, 0.5);
+                        let (p, su, sv) = surface.first_derivatives(u, v);
+                        let n = su.cross(sv);
+                        let weight = 0.25 * (b - a) * g.w * h.w;
+                        area += weight * n.length();
+                        volume += weight * Vec3::new(p.x(), p.y(), p.z()).dot(n) / 3.0;
+                    }
+                }
+            }
+        }
+        assert!(
+            (got.area - area).abs() < 1e-10 * area,
+            "area {} for {area}",
+            got.area
+        );
+        assert!(
+            (got.volume.abs() - volume.abs()).abs() < 1e-10 * volume.abs(),
+            "volume {} for {volume}",
+            got.volume
+        );
+    }
 }
