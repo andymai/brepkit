@@ -105,14 +105,11 @@ struct Bore {
     radius: f64,
 }
 
-/// The through-bores opening on `faces` whose mouth comes within `reach`
-/// of a point of `near`.
+/// The through-bores with a mouth on one of `faces`.
 fn bores_opening_on(
     topo: &Topology,
     solid: SolidId,
     faces: &HashSet<FaceId>,
-    near: &[Point3],
-    reach: f64,
 ) -> Result<Vec<Bore>, OperationsError> {
     use brepkit_topology::face::FaceSurface;
     // Each single-circle hole of a plane face, by its edge.
@@ -179,15 +176,6 @@ fn bores_opening_on(
         if outward_normal_at(topo, face_id, on_wall)?.is_none_or(|n| n.dot(on_wall - ha.2) >= 0.0) {
             continue;
         }
-        let gap = |centre: Point3| {
-            near.iter()
-                .map(|&p| (p - centre).length())
-                .fold(f64::INFINITY, f64::min)
-                - radius
-        };
-        if gap(ha.2).min(gap(hb.2)) > reach {
-            continue;
-        }
         bores.push(Bore {
             wall: face_id,
             mouths: [(ha.0, ha.1), (hb.0, hb.1)],
@@ -200,6 +188,123 @@ fn bores_opening_on(
 
 /// How far past each mouth the cut back runs, in bore radii.
 const MOUTH_MARGIN: f64 = 0.1;
+
+/// Whether the band of a round of `radius` along one of `edges` reaches
+/// over one of the bore's mouths, on a face of that edge.
+fn band_reaches_a_mouth(
+    topo: &Topology,
+    bore: &Bore,
+    edges: &[EdgeId],
+    faces_of: &HashMap<EdgeId, Vec<FaceId>>,
+    radius: f64,
+) -> Result<bool, OperationsError> {
+    let tol = Tolerance::new().linear;
+    for (&(mouth, _), &centre) in bore.mouths.iter().zip(&bore.centres) {
+        for edge in edges {
+            let Some(adjacent) = faces_of.get(edge) else {
+                continue;
+            };
+            if !adjacent.contains(&mouth) {
+                continue;
+            }
+            let &[a, b] = adjacent.as_slice() else {
+                return Ok(true);
+            };
+            let other = if a == mouth { b } else { a };
+            let (nearest, exact) = nearest_on_edge(topo, *edge, centre)?;
+            let gap = (centre - nearest).length() - bore.radius;
+            if gap <= reach_over(topo, mouth, other, nearest, exact, radius)? + tol {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
+/// The point of `edge_id` nearest `point`, and whether it is exact: a
+/// line's and a circle's are, an ellipse's or a spline's is found
+/// numerically.
+fn nearest_on_edge(
+    topo: &Topology,
+    edge_id: EdgeId,
+    point: Point3,
+) -> Result<(Point3, bool), OperationsError> {
+    use brepkit_geometry::extrema::point_to_curve;
+    let edge = topo.edge(edge_id)?;
+    let (start, end) = (
+        topo.vertex(edge.start())?.point(),
+        topo.vertex(edge.end())?.point(),
+    );
+    let (t0, t1) = edge.curve().domain_with_endpoints(start, end);
+    let (lo, hi) = (t0.min(t1), t0.max(t1));
+    Ok(match edge.curve() {
+        EdgeCurve::Line => {
+            let along = end - start;
+            let length_sq = along.dot(along);
+            let s = if length_sq > 0.0 {
+                ((point - start).dot(along) / length_sq).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            (start + along * s, true)
+        }
+        EdgeCurve::Circle(circle) => {
+            let t = lo + (circle.project(point) - lo).rem_euclid(std::f64::consts::TAU);
+            let nearest = if t <= hi {
+                circle.evaluate(t)
+            } else if (point - start).length() <= (point - end).length() {
+                start
+            } else {
+                end
+            };
+            (nearest, true)
+        }
+        EdgeCurve::Ellipse(ellipse) => (point_to_curve(point, ellipse, lo, hi).point, false),
+        EdgeCurve::NurbsCurve(curve) => (point_to_curve(point, curve, lo, hi).point, false),
+    })
+}
+
+/// How far a round of `radius` reaches over the plane face `mouth` from
+/// the point `at` of its edge, `other` the edge's other face. The ball
+/// touches the plane `r tan(b / 2)` off the edge, `b` the turn between the
+/// faces' outward normals, wherever the other face's section across the
+/// edge is straight: a plane, or a cylinder or cone square to the plane.
+/// Where it curves, or `at` is not exact, the reach is uncertain, and taken
+/// as at least four radii.
+fn reach_over(
+    topo: &Topology,
+    mouth: FaceId,
+    other: FaceId,
+    at: Point3,
+    exact: bool,
+    radius: f64,
+) -> Result<f64, OperationsError> {
+    use brepkit_topology::face::FaceSurface;
+    let (Some(n_mouth), Some(n_other)) = (
+        outward_normal_at(topo, mouth, at)?,
+        outward_normal_at(topo, other, at)?,
+    ) else {
+        return Ok(f64::INFINITY);
+    };
+    let cos = n_mouth.dot(n_other);
+    let reach = if 1.0 + cos <= Tolerance::new().angular {
+        f64::INFINITY
+    } else {
+        radius * n_mouth.cross(n_other).length() / (1.0 + cos)
+    };
+    let square = |axis: Vec3| axis.cross(n_mouth).length() <= Tolerance::loose().angular;
+    let straight = match topo.face(other)?.surface() {
+        FaceSurface::Plane { .. } => true,
+        FaceSurface::Cylinder(cylinder) => square(cylinder.axis()),
+        FaceSurface::Cone(cone) => square(cone.axis()),
+        FaceSurface::Sphere(_) | FaceSurface::Torus(_) | FaceSurface::Nurbs(_) => false,
+    };
+    Ok(if exact && straight {
+        reach
+    } else {
+        reach.max(4.0 * radius)
+    })
+}
 
 /// The outward unit normal of `face_id` at `point`, on it.
 fn outward_normal_at(
@@ -332,8 +437,9 @@ fn opens_past_its_mouths(
 /// running over a bore's mouth (a bracket's edge rounded past a hole near
 /// it) trims the face round the hole, which the trimmer refuses, or, where
 /// the hole straddles the round's contact, crosses the trimmed outline.
-/// Each bore opening within the round's reach on a face of the picked edges
-/// is filled, the solid rounded, and the bore cut back through the round.
+/// Each bore whose mouth the round's band reaches, on a face of a picked
+/// edge, is filled, the solid rounded, and the bore cut back through the
+/// round.
 /// `None` when there is no such bore, or the round or the cut does not
 /// build exactly.
 fn fillet_over_bores(
@@ -360,22 +466,12 @@ fn fillet_over_bores(
         }
     }
     let beside: HashSet<FaceId> = faces_of.values().flatten().copied().collect();
-    // Points along the picked edges: a round reaches a few radii from its
-    // edge at most (r cot(a / 2) on a face at an acute corner a).
-    let mut near = Vec::new();
-    for &edge_id in edges {
-        let edge = topo.edge(edge_id)?;
-        let (start, end) = (
-            topo.vertex(edge.start())?.point(),
-            topo.vertex(edge.end())?.point(),
-        );
-        let (t0, t1) = edge.curve().domain_with_endpoints(start, end);
-        for i in 0..=64 {
-            let t = t0 + (t1 - t0) * f64::from(i) / 64.0;
-            near.push(edge.curve().evaluate_with_endpoints(t, start, end));
+    let mut bores = Vec::new();
+    for bore in bores_opening_on(topo, solid, &beside)? {
+        if band_reaches_a_mouth(topo, &bore, edges, &faces_of, radius)? {
+            bores.push(bore);
         }
     }
-    let bores = bores_opening_on(topo, solid, &beside, &near, 4.0 * radius)?;
     if bores.is_empty() {
         return Ok(None);
     }
@@ -886,4 +982,62 @@ fn chain_extends_tangently(topo: &Topology, chain: &[EdgeId], cand: EdgeId) -> b
         }
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use brepkit_math::curves::Circle3D;
+    use brepkit_math::vec::{Point3, Vec3};
+    use brepkit_topology::Topology;
+    use brepkit_topology::edge::{Edge, EdgeCurve, EdgeId};
+    use brepkit_topology::vertex::Vertex;
+
+    use super::nearest_on_edge;
+
+    fn edge(topo: &mut Topology, a: Point3, b: Point3, curve: EdgeCurve) -> EdgeId {
+        let a = topo.add_vertex(Vertex::new(a, 1e-7));
+        let b = if b == topo.vertex(a).unwrap().point() {
+            a
+        } else {
+            topo.add_vertex(Vertex::new(b, 1e-7))
+        };
+        topo.add_edge(Edge::new(a, b, curve))
+    }
+
+    fn assert_nearest(topo: &Topology, edge: EdgeId, point: [f64; 2], want: [f64; 2]) {
+        let (nearest, exact) =
+            nearest_on_edge(topo, edge, Point3::new(point[0], point[1], 0.0)).unwrap();
+        assert!(exact);
+        let want = Point3::new(want[0], want[1], 0.0);
+        assert!(
+            (nearest - want).length() < 1e-12,
+            "{point:?}: {nearest:?}, want {want:?}"
+        );
+    }
+
+    /// A line's nearest point is clamped to its ends, and an arc's, past
+    /// its span, is the nearer of its ends.
+    #[test]
+    fn the_nearest_point_of_an_edge_lies_on_the_edge() {
+        let mut topo = Topology::new();
+        let o = Point3::new(0.0, 0.0, 0.0);
+        let line = edge(&mut topo, o, Point3::new(10.0, 0.0, 0.0), EdgeCurve::Line);
+        assert_nearest(&topo, line, [4.0, 3.0], [4.0, 0.0]);
+        assert_nearest(&topo, line, [12.0, 3.0], [10.0, 0.0]);
+
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        let circle = Circle3D::new_with_ref(o, z, 5.0, Vec3::new(1.0, 0.0, 0.0)).unwrap();
+        let rim = Point3::new(5.0, 0.0, 0.0);
+        let closed = edge(&mut topo, rim, rim, EdgeCurve::Circle(circle.clone()));
+        assert_nearest(&topo, closed, [0.0, -2.0], [0.0, -5.0]);
+
+        let top = Point3::new(0.0, 5.0, 0.0);
+        let arc = edge(&mut topo, rim, top, EdgeCurve::Circle(circle));
+        let diagonal = 5.0 * std::f64::consts::FRAC_1_SQRT_2;
+        assert_nearest(&topo, arc, [1.0, 1.0], [diagonal, diagonal]);
+        assert_nearest(&topo, arc, [0.0, -2.0], [5.0, 0.0]);
+        assert_nearest(&topo, arc, [-2.0, 0.5], [0.0, 5.0]);
+    }
 }

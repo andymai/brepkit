@@ -14,12 +14,14 @@ use brepkit_math::vec::Point3;
 use brepkit_operations::blend_ops::{all_blended, fillet_v2};
 use brepkit_operations::boolean::{BooleanOp, boolean};
 use brepkit_operations::classify::{PointClassification, classify_point};
+use brepkit_operations::imprint::{ImprintTool, imprint_faces};
 use brepkit_operations::measure::solid_volume;
 use brepkit_operations::primitives::{make_box, make_cylinder};
 use brepkit_operations::tessellate::{is_watertight, tessellate_solid};
 use brepkit_operations::transform::transform_solid;
 use brepkit_operations::validate::validate_solid;
 use brepkit_topology::Topology;
+use brepkit_topology::builder::make_line_edge;
 use brepkit_topology::edge::{EdgeCurve, EdgeId};
 use brepkit_topology::explorer::{solid_edges, solid_faces};
 use brepkit_topology::solid::SolidId;
@@ -153,16 +155,31 @@ fn pinned_channel(topo: &mut Topology, z: f64) -> (SolidId, EdgeId) {
     (solid, edge)
 }
 
-/// The volume and face count of the direct fillet's round of `edges`, with
-/// no bore filled: what `fillet_v2` gives when it leaves the bores alone.
-fn direct_round(topo: &mut Topology, solid: SolidId, edges: &[EdgeId], r: f64) -> (f64, usize) {
+/// Rounds `edges` by `r` and checks the round is the direct fillet's, with
+/// no bore filled: the same volume and face count.
+fn round_as_the_direct_fillet(
+    topo: &mut Topology,
+    solid: SolidId,
+    edges: &[EdgeId],
+    r: f64,
+) -> SolidId {
     let mut builder = FilletBuilder::new(topo, solid);
     builder.add_edges(edges, r);
-    let result = all_blended(builder.build().unwrap()).unwrap();
-    (
-        solid_volume(topo, result, 0.01).unwrap(),
-        solid_faces(topo, result).unwrap().len(),
-    )
+    let direct = all_blended(builder.build().unwrap()).unwrap();
+    let result = fillet_v2(topo, solid, edges, r)
+        .and_then(all_blended)
+        .unwrap();
+    let [made, want] = [result, direct].map(|s| {
+        (
+            solid_volume(topo, s, 0.01).unwrap(),
+            solid_faces(topo, s).unwrap().len(),
+        )
+    });
+    assert!(
+        (made.0 - want.0).abs() <= 1e-9 * want.0 && made.1 == want.1,
+        "made {made:?}, the direct fillet {want:?}"
+    );
+    result
 }
 
 /// A pin across a slot meets each wall in a circle, as a bore meets its
@@ -190,19 +207,8 @@ fn a_pin_under_a_round_is_kept() {
 
     let mut topo = Topology::new();
     let (solid, edge) = pinned_channel(&mut topo, 13.0);
-    let direct = direct_round(&mut topo, solid, &[edge], 4.0);
-    let result = fillet_v2(&mut topo, solid, &[edge], 4.0)
-        .and_then(all_blended)
-        .unwrap();
+    let result = round_as_the_direct_fillet(&mut topo, solid, &[edge], 4.0);
     assert!(inside(&topo, result, [15.0, 10.0, 13.0]), "pin lost");
-    let made = (
-        solid_volume(&topo, result, 0.01).unwrap(),
-        solid_faces(&topo, result).unwrap().len(),
-    );
-    assert!(
-        (made.0 - direct.0).abs() <= 1e-9 * direct.0 && made.1 == direct.1,
-        "made {made:?}, the direct fillet {direct:?}"
-    );
 }
 
 /// A spool: a hub of radius 3 between two flanges of radius 10 meets each
@@ -262,16 +268,27 @@ fn a_concave_round_over_a_bore_is_the_direct_fillets() {
     transform_solid(&mut topo, drill, &Mat4::translation(9.0, 10.0, -1.0)).unwrap();
     let solid = boolean(&mut topo, BooleanOp::Cut, bracket, drill).unwrap();
     let corner = line_edge(&topo, solid, [5.0, 0.0, 5.0], [5.0, 20.0, 5.0]);
-    let direct = direct_round(&mut topo, solid, &[corner], 6.0);
-    let result = fillet_v2(&mut topo, solid, &[corner], 6.0)
-        .and_then(all_blended)
+    round_as_the_direct_fillet(&mut topo, solid, &[corner], 6.0);
+}
+
+/// The box drilled at (20, 8) by a bore of radius 2, its top marked along
+/// y = 15 into two faces, and the top edge at y = 0 rounded. A round of 2
+/// reaches 2 into the top, short of the bore 6 away, and one of 1 reaches 1:
+/// each is the direct fillet's, and keeps the mark.
+#[test]
+fn a_round_short_of_a_bore_is_the_direct_fillets() {
+    for r in [2.0, 1.0] {
+        let mut topo = Topology::new();
+        let (drilled, _) = drilled_box(&mut topo, 0.5 * LENGTH, 8.0, 2.0);
+        let mark = make_line_edge(
+            &mut topo,
+            Point3::new(-1.0, 15.0, HEIGHT),
+            Point3::new(LENGTH + 1.0, 15.0, HEIGHT),
+            1e-7,
+        )
         .unwrap();
-    let made = (
-        solid_volume(&topo, result, 0.01).unwrap(),
-        solid_faces(&topo, result).unwrap().len(),
-    );
-    assert!(
-        (made.0 - direct.0).abs() <= 1e-9 * direct.0 && made.1 == direct.1,
-        "made {made:?}, the direct fillet {direct:?}"
-    );
+        let marked = imprint_faces(&mut topo, drilled, &[ImprintTool::Edge(mark)]).unwrap();
+        let edge = line_edge(&topo, marked, [0.0, 0.0, HEIGHT], [LENGTH, 0.0, HEIGHT]);
+        round_as_the_direct_fillet(&mut topo, marked, &[edge], r);
+    }
 }
