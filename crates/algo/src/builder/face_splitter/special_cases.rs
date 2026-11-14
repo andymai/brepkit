@@ -1795,8 +1795,9 @@ pub(super) enum BandEnd<'a> {
     Apex,
 }
 
-/// The band stack of a cylinder or cone lateral cut open along its seam:
-/// two rim circles, or one rim and the apex of a pointed cone.
+/// The band stack of a cylinder or cone lateral, or of a torus band, cut
+/// open along its seam: two rim circles, or one rim and the apex of a
+/// pointed cone.
 pub(super) struct BandStack<'a> {
     pub(super) seam_u: f64,
     pub(super) v_bot: f64,
@@ -3156,7 +3157,8 @@ pub(super) fn split_torus_by_ring_loops(
 ///
 /// Preconditions (returns `None` so the caller can fall back otherwise):
 /// - the boundary reads as a [`band_stack`]: 2 closed circle edges, or 1
-///   and a cone's apex, plus seam Line edges at one u
+///   and a cone's apex, plus seam edges at one u (lines, or a torus's
+///   meridian arcs)
 /// - every section is a full closed circle whose start point sits on the
 ///   seam (guaranteed by the seam-anchor pre-pass) at a v strictly between
 ///   the stack's ends, with no two circles at the same v; or, on a cylinder
