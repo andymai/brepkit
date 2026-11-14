@@ -260,7 +260,7 @@ fn find_edge_edge_crossings(
 
     let mut alongside: Vec<(usize, usize)> = Vec::new();
     let mut alongside_hits: Vec<ChordApproach> = Vec::new();
-    let mut crossed = vec![false; n * n];
+    let mut crossed: Vec<Option<f64>> = vec![None; n * n];
     for i in 0..n {
         for j in 0..n {
             // Quick distance check: if minimum endpoint distance exceeds
@@ -289,7 +289,7 @@ fn find_edge_edge_crossings(
                     alongside.push((i, j));
                     alongside_hits.push(hit);
                 } else {
-                    crossed[i * n + j] = true;
+                    crossed[i * n + j] = Some(hit.t_a);
                     read(&mut crossings, &hit);
                 }
             }
@@ -297,37 +297,67 @@ fn find_edge_edge_crossings(
     }
 
     // Chords all but parallel and within tolerance form ribbons on the grid
-    // of chord pairs. Where a ribbon stops at both of its extremes because
-    // an edge ends or the edges part at a corner, the edges overlap. The VE
-    // phase paves those ends and the corner is a crossing read above; a
-    // crossing read along the ribbon would split both edges where nothing
-    // meets them. Else the edges come together and part again while both
-    // go on, and the ribbon holds one crossing, at its closest place.
-    let on_chord = |p: &SegmentEndpoint, chord: [&SegmentEndpoint; 2]| {
-        closest_segment_pair([p, p], chord, tol.linear).is_some()
+    // of chord pairs. A ribbon stops where an edge ends on the other edge or
+    // where the edges part at a corner (a crossing read above, next to the
+    // ribbon). Where it stops at both of its ends, by two different stops,
+    // the edges overlap. The VE phase paves those edge ends and the corner
+    // is read already; a crossing read along the ribbon would split both
+    // edges where nothing meets them. Else the edges come together and part
+    // again while both go on, and the ribbon holds one crossing, at its
+    // closest place. Places are read along edge A, as parameters of A.
+    let on = |p: &SegmentEndpoint, chord: [&SegmentEndpoint; 2]| {
+        closest_segment_pair([p, p], chord, tol.linear)
     };
-    let edge_end_in = |(i, j): (usize, usize)| {
+    // The stops next to cell `(i, j)`, each as `(which, place)`: the ends of
+    // A and of B are 0 to 3, a corner is 4 past its cell's index.
+    let stops_in = |(i, j): (usize, usize), stops: &mut Vec<(usize, f64)>| {
         let chord_a = [&pts_a[i], &pts_a[i + 1]];
         let chord_b = [&pts_b[j], &pts_b[j + 1]];
-        (i == 0 && on_chord(&pts_a[0], chord_b))
-            || (i + 1 == n && on_chord(&pts_a[n], chord_b))
-            || (j == 0 && on_chord(&pts_b[0], chord_a))
-            || (j + 1 == n && on_chord(&pts_b[n], chord_a))
+        if i == 0 && on(&pts_a[0], chord_b).is_some() {
+            stops.push((0, pts_a[0].t));
+        }
+        if i + 1 == n && on(&pts_a[n], chord_b).is_some() {
+            stops.push((1, pts_a[n].t));
+        }
+        if j == 0
+            && let Some(hit) = on(&pts_b[0], chord_a)
+        {
+            stops.push((2, hit.t_b));
+        }
+        if j + 1 == n
+            && let Some(hit) = on(&pts_b[n], chord_a)
+        {
+            stops.push((3, hit.t_b));
+        }
+        for ni in i.saturating_sub(1)..=(i + 1).min(n - 1) {
+            for nj in j.saturating_sub(1)..=(j + 1).min(n - 1) {
+                if let Some(at) = crossed[ni * n + nj] {
+                    stops.push((4 + ni * n + nj, at));
+                }
+            }
+        }
     };
-    let corner_by = |(i, j): (usize, usize)| {
-        (i.saturating_sub(1)..=(i + 1).min(n - 1))
-            .any(|ni| (j.saturating_sub(1)..=(j + 1).min(n - 1)).any(|nj| crossed[ni * n + nj]))
-    };
+    // A stop lies at or past the end of the ribbon it stops. Where that
+    // end's closest place is the stop itself, the two differ by rounding.
+    let slack = 1e-9 * (ea.t1 - ea.t0).abs();
     for ribbon in ribbons(&alongside, n) {
-        let rows = ribbon.iter().map(|&k| alongside[k].0);
-        let (first, last) = (rows.clone().min(), rows.max());
-        let ends_at = |row: Option<usize>| {
-            ribbon.iter().any(|&k| {
-                Some(alongside[k].0) == row
-                    && (edge_end_in(alongside[k]) || corner_by(alongside[k]))
-            })
-        };
-        if ends_at(first) && ends_at(last) {
+        let (lo, hi) = ribbon
+            .iter()
+            .map(|&k| alongside_hits[k].t_a)
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), t| {
+                (lo.min(t), hi.max(t))
+            });
+        let mut stops = Vec::new();
+        for &k in &ribbon {
+            stops_in(alongside[k], &mut stops);
+        }
+        let overlap = stops.iter().any(|&(low, at_low)| {
+            at_low <= lo + slack
+                && stops
+                    .iter()
+                    .any(|&(high, at_high)| high != low && at_high >= hi - slack)
+        });
+        if overlap {
             continue;
         }
         if let Some(&k) = ribbon
@@ -1160,6 +1190,125 @@ mod tests {
                 (p.y() - height(p.x())).hypot(p.z()) <= tol,
                 "off the parabola: {p:?}"
             );
+        }
+    }
+
+    /// A long line, its chords 100 long, and a short degree-1 spline from
+    /// x = 40 to 60 at 1e-8 rad to it. The spline starts within tolerance of
+    /// the line, crosses it at x = 45 and leaves the band near x = 55 while
+    /// both go on. Its ribbon lies in one chord of the line and stops only at
+    /// the spline's start, so it holds the crossing.
+    #[test]
+    fn a_shallow_crossing_inside_one_long_chord_is_read_once() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+
+        let mut topo = Topology::new();
+        let line = add_edge(
+            &mut topo,
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(3200.0, 0.0, 0.0),
+            EdgeCurve::Line,
+        );
+        let (start, end) = (
+            Point3::new(40.0, -5e-8, 0.0),
+            Point3::new(60.0, 1.5e-7, 0.0),
+        );
+        let nurbs =
+            NurbsCurve::new(1, vec![0.0, 0.0, 1.0, 1.0], vec![start, end], vec![1.0; 2]).unwrap();
+        let spline = add_edge(&mut topo, start, end, EdgeCurve::NurbsCurve(nurbs));
+        for (ea, eb) in [(line, spline), (spline, line)] {
+            let hits = crossings(&topo, ea, eb);
+            assert_eq!(hits.len(), 1, "{hits:?}");
+            let gap = (hits[0].2 - Point3::new(45.0, 0.0, 0.0)).length();
+            assert!(gap < 1e-6, "read {gap:e} from the crossing");
+        }
+    }
+
+    /// A long line and a short spline that start at one place, run within
+    /// tolerance of each other, cross at x = 5 and part near x = 15 while
+    /// both go on. Two edge ends stop the ribbon, both at its start; its
+    /// other end is open, so it holds the crossing.
+    #[test]
+    fn edges_from_one_start_that_cross_further_on_cross_once() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+
+        let mut topo = Topology::new();
+        let line = add_edge(
+            &mut topo,
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(3200.0, 0.0, 0.0),
+            EdgeCurve::Line,
+        );
+        let (start, end) = (Point3::new(0.0, -5e-8, 0.0), Point3::new(20.0, 1.5e-7, 0.0));
+        let nurbs =
+            NurbsCurve::new(1, vec![0.0, 0.0, 1.0, 1.0], vec![start, end], vec![1.0; 2]).unwrap();
+        let spline = add_edge(&mut topo, start, end, EdgeCurve::NurbsCurve(nurbs));
+        for (ea, eb) in [(line, spline), (spline, line)] {
+            let hits = crossings(&topo, ea, eb);
+            assert_eq!(hits.len(), 1, "{hits:?}");
+            let inside = crossings_inside(&topo, ea, eb);
+            assert_eq!(inside.len(), 1, "{hits:?}");
+            let gap = (inside[0].2 - Point3::new(5.0, 0.0, 0.0)).length();
+            assert!(gap < 1e-6, "read {gap:e} from the crossing");
+        }
+    }
+
+    /// A short spline inside one chord of a long line and within tolerance
+    /// of it all along, at 3e-8 or from 1e-8 to 9e-8 off it, either way: the
+    /// spline's two ends stop its ribbon at both of its ends, an overlap.
+    #[test]
+    fn a_short_edge_along_one_long_chord_does_not_cross_inside_it() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+
+        let at = |x: f64, y: f64| Point3::new(x, y, 0.0);
+        for (start, end) in [
+            (at(40.0, 3e-8), at(60.0, 3e-8)),
+            (at(40.0, 1e-8), at(60.0, 9e-8)),
+            (at(60.0, 9e-8), at(40.0, 1e-8)),
+        ] {
+            let mut topo = Topology::new();
+            let line = add_edge(&mut topo, at(0.0, 0.0), at(3200.0, 0.0), EdgeCurve::Line);
+            let nurbs =
+                NurbsCurve::new(1, vec![0.0, 0.0, 1.0, 1.0], vec![start, end], vec![1.0; 2])
+                    .unwrap();
+            let spline = add_edge(&mut topo, start, end, EdgeCurve::NurbsCurve(nurbs));
+            for (ea, eb) in [(line, spline), (spline, line)] {
+                let hits = crossings_inside(&topo, ea, eb);
+                assert!(hits.is_empty(), "{start:?}..{end:?}: {hits:?}");
+            }
+        }
+    }
+
+    /// A short spline that starts within tolerance of a long line, inside
+    /// one of its chords, and leaves the band near x = 45 without crossing.
+    /// Its ribbon stops at the spline's start only, so it is read once, at
+    /// its closest place: that start, which the VE phase paves as well.
+    /// Nothing inside both edges is a crossing.
+    #[test]
+    fn a_short_edge_leaving_a_long_one_from_its_start_meets_it_only_there() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+
+        let mut topo = Topology::new();
+        let line = add_edge(
+            &mut topo,
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(3200.0, 0.0, 0.0),
+            EdgeCurve::Line,
+        );
+        let (start, end) = (Point3::new(40.0, 5e-8, 0.0), Point3::new(60.0, 2.5e-7, 0.0));
+        let nurbs =
+            NurbsCurve::new(1, vec![0.0, 0.0, 1.0, 1.0], vec![start, end], vec![1.0; 2]).unwrap();
+        let spline = add_edge(&mut topo, start, end, EdgeCurve::NurbsCurve(nurbs));
+        let tol = Tolerance::default().linear;
+        for (ea, eb) in [(line, spline), (spline, line)] {
+            let hits = crossings(&topo, ea, eb);
+            assert!(hits.len() <= 1, "{hits:?}");
+            assert!(
+                hits.iter().all(|h| (h.2 - start).length() <= tol),
+                "{hits:?}"
+            );
+            let inside = crossings_inside(&topo, ea, eb);
+            assert!(inside.is_empty(), "{inside:?}");
         }
     }
 
