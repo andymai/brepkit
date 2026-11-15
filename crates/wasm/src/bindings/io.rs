@@ -6,9 +6,54 @@
 use wasm_bindgen::prelude::*;
 
 use crate::error::{WasmError, validate_positive};
-use crate::handles::solid_id_to_u32;
+use crate::handles::{shell_id_to_u32, solid_id_to_u32};
 use crate::helpers::TOL;
 use crate::kernel::BrepKernel;
+use crate::types::MeshImportResult;
+use brepkit_operations::tessellate::TriangleMesh;
+
+/// Import a mesh, one handle for each of its bodies.
+fn mesh_parts(
+    topo: &mut brepkit_topology::Topology,
+    mesh: &TriangleMesh,
+) -> Result<MeshImportResult, brepkit_io::IoError> {
+    let parts = brepkit_io::stl::import::import_mesh_parts(topo, mesh, TOL)?;
+    Ok(MeshImportResult {
+        solids: parts.solids.into_iter().map(solid_id_to_u32).collect(),
+        shells: parts.shells.into_iter().map(shell_id_to_u32).collect(),
+    })
+}
+
+fn to_json<T: serde::Serialize>(value: &T) -> Result<String, JsError> {
+    serde_json::to_string(value).map_err(|e| JsError::new(&e.to_string()))
+}
+
+/// Build a mesh with no normals from flat position and index arrays.
+fn indexed_mesh(positions: &[f64], indices: &[u32]) -> Result<TriangleMesh, WasmError> {
+    use brepkit_math::vec::Point3;
+
+    if !positions.len().is_multiple_of(3) {
+        return Err(WasmError::InvalidInput {
+            reason: format!(
+                "positions length {} is not a multiple of 3",
+                positions.len()
+            ),
+        });
+    }
+    if !indices.len().is_multiple_of(3) {
+        return Err(WasmError::InvalidInput {
+            reason: format!("indices length {} is not a multiple of 3", indices.len()),
+        });
+    }
+    Ok(TriangleMesh {
+        positions: positions
+            .chunks_exact(3)
+            .map(|c| Point3::new(c[0], c[1], c[2]))
+            .collect(),
+        normals: Vec::new(),
+        indices: indices.to_vec(),
+    })
+}
 
 #[wasm_bindgen]
 impl BrepKernel {
@@ -147,11 +192,14 @@ impl BrepKernel {
     /// Import an STL file (binary or ASCII) and return a solid handle.
     ///
     /// The mesh triangles are converted to planar B-Rep faces with
-    /// vertex merging.
+    /// vertex merging, and triangles that meet at an edge share it. Two or
+    /// more closed bodies come back as the pieces of one solid.
     ///
     /// # Errors
     ///
-    /// Returns an error if the STL data is malformed or empty.
+    /// Returns an error if the STL data is malformed or empty, a part of
+    /// the mesh does not close, or a body lies in the material of another.
+    /// `importStlParts` returns each part of such a mesh.
     #[wasm_bindgen(js_name = "importStl")]
     pub fn import_stl(&mut self, data: &[u8]) -> Result<u32, JsError> {
         let mesh = brepkit_io::stl::reader::read_stl(data)?;
@@ -185,45 +233,100 @@ impl BrepKernel {
     ///
     /// # Errors
     ///
-    /// Returns an error if the arrays are malformed or mesh import fails.
+    /// Returns an error if the arrays are malformed, a part of the mesh
+    /// does not close, or a body lies in the material of another.
+    /// `importIndexedMeshParts` returns each part of such a mesh.
     #[wasm_bindgen(js_name = "importIndexedMesh")]
     pub fn import_indexed_mesh(
         &mut self,
         positions: &[f64],
         indices: &[u32],
     ) -> Result<u32, JsError> {
-        use brepkit_math::vec::Point3;
-
-        if !positions.len().is_multiple_of(3) {
-            return Err(WasmError::InvalidInput {
-                reason: format!(
-                    "positions length {} is not a multiple of 3",
-                    positions.len()
-                ),
-            }
-            .into());
-        }
-        if !indices.len().is_multiple_of(3) {
-            return Err(WasmError::InvalidInput {
-                reason: format!("indices length {} is not a multiple of 3", indices.len()),
-            }
-            .into());
-        }
-
-        let verts: Vec<Point3> = positions
-            .chunks_exact(3)
-            .map(|c| Point3::new(c[0], c[1], c[2]))
-            .collect();
-        let normals = Vec::new();
-
-        let mesh = brepkit_operations::tessellate::TriangleMesh {
-            positions: verts,
-            normals,
-            indices: indices.to_vec(),
-        };
-
+        let mesh = indexed_mesh(positions, indices)?;
         let solid_id = brepkit_io::stl::import::import_mesh(self.topo_mut(), &mesh, TOL)?;
         Ok(solid_id_to_u32(solid_id))
+    }
+
+    /// Import an STL file (binary or ASCII), one handle for each body.
+    ///
+    /// Returns a JSON string `{ solids: number[], shells: number[] }`. A
+    /// closed body is a solid, with each inward closed body in it as a
+    /// cavity. A body that does not close is a shell.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the STL data is malformed or empty.
+    #[wasm_bindgen(js_name = "importStlParts")]
+    pub fn import_stl_parts(&mut self, data: &[u8]) -> Result<String, JsError> {
+        let mesh = brepkit_io::stl::reader::read_stl(data)?;
+        to_json(&mesh_parts(self.topo_mut(), &mesh)?)
+    }
+
+    /// Import an OBJ file, one handle for each body.
+    ///
+    /// Returns the same JSON string as `importStlParts`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the file is malformed or has no triangle.
+    #[wasm_bindgen(js_name = "importObjParts")]
+    pub fn import_obj_parts(&mut self, data: &[u8]) -> Result<String, JsError> {
+        let text = std::str::from_utf8(data).map_err(|e| WasmError::InvalidInput {
+            reason: format!("OBJ must be valid UTF-8: {e}"),
+        })?;
+        let mesh = brepkit_io::obj::read_obj(text)?;
+        to_json(&mesh_parts(self.topo_mut(), &mesh)?)
+    }
+
+    /// Import a GLB (glTF binary) file, one handle for each body.
+    ///
+    /// Returns the same JSON string as `importStlParts`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the file is malformed or has no triangle.
+    #[wasm_bindgen(js_name = "importGlbParts")]
+    pub fn import_glb_parts(&mut self, data: &[u8]) -> Result<String, JsError> {
+        let mesh = brepkit_io::gltf::read_glb(data)?;
+        to_json(&mesh_parts(self.topo_mut(), &mesh)?)
+    }
+
+    /// Import a 3MF file, one entry for each object and one handle for each
+    /// body of the object.
+    ///
+    /// Returns a JSON string: an array of `{ solids, shells }`, in the
+    /// order of the objects in the archive.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the 3MF data is malformed.
+    #[wasm_bindgen(js_name = "import3mfParts")]
+    pub fn import_3mf_parts(&mut self, data: &[u8]) -> Result<String, JsError> {
+        let meshes = brepkit_io::threemf::reader::read_threemf(data)?;
+        let mut objects = Vec::with_capacity(meshes.len());
+        for mesh in &meshes {
+            objects.push(mesh_parts(self.topo_mut(), mesh)?);
+        }
+        to_json(&objects)
+    }
+
+    /// Import a triangle mesh from flat vertex/index arrays, one handle for
+    /// each body.
+    ///
+    /// The arrays are those of `importIndexedMesh`. Returns the same JSON
+    /// string as `importStlParts`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the arrays are malformed or have no triangle.
+    #[wasm_bindgen(js_name = "importIndexedMeshParts")]
+    pub fn import_indexed_mesh_parts(
+        &mut self,
+        positions: &[f64],
+        indices: &[u32],
+    ) -> Result<String, JsError> {
+        let mesh = indexed_mesh(positions, indices)?;
+        to_json(&mesh_parts(self.topo_mut(), &mesh)?)
     }
 
     /// Export a solid to STEP AP203 format.
@@ -336,5 +439,84 @@ impl BrepKernel {
     pub fn deserialize_solid(&mut self, data: &[u8]) -> Result<u32, JsError> {
         let solid_id = brepkit_io::arena_io::deserialize_solid(data, self.topo_mut())?;
         Ok(solid_id_to_u32(solid_id))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use super::*;
+
+    const CUBE: [u32; 36] = [
+        0, 2, 1, 0, 3, 2, 4, 5, 6, 4, 6, 7, 0, 1, 5, 0, 5, 4, 3, 7, 6, 3, 6, 2, 0, 4, 7, 0, 7, 3,
+        1, 2, 6, 1, 6, 5,
+    ];
+
+    fn cube_positions(at: f64) -> Vec<f64> {
+        let mut out = Vec::new();
+        for (x, y, z) in [
+            (0.0, 0.0, 0.0),
+            (1.0, 0.0, 0.0),
+            (1.0, 1.0, 0.0),
+            (0.0, 1.0, 0.0),
+            (0.0, 0.0, 1.0),
+            (1.0, 0.0, 1.0),
+            (1.0, 1.0, 1.0),
+            (0.0, 1.0, 1.0),
+        ] {
+            out.extend([at + x * 10.0, y * 10.0, z * 10.0]);
+        }
+        out
+    }
+
+    #[test]
+    fn an_indexed_cube_is_one_solid_in_one_piece() {
+        let mut k = BrepKernel::new();
+        let solid = k.import_indexed_mesh(&cube_positions(0.0), &CUBE).unwrap();
+        assert_eq!(k.get_solid_shells(solid).unwrap().len(), 1);
+        assert_eq!(k.get_solid_pieces(solid).unwrap(), vec![solid]);
+    }
+
+    #[test]
+    fn an_stl_box_is_one_solid_in_one_piece() {
+        let mut k = BrepKernel::new();
+        let source = k.make_box_solid(10.0, 10.0, 10.0).unwrap();
+        let stl = k.export_stl(source, 0.1).unwrap();
+        let solid = k.import_stl(&stl).unwrap();
+        assert_eq!(k.get_solid_shells(solid).unwrap().len(), 1);
+        assert_eq!(k.get_solid_pieces(solid).unwrap(), vec![solid]);
+    }
+
+    #[test]
+    fn two_indexed_cubes_and_a_sheet_are_two_solids_and_a_shell() {
+        let mut positions = cube_positions(0.0);
+        positions.extend(cube_positions(20.0));
+        let mut indices = CUBE.to_vec();
+        indices.extend(CUBE.iter().map(|i| i + 8));
+        positions.extend([0.0, 0.0, 50.0, 1.0, 0.0, 50.0, 1.0, 1.0, 50.0]);
+        indices.extend([16, 17, 18]);
+
+        let mut k = BrepKernel::new();
+        let mesh = indexed_mesh(&positions, &indices).unwrap();
+        let parts = mesh_parts(k.topo_mut(), &mesh).unwrap();
+        assert_eq!((parts.solids.len(), parts.shells.len()), (2, 1));
+        assert_eq!(
+            serde_json::to_string(&parts).unwrap(),
+            format!(
+                "{{\"solids\":[{},{}],\"shells\":[{}]}}",
+                parts.solids[0], parts.solids[1], parts.shells[0]
+            )
+        );
+        assert_eq!(k.get_shell_faces(parts.shells[0]).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn an_open_indexed_mesh_is_no_solid() {
+        let mut k = BrepKernel::new();
+        let mesh =
+            indexed_mesh(&[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0], &[0, 1, 2]).unwrap();
+        assert!(brepkit_io::stl::import::import_mesh(k.topo_mut(), &mesh, TOL).is_err());
+        assert!(indexed_mesh(&[0.0, 0.0], &[0, 1, 2]).is_err());
     }
 }

@@ -7,6 +7,6 @@ pub mod import;
 pub mod reader;
 pub mod writer;
 
-pub use import::import_mesh;
+pub use import::{MeshImport, import_mesh, import_mesh_parts};
 pub use reader::{read_stl, read_stl_solid};
 pub use writer::write_stl;
