@@ -199,25 +199,31 @@ pub fn edges_in_one_surface(
         let one_surface = if f1 == f2 {
             forward1 != forward2
         } else if same_surface(topo.face(f1)?.surface(), topo.face(f2)?.surface()) {
-            // The middle of the edge on its curve: the middle of an arc's
-            // chord can be on the axis of its surface, which has no normal.
+            // Points of the edge on its curve: the middle of an arc's chord
+            // can be on the axis of its surface, which has no normal. Three
+            // points, since a corner along a knot can open along the edge.
             let edge = topo.edge(edge_id)?;
             let a = topo.vertex(edge.start())?.point();
             let b = topo.vertex(edge.end())?.point();
             let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
-            let mid = edge.curve().evaluate_with_endpoints(0.5 * (t0 + t1), a, b);
-            let smooth = match topo.face(f1)?.surface() {
-                FaceSurface::Nurbs(surface) => smooth_across(surface, mid),
-                _ => true,
-            };
-            smooth
-                && match (
-                    outward_normal_near(topo, f1, mid),
-                    outward_normal_near(topo, f2, mid),
-                ) {
-                    (Some(n1), Some(n2)) => n1.dot(n2) > 0.9962,
-                    _ => false,
-                }
+            let surface = topo.face(f1)?.surface();
+            [0.25, 0.5, 0.75].iter().all(|&s| {
+                let at = edge
+                    .curve()
+                    .evaluate_with_endpoints(t0 + s * (t1 - t0), a, b);
+                let smooth = match surface {
+                    FaceSurface::Nurbs(surface) => smooth_across(surface, at),
+                    _ => true,
+                };
+                smooth
+                    && match (
+                        outward_normal_near(topo, f1, at),
+                        outward_normal_near(topo, f2, at),
+                    ) {
+                        (Some(n1), Some(n2)) => n1.dot(n2) > 0.9962,
+                        _ => false,
+                    }
+            })
         } else {
             false
         };
