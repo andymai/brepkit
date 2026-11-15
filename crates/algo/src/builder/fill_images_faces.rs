@@ -3928,9 +3928,7 @@ fn arc_segment_crossings(
             };
             let dir = line_end - line_start;
             let side = |p: Point3| (p - line_start).cross(dir).dot(n);
-            let eval = |f: f64| {
-                super::pcurve_compute::evaluate_edge_at_t(curve, stored_start, stored_end, f)
-            };
+            let eval = super::pcurve_compute::edge_point_at(curve, stored_start, stored_end);
             let mut hits = Vec::new();
             let mut prev_f = 0.0_f64;
             let mut prev_s = side(eval(0.0));
@@ -4122,11 +4120,16 @@ fn split_runs_across_holes(
 }
 
 /// Each input face's loops in its own parameter space, sampled the first
-/// time a section clip needs them.
+/// time a section clip needs them, and each plane face's hole polygons in
+/// the frame of its outline, as [`hole_loops_along_line`] samples them.
 #[derive(Default)]
 struct FaceLoopsCache(
     std::cell::RefCell<HashMap<FaceId, Option<std::rc::Rc<crate::classifier::FaceLoops2d>>>>,
+    std::cell::RefCell<HashMap<FaceId, HolePolygons>>,
 );
+
+/// A plane face's hole polygons in the frame of its outline.
+type HolePolygons = std::rc::Rc<Vec<Vec<brepkit_math::vec::Point2>>>;
 
 impl FaceLoopsCache {
     fn get(
@@ -4561,8 +4564,23 @@ fn clip_line_to_face_boundary(
         // splitting at the hole crossings as well as the outer ones. The
         // whole-section hole weave never sees these sections (it needs two
         // outer crossings), so trimming them here takes nothing from it.
-        let (hole_polys, hole_crossings) =
-            hole_loops_along_line(topo, face, frame, line_start, line_end, tol);
+        // The holes' polygons are the face's own, sampled once: only the
+        // crossings are the line's.
+        let cached = face_loops.1.borrow().get(&face_id).cloned();
+        let (sampled, hole_crossings) = hole_loops_along_line(
+            topo,
+            face,
+            frame,
+            line_start,
+            line_end,
+            tol,
+            cached.is_none(),
+        );
+        let hole_polys = cached.unwrap_or_else(|| {
+            let polys = std::rc::Rc::new(sampled);
+            face_loops.1.borrow_mut().insert(face_id, polys.clone());
+            polys
+        });
         let mut borders: Vec<f64> = crossings
             .iter()
             .chain(crossings_ext.iter())
@@ -4683,6 +4701,7 @@ fn hole_loops_along_line(
     line_start: Point3,
     line_end: Point3,
     tol: f64,
+    sample_polygons: bool,
 ) -> (Vec<Vec<brepkit_math::vec::Point2>>, Vec<f64>) {
     use brepkit_math::vec::Point2;
     let line_dir = line_end - line_start;
@@ -4711,7 +4730,9 @@ fn hole_loops_along_line(
                 continue;
             };
             let (sp, ep) = (sv.point(), ev.point());
-            poly.push(frame.project(sp));
+            if sample_polygons {
+                poly.push(frame.project(sp));
+            }
             let closed = oe.oriented_start(edge) == oe.oriented_end(edge);
             match edge.curve() {
                 EdgeCurve::Line => {
@@ -4750,19 +4771,25 @@ fn hole_loops_along_line(
                             }
                         }
                     }
-                    if closed && let EdgeCurve::Circle(c) = curve {
+                    if sample_polygons
+                        && closed
+                        && let EdgeCurve::Circle(c) = curve
+                    {
                         let a_seam = c.project(sp);
                         for k in 1..96 {
                             let a = std::f64::consts::TAU.madd(f64::from(k) / 96.0, a_seam);
                             poly.push(frame.project(c.evaluate(a)));
                         }
-                    } else if closed && let EdgeCurve::Ellipse(el) = curve {
+                    } else if sample_polygons
+                        && closed
+                        && let EdgeCurve::Ellipse(el) = curve
+                    {
                         let a_seam = el.project(sp);
                         for k in 1..96 {
                             let a = std::f64::consts::TAU.madd(f64::from(k) / 96.0, a_seam);
                             poly.push(frame.project(el.evaluate(a)));
                         }
-                    } else {
+                    } else if sample_polygons {
                         // Walk the edge's NATIVE span (`domain_with_endpoints`
                         // is the arc from the stored start to the stored end),
                         // then restore traversal order: a rim piece past 180
@@ -4825,10 +4852,11 @@ fn face_parameter_span(
         let edge = topo.edge(oe.edge()).ok()?;
         let sp = topo.vertex(edge.start()).ok()?.point();
         let ep = topo.vertex(edge.end()).ok()?.point();
+        let at = super::pcurve_compute::edge_point_at(edge.curve(), sp, ep);
         for i in 0..=8 {
             #[allow(clippy::cast_precision_loss)]
             let t = f64::from(i) / 8.0;
-            let p = super::pcurve_compute::evaluate_edge_at_t(edge.curve(), sp, ep, t);
+            let p = at(t);
             if let Some((u, v)) = surface.project_point(p) {
                 us.push(if along_v { v } else { u }.rem_euclid(TAU));
             }
