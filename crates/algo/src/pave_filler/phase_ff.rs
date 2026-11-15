@@ -8197,6 +8197,24 @@ fn emit_split_circle_arcs(
                 max.z().max(c.z() + r),
             );
         }
+        // A whole torus has no outline: its wire is the seam placeholders at
+        // one point, whose box holds no arc on the ring.
+        if let FaceSurface::Torus(torus) = face.surface()
+            && face_boundary_all_degenerate(topo, fid, tol).unwrap_or(false)
+        {
+            let r = torus.major_radius() + torus.minor_radius();
+            let c = torus.center();
+            min = Point3::new(
+                min.x().min(c.x() - r),
+                min.y().min(c.y() - r),
+                min.z().min(c.z() - r),
+            );
+            max = Point3::new(
+                max.x().max(c.x() + r),
+                max.y().max(c.y() + r),
+                max.z().max(c.z() + r),
+            );
+        }
         Some(Aabb3 { min, max }.expanded(tol.linear * 10.0))
     };
     let bbox_a = face_aabb(face_a);
