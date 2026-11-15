@@ -6230,10 +6230,14 @@ fn split_face_2d_impl(
                         if (s3 - e3).length() < tol.linear {
                             continue;
                         }
-                        let pcurve = super::pcurve_compute::compute_pcurve_on_surface(
+                        // A piece of a split rim can run more than a half
+                        // turn: it traces its own span, not the shorter arc
+                        // between its ends.
+                        let pcurve = super::pcurve_compute::compute_boundary_pcurve_on_surface(
                             e.curve(),
-                            s3,
-                            e3,
+                            vs.point(),
+                            ve.point(),
+                            oe.is_forward(),
                             &surface,
                             &wire_pts,
                             Some(frame),
@@ -9052,6 +9056,26 @@ fn split_face_2d_impl(
             }
         };
         let outer_uv: Vec<Vec<Point2>> = outers.iter().map(|(w, _)| sample_loop(w)).collect();
+        // An outer of lines and conic arcs read as it is: its polygon cuts
+        // each arc's corners off, by half a unit on a rim that is one circle
+        // of radius seven, and a loop that runs nearer the rim than that
+        // reads as outside it.
+        let outer_exact: Vec<Option<Vec<brepkit_math::region2d::Boundary2>>> = outers
+            .iter()
+            .map(|(w, _)| {
+                is_plane
+                    .then(|| containment::exact_hole(w, frame))
+                    .flatten()
+            })
+            .collect();
+        let within_exact = |pts: &[Point2]| {
+            outer_exact.iter().flatten().any(|pieces| {
+                pts.iter().all(|&p| {
+                    brepkit_math::region2d::point_in_region(pieces, p, tol.linear * 10.0)
+                        != Some(false)
+                })
+            })
+        };
         let mut promoted: Vec<Vec<OrientedPCurveEdge>> = Vec::new();
         holes.retain(|hole| {
             let hole_pts = sample_loop(hole);
@@ -9060,7 +9084,8 @@ fn split_face_2d_impl(
             }
             let nested = outer_uv
                 .iter()
-                .any(|o| loop_containment(&hole_pts, o) != LoopContainment::Outside);
+                .any(|o| loop_containment(&hole_pts, o) != LoopContainment::Outside)
+                || within_exact(&hole_pts);
             if nested {
                 true
             } else {
