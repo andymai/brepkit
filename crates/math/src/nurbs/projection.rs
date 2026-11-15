@@ -589,6 +589,10 @@ fn search_bezier_boxes(
     tolerance: f64,
     start: Option<SurfaceProjection>,
 ) -> Option<SurfaceProjection> {
+    // A direction of degree zero is a step, with no Bezier form to halve.
+    if surface.degree_u() == 0 || surface.degree_v() == 0 {
+        return start;
+    }
     let Ok(patches) = surface.bezier_patches() else {
         return start;
     };
@@ -1295,6 +1299,27 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A surface of degree zero along u has no Bezier patches to search.
+    #[test]
+    fn a_point_beside_a_surface_of_degree_zero_gets_the_plain_projection() {
+        let line = NurbsSurface::new(
+            0,
+            1,
+            vec![0.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![vec![Point3::new(0.0, 0.0, 0.0), Point3::new(0.0, 1.0, 0.0)]],
+            vec![vec![1.0, 1.0]],
+        )
+        .expect("a surface");
+        let point = Point3::new(0.0, 0.5, 1e-5);
+        let plain = project_point_to_surface(&line, point, 1e-6);
+        let near = project_point_near_surface(&line, point, 1e-6);
+        assert_eq!(
+            plain.ok().map(|p| (p.u, p.v)),
+            near.ok().map(|p| (p.u, p.v))
+        );
     }
 
     #[test]
