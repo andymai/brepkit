@@ -240,23 +240,23 @@ pub fn try_fillet(
     // one surface) is carrier topology, and a pick of it asks for nothing. A
     // tangent edge between two surfaces is a request that cannot be met, so
     // it fails the whole batch.
-    let filtered = brepkit_operations::query::filter_filletable_edges(topo, solid_id, edge_ids)?;
+    let inside = brepkit_operations::query::edges_in_one_surface(topo, solid_id, edge_ids)?;
+    let mut filtered =
+        brepkit_operations::query::filter_filletable_edges(topo, solid_id, edge_ids)?;
+    let with_an_angle = edge_ids
+        .iter()
+        .filter(|edge| !inside.contains(&edge.index()))
+        .count();
+    filtered.retain(|edge| !inside.contains(&edge.index()));
     if filtered.is_empty() {
         return Err(brepkit_operations::OperationsError::InvalidInput {
             reason: "none of the requested edges are filletable".to_owned(),
         });
     }
-    if filtered.len() != edge_ids.len() {
-        let inside = brepkit_operations::query::edges_in_one_surface(topo, solid_id, edge_ids)?;
-        let all_inside = edge_ids
-            .iter()
-            .filter(|edge| !filtered.contains(edge))
-            .all(|edge| inside.contains(&edge.index()));
-        if !all_inside {
-            return Err(brepkit_operations::OperationsError::InvalidInput {
-                reason: "some requested edges are not filletable".to_owned(),
-            });
-        }
+    if filtered.len() != with_an_angle {
+        return Err(brepkit_operations::OperationsError::InvalidInput {
+            reason: "some requested edges are not filletable".to_owned(),
+        });
     }
     let edges = filtered.as_slice();
 

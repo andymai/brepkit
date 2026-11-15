@@ -247,8 +247,11 @@ fn same_surface(a: &FaceSurface, b: &FaceSurface) -> bool {
     if let (FaceSurface::Plane { normal: na, d: da }, FaceSurface::Plane { normal: nb, d: db }) =
         (a, b)
     {
+        // The cross product reads the angle itself: `1 - |dot|` reads half
+        // its square, which a crease of 1e-6 rad passes.
         let dot = na.dot(*nb);
-        return 1.0 - dot.abs() < tol.angular && (da - db * dot.signum()).abs() < tol.linear;
+        return na.cross(*nb).length() <= tol.angular
+            && (da - db * dot.signum()).abs() < tol.linear;
     }
     let (FaceSurface::Nurbs(a), FaceSurface::Nurbs(b)) = (a, b) else {
         return crate::heal::surfaces_equivalent_pub(a, b);
@@ -403,6 +406,11 @@ mod tests {
         assert!(same_surface(&flat, &flat));
         assert!(same_surface(&flat, &turned_over));
         assert!(!same_surface(&flat, &tilted));
+        let barely_tilted = FaceSurface::Plane {
+            normal: Vec3::new(1e-6_f64.sin(), 0.0, 1e-6_f64.cos()),
+            d: 2.0,
+        };
+        assert!(!same_surface(&flat, &barely_tilted));
         assert!(!same_surface(&flat, &shifted));
     }
 
