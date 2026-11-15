@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794738215949,
+  "lastUpdate": 1794742003655,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -70631,6 +70631,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 19883206,
             "range": "± 318076",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b14ae6559bdf3cebb41be9b529dbdaf037cb4914",
+          "message": "fix(operations): mesh a spline face that bends back on its own surface (#2471)\n\n## Summary\n\nA blend surface with tangent weights of `[6, 6]` read an area of 125.25,\nand its faired copy read 245.08. The two surfaces agree to 5e-5. The\nsurface integral of `|Su x Sv|` is 125.27 for both, so the reading of\nthe faired copy was wrong.\n\n- The blend runs out, back and out again on the way across. The face\nmesher projects each boundary point onto the surface, and the projection\nstarts from a 9 x 9 grid of the surface. Near each end of this blend the\nsurface runs fast, so the grid stepped over the valley of a boundary\npoint there. The projection settled on the middle of the surface, 1.22\nfrom the point.\n- For the faired copy, the test for a face that is its whole surface\nthen failed, and the trimmed mesher put four boundary points at the\nparameters of the wrong part of the surface. The triangles on those\npoints added the area.\n- `project_point_near_surface` is new in `brepkit-math`. It is for a\npoint that the caller knows to be on the surface, or close beside it.\nWhen the plain projection ends farther away than the tolerance, it\nsearches the Bezier patches of the surface by halving, nearest control\nbox first. It drops each part whose control box is no nearer than the\nnearest point so far, less the tolerance. A part whose middle is nearer\nstarts a descent, and so does each part no larger than the nearest\ndistance so far. The patches come from the surface's kept split.\n- On a strip of one patch, the plain projection takes 0.74 us for each\npoint. The new one takes 1.2 us for a point within 1e-6 of the surface,\nand 14 to 16 us for a point 1e-5 or 1e-3 off it.\n- The face mesher uses it for boundary points of a spline face.\n\nThe blend in the issue does not fold. The least `|Su x Sv|` on it is\n24.6, and the surface rises while it turns. This holds at each weight:\nthe tests prove it from the control points for weights from 0.5 to 40,\nG1 and G2.\n\nA blend between two faces in one plane does fold past a weight of 3, and\n`blend_surface` returns it. That fault is #2469. A check that refuses\neach fold also refuses five blends in `tests/blend_surface.rs`, which\nhave a small fold at weights of 1, so it is not in this change.\n\n#2470 holds the same fault of the plain projection for its other\ncallers.\n\nCloses #2371\n\n## Tests\n\n`crates/operations/tests/blend_overshoot_area.rs`:\n\n- `a_blend_and_its_faired_copy_read_their_surface_area_at_every_weight`:\nweights 1, 3 and 6, upright, turned and mirrored. The blend and its\nfaired copy have the surface integral of the issue's table (63.88,\n71.41, 125.27). At deflections from 0.5 to 0.005, each mesh vertex is at\nthe point of its parameters, and the mesh area is the integral to a\nrelative 2e-3. It fails on `main` at weight 6.\n- `a_blend_between_two_heights_does_not_fold_at_any_weight`: 7 weights,\nG1 and G2, three poses, the blend and its faired copy.\n- `the_fold_measure_finds_a_blend_in_one_plane_that_turns_back`: the\nmeasure finds no fold below a weight of 3 and a fold above it.\n- `the_fold_measure_finds_a_fold_on_the_line_two_pieces_share`: a fold\non a knot line, the same two pieces without a fold, and a strip that\ncloses to a point.\n- `a_blend_in_one_plane_that_folds_is_refused`: ignored, for #2469.\n\n`crates/operations/tests/surface_fixtures/fold.rs` has the fold measure.\nOn one Bezier patch, the normal is a blend with positive weights of the\ncross products of each u step with each v step of the control points. If\nno product points against their sum, the normal does not vanish inside\nthe patch. Each side and each corner of a part also needs a product of\nits own along the sum, because only the steps at a side have weight on\nit. A part that fails is halved and read again.\n\n`crates/math/src/nurbs/projection.rs`:\n\n- `a_point_on_a_strip_that_bends_back_projects_to_itself`: 603 points of\na strip 10 long, and of one 20,000 long. `project_point_near_surface`\nreturns each point's own parameters. The test also requires that the\nplain projection strays for some of them.\n- `a_point_just_off_a_strip_that_bends_back_projects_to_its_foot`:\npoints 1e-7, 1e-5 and 1e-3 off the strip along its normal.\n-\n`a_point_beside_a_strip_that_runs_close_under_itself_gets_its_nearest_point`:\na strip 0.02 high, points 0.001 off it on both sides. The result is no\nfarther than the nearest of 40,001 samples.\n- `a_point_on_a_strip_of_many_spans_projects_to_itself`: 2,048 spans.\n- `a_point_beside_a_surface_of_degree_zero_gets_the_plain_projection`.\n#2479 holds the division by zero in the patch split.\n- `a_point_far_from_the_surface_gets_its_nearest_point`.\n\n`cargo test --release` on the math, check, operations, io and wasm\ncrates: 3760 passed, 22 ignored. The pose sweep and the truth audit give\nthe same lines as `main`. clippy and fmt are clean.",
+          "timestamp": "2026-11-15T11:23:08Z",
+          "tree_id": "7b0baf79ead26de6ea8e64c5418335439cc9f029",
+          "url": "https://github.com/andymai/brepkit/commit/b14ae6559bdf3cebb41be9b529dbdaf037cb4914"
+        },
+        "date": 1794741996304,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1094619,
+            "range": "± 139042",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1133109,
+            "range": "± 3877",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12751,
+            "range": "± 66",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 694004,
+            "range": "± 3182",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24543079,
+            "range": "± 63252",
             "unit": "ns/iter"
           }
         ]
