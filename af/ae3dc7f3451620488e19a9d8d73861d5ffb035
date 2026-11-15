@@ -1,0 +1,67 @@
+.release-please-manifest.json
+  s_709d857a0f83c4::t_fd663fa44afe74 2
+CHANGELOG.md
+  s_709d857a0f83c4::t_1ba3e64a7c683f 3-34
+Cargo.toml
+  s_709d857a0f83c4::t_8baa181c895132 15,58-68
+crates/algo/src/builder/face_splitter/mod.rs
+  s_709d857a0f83c4::t_c08ca4bcd484ab 6233-6236,6238-6240,7126-7132,7163-7164,9067-9086,9095-9096,9540-9570
+crates/algo/src/builder/fill_images_faces.rs
+  s_709d857a0f83c4::t_9849c89e7eafe1 4195-4236,4706-4714,4717,5854-5886
+crates/algo/src/builder/mod.rs
+  s_709d857a0f83c4::t_48ccb355ef23cd 698-709
+crates/algo/src/pave_filler/phase_ff.rs
+  s_709d857a0f83c4::t_e705d15e8dbf42 8200-8217,8576-8599,8614,8685-8690,8699-8705,8725-8727,8729-8732,8746,9335-9482
+crates/io/tests/data/robot_arm_base.bin
+  s_709d857a0f83c4::t_04a92c2436ad00 1
+crates/io/tests/data/robot_arm_column.bin
+  s_709d857a0f83c4::t_449afec92b1f11 1
+crates/io/tests/data/robot_arm_turret.bin
+  s_709d857a0f83c4::t_d2f9bb5c0a9b34 1
+crates/io/tests/robot_arm_column_fuse_inmem.rs
+  s_709d857a0f83c4::t_a82d95149a28e6 1-106
+crates/math/src/nurbs/projection.rs
+  s_709d857a0f83c4::t_0f7f9dbfb144fb 410-678,1238-1431
+crates/operations/src/query.rs
+  s_709d857a0f83c4::t_fdd3a1a382b897 241,256-291,478-503
+crates/operations/src/tessellate/face.rs
+  s_709d857a0f83c4::t_e9848575376b71 202
+crates/operations/src/tessellate/nonplanar.rs
+  s_709d857a0f83c4::t_a08d8a40e98bf2 3255-3257
+crates/operations/src/tessellate/nurbs.rs
+  s_709d857a0f83c4::t_ab193bea7dcdec 1670-1682
+crates/operations/tests/blend_overshoot_area.rs
+  s_709d857a0f83c4::t_7cd16091d11a7b 1-295
+crates/operations/tests/flange_on_a_tee.rs
+  s_709d857a0f83c4::t_24903726fa914a 1-141
+crates/operations/tests/plane_through_nurbs_edges.rs
+  s_709d857a0f83c4::t_cb7d04e2e514d3 11-12,44-47,60,84,86-88,112-123,126-130,139-142,144,155,163-188,193-198,250-328
+crates/operations/tests/ring_groove_round_a_flatted_rod.rs
+  s_709d857a0f83c4::t_a02eec71248685 1-168
+crates/operations/tests/spoke_into_a_ring.rs
+  s_709d857a0f83c4::t_67a0c391165ad7 1-136
+crates/operations/tests/surface_fixtures/fold.rs
+  s_709d857a0f83c4::t_4c85a58bf110d1 1-215
+crates/operations/tests/surface_fixtures/mod.rs
+  s_709d857a0f83c4::t_7b87656269fe90 6-7
+crates/wasm/src/bindings/operations.rs
+  s_709d857a0f83c4::t_600bafbd562efb 2914-2981
+crates/wasm/src/helpers.rs
+  s_709d857a0f83c4::t_ff3409159e86ee 424-427,434,436-438,2024
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "afae3dc7f3451620488e19a9d8d73861d5ffb035",
+  "prompts": {},
+  "sessions": {
+    "s_709d857a0f83c4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6cca9812-d77a-4dae-96f4-26562694b205",
+        "model": "claude-fable-5-2"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
