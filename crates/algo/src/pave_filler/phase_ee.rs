@@ -704,15 +704,15 @@ fn drop_crossings_along_one_curve(
             });
         crossings.push(corner);
     }
+    // Two junctions can be close: the two ends of a narrow bump. Only a
+    // crossing at the same place, within tolerance, stands for a junction.
     for at in joins {
-        if crossings
-            .iter()
-            .any(|&(t_a, _, _)| (t_a - at).abs() <= 4.0 * probe)
-        {
+        let (t_b, on_a) = (foot(at).0, at_a(at));
+        let point = on_a + (at_b(t_b) - on_a) * 0.5;
+        if crossings.iter().any(|hit| (hit.2 - point).length() <= tol) {
             continue;
         }
-        let (t_b, on_a) = (foot(at).0, at_a(at));
-        crossings.push((at, t_b, on_a + (at_b(t_b) - on_a) * 0.5));
+        crossings.push((at, t_b, point));
     }
 }
 
@@ -2172,10 +2172,11 @@ mod tests {
         }
     }
 
-    /// A cubic and the same curve with a smooth bump over one narrow span,
-    /// from 0.5 to 17/32 of it: between two sample points of both edges,
-    /// which all agree. The edges overlap up to the bump and after it, and
-    /// each end of the bump is one crossing.
+    /// A cubic and the same curve with a smooth bump over one narrow span:
+    /// from 0.5 to 17/32 of it, between two sample points of both edges,
+    /// which all agree, and from 0.5 to 0.50001 of it, 4.5e-5 long. The
+    /// edges overlap up to the bump and after it, and each end of the bump
+    /// is one crossing.
     #[test]
     fn a_bump_between_two_sample_points_ends_the_overlap_each_side() {
         use brepkit_math::nurbs::curve::NurbsCurve;
@@ -2190,37 +2191,40 @@ mod tests {
                 })
                 .collect()
         };
-        let (from, to) = (0.5, 17.0 / 32.0);
-        let mut bump = raised(bezier_part(&arch_poles(), from, to));
-        // `1.6 s^2 (1 - s)^2` along z: 0.1 at the middle of the span, and
-        // no step in place or direction at its ends.
-        bump[2] = bump[2] + Vec3::new(0.0, 0.0, 1.6 / 6.0);
-        let mut poles = raised(bezier_part(&arch_poles(), 0.0, from));
-        poles.extend(bump.into_iter().skip(1));
-        poles.extend(
-            raised(bezier_part(&arch_poles(), to, 1.0))
-                .into_iter()
-                .skip(1),
-        );
-        let mut knots = vec![0.0; 5];
-        knots.extend([from; 4]);
-        knots.extend([to; 4]);
-        knots.extend([1.0; 5]);
-        let bumped = NurbsCurve::new(4, knots, poles, vec![1.0; 13]).unwrap();
-        assert!((bumped.evaluate(0.3) - curve.evaluate(0.3)).length() < 1e-12);
-        assert!((bumped.evaluate(f64::midpoint(from, to)).z() - 0.1).abs() < 1e-12);
-
-        let mut topo = Topology::new();
-        let ea = edge_on(&mut topo, &curve, 0.0, 1.0);
-        let eb = edge_on(&mut topo, &bumped, 0.0, 1.0);
-        for (ea, eb) in [(ea, eb), (eb, ea)] {
-            let mut at: Vec<f64> = crossings(&topo, ea, eb).iter().map(|h| h.0).collect();
-            at.sort_by(f64::total_cmp);
-            assert_eq!(at.len(), 2, "{at:?}");
-            assert!(
-                (at[0] - from).abs() < 1e-3 && (at[1] - to).abs() < 1e-3,
-                "{at:?}"
+        let from = 0.5;
+        for to in [17.0 / 32.0, 0.500_01] {
+            let mut bump = raised(bezier_part(&arch_poles(), from, to));
+            // `1.6 s^2 (1 - s)^2` along z: 0.1 at the middle of the span,
+            // and no step in place or direction at its ends.
+            bump[2] = bump[2] + Vec3::new(0.0, 0.0, 1.6 / 6.0);
+            let mut poles = raised(bezier_part(&arch_poles(), 0.0, from));
+            poles.extend(bump.into_iter().skip(1));
+            poles.extend(
+                raised(bezier_part(&arch_poles(), to, 1.0))
+                    .into_iter()
+                    .skip(1),
             );
+            let mut knots = vec![0.0; 5];
+            knots.extend([from; 4]);
+            knots.extend([to; 4]);
+            knots.extend([1.0; 5]);
+            let bumped = NurbsCurve::new(4, knots, poles, vec![1.0; 13]).unwrap();
+            assert!((bumped.evaluate(0.3) - curve.evaluate(0.3)).length() < 1e-12);
+            assert!((bumped.evaluate(f64::midpoint(from, to)).z() - 0.1).abs() < 1e-12);
+
+            let mut topo = Topology::new();
+            let ea = edge_on(&mut topo, &curve, 0.0, 1.0);
+            let eb = edge_on(&mut topo, &bumped, 0.0, 1.0);
+            for (ea, eb) in [(ea, eb), (eb, ea)] {
+                let mut at: Vec<f64> = crossings(&topo, ea, eb).iter().map(|h| h.0).collect();
+                at.sort_by(f64::total_cmp);
+                assert_eq!(at.len(), 2, "to {to}: {at:?}");
+                let width = to - from;
+                assert!(
+                    (at[0] - from).abs() < 0.1 * width && (at[1] - to).abs() < 0.1 * width,
+                    "to {to}: {at:?}"
+                );
+            }
         }
     }
 
