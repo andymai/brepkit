@@ -1,0 +1,21 @@
+crates/math/src/nurbs/projection.rs
+  s_709d857a0f83c4::t_3efd750b89a7b8 410-411,417-421,423-425,580-583,585-588,606,624,628,630,633,635,644,651,655-656,1228-1241,1243-1245,1249,1252,1257-1298
+crates/operations/src/tessellate/nurbs.rs
+  s_709d857a0f83c4::t_47112daee57550 1675
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "382e2a0accc4d8ac63a426ba265d82651a61a164",
+  "prompts": {},
+  "sessions": {
+    "s_709d857a0f83c4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6cca9812-d77a-4dae-96f4-26562694b205",
+        "model": "claude-fable-5-2"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
