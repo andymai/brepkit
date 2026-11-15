@@ -206,13 +206,18 @@ pub fn edges_in_one_surface(
             let b = topo.vertex(edge.end())?.point();
             let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
             let mid = edge.curve().evaluate_with_endpoints(0.5 * (t0 + t1), a, b);
-            match (
-                outward_normal_near(topo, f1, mid),
-                outward_normal_near(topo, f2, mid),
-            ) {
-                (Some(n1), Some(n2)) => n1.dot(n2) > 0.9962,
-                _ => false,
-            }
+            let smooth = match topo.face(f1)?.surface() {
+                FaceSurface::Nurbs(surface) => smooth_across(surface, mid),
+                _ => true,
+            };
+            smooth
+                && match (
+                    outward_normal_near(topo, f1, mid),
+                    outward_normal_near(topo, f2, mid),
+                ) {
+                    (Some(n1), Some(n2)) => n1.dot(n2) > 0.9962,
+                    _ => false,
+                }
         } else {
             false
         };
@@ -323,8 +328,50 @@ fn same_surface(a: &FaceSurface, b: &FaceSurface) -> bool {
         && same_knots(a.knots_v(), b.knots_v())
         && same_points
         && same_rows(a.weights(), b.weights())
-        && !can_crease(a.knots_u(), a.degree_u())
-        && !can_crease(a.knots_v(), a.degree_v())
+}
+
+/// Whether a B-spline surface has one normal on each side of `point`.
+///
+/// A surface whose inner knot occurs as many times as its degree can have a
+/// corner there, and two faces on its two sides then meet at a real angle on
+/// one surface. A rational circle has such knots and no corner, so the test
+/// reads the normals a small step to each side.
+fn smooth_across(
+    surface: &brepkit_math::nurbs::surface::NurbsSurface,
+    point: brepkit_math::vec::Point3,
+) -> bool {
+    if !can_crease(surface.knots_u(), surface.degree_u())
+        && !can_crease(surface.knots_v(), surface.degree_v())
+    {
+        return true;
+    }
+    let face_surface = FaceSurface::Nurbs(surface.clone());
+    let Some((u, v)) = face_surface.project_point(point) else {
+        return false;
+    };
+    let span = |knots: &[f64]| match (knots.first(), knots.last()) {
+        (Some(&lo), Some(&hi)) => (lo, hi),
+        _ => (0.0, 1.0),
+    };
+    let (u0, u1) = span(surface.knots_u());
+    let (v0, v1) = span(surface.knots_v());
+    let (du, dv) = (1e-6 * (u1 - u0), 1e-6 * (v1 - v0));
+    let sides = [
+        ((u - du).max(u0), v),
+        ((u + du).min(u1), v),
+        (u, (v - dv).max(v0)),
+        (u, (v + dv).min(v1)),
+    ];
+    let mut normals = Vec::with_capacity(4);
+    for (su, sv) in sides {
+        let Ok(n) = surface.normal(su, sv) else {
+            return false;
+        };
+        normals.push(n);
+    }
+    normals
+        .iter()
+        .all(|n| normals.iter().all(|m| n.dot(*m) > 1.0 - 1e-6))
 }
 
 /// Whether a B-spline of this degree can have a corner at an inner knot: a
@@ -584,6 +631,35 @@ mod tests {
         };
         assert!(same_surface(&strip(1.0, 0.0), &strip(1.0, 0.0)));
         assert!(!same_surface(&strip(1.0, 1e12), &strip(0.5, 1e12)));
+
+        // A rational cylinder has doubled inner knots and no corner. A
+        // folded sheet of degree 1 has a corner along its inner knot.
+        let wall = brepkit_math::surfaces::CylindricalSurface::new(
+            Point3::new(0.0, 0.0, 0.0),
+            brepkit_math::vec::Vec3::new(0.0, 0.0, 1.0),
+            3.0,
+        )
+        .unwrap();
+        let rational = wall.to_nurbs(0.0, 10.0).unwrap();
+        assert!(can_crease(rational.knots_u(), rational.degree_u()));
+        let on_a_knot = rational.evaluate(0.25, 0.5);
+        assert!(smooth_across(&rational, on_a_knot));
+
+        let fold = NurbsSurface::new(
+            1,
+            1,
+            vec![0.0, 0.0, 1.0, 2.0, 2.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![
+                vec![Point3::new(0.0, 0.0, 0.0), Point3::new(0.0, 1.0, 0.0)],
+                vec![Point3::new(1.0, 0.0, 0.0), Point3::new(1.0, 1.0, 0.0)],
+                vec![Point3::new(1.0, 0.0, 1.0), Point3::new(1.0, 1.0, 1.0)],
+            ],
+            vec![vec![1.0; 2]; 3],
+        )
+        .unwrap();
+        assert!(!smooth_across(&fold, Point3::new(1.0, 0.5, 0.0)));
+        assert!(smooth_across(&fold, Point3::new(0.5, 0.5, 0.0)));
 
         assert!(!can_crease(&[0.0, 0.0, 0.0, 1.0, 2.0, 2.0, 2.0], 2));
         assert!(can_crease(&[0.0, 0.0, 0.0, 1.0, 1.0, 2.0, 2.0, 2.0], 2));
