@@ -299,6 +299,34 @@ pub fn try_fillet(
     })
 }
 
+/// Fillet edges as [`try_fillet`] does. If that fails, fillet the edges of
+/// the pick that lie between two plane faces.
+///
+/// An edge that is not on the solid's outer shell fails the call before the
+/// second pass, which would drop it.
+///
+/// # Errors
+///
+/// Returns an error if the pick names an edge off the outer shell, or if
+/// neither pass fillets the edges.
+pub fn try_fillet_or_its_planar_edges(
+    topo: &mut brepkit_topology::Topology,
+    solid_id: brepkit_topology::solid::SolidId,
+    edge_ids: &[brepkit_topology::edge::EdgeId],
+    radius: f64,
+) -> Result<brepkit_topology::solid::SolidId, brepkit_operations::OperationsError> {
+    refuse_edges_off_the_outer_shell(topo, solid_id, edge_ids, "filleting")?;
+    let error = match try_fillet(topo, solid_id, edge_ids, radius) {
+        Ok(solid) => return Ok(solid),
+        Err(error) => error,
+    };
+    let planar_edges = brepkit_operations::query::filter_planar_edges(topo, solid_id, edge_ids)?;
+    if planar_edges.is_empty() {
+        return Err(error);
+    }
+    try_fillet(topo, solid_id, &planar_edges, radius)
+}
+
 /// Fillet edges each along its radius law, as [`try_fillet`] fillets them at
 /// one radius: the walking engine's band is kept when it is a changed,
 /// closed, outward-oriented solid, and the planar rebuild, which closes each
@@ -2027,6 +2055,12 @@ mod fillet_tests {
 
         let error = try_fillet(&mut topo, hollow, &[outer, seam], 1.0)
             .expect_err("a cavity's edge must fail the batch");
+        assert!(
+            error.to_string().contains("an edge of a cavity"),
+            "unexpected error: {error}"
+        );
+        let error = super::try_fillet_or_its_planar_edges(&mut topo, hollow, &[outer, seam], 1.0)
+            .expect_err("the second pass must not drop a cavity's edge");
         assert!(
             error.to_string().contains("an edge of a cavity"),
             "unexpected error: {error}"

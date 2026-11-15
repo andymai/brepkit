@@ -199,10 +199,13 @@ pub fn edges_in_one_surface(
         let one_surface = if f1 == f2 {
             forward1 != forward2
         } else if same_surface(topo.face(f1)?.surface(), topo.face(f2)?.surface()) {
+            // The middle of the edge on its curve: the middle of an arc's
+            // chord can be on the axis of its surface, which has no normal.
             let edge = topo.edge(edge_id)?;
             let a = topo.vertex(edge.start())?.point();
             let b = topo.vertex(edge.end())?.point();
-            let mid = a + (b - a) * 0.5;
+            let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
+            let mid = edge.curve().evaluate_with_endpoints(0.5 * (t0 + t1), a, b);
             match (
                 outward_normal_near(topo, f1, mid),
                 outward_normal_near(topo, f2, mid),
@@ -250,8 +253,13 @@ fn same_surface(a: &FaceSurface, b: &FaceSurface) -> bool {
     let (FaceSurface::Nurbs(a), FaceSurface::Nurbs(b)) = (a, b) else {
         return crate::heal::surfaces_equivalent_pub(a, b);
     };
+    // Parts of one surface hold copies of it. The compare is relative, since
+    // a weight has no length scale.
     let same_values = |x: &[f64], y: &[f64]| {
-        x.len() == y.len() && x.iter().zip(y).all(|(&p, &q)| tol.approx_eq(p, q))
+        x.len() == y.len()
+            && x.iter()
+                .zip(y)
+                .all(|(&p, &q)| (p - q).abs() <= 1e-12 * p.abs().max(q.abs()))
     };
     let same_rows = |x: &[Vec<f64>], y: &[Vec<f64>]| {
         x.len() == y.len() && x.iter().zip(y).all(|(p, q)| same_values(p, q))
@@ -413,6 +421,36 @@ mod tests {
         let edges = brepkit_topology::explorer::face_edges(&topo, wall).unwrap();
         let inside = edges_in_one_surface(&topo, open, &edges).unwrap();
         assert_eq!(inside.len(), 1, "the seam only, and no rim: {inside:?}");
+    }
+
+    #[test]
+    fn a_balls_equator_lies_in_one_surface() {
+        let mut topo = Topology::new();
+        let ball = crate::primitives::make_sphere(&mut topo, 3.0, 16).unwrap();
+        let all = solid_edges(&topo, ball).unwrap();
+        let inside = edges_in_one_surface(&topo, ball, &all).unwrap();
+        assert_eq!(all.len(), 16);
+        assert_eq!(inside.len(), 16, "each edge is between the two halves");
+    }
+
+    #[test]
+    fn two_spline_surfaces_with_other_weights_are_two_surfaces() {
+        use brepkit_math::nurbs::surface::NurbsSurface;
+        use brepkit_math::vec::Point3;
+
+        let patch = |w: f64| {
+            let points = vec![
+                vec![Point3::new(0.0, 0.0, 0.0), Point3::new(0.0, 1.0, 0.0)],
+                vec![Point3::new(1.0, 0.0, 0.0), Point3::new(1.0, 1.0, 1.0)],
+            ];
+            let weights = vec![vec![1e-8, 1e-8], vec![1e-8, w]];
+            let knots = vec![0.0, 0.0, 1.0, 1.0];
+            FaceSurface::Nurbs(
+                NurbsSurface::new(1, 1, knots.clone(), knots, points, weights).unwrap(),
+            )
+        };
+        assert!(same_surface(&patch(1e-8), &patch(1e-8)));
+        assert!(!same_surface(&patch(1e-8), &patch(3e-8)));
     }
 
     #[test]
