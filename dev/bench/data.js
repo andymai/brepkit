@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794733404472,
+  "lastUpdate": 1794735669161,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -70469,6 +70469,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24608447,
             "range": "± 93857",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "3b4664af329118e95817ba8f08c1f12ebbb676d2",
+          "message": "chore(main): release 4.11.21 (#2492)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[4.11.21](https://github.com/andymai/brepkit/compare/v4.11.20...v4.11.21)\n(2026-11-15)\n\n\n### Bug Fixes\n\n* **algo:** classify a wall with a saddle hole that no section cuts\n([#2480](https://github.com/andymai/brepkit/issues/2480))\n([a3505ba](https://github.com/andymai/brepkit/commit/a3505ba1cdd5891fcad96c691c310e3f5f3e4859))\n* **algo:** end a section at the vertex where two spline edges meet\n([#2461](https://github.com/andymai/brepkit/issues/2461))\n([026bee5](https://github.com/andymai/brepkit/commit/026bee50f9c01da9457bc3b34a2f50745ead0234))\n* **algo:** keep a wall's arcs on a whole torus ring\n([#2483](https://github.com/andymai/brepkit/issues/2483))\n([309dc70](https://github.com/andymai/brepkit/commit/309dc7028e71605fc7a718c498f175dbeb190318))\n* **algo:** split a ring's cap where a spoke from the bore ends in it\n([#2481](https://github.com/andymai/brepkit/issues/2481))\n([7ea8e30](https://github.com/andymai/brepkit/commit/7ea8e30ee4ad2837aa9959116acb905d21d55ddd))\n* **algo:** split an opening's rim where a curved section ends on it\n([#2482](https://github.com/andymai/brepkit/issues/2482))\n([df619c3](https://github.com/andymai/brepkit/commit/df619c3eba993aeb7a5097f2d1c8b021016a9141))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-11-15T09:38:16Z",
+          "tree_id": "8933517c4f1721b5a23fc3b2084a3d02f4498868",
+          "url": "https://github.com/andymai/brepkit/commit/3b4664af329118e95817ba8f08c1f12ebbb676d2"
+        },
+        "date": 1794735659660,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 637812,
+            "range": "± 21269",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 648413,
+            "range": "± 14670",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 7786,
+            "range": "± 129",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 412821,
+            "range": "± 4407",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 14073611,
+            "range": "± 64707",
             "unit": "ns/iter"
           }
         ]
