@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.11.23](https://github.com/andymai/brepkit/compare/v4.11.22...v4.11.23) (2026-11-15)
+
+
+### Bug Fixes
+
+* **operations:** mesh a spline face that bends back on its own surface ([#2471](https://github.com/andymai/brepkit/issues/2471)) ([b14ae65](https://github.com/andymai/brepkit/commit/b14ae6559bdf3cebb41be9b529dbdaf037cb4914))
+
 ## [4.11.22](https://github.com/andymai/brepkit/compare/v4.11.21...v4.11.22) (2026-11-15)
 
 
