@@ -1069,14 +1069,26 @@ fn propagate_split(
     // The sub-edges deliberately get none: downstream consumers regenerate
     // lazily (boolean assembly) or fall back to direct surface projection
     // (tessellation), matching every other edge the blend engine creates.
-    let stale_faces: Vec<FaceId> = topo
+    // A face out of scope keeps the edge whole, and so keeps its pcurve.
+    let on_edge: Vec<FaceId> = topo
         .pcurves()
         .pcurves_for_edge(old_edge)
         .into_iter()
         .map(|(fid, _)| fid)
         .collect();
-    for fid in stale_faces {
-        topo.pcurves_mut().remove(old_edge, fid);
+    for fid in on_edge {
+        let face = topo.face(fid)?;
+        let mut still_used = false;
+        for wire in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            still_used |= topo
+                .wire(wire)?
+                .edges()
+                .iter()
+                .any(|oe| oe.edge() == old_edge);
+        }
+        if !still_used {
+            topo.pcurves_mut().remove(old_edge, fid);
+        }
     }
     Ok(())
 }
@@ -4592,6 +4604,55 @@ mod tests {
         assert!(
             !topo.pcurves().contains(edges[0], neighbor),
             "stale pcurve entry for the replaced edge must be removed"
+        );
+    }
+
+    #[test]
+    fn a_face_out_of_scope_keeps_its_edge_and_its_pcurve() {
+        use brepkit_math::curves2d::{Curve2D, Line2D};
+        use brepkit_math::vec::{Point2, Vec2};
+        use brepkit_topology::pcurve::PCurve;
+
+        let mut topo = Topology::new();
+        let (face_id, verts, edges) = make_square_face(&mut topo);
+        let neighbor = attach_neighbor_below(&mut topo, verts[0], verts[1], edges[0]);
+        let line = Line2D::new(Point2::new(0.0, 0.0), Vec2::new(1.0, 0.0)).unwrap();
+        topo.pcurves_mut().set(
+            edges[0],
+            neighbor,
+            PCurve::new(Curve2D::Line(line), 0.0, 1.0),
+        );
+        let scope = SplitScope {
+            faces: vec![face_id],
+            wires: vec![topo.face(face_id).unwrap().outer_wire()],
+            first_new_face: topo.num_faces(),
+            first_new_wire: topo.num_wires(),
+        };
+
+        let contact_3d = vec![Point3::new(0.5, 0.0, 0.0), Point3::new(0.5, 1.0, 0.0)];
+        let contact_uv = vec![(0.5, 0.0), (0.5, 1.0)];
+        trim_face(
+            &mut topo,
+            &scope,
+            face_id,
+            &contact_3d,
+            &contact_uv,
+            TrimKeep::Side(TrimSide::Left),
+        )
+        .expect("trim should succeed");
+
+        let wire = topo.face(neighbor).unwrap().outer_wire();
+        assert!(
+            topo.wire(wire)
+                .unwrap()
+                .edges()
+                .iter()
+                .any(|oe| oe.edge() == edges[0]),
+            "a face out of scope keeps the whole edge"
+        );
+        assert!(
+            topo.pcurves().contains(edges[0], neighbor),
+            "and the pcurve of that edge"
         );
     }
 

@@ -390,6 +390,10 @@ impl Topology {
     /// The cost is the entities that `edit` changes and adds. It does not
     /// depend on how many entities the topology holds. Transactions can nest.
     ///
+    /// The record of the transaction is part of the topology. Do not put
+    /// another topology, or another pcurve registry, in the place of this
+    /// one in `edit`: the record goes with the old one, and the undo with it.
+    ///
     /// # Errors
     ///
     /// Returns the error of `edit`.

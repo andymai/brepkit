@@ -546,6 +546,47 @@ mod tests {
     }
 
     #[test]
+    fn a_panic_in_a_transaction_puts_the_topology_back() {
+        let (mut topo, e0, face) = make_simple_topology();
+        let e1 = topo.edge_id_from_index(1).unwrap();
+        let v0 = topo.vertex_id_from_index(0).unwrap();
+        topo.pcurves_mut().set(e0, face, line_pcurve(1.0));
+        topo.pcurves_mut().set(e1, face, line_pcurve(2.0));
+        let order = |t: &Topology| -> Vec<EdgeId> {
+            let found = t.pcurves().pcurves_for_face(face);
+            found.into_iter().map(|(edge, _)| edge).collect()
+        };
+        let counts = |t: &Topology| (t.num_vertices(), t.num_edges(), t.pcurves().len());
+        let before = (counts(&topo), order(&topo));
+
+        let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _: Result<(), ()> = topo.transaction(|topo| {
+                *topo.vertex_mut(v0).unwrap() = Vertex::new(Point3::new(9.0, 9.0, 9.0), 1e-7);
+                let made = topo.add_edge(Edge::new(v0, v0, EdgeCurve::Line));
+                topo.pcurves_mut().set(made, face, line_pcurve(3.0));
+                topo.pcurves_mut().set(e1, face, line_pcurve(4.0));
+                topo.pcurves_mut().remove(e0, face);
+                std::panic::resume_unwind(Box::new("stop"));
+            });
+        }));
+
+        assert!(unwound.is_err());
+        assert_eq!((counts(&topo), order(&topo)), before);
+        assert!(topo.vertex(v0).unwrap().point().x().abs() < 1e-12);
+        assert!((topo.pcurves().get(e1, face).unwrap().t_end() - 2.0).abs() < 1e-12);
+
+        // The next transaction starts clean: its failure undoes only itself.
+        let failed: Result<(), ()> = topo.transaction(|topo| {
+            topo.pcurves_mut().remove(e1, face);
+            Err(())
+        });
+        assert!(failed.is_err());
+        assert_eq!((counts(&topo), order(&topo)), before);
+        topo.pcurves_mut().remove(e1, face);
+        assert_eq!(topo.pcurves().len(), 1);
+    }
+
+    #[test]
     fn a_copy_made_in_a_transaction_has_no_open_transaction() {
         let (mut topo, e0, face) = make_simple_topology();
         let v0 = topo.vertex_id_from_index(0).unwrap();
