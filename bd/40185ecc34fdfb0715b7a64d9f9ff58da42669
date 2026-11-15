@@ -1,0 +1,30 @@
+crates/check/src/validate/face_wires.rs
+  s_709d857a0f83c4::t_1849cf0bef499c 1-453
+  s_709d857a0f83c4::t_feb8ec0d9610fc 454-456
+CLAUDE.md
+  s_709d857a0f83c4::t_446daa826ba1b8 244
+crates/check/src/validate/checks.rs
+  s_709d857a0f83c4::t_cddff1359edda4 39-41
+crates/check/src/validate/mod.rs
+  s_709d857a0f83c4::t_39563f61edc684 6,174-183
+crates/operations/src/validate.rs
+  s_709d857a0f83c4::t_8a4eeaaf432451 398-400,972-973,1051-1074,1303-1304
+crates/topology/src/planar.rs
+  s_709d857a0f83c4::t_9db8fdba3c12e7 478-485,487,506,509,518,543-573,577
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "bd40185ecc34fdfb0715b7a64d9f9ff58da42669",
+  "prompts": {},
+  "sessions": {
+    "s_709d857a0f83c4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6cca9812-d77a-4dae-96f4-26562694b205",
+        "model": "claude-fable-5-2"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
