@@ -593,8 +593,8 @@ impl<'a> FilletBuilder<'a> {
                 topo.face(face_id)
                     .is_ok_and(|face| face.surface().is_planar())
             });
-        // A terminal vertex whose third face is a planar cap with straight
-        // corner edges takes the notch: the spoke splits there on every
+        // A terminal vertex whose third face is a planar cap that both
+        // contacts end on takes the notch: the spoke splits there on every
         // face and the cap adopts the cross-section arc. Any other terminal
         // keeps the runout closure, which expects the whole spoke. Without a
         // plan every source vertex is treated as an unsplit terminal.
@@ -3852,8 +3852,8 @@ fn run_stripes_to_tilted_caps(
 }
 
 /// Whether a stripe's terminal vertex sits on a planar cap whose two edges
-/// at the vertex are straight or B-splines (a spline profile's rim), or on a
-/// curved cap the stripe was run on to: the end-cap notch can replace that
+/// at the vertex the stripe's contacts end on (lines, a spline profile's
+/// rim, or a vault's end arc), or on a curved cap the stripe was run on to: the end-cap notch can replace that
 /// corner path with the stripe's end curve. A notch that would cross another
 /// boundary of its cap is an error.
 fn terminal_cap_is_notchable(
@@ -3933,15 +3933,9 @@ fn terminal_cap_is_notchable(
         if edge.start() != junction.vertex && edge.end() != junction.vertex {
             continue;
         }
-        // A straight corner edge or a B-spline (a spline wall's rim): the
-        // trim splits either where the contact ends on it.
-        if !matches!(
-            edge.curve(),
-            brepkit_topology::edge::EdgeCurve::Line
-                | brepkit_topology::edge::EdgeCurve::NurbsCurve(_)
-        ) {
-            return Ok(false);
-        }
+        // The trim splits a corner edge of any kind where the contact ends
+        // on it: a line, a B-spline (a spline wall's rim), or an arc (the
+        // end of a vault).
         let (Ok(a), Ok(b)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) else {
             return Ok(false);
         };
@@ -3978,6 +3972,20 @@ fn terminal_cap_is_notchable(
                     .is_ok_and(|found| {
                         found.distance <= reach && (low..=high).contains(&found.parameter)
                     });
+            }
+            let turn = match curve {
+                brepkit_topology::edge::EdgeCurve::Circle(circle) => Some(circle.project(point)),
+                brepkit_topology::edge::EdgeCurve::Ellipse(ellipse) => Some(ellipse.project(point)),
+                brepkit_topology::edge::EdgeCurve::Line
+                | brepkit_topology::edge::EdgeCurve::NurbsCurve(_) => None,
+            };
+            if let Some(turn) = turn {
+                // Within the arc's own span, from its start.
+                const TAU: f64 = std::f64::consts::TAU;
+                let (t0, t1) = curve.domain_with_endpoints(a, b);
+                let along = (turn - t0).rem_euclid(TAU);
+                return (along <= t1 - t0 + 1e-9 || along >= TAU - 1e-9)
+                    && (curve.evaluate_with_endpoints(turn, a, b) - point).length() <= reach;
             }
             let ab = b - a;
             let len2 = ab.length_squared();
