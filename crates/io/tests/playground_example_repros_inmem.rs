@@ -6,8 +6,10 @@
 use std::path::Path;
 
 use brepkit_io::arena_io::deserialize_solid;
+use brepkit_math::vec::Point3;
 use brepkit_operations::blend_ops::{all_blended, chamfer_v2};
 use brepkit_operations::boolean::{BooleanOp, BooleanOptions, boolean_with_options};
+use brepkit_operations::classify::{PointClassification, classify_point};
 use brepkit_operations::tessellate::{is_watertight, tessellate_solid};
 use brepkit_operations::validate::validate_solid;
 use brepkit_topology::Topology;
@@ -30,8 +32,35 @@ fn assert_holds(topo: &Topology, solid: SolidId) {
     );
 }
 
-/// The exact fuse, which must be a valid solid that keeps a curved face.
-fn fuse_exactly(topo: &mut Topology, a: SolidId, b: SolidId) -> SolidId {
+fn class_of(topo: &Topology, solid: SolidId, at: [f64; 3]) -> PointClassification {
+    let tol = brepkit_math::tolerance::Tolerance::new();
+    classify_point(
+        topo,
+        solid,
+        Point3::new(at[0], at[1], at[2]),
+        0.01,
+        tol.linear,
+    )
+    .unwrap()
+}
+
+/// The exact fuse of `a` and `b`: a valid, watertight solid that keeps a
+/// curved face, holds `in_a` (in `a` alone) and `in_b` (in `b` alone), and
+/// does not hold `off`.
+fn fuse_exactly(
+    topo: &mut Topology,
+    a: SolidId,
+    b: SolidId,
+    in_a: [f64; 3],
+    in_b: [f64; 3],
+    off: [f64; 3],
+) {
+    use PointClassification::{Inside, Outside};
+    for (solid, own, other) in [(a, in_a, in_b), (b, in_b, in_a)] {
+        assert_eq!(class_of(topo, solid, own), Inside, "probe {own:?}");
+        assert_eq!(class_of(topo, solid, other), Outside, "probe {other:?}");
+        assert_eq!(class_of(topo, solid, off), Outside, "probe {off:?}");
+    }
     let exact = BooleanOptions {
         mesh_fallback: false,
         ..BooleanOptions::default()
@@ -46,7 +75,13 @@ fn fuse_exactly(topo: &mut Topology, a: SolidId, b: SolidId) -> SolidId {
             .is_planar()),
         "no curved face is left"
     );
-    fused
+    assert_eq!(class_of(topo, fused, in_a), Inside, "material of the first");
+    assert_eq!(
+        class_of(topo, fused, in_b),
+        Inside,
+        "material of the second"
+    );
+    assert_eq!(class_of(topo, fused, off), Outside, "a point off the two");
 }
 
 /// `mars-rover`: a wheel's thin shell (radii 249.25 and 250) with four other
@@ -58,7 +93,16 @@ fn a_grouser_fuses_onto_a_wheel() {
     let mut topo = Topology::new();
     let wheel = load("mars_rover_wheel.bin", &mut topo);
     let grouser = load("mars_rover_grouser.bin", &mut topo);
-    fuse_exactly(&mut topo, wheel, grouser);
+    // In the shell's wall away from the grouser, in the grouser past the
+    // shell, and in the bore.
+    fuse_exactly(
+        &mut topo,
+        wheel,
+        grouser,
+        [0.0, 249.6, 0.0],
+        [255.0, 15.84, 100.0],
+        [0.0, 0.0, 0.0],
+    );
 }
 
 /// `robot-arm`: the turret's cap, a cylinder with a cone on it, and a yoke
@@ -70,7 +114,16 @@ fn a_yoke_with_rounded_arms_fuses_onto_the_turrets_cap() {
     let mut topo = Topology::new();
     let cap = load("robot_arm_shoulder_cap.bin", &mut topo);
     let yoke = load("robot_arm_shoulder_yoke.bin", &mut topo);
-    fuse_exactly(&mut topo, cap, yoke);
+    // In the cap under the yoke, in the middle of one arm of the yoke, and
+    // beside that arm.
+    fuse_exactly(
+        &mut topo,
+        cap,
+        yoke,
+        [0.0, 0.0, 170.0],
+        [0.0, -49.0, 250.0],
+        [0.0, -60.0, 250.0],
+    );
 }
 
 /// `pocket-watch`: a bridge plate whose top outline, at z = 3.15, is 6 lines
