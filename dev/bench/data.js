@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794714033498,
+  "lastUpdate": 1794716017570,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -69767,6 +69767,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 19498061,
             "range": "± 51560",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "8a3720562f30eaf456c10170b8daab7dbd06f9ad",
+          "message": "fix(operations): scale a solid by a small uniform factor (#2447)\n\n## Summary\n\nA uniform scale by 0.002 or less failed with \"transform matrix is\ndegenerate (zero determinant)\".\n\n- `transform_solid`, `transform_face`, `transform_wire` and\n`copy_and_transform_solid` compared the determinant with the length\ntolerance of 1e-7. The determinant of a uniform scale by `s` is `s³`,\nwhich is 8e-9 at `s = 0.002`.\n- The check now inverts the linear block of an affine matrix by\nelimination with row pivots, on rows scaled to unit length. A pivot at\nthe size of the rounding of a unit row means no inverse. The answer does\nnot change with the size of the scale or with the translation, so a\nsmall scale about a centre far from the origin also passes.\n- A matrix with a component that is not finite is refused, and so is a\nmatrix whose inverse has such a component.\n- The three mirror tests read the sign from the same pivots. The\ndeterminant of a mirror scale by 1e-110 underflows to zero, and the\nwires of the result stayed unreversed.\n\nCloses #2376\n\n## Tests\n\n`crates/operations/tests/scale_dependent.rs`:\n\n- `a_small_uniform_scale_keeps_the_solid`: a box, a cylinder and a\nsphere, scaled by 0.005, 0.002, 0.0011, 0.001, 1e-4, 1e-5, 1e-6 and\n1e-7, in place and as a copy. Each volume is its closed form to a\nrelative 1e-9, and each shell is manifold. It fails on `main` at 0.002.\n- `a_small_scale_about_a_far_centre_keeps_the_solid`: a box at x =\n100000, scaled by 0.002 and by 1e-7 about its own corner.\n- `a_matrix_with_no_inverse_is_refused`: a scale with a zero factor, the\nsame with two factors of 1e-7 and of 1e-80, and a matrix with a NaN are\nrefused by the solid, face and wire transforms and by the copy. The\nsolid stays as it was.\n\n`crates/operations/src/transform/tests.rs`:\n\n- The inverse times the matrix is the identity for 9 affine matrices:\nscales from 1e-200 to 1e200, turns, large translations, and a block\nwhose rows are almost one direction.\n- 7 matrices with no inverse are refused.\n- `is_mirror` is right for scales from 1e-200 to 1e110, and a box\nmirrored at a scale of 1e-110 keeps each boundary counter-clockwise\nabout its outward normal, in place and as a copy. A cylinder mirrored at\nthat scale, and scaled back, has its closed-form volume: the normal of a\nmoved circle now comes from its unit axes.\n\nThe 50 `transform` and `copy` unit tests, the 8 tests of\n`scale_dependent`, and the `mirror_mixed_faces`,\n`mirrored_cylinder_corner` and `non_uniform_scale_mesh` tests pass.\nclippy and fmt are clean.",
+          "timestamp": "2026-11-15T04:10:49Z",
+          "tree_id": "8dcc696bf0aa5e58b14f070c0de5be1ae5a58277",
+          "url": "https://github.com/andymai/brepkit/commit/8a3720562f30eaf456c10170b8daab7dbd06f9ad"
+        },
+        "date": 1794716005893,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 608086,
+            "range": "± 2795",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 646701,
+            "range": "± 14769",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 7612,
+            "range": "± 42",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 385909,
+            "range": "± 3834",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 14666275,
+            "range": "± 391510",
             "unit": "ns/iter"
           }
         ]
