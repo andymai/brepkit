@@ -130,11 +130,7 @@ pub(super) fn check_vertex_edge_pairs(
                 if let Some(pb_ids) = arena.edge_pave_blocks.get(&eid) {
                     let pb_ids_copy: Vec<_> = pb_ids.clone();
                     for pb_id in pb_ids_copy {
-                        if arena
-                            .pave_blocks
-                            .get(pb_id)
-                            .is_some_and(|pb| pb.spans_interior(param))
-                        {
+                        if super::helpers::block_spans_interior(topo, arena, pb_id, param) {
                             arena.add_extra_pave(topo, pb_id, pave);
                         }
                     }
