@@ -1,0 +1,19 @@
+crates/check/src/validate/face_wires.rs
+  s_709d857a0f83c4::t_8061a59ea586c8 75-76,130-135,233-313,316-318,320-327,329-331,334,534-536,559-560,565-566,967-1068
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "39d8248b06901c078f68400dffd6d48768b4dda4",
+  "prompts": {},
+  "sessions": {
+    "s_709d857a0f83c4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6cca9812-d77a-4dae-96f4-26562694b205",
+        "model": "claude-fable-5-2"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
