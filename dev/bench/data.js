@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794699727855,
+  "lastUpdate": 1794714033498,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -69713,6 +69713,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24283484,
             "range": "± 119253",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c8b7eb138f710955f32c9e6ece1ee9d6e2e8bb0d",
+          "message": "fix(io): join the triangles of an imported mesh at their edges (#2448)\n\n## Summary\n\nA mesh import gave each triangle three edges of its own, so no two faces\nof the result were joined. A box read from an STL file came back as one\nsolid in 12 pieces (`getSolidPieces`), and a mesh that does not close\ncame back as a solid.\n\nTriangles that use the same two points now share one edge. The triangles\njoined through shared edges are one body.\n\n- A body closes when each of its edges has two triangles that run it in\nopposite directions. Triangles of a closed body that are wound against\ntheir neighbours are turned.\n- A closed body that faces outward is a solid, also when it lies in\nanother body.\n- A closed body that faces inward is a cavity of the outward body that\nit lies directly in. In any other place (in no body, or directly in\nanother inward body), it is turned and becomes a solid.\n- Each other body is a shell: an open sheet, a set with an edge that\nmore than two triangles use, a one-sided surface, and a closed set with\nno volume.\n- A closed body takes the side of most of its triangles as they are\nwound. It is turned over when its stored normals, summed over the body,\npoint against that side. Normals in one direction for each vertex (a\nreader's fill for a file with none) sum to zero over a closed body and\nleave the winding. In a body that does not close, a normal against a\ntriangle's winding turns the triangle, as before.\n- Each body has vertices of its own. Two bodies that touch at a point\nshare no vertex, so a transform of one does not move the other.\n\nAPI:\n\n- `brepkit_io::stl::import_mesh_parts` returns `MeshImport { solids,\nshells }`.\n- `import_mesh` keeps its signature. It returns the closed bodies as one\nsolid: the outside of each body in the outer shell, and each cavity as\nan inner shell. It now returns an error for a mesh with a part that does\nnot close, and for a mesh with a body in the material of another body\n(as pieces of one solid, the inner body reads as a cavity). A refused\nimport adds nothing to the topology. `read_stl_solid`, `read_obj_solid`,\n`read_ply_solid` and `read_threemf_solid` use it.\n- New wasm bindings `importStlParts`, `importObjParts`,\n`importGlbParts`, `import3mfParts` and `importIndexedMeshParts` return a\nJSON string `{ solids: number[], shells: number[] }` (an array of these\nfor 3MF, one for each object). `importStl`, `importObj`, `importGlb`,\n`import3mf` and `importIndexedMesh` return an error in the same two\ncases.\n- The import refuses an index past the end of the positions. Before, it\nwas a panic.\n- A grid finds the positions to merge. Before, each position was\ncompared with each kept point.\n\nCloses #2375\n\n## Tests\n\n- `crates/io/tests/mesh_import_bodies.rs`, 24 tests: a cube (one solid,\none shell, 18 edges, 8 vertices, valid, one piece), an STL box, two\ncubes, an inward cube in a cube, an outward cube in a cube (two solids\nfrom `import_mesh_parts`, an error from `import_mesh` that adds\nnothing), an outward cube in an inward cube (the same), an island in a\ncavity, an inward cube in a cavity, an inward cube alone, a triangle\nwound against its neighbours, two cubes that touch at a corner (16\nvertices, and a move of one leaves the other valid), an open sheet, a\nsheet and a loose triangle beside a cube, a cube with a side missing,\ntwo triangles back to back, an index past the positions, the merge\ntolerance, normals in one direction on a cube with a cavity, normals\nagainst the winding of a body, a box of 1000 by 0.0001 by 0.0001, a body\nthat touches the corner of its container, 2000 triangles on one edge,\nand a cavity 0.00002 from the wall of a box of 1000000 by 0.0001 by\n0.0001. Each volume is its closed form to 1e-9 (1e-6 through STL).\n- `crates/wasm/src/bindings/io.rs`, 4 tests: `importIndexedMesh` and\n`importStl` give one shell and one piece, two cubes and a triangle give\ntwo solids and a shell, and an open mesh is no solid.\n- On `main`, the STL box has 12 pieces.\n\nThe 160 unit tests of `brepkit-io`, the 25 tests of `cross_format` and\n279 unit tests of `brepkit-wasm` pass (4 more are ignored, as on\n`main`). clippy and fmt are clean.\n\n## Next steps\n\nbrepjs reads a shell or a compound from a mesh file only after its\nadapter calls the `import*Parts` bindings.",
+          "timestamp": "2026-11-15T03:37:20Z",
+          "tree_id": "99f0267389a44a2bb401dc28c2ec487a39cc43fe",
+          "url": "https://github.com/andymai/brepkit/commit/c8b7eb138f710955f32c9e6ece1ee9d6e2e8bb0d"
+        },
+        "date": 1794714023835,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 910636,
+            "range": "± 7590",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 963097,
+            "range": "± 16858",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 9282,
+            "range": "± 42",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 592669,
+            "range": "± 8723",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 19498061,
+            "range": "± 51560",
             "unit": "ns/iter"
           }
         ]
