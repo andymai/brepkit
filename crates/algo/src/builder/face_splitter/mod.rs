@@ -9144,7 +9144,20 @@ fn split_face_2d_impl(
                     super::classify_2d::point_in_polygon_2d(ip, hp)
                         && super::classify_2d::distance_to_polygon_boundary(ip, hp) > hole_margin
                 });
-                if let Some(hole_poly) = matched_hole {
+                // A region that holds a hole is not inside one: the point
+                // read off its outline alone can lie in the hole it holds (a
+                // ring's outer rim, whose middle is the middle of its hole).
+                let holds_a_hole = matched_hole.is_some()
+                    && containment::exact_hole(&outer_wire, frame).is_some_and(|outline| {
+                        original_inner_wires.iter().flatten().any(|e| {
+                            brepkit_math::region2d::point_in_region(
+                                &outline,
+                                frame.project(e.start_3d),
+                                hole_margin,
+                            ) == Some(true)
+                        })
+                    });
+                if let Some(hole_poly) = matched_hole.filter(|_| !holds_a_hole) {
                     if trace_split {
                         log::debug!(
                             "STRACE-DROP face={face_id:?} in-hole island (ip=({:.4},{:.4}))",

@@ -158,7 +158,14 @@ pub fn build_wire_loops_with_winding(
             // still order by curvature.
             let score = |entry: &VertexEntry| {
                 let turn = turn_score(incoming_angle, entry.angle);
-                if continues_straight(incoming_exact, entry.exact) {
+                if continues_straight(incoming_exact, entry.exact)
+                    || continues_one_conic(
+                        current_edge,
+                        &edges[entry.edge_idx],
+                        incoming_angle,
+                        entry.angle,
+                    )
+                {
                     TAU + turn
                 } else {
                     turn
@@ -796,6 +803,51 @@ fn continues_straight(incoming: Option<f64>, outgoing: Option<f64>) -> bool {
     !(STRAIGHT..=TAU - STRAIGHT).contains(&da)
 }
 
+/// Whether a boundary piece leaving a vertex runs on along the circle or
+/// ellipse the arriving boundary piece lies on.
+///
+/// Two pieces of one conic meet at a shared point with one tangent line,
+/// so a piece that leaves within a quarter turn of the travel direction
+/// continues the arriving piece exactly. Their pcurves are fitted piece by
+/// piece and their end derivatives differ by up to 6e-5 (a 60 degree piece
+/// after a 30 degree piece of a hole's rim), which [`continues_straight`]
+/// reads as a turn: toward the hole where the rim curves that way, and the
+/// walk then passes the section that leaves the rim at that vertex.
+fn continues_one_conic(
+    arriving: &OrientedPCurveEdge,
+    leaving: &OrientedPCurveEdge,
+    incoming_angle: f64,
+    outgoing_angle: f64,
+) -> bool {
+    use brepkit_topology::edge::EdgeCurve;
+    const SAME: f64 = 1e-9;
+    // Sections run both ways, and one that continues another is a turn like
+    // any other where a third section leaves between them.
+    if arriving.source_edge_idx.is_some() || leaving.source_edge_idx.is_some() {
+        return false;
+    }
+    let one_conic = match (&arriving.curve_3d, &leaving.curve_3d) {
+        (EdgeCurve::Circle(a), EdgeCurve::Circle(b)) => {
+            (a.center() - b.center()).length() <= SAME
+                && (a.radius() - b.radius()).abs() <= SAME
+                && a.normal().cross(b.normal()).length() <= SAME
+        }
+        (EdgeCurve::Ellipse(a), EdgeCurve::Ellipse(b)) => {
+            (a.center() - b.center()).length() <= SAME
+                && (a.semi_major() - b.semi_major()).abs() <= SAME
+                && (a.semi_minor() - b.semi_minor()).abs() <= SAME
+                && a.normal().cross(b.normal()).length() <= SAME
+                && a.u_axis().cross(b.u_axis()).length() <= SAME
+        }
+        _ => false,
+    };
+    if !one_conic {
+        return false;
+    }
+    let off_travel = (incoming_angle + std::f64::consts::PI - outgoing_angle).rem_euclid(TAU);
+    !(std::f64::consts::FRAC_PI_2..=TAU - std::f64::consts::FRAC_PI_2).contains(&off_travel)
+}
+
 /// Compute the clockwise sweep angle from `angle_in` to `angle_out`.
 ///
 /// `angle_in` is the incoming edge's angle at the vertex (points back along
@@ -1152,6 +1204,69 @@ mod tests {
         let loops = build_wire_loops(&edges, 1e-7, true, false);
         assert_eq!(loops.len(), 1, "expected 1 loop, got {}", loops.len());
         assert_eq!(loops[0].len(), 4);
+    }
+
+    /// A piece of the circle of radius `r` about the origin from angle `a`
+    /// to angle `b` (degrees), with a pcurve fitted through 17 samples as
+    /// the face splitter fits a boundary piece.
+    fn make_arc_edge(r: f64, a: f64, b: f64) -> OrientedPCurveEdge {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::vec::{Point3, Vec3};
+        let at = |deg: f64| {
+            let t = deg.to_radians();
+            Point2::new(r * t.cos(), r * t.sin())
+        };
+        let samples: Vec<Point2> = (0..=16)
+            .map(|k| at(a + (b - a) * f64::from(k) / 16.0))
+            .collect();
+        let circle =
+            Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), r).unwrap();
+        let (start, end) = (at(a), at(b));
+        OrientedPCurveEdge {
+            curve_3d: EdgeCurve::Circle(circle),
+            pcurve: crate::builder::pcurve_compute::fit_nurbs2d_through_points(&samples),
+            start_uv: start,
+            end_uv: end,
+            start_3d: Point3::new(start.x(), start.y(), 0.0),
+            end_3d: Point3::new(end.x(), end.y(), 0.0),
+            forward: b > a,
+            source_edge_idx: None,
+            pave_block_id: None,
+        }
+    }
+
+    /// A ring cut by two radial sections 60 degrees apart. The hole's rim
+    /// runs clockwise, so a piece of it that follows another curves toward
+    /// the hole; the fitted pcurves of a 120 degree and a 60 degree piece
+    /// differ at their shared end, and the walk read that as a turn toward
+    /// the hole and passed the section that leaves the rim there.
+    #[test]
+    fn a_holes_rim_piece_runs_on_and_the_section_at_its_end_is_taken() {
+        let stem = |deg: f64, src: usize| {
+            let t = deg.to_radians();
+            let (inner, outer) = (
+                Point2::new(2.0 * t.cos(), 2.0 * t.sin()),
+                Point2::new(3.0 * t.cos(), 3.0 * t.sin()),
+            );
+            [
+                make_section_edge(inner, outer, src),
+                make_section_edge(outer, inner, src),
+            ]
+        };
+        let mut edges = vec![
+            make_arc_edge(3.0, 0.0, 60.0),
+            make_arc_edge(3.0, 60.0, 180.0),
+            make_arc_edge(3.0, 180.0, 360.0),
+            make_arc_edge(2.0, 360.0, 180.0),
+            make_arc_edge(2.0, 180.0, 60.0),
+            make_arc_edge(2.0, 60.0, 0.0),
+        ];
+        edges.extend(stem(0.0, 0));
+        edges.extend(stem(60.0, 1));
+        let loops = build_wire_loops(&edges, 1e-7, false, false);
+        let mut sizes: Vec<usize> = loops.iter().map(Vec::len).collect();
+        sizes.sort_unstable();
+        assert_eq!(sizes, [4, 6], "a 60 degree piece and the rest of the ring");
     }
 
     #[test]

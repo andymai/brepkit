@@ -89,7 +89,9 @@ pub fn perform(topo: &mut Topology, arena: &mut GfaArena) -> Result<(), AlgoErro
                 // vertex order follows the walk around the rim; otherwise a
                 // child between the origin and the seam reads backwards and
                 // its edge covers the complementary arc.
-                if closed && let Some(seam) = closed_seam_parameter(topo, original_edge) {
+                if closed
+                    && let Some(seam) = super::helpers::closed_seam_parameter(topo, original_edge)
+                {
                     use std::f64::consts::TAU;
                     start.parameter = seam;
                     end.parameter = seam + TAU;
@@ -170,18 +172,6 @@ pub fn perform(topo: &mut Topology, arena: &mut GfaArena) -> Result<(), AlgoErro
     }
 
     Ok(())
-}
-
-/// The angular parameter of a closed circle or ellipse edge's seam vertex.
-fn closed_seam_parameter(topo: &Topology, edge_id: brepkit_topology::edge::EdgeId) -> Option<f64> {
-    let edge = topo.edge(edge_id).ok()?;
-    let sp = topo.vertex(edge.start()).ok()?.point();
-    match edge.curve() {
-        brepkit_topology::edge::EdgeCurve::Circle(c) => Some(c.project(sp)),
-        brepkit_topology::edge::EdgeCurve::Ellipse(e) => Some(e.project(sp)),
-        brepkit_topology::edge::EdgeCurve::Line
-        | brepkit_topology::edge::EdgeCurve::NurbsCurve(_) => None,
-    }
 }
 
 /// For a closed edge whose interior paves sit at exactly one position away
@@ -272,5 +262,57 @@ mod tests {
         arena.edge_pave_blocks.insert(edge, vec![id]);
         perform(&mut topo, &mut arena).unwrap();
         assert_eq!(arena.pave_blocks.get(id).unwrap().children.len(), 2);
+    }
+
+    /// A rim whose vertex is a quarter turn before the origin of its
+    /// circle's parameter, as a boolean leaves it. A crossing at the origin
+    /// is a point inside the rim's block; a crossing at the vertex is not.
+    #[test]
+    fn a_rim_takes_a_pave_at_its_circles_origin_and_none_at_its_vertex() {
+        use crate::pave_filler::helpers::add_pave_to_edge;
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::vec::Vec3;
+        use std::f64::consts::{FRAC_PI_2, TAU};
+
+        let mut topo = Topology::new();
+        let circle = Circle3D::new_with_ref(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            2.0,
+            Vec3::new(1.0, 0.0, 0.0),
+        )
+        .unwrap();
+        let at =
+            |topo: &mut Topology, t: f64| topo.add_vertex(Vertex::new(circle.evaluate(t), 1e-7));
+        let seam = at(&mut topo, -FRAC_PI_2);
+        let (origin, quarter) = (at(&mut topo, 0.0), at(&mut topo, FRAC_PI_2));
+        let edge = topo.add_edge(Edge::new(seam, seam, EdgeCurve::Circle(circle)));
+        let mut arena = GfaArena::new();
+        let id = arena.init_edge_pave_block(edge, seam, 0.0, seam, TAU);
+        let paves = |arena: &GfaArena| arena.pave_blocks.get(id).unwrap().extra_paves.len();
+
+        add_pave_to_edge(&mut arena, &topo, edge, Pave::new(seam, 3.0 * FRAC_PI_2));
+        add_pave_to_edge(&mut arena, &topo, edge, Pave::new(seam, -FRAC_PI_2));
+        assert_eq!(paves(&arena), 0, "the vertex is the block's end");
+        add_pave_to_edge(&mut arena, &topo, edge, Pave::new(origin, 0.0));
+        add_pave_to_edge(&mut arena, &topo, edge, Pave::new(origin, TAU));
+        add_pave_to_edge(&mut arena, &topo, edge, Pave::new(quarter, FRAC_PI_2));
+        assert_eq!(paves(&arena), 3, "the origin is inside the block");
+
+        perform(&mut topo, &mut arena).unwrap();
+        // From the vertex: a quarter turn to the origin, a quarter turn on,
+        // and the rest of the turn.
+        let children = arena.pave_blocks.get(id).unwrap().children.clone();
+        let spans: Vec<f64> = children
+            .iter()
+            .map(|&c| {
+                let (a, b) = arena.pave_blocks.get(c).unwrap().parameter_range();
+                b - a
+            })
+            .collect();
+        assert_eq!(spans.len(), 3, "{spans:?}");
+        for (span, want) in spans.iter().zip([FRAC_PI_2, FRAC_PI_2, 2.0 * FRAC_PI_2]) {
+            assert!((span - want).abs() < 1e-12, "{spans:?}");
+        }
     }
 }
