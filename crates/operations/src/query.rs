@@ -311,12 +311,44 @@ fn same_surface(a: &FaceSurface, b: &FaceSurface) -> bool {
                         .zip(q)
                         .all(|(&s, &t)| (s - t).length() <= tol.linear)
             });
+    // Parts of one surface hold copies of its knots, bit for bit. A knot
+    // has no scale to compare against: a small move of one changes the
+    // surface.
+    let same_knots = |x: &[f64], y: &[f64]| {
+        x.len() == y.len() && x.iter().zip(y).all(|(p, q)| p.to_bits() == q.to_bits())
+    };
     a.degree_u() == b.degree_u()
         && a.degree_v() == b.degree_v()
-        && same_values(a.knots_u(), b.knots_u())
-        && same_values(a.knots_v(), b.knots_v())
+        && same_knots(a.knots_u(), b.knots_u())
+        && same_knots(a.knots_v(), b.knots_v())
         && same_points
         && same_rows(a.weights(), b.weights())
+        && !can_crease(a.knots_u(), a.degree_u())
+        && !can_crease(a.knots_v(), a.degree_v())
+}
+
+/// Whether a B-spline of this degree can have a corner at an inner knot: a
+/// knot there occurs as many times as the degree, or more. Two faces on the
+/// two sides of such a knot can meet at a real angle on one surface.
+fn can_crease(knots: &[f64], degree: usize) -> bool {
+    let (Some(first), Some(last)) = (knots.first(), knots.last()) else {
+        return false;
+    };
+    let mut run = 0;
+    let mut previous = f64::NAN;
+    for knot in knots {
+        if knot.to_bits() == previous.to_bits() {
+            run += 1;
+        } else {
+            run = 1;
+            previous = *knot;
+        }
+        let inner = knot.to_bits() != first.to_bits() && knot.to_bits() != last.to_bits();
+        if inner && run >= degree.max(1) {
+            return true;
+        }
+    }
+    false
 }
 
 #[cfg(test)]
@@ -519,6 +551,43 @@ mod tests {
         };
         assert!(same_surface(&patch(1e-8), &patch(1e-8)));
         assert!(!same_surface(&patch(1e-8), &patch(3e-8)));
+    }
+
+    #[test]
+    fn two_spline_surfaces_with_other_knots_or_a_corner_knot_are_two_surfaces() {
+        use brepkit_math::nurbs::surface::NurbsSurface;
+        use brepkit_math::vec::Point3;
+
+        // Degree 2 by 1, four rows of control points, one inner knot in u.
+        let strip = |inner: f64, offset: f64| {
+            let points = (0..4)
+                .map(|i| {
+                    let x = f64::from(i);
+                    vec![Point3::new(x, 0.0, x * x), Point3::new(x, 1.0, x * x)]
+                })
+                .collect();
+            let knots_u: Vec<f64> = [0.0, 0.0, 0.0, inner, 2.0, 2.0, 2.0]
+                .iter()
+                .map(|k| k + offset)
+                .collect();
+            FaceSurface::Nurbs(
+                NurbsSurface::new(
+                    2,
+                    1,
+                    knots_u,
+                    vec![0.0, 0.0, 1.0, 1.0],
+                    points,
+                    vec![vec![1.0; 2]; 4],
+                )
+                .unwrap(),
+            )
+        };
+        assert!(same_surface(&strip(1.0, 0.0), &strip(1.0, 0.0)));
+        assert!(!same_surface(&strip(1.0, 1e12), &strip(0.5, 1e12)));
+
+        assert!(!can_crease(&[0.0, 0.0, 0.0, 1.0, 2.0, 2.0, 2.0], 2));
+        assert!(can_crease(&[0.0, 0.0, 0.0, 1.0, 1.0, 2.0, 2.0, 2.0], 2));
+        assert!(can_crease(&[0.0, 0.0, 1.0, 2.0, 2.0], 1));
     }
 
     #[test]
