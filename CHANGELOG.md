@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.11.20](https://github.com/andymai/brepkit/compare/v4.11.19...v4.11.20) (2026-11-15)
+
+
+### Performance
+
+* **blend:** a fillet and a chamfer cost the same among other shapes ([#2454](https://github.com/andymai/brepkit/issues/2454)) ([9c6f53f](https://github.com/andymai/brepkit/commit/9c6f53f0fbbdc30c46ffa8d4e4b5e1ac1cd17931))
+
 ## [4.11.19](https://github.com/andymai/brepkit/compare/v4.11.18...v4.11.19) (2026-11-15)
 
 
