@@ -333,54 +333,53 @@ fn same_surface(a: &FaceSurface, b: &FaceSurface) -> bool {
 /// Whether a B-spline surface has one normal on each side of `point`.
 ///
 /// A surface whose inner knot occurs as many times as its degree can have a
-/// corner there, and two faces on its two sides then meet at a real angle on
-/// one surface. A rational circle has such knots and no corner, so the test
-/// reads the normals a small step to each side.
+/// corner along that knot, and two faces on its two sides then meet at a
+/// real angle on one surface. A rational circle has such knots and no
+/// corner. So where `point` is on such a knot line, the test compares the
+/// normals of the two spans that meet there, each at its end of the knot.
 fn smooth_across(
     surface: &brepkit_math::nurbs::surface::NurbsSurface,
     point: brepkit_math::vec::Point3,
 ) -> bool {
-    if !can_crease(surface.knots_u(), surface.degree_u())
-        && !can_crease(surface.knots_v(), surface.degree_v())
-    {
+    // On the knot line: within ten times the length tolerance of it.
+    const ON_THE_LINE: f64 = 1e-6;
+    // One normal: within the rounding of a normal's three coordinates.
+    const ONE_NORMAL: f64 = 1e-9;
+
+    let knots_u = crease_knots(surface.knots_u(), surface.degree_u());
+    let knots_v = crease_knots(surface.knots_v(), surface.degree_v());
+    if knots_u.is_empty() && knots_v.is_empty() {
         return true;
     }
-    let face_surface = FaceSurface::Nurbs(surface.clone());
-    let Some((u, v)) = face_surface.project_point(point) else {
+    let Some((u, v)) = FaceSurface::Nurbs(surface.clone()).project_point(point) else {
         return false;
     };
-    let span = |knots: &[f64]| match (knots.first(), knots.last()) {
-        (Some(&lo), Some(&hi)) => (lo, hi),
-        _ => (0.0, 1.0),
-    };
-    let (u0, u1) = span(surface.knots_u());
-    let (v0, v1) = span(surface.knots_v());
-    let (du, dv) = (1e-6 * (u1 - u0), 1e-6 * (v1 - v0));
-    let sides = [
-        ((u - du).max(u0), v),
-        ((u + du).min(u1), v),
-        (u, (v - dv).max(v0)),
-        (u, (v + dv).min(v1)),
-    ];
-    let mut normals = Vec::with_capacity(4);
-    for (su, sv) in sides {
-        let Ok(n) = surface.normal(su, sv) else {
+    let along_u = knots_u.iter().map(|&k| ((k, v), (k.next_down(), v)));
+    let along_v = knots_v.iter().map(|&k| ((u, k), (u, k.next_down())));
+    for (after, before) in along_u.chain(along_v) {
+        if (surface.evaluate(after.0, after.1) - point).length() > ON_THE_LINE {
+            continue;
+        }
+        let (Ok(n_after), Ok(n_before)) = (
+            surface.normal(after.0, after.1),
+            surface.normal(before.0, before.1),
+        ) else {
             return false;
         };
-        normals.push(n);
+        if n_after.cross(n_before).length() > ONE_NORMAL || n_after.dot(n_before) < 0.0 {
+            return false;
+        }
     }
-    normals
-        .iter()
-        .all(|n| normals.iter().all(|m| n.dot(*m) > 1.0 - 1e-6))
+    true
 }
 
-/// Whether a B-spline of this degree can have a corner at an inner knot: a
-/// knot there occurs as many times as the degree, or more. Two faces on the
-/// two sides of such a knot can meet at a real angle on one surface.
-fn can_crease(knots: &[f64], degree: usize) -> bool {
+/// The inner knots at which a B-spline of this degree can have a corner:
+/// each one occurs as many times as the degree, or more.
+fn crease_knots(knots: &[f64], degree: usize) -> Vec<f64> {
     let (Some(first), Some(last)) = (knots.first(), knots.last()) else {
-        return false;
+        return Vec::new();
     };
+    let mut found: Vec<f64> = Vec::new();
     let mut run = 0;
     let mut previous = f64::NAN;
     for knot in knots {
@@ -391,11 +390,11 @@ fn can_crease(knots: &[f64], degree: usize) -> bool {
             previous = *knot;
         }
         let inner = knot.to_bits() != first.to_bits() && knot.to_bits() != last.to_bits();
-        if inner && run >= degree.max(1) {
-            return true;
+        if inner && run == degree.max(1) {
+            found.push(*knot);
         }
     }
-    false
+    found
 }
 
 #[cfg(test)]
@@ -632,8 +631,7 @@ mod tests {
         assert!(same_surface(&strip(1.0, 0.0), &strip(1.0, 0.0)));
         assert!(!same_surface(&strip(1.0, 1e12), &strip(0.5, 1e12)));
 
-        // A rational cylinder has doubled inner knots and no corner. A
-        // folded sheet of degree 1 has a corner along its inner knot.
+        // A rational cylinder has doubled inner knots and no corner.
         let wall = brepkit_math::surfaces::CylindricalSurface::new(
             Point3::new(0.0, 0.0, 0.0),
             brepkit_math::vec::Vec3::new(0.0, 0.0, 1.0),
@@ -641,29 +639,67 @@ mod tests {
         )
         .unwrap();
         let rational = wall.to_nurbs(0.0, 10.0).unwrap();
-        assert!(can_crease(rational.knots_u(), rational.degree_u()));
+        assert_eq!(
+            crease_knots(rational.knots_u(), rational.degree_u()),
+            vec![0.25, 0.5, 0.75]
+        );
         let on_a_knot = rational.evaluate(0.25, 0.5);
         assert!(smooth_across(&rational, on_a_knot));
 
-        let fold = NurbsSurface::new(
-            1,
-            1,
-            vec![0.0, 0.0, 1.0, 2.0, 2.0],
-            vec![0.0, 0.0, 1.0, 1.0],
-            vec![
-                vec![Point3::new(0.0, 0.0, 0.0), Point3::new(0.0, 1.0, 0.0)],
-                vec![Point3::new(1.0, 0.0, 0.0), Point3::new(1.0, 1.0, 0.0)],
-                vec![Point3::new(1.0, 0.0, 1.0), Point3::new(1.0, 1.0, 1.0)],
-            ],
-            vec![vec![1.0; 2]; 3],
-        )
-        .unwrap();
-        assert!(!smooth_across(&fold, Point3::new(1.0, 0.5, 0.0)));
-        assert!(smooth_across(&fold, Point3::new(0.5, 0.5, 0.0)));
+        // A sheet of degree 1 in three panels: flat, then up at `angle`,
+        // then flat. Its middle panel has the width `narrow` in u.
+        let fold = |angle: f64, narrow: f64, offset: f64| {
+            let (rise, run) = angle.sin_cos();
+            let xz = [(0.0, 0.0), (1.0, 0.0), (1.0 + run, rise), (2.0 + run, rise)];
+            let knots_u: Vec<f64> = [0.0, 0.0, 1.0, 1.0 + narrow, 2.0, 2.0]
+                .iter()
+                .map(|k| k + offset)
+                .collect();
+            NurbsSurface::new(
+                1,
+                1,
+                knots_u,
+                vec![0.0, 0.0, 1.0, 1.0],
+                xz.iter()
+                    .map(|&(x, z)| vec![Point3::new(x, 0.0, z), Point3::new(x, 1.0, z)])
+                    .collect(),
+                vec![vec![1.0; 2]; 4],
+            )
+            .unwrap()
+        };
+        let quarter = std::f64::consts::FRAC_PI_2;
+        let first_fold = Point3::new(1.0, 0.5, 0.0);
+        let second_fold = Point3::new(1.0, 0.5, 1.0);
+        let in_a_panel = Point3::new(0.5, 0.5, 0.0);
+        for (angle, narrow, offset) in [
+            (quarter, 0.5, 0.0),
+            (quarter, 1e-7, 0.0),
+            (quarter, 0.5, 1e12),
+            (1e-4, 0.5, 0.0),
+        ] {
+            let sheet = fold(angle, narrow, offset);
+            assert!(
+                !smooth_across(&sheet, first_fold),
+                "{angle} {narrow} {offset}"
+            );
+            assert!(
+                smooth_across(&sheet, in_a_panel),
+                "{angle} {narrow} {offset}"
+            );
+            if (angle - quarter).abs() < 1e-12 {
+                assert!(
+                    !smooth_across(&sheet, second_fold),
+                    "{angle} {narrow} {offset}"
+                );
+            }
+        }
 
-        assert!(!can_crease(&[0.0, 0.0, 0.0, 1.0, 2.0, 2.0, 2.0], 2));
-        assert!(can_crease(&[0.0, 0.0, 0.0, 1.0, 1.0, 2.0, 2.0, 2.0], 2));
-        assert!(can_crease(&[0.0, 0.0, 1.0, 2.0, 2.0], 1));
+        assert!(crease_knots(&[0.0, 0.0, 0.0, 1.0, 2.0, 2.0, 2.0], 2).is_empty());
+        assert_eq!(
+            crease_knots(&[0.0, 0.0, 0.0, 1.0, 1.0, 2.0, 2.0, 2.0], 2),
+            vec![1.0]
+        );
+        assert_eq!(crease_knots(&[0.0, 0.0, 1.0, 2.0, 2.0], 1), vec![1.0]);
     }
 
     #[test]
