@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794732846557,
+  "lastUpdate": 1794733026655,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -70361,6 +70361,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 19897609,
             "range": "± 330650",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "df619c3eba993aeb7a5097f2d1c8b021016a9141",
+          "message": "fix(algo): split an opening's rim where a curved section ends on it (#2482)\n\nA fuse fell back to a mesh when a curved section ended on the rim of an\nopening in a flat face. The fuse is now exact. This is the fault behind\nthe first `fuseAll` of the `robot-arm` playground example in #2372.\n\n## What happened\n\nThe example fuses a base plate, a turret on the plate, and a column with\nrounded corners. The column stands on the plate and runs into the\nturret. With the base and the turret fused first, the plate's top has\nthe turret's foot as an opening. The column's foot crosses the rim of\nthat opening on two corner arcs, so two arc sections end on the rim.\n\nThe face splitter adds an opening to the arrangement when a section\nmeets a vertex of its rim. It made that test for line sections only. The\ntwo arcs were loose ends, the splitter dropped them, and the top stayed\nwhole under the column. The result had 7 free edges and 2 non-manifold\nedges.\n\n## What changes\n\nThe test also takes the two ends of each curved section.\n\n## How I checked it\n\n- `crates/io/tests/robot_arm_column_fuse_inmem.rs` is new, with the\nthree captured operands in `crates/io/tests/data/robot_arm_*.bin` (19 kB\ntogether). It fuses the column last, and it calls `fuse_all` on the\nthree. Each result must be valid, with only plane, cylinder and cone\nfaces. The volume must be the volume of the fuse with the column first,\nwhich is exact on main, to 1e-9. The two tests fail without the change,\non main at `c8b7eb138`.\n- The pose sweep and the truth audit match main line for line, with the\nfive changes for #2372 together on main at `bdae9da54`. `cargo clippy\n--all-targets -- -D warnings` and `cargo fmt --all --check` pass in the\npre-commit hook.\n\n## What is still open\n\nThe solid from these operands does not mesh watertight (#2486), and a\nlater `fuseAll` of the same example falls back (#2488).",
+          "timestamp": "2026-11-15T08:51:54Z",
+          "tree_id": "25e476b7db953a00bb3f2d2ab9bcbff5fb2c2d3b",
+          "url": "https://github.com/andymai/brepkit/commit/df619c3eba993aeb7a5097f2d1c8b021016a9141"
+        },
+        "date": 1794733017546,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 879068,
+            "range": "± 6584",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 924340,
+            "range": "± 11794",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10786,
+            "range": "± 10",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 552614,
+            "range": "± 3228",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 19827492,
+            "range": "± 64738",
             "unit": "ns/iter"
           }
         ]
