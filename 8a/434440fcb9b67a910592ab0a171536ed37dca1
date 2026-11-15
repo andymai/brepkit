@@ -1,0 +1,25 @@
+crates/math/src/nurbs/projection.rs
+  s_709d857a0f83c4::t_066d1db3b745f5 410-411,415-419,421-422,434-438,441,578-585,590,592-594,598-599,601,614-617,623-625,627-641,643-644,650,655,1221,1223,1238-1239,1242-1266,1268-1289,1291-1293,1301-1302,1305-1307
+crates/operations/src/tessellate/nurbs.rs
+  s_709d857a0f83c4::t_87a98fc249c2dc 1673-1675,1680
+crates/operations/tests/blend_overshoot_area.rs
+  s_709d857a0f83c4::t_0422b7ebb81a32 238-280
+crates/operations/tests/surface_fixtures/fold.rs
+  s_709d857a0f83c4::t_d0c71653246d4a 33-41,51,54-61,68-77,85-89,91-97,106-114,116-117,119-122,124-127,137-179,181
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "8a434440fcb9b67a910592ab0a171536ed37dca1",
+  "prompts": {},
+  "sessions": {
+    "s_709d857a0f83c4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6cca9812-d77a-4dae-96f4-26562694b205",
+        "model": "claude-fable-5-2"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
