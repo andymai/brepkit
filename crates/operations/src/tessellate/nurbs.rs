@@ -1672,7 +1672,7 @@ pub(super) fn point_triangle_distance(p: Point3, a: Point3, b: Point3, c: Point3
 /// The point lies on the surface, to the tolerance of the boundary's edges,
 /// so a projection that ends off it may be on a wrong part of the surface (a
 /// surface that bends back runs near itself), and the search goes on for a
-/// point less than half as far.
+/// nearer point.
 pub(super) fn project_boundary_point(
     surface: &brepkit_math::nurbs::surface::NurbsSurface,
     point: Point3,
