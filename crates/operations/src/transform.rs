@@ -6,7 +6,6 @@ use std::collections::HashSet;
 use brepkit_math::mat::Mat4;
 use brepkit_math::nurbs::curve::NurbsCurve;
 use brepkit_math::nurbs::surface::NurbsSurface;
-use brepkit_math::tolerance::Tolerance;
 use brepkit_math::vec::Vec3;
 use brepkit_topology::Topology;
 use brepkit_topology::edge::{EdgeCurve, EdgeId};
@@ -50,14 +49,114 @@ pub fn transform_solid(
 }
 
 /// Checks the matrix is invertible and returns its inverse.
-fn checked_inverse(matrix: &Mat4) -> Result<Mat4, crate::OperationsError> {
-    let tol = Tolerance::new();
-    if tol.approx_eq(matrix.determinant(), 0.0) {
+///
+/// The determinant of a uniform scale by `s` is `s³`, so a comparison of the
+/// determinant with a length tolerance refuses a scale from millimetres to
+/// metres. An affine matrix is judged on the pivots of its linear block,
+/// with each row scaled to unit length: neither the size of the scale nor
+/// the translation changes the answer.
+pub(crate) fn checked_inverse(matrix: &Mat4) -> Result<Mat4, crate::OperationsError> {
+    let finite = |m: &Mat4| m.0.iter().flatten().all(|c| c.is_finite());
+    if !finite(matrix) {
         return Err(crate::OperationsError::InvalidInput {
-            reason: "transform matrix is degenerate (zero determinant)".into(),
+            reason: "transform matrix has a component that is not finite".into(),
         });
     }
-    Ok(matrix.inverse()?)
+    let inverse = if is_affine(matrix) {
+        invert_linear_block(matrix).map(|(inverse, _)| inverse)
+    } else {
+        matrix.inverse().ok()
+    };
+    inverse
+        .filter(finite)
+        .ok_or_else(|| crate::OperationsError::InvalidInput {
+            reason: "transform matrix is degenerate (zero determinant)".into(),
+        })
+}
+
+/// Whether the matrix turns a right-handed frame into a left-handed one.
+///
+/// The determinant of a small scale underflows to zero, so the sign comes
+/// from the pivots of the unit rows.
+pub(crate) fn is_mirror(matrix: &Mat4) -> bool {
+    if is_affine(matrix) {
+        invert_linear_block(matrix).is_some_and(|(_, mirror)| mirror)
+    } else {
+        matrix.determinant() < 0.0
+    }
+}
+
+#[allow(clippy::float_cmp)]
+fn is_affine(matrix: &Mat4) -> bool {
+    matrix.0[3] == [0.0, 0.0, 0.0, 1.0]
+}
+
+/// The inverse of a matrix whose last row is `0 0 0 1`, and whether the
+/// matrix is a mirror. `None` when its linear block has no inverse.
+///
+/// Gauss-Jordan elimination with row pivots, on rows of unit length. A
+/// pivot at the size of the rounding of a unit row means that the rows do
+/// not span space.
+fn invert_linear_block(matrix: &Mat4) -> Option<(Mat4, bool)> {
+    let m = &matrix.0;
+    // `hypot` holds a row of 1e-200 or of 1e200, where a sum of squares
+    // does not.
+    let lengths = [0, 1, 2].map(|i| m[i][0].hypot(m[i][1]).hypot(m[i][2]));
+    if lengths.contains(&0.0) {
+        return None;
+    }
+    // Each row is `[unit row | row of the identity]`.
+    let mut rows = [[0.0_f64; 6]; 3];
+    for i in 0..3 {
+        for j in 0..3 {
+            rows[i][j] = m[i][j] / lengths[i];
+        }
+        rows[i][3 + i] = 1.0;
+    }
+    let mut mirror = false;
+    for col in 0..3 {
+        let mut pivot = col;
+        for i in col + 1..3 {
+            if rows[i][col].abs() > rows[pivot][col].abs() {
+                pivot = i;
+            }
+        }
+        if rows[pivot][col].abs() <= 16.0 * f64::EPSILON {
+            return None;
+        }
+        if pivot != col {
+            rows.swap(pivot, col);
+            mirror = !mirror;
+        }
+        if rows[col][col] < 0.0 {
+            mirror = !mirror;
+        }
+        let scale = 1.0 / rows[col][col];
+        for v in &mut rows[col] {
+            *v *= scale;
+        }
+        let pivot_row = rows[col];
+        for (i, row) in rows.iter_mut().enumerate() {
+            if i == col {
+                continue;
+            }
+            let factor = row[col];
+            for (v, p) in row.iter_mut().zip(pivot_row) {
+                *v = (-factor).madd(p, *v);
+            }
+        }
+    }
+    // The right half is the inverse of the unit rows. Column `j` of the
+    // block's inverse is that column over the length of row `j`.
+    let lin = |i: usize, j: usize| rows[i][3 + j] / lengths[j];
+    let shift = |i: usize| -(lin(i, 0).madd(m[0][3], lin(i, 1).madd(m[1][3], lin(i, 2) * m[2][3])));
+    let inverse = Mat4([
+        [lin(0, 0), lin(0, 1), lin(0, 2), shift(0)],
+        [lin(1, 0), lin(1, 1), lin(1, 2), shift(1)],
+        [lin(2, 0), lin(2, 1), lin(2, 2), shift(2)],
+        [0.0, 0.0, 0.0, 1.0],
+    ]);
+    Some((inverse, mirror))
 }
 
 /// Transform a closed set of faces with the edges and vertices they use.
@@ -94,7 +193,7 @@ fn transform_topology(
     // normal outward, so its wires reverse. A NURBS image's Su × Sv turns
     // inward instead, which already leaves its wires counter-clockwise about
     // the surface normal: only its flag flips.
-    if matrix.determinant() < 0.0 {
+    if is_mirror(matrix) {
         let kept: HashSet<FaceId> = face_ids.difference(&flipped).copied().collect();
         separate_shared_wires(topo, &kept, &flipped)?;
         reverse_face_wires(topo, &kept)?;
@@ -309,7 +408,7 @@ pub(crate) fn surface_image(
         ConicalSurface, CylindricalSurface, SphericalSurface, ToroidalSurface,
     };
 
-    let mirrored = matrix.determinant() < 0.0;
+    let mirrored = is_mirror(matrix);
     let heal_err = |what: &str, e: brepkit_heal::HealError| crate::OperationsError::InvalidInput {
         reason: format!("{what} failed: {e}"),
     };
@@ -624,8 +723,10 @@ fn transform_conic(
     };
     let (l1, l2) = (a1.length(), a2.length());
     let center = matrix.mul_point(center);
-    let normal = a1.cross(a2).normalize()?;
     let (u, v) = (a1.normalize()?, a2.normalize()?);
+    // The cross product of the unit axes: that of two axes of 1e-110
+    // underflows to zero.
+    let normal = u.cross(v).normalize()?;
     let origin_moved = a1 != p;
     let curve = if nearly_equal(l1, l2) {
         EdgeCurve::Circle(Circle3D::with_axes(center, normal, l1, u, v)?)

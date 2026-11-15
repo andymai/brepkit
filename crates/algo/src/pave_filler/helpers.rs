@@ -353,11 +353,7 @@ pub(super) fn add_pave_to_edge(arena: &mut GfaArena, topo: &Topology, edge_id: E
     if let Some(pb_ids) = arena.edge_pave_blocks.get(&edge_id) {
         let pb_ids_copy: Vec<_> = pb_ids.clone();
         for pb_id in pb_ids_copy {
-            if arena
-                .pave_blocks
-                .get(pb_id)
-                .is_some_and(|pb| pb.spans_interior(pave.parameter))
-            {
+            if block_spans_interior(topo, arena, pb_id, pave.parameter) {
                 arena.add_extra_pave(topo, pb_id, pave);
             }
         }
@@ -412,4 +408,42 @@ pub(super) fn foot_on_curve(
         }
     }
     (t, (at(t) - p).length())
+}
+
+/// The angular parameter of a closed circle or ellipse edge's seam vertex.
+pub(super) fn closed_seam_parameter(topo: &Topology, edge_id: EdgeId) -> Option<f64> {
+    let edge = topo.edge(edge_id).ok()?;
+    let sp = topo.vertex(edge.start()).ok()?.point();
+    match edge.curve() {
+        EdgeCurve::Circle(c) => Some(c.project(sp)),
+        EdgeCurve::Ellipse(e) => Some(e.project(sp)),
+        EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => None,
+    }
+}
+
+/// Whether `t` lies strictly inside a pave block.
+///
+/// The whole block of a closed circle or ellipse spans the curve's own
+/// period from its angular origin, but the block's two ends are the edge's
+/// one vertex, which sits wherever the seam is. The origin is then a point
+/// inside the block and the seam's parameter is not, so the test runs from
+/// the seam.
+pub(super) fn block_spans_interior(
+    topo: &Topology,
+    arena: &GfaArena,
+    pb_id: crate::ds::PaveBlockId,
+    t: f64,
+) -> bool {
+    use std::f64::consts::TAU;
+    let Some(pb) = arena.pave_blocks.get(pb_id) else {
+        return false;
+    };
+    let (a, b) = pb.parameter_range();
+    let whole_turn = ((b - a).abs() - TAU).abs() < 1e-9
+        && arena.resolve_vertex(pb.start.vertex) == arena.resolve_vertex(pb.end.vertex);
+    if whole_turn && let Some(seam) = closed_seam_parameter(topo, pb.original_edge) {
+        let from_seam = (t - seam).rem_euclid(TAU);
+        return from_seam > 1e-10 && from_seam < TAU - 1e-10;
+    }
+    pb.spans_interior(t)
 }
