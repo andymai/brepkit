@@ -1670,17 +1670,14 @@ pub(super) fn point_triangle_distance(p: Point3, a: Point3, b: Point3, c: Point3
 /// The parameters of a point of a face's boundary on the face's surface.
 ///
 /// The point lies on the surface, to the tolerance of the boundary's edges,
-/// so a projection that ends far from it is on a wrong part of the surface
-/// (a surface that bends back runs near itself), and the search goes on for
-/// a point within a small share of the surface's size.
+/// so a projection that ends off it may be on a wrong part of the surface (a
+/// surface that bends back runs near itself), and the search goes on for a
+/// point less than half as far.
 pub(super) fn project_boundary_point(
     surface: &brepkit_math::nurbs::surface::NurbsSurface,
     point: Point3,
 ) -> Result<brepkit_math::nurbs::projection::SurfaceProjection, brepkit_math::MathError> {
-    const NEAR: f64 = 1e-4;
-    let hull = surface.aabb();
-    let near = NEAR * (hull.max - hull.min).length();
-    brepkit_math::nurbs::projection::project_point_near_surface(surface, point, 1e-6, near)
+    brepkit_math::nurbs::projection::project_point_near_surface(surface, point, 1e-6)
 }
 
 /// Tessellate a NURBS surface via curvature-adaptive subdivision.

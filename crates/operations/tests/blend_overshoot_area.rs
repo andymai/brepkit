@@ -235,6 +235,49 @@ fn the_fold_measure_finds_a_blend_in_one_plane_that_turns_back() {
     }
 }
 
+/// `((v - 1/2)^2, u, 0)` in two pieces that meet at `v = 1/2`, where the
+/// surface turns back: each piece alone runs one way, and the fold is on
+/// the line they share.
+#[test]
+fn the_fold_measure_finds_a_fold_on_the_line_two_pieces_share() {
+    let folded = |xs: [f64; 5]| {
+        let net: Vec<Vec<Point3>> = [0.0, 1.0]
+            .iter()
+            .map(|&y| xs.iter().map(|&x| Point3::new(x, y, 0.0)).collect())
+            .collect();
+        NurbsSurface::new(
+            1,
+            2,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![0.0, 0.0, 0.0, 0.5, 0.5, 1.0, 1.0, 1.0],
+            net,
+            vec![vec![1.0; 5]; 2],
+        )
+        .unwrap()
+    };
+    let fold = first_fold(&folded([0.25, 0.0, 0.0, 0.0, 0.25])).expect("a fold");
+    assert!((fold.v - 0.5).abs() < 1e-3, "fold at v = {}", fold.v);
+    // The same two pieces run one way: `x` falls, then falls on.
+    assert_eq!(first_fold(&folded([0.5, 0.375, 0.25, 0.125, 0.0])), None);
+    // And a strip that closes to a point along one edge has no fold.
+    let net = vec![
+        (0..4)
+            .map(|k| Point3::new(f64::from(k), 0.0, 0.0))
+            .collect::<Vec<_>>(),
+        vec![Point3::new(1.5, 5.0, 1.0); 4],
+    ];
+    let closing = NurbsSurface::new(
+        1,
+        3,
+        vec![0.0, 0.0, 1.0, 1.0],
+        vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+        net,
+        vec![vec![1.0; 4]; 2],
+    )
+    .unwrap();
+    assert_eq!(first_fold(&closing), None);
+}
+
 /// `blend_surface` returns a surface that folds. Tracked in #2469.
 #[test]
 #[ignore = "blend_surface does not refuse a surface that folds (#2469)"]
