@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.11.19](https://github.com/andymai/brepkit/compare/v4.11.18...v4.11.19) (2026-11-15)
+
+
+### Bug Fixes
+
+* **operations:** weld a hole's walls facing into the hole ([#2473](https://github.com/andymai/brepkit/issues/2473)) ([cc2dead](https://github.com/andymai/brepkit/commit/cc2dead1d053977e9f756fc60befc4af9abee093))
+
 ## [4.11.18](https://github.com/andymai/brepkit/compare/v4.11.17...v4.11.18) (2026-11-15)
 
 
