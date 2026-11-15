@@ -4210,8 +4210,13 @@ fn arc_bow(
     let (end, other, turn) = [(near_ends[0], near_ends[1]), (near_ends[1], near_ends[0])]
         .into_iter()
         .filter_map(|(end, other)| {
+            // Within the arc's span, or just past the nearer of its ends.
             let turn = t0 + (turn_of(end)? - t0).rem_euclid(TAU);
-            let turn = if turn > t1 { turn - TAU } else { turn };
+            let turn = if turn > t1 && t0 - (turn - TAU) < turn - t1 {
+                turn - TAU
+            } else {
+                turn
+            };
             let off = (curve.evaluate_with_endpoints(turn, a, b) - end).length();
             Some((off, end, other, turn))
         })
@@ -4222,27 +4227,40 @@ fn arc_bow(
     let cross = |o: (f64, f64), p: (f64, f64), q: (f64, f64)| {
         (p.0 - o.0) * (q.1 - o.1) - (p.1 - o.1) * (q.0 - o.0)
     };
-    // Past a quarter turn the tangents meet far from the arc, or behind it.
-    if (turn - at_corner).abs() > std::f64::consts::FRAC_PI_2 {
-        return Some(Err(BlendError::PlanningFailure {
-            reason: "the fillet's end takes too long a piece of its cap's arc edge".into(),
-        }));
-    }
     let (c, e) = (flat(corner), flat(end));
-    let heading = |turn: f64, from: Point3| {
+    let heading = |turn: f64| {
+        let from = curve.evaluate_with_endpoints(turn, a, b);
         let to = flat(from + curve.tangent_with_endpoints(turn, a, b));
         let at = flat(from);
         (to.0 - at.0, to.1 - at.1)
     };
-    let (dc, de) = (heading(at_corner, corner), heading(turn, end));
+    let (dc, dm, de) = (
+        heading(at_corner),
+        heading(f64::midpoint(at_corner, turn)),
+        heading(turn),
+    );
     let chord = (e.0 - c.0, e.1 - c.1);
-    let span = chord.0.hypot(chord.1);
-    let size = dc.0.hypot(dc.1) * de.0.hypot(de.1);
-    let sine = dc.0 * de.1 - dc.1 * de.0;
-    // Too flat to leave the triangle by more than a rounding.
-    if span <= 0.0 || size <= 0.0 || sine.abs() <= 1e-9 * size {
+    let turns = |p: (f64, f64), q: (f64, f64)| {
+        let sine = p.0 * q.1 - p.1 * q.0;
+        (sine.abs() > 1e-9 * p.0.hypot(p.1) * q.0.hypot(q.1)).then_some(sine)
+    };
+    // An arc seen edge on (a curved cap's rim seen along the round's axis)
+    // is a straight line, and a short enough arc is one to within a
+    // rounding: neither leaves the triangle. Its tangents at its ends and
+    // at its middle are then parallel; at the ends alone, a half turn's
+    // are too.
+    if chord.0.hypot(chord.1) <= 0.0 || (turns(dc, dm).is_none() && turns(dc, de).is_none()) {
         return None;
     }
+    // Past a quarter turn the tangents meet far from the arc, or behind it.
+    let sine = match turns(dc, de) {
+        Some(sine) if (turn - at_corner).abs() <= std::f64::consts::FRAC_PI_2 => sine,
+        _ => {
+            return Some(Err(BlendError::PlanningFailure {
+                reason: "the fillet's end takes too long a piece of its cap's arc edge".into(),
+            }));
+        }
+    };
     let along = (chord.0 * de.1 - chord.1 * de.0) / sine;
     let apex = (c.0 + dc.0 * along, c.1 + dc.1 * along);
     let bows_out = cross(c, e, apex) * cross(c, e, flat(other)) < 0.0;
@@ -6336,6 +6354,31 @@ mod tests {
                 matches!(bow_of_unit_arc(turn, inside), Some(Err(_))),
                 "turn {turn}"
             );
+        }
+    }
+
+    #[test]
+    fn an_arc_seen_edge_on_is_a_straight_side() {
+        // A unit circle in the plane y = 0, seen along z: a line along x,
+        // whatever the turn of its piece.
+        let mut topo = Topology::new();
+        let at = |angle: f64| Point3::new(angle.cos(), 0.0, angle.sin());
+        let (corner, far) = (at(0.0), at(3.0));
+        let a = topo.add_vertex(brepkit_topology::vertex::Vertex::new(corner, 1e-7));
+        let b = topo.add_vertex(brepkit_topology::vertex::Vertex::new(far, 1e-7));
+        let circle = brepkit_math::curves::Circle3D::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, -1.0, 0.0),
+            1.0,
+        )
+        .unwrap();
+        let edge = brepkit_topology::edge::Edge::new(a, b, EdgeCurve::Circle(circle));
+        let other = Point3::new(0.5, 0.4, 0.0);
+        for turn in [0.3, 1.6, 2.9] {
+            let bow = arc_bow(&edge, corner, far, true, [at(turn), other], &|p: Point3| {
+                (p.x(), p.y())
+            });
+            assert!(bow.is_none(), "turn {turn}");
         }
     }
 
