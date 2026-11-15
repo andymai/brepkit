@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794744294988,
+  "lastUpdate": 1794748928747,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -70739,6 +70739,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 19924232,
             "range": "± 52273",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "5c11689c6970ead92df00035ccd19148b34d4bfb",
+          "message": "fix(blend): notch an end wall whose corner edge is an arc (#2467)\n\n## Summary\n\nCloses #2446.\n\nA box has a cylindrical vault as its top. A round along the straight\nedge between a side wall and the vault ends on the two end walls. The\nedge of each end wall on the vault is an arc.\n\nThe notch of an end wall took a corner only when its two edges were\nlines or B-splines. With an arc at the corner, the end wall stayed\nwhole, and a flat triangular patch closed each end of the round. The\npatch lay in the plane of the end wall, inside its outline, and its\nnormal pointed into the solid. Each edge had two uses, so\n`validate_solid` accepted the solid. Its mesh was open. The result had 9\nfaces.\n\nThe notch now takes a corner edge of any kind that the contact ends on\n(`terminal_cap_is_notchable` in `fillet_builder.rs`,\n`notched_wire_edges` in `builder_utils.rs`). The contact end is read on\nan arc within the span of the arc. The trim already splits a circle or\nellipse edge where a contact ends on it. The result has 7 faces: the\nround, and each end wall with five edges.\n\nAn arc corner edge can bow past the straight line from the corner to the\nend of the contact, and the notch goes with it. `notch_stays_clear`\ntested only the triangle between the corner and the two contact ends. It\nnow also tests the triangle between the corner, the end of the contact\non the arc, and the point where the two tangents of the arc meet\n(`arc_bow`). A hole of the end face in that sliver gives a planning\nfailure. A piece of an arc longer than a quarter turn also gives a\nplanning failure. An arc that the view shows edge on is a straight side\nof the notch, with no limit on its piece: a curved cap's rim seen along\nthe axis of the round is such an arc. The test for it compares two\ntangents of the arc a quarter turn apart, each projected on the two axes\nof the view.\n\nThe face in #2446 has no hole, so the check of #2452 does not apply to\nit.\n\n## How I checked it\n\n- New test file `crates/operations/tests/fillet_plane_vault.rs`, 7\ntests. The vault bows up (radius 13 and radius 6) or dishes down (radius\n13). The round is along each of the two straight edges and along each of\nthe two end arcs, at r 1 and r 2.5, upright and in a turned and shifted\npose.\n- Each case requires a valid solid, a watertight mesh at deflection 0.05\nand 0.5, and the removed volume within 1e-4 of its closed form. For a\nstraight edge, the closed form is the area between the wall, the round\nand the vault, times the length. For an end arc, it is a square corner\nless its quarter disc, turned about the axis of the vault.\n- For a straight edge, each case also requires one new face, two end\nwalls with five edges, a point in the removed corner outside the solid,\nand a point below the round inside it.\n- On main, the three tests of a straight edge fail: the result has 9\nfaces and an open mesh. The two tests of an end arc pass on main.\n- `a_bore_between_the_arc_and_its_chord_is_in_the_rounds_way` cuts a\nbore along the vault through the two end walls, between the arc and its\nchord. The round is refused. Without the second triangle, the round is\nmade and the test fails. `a_bore_clear_of_the_rounds_end_stays` has a\nbore of radius 1 through the middle of the end walls: the round is made,\nwith 8 faces and the same removed volume.\n- Unit tests of `arc_bow` in `fillet_builder.rs` cover an arc that bows\naway from the notch and one that bows into it, a piece of 1.6, 2.9,\nalmost a half turn and almost a full turn, and an arc seen edge on,\nupright and in a turned and shifted pose.\n- `a_wide_round_ending_on_a_nearly_tangent_cylinder` in\n`fillet_curved_end_caps.rs` takes more than a quarter turn of a curved\ncap's rim, upright and turned. The round is made.\n- `cargo test --release -p brepkit-blend -p brepkit-operations` passes:\n2,411 tests, 15 ignored.\n- The pose sweep and the truth audit match the base line for line.\n- `cargo clippy -p brepkit-blend -p brepkit-operations --all-targets --\n-D warnings`, `scripts/check-mul-add.sh` and\n`scripts/check-boundaries.sh` pass.\n\n## Not in this PR\n\n- #2459: `validate_solid` does not report a face that lies on another\nface of the solid.\n- #2460: the round along the straight edge is a B-spline band. The exact\nband is a cylinder.\n- #2474: a B-spline corner edge that bows past its chord has the same\ngap in the clearance check. This gap is also on main.\n- A concave edge between a plane and a vault has no test here.",
+          "timestamp": "2026-11-15T05:19:06-08:00",
+          "tree_id": "a01e61766c612e66c29ca7ed7f2dd746dd07da29",
+          "url": "https://github.com/andymai/brepkit/commit/5c11689c6970ead92df00035ccd19148b34d4bfb"
+        },
+        "date": 1794748917254,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 666424,
+            "range": "± 8618",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 682969,
+            "range": "± 7263",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 8332,
+            "range": "± 66",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 424764,
+            "range": "± 8245",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 14937481,
+            "range": "± 118632",
             "unit": "ns/iter"
           }
         ]
