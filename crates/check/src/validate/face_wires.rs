@@ -1017,14 +1017,14 @@ mod tests {
             ],
         );
         let outer = polygon(&mut topo, &corners);
-        // A thin spike of the hole through the outline's long edge.
+        // A thin slot of a hole through the outline's long edge.
         let spike = points(
             &mut topo,
             &[
-                [499.0, 5.0, 0.0],
+                [499.999_95, 5.0, 0.0],
                 [499.999_95, -5.0, 0.0],
                 [500.000_05, -5.0, 0.0],
-                [501.0, 5.0, 0.0],
+                [500.000_05, 5.0, 0.0],
             ],
         );
         let hole = polygon(&mut topo, &spike);
