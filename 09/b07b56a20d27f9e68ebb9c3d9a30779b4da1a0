@@ -1,0 +1,30 @@
+crates/algo/src/pave_filler/make_blocks.rs
+  s_709d857a0f83c4::t_a84ea82750648e 92-94,266-317
+crates/algo/src/builder/wire_builder.rs
+  s_709d857a0f83c4::t_22f170d69a8435 161-168,808-823,829-850,1209-1271
+  s_709d857a0f83c4::t_db3b16db5adbba 806-807,824-828
+crates/algo/src/pave_filler/helpers.rs
+  s_709d857a0f83c4::t_cf4c53f5a91f14 355,361-398
+crates/algo/src/pave_filler/phase_ve.rs
+  s_709d857a0f83c4::t_372a660946d8af 133
+crates/operations/tests/ring_cut_through_its_axis.rs
+  s_709d857a0f83c4::t_12ce6e9d14b91c 1-339
+crates/algo/src/builder/face_splitter/mod.rs
+  s_709d857a0f83c4::t_6563651ca0ae94 9147-9160
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "09b07b56a20d27f9e68ebb9c3d9a30779b4da1a0",
+  "prompts": {},
+  "sessions": {
+    "s_709d857a0f83c4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6cca9812-d77a-4dae-96f4-26562694b205",
+        "model": "claude-fable-5-2"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
