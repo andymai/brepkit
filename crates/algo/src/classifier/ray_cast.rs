@@ -1748,7 +1748,7 @@ fn extrusion_geom(
     }
     if whole {
         return Ok(Some(FaceGeom::Extrusion {
-            samples: Box::new(ProfileSamples::new(&profile)),
+            samples: Box::new(ProfileSamples::new(&profile, along)),
             profile,
             along,
             trim: None,
@@ -1756,7 +1756,7 @@ fn extrusion_geom(
     }
     Ok(
         ExtrusionTrim::new(topo, face, &profile, along)?.map(|trim| FaceGeom::Extrusion {
-            samples: Box::new(ProfileSamples::new(&profile)),
+            samples: Box::new(ProfileSamples::new(&profile, along)),
             profile,
             along,
             trim: Some(trim),
@@ -2653,18 +2653,99 @@ fn ray_nurbs_crossings(
 
 /// Samples of an extrusion's profile every ray reads the same: the first
 /// intervals' bounds (even steps and the interior knots), the profile's
-/// points there and at each interval's middle, and its two ends.
+/// points there and at each interval's middle, at the even steps alone (a
+/// ray along the extrusion is tested against those), and its two ends.
 struct ProfileSamples {
     breaks: Vec<f64>,
     at_breaks: Vec<Point3>,
     at_middles: Vec<Point3>,
+    at_steps: Vec<Point3>,
     ends: [Point3; 2],
+    hull: Option<FlatBox>,
+}
+
+/// A box about an extrusion's profile in the plane square to the
+/// extrusion, in two axes `e` there: the profile's control points' extent
+/// along each, which holds the profile (its weights all positive). A ray
+/// whose line, seen along the extrusion, passes the box by more than the
+/// tolerance meets the profile nowhere near, so its crossing test reads
+/// nothing.
+struct FlatBox {
+    e: [Vec3; 2],
+    lo: [f64; 2],
+    hi: [f64; 2],
+    /// The largest coordinate of a control point, which bounds the rounding.
+    scale: f64,
+}
+
+impl FlatBox {
+    fn new(profile: &brepkit_math::nurbs::curve::NurbsCurve, along: Vec3) -> Option<Self> {
+        let axis = along.normalize().ok()?;
+        if !profile.weights().iter().all(|&w| w > 0.0) {
+            return None;
+        }
+        let seed = if axis.x().abs() < 0.9 {
+            Vec3::new(1.0, 0.0, 0.0)
+        } else {
+            Vec3::new(0.0, 1.0, 0.0)
+        };
+        let e0 = (seed - axis * axis.dot(seed)).normalize().ok()?;
+        let e = [e0, axis.cross(e0)];
+        let (mut lo, mut hi, mut scale) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2], 1.0_f64);
+        for p in profile.control_points() {
+            let x = Vec3::new(p.x(), p.y(), p.z());
+            for k in 0..2 {
+                let c = e[k].dot(x);
+                lo[k] = lo[k].min(c);
+                hi[k] = hi[k].max(c);
+            }
+            scale = scale.max(p.x().abs()).max(p.y().abs()).max(p.z().abs());
+        }
+        lo.iter()
+            .chain(&hi)
+            .all(|c| c.is_finite())
+            .then_some(Self { e, lo, hi, scale })
+    }
+
+    /// Whether the line through `origin` along `ray_dir` passes the box, seen
+    /// along the extrusion, by more than `near` and the rounding of the
+    /// crossing test's own reading (or, for a ray the test reads as running
+    /// along the extrusion, `along_ray`, whether `origin` lies that far from
+    /// the box). A ray all but along the extrusion that the test still reads
+    /// across it is never passed over: seen along the extrusion its direction
+    /// is mostly rounding.
+    fn misses(&self, origin: Point3, ray_dir: Vec3, along_ray: bool, near: f64) -> bool {
+        let o = Vec3::new(origin.x(), origin.y(), origin.z());
+        let scale = self
+            .scale
+            .max(origin.x().abs())
+            .max(origin.y().abs())
+            .max(origin.z().abs());
+        let margin = near + 1e-9 * scale;
+        let oc = [self.e[0].dot(o), self.e[1].dot(o)];
+        if along_ray {
+            return (0..2).any(|k| self.lo[k] - oc[k] > margin || oc[k] - self.hi[k] > margin);
+        }
+        let r = [self.e[0].dot(ray_dir), self.e[1].dot(ray_dir)];
+        let r_len = r[0].hypot(r[1]);
+        if r_len <= 1e-6 * ray_dir.length() {
+            return false;
+        }
+        let side = |c0: f64, c1: f64| ((c0 - oc[0]) * r[1] - (c1 - oc[1]) * r[0]) / r_len;
+        let sides = [
+            side(self.lo[0], self.lo[1]),
+            side(self.lo[0], self.hi[1]),
+            side(self.hi[0], self.lo[1]),
+            side(self.hi[0], self.hi[1]),
+        ];
+        sides.iter().all(|&f| f > margin) || sides.iter().all(|&f| f < -margin)
+    }
 }
 
 impl ProfileSamples {
     const SAMPLES: usize = 64;
 
-    fn new(profile: &brepkit_math::nurbs::curve::NurbsCurve) -> Self {
+    fn new(profile: &brepkit_math::nurbs::curve::NurbsCurve, along: Vec3) -> Self {
         const SAMPLES: usize = ProfileSamples::SAMPLES;
         let (v0, v1) = profile.domain();
         let at = |k: usize| v0 + (v1 - v0) * (k as f64 / SAMPLES as f64);
@@ -2687,7 +2768,9 @@ impl ProfileSamples {
                 .windows(2)
                 .map(|w| profile.evaluate(f64::midpoint(w[0], w[1])))
                 .collect(),
+            at_steps: (0..=SAMPLES).map(|k| profile.evaluate(at(k))).collect(),
             ends: [profile.evaluate(v0), profile.evaluate(v1)],
+            hull: FlatBox::new(profile, along),
             breaks,
         }
     }
@@ -2706,20 +2789,28 @@ fn ray_extrusion_crossings(
     trim: Option<&ExtrusionTrim>,
     tol: Tolerance,
 ) -> (i32, bool) {
-    const SAMPLES: usize = ProfileSamples::SAMPLES;
     const MAX_DEPTH: u32 = 8;
     let near = 10.0 * tol.linear;
     let Ok(axis) = along.normalize() else {
         return (0, true);
     };
     let flat = |x: Vec3| x - axis * axis.dot(x);
-    let (v0, v1) = profile.domain();
-    let at = |k: usize| v0 + (v1 - v0) * (k as f64 / SAMPLES as f64);
     let rp = flat(ray_dir);
     let rp_len = rp.length();
-    if rp_len <= 1e-12 * ray_dir.length() {
+    let along_ray = rp_len <= 1e-12 * ray_dir.length();
+    if samples
+        .hull
+        .as_ref()
+        .is_some_and(|hull| hull.misses(origin, ray_dir, along_ray, near))
+    {
+        return (0, false);
+    }
+    if along_ray {
         // Along the extrusion: the ray runs in the surface or misses it.
-        let grazes = (0..=SAMPLES).any(|k| flat(profile.evaluate(at(k)) - origin).length() <= near);
+        let grazes = samples
+            .at_steps
+            .iter()
+            .any(|&p| flat(p - origin).length() <= near);
         return (0, grazes);
     }
     let side_of = |p: Point3| flat(p - origin).cross(rp).dot(axis) / rp_len;
@@ -4516,7 +4607,7 @@ mod tests {
             Point3::new(0.5, 0.007, 0.0),
             Vec3::new(0.0, 1.0, 0.0),
             &profile,
-            &ProfileSamples::new(&profile),
+            &ProfileSamples::new(&profile, Vec3::new(1.0, 0.0, 0.0)),
             Vec3::new(1.0, 0.0, 0.0),
             None,
             Tolerance::new(),
@@ -4546,7 +4637,7 @@ mod tests {
             Point3::new(0.5, 0.0, -5.0),
             Vec3::new(0.0, 0.0, 1.0),
             &profile,
-            &ProfileSamples::new(&profile),
+            &ProfileSamples::new(&profile, along),
             along,
             None,
             Tolerance::new(),
@@ -4556,7 +4647,7 @@ mod tests {
             Point3::new(0.5, -5.0, 0.0),
             Vec3::new(0.0, 1.0, 0.0),
             &profile,
-            &ProfileSamples::new(&profile),
+            &ProfileSamples::new(&profile, along),
             along,
             None,
             Tolerance::new(),
@@ -4588,7 +4679,7 @@ mod tests {
             Point3::new(0.5, 0.001, 0.0),
             Vec3::new(0.0, 1.0, 0.0),
             &profile,
-            &ProfileSamples::new(&profile),
+            &ProfileSamples::new(&profile, Vec3::new(1.0, 0.0, 0.0)),
             Vec3::new(1.0, 0.0, 0.0),
             None,
             Tolerance::new(),
