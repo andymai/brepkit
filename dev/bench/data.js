@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794755176626,
+  "lastUpdate": 1794758309826,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -70901,6 +70901,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25002344,
             "range": "± 418432",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "a2b789c4e2f5eef42ce2913ac4e9b904990b6b46",
+          "message": "fix(algo): read a ball's loop past a pole round its own side (#2499)\n\n## Summary\n\nThe pose sweep line `ball | y > 0, z > 1` at pose `ry0.3rz1` fell back\nto a mesh for the cut, the intersection and the reverse cut. The three\nresults are exact again. Closes #2498.\n\nA ball of radius 3 is cut by a block whose faces `y = 0` and `z = 1`\npass through it. The section of the face `y = 0` on the ball runs\nthrough the pole of the ball, along two meridians a half turn apart. One\nof them is the seam of the ball. The loop of the piece in the `(u, v)`\nof the ball passes the pole there, and a point at a pole has no\nlongitude.\n\n`unwrapped_u` (`crates/algo/src/builder/face_splitter/mod.rs`) took the\nnearest way round between the two meridians. For a half turn, the last\nbit of a coordinate decided the way. In the turned pose, the loop was\nread round the other half of the cap. The piece and the rest of the ball\neach took an interior point of the other, and the classifier selected\nthe wrong one.\n\nThe region of a loop is on its left. So the loop passes the north pole\ntoward `-u` and the south pole toward `+u`. `unwrapped_u` now takes that\nway, and puts the two corners of the passage in place of the pole\npoints. A hole is turned round before it is read, because it runs with\nits own region on its right.\n\nA point counts as a pole point within 1e-7 of the pole's latitude. A\npoint projected from a pole reads a latitude short of the pole by the\nsquare root of its rounding, about 1.5e-8. A loop with no point off the\npoles, and a small loop beside a pole, keep the nearest way.\n\n## Where the fault came from\n\nThe fault is older than the line in the sweep shows. #2447 (`8a3720562`)\nchanged the last bits of a transform, and the tie at the pole went the\nother way for the sweep's build of this pose. The sweep reads exact\nresults at `c8b7eb138` and a fallback at `8a3720562`. The same pair with\nthe block moved to its place in one transform, where the sweep uses two,\nfalls back at `6a4783fd8` too.\n\n## How I checked it\n\n- `crates/operations/tests/ball_quarter_cap.rs` runs the three booleans\nin the five sweep poses and one more pose, with the block moved in one\ntransform and in two. Each boolean runs with `mesh_fallback: false`.\nEach result must be valid and watertight, have the expected face count,\nhold the closed-form volume to 1e-9, and classify a point inside and a\npoint outside. On main, the test fails at `ry0.3rz1` for the two ways to\nmove the block.\n- Two unit tests of `unwrapped_u` read a loop through the north pole\nwith four values for the longitude of the pole point and four for the\nseam meridian, from each start point. They also read a loop through the\nsouth pole, a loop off the poles across the seam, and that loop lifted\nto within 1e-6 of the pole.\n- `cargo test --release -p brepkit-algo -p brepkit-operations`: 2,643\npassed, 0 failed, 15 ignored.\n- The pose sweep differs from main `b14ae6559` on those three lines\nonly, and has no fallback line. The truth audit gives the same output as\nmain.\n- `cargo clippy --all-targets -- -D warnings` for the two crates, `cargo\nfmt --all --check` and the three check scripts pass.",
+          "timestamp": "2026-11-15T07:54:55-08:00",
+          "tree_id": "8383cb11e2e97e8d110db76cf2078067decb85bb",
+          "url": "https://github.com/andymai/brepkit/commit/a2b789c4e2f5eef42ce2913ac4e9b904990b6b46"
+        },
+        "date": 1794758296164,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1097500,
+            "range": "± 8945",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1144326,
+            "range": "± 4669",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13003,
+            "range": "± 159",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 707864,
+            "range": "± 3182",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24599252,
+            "range": "± 27437",
             "unit": "ns/iter"
           }
         ]
