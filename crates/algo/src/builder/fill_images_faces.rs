@@ -4192,6 +4192,27 @@ struct BoundaryArc {
     forward: bool,
 }
 
+impl BoundaryArc {
+    /// Whether `p` is on the edge's own curve, within `tol`.
+    fn holds(&self, p: Point3, tol: f64) -> bool {
+        match &self.curve {
+            EdgeCurve::Line => point_to_segment_dist_3d(p, self.start, self.end) < tol,
+            curve @ (EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_)) => {
+                let (start, end) = if self.forward {
+                    (self.start, self.end)
+                } else {
+                    (self.end, self.start)
+                };
+                point_on_edge(curve, start, end, p, tol)
+            }
+            EdgeCurve::NurbsCurve(c) => {
+                brepkit_math::nurbs::projection::project_point_to_curve(c, p, tol * 1e-3)
+                    .is_ok_and(|hit| hit.distance < tol)
+            }
+        }
+    }
+}
+
 /// Clip a 3D line segment to a face's boundary polygon.
 ///
 /// Collects the outer wire vertices as line segments, then finds where
@@ -4661,8 +4682,16 @@ fn clip_line_to_face_boundary(
         for (k, (seg_start, seg_end)) in boundary_segments.iter().enumerate() {
             let start_dist = point_to_segment_dist_3d(clipped_start, *seg_start, *seg_end);
             let end_dist = point_to_segment_dist_3d(clipped_end, *seg_start, *seg_end);
+            // The chord stands for a straight edge only. A piece between the
+            // ends of a curved edge lies on its chord, and across the face
+            // (the chord of an aerofoil cap, from its nose to its trailing
+            // edge), unless its middle is on the curve too.
+            let on_edge = boundary_arcs[k].as_ref().is_none_or(|arc| {
+                arc.holds(clipped_start + (clipped_end - clipped_start) * 0.5, tol)
+            });
             if start_dist < tol
                 && end_dist < tol
+                && on_edge
                 && !keep_run_along.is_some_and(|keep| keep(boundary_edge_ids[k]))
             {
                 continue 'interval;

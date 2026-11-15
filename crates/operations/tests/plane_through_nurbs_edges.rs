@@ -8,9 +8,8 @@
 //! their own edges, where the face-face phase drops the section as being the
 //! edge, so the tool's face is split along the edges themselves.
 //!
-//! The tool's face does split. The cut still fails on the caps, whose section
-//! along the chord is not trimmed where their two splines meet (#2404), so
-//! both tests wait on that.
+//! Each cap takes its section along the chord, from the vertex at the nose
+//! to the vertex at the trailing edge, where its two splines meet.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -42,9 +41,10 @@ fn half_thickness(x: f64) -> f64 {
         * (0.2969 * x.sqrt() - 0.126 * x - 0.3516 * x * x + 0.2843 * x.powi(3) - 0.1036 * x.powi(4))
 }
 
-/// A symmetric aerofoil section in the plane `x = at`, its chord along `z`
-/// from 2 to 42 on `y = 0`: an upper and a lower spline.
-fn section(topo: &mut Topology, at: f64) -> FaceId {
+/// An aerofoil section in the plane `x = at`, its chord along `z` from 2 to
+/// 42 on `y = 0`: an upper and a lower spline, the lower `lower` times as
+/// thick as the upper.
+fn section(topo: &mut Topology, at: f64, lower: f64) -> FaceId {
     let n = 12;
     let point = |x: f64, side: f64| {
         Point3::new(
@@ -57,7 +57,7 @@ fn section(topo: &mut Topology, at: f64) -> FaceId {
         .map(|i| 0.5 * (1.0 - (std::f64::consts::PI * f64::from(i) / f64::from(n)).cos()))
         .collect();
     let upper: Vec<Point3> = xs.iter().map(|&x| point(x, 1.0)).collect();
-    let lower: Vec<Point3> = xs.iter().rev().map(|&x| point(x, -1.0)).collect();
+    let lower: Vec<Point3> = xs.iter().rev().map(|&x| point(x, -lower)).collect();
     let le = topo.add_vertex(Vertex::new(upper[0], 1e-7));
     let te = topo.add_vertex(Vertex::new(upper[n as usize], 1e-7));
     let up = brepkit_math::nurbs::fitting::interpolate(&upper, 3).unwrap();
@@ -81,11 +81,11 @@ fn section(topo: &mut Topology, at: f64) -> FaceId {
     ))
 }
 
-fn prism(topo: &mut Topology) -> SolidId {
+fn prism(topo: &mut Topology, lower: f64) -> SolidId {
     let sections = [
-        section(topo, 0.0),
-        section(topo, SPAN / 2.0),
-        section(topo, SPAN),
+        section(topo, 0.0, lower),
+        section(topo, SPAN / 2.0, lower),
+        section(topo, SPAN, lower),
     ];
     loft_smooth(topo, &sections).unwrap()
 }
@@ -109,12 +109,25 @@ fn census(topo: &Topology, solid: SolidId) -> BTreeMap<&'static str, usize> {
     m
 }
 
-/// `blank` less `tool` is the prism's lower half: its lower NURBS face, the
-/// cut face in `y = 0`, and half of each cap.
-fn leaves_the_lower_half(topo: &mut Topology, blank: SolidId, tool: SolidId) {
+/// `blank` less `tool`, both moved by `pose`, is the prism's lower part: its
+/// lower NURBS face, the cut face in `y = 0`, and the lower part of each cap.
+/// `lower` is the thickness of that part against the upper one.
+fn leaves_the_lower_half(
+    topo: &mut Topology,
+    blank: SolidId,
+    tool: SolidId,
+    lower: f64,
+    (name, pose): &(&str, Mat4),
+) {
+    transform_solid(topo, blank, pose).unwrap();
+    transform_solid(topo, tool, pose).unwrap();
     let before = boolean::mesh_fallback_count();
     let half = boolean::boolean(topo, BooleanOp::Cut, blank, tool).unwrap();
-    assert_eq!(boolean::mesh_fallback_count(), before, "mesh fallback");
+    assert_eq!(
+        boolean::mesh_fallback_count(),
+        before,
+        "mesh fallback, {name}"
+    );
     let report = validate_solid(topo, half).unwrap();
     assert!(report.is_valid(), "{:?}", report.issues);
     assert_eq!(
@@ -123,10 +136,12 @@ fn leaves_the_lower_half(topo: &mut Topology, blank: SolidId, tool: SolidId) {
     );
     for x in [5.0, 30.0, 55.0] {
         for z in [8.0, 22.0, 36.0] {
-            let class =
-                |y: f64| classify_point(topo, half, Point3::new(x, y, z), 0.01, 1e-7).unwrap();
+            let class = |y: f64| {
+                let p = pose.mul_point(Point3::new(x, y, z));
+                classify_point(topo, half, p, 0.01, 1e-7).unwrap()
+            };
             assert_eq!(
-                class(-0.5),
+                class(-0.5 * lower),
                 PointClassification::Inside,
                 "below at {x}, {z}"
             );
@@ -137,7 +152,7 @@ fn leaves_the_lower_half(topo: &mut Topology, blank: SolidId, tool: SolidId) {
             );
         }
     }
-    let expected = half_area() * SPAN;
+    let expected = half_area() * lower * SPAN;
     let volume = solid_volume(topo, half, 0.005).unwrap();
     assert!(
         (volume - expected).abs() < 2e-3 * expected,
@@ -145,16 +160,42 @@ fn leaves_the_lower_half(topo: &mut Topology, blank: SolidId, tool: SolidId) {
     );
 }
 
+/// The poses each cut runs in: as built, turned off every axis, moved far
+/// from the origin, and mirrored.
+fn poses() -> [(&'static str, Mat4); 4] {
+    [
+        ("as built", Mat4::identity()),
+        ("turned", Mat4::rotation_x(0.41) * Mat4::rotation_z(1.13)),
+        (
+            "shifted",
+            Mat4::translation(1000.0, -7.3, 0.123) * Mat4::rotation_y(0.3),
+        ),
+        ("mirrored", Mat4::scale(1.0, 1.0, -1.0)),
+    ]
+}
+
+/// A box on the chord plane, across a prism whose lower part is `lower`
+/// times as thick as its upper part.
+fn box_on_the_chord_plane(lower: f64) {
+    for pose in poses() {
+        let mut topo = Topology::new();
+        let blank = prism(&mut topo, lower);
+        let tool = make_box(&mut topo, 80.0, 50.0, 70.0).unwrap();
+        transform_solid(&mut topo, tool, &Mat4::translation(-10.0, 0.0, -10.0)).unwrap();
+        leaves_the_lower_half(&mut topo, blank, tool, lower, &pose);
+    }
+}
+
 #[test]
-#[ignore = "the section on each cap is not trimmed at the nose: #2404"]
 fn a_box_on_the_chord_plane_leaves_the_lower_half() {
     // The box's bottom face also takes a section from each cap, so it has
     // sections of its own beside the two edges that lie in it.
-    let mut topo = Topology::new();
-    let blank = prism(&mut topo);
-    let tool = make_box(&mut topo, 80.0, 50.0, 70.0).unwrap();
-    transform_solid(&mut topo, tool, &Mat4::translation(-10.0, 0.0, -10.0)).unwrap();
-    leaves_the_lower_half(&mut topo, blank, tool);
+    box_on_the_chord_plane(1.0);
+}
+
+#[test]
+fn a_box_on_the_chord_plane_of_a_cambered_section_leaves_the_lower_part() {
+    box_on_the_chord_plane(0.5);
 }
 
 /// A lens in the plane `y`, from (-40, 22) to (100, 22) in `(x, z)` and
@@ -203,13 +244,86 @@ fn lens(topo: &mut Topology, y: f64) -> FaceId {
 }
 
 #[test]
-#[ignore = "the section on each cap is not trimmed at the nose: #2404"]
 fn a_tool_whose_flat_face_has_spline_edges_leaves_the_lower_half() {
     // The tool's bottom face is bounded by two splines, so its region is
     // read on sampled loops.
-    let mut topo = Topology::new();
-    let blank = prism(&mut topo);
-    let profiles = [lens(&mut topo, 0.0), lens(&mut topo, 50.0)];
-    let tool = loft(&mut topo, &profiles).unwrap();
-    leaves_the_lower_half(&mut topo, blank, tool);
+    for pose in poses() {
+        let mut topo = Topology::new();
+        let blank = prism(&mut topo, 1.0);
+        let profiles = [lens(&mut topo, 0.0), lens(&mut topo, 50.0)];
+        let tool = loft(&mut topo, &profiles).unwrap();
+        leaves_the_lower_half(&mut topo, blank, tool, 1.0, &pose);
+    }
+}
+
+#[test]
+#[ignore = "open: the assembly rejects every face: #2450"]
+fn a_box_tilted_about_the_nose_leaves_the_part_under_its_face() {
+    // The box's bottom face holds the leading edge alone. Its section on each
+    // cap starts at the nose vertex and ends on the lower spline.
+    let slope = 0.05_f64;
+    let tilt = Mat4::translation(0.0, 0.0, 2.0)
+        * Mat4::rotation_x(slope.atan())
+        * Mat4::translation(0.0, 0.0, -2.0);
+    // The cut face is y = -slope (z - 2).
+    let n = 20_000;
+    let area = (0..n)
+        .map(|i| {
+            let x = (f64::from(i) + 0.5) / f64::from(n);
+            let h = half_thickness(x);
+            ((-slope * x).min(h) + h).max(0.0) / f64::from(n)
+        })
+        .sum::<f64>()
+        * CHORD
+        * CHORD;
+    for (name, pose) in poses() {
+        let mut topo = Topology::new();
+        let blank = prism(&mut topo, 1.0);
+        let tool = make_box(&mut topo, 80.0, 50.0, 70.0).unwrap();
+        transform_solid(
+            &mut topo,
+            tool,
+            &(tilt * Mat4::translation(-10.0, 0.0, -10.0)),
+        )
+        .unwrap();
+        transform_solid(&mut topo, blank, &pose).unwrap();
+        transform_solid(&mut topo, tool, &pose).unwrap();
+        let before = boolean::mesh_fallback_count();
+        let part = boolean::boolean(&mut topo, BooleanOp::Cut, blank, tool).unwrap();
+        assert_eq!(
+            boolean::mesh_fallback_count(),
+            before,
+            "mesh fallback, {name}"
+        );
+        let report = validate_solid(&topo, part).unwrap();
+        assert!(report.is_valid(), "{:?}", report.issues);
+        assert_eq!(
+            census(&topo, part),
+            BTreeMap::from([("nurbs", 1), ("plane", 3)])
+        );
+        for x in [5.0, 30.0, 55.0] {
+            for z in [8.0, 14.0, 20.0] {
+                let class = |off: f64| {
+                    let p = pose.mul_point(Point3::new(x, -slope * (z - 2.0) + off, z));
+                    classify_point(&topo, part, p, 0.01, 1e-7).unwrap()
+                };
+                assert_eq!(
+                    class(-0.1),
+                    PointClassification::Inside,
+                    "below at {x}, {z}"
+                );
+                assert_eq!(
+                    class(0.1),
+                    PointClassification::Outside,
+                    "above at {x}, {z}"
+                );
+            }
+        }
+        let expected = area * SPAN;
+        let volume = solid_volume(&topo, part, 0.005).unwrap();
+        assert!(
+            (volume - expected).abs() < 2e-3 * expected,
+            "volume {volume} should be {expected}"
+        );
+    }
 }
