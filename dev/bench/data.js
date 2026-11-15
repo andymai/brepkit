@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794716017570,
+  "lastUpdate": 1794716716772,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -69821,6 +69821,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 14666275,
             "range": "± 391510",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "333663a71fa46d34a344e8f8c009ae106e10f724",
+          "message": "fix(algo): split a ring by faces through its axis (#2466)\n\nThe intersection of a ring with a box whose side faces pass through the\nring's axis fell back to a mesh. The result had 21 flat faces and a\nvolume of 39.129. It is now exact: 2 cylinder faces, 4 planes, and the\nclosed-form volume 39.270. The cut and the fuse of the same pair, and a\nsheet-metal bend made from a tube and a wedge, are exact too. Closes\n#2374.\n\nThere were three faults.\n\n**The pave filler dropped a crossing at the origin of a rim's circle.**\nThe ring comes from a cut. That cut leaves the vertex of each rim a\nquarter turn before the origin of the circle's parameter. The pave block\nof a closed rim spans the circle's own period, from 0 to 2π. The filler\ntook a crossing at parameter 0 for the end of the block, although the\nblock's ends are the rim's vertex. The box face `x = 0` meets each rim\nat that origin, so the rim got no pave there. The ring's end face then\nsplit into nothing.\n\n`block_spans_interior` (`crates/algo/src/pave_filler/helpers.rs`) now\nmeasures a crossing on a closed circle or ellipse from the rim's vertex.\nThe edge-edge and vertex-edge phases use it.\n\n**The wire builder passed a section that leaves a hole's rim.** The\npcurve of each rim piece is a fit through 17 samples. At the vertex\nbetween a 30 degree piece and a 60 degree piece, the two fits differ in\ndirection by about 6e-5 rad. The walk read that as a turn toward the\nhole, and took the next rim piece. The section at that vertex was then\nleft to a loop with a slit, and the face did not split.\n\n`continues_one_conic` (`crates/algo/src/builder/wire_builder.rs`) reads\ntwo boundary pieces of one circle or ellipse that meet at a vertex as\none curve that continues. Such a continuation ranks after each turn, as\nan exact continuation does. Sections keep the rule that they had: a\nsection that continues a section is a turn where a third section leaves\nbetween them.\n\n**The face splitter dropped a region that holds a hole.** The walk is\nnow correct. A ring's outer rim is one loop, and the hole with its\nsections is a second loop. The splitter drops a loop whose inside point\nlies in a hole of the face. It read that point off the outline alone,\nand the middle of a ring's outer rim is in the ring's hole.\n\nThe splitter now keeps a loop when a vertex of a hole lies inside the\nloop's exact outline. The change is in `split_face_2d_impl`\n(`crates/algo/src/builder/face_splitter/mod.rs`). Two tests in\n`keyholed_knuckles_end_to_end.rs` fail with the second fix and without\nthis one.\n\nThe first fault is the one in the issue. The second one shows in a 60\ndegree bend and for a box beside the axis. There, the two side faces\nmeet a rim less than half a turn apart, away from the rim's vertex.\n\n## How I checked it\n\n- `crates/operations/tests/ring_cut_through_its_axis.rs` has 4 tests.\nEach case runs upright, turned, shifted, mirrored and scaled by -1. Each\nboolean runs with `mesh_fallback: false`, and each result must be valid\nand watertight. Each must have 2 cylinder faces and the expected count\nof planes, the closed-form volume to 1e-6, and ray-cast points inside\nand outside.\n  - The issue's ring and box: intersect, cut and fuse.\n- A box longer than the ring, for a quarter and for a half of the ring.\n- A bend of 90, 60 and 120 degrees from a tube and a wedge, and the rest\nof the tube.\n- A box half a unit from the axis: the corner of the ring and the rest.\n- On main, the 4 tests fail. With the first fix only, 2 of them fail:\nthe 60 degree bend and the box beside the axis.\n- `a_rim_takes_a_pave_at_its_circles_origin_and_none_at_its_vertex` and\n`a_holes_rim_piece_runs_on_and_the_section_at_its_end_is_taken` are unit\ntests of the first two fixes. Each fails without its fix.\n- `cargo nextest run --release -p brepkit-algo -p brepkit-operations`\npasses (2,589 tests).\n- The pose sweep and the truth audit match main line for line.\n- `cargo clippy --all-targets -- -D warnings` and `cargo fmt --all\n--check` pass.\n\n## Left open\n\n- #2464: the coplanar phase drops a section piece whose middle is the\nmiddle of a longer section.\n- #2465: a rim piece of a hole longer than half a turn gets the pcurve\nof the shorter arc.\n\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nMakes the intersection of a ring with a box whose side faces pass\nthrough the ring's axis exact instead of falling back to a mesh. The\nresult now has 2 cylinder faces and the expected planes with a\nclosed-form volume; cut, fuse, and a sheet-metal bend from a tube and a\nwedge are exact too. Closes #2374.\n\nThree faults caused the mesh fallback:\n\n- **Bug Fixes**\n- The pave filler dropped a crossing at the origin of a rim's circle;\ncrossings on a closed circle or ellipse are now measured from the rim's\nvertex.\n- The wire builder walked past a section leaving a hole's rim; two\nboundary pieces of one circle or ellipse now read as one continuing\ncurve.\n- The face splitter dropped a region holding a hole; such a region is\nkept when a hole's vertex lies inside the region's exact outline.\n\n<sup>Written for commit 09b07b56a20d27f9e68ebb9c3d9a30779b4da1a0.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2466?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2466?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2466&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-11-15T04:22:34Z",
+          "tree_id": "af1af26333f910dd1c9fda519f78abf082ec1b97",
+          "url": "https://github.com/andymai/brepkit/commit/333663a71fa46d34a344e8f8c009ae106e10f724"
+        },
+        "date": 1794716708257,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 611435,
+            "range": "± 10232",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 641240,
+            "range": "± 6239",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 7561,
+            "range": "± 35",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 397008,
+            "range": "± 4535",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 14088598,
+            "range": "± 628343",
             "unit": "ns/iter"
           }
         ]
