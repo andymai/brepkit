@@ -8579,7 +8579,7 @@ fn split_plane_line_at_curved_boundaries(
     raw: RawCurve,
     tol: Tolerance,
 ) -> Vec<RawCurve> {
-    // How far a sampled crossing lands off the vertex it stands for.
+    // How far a sampled crossing of a spline lands off the end it stands for.
     const END_SNAP: f64 = 1e-6;
     if !matches!(raw.curve, EdgeCurve::Line) {
         return vec![raw];
@@ -8643,9 +8643,10 @@ fn split_plane_line_at_curved_boundaries(
         }
         let mut hits: Vec<Point3> = Vec::new();
         // An edge's end on the partner's plane is where the boundary meets the
-        // line, whatever the edge does there. A sampled search loses the root
-        // at an end the edge leaves square to the line (an aerofoil's nose),
-        // and lands near an end it leaves at an angle, a sliver off the vertex.
+        // line, whatever the edge does there. The sampled search on a spline
+        // loses the root at an end the edge leaves square to the line (an
+        // aerofoil's nose), and lands near an end it leaves at an angle, a
+        // sliver off the vertex.
         let mut ends: Vec<Point3> = Vec::new();
         for oe in wires.iter().flat_map(|w| w.edges()) {
             let Ok(edge) = topo.edge(oe.edge()) else {
@@ -8655,12 +8656,15 @@ fn split_plane_line_at_curved_boundaries(
                 return vec![raw];
             };
             let (sp, ep) = (sv.point(), ev.point());
-            for (p, v) in [(sp, sv), (ep, ev)] {
-                let off = partner_n.dot(Vec3::new(p.x(), p.y(), p.z())) - partner_d;
-                if off.abs() <= v.tolerance().max(tol.linear) {
-                    ends.push(p);
-                }
-            }
+            let own_ends: Vec<Point3> = [(sp, sv), (ep, ev)]
+                .into_iter()
+                .filter(|(p, v)| {
+                    let off = partner_n.dot(Vec3::new(p.x(), p.y(), p.z())) - partner_d;
+                    off.abs() <= v.tolerance().max(tol.linear)
+                })
+                .map(|(p, _)| p)
+                .collect();
+            ends.extend(own_ends.iter().copied());
             match edge.curve() {
                 EdgeCurve::Line => {
                     hits.extend(line_segment_plane_crossing(sp, ep, partner_n, partner_d));
@@ -8680,12 +8684,15 @@ fn split_plane_line_at_curved_boundaries(
                 }
                 curve @ EdgeCurve::NurbsCurve(_) => {
                     let (t0, t1) = curve.domain_with_endpoints(sp, ep);
+                    // The sampled root at an end of this edge stands for
+                    // that end, which is a cut of its own.
                     hits.extend(
                         super::phase_ef::find_edge_plane_crossings(
                             curve, sp, ep, t0, t1, partner_n, partner_d, tol,
                         )
                         .into_iter()
-                        .map(|(_, p)| p),
+                        .map(|(_, p)| p)
+                        .filter(|p| own_ends.iter().all(|e| (*p - *e).length() > END_SNAP)),
                     );
                 }
             }
@@ -8696,7 +8703,6 @@ fn split_plane_line_at_curved_boundaries(
             return vec![raw];
         };
         extents.push((extent, with_holes));
-        hits.retain(|h| ends.iter().all(|e| (*h - *e).length() > END_SNAP));
         hits.extend(ends);
         for p in hits {
             let f = (p - raw.p_start).dot(seg) / len2;

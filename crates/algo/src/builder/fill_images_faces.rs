@@ -4195,19 +4195,40 @@ struct BoundaryArc {
 impl BoundaryArc {
     /// Whether `p` is on the edge's own curve, within `tol`.
     fn holds(&self, p: Point3, tol: f64) -> bool {
+        use brepkit_math::nurbs::knot_ops::curve_split;
+        use brepkit_math::nurbs::projection::project_point_to_curve;
+        use brepkit_math::traits::ParametricCurve;
+        let (start, end) = if self.forward {
+            (self.start, self.end)
+        } else {
+            (self.end, self.start)
+        };
         match &self.curve {
             EdgeCurve::Line => point_to_segment_dist_3d(p, self.start, self.end) < tol,
             curve @ (EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_)) => {
-                let (start, end) = if self.forward {
-                    (self.start, self.end)
-                } else {
-                    (self.end, self.start)
-                };
                 point_on_edge(curve, start, end, p, tol)
             }
-            EdgeCurve::NurbsCurve(c) => {
-                brepkit_math::nurbs::projection::project_point_to_curve(c, p, tol * 1e-3)
-                    .is_ok_and(|hit| hit.distance < tol)
+            curve @ EdgeCurve::NurbsCurve(whole) => {
+                // The edge can run on a part of its curve, in either
+                // direction. The rest of the curve is not the edge.
+                let (t0, t1) = curve.domain_with_endpoints(start, end);
+                let (lo, hi) = (t0.min(t1), t0.max(t1));
+                let (d0, d1) = ParametricCurve::domain(whole);
+                let slack = 1e-9 * (d1 - d0);
+                let mut span = whole.clone();
+                if lo > d0 + slack {
+                    let Ok((_, rest)) = curve_split(&span, lo) else {
+                        return false;
+                    };
+                    span = rest;
+                }
+                if hi < d1 - slack {
+                    let Ok((kept, _)) = curve_split(&span, hi) else {
+                        return false;
+                    };
+                    span = kept;
+                }
+                project_point_to_curve(&span, p, tol * 1e-3).is_ok_and(|hit| hit.distance < tol)
             }
         }
     }
@@ -4686,12 +4707,14 @@ fn clip_line_to_face_boundary(
             // ends of a curved edge lies on its chord, and across the face
             // (the chord of an aerofoil cap, from its nose to its trailing
             // edge), unless its middle is on the curve too.
-            let on_edge = boundary_arcs[k].as_ref().is_none_or(|arc| {
-                arc.holds(clipped_start + (clipped_end - clipped_start) * 0.5, tol)
-            });
+            let on_edge = || {
+                boundary_arcs[k].as_ref().is_none_or(|arc| {
+                    arc.holds(clipped_start + (clipped_end - clipped_start) * 0.5, tol)
+                })
+            };
             if start_dist < tol
                 && end_dist < tol
-                && on_edge
+                && on_edge()
                 && !keep_run_along.is_some_and(|keep| keep(boundary_edge_ids[k]))
             {
                 continue 'interval;
@@ -5827,6 +5850,39 @@ mod tests {
     use super::*;
     use brepkit_math::curves::Circle3D;
     use brepkit_math::vec::Vec3;
+
+    /// An edge on the first two legs of a three-leg curve, whose third leg
+    /// comes back to the middle of the edge's chord. That middle is on the
+    /// curve and off the edge, in either direction of the edge.
+    #[test]
+    fn a_spline_edge_holds_only_points_of_its_own_span() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        let at = |x: f64, y: f64| Point3::new(x, y, 0.0);
+        let curve = NurbsCurve::new(
+            1,
+            vec![0.0, 0.0, 1.0, 2.0, 3.0, 3.0],
+            vec![at(0.0, 0.0), at(5.0, 4.0), at(10.0, 0.0), at(5.0, 0.0)],
+            vec![1.0; 4],
+        )
+        .unwrap();
+        for forward in [true, false] {
+            let (start, end) = if forward {
+                (at(0.0, 0.0), at(10.0, 0.0))
+            } else {
+                (at(10.0, 0.0), at(0.0, 0.0))
+            };
+            let arc = BoundaryArc {
+                curve: EdgeCurve::NurbsCurve(curve.clone()),
+                start,
+                end,
+                closed: false,
+                forward,
+            };
+            assert!(arc.holds(at(2.5, 2.0), 1e-7), "forward {forward}");
+            assert!(arc.holds(at(7.5, 2.0), 1e-7), "forward {forward}");
+            assert!(!arc.holds(at(5.0, 0.0), 1e-7), "forward {forward}");
+        }
+    }
 
     /// A unit circle in a 4 by 4 square lies on it; with a notch 0.01 wide
     /// reaching to radius 0.97 between the circle's samples it meets the
