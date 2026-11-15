@@ -1,0 +1,19 @@
+crates/io/tests/playground_example_repros_inmem.rs
+  s_709d857a0f83c4::t_3bd13f887dcf2c 9,12,35-63,78-84,96-105,117-126
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1e60403188672630f2d3bb97ae5c0b0b709c585e",
+  "prompts": {},
+  "sessions": {
+    "s_709d857a0f83c4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6cca9812-d77a-4dae-96f4-26562694b205",
+        "model": "claude-fable-5-2"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
