@@ -1,0 +1,21 @@
+crates/algo/src/pave_filler/phase_ff.rs
+  s_709d857a0f83c4::t_d9bdfd394df830 8200-8217
+crates/operations/tests/ring_groove_round_a_flatted_rod.rs
+  s_709d857a0f83c4::t_a3c73514d5e2bf 1-168
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1b88215d9891890ecf02093ee053c764d7f5864a",
+  "prompts": {},
+  "sessions": {
+    "s_709d857a0f83c4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6cca9812-d77a-4dae-96f4-26562694b205",
+        "model": "claude-fable-5-2"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
