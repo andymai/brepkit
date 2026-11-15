@@ -9,6 +9,7 @@
 
 use std::f64::consts::TAU;
 
+use brepkit_math::nurbs::decompose::curve_bezier_between;
 use brepkit_math::vec::{Point2, Point3, Vec3};
 use brepkit_topology::Topology;
 use brepkit_topology::edge::{EdgeCurve, EdgeId};
@@ -33,7 +34,10 @@ struct Arc<'a> {
     ends: (Point3, Point3),
     span: (f64, f64),
     forward: bool,
-    /// The edge's points at even fractions of its span.
+    /// The fractions of the edge's way along the wire at which it is read,
+    /// from 0 to 1: a NURBS edge's knots are among them.
+    fractions: Vec<f64>,
+    /// The edge's points at `fractions`.
     points: Vec<Point3>,
     /// A bound on how far the edge stands off its chords.
     sag: f64,
@@ -56,25 +60,19 @@ impl<'a> Arc<'a> {
             ends,
             span: curve.domain_with_endpoints(ends.0, ends.1),
             forward,
+            fractions: Vec::new(),
             points: Vec::new(),
             sag: 0.0,
             length: 0.0,
             lo: [f64::INFINITY; 3],
             hi: [f64::NEG_INFINITY; 3],
         };
-        let chords = if matches!(curve, EdgeCurve::Line) {
-            1
-        } else {
-            CHORDS
-        };
-        arc.points = (0..=chords).map(|k| arc.at(fraction(k, chords))).collect();
-        for k in 0..chords {
+        arc.fractions = arc.breaks();
+        arc.points = arc.fractions.iter().map(|&f| arc.at(f)).collect();
+        for k in 0..arc.chords() {
             let (a, b) = (arc.points[k], arc.points[k + 1]);
             arc.length += (b - a).length();
-            if chords > 1 {
-                let on = arc.at((fraction(k, chords) + fraction(k + 1, chords)) * 0.5);
-                arc.sag = arc.sag.max(2.0 * (on - (a + (b - a) * 0.5)).length());
-            }
+            arc.sag = arc.sag.max(arc.stand_off(k));
         }
         for p in &arc.points {
             for (k, c) in [p.x(), p.y(), p.z()].into_iter().enumerate() {
@@ -85,14 +83,88 @@ impl<'a> Arc<'a> {
         Ok(arc)
     }
 
+    /// The fractions at which the edge is read: the two ends of a line, and
+    /// `CHORDS` even steps of a circle or an ellipse. A NURBS edge is read
+    /// at each knot in its span, and at even steps between them, so each
+    /// chord keeps to one knot span.
+    fn breaks(&self) -> Vec<f64> {
+        let even = |n: usize| (0..=n).map(|k| fraction(k, n)).collect::<Vec<_>>();
+        match self.curve {
+            EdgeCurve::Line => even(1),
+            EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => even(CHORDS),
+            EdgeCurve::NurbsCurve(nurbs) => {
+                let (t0, t1) = self.span;
+                let width = t1 - t0;
+                if width.abs() <= 0.0 {
+                    return even(CHORDS);
+                }
+                let (lo, hi) = (t0.min(t1), t0.max(t1));
+                let mut cuts: Vec<f64> = std::iter::once(0.0)
+                    .chain(
+                        nurbs
+                            .knots()
+                            .iter()
+                            .filter(|&&k| k > lo && k < hi)
+                            .map(|&k| (k - t0) / width),
+                    )
+                    .chain(std::iter::once(1.0))
+                    .collect();
+                cuts.sort_by(f64::total_cmp);
+                cuts.dedup();
+                let steps = CHORDS.div_ceil(cuts.len() - 1);
+                let mut fractions = vec![0.0];
+                for pair in cuts.windows(2) {
+                    for k in 1..=steps {
+                        fractions.push(pair[0] + (pair[1] - pair[0]) * fraction(k, steps));
+                    }
+                }
+                if !self.forward {
+                    fractions = fractions.iter().rev().map(|s| 1.0 - s).collect();
+                }
+                fractions
+            }
+        }
+    }
+
+    /// A bound on how far the edge stands off its chord `k`. For a NURBS
+    /// edge, the farthest control point of the chord's piece of the curve,
+    /// which holds the piece when its weights are positive. Else twice the
+    /// stand-off at the chord's middle, which a circle's is.
+    fn stand_off(&self, k: usize) -> f64 {
+        let (a, b) = (self.points[k], self.points[k + 1]);
+        let (fa, fb) = (self.fractions[k], self.fractions[k + 1]);
+        if let EdgeCurve::NurbsCurve(nurbs) = self.curve {
+            let hull = curve_bezier_between(nurbs, self.parameter(fa), self.parameter(fb));
+            if let Ok(hull) = hull
+                && hull.iter().all(|c| c[3] > 0.0)
+            {
+                return hull
+                    .iter()
+                    .map(|&[x, y, z, w]| {
+                        let c = Point3::new(x / w, y / w, z / w);
+                        (c - (a + (b - a) * along(a, b, c))).length()
+                    })
+                    .fold(0.0, f64::max);
+            }
+        }
+        if matches!(self.curve, EdgeCurve::Line) {
+            return 0.0;
+        }
+        let on = self.at(0.5 * (fa + fb));
+        2.0 * (on - (a + (b - a) * 0.5)).length()
+    }
+
+    /// The curve's parameter at the fraction `f` of the edge's way along
+    /// the wire.
+    fn parameter(&self, f: f64) -> f64 {
+        let s = if self.forward { f } else { 1.0 - f };
+        self.span.0 + (self.span.1 - self.span.0) * s
+    }
+
     /// The edge's point at the fraction `f` of its way along the wire.
     fn at(&self, f: f64) -> Point3 {
-        let s = if self.forward { f } else { 1.0 - f };
-        self.curve.evaluate_with_endpoints(
-            self.span.0 + (self.span.1 - self.span.0) * s,
-            self.ends.0,
-            self.ends.1,
-        )
+        self.curve
+            .evaluate_with_endpoints(self.parameter(f), self.ends.0, self.ends.1)
     }
 
     fn chords(&self) -> usize {
@@ -173,8 +245,8 @@ fn meetings(a: &Arc<'_>, b: &Arc<'_>, tol: f64) -> Vec<(f64, f64)> {
             if gap > reach {
                 continue;
             }
-            let fa = fraction(i, a.chords()) + along(a0, a1, pa) / fraction(a.chords(), 1);
-            let fb = fraction(j, b.chords()) + along(b0, b1, pb) / fraction(b.chords(), 1);
+            let fa = a.fractions[i] + along(a0, a1, pa) * (a.fractions[i + 1] - a.fractions[i]);
+            let fb = b.fractions[j] + along(b0, b1, pb) * (b.fractions[j + 1] - b.fractions[j]);
             let (fa, fb, gap) = nearest(a, b, fa, fb);
             let known = found
                 .iter()
@@ -194,16 +266,17 @@ fn arm(wire: &[Arc<'_>], index: usize, f: f64, onward: bool, p: Point3, d: f64) 
     let (mut i, mut from) = (index, f);
     for _ in 0..=wire.len() {
         let arc = &wire[i];
-        let n = arc.chords();
         let steps: Vec<f64> = if onward {
-            (0..=n)
-                .map(|k| fraction(k, n))
+            arc.fractions
+                .iter()
+                .copied()
                 .filter(|&g| g > from)
                 .collect()
         } else {
-            (0..=n)
+            arc.fractions
+                .iter()
                 .rev()
-                .map(|k| fraction(k, n))
+                .copied()
                 .filter(|&g| g < from)
                 .collect()
         };
@@ -248,36 +321,40 @@ fn frame(n: Vec3) -> Option<(Vec3, Vec3)> {
 
 /// Whether the direction at the angle `at` lies to the left of a path that
 /// comes in along the direction at `back` (read from the path's point) and
-/// leaves at `out`. `None` when it lies along the path.
-fn left_of(out: f64, back: f64, at: f64) -> Option<bool> {
+/// leaves at `out`. `None` when it lies within `along` of the path.
+fn left_of(out: f64, back: f64, at: f64, along: f64) -> Option<bool> {
     let wedge = (back - out).rem_euclid(TAU);
     let turn = (at - out).rem_euclid(TAU);
-    if !(ALONG..=TAU - ALONG).contains(&wedge) {
+    if !(along..=TAU - along).contains(&wedge) {
         None
-    } else if turn > ALONG && turn < wedge - ALONG {
+    } else if turn > along && turn < wedge - along {
         Some(true)
-    } else if turn > wedge + ALONG && turn < TAU - ALONG {
+    } else if turn > wedge + along && turn < TAU - along {
         Some(false)
     } else {
         None
     }
 }
 
-/// Whether wire `a` crosses wire `b` where its edge `ia` meets `b`'s edge
-/// `ib` at the fractions `fa` and `fb`.
+/// Where an edge of one wire meets an edge of another: each edge's place in
+/// its wire, the fraction along it, and the point.
+struct Meeting {
+    a: (usize, f64),
+    b: (usize, f64),
+    at: Point3,
+}
+
+/// Whether wire `a` crosses wire `b` at `meeting`, read from the wires'
+/// points the distance `d` from it.
 fn crosses(
     surface: &FaceSurface,
     a: &[Arc<'_>],
-    (ia, fa): (usize, f64),
     b: &[Arc<'_>],
-    (ib, fb): (usize, f64),
+    meeting: &Meeting,
+    d: f64,
     tol: f64,
 ) -> bool {
-    let p = b[ib].at(fb);
-    let d = 1e-2 * a[ia].length.min(b[ib].length);
-    if d < 100.0 * tol {
-        return false;
-    }
+    let ((ia, fa), (ib, fb), p) = (meeting.a, meeting.b, meeting.at);
     let normal = surface
         .project_point(p)
         .map_or_else(|| surface.normal(0.0, 0.0), |(u, v)| surface.normal(u, v));
@@ -297,10 +374,50 @@ fn crosses(
     let [Some(out), Some(back), Some(before), Some(after)] = arms.map(|q| q.map(angle)) else {
         return false;
     };
+    // A point within the tolerance of the other wire is on it, on neither
+    // side.
+    let along = ALONG.max(4.0 * tol / d);
     matches!(
-        (left_of(out, back, before), left_of(out, back, after)),
+        (left_of(out, back, before, along), left_of(out, back, after, along)),
         (Some(came), Some(left)) if came != left
     )
+}
+
+/// Whether wire `a` crosses wire `b`.
+///
+/// Each wire is followed from a meeting point a hundredth of the shorter
+/// meeting edge, but no farther than a quarter of the way to the nearest
+/// other meeting point, so a wire that crosses out and back in close by is
+/// read between its two crossings.
+fn wires_cross(surface: &FaceSurface, a: &[Arc<'_>], b: &[Arc<'_>], tol: f64) -> bool {
+    let mut all: Vec<(Meeting, f64)> = Vec::new();
+    for (ia, arc_a) in a.iter().enumerate() {
+        if arc_a.length <= tol {
+            continue;
+        }
+        for (ib, arc_b) in b.iter().enumerate() {
+            if arc_b.length <= tol || arc_a.edge == arc_b.edge {
+                continue;
+            }
+            let reach = (1e-2 * arc_a.length.min(arc_b.length)).max(100.0 * tol);
+            for (fa, fb) in meetings(arc_a, arc_b, tol) {
+                let meeting = Meeting {
+                    a: (ia, fa),
+                    b: (ib, fb),
+                    at: arc_b.at(fb),
+                };
+                all.push((meeting, reach));
+            }
+        }
+    }
+    all.iter().any(|(meeting, reach)| {
+        let d = all
+            .iter()
+            .map(|(other, _)| (other.at - meeting.at).length())
+            .filter(|&gap| gap > 10.0 * tol)
+            .fold(*reach, |d, gap| d.min(0.25 * gap));
+        d >= 10.0 * tol && crosses(surface, a, b, meeting, d, tol)
+    })
 }
 
 fn issue(face_id: FaceId, description: String) -> ValidationIssue {
@@ -332,10 +449,6 @@ impl Bounds {
             }
         }
         bounds
-    }
-
-    fn within(&self, outer: &Self) -> bool {
-        (0..3).all(|k| self.lo[k] >= outer.lo[k] && self.hi[k] <= outer.hi[k])
     }
 
     fn clear_of(&self, other: &Self, reach: f64) -> bool {
@@ -387,7 +500,7 @@ fn misplaced_hole(
     for other in 1..wires.len() {
         let mut around: Option<Option<PlanarRegion>> = None;
         for hole in 1..wires.len() {
-            if hole == other || !bounds[hole].within(&bounds[other]) {
+            if hole == other || bounds[hole].clear_of(&bounds[other], tol) {
                 continue;
             }
             if around.is_none() {
@@ -446,28 +559,16 @@ pub fn check_face_wires_apart(
             if bounds[i].clear_of(&bounds[j], tolerance) {
                 continue;
             }
-            for (ia, arc_a) in a.iter().enumerate() {
-                if arc_a.length <= tolerance {
-                    continue;
-                }
-                for (ib, arc_b) in b.iter().enumerate() {
-                    if arc_b.length <= tolerance || arc_a.edge == arc_b.edge {
-                        continue;
-                    }
-                    for (fa, fb) in meetings(arc_a, arc_b, tolerance) {
-                        if crosses(face.surface(), a, (ia, fa), b, (ib, fb), tolerance) {
-                            let name = if j == 0 {
-                                "the outer wire"
-                            } else {
-                                "another inner wire"
-                            };
-                            return Ok(vec![issue(
-                                face_id,
-                                format!("inner wire {} crosses {name}", wire_ids[i].index()),
-                            )]);
-                        }
-                    }
-                }
+            if wires_cross(face.surface(), a, b, tolerance) {
+                let name = if j == 0 {
+                    "the outer wire"
+                } else {
+                    "another inner wire"
+                };
+                return Ok(vec![issue(
+                    face_id,
+                    format!("inner wire {} crosses {name}", wire_ids[i].index()),
+                )]);
             }
         }
     }
@@ -705,6 +806,85 @@ mod tests {
         assert_eq!(found(&topo, face), None);
     }
 
+    /// A hole that stands out of the outline by a ten thousandth: its two
+    /// crossings lie close to each other.
+    #[test]
+    fn a_hole_a_little_across_the_outline_is_reported() {
+        let mut topo = Topology::default();
+        let outer = square(&mut topo);
+        let hole = circle(&mut topo, [8.0001, 5.0, 0.0], 2.0);
+        let face = flat(&mut topo, outer, vec![hole]);
+        assert!(
+            found(&topo, face)
+                .unwrap()
+                .contains("crosses the outer wire")
+        );
+    }
+
+    /// A hole of a line and a spline that leaves the outline in one narrow
+    /// spike, between points that all lie inside.
+    #[test]
+    fn a_splines_narrow_spike_across_the_outline_is_reported() {
+        let mut topo = Topology::default();
+        let outer = square(&mut topo);
+        let n = 41;
+        let control: Vec<Point3> = (0..n)
+            .map(|k| {
+                let x = 7.0 - 4.0 * fraction(k, n - 1);
+                let y = if k == n / 2 { 30.0 } else { 6.0 };
+                Point3::new(x, if k == 0 || k == n - 1 { 5.0 } else { y }, 0.0)
+            })
+            .collect();
+        let mut knots = vec![0.0; 4];
+        knots.extend((1..n - 3).map(|k| fraction(k, n - 3)));
+        knots.extend([1.0; 4]);
+        let spline =
+            brepkit_math::nurbs::curve::NurbsCurve::new(3, knots, control, vec![1.0; n]).unwrap();
+        let ends = points(&mut topo, &[[3.0, 5.0, 0.0], [7.0, 5.0, 0.0]]);
+        let base = topo.add_edge(Edge::new(ends[0], ends[1], EdgeCurve::Line));
+        let top = topo.add_edge(Edge::new(ends[1], ends[0], EdgeCurve::NurbsCurve(spline)));
+        let hole = topo.add_wire(
+            Wire::new(
+                vec![OrientedEdge::new(base, true), OrientedEdge::new(top, true)],
+                true,
+            )
+            .unwrap(),
+        );
+        let face = flat(&mut topo, outer, vec![hole]);
+        assert!(
+            found(&topo, face)
+                .unwrap()
+                .contains("crosses the outer wire")
+        );
+    }
+
+    /// A circle's box stands off its plane by its chords' bound, and a
+    /// polygon's does not: the circle's box is not within the polygon's.
+    #[test]
+    fn a_round_hole_inside_a_square_hole_is_reported() {
+        let mut topo = Topology::default();
+        let outer = square(&mut topo);
+        let corners = points(
+            &mut topo,
+            &[
+                [2.0, 2.0, 0.0],
+                [8.0, 2.0, 0.0],
+                [8.0, 8.0, 0.0],
+                [2.0, 8.0, 0.0],
+            ],
+        );
+        let holes = vec![
+            polygon(&mut topo, &corners),
+            circle(&mut topo, [5.0, 5.0, 0.0], 1.0),
+        ];
+        let face = flat(&mut topo, outer, holes);
+        assert!(
+            found(&topo, face)
+                .unwrap()
+                .contains("lies inside inner wire")
+        );
+    }
+
     /// A cylinder's band between z = 0 and 10, with its seam, and a window
     /// of two arcs and two rulings from `low` to `high` over a quarter turn
     /// from the angle `from`.
@@ -776,6 +956,17 @@ mod tests {
     fn a_window_across_a_cylinders_rim_is_reported() {
         let mut topo = Topology::default();
         let face = windowed_band(&mut topo, 1.0, 3.0, 12.0);
+        assert!(
+            found(&topo, face)
+                .unwrap()
+                .contains("crosses the outer wire")
+        );
+    }
+
+    #[test]
+    fn a_thin_window_across_a_cylinders_rim_is_reported() {
+        let mut topo = Topology::default();
+        let face = windowed_band(&mut topo, 1.0, 9.999, 10.001);
         assert!(
             found(&topo, face)
                 .unwrap()
