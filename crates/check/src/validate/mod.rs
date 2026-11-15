@@ -3,6 +3,7 @@
 pub mod checks;
 pub(crate) mod edge;
 pub(crate) mod face;
+pub mod face_wires;
 pub mod shell;
 pub(crate) mod solid;
 pub(crate) mod vertex;
@@ -169,6 +170,16 @@ fn validate_shell_checks(
                 .contains(&CheckId::FaceOrientationConsistency)
             {
                 issues.extend(face::check_face_orientation(topo, fid)?);
+            }
+            if !options
+                .disabled_checks
+                .contains(&CheckId::FaceWiresIntersect)
+            {
+                issues.extend(face_wires::check_face_wires_apart(
+                    topo,
+                    fid,
+                    options.tolerance_scale * 1e-6,
+                )?);
             }
         }
     }
