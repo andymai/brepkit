@@ -163,6 +163,13 @@ impl PCurveRegistry {
         if edges.is_empty() {
             self.by_face.remove(&face);
         }
+        self.forget(key, face_at)
+    }
+
+    /// Drops the pcurve of `key`, whose edge the caller took from place
+    /// `face_at` of its face's list, and records it.
+    fn forget(&mut self, key: PCurveKey, face_at: usize) -> Option<PCurve> {
+        let face = key.face;
         let mut edge_at = 0;
         if let Some(faces) = self.by_edge.get_mut(&key.edge) {
             if let Some(found) = faces.iter().rposition(|&f| f == face) {
@@ -265,17 +272,22 @@ impl PCurveRegistry {
             .collect();
         faces.sort_unstable_by_key(|face| face.index());
         faces.dedup();
-        // One pass finds a face's edges to remove; the last goes first, so
-        // the places of the others stay as found.
+        // One pass over the list of each face: an edge to keep moves down
+        // over the removed ones, so no removal moves the rest of the list.
         for face in faces {
-            let hits: Vec<usize> = self.by_face.get(&face).map_or_else(Vec::new, |list| {
-                list.iter()
-                    .enumerate()
-                    .filter_map(|(at, edge)| edges.contains(edge).then_some(at))
-                    .collect()
-            });
-            for at in hits.into_iter().rev() {
-                self.remove_at(face, at);
+            let Some(list) = self.by_face.remove(&face) else {
+                continue;
+            };
+            let mut kept = Vec::with_capacity(list.len());
+            for edge in list {
+                if edges.contains(&edge) {
+                    self.forget(PCurveKey::new(edge, face), kept.len());
+                } else {
+                    kept.push(edge);
+                }
+            }
+            if !kept.is_empty() {
+                self.by_face.insert(face, kept);
             }
         }
     }
