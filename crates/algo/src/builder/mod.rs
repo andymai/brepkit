@@ -1541,6 +1541,140 @@ fn partial_revolution_middle(
     Ok(None)
 }
 
+/// The side of an outer wire's edge that its face lies on, in the surface's
+/// `(u, v)`.
+struct FaceSide {
+    /// The middle of the edge.
+    middle: (f64, f64),
+    /// A unit direction from the middle into the face.
+    into: (f64, f64),
+    /// How far along that direction the loop comes back, where it does.
+    across: Option<f64>,
+}
+
+/// The side of edge `at` of an outer wire's `edges` that the face lies on.
+///
+/// The wire is read into the `(u, v)` of a cylinder, a cone, a sphere or a torus, each
+/// point on the turn nearest the point before it. A loop that closes there
+/// has the face on its left where it runs counterclockwise, and on its right
+/// where it runs clockwise.
+///
+/// `None` for a plane or a NURBS surface, and for a loop that does not close
+/// in `(u, v)`: one that winds round the surface, or passes a pole or an
+/// apex.
+fn face_side_in_uv(
+    topo: &Topology,
+    surface: &brepkit_topology::face::FaceSurface,
+    edges: &[brepkit_topology::wire::OrientedEdge],
+    at: usize,
+) -> Result<Option<FaceSide>, AlgoError> {
+    use brepkit_topology::face::FaceSurface;
+    use std::f64::consts::{FRAC_PI_2, TAU};
+    const SAMPLES: usize = 8;
+
+    let v_turns = match surface {
+        FaceSurface::Plane { .. } | FaceSurface::Nurbs(_) => return Ok(None),
+        FaceSurface::Cylinder(_) | FaceSurface::Cone(_) | FaceSurface::Sphere(_) => false,
+        FaceSurface::Torus(_) => true,
+    };
+    let near = |x: f64, to: f64| x - TAU * ((x - to) / TAU).round();
+    let mut loop_uv: Vec<(f64, f64)> = Vec::with_capacity(edges.len() * SAMPLES);
+    let mut middle = None;
+    for (index, oe) in edges.iter().enumerate() {
+        let edge = topo.edge(oe.edge())?;
+        let sp = topo.vertex(edge.start())?.point();
+        let ep = topo.vertex(edge.end())?.point();
+        let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
+        for k in 0..SAMPLES {
+            #[allow(clippy::cast_precision_loss)]
+            let along = k as f64 / SAMPLES as f64;
+            let along = if oe.is_forward() { along } else { 1.0 - along };
+            let p = edge
+                .curve()
+                .evaluate_with_endpoints((t1 - t0).madd(along, t0), sp, ep);
+            let Some((mut u, mut v)) = surface.project_point(p) else {
+                return Ok(None);
+            };
+            if let Some(&(last_u, last_v)) = loop_uv.last() {
+                u = near(u, last_u);
+                if v_turns {
+                    v = near(v, last_v);
+                }
+                // A quarter turn in one step is a pole, an apex, or a loop
+                // too coarse to read.
+                if (u - last_u).abs() >= FRAC_PI_2 || (v_turns && (v - last_v).abs() >= FRAC_PI_2) {
+                    return Ok(None);
+                }
+            }
+            if index == at && k == SAMPLES / 2 {
+                middle = Some(loop_uv.len());
+            }
+            loop_uv.push((u, v));
+        }
+    }
+    let (Some(middle), Some(&first), Some(&last)) = (middle, loop_uv.first(), loop_uv.last())
+    else {
+        return Ok(None);
+    };
+    let closes =
+        |x: f64, from: f64| (near(x, from) - x).abs() < 1e-6 && (x - from).abs() < FRAC_PI_2;
+    if !closes(first.0, last.0) || (v_turns && !closes(first.1, last.1)) {
+        return Ok(None);
+    }
+    let count = loop_uv.len();
+    let area: f64 = (0..count)
+        .map(|i| {
+            let (a, b) = (loop_uv[i], loop_uv[(i + 1) % count]);
+            a.0 * b.1 - b.0 * a.1
+        })
+        .sum();
+    let (lo, hi) = loop_uv.iter().fold(
+        ((f64::MAX, f64::MAX), (f64::MIN, f64::MIN)),
+        |(lo, hi), p| {
+            (
+                (lo.0.min(p.0), lo.1.min(p.1)),
+                (hi.0.max(p.0), hi.1.max(p.1)),
+            )
+        },
+    );
+    if area.abs() <= 1e-6 * (hi.0 - lo.0) * (hi.1 - lo.1) {
+        return Ok(None);
+    }
+    let (before, after) = (
+        loop_uv[(middle + count - 1) % count],
+        loop_uv[(middle + 1) % count],
+    );
+    let along = (after.0 - before.0, after.1 - before.1);
+    let length = along.0.hypot(along.1);
+    if length <= 0.0 {
+        return Ok(None);
+    }
+    let side = area.signum() / length;
+    let (from, left) = (loop_uv[middle], (-along.1 * side, along.0 * side));
+    // The nearest place where a ray from the middle into the face meets a
+    // chord of the loop, the two chords at the middle left out.
+    let across = (0..count)
+        .filter(|&i| i != middle && (i + 1) % count != middle)
+        .filter_map(|i| {
+            let (a, b) = (loop_uv[i], loop_uv[(i + 1) % count]);
+            let chord = (b.0 - a.0, b.1 - a.1);
+            let to_a = (a.0 - from.0, a.1 - from.1);
+            let det = chord.0 * left.1 - chord.1 * left.0;
+            if det.abs() <= 1e-14 {
+                return None;
+            }
+            let reach = (chord.0 * to_a.1 - chord.1 * to_a.0) / det;
+            let on_chord = (left.0 * to_a.1 - left.1 * to_a.0) / det;
+            (reach > 0.0 && (0.0..=1.0).contains(&on_chord)).then_some(reach)
+        })
+        .min_by(f64::total_cmp);
+    Ok(Some(FaceSide {
+        middle: from,
+        into: left,
+        across,
+    }))
+}
+
 /// Sample a point in the interior of a face.
 ///
 /// Uses the midpoint of the longest boundary edge, then offsets slightly
@@ -1657,8 +1791,9 @@ fn sample_face_interior(
     // midpoint is least likely to sit on a shared junction plane where
     // the axis-aligned classification rays graze adjacent faces.
     let mut first_oe = &edges[0];
+    let mut first_index = 0;
     let mut best_len = 0.0_f64;
-    for oe in edges {
+    for (index, oe) in edges.iter().enumerate() {
         let e = topo.edge(oe.edge())?;
         let sp = topo.vertex(e.start())?.point();
         let ep = topo.vertex(e.end())?.point();
@@ -1666,6 +1801,7 @@ fn sample_face_interior(
         if len > best_len {
             best_len = len;
             first_oe = oe;
+            first_index = index;
         }
     }
     let edge = topo.edge(first_oe.edge())?;
@@ -1840,6 +1976,47 @@ fn sample_face_interior(
     // reversed or CW-wound faces flip it, sending the sample outside the
     // face. Use the boundary vertex centroid to pick the side that points
     // into the face.
+    // Where the outer wire closes in the surface's `(u, v)`, its turning
+    // direction there tells the side of the edge that the face lies on. That
+    // holds for a reversed face and for a left-handed surface frame, where
+    // the rules below do not.
+    if inward_len > 1e-12
+        && let Some(FaceSide {
+            middle: mid_uv,
+            into: left,
+            across,
+        }) = face_side_in_uv(topo, surface, edges, first_index)?
+    {
+        // Halfway across the face from the edge, the sample is clear of the
+        // edge, which can lie on the other solid's boundary. A hole could
+        // hold that place.
+        if face.inner_wires().is_empty()
+            && let Some(across) = across
+            && let Some(on_surface) = surface.evaluate(
+                (0.5 * across).madd(left.0, mid_uv.0),
+                (0.5 * across).madd(left.1, mid_uv.1),
+            )
+        {
+            return Ok(on_surface);
+        }
+        let turn = |d: f64| d - std::f64::consts::TAU * (d / std::f64::consts::TAU).round();
+        let leans = |sign: f64| {
+            surface
+                .project_point(mid_pt + base_offset * sign)
+                .map(|(u, v)| turn(u - mid_uv.0) * left.0 + turn(v - mid_uv.1) * left.1)
+        };
+        if let (Some(ahead), Some(behind)) = (leans(1.0), leans(-1.0))
+            && ahead * behind < 0.0
+        {
+            let sign = if ahead > 0.0 { 1.0 } else { -1.0 };
+            if let Some((u, v)) = surface.project_point(mid_pt + base_offset * sign)
+                && let Some(on_surface) = surface.evaluate(u, v)
+            {
+                return Ok(on_surface);
+            }
+        }
+    }
+
     let mut offset = base_offset;
     let centroid = {
         let mut sum = Vec3::new(0.0, 0.0, 0.0);
@@ -2019,6 +2196,88 @@ mod tests {
         ));
         let face = topo.face(face_id).unwrap();
         assert!(partial_revolution_middle(&topo, face).unwrap().is_none());
+    }
+
+    /// A band of a torus: the outer quarter of the tube above the ring's
+    /// plane, half way round the ring. Its longest edge is the half circle
+    /// in that plane, and the vertex centroid lies level with that edge's
+    /// middle. The sample is on the band for each direction of the wire and
+    /// for a reversed face, clear of the half circle, which the other half
+    /// of a ring shares.
+    #[test]
+    fn sample_face_interior_lands_on_a_torus_band_for_each_orientation() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::ToroidalSurface;
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::{Face, FaceSurface};
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        let tol = Tolerance::default();
+        let (x, y, z) = (
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+        );
+        let origin = Point3::new(0.0, 0.0, 0.0);
+        for reverse_wire in [false, true] {
+            for reversed in [false, true] {
+                let mut topo = Topology::new();
+                let mut vertex = |p: Vec3| topo.add_vertex(Vertex::new(origin + p, tol.linear));
+                let (low_near, low_far) = (vertex(x * 25.0), vertex(x * -25.0));
+                let (top_near, top_far) = (vertex(x * 20.0 + z * 5.0), vertex(x * -20.0 + z * 5.0));
+                let circle = |centre: Vec3, normal: Vec3, radius: f64, from: Vec3| {
+                    EdgeCurve::Circle(
+                        Circle3D::new_with_ref(origin + centre, normal, radius, from).unwrap(),
+                    )
+                };
+                let low = topo.add_edge(Edge::new(
+                    low_near,
+                    low_far,
+                    circle(Vec3::new(0.0, 0.0, 0.0), z, 25.0, x),
+                ));
+                let top = topo.add_edge(Edge::new(top_near, top_far, circle(z * 5.0, z, 20.0, x)));
+                let far = topo.add_edge(Edge::new(
+                    low_far,
+                    top_far,
+                    circle(x * -20.0, y, 5.0, x * -1.0),
+                ));
+                let near = topo.add_edge(Edge::new(
+                    low_near,
+                    top_near,
+                    circle(x * 20.0, y * -1.0, 5.0, x),
+                ));
+                let mut edges = vec![
+                    OrientedEdge::new(low, true),
+                    OrientedEdge::new(far, true),
+                    OrientedEdge::new(top, false),
+                    OrientedEdge::new(near, false),
+                ];
+                if reverse_wire {
+                    edges.reverse();
+                    edges = edges
+                        .iter()
+                        .map(|oe| OrientedEdge::new(oe.edge(), !oe.is_forward()))
+                        .collect();
+                }
+                let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+                let surface = FaceSurface::Torus(ToroidalSurface::new(origin, 20.0, 5.0).unwrap());
+                let face = topo.add_face(if reversed {
+                    Face::new_reversed(wire, vec![], surface)
+                } else {
+                    Face::new(wire, vec![], surface)
+                });
+                let p = sample_face_interior(&topo, face, tol).unwrap();
+                let label =
+                    format!("wire reversed {reverse_wire}, face reversed {reversed}: {p:?}");
+                let from_axis = p.x().hypot(p.y());
+                assert!(p.y() > 10.0, "{label}");
+                assert!(p.z() > 1.0 && p.z() < 4.5, "{label}");
+                assert!(from_axis > 20.5 && from_axis < 24.9, "{label}");
+                let on_tube = (from_axis - 20.0).hypot(p.z());
+                assert!((on_tube - 5.0).abs() < 1e-9, "{label}");
+            }
+        }
     }
 
     #[test]
