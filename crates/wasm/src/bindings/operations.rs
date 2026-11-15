@@ -2963,7 +2963,8 @@ mod tests {
         let batch = format!(
             r#"[
                 {{"op": "chamfer", "args": {{"solid": {solid}, "edges": [{seam}, {rim}], "distance": 1.0}}}},
-                {{"op": "chamfer", "args": {{"solid": {solid}, "edges": [{seam}], "distance": 1.0}}}}
+                {{"op": "chamfer", "args": {{"solid": {solid}, "edges": [{seam}], "distance": 1.0}}}},
+                {{"op": "chamfer", "args": {{"solid": {solid}, "edges": [], "distance": 1.0}}}}
             ]"#
         );
         let parsed: serde_json::Value = serde_json::from_str(&k.execute_batch(&batch)).unwrap();
@@ -2979,6 +2980,10 @@ mod tests {
             .as_str()
             .expect("a seam alone is refused");
         assert!(refused.contains("seam"), "{refused}");
+        let empty = parsed[2]["error"]
+            .as_str()
+            .expect("an empty pick is refused");
+        assert!(!empty.contains("seam"), "{empty}");
     }
 
     use brepkit_math::vec::Point3;

@@ -409,7 +409,7 @@ pub fn try_chamfer(
                 .is_some_and(|first| faces.iter().all(|face| face == first))
         })
         .collect();
-    if edges.is_empty() {
+    if edges.is_empty() && !edge_ids.is_empty() {
         return Err(brepkit_operations::OperationsError::InvalidInput {
             reason: "each requested edge is a seam of its face, with no corner to chamfer"
                 .to_owned(),
