@@ -36,15 +36,17 @@ pub struct MeshImport {
 /// Each triangle becomes a planar face. Vertices at the same position
 /// (within `tolerance`) are merged, and two triangles that use the same two
 /// vertices share one edge. The triangles joined through shared edges are
-/// one body:
+/// one body, with vertices of its own: two bodies that touch at a point
+/// share no vertex.
 ///
 /// - A body closes when each of its edges has two triangles that run it in
 ///   opposite directions. Triangles of a closed body that are wound against
 ///   their neighbours are turned.
 /// - A closed body that faces outward is a solid, also when it lies in
 ///   another body.
-/// - A closed body that faces inward is a cavity of the smallest outward
-///   body round it. With no such body, it is turned and becomes a solid.
+/// - A closed body that faces inward is a cavity of the outward body that
+///   it lies directly in. In any other place (in no body, or directly in
+///   another inward body), it is turned and becomes a solid.
 /// - Every other body is a shell: an open sheet, a set with an edge that
 ///   more than two triangles use, a one-sided surface, and a closed set
 ///   with no volume.
@@ -58,76 +60,120 @@ pub fn import_mesh_parts(
     mesh: &TriangleMesh,
     tolerance: f64,
 ) -> Result<MeshImport, IoError> {
-    if mesh.indices.len() < 3 {
-        return Err(IoError::InvalidTopology {
-            reason: "mesh has no triangles".to_string(),
-        });
-    }
-    if let Some(&bad) = mesh
-        .indices
-        .iter()
-        .find(|&&i| i as usize >= mesh.positions.len())
-    {
-        return Err(IoError::InvalidTopology {
-            reason: format!(
-                "mesh index {bad} is past its {} positions",
-                mesh.positions.len()
-            ),
-        });
-    }
+    let bodies = MeshBodies::read(mesh, tolerance)?;
+    bodies.build(topo, tolerance)
+}
 
-    let (points, remap) = merge_positions(&mesh.positions, tolerance);
-    let mut tris = oriented_triangles(mesh, &remap);
-    if tris.is_empty() {
-        return Err(IoError::InvalidTopology {
-            reason: "no valid triangles in mesh".to_string(),
-        });
-    }
+/// The bodies of a mesh, before any of them is in a topology.
+struct MeshBodies {
+    points: Vec<Point3>,
+    tris: Vec<[usize; 3]>,
+    bodies: Vec<Body>,
+    /// Whether a solid lies directly in the material of another.
+    overlap: bool,
+}
 
-    let mut bodies = split_bodies(&mut tris, &points);
-    assign_cavities(&mut bodies, &mut tris, &points);
-
-    let vertex_ids: Vec<VertexId> = points
-        .iter()
-        .map(|&p| topo.add_vertex(Vertex::new(p, tolerance)))
-        .collect();
-    let mut edges: HashMap<(usize, usize), EdgeId> = HashMap::new();
-    let mut shell_ids = Vec::with_capacity(bodies.len());
-    for body in &bodies {
-        let mut faces = Vec::with_capacity(body.tris.len());
-        for &t in &body.tris {
-            faces.push(build_triangle_face(
-                topo,
-                &points,
-                &vertex_ids,
-                &mut edges,
-                tris[t],
-            )?);
+impl MeshBodies {
+    fn read(mesh: &TriangleMesh, tolerance: f64) -> Result<Self, IoError> {
+        if mesh.indices.len() < 3 {
+            return Err(IoError::InvalidTopology {
+                reason: "mesh has no triangles".to_string(),
+            });
         }
-        let shell = Shell::new(faces).map_err(|e| IoError::ParseError {
-            reason: format!("failed to build shell from mesh: {e}"),
-        })?;
-        shell_ids.push(topo.add_shell(shell));
+        if let Some(&bad) = mesh
+            .indices
+            .iter()
+            .find(|&&i| i as usize >= mesh.positions.len())
+        {
+            return Err(IoError::InvalidTopology {
+                reason: format!(
+                    "mesh index {bad} is past its {} positions",
+                    mesh.positions.len()
+                ),
+            });
+        }
+
+        let (points, remap) = merge_positions(&mesh.positions, tolerance);
+        let mut tris = oriented_triangles(mesh, &remap);
+        if tris.is_empty() {
+            return Err(IoError::InvalidTopology {
+                reason: "no valid triangles in mesh".to_string(),
+            });
+        }
+
+        let mut bodies = split_bodies(&mut tris, &points);
+        let overlap = assign_cavities(&mut bodies, &mut tris, &points);
+        Ok(Self {
+            points,
+            tris,
+            bodies,
+            overlap,
+        })
     }
 
-    let mut out = MeshImport::default();
-    for (i, body) in bodies.iter().enumerate() {
-        match body.kind {
-            BodyKind::Open => out.shells.push(shell_ids[i]),
-            BodyKind::Cavity(_) => {}
-            BodyKind::Solid => {
-                let cavities = bodies
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, b)| b.kind == BodyKind::Cavity(i))
-                    .map(|(j, _)| shell_ids[j])
-                    .collect();
-                out.solids
-                    .push(topo.add_solid(Solid::new(shell_ids[i], cavities)));
+    fn open_count(&self) -> usize {
+        self.bodies
+            .iter()
+            .filter(|b| b.kind == BodyKind::Open)
+            .count()
+    }
+
+    fn build(&self, topo: &mut Topology, tolerance: f64) -> Result<MeshImport, IoError> {
+        let Self {
+            points,
+            tris,
+            bodies,
+            ..
+        } = self;
+        let mut shell_ids = Vec::with_capacity(bodies.len());
+        for body in bodies {
+            // The vertices and edges of one body. A point where two bodies
+            // touch gets a vertex in each, so a transform of one body does not
+            // move the other.
+            let mut vertices: HashMap<usize, VertexId> = HashMap::new();
+            let mut edges: HashMap<(usize, usize), EdgeId> = HashMap::new();
+            let mut faces = Vec::with_capacity(body.tris.len());
+            for &t in &body.tris {
+                let tri = tris[t];
+                let corners = tri.map(|i| {
+                    *vertices
+                        .entry(i)
+                        .or_insert_with(|| topo.add_vertex(Vertex::new(points[i], tolerance)))
+                });
+                faces.push(build_triangle_face(
+                    topo,
+                    tri.map(|i| points[i]),
+                    tri,
+                    corners,
+                    &mut edges,
+                )?);
+            }
+            let shell = Shell::new(faces).map_err(|e| IoError::ParseError {
+                reason: format!("failed to build shell from mesh: {e}"),
+            })?;
+            shell_ids.push(topo.add_shell(shell));
+        }
+
+        let mut cavities: HashMap<usize, Vec<ShellId>> = HashMap::new();
+        for (i, body) in bodies.iter().enumerate() {
+            if let BodyKind::Cavity(owner) = body.kind {
+                cavities.entry(owner).or_default().push(shell_ids[i]);
             }
         }
+        let mut out = MeshImport::default();
+        for (i, body) in bodies.iter().enumerate() {
+            match body.kind {
+                BodyKind::Open => out.shells.push(shell_ids[i]),
+                BodyKind::Cavity(_) => {}
+                BodyKind::Solid => {
+                    let inner = cavities.remove(&i).unwrap_or_default();
+                    out.solids
+                        .push(topo.add_solid(Solid::new(shell_ids[i], inner)));
+                }
+            }
+        }
+        Ok(out)
     }
-    Ok(out)
 }
 
 /// Import a closed [`TriangleMesh`] into topology as a single solid.
@@ -143,21 +189,32 @@ pub fn import_mesh_parts(
 /// - The mesh has no triangles
 /// - A part of the mesh does not close; [`import_mesh_parts`] returns such
 ///   a part as a shell
+/// - A body lies in the material of another body. One solid cannot hold
+///   the two; [`import_mesh_parts`] returns each as a solid
 pub fn import_mesh(
     topo: &mut Topology,
     mesh: &TriangleMesh,
     tolerance: f64,
 ) -> Result<SolidId, IoError> {
-    let parts = import_mesh_parts(topo, mesh, tolerance)?;
-    if !parts.shells.is_empty() {
+    // Read the whole mesh first: a refused import adds nothing to `topo`.
+    let bodies = MeshBodies::read(mesh, tolerance)?;
+    let open = bodies.open_count();
+    if open > 0 {
         return Err(IoError::InvalidTopology {
             reason: format!(
-                "the mesh does not close: {} of its {} bodies are open",
-                parts.shells.len(),
-                parts.shells.len() + parts.solids.len()
+                "the mesh does not close: {open} of its {} bodies are open",
+                bodies.bodies.len()
             ),
         });
     }
+    if bodies.overlap {
+        return Err(IoError::InvalidTopology {
+            reason: "a body of the mesh lies in the material of another body, \
+                     so the mesh is not one solid"
+                .to_string(),
+        });
+    }
+    let parts = bodies.build(topo, tolerance)?;
     if let [solid] = parts.solids[..] {
         return Ok(solid);
     }
@@ -453,9 +510,12 @@ fn body_extent(members: &[usize], tris: &[[usize; 3]], points: &[Point3]) -> f64
     (0..3).map(|k| hi[k] - lo[k]).fold(0.0, f64::max)
 }
 
-/// Make each inward closed body a cavity of the smallest outward body
-/// round it, or turn it into a solid when it has none.
-fn assign_cavities(bodies: &mut [Body], tris: &mut [[usize; 3]], points: &[Point3]) {
+/// Make each inward closed body a cavity of the outward body that it lies
+/// directly in, or turn it into a solid when it lies in no such body.
+///
+/// Returns whether a solid of the result lies directly in an outward body:
+/// in its material, and not in a cavity of it.
+fn assign_cavities(bodies: &mut [Body], tris: &mut [[usize; 3]], points: &[Point3]) -> bool {
     let closed: Vec<usize> = (0..bodies.len())
         .filter(|&i| bodies[i].kind == BodyKind::Solid)
         .collect();
@@ -464,32 +524,34 @@ fn assign_cavities(bodies: &mut [Body], tris: &mut [[usize; 3]], points: &[Point
         .map(|b| body_box(&b.tris, tris, points))
         .collect();
 
-    let mut owners: Vec<(usize, Option<usize>)> = Vec::new();
+    // The smallest closed body round each closed body: the one that it
+    // lies directly in.
+    let mut around: Vec<(usize, Option<usize>)> = Vec::with_capacity(closed.len());
     for &i in &closed {
-        if bodies[i].volume6 > 0.0 {
-            continue;
-        }
-        // The smallest closed body round body `i` is the one it lies
-        // directly in.
-        let mut around: Option<usize> = None;
+        let mut found: Option<usize> = None;
         for &j in &closed {
-            if j == i || bodies[j].volume6.abs() <= bodies[i].volume6.abs() {
+            if j == i
+                || bodies[j].volume6.abs() <= bodies[i].volume6.abs()
+                || found.is_some_and(|a| bodies[j].volume6.abs() >= bodies[a].volume6.abs())
+            {
                 continue;
             }
             let inside_box =
                 (0..3).all(|k| boxes[i].0[k] >= boxes[j].0[k] && boxes[i].1[k] <= boxes[j].1[k]);
-            if !inside_box || !lies_in(&bodies[i].tris, &bodies[j].tris, tris, points) {
-                continue;
-            }
-            if around.is_none_or(|a| bodies[j].volume6.abs() < bodies[a].volume6.abs()) {
-                around = Some(j);
+            if inside_box && lies_in(&bodies[i].tris, &bodies[j].tris, tris, points) {
+                found = Some(j);
             }
         }
-        owners.push((i, around.filter(|&j| bodies[j].volume6 > 0.0)));
+        around.push((i, found));
     }
 
-    for (i, owner) in owners {
-        if let Some(j) = owner {
+    let outward: Vec<bool> = bodies.iter().map(|b| b.volume6 > 0.0).collect();
+    let mut overlap = false;
+    for (i, container) in around {
+        let in_material = container.is_some_and(|j| outward[j]);
+        if outward[i] {
+            overlap |= in_material;
+        } else if let (true, Some(j)) = (in_material, container) {
             bodies[i].kind = BodyKind::Cavity(j);
         } else {
             for &t in &bodies[i].tris {
@@ -498,6 +560,7 @@ fn assign_cavities(bodies: &mut [Body], tris: &mut [[usize; 3]], points: &[Point
             bodies[i].volume6 = -bodies[i].volume6;
         }
     }
+    overlap
 }
 
 /// Whether the closed body `inner` lies in the closed body `outer`.
@@ -532,29 +595,29 @@ fn winding_number(p: Point3, members: &[usize], tris: &[[usize; 3]], points: &[P
 }
 
 /// Build a triangular planar face on three points, with the edges that
-/// earlier triangles made on the same points.
+/// earlier triangles of the body made on the same points.
 fn build_triangle_face(
     topo: &mut Topology,
-    points: &[Point3],
-    vertex_ids: &[VertexId],
-    edges: &mut HashMap<(usize, usize), EdgeId>,
+    [p0, p1, p2]: [Point3; 3],
     tri: [usize; 3],
+    corners: [VertexId; 3],
+    edges: &mut HashMap<(usize, usize), EdgeId>,
 ) -> Result<FaceId, IoError> {
     let mut oriented = Vec::with_capacity(3);
     for k in 0..3 {
-        let (a, b) = (tri[k], tri[(k + 1) % 3]);
-        let (lo, hi) = edge_key(a, b);
-        let edge = *edges.entry((lo, hi)).or_insert_with(|| {
-            topo.add_edge(Edge::new(vertex_ids[lo], vertex_ids[hi], EdgeCurve::Line))
-        });
-        oriented.push(OrientedEdge::new(edge, a < b));
+        let n = (k + 1) % 3;
+        let forward = tri[k] < tri[n];
+        let (lo, hi) = if forward { (k, n) } else { (n, k) };
+        let edge = *edges
+            .entry((tri[lo], tri[hi]))
+            .or_insert_with(|| topo.add_edge(Edge::new(corners[lo], corners[hi], EdgeCurve::Line)));
+        oriented.push(OrientedEdge::new(edge, forward));
     }
     let wire = Wire::new(oriented, true).map_err(|e| IoError::ParseError {
         reason: format!("failed to build triangle wire: {e}"),
     })?;
     let wire_id = topo.add_wire(wire);
 
-    let [p0, p1, p2] = tri.map(|i| points[i]);
     let normal = (p1 - p0)
         .cross(p2 - p0)
         .normalize()

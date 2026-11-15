@@ -168,6 +168,81 @@ fn an_outward_cube_in_a_cube_is_a_solid_of_its_own() {
     assert!((volumes[1] - 8000.0).abs() < 1e-9);
 }
 
+/// One solid cannot hold a body in the material of another: as pieces of
+/// one solid, the inner body reads as a cavity.
+#[test]
+fn an_outward_cube_in_a_cube_is_not_one_solid() {
+    let mut mesh = TriangleMesh::default();
+    add_cube(&mut mesh, [0.0; 3], 20.0, false);
+    add_cube(&mut mesh, [5.0; 3], 10.0, false);
+
+    let mut topo = Topology::new();
+    assert!(import_mesh(&mut topo, &mesh, 1e-7).is_err());
+    // A refused import adds nothing.
+    assert_eq!(topo.vertices().len(), 0);
+    assert_eq!(topo.faces().len(), 0);
+    assert_eq!(topo.solids().len(), 0);
+}
+
+/// An inward body directly in an inward body is in a void. It is an island
+/// wound the wrong way: a solid, in the cavity of the outer body.
+#[test]
+fn an_inward_cube_in_a_cavity_is_turned_into_a_solid() {
+    let mut mesh = TriangleMesh::default();
+    add_cube(&mut mesh, [0.0; 3], 30.0, false);
+    add_cube(&mut mesh, [5.0; 3], 20.0, true);
+    add_cube(&mut mesh, [10.0; 3], 10.0, true);
+
+    let mut topo = Topology::new();
+    let parts = import_mesh_parts(&mut topo, &mesh, 1e-7).unwrap();
+    assert_eq!((parts.solids.len(), parts.shells.len()), (2, 0));
+    let mut volumes: Vec<f64> = parts.solids.iter().map(|&s| volume(&topo, s)).collect();
+    volumes.sort_by(f64::total_cmp);
+    assert!((volumes[0] - 1000.0).abs() < 1e-9);
+    assert!((volumes[1] - 19000.0).abs() < 1e-9);
+
+    // As one solid, its pieces are the same two bodies.
+    let mut topo = Topology::new();
+    let joined = import_mesh(&mut topo, &mesh, 1e-7).unwrap();
+    let pieces = solid_pieces(&mut topo, joined).unwrap();
+    let mut volumes: Vec<f64> = pieces.iter().map(|&s| volume(&topo, s)).collect();
+    volumes.sort_by(f64::total_cmp);
+    assert_eq!(volumes.len(), 2);
+    assert!((volumes[0] - 1000.0).abs() < 1e-9);
+    assert!((volumes[1] - 19000.0).abs() < 1e-9);
+}
+
+/// Two cubes that touch at one corner are two bodies with no vertex in
+/// common, so a move of one leaves the other where it was.
+#[test]
+fn two_cubes_that_touch_at_a_corner_share_no_vertex() {
+    let mut mesh = TriangleMesh::default();
+    add_cube(&mut mesh, [0.0; 3], 10.0, false);
+    add_cube(&mut mesh, [10.0; 3], 10.0, false);
+
+    let mut topo = Topology::new();
+    let parts = import_mesh_parts(&mut topo, &mesh, 1e-7).unwrap();
+    assert_eq!((parts.solids.len(), parts.shells.len()), (2, 0));
+    assert_eq!(topo.vertices().len(), 16);
+
+    transform_solid(
+        &mut topo,
+        parts.solids[1],
+        &Mat4::translation(5.0, 0.0, 0.0),
+    )
+    .unwrap();
+    for &solid in &parts.solids {
+        assert!((volume(&topo, solid) - 1000.0).abs() < 1e-9);
+        assert_valid(&topo, solid);
+    }
+    let first = brepkit_topology::explorer::solid_vertices(&topo, parts.solids[0]).unwrap();
+    assert!(
+        first
+            .iter()
+            .all(|&v| topo.vertex(v).unwrap().point().x() <= 10.0)
+    );
+}
+
 #[test]
 fn an_island_in_a_cavity_is_a_solid_of_its_own() {
     let mut mesh = TriangleMesh::default();
