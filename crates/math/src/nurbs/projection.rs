@@ -585,7 +585,8 @@ const MOST_BEZIER_HALVES: usize = 2048;
 /// The nearest point found of `surface` to `point`: `start`, or the end of
 /// a damped descent off the middle of a part of a Bezier patch (see
 /// [`project_point_near_surface`]). `start` for a surface with a weight
-/// that is not positive, whose parts can leave their control boxes.
+/// that is not positive, whose parts can leave their control boxes, and for
+/// one with a knot vector that is not clamped or a degree of zero.
 fn search_bezier_boxes(
     surface: &NurbsSurface,
     point: Point3,
@@ -593,7 +594,21 @@ fn search_bezier_boxes(
     start: Option<SurfaceProjection>,
 ) -> Option<SurfaceProjection> {
     // A direction of degree zero is a step, with no Bezier form to halve.
-    if surface.degree_u() == 0 || surface.degree_v() == 0 {
+    // The split into patches reads a clamped knot vector; from one that is
+    // not, its patches' control boxes do not hold the surface.
+    let clamped = |knots: &[f64], degree: usize| {
+        let last = knots.len() - 1;
+        degree > 0
+            && knots[..=degree]
+                .iter()
+                .all(|k| k.to_bits() == knots[0].to_bits())
+            && knots[last - degree..]
+                .iter()
+                .all(|k| k.to_bits() == knots[last].to_bits())
+    };
+    if !clamped(surface.knots_u(), surface.degree_u())
+        || !clamped(surface.knots_v(), surface.degree_v())
+    {
         return start;
     }
     let Ok(patches) = surface.bezier_patches() else {
@@ -1356,6 +1371,31 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A surface whose knots are not clamped keeps the plain projection.
+    #[test]
+    fn a_point_beside_a_surface_that_is_not_clamped_gets_the_plain_projection() {
+        let net: Vec<Vec<Point3>> = (0..2)
+            .map(|i| {
+                (0..6)
+                    .map(|j| Point3::new(f64::from(j), f64::from(i), f64::from(j % 2)))
+                    .collect()
+            })
+            .collect();
+        let wave = NurbsSurface::new(
+            1,
+            2,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+            net,
+            vec![vec![1.0; 6]; 2],
+        )
+        .expect("a surface");
+        let point = wave.evaluate(0.5, 3.7) + Vec3::new(0.0, 0.0, 1e-4);
+        let plain = project_point_to_surface(&wave, point, 1e-9).expect("a projection");
+        let near = project_point_near_surface(&wave, point, 1e-9).expect("a projection");
+        assert_eq!((plain.u, plain.v), (near.u, near.v));
     }
 
     /// A surface of degree zero along u has no Bezier patches to search.
