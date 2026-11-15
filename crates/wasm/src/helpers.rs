@@ -234,28 +234,19 @@ pub fn try_fillet(
     edge_ids: &[brepkit_topology::edge::EdgeId],
     radius: f64,
 ) -> Result<brepkit_topology::solid::SolidId, brepkit_operations::OperationsError> {
-    // Filtering identifies non-candidate topology seams and tangent/degenerate
-    // edges (for example a prior fillet's G1 contact line). Seams are harmless
-    // carrier topology; every actual edge candidate remains atomic.
+    // Filtering identifies the edges with no angle to round. An edge inside
+    // one surface (a seam, or the line between two faces that are parts of
+    // one surface) is carrier topology, and a pick of it asks for nothing. A
+    // tangent edge between two surfaces is a request that cannot be met, so
+    // it fails the whole batch.
     let filtered = brepkit_operations::query::filter_filletable_edges(topo, solid_id, edge_ids)?;
     if filtered.is_empty() {
         return Err(brepkit_operations::OperationsError::InvalidInput {
             reason: "none of the requested edges are filletable".to_owned(),
         });
     }
-    if filtered.len() != edge_ids.len() {
-        let adjacency = topo.build_adjacency(solid_id)?;
-        let rejected_are_seams =
-            edge_ids
-                .iter()
-                .filter(|edge| !filtered.contains(edge))
-                .all(|&edge| {
-                    let faces = adjacency.faces_for_edge(edge);
-                    faces
-                        .first()
-                        .is_some_and(|first| faces.iter().all(|face| face == first))
-                });
-        if !rejected_are_seams {
+    for &edge in edge_ids.iter().filter(|edge| !filtered.contains(edge)) {
+        if !brepkit_operations::query::edge_lies_in_one_surface(topo, solid_id, edge)? {
             return Err(brepkit_operations::OperationsError::InvalidInput {
                 reason: "some requested edges are not filletable".to_owned(),
             });
@@ -387,7 +378,8 @@ fn refuse_edges_off_the_outer_shell(
 ///
 /// # Errors
 ///
-/// Returns an error if neither engine chamfers the edges.
+/// Returns an error if neither engine chamfers the edges, or if each edge
+/// lies inside one surface.
 pub fn try_chamfer(
     topo: &mut brepkit_topology::Topology,
     solid_id: brepkit_topology::solid::SolidId,
@@ -395,6 +387,19 @@ pub fn try_chamfer(
     distance: f64,
 ) -> Result<brepkit_topology::solid::SolidId, brepkit_operations::OperationsError> {
     refuse_edges_off_the_outer_shell(topo, solid_id, edge_ids, "chamfering")?;
+    // An edge inside one surface has no angle to bevel, as in `try_fillet`.
+    let mut with_an_angle = Vec::with_capacity(edge_ids.len());
+    for &edge in edge_ids {
+        if !brepkit_operations::query::edge_lies_in_one_surface(topo, solid_id, edge)? {
+            with_an_angle.push(edge);
+        }
+    }
+    if with_an_angle.is_empty() {
+        return Err(brepkit_operations::OperationsError::InvalidInput {
+            reason: "none of the requested edges have an angle to chamfer".to_owned(),
+        });
+    }
+    let edge_ids = with_an_angle.as_slice();
     let orientation_deflection = gate_deflection(topo, solid_id, distance)?;
     if let Ok(Some(s)) = brepkit_operations::chamfer_chain::chamfer_tangent_chains(
         topo, solid_id, edge_ids, distance,
@@ -1763,6 +1768,225 @@ mod fillet_tests {
         validate_shell_manifold(sh, &topo).expect("second fillet must be manifold");
         validate_shell_closed(sh, &topo)
             .expect("second fillet on a NURBS-blend-adjacent edge must be watertight");
+    }
+
+    /// A snap clip's ring: a barrel along x with its bore, and a slot cut
+    /// down from the top to the bore's axis. The barrel's and the bore's
+    /// walls are each two faces that meet along the cylinder's old seam.
+    fn snap_clip_ring(topo: &mut Topology) -> SolidId {
+        use brepkit_math::mat::Mat4;
+        use brepkit_operations::boolean::{BooleanOp, BooleanOptions, boolean_with_options};
+        use brepkit_operations::primitives::{make_box, make_cylinder};
+        use brepkit_operations::transform::transform_solid;
+
+        // The bindings' booleans do not merge the parts of one surface.
+        let exact = BooleanOptions {
+            mesh_fallback: false,
+            unify_faces: false,
+            ..BooleanOptions::default()
+        };
+        let along_x = Mat4::rotation_y(std::f64::consts::FRAC_PI_2);
+        let barrel = make_cylinder(topo, SNAP_CLIP_BORE + 2.4, 12.0).expect("barrel");
+        transform_solid(
+            topo,
+            barrel,
+            &(Mat4::translation(-6.0, 0.0, 13.4) * along_x),
+        )
+        .expect("place barrel");
+        let bore = make_cylinder(topo, SNAP_CLIP_BORE, 14.0).expect("bore");
+        transform_solid(topo, bore, &(Mat4::translation(-7.0, 0.0, 13.4) * along_x))
+            .expect("place bore");
+        let bored = boolean_with_options(topo, BooleanOp::Cut, barrel, bore, exact)
+            .expect("bore the barrel");
+        let slot = make_box(topo, 14.0, 2.0 * SNAP_CLIP_SLOT, 20.8).expect("slot");
+        transform_solid(topo, slot, &Mat4::translation(-7.0, -SNAP_CLIP_SLOT, 13.4))
+            .expect("place slot");
+        boolean_with_options(topo, BooleanOp::Cut, bored, slot, exact).expect("open the ring")
+    }
+
+    const SNAP_CLIP_BORE: f64 = 8.0;
+    const SNAP_CLIP_SLOT: f64 = 4.96;
+
+    /// The edges of the ring that run along x at the bore's radius from its
+    /// axis: the two lips of the slot, and the line between the two halves of
+    /// the bore's wall.
+    fn edges_along_the_bore(topo: &Topology, solid: SolidId) -> Vec<EdgeId> {
+        solid_edge_ids(topo, solid)
+            .into_iter()
+            .filter(|&e| {
+                let edge = topo.edge(e).expect("edge");
+                let a = topo.vertex(edge.start()).expect("start").point();
+                let b = topo.vertex(edge.end()).expect("end").point();
+                let d = b - a;
+                let r = a.y().hypot(a.z() - 13.4);
+                d.x().abs() > 1.0
+                    && d.y().abs() < 1e-9
+                    && d.z().abs() < 1e-9
+                    && (r - SNAP_CLIP_BORE).abs() < 1e-6
+            })
+            .collect()
+    }
+
+    /// The volume that a round of radius `rho` takes off the two lips, where
+    /// the slot's flat walls meet the bore: the corner between the wall, the
+    /// bore's circle and the round's arc, over the ring's length.
+    fn snap_clip_lip_volume(rho: f64) -> f64 {
+        let (big, c) = (SNAP_CLIP_BORE, SNAP_CLIP_SLOT);
+        let corner = (c, (big * big - c * c).sqrt());
+        let centre = (c + rho, ((big + rho).powi(2) - (c + rho).powi(2)).sqrt());
+        let on_wall = (c, centre.1);
+        let scale = big / (big + rho);
+        let on_bore = (centre.0 * scale, centre.1 * scale);
+        let ring = [corner, on_wall, centre, on_bore];
+        let shoelace: f64 = (0..4)
+            .map(|i| {
+                let (p, q) = (ring[i], ring[(i + 1) % 4]);
+                p.0 * q.1 - q.0 * p.1
+            })
+            .sum();
+        let turn_on_bore = (corner.0 * on_bore.1 - corner.1 * on_bore.0)
+            .atan2(corner.0 * on_bore.0 + corner.1 * on_bore.1)
+            .abs();
+        let bore_segment = 0.5 * big * big * (turn_on_bore - turn_on_bore.sin());
+        let to_wall = (on_wall.0 - centre.0, on_wall.1 - centre.1);
+        let to_bore = (on_bore.0 - centre.0, on_bore.1 - centre.1);
+        let turn_of_round = (to_wall.0 * to_bore.1 - to_wall.1 * to_bore.0)
+            .atan2(to_wall.0 * to_bore.0 + to_wall.1 * to_bore.1)
+            .abs();
+        let area = 0.5 * shoelace.abs() - bore_segment - 0.5 * rho * rho * turn_of_round;
+        2.0 * 12.0 * area
+    }
+
+    #[test]
+    fn try_fillet_passes_over_the_line_between_two_halves_of_a_wall() {
+        use brepkit_math::mat::Mat4;
+        use brepkit_operations::measure::solid_volume;
+        use brepkit_operations::transform::transform_solid;
+        use brepkit_operations::validate::validate_solid;
+
+        let poses = [
+            ("as made", Mat4::identity()),
+            (
+                "turned",
+                Mat4::translation(3.0, -2.0, 5.0) * Mat4::rotation_z(0.7) * Mat4::rotation_x(-0.4),
+            ),
+            (
+                "mirrored",
+                Mat4::scale(1.0, -1.0, 1.0) * Mat4::rotation_y(1.1),
+            ),
+        ];
+        let rho = 1.44;
+        for (pose, matrix) in poses {
+            let mut topo = Topology::new();
+            let ring = snap_clip_ring(&mut topo);
+            let picked = edges_along_the_bore(&topo, ring);
+            assert_eq!(picked.len(), 3, "{pose}: two lips and the wall's line");
+            let lips = brepkit_operations::query::filter_filletable_edges(&topo, ring, &picked)
+                .expect("filter");
+            assert_eq!(lips.len(), 2, "{pose}: the wall's line has no angle");
+            transform_solid(&mut topo, ring, &matrix).expect("pose");
+            let before = solid_volume(&topo, ring, 0.001).expect("volume");
+
+            let rounded = try_fillet(&mut topo, ring, &picked, rho);
+            assert!(rounded.is_ok(), "{pose}: {rounded:?}");
+            let rounded = rounded.expect("checked");
+            let report = validate_solid(&topo, rounded).expect("validate");
+            assert!(report.is_valid(), "{pose}: {report:?}");
+            let after = solid_volume(&topo, rounded, 0.001).expect("volume");
+            let taken = snap_clip_lip_volume(rho);
+            assert!(
+                (before - after - taken).abs() < 1e-6,
+                "{pose}: the rounds take {} where {taken} is right",
+                before - after
+            );
+
+            let lips_only = try_fillet(&mut topo, ring, &lips, rho).expect("lips only");
+            let same = solid_volume(&topo, lips_only, 0.001).expect("volume");
+            assert!(
+                (after - same).abs() < 1e-9,
+                "{pose}: {after} against {same}"
+            );
+        }
+    }
+
+    #[test]
+    fn try_fillet_refuses_only_the_line_between_two_halves_of_a_wall() {
+        let mut topo = Topology::new();
+        let ring = snap_clip_ring(&mut topo);
+        let picked = edges_along_the_bore(&topo, ring);
+        let lips = brepkit_operations::query::filter_filletable_edges(&topo, ring, &picked)
+            .expect("filter");
+        let line: Vec<EdgeId> = picked
+            .iter()
+            .copied()
+            .filter(|e| !lips.contains(e))
+            .collect();
+        assert_eq!(line.len(), 1);
+        let error = try_fillet(&mut topo, ring, &line, 1.44)
+            .expect_err("a pick with no angle must not report the input solid as success");
+        assert!(
+            error
+                .to_string()
+                .contains("none of the requested edges are filletable"),
+            "unexpected error: {error}"
+        );
+    }
+
+    /// The ring as the brepjs `conduit-snap-clip` example gives it to its
+    /// fillet, with the three edges that its edge finder picks.
+    #[cfg(feature = "io")]
+    #[test]
+    fn try_fillet_rounds_the_lips_of_a_captured_snap_clip() {
+        let bytes = include_bytes!("../../io/tests/data/snapclip_ring.bin");
+        let mut topo = Topology::new();
+        let ring = brepkit_io::arena_io::deserialize_solid(bytes, &mut topo).expect("fixture");
+        let picked = edges_along_the_bore(&topo, ring);
+        assert_eq!(picked.len(), 3);
+        let before = brepkit_operations::measure::solid_volume(&topo, ring, 0.001).expect("volume");
+        let rounded = try_fillet(&mut topo, ring, &picked, 1.44).expect("round the lips");
+        let after =
+            brepkit_operations::measure::solid_volume(&topo, rounded, 0.001).expect("volume");
+        let taken = snap_clip_lip_volume(1.44);
+        assert!(
+            (before - after - taken).abs() < 1e-6,
+            "the rounds take {} where {taken} is right",
+            before - after
+        );
+    }
+
+    #[test]
+    fn try_chamfer_passes_over_a_cylinders_seam() {
+        use brepkit_operations::measure::solid_volume;
+
+        let mut topo = Topology::new();
+        let rod = brepkit_operations::primitives::make_cylinder(&mut topo, 3.0, 10.0).expect("rod");
+        let all = solid_edge_ids(&topo, rod);
+        assert_eq!(all.len(), 3, "two rims and the seam");
+        let seam: Vec<EdgeId> = all
+            .iter()
+            .copied()
+            .filter(|&e| {
+                brepkit_operations::query::edge_lies_in_one_surface(&topo, rod, e).expect("query")
+            })
+            .collect();
+        assert_eq!(seam.len(), 1);
+
+        let bevelled = try_chamfer(&mut topo, rod, &all, 0.5).expect("chamfer the rims");
+        // Each rim loses a ring of triangle section 0.5 by 0.5 at a centroid
+        // radius of 3 - 0.5 / 3.
+        let ring = std::f64::consts::TAU * (3.0 - 0.5 / 3.0) * 0.125;
+        let exact = std::f64::consts::PI * 90.0 - 2.0 * ring;
+        let volume = solid_volume(&topo, bevelled, 0.001).expect("volume");
+        assert!((volume - exact).abs() < 1e-6, "{volume} against {exact}");
+
+        let error = try_chamfer(&mut topo, rod, &seam, 0.5)
+            .expect_err("a pick with no angle must not report the input solid as success");
+        assert!(
+            error
+                .to_string()
+                .contains("none of the requested edges have an angle"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]

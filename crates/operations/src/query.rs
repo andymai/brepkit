@@ -125,18 +125,7 @@ fn edge_is_tangent(
     let b = topo.vertex(edge.end())?.point();
     let mid = a + (b - a) * 0.5;
 
-    let normal = |fid: FaceId| -> Option<brepkit_math::vec::Vec3> {
-        let face = topo.face(fid).ok()?;
-        let n = match face.surface() {
-            FaceSurface::Plane { normal, .. } => *normal,
-            other => {
-                let (u, v) = other.project_point(mid)?;
-                other.normal(u, v)
-            }
-        };
-        let n = if face.is_reversed() { -n } else { n };
-        n.normalize().ok()
-    };
+    let normal = |fid: FaceId| outward_normal_near(topo, fid, mid);
 
     match (normal(f1), normal(f2)) {
         (Some(n1), Some(n2)) => {
@@ -150,6 +139,108 @@ fn edge_is_tangent(
     }
 }
 
+/// The outward normal of a face at the point of its surface nearest `near`.
+fn outward_normal_near(
+    topo: &Topology,
+    fid: FaceId,
+    near: brepkit_math::vec::Point3,
+) -> Option<brepkit_math::vec::Vec3> {
+    let face = topo.face(fid).ok()?;
+    let n = match face.surface() {
+        FaceSurface::Plane { normal, .. } => *normal,
+        other => {
+            let (u, v) = other.project_point(near)?;
+            other.normal(u, v)
+        }
+    };
+    let n = if face.is_reversed() { -n } else { n };
+    n.normalize().ok()
+}
+
+/// Whether an edge lies inside one surface of the solid, so that it has no
+/// angle to round or bevel.
+///
+/// This is true for the seam of one face. It is also true for the edge
+/// between two faces that are parts of one surface with the material on one
+/// side, such as the two halves of a cylinder wall that a boolean or an
+/// imported file keeps as two faces.
+///
+/// # Errors
+///
+/// Returns `OperationsError::Topology` if any entity ID is invalid.
+pub fn edge_lies_in_one_surface(
+    topo: &Topology,
+    solid_id: SolidId,
+    edge_id: EdgeId,
+) -> Result<bool, OperationsError> {
+    let mut faces: Vec<FaceId> = Vec::new();
+    for fid in brepkit_topology::explorer::solid_faces(topo, solid_id)? {
+        let face = topo.face(fid)?;
+        let mut wires = vec![face.outer_wire()];
+        wires.extend(face.inner_wires().iter().copied());
+        for wid in wires {
+            let uses = topo.wire(wid)?.edges().iter();
+            if uses.filter(|oe| oe.edge() == edge_id).count() > 0 && !faces.contains(&fid) {
+                faces.push(fid);
+            }
+        }
+    }
+    match faces.as_slice() {
+        [_] => Ok(true),
+        &[f1, f2] => {
+            if !same_surface(topo.face(f1)?.surface(), topo.face(f2)?.surface()) {
+                return Ok(false);
+            }
+            let edge = topo.edge(edge_id)?;
+            let a = topo.vertex(edge.start())?.point();
+            let b = topo.vertex(edge.end())?.point();
+            let mid = a + (b - a) * 0.5;
+            Ok(
+                match (
+                    outward_normal_near(topo, f1, mid),
+                    outward_normal_near(topo, f2, mid),
+                ) {
+                    (Some(n1), Some(n2)) => n1.dot(n2) > 0.9962,
+                    _ => false,
+                },
+            )
+        }
+        _ => Ok(false),
+    }
+}
+
+/// Whether two faces' surfaces are one surface: equal analytic surfaces, or
+/// B-spline surfaces with the same degrees, knots, control points and
+/// weights.
+fn same_surface(a: &FaceSurface, b: &FaceSurface) -> bool {
+    let (FaceSurface::Nurbs(a), FaceSurface::Nurbs(b)) = (a, b) else {
+        return crate::heal::surfaces_equivalent_pub(a, b);
+    };
+    let tol = brepkit_math::tolerance::Tolerance::new();
+    let same_values = |x: &[f64], y: &[f64]| {
+        x.len() == y.len() && x.iter().zip(y).all(|(&p, &q)| tol.approx_eq(p, q))
+    };
+    let same_rows = |x: &[Vec<f64>], y: &[Vec<f64>]| {
+        x.len() == y.len() && x.iter().zip(y).all(|(p, q)| same_values(p, q))
+    };
+    let same_points = a.control_points().len() == b.control_points().len()
+        && a.control_points()
+            .iter()
+            .zip(b.control_points())
+            .all(|(p, q)| {
+                p.len() == q.len()
+                    && p.iter()
+                        .zip(q)
+                        .all(|(&s, &t)| (s - t).length() <= tol.linear)
+            });
+    a.degree_u() == b.degree_u()
+        && a.degree_v() == b.degree_v()
+        && same_values(a.knots_u(), b.knots_u())
+        && same_values(a.knots_v(), b.knots_v())
+        && same_points
+        && same_rows(a.weights(), b.weights())
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, deprecated)]
@@ -157,6 +248,96 @@ mod tests {
     use brepkit_topology::explorer::solid_edges;
 
     use super::*;
+
+    #[test]
+    fn a_box_edge_and_a_cylinders_rim_lie_in_two_surfaces() {
+        let mut topo = Topology::new();
+        let cube = crate::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+        for edge in solid_edges(&topo, cube).unwrap() {
+            assert!(!edge_lies_in_one_surface(&topo, cube, edge).unwrap());
+        }
+        let rod = crate::primitives::make_cylinder(&mut topo, 3.0, 10.0).unwrap();
+        let inside: Vec<bool> = solid_edges(&topo, rod)
+            .unwrap()
+            .into_iter()
+            .map(|edge| edge_lies_in_one_surface(&topo, rod, edge).unwrap())
+            .collect();
+        assert_eq!(
+            inside.iter().filter(|&&seam| seam).count(),
+            1,
+            "the wall's seam is the one edge inside a surface: {inside:?}"
+        );
+        assert_eq!(inside.len(), 3);
+    }
+
+    #[test]
+    fn the_line_between_two_halves_of_a_wall_lies_in_one_surface() {
+        use crate::boolean::{BooleanOp, BooleanOptions, boolean_with_options};
+        use brepkit_math::mat::Mat4;
+
+        // A rod cut by a box that takes the side of the wall away from the
+        // seam: without a merge of faces, the wall stays in two faces.
+        let mut topo = Topology::new();
+        let rod = crate::primitives::make_cylinder(&mut topo, 3.0, 10.0).unwrap();
+        let tool = crate::primitives::make_box(&mut topo, 4.0, 2.0, 12.0).unwrap();
+        crate::transform::transform_solid(&mut topo, tool, &Mat4::translation(-5.0, -1.0, -1.0))
+            .unwrap();
+        let opts = BooleanOptions {
+            mesh_fallback: false,
+            unify_faces: false,
+            ..BooleanOptions::default()
+        };
+        let cut = boolean_with_options(&mut topo, BooleanOp::Cut, rod, tool, opts).unwrap();
+
+        let walls = brepkit_topology::explorer::solid_faces(&topo, cut)
+            .unwrap()
+            .into_iter()
+            .filter(|&f| matches!(topo.face(f).unwrap().surface(), FaceSurface::Cylinder(_)))
+            .count();
+        assert_eq!(walls, 2, "the wall is in two faces");
+        let inside: Vec<EdgeId> = solid_edges(&topo, cut)
+            .unwrap()
+            .into_iter()
+            .filter(|&edge| edge_lies_in_one_surface(&topo, cut, edge).unwrap())
+            .collect();
+        assert_eq!(inside.len(), 1, "one line between the two halves");
+        let line = topo.edge(inside[0]).unwrap();
+        for end in [line.start(), line.end()] {
+            let p = topo.vertex(end).unwrap().point();
+            assert!((p.x() - 3.0).abs() < 1e-9 && p.y().abs() < 1e-9, "{p:?}");
+        }
+        assert!(
+            filter_filletable_edges(&topo, cut, &inside)
+                .unwrap()
+                .is_empty(),
+            "the line has no angle to round"
+        );
+    }
+
+    #[test]
+    fn a_rounds_contact_line_lies_in_two_surfaces() {
+        let mut topo = Topology::new();
+        let cube = crate::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+        let edges = solid_edges(&topo, cube).unwrap();
+        let rounded = crate::blend_ops::fillet_v2(&mut topo, cube, &[edges[0]], 1.0)
+            .unwrap()
+            .solid;
+        let all = solid_edges(&topo, rounded).unwrap();
+        let sharp: HashSet<usize> = filter_filletable_edges(&topo, rounded, &all)
+            .unwrap()
+            .iter()
+            .map(|e| e.index())
+            .collect();
+        let tangent: Vec<EdgeId> = all
+            .iter()
+            .copied()
+            .filter(|e| !sharp.contains(&e.index()))
+            .collect();
+        assert_eq!(tangent.len(), 2, "the round's two contact lines");
+        for edge in tangent {
+            assert!(!edge_lies_in_one_surface(&topo, rounded, edge).unwrap());
+        }
+    }
 
     #[test]
     fn filletable_edges_all_planar_box() {
