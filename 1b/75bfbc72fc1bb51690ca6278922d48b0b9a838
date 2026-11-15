@@ -1,0 +1,23 @@
+crates/blend/src/trimmer.rs
+  s_709d857a0f83c4::t_007b1f204f34ac 1072-1073,1079-1091,4610-4658
+crates/topology/src/pcurve.rs
+  s_709d857a0f83c4::t_56674303ad16ed 548-588
+crates/topology/src/topology.rs
+  s_709d857a0f83c4::t_b029056d6f8b07 393-396
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1b75bfbc72fc1bb51690ca6278922d48b0b9a838",
+  "prompts": {},
+  "sessions": {
+    "s_709d857a0f83c4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6cca9812-d77a-4dae-96f4-26562694b205",
+        "model": "claude-fable-5-2"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
