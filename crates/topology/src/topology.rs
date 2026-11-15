@@ -23,7 +23,7 @@ use crate::wire::{Wire, WireId};
 /// Arena fields are private to enforce invariants through the public API.
 /// Use the typed accessor methods for lookups and the `add_*` methods
 /// for allocation.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default)]
 pub struct Topology {
     /// All vertices in the model.
     vertices: Arena<Vertex>,
@@ -45,6 +45,25 @@ pub struct Topology {
     pcurves: PCurveRegistry,
     /// One record for each open [`Topology::transaction`], innermost last.
     journals: Vec<Journal>,
+}
+
+/// A copy holds the entities and the pcurves. It does not hold the record of
+/// an open transaction, because no transaction is open on the copy.
+impl Clone for Topology {
+    fn clone(&self) -> Self {
+        Self {
+            vertices: self.vertices.clone(),
+            edges: self.edges.clone(),
+            wires: self.wires.clone(),
+            faces: self.faces.clone(),
+            shells: self.shells.clone(),
+            solids: self.solids.clone(),
+            compounds: self.compounds.clone(),
+            compsolids: self.compsolids.clone(),
+            pcurves: self.pcurves.clone(),
+            journals: Vec::new(),
+        }
+    }
 }
 
 /// The number of entities in each arena.
