@@ -513,3 +513,28 @@ fn a_fan_of_triangles_on_one_edge_is_one_shell() {
     assert_eq!((parts.solids.len(), parts.shells.len()), (0, 1));
     assert_eq!(topo.shell(parts.shells[0]).unwrap().faces().len(), 2000);
 }
+
+/// The gap between the two boxes is far below the length of the outer one,
+/// and far above the merge tolerance.
+#[test]
+fn a_cavity_close_to_the_wall_of_a_long_thin_box_is_its_cavity() {
+    let scaled = |at: [f64; 3], size: [f64; 3], inward: bool, mesh: &mut TriangleMesh| {
+        let first = mesh.positions.len();
+        add_cube(mesh, [0.0; 3], 1.0, inward);
+        for p in &mut mesh.positions[first..] {
+            *p = Point3::new(
+                at[0] + p.x() * size[0],
+                at[1] + p.y() * size[1],
+                at[2] + p.z() * size[2],
+            );
+        }
+    };
+    let mut mesh = TriangleMesh::default();
+    scaled([0.0; 3], [1e6, 1e-4, 1e-4], false, &mut mesh);
+    scaled([1.0, 2e-5, 2e-5], [10.0, 6e-5, 6e-5], true, &mut mesh);
+
+    let mut topo = Topology::new();
+    let parts = import_mesh_parts(&mut topo, &mesh, 1e-7).unwrap();
+    assert_eq!((parts.solids.len(), parts.shells.len()), (1, 0));
+    assert_eq!(topo.solid(parts.solids[0]).unwrap().inner_shells().len(), 1);
+}

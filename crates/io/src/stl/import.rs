@@ -587,11 +587,12 @@ fn assign_cavities(
             }
             let inside_box =
                 (0..3).all(|k| boxes[i].0[k] >= boxes[j].0[k] && boxes[i].1[k] <= boxes[j].1[k]);
-            let on = tolerance.max(
-                1e-9 * (0..3)
-                    .map(|k| boxes[j].1[k] - boxes[j].0[k])
-                    .fold(0.0, f64::max),
-            );
+            // Two points within the merge tolerance are one point. With
+            // no tolerance, the margin is the rounding of a coordinate.
+            let reach = (0..3)
+                .map(|k| boxes[j].0[k].abs().max(boxes[j].1[k].abs()))
+                .fold(0.0, f64::max);
+            let on = tolerance.max(8.0 * f64::EPSILON * reach);
             if inside_box && lies_in(&bodies[i].tris, &bodies[j].tris, tris, points, on) {
                 found = Some(j);
             }
