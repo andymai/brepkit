@@ -7,6 +7,10 @@
 //! lying on the end wall and facing into the solid: a solid the validator
 //! accepted, with an open mesh. The notch now takes an arc corner edge.
 //!
+//! The arc bows past the straight line from the corner to the contact's
+//! end, so the notch reaches past it too: a bore through the end walls in
+//! that sliver is in the round's way, and the round is refused.
+//!
 //! The round along an end wall's arc is a torus band about the vault's
 //! axis; it ends on the axial planes through the arc's ends.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -19,8 +23,9 @@ use brepkit_math::mat::Mat4;
 use brepkit_math::surfaces::CylindricalSurface;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_operations::blend_ops::{all_blended, fillet_v2};
+use brepkit_operations::boolean::{BooleanOp, boolean};
 use brepkit_operations::measure::solid_volume;
-use brepkit_operations::primitives::make_box;
+use brepkit_operations::primitives::{make_box, make_cylinder};
 use brepkit_operations::tessellate::{is_watertight, tessellate_solid};
 use brepkit_operations::transform::transform_solid;
 use brepkit_operations::validate::validate_solid;
@@ -327,4 +332,77 @@ fn a_round_along_a_dishs_end_arc() {
             check(DISHED, Pick::Across { far }, 1.0, &pose);
         }
     }
+}
+
+/// The bowed box with a bore of radius `bore` along x through both end
+/// walls at (`y`, `z`), and its straight top edge on the wall y = 0.
+fn bored_vault(topo: &mut Topology, y: f64, z: f64, bore: f64) -> (SolidId, EdgeId) {
+    let (solid, _) = vaulted_box(topo, BOWED, Pick::Along { far: false });
+    let drill = make_cylinder(topo, bore, SIDE + 2.0).unwrap();
+    let lay = Mat4::translation(-1.0, y, z) * Mat4::rotation_y(std::f64::consts::FRAC_PI_2);
+    transform_solid(topo, drill, &lay).unwrap();
+    let solid = boolean(topo, BooleanOp::Cut, solid, drill).unwrap();
+    assert!(validate_solid(topo, solid).unwrap().is_valid());
+    assert_eq!(solid_faces(topo, solid).unwrap().len(), 7, "bored box");
+    let edge = solid_edges(topo, solid)
+        .unwrap()
+        .into_iter()
+        .find(|&e| {
+            let edge = topo.edge(e).unwrap();
+            [edge.start(), edge.end()].iter().all(|&v| {
+                let p = topo.vertex(v).unwrap().point();
+                p.y().abs() < 1e-9 && (p.z() - SIDE).abs() < 1e-9
+            })
+        })
+        .unwrap();
+    (solid, edge)
+}
+
+#[test]
+fn a_bore_between_the_arc_and_its_chord_is_in_the_rounds_way() {
+    let r = 2.5;
+    // The contact's end on the vault, as in `removed`, and the middle of
+    // the arc from the corner to it: the bore lies between that and the
+    // middle of the chord.
+    let axis = (HALF, BOWED.axis_z());
+    let reach = BOWED.radius - r;
+    let up = (reach * reach - (r - HALF) * (r - HALF)).sqrt();
+    let scale = BOWED.radius / reach;
+    let on_vault = (axis.0 + (r - axis.0) * scale, axis.1 + up * scale);
+    let chord = (on_vault.0 / 2.0, f64::midpoint(SIDE, on_vault.1));
+    let out = (chord.0 - axis.0).hypot(chord.1 - axis.1);
+    let sag = BOWED.radius - out;
+    let middle = 1.0 + 0.5 * sag / out;
+    let (y, z) = (
+        axis.0 + (chord.0 - axis.0) * middle,
+        axis.1 + (chord.1 - axis.1) * middle,
+    );
+    let mut topo = Topology::new();
+    let (solid, edge) = bored_vault(&mut topo, y, z, sag / 4.0);
+    let result = fillet_v2(&mut topo, solid, &[edge], r).and_then(all_blended);
+    let refusal = result.expect_err("a round over a bore in its end's way");
+    assert!(
+        refusal.to_string().contains("cross another boundary"),
+        "{refusal}"
+    );
+}
+
+#[test]
+fn a_bore_clear_of_the_rounds_end_stays() {
+    let r = 2.5;
+    let mut topo = Topology::new();
+    let (solid, edge) = bored_vault(&mut topo, HALF, HALF, 1.0);
+    let before = solid_volume(&topo, solid, 1e-3).unwrap();
+    let result = fillet_v2(&mut topo, solid, &[edge], r)
+        .and_then(all_blended)
+        .unwrap();
+    assert!(validate_solid(&topo, result).unwrap().is_valid());
+    for deflection in [0.05, 0.5] {
+        let mesh = tessellate_solid(&topo, result, deflection).unwrap();
+        assert!(is_watertight(&mesh), "mesh not watertight at {deflection}");
+    }
+    assert_eq!(solid_faces(&topo, result).unwrap().len(), 8);
+    let took = before - solid_volume(&topo, result, 1e-3).unwrap();
+    let want = removed(BOWED, Pick::Along { far: false }, r);
+    assert!((took - want).abs() <= 1e-4, "removed {took}, want {want}");
 }

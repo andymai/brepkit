@@ -4086,6 +4086,31 @@ fn notch_stays_clear(
         (d.dot(frame.x), d.dot(frame.y))
     };
     let triangle = [flat(near_ends[0]), (0.0, 0.0), flat(near_ends[1])];
+    // The notch lies between the cap's two corner edges and the round's end.
+    // A straight corner edge is a side of the triangle. An arc that bows
+    // away from the triangle takes the notch past that side, as far as the
+    // arc's tangents at its two ends: the triangle of the corner, the
+    // contact's end and the point where those tangents meet holds that part.
+    let mut bows: Vec<[(f64, f64); 3]> = Vec::new();
+    let wires = std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied());
+    for oriented in wires
+        .filter_map(|wire| topo.wire(wire).ok())
+        .flat_map(|wire| wire.edges().iter())
+    {
+        let Ok(edge) = topo.edge(oriented.edge()) else {
+            return Ok(false);
+        };
+        if edge.start() != corner && edge.end() != corner {
+            continue;
+        }
+        let (Ok(a), Ok(b)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) else {
+            return Ok(false);
+        };
+        let (a, b) = (a.point(), b.point());
+        if let Some(bow) = arc_bow(edge, a, b, edge.start() == corner, near_ends, &flat) {
+            bows.push(bow?);
+        }
+    }
     let slab = end_hull.filter(|hull| !hull.is_empty()).map(|hull| {
         let along = |p: Point3| (p - vertex).dot(frame.z);
         let (lo, hi) = hull
@@ -4142,7 +4167,10 @@ fn notch_stays_clear(
             if outside_notch && slab.is_some_and(|slab| cap_edge_beyond_slab(edge, a, b, slab)) {
                 continue;
             }
-            if cap_edge_reaches_triangle(edge, a, b, &flat, triangle) {
+            if std::iter::once(&triangle)
+                .chain(&bows)
+                .any(|&region| cap_edge_reaches_triangle(edge, a, b, &flat, region))
+            {
                 return Err(BlendError::PlanningFailure {
                     reason: format!(
                         "the fillet's end at {corner:?} would cross another boundary of its cap"
@@ -4152,6 +4180,72 @@ fn notch_stays_clear(
         }
     }
     Ok(true)
+}
+
+/// For a cap's corner edge that is an arc bowing away from the notch
+/// triangle: the triangle of the corner, the contact's end on the arc, and
+/// the point where the arc's tangents at those two meet, which holds the arc
+/// between them. `None` for a line or a B-spline, an arc that bows into the
+/// notch triangle, and an arc too flat to leave it; an error for an arc whose
+/// piece turns too far for its tangents to bound it.
+fn arc_bow(
+    edge: &brepkit_topology::edge::Edge,
+    a: Point3,
+    b: Point3,
+    corner_at_start: bool,
+    near_ends: [Point3; 2],
+    flat: &impl Fn(Point3) -> (f64, f64),
+) -> Option<Result<[(f64, f64); 3], BlendError>> {
+    use brepkit_topology::edge::EdgeCurve;
+    const TAU: f64 = std::f64::consts::TAU;
+    let curve = edge.curve();
+    let turn_of = |point: Point3| match curve {
+        EdgeCurve::Circle(circle) => Some(circle.project(point)),
+        EdgeCurve::Ellipse(ellipse) => Some(ellipse.project(point)),
+        EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => None,
+    };
+    let (t0, t1) = curve.domain_with_endpoints(a, b);
+    // The contact's end on this arc: the nearer of the two.
+    let (end, other, turn) = [(near_ends[0], near_ends[1]), (near_ends[1], near_ends[0])]
+        .into_iter()
+        .filter_map(|(end, other)| {
+            let turn = t0 + (turn_of(end)? - t0).rem_euclid(TAU);
+            let turn = if turn > t1 { turn - TAU } else { turn };
+            let off = (curve.evaluate_with_endpoints(turn, a, b) - end).length();
+            Some((off, end, other, turn))
+        })
+        .min_by(|p, q| p.0.total_cmp(&q.0))
+        .map(|(_, end, other, turn)| (end, other, turn))?;
+    let at_corner = if corner_at_start { t0 } else { t1 };
+    let corner = if corner_at_start { a } else { b };
+    let cross = |o: (f64, f64), p: (f64, f64), q: (f64, f64)| {
+        (p.0 - o.0) * (q.1 - o.1) - (p.1 - o.1) * (q.0 - o.0)
+    };
+    let (c, e) = (flat(corner), flat(end));
+    let heading = |turn: f64, from: Point3| {
+        let to = flat(from + curve.tangent_with_endpoints(turn, a, b));
+        let at = flat(from);
+        (to.0 - at.0, to.1 - at.1)
+    };
+    let (dc, de) = (heading(at_corner, corner), heading(turn, end));
+    let chord = (e.0 - c.0, e.1 - c.1);
+    let span = chord.0.hypot(chord.1);
+    let size = dc.0.hypot(dc.1) * de.0.hypot(de.1);
+    let sine = dc.0 * de.1 - dc.1 * de.0;
+    // Too flat to leave the triangle by more than a rounding.
+    if span <= 0.0 || size <= 0.0 || sine.abs() <= 1e-9 * size {
+        return None;
+    }
+    // Past a quarter turn the tangents meet far from the arc, or behind it.
+    if (turn - at_corner).abs() > std::f64::consts::FRAC_PI_2 {
+        return Some(Err(BlendError::PlanningFailure {
+            reason: "the fillet's end takes too long a piece of its cap's arc edge".into(),
+        }));
+    }
+    let along = (chord.0 * de.1 - chord.1 * de.0) / sine;
+    let apex = (c.0 + dc.0 * along, c.1 + dc.1 * along);
+    let bows_out = cross(c, e, apex) * cross(c, e, flat(other)) < 0.0;
+    bows_out.then_some(Ok([c, apex, e]))
 }
 
 /// Whether a cap edge lies wholly to one side of the slab `lo..=hi` along
