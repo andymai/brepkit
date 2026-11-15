@@ -8555,6 +8555,24 @@ fn trim_line_short_of_hole(
     }
 }
 
+/// The sampled crossings of a spline edge with a plane, less each one that
+/// stands for an end of the edge on that plane: the end is a cut of its own,
+/// at the vertex. The search puts such a root at the last part of the
+/// edge's range, where a crossing of its own cannot be told from the end. A
+/// crossing further along stays, however near the vertex the edge comes back.
+fn roots_off_the_ends(
+    roots: Vec<(f64, Point3)>,
+    (t0, t1): (f64, f64),
+    (start_on, end_on): (bool, bool),
+) -> Vec<(f64, Point3)> {
+    const END_SPAN: f64 = 1e-4;
+    let band = END_SPAN * (t1 - t0).abs();
+    roots
+        .into_iter()
+        .filter(|&(t, _)| !(start_on && (t - t0).abs() <= band || end_on && (t - t1).abs() <= band))
+        .collect()
+}
+
 /// A section line on a plane face, split where it crosses that face's
 /// boundary when the boundary carries an elliptical or NURBS edge, with the
 /// pieces outside the face dropped. The polygon clips cannot represent such a
@@ -8579,8 +8597,6 @@ fn split_plane_line_at_curved_boundaries(
     raw: RawCurve,
     tol: Tolerance,
 ) -> Vec<RawCurve> {
-    // How far a sampled crossing of a spline lands off the end it stands for.
-    const END_SNAP: f64 = 1e-6;
     if !matches!(raw.curve, EdgeCurve::Line) {
         return vec![raw];
     }
@@ -8656,15 +8672,13 @@ fn split_plane_line_at_curved_boundaries(
                 return vec![raw];
             };
             let (sp, ep) = (sv.point(), ev.point());
-            let own_ends: Vec<Point3> = [(sp, sv), (ep, ev)]
-                .into_iter()
-                .filter(|(p, v)| {
-                    let off = partner_n.dot(Vec3::new(p.x(), p.y(), p.z())) - partner_d;
-                    off.abs() <= v.tolerance().max(tol.linear)
-                })
-                .map(|(p, _)| p)
-                .collect();
-            ends.extend(own_ends.iter().copied());
+            let on_partner = |p: Point3, v: &brepkit_topology::vertex::Vertex| {
+                let off = partner_n.dot(Vec3::new(p.x(), p.y(), p.z())) - partner_d;
+                off.abs() <= v.tolerance().max(tol.linear)
+            };
+            let (start_on, end_on) = (on_partner(sp, sv), on_partner(ep, ev));
+            ends.extend(start_on.then_some(sp));
+            ends.extend(end_on.then_some(ep));
             match edge.curve() {
                 EdgeCurve::Line => {
                     hits.extend(line_segment_plane_crossing(sp, ep, partner_n, partner_d));
@@ -8684,15 +8698,13 @@ fn split_plane_line_at_curved_boundaries(
                 }
                 curve @ EdgeCurve::NurbsCurve(_) => {
                     let (t0, t1) = curve.domain_with_endpoints(sp, ep);
-                    // The sampled root at an end of this edge stands for
-                    // that end, which is a cut of its own.
+                    let roots = super::phase_ef::find_edge_plane_crossings(
+                        curve, sp, ep, t0, t1, partner_n, partner_d, tol,
+                    );
                     hits.extend(
-                        super::phase_ef::find_edge_plane_crossings(
-                            curve, sp, ep, t0, t1, partner_n, partner_d, tol,
-                        )
-                        .into_iter()
-                        .map(|(_, p)| p)
-                        .filter(|p| own_ends.iter().all(|e| (*p - *e).length() > END_SNAP)),
+                        roots_off_the_ends(roots, (t0, t1), (start_on, end_on))
+                            .into_iter()
+                            .map(|(_, p)| p),
                     );
                 }
             }
@@ -9381,6 +9393,46 @@ mod tests {
             assert!((p - nose).length() < 1e-9, "starts at {p:?}");
             assert!((q - tail).length() < 1e-9, "ends at {q:?}");
         }
+    }
+
+    /// A spline that leaves the plane y = 0 at its start and comes back
+    /// through it 5e-7 from that start, halfway along its range. That
+    /// crossing is not the start.
+    #[test]
+    fn a_spline_crossing_near_its_own_start_is_kept() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        let at = |x: f64, y: f64| Point3::new(x, y, 0.0);
+        let pts = vec![
+            at(0.0, 0.0),
+            at(0.0, 1.0),
+            at(5e-7, 1.0),
+            at(5e-7, -1.0),
+            at(-10.0, -1.0),
+        ];
+        let (start, end) = (pts[0], pts[4]);
+        let curve = EdgeCurve::NurbsCurve(
+            NurbsCurve::new(
+                1,
+                vec![0.0, 0.0, 1.0, 2.0, 3.0, 4.0, 4.0],
+                pts,
+                vec![1.0; 5],
+            )
+            .unwrap(),
+        );
+        let roots = crate::pave_filler::phase_ef::find_edge_plane_crossings(
+            &curve,
+            start,
+            end,
+            0.0,
+            4.0,
+            Vec3::new(0.0, 1.0, 0.0),
+            0.0,
+            Tolerance::new(),
+        );
+        let kept = roots_off_the_ends(roots, (0.0, 4.0), (true, false));
+        assert_eq!(kept.len(), 1, "{kept:?}");
+        assert!((kept[0].0 - 2.5).abs() < 1e-6, "{kept:?}");
+        assert!((kept[0].1 - at(5e-7, 0.0)).length() < 1e-6, "{kept:?}");
     }
 
     /// The line x = -100 + 200 t on a NURBS face standing in the plane y = 0,
