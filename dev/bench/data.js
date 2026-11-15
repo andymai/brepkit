@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794728679601,
+  "lastUpdate": 1794730771355,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -70253,6 +70253,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 20174057,
             "range": "± 103360",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "026bee50f9c01da9457bc3b34a2f50745ead0234",
+          "message": "fix(algo): end a section at the vertex where two spline edges meet (#2461)\n\n## Summary\n\nA flat face between two spline edges took no section along the line\nthrough the two vertices where the edges meet. A cut on the chord plane\nof an aerofoil prism left each cap whole, returned four faces with 6\nfree edges, and fell back to a mesh. Two faults caused this.\n\n- The face-face phase splits a section line where it crosses a curved\nboundary (`split_plane_line_at_curved_boundaries`). It found the\ncrossings of a spline edge with a sampled search. At the nose, where\neach spline leaves the vertex square to the line, the search found no\ncrossing, so the section ran from `z = -10` to `z = 42`. At the trailing\nedge it found crossings 1.7e-7 and 3e-10 off the vertex. An end of a\nboundary edge that lies on the partner's plane is now a cut at the\nvertex itself. A sampled crossing of a spline edge stands for an end of\nthat edge on the plane, and is dropped, when it is in the last 1e-4 of\nthe range at that end and within 1e-6 of the vertex.\n- The builder drops a piece of a section that lies on one boundary edge\n(`clip_line_to_face_boundary`). It read each edge as its chord. The\nchord of each spline of the cap is the section, so the builder dropped\nit. A piece is now on a curved edge only when its middle is also on the\nspan of the curve that the edge uses.\n\nThe second change alone makes the two tests of the issue pass. The first\nchange makes the section end at the two vertices, as the issue expects.\n\nCloses #2404\n\n## Tests\n\n- `crates/operations/tests/plane_through_nurbs_edges.rs`: the two tests\nof the issue run without `#[ignore]`, each in four poses (as built,\nturned, shifted, mirrored). A third test cuts a prism whose lower part\nis half as thick as its upper part, in the same poses. Each requires no\nmesh fallback, a valid solid, the face count of each type, ray-cast\npoints on the two sides of the cut, and the volume. The two tests of the\nissue fail on `main`.\n- `crates/algo/src/pave_filler/phase_ff.rs`:\n`a_section_through_two_spline_edges_common_ends_stops_at_each` requires\none piece that ends within 1e-9 of each vertex. Without the first change\nit ends 5e-8 off the second vertex.\n- `crates/algo/src/builder/fill_images_faces.rs`:\n`a_spline_edge_holds_only_points_of_its_own_span` uses an edge on a part\nof its curve, in each direction. A point on the other part of the curve\nis not on the edge.\n- `crates/algo/src/pave_filler/phase_ff.rs`:\n`a_spline_crossing_near_its_own_start_is_kept` uses a spline that comes\nback through the plane 5e-7 from its start, halfway along its range.\nThat crossing stays. `a_spline_crossing_early_in_its_range_is_kept`\nkeeps a crossing at 5e-5 of the range, 0.005 from the vertex.\n- A fourth test,\n`a_box_tilted_about_the_nose_leaves_the_part_under_its_face`, has\n`#[ignore]`. Its sections are correct, and the assembly then rejects\nevery face. #2450 records this fault.\n\n`brepkit-algo`: 402 tests pass. `brepkit-operations`: 2190 tests pass.\nClippy and fmt are clean. The outputs of the pose sweep and of the truth\naudit are the same as on `main`.",
+          "timestamp": "2026-11-15T08:15:26Z",
+          "tree_id": "fef3d43a8e8fe92fe35c057453e4cc48d8d381cc",
+          "url": "https://github.com/andymai/brepkit/commit/026bee50f9c01da9457bc3b34a2f50745ead0234"
+        },
+        "date": 1794730764221,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 890632,
+            "range": "± 2966",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 936436,
+            "range": "± 18086",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10789,
+            "range": "± 48",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 556067,
+            "range": "± 1683",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 20241220,
+            "range": "± 349243",
             "unit": "ns/iter"
           }
         ]
