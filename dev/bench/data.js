@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794719196783,
+  "lastUpdate": 1794719886041,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -69929,6 +69929,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24912865,
             "range": "± 185964",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "06d64b37035e11b2269bf1906eb70e82437c91f5",
+          "message": "fix(check): report a face whose hole crosses its outline (#2452)\n\n## Summary\n\n`validate_solid` accepted a face whose inner wire crosses its outer\nwire. A round whose contact crosses a bore gives such a face, and its\nmesh is open (#2444).\n\nThe new check, `check_face_wires_apart` in\n`crates/check/src/validate/face_wires.rs`, reads the edges' own curves.\n\n- Where two wires of a face meet, the check follows each wire a short\nway to both sides of the meeting point. The wires cross when one wire\nleaves the point on the other side of the other wire than it came in on.\n- Wires that share a vertex or an edge, or touch without a crossing, are\nnot reported.\n- A NURBS edge is read at its knots. The bound on each chord is the\nfarthest control point of its piece of the curve.\n- A wire is followed from a meeting point no farther than a quarter of\nthe way to the nearest other meeting point. Thus two crossings close to\neach other are read apart.\n- A pair of chords that come near each other is halved up to five times.\nEach of two meeting points in one chord then has a search of its own.\n- The crossing check applies to a face of each surface type, and to two\nholes of one face.\n- On a plane face, the check also reports a hole that lies outside the\noutline or inside another hole. `wire_region_2d` and\n`PlanarRegion::side` in `crates/topology/src/planar.rs` give the side of\none wire for a point.\n\n`validate_solid` and `validate_solid_relaxed` in operations run the\ncheck and report an error. The check crate's `validate_solid` runs it as\n`CheckId::FaceWiresIntersect`.\n\nA hole that lies fully outside its outline on a curved face is not\nreported: #2451.\n\n## Tests\n\n- `crates/operations/tests/validate_wires_apart.rs`: the direct fillet\non a drilled box with the bore across the round's contact, upright,\nturned and mirrored. `validate_solid` reports one crossing for each. A\nround short of the bore stays valid. The first test fails on `main`.\n- 18 unit tests in `face_wires.rs`: holes across the outline (circle and\nB-spline), outside it, across each other and inside each other; a window\nin a cylinder's band, across its rim and across its seam; holes that\nshare a vertex with the outline or touch it, which pass. Seven of them\nare the cases from the review: a hole 1e-4 across the outline, a narrow\nspike of a spline, a window 0.002 high across a rim, a round hole inside\na square hole, two crossings in one chord of a spline, two crossings\n1e-4 apart on an outline 1000 long, and a misplaced hole that touches\nthe other wire at the middle of its edge.\n- check, topology, operations, algo, blend, io and wasm: 3716 tests\npass.\n- With a print at the new error, these suites reach it only in the new\ntest.\n- The pose sweep and the truth audit give the same output as on `main`.\n- clippy and fmt are clean. The boundary, doc path and `mul_add` scripts\npass.\n\n## Cost\n\nRelease build, a plate with drilled holes, the check's share of\n`validate_solid`:\n\n| Holes | `validate_solid` | The new check |\n| ---: | ---: | ---: |\n| 1 | 0.121 ms | 0.002 ms |\n| 25 | 2.238 ms | 0.041 ms |\n| 900 | 91.905 ms | 3.833 ms |\n\nA face with no hole returns before any curve is read.\n\nCloses #2444",
+          "timestamp": "2026-11-14T21:15:27-08:00",
+          "tree_id": "c55379730852b92c425d4d62ff35c1798013bd04",
+          "url": "https://github.com/andymai/brepkit/commit/06d64b37035e11b2269bf1906eb70e82437c91f5"
+        },
+        "date": 1794719876628,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 606548,
+            "range": "± 838",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 635816,
+            "range": "± 4398",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 7504,
+            "range": "± 7",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 386706,
+            "range": "± 2492",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 13906886,
+            "range": "± 16834",
             "unit": "ns/iter"
           }
         ]
