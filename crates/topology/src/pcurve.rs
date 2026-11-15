@@ -248,6 +248,9 @@ impl PCurveRegistry {
 
     /// Removes the pcurve for an (edge, face) pair.
     pub fn remove(&mut self, edge: EdgeId, face: FaceId) -> Option<PCurve> {
+        if !self.contains(edge, face) {
+            return None;
+        }
         let at = self.by_face.get(&face)?.iter().rposition(|&e| e == edge)?;
         self.remove_at(face, at)
     }
@@ -272,23 +275,39 @@ impl PCurveRegistry {
             .collect();
         faces.sort_unstable_by_key(|face| face.index());
         faces.dedup();
-        // One pass over the list of each face: an edge to keep moves down
-        // over the removed ones, so no removal moves the rest of the list.
         for face in faces {
-            let Some(list) = self.by_face.remove(&face) else {
-                continue;
-            };
-            let mut kept = Vec::with_capacity(list.len());
-            for edge in list {
-                if edges.contains(&edge) {
-                    self.forget(PCurveKey::new(edge, face), kept.len());
-                } else {
-                    kept.push(edge);
-                }
+            self.remove_on_face(face, edges);
+        }
+    }
+
+    /// Removes every pcurve of one of `edges` on one of `faces`.
+    pub fn remove_between(
+        &mut self,
+        edges: &std::collections::HashSet<EdgeId>,
+        faces: &std::collections::HashSet<FaceId>,
+    ) {
+        for &face in faces {
+            self.remove_on_face(face, edges);
+        }
+    }
+
+    /// Removes the pcurves of `edges` on `face` in one pass over the list of
+    /// the face: an edge to keep moves down over the removed ones, so no
+    /// removal moves the rest of the list.
+    fn remove_on_face(&mut self, face: FaceId, edges: &std::collections::HashSet<EdgeId>) {
+        let Some(list) = self.by_face.remove(&face) else {
+            return;
+        };
+        let mut kept = Vec::with_capacity(list.len());
+        for edge in list {
+            if edges.contains(&edge) {
+                self.forget(PCurveKey::new(edge, face), kept.len());
+            } else {
+                kept.push(edge);
             }
-            if !kept.is_empty() {
-                self.by_face.insert(face, kept);
-            }
+        }
+        if !kept.is_empty() {
+            self.by_face.insert(face, kept);
         }
     }
 
@@ -533,7 +552,14 @@ mod tests {
         };
         let before = order(&topo);
 
-        let edits: [fn(&mut Topology, EdgeId, EdgeId, FaceId); 3] = [
+        let edits: [fn(&mut Topology, EdgeId, EdgeId, FaceId); 4] = [
+            |t, e0, e1, face| {
+                t.pcurves_mut().remove_between(
+                    &std::collections::HashSet::from([e1, e0]),
+                    &std::collections::HashSet::from([face]),
+                );
+                assert_eq!(t.pcurves().len(), 4);
+            },
             |t, e0, _, face| {
                 t.pcurves_mut().remove(e0, face);
             },
