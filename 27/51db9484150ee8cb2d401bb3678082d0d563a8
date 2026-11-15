@@ -1,0 +1,47 @@
+crates/algo/src/builder/face_splitter/mod.rs
+  s_709d857a0f83c4::t_f211ed9fbd85bd 9147-9160
+crates/algo/src/builder/wire_builder.rs
+  s_709d857a0f83c4::t_1ecae801578fd9 161-168,806-850,1209-1271
+crates/algo/src/pave_filler/helpers.rs
+  s_709d857a0f83c4::t_dd8ffadee0121a 356,412-449
+crates/algo/src/pave_filler/make_blocks.rs
+  s_709d857a0f83c4::t_cefa078dbad8a3 92-94,266-317
+crates/algo/src/pave_filler/phase_ve.rs
+  s_709d857a0f83c4::t_d466646ace3881 133
+crates/io/src/stl/import.rs
+  s_709d857a0f83c4::t_4b52cc75f56592 1,3-9,15-17,19,24-34,37-184,190-193,199-210,212-214,217-220,222-234,236-266,269-318,320-347,349-355,357-380,382,384-409,412-417,420-464,466-475,477-478,480-524,526-539,542-555,557-605,607-614,616-619,622-627,629-652,655-714,717-731,737-738,744,899,901-904,923,925-929,966,998,1001-1002
+crates/io/src/stl/mod.rs
+  s_709d857a0f83c4::t_393f751f883741 10
+crates/io/tests/mesh_import_bodies.rs
+  s_709d857a0f83c4::t_7053a84cb52dd6 1-540
+crates/operations/src/copy.rs
+  s_709d857a0f83c4::t_5faa30a6863859 261-262
+crates/operations/src/transform.rs
+  s_709d857a0f83c4::t_4ef6c0f4bba1c2 52-60,62,65-159,196,411,727-729
+crates/operations/src/transform/tests.rs
+  s_709d857a0f83c4::t_7ea467ead85ccf 1106-1250
+crates/operations/tests/ring_cut_through_its_axis.rs
+  s_709d857a0f83c4::t_7d39dc1d20e4a2 1-339
+crates/operations/tests/scale_dependent.rs
+  s_709d857a0f83c4::t_f50c39a45c7cd9 141-235
+crates/wasm/src/bindings/io.rs
+  s_709d857a0f83c4::t_4d5339944428fc 9,12-56,195-196,200-202,236-238,245-248,250-263,265-279,281-329,444-522
+crates/wasm/src/types.rs
+  s_709d857a0f83c4::t_73eeb8ef00ab3e 19-27
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "2751db9484150ee8cb2d401bb3678082d0d563a8",
+  "prompts": {},
+  "sessions": {
+    "s_709d857a0f83c4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6cca9812-d77a-4dae-96f4-26562694b205",
+        "model": "claude-fable-5-2"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
