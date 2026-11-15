@@ -324,6 +324,34 @@ fn bench_box_fillet_all_rolling_ball(c: &mut Criterion) {
     });
 }
 
+/// `box(20,20,20)` + fillet and chamfer of all edges at 1 with the walking
+/// engine, in an empty topology and in one that already holds 20,000 other
+/// boxes. The two times of each operation must agree: the cost of a blend
+/// must not depend on the shapes that it does not touch.
+fn bench_box_blend_among_other_shapes(c: &mut Criterion) {
+    use brepkit_operations::blend_ops::{chamfer_v2, fillet_v2};
+    for (label, others) in [("empty topology", 0), ("20000 other boxes", 20_000)] {
+        let mut topo = Topology::new();
+        for _ in 0..others {
+            primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+        }
+        c.bench_function(&format!("box+fillet (walking), {label}"), |b| {
+            b.iter(|| {
+                let solid = primitives::make_box(&mut topo, 20.0, 20.0, 20.0).unwrap();
+                let edges = collect_edges(&topo, solid);
+                black_box(fillet_v2(&mut topo, solid, &edges, 1.0).unwrap());
+            });
+        });
+        c.bench_function(&format!("box+chamfer (walking), {label}"), |b| {
+            b.iter(|| {
+                let solid = primitives::make_box(&mut topo, 20.0, 20.0, 20.0).unwrap();
+                let edges = collect_edges(&topo, solid);
+                black_box(chamfer_v2(&mut topo, solid, &edges, 1.0, 1.0).unwrap());
+            });
+        });
+    }
+}
+
 /// Multi-boolean: plate(50,50,10) with 4 cylinder holes.
 fn bench_multi_boolean(c: &mut Criterion) {
     c.bench_function("multi-boolean model", |b| {
@@ -673,6 +701,7 @@ criterion_group! {
         bench_box_chamfer_all,
         bench_box_fillet_all,
         bench_box_fillet_all_rolling_ball,
+        bench_box_blend_among_other_shapes,
         bench_multi_boolean,
 }
 

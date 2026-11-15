@@ -500,48 +500,50 @@ fn blend_result_holds(
     let Ok(shell) = topo.shell(shell_id) else {
         return false;
     };
-    // Closure by edge id is blind to a face that overlays a neighbour or
-    // winds against it; the position-quantized view is the mesh, whose
-    // directed edges must all pair. A result that fails this is
-    // consumed as garbage downstream (a slot cut through it falls back
-    // to a mesh), while a clean failure lets the caller keep its input.
-    let watertight = || {
-        brepkit_operations::tessellate::tessellate_solid_with_tolerance(
-            topo,
-            s,
-            orientation_deflection,
-            10.0_f64.to_radians(),
-        )
-        .is_ok_and(|mesh| brepkit_operations::tessellate::boundary_edge_count(&mesh) == 0)
-    };
-    brepkit_topology::validation::validate_shell_closed(shell, topo).is_ok()
-        && brepkit_check::validate::shell::check_shell_orientation(topo, shell_id)
+    if brepkit_topology::validation::validate_shell_closed(shell, topo).is_err()
+        || !brepkit_check::validate::shell::check_shell_orientation(topo, shell_id)
             .is_ok_and(|issues| issues.is_empty())
-        && brepkit_operations::measure::oriented_solid_volume(topo, s, orientation_deflection)
-            .is_ok_and(|meshed| {
-                // A solid whose exact volume and meshed volume disagree
-                // is not a consistent B-rep (a second-pass band thrown
-                // past its neighbouring blend reads 1010.11 exact and
-                // 985.42 meshed); a sound one agrees to the mesh's chord
-                // error, far inside 1%.
-                // Chord error alone can pass 1% at the coarse deflection
-                // (a plain r = 10 cylinder meshes 1.24% short at 0.1), so
-                // a disagreement is re-read ten times finer, where a sound
-                // solid converges and an inconsistent one does not.
-                let agrees = |exact: f64, meshed: f64| (exact - meshed).abs() <= 0.01 * exact.abs();
-                meshed > 0.0
-                    && brepkit_operations::measure::solid_volume(topo, s, orientation_deflection)
-                        .is_ok_and(|exact| {
-                            agrees(exact, meshed)
-                                || brepkit_operations::measure::oriented_solid_volume(
-                                    topo,
-                                    s,
-                                    orientation_deflection * 0.1,
-                                )
-                                .is_ok_and(|fine| agrees(exact, fine))
-                        })
-            })
-        && watertight()
+    {
+        return false;
+    }
+    // One mesh gives both readings: its oriented volume, and whether it is
+    // watertight.
+    let Ok(mesh) = brepkit_operations::tessellate::tessellate_solid_with_tolerance(
+        topo,
+        s,
+        orientation_deflection,
+        10.0_f64.to_radians(),
+    ) else {
+        return false;
+    };
+    let meshed = brepkit_operations::measure::oriented_mesh_volume(&mesh);
+    // A solid whose exact volume and meshed volume disagree is not a
+    // consistent B-rep (a second-pass band thrown past its neighbouring
+    // blend reads 1010.11 exact and 985.42 meshed); a sound one agrees to
+    // the mesh's chord error, far inside 1%.
+    // Chord error alone can pass 1% at the coarse deflection (a plain
+    // r = 10 cylinder meshes 1.24% short at 0.1), so a disagreement is
+    // re-read ten times finer, where a sound solid converges and an
+    // inconsistent one does not.
+    let agrees = |exact: f64, meshed: f64| (exact - meshed).abs() <= 0.01 * exact.abs();
+    meshed > 0.0
+        && brepkit_operations::measure::solid_volume(topo, s, orientation_deflection).is_ok_and(
+            |exact| {
+                agrees(exact, meshed)
+                    || brepkit_operations::measure::oriented_solid_volume(
+                        topo,
+                        s,
+                        orientation_deflection * 0.1,
+                    )
+                    .is_ok_and(|fine| agrees(exact, fine))
+            },
+        )
+        // Closure by edge id is blind to a face that overlays a neighbour or
+        // winds against it; the position-quantized view is the mesh, whose
+        // directed edges must all pair. A result that fails this is
+        // consumed as garbage downstream (a slot cut through it falls back
+        // to a mesh), while a clean failure lets the caller keep its input.
+        && brepkit_operations::tessellate::boundary_edge_count(&mesh) == 0
 }
 
 /// Extract a human-readable message from a `catch_unwind` panic payload.
@@ -921,6 +923,55 @@ mod fillet_tests {
                 )
             })
             .collect()
+    }
+
+    // gh #2432: a blend rolled each failed trim back from a copy of the whole
+    // topology, and looked through every wire in it for the users of an edge
+    // that it split, so its time grew with the shapes that it did not touch
+    // (27 times as long for this fillet among 20,000 other boxes, 12 times
+    // for this chamfer). The least of five runs keeps the ratio steady on a
+    // busy machine.
+    #[test]
+    fn a_blend_costs_the_same_among_other_shapes() {
+        type Blend = fn(&mut Topology, SolidId, &[EdgeId]) -> SolidId;
+        let fillet: Blend = |topo, solid, edges| try_fillet(topo, solid, edges, 1.0).unwrap();
+        let chamfer: Blend = |topo, solid, edges| try_chamfer(topo, solid, edges, 1.0).unwrap();
+        let measure = |topo: &mut Topology, blend: Blend| {
+            let mut least = f64::INFINITY;
+            let mut made = Vec::new();
+            for _ in 0..5 {
+                let solid =
+                    brepkit_operations::primitives::make_box(topo, 20.0, 20.0, 20.0).unwrap();
+                let edges = solid_edge_ids(topo, solid);
+                let before = (topo.num_edges(), topo.num_wires(), topo.num_faces());
+                let start = std::time::Instant::now();
+                blend(topo, solid, &edges);
+                least = least.min(start.elapsed().as_secs_f64());
+                made.push((
+                    topo.num_edges() - before.0,
+                    topo.num_wires() - before.1,
+                    topo.num_faces() - before.2,
+                ));
+            }
+            (least, made)
+        };
+        for (name, blend) in [("fillet", fillet), ("chamfer", chamfer)] {
+            let mut alone = Topology::new();
+            let (time_alone, made_alone) = measure(&mut alone, blend);
+            let mut crowded = Topology::new();
+            for _ in 0..20_000 {
+                brepkit_operations::primitives::make_box(&mut crowded, 10.0, 10.0, 10.0).unwrap();
+            }
+            let (time_crowded, made_crowded) = measure(&mut crowded, blend);
+            assert_eq!(
+                made_alone, made_crowded,
+                "{name}: the entities a blend makes must not depend on the other shapes"
+            );
+            assert!(
+                time_crowded < 3.0 * time_alone,
+                "{name}: {time_crowded:.6} s among 20,000 other boxes, {time_alone:.6} s alone"
+            );
+        }
     }
 
     // The wasm `fillet` binding (and its batch sibling) route through
