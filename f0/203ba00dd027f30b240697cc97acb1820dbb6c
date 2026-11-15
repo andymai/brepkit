@@ -1,0 +1,31 @@
+crates/math/src/nurbs/projection.rs
+  s_709d857a0f83c4::t_99a6efb09d9915 410-638,1198-1255
+crates/operations/src/tessellate/face.rs
+  s_709d857a0f83c4::t_3830fff6f1e957 202
+crates/operations/src/tessellate/nonplanar.rs
+  s_709d857a0f83c4::t_53609f9ae23918 3255-3257
+crates/operations/src/tessellate/nurbs.rs
+  s_709d857a0f83c4::t_c164ae21c1e0ad 1670-1685
+crates/operations/tests/blend_overshoot_area.rs
+  s_709d857a0f83c4::t_a3b73b76c60258 1-252
+crates/operations/tests/surface_fixtures/fold.rs
+  s_709d857a0f83c4::t_00df7a90cb19b8 1-136
+crates/operations/tests/surface_fixtures/mod.rs
+  s_709d857a0f83c4::t_762417947d5aee 6-7
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f0203ba00dd027f30b240697cc97acb1820dbb6c",
+  "prompts": {},
+  "sessions": {
+    "s_709d857a0f83c4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6cca9812-d77a-4dae-96f4-26562694b205",
+        "model": "claude-fable-5-2"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
