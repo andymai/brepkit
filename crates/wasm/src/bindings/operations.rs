@@ -278,20 +278,13 @@ impl BrepKernel {
         // WASM FFI boundary, which would abort the entire WASM instance.
         let result =
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<u32, JsError> {
-                let solid = match try_fillet(self.topo_mut(), solid_id, &edge_ids, radius) {
-                    Ok(solid) => solid,
-                    Err(error) => {
-                        // Filter to edges where both adjacent faces are planar.
-                        let planar_edges = brepkit_operations::query::filter_planar_edges(
-                            &self.topo, solid_id, &edge_ids,
-                        )?;
-                        if planar_edges.is_empty() {
-                            return Err(JsError::new(&error.to_string()));
-                        }
-                        try_fillet(self.topo_mut(), solid_id, &planar_edges, radius)
-                            .map_err(|retry_error| JsError::new(&retry_error.to_string()))?
-                    }
-                };
+                let solid = crate::helpers::try_fillet_or_its_planar_edges(
+                    self.topo_mut(),
+                    solid_id,
+                    &edge_ids,
+                    radius,
+                )
+                .map_err(|error| JsError::new(&error.to_string()))?;
                 Ok(solid_id_to_u32(solid))
             }));
         match result {
