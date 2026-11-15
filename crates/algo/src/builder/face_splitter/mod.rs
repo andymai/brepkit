@@ -7119,6 +7119,13 @@ fn split_face_2d_impl(
             .filter(|sct| matches!(sct.curve_3d, EdgeCurve::Line))
             .map(|sct| (sct.start, sct.end))
             .collect();
+        // A curved section (the corner arc of a rounded outline) that ends
+        // on the opening's rim bridges to it as a line does.
+        let curved_ends: Vec<Point3> = sections
+            .iter()
+            .filter(|sct| !matches!(sct.curve_3d, EdgeCurve::Line))
+            .flat_map(|sct| [sct.start, sct.end])
+            .collect();
         let on_seg = |p: Point3, a: Point3, b: Point3| -> bool {
             let d = b - a;
             let len2 = d.dot(d);
@@ -7149,7 +7156,8 @@ fn split_face_2d_impl(
             let mut coincident: Vec<Point3> = Vec::new();
             for e in hole {
                 for p in [e.start_3d, e.end_3d] {
-                    if sec_segs.iter().any(|&(a, b)| on_seg(p, a, b))
+                    if (sec_segs.iter().any(|&(a, b)| on_seg(p, a, b))
+                        || curved_ends.iter().any(|q| (*q - p).length() < tol.linear))
                         && !coincident.iter().any(|q| (*q - p).length() < tol.linear)
                     {
                         coincident.push(p);
