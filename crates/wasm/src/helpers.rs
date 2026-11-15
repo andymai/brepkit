@@ -234,6 +234,7 @@ pub fn try_fillet(
     edge_ids: &[brepkit_topology::edge::EdgeId],
     radius: f64,
 ) -> Result<brepkit_topology::solid::SolidId, brepkit_operations::OperationsError> {
+    refuse_edges_off_the_outer_shell(topo, solid_id, edge_ids, "filleting")?;
     // Filtering identifies the edges with no angle to round. An edge inside
     // one surface (a seam, or the line between two faces that are parts of
     // one surface) is carrier topology, and a pick of it asks for nothing. A
@@ -245,8 +246,13 @@ pub fn try_fillet(
             reason: "none of the requested edges are filletable".to_owned(),
         });
     }
-    for &edge in edge_ids.iter().filter(|edge| !filtered.contains(edge)) {
-        if !brepkit_operations::query::edge_lies_in_one_surface(topo, solid_id, edge)? {
+    if filtered.len() != edge_ids.len() {
+        let inside = brepkit_operations::query::edges_in_one_surface(topo, solid_id, edge_ids)?;
+        let all_inside = edge_ids
+            .iter()
+            .filter(|edge| !filtered.contains(edge))
+            .all(|edge| inside.contains(&edge.index()));
+        if !all_inside {
             return Err(brepkit_operations::OperationsError::InvalidInput {
                 reason: "some requested edges are not filletable".to_owned(),
             });
@@ -388,12 +394,12 @@ pub fn try_chamfer(
 ) -> Result<brepkit_topology::solid::SolidId, brepkit_operations::OperationsError> {
     refuse_edges_off_the_outer_shell(topo, solid_id, edge_ids, "chamfering")?;
     // An edge inside one surface has no angle to bevel, as in `try_fillet`.
-    let mut with_an_angle = Vec::with_capacity(edge_ids.len());
-    for &edge in edge_ids {
-        if !brepkit_operations::query::edge_lies_in_one_surface(topo, solid_id, edge)? {
-            with_an_angle.push(edge);
-        }
-    }
+    let inside = brepkit_operations::query::edges_in_one_surface(topo, solid_id, edge_ids)?;
+    let with_an_angle: Vec<_> = edge_ids
+        .iter()
+        .copied()
+        .filter(|edge| !inside.contains(&edge.index()))
+        .collect();
     if with_an_angle.is_empty() {
         return Err(brepkit_operations::OperationsError::InvalidInput {
             reason: "none of the requested edges have an angle to chamfer".to_owned(),
@@ -1987,6 +1993,45 @@ mod fillet_tests {
                 .contains("none of the requested edges have an angle"),
             "unexpected error: {error}"
         );
+    }
+
+    /// A fillet naming the seam of a round cavity with an outer edge is
+    /// refused: the seam is carrier topology only on the outer shell.
+    #[test]
+    fn try_fillet_refuses_a_cavitys_seam() {
+        use brepkit_operations::boolean::{BooleanOp, boolean};
+
+        let mut topo = Topology::new();
+        let block = brepkit_operations::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+        let rod = brepkit_operations::primitives::make_cylinder(&mut topo, 1.0, 3.0).unwrap();
+        brepkit_operations::transform::transform_solid(
+            &mut topo,
+            rod,
+            &brepkit_math::mat::Mat4::translation(5.0, 5.0, 3.5),
+        )
+        .unwrap();
+        let hollow = boolean(&mut topo, BooleanOp::Cut, block, rod).unwrap();
+        let cavity = topo.solid(hollow).unwrap().inner_shells()[0];
+        let mut cavity_edges = Vec::new();
+        for &face in topo.shell(cavity).unwrap().faces() {
+            cavity_edges.extend(brepkit_topology::explorer::face_edges(&topo, face).unwrap());
+        }
+        let seams =
+            brepkit_operations::query::edges_in_one_surface(&topo, hollow, &cavity_edges).unwrap();
+        let seam = cavity_edges
+            .iter()
+            .copied()
+            .find(|e| seams.contains(&e.index()))
+            .expect("the cavity's wall has a seam");
+        let outer = solid_edge_ids(&topo, hollow)[0];
+
+        let error = try_fillet(&mut topo, hollow, &[outer, seam], 1.0)
+            .expect_err("a cavity's edge must fail the batch");
+        assert!(
+            error.to_string().contains("an edge of a cavity"),
+            "unexpected error: {error}"
+        );
+        assert!(try_fillet(&mut topo, hollow, &[outer], 1.0).is_ok());
     }
 
     #[test]

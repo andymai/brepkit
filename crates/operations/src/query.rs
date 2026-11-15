@@ -157,13 +157,71 @@ fn outward_normal_near(
     n.normalize().ok()
 }
 
-/// Whether an edge lies inside one surface of the solid, so that it has no
-/// angle to round or bevel.
+/// The edges of `edge_ids` that lie inside one surface of the solid, so that
+/// they have no angle to round or bevel.
 ///
-/// This is true for the seam of one face. It is also true for the edge
-/// between two faces that are parts of one surface with the material on one
-/// side, such as the two halves of a cylinder wall that a boolean or an
-/// imported file keeps as two faces.
+/// Such an edge is the seam of one face: the face uses it one time in each
+/// direction. Or it is the edge between two faces that are parts of one
+/// surface with the material on one side, such as the two halves of a
+/// cylinder wall that a boolean or an imported file keeps as two faces.
+///
+/// The solid's faces are read one time for the whole of `edge_ids`.
+///
+/// # Errors
+///
+/// Returns `OperationsError::Topology` if any entity ID is invalid.
+pub fn edges_in_one_surface(
+    topo: &Topology,
+    solid_id: SolidId,
+    edge_ids: &[EdgeId],
+) -> Result<HashSet<usize>, OperationsError> {
+    let wanted: HashSet<usize> = edge_ids.iter().map(|e| e.index()).collect();
+    let mut uses: HashMap<usize, Vec<(FaceId, bool)>> = HashMap::new();
+    for fid in brepkit_topology::explorer::solid_faces(topo, solid_id)? {
+        let face = topo.face(fid)?;
+        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            for oe in topo.wire(wid)?.edges() {
+                if wanted.contains(&oe.edge().index()) {
+                    uses.entry(oe.edge().index())
+                        .or_default()
+                        .push((fid, oe.is_forward()));
+                }
+            }
+        }
+    }
+
+    let mut inside = HashSet::new();
+    for &edge_id in edge_ids {
+        let Some(&[(f1, forward1), (f2, forward2)]) = uses.get(&edge_id.index()).map(Vec::as_slice)
+        else {
+            continue;
+        };
+        let one_surface = if f1 == f2 {
+            forward1 != forward2
+        } else if same_surface(topo.face(f1)?.surface(), topo.face(f2)?.surface()) {
+            let edge = topo.edge(edge_id)?;
+            let a = topo.vertex(edge.start())?.point();
+            let b = topo.vertex(edge.end())?.point();
+            let mid = a + (b - a) * 0.5;
+            match (
+                outward_normal_near(topo, f1, mid),
+                outward_normal_near(topo, f2, mid),
+            ) {
+                (Some(n1), Some(n2)) => n1.dot(n2) > 0.9962,
+                _ => false,
+            }
+        } else {
+            false
+        };
+        if one_surface {
+            inside.insert(edge_id.index());
+        }
+    }
+    Ok(inside)
+}
+
+/// Whether one edge lies inside one surface of the solid: see
+/// [`edges_in_one_surface`], which reads the solid one time for many edges.
 ///
 /// # Errors
 ///
@@ -173,50 +231,25 @@ pub fn edge_lies_in_one_surface(
     solid_id: SolidId,
     edge_id: EdgeId,
 ) -> Result<bool, OperationsError> {
-    let mut faces: Vec<FaceId> = Vec::new();
-    for fid in brepkit_topology::explorer::solid_faces(topo, solid_id)? {
-        let face = topo.face(fid)?;
-        let mut wires = vec![face.outer_wire()];
-        wires.extend(face.inner_wires().iter().copied());
-        for wid in wires {
-            let uses = topo.wire(wid)?.edges().iter();
-            if uses.filter(|oe| oe.edge() == edge_id).count() > 0 && !faces.contains(&fid) {
-                faces.push(fid);
-            }
-        }
-    }
-    match faces.as_slice() {
-        [_] => Ok(true),
-        &[f1, f2] => {
-            if !same_surface(topo.face(f1)?.surface(), topo.face(f2)?.surface()) {
-                return Ok(false);
-            }
-            let edge = topo.edge(edge_id)?;
-            let a = topo.vertex(edge.start())?.point();
-            let b = topo.vertex(edge.end())?.point();
-            let mid = a + (b - a) * 0.5;
-            Ok(
-                match (
-                    outward_normal_near(topo, f1, mid),
-                    outward_normal_near(topo, f2, mid),
-                ) {
-                    (Some(n1), Some(n2)) => n1.dot(n2) > 0.9962,
-                    _ => false,
-                },
-            )
-        }
-        _ => Ok(false),
-    }
+    Ok(!edges_in_one_surface(topo, solid_id, &[edge_id])?.is_empty())
 }
 
-/// Whether two faces' surfaces are one surface: equal analytic surfaces, or
-/// B-spline surfaces with the same degrees, knots, control points and
-/// weights.
+/// Whether two faces' surfaces are one surface: equal analytic surfaces
+/// within the standard tolerances, or B-spline surfaces with the same
+/// degrees, knots, control points and weights.
 fn same_surface(a: &FaceSurface, b: &FaceSurface) -> bool {
+    let tol = brepkit_math::tolerance::Tolerance::new();
+    // The healer reads two planes as one within a wide tolerance, which a
+    // shallow crease also passes.
+    if let (FaceSurface::Plane { normal: na, d: da }, FaceSurface::Plane { normal: nb, d: db }) =
+        (a, b)
+    {
+        let dot = na.dot(*nb);
+        return 1.0 - dot.abs() < tol.angular && (da - db * dot.signum()).abs() < tol.linear;
+    }
     let (FaceSurface::Nurbs(a), FaceSurface::Nurbs(b)) = (a, b) else {
         return crate::heal::surfaces_equivalent_pub(a, b);
     };
-    let tol = brepkit_math::tolerance::Tolerance::new();
     let same_values = |x: &[f64], y: &[f64]| {
         x.len() == y.len() && x.iter().zip(y).all(|(&p, &q)| tol.approx_eq(p, q))
     };
@@ -337,6 +370,49 @@ mod tests {
         for edge in tangent {
             assert!(!edge_lies_in_one_surface(&topo, rounded, edge).unwrap());
         }
+    }
+
+    #[test]
+    fn two_planes_at_a_shallow_crease_are_two_surfaces() {
+        use brepkit_math::vec::Vec3;
+
+        let flat = FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: 2.0,
+        };
+        let tilted = FaceSurface::Plane {
+            normal: Vec3::new(0.01_f64.sin(), 0.0, 0.01_f64.cos()),
+            d: 2.0,
+        };
+        let turned_over = FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, -1.0),
+            d: -2.0,
+        };
+        let shifted = FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: 2.0 + 1e-4,
+        };
+        assert!(same_surface(&flat, &flat));
+        assert!(same_surface(&flat, &turned_over));
+        assert!(!same_surface(&flat, &tilted));
+        assert!(!same_surface(&flat, &shifted));
+    }
+
+    #[test]
+    fn an_edge_that_one_face_uses_one_time_is_no_seam() {
+        // A cylinder's wall alone: each rim is used one time, by one face.
+        let mut topo = Topology::new();
+        let rod = crate::primitives::make_cylinder(&mut topo, 3.0, 10.0).unwrap();
+        let wall = brepkit_topology::explorer::solid_faces(&topo, rod)
+            .unwrap()
+            .into_iter()
+            .find(|&f| matches!(topo.face(f).unwrap().surface(), FaceSurface::Cylinder(_)))
+            .unwrap();
+        let shell = topo.add_shell(brepkit_topology::shell::Shell::new(vec![wall]).unwrap());
+        let open = topo.add_solid(brepkit_topology::solid::Solid::new(shell, vec![]));
+        let edges = brepkit_topology::explorer::face_edges(&topo, wall).unwrap();
+        let inside = edges_in_one_surface(&topo, open, &edges).unwrap();
+        assert_eq!(inside.len(), 1, "the seam only, and no rim: {inside:?}");
     }
 
     #[test]
