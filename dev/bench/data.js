@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794726193952,
+  "lastUpdate": 1794726716160,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -70145,6 +70145,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 19870290,
             "range": "± 138757",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "9c6f53f0fbbdc30c46ffa8d4e4b5e1ac1cd17931",
+          "message": "perf(blend): a fillet and a chamfer cost the same among other shapes (#2454)\n\n## Summary\n\nA fillet or a chamfer took longer as the kernel held more shapes, also\nshapes that the operation does not touch. Among 20,000 other boxes, the\nfillet of a box took 83 ms and the chamfer 12.7 ms. They now take 7 ms\nand 0.33 ms, the same as in an empty kernel.\n\nCloses #2432.\n\nTwo steps of the blend engine read the whole topology:\n\n- The batch trimmer made a copy of the whole topology for each face that\nit trimmed. It dropped the copy when the trim failed. This was the cost\nof the fillet.\n- A split of an edge looked through every wire of the topology for the\nusers of that edge. This was the cost of the chamfer.\n\nThe changes:\n\n- `Topology::transaction` runs an edit and puts the topology back if the\nedit fails. It records the first value of each entity that the edit\nchanges. Its cost is the entities that the edit changes and adds. The\nbatch trimmer uses it in place of the copy.\n- A split looks only at the faces and wires of the solid under the\nblend, and at those made after the blend started. The batch trimmer does\nthe same when it looks for the neighbours of a face.\n- The pcurve registry keeps the edges of each face and the faces of each\nedge. A query or a removal for one face or one edge no longer reads the\nwhole registry.\n\nTwo more changes make the blend faster in an empty kernel:\n\n- The gate on the result of a blend meshed the solid two times. It now\nreads the oriented volume and the open edges from one mesh.\n- The check for closed contacts that cross measured the length of each\ncontact first. It now looks at the ends first, so an open contact costs\nnothing.\n\nThe result of the fillet is the same: 6 planes, 12 cylinders and 8\nspheres.\n\n## Timings\n\nThe repro of #2432 in Node 26.13.0, on wasm builds of `main` at\nbd37fcb52 and of this branch. I made the two builds on the same machine\non the same day, and ran them in turn three times. The table shows the\nsecond run. The other two runs agree, apart from the first row of the\nbranch, where the JIT is not yet warm.\n\n| Boxes already in the kernel | `main` chamfer | `main` fillet | Branch\nchamfer | Branch fillet |\n| ---: | ---: | ---: | ---: | ---: |\n| 0 | 1.10 ms | 10.25 ms | 1.11 ms | 9.21 ms |\n| 1,000 | 1.28 ms | 13.90 ms | 0.42 ms | 8.87 ms |\n| 7,000 | 5.53 ms | 34.15 ms | 0.35 ms | 8.83 ms |\n| 20,000 | 14.24 ms | 83.67 ms | 0.33 ms | 6.95 ms |\n\nA native probe through `try_fillet` and `try_chamfer`, release build,\nmedian of 5:\n\n| Boxes already in the topology | `main` chamfer | `main` fillet |\nBranch chamfer | Branch fillet |\n| ---: | ---: | ---: | ---: | ---: |\n| 0 | 0.72 ms | 7.36 ms | 0.41 ms | 5.00 ms |\n| 20,000 | 8.62 ms | 201.68 ms | 0.42 ms | 4.70 ms |\n\nI ran the same probe on booleans, shell, offset, extrude, copy,\ntransform, mirror, pattern, tessellation, volume, validation and heal.\nTheir times do not change with 20,000 boxes in the topology.\n\nThe wasm file grows from 9,442,494 to 9,506,013 bytes, 0.67%, with no\nnew dependency. The growth is the transaction record of each entity\ntype.\n\n## Tests\n\n- `a_blend_costs_the_same_among_other_shapes` in\n`crates/wasm/src/helpers.rs` fillets and chamfers a box alone and among\n20,000 other boxes. It requires the same number of new entities, and\nless than 3 times the time. It fails with the copy and the\nwhole-topology search put back.\n- Six tests in `crates/topology/src/pcurve.rs` cover a failed\ntransaction, a kept transaction and nested transactions. They also cover\nthe order of the pcurves after an undo, a copy made in a transaction,\nand removal by face and by edge.\n- `box+fillet (walking)` and `box+chamfer one edge (walking)` in the\ncriterion suite run in an empty topology and among 20,000 other boxes.\n- The topology, blend, algo, check, heal, offset, operations, io and\nwasm tests pass. Clippy and fmt are clean.\n- The pose sweep and the truth audit give the same output as on `main`.",
+          "timestamp": "2026-11-14T23:08:05-08:00",
+          "tree_id": "9f402c6a8e9bb7b71426209b19213d38ff41e1a9",
+          "url": "https://github.com/andymai/brepkit/commit/9c6f53f0fbbdc30c46ffa8d4e4b5e1ac1cd17931"
+        },
+        "date": 1794726706591,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1080553,
+            "range": "± 8672",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1130382,
+            "range": "± 11440",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11479,
+            "range": "± 25",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 705901,
+            "range": "± 7417",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 23573937,
+            "range": "± 69772",
             "unit": "ns/iter"
           }
         ]
