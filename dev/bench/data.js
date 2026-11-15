@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794733026655,
+  "lastUpdate": 1794733404472,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -70415,6 +70415,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 19827492,
             "range": "± 64738",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "7ea8e30ee4ad2837aa9959116acb905d21d55ddd",
+          "message": "fix(algo): split a ring's cap where a spoke from the bore ends in it (#2481)\n\nA box that came from the bore of a ring and ended in the ring's\nmaterial, flush with its flat cap, did not fuse exactly. The fuse fell\nback to a mesh. It is now exact. This is the fault behind the\n`fan-guard` and `pocket-watch` playground examples in #2372: a spoke\nbetween a hub and a rim, flush with their bottoms.\n\n## What happened\n\nThe spoke's outline crosses the hole of the cap twice and ends in the\ncap. The hole's rim is one circle. The two crossings split it into a\nshort arc and an arc of most of a turn. The cap must divide into the\npatch under the spoke and the rest of the ring. Two steps went wrong.\n\n1. The long arc got the pcurve of its short complement. The pcurve of a\npiece of a split rim came from the shorter arc between its two ends.\nThis is #2465, which had no input that fails. This case is such an\ninput.\n2. A spoke that ends near the outer wall lost the hole. The cap's\noutline is one circle, which the nesting test reads as 8 chords. A loop\nnearer the circle than those chords cut off read as outside it, and the\nsplitter made it a region.\n\n## What changes\n\n1. A piece of a split rim traces its own span\n(`compute_boundary_pcurve_on_surface`).\n2. The nesting test also reads an outline of lines and conic arcs\nexactly (`region2d::point_in_region`).\n\nThe walk past a section at a rim vertex and the dropped outline of a\nring, which this case also needs, are in #2466.\n\n## How I checked it\n\n- `crates/operations/tests/spoke_into_a_ring.rs` is new. It fuses a\nspoke into a ring from the bore. The spoke is 0.3 high or as high as the\nring, and its end is near the inner wall or the outer wall. One test\nturns the ring, and one mirrors it.\n- Each result must be valid and watertight, with 2 cylinder faces. The\nvolume must be the closed form, to 1e-7. Seven points must classify as\ninside or outside. All four tests fail on main. With the first fix only,\nthe test with the spoke near the outer wall fails.\n- With a local wasm build of the five changes in brepjs, the `fan-guard`\nexample evaluates and meshes. The `pocket-watch` example gets past its\n`fuseAll`, to a chamfer that fails (#2490).\n- The pose sweep and the truth audit match main line for line, with the\nfive changes for #2372 together on main at `bdae9da54`. `cargo clippy\n--all-targets -- -D warnings` and `cargo fmt --all --check` pass in the\npre-commit hook.\n\nCloses #2465.",
+          "timestamp": "2026-11-15T08:59:50Z",
+          "tree_id": "eaf91b914816230a111d502f6e4ac811370d4075",
+          "url": "https://github.com/andymai/brepkit/commit/7ea8e30ee4ad2837aa9959116acb905d21d55ddd"
+        },
+        "date": 1794733395219,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1099753,
+            "range": "± 20141",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1153733,
+            "range": "± 25173",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13155,
+            "range": "± 67",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 698024,
+            "range": "± 3758",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24608447,
+            "range": "± 93857",
             "unit": "ns/iter"
           }
         ]
