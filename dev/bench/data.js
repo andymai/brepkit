@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794750925583,
+  "lastUpdate": 1794755176626,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -70847,6 +70847,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 19814817,
             "range": "± 88489",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "053c5eeaf9ee4de3edb54f309559527715eb2a02",
+          "message": "test(io): ready repros for three playground example faults (#2493)\n\nThis PR adds the captured operands of three calls that fail in the\nbrepjs playground examples (#2372), each with an ignored test. No\nlibrary code changes.\n\n| Example | Call | Test | Issue |\n| --- | --- | --- | --- |\n| `mars-rover` | The fuse of a grouser onto the wheel |\n`a_grouser_fuses_onto_a_wheel` | #2487 |\n| `robot-arm` | The fuse of a yoke with rounded arms onto the turret's\ncap | `a_yoke_with_rounded_arms_fuses_onto_the_turrets_cap` | #2488 |\n| `pocket-watch` | The chamfer of a bridge plate's top outline |\n`a_plates_top_outline_of_lines_and_arcs_takes_a_chamfer` | #2490 |\n\nThe tests are in `crates/io/tests/playground_example_repros_inmem.rs`.\nThe five fixtures in `crates/io/tests/data` are 90 kB together.\n\n## How I checked it\n\n- Each of the three tests fails when I run it with `--include-ignored`,\nwith the error that its issue gives.\n- `cargo clippy --all-targets -- -D warnings` and `cargo fmt --all\n--check` pass in the pre-commit hook.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nAdds ready repros for three brepjs playground example faults (#2372) as\nignored tests with captured input fixtures, so each failure can be fixed\nwithout the playground.\n\n- The tests live in\n`crates/io/tests/playground_example_repros_inmem.rs`; the five fixtures\nare 90 kB.\n- No library code changes.\n- Each fuse repro probes points inside each operand alone and off both,\nso a result that silently drops one operand also fails.\n\n<sup>Written for commit 1e60403188672630f2d3bb97ae5c0b0b709c585e.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2493?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2493?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2493&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-11-15T07:02:36-08:00",
+          "tree_id": "0df0736a271c9ca05e19c65fb0f4a070200a35ab",
+          "url": "https://github.com/andymai/brepkit/commit/053c5eeaf9ee4de3edb54f309559527715eb2a02"
+        },
+        "date": 1794755166841,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1087488,
+            "range": "± 6179",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1140513,
+            "range": "± 3272",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13197,
+            "range": "± 33",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 696914,
+            "range": "± 14878",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25002344,
+            "range": "± 418432",
             "unit": "ns/iter"
           }
         ]
