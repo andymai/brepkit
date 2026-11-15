@@ -1,0 +1,29 @@
+crates/io/tests/data/mars_rover_grouser.bin
+  s_709d857a0f83c4::t_74e543f3cc323c 1
+crates/io/tests/data/mars_rover_wheel.bin
+  s_709d857a0f83c4::t_ddba986858063a 1
+crates/io/tests/data/pocket_watch_bridge.bin
+  s_709d857a0f83c4::t_adb9f9cecf1605 1
+crates/io/tests/data/robot_arm_shoulder_cap.bin
+  s_709d857a0f83c4::t_8ca2218f5f1279 1
+crates/io/tests/data/robot_arm_shoulder_yoke.bin
+  s_709d857a0f83c4::t_7169fd38abc314 1
+crates/io/tests/playground_example_repros_inmem.rs
+  s_709d857a0f83c4::t_7df1743df62264 1-98
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "217c2c17169306eb5e6fd3dbba4f74e54d7491fb",
+  "prompts": {},
+  "sessions": {
+    "s_709d857a0f83c4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6cca9812-d77a-4dae-96f4-26562694b205",
+        "model": "claude-fable-5-2"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
