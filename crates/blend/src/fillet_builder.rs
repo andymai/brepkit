@@ -4240,33 +4240,28 @@ fn arc_bow(
             tangent.length(),
         )
     };
-    let (dc, dm, de) = (
-        heading(at_corner),
-        heading(f64::midpoint(at_corner, turn)),
-        heading(turn),
-    );
     let chord = (e.0 - c.0, e.1 - c.1);
     let turns = |(p, p_len): ((f64, f64), f64), (q, q_len): ((f64, f64), f64)| {
         let sine = p.0 * q.1 - p.1 * q.0;
         (sine.abs() > 1e-9 * p_len * q_len).then_some(sine)
     };
+    let dc = heading(at_corner);
     // An arc seen edge on (a curved cap's rim seen along the round's axis)
-    // is a straight line, and a short enough arc is one to within a
-    // rounding: neither leaves the triangle. Its tangents at its ends and
-    // at its middle are then parallel; at the ends alone, a half turn's
-    // are too.
-    if chord.0.hypot(chord.1) <= 0.0 || (turns(dc, dm).is_none() && turns(dc, de).is_none()) {
+    // is a straight line, however long its piece: it does not leave the
+    // triangle. Its tangents a quarter turn apart are then parallel.
+    let edge_on = turns(dc, heading(at_corner + std::f64::consts::FRAC_PI_2)).is_none();
+    if chord.0.hypot(chord.1) <= 0.0 || edge_on {
         return None;
     }
     // Past a quarter turn the tangents meet far from the arc, or behind it.
-    let sine = match turns(dc, de) {
-        Some(sine) if (turn - at_corner).abs() <= std::f64::consts::FRAC_PI_2 => sine,
-        _ => {
-            return Some(Err(BlendError::PlanningFailure {
-                reason: "the fillet's end takes too long a piece of its cap's arc edge".into(),
-            }));
-        }
-    };
+    if (turn - at_corner).abs() > std::f64::consts::FRAC_PI_2 {
+        return Some(Err(BlendError::PlanningFailure {
+            reason: "the fillet's end takes too long a piece of its cap's arc edge".into(),
+        }));
+    }
+    // A piece too short to turn leaves the triangle by a rounding at most.
+    let de = heading(turn);
+    let sine = turns(dc, de)?;
     let (dc, de) = (dc.0, de.0);
     let along = (chord.0 * de.1 - chord.1 * de.0) / sine;
     let apex = (c.0 + dc.0 * along, c.1 + dc.1 * along);
@@ -6320,15 +6315,25 @@ mod tests {
     /// An arc from the corner at angle 0 to a contact's end at `turn`, on a
     /// unit circle in the plane z = 0, seen along z.
     fn bow_of_unit_arc(turn: f64, other: Point3) -> Option<Result<[(f64, f64); 3], BlendError>> {
+        bow_of_arc(1.0, 3.0, turn, other)
+    }
+
+    /// The same on a circle of radius `radius` whose edge ends at `span`.
+    fn bow_of_arc(
+        radius: f64,
+        span: f64,
+        turn: f64,
+        other: Point3,
+    ) -> Option<Result<[(f64, f64); 3], BlendError>> {
         let mut topo = Topology::new();
-        let at = |angle: f64| Point3::new(angle.cos(), angle.sin(), 0.0);
-        let (corner, far) = (at(0.0), at(3.0));
+        let at = |angle: f64| Point3::new(radius * angle.cos(), radius * angle.sin(), 0.0);
+        let (corner, far) = (at(0.0), at(span));
         let a = topo.add_vertex(brepkit_topology::vertex::Vertex::new(corner, 1e-7));
         let b = topo.add_vertex(brepkit_topology::vertex::Vertex::new(far, 1e-7));
         let circle = brepkit_math::curves::Circle3D::new(
             Point3::new(0.0, 0.0, 0.0),
             Vec3::new(0.0, 0.0, 1.0),
-            1.0,
+            radius,
         )
         .unwrap();
         let edge = brepkit_topology::edge::Edge::new(a, b, EdgeCurve::Circle(circle));
@@ -6368,6 +6373,16 @@ mod tests {
                 "turn {turn}"
             );
         }
+        // Almost a full turn: the tangents at the piece's ends and at its
+        // middle are all parallel.
+        let tau = std::f64::consts::TAU;
+        let almost = bow_of_arc(
+            1000.0,
+            tau - 2e-10,
+            tau - 4e-10,
+            Point3::new(500.0, 200.0, 0.0),
+        );
+        assert!(matches!(almost, Some(Err(_))));
     }
 
     #[test]
