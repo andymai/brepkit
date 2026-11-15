@@ -1,0 +1,21 @@
+crates/wasm/src/bindings/operations.rs
+  s_709d857a0f83c4::t_a7c541eb5080e4 2921-2983
+crates/wasm/src/helpers.rs
+  s_709d857a0f83c4::t_893fb35d5beb06 398-418
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5311346848a69e6897e882b6a512eadd0c144b86",
+  "prompts": {},
+  "sessions": {
+    "s_709d857a0f83c4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6cca9812-d77a-4dae-96f4-26562694b205",
+        "model": "claude-fable-5-2"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
