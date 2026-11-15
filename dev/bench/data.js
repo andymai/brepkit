@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794735669161,
+  "lastUpdate": 1794735940285,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -70523,6 +70523,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 14073611,
             "range": "± 64707",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "aa8117781a4ef89af858102be15f635b90f2684a",
+          "message": "fix(wasm): leave a wall's seam out of a chamfer pick (#2484)\n\n`chamfer` returned an error when the picked edges held the seam of a\ncylinder wall. It now leaves the seam out and chamfers the other edges.\nThis is the fault behind the `hobby-rc-servo` and\n`button-top-battery-cell` playground examples in #2372.\n\n## What happened\n\nThe two examples pick a rim with `edgeFinder().atDistance(r, centre)`.\nThe wall's seam line is at the same distance from that point, so the\npick holds the rim circle and the seam. A seam is where one face meets\nitself: the two sides are the same cylinder, and there is no corner to\ncut. The walking chamfer refused it as `cylinder+cylinder (walker not\nyet integrated)`, and the call failed.\n\n`fillet` already leaves a seam out of its pick (`try_fillet`).\n\n## What changes\n\n`try_chamfer` leaves out each edge whose faces are all one face. If no\nedge is left, it returns an error that says each picked edge is a seam.\n\n## How I checked it\n\n- `chamfer_leaves_out_a_walls_seam_picked_with_its_rim` in\n`crates/wasm/src/bindings/operations.rs` is new. A pick of a rod's seam\nand its top rim gives the exact volume of the rim chamfer alone, to\n1e-9. A pick of the seam alone is an error.\n- With a local wasm build of the five changes in brepjs, the two\nexamples evaluate and mesh.\n- The pose sweep and the truth audit match main line for line, with the\nfive changes for #2372 together on main at `bdae9da54`. `cargo clippy\n--all-targets -- -D warnings` and `cargo fmt --all --check` pass in the\npre-commit hook.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\n`chamfer` no longer fails when a pick includes a wall's seam. Picking a\nrim by distance also picks the seam line where the cylinder wall meets\nitself, which has no corner to chamfer. `try_chamfer` now filters out\nsuch edges, matching `try_fillet`, and returns a clear error when every\npicked edge is a seam; an empty pick keeps its original error. This\nfixes the `hobby-rc-servo` and `button-top-battery-cell` playground\nexamples from #2372.\n\n<sup>Written for commit c22c623b68e0af4655eb742bbd8e9213227b78b5.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2484?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2484?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2484&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-11-15T09:42:29Z",
+          "tree_id": "e70cc8a7f604577f399036f87d1bde4b2ad3d86d",
+          "url": "https://github.com/andymai/brepkit/commit/aa8117781a4ef89af858102be15f635b90f2684a"
+        },
+        "date": 1794735930510,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 785215,
+            "range": "± 18228",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 838275,
+            "range": "± 25024",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 9196,
+            "range": "± 24",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 490627,
+            "range": "± 6251",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 17830833,
+            "range": "± 44389",
             "unit": "ns/iter"
           }
         ]
