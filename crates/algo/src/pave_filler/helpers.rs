@@ -4,6 +4,7 @@
 //! duplicated vertex-lookup and pave-insertion logic.
 
 use brepkit_math::aabb::Aabb3;
+use brepkit_math::madd::Madd;
 use brepkit_math::nurbs::surface::NurbsSurface;
 use brepkit_math::tolerance::Tolerance;
 use brepkit_math::vec::Point3;
@@ -361,4 +362,54 @@ pub(super) fn add_pave_to_edge(arena: &mut GfaArena, topo: &Topology, edge_id: E
             }
         }
     }
+}
+
+/// The foot of `p` on an edge's curve between the parameters `range`, as
+/// its parameter and its distance from `p`.
+///
+/// `ends` are the edge's vertex positions. `samples` are places on that part
+/// of the curve, in order, each with its parameter: the nearest chord
+/// between them gives the start.
+pub(super) fn foot_on_curve(
+    p: Point3,
+    curve: &EdgeCurve,
+    ends: (Point3, Point3),
+    range: (f64, f64),
+    samples: &[(f64, Point3)],
+) -> (f64, f64) {
+    let at = |t: f64| curve.evaluate_with_endpoints(t, ends.0, ends.1);
+    let (lo, hi) = (range.0.min(range.1), range.0.max(range.1));
+    let mut nearest = (f64::INFINITY, lo);
+    for chord in samples.windows(2) {
+        let dir = chord[1].1 - chord[0].1;
+        let len2 = dir.dot(dir);
+        let s = if len2 > 0.0 {
+            ((p - chord[0].1).dot(dir) / len2).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let gap2 = (chord[0].1 + dir * s - p).length_squared();
+        if gap2 < nearest.0 {
+            nearest = (gap2, s.madd(chord[1].0 - chord[0].0, chord[0].0));
+        }
+    }
+    let mut t = nearest.1.clamp(lo, hi);
+    let h = (hi - lo) * 1e-7;
+    if h > 0.0 {
+        for _ in 0..20 {
+            let (below, above) = ((t - h).max(lo), (t + h).min(hi));
+            let speed = (at(above) - at(below)) * (1.0 / (above - below));
+            let speed2 = speed.dot(speed);
+            if speed2 <= 0.0 {
+                break;
+            }
+            let next = (t + (p - at(t)).dot(speed) / speed2).clamp(lo, hi);
+            let moved = (next - t).abs();
+            t = next;
+            if moved <= 1e-11 * (hi - lo) {
+                break;
+            }
+        }
+    }
+    (t, (at(t) - p).length())
 }

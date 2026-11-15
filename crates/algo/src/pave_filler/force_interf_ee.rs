@@ -142,7 +142,11 @@ pub fn perform(topo: &Topology, tol: Tolerance, arena: &mut GfaArena) -> Result<
 
                         let curve_i = topo.edge(edge_i)?.curve();
                         let curve_j = topo.edge(edge_j)?.curve();
-                        if !curves_compatible(curve_i, curve_j, tol) {
+                        let compatible = match curves_compatible(curve_i, curve_j, tol) {
+                            Some(compatible) => compatible,
+                            None => block_lies_on_block(topo, arena, pb_i, pb_j, tol)?,
+                        };
+                        if !compatible {
                             continue;
                         }
 
@@ -191,26 +195,27 @@ pub fn perform(topo: &Topology, tol: Tolerance, arena: &mut GfaArena) -> Result<
     Ok(())
 }
 
-/// Check if two edge curves are geometrically compatible (same type + parameters).
-fn curves_compatible(a: &EdgeCurve, b: &EdgeCurve, tol: Tolerance) -> bool {
+/// Whether two edge curves of one type are the same curve, from their
+/// parameters. `None` for a pair that has no such test: the blocks then
+/// decide, in [`block_lies_on_block`].
+fn curves_compatible(a: &EdgeCurve, b: &EdgeCurve, tol: Tolerance) -> Option<bool> {
     // Exhaustive match — no wildcards per CLAUDE.md convention.
     // Adding a new EdgeCurve variant will require updating this match.
     match (a, b) {
-        (EdgeCurve::Line, EdgeCurve::Line) => true,
-        (EdgeCurve::Circle(ca), EdgeCurve::Circle(cb)) => {
+        (EdgeCurve::Line, EdgeCurve::Line) => Some(true),
+        (EdgeCurve::Circle(ca), EdgeCurve::Circle(cb)) => Some(
             (ca.radius() - cb.radius()).abs() < tol.linear
                 && (ca.center() - cb.center()).length() < tol.linear
-                && ca.normal().dot(cb.normal()).abs() > 1.0 - tol.angular
-        }
-        (EdgeCurve::Ellipse(ea), EdgeCurve::Ellipse(eb)) => {
+                && ca.normal().dot(cb.normal()).abs() > 1.0 - tol.angular,
+        ),
+        (EdgeCurve::Ellipse(ea), EdgeCurve::Ellipse(eb)) => Some(
             (ea.semi_major() - eb.semi_major()).abs() < tol.linear
                 && (ea.semi_minor() - eb.semi_minor()).abs() < tol.linear
                 && (ea.center() - eb.center()).length() < tol.linear
-                && ea.normal().dot(eb.normal()).abs() > 1.0 - tol.angular
-        }
-        // NurbsCurve overlap detection deferred — needs parametric comparison.
-        (EdgeCurve::NurbsCurve(_), EdgeCurve::NurbsCurve(_)) => false,
-        // Different curve types cannot be geometrically coincident.
+                && ea.normal().dot(eb.normal()).abs() > 1.0 - tol.angular,
+        ),
+        // A B-spline can be the same curve as another B-spline with other
+        // poles, or as a line, a circle or an ellipse.
         (
             EdgeCurve::Line,
             EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_),
@@ -225,7 +230,177 @@ fn curves_compatible(a: &EdgeCurve, b: &EdgeCurve, tol: Tolerance) -> bool {
         )
         | (
             EdgeCurve::NurbsCurve(_),
-            EdgeCurve::Line | EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_),
-        ) => false,
+            EdgeCurve::Line
+            | EdgeCurve::Circle(_)
+            | EdgeCurve::Ellipse(_)
+            | EdgeCurve::NurbsCurve(_),
+        ) => None,
+    }
+}
+
+/// Whether the part of its edge's curve that block `pb_i` covers lies on the
+/// part that block `pb_j` covers, within tolerance. The two blocks share
+/// their ends already.
+fn block_lies_on_block(
+    topo: &Topology,
+    arena: &GfaArena,
+    pb_i: PaveBlockId,
+    pb_j: PaveBlockId,
+    tol: Tolerance,
+) -> Result<bool, AlgoError> {
+    const SAMPLES: usize = 16;
+    let (Some(block_i), Some(block_j)) = (arena.pave_blocks.get(pb_i), arena.pave_blocks.get(pb_j))
+    else {
+        return Ok(false);
+    };
+    let ends_of = |edge: EdgeId| -> Result<_, AlgoError> {
+        let edge = topo.edge(edge)?;
+        Ok((
+            topo.vertex(edge.start())?.point(),
+            topo.vertex(edge.end())?.point(),
+        ))
+    };
+    let curve_i = topo.edge(block_i.original_edge)?.curve();
+    let curve_j = topo.edge(block_j.original_edge)?.curve();
+    let (ends_i, ends_j) = (
+        ends_of(block_i.original_edge)?,
+        ends_of(block_j.original_edge)?,
+    );
+    let range_i = (block_i.start.parameter, block_i.end.parameter);
+    let range_j = (block_j.start.parameter, block_j.end.parameter);
+    let along =
+        |range: (f64, f64), k: usize| range.0 + (range.1 - range.0) * (k as f64 / SAMPLES as f64);
+    let samples_j: Vec<_> = (0..=SAMPLES)
+        .map(|k| {
+            let t = along(range_j, k);
+            (t, curve_j.evaluate_with_endpoints(t, ends_j.0, ends_j.1))
+        })
+        .collect();
+    Ok((1..SAMPLES).all(|k| {
+        let p = curve_i.evaluate_with_endpoints(along(range_i, k), ends_i.0, ends_i.1);
+        super::helpers::foot_on_curve(p, curve_j, ends_j, range_j, &samples_j).1 <= tol.linear
+    }))
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use super::*;
+    use brepkit_math::curves::Circle3D;
+    use brepkit_math::nurbs::curve::NurbsCurve;
+    use brepkit_math::vec::{Point3, Vec3};
+    use brepkit_topology::edge::Edge;
+    use brepkit_topology::vertex::Vertex;
+
+    fn cubic(poles: [Point3; 4]) -> NurbsCurve {
+        NurbsCurve::new(
+            3,
+            vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+            poles.to_vec(),
+            vec![1.0; 4],
+        )
+        .unwrap()
+    }
+
+    /// An edge with its own two vertices and one pave block over all of it.
+    fn whole_edge(
+        topo: &mut Topology,
+        arena: &mut GfaArena,
+        start: Point3,
+        end: Point3,
+        curve: EdgeCurve,
+    ) -> EdgeId {
+        let tol = Tolerance::default().linear;
+        let from = topo.add_vertex(Vertex::new(start, tol));
+        let to = topo.add_vertex(Vertex::new(end, tol));
+        let (t0, t1) = curve.domain_with_endpoints(start, end);
+        let edge = topo.add_edge(Edge::new(from, to, curve));
+        arena.init_edge_pave_block(edge, from, t0, to, t1);
+        edge
+    }
+
+    fn common_blocks(topo: &Topology, arena: &mut GfaArena) -> usize {
+        perform(topo, Tolerance::default(), arena).unwrap();
+        arena.common_blocks.iter().count()
+    }
+
+    /// Two edges on one cubic share their block, in the same direction and
+    /// in opposite directions. A different cubic between the same two ends
+    /// does not.
+    #[test]
+    fn blocks_on_one_b_spline_curve_are_common() {
+        let poles = [
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(1.0, 2.0, 0.5),
+            Point3::new(3.0, 2.0, -0.5),
+            Point3::new(4.0, 0.0, 0.0),
+        ];
+        let mut back = poles;
+        back.reverse();
+        let mut lifted = poles;
+        lifted[1] = Point3::new(1.0, 2.5, 0.5);
+        for (other, common) in [(poles, 1), (back, 1), (lifted, 0)] {
+            let mut topo = Topology::new();
+            let mut arena = GfaArena::new();
+            whole_edge(
+                &mut topo,
+                &mut arena,
+                poles[0],
+                poles[3],
+                EdgeCurve::NurbsCurve(cubic(poles)),
+            );
+            whole_edge(
+                &mut topo,
+                &mut arena,
+                other[0],
+                other[3],
+                EdgeCurve::NurbsCurve(cubic(other)),
+            );
+            assert_eq!(common_blocks(&topo, &mut arena), common, "{other:?}");
+        }
+    }
+
+    /// A quarter circle and the same quarter as a rational quadratic share
+    /// their block. The three quarters of the circle between the same two
+    /// ends do not.
+    #[test]
+    fn an_arc_and_the_same_arc_as_a_b_spline_are_common() {
+        let (x, y, z) = (
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+        );
+        let centre = Point3::new(1.0, -2.0, 0.5);
+        let (start, end) = (centre + x * 2.0, centre + y * 2.0);
+        let quarter = NurbsCurve::new(
+            2,
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            vec![start, centre + x * 2.0 + y * 2.0, end],
+            vec![1.0, std::f64::consts::FRAC_1_SQRT_2, 1.0],
+        )
+        .unwrap();
+        let circle = Circle3D::new_with_ref(centre, z, 2.0, x).unwrap();
+        // From `end` round to `start`, the circle edge is the other three
+        // quarters.
+        for (from, to, common) in [(start, end, 1), (end, start, 0)] {
+            let mut topo = Topology::new();
+            let mut arena = GfaArena::new();
+            whole_edge(
+                &mut topo,
+                &mut arena,
+                from,
+                to,
+                EdgeCurve::Circle(circle.clone()),
+            );
+            whole_edge(
+                &mut topo,
+                &mut arena,
+                start,
+                end,
+                EdgeCurve::NurbsCurve(quarter.clone()),
+            );
+            assert_eq!(common_blocks(&topo, &mut arena), common);
+        }
     }
 }
