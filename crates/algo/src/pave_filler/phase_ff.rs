@@ -8557,19 +8557,25 @@ fn trim_line_short_of_hole(
 
 /// The sampled crossings of a spline edge with a plane, less each one that
 /// stands for an end of the edge on that plane: the end is a cut of its own,
-/// at the vertex. The search puts such a root at the last part of the
-/// edge's range, where a crossing of its own cannot be told from the end. A
-/// crossing further along stays, however near the vertex the edge comes back.
+/// at the vertex. The search puts such a root in the last part of the edge's
+/// range and within its own error of the vertex, where a crossing of its own
+/// cannot be told from the end. A crossing further along the range stays,
+/// however near the vertex the edge comes back, and so does one further from
+/// the vertex, however early in the range.
 fn roots_off_the_ends(
     roots: Vec<(f64, Point3)>,
     (t0, t1): (f64, f64),
-    (start_on, end_on): (bool, bool),
+    (start, end): (Option<Point3>, Option<Point3>),
 ) -> Vec<(f64, Point3)> {
     const END_SPAN: f64 = 1e-4;
+    const END_SNAP: f64 = 1e-6;
     let band = END_SPAN * (t1 - t0).abs();
+    let stands_for = |t: f64, p: Point3, t_end: f64, v: Option<Point3>| {
+        v.is_some_and(|v| (t - t_end).abs() <= band && (p - v).length() <= END_SNAP)
+    };
     roots
         .into_iter()
-        .filter(|&(t, _)| !(start_on && (t - t0).abs() <= band || end_on && (t - t1).abs() <= band))
+        .filter(|&(t, p)| !stands_for(t, p, t0, start) && !stands_for(t, p, t1, end))
         .collect()
 }
 
@@ -8702,9 +8708,13 @@ fn split_plane_line_at_curved_boundaries(
                         curve, sp, ep, t0, t1, partner_n, partner_d, tol,
                     );
                     hits.extend(
-                        roots_off_the_ends(roots, (t0, t1), (start_on, end_on))
-                            .into_iter()
-                            .map(|(_, p)| p),
+                        roots_off_the_ends(
+                            roots,
+                            (t0, t1),
+                            (start_on.then_some(sp), end_on.then_some(ep)),
+                        )
+                        .into_iter()
+                        .map(|(_, p)| p),
                     );
                 }
             }
@@ -9429,10 +9439,27 @@ mod tests {
             0.0,
             Tolerance::new(),
         );
-        let kept = roots_off_the_ends(roots, (0.0, 4.0), (true, false));
+        let kept = roots_off_the_ends(roots, (0.0, 4.0), (Some(start), None));
         assert_eq!(kept.len(), 1, "{kept:?}");
         assert!((kept[0].0 - 2.5).abs() < 1e-6, "{kept:?}");
         assert!((kept[0].1 - at(5e-7, 0.0)).length() < 1e-6, "{kept:?}");
+    }
+
+    /// A root early in an edge's range stands for the start only within the
+    /// search's error of the vertex. The curve (100 t, 1000 t^2 - 0.05 t)
+    /// crosses y = 0 again at t = 5e-5, 0.005 from its start.
+    #[test]
+    fn a_spline_crossing_early_in_its_range_is_kept() {
+        let at = |x: f64, y: f64| Point3::new(x, y, 0.0);
+        let start = at(0.0, 0.0);
+        let roots = vec![(2e-9, at(2e-7, 0.0)), (5e-5, at(0.005, 0.0))];
+        for range in [(0.0, 1.0), (0.0, 37.5)] {
+            let kept = roots_off_the_ends(roots.clone(), range, (Some(start), None));
+            assert_eq!(kept.len(), 1, "{kept:?}");
+            assert!((kept[0].1 - at(0.005, 0.0)).length() < 1e-12, "{kept:?}");
+        }
+        let kept = roots_off_the_ends(roots, (0.0, 1.0), (None, None));
+        assert_eq!(kept.len(), 2, "{kept:?}");
     }
 
     /// The line x = -100 + 200 t on a NURBS face standing in the plane y = 0,
