@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794758309826,
+  "lastUpdate": 1794759329935,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -70955,6 +70955,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24599252,
             "range": "± 27437",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "9bd5edb00d96eda31f8e117e9e631cba89f7e991",
+          "message": "fix(wasm): round and bevel past an edge that lies inside one surface (#2491)\n\nA fillet failed when the pick held the line between two faces of one\ncylinder wall. The call returned `some requested edges are not\nfilletable`. The fillet now passes over that line and rounds the other\nedges of the pick. The chamfer passes over such a line too, as it does\nfor a seam since #2484. Closes #2477.\n\n## Why\n\nThe brepjs `conduit-snap-clip` example makes a ring from a barrel and a\nbore, and cuts a slot into it. It then rounds the two lips of the slot.\nIts edge finder picks each edge along the ring's axis at the bore's\nradius. That pick holds the two lips. It also holds the old seam of the\nbore's wall, which the cut keeps as an edge between two cylinder faces.\n\nBefore #2466, the slot cut fell back to a mesh of 106 flat faces, and\nthe fillet rounded 45 edges of that mesh. Since #2466, the cut is exact:\n8 faces and 18 edges. The pick is then the two lips and the wall's line,\nand the fillet gate refused it.\n\nI ran the same native sequence at each change in release 4.11.18:\n\n| Commit | Faces | Edges picked | Fillet |\n|---|---:|---:|---|\n| `bd37fcb52` (4.11.17) | 106 | 45 | ok |\n| `c8b7eb138` (#2448) | 106 | 45 | ok |\n| `8a3720562` (#2447) | 106 | 45 | ok |\n| `333663a71` (#2466) | 8 | 3 | error |\n| `43dc136d6` (#2462) | 8 | 3 | error |\n| `06d64b370` (#2452) | 8 | 3 | error |\n\nSo #2466 is correct, and it showed an older fault in the gate.\n`try_fillet` passed over a seam: an edge that one face uses two times.\nIt took the line between two faces of one surface for a tangent edge\nbetween two surfaces, which fails the batch.\n\n## What\n\n- `edges_in_one_surface` in `crates/operations/src/query.rs` reads the\nsolid's faces one time and returns the edges of a pick that lie inside\none surface. A seam is such an edge: one face uses it one time in each\ndirection. The edge between two faces that are parts of one surface,\nwith the material on one side, is such an edge too.\n- Two analytic surfaces are one surface within the standard tolerances.\nThe compare reads the angle between two normals or two axes from their\ncross product. Two B-spline surfaces are one surface when their degrees,\nknots, control points and weights agree. Where an inner knot occurs as\nmany times as the degree, the surface can have a corner. Where the edge\nis on such a knot, `smooth_across` compares the normals of the two spans\nthat meet there.\n- `try_fillet` in `crates/wasm/src/helpers.rs` passes over each such\nedge. It refuses an edge of a cavity first, as `try_chamfer` does. A\ntangent edge between two surfaces still fails the batch. A pick of such\nedges only is still an error.\n- The `fillet` binding rounds the planar edges of a pick when the whole\npick fails. `try_fillet_or_its_planar_edges` now holds the two passes.\nIt refuses an edge off the outer shell first, because the second pass\ndropped such an edge.\n- `try_chamfer` leaves each such edge out of its pick. Since #2484 it\nleft out a seam only.\n\n## How I checked it\n\n- `try_fillet_passes_over_the_line_between_two_halves_of_a_wall` builds\nthe ring as made, turned and mirrored. The result must be valid. The\nvolume that the rounds take must agree with the closed form to 1e-6. The\nresult must have the volume of a fillet of the two lips only, to 1e-9.\n- `try_fillet_rounds_the_lips_of_a_captured_snap_clip` reads\n`crates/io/tests/data/snapclip_ring.bin`. I captured that solid from the\nbrepjs example on brepkit-wasm 4.11.19, at the fillet call. The test\nmakes the same volume check. It fails on main with the error from the\nissue.\n- `try_fillet_refuses_only_the_line_between_two_halves_of_a_wall` and\n`try_fillet_rejects_unchanged_batch` cover the two error cases.\n- `try_chamfer_passes_over_a_cylinders_seam` checks the chamfer of a rod\nagainst its closed form to 1e-6. The test from #2484 passes with the\nshared rule.\n- Nine unit tests in `query.rs` cover a box, a cylinder, a wall in two\nfaces, and the contact lines of a round. They also cover two planes at a\ncrease of 0.01 rad, and a rim that one face uses one time. The last\nthree cover a ball's equator, two B-spline surfaces with different\nweights, and two cylinders 1e-6 rad apart. One more covers knots at a\nlarge offset, a rational cylinder on its doubled knot, and folded\nsheets. The sheets have a fold of 90 degrees and of 1e-4 rad, a span of\n1e-7, and knots at 1e12.\n- `try_fillet_refuses_a_cavitys_seam` picks an outer edge and the seam\nof a round cavity, and requires the cavity error from both gates.\n- `cargo test --release -p brepkit-wasm -p brepkit-operations --lib`\npasses: 1150 and 289 tests.\n- `cargo clippy --release -p brepkit-operations -p brepkit-wasm\n--all-targets -- -D warnings`, `cargo fmt` and the three check scripts\npass.\n- With a local wasm build of this branch in brepjs, `conduit-snap-clip`\npasses in `tests/playgroundExamples.test.ts`.\n- The pose sweep and the truth audit do not call the changed functions,\nso I did not run them.\n\n## After the release\n\nIn brepjs, `tests/knownFailures/brepkit.json` lists `conduit-snap-clip`.\nThe entry can go when the pin moves to the release with this change.",
+          "timestamp": "2026-11-15T16:12:11Z",
+          "tree_id": "f3b0d88fb0ce5fa75c5b06570660bb13d4a7d6ea",
+          "url": "https://github.com/andymai/brepkit/commit/9bd5edb00d96eda31f8e117e9e631cba89f7e991"
+        },
+        "date": 1794759318083,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 886095,
+            "range": "± 8875",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 926544,
+            "range": "± 1777",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11265,
+            "range": "± 83",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 552324,
+            "range": "± 1827",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 20156858,
+            "range": "± 143228",
             "unit": "ns/iter"
           }
         ]
