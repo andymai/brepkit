@@ -1227,3 +1227,24 @@ fn a_tiny_mirror_scale_keeps_a_box_outward() {
         }
     }
 }
+
+#[test]
+fn a_tiny_mirror_scale_keeps_a_cylinder() {
+    use crate::copy::copy_and_transform_solid;
+    use crate::primitives::make_cylinder;
+
+    let s = 1e-110;
+    let m = Mat4::scale(-s, s, s);
+    let back = Mat4::scale(-1.0 / s, 1.0 / s, 1.0 / s);
+    let mut topo = Topology::new();
+    let c = make_cylinder(&mut topo, 3.0, 10.0).unwrap();
+    let copy = copy_and_transform_solid(&mut topo, c, &m).unwrap();
+    transform_solid(&mut topo, c, &m).unwrap();
+    // Scaled back to a size with a volume, each is the cylinder again.
+    for solid in [c, copy] {
+        transform_solid(&mut topo, solid, &back).unwrap();
+        let v = crate::measure::solid_volume(&topo, solid, 0.01).unwrap();
+        let truth = std::f64::consts::PI * 90.0;
+        assert!((v - truth).abs() < 1e-9 * truth, "volume {v}");
+    }
+}

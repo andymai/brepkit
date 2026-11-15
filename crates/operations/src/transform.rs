@@ -723,8 +723,10 @@ fn transform_conic(
     };
     let (l1, l2) = (a1.length(), a2.length());
     let center = matrix.mul_point(center);
-    let normal = a1.cross(a2).normalize()?;
     let (u, v) = (a1.normalize()?, a2.normalize()?);
+    // The cross product of the unit axes: that of two axes of 1e-110
+    // underflows to zero.
+    let normal = u.cross(v).normalize()?;
     let origin_moved = a1 != p;
     let curve = if nearly_equal(l1, l2) {
         EdgeCurve::Circle(Circle3D::with_axes(center, normal, l1, u, v)?)
