@@ -1,0 +1,19 @@
+crates/operations/src/query.rs
+  s_709d857a0f83c4::t_64b6e044a7133c 314-319,322-323,326-351,556-592
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "92362950ea8fbf7b83d67f06e9f07daa90c0de84",
+  "prompts": {},
+  "sessions": {
+    "s_709d857a0f83c4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6cca9812-d77a-4dae-96f4-26562694b205",
+        "model": "claude-fable-5-2"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
