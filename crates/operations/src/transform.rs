@@ -52,19 +52,63 @@ pub fn transform_solid(
 ///
 /// The determinant of a uniform scale by `s` is `s³`, so a comparison of the
 /// determinant with a length tolerance refuses a scale from millimetres to
-/// metres. `Mat4::inverse` compares the determinant with the size of the
-/// matrix's own minors.
+/// metres. An affine matrix is judged on its linear block alone, with each
+/// row scaled to unit length: neither the size of the scale nor the
+/// translation changes the answer.
 pub(crate) fn checked_inverse(matrix: &Mat4) -> Result<Mat4, crate::OperationsError> {
-    if matrix.0.iter().flatten().any(|c| !c.is_finite()) {
+    let finite = |m: &Mat4| m.0.iter().flatten().all(|c| c.is_finite());
+    if !finite(matrix) {
         return Err(crate::OperationsError::InvalidInput {
             reason: "transform matrix has a component that is not finite".into(),
         });
     }
-    matrix
-        .inverse()
-        .map_err(|_| crate::OperationsError::InvalidInput {
+    #[allow(clippy::float_cmp)]
+    let affine = matrix.0[3] == [0.0, 0.0, 0.0, 1.0];
+    let inverse = if affine {
+        affine_inverse(matrix)
+    } else {
+        matrix.inverse().ok()
+    };
+    inverse
+        .filter(finite)
+        .ok_or_else(|| crate::OperationsError::InvalidInput {
             reason: "transform matrix is degenerate (zero determinant)".into(),
         })
+}
+
+/// The inverse of a matrix whose last row is `0 0 0 1`, or `None` when its
+/// linear block has no inverse.
+fn affine_inverse(matrix: &Mat4) -> Option<Mat4> {
+    let m = &matrix.0;
+    let row = |i: usize| Vec3::new(m[i][0], m[i][1], m[i][2]);
+    let lengths = [row(0).length(), row(1).length(), row(2).length()];
+    if lengths.contains(&0.0) {
+        return None;
+    }
+    // Unit rows: their determinant is the sine-like volume of the three
+    // directions, whatever the scale.
+    let unit = [0, 1, 2].map(|i| row(i) * (1.0 / lengths[i]));
+    let det = unit[0].dot(unit[1].cross(unit[2]));
+    if det.abs() <= 64.0 * f64::EPSILON {
+        return None;
+    }
+    // Column `i` of the inverse of the unit block, then of the block.
+    let cols = [
+        unit[1].cross(unit[2]),
+        unit[2].cross(unit[0]),
+        unit[0].cross(unit[1]),
+    ];
+    let cols = [0, 1, 2].map(|i| cols[i] * (1.0 / (det * lengths[i])));
+    let t = Vec3::new(m[0][3], m[1][3], m[2][3]);
+    let lin = |f: fn(&Vec3) -> f64| [f(&cols[0]), f(&cols[1]), f(&cols[2])];
+    let rows = [lin(|c| c.x()), lin(|c| c.y()), lin(|c| c.z())];
+    let shift = |r: &[f64; 3]| -(r[0].madd(t.x(), r[1].madd(t.y(), r[2] * t.z())));
+    Some(Mat4([
+        [rows[0][0], rows[0][1], rows[0][2], shift(&rows[0])],
+        [rows[1][0], rows[1][1], rows[1][2], shift(&rows[1])],
+        [rows[2][0], rows[2][1], rows[2][2], shift(&rows[2])],
+        [0.0, 0.0, 0.0, 1.0],
+    ]))
 }
 
 /// Transform a closed set of faces with the edges and vertices they use.

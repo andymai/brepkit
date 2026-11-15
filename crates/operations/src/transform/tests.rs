@@ -1103,3 +1103,55 @@ fn cylinder_nurbs_image_covers_its_whole_boundary() {
     let offset = worst_boundary_offset(&topo, cut);
     assert!(offset < 1e-6, "boundary {offset} off its surfaces");
 }
+
+#[test]
+fn the_inverse_of_an_affine_matrix_holds_at_each_scale_and_place() {
+    let turn = Mat4::rotation_z(0.7) * Mat4::rotation_x(-1.1);
+    let cases = [
+        Mat4::scale(1e-7, 1e-7, 1e-7),
+        Mat4::translation(99_999.99, 0.0, 0.0) * Mat4::scale(1e-7, 1e-7, 1e-7),
+        Mat4::translation(-3.0e6, 2.0e5, 7.0) * turn * Mat4::scale(1e-7, 2e-7, -4e-7),
+        Mat4::scale(1e-120, 1e-120, 1e-120),
+        Mat4::scale(1e90, 1e90, 1e90),
+        Mat4::translation(5.0, -6.0, 7.0) * turn * Mat4::scale(2.0, 0.5, 3.0),
+    ];
+    for m in cases {
+        let inverse = checked_inverse(&m).unwrap();
+        let both = inverse * m;
+        for (i, row) in both.0.iter().enumerate() {
+            for (j, &c) in row.iter().enumerate() {
+                let want = if i == j { 1.0 } else { 0.0 };
+                // The last column carries the translation, in the units of
+                // the source: compare it with the size of the translation.
+                let size = if j == 3 && i < 3 {
+                    1.0 + inverse.0[i][3].abs()
+                } else {
+                    1.0
+                };
+                assert!(
+                    (c - want).abs() < 1e-9 * size,
+                    "inverse * m at ({i}, {j}) is {c} for {m:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn a_matrix_with_no_inverse_has_no_checked_inverse() {
+    let turn = Mat4::rotation_z(0.7) * Mat4::rotation_x(-1.1);
+    let mut shear = Mat4::identity();
+    shear.0[1] = [1.0, 0.0, 0.0, 0.0];
+    let cases = [
+        Mat4::scale(1.0, 1.0, 0.0),
+        Mat4::scale(1e-80, 1e-80, 0.0),
+        Mat4::translation(1.0, 2.0, 3.0) * turn * Mat4::scale(1e-7, 0.0, 1e-7),
+        shear,
+        Mat4::scale(f64::INFINITY, 1.0, 1.0),
+        Mat4::scale(1.0, f64::NAN, 1.0),
+        Mat4([[0.0; 4]; 4]),
+    ];
+    for m in cases {
+        assert!(checked_inverse(&m).is_err(), "{m:?}");
+    }
+}

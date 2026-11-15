@@ -187,12 +187,49 @@ fn a_matrix_with_no_inverse_is_refused() {
 
     let flat = Mat4::scale(1.0, 1.0, 0.0);
     let tiny_flat = Mat4::scale(1e-7, 1e-7, 0.0);
+    let tinier_flat = Mat4::scale(1e-80, 1e-80, 0.0);
     let not_finite = Mat4::scale(f64::NAN, 1.0, 1.0);
-    for m in [flat, tiny_flat, not_finite] {
+    for m in [flat, tiny_flat, tinier_flat, not_finite] {
         let mut topo = Topology::new();
         let b = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
         assert!(copy_and_transform_solid(&mut topo, b, &m).is_err());
         assert!(transform_solid(&mut topo, b, &m).is_err());
+        let face = brepkit_topology::explorer::solid_faces(&topo, b).unwrap()[0];
+        let wire = topo.face(face).unwrap().outer_wire();
+        assert!(brepkit_operations::transform::transform_face(&mut topo, face, &m).is_err());
+        assert!(brepkit_operations::transform::transform_wire(&mut topo, wire, &m).is_err());
         assert!((vol(&topo, b, 0.1) - 1000.0).abs() < 1e-9);
+    }
+}
+
+/// A scale about a centre far from the origin has a large translation,
+/// which must not change whether the matrix has an inverse.
+#[test]
+fn a_small_scale_about_a_far_centre_keeps_the_solid() {
+    use brepkit_operations::copy::copy_and_transform_solid;
+
+    for s in [0.002, 1e-7] {
+        let centre = 100_000.0;
+        let m = Mat4::translation(centre, 0.0, 0.0)
+            * Mat4::scale(s, s, s)
+            * Mat4::translation(-centre, 0.0, 0.0);
+        let mut topo = Topology::new();
+        let b = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+        transform_solid(&mut topo, b, &Mat4::translation(centre, 0.0, 0.0)).unwrap();
+        let copy = copy_and_transform_solid(&mut topo, b, &m);
+        assert!(copy.is_ok(), "copy at scale {s}: {copy:?}");
+        let moved = transform_solid(&mut topo, b, &m);
+        assert!(moved.is_ok(), "transform at scale {s}: {moved:?}");
+        for scaled in [b, copy.unwrap()] {
+            let v = vol(&topo, scaled, s * 0.01);
+            let truth = 1000.0 * s * s * s;
+            // The corners sit at 1e5, where a coordinate holds steps of
+            // about 1e-11: five digits of a box edge of 1e-6.
+            assert!(
+                (v - truth).abs() / truth < 1e-3,
+                "scale {s}: volume {v}, expected {truth}"
+            );
+            check_manifold(&topo, scaled);
+        }
     }
 }
