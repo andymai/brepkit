@@ -1,0 +1,21 @@
+crates/blend/src/fillet_builder.rs
+  s_709d857a0f83c4::t_4a3612f2577a85 4211,4213-4217,4229-4230,4235-4239,4241-4250,4253-4261,6354-6378
+crates/operations/tests/fillet_curved_end_caps.rs
+  s_709d857a0f83c4::t_12d2959a0174c6 244-251
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "cbf089f90ad08405172e0013aa63a92e001b7ae9",
+  "prompts": {},
+  "sessions": {
+    "s_709d857a0f83c4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6cca9812-d77a-4dae-96f4-26562694b205",
+        "model": "claude-fable-5-2"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
