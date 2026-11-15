@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794724009694,
+  "lastUpdate": 1794724233752,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -70037,6 +70037,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 22929128,
             "range": "± 193692",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "cc2dead1d053977e9f756fc60befc4af9abee093",
+          "message": "fix(operations): weld a hole's walls facing into the hole (#2473)\n\nA weld of faces now leaves a hole out of the solid when the faces come\nfrom a loft between two profiles with a hole. Before this change, the\nsolid added the volume of a square hole, and a round hole gave a shell\nwith 4 free edges. This is the kernel side of #2370.\n\nbrepjs builds such a loft in four steps. It lofts the outline and each\nhole to their sides. It makes each profile a face with `addHolesToFace`.\nIt welds all of the faces with `weldShellsAndFaces`, and then calls\n`solidFromShell`. The weld is `sew_faces`, and it had two faults.\n\n- `addHolesToFace` keeps a hole wire as the caller gives it, and brepjs\ngives it the same way round as the outline. The weld turns each face to\nagree with its neighbour across each shared edge, so the walls of the\nhole faced away from the hole. A 20 to 12 frustum with an 8 to 4 hole\nread 2880, and the correct volume is 2240. The weld now reverses a hole\nof a planar face that runs the same way round as the outline of the\nface.\n- Two closed edges on one curve merged only when they closed at the same\nvertex, and stayed apart if not. The rim that `makeCircleEdge` gives a\nround hole closes at one point of the circle. The wall that the loft\nmakes through the hole closes at a different point. The weld now cuts\neach closed edge at the vertex of each other closed edge on its curve.\nThe faces then share the arcs between the vertices. This applies to\ncircles, ellipses and closed B-splines.\n\nA hole of a face that is not planar keeps the direction that the caller\ngives it. #2472 tracks that.\n\n## How I checked it\n\n- Three new tests in `crates/wasm/src/bindings/operations.rs` make the\nsame kernel calls as brepjs. They cover the frustum with a square hole\nand the same frustum under `normal` ends. They also cover a prism with\none round hole, and with two round holes off the axis. Each case runs\nwith the profiles welded before the sides and after them.\n- Each test requires a valid solid with one shell, each profile as one\nface with its holes, and a closed mesh. A point in the material must\nread inside, and a point in the hole must read outside. The volume must\nmatch the closed form to 1e-9: 2240, `1000 - 40 pi`, `1000 - 32.5 pi`,\nand the difference of the two stacks of squares for the `normal` ends.\n- The three tests fail with the `sew.rs` of main.\n- Two new tests in `crates/operations/src/sew.rs` cover each fault\nalone. One welds a cylinder to a cap whose rim closes a quarter turn\nfrom the rim of the wall. The rim of the cap is a circle, and then a\nB-spline. The other welds a plate whose two flat faces hold the hole the\nsame way round as the outline.\n- `cargo test --release -p brepkit-operations -p brepkit-wasm -p\nbrepkit-io` passes, with 305 test binaries and no failure.\n- `cargo clippy --all-targets -- -D warnings` passes for\n`brepkit-operations` and `brepkit-wasm`. `cargo fmt`,\n`check-boundaries.sh`, `check-mul-add.sh` and `check-doc-paths.sh` pass.\n- I did not run the pose sweep or the truth audit. Only the wasm\nbindings call `sew_faces`, and the two tools do not get to it.\n\n## Next step\n\n#2370 stays open until brepjs labels the sides of a loft as a shell and\ntakes the release with this change.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes the weld of faces from a loft between two profiles with a hole so\nthe hole stays out of the solid. Before this change, a square hole added\nits volume to the solid, and a round hole gave a shell with four free\nedges. This is the kernel side of #2370.\n\n- A hole of a planar face that runs the same way round as the face's\noutline is now reversed, so the walls sewn onto it face into the hole.\n- Closed edges are now cut at the vertex of every other closed edge on\nthe same curve, so rims that close at different points share the arcs\nbetween them. A bounding-box check skips pairs whose curves cannot\noverlap, so large welds only cut curves that can share arcs.\n- New tests cover the square-hole frustum, round holes on and off the\naxis, and normal ends, each welded with the profiles before the sides\nand after them.\n\n<sup>Written for commit f3412ba4b06d9f8956c5640ff7f21fdec19f1a42.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2473?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2473?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2473&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-11-14T22:25:54-08:00",
+          "tree_id": "e4145112c3289300fd0501fef6c22de13970b29c",
+          "url": "https://github.com/andymai/brepkit/commit/cc2dead1d053977e9f756fc60befc4af9abee093"
+        },
+        "date": 1794724222522,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1087678,
+            "range": "± 11533",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1127682,
+            "range": "± 21499",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11756,
+            "range": "± 265",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 716650,
+            "range": "± 10351",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 23517424,
+            "range": "± 171353",
             "unit": "ns/iter"
           }
         ]
