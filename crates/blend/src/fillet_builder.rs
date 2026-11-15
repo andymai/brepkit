@@ -4187,7 +4187,8 @@ fn notch_stays_clear(
 /// the point where the arc's tangents at those two meet, which holds the arc
 /// between them. `None` for a line or a B-spline, an arc that bows into the
 /// notch triangle, and an arc too flat to leave it; an error for an arc whose
-/// piece turns too far for its tangents to bound it.
+/// piece turns more than a quarter turn, too far for its tangents to bound
+/// it.
 fn arc_bow(
     edge: &brepkit_topology::edge::Edge,
     a: Point3,
@@ -4221,6 +4222,12 @@ fn arc_bow(
     let cross = |o: (f64, f64), p: (f64, f64), q: (f64, f64)| {
         (p.0 - o.0) * (q.1 - o.1) - (p.1 - o.1) * (q.0 - o.0)
     };
+    // Past a quarter turn the tangents meet far from the arc, or behind it.
+    if (turn - at_corner).abs() > std::f64::consts::FRAC_PI_2 {
+        return Some(Err(BlendError::PlanningFailure {
+            reason: "the fillet's end takes too long a piece of its cap's arc edge".into(),
+        }));
+    }
     let (c, e) = (flat(corner), flat(end));
     let heading = |turn: f64, from: Point3| {
         let to = flat(from + curve.tangent_with_endpoints(turn, a, b));
@@ -4235,12 +4242,6 @@ fn arc_bow(
     // Too flat to leave the triangle by more than a rounding.
     if span <= 0.0 || size <= 0.0 || sine.abs() <= 1e-9 * size {
         return None;
-    }
-    // Past a quarter turn the tangents meet far from the arc, or behind it.
-    if (turn - at_corner).abs() > std::f64::consts::FRAC_PI_2 {
-        return Some(Err(BlendError::PlanningFailure {
-            reason: "the fillet's end takes too long a piece of its cap's arc edge".into(),
-        }));
     }
     let along = (chord.0 * de.1 - chord.1 * de.0) / sine;
     let apex = (c.0 + dc.0 * along, c.1 + dc.1 * along);
@@ -6290,6 +6291,53 @@ mod tests {
     /// The notch triangle at a corner filleted r 6: the arc's ends on the two
     /// corner edges and the corner itself.
     const NOTCH: [(f64, f64); 3] = [(6.0, 0.0), (0.0, 0.0), (0.0, 6.0)];
+
+    /// An arc from the corner at angle 0 to a contact's end at `turn`, on a
+    /// unit circle in the plane z = 0, seen along z.
+    fn bow_of_unit_arc(turn: f64, other: Point3) -> Option<Result<[(f64, f64); 3], BlendError>> {
+        let mut topo = Topology::new();
+        let at = |angle: f64| Point3::new(angle.cos(), angle.sin(), 0.0);
+        let (corner, far) = (at(0.0), at(3.0));
+        let a = topo.add_vertex(brepkit_topology::vertex::Vertex::new(corner, 1e-7));
+        let b = topo.add_vertex(brepkit_topology::vertex::Vertex::new(far, 1e-7));
+        let circle = brepkit_math::curves::Circle3D::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            1.0,
+        )
+        .unwrap();
+        let edge = brepkit_topology::edge::Edge::new(a, b, EdgeCurve::Circle(circle));
+        arc_bow(&edge, corner, far, true, [at(turn), other], &|p: Point3| {
+            (p.x(), p.y())
+        })
+    }
+
+    #[test]
+    fn an_arc_bowing_away_from_the_notch_is_held_by_its_tangents() {
+        // The other contact end is inside the circle: the arc bows away.
+        let inside = Point3::new(0.5, 0.2, 0.0);
+        let [c, apex, e] = bow_of_unit_arc(1.0, inside).unwrap().unwrap();
+        assert!((c.0 - 1.0).abs() < 1e-12 && c.1.abs() < 1e-12);
+        assert!((e.0 - 1.0_f64.cos()).abs() < 1e-12 && (e.1 - 1.0_f64.sin()).abs() < 1e-12);
+        // The tangents meet on the bisector, at 1 / cos(half the turn).
+        let out = 1.0 / 0.5_f64.cos();
+        assert!((apex.0 - out * 0.5_f64.cos()).abs() < 1e-9);
+        assert!((apex.1 - out * 0.5_f64.sin()).abs() < 1e-9);
+        // The other end outside the circle: the arc bows into the notch.
+        assert!(bow_of_unit_arc(1.0, Point3::new(1.5, 0.9, 0.0)).is_none());
+    }
+
+    #[test]
+    fn an_arc_piece_past_a_quarter_turn_is_refused() {
+        let inside = Point3::new(0.5, 0.2, 0.0);
+        // At a half turn the two tangents are parallel.
+        for turn in [1.6, std::f64::consts::PI - 1e-12, 2.9] {
+            assert!(
+                matches!(bow_of_unit_arc(turn, inside), Some(Err(_))),
+                "turn {turn}"
+            );
+        }
+    }
 
     #[test]
     fn a_spike_inside_a_narrow_knot_span_reaches_the_notch_triangle() {
