@@ -9923,7 +9923,11 @@ fn sphere_loop_uv(sub_face: &SplitSubFace) -> Option<Vec<Point2>> {
 /// starting at its first point off the poles.
 fn unwrapped_u(pts: &[Point2]) -> Vec<Point2> {
     use std::f64::consts::{FRAC_PI_2, PI, TAU};
-    let at_pole = |p: &Point2| p.y().abs() >= FRAC_PI_2 - 1e-6;
+    // A point projected from a pole reads a latitude short of the pole by
+    // the square root of its rounding, about 1.5e-8. A point farther off
+    // has a longitude of its own: a small loop beside the pole keeps the
+    // nearest way.
+    let at_pole = |p: &Point2| p.y().abs() >= FRAC_PI_2 - 1e-7;
     let nearest = |from: f64, to: f64| (to - from + PI).rem_euclid(TAU) - PI;
     // A loop with no point off the poles has no meridian to pass a pole
     // from: it keeps the nearest way, as a loop with no point at a pole does.
@@ -11721,7 +11725,12 @@ mod tests {
                 .map(|p| Point2::new(p.x(), if p.y() < 0.3 { by } else { by + 6e-7 }))
                 .collect()
         };
-        for loop_uv in [across_the_seam.to_vec(), lift(FRAC_PI_2 - 8e-7)] {
+        for loop_uv in [
+            across_the_seam.to_vec(),
+            lift(FRAC_PI_2 - 8e-7),
+            lift(FRAC_PI_2 - 6.5e-7),
+            lift(FRAC_PI_2 - 6.2e-7),
+        ] {
             let us: Vec<f64> = unwrapped_u(&loop_uv).iter().map(|p| p.x()).collect();
             assert_eq!(us.len(), 4);
             for (got, want) in us.iter().zip([6.0, 0.2 + TAU, 0.2 + TAU, 6.0]) {
