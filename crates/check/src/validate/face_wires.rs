@@ -72,7 +72,8 @@ impl<'a> Arc<'a> {
         for k in 0..arc.chords() {
             let (a, b) = (arc.points[k], arc.points[k + 1]);
             arc.length += (b - a).length();
-            arc.sag = arc.sag.max(arc.stand_off(k));
+            let (f0, f1) = (arc.fractions[k], arc.fractions[k + 1]);
+            arc.sag = arc.sag.max(arc.stand_off(f0, f1, a, b));
         }
         for p in &arc.points {
             for (k, c) in [p.x(), p.y(), p.z()].into_iter().enumerate() {
@@ -126,13 +127,12 @@ impl<'a> Arc<'a> {
         }
     }
 
-    /// A bound on how far the edge stands off its chord `k`. For a NURBS
-    /// edge, the farthest control point of the chord's piece of the curve,
-    /// which holds the piece when its weights are positive. Else twice the
-    /// stand-off at the chord's middle, which a circle's is.
-    fn stand_off(&self, k: usize) -> f64 {
-        let (a, b) = (self.points[k], self.points[k + 1]);
-        let (fa, fb) = (self.fractions[k], self.fractions[k + 1]);
+    /// A bound on how far the edge stands off its chord from `a`, at the
+    /// fraction `fa`, to `b`, at `fb`, two fractions in one knot span. For
+    /// a NURBS edge, the farthest control point of the chord's piece of the
+    /// curve, which holds the piece when its weights are positive. Else
+    /// twice the stand-off at the chord's middle, which a circle's is.
+    fn stand_off(&self, fa: f64, fb: f64, a: Point3, b: Point3) -> f64 {
         if let EdgeCurve::NurbsCurve(nurbs) = self.curve {
             let hull = curve_bezier_between(nurbs, self.parameter(fa), self.parameter(fb));
             if let Ok(hull) = hull
@@ -230,33 +230,108 @@ fn nearest(a: &Arc<'_>, b: &Arc<'_>, mut fa: f64, mut fb: f64) -> (f64, f64, f64
     best
 }
 
-/// The fractions at which the two edges come within `tol` of each other.
-fn meetings(a: &Arc<'_>, b: &Arc<'_>, tol: f64) -> Vec<(f64, f64)> {
-    let reach = a.sag + b.sag + tol;
-    let mut found: Vec<(f64, f64)> = Vec::new();
-    if a.clear_of(b, reach) {
-        return found;
-    }
-    for i in 0..a.chords() {
-        let (a0, a1) = (a.points[i], a.points[i + 1]);
-        for j in 0..b.chords() {
-            let (b0, b1) = (b.points[j], b.points[j + 1]);
-            let (gap, pa, pb) = crate::distance::edge::segment_segment_distance(a0, a1, b0, b1);
-            if gap > reach {
-                continue;
-            }
-            let fa = a.fractions[i] + along(a0, a1, pa) * (a.fractions[i + 1] - a.fractions[i]);
-            let fb = b.fractions[j] + along(b0, b1, pb) * (b.fractions[j + 1] - b.fractions[j]);
-            let (fa, fb, gap) = nearest(a, b, fa, fb);
-            let known = found
-                .iter()
-                .any(|&(ga, gb)| (ga - fa).abs() < 1e-6 && (gb - fb).abs() < 1e-6);
-            if gap < tol && !known {
-                found.push((fa, fb));
-            }
+/// An edge's stretch between two fractions, its chord, and a bound on how
+/// far the stretch stands off the chord.
+#[derive(Clone, Copy)]
+struct Piece {
+    fractions: (f64, f64),
+    ends: (Point3, Point3),
+    sag: f64,
+}
+
+impl Piece {
+    fn of(arc: &Arc<'_>, fractions: (f64, f64), ends: (Point3, Point3)) -> Self {
+        Self {
+            fractions,
+            ends,
+            sag: arc.stand_off(fractions.0, fractions.1, ends.0, ends.1),
         }
     }
-    found
+
+    /// The stretch's two halves, or the stretch itself when it is its chord.
+    fn halves(self, arc: &Arc<'_>) -> Vec<Self> {
+        if self.sag <= 0.0 {
+            return vec![self];
+        }
+        let f = 0.5 * (self.fractions.0 + self.fractions.1);
+        let p = arc.at(f);
+        vec![
+            Self::of(arc, (self.fractions.0, f), (self.ends.0, p)),
+            Self::of(arc, (f, self.fractions.1), (p, self.ends.1)),
+        ]
+    }
+}
+
+/// How often a pair of chords is halved to tell meeting points apart.
+const HALVINGS: usize = 5;
+
+/// The most meeting points read between two edges: edges that meet more
+/// often run along each other.
+const MOST_MEETINGS: usize = 64;
+
+/// Adds the points at which the stretches `pa` of `a` and `pb` of `b` come
+/// within `tol` of each other. A pair of stretches whose chords come near
+/// is halved, so two meeting points close to each other fall to different
+/// pairs, each with a search of its own.
+fn meet(
+    (a, pa): (&Arc<'_>, Piece),
+    (b, pb): (&Arc<'_>, Piece),
+    halvings: usize,
+    tol: f64,
+    found: &mut Vec<(f64, f64, Point3)>,
+) {
+    if found.len() >= MOST_MEETINGS {
+        return;
+    }
+    let (gap, qa, qb) =
+        crate::distance::edge::segment_segment_distance(pa.ends.0, pa.ends.1, pb.ends.0, pb.ends.1);
+    if gap > pa.sag + pb.sag + tol {
+        return;
+    }
+    if halvings == 0 || pa.sag + pb.sag <= tol {
+        let seed = |piece: Piece, q: Point3| {
+            piece.fractions.0
+                + along(piece.ends.0, piece.ends.1, q) * (piece.fractions.1 - piece.fractions.0)
+        };
+        let (fa, fb, gap) = nearest(a, b, seed(pa, qa), seed(pb, qb));
+        let at = a.at(fa);
+        if gap < tol
+            && !found
+                .iter()
+                .any(|&(_, _, known)| (known - at).length() < tol)
+        {
+            found.push((fa, fb, at));
+        }
+        return;
+    }
+    for ha in pa.halves(a) {
+        for hb in pb.halves(b) {
+            meet((a, ha), (b, hb), halvings - 1, tol, found);
+        }
+    }
+}
+
+/// The fractions at which the two edges come within `tol` of each other.
+fn meetings(a: &Arc<'_>, b: &Arc<'_>, tol: f64) -> Vec<(f64, f64)> {
+    let mut found = Vec::new();
+    if a.clear_of(b, a.sag + b.sag + tol) {
+        return Vec::new();
+    }
+    let piece = |arc: &Arc<'_>, k: usize| {
+        Piece::of(
+            arc,
+            (arc.fractions[k], arc.fractions[k + 1]),
+            (arc.points[k], arc.points[k + 1]),
+        )
+    };
+    let pieces_b: Vec<Piece> = (0..b.chords()).map(|j| piece(b, j)).collect();
+    for i in 0..a.chords() {
+        let pa = piece(a, i);
+        for &pb in &pieces_b {
+            meet((a, pa), (b, pb), HALVINGS, tol, &mut found);
+        }
+    }
+    found.into_iter().map(|(fa, fb, _)| (fa, fb)).collect()
 }
 
 /// The wire's point the distance `d` from `p`, the first met when the wire
@@ -456,6 +531,9 @@ impl Bounds {
     }
 }
 
+/// The fractions of an edge at which a hole's side of a wire is read.
+const PROBES: [f64; 7] = [0.5, 0.25, 0.75, 0.125, 0.375, 0.625, 0.875];
+
 /// On a plane face, the first hole that lies outside the outline or inside
 /// another hole.
 fn misplaced_hole(
@@ -478,13 +556,14 @@ fn misplaced_hole(
     };
     let flat = |p: Point3| Point2::new((p - origin).dot(x), (p - origin).dot(y));
     let region = |k: usize| wire_region_2d(topo, wire_ids[k], origin, x, y, tol);
-    // Where a hole stands to a wire's region, read at the first of its
-    // edges' middles that lies clear of that wire.
+    // Where a hole stands to a wire's region, read at the first of these
+    // points of its edges that lies clear of that wire.
     let side = |hole: usize, of: &PlanarRegion| {
         wires[hole]
             .iter()
             .filter(|arc| arc.length > tol)
-            .find_map(|arc| of.side(flat(arc.at(0.5)), tol))
+            .flat_map(|arc| PROBES.iter().map(move |&f| arc.at(f)))
+            .find_map(|p| of.side(flat(p), tol))
     };
     let Some(outline) = region(0)? else {
         return Ok(None);
@@ -876,6 +955,108 @@ mod tests {
         let holes = vec![
             polygon(&mut topo, &corners),
             circle(&mut topo, [5.0, 5.0, 0.0], 1.0),
+        ];
+        let face = flat(&mut topo, outer, holes);
+        assert!(
+            found(&topo, face)
+                .unwrap()
+                .contains("lies inside inner wire")
+        );
+    }
+
+    /// A hole whose spline leaves the outline and comes back within one
+    /// chord of the spline.
+    #[test]
+    fn a_splines_two_crossings_in_one_chord_are_reported() {
+        let mut topo = Topology::default();
+        let outer = square(&mut topo);
+        // x = 3 + 4 t, y = 10.0001 - 5 (t - 0.45)^2, as a quadratic Bezier.
+        let y = |t: f64| 10.0001 - 5.0 * (t - 0.45) * (t - 0.45);
+        let slope = |t: f64| -10.0 * (t - 0.45);
+        let control = vec![
+            Point3::new(3.0, y(0.0), 0.0),
+            Point3::new(5.0, y(0.0) + 0.5 * slope(0.0), 0.0),
+            Point3::new(7.0, y(1.0), 0.0),
+        ];
+        let spline = brepkit_math::nurbs::curve::NurbsCurve::new(
+            2,
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            control,
+            vec![1.0; 3],
+        )
+        .unwrap();
+        let ends = points(&mut topo, &[[3.0, y(0.0), 0.0], [7.0, y(1.0), 0.0]]);
+        let top = topo.add_edge(Edge::new(ends[0], ends[1], EdgeCurve::NurbsCurve(spline)));
+        let base = topo.add_edge(Edge::new(ends[1], ends[0], EdgeCurve::Line));
+        let hole = topo.add_wire(
+            Wire::new(
+                vec![OrientedEdge::new(top, true), OrientedEdge::new(base, true)],
+                true,
+            )
+            .unwrap(),
+        );
+        let face = flat(&mut topo, outer, vec![hole]);
+        assert!(
+            found(&topo, face)
+                .unwrap()
+                .contains("crosses the outer wire")
+        );
+    }
+
+    /// Two crossings 1e-4 apart on an outline 1000 long.
+    #[test]
+    fn two_crossings_close_on_a_long_outline_are_reported() {
+        let mut topo = Topology::default();
+        let corners = points(
+            &mut topo,
+            &[
+                [0.0, 0.0, 0.0],
+                [1000.0, 0.0, 0.0],
+                [1000.0, 10.0, 0.0],
+                [0.0, 10.0, 0.0],
+            ],
+        );
+        let outer = polygon(&mut topo, &corners);
+        // A thin spike of the hole through the outline's long edge.
+        let spike = points(
+            &mut topo,
+            &[
+                [499.0, 5.0, 0.0],
+                [499.999_95, -5.0, 0.0],
+                [500.000_05, -5.0, 0.0],
+                [501.0, 5.0, 0.0],
+            ],
+        );
+        let hole = polygon(&mut topo, &spike);
+        let face = flat(&mut topo, outer, vec![hole]);
+        assert!(
+            found(&topo, face)
+                .unwrap()
+                .contains("crosses the outer wire")
+        );
+    }
+
+    /// A circle outside the outline that touches it at the middle of the
+    /// circle's edge, and one inside another hole that touches it there.
+    /// A circle's edge starts on its +x side, so its middle is on its -x
+    /// side.
+    #[test]
+    fn a_hole_misplaced_and_touching_at_its_edges_middle_is_reported() {
+        let mut topo = Topology::default();
+        let outer = square(&mut topo);
+        let hole = circle(&mut topo, [12.0, 5.0, 0.0], 2.0);
+        let face = flat(&mut topo, outer, vec![hole]);
+        assert!(
+            found(&topo, face)
+                .unwrap()
+                .contains("outside the outer wire")
+        );
+
+        let mut topo = Topology::default();
+        let outer = square(&mut topo);
+        let holes = vec![
+            circle(&mut topo, [5.0, 5.0, 0.0], 3.0),
+            circle(&mut topo, [3.0, 5.0, 0.0], 1.0),
         ];
         let face = flat(&mut topo, outer, holes);
         assert!(
