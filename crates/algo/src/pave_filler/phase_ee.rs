@@ -414,6 +414,12 @@ const ALONG_SINE: f64 = 1e-4;
 /// From this sine of the angle at which two curves part, the place is a
 /// corner.
 const CORNER_SINE: f64 = 1e-3;
+/// The part of a stretch that must stay at a thousandth of the tolerance
+/// for the two edges to share a curve along it. A contact of order `n`
+/// keeps `0.001^(1/n)` of its stretch: 0.03 for a tangency, 0.5 for order
+/// 10. Edges that share a curve keep all of it but the last of the run-out
+/// where one leaves.
+const SHARED_PART: f64 = 0.8;
 
 /// Drop the crossings read inside a stretch where the two edges lie on one
 /// curve.
@@ -434,7 +440,8 @@ const CORNER_SINE: f64 = 1e-3;
 /// while both go on. A tangency and a grazing crossing are such places, and
 /// their crossings stay as they are: their stretch is as long as the
 /// tolerance makes it. Where the stretch is almost as long at a thousandth
-/// of the tolerance, the edges share a curve there, and one of them leaves
+/// of the tolerance ([`SHARED_PART`] of it or more), the edges share a curve
+/// there, and one of them leaves
 /// it with no corner. That end is a junction: it ends an overlap as a corner
 /// does, and gets one crossing.
 ///
@@ -465,7 +472,15 @@ fn drop_crossings_along_one_curve(
         )
     };
     let on_b = |t: f64| foot(t).1 <= tol;
-    let b_ends_at = |t_b: f64| (t_b - lo_b).min(hi_b - t_b) <= 1e-6 * span_b;
+    let at_b = |t: f64| b.0.evaluate_with_endpoints(t, b.1.start_pos, b.1.end_pos);
+    // B ends at a place on it that is within tolerance of one of its ends.
+    // A part of B's parameter span is not such a measure: on a long edge it
+    // is far more than the tolerance.
+    let ends_b = [at_b(lo_b), at_b(hi_b)];
+    let b_ends_at = |t_b: f64| {
+        let p = at_b(t_b);
+        ends_b.iter().any(|&end| (p - end).length() <= tol)
+    };
 
     // The crossings where the curves meet at a real angle.
     let real: Vec<bool> = crossings
@@ -626,7 +641,6 @@ fn drop_crossings_along_one_curve(
             });
         crossings.push(corner);
     }
-    let at_b = |t: f64| b.0.evaluate_with_endpoints(t, b.1.start_pos, b.1.end_pos);
     for at in joins {
         if crossings
             .iter()
@@ -645,7 +659,7 @@ fn drop_crossings_along_one_curve(
 /// `foot` gives the foot on B of A's point at a parameter, and its distance.
 /// `at` is a place in the stretch, and each end is its parameter with its
 /// kind. An end stays open unless A lies on B to a thousandth of `tol`
-/// from that end to the other, over half of the stretch or more.
+/// from that end to the other, over [`SHARED_PART`] of the stretch or more.
 fn junctions(
     foot: &impl Fn(f64) -> (f64, f64),
     tol: f64,
@@ -679,7 +693,7 @@ fn junctions(
     };
     let place = |end: (f64, StretchEnd)| if open(end.1) { leaves(end.0) } else { end.0 };
     let (from, to) = (place(low), place(high));
-    let shared = to - from >= 0.5 * (high.0 - low.0)
+    let shared = to - from >= SHARED_PART * (high.0 - low.0)
         && (1..8).all(|k| on_curve(from + (to - from) * (f64::from(k) / 8.0)));
     if !shared {
         return (low.1, high.1);
@@ -1951,6 +1965,81 @@ mod tests {
                 assert!((t_arch - 0.7).abs() < 1e-3, "{hits:?}");
                 assert!((p - curve.evaluate(t_arch)).length() <= tol, "{hits:?}");
                 assert!((p - leave).length() < 5e-3, "{hits:?}");
+            }
+        }
+    }
+
+    /// A parabola that touches a line 2000 long, 0.001 from the line's
+    /// start. The place where the parabola leaves the tolerance of the line
+    /// is a small part of the line's parameter span from its start, and
+    /// far from that start in space. The contact is one crossing.
+    #[test]
+    fn a_tangency_near_the_start_of_a_long_edge_is_read_once() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+
+        let at = |x: f64, y: f64| Point3::new(x, y, 0.0);
+        let parabola = NurbsCurve::new(
+            2,
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            vec![at(-1.0, 1.0), at(0.0, -1.0), at(1.0, 1.0)],
+            vec![1.0; 3],
+        )
+        .unwrap();
+        let (start, end) = (at(-0.001, 0.0), at(1999.999, 0.0));
+        let straight =
+            NurbsCurve::new(1, vec![0.0, 0.0, 1.0, 1.0], vec![start, end], vec![1.0; 2]).unwrap();
+        for long in [EdgeCurve::Line, EdgeCurve::NurbsCurve(straight)] {
+            let mut topo = Topology::new();
+            let ea = edge_on(&mut topo, &parabola, 0.0, 1.0);
+            let eb = add_edge(&mut topo, start, end, long);
+            for (ea, eb) in [(ea, eb), (eb, ea)] {
+                let hits = crossings(&topo, ea, eb);
+                assert_eq!(hits.len(), 1, "{hits:?}");
+                assert!((hits[0].2 - at(0.0, 0.0)).length() < 1e-3, "{hits:?}");
+            }
+        }
+    }
+
+    /// A curve `y = x^10` touches the line `y = 0` at one place. It stays
+    /// within the tolerance of the line for 0.2 each side, and within a
+    /// thousandth of the tolerance for 0.1 each side: half of the stretch.
+    /// The two do not share a curve, and the contact is one crossing.
+    #[test]
+    fn a_contact_of_high_order_is_read_once() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+
+        // `(2u - 1)^10` in powers of `u`, then as Bezier ordinates.
+        let binomial =
+            |n: u32, k: u32| (0..k).fold(1.0, |c, i| c * f64::from(n - i) / f64::from(i + 1));
+        let power: Vec<f64> = (0..=10)
+            .map(|k| binomial(10, k) * f64::from(1u32 << k) * if k % 2 == 0 { 1.0 } else { -1.0 })
+            .collect();
+        let poles: Vec<Point3> = (0..=10u32)
+            .map(|i| {
+                let y: f64 = (0..=i)
+                    .map(|k| binomial(i, k) / binomial(10, k) * power[k as usize])
+                    .sum();
+                Point3::new(-1.0 + 0.2 * f64::from(i), y, 0.0)
+            })
+            .collect();
+        let mut knots = vec![0.0; 11];
+        knots.extend([1.0; 11]);
+        let flat = NurbsCurve::new(10, knots, poles, vec![1.0; 11]).unwrap();
+        assert!((flat.evaluate(0.75).y() - 0.5f64.powi(10)).abs() < 1e-12);
+
+        let (start, end) = (Point3::new(-1.3, 0.0, 0.0), Point3::new(1.1, 0.0, 0.0));
+        let straight =
+            NurbsCurve::new(1, vec![0.0, 0.0, 1.0, 1.0], vec![start, end], vec![1.0; 2]).unwrap();
+        let tol = Tolerance::default().linear;
+        for line in [EdgeCurve::Line, EdgeCurve::NurbsCurve(straight)] {
+            let mut topo = Topology::new();
+            let ea = edge_on(&mut topo, &flat, 0.0, 1.0);
+            let eb = add_edge(&mut topo, start, end, line);
+            for (ea, eb) in [(ea, eb), (eb, ea)] {
+                let hits = crossings(&topo, ea, eb);
+                assert_eq!(hits.len(), 1, "{hits:?}");
+                let p = hits[0].2;
+                assert!(p.x().abs() < 0.2 && p.y().abs() <= tol, "{hits:?}");
             }
         }
     }

@@ -1550,6 +1550,8 @@ struct FaceSide {
     into: (f64, f64),
     /// How far along that direction the loop comes back, where it does.
     across: Option<f64>,
+    /// `v` is an angle, as `u` is: the surface is a torus.
+    v_turns: bool,
 }
 
 /// The side of edge `at` of an outer wire's `edges` that the face lies on.
@@ -1672,6 +1674,7 @@ fn face_side_in_uv(
         middle: from,
         into: left,
         across,
+        v_turns,
     }))
 }
 
@@ -1985,6 +1988,7 @@ fn sample_face_interior(
             middle: mid_uv,
             into: left,
             across,
+            v_turns,
         }) = face_side_in_uv(topo, surface, edges, first_index)?
     {
         // Halfway across the face from the edge, the sample is clear of the
@@ -2000,10 +2004,15 @@ fn sample_face_interior(
             return Ok(on_surface);
         }
         let turn = |d: f64| d - std::f64::consts::TAU * (d / std::f64::consts::TAU).round();
+        // On a cylinder, a cone and a sphere, `v` is no angle that comes
+        // round: only a torus's `v` is read on the nearest turn.
         let leans = |sign: f64| {
             surface
                 .project_point(mid_pt + base_offset * sign)
-                .map(|(u, v)| turn(u - mid_uv.0) * left.0 + turn(v - mid_uv.1) * left.1)
+                .map(|(u, v)| {
+                    let dv = v - mid_uv.1;
+                    turn(u - mid_uv.0) * left.0 + if v_turns { turn(dv) } else { dv } * left.1
+                })
         };
         if let (Some(ahead), Some(behind)) = (leans(1.0), leans(-1.0))
             && ahead * behind < 0.0
