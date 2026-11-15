@@ -1,0 +1,19 @@
+crates/blend/src/fillet_builder.rs
+  s_709d857a0f83c4::t_6df5e8a8cf4836 4190-4191,4225-4230,6295-6341
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "546dbebfb50f424335e408ed135e81e787ee4c1d",
+  "prompts": {},
+  "sessions": {
+    "s_709d857a0f83c4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6cca9812-d77a-4dae-96f4-26562694b205",
+        "model": "claude-fable-5-2"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
