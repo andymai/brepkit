@@ -72,12 +72,28 @@ pub fn sew_faces(
             }
             wires.push(edges);
         }
+        // A hole runs against its face's outline, so the face is on one side
+        // of every edge of its boundary. A hole given the outline's way round
+        // would turn the faces sewn onto it the wrong way out.
+        if let FaceSurface::Plane { normal, .. } = *face.surface()
+            && let Some(outline) = wires.first().map(|w| winding(w, normal))
+        {
+            for hole in wires.iter_mut().skip(1) {
+                if winding(hole, normal) * outline > 0.0 {
+                    hole.reverse();
+                    for e in hole.iter_mut() {
+                        e.forward = !e.forward;
+                    }
+                }
+            }
+        }
         face_snapshots.push(FaceSnapshot {
             surface: face.surface().clone(),
             reversed: face.is_reversed(),
             wires,
         });
     }
+    split_closed_edges(&mut face_snapshots, tol);
 
     let resolution = 1.0 / tol;
     let mut vertex_map: HashMap<(i64, i64, i64), VertexId> = HashMap::new();
@@ -237,6 +253,153 @@ fn closes(topo: &Topology, faces: &[FaceId]) -> Result<bool, crate::OperationsEr
         }
     }
     Ok(!uses.is_empty() && uses.values().all(|&n| n == 2))
+}
+
+/// Twice the area `wire` goes round about `normal`, positive anticlockwise,
+/// read on the chords between the points that hold each edge's shape.
+fn winding(wire: &[EdgeSnapshot], normal: Vec3) -> f64 {
+    let mut points: Vec<Point3> = Vec::new();
+    for e in wire {
+        let fractions: Vec<f64> = e.span.samples().collect();
+        if e.forward {
+            points.extend(fractions.iter().map(|&f| e.span.at(f)));
+        } else {
+            points.extend(fractions.iter().rev().map(|&f| e.span.at(f)));
+        }
+    }
+    let Some(&origin) = points.first() else {
+        return 0.0;
+    };
+    let mut sum = Vec3::new(0.0, 0.0, 0.0);
+    for pair in points.windows(2) {
+        sum += (pair[0] - origin).cross(pair[1] - origin);
+    }
+    sum.dot(normal)
+}
+
+/// Cut each closed edge at the vertex of every other closed edge on its
+/// curve. Two faces can run one closed curve from different vertices: a
+/// circle as a hole's rim, and the same circle as the end of a wall whose
+/// seam meets it elsewhere. Whole, the two edges share no vertex and stay
+/// apart. Cut at both vertices, they are the same arcs between them.
+fn split_closed_edges(faces: &mut [FaceSnapshot], tol: f64) {
+    let mut closed: Vec<(usize, Span)> = Vec::new();
+    let mut next_source = 0;
+    for e in faces.iter().flat_map(|f| f.wires.iter().flatten()) {
+        next_source = next_source.max(e.source + 1);
+        if e.closed && closed.iter().all(|(source, _)| *source != e.source) {
+            closed.push((e.source, e.span.clone()));
+        }
+    }
+    if closed.len() < 2 {
+        return;
+    }
+
+    // The box of the balls that hold each edge: two edges on one curve have
+    // boxes that meet, and most pairs of a large weld do not.
+    let boxes: Vec<(Point3, Point3)> = closed
+        .iter()
+        .map(|(_, span)| {
+            let mut lo = [f64::INFINITY; 3];
+            let mut hi = [f64::NEG_INFINITY; 3];
+            for piece in &span.pieces {
+                let c = [piece.centre.x(), piece.centre.y(), piece.centre.z()];
+                for k in 0..3 {
+                    lo[k] = lo[k].min(c[k] - piece.radius);
+                    hi[k] = hi[k].max(c[k] + piece.radius);
+                }
+            }
+            (
+                Point3::new(lo[0], lo[1], lo[2]),
+                Point3::new(hi[0], hi[1], hi[2]),
+            )
+        })
+        .collect();
+    let apart = |a: &(Point3, Point3), b: &(Point3, Point3)| {
+        a.0.x() > b.1.x() + tol
+            || b.0.x() > a.1.x() + tol
+            || a.0.y() > b.1.y() + tol
+            || b.0.y() > a.1.y() + tol
+            || a.0.z() > b.1.z() + tol
+            || b.0.z() > a.1.z() + tol
+    };
+
+    let mut pieces_of: HashMap<usize, Vec<EdgeSnapshot>> = HashMap::new();
+    for (i, (source, span)) in closed.iter().enumerate() {
+        let mut cuts: Vec<(f64, Point3)> = Vec::new();
+        for (j, (_, other)) in closed.iter().enumerate() {
+            if i == j || apart(&boxes[i], &boxes[j]) || (other.start - span.start).length() <= tol {
+                continue;
+            }
+            if !(span.lies_on(other, tol) && other.lies_on(span, tol)) {
+                continue;
+            }
+            let f = span.nearest(other.start).0;
+            if cuts.iter().all(|(_, p)| (*p - other.start).length() > tol) {
+                cuts.push((f, other.start));
+            }
+        }
+        if cuts.is_empty() {
+            continue;
+        }
+        cuts.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let mut stops = vec![(0.0, span.start)];
+        stops.extend(cuts);
+        stops.push((1.0, span.end));
+        let pieces: Option<Vec<EdgeSnapshot>> = stops
+            .windows(2)
+            .map(|w| {
+                let ((fa, pa), (fb, pb)) = (w[0], w[1]);
+                let curve = match &span.curve {
+                    EdgeCurve::Line => return None,
+                    EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => span.curve.clone(),
+                    EdgeCurve::NurbsCurve(c) => {
+                        let at = |f: f64| f.madd(span.t1 - span.t0, span.t0);
+                        EdgeCurve::NurbsCurve(nurbs_between(c, at(fa), at(fb))?)
+                    }
+                };
+                let source = next_source;
+                next_source += 1;
+                Some(EdgeSnapshot {
+                    span: Span::new(curve, pa, pb),
+                    forward: true,
+                    source,
+                    closed: false,
+                })
+            })
+            .collect();
+        if let Some(pieces) = pieces {
+            pieces_of.insert(*source, pieces);
+        }
+    }
+    if pieces_of.is_empty() {
+        return;
+    }
+
+    for wire in faces.iter_mut().flat_map(|f| f.wires.iter_mut()) {
+        if wire.iter().all(|e| !pieces_of.contains_key(&e.source)) {
+            continue;
+        }
+        let mut cut = Vec::with_capacity(wire.len() + 1);
+        for e in wire.drain(..) {
+            let Some(pieces) = pieces_of.get(&e.source) else {
+                cut.push(e);
+                continue;
+            };
+            let run = pieces.iter().map(|piece| EdgeSnapshot {
+                span: piece.span.clone(),
+                forward: e.forward,
+                source: piece.source,
+                closed: false,
+            });
+            if e.forward {
+                cut.extend(run);
+            } else {
+                cut.extend(run.rev());
+            }
+        }
+        *wire = cut;
+    }
 }
 
 /// An edge sewing has made: its curve, and the vertex it starts at.
@@ -1424,6 +1587,148 @@ mod tests {
         let faces = cylinder_with_rim(&mut topo, true, rim, true);
         let sewn = sew_faces(&mut topo, &faces, 1e-7).unwrap();
         assert_whole_cylinder(&topo, sewn);
+    }
+
+    /// A top cap whose rim closes a quarter turn round from where the wall's
+    /// rim does shares no vertex with it. Both rims are cut at both points
+    /// and share the two arcs between them, the cap's rim a circle or the
+    /// same circle as a B-spline.
+    #[test]
+    fn sew_cuts_closed_rims_that_close_at_different_points() {
+        use brepkit_math::curves::Circle3D;
+
+        for as_spline in [false, true] {
+            let mut topo = Topology::new();
+            let cyl = crate::primitives::make_cylinder(&mut topo, 10.0, 20.0).unwrap();
+            let mut faces = brepkit_topology::explorer::solid_faces(&topo, cyl).unwrap();
+            let at = faces
+                .iter()
+                .position(|&f| {
+                    let face = topo.face(f).unwrap();
+                    face.surface().is_planar() && {
+                        let wire = topo.wire(face.outer_wire()).unwrap();
+                        let edge = topo.edge(wire.edges()[0].edge()).unwrap();
+                        (topo.vertex(edge.start()).unwrap().point().z() - 20.0).abs() < 1e-9
+                    }
+                })
+                .unwrap();
+            let (surface, reversed) = {
+                let face = topo.face(faces[at]).unwrap();
+                (face.surface().clone(), face.is_reversed())
+            };
+            let circle = Circle3D::new_with_ref(
+                Point3::new(0.0, 0.0, 20.0),
+                Vec3::new(0.0, 0.0, 1.0),
+                10.0,
+                Vec3::new(0.0, 1.0, 0.0),
+            )
+            .unwrap();
+            let curve = if as_spline {
+                EdgeCurve::NurbsCurve(
+                    brepkit_geometry::convert::curve_to_nurbs::circle_to_nurbs(
+                        &circle,
+                        0.0,
+                        std::f64::consts::TAU,
+                    )
+                    .unwrap(),
+                )
+            } else {
+                EdgeCurve::Circle(circle)
+            };
+            let vertex = topo.add_vertex(Vertex::new(Point3::new(0.0, 10.0, 20.0), 1e-7));
+            let edge = topo.add_edge(Edge::new(vertex, vertex, curve));
+            let wire = topo.add_wire(Wire::new(vec![OrientedEdge::new(edge, true)], true).unwrap());
+            let mut cap = Face::new(wire, vec![], surface);
+            cap.set_reversed(reversed);
+            faces[at] = topo.add_face(cap);
+
+            let sewn = sew_faces(&mut topo, &faces, 1e-7).unwrap();
+            let shell = topo.solid(sewn).unwrap().outer_shell();
+            assert!(
+                brepkit_topology::validation::validate_shell_closed(
+                    topo.shell(shell).unwrap(),
+                    &topo
+                )
+                .is_ok(),
+                "spline {as_spline}"
+            );
+            assert!(
+                crate::validate::validate_solid(&topo, sewn)
+                    .unwrap()
+                    .is_valid()
+            );
+            let volume = crate::measure::solid_volume(&topo, sewn, 0.001).unwrap();
+            let exact = std::f64::consts::PI * 100.0 * 20.0;
+            assert!(
+                (volume - exact).abs() < 1e-6 * exact,
+                "spline {as_spline}: {volume}"
+            );
+            let mesh = crate::tessellate::tessellate_solid(&topo, sewn, 0.05).unwrap();
+            assert_eq!(crate::tessellate::boundary_edge_count(&mesh), 0);
+        }
+    }
+
+    /// A plate's top and bottom, each given its hole the same way round as
+    /// its outline, sewn to the plate's own walls and the hole's: the hole's
+    /// walls face into the hole, and the plate holds its volume less the
+    /// hole's.
+    #[test]
+    fn sew_turns_a_hole_given_its_outlines_way_round() {
+        let mut topo = Topology::new();
+        let plate = crate::primitives::make_box(&mut topo, 10.0, 10.0, 2.0).unwrap();
+        let core = crate::primitives::make_box(&mut topo, 4.0, 4.0, 2.0).unwrap();
+        crate::transform::transform_solid(
+            &mut topo,
+            core,
+            &brepkit_math::mat::Mat4::translation(3.0, 3.0, 0.0),
+        )
+        .unwrap();
+        let flat = |topo: &Topology, f: FaceId| {
+            matches!(*topo.face(f).unwrap().surface(),
+                FaceSurface::Plane { normal, .. } if normal.z().abs() > 0.5)
+        };
+        let mut faces = Vec::new();
+        let plate_faces = brepkit_topology::explorer::solid_faces(&topo, plate).unwrap();
+        let core_faces = brepkit_topology::explorer::solid_faces(&topo, core).unwrap();
+        for &f in &plate_faces {
+            if !flat(&topo, f) {
+                faces.push(f);
+                continue;
+            }
+            // The core's face at the same height, its outline as the hole.
+            let z = |topo: &Topology, f: FaceId| {
+                let wire = topo.wire(topo.face(f).unwrap().outer_wire()).unwrap();
+                let edge = topo.edge(wire.edges()[0].edge()).unwrap();
+                topo.vertex(edge.start()).unwrap().point().z()
+            };
+            let hole = core_faces
+                .iter()
+                .copied()
+                .find(|&c| flat(&topo, c) && (z(&topo, c) - z(&topo, f)).abs() < 1e-9)
+                .unwrap();
+            let (outer, surface, reversed, inner) = {
+                let face = topo.face(f).unwrap();
+                (
+                    face.outer_wire(),
+                    face.surface().clone(),
+                    face.is_reversed(),
+                    topo.face(hole).unwrap().outer_wire(),
+                )
+            };
+            let mut holed = Face::new(outer, vec![inner], surface);
+            holed.set_reversed(reversed);
+            faces.push(topo.add_face(holed));
+        }
+        faces.extend(core_faces.iter().copied().filter(|&c| !flat(&topo, c)));
+
+        let sewn = sew_faces(&mut topo, &faces, 1e-7).unwrap();
+        assert!(
+            crate::validate::validate_solid(&topo, sewn)
+                .unwrap()
+                .is_valid()
+        );
+        let volume = crate::measure::oriented_solid_volume(&topo, sewn, 0.01).unwrap();
+        assert!((volume - (200.0 - 32.0)).abs() < 1e-9, "{volume}");
     }
 
     /// Two discs on perpendicular planes, both closed at (1, 0, 0) with the
