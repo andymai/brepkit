@@ -3401,4 +3401,245 @@ mod tests {
             "unknown join type should error: {entry}"
         );
     }
+
+    /// The wire of a square of half-size `h` at height `z`, edge by edge.
+    fn square_wire_at(k: &mut crate::kernel::BrepKernel, h: f64, z: f64) -> u32 {
+        let c = [(-h, -h), (h, -h), (h, h), (-h, h)];
+        let edges = (0..4)
+            .map(|i| {
+                let (a, b) = (c[i], c[(i + 1) % 4]);
+                k.make_line_edge(a.0, a.1, z, b.0, b.1, z).unwrap()
+            })
+            .collect();
+        k.make_wire(edges, true).unwrap()
+    }
+
+    /// The wire of one whole circle about `(cx, cy, z)`.
+    fn circle_wire_at(k: &mut crate::kernel::BrepKernel, cx: f64, cy: f64, z: f64, r: f64) -> u32 {
+        let e = k.make_circle_edge(cx, cy, z, 0.0, 0.0, 1.0, r).unwrap();
+        k.make_wire(vec![e], true).unwrap()
+    }
+
+    /// The calls a loft between two profiles with holes makes: each boundary
+    /// lofted to its sides, the two profiles as faces with their holes, all
+    /// of it welded, and the weld's shell made a solid. `caps_first` welds
+    /// the profiles before the sides.
+    fn loft_with_holes(
+        k: &mut crate::kernel::BrepKernel,
+        outer: [u32; 2],
+        holes: &[[u32; 2]],
+        opts: &str,
+        caps_first: bool,
+    ) -> brepkit_topology::solid::SolidId {
+        let opts: serde_json::Value = serde_json::from_str(opts).unwrap();
+        let mut sides = Vec::new();
+        for pair in std::iter::once(&outer).chain(holes) {
+            let sections: Vec<_> = pair
+                .iter()
+                .map(|&w| {
+                    let f = k.make_face_from_wire(w).unwrap();
+                    k.resolve_face(f).unwrap()
+                })
+                .collect();
+            let shell = k.loft_from_options(&sections, &opts).unwrap();
+            sides.extend(k.get_shell_faces(shell).unwrap());
+        }
+        let mut caps = Vec::new();
+        for i in 0..2 {
+            let cap = k.make_planar_face_from_wire(outer[i]).unwrap();
+            let inner = holes.iter().map(|pair| pair[i]).collect();
+            caps.push(k.add_holes_to_face(cap, inner).unwrap());
+        }
+        let faces = if caps_first {
+            [caps, sides].concat()
+        } else {
+            [sides, caps].concat()
+        };
+        let face_ids: Vec<_> = faces.iter().map(|&f| k.resolve_face(f).unwrap()).collect();
+        let welded = brepkit_operations::sew::sew_faces(k.topo_mut(), &face_ids, 1e-7).unwrap();
+        let shell = k.topo.solid(welded).unwrap().outer_shell();
+        crate::helpers::solid_from_closed_shell(k.topo_mut(), shell).unwrap()
+    }
+
+    /// A lofted solid with holes: valid, one shell, each profile one face
+    /// with its holes, a closed mesh, the volume, and the points in and out.
+    fn assert_lofted_with_holes(
+        k: &crate::kernel::BrepKernel,
+        solid: brepkit_topology::solid::SolidId,
+        faces: usize,
+        holes: usize,
+        volume: f64,
+        inside: Point3,
+        in_a_hole: Point3,
+    ) {
+        use brepkit_operations::classify::{PointClassification, classify_point};
+        let topo = &k.topo;
+        let report = brepkit_operations::validate::validate_solid(topo, solid).unwrap();
+        assert!(report.is_valid(), "{:?}", report.issues);
+        assert!(topo.solid(solid).unwrap().inner_shells().is_empty());
+        let all = brepkit_topology::explorer::solid_faces(topo, solid).unwrap();
+        assert_eq!(all.len(), faces);
+        let holed = all
+            .iter()
+            .filter(|&&f| topo.face(f).unwrap().inner_wires().len() == holes)
+            .count();
+        assert_eq!(holed, 2, "each profile is one face with its holes");
+        let got = brepkit_check::properties::exact_solid_volume(topo, solid)
+            .unwrap()
+            .unwrap_or_else(|| {
+                brepkit_operations::measure::solid_volume(topo, solid, 1e-4).unwrap()
+            });
+        assert!((got - volume).abs() < 1e-9 * volume, "{got}, want {volume}");
+        let mesh = brepkit_operations::tessellate::tessellate_solid(topo, solid, 0.01).unwrap();
+        assert_eq!(
+            brepkit_operations::tessellate::boundary_edge_count(&mesh),
+            0
+        );
+        assert_eq!(
+            classify_point(topo, solid, inside, 0.01, 1e-7).unwrap(),
+            PointClassification::Inside
+        );
+        assert_eq!(
+            classify_point(topo, solid, in_a_hole, 0.01, 1e-7).unwrap(),
+            PointClassification::Outside
+        );
+    }
+
+    const SIDES_ONLY: &str = r#"{"ruled": true, "solid": false, "tolerance": 1e-6}"#;
+
+    /// A frustum from a 20 square to a 12 square with a hole from an 8 square
+    /// to a 4 square holds the outer frustum less the inner one, whichever of
+    /// the profiles and the sides is welded first. Each profile's hole is
+    /// given the same way round as its outline.
+    #[test]
+    fn a_loft_between_squares_with_a_square_hole_leaves_the_hole_out() {
+        let frustum = |a: f64, b: f64| 10.0 / 3.0 * (a * a + b * b + a * b);
+        let want = frustum(20.0, 12.0) - frustum(8.0, 4.0);
+        for caps_first in [false, true] {
+            let mut k = crate::kernel::BrepKernel::new();
+            let outer = [
+                square_wire_at(&mut k, 10.0, 0.0),
+                square_wire_at(&mut k, 6.0, 10.0),
+            ];
+            let hole = [
+                square_wire_at(&mut k, 4.0, 0.0),
+                square_wire_at(&mut k, 2.0, 10.0),
+            ];
+            let solid = loft_with_holes(&mut k, outer, &[hole], SIDES_ONLY, caps_first);
+            assert_lofted_with_holes(
+                &k,
+                solid,
+                10,
+                1,
+                want,
+                Point3::new(5.0, 0.5, 5.0),
+                Point3::new(0.5, 0.25, 5.0),
+            );
+        }
+    }
+
+    /// A 10 square prism with round holes: the holes' rims start at one
+    /// point of each circle and the walls lofted through them at another.
+    /// One hole on the axis, then two off it.
+    #[test]
+    fn a_loft_between_squares_with_round_holes_leaves_the_holes_out() {
+        let pi = std::f64::consts::PI;
+        for caps_first in [false, true] {
+            let mut k = crate::kernel::BrepKernel::new();
+            let outer = [
+                square_wire_at(&mut k, 5.0, 0.0),
+                square_wire_at(&mut k, 5.0, 10.0),
+            ];
+            let hole = [
+                circle_wire_at(&mut k, 0.0, 0.0, 0.0, 2.0),
+                circle_wire_at(&mut k, 0.0, 0.0, 10.0, 2.0),
+            ];
+            let solid = loft_with_holes(&mut k, outer, &[hole], SIDES_ONLY, caps_first);
+            assert_lofted_with_holes(
+                &k,
+                solid,
+                7,
+                1,
+                1000.0 - 40.0 * pi,
+                Point3::new(3.5, 0.5, 5.0),
+                Point3::new(0.5, 0.25, 5.0),
+            );
+
+            let mut k = crate::kernel::BrepKernel::new();
+            let outer = [
+                square_wire_at(&mut k, 5.0, 0.0),
+                square_wire_at(&mut k, 5.0, 10.0),
+            ];
+            let holes = [
+                [
+                    circle_wire_at(&mut k, 2.5, 1.0, 0.0, 1.5),
+                    circle_wire_at(&mut k, 2.5, 1.0, 10.0, 1.5),
+                ],
+                [
+                    circle_wire_at(&mut k, -2.0, -2.5, 0.0, 1.0),
+                    circle_wire_at(&mut k, -2.0, -2.5, 10.0, 1.0),
+                ],
+            ];
+            let solid = loft_with_holes(&mut k, outer, &holes, SIDES_ONLY, caps_first);
+            assert_lofted_with_holes(
+                &k,
+                solid,
+                8,
+                2,
+                1000.0 - 10.0 * pi * (2.25 + 1.0),
+                Point3::new(0.0, 3.5, 5.0),
+                Point3::new(-2.0, -2.25, 5.0),
+            );
+        }
+    }
+
+    /// Under `normal` ends the outline and the hole each leave their
+    /// profiles square on, and the solid holds the difference of the two
+    /// closed forms: at each height a square of the corners' half-size, the
+    /// corners on cubics with no slope in the half-size and the chord up.
+    #[test]
+    fn a_loft_with_a_hole_under_normal_ends_leaves_the_hole_out() {
+        let stack = |low: f64, high: f64| {
+            let chord = (2.0 * (low - high) * (low - high) + 100.0_f64).sqrt();
+            let steps = 2000;
+            let f = |t: f64| {
+                let half = low - (low - high) * (3.0 * t * t - 2.0 * t * t * t);
+                let up = chord * (3.0 * t * t - 4.0 * t + 1.0)
+                    + 10.0 * (6.0 * t - 6.0 * t * t)
+                    + chord * (3.0 * t * t - 2.0 * t);
+                4.0 * half * half * up
+            };
+            let h = 1.0 / f64::from(steps);
+            let mut sum = f(0.0) + f(1.0);
+            for i in 1..steps {
+                sum += f(f64::from(i) * h) * if i % 2 == 1 { 4.0 } else { 2.0 };
+            }
+            sum * h / 3.0
+        };
+        let mut k = crate::kernel::BrepKernel::new();
+        let outer = [
+            square_wire_at(&mut k, 10.0, 0.0),
+            square_wire_at(&mut k, 6.0, 10.0),
+        ];
+        let hole = [
+            square_wire_at(&mut k, 4.0, 0.0),
+            square_wire_at(&mut k, 2.0, 10.0),
+        ];
+        let solid = loft_with_holes(
+            &mut k,
+            outer,
+            &[hole],
+            r#"{"start": "normal", "end": "normal", "solid": false}"#,
+            false,
+        );
+        assert_lofted_with_holes(
+            &k,
+            solid,
+            10,
+            1,
+            stack(10.0, 6.0) - stack(4.0, 2.0),
+            Point3::new(5.0, 0.5, 5.0),
+            Point3::new(0.5, 0.25, 5.0),
+        );
+    }
 }
