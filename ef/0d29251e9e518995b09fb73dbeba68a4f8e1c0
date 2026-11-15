@@ -1,0 +1,19 @@
+crates/math/src/nurbs/projection.rs
+  s_709d857a0f83c4::t_6fb30332b055f2 592-595,1304-1324
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ef0d29251e9e518995b09fb73dbeba68a4f8e1c0",
+  "prompts": {},
+  "sessions": {
+    "s_709d857a0f83c4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6cca9812-d77a-4dae-96f4-26562694b205",
+        "model": "claude-fable-5-2"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
