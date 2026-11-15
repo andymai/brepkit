@@ -295,11 +295,40 @@ fn split_closed_edges(faces: &mut [FaceSnapshot], tol: f64) {
         return;
     }
 
+    // The box of the balls that hold each edge: two edges on one curve have
+    // boxes that meet, and most pairs of a large weld do not.
+    let boxes: Vec<(Point3, Point3)> = closed
+        .iter()
+        .map(|(_, span)| {
+            let mut lo = [f64::INFINITY; 3];
+            let mut hi = [f64::NEG_INFINITY; 3];
+            for piece in &span.pieces {
+                let c = [piece.centre.x(), piece.centre.y(), piece.centre.z()];
+                for k in 0..3 {
+                    lo[k] = lo[k].min(c[k] - piece.radius);
+                    hi[k] = hi[k].max(c[k] + piece.radius);
+                }
+            }
+            (
+                Point3::new(lo[0], lo[1], lo[2]),
+                Point3::new(hi[0], hi[1], hi[2]),
+            )
+        })
+        .collect();
+    let apart = |a: &(Point3, Point3), b: &(Point3, Point3)| {
+        a.0.x() > b.1.x() + tol
+            || b.0.x() > a.1.x() + tol
+            || a.0.y() > b.1.y() + tol
+            || b.0.y() > a.1.y() + tol
+            || a.0.z() > b.1.z() + tol
+            || b.0.z() > a.1.z() + tol
+    };
+
     let mut pieces_of: HashMap<usize, Vec<EdgeSnapshot>> = HashMap::new();
     for (i, (source, span)) in closed.iter().enumerate() {
         let mut cuts: Vec<(f64, Point3)> = Vec::new();
         for (j, (_, other)) in closed.iter().enumerate() {
-            if i == j || (other.start - span.start).length() <= tol {
+            if i == j || apart(&boxes[i], &boxes[j]) || (other.start - span.start).length() <= tol {
                 continue;
             }
             if !(span.lies_on(other, tol) && other.lies_on(span, tol)) {
