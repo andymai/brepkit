@@ -1,0 +1,23 @@
+crates/io/tests/data/snapclip_ring.bin
+  s_709d857a0f83c4::t_88e09f9777b0fb 1
+crates/operations/src/query.rs
+  s_709d857a0f83c4::t_afdd8129f4af9a 128,142-243,252-341
+crates/wasm/src/helpers.rs
+  s_709d857a0f83c4::t_b623b73900d794 237-241,248-249,381-382,390-402,1773-1991
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6691bc12aa13b4aae757e32de98f2d78a609b652",
+  "prompts": {},
+  "sessions": {
+    "s_709d857a0f83c4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6cca9812-d77a-4dae-96f4-26562694b205",
+        "model": "claude-fable-5-2"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
