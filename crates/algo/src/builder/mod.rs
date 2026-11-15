@@ -1561,6 +1561,8 @@ struct FaceSide {
 /// has the face on its left where it runs counterclockwise, and on its right
 /// where it runs clockwise.
 ///
+/// Each edge is read at `samples` places, an even number.
+///
 /// `None` for a plane or a NURBS surface, and for a loop that does not close
 /// in `(u, v)`: one that winds round the surface, or passes a pole or an
 /// apex.
@@ -1569,10 +1571,10 @@ fn face_side_in_uv(
     surface: &brepkit_topology::face::FaceSurface,
     edges: &[brepkit_topology::wire::OrientedEdge],
     at: usize,
+    samples: usize,
 ) -> Result<Option<FaceSide>, AlgoError> {
     use brepkit_topology::face::FaceSurface;
     use std::f64::consts::{FRAC_PI_2, TAU};
-    const SAMPLES: usize = 8;
 
     let v_turns = match surface {
         FaceSurface::Plane { .. } | FaceSurface::Nurbs(_) => return Ok(None),
@@ -1580,16 +1582,16 @@ fn face_side_in_uv(
         FaceSurface::Torus(_) => true,
     };
     let near = |x: f64, to: f64| x - TAU * ((x - to) / TAU).round();
-    let mut loop_uv: Vec<(f64, f64)> = Vec::with_capacity(edges.len() * SAMPLES);
+    let mut loop_uv: Vec<(f64, f64)> = Vec::with_capacity(edges.len() * samples);
     let mut middle = None;
     for (index, oe) in edges.iter().enumerate() {
         let edge = topo.edge(oe.edge())?;
         let sp = topo.vertex(edge.start())?.point();
         let ep = topo.vertex(edge.end())?.point();
         let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
-        for k in 0..SAMPLES {
+        for k in 0..samples {
             #[allow(clippy::cast_precision_loss)]
-            let along = k as f64 / SAMPLES as f64;
+            let along = k as f64 / samples as f64;
             let along = if oe.is_forward() { along } else { 1.0 - along };
             let p = edge
                 .curve()
@@ -1608,7 +1610,7 @@ fn face_side_in_uv(
                     return Ok(None);
                 }
             }
-            if index == at && k == SAMPLES / 2 {
+            if index == at && k == samples / 2 {
                 middle = Some(loop_uv.len());
             }
             loop_uv.push((u, v));
@@ -1983,26 +1985,45 @@ fn sample_face_interior(
     // direction there tells the side of the edge that the face lies on. That
     // holds for a reversed face and for a left-handed surface frame, where
     // the rules below do not.
-    if inward_len > 1e-12
-        && let Some(FaceSide {
-            middle: mid_uv,
-            into: left,
-            across,
-            v_turns,
-        }) = face_side_in_uv(topo, surface, edges, first_index)?
-    {
-        // Halfway across the face from the edge, the sample is clear of the
-        // edge, which can lie on the other solid's boundary. A hole could
-        // hold that place.
-        if face.inner_wires().is_empty()
-            && let Some(across) = across
-            && let Some(on_surface) = surface.evaluate(
-                (0.5 * across).madd(left.0, mid_uv.0),
-                (0.5 * across).madd(left.1, mid_uv.1),
-            )
-        {
-            return Ok(on_surface);
+    // The loop is read on chords, and a chord can stand off a curved edge
+    // by more than a thin face is wide: the chords of such a face can cross
+    // each other, and then they tell neither the side nor the way across.
+    // So a face with no hole is read at four times the places on each edge
+    // until two readings give the same side, and the same way across to a
+    // tenth. Halfway across from the edge, the sample is clear of the edge,
+    // which can lie on the other solid's boundary. A hole could hold that
+    // place, so a face with holes takes the side only, from one fine
+    // reading.
+    let mut side = None;
+    if inward_len > 1e-12 {
+        if face.inner_wires().is_empty() {
+            side = face_side_in_uv(topo, surface, edges, first_index, 8)?;
+            for samples in [32, 128, 512] {
+                let fine = face_side_in_uv(topo, surface, edges, first_index, samples)?;
+                if let (Some(coarse), Some(fine)) = (&side, &fine)
+                    && let (Some(far), Some(near)) = (coarse.across, fine.across)
+                    && coarse.into.0 * fine.into.0 + coarse.into.1 * fine.into.1 > 0.0
+                    && (far - near).abs() <= 0.1 * near
+                    && let Some(on_surface) = surface.evaluate(
+                        (0.5 * near).madd(fine.into.0, fine.middle.0),
+                        (0.5 * near).madd(fine.into.1, fine.middle.1),
+                    )
+                {
+                    return Ok(on_surface);
+                }
+                side = fine;
+            }
+        } else {
+            side = face_side_in_uv(topo, surface, edges, first_index, 128)?;
         }
+    }
+    if let Some(FaceSide {
+        middle: mid_uv,
+        into: left,
+        v_turns,
+        ..
+    }) = side
+    {
         let turn = |d: f64| d - std::f64::consts::TAU * (d / std::f64::consts::TAU).round();
         // On a cylinder, a cone and a sphere, `v` is no angle that comes
         // round: only a torus's `v` is read on the nearest turn.
@@ -2287,6 +2308,84 @@ mod tests {
                 assert!((on_tube - 5.0).abs() < 1e-9, "{label}");
             }
         }
+    }
+
+    /// A band 0.001 wide on a cylinder, between two half ellipses that
+    /// swing a unit along the axis. The upper half ellipse is two edges, so
+    /// its sample chords stand 0.008 off it above the middle of the lower
+    /// one: halfway to those chords is off the band. The sample is on the
+    /// band.
+    #[test]
+    fn sample_face_interior_lands_on_a_thin_band_between_curved_edges() {
+        use brepkit_math::curves::Ellipse3D;
+        use brepkit_math::surfaces::CylindricalSurface;
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::{Face, FaceSurface};
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        use std::f64::consts::PI;
+
+        let tol = Tolerance::default();
+        let width = 0.001;
+        // The band is `-sin u < z < -sin u + width` for `u` from 0 to pi.
+        let on = |u: f64, lift: f64| Point3::new(u.cos(), u.sin(), lift - u.sin());
+        let mut topo = Topology::new();
+        let mut vertex = |u: f64, lift: f64| topo.add_vertex(Vertex::new(on(u, lift), tol.linear));
+        let (low_from, low_to) = (vertex(0.0, 0.0), vertex(PI, 0.0));
+        let (up_from, up_split, up_to) = (
+            vertex(0.0, width),
+            vertex(0.3 * PI, width),
+            vertex(PI, width),
+        );
+        let ellipse = |lift: f64| {
+            EdgeCurve::Ellipse(
+                Ellipse3D::new_with_ref(
+                    Point3::new(0.0, 0.0, lift),
+                    Vec3::new(0.0, 1.0, 1.0),
+                    2f64.sqrt(),
+                    1.0,
+                    Vec3::new(0.0, 1.0, -1.0),
+                )
+                .unwrap(),
+            )
+        };
+        let low = topo.add_edge(Edge::new(low_from, low_to, ellipse(0.0)));
+        let up_near = topo.add_edge(Edge::new(up_from, up_split, ellipse(width)));
+        let up_far = topo.add_edge(Edge::new(up_split, up_to, ellipse(width)));
+        let side_far = topo.add_edge(Edge::new(low_to, up_to, EdgeCurve::Line));
+        let side_near = topo.add_edge(Edge::new(low_from, up_from, EdgeCurve::Line));
+        let wire = topo.add_wire(
+            Wire::new(
+                vec![
+                    OrientedEdge::new(low, true),
+                    OrientedEdge::new(side_far, true),
+                    OrientedEdge::new(up_far, false),
+                    OrientedEdge::new(up_near, false),
+                    OrientedEdge::new(side_near, false),
+                ],
+                true,
+            )
+            .unwrap(),
+        );
+        let cylinder =
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0)
+                .unwrap();
+        let face = topo.add_face(Face::new(wire, vec![], FaceSurface::Cylinder(cylinder)));
+        // The lower half ellipse runs through the band's lowest place.
+        let middle = topo.edge(low).unwrap().curve().clone();
+        let (t0, t1) = middle.domain_with_endpoints(on(0.0, 0.0), on(PI, 0.0));
+        let at_middle =
+            middle.evaluate_with_endpoints(f64::midpoint(t0, t1), on(0.0, 0.0), on(PI, 0.0));
+        assert!(
+            (at_middle - on(PI / 2.0, 0.0)).length() < 1e-12,
+            "{at_middle:?}"
+        );
+
+        let p = sample_face_interior(&topo, face, tol).unwrap();
+        let above_low = p.z() + p.y();
+        assert!((p.x().hypot(p.y()) - 1.0).abs() < 1e-9, "{p:?}");
+        assert!(p.y() > 0.0, "{p:?}");
+        assert!(above_low > 0.0 && above_low < width, "{p:?}: {above_low}");
     }
 
     #[test]

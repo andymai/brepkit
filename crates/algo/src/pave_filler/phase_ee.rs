@@ -384,6 +384,48 @@ fn find_edge_edge_crossings(
 /// One edge of a pair: its curve, its data and its sample points.
 type SampledEdge<'a> = (&'a EdgeCurve, &'a EdgeData, &'a [SegmentEndpoint]);
 
+/// The parameters of edge A at which a walk along it reads it, in rising
+/// order, its two ends left out.
+///
+/// The marks are a sample chord apart. Between two knots a B-spline is one
+/// piece, and a narrow piece can leave the other curve and come back
+/// between two such marks. So each piece of A narrower than two chords gets
+/// marks of its own, and so does each piece of B, between the feet of its
+/// knots on A.
+fn walk_marks(a: SampledEdge<'_>, b: SampledEdge<'_>) -> Vec<f64> {
+    let (lo, hi) = (a.1.t0.min(a.1.t1), a.1.t0.max(a.1.t1));
+    let span = hi - lo;
+    let step = span / 32.0;
+    let mut breaks = vec![lo, hi];
+    if let EdgeCurve::NurbsCurve(nurbs) = a.0 {
+        breaks.extend(nurbs.knots().iter().copied().filter(|&k| k > lo && k < hi));
+    }
+    if let EdgeCurve::NurbsCurve(nurbs) = b.0 {
+        let (lo_b, hi_b) = (b.1.t0.min(b.1.t1), b.1.t0.max(b.1.t1));
+        let samples_a: Vec<(f64, Point3)> = a.2.iter().map(|p| (p.t, p.pos)).collect();
+        for &knot in nurbs.knots() {
+            if knot > lo_b && knot < hi_b {
+                let at = nurbs.evaluate(knot);
+                let ends = (a.1.start_pos, a.1.end_pos);
+                breaks.push(foot_on_curve(at, a.0, ends, (lo, hi), &samples_a).0);
+            }
+        }
+    }
+    breaks.sort_by(f64::total_cmp);
+    let mut marks: Vec<f64> = (1..32).map(|k| lo + step * f64::from(k)).collect();
+    for piece in breaks.windows(2) {
+        let width = piece[1] - piece[0];
+        if width > 1e-12 * span && width < 2.0 * step {
+            marks.extend((1..4).map(|k| piece[0] + width * (f64::from(k) / 4.0)));
+        }
+        marks.push(piece[1]);
+    }
+    marks.retain(|&t| t > lo && t < hi);
+    marks.sort_by(f64::total_cmp);
+    marks.dedup_by(|x, y| (*x - *y).abs() <= 1e-12 * span);
+    marks
+}
+
 /// How a stretch of two edges along each other ends.
 #[derive(Clone, Copy, PartialEq)]
 enum StretchEnd {
@@ -404,8 +446,12 @@ struct Stretch {
     span: (f64, f64),
     /// How far past each end a crossing still counts as read in it.
     slack: (f64, f64),
-    /// The stretch is an overlap: both ends are edge ends or corners.
+    /// The stretch is an overlap: each end is an edge end, a corner or a
+    /// junction.
     overlap: bool,
+    /// The crossing read in the stretch where the curves are nearest, and
+    /// their distance there.
+    nearest: (usize, f64),
 }
 
 /// Below this sine of the angle between two curves at a crossing, the
@@ -437,9 +483,9 @@ const SHARED_PART: f64 = 0.8;
 /// and a corner gets one crossing of its own.
 ///
 /// Where an end of the stretch is open, the edges come together and part
-/// while both go on. A tangency and a grazing crossing are such places, and
-/// their crossings stay as they are: their stretch is as long as the
-/// tolerance makes it. Where the stretch is almost as long at a thousandth
+/// while both go on. A tangency and a grazing crossing are such places.
+/// Such a stretch is one contact, and keeps the one crossing where the
+/// curves are nearest. It is as long as the tolerance makes it. Where the stretch is almost as long at a thousandth
 /// of the tolerance ([`SHARED_PART`] of it or more), the edges share a curve
 /// there, and one of them leaves
 /// it with no corner. That end is a junction: it ends an overlap as a corner
@@ -510,19 +556,27 @@ fn drop_crossings_along_one_curve(
     // A sample chord of A.
     let step = span / 32.0;
     let probe = span * 1e-5;
+    let marks = walk_marks(a, b);
     // Follow A from `from`, which is on B, towards `side` (-1 or 1) to the
-    // end of the stretch.
+    // end of the stretch, from one mark to the next.
     let follow = |from: f64, side: f64| -> (f64, StretchEnd) {
         let end = if side < 0.0 { lo } else { hi };
         let mut t = from;
         let off = loop {
-            let next = t + side * step;
-            if (next - end) * side >= 0.0 {
+            let next = if side > 0.0 {
+                marks.get(marks.partition_point(|&m| m <= t)).copied()
+            } else {
+                marks
+                    .partition_point(|&m| m < t)
+                    .checked_sub(1)
+                    .map(|i| marks[i])
+            };
+            let Some(next) = next else {
                 if on_b(end) {
                     return (end, StretchEnd::EdgeEnd);
                 }
                 break end;
-            }
+            };
             if !on_b(next) {
                 break next;
             }
@@ -556,6 +610,11 @@ fn drop_crossings_along_one_curve(
         }
     };
 
+    // The length of A between two of its parameters, along 16 chords.
+    let arc = |from: f64, to: f64| -> f64 {
+        let at = |i: usize| at_a(from + (to - from) * (i as f64 / 16.0));
+        (0..16).map(|i| (at(i + 1) - at(i)).length()).sum()
+    };
     let mut stretches: Vec<Stretch> = Vec::new();
     let mut corners: Vec<(f64, f64)> = Vec::new();
     let mut joins: Vec<f64> = Vec::new();
@@ -565,8 +624,16 @@ fn drop_crossings_along_one_curve(
             continue;
         }
         let within = |s: &Stretch| t_a >= s.span.0 - s.slack.0 && t_a <= s.span.1 + s.slack.1;
-        if let Some(known) = stretches.iter().find(|s| within(s)) {
-            dropped[k] = known.overlap;
+        if let Some(known) = stretches.iter_mut().find(|s| within(s)) {
+            // A stretch that is no overlap is one contact, and keeps the
+            // one crossing where the curves are nearest.
+            let gap = foot(t_a.clamp(lo, hi)).1;
+            if known.overlap || gap >= known.nearest.1 {
+                dropped[k] = true;
+            } else {
+                dropped[known.nearest.0] = true;
+                known.nearest = (k, gap);
+            }
             continue;
         }
         let t_a = t_a.clamp(lo, hi);
@@ -578,13 +645,8 @@ fn drop_crossings_along_one_curve(
         // A crossing at an angle has such a stretch too, as long as the
         // tolerance over the sine of the angle each side. An overlap that
         // ends at a corner is far longer.
-        let length: f64 = (0..8)
-            .map(|i| {
-                let at = |i: usize| at_a(from + (to - from) * (i as f64 / 8.0));
-                (at(i + 1) - at(i)).length()
-            })
-            .sum();
-        let (low, high) = junctions(&foot, tol, t_a, (from, low), (to, high));
+        let length = arc(from, to);
+        let (low, high) = junctions(&foot, &arc, tol, t_a, (from, low), (to, high));
         let stops = |end: StretchEnd| match end {
             StretchEnd::EdgeEnd | StretchEnd::Junction(_) => true,
             StretchEnd::Corner(sine) => length * sine > 50.0 * tol,
@@ -613,6 +675,7 @@ fn drop_crossings_along_one_curve(
             span: (from, to),
             slack: (slack(low), slack(high)),
             overlap,
+            nearest: (k, foot(t_a).1),
         });
     }
 
@@ -660,8 +723,11 @@ fn drop_crossings_along_one_curve(
 /// `at` is a place in the stretch, and each end is its parameter with its
 /// kind. An end stays open unless A lies on B to a thousandth of `tol`
 /// from that end to the other, over [`SHARED_PART`] of the stretch or more.
+/// `arc` gives the length of A between two parameters: a part of the
+/// parameter span is no measure of a part of the curve.
 fn junctions(
     foot: &impl Fn(f64) -> (f64, f64),
+    arc: &impl Fn(f64, f64) -> f64,
     tol: f64,
     at: f64,
     low: (f64, StretchEnd),
@@ -693,7 +759,7 @@ fn junctions(
     };
     let place = |end: (f64, StretchEnd)| if open(end.1) { leaves(end.0) } else { end.0 };
     let (from, to) = (place(low), place(high));
-    let shared = to - from >= SHARED_PART * (high.0 - low.0)
+    let shared = arc(from, to) >= SHARED_PART * arc(low.0, high.0)
         && (1..8).all(|k| on_curve(from + (to - from) * (f64::from(k) / 8.0)));
     if !shared {
         return (low.1, high.1);
@@ -2041,6 +2107,120 @@ mod tests {
                 let p = hits[0].2;
                 assert!(p.x().abs() < 0.2 && p.y().abs() <= tol, "{hits:?}");
             }
+        }
+    }
+
+    /// The product of two polynomials given by their Bezier ordinates.
+    fn bezier_product(a: &[f64], b: &[f64]) -> Vec<f64> {
+        let binomial =
+            |n: usize, k: usize| (0..k).fold(1.0, |c, i| c * (n - i) as f64 / (i + 1) as f64);
+        let (m, n) = (a.len() - 1, b.len() - 1);
+        (0..=m + n)
+            .map(|k| {
+                (0..=m)
+                    .filter(|&i| k >= i && k - i <= n)
+                    .map(|i| binomial(m, i) * binomial(n, k - i) * a[i] * b[k - i])
+                    .sum::<f64>()
+                    / binomial(m + n, k)
+            })
+            .collect()
+    }
+
+    /// A parabola that touches a line, with most of its parameter span
+    /// spent next to the place where they touch: `x = 1e-6 s / (1 - s^2 +
+    /// 1e-6)` and `y = x^2` for `s` from -1 to 1. At a thousandth of the
+    /// tolerance, the stretch keeps 0.95 of its parameter span and 0.03 of
+    /// its length. The two do not share a curve, and the contact is one
+    /// crossing.
+    #[test]
+    fn a_tangency_that_fills_its_parameter_span_is_read_once() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+
+        let s = [-1.0, 1.0];
+        let w = [1e-6, 2.0 + 1e-6, 1e-6];
+        let weights = bezier_product(&w, &w);
+        let x: Vec<f64> = bezier_product(&bezier_product(&s, &w), &[1.0, 1.0])
+            .iter()
+            .map(|c| c * 1e-6)
+            .collect();
+        let y: Vec<f64> = bezier_product(&bezier_product(&s, &s), &[1.0, 1.0, 1.0])
+            .iter()
+            .map(|c| c * 1e-12)
+            .collect();
+        assert!(weights.iter().all(|&weight| weight > 0.0));
+        let poles: Vec<Point3> = (0..5)
+            .map(|i| Point3::new(x[i] / weights[i], y[i] / weights[i], 0.0))
+            .collect();
+        let mut knots = vec![0.0; 5];
+        knots.extend([1.0; 5]);
+        let parabola = NurbsCurve::new(4, knots, poles, weights).unwrap();
+        let p = parabola.evaluate(0.875);
+        assert!((p.y() - p.x() * p.x()).abs() < 1e-15 && p.x() > 1e-6);
+
+        let (start, end) = (Point3::new(-1.2, 0.0, 0.0), Point3::new(1.3, 0.0, 0.0));
+        let straight =
+            NurbsCurve::new(1, vec![0.0, 0.0, 1.0, 1.0], vec![start, end], vec![1.0; 2]).unwrap();
+        for line in [EdgeCurve::Line, EdgeCurve::NurbsCurve(straight)] {
+            let mut topo = Topology::new();
+            let ea = edge_on(&mut topo, &parabola, 0.0, 1.0);
+            let eb = add_edge(&mut topo, start, end, line);
+            for (ea, eb) in [(ea, eb), (eb, ea)] {
+                let hits = crossings(&topo, ea, eb);
+                assert_eq!(hits.len(), 1, "{hits:?}");
+                assert!((hits[0].2 - Point3::new(0.0, 0.0, 0.0)).length() < 4e-4);
+            }
+        }
+    }
+
+    /// A cubic and the same curve with a smooth bump over one narrow span,
+    /// from 0.5 to 17/32 of it: between two sample points of both edges,
+    /// which all agree. The edges overlap up to the bump and after it, and
+    /// each end of the bump is one crossing.
+    #[test]
+    fn a_bump_between_two_sample_points_ends_the_overlap_each_side() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+
+        let curve = arch(0.0);
+        let raised = |part: Vec<Point3>| -> Vec<Point3> {
+            (0..5usize)
+                .map(|i| {
+                    let w = i as f64 / 4.0;
+                    let (before, here) = (part[i.saturating_sub(1)], part[i.min(3)]);
+                    here + (before - here) * w
+                })
+                .collect()
+        };
+        let (from, to) = (0.5, 17.0 / 32.0);
+        let mut bump = raised(bezier_part(&arch_poles(), from, to));
+        // `1.6 s^2 (1 - s)^2` along z: 0.1 at the middle of the span, and
+        // no step in place or direction at its ends.
+        bump[2] = bump[2] + Vec3::new(0.0, 0.0, 1.6 / 6.0);
+        let mut poles = raised(bezier_part(&arch_poles(), 0.0, from));
+        poles.extend(bump.into_iter().skip(1));
+        poles.extend(
+            raised(bezier_part(&arch_poles(), to, 1.0))
+                .into_iter()
+                .skip(1),
+        );
+        let mut knots = vec![0.0; 5];
+        knots.extend([from; 4]);
+        knots.extend([to; 4]);
+        knots.extend([1.0; 5]);
+        let bumped = NurbsCurve::new(4, knots, poles, vec![1.0; 13]).unwrap();
+        assert!((bumped.evaluate(0.3) - curve.evaluate(0.3)).length() < 1e-12);
+        assert!((bumped.evaluate(f64::midpoint(from, to)).z() - 0.1).abs() < 1e-12);
+
+        let mut topo = Topology::new();
+        let ea = edge_on(&mut topo, &curve, 0.0, 1.0);
+        let eb = edge_on(&mut topo, &bumped, 0.0, 1.0);
+        for (ea, eb) in [(ea, eb), (eb, ea)] {
+            let mut at: Vec<f64> = crossings(&topo, ea, eb).iter().map(|h| h.0).collect();
+            at.sort_by(f64::total_cmp);
+            assert_eq!(at.len(), 2, "{at:?}");
+            assert!(
+                (at[0] - from).abs() < 1e-3 && (at[1] - to).abs() < 1e-3,
+                "{at:?}"
+            );
         }
     }
 
