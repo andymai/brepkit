@@ -87,9 +87,18 @@ impl PCurve {
 ///
 /// Each edge on a face can have an associated pcurve that represents
 /// the edge's geometry in the face's surface parameter space.
+///
+/// The registry also keeps the edges of each face and the faces of each
+/// edge, so a query or a removal for one face or one edge costs the pcurves
+/// of that face or edge, whatever the registry holds.
 #[derive(Debug, Default, Clone)]
 pub struct PCurveRegistry {
     curves: HashMap<PCurveKey, PCurve>,
+    by_face: HashMap<FaceId, Vec<EdgeId>>,
+    by_edge: HashMap<EdgeId, Vec<FaceId>>,
+    /// The value each changed key held before its change, oldest first,
+    /// while a [`Topology`](crate::Topology) transaction is open.
+    undo: Option<Vec<(PCurveKey, Option<PCurve>)>>,
 }
 
 impl PCurveRegistry {
@@ -99,9 +108,72 @@ impl PCurveRegistry {
         Self::default()
     }
 
+    fn insert_raw(&mut self, key: PCurveKey, pcurve: PCurve) -> Option<PCurve> {
+        let old = self.curves.insert(key, pcurve);
+        if old.is_none() {
+            self.by_face.entry(key.face).or_default().push(key.edge);
+            self.by_edge.entry(key.edge).or_default().push(key.face);
+        }
+        old
+    }
+
+    fn remove_raw(&mut self, key: PCurveKey) -> Option<PCurve> {
+        let old = self.curves.remove(&key)?;
+        if let Some(edges) = self.by_face.get_mut(&key.face) {
+            edges.retain(|&edge| edge != key.edge);
+            if edges.is_empty() {
+                self.by_face.remove(&key.face);
+            }
+        }
+        if let Some(faces) = self.by_edge.get_mut(&key.edge) {
+            faces.retain(|&face| face != key.face);
+            if faces.is_empty() {
+                self.by_edge.remove(&key.edge);
+            }
+        }
+        Some(old)
+    }
+
+    fn record(&mut self, key: PCurveKey, old: Option<PCurve>) {
+        if let Some(undo) = self.undo.as_mut() {
+            undo.push((key, old));
+        }
+    }
+
+    /// Starts to record changes, and returns the mark to undo back to.
+    pub(crate) fn begin_undo(&mut self) -> usize {
+        self.undo.get_or_insert_with(Vec::new).len()
+    }
+
+    /// Undoes each change recorded after `mark`, newest first.
+    pub(crate) fn undo_to(&mut self, mark: usize) {
+        let Some(mut undo) = self.undo.take() else {
+            return;
+        };
+        while undo.len() > mark {
+            match undo.pop() {
+                Some((key, Some(old))) => {
+                    self.insert_raw(key, old);
+                }
+                Some((key, None)) => {
+                    self.remove_raw(key);
+                }
+                None => break,
+            }
+        }
+        self.undo = Some(undo);
+    }
+
+    /// Stops the record and drops it.
+    pub(crate) fn end_undo(&mut self) {
+        self.undo = None;
+    }
+
     /// Sets the pcurve for an (edge, face) pair.
     pub fn set(&mut self, edge: EdgeId, face: FaceId, pcurve: PCurve) {
-        self.curves.insert(PCurveKey::new(edge, face), pcurve);
+        let key = PCurveKey::new(edge, face);
+        let old = self.insert_raw(key, pcurve);
+        self.record(key, old);
     }
 
     /// Gets the pcurve for an (edge, face) pair, if one exists.
@@ -118,20 +190,29 @@ impl PCurveRegistry {
 
     /// Removes the pcurve for an (edge, face) pair.
     pub fn remove(&mut self, edge: EdgeId, face: FaceId) -> Option<PCurve> {
-        self.curves.remove(&PCurveKey::new(edge, face))
+        let key = PCurveKey::new(edge, face);
+        let old = self.remove_raw(key)?;
+        if self.undo.is_some() {
+            self.record(key, Some(old.clone()));
+        }
+        Some(old)
     }
 
     /// Removes every pcurve that lives on one of `faces`.
     pub fn remove_faces(&mut self, faces: &std::collections::HashSet<FaceId>) {
-        if !faces.is_empty() {
-            self.curves.retain(|key, _| !faces.contains(&key.face));
+        for &face in faces {
+            for edge in self.by_face.get(&face).cloned().unwrap_or_default() {
+                self.remove(edge, face);
+            }
         }
     }
 
     /// Removes every pcurve of one of `edges`, on any face.
     pub fn remove_edges(&mut self, edges: &std::collections::HashSet<EdgeId>) {
-        if !edges.is_empty() {
-            self.curves.retain(|key, _| !edges.contains(&key.edge));
+        for &edge in edges {
+            for face in self.by_edge.get(&edge).cloned().unwrap_or_default() {
+                self.remove(edge, face);
+            }
         }
     }
 
@@ -147,23 +228,26 @@ impl PCurveRegistry {
         self.curves.is_empty()
     }
 
-    /// Returns all pcurves for a given face.
+    /// Returns all pcurves for a given face, in the order they were set.
     #[must_use]
     pub fn pcurves_for_face(&self, face: FaceId) -> Vec<(EdgeId, &PCurve)> {
-        self.curves
-            .iter()
-            .filter(|(k, _)| k.face == face)
-            .map(|(k, v)| (k.edge, v))
+        self.by_face
+            .get(&face)
+            .into_iter()
+            .flatten()
+            .filter_map(|&edge| Some((edge, self.curves.get(&PCurveKey::new(edge, face))?)))
             .collect()
     }
 
-    /// Returns all pcurves for a given edge (typically 1-2 per edge).
+    /// Returns all pcurves for a given edge (typically 1-2 per edge), in the
+    /// order they were set.
     #[must_use]
     pub fn pcurves_for_edge(&self, edge: EdgeId) -> Vec<(FaceId, &PCurve)> {
-        self.curves
-            .iter()
-            .filter(|(k, _)| k.edge == edge)
-            .map(|(k, v)| (k.face, v))
+        self.by_edge
+            .get(&edge)
+            .into_iter()
+            .flatten()
+            .filter_map(|&face| Some((face, self.curves.get(&PCurveKey::new(edge, face))?)))
             .collect()
     }
 }
@@ -260,6 +344,141 @@ mod tests {
         assert!(topo.pcurves().contains(edge_id, face_id));
         topo.pcurves_mut().remove(edge_id, face_id);
         assert!(!topo.pcurves().contains(edge_id, face_id));
+    }
+
+    fn line_pcurve(end: f64) -> PCurve {
+        let line = Line2D::new(Point2::new(0.0, 0.0), Vec2::new(1.0, 0.0)).unwrap();
+        PCurve::new(Curve2D::Line(line), 0.0, end)
+    }
+
+    #[test]
+    fn removal_by_face_and_by_edge_leaves_the_other_pcurves() {
+        let (mut topo, e0, face) = make_simple_topology();
+        let e1 = topo.edge_id_from_index(1).unwrap();
+        let other_face = topo.add_face(topo.face(face).unwrap().clone());
+        topo.pcurves_mut().set(e0, face, line_pcurve(1.0));
+        topo.pcurves_mut().set(e1, face, line_pcurve(2.0));
+        topo.pcurves_mut().set(e0, other_face, line_pcurve(3.0));
+
+        let on_e0: Vec<FaceId> = topo
+            .pcurves()
+            .pcurves_for_edge(e0)
+            .into_iter()
+            .map(|(f, _)| f)
+            .collect();
+        assert_eq!(on_e0, vec![face, other_face]);
+
+        topo.pcurves_mut()
+            .remove_faces(&std::collections::HashSet::from([face]));
+        assert_eq!(topo.pcurves().len(), 1);
+        assert!(topo.pcurves().pcurves_for_face(face).is_empty());
+        assert!(topo.pcurves().contains(e0, other_face));
+
+        topo.pcurves_mut().set(e1, other_face, line_pcurve(4.0));
+        topo.pcurves_mut()
+            .remove_edges(&std::collections::HashSet::from([e0]));
+        assert!(topo.pcurves().pcurves_for_edge(e0).is_empty());
+        let left = topo.pcurves().pcurves_for_face(other_face);
+        assert_eq!(left.len(), 1);
+        assert_eq!(left[0].0, e1);
+    }
+
+    #[test]
+    fn a_failed_transaction_puts_the_topology_back() {
+        let (mut topo, e0, face) = make_simple_topology();
+        let e1 = topo.edge_id_from_index(1).unwrap();
+        let v0 = topo.vertex_id_from_index(0).unwrap();
+        let wire = topo.face(face).unwrap().outer_wire();
+        topo.pcurves_mut().set(e0, face, line_pcurve(1.0));
+        topo.pcurves_mut().set(e1, face, line_pcurve(2.0));
+        let counts = |t: &Topology| {
+            (
+                t.num_vertices(),
+                t.num_edges(),
+                t.num_wires(),
+                t.num_faces(),
+            )
+        };
+        let before = counts(&topo);
+
+        let result: Result<(), ()> = topo.transaction(|topo| {
+            *topo.vertex_mut(v0).unwrap() = Vertex::new(Point3::new(9.0, 9.0, 9.0), 1e-7);
+            *topo.vertex_mut(v0).unwrap() = Vertex::new(Point3::new(8.0, 8.0, 8.0), 1e-7);
+            let made = topo.add_edge(Edge::new(v0, v0, EdgeCurve::Line));
+            *topo.wire_mut(wire).unwrap() =
+                Wire::new(vec![OrientedEdge::new(made, true)], true).unwrap();
+            let copy = topo.add_face(topo.face(face).unwrap().clone());
+            topo.pcurves_mut().set(made, copy, line_pcurve(5.0));
+            topo.pcurves_mut().set(e0, face, line_pcurve(6.0));
+            topo.pcurves_mut().remove(e1, face);
+            Err(())
+        });
+
+        assert!(result.is_err());
+        assert_eq!(counts(&topo), before);
+        assert!(topo.vertex(v0).unwrap().point().x().abs() < 1e-12);
+        assert_eq!(topo.wire(wire).unwrap().edges().len(), 3);
+        assert_eq!(topo.pcurves().len(), 2);
+        assert!((topo.pcurves().get(e0, face).unwrap().t_end() - 1.0).abs() < 1e-12);
+        assert!((topo.pcurves().get(e1, face).unwrap().t_end() - 2.0).abs() < 1e-12);
+        assert_eq!(topo.pcurves().pcurves_for_face(face).len(), 2);
+    }
+
+    #[test]
+    fn a_transaction_that_succeeds_keeps_its_changes() {
+        let (mut topo, e0, face) = make_simple_topology();
+        let v0 = topo.vertex_id_from_index(0).unwrap();
+        let made: Result<EdgeId, ()> = topo.transaction(|topo| {
+            *topo.vertex_mut(v0).unwrap() = Vertex::new(Point3::new(9.0, 0.0, 0.0), 1e-7);
+            topo.pcurves_mut().set(e0, face, line_pcurve(1.0));
+            Ok(topo.add_edge(Edge::new(v0, v0, EdgeCurve::Line)))
+        });
+        assert!(topo.edge(made.unwrap()).is_ok());
+        assert!((topo.vertex(v0).unwrap().point().x() - 9.0).abs() < 1e-12);
+        assert!(topo.pcurves().contains(e0, face));
+    }
+
+    #[test]
+    fn nested_transactions_undo_to_their_own_start() {
+        let (mut topo, e0, face) = make_simple_topology();
+        let v0 = topo.vertex_id_from_index(0).unwrap();
+        let x = |t: &Topology| t.vertex(v0).unwrap().point().x();
+        let at = |x: f64| Vertex::new(Point3::new(x, 0.0, 0.0), 1e-7);
+
+        // The inner one fails: the outer one's changes stay.
+        let kept: Result<(), ()> = topo.transaction(|topo| {
+            *topo.vertex_mut(v0).unwrap() = at(1.0);
+            let inner: Result<(), ()> = topo.transaction(|topo| {
+                *topo.vertex_mut(v0).unwrap() = at(2.0);
+                topo.pcurves_mut().set(e0, face, line_pcurve(1.0));
+                Err(())
+            });
+            assert!(inner.is_err());
+            Ok(())
+        });
+        assert!(kept.is_ok());
+        assert!((x(&topo) - 1.0).abs() < 1e-12);
+        assert!(topo.pcurves().is_empty());
+
+        // The inner one succeeds and the outer one fails: nothing stays.
+        let dropped: Result<(), ()> = topo.transaction(|topo| {
+            let inner: Result<(), ()> = topo.transaction(|topo| {
+                *topo.vertex_mut(v0).unwrap() = at(3.0);
+                topo.add_vertex(at(4.0));
+                topo.pcurves_mut().set(e0, face, line_pcurve(1.0));
+                Ok(())
+            });
+            assert!(inner.is_ok());
+            Err(())
+        });
+        assert!(dropped.is_err());
+        assert!((x(&topo) - 1.0).abs() < 1e-12);
+        assert_eq!(topo.num_vertices(), 3);
+        assert!(topo.pcurves().is_empty());
+
+        // A change after the last transaction is not recorded.
+        topo.pcurves_mut().set(e0, face, line_pcurve(1.0));
+        assert_eq!(topo.pcurves().len(), 1);
     }
 
     #[test]
