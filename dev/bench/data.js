@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794719886041,
+  "lastUpdate": 1794724009694,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -69983,6 +69983,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 13906886,
             "range": "± 16834",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "07bbe5b108e2aba269b7ccf7344708aa127e9e58",
+          "message": "chore(main): release 4.11.18 (#2463)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[4.11.18](https://github.com/andymai/brepkit/compare/v4.11.17...v4.11.18)\n(2026-11-15)\n\n\n### Bug Fixes\n\n* **algo:** edges on one curve do not cross at their sample points\n([#2462](https://github.com/andymai/brepkit/issues/2462))\n([43dc136](https://github.com/andymai/brepkit/commit/43dc136d6503bb05a298fed55d2fbef18dfb6d10))\n* **algo:** split a ring by faces through its axis\n([#2466](https://github.com/andymai/brepkit/issues/2466))\n([333663a](https://github.com/andymai/brepkit/commit/333663a71fa46d34a344e8f8c009ae106e10f724))\n* **check:** report a face whose hole crosses its outline\n([#2452](https://github.com/andymai/brepkit/issues/2452))\n([06d64b3](https://github.com/andymai/brepkit/commit/06d64b37035e11b2269bf1906eb70e82437c91f5)),\ncloses [#2444](https://github.com/andymai/brepkit/issues/2444)\n* **io:** join the triangles of an imported mesh at their edges\n([#2448](https://github.com/andymai/brepkit/issues/2448))\n([c8b7eb1](https://github.com/andymai/brepkit/commit/c8b7eb138f710955f32c9e6ece1ee9d6e2e8bb0d))\n* **operations:** scale a solid by a small uniform factor\n([#2447](https://github.com/andymai/brepkit/issues/2447))\n([8a37205](https://github.com/andymai/brepkit/commit/8a3720562f30eaf456c10170b8daab7dbd06f9ad))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-11-15T06:23:08Z",
+          "tree_id": "dc7324feb9b4103dd04bafaaed4f6a181af3ce41",
+          "url": "https://github.com/andymai/brepkit/commit/07bbe5b108e2aba269b7ccf7344708aa127e9e58"
+        },
+        "date": 1794724001644,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1061802,
+            "range": "± 5565",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1112916,
+            "range": "± 6406",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10983,
+            "range": "± 107",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 695074,
+            "range": "± 10296",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 22929128,
+            "range": "± 193692",
             "unit": "ns/iter"
           }
         ]
