@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794716716772,
+  "lastUpdate": 1794719196783,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -69875,6 +69875,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 14088598,
             "range": "± 628343",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "43dc136d6503bb05a298fed55d2fbef18dfb6d10",
+          "message": "fix(algo): edges on one curve do not cross at their sample points (#2462)\n\nCloses #2445.\n\nTwo edges that lie on one curve got a crossing at each sample point that\nthey share. Each crossing split the two edges: two B-spline edges on one\ncubic, in opposite directions, got 31 crossings. The edge-edge phase now\nreads such edges as an overlap, and gives no crossing inside it.\n\n## Why\n\nThe phase samples each curved edge into 32 chords. Chords of two edges\non one curve are chords of that curve between different points. They\nmeet at each sample point that the edges share, and they cross between\nthe other sample points. They meet at a real angle, although the curves\ndo not cross.\n\n## What\n\nThe decision is now made on the curves, in\n`drop_crossings_along_one_curve`\n(`crates/algo/src/pave_filler/phase_ee.rs`).\n\n- A crossing where the two curves meet at a real angle stays.\n- From each other crossing, the phase follows edge A both ways for as\nlong as A stays within tolerance of edge B. It reads A a sample chord\napart, and closer in each narrow span between two knots of A or B.\n- That stretch is an overlap when each of its two ends is an edge end, a\ncorner or a junction. At an edge end, one of the two edges ends on the\nother. At a corner, the curves part at a real angle. At a junction, one\nedge leaves the curve that the two share with no corner.\n- The phase drops the crossings in an overlap. A corner and a junction\nget one crossing each. The VE phase paves the edge ends.\n- A stretch with an open end is a tangency or a grazing crossing. It is\none contact, and it keeps the one crossing where the curves are nearest.\n\nThe test of a junction is the length of the stretch at a thousandth of\nthe tolerance. A tangency keeps 0.03 of its length, and a contact of\norder 10 keeps half. A shared curve must keep 0.8 or more.\n\nTwo more changes come with this one.\n\n**Common blocks.** `force_interf_ee` gave two pave blocks with the same\nends a common block only for two lines, or for one circle or ellipse.\nFor each other pair, it now reads points along both blocks, with points\nof their own between each two knots of a B-spline. The blocks share a\ncommon block when each point is within tolerance of the curve of the\nother block.\n\n**The sample of a curved face.** With the crossings gone,\n`two_revolved_half_rings_fuse_into_the_ring` fell back to a mesh in two\nposes. On main, the 31 crossings split each shared half circle into 32\nblocks, and that hid a fault in `sample_face_interior`. The sampler\nmoves the middle of the longest edge a small step into the face, and the\nwhole half circle is the longest edge.\n\n- For a reversed tube face, the step went out of the face. The\nclassifier read the face as inside the other half, and the result had 8\nfree edges.\n- With the side correct, the sample was 0.007 from the plane where the\ntwo halves meet. In the turned pose, the classifier still read it as\ninside.\n\nThe sampler now reads the outer wire in the parameters of a cylinder, a\ncone, a sphere or a torus. Where the loop closes there, its turning\ndirection gives the side of the edge that the face lies on. For a face\nwith no hole, the sample is halfway across the face from the edge. The\nsampler reads the loop on chords. It takes the side and the way across\nonly where a second reading agrees, with four times the points on each\nedge.\n\n## How I checked it\n\n- `two_edges_on_one_cubic_running_opposite_ways_do_not_cross` is the\ncase from the issue. With the new function off, it fails with 31\ncrossings.\n- `edges_that_share_a_part_of_one_cubic_do_not_cross_inside_it` has 7\nlayouts, each on a flat cubic and on a twisted cubic. They cover an edge\non a part of the other, a partial overlap, and a short edge inside one\nchord.\n- `edges_on_equal_curves_with_different_poles_do_not_cross` uses the\ncubic as a degree-4 curve and as a cubic over other knots.\n-\n`an_arc_and_the_same_arc_as_a_spline_do_not_cross_inside_their_overlap`\nuses a circle arc and an ellipse arc.\n- `a_spline_leaving_a_cubic_at_a_corner_crosses_it_only_there` and\n`a_spline_leaving_a_cubic_smoothly_meets_it_where_it_leaves` each need\none crossing, at the corner or the junction.\n- `different_curves_between_shared_ends_still_cross` needs the crossing\nof two different curves that share both ends.\n- With the new function off, the tests of an overlap and of a corner\nfail. The 21 tests that the module had pass without change.\n- Four tests come from the review, and each failed before its fix. They\nare a tangency near the start of a long edge, and a contact of order 10.\nThey are also a tangency that fills its parameter span, and a bump\nbetween two sample points.\n- `blocks_on_one_b_spline_curve_are_common` and\n`an_arc_and_the_same_arc_as_a_b_spline_are_common` cover the common\nblocks. Each has a case that must not share a block.\n`a_narrow_span_off_the_other_curve_keeps_the_blocks_apart` is a B-spline\nthat leaves a line in one narrow span.\n- `sample_face_interior_lands_on_a_torus_band_for_each_orientation`\ncovers both directions of the wire and a reversed face. It fails on\nmain. `sample_face_interior_lands_on_a_thin_band_between_curved_edges`\nis a band 0.001 wide on a cylinder.\n- `cargo test -p brepkit-algo` passes (414 tests). `cargo test -p\nbrepkit-operations` passes (2,187 tests, 15 ignored). That run was on\nthe commit before the last one, which changes how the phase tells two\njunctions apart.\n- The pose sweep and the truth audit match main line for line.\n- `cargo clippy -p brepkit-algo --all-targets -- -D warnings` and the\nthree check scripts pass.\n\nTime of `find_edge_edge_crossings` for one pair of cubic edges, release\nbuild, best of 3 runs:\n\n| Pair | Without the new function | With it |\n|---|---|---|\n| Two cubics apart | 13.0 us | 13.3 us |\n| Two cubics, one crossing | 13.1 us | 13.5 us |\n| A cubic and a line, one crossing | 11.4 us | 11.6 us |\n| One cubic, opposite directions | 23.8 us, 31 crossings | 49.4 us, no\ncrossing |\n| One cubic, an edge on a part of it | 23.1 us, 29 crossings | 78.4 us,\nno crossing |\n\nThe new function does not run for a pair with no crossing, so the first\nrow shows the noise of the measurement. A pair on one curve costs 26 to\n55 us more, and no longer splits each edge at 29 or more points.\n\n## Next steps\n\n#2458 is a fault that I found and did not fix. The phase misses a\ncrossing between sample points when the two edges are not in one plane.",
+          "timestamp": "2026-11-15T05:02:58Z",
+          "tree_id": "1140b21971c6b0b28835e2cfed67a9469af56597",
+          "url": "https://github.com/andymai/brepkit/commit/43dc136d6503bb05a298fed55d2fbef18dfb6d10"
+        },
+        "date": 1794719188844,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1111325,
+            "range": "± 5097",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1164312,
+            "range": "± 27937",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13238,
+            "range": "± 95",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 702475,
+            "range": "± 5865",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24912865,
+            "range": "± 185964",
             "unit": "ns/iter"
           }
         ]
