@@ -1,0 +1,21 @@
+crates/io/src/stl/import.rs
+  s_709d857a0f83c4::t_104568a67e9a40 39-40,47-49,63-65,67-74,76-94,96-101,103-111,114-160,163-175,192-193,199-202,205-206,210-217,513-518,527-529,531,533-536,541-542,545,548-554,563,598,601,603-604,608-614
+crates/io/tests/mesh_import_bodies.rs
+  s_709d857a0f83c4::t_c7a5e5b9e050ff 171-245
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9fd27b78805d04c8c575bb8f066b9052a349541b",
+  "prompts": {},
+  "sessions": {
+    "s_709d857a0f83c4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6cca9812-d77a-4dae-96f4-26562694b205",
+        "model": "claude-fable-5-2"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
