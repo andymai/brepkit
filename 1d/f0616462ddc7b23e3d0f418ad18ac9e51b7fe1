@@ -1,0 +1,19 @@
+crates/topology/src/pcurve.rs
+  s_709d857a0f83c4::t_c4458504b9cd1a 166-172,275-276,278-290
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1df0616462ddc7b23e3d0f418ad18ac9e51b7fe1",
+  "prompts": {},
+  "sessions": {
+    "s_709d857a0f83c4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6cca9812-d77a-4dae-96f4-26562694b205",
+        "model": "claude-fable-5-2"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
