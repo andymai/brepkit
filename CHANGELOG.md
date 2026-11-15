@@ -1,5 +1,13 @@
 # Changelog
 
+## [4.11.25](https://github.com/andymai/brepkit/compare/v4.11.24...v4.11.25) (2026-11-15)
+
+
+### Bug Fixes
+
+* **algo:** read a ball's loop past a pole round its own side ([#2499](https://github.com/andymai/brepkit/issues/2499)) ([a2b789c](https://github.com/andymai/brepkit/commit/a2b789c4e2f5eef42ce2913ac4e9b904990b6b46))
+* **wasm:** round and bevel past an edge that lies inside one surface ([#2491](https://github.com/andymai/brepkit/issues/2491)) ([9bd5edb](https://github.com/andymai/brepkit/commit/9bd5edb00d96eda31f8e117e9e631cba89f7e991))
+
 ## [4.11.24](https://github.com/andymai/brepkit/compare/v4.11.23...v4.11.24) (2026-11-15)
 
 
