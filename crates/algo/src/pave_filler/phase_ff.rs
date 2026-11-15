@@ -8555,6 +8555,30 @@ fn trim_line_short_of_hole(
     }
 }
 
+/// The sampled crossings of a spline edge with a plane, less each one that
+/// stands for an end of the edge on that plane: the end is a cut of its own,
+/// at the vertex. The search puts such a root in the last part of the edge's
+/// range and within its own error of the vertex, where a crossing of its own
+/// cannot be told from the end. A crossing further along the range stays,
+/// however near the vertex the edge comes back, and so does one further from
+/// the vertex, however early in the range.
+fn roots_off_the_ends(
+    roots: Vec<(f64, Point3)>,
+    (t0, t1): (f64, f64),
+    (start, end): (Option<Point3>, Option<Point3>),
+) -> Vec<(f64, Point3)> {
+    const END_SPAN: f64 = 1e-4;
+    const END_SNAP: f64 = 1e-6;
+    let band = END_SPAN * (t1 - t0).abs();
+    let stands_for = |t: f64, p: Point3, t_end: f64, v: Option<Point3>| {
+        v.is_some_and(|v| (t - t_end).abs() <= band && (p - v).length() <= END_SNAP)
+    };
+    roots
+        .into_iter()
+        .filter(|&(t, p)| !stands_for(t, p, t0, start) && !stands_for(t, p, t1, end))
+        .collect()
+}
+
 /// A section line on a plane face, split where it crosses that face's
 /// boundary when the boundary carries an elliptical or NURBS edge, with the
 /// pieces outside the face dropped. The polygon clips cannot represent such a
@@ -8569,6 +8593,7 @@ fn trim_line_short_of_hole(
 /// holes keep the whole-line paths those splits are calibrated on. A ruling
 /// also stops at holes (a bevel face around the knuckles a coaxial pin
 /// passes through).
+#[allow(clippy::too_many_lines)]
 fn split_plane_line_at_curved_boundaries(
     topo: &Topology,
     fa: FaceId,
@@ -8639,6 +8664,12 @@ fn split_plane_line_at_curved_boundaries(
             continue;
         }
         let mut hits: Vec<Point3> = Vec::new();
+        // An edge's end on the partner's plane is where the boundary meets the
+        // line, whatever the edge does there. The sampled search on a spline
+        // loses the root at an end the edge leaves square to the line (an
+        // aerofoil's nose), and lands near an end it leaves at an angle, a
+        // sliver off the vertex.
+        let mut ends: Vec<Point3> = Vec::new();
         for oe in wires.iter().flat_map(|w| w.edges()) {
             let Ok(edge) = topo.edge(oe.edge()) else {
                 return vec![raw];
@@ -8647,6 +8678,13 @@ fn split_plane_line_at_curved_boundaries(
                 return vec![raw];
             };
             let (sp, ep) = (sv.point(), ev.point());
+            let on_partner = |p: Point3, v: &brepkit_topology::vertex::Vertex| {
+                let off = partner_n.dot(Vec3::new(p.x(), p.y(), p.z())) - partner_d;
+                off.abs() <= v.tolerance().max(tol.linear)
+            };
+            let (start_on, end_on) = (on_partner(sp, sv), on_partner(ep, ev));
+            ends.extend(start_on.then_some(sp));
+            ends.extend(end_on.then_some(ep));
             match edge.curve() {
                 EdgeCurve::Line => {
                     hits.extend(line_segment_plane_crossing(sp, ep, partner_n, partner_d));
@@ -8666,9 +8704,14 @@ fn split_plane_line_at_curved_boundaries(
                 }
                 curve @ EdgeCurve::NurbsCurve(_) => {
                     let (t0, t1) = curve.domain_with_endpoints(sp, ep);
+                    let roots = super::phase_ef::find_edge_plane_crossings(
+                        curve, sp, ep, t0, t1, partner_n, partner_d, tol,
+                    );
                     hits.extend(
-                        super::phase_ef::find_edge_plane_crossings(
-                            curve, sp, ep, t0, t1, partner_n, partner_d, tol,
+                        roots_off_the_ends(
+                            roots,
+                            (t0, t1),
+                            (start_on.then_some(sp), end_on.then_some(ep)),
                         )
                         .into_iter()
                         .map(|(_, p)| p),
@@ -8682,6 +8725,7 @@ fn split_plane_line_at_curved_boundaries(
             return vec![raw];
         };
         extents.push((extent, with_holes));
+        hits.extend(ends);
         for p in hits {
             let f = (p - raw.p_start).dot(seg) / len2;
             let foot = raw.p_start + seg * f;
@@ -9268,6 +9312,154 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A flat face in z = 0 between two cubic splines from (0, 0) to (10, 0).
+    /// Each leaves the first vertex square to the chord and comes to the
+    /// second at a slant. The chord's line, in the plane y = 0 of a wide
+    /// partner, ends at the two vertices.
+    #[test]
+    fn a_section_through_two_spline_edges_common_ends_stops_at_each() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        use brepkit_topology::builder::make_polygon_wire;
+        use brepkit_topology::face::Face;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let tol = Tolerance::new();
+        let mut topo = Topology::default();
+        let (nose, tail) = (Point3::new(0.0, 0.0, 0.0), Point3::new(10.0, 0.0, 0.0));
+        let side = |s: f64, from: Point3, to: Point3, lead: f64, trail: f64| {
+            NurbsCurve::new(
+                3,
+                vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+                vec![
+                    from,
+                    Point3::new(lead, 4.0 * s, 0.0),
+                    Point3::new(trail, 4.0 * s, 0.0),
+                    to,
+                ],
+                vec![1.0; 4],
+            )
+            .unwrap()
+        };
+        let v0 = topo.add_vertex(Vertex::new(nose, 1e-7));
+        let v1 = topo.add_vertex(Vertex::new(tail, 1e-7));
+        let upper = topo.add_edge(Edge::new(
+            v0,
+            v1,
+            EdgeCurve::NurbsCurve(side(1.0, nose, tail, 0.0, 6.0)),
+        ));
+        let lower = topo.add_edge(Edge::new(
+            v1,
+            v0,
+            EdgeCurve::NurbsCurve(side(-1.0, tail, nose, 6.0, 0.0)),
+        ));
+        let wire = topo.add_wire(
+            Wire::new(
+                vec![
+                    OrientedEdge::new(lower, true),
+                    OrientedEdge::new(upper, true),
+                ],
+                true,
+            )
+            .unwrap(),
+        );
+        let lens_surface = FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: 0.0,
+        };
+        let lens = topo.add_face(Face::new(wire, vec![], lens_surface.clone()));
+        let wide = make_polygon_wire(
+            &mut topo,
+            &[
+                Point3::new(-5.0, 0.0, -5.0),
+                Point3::new(-5.0, 0.0, 5.0),
+                Point3::new(15.0, 0.0, 5.0),
+                Point3::new(15.0, 0.0, -5.0),
+            ],
+            1e-7,
+        )
+        .unwrap();
+        let wide_surface = FaceSurface::Plane {
+            normal: Vec3::new(0.0, 1.0, 0.0),
+            d: 0.0,
+        };
+        let partner = topo.add_face(Face::new(wide, vec![], wide_surface.clone()));
+        let (a, b) = (Point3::new(-5.0, 0.0, 0.0), Point3::new(15.0, 0.0, 0.0));
+        let raw = RawCurve {
+            curve: EdgeCurve::Line,
+            bbox: Aabb3::from_points([a, b]),
+            t_range: (0.0, 20.0),
+            p_start: a,
+            p_end: b,
+        };
+        for (fa, fb, sa, sb) in [
+            (lens, partner, &lens_surface, &wide_surface),
+            (partner, lens, &wide_surface, &lens_surface),
+        ] {
+            let pieces =
+                split_plane_line_at_curved_boundaries(&topo, fa, fb, sa, sb, raw.clone(), tol);
+            assert_eq!(pieces.len(), 1, "{} pieces", pieces.len());
+            let (p, q) = (pieces[0].p_start, pieces[0].p_end);
+            assert!((p - nose).length() < 1e-9, "starts at {p:?}");
+            assert!((q - tail).length() < 1e-9, "ends at {q:?}");
+        }
+    }
+
+    /// A spline that leaves the plane y = 0 at its start and comes back
+    /// through it 5e-7 from that start, halfway along its range. That
+    /// crossing is not the start.
+    #[test]
+    fn a_spline_crossing_near_its_own_start_is_kept() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        let at = |x: f64, y: f64| Point3::new(x, y, 0.0);
+        let pts = vec![
+            at(0.0, 0.0),
+            at(0.0, 1.0),
+            at(5e-7, 1.0),
+            at(5e-7, -1.0),
+            at(-10.0, -1.0),
+        ];
+        let (start, end) = (pts[0], pts[4]);
+        let curve = EdgeCurve::NurbsCurve(
+            NurbsCurve::new(
+                1,
+                vec![0.0, 0.0, 1.0, 2.0, 3.0, 4.0, 4.0],
+                pts,
+                vec![1.0; 5],
+            )
+            .unwrap(),
+        );
+        let roots = crate::pave_filler::phase_ef::find_edge_plane_crossings(
+            &curve,
+            start,
+            end,
+            0.0,
+            4.0,
+            Vec3::new(0.0, 1.0, 0.0),
+            0.0,
+            Tolerance::new(),
+        );
+        let kept = roots_off_the_ends(roots, (0.0, 4.0), (Some(start), None));
+        assert_eq!(kept.len(), 1, "{kept:?}");
+        assert!((kept[0].0 - 2.5).abs() < 1e-6, "{kept:?}");
+        assert!((kept[0].1 - at(5e-7, 0.0)).length() < 1e-6, "{kept:?}");
+    }
+
+    /// A root early in an edge's range stands for the start only within the
+    /// search's error of the vertex. The curve (100 t, 1000 t^2 - 0.05 t)
+    /// crosses y = 0 again at t = 5e-5, 0.005 from its start.
+    #[test]
+    fn a_spline_crossing_early_in_its_range_is_kept() {
+        let at = |x: f64, y: f64| Point3::new(x, y, 0.0);
+        let start = at(0.0, 0.0);
+        let roots = vec![(2e-9, at(2e-7, 0.0)), (5e-5, at(0.005, 0.0))];
+        for range in [(0.0, 1.0), (0.0, 37.5)] {
+            let kept = roots_off_the_ends(roots.clone(), range, (Some(start), None));
+            assert_eq!(kept.len(), 1, "{kept:?}");
+            assert!((kept[0].1 - at(0.005, 0.0)).length() < 1e-12, "{kept:?}");
+        }
+        let kept = roots_off_the_ends(roots, (0.0, 1.0), (None, None));
+        assert_eq!(kept.len(), 2, "{kept:?}");
     }
 
     /// The line x = -100 + 200 t on a NURBS face standing in the plane y = 0,
