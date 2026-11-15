@@ -197,9 +197,9 @@ impl BrepKernel {
     ///
     /// # Errors
     ///
-    /// Returns an error if the STL data is malformed or empty, or a part of
-    /// the mesh does not close. `importStlParts` returns such a part as a
-    /// shell.
+    /// Returns an error if the STL data is malformed or empty, a part of
+    /// the mesh does not close, or a body lies in the material of another.
+    /// `importStlParts` returns each part of such a mesh.
     #[wasm_bindgen(js_name = "importStl")]
     pub fn import_stl(&mut self, data: &[u8]) -> Result<u32, JsError> {
         let mesh = brepkit_io::stl::reader::read_stl(data)?;
@@ -233,9 +233,9 @@ impl BrepKernel {
     ///
     /// # Errors
     ///
-    /// Returns an error if the arrays are malformed, or a part of the mesh
-    /// does not close. `importIndexedMeshParts` returns such a part as a
-    /// shell.
+    /// Returns an error if the arrays are malformed, a part of the mesh
+    /// does not close, or a body lies in the material of another.
+    /// `importIndexedMeshParts` returns each part of such a mesh.
     #[wasm_bindgen(js_name = "importIndexedMesh")]
     pub fn import_indexed_mesh(
         &mut self,

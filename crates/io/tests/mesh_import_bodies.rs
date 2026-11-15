@@ -184,6 +184,26 @@ fn an_outward_cube_in_a_cube_is_not_one_solid() {
     assert_eq!(topo.solids().len(), 0);
 }
 
+/// An inward body with no body round it is turned into a solid. An outward
+/// body in it then lies in its material.
+#[test]
+fn an_outward_cube_in_an_inward_cube_is_not_one_solid() {
+    let mut mesh = TriangleMesh::default();
+    add_cube(&mut mesh, [0.0; 3], 20.0, true);
+    add_cube(&mut mesh, [5.0; 3], 10.0, false);
+
+    let mut topo = Topology::new();
+    assert!(import_mesh(&mut topo, &mesh, 1e-7).is_err());
+    assert_eq!(topo.faces().len(), 0);
+
+    let parts = import_mesh_parts(&mut topo, &mesh, 1e-7).unwrap();
+    assert_eq!((parts.solids.len(), parts.shells.len()), (2, 0));
+    let mut volumes: Vec<f64> = parts.solids.iter().map(|&s| volume(&topo, s)).collect();
+    volumes.sort_by(f64::total_cmp);
+    assert!((volumes[0] - 1000.0).abs() < 1e-9);
+    assert!((volumes[1] - 8000.0).abs() < 1e-9);
+}
+
 /// An inward body directly in an inward body is in a void. It is an island
 /// wound the wrong way: a solid, in the cavity of the outer body.
 #[test]

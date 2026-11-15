@@ -545,13 +545,13 @@ fn assign_cavities(bodies: &mut [Body], tris: &mut [[usize; 3]], points: &[Point
         around.push((i, found));
     }
 
+    // The cavities come from the winding of the mesh as it is.
     let outward: Vec<bool> = bodies.iter().map(|b| b.volume6 > 0.0).collect();
-    let mut overlap = false;
-    for (i, container) in around {
-        let in_material = container.is_some_and(|j| outward[j]);
+    for &(i, container) in &around {
         if outward[i] {
-            overlap |= in_material;
-        } else if let (true, Some(j)) = (in_material, container) {
+            continue;
+        }
+        if let Some(j) = container.filter(|&j| outward[j]) {
             bodies[i].kind = BodyKind::Cavity(j);
         } else {
             for &t in &bodies[i].tris {
@@ -560,14 +560,18 @@ fn assign_cavities(bodies: &mut [Body], tris: &mut [[usize; 3]], points: &[Point
             bodies[i].volume6 = -bodies[i].volume6;
         }
     }
-    overlap
+    // The overlap comes from the result: a turned body is a solid too.
+    around.iter().any(|&(i, container)| {
+        bodies[i].kind == BodyKind::Solid
+            && container.is_some_and(|j| bodies[j].kind == BodyKind::Solid)
+    })
 }
 
 /// Whether the closed body `inner` lies in the closed body `outer`.
 ///
-/// Two bodies of a mesh do not cross, so one point of `inner` decides. A
-/// point on `outer` itself (the two bodies touch there) decides nothing,
-/// and the next point is read.
+/// One point of `inner` decides: this reads two bodies whose surfaces cross
+/// as one in the other, or as apart. A point on `outer` itself (the two
+/// bodies touch there) decides nothing, and the next point is read.
 fn lies_in(inner: &[usize], outer: &[usize], tris: &[[usize; 3]], points: &[Point3]) -> bool {
     for &t in inner {
         for i in tris[t] {
