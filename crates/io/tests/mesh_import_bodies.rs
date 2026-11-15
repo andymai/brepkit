@@ -6,7 +6,7 @@
 use brepkit_io::stl::writer::StlFormat;
 use brepkit_io::stl::{import_mesh, import_mesh_parts, read_stl, write_stl};
 use brepkit_math::mat::Mat4;
-use brepkit_math::vec::Point3;
+use brepkit_math::vec::{Point3, Vec3};
 use brepkit_operations::compound_ops::solid_pieces;
 use brepkit_operations::measure::solid_volume;
 use brepkit_operations::primitives::make_box;
@@ -408,4 +408,108 @@ fn positions_merge_within_the_tolerance_and_not_past_it() {
     let mut topo = Topology::new();
     let parts = import_mesh_parts(&mut topo, &split, 0.0).unwrap();
     assert!(parts.solids.is_empty());
+}
+
+/// A reader with no normals in its file gives each vertex one direction.
+/// Such normals say nothing, and the winding stands.
+#[test]
+fn normals_in_one_direction_leave_a_cavity_inward() {
+    let mut mesh = TriangleMesh::default();
+    add_cube(&mut mesh, [0.0; 3], 20.0, false);
+    add_cube(&mut mesh, [5.0; 3], 10.0, true);
+    mesh.normals = vec![Vec3::new(0.0, 0.0, 1.0); mesh.positions.len()];
+
+    let mut topo = Topology::new();
+    let solid = import_mesh(&mut topo, &mesh, 1e-7).unwrap();
+    assert_eq!(topo.solid(solid).unwrap().inner_shells().len(), 1);
+    assert!((volume(&topo, solid) - 7000.0).abs() < 1e-9);
+}
+
+/// Normals that point against the winding of a whole body turn the body.
+#[test]
+fn normals_against_the_winding_turn_a_body() {
+    let mut mesh = TriangleMesh::default();
+    add_cube(&mut mesh, [0.0; 3], 20.0, false);
+    // Wound outward, with normals that point to its centre: a cavity.
+    add_cube(&mut mesh, [5.0; 3], 10.0, false);
+    let centre = Point3::new(10.0, 10.0, 10.0);
+    mesh.normals = mesh.positions[..8]
+        .iter()
+        .map(|&p| p - centre)
+        .chain(mesh.positions[8..].iter().map(|&p| centre - p))
+        .collect();
+
+    let mut topo = Topology::new();
+    let solid = import_mesh(&mut topo, &mesh, 1e-7).unwrap();
+    assert_eq!(topo.solid(solid).unwrap().inner_shells().len(), 1);
+    assert!((volume(&topo, solid) - 7000.0).abs() < 1e-9);
+    assert_valid(&topo, solid);
+}
+
+#[test]
+fn a_long_thin_box_is_a_solid() {
+    let mut mesh = TriangleMesh::default();
+    add_cube(&mut mesh, [0.0; 3], 1.0, false);
+    for p in &mut mesh.positions {
+        *p = Point3::new(p.x() * 1000.0, p.y() * 1e-4, p.z() * 1e-4);
+    }
+
+    let mut topo = Topology::new();
+    let solid = import_mesh(&mut topo, &mesh, 1e-7).unwrap();
+    let v = volume(&topo, solid);
+    assert!((v - 1e-5).abs() < 1e-12, "volume {v}");
+}
+
+/// The first corner of the inner body is a corner of the outer one, where
+/// the count of turns round the point has no meaning.
+#[test]
+fn a_body_that_touches_the_corner_of_its_container_is_in_it() {
+    let tetra = |mesh: &mut TriangleMesh, inward: bool| {
+        let base = u32::try_from(mesh.positions.len()).unwrap();
+        mesh.positions.extend([
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(0.5, 0.2, 0.2),
+            Point3::new(0.2, 0.5, 0.2),
+            Point3::new(0.2, 0.2, 0.5),
+        ]);
+        for [a, b, c] in [[0u32, 2, 1], [0, 1, 3], [0, 3, 2], [1, 2, 3]] {
+            let tri = if inward { [a, c, b] } else { [a, b, c] };
+            mesh.indices.extend(tri.map(|i| base + i));
+        }
+    };
+
+    let mut mesh = TriangleMesh::default();
+    tetra(&mut mesh, true);
+    add_cube(&mut mesh, [0.0; 3], 2.0, false);
+    let mut topo = Topology::new();
+    let parts = import_mesh_parts(&mut topo, &mesh, 1e-7).unwrap();
+    assert_eq!((parts.solids.len(), parts.shells.len()), (1, 0));
+    let tetra_volume = 0.081 / 6.0;
+    let v = volume(&topo, parts.solids[0]);
+    assert!((v - (8.0 - tetra_volume)).abs() < 1e-9, "volume {v}");
+
+    let mut mesh = TriangleMesh::default();
+    tetra(&mut mesh, false);
+    add_cube(&mut mesh, [0.0; 3], 2.0, false);
+    let mut topo = Topology::new();
+    assert!(import_mesh(&mut topo, &mesh, 1e-7).is_err());
+}
+
+#[test]
+fn a_fan_of_triangles_on_one_edge_is_one_shell() {
+    let mut mesh = TriangleMesh {
+        positions: vec![Point3::new(0.0, 0.0, 0.0), Point3::new(0.0, 0.0, 1.0)],
+        ..TriangleMesh::default()
+    };
+    for k in 0..2000_u32 {
+        let angle = f64::from(k) * 0.003;
+        mesh.positions
+            .push(Point3::new(angle.cos(), angle.sin(), 0.5));
+        mesh.indices.extend([0, 1, 2 + k]);
+    }
+
+    let mut topo = Topology::new();
+    let parts = import_mesh_parts(&mut topo, &mesh, 1e-7).unwrap();
+    assert_eq!((parts.solids.len(), parts.shells.len()), (0, 1));
+    assert_eq!(topo.shell(parts.shells[0]).unwrap().faces().len(), 2000);
 }

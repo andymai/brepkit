@@ -6,7 +6,7 @@
 //! closed shell. [`import_mesh_parts`] returns each closed body as a solid
 //! and each open set of triangles as a shell.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use brepkit_math::madd::Madd;
 use brepkit_math::vec::{Point3, Vec3};
@@ -94,15 +94,15 @@ impl MeshBodies {
         }
 
         let (points, remap) = merge_positions(&mesh.positions, tolerance);
-        let mut tris = oriented_triangles(mesh, &remap);
+        let (mut tris, votes) = mesh_triangles(mesh, &remap);
         if tris.is_empty() {
             return Err(IoError::InvalidTopology {
                 reason: "no valid triangles in mesh".to_string(),
             });
         }
 
-        let mut bodies = split_bodies(&mut tris, &points);
-        let overlap = assign_cavities(&mut bodies, &mut tris, &points);
+        let mut bodies = split_bodies(&mut tris, &votes, &points);
+        let overlap = assign_cavities(&mut bodies, &mut tris, &points, tolerance);
         Ok(Self {
             points,
             tris,
@@ -307,29 +307,32 @@ fn merge_positions(positions: &[Point3], tolerance: f64) -> (Vec<Point3>, Vec<us
 }
 
 /// The triangles of the mesh on its merged points, less each triangle with
-/// two corners on one point.
+/// two corners on one point, as they are wound.
 ///
-/// A stored normal that points against a triangle's winding turns the
-/// triangle.
-fn oriented_triangles(mesh: &TriangleMesh, remap: &[usize]) -> Vec<[usize; 3]> {
+/// Each triangle comes with the vote of its stored normals: the dot product
+/// of their sum with the normal of the winding, or zero for a mesh with no
+/// normals. A vote below zero is a normal that points against the winding.
+fn mesh_triangles(mesh: &TriangleMesh, remap: &[usize]) -> (Vec<[usize; 3]>, Vec<f64>) {
     let has_normals = mesh.normals.len() >= mesh.positions.len();
     let mut tris = Vec::with_capacity(mesh.indices.len() / 3);
+    let mut votes = Vec::with_capacity(mesh.indices.len() / 3);
     for tri in mesh.indices.chunks_exact(3) {
         let (i0, i1, i2) = (tri[0] as usize, tri[1] as usize, tri[2] as usize);
-        let mut t = [remap[i0], remap[i1], remap[i2]];
+        let t = [remap[i0], remap[i1], remap[i2]];
         if t[0] == t[1] || t[1] == t[2] || t[0] == t[2] {
             continue;
         }
-        if has_normals {
+        let vote = if has_normals {
             let p0 = mesh.positions[i0];
             let geo_normal = (mesh.positions[i1] - p0).cross(mesh.positions[i2] - p0);
-            if geo_normal.dot(mesh.normals[i0]) < 0.0 {
-                t.swap(1, 2);
-            }
-        }
+            geo_normal.dot(mesh.normals[i0] + mesh.normals[i1] + mesh.normals[i2])
+        } else {
+            0.0
+        };
         tris.push(t);
+        votes.push(if vote.is_finite() { vote } else { 0.0 });
     }
-    tris
+    (tris, votes)
 }
 
 /// What a set of joined triangles is in the result.
@@ -356,11 +359,18 @@ const fn edge_key(a: usize, b: usize) -> (usize, usize) {
 }
 
 /// Group the triangles into bodies, in the order of each body's first
-/// triangle, and turn the triangles of a closed body to one side.
+/// triangle, and turn the triangles of each body to one side.
+///
+/// - A closed body takes the side of most of its triangles as they are
+///   wound. It is turned over when its stored normals, summed over the
+///   body, point against that side. Normals that say nothing (one direction
+///   for each triangle of a closed body sums to zero) leave the winding.
+/// - In a body that does not close, a stored normal that points against a
+///   triangle's winding turns the triangle.
 ///
 /// A closed body has [`BodyKind::Solid`] here, whichever way it faces;
 /// [`assign_cavities`] reads the sign of its volume.
-fn split_bodies(tris: &mut [[usize; 3]], points: &[Point3]) -> Vec<Body> {
+fn split_bodies(tris: &mut [[usize; 3]], votes: &[f64], points: &[Point3]) -> Vec<Body> {
     // Each edge's triangles, with `true` for a triangle that runs the edge
     // from its lower point to its higher one.
     let mut uses: HashMap<(usize, usize), Vec<(usize, bool)>> = HashMap::new();
@@ -372,6 +382,7 @@ fn split_bodies(tris: &mut [[usize; 3]], points: &[Point3]) -> Vec<Body> {
     }
 
     let mut body_of = vec![usize::MAX; tris.len()];
+    let mut walked: HashSet<(usize, usize)> = HashSet::with_capacity(uses.len());
     let mut bodies: Vec<Body> = Vec::new();
     for seed in 0..tris.len() {
         if body_of[seed] != usize::MAX {
@@ -385,7 +396,12 @@ fn split_bodies(tris: &mut [[usize; 3]], points: &[Point3]) -> Vec<Body> {
             let tri = tris[members[next]];
             next += 1;
             for k in 0..3 {
-                for &(other, _) in &uses[&edge_key(tri[k], tri[(k + 1) % 3])] {
+                let key = edge_key(tri[k], tri[(k + 1) % 3]);
+                // Each edge gives its triangles once, however many it has.
+                if !walked.insert(key) {
+                    continue;
+                }
+                for &(other, _) in &uses[&key] {
                     if body_of[other] == usize::MAX {
                         body_of[other] = index;
                         members.push(other);
@@ -406,25 +422,55 @@ fn split_bodies(tris: &mut [[usize; 3]], points: &[Point3]) -> Vec<Body> {
             .tris
             .iter()
             .all(|&t| (0..3).all(|k| uses[&edge_key(tris[t][k], tris[t][(k + 1) % 3])].len() == 2));
-        if !two_sided {
-            continue;
-        }
-        let Some(turned) = consistent_turns(&body.tris, tris, &uses) else {
-            continue;
+        let turned = if two_sided {
+            consistent_turns(&body.tris, tris, &uses)
+        } else {
+            None
         };
-        for &t in &turned {
-            tris[t].swap(1, 2);
-        }
-        let volume6 = signed_volume6(&body.tris, tris, points);
-        let size = body_extent(&body.tris, tris, points);
-        if volume6.abs() > 1e-12 * size * size * size {
+        let closed = turned.and_then(|mut turned| {
+            // The body's stored normals against its one side.
+            let is_turned: HashSet<usize> = turned.iter().copied().collect();
+            let (mut vote, mut weight) = (0.0, 0.0);
+            for &t in &body.tris {
+                vote += if is_turned.contains(&t) {
+                    -votes[t]
+                } else {
+                    votes[t]
+                };
+                weight += votes[t].abs();
+            }
+            if vote < -0.5 * weight {
+                turned = body
+                    .tris
+                    .iter()
+                    .copied()
+                    .filter(|t| !is_turned.contains(t))
+                    .collect();
+            }
+            for &t in &turned {
+                tris[t].swap(1, 2);
+            }
+            // A closed set with no volume (two triangles back to back) is
+            // a sheet. The sum of the sizes of the terms bounds the
+            // rounding of their sum.
+            let (volume6, terms) = signed_volume6(&body.tris, tris, points);
+            if volume6.abs() > 1e-12 * terms {
+                Some(volume6)
+            } else {
+                for &t in &turned {
+                    tris[t].swap(1, 2);
+                }
+                None
+            }
+        });
+        if let Some(volume6) = closed {
             body.kind = BodyKind::Solid;
             body.volume6 = volume6;
         } else {
-            // A closed set with no volume (two triangles back to back) is
-            // a sheet; it keeps its winding.
-            for &t in &turned {
-                tris[t].swap(1, 2);
+            for &t in &body.tris {
+                if votes[t] < 0.0 {
+                    tris[t].swap(1, 2);
+                }
             }
         }
     }
@@ -477,17 +523,20 @@ fn consistent_turns(
     }
 }
 
-fn signed_volume6(members: &[usize], tris: &[[usize; 3]], points: &[Point3]) -> f64 {
+/// Six times the signed volume of a closed body, and the sum of the sizes
+/// of its terms.
+fn signed_volume6(members: &[usize], tris: &[[usize; 3]], points: &[Point3]) -> (f64, f64) {
     // Measured from a point of the body, so a body far from the origin
     // keeps its digits.
     let origin = points[tris[members[0]][0]];
-    members
-        .iter()
-        .map(|&t| {
-            let [a, b, c] = tris[t].map(|i| points[i] - origin);
-            a.dot(b.cross(c))
-        })
-        .sum()
+    let (mut sum, mut sizes) = (0.0, 0.0);
+    for &t in members {
+        let [a, b, c] = tris[t].map(|i| points[i] - origin);
+        let term = a.dot(b.cross(c));
+        sum += term;
+        sizes += term.abs();
+    }
+    (sum, sizes)
 }
 
 fn body_box(members: &[usize], tris: &[[usize; 3]], points: &[Point3]) -> ([f64; 3], [f64; 3]) {
@@ -505,17 +554,17 @@ fn body_box(members: &[usize], tris: &[[usize; 3]], points: &[Point3]) -> ([f64;
     (lo, hi)
 }
 
-fn body_extent(members: &[usize], tris: &[[usize; 3]], points: &[Point3]) -> f64 {
-    let (lo, hi) = body_box(members, tris, points);
-    (0..3).map(|k| hi[k] - lo[k]).fold(0.0, f64::max)
-}
-
 /// Make each inward closed body a cavity of the outward body that it lies
 /// directly in, or turn it into a solid when it lies in no such body.
 ///
 /// Returns whether a solid of the result lies directly in an outward body:
 /// in its material, and not in a cavity of it.
-fn assign_cavities(bodies: &mut [Body], tris: &mut [[usize; 3]], points: &[Point3]) -> bool {
+fn assign_cavities(
+    bodies: &mut [Body],
+    tris: &mut [[usize; 3]],
+    points: &[Point3],
+    tolerance: f64,
+) -> bool {
     let closed: Vec<usize> = (0..bodies.len())
         .filter(|&i| bodies[i].kind == BodyKind::Solid)
         .collect();
@@ -538,7 +587,12 @@ fn assign_cavities(bodies: &mut [Body], tris: &mut [[usize; 3]], points: &[Point
             }
             let inside_box =
                 (0..3).all(|k| boxes[i].0[k] >= boxes[j].0[k] && boxes[i].1[k] <= boxes[j].1[k]);
-            if inside_box && lies_in(&bodies[i].tris, &bodies[j].tris, tris, points) {
+            let on = tolerance.max(
+                1e-9 * (0..3)
+                    .map(|k| boxes[j].1[k] - boxes[j].0[k])
+                    .fold(0.0, f64::max),
+            );
+            if inside_box && lies_in(&bodies[i].tris, &bodies[j].tris, tris, points, on) {
                 found = Some(j);
             }
         }
@@ -570,14 +624,23 @@ fn assign_cavities(bodies: &mut [Body], tris: &mut [[usize; 3]], points: &[Point
 /// Whether the closed body `inner` lies in the closed body `outer`.
 ///
 /// One point of `inner` decides: this reads two bodies whose surfaces cross
-/// as one in the other, or as apart. A point on `outer` itself (the two
-/// bodies touch there) decides nothing, and the next point is read.
-fn lies_in(inner: &[usize], outer: &[usize], tris: &[[usize; 3]], points: &[Point3]) -> bool {
+/// as one in the other, or as apart. A point within `on` of `outer` (the
+/// two bodies touch there) decides nothing, and the next point is read.
+fn lies_in(
+    inner: &[usize],
+    outer: &[usize],
+    tris: &[[usize; 3]],
+    points: &[Point3],
+    on: f64,
+) -> bool {
+    let mut read: HashSet<usize> = HashSet::new();
     for &t in inner {
         for i in tris[t] {
-            let turns = winding_number(points[i], outer, tris, points).abs();
-            if (turns - turns.round()).abs() < 0.25 {
-                return turns.round() >= 1.0;
+            if !read.insert(i) {
+                continue;
+            }
+            if let Some(turns) = winding_number(points[i], outer, tris, points, on) {
+                return turns.abs().round() >= 1.0;
             }
         }
     }
@@ -585,17 +648,61 @@ fn lies_in(inner: &[usize], outer: &[usize], tris: &[[usize; 3]], points: &[Poin
 }
 
 /// The count of times the triangles of `members` wrap round `p`: the sum of
-/// their solid angles at `p`, over a full sphere.
-fn winding_number(p: Point3, members: &[usize], tris: &[[usize; 3]], points: &[Point3]) -> f64 {
+/// their solid angles at `p`, over a full sphere. `None` for a point within
+/// `on` of a triangle, where the count has no meaning.
+fn winding_number(
+    p: Point3,
+    members: &[usize],
+    tris: &[[usize; 3]],
+    points: &[Point3],
+    on: f64,
+) -> Option<f64> {
     let mut total = 0.0;
     for &t in members {
         let [a, b, c] = tris[t].map(|i| points[i] - p);
+        if origin_to_triangle(a, b, c) <= on {
+            return None;
+        }
         let (la, lb, lc) = (a.length(), b.length(), c.length());
         let det = a.dot(b.cross(c));
         let denom = (la * lb).madd(lc, a.dot(b).madd(lc, b.dot(c).madd(la, c.dot(a) * lb)));
         total += 2.0 * det.atan2(denom);
     }
-    total / (4.0 * std::f64::consts::PI)
+    Some(total / (4.0 * std::f64::consts::PI))
+}
+
+/// The distance from the origin to the triangle `a b c`.
+fn origin_to_triangle(a: Vec3, b: Vec3, c: Vec3) -> f64 {
+    let (ab, ac) = (b - a, c - a);
+    // The region of the triangle's plane that holds the foot of the
+    // origin: a corner, an edge, or the inside.
+    let (d1, d2) = (-ab.dot(a), -ac.dot(a));
+    if d1 <= 0.0 && d2 <= 0.0 {
+        return a.length();
+    }
+    let (d3, d4) = (-ab.dot(b), -ac.dot(b));
+    if d3 >= 0.0 && d4 <= d3 {
+        return b.length();
+    }
+    let vc = d1 * d4 - d3 * d2;
+    if vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0 {
+        return (a + ab * (d1 / (d1 - d3))).length();
+    }
+    let (d5, d6) = (-ab.dot(c), -ac.dot(c));
+    if d6 >= 0.0 && d5 <= d6 {
+        return c.length();
+    }
+    let vb = d5 * d2 - d1 * d6;
+    if vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0 {
+        return (a + ac * (d2 / (d2 - d6))).length();
+    }
+    let va = d3 * d6 - d5 * d4;
+    if va <= 0.0 && d4 - d3 >= 0.0 && d5 - d6 >= 0.0 {
+        let w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
+        return (b + (c - b) * w).length();
+    }
+    let denom = 1.0 / (va + vb + vc);
+    (a + ab * (vb * denom) + ac * (vc * denom)).length()
 }
 
 /// Build a triangular planar face on three points, with the edges that
