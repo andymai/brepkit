@@ -1,6 +1,9 @@
 //! Solid-level tessellation orchestration.
 
+use brepkit_geometry::extrema::segment_segment_distance;
 use brepkit_math::det_hash::{DetHashMap, DetHashSet};
+use brepkit_math::madd::Madd;
+use brepkit_math::traits::ParametricSurface;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
 use brepkit_topology::edge::EdgeCurve;
@@ -8,7 +11,9 @@ use brepkit_topology::face::{FaceId, FaceSurface};
 use brepkit_topology::solid::SolidId;
 
 use super::TriangleMesh;
-use super::edge_sampling::{circle_param_range, sample_edge, segments_for_chord_deviation_a};
+use super::edge_sampling::{
+    circle_param_range, sample_edge, sample_edge_with_params, segments_for_chord_deviation_a,
+};
 use super::mesh_ops::{dedupe_coincident_triangles, split_pinched_chords, weld_boundary_vertices};
 use super::nonplanar::{
     circle_pole_params, tessellate_latitude_band_shared, tessellate_nonplanar_cdt,
@@ -424,6 +429,313 @@ fn share_doubled_back_samples(
     Ok(())
 }
 
+/// A spline edge keeps only the samples its chords need to hold the
+/// deflection in space, which need not hold it in a face's (u, v). A face
+/// narrower than the chords' sag (a sliver between two spline sides running
+/// almost together) can have an outline whose chords cross in its (u, v),
+/// and its mesh then loses the triangles past the crossing; and on a spline
+/// face whose (u, v) is skewed, a chord's straight line in (u, v) can run far
+/// off the edge on the surface, taking grid points outside the face. Each
+/// spline chord crossing another chord of its face's outline, or whose middle
+/// in (u, v) lies farther than the deflection from its curve's, is halved on
+/// its curve, round by round. The samples are shared, so the face across each
+/// edge takes them too.
+///
+/// Two chords can cross in (u, v) only where each comes within its sag of the
+/// surface point both project to, so only chords nearer each other than
+/// their two sags are projected.
+#[allow(clippy::too_many_lines)]
+pub(super) fn split_crossing_spline_chords(
+    topo: &Topology,
+    faces: &[FaceId],
+    edge_points: &mut DetHashMap<usize, Vec<Point3>>,
+    mut params: DetHashMap<usize, Vec<f64>>,
+    deflection: f64,
+) -> Result<(), crate::OperationsError> {
+    // A face's projections of sample points, keyed by the point's bits.
+    type UvCache = DetHashMap<(u64, u64, u64), Option<(f64, f64)>>;
+    const MAX_ROUNDS: usize = 8;
+    // Chord ends closer than this are one sample.
+    const SAME: f64 = 1e-9;
+    // A sample off a chord by less than this fraction of its length lies on it.
+    const TOUCH: f64 = 1e-9;
+    struct Chord {
+        edge: usize,
+        index: usize,
+        a: Point3,
+        b: Point3,
+        // How far the chord may stand off its curve.
+        reach: f64,
+        // Whether the chord is a spline's, and bows off its curve.
+        halvable: bool,
+        // The curve's point halfway along the chord, for a spline's.
+        middle: Option<Point3>,
+    }
+    // The parameters of each spline edge's samples, where its samples are
+    // still those they were taken at.
+    params.retain(|idx, ts| {
+        edge_points
+            .get(idx)
+            .is_some_and(|pts| pts.len() == ts.len())
+    });
+    if params.is_empty() {
+        return Ok(());
+    }
+    let orient = |a: (f64, f64), b: (f64, f64), c: (f64, f64)| {
+        (b.0 - a.0).madd(c.1 - a.1, -((b.1 - a.1) * (c.0 - a.0)))
+    };
+    // Each face's samples in its (u, v), kept from round to round.
+    let mut caches: Vec<UvCache> = vec![UvCache::default(); faces.len()];
+    // The edges the last round halved: a face none of them bound is as it was.
+    let mut changed: Option<DetHashSet<usize>> = None;
+    for _ in 0..MAX_ROUNDS {
+        let mut halve: DetHashSet<(usize, usize)> = DetHashSet::default();
+        for (k, &face_id) in faces.iter().enumerate() {
+            let face = topo.face(face_id)?;
+            if let Some(changed) = &changed {
+                let mut touched = false;
+                for &wire_id in std::iter::once(&face.outer_wire()).chain(face.inner_wires()) {
+                    touched |= topo
+                        .wire(wire_id)?
+                        .edges()
+                        .iter()
+                        .any(|oe| changed.contains(&oe.edge().index()));
+                }
+                if !touched {
+                    continue;
+                }
+            }
+            let surface = face.surface();
+            // How far u and v run round a surface closed across them.
+            let period = |range: Option<(f64, f64)>| range.map_or(f64::INFINITY, |r| r.1 - r.0);
+            let turn = std::f64::consts::TAU;
+            let (su, sv) = match surface {
+                FaceSurface::Plane { .. } => (f64::INFINITY, f64::INFINITY),
+                FaceSurface::Nurbs(n) => (period(n.closed_u()), period(n.closed_v())),
+                FaceSurface::Cylinder(_) | FaceSurface::Cone(_) | FaceSurface::Sphere(_) => {
+                    (turn, f64::INFINITY)
+                }
+                FaceSurface::Torus(_) => (turn, turn),
+            };
+            let mut chords: Vec<Chord> = Vec::new();
+            let mut seen: DetHashSet<usize> = DetHashSet::default();
+            for &wire_id in std::iter::once(&face.outer_wire()).chain(face.inner_wires()) {
+                for oe in topo.wire(wire_id)?.edges() {
+                    let idx = oe.edge().index();
+                    if !seen.insert(idx) {
+                        continue;
+                    }
+                    let Some(pts) = edge_points.get(&idx) else {
+                        continue;
+                    };
+                    let edge = topo.edge(oe.edge())?;
+                    for (index, pair) in pts.windows(2).enumerate() {
+                        let (a, b) = (pair[0], pair[1]);
+                        let (reach, halvable, middle) = match (edge.curve(), params.get(&idx)) {
+                            (EdgeCurve::Line, _) => (0.0, false, None),
+                            (EdgeCurve::NurbsCurve(nurbs), Some(ts)) => {
+                                let mid = nurbs.evaluate(0.5 * (ts[index] + ts[index + 1]));
+                                let sag = (mid - (a + (b - a) * 0.5)).length();
+                                (2.0 * sag, sag > SAME, Some(mid))
+                            }
+                            _ => (deflection, false, None),
+                        };
+                        chords.push(Chord {
+                            edge: idx,
+                            index,
+                            a,
+                            b,
+                            reach,
+                            halvable,
+                            middle,
+                        });
+                    }
+                }
+            }
+            if !chords.iter().any(|c| c.halvable) {
+                continue;
+            }
+            // Sweep the chords along the outline's widest axis (a face in a
+            // plane square to one axis has every chord at one coordinate of
+            // it), each chord's box grown by its reach.
+            let coord = |p: Point3, axis: usize| match axis {
+                0 => p.x(),
+                1 => p.y(),
+                _ => p.z(),
+            };
+            let spread = |axis: usize| {
+                let (lo, hi) = chords
+                    .iter()
+                    .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), c| {
+                        (lo.min(coord(c.a, axis)), hi.max(coord(c.a, axis)))
+                    });
+                hi - lo
+            };
+            let along = (0..3)
+                .max_by(|&x, &y| spread(x).total_cmp(&spread(y)))
+                .unwrap_or(0);
+            let low = |c: &Chord, axis: usize| coord(c.a, axis).min(coord(c.b, axis)) - c.reach;
+            let high = |c: &Chord, axis: usize| coord(c.a, axis).max(coord(c.b, axis)) + c.reach;
+            let lo = |c: &Chord| low(c, along);
+            let hi = |c: &Chord| high(c, along);
+            let mut order: Vec<usize> = (0..chords.len()).collect();
+            order.sort_by(|&i, &j| lo(&chords[i]).total_cmp(&lo(&chords[j])));
+            let uv = &mut caches[k];
+            let mut to_uv = |p: Point3| {
+                *uv.entry((p.x().to_bits(), p.y().to_bits(), p.z().to_bits()))
+                    .or_insert_with(|| surface.project_point(p))
+            };
+            // A curved face's (u, v) can stretch a chord's straight line in
+            // (u, v) far off the chord in space: the mesh's edge there is that
+            // line on the surface, so its middle must hold the deflection of
+            // the curve's. An edge can stand off its surface (a file's
+            // tolerance): the line is read with the ends' offsets carried
+            // along it. A cone's apex and a sphere's poles have no u.
+            if matches!(
+                surface,
+                FaceSurface::Nurbs(_) | FaceSurface::Cylinder(_) | FaceSurface::Torus(_)
+            ) {
+                for c in chords.iter().filter(|c| c.halvable) {
+                    let (Some(middle), Some(a), Some(b)) = (c.middle, to_uv(c.a), to_uv(c.b))
+                    else {
+                        continue;
+                    };
+                    if (a.0 - b.0).abs() > 0.5 * su || (a.1 - b.1).abs() > 0.5 * sv {
+                        continue;
+                    }
+                    let (Some(on_surface), Some(at_a), Some(at_b)) = (
+                        surface.evaluate(0.5 * (a.0 + b.0), 0.5 * (a.1 + b.1)),
+                        surface.evaluate(a.0, a.1),
+                        surface.evaluate(b.0, b.1),
+                    ) else {
+                        continue;
+                    };
+                    let offset = ((c.a - at_a) + (c.b - at_b)) * 0.5;
+                    if (on_surface + offset - middle).length() > deflection {
+                        halve.insert((c.edge, c.index));
+                    }
+                }
+            }
+            // Only a pair with a spline chord in it can be halved. Each spline
+            // chord meets the chords starting within its span, and each chord
+            // the spline chords starting within its own: every overlapping pair
+            // with a spline chord in it is one or the other.
+            let mut test = |i: usize, j: usize| {
+                let ci = &chords[i];
+                let cj = &chords[j];
+                if !(ci.halvable || cj.halvable)
+                    || (ci.edge == cj.edge && ci.index == cj.index)
+                    || (0..3).any(|axis| {
+                        low(ci, axis) > high(cj, axis) || low(cj, axis) > high(ci, axis)
+                    })
+                {
+                    return;
+                }
+                let ends = [ci.a, ci.b];
+                if ends
+                    .iter()
+                    .any(|&p| (p - cj.a).length() < SAME || (p - cj.b).length() < SAME)
+                {
+                    return;
+                }
+                let (gap, _, _) = segment_segment_distance(ci.a, ci.b, cj.a, cj.b);
+                if gap > ci.reach + cj.reach {
+                    return;
+                }
+                let (Some(a), Some(b), Some(c), Some(d)) =
+                    (to_uv(ci.a), to_uv(ci.b), to_uv(cj.a), to_uv(cj.b))
+                else {
+                    return;
+                };
+                // A chord across a closed surface's seam is no chord in (u, v).
+                if [(a, b), (c, d)]
+                    .iter()
+                    .any(|&(p, q)| (p.0 - q.0).abs() > 0.5 * su || (p.1 - q.1).abs() > 0.5 * sv)
+                {
+                    return;
+                }
+                let crosses = orient(a, b, c) * orient(a, b, d) < 0.0
+                    && orient(c, d, a) * orient(c, d, b) < 0.0;
+                // A sample lying on the other chord makes a T: the face
+                // splits the chord there, and the face across it does not.
+                let on = |p: (f64, f64), q: (f64, f64), r: (f64, f64)| {
+                    let (dx, dy) = (q.0 - p.0, q.1 - p.1);
+                    let length2 = dx.madd(dx, dy * dy);
+                    let t = (r.0 - p.0).madd(dx, (r.1 - p.1) * dy) / length2;
+                    length2 > 0.0 && t > 0.0 && t < 1.0 && orient(p, q, r).abs() <= TOUCH * length2
+                };
+                let touches = on(a, b, c) || on(a, b, d) || on(c, d, a) || on(c, d, b);
+                if !(crosses || touches) {
+                    return;
+                }
+                for c in [ci, cj] {
+                    if c.halvable {
+                        halve.insert((c.edge, c.index));
+                    }
+                }
+            };
+            let starts: Vec<f64> = order.iter().map(|&i| lo(&chords[i])).collect();
+            let spline_order: Vec<usize> = order
+                .iter()
+                .copied()
+                .filter(|&i| chords[i].halvable)
+                .collect();
+            let spline_starts: Vec<f64> = spline_order.iter().map(|&i| lo(&chords[i])).collect();
+            for &i in &spline_order {
+                let (from, to) = (lo(&chords[i]), hi(&chords[i]));
+                let first = starts.partition_point(|&x| x < from);
+                for &j in order[first..].iter().take_while(|&&j| lo(&chords[j]) <= to) {
+                    if j != i {
+                        test(i, j);
+                    }
+                }
+            }
+            for &j in &order {
+                let (from, to) = (lo(&chords[j]), hi(&chords[j]));
+                let first = spline_starts.partition_point(|&x| x <= from);
+                for &i in spline_order[first..]
+                    .iter()
+                    .take_while(|&&i| lo(&chords[i]) <= to)
+                {
+                    if i != j {
+                        test(i, j);
+                    }
+                }
+            }
+        }
+        if halve.is_empty() {
+            break;
+        }
+        let mut by_edge: DetHashMap<usize, Vec<usize>> = DetHashMap::default();
+        for &(edge, index) in &halve {
+            by_edge.entry(edge).or_default().push(index);
+        }
+        let mut edges: Vec<usize> = by_edge.keys().copied().collect();
+        edges.sort_unstable();
+        changed = Some(edges.iter().copied().collect());
+        for idx in edges {
+            let (Some(edge_id), Some(ts), Some(pts)) = (
+                topo.edge_id_from_index(idx),
+                params.get_mut(&idx),
+                edge_points.get_mut(&idx),
+            ) else {
+                continue;
+            };
+            let EdgeCurve::NurbsCurve(nurbs) = topo.edge(edge_id)?.curve() else {
+                continue;
+            };
+            let mut indices = by_edge[&idx].clone();
+            indices.sort_unstable_by(|x, y| y.cmp(x));
+            for index in indices {
+                let t = 0.5 * (ts[index] + ts[index + 1]);
+                ts.insert(index + 1, t);
+                pts.insert(index + 1, nurbs.evaluate(t));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Core watertight tessellation pipeline.
 ///
 /// When `track_faces` is set, also returns a parallel `tri -> face` array (one
@@ -458,10 +770,14 @@ pub(super) fn tessellate_solid_core(
     // insertion-order hashing.
     let mut edge_indices: Vec<usize> = edge_face_map.keys().copied().collect();
     edge_indices.sort_unstable();
+    // A NURBS edge's sample parameters, for the chord split below.
+    let mut edge_params: DetHashMap<usize, Vec<f64>> = DetHashMap::default();
     #[cfg(not(target_arch = "wasm32"))]
     let mut edge_points: DetHashMap<usize, Vec<Point3>> = if edge_indices.len() >= 32 {
         use rayon::prelude::*;
-        let results: Vec<Result<(usize, Vec<Point3>), crate::OperationsError>> = edge_indices
+        #[allow(clippy::items_after_statements)]
+        type Sampled = Result<(usize, Vec<Point3>, Option<Vec<f64>>), crate::OperationsError>;
+        let results: Vec<Sampled> = edge_indices
             .par_iter()
             .filter_map(|&edge_idx| {
                 let edge_id = topo.edge_id_from_index(edge_idx)?;
@@ -470,15 +786,18 @@ pub(super) fn tessellate_solid_core(
                     Err(e) => return Some(Err(crate::OperationsError::Topology(e))),
                 };
                 Some(
-                    sample_edge(topo, edge_data, deflection, angular_tol, circle_floor)
-                        .map(|pts| (edge_idx, pts)),
+                    sample_edge_with_params(topo, edge_data, deflection, angular_tol, circle_floor)
+                        .map(|(pts, ts)| (edge_idx, pts, ts)),
                 )
             })
             .collect();
         let mut map = DetHashMap::default();
         for r in results {
-            let (idx, pts) = r?;
+            let (idx, pts, ts) = r?;
             map.insert(idx, pts);
+            if let Some(ts) = ts {
+                edge_params.insert(idx, ts);
+            }
         }
         map
     } else {
@@ -487,8 +806,17 @@ pub(super) fn tessellate_solid_core(
             if let Some(edge_id) = topo.edge_id_from_index(edge_idx)
                 && let Ok(edge_data) = topo.edge(edge_id)
             {
-                let points = sample_edge(topo, edge_data, deflection, angular_tol, circle_floor)?;
+                let (points, ts) = sample_edge_with_params(
+                    topo,
+                    edge_data,
+                    deflection,
+                    angular_tol,
+                    circle_floor,
+                )?;
                 map.insert(edge_idx, points);
+                if let Some(ts) = ts {
+                    edge_params.insert(edge_idx, ts);
+                }
             }
         }
         map
@@ -499,9 +827,17 @@ pub(super) fn tessellate_solid_core(
         for &edge_idx in &edge_indices {
             if let Some(edge_id) = topo.edge_id_from_index(edge_idx) {
                 if let Ok(edge_data) = topo.edge(edge_id) {
-                    let points =
-                        sample_edge(topo, edge_data, deflection, angular_tol, circle_floor)?;
+                    let (points, ts) = sample_edge_with_params(
+                        topo,
+                        edge_data,
+                        deflection,
+                        angular_tol,
+                        circle_floor,
+                    )?;
                     map.insert(edge_idx, points);
+                    if let Some(ts) = ts {
+                        edge_params.insert(edge_idx, ts);
+                    }
                 }
             }
         }
@@ -701,6 +1037,7 @@ pub(super) fn tessellate_solid_core(
         }
     }
 
+    split_crossing_spline_chords(topo, &all_faces, &mut edge_points, edge_params, deflection)?;
     phase("circle_sync", &mut phase_t);
     let mut merged = TriangleMesh::default();
     let mut point_to_global: DetHashMap<(i64, i64, i64), u32> = DetHashMap::default();

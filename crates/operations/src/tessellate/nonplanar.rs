@@ -2466,6 +2466,15 @@ fn cdt_in_surface_frame(
                 let within = projected
                     .iter()
                     .all(|&v| v >= v_lo - slack && v <= v_hi + slack);
+                // The rims' span comes from their samples, and the sample a
+                // closed rim keeps for the seam's vertex can fall short of the
+                // vertex's v; with no span at all, nothing is spaced across.
+                let reach = (1e-3 * (v_hi - v_lo)).max(slack);
+                let within = within
+                    || v_hi - v_lo <= slack
+                    || projected
+                        .iter()
+                        .all(|&v| v >= v_lo - reach && v <= v_hi + reach);
                 let steady = projected.windows(2).all(|w| w[1] > w[0])
                     || projected.windows(2).all(|w| w[1] < w[0]);
                 if within && steady {
@@ -3513,34 +3522,62 @@ pub(super) fn tessellate_holed_face_local(
         )?
         .into_iter()
         .collect();
+    let mut edge_points: DetHashMap<usize, Vec<Point3>> = DetHashMap::default();
+    let mut params: DetHashMap<usize, Vec<f64>> = DetHashMap::default();
+    let mut order: Vec<usize> = Vec::new();
     for wire_id in
         std::iter::once(face_data.outer_wire()).chain(face_data.inner_wires().iter().copied())
     {
         for oe in topo.wire(wire_id)?.edges() {
-            if pool.contains_key(&oe.edge().index()) {
+            if edge_points.contains_key(&oe.edge().index()) {
                 continue;
             }
             let edge = topo.edge(oe.edge())?;
-            let points = match straight.remove(&oe.edge().index()) {
-                Some(points) => points,
-                None => sample_edge(topo, edge, deflection, angular_tol, circle_floor)?,
+            let points = if let Some(points) = straight.remove(&oe.edge().index()) {
+                points
+            } else {
+                let (points, ts) = super::edge_sampling::sample_edge_with_params(
+                    topo,
+                    edge,
+                    deflection,
+                    angular_tol,
+                    circle_floor,
+                )?;
+                if let Some(ts) = ts {
+                    params.insert(oe.edge().index(), ts);
+                }
+                points
             };
-            let gids = points
-                .into_iter()
-                .map(|pt| {
-                    *point_to_global
-                        .entry(point_merge_key(pt, MERGE_GRID))
-                        .or_insert_with(|| {
-                            #[allow(clippy::cast_possible_truncation)]
-                            let idx = merged.positions.len() as u32;
-                            merged.positions.push(pt);
-                            merged.normals.push(Vec3::new(0.0, 0.0, 0.0));
-                            idx
-                        })
-                })
-                .collect();
-            pool.insert(oe.edge().index(), gids);
+            edge_points.insert(oe.edge().index(), points);
+            order.push(oe.edge().index());
         }
+    }
+    // The face's outline is read in its (u, v) as the solid mesher reads it.
+    super::solid::split_crossing_spline_chords(
+        topo,
+        &[face_id],
+        &mut edge_points,
+        params,
+        deflection,
+    )?;
+    for idx in order {
+        let gids = edge_points
+            .remove(&idx)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|pt| {
+                *point_to_global
+                    .entry(point_merge_key(pt, MERGE_GRID))
+                    .or_insert_with(|| {
+                        #[allow(clippy::cast_possible_truncation)]
+                        let idx = merged.positions.len() as u32;
+                        merged.positions.push(pt);
+                        merged.normals.push(Vec3::new(0.0, 0.0, 0.0));
+                        idx
+                    })
+            })
+            .collect();
+        pool.insert(idx, gids);
     }
     let meshed = match face_data.surface() {
         FaceSurface::Cylinder(_) | FaceSurface::Cone(_) | FaceSurface::Nurbs(_) => {
