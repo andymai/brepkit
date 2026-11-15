@@ -247,6 +247,7 @@ fn edges_ending_on_a_nearly_tangent_cylinder() {
 #[test]
 fn a_wide_round_ending_on_a_nearly_tangent_cylinder() {
     assert_round_ends_on_the_curve(NEAR_TANGENT, H, 5.5, None);
+    assert_round_ends_on_the_curve(NEAR_TANGENT, H, 5.5, Some(turned()));
 }
 
 /// The D with a blind radial hole in its arc wall, `HOLE` in radius and 1

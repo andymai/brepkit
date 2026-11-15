@@ -4107,7 +4107,8 @@ fn notch_stays_clear(
             return Ok(false);
         };
         let (a, b) = (a.point(), b.point());
-        if let Some(bow) = arc_bow(edge, a, b, edge.start() == corner, near_ends, &flat) {
+        let across = (frame.x, frame.y);
+        if let Some(bow) = arc_bow(edge, a, b, edge.start() == corner, near_ends, &flat, across) {
             bows.push(bow?);
         }
     }
@@ -4196,6 +4197,7 @@ fn arc_bow(
     corner_at_start: bool,
     near_ends: [Point3; 2],
     flat: &impl Fn(Point3) -> (f64, f64),
+    (across_x, across_y): (Vec3, Vec3),
 ) -> Option<Result<[(f64, f64); 3], BlendError>> {
     use brepkit_topology::edge::EdgeCurve;
     const TAU: f64 = std::f64::consts::TAU;
@@ -4228,11 +4230,15 @@ fn arc_bow(
         (p.0 - o.0) * (q.1 - o.1) - (p.1 - o.1) * (q.0 - o.0)
     };
     let (c, e) = (flat(corner), flat(end));
+    // Each tangent in the view, with its own length before the view
+    // shortened it: a tangent that points along the view has no direction
+    // there, and turns from nothing.
     let heading = |turn: f64| {
-        let from = curve.evaluate_with_endpoints(turn, a, b);
-        let to = flat(from + curve.tangent_with_endpoints(turn, a, b));
-        let at = flat(from);
-        (to.0 - at.0, to.1 - at.1)
+        let tangent = curve.tangent_with_endpoints(turn, a, b);
+        (
+            (tangent.dot(across_x), tangent.dot(across_y)),
+            tangent.length(),
+        )
     };
     let (dc, dm, de) = (
         heading(at_corner),
@@ -4240,9 +4246,9 @@ fn arc_bow(
         heading(turn),
     );
     let chord = (e.0 - c.0, e.1 - c.1);
-    let turns = |p: (f64, f64), q: (f64, f64)| {
+    let turns = |(p, p_len): ((f64, f64), f64), (q, q_len): ((f64, f64), f64)| {
         let sine = p.0 * q.1 - p.1 * q.0;
-        (sine.abs() > 1e-9 * p.0.hypot(p.1) * q.0.hypot(q.1)).then_some(sine)
+        (sine.abs() > 1e-9 * p_len * q_len).then_some(sine)
     };
     // An arc seen edge on (a curved cap's rim seen along the round's axis)
     // is a straight line, and a short enough arc is one to within a
@@ -4261,6 +4267,7 @@ fn arc_bow(
             }));
         }
     };
+    let (dc, de) = (dc.0, de.0);
     let along = (chord.0 * de.1 - chord.1 * de.0) / sine;
     let apex = (c.0 + dc.0 * along, c.1 + dc.1 * along);
     let bows_out = cross(c, e, apex) * cross(c, e, flat(other)) < 0.0;
@@ -6325,9 +6332,15 @@ mod tests {
         )
         .unwrap();
         let edge = brepkit_topology::edge::Edge::new(a, b, EdgeCurve::Circle(circle));
-        arc_bow(&edge, corner, far, true, [at(turn), other], &|p: Point3| {
-            (p.x(), p.y())
-        })
+        arc_bow(
+            &edge,
+            corner,
+            far,
+            true,
+            [at(turn), other],
+            &|p: Point3| (p.x(), p.y()),
+            (Vec3::new(1.0, 0.0, 0.0), Vec3::new(0.0, 1.0, 0.0)),
+        )
     }
 
     #[test]
@@ -6360,25 +6373,44 @@ mod tests {
     #[test]
     fn an_arc_seen_edge_on_is_a_straight_side() {
         // A unit circle in the plane y = 0, seen along z: a line along x,
-        // whatever the turn of its piece.
-        let mut topo = Topology::new();
-        let at = |angle: f64| Point3::new(angle.cos(), 0.0, angle.sin());
-        let (corner, far) = (at(0.0), at(3.0));
-        let a = topo.add_vertex(brepkit_topology::vertex::Vertex::new(corner, 1e-7));
-        let b = topo.add_vertex(brepkit_topology::vertex::Vertex::new(far, 1e-7));
-        let circle = brepkit_math::curves::Circle3D::new(
-            Point3::new(0.0, 0.0, 0.0),
-            Vec3::new(0.0, -1.0, 0.0),
-            1.0,
-        )
-        .unwrap();
-        let edge = brepkit_topology::edge::Edge::new(a, b, EdgeCurve::Circle(circle));
-        let other = Point3::new(0.5, 0.4, 0.0);
-        for turn in [0.3, 1.6, 2.9] {
-            let bow = arc_bow(&edge, corner, far, true, [at(turn), other], &|p: Point3| {
-                (p.x(), p.y())
-            });
-            assert!(bow.is_none(), "turn {turn}");
+        // whatever the turn of its piece, and wherever the solid is.
+        let poses = [
+            brepkit_math::mat::Mat4::identity(),
+            brepkit_math::mat::Mat4::translation(310.0, -720.0, 150.0)
+                * brepkit_math::mat::Mat4::rotation_z(0.7)
+                * brepkit_math::mat::Mat4::rotation_x(-1.1),
+        ];
+        for pose in poses {
+            let turned = |v: Vec3| {
+                let to = pose.mul_point(Point3::new(v.x(), v.y(), v.z()));
+                let from = pose.mul_point(Point3::new(0.0, 0.0, 0.0));
+                to - from
+            };
+            let mut topo = Topology::new();
+            let at = |angle: f64| pose.mul_point(Point3::new(angle.cos(), 0.0, angle.sin()));
+            let (corner, far) = (at(0.0), at(3.0));
+            let a = topo.add_vertex(brepkit_topology::vertex::Vertex::new(corner, 1e-7));
+            let b = topo.add_vertex(brepkit_topology::vertex::Vertex::new(far, 1e-7));
+            let circle = brepkit_math::curves::Circle3D::new(
+                pose.mul_point(Point3::new(0.0, 0.0, 0.0)),
+                turned(Vec3::new(0.0, -1.0, 0.0)),
+                1.0,
+            )
+            .unwrap();
+            let edge = brepkit_topology::edge::Edge::new(a, b, EdgeCurve::Circle(circle));
+            let other = pose.mul_point(Point3::new(0.5, 0.4, 0.0));
+            let (x, y) = (
+                turned(Vec3::new(1.0, 0.0, 0.0)),
+                turned(Vec3::new(0.0, 1.0, 0.0)),
+            );
+            let flat = |p: Point3| {
+                let d = p - corner;
+                (d.dot(x), d.dot(y))
+            };
+            for turn in [0.3, 1.6, 2.9] {
+                let bow = arc_bow(&edge, corner, far, true, [at(turn), other], &flat, (x, y));
+                assert!(bow.is_none(), "turn {turn}");
+            }
         }
     }
 
