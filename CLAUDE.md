@@ -241,6 +241,7 @@ Quick reference — find the right file for any task:
 | Vertex geometric checks | `validate/vertex.rs` |
 | Edge geometric checks | `validate/edge.rs` |
 | Face geometric checks | `validate/face.rs` |
+| A face's holes against its outline and each other | `validate/face_wires.rs` |
 | Validation orchestrator | `validate/mod.rs` |
 | GProps accumulator (Huygens' theorem) | `properties/accumulator.rs` |
 | Closed-form formulas (box, sphere, cylinder, etc.) | `properties/analytic.rs` |

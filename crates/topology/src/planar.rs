@@ -475,8 +475,16 @@ impl PlanarRegion {
     /// boundary there.
     #[must_use]
     pub fn contains_clear(&self, p: Point2, margin: f64) -> bool {
+        self.side(p, margin) == Some(true)
+    }
+
+    /// Whether `p` lies inside the region, read as
+    /// [`contains_clear`](Self::contains_clear) reads it. `None` when `p`
+    /// lies within `margin` of the boundary, or the query does not settle.
+    #[must_use]
+    pub fn side(&self, p: Point2, margin: f64) -> Option<bool> {
         if distance_to_boundary(&self.exact, p) <= margin {
-            return false;
+            return None;
         }
         let mut pieces = Vec::with_capacity(self.exact.len() + self.beziers.len());
         pieces.extend_from_slice(&self.exact);
@@ -495,10 +503,10 @@ impl PlanarRegion {
             };
             match piece.read(p, margin) {
                 Reading::Chord => pieces.push(Boundary2::Segment(piece.start, piece.end)),
-                Reading::Touches => return false,
+                Reading::Touches => return None,
                 Reading::Unsettled => {
                     if halvings == MAX_HALVINGS {
-                        return false;
+                        return None;
                     }
                     halvings += 1;
                     let (first, second) = piece.halves();
@@ -507,7 +515,7 @@ impl PlanarRegion {
                 }
             }
         }
-        point_in_region(&pieces, p, margin.min(self.tol)) == Some(true)
+        point_in_region(&pieces, p, margin.min(self.tol))
     }
 }
 
@@ -532,10 +540,41 @@ pub fn face_region_2d(
     tol: f64,
 ) -> Result<Option<PlanarRegion>, TopologyError> {
     let face = topo.face(face)?;
+    let wires: Vec<WireId> = std::iter::once(face.outer_wire())
+        .chain(face.inner_wires().iter().copied())
+        .collect();
+    wires_region_2d(topo, &wires, origin, x, y, tol)
+}
+
+/// The region one wire encloses in the plane through `origin` spanned by the
+/// orthonormal `x` and `y`, read as [`face_region_2d`] reads a face's.
+///
+/// # Errors
+///
+/// Returns [`TopologyError`] if an entity lookup fails.
+pub fn wire_region_2d(
+    topo: &Topology,
+    wire: WireId,
+    origin: Point3,
+    x: Vec3,
+    y: Vec3,
+    tol: f64,
+) -> Result<Option<PlanarRegion>, TopologyError> {
+    wires_region_2d(topo, &[wire], origin, x, y, tol)
+}
+
+fn wires_region_2d(
+    topo: &Topology,
+    wires: &[WireId],
+    origin: Point3,
+    x: Vec3,
+    y: Vec3,
+    tol: f64,
+) -> Result<Option<PlanarRegion>, TopologyError> {
     let plane = Plane2 { origin, x, y };
     let mut exact = Vec::new();
     let mut beziers = Vec::new();
-    for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+    for &wid in wires {
         for oe in topo.wire(wid)?.edges() {
             let edge = topo.edge(oe.edge())?;
             let (a, b) = (
