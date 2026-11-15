@@ -9504,6 +9504,37 @@ pub fn face_has_curved_lens_holes(topo: &Topology, face_id: FaceId) -> bool {
     })
 }
 
+/// A point on a whole cylinder/cone wall that lies clear of its lens holes:
+/// the search of [`cylinder_cone_remainder_interior`], for a wall that no
+/// section cut. The generic sample of an uncut face does not look at holes.
+pub fn whole_lens_wall_interior(
+    topo: &Topology,
+    face_id: FaceId,
+    clearance: f64,
+) -> Option<Point3> {
+    let face = topo.face(face_id).ok()?;
+    let surface = face.surface().clone();
+    let edges_of = |wire| {
+        let pts = collect_wire_points(topo, wire);
+        boundary_edges_to_pcurve(topo, wire, &surface, &pts, None)
+    };
+    let outer_wire = edges_of(face.outer_wire());
+    let inner_wires: Vec<_> = face.inner_wires().iter().map(|&w| edges_of(w)).collect();
+    if outer_wire.is_empty() || inner_wires.iter().any(Vec::is_empty) {
+        return None;
+    }
+    let whole = SplitSubFace {
+        surface,
+        outer_wire,
+        inner_wires,
+        reversed: face.is_reversed(),
+        parent: face_id,
+        rank: Rank::A,
+        precomputed_interior: None,
+    };
+    cylinder_cone_remainder_interior(&whole, clearance)
+}
+
 /// Get a point guaranteed inside a sub-face's outer wire (in UV space),
 /// not inside any inner wire (hole), then evaluate it to 3D via the surface.
 /// `None` for a plane piece bounded by lines and conic arcs when no point
