@@ -1685,6 +1685,13 @@ pub fn oriented_solid_volume(
     deflection: f64,
 ) -> Result<f64, crate::OperationsError> {
     let mesh = tessellate::tessellate_solid(topo, solid, deflection)?;
+    Ok(oriented_mesh_volume(&mesh))
+}
+
+/// Divergence-theorem volume of a mesh WITHOUT the absolute value: the value
+/// [`oriented_solid_volume`] reads from the mesh of a solid.
+#[must_use]
+pub fn oriented_mesh_volume(mesh: &tessellate::TriangleMesh) -> f64 {
     let idx = &mesh.indices;
     let pos = &mesh.positions;
     // A mesh may be open, and an open mesh's sum depends on the point it is
@@ -1698,7 +1705,7 @@ pub fn oriented_solid_volume(
         let (a, b, c) = (v0 - p0, v1 - p0, v2 - p0);
         total += a.dot((b - a).cross(c - a));
     }
-    Ok(total / 6.0)
+    total / 6.0
 }
 
 /// Compute signed volume from a watertight triangle mesh using

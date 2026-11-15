@@ -1032,11 +1032,10 @@ impl SolidSnapshot {
         }
         *topo.solid_mut(self.graph.solid_id)? = self.solid.clone();
 
-        for &edge_id in &self.graph.edge_ids {
-            for &face_id in &self.graph.face_ids {
-                topo.pcurves_mut().remove(edge_id, face_id);
-            }
-        }
+        topo.pcurves_mut().remove_between(
+            &self.graph.edge_ids.iter().copied().collect(),
+            &self.graph.face_ids.iter().copied().collect(),
+        );
         for (edge_id, face_id, pcurve) in &self.graph.pcurves {
             topo.pcurves_mut().set(*edge_id, *face_id, pcurve.clone());
         }

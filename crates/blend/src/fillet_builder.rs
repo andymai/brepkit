@@ -139,6 +139,7 @@ impl<'a> FilletBuilder<'a> {
         self,
         force_postassembly_failure: bool,
     ) -> Result<BlendResult, BlendError> {
+        let scope = trimmer::SplitScope::of_solid(self.topo, self.solid)?;
         // Build the immutable plan before any result topology is allocated.
         // Every valid request is represented by one ordered contour; the
         // contour spine is then used for one coherent stripe computation.
@@ -472,7 +473,7 @@ impl<'a> FilletBuilder<'a> {
         let (rim_contact_edges, rim_notches) = if plan.is_some() {
             (std::collections::HashMap::new(), Vec::new())
         } else {
-            rebuild_closed_rim_loop_faces(topo, &regular_results, &mut face_replacements)?
+            rebuild_closed_rim_loop_faces(topo, &scope, &regular_results, &mut face_replacements)?
         };
 
         let stripes: Vec<Stripe> = regular_results.iter().map(|sr| sr.stripe.clone()).collect();
@@ -709,6 +710,7 @@ impl<'a> FilletBuilder<'a> {
                 .collect();
             let batch = trimmer::trim_parametric_face_batch(
                 topo,
+                &scope,
                 face_id,
                 &restriction_plan,
                 split_policy,
@@ -5237,6 +5239,9 @@ fn check_closed_contacts_do_not_cross(
             let Some(EdgeCurve::NurbsCurve(curve)) = r.curve.as_ref() else {
                 return None;
             };
+            if (*first - *last).length() > GAP {
+                return None;
+            }
             let (t0, t1) = curve.domain();
             let t = |k: u32| t0 + (t1 - t0) * f64::from(k) / f64::from(SAMPLES);
             let length: f64 = (0..SAMPLES)
@@ -5712,6 +5717,7 @@ fn shared_spine_vertex(
 )]
 fn rebuild_closed_rim_loop_faces(
     topo: &mut Topology,
+    scope: &trimmer::SplitScope,
     regular_results: &[&StripeResult],
     face_replacements: &mut std::collections::HashMap<FaceId, FaceId>,
 ) -> Result<
@@ -5999,9 +6005,9 @@ fn rebuild_closed_rim_loop_faces(
             };
             let v_split = topo.add_vertex(Vertex::new(cp, 1e-7));
             let (pre, post) = match plan {
-                SplitPlan::Line => trimmer::split_edge_at(topo, &oe, v_split)?,
+                SplitPlan::Line => trimmer::split_edge_at(topo, scope, &oe, v_split)?,
                 SplitPlan::Curve(left, right) => {
-                    trimmer::split_edge_at_with_curves(topo, &oe, v_split, left, right)?
+                    trimmer::split_edge_at_with_curves(topo, scope, &oe, v_split, left, right)?
                 }
             };
             // The kept sub-piece: the part AWAY from the contact junction.

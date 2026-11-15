@@ -129,6 +129,11 @@ impl<T> Arena<T> {
         }
     }
 
+    /// Drops every entry from index `len` on.
+    pub(crate) fn truncate(&mut self, len: usize) {
+        self.items.truncate(len);
+    }
+
     /// Returns a reference to the value at `id`, or `None` if the id
     /// is out of bounds.
     #[must_use]
