@@ -1860,16 +1860,25 @@ fn nurbs_geom(
     // The wires' samples follow one another along each edge, so Newton from
     // the sample before lands on the next. On this surface a point has one
     // `(u, v)`, so a foot at the sample is the one a search of the whole
-    // surface finds; a foot off it sends that sample to the search.
+    // surface finds; a foot off it sends that sample to the search. The
+    // search can settle on a far local foot (on a fitted surface with many
+    // spans, a point on a boundary edge read 0.55 off where Newton from the
+    // sample before found it on the surface), and the next sample's Newton
+    // would start from there: the nearer of the two is kept.
     let last = std::cell::Cell::new(None::<(f64, f64)>);
     let project = |p: Point3| {
-        let warm = last.get().and_then(|from| {
+        let tried = last.get().and_then(|from| {
             brepkit_math::nurbs::projection::project_point_to_surface_from(surface, p, from, 1e-12)
                 .ok()
-                .filter(|q| q.distance <= 64.0 * f64::EPSILON * size.max(1.0))
         });
+        let warm = tried.filter(|q| q.distance <= 64.0 * f64::EPSILON * size.max(1.0));
         let found = warm.or_else(|| {
-            brepkit_math::nurbs::projection::project_point_to_surface(surface, p, 1e-12).ok()
+            let searched =
+                brepkit_math::nurbs::projection::project_point_to_surface(surface, p, 1e-12).ok();
+            match (searched, tried) {
+                (Some(s), Some(t)) if t.distance < s.distance => Some(t),
+                (s, t) => s.or(t),
+            }
         });
         last.set(found.map(|q| (q.u, q.v)));
         found.map_or_else(|| trim.scaled(u0, v0), |q| trim.scaled(q.u, q.v))
