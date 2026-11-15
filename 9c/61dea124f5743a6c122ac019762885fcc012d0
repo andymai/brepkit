@@ -1,0 +1,22 @@
+crates/operations/tests/ball_quarter_cap.rs
+  s_709d857a0f83c4::t_8bef303820932e 1-116
+  s_709d857a0f83c4::t_e355c56a697b35 117-129
+crates/algo/src/builder/face_splitter/mod.rs
+  s_709d857a0f83c4::t_917e795aa64775 9749-9752,9913-9923,9925-9968,11648-11725
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9c61dea124f5743a6c122ac019762885fcc012d0",
+  "prompts": {},
+  "sessions": {
+    "s_709d857a0f83c4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6cca9812-d77a-4dae-96f4-26562694b205",
+        "model": "claude-fable-5-2"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
