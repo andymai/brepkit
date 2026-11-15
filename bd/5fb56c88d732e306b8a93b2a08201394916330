@@ -1,0 +1,23 @@
+crates/topology/src/arena.rs
+  s_709d857a0f83c4::t_908fc2702653dc 132-136
+crates/topology/src/pcurve.rs
+  s_709d857a0f83c4::t_c6edbcd2adceef 90-93,97-101,111-171,174-176,193-198,203-206,212-215,231,234-238,242-243,246-250,349-483
+crates/topology/src/topology.rs
+  s_709d857a0f83c4::t_78bcd3f581cb16 6-7,46-90,120-128,363-458
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "bd5fb56c88d732e306b8a93b2a08201394916330",
+  "prompts": {},
+  "sessions": {
+    "s_709d857a0f83c4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6cca9812-d77a-4dae-96f4-26562694b205",
+        "model": "claude-fable-5-2"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
