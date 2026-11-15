@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794730771355,
+  "lastUpdate": 1794732846557,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -70307,6 +70307,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 20241220,
             "range": "± 349243",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "a3505ba1cdd5891fcad96c691c310e3f5f3e4859",
+          "message": "fix(algo): classify a wall with a saddle hole that no section cuts (#2480)\n\nA fuse onto a pipe tee fell back to a mesh when the other solid did not\ntouch the run's wall. The fuse is now exact. This is the fault behind\nthe `flanged-tee` playground example in #2372, whose `fuseAll` returned\n`cluster fuse degraded to mesh fallback`.\n\n## What happened\n\nThe tee is a run with a branch on it. The run's wall holds the saddle\nwhere the branch leaves it. The saddle is one closed curve, so it is a\nhole of one edge in the wall.\n\nThe face splitter finds a point on such a wall that is clear of the\nhole. It does this only for a wall that a section cuts. A flange on the\nfar end of the branch cuts no part of the run's wall, so the wall got no\npoint. The classifier then stopped the exact boolean with `no contained\ninterior for curved-lens wall`.\n\n## What changes\n\nThe classifier now makes the same search for a wall that no section cuts\n(`whole_lens_wall_interior`). It stops the exact boolean only when the\nsearch finds no point.\n\n## How I checked it\n\n- `crates/operations/tests/flange_on_a_tee.rs` is new. It fuses a flange\nonto the branch of a tee, with the flange last and with the branch last,\nupright, turned and mirrored. Each result must be valid and watertight,\nwith 3 cylinder faces. The volume must be the tee's volume plus the\nflange's ring, to 1e-7. Six points must classify as inside or outside.\nThe fuse of the flange onto the tee fell back to a mesh on main at\n`c8b7eb138`.\n- With a local wasm build of the five changes in brepjs, the\n`flanged-tee` example evaluates and meshes.\n- The pose sweep and the truth audit match main line for line, with the\nfive changes for #2372 together on main at `bdae9da54`. `cargo clippy\n--all-targets -- -D warnings` and `cargo fmt --all --check` pass in the\npre-commit hook.\n\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes fusion of a flange onto a pipe tee so the exact boolean no longer\ndegrades to a mesh fallback.\n\nThe tee's run wall holds a saddle hole where the branch leaves. The\nexact boolean classified this wall using a point clear of the hole, but\nthat search only ran for walls that a section cut. A flange touches no\npart of the run wall, so no point was found and the boolean aborted. Now\nthe same search runs for walls that no section cuts, and only a failed\nsearch stops the boolean.\n\nAdds a test that fuses a flange onto a tee and asserts the solid is\nvalid, watertight, has the expected face count and volume, and\nclassifies six sample points correctly.\n\n<sup>Written for commit 89c411979fc7d9c96da894f340f64365fcb2ced7.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2480?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2480?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2480&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-11-15T08:50:56Z",
+          "tree_id": "436459370dcadcb879f32fead07d6c91011255e6",
+          "url": "https://github.com/andymai/brepkit/commit/a3505ba1cdd5891fcad96c691c310e3f5f3e4859"
+        },
+        "date": 1794732835393,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 878345,
+            "range": "± 2712",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 923099,
+            "range": "± 1726",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10835,
+            "range": "± 8",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 549788,
+            "range": "± 3301",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 19897609,
+            "range": "± 330650",
             "unit": "ns/iter"
           }
         ]
