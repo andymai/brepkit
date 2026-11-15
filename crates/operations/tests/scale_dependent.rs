@@ -138,3 +138,61 @@ fn test_tolerance_scaling() {
         check_manifold(&topo, fused);
     }
 }
+
+// ── Small uniform scale ─────────────────────────────────────────────
+
+/// A uniform scale by `s` has the determinant `s³`, which is below a length
+/// tolerance from `s = 0.004` down. Each such scale has an inverse.
+#[test]
+fn a_small_uniform_scale_keeps_the_solid() {
+    use brepkit_operations::copy::copy_and_transform_solid;
+    use brepkit_operations::primitives::make_sphere;
+
+    for s in [0.005, 0.002, 0.0011, 0.001, 1e-4, 1e-5, 1e-6, 1e-7] {
+        let m = Mat4::scale(s, s, s);
+        let cube = s * s * s;
+
+        let mut topo = Topology::new();
+        let b = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+        let c = make_cylinder(&mut topo, 3.0, 10.0).unwrap();
+        let sp = make_sphere(&mut topo, 4.0, 16).unwrap();
+        let truths = [
+            (b, 1000.0),
+            (c, std::f64::consts::PI * 90.0),
+            (sp, std::f64::consts::PI * 256.0 / 3.0),
+        ];
+        for (solid, truth) in truths {
+            let copy = copy_and_transform_solid(&mut topo, solid, &m);
+            assert!(copy.is_ok(), "copy at scale {s}: {copy:?}");
+            let copy = copy.unwrap();
+            let moved = transform_solid(&mut topo, solid, &m);
+            assert!(moved.is_ok(), "transform at scale {s}: {moved:?}");
+            for scaled in [solid, copy] {
+                let v = vol(&topo, scaled, s * 0.01);
+                let rel = (v - truth * cube).abs() / (truth * cube);
+                assert!(
+                    rel < 1e-9,
+                    "scale {s}: volume {v}, expected {}, relative error {rel:e}",
+                    truth * cube
+                );
+                check_manifold(&topo, scaled);
+            }
+        }
+    }
+}
+
+#[test]
+fn a_matrix_with_no_inverse_is_refused() {
+    use brepkit_operations::copy::copy_and_transform_solid;
+
+    let flat = Mat4::scale(1.0, 1.0, 0.0);
+    let tiny_flat = Mat4::scale(1e-7, 1e-7, 0.0);
+    let not_finite = Mat4::scale(f64::NAN, 1.0, 1.0);
+    for m in [flat, tiny_flat, not_finite] {
+        let mut topo = Topology::new();
+        let b = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+        assert!(copy_and_transform_solid(&mut topo, b, &m).is_err());
+        assert!(transform_solid(&mut topo, b, &m).is_err());
+        assert!((vol(&topo, b, 0.1) - 1000.0).abs() < 1e-9);
+    }
+}

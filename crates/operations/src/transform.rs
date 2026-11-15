@@ -6,7 +6,6 @@ use std::collections::HashSet;
 use brepkit_math::mat::Mat4;
 use brepkit_math::nurbs::curve::NurbsCurve;
 use brepkit_math::nurbs::surface::NurbsSurface;
-use brepkit_math::tolerance::Tolerance;
 use brepkit_math::vec::Vec3;
 use brepkit_topology::Topology;
 use brepkit_topology::edge::{EdgeCurve, EdgeId};
@@ -50,14 +49,22 @@ pub fn transform_solid(
 }
 
 /// Checks the matrix is invertible and returns its inverse.
-fn checked_inverse(matrix: &Mat4) -> Result<Mat4, crate::OperationsError> {
-    let tol = Tolerance::new();
-    if tol.approx_eq(matrix.determinant(), 0.0) {
+///
+/// The determinant of a uniform scale by `s` is `s³`, so a comparison of the
+/// determinant with a length tolerance refuses a scale from millimetres to
+/// metres. `Mat4::inverse` compares the determinant with the size of the
+/// matrix's own minors.
+pub(crate) fn checked_inverse(matrix: &Mat4) -> Result<Mat4, crate::OperationsError> {
+    if matrix.0.iter().flatten().any(|c| !c.is_finite()) {
         return Err(crate::OperationsError::InvalidInput {
-            reason: "transform matrix is degenerate (zero determinant)".into(),
+            reason: "transform matrix has a component that is not finite".into(),
         });
     }
-    Ok(matrix.inverse()?)
+    matrix
+        .inverse()
+        .map_err(|_| crate::OperationsError::InvalidInput {
+            reason: "transform matrix is degenerate (zero determinant)".into(),
+        })
 }
 
 /// Transform a closed set of faces with the edges and vertices they use.

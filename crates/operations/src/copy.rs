@@ -258,13 +258,7 @@ pub fn copy_and_transform_solid(
 ) -> Result<SolidId, crate::OperationsError> {
     use crate::transform::{curve_image, surface_image};
 
-    let tol = brepkit_math::tolerance::Tolerance::new();
-    if tol.approx_eq(matrix.determinant(), 0.0) {
-        return Err(crate::OperationsError::InvalidInput {
-            reason: "transform matrix is degenerate (zero determinant)".into(),
-        });
-    }
-    let inverse = matrix.inverse()?;
+    let inverse = crate::transform::checked_inverse(matrix)?;
     let mirrored = matrix.determinant() < 0.0;
 
     // Read phase mirrors copy_solid, and maps each surface while the source
