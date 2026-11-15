@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.11.24](https://github.com/andymai/brepkit/compare/v4.11.23...v4.11.24) (2026-11-15)
+
+
+### Bug Fixes
+
+* **blend:** notch an end wall whose corner edge is an arc ([#2467](https://github.com/andymai/brepkit/issues/2467)) ([5c11689](https://github.com/andymai/brepkit/commit/5c11689c6970ead92df00035ccd19148b34d4bfb))
+
 ## [4.11.23](https://github.com/andymai/brepkit/compare/v4.11.22...v4.11.23) (2026-11-15)
 
 
