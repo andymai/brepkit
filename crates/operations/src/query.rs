@@ -238,7 +238,7 @@ pub fn edge_lies_in_one_surface(
 }
 
 /// Whether two faces' surfaces are one surface: equal analytic surfaces
-/// within the standard tolerances, or B-spline surfaces with the same
+/// within the standard tolerances (an angle is read as an angle), or B-spline surfaces with the same
 /// degrees, knots, control points and weights.
 fn same_surface(a: &FaceSurface, b: &FaceSurface) -> bool {
     let tol = brepkit_math::tolerance::Tolerance::new();
@@ -253,8 +253,42 @@ fn same_surface(a: &FaceSurface, b: &FaceSurface) -> bool {
         return na.cross(*nb).length() <= tol.angular
             && (da - db * dot.signum()).abs() < tol.linear;
     }
-    let (FaceSurface::Nurbs(a), FaceSurface::Nurbs(b)) = (a, b) else {
-        return crate::heal::surfaces_equivalent_pub(a, b);
+    // The healer reads an angle between two axes from `1 - |dot|` too, so
+    // each analytic pair has its compare here.
+    let along =
+        |p: brepkit_math::vec::Vec3, q: brepkit_math::vec::Vec3| p.cross(q).length() <= tol.angular;
+    let (a, b) = match (a, b) {
+        (FaceSurface::Nurbs(a), FaceSurface::Nurbs(b)) => (a, b),
+        (FaceSurface::Cylinder(a), FaceSurface::Cylinder(b)) => {
+            return (a.radius() - b.radius()).abs() < tol.linear
+                && along(a.axis(), b.axis())
+                && (b.origin() - a.origin()).cross(a.axis()).length() < tol.linear;
+        }
+        (FaceSurface::Cone(a), FaceSurface::Cone(b)) => {
+            return (a.half_angle() - b.half_angle()).abs() <= tol.angular
+                && along(a.axis(), b.axis())
+                && a.axis().dot(b.axis()) > 0.0
+                && (b.apex() - a.apex()).length() < tol.linear;
+        }
+        (FaceSurface::Sphere(a), FaceSurface::Sphere(b)) => {
+            return (a.radius() - b.radius()).abs() < tol.linear
+                && (b.center() - a.center()).length() < tol.linear;
+        }
+        (FaceSurface::Torus(a), FaceSurface::Torus(b)) => {
+            return (a.major_radius() - b.major_radius()).abs() < tol.linear
+                && (a.minor_radius() - b.minor_radius()).abs() < tol.linear
+                && along(a.z_axis(), b.z_axis())
+                && (b.center() - a.center()).length() < tol.linear;
+        }
+        (
+            FaceSurface::Plane { .. }
+            | FaceSurface::Cylinder(_)
+            | FaceSurface::Cone(_)
+            | FaceSurface::Sphere(_)
+            | FaceSurface::Torus(_)
+            | FaceSurface::Nurbs(_),
+            _,
+        ) => return false,
     };
     // Parts of one surface hold copies of it. The compare is relative, since
     // a weight has no length scale.
@@ -439,6 +473,32 @@ mod tests {
         let inside = edges_in_one_surface(&topo, ball, &all).unwrap();
         assert_eq!(all.len(), 16);
         assert_eq!(inside.len(), 16, "each edge is between the two halves");
+    }
+
+    #[test]
+    fn two_cylinders_at_a_shallow_tilt_are_two_surfaces() {
+        use brepkit_math::surfaces::CylindricalSurface;
+        use brepkit_math::vec::{Point3, Vec3};
+
+        let wall = |axis: Vec3, radius: f64| {
+            FaceSurface::Cylinder(
+                CylindricalSurface::new(Point3::new(1.0, 2.0, 3.0), axis, radius).unwrap(),
+            )
+        };
+        let upright = wall(Vec3::new(0.0, 0.0, 1.0), 3.0);
+        assert!(same_surface(&upright, &wall(Vec3::new(0.0, 0.0, 1.0), 3.0)));
+        assert!(same_surface(
+            &upright,
+            &wall(Vec3::new(0.0, 0.0, -1.0), 3.0)
+        ));
+        assert!(!same_surface(
+            &upright,
+            &wall(Vec3::new(1e-6_f64.sin(), 0.0, 1e-6_f64.cos()), 3.0)
+        ));
+        assert!(!same_surface(
+            &upright,
+            &wall(Vec3::new(0.0, 0.0, 1.0), 3.0 + 1e-4)
+        ));
     }
 
     #[test]

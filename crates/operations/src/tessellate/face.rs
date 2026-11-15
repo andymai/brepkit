@@ -199,9 +199,7 @@ fn bounded_by_domain(
             #[allow(clippy::cast_precision_loss)]
             let t = t0 + (t1 - t0) * (k as f64) / (samples as f64);
             let p = edge.curve().evaluate_with_endpoints(t, start, end);
-            let Ok(at) =
-                brepkit_math::nurbs::projection::project_point_to_surface(surface, p, 1e-6)
-            else {
+            let Ok(at) = super::nurbs::project_boundary_point(surface, p) else {
                 return Ok(false);
             };
             let on_edge = (at.u - u_lo).abs() <= tol_u

@@ -2911,6 +2911,74 @@ mod tests {
         }
     }
 
+    /// A pick by position takes a rod's seam with its rim: the seam has no
+    /// corner, so the chamfer bevels the rim alone. A pick of the seam alone
+    /// is an error.
+    #[test]
+    fn chamfer_leaves_out_a_walls_seam_picked_with_its_rim() {
+        use brepkit_topology::edge::EdgeCurve;
+
+        let mut k = crate::kernel::BrepKernel::new();
+        let r = k.execute_batch(
+            r#"[
+                {"op": "makeCylinder", "args": {"radius": 3, "height": 10}},
+                {"op": "solidEdges", "args": {"solid": 0}}
+            ]"#,
+        );
+        let parsed: serde_json::Value = serde_json::from_str(&r).unwrap();
+        let solid = u32::try_from(parsed[0]["ok"].as_u64().unwrap()).unwrap();
+        let edges: Vec<u32> = parsed[1]["ok"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|h| u32::try_from(h.as_u64().unwrap()).unwrap())
+            .collect();
+        let curve_of = |k: &crate::kernel::BrepKernel, h: u32| {
+            k.topo
+                .edge(k.resolve_edge(h).unwrap())
+                .unwrap()
+                .curve()
+                .clone()
+        };
+        let rim = *edges
+            .iter()
+            .find(|&&h| {
+                let edge = k.topo.edge(k.resolve_edge(h).unwrap()).unwrap();
+                matches!(edge.curve(), EdgeCurve::Circle(_))
+                    && k.topo.vertex(edge.start()).unwrap().point().z() > 9.0
+            })
+            .unwrap();
+        let seam = *edges
+            .iter()
+            .find(|&&h| matches!(curve_of(&k, h), EdgeCurve::Line))
+            .unwrap();
+
+        let batch = format!(
+            r#"[
+                {{"op": "chamfer", "args": {{"solid": {solid}, "edges": [{seam}, {rim}], "distance": 1.0}}}},
+                {{"op": "chamfer", "args": {{"solid": {solid}, "edges": [{seam}], "distance": 1.0}}}},
+                {{"op": "chamfer", "args": {{"solid": {solid}, "edges": [], "distance": 1.0}}}}
+            ]"#
+        );
+        let parsed: serde_json::Value = serde_json::from_str(&k.execute_batch(&batch)).unwrap();
+        let chamfered = u32::try_from(parsed[0]["ok"].as_u64().expect("chamfer result")).unwrap();
+        let id = k.resolve_solid(chamfered).unwrap();
+        let volume = brepkit_operations::measure::solid_volume(&k.topo, id, 0.001).unwrap();
+        let truth = std::f64::consts::PI * (90.0 - (3.0 - 1.0 / 3.0));
+        assert!(
+            (volume - truth).abs() < 1e-9 * truth,
+            "volume {volume}, expected {truth}"
+        );
+        let refused = parsed[1]["error"]
+            .as_str()
+            .expect("a seam alone is refused");
+        assert!(refused.contains("seam"), "{refused}");
+        let empty = parsed[2]["error"]
+            .as_str()
+            .expect("an empty pick is refused");
+        assert!(!empty.contains("seam"), "{empty}");
+    }
+
     use brepkit_math::vec::Point3;
     use brepkit_topology::builder::make_polygon_wire;
 

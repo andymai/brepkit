@@ -421,16 +421,21 @@ pub fn try_chamfer(
     distance: f64,
 ) -> Result<brepkit_topology::solid::SolidId, brepkit_operations::OperationsError> {
     refuse_edges_off_the_outer_shell(topo, solid_id, edge_ids, "chamfering")?;
-    // An edge inside one surface has no angle to bevel, as in `try_fillet`.
+    // An edge inside one surface has no angle to bevel: a seam, where one
+    // face meets itself, or the line between two parts of one surface. A
+    // pick by position takes a wall's seam with its rim. As in `try_fillet`,
+    // such an edge is left out.
     let inside = brepkit_operations::query::edges_in_one_surface(topo, solid_id, edge_ids)?;
     let with_an_angle: Vec<_> = edge_ids
         .iter()
         .copied()
         .filter(|edge| !inside.contains(&edge.index()))
         .collect();
-    if with_an_angle.is_empty() {
+    if with_an_angle.is_empty() && !edge_ids.is_empty() {
         return Err(brepkit_operations::OperationsError::InvalidInput {
-            reason: "none of the requested edges have an angle to chamfer".to_owned(),
+            reason: "each requested edge is a seam or lies inside one surface, with no corner \
+                     to chamfer"
+                .to_owned(),
         });
     }
     let edge_ids = with_an_angle.as_slice();
@@ -2016,9 +2021,7 @@ mod fillet_tests {
         let error = try_chamfer(&mut topo, rod, &seam, 0.5)
             .expect_err("a pick with no angle must not report the input solid as success");
         assert!(
-            error
-                .to_string()
-                .contains("none of the requested edges have an angle"),
+            error.to_string().contains("lies inside one surface"),
             "unexpected error: {error}"
         );
     }

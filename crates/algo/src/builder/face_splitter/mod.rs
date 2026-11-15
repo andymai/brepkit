@@ -6230,10 +6230,14 @@ fn split_face_2d_impl(
                         if (s3 - e3).length() < tol.linear {
                             continue;
                         }
-                        let pcurve = super::pcurve_compute::compute_pcurve_on_surface(
+                        // A piece of a split rim can run more than a half
+                        // turn: it traces its own span, not the shorter arc
+                        // between its ends.
+                        let pcurve = super::pcurve_compute::compute_boundary_pcurve_on_surface(
                             e.curve(),
-                            s3,
-                            e3,
+                            vs.point(),
+                            ve.point(),
+                            oe.is_forward(),
                             &surface,
                             &wire_pts,
                             Some(frame),
@@ -7119,6 +7123,13 @@ fn split_face_2d_impl(
             .filter(|sct| matches!(sct.curve_3d, EdgeCurve::Line))
             .map(|sct| (sct.start, sct.end))
             .collect();
+        // A curved section (the corner arc of a rounded outline) that ends
+        // on the opening's rim bridges to it as a line does.
+        let curved_ends: Vec<Point3> = sections
+            .iter()
+            .filter(|sct| !matches!(sct.curve_3d, EdgeCurve::Line))
+            .flat_map(|sct| [sct.start, sct.end])
+            .collect();
         let on_seg = |p: Point3, a: Point3, b: Point3| -> bool {
             let d = b - a;
             let len2 = d.dot(d);
@@ -7149,7 +7160,8 @@ fn split_face_2d_impl(
             let mut coincident: Vec<Point3> = Vec::new();
             for e in hole {
                 for p in [e.start_3d, e.end_3d] {
-                    if sec_segs.iter().any(|&(a, b)| on_seg(p, a, b))
+                    if (sec_segs.iter().any(|&(a, b)| on_seg(p, a, b))
+                        || curved_ends.iter().any(|q| (*q - p).length() < tol.linear))
                         && !coincident.iter().any(|q| (*q - p).length() < tol.linear)
                     {
                         coincident.push(p);
@@ -9052,6 +9064,26 @@ fn split_face_2d_impl(
             }
         };
         let outer_uv: Vec<Vec<Point2>> = outers.iter().map(|(w, _)| sample_loop(w)).collect();
+        // An outer of lines and conic arcs read as it is: its polygon cuts
+        // each arc's corners off, by half a unit on a rim that is one circle
+        // of radius seven, and a loop that runs nearer the rim than that
+        // reads as outside it.
+        let outer_exact: Vec<Option<Vec<brepkit_math::region2d::Boundary2>>> = outers
+            .iter()
+            .map(|(w, _)| {
+                is_plane
+                    .then(|| containment::exact_hole(w, frame))
+                    .flatten()
+            })
+            .collect();
+        let within_exact = |pts: &[Point2]| {
+            outer_exact.iter().flatten().any(|pieces| {
+                pts.iter().all(|&p| {
+                    brepkit_math::region2d::point_in_region(pieces, p, tol.linear * 10.0)
+                        != Some(false)
+                })
+            })
+        };
         let mut promoted: Vec<Vec<OrientedPCurveEdge>> = Vec::new();
         holes.retain(|hole| {
             let hole_pts = sample_loop(hole);
@@ -9060,7 +9092,8 @@ fn split_face_2d_impl(
             }
             let nested = outer_uv
                 .iter()
-                .any(|o| loop_containment(&hole_pts, o) != LoopContainment::Outside);
+                .any(|o| loop_containment(&hole_pts, o) != LoopContainment::Outside)
+                || within_exact(&hole_pts);
             if nested {
                 true
             } else {
@@ -9502,6 +9535,37 @@ pub fn face_has_curved_lens_holes(topo: &Topology, face_id: FaceId) -> bool {
             })
         })
     })
+}
+
+/// A point on a whole cylinder/cone wall that lies clear of its lens holes:
+/// the search of [`cylinder_cone_remainder_interior`], for a wall that no
+/// section cut. The generic sample of an uncut face does not look at holes.
+pub fn whole_lens_wall_interior(
+    topo: &Topology,
+    face_id: FaceId,
+    clearance: f64,
+) -> Option<Point3> {
+    let face = topo.face(face_id).ok()?;
+    let surface = face.surface().clone();
+    let edges_of = |wire| {
+        let pts = collect_wire_points(topo, wire);
+        boundary_edges_to_pcurve(topo, wire, &surface, &pts, None)
+    };
+    let outer_wire = edges_of(face.outer_wire());
+    let inner_wires: Vec<_> = face.inner_wires().iter().map(|&w| edges_of(w)).collect();
+    if outer_wire.is_empty() || inner_wires.iter().any(Vec::is_empty) {
+        return None;
+    }
+    let whole = SplitSubFace {
+        surface,
+        outer_wire,
+        inner_wires,
+        reversed: face.is_reversed(),
+        parent: face_id,
+        rank: Rank::A,
+        precomputed_interior: None,
+    };
+    cylinder_cone_remainder_interior(&whole, clearance)
 }
 
 /// Get a point guaranteed inside a sub-face's outer wire (in UV space),
