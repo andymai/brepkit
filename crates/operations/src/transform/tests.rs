@@ -1113,6 +1113,15 @@ fn the_inverse_of_an_affine_matrix_holds_at_each_scale_and_place() {
         Mat4::translation(-3.0e6, 2.0e5, 7.0) * turn * Mat4::scale(1e-7, 2e-7, -4e-7),
         Mat4::scale(1e-120, 1e-120, 1e-120),
         Mat4::scale(1e90, 1e90, 1e90),
+        Mat4::scale(1e-200, 1e-200, 1e-200),
+        Mat4::scale(1e200, 1e200, 1e200),
+        // Rows that are almost one direction, and still span space.
+        Mat4([
+            [1e-4, 0.0, 1e4, 3.0],
+            [0.0, 1e-4, 1e4, -2.0],
+            [0.0, 0.0, 1e4, 9.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ]),
         Mat4::translation(5.0, -6.0, 7.0) * turn * Mat4::scale(2.0, 0.5, 3.0),
     ];
     for m in cases {
@@ -1128,6 +1137,8 @@ fn the_inverse_of_an_affine_matrix_holds_at_each_scale_and_place() {
                 } else {
                     1.0
                 };
+                // A far translation keeps fewer digits through the product.
+                let size = size * (1.0 + m.0[0][3].abs().max(m.0[1][3].abs()) * 1e-3);
                 assert!(
                     (c - want).abs() < 1e-9 * size,
                     "inverse * m at ({i}, {j}) is {c} for {m:?}"
@@ -1153,5 +1164,66 @@ fn a_matrix_with_no_inverse_has_no_checked_inverse() {
     ];
     for m in cases {
         assert!(checked_inverse(&m).is_err(), "{m:?}");
+    }
+}
+
+#[test]
+fn a_mirror_is_read_at_each_scale() {
+    for s in [1e-200, 1e-110, 1e-7, 1.0, 1e110] {
+        assert!(is_mirror(&Mat4::scale(-s, s, s)), "scale {s}");
+        assert!(is_mirror(&Mat4::scale(-s, -s, -s)), "scale {s}");
+        assert!(!is_mirror(&Mat4::scale(s, s, s)), "scale {s}");
+        assert!(!is_mirror(&Mat4::scale(-s, -s, s)), "scale {s}");
+        let turned = Mat4::translation(1e5, 0.0, 0.0) * Mat4::rotation_z(2.0);
+        assert!(is_mirror(&(turned * Mat4::scale(s, s, -s))), "scale {s}");
+        assert!(!is_mirror(&(turned * Mat4::scale(s, s, s))), "scale {s}");
+    }
+}
+
+/// The determinant of a mirror scale by 1e-110 underflows to zero. The
+/// mirrored box must still have its boundaries the right way round.
+#[test]
+fn a_tiny_mirror_scale_keeps_a_box_outward() {
+    use crate::copy::copy_and_transform_solid;
+    use crate::primitives::make_box;
+
+    let s = 1e-110;
+    let m = Mat4::scale(-s, s, s);
+    let mut topo = Topology::new();
+    let b = make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+    let copy = copy_and_transform_solid(&mut topo, b, &m).unwrap();
+    transform_solid(&mut topo, b, &m).unwrap();
+    for solid in [b, copy] {
+        for fid in brepkit_topology::explorer::solid_faces(&topo, solid).unwrap() {
+            let face = topo.face(fid).unwrap();
+            let FaceSurface::Plane { normal, .. } = face.surface() else {
+                panic!("a box face is a plane");
+            };
+            // Newell's sum over the outer wire, in units of the scale.
+            let wire = topo.wire(face.outer_wire()).unwrap();
+            let pts: Vec<_> = wire
+                .edges()
+                .iter()
+                .map(|oe| {
+                    let e = topo.edge(oe.edge()).unwrap();
+                    let v = if oe.is_forward() { e.start() } else { e.end() };
+                    let p = topo.vertex(v).unwrap().point();
+                    Vec3::new(p.x() / s, p.y() / s, p.z() / s)
+                })
+                .collect();
+            let mut area = Vec3::new(0.0, 0.0, 0.0);
+            for i in 0..pts.len() {
+                area += pts[i].cross(pts[(i + 1) % pts.len()]);
+            }
+            let outward = if face.is_reversed() {
+                -*normal
+            } else {
+                *normal
+            };
+            assert!(
+                area.dot(outward) > 0.5,
+                "face {fid:?}: {area:?} {outward:?}"
+            );
+        }
     }
 }

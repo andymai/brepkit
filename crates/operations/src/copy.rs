@@ -259,7 +259,7 @@ pub fn copy_and_transform_solid(
     use crate::transform::{curve_image, surface_image};
 
     let inverse = crate::transform::checked_inverse(matrix)?;
-    let mirrored = matrix.determinant() < 0.0;
+    let mirrored = crate::transform::is_mirror(matrix);
 
     // Read phase mirrors copy_solid, and maps each surface while the source
     // face's boundary is still in place.

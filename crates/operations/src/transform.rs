@@ -52,9 +52,9 @@ pub fn transform_solid(
 ///
 /// The determinant of a uniform scale by `s` is `s³`, so a comparison of the
 /// determinant with a length tolerance refuses a scale from millimetres to
-/// metres. An affine matrix is judged on its linear block alone, with each
-/// row scaled to unit length: neither the size of the scale nor the
-/// translation changes the answer.
+/// metres. An affine matrix is judged on the pivots of its linear block,
+/// with each row scaled to unit length: neither the size of the scale nor
+/// the translation changes the answer.
 pub(crate) fn checked_inverse(matrix: &Mat4) -> Result<Mat4, crate::OperationsError> {
     let finite = |m: &Mat4| m.0.iter().flatten().all(|c| c.is_finite());
     if !finite(matrix) {
@@ -62,10 +62,8 @@ pub(crate) fn checked_inverse(matrix: &Mat4) -> Result<Mat4, crate::OperationsEr
             reason: "transform matrix has a component that is not finite".into(),
         });
     }
-    #[allow(clippy::float_cmp)]
-    let affine = matrix.0[3] == [0.0, 0.0, 0.0, 1.0];
-    let inverse = if affine {
-        affine_inverse(matrix)
+    let inverse = if is_affine(matrix) {
+        invert_linear_block(matrix).map(|(inverse, _)| inverse)
     } else {
         matrix.inverse().ok()
     };
@@ -76,39 +74,89 @@ pub(crate) fn checked_inverse(matrix: &Mat4) -> Result<Mat4, crate::OperationsEr
         })
 }
 
-/// The inverse of a matrix whose last row is `0 0 0 1`, or `None` when its
-/// linear block has no inverse.
-fn affine_inverse(matrix: &Mat4) -> Option<Mat4> {
+/// Whether the matrix turns a right-handed frame into a left-handed one.
+///
+/// The determinant of a small scale underflows to zero, so the sign comes
+/// from the pivots of the unit rows.
+pub(crate) fn is_mirror(matrix: &Mat4) -> bool {
+    if is_affine(matrix) {
+        invert_linear_block(matrix).is_some_and(|(_, mirror)| mirror)
+    } else {
+        matrix.determinant() < 0.0
+    }
+}
+
+#[allow(clippy::float_cmp)]
+fn is_affine(matrix: &Mat4) -> bool {
+    matrix.0[3] == [0.0, 0.0, 0.0, 1.0]
+}
+
+/// The inverse of a matrix whose last row is `0 0 0 1`, and whether the
+/// matrix is a mirror. `None` when its linear block has no inverse.
+///
+/// Gauss-Jordan elimination with row pivots, on rows of unit length. A
+/// pivot at the size of the rounding of a unit row means that the rows do
+/// not span space.
+fn invert_linear_block(matrix: &Mat4) -> Option<(Mat4, bool)> {
     let m = &matrix.0;
-    let row = |i: usize| Vec3::new(m[i][0], m[i][1], m[i][2]);
-    let lengths = [row(0).length(), row(1).length(), row(2).length()];
+    // `hypot` holds a row of 1e-200 or of 1e200, where a sum of squares
+    // does not.
+    let lengths = [0, 1, 2].map(|i| m[i][0].hypot(m[i][1]).hypot(m[i][2]));
     if lengths.contains(&0.0) {
         return None;
     }
-    // Unit rows: their determinant is the sine-like volume of the three
-    // directions, whatever the scale.
-    let unit = [0, 1, 2].map(|i| row(i) * (1.0 / lengths[i]));
-    let det = unit[0].dot(unit[1].cross(unit[2]));
-    if det.abs() <= 64.0 * f64::EPSILON {
-        return None;
+    // Each row is `[unit row | row of the identity]`.
+    let mut rows = [[0.0_f64; 6]; 3];
+    for i in 0..3 {
+        for j in 0..3 {
+            rows[i][j] = m[i][j] / lengths[i];
+        }
+        rows[i][3 + i] = 1.0;
     }
-    // Column `i` of the inverse of the unit block, then of the block.
-    let cols = [
-        unit[1].cross(unit[2]),
-        unit[2].cross(unit[0]),
-        unit[0].cross(unit[1]),
-    ];
-    let cols = [0, 1, 2].map(|i| cols[i] * (1.0 / (det * lengths[i])));
-    let t = Vec3::new(m[0][3], m[1][3], m[2][3]);
-    let lin = |f: fn(&Vec3) -> f64| [f(&cols[0]), f(&cols[1]), f(&cols[2])];
-    let rows = [lin(|c| c.x()), lin(|c| c.y()), lin(|c| c.z())];
-    let shift = |r: &[f64; 3]| -(r[0].madd(t.x(), r[1].madd(t.y(), r[2] * t.z())));
-    Some(Mat4([
-        [rows[0][0], rows[0][1], rows[0][2], shift(&rows[0])],
-        [rows[1][0], rows[1][1], rows[1][2], shift(&rows[1])],
-        [rows[2][0], rows[2][1], rows[2][2], shift(&rows[2])],
+    let mut mirror = false;
+    for col in 0..3 {
+        let mut pivot = col;
+        for i in col + 1..3 {
+            if rows[i][col].abs() > rows[pivot][col].abs() {
+                pivot = i;
+            }
+        }
+        if rows[pivot][col].abs() <= 16.0 * f64::EPSILON {
+            return None;
+        }
+        if pivot != col {
+            rows.swap(pivot, col);
+            mirror = !mirror;
+        }
+        if rows[col][col] < 0.0 {
+            mirror = !mirror;
+        }
+        let scale = 1.0 / rows[col][col];
+        for v in &mut rows[col] {
+            *v *= scale;
+        }
+        let pivot_row = rows[col];
+        for (i, row) in rows.iter_mut().enumerate() {
+            if i == col {
+                continue;
+            }
+            let factor = row[col];
+            for (v, p) in row.iter_mut().zip(pivot_row) {
+                *v = (-factor).madd(p, *v);
+            }
+        }
+    }
+    // The right half is the inverse of the unit rows. Column `j` of the
+    // block's inverse is that column over the length of row `j`.
+    let lin = |i: usize, j: usize| rows[i][3 + j] / lengths[j];
+    let shift = |i: usize| -(lin(i, 0).madd(m[0][3], lin(i, 1).madd(m[1][3], lin(i, 2) * m[2][3])));
+    let inverse = Mat4([
+        [lin(0, 0), lin(0, 1), lin(0, 2), shift(0)],
+        [lin(1, 0), lin(1, 1), lin(1, 2), shift(1)],
+        [lin(2, 0), lin(2, 1), lin(2, 2), shift(2)],
         [0.0, 0.0, 0.0, 1.0],
-    ]))
+    ]);
+    Some((inverse, mirror))
 }
 
 /// Transform a closed set of faces with the edges and vertices they use.
@@ -145,7 +193,7 @@ fn transform_topology(
     // normal outward, so its wires reverse. A NURBS image's Su × Sv turns
     // inward instead, which already leaves its wires counter-clockwise about
     // the surface normal: only its flag flips.
-    if matrix.determinant() < 0.0 {
+    if is_mirror(matrix) {
         let kept: HashSet<FaceId> = face_ids.difference(&flipped).copied().collect();
         separate_shared_wires(topo, &kept, &flipped)?;
         reverse_face_wires(topo, &kept)?;
@@ -360,7 +408,7 @@ pub(crate) fn surface_image(
         ConicalSurface, CylindricalSurface, SphericalSurface, ToroidalSurface,
     };
 
-    let mirrored = matrix.determinant() < 0.0;
+    let mirrored = is_mirror(matrix);
     let heal_err = |what: &str, e: brepkit_heal::HealError| crate::OperationsError::InvalidInput {
         reason: format!("{what} failed: {e}"),
     };
