@@ -9925,10 +9925,10 @@ fn unwrapped_u(pts: &[Point2]) -> Vec<Point2> {
     use std::f64::consts::{FRAC_PI_2, PI, TAU};
     let at_pole = |p: &Point2| p.y().abs() >= FRAC_PI_2 - 1e-6;
     let nearest = |from: f64, to: f64| (to - from + PI).rem_euclid(TAU) - PI;
-    let Some(first) = pts.iter().position(|p| !at_pole(p)) else {
-        return pts.to_vec();
-    };
-    if !pts.iter().any(at_pole) {
+    // A loop with no point off the poles has no meridian to pass a pole
+    // from: it keeps the nearest way, as a loop with no point at a pole does.
+    let first = pts.iter().position(|p| !at_pole(p));
+    let (Some(first), true) = (first, pts.iter().any(at_pole)) else {
         let mut u = pts[0].x();
         let mut out = vec![pts[0]];
         for w in pts.windows(2) {
@@ -9936,7 +9936,7 @@ fn unwrapped_u(pts: &[Point2]) -> Vec<Point2> {
             out.push(Point2::new(u, w[1].y()));
         }
         return out;
-    }
+    };
     // The way past a pole from the meridian `from` to the meridian `to`.
     let past_pole = |from: f64, to: f64, north: bool| {
         let turn = if north { from - to } else { to - from }.rem_euclid(TAU);
@@ -11714,13 +11714,19 @@ mod tests {
             Point2::new(0.2, 0.5),
             Point2::new(6.0, 0.5),
         ];
-        let us: Vec<f64> = unwrapped_u(&across_the_seam)
-            .iter()
-            .map(|p| p.x())
-            .collect();
-        assert_eq!(us.len(), 4);
-        for (got, want) in us.iter().zip([6.0, 0.2 + TAU, 0.2 + TAU, 6.0]) {
-            assert!((got - want).abs() < 1e-12, "{us:?}");
+        // The same loop within the pole's margin has no point off the pole.
+        let lift = |by: f64| -> Vec<Point2> {
+            across_the_seam
+                .iter()
+                .map(|p| Point2::new(p.x(), if p.y() < 0.3 { by } else { by + 6e-7 }))
+                .collect()
+        };
+        for loop_uv in [across_the_seam.to_vec(), lift(FRAC_PI_2 - 8e-7)] {
+            let us: Vec<f64> = unwrapped_u(&loop_uv).iter().map(|p| p.x()).collect();
+            assert_eq!(us.len(), 4);
+            for (got, want) in us.iter().zip([6.0, 0.2 + TAU, 0.2 + TAU, 6.0]) {
+                assert!((got - want).abs() < 1e-12, "{us:?}");
+            }
         }
     }
 }
