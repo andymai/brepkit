@@ -395,6 +395,27 @@ pub fn try_chamfer(
     distance: f64,
 ) -> Result<brepkit_topology::solid::SolidId, brepkit_operations::OperationsError> {
     refuse_edges_off_the_outer_shell(topo, solid_id, edge_ids, "chamfering")?;
+    // A seam is where one face meets itself: it has no corner to cut, and a
+    // pick by position takes a wall's seam with its rim. As in `try_fillet`,
+    // it is left out.
+    let adjacency = topo.build_adjacency(solid_id)?;
+    let edges: Vec<_> = edge_ids
+        .iter()
+        .copied()
+        .filter(|&edge| {
+            let faces = adjacency.faces_for_edge(edge);
+            !faces
+                .first()
+                .is_some_and(|first| faces.iter().all(|face| face == first))
+        })
+        .collect();
+    if edges.is_empty() && !edge_ids.is_empty() {
+        return Err(brepkit_operations::OperationsError::InvalidInput {
+            reason: "each requested edge is a seam of its face, with no corner to chamfer"
+                .to_owned(),
+        });
+    }
+    let edge_ids = edges.as_slice();
     let orientation_deflection = gate_deflection(topo, solid_id, distance)?;
     if let Ok(Some(s)) = brepkit_operations::chamfer_chain::chamfer_tangent_chains(
         topo, solid_id, edge_ids, distance,
