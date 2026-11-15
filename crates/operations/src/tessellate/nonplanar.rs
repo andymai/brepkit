@@ -3252,11 +3252,9 @@ fn project_to_surface_uv(
         FaceSurface::Cone(cone) => Ok(cone.project_point(pt)),
         FaceSurface::Sphere(sphere) => Ok(sphere.project_point(pt)),
         FaceSurface::Torus(torus) => Ok(torus.project_point(pt)),
-        FaceSurface::Nurbs(surface) => {
-            brepkit_math::nurbs::projection::project_point_to_surface(surface, pt, 1e-6)
-                .map(|proj| (proj.u, proj.v))
-                .map_err(crate::OperationsError::Math)
-        }
+        FaceSurface::Nurbs(surface) => super::nurbs::project_boundary_point(surface, pt)
+            .map(|proj| (proj.u, proj.v))
+            .map_err(crate::OperationsError::Math),
         FaceSurface::Plane { .. } => Err(crate::OperationsError::InvalidInput {
             reason: "planar faces should not use CDT tessellation".to_string(),
         }),

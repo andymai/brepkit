@@ -407,6 +407,235 @@ pub fn project_point_to_surface(
     }
 }
 
+/// Find the point of a NURBS surface nearest a point known to lie within
+/// `near` of it.
+///
+/// [`project_point_to_surface`] seeds from a coarse grid, and where the
+/// surface runs fast between two grid points it can settle on a point of a
+/// farther part of the surface. A result farther than `near` is such a
+/// point, so the Bezier patches of the surface are then searched by halving,
+/// nearest control box first, and a patch whose control box is farther than
+/// `near` is dropped: it cannot hold the point.
+///
+/// A point that is farther than `near` from the surface gets the result of
+/// [`project_point_to_surface`].
+///
+/// # Errors
+///
+/// Returns [`MathError::ConvergenceFailure`] as [`project_point_to_surface`]
+/// does, when the patch search finds no point either.
+pub fn project_point_near_surface(
+    surface: &NurbsSurface,
+    point: Point3,
+    tolerance: f64,
+    near: f64,
+) -> Result<SurfaceProjection, MathError> {
+    let first = project_point_to_surface(surface, point, tolerance);
+    if near.is_nan() || first.as_ref().is_ok_and(|found| found.distance <= near) {
+        return first;
+    }
+    match search_bezier_boxes(surface, point, tolerance, near) {
+        Some(found) => Ok(found),
+        None => first,
+    }
+}
+
+/// A part of one Bezier patch: its control points, each `[w x, w y, w z, w]`,
+/// in rows along u, and the parameters of the surface it covers.
+struct BezierBox {
+    net: Vec<Vec<[f64; 4]>>,
+    u: (f64, f64),
+    v: (f64, f64),
+    /// The distance from the point to the box of the control points, which
+    /// no point of the part comes nearer than.
+    reach: f64,
+    /// The diagonal of that box.
+    size: f64,
+}
+
+impl BezierBox {
+    /// `None` for a weight that is not positive: the part can then leave the
+    /// box of its control points.
+    fn new(net: Vec<Vec<[f64; 4]>>, u: (f64, f64), v: (f64, f64), point: Point3) -> Option<Self> {
+        if net.iter().flatten().any(|q| q[3].is_nan() || q[3] <= 0.0) {
+            return None;
+        }
+        let hull = Aabb3::from_points(
+            net.iter()
+                .flatten()
+                .map(|q| Point3::new(q[0] / q[3], q[1] / q[3], q[2] / q[3])),
+        );
+        Some(Self {
+            net,
+            u,
+            v,
+            reach: hull.distance_squared_to_point(point).sqrt(),
+            size: (hull.max - hull.min).length(),
+        })
+    }
+
+    /// The two halves, cut across the direction the control points run
+    /// farther in.
+    fn halves(&self, point: Point3) -> [Option<Self>; 2] {
+        let step = |a: &[f64; 4], b: &[f64; 4]| {
+            let at = |q: &[f64; 4]| Point3::new(q[0] / q[3], q[1] / q[3], q[2] / q[3]);
+            (at(b) - at(a)).length()
+        };
+        let along_u: f64 = self
+            .net
+            .windows(2)
+            .map(|rows| {
+                rows[0]
+                    .iter()
+                    .zip(&rows[1])
+                    .map(|(a, b)| step(a, b))
+                    .fold(0.0, f64::max)
+            })
+            .sum();
+        let along_v: f64 = self
+            .net
+            .iter()
+            .map(|row| row.windows(2).map(|q| step(&q[0], &q[1])).sum::<f64>())
+            .fold(0.0, f64::max);
+        if along_u >= along_v {
+            let columns = self.net.first().map_or(0, Vec::len);
+            let mut low = vec![Vec::with_capacity(columns); self.net.len()];
+            let mut high = vec![Vec::with_capacity(columns); self.net.len()];
+            for j in 0..columns {
+                let column: Vec<[f64; 4]> = self.net.iter().map(|row| row[j]).collect();
+                let (a, b) = halve_bezier(&column);
+                for (i, (qa, qb)) in a.into_iter().zip(b).enumerate() {
+                    low[i].push(qa);
+                    high[i].push(qb);
+                }
+            }
+            let mid = 0.5 * (self.u.0 + self.u.1);
+            [
+                Self::new(low, (self.u.0, mid), self.v, point),
+                Self::new(high, (mid, self.u.1), self.v, point),
+            ]
+        } else {
+            let (low, high): (Vec<_>, Vec<_>) =
+                self.net.iter().map(|row| halve_bezier(row)).unzip();
+            let mid = 0.5 * (self.v.0 + self.v.1);
+            [
+                Self::new(low, self.u, (self.v.0, mid), point),
+                Self::new(high, self.u, (mid, self.v.1), point),
+            ]
+        }
+    }
+}
+
+impl PartialEq for BezierBox {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == std::cmp::Ordering::Equal
+    }
+}
+
+impl Eq for BezierBox {}
+
+impl PartialOrd for BezierBox {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for BezierBox {
+    /// The part whose control box is nearest is the greatest, for a
+    /// max-heap; of two equally near, the smaller.
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        other
+            .reach
+            .total_cmp(&self.reach)
+            .then(other.size.total_cmp(&self.size))
+    }
+}
+
+/// The control points of the two halves of a Bezier curve, by de Casteljau.
+fn halve_bezier(points: &[[f64; 4]]) -> (Vec<[f64; 4]>, Vec<[f64; 4]>) {
+    let mut work = points.to_vec();
+    let mut low = Vec::with_capacity(points.len());
+    let mut high = Vec::with_capacity(points.len());
+    for level in 0..points.len() {
+        let last = points.len() - 1 - level;
+        low.push(work[0]);
+        high.push(work[last]);
+        for k in 0..last {
+            for c in 0..4 {
+                work[k][c] = 0.5 * (work[k][c] + work[k + 1][c]);
+            }
+        }
+    }
+    high.reverse();
+    (low, high)
+}
+
+/// The most parts of Bezier patches a search for a point near the surface
+/// reads before it gives up.
+const MOST_BEZIER_BOXES: usize = 4096;
+
+/// A point of `surface` within `near` of `point`, by a damped descent from
+/// the middle of each part of a Bezier patch whose control box comes within
+/// `near` of the point, nearest and smallest first. `None` if no part holds
+/// one, or a patch has a weight that is not positive.
+fn search_bezier_boxes(
+    surface: &NurbsSurface,
+    point: Point3,
+    tolerance: f64,
+    near: f64,
+) -> Option<SurfaceProjection> {
+    let patches = crate::nurbs::decompose::surface_to_bezier_patches(surface).ok()?;
+    let (u_min, u_max) = surface.domain_u();
+    let (v_min, v_max) = surface.domain_v();
+    let closed = (surface.is_periodic_u(), surface.is_periodic_v());
+    let mut heap = std::collections::BinaryHeap::new();
+    for patch in &patches {
+        let net = patch
+            .surface
+            .control_points()
+            .iter()
+            .zip(patch.surface.weights())
+            .map(|(row, weights)| {
+                row.iter()
+                    .zip(weights)
+                    .map(|(p, &w)| [p.x() * w, p.y() * w, p.z() * w, w])
+                    .collect()
+            })
+            .collect();
+        let part = BezierBox::new(net, patch.u_range, patch.v_range, point)?;
+        if part.reach <= near {
+            heap.push(part);
+        }
+    }
+    let mut read = heap.len();
+    while let Some(part) = heap.pop() {
+        let seed = (0.5 * (part.u.0 + part.u.1), 0.5 * (part.v.0 + part.v.1));
+        let found = surface_descend(
+            surface,
+            point,
+            seed,
+            [u_min, u_max, v_min, v_max],
+            closed,
+            tolerance,
+        );
+        if found.distance <= near {
+            return Some(found);
+        }
+        // A part smaller than the tolerance holds no point that the descent
+        // from its middle did not find.
+        if part.size <= tolerance || read >= MOST_BEZIER_BOXES {
+            continue;
+        }
+        for half in part.halves(point).into_iter().flatten() {
+            read += 1;
+            if half.reach <= near {
+                heap.push(half);
+            }
+        }
+    }
+    None
+}
+
 /// Project `point` onto `surface` by Newton from `(u, v)`, for a point
 /// known to lie near the surface there.
 ///
@@ -965,6 +1194,64 @@ mod tests {
     use crate::vec::Vec3;
 
     const TOL: f64 = 1e-8;
+
+    /// A strip ruled along u over a plane cubic that runs out, back and out
+    /// again while it rises. Near each end the curve runs fast, so the seed
+    /// grid steps over the valley of a point there, and the nearest grid
+    /// point is on the middle of the curve.
+    fn strip_that_bends_back() -> NurbsSurface {
+        let (xs, zs) = ([0.0, 12.65, -6.65, 6.0], [0.0, 0.0, 2.0, 2.0]);
+        let net: Vec<Vec<Point3>> = [0.0, 10.0]
+            .iter()
+            .map(|&y| (0..4).map(|k| Point3::new(xs[k], y, zs[k])).collect())
+            .collect();
+        NurbsSurface::new(
+            1,
+            3,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+            net,
+            vec![vec![1.0; 4]; 2],
+        )
+        .expect("a strip")
+    }
+
+    #[test]
+    fn a_point_on_a_strip_that_bends_back_projects_to_itself() {
+        let strip = strip_that_bends_back();
+        let mut strayed = 0;
+        for u in [0.0, 0.3, 1.0] {
+            for k in 0..=200 {
+                let v = f64::from(k) / 200.0;
+                let point = strip.evaluate(u, v);
+                let plain = project_point_to_surface(&strip, point, 1e-9).expect("a projection");
+                if plain.distance > 1e-3 {
+                    strayed += 1;
+                }
+                let near =
+                    project_point_near_surface(&strip, point, 1e-9, 1e-3).expect("a projection");
+                assert!(near.distance < 1e-7, "v = {v}: {} away", near.distance);
+                assert!(
+                    (near.u - u).abs() < 1e-6 && (near.v - v).abs() < 1e-6,
+                    "v = {v}: found ({}, {})",
+                    near.u,
+                    near.v
+                );
+            }
+        }
+        // The plain projection is what strays here; if it stops, this test
+        // no longer shows that the search is needed.
+        assert!(strayed > 0, "the plain projection found every point");
+    }
+
+    #[test]
+    fn a_point_far_from_the_surface_gets_the_plain_projection() {
+        let strip = strip_that_bends_back();
+        let point = Point3::new(3.0, 5.0, 9.0);
+        let plain = project_point_to_surface(&strip, point, 1e-9).expect("a projection");
+        let near = project_point_near_surface(&strip, point, 1e-9, 1e-3).expect("a projection");
+        assert_eq!((plain.u, plain.v), (near.u, near.v));
+    }
 
     /// A span with a negative weight leaves its control points' box, so it
     /// is never pruned: here the exact hit at u = 0.75 lies outside the box
