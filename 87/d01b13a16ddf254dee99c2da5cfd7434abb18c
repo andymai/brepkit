@@ -1,0 +1,23 @@
+crates/operations/benches/cad_operations.rs
+  s_709d857a0f83c4::t_42b95d27aa4ad1 327-335,338,340,342,344-352,354-361,363-371
+crates/topology/src/pcurve.rs
+  s_709d857a0f83c4::t_aed42355eb53fd 94,99-126,136-143,146-150,155-164,166,168-171,176,178,180,195-199,201-208,224-227,244-245,251-253,260-278,488-570
+crates/topology/src/topology.rs
+  s_709d857a0f83c4::t_bc808e47751f8f 26,50-68
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "87d01b13a16ddf254dee99c2da5cfd7434abb18c",
+  "prompts": {},
+  "sessions": {
+    "s_709d857a0f83c4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6cca9812-d77a-4dae-96f4-26562694b205",
+        "model": "unknown"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
