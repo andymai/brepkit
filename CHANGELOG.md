@@ -1,5 +1,16 @@
 # Changelog
 
+## [4.11.18](https://github.com/andymai/brepkit/compare/v4.11.17...v4.11.18) (2026-11-15)
+
+
+### Bug Fixes
+
+* **algo:** edges on one curve do not cross at their sample points ([#2462](https://github.com/andymai/brepkit/issues/2462)) ([43dc136](https://github.com/andymai/brepkit/commit/43dc136d6503bb05a298fed55d2fbef18dfb6d10))
+* **algo:** split a ring by faces through its axis ([#2466](https://github.com/andymai/brepkit/issues/2466)) ([333663a](https://github.com/andymai/brepkit/commit/333663a71fa46d34a344e8f8c009ae106e10f724))
+* **check:** report a face whose hole crosses its outline ([#2452](https://github.com/andymai/brepkit/issues/2452)) ([06d64b3](https://github.com/andymai/brepkit/commit/06d64b37035e11b2269bf1906eb70e82437c91f5)), closes [#2444](https://github.com/andymai/brepkit/issues/2444)
+* **io:** join the triangles of an imported mesh at their edges ([#2448](https://github.com/andymai/brepkit/issues/2448)) ([c8b7eb1](https://github.com/andymai/brepkit/commit/c8b7eb138f710955f32c9e6ece1ee9d6e2e8bb0d))
+* **operations:** scale a solid by a small uniform factor ([#2447](https://github.com/andymai/brepkit/issues/2447)) ([8a37205](https://github.com/andymai/brepkit/commit/8a3720562f30eaf456c10170b8daab7dbd06f9ad))
+
 ## [4.11.17](https://github.com/andymai/brepkit/compare/v4.11.16...v4.11.17) (2026-11-14)
 
 
