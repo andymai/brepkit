@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.11.22](https://github.com/andymai/brepkit/compare/v4.11.21...v4.11.22) (2026-11-15)
+
+
+### Bug Fixes
+
+* **wasm:** leave a wall's seam out of a chamfer pick ([#2484](https://github.com/andymai/brepkit/issues/2484)) ([aa81177](https://github.com/andymai/brepkit/commit/aa8117781a4ef89af858102be15f635b90f2684a))
+
 ## [4.11.21](https://github.com/andymai/brepkit/compare/v4.11.20...v4.11.21) (2026-11-15)
 
 
