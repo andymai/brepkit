@@ -1,0 +1,19 @@
+crates/operations/src/sew.rs
+  s_709d857a0f83c4::t_66d4f8927ed1a7 298-326,331
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f3412ba4b06d9f8956c5640ff7f21fdec19f1a42",
+  "prompts": {},
+  "sessions": {
+    "s_709d857a0f83c4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6cca9812-d77a-4dae-96f4-26562694b205",
+        "model": "claude-fable-5-2"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
