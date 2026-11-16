@@ -1,0 +1,23 @@
+crates/operations/src/chamfer_chain.rs
+  s_0db8415e6f59cd::t_e28c3cf723f230 928,934,995,1291,1297-1591,1964,1996,2010,2014-2015,2075,2155-2166,2231-2382,2384-2388,2390-2398,2400,2402-2689,3679,3681,3695-3702,3707-3729
+crates/operations/tests/chamfer_corner_regions.rs
+  s_0db8415e6f59cd::t_997ae5ab86c7e3 1-420
+crates/operations/tests/chamfer_slot_ends.rs
+  s_0db8415e6f59cd::t_0fb3af367f4e8c 1-5,12,20,40-78,81-138,140-196,198-218,309,312-313,318,347-349,352-353,358,378-379,386,393-473
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e66f3b765f1d25bb97098e46dd184ece5c05a4b2",
+  "prompts": {},
+  "sessions": {
+    "s_0db8415e6f59cd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "80c728ce-cbd9-4375-adac-8fbf308dc911",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
