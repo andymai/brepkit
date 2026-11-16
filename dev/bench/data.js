@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794819569300,
+  "lastUpdate": 1794821822062,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -72143,6 +72143,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 14404244,
             "range": "± 1178195",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "302ce3627e76129bca215f247c4e96ba62f4a8b5",
+          "message": "chore(main): release 4.11.26 (#2531)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[4.11.26](https://github.com/andymai/brepkit/compare/v4.11.25...v4.11.26)\n(2026-11-16)\n\n\n### Bug Fixes\n\n* **algo:** fuse a post between two rails and balls across a flat ring\nexactly ([#2549](https://github.com/andymai/brepkit/issues/2549))\n([63ab2cb](https://github.com/andymai/brepkit/commit/63ab2cb2d20521d16770c8b172e34a7a33830418))\n* **algo:** keep a coplanar piece unless a section has its two ends\n([#2508](https://github.com/andymai/brepkit/issues/2508))\n([7295743](https://github.com/andymai/brepkit/commit/7295743f417082ad453356a34fc38a55759605eb))\n* **algo:** read a section's windows against the face's true arcs\n([#2539](https://github.com/andymai/brepkit/issues/2539))\n([0ff2279](https://github.com/andymai/brepkit/commit/0ff2279d5c0c17a70a5e637d02e39ba0e18b3591))\n* **algo:** read an edge crossing between sample points out of one plane\n([#2530](https://github.com/andymai/brepkit/issues/2530))\n([fa3f76b](https://github.com/andymai/brepkit/commit/fa3f76b1502845b56843bfabe85037bfb1c13d71))\n* **algo:** split a curve that shares its ends with another path before\nassembly ([#2536](https://github.com/andymai/brepkit/issues/2536))\n([bc18daa](https://github.com/andymai/brepkit/commit/bc18daac3c19f332843319cbbc968dc265e21bc9))\n* **blend:** hold a B-spline corner edge's bow in a round's notch check\n([#2542](https://github.com/andymai/brepkit/issues/2542))\n([30b10f4](https://github.com/andymai/brepkit/commit/30b10f47609bb0cf1eaa03e3809390eec392a19a))\n* **blend:** round a plane and a cylinder along the axis with a cylinder\n([#2518](https://github.com/andymai/brepkit/issues/2518))\n([b0b9f03](https://github.com/andymai/brepkit/commit/b0b9f03c76d014c7b5883910845de760ac3eeb91))\n* **check:** read a curved face's holes in its surface's parameters\n([#2532](https://github.com/andymai/brepkit/issues/2532))\n([f1d7eae](https://github.com/andymai/brepkit/commit/f1d7eaedbf3a794444bed71cbffe88bc1843328d))\n* **check:** report two flat faces of one solid that cover the same area\n([#2512](https://github.com/andymai/brepkit/issues/2512))\n([3408aad](https://github.com/andymai/brepkit/commit/3408aad5a42c90b5806ea4f96dd91ae8f5699d3e))\n* **io:** split bodies at shared edges and find crossings in a mesh\nimport ([#2505](https://github.com/andymai/brepkit/issues/2505))\n([59ff8e4](https://github.com/andymai/brepkit/commit/59ff8e4b21859dd81e0444624294c17eb041593d))\n* **math:** march a section to the edge of its patches\n([#2540](https://github.com/andymai/brepkit/issues/2540))\n([a2171c7](https://github.com/andymai/brepkit/commit/a2171c7fa436d00b192f932af76a1d5f8645ec59))\n* **math:** split a surface of degree zero, or not clamped, into its\nexact patches ([#2506](https://github.com/andymai/brepkit/issues/2506))\n([7c4f3a1](https://github.com/andymai/brepkit/commit/7c4f3a184b7baf8e18f03cd774a5e6e9d3f683bd))\n* **operations:** chamfer chains turn corners and run along a cylinder's\nrulings ([#2538](https://github.com/andymai/brepkit/issues/2538))\n([a2b275f](https://github.com/andymai/brepkit/commit/a2b275f00ecc3c5a6ed084c8d99f1a80fd74a271))\n* **operations:** mesh a wall whose rim runs round a notch\n([#2504](https://github.com/andymai/brepkit/issues/2504))\n([bc78568](https://github.com/andymai/brepkit/commit/bc78568249ccdde3466356f8342fd78d935ac647))\n* **operations:** refuse a blend or faired surface that folds\n([#2528](https://github.com/andymai/brepkit/issues/2528))\n([256ed7d](https://github.com/andymai/brepkit/commit/256ed7d189ea67f3cc742e3a8e64810274238177))\n* **operations:** revolve the other way for a negative angle\n([#2546](https://github.com/andymai/brepkit/issues/2546))\n([0e3d2ba](https://github.com/andymai/brepkit/commit/0e3d2ba612e543143d7490d7955868b164c71e06))\n* **tessellate:** close spline faces whose chords do not hold in (u, v)\n([#2478](https://github.com/andymai/brepkit/issues/2478))\n([a82cc2b](https://github.com/andymai/brepkit/commit/a82cc2b497fd21f59f60a43d733f5c3647e7a328))\n\n\n### Performance\n\n* **blend:** refuse two chamfers at one corner before the other trims\n([#2534](https://github.com/andymai/brepkit/issues/2534))\n([56205dd](https://github.com/andymai/brepkit/commit/56205ddf2e638847d5f95788f71b0c3c8e9ef008))\n* **boolean:** the slowest booleans' ray casting, trims, touch gate,\nboxes, hole polygons and section seeds\n([#2496](https://github.com/andymai/brepkit/issues/2496))\n([be7eb09](https://github.com/andymai/brepkit/commit/be7eb0952269cbdf085548dd2b5d0e2965ef8bf3))\n* **check:** integrate round a surface of revolution in closed form\n([#2516](https://github.com/andymai/brepkit/issues/2516))\n([ee5764f](https://github.com/andymai/brepkit/commit/ee5764f817521b5bdaa23dbfb0a41ac5d3b160e5))\n* **topology:** a checkpoint and an IGES export cost what they touch\n([#2533](https://github.com/andymai/brepkit/issues/2533))\n([f65f0c7](https://github.com/andymai/brepkit/commit/f65f0c7c283295586f8871254dfb5f5bea66bee2))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-11-16T09:33:09Z",
+          "tree_id": "38e513b5c7d39e8f1898f31a3eb048fcf882191e",
+          "url": "https://github.com/andymai/brepkit/commit/302ce3627e76129bca215f247c4e96ba62f4a8b5"
+        },
+        "date": 1794821814657,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1124551,
+            "range": "± 6847",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1178633,
+            "range": "± 12199",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12899,
+            "range": "± 208",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 710406,
+            "range": "± 2302",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25481224,
+            "range": "± 81833",
             "unit": "ns/iter"
           }
         ]
