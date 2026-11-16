@@ -886,12 +886,16 @@ fn trace(wire: &[BoundaryEdge<'_>], chart: &Chart<'_>, sizes: &Sizes) -> Option<
             while let Some((ta, tb, depth)) = pending.pop() {
                 let a = *points.last()?;
                 let b = draw(at(tb), Some(a));
-                let thirds = [1.0 / 3.0, 0.5, 2.0 / 3.0].map(|f| {
-                    let p = draw(at((tb - ta).madd(f, ta)), Some(a));
-                    let on = a + (b - a) * f;
-                    (p - on).length()
-                });
-                let off = thirds.iter().fold(0.0_f64, |m, &x| m.max(x));
+                // Each point read against the chord's point at the same
+                // fraction, so a drawing that runs unevenly along the chord
+                // reads as off it too.
+                let off = [0.13, 0.29, 0.5, 0.71, 0.87]
+                    .map(|f| {
+                        let p = draw(at((tb - ta).madd(f, ta)), Some(a));
+                        (p - (a + (b - a) * f)).length()
+                    })
+                    .into_iter()
+                    .fold(0.0_f64, f64::max);
                 // A B-spline piece lies within its control points' hull, so
                 // their distance from its chord bounds how far it strays
                 // between the points read; three points alone do not.

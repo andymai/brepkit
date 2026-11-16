@@ -1926,4 +1926,44 @@ mod tests {
         let face = topo.add_face(Face::new(bottom, vec![top, inside], cylinder()));
         assert_eq!(found(&topo, face), None);
     }
+
+    /// A flat patch whose `u` runs unevenly along x, a cubic crowded at both
+    /// ends: a straight edge across it draws as a curve in `(u, v)`. Holes
+    /// just either side of that edge read on their own sides of it.
+    #[test]
+    fn holes_beside_a_straight_edge_on_an_uneven_patch_read_their_sides() {
+        let xs = [0.0, 0.5, 19.5, 20.0];
+        let control = xs
+            .iter()
+            .map(|&x| {
+                (0..2)
+                    .map(|j| Point3::new(x, 20.0 * f64::from(j), 0.0))
+                    .collect()
+            })
+            .collect();
+        let surface = FaceSurface::Nurbs(
+            brepkit_math::nurbs::surface::NurbsSurface::new(
+                3,
+                1,
+                vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+                vec![0.0, 0.0, 1.0, 1.0],
+                control,
+                vec![vec![1.0; 2]; 4],
+            )
+            .unwrap(),
+        );
+        let mut topo = Topology::default();
+        let corners = points(
+            &mut topo,
+            &[[2.0, 2.0, 0.0], [18.0, 2.0, 0.0], [18.0, 18.0, 0.0]],
+        );
+        let outer = polygon(&mut topo, &corners);
+        // The diagonal runs from (2, 2) to (18, 18); a point off it by 0.02.
+        let inside = circle(&mut topo, [6.02, 5.98, 0.0], 0.01);
+        let outside = circle(&mut topo, [5.98, 6.02, 0.0], 0.01);
+        let face = topo.add_face(Face::new(outer, vec![inside], surface.clone()));
+        assert_eq!(found(&topo, face), None);
+        let face = topo.add_face(Face::new(outer, vec![outside], surface));
+        assert!(found(&topo, face).is_some_and(|d| d.contains("outside the outer wire")));
+    }
 }
