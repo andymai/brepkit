@@ -4283,8 +4283,8 @@ fn arc_bow(
 /// the control points of the edge's piece between the two. While every
 /// weight is positive that hull holds the piece, and so the part of the
 /// notch between the piece and its chord, whichever way the piece bows.
-/// Where the piece cannot be cut out of the curve, the hull of the whole
-/// curve's control points stands in. Empty for any other curve and for a
+/// Where the piece cannot be cut out of the curve, or is too narrow to cut,
+/// the hull of the whole curve's control points stands in. Empty for any other curve and for a
 /// piece seen edge on; an error for a weight that the hull does not bound.
 fn spline_bow(
     edge: &brepkit_topology::edge::Edge,
@@ -4310,12 +4310,14 @@ fn spline_bow(
     let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
     let at_corner = if corner_at_start { t0 } else { t1 };
     let (low, high) = (t0.min(t1), t0.max(t1));
-    // The contact's end on this edge: the nearer of the two.
+    // The contact's end on this edge: the nearer of the two to the edge's
+    // own span. The other can lie nearer the rest of the curve past it.
     let found = near_ends
         .into_iter()
         .filter_map(|end| {
             let found = project_point_to_curve(curve, end, 1e-9).ok()?;
-            Some((found.distance, end, found.parameter.clamp(low, high)))
+            let at = found.parameter.clamp(low, high);
+            Some(((curve.evaluate(at) - end).length(), end, at))
         })
         .min_by(|p, q| p.0.total_cmp(&q.0));
     let Some((_, end, at_end)) = found else {
@@ -4327,9 +4329,11 @@ fn spline_bow(
         if (curve.evaluate(at_corner) - corner).length() > ON_CURVE {
             return None;
         }
+        // A piece too narrow to split can still bow far, as fast as the
+        // curve runs there: the whole curve's hull stands in.
         let (from, to) = (at_corner.min(at_end), at_corner.max(at_end));
         if to - from <= narrow {
-            return Some(Vec::new());
+            return None;
         }
         let mut piece = curve.clone();
         if to < d1 - narrow {
@@ -6548,8 +6552,20 @@ mod tests {
         at_end: f64,
         backward: bool,
     ) -> Result<Vec<[(f64, f64); 3]>, BlendError> {
+        let near_ends = [curve.evaluate(at_end), Point3::new(0.5, -3.0, 0.0)];
+        bow_of_spline_span(curve, (0.0, 1.0), backward, near_ends)
+    }
+
+    /// The same for the edge along `curve` over `span`, the corner at its
+    /// first end, and the contacts' ends at `near_ends`.
+    fn bow_of_spline_span(
+        curve: &brepkit_math::nurbs::NurbsCurve,
+        span: (f64, f64),
+        backward: bool,
+        near_ends: [Point3; 2],
+    ) -> Result<Vec<[(f64, f64); 3]>, BlendError> {
         let mut topo = Topology::new();
-        let (corner, far) = (curve.evaluate(0.0), curve.evaluate(1.0));
+        let (corner, far) = (curve.evaluate(span.0), curve.evaluate(span.1));
         let (start, end) = if backward {
             (far, corner)
         } else {
@@ -6558,14 +6574,9 @@ mod tests {
         let a = topo.add_vertex(brepkit_topology::vertex::Vertex::new(start, 1e-7));
         let b = topo.add_vertex(brepkit_topology::vertex::Vertex::new(end, 1e-7));
         let edge = brepkit_topology::edge::Edge::new(a, b, EdgeCurve::NurbsCurve(curve.clone()));
-        spline_bow(
-            &edge,
-            start,
-            end,
-            !backward,
-            [curve.evaluate(at_end), Point3::new(0.5, -3.0, 0.0)],
-            &|p: Point3| (p.x(), p.y()),
-        )
+        spline_bow(&edge, start, end, !backward, near_ends, &|p: Point3| {
+            (p.x(), p.y())
+        })
     }
 
     /// Whether `p` lies in one of `triangles`, to a rounding.
@@ -6594,6 +6605,31 @@ mod tests {
             // Past the contact's end, the edge runs on clear of them.
             let past = curve.evaluate(1.0);
             assert!(!in_triangles(&bow, (past.x(), past.y())), "{past:?}");
+        }
+    }
+
+    #[test]
+    fn a_contact_end_is_read_on_a_trimmed_splines_own_span() {
+        // The edge runs along the curve from 0.3 to its end, with the
+        // corner at 0.3. The other contact's end lies on the curve before
+        // the corner, and this one a rounding off the edge.
+        let curve = wave([1.0, 1.0, 2.0, 1.0, 1.0]);
+        let on_edge = curve.evaluate(0.8) + Vec3::new(0.0, 0.0, 1e-6);
+        let near_ends = [curve.evaluate(0.1), on_edge];
+        let bow = bow_of_spline_span(&curve, (0.3, 1.0), false, near_ends).unwrap();
+        for k in 0..=50 {
+            let p = curve.evaluate(0.3 + 0.5 * f64::from(k) / 50.0);
+            assert!(in_triangles(&bow, (p.x(), p.y())), "{p:?}");
+        }
+    }
+
+    #[test]
+    fn a_spline_piece_too_narrow_to_cut_takes_the_whole_curves_hull() {
+        let curve = wave([1.0, 1.0, 2.0, 1.0, 1.0]);
+        let bow = bow_of_spline(&curve, 0.0, false).unwrap();
+        for k in 0..=50 {
+            let p = curve.evaluate(f64::from(k) / 50.0);
+            assert!(in_triangles(&bow, (p.x(), p.y())), "{p:?}");
         }
     }
 
