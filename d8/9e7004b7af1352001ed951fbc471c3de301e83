@@ -1,0 +1,69 @@
+.claude/skills/wasm-bindings/SKILL.md
+  s_0db8415e6f59cd::t_3d23a2259b58bd 27
+crates/algo/src/builder/fill_images_faces.rs
+  s_0db8415e6f59cd::t_6ddbfbc6c46576 4561-4586,4596,4618-4622,4646,4651-4657
+crates/algo/src/pave_filler/phase_ff_coplanar.rs
+  s_0db8415e6f59cd::t_1ebe0f951517fd 193-194,196-201,204,210-215,217,219-223,225-300,348,1527-1786
+crates/blend/src/analytic.rs
+  s_0db8415e6f59cd::t_04dac459674b76 20,737-744,766-767,770-774,969-1144
+crates/check/src/properties/boundary.rs
+  s_0db8415e6f59cd::t_a8a1798631b167 111-112,167-225,229-263,265-289,292-408,427-428,587,874,899,945,959,1007,1732-2011
+crates/heal/src/custom/convert_to_bspline.rs
+  s_0db8415e6f59cd::t_d6a7ce15885d05 73-94,103,111,116,118,520-580
+crates/io/src/iges/writer.rs
+  s_0db8415e6f59cd::t_151ab4b5961d2d 81-83,88,95-104
+crates/io/tests/playground_example_repros_inmem.rs
+  s_0db8415e6f59cd::t_25572a40d6a242 13,48-77,80-81,86-87,116-135,147-148,153-158,172-173,178-183
+crates/math/src/nurbs/decompose.rs
+  s_0db8415e6f59cd::t_e342f6fa9acc4a 114-132,134,148,201-211,215-217,234-235,237,248-269,271-274,280-310,333-366,516,519,1335-1518
+crates/operations/src/blend_surface.rs
+  s_0db8415e6f59cd::t_e1d964518e7358 17,134-136,238,255-269
+crates/operations/src/blend_surface/fair.rs
+  s_0db8415e6f59cd::t_f887050c635910 75-77,96-102,108-137
+crates/operations/src/blend_surface/fold.rs
+  s_0db8415e6f59cd::t_05d13fd8b45820 1-810
+crates/operations/src/heal.rs
+  s_0db8415e6f59cd::t_a78b4e796ffa41 1901-1917
+crates/operations/src/tessellate/nonplanar.rs
+  s_0db8415e6f59cd::t_dc9771141ea374 144-145,148-165,169,204-208,210,212-223,226-232,258-262,389-391,394-402,406,464-472,474-476,479,481-557,561-600,602-603,605-608,610-617,619-620,622-636,638-640,643-644,646-672,674-675,677-685,687-688,691-692,694-712
+crates/operations/src/tessellate/solid.rs
+  s_0db8415e6f59cd::t_51294a626e2364 803-809,860-862,877,1391-1404
+crates/operations/src/tessellate/tests.rs
+  s_0db8415e6f59cd::t_0b9583203c1d9c 4593-4785
+crates/operations/tests/blend_overshoot_area.rs
+  s_0db8415e6f59cd::t_0a795f3313261b 281-282,285-288,290-293,295,297,299-302
+crates/operations/tests/blend_surface.rs
+  s_0db8415e6f59cd::t_73fbaa6a97c03e 168-177,179,218-224,238,245-254,271-287,310-315,362-364,403-433,438,1783
+crates/operations/tests/fair_surface.rs
+  s_0db8415e6f59cd::t_2b402c6fa6b428 742-894
+crates/operations/tests/fillet_plane_vault.rs
+  s_0db8415e6f59cd::t_5dc80e73948d03 18-22,35,42,44,46,176-217,222,256,260,273-279,281,304,308,312-339,402-532
+crates/topology/src/lib.rs
+  s_0db8415e6f59cd::t_c44b4b2abbafd8 147
+crates/topology/src/topology.rs
+  s_0db8415e6f59cd::t_275980e756104e 46-47,49-58,62,76,94-96,99-101,117-118,125,422-516,529,532-533,691-903
+crates/wasm/src/bindings/checkpoint.rs
+  s_0db8415e6f59cd::t_c1cdf7d7587aa2 15-18,23,49-53,69,73-77,208-249
+crates/wasm/src/bindings/gridfinity_tests.rs
+  s_0db8415e6f59cd::t_4d20fb5ec03bf6 1851
+crates/wasm/src/kernel.rs
+  s_0db8415e6f59cd::t_e4e91c2622d392 44,59,77,79
+crates/wasm/src/state.rs
+  s_0db8415e6f59cd::t_e4c62ff80150d2 3-5,8
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d89e7004b7af1352001ed951fbc471c3de301e83",
+  "prompts": {},
+  "sessions": {
+    "s_0db8415e6f59cd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "80c728ce-cbd9-4375-adac-8fbf308dc911",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
