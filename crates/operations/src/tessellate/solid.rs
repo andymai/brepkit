@@ -552,7 +552,7 @@ pub(super) fn split_crossing_spline_chords(
                     }
                 }
             }
-            if !chords.iter().any(|c| c.halvable) {
+            if !chords.iter().any(|c| c.middle.is_some()) {
                 continue;
             }
             // Sweep the chords along the outline's widest axis (a face in a
@@ -595,7 +595,7 @@ pub(super) fn split_crossing_spline_chords(
                 surface,
                 FaceSurface::Nurbs(_) | FaceSurface::Cylinder(_) | FaceSurface::Torus(_)
             ) {
-                for c in chords.iter().filter(|c| c.halvable) {
+                for c in chords.iter().filter(|c| c.middle.is_some()) {
                     let (Some(middle), Some(a), Some(b)) = (c.middle, to_uv(c.a), to_uv(c.b))
                     else {
                         continue;
