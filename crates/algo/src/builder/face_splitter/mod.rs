@@ -1991,9 +1991,9 @@ fn split_periodic_face_by_winding_chain(
         let du = surface.evaluate(seam_u + 1e-4, mid)? - surface.evaluate(seam_u - 1e-4, mid)?;
         ref_tan.dot(du) > 0.0
     };
-    let mut band_holes: Vec<Vec<Vec<OrientedPCurveEdge>>> = vec![Vec::new(); n + 1];
-    let mut band_hole_uv: Vec<Vec<Vec<Point2>>> = vec![Vec::new(); n + 1];
-    let mut discs: Vec<SplitSubFace> = Vec::new();
+    // Each loop's band, `(u, v)` samples (`u` past the seam, kept on one side
+    // of it), disc and hole wires.
+    let mut holes: Vec<HoleLoop> = Vec::with_capacity(hole_loops.len());
     for entries in &hole_loops {
         let mut uv: Vec<Point2> = Vec::new();
         let mut band: Option<usize> = None;
@@ -2027,6 +2027,11 @@ fn split_periodic_face_by_winding_chain(
         let clear = |a: f64, b: f64| a >= HOLE_SEAM_CLEARANCE && b <= period - HOLE_SEAM_CLEARANCE;
         if !clear(lo, hi) && !clear(-hi, -lo) {
             return None;
+        }
+        if hi < 0.0 {
+            for p in &mut uv {
+                *p = Point2::new(p.x() + period, p.y());
+            }
         }
         let face_left = (signed_area_2d(&uv) > 0.0) == along_u;
         let reversed_entries: Vec<(usize, bool)> =
@@ -2078,18 +2083,51 @@ fn split_periodic_face_by_winding_chain(
             }
             Some(out)
         };
-        let inside = point_inside_loop_uv(&uv)?;
+        holes.push(HoleLoop {
+            band,
+            disc: materialize(&disc)?,
+            hole: materialize(&hole)?,
+            uv,
+            parent: None,
+        });
+    }
+    // A loop inside another (a hollow rail's bore inside its wall) is a hole
+    // of the disc around it, not of the band: each loop's parent is the
+    // smallest loop holding it.
+    for i in 0..holes.len() {
+        let probe = *holes[i].uv.first()?;
+        holes[i].parent = (0..holes.len())
+            .filter(|&j| {
+                j != i
+                    && holes[j].band == holes[i].band
+                    && super::classify_2d::point_in_polygon_2d(probe, &holes[j].uv)
+            })
+            .min_by(|&a, &b| {
+                signed_area_2d(&holes[a].uv)
+                    .abs()
+                    .total_cmp(&signed_area_2d(&holes[b].uv).abs())
+            });
+    }
+    let mut band_holes: Vec<Vec<Vec<OrientedPCurveEdge>>> = vec![Vec::new(); n + 1];
+    let mut band_hole_uv: Vec<Vec<Vec<Point2>>> = vec![Vec::new(); n + 1];
+    let mut discs: Vec<SplitSubFace> = Vec::new();
+    for (i, h) in holes.iter().enumerate() {
+        let children: Vec<&HoleLoop> = holes.iter().filter(|c| c.parent == Some(i)).collect();
+        let child_uv: Vec<&[Point2]> = children.iter().map(|c| c.uv.as_slice()).collect();
+        let inside = point_inside_region_uv(&h.uv, &child_uv)?;
         discs.push(SplitSubFace {
             surface: surface.clone(),
-            outer_wire: materialize(&disc)?,
-            inner_wires: Vec::new(),
+            outer_wire: h.disc.clone(),
+            inner_wires: children.iter().map(|c| c.hole.clone()).collect(),
             reversed,
             parent: face_id,
             rank,
             precomputed_interior: Some(surface.evaluate(seam_u + inside.x(), inside.y())?),
         });
-        band_holes[band].push(materialize(&hole)?);
-        band_hole_uv[band].push(uv);
+        if h.parent.is_none() {
+            band_holes[h.band].push(h.hole.clone());
+            band_hole_uv[h.band].push(h.uv.clone());
+        }
     }
 
     // Each band: its lower separator in the lower role, the seam up, its
@@ -2140,6 +2178,17 @@ fn split_periodic_face_by_winding_chain(
     }
     bands.extend(discs);
     Some(bands)
+}
+
+/// A loop of sections on a lateral that winds nothing: the band holding it,
+/// its wires as a disc and as a hole, its `(u, v)` samples, and the loop
+/// holding it, if any.
+struct HoleLoop {
+    band: usize,
+    disc: Vec<OrientedPCurveEdge>,
+    hole: Vec<OrientedPCurveEdge>,
+    uv: Vec<Point2>,
+    parent: Option<usize>,
 }
 
 /// Samples along each piece of a hole, or along a rim, read on a lateral.
@@ -2221,16 +2270,19 @@ fn winding_path_v_at(path: &[(f64, f64)], d: f64, period: f64) -> Option<f64> {
     found
 }
 
-/// A point inside a closed `(u, v)` polygon: the middle of the widest span
-/// it leaves on the line through its mean `v`.
-fn point_inside_loop_uv(uv: &[Point2]) -> Option<Point2> {
+/// A point inside the closed `(u, v)` polygon `outer` and outside each of
+/// `holes`: the middle of the widest span they leave, read by parity, on the
+/// line through the mean `v` of `outer`.
+fn point_inside_region_uv(outer: &[Point2], holes: &[&[Point2]]) -> Option<Point2> {
     #[allow(clippy::cast_precision_loss)]
-    let v = uv.iter().map(|p| p.y()).sum::<f64>() / uv.len() as f64;
+    let v = outer.iter().map(|p| p.y()).sum::<f64>() / outer.len() as f64;
     let mut cuts: Vec<f64> = Vec::new();
-    for k in 0..uv.len() {
-        let (a, b) = (uv[k], uv[(k + 1) % uv.len()]);
-        if (a.y() <= v) != (b.y() <= v) {
-            cuts.push((b.x() - a.x()).madd((v - a.y()) / (b.y() - a.y()), a.x()));
+    for poly in std::iter::once(outer).chain(holes.iter().copied()) {
+        for k in 0..poly.len() {
+            let (a, b) = (poly[k], poly[(k + 1) % poly.len()]);
+            if (a.y() <= v) != (b.y() <= v) {
+                cuts.push((b.x() - a.x()).madd((v - a.y()) / (b.y() - a.y()), a.x()));
+            }
         }
     }
     cuts.sort_by(f64::total_cmp);
