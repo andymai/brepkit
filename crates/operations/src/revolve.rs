@@ -1607,7 +1607,8 @@ fn profile_chart_is_ccw(
 /// - `face` — a face whose outer wire defines the profile
 /// - `axis_origin` — a point on the rotation axis
 /// - `axis_direction` — direction of the rotation axis (will be normalized)
-/// - `angle_radians` — rotation angle in radians, must be in (0, 2π]
+/// - `angle_radians` — rotation angle in radians, in (0, 2π]; an angle in
+///   [-2π, 0) turns the other way, as about the reversed axis
 ///
 /// When the input face has inner wires (holes), they are propagated:
 /// inner wire edges generate revolution surfaces facing into the passage,
@@ -1635,14 +1636,17 @@ pub fn revolve(
     }
     let axis = axis_direction.normalize()?;
 
-    if angle_radians <= 0.0 || angle_radians > 2.0f64.madd(PI, tol.angular) {
+    let size = angle_radians.abs();
+    let in_range = size > 0.0 && size <= 2.0f64.madd(PI, tol.angular);
+    if !in_range {
         return Err(crate::OperationsError::InvalidInput {
-            reason: format!("revolve angle must be in (0, 2π], got {angle_radians}"),
+            reason: format!("revolve angle must be in [-2π, 0) or (0, 2π], got {angle_radians}"),
         });
     }
+    let axis = if angle_radians < 0.0 { -axis } else { axis };
 
-    let is_full = angle_radians >= 2.0f64.madd(PI, -tol.angular);
-    let angle = if is_full { 2.0 * PI } else { angle_radians };
+    let is_full = size >= 2.0f64.madd(PI, -tol.angular);
+    let angle = if is_full { 2.0 * PI } else { size };
 
     let face_data = topo.face(face)?;
     // A planar profile keeps its stored plane normal; a non-planar surface has
