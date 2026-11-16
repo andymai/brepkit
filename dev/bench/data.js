@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794806967147,
+  "lastUpdate": 1794807311244,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -71387,6 +71387,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 17981600,
             "range": "± 24785",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f65f0c7c283295586f8871254dfb5f5bea66bee2",
+          "message": "perf(topology): a checkpoint and an IGES export cost what they touch (#2533)\n\n## Summary\n\nTwo steps copied the whole topology, also when they worked on one small\nshape. Each now costs about what it reads or changes. Part of #2456.\n\n- A checkpoint in the wasm kernel held a second reference to the\ntopology. The first change after it copied the whole topology\n(`Rc::make_mut` in `topo_mut`), and so did the first change after each\nrestore. Now the topology keeps a record of the changes after a\ncheckpoint, and a restore undoes them.\n- The IGES writer copied the whole topology and converted the copy to\nB-splines, to read the surface of each curved face. Now it converts the\nsurface of each curved face that it writes, with no copy.\n\nAmong 20,000 other boxes, a fillet in a checkpoint, with its restore,\ntook 35.7 ms and now takes 4.8 ms. An IGES export of a filleted box took\n22.7 ms and now takes 1.0 ms.\n\n## Checkpoints\n\n`Topology::open_checkpoint`, `restore_checkpoint` and `close_checkpoint`\nare in `crates/topology/src/topology.rs`. They use the record that\n`Topology::transaction` keeps since #2454. The record holds the arena\nsizes at the start and the first value of each entity changed after it.\nThe pcurve registry keeps its own undo log.\n\n- A restore drops the entities added after the checkpoint and puts back\nthe first values. The checkpoint stays open, and the checkpoints opened\nafter it close.\n- A close keeps the changes.\n- Checkpoints nest, and a transaction can run in a checkpoint. While a\ntransaction that opened after a checkpoint is open, the topology refuses\na restore or a close of that checkpoint. It also refuses them for a\ncheckpoint that is not open.\n- A transaction ends at its own record. A checkpoint opened in a\ntransaction thus ends with it. The end keeps or undoes the changes of\nthe checkpoint with those of the transaction, also on a panic.\n\n`BrepKernel` now owns its `Topology`. `checkpoint` opens a topology\ncheckpoint, `restore` restores it, and `discardCheckpoint` closes it.\n\nThe cost moves. While a checkpoint is open, the first change to each\nentity keeps a copy of its old value. The pcurve registry keeps a record\nof each change. These records grow with the changes until the checkpoint\ncloses. A restore costs the changes since the checkpoint. The old\nrestore dropped the copy, at a cost of the size of the topology, and the\nnext change copied it again.\n\n## The IGES writer\n\n`face_bspline_surface` in `crates/heal/src/custom/convert_to_bspline.rs`\ngives the B-spline surface of one face. It reads the surface and the\nboundary of the face, and it does not change the topology.\n`convert_solid_to_bspline` uses it, and\n`brepkit_operations::heal::face_bspline_surface` wraps it for the\nwriter.\n\n## Timings\n\nProbes that I did not commit, native release build, medians, `main` at\n4e5184192 and this branch. The kernel holds the given number of unit\nboxes and a box of 20. The branch build for these runs also held the\nedge-to-face map below, which no step here reads. The runs used rayon at\nits default thread count on the same machine.\n\n| Step | Boxes | `main` | Branch |\n| --- | ---: | ---: | ---: |\n| `makeBox` after `checkpoint` (21 runs) | 0 | 0.001 ms | under 0.001 ms\n|\n| | 2,000 | 3.77 ms | under 0.001 ms |\n| | 20,000 | 30.65 ms | under 0.001 ms |\n| `restore` after that `makeBox` (21 runs) | 2,000 | 0.72 ms | under\n0.001 ms |\n| | 20,000 | 7.99 ms | under 0.001 ms |\n| `checkpoint`, `fillet` of the 12 edges at r = 1, `restore`,\n`discardCheckpoint` (11 runs) | 0 | 4.90 ms | 4.79 ms |\n| | 2,000 | 5.34 ms | 4.74 ms |\n| | 20,000 | 35.69 ms | 4.84 ms |\n\n`write_iges` of a box of 20 with its 12 edges rounded at r = 1, among\nother unit boxes (21 runs):\n\n| Boxes | `main` | Branch |\n| ---: | ---: | ---: |\n| 0 | 1.04 ms | 0.99 ms |\n| 2,000 | 1.55 ms | 0.99 ms |\n| 20,000 | 22.73 ms | 0.99 ms |\n\nThe IGES output of 9 files is the same byte for byte on `main` and on\nthis branch. The files hold a box, a cylinder, a frustum, a cone, a\nsphere, a torus and a box with a hole. They also hold the filleted box,\nand a cylinder with a sphere in one file.\n\n## Not in this PR\n\n`owner_of` in `crates/operations/src/blend_surface/match_edge.rs` still\nlooks through every face of the topology. Only an edge-to-face map of\nthe whole topology can find the faces of an edge without that walk. I\nbuilt one in `Topology`, kept up to date through `add_wire`, `add_face`,\n`wire_mut`, `face_mut` and rollbacks. Its first query reads every wire\nand face, and costs more than the walk: `match_surface` among 20,000\nboxes went from 2.76 ms to 4.10 ms. Later queries would cost only the\nchanges since the query before. I left the map out, and the choice stays\nopen.\n\n## Tests\n\n- `a_restore_puts_back_what_changed_since_its_checkpoint`,\n`nested_checkpoints_restore_in_their_order` and\n`a_transaction_runs_in_a_checkpoint` cover the topology checkpoints.\nThey change entities, add entities and pcurves, and restore two times to\none checkpoint.\n- `a_checkpoint_opened_in_a_transaction_ends_with_it` opens a checkpoint\nin a transaction that fails, one that succeeds and one that panics. With\nthe old end of a transaction, which closed only the innermost record,\nthe test fails. It also restores and closes a checkpoint in the\ntransaction that opened it, and the failure of the transaction then\nundoes all of its changes.\n- `restore_puts_back_a_solid_changed_in_place_each_time` moves a box in\nplace and fillets it after a kernel checkpoint, two times. Each restore\ngives back the box's bounding box and volume, and drops the fillet's\nsolid.\n- `face_bspline_surface_is_the_surface_the_conversion_sets` requires the\nsame control points, weights and knots as the conversion in place, for a\ncylinder, a sphere, a cone and a torus face.\n- `cargo nextest run -p brepkit-topology -p brepkit-heal -p\nbrepkit-operations -p brepkit-io -p brepkit-wasm` passes: 3231 tests, 25\nskipped. I ran it with the edge-to-face map in place. After I took the\nmap out, the topology tests (85), the kernel checkpoint tests (12), the\nconversion tests (15), `iges_round_trip` (26) and `match_surface` (19)\npass. With the end of a transaction at its own record, the topology\ntests (86) pass.\n- `cargo clippy` and `cargo fmt` pass.",
+          "timestamp": "2026-11-15T21:29:46-08:00",
+          "tree_id": "2601d3cc83367c1d05273ae9098ad173bc14a835",
+          "url": "https://github.com/andymai/brepkit/commit/f65f0c7c283295586f8871254dfb5f5bea66bee2"
+        },
+        "date": 1794807301865,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 746197,
+            "range": "± 33623",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 905324,
+            "range": "± 55929",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 8344,
+            "range": "± 71",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 513311,
+            "range": "± 26881",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 16889569,
+            "range": "± 96994",
             "unit": "ns/iter"
           }
         ]
