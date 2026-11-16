@@ -399,9 +399,8 @@ fn shares_area(
                 continue;
             }
             // A point inside both faces beside the edge at `f`: each side of
-            // the edge in turn, from a quarter of the edge's length away to
-            // the tolerance, which `side` keeps clear of each face's
-            // boundary.
+            // the edge in turn, from the edge's length away down to the
+            // tolerance, which `side` keeps clear of each face's boundary.
             let beside = |f: f64| {
                 let m = point(f);
                 let along = curve.tangent_with_endpoints(at(f), a, b);
@@ -409,7 +408,7 @@ fn shares_area(
                 else {
                     return false;
                 };
-                let mut step = 0.25 * edge_length;
+                let mut step = edge_length;
                 for _ in 0..128 {
                     if step <= tol {
                         break;
@@ -1279,6 +1278,17 @@ mod tests {
             ));
             b.faces.push(face);
         }
+        let solid = b.solid();
+        assert_eq!(found(&b.topo, solid).len(), 1);
+    }
+
+    /// Two squares three tolerances across, one on the other: their middle
+    /// lies a tolerance and a half from each edge.
+    #[test]
+    fn two_squares_three_tolerances_across_one_on_the_other_are_reported() {
+        let mut b = Builder::default();
+        square(&mut b, (0.0, 0.0), 3e-6, [0., 0., 1.]);
+        square(&mut b, (0.0, 0.0), 3e-6, [0., 0., -1.]);
         let solid = b.solid();
         assert_eq!(found(&b.topo, solid).len(), 1);
     }
