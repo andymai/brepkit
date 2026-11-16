@@ -1,0 +1,19 @@
+crates/algo/src/pave_filler/phase_ff_coplanar.rs
+  s_0db8415e6f59cd::t_ca1718eb5ec2cd 197-201,219,222-231,233-238,240,244-280,285,298,1698-1707,1712,1716,1718-1720,1723,1725-1785
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a329a584e27516b417ea341b7f691f5761e83b1a",
+  "prompts": {},
+  "sessions": {
+    "s_0db8415e6f59cd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "80c728ce-cbd9-4375-adac-8fbf308dc911",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
