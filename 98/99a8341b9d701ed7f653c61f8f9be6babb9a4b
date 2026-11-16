@@ -1,0 +1,24 @@
+crates/topology/src/topology.rs
+  s_0db8415e6f59cd::t_3f999ec786e98e 196,576-579,582-601,627,635
+  s_0db8415e6f59cd::t_649defab9f8e5e 645-649
+crates/topology/src/owners.rs
+  s_0db8415e6f59cd::t_dce6003aab4851 141-142
+  s_0db8415e6f59cd::t_649defab9f8e5e 57-58,62-64,99-101,123-125,221,227,301-354
+  s_0db8415e6f59cd::t_70e33ea3746849 16-23,28,32,34,46-47,53-56,59-61,79,84,92,97-98,102-109,116,126-134,140,162-163,194,204,206-207,209-220,223-226
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9899a8341b9d701ed7f653c61f8f9be6babb9a4b",
+  "prompts": {},
+  "sessions": {
+    "s_0db8415e6f59cd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "80c728ce-cbd9-4375-adac-8fbf308dc911",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
