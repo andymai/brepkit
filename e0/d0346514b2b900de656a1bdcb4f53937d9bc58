@@ -1,0 +1,23 @@
+crates/math/src/analytic_intersection.rs
+  s_0db8415e6f59cd::t_db1ff6d0fcd526 4715,4797-4801
+  s_0db8415e6f59cd::t_e33374e301504e 2295,4716,4728,4830,6748-6789
+  s_0db8415e6f59cd::t_9a6b9d58f476f2 2114-2115,2280-2294,2296-2297,4695-4714,4717-4727,4729-4737,4829,4831-4847,6737-6747
+crates/io/tests/playground_example_repros_inmem.rs
+  s_0db8415e6f59cd::t_c84f6e918a4c96 13,48-77,80-81,86-87,116-135,148-149,154-159,172-173,178-183
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e0d0346514b2b900de656a1bdcb4f53937d9bc58",
+  "prompts": {},
+  "sessions": {
+    "s_0db8415e6f59cd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "80c728ce-cbd9-4375-adac-8fbf308dc911",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
