@@ -1286,6 +1286,33 @@ mod tests {
         );
     }
 
+    /// Weights of `1e-90` and 1 across a line: close enough for the proof
+    /// to read the line's own sums, whose products of products would fall
+    /// below the least float.
+    #[test]
+    fn weights_far_apart_but_within_reach_prove_the_nearest_point() {
+        let line = NurbsSurface::new(
+            0,
+            1,
+            vec![0.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![vec![Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 0.0, 0.0)]],
+            vec![vec![1e-90, 1.0]],
+        )
+        .expect("a surface");
+        for x in [0.25, 0.5, 0.999] {
+            let point = Point3::new(x, 1e-3, 0.0);
+            let found = project_point_to_surface(&line, point, 1e-9);
+            assert!(
+                matches!(found, Err(MathError::ConvergenceFailure { .. }))
+                    || found
+                        .as_ref()
+                        .is_ok_and(|f| (f.distance - 1e-3).abs() < 1e-6),
+                "x = {x}: {found:?}"
+            );
+        }
+    }
+
     /// Weights of `1e-200` give the surface of weights of 1, though their
     /// squares are less than the least float.
     #[test]

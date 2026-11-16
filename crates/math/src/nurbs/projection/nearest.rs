@@ -497,6 +497,14 @@ impl Search {
                 line.extend((0..=du).map(|i| gaps[i * (dv + 1) + k]));
             }
         }
+        // A positive factor leaves each sign as it is; taken out, the
+        // products below cannot drop below the least float.
+        let most = lines.iter().flatten().fold(0.0_f64, |m, c| m.max(c.abs()));
+        if most > 0.0 && most.is_finite() {
+            for c in lines.iter_mut().flatten() {
+                *c /= most;
+            }
+        }
         let hint = if across_u { at[1] } else { at[0] };
         let [low, middle, high] = &lines;
         let mut work = self.take_values();
