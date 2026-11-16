@@ -742,20 +742,33 @@ fn the_energy_measure_reads_a_known_shape() {
 
 /// A sheet whose section runs out, back and out again, as the cubic with
 /// control values 0, 12, -6, 6 across it does, folds back over itself. With
-/// bumps, the faired copy folds too; without, nothing moves, and the copy
-/// is the sheet. Either way it is refused.
+/// bumps, the fairing moves the sheet where it folds, and the faired copy is
+/// refused. Without, nothing moves, and the copy is the sheet as it was.
 #[test]
 fn a_surface_that_folds_is_not_faired() {
-    for height in [0.3, 0.0] {
-        let refused = fair_surface_of_folded_sheet(height);
-        let Err(OperationsError::InvalidInput { reason }) = refused else {
-            panic!("bumps {height}: {refused:?}");
-        };
-        assert!(reason.contains("fold"), "bumps {height}: {reason}");
-    }
+    let mut topo = Topology::new();
+    let refused = fair_surface_of_folded_sheet(&mut topo, 0.3);
+    let Err(OperationsError::InvalidInput { reason }) = refused else {
+        panic!("{refused:?}");
+    };
+    assert!(reason.contains("fold"), "{reason}");
+    let mut topo = Topology::new();
+    let (face, result) = (
+        fair_surface_of_folded_sheet_face(&mut topo, 0.0),
+        fair_surface_of_folded_sheet(&mut topo, 0.0).unwrap(),
+    );
+    assert_eq!(nurbs_of(&topo, face), nurbs_of(&topo, result));
 }
 
-fn fair_surface_of_folded_sheet(height: f64) -> Result<FaceId, OperationsError> {
+fn fair_surface_of_folded_sheet(
+    topo: &mut Topology,
+    height: f64,
+) -> Result<FaceId, OperationsError> {
+    let face = fair_surface_of_folded_sheet_face(topo, height);
+    fair_surface(topo, face, 0.1)
+}
+
+fn fair_surface_of_folded_sheet_face(topo: &mut Topology, height: f64) -> FaceId {
     let count = 9;
     let across = [0.0, 12.0, -6.0, 6.0];
     let net: Vec<Vec<Point3>> = (0..count)
@@ -776,13 +789,11 @@ fn fair_surface_of_folded_sheet(height: f64) -> Result<FaceId, OperationsError> 
         .collect();
     let weights = vec![vec![1.0; 4]; count];
     let knots = (uniform_knots(count, 3), uniform_knots(4, 3));
-    let mut topo = Topology::new();
     let mut b = Builder {
-        topo: &mut topo,
+        topo,
         pose: Pose::turned(),
     };
-    let (face, _) = net_sheet(&mut b, (3, 3), knots, &net, &weights);
-    fair_surface(&mut topo, face, 0.1)
+    net_sheet(&mut b, (3, 3), knots, &net, &weights).0
 }
 
 /// A face of `surface` within the parameter square through `corners`, with

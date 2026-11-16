@@ -13,6 +13,13 @@
 //! edge of the surface and has shrunk to a point is let off: the surface has
 //! no normal there. A part that fails is halved both ways and read again; a
 //! fold fails at every depth.
+//!
+//! Where two patches meet on a knot line that is only `C0`, each can be
+//! regular and still turn the other way: the surface has a crease there,
+//! and folds where the normals on the two sides point opposite ways. The
+//! coefficients of `N` on the two sides must lie on one side of a plane
+//! through the origin, so no normal of one side is opposite one of the
+//! other; else the two sides are halved along the line and read again.
 
 use brepkit_math::nurbs::surface::NurbsSurface;
 use brepkit_math::vec::{Point3, Vec3};
@@ -39,15 +46,103 @@ pub(super) fn first_fold(
         return None;
     }
     let (domain_u, domain_v) = (surface.domain_u(), surface.domain_v());
-    span_nets(surface).find_map(|(net, u, v)| {
+    let nets: Vec<SpanNet> = span_nets(surface).collect();
+    let inside = nets.iter().find_map(|(net, u, v)| {
         let on_edge = [
             u.0 <= domain_u.0,
             u.1 >= domain_u.1,
             v.0 <= domain_v.0,
             v.1 >= domain_v.1,
         ];
-        fold_in(&net, (u, v), on_edge, meets, 0)
+        fold_in(net, (*u, *v), on_edge, meets, 0)
+    });
+    if inside.is_some() {
+        return inside;
+    }
+    // The spans run along u first and v within; neighbours across a knot
+    // line that is only C0 must turn the same way.
+    let columns = nets
+        .iter()
+        .take_while(|(_, u, _)| u.0.to_bits() == nets[0].1.0.to_bits())
+        .count()
+        .max(1);
+    let corner = |knots: &[f64], p: usize, at: f64| {
+        knots.iter().filter(|k| k.to_bits() == at.to_bits()).count() >= p
+    };
+    (0..nets.len()).find_map(|k| {
+        let (net, u, v) = &nets[k];
+        let next_u = (k + columns < nets.len()
+            && corner(surface.knots_u(), surface.degree_u(), u.1))
+        .then(|| &nets[k + columns])
+        .filter(|(_, u_next, v_next)| meets(*u, *v) || meets(*u_next, *v_next))
+        .and_then(|(next, _, _)| across(net, next, true, (u.1, *v), 0));
+        let next_v = (k % columns + 1 < columns
+            && corner(surface.knots_v(), surface.degree_v(), v.1))
+        .then(|| &nets[k + 1])
+        .filter(|(_, u_next, v_next)| meets(*u, *v) || meets(*u_next, *v_next))
+        .and_then(|(next, _, _)| across(net, next, false, (v.1, *u), 0));
+        next_u.or(next_v)
     })
+}
+
+/// Where the normals of `low` and `high`, two parts that share a side, may
+/// point opposite ways along it (see the module notes); `None` where they
+/// cannot. `on_u`: the side is a line of constant u, at `line.0`, over the
+/// range `line.1` of v; else of constant v over a range of u.
+fn across(
+    low: &[Vec<[f64; 4]>],
+    high: &[Vec<[f64; 4]>],
+    on_u: bool,
+    line: (f64, (f64, f64)),
+    depth: u32,
+) -> Option<(f64, f64)> {
+    let side = |net: &[Vec<[f64; 4]>], last: bool| -> Vec<Vec3> {
+        let normal = normal_coefficients(net);
+        let sense = if net[0][0][3] < 0.0 { -1.0 } else { 1.0 };
+        let (rows, cols) = (normal.rows, normal.cols);
+        let pick: Vec<(usize, usize)> = match (on_u, last) {
+            (true, true) => (0..cols).map(|j| (rows - 1, j)).collect(),
+            (true, false) => (0..cols).map(|j| (0, j)).collect(),
+            (false, true) => (0..rows).map(|i| (i, cols - 1)).collect(),
+            (false, false) => (0..rows).map(|i| (i, 0)).collect(),
+        };
+        pick.into_iter()
+            .map(|(i, j)| normal.at(i, j) * sense)
+            .filter(|c| c.length() > 0.0)
+            .collect()
+    };
+    let (a, b) = (side(low, true), side(high, false));
+    // A side shrunk to a point has no normal of its own.
+    if a.is_empty() || b.is_empty() {
+        return None;
+    }
+    let toward = a.iter().chain(&b).fold(Vec3::new(0.0, 0.0, 0.0), |sum, c| {
+        sum + *c * (1.0 / c.length())
+    });
+    if a.iter()
+        .chain(&b)
+        .all(|c| c.dot(toward) > PARALLEL * c.length() * toward.length())
+    {
+        return None;
+    }
+    let (at, (lo, hi)) = line;
+    let mid = f64::midpoint(lo, hi);
+    let place = if on_u { (at, mid) } else { (mid, at) };
+    if depth == DEEPEST {
+        return Some(place);
+    }
+    // Halve both parts along the line, which runs along v for a line of
+    // constant u.
+    let split = |net: &[Vec<[f64; 4]>]| -> (Net, Net) {
+        if on_u {
+            net.iter().map(|row| halve(row)).unzip()
+        } else {
+            halve_rows(net)
+        }
+    };
+    let ((low_a, low_b), (high_a, high_b)) = (split(low), split(high));
+    across(&low_a, &high_a, on_u, (at, (lo, mid)), depth + 1)
+        .or_else(|| across(&low_b, &high_b, on_u, (at, (mid, hi)), depth + 1))
 }
 
 /// The Bezier net of each knot-span patch of `surface`, with its ranges of
@@ -81,6 +176,17 @@ fn span_nets(surface: &NurbsSurface) -> impl Iterator<Item = SpanNet> + '_ {
                 let column: Vec<[f64; 4]> = rows.iter().map(|row| row[c]).collect();
                 for (r, q) in span_bezier(&column, knots_u, pu, i).into_iter().enumerate() {
                     net[r][c] = q;
+                }
+            }
+            // A common factor of the weights leaves the surface as it is;
+            // taken out, it cannot carry the products past the range of a
+            // float.
+            let scale = net.iter().flatten().fold(0.0_f64, |m, q| m.max(q[3].abs()));
+            if scale > 0.0 && scale.is_finite() {
+                for q in net.iter_mut().flatten() {
+                    for c in q.iter_mut() {
+                        *c /= scale;
+                    }
                 }
             }
             (
@@ -536,6 +642,48 @@ mod tests {
             )
             .unwrap();
             assert_eq!(first_fold_test(&square), None, "shift {shift}");
+        }
+    }
+
+    /// The strip `(x(v), u, 0)` with `x` running 0, 1, 0 over two linear
+    /// pieces turns back on the line they share: each piece alone is
+    /// regular. With `x` running 0, 1, 1.5 and a kink in z, it does not.
+    #[test]
+    fn a_turn_on_a_knot_line_that_is_only_c0_folds() {
+        let strip = |xs: [f64; 3], zs: [f64; 3]| {
+            let net = (0..2)
+                .map(|i| {
+                    (0..3)
+                        .map(|k| Point3::new(xs[k], f64::from(i), zs[k]))
+                        .collect()
+                })
+                .collect();
+            NurbsSurface::new(
+                1,
+                1,
+                vec![0.0, 0.0, 1.0, 1.0],
+                vec![0.0, 0.0, 0.5, 1.0, 1.0],
+                net,
+                vec![vec![1.0; 3]; 2],
+            )
+            .unwrap()
+        };
+        let (_, v) = first_fold_test(&strip([0.0, 1.0, 0.0], [0.0; 3])).expect("a fold");
+        assert!((v - 0.5).abs() < 1e-3, "v = {v}");
+        assert_eq!(
+            first_fold_test(&strip([0.0, 1.0, 1.5], [0.0, 0.0, 1.0])),
+            None
+        );
+    }
+
+    /// Weights of `1e60` give the surface of weights of 1.
+    #[test]
+    fn a_large_common_weight_does_not_matter() {
+        for weights in [[1.0; 4], [1e60; 4]] {
+            let plain = strip([0.0, 2.0, 4.0, 6.0], weights, 3);
+            assert_eq!(first_fold_test(&plain), None, "{weights:?}");
+            let folded = strip([0.0, 12.0, -6.0, 6.0], weights, 3);
+            assert!(first_fold_test(&folded).is_some(), "{weights:?}");
         }
     }
 

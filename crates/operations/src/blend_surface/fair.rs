@@ -72,8 +72,9 @@ const REACHES_BOUNDARY: f64 = 1e-9;
 /// # Errors
 ///
 /// Returns [`OperationsError::InvalidInput`] if `tolerance` is not positive
-/// and finite, or if the surface it would return folds back over itself
-/// within the face. A topology lookup can also fail.
+/// and finite, or if the faired surface folds back over itself where the
+/// fairing moved it. A fold where nothing moves is the input's, and stays. A
+/// topology lookup can also fail.
 pub fn fair_surface(
     topo: &mut Topology,
     face: FaceId,
@@ -88,16 +89,50 @@ pub fn fair_surface(
         return crate::copy::copy_face(topo, face);
     };
     let source = source.clone();
-    let (held, region) = held_points(topo, face, &source)?;
-    let meets = |u: (f64, f64), v: (f64, f64)| region.meets(u, v);
+    let held = held_points(topo, face, &source)?;
     let Some(faired) = fair_net(&source, &held, tolerance)? else {
-        super::refuse_fold(&source, &meets, "the surface")?;
         return crate::copy::copy_face(topo, face);
     };
-    super::refuse_fold(&faired, &meets, "the faired surface")?;
+    let moved = moved_reach(&source, &faired);
+    let touched = |u: (f64, f64), v: (f64, f64)| {
+        moved
+            .iter()
+            .any(|(mu, mv)| u.0 < mu.1 && mu.0 < u.1 && v.0 < mv.1 && mv.0 < v.1)
+    };
+    super::refuse_fold(&faired, &touched, "the faired surface")?;
     let copy = crate::copy::copy_face(topo, face)?;
     topo.face_mut(copy)?.set_surface(FaceSurface::Nurbs(faired));
     Ok(copy)
+}
+
+/// The parameter rectangles over which a control point of `faired` differs
+/// from that of `source`: the support of its basis function. Outside them
+/// the two surfaces are one.
+fn moved_reach(source: &NurbsSurface, faired: &NurbsSurface) -> Vec<((f64, f64), (f64, f64))> {
+    let (pu, pv) = (source.degree_u(), source.degree_v());
+    let (knots_u, knots_v) = (source.knots_u(), source.knots_v());
+    let same = |a: Point3, b: Point3| {
+        a.x().to_bits() == b.x().to_bits()
+            && a.y().to_bits() == b.y().to_bits()
+            && a.z().to_bits() == b.z().to_bits()
+    };
+    let mut reach = Vec::new();
+    for (i, (before, after)) in source
+        .control_points()
+        .iter()
+        .zip(faired.control_points())
+        .enumerate()
+    {
+        for (j, (a, b)) in before.iter().zip(after).enumerate() {
+            if !same(*a, *b) {
+                reach.push((
+                    (knots_u[i], knots_u[i + pu + 1]),
+                    (knots_v[j], knots_v[j + pv + 1]),
+                ));
+            }
+        }
+    }
+    reach
 }
 
 /// Which control points must not move: those that reach the face's boundary,
@@ -106,7 +141,7 @@ fn held_points(
     topo: &Topology,
     face: FaceId,
     surface: &NurbsSurface,
-) -> Result<(Vec<Vec<bool>>, Region), OperationsError> {
+) -> Result<Vec<Vec<bool>>, OperationsError> {
     let net = surface.control_points();
     let (n, m) = (net.len(), net[0].len());
     let mut held = vec![vec![false; m]; n];
@@ -163,9 +198,8 @@ fn held_points(
         }
     }
 
-    let region = Region::of(&reader, topo, outer, &inner)?;
-    hold_outside(&region, surface, &mut held);
-    Ok((held, region))
+    hold_outside(&reader, topo, outer, &inner, surface, &mut held)?;
+    Ok(held)
 }
 
 fn wire_walk(topo: &Topology, wire: WireId) -> Result<Vec<(EdgeId, bool)>, OperationsError> {
@@ -177,134 +211,38 @@ fn wire_walk(topo: &Topology, wire: WireId) -> Result<Vec<(EdgeId, bool)>, Opera
         .collect())
 }
 
-/// A face's loops in `(u, v)`, as polygons through points of its wires. A
-/// loop that winds round a closed surface bounds no area there, and has no
-/// polygon.
-struct Region {
-    outer: Option<Vec<Point2>>,
-    holes: Vec<Vec<Point2>>,
-    /// The longest step between neighbouring points of a polygon: the wire
-    /// between them stays this near the polygon.
-    reach: f64,
-    periods: (Option<f64>, Option<f64>),
-}
-
-impl Region {
-    fn of(
-        reader: &Neighbour,
-        topo: &Topology,
-        outer: WireId,
-        inner: &[WireId],
-    ) -> Result<Self, OperationsError> {
-        let (pu, pv) = reader.periods();
-        let closes = |loop_uv: &[(f64, f64)]| {
-            let (Some(first), Some(last)) = (loop_uv.first(), loop_uv.last()) else {
-                return false;
-            };
-            pu.is_none_or(|p| (last.0 - first.0).abs() < 0.5 * p)
-                && pv.is_none_or(|p| (last.1 - first.1).abs() < 0.5 * p)
-        };
-        let polygon = |wire: WireId| -> Result<Option<Vec<Point2>>, OperationsError> {
-            let loop_uv = reader.chart_loop(topo, wire)?;
-            Ok(closes(&loop_uv).then(|| {
-                loop_uv
-                    .iter()
-                    .map(|&(u, v)| Point2::new(u, v))
-                    .collect::<Vec<_>>()
-            }))
-        };
-        let outer = polygon(outer)?;
-        let holes: Vec<Vec<Point2>> = inner
-            .iter()
-            .map(|&wire| polygon(wire))
-            .collect::<Result<Vec<_>, _>>()?
-            .into_iter()
-            .flatten()
-            .collect();
-        let reach = outer
-            .iter()
-            .chain(&holes)
-            .flat_map(|ring| ring.iter().zip(ring.iter().cycle().skip(1)))
-            .map(|(a, b)| (*b - *a).length())
-            .fold(0.0, f64::max);
-        Ok(Self {
-            outer,
-            holes,
-            reach,
-            periods: (pu, pv),
-        })
-    }
-
-    /// Whether `point` lies on the face: in its outer polygon and in no hole.
-    fn holds(&self, point: Point2) -> bool {
-        self.outer
-            .as_ref()
-            .is_none_or(|ring| point_in_polygon(point, ring))
-            && !self.holes.iter().any(|ring| point_in_polygon(point, ring))
-    }
-
-    /// Whether the part `u` by `v` of the domain can meet the face. A part
-    /// that no polygon comes within [`Region::reach`] of lies all on one side
-    /// of each, so its middle says which. A closed surface's part counts at
-    /// each of its copies a period away.
-    fn meets(&self, u: (f64, f64), v: (f64, f64)) -> bool {
-        let shifts = |period: Option<f64>| -> Vec<f64> {
-            period.map_or_else(|| vec![0.0], |p| vec![-p, 0.0, p])
-        };
-        shifts(self.periods.0).iter().any(|&du| {
-            shifts(self.periods.1).iter().any(|&dv| {
-                let lo = Point2::new(u.0 + du - self.reach, v.0 + dv - self.reach);
-                let hi = Point2::new(u.1 + du + self.reach, v.1 + dv + self.reach);
-                let touched = self
-                    .outer
-                    .iter()
-                    .chain(&self.holes)
-                    .any(|ring| ring_meets_box(ring, lo, hi));
-                let middle =
-                    Point2::new(f64::midpoint(u.0, u.1) + du, f64::midpoint(v.0, v.1) + dv);
-                touched || self.holds(middle)
-            })
-        })
-    }
-}
-
-/// Whether a side of the closed polygon `ring` meets the box `lo` to `hi`.
-fn ring_meets_box(ring: &[Point2], lo: Point2, hi: Point2) -> bool {
-    ring.iter()
-        .zip(ring.iter().cycle().skip(1))
-        .any(|(a, b)| segment_meets_box(*a, *b, lo, hi))
-}
-
-/// Whether the segment `a` to `b` meets the box `lo` to `hi`, by clipping
-/// its parameter to each slab of the box in turn.
-fn segment_meets_box(a: Point2, b: Point2, lo: Point2, hi: Point2) -> bool {
-    let (mut t0, mut t1) = (0.0_f64, 1.0_f64);
-    for (from, step, min, max) in [
-        (a.x(), b.x() - a.x(), lo.x(), hi.x()),
-        (a.y(), b.y() - a.y(), lo.y(), hi.y()),
-    ] {
-        if step == 0.0 {
-            if from < min || from > max {
-                return false;
-            }
-            continue;
-        }
-        let (mut enter, mut leave) = ((min - from) / step, (max - from) / step);
-        if enter > leave {
-            std::mem::swap(&mut enter, &mut leave);
-        }
-        t0 = t0.max(enter);
-        t1 = t1.min(leave);
-        if t0 > t1 {
-            return false;
-        }
-    }
-    true
-}
-
 /// Hold control points whose Greville point lies outside the face: they move
 /// nothing on it, and moving them only spends the tolerance.
-fn hold_outside(region: &Region, surface: &NurbsSurface, held: &mut [Vec<bool>]) {
+fn hold_outside(
+    reader: &Neighbour,
+    topo: &Topology,
+    outer: WireId,
+    inner: &[WireId],
+    surface: &NurbsSurface,
+    held: &mut [Vec<bool>],
+) -> Result<(), OperationsError> {
+    let (pu, pv) = reader.periods();
+    let closes = |loop_uv: &[(f64, f64)]| {
+        let (Some(first), Some(last)) = (loop_uv.first(), loop_uv.last()) else {
+            return false;
+        };
+        pu.is_none_or(|p| (last.0 - first.0).abs() < 0.5 * p)
+            && pv.is_none_or(|p| (last.1 - first.1).abs() < 0.5 * p)
+    };
+    let polygon = |wire: WireId| -> Result<Option<Vec<Point2>>, OperationsError> {
+        let loop_uv = reader.chart_loop(topo, wire)?;
+        Ok(closes(&loop_uv).then(|| {
+            loop_uv
+                .iter()
+                .map(|&(u, v)| Point2::new(u, v))
+                .collect::<Vec<_>>()
+        }))
+    };
+    let outer_polygon = polygon(outer)?;
+    let hole_polygons: Vec<_> = inner
+        .iter()
+        .map(|&wire| polygon(wire))
+        .collect::<Result<_, _>>()?;
     let sites_u = Space {
         degree: surface.degree_u(),
         knots: surface.knots_u().to_vec(),
@@ -320,11 +258,20 @@ fn hold_outside(region: &Region, surface: &NurbsSurface, held: &mut [Vec<bool>])
             if held[i][j] {
                 continue;
             }
-            if !region.holds(Point2::new(u, v)) {
+            let at = Point2::new(u, v);
+            let outside = outer_polygon
+                .as_ref()
+                .is_some_and(|ring| !point_in_polygon(at, ring));
+            let in_hole = hole_polygons
+                .iter()
+                .flatten()
+                .any(|ring| point_in_polygon(at, ring));
+            if outside || in_hole {
                 held[i][j] = true;
             }
         }
     }
+    Ok(())
 }
 
 /// Every knot span of positive width inside the domain, however narrow the
