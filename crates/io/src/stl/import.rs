@@ -984,6 +984,65 @@ impl BoxTree {
         self.walk(|b| meets(b, bounds), visit)
     }
 
+    /// Visit each pair of items of two owners whose boxes meet, once.
+    ///
+    /// The walk goes down the tree in pairs of nodes. It drops a pair whose
+    /// boxes do not meet, and a pair whose items all have one owner.
+    fn each_pair(&self, owner: &[usize], mut visit: impl FnMut(usize, usize)) {
+        if self.nodes.is_empty() {
+            return;
+        }
+        // The one owner of the items under each node, if they have one.
+        // Children come after their node, so a walk back reads them first.
+        let mut single: Vec<Option<usize>> = vec![None; self.nodes.len()];
+        for n in (0..self.nodes.len()).rev() {
+            let node = self.nodes[n];
+            single[n] = if node.count == 0 {
+                single[node.first].filter(|&o| single[node.first + 1] == Some(o))
+            } else {
+                let mut owners = self.items[node.first..node.first + node.count]
+                    .iter()
+                    .map(|&i| owner[i]);
+                let first = owners.next();
+                first.filter(|&o| owners.all(|other| other == o))
+            };
+        }
+        let size = |node: &BoxNode| {
+            (0..3)
+                .map(|k| node.bounds.1[k] - node.bounds.0[k])
+                .sum::<f64>()
+        };
+        let mut stack = vec![(0, 0)];
+        while let Some((a, b)) = stack.pop() {
+            let (na, nb) = (self.nodes[a], self.nodes[b]);
+            if !meets(&na.bounds, &nb.bounds) || single[a].is_some_and(|o| single[b] == Some(o)) {
+                continue;
+            }
+            match (na.count == 0, nb.count == 0) {
+                (false, false) => {
+                    let left = &self.items[na.first..na.first + na.count];
+                    let right = &self.items[nb.first..nb.first + nb.count];
+                    for (k, &i) in left.iter().enumerate() {
+                        let rest = if a == b { &right[k + 1..] } else { right };
+                        for &j in rest {
+                            if owner[i] != owner[j] && meets(&self.boxes[i], &self.boxes[j]) {
+                                visit(i, j);
+                            }
+                        }
+                    }
+                }
+                _ if a == b => {
+                    let (l, r) = (na.first, na.first + 1);
+                    stack.extend([(l, l), (r, r), (l, r)]);
+                }
+                (true, nb_inner) if !nb_inner || size(&na) >= size(&nb) => {
+                    stack.extend([(na.first, b), (na.first + 1, b)]);
+                }
+                _ => stack.extend([(a, nb.first), (a, nb.first + 1)]),
+            }
+        }
+    }
+
     /// Visit each item whose box the segment from `p` to `q` meets.
     fn each_along(&self, p: Point3, q: Point3, visit: impl FnMut(usize) -> bool) -> bool {
         let d = q - p;
@@ -1189,29 +1248,27 @@ impl Nesting {
         // Pairs of bodies with triangles in one plane and their insides to
         // one side of it: one body lies in the other, or the two cross.
         let mut meeting: HashSet<(usize, usize)> = HashSet::new();
-        for (item, &t) in tri_of.iter().enumerate() {
-            let c = owner[item];
-            let bounds = tri_tree.boxes[item];
-            if body_tree.each_meeting(&bounds, |d| d == c) {
-                continue;
+        tri_tree.each_pair(&owner, |one, other| {
+            let (c, d) = (owner[one], owner[other]);
+            let ((c, t), (d, u)) = if c < d {
+                ((c, tri_of[one]), (d, tri_of[other]))
+            } else {
+                ((d, tri_of[other]), (c, tri_of[one]))
+            };
+            if crossing.contains(&(c, d)) {
+                return;
             }
-            tri_tree.each_meeting(&bounds, |other| {
-                let d = owner[other];
-                if d > c && !crossing.contains(&(c, d)) {
-                    let reach = reach_of(&bounds).max(reach_of(&tri_tree.boxes[other]));
-                    let on = margins.on(reach);
-                    let (ft, fu) = (facet(t), facet(tri_of[other]));
-                    if triangles_cross(&ft, &fu, on) {
-                        crossing.insert((c, d));
-                    } else if !meeting.contains(&(c, d))
-                        && insides_meet(&ft.corners, &fu.corners, [outward[c], outward[d]], on)
-                    {
-                        meeting.insert((c, d));
-                    }
-                }
-                true
-            });
-        }
+            let reach = reach_of(&tri_tree.boxes[one]).max(reach_of(&tri_tree.boxes[other]));
+            let on = margins.on(reach);
+            let (ft, fu) = (facet(t), facet(u));
+            if triangles_cross(&ft, &fu, on) {
+                crossing.insert((c, d));
+            } else if !meeting.contains(&(c, d))
+                && insides_meet(&ft.corners, &fu.corners, [outward[c], outward[d]], on)
+            {
+                meeting.insert((c, d));
+            }
+        });
 
         let mut scene = body_tree.boxes[0];
         for (c, b) in body_tree.boxes.iter().enumerate() {
