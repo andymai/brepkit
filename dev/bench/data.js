@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794833993478,
+  "lastUpdate": 1794834494752,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -72305,6 +72305,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25176127,
             "range": "± 137484",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "84b2954f745236cd7bc916178a7d20b1afa2cbbd",
+          "message": "fix(algo): cut a flat through a torus groove on a rod exactly (#2543)\n\n## Summary\n\nA box that cut a flat through a torus groove on a rod fell back to a\nmesh. The log read `face splitting failed: face Id(2) is cut by sections\nbut split into nothing`. The cut is now exact, with one torus face for\neach part of the groove and the closed-form volume. Closes #2485.\n\nThe rod has a radius of 6, and the groove is the cut of a torus ring of\nminor radius 0.32 about its axis. The plane of the flat is parallel to\nthe axis. It meets the torus band of the groove in a loop round the\ntube. The band keeps the inner part of that loop, which is more than\nhalf of it.\n\nSix faults in the face splitter and its section edges stopped the cut:\n\n- The curve of a section was the whole loop, and the two ends of the\nwindow were its vertices. The reversed copy of the section cannot tell\nthe window from the rest of the loop. Past half the loop, it read the\nwhole loop, and the T-junction split cut it at its own ends.\n`window_curve` in `crates/algo/src/builder/fill_images_faces.rs` now\ncuts a window of a closed curve out of it.\n- The seam of a torus band is a meridian arc, not a line. The\nclassification of a periodic face looks for a seam line. So the two\npieces of the band read as holes, and the split gave no face. A loop on\na torus face with a boundary edge and a section is now a region, as on a\ncone. The exceptions are a loop that encloses no area and a loop that\nruns a section both ways. A section that retraces part of the rim makes\nsuch loops, as where two revolved half rings meet.\n- A torus band over part of the tube was periodic in the tube angle `v`.\nOn the groove of a ring of radius 5.9, a section crosses 3.78 rad of\n`v`. The wire walk read it the short way round. `build_surface_info` now\nmakes a torus face periodic in `v` only when its outline leaves no gap\nin the tube. It uses `face_tube_window`, which FF uses for the same\nface.\n- On a face that is not periodic in `v`, the splitter started the `v`\nwindow after the widest gap between the ends of the edges. On a band\nover more than half the tube, that gap is the face itself. The window\nnow starts where `face_tube_window` starts.\n- A second flat met the band at `u` = 4.26 and 5.16, a turn away from\nthe outline at -4.26 to 1.12. Its loops did not close. The splitter now\nmoves each section on a torus face by whole turns of `u` into the window\nof the outline, as on a cone.\n- `sample_wire_loop_uv_periodic` read the NURBS pcurve of a reversed\nboundary edge backward, because a boundary pcurve runs the way the wire\nwalks the edge. It now reads each pcurve the way whose ends land nearer\nthe UVs of the edge. The two pieces of the band that a second flat\nleaves read areas of 4.25 and 2.85 before, against 5.88 each.\n\nI removed each change in turn. Without any one of the first five, a test\nbelow fails. The last change makes no test fail, but without it the sign\nof those two areas is right only by chance.\n\n## Tests\n\n- `crates/operations/tests/ring_groove_round_a_flatted_rod.rs` now also\ncuts the ring first and then one or two flats. It does this for rings of\nradius 6, 6.1 and 5.9, upright, turned and mirrored. Each boolean runs\nwith `mesh_fallback: false`. On main at `4e5184192`, the first flat\nfalls back for each ring, upright and turned. For the ring of radius 6,\nthe error is the one in the issue.\n- Each result must be valid and watertight, with one torus face and one\nplane for each flat. Eight points must classify as inside or outside.\nThe volume must agree to 1e-6 with an integral of the tube section over\nthe flatted rod. At each radius, the integral takes the turn of the\ncircle that the flats leave.\n- `a_window_of_a_closed_curve_is_cut_to_the_window` and\n`a_reverse_edge_samples_from_its_start_whichever_way_its_pcurve_runs`\nare new unit tests. The second one also reads an edge shorter than the\n1e-2 band of the sampler.\n- `cargo nextest run --cargo-profile ci -p brepkit-algo -p brepkit-io -p\nbrepkit-operations -p brepkit-wasm -p brepkit-check -p brepkit-heal`:\n3649 tests run, 3649 passed, 24 skipped.\n- `two_revolved_half_rings_fuse_into_the_ring` failed at 1.7 pi without\nthe two exceptions above, and passes with them.\n- The pose sweep (495 lines) and the truth audit (40 lines) give the\nsame output as main at `4e5184192`. Neither has a torus.\n- So I ran a probe of 834 booleans with tori on main and on this branch.\nIt makes the cut, the intersection and the fuse of 278 pairs, upright\nand turned. The pairs are `make_torus(4, 1.5)` with 96 boxes and 8\nslabs. Rods with grooves of five radii (5.5 to 6.3) meet six boxes, and\nrings of those radii meet a ball. 743 results are the same as on main,\n90 fallbacks are now exact, and no result is worse. The 90 are flats,\nslots and notches through a groove.\n- `cargo clippy --all-targets --all-features -- -D warnings` and `cargo\nfmt --all -- --check` pass in the pre-commit hook.",
+          "timestamp": "2026-11-16T13:04:53Z",
+          "tree_id": "0665d508035052be01d2d5ffea8a10f24c98dece",
+          "url": "https://github.com/andymai/brepkit/commit/84b2954f745236cd7bc916178a7d20b1afa2cbbd"
+        },
+        "date": 1794834484708,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 900972,
+            "range": "± 2103",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 959769,
+            "range": "± 10705",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10903,
+            "range": "± 17",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 559831,
+            "range": "± 4638",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 20275294,
+            "range": "± 25887",
             "unit": "ns/iter"
           }
         ]
