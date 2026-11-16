@@ -1,0 +1,25 @@
+crates/operations/src/revolve.rs
+  s_0db8415e6f59cd::t_bc22eadf7370b7 1610-1611,1639-1641,1643,1646,1648-1649
+crates/operations/src/sheet.rs
+  s_0db8415e6f59cd::t_4eb1b8f4bc9d56 400,413,427-428,431,434-438
+crates/operations/tests/revolve_negative_angle.rs
+  s_0db8415e6f59cd::t_5cafc391dc0f89 1-163
+crates/wasm/src/bindings/operations.rs
+  s_0db8415e6f59cd::t_75491ecfd47b5a 416-417,445-446,448-450,468-469,498-499,501-503,2219-2243
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "8b790d02501f7e2da4a6b0f54c48fa0a3f1fa908",
+  "prompts": {},
+  "sessions": {
+    "s_0db8415e6f59cd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "80c728ce-cbd9-4375-adac-8fbf308dc911",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
