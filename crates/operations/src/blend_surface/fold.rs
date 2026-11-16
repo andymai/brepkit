@@ -39,24 +39,21 @@ pub(super) fn first_fold(
         return None;
     }
     let (domain_u, domain_v) = (surface.domain_u(), surface.domain_v());
-    for (net, u, v) in span_nets(surface) {
+    span_nets(surface).find_map(|(net, u, v)| {
         let on_edge = [
             u.0 <= domain_u.0,
             u.1 >= domain_u.1,
             v.0 <= domain_v.0,
             v.1 >= domain_v.1,
         ];
-        if let Some(fold) = fold_in(&net, (u, v), on_edge, meets, 0) {
-            return Some(fold);
-        }
-    }
-    None
+        fold_in(&net, (u, v), on_edge, meets, 0)
+    })
 }
 
 /// The Bezier net of each knot-span patch of `surface`, with its ranges of
 /// u and v, from the blossoms of each span's de Boor points: no knot is
 /// inserted, so a knot vector that is not clamped needs nothing more.
-fn span_nets(surface: &NurbsSurface) -> Vec<SpanNet> {
+fn span_nets(surface: &NurbsSurface) -> impl Iterator<Item = SpanNet> + '_ {
     let (pu, pv) = (surface.degree_u(), surface.degree_v());
     let (knots_u, knots_v) = (surface.knots_u(), surface.knots_v());
     let (points, weights) = (surface.control_points(), surface.weights());
@@ -66,9 +63,8 @@ fn span_nets(surface: &NurbsSurface) -> Vec<SpanNet> {
             .collect()
     };
     let spans_v = spans(knots_v, pv);
-    let mut nets = Vec::new();
-    for i in spans(knots_u, pu) {
-        for &j in &spans_v {
+    spans(knots_u, pu).into_iter().flat_map(move |i| {
+        spans_v.clone().into_iter().map(move |j| {
             let rows: Vec<Vec<[f64; 4]>> = (i - pu..=i)
                 .map(|r| {
                     let homogeneous: Vec<[f64; 4]> = (j - pv..=j)
@@ -87,14 +83,13 @@ fn span_nets(surface: &NurbsSurface) -> Vec<SpanNet> {
                     net[r][c] = q;
                 }
             }
-            nets.push((
+            (
                 net,
                 (knots_u[i], knots_u[i + 1]),
                 (knots_v[j], knots_v[j + 1]),
-            ));
-        }
-    }
-    nets
+            )
+        })
+    })
 }
 
 /// The Bezier points of the span `[knots[i], knots[i + 1]]` of a curve of
@@ -109,6 +104,9 @@ fn span_bezier(d: &[[f64; 4]], knots: &[f64], p: usize, i: usize) -> Vec<[f64; 4
             for level in 1..=p {
                 let t = if level <= at_end { b } else { a };
                 for j in (level..=p).rev() {
+                    // `j >= level` puts `left` at or before `knots[i]` and
+                    // `right` at or after `knots[i + 1]`, and the span is
+                    // not empty, so they never meet.
                     let (left, right) = (knots[i - p + j], knots[i + 1 + j - level]);
                     let alpha = (t - left) / (right - left);
                     let prev = work[j - 1];
