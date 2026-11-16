@@ -139,6 +139,7 @@ impl<'a> FilletBuilder<'a> {
         self,
         force_postassembly_failure: bool,
     ) -> Result<BlendResult, BlendError> {
+        let scope = trimmer::SplitScope::of_solid(self.topo, self.solid)?;
         // Build the immutable plan before any result topology is allocated.
         // Every valid request is represented by one ordered contour; the
         // contour spine is then used for one coherent stripe computation.
@@ -472,7 +473,7 @@ impl<'a> FilletBuilder<'a> {
         let (rim_contact_edges, rim_notches) = if plan.is_some() {
             (std::collections::HashMap::new(), Vec::new())
         } else {
-            rebuild_closed_rim_loop_faces(topo, &regular_results, &mut face_replacements)?
+            rebuild_closed_rim_loop_faces(topo, &scope, &regular_results, &mut face_replacements)?
         };
 
         let stripes: Vec<Stripe> = regular_results.iter().map(|sr| sr.stripe.clone()).collect();
@@ -592,8 +593,8 @@ impl<'a> FilletBuilder<'a> {
                 topo.face(face_id)
                     .is_ok_and(|face| face.surface().is_planar())
             });
-        // A terminal vertex whose third face is a planar cap with straight
-        // corner edges takes the notch: the spoke splits there on every
+        // A terminal vertex whose third face is a planar cap that both
+        // contacts end on takes the notch: the spoke splits there on every
         // face and the cap adopts the cross-section arc. Any other terminal
         // keeps the runout closure, which expects the whole spoke. Without a
         // plan every source vertex is treated as an unsplit terminal.
@@ -709,6 +710,7 @@ impl<'a> FilletBuilder<'a> {
                 .collect();
             let batch = trimmer::trim_parametric_face_batch(
                 topo,
+                &scope,
                 face_id,
                 &restriction_plan,
                 split_policy,
@@ -3850,8 +3852,8 @@ fn run_stripes_to_tilted_caps(
 }
 
 /// Whether a stripe's terminal vertex sits on a planar cap whose two edges
-/// at the vertex are straight or B-splines (a spline profile's rim), or on a
-/// curved cap the stripe was run on to: the end-cap notch can replace that
+/// at the vertex the stripe's contacts end on (lines, a spline profile's
+/// rim, or a vault's end arc), or on a curved cap the stripe was run on to: the end-cap notch can replace that
 /// corner path with the stripe's end curve. A notch that would cross another
 /// boundary of its cap is an error.
 fn terminal_cap_is_notchable(
@@ -3931,15 +3933,9 @@ fn terminal_cap_is_notchable(
         if edge.start() != junction.vertex && edge.end() != junction.vertex {
             continue;
         }
-        // A straight corner edge or a B-spline (a spline wall's rim): the
-        // trim splits either where the contact ends on it.
-        if !matches!(
-            edge.curve(),
-            brepkit_topology::edge::EdgeCurve::Line
-                | brepkit_topology::edge::EdgeCurve::NurbsCurve(_)
-        ) {
-            return Ok(false);
-        }
+        // The trim splits a corner edge of any kind where the contact ends
+        // on it: a line, a B-spline (a spline wall's rim), or an arc (the
+        // end of a vault).
         let (Ok(a), Ok(b)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) else {
             return Ok(false);
         };
@@ -3976,6 +3972,20 @@ fn terminal_cap_is_notchable(
                     .is_ok_and(|found| {
                         found.distance <= reach && (low..=high).contains(&found.parameter)
                     });
+            }
+            let turn = match curve {
+                brepkit_topology::edge::EdgeCurve::Circle(circle) => Some(circle.project(point)),
+                brepkit_topology::edge::EdgeCurve::Ellipse(ellipse) => Some(ellipse.project(point)),
+                brepkit_topology::edge::EdgeCurve::Line
+                | brepkit_topology::edge::EdgeCurve::NurbsCurve(_) => None,
+            };
+            if let Some(turn) = turn {
+                // Within the arc's own span, from its start.
+                const TAU: f64 = std::f64::consts::TAU;
+                let (t0, t1) = curve.domain_with_endpoints(a, b);
+                let along = (turn - t0).rem_euclid(TAU);
+                return (along <= t1 - t0 + 1e-9 || along >= TAU - 1e-9)
+                    && (curve.evaluate_with_endpoints(turn, a, b) - point).length() <= reach;
             }
             let ab = b - a;
             let len2 = ab.length_squared();
@@ -4076,6 +4086,32 @@ fn notch_stays_clear(
         (d.dot(frame.x), d.dot(frame.y))
     };
     let triangle = [flat(near_ends[0]), (0.0, 0.0), flat(near_ends[1])];
+    // The notch lies between the cap's two corner edges and the round's end.
+    // A straight corner edge is a side of the triangle. An arc that bows
+    // away from the triangle takes the notch past that side, as far as the
+    // arc's tangents at its two ends: the triangle of the corner, the
+    // contact's end and the point where those tangents meet holds that part.
+    let mut bows: Vec<[(f64, f64); 3]> = Vec::new();
+    let wires = std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied());
+    for oriented in wires
+        .filter_map(|wire| topo.wire(wire).ok())
+        .flat_map(|wire| wire.edges().iter())
+    {
+        let Ok(edge) = topo.edge(oriented.edge()) else {
+            return Ok(false);
+        };
+        if edge.start() != corner && edge.end() != corner {
+            continue;
+        }
+        let (Ok(a), Ok(b)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) else {
+            return Ok(false);
+        };
+        let (a, b) = (a.point(), b.point());
+        let across = (frame.x, frame.y);
+        if let Some(bow) = arc_bow(edge, a, b, edge.start() == corner, near_ends, &flat, across) {
+            bows.push(bow?);
+        }
+    }
     let slab = end_hull.filter(|hull| !hull.is_empty()).map(|hull| {
         let along = |p: Point3| (p - vertex).dot(frame.z);
         let (lo, hi) = hull
@@ -4132,7 +4168,10 @@ fn notch_stays_clear(
             if outside_notch && slab.is_some_and(|slab| cap_edge_beyond_slab(edge, a, b, slab)) {
                 continue;
             }
-            if cap_edge_reaches_triangle(edge, a, b, &flat, triangle) {
+            if std::iter::once(&triangle)
+                .chain(&bows)
+                .any(|&region| cap_edge_reaches_triangle(edge, a, b, &flat, region))
+            {
                 return Err(BlendError::PlanningFailure {
                     reason: format!(
                         "the fillet's end at {corner:?} would cross another boundary of its cap"
@@ -4142,6 +4181,92 @@ fn notch_stays_clear(
         }
     }
     Ok(true)
+}
+
+/// For a cap's corner edge that is an arc bowing away from the notch
+/// triangle: the triangle of the corner, the contact's end on the arc, and
+/// the point where the arc's tangents at those two meet, which holds the arc
+/// between them. `None` for a line or a B-spline, an arc that bows into the
+/// notch triangle, and an arc too flat to leave it; an error for an arc whose
+/// piece turns more than a quarter turn, too far for its tangents to bound
+/// it.
+fn arc_bow(
+    edge: &brepkit_topology::edge::Edge,
+    a: Point3,
+    b: Point3,
+    corner_at_start: bool,
+    near_ends: [Point3; 2],
+    flat: &impl Fn(Point3) -> (f64, f64),
+    (across_x, across_y): (Vec3, Vec3),
+) -> Option<Result<[(f64, f64); 3], BlendError>> {
+    use brepkit_topology::edge::EdgeCurve;
+    const TAU: f64 = std::f64::consts::TAU;
+    let curve = edge.curve();
+    let turn_of = |point: Point3| match curve {
+        EdgeCurve::Circle(circle) => Some(circle.project(point)),
+        EdgeCurve::Ellipse(ellipse) => Some(ellipse.project(point)),
+        EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => None,
+    };
+    let (t0, t1) = curve.domain_with_endpoints(a, b);
+    // The contact's end on this arc: the nearer of the two.
+    let (end, other, turn) = [(near_ends[0], near_ends[1]), (near_ends[1], near_ends[0])]
+        .into_iter()
+        .filter_map(|(end, other)| {
+            // Within the arc's span, or just past the nearer of its ends.
+            let turn = t0 + (turn_of(end)? - t0).rem_euclid(TAU);
+            let turn = if turn > t1 && t0 - (turn - TAU) < turn - t1 {
+                turn - TAU
+            } else {
+                turn
+            };
+            let off = (curve.evaluate_with_endpoints(turn, a, b) - end).length();
+            Some((off, end, other, turn))
+        })
+        .min_by(|p, q| p.0.total_cmp(&q.0))
+        .map(|(_, end, other, turn)| (end, other, turn))?;
+    let at_corner = if corner_at_start { t0 } else { t1 };
+    let corner = if corner_at_start { a } else { b };
+    let cross = |o: (f64, f64), p: (f64, f64), q: (f64, f64)| {
+        (p.0 - o.0) * (q.1 - o.1) - (p.1 - o.1) * (q.0 - o.0)
+    };
+    let (c, e) = (flat(corner), flat(end));
+    // Each tangent in the view, with its own length before the view
+    // shortened it: a tangent that points along the view has no direction
+    // there, and turns from nothing.
+    let heading = |turn: f64| {
+        let tangent = curve.tangent_with_endpoints(turn, a, b);
+        (
+            (tangent.dot(across_x), tangent.dot(across_y)),
+            tangent.length(),
+        )
+    };
+    let chord = (e.0 - c.0, e.1 - c.1);
+    let turns = |(p, p_len): ((f64, f64), f64), (q, q_len): ((f64, f64), f64)| {
+        let sine = p.0 * q.1 - p.1 * q.0;
+        (sine.abs() > 1e-9 * p_len * q_len).then_some(sine)
+    };
+    let dc = heading(at_corner);
+    // An arc seen edge on (a curved cap's rim seen along the round's axis)
+    // is a straight line, however long its piece: it does not leave the
+    // triangle. Its tangents a quarter turn apart are then parallel.
+    let edge_on = turns(dc, heading(at_corner + std::f64::consts::FRAC_PI_2)).is_none();
+    if chord.0.hypot(chord.1) <= 0.0 || edge_on {
+        return None;
+    }
+    // Past a quarter turn the tangents meet far from the arc, or behind it.
+    if (turn - at_corner).abs() > std::f64::consts::FRAC_PI_2 {
+        return Some(Err(BlendError::PlanningFailure {
+            reason: "the fillet's end takes too long a piece of its cap's arc edge".into(),
+        }));
+    }
+    // A piece too short to turn leaves the triangle by a rounding at most.
+    let de = heading(turn);
+    let sine = turns(dc, de)?;
+    let (dc, de) = (dc.0, de.0);
+    let along = (chord.0 * de.1 - chord.1 * de.0) / sine;
+    let apex = (c.0 + dc.0 * along, c.1 + dc.1 * along);
+    let bows_out = cross(c, e, apex) * cross(c, e, flat(other)) < 0.0;
+    bows_out.then_some(Ok([c, apex, e]))
 }
 
 /// Whether a cap edge lies wholly to one side of the slab `lo..=hi` along
@@ -5237,6 +5362,9 @@ fn check_closed_contacts_do_not_cross(
             let Some(EdgeCurve::NurbsCurve(curve)) = r.curve.as_ref() else {
                 return None;
             };
+            if (*first - *last).length() > GAP {
+                return None;
+            }
             let (t0, t1) = curve.domain();
             let t = |k: u32| t0 + (t1 - t0) * f64::from(k) / f64::from(SAMPLES);
             let length: f64 = (0..SAMPLES)
@@ -5712,6 +5840,7 @@ fn shared_spine_vertex(
 )]
 fn rebuild_closed_rim_loop_faces(
     topo: &mut Topology,
+    scope: &trimmer::SplitScope,
     regular_results: &[&StripeResult],
     face_replacements: &mut std::collections::HashMap<FaceId, FaceId>,
 ) -> Result<
@@ -5999,9 +6128,9 @@ fn rebuild_closed_rim_loop_faces(
             };
             let v_split = topo.add_vertex(Vertex::new(cp, 1e-7));
             let (pre, post) = match plan {
-                SplitPlan::Line => trimmer::split_edge_at(topo, &oe, v_split)?,
+                SplitPlan::Line => trimmer::split_edge_at(topo, scope, &oe, v_split)?,
                 SplitPlan::Curve(left, right) => {
-                    trimmer::split_edge_at_with_curves(topo, &oe, v_split, left, right)?
+                    trimmer::split_edge_at_with_curves(topo, scope, &oe, v_split, left, right)?
                 }
             };
             // The kept sub-piece: the part AWAY from the contact junction.
@@ -6182,6 +6311,123 @@ mod tests {
     /// The notch triangle at a corner filleted r 6: the arc's ends on the two
     /// corner edges and the corner itself.
     const NOTCH: [(f64, f64); 3] = [(6.0, 0.0), (0.0, 0.0), (0.0, 6.0)];
+
+    /// An arc from the corner at angle 0 to a contact's end at `turn`, on a
+    /// unit circle in the plane z = 0, seen along z.
+    fn bow_of_unit_arc(turn: f64, other: Point3) -> Option<Result<[(f64, f64); 3], BlendError>> {
+        bow_of_arc(1.0, 3.0, turn, other)
+    }
+
+    /// The same on a circle of radius `radius` whose edge ends at `span`.
+    fn bow_of_arc(
+        radius: f64,
+        span: f64,
+        turn: f64,
+        other: Point3,
+    ) -> Option<Result<[(f64, f64); 3], BlendError>> {
+        let mut topo = Topology::new();
+        let at = |angle: f64| Point3::new(radius * angle.cos(), radius * angle.sin(), 0.0);
+        let (corner, far) = (at(0.0), at(span));
+        let a = topo.add_vertex(brepkit_topology::vertex::Vertex::new(corner, 1e-7));
+        let b = topo.add_vertex(brepkit_topology::vertex::Vertex::new(far, 1e-7));
+        let circle = brepkit_math::curves::Circle3D::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            radius,
+        )
+        .unwrap();
+        let edge = brepkit_topology::edge::Edge::new(a, b, EdgeCurve::Circle(circle));
+        arc_bow(
+            &edge,
+            corner,
+            far,
+            true,
+            [at(turn), other],
+            &|p: Point3| (p.x(), p.y()),
+            (Vec3::new(1.0, 0.0, 0.0), Vec3::new(0.0, 1.0, 0.0)),
+        )
+    }
+
+    #[test]
+    fn an_arc_bowing_away_from_the_notch_is_held_by_its_tangents() {
+        // The other contact end is inside the circle: the arc bows away.
+        let inside = Point3::new(0.5, 0.2, 0.0);
+        let [c, apex, e] = bow_of_unit_arc(1.0, inside).unwrap().unwrap();
+        assert!((c.0 - 1.0).abs() < 1e-12 && c.1.abs() < 1e-12);
+        assert!((e.0 - 1.0_f64.cos()).abs() < 1e-12 && (e.1 - 1.0_f64.sin()).abs() < 1e-12);
+        // The tangents meet on the bisector, at 1 / cos(half the turn).
+        let out = 1.0 / 0.5_f64.cos();
+        assert!((apex.0 - out * 0.5_f64.cos()).abs() < 1e-9);
+        assert!((apex.1 - out * 0.5_f64.sin()).abs() < 1e-9);
+        // The other end outside the circle: the arc bows into the notch.
+        assert!(bow_of_unit_arc(1.0, Point3::new(1.5, 0.9, 0.0)).is_none());
+    }
+
+    #[test]
+    fn an_arc_piece_past_a_quarter_turn_is_refused() {
+        let inside = Point3::new(0.5, 0.2, 0.0);
+        // At a half turn the two tangents are parallel.
+        for turn in [1.6, std::f64::consts::PI - 1e-12, 2.9] {
+            assert!(
+                matches!(bow_of_unit_arc(turn, inside), Some(Err(_))),
+                "turn {turn}"
+            );
+        }
+        // Almost a full turn: the tangents at the piece's ends and at its
+        // middle are all parallel.
+        let tau = std::f64::consts::TAU;
+        let almost = bow_of_arc(
+            1000.0,
+            tau - 2e-10,
+            tau - 4e-10,
+            Point3::new(500.0, 200.0, 0.0),
+        );
+        assert!(matches!(almost, Some(Err(_))));
+    }
+
+    #[test]
+    fn an_arc_seen_edge_on_is_a_straight_side() {
+        // A unit circle in the plane y = 0, seen along z: a line along x,
+        // whatever the turn of its piece, and wherever the solid is.
+        let poses = [
+            brepkit_math::mat::Mat4::identity(),
+            brepkit_math::mat::Mat4::translation(310.0, -720.0, 150.0)
+                * brepkit_math::mat::Mat4::rotation_z(0.7)
+                * brepkit_math::mat::Mat4::rotation_x(-1.1),
+        ];
+        for pose in poses {
+            let turned = |v: Vec3| {
+                let to = pose.mul_point(Point3::new(v.x(), v.y(), v.z()));
+                let from = pose.mul_point(Point3::new(0.0, 0.0, 0.0));
+                to - from
+            };
+            let mut topo = Topology::new();
+            let at = |angle: f64| pose.mul_point(Point3::new(angle.cos(), 0.0, angle.sin()));
+            let (corner, far) = (at(0.0), at(3.0));
+            let a = topo.add_vertex(brepkit_topology::vertex::Vertex::new(corner, 1e-7));
+            let b = topo.add_vertex(brepkit_topology::vertex::Vertex::new(far, 1e-7));
+            let circle = brepkit_math::curves::Circle3D::new(
+                pose.mul_point(Point3::new(0.0, 0.0, 0.0)),
+                turned(Vec3::new(0.0, -1.0, 0.0)),
+                1.0,
+            )
+            .unwrap();
+            let edge = brepkit_topology::edge::Edge::new(a, b, EdgeCurve::Circle(circle));
+            let other = pose.mul_point(Point3::new(0.5, 0.4, 0.0));
+            let (x, y) = (
+                turned(Vec3::new(1.0, 0.0, 0.0)),
+                turned(Vec3::new(0.0, 1.0, 0.0)),
+            );
+            let flat = |p: Point3| {
+                let d = p - corner;
+                (d.dot(x), d.dot(y))
+            };
+            for turn in [0.3, 1.6, 2.9] {
+                let bow = arc_bow(&edge, corner, far, true, [at(turn), other], &flat, (x, y));
+                assert!(bow.is_none(), "turn {turn}");
+            }
+        }
+    }
 
     #[test]
     fn a_spike_inside_a_narrow_knot_span_reaches_the_notch_triangle() {

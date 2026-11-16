@@ -559,9 +559,8 @@ pub fn create_blend_face_from_registry(
 
 /// Replace a face's two-edge corner path `from -> corner -> to` with the
 /// single cross-section arc `edge`, notching the fillet's end profile out of
-/// an end cap so the cap and the blend share one edge entity. Both replaced
-/// edges must be straight (the box corner sides); returns whether a
-/// replacement happened.
+/// an end cap so the cap and the blend share one edge entity. Returns the
+/// notched face, if a replacement happened.
 pub fn notch_face_corner_with_arc(
     topo: &mut Topology,
     face_id: FaceId,
@@ -603,8 +602,7 @@ pub fn notch_face_corner_with_arc(
 }
 
 /// The wire's edges with its two-edge corner path `va -> corner -> vb`
-/// replaced by the arc, or `None` when the wire has no such path. The
-/// path's edges are lines or B-splines (a spline wall's rim).
+/// replaced by the arc, or `None` when the wire has no such path.
 fn notched_wire_edges(
     topo: &Topology,
     wire_id: brepkit_topology::wire::WireId,
@@ -642,20 +640,6 @@ fn notched_wire_edges(
         let fwd = s0 == va && e1 == vb;
         let rev = s0 == vb && e1 == va;
         if !(fwd || rev) {
-            continue;
-        }
-        let notchable_corner = [oes[i].edge(), oes[j].edge()].iter().all(|&eid| {
-            topo.edge(eid)
-                .is_ok_and(|e| matches!(e.curve(), EdgeCurve::Line | EdgeCurve::NurbsCurve(_)))
-        });
-        // A round run on to a curved cap ends on its intersection with the
-        // cap, a fitted curve, across the cap's corner edges, whatever they
-        // are; a section arc (circle or ellipse) notches straight edges, or
-        // B-splines (a spline wall's rim), only.
-        let fitted = topo
-            .edge(arc_eid)
-            .is_ok_and(|e| matches!(e.curve(), EdgeCurve::NurbsCurve(_)));
-        if !notchable_corner && !fitted {
             continue;
         }
         // The arc is the blend's own cross-section circle at this cap: the
@@ -1032,11 +1016,10 @@ impl SolidSnapshot {
         }
         *topo.solid_mut(self.graph.solid_id)? = self.solid.clone();
 
-        for &edge_id in &self.graph.edge_ids {
-            for &face_id in &self.graph.face_ids {
-                topo.pcurves_mut().remove(edge_id, face_id);
-            }
-        }
+        topo.pcurves_mut().remove_between(
+            &self.graph.edge_ids.iter().copied().collect(),
+            &self.graph.face_ids.iter().copied().collect(),
+        );
         for (edge_id, face_id, pcurve) in &self.graph.pcurves {
             topo.pcurves_mut().set(*edge_id, *face_id, pcurve.clone());
         }

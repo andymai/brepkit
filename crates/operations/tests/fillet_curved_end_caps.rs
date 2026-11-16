@@ -241,6 +241,15 @@ fn edges_ending_on_a_nearly_tangent_cylinder() {
     }
 }
 
+/// A round wide enough to take more than a quarter turn of the cylinder's
+/// rim. Seen along the round's axis the rim is a straight line, so the
+/// notch still lies in the triangle of its ends and the corner.
+#[test]
+fn a_wide_round_ending_on_a_nearly_tangent_cylinder() {
+    assert_round_ends_on_the_curve(NEAR_TANGENT, H, 5.5, None);
+    assert_round_ends_on_the_curve(NEAR_TANGENT, H, 5.5, Some(turned()));
+}
+
 /// The D with a blind radial hole in its arc wall, `HOLE` in radius and 1
 /// deep, its mouth centred where the arc is at `y`, at height `z`.
 fn d_prism_with_hole(topo: &mut Topology, y: f64, z: f64) -> SolidId {

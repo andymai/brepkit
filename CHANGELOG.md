@@ -1,5 +1,52 @@
 # Changelog
 
+## [4.11.25](https://github.com/andymai/brepkit/compare/v4.11.24...v4.11.25) (2026-11-15)
+
+
+### Bug Fixes
+
+* **algo:** read a ball's loop past a pole round its own side ([#2499](https://github.com/andymai/brepkit/issues/2499)) ([a2b789c](https://github.com/andymai/brepkit/commit/a2b789c4e2f5eef42ce2913ac4e9b904990b6b46))
+* **wasm:** round and bevel past an edge that lies inside one surface ([#2491](https://github.com/andymai/brepkit/issues/2491)) ([9bd5edb](https://github.com/andymai/brepkit/commit/9bd5edb00d96eda31f8e117e9e631cba89f7e991))
+
+## [4.11.24](https://github.com/andymai/brepkit/compare/v4.11.23...v4.11.24) (2026-11-15)
+
+
+### Bug Fixes
+
+* **blend:** notch an end wall whose corner edge is an arc ([#2467](https://github.com/andymai/brepkit/issues/2467)) ([5c11689](https://github.com/andymai/brepkit/commit/5c11689c6970ead92df00035ccd19148b34d4bfb))
+
+## [4.11.23](https://github.com/andymai/brepkit/compare/v4.11.22...v4.11.23) (2026-11-15)
+
+
+### Bug Fixes
+
+* **operations:** mesh a spline face that bends back on its own surface ([#2471](https://github.com/andymai/brepkit/issues/2471)) ([b14ae65](https://github.com/andymai/brepkit/commit/b14ae6559bdf3cebb41be9b529dbdaf037cb4914))
+
+## [4.11.22](https://github.com/andymai/brepkit/compare/v4.11.21...v4.11.22) (2026-11-15)
+
+
+### Bug Fixes
+
+* **wasm:** leave a wall's seam out of a chamfer pick ([#2484](https://github.com/andymai/brepkit/issues/2484)) ([aa81177](https://github.com/andymai/brepkit/commit/aa8117781a4ef89af858102be15f635b90f2684a))
+
+## [4.11.21](https://github.com/andymai/brepkit/compare/v4.11.20...v4.11.21) (2026-11-15)
+
+
+### Bug Fixes
+
+* **algo:** classify a wall with a saddle hole that no section cuts ([#2480](https://github.com/andymai/brepkit/issues/2480)) ([a3505ba](https://github.com/andymai/brepkit/commit/a3505ba1cdd5891fcad96c691c310e3f5f3e4859))
+* **algo:** end a section at the vertex where two spline edges meet ([#2461](https://github.com/andymai/brepkit/issues/2461)) ([026bee5](https://github.com/andymai/brepkit/commit/026bee50f9c01da9457bc3b34a2f50745ead0234))
+* **algo:** keep a wall's arcs on a whole torus ring ([#2483](https://github.com/andymai/brepkit/issues/2483)) ([309dc70](https://github.com/andymai/brepkit/commit/309dc7028e71605fc7a718c498f175dbeb190318))
+* **algo:** split a ring's cap where a spoke from the bore ends in it ([#2481](https://github.com/andymai/brepkit/issues/2481)) ([7ea8e30](https://github.com/andymai/brepkit/commit/7ea8e30ee4ad2837aa9959116acb905d21d55ddd))
+* **algo:** split an opening's rim where a curved section ends on it ([#2482](https://github.com/andymai/brepkit/issues/2482)) ([df619c3](https://github.com/andymai/brepkit/commit/df619c3eba993aeb7a5097f2d1c8b021016a9141))
+
+## [4.11.20](https://github.com/andymai/brepkit/compare/v4.11.19...v4.11.20) (2026-11-15)
+
+
+### Performance
+
+* **blend:** a fillet and a chamfer cost the same among other shapes ([#2454](https://github.com/andymai/brepkit/issues/2454)) ([9c6f53f](https://github.com/andymai/brepkit/commit/9c6f53f0fbbdc30c46ffa8d4e4b5e1ac1cd17931))
+
 ## [4.11.19](https://github.com/andymai/brepkit/compare/v4.11.18...v4.11.19) (2026-11-15)
 
 

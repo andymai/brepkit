@@ -3,6 +3,8 @@
 //! [`Topology`] is the single owner of every arena. All operations that
 //! create or query topological entities take a reference to this struct.
 
+use std::collections::HashMap;
+
 use crate::TopologyError;
 use crate::adjacency::AdjacencyIndex;
 use crate::arena::Arena;
@@ -21,7 +23,7 @@ use crate::wire::{Wire, WireId};
 /// Arena fields are private to enforce invariants through the public API.
 /// Use the typed accessor methods for lookups and the `add_*` methods
 /// for allocation.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default)]
 pub struct Topology {
     /// All vertices in the model.
     vertices: Arena<Vertex>,
@@ -41,6 +43,70 @@ pub struct Topology {
     compsolids: Arena<CompSolid>,
     /// `PCurves`: 2D parametric curves mapping edges to face surface parameters.
     pcurves: PCurveRegistry,
+    /// One record for each open [`Topology::transaction`], innermost last.
+    journals: Vec<Journal>,
+}
+
+/// A copy holds the entities and the pcurves. It does not hold the record of
+/// an open transaction, because no transaction is open on the copy.
+impl Clone for Topology {
+    fn clone(&self) -> Self {
+        Self {
+            vertices: self.vertices.clone(),
+            edges: self.edges.clone(),
+            wires: self.wires.clone(),
+            faces: self.faces.clone(),
+            shells: self.shells.clone(),
+            solids: self.solids.clone(),
+            compounds: self.compounds.clone(),
+            compsolids: self.compsolids.clone(),
+            pcurves: self.pcurves.clone(),
+            journals: Vec::new(),
+        }
+    }
+}
+
+/// The number of entities in each arena.
+#[derive(Debug, Default, Clone, Copy)]
+struct Counts {
+    vertices: usize,
+    edges: usize,
+    wires: usize,
+    faces: usize,
+    shells: usize,
+    solids: usize,
+    compounds: usize,
+    compsolids: usize,
+}
+
+/// What one open transaction needs to put the topology back: the arena sizes
+/// at its start, and the first value of each older entity that it changed.
+#[derive(Debug, Default, Clone)]
+struct Journal {
+    base: Counts,
+    pcurve_mark: usize,
+    vertices: HashMap<usize, Vertex>,
+    edges: HashMap<usize, Edge>,
+    wires: HashMap<usize, Wire>,
+    faces: HashMap<usize, Face>,
+    shells: HashMap<usize, Shell>,
+    solids: HashMap<usize, Solid>,
+    compounds: HashMap<usize, Compound>,
+    compsolids: HashMap<usize, CompSolid>,
+}
+
+/// Rolls an open transaction back if a panic unwinds through it.
+struct TransactionGuard<'a> {
+    topo: &'a mut Topology,
+    open: bool,
+}
+
+impl Drop for TransactionGuard<'_> {
+    fn drop(&mut self) {
+        if self.open {
+            self.topo.end_transaction(false);
+        }
+    }
 }
 
 /// Generates an immutable arena accessor method on [`Topology`].
@@ -70,6 +136,15 @@ macro_rules! arena_get_mut {
         ///
         /// Returns a not-found error if the ID is invalid.
         pub fn $method(&mut self, id: $Id) -> Result<&mut $T, TopologyError> {
+            if let Some(journal) = self.journals.last_mut()
+                && id.index() < journal.base.$field
+                && let Some(value) = self.$field.get(id)
+            {
+                journal
+                    .$field
+                    .entry(id.index())
+                    .or_insert_with(|| value.clone());
+            }
             self.$field.get_mut(id).ok_or(TopologyError::$err(id))
         }
     };
@@ -302,6 +377,106 @@ impl Topology {
     /// Returns an exclusive reference to the pcurve registry.
     pub fn pcurves_mut(&mut self) -> &mut PCurveRegistry {
         &mut self.pcurves
+    }
+
+    /// Runs `edit`, and puts the topology back as it was if `edit` fails.
+    ///
+    /// On an error, each entity that `edit` changed gets its first value
+    /// again, each entity and pcurve that `edit` added is dropped, and each
+    /// pcurve that it removed or replaced comes back. An id that `edit` made
+    /// is then not valid. The same applies when a panic unwinds through
+    /// `edit`.
+    ///
+    /// The cost is the entities that `edit` changes and adds. It does not
+    /// depend on how many entities the topology holds. Transactions can nest.
+    ///
+    /// The record of the transaction is part of the topology. Do not put
+    /// another topology, or another pcurve registry, in the place of this
+    /// one in `edit`: the record goes with the old one, and the undo with it.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error of `edit`.
+    pub fn transaction<T, E>(
+        &mut self,
+        edit: impl FnOnce(&mut Self) -> Result<T, E>,
+    ) -> Result<T, E> {
+        let journal = Journal {
+            base: Counts {
+                vertices: self.vertices.len(),
+                edges: self.edges.len(),
+                wires: self.wires.len(),
+                faces: self.faces.len(),
+                shells: self.shells.len(),
+                solids: self.solids.len(),
+                compounds: self.compounds.len(),
+                compsolids: self.compsolids.len(),
+            },
+            pcurve_mark: self.pcurves.begin_undo(),
+            ..Journal::default()
+        };
+        self.journals.push(journal);
+        let mut guard = TransactionGuard {
+            topo: self,
+            open: true,
+        };
+        let result = edit(guard.topo);
+        guard.open = false;
+        guard.topo.end_transaction(result.is_ok());
+        result
+    }
+
+    /// Closes the innermost transaction: keeps its changes, or undoes them.
+    fn end_transaction(&mut self, keep: bool) {
+        let Some(journal) = self.journals.pop() else {
+            return;
+        };
+        if keep {
+            if let Some(outer) = self.journals.last_mut() {
+                macro_rules! hand_over {
+                    ($field:ident) => {
+                        for (index, value) in journal.$field {
+                            if index < outer.base.$field {
+                                outer.$field.entry(index).or_insert(value);
+                            }
+                        }
+                    };
+                }
+                hand_over!(vertices);
+                hand_over!(edges);
+                hand_over!(wires);
+                hand_over!(faces);
+                hand_over!(shells);
+                hand_over!(solids);
+                hand_over!(compounds);
+                hand_over!(compsolids);
+            }
+        } else {
+            macro_rules! put_back {
+                ($field:ident) => {
+                    self.$field.truncate(journal.base.$field);
+                    for (index, value) in journal.$field {
+                        if let Some(id) = self.$field.id_from_index(index)
+                            && let Some(slot) = self.$field.get_mut(id)
+                        {
+                            *slot = value;
+                        }
+                    }
+                };
+            }
+            put_back!(vertices);
+            put_back!(edges);
+            put_back!(wires);
+            put_back!(faces);
+            put_back!(shells);
+            put_back!(solids);
+            put_back!(compounds);
+            put_back!(compsolids);
+            self.pcurves.undo_to(journal.pcurve_mark);
+        }
+        if self.journals.is_empty() {
+            self.pcurves.end_undo();
+        }
     }
 
     /// Builds an adjacency index for the given solid.

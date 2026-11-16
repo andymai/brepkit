@@ -278,20 +278,13 @@ impl BrepKernel {
         // WASM FFI boundary, which would abort the entire WASM instance.
         let result =
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<u32, JsError> {
-                let solid = match try_fillet(self.topo_mut(), solid_id, &edge_ids, radius) {
-                    Ok(solid) => solid,
-                    Err(error) => {
-                        // Filter to edges where both adjacent faces are planar.
-                        let planar_edges = brepkit_operations::query::filter_planar_edges(
-                            &self.topo, solid_id, &edge_ids,
-                        )?;
-                        if planar_edges.is_empty() {
-                            return Err(JsError::new(&error.to_string()));
-                        }
-                        try_fillet(self.topo_mut(), solid_id, &planar_edges, radius)
-                            .map_err(|retry_error| JsError::new(&retry_error.to_string()))?
-                    }
-                };
+                let solid = crate::helpers::try_fillet_or_its_planar_edges(
+                    self.topo_mut(),
+                    solid_id,
+                    &edge_ids,
+                    radius,
+                )
+                .map_err(|error| JsError::new(&error.to_string()))?;
                 Ok(solid_id_to_u32(solid))
             }));
         match result {
@@ -2916,6 +2909,74 @@ mod tests {
                 "volume {volume}, expected {truth}"
             );
         }
+    }
+
+    /// A pick by position takes a rod's seam with its rim: the seam has no
+    /// corner, so the chamfer bevels the rim alone. A pick of the seam alone
+    /// is an error.
+    #[test]
+    fn chamfer_leaves_out_a_walls_seam_picked_with_its_rim() {
+        use brepkit_topology::edge::EdgeCurve;
+
+        let mut k = crate::kernel::BrepKernel::new();
+        let r = k.execute_batch(
+            r#"[
+                {"op": "makeCylinder", "args": {"radius": 3, "height": 10}},
+                {"op": "solidEdges", "args": {"solid": 0}}
+            ]"#,
+        );
+        let parsed: serde_json::Value = serde_json::from_str(&r).unwrap();
+        let solid = u32::try_from(parsed[0]["ok"].as_u64().unwrap()).unwrap();
+        let edges: Vec<u32> = parsed[1]["ok"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|h| u32::try_from(h.as_u64().unwrap()).unwrap())
+            .collect();
+        let curve_of = |k: &crate::kernel::BrepKernel, h: u32| {
+            k.topo
+                .edge(k.resolve_edge(h).unwrap())
+                .unwrap()
+                .curve()
+                .clone()
+        };
+        let rim = *edges
+            .iter()
+            .find(|&&h| {
+                let edge = k.topo.edge(k.resolve_edge(h).unwrap()).unwrap();
+                matches!(edge.curve(), EdgeCurve::Circle(_))
+                    && k.topo.vertex(edge.start()).unwrap().point().z() > 9.0
+            })
+            .unwrap();
+        let seam = *edges
+            .iter()
+            .find(|&&h| matches!(curve_of(&k, h), EdgeCurve::Line))
+            .unwrap();
+
+        let batch = format!(
+            r#"[
+                {{"op": "chamfer", "args": {{"solid": {solid}, "edges": [{seam}, {rim}], "distance": 1.0}}}},
+                {{"op": "chamfer", "args": {{"solid": {solid}, "edges": [{seam}], "distance": 1.0}}}},
+                {{"op": "chamfer", "args": {{"solid": {solid}, "edges": [], "distance": 1.0}}}}
+            ]"#
+        );
+        let parsed: serde_json::Value = serde_json::from_str(&k.execute_batch(&batch)).unwrap();
+        let chamfered = u32::try_from(parsed[0]["ok"].as_u64().expect("chamfer result")).unwrap();
+        let id = k.resolve_solid(chamfered).unwrap();
+        let volume = brepkit_operations::measure::solid_volume(&k.topo, id, 0.001).unwrap();
+        let truth = std::f64::consts::PI * (90.0 - (3.0 - 1.0 / 3.0));
+        assert!(
+            (volume - truth).abs() < 1e-9 * truth,
+            "volume {volume}, expected {truth}"
+        );
+        let refused = parsed[1]["error"]
+            .as_str()
+            .expect("a seam alone is refused");
+        assert!(refused.contains("seam"), "{refused}");
+        let empty = parsed[2]["error"]
+            .as_str()
+            .expect("an empty pick is refused");
+        assert!(!empty.contains("seam"), "{empty}");
     }
 
     use brepkit_math::vec::Point3;

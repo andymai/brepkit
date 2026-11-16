@@ -12,7 +12,8 @@ pub(crate) use bounding_box::{face_set_bounding_box, hold_nurbs_faces, solid_out
 pub use bounding_box::{solid_bounding_box, solid_bounding_box_transformed};
 pub use edge_length::{edge_length, face_perimeter, wire_length};
 pub use volume::{
-    oriented_solid_volume, solid_center_of_mass, solid_volume, solid_volume_from_faces,
+    oriented_mesh_volume, oriented_solid_volume, solid_center_of_mass, solid_volume,
+    solid_volume_from_faces,
 };
 
 #[cfg(test)]

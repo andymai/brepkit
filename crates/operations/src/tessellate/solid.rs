@@ -1137,6 +1137,13 @@ pub(super) fn tessellate_solid_core(
 
             let (t_min, t_max) = edge_data.curve().domain_with_endpoints(start_pos, end_pos);
             let is_closed = edge_data.start() == edge_data.end();
+            let place = |t: f64| {
+                if is_closed {
+                    t
+                } else {
+                    along_arc(t, t_min, t_max - t_min)
+                }
+            };
 
             let existing_gids_vec: Vec<u32> = edge_global_indices
                 .get(&edge_idx)
@@ -1187,15 +1194,9 @@ pub(super) fn tessellate_solid_core(
                 if dist >= refine_tol {
                     continue;
                 }
-                let in_range = if is_closed {
-                    true
-                } else if t_min < t_max {
-                    t >= t_min - 1e-8 && t <= t_max + 1e-8
-                } else {
-                    t >= t_min - 1e-8 || t <= t_max + 1e-8
-                };
-                if in_range {
-                    insertions.push((t, gid32));
+                let along = place(t);
+                if is_closed || (-1e-8..=t_max - t_min + 1e-8).contains(&along) {
+                    insertions.push((along, gid32));
                 }
             }
 
@@ -1210,7 +1211,7 @@ pub(super) fn tessellate_solid_core(
                 .iter()
                 .map(|&gid| {
                     let pos = merged.positions[gid as usize];
-                    (circle.project(pos), gid)
+                    (place(circle.project(pos)), gid)
                 })
                 .collect();
             all_with_t.extend(insertions);
@@ -1722,6 +1723,20 @@ pub(super) fn tessellate_solid_core(
         #[cfg(test)]
         unmeshed,
     })
+}
+
+/// Where a sample at circle parameter `t` lies along an arc that starts at
+/// `start` and spans `span`: `t` unwrapped from the start, so the order of
+/// samples does not break where the parameter wraps (`project` gives an
+/// angle in `(-π, π]`). A sample just before the start reads a little below
+/// zero.
+pub(super) fn along_arc(t: f64, start: f64, span: f64) -> f64 {
+    let along = (t - start).rem_euclid(std::f64::consts::TAU);
+    if along > 0.5 * (span + std::f64::consts::TAU) {
+        along - std::f64::consts::TAU
+    } else {
+        along
+    }
 }
 
 /// `BK_TESS_PHASES` (any value): log per-phase wall clock of the solid

@@ -6230,10 +6230,14 @@ fn split_face_2d_impl(
                         if (s3 - e3).length() < tol.linear {
                             continue;
                         }
-                        let pcurve = super::pcurve_compute::compute_pcurve_on_surface(
+                        // A piece of a split rim can run more than a half
+                        // turn: it traces its own span, not the shorter arc
+                        // between its ends.
+                        let pcurve = super::pcurve_compute::compute_boundary_pcurve_on_surface(
                             e.curve(),
-                            s3,
-                            e3,
+                            vs.point(),
+                            ve.point(),
+                            oe.is_forward(),
                             &surface,
                             &wire_pts,
                             Some(frame),
@@ -7119,6 +7123,13 @@ fn split_face_2d_impl(
             .filter(|sct| matches!(sct.curve_3d, EdgeCurve::Line))
             .map(|sct| (sct.start, sct.end))
             .collect();
+        // A curved section (the corner arc of a rounded outline) that ends
+        // on the opening's rim bridges to it as a line does.
+        let curved_ends: Vec<Point3> = sections
+            .iter()
+            .filter(|sct| !matches!(sct.curve_3d, EdgeCurve::Line))
+            .flat_map(|sct| [sct.start, sct.end])
+            .collect();
         let on_seg = |p: Point3, a: Point3, b: Point3| -> bool {
             let d = b - a;
             let len2 = d.dot(d);
@@ -7149,7 +7160,8 @@ fn split_face_2d_impl(
             let mut coincident: Vec<Point3> = Vec::new();
             for e in hole {
                 for p in [e.start_3d, e.end_3d] {
-                    if sec_segs.iter().any(|&(a, b)| on_seg(p, a, b))
+                    if (sec_segs.iter().any(|&(a, b)| on_seg(p, a, b))
+                        || curved_ends.iter().any(|q| (*q - p).length() < tol.linear))
                         && !coincident.iter().any(|q| (*q - p).length() < tol.linear)
                     {
                         coincident.push(p);
@@ -9052,6 +9064,26 @@ fn split_face_2d_impl(
             }
         };
         let outer_uv: Vec<Vec<Point2>> = outers.iter().map(|(w, _)| sample_loop(w)).collect();
+        // An outer of lines and conic arcs read as it is: its polygon cuts
+        // each arc's corners off, by half a unit on a rim that is one circle
+        // of radius seven, and a loop that runs nearer the rim than that
+        // reads as outside it.
+        let outer_exact: Vec<Option<Vec<brepkit_math::region2d::Boundary2>>> = outers
+            .iter()
+            .map(|(w, _)| {
+                is_plane
+                    .then(|| containment::exact_hole(w, frame))
+                    .flatten()
+            })
+            .collect();
+        let within_exact = |pts: &[Point2]| {
+            outer_exact.iter().flatten().any(|pieces| {
+                pts.iter().all(|&p| {
+                    brepkit_math::region2d::point_in_region(pieces, p, tol.linear * 10.0)
+                        != Some(false)
+                })
+            })
+        };
         let mut promoted: Vec<Vec<OrientedPCurveEdge>> = Vec::new();
         holes.retain(|hole| {
             let hole_pts = sample_loop(hole);
@@ -9060,7 +9092,8 @@ fn split_face_2d_impl(
             }
             let nested = outer_uv
                 .iter()
-                .any(|o| loop_containment(&hole_pts, o) != LoopContainment::Outside);
+                .any(|o| loop_containment(&hole_pts, o) != LoopContainment::Outside)
+                || within_exact(&hole_pts);
             if nested {
                 true
             } else {
@@ -9504,6 +9537,37 @@ pub fn face_has_curved_lens_holes(topo: &Topology, face_id: FaceId) -> bool {
     })
 }
 
+/// A point on a whole cylinder/cone wall that lies clear of its lens holes:
+/// the search of [`cylinder_cone_remainder_interior`], for a wall that no
+/// section cut. The generic sample of an uncut face does not look at holes.
+pub fn whole_lens_wall_interior(
+    topo: &Topology,
+    face_id: FaceId,
+    clearance: f64,
+) -> Option<Point3> {
+    let face = topo.face(face_id).ok()?;
+    let surface = face.surface().clone();
+    let edges_of = |wire| {
+        let pts = collect_wire_points(topo, wire);
+        boundary_edges_to_pcurve(topo, wire, &surface, &pts, None)
+    };
+    let outer_wire = edges_of(face.outer_wire());
+    let inner_wires: Vec<_> = face.inner_wires().iter().map(|&w| edges_of(w)).collect();
+    if outer_wire.is_empty() || inner_wires.iter().any(Vec::is_empty) {
+        return None;
+    }
+    let whole = SplitSubFace {
+        surface,
+        outer_wire,
+        inner_wires,
+        reversed: face.is_reversed(),
+        parent: face_id,
+        rank: Rank::A,
+        precomputed_interior: None,
+    };
+    cylinder_cone_remainder_interior(&whole, clearance)
+}
+
 /// Get a point guaranteed inside a sub-face's outer wire (in UV space),
 /// not inside any inner wire (hole), then evaluate it to 3D via the surface.
 /// `None` for a plane piece bounded by lines and conic arcs when no point
@@ -9682,7 +9746,10 @@ pub fn interior_point_3d(
                             .fold(f64::INFINITY, f64::min);
                         far = far.min(near);
                     } else if hole_2d.len() >= 3 {
-                        islands.push(unwrapped_u(&hole_2d));
+                        // A hole runs with the piece on its left: turned
+                        // round, it has its own region there.
+                        let own: Vec<Point2> = hole_2d.iter().rev().copied().collect();
+                        islands.push(unwrapped_u(&own));
                     }
                 }
                 // A hole that does not wind the axis covers only part of any
@@ -9843,14 +9910,66 @@ fn sphere_loop_uv(sub_face: &SplitSubFace) -> Option<Vec<Point2>> {
     closes.then_some(pts)
 }
 
-/// A loop's `(u, v)` samples with `u` carried continuously along it.
+/// A sphere loop's `(u, v)` samples with `u` carried continuously along it.
+/// The loop's region is on its left.
+///
+/// A point at a pole has no `u` of its own. The loop arrives there on one
+/// meridian and leaves on another, and the nearest way round between the two
+/// is not the loop's way: for meridians a half turn apart, rounding alone
+/// picks it. The region lies below the north pole and above the south one,
+/// so with the region on its left the loop passes the north pole toward `-u`
+/// and the south pole toward `+u`. Each run of pole points becomes the two
+/// corners of that passage, and a loop that starts at a pole comes back
+/// starting at its first point off the poles.
 fn unwrapped_u(pts: &[Point2]) -> Vec<Point2> {
-    use std::f64::consts::{PI, TAU};
-    let mut u = pts[0].x();
-    let mut out = vec![pts[0]];
-    for w in pts.windows(2) {
-        u += (w[1].x() - w[0].x() + PI).rem_euclid(TAU) - PI;
-        out.push(Point2::new(u, w[1].y()));
+    use std::f64::consts::{FRAC_PI_2, PI, TAU};
+    // A point projected from a pole reads a latitude short of the pole by
+    // the square root of its rounding, about 1.5e-8. A point farther off
+    // has a longitude of its own: a small loop beside the pole keeps the
+    // nearest way.
+    let at_pole = |p: &Point2| p.y().abs() >= FRAC_PI_2 - 1e-7;
+    let nearest = |from: f64, to: f64| (to - from + PI).rem_euclid(TAU) - PI;
+    // A loop with no point off the poles has no meridian to pass a pole
+    // from: it keeps the nearest way, as a loop with no point at a pole does.
+    let first = pts.iter().position(|p| !at_pole(p));
+    let (Some(first), true) = (first, pts.iter().any(at_pole)) else {
+        let mut u = pts[0].x();
+        let mut out = vec![pts[0]];
+        for w in pts.windows(2) {
+            u += nearest(w[0].x(), w[1].x());
+            out.push(Point2::new(u, w[1].y()));
+        }
+        return out;
+    };
+    // The way past a pole from the meridian `from` to the meridian `to`.
+    let past_pole = |from: f64, to: f64, north: bool| {
+        let turn = if north { from - to } else { to - from }.rem_euclid(TAU);
+        let turn = if turn > TAU - 1e-9 { 0.0 } else { turn };
+        if north { -turn } else { turn }
+    };
+    let count = pts.len();
+    let mut u = pts[first].x();
+    let mut last_raw = u;
+    let mut out = vec![pts[first]];
+    let mut pole: Option<f64> = None;
+    for k in 1..=count {
+        let p = pts[(first + k) % count];
+        if at_pole(&p) {
+            pole = Some(p.y());
+            continue;
+        }
+        if let Some(v) = pole.take() {
+            out.push(Point2::new(u, v));
+            u += past_pole(last_raw, p.x(), v > 0.0);
+            out.push(Point2::new(u, v));
+        } else {
+            u += nearest(last_raw, p.x());
+        }
+        last_raw = p.x();
+        // The last step comes back to the first point, which is there.
+        if k < count {
+            out.push(Point2::new(u, p.y()));
+        }
     }
     out
 }
@@ -11529,5 +11648,94 @@ mod tests {
         let p = interior_point_3d(&thin, Some(&frame), 1e-11).unwrap();
         assert!(inside(p, 1e-3, 1.5e-7), "{p:?}");
         assert!(interior_point_3d(&thin, Some(&frame), containment::SEED_CLEARANCE).is_none());
+    }
+
+    /// A loop through the north pole between two meridians a half turn
+    /// apart, with its region on its left: up the meridian `u = pi`, down
+    /// the meridian `u = 0`, and back along a latitude through `u = pi/2`.
+    /// The pole's own `u`, and the last bit of the seam meridian's `u`, are
+    /// noise, and neither moves the region.
+    #[test]
+    fn a_loop_through_a_pole_is_read_round_its_own_half() {
+        use std::f64::consts::{FRAC_PI_2, FRAC_PI_4, PI, TAU};
+        let low = 0.34;
+        for pole_u in [0.0, 1.2, 5.0341, -2.0] {
+            for seam in [0.0, 1e-15, TAU - 1e-15, TAU] {
+                let mut pts = vec![
+                    Point2::new(PI, low),
+                    Point2::new(PI, 1.0),
+                    Point2::new(pole_u, FRAC_PI_2),
+                    Point2::new(seam, 1.0),
+                    Point2::new(seam, low),
+                    Point2::new(0.0, low),
+                    Point2::new(FRAC_PI_2, low),
+                ];
+                for start in 0..pts.len() {
+                    let poly = unwrapped_u(&pts);
+                    let holds = |u: f64, v: f64| {
+                        (-2..=2).any(|k| {
+                            let at = Point2::new(TAU * f64::from(k) + u, v);
+                            super::super::classify_2d::point_in_polygon_2d(at, &poly)
+                        })
+                    };
+                    let label = format!("pole_u={pole_u} seam={seam} start={start}");
+                    assert!(holds(FRAC_PI_2, 1.0), "{label}: its own half");
+                    assert!(holds(FRAC_PI_4, 1.5), "{label}: near the pole");
+                    assert!(!holds(3.0 * FRAC_PI_2, 1.0), "{label}: the other half");
+                    assert!(!holds(FRAC_PI_2, 0.2), "{label}: below the latitude");
+                    pts.rotate_left(1);
+                }
+            }
+        }
+    }
+
+    /// The same loop about the south pole runs the other way round, and a
+    /// loop off the poles keeps the nearest way.
+    #[test]
+    fn a_loop_through_the_south_pole_and_one_off_the_poles() {
+        use std::f64::consts::{FRAC_PI_2, PI, TAU};
+        let south = [
+            Point2::new(0.0, -0.34),
+            Point2::new(0.0, -1.0),
+            Point2::new(4.0, -FRAC_PI_2),
+            Point2::new(PI, -1.0),
+            Point2::new(PI, -0.34),
+            Point2::new(FRAC_PI_2, -0.34),
+        ];
+        let poly = unwrapped_u(&south);
+        let holds = |u: f64, v: f64| {
+            (-2..=2).any(|k| {
+                let at = Point2::new(TAU * f64::from(k) + u, v);
+                super::super::classify_2d::point_in_polygon_2d(at, &poly)
+            })
+        };
+        assert!(holds(FRAC_PI_2, -1.0));
+        assert!(!holds(3.0 * FRAC_PI_2, -1.0));
+
+        let across_the_seam = [
+            Point2::new(6.0, 0.1),
+            Point2::new(0.2, 0.1),
+            Point2::new(0.2, 0.5),
+            Point2::new(6.0, 0.5),
+        ];
+        // The same loop within the pole's margin has no point off the pole.
+        let lift = |by: f64| -> Vec<Point2> {
+            across_the_seam
+                .iter()
+                .map(|p| Point2::new(p.x(), if p.y() < 0.3 { by } else { by + 6e-7 }))
+                .collect()
+        };
+        for loop_uv in [
+            across_the_seam.to_vec(),
+            lift(FRAC_PI_2 - 8e-7),
+            lift(FRAC_PI_2 - 6.5e-7),
+            lift(FRAC_PI_2 - 6.2e-7),
+        ] {
+            let us: Vec<f64> = unwrapped_u(&loop_uv).iter().map(|p| p.x()).collect();
+            assert_eq!(us.len(), 4);
+            for (got, want) in us.iter().zip([6.0, 0.2 + TAU, 0.2 + TAU, 6.0]) {
+                assert!((got - want).abs() < 1e-12, "{us:?}");
+            }
+        }
     }
 }

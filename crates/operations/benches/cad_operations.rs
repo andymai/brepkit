@@ -324,6 +324,55 @@ fn bench_box_fillet_all_rolling_ball(c: &mut Criterion) {
     });
 }
 
+/// `box(20,20,20)` + fillet of all edges and chamfer of one edge at 1 with
+/// the walking engine, in an empty topology and in one that already holds 20,000 other
+/// boxes. The two times of each operation must stay near each other: the cost
+/// of a blend must not depend on the shapes that it does not touch. The large
+/// topology reads a little slower, because the first writes to the new copy
+/// of its arenas fault their pages in.
+///
+/// Each iteration gets its own copy of the topology, made and dropped
+/// outside the timed section, so no iteration sees the work of another.
+fn bench_box_blend_among_other_shapes(c: &mut Criterion) {
+    use brepkit_operations::blend_ops::{chamfer_v2, fillet_v2};
+    use criterion::BatchSize;
+    for (label, others) in [("empty topology", 0), ("20000 other boxes", 20_000)] {
+        let mut baseline = Topology::new();
+        for _ in 0..others {
+            primitives::make_box(&mut baseline, 10.0, 10.0, 10.0).unwrap();
+        }
+        let solid = primitives::make_box(&mut baseline, 20.0, 20.0, 20.0).unwrap();
+        let edges = collect_edges(&baseline, solid);
+        // A copy has no spare room, so its first new entity would move the
+        // whole arena inside the timed section.
+        let roomy_copy = |topo: &Topology| {
+            let mut copy = topo.clone();
+            copy.reserve(4096, 4096, 4096, 4096, 16, 16);
+            copy
+        };
+        c.bench_function(&format!("box+fillet (walking), {label}"), |b| {
+            b.iter_batched(
+                || roomy_copy(&baseline),
+                |mut topo| {
+                    black_box(fillet_v2(&mut topo, solid, &edges, 1.0).unwrap());
+                    topo
+                },
+                BatchSize::LargeInput,
+            );
+        });
+        c.bench_function(&format!("box+chamfer one edge (walking), {label}"), |b| {
+            b.iter_batched(
+                || roomy_copy(&baseline),
+                |mut topo| {
+                    black_box(chamfer_v2(&mut topo, solid, &edges[..1], 1.0, 1.0).unwrap());
+                    topo
+                },
+                BatchSize::LargeInput,
+            );
+        });
+    }
+}
+
 /// Multi-boolean: plate(50,50,10) with 4 cylinder holes.
 fn bench_multi_boolean(c: &mut Criterion) {
     c.bench_function("multi-boolean model", |b| {
@@ -673,6 +722,7 @@ criterion_group! {
         bench_box_chamfer_all,
         bench_box_fillet_all,
         bench_box_fillet_all_rolling_ball,
+        bench_box_blend_among_other_shapes,
         bench_multi_boolean,
 }
 

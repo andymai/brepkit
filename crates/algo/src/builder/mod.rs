@@ -695,15 +695,18 @@ impl Builder {
                 )));
             } else if face_splitter::face_has_curved_lens_holes(&self.topo, sf.face_id) {
                 // A curved-lens-hole wall (cylinder/cone with closed
-                // Circle/Ellipse/NURBS holes) whose contained-interior search
-                // failed: every generic interior sample risks landing inside the
-                // removed lens, which would misclassify and drop the wall. Abort
-                // the analytic split so the boolean falls back to mesh (correct)
-                // rather than build a wrong B-rep.
-                return Err(AlgoError::ClassificationFailed(format!(
-                    "no contained interior for curved-lens wall {:?}; aborting analytic split",
-                    sf.face_id
-                )));
+                // Circle/Ellipse/NURBS holes): a generic interior sample can
+                // land inside the removed lens, which would misclassify and
+                // drop the wall. A wall that no section cut has had no search
+                // yet, so it is searched here. With no contained point, the
+                // analytic split aborts.
+                face_splitter::whole_lens_wall_interior(&self.topo, sf.face_id, self.tol.linear)
+                    .ok_or_else(|| {
+                        AlgoError::ClassificationFailed(format!(
+                            "no contained interior for curved-lens wall {:?}; aborting analytic split",
+                            sf.face_id
+                        ))
+                    })
             } else {
                 sample_face_interior(&self.topo, sf.face_id, self.tol)
             };

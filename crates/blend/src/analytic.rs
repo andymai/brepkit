@@ -17,6 +17,7 @@
 //! |--------------------------------|-------------------------|---------------------------------|
 //! | Plane × Plane                  | Cylinder (fillet) / Plane (chamfer) | none — dihedral edge       |
 //! | Plane × {Cylinder, Cone, Sphere} | Torus (fillet) / Cone (chamfer) | other surface's axis ⟂ plate     |
+//! | Plane × Cylinder (fillet only) | Cylinder                | cyl axis parallel to the plate  |
 //! | Sphere × {Cylinder, Cone}      | Torus (fillet) / Cone (chamfer) | sphere centre on cyl/cone axis line |
 //! | Sphere × Sphere                | Torus (fillet) / Cone (chamfer) | none — axis is line C1→C2 by construction |
 //! | Cylinder × Cylinder (parallel axes) | Cylinder (fillet) / Plane (chamfer) | parallel cyl axes, intersecting   |
@@ -733,11 +734,14 @@ fn plane_plane_chamfer(
 /// This keeps the plane contact inside the support face instead of placing a
 /// hole fillet's contact circle in the void.
 ///
-/// Returns `None` (walker fallback) when the cylinder axis is not parallel to
-/// the plane normal, the spine is too short or degenerate, or the requested
-/// radius reaches `r_c`. A bounded rim at `r >= r_c / 2` is a spindle torus;
-/// the quarter tube the blend uses lies outside the major radius, clear of
-/// the self-intersection.
+/// A cylinder whose axis is parallel to the plane meets it on straight
+/// lines; `plane_cylinder_side_fillet` rounds those.
+///
+/// Returns `None` (walker fallback) when the cylinder axis is neither
+/// parallel to the plane normal nor to the plane, the spine is too short or
+/// degenerate, or the requested radius reaches `r_c`. A bounded rim at
+/// `r >= r_c / 2` is a spindle torus; the quarter tube the blend uses lies
+/// outside the major radius, clear of the self-intersection.
 ///
 /// # Errors
 ///
@@ -759,9 +763,15 @@ pub fn plane_cylinder_fillet(
     let tol_lin = ANALYTIC_TOL_LIN;
 
     // 1) Cylinder axis must be parallel (up to sign) to the inward plane
-    //    normal — this is the perpendicular plane-cylinder case.
+    //    normal — this is the perpendicular plane-cylinder case. An axis
+    //    parallel to the plane meets it on straight lines instead.
     let axis_c = cyl.axis();
     let n_dot = axis_c.dot(n_p_inward);
+    if n_dot.abs() <= tol_ang {
+        return plane_cylinder_side_fillet(
+            n_p_inward, d_plane, cyl, spine, topo, radius, face_plane, face_cyl,
+        );
+    }
     if n_dot.abs() < 1.0 - tol_ang {
         return Ok(None);
     }
@@ -953,6 +963,182 @@ pub fn plane_cylinder_fillet(
         pcurve2: pcurve_cyl,
         contact1: contact_plane,
         contact2: contact_cyl,
+        face1: face_plane,
+        face2: face_cyl,
+        sections: vec![section_start, section_end],
+    };
+    Ok(Some(StripeResult {
+        stripe,
+        new_edges: Vec::new(),
+    }))
+}
+
+/// Fillet along a straight line where a plane meets a cylinder whose axis
+/// is parallel to the plane.
+///
+/// The ball's centre runs along a line parallel to the axis, so the blend is
+/// a cylinder of the fillet radius. In the section across the axis, the
+/// ball sits in the wedge between the two faces at the edge, convex or
+/// concave: one radius off the plate on the side the wall runs to, and one
+/// radius off the wall on the side the plate runs to, `r_c + r` from the
+/// axis where the plate runs away from it and `r_c - r` where the plate
+/// runs toward it. Of the two such centres, the ball's is on the edge's
+/// side of the plane through the axis square to the plate.
+///
+/// Returns `None` (walker fallback) when the spine is not a straight line
+/// along the axis on both surfaces, a face does not hold the spine's edge,
+/// the plate is tangent to the wall at the edge, or no ball of the radius
+/// fits the wedge.
+///
+/// # Errors
+///
+/// Returns `BlendError` if topology lookups or curve construction fail.
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+fn plane_cylinder_side_fillet(
+    n_p_inward: Vec3,
+    d_plane: f64,
+    cyl: &CylindricalSurface,
+    spine: &Spine,
+    topo: &Topology,
+    radius: f64,
+    face_plane: FaceId,
+    face_cyl: FaceId,
+) -> Result<Option<StripeResult>, BlendError> {
+    let tol_lin = ANALYTIC_TOL_LIN;
+    let tol_ang = ANALYTIC_TOL_ANG;
+    let r_c = cyl.radius();
+    if radius <= tol_lin {
+        return Ok(None);
+    }
+    let Some(&spine_edge) = spine.edges().first() else {
+        return Ok(None);
+    };
+    let first = topo.edge(spine_edge)?;
+    let spine_len = spine.length();
+    if first.start() == first.end() || spine_len < tol_lin {
+        return Ok(None);
+    }
+
+    // The spine is the line where the two surfaces meet: along the axis,
+    // with its ends and middle on both.
+    let axis = cyl.axis();
+    let tangent = spine.tangent(topo, 0.0)?;
+    if tangent.dot(axis).abs() < 1.0 - tol_ang {
+        return Ok(None);
+    }
+    let along = if tangent.dot(axis) > 0.0 { axis } else { -axis };
+    let o = cyl.origin();
+    let off_axis = |p: Point3| {
+        let v = p - o;
+        v - axis * axis.dot(v)
+    };
+    let height = |p: Point3| n_p_inward.dot(Vec3::new(p.x(), p.y(), p.z())) - d_plane;
+    let p_start = spine.evaluate(topo, 0.0)?;
+    let p_end = spine.evaluate(topo, spine_len)?;
+    let match_tol = tol_lin * 1e3 * r_c.max(1.0);
+    for p in [p_start, spine.evaluate(topo, 0.5 * spine_len)?, p_end] {
+        if height(p).abs() > match_tol
+            || (off_axis(p).length() - r_c).abs() > match_tol
+            || (off_axis(p) - off_axis(p_start)).length() > match_tol
+        {
+            return Ok(None);
+        }
+    }
+
+    // Which way each face runs from the edge, square to it.
+    let (Some(into_plate), Some(into_wall)) = (
+        crate::builder_utils::into_face_from_edge(topo, face_plane, spine_edge)?,
+        crate::builder_utils::into_face_from_edge(topo, face_cyl, spine_edge)?,
+    ) else {
+        return Ok(None);
+    };
+    let out = off_axis(p_start).normalize()?;
+    let plate_away = into_plate.dot(out);
+    let wall_side = into_wall.dot(n_p_inward);
+    if plate_away.abs() <= tol_lin || wall_side.abs() <= tol_lin {
+        return Ok(None);
+    }
+
+    // Section coordinates about the axis: `h` along the plate's inward
+    // normal, `t` along the plate square to the axis.
+    let across = axis.cross(n_p_inward).normalize()?;
+    let h_plate = d_plane - n_p_inward.dot(Vec3::new(o.x(), o.y(), o.z()));
+    let t_edge = across.dot(p_start - o);
+    let h_ball = if wall_side > 0.0 {
+        h_plate + radius
+    } else {
+        h_plate - radius
+    };
+    let q = if plate_away > 0.0 {
+        r_c + radius
+    } else {
+        r_c - radius
+    };
+    let t_sq = q * q - h_ball * h_ball;
+    if q <= tol_lin || t_sq <= tol_lin * tol_lin || t_edge.abs() <= tol_lin {
+        return Ok(None);
+    }
+    let t_ball = t_edge.signum() * t_sq.sqrt();
+    let at = |h: f64, t: f64, axial: f64| o + n_p_inward * h + across * t + axis * axial;
+    let axial_start = axis.dot(p_start - o);
+    let axial_end = axis.dot(p_end - o);
+    let to_wall = r_c / q;
+    let centre_start = at(h_ball, t_ball, axial_start);
+    let centre_end = at(h_ball, t_ball, axial_end);
+    let c1_start = at(h_plate, t_ball, axial_start);
+    let c1_end = at(h_plate, t_ball, axial_end);
+    let c2_start = at(h_ball * to_wall, t_ball * to_wall, axial_start);
+    let c2_end = at(h_ball * to_wall, t_ball * to_wall, axial_end);
+    // Both contacts lie on their faces' sides of the edge.
+    if (c1_start - p_start).dot(into_plate) <= 0.0 || (c2_start - p_start).dot(into_wall) <= 0.0 {
+        return Ok(None);
+    }
+
+    let fillet_cyl = CylindricalSurface::new(centre_start, along, radius)?;
+    let contact1 = nurbs_line(c1_start, c1_end)?;
+    let contact2 = nurbs_line(c2_start, c2_end)?;
+
+    let plane_adapter = crate::builder_utils::PlaneAdapter::from_normal_and_d(n_p_inward, d_plane);
+    let uv1_start = plane_adapter.project_point(c1_start);
+    let uv1_end = plane_adapter.project_point(c1_end);
+    let pcurve1 = Curve2D::Line(Line2D::new(
+        brepkit_math::vec::Point2::new(uv1_start.0, uv1_start.1),
+        brepkit_math::vec::Vec2::new(uv1_end.0 - uv1_start.0, uv1_end.1 - uv1_start.1),
+    )?);
+    let u2 = ParametricSurface::project_point(cyl, c2_start).0;
+    let v2_start = cyl_v_at_point(cyl, c2_start);
+    let v2_end = cyl_v_at_point(cyl, c2_end);
+    let pcurve2 = Curve2D::Line(Line2D::new(
+        brepkit_math::vec::Point2::new(u2, v2_start),
+        brepkit_math::vec::Vec2::new(0.0, v2_end - v2_start),
+    )?);
+
+    let section_start = CircSection {
+        p1: c1_start,
+        p2: c2_start,
+        center: centre_start,
+        radius,
+        uv1: uv1_start,
+        uv2: (u2, v2_start),
+        t: 0.0,
+    };
+    let section_end = CircSection {
+        p1: c1_end,
+        p2: c2_end,
+        center: centre_end,
+        radius,
+        uv1: uv1_end,
+        uv2: (u2, v2_end),
+        t: 1.0,
+    };
+
+    let stripe = Stripe {
+        spine: spine.clone(),
+        surface: FaceSurface::Cylinder(fillet_cyl),
+        pcurve1,
+        pcurve2,
+        contact1,
+        contact2,
         face1: face_plane,
         face2: face_cyl,
         sections: vec![section_start, section_end],

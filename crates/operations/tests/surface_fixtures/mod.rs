@@ -3,6 +3,8 @@
 
 #![allow(dead_code)]
 
+pub mod fold;
+
 use std::f64::consts::FRAC_1_SQRT_2;
 
 use brepkit_math::curves::Circle3D;

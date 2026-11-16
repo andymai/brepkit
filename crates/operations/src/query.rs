@@ -125,18 +125,7 @@ fn edge_is_tangent(
     let b = topo.vertex(edge.end())?.point();
     let mid = a + (b - a) * 0.5;
 
-    let normal = |fid: FaceId| -> Option<brepkit_math::vec::Vec3> {
-        let face = topo.face(fid).ok()?;
-        let n = match face.surface() {
-            FaceSurface::Plane { normal, .. } => *normal,
-            other => {
-                let (u, v) = other.project_point(mid)?;
-                other.normal(u, v)
-            }
-        };
-        let n = if face.is_reversed() { -n } else { n };
-        n.normalize().ok()
-    };
+    let normal = |fid: FaceId| outward_normal_near(topo, fid, mid);
 
     match (normal(f1), normal(f2)) {
         (Some(n1), Some(n2)) => {
@@ -150,6 +139,270 @@ fn edge_is_tangent(
     }
 }
 
+/// The outward normal of a face at the point of its surface nearest `near`.
+fn outward_normal_near(
+    topo: &Topology,
+    fid: FaceId,
+    near: brepkit_math::vec::Point3,
+) -> Option<brepkit_math::vec::Vec3> {
+    let face = topo.face(fid).ok()?;
+    let n = match face.surface() {
+        FaceSurface::Plane { normal, .. } => *normal,
+        other => {
+            let (u, v) = other.project_point(near)?;
+            other.normal(u, v)
+        }
+    };
+    let n = if face.is_reversed() { -n } else { n };
+    n.normalize().ok()
+}
+
+/// The edges of `edge_ids` that lie inside one surface of the solid, so that
+/// they have no angle to round or bevel.
+///
+/// Such an edge is the seam of one face: the face uses it one time in each
+/// direction. Or it is the edge between two faces that are parts of one
+/// surface with the material on one side, such as the two halves of a
+/// cylinder wall that a boolean or an imported file keeps as two faces.
+///
+/// The solid's faces are read one time for the whole of `edge_ids`.
+///
+/// # Errors
+///
+/// Returns `OperationsError::Topology` if any entity ID is invalid.
+pub fn edges_in_one_surface(
+    topo: &Topology,
+    solid_id: SolidId,
+    edge_ids: &[EdgeId],
+) -> Result<HashSet<usize>, OperationsError> {
+    let wanted: HashSet<usize> = edge_ids.iter().map(|e| e.index()).collect();
+    let mut uses: HashMap<usize, Vec<(FaceId, bool)>> = HashMap::new();
+    for fid in brepkit_topology::explorer::solid_faces(topo, solid_id)? {
+        let face = topo.face(fid)?;
+        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            for oe in topo.wire(wid)?.edges() {
+                if wanted.contains(&oe.edge().index()) {
+                    uses.entry(oe.edge().index())
+                        .or_default()
+                        .push((fid, oe.is_forward()));
+                }
+            }
+        }
+    }
+
+    let mut inside = HashSet::new();
+    for &edge_id in edge_ids {
+        let Some(&[(f1, forward1), (f2, forward2)]) = uses.get(&edge_id.index()).map(Vec::as_slice)
+        else {
+            continue;
+        };
+        let one_surface = if f1 == f2 {
+            forward1 != forward2
+        } else if same_surface(topo.face(f1)?.surface(), topo.face(f2)?.surface()) {
+            // Points of the edge on its curve: the middle of an arc's chord
+            // can be on the axis of its surface, which has no normal. Three
+            // points, since a corner along a knot can open along the edge.
+            let edge = topo.edge(edge_id)?;
+            let a = topo.vertex(edge.start())?.point();
+            let b = topo.vertex(edge.end())?.point();
+            let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
+            let surface = topo.face(f1)?.surface();
+            [0.25, 0.5, 0.75].iter().all(|&s| {
+                let at = edge
+                    .curve()
+                    .evaluate_with_endpoints(t0 + s * (t1 - t0), a, b);
+                let smooth = match surface {
+                    FaceSurface::Nurbs(surface) => smooth_across(surface, at),
+                    _ => true,
+                };
+                smooth
+                    && match (
+                        outward_normal_near(topo, f1, at),
+                        outward_normal_near(topo, f2, at),
+                    ) {
+                        (Some(n1), Some(n2)) => n1.dot(n2) > 0.9962,
+                        _ => false,
+                    }
+            })
+        } else {
+            false
+        };
+        if one_surface {
+            inside.insert(edge_id.index());
+        }
+    }
+    Ok(inside)
+}
+
+/// Whether one edge lies inside one surface of the solid: see
+/// [`edges_in_one_surface`], which reads the solid one time for many edges.
+///
+/// # Errors
+///
+/// Returns `OperationsError::Topology` if any entity ID is invalid.
+pub fn edge_lies_in_one_surface(
+    topo: &Topology,
+    solid_id: SolidId,
+    edge_id: EdgeId,
+) -> Result<bool, OperationsError> {
+    Ok(!edges_in_one_surface(topo, solid_id, &[edge_id])?.is_empty())
+}
+
+/// Whether two faces' surfaces are one surface: equal analytic surfaces
+/// within the standard tolerances (an angle is read as an angle), or B-spline surfaces with the same
+/// degrees, knots, control points and weights.
+fn same_surface(a: &FaceSurface, b: &FaceSurface) -> bool {
+    let tol = brepkit_math::tolerance::Tolerance::new();
+    // The healer reads two planes as one within a wide tolerance, which a
+    // shallow crease also passes.
+    if let (FaceSurface::Plane { normal: na, d: da }, FaceSurface::Plane { normal: nb, d: db }) =
+        (a, b)
+    {
+        // The cross product reads the angle itself: `1 - |dot|` reads half
+        // its square, which a crease of 1e-6 rad passes.
+        let dot = na.dot(*nb);
+        return na.cross(*nb).length() <= tol.angular
+            && (da - db * dot.signum()).abs() < tol.linear;
+    }
+    // The healer reads an angle between two axes from `1 - |dot|` too, so
+    // each analytic pair has its compare here.
+    let along =
+        |p: brepkit_math::vec::Vec3, q: brepkit_math::vec::Vec3| p.cross(q).length() <= tol.angular;
+    let (a, b) = match (a, b) {
+        (FaceSurface::Nurbs(a), FaceSurface::Nurbs(b)) => (a, b),
+        (FaceSurface::Cylinder(a), FaceSurface::Cylinder(b)) => {
+            return (a.radius() - b.radius()).abs() < tol.linear
+                && along(a.axis(), b.axis())
+                && (b.origin() - a.origin()).cross(a.axis()).length() < tol.linear;
+        }
+        (FaceSurface::Cone(a), FaceSurface::Cone(b)) => {
+            return (a.half_angle() - b.half_angle()).abs() <= tol.angular
+                && along(a.axis(), b.axis())
+                && a.axis().dot(b.axis()) > 0.0
+                && (b.apex() - a.apex()).length() < tol.linear;
+        }
+        (FaceSurface::Sphere(a), FaceSurface::Sphere(b)) => {
+            return (a.radius() - b.radius()).abs() < tol.linear
+                && (b.center() - a.center()).length() < tol.linear;
+        }
+        (FaceSurface::Torus(a), FaceSurface::Torus(b)) => {
+            return (a.major_radius() - b.major_radius()).abs() < tol.linear
+                && (a.minor_radius() - b.minor_radius()).abs() < tol.linear
+                && along(a.z_axis(), b.z_axis())
+                && (b.center() - a.center()).length() < tol.linear;
+        }
+        (
+            FaceSurface::Plane { .. }
+            | FaceSurface::Cylinder(_)
+            | FaceSurface::Cone(_)
+            | FaceSurface::Sphere(_)
+            | FaceSurface::Torus(_)
+            | FaceSurface::Nurbs(_),
+            _,
+        ) => return false,
+    };
+    // Parts of one surface hold copies of it. The compare is relative, since
+    // a weight has no length scale.
+    let same_values = |x: &[f64], y: &[f64]| {
+        x.len() == y.len()
+            && x.iter()
+                .zip(y)
+                .all(|(&p, &q)| (p - q).abs() <= 1e-12 * p.abs().max(q.abs()))
+    };
+    let same_rows = |x: &[Vec<f64>], y: &[Vec<f64>]| {
+        x.len() == y.len() && x.iter().zip(y).all(|(p, q)| same_values(p, q))
+    };
+    let same_points = a.control_points().len() == b.control_points().len()
+        && a.control_points()
+            .iter()
+            .zip(b.control_points())
+            .all(|(p, q)| {
+                p.len() == q.len()
+                    && p.iter()
+                        .zip(q)
+                        .all(|(&s, &t)| (s - t).length() <= tol.linear)
+            });
+    // Parts of one surface hold copies of its knots, bit for bit. A knot
+    // has no scale to compare against: a small move of one changes the
+    // surface.
+    let same_knots = |x: &[f64], y: &[f64]| {
+        x.len() == y.len() && x.iter().zip(y).all(|(p, q)| p.to_bits() == q.to_bits())
+    };
+    a.degree_u() == b.degree_u()
+        && a.degree_v() == b.degree_v()
+        && same_knots(a.knots_u(), b.knots_u())
+        && same_knots(a.knots_v(), b.knots_v())
+        && same_points
+        && same_rows(a.weights(), b.weights())
+}
+
+/// Whether a B-spline surface has one normal on each side of `point`.
+///
+/// A surface whose inner knot occurs as many times as its degree can have a
+/// corner along that knot, and two faces on its two sides then meet at a
+/// real angle on one surface. A rational circle has such knots and no
+/// corner. So where `point` is on such a knot line, the test compares the
+/// normals of the two spans that meet there, each at its end of the knot.
+fn smooth_across(
+    surface: &brepkit_math::nurbs::surface::NurbsSurface,
+    point: brepkit_math::vec::Point3,
+) -> bool {
+    // On the knot line: within ten times the length tolerance of it.
+    const ON_THE_LINE: f64 = 1e-6;
+    // One normal: within the rounding of a normal's three coordinates.
+    const ONE_NORMAL: f64 = 1e-9;
+
+    let knots_u = crease_knots(surface.knots_u(), surface.degree_u());
+    let knots_v = crease_knots(surface.knots_v(), surface.degree_v());
+    if knots_u.is_empty() && knots_v.is_empty() {
+        return true;
+    }
+    let Some((u, v)) = FaceSurface::Nurbs(surface.clone()).project_point(point) else {
+        return false;
+    };
+    let along_u = knots_u.iter().map(|&k| ((k, v), (k.next_down(), v)));
+    let along_v = knots_v.iter().map(|&k| ((u, k), (u, k.next_down())));
+    for (after, before) in along_u.chain(along_v) {
+        if (surface.evaluate(after.0, after.1) - point).length() > ON_THE_LINE {
+            continue;
+        }
+        let (Ok(n_after), Ok(n_before)) = (
+            surface.normal(after.0, after.1),
+            surface.normal(before.0, before.1),
+        ) else {
+            return false;
+        };
+        if n_after.cross(n_before).length() > ONE_NORMAL || n_after.dot(n_before) < 0.0 {
+            return false;
+        }
+    }
+    true
+}
+
+/// The inner knots at which a B-spline of this degree can have a corner:
+/// each one occurs as many times as the degree, or more.
+fn crease_knots(knots: &[f64], degree: usize) -> Vec<f64> {
+    let (Some(first), Some(last)) = (knots.first(), knots.last()) else {
+        return Vec::new();
+    };
+    let mut found: Vec<f64> = Vec::new();
+    let mut run = 0;
+    let mut previous = f64::NAN;
+    for knot in knots {
+        if knot.to_bits() == previous.to_bits() {
+            run += 1;
+        } else {
+            run = 1;
+            previous = *knot;
+        }
+        let inner = knot.to_bits() != first.to_bits() && knot.to_bits() != last.to_bits();
+        if inner && run == degree.max(1) {
+            found.push(*knot);
+        }
+    }
+    found
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, deprecated)]
@@ -157,6 +410,303 @@ mod tests {
     use brepkit_topology::explorer::solid_edges;
 
     use super::*;
+
+    #[test]
+    fn a_box_edge_and_a_cylinders_rim_lie_in_two_surfaces() {
+        let mut topo = Topology::new();
+        let cube = crate::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+        for edge in solid_edges(&topo, cube).unwrap() {
+            assert!(!edge_lies_in_one_surface(&topo, cube, edge).unwrap());
+        }
+        let rod = crate::primitives::make_cylinder(&mut topo, 3.0, 10.0).unwrap();
+        let inside: Vec<bool> = solid_edges(&topo, rod)
+            .unwrap()
+            .into_iter()
+            .map(|edge| edge_lies_in_one_surface(&topo, rod, edge).unwrap())
+            .collect();
+        assert_eq!(
+            inside.iter().filter(|&&seam| seam).count(),
+            1,
+            "the wall's seam is the one edge inside a surface: {inside:?}"
+        );
+        assert_eq!(inside.len(), 3);
+    }
+
+    #[test]
+    fn the_line_between_two_halves_of_a_wall_lies_in_one_surface() {
+        use crate::boolean::{BooleanOp, BooleanOptions, boolean_with_options};
+        use brepkit_math::mat::Mat4;
+
+        // A rod cut by a box that takes the side of the wall away from the
+        // seam: without a merge of faces, the wall stays in two faces.
+        let mut topo = Topology::new();
+        let rod = crate::primitives::make_cylinder(&mut topo, 3.0, 10.0).unwrap();
+        let tool = crate::primitives::make_box(&mut topo, 4.0, 2.0, 12.0).unwrap();
+        crate::transform::transform_solid(&mut topo, tool, &Mat4::translation(-5.0, -1.0, -1.0))
+            .unwrap();
+        let opts = BooleanOptions {
+            mesh_fallback: false,
+            unify_faces: false,
+            ..BooleanOptions::default()
+        };
+        let cut = boolean_with_options(&mut topo, BooleanOp::Cut, rod, tool, opts).unwrap();
+
+        let walls = brepkit_topology::explorer::solid_faces(&topo, cut)
+            .unwrap()
+            .into_iter()
+            .filter(|&f| matches!(topo.face(f).unwrap().surface(), FaceSurface::Cylinder(_)))
+            .count();
+        assert_eq!(walls, 2, "the wall is in two faces");
+        let inside: Vec<EdgeId> = solid_edges(&topo, cut)
+            .unwrap()
+            .into_iter()
+            .filter(|&edge| edge_lies_in_one_surface(&topo, cut, edge).unwrap())
+            .collect();
+        assert_eq!(inside.len(), 1, "one line between the two halves");
+        let line = topo.edge(inside[0]).unwrap();
+        for end in [line.start(), line.end()] {
+            let p = topo.vertex(end).unwrap().point();
+            assert!((p.x() - 3.0).abs() < 1e-9 && p.y().abs() < 1e-9, "{p:?}");
+        }
+        assert!(
+            filter_filletable_edges(&topo, cut, &inside)
+                .unwrap()
+                .is_empty(),
+            "the line has no angle to round"
+        );
+    }
+
+    #[test]
+    fn a_rounds_contact_line_lies_in_two_surfaces() {
+        let mut topo = Topology::new();
+        let cube = crate::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+        let edges = solid_edges(&topo, cube).unwrap();
+        let rounded = crate::blend_ops::fillet_v2(&mut topo, cube, &[edges[0]], 1.0)
+            .unwrap()
+            .solid;
+        let all = solid_edges(&topo, rounded).unwrap();
+        let sharp: HashSet<usize> = filter_filletable_edges(&topo, rounded, &all)
+            .unwrap()
+            .iter()
+            .map(|e| e.index())
+            .collect();
+        let tangent: Vec<EdgeId> = all
+            .iter()
+            .copied()
+            .filter(|e| !sharp.contains(&e.index()))
+            .collect();
+        assert_eq!(tangent.len(), 2, "the round's two contact lines");
+        for edge in tangent {
+            assert!(!edge_lies_in_one_surface(&topo, rounded, edge).unwrap());
+        }
+    }
+
+    #[test]
+    fn two_planes_at_a_shallow_crease_are_two_surfaces() {
+        use brepkit_math::vec::Vec3;
+
+        let flat = FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: 2.0,
+        };
+        let tilted = FaceSurface::Plane {
+            normal: Vec3::new(0.01_f64.sin(), 0.0, 0.01_f64.cos()),
+            d: 2.0,
+        };
+        let turned_over = FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, -1.0),
+            d: -2.0,
+        };
+        let shifted = FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: 2.0 + 1e-4,
+        };
+        assert!(same_surface(&flat, &flat));
+        assert!(same_surface(&flat, &turned_over));
+        assert!(!same_surface(&flat, &tilted));
+        let barely_tilted = FaceSurface::Plane {
+            normal: Vec3::new(1e-6_f64.sin(), 0.0, 1e-6_f64.cos()),
+            d: 2.0,
+        };
+        assert!(!same_surface(&flat, &barely_tilted));
+        assert!(!same_surface(&flat, &shifted));
+    }
+
+    #[test]
+    fn an_edge_that_one_face_uses_one_time_is_no_seam() {
+        // A cylinder's wall alone: each rim is used one time, by one face.
+        let mut topo = Topology::new();
+        let rod = crate::primitives::make_cylinder(&mut topo, 3.0, 10.0).unwrap();
+        let wall = brepkit_topology::explorer::solid_faces(&topo, rod)
+            .unwrap()
+            .into_iter()
+            .find(|&f| matches!(topo.face(f).unwrap().surface(), FaceSurface::Cylinder(_)))
+            .unwrap();
+        let shell = topo.add_shell(brepkit_topology::shell::Shell::new(vec![wall]).unwrap());
+        let open = topo.add_solid(brepkit_topology::solid::Solid::new(shell, vec![]));
+        let edges = brepkit_topology::explorer::face_edges(&topo, wall).unwrap();
+        let inside = edges_in_one_surface(&topo, open, &edges).unwrap();
+        assert_eq!(inside.len(), 1, "the seam only, and no rim: {inside:?}");
+    }
+
+    #[test]
+    fn a_balls_equator_lies_in_one_surface() {
+        let mut topo = Topology::new();
+        let ball = crate::primitives::make_sphere(&mut topo, 3.0, 16).unwrap();
+        let all = solid_edges(&topo, ball).unwrap();
+        let inside = edges_in_one_surface(&topo, ball, &all).unwrap();
+        assert_eq!(all.len(), 16);
+        assert_eq!(inside.len(), 16, "each edge is between the two halves");
+    }
+
+    #[test]
+    fn two_cylinders_at_a_shallow_tilt_are_two_surfaces() {
+        use brepkit_math::surfaces::CylindricalSurface;
+        use brepkit_math::vec::{Point3, Vec3};
+
+        let wall = |axis: Vec3, radius: f64| {
+            FaceSurface::Cylinder(
+                CylindricalSurface::new(Point3::new(1.0, 2.0, 3.0), axis, radius).unwrap(),
+            )
+        };
+        let upright = wall(Vec3::new(0.0, 0.0, 1.0), 3.0);
+        assert!(same_surface(&upright, &wall(Vec3::new(0.0, 0.0, 1.0), 3.0)));
+        assert!(same_surface(
+            &upright,
+            &wall(Vec3::new(0.0, 0.0, -1.0), 3.0)
+        ));
+        assert!(!same_surface(
+            &upright,
+            &wall(Vec3::new(1e-6_f64.sin(), 0.0, 1e-6_f64.cos()), 3.0)
+        ));
+        assert!(!same_surface(
+            &upright,
+            &wall(Vec3::new(0.0, 0.0, 1.0), 3.0 + 1e-4)
+        ));
+    }
+
+    #[test]
+    fn two_spline_surfaces_with_other_weights_are_two_surfaces() {
+        use brepkit_math::nurbs::surface::NurbsSurface;
+        use brepkit_math::vec::Point3;
+
+        let patch = |w: f64| {
+            let points = vec![
+                vec![Point3::new(0.0, 0.0, 0.0), Point3::new(0.0, 1.0, 0.0)],
+                vec![Point3::new(1.0, 0.0, 0.0), Point3::new(1.0, 1.0, 1.0)],
+            ];
+            let weights = vec![vec![1e-8, 1e-8], vec![1e-8, w]];
+            let knots = vec![0.0, 0.0, 1.0, 1.0];
+            FaceSurface::Nurbs(
+                NurbsSurface::new(1, 1, knots.clone(), knots, points, weights).unwrap(),
+            )
+        };
+        assert!(same_surface(&patch(1e-8), &patch(1e-8)));
+        assert!(!same_surface(&patch(1e-8), &patch(3e-8)));
+    }
+
+    #[test]
+    fn two_spline_surfaces_with_other_knots_or_a_corner_knot_are_two_surfaces() {
+        use brepkit_math::nurbs::surface::NurbsSurface;
+        use brepkit_math::vec::Point3;
+
+        // Degree 2 by 1, four rows of control points, one inner knot in u.
+        let strip = |inner: f64, offset: f64| {
+            let points = (0..4)
+                .map(|i| {
+                    let x = f64::from(i);
+                    vec![Point3::new(x, 0.0, x * x), Point3::new(x, 1.0, x * x)]
+                })
+                .collect();
+            let knots_u: Vec<f64> = [0.0, 0.0, 0.0, inner, 2.0, 2.0, 2.0]
+                .iter()
+                .map(|k| k + offset)
+                .collect();
+            FaceSurface::Nurbs(
+                NurbsSurface::new(
+                    2,
+                    1,
+                    knots_u,
+                    vec![0.0, 0.0, 1.0, 1.0],
+                    points,
+                    vec![vec![1.0; 2]; 4],
+                )
+                .unwrap(),
+            )
+        };
+        assert!(same_surface(&strip(1.0, 0.0), &strip(1.0, 0.0)));
+        assert!(!same_surface(&strip(1.0, 1e12), &strip(0.5, 1e12)));
+
+        // A rational cylinder has doubled inner knots and no corner.
+        let wall = brepkit_math::surfaces::CylindricalSurface::new(
+            Point3::new(0.0, 0.0, 0.0),
+            brepkit_math::vec::Vec3::new(0.0, 0.0, 1.0),
+            3.0,
+        )
+        .unwrap();
+        let rational = wall.to_nurbs(0.0, 10.0).unwrap();
+        assert_eq!(
+            crease_knots(rational.knots_u(), rational.degree_u()),
+            vec![0.25, 0.5, 0.75]
+        );
+        let on_a_knot = rational.evaluate(0.25, 0.5);
+        assert!(smooth_across(&rational, on_a_knot));
+
+        // A sheet of degree 1 in three panels: flat, then up at `angle`,
+        // then flat. Its middle panel has the width `narrow` in u.
+        let fold = |angle: f64, narrow: f64, offset: f64| {
+            let (rise, run) = angle.sin_cos();
+            let xz = [(0.0, 0.0), (1.0, 0.0), (1.0 + run, rise), (2.0 + run, rise)];
+            let knots_u: Vec<f64> = [0.0, 0.0, 1.0, 1.0 + narrow, 2.0, 2.0]
+                .iter()
+                .map(|k| k + offset)
+                .collect();
+            NurbsSurface::new(
+                1,
+                1,
+                knots_u,
+                vec![0.0, 0.0, 1.0, 1.0],
+                xz.iter()
+                    .map(|&(x, z)| vec![Point3::new(x, 0.0, z), Point3::new(x, 1.0, z)])
+                    .collect(),
+                vec![vec![1.0; 2]; 4],
+            )
+            .unwrap()
+        };
+        let quarter = std::f64::consts::FRAC_PI_2;
+        let first_fold = Point3::new(1.0, 0.5, 0.0);
+        let second_fold = Point3::new(1.0, 0.5, 1.0);
+        let in_a_panel = Point3::new(0.5, 0.5, 0.0);
+        for (angle, narrow, offset) in [
+            (quarter, 0.5, 0.0),
+            (quarter, 1e-7, 0.0),
+            (quarter, 0.5, 1e12),
+            (1e-4, 0.5, 0.0),
+        ] {
+            let sheet = fold(angle, narrow, offset);
+            assert!(
+                !smooth_across(&sheet, first_fold),
+                "{angle} {narrow} {offset}"
+            );
+            assert!(
+                smooth_across(&sheet, in_a_panel),
+                "{angle} {narrow} {offset}"
+            );
+            if (angle - quarter).abs() < 1e-12 {
+                assert!(
+                    !smooth_across(&sheet, second_fold),
+                    "{angle} {narrow} {offset}"
+                );
+            }
+        }
+
+        assert!(crease_knots(&[0.0, 0.0, 0.0, 1.0, 2.0, 2.0, 2.0], 2).is_empty());
+        assert_eq!(
+            crease_knots(&[0.0, 0.0, 0.0, 1.0, 1.0, 2.0, 2.0, 2.0], 2),
+            vec![1.0]
+        );
+        assert_eq!(crease_knots(&[0.0, 0.0, 1.0, 2.0, 2.0], 1), vec![1.0]);
+    }
 
     #[test]
     fn filletable_edges_all_planar_box() {

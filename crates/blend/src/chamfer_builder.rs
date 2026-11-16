@@ -198,6 +198,7 @@ impl<'a> ChamferBuilder<'a> {
 
     #[allow(clippy::too_many_lines)]
     fn build_in_place(self) -> Result<BlendResult, BlendError> {
+        let scope = trimmer::SplitScope::of_solid(self.topo, self.solid)?;
         let adjacency = self.topo.build_adjacency(self.solid)?;
         let solid = self.topo.solid(self.solid)?;
         let (shell_id, inner_shells) = (solid.outer_shell(), solid.inner_shells().to_vec());
@@ -322,6 +323,7 @@ impl<'a> ChamferBuilder<'a> {
                 let current = face_replacements.get(&face).copied().unwrap_or(face);
                 match trimmer::trim_face_to_corners(
                     topo,
+                    &scope,
                     current,
                     &sample_nurbs_endpoints(contact),
                     &[(0.0, 0.0), (1.0, 0.0)],
