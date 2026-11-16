@@ -3739,10 +3739,10 @@ pub fn separate_arcs_sharing_ends(
 
 /// Whether two edges with the same ends run along one path.
 ///
-/// Edges whose middles meet are one path. Otherwise the points a quarter, half
-/// and three quarters along each must lie on the other, read by distance, not
-/// by parameter, so a line and a spline that traces it agree whatever their
-/// parameterizations.
+/// Edges whose points at seven even steps of their parameters meet are one
+/// path. Otherwise each of those points must lie on the other edge, read by
+/// distance, not by parameter, so a line and a spline that traces it agree
+/// whatever their parameterizations.
 fn edges_share_path(topo: &Topology, a: EdgeId, b: EdgeId) -> Result<bool, AlgoError> {
     use brepkit_topology::edge::EdgeCurve;
 
@@ -3753,11 +3753,12 @@ fn edges_share_path(topo: &Topology, a: EdgeId, b: EdgeId) -> Result<bool, AlgoE
     let (at_a, at_b) = (edge_path(topo, ea)?, edge_path(topo, eb)?);
     let span =
         |at: &dyn Fn(f64) -> Point3| (at(0.5) - at(0.0)).length() + (at(1.0) - at(0.5)).length();
-    let tol = (PATH_REL_TOL * span(&at_a).min(span(&at_b))).max(PATH_ABS_TOL);
-    if (at_a(0.5) - at_b(0.5)).length() <= tol {
+    let tol = (PATH_REL_TOL * span(&at_a).min(span(&at_b))).clamp(PATH_MIN_TOL, PATH_MAX_TOL);
+    let steps = (1..PATH_CHECKS).map(|k| f64::from(k) / f64::from(PATH_CHECKS));
+    if steps.clone().all(|f| (at_a(f) - at_b(f)).length() <= tol) {
         return Ok(true);
     }
-    for f in [0.25, 0.5, 0.75] {
+    for f in steps {
         if distance_to_path(&at_b, at_a(f)) > tol || distance_to_path(&at_a, at_b(f)) > tol {
             return Ok(false);
         }
@@ -3807,12 +3808,18 @@ fn distance_to_path(at: &dyn Fn(f64) -> Point3, p: Point3) -> f64 {
 const PATH_SAMPLES: u32 = 32;
 /// Ternary steps that refine that nearest point.
 const PATH_REFINE_STEPS: usize = 30;
+/// Points of an edge read against the other, at even steps between its ends.
+const PATH_CHECKS: u32 = 8;
 /// How far, as a share of the shorter edge's length, two paths may part and
-/// still be one edge: well above a fitted curve's error, well below the bulge
-/// of a spline over its chord.
+/// still be one edge, within [`PATH_MIN_TOL`] and [`PATH_MAX_TOL`]: two fits
+/// of one fillet's edge, ten long, part by 4e-4.
 const PATH_REL_TOL: f64 = 1e-3;
-/// The least such distance, for short edges.
-const PATH_ABS_TOL: f64 = 1e-5;
+/// The least such distance: above the weld band, so a fitted curve's error
+/// keeps it on its own path.
+const PATH_MIN_TOL: f64 = 1e-5;
+/// The largest such distance, so a long lens between two splines stays two
+/// paths whatever its length.
+const PATH_MAX_TOL: f64 = 1e-2;
 
 /// Rebuild the faces whose wires use a replaced edge, each replaced by its
 /// chain of pieces in the edge's own direction.
@@ -4837,6 +4844,87 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
 
     use super::*;
+
+    /// Two edges from `a` to `b`, one per curve, and whether they read as
+    /// one path.
+    fn one_path(a: Point3, b: Point3, first: EdgeCurveOf, second: EdgeCurveOf) -> bool {
+        use brepkit_topology::edge::Edge;
+        use brepkit_topology::vertex::Vertex;
+        let mut topo = Topology::new();
+        let va = topo.add_vertex(Vertex::new(a, 1e-7));
+        let vb = topo.add_vertex(Vertex::new(b, 1e-7));
+        let ea = topo.add_edge(Edge::new(va, vb, first));
+        let eb = topo.add_edge(Edge::new(va, vb, second));
+        edges_share_path(&topo, ea, eb).unwrap()
+    }
+
+    type EdgeCurveOf = brepkit_topology::edge::EdgeCurve;
+
+    fn spline(degree: usize, points: &[(f64, f64)], knots: Vec<f64>) -> EdgeCurveOf {
+        let n = points.len();
+        brepkit_topology::edge::EdgeCurve::NurbsCurve(
+            brepkit_math::nurbs::curve::NurbsCurve::new(
+                degree,
+                knots,
+                points
+                    .iter()
+                    .map(|&(x, y)| Point3::new(x, y, 0.0))
+                    .collect(),
+                vec![1.0; n],
+            )
+            .unwrap(),
+        )
+    }
+
+    /// A long lens between two arches half a unit high and a thousand long
+    /// is two paths, and so is a line beside a spline that meets it at its
+    /// middle and parts from it on either side.
+    #[test]
+    fn paths_that_part_by_more_than_a_fit_stay_apart() {
+        let clamped = vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0];
+        let (a, b) = (Point3::new(0.0, 0.0, 0.0), Point3::new(1000.0, 0.0, 0.0));
+        let arch = |h: f64| spline(2, &[(0.0, 0.0), (500.0, h), (1000.0, 0.0)], clamped.clone());
+        assert!(!one_path(a, b, arch(0.5), arch(-0.5)));
+        assert!(one_path(a, b, arch(0.5), arch(0.5)));
+
+        // The spline y = t (1 - t) (2t - 1)^2, interpolated through 41
+        // points, meets the unit chord at its middle and leaves it by 0.047
+        // a quarter along.
+        let pts: Vec<Point3> = (0..=40)
+            .map(|i| {
+                let t = f64::from(i) / 40.0;
+                let w = 2.0f64.mul_add(t, -1.0);
+                Point3::new(t, t * (1.0 - t) * w * w, 0.0)
+            })
+            .collect();
+        let wave = brepkit_topology::edge::EdgeCurve::NurbsCurve(
+            brepkit_math::nurbs::fitting::interpolate(&pts, 3).unwrap(),
+        );
+        let (a, b) = (Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 0.0, 0.0));
+        assert!(!one_path(
+            a,
+            b,
+            brepkit_topology::edge::EdgeCurve::Line,
+            wave
+        ));
+    }
+
+    /// A line and a spline that runs along it at an uneven pace are one path.
+    #[test]
+    fn a_spline_along_a_line_at_its_own_pace_is_the_line() {
+        let (a, b) = (Point3::new(0.0, 0.0, 0.0), Point3::new(10.0, 0.0, 0.0));
+        let uneven = spline(
+            2,
+            &[(0.0, 0.0), (1.0, 0.0), (10.0, 0.0)],
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+        );
+        assert!(one_path(
+            a,
+            b,
+            brepkit_topology::edge::EdgeCurve::Line,
+            uneven
+        ));
+    }
 
     /// A planar face's flux and corner share with a square hole, and with a
     /// round one whose loop is a single closed circle or two half circles.
