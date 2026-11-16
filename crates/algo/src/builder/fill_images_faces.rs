@@ -4558,6 +4558,32 @@ fn clip_line_to_face_boundary(
         poly
     });
 
+    // A window's midpoint is read against the face's curves first: the
+    // sampled polygon misses the sliver between each chord and its arc,
+    // 0.13 deep on a radius-249 rim, and a section across a ring a quarter
+    // wide lies in that sliver whole. The polygon reads only a midpoint
+    // within `margin` of the boundary, as it did before.
+    let region = std::cell::OnceCell::new();
+    let exact_side = |q: brepkit_math::vec::Point2, margin: f64| {
+        region
+            .get_or_init(|| {
+                plane_frame.as_ref().and_then(|frame| {
+                    brepkit_topology::planar::face_region_2d(
+                        topo,
+                        face_id,
+                        frame.origin(),
+                        frame.u_axis(),
+                        frame.v_axis(),
+                        tol,
+                    )
+                    .ok()
+                    .flatten()
+                })
+            })
+            .as_ref()
+            .and_then(|r| r.side(q, margin))
+    };
+
     // Midpoint classification only steers hole-free faces: a holed face's
     // sections are the hole weave's input, and that machinery (promotion,
     // coincidence splitting, re-trace discriminants) is calibrated on WHOLE
@@ -4567,6 +4593,7 @@ fn clip_line_to_face_boundary(
     let t_intervals: Vec<(f64, f64)> = if face.inner_wires().is_empty()
         && let (Some(frame), Some(poly)) = (plane_frame.as_ref(), poly.as_ref())
     {
+        let eps = crate::builder::classify_2d::boundary_eps(poly);
         // Every in-face sub-interval, not just one: a section can cross the
         // face in MULTIPLE material windows (the slot's z=-1.2 closer runs
         // across the socket bite, leaving material on both sides), and every
@@ -4588,9 +4615,11 @@ fn clip_line_to_face_boundary(
                 // whole-edge duplicate of the shelled-cup lip fuses) has
                 // every midpoint ON the polygon, where the even-odd test
                 // is unreliable.
-                let inside = crate::builder::classify_2d::point_in_polygon_2d(mid_uv, poly)
-                    || crate::builder::classify_2d::distance_to_polygon_boundary(mid_uv, poly)
-                        <= crate::builder::classify_2d::boundary_eps(poly);
+                let inside = exact_side(mid_uv, eps).unwrap_or_else(|| {
+                    crate::builder::classify_2d::point_in_polygon_2d(mid_uv, poly)
+                        || crate::builder::classify_2d::distance_to_polygon_boundary(mid_uv, poly)
+                            <= eps
+                });
                 inside.then_some((w[0], w[1]))
             })
             .collect()
@@ -4614,15 +4643,18 @@ fn clip_line_to_face_boundary(
             .collect();
         borders.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         borders.dedup_by(|a, b| (*a - *b).abs() < 1e-9);
+        let eps = crate::builder::classify_2d::boundary_eps(poly);
         borders
             .windows(2)
             .filter_map(|w| {
                 let mid_uv = frame.project(line_start + line_dir * f64::midpoint(w[0], w[1]));
-                let in_outer = crate::builder::classify_2d::point_in_polygon_2d(mid_uv, poly);
-                let in_hole = hole_polys
-                    .iter()
-                    .any(|h| crate::builder::classify_2d::point_in_polygon_2d(mid_uv, h));
-                (in_outer && !in_hole).then_some((w[0], w[1]))
+                let inside = exact_side(mid_uv, eps).unwrap_or_else(|| {
+                    crate::builder::classify_2d::point_in_polygon_2d(mid_uv, poly)
+                        && !hole_polys
+                            .iter()
+                            .any(|h| crate::builder::classify_2d::point_in_polygon_2d(mid_uv, h))
+                });
+                inside.then_some((w[0], w[1]))
             })
             .collect()
     } else if matches!(
