@@ -986,3 +986,109 @@ fn a_cavity_that_touches_the_wall_of_a_finer_box_is_its_cavity() {
     assert!((volume(&topo, solid) - 7000.0).abs() < 1e-9);
     assert_valid(&topo, solid);
 }
+
+/// Add a box from `lo` to `hi`, with corners of its own.
+fn add_box(mesh: &mut TriangleMesh, lo: [f64; 3], hi: [f64; 3], inward: bool) {
+    add_grid_box(mesh, lo, hi, 1, inward);
+}
+
+/// A reader with no normals in its file gives each vertex one direction.
+/// Over the two cubes, such normals sum to nothing, and the two cubes pair
+/// off at their shared side.
+#[test]
+fn normals_in_one_direction_leave_two_cubes_that_share_a_side() {
+    let mut mesh = TriangleMesh::default();
+    add_cube(&mut mesh, [0.0; 3], 10.0, false);
+    add_cube(&mut mesh, [0.0, 0.0, 10.0], 10.0, false);
+    mesh.normals = vec![Vec3::new(0.0, 0.0, 1.0); mesh.positions.len()];
+
+    let mut topo = Topology::new();
+    let parts = import_mesh_parts(&mut topo, &mesh, 1e-7).unwrap();
+    assert_eq!((parts.solids.len(), parts.shells.len()), (2, 0));
+    for &solid in &parts.solids {
+        assert!((volume(&topo, solid) - 1000.0).abs() < 1e-9);
+        assert_valid(&topo, solid);
+    }
+}
+
+/// The two outward cubes cross, and a ray from the small cube leaves the
+/// larger one first. The cavity goes to the smallest body round it.
+#[test]
+fn a_cavity_in_two_bodies_that_cross_goes_to_the_smaller() {
+    let mut mesh = TriangleMesh::default();
+    add_box(&mut mesh, [0.0; 3], [10.0; 3], false);
+    add_box(&mut mesh, [-5.0, -1.0, -1.0], [7.0, 11.0, 11.0], false);
+    add_box(&mut mesh, [1.0; 3], [2.0; 3], true);
+
+    let mut topo = Topology::new();
+    let parts = import_mesh_parts(&mut topo, &mesh, 1e-7).unwrap();
+    assert_eq!((parts.solids.len(), parts.shells.len()), (2, 0));
+    let with_cavity: Vec<_> = parts
+        .solids
+        .iter()
+        .filter(|&&s| topo.solid(s).unwrap().inner_shells().len() == 1)
+        .collect();
+    assert_eq!(with_cavity.len(), 1);
+    assert!((volume(&topo, *with_cavity[0]) - 999.0).abs() < 1e-9);
+}
+
+/// The cavity touches the wall of the outer cube, so a ray from the island
+/// can leave the cavity and the outer cube at one place.
+#[test]
+fn an_island_in_a_cavity_on_the_wall_of_its_body_is_a_solid_of_its_own() {
+    let mut mesh = TriangleMesh::default();
+    add_box(&mut mesh, [0.0; 3], [20.0; 3], false);
+    add_box(&mut mesh, [10.0, 5.0, 5.0], [20.0, 15.0, 15.0], true);
+    add_box(&mut mesh, [12.0, 8.0, 8.0], [14.0, 10.0, 10.0], false);
+
+    let mut topo = Topology::new();
+    let parts = import_mesh_parts(&mut topo, &mesh, 1e-7).unwrap();
+    assert_eq!((parts.solids.len(), parts.shells.len()), (2, 0));
+    assert_eq!(sorted_volumes(&topo, &parts.solids), [8.0, 7000.0]);
+
+    let mut topo = Topology::new();
+    let solid = import_mesh(&mut topo, &mesh, 1e-7).unwrap();
+    assert!((volume(&topo, solid) - 7008.0).abs() < 1e-9);
+}
+
+/// The two cubes share material, and their surfaces meet only in the
+/// planes of their sides.
+#[test]
+fn two_cubes_that_overlap_in_the_planes_of_their_sides_are_not_one_solid() {
+    let mut mesh = TriangleMesh::default();
+    add_box(&mut mesh, [0.0; 3], [10.0; 3], false);
+    add_box(&mut mesh, [5.0, 0.0, 0.0], [15.0, 10.0, 10.0], false);
+
+    let mut topo = Topology::new();
+    let err = import_mesh(&mut topo, &mesh, 1e-7).unwrap_err();
+    assert!(err.to_string().contains("cross"), "{err}");
+    let parts = import_mesh_parts(&mut topo, &mesh, 1e-7).unwrap();
+    assert_eq!((parts.solids.len(), parts.shells.len()), (2, 0));
+}
+
+/// Two cubes that touch along a side, from the two sides of it, are two
+/// pieces of one solid.
+#[test]
+fn two_cubes_that_touch_along_a_side_are_one_solid() {
+    let mut mesh = TriangleMesh::default();
+    add_box(&mut mesh, [0.0; 3], [10.0; 3], false);
+    add_box(&mut mesh, [10.0, 2.0, 2.0], [20.0, 8.0, 8.0], false);
+
+    let mut topo = Topology::new();
+    let solid = import_mesh(&mut topo, &mesh, 1e-7).unwrap();
+    assert!((volume(&topo, solid) - 1360.0).abs() < 1e-9);
+    assert_eq!(solid_pieces(&mut topo, solid).unwrap().len(), 2);
+}
+
+/// An outward cube on the wall inside another lies in its material: the
+/// two do not cross.
+#[test]
+fn an_outward_cube_on_the_wall_inside_a_cube_lies_in_it() {
+    let mut mesh = TriangleMesh::default();
+    add_box(&mut mesh, [0.0; 3], [20.0; 3], false);
+    add_box(&mut mesh, [10.0, 5.0, 5.0], [20.0, 15.0, 15.0], false);
+
+    let mut topo = Topology::new();
+    let err = import_mesh(&mut topo, &mesh, 1e-7).unwrap_err();
+    assert!(err.to_string().contains("material"), "{err}");
+}

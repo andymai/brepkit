@@ -446,9 +446,10 @@ impl Links {
 /// For each triangle, whether it is wound against the side of the triangles
 /// joined to it through edges of two triangles.
 ///
-/// Such a set takes the side of most of its triangles as they are wound,
-/// and turns over when its stored normals point against that side, as a
-/// closed body does in [`split_bodies`].
+/// Such a set takes the side of most of its triangles as they are wound.
+/// The sets joined through any edge turn over together when their stored
+/// normals point against their sides, as a closed body does in
+/// [`split_bodies`].
 fn patch_turns(
     tris: &[[usize; 3]],
     uses: &HashMap<(usize, usize), Vec<(usize, bool)>>,
@@ -489,18 +490,40 @@ fn patch_turns(
                 turn[t] = !turn[t];
             }
         }
-        let (mut vote, mut weight) = (0.0, 0.0);
-        for &t in &patch {
-            vote += if turn[t] { -votes[t] } else { votes[t] };
-            weight += votes[t].abs();
+    }
+
+    // The sets joined through any edge turn over together. Over a closed
+    // group, normals in one direction sum to nothing and turn nothing.
+    let mut group: Vec<usize> = (0..tris.len()).collect();
+    for list in uses.values() {
+        let first = group_of(&mut group, list[0].0);
+        for &(t, _) in &list[1..] {
+            let other = group_of(&mut group, t);
+            group[other] = first;
         }
+    }
+    let mut tally = vec![(0.0, 0.0); tris.len()];
+    for t in 0..tris.len() {
+        let g = group_of(&mut group, t);
+        tally[g].0 += if turn[t] { -votes[t] } else { votes[t] };
+        tally[g].1 += votes[t].abs();
+    }
+    for t in 0..tris.len() {
+        let (vote, weight) = tally[group_of(&mut group, t)];
         if vote < -0.5 * weight {
-            for &t in &patch {
-                turn[t] = !turn[t];
-            }
+            turn[t] = !turn[t];
         }
     }
     turn
+}
+
+/// The first triangle of the group of `t`, in a forest of groups.
+fn group_of(group: &mut [usize], mut t: usize) -> usize {
+    while group[t] != t {
+        group[t] = group[group[t]];
+        t = group[t];
+    }
+    t
 }
 
 /// The pairs of triangles round an edge of more than two triangles, each
@@ -1148,6 +1171,9 @@ impl Nesting {
             }
         };
         let mut crossing: HashSet<(usize, usize)> = HashSet::new();
+        // Pairs of bodies with triangles in one plane and their insides to
+        // one side of it: one body lies in the other, or the two cross.
+        let mut meeting: HashSet<(usize, usize)> = HashSet::new();
         for (item, &t) in tri_of.iter().enumerate() {
             let c = owner[item];
             let bounds = tri_tree.boxes[item];
@@ -1158,16 +1184,18 @@ impl Nesting {
                 let d = owner[other];
                 if d > c && !crossing.contains(&(c, d)) {
                     let reach = reach_of(&bounds).max(reach_of(&tri_tree.boxes[other]));
-                    if triangles_cross(&facet(t), &facet(tri_of[other]), margins.on(reach)) {
+                    let on = margins.on(reach);
+                    let (ft, fu) = (facet(t), facet(tri_of[other]));
+                    if triangles_cross(&ft, &fu, on) {
                         crossing.insert((c, d));
+                    } else if !meeting.contains(&(c, d))
+                        && insides_meet(&ft.corners, &fu.corners, [outward[c], outward[d]], on)
+                    {
+                        meeting.insert((c, d));
                     }
                 }
                 true
             });
-        }
-        for &(c, d) in &crossing {
-            out.crossed[c] = true;
-            out.crossed[d] = true;
         }
 
         let mut scene = body_tree.boxes[0];
@@ -1181,15 +1209,33 @@ impl Nesting {
                 ]);
             }
         }
-        let rays = Rays {
+        let rays_with = |crossed| Rays {
             tri_tree: &tri_tree,
             tri_of: &tri_of,
             owner: &owner,
             corners: &corners,
             body_boxes: &body_tree.boxes,
             outward: &outward,
+            crossed,
             margins,
         };
+        let crossed_none = vec![false; n];
+        let probe = rays_with(&crossed_none);
+        let lies_in = |inner: usize, outer: usize| {
+            sizes[outer] > sizes[inner]
+                && holds(&body_tree.boxes[outer], &boxes[inner])
+                && probe.lies_in(&bodies[closed[inner]].tris, outer)
+        };
+        for &(c, d) in &meeting {
+            if !lies_in(c, d) && !lies_in(d, c) {
+                crossing.insert((c, d));
+            }
+        }
+        for &(c, d) in &crossing {
+            out.crossed[c] = true;
+            out.crossed[d] = true;
+        }
+        let rays = rays_with(&out.crossed);
         for c in (0..n).filter(|&c| near[c]) {
             // A body that can hold this one: larger, with a box that holds
             // its box, and not across it.
@@ -1252,6 +1298,8 @@ struct Rays<'a, F: Fn(usize) -> [Point3; 3]> {
     /// The box of each closed body, with the margin of the tree.
     body_boxes: &'a [Bounds],
     outward: &'a [bool],
+    /// Whether each closed body crosses another.
+    crossed: &'a [bool],
     margins: Margins,
 }
 
@@ -1404,6 +1452,20 @@ impl<F: Fn(usize) -> [Point3; 3]> Rays<'_, F> {
                         return None;
                     }
                     if hit.exit && holder(hit.body) {
+                        // A body across another need not be the smallest
+                        // round `p`, and two bodies that the ray leaves at
+                        // one place can come in either order. The scan of
+                        // the boxes decides those.
+                        let tied = hits.iter().any(|std::cmp::Reverse(other)| {
+                            other.exit
+                                && other.body != hit.body
+                                && !read.contains(&other.body)
+                                && holder(other.body)
+                                && (other.at.0 - hit.at.0).abs() <= hit.tie.0
+                        });
+                        if tied || self.crossed[hit.body] {
+                            return None;
+                        }
                         // The count of crossings of that body alone, with
                         // exact signs, has the last word.
                         return self
@@ -1581,6 +1643,85 @@ fn triangles_cross(t: &Facet, u: &Facet, on: f64) -> bool {
     };
     let ((a0, a1), (b0, b1)) = (span(cut_t), span(cut_u));
     a1.min(b1) - a0.max(b0) > on
+}
+
+/// Whether two triangles of two closed bodies lie in one plane, within
+/// `on`, with the insides of their bodies to one side of it, and overlap
+/// there by more than `on`. `outward` tells, for each, whether its body
+/// faces outward: the inside of such a body is behind its triangles.
+fn insides_meet(t: &[Point3; 3], u: &[Point3; 3], outward: [bool; 2], on: f64) -> bool {
+    let normal = |tri: &[Point3; 3]| (tri[1] - tri[0]).cross(tri[2] - tri[0]).normalize();
+    let (Ok(n_t), Ok(n_u)) = (normal(t), normal(u)) else {
+        return false;
+    };
+    if t.iter().any(|&p| n_u.dot(p - u[0]).abs() > on)
+        || u.iter().any(|&p| n_t.dot(p - t[0]).abs() > on)
+    {
+        return false;
+    }
+    if (n_t.dot(n_u) > 0.0) != (outward[0] == outward[1]) {
+        return false;
+    }
+    // The overlap in the plane of the two, from the coordinates off the
+    // largest part of the normal.
+    let axis = if n_t.x().abs() >= n_t.y().abs() && n_t.x().abs() >= n_t.z().abs() {
+        0
+    } else if n_t.y().abs() >= n_t.z().abs() {
+        1
+    } else {
+        2
+    };
+    let flat = |p: Point3| {
+        let c = coords(p);
+        [c[(axis + 1) % 3], c[(axis + 2) % 3]]
+    };
+    let counter_clockwise = |mut tri: [[f64; 2]; 3]| {
+        let turn = (tri[1][0] - tri[0][0]) * (tri[2][1] - tri[0][1])
+            - (tri[1][1] - tri[0][1]) * (tri[2][0] - tri[0][0]);
+        if turn < 0.0 {
+            tri.swap(1, 2);
+        }
+        tri
+    };
+    let overlap = clip_to_triangle(
+        counter_clockwise(t.map(flat)).to_vec(),
+        &counter_clockwise(u.map(flat)),
+    );
+    let (mut area, mut length) = (0.0, 0.0);
+    for (k, a) in overlap.iter().enumerate() {
+        let b = overlap[(k + 1) % overlap.len()];
+        area += 0.5 * (a[0] * b[1] - a[1] * b[0]);
+        length += (b[0] - a[0]).hypot(b[1] - a[1]);
+    }
+    // An overlap of area over `on` times its edge length is wider than
+    // about `on`.
+    area > on * length
+}
+
+/// The part of the convex polygon `polygon` in the triangle `clip`, both
+/// wound counter-clockwise.
+fn clip_to_triangle(polygon: Vec<[f64; 2]>, clip: &[[f64; 2]; 3]) -> Vec<[f64; 2]> {
+    let mut out = polygon;
+    for k in 0..3 {
+        let (a, b) = (clip[k], clip[(k + 1) % 3]);
+        let side = |p: [f64; 2]| (b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0]);
+        let input = std::mem::take(&mut out);
+        for (i, &p) in input.iter().enumerate() {
+            let q = input[(i + 1) % input.len()];
+            let (sp, sq) = (side(p), side(q));
+            if sp >= 0.0 {
+                out.push(p);
+            }
+            if (sp >= 0.0) != (sq >= 0.0) {
+                let f = sp / (sp - sq);
+                out.push([p[0] + (q[0] - p[0]) * f, p[1] + (q[1] - p[1]) * f]);
+            }
+        }
+        if out.is_empty() {
+            break;
+        }
+    }
+    out
 }
 
 /// Where the surface of the body of `facet` passes through the plane of
