@@ -3756,7 +3756,8 @@ pub fn separate_arcs_sharing_ends(
             // and its pieces would pair with the curve's. The split then
             // moves to where the curve stands farthest from the chords.
             let mid = {
-                let at = edge_path(topo, topo.edge(path[0])?)?;
+                let lead = topo.edge(path[0])?;
+                let at = edge_path(topo, lead)?;
                 let apart = |f: f64| {
                     let p = at(f);
                     chords
@@ -3772,8 +3773,8 @@ pub fn separate_arcs_sharing_ends(
                 let f = if apart(0.5) > PATH_MAX_TOL {
                     0.5
                 } else {
-                    (1..PATH_CHECKS)
-                        .map(|i| f64::from(i) / f64::from(PATH_CHECKS))
+                    path_steps(topo, lead)?
+                        .into_iter()
                         .max_by(|a, b| apart(*a).total_cmp(&apart(*b)))
                         .unwrap_or(0.5)
                 };
@@ -5188,6 +5189,66 @@ mod tests {
                 "a piece of the spline lies on the chord"
             );
         }
+    }
+
+    /// Two faces each bounded by a chord and a polyline that leaves it by 0.1
+    /// over its first tenth only, and by 1e-8 after that. The polyline splits
+    /// at its knot on the bulge, off the chord, so the chord stays whole and
+    /// every edge has two uses.
+    #[test]
+    fn a_chord_and_a_short_bulge_unify_piece_by_piece() {
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::Wire;
+
+        let bulge = || {
+            spline(
+                1,
+                &[
+                    (0.0, 0.0),
+                    (0.05, 0.1),
+                    (0.1, 1e-8),
+                    (0.9, 1e-8),
+                    (1.0, 0.0),
+                ],
+                vec![0.0, 0.0, 0.05, 0.1, 0.9, 1.0, 1.0],
+            )
+        };
+        let mut topo = Topology::new();
+        let plane = FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: 0.0,
+        };
+        let a = topo.add_vertex(Vertex::new(Point3::new(0.0, 0.0, 0.0), 1e-7));
+        let b = topo.add_vertex(Vertex::new(Point3::new(1.0, 0.0, 0.0), 1e-7));
+        let mut face = |forward: bool| {
+            let spline = topo.add_edge(Edge::new(a, b, bulge()));
+            let chord = topo.add_edge(Edge::new(a, b, EdgeCurve::Line));
+            let wire = topo.add_wire(
+                Wire::new(
+                    vec![
+                        OrientedEdge::new(spline, forward),
+                        OrientedEdge::new(chord, !forward),
+                    ],
+                    true,
+                )
+                .unwrap(),
+            );
+            topo.add_face(Face::new(wire, vec![], plane.clone()))
+        };
+        let mut face_ids = vec![face(true), face(false)];
+        let mut sources = vec![None, None];
+        separate_arcs_sharing_ends(&mut topo, &mut face_ids).unwrap();
+        unify_boundaries(&mut topo, &mut face_ids, &mut sources).unwrap();
+        let mut uses: HashMap<EdgeId, usize> = HashMap::new();
+        for &fid in &face_ids {
+            for (edge, _) in face_edge_uses(&topo, fid).unwrap() {
+                *uses.entry(edge).or_default() += 1;
+            }
+        }
+        assert!(uses.values().all(|&n| n == 2), "{uses:?}");
+        assert_eq!(uses.len(), 3, "the chord and two pieces of the polyline");
     }
 
     /// A ball's face bounded by a chord of its equator and the rest of the
