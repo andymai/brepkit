@@ -3688,8 +3688,8 @@ pub fn separate_arcs_sharing_ends(
         topo.edge(e)
             .is_ok_and(|edge| matches!(edge.curve(), EdgeCurve::Line))
     };
-    let is_arc = |topo: &Topology, e: EdgeId| {
-        topo.edge(e)
+    let is_arc = |topo: &Topology, e: &EdgeId| {
+        topo.edge(*e)
             .is_ok_and(|edge| matches!(edge.curve(), EdgeCurve::Circle(_)))
     };
     let mid_of = |topo: &Topology, e: EdgeId| -> Result<Point3, AlgoError> {
@@ -3715,14 +3715,14 @@ pub fn separate_arcs_sharing_ends(
                 paths.push(vec![e]);
             }
         }
-        // A chord of a ball's equator joins the arc it stands for, the one
-        // whose middle lies nearest its own.
+        // A chord of a ball's equator joins the arc it stands for: the path
+        // with an arc whose middle lies nearest its own.
         for &e in group.iter().filter(|e| chord(e)) {
             let at = mid_of(topo, e)?;
             let mut nearest: Option<(f64, usize)> = None;
             for (k, path) in paths.iter().enumerate() {
-                if is_arc(topo, path[0]) {
-                    let d = (mid_of(topo, path[0])? - at).length();
+                if let Some(&arc) = path.iter().find(|e| is_arc(topo, e)) {
+                    let d = (mid_of(topo, arc)? - at).length();
                     if nearest.is_none_or(|(best, _)| d < best) {
                         nearest = Some((d, k));
                     }
@@ -3864,8 +3864,10 @@ fn split_edge_curve(
 
 /// Whether two edges with the same ends run along one path.
 ///
-/// Edges whose points at seven even steps of their parameters meet are one
-/// path. Otherwise each of those points must lie on the other edge, read by
+/// Each edge is read at seven even steps of its parameter, and a spline also
+/// at each of its knots and the middle of each knot span, so a short span's
+/// bulge is read too. Edges whose points at all those steps meet are one
+/// path. Otherwise each edge's points must lie on the other edge, read by
 /// distance, not by parameter, so a line and a spline that traces it agree
 /// whatever their parameterizations.
 fn edges_share_path(topo: &Topology, a: EdgeId, b: EdgeId) -> Result<bool, AlgoError> {
@@ -3879,16 +3881,55 @@ fn edges_share_path(topo: &Topology, a: EdgeId, b: EdgeId) -> Result<bool, AlgoE
     let span =
         |at: &dyn Fn(f64) -> Point3| (at(0.5) - at(0.0)).length() + (at(1.0) - at(0.5)).length();
     let tol = (PATH_REL_TOL * span(&at_a).min(span(&at_b))).clamp(PATH_MIN_TOL, PATH_MAX_TOL);
-    let steps = (1..PATH_CHECKS).map(|k| f64::from(k) / f64::from(PATH_CHECKS));
-    if steps.clone().all(|f| (at_a(f) - at_b(f)).length() <= tol) {
+    let (steps_a, steps_b) = (path_steps(topo, ea)?, path_steps(topo, eb)?);
+    if steps_a
+        .iter()
+        .chain(&steps_b)
+        .all(|&f| (at_a(f) - at_b(f)).length() <= tol)
+    {
         return Ok(true);
     }
-    for f in steps {
-        if distance_to_path(&at_b, at_a(f)) > tol || distance_to_path(&at_a, at_b(f)) > tol {
-            return Ok(false);
+    Ok(steps_a
+        .iter()
+        .all(|&f| distance_to_path(&at_b, at_a(f)) <= tol)
+        && steps_b
+            .iter()
+            .all(|&f| distance_to_path(&at_a, at_b(f)) <= tol))
+}
+
+/// The steps along an edge, as shares of its parameter domain, that
+/// [`edges_share_path`] reads: [`PATH_CHECKS`] even steps, and for a spline
+/// each knot inside the domain and the middle of each knot span.
+fn path_steps(topo: &Topology, edge: &brepkit_topology::edge::Edge) -> Result<Vec<f64>, AlgoError> {
+    use brepkit_topology::edge::EdgeCurve;
+
+    let mut steps: Vec<f64> = (1..PATH_CHECKS)
+        .map(|k| f64::from(k) / f64::from(PATH_CHECKS))
+        .collect();
+    let EdgeCurve::NurbsCurve(nurbs) = edge.curve() else {
+        return Ok(steps);
+    };
+    let (sp, ep) = (
+        topo.vertex(edge.start())?.point(),
+        topo.vertex(edge.end())?.point(),
+    );
+    let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
+    let (lo, hi) = (t0.min(t1), t0.max(t1));
+    if hi - lo <= f64::EPSILON * hi.abs().max(1.0) {
+        return Ok(steps);
+    }
+    let mut cuts = vec![lo];
+    cuts.extend(nurbs.knots().iter().copied().filter(|&k| k > lo && k < hi));
+    cuts.push(hi);
+    cuts.dedup();
+    let share = |t: f64| (t - t0) / (t1 - t0);
+    for pair in cuts.windows(2) {
+        steps.push(share(0.5 * (pair[0] + pair[1])));
+        if pair[1] < hi {
+            steps.push(share(pair[1]));
         }
     }
-    Ok(true)
+    Ok(steps)
 }
 
 /// An edge's point at `f` of the way along its own parameter domain.
@@ -5007,7 +5048,8 @@ mod tests {
 
     /// A long lens between two arches half a unit high and a thousand long
     /// is two paths, and so is a line beside a spline that meets it at its
-    /// middle and parts from it on either side.
+    /// middle and parts from it on either side, or a line beside a polyline
+    /// that leaves it only over a short span.
     #[test]
     fn paths_that_part_by_more_than_a_fit_stay_apart() {
         let clamped = vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0];
@@ -5035,6 +5077,28 @@ mod tests {
             b,
             brepkit_topology::edge::EdgeCurve::Line,
             wave
+        ));
+
+        // A polyline 0.1 high over its first tenth, then 1e-4 off the chord:
+        // no even step lands on the bulge, but its knot does.
+        let bulge = spline(
+            1,
+            &[
+                (0.0, 0.0),
+                (0.05, 0.1),
+                (0.1, 1e-4),
+                (0.9, 1e-4),
+                (1.0, 0.0),
+            ],
+            vec![0.0, 0.0, 0.05, 0.1, 0.9, 1.0, 1.0],
+        );
+        let straight = spline(1, &[(0.0, 0.0), (1.0, 0.0)], vec![0.0, 0.0, 1.0, 1.0]);
+        assert!(!one_path(a, b, straight, bulge.clone()));
+        assert!(!one_path(
+            a,
+            b,
+            brepkit_topology::edge::EdgeCurve::Line,
+            bulge
         ));
     }
 
@@ -5161,7 +5225,7 @@ mod tests {
         let plane = FaceSurface::Plane { normal: z, d: 0.0 };
         let mut face_ids = vec![
             face(&mut topo, EdgeCurve::Line, ball),
-            face(&mut topo, circle(), plane),
+            face(&mut topo, circle(), plane.clone()),
         ];
         let mut sources = vec![None, None];
         separate_arcs_sharing_ends(&mut topo, &mut face_ids).unwrap();
@@ -5178,6 +5242,44 @@ mod tests {
             uses.keys()
                 .all(|&e| matches!(topo.edge(e).unwrap().curve(), EdgeCurve::Circle(_)))
         );
+
+        // A spline fit of the arc read first, the arc itself after it: the
+        // chord still joins their path, which then stays whole, and the
+        // rest splits.
+        let mut topo = Topology::new();
+        let a = topo.add_vertex(Vertex::new(Point3::new(3.0, 0.0, 0.0), 1e-7));
+        let b = topo.add_vertex(Vertex::new(Point3::new(0.0, 3.0, 0.0), 1e-7));
+        let face = |topo: &mut Topology, near: EdgeCurve, surface: FaceSurface| {
+            let near = topo.add_edge(Edge::new(a, b, near));
+            let rest = topo.add_edge(Edge::new(b, a, circle()));
+            let wire = topo.add_wire(
+                Wire::new(
+                    vec![OrientedEdge::new(near, true), OrientedEdge::new(rest, true)],
+                    true,
+                )
+                .unwrap(),
+            );
+            topo.add_face(Face::new(wire, vec![], surface))
+        };
+        let pts: Vec<Point3> = (0..=40)
+            .map(|i| {
+                let t = std::f64::consts::FRAC_PI_2 * f64::from(i) / 40.0;
+                Point3::new(3.0 * t.cos(), 3.0 * t.sin(), 0.0)
+            })
+            .collect();
+        let fit =
+            EdgeCurve::NurbsCurve(brepkit_math::nurbs::fitting::interpolate(&pts, 3).unwrap());
+        let ball = FaceSurface::Sphere(SphericalSurface::new(origin, 3.0).unwrap());
+        let mut face_ids = vec![
+            face(&mut topo, fit, plane.clone()),
+            face(&mut topo, circle(), plane),
+            face(&mut topo, EdgeCurve::Line, ball),
+        ];
+        separate_arcs_sharing_ends(&mut topo, &mut face_ids).unwrap();
+        for &fid in &face_ids {
+            let uses = face_edge_uses(&topo, fid).unwrap();
+            assert_eq!(uses.len(), 3, "the near edge whole and the rest in two");
+        }
     }
 
     /// A line and a spline that runs along it at an uneven pace are one path.
