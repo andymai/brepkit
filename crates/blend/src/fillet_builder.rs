@@ -4091,6 +4091,7 @@ fn notch_stays_clear(
     // away from the triangle takes the notch past that side, as far as the
     // arc's tangents at its two ends: the triangle of the corner, the
     // contact's end and the point where those tangents meet holds that part.
+    // A B-spline's piece lies in the hull of its control points.
     let mut bows: Vec<[(f64, f64); 3]> = Vec::new();
     let wires = std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied());
     for oriented in wires
@@ -4111,6 +4112,14 @@ fn notch_stays_clear(
         if let Some(bow) = arc_bow(edge, a, b, edge.start() == corner, near_ends, &flat, across) {
             bows.push(bow?);
         }
+        bows.extend(spline_bow(
+            edge,
+            a,
+            b,
+            edge.start() == corner,
+            near_ends,
+            &flat,
+        )?);
     }
     let slab = end_hull.filter(|hull| !hull.is_empty()).map(|hull| {
         let along = |p: Point3| (p - vertex).dot(frame.z);
@@ -4269,6 +4278,83 @@ fn arc_bow(
     bows_out.then_some(Ok([c, apex, e]))
 }
 
+/// For a cap's corner edge that is a B-spline: triangles that together
+/// make the convex hull of the corner, the contact's end on the edge, and
+/// the control points of the edge's piece between the two. While every
+/// weight is positive that hull holds the piece, and so the part of the
+/// notch between the piece and its chord, whichever way the piece bows.
+/// Where the piece cannot be cut out of the curve, the hull of the whole
+/// curve's control points stands in. Empty for any other curve and for a
+/// piece seen edge on; an error for a weight that the hull does not bound.
+fn spline_bow(
+    edge: &brepkit_topology::edge::Edge,
+    a: Point3,
+    b: Point3,
+    corner_at_start: bool,
+    near_ends: [Point3; 2],
+    flat: &impl Fn(Point3) -> (f64, f64),
+) -> Result<Vec<[(f64, f64); 3]>, BlendError> {
+    use brepkit_math::nurbs::{curve_split, project_point_to_curve};
+    use brepkit_topology::edge::EdgeCurve;
+    // The weld scale: a vertex sits within this of its edge's curve.
+    const ON_CURVE: f64 = 1e-5;
+    let EdgeCurve::NurbsCurve(curve) = edge.curve() else {
+        return Ok(Vec::new());
+    };
+    if !curve.weights().iter().all(|w| w.is_finite() && *w > 0.0) {
+        return Err(BlendError::PlanningFailure {
+            reason: "the fillet's end runs along a cap edge whose weights do not bound it".into(),
+        });
+    }
+    let corner = if corner_at_start { a } else { b };
+    let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
+    let at_corner = if corner_at_start { t0 } else { t1 };
+    let (low, high) = (t0.min(t1), t0.max(t1));
+    // The contact's end on this edge: the nearer of the two.
+    let found = near_ends
+        .into_iter()
+        .filter_map(|end| {
+            let found = project_point_to_curve(curve, end, 1e-9).ok()?;
+            Some((found.distance, end, found.parameter.clamp(low, high)))
+        })
+        .min_by(|p, q| p.0.total_cmp(&q.0));
+    let Some((_, end, at_end)) = found else {
+        return Ok(Vec::new());
+    };
+    let (d0, d1) = brepkit_math::traits::ParametricCurve::domain(curve);
+    let narrow = 1e-12 * (d1 - d0).abs().max(1.0);
+    let piece = || -> Option<Vec<Point3>> {
+        if (curve.evaluate(at_corner) - corner).length() > ON_CURVE {
+            return None;
+        }
+        let (from, to) = (at_corner.min(at_end), at_corner.max(at_end));
+        if to - from <= narrow {
+            return Some(Vec::new());
+        }
+        let mut piece = curve.clone();
+        if to < d1 - narrow {
+            piece = curve_split(&piece, to).ok()?.0;
+        }
+        if from > d0 + narrow {
+            piece = curve_split(&piece, from).ok()?.1;
+        }
+        Some(piece.control_points().to_vec())
+    };
+    let controls = piece().unwrap_or_else(|| curve.control_points().to_vec());
+    let points: Vec<(f64, f64)> = [corner, end]
+        .into_iter()
+        .chain(controls)
+        .map(flat)
+        .collect();
+    let hull = convex_hull_2d(&points);
+    if hull.len() < 3 {
+        return Ok(Vec::new());
+    }
+    Ok((1..hull.len() - 1)
+        .map(|i| [hull[0], hull[i], hull[i + 1]])
+        .collect())
+}
+
 /// Whether a cap edge lies wholly to one side of the slab `lo..=hi` along
 /// `axis` from `origin`, certified: a line by its ends, a circle or an
 /// ellipse by samples clear of it by their sag, a B-spline by its control
@@ -4391,9 +4477,9 @@ fn path_within_of_triangle(path: &[(f64, f64)], triangle: [(f64, f64); 3], margi
         })
 }
 
-/// Whether the convex hull of `points` overlaps the triangle by more than a
-/// rounding of their sizes (touching alone does not count).
-fn hull_overlaps_triangle(points: &[(f64, f64)], triangle: [(f64, f64); 3]) -> bool {
+/// The convex hull of `points`, counter-clockwise, without points on its
+/// sides: two points for points along a line, none for one point.
+fn convex_hull_2d(points: &[(f64, f64)]) -> Vec<(f64, f64)> {
     let mut sorted = points.to_vec();
     sorted.sort_by(|p, q| p.0.total_cmp(&q.0).then(p.1.total_cmp(&q.1)));
     sorted.dedup();
@@ -4418,6 +4504,13 @@ fn hull_overlaps_triangle(points: &[(f64, f64)], triangle: [(f64, f64); 3]) -> b
         }
         hull.pop();
     }
+    hull
+}
+
+/// Whether the convex hull of `points` overlaps the triangle by more than a
+/// rounding of their sizes (touching alone does not count).
+fn hull_overlaps_triangle(points: &[(f64, f64)], triangle: [(f64, f64); 3]) -> bool {
+    let hull = convex_hull_2d(points);
     if hull.is_empty() {
         return false;
     }
@@ -6426,6 +6519,105 @@ mod tests {
                 let bow = arc_bow(&edge, corner, far, true, [at(turn), other], &flat, (x, y));
                 assert!(bow.is_none(), "turn {turn}");
             }
+        }
+    }
+
+    /// A cubic B-spline in the plane z = 0 from the corner at the origin to
+    /// (6, 0), bowing to +y over its first half and to -y over its second.
+    fn wave(weights: [f64; 5]) -> brepkit_math::nurbs::NurbsCurve {
+        brepkit_math::nurbs::NurbsCurve::new(
+            3,
+            vec![0.0, 0.0, 0.0, 0.0, 0.5, 1.0, 1.0, 1.0, 1.0],
+            vec![
+                Point3::new(0.0, 0.0, 0.0),
+                Point3::new(1.0, 3.0, 0.0),
+                Point3::new(3.0, 3.0, 0.0),
+                Point3::new(4.0, -3.0, 0.0),
+                Point3::new(6.0, 0.0, 0.0),
+            ],
+            weights.to_vec(),
+        )
+        .unwrap()
+    }
+
+    /// The triangles `spline_bow` gives for `curve` as an edge from the
+    /// corner (or, with `backward`, to it), the contact's end at `at_end`
+    /// on it and the other inside the notch, seen along z.
+    fn bow_of_spline(
+        curve: &brepkit_math::nurbs::NurbsCurve,
+        at_end: f64,
+        backward: bool,
+    ) -> Result<Vec<[(f64, f64); 3]>, BlendError> {
+        let mut topo = Topology::new();
+        let (corner, far) = (curve.evaluate(0.0), curve.evaluate(1.0));
+        let (start, end) = if backward {
+            (far, corner)
+        } else {
+            (corner, far)
+        };
+        let a = topo.add_vertex(brepkit_topology::vertex::Vertex::new(start, 1e-7));
+        let b = topo.add_vertex(brepkit_topology::vertex::Vertex::new(end, 1e-7));
+        let edge = brepkit_topology::edge::Edge::new(a, b, EdgeCurve::NurbsCurve(curve.clone()));
+        spline_bow(
+            &edge,
+            start,
+            end,
+            !backward,
+            [curve.evaluate(at_end), Point3::new(0.5, -3.0, 0.0)],
+            &|p: Point3| (p.x(), p.y()),
+        )
+    }
+
+    /// Whether `p` lies in one of `triangles`, to a rounding.
+    fn in_triangles(triangles: &[[(f64, f64); 3]], p: (f64, f64)) -> bool {
+        let cross = |o: (f64, f64), a: (f64, f64), b: (f64, f64)| {
+            (a.0 - o.0) * (b.1 - o.1) - (a.1 - o.1) * (b.0 - o.0)
+        };
+        triangles.iter().any(|t| {
+            let area = cross(t[0], t[1], t[2]);
+            (0..3).all(|i| cross(t[i], t[(i + 1) % 3], p) * area.signum() >= -1e-9)
+        })
+    }
+
+    #[test]
+    fn a_spline_corner_edges_piece_is_held_by_its_control_hull() {
+        let curve = wave([1.0, 1.0, 2.0, 1.0, 1.0]);
+        for backward in [false, true] {
+            let bow = bow_of_spline(&curve, 0.95, backward).unwrap();
+            assert!(!bow.is_empty());
+            // The piece up to the contact's end bows both ways off its
+            // chord, and the triangles hold it all.
+            for k in 0..=50 {
+                let p = curve.evaluate(0.95 * f64::from(k) / 50.0);
+                assert!(in_triangles(&bow, (p.x(), p.y())), "{p:?}");
+            }
+            // Past the contact's end, the edge runs on clear of them.
+            let past = curve.evaluate(1.0);
+            assert!(!in_triangles(&bow, (past.x(), past.y())), "{past:?}");
+        }
+    }
+
+    #[test]
+    fn a_spline_corner_edge_seen_edge_on_adds_nothing() {
+        let line = brepkit_math::nurbs::NurbsCurve::new(
+            2,
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            vec![
+                Point3::new(0.0, 0.0, 0.0),
+                Point3::new(2.0, 0.0, 1.0),
+                Point3::new(6.0, 0.0, -1.0),
+            ],
+            vec![1.0, 1.0, 1.0],
+        )
+        .unwrap();
+        assert!(bow_of_spline(&line, 0.5, false).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_spline_corner_edge_with_a_weight_off_its_hull_is_refused() {
+        for weight in [0.0, -1.0, f64::NAN] {
+            let curve = wave([1.0, 1.0, weight, 1.0, 1.0]);
+            assert!(bow_of_spline(&curve, 0.5, false).is_err(), "{weight}");
         }
     }
 
