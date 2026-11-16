@@ -1,0 +1,31 @@
+crates/check/src/lib.rs
+  s_0db8415e6f59cd::t_6719b259a2687f 17
+crates/operations/src/sew.rs
+  s_0db8415e6f59cd::t_fa19357e0f4d3d 77-101,1956-2065
+crates/check/src/properties/mod.rs
+  s_0db8415e6f59cd::t_eca9a48a3b1220 6
+crates/check/src/properties/boundary.rs
+  s_0db8415e6f59cd::t_8e520b0cb4ff34 88,235,532
+crates/check/src/face_loops.rs
+  s_0db8415e6f59cd::t_63574885df7aca 1-793,795,811-813,815
+  s_0db8415e6f59cd::t_8b117b723ec8a1 794,796-810
+  s_0db8415e6f59cd::t_9dc781de0f13b8 814,816-937
+crates/check/src/validate/face_wires.rs
+  s_0db8415e6f59cd::t_48cd9455c23605 2-3,22,605-607,610-615,660-661,663-667,669-679,1190-1709
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "359824500d783122914c777863331b3ec6732935",
+  "prompts": {},
+  "sessions": {
+    "s_0db8415e6f59cd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "80c728ce-cbd9-4375-adac-8fbf308dc911",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
