@@ -1671,8 +1671,11 @@ fn insides_meet(t: &[Point3; 3], u: &[Point3; 3], outward: [bool; 2], on: f64) -
     } else {
         2
     };
+    // Measured from a corner, so a mesh far from the origin keeps its
+    // digits.
     let flat = |p: Point3| {
-        let c = coords(p);
+        let c = p - t[0];
+        let c = [c.x(), c.y(), c.z()];
         [c[(axis + 1) % 3], c[(axis + 2) % 3]]
     };
     let counter_clockwise = |mut tri: [[f64; 2]; 3]| {

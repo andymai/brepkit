@@ -1066,6 +1066,25 @@ fn two_cubes_that_overlap_in_the_planes_of_their_sides_are_not_one_solid() {
     assert_eq!((parts.solids.len(), parts.shells.len()), (2, 0));
 }
 
+/// The same two cubes far from the origin, where the coordinates are large
+/// next to the overlap.
+#[test]
+fn two_cubes_far_away_that_overlap_in_the_planes_of_their_sides_are_not_one_solid() {
+    let far = 2f64.powi(30);
+    let mut mesh = TriangleMesh::default();
+    add_box(&mut mesh, [far; 3], [far + 10.0; 3], false);
+    add_box(
+        &mut mesh,
+        [far + 5.0, far, far],
+        [far + 15.0, far + 10.0, far + 10.0],
+        false,
+    );
+
+    let mut topo = Topology::new();
+    let err = import_mesh(&mut topo, &mesh, 1e-7).unwrap_err();
+    assert!(err.to_string().contains("cross"), "{err}");
+}
+
 /// Two cubes that touch along a side, from the two sides of it, are two
 /// pieces of one solid.
 #[test]
