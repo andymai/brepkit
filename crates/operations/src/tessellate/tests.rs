@@ -4738,3 +4738,24 @@ fn a_cone_wall_notched_at_its_rim_meshes_closed() {
         frustum + outside,
     );
 }
+
+/// An arc from 2.8 to 3.5 crosses the angle where a circle's projection
+/// wraps from π to -π: its samples keep their order along the arc, and a
+/// point off the arc reads outside its span.
+#[test]
+fn samples_along_an_arc_keep_their_order_across_the_wrap() {
+    use std::f64::consts::TAU;
+
+    let wrapped = |a: f64| if a > std::f64::consts::PI { a - TAU } else { a };
+    let along: Vec<f64> = [2.8 - 1e-12, 3.0, 3.1, 3.3, 3.5]
+        .iter()
+        .map(|&a| super::solid::along_arc(wrapped(a), 2.8, 0.7))
+        .collect();
+    assert!(along.windows(2).all(|w| w[0] < w[1]), "{along:?}");
+    assert!(along[0] < 0.0 && along[0] > -1e-8);
+    assert!((along[4] - 0.7).abs() < 1e-12);
+    for off in [1.0, -2.0, 4.0] {
+        let a = super::solid::along_arc(wrapped(off), 2.8, 0.7);
+        assert!(!(-1e-8..=0.7 + 1e-8).contains(&a), "{off} reads {a}");
+    }
+}

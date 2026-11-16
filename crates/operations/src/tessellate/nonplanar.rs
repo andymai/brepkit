@@ -219,35 +219,17 @@ pub(super) fn tessellate_band_face_local(
             ([a, b, c], [pa, pb, pc])
         })
         .collect();
-    if !turns_one_way(
-        tris.iter()
-            .filter(|(ids, _)| !degenerate_triangle(&positions, *ids))
-            .map(|&(_, uv)| uv),
-    ) {
+    if tris.is_empty() || !turns_one_way(tris.iter().map(|&(_, uv)| uv)) {
         return Ok(None);
     }
 
-    let mut indices: Vec<u32> = Vec::with_capacity((n + m) * 3);
-    for (mut tri, _) in tris {
-        if degenerate_triangle(&positions, tri) {
-            continue;
-        }
-        let [pa, pb, pc] = tri.map(|i| positions[i as usize]);
-        let (u, v) = project(pa);
-        if (pb - pa).cross(pc - pa).dot(surf_normal(u, v)) < 0.0 {
-            tri.swap(1, 2);
-        }
-        indices.extend_from_slice(&tri);
-    }
-
-    Ok(Some(super::TriangleMeshUV {
-        mesh: TriangleMesh {
-            positions,
-            normals,
-            indices,
-        },
-        uvs,
-    }))
+    let mut mesh = TriangleMesh {
+        positions,
+        normals,
+        indices: tris.into_iter().flat_map(|(ids, _)| ids).collect(),
+    };
+    orient_triangle_run(&mut mesh, 0, project.as_ref(), surf_normal.as_ref());
+    Ok(Some(super::TriangleMeshUV { mesh, uvs }))
 }
 
 /// Tessellate a cylinder/cone lateral "standard band" face directly from the
@@ -479,30 +461,6 @@ pub(super) fn tessellate_revolution_band_shared(
         None
     };
 
-    // Emit default-oriented (non-reversed) triangles: the geometric normal
-    // matches the surface outward normal, the convention `tessellate_analytic`
-    // uses. The caller (`tessellate_face_with_shared_edges`) applies the global
-    // `is_reversed` winding flip afterward, so we must NOT apply it here.
-    let emit = |merged: &mut TriangleMesh, a: u32, b: u32, c: u32| {
-        let (pa, pb, pc) = (
-            merged.positions[a as usize],
-            merged.positions[b as usize],
-            merged.positions[c as usize],
-        );
-        // Skip degenerate triangles (two rim points at the same position).
-        let geo = (pb - pa).cross(pc - pa);
-        if geo.length() < 1e-20 {
-            return;
-        }
-        let (u, v) = project(pa);
-        let outward = surf_normal(u, v);
-        let mut tri = [a, b, c];
-        if geo.dot(outward) < 0.0 {
-            tri.swap(1, 2);
-        }
-        merged.indices.extend_from_slice(&tri);
-    };
-
     // Each candidate triangle with its corners' (u, v), u unwrapped along
     // the rims from ring 0's first sample.
     let rim_uv = |rim: &[u32], merged: &TriangleMesh, base: f64| {
@@ -600,17 +558,18 @@ pub(super) fn tessellate_revolution_band_shared(
         }
     }
 
-    let positions = &merged.positions;
-    if !turns_one_way(
-        tris.iter()
-            .filter(|(ids, _)| !degenerate_triangle(positions, *ids))
-            .map(|&(_, uv)| uv),
-    ) {
+    if tris.is_empty() || !turns_one_way(tris.iter().map(|&(_, uv)| uv)) {
         return Ok(false);
     }
+    // The triangles all turn one way, so one flip decision orients the run
+    // outward, the convention `tessellate_analytic` uses. The caller
+    // (`tessellate_face_with_shared_edges`) applies the face's `is_reversed`
+    // flip afterward, so it must NOT be applied here.
+    let idx_start = merged.indices.len();
     for (ids, _) in tris {
-        emit(merged, ids[0], ids[1], ids[2]);
+        merged.indices.extend_from_slice(&ids);
     }
+    orient_triangle_run(merged, idx_start, project.as_ref(), surf_normal.as_ref());
     Ok(true)
 }
 
@@ -751,16 +710,6 @@ fn turns_one_way(tris: impl IntoIterator<Item = [[f64; 2]; 3]>) -> bool {
         }
     }
     true
-}
-
-/// A triangle with no area, which the band meshers skip.
-fn degenerate_triangle(positions: &[Point3], [a, b, c]: [u32; 3]) -> bool {
-    let (pa, pb, pc) = (
-        positions[a as usize],
-        positions[b as usize],
-        positions[c as usize],
-    );
-    (pb - pa).cross(pc - pa).length() < 1e-20
 }
 
 /// Tessellate a torus band bounded by two closed rims and seamed by a
