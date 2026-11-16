@@ -401,6 +401,23 @@ impl SphereLoop {
         }
     }
 
+    /// Whether `p` lies within `near` of the loop's own arcs: on one of its
+    /// planes, and on the arc's side of each other plane. [`Self::grazes`]
+    /// reads the whole of each plane.
+    fn borders(&self, p: Point3, near: f64) -> bool {
+        match self {
+            Self::HalfSpaces { planes, any } => planes.iter().enumerate().any(|(i, &(c, n))| {
+                (p - c).dot(n).abs() <= near
+                    && planes.iter().enumerate().all(|(j, &(cj, nj))| {
+                        let side = (p - cj).dot(nj);
+                        // A hole's arcs bound the part the planes keep out.
+                        j == i || if *any { side <= near } else { side >= -near }
+                    })
+            }),
+            Self::Rim { .. } => self.grazes(p, near),
+        }
+    }
+
     /// Whether `p` lies within `near` of the loop's boundary.
     fn grazes(&self, p: Point3, near: f64) -> bool {
         match self {
@@ -2439,7 +2456,7 @@ impl SphereFaceTrim {
             FaceGeom::Sphere { loops, .. } => (
                 loops.iter().all(|l| l.admits(point, 0.0)),
                 loops.iter().all(|l| l.admits(point, near))
-                    && loops.iter().any(|l| l.grazes(point, near)),
+                    && loops.iter().any(|l| l.borders(point, near)),
             ),
             FaceGeom::SphereTrim {
                 frame,
@@ -4912,6 +4929,32 @@ mod tests {
         assert!(
             !trim.holds(Point3::new(-r, r, r), near),
             "a neighbouring octant"
+        );
+
+        // The ball less that octant, its arcs run the other way round.
+        let rest = sphere_patch(
+            &mut topo,
+            3.0,
+            &[
+                Point3::new(0.0, 0.0, 3.0),
+                Point3::new(0.0, 3.0, 0.0),
+                Point3::new(3.0, 0.0, 0.0),
+            ],
+            &[origin, origin, origin],
+        );
+        let trim = SphereFaceTrim::new(&topo, rest).unwrap().unwrap();
+        assert!(
+            trim.holds_clear(Point3::new(0.0, -1.8, 2.4), near),
+            "on an arc's plane, away from the arc"
+        );
+        assert!(trim.holds(Point3::new(0.0, 1.8, 2.4), near), "on an arc");
+        assert!(
+            !trim.holds_clear(Point3::new(0.0, 1.8, 2.4), near),
+            "on an arc"
+        );
+        assert!(
+            !trim.holds(Point3::new(r, r, r), near),
+            "the octant left out"
         );
     }
 
