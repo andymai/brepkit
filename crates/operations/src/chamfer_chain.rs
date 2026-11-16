@@ -1071,23 +1071,34 @@ fn plan_on(
                 if !coaxial {
                     return Ok(None);
                 }
-                // Toward the wall's far side along its axis.
-                let along = |p: Point3| (p - cylinder.origin()).dot(axis);
+                // Into the wall's material along its axis: the left of the
+                // wall's stored traversal of the arc about the cylinder's own
+                // normal, read at the arc's middle, as for a ruling. A wall
+                // that rises past the rim elsewhere does not turn it.
+                let Some(flag) = wire_flag(topo, wall, edge)? else {
+                    return Ok(None);
+                };
+                let (t0, t1) = curve.domain_with_endpoints(start_point, end_point);
+                let mid = circle.evaluate(0.5 * (t0 + t1));
+                let tangent = circle.tangent(0.5 * (t0 + t1)).normalize()?;
+                let foot = cylinder.origin() + axis * axis.dot(mid - cylinder.origin());
+                let radial = (mid - foot).normalize()?;
+                let traversal = if flag { tangent } else { -tangent };
+                let into = axis * radial.cross(traversal).dot(axis).signum();
+                // And the wall reaches past the rim that way.
+                let along = |p: Point3| (p - cylinder.origin()).dot(into);
                 let rim = along(start_point);
-                let mut far = rim;
+                let mut reach = 0.0_f64;
                 for oe in topo.wire(topo.face(wall)?.outer_wire())?.edges() {
                     let e = topo.edge(oe.edge())?;
                     for v in [e.start(), e.end()] {
-                        let height = along(topo.vertex(v)?.point());
-                        if (height - rim).abs() > (far - rim).abs() {
-                            far = height;
-                        }
+                        reach = reach.max(along(topo.vertex(v)?.point()) - rim);
                     }
                 }
-                if (far - rim).abs() <= tol {
+                if reach <= tol {
                     return Ok(None);
                 }
-                WallSide::Axis(axis * (far - rim).signum())
+                WallSide::Axis(into)
             }
             EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_) => return Ok(None),
         };

@@ -423,3 +423,52 @@ fn a_notch_whose_sides_are_shorter_than_the_chamfer_refuses_it() {
         assert!(chamfer(&mut topo, solid, &edges, 0.5).is_err(), "{name}");
     }
 }
+
+/// A rod of radius 5, 10 high, turned 0.3 about its axis so that its seam
+/// lies inside the rim below, less the quadrant `x, y > 0` above `z = 3`:
+/// the quadrant's rim arc at `z = 3` has its wall below it, though the same
+/// wall rises to 10 elsewhere. Its chamfer takes the ring's triangle over a
+/// quarter turn, square at both ends where the steps stand on radial planes.
+#[test]
+fn a_rim_whose_wall_rises_past_it_elsewhere_takes_its_chamfer_below() {
+    let (r, d) = (5.0_f64, 0.5_f64);
+    let plain = PI * r * r * (3.0 + 0.75 * 7.0);
+    let taken = 0.5 * d * d * 0.5 * PI * (r - d / 3.0);
+    for (name, pose) in poses() {
+        let mut topo = Topology::new();
+        let rod = make_cylinder(&mut topo, r, 10.0).unwrap();
+        transform_solid(&mut topo, rod, &Mat4::rotation_z(0.3)).unwrap();
+        let cut = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+        transform_solid(&mut topo, cut, &Mat4::translation(0.0, 0.0, 3.0)).unwrap();
+        let stepped = boolean(&mut topo, BooleanOp::Cut, rod, cut).unwrap();
+        let rim: Vec<EdgeId> = brepkit_topology::explorer::solid_edges(&topo, stepped)
+            .unwrap()
+            .into_iter()
+            .filter(|&e| {
+                let edge = topo.edge(e).unwrap();
+                let a = topo.vertex(edge.start()).unwrap().point();
+                let b = topo.vertex(edge.end()).unwrap().point();
+                matches!(edge.curve(), EdgeCurve::Circle(_))
+                    && (a.z() - 3.0).abs() < 1e-9
+                    && (b.z() - 3.0).abs() < 1e-9
+            })
+            .collect();
+        assert_eq!(rim.len(), 2, "{name}: the rim, split at the seam");
+        transform_solid(&mut topo, stepped, &pose).unwrap();
+
+        let result = chamfer(&mut topo, stepped, &rim, d).unwrap();
+
+        let report = validate_solid(&topo, result).unwrap();
+        assert!(report.is_valid(), "{name}: {:?}", report.issues);
+        assert!(
+            is_watertight(&tessellate_solid(&topo, result, 0.01).unwrap()),
+            "{name}"
+        );
+        let volume = solid_volume(&topo, result, 0.001).unwrap();
+        let expected = plain - taken;
+        assert!(
+            (volume - expected).abs() < 1e-9 * expected,
+            "{name}: volume {volume}, expected {expected}"
+        );
+    }
+}
