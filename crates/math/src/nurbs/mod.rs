@@ -14,6 +14,7 @@ pub mod knot_ops;
 pub mod power_basis;
 pub mod projection;
 pub mod self_intersection;
+pub mod span_index;
 pub mod surface;
 pub mod surface_fitting;
 

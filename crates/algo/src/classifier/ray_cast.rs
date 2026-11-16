@@ -1884,10 +1884,8 @@ fn nurbs_geom(
     // the sample before lands on the next. On this surface a point has one
     // `(u, v)`, so a foot at the sample is the one a search of the whole
     // surface finds; a foot off it sends that sample to the search. The
-    // search can settle on a far local foot (on a fitted surface with many
-    // spans, a point on a boundary edge read 0.55 off where Newton from the
-    // sample before found it on the surface), and the next sample's Newton
-    // would start from there: the nearer of the two is kept.
+    // search proves its foot nearest, or fails where its proof does not
+    // settle, and then the foot of Newton from the sample before is kept.
     let last = std::cell::Cell::new(None::<(f64, f64)>);
     let project = |p: Point3| {
         let tried = last.get().and_then(|from| {
@@ -4585,10 +4583,11 @@ mod tests {
     /// triangle (0.2, 0), (0.8, 0), (0.8, 0.3) in `(u, v)`. Its long side
     /// stands 1e-7 off the strip, as an edge read from a file can, so Newton
     /// from the sample before lands past the cutoff for a point on the
-    /// surface; for that side's points about `v = 0.05` and `v = 0.17`, a
-    /// search of the whole strip settles on a foot 0.5 to 1.4 off. The trim
-    /// keeps the nearer foot: its samples lie on its edges' `(u, v)`, and
-    /// rays just inside and just outside the trim read as such.
+    /// surface; for that side's points about `v = 0.05` and `v = 0.17`, Newton
+    /// from the coarse grid settles on a foot 0.5 to 1.4 off, and the search
+    /// of the whole strip finds the point itself. The trim's samples lie on
+    /// its edges' `(u, v)`, and rays just inside and just outside the trim
+    /// read as such.
     #[test]
     fn a_nurbs_trim_keeps_the_nearer_foot_of_an_edge_off_its_surface() {
         use brepkit_math::nurbs::curve::NurbsCurve;
@@ -4609,13 +4608,13 @@ mod tests {
             vec![vec![1.0; 4]; 2],
         )
         .unwrap();
-        let strays = brepkit_math::nurbs::projection::project_point_to_surface(
+        let found = brepkit_math::nurbs::projection::project_point_to_surface(
             &strip,
             strip.evaluate(0.3, 0.05),
             1e-12,
         )
         .unwrap();
-        assert!(strays.distance > 0.5, "the search finds {strays:?}");
+        assert!(found.distance < 1e-9, "the search finds {found:?}");
         // The cubic's piece from `v0` to `v1` in Bezier form, by blossoms,
         // carried from `u0` to `u1` along the strip and lifted by `lift`.
         let blossom = |ts: [f64; 3]| {

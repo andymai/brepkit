@@ -45,6 +45,8 @@ struct Caches {
         std::sync::OnceLock<Option<std::sync::Arc<crate::nurbs::intersection::RaySurface>>>,
     /// Points projected onto the surface (see [`NurbsSurface::projected`]).
     projections: ProjectionMemo,
+    /// The knot spans by their control boxes (see [`NurbsSurface::span_index`]).
+    span_index: std::sync::OnceLock<Option<std::sync::Arc<crate::nurbs::span_index::SpanIndex>>>,
 }
 
 /// Points already projected onto a surface, by their coordinates' bits, at
@@ -876,6 +878,17 @@ impl NurbsSurface {
     }
 
     /// The surface's coarse grid for projections, evaluated on first use.
+    /// The surface's knot spans indexed by their control boxes, made on
+    /// first use; `None` where a weight is not positive, where the boxes
+    /// need not bound the surface.
+    #[must_use]
+    pub fn span_index(&self) -> Option<&crate::nurbs::span_index::SpanIndex> {
+        self.caches
+            .span_index
+            .get_or_init(|| crate::nurbs::span_index::SpanIndex::new(self).map(std::sync::Arc::new))
+            .as_deref()
+    }
+
     pub(crate) fn coarse_grid(&self) -> &crate::nurbs::projection::CoarseGrid {
         self.caches
             .coarse_grid

@@ -501,9 +501,9 @@ fn check_edge_face_pairs(
             // crossings; sampling it here would emit dozens of fake paves
             // (e.g. a cap circle lying in the opposing cap's plane).
             let n_chk = 16;
-            let survey = surveys[edge_idx]
-                .remove(&face_idx)
-                .unwrap_or_else(|| survey(&curve, start_pos, end_pos, t0, t1, surface, hull, tol));
+            let survey = surveys[edge_idx].remove(&face_idx).unwrap_or_else(|| {
+                survey(&curve, start_pos, end_pos, t0, t1, surface, hull, None, tol)
+            });
             if survey.is_none() {
                 // Through the inside of a cylinder or cone face, the edge
                 // bounds a region the two solids share there (a bin wall's
@@ -1079,8 +1079,21 @@ fn survey(
     t1: f64,
     surface: &FaceSurface,
     hull: Option<Aabb3>,
+    pieces: Option<&[Aabb3]>,
     tol: Tolerance,
 ) -> Survey {
+    // An edge every point of which lies farther from a B-spline surface
+    // than the scan below reads as near it crosses it nowhere: the scan's
+    // distances are those of points of the surface, or bounds below them,
+    // and it keeps only crossings within the tolerance of the surface.
+    if let (FaceSurface::Nurbs(nurbs), Some(pieces)) = (surface, pieces)
+        && let Some(index) = nurbs.span_index()
+        && pieces
+            .iter()
+            .all(|b| index.box_clears(nurbs, b, 2.0 * NEAR_LIMIT * tol.linear))
+    {
+        return Some(Vec::new());
+    }
     let n_chk = 16;
     let edge_on_surface = (0..=n_chk).all(|i| {
         let t = t0 + (t1 - t0) * (f64::from(i) / f64::from(n_chk));
@@ -1132,6 +1145,7 @@ fn survey_pairs(
                 .map(brepkit_topology::face::Face::surface)
         })
         .collect();
+    let mut pieces: Vec<Option<Vec<Aabb3>>> = (0..edges.len()).map(|_| None).collect();
     let mut pairs = Vec::new();
     for (edge_idx, &eid) in edges.iter().enumerate() {
         let Some((curve, start_pos, end_pos, t0, t1)) = topo.edge(eid).ok().and_then(|edge| {
@@ -1151,6 +1165,9 @@ fn survey_pairs(
             }
             Aabb3::try_from_points(pts).map(|a| a.expanded(tol.linear))
         };
+        // An edge's piece boxes serve only its pairs with B-spline faces,
+        // so they are made for the first such pair that is kept.
+        let mut boxed = false;
         for (face_idx, surface) in surfaces.iter().enumerate() {
             let Some(surface) = surface else {
                 continue;
@@ -1167,6 +1184,10 @@ fn survey_pairs(
                 && !ea.intersects(hull.expanded(tol.linear))
             {
                 continue;
+            }
+            if !boxed && matches!(surface, FaceSurface::Nurbs(_)) {
+                pieces[edge_idx] = curve_piece_boxes(curve, start_pos, end_pos, t0, t1);
+                boxed = true;
             }
             pairs.push(Pair {
                 edge_idx,
@@ -1189,6 +1210,7 @@ fn survey_pairs(
             pair.t1,
             pair.surface,
             hulls[pair.face_idx],
+            pieces[pair.edge_idx].as_deref(),
             tol,
         )
     };
@@ -1206,6 +1228,118 @@ fn survey_pairs(
         surveys[pair.edge_idx].insert(pair.face_idx, found);
     }
     surveys
+}
+
+/// Boxes that together hold every point an edge's curve takes over its
+/// parameters `t0` to `t1`: a line's in eight pieces; a circle's or an
+/// ellipse's in sixteen arcs, each the box of its ends grown by the arc's sag
+/// bound (the most its second derivative reaches, times its angle squared
+/// over eight); a
+/// B-spline's the boxes of the nets of the Bezier pieces the range runs
+/// over, each piece within the hull of its net. `None` where a weight is not
+/// positive, the pieces cannot be read, or a box is not finite.
+fn curve_piece_boxes(
+    curve: &EdgeCurve,
+    start_pos: Point3,
+    end_pos: Point3,
+    t0: f64,
+    t1: f64,
+) -> Option<Vec<Aabb3>> {
+    let finite = |p: Point3| p.x().is_finite() && p.y().is_finite() && p.z().is_finite();
+    piece_boxes(curve, start_pos, end_pos, t0, t1)
+        .filter(|boxes| boxes.iter().all(|b| finite(b.min) && finite(b.max)))
+}
+
+/// [`curve_piece_boxes`], whose boxes may not be finite.
+fn piece_boxes(
+    curve: &EdgeCurve,
+    start_pos: Point3,
+    end_pos: Point3,
+    t0: f64,
+    t1: f64,
+) -> Option<Vec<Aabb3>> {
+    let (lo, hi) = (t0.min(t1), t0.max(t1));
+    if !(lo.is_finite() && hi.is_finite()) {
+        return None;
+    }
+    let grown = |b: Aabb3, by: f64| {
+        let size = b.min.x().abs().max(b.min.y().abs()).max(b.min.z().abs())
+            + b.max.x().abs().max(b.max.y().abs()).max(b.max.z().abs());
+        b.expanded(by + 1e-9 * size.max(1.0))
+    };
+    let arcs = |at: &dyn Fn(f64) -> Point3, radius: f64| -> Vec<Aabb3> {
+        const ARCS: usize = 16;
+        let step = (hi - lo) / ARCS as f64;
+        (0..ARCS)
+            .map(|k| {
+                let a = (k as f64).madd(step, lo);
+                let b = if k + 1 == ARCS { hi } else { a + step };
+                let w = b - a;
+                grown(Aabb3::from_points([at(a), at(b)]), radius * w * w / 8.0)
+            })
+            .collect()
+    };
+    match curve {
+        EdgeCurve::Line => {
+            const PIECES: usize = 8;
+            let at = |t: f64| start_pos + (end_pos - start_pos) * t;
+            let step = (hi - lo) / PIECES as f64;
+            Some(
+                (0..PIECES)
+                    .map(|k| {
+                        let a = (k as f64).madd(step, lo);
+                        let b = if k + 1 == PIECES { hi } else { a + step };
+                        grown(Aabb3::from_points([at(a), at(b)]), 0.0)
+                    })
+                    .collect(),
+            )
+        }
+        EdgeCurve::Circle(c) => Some(arcs(
+            &|t| c.evaluate(t),
+            conic_reach(c.radius(), c.radius(), c.u_axis(), c.v_axis()),
+        )),
+        EdgeCurve::Ellipse(e) => Some(arcs(
+            &|t| e.evaluate(t),
+            conic_reach(e.semi_major(), e.semi_minor(), e.u_axis(), e.v_axis()),
+        )),
+        EdgeCurve::NurbsCurve(n) => {
+            // A weight below the least normal float can carry the curve out
+            // of its control box, as one that is not positive can.
+            let unbounded = |w: &f64| *w <= 0.0 || !w.is_normal();
+            if n.weights().iter().any(unbounded) {
+                return None;
+            }
+            let segments = brepkit_math::nurbs::decompose::curve_to_bezier_segments(n).ok()?;
+            let boxes: Vec<Aabb3> = segments
+                .iter()
+                .filter(|seg| {
+                    let k = seg.knots();
+                    k.first().is_some_and(|&a| a <= hi) && k.last().is_some_and(|&b| b >= lo)
+                })
+                .map(|seg| {
+                    if seg.weights().iter().any(unbounded) {
+                        return None;
+                    }
+                    Aabb3::try_from_points(seg.control_points().iter().copied())
+                        .map(|b| grown(b, 0.0))
+                })
+                .collect::<Option<_>>()?;
+            (!boxes.is_empty()).then_some(boxes)
+        }
+    }
+}
+
+/// The most `|a cos t u + b sin t v|` reaches over `t`, the size of the
+/// second derivative of a conic on axes `u` and `v` that need not be unit or
+/// square: its square is no more than the larger of `(a |u|)²` and
+/// `(b |v|)²` plus `|a b u . v|`.
+fn conic_reach(a: f64, b: f64, u: Vec3, v: Vec3) -> f64 {
+    // The axes are scaled before they are multiplied: a large radius on
+    // short axes is an ordinary conic, but the product of the two lengths
+    // can overflow on its own.
+    let (u, v) = (u * a, v * b);
+    let most = u.length().max(v.length());
+    (most * most + u.dot(v).abs()).sqrt()
 }
 
 /// Find edge-surface crossings by sampling the distance to the surface and refining.
@@ -2194,5 +2328,122 @@ mod tests {
             (t - 0.5).abs() < 0.02,
             "tangent point should be near t=0.5, got {t}"
         );
+    }
+
+    /// Every point a curve takes over an edge's parameters lies in one of
+    /// its piece boxes: a line, a circle's arc, an ellipse's arc past a half
+    /// turn, and a rational B-spline's sub-span, sampled densely.
+    #[test]
+    fn curve_piece_boxes_hold_the_curve() {
+        use brepkit_math::curves::{Circle3D, Ellipse3D};
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        let n = Vec3::new(0.3, -0.4, 0.866);
+        let nurbs = NurbsCurve::new(
+            3,
+            vec![0.0, 0.0, 0.0, 0.0, 0.4, 1.0, 1.0, 1.0, 1.0],
+            vec![
+                Point3::new(0.0, 0.0, 0.0),
+                Point3::new(1.0, 3.0, -1.0),
+                Point3::new(4.0, -2.0, 2.0),
+                Point3::new(5.0, 1.0, 0.5),
+                Point3::new(7.0, 0.0, 3.0),
+            ],
+            vec![1.0, 0.5, 2.0, 0.8, 1.0],
+        )
+        .unwrap();
+        let (a, b) = (Point3::new(1.0, 2.0, 3.0), Point3::new(-4.0, 0.5, 7.0));
+        let cases = [
+            (EdgeCurve::Line, a, b, 0.0, 1.0),
+            (
+                EdgeCurve::Circle(Circle3D::new(a, n, 2.5).unwrap()),
+                a,
+                a,
+                0.4,
+                2.9,
+            ),
+            (
+                EdgeCurve::Ellipse(Ellipse3D::new(a, n, 6.0, 1.5).unwrap()),
+                a,
+                a,
+                5.0,
+                -0.3,
+            ),
+            (EdgeCurve::NurbsCurve(nurbs), a, b, 0.25, 0.9),
+            // Axes that are neither unit nor square, as a copy through a
+            // scaling or shearing transform keeps them.
+            (
+                EdgeCurve::Circle(
+                    Circle3D::with_axes(
+                        a,
+                        n,
+                        2.5,
+                        Vec3::new(3.0, 0.0, 0.0),
+                        Vec3::new(1.5, 0.5, 0.0),
+                    )
+                    .unwrap(),
+                ),
+                a,
+                a,
+                0.4,
+                2.9,
+            ),
+            (
+                EdgeCurve::Ellipse(
+                    Ellipse3D::with_axes(
+                        a,
+                        n,
+                        6.0,
+                        1.5,
+                        Vec3::new(0.0, 4.0, 0.0),
+                        Vec3::new(2.0, -3.0, 1.0),
+                    )
+                    .unwrap(),
+                ),
+                a,
+                a,
+                5.0,
+                -0.3,
+            ),
+            // A unit circle, its radius and axes each far from unit: the
+            // product of the radius by itself overflows.
+            (
+                EdgeCurve::Circle(
+                    Circle3D::with_axes(
+                        a,
+                        Vec3::new(0.0, 1.0, 0.0),
+                        1e160,
+                        Vec3::new(1e-160, 0.0, 0.0),
+                        Vec3::new(0.0, 0.0, 1e-160),
+                    )
+                    .unwrap(),
+                ),
+                a,
+                a,
+                0.4,
+                2.9,
+            ),
+        ];
+        // Weights below the least normal float give no boxes.
+        let tiny = f64::from_bits(1);
+        let line = NurbsCurve::new(
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![Point3::new(1.0, 0.0, 1.0), Point3::new(1.0, 1.0, 1.0)],
+            vec![tiny, tiny],
+        )
+        .unwrap();
+        let (s, e) = (Point3::new(1.0, 0.0, 1.0), Point3::new(1.0, 1.0, 1.0));
+        assert!(curve_piece_boxes(&EdgeCurve::NurbsCurve(line), s, e, 0.0, 1.0).is_none());
+        for (curve, start, end, t0, t1) in &cases {
+            let boxes = curve_piece_boxes(curve, *start, *end, *t0, *t1).unwrap();
+            for k in 0..=2000 {
+                let t = t0 + (t1 - t0) * f64::from(k) / 2000.0;
+                let p = curve.evaluate_with_endpoints(t, *start, *end);
+                assert!(
+                    boxes.iter().any(|bx| bx.contains_point(p)),
+                    "{curve:?} at {t}: {p:?} in no box"
+                );
+            }
+        }
     }
 }
