@@ -55,7 +55,7 @@ const EXAMPLE: Cap = Cap {
 };
 
 /// A slot 8 wide in a disc of radius 5: at its top corners the rim's cone
-/// cuts a sliver a tenth of a unit wide from the slot's side.
+/// cuts a sliver about 0.44 wide and 0.22 tall from the slot's side.
 const WIDE: Cap = Cap {
     r: 5.0,
     c: 4.0,
@@ -393,7 +393,7 @@ fn a_smaller_chamfer_of_the_same_pick_meets_the_same_way() {
 
 /// The wide slot's pick: at its top corners the rim's cone reaches the top
 /// edge of the slot's side 0.94 from the corner, where the rulings' chamfer
-/// reaches 0.5, so the cone cuts a sliver of the side as tall as 0.2.
+/// reaches 0.5, so the cone cuts a sliver of the side about 0.22 tall.
 #[test]
 fn a_wide_slots_corners_cut_a_wide_sliver_from_its_sides() {
     let d = 0.5;
