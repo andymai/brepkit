@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794830289353,
+  "lastUpdate": 1794833993478,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -72251,6 +72251,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 18359459,
             "range": "± 70256",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "840ddceba1d17935e4f64b7769bdc7c3413eca2f",
+          "message": "fix(math): prove a surface projection is the nearest point (#2537)\n\nproject_point_to_surface now proves that its result is the nearest\npoint of the surface, finds a nearer point, or returns\nConvergenceFailure. A B-spline surface keeps its knot spans in an\nindex, which gives the spans near the point and the Bezier net of\neach.\n\nCloses #2470\n\nCo-authored-by: Eric Vaughan <66281732+Robokan@users.noreply.github.com>",
+          "timestamp": "2026-11-16T12:56:14Z",
+          "tree_id": "eb577f979504f8a1af47e53a65113c65ed7b1231",
+          "url": "https://github.com/andymai/brepkit/commit/840ddceba1d17935e4f64b7769bdc7c3413eca2f"
+        },
+        "date": 1794833985522,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1109987,
+            "range": "± 3048",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1160956,
+            "range": "± 7815",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12915,
+            "range": "± 345",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 700685,
+            "range": "± 1640",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25176127,
+            "range": "± 137484",
             "unit": "ns/iter"
           }
         ]
