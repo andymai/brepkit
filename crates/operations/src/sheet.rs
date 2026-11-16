@@ -397,6 +397,7 @@ fn full_band(run: &EdgeRun, axis_origin: Point3, axis: Vec3, tol: f64) -> Option
 }
 
 /// Revolve an open wire by `angle_radians` about the axis into an open shell.
+/// A negative angle turns the other way, as about the reversed axis.
 ///
 /// A line in a plane holding the axis sweeps a cylinder, cone or plane, and a
 /// circular arc in such a plane a torus or sphere band; any other edge sweeps
@@ -409,7 +410,7 @@ fn full_band(run: &EdgeRun, axis_origin: Point3, axis: Vec3, tol: f64) -> Option
 /// # Errors
 ///
 /// Returns [`OperationsError::InvalidInput`] if the axis has no length, the
-/// angle is outside `(0, 2π]`, the whole wire lies along the axis, an edge
+/// angle is zero or larger than a turn, the whole wire lies along the axis, an edge
 /// crosses the axis between its ends, or the wire is closed, meets itself or
 /// breaks.
 pub fn revolve_wire(
@@ -423,15 +424,18 @@ pub fn revolve_wire(
     if tol.approx_eq(axis_direction.length_squared(), 0.0) {
         return Err(refuse("the revolve axis has zero length"));
     }
-    let axis = axis_direction.normalize()?;
-    let in_range = angle_radians > 0.0 && angle_radians <= TAU + tol.angular;
+    let size = angle_radians.abs();
+    let in_range = size > 0.0 && size <= TAU + tol.angular;
     if !in_range {
         return Err(refuse(format!(
-            "the revolve angle must be in (0, 2π], got {angle_radians}"
+            "the revolve angle must be in [-2π, 0) or (0, 2π], got {angle_radians}"
         )));
     }
-    let is_full = angle_radians >= TAU - tol.angular;
-    let angle = if is_full { TAU } else { angle_radians };
+    // A negative angle turns the other way, as about the reversed axis.
+    let axis = axis_direction.normalize()?;
+    let axis = if angle_radians < 0.0 { -axis } else { axis };
+    let is_full = size >= TAU - tol.angular;
+    let angle = if is_full { TAU } else { size };
 
     let chain = open_chain(topo, wire)?;
     let along_axis: Vec<bool> = chain

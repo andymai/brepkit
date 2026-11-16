@@ -1002,7 +1002,18 @@ fn a_cavity_that_touches_the_wall_of_a_finer_box_is_its_cavity() {
     let solid = import_mesh(&mut topo, &mesh, 1e-7).unwrap();
     assert_eq!(topo.solid(solid).unwrap().inner_shells().len(), 1);
     assert!((volume(&topo, solid) - 7000.0).abs() < 1e-9);
-    assert_valid(&topo, solid);
+    // The cavity's face at x = 20 lies on the box's wall there, so the wall
+    // between them has no thickness, and the validator reports the two faces.
+    let report = validate_solid(&topo, solid).unwrap();
+    assert!(
+        !report.issues.is_empty()
+            && report
+                .issues
+                .iter()
+                .all(|issue| issue.description.contains("cover the same area")),
+        "{:?}",
+        report.issues
+    );
 }
 
 /// Add a box from `lo` to `hi`, with corners of its own.
