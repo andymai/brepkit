@@ -282,7 +282,7 @@ fn find_edge_edge_crossings(
     let mut alongside: Vec<(usize, usize)> = Vec::new();
     let mut alongside_hits: Vec<ChordApproach> = Vec::new();
     let mut crossed: Vec<Option<f64>> = vec![None; n * n];
-    let mut near: Vec<(usize, usize, ChordApproach)> = Vec::new();
+    let mut near: Vec<(usize, usize, (f64, f64))> = Vec::new();
     for i in 0..n {
         for j in 0..n {
             let (chord_a, chord_b) = ([&pts_a[i], &pts_a[i + 1]], [&pts_b[j], &pts_b[j + 1]]);
@@ -313,10 +313,16 @@ fn find_edge_edge_crossings(
                     crossed[i * n + j] = Some(hit.t_a);
                     read(&mut crossings, &hit);
                 }
-            } else if reach > 0.0
-                && let Some(hit) = closest_segment_pair(chord_a, chord_b, reach + tol.linear)
-            {
-                near.push((i, j, hit));
+            } else if reach > 0.0 {
+                let (s, t, gap) = segment_distance(
+                    (chord_a[0].pos, chord_a[1].pos),
+                    (chord_b[0].pos, chord_b[1].pos),
+                );
+                if gap <= reach + tol.linear {
+                    let t_a = s.madd(chord_a[1].t - chord_a[0].t, chord_a[0].t);
+                    let t_b = t.madd(chord_b[1].t - chord_b[0].t, chord_b[0].t);
+                    near.push((i, j, (t_a, t_b)));
+                }
             }
         }
     }
@@ -327,7 +333,7 @@ fn find_edge_edge_crossings(
     // can miss each other by more than the tolerance. Gauss-Newton on the
     // curves, from the chords' closest points, reads such a crossing. A
     // pair of chords whose spans hold a crossing read already is passed over.
-    for (i, j, hit) in near {
+    for (i, j, seed) in near {
         let spans = |t: f64, (p, q): (&SegmentEndpoint, &SegmentEndpoint)| {
             t >= p.t.min(q.t) && t <= p.t.max(q.t)
         };
@@ -336,12 +342,9 @@ fn find_edge_edge_crossings(
         }) {
             continue;
         }
-        if let Some((t_a, t_b, point)) = refine_on_curves(
-            (edge_a.curve(), ea),
-            (edge_b.curve(), eb),
-            (hit.t_a, hit.t_b),
-            tol.linear,
-        ) {
+        if let Some((t_a, t_b, point)) =
+            refine_on_curves((edge_a.curve(), ea), (edge_b.curve(), eb), seed, tol.linear)
+        {
             crossed[i * n + j] = Some(t_a);
             let at = ChordApproach {
                 t_a,
@@ -504,6 +507,44 @@ fn nurbs_chord_sag(
         }
     }
     sag
+}
+
+/// The closest points of the segments `a` and `b`, as fractions `s` and `t`
+/// along them, and their distance. The fraction on one segment is clamped
+/// and the other one read again from it, so the distance is the least of
+/// any two points of the segments, also where one end of a segment is
+/// nearest the inside of the other.
+fn segment_distance(a: (Point3, Point3), b: (Point3, Point3)) -> (f64, f64, f64) {
+    let (da, db, r) = (a.1 - a.0, b.1 - b.0, a.0 - b.0);
+    let (aa, bb, f) = (da.dot(da), db.dot(db), db.dot(r));
+    let (s, t) = if aa <= 0.0 && bb <= 0.0 {
+        (0.0, 0.0)
+    } else if aa <= 0.0 {
+        (0.0, (f / bb).clamp(0.0, 1.0))
+    } else {
+        let c = da.dot(r);
+        if bb <= 0.0 {
+            ((-c / aa).clamp(0.0, 1.0), 0.0)
+        } else {
+            let ab = da.dot(db);
+            let denom = aa.madd(bb, -(ab * ab));
+            let s = if denom > 0.0 {
+                (ab.madd(f, -(c * bb)) / denom).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            let t = ab.madd(s, f) / bb;
+            if t < 0.0 {
+                ((-c / aa).clamp(0.0, 1.0), 0.0)
+            } else if t > 1.0 {
+                (((ab - c) / aa).clamp(0.0, 1.0), 1.0)
+            } else {
+                (s, t)
+            }
+        }
+    };
+    let gap = ((a.0 + da * s) - (b.0 + db * t)).length();
+    (s, t, gap)
 }
 
 /// The distance from `p` to the segment from `a` to `b`.
@@ -2415,6 +2456,33 @@ mod tests {
             assert_eq!(hits.len(), 1, "{hits:?}");
             assert!((hits[0].2 - through).length() < 1e-9, "{hits:?}");
         }
+    }
+
+    /// Segments whose closest points are one end of the first and a point
+    /// inside the second: the distance is that of the end from the second
+    /// segment, `sqrt(1.8)`, and the fractions are 1 and 0.2.
+    #[test]
+    fn segment_distance_reads_an_end_against_the_inside_of_the_other() {
+        let p = Point3::new;
+        let a = (p(0.0, 0.0, 0.0), p(1.0, 0.0, 0.0));
+        let b = (p(2.0, -1.0, 0.0), p(3.0, 1.0, 0.0));
+        let (s, t, gap) = segment_distance(a, b);
+        assert!((gap - 1.8_f64.sqrt()).abs() < 1e-12, "{gap}");
+        assert!(
+            (s - 1.0).abs() < 1e-12 && (t - 0.2).abs() < 1e-12,
+            "{s} {t}"
+        );
+        let (t, s, gap) = segment_distance(b, a);
+        assert!((gap - 1.8_f64.sqrt()).abs() < 1e-12, "{gap}");
+        assert!(
+            (s - 1.0).abs() < 1e-12 && (t - 0.2).abs() < 1e-12,
+            "{s} {t}"
+        );
+        let crossing = segment_distance(
+            (p(0.0, 0.0, 0.0), p(2.0, 0.0, 0.0)),
+            (p(1.0, -1.0, 0.5), p(1.0, 1.0, 0.5)),
+        );
+        assert!((crossing.2 - 0.5).abs() < 1e-12, "{crossing:?}");
     }
 
     /// A line edge, or a degree-1 B-spline on the same line, through the
