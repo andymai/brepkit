@@ -1,0 +1,19 @@
+crates/topology/src/topology.rs
+  s_0db8415e6f59cd::t_018b11d917ccf4 463-464,480-481,872-889
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "0acbdb934c6393937e7df2103672d5eb7295d9b5",
+  "prompts": {},
+  "sessions": {
+    "s_0db8415e6f59cd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "80c728ce-cbd9-4375-adac-8fbf308dc911",
+        "model": "unknown"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
