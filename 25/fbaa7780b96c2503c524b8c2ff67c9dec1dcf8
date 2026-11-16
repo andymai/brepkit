@@ -1,0 +1,21 @@
+crates/blend/src/fillet_builder.rs
+  s_0db8415e6f59cd::t_2650c2a3957815 4094,4115-4122,4281-4357,4480-4482,4507-4513,6525-6623
+crates/operations/tests/fillet_plane_vault.rs
+  s_0db8415e6f59cd::t_210cb09725d64d 12-14,23,340-358,360-362,364-366,389-397,416,427-435,438
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "25fbaa7780b96c2503c524b8c2ff67c9dec1dcf8",
+  "prompts": {},
+  "sessions": {
+    "s_0db8415e6f59cd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "80c728ce-cbd9-4375-adac-8fbf308dc911",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
