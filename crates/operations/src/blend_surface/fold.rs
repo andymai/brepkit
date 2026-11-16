@@ -69,18 +69,40 @@ pub(super) fn first_fold(
     let corner = |knots: &[f64], p: usize, at: f64| {
         knots.iter().filter(|k| k.to_bits() == at.to_bits()).count() >= p
     };
+    // A surface that closes on itself across u or v, its first row of
+    // control points on its last and its knots clamped, meets itself on a
+    // seam that can be only C0 too: the last span runs on into the first.
+    let clamped = |knots: &[f64], p: usize| {
+        let last = knots.len() - 1;
+        knots[..=p]
+            .iter()
+            .all(|k| k.to_bits() == knots[0].to_bits())
+            && knots[last - p..]
+                .iter()
+                .all(|k| k.to_bits() == knots[last].to_bits())
+    };
+    let seam_u = surface.is_periodic_u() && clamped(surface.knots_u(), surface.degree_u());
+    let seam_v = surface.is_periodic_v() && clamped(surface.knots_v(), surface.degree_v());
     (0..nets.len()).find_map(|k| {
         let (net, u, v) = &nets[k];
-        let next_u = (k + columns < nets.len()
-            && corner(surface.knots_u(), surface.degree_u(), u.1))
-        .then(|| &nets[k + columns])
-        .filter(|(_, u_next, v_next)| meets(*u, *v) || meets(*u_next, *v_next))
-        .and_then(|(next, _, _)| across(net, next, true, (u.1, *v), 0));
-        let next_v = (k % columns + 1 < columns
-            && corner(surface.knots_v(), surface.degree_v(), v.1))
-        .then(|| &nets[k + 1])
-        .filter(|(_, u_next, v_next)| meets(*u, *v) || meets(*u_next, *v_next))
-        .and_then(|(next, _, _)| across(net, next, false, (v.1, *u), 0));
+        let after_u = if k + columns < nets.len() {
+            corner(surface.knots_u(), surface.degree_u(), u.1).then_some(k + columns)
+        } else {
+            seam_u.then_some(k % columns)
+        };
+        let after_v = if k % columns + 1 < columns {
+            corner(surface.knots_v(), surface.degree_v(), v.1).then_some(k + 1)
+        } else {
+            seam_v.then_some(k + 1 - columns)
+        };
+        let next_u = after_u
+            .map(|n| &nets[n])
+            .filter(|(_, u_next, v_next)| meets(*u, *v) || meets(*u_next, *v_next))
+            .and_then(|(next, _, _)| across(net, next, true, (u.1, *v), 0));
+        let next_v = after_v
+            .map(|n| &nets[n])
+            .filter(|(_, u_next, v_next)| meets(*u, *v) || meets(*u_next, *v_next))
+            .and_then(|(next, _, _)| across(net, next, false, (v.1, *u), 0));
         next_u.or(next_v)
     })
 }
@@ -674,6 +696,50 @@ mod tests {
             first_fold_test(&strip([0.0, 1.0, 1.5], [0.0, 0.0, 1.0])),
             None
         );
+    }
+
+    /// A tube whose section is a closed polygon that turns back on itself
+    /// where it closes: each span is regular and each inner corner a crease
+    /// of a right angle, but the seam is a cusp.
+    #[test]
+    fn a_turn_on_the_seam_of_a_closed_surface_folds() {
+        let tube = |section: &[(f64, f64)]| {
+            let n = section.len();
+            let net = (0..2)
+                .map(|i| {
+                    section
+                        .iter()
+                        .map(|&(x, z)| Point3::new(x, f64::from(i), z))
+                        .collect()
+                })
+                .collect();
+            let mut knots_v = vec![0.0];
+            knots_v.extend((0..n).map(|k| k as f64 / (n - 1) as f64));
+            knots_v.push(1.0);
+            NurbsSurface::new(
+                1,
+                1,
+                vec![0.0, 0.0, 1.0, 1.0],
+                knots_v,
+                net,
+                vec![vec![1.0; n]; 2],
+            )
+            .unwrap()
+        };
+        let square = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0), (0.0, 0.0)];
+        assert_eq!(first_fold_test(&tube(&square)), None);
+        let cusp = [
+            (0.0, 0.0),
+            (-1.0, 0.0),
+            (-1.0, 1.0),
+            (-2.0, 1.0),
+            (-2.0, -1.0),
+            (-1.0, -1.0),
+            (-1.0, 0.0),
+            (0.0, 0.0),
+        ];
+        let (_, v) = first_fold_test(&tube(&cusp)).expect("a fold");
+        assert!((v - 1.0).abs() < 1e-3, "v = {v}");
     }
 
     /// Weights of `1e60` give the surface of weights of 1.
