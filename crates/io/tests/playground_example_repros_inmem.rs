@@ -163,7 +163,6 @@ fn a_grouser_fuses_onto_a_wheel() {
 /// whose arms have rounded edges. The yoke's flat bottom lies in the plane
 /// where the cylinder meets the cone.
 #[test]
-#[ignore = "TODO: enable when #2488 closes"]
 fn a_yoke_with_rounded_arms_fuses_onto_the_turrets_cap() {
     let mut topo = Topology::new();
     let cap = load("robot_arm_shoulder_cap.bin", &mut topo);
