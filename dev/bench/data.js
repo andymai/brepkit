@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794817472194,
+  "lastUpdate": 1794819569300,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -72089,6 +72089,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 15589868,
             "range": "± 681620",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "a2b275f00ecc3c5a6ed084c8d99f1a80fd74a271",
+          "message": "fix(operations): chamfer chains turn corners and run along a cylinder's rulings (#2538)\n\n## Summary\n\nTwo chamfers from the brepjs playground examples (#2372) failed:\n`chamfer` returned an error for each pick. Both picks now take an exact\nchamfer, and each result is valid and watertight. Closes #2489. Closes\n#2490.\n\n- `panel-fuse-holder` (#2489): a disc of radius 9.4 with a slot across\nits top. The pick is the top rim (four arcs) and the four edges where\nthe slot's ends meet the disc's wall.\n- `pocket-watch` (#2490): a plate whose top outline is 6 lines and 7\narcs.\n\n`try_chamfer` offers a pick to the chain chamfer\n(`chamfer_tangent_chains` in `crates/operations/src/chamfer_chain.rs`)\nfirst, and `chamfer` offers it after its rim path. The chain chamfer\ntook only chains of tangent lines and arcs on one flat cap. It refused\nboth picks, and the walking chamfer then failed on each pick.\n\nThe chain chamfer refused the plate for two reasons. Its side walls meet\nalong straight edges stored as degree-1 NURBS curves, and\n`face_boundary_2d` did not read a face with a NURBS edge. Also, at two\nvertices of the outline a line meets an arc at an angle, not tangent.\n\nThe chain chamfer refused the cap for two reasons too. The four edges at\nthe slot's ends lie along rulings of the disc's wall. Each is between\nthe wall and a slot side that is parallel to the axis. Where these edges\nmeet the rim, two chamfers meet at an angle. The two edges there lie on\ndifferent caps: the top and a slot side.\n\n## What changes\n\n- `EdgeCurve::is_straight_between` reads a NURBS curve as the segment\nbetween its ends when its control points lie on that segment.\n`face_boundary_2d` and `wire_boundary_2d` read such an edge as a\nsegment, and the chain chamfer reads it as a line. `face_region_2d`\nstill reads a NURBS edge through its Bezier pieces, with their deviation\nbound.\n- A chain runs along one cap, as before, or along one wall with each\nedge on a cap of its own.\n- A rim arc's wall side was the way to the wall face's farthest vertex\nalong the axis. A wall that stands below the rim at the arc but rises\nhigher elsewhere gave the wrong side. The side is now the left of the\nwall's stored traversal of the arc, about the cylinder's own normal, as\nfor a ruling.\n- A chain can hold a straight edge along a ruling of a cylinder, where a\nplane parallel to the axis meets the cylinder. Its contact on the wall\nis the ruling at a chord `d` from the edge. So both sides of the\ntriangle at the edge are `d` long. A plane through the two contacts is\nthe chamfer face.\n- A corner: two picked edges meet at an angle and share one face, and\nthe pick does not hold the third edge at the vertex. The contacts on the\nshared face run to the point where they cross. The other two contacts\nrun to the third edge, which gets shorter. The two chamfer faces meet\nalong a line, or along a conic stored as an exact rational quadratic.\nWhere the two contacts reach the third edge at two points, the chamfer\nface that reaches farther also cuts a sliver from the other face.\n- A free end at a plane square to the edge: that plane takes the end of\nthe chamfer. At an inside corner, the section reaches past the vertex,\nand the plane also takes the triangle that the chamfer exposes.\n- The chain chamfer reads a cylinder wall's rulings and circles about\nthe axis exactly when it checks that a wall stays clear. So the far side\nof a wall that goes all the way round does not refuse a chain.\n- The chain chamfer refuses a pick where two cuts from the ends of one\nedge pass each other. It also refuses two strips on one wall that\noverlap away from a corner. It also refuses a contact whose two ends\npass each other, where corners take its whole edge.\n- The chain chamfer refuses a pick when anything else lies where a\ncorner or a square end cuts. On each of a corner's three faces, the\nregion lies in one hull. The hull holds the vertex, the sections'\npoints, the contact ends, the poles of an arc contact and the sliver's\npoles. The check runs in the plane's frame, or on a cylinder unrolled\nabout the vertex. A square end's region lies in the hull of its triangle\nand of the pole of an arc edge there.\n- The chain chamfer refuses a pick when a face that it does not rebuild\nreaches into a chamfer. A piece's chamfer lies within `d` of its edge.\nSo each piece gets a box about its edge in its own frame, an arc one box\nfor each stretch of at most 15 degrees. A corner gets a box out to its\nfarthest point.\n- A face that reaches such a box can still be clear. The check tests a\nplane face exactly against the box. It also clears a face whose hull\nlies strictly on the kept side of each chamfer face there, where that\nside is convex. That is either side of a plane, or the inside of a cone.\nAny other face that reaches a box refuses the pick.\n- Beside a ruling, the triangle's wall side is an arc that bulges inside\nits circle. The expected volume adds that segment for a convex edge on a\nround wall, and for a concave edge on a hollow wall. It takes the\nsegment away otherwise.\n- The volume check compares the change with the triangles swept along\nthe edges. At a corner the chamfers meet past the ends of their edges.\nSo the check also allows the volume of a ball about the vertex, out to\nthe corner's farthest point.\n\n## How I checked it\n\n- `crates/operations/tests/chamfer_slot_ends.rs` builds the cap from\n#2489 in four poses. It chamfers the example's pick at 0.6, the four\nslot-end edges alone at 0.6, and the pick at 0.25. Each result must be\nvalid and watertight, and classify points inside and outside. Its volume\nmust agree with an independent value to 1e-9. That value integrates the\nexact area of each cross-section over the height, with Gauss-Legendre\npoints on each smooth stretch. The first two tests also count the faces\nby type.\n- `a_plates_top_outline_of_lines_and_arcs_takes_a_chamfer` in\n`crates/io/tests/playground_example_repros_inmem.rs` is no longer\nignored, and it now calls `chamfer` in place of `chamfer_v2` (#2513).\nThe removed volume must agree to 1e-9 with an integral over `s` from 0\nto `d`. The integrand is the top's area less the area of the outline\ninset by `s`. The test computes the inset outline exactly, with lines\nmoved, arcs resized, and the two corners met.\n- `the_planar_rebuild_refuses_curved_edges` used the edge between a D\nprism's back wall and its round wall. That edge now takes an exact\nchamfer, which\n`a_d_prisms_corner_on_its_round_wall_takes_a_flat_chamfer` checks in\nfour poses against a closed form. The refusal test now uses the edge\nbetween the two round walls of a lens.\n- `a_notchs_corner_on_its_hollow_wall_takes_a_flat_chamfer` chamfers the\nedge where a block meets a half-cylinder notch, in four poses, against a\nclosed form. `a_concave_corner_on_a_round_wall_fills_a_flat_chamfer`\nfills the concave edge where a block meets a half disc on its side, in\nfour poses, against a closed form.\n`rims_whose_chamfers_pass_each_other_on_the_wall_are_refused` picks both\nrims of the D and one upright: `chamfer` refuses 2.1, and 0.5 gives a\nvalid, watertight solid.\n`a_sectors_top_outline_takes_a_chamfer_its_insets_allow` chamfers a\nsector's top outline at 0.3 in four poses. The volume must agree to 1e-9\nwith the integral of the inset sector's closed-form area, and `chamfer`\nrefuses 1.0.\n- One unit test in `chamfer_chain.rs` checks that a conic arc lies on\nboth its surfaces and in the hull of its poles. Another checks that an\narc meets a region it passes through.\n- `try_chamfer_takes_a_slotted_caps_rim_and_slot_ends` and\n`try_chamfer_takes_a_captured_plates_top_outline` in\n`crates/wasm/src/helpers.rs` run both picks through `try_chamfer`. The\nresult must be valid and agree in volume with the chain chamfer to 1e-9.\n- `chamfer_slot_ends.rs` also chamfers a slot 8 wide in a disc of radius\n5 at 0.5, in four poses. There the rim's cone cuts a sliver about 0.22\ntall from each slot side, and the volume must agree with the oracle to\n1e-9. `chamfer` refuses the pick with a blind hole in that sliver, or in\na square end's triangle. It also refuses a slot only 0.1 deep.\n- `crates/operations/tests/chamfer_corner_regions.rs` chamfers the top\noutline of a disc less a square notch at 0.5, in four poses. The volume\nmust agree to 1e-9 with the inset-area integral, which meets the notch's\ninside corner past both edges. `chamfer` refuses the pick with a pocket\nin the inside corner's square, or with notch sides 0.14 long. It also\nrefuses a hole drilled from the bottom into the rim's chamfer. Holes\nthat stop at 2.0 and 2.6, short of the chamfer, leave the oracle's\nvolume less the hole's.\n- `a_rim_whose_wall_rises_past_it_elsewhere_takes_its_chamfer_below`\ncuts a rod 10 high down to 3 over one quadrant and chamfers that\nquadrant's rim at 0.5, in four poses. The volume must agree with the\nclosed form to 1e-9. Before the wall-side fix, the chain built the\nchamfer on the wrong side, and only the volume check refused it.\n- On `f418894c3`, the hole drilled from the bottom into the rim's\nchamfer gave a valid, watertight solid. Its removed volume matched the\nchamfer of the plain disc, and the hole passed through the chamfer face.\nOn that commit, the final volume or validity check also refused the\npocket and the two blind holes in the slotted caps.\n- On main at `4e5184192`, the three tests in `chamfer_slot_ends.rs` fail\nwith `cylinder+plane (walker not yet integrated)`. The plate test fails\nwith `TrimmingFailure`.\n- On `68c30cf1f`, `cargo nextest run --cargo-profile ci` for algo, io,\noperations, wasm, check, heal and topology ran 3773 tests, and all\npassed (23 skipped).\n- On `ac5e4852c`, the pose sweep and the truth audit give the same\noutput as on main `4e5184192`.\n- `cargo clippy --all-targets -- -D warnings` for the four changed\ncrates, `cargo fmt --all --check` and the four check scripts pass.\n\n## Not in this change\n\n- `chamfer_v2` still fails on any edge that borders a cylinder: #2513.\n- The cap's top rim alone, without the slot-end edges, still fails:\n#2514.",
+          "timestamp": "2026-11-16T08:56:28Z",
+          "tree_id": "a00bd7cbb3ea0f9cdc3fa3f5f7621053c7937125",
+          "url": "https://github.com/andymai/brepkit/commit/a2b275f00ecc3c5a6ed084c8d99f1a80fd74a271"
+        },
+        "date": 1794819556526,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 627565,
+            "range": "± 11735",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 651293,
+            "range": "± 7808",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 7942,
+            "range": "± 44",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 401290,
+            "range": "± 5338",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 14404244,
+            "range": "± 1178195",
             "unit": "ns/iter"
           }
         ]
