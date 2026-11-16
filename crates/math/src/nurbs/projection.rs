@@ -1090,6 +1090,22 @@ fn span_patches(
     {
         return None;
     }
+    // The spans' boxes are kept in an index made once per surface: read
+    // afresh for each point, as most points in a boolean are, they cost
+    // seconds per boolean on a fitted surface's thousands of spans.
+    if let Some(index) = surface.span_index() {
+        return Some(
+            index
+                .spans_within(point, bound)
+                .into_iter()
+                .filter_map(|(i, reach)| {
+                    let (u, v) = index.span(i)?;
+                    let patch = SpanPatch { u, v, reach };
+                    (!settled.is_some_and(|uv| patch.holds(uv))).then_some(patch)
+                })
+                .collect(),
+        );
+    }
     let spans = |knots: &[f64], p: usize| -> Vec<usize> {
         (p..knots.len() - p - 1)
             .filter(|&k| knots[k] < knots[k + 1])
