@@ -1,0 +1,25 @@
+crates/algo/src/classifier/mod.rs
+  s_0db8415e6f59cd::t_6f63f91572f09e 12-14
+crates/algo/src/classifier/ray_cast.rs
+  s_0db8415e6f59cd::t_a5bc8e49db4738 2388-2457
+crates/algo/src/pave_filler/phase_ef.rs
+  s_0db8415e6f59cd::t_10ca7e08b4739a 436-437,710-741
+crates/operations/tests/balls_on_a_flat_ring.rs
+  s_0db8415e6f59cd::t_20e594b5a597a9 1-218
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ee7c21ef638ea884762d42ff5b274d56b017362e",
+  "prompts": {},
+  "sessions": {
+    "s_0db8415e6f59cd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "80c728ce-cbd9-4375-adac-8fbf308dc911",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
