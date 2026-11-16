@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794807311244,
+  "lastUpdate": 1794807571190,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -71441,6 +71441,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 16889569,
             "range": "± 96994",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ee5764f817521b5bdaa23dbfb0a41ac5d3b160e5",
+          "message": "perf(check): integrate round a surface of revolution in closed form (#2516)\n\n## Summary\n\nThe `fillet` binding keeps a result only when `blend_result_holds`\npasses it. Take a box of 20 with its 12 edges rounded at r = 1. The gate\nread the exact volume in 1.69 ms, and the fillet itself took 0.35 ms.\nThe exact volume now takes 0.67 ms, and the whole call takes 3.76 ms in\nplace of 4.86 ms. Closes #2455.\n\nThe exact volume of a cylinder, cone, sphere or torus face is a sum\nalong its boundary by Green's theorem. At each node of each boundary\npiece, it reads `F(u, v)`, the integral in `u` from 0 of each integrand\nat constant `v`. The old code took `F` with a 10-point Gauss-Legendre\nrule in each quarter turn of `u`. It took the integral over a whole turn\nwith a 32-point trapezoid rule.\n\nOn these four surfaces, the point and the normal are trigonometric\npolynomials of degree 1 in `u` at constant `v`. The length of the normal\ndoes not change with `u`. Each integrand is thus a trigonometric\npolynomial of degree 3 or less, and `F` has a closed form.\n\n- `Revolution` in `crates/check/src/properties/boundary.rs` holds the\nframe of the surface and how its radius and height change with `v`.\n- `Revolution::series` writes the 8 integrands at one `v` as\ntrigonometric polynomials. `antiderivative` integrates them in closed\nform, and `mean` gives their means over a turn.\n- The Gauss-Legendre rule along each boundary piece, the rule in `v` for\nthe mean integral, and the NURBS paths do not change.\n- The gate still compares the exact volume with the volume of the mesh.\n\n## Timings\n\n`blend_gate_timing` is a probe that I did not commit. It calls the\n`fillet` batch op 200 times. Each call is on a new kernel with a box of\n20 and its 12 edges at r = 1. It then times the steps of the gate on the\nresult of `fillet_v2`, 200 times each. The runs used rayon at its\ndefault thread count on the same machine. Native release build, medians,\n`main` at 4e5184192 and this branch, run in turn:\n\n| Step | `main` | Branch |\n| --- | ---: | ---: |\n| `fillet` batch op (`try_fillet`) | 4.86 ms | 3.76 ms |\n| `fillet_v2` | 0.35 ms | 0.35 ms |\n| `exact_solid_volume` | 1.69 ms | 0.67 ms |\n| `tessellate_solid_with_tolerance` at 0.1 | 2.48 ms | 2.47 ms |\n\nThe mesh is now the largest step of the gate. I filed #2515 for its\ncost.\n\n## Tests\n\n- `closed_form_antiderivative_agrees_with_quadrature` compares the\nclosed form with the old quadrature, which the test keeps. It reads 8000\ncases: a cylinder, a cone, a sphere, and a ring or horn torus, in 40\nrandom frames. Each case has a random `u` up to three turns either way\nand a random `v`. The point to sum about is at the origin or away from\nit.\n- The largest difference is 1.4e-15 of the largest integrand times the\nlength in `u`. The test fails above 2e-14. With one sign changed in the\nproduct rule, the difference is 0.71.\n- `closed_form_antiderivative_keeps_a_sliver_of_a_turn` reads `u` from\n1e-12 to 1e-3, either way, in 40 random frames. It compares each\nintegral with its own integrand's largest value times `|u|`. The largest\ndifference is 1.9e-15, and the test fails above 2e-14. A wall of radius\n1e6 must give the area moment `r² (1 - cos u)` over `u` = 1e-8, which is\n5e-5. With `1 - cos ku` in place of `2 sin²(ku / 2)`, the closed form\ngives 0 there.\n- The pose sweep gives the same faces, validity and volumes on `main`\nand on this branch. 33 of its 497 lines change, each only in the last\ndigit of a relative error of 7e-13 or less. In the truth audit, one line\nchanges two errors below 1e-15, and the marks are the same.\n- `cargo nextest run -p brepkit-check -p brepkit-operations -p\nbrepkit-wasm -p brepkit-io` passes: 3127 tests, 24 skipped.\n- `cargo clippy` and `cargo fmt` pass.",
+          "timestamp": "2026-11-15T21:29:49-08:00",
+          "tree_id": "9e9ac6beb10a5b66c307bba8b7a49eff3ff38f7b",
+          "url": "https://github.com/andymai/brepkit/commit/ee5764f817521b5bdaa23dbfb0a41ac5d3b160e5"
+        },
+        "date": 1794807561632,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1078377,
+            "range": "± 54799",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1170964,
+            "range": "± 46115",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12425,
+            "range": "± 60",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 694272,
+            "range": "± 6759",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24824849,
+            "range": "± 118885",
             "unit": "ns/iter"
           }
         ]
