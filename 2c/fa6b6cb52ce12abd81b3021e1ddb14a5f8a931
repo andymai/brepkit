@@ -1,0 +1,21 @@
+crates/check/src/face_loops.rs
+  s_0db8415e6f59cd::t_690ccfffabfbef 38,122-125,175-180,185,227-230,236-265,267,345,732-735,738-743,754-755,981-1081
+crates/check/src/validate/face_wires.rs
+  s_0db8415e6f59cd::t_64bd6e037a4bea 1609-1616
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "2cfa6b6cb52ce12abd81b3021e1ddb14a5f8a931",
+  "prompts": {},
+  "sessions": {
+    "s_0db8415e6f59cd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "80c728ce-cbd9-4375-adac-8fbf308dc911",
+        "model": "unknown"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
