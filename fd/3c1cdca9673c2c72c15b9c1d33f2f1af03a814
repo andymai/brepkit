@@ -1,0 +1,19 @@
+crates/operations/src/tessellate/tests.rs
+  s_0db8415e6f59cd::t_11a2ec83f32b4a 4607-4608,4687-4709
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "fd3c1cdca9673c2c72c15b9c1d33f2f1af03a814",
+  "prompts": {},
+  "sessions": {
+    "s_0db8415e6f59cd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "80c728ce-cbd9-4375-adac-8fbf308dc911",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
