@@ -1,0 +1,19 @@
+crates/check/src/validate/face_overlap.rs
+  s_0db8415e6f59cd::t_11881b849a6882 402-403,411,1284-1294
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e1d078b8ba77df47781c2bcaec0d6e74b05397b4",
+  "prompts": {},
+  "sessions": {
+    "s_0db8415e6f59cd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "80c728ce-cbd9-4375-adac-8fbf308dc911",
+        "model": "unknown"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
