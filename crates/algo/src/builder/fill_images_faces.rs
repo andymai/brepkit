@@ -3574,6 +3574,10 @@ fn curve_endpoints(
 /// read as its marched curve end to end, and the face splitter cut it at
 /// its own start. Cut to the window, the whole curve is the window. Split
 /// operand edges keep their shared curve, which coincident faces pair on.
+///
+/// A window of a closed curve is cut out too. Its two ends split the loop
+/// into two arcs, and the edge run from end to start cannot tell which one
+/// it is: past half the loop it read the whole loop, through its own ends.
 fn window_curve(
     curve: &EdgeCurve,
     (t0, t1): (f64, f64),
@@ -3586,14 +3590,15 @@ fn window_curve(
     };
     let (d0, d1) = n.domain();
     let eps = 1e-9 * (d1 - d0);
-    if t1 - t0 <= eps || (t0 - d0 <= eps && d1 - t1 <= eps) {
+    if t1 - t0 <= eps || (t0 - d0 <= eps && d1 - t1 <= eps) || t0 < d0 - eps || t1 > d1 + eps {
         return None;
     }
     let off = |p: brepkit_math::vec::Point3| {
         brepkit_math::nurbs::projection::project_point_to_curve(n, p, 1e-9)
             .map_or(true, |c| c.distance >= ON_CURVE)
     };
-    if !off(start) && !off(end) {
+    let closed = (n.evaluate(d0) - n.evaluate(d1)).length() < ON_CURVE;
+    if !closed && !off(start) && !off(end) {
         return None;
     }
     let tail = if t0 - d0 > eps {
@@ -4995,9 +5000,18 @@ fn build_surface_info(topo: &Topology, face_id: FaceId) -> Option<SurfaceInfo> {
                         .is_some_and(|span| span <= std::f64::consts::PI + 0.05)
             };
             let partial = small(false) && small(true);
+            // A band round the axis over part of the tube (a groove's inner
+            // half) has no seam across its tube: read periodic in v, a
+            // section running more than half a turn of v across it runs the
+            // short way round, through the part of the tube the face leaves
+            // out.
+            let tube_window = || {
+                crate::pave_filler::phase_ff::face_tube_window(topo, face_id, face.surface())
+                    .is_some()
+            };
             Some(SurfaceInfo::Parametric {
                 u_periodic: !partial,
-                v_periodic: !partial,
+                v_periodic: !partial && !tube_window(),
             })
         }
         FaceSurface::Nurbs(_) => Some(SurfaceInfo::Parametric {
@@ -6619,6 +6633,39 @@ mod tests {
         assert!((w0 - t0).abs() < 1e-12 && (w1 - t1).abs() < 1e-12);
         assert!((w.evaluate(w0) - a).length() < 1e-9);
         assert!((w.evaluate(w1) - b).length() < 1e-9);
+    }
+
+    /// A window over more than half of a closed curve is cut out of it, so
+    /// the edge run from its end back to its start reads the window, not the
+    /// whole loop through its own ends.
+    #[test]
+    fn a_window_of_a_closed_curve_is_cut_to_the_window() {
+        let pts: Vec<brepkit_math::vec::Point3> = (0..=12)
+            .map(|k| {
+                let a = std::f64::consts::TAU * f64::from(k) / 12.0;
+                brepkit_math::vec::Point3::new(3.0 * a.cos(), 2.0 * a.sin(), 1.0)
+            })
+            .collect();
+        let n = brepkit_math::nurbs::fitting::interpolate(&pts, 3).unwrap();
+        let (d0, d1) = n.domain();
+        let (t0, t1) = (0.2_f64.madd(d1 - d0, d0), 0.8_f64.madd(d1 - d0, d0));
+        let (a, b) = (n.evaluate(t0), n.evaluate(t1));
+        let middle = n.evaluate(f64::midpoint(t0, t1));
+        let curve = EdgeCurve::NurbsCurve(n);
+        let (r0, r1) = curve.domain_with_endpoints(b, a);
+        assert!(
+            (r0 - d0).abs() < 1e-12 && (r1 - d1).abs() < 1e-12,
+            "the loop's own reversed reading is the whole loop: ({r0}, {r1})"
+        );
+
+        let windowed = window_curve(&curve, (t0, t1), (a, b)).expect("the window was cut");
+        let (w0, w1) = windowed.domain_with_endpoints(b, a);
+        assert!(
+            (w0 - t1).abs() < 1e-9 && (w1 - t0).abs() < 1e-9,
+            "({w0}, {w1})"
+        );
+        let mid = windowed.evaluate_with_endpoints(f64::midpoint(w0, w1), b, a);
+        assert!((mid - middle).length() < 1e-9, "{mid:?} against {middle:?}");
     }
 
     /// The pool's grid must hand the weld every entry within its reach, in

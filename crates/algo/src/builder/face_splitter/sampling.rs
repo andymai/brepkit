@@ -177,40 +177,53 @@ pub(super) fn sample_wire_loop_uv_periodic(
                     // seam): sample it on the copy its start sits at.
                     // Both ends must land on the edge's end UVs under the one
                     // shift.
-                    let (first, last) = if edge.forward {
-                        (nurbs.evaluate(t0), nurbs.evaluate(tn))
-                    } else {
-                        (nurbs.evaluate(tn), nurbs.evaluate(t0))
-                    };
                     // A marched section's pcurve is a fit, its ends a few
                     // 1e-4 off the edge's own UVs; whole turns are what tell
                     // the copy apart, not the fit's residual.
                     let whole_periods = |at_start: f64, at_end: f64| {
                         let turns = (at_start / std::f64::consts::TAU).round();
                         let shift = turns * std::f64::consts::TAU;
-                        if turns != 0.0
-                            && (at_start - shift).abs() < 1e-2
-                            && (at_end - shift).abs() < 1e-2
-                        {
-                            shift
-                        } else {
-                            0.0
-                        }
+                        let residual = (at_start - shift).abs().max((at_end - shift).abs());
+                        (shift, (residual < 1e-2).then_some(residual))
                     };
-                    let (du, dv) = (
-                        whole_periods(edge.start_uv.x() - first.x(), edge.end_uv.x() - last.x()),
-                        whole_periods(edge.start_uv.y() - first.y(), edge.end_uv.y() - last.y()),
-                    );
-                    // For reverse edges, the pcurve was computed for the forward
-                    // direction. Evaluate from tn->t0 to trace the reverse path.
+                    let shifts = |t_first: f64, t_last: f64| {
+                        let (first, last) = (nurbs.evaluate(t_first), nurbs.evaluate(t_last));
+                        let (du, u_fit) = whole_periods(
+                            edge.start_uv.x() - first.x(),
+                            edge.end_uv.x() - last.x(),
+                        );
+                        let (dv, v_fit) = whole_periods(
+                            edge.start_uv.y() - first.y(),
+                            edge.end_uv.y() - last.y(),
+                        );
+                        let fit = u_fit.zip(v_fit).map(|(a, b)| a.max(b));
+                        (
+                            if u_fit.is_some() { du } else { 0.0 },
+                            if v_fit.is_some() { dv } else { 0.0 },
+                            fit,
+                        )
+                    };
+                    // A section's pcurve runs the curve's own way, so a
+                    // reverse edge is read from tn to t0; a boundary edge's
+                    // is fit in traversal order. Read it the way whose ends
+                    // land nearer the edge's own (on an edge shorter than the
+                    // fit's band, both ways land within it).
+                    let (from, to) = if edge.forward { (t0, tn) } else { (tn, t0) };
+                    let (stored, turned) = (shifts(from, to), shifts(to, from));
+                    let reads_turned = match (stored.2, turned.2) {
+                        (Some(a), Some(b)) => b < a,
+                        (None, Some(_)) => true,
+                        _ => false,
+                    };
+                    let (from, to, (du, dv, _)) = if reads_turned {
+                        (to, from, turned)
+                    } else {
+                        (from, to, stored)
+                    };
                     #[allow(clippy::cast_precision_loss)]
                     for i in 0..CURVE_SAMPLES {
                         let frac = i as f64 / CURVE_SAMPLES as f64;
-                        let t = if edge.forward {
-                            t0 + (tn - t0) * frac
-                        } else {
-                            tn - (tn - t0) * frac
-                        };
+                        let t = from + (to - from) * frac;
                         let p = nurbs.evaluate(t);
                         pts.push(Point2::new(p.x() + du, p.y() + dv));
                     }
@@ -281,4 +294,64 @@ pub(super) fn normalize_angle_in_span(angle: f64, t0: f64, span: f64) -> f64 {
         }
     }
     delta / span
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use brepkit_math::curves2d::{Curve2D, NurbsCurve2D};
+    use brepkit_math::vec::{Point2, Point3};
+    use brepkit_topology::edge::EdgeCurve;
+
+    use super::*;
+
+    fn edge(pcurve: (Point2, Point2), uv: (Point2, Point2), forward: bool) -> OrientedPCurveEdge {
+        OrientedPCurveEdge {
+            curve_3d: EdgeCurve::Line,
+            pcurve: Curve2D::Nurbs(NurbsCurve2D::from_line(pcurve.0, pcurve.1).unwrap()),
+            start_uv: uv.0,
+            end_uv: uv.1,
+            start_3d: Point3::new(0.0, 0.0, 0.0),
+            end_3d: Point3::new(1.0, 0.0, 0.0),
+            forward,
+            source_edge_idx: None,
+            pave_block_id: None,
+        }
+    }
+
+    /// A reverse edge's pcurve may run the curve's own way (a section's) or
+    /// the way the edge is walked (a boundary edge's), on the edge's own
+    /// period copy or another: either way its samples run from the edge's
+    /// start to its end.
+    #[test]
+    fn a_reverse_edge_samples_from_its_start_whichever_way_its_pcurve_runs() {
+        let tau = std::f64::consts::TAU;
+        let (a, b) = (Point2::new(1.0, 2.0), Point2::new(1.0, 4.0));
+        let short = Point2::new(1.0, 2.005);
+        for (shift, pcurve) in [
+            (0.0, (b, a)),
+            (0.0, (a, b)),
+            (tau, (b, a)),
+            (tau, (a, b)),
+            (0.0, (short, a)),
+            (0.0, (a, short)),
+        ] {
+            let end = if pcurve.0 == short || pcurve.1 == short {
+                short
+            } else {
+                b
+            };
+            let uv = (
+                Point2::new(a.x(), a.y() + shift),
+                Point2::new(end.x(), end.y() + shift),
+            );
+            let pts = sample_wire_loop_uv_periodic(&[edge(pcurve, uv, false)], None, None);
+            assert!((pts[0] - uv.0).length() < 1e-12, "{pcurve:?}: {pts:?}");
+            assert!(
+                pts.windows(2).all(|w| w[1].y() > w[0].y()),
+                "{pcurve:?}: {pts:?}"
+            );
+        }
+    }
 }
