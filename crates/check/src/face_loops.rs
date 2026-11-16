@@ -1595,11 +1595,11 @@ mod tests {
         bend.stray(from, (to.0 - from.0, to.1 - from.1))
     }
 
-    /// A patch `(20 u, 20 v + f(u), 0)` whose `f''` is nothing at each fifth
-    /// of `u` but not between: the derivatives at a grid of points miss
-    /// its bend. The stray read from the patch's net holds along a chord
-    /// across it, and so does that of a rational patch over two knot spans,
-    /// within twice the stray along a short chord.
+    /// A patch `(20 u, 20 v + f(u), 0)` whose `f''` is nothing at `u` = 0,
+    /// 1/4, 1/2, 3/4 and 1 but not between: the derivatives at a grid of
+    /// points miss its bend. The stray read from the patch's net holds along
+    /// a chord across it, and so does that of a rational patch over two knot
+    /// spans, within twice the stray along a short chord.
     #[test]
     fn a_chords_stray_holds_between_points_where_its_bend_is_nothing() {
         // `f'' = 1000 u (u - 1/4) (u - 1/2) (u - 3/4) (u - 1)`, from its
