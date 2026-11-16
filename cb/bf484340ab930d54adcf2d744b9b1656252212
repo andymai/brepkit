@@ -1,0 +1,21 @@
+crates/math/src/nurbs/projection.rs
+  s_0db8415e6f59cd::t_8e301bbdf24065 1289-1315
+crates/math/src/nurbs/projection/nearest.rs
+  s_0db8415e6f59cd::t_13f41269994b4c 500-507
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "cbbf484340ab930d54adcf2d744b9b1656252212",
+  "prompts": {},
+  "sessions": {
+    "s_0db8415e6f59cd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "80c728ce-cbd9-4375-adac-8fbf308dc911",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
