@@ -190,65 +190,114 @@ fn compute_face_bbox(topo: &Topology, face_id: FaceId) -> Result<Aabb3, AlgoErro
     }
 }
 
-/// Check if a section curve already exists at this position on the face
-/// the piece must split.
+/// Whether a section on the face the piece must split already runs from
+/// `p_start` to `p_end`, either way.
 ///
-/// Searches `arena.curves` for an existing intersection curve attached to
-/// `target` whose midpoint matches the proposed piece's within tolerance, so
-/// the coplanar phase does not duplicate a section the regular FF phase
-/// already gave that face. A curve attached only to the other face of the
-/// pair does not count: it never splits `target`.
+/// Searches `arena.curves` for an intersection curve attached to `target`
+/// that runs along the piece from one of its ends to the other, so the
+/// coplanar phase does not duplicate a section the regular FF phase already
+/// gave that face. A longer section on the same line can have the middle of
+/// the piece, and a curved one its two ends. A curve attached only to the
+/// other face of the pair does not count: it never splits `target`.
 fn has_existing_section_at(
     arena: &GfaArena,
+    topo: &Topology,
     target: FaceId,
     p_start: Point3,
     p_end: Point3,
     tol: Tolerance,
 ) -> bool {
-    for curve in &arena.curves {
-        if curve.face_a != target && curve.face_b != target {
-            continue;
-        }
-
-        let edge_min = Point3::new(
-            p_start.x().min(p_end.x()),
-            p_start.y().min(p_end.y()),
-            p_start.z().min(p_end.z()),
-        );
-        let edge_max = Point3::new(
-            p_start.x().max(p_end.x()),
-            p_start.y().max(p_end.y()),
-            p_start.z().max(p_end.z()),
-        );
-        let expanded = curve.bbox.expanded(tol.linear);
-        if edge_min.x() > expanded.max.x()
-            || edge_max.x() < expanded.min.x()
-            || edge_min.y() > expanded.max.y()
-            || edge_max.y() < expanded.min.y()
-            || edge_min.z() > expanded.max.z()
-            || edge_max.z() < expanded.min.z()
+    let near = |p: Point3, q: Point3| (p - q).length() < tol.linear * 10.0;
+    let mid = lerp3(p_start, p_end, 0.5);
+    let piece = Aabb3::from_points([p_start, p_end]);
+    arena.curves.iter().any(|curve| {
+        if (curve.face_a != target && curve.face_b != target)
+            || !curve.bbox.expanded(tol.linear).intersects(piece)
         {
-            continue;
+            return false;
         }
+        let Some(((s, t_s), (e, t_e))) = section_ends(topo, arena, curve) else {
+            return false;
+        };
+        if !((near(s, p_start) && near(e, p_end)) || (near(s, p_end) && near(e, p_start))) {
+            return false;
+        }
+        // A line section with the piece's two ends is the piece, whether its
+        // parameters run over its length or over 0 to 1. An arc of a circle
+        // or an ellipse stands off its chord the most at the middle of its
+        // parameters, where its tangent runs along the chord. A B-spline
+        // lies in the hull of its Bezier poles when their weights are
+        // positive, whatever its speed along them.
+        match &curve.curve {
+            EdgeCurve::Line => true,
+            EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => near(
+                curve.curve.evaluate_with_endpoints(0.5 * (t_s + t_e), s, e),
+                mid,
+            ),
+            EdgeCurve::NurbsCurve(nurbs) => {
+                spline_along_segment(nurbs, (t_s, t_e), (p_start, p_end), tol.linear * 10.0)
+            }
+        }
+    })
+}
 
-        // Check endpoint match: midpoint of proposed edge must be near the
-        // existing curve's midpoint. Use midpoint instead of endpoint to
-        // handle reversed-direction curves.
-        let mid = Point3::new(
-            (p_start.x() + p_end.x()) * 0.5,
-            (p_start.y() + p_end.y()) * 0.5,
-            (p_start.z() + p_end.z()) * 0.5,
-        );
-        let curve_mid = Point3::new(
-            (curve.bbox.min.x() + curve.bbox.max.x()) * 0.5,
-            (curve.bbox.min.y() + curve.bbox.max.y()) * 0.5,
-            (curve.bbox.min.z() + curve.bbox.max.z()) * 0.5,
-        );
-        if (mid - curve_mid).length() < tol.linear * 10.0 {
-            return true;
-        }
-    }
-    false
+/// Whether the part of `curve` between the parameters `t_s` and `t_e` lies
+/// within `reach` of the segment from `a` to `b`: each Bezier pole of each
+/// piece between its knots does, with a positive weight.
+fn spline_along_segment(
+    curve: &brepkit_math::nurbs::curve::NurbsCurve,
+    (t_s, t_e): (f64, f64),
+    (a, b): (Point3, Point3),
+    reach: f64,
+) -> bool {
+    let (lo, hi) = (t_s.min(t_e), t_s.max(t_e));
+    let mut cuts = vec![lo];
+    cuts.extend(curve.knots().iter().copied().filter(|&k| k > lo && k < hi));
+    cuts.push(hi);
+    let along = b - a;
+    let length2 = along.dot(along);
+    cuts.windows(2).all(|piece| {
+        brepkit_math::nurbs::decompose::curve_bezier_between(curve, piece[0], piece[1]).is_ok_and(
+            |poles| {
+                poles.into_iter().all(|[x, y, z, w]| {
+                    if w.is_nan() || w <= 0.0 {
+                        return false;
+                    }
+                    let p = Point3::new(x / w, y / w, z / w);
+                    let s = if length2 > 0.0 {
+                        ((p - a).dot(along) / length2).clamp(0.0, 1.0)
+                    } else {
+                        0.0
+                    };
+                    (p - (a + along * s)).length() <= reach
+                })
+            },
+        )
+    })
+}
+
+/// The two ends of a section, each with its parameter: the paves of its
+/// pave blocks at the lowest and the highest parameter.
+fn section_ends(
+    topo: &Topology,
+    arena: &GfaArena,
+    curve: &IntersectionCurveDS,
+) -> Option<((Point3, f64), (Point3, f64))> {
+    let paves = curve
+        .pave_blocks
+        .iter()
+        .filter_map(|&pb| arena.pave_blocks.get(pb))
+        .flat_map(|pb| [pb.start, pb.end]);
+    let first = paves
+        .clone()
+        .min_by(|a, b| a.parameter.total_cmp(&b.parameter))?;
+    let last = paves.max_by(|a, b| a.parameter.total_cmp(&b.parameter))?;
+    let at = |p: Pave| {
+        topo.vertex(arena.resolve_vertex(p.vertex))
+            .ok()
+            .map(|v| (v.point(), p.parameter))
+    };
+    Some((at(first)?, at(last)?))
 }
 
 /// Check if an FF interference already exists for this face pair.
@@ -296,7 +345,7 @@ fn process_coplanar_pair(
     for piece in pieces {
         match piece {
             SectionPiece::Line { target, start, end } => {
-                if !has_existing_section_at(arena, target, start, end, tol) {
+                if !has_existing_section_at(arena, topo, target, start, end, tol) {
                     create_section_edge(topo, arena, minted, faces, start, end, tol)?;
                 }
             }
@@ -1474,5 +1523,265 @@ mod tests {
         assert!(!point_on_segment_2d(Point2::new(0.5, 1.0), a, b, 1e-7));
         assert!(point_on_segment_2d(Point2::new(0.0, 0.0), a, b, 1e-7));
         assert!(point_on_segment_2d(Point2::new(1.0, 0.0), a, b, 1e-7));
+    }
+
+    use brepkit_math::curves::Circle3D;
+    use brepkit_topology::face::Face;
+    use brepkit_topology::wire::{OrientedEdge, Wire};
+
+    /// A face on the plane `z = 0`, facing down, bounded by `outer` and by
+    /// the holes `inner`, each a loop of edges.
+    fn face_down(
+        topo: &mut Topology,
+        outer: Vec<OrientedEdge>,
+        inner: Vec<Vec<OrientedEdge>>,
+    ) -> FaceId {
+        let outer = topo.add_wire(Wire::new(outer, true).unwrap());
+        let inner = inner
+            .into_iter()
+            .map(|edges| topo.add_wire(Wire::new(edges, true).unwrap()))
+            .collect();
+        topo.add_face(Face::new(
+            outer,
+            inner,
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, -1.0),
+                d: 0.0,
+            },
+        ))
+    }
+
+    /// A circle on `z = 0` about the origin, as one closed edge from its
+    /// point at 2.4 rad.
+    fn rim(topo: &mut Topology, radius: f64) -> OrientedEdge {
+        let circle =
+            Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), radius).unwrap();
+        let v = topo.add_vertex(Vertex::new(circle.evaluate(2.4), 1e-7));
+        OrientedEdge::new(
+            topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(circle))),
+            false,
+        )
+    }
+
+    /// The ends of each section the arena holds, by its pave blocks.
+    fn all_section_ends(topo: &Topology, arena: &GfaArena) -> Vec<(Point3, Point3)> {
+        arena
+            .curves
+            .iter()
+            .flat_map(|c| &c.pave_blocks)
+            .filter_map(|&pb| arena.pave_blocks.get(pb))
+            .map(|pb| {
+                let at = |p: Pave| topo.vertex(arena.resolve_vertex(p.vertex)).unwrap().point();
+                (at(pb.start), at(pb.end))
+            })
+            .collect()
+    }
+
+    /// The end of a ring of radii 2 and 3 about the z axis, and the bottom
+    /// of a block from the origin to (5, 5): the block's edge along x
+    /// crosses the ring's end from (2, 0, 0) to (3, 0, 0). The section of
+    /// the ring's end on the block's side `y = 0` runs from (5, 0, 0) to
+    /// (0, 0, 0), with the same middle. That piece is not on the section.
+    #[test]
+    fn a_piece_with_the_middle_of_a_longer_section_is_kept() {
+        let tol = Tolerance::default();
+        let mut topo = Topology::new();
+        let mut arena = GfaArena::new();
+        let (outer, inner) = (rim(&mut topo, 3.0), rim(&mut topo, 2.0));
+        let ring_end = face_down(&mut topo, vec![outer], vec![vec![inner]]);
+        let corners = [(0.0, 0.0), (0.0, 5.0), (5.0, 5.0), (5.0, 0.0)]
+            .map(|(x, y)| topo.add_vertex(Vertex::new(Point3::new(x, y, 0.0), 1e-7)));
+        let sides = (0..4)
+            .map(|k| {
+                let edge = Edge::new(corners[k], corners[(k + 1) % 4], EdgeCurve::Line);
+                OrientedEdge::new(topo.add_edge(edge), true)
+            })
+            .collect();
+        let block_bottom = face_down(&mut topo, sides, vec![]);
+        let block_side_rim = rim(&mut topo, 9.0);
+        let block_side = face_down(&mut topo, vec![block_side_rim], vec![]);
+
+        let (from, to) = (Point3::new(5.0, 0.0, 0.0), Point3::new(0.0, 0.0, 0.0));
+        create_section_edge(
+            &mut topo,
+            &mut arena,
+            &mut Vec::new(),
+            [ring_end, block_side],
+            from,
+            to,
+            tol,
+        )
+        .unwrap();
+
+        let frame = PlaneFrame2D::canonical(Vec3::new(0.0, 0.0, -1.0), 0.0);
+        let region_ring = face_region_2d(&topo, ring_end, &frame).unwrap();
+        let region_block = face_region_2d(&topo, block_bottom, &frame).unwrap();
+        process_coplanar_pair(
+            &mut topo,
+            &mut arena,
+            &mut Vec::new(),
+            (ring_end, &region_ring),
+            (block_bottom, &region_block),
+            &frame,
+            tol,
+        )
+        .unwrap();
+
+        let piece = (Point3::new(2.0, 0.0, 0.0), Point3::new(3.0, 0.0, 0.0));
+        let ends = all_section_ends(&topo, &arena);
+        let near = |p: Point3, q: Point3| (p - q).length() < 1e-9;
+        assert!(
+            ends.iter()
+                .any(|&(s, e)| (near(s, piece.0) && near(e, piece.1))
+                    || (near(s, piece.1) && near(e, piece.0))),
+            "no section from (2, 0, 0) to (3, 0, 0): {ends:?}"
+        );
+    }
+
+    /// A piece with the two ends of a line section on its face is that
+    /// section, either way. A piece in the middle of it is not, nor is a
+    /// piece on a face the section does not split, nor the chord of an arc
+    /// section.
+    #[test]
+    fn a_piece_on_a_section_with_its_ends_is_present() {
+        let tol = Tolerance::default();
+        let mut topo = Topology::new();
+        let mut arena = GfaArena::new();
+        let target_rim = rim(&mut topo, 9.0);
+        let target = face_down(&mut topo, vec![target_rim], vec![]);
+        let other_rim = rim(&mut topo, 8.0);
+        let other = face_down(&mut topo, vec![other_rim], vec![]);
+        let (from, to) = (Point3::new(5.0, 0.0, 0.0), Point3::new(0.0, 0.0, 0.0));
+        create_section_edge(
+            &mut topo,
+            &mut arena,
+            &mut Vec::new(),
+            [target, other],
+            from,
+            to,
+            tol,
+        )
+        .unwrap();
+        assert!(has_existing_section_at(
+            &arena, &topo, target, to, from, tol
+        ));
+        assert!(has_existing_section_at(
+            &arena, &topo, target, from, to, tol
+        ));
+        let middle = (Point3::new(2.0, 0.0, 0.0), Point3::new(3.0, 0.0, 0.0));
+        assert!(!has_existing_section_at(
+            &arena, &topo, target, middle.0, middle.1, tol
+        ));
+        let elsewhere_rim = rim(&mut topo, 7.0);
+        let elsewhere = face_down(&mut topo, vec![elsewhere_rim], vec![]);
+        assert!(!has_existing_section_at(
+            &arena, &topo, elsewhere, to, from, tol
+        ));
+
+        let circle =
+            Circle3D::new(Point3::new(0.0, 5.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 2.0).unwrap();
+        let (a, b) = (0.2, 0.2 + std::f64::consts::FRAC_PI_2);
+        let (p0, p1) = (circle.evaluate(a), circle.evaluate(b));
+        create_arc_section_edges(
+            &mut topo,
+            &mut arena,
+            &mut Vec::new(),
+            [target, other],
+            &circle,
+            (p0, p1),
+            (a, b),
+            tol,
+        );
+        assert!(!has_existing_section_at(&arena, &topo, target, p0, p1, tol));
+    }
+
+    /// Records a section on `face` alone along `curve`, from `from` at the
+    /// parameter `t.0` to `to` at `t.1`, as the regular FF phase does.
+    fn record_section(
+        topo: &mut Topology,
+        arena: &mut GfaArena,
+        face: FaceId,
+        curve: EdgeCurve,
+        (from, to): (Point3, Point3),
+        t: (f64, f64),
+    ) {
+        let (a, b) = (
+            topo.add_vertex(Vertex::new(from, 1e-7)),
+            topo.add_vertex(Vertex::new(to, 1e-7)),
+        );
+        let edge = topo.add_edge(Edge::new(a, b, curve.clone()));
+        let pb =
+            arena
+                .pave_blocks
+                .alloc(PaveBlock::new(edge, Pave::new(a, t.0), Pave::new(b, t.1)));
+        arena.curves.push(IntersectionCurveDS {
+            curve,
+            face_a: face,
+            face_b: face,
+            bbox: Aabb3::from_points([from, to]),
+            pave_blocks: vec![pb],
+            t_range: t,
+        });
+    }
+
+    /// A line section as the regular FF phase records one, its parameters
+    /// running over its length (0 to 5), is present for a piece with its
+    /// two ends.
+    #[test]
+    fn a_line_section_with_parameters_over_its_length_is_present() {
+        let tol = Tolerance::default();
+        let mut topo = Topology::new();
+        let mut arena = GfaArena::new();
+        let target_rim = rim(&mut topo, 9.0);
+        let target = face_down(&mut topo, vec![target_rim], vec![]);
+        let (from, to) = (Point3::new(0.0, 0.0, 0.0), Point3::new(5.0, 0.0, 0.0));
+        let line = EdgeCurve::Line;
+        record_section(&mut topo, &mut arena, target, line, (from, to), (0.0, 5.0));
+        for (a, b) in [(from, to), (to, from)] {
+            assert!(has_existing_section_at(&arena, &topo, target, a, b, tol));
+        }
+    }
+
+    /// Cubic B-spline sections from (0, 0, 0) to (5, 0, 0). One runs along
+    /// the line at an uneven speed: it is present for the piece with those
+    /// ends. The other weaves across the line and passes through (2.5, 0,
+    /// 0) at its middle parameter: it is not.
+    #[test]
+    fn a_spline_section_is_present_only_along_the_piece() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        let tol = Tolerance::default();
+        let p = Point3::new;
+        let (from, to) = (p(0.0, 0.0, 0.0), p(5.0, 0.0, 0.0));
+        let cubic = |inner: [Point3; 2]| {
+            NurbsCurve::new(
+                3,
+                vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+                vec![from, inner[0], inner[1], to],
+                vec![1.0; 4],
+            )
+            .unwrap()
+        };
+        let uneven = cubic([p(0.5, 0.0, 0.0), p(1.0, 0.0, 0.0)]);
+        let weave = cubic([p(5.0 / 3.0, 1.0, 0.0), p(10.0 / 3.0, -1.0, 0.0)]);
+        assert!((weave.evaluate(0.5) - p(2.5, 0.0, 0.0)).length() < 1e-12);
+        for (curve, present) in [(uneven, true), (weave, false)] {
+            let mut topo = Topology::new();
+            let mut arena = GfaArena::new();
+            let target_rim = rim(&mut topo, 9.0);
+            let target = face_down(&mut topo, vec![target_rim], vec![]);
+            let section = EdgeCurve::NurbsCurve(curve);
+            record_section(
+                &mut topo,
+                &mut arena,
+                target,
+                section,
+                (from, to),
+                (0.0, 1.0),
+            );
+            for (a, b) in [(from, to), (to, from)] {
+                let found = has_existing_section_at(&arena, &topo, target, a, b, tol);
+                assert_eq!(found, present);
+            }
+        }
     }
 }

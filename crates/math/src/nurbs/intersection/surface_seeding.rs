@@ -1446,15 +1446,31 @@ pub(super) fn grid_seeds(
     // branch that has no mutual nearest pair is still found.
     let mut nearest_in_2: Vec<(usize, f64)> = vec![(usize::MAX, f64::MAX); pts1.len()];
     let mut nearest_in_1: Vec<(usize, f64)> = vec![(usize::MAX, f64::MAX); pts2.len()];
+    // Each nearest distance's square, as it was found: a pair whose square
+    // is larger has a distance no smaller (the root is monotone), so it
+    // changes neither nearest nor, past the threshold's square (padded for
+    // its rounding), the closest pairs, and its root is not taken.
+    let mut nearest_sq_2 = vec![f64::INFINITY; pts1.len()];
+    let mut nearest_sq_1 = vec![f64::INFINITY; pts2.len()];
+    let threshold_sq = {
+        let t = threshold * (1.0 + 1e-12);
+        t * t
+    };
     let mut closest: std::collections::BinaryHeap<ClosePair> = std::collections::BinaryHeap::new();
     for (i, &(_, _, p1)) in pts1.iter().enumerate() {
         for (k, &(_, _, p2)) in pts2.iter().enumerate() {
-            let dist = (p1 - p2).length();
+            let sq = (p1 - p2).length_squared();
+            if sq > nearest_sq_2[i] && sq > nearest_sq_1[k] && sq > threshold_sq {
+                continue;
+            }
+            let dist = sq.sqrt();
             if dist < nearest_in_2[i].1 {
                 nearest_in_2[i] = (k, dist);
+                nearest_sq_2[i] = sq;
             }
             if dist < nearest_in_1[k].1 {
                 nearest_in_1[k] = (i, dist);
+                nearest_sq_1[k] = sq;
             }
             if dist < threshold {
                 closest.push(ClosePair { dist, i, k });

@@ -413,7 +413,8 @@ impl BrepKernel {
     /// Revolve a planar face around an axis to create a solid of revolution.
     ///
     /// The axis is defined by an origin point `(ox, oy, oz)` and a direction
-    /// `(dx, dy, dz)`. The angle is in degrees and must be in (0, 360].
+    /// `(dx, dy, dz)`. The angle is in degrees, in (0, 360]; an angle in
+    /// [-360, 0) turns the other way.
     ///
     /// Returns a solid handle (`u32`).
     ///
@@ -441,9 +442,12 @@ impl BrepKernel {
         validate_finite(dy, "dy")?;
         validate_finite(dz, "dz")?;
         validate_finite(angle_degrees, "angle_degrees")?;
-        if angle_degrees <= 0.0 || angle_degrees > 360.0 {
+        let in_range = angle_degrees.abs() > 0.0 && angle_degrees.abs() <= 360.0;
+        if !in_range {
             return Err(WasmError::InvalidInput {
-                reason: format!("angle_degrees must be in (0, 360], got {angle_degrees}"),
+                reason: format!(
+                    "angle_degrees must be in [-360, 0) or (0, 360], got {angle_degrees}"
+                ),
             }
             .into());
         }
@@ -461,7 +465,8 @@ impl BrepKernel {
     /// Revolve an open wire around an axis into an open shell.
     ///
     /// The axis is defined by an origin point `(ox, oy, oz)` and a direction
-    /// `(dx, dy, dz)`. The angle is in degrees and must be in (0, 360].
+    /// `(dx, dy, dz)`. The angle is in degrees, in (0, 360]; an angle in
+    /// [-360, 0) turns the other way.
     ///
     /// Returns a shell handle (`u32`).
     ///
@@ -490,9 +495,12 @@ impl BrepKernel {
         validate_finite(dy, "dy")?;
         validate_finite(dz, "dz")?;
         validate_finite(angle_degrees, "angle_degrees")?;
-        if angle_degrees <= 0.0 || angle_degrees > 360.0 {
+        let in_range = angle_degrees.abs() > 0.0 && angle_degrees.abs() <= 360.0;
+        if !in_range {
             return Err(WasmError::InvalidInput {
-                reason: format!("angle_degrees must be in (0, 360], got {angle_degrees}"),
+                reason: format!(
+                    "angle_degrees must be in [-360, 0) or (0, 360], got {angle_degrees}"
+                ),
             }
             .into());
         }
@@ -2207,6 +2215,31 @@ impl BrepKernel {
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
     use brepkit_math::madd::Madd;
+
+    /// A square beside the `y` axis revolved -180 degrees about it sweeps the
+    /// half turn on the `+z` side, with the half turn's volume.
+    #[test]
+    fn a_negative_revolve_angle_turns_the_other_way() {
+        let mut k = crate::kernel::BrepKernel::new();
+        let square = k
+            .make_polygon(vec![
+                21.2, -4.0, 0.0, 29.2, -4.0, 0.0, 29.2, 4.0, 0.0, 21.2, 4.0, 0.0,
+            ])
+            .unwrap();
+        let arch = k
+            .revolve_face(square, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, -180.0)
+            .unwrap();
+        let expected = 64.0 * std::f64::consts::PI * 25.2;
+        let volume = k.volume(arch, 0.001).unwrap();
+        assert!(
+            (volume - expected).abs() < 1e-6 * expected,
+            "volume {volume} should be {expected}"
+        );
+        let solid = k.resolve_solid(arch).unwrap();
+        let bounds = brepkit_operations::measure::solid_bounding_box(k.topo(), solid).unwrap();
+        assert!(bounds.min.z() > -1e-9, "{bounds:?}");
+        assert!((bounds.max.z() - 29.2).abs() < 1e-6, "{bounds:?}");
+    }
 
     /// A box's corner at the origin, and the three edges meeting there, as handles.
     fn box_corner(k: &crate::kernel::BrepKernel, solid: u32) -> (u32, Vec<u32>) {
