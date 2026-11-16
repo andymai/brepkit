@@ -114,13 +114,15 @@ struct Journal {
 /// Rolls an open transaction back if a panic unwinds through it.
 struct TransactionGuard<'a> {
     topo: &'a mut Topology,
+    /// The place of the transaction's record among the open records.
+    depth: usize,
     open: bool,
 }
 
 impl Drop for TransactionGuard<'_> {
     fn drop(&mut self) {
         if self.open {
-            self.topo.end_transaction(false);
+            self.topo.end_from(self.depth, false);
         }
     }
 }
@@ -417,15 +419,17 @@ impl Topology {
         &mut self,
         edit: impl FnOnce(&mut Self) -> Result<T, E>,
     ) -> Result<T, E> {
+        let depth = self.journals.len();
         let journal = self.journal(None);
         self.journals.push(journal);
         let mut guard = TransactionGuard {
             topo: self,
+            depth,
             open: true,
         };
         let result = edit(guard.topo);
         guard.open = false;
-        guard.topo.end_transaction(result.is_ok());
+        guard.topo.end_from(depth, result.is_ok());
         result
     }
 
@@ -436,7 +440,9 @@ impl Topology {
     /// copy of its old value, and the pcurve registry keeps a record of each
     /// change. A restore costs the entities and pcurves changed and added
     /// since the checkpoint opened, and not the size of the topology.
-    /// Checkpoints can nest, and a transaction can run in a checkpoint.
+    /// Checkpoints can nest, and a transaction can run in a checkpoint. A
+    /// checkpoint opened in a transaction closes when the transaction ends,
+    /// with its changes kept or undone as the transaction's are.
     pub fn open_checkpoint(&mut self) -> Checkpoint {
         self.checkpoints_opened += 1;
         let mark = Checkpoint {
@@ -460,9 +466,7 @@ impl Topology {
         if !self.is_open(mark) {
             return false;
         }
-        while self.journals.len() > mark.depth {
-            self.end_transaction(false);
-        }
+        self.end_from(mark.depth, false);
         let journal = self.journal(Some(mark.number));
         self.journals.push(journal);
         true
@@ -478,10 +482,16 @@ impl Topology {
         if !self.is_open(mark) {
             return false;
         }
-        while self.journals.len() > mark.depth {
-            self.end_transaction(true);
-        }
+        self.end_from(mark.depth, true);
         true
+    }
+
+    /// Closes the record at `depth` and each one opened after it, innermost
+    /// first: keeps their changes, or undoes them.
+    fn end_from(&mut self, depth: usize, keep: bool) {
+        while self.journals.len() > depth {
+            self.end_transaction(keep);
+        }
     }
 
     /// Whether `mark` is open, with no transaction open after it. A
@@ -819,6 +829,56 @@ mod tests {
         assert_eq!(counts(&topo), before);
         assert!(x_of(&topo, v0).abs() < 1e-12);
         assert_eq!(pcurve_end(&topo, e0, face), None);
+        assert!(topo.close_checkpoint(mark));
+    }
+
+    #[test]
+    fn a_checkpoint_opened_in_a_transaction_ends_with_it() {
+        let mut topo = Topology::new();
+        let (_, [v0, ..], _) = triangle(&mut topo);
+        let before = counts(&topo);
+
+        let mut inner = None;
+        let failed: Result<(), ()> = topo.transaction(|topo| {
+            *topo.vertex_mut(v0).unwrap() = at(1.0);
+            inner = Some(topo.open_checkpoint());
+            *topo.vertex_mut(v0).unwrap() = at(2.0);
+            topo.add_vertex(at(3.0));
+            Err(())
+        });
+        assert!(failed.is_err());
+        assert!(x_of(&topo, v0).abs() < 1e-12);
+        assert_eq!(counts(&topo), before);
+        assert!(!topo.restore_checkpoint(inner.unwrap()));
+
+        let kept: Result<(), ()> = topo.transaction(|topo| {
+            inner = Some(topo.open_checkpoint());
+            *topo.vertex_mut(v0).unwrap() = at(4.0);
+            Ok(())
+        });
+        assert!(kept.is_ok());
+        assert!((x_of(&topo, v0) - 4.0).abs() < 1e-12);
+        assert!(!topo.close_checkpoint(inner.unwrap()));
+
+        // No record stays open: a checkpoint after them restores alone.
+        let mark = topo.open_checkpoint();
+        *topo.vertex_mut(v0).unwrap() = at(5.0);
+        assert!(topo.restore_checkpoint(mark));
+        assert!((x_of(&topo, v0) - 4.0).abs() < 1e-12);
+        assert!(topo.close_checkpoint(mark));
+
+        // A panic in the transaction undoes the checkpoint's changes too.
+        let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _: Result<(), ()> = topo.transaction(|topo| {
+                topo.open_checkpoint();
+                *topo.vertex_mut(v0).unwrap() = at(6.0);
+                std::panic::resume_unwind(Box::new("stop"));
+            });
+        }));
+        assert!(unwound.is_err());
+        assert!((x_of(&topo, v0) - 4.0).abs() < 1e-12);
+        let mark = topo.open_checkpoint();
+        assert!(topo.restore_checkpoint(mark));
         assert!(topo.close_checkpoint(mark));
     }
 }
