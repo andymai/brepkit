@@ -551,7 +551,7 @@ pub fn check_faces_overlap(
     // tolerance and the planes' tilt over the faces' distance from the
     // middle. The faces fall in runs of offsets each within that of the
     // next, and within a run, each face is read against the faces whose
-    // boxes meet its own along x.
+    // boxes meet its own along the axis the run's boxes spread most along.
     let window = MOST_TILT.madd(spread, tolerance);
     flats.sort_by(|a, b| a.offset.total_cmp(&b.offset));
     let mut pairs: Vec<(usize, usize)> = Vec::new();
@@ -562,10 +562,21 @@ pub fn check_faces_overlap(
             last += 1;
         }
         let mut run: Vec<usize> = (first..last).collect();
-        run.sort_by(|&i, &j| flats[i].bounds.min.x().total_cmp(&flats[j].bounds.min.x()));
+        let mut spread = [(f64::INFINITY, f64::NEG_INFINITY); 3];
+        for &i in &run {
+            for (k, (lo, hi)) in spread.iter_mut().enumerate() {
+                let x = flats[i].bounds.min.0[k];
+                *lo = lo.min(x);
+                *hi = hi.max(x);
+            }
+        }
+        let axis = (0..3)
+            .max_by(|&a, &b| (spread[a].1 - spread[a].0).total_cmp(&(spread[b].1 - spread[b].0)))
+            .unwrap_or(0);
+        run.sort_by(|&i, &j| flats[i].bounds.min.0[axis].total_cmp(&flats[j].bounds.min.0[axis]));
         for (k, &i) in run.iter().enumerate() {
             for &j in &run[k + 1..] {
-                if flats[j].bounds.min.x() > flats[i].bounds.max.x() + tolerance {
+                if flats[j].bounds.min.0[axis] > flats[i].bounds.max.0[axis] + tolerance {
                     break;
                 }
                 if (flats[i].offset - flats[j].offset).abs() <= window
