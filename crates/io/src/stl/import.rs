@@ -112,23 +112,14 @@ impl MeshBodies {
         }
 
         let (points, remap) = merge_positions(&mesh.positions, tolerance);
-        let (mut tris, votes) = mesh_triangles(mesh, &remap);
+        let (mut tris, votes, directions) = mesh_triangles(mesh, &remap);
         if tris.is_empty() {
             return Err(IoError::InvalidTopology {
                 reason: "no valid triangles in mesh".to_string(),
             });
         }
 
-        // Normals in one direction for each vertex (a reader's fill for a
-        // file with none) say nothing about the sides of the triangles that
-        // pair off round an edge.
-        let one_direction = mesh.normals.first().is_some_and(|first| {
-            let bits = |n: &Vec3| [n.x(), n.y(), n.z()].map(f64::to_bits);
-            mesh.normals.iter().all(|n| bits(n) == bits(first))
-        });
-        let no_votes = vec![0.0; votes.len()];
-        let pair_votes = if one_direction { &no_votes } else { &votes };
-        let links = Links::read(&tris, &points, pair_votes, tolerance);
+        let links = Links::read(&tris, &points, &votes, &directions, tolerance);
         let mut bodies = split_bodies(&mut tris, &votes, &points, &links);
         let placement = assign_cavities(&mut bodies, &mut tris, &points, &links, tolerance);
         Ok(Self {
@@ -351,16 +342,27 @@ fn merge_positions(positions: &[Point3], tolerance: f64) -> (Vec<Point3>, Vec<us
     (points, remap)
 }
 
+/// The bits of the one normal at the three corners of a triangle, when its
+/// corners have one normal.
+type Direction = Option<[u64; 3]>;
+
 /// The triangles of the mesh on its merged points, less each triangle with
 /// two corners on one point, as they are wound.
 ///
 /// Each triangle comes with the vote of its stored normals: the dot product
 /// of their sum with the normal of the winding, or zero for a mesh with no
 /// normals. A vote below zero is a normal that points against the winding.
-fn mesh_triangles(mesh: &TriangleMesh, remap: &[usize]) -> (Vec<[usize; 3]>, Vec<f64>) {
+/// It also comes with the bits of its normal when its three corners have
+/// one normal.
+fn mesh_triangles(
+    mesh: &TriangleMesh,
+    remap: &[usize],
+) -> (Vec<[usize; 3]>, Vec<f64>, Vec<Direction>) {
     let has_normals = mesh.normals.len() >= mesh.positions.len();
     let mut tris = Vec::with_capacity(mesh.indices.len() / 3);
     let mut votes = Vec::with_capacity(mesh.indices.len() / 3);
+    let mut directions = Vec::with_capacity(mesh.indices.len() / 3);
+    let bits = |n: Vec3| [n.x(), n.y(), n.z()].map(f64::to_bits);
     for tri in mesh.indices.chunks_exact(3) {
         let (i0, i1, i2) = (tri[0] as usize, tri[1] as usize, tri[2] as usize);
         let t = [remap[i0], remap[i1], remap[i2]];
@@ -374,10 +376,17 @@ fn mesh_triangles(mesh: &TriangleMesh, remap: &[usize]) -> (Vec<[usize; 3]>, Vec
         } else {
             0.0
         };
+        let direction = if has_normals {
+            let [a, b, c] = [i0, i1, i2].map(|i| bits(mesh.normals[i]));
+            (a == b && b == c).then_some(a)
+        } else {
+            None
+        };
         tris.push(t);
         votes.push(if vote.is_finite() { vote } else { 0.0 });
+        directions.push(direction);
     }
-    (tris, votes)
+    (tris, votes, directions)
 }
 
 /// What a set of joined triangles is in the result.
@@ -422,7 +431,13 @@ struct Links {
 }
 
 impl Links {
-    fn read(tris: &[[usize; 3]], points: &[Point3], votes: &[f64], tolerance: f64) -> Self {
+    fn read(
+        tris: &[[usize; 3]],
+        points: &[Point3],
+        votes: &[f64],
+        directions: &[Direction],
+        tolerance: f64,
+    ) -> Self {
         let mut uses: HashMap<(usize, usize), Vec<(usize, bool)>> = HashMap::new();
         for (t, tri) in tris.iter().enumerate() {
             for k in 0..3 {
@@ -432,7 +447,7 @@ impl Links {
         }
         let mut pairs = HashMap::new();
         let facing = if uses.values().any(|list| list.len() > 2) {
-            let (turned, unsure) = patch_turns(tris, &uses, votes);
+            let (turned, unsure) = patch_turns(tris, &uses, votes, directions);
             for (&key, list) in &uses {
                 // The triangles of an edge are in one group, so one of them
                 // tells whether its side is sure.
@@ -485,11 +500,14 @@ impl Links {
 /// The sets joined through any edge (a group) turn over together when
 /// their stored normals point against their sides, as a closed body does in
 /// [`split_bodies`]. When the normals of a group neither agree nor disagree
-/// with its sides, the side of the group is unsure.
+/// with its sides, the side of the group is unsure. A group with one normal
+/// at each corner of each triangle (a reader's fill for a file with none)
+/// has no vote: such normals say nothing of its sides.
 fn patch_turns(
     tris: &[[usize; 3]],
     uses: &HashMap<(usize, usize), Vec<(usize, bool)>>,
     votes: &[f64],
+    directions: &[Direction],
 ) -> (Vec<bool>, Vec<bool>) {
     let mut turn = vec![false; tris.len()];
     let mut seen = vec![false; tris.len()];
@@ -539,10 +557,22 @@ fn patch_turns(
         }
     }
     let mut tally = vec![(0.0, 0.0); tris.len()];
+    // The one normal of each group, while its triangles have one.
+    let mut direction: Vec<Option<Direction>> = vec![None; tris.len()];
     for t in 0..tris.len() {
         let g = group_of(&mut group, t);
         tally[g].0 += if turn[t] { -votes[t] } else { votes[t] };
         tally[g].1 += votes[t].abs();
+        direction[g] = match direction[g] {
+            None => Some(directions[t]),
+            Some(d) if d == directions[t] => Some(d),
+            Some(_) => Some(None),
+        };
+    }
+    for (g, d) in direction.iter().enumerate() {
+        if matches!(d, Some(Some(_))) {
+            tally[g] = (0.0, 0.0);
+        }
     }
     // The normals of a group decide when they agree, or disagree, three to
     // one by weight: the rule that turns a closed body in `split_bodies`.

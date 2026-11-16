@@ -1176,3 +1176,24 @@ fn a_body_wound_against_its_normals_at_a_shared_edge_is_a_shell() {
     assert!((volume(&topo, parts.solids[0]) - 8000.0).abs() < 1e-9);
     assert_eq!(topo.shell(parts.shells[0]).unwrap().faces().len(), 12);
 }
+
+/// The two cubes that share an edge have normals in one direction, and a
+/// cube apart from them has normals that point out. The one direction of the
+/// first group says nothing, whatever the normals of the other group are.
+#[test]
+fn normals_in_one_direction_beside_true_normals_leave_two_cubes_that_share_an_edge() {
+    let mut mesh = TriangleMesh::default();
+    add_cube(&mut mesh, [0.0; 3], 10.0, false);
+    add_cube(&mut mesh, [10.0, 10.0, 0.0], 10.0, false);
+    mesh.normals = vec![Vec3::new(0.0, 0.0, 1.0); mesh.positions.len()];
+    add_cube(&mut mesh, [50.0; 3], 10.0, false);
+    set_normals(&mut mesh, 16, Point3::new(55.0, 55.0, 55.0), false);
+
+    let mut topo = Topology::new();
+    let parts = import_mesh_parts(&mut topo, &mesh, 1e-7).unwrap();
+    assert_eq!((parts.solids.len(), parts.shells.len()), (3, 0));
+    for &solid in &parts.solids {
+        assert!((volume(&topo, solid) - 1000.0).abs() < 1e-9);
+        assert_valid(&topo, solid);
+    }
+}
