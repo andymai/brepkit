@@ -1,0 +1,23 @@
+crates/operations/src/tessellate/nonplanar.rs
+  s_0db8415e6f59cd::t_140c61937a7895 222,226-232,561,564-568,570,572
+crates/operations/src/tessellate/solid.rs
+  s_0db8415e6f59cd::t_0df76237db44ac 803-809,860-862,877,1394-1407
+crates/operations/src/tessellate/tests.rs
+  s_0db8415e6f59cd::t_ec09bd46cd0ced 4741-4761
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9514db22945fc43823c964e4d19b16c201f1f03c",
+  "prompts": {},
+  "sessions": {
+    "s_0db8415e6f59cd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "80c728ce-cbd9-4375-adac-8fbf308dc911",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
