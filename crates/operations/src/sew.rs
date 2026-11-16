@@ -74,16 +74,33 @@ pub fn sew_faces(
         }
         // A hole runs against its face's outline, so the face is on one side
         // of every edge of its boundary. A hole given the outline's way round
-        // would turn the faces sewn onto it the wrong way out.
-        if let FaceSurface::Plane { normal, .. } = *face.surface()
-            && let Some(outline) = wires.first().map(|w| winding(w, normal))
-        {
-            for hole in wires.iter_mut().skip(1) {
-                if winding(hole, normal) * outline > 0.0 {
-                    hole.reverse();
-                    for e in hole.iter_mut() {
-                        e.forward = !e.forward;
-                    }
+        // would turn the faces sewn onto it the wrong way out. A curved face's
+        // wires are read in a plane drawn from its surface's parameters.
+        let with_outline: Vec<bool> = if let FaceSurface::Plane { normal, .. } = *face.surface() {
+            let outline = wires.first().map_or(0.0, |w| winding(w, normal));
+            wires
+                .iter()
+                .skip(1)
+                .map(|hole| winding(hole, normal) * outline > 0.0)
+                .collect()
+        } else if face.inner_wires().is_empty() {
+            Vec::new()
+        } else {
+            brepkit_check::face_loops::FaceLoops::of(topo, fid, tol)?
+                .map(|loops| {
+                    loops
+                        .holes_running_with_outline()
+                        .into_iter()
+                        .map(|same| same == Some(true))
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        for (hole, &same) in wires.iter_mut().skip(1).zip(&with_outline) {
+            if same {
+                hole.reverse();
+                for e in hole.iter_mut() {
+                    e.forward = !e.forward;
                 }
             }
         }
@@ -1937,5 +1954,115 @@ mod tests {
             (after - before).abs() < 1e-6 * before,
             "{after} vs {before}"
         );
+    }
+
+    /// A tube of radius 3 along +y from the axis, its axis at height
+    /// `height`, fused to `body`: the body's face the tube runs through
+    /// comes back with the tube's mouth as its hole.
+    fn tube_through(topo: &mut Topology, body: SolidId, height: f64) -> SolidId {
+        let tube = crate::primitives::make_cylinder(topo, 3.0, 15.0).unwrap();
+        crate::transform::transform_solid(
+            topo,
+            tube,
+            &(brepkit_math::mat::Mat4::translation(0.0, 0.0, height)
+                * brepkit_math::mat::Mat4::rotation_x(-std::f64::consts::FRAC_PI_2)),
+        )
+        .unwrap();
+        crate::boolean::boolean(topo, crate::boolean::BooleanOp::Fuse, body, tube).unwrap()
+    }
+
+    /// A cylinder's wall and a ball's upper half, each with a window where a
+    /// tube runs through it, the window run the same way round as the face's
+    /// outline, sewn to the tube and the other faces: the tube's wall faces
+    /// out of the solid, and the solid holds the fused solid's volume. The
+    /// cylinder's is the closed form, `2135 pi` less the tube's part inside
+    /// the cylinder.
+    #[test]
+    fn sew_turns_a_curved_faces_hole_given_its_outlines_way_round() {
+        let inside: f64 = {
+            // 18 times the integral of cos^2 t sqrt(100 - 9 sin^2 t) over a
+            // half turn, by the midpoint rule, which a smooth periodic
+            // integrand meets at once.
+            let n = 4000;
+            let h = std::f64::consts::PI / f64::from(n);
+            (0..n)
+                .map(|k| {
+                    let t = -std::f64::consts::FRAC_PI_2 + (f64::from(k) + 0.5) * h;
+                    t.cos().powi(2) * (100.0 - 9.0 * t.sin().powi(2)).sqrt()
+                })
+                .sum::<f64>()
+                * h
+                * 18.0
+        };
+        let cylinder_exact = 2135.0 * std::f64::consts::PI - inside;
+        for ball in [false, true] {
+            let mut topo = Topology::new();
+            let body = if ball {
+                crate::primitives::make_sphere(&mut topo, 10.0, 16).unwrap()
+            } else {
+                crate::primitives::make_cylinder(&mut topo, 10.0, 20.0).unwrap()
+            };
+            let fused = tube_through(&mut topo, body, if ball { 5.0 } else { 10.0 });
+            let fused_volume = crate::measure::solid_volume(&topo, fused, 0.01).unwrap();
+            if !ball {
+                assert!(
+                    (fused_volume - cylinder_exact).abs() < 1e-6 * cylinder_exact,
+                    "{fused_volume}"
+                );
+            }
+            let mut faces = brepkit_topology::explorer::solid_faces(&topo, fused).unwrap();
+            let at = faces
+                .iter()
+                .position(|&f| {
+                    let face = topo.face(f).unwrap();
+                    !face.surface().is_planar() && face.inner_wires().len() == 1
+                })
+                .unwrap();
+            let (outer, hole, surface, reversed) = {
+                let face = topo.face(faces[at]).unwrap();
+                (
+                    face.outer_wire(),
+                    face.inner_wires()[0],
+                    face.surface().clone(),
+                    face.is_reversed(),
+                )
+            };
+            let turned: Vec<OrientedEdge> = topo
+                .wire(hole)
+                .unwrap()
+                .edges()
+                .iter()
+                .rev()
+                .map(|oe| OrientedEdge::new(oe.edge(), !oe.is_forward()))
+                .collect();
+            let turned = topo.add_wire(Wire::new(turned, true).unwrap());
+            let mut holed = Face::new(outer, vec![turned], surface);
+            holed.set_reversed(reversed);
+            faces[at] = topo.add_face(holed);
+            let loops = brepkit_check::face_loops::FaceLoops::of(&topo, faces[at], 1e-7)
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                loops.holes_running_with_outline(),
+                vec![Some(true)],
+                "ball {ball}"
+            );
+
+            let sewn = sew_faces(&mut topo, &faces, 1e-7).unwrap();
+            let report = crate::validate::validate_solid(&topo, sewn).unwrap();
+            assert!(report.is_valid(), "ball {ball}: {:?}", report.issues);
+            let volume = crate::measure::solid_volume(&topo, sewn, 0.01).unwrap();
+            assert!(
+                (volume - fused_volume).abs() < 1e-9 * fused_volume,
+                "ball {ball}: {volume} against {fused_volume}"
+            );
+            assert!(crate::measure::oriented_solid_volume(&topo, sewn, 0.01).unwrap() > 0.0);
+            let mesh = crate::tessellate::tessellate_solid(&topo, sewn, 0.05).unwrap();
+            assert_eq!(
+                crate::tessellate::boundary_edge_count(&mesh),
+                0,
+                "ball {ball}"
+            );
+        }
     }
 }

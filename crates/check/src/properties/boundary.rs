@@ -85,7 +85,7 @@ fn terms_at((p, su, sv): (Point3, Vec3, Vec3), about: Vec3) -> [f64; 8] {
 
 /// One edge of a wire in its traversal: its curve, end points, and the
 /// curve parameter it runs over from where the wire enters it.
-pub(super) struct BoundaryEdge<'a> {
+pub struct BoundaryEdge<'a> {
     pub curve: &'a EdgeCurve,
     pub start: Point3,
     pub end: Point3,
@@ -435,7 +435,7 @@ fn mean_integral<S: ParametricSurface>(chart: &Chart<'_, S>, v: f64, about: Vec3
 /// An edge's parameter span in traversal order, cut where the quadrature
 /// wants it: a conic every eighth of a turn (its parameter is its angle), a
 /// NURBS curve at its knots, a line in two.
-fn edge_pieces(edge: &BoundaryEdge<'_>) -> Vec<(f64, f64)> {
+pub fn edge_pieces(edge: &BoundaryEdge<'_>) -> Vec<(f64, f64)> {
     let span = edge.to - edge.from;
     let uniform = |n: u32| {
         (0..n)
@@ -732,7 +732,7 @@ fn boundary_wires<'t>(
 }
 
 /// [`boundary_wires`] for the wires `ids`.
-fn wires_of<'t>(
+pub fn wires_of<'t>(
     topo: &'t Topology,
     ids: &[brepkit_topology::wire::WireId],
 ) -> Result<Option<Vec<Vec<BoundaryEdge<'t>>>>, CheckError> {
