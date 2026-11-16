@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794834494752,
+  "lastUpdate": 1794836611988,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -72359,6 +72359,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 20275294,
             "range": "± 25887",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "7f7cff6fe35b4c312bc1ebbbc1c9d5edf9eddadc",
+          "message": "docs(roadmap): note the exact flat through a torus groove on a rod (#2558)\n\n## Summary\n\nThe \"Torus booleans (Beta)\" row of the roadmap skill now lists the flat\nthrough a torus groove on a rod. #2543 made that cut exact. The row\npoints to the test that pins it and to the two issues for the groove\ncuts that still fall back.\n\n- Exact: a flat parallel to the rod's axis, upright, turned and mirrored\n(`crates/operations/tests/ring_groove_round_a_flatted_rod.rs`).\n- Fallbacks to a mesh: a flat that takes off the groove's seam (#2544),\nand three other groove cuts (#2545).\n\n## Test plan\n\n- `./scripts/check-doc-paths.sh` passes.\n- The pre-commit hook passes.\n\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRecords on the Torus booleans roadmap row that a flat parallel to a\nrod's axis through a torus groove is now exact, since #2543 made that\ncut exact. The row points to the test that pins it\n(`crates/operations/tests/ring_groove_round_a_flatted_rod.rs`) and to\n#2544 and #2545 for the groove cuts that still fall back to a mesh.\n\n**Test plan**\n- `./scripts/check-doc-paths.sh` passes.\n- The pre-commit hook passes.\n\n<sup>Written for commit a356302ea834456894bfd44f8c1010bfdc634d4b.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2558?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2558?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2558&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-11-16T13:40:21Z",
+          "tree_id": "8f118bdd7e7e9eba95ecaaaf93b13dc1304bdccd",
+          "url": "https://github.com/andymai/brepkit/commit/7f7cff6fe35b4c312bc1ebbbc1c9d5edf9eddadc"
+        },
+        "date": 1794836602765,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 902637,
+            "range": "± 1994",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 950268,
+            "range": "± 4014",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10797,
+            "range": "± 21",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 563561,
+            "range": "± 3112",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 20285296,
+            "range": "± 184780",
             "unit": "ns/iter"
           }
         ]
