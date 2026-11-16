@@ -151,26 +151,48 @@ impl FaceLoops {
         for &wid in &wire_ids {
             wires.push(wires_of(topo, &[wid])?.and_then(|mut w| w.pop()));
         }
-        let samples: Vec<Point3> = wires.iter().flatten().flat_map(|w| samples(w)).collect();
-        if samples.is_empty() {
+        let all: Vec<Point3> = wires.iter().flatten().flat_map(|w| samples(w)).collect();
+        if all.is_empty() {
             return Ok(None);
         }
-        let Some((drawing, draw)) = drawing_of(face.surface(), &samples) else {
+        let Some((drawing, draw)) = drawing_of(face.surface(), &all) else {
             return Ok(None);
         };
-        let size = extent_3d(&samples);
-        let drawn: Vec<Point2> = samples.iter().map(|&p| draw(p, None)).collect();
-        let scale = extent_2d(&drawn).max(f64::MIN_POSITIVE);
-        let reach = (tolerance * scale / size.max(f64::MIN_POSITIVE)).max(1e-12 * scale);
+        let size = extent_3d(&all);
+        // The drawing's size against the surface's, read wire by wire along
+        // each wire, so that a wire across a seam reads its own extent.
+        let (mut scale, mut stretch) = (0.0_f64, 0.0_f64);
+        for wire in wires.iter().flatten() {
+            let points = samples(wire);
+            let mut before = None;
+            let drawn: Vec<Point2> = points
+                .iter()
+                .map(|&p| {
+                    let q = draw(p, before);
+                    before = Some(q);
+                    q
+                })
+                .collect();
+            let (flat, solid) = (extent_2d(&drawn), extent_3d(&points));
+            scale = scale.max(flat);
+            if solid > 0.0 {
+                stretch = stretch.max(flat / solid);
+            }
+        }
+        let scale = scale.max(f64::MIN_POSITIVE);
+        let reach = (tolerance * stretch).max(1e-12 * scale);
         if !(scale.is_finite() && reach.is_finite()) {
             return Ok(None);
         }
+        let sizes = Sizes {
+            scale,
+            reach,
+            stretch,
+            size,
+        };
         let loops = wires
             .iter()
-            .map(|w| {
-                w.as_ref()
-                    .and_then(|w| trace(w, &*draw, drawing, scale, reach))
-            })
+            .map(|w| w.as_ref().and_then(|w| trace(w, &*draw, drawing, &sizes)))
             .collect();
         let outline = topo.wire(face.outer_wire())?.edges();
         let mut whole = !outline.is_empty();
@@ -712,6 +734,46 @@ fn nurbs_drawing<'s>(
     ))
 }
 
+/// The drawing's sizes: its extent, its linear tolerance, the most it
+/// stretches a length on the surface, and the wires' extent in space.
+struct Sizes {
+    scale: f64,
+    reach: f64,
+    stretch: f64,
+    size: f64,
+}
+
+/// How far the piece of `curve` from `ta` (at `a`) to `tb` (at `b`) can
+/// stray from its chord: its farthest control point, `None` where a weight
+/// is not positive or the piece leaves a knot span.
+fn hull_off_chord(
+    curve: &brepkit_math::nurbs::curve::NurbsCurve,
+    ta: f64,
+    tb: f64,
+    a: Point3,
+    b: Point3,
+) -> Option<f64> {
+    let hull = brepkit_math::nurbs::decompose::curve_bezier_between(curve, ta, tb).ok()?;
+    if hull.iter().any(|c| c[3] <= 0.0) {
+        return None;
+    }
+    let d = b - a;
+    let len2 = d.dot(d);
+    Some(
+        hull.iter()
+            .map(|&[x, y, z, w]| {
+                let c = Point3::new(x / w, y / w, z / w);
+                let f = if len2 > 0.0 {
+                    ((c - a).dot(d) / len2).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                (c - (a + d * f)).length()
+            })
+            .fold(0.0, f64::max),
+    )
+}
+
 /// A wire's drawing, its chords halved until each follows its curve to
 /// within a ten-thousandth of the drawing's `scale`. `None` for a wire
 /// that does not close, or closes on a point.
@@ -719,10 +781,11 @@ fn trace(
     wire: &[BoundaryEdge<'_>],
     draw: &dyn Fn(Point3, Option<Point2>) -> Point2,
     drawing: Drawing,
-    scale: f64,
-    reach: f64,
+    sizes: &Sizes,
 ) -> Option<Loop> {
+    let (scale, reach) = (sizes.scale, sizes.reach);
     let target = 1e-4 * scale;
+    let target_3d = 1e-4 * sizes.size;
     let longest = match drawing {
         Drawing::Torus(period) => 0.125 * period.x().min(period.y()),
         _ => f64::INFINITY,
@@ -756,14 +819,27 @@ fn trace(
                     (p - on).length()
                 });
                 let off = thirds.iter().fold(0.0_f64, |m, &x| m.max(x));
-                if (off > target || (b - a).length() > longest) && depth < MOST_HALVINGS {
+                // A B-spline piece lies within its control points' hull, so
+                // their distance from its chord bounds how far it strays
+                // between the points read; three points alone do not.
+                let hull = match edge.curve {
+                    EdgeCurve::NurbsCurve(n) => hull_off_chord(n, ta, tb, at(ta), at(tb)),
+                    _ => Some(0.0),
+                };
+                let off_3d = hull.unwrap_or(0.0);
+                let hull_short = hull.is_none() || off_3d > target_3d;
+                if (off > target || hull_short || (b - a).length() > longest)
+                    && depth < MOST_HALVINGS
+                {
                     let mid = f64::midpoint(ta, tb);
                     // The second half is followed after the first.
                     pending.push((mid, tb, depth + 1));
                     pending.push((ta, mid, depth + 1));
                     continue;
                 }
-                sag = sag.max(2.0 * off);
+                // A piece whose stray is not bounded leaves the wire unread.
+                hull?;
+                sag = sag.max(2.0f64.madd(off, off_3d * sizes.stretch));
                 points.push(b);
             }
         }
@@ -873,17 +949,8 @@ fn crossings(l: &Loop, from: Point2, to: Point2, period: Vec2, reach: f64) -> Op
     let seg_hi = Point2::new(from.x().max(to.x()), from.y().max(to.y()));
     let d = to - from;
     let mut count = 0;
-    // The closing chord ends a shift on from the first point.
-    let (lo, hi) = (
-        Point2::new(
-            l.lo.x() + l.shift.x().min(0.0),
-            l.lo.y() + l.shift.y().min(0.0),
-        ),
-        Point2::new(
-            l.hi.x() + l.shift.x().max(0.0),
-            l.hi.y() + l.shift.y().max(0.0),
-        ),
-    );
+    // The box holds the closing chord's end already.
+    let (lo, hi) = (l.lo, l.hi);
     let us = periods_between(
         seg_lo.x() - hi.x() - period.x(),
         seg_hi.x() - lo.x() + period.x(),

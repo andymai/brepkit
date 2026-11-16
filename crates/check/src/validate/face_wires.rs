@@ -1749,4 +1749,93 @@ mod tests {
         let face = topo.add_face(Face::new(outer, vec![outside], surface));
         assert!(found(&topo, face).is_some_and(|d| d.contains("outside the outer wire")));
     }
+
+    /// An outline on a flat patch whose lower edge is one span of a quintic
+    /// B-spline that bulges up between three points that lie on a line: a
+    /// small hole under the bulge lies outside the outline.
+    #[test]
+    fn a_hole_under_a_splines_bulge_between_its_samples_is_reported() {
+        let control = (0..2)
+            .map(|i| {
+                (0..2)
+                    .map(|j| Point3::new(20.0 * f64::from(i), 20.0 * f64::from(j), 0.0))
+                    .collect()
+            })
+            .collect();
+        let surface = FaceSurface::Nurbs(
+            brepkit_math::nurbs::surface::NurbsSurface::new(
+                1,
+                1,
+                vec![0.0, 0.0, 1.0, 1.0],
+                vec![0.0, 0.0, 1.0, 1.0],
+                control,
+                vec![vec![1.0; 2]; 2],
+            )
+            .unwrap(),
+        );
+        let ys = [5.0, 25.0 / 9.0, 80.0 / 9.0, 10.0 / 9.0, 65.0 / 9.0, 5.0];
+        let bulge = brepkit_math::nurbs::curve::NurbsCurve::new(
+            5,
+            [vec![0.0; 6], vec![1.0; 6]].concat(),
+            (0..6)
+                .map(|k| Point3::new(2.0 * f64::from(k), ys[k as usize], 0.0))
+                .collect(),
+            vec![1.0; 6],
+        )
+        .unwrap();
+        let mut topo = Topology::default();
+        let corners = points(
+            &mut topo,
+            &[
+                [0.0, 5.0, 0.0],
+                [10.0, 5.0, 0.0],
+                [10.0, 10.0, 0.0],
+                [0.0, 10.0, 0.0],
+            ],
+        );
+        let lower = topo.add_edge(Edge::new(
+            corners[0],
+            corners[1],
+            EdgeCurve::NurbsCurve(bulge),
+        ));
+        let mut edges = vec![OrientedEdge::new(lower, true)];
+        for k in 1..4 {
+            let e = topo.add_edge(Edge::new(corners[k], corners[(k + 1) % 4], EdgeCurve::Line));
+            edges.push(OrientedEdge::new(e, true));
+        }
+        let outer = topo.add_wire(Wire::new(edges, true).unwrap());
+        let hole = circle(&mut topo, [8.5, 5.1, 0.0], 0.05);
+        let face = topo.add_face(Face::new(outer, vec![hole], surface));
+        assert!(found(&topo, face).is_some_and(|d| d.contains("outside the outer wire")));
+    }
+
+    /// A small patch of a torus, 2e-5 across, with a hole inside it and one
+    /// beside it, read at the seam `u = 0` and turned away from it.
+    #[test]
+    fn a_small_torus_patch_reads_alike_on_its_seam_and_off_it() {
+        for u in [0.0, 1.0] {
+            let mut topo = Topology::default();
+            let patch = torus_loop(&mut topo, (u, 1.0), (1e-5, 1e-5));
+            let inside = torus_loop(&mut topo, (u, 1.0), (2e-6, 2e-6));
+            let beside = torus_loop(&mut topo, (u + 3e-5, 1.0), (2e-6, 2e-6));
+            let face = topo.add_face(Face::new(patch, vec![inside], FaceSurface::Torus(torus())));
+            let loops = crate::face_loops::FaceLoops::of(&topo, face, 1e-7)
+                .unwrap()
+                .unwrap();
+            assert_eq!(loops.misplaced_hole(), None, "u {u}");
+            let face = topo.add_face(Face::new(
+                patch,
+                vec![inside, beside],
+                FaceSurface::Torus(torus()),
+            ));
+            let loops = crate::face_loops::FaceLoops::of(&topo, face, 1e-7)
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                loops.misplaced_hole(),
+                Some(crate::face_loops::Misplaced::Outside(2)),
+                "u {u}"
+            );
+        }
+    }
 }
