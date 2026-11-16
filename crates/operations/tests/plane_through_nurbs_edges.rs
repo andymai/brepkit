@@ -257,7 +257,6 @@ fn a_tool_whose_flat_face_has_spline_edges_leaves_the_lower_half() {
 }
 
 #[test]
-#[ignore = "open: the assembly rejects every face: #2450"]
 fn a_box_tilted_about_the_nose_leaves_the_part_under_its_face() {
     // The box's bottom face holds the leading edge alone. Its section on each
     // cap starts at the nose vertex and ends on the lower spline.
