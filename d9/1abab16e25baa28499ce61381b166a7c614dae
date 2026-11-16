@@ -1,0 +1,35 @@
+crates/check/src/validate/face_overlap.rs
+  s_0db8415e6f59cd::t_9a5183c16d6981 203-454
+  s_0db8415e6f59cd::t_e3d0cfb45649e7 1-202
+crates/operations/tests/regress_fillet_variable_retry_seam_stub.rs
+  s_0db8415e6f59cd::t_7f2249c708793c 343,417,466
+crates/operations/src/validate.rs
+  s_0db8415e6f59cd::t_e2e6c9fae99187 973,1076-1096,1326
+crates/check/src/validate/mod.rs
+  s_0db8415e6f59cd::t_1e4491bc338c44 6,70-79
+crates/operations/tests/validate_faces_overlap.rs
+  s_0db8415e6f59cd::t_046eee2f5f9c01 1-149
+  s_0db8415e6f59cd::t_a40dde37af1801 150-159
+crates/check/src/validate/checks.rs
+  s_0db8415e6f59cd::t_df875e4512c045 54-56
+crates/operations/src/thicken.rs
+  s_0db8415e6f59cd::t_9468f54d61e36b 939-941,988-994,996-998
+CLAUDE.md
+  s_0db8415e6f59cd::t_6f7fe40d81007d 245
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d91abab16e25baa28499ce61381b166a7c614dae",
+  "prompts": {},
+  "sessions": {
+    "s_0db8415e6f59cd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "80c728ce-cbd9-4375-adac-8fbf308dc911",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
