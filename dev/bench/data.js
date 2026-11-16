@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794836611988,
+  "lastUpdate": 1794837173097,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -72413,6 +72413,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 20285296,
             "range": "± 184780",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "7030cbc6ad34da1da481d8cbc01537b8cb300c79",
+          "message": "chore(main): release 4.11.27 (#2556)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[4.11.27](https://github.com/andymai/brepkit/compare/v4.11.26...v4.11.27)\n(2026-11-16)\n\n\n### Bug Fixes\n\n* **algo:** cut a flat through a torus groove on a rod exactly\n([#2543](https://github.com/andymai/brepkit/issues/2543))\n([84b2954](https://github.com/andymai/brepkit/commit/84b2954f745236cd7bc916178a7d20b1afa2cbbd))\n* **math:** prove a surface projection is the nearest point\n([#2537](https://github.com/andymai/brepkit/issues/2537))\n([840ddce](https://github.com/andymai/brepkit/commit/840ddceba1d17935e4f64b7769bdc7c3413eca2f)),\ncloses [#2470](https://github.com/andymai/brepkit/issues/2470)\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-11-16T13:48:55Z",
+          "tree_id": "665d0430975ba69e75ca9b18ee327fa73c74706f",
+          "url": "https://github.com/andymai/brepkit/commit/7030cbc6ad34da1da481d8cbc01537b8cb300c79"
+        },
+        "date": 1794837162085,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1107496,
+            "range": "± 13225",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1170725,
+            "range": "± 3646",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11646,
+            "range": "± 143",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 716317,
+            "range": "± 9877",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 23957053,
+            "range": "± 181079",
             "unit": "ns/iter"
           }
         ]
