@@ -374,7 +374,27 @@ fn shares_area(
             let through = |f0: f64, mid: f64, f1: f64| {
                 (point(mid) - point(f0)).length() + (point(f1) - point(mid)).length()
             };
-            let edge_length = through(0.0, 0.5, 1.0);
+            // The edge's length along the chords between even steps and, on a
+            // B-spline, its knots: a closed edge's ends are one point, and a
+            // B-spline's parameter can run unevenly along it.
+            let mut steps: Vec<f64> = (0..=STRETCHES)
+                .map(|k| f64::from(k) / f64::from(STRETCHES))
+                .collect();
+            if let EdgeCurve::NurbsCurve(n) = curve {
+                let (lo, hi) = (t0.min(t1), t0.max(t1));
+                steps.extend(
+                    n.knots()
+                        .iter()
+                        .filter(|&&k| k > lo && k < hi)
+                        .map(|&k| (k - t0) / (t1 - t0)),
+                );
+                steps.sort_by(f64::total_cmp);
+                steps.dedup();
+            }
+            let edge_length: f64 = steps
+                .windows(2)
+                .map(|w| (point(w[1]) - point(w[0])).length())
+                .sum();
             if edge_length <= tol {
                 continue;
             }
@@ -443,20 +463,7 @@ fn shares_area(
                             .fold(0.0, f64::max)
                     }),
             };
-            let mut cuts: Vec<f64> = (0..=STRETCHES)
-                .map(|k| f64::from(k) / f64::from(STRETCHES))
-                .collect();
-            if let EdgeCurve::NurbsCurve(n) = curve {
-                let (lo, hi) = (t0.min(t1), t0.max(t1));
-                cuts.extend(
-                    n.knots()
-                        .iter()
-                        .filter(|&&k| k > lo && k < hi)
-                        .map(|&k| (k - t0) / (t1 - t0)),
-                );
-                cuts.sort_by(f64::total_cmp);
-                cuts.dedup();
-            }
+            let cuts = steps;
             // An edge the other face shares runs along its boundary: it is
             // read beside the middle of each first stretch.
             if other_face.edges.contains(&oe.edge()) {
@@ -1219,6 +1226,49 @@ mod tests {
             let at = circle.evaluate(0.0);
             let v = b.vertex([at.x(), at.y(), at.z()]);
             let e = b.topo.add_edge(Edge::new(v, v, EdgeCurve::NurbsCurve(rim)));
+            let wire = b
+                .topo
+                .add_wire(Wire::new(vec![OrientedEdge::new(e, true)], true).unwrap());
+            let face = b.topo.add_face(Face::new(
+                wire,
+                vec![],
+                FaceSurface::Plane { normal, d: 0.0 },
+            ));
+            b.faces.push(face);
+        }
+        let solid = b.solid();
+        assert_eq!(found(&b.topo, solid).len(), 1);
+    }
+
+    /// Two squares, one on the other, each bounded by one closed straight
+    /// B-spline whose knots crowd its parameter into the first fifth: its
+    /// ends and middle lie within 1.25e-7 of each other.
+    #[test]
+    fn faces_bounded_by_a_spline_with_crowded_knots_are_reported() {
+        let mut b = Builder::default();
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        for normal in [z, -z] {
+            let points = [
+                [0.0, 0.0],
+                [10.0, 0.0],
+                [10.0, 10.0],
+                [0.0, 10.0],
+                [0.0, 1e-7],
+                [0.0, 0.0],
+            ]
+            .map(|c| Point3::new(c[0], c[1], 0.0))
+            .to_vec();
+            let outline = brepkit_math::nurbs::curve::NurbsCurve::new(
+                1,
+                vec![0.0, 0.0, 0.05, 0.1, 0.15, 0.2, 1.0, 1.0],
+                points,
+                vec![1.0; 6],
+            )
+            .unwrap();
+            let v = b.vertex([0.0, 0.0, 0.0]);
+            let e = b
+                .topo
+                .add_edge(Edge::new(v, v, EdgeCurve::NurbsCurve(outline)));
             let wire = b
                 .topo
                 .add_wire(Wire::new(vec![OrientedEdge::new(e, true)], true).unwrap());
