@@ -6,10 +6,11 @@
 //! closed shell. [`import_mesh_parts`] returns each closed body as a solid
 //! and each open set of triangles as a shell.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BinaryHeap, HashMap, HashSet};
 
 use brepkit_math::madd::Madd;
-use brepkit_math::vec::{Point3, Vec3};
+use brepkit_math::predicates::{orient2d, orient3d};
+use brepkit_math::vec::{Point2, Point3, Vec3};
 use brepkit_operations::tessellate::TriangleMesh;
 use brepkit_topology::Topology;
 use brepkit_topology::edge::{Edge, EdgeCurve, EdgeId};
@@ -27,7 +28,9 @@ pub struct MeshImport {
     /// One solid for each closed body. A closed set of triangles that faces
     /// inward, and lies in a body, is a cavity of that body.
     pub solids: Vec<SolidId>,
-    /// One shell for each set of joined triangles that does not close.
+    /// One shell for each set of joined triangles that does not bound a
+    /// solid: a set that does not close, and a closed set that faces inward
+    /// and crosses another body.
     pub shells: Vec<ShellId>,
 }
 
@@ -39,17 +42,25 @@ pub struct MeshImport {
 /// one body, with vertices of its own: two bodies that touch at a point
 /// share no vertex.
 ///
+/// - At an edge of more than two triangles, the triangles pair off by their
+///   order round the edge, and each pair joins one body there. In each pair
+///   the two triangles run the edge in opposite directions. When two ways
+///   to pair them do that, each pair holds the material between its two
+///   triangles, so two closed bodies that share an edge are two bodies.
 /// - A body closes when each of its edges has two triangles that run it in
 ///   opposite directions. Triangles of a closed body that are wound against
 ///   their neighbours are turned.
-/// - A closed body that faces outward is a solid, also when it lies in
-///   another body.
+/// - Two closed bodies cross when a triangle of one passes through a
+///   triangle of the other. Two bodies that touch do not cross.
+/// - A closed body that faces outward is a solid, also when it lies in or
+///   crosses another body.
 /// - A closed body that faces inward is a cavity of the outward body that
-///   it lies directly in. In any other place (in no body, or directly in
+///   it lies directly in. When it crosses another body, it is a shell: it
+///   bounds no solid. In any other place (in no body, or directly in
 ///   another inward body), it is turned and becomes a solid.
-/// - Every other body is a shell: an open sheet, a set with an edge that
-///   more than two triangles use, a one-sided surface, and a closed set
-///   with no volume.
+/// - Every other body is a shell: an open sheet, a set with an edge whose
+///   triangles do not pair off, a one-sided surface, and a closed set with
+///   no volume.
 ///
 /// # Errors
 ///
@@ -69,8 +80,10 @@ struct MeshBodies {
     points: Vec<Point3>,
     tris: Vec<[usize; 3]>,
     bodies: Vec<Body>,
-    /// Whether a solid lies directly in the material of another.
-    overlap: bool,
+    /// At an edge of more than two triangles, the triangle that each one
+    /// pairs with.
+    pairs: HashMap<(usize, (usize, usize)), usize>,
+    placement: Placement,
 }
 
 impl MeshBodies {
@@ -101,13 +114,15 @@ impl MeshBodies {
             });
         }
 
-        let mut bodies = split_bodies(&mut tris, &votes, &points);
-        let overlap = assign_cavities(&mut bodies, &mut tris, &points, tolerance);
+        let links = Links::read(&tris, &points, tolerance);
+        let mut bodies = split_bodies(&mut tris, &votes, &points, &links);
+        let placement = assign_cavities(&mut bodies, &mut tris, &points, tolerance);
         Ok(Self {
             points,
             tris,
             bodies,
-            overlap,
+            pairs: links.pairs,
+            placement,
         })
     }
 
@@ -123,6 +138,7 @@ impl MeshBodies {
             points,
             tris,
             bodies,
+            pairs,
             ..
         } = self;
         let mut shell_ids = Vec::with_capacity(bodies.len());
@@ -131,7 +147,7 @@ impl MeshBodies {
             // touch gets a vertex in each, so a transform of one body does not
             // move the other.
             let mut vertices: HashMap<usize, VertexId> = HashMap::new();
-            let mut edges: HashMap<(usize, usize), EdgeId> = HashMap::new();
+            let mut edges: HashMap<(usize, usize, usize), EdgeId> = HashMap::new();
             let mut faces = Vec::with_capacity(body.tris.len());
             for &t in &body.tris {
                 let tri = tris[t];
@@ -140,11 +156,19 @@ impl MeshBodies {
                         .entry(i)
                         .or_insert_with(|| topo.add_vertex(Vertex::new(points[i], tolerance)))
                 });
+                // Each pair round an edge of more than two triangles has an
+                // edge of its own, also when two pairs are in one body.
+                let tags = [0, 1, 2].map(|k| {
+                    pairs
+                        .get(&(t, edge_key(tri[k], tri[(k + 1) % 3])))
+                        .map_or(usize::MAX, |&other| other.min(t))
+                });
                 faces.push(build_triangle_face(
                     topo,
                     tri.map(|i| points[i]),
                     tri,
                     corners,
+                    tags,
                     &mut edges,
                 )?);
             }
@@ -187,6 +211,8 @@ impl MeshBodies {
 ///
 /// Returns [`IoError`] if:
 /// - The mesh has no triangles
+/// - Two closed bodies of the mesh cross. The material of the two has no
+///   boundary in the triangles of the mesh
 /// - A part of the mesh does not close; [`import_mesh_parts`] returns such
 ///   a part as a shell
 /// - A body lies in the material of another body. One solid cannot hold
@@ -198,6 +224,11 @@ pub fn import_mesh(
 ) -> Result<SolidId, IoError> {
     // Read the whole mesh first: a refused import adds nothing to `topo`.
     let bodies = MeshBodies::read(mesh, tolerance)?;
+    if bodies.placement.crossing {
+        return Err(IoError::InvalidTopology {
+            reason: "two closed bodies of the mesh cross, so the mesh is not one solid".to_string(),
+        });
+    }
     let open = bodies.open_count();
     if open > 0 {
         return Err(IoError::InvalidTopology {
@@ -207,7 +238,7 @@ pub fn import_mesh(
             ),
         });
     }
-    if bodies.overlap {
+    if bodies.placement.overlap {
         return Err(IoError::InvalidTopology {
             reason: "a body of the mesh lies in the material of another body, \
                      so the mesh is not one solid"
@@ -338,7 +369,7 @@ fn mesh_triangles(mesh: &TriangleMesh, remap: &[usize]) -> (Vec<[usize; 3]>, Vec
 /// What a set of joined triangles is in the result.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BodyKind {
-    /// A shell: the triangles do not bound a volume.
+    /// A shell: the triangles do not bound a solid.
     Open,
     /// A closed body that faces outward.
     Solid,
@@ -358,6 +389,224 @@ const fn edge_key(a: usize, b: usize) -> (usize, usize) {
     if a < b { (a, b) } else { (b, a) }
 }
 
+/// Whether the triangle `tri` runs the edge `(lo, hi)` from `lo` to `hi`.
+fn runs_up(tri: [usize; 3], (lo, hi): (usize, usize)) -> bool {
+    (0..3).any(|k| tri[k] == lo && tri[(k + 1) % 3] == hi)
+}
+
+/// How the triangles of a mesh meet at their edges.
+struct Links {
+    /// The triangles of each edge, with `true` for a triangle that runs the
+    /// edge from its lower point to its higher one.
+    uses: HashMap<(usize, usize), Vec<(usize, bool)>>,
+    /// At an edge of more than two triangles that pair off round it, the
+    /// triangle across the edge from each one.
+    pairs: HashMap<(usize, (usize, usize)), usize>,
+}
+
+impl Links {
+    fn read(tris: &[[usize; 3]], points: &[Point3], tolerance: f64) -> Self {
+        let mut uses: HashMap<(usize, usize), Vec<(usize, bool)>> = HashMap::new();
+        for (t, tri) in tris.iter().enumerate() {
+            for k in 0..3 {
+                let (a, b) = (tri[k], tri[(k + 1) % 3]);
+                uses.entry(edge_key(a, b)).or_default().push((t, a < b));
+            }
+        }
+        let mut pairs = HashMap::new();
+        if uses.values().any(|list| list.len() > 2) {
+            let turned = patch_turns(tris, &uses);
+            for (&key, list) in &uses {
+                if list.len() <= 2 {
+                    continue;
+                }
+                for [s, t] in pair_round_edge(key, list, &turned, tris, points, tolerance) {
+                    pairs.insert((s, key), t);
+                    pairs.insert((t, key), s);
+                }
+            }
+        }
+        Self { uses, pairs }
+    }
+
+    /// The triangle across the edge `key` from `t`: the other triangle of an
+    /// edge of two, or the pair of `t` round an edge of more.
+    fn across(&self, t: usize, key: (usize, usize)) -> Option<usize> {
+        let list = &self.uses[&key];
+        if list.len() == 2 {
+            list.iter()
+                .map(|&(other, _)| other)
+                .find(|&other| other != t)
+        } else {
+            self.pairs.get(&(t, key)).copied()
+        }
+    }
+}
+
+/// For each triangle, whether it is wound against most of the triangles
+/// joined to it through edges of two triangles.
+fn patch_turns(
+    tris: &[[usize; 3]],
+    uses: &HashMap<(usize, usize), Vec<(usize, bool)>>,
+) -> Vec<bool> {
+    let mut turn = vec![false; tris.len()];
+    let mut seen = vec![false; tris.len()];
+    let mut patch = Vec::new();
+    for seed in 0..tris.len() {
+        if seen[seed] {
+            continue;
+        }
+        patch.clear();
+        patch.push(seed);
+        seen[seed] = true;
+        let mut next = 0;
+        while next < patch.len() {
+            let t = patch[next];
+            next += 1;
+            for k in 0..3 {
+                let (a, b) = (tris[t][k], tris[t][(k + 1) % 3]);
+                let list = &uses[&edge_key(a, b)];
+                if list.len() != 2 {
+                    continue;
+                }
+                let forward = (a < b) != turn[t];
+                for &(other, other_forward) in list {
+                    if !seen[other] {
+                        seen[other] = true;
+                        turn[other] = other_forward == forward;
+                        patch.push(other);
+                    }
+                }
+            }
+        }
+        if patch.iter().filter(|&&t| turn[t]).count() * 2 > patch.len() {
+            for &t in &patch {
+                turn[t] = !turn[t];
+            }
+        }
+    }
+    turn
+}
+
+/// The pairs of triangles round an edge of more than two triangles, each
+/// pair the two sides of one body at the edge. Empty when they do not pair
+/// off.
+///
+/// Each triangle faces one of its two neighbours round the edge. Two
+/// neighbours that run the edge the same way cannot be the two sides of one
+/// body, so the pairs come from the rotation in which no pair does. When
+/// both rotations fit, each pair takes the wedge that both of its triangles
+/// face away from: the material of the body.
+fn pair_round_edge(
+    (lo, hi): (usize, usize),
+    list: &[(usize, bool)],
+    turned: &[bool],
+    tris: &[[usize; 3]],
+    points: &[Point3],
+    tolerance: f64,
+) -> Vec<[usize; 2]> {
+    /// A triangle round the edge.
+    struct Side {
+        angle: f64,
+        /// The distance from the edge to the far corner.
+        reach: f64,
+        /// Whether the triangle faces the way that the angle grows.
+        up: bool,
+        tri: usize,
+    }
+
+    let n = list.len();
+    if n % 2 == 1 {
+        return Vec::new();
+    }
+    let origin = points[lo];
+    let Ok(axis) = (points[hi] - origin).normalize() else {
+        return Vec::new();
+    };
+    let least = if axis.x().abs() <= axis.y().abs() && axis.x().abs() <= axis.z().abs() {
+        Vec3::new(1.0, 0.0, 0.0)
+    } else if axis.y().abs() <= axis.z().abs() {
+        Vec3::new(0.0, 1.0, 0.0)
+    } else {
+        Vec3::new(0.0, 0.0, 1.0)
+    };
+    let Ok(u) = axis.cross(least).normalize() else {
+        return Vec::new();
+    };
+    // `u`, `v` and `axis` are right-handed, so a triangle that runs the
+    // edge from `lo` to `hi` faces the way that the angle grows.
+    let v = axis.cross(u);
+    let mut round: Vec<Side> = list
+        .iter()
+        .map(|&(tri, forward)| {
+            let far = tris[tri]
+                .into_iter()
+                .find(|&i| i != lo && i != hi)
+                .unwrap_or(lo);
+            let w = points[far] - origin;
+            let (x, y) = (w.dot(u), w.dot(v));
+            Side {
+                angle: y.atan2(x),
+                reach: x.hypot(y),
+                up: forward != turned[tri],
+                tri,
+            }
+        })
+        .collect();
+    round.sort_by(|a, b| a.angle.total_cmp(&b.angle));
+
+    // The turn from one side to the next.
+    let gap = |a: &Side, b: &Side| {
+        let g = b.angle - a.angle;
+        if g < 0.0 {
+            g + std::f64::consts::TAU
+        } else {
+            g
+        }
+    };
+    // Start after the widest gap, so that no run of sides at one angle
+    // wraps round the end of the list.
+    let widest = (0..n)
+        .max_by(|&i, &j| {
+            gap(&round[i], &round[(i + 1) % n]).total_cmp(&gap(&round[j], &round[(j + 1) % n]))
+        })
+        .unwrap_or(0);
+    round.rotate_left((widest + 1) % n);
+    // At one angle (within the tolerance at the far corners), the sides
+    // that face up come first: two faces that touch hold no material
+    // between them.
+    let mut start = 0;
+    while start < n {
+        let mut end = start + 1;
+        while end < n
+            && gap(&round[end - 1], &round[end]) * round[end - 1].reach.min(round[end].reach)
+                <= tolerance.max(0.0)
+        {
+            end += 1;
+        }
+        round[start..end].sort_by_key(|side| !side.up);
+        start = end;
+    }
+
+    let fits = |shift: usize| {
+        (0..n / 2).all(|m| round[(shift + 2 * m) % n].up != round[(shift + 2 * m + 1) % n].up)
+    };
+    let shift = match (fits(0), fits(1)) {
+        (true, true) => usize::from(round[0].up),
+        (true, false) => 0,
+        (false, true) => 1,
+        (false, false) => return Vec::new(),
+    };
+    (0..n / 2)
+        .map(|m| {
+            [
+                round[(shift + 2 * m) % n].tri,
+                round[(shift + 2 * m + 1) % n].tri,
+            ]
+        })
+        .collect()
+}
+
 /// Group the triangles into bodies, in the order of each body's first
 /// triangle, and turn the triangles of each body to one side.
 ///
@@ -370,19 +619,14 @@ const fn edge_key(a: usize, b: usize) -> (usize, usize) {
 ///
 /// A closed body has [`BodyKind::Solid`] here, whichever way it faces;
 /// [`assign_cavities`] reads the sign of its volume.
-fn split_bodies(tris: &mut [[usize; 3]], votes: &[f64], points: &[Point3]) -> Vec<Body> {
-    // Each edge's triangles, with `true` for a triangle that runs the edge
-    // from its lower point to its higher one.
-    let mut uses: HashMap<(usize, usize), Vec<(usize, bool)>> = HashMap::new();
-    for (t, tri) in tris.iter().enumerate() {
-        for k in 0..3 {
-            let (a, b) = (tri[k], tri[(k + 1) % 3]);
-            uses.entry(edge_key(a, b)).or_default().push((t, a < b));
-        }
-    }
-
+fn split_bodies(
+    tris: &mut [[usize; 3]],
+    votes: &[f64],
+    points: &[Point3],
+    links: &Links,
+) -> Vec<Body> {
     let mut body_of = vec![usize::MAX; tris.len()];
-    let mut walked: HashSet<(usize, usize)> = HashSet::with_capacity(uses.len());
+    let mut walked: HashSet<(usize, usize)> = HashSet::new();
     let mut bodies: Vec<Body> = Vec::new();
     for seed in 0..tris.len() {
         if body_of[seed] != usize::MAX {
@@ -393,18 +637,24 @@ fn split_bodies(tris: &mut [[usize; 3]], votes: &[f64], points: &[Point3]) -> Ve
         body_of[seed] = index;
         let mut next = 0;
         while next < members.len() {
-            let tri = tris[members[next]];
+            let t = members[next];
             next += 1;
+            let tri = tris[t];
             for k in 0..3 {
                 let key = edge_key(tri[k], tri[(k + 1) % 3]);
-                // Each edge gives its triangles once, however many it has.
-                if !walked.insert(key) {
-                    continue;
-                }
-                for &(other, _) in &uses[&key] {
+                if let Some(other) = links.across(t, key) {
                     if body_of[other] == usize::MAX {
                         body_of[other] = index;
                         members.push(other);
+                    }
+                } else if links.uses[&key].len() > 2 && walked.insert(key) {
+                    // An edge whose triangles do not pair off joins them
+                    // all, once, however many it has.
+                    for &(other, _) in &links.uses[&key] {
+                        if body_of[other] == usize::MAX {
+                            body_of[other] = index;
+                            members.push(other);
+                        }
                     }
                 }
             }
@@ -418,12 +668,15 @@ fn split_bodies(tris: &mut [[usize; 3]], votes: &[f64], points: &[Point3]) -> Ve
     }
 
     for body in &mut bodies {
-        let two_sided = body
-            .tris
-            .iter()
-            .all(|&t| (0..3).all(|k| uses[&edge_key(tris[t][k], tris[t][(k + 1) % 3])].len() == 2));
-        let turned = if two_sided {
-            consistent_turns(&body.tris, tris, &uses)
+        let paired = body.tris.iter().all(|&t| {
+            (0..3).all(|k| {
+                links
+                    .across(t, edge_key(tris[t][k], tris[t][(k + 1) % 3]))
+                    .is_some()
+            })
+        });
+        let turned = if paired {
+            consistent_turns(&body.tris, tris, links)
         } else {
             None
         };
@@ -477,16 +730,12 @@ fn split_bodies(tris: &mut [[usize; 3]], votes: &[f64], points: &[Point3]) -> Ve
     bodies
 }
 
-/// The triangles of a two-sided body to turn so that each edge's two
+/// The triangles of a closed body to turn so that each edge's two
 /// triangles run it in opposite directions.
 ///
 /// Of the two answers, this is the one that turns fewer triangles. Returns
 /// `None` for a one-sided surface, which has no such answer.
-fn consistent_turns(
-    members: &[usize],
-    tris: &[[usize; 3]],
-    uses: &HashMap<(usize, usize), Vec<(usize, bool)>>,
-) -> Option<Vec<usize>> {
+fn consistent_turns(members: &[usize], tris: &[[usize; 3]], links: &Links) -> Option<Vec<usize>> {
     let mut turn: HashMap<usize, bool> = HashMap::with_capacity(members.len());
     let mut queue = vec![members[0]];
     turn.insert(members[0], false);
@@ -497,20 +746,17 @@ fn consistent_turns(
         let t_turn = turn[&t];
         for k in 0..3 {
             let (a, b) = (tris[t][k], tris[t][(k + 1) % 3]);
+            let key = edge_key(a, b);
             let forward = (a < b) != t_turn;
-            for &(other, other_forward) in &uses[&edge_key(a, b)] {
-                if other == t {
-                    continue;
-                }
-                // The neighbour must run the edge the other way.
-                let needs_turn = other_forward == forward;
-                match turn.get(&other) {
-                    Some(&known) if known != needs_turn => return None,
-                    Some(_) => {}
-                    None => {
-                        turn.insert(other, needs_turn);
-                        queue.push(other);
-                    }
+            let other = links.across(t, key)?;
+            // The neighbour must run the edge the other way.
+            let needs_turn = runs_up(tris[other], key) == forward;
+            match turn.get(&other) {
+                Some(&known) if known != needs_turn => return None,
+                Some(_) => {}
+                None => {
+                    turn.insert(other, needs_turn);
+                    queue.push(other);
                 }
             }
         }
@@ -539,78 +785,222 @@ fn signed_volume6(members: &[usize], tris: &[[usize; 3]], points: &[Point3]) -> 
     (sum, sizes)
 }
 
-fn body_box(members: &[usize], tris: &[[usize; 3]], points: &[Point3]) -> ([f64; 3], [f64; 3]) {
+/// An axis-aligned box: its low corner and its high corner.
+type Bounds = ([f64; 3], [f64; 3]);
+
+const fn coords(p: Point3) -> [f64; 3] {
+    [p.x(), p.y(), p.z()]
+}
+
+fn point_bounds(points: impl IntoIterator<Item = Point3>) -> Bounds {
     let mut lo = [f64::INFINITY; 3];
     let mut hi = [f64::NEG_INFINITY; 3];
-    for &t in members {
-        for i in tris[t] {
-            let p = [points[i].x(), points[i].y(), points[i].z()];
-            for k in 0..3 {
-                lo[k] = lo[k].min(p[k]);
-                hi[k] = hi[k].max(p[k]);
-            }
+    for p in points {
+        let p = coords(p);
+        for k in 0..3 {
+            lo[k] = lo[k].min(p[k]);
+            hi[k] = hi[k].max(p[k]);
         }
     }
     (lo, hi)
 }
 
+fn grown((lo, hi): Bounds, by: f64) -> Bounds {
+    (lo.map(|c| c - by), hi.map(|c| c + by))
+}
+
+fn meets(a: &Bounds, b: &Bounds) -> bool {
+    (0..3).all(|k| a.0[k] <= b.1[k] && b.0[k] <= a.1[k])
+}
+
+fn holds(outer: &Bounds, inner: &Bounds) -> bool {
+    (0..3).all(|k| outer.0[k] <= inner.0[k] && inner.1[k] <= outer.1[k])
+}
+
+/// A tree of boxes. Each node splits its items at the middle one along
+/// its longest side, so the tree is built in `n log n`.
+struct BoxTree {
+    nodes: Vec<BoxNode>,
+    items: Vec<usize>,
+    boxes: Vec<Bounds>,
+}
+
+#[derive(Clone, Copy)]
+struct BoxNode {
+    bounds: Bounds,
+    /// A leaf holds `items[first..first + count]`; a node with no count has
+    /// its two children at `first` and `first + 1`.
+    first: usize,
+    count: usize,
+}
+
+impl BoxTree {
+    const LEAF: usize = 4;
+
+    fn new(boxes: Vec<Bounds>) -> Self {
+        let mut items: Vec<usize> = (0..boxes.len()).collect();
+        let mut nodes = Vec::new();
+        if boxes.is_empty() {
+            return Self {
+                nodes,
+                items,
+                boxes,
+            };
+        }
+        let empty = BoxNode {
+            bounds: boxes[0],
+            first: 0,
+            count: 0,
+        };
+        nodes.push(empty);
+        let mut stack = vec![(0, 0, boxes.len())];
+        while let Some((node, start, end)) = stack.pop() {
+            let mut bounds = boxes[items[start]];
+            for &i in &items[start + 1..end] {
+                for k in 0..3 {
+                    bounds.0[k] = bounds.0[k].min(boxes[i].0[k]);
+                    bounds.1[k] = bounds.1[k].max(boxes[i].1[k]);
+                }
+            }
+            if end - start <= Self::LEAF {
+                nodes[node] = BoxNode {
+                    bounds,
+                    first: start,
+                    count: end - start,
+                };
+                continue;
+            }
+            let side = |k: usize| bounds.1[k] - bounds.0[k];
+            let axis = if side(0) >= side(1) && side(0) >= side(2) {
+                0
+            } else if side(1) >= side(2) {
+                1
+            } else {
+                2
+            };
+            let mid = start + (end - start) / 2;
+            items[start..end].select_nth_unstable_by(mid - start, |&a, &b| {
+                (boxes[a].0[axis] + boxes[a].1[axis])
+                    .total_cmp(&(boxes[b].0[axis] + boxes[b].1[axis]))
+            });
+            let first = nodes.len();
+            nodes.extend([empty, empty]);
+            nodes[node] = BoxNode {
+                bounds,
+                first,
+                count: 0,
+            };
+            stack.push((first, start, mid));
+            stack.push((first + 1, mid, end));
+        }
+        Self {
+            nodes,
+            items,
+            boxes,
+        }
+    }
+
+    /// Visit each item whose box passes `test`, while `visit` returns
+    /// `true`. Returns `false` when `visit` stopped the walk.
+    fn walk(&self, test: impl Fn(&Bounds) -> bool, mut visit: impl FnMut(usize) -> bool) -> bool {
+        let mut stack = Vec::new();
+        if !self.nodes.is_empty() {
+            stack.push(0);
+        }
+        while let Some(n) = stack.pop() {
+            let node = self.nodes[n];
+            if !test(&node.bounds) {
+                continue;
+            }
+            if node.count == 0 {
+                stack.extend([node.first, node.first + 1]);
+                continue;
+            }
+            for &item in &self.items[node.first..node.first + node.count] {
+                if test(&self.boxes[item]) && !visit(item) {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
+    /// Visit each item whose box meets `bounds`, while `visit` returns
+    /// `true`.
+    fn each_meeting(&self, bounds: &Bounds, visit: impl FnMut(usize) -> bool) -> bool {
+        self.walk(|b| meets(b, bounds), visit)
+    }
+
+    /// Visit each item whose box the segment from `p` to `q` meets.
+    fn each_along(&self, p: Point3, q: Point3, visit: impl FnMut(usize) -> bool) -> bool {
+        let (p, q) = (coords(p), coords(q));
+        let d = [q[0] - p[0], q[1] - p[1], q[2] - p[2]];
+        self.walk(
+            |(lo, hi)| {
+                let (mut t0, mut t1) = (0.0_f64, 1.0_f64);
+                for k in 0..3 {
+                    if d[k] == 0.0 {
+                        if p[k] < lo[k] || p[k] > hi[k] {
+                            return false;
+                        }
+                        continue;
+                    }
+                    let (a, b) = ((lo[k] - p[k]) / d[k], (hi[k] - p[k]) / d[k]);
+                    t0 = t0.max(a.min(b));
+                    t1 = t1.min(a.max(b));
+                    if t0 > t1 {
+                        return false;
+                    }
+                }
+                true
+            },
+            visit,
+        )
+    }
+}
+
+/// How the closed bodies of a mesh sit together.
+#[derive(Debug, Clone, Copy, Default)]
+struct Placement {
+    /// A solid of the result lies directly in an outward body: in its
+    /// material, and not in a cavity of it.
+    overlap: bool,
+    /// Two closed bodies cross.
+    crossing: bool,
+}
+
+/// Directions for the rays that find whether a point lies in a body. None
+/// lies along an axis or a diagonal, where the edges of a mesh often are.
+const RAYS: [[f64; 3]; 4] = [
+    [1.0, 0.297_1, 0.261_3],
+    [-0.267_9, 1.0, 0.141_4],
+    [0.173_2, -0.223_6, 1.0],
+    [-1.0, -0.414_2, -0.302_7],
+];
+
 /// Make each inward closed body a cavity of the outward body that it lies
-/// directly in, or turn it into a solid when it lies in no such body.
-///
-/// Returns whether a solid of the result lies directly in an outward body:
-/// in its material, and not in a cavity of it.
+/// directly in, a shell when it crosses another body, or turn it into a
+/// solid when it lies in no outward body.
 fn assign_cavities(
     bodies: &mut [Body],
     tris: &mut [[usize; 3]],
     points: &[Point3],
     tolerance: f64,
-) -> bool {
+) -> Placement {
     let closed: Vec<usize> = (0..bodies.len())
         .filter(|&i| bodies[i].kind == BodyKind::Solid)
         .collect();
-    let boxes: Vec<_> = bodies
-        .iter()
-        .map(|b| body_box(&b.tris, tris, points))
-        .collect();
-
-    // The smallest closed body round each closed body: the one that it
-    // lies directly in.
-    let mut around: Vec<(usize, Option<usize>)> = Vec::with_capacity(closed.len());
-    for &i in &closed {
-        let mut found: Option<usize> = None;
-        for &j in &closed {
-            if j == i
-                || bodies[j].volume6.abs() <= bodies[i].volume6.abs()
-                || found.is_some_and(|a| bodies[j].volume6.abs() >= bodies[a].volume6.abs())
-            {
-                continue;
-            }
-            let inside_box =
-                (0..3).all(|k| boxes[i].0[k] >= boxes[j].0[k] && boxes[i].1[k] <= boxes[j].1[k]);
-            // Two points within the merge tolerance are one point. With
-            // no tolerance, the margin is the rounding of a coordinate.
-            let on = if tolerance > 0.0 {
-                tolerance
-            } else {
-                let reach = (0..3)
-                    .map(|k| boxes[j].0[k].abs().max(boxes[j].1[k].abs()))
-                    .fold(0.0, f64::max);
-                8.0 * f64::EPSILON * reach
-            };
-            if inside_box && lies_in(&bodies[i].tris, &bodies[j].tris, tris, points, on) {
-                found = Some(j);
-            }
-        }
-        around.push((i, found));
-    }
+    let nesting = Nesting::read(&closed, bodies, tris, points, tolerance);
 
     // The cavities come from the winding of the mesh as it is.
     let outward: Vec<bool> = bodies.iter().map(|b| b.volume6 > 0.0).collect();
-    for &(i, container) in &around {
+    for (c, &i) in closed.iter().enumerate() {
         if outward[i] {
             continue;
         }
-        if let Some(j) = container.filter(|&j| outward[j]) {
+        if nesting.crossed[c] {
+            bodies[i].kind = BodyKind::Open;
+        } else if let Some(j) = nesting.around[c].map(|d| closed[d]).filter(|&j| outward[j]) {
             bodies[i].kind = BodyKind::Cavity(j);
         } else {
             for &t in &bodies[i].tris {
@@ -620,60 +1010,337 @@ fn assign_cavities(
         }
     }
     // The overlap comes from the result: a turned body is a solid too.
-    around.iter().any(|&(i, container)| {
+    let overlap = closed.iter().zip(&nesting.around).any(|(&i, around)| {
         bodies[i].kind == BodyKind::Solid
-            && container.is_some_and(|j| bodies[j].kind == BodyKind::Solid)
-    })
+            && around.is_some_and(|d| bodies[closed[d]].kind == BodyKind::Solid)
+    });
+    Placement {
+        overlap,
+        crossing: nesting.crossed.contains(&true),
+    }
 }
 
-/// Whether the closed body `inner` lies in the closed body `outer`.
-///
-/// One point of `inner` decides: this reads two bodies whose surfaces cross
-/// as one in the other, or as apart. A point within `on` of `outer` (the
-/// two bodies touch there) decides nothing, and the next point is read.
-fn lies_in(
-    inner: &[usize],
-    outer: &[usize],
-    tris: &[[usize; 3]],
-    points: &[Point3],
-    on: f64,
-) -> bool {
-    let mut read: HashSet<usize> = HashSet::new();
-    for &t in inner {
-        for i in tris[t] {
-            if !read.insert(i) {
+/// Where the closed bodies of a mesh lie, each body by its place in the
+/// list of closed bodies.
+struct Nesting {
+    /// The smallest closed body round each closed body: the one that it
+    /// lies directly in.
+    around: Vec<Option<usize>>,
+    /// Whether each closed body crosses another.
+    crossed: Vec<bool>,
+}
+
+impl Nesting {
+    fn read(
+        closed: &[usize],
+        bodies: &[Body],
+        tris: &[[usize; 3]],
+        points: &[Point3],
+        tolerance: f64,
+    ) -> Self {
+        let n = closed.len();
+        let mut out = Self {
+            around: vec![None; n],
+            crossed: vec![false; n],
+        };
+        if n < 2 {
+            return out;
+        }
+        let corners = |t: usize| tris[t].map(|i| points[i]);
+        let boxes: Vec<Bounds> = closed
+            .iter()
+            .map(|&i| point_bounds(bodies[i].tris.iter().flat_map(|&t| corners(t))))
+            .collect();
+        let reach = boxes
+            .iter()
+            .flat_map(|(lo, hi)| lo.iter().chain(hi))
+            .fold(0.0_f64, |m, c| m.max(c.abs()));
+        // Two points within the merge tolerance are one point. With no
+        // tolerance, the margin is the rounding of a coordinate.
+        let on = if tolerance > 0.0 {
+            tolerance
+        } else {
+            8.0 * f64::EPSILON * reach
+        };
+        // The boxes in the trees take in the rounding of the box tests.
+        let pad = on.max(64.0 * f64::EPSILON * reach);
+        let sizes: Vec<f64> = closed.iter().map(|&i| bodies[i].volume6.abs()).collect();
+        let body_tree = BoxTree::new(boxes.iter().map(|&b| grown(b, pad)).collect());
+
+        // Only the triangles of a body whose box meets the box of another
+        // can cross or hold another body.
+        let near: Vec<bool> = (0..n)
+            .map(|c| !body_tree.each_meeting(&grown(boxes[c], pad), |d| d == c))
+            .collect();
+        let mut tri_of = Vec::new();
+        let mut owner = Vec::new();
+        for (c, &i) in closed.iter().enumerate() {
+            if near[c] {
+                tri_of.extend_from_slice(&bodies[i].tris);
+                owner.resize(tri_of.len(), c);
+            }
+        }
+        let tri_tree = BoxTree::new(
+            tri_of
+                .iter()
+                .map(|&t| grown(point_bounds(corners(t)), pad))
+                .collect(),
+        );
+
+        let mut crossing: HashSet<(usize, usize)> = HashSet::new();
+        for (item, &t) in tri_of.iter().enumerate() {
+            let c = owner[item];
+            let bounds = tri_tree.boxes[item];
+            if body_tree.each_meeting(&bounds, |d| d == c) {
                 continue;
             }
-            if let Some(turns) = winding_number(points[i], outer, tris, points, on) {
-                return turns.abs().round() >= 1.0;
+            tri_tree.each_meeting(&bounds, |other| {
+                let d = owner[other];
+                if d > c
+                    && !crossing.contains(&(c, d))
+                    && triangles_cross(corners(t), corners(tri_of[other]), on)
+                {
+                    crossing.insert((c, d));
+                }
+                true
+            });
+        }
+        for &(c, d) in &crossing {
+            out.crossed[c] = true;
+            out.crossed[d] = true;
+        }
+
+        let ctx = Rays {
+            tri_tree: &tri_tree,
+            tri_of: &tri_of,
+            owner: &owner,
+            corners: &corners,
+            on,
+            pad,
+        };
+        for c in (0..n).filter(|&c| near[c]) {
+            // The bodies whose boxes hold this body's box, smallest first.
+            let mut candidates = BinaryHeap::new();
+            body_tree.each_meeting(&boxes[c], |d| {
+                if d != c
+                    && sizes[d] > sizes[c]
+                    && holds(&body_tree.boxes[d], &boxes[c])
+                    && !crossing.contains(&(c.min(d), c.max(d)))
+                {
+                    candidates.push(std::cmp::Reverse((Size(sizes[d]), d)));
+                }
+                true
+            });
+            let members = &bodies[closed[c]].tris;
+            while let Some(std::cmp::Reverse((_, d))) = candidates.pop() {
+                if ctx.lies_in(members, d, &body_tree.boxes[d]) {
+                    out.around[c] = Some(d);
+                    break;
+                }
             }
         }
+        out
     }
-    false
 }
 
-/// The count of times the triangles of `members` wrap round `p`: the sum of
-/// their solid angles at `p`, over a full sphere. `None` for a point within
-/// `on` of a triangle, where the count has no meaning.
-fn winding_number(
-    p: Point3,
-    members: &[usize],
-    tris: &[[usize; 3]],
-    points: &[Point3],
-    on: f64,
-) -> Option<f64> {
-    let mut total = 0.0;
-    for &t in members {
-        let [a, b, c] = tris[t].map(|i| points[i] - p);
-        if origin_to_triangle(a, b, c) <= on {
-            return None;
-        }
-        let (la, lb, lc) = (a.length(), b.length(), c.length());
-        let det = a.dot(b.cross(c));
-        let denom = (la * lb).madd(lc, a.dot(b).madd(lc, b.dot(c).madd(la, c.dot(a) * lb)));
-        total += 2.0 * det.atan2(denom);
+/// A size that orders by [`f64::total_cmp`].
+#[derive(Clone, Copy, PartialEq)]
+struct Size(f64);
+
+impl Eq for Size {}
+
+impl PartialOrd for Size {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
     }
-    Some(total / (4.0 * std::f64::consts::PI))
+}
+
+impl Ord for Size {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.0.total_cmp(&other.0)
+    }
+}
+
+/// The rays that find whether a body lies in another.
+struct Rays<'a, F: Fn(usize) -> [Point3; 3]> {
+    tri_tree: &'a BoxTree,
+    tri_of: &'a [usize],
+    owner: &'a [usize],
+    corners: &'a F,
+    on: f64,
+    pad: f64,
+}
+
+impl<F: Fn(usize) -> [Point3; 3]> Rays<'_, F> {
+    /// Whether the closed body of the triangles `members` lies in the
+    /// closed body `outer`, whose box (with the margin of the tree) is
+    /// `bounds`.
+    ///
+    /// One point of `members` decides, from the count of times a ray from
+    /// it crosses `outer`. A point within `on` of `outer` (the two bodies
+    /// touch there) decides nothing, and the next point is read: each
+    /// corner, then the centre of each triangle. A ray that meets an edge
+    /// or a corner of `outer` decides nothing, and the next ray is cast.
+    fn lies_in(&self, members: &[usize], outer: usize, bounds: &Bounds) -> bool {
+        let mut read: HashSet<Point3Key> = HashSet::new();
+        let corners = members.iter().flat_map(|&t| (self.corners)(t));
+        let centres = members.iter().map(|&t| {
+            let [a, b, c] = (self.corners)(t);
+            Point3::new(
+                (a.x() + b.x() + c.x()) / 3.0,
+                (a.y() + b.y() + c.y()) / 3.0,
+                (a.z() + b.z() + c.z()) / 3.0,
+            )
+        });
+        for p in corners.chain(centres) {
+            if !read.insert(Point3Key::of(p)) || self.touches(p, outer) {
+                continue;
+            }
+            for dir in RAYS {
+                if let Some(odd) =
+                    self.crosses_odd(p, Vec3::new(dir[0], dir[1], dir[2]), outer, bounds)
+                {
+                    return odd;
+                }
+            }
+        }
+        false
+    }
+
+    /// Whether `p` lies within `on` of a triangle of `outer`.
+    fn touches(&self, p: Point3, outer: usize) -> bool {
+        let at = grown(point_bounds([p]), self.pad);
+        !self.tri_tree.each_meeting(&at, |item| {
+            if self.owner[item] != outer {
+                return true;
+            }
+            let [a, b, c] = (self.corners)(self.tri_of[item]);
+            origin_to_triangle(a - p, b - p, c - p) > self.on
+        })
+    }
+
+    /// Whether a ray from `p` along `dir` crosses the triangles of `outer`
+    /// an odd count of times, or `None` when it meets an edge or a corner.
+    ///
+    /// The ray stops past the box of `outer`, so it reads only the
+    /// triangles near that body.
+    fn crosses_odd(&self, p: Point3, dir: Vec3, outer: usize, (lo, hi): &Bounds) -> Option<bool> {
+        let (from, along) = (coords(p), [dir.x(), dir.y(), dir.z()]);
+        let reach = (0..3)
+            .map(|k| {
+                let wall = if along[k] > 0.0 { hi[k] } else { lo[k] };
+                (wall - from[k]) / along[k]
+            })
+            .fold(f64::INFINITY, f64::min);
+        let q = p + dir * reach.max(0.0);
+        let mut odd = false;
+        let mut sure = true;
+        self.tri_tree.each_along(p, q, |item| {
+            if self.owner[item] != outer {
+                return true;
+            }
+            match segment_crosses(p, q, (self.corners)(self.tri_of[item])) {
+                Some(cross) => odd ^= cross,
+                None => sure = false,
+            }
+            sure
+        });
+        sure.then_some(odd)
+    }
+}
+
+/// The bits of a point, to read each point once.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct Point3Key([u64; 3]);
+
+impl Point3Key {
+    fn of(p: Point3) -> Self {
+        Self(coords(p).map(f64::to_bits))
+    }
+}
+
+/// Whether the segment `p q` passes through the triangle `a b c`, with
+/// exact signs. `None` when the segment meets an edge or a corner of the
+/// triangle, or runs in its plane: there the count of crossings has no
+/// meaning. The two ends must be off the triangle.
+fn segment_crosses(p: Point3, q: Point3, [a, b, c]: [Point3; 3]) -> Option<bool> {
+    let (sp, sq) = (orient3d(a, b, c, p), orient3d(a, b, c, q));
+    if sp == 0.0 && sq == 0.0 {
+        let flat = |f: fn(Point3) -> Point2| orient2d(f(a), f(b), f(c)) == 0.0;
+        let on_a_line = flat(|p| Point2::new(p.x(), p.y()))
+            && flat(|p| Point2::new(p.y(), p.z()))
+            && flat(|p| Point2::new(p.z(), p.x()));
+        // A triangle with its corners on a line has no inside to cross.
+        return if on_a_line { Some(false) } else { None };
+    }
+    // An end in the plane of the triangle is off the triangle, so the
+    // segment meets the plane there and nowhere in the triangle.
+    if sp == 0.0 || sq == 0.0 || (sp > 0.0) == (sq > 0.0) {
+        return Some(false);
+    }
+    let sides = [
+        orient3d(p, q, a, b),
+        orient3d(p, q, b, c),
+        orient3d(p, q, c, a),
+    ];
+    let above = sides.iter().any(|&s| s > 0.0);
+    let below = sides.iter().any(|&s| s < 0.0);
+    if above && below {
+        Some(false)
+    } else if sides.contains(&0.0) {
+        None
+    } else {
+        Some(true)
+    }
+}
+
+/// Whether two triangles cross: each passes through the plane of the
+/// other by more than `on` to both sides, and the two meet along a length
+/// of more than `on`. Two triangles that touch at a point, along an edge,
+/// or in one plane do not cross.
+fn triangles_cross(t: [Point3; 3], u: [Point3; 3], on: f64) -> bool {
+    let (Some(cut_t), Some(cut_u)) = (cut_by_plane(t, u, on), cut_by_plane(u, t, on)) else {
+        return false;
+    };
+    let n_t = (t[1] - t[0]).cross(t[2] - t[0]);
+    let n_u = (u[1] - u[0]).cross(u[2] - u[0]);
+    let Ok(line) = n_t.cross(n_u).normalize() else {
+        return false;
+    };
+    let span = |(a, b): (Point3, Point3)| {
+        let (x, y) = (line.dot(a - t[0]), line.dot(b - t[0]));
+        (x.min(y), x.max(y))
+    };
+    let ((t0, t1), (u0, u1)) = (span(cut_t), span(cut_u));
+    t1.min(u1) - t0.max(u0) > on
+}
+
+/// The part of the triangle `tri` in the plane of the triangle `other`, by
+/// its two ends, when `tri` passes more than `on` to each side of the
+/// plane.
+fn cut_by_plane(tri: [Point3; 3], other: [Point3; 3], on: f64) -> Option<(Point3, Point3)> {
+    let normal = (other[1] - other[0])
+        .cross(other[2] - other[0])
+        .normalize()
+        .ok()?;
+    let d = tri.map(|p| normal.dot(p - other[0]));
+    let (low, high) = (d[0].min(d[1]).min(d[2]), d[0].max(d[1]).max(d[2]));
+    if !(high > on && low < -on) {
+        return None;
+    }
+    let mut ends = Vec::with_capacity(2);
+    for k in 0..3 {
+        let m = (k + 1) % 3;
+        if d[k] == 0.0 {
+            ends.push(tri[k]);
+        } else if d[m] != 0.0 && (d[k] > 0.0) != (d[m] > 0.0) {
+            ends.push(tri[k] + (tri[m] - tri[k]) * (d[k] / (d[k] - d[m])));
+        }
+    }
+    match ends[..] {
+        [a, b] => Some((a, b)),
+        _ => None,
+    }
 }
 
 /// The distance from the origin to the triangle `a b c`.
@@ -711,13 +1378,15 @@ fn origin_to_triangle(a: Vec3, b: Vec3, c: Vec3) -> f64 {
 }
 
 /// Build a triangular planar face on three points, with the edges that
-/// earlier triangles of the body made on the same points.
+/// earlier triangles of the body made on the same points. `tags` tells
+/// apart the edges of the pairs round an edge of more than two triangles.
 fn build_triangle_face(
     topo: &mut Topology,
     [p0, p1, p2]: [Point3; 3],
     tri: [usize; 3],
     corners: [VertexId; 3],
-    edges: &mut HashMap<(usize, usize), EdgeId>,
+    tags: [usize; 3],
+    edges: &mut HashMap<(usize, usize, usize), EdgeId>,
 ) -> Result<FaceId, IoError> {
     let mut oriented = Vec::with_capacity(3);
     for k in 0..3 {
@@ -725,7 +1394,7 @@ fn build_triangle_face(
         let forward = tri[k] < tri[n];
         let (lo, hi) = if forward { (k, n) } else { (n, k) };
         let edge = *edges
-            .entry((tri[lo], tri[hi]))
+            .entry((tri[lo], tri[hi], tags[k]))
             .or_insert_with(|| topo.add_edge(Edge::new(corners[lo], corners[hi], EdgeCurve::Line)));
         oriented.push(OrientedEdge::new(edge, forward));
     }
