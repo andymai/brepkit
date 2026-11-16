@@ -55,6 +55,9 @@ pub struct SpanIndex {
     /// Each span's sub-patch boxes, by span index, each made the first time
     /// a search reads it.
     sub_boxes: std::sync::OnceLock<Box<[std::sync::OnceLock<SubBoxes>]>>,
+    /// Each span's Bezier net, by span index, each made the first time it
+    /// is read.
+    nets: std::sync::OnceLock<Box<[std::sync::OnceLock<Vec<Hpoint>>]>>,
 }
 
 /// The distinct knot spans of one direction: each span's bounds and the
@@ -120,6 +123,7 @@ impl SpanIndex {
             bvh: Bvh::build(&padded),
             scale,
             sub_boxes: std::sync::OnceLock::new(),
+            nets: std::sync::OnceLock::new(),
         })
     }
 
@@ -180,10 +184,30 @@ impl SpanIndex {
             })
     }
 
+    /// Span `i`'s Bezier net (see [`span_net`]), made the first time it is
+    /// read, with its parameter rectangle.
+    pub(crate) fn bezier_net(
+        &self,
+        surface: &NurbsSurface,
+        i: usize,
+    ) -> Option<(&[Hpoint], Interval, Interval)> {
+        let span = *self.spans.get(i)?;
+        let net = self
+            .nets
+            .get_or_init(|| {
+                (0..self.spans.len())
+                    .map(|_| std::sync::OnceLock::new())
+                    .collect()
+            })
+            .get(i)?
+            .get_or_init(|| span_net(surface, span));
+        Some((net, span.u, span.v))
+    }
+
     /// Span `i`'s sub-patch boxes, made the first time they are read.
     fn sub_boxes_of(&self, surface: &NurbsSurface, i: usize) -> Option<&SubBoxes> {
-        let span = *self.spans.get(i)?;
         let pad = 1e-9 * self.scale.max(1.0);
+        let (net, _, _) = self.bezier_net(surface, i)?;
         Some(
             self.sub_boxes
                 .get_or_init(|| {
@@ -192,7 +216,7 @@ impl SpanIndex {
                         .collect()
                 })
                 .get(i)?
-                .get_or_init(|| sub_patch_boxes(surface, span, pad)),
+                .get_or_init(|| sub_patch_boxes(surface, net, pad)),
         )
     }
 }
@@ -209,11 +233,10 @@ fn box_gap(a: &Aabb3, b: &Aabb3) -> f64 {
 /// A homogeneous control point: `(w x, w y, w z, w)`.
 type Hpoint = [f64; 4];
 
-/// `span`'s sub-patch boxes, each padded by `pad`: the span's Bezier net,
-/// read off its control points by blossoming, split in halves along `u` and
-/// `v` [`SUB_DEPTH`] times, each piece's box that of its net's points. Each
-/// piece lies in the hull of its net, its weights being positive.
-fn sub_patch_boxes(surface: &NurbsSurface, span: Span, pad: f64) -> SubBoxes {
+/// `span`'s Bezier net, read off its control points by blossoming: rows
+/// along `u` of homogeneous points, point `(i, j)` at `i * (degree_v + 1) +
+/// j`.
+fn span_net(surface: &NurbsSurface, span: Span) -> Vec<Hpoint> {
     let (pu, pv) = (surface.degree_u(), surface.degree_v());
     let (nu, nv) = (pu + 1, pv + 1);
     let cps = surface.control_points();
@@ -241,7 +264,16 @@ fn sub_patch_boxes(surface: &NurbsSurface, span: Span, pad: f64) -> SubBoxes {
         let bez = span_bezier(&row, surface.knots_v(), span.last_col, span.v);
         net[r * nv..(r + 1) * nv].copy_from_slice(&bez);
     }
-    let mut pieces = vec![net];
+    net
+}
+
+/// A span's sub-patch boxes, each padded by `pad`: its Bezier net `net`,
+/// split in halves along `u` and `v` [`SUB_DEPTH`] times, each piece's box
+/// that of its net's points. Each piece lies in the hull of its net, its
+/// weights being positive.
+fn sub_patch_boxes(surface: &NurbsSurface, net: &[Hpoint], pad: f64) -> SubBoxes {
+    let (nu, nv) = (surface.degree_u() + 1, surface.degree_v() + 1);
+    let mut pieces = vec![net.to_vec()];
     for _ in 0..SUB_DEPTH {
         pieces = pieces
             .into_iter()

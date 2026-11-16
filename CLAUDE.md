@@ -77,6 +77,7 @@ Quick reference — find the right file for any task:
 | Bezier clipping intersection | `nurbs/bezier_clip.rs` |
 | Curve/surface fitting (LSPIA) | `nurbs/fitting.rs`, `nurbs/surface_fitting.rs` |
 | Point projection onto curves | `nurbs/projection.rs` |
+| Proof that a surface projection is the nearest point | `nurbs/projection/nearest.rs` |
 | Self-intersection detection | `nurbs/self_intersection.rs` |
 | 3D curves (Line, Circle, Ellipse, Parabola, Hyperbola) | `curves.rs` |
 | 2D curves (Line2D, Circle2D, Ellipse2D) | `curves2d.rs` |

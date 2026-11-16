@@ -8,11 +8,12 @@
 //! followed by Newton–Raphson refinement.
 
 use crate::MathError;
-use crate::aabb::Aabb3;
 use crate::madd::Madd;
 use crate::nurbs::curve::NurbsCurve;
 use crate::nurbs::surface::NurbsSurface;
 use crate::vec::{Point3, Vec3};
+
+mod nearest;
 
 /// Maximum Newton iterations before declaring convergence failure.
 const MAX_ITERATIONS: usize = 50;
@@ -379,16 +380,19 @@ fn curve_newton_refine(
 /// Find the closest point on a NURBS surface to the given point.
 ///
 /// Uses grid evaluation for initial guess, then 2D Newton–Raphson
-/// refinement (NURBS Book A6.2 + A6.5–A6.6). A result off the surface is
-/// then checked against every knot-span patch: each lies within the box of
-/// its own control points, so only a patch whose box comes nearer than the
-/// result can hold a nearer point, and those are searched nearest box first.
+/// refinement (NURBS Book A6.2 + A6.5–A6.6). A result farther than
+/// `tolerance` is then proved nearest, or a nearer point found, on the
+/// surface's knot-span patches in Bezier form: no point of the surface is
+/// nearer than the result by more than `tolerance`, or than a share of
+/// `1e-12` of the largest coordinate of the point and the control points,
+/// below which rounding decides. A surface with a weight that is not
+/// positive gets the Newton result.
 ///
 /// # Errors
 ///
 /// Returns [`MathError::ConvergenceFailure`] if Newton iteration does not
-/// converge within the maximum number of iterations and no patch search
-/// reaches a point either.
+/// converge within the maximum number of iterations and the surface has a
+/// weight that is not positive.
 pub fn project_point_to_surface(
     surface: &NurbsSurface,
     point: Point3,
@@ -397,283 +401,53 @@ pub fn project_point_to_surface(
     let seeded = project_from_coarse_grid(surface, point, tolerance);
     if tolerance.is_nan()
         || tolerance <= 0.0
+        || ![point.x(), point.y(), point.z()]
+            .iter()
+            .all(|c| c.is_finite())
         || seeded.as_ref().is_ok_and(|p| p.distance <= tolerance)
     {
         return seeded;
     }
-    match search_span_patches(surface, point, tolerance, seeded.as_ref().ok().copied()) {
-        Some(found) => Ok(found),
-        None => seeded,
+    let Some(index) = surface.span_index() else {
+        return seeded;
+    };
+    let start = match seeded {
+        Ok(found) if found.distance.is_finite() => found,
+        _ => {
+            let (u_min, u_max) = surface.domain_u();
+            let (v_min, v_max) = surface.domain_v();
+            surface_descend(
+                surface,
+                point,
+                surface_coarse_search(surface, point).0,
+                [u_min, u_max, v_min, v_max],
+                (surface.is_periodic_u(), surface.is_periodic_v()),
+                tolerance,
+            )
+        }
+    };
+    if !start.distance.is_finite() {
+        return Err(MathError::ConvergenceFailure {
+            iterations: MAX_ITERATIONS,
+        });
     }
+    Ok(nearest::nearest(surface, index, point, tolerance, start))
 }
 
 /// Find the point of a NURBS surface nearest a point known to lie on it or
-/// close beside it.
-///
-/// [`project_point_to_surface`] seeds from a coarse grid, and where the
-/// surface runs fast between two grid points it can settle on a point of a
-/// farther part of the surface. So a result farther than `tolerance` is
-/// tested: the Bezier patches of the surface are searched by halving,
-/// nearest control box first. A part whose control box is no nearer than
-/// the nearest point so far, less `tolerance`, is dropped, since it cannot
-/// hold a nearer one. A part whose middle is nearer starts a descent, and
-/// so does each part that is no larger than the nearest distance so far,
-/// which is not halved again. The result is the nearest point found.
-///
-/// The search reads more parts the farther the point is from the surface,
-/// so [`project_point_to_surface`] is the function for a point that is not
-/// near it.
+/// close beside it: [`project_point_to_surface`], which proves its result
+/// nearest wherever the point is.
 ///
 /// # Errors
 ///
-/// Returns [`MathError::ConvergenceFailure`] as [`project_point_to_surface`]
-/// does, when the patch search finds no point either.
+/// As [`project_point_to_surface`].
+#[deprecated(note = "use project_point_to_surface, which proves its result nearest")]
 pub fn project_point_near_surface(
     surface: &NurbsSurface,
     point: Point3,
     tolerance: f64,
 ) -> Result<SurfaceProjection, MathError> {
-    let first = project_point_to_surface(surface, point, tolerance);
-    if tolerance.is_nan()
-        || first
-            .as_ref()
-            .is_ok_and(|found| found.distance <= tolerance)
-    {
-        return first;
-    }
-    match search_bezier_boxes(surface, point, tolerance, first.as_ref().ok().copied()) {
-        Some(found) => Ok(found),
-        None => first,
-    }
-}
-
-/// A part of one Bezier patch: its control points, each `[w x, w y, w z, w]`,
-/// in rows along u, and the parameters of the surface it covers.
-struct BezierBox {
-    net: Vec<Vec<[f64; 4]>>,
-    u: (f64, f64),
-    v: (f64, f64),
-    /// The distance from the point to the box of the control points, which
-    /// no point of the part comes nearer than.
-    reach: f64,
-    /// The diagonal of that box.
-    size: f64,
-}
-
-impl BezierBox {
-    /// `None` for a weight that is not positive: the part can then leave the
-    /// box of its control points.
-    fn new(net: Vec<Vec<[f64; 4]>>, u: (f64, f64), v: (f64, f64), point: Point3) -> Option<Self> {
-        if net.iter().flatten().any(|q| q[3].is_nan() || q[3] <= 0.0) {
-            return None;
-        }
-        let hull = Aabb3::from_points(
-            net.iter()
-                .flatten()
-                .map(|q| Point3::new(q[0] / q[3], q[1] / q[3], q[2] / q[3])),
-        );
-        Some(Self {
-            net,
-            u,
-            v,
-            reach: hull.distance_squared_to_point(point).sqrt(),
-            size: (hull.max - hull.min).length(),
-        })
-    }
-
-    /// The two halves, cut across the direction the control points run
-    /// farther in.
-    fn halves(&self, point: Point3) -> [Option<Self>; 2] {
-        let step = |a: &[f64; 4], b: &[f64; 4]| {
-            let at = |q: &[f64; 4]| Point3::new(q[0] / q[3], q[1] / q[3], q[2] / q[3]);
-            (at(b) - at(a)).length()
-        };
-        let along_u: f64 = self
-            .net
-            .windows(2)
-            .map(|rows| {
-                rows[0]
-                    .iter()
-                    .zip(&rows[1])
-                    .map(|(a, b)| step(a, b))
-                    .fold(0.0, f64::max)
-            })
-            .sum();
-        let along_v: f64 = self
-            .net
-            .iter()
-            .map(|row| row.windows(2).map(|q| step(&q[0], &q[1])).sum::<f64>())
-            .fold(0.0, f64::max);
-        if along_u >= along_v {
-            let columns = self.net.first().map_or(0, Vec::len);
-            let mut low = vec![Vec::with_capacity(columns); self.net.len()];
-            let mut high = vec![Vec::with_capacity(columns); self.net.len()];
-            for j in 0..columns {
-                let column: Vec<[f64; 4]> = self.net.iter().map(|row| row[j]).collect();
-                let (a, b) = halve_bezier(&column);
-                for (i, (qa, qb)) in a.into_iter().zip(b).enumerate() {
-                    low[i].push(qa);
-                    high[i].push(qb);
-                }
-            }
-            let mid = 0.5 * (self.u.0 + self.u.1);
-            [
-                Self::new(low, (self.u.0, mid), self.v, point),
-                Self::new(high, (mid, self.u.1), self.v, point),
-            ]
-        } else {
-            let (low, high): (Vec<_>, Vec<_>) =
-                self.net.iter().map(|row| halve_bezier(row)).unzip();
-            let mid = 0.5 * (self.v.0 + self.v.1);
-            [
-                Self::new(low, self.u, (self.v.0, mid), point),
-                Self::new(high, self.u, (mid, self.v.1), point),
-            ]
-        }
-    }
-}
-
-impl PartialEq for BezierBox {
-    fn eq(&self, other: &Self) -> bool {
-        self.cmp(other) == std::cmp::Ordering::Equal
-    }
-}
-
-impl Eq for BezierBox {}
-
-impl PartialOrd for BezierBox {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for BezierBox {
-    /// The part whose control box is nearest is the greatest, for a
-    /// max-heap; of two equally near, the smaller.
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        other
-            .reach
-            .total_cmp(&self.reach)
-            .then(other.size.total_cmp(&self.size))
-    }
-}
-
-/// The control points of the two halves of a Bezier curve, by de Casteljau.
-fn halve_bezier(points: &[[f64; 4]]) -> (Vec<[f64; 4]>, Vec<[f64; 4]>) {
-    let mut work = points.to_vec();
-    let mut low = Vec::with_capacity(points.len());
-    let mut high = Vec::with_capacity(points.len());
-    for level in 0..points.len() {
-        let last = points.len() - 1 - level;
-        low.push(work[0]);
-        high.push(work[last]);
-        for k in 0..last {
-            for c in 0..4 {
-                work[k][c] = 0.5 * (work[k][c] + work[k + 1][c]);
-            }
-        }
-    }
-    high.reverse();
-    (low, high)
-}
-
-/// The most halves of parts of Bezier patches a search for a point near the
-/// surface makes. The patches themselves do not count. Past this many, a
-/// part is not halved again, and still starts its descent.
-const MOST_BEZIER_HALVES: usize = 2048;
-
-/// The nearest point found of `surface` to `point`: `start`, or the end of
-/// a damped descent off the middle of a part of a Bezier patch (see
-/// [`project_point_near_surface`]). `start` for a surface with a weight
-/// that is not positive, whose parts can leave their control boxes, and for
-/// one with a knot vector that is not clamped or a degree of zero.
-fn search_bezier_boxes(
-    surface: &NurbsSurface,
-    point: Point3,
-    tolerance: f64,
-    start: Option<SurfaceProjection>,
-) -> Option<SurfaceProjection> {
-    // A direction of degree zero is a step, with no Bezier form to halve.
-    // The split into patches reads a clamped knot vector; from one that is
-    // not, its patches' control boxes do not hold the surface.
-    let clamped = |knots: &[f64], degree: usize| {
-        let last = knots.len() - 1;
-        degree > 0
-            && knots[..=degree]
-                .iter()
-                .all(|k| k.to_bits() == knots[0].to_bits())
-            && knots[last - degree..]
-                .iter()
-                .all(|k| k.to_bits() == knots[last].to_bits())
-    };
-    if !clamped(surface.knots_u(), surface.degree_u())
-        || !clamped(surface.knots_v(), surface.degree_v())
-    {
-        return start;
-    }
-    let Ok(patches) = surface.bezier_patches() else {
-        return start;
-    };
-    let (u_min, u_max) = surface.domain_u();
-    let (v_min, v_max) = surface.domain_v();
-    let closed = (surface.is_periodic_u(), surface.is_periodic_v());
-    let mut best = start;
-    let nearest = |best: Option<SurfaceProjection>| best.map_or(f64::INFINITY, |b| b.distance);
-    let mut heap = std::collections::BinaryHeap::new();
-    for patch in patches.iter() {
-        let net = patch
-            .surface
-            .control_points()
-            .iter()
-            .zip(patch.surface.weights())
-            .map(|(row, weights)| {
-                row.iter()
-                    .zip(weights)
-                    .map(|(p, &w)| [p.x() * w, p.y() * w, p.z() * w, w])
-                    .collect()
-            })
-            .collect();
-        let Some(part) = BezierBox::new(net, patch.u_range, patch.v_range, point) else {
-            return start;
-        };
-        if part.reach < nearest(best) - tolerance {
-            heap.push(part);
-        }
-    }
-    let mut halved = 0;
-    while let Some(part) = heap.pop() {
-        if part.reach >= nearest(best) - tolerance {
-            break;
-        }
-        let last = part.size <= nearest(best).max(tolerance) || halved >= MOST_BEZIER_HALVES;
-        let seed = (0.5 * (part.u.0 + part.u.1), 0.5 * (part.v.0 + part.v.1));
-        if last || (surface.evaluate(seed.0, seed.1) - point).length() < nearest(best) {
-            let found = surface_descend(
-                surface,
-                point,
-                seed,
-                [u_min, u_max, v_min, v_max],
-                closed,
-                tolerance,
-            );
-            if found.distance < nearest(best) {
-                best = Some(found);
-                if found.distance <= tolerance {
-                    break;
-                }
-            }
-        }
-        if last {
-            continue;
-        }
-        for half in part.halves(point).into_iter().flatten() {
-            halved += 1;
-            if half.reach < nearest(best) - tolerance {
-                heap.push(half);
-            }
-        }
-    }
-    best
+    project_point_to_surface(surface, point, tolerance)
 }
 
 /// Project `point` onto `surface` by Newton from `(u, v)`, for a point
@@ -1041,141 +815,6 @@ fn gauss_newton_step(
     }
 }
 
-/// One knot span of each direction: its parameter box, and the distance
-/// to the box of the control points that shape it, which bounds how near
-/// any point of the patch can come.
-struct SpanPatch {
-    u: (f64, f64),
-    v: (f64, f64),
-    reach: f64,
-}
-
-impl SpanPatch {
-    fn holds(&self, (u, v): (f64, f64)) -> bool {
-        (self.u.0..=self.u.1).contains(&u) && (self.v.0..=self.v.1).contains(&v)
-    }
-
-    /// The nearest of a 3 x 3 grid of samples over the patch.
-    fn nearest_sample(&self, surface: &NurbsSurface, point: Point3) -> (f64, f64) {
-        let mut best = (f64::INFINITY, self.u.0, self.v.0);
-        for fu in [0.0_f64, 0.5, 1.0] {
-            let u = fu.madd(self.u.1 - self.u.0, self.u.0);
-            for fv in [0.0_f64, 0.5, 1.0] {
-                let v = fv.madd(self.v.1 - self.v.0, self.v.0);
-                let d = (surface.evaluate(u, v) - point).length_squared();
-                if d < best.0 {
-                    best = (d, u, v);
-                }
-            }
-        }
-        (best.1, best.2)
-    }
-}
-
-/// The knot-span patches whose control box comes nearer than `bound`,
-/// nearest first, leaving out any that holds `settled`. `None` for a weight
-/// that is not positive, which can carry the surface outside its control
-/// points' hull.
-fn span_patches(
-    surface: &NurbsSurface,
-    point: Point3,
-    bound: f64,
-    settled: Option<(f64, f64)>,
-) -> Option<Vec<SpanPatch>> {
-    if surface
-        .weights()
-        .iter()
-        .flatten()
-        .any(|&w| w.is_nan() || w <= 0.0)
-    {
-        return None;
-    }
-    // The spans' boxes are kept in an index made once per surface: read
-    // afresh for each point, as most points in a boolean are, they cost
-    // seconds per boolean on a fitted surface's thousands of spans.
-    if let Some(index) = surface.span_index() {
-        return Some(
-            index
-                .spans_within(point, bound)
-                .into_iter()
-                .filter_map(|(i, reach)| {
-                    let (u, v) = index.span(i)?;
-                    let patch = SpanPatch { u, v, reach };
-                    (!settled.is_some_and(|uv| patch.holds(uv))).then_some(patch)
-                })
-                .collect(),
-        );
-    }
-    let spans = |knots: &[f64], p: usize| -> Vec<usize> {
-        (p..knots.len() - p - 1)
-            .filter(|&k| knots[k] < knots[k + 1])
-            .collect()
-    };
-    let (knots_u, knots_v) = (surface.knots_u(), surface.knots_v());
-    let (pu, pv) = (surface.degree_u(), surface.degree_v());
-    let rows = surface.control_points();
-    let spans_v = spans(knots_v, pv);
-    let mut patches = Vec::new();
-    for i in spans(knots_u, pu) {
-        for &j in &spans_v {
-            let hull = Aabb3::from_points(
-                rows[i - pu..=i]
-                    .iter()
-                    .flat_map(|row| row[j - pv..=j].iter().copied()),
-            );
-            let reach = hull.distance_squared_to_point(point).sqrt();
-            let patch = SpanPatch {
-                u: (knots_u[i], knots_u[i + 1]),
-                v: (knots_v[j], knots_v[j + 1]),
-                reach,
-            };
-            if reach < bound && !settled.is_some_and(|uv| patch.holds(uv)) {
-                patches.push(patch);
-            }
-        }
-    }
-    patches.sort_by(|a, b| a.reach.total_cmp(&b.reach));
-    Some(patches)
-}
-
-/// Search the patches that could hold a point nearer than `start` by more
-/// than `tolerance`, skipping those that hold `start` itself, whose valley
-/// its refinement already settled.
-fn search_span_patches(
-    surface: &NurbsSurface,
-    point: Point3,
-    tolerance: f64,
-    start: Option<SurfaceProjection>,
-) -> Option<SurfaceProjection> {
-    let bound = start.map_or(f64::INFINITY, |b| b.distance - tolerance);
-    let Some(patches) = span_patches(surface, point, bound, start.map(|b| (b.u, b.v))) else {
-        return start;
-    };
-    let (knots_u, knots_v) = (surface.knots_u(), surface.knots_v());
-    let (pu, pv) = (surface.degree_u(), surface.degree_v());
-    let domain = [
-        knots_u[pu],
-        knots_u[knots_u.len() - pu - 1],
-        knots_v[pv],
-        knots_v[knots_v.len() - pv - 1],
-    ];
-    let closed = (surface.is_periodic_u(), surface.is_periodic_v());
-    let mut best = start;
-    for patch in &patches {
-        if best.is_some_and(|b| patch.reach >= b.distance - tolerance) {
-            break;
-        }
-        let (u, v) = patch.nearest_sample(surface, point);
-        let found = surface_descend(surface, point, (u, v), domain, closed, tolerance);
-        if found.distance.is_finite()
-            && best.is_none_or(|b| found.distance < b.distance - tolerance)
-        {
-            best = Some(found);
-        }
-    }
-    best
-}
-
 /// Gauss–Newton from `seed`, halving any step that does not bring the
 /// point nearer: it settles where the undamped iteration can circle a
 /// valley, and never ends farther than it began.
@@ -1304,17 +943,17 @@ mod tests {
                     .iter()
                     .map(|s| (*s - point).length())
                     .fold(f64::INFINITY, f64::min);
-                let near = project_point_near_surface(&strip, point, 1e-9).expect("a projection");
+                let found = project_point_to_surface(&strip, point, 1e-9).expect("a projection");
                 assert!(
-                    near.distance <= sampled + 1e-9,
+                    found.distance <= sampled + 1e-9,
                     "v = {v}, side {side}: {} away, a sample is {sampled} away",
-                    near.distance
+                    found.distance
                 );
             }
         }
     }
 
-    /// The patches a search starts from do not use up its halvings: a strip
+    /// The patches a proof starts from do not use up its halvings: a strip
     /// in 2,048 spans still gets its parts halved.
     #[test]
     fn a_point_on_a_strip_of_many_spans_projects_to_itself() {
@@ -1322,8 +961,8 @@ mod tests {
         for k in 0..=50 {
             let v = f64::from(k) / 50.0;
             let point = strip.evaluate(0.4003, v);
-            let near = project_point_near_surface(&strip, point, 1e-9).expect("a projection");
-            assert!(near.distance < 1e-7, "v = {v}: {} away", near.distance);
+            let found = project_point_to_surface(&strip, point, 1e-9).expect("a projection");
+            assert!(found.distance < 1e-7, "v = {v}: {} away", found.distance);
         }
     }
 
@@ -1338,32 +977,28 @@ mod tests {
                 for k in 0..=200 {
                     let v = f64::from(k) / 200.0;
                     let point = strip.evaluate(u, v);
-                    let plain =
-                        project_point_to_surface(&strip, point, 1e-9).expect("a projection");
-                    if plain.distance > 1e-3 {
+                    let seeded = project_from_coarse_grid(&strip, point, 1e-9);
+                    if seeded.is_ok_and(|s| s.distance > 1e-3) {
                         strayed += 1;
                     }
-                    let near =
-                        project_point_near_surface(&strip, point, 1e-9).expect("a projection");
+                    let found =
+                        project_point_to_surface(&strip, point, 1e-9).expect("a projection");
                     assert!(
-                        near.distance < 1e-7,
+                        found.distance < 1e-7,
                         "length {length}, v = {v}: {} away",
-                        near.distance
+                        found.distance
                     );
                     assert!(
-                        (near.u - u).abs() < 1e-6 && (near.v - v).abs() < 1e-6,
+                        (found.u - u).abs() < 1e-6 && (found.v - v).abs() < 1e-6,
                         "length {length}, v = {v}: found ({}, {})",
-                        near.u,
-                        near.v
+                        found.u,
+                        found.v
                     );
                 }
             }
-            // The plain projection is what strays here; if it stops, this
-            // test no longer shows that the search is needed.
-            assert!(
-                strayed > 0,
-                "length {length}: the plain projection found every point"
-            );
+            // Newton from the seed grid is what strays here; if it stops,
+            // this test no longer shows that the proof is needed.
+            assert!(strayed > 0, "length {length}: Newton found every point");
         }
     }
 
@@ -1377,21 +1012,104 @@ mod tests {
                 let v = f64::from(k) / 200.0;
                 let foot = strip.evaluate(0.4, v);
                 let normal = strip.normal(0.4, v).expect("a normal");
-                let near = project_point_near_surface(&strip, foot + normal * off, 1e-9)
+                let found = project_point_to_surface(&strip, foot + normal * off, 1e-9)
                     .expect("a projection");
                 assert!(
-                    (near.distance - off).abs() < 1e-9 && (near.v - v).abs() < 1e-5,
+                    (found.distance - off).abs() < 1e-9 && (found.v - v).abs() < 1e-5,
                     "off {off}, v = {v}: {} away at v = {}",
-                    near.distance,
-                    near.v
+                    found.distance,
+                    found.v
                 );
             }
         }
     }
 
-    /// A surface whose knots are not clamped keeps the plain projection.
+    /// Whether each of `points` projects onto `surface` no farther than the
+    /// nearest of an `n_u` by `n_v` grid of its points, which the nearest
+    /// point is no farther than.
+    #[allow(clippy::cast_precision_loss)]
+    fn assert_nearest(
+        name: &str,
+        surface: &NurbsSurface,
+        points: &[Point3],
+        (n_u, n_v): (usize, usize),
+    ) {
+        let (u0, u1) = surface.domain_u();
+        let (v0, v1) = surface.domain_v();
+        let samples: Vec<Point3> = (0..=n_u)
+            .flat_map(|i| (0..=n_v).map(move |j| (i, j)))
+            .map(|(i, j)| {
+                surface.evaluate(
+                    u0 + (u1 - u0) * i as f64 / n_u as f64,
+                    v0 + (v1 - v0) * j as f64 / n_v as f64,
+                )
+            })
+            .collect();
+        for point in points {
+            let sampled = samples
+                .iter()
+                .map(|s| (*s - *point).length())
+                .fold(f64::INFINITY, f64::min);
+            let found = project_point_to_surface(surface, *point, 1e-9).expect("a projection");
+            assert!(
+                found.distance <= sampled + 1e-9,
+                "{name}, {point:?}: {} away at ({}, {}), a sample is {sampled} away",
+                found.distance,
+                found.u,
+                found.v
+            );
+            let at = surface.evaluate(found.u, found.v);
+            assert!(
+                ((at - *point).length() - found.distance).abs() < 1e-9,
+                "{name}, {point:?}: the distance is not that of its parameters"
+            );
+        }
+    }
+
+    /// Points on, near and far from a strip that bends back, a lune of a
+    /// ball (rational, with a pole at each end), a wall of 117 spans and a
+    /// strip that runs close under itself, and points on the axis of the
+    /// lune, where each pole is the nearest point or a whole circle is.
     #[test]
-    fn a_point_beside_a_surface_that_is_not_clamped_gets_the_plain_projection() {
+    #[allow(clippy::cast_precision_loss)]
+    fn points_round_a_surface_get_their_nearest_points() {
+        let mut state = 0x9e37_79b9_7f4a_7c15_u64;
+        let mut unit = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            (state >> 11) as f64 / (1_u64 << 53) as f64
+        };
+        let surfaces = [
+            ("bends back", strip_that_bends_back(10.0), (40, 400)),
+            ("runs close under", strip_of(10.0, 0.02, 1), (40, 400)),
+            ("lune", ball_lune(1, 1.0), (200, 200)),
+            ("wall", wavy_ring(), (1200, 40)),
+        ];
+        for (name, surface, grid) in &surfaces {
+            let (u0, u1) = surface.domain_u();
+            let (v0, v1) = surface.domain_v();
+            let mut points = Vec::new();
+            for off in [0.0, 1e-6, 1e-3, 0.3, 3.0, 30.0] {
+                for _ in 0..12 {
+                    let (u, v) = (u0 + (u1 - u0) * unit(), v0 + (v1 - v0) * unit());
+                    let normal = surface.normal(u, v).unwrap_or(Vec3::new(0.0, 0.0, 1.0));
+                    points.push(surface.evaluate(u, v) + normal * (off * (2.0 * unit() - 1.0)));
+                }
+            }
+            assert_nearest(name, surface, &points, *grid);
+        }
+        let axis: Vec<Point3> = [-20.0, -9.0, -7.6, -7.0, -3.0, 0.0, 3.0, 7.0, 7.6, 9.0, 20.0]
+            .iter()
+            .map(|&z| Point3::new(0.0, 0.0, z))
+            .collect();
+        assert_nearest("lune axis", &surfaces[2].1, &axis, (200, 200));
+    }
+
+    /// A surface whose knots are not clamped: each span is still a Bezier
+    /// patch of it, so the proof reads it as any other.
+    #[test]
+    fn a_point_beside_a_surface_that_is_not_clamped_gets_its_nearest_point() {
         let net: Vec<Vec<Point3>> = (0..2)
             .map(|i| {
                 (0..6)
@@ -1408,15 +1126,19 @@ mod tests {
             vec![vec![1.0; 6]; 2],
         )
         .expect("a surface");
-        let point = wave.evaluate(0.5, 3.7) + Vec3::new(0.0, 0.0, 1e-4);
-        let plain = project_point_to_surface(&wave, point, 1e-9).expect("a projection");
-        let near = project_point_near_surface(&wave, point, 1e-9).expect("a projection");
-        assert_eq!((plain.u, plain.v), (near.u, near.v));
+        let mut points = vec![wave.evaluate(0.5, 3.7) + Vec3::new(0.0, 0.0, 1e-4)];
+        for k in 0..20 {
+            let x = 1.0 + 0.2 * f64::from(k);
+            points.push(Point3::new(x, 0.3, 2.0));
+            points.push(Point3::new(x, 0.7, -1.5));
+        }
+        assert_nearest("wave", &wave, &points, (20, 2000));
     }
 
-    /// A surface of degree zero along u has no Bezier patches to search.
+    /// A surface of degree zero along u is a step along u: each knot span
+    /// of u is one curve along v.
     #[test]
-    fn a_point_beside_a_surface_of_degree_zero_gets_the_plain_projection() {
+    fn a_point_beside_a_surface_of_degree_zero_gets_its_nearest_point() {
         let line = NurbsSurface::new(
             0,
             1,
@@ -1426,23 +1148,37 @@ mod tests {
             vec![vec![1.0, 1.0]],
         )
         .expect("a surface");
-        let point = Point3::new(0.0, 0.5, 1e-5);
-        let plain = project_point_to_surface(&line, point, 1e-6);
-        let near = project_point_near_surface(&line, point, 1e-6);
-        assert_eq!(
-            plain.ok().map(|p| (p.u, p.v)),
-            near.ok().map(|p| (p.u, p.v))
-        );
+        let found =
+            project_point_to_surface(&line, Point3::new(0.0, 0.5, 1e-5), 1e-6).expect("projection");
+        assert!((found.distance - 1e-5).abs() < 1e-9, "{found:?}");
+        assert!((found.v - 0.5).abs() < 1e-6, "{found:?}");
+        let steps = NurbsSurface::new(
+            0,
+            1,
+            vec![0.0, 0.5, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![
+                vec![Point3::new(0.0, 0.0, 0.0), Point3::new(0.0, 1.0, 0.0)],
+                vec![Point3::new(5.0, 0.0, 0.0), Point3::new(5.0, 1.0, 1.0)],
+            ],
+            vec![vec![1.0, 1.0]; 2],
+        )
+        .expect("a surface");
+        let points: Vec<Point3> = (0..=10)
+            .map(|k| Point3::new(0.5 * f64::from(k), 0.5, 0.4))
+            .collect();
+        assert_nearest("steps", &steps, &points, (2, 4000));
     }
 
     #[test]
     fn a_point_far_from_the_surface_gets_its_nearest_point() {
         let strip = strip_that_bends_back(10.0);
-        let point = Point3::new(3.0, 5.0, 9.0);
-        let plain = project_point_to_surface(&strip, point, 1e-9).expect("a projection");
-        let near = project_point_near_surface(&strip, point, 1e-9).expect("a projection");
-        assert!((plain.distance - near.distance).abs() < 1e-9);
-        assert!((plain.u - near.u).abs() < 1e-6 && (plain.v - near.v).abs() < 1e-6);
+        let points = [
+            Point3::new(3.0, 5.0, 9.0),
+            Point3::new(-30.0, 5.0, 1.0),
+            Point3::new(3.0, 500.0, -9.0),
+        ];
+        assert_nearest("strip", &strip, &points, (100, 1000));
     }
 
     /// A span with a negative weight leaves its control points' box, so it
