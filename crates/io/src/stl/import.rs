@@ -908,19 +908,34 @@ impl BoxTree {
                 };
                 continue;
             }
-            let side = |k: usize| bounds.1[k] - bounds.0[k];
-            let axis = if side(0) >= side(1) && side(0) >= side(2) {
+            // Split along the widest spread of the centres of the boxes.
+            // Boxes round one centre (nested shells) split by their size.
+            let (mut low, mut high) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
+            for &i in &items[start..end] {
+                for k in 0..3 {
+                    let centre = boxes[i].0[k] + boxes[i].1[k];
+                    low[k] = low[k].min(centre);
+                    high[k] = high[k].max(centre);
+                }
+            }
+            let spread = |k: usize| high[k] - low[k];
+            let axis = if spread(0) >= spread(1) && spread(0) >= spread(2) {
                 0
-            } else if side(1) >= side(2) {
+            } else if spread(1) >= spread(2) {
                 1
             } else {
                 2
             };
+            let key = |i: usize| {
+                if spread(axis) > 0.0 {
+                    boxes[i].0[axis] + boxes[i].1[axis]
+                } else {
+                    (0..3).map(|k| boxes[i].1[k] - boxes[i].0[k]).sum()
+                }
+            };
             let mid = start + (end - start) / 2;
-            items[start..end].select_nth_unstable_by(mid - start, |&a, &b| {
-                (boxes[a].0[axis] + boxes[a].1[axis])
-                    .total_cmp(&(boxes[b].0[axis] + boxes[b].1[axis]))
-            });
+            items[start..end]
+                .select_nth_unstable_by(mid - start, |&a, &b| key(a).total_cmp(&key(b)));
             let first = nodes.len();
             nodes.extend([empty, empty]);
             nodes[node] = BoxNode {
