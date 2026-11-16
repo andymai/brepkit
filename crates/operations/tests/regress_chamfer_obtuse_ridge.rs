@@ -230,3 +230,79 @@ fn chamfer_v2_refuses_edges_meeting_at_a_vertex() {
         .unwrap();
     assert!(chamfer_v2(&mut topo, b, &[edges[0], neighbour], 0.4, 0.4).is_err());
 }
+
+/// A chamfer of every edge of a box is refused at the first corner where two
+/// chamfers trim, before the trims of the other edges and the chamfer faces.
+#[test]
+fn chamfer_v2_refuses_a_corner_before_the_other_edges() {
+    use brepkit_blend::BlendError;
+    use brepkit_operations::OperationsError;
+
+    let mut topo = Topology::new();
+    let b = brepkit_operations::primitives::make_box(&mut topo, 20.0, 20.0, 20.0).unwrap();
+    let edges = solid_edges(&topo, b).unwrap();
+    let faces_before = topo.num_faces();
+    let refused = chamfer_v2(&mut topo, b, &edges, 1.0, 1.0);
+    let made = topo.num_faces() - faces_before;
+    let Err(OperationsError::Blend(BlendError::CornerFailure { vertex })) = refused else {
+        panic!(
+            "expected a corner refusal, got {:?} after {made} faces",
+            refused.map(|r| r.solid)
+        );
+    };
+    let meeting = edges
+        .iter()
+        .filter(|&&e| {
+            let e = topo.edge(e).unwrap();
+            e.start() == vertex || e.end() == vertex
+        })
+        .count();
+    assert_eq!(meeting, 3);
+    // Two edges trimmed their two faces each.
+    assert!(made <= 4, "{made} faces made before the refusal");
+}
+
+/// Of two edges of an L prism that meet, one fails to trim. The other is
+/// chamfered, and the result is partial: the corner check runs only on edges
+/// that trim.
+#[test]
+fn chamfer_v2_chamfers_one_of_two_meeting_edges_when_the_other_fails() {
+    let mut topo = Topology::new();
+    let profile = make_polygon_wire(
+        &mut topo,
+        &[
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(6.0, 0.0, 0.0),
+            Point3::new(6.0, 2.0, 0.0),
+            Point3::new(2.0, 2.0, 0.0),
+            Point3::new(2.0, 5.0, 0.0),
+            Point3::new(0.0, 5.0, 0.0),
+        ],
+        1e-7,
+    )
+    .unwrap();
+    let face = topo.add_face(Face::new(
+        profile,
+        vec![],
+        FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: 0.0,
+        },
+    ));
+    let solid = extrude(&mut topo, face, Vec3::new(0.0, 0.0, 1.0), 3.0).unwrap();
+    let edges = solid_edges(&topo, solid).unwrap();
+    let (kept, failing) = (edges[1], edges[2]);
+    let result = chamfer_v2(&mut topo, solid, &[kept, failing], 0.4, 0.4).unwrap();
+    assert_eq!(result.succeeded, vec![kept]);
+    assert!(result.is_partial);
+    assert!(matches!(
+        result.failed[..],
+        [(edge, brepkit_blend::BlendError::TrimmingFailure { .. })] if edge == failing
+    ));
+    let volume = brepkit_operations::measure::solid_volume(&topo, result.solid, 0.01).unwrap();
+    let expected = 54.0 - 0.08 * edge_length(&topo, kept);
+    assert!(
+        (volume - expected).abs() < 1e-9,
+        "volume {volume}, expected {expected}"
+    );
+}

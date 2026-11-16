@@ -3,6 +3,7 @@
 pub mod checks;
 pub(crate) mod edge;
 pub(crate) mod face;
+pub mod face_overlap;
 pub mod face_wires;
 pub mod shell;
 pub(crate) mod solid;
@@ -65,6 +66,16 @@ pub fn validate_solid(
         report
             .issues
             .extend(solid::check_duplicate_faces(topo, solid_id)?);
+    }
+    if !options
+        .disabled_checks
+        .contains(&CheckId::SolidFacesOverlap)
+    {
+        report.issues.extend(face_overlap::check_faces_overlap(
+            topo,
+            solid_id,
+            options.tolerance_scale * 1e-6,
+        )?);
     }
 
     let shells: Vec<_> = std::iter::once(solid_data.outer_shell())

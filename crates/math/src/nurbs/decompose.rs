@@ -111,13 +111,27 @@ pub fn curve_bezier_between(
     if !(knots[i] <= lo && hi <= knots[i + 1] && knots[i] < knots[i + 1]) {
         return Err(out_of_range);
     }
-    let homogeneous: Vec<[f64; 4]> = curve.control_points()[i - p..=i]
-        .iter()
-        .zip(&curve.weights()[i - p..=i])
-        .map(|(pt, &w)| [pt.x() * w, pt.y() * w, pt.z() * w, w])
-        .collect();
+    let homogeneous = homogeneous(
+        &curve.control_points()[i - p..=i],
+        &curve.weights()[i - p..=i],
+    );
+    Ok(span_bezier(&homogeneous, knots, p, i, (a, b)))
+}
+
+/// The Bezier points, in homogeneous form, of knot span `i` of a B-spline
+/// of degree `p` on `knots`, from parameter `a` to parameter `b` in the
+/// span, from the span's `p + 1` de Boor points `de_boor` in homogeneous
+/// form. Point `j` is the blossom at `a` taken `p - j` times and `b` taken
+/// `j` times.
+fn span_bezier(
+    de_boor: &[[f64; 4]],
+    knots: &[f64],
+    p: usize,
+    i: usize,
+    (a, b): (f64, f64),
+) -> Vec<[f64; 4]> {
     let blossom = |at_b: usize| {
-        let mut d = homogeneous.clone();
+        let mut d = de_boor.to_vec();
         for level in 1..=p {
             let u = if level <= at_b { b } else { a };
             for j in (level..=p).rev() {
@@ -131,7 +145,7 @@ pub fn curve_bezier_between(
         }
         d[p]
     };
-    Ok((0..=p).map(blossom).collect())
+    (0..=p).map(blossom).collect()
 }
 
 /// A single Bezier patch extracted from a NURBS surface decomposition.
@@ -184,13 +198,23 @@ impl BezierPatch {
 /// Decompose a NURBS surface into Bezier patches.
 ///
 /// Inserts knots in both u and v directions until all interior knots reach
-/// full multiplicity (equal to degree), then extracts individual patches.
-/// Each patch has `(degree_u + 1) × (degree_v + 1)` control points.
+/// at least full multiplicity (the degree), then extracts one patch for each
+/// pair of knot spans of nonzero width, in u-major order. Each patch has
+/// `(degree_u + 1) × (degree_v + 1)` control points. A direction of degree
+/// zero gives one patch for each of its spans, constant along it.
+///
+/// Where a span's control points are its Bezier points, the patch takes
+/// them as they are. Where they are not, because a knot at an end of the
+/// span falls short of the degree's multiplicity, the patch takes the
+/// span's Bezier points by blossoming: at the ends of a knot vector that is
+/// not clamped, and next to knots nearer than `KNOT_EPS` (1e-15), which the
+/// insertion counts as one knot.
 ///
 /// # Errors
 ///
-/// Returns an error if knot insertion fails or the surface is degenerate.
-#[allow(clippy::too_many_lines)]
+/// Returns [`MathError::PoleAtInfinity`] if a blossomed patch has a control
+/// point at infinity, as weights of mixed sign can give, or another error if
+/// knot insertion fails or the surface is degenerate.
 pub fn surface_to_bezier_patches(surface: &NurbsSurface) -> Result<Vec<BezierPatch>, MathError> {
     let pu = surface.degree_u();
     let pv = surface.degree_v();
@@ -207,10 +231,10 @@ pub fn surface_to_bezier_patches(surface: &NurbsSurface) -> Result<Vec<BezierPat
     let n_rows = ref_cps.len();
     let n_cols = if n_rows > 0 { ref_cps[0].len() } else { 0 };
 
-    let n_patches_u = if n_rows > pu { (n_rows - 1) / pu } else { 0 };
-    let n_patches_v = if n_cols > pv { (n_cols - 1) / pv } else { 0 };
+    let spans_u = spans_of_width(ref_knots_u, pu, n_rows);
+    let spans_v = spans_of_width(ref_knots_v, pv, n_cols);
 
-    if n_patches_u == 0 || n_patches_v == 0 {
+    if spans_u.is_empty() || spans_v.is_empty() {
         // Single patch: return the whole surface.
         let (u_start, u_end) = refined.domain_u();
         let (v_start, v_end) = refined.domain_v();
@@ -221,34 +245,69 @@ pub fn surface_to_bezier_patches(surface: &NurbsSurface) -> Result<Vec<BezierPat
         }]);
     }
 
-    let mut patches = Vec::with_capacity(n_patches_u * n_patches_v);
+    let mut patches = Vec::with_capacity(spans_u.len() * spans_v.len());
 
-    for iu in 0..n_patches_u {
-        let row_start = iu * pu;
-        let row_end = row_start + pu + 1;
-        if row_end > n_rows {
-            break;
-        }
-        // Knot values for this u-span
-        let u_start = ref_knots_u[row_start + pu];
-        let u_end = ref_knots_u[row_end];
+    for &su in &spans_u {
+        let (row_start, row_end) = (su - pu, su + 1);
+        let (u_start, u_end) = (ref_knots_u[su], ref_knots_u[su + 1]);
+        let bezier_u = span_is_bezier(ref_knots_u, pu, su);
+        // The span's rows along u in homogeneous form, read off its de Boor
+        // points column by column, when they are not its Bezier points.
+        let blossomed_rows = (!bezier_u).then(|| {
+            let columns: Vec<Vec<[f64; 4]>> = (0..n_cols)
+                .map(|c| {
+                    let de_boor: Vec<[f64; 4]> = (row_start..row_end)
+                        .map(|r| {
+                            let (pt, w) = (ref_cps[r][c], ref_ws[r][c]);
+                            [pt.x() * w, pt.y() * w, pt.z() * w, w]
+                        })
+                        .collect();
+                    span_bezier(&de_boor, ref_knots_u, pu, su, (u_start, u_end))
+                })
+                .collect();
+            transpose(&columns)
+        });
 
-        for iv in 0..n_patches_v {
-            let col_start = iv * pv;
-            let col_end = col_start + pv + 1;
-            if col_end > n_cols {
-                break;
-            }
-            let v_start = ref_knots_v[col_start + pv];
-            let v_end = ref_knots_v[col_end];
+        for &sv in &spans_v {
+            let (col_start, col_end) = (sv - pv, sv + 1);
+            let (v_start, v_end) = (ref_knots_v[sv], ref_knots_v[sv + 1]);
+            let bezier_v = span_is_bezier(ref_knots_v, pv, sv);
 
             // Extract (pu+1) × (pv+1) control point sub-grid.
             let mut patch_cps = Vec::with_capacity(pu + 1);
             let mut patch_ws = Vec::with_capacity(pu + 1);
 
-            for row in row_start..row_end {
-                patch_cps.push(ref_cps[row][col_start..col_end].to_vec());
-                patch_ws.push(ref_ws[row][col_start..col_end].to_vec());
+            if bezier_u && bezier_v {
+                for row in row_start..row_end {
+                    patch_cps.push(ref_cps[row][col_start..col_end].to_vec());
+                    patch_ws.push(ref_ws[row][col_start..col_end].to_vec());
+                }
+            } else {
+                let (start, end) = if bezier_u {
+                    (v_start, v_end)
+                } else {
+                    (u_start, u_end)
+                };
+                for k in 0..=pu {
+                    let along_v = match &blossomed_rows {
+                        Some(rows) => std::borrow::Cow::Borrowed(&rows[k][col_start..col_end]),
+                        None => std::borrow::Cow::Owned(homogeneous(
+                            &ref_cps[row_start + k][col_start..col_end],
+                            &ref_ws[row_start + k][col_start..col_end],
+                        )),
+                    };
+                    let net = if bezier_v {
+                        along_v.into_owned()
+                    } else {
+                        span_bezier(&along_v, ref_knots_v, pv, sv, (v_start, v_end))
+                    };
+                    let mut points = Vec::with_capacity(net.len());
+                    for &q in &net {
+                        points.push(cartesian(q).ok_or(MathError::PoleAtInfinity { start, end })?);
+                    }
+                    patch_cps.push(points);
+                    patch_ws.push(net.iter().map(|q| q[3]).collect());
+                }
             }
 
             // Build Bezier knot vectors: (p+1) copies of start, (p+1) copies of end.
@@ -269,6 +328,40 @@ pub fn surface_to_bezier_patches(surface: &NurbsSurface) -> Result<Vec<BezierPat
     }
 
     Ok(patches)
+}
+
+/// The index `i` of each knot span `[knots[i], knots[i + 1]]` of nonzero
+/// width in the domain of a direction of degree `p` over `n` control points.
+/// A span counts however narrow it is: the surface can cross a long way in
+/// it.
+fn spans_of_width(knots: &[f64], p: usize, n: usize) -> Vec<usize> {
+    (p..n).filter(|&i| knots[i] < knots[i + 1]).collect()
+}
+
+/// Whether control points `i - p` to `i` are the Bezier points of knot
+/// span `i`: the `p` knots up to `knots[i]` equal it, and the `p` knots
+/// from `knots[i + 1]` equal that.
+fn span_is_bezier(knots: &[f64], p: usize, i: usize) -> bool {
+    // By value: -0 and 0 are one knot.
+    let same = |a: f64, b: f64| (a - b).abs() <= 0.0;
+    knots[i + 1 - p..=i].iter().all(|&k| same(k, knots[i]))
+        && knots[i + 1..=i + p].iter().all(|&k| same(k, knots[i + 1]))
+}
+
+/// A row of homogeneous points `[w x, w y, w z, w]` as points and weights,
+/// a point of weight zero kept as its numerator.
+fn cartesian_row(h: &[[f64; 4]]) -> (Vec<Point3>, Vec<f64>) {
+    let row = h
+        .iter()
+        .map(|h| {
+            if h[3] == 0.0 {
+                Point3::new(h[0], h[1], h[2])
+            } else {
+                Point3::new(h[0] / h[3], h[1] / h[3], h[2] / h[3])
+            }
+        })
+        .collect();
+    (row, h.iter().map(|h| h[3]).collect())
 }
 
 /// The knots `surface_to_bezier_patches` inserts along one direction, in
@@ -409,19 +502,6 @@ fn insert_along_rows(
         rows.splice((ck - p + 1)..ck, new_rows);
         knots.insert(ck + 1, u);
     }
-    let back = |h: &[[f64; 4]]| -> (Vec<Point3>, Vec<f64>) {
-        let row = h
-            .iter()
-            .map(|h| {
-                if h[3] == 0.0 {
-                    Point3::new(h[0], h[1], h[2])
-                } else {
-                    Point3::new(h[0] / h[3], h[1] / h[3], h[2] / h[3])
-                }
-            })
-            .collect();
-        (row, h.iter().map(|h| h[3]).collect())
-    };
     let mut old: Vec<Option<(Vec<Point3>, Vec<f64>)>> = std::mem::take(cps)
         .into_iter()
         .zip(std::mem::take(ws))
@@ -433,10 +513,10 @@ fn insert_along_rows(
                 Some((row, wrow)) if wrow.iter().all(|&w| w.to_bits() == 1.0_f64.to_bits()) => {
                     (row, wrow)
                 }
-                Some((row, wrow)) => back(&homogeneous(&row, &wrow)),
+                Some((row, wrow)) => cartesian_row(&homogeneous(&row, &wrow)),
                 None => continue,
             },
-            Row::Blended(h) => back(&h),
+            Row::Blended(h) => cartesian_row(&h),
         };
         cps.push(row);
         ws.push(wrow);
@@ -1251,5 +1331,189 @@ mod tests {
             let off = (raised.evaluate(t) - c.evaluate(t)).length();
             assert!(off < 1e-12, "at {t}: {off}");
         }
+    }
+
+    /// A surface's Bezier patches trace it: each at 7 by 7 points inside its
+    /// ranges holds the surface to 1e-12 there (a direction of degree zero
+    /// jumps at its knots).
+    fn patches_trace(s: &NurbsSurface, count: usize) {
+        let patches = surface_to_bezier_patches(s).expect("valid");
+        assert_eq!(patches.len(), count);
+        for patch in &patches {
+            assert_eq!(patch.surface.degree_u(), s.degree_u());
+            assert_eq!(patch.surface.degree_v(), s.degree_v());
+            let ((u0, u1), (v0, v1)) = (patch.u_range, patch.v_range);
+            for i in 1..8 {
+                let u = (u1 - u0).madd(f64::from(i) / 8.0, u0);
+                for j in 1..8 {
+                    let v = (v1 - v0).madd(f64::from(j) / 8.0, v0);
+                    let off = (patch.surface.evaluate(u, v) - s.evaluate(u, v)).length();
+                    assert!(off < 1e-12, "at ({u}, {v}): {off}");
+                }
+            }
+        }
+    }
+
+    /// Degree 0 along u on the knots 0, 1, and a line along v: one patch.
+    #[test]
+    fn a_surface_of_degree_zero_cuts_one_patch() {
+        let p = Point3::new;
+        let s = NurbsSurface::new(
+            0,
+            1,
+            vec![0.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![vec![p(0.0, 0.0, 0.0), p(0.0, 1.0, 0.0)]],
+            vec![vec![1.0; 2]],
+        )
+        .expect("valid");
+        patches_trace(&s, 1);
+    }
+
+    /// Degree 0 along u on the knots 0, 0.25, 0.25, 1 and quadratic along
+    /// v: one constant patch for each span of width, two.
+    #[test]
+    fn a_degree_zero_direction_cuts_a_patch_per_span() {
+        let p = Point3::new;
+        let row = |x: f64| vec![p(x, 0.0, 0.0), p(x, 1.0, x), p(x, 2.0, 0.0)];
+        let s = NurbsSurface::new(
+            0,
+            2,
+            vec![0.0, 0.25, 0.25, 1.0],
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            vec![row(0.0), row(1.0), row(2.0)],
+            vec![vec![1.0, 0.5, 1.0]; 3],
+        )
+        .expect("valid");
+        patches_trace(&s, 2);
+    }
+
+    /// Degree 0 both ways on the knots 0, 0.5, 1 and 0, 1/3, 2/3, 1: six
+    /// constant patches.
+    #[test]
+    fn a_surface_of_degree_zero_both_ways_cuts_a_patch_per_cell() {
+        let s = NurbsSurface::new(
+            0,
+            0,
+            vec![0.0, 0.5, 1.0],
+            vec![0.0, 1.0 / 3.0, 2.0 / 3.0, 1.0],
+            (0..2)
+                .map(|i| {
+                    (0..3)
+                        .map(|j| Point3::new(f64::from(i), f64::from(j), f64::from(i * j)))
+                        .collect()
+                })
+                .collect(),
+            vec![vec![1.0; 3]; 2],
+        )
+        .expect("valid");
+        patches_trace(&s, 6);
+    }
+
+    /// A bilinear sheet on the u knots 0, 0, 5e-16, 1, 1: the sheet runs
+    /// from its first row to its second inside the narrow span, and a patch
+    /// holds that part too.
+    #[test]
+    fn a_narrow_span_keeps_its_patch() {
+        let p = Point3::new;
+        let row = |x: f64| vec![p(x, 0.0, 0.0), p(x, 1.0, 0.0)];
+        let s = NurbsSurface::new(
+            1,
+            1,
+            vec![0.0, 0.0, 5e-16, 1.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![row(0.0), row(1.0), row(2.0)],
+            vec![vec![1.0; 2]; 3],
+        )
+        .expect("valid");
+        patches_trace(&s, 2);
+        let narrow = surface_to_bezier_patches(&s).expect("valid");
+        assert!(narrow[0].aabb().min.x() <= 0.0 && narrow[0].aabb().max.x() >= 1.0);
+    }
+
+    /// A sheet quadratic along u on the knots 0, 0, 0, 0.5, 0.5 + 2^-51, 1,
+    /// 1, 1, two knots nearer than the insertion tells apart: three patches,
+    /// each the surface over its span, the narrow one too.
+    #[test]
+    fn knots_a_hair_apart_cut_patches_on_the_surface() {
+        let p = Point3::new;
+        let row = |x: f64| vec![p(x, 0.0, 0.0), p(x, 1.0, x)];
+        let s = NurbsSurface::new(
+            2,
+            1,
+            vec![0.0, 0.0, 0.0, 0.5, 0.5 + 2f64.powi(-51), 1.0, 1.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![row(0.0), row(1.0), row(0.0), row(1.0), row(0.0)],
+            vec![vec![1.0; 2]; 5],
+        )
+        .expect("valid");
+        patches_trace(&s, 3);
+    }
+
+    /// A rational bicubic on the uniform knots 0 to 8 each way, clamped in
+    /// neither: its domain is 3 to 5 each way, in four patches on it.
+    #[test]
+    fn a_surface_not_clamped_cuts_patches_on_its_domain() {
+        let points: Vec<Vec<Point3>> = (0..5)
+            .map(|i| {
+                (0..5)
+                    .map(|j| Point3::new(f64::from(i), f64::from(j), f64::from((i * j) % 3) * 2.0))
+                    .collect()
+            })
+            .collect();
+        let weights = (0..5)
+            .map(|i| {
+                (0..5)
+                    .map(|j| 1.0 + 0.25 * f64::from((i + j) % 2))
+                    .collect()
+            })
+            .collect();
+        let knots: Vec<f64> = (0..9).map(f64::from).collect();
+        let s = NurbsSurface::new(3, 3, knots.clone(), knots, points, weights).expect("valid");
+        patches_trace(&s, 4);
+    }
+
+    /// A sheet quadratic along u on the knots 0 to 5, clamped in neither
+    /// end, with the weights 1, -1, 1 along u: its one patch has a control
+    /// point at infinity, which the split refuses.
+    #[test]
+    fn a_patch_with_a_pole_at_infinity_is_refused() {
+        let p = Point3::new;
+        let row = |x: f64| vec![p(x, 0.0, 0.0), p(x, 1.0, 0.0)];
+        let s = NurbsSurface::new(
+            2,
+            1,
+            (0..6).map(f64::from).collect(),
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![row(0.0), row(1.0), row(2.0)],
+            vec![vec![1.0; 2], vec![-1.0; 2], vec![1.0; 2]],
+        )
+        .expect("valid");
+        assert!(matches!(
+            surface_to_bezier_patches(&s),
+            Err(MathError::PoleAtInfinity { .. })
+        ));
+    }
+
+    /// A bilinear sheet on knots 0, 0, 0.5, 0.5, 1, 1 along u, an interior
+    /// knot repeated past the degree: two patches, none across the jump.
+    #[test]
+    fn a_knot_repeated_past_the_degree_cuts_no_patch_across_it() {
+        let p = Point3::new;
+        let s = NurbsSurface::new(
+            1,
+            1,
+            vec![0.0, 0.0, 0.5, 0.5, 1.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![
+                vec![p(0.0, 0.0, 0.0), p(0.0, 1.0, 0.0)],
+                vec![p(1.0, 0.0, 0.0), p(1.0, 1.0, 0.0)],
+                vec![p(1.0, 0.0, 1.0), p(1.0, 1.0, 1.0)],
+                vec![p(2.0, 0.0, 1.0), p(2.0, 1.0, 1.0)],
+            ],
+            vec![vec![1.0; 2]; 4],
+        )
+        .expect("valid");
+        patches_trace(&s, 2);
     }
 }
