@@ -1,0 +1,21 @@
+crates/io/src/stl/import.rs
+  s_0db8415e6f59cd::t_8043e1ce2692e7 115,122,345-348,355-360,364-365,379-384,387,389,434-440,450,503-505,510,560-561,566-575
+crates/io/tests/mesh_import_bodies.rs
+  s_0db8415e6f59cd::t_beb693faa77c6e 1179-1199
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ed6e39eac36545304c1e288c8650c6f0b2562181",
+  "prompts": {},
+  "sessions": {
+    "s_0db8415e6f59cd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "80c728ce-cbd9-4375-adac-8fbf308dc911",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
