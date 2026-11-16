@@ -194,12 +194,11 @@ fn compute_face_bbox(topo: &Topology, face_id: FaceId) -> Result<Aabb3, AlgoErro
 /// `p_start` to `p_end`, either way.
 ///
 /// Searches `arena.curves` for an intersection curve attached to `target`
-/// with both ends of the piece, so the coplanar phase does not duplicate a
-/// section the regular FF phase already gave that face. A longer section on
-/// the same line can have the middle of the piece. A curved section must
-/// also pass through the piece's middle at the middle of its parameters: an
-/// arc can have the ends of its chord. A curve attached only to the other
-/// face of the pair does not count: it never splits `target`.
+/// that runs along the piece from one of its ends to the other, so the
+/// coplanar phase does not duplicate a section the regular FF phase already
+/// gave that face. A longer section on the same line can have the middle of
+/// the piece, and a curved one its two ends. A curve attached only to the
+/// other face of the pair does not count: it never splits `target`.
 fn has_existing_section_at(
     arena: &GfaArena,
     topo: &Topology,
@@ -217,32 +216,73 @@ fn has_existing_section_at(
         {
             return false;
         }
-        let Some((s, e)) = section_ends(topo, arena, curve) else {
+        let Some(((s, t_s), (e, t_e))) = section_ends(topo, arena, curve) else {
             return false;
         };
-        // A line section's parameters can run over its length or over 0 to 1,
-        // and with the two ends its middle is the piece's.
-        let on_piece = match &curve.curve {
+        if !((near(s, p_start) && near(e, p_end)) || (near(s, p_end) && near(e, p_start))) {
+            return false;
+        }
+        // A line section with the piece's two ends is the piece, whether its
+        // parameters run over its length or over 0 to 1. An arc of a circle
+        // or an ellipse stands off its chord the most at the middle of its
+        // parameters, where its tangent runs along the chord. A B-spline
+        // lies in the hull of its Bezier poles when their weights are
+        // positive, whatever its speed along them.
+        match &curve.curve {
             EdgeCurve::Line => true,
-            EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_) => {
-                let (t0, t1) = curve.t_range;
-                near(
-                    curve.curve.evaluate_with_endpoints(0.5 * (t0 + t1), s, e),
-                    mid,
-                )
+            EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => near(
+                curve.curve.evaluate_with_endpoints(0.5 * (t_s + t_e), s, e),
+                mid,
+            ),
+            EdgeCurve::NurbsCurve(nurbs) => {
+                spline_along_segment(nurbs, (t_s, t_e), (p_start, p_end), tol.linear * 10.0)
             }
-        };
-        ((near(s, p_start) && near(e, p_end)) || (near(s, p_end) && near(e, p_start))) && on_piece
+        }
     })
 }
 
-/// The two ends of a section: the points of the paves of its pave blocks
-/// at the lowest and the highest parameter.
+/// Whether the part of `curve` between the parameters `t_s` and `t_e` lies
+/// within `reach` of the segment from `a` to `b`: each Bezier pole of each
+/// piece between its knots does, with a positive weight.
+fn spline_along_segment(
+    curve: &brepkit_math::nurbs::curve::NurbsCurve,
+    (t_s, t_e): (f64, f64),
+    (a, b): (Point3, Point3),
+    reach: f64,
+) -> bool {
+    let (lo, hi) = (t_s.min(t_e), t_s.max(t_e));
+    let mut cuts = vec![lo];
+    cuts.extend(curve.knots().iter().copied().filter(|&k| k > lo && k < hi));
+    cuts.push(hi);
+    let along = b - a;
+    let length2 = along.dot(along);
+    cuts.windows(2).all(|piece| {
+        brepkit_math::nurbs::decompose::curve_bezier_between(curve, piece[0], piece[1]).is_ok_and(
+            |poles| {
+                poles.into_iter().all(|[x, y, z, w]| {
+                    if w.is_nan() || w <= 0.0 {
+                        return false;
+                    }
+                    let p = Point3::new(x / w, y / w, z / w);
+                    let s = if length2 > 0.0 {
+                        ((p - a).dot(along) / length2).clamp(0.0, 1.0)
+                    } else {
+                        0.0
+                    };
+                    (p - (a + along * s)).length() <= reach
+                })
+            },
+        )
+    })
+}
+
+/// The two ends of a section, each with its parameter: the paves of its
+/// pave blocks at the lowest and the highest parameter.
 fn section_ends(
     topo: &Topology,
     arena: &GfaArena,
     curve: &IntersectionCurveDS,
-) -> Option<(Point3, Point3)> {
+) -> Option<((Point3, f64), (Point3, f64))> {
     let paves = curve
         .pave_blocks
         .iter()
@@ -255,7 +295,7 @@ fn section_ends(
     let at = |p: Pave| {
         topo.vertex(arena.resolve_vertex(p.vertex))
             .ok()
-            .map(Vertex::point)
+            .map(|v| (v.point(), p.parameter))
     };
     Some((at(first)?, at(last)?))
 }
@@ -1655,6 +1695,35 @@ mod tests {
         assert!(!has_existing_section_at(&arena, &topo, target, p0, p1, tol));
     }
 
+    /// Records a section on `face` alone along `curve`, from `from` at the
+    /// parameter `t.0` to `to` at `t.1`, as the regular FF phase does.
+    fn record_section(
+        topo: &mut Topology,
+        arena: &mut GfaArena,
+        face: FaceId,
+        curve: EdgeCurve,
+        (from, to): (Point3, Point3),
+        t: (f64, f64),
+    ) {
+        let (a, b) = (
+            topo.add_vertex(Vertex::new(from, 1e-7)),
+            topo.add_vertex(Vertex::new(to, 1e-7)),
+        );
+        let edge = topo.add_edge(Edge::new(a, b, curve.clone()));
+        let pb =
+            arena
+                .pave_blocks
+                .alloc(PaveBlock::new(edge, Pave::new(a, t.0), Pave::new(b, t.1)));
+        arena.curves.push(IntersectionCurveDS {
+            curve,
+            face_a: face,
+            face_b: face,
+            bbox: Aabb3::from_points([from, to]),
+            pave_blocks: vec![pb],
+            t_range: t,
+        });
+    }
+
     /// A line section as the regular FF phase records one, its parameters
     /// running over its length (0 to 5), is present for a piece with its
     /// two ends.
@@ -1666,28 +1735,53 @@ mod tests {
         let target_rim = rim(&mut topo, 9.0);
         let target = face_down(&mut topo, vec![target_rim], vec![]);
         let (from, to) = (Point3::new(0.0, 0.0, 0.0), Point3::new(5.0, 0.0, 0.0));
-        let (a, b) = (
-            topo.add_vertex(Vertex::new(from, 1e-7)),
-            topo.add_vertex(Vertex::new(to, 1e-7)),
-        );
-        let edge = topo.add_edge(Edge::new(a, b, EdgeCurve::Line));
-        let pb =
-            arena
-                .pave_blocks
-                .alloc(PaveBlock::new(edge, Pave::new(a, 0.0), Pave::new(b, 5.0)));
-        arena.curves.push(IntersectionCurveDS {
-            curve: EdgeCurve::Line,
-            face_a: target,
-            face_b: target,
-            bbox: Aabb3::from_points([from, to]),
-            pave_blocks: vec![pb],
-            t_range: (0.0, 5.0),
-        });
-        assert!(has_existing_section_at(
-            &arena, &topo, target, from, to, tol
-        ));
-        assert!(has_existing_section_at(
-            &arena, &topo, target, to, from, tol
-        ));
+        let line = EdgeCurve::Line;
+        record_section(&mut topo, &mut arena, target, line, (from, to), (0.0, 5.0));
+        for (a, b) in [(from, to), (to, from)] {
+            assert!(has_existing_section_at(&arena, &topo, target, a, b, tol));
+        }
+    }
+
+    /// Cubic B-spline sections from (0, 0, 0) to (5, 0, 0). One runs along
+    /// the line at an uneven speed: it is present for the piece with those
+    /// ends. The other weaves across the line and passes through (2.5, 0,
+    /// 0) at its middle parameter: it is not.
+    #[test]
+    fn a_spline_section_is_present_only_along_the_piece() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        let tol = Tolerance::default();
+        let p = Point3::new;
+        let (from, to) = (p(0.0, 0.0, 0.0), p(5.0, 0.0, 0.0));
+        let cubic = |inner: [Point3; 2]| {
+            NurbsCurve::new(
+                3,
+                vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+                vec![from, inner[0], inner[1], to],
+                vec![1.0; 4],
+            )
+            .unwrap()
+        };
+        let uneven = cubic([p(0.5, 0.0, 0.0), p(1.0, 0.0, 0.0)]);
+        let weave = cubic([p(5.0 / 3.0, 1.0, 0.0), p(10.0 / 3.0, -1.0, 0.0)]);
+        assert!((weave.evaluate(0.5) - p(2.5, 0.0, 0.0)).length() < 1e-12);
+        for (curve, present) in [(uneven, true), (weave, false)] {
+            let mut topo = Topology::new();
+            let mut arena = GfaArena::new();
+            let target_rim = rim(&mut topo, 9.0);
+            let target = face_down(&mut topo, vec![target_rim], vec![]);
+            let section = EdgeCurve::NurbsCurve(curve);
+            record_section(
+                &mut topo,
+                &mut arena,
+                target,
+                section,
+                (from, to),
+                (0.0, 1.0),
+            );
+            for (a, b) in [(from, to), (to, from)] {
+                let found = has_existing_section_at(&arena, &topo, target, a, b, tol);
+                assert_eq!(found, present);
+            }
+        }
     }
 }
