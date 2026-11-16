@@ -374,19 +374,23 @@ fn shares_area(
             let through = |f0: f64, mid: f64, f1: f64| {
                 (point(mid) - point(f0)).length() + (point(f1) - point(mid)).length()
             };
-            // A point inside both faces beside the edge at `f`, for a stretch
-            // `length` long: each side of the edge in turn, from a quarter of
-            // the stretch away to the tolerance, which `side` keeps clear of
-            // each face's boundary.
-            let beside = |f: f64, length: f64| {
+            let edge_length = through(0.0, 0.5, 1.0);
+            if edge_length <= tol {
+                continue;
+            }
+            // A point inside both faces beside the edge at `f`: each side of
+            // the edge in turn, from a quarter of the edge's length away to
+            // the tolerance, which `side` keeps clear of each face's
+            // boundary.
+            let beside = |f: f64| {
                 let m = point(f);
                 let along = curve.tangent_with_endpoints(at(f), a, b);
                 let Ok(across) = Vec2::new(-along.dot(frame.y), along.dot(frame.x)).normalize()
                 else {
                     return false;
                 };
-                let mut step = 0.25 * length;
-                for _ in 0..64 {
+                let mut step = 0.25 * edge_length;
+                for _ in 0..128 {
                     if step <= tol {
                         break;
                     }
@@ -411,10 +415,9 @@ fn shares_area(
                 for pair in cuts.windows(2) {
                     let (f0, f1) = (pair[0], pair[1]);
                     let mid = 0.5 * (f0 + f1);
-                    let length = through(f0, mid, f1);
-                    if length > tol
+                    if through(f0, mid, f1) > tol
                         && other.side(point(mid), tol) != Some(false)
-                        && beside(mid, length)
+                        && beside(mid)
                     {
                         return Ok(true);
                     }
@@ -459,7 +462,7 @@ fn shares_area(
             if other_face.edges.contains(&oe.edge()) {
                 for first in cuts.windows(2) {
                     let mid = 0.5 * (first[0] + first[1]);
-                    if beside(mid, through(first[0], mid, first[1])) {
+                    if beside(mid) {
                         return Ok(true);
                     }
                 }
@@ -476,15 +479,11 @@ fn shares_area(
                 while let Some((f0, f1, depth)) = pending.pop_front() {
                     read += 1;
                     let mid = 0.5 * (f0 + f1);
-                    let length = through(f0, mid, f1);
-                    if length <= tol {
-                        continue;
-                    }
                     let m = point(mid);
                     match other.side(m, reach(f0, f1, m)) {
                         Some(false) => {}
                         Some(true) => {
-                            if beside(mid, length) {
+                            if beside(mid) {
                                 return Ok(true);
                             }
                         }
@@ -492,9 +491,7 @@ fn shares_area(
                             let last =
                                 depth >= MOST_HALVINGS || read + pending.len() + 2 > MOST_STRETCHES;
                             let near = other.side(m, tol);
-                            if (near == Some(true) || (last && near.is_none()))
-                                && beside(mid, length)
-                            {
+                            if (near == Some(true) || (last && near.is_none())) && beside(mid) {
                                 return Ok(true);
                             }
                             if !last {
@@ -1203,6 +1200,35 @@ mod tests {
             ],
             [0.0, 0.0, 1.0],
         );
+        let solid = b.solid();
+        assert_eq!(found(&b.topo, solid).len(), 1);
+    }
+
+    /// Two discs twenty tolerances across, one on the other, each bounded by
+    /// one closed B-spline circle: each of the 64 first stretches of a rim
+    /// is about a tolerance long.
+    #[test]
+    fn two_small_spline_discs_one_on_the_other_are_reported() {
+        let r = 1e-5;
+        let mut b = Builder::default();
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        for normal in [z, -z] {
+            let circle = Circle3D::new(Point3::new(0.0, 0.0, 0.0), z, r).unwrap();
+            let rim = brepkit_geometry::convert::curve_to_nurbs::circle_to_nurbs(&circle, 0.0, TAU)
+                .unwrap();
+            let at = circle.evaluate(0.0);
+            let v = b.vertex([at.x(), at.y(), at.z()]);
+            let e = b.topo.add_edge(Edge::new(v, v, EdgeCurve::NurbsCurve(rim)));
+            let wire = b
+                .topo
+                .add_wire(Wire::new(vec![OrientedEdge::new(e, true)], true).unwrap());
+            let face = b.topo.add_face(Face::new(
+                wire,
+                vec![],
+                FaceSurface::Plane { normal, d: 0.0 },
+            ));
+            b.faces.push(face);
+        }
         let solid = b.solid();
         assert_eq!(found(&b.topo, solid).len(), 1);
     }
