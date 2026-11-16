@@ -401,9 +401,10 @@ impl SphereLoop {
         }
     }
 
-    /// Whether `p` lies within `near` of the loop's own arcs: on one of its
-    /// planes, and on the arc's side of each other plane. [`Self::grazes`]
-    /// reads the whole of each plane.
+    /// Whether `p` lies within `near` of the loop's own boundary: for arcs, on
+    /// one of their planes and on the arc's side of each other plane; for a
+    /// rim, on the rim's hemisphere. [`Self::grazes`] reads the whole of each
+    /// plane, and a rim's projection from both hemispheres.
     fn borders(&self, p: Point3, near: f64) -> bool {
         match self {
             Self::HalfSpaces { planes, any } => planes.iter().enumerate().any(|(i, &(c, n))| {
@@ -414,7 +415,9 @@ impl SphereLoop {
                         j == i || if *any { side <= near } else { side >= -near }
                     })
             }),
-            Self::Rim { .. } => self.grazes(p, near),
+            Self::Rim { frame, .. } => {
+                (p - frame.origin).dot(frame.z) >= -near && self.grazes(p, near)
+            }
         }
     }
 
@@ -5369,6 +5372,59 @@ mod tests {
         assert!(
             !trim.holds(Point3::new(r, r, r), near),
             "the octant left out"
+        );
+    }
+
+    /// A ball less a cap and a bore's rim off its centre: a point of the face
+    /// on the far hemisphere, under the rim along the rim's axis, is clear of
+    /// the rim.
+    #[test]
+    fn a_ball_face_trim_reads_a_rim_on_its_own_hemisphere() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::SphericalSurface;
+
+        let mut topo = Topology::new();
+        let origin = Point3::new(0.0, 0.0, 0.0);
+        let cap_at = Point3::new(-2.5, 0.0, 0.0);
+        let cap_radius = (9.0_f64 - 6.25).sqrt();
+        let start = topo.add_vertex(Vertex::new(Point3::new(-2.5, cap_radius, 0.0), 1e-7));
+        let circle = Circle3D::new(cap_at, Vec3::new(1.0, 0.0, 0.0), cap_radius).unwrap();
+        let cap = topo.add_edge(Edge::new(start, start, EdgeCurve::Circle(circle)));
+        let outer = topo.add_wire(Wire::new(vec![OrientedEdge::new(cap, true)], true).unwrap());
+        let rim_at = |k: usize| {
+            #[allow(clippy::cast_precision_loss)]
+            let a = -std::f64::consts::TAU * k as f64 / 24.0;
+            let (x, y) = (0.5f64.madd(a.cos(), 1.0), 0.5 * a.sin());
+            Point3::new(x, y, (9.0 - x * x - y * y).sqrt())
+        };
+        let verts: Vec<_> = (0..24)
+            .map(|k| topo.add_vertex(Vertex::new(rim_at(k), 1e-7)))
+            .collect();
+        let edges: Vec<_> = (0..24)
+            .map(|k| {
+                let e = topo.add_edge(Edge::new(verts[k], verts[(k + 1) % 24], EdgeCurve::Line));
+                OrientedEdge::new(e, true)
+            })
+            .collect();
+        let inner = topo.add_wire(Wire::new(edges, true).unwrap());
+        let sphere = SphericalSurface::new(origin, 3.0).unwrap();
+        let face = topo.add_face(Face::new(outer, vec![inner], FaceSurface::Sphere(sphere)));
+        let trim = SphereFaceTrim::new(&topo, face).unwrap().unwrap();
+        let near = 1e-6;
+
+        let top = Point3::new(1.0, 0.0, 8.0_f64.sqrt());
+        assert!(!trim.holds(top, near), "the bore");
+        assert!(trim.holds_clear(Point3::new(0.0, 3.0, 0.0), near));
+        assert!(!trim.holds_clear(rim_at(0), near), "on the rim");
+        let rim_sum = (0..24).fold(Vec3::new(0.0, 0.0, 0.0), |acc, k| {
+            acc + (rim_at(k) - origin)
+        });
+        let axis = rim_sum.normalize().unwrap();
+        let q = rim_at(6) - origin;
+        let below = origin + (q - axis * (2.0 * q.dot(axis)));
+        assert!(
+            trim.holds_clear(below, near),
+            "under the rim, on the far side"
         );
     }
 
