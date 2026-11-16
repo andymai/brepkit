@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.11.28](https://github.com/andymai/brepkit/compare/v4.11.27...v4.11.28) (2026-11-16)
+
+
+### Performance
+
+* **topology:** keep the faces of each edge as the topology is built ([#2559](https://github.com/andymai/brepkit/issues/2559)) ([5ea81ac](https://github.com/andymai/brepkit/commit/5ea81acdac09bb0b2641b0b9cbe3d92fd0e6aeba)), closes [#2456](https://github.com/andymai/brepkit/issues/2456)
+
 ## [4.11.27](https://github.com/andymai/brepkit/compare/v4.11.26...v4.11.27) (2026-11-16)
 
 
