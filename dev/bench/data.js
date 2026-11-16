@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794811898608,
+  "lastUpdate": 1794815220631,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -71927,6 +71927,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 20472767,
             "range": "± 104180",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "d1173db88f987ff88e0dfd68e9ba1eb8ed325c9d",
+          "message": "test(io): expect the overlap report for a cavity on its box's wall (#2553)\n\n## Summary\n\n`a_cavity_that_touches_the_wall_of_a_finer_box_is_its_cavity` fails on\nmain since #2505 merged. The cavity's face at x = 20 lies on the box's\nwall at x = 20, so the wall between them has no thickness. Since #2512,\n`validate_solid` reports two faces of one solid that cover the same\narea. #2505 added the test before #2512 merged, and each PR passed CI\nalone.\n\nThe test now expects only those reports: eight pairs, each a face of the\nbox's grid wall and a face of the cavity. The import, the cavity and the\nvolume do not change.\n\n## Tests\n\n- `cargo test --profile ci -p brepkit-io --test mesh_import_bodies`: 54\npassed.\n- On main `0e3d2ba61`, the same file has 1 failure, in this test.\n\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nUpdates the cavity-on-wall test so it expects the validator's overlap\nreports instead of a clean validation.\n\nThe cavity's face at x = 20 sits exactly on the box's wall at x = 20,\nleaving no wall thickness between them. The validator now reports such\nface pairs as covering the same area, so the test asserts the validation\nreports only those `cover the same area` issues.\n\n<sup>Written for commit 12a0e24ed30624837e00a2b313364088cfc1261e.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2553?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2553?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2553&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\n\n\nCloses #2551.",
+          "timestamp": "2026-11-16T07:43:01Z",
+          "tree_id": "68c3de7100cf1445af3e53a2650b78195c531ad4",
+          "url": "https://github.com/andymai/brepkit/commit/d1173db88f987ff88e0dfd68e9ba1eb8ed325c9d"
+        },
+        "date": 1794815208741,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 919802,
+            "range": "± 9723",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 951407,
+            "range": "± 5908",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10057,
+            "range": "± 37",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 598755,
+            "range": "± 8482",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 19749402,
+            "range": "± 39179",
             "unit": "ns/iter"
           }
         ]
