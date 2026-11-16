@@ -394,9 +394,12 @@ impl SphereLoop {
                     planes.iter().all(inside)
                 }
             }
+            // Within `slack` of the rim on its own side counts as outside the
+            // hole, as a plane's half-space admits a point within `slack`.
             Self::Rim { frame, flat } => {
                 (p - frame.origin).dot(frame.z) <= 0.0
                     || !point_in_polygon(rim_flat(frame, p), flat)
+                    || (slack > 0.0 && self.borders(p, slack))
             }
         }
     }
@@ -5426,6 +5429,13 @@ mod tests {
             trim.holds_clear(below, near),
             "under the rim, on the far side"
         );
+
+        // Just inside the bore, closer to its rim than `near`.
+        let r = rim_at(0);
+        let toward = (Point3::new(1.0, 0.0, r.z()) - r).normalize().unwrap();
+        let inside = r + toward * (0.5 * near);
+        assert!(trim.holds(inside, near), "by the rim, inside the bore");
+        assert!(!trim.holds(r + toward * 1e-3, near), "inside the bore");
     }
 
     #[test]
