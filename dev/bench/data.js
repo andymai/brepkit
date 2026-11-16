@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794808363310,
+  "lastUpdate": 1794808719475,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -71603,6 +71603,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 20048129,
             "range": "± 55553",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "56205ddf2e638847d5f95788f71b0c3c8e9ef008",
+          "message": "perf(blend): refuse two chamfers at one corner before the other trims (#2534)\n\n## Summary\n\n`try_chamfer` runs `chamfer_v2` before the planar `chamfer`. Take a box\nof 20 with its 12 edges chamfered at 1. `chamfer_v2` trimmed the faces\nof all 12 edges and made the 12 chamfer faces, 36 new faces in all. It\nthen refused the result with `TrimmingFailure` at the first corner, and\nthe planar `chamfer` ran. Closes #2457.\n\nNow the builder refuses with `CornerFailure` at the first corner where\ntwo trimmed chamfers meet. For the box, that comes after the trims of\ntwo edges and 4 new faces.\n\nTwo chamfers that meet at a vertex need a mitre between their planes,\nand the builder does not make one. The roadmap row \"walking-engine\nchamfer at a closed rim or a shared vertex\" records this, and\n`chamfer_v2_refuses_edges_meeting_at_a_vertex` pins it.\n\nThe check is in the trim loop of `ChamferBuilder::build_in_place` in\n`crates/blend/src/chamfer_builder.rs`, and not in the planning before\nit. When two picked edges meet and one of them fails to trim,\n`chamfer_v2` still returns a result. It holds the chamfer of the other\nedge, marked partial, or the solid as it was when both fail. A refusal\nbefore the trims would turn each such result into an error. In the\nbattery below, 162 picks of edges that meet give such a result: 82\npartial, and 80 with no edge done.\n\nThe builder keeps the end vertices of each open edge that trims. It\nrefuses when a second edge trims at one of them.\n\n## Timings\n\n`blend_gate_timing` is a probe that I did not commit. It runs on a box\nof 20 with its 12 edges at 1, 200 times, each time on a new topology or\nkernel. The runs used rayon at its default thread count on the same\nmachine. Native release build, medians, `main` at 4e5184192 and this\nbranch, run in turn:\n\n| Step | `main` | Branch |\n| --- | ---: | ---: |\n| `chamfer_v2` up to its refusal | 0.034 ms, 0.033 ms | 0.014 ms |\n| `chamfer` batch op (`try_chamfer`) | 0.388 ms, 0.436 ms, 0.377 ms |\n0.346 ms, 0.355 ms |\n\n`chamfer_v2` is a small part of `try_chamfer`. In the samples of #2457,\nmost of the rest is the gate on the result of the planar `chamfer`.\n\n## Tests\n\n- `chamfer_v2_refuses_a_corner_before_the_other_edges` chamfers the 12\nedges of the box. It requires `CornerFailure` at a vertex of three\npicked edges, and at most 4 new faces in the topology. On `main` the\ncall makes 36 faces before it refuses.\n- `chamfer_v2_chamfers_one_of_two_meeting_edges_when_the_other_fails`\npicks two edges of an L prism that meet at a vertex. One fails to trim.\nThe test requires the partial result of the other, with its closed-form\nvolume.\n- `chamfer_vertex_battery` is a probe that I did not commit. It runs\n`chamfer_v2` on 13 solids. They are two boxes, four prisms, a box with a\nhole, a cylinder, a frustum, two boolean results, a filleted box and a\nchamfered box.\n- On each solid, the battery picks each edge and each pair of edges. It\nalso picks all the edges at each vertex, and all the edges. Each pick\nruns at two distances: 3564 calls in all.\n- For each call, the builder gives the same result without and with this\nchange. The result, the counts of edges done and failed, the face count\nand the volume match.\n- `cargo nextest run -p brepkit-blend -p brepkit-operations -p\nbrepkit-wasm` passes: 2714 tests, 19 skipped.\n- `cargo clippy` and `cargo fmt` pass.",
+          "timestamp": "2026-11-16T05:55:24Z",
+          "tree_id": "b025f633a693fc746c6b6ee9d3186b8fe7242972",
+          "url": "https://github.com/andymai/brepkit/commit/56205ddf2e638847d5f95788f71b0c3c8e9ef008"
+        },
+        "date": 1794808711150,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 810764,
+            "range": "± 23106",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 841465,
+            "range": "± 21727",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 9041,
+            "range": "± 12",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 498157,
+            "range": "± 28661",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 18077155,
+            "range": "± 69519",
             "unit": "ns/iter"
           }
         ]
