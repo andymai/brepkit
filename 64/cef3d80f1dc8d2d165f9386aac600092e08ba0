@@ -1,0 +1,19 @@
+crates/algo/src/pave_filler/phase_ee.rs
+  s_0db8415e6f59cd::t_708903122c4401 285,316-325,336,345-347,512-549,2461-2487
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "64cef3d80f1dc8d2d165f9386aac600092e08ba0",
+  "prompts": {},
+  "sessions": {
+    "s_0db8415e6f59cd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "80c728ce-cbd9-4375-adac-8fbf308dc911",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
