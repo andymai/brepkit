@@ -1203,8 +1203,21 @@ fn survey_pairs(
 /// over eight); a
 /// B-spline's the boxes of the nets of the Bezier pieces the range runs
 /// over, each piece within the hull of its net. `None` where a weight is not
-/// positive or the pieces cannot be read.
+/// positive, the pieces cannot be read, or a box is not finite.
 fn curve_piece_boxes(
+    curve: &EdgeCurve,
+    start_pos: Point3,
+    end_pos: Point3,
+    t0: f64,
+    t1: f64,
+) -> Option<Vec<Aabb3>> {
+    let finite = |p: Point3| p.x().is_finite() && p.y().is_finite() && p.z().is_finite();
+    piece_boxes(curve, start_pos, end_pos, t0, t1)
+        .filter(|boxes| boxes.iter().all(|b| finite(b.min) && finite(b.max)))
+}
+
+/// [`curve_piece_boxes`], whose boxes may not be finite.
+fn piece_boxes(
     curve: &EdgeCurve,
     start_pos: Point3,
     end_pos: Point3,
@@ -1284,9 +1297,12 @@ fn curve_piece_boxes(
 /// square: its square is no more than the larger of `(a |u|)²` and
 /// `(b |v|)²` plus `|a b u . v|`.
 fn conic_reach(a: f64, b: f64, u: Vec3, v: Vec3) -> f64 {
-    let (along_u, along_v) = ((a * u.length()).abs(), (b * v.length()).abs());
-    let most = along_u.max(along_v);
-    (most * most + (a * b * u.dot(v)).abs()).sqrt()
+    // The axes are scaled before they are multiplied: a large radius on
+    // short axes is an ordinary conic, but the product of the two lengths
+    // can overflow on its own.
+    let (u, v) = (u * a, v * b);
+    let most = u.length().max(v.length());
+    (most * most + u.dot(v).abs()).sqrt()
 }
 
 /// Find edge-surface crossings by sampling the distance to the surface and refining.
@@ -2350,6 +2366,24 @@ mod tests {
                 a,
                 5.0,
                 -0.3,
+            ),
+            // A unit circle, its radius and axes each far from unit: the
+            // product of the radius by itself overflows.
+            (
+                EdgeCurve::Circle(
+                    Circle3D::with_axes(
+                        a,
+                        Vec3::new(0.0, 1.0, 0.0),
+                        1e160,
+                        Vec3::new(1e-160, 0.0, 0.0),
+                        Vec3::new(0.0, 0.0, 1e-160),
+                    )
+                    .unwrap(),
+                ),
+                a,
+                a,
+                0.4,
+                2.9,
             ),
         ];
         for (curve, start, end, t0, t1) in &cases {
