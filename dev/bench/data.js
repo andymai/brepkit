@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794809567528,
+  "lastUpdate": 1794810520782,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -71819,6 +71819,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 15205803,
             "range": "± 347818",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "30b10f47609bb0cf1eaa03e3809390eec392a19a",
+          "message": "fix(blend): hold a B-spline corner edge's bow in a round's notch check (#2542)\n\n## Summary\n\nA round that ends on a flat end face notches that face. A corner edge of\nthe face can be a B-spline that bows away from the notch. The notch\ncheck then did not see a hole of the face between the edge and its\nchord. `fillet_v2` made the round over the hole. Now `fillet_v2` gives a\nplanning failure, as for a hole in the notch triangle. Closes #2474.\n\n`notch_stays_clear` in `crates/blend/src/fillet_builder.rs` tests the\ntriangle between the corner and the two ends of the contacts. #2467\nadded `arc_bow` for a corner edge that is a circle or an ellipse arc. It\ntests one more triangle: the corner, the end of the contact, and the\npoint where the two tangents of the arc meet. `arc_bow` gives nothing\nfor a B-spline.\n\nThe new `spline_bow` takes a B-spline corner edge:\n\n- It reads the end of the contact on the edge, and cuts out the piece of\nthe curve between the corner and that end (`curve_split`). Of the two\ncontact ends, it takes the one nearer to the span of the edge. A trimmed\nedge can lie on a longer curve.\n- It takes the convex hull of the corner, the end of the contact, and\nthe control points of the piece. It reads them in the view of the notch.\nThe hull is one more region of the notch.\n- While every weight is positive, the hull holds the piece. The part of\nthe notch between the piece and its chord is then in the hull, whichever\nway the piece bows.\n\nA weight that is not positive and finite gives a planning failure,\nbecause the hull does not hold the curve then. If `spline_bow` cannot\ncut out the piece, or the piece is too narrow to cut, it uses the hull\nof all the curve's control points. A piece that the view shows edge on\nadds nothing. `convex_hull_2d` holds the hull code that\n`hull_overlaps_triangle` used.\n\nThe checks now take a convex region of any number of sides in place of a\ntriangle (`cap_edge_reaches_region` and its helpers). Two more changes\ncome with that:\n\n- A line edge reaches a region when the two overlap past a rounding of\nthe region's size (`hull_overlaps_region`). A line whose ends lie on two\nsides of a region runs through it. The test before took only an end\nstrictly inside or a crossing of a side, so such a line passed.\n- The rounding in `hull_overlaps_region` comes from the size of the\nregion only. Before, it also grew with the edge, so a long edge through\na small notch read as touching it.\n- On a curved cap, a vertex is outside the notch only when it is outside\nevery region. Before, a vertex outside the triangle counted as outside,\nalso when an arc's region held it.\n\n## Tests\n\n- `a_bore_between_a_spline_arc_and_its_chord_is_in_the_rounds_way` in\n`crates/operations/tests/fillet_plane_vault.rs` gives the two end arcs\nof the vault as the B-splines that trace them (`circle_to_nurbs`). Then\nit cuts the bore of the arc test between the arc and its chord.\n`fillet_v2` refuses the round with `would cross another boundary of its\ncap`. With `spline_bow` turned off, `fillet_v2` makes the round and the\ntest fails.\n- `a_bore_clear_of_the_rounds_end_stays_by_spline_arcs` makes the same\nchange to the test with a bore of radius 1 in the middle of the end\nwalls. `fillet_v2` makes the round. The result is a valid solid with 8\nfaces and a watertight mesh at deflection 0.05 and 0.5. The removed\nvolume is within 1e-4 of its closed form.\n- Five unit tests of `spline_bow` in `fillet_builder.rs`. A piece of a\ncubic B-spline bows both ways off its chord, and it lies in the region.\nThis holds for an edge that starts at the corner and for one that ends\nthere. The far end of the edge, past the contact, is outside it.\n- The unit tests also cover these cases. A B-spline seen edge on gives\nno region. A weight of 0, -1 or NaN gives an error. On a trimmed edge,\nan end on the curve before the corner does not hide the end on the edge.\nA piece too narrow to cut gives a region that holds the whole curve.\nThese last two tests fail without the second commit.\n- `a_line_from_side_to_side_of_a_region_reaches_it` takes lines whose\nends lie on two sides of the notch triangle or of a hexagon. Each\nreaches the region. A line 2e6 long at 5e-4 inside a side of the\ntriangle reaches it, and one at 5e-4 outside does not. A line along a\nside, and a line that touches a corner, do not.\n- `cargo nextest run -p brepkit-blend -p brepkit-operations -p\nbrepkit-io -p brepkit-wasm` passes on this branch merged with main\n`ee5764f81`: 3,240 tests, 22 skipped.\n- `cargo clippy -p brepkit-blend -p brepkit-operations --all-targets --\n-D warnings`, the workspace clippy of the pre-commit hook, and `cargo\nfmt` pass.",
+          "timestamp": "2026-11-15T22:25:50-08:00",
+          "tree_id": "826430a5d88b2ecd55c50e96c6b2569be2070331",
+          "url": "https://github.com/andymai/brepkit/commit/30b10f47609bb0cf1eaa03e3809390eec392a19a"
+        },
+        "date": 1794810507599,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 623202,
+            "range": "± 3088",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 659338,
+            "range": "± 9076",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 7723,
+            "range": "± 62",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 391398,
+            "range": "± 2764",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 14488704,
+            "range": "± 229614",
             "unit": "ns/iter"
           }
         ]
