@@ -43,12 +43,23 @@ pub struct Topology {
     compsolids: Arena<CompSolid>,
     /// `PCurves`: 2D parametric curves mapping edges to face surface parameters.
     pcurves: PCurveRegistry,
-    /// One record for each open [`Topology::transaction`], innermost last.
+    /// One record for each open [`Topology::transaction`] and
+    /// [`Topology::open_checkpoint`], innermost last.
     journals: Vec<Journal>,
+    /// The number of checkpoints opened, which names the next one.
+    checkpoints_opened: u64,
+}
+
+/// A checkpoint that [`Topology::open_checkpoint`] opened: the place of its
+/// record among the open records, and its number.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Checkpoint {
+    depth: usize,
+    number: u64,
 }
 
 /// A copy holds the entities and the pcurves. It does not hold the record of
-/// an open transaction, because no transaction is open on the copy.
+/// an open transaction or checkpoint, because none is open on the copy.
 impl Clone for Topology {
     fn clone(&self) -> Self {
         Self {
@@ -62,6 +73,7 @@ impl Clone for Topology {
             compsolids: self.compsolids.clone(),
             pcurves: self.pcurves.clone(),
             journals: Vec::new(),
+            checkpoints_opened: 0,
         }
     }
 }
@@ -79,10 +91,14 @@ struct Counts {
     compsolids: usize,
 }
 
-/// What one open transaction needs to put the topology back: the arena sizes
-/// at its start, and the first value of each older entity that it changed.
+/// What one open transaction or checkpoint needs to put the topology back:
+/// the arena sizes at its start, and the first value of each older entity
+/// that it changed.
 #[derive(Debug, Default, Clone)]
 struct Journal {
+    /// The number of the checkpoint the record is for, `None` for a
+    /// transaction.
+    checkpoint: Option<u64>,
     base: Counts,
     pcurve_mark: usize,
     vertices: HashMap<usize, Vertex>,
@@ -401,7 +417,91 @@ impl Topology {
         &mut self,
         edit: impl FnOnce(&mut Self) -> Result<T, E>,
     ) -> Result<T, E> {
-        let journal = Journal {
+        let journal = self.journal(None);
+        self.journals.push(journal);
+        let mut guard = TransactionGuard {
+            topo: self,
+            open: true,
+        };
+        let result = edit(guard.topo);
+        guard.open = false;
+        guard.topo.end_transaction(result.is_ok());
+        result
+    }
+
+    /// Starts to record the changes that [`Topology::restore_checkpoint`]
+    /// needs to put the topology back as it is now.
+    ///
+    /// While a checkpoint is open, the first change to each entity keeps a
+    /// copy of its old value, and the pcurve registry keeps a record of each
+    /// change. A restore costs the entities and pcurves changed and added
+    /// since the checkpoint opened, and not the size of the topology.
+    /// Checkpoints can nest, and a transaction can run in a checkpoint.
+    pub fn open_checkpoint(&mut self) -> Checkpoint {
+        self.checkpoints_opened += 1;
+        let mark = Checkpoint {
+            depth: self.journals.len(),
+            number: self.checkpoints_opened,
+        };
+        let journal = self.journal(Some(mark.number));
+        self.journals.push(journal);
+        mark
+    }
+
+    /// Puts the topology back as it was when `mark` opened: each entity
+    /// changed since then gets its old value, and each entity and pcurve
+    /// added since then is dropped. The checkpoints opened after `mark`
+    /// close, and `mark` stays open.
+    ///
+    /// Returns `false`, and changes nothing, if `mark` is not open or a
+    /// transaction is open.
+    #[must_use]
+    pub fn restore_checkpoint(&mut self, mark: Checkpoint) -> bool {
+        if !self.is_open(mark) {
+            return false;
+        }
+        while self.journals.len() > mark.depth {
+            self.end_transaction(false);
+        }
+        let journal = self.journal(Some(mark.number));
+        self.journals.push(journal);
+        true
+    }
+
+    /// Closes `mark` and the checkpoints opened after it, and keeps the
+    /// changes.
+    ///
+    /// Returns `false`, and changes nothing, if `mark` is not open or a
+    /// transaction is open.
+    #[must_use]
+    pub fn close_checkpoint(&mut self, mark: Checkpoint) -> bool {
+        if !self.is_open(mark) {
+            return false;
+        }
+        while self.journals.len() > mark.depth {
+            self.end_transaction(true);
+        }
+        true
+    }
+
+    /// Whether `mark` is open, with no transaction open after it. A
+    /// transaction's record must stay the innermost until its end.
+    fn is_open(&self, mark: Checkpoint) -> bool {
+        self.journals
+            .get(mark.depth)
+            .is_some_and(|journal| journal.checkpoint == Some(mark.number))
+            && self
+                .journals
+                .iter()
+                .skip(mark.depth)
+                .all(|journal| journal.checkpoint.is_some())
+    }
+
+    /// A new record that starts now, for a transaction or the checkpoint
+    /// `checkpoint`.
+    fn journal(&mut self, checkpoint: Option<u64>) -> Journal {
+        Journal {
+            checkpoint,
             base: Counts {
                 vertices: self.vertices.len(),
                 edges: self.edges.len(),
@@ -414,19 +514,11 @@ impl Topology {
             },
             pcurve_mark: self.pcurves.begin_undo(),
             ..Journal::default()
-        };
-        self.journals.push(journal);
-        let mut guard = TransactionGuard {
-            topo: self,
-            open: true,
-        };
-        let result = edit(guard.topo);
-        guard.open = false;
-        guard.topo.end_transaction(result.is_ok());
-        result
+        }
     }
 
-    /// Closes the innermost transaction: keeps its changes, or undoes them.
+    /// Closes the innermost transaction or checkpoint: keeps its changes, or
+    /// undoes them.
     fn end_transaction(&mut self, keep: bool) {
         let Some(journal) = self.journals.pop() else {
             return;
@@ -583,5 +675,150 @@ mod tests {
         assert_eq!(topo.num_vertices(), 2);
         let v2 = topo.vertex(vid2).unwrap();
         assert!((v2.point().x() - 4.0).abs() < f64::EPSILON);
+    }
+
+    use crate::edge::EdgeCurve;
+    use crate::face::FaceSurface;
+    use crate::pcurve::PCurve;
+    use crate::wire::OrientedEdge;
+    use brepkit_math::curves2d::{Curve2D, Line2D};
+    use brepkit_math::vec::{Point2, Vec2, Vec3};
+
+    fn at(x: f64) -> Vertex {
+        Vertex::new(Point3::new(x, 0.0, 0.0), 1e-7)
+    }
+
+    fn x_of(topo: &Topology, v: VertexId) -> f64 {
+        topo.vertex(v).unwrap().point().x()
+    }
+
+    fn pcurve(end: f64) -> PCurve {
+        let line = Line2D::new(Point2::new(0.0, 0.0), Vec2::new(1.0, 0.0)).unwrap();
+        PCurve::new(Curve2D::Line(line), 0.0, end)
+    }
+
+    fn pcurve_end(topo: &Topology, edge: EdgeId, face: FaceId) -> Option<f64> {
+        topo.pcurves().get(edge, face).map(PCurve::t_end)
+    }
+
+    fn wire_of(topo: &mut Topology, edges: &[EdgeId]) -> WireId {
+        let edges = edges.iter().map(|&e| OrientedEdge::new(e, true)).collect();
+        topo.add_wire(Wire::new(edges, true).unwrap())
+    }
+
+    fn face_on(topo: &mut Topology, wire: WireId, holes: Vec<WireId>) -> FaceId {
+        topo.add_face(Face::new(
+            wire,
+            holes,
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: 0.0,
+            },
+        ))
+    }
+
+    /// A triangle face, its vertices and its edges.
+    fn triangle(topo: &mut Topology) -> (FaceId, [VertexId; 3], [EdgeId; 3]) {
+        let v = [at(0.0), at(1.0), at(2.0)].map(|vertex| topo.add_vertex(vertex));
+        let e = [(0, 1), (1, 2), (2, 0)]
+            .map(|(a, b)| topo.add_edge(Edge::new(v[a], v[b], EdgeCurve::Line)));
+        let wire = wire_of(topo, &e);
+        (face_on(topo, wire, vec![]), v, e)
+    }
+
+    fn counts(topo: &Topology) -> [usize; 5] {
+        [
+            topo.num_vertices(),
+            topo.num_edges(),
+            topo.num_wires(),
+            topo.num_faces(),
+            topo.pcurves().len(),
+        ]
+    }
+
+    #[test]
+    fn a_restore_puts_back_what_changed_since_its_checkpoint() {
+        let mut topo = Topology::new();
+        let (face, [v0, ..], [e0, e1, _]) = triangle(&mut topo);
+        topo.pcurves_mut().set(e0, face, pcurve(1.0));
+        let before = counts(&topo);
+
+        let mark = topo.open_checkpoint();
+        for round in 0..2 {
+            *topo.vertex_mut(v0).unwrap() = at(5.0 + f64::from(round));
+            let made = topo.add_edge(Edge::new(v0, v0, EdgeCurve::Line));
+            let wire = wire_of(&mut topo, &[made, e1]);
+            let copy = face_on(&mut topo, wire, vec![]);
+            topo.pcurves_mut().set(e0, face, pcurve(6.0));
+            topo.pcurves_mut().set(made, copy, pcurve(7.0));
+            assert!(topo.restore_checkpoint(mark));
+            assert_eq!(counts(&topo), before, "round {round}");
+            assert!(x_of(&topo, v0).abs() < 1e-12, "round {round}");
+            assert_eq!(pcurve_end(&topo, e0, face), Some(1.0), "round {round}");
+        }
+
+        assert!(topo.close_checkpoint(mark));
+        assert!(!topo.restore_checkpoint(mark));
+        *topo.vertex_mut(v0).unwrap() = at(3.0);
+        assert!((x_of(&topo, v0) - 3.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn nested_checkpoints_restore_in_their_order() {
+        let mut topo = Topology::new();
+        let (_, [v0, ..], _) = triangle(&mut topo);
+        let first = topo.open_checkpoint();
+        *topo.vertex_mut(v0).unwrap() = at(1.0);
+        let second = topo.open_checkpoint();
+        let at_second = counts(&topo);
+        *topo.vertex_mut(v0).unwrap() = at(2.0);
+        topo.add_vertex(at(9.0));
+
+        assert!(topo.restore_checkpoint(second));
+        assert!((x_of(&topo, v0) - 1.0).abs() < 1e-12);
+        assert_eq!(counts(&topo), at_second);
+
+        *topo.vertex_mut(v0).unwrap() = at(3.0);
+        assert!(topo.restore_checkpoint(first));
+        assert!(x_of(&topo, v0).abs() < 1e-12);
+        assert!(!topo.restore_checkpoint(second));
+
+        // A checkpoint opened in the place of a closed one is a new one.
+        assert!(topo.close_checkpoint(first));
+        let third = topo.open_checkpoint();
+        assert!(!topo.close_checkpoint(first));
+        assert!(topo.close_checkpoint(third));
+    }
+
+    #[test]
+    fn a_transaction_runs_in_a_checkpoint() {
+        let mut topo = Topology::new();
+        let (face, [v0, ..], [e0, ..]) = triangle(&mut topo);
+        let before = counts(&topo);
+        let mark = topo.open_checkpoint();
+
+        let failed: Result<(), ()> = topo.transaction(|topo| {
+            *topo.vertex_mut(v0).unwrap() = at(5.0);
+            assert!(!topo.restore_checkpoint(mark));
+            assert!(!topo.close_checkpoint(mark));
+            Err(())
+        });
+        assert!(failed.is_err());
+        assert!(x_of(&topo, v0).abs() < 1e-12);
+
+        let kept: Result<(), ()> = topo.transaction(|topo| {
+            *topo.vertex_mut(v0).unwrap() = at(7.0);
+            topo.add_vertex(at(8.0));
+            topo.pcurves_mut().set(e0, face, pcurve(2.0));
+            Ok(())
+        });
+        assert!(kept.is_ok());
+        assert!((x_of(&topo, v0) - 7.0).abs() < 1e-12);
+
+        assert!(topo.restore_checkpoint(mark));
+        assert_eq!(counts(&topo), before);
+        assert!(x_of(&topo, v0).abs() < 1e-12);
+        assert_eq!(pcurve_end(&topo, e0, face), None);
+        assert!(topo.close_checkpoint(mark));
     }
 }
