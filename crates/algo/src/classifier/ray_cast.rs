@@ -2385,6 +2385,76 @@ impl LateralTrim {
     }
 }
 
+/// A spherical face's wires, to read whether a point of its sphere lies on
+/// the face itself: the planes its loops lie in, or its wires in `(u, v)`
+/// about an axis clear of them, as the ray cast reads the face.
+pub struct SphereFaceTrim {
+    geom: FaceGeom,
+}
+
+impl SphereFaceTrim {
+    /// The trim of a spherical face. `None` for any other surface, or a face
+    /// whose wires neither planes nor a trim can read.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AlgoError`] if a topology lookup fails.
+    pub fn new(
+        topo: &Topology,
+        face_id: brepkit_topology::face::FaceId,
+    ) -> Result<Option<Self>, AlgoError> {
+        let face = topo.face(face_id)?;
+        let brepkit_topology::face::FaceSurface::Sphere(surface) = face.surface() else {
+            return Ok(None);
+        };
+        if let Some(loops) = sphere_face_loops(topo, face, surface)? {
+            return Ok(Some(Self {
+                geom: FaceGeom::Sphere {
+                    surface: surface.clone(),
+                    loops,
+                },
+            }));
+        }
+        Ok(sphere_trim(topo, face, surface)?.map(|geom| Self { geom }))
+    }
+
+    /// Whether `point`, on the face's sphere, lies on the face: within
+    /// `near` of a wire counts as on it.
+    pub fn holds(&self, point: Point3, near: f64) -> bool {
+        let (on, close) = self.reads(point, near);
+        on || close
+    }
+
+    /// Whether `point`, on the face's sphere, lies inside the face farther
+    /// than `near` from every wire.
+    pub fn holds_clear(&self, point: Point3, near: f64) -> bool {
+        let (on, close) = self.reads(point, near);
+        on && !close
+    }
+
+    fn reads(&self, point: Point3, near: f64) -> (bool, bool) {
+        match &self.geom {
+            FaceGeom::Sphere { loops, .. } => (
+                loops.iter().all(|l| l.admits(point, 0.0)),
+                loops.iter().any(|l| l.grazes(point, near)),
+            ),
+            FaceGeom::SphereTrim {
+                frame,
+                trim,
+                away,
+                beyond,
+                ..
+            } => {
+                let project = |p: Point3| frame.project(p);
+                let (u, v) = frame.project(point);
+                let (on, close) = trim.contains(u, v, *away, frame.radius_at(v), near, &project);
+                (on != *beyond, close)
+            }
+            _ => (true, false),
+        }
+    }
+}
+
 impl UvEdge {
     /// The `v` where the edge between samples `a` and `b` (offset `ga` and
     /// `gb` from `u`) reaches `u`, found on the curve by regula falsi with
