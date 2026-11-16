@@ -7548,11 +7548,13 @@ fn ruling_crossing(
 }
 
 /// Where a closed section circle meets a face's outer boundary: each hit's
-/// circle parameter, point, and the boundary edge it lies on.
+/// circle parameter, point, and the boundary edge it lies on. With
+/// `rim_ends`, a rim on the circle itself meets it at the rim's ends.
 fn circle_face_hits(
     topo: &Topology,
     fid: FaceId,
     circle: &brepkit_math::curves::Circle3D,
+    rim_ends: bool,
     tol: Tolerance,
 ) -> Vec<(f64, Point3, Option<brepkit_topology::edge::EdgeId>)> {
     let mut hits: Vec<(f64, Point3, Option<brepkit_topology::edge::EdgeId>)> = Vec::new();
@@ -7600,49 +7602,66 @@ fn circle_face_hits(
             EdgeCurve::Circle(bc) => {
                 const NS: usize = 128;
                 let full = (sv.point() - ev.point()).length() < tol.linear;
-                let cand = circle.intersect_circle(bc, tol.linear);
-                if cand.is_empty() {
-                    continue;
-                }
-                // Filter to the edge's actual arc by proximity to its
-                // sampled polyline (skipped for a full-circle edge). The
-                // band covers the sampling sagitta plus the fit weld.
-                let mut samples: Vec<Point3> = Vec::new();
-                if !full {
-                    let (t0, t1) = edge.curve().domain_with_endpoints(sv.point(), ev.point());
-                    for i in 0..=NS {
-                        #[allow(clippy::cast_precision_loss)]
-                        let t = t0 + (t1 - t0) * (i as f64) / (NS as f64);
-                        samples.push(edge.curve().evaluate_with_endpoints(
-                            t,
-                            sv.point(),
-                            ev.point(),
-                        ));
-                    }
-                }
-                let band = {
-                    let step = if samples.len() > 1 {
-                        (samples[1] - samples[0]).length()
-                    } else {
-                        0.0
-                    };
-                    (step * step / (8.0 * bc.radius().max(tol.linear)))
-                        .madd(2.0, tol.linear * 100.0)
-                };
-                for (p, t) in cand {
-                    let on_arc = full
-                        || samples.windows(2).any(|w| {
-                            let d = w[1] - w[0];
-                            let l2 = d.length_squared();
-                            let f = if l2 > 1e-20 {
-                                ((p - w[0]).dot(d) / l2).clamp(0.0, 1.0)
-                            } else {
-                                0.0
-                            };
-                            (p - (w[0] + d * f)).length() <= band
-                        });
-                    if on_arc {
+                // A rim on the circle itself meets it everywhere: its ends
+                // are where the face's boundary breaks, and the section
+                // breaks there too, as it does where it runs along the other
+                // face's boundary (a ball on a rod's end, whose end cap and
+                // wall both meet the ball along the cap's rim).
+                let near = tol.linear * 10.0;
+                if rim_ends
+                    && bc.normal().cross(circle.normal()).length() < 1e-9
+                    && (bc.center() - circle.center()).length() < near
+                    && (bc.radius() - circle.radius()).abs() < near
+                {
+                    for p in [sv.point(), ev.point()] {
+                        let t = circle.project(p).rem_euclid(std::f64::consts::TAU);
                         edge_hits.push((t, p, Some(oe.edge())));
+                    }
+                } else {
+                    let cand = circle.intersect_circle(bc, tol.linear);
+                    if cand.is_empty() {
+                        continue;
+                    }
+                    // Filter to the edge's actual arc by proximity to its
+                    // sampled polyline (skipped for a full-circle edge). The
+                    // band covers the sampling sagitta plus the fit weld.
+                    let mut samples: Vec<Point3> = Vec::new();
+                    if !full {
+                        let (t0, t1) = edge.curve().domain_with_endpoints(sv.point(), ev.point());
+                        for i in 0..=NS {
+                            #[allow(clippy::cast_precision_loss)]
+                            let t = t0 + (t1 - t0) * (i as f64) / (NS as f64);
+                            samples.push(edge.curve().evaluate_with_endpoints(
+                                t,
+                                sv.point(),
+                                ev.point(),
+                            ));
+                        }
+                    }
+                    let band = {
+                        let step = if samples.len() > 1 {
+                            (samples[1] - samples[0]).length()
+                        } else {
+                            0.0
+                        };
+                        (step * step / (8.0 * bc.radius().max(tol.linear)))
+                            .madd(2.0, tol.linear * 100.0)
+                    };
+                    for (p, t) in cand {
+                        let on_arc = full
+                            || samples.windows(2).any(|w| {
+                                let d = w[1] - w[0];
+                                let l2 = d.length_squared();
+                                let f = if l2 > 1e-20 {
+                                    ((p - w[0]).dot(d) / l2).clamp(0.0, 1.0)
+                                } else {
+                                    0.0
+                                };
+                                (p - (w[0] + d * f)).length() <= band
+                            });
+                        if on_arc {
+                            edge_hits.push((t, p, Some(oe.edge())));
+                        }
                     }
                 }
             }
@@ -7709,8 +7728,6 @@ fn closed_circle_boundary_crossings(
     // edge, collapsing the lens region to a zero-area slit. The midpoint split
     // is the sanctioned splitter-side resolution (never make the shared merge
     // smarter).
-    let face_hits = |fid: FaceId| circle_face_hits(topo, fid, circle, tol);
-
     let surface_of = |fid: FaceId| topo.face(fid).ok().map(|f| f.surface().clone());
     let surf_a = surface_of(face_a);
     let surf_b = surface_of(face_b);
@@ -7718,6 +7735,10 @@ fn closed_circle_boundary_crossings(
     let is_sphere = |s: &Option<FaceSurface>| matches!(s, Some(FaceSurface::Sphere(_)));
 
     let pair_has_sphere = is_sphere(&surf_a) || is_sphere(&surf_b);
+    // Each pair of faces about one ball splits the ball's circle on its own,
+    // and an arc another pair already gave the ball is taken again only where
+    // its ends match: a rim on the circle breaks it the same for each pair.
+    let face_hits = |fid: FaceId| circle_face_hits(topo, fid, circle, pair_has_sphere, tol);
     let faces_to_check: Vec<FaceId> = if pair_has_sphere {
         vec![face_a, face_b]
     } else {
@@ -7983,7 +8004,7 @@ fn inscribed_boundary_traced_by(
         if !is_plane(other) {
             return None;
         }
-        let hits = circle_face_hits(topo, fid, circle, tol);
+        let hits = circle_face_hits(topo, fid, circle, false, tol);
         let traced = boundary_is_inscribed(topo, fid, &hits, circle, tol)
             && topo
                 .face(fid)

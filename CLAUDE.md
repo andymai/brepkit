@@ -232,6 +232,7 @@ Quick reference — find the right file for any task:
 | Shared utilities (face polygon, AABB, edge sampling) | `util.rs` |
 | Ray-surface intersection (all types + solvers) | `classify/ray_surface.rs` |
 | UV boundary polygon, containment tests | `classify/boundary.rs` |
+| A curved face's wires drawn in a plane from its surface's parameters (a point's side of a wire, a wire's way round) | `face_loops.rs` |
 | Point-in-solid classification (ray casting) | `classify/mod.rs` |
 | Winding number classifier | `classify/winding.rs` |
 | CheckId enum, ValidationReport, severity | `validate/checks.rs` |
@@ -242,6 +243,7 @@ Quick reference — find the right file for any task:
 | Edge geometric checks | `validate/edge.rs` |
 | Face geometric checks | `validate/face.rs` |
 | A face's holes against its outline and each other | `validate/face_wires.rs` |
+| Plane faces of one solid that cover the same area | `validate/face_overlap.rs` |
 | Validation orchestrator | `validate/mod.rs` |
 | GProps accumulator (Huygens' theorem) | `properties/accumulator.rs` |
 | Closed-form formulas (box, sphere, cylinder, etc.) | `properties/analytic.rs` |
@@ -288,7 +290,7 @@ Quick reference — find the right file for any task:
 | Loft along guide rails and under end conditions | `loft/network.rs` |
 | Helical sweep | `helix.rs` |
 | Chamfer, Fillet | `chamfer.rs`, `fillet/` (mod, rolling_ball, g1_chain, geometry, radius_law, helpers, tests) |
-| Chamfer along tangent chains of lines and arcs | `chamfer_chain.rs` |
+| Chamfer along chains of lines and arcs (tangent joins, corners, cylinder rulings) | `chamfer_chain.rs` |
 | Shell (hollow solid) | `shell_op.rs` |
 | Draft (taper faces) | `draft.rs` |
 | Section / Split | `section.rs`, `split.rs` |

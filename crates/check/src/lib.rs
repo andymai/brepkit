@@ -14,6 +14,7 @@
 pub mod classify;
 pub mod distance;
 pub mod error;
+pub mod face_loops;
 pub mod properties;
 pub(crate) mod util;
 pub mod validate;

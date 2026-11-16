@@ -70,9 +70,28 @@ pub fn convert_solid_to_bspline(
 }
 
 fn convert_face_surface(topo: &mut Topology, fid: FaceId) -> Result<bool, HealError> {
-    let surface = topo.face(fid)?.surface().clone();
-    let nurbs = match surface {
-        FaceSurface::Plane { normal, d } => plane_face_to_nurbs(topo, fid, normal, d)?,
+    let Some(nurbs) = face_bspline_surface(topo, fid)? else {
+        return Ok(false);
+    };
+    drop_face_pcurves(topo, fid)?;
+    topo.face_mut(fid)?.set_surface(FaceSurface::Nurbs(nurbs));
+    Ok(true)
+}
+
+/// The B-spline surface that [`convert_solid_to_bspline`] gives a face, read
+/// from the face's surface and its own boundary, with no change to the
+/// topology. `None` for a face that is NURBS already.
+///
+/// # Errors
+///
+/// Returns [`HealError`] if a topology lookup or the NURBS construction
+/// fails.
+pub fn face_bspline_surface(
+    topo: &Topology,
+    fid: FaceId,
+) -> Result<Option<NurbsSurface>, HealError> {
+    let nurbs = match topo.face(fid)?.surface() {
+        &FaceSurface::Plane { normal, d } => plane_face_to_nurbs(topo, fid, normal, d)?,
         FaceSurface::Cylinder(c) => {
             let c = c.turned(patch_start_angle(topo, fid, |p| {
                 Some(c.project_point(p).0)
@@ -81,7 +100,7 @@ fn convert_face_surface(topo: &mut Topology, fid: FaceId) -> Result<bool, HealEr
             cylinder_to_nurbs(&c, v_range)?
         }
         FaceSurface::Cone(c) => {
-            let c = c.turned(patch_start_angle(topo, fid, |p| cone_angle(&c, p))?);
+            let c = c.turned(patch_start_angle(topo, fid, |p| cone_angle(c, p))?);
             let (mut v_lo, v_hi) = surface_v_range(topo, fid, |p| c.project_point(p).1)?;
             // The rational form needs a nonzero radius row, so a face that
             // reaches the apex keeps a vanishing ring there.
@@ -89,17 +108,14 @@ fn convert_face_surface(topo: &mut Topology, fid: FaceId) -> Result<bool, HealEr
             cone_to_nurbs(&c, (v_lo, v_hi.max(v_lo * 2.0)))?
         }
         FaceSurface::Sphere(s) => {
-            sphere_to_nurbs(&s.turned(patch_start_angle(topo, fid, |p| sphere_angle(&s, p))?))?
+            sphere_to_nurbs(&s.turned(patch_start_angle(topo, fid, |p| sphere_angle(s, p))?))?
         }
         FaceSurface::Torus(t) => torus_to_nurbs(&t.turned(patch_start_angle(topo, fid, |p| {
             Some(t.project_point(p).0)
         })?))?,
-        FaceSurface::Nurbs(_) => return Ok(false),
+        FaceSurface::Nurbs(_) => return Ok(None),
     };
-
-    drop_face_pcurves(topo, fid)?;
-    topo.face_mut(fid)?.set_surface(FaceSurface::Nurbs(nurbs));
-    Ok(true)
+    Ok(Some(nurbs))
 }
 
 fn convert_edge_curve(topo: &mut Topology, eid: EdgeId) -> Result<bool, HealError> {
@@ -498,6 +514,67 @@ mod tests {
                 matches!(topo.edge(eid).unwrap().curve(), EdgeCurve::NurbsCurve(_)),
                 "edge {eid:?} should be NURBS after convert_to_bspline"
             );
+        }
+    }
+
+    /// The read-only form gives each face the surface that the conversion
+    /// sets on it, and changes nothing.
+    #[test]
+    fn face_bspline_surface_is_the_surface_the_conversion_sets() {
+        let origin = Point3::new(0.0, 0.0, 0.0);
+        let cases = [
+            (
+                FaceSurface::Cylinder(CylindricalSurface::new(origin, z_axis(), 2.0).unwrap()),
+                vec![
+                    Point3::new(2.0, 0.0, 0.0),
+                    Point3::new(0.0, 2.0, 0.0),
+                    Point3::new(2.0, 0.0, 5.0),
+                    Point3::new(0.0, 2.0, 5.0),
+                ],
+            ),
+            (
+                FaceSurface::Sphere(SphericalSurface::new(origin, 3.0).unwrap()),
+                vec![
+                    Point3::new(3.0, 0.0, 0.0),
+                    Point3::new(0.0, 3.0, 0.0),
+                    Point3::new(-3.0, 0.0, 0.0),
+                ],
+            ),
+            (
+                FaceSurface::Cone(
+                    ConicalSurface::new(origin, z_axis(), std::f64::consts::FRAC_PI_4).unwrap(),
+                ),
+                vec![
+                    origin,
+                    Point3::new(2.0, 0.0, 2.0),
+                    Point3::new(0.0, 2.0, 2.0),
+                ],
+            ),
+            (
+                FaceSurface::Torus(ToroidalSurface::new(origin, 4.0, 1.0).unwrap()),
+                vec![
+                    Point3::new(5.0, 0.0, 0.0),
+                    Point3::new(0.0, 5.0, 0.0),
+                    Point3::new(-5.0, 0.0, 0.0),
+                ],
+            ),
+        ];
+        for (surface, ring) in cases {
+            let tag = surface.type_tag();
+            let mut topo = Topology::default();
+            let solid = single_face_solid(&mut topo, surface, &ring);
+            let fid = solid_faces(&topo, solid).unwrap()[0];
+            let read = face_bspline_surface(&topo, fid).unwrap().unwrap();
+            assert_eq!(topo.face(fid).unwrap().surface().type_tag(), tag);
+            convert_solid_to_bspline(&mut topo, solid).unwrap();
+            let FaceSurface::Nurbs(set) = topo.face(fid).unwrap().surface() else {
+                panic!("the {tag} face should be NURBS");
+            };
+            assert_eq!(read.control_points(), set.control_points(), "{tag}");
+            assert_eq!(read.weights(), set.weights(), "{tag}");
+            assert_eq!(read.knots_u(), set.knots_u(), "{tag}");
+            assert_eq!(read.knots_v(), set.knots_v(), "{tag}");
+            assert!(face_bspline_surface(&topo, fid).unwrap().is_none());
         }
     }
 

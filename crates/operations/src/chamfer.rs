@@ -30,7 +30,7 @@ use crate::dot_normal_point;
 /// - `distance` is zero or negative
 /// - any edge is not shared by exactly two faces in the solid
 /// - on a body with a curved edge (other than closed circular rims or
-///   tangent chains of lines and arcs, see
+///   chains of lines and arcs, see
 ///   [`crate::chamfer_chain::chamfer_tangent_chains`]), the blend engine's
 ///   chamfer fails on an edge
 /// - a chamfered edge reaches a face's hole

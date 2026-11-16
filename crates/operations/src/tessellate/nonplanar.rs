@@ -141,30 +141,32 @@ pub(super) fn tessellate_band_face_local(
         }
     }
 
-    // Sample each rim's edges locally, dedup by quantized position, sort by
-    // angle around the axis.
+    // Sample each rim's edges locally, in the order the rim's cycle walks
+    // them, turned to run up the angle around the axis.
     let mut rims: Vec<Vec<Point3>> = Vec::with_capacity(2);
     for cycle in &cycles {
-        let mut pts: Vec<Point3> = Vec::new();
-        let mut keys: std::collections::HashSet<(i64, i64, i64)> = std::collections::HashSet::new();
-        for &ci in cycle {
-            let edge = topo.edge(curved[ci].0)?;
-            for p in sample_edge(topo, edge, deflection, angular_tol, false)? {
-                let k = point_merge_key(p, MERGE_GRID);
-                if keys.insert(k) {
-                    pts.push(p);
-                }
-            }
-        }
+        let Some(mut pts) = rim_in_walk_order(
+            cycle,
+            &curved,
+            |edge| -> Result<_, crate::OperationsError> {
+                let edge = topo.edge(edge)?;
+                Ok(Some(sample_edge(
+                    topo,
+                    edge,
+                    deflection,
+                    angular_tol,
+                    false,
+                )?))
+            },
+            |p| point_merge_key(*p, MERGE_GRID),
+        )?
+        else {
+            return Ok(None);
+        };
         if pts.len() < 3 {
             return Ok(None);
         }
-        pts.sort_by(|a, b| {
-            project(*a)
-                .0
-                .partial_cmp(&project(*b).0)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        ascending_from_least_angle(&mut pts, |p| project(*p).0);
         rims.push(pts);
     }
 
@@ -199,61 +201,35 @@ pub(super) fn tessellate_band_face_local(
     let unwrap = |a: f64| (a - base).rem_euclid(TAU);
     let a0: Vec<f64> = ring0.iter().map(|&i| unwrap(ang(i))).collect();
     let a1: Vec<f64> = ring1.iter().map(|&i| unwrap(ang(i))).collect();
-
-    let mut indices: Vec<u32> = Vec::with_capacity((n + m) * 3);
-    let mut emit = |a: usize, b: usize, c: usize| {
-        let (pa, pb, pc) = (positions[a], positions[b], positions[c]);
-        let geo = (pb - pa).cross(pc - pa);
-        if geo.length() < 1e-20 {
-            return;
-        }
-        let (u, v) = project(pa);
-        let outward = surf_normal(u, v);
+    let u0 = unwrapped_angles(&ring0.iter().map(|&i| ang(i)).collect::<Vec<_>>(), base);
+    let u1 = unwrapped_angles(&ring1.iter().map(|&i| ang(i)).collect::<Vec<_>>(), base);
+    let corner = |(ring, k): (usize, usize)| {
+        let (at, u) = if ring == 0 {
+            (ring0[k % n], u0[k])
+        } else {
+            (ring1[k % m], u1[k])
+        };
         #[allow(clippy::cast_possible_truncation)]
-        let mut tri = [a as u32, b as u32, c as u32];
-        if geo.dot(outward) < 0.0 {
-            tri.swap(1, 2);
-        }
-        indices.extend_from_slice(&tri);
+        (at as u32, [u, uvs[at][1]])
     };
-    let (mut i, mut j) = (0usize, 0usize);
-    let (mut done0, mut done1) = (0usize, 0usize);
-    while done0 < n || done1 < m {
-        let next0 = if done0 >= n {
-            f64::INFINITY
-        } else if i + 1 < n {
-            a0[i + 1]
-        } else {
-            a0[0] + TAU
-        };
-        let next1 = if done1 >= m {
-            f64::INFINITY
-        } else if j + 1 < m {
-            a1[j + 1]
-        } else {
-            a1[0] + TAU
-        };
-        if next0 <= next1 {
-            let ni = (i + 1) % n;
-            emit(ring0[i], ring1[j], ring0[ni]);
-            i = ni;
-            done0 += 1;
-        } else {
-            let nj = (j + 1) % m;
-            emit(ring0[i], ring1[j], ring1[nj]);
-            j = nj;
-            done1 += 1;
-        }
+    let tris: Vec<([u32; 3], [[f64; 2]; 3])> = zip_rims(&a0, &a1)
+        .into_iter()
+        .map(|tri| {
+            let [(a, pa), (b, pb), (c, pc)] = tri.map(corner);
+            ([a, b, c], [pa, pb, pc])
+        })
+        .collect();
+    if tris.is_empty() || !turns_one_way(tris.iter().map(|&(_, uv)| uv)) {
+        return Ok(None);
     }
 
-    Ok(Some(super::TriangleMeshUV {
-        mesh: TriangleMesh {
-            positions,
-            normals,
-            indices,
-        },
-        uvs,
-    }))
+    let mut mesh = TriangleMesh {
+        positions,
+        normals,
+        indices: tris.into_iter().flat_map(|(ids, _)| ids).collect(),
+    };
+    orient_triangle_run(&mut mesh, 0, project.as_ref(), surf_normal.as_ref());
+    Ok(Some(super::TriangleMeshUV { mesh, uvs }))
 }
 
 /// Tessellate a cylinder/cone lateral "standard band" face directly from the
@@ -279,6 +255,11 @@ pub(super) fn tessellate_band_face_local(
 /// structured watertight band. Rims with equal shared-vertex counts sweep
 /// index-paired exactly as before; unequal counts (each rim's sampling is
 /// dictated by its own neighbours) are stitched with an angular zipper merge.
+/// Each rim keeps the order its cycle walks it, and the band is emitted only
+/// when every triangle turns one way in the unwrapped `(u, v)` strip. A notch
+/// cut into a rim can fold the sweep (a side along a ruling, or a steep side
+/// that the zipper joins to the other rim across the notch); such a face
+/// returns `Ok(false)` for the CDT.
 pub(super) fn tessellate_revolution_band_shared(
     topo: &Topology,
     face_data: &brepkit_topology::face::Face,
@@ -405,36 +386,27 @@ pub(super) fn tessellate_revolution_band_shared(
         }
     }
 
-    // Pull each rim's shared global vertex IDs. Chained pieces share their
-    // joint vertices through the pool, so id-dedup merges the chain into one
-    // ring; a closed circle carries its closing duplicate instead.
+    // Pull each rim's shared global vertex IDs in the order its cycle walks
+    // them, turned to run up the angle around the axis from its least angle.
+    let angle_of = |gid: u32, merged: &TriangleMesh| project(merged.positions[gid as usize]).0;
     let mut rims: Vec<Vec<u32>> = Vec::with_capacity(2);
     for cycle in &cycles {
-        let mut ids: Vec<u32> = Vec::new();
-        for &ci in cycle {
-            let Some(edge_ids) = edge_global_indices.get(&curved[ci].0) else {
-                return Ok(false);
-            };
-            ids.extend_from_slice(edge_ids);
-        }
-        ids.sort_unstable();
-        ids.dedup();
+        let Some(mut ids) = rim_in_walk_order(
+            cycle,
+            &curved,
+            |edge| Ok(edge_global_indices.get(&edge).cloned()),
+            |&gid| gid,
+        )?
+        else {
+            return Ok(false);
+        };
         if ids.len() < 3 {
             return Ok(false);
         }
+        ascending_from_least_angle(&mut ids, |&gid| angle_of(gid, merged));
         rims.push(ids);
     }
     let n = rims[0].len();
-
-    // Sort each rim by angle around the axis so the two rings align by index.
-    let angle_of = |gid: u32, merged: &TriangleMesh| project(merged.positions[gid as usize]).0;
-    for rim in &mut rims {
-        rim.sort_by(|&a, &b| {
-            angle_of(a, merged)
-                .partial_cmp(&angle_of(b, merged))
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-    }
 
     // A pointed cone's only other boundary is its seam line up to the apex.
     // Every ruling is straight, so a fan from the rim's shared samples to the
@@ -489,127 +461,255 @@ pub(super) fn tessellate_revolution_band_shared(
         None
     };
 
-    // Emit default-oriented (non-reversed) triangles: the geometric normal
-    // matches the surface outward normal, the convention `tessellate_analytic`
-    // uses. The caller (`tessellate_face_with_shared_edges`) applies the global
-    // `is_reversed` winding flip afterward, so we must NOT apply it here.
-    let emit = |merged: &mut TriangleMesh, a: u32, b: u32, c: u32| {
-        let (pa, pb, pc) = (
-            merged.positions[a as usize],
-            merged.positions[b as usize],
-            merged.positions[c as usize],
-        );
-        // Skip degenerate triangles (two rim points at the same position).
-        let geo = (pb - pa).cross(pc - pa);
-        if geo.length() < 1e-20 {
-            return;
-        }
-        let (u, v) = project(pa);
-        let outward = surf_normal(u, v);
-        let mut tri = [a, b, c];
-        if geo.dot(outward) < 0.0 {
-            tri.swap(1, 2);
-        }
-        merged.indices.extend_from_slice(&tri);
+    // Each candidate triangle with its corners' (u, v), u unwrapped along
+    // the rims from ring 0's first sample.
+    let rim_uv = |rim: &[u32], merged: &TriangleMesh, base: f64| {
+        let angles: Vec<f64> = rim.iter().map(|&g| angle_of(g, merged)).collect();
+        let vs: Vec<f64> = rim
+            .iter()
+            .map(|&g| project(merged.positions[g as usize]).1)
+            .collect();
+        (unwrapped_angles(&angles, base), vs)
     };
+    let base = angle_of(rims[0][0], merged);
+    let (u0, v0) = rim_uv(&rims[0], merged, base);
+    let mut tris: Vec<([u32; 3], [[f64; 2]; 3])> = Vec::with_capacity(2 * n + 2);
 
     if let Some(apex) = apex_id {
+        let apex_v = project(merged.positions[apex as usize]).1;
         for i in 0..n {
-            emit(merged, rims[0][i], rims[0][(i + 1) % n], apex);
+            let ni = (i + 1) % n;
+            tris.push((
+                [rims[0][i], rims[0][ni], apex],
+                [
+                    [u0[i], v0[i]],
+                    [u0[i + 1], v0[ni]],
+                    [0.5 * (u0[i] + u0[i + 1]), apex_v],
+                ],
+            ));
         }
-        return Ok(true);
-    }
-
-    let m = rims[1].len();
-    if n == m {
-        // Equal counts: the historical index-paired sweep (kept byte-identical
-        // for the calibrated closed-rim cases). A sample on the surface's u
-        // seam projects to either end of [0, 2π), so the two sorted rings can
-        // start one sample out of phase; pairing them as-is twists the band
-        // through the solid. Rotate ring 1 to start at ring 0's angular
-        // partner, keeping index 0 unless another sample is strictly closer.
-        let circular = |a: f64, b: f64| {
-            let d = (a - b).rem_euclid(TAU);
-            d.min(TAU - d)
-        };
-        let base = angle_of(rims[0][0], merged);
-        let mut phase = 0;
-        let mut phase_gap = circular(angle_of(rims[1][0], merged), base);
-        for k in 1..m {
-            let gap = circular(angle_of(rims[1][k], merged), base);
-            if gap < phase_gap - 1e-9 {
-                phase = k;
-                phase_gap = gap;
+    } else {
+        let m = rims[1].len();
+        if n == m {
+            // Equal counts: the historical index-paired sweep (kept
+            // byte-identical for the calibrated closed-rim cases). A sample
+            // on the surface's u seam projects to either end of [0, 2π), so
+            // the two rings can start one sample out of phase; pairing
+            // them as-is twists the band through the solid. Rotate ring 1 to
+            // start at ring 0's angular partner, keeping index 0 unless
+            // another sample is strictly closer.
+            let circular = |a: f64, b: f64| {
+                let d = (a - b).rem_euclid(TAU);
+                d.min(TAU - d)
+            };
+            let mut phase = 0;
+            let mut phase_gap = circular(angle_of(rims[1][0], merged), base);
+            for k in 1..m {
+                let gap = circular(angle_of(rims[1][k], merged), base);
+                if gap < phase_gap - 1e-9 {
+                    phase = k;
+                    phase_gap = gap;
+                }
+            }
+            rims[1].rotate_left(phase);
+            let (u1, v1) = rim_uv(&rims[1], merged, base);
+            for i in 0..n {
+                let j = (i + 1) % n;
+                let (b0, b1) = (rims[0][i], rims[0][j]);
+                let (t0, t1) = (rims[1][i], rims[1][j]);
+                let (pb0, pb1) = ([u0[i], v0[i]], [u0[i + 1], v0[j]]);
+                let (pt0, pt1) = ([u1[i], v1[i]], [u1[i + 1], v1[j]]);
+                tris.push(([b0, b1, t1], [pb0, pb1, pt1]));
+                tris.push(([b0, t1, t0], [pb0, pt1, pt0]));
+            }
+        } else {
+            // Unequal counts: angular zipper merge. Rotate ring 1 so its
+            // start sits just after ring 0's start angle, keeping the initial
+            // quad local instead of spanning the whole circle.
+            let start1 = (0..m)
+                .min_by(|&a, &b| {
+                    let ka = (angle_of(rims[1][a], merged) - base).rem_euclid(TAU);
+                    let kb = (angle_of(rims[1][b], merged) - base).rem_euclid(TAU);
+                    ka.partial_cmp(&kb).unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .unwrap_or(0);
+            rims[1].rotate_left(start1);
+            let (u1, v1) = rim_uv(&rims[1], merged, base);
+            let unwrap = |a: f64| (a - base).rem_euclid(TAU);
+            let a0: Vec<f64> = rims[0]
+                .iter()
+                .map(|&g| unwrap(angle_of(g, merged)))
+                .collect();
+            let a1: Vec<f64> = rims[1]
+                .iter()
+                .map(|&g| unwrap(angle_of(g, merged)))
+                .collect();
+            let corner = |(ring, k): (usize, usize)| {
+                if ring == 0 {
+                    (rims[0][k % n], [u0[k], v0[k % n]])
+                } else {
+                    (rims[1][k % m], [u1[k], v1[k % m]])
+                }
+            };
+            for tri in zip_rims(&a0, &a1) {
+                let [(a, pa), (b, pb), (c, pc)] = tri.map(corner);
+                tris.push(([a, b, c], [pa, pb, pc]));
             }
         }
-        rims[1].rotate_left(phase);
-        for i in 0..n {
-            let j = (i + 1) % n;
-            let (b0, b1) = (rims[0][i], rims[0][j]);
-            let (t0, t1) = (rims[1][i], rims[1][j]);
-            emit(merged, b0, b1, t1);
-            emit(merged, b0, t1, t0);
-        }
-        return Ok(true);
     }
 
-    // Unequal counts: angular zipper merge. Advance whichever ring's next
-    // vertex comes first in angle, emitting one triangle per advance; after
-    // n + m advances both rings close and every boundary segment is used
-    // exactly once, so the band is watertight against both neighbours.
-    let ang0: Vec<f64> = rims[0].iter().map(|&g| angle_of(g, merged)).collect();
-    // Rotate ring 1 so its start sits just after ring 0's start angle,
-    // keeping the initial quad local instead of spanning the whole circle.
-    let start1 = (0..m)
+    if tris.is_empty() || !turns_one_way(tris.iter().map(|&(_, uv)| uv)) {
+        return Ok(false);
+    }
+    // The triangles all turn one way, so one flip decision orients the run
+    // outward, the convention `tessellate_analytic` uses. The caller
+    // (`tessellate_face_with_shared_edges`) applies the face's `is_reversed`
+    // flip afterward, so it must NOT be applied here.
+    let idx_start = merged.indices.len();
+    for (ids, _) in tris {
+        merged.indices.extend_from_slice(&ids);
+    }
+    orient_triangle_run(merged, idx_start, project.as_ref(), surf_normal.as_ref());
+    Ok(true)
+}
+
+type RimEdge<K> = (
+    K,
+    brepkit_topology::vertex::VertexId,
+    brepkit_topology::vertex::VertexId,
+);
+
+/// The samples of one rim cycle in the order the cycle walks them: an edge's
+/// samples run backwards where the walk enters the edge at its end, and a
+/// joint shared by consecutive edges, like the closing sample, appears once.
+/// An angle sort cannot stand in for the walk: a rim that runs along a
+/// ruling (the side of a notch cut into the rim) holds samples at one angle.
+/// `None` when an edge has no samples or the walk meets a sample twice.
+fn rim_in_walk_order<K: Copy, T, Q: Eq + std::hash::Hash>(
+    cycle: &[usize],
+    curved: &[RimEdge<K>],
+    mut samples: impl FnMut(K) -> Result<Option<Vec<T>>, crate::OperationsError>,
+    key: impl Fn(&T) -> Q,
+) -> Result<Option<Vec<T>>, crate::OperationsError> {
+    let mut rim: Vec<T> = Vec::new();
+    let mut at = None;
+    for &ci in cycle {
+        let (edge, sv, ev) = curved[ci];
+        let forward = at.is_none_or(|v| v == sv);
+        let Some(mut pts) = samples(edge)? else {
+            return Ok(None);
+        };
+        if !forward {
+            pts.reverse();
+        }
+        for p in pts {
+            if rim.last().is_none_or(|q| key(q) != key(&p)) {
+                rim.push(p);
+            }
+        }
+        at = Some(if forward { ev } else { sv });
+    }
+    while rim.len() > 1 && rim.first().map(&key) == rim.last().map(&key) {
+        rim.pop();
+    }
+    let mut seen = DetHashSet::default();
+    if !rim.iter().all(|p| seen.insert(key(p))) {
+        return Ok(None);
+    }
+    Ok(Some(rim))
+}
+
+/// Turns a walked rim to run up the angle around the axis and starts it at
+/// its least angle: the order an angle sort gives a rim that is a graph over
+/// the angle.
+fn ascending_from_least_angle<T>(rim: &mut [T], angle: impl Fn(&T) -> f64) {
+    let n = rim.len();
+    if n == 0 {
+        return;
+    }
+    let turn: f64 = (0..n)
+        .map(|k| wrap_to_half_turn(angle(&rim[(k + 1) % n]) - angle(&rim[k])))
+        .sum();
+    if turn < 0.0 {
+        rim.reverse();
+    }
+    let least = (0..n)
         .min_by(|&a, &b| {
-            let ka = (angle_of(rims[1][a], merged) - ang0[0]).rem_euclid(TAU);
-            let kb = (angle_of(rims[1][b], merged) - ang0[0]).rem_euclid(TAU);
-            ka.partial_cmp(&kb).unwrap_or(std::cmp::Ordering::Equal)
+            angle(&rim[a])
+                .partial_cmp(&angle(&rim[b]))
+                .unwrap_or(std::cmp::Ordering::Equal)
         })
         .unwrap_or(0);
-    rims[1].rotate_left(start1);
-    let base = ang0[0];
-    let unwrap = |a: f64| (a - base).rem_euclid(TAU);
-    let a0: Vec<f64> = rims[0]
-        .iter()
-        .map(|&g| unwrap(angle_of(g, merged)))
-        .collect();
-    let a1: Vec<f64> = rims[1]
-        .iter()
-        .map(|&g| unwrap(angle_of(g, merged)))
-        .collect();
+    rim.rotate_left(least);
+}
 
-    let (mut i, mut j) = (0usize, 0usize);
-    let (mut done0, mut done1) = (0usize, 0usize);
-    while done0 < n || done1 < m {
-        let next0 = if done0 >= n {
+fn wrap_to_half_turn(d: f64) -> f64 {
+    (d + TAU / 2.0).rem_euclid(TAU) - TAU / 2.0
+}
+
+/// A rim's angles unwrapped along it, starting within half a turn of
+/// `base`, with a closing entry for the first sample after one more step.
+fn unwrapped_angles(angles: &[f64], base: f64) -> Vec<f64> {
+    let Some(&first) = angles.first() else {
+        return Vec::new();
+    };
+    let mut at = base + wrap_to_half_turn(first - base);
+    let mut out = Vec::with_capacity(angles.len() + 1);
+    out.push(at);
+    for k in 1..=angles.len() {
+        at += wrap_to_half_turn(angles[k % angles.len()] - angles[k - 1]);
+        out.push(at);
+    }
+    out
+}
+
+/// The angular zipper between two rims that each run up the angle from
+/// `a0[0]`: advance whichever rim's next sample comes first in angle, one
+/// triangle per advance, until both close. Corners are `(rim, position)`;
+/// position `len` is the rim's first sample again, one turn on.
+fn zip_rims(a0: &[f64], a1: &[f64]) -> Vec<[(usize, usize); 3]> {
+    let next = |a: &[f64], k: usize| {
+        if k >= a.len() {
             f64::INFINITY
-        } else if i + 1 < n {
-            a0[i + 1]
+        } else if k + 1 < a.len() {
+            a[k + 1]
         } else {
-            a0[0] + TAU
-        };
-        let next1 = if done1 >= m {
-            f64::INFINITY
-        } else if j + 1 < m {
-            a1[j + 1]
+            a[0] + TAU
+        }
+    };
+    let (mut i, mut j) = (0, 0);
+    let mut tris = Vec::with_capacity(a0.len() + a1.len());
+    while i < a0.len() || j < a1.len() {
+        if next(a0, i) <= next(a1, j) {
+            tris.push([(0, i), (1, j), (0, i + 1)]);
+            i += 1;
         } else {
-            a1[0] + TAU
-        };
-        if next0 <= next1 {
-            let ni = (i + 1) % n;
-            emit(merged, rims[0][i], rims[1][j], rims[0][ni]);
-            i = ni;
-            done0 += 1;
-        } else {
-            let nj = (j + 1) % m;
-            emit(merged, rims[0][i], rims[1][j], rims[1][nj]);
-            j = nj;
-            done1 += 1;
+            tris.push([(0, i), (1, j), (1, j + 1)]);
+            j += 1;
         }
     }
+    tris
+}
 
-    Ok(true)
+/// Whether band triangles, given by their corners' unwrapped `(u, v)`, all
+/// turn one way. Such triangles cover the band between two rims that each
+/// wind once exactly once; one that turns the other way, or has no area in
+/// `(u, v)`, folds over a region a rim leaves out, such as a notch cut into
+/// the rim.
+fn turns_one_way(tris: impl IntoIterator<Item = [[f64; 2]; 3]>) -> bool {
+    let mut way: Option<bool> = None;
+    for [a, b, c] in tris {
+        let turn = (b[0] - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (b[1] - a[1]);
+        let left = match turn.partial_cmp(&0.0) {
+            Some(std::cmp::Ordering::Greater) => true,
+            Some(std::cmp::Ordering::Less) => false,
+            _ => return false,
+        };
+        if *way.get_or_insert(left) != left {
+            return false;
+        }
+    }
+    true
 }
 
 /// Tessellate a torus band bounded by two closed rims and seamed by a
@@ -2466,6 +2566,15 @@ fn cdt_in_surface_frame(
                 let within = projected
                     .iter()
                     .all(|&v| v >= v_lo - slack && v <= v_hi + slack);
+                // The rims' span comes from their samples, and the sample a
+                // closed rim keeps for the seam's vertex can fall short of the
+                // vertex's v; with no span at all, nothing is spaced across.
+                let reach = (1e-3 * (v_hi - v_lo)).max(slack);
+                let within = within
+                    || v_hi - v_lo <= slack
+                    || projected
+                        .iter()
+                        .all(|&v| v >= v_lo - reach && v <= v_hi + reach);
                 let steady = projected.windows(2).all(|w| w[1] > w[0])
                     || projected.windows(2).all(|w| w[1] < w[0]);
                 if within && steady {
@@ -3511,34 +3620,62 @@ pub(super) fn tessellate_holed_face_local(
         )?
         .into_iter()
         .collect();
+    let mut edge_points: DetHashMap<usize, Vec<Point3>> = DetHashMap::default();
+    let mut params: DetHashMap<usize, Vec<f64>> = DetHashMap::default();
+    let mut order: Vec<usize> = Vec::new();
     for wire_id in
         std::iter::once(face_data.outer_wire()).chain(face_data.inner_wires().iter().copied())
     {
         for oe in topo.wire(wire_id)?.edges() {
-            if pool.contains_key(&oe.edge().index()) {
+            if edge_points.contains_key(&oe.edge().index()) {
                 continue;
             }
             let edge = topo.edge(oe.edge())?;
-            let points = match straight.remove(&oe.edge().index()) {
-                Some(points) => points,
-                None => sample_edge(topo, edge, deflection, angular_tol, circle_floor)?,
+            let points = if let Some(points) = straight.remove(&oe.edge().index()) {
+                points
+            } else {
+                let (points, ts) = super::edge_sampling::sample_edge_with_params(
+                    topo,
+                    edge,
+                    deflection,
+                    angular_tol,
+                    circle_floor,
+                )?;
+                if let Some(ts) = ts {
+                    params.insert(oe.edge().index(), ts);
+                }
+                points
             };
-            let gids = points
-                .into_iter()
-                .map(|pt| {
-                    *point_to_global
-                        .entry(point_merge_key(pt, MERGE_GRID))
-                        .or_insert_with(|| {
-                            #[allow(clippy::cast_possible_truncation)]
-                            let idx = merged.positions.len() as u32;
-                            merged.positions.push(pt);
-                            merged.normals.push(Vec3::new(0.0, 0.0, 0.0));
-                            idx
-                        })
-                })
-                .collect();
-            pool.insert(oe.edge().index(), gids);
+            edge_points.insert(oe.edge().index(), points);
+            order.push(oe.edge().index());
         }
+    }
+    // The face's outline is read in its (u, v) as the solid mesher reads it.
+    super::solid::split_crossing_spline_chords(
+        topo,
+        &[face_id],
+        &mut edge_points,
+        params,
+        deflection,
+    )?;
+    for idx in order {
+        let gids = edge_points
+            .remove(&idx)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|pt| {
+                *point_to_global
+                    .entry(point_merge_key(pt, MERGE_GRID))
+                    .or_insert_with(|| {
+                        #[allow(clippy::cast_possible_truncation)]
+                        let idx = merged.positions.len() as u32;
+                        merged.positions.push(pt);
+                        merged.normals.push(Vec3::new(0.0, 0.0, 0.0));
+                        idx
+                    })
+            })
+            .collect();
+        pool.insert(idx, gids);
     }
     let meshed = match face_data.surface() {
         FaceSurface::Cylinder(_) | FaceSurface::Cone(_) | FaceSurface::Nurbs(_) => {

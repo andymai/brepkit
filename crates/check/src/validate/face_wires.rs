@@ -1,6 +1,6 @@
 //! Whether a face's wires keep clear of each other: no hole crosses the
-//! outline or another hole, and on a plane no hole lies outside the outline
-//! or inside another hole.
+//! outline or another hole, lies outside the outline, or lies inside another
+//! hole.
 //!
 //! The edges' own curves are read. Where two wires meet, each is followed a
 //! short way to both sides of the meeting point: the wires cross when one
@@ -19,6 +19,7 @@ use brepkit_topology::wire::WireId;
 
 use super::checks::{CheckId, EntityRef, Severity, ValidationIssue};
 use crate::CheckError;
+use crate::face_loops::{FaceLoops, Misplaced};
 
 /// The chords a curved edge is read in when meeting points are looked for.
 const CHORDS: usize = 16;
@@ -601,11 +602,16 @@ fn misplaced_hole(
 
 /// Check that a face's wires keep clear of each other.
 ///
-/// Reports a hole that crosses the outline or another hole, on a face of
-/// any surface. On a plane face, also reports a hole that lies outside the
-/// outline or inside another hole. Wires that share a vertex or an edge, or
-/// touch without crossing, are not reported. `tolerance` is the gap within
+/// Reports a hole that crosses the outline or another hole, or lies outside
+/// the outline or inside another hole. Wires that share a vertex or an edge,
+/// or touch without crossing, are not reported. `tolerance` is the gap within
 /// which two edges meet.
+///
+/// On a curved face the wires are read in a plane drawn from the surface's
+/// parameters ([`FaceLoops`]). A closed surface has no inside and outside
+/// of a wire as a plane has: there a hole is reported when the face's other
+/// wires do not all lie on one side of it or of the outline, or when the
+/// face reaches an open end of its surface.
 ///
 /// # Errors
 ///
@@ -651,10 +657,26 @@ pub fn check_face_wires_apart(
             }
         }
     }
-    if let FaceSurface::Plane { normal, .. } = face.surface()
-        && let Some(description) =
+    if let FaceSurface::Plane { normal, .. } = face.surface() {
+        if let Some(description) =
             misplaced_hole(topo, &wire_ids, &wires, &bounds, *normal, tolerance)?
+        {
+            return Ok(vec![issue(face_id, description)]);
+        }
+    } else if let Some(misplaced) =
+        FaceLoops::of(topo, face_id, tolerance)?.and_then(|loops| loops.misplaced_hole())
     {
+        let description = match misplaced {
+            Misplaced::Outside(hole) => format!(
+                "inner wire {} lies outside the outer wire",
+                wire_ids[hole].index()
+            ),
+            Misplaced::Inside(hole, other) => format!(
+                "inner wire {} lies inside inner wire {}",
+                wire_ids[hole].index(),
+                wire_ids[other].index()
+            ),
+        };
         return Ok(vec![issue(face_id, description)]);
     }
     Ok(vec![])
@@ -1164,5 +1186,833 @@ mod tests {
                 .unwrap()
                 .contains("crosses the outer wire")
         );
+    }
+
+    /// A closed edge on `curve` through `at`, as a wire run forward or not.
+    fn closed(topo: &mut Topology, curve: EdgeCurve, at: Point3, forward: bool) -> WireId {
+        let v = vertex(topo, [at.x(), at.y(), at.z()]);
+        let e = topo.add_edge(Edge::new(v, v, curve));
+        topo.add_wire(Wire::new(vec![OrientedEdge::new(e, forward)], true).unwrap())
+    }
+
+    /// The circle at height `z` about the z axis.
+    fn ring(z: f64, r: f64) -> Circle3D {
+        Circle3D::new(Point3::new(0.0, 0.0, z), Z, r).unwrap()
+    }
+
+    fn ring_wire(topo: &mut Topology, z: f64, r: f64, forward: bool) -> WireId {
+        let c = ring(z, r);
+        closed(topo, EdgeCurve::Circle(c.clone()), c.evaluate(0.0), forward)
+    }
+
+    /// A window of two arcs about the z axis from `low` to `high`, from the
+    /// angle `from` a quarter turn on, joined by two lines, with the arcs'
+    /// radii `r(z)`, run forward or not.
+    fn window(
+        topo: &mut Topology,
+        from: f64,
+        (low, high): (f64, f64),
+        r: &dyn Fn(f64) -> f64,
+        forward: bool,
+    ) -> WireId {
+        let (lower, upper) = (ring(low, r(low)), ring(high, r(high)));
+        let to = from + std::f64::consts::FRAC_PI_2;
+        let corner = |topo: &mut Topology, c: &Circle3D, t: f64| {
+            let p = c.evaluate(t);
+            vertex(topo, [p.x(), p.y(), p.z()])
+        };
+        let (p0, p1) = (corner(topo, &lower, from), corner(topo, &lower, to));
+        let (q0, q1) = (corner(topo, &upper, from), corner(topo, &upper, to));
+        let mut edges = vec![
+            OrientedEdge::new(
+                topo.add_edge(Edge::new(p0, p1, EdgeCurve::Circle(lower))),
+                true,
+            ),
+            OrientedEdge::new(topo.add_edge(Edge::new(p1, q1, EdgeCurve::Line)), true),
+            OrientedEdge::new(
+                topo.add_edge(Edge::new(q0, q1, EdgeCurve::Circle(upper))),
+                false,
+            ),
+            OrientedEdge::new(topo.add_edge(Edge::new(p0, q0, EdgeCurve::Line)), false),
+        ];
+        if !forward {
+            edges = edges
+                .iter()
+                .rev()
+                .map(|oe| OrientedEdge::new(oe.edge(), !oe.is_forward()))
+                .collect();
+        }
+        topo.add_wire(Wire::new(edges, true).unwrap())
+    }
+
+    /// A band about the z axis from `low` to `high`: its two rims and a seam
+    /// between them, with the rims' radii `r(z)`.
+    fn band(topo: &mut Topology, (low, high): (f64, f64), r: &dyn Fn(f64) -> f64) -> WireId {
+        let (bottom, top) = (ring(low, r(low)), ring(high, r(high)));
+        let (a, b) = (bottom.evaluate(0.0), top.evaluate(0.0));
+        let va = vertex(topo, [a.x(), a.y(), a.z()]);
+        let vb = vertex(topo, [b.x(), b.y(), b.z()]);
+        let rim_a = topo.add_edge(Edge::new(va, va, EdgeCurve::Circle(bottom)));
+        let rim_b = topo.add_edge(Edge::new(vb, vb, EdgeCurve::Circle(top)));
+        let seam = topo.add_edge(Edge::new(va, vb, EdgeCurve::Line));
+        topo.add_wire(
+            Wire::new(
+                vec![
+                    OrientedEdge::new(rim_a, true),
+                    OrientedEdge::new(seam, true),
+                    OrientedEdge::new(rim_b, false),
+                    OrientedEdge::new(seam, false),
+                ],
+                true,
+            )
+            .unwrap(),
+        )
+    }
+
+    fn cylinder() -> FaceSurface {
+        FaceSurface::Cylinder(CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Z, 3.0).unwrap())
+    }
+
+    const THREE: &dyn Fn(f64) -> f64 = &|_| 3.0;
+
+    #[test]
+    fn a_window_beyond_a_cylinders_band_is_reported() {
+        for forward in [true, false] {
+            let mut topo = Topology::default();
+            let outer = band(&mut topo, (0.0, 10.0), THREE);
+            let hole = window(&mut topo, 1.0, (12.0, 14.0), THREE, forward);
+            let face = topo.add_face(Face::new(outer, vec![hole], cylinder()));
+            assert!(
+                found(&topo, face)
+                    .unwrap()
+                    .contains("outside the outer wire")
+            );
+        }
+    }
+
+    /// A band of a cylinder whose lower rim, a B-spline of degree one, dips
+    /// to `z = -100` between the points the check samples along it: the
+    /// samples all lie at `z = 0`. A window inside the band passes, and a
+    /// window above it is reported.
+    #[test]
+    fn a_band_whose_rim_dips_between_its_samples_reads_its_windows() {
+        for (window_at, outside) in [((3.0, 7.0), false), ((12.0, 14.0), true)] {
+            let mut topo = Topology::default();
+            let at = |angle: f64, z: f64| Point3::new(3.0 * angle.cos(), 3.0 * angle.sin(), z);
+            let mut points = vec![at(0.0, 0.0), at(TAU / 32.0, -100.0)];
+            let mut knots = vec![0.0, 0.0, 1.0 / 32.0];
+            for k in 1..=16 {
+                points.push(at(TAU * f64::from(k) / 16.0, 0.0));
+                knots.push(f64::from(k) / 16.0);
+            }
+            knots.push(1.0);
+            let weights = vec![1.0; points.len()];
+            let dip =
+                brepkit_math::nurbs::curve::NurbsCurve::new(1, knots, points, weights).unwrap();
+            let va = vertex(&mut topo, [3.0, 0.0, 0.0]);
+            let vb = vertex(&mut topo, [3.0, 0.0, 10.0]);
+            let rim_a = topo.add_edge(Edge::new(va, va, EdgeCurve::NurbsCurve(dip)));
+            let rim_b = topo.add_edge(Edge::new(vb, vb, EdgeCurve::Circle(ring(10.0, 3.0))));
+            let seam = topo.add_edge(Edge::new(va, vb, EdgeCurve::Line));
+            let outer = topo.add_wire(
+                Wire::new(
+                    vec![
+                        OrientedEdge::new(rim_a, true),
+                        OrientedEdge::new(seam, true),
+                        OrientedEdge::new(rim_b, false),
+                        OrientedEdge::new(seam, false),
+                    ],
+                    true,
+                )
+                .unwrap(),
+            );
+            let hole = window(&mut topo, 1.0, window_at, THREE, true);
+            let face = topo.add_face(Face::new(outer, vec![hole], cylinder()));
+            let found = found(&topo, face);
+            assert_eq!(
+                found
+                    .as_ref()
+                    .is_some_and(|d| d.contains("outside the outer wire")),
+                outside,
+                "{window_at:?}: {found:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_window_inside_a_window_of_a_cylinder_is_reported() {
+        let mut topo = Topology::default();
+        let outer = band(&mut topo, (0.0, 10.0), THREE);
+        let wide = window(&mut topo, 1.0, (2.0, 8.0), THREE, false);
+        let narrow = window(&mut topo, 1.3, (4.0, 6.0), &|_| 3.0, false);
+        // A quarter turn from 1.3 runs past the wide window's end at 1 + a
+        // quarter turn: narrow it by turning the arcs' ends in.
+        let _ = narrow;
+        let narrow = {
+            let (lower, upper) = (ring(4.0, 3.0), ring(6.0, 3.0));
+            let corner = |topo: &mut Topology, c: &Circle3D, t: f64| {
+                let p = c.evaluate(t);
+                vertex(&mut *topo, [p.x(), p.y(), p.z()])
+            };
+            let (p0, p1) = (
+                corner(&mut topo, &lower, 1.2),
+                corner(&mut topo, &lower, 2.2),
+            );
+            let (q0, q1) = (
+                corner(&mut topo, &upper, 1.2),
+                corner(&mut topo, &upper, 2.2),
+            );
+            let edges = vec![
+                OrientedEdge::new(
+                    topo.add_edge(Edge::new(p0, p1, EdgeCurve::Circle(lower))),
+                    true,
+                ),
+                OrientedEdge::new(topo.add_edge(Edge::new(p1, q1, EdgeCurve::Line)), true),
+                OrientedEdge::new(
+                    topo.add_edge(Edge::new(q0, q1, EdgeCurve::Circle(upper))),
+                    false,
+                ),
+                OrientedEdge::new(topo.add_edge(Edge::new(p0, q0, EdgeCurve::Line)), false),
+            ];
+            topo.add_wire(Wire::new(edges, true).unwrap())
+        };
+        for holes in [vec![wide, narrow], vec![narrow, wide]] {
+            let face = topo.add_face(Face::new(outer, holes, cylinder()));
+            assert!(
+                found(&topo, face)
+                    .unwrap()
+                    .contains("lies inside inner wire")
+            );
+        }
+        let beside = window(&mut topo, 3.0, (2.0, 8.0), THREE, true);
+        let face = topo.add_face(Face::new(outer, vec![wide, beside], cylinder()));
+        assert_eq!(found(&topo, face), None);
+    }
+
+    /// A band bounded by its two rims alone, no seam: either rim may be the
+    /// outer wire, and a window between them passes. A window beyond the
+    /// rim that is a hole lies inside that hole, on its side away from the
+    /// face; one beyond the outer wire lies outside it. A face with one rim
+    /// is reported.
+    #[test]
+    fn a_seamless_band_of_a_cylinder_reads_its_windows() {
+        let mut topo = Topology::default();
+        let bottom = ring_wire(&mut topo, 0.0, 3.0, true);
+        let top = ring_wire(&mut topo, 10.0, 3.0, false);
+        let inside = window(&mut topo, 1.0, (3.0, 7.0), THREE, false);
+        let above = window(&mut topo, 1.0, (12.0, 14.0), THREE, false);
+        for (outer, rim, beyond) in [
+            (bottom, top, "lies inside inner wire"),
+            (top, bottom, "outside the outer wire"),
+        ] {
+            let face = topo.add_face(Face::new(outer, vec![rim, inside], cylinder()));
+            assert_eq!(found(&topo, face), None);
+            let face = topo.add_face(Face::new(outer, vec![rim, inside, above], cylinder()));
+            assert!(found(&topo, face).is_some_and(|d| d.contains(beyond)));
+        }
+        let face = topo.add_face(Face::new(bottom, vec![inside], cylinder()));
+        assert!(found(&topo, face).is_some_and(|d| d.contains("outside the outer wire")));
+    }
+
+    fn cone() -> (FaceSurface, Box<dyn Fn(f64) -> f64>) {
+        let surface =
+            brepkit_math::surfaces::ConicalSurface::new(Point3::new(0.0, 0.0, 0.0), Z, 0.6)
+                .unwrap();
+        // Height `z = v sin a` and radius `v cos a` along the generator.
+        let slope = 0.6_f64.cos() / 0.6_f64.sin();
+        (FaceSurface::Cone(surface), Box::new(move |z| z * slope))
+    }
+
+    #[test]
+    fn a_cones_holes_read_as_a_discs() {
+        let (surface, r) = cone();
+        let mut topo = Topology::default();
+        let outer = band(&mut topo, (2.0, 6.0), &*r);
+        let inside = window(&mut topo, 1.0, (3.0, 5.0), &*r, true);
+        let face = topo.add_face(Face::new(outer, vec![inside], surface.clone()));
+        assert_eq!(found(&topo, face), None);
+        let above = window(&mut topo, 1.0, (7.0, 9.0), &*r, true);
+        let face = topo.add_face(Face::new(outer, vec![inside, above], surface.clone()));
+        assert!(found(&topo, face).is_some_and(|d| d.contains("outside the outer wire")));
+
+        // A seamless band: the wide rim holds the narrow one, about the apex.
+        let narrow = ring_wire(&mut topo, 2.0, r(2.0), true);
+        let wide = ring_wire(&mut topo, 6.0, r(6.0), false);
+        let face = topo.add_face(Face::new(wide, vec![narrow, inside], surface.clone()));
+        assert_eq!(found(&topo, face), None);
+        let face = topo.add_face(Face::new(narrow, vec![wide, inside], surface));
+        assert!(found(&topo, face).is_some_and(|d| d.contains("outside the outer wire")));
+    }
+
+    const R: f64 = 5.0;
+
+    /// The circle on the sphere of radius `R` about the origin at the
+    /// latitude `degrees`.
+    fn latitude(topo: &mut Topology, degrees: f64, forward: bool) -> WireId {
+        let (s, c) = degrees.to_radians().sin_cos();
+        ring_wire(topo, R * s, R * c, forward)
+    }
+
+    /// The circle on the sphere ten degrees about the direction at latitude
+    /// `degrees` on the meridian through +x.
+    fn spot(topo: &mut Topology, degrees: f64, forward: bool) -> WireId {
+        let (s, c) = degrees.to_radians().sin_cos();
+        let axis = Vec3::new(c, 0.0, s);
+        let (rs, rc) = 10.0_f64.to_radians().sin_cos();
+        let circle =
+            Circle3D::new(Point3::new(0.0, 0.0, 0.0) + axis * (R * rc), axis, R * rs).unwrap();
+        let at = circle.evaluate(0.0);
+        closed(topo, EdgeCurve::Circle(circle), at, forward)
+    }
+
+    fn sphere() -> FaceSurface {
+        FaceSurface::Sphere(
+            brepkit_math::surfaces::SphericalSurface::new(Point3::new(0.0, 0.0, 0.0), R).unwrap(),
+        )
+    }
+
+    /// Whichever way round its wires run, a sphere face reads where its holes
+    /// lie: all on one side of the outline, or on both; side by side, or one
+    /// inside another, read from the outline's side.
+    #[test]
+    fn a_spheres_holes_read_whichever_way_round_its_wires_run() {
+        for (outline_forward, holes_forward) in
+            [(true, true), (true, false), (false, true), (false, false)]
+        {
+            let mut topo = Topology::default();
+            let mut face = |outer: (f64, bool), holes: &[(f64, bool)]| {
+                let outer = latitude(&mut topo, outer.0, outer.1 == outline_forward);
+                let holes = holes
+                    .iter()
+                    .map(|&(at, round)| {
+                        if round {
+                            latitude(&mut topo, at, holes_forward)
+                        } else {
+                            spot(&mut topo, at, holes_forward)
+                        }
+                    })
+                    .collect();
+                let id = topo.add_face(Face::new(outer, holes, sphere()));
+                found(&topo, id)
+            };
+            let case = (outline_forward, holes_forward);
+            assert_eq!(
+                face((0.0, true), &[(75.0, true), (30.0, false)]),
+                None,
+                "{case:?}"
+            );
+            assert!(
+                face((0.0, true), &[(50.0, true), (-50.0, true)])
+                    .is_some_and(|d| d.contains("outside the outer wire")),
+                "{case:?}"
+            );
+            assert!(
+                face((0.0, true), &[(50.0, true), (70.0, true)])
+                    .is_some_and(|d| d.contains("lies inside inner wire")),
+                "{case:?}"
+            );
+            // The face beyond a small cap round the north pole.
+            assert_eq!(
+                face((80.0, true), &[(-50.0, true), (0.0, false)]),
+                None,
+                "{case:?}"
+            );
+            assert!(
+                face((80.0, true), &[(-50.0, true), (-70.0, false)])
+                    .is_some_and(|d| d.contains("lies inside inner wire")),
+                "{case:?}"
+            );
+        }
+    }
+
+    /// The same sphere as a closed B-spline surface with a pole at each end.
+    #[test]
+    fn a_spline_spheres_holes_are_read() {
+        let surface = FaceSurface::Nurbs(
+            brepkit_math::surfaces::SphericalSurface::new(Point3::new(0.0, 0.0, 0.0), R)
+                .unwrap()
+                .to_rational_nurbs()
+                .unwrap(),
+        );
+        let mut topo = Topology::default();
+        let outer = latitude(&mut topo, 0.0, true);
+        let holes = vec![
+            latitude(&mut topo, 50.0, false),
+            latitude(&mut topo, -50.0, false),
+        ];
+        let face = topo.add_face(Face::new(outer, holes, surface.clone()));
+        assert!(found(&topo, face).is_some_and(|d| d.contains("outside the outer wire")));
+        let holes = vec![
+            latitude(&mut topo, 50.0, false),
+            spot(&mut topo, 30.0, false),
+        ];
+        let face = topo.add_face(Face::new(outer, holes, surface));
+        assert_eq!(found(&topo, face), None);
+    }
+
+    /// A band of a cylinder as a B-spline surface closed round its axis.
+    #[test]
+    fn a_spline_cylinders_window_beyond_its_band_is_reported() {
+        let surface = FaceSurface::Nurbs(
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Z, 3.0)
+                .unwrap()
+                .to_nurbs(-5.0, 25.0)
+                .unwrap(),
+        );
+        let mut topo = Topology::default();
+        let outer = band(&mut topo, (0.0, 10.0), THREE);
+        let inside = window(&mut topo, 1.0, (3.0, 7.0), THREE, true);
+        let above = window(&mut topo, 1.0, (12.0, 14.0), THREE, true);
+        let face = topo.add_face(Face::new(outer, vec![inside], surface.clone()));
+        assert_eq!(found(&topo, face), None);
+        let face = topo.add_face(Face::new(outer, vec![inside, above], surface));
+        assert!(found(&topo, face).is_some_and(|d| d.contains("outside the outer wire")));
+    }
+
+    /// An open B-spline patch, flat, read in its own parameters.
+    #[test]
+    fn an_open_spline_patchs_hole_outside_its_outline_is_reported() {
+        let control = (0..2)
+            .map(|i| {
+                (0..2)
+                    .map(|j| Point3::new(20.0 * f64::from(i), 20.0 * f64::from(j), 0.0))
+                    .collect()
+            })
+            .collect();
+        let surface = FaceSurface::Nurbs(
+            brepkit_math::nurbs::surface::NurbsSurface::new(
+                1,
+                1,
+                vec![0.0, 0.0, 1.0, 1.0],
+                vec![0.0, 0.0, 1.0, 1.0],
+                control,
+                vec![vec![1.0; 2]; 2],
+            )
+            .unwrap(),
+        );
+        let mut topo = Topology::default();
+        let outer = square(&mut topo);
+        let inside = circle(&mut topo, [5.0, 5.0, 0.0], 2.0);
+        let outside = circle(&mut topo, [15.0, 15.0, 0.0], 2.0);
+        let face = topo.add_face(Face::new(outer, vec![inside], surface.clone()));
+        assert_eq!(found(&topo, face), None);
+        let face = topo.add_face(Face::new(outer, vec![outside], surface));
+        assert!(found(&topo, face).is_some_and(|d| d.contains("outside the outer wire")));
+    }
+
+    fn torus() -> brepkit_math::surfaces::ToroidalSurface {
+        brepkit_math::surfaces::ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), 6.0, 2.0).unwrap()
+    }
+
+    /// A loop of lines on the torus round `(u, v)`, `(a, b)` across.
+    fn torus_loop(topo: &mut Topology, (u, v): (f64, f64), (a, b): (f64, f64)) -> WireId {
+        let t = torus();
+        let corners: Vec<[f64; 3]> = (0..48)
+            .map(|k| {
+                let s = TAU * f64::from(k) / 48.0;
+                let p = t.evaluate(u + a * s.cos(), v + b * s.sin());
+                [p.x(), p.y(), p.z()]
+            })
+            .collect();
+        let ids = points(topo, &corners);
+        polygon(topo, &ids)
+    }
+
+    /// The whole torus: its outer wire is its two seams, lines closed on
+    /// one vertex.
+    fn whole_torus_outline(topo: &mut Topology) -> WireId {
+        let v = vertex(topo, [8.0, 0.0, 0.0]);
+        let ea = topo.add_edge(Edge::new(v, v, EdgeCurve::Line));
+        let eb = topo.add_edge(Edge::new(v, v, EdgeCurve::Line));
+        topo.add_wire(
+            Wire::new(
+                vec![
+                    OrientedEdge::new(ea, true),
+                    OrientedEdge::new(eb, true),
+                    OrientedEdge::new(ea, false),
+                    OrientedEdge::new(eb, false),
+                ],
+                true,
+            )
+            .unwrap(),
+        )
+    }
+
+    #[test]
+    fn a_toruss_holes_are_read_across_its_seams() {
+        let mut topo = Topology::default();
+        let outer = whole_torus_outline(&mut topo);
+        // Holes round the seams, where `u` and `v` start again.
+        let a = torus_loop(&mut topo, (0.0, 0.0), (0.3, 0.4));
+        let b = torus_loop(&mut topo, (3.0, 3.0), (0.3, 0.4));
+        let around_a = torus_loop(&mut topo, (0.0, 0.0), (0.6, 0.8));
+        let face = topo.add_face(Face::new(outer, vec![a, b], FaceSurface::Torus(torus())));
+        assert_eq!(found(&topo, face), None);
+        let face = topo.add_face(Face::new(
+            outer,
+            vec![a, b, around_a],
+            FaceSurface::Torus(torus()),
+        ));
+        assert!(found(&topo, face).is_some_and(|d| d.contains("lies inside inner wire")));
+
+        // Two holes alone, one round the other.
+        let face = topo.add_face(Face::new(
+            outer,
+            vec![a, around_a],
+            FaceSurface::Torus(torus()),
+        ));
+        assert!(found(&topo, face).is_some_and(|d| d.contains("lies inside inner wire")));
+
+        // A patch round the seams: a hole inside it passes, and with one
+        // more beyond it, the two lie on two sides of the outline.
+        let patch = torus_loop(&mut topo, (0.0, 0.0), (1.0, 1.0));
+        let c = torus_loop(&mut topo, (0.1, 0.0), (0.3, 0.4));
+        let face = topo.add_face(Face::new(patch, vec![c], FaceSurface::Torus(torus())));
+        assert_eq!(found(&topo, face), None);
+        let face = topo.add_face(Face::new(patch, vec![c, b], FaceSurface::Torus(torus())));
+        assert!(found(&topo, face).is_some_and(|d| d.contains("outside the outer wire")));
+    }
+
+    /// A torus face between two tube circles, with no seam: holes in both of
+    /// the bands between them are reported.
+    #[test]
+    fn a_toruss_holes_in_both_bands_between_two_tube_circles_are_reported() {
+        let t = torus();
+        let mut topo = Topology::default();
+        let tube = |topo: &mut Topology, u: f64| {
+            let (s, c) = u.sin_cos();
+            let circle = Circle3D::new(
+                Point3::new(6.0 * c, 6.0 * s, 0.0),
+                Vec3::new(-s, c, 0.0),
+                2.0,
+            )
+            .unwrap();
+            let at = circle.evaluate(0.0);
+            closed(topo, EdgeCurve::Circle(circle), at, true)
+        };
+        let outer = tube(&mut topo, 0.0);
+        let rim = tube(&mut topo, std::f64::consts::PI);
+        let near = torus_loop(&mut topo, (1.0, 1.0), (0.3, 0.4));
+        let also_near = torus_loop(&mut topo, (2.0, 4.0), (0.3, 0.4));
+        let far = torus_loop(&mut topo, (4.5, 1.0), (0.3, 0.4));
+        let face = topo.add_face(Face::new(
+            outer,
+            vec![rim, near, also_near],
+            FaceSurface::Torus(t),
+        ));
+        assert_eq!(found(&topo, face), None);
+        let face = topo.add_face(Face::new(
+            outer,
+            vec![rim, near, far],
+            FaceSurface::Torus(torus()),
+        ));
+        assert!(found(&topo, face).is_some_and(|d| d.contains("outside the outer wire")));
+    }
+
+    /// Turning a hole, or the outline, turns whether the hole runs the
+    /// outline's way round, on a sphere, a cylinder and a torus. The
+    /// equator and the circle at 50 degrees north, both counter-clockwise
+    /// about +z, run one way round: the band between them lies to the left
+    /// of the one and to the right of the other. So do a band of a cylinder
+    /// and a window that both run counter-clockwise in `(u, v)`.
+    #[test]
+    fn a_turned_hole_runs_the_other_way_round() {
+        let read = |topo: &Topology, face: FaceId| {
+            crate::face_loops::FaceLoops::of(topo, face, 1e-6)
+                .unwrap()
+                .unwrap()
+                .holes_running_with_outline()
+        };
+        let mut topo = Topology::default();
+        let mut sphere_face = |outline: bool, hole: bool| {
+            let outer = latitude(&mut topo, 0.0, outline);
+            let hole = latitude(&mut topo, 50.0, hole);
+            let face = topo.add_face(Face::new(outer, vec![hole], sphere()));
+            read(&topo, face)
+        };
+        let same = sphere_face(true, true);
+        assert_eq!(same, vec![Some(true)]);
+        assert_eq!(sphere_face(false, false), same);
+        assert_ne!(sphere_face(true, false), same);
+        assert_ne!(sphere_face(false, true), same);
+
+        let mut topo = Topology::default();
+        let outer = band(&mut topo, (0.0, 10.0), THREE);
+        let mut readings = Vec::new();
+        for forward in [true, false] {
+            let hole = window(&mut topo, 1.0, (3.0, 7.0), THREE, forward);
+            let face = topo.add_face(Face::new(outer, vec![hole], cylinder()));
+            readings.push(read(&topo, face));
+        }
+        assert_eq!(readings, vec![vec![Some(true)], vec![Some(false)]]);
+
+        let mut topo = Topology::default();
+        let patch = torus_loop(&mut topo, (0.0, 0.0), (1.0, 1.0));
+        let hole = torus_loop(&mut topo, (0.1, 0.0), (0.3, 0.4));
+        let turned: Vec<OrientedEdge> = topo
+            .wire(hole)
+            .unwrap()
+            .edges()
+            .iter()
+            .rev()
+            .map(|oe| OrientedEdge::new(oe.edge(), !oe.is_forward()))
+            .collect();
+        let turned = topo.add_wire(Wire::new(turned, true).unwrap());
+        let one = topo.add_face(Face::new(patch, vec![hole], FaceSurface::Torus(torus())));
+        let other = topo.add_face(Face::new(patch, vec![turned], FaceSurface::Torus(torus())));
+        let (one, other) = (read(&topo, one), read(&topo, other));
+        assert!(matches!(one[..], [Some(_)]));
+        assert_ne!(one, other);
+    }
+
+    /// A patch 20 across whose `v` spans 1e-10: each parameter is read as
+    /// the fraction of its span, so the hole outside the outline reads clear
+    /// of it.
+    #[test]
+    fn a_hole_outside_an_outline_on_a_patch_of_unequal_spans_is_reported() {
+        let control = (0..2)
+            .map(|i| {
+                (0..2)
+                    .map(|j| Point3::new(20.0 * f64::from(i), 20.0 * f64::from(j), 0.0))
+                    .collect()
+            })
+            .collect();
+        let surface = FaceSurface::Nurbs(
+            brepkit_math::nurbs::surface::NurbsSurface::new(
+                1,
+                1,
+                vec![0.0, 0.0, 1.0, 1.0],
+                vec![0.0, 0.0, 1e-10, 1e-10],
+                control,
+                vec![vec![1.0; 2]; 2],
+            )
+            .unwrap(),
+        );
+        let mut topo = Topology::default();
+        let outer = square(&mut topo);
+        let inside = circle(&mut topo, [5.0, 5.0, 0.0], 2.0);
+        // Beyond the outline along `v` alone.
+        let outside = circle(&mut topo, [5.0, 15.0, 0.0], 2.0);
+        let face = topo.add_face(Face::new(outer, vec![inside], surface.clone()));
+        assert_eq!(found(&topo, face), None);
+        let face = topo.add_face(Face::new(outer, vec![outside], surface));
+        assert!(found(&topo, face).is_some_and(|d| d.contains("outside the outer wire")));
+    }
+
+    /// An outline on a flat patch whose lower edge is one span of a quintic
+    /// B-spline that bulges up between three points that lie on a line: a
+    /// small hole under the bulge lies outside the outline.
+    #[test]
+    fn a_hole_under_a_splines_bulge_between_its_samples_is_reported() {
+        let control = (0..2)
+            .map(|i| {
+                (0..2)
+                    .map(|j| Point3::new(20.0 * f64::from(i), 20.0 * f64::from(j), 0.0))
+                    .collect()
+            })
+            .collect();
+        let surface = FaceSurface::Nurbs(
+            brepkit_math::nurbs::surface::NurbsSurface::new(
+                1,
+                1,
+                vec![0.0, 0.0, 1.0, 1.0],
+                vec![0.0, 0.0, 1.0, 1.0],
+                control,
+                vec![vec![1.0; 2]; 2],
+            )
+            .unwrap(),
+        );
+        let ys = [5.0, 25.0 / 9.0, 80.0 / 9.0, 10.0 / 9.0, 65.0 / 9.0, 5.0];
+        let bulge = brepkit_math::nurbs::curve::NurbsCurve::new(
+            5,
+            [vec![0.0; 6], vec![1.0; 6]].concat(),
+            (0..6)
+                .map(|k| Point3::new(2.0 * f64::from(k), ys[k as usize], 0.0))
+                .collect(),
+            vec![1.0; 6],
+        )
+        .unwrap();
+        let mut topo = Topology::default();
+        let corners = points(
+            &mut topo,
+            &[
+                [0.0, 5.0, 0.0],
+                [10.0, 5.0, 0.0],
+                [10.0, 10.0, 0.0],
+                [0.0, 10.0, 0.0],
+            ],
+        );
+        let lower = topo.add_edge(Edge::new(
+            corners[0],
+            corners[1],
+            EdgeCurve::NurbsCurve(bulge),
+        ));
+        let mut edges = vec![OrientedEdge::new(lower, true)];
+        for k in 1..4 {
+            let e = topo.add_edge(Edge::new(corners[k], corners[(k + 1) % 4], EdgeCurve::Line));
+            edges.push(OrientedEdge::new(e, true));
+        }
+        let outer = topo.add_wire(Wire::new(edges, true).unwrap());
+        let hole = circle(&mut topo, [8.5, 5.1, 0.0], 0.05);
+        let face = topo.add_face(Face::new(outer, vec![hole], surface));
+        assert!(found(&topo, face).is_some_and(|d| d.contains("outside the outer wire")));
+    }
+
+    /// A small patch of a torus, 2e-5 across, with a hole inside it and one
+    /// beside it, read at the seam `u = 0` and turned away from it.
+    #[test]
+    fn a_small_torus_patch_reads_alike_on_its_seam_and_off_it() {
+        for u in [0.0, 1.0] {
+            let mut topo = Topology::default();
+            let patch = torus_loop(&mut topo, (u, 1.0), (1e-5, 1e-5));
+            let inside = torus_loop(&mut topo, (u, 1.0), (2e-6, 2e-6));
+            let beside = torus_loop(&mut topo, (u + 3e-5, 1.0), (2e-6, 2e-6));
+            let face = topo.add_face(Face::new(patch, vec![inside], FaceSurface::Torus(torus())));
+            let loops = crate::face_loops::FaceLoops::of(&topo, face, 1e-7)
+                .unwrap()
+                .unwrap();
+            assert_eq!(loops.misplaced_hole(), None, "u {u}");
+            let face = topo.add_face(Face::new(
+                patch,
+                vec![inside, beside],
+                FaceSurface::Torus(torus()),
+            ));
+            let loops = crate::face_loops::FaceLoops::of(&topo, face, 1e-7)
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                loops.misplaced_hole(),
+                Some(crate::face_loops::Misplaced::Outside(2)),
+                "u {u}"
+            );
+        }
+    }
+
+    /// The quintic bulge on a patch stretched a hundredfold along x: the
+    /// drawing stretches a length across the patch far more than along it.
+    #[test]
+    fn a_hole_under_a_stretched_splines_bulge_is_reported() {
+        let control = (0..2)
+            .map(|i| {
+                (0..2)
+                    .map(|j| Point3::new(2000.0 * f64::from(i), 20.0 * f64::from(j), 0.0))
+                    .collect()
+            })
+            .collect();
+        let surface = FaceSurface::Nurbs(
+            brepkit_math::nurbs::surface::NurbsSurface::new(
+                1,
+                1,
+                vec![0.0, 0.0, 1.0, 1.0],
+                vec![0.0, 0.0, 1.0, 1.0],
+                control,
+                vec![vec![1.0; 2]; 2],
+            )
+            .unwrap(),
+        );
+        let ys = [5.0, 25.0 / 9.0, 80.0 / 9.0, 10.0 / 9.0, 65.0 / 9.0, 5.0];
+        let bulge = brepkit_math::nurbs::curve::NurbsCurve::new(
+            5,
+            [vec![0.0; 6], vec![1.0; 6]].concat(),
+            (0..6)
+                .map(|k| Point3::new(200.0 * f64::from(k), ys[k as usize], 0.0))
+                .collect(),
+            vec![1.0; 6],
+        )
+        .unwrap();
+        let mut topo = Topology::default();
+        let corners = points(
+            &mut topo,
+            &[
+                [0.0, 5.0, 0.0],
+                [1000.0, 5.0, 0.0],
+                [1000.0, 10.0, 0.0],
+                [0.0, 10.0, 0.0],
+            ],
+        );
+        let lower = topo.add_edge(Edge::new(
+            corners[0],
+            corners[1],
+            EdgeCurve::NurbsCurve(bulge),
+        ));
+        let mut edges = vec![OrientedEdge::new(lower, true)];
+        for k in 1..4 {
+            let e = topo.add_edge(Edge::new(corners[k], corners[(k + 1) % 4], EdgeCurve::Line));
+            edges.push(OrientedEdge::new(e, true));
+        }
+        let outer = topo.add_wire(Wire::new(edges, true).unwrap());
+        let hole = circle(&mut topo, [850.0, 5.1, 0.0], 0.05);
+        let face = topo.add_face(Face::new(outer, vec![hole], surface));
+        assert!(found(&topo, face).is_some_and(|d| d.contains("outside the outer wire")));
+    }
+
+    /// A seamless band of a cylinder whose top rim does not read, a rational
+    /// circle with every weight negated: the band's open ends are not
+    /// inferred without it, and its window passes.
+    #[test]
+    fn a_band_with_a_rim_that_does_not_read_is_not_reported() {
+        let mut topo = Topology::default();
+        let bottom = ring_wire(&mut topo, 0.0, 3.0, true);
+        let top = {
+            let c = ring(10.0, 3.0);
+            let n =
+                brepkit_geometry::convert::curve_to_nurbs::circle_to_nurbs(&c, 0.0, TAU).unwrap();
+            let negated = brepkit_math::nurbs::curve::NurbsCurve::new(
+                n.degree(),
+                n.knots().to_vec(),
+                n.control_points().to_vec(),
+                n.weights().iter().map(|w| -w).collect(),
+            )
+            .unwrap();
+            closed(
+                &mut topo,
+                EdgeCurve::NurbsCurve(negated),
+                c.evaluate(0.0),
+                false,
+            )
+        };
+        let inside = window(&mut topo, 1.0, (3.0, 7.0), THREE, false);
+        let face = topo.add_face(Face::new(bottom, vec![top, inside], cylinder()));
+        assert_eq!(found(&topo, face), None);
+    }
+
+    /// A flat patch whose `u` runs unevenly along x, a cubic crowded at both
+    /// ends: a straight edge across it draws as a curve in `(u, v)`. Holes
+    /// just either side of that edge read on their own sides of it.
+    #[test]
+    fn holes_beside_a_straight_edge_on_an_uneven_patch_read_their_sides() {
+        let xs = [0.0, 0.5, 19.5, 20.0];
+        let control = xs
+            .iter()
+            .map(|&x| {
+                (0..2)
+                    .map(|j| Point3::new(x, 20.0 * f64::from(j), 0.0))
+                    .collect()
+            })
+            .collect();
+        let surface = FaceSurface::Nurbs(
+            brepkit_math::nurbs::surface::NurbsSurface::new(
+                3,
+                1,
+                vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+                vec![0.0, 0.0, 1.0, 1.0],
+                control,
+                vec![vec![1.0; 2]; 4],
+            )
+            .unwrap(),
+        );
+        let mut topo = Topology::default();
+        let corners = points(
+            &mut topo,
+            &[[2.0, 2.0, 0.0], [18.0, 2.0, 0.0], [18.0, 18.0, 0.0]],
+        );
+        let outer = polygon(&mut topo, &corners);
+        // The diagonal runs from (2, 2) to (18, 18); a point off it by 0.02.
+        let inside = circle(&mut topo, [6.02, 5.98, 0.0], 0.01);
+        let outside = circle(&mut topo, [5.98, 6.02, 0.0], 0.01);
+        let face = topo.add_face(Face::new(outer, vec![inside], surface.clone()));
+        assert_eq!(found(&topo, face), None);
+        let face = topo.add_face(Face::new(outer, vec![outside], surface));
+        assert!(found(&topo, face).is_some_and(|d| d.contains("outside the outer wire")));
     }
 }

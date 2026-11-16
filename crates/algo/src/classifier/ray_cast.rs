@@ -394,9 +394,32 @@ impl SphereLoop {
                     planes.iter().all(inside)
                 }
             }
+            // Within `slack` of the rim on its own side counts as outside the
+            // hole, as a plane's half-space admits a point within `slack`.
             Self::Rim { frame, flat } => {
                 (p - frame.origin).dot(frame.z) <= 0.0
                     || !point_in_polygon(rim_flat(frame, p), flat)
+                    || (slack > 0.0 && self.borders(p, slack))
+            }
+        }
+    }
+
+    /// Whether `p` lies within `near` of the loop's own boundary: for arcs, on
+    /// one of their planes and on the arc's side of each other plane; for a
+    /// rim, on the rim's hemisphere. [`Self::grazes`] reads the whole of each
+    /// plane, and a rim's projection from both hemispheres.
+    fn borders(&self, p: Point3, near: f64) -> bool {
+        match self {
+            Self::HalfSpaces { planes, any } => planes.iter().enumerate().any(|(i, &(c, n))| {
+                (p - c).dot(n).abs() <= near
+                    && planes.iter().enumerate().all(|(j, &(cj, nj))| {
+                        let side = (p - cj).dot(nj);
+                        // A hole's arcs bound the part the planes keep out.
+                        j == i || if *any { side <= near } else { side >= -near }
+                    })
+            }),
+            Self::Rim { frame, .. } => {
+                (p - frame.origin).dot(frame.z) >= -near && self.grazes(p, near)
             }
         }
     }
@@ -1748,7 +1771,7 @@ fn extrusion_geom(
     }
     if whole {
         return Ok(Some(FaceGeom::Extrusion {
-            samples: Box::new(ProfileSamples::new(&profile)),
+            samples: Box::new(ProfileSamples::new(&profile, along)),
             profile,
             along,
             trim: None,
@@ -1756,7 +1779,7 @@ fn extrusion_geom(
     }
     Ok(
         ExtrusionTrim::new(topo, face, &profile, along)?.map(|trim| FaceGeom::Extrusion {
-            samples: Box::new(ProfileSamples::new(&profile)),
+            samples: Box::new(ProfileSamples::new(&profile, along)),
             profile,
             along,
             trim: Some(trim),
@@ -1860,16 +1883,25 @@ fn nurbs_geom(
     // The wires' samples follow one another along each edge, so Newton from
     // the sample before lands on the next. On this surface a point has one
     // `(u, v)`, so a foot at the sample is the one a search of the whole
-    // surface finds; a foot off it sends that sample to the search.
+    // surface finds; a foot off it sends that sample to the search. The
+    // search can settle on a far local foot (on a fitted surface with many
+    // spans, a point on a boundary edge read 0.55 off where Newton from the
+    // sample before found it on the surface), and the next sample's Newton
+    // would start from there: the nearer of the two is kept.
     let last = std::cell::Cell::new(None::<(f64, f64)>);
     let project = |p: Point3| {
-        let warm = last.get().and_then(|from| {
+        let tried = last.get().and_then(|from| {
             brepkit_math::nurbs::projection::project_point_to_surface_from(surface, p, from, 1e-12)
                 .ok()
-                .filter(|q| q.distance <= 64.0 * f64::EPSILON * size.max(1.0))
         });
+        let warm = tried.filter(|q| q.distance <= 64.0 * f64::EPSILON * size.max(1.0));
         let found = warm.or_else(|| {
-            brepkit_math::nurbs::projection::project_point_to_surface(surface, p, 1e-12).ok()
+            let searched =
+                brepkit_math::nurbs::projection::project_point_to_surface(surface, p, 1e-12).ok();
+            match (searched, tried) {
+                (Some(s), Some(t)) if t.distance < s.distance => Some(t),
+                (s, t) => s.or(t),
+            }
         });
         last.set(found.map(|q| (q.u, q.v)));
         found.map_or_else(|| trim.scaled(u0, v0), |q| trim.scaled(q.u, q.v))
@@ -2385,6 +2417,79 @@ impl LateralTrim {
     }
 }
 
+/// A spherical face's wires, to read whether a point of its sphere lies on
+/// the face itself: the planes its loops lie in, or its wires in `(u, v)`
+/// about an axis clear of them, as the ray cast reads the face.
+pub struct SphereFaceTrim {
+    geom: FaceGeom,
+}
+
+impl SphereFaceTrim {
+    /// The trim of a spherical face. `None` for any other surface, or a face
+    /// whose wires neither planes nor a trim can read.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AlgoError`] if a topology lookup fails.
+    pub fn new(
+        topo: &Topology,
+        face_id: brepkit_topology::face::FaceId,
+    ) -> Result<Option<Self>, AlgoError> {
+        let face = topo.face(face_id)?;
+        let brepkit_topology::face::FaceSurface::Sphere(surface) = face.surface() else {
+            return Ok(None);
+        };
+        if let Some(loops) = sphere_face_loops(topo, face, surface)? {
+            return Ok(Some(Self {
+                geom: FaceGeom::Sphere {
+                    surface: surface.clone(),
+                    loops,
+                },
+            }));
+        }
+        Ok(sphere_trim(topo, face, surface)?.map(|geom| Self { geom }))
+    }
+
+    /// Whether `point`, on the face's sphere, lies on the face: within
+    /// `near` of a wire counts as on it.
+    pub fn holds(&self, point: Point3, near: f64) -> bool {
+        let (on, close) = self.reads(point, near);
+        on || close
+    }
+
+    /// Whether `point`, on the face's sphere, lies inside the face farther
+    /// than `near` from every wire.
+    pub fn holds_clear(&self, point: Point3, near: f64) -> bool {
+        let (on, close) = self.reads(point, near);
+        on && !close
+    }
+
+    fn reads(&self, point: Point3, near: f64) -> (bool, bool) {
+        match &self.geom {
+            // A loop grazes along the whole of its planes; a point is near
+            // the face's boundary only where the other loops admit it too.
+            FaceGeom::Sphere { loops, .. } => (
+                loops.iter().all(|l| l.admits(point, 0.0)),
+                loops.iter().all(|l| l.admits(point, near))
+                    && loops.iter().any(|l| l.borders(point, near)),
+            ),
+            FaceGeom::SphereTrim {
+                frame,
+                trim,
+                away,
+                beyond,
+                ..
+            } => {
+                let project = |p: Point3| frame.project(p);
+                let (u, v) = frame.project(point);
+                let (on, close) = trim.contains(u, v, *away, frame.radius_at(v), near, &project);
+                (on != *beyond, close)
+            }
+            _ => (true, false),
+        }
+    }
+}
+
 impl UvEdge {
     /// The `v` where the edge between samples `a` and `b` (offset `ga` and
     /// `gb` from `u`) reaches `u`, found on the curve by regula falsi with
@@ -2653,18 +2758,99 @@ fn ray_nurbs_crossings(
 
 /// Samples of an extrusion's profile every ray reads the same: the first
 /// intervals' bounds (even steps and the interior knots), the profile's
-/// points there and at each interval's middle, and its two ends.
+/// points there and at each interval's middle, at the even steps alone (a
+/// ray along the extrusion is tested against those), and its two ends.
 struct ProfileSamples {
     breaks: Vec<f64>,
     at_breaks: Vec<Point3>,
     at_middles: Vec<Point3>,
+    at_steps: Vec<Point3>,
     ends: [Point3; 2],
+    hull: Option<FlatBox>,
+}
+
+/// A box about an extrusion's profile in the plane square to the
+/// extrusion, in two axes `e` there: the profile's control points' extent
+/// along each, which holds the profile (its weights all positive). A ray
+/// whose line, seen along the extrusion, passes the box by more than the
+/// tolerance meets the profile nowhere near, so its crossing test reads
+/// nothing.
+struct FlatBox {
+    e: [Vec3; 2],
+    lo: [f64; 2],
+    hi: [f64; 2],
+    /// The largest coordinate of a control point, which bounds the rounding.
+    scale: f64,
+}
+
+impl FlatBox {
+    fn new(profile: &brepkit_math::nurbs::curve::NurbsCurve, along: Vec3) -> Option<Self> {
+        let axis = along.normalize().ok()?;
+        if !profile.weights().iter().all(|&w| w > 0.0) {
+            return None;
+        }
+        let seed = if axis.x().abs() < 0.9 {
+            Vec3::new(1.0, 0.0, 0.0)
+        } else {
+            Vec3::new(0.0, 1.0, 0.0)
+        };
+        let e0 = (seed - axis * axis.dot(seed)).normalize().ok()?;
+        let e = [e0, axis.cross(e0)];
+        let (mut lo, mut hi, mut scale) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2], 1.0_f64);
+        for p in profile.control_points() {
+            let x = Vec3::new(p.x(), p.y(), p.z());
+            for k in 0..2 {
+                let c = e[k].dot(x);
+                lo[k] = lo[k].min(c);
+                hi[k] = hi[k].max(c);
+            }
+            scale = scale.max(p.x().abs()).max(p.y().abs()).max(p.z().abs());
+        }
+        lo.iter()
+            .chain(&hi)
+            .all(|c| c.is_finite())
+            .then_some(Self { e, lo, hi, scale })
+    }
+
+    /// Whether the line through `origin` along `ray_dir` passes the box, seen
+    /// along the extrusion, by more than `near` and the rounding of the
+    /// crossing test's own reading (or, for a ray the test reads as running
+    /// along the extrusion, `along_ray`, whether `origin` lies that far from
+    /// the box). A ray all but along the extrusion that the test still reads
+    /// across it is never passed over: seen along the extrusion its direction
+    /// is mostly rounding.
+    fn misses(&self, origin: Point3, ray_dir: Vec3, along_ray: bool, near: f64) -> bool {
+        let o = Vec3::new(origin.x(), origin.y(), origin.z());
+        let scale = self
+            .scale
+            .max(origin.x().abs())
+            .max(origin.y().abs())
+            .max(origin.z().abs());
+        let margin = near + 1e-9 * scale;
+        let oc = [self.e[0].dot(o), self.e[1].dot(o)];
+        if along_ray {
+            return (0..2).any(|k| self.lo[k] - oc[k] > margin || oc[k] - self.hi[k] > margin);
+        }
+        let r = [self.e[0].dot(ray_dir), self.e[1].dot(ray_dir)];
+        let r_len = r[0].hypot(r[1]);
+        if r_len <= 1e-6 * ray_dir.length() {
+            return false;
+        }
+        let side = |c0: f64, c1: f64| ((c0 - oc[0]) * r[1] - (c1 - oc[1]) * r[0]) / r_len;
+        let sides = [
+            side(self.lo[0], self.lo[1]),
+            side(self.lo[0], self.hi[1]),
+            side(self.hi[0], self.lo[1]),
+            side(self.hi[0], self.hi[1]),
+        ];
+        sides.iter().all(|&f| f > margin) || sides.iter().all(|&f| f < -margin)
+    }
 }
 
 impl ProfileSamples {
     const SAMPLES: usize = 64;
 
-    fn new(profile: &brepkit_math::nurbs::curve::NurbsCurve) -> Self {
+    fn new(profile: &brepkit_math::nurbs::curve::NurbsCurve, along: Vec3) -> Self {
         const SAMPLES: usize = ProfileSamples::SAMPLES;
         let (v0, v1) = profile.domain();
         let at = |k: usize| v0 + (v1 - v0) * (k as f64 / SAMPLES as f64);
@@ -2687,7 +2873,9 @@ impl ProfileSamples {
                 .windows(2)
                 .map(|w| profile.evaluate(f64::midpoint(w[0], w[1])))
                 .collect(),
+            at_steps: (0..=SAMPLES).map(|k| profile.evaluate(at(k))).collect(),
             ends: [profile.evaluate(v0), profile.evaluate(v1)],
+            hull: FlatBox::new(profile, along),
             breaks,
         }
     }
@@ -2706,20 +2894,28 @@ fn ray_extrusion_crossings(
     trim: Option<&ExtrusionTrim>,
     tol: Tolerance,
 ) -> (i32, bool) {
-    const SAMPLES: usize = ProfileSamples::SAMPLES;
     const MAX_DEPTH: u32 = 8;
     let near = 10.0 * tol.linear;
     let Ok(axis) = along.normalize() else {
         return (0, true);
     };
     let flat = |x: Vec3| x - axis * axis.dot(x);
-    let (v0, v1) = profile.domain();
-    let at = |k: usize| v0 + (v1 - v0) * (k as f64 / SAMPLES as f64);
     let rp = flat(ray_dir);
     let rp_len = rp.length();
-    if rp_len <= 1e-12 * ray_dir.length() {
+    let along_ray = rp_len <= 1e-12 * ray_dir.length();
+    if samples
+        .hull
+        .as_ref()
+        .is_some_and(|hull| hull.misses(origin, ray_dir, along_ray, near))
+    {
+        return (0, false);
+    }
+    if along_ray {
         // Along the extrusion: the ray runs in the surface or misses it.
-        let grazes = (0..=SAMPLES).any(|k| flat(profile.evaluate(at(k)) - origin).length() <= near);
+        let grazes = samples
+            .at_steps
+            .iter()
+            .any(|&p| flat(p - origin).length() <= near);
         return (0, grazes);
     }
     let side_of = |p: Point3| flat(p - origin).cross(rp).dot(axis) / rp_len;
@@ -4384,6 +4580,144 @@ mod tests {
         }
     }
 
+    /// A strip 10 long ruled along `u` over the plane cubic with poles
+    /// (0, 0), (12.65, 0), (-6.65, 2) and (6, 2) in `(x, z)`, trimmed to the
+    /// triangle (0.2, 0), (0.8, 0), (0.8, 0.3) in `(u, v)`. Its long side
+    /// stands 1e-7 off the strip, as an edge read from a file can, so Newton
+    /// from the sample before lands past the cutoff for a point on the
+    /// surface; for that side's points about `v = 0.05` and `v = 0.17`, a
+    /// search of the whole strip settles on a foot 0.5 to 1.4 off. The trim
+    /// keeps the nearer foot: its samples lie on its edges' `(u, v)`, and
+    /// rays just inside and just outside the trim read as such.
+    #[test]
+    fn a_nurbs_trim_keeps_the_nearer_foot_of_an_edge_off_its_surface() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        use brepkit_math::nurbs::surface::NurbsSurface;
+        let p = Point3::new;
+        let length = 10.0;
+        let (xs, zs) = ([0.0, 12.65, -6.65, 6.0], [0.0, 0.0, 2.0, 2.0]);
+        let net: Vec<Vec<Point3>> = [0.0, length]
+            .iter()
+            .map(|&y| (0..4).map(|k| p(xs[k], y, zs[k])).collect())
+            .collect();
+        let strip = NurbsSurface::new(
+            1,
+            3,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+            net,
+            vec![vec![1.0; 4]; 2],
+        )
+        .unwrap();
+        let strays = brepkit_math::nurbs::projection::project_point_to_surface(
+            &strip,
+            strip.evaluate(0.3, 0.05),
+            1e-12,
+        )
+        .unwrap();
+        assert!(strays.distance > 0.5, "the search finds {strays:?}");
+        // The cubic's piece from `v0` to `v1` in Bezier form, by blossoms,
+        // carried from `u0` to `u1` along the strip and lifted by `lift`.
+        let blossom = |ts: [f64; 3]| {
+            let mut poles: Vec<(f64, f64)> = xs.iter().copied().zip(zs).collect();
+            for t in ts {
+                poles = poles
+                    .windows(2)
+                    .map(|w| {
+                        (
+                            (w[1].0 - w[0].0).madd(t, w[0].0),
+                            (w[1].1 - w[0].1).madd(t, w[0].1),
+                        )
+                    })
+                    .collect();
+            }
+            poles[0]
+        };
+        let piece = |(u0, v0): (f64, f64), (u1, v1): (f64, f64), lift: f64| {
+            let poles: Vec<Point3> = [[v0, v0, v0], [v0, v0, v1], [v0, v1, v1], [v1, v1, v1]]
+                .into_iter()
+                .zip([0.0, 1.0, 2.0, 3.0])
+                .map(|(ts, k)| {
+                    let (x, z) = blossom(ts);
+                    p(x, length * (u1 - u0).madd(k / 3.0, u0), z + lift)
+                })
+                .collect();
+            let knots = vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0];
+            EdgeCurve::NurbsCurve(NurbsCurve::new(3, knots, poles, vec![1.0; 4]).unwrap())
+        };
+        let mut topo = Topology::new();
+        let corners_uv = [(0.2, 0.0), (0.8, 0.0), (0.8, 0.3)];
+        let corners: Vec<_> = corners_uv
+            .iter()
+            .map(|&(u, v)| topo.add_vertex(Vertex::new(strip.evaluate(u, v), 1e-7)))
+            .collect();
+        let edges = [
+            Edge::new(corners[0], corners[1], EdgeCurve::Line),
+            Edge::new(
+                corners[1],
+                corners[2],
+                piece(corners_uv[1], corners_uv[2], 0.0),
+            ),
+            Edge::new(
+                corners[2],
+                corners[0],
+                piece(corners_uv[2], corners_uv[0], 1e-7),
+            ),
+        ]
+        .map(|edge| OrientedEdge::new(topo.add_edge(edge), true));
+        let wire = topo.add_wire(Wire::new(edges.to_vec(), true).unwrap());
+        let face_id = topo.add_face(Face::new(wire, vec![], FaceSurface::Nurbs(strip.clone())));
+        let geom = nurbs_geom(&topo, topo.face(face_id).unwrap(), &strip)
+            .unwrap()
+            .unwrap();
+        let trim = match &geom {
+            FaceGeom::Nurbs { trim, .. } => Some(trim),
+            _ => None,
+        }
+        .expect("a NURBS face");
+        // Each edge's `(u, v)` at its parameter `t`.
+        let on_edge = [
+            |t: f64| (0.6_f64.madd(t, 0.2), 0.0),
+            |t: f64| (0.8, 0.3 * t),
+            |t: f64| ((-0.6_f64).madd(t, 0.8), (-0.3_f64).madd(t, 0.3)),
+        ];
+        assert_eq!(trim.trim.edges.len(), 3);
+        for (k, edge) in trim.trim.edges.iter().enumerate() {
+            for &(t, u, v) in &edge.samples {
+                let (eu, ev) = on_edge[k](t);
+                assert!(
+                    (u - eu).abs() <= 1e-6 && (v / trim.v_len - ev).abs() <= 1e-6,
+                    "edge {k} at t = {t}: ({u}, {}) against ({eu}, {ev})",
+                    v / trim.v_len
+                );
+            }
+        }
+        // A ray in along the normal at a point beside the long side. It can
+        // meet the strip again where it bends back; the hits inside the
+        // triangle are the crossings.
+        let inside = |u: f64, v: f64| u > 0.2 && u < 0.8 && v > 0.0 && v < 0.5 * (u - 0.2);
+        let tol = Tolerance::new();
+        let ray_surface = strip.ray_surface().unwrap();
+        for u in [0.25, 0.4, 0.45, 0.6, 0.7] {
+            for dv in [-1e-3, 1e-3] {
+                let v = 0.5f64.madd(u - 0.2, dv);
+                let normal = strip.normal(u, v).unwrap();
+                let origin = strip.evaluate(u, v) + normal * 1e-3;
+                let crossings = ray_surface
+                    .hits(origin, -normal, 1e-6)
+                    .hits
+                    .iter()
+                    .filter(|hit| hit.t > 1e-6 && inside(hit.u, hit.v))
+                    .count();
+                assert_eq!(
+                    ray_geom_crossings(origin, -normal, &geom, tol),
+                    (i32::try_from(crossings).unwrap(), false),
+                    "u = {u}, v = {v}"
+                );
+            }
+        }
+    }
+
     /// The unit cube with its top the lid `z = 1 + 100 u (1 - u)^4 v (1 - v)`
     /// over the unit square, flat along its rim: the solid rises to 3.048 at
     /// `(0.2, 0.5)`, between the lid's boundary edges, all at `z = 1`.
@@ -4516,7 +4850,7 @@ mod tests {
             Point3::new(0.5, 0.007, 0.0),
             Vec3::new(0.0, 1.0, 0.0),
             &profile,
-            &ProfileSamples::new(&profile),
+            &ProfileSamples::new(&profile, Vec3::new(1.0, 0.0, 0.0)),
             Vec3::new(1.0, 0.0, 0.0),
             None,
             Tolerance::new(),
@@ -4546,7 +4880,7 @@ mod tests {
             Point3::new(0.5, 0.0, -5.0),
             Vec3::new(0.0, 0.0, 1.0),
             &profile,
-            &ProfileSamples::new(&profile),
+            &ProfileSamples::new(&profile, along),
             along,
             None,
             Tolerance::new(),
@@ -4556,7 +4890,7 @@ mod tests {
             Point3::new(0.5, -5.0, 0.0),
             Vec3::new(0.0, 1.0, 0.0),
             &profile,
-            &ProfileSamples::new(&profile),
+            &ProfileSamples::new(&profile, along),
             along,
             None,
             Tolerance::new(),
@@ -4588,12 +4922,188 @@ mod tests {
             Point3::new(0.5, 0.001, 0.0),
             Vec3::new(0.0, 1.0, 0.0),
             &profile,
-            &ProfileSamples::new(&profile),
+            &ProfileSamples::new(&profile, Vec3::new(1.0, 0.0, 0.0)),
             Vec3::new(1.0, 0.0, 0.0),
             None,
             Tolerance::new(),
         );
         assert_eq!(crossings, 1);
+    }
+
+    /// A stream of numbers in `[0, 1)` that runs the same each time.
+    struct Stream(u64);
+
+    impl Stream {
+        fn next(&mut self) -> f64 {
+            self.0 = self
+                .0
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            #[allow(clippy::cast_precision_loss)]
+            let x = (self.0 >> 11) as f64 / (1_u64 << 53) as f64;
+            x
+        }
+
+        fn range(&mut self, lo: f64, hi: f64) -> f64 {
+            (hi - lo).madd(self.next(), lo)
+        }
+
+        fn unit(&mut self) -> Vec3 {
+            loop {
+                let v = Vec3::new(
+                    self.range(-1.0, 1.0),
+                    self.range(-1.0, 1.0),
+                    self.range(-1.0, 1.0),
+                );
+                if let Ok(unit) = v.normalize()
+                    && v.length() <= 1.0
+                {
+                    return unit;
+                }
+            }
+        }
+    }
+
+    /// The box about an extrusion's profile only passes over rays its
+    /// crossing test reads nothing on: with the box and without it, the test
+    /// gives the same count and graze flag. The profiles are rational, their
+    /// weights positive, turned and moved anywhere up to 1,000 from the
+    /// origin, and the rays pass the box by about the tolerance on every
+    /// side and corner, run along the extrusion or all but along it, or
+    /// cross the profile.
+    #[test]
+    fn the_box_about_an_extrusion_profile_changes_no_reading() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        let tol = Tolerance::new();
+        let near = 10.0 * tol.linear;
+        let mut random = Stream(0x2496);
+        let (mut passed_over, mut crossed, mut grazed, mut along_read) = (0, 0, 0, 0);
+        for case in 0..24 {
+            let degree = 2 + case % 2;
+            let count = degree + 1 + case % 4;
+            let mut knots = vec![0.0; degree + 1];
+            #[allow(clippy::cast_precision_loss)]
+            knots.extend((1..count - degree).map(|k| k as f64 / (count - degree) as f64));
+            knots.extend(vec![1.0; degree + 1]);
+            let turn_axis = random.unit();
+            let angle = random.range(0.0, TAU);
+            // Rodrigues: a fixed turn of every point and direction.
+            let turn = |x: Vec3| {
+                let (sin, cos) = angle.sin_cos();
+                x * cos + turn_axis.cross(x) * sin + turn_axis * (turn_axis.dot(x) * (1.0 - cos))
+            };
+            let reach = if case % 3 == 0 { 1000.0 } else { 3.0 };
+            let shift = random.unit() * random.range(0.0, reach);
+            let size = random.range(0.01, 4.0);
+            let control: Vec<Point3> = (0..count)
+                .map(|_| {
+                    let local = Vec3::new(
+                        random.range(-size, size),
+                        random.range(-size, size),
+                        random.range(-0.3 * size, 0.3 * size),
+                    );
+                    let x = turn(local) + shift;
+                    Point3::new(x.x(), x.y(), x.z())
+                })
+                .collect();
+            let weights: Vec<f64> = (0..count).map(|_| random.range(0.2, 4.0)).collect();
+            let profile = NurbsCurve::new(degree, knots, control, weights).unwrap();
+            let height = random.range(0.5, 5.0) * if case % 2 == 0 { 1.0 } else { -1.0 };
+            let along = turn(Vec3::new(0.0, 0.0, height));
+            let with = ProfileSamples::new(&profile, along);
+            let without = ProfileSamples {
+                hull: None,
+                ..ProfileSamples::new(&profile, along)
+            };
+            let hull = with.hull.as_ref().expect("a box about a positive profile");
+            let axis = along.normalize().unwrap();
+            let lift = |x: f64, y: f64| hull.e[0] * x + hull.e[1] * y;
+            let at = |x: Vec3| Point3::new(x.x(), x.y(), x.z());
+            let corners = [
+                (hull.lo[0], hull.lo[1]),
+                (hull.lo[0], hull.hi[1]),
+                (hull.hi[0], hull.lo[1]),
+                (hull.hi[0], hull.hi[1]),
+            ];
+            let scale = hull.scale.max(shift.length() + 2.0 * size);
+            let margin = near + 1e-9 * scale;
+            let mut rays: Vec<(Point3, Vec3)> = Vec::new();
+            for _ in 0..12 {
+                // A line seen along the extrusion, `d` past the box's
+                // support line square to `n`, running any way across it.
+                let theta = random.range(0.0, TAU);
+                let (n0, n1) = (theta.cos(), theta.sin());
+                let support = corners
+                    .iter()
+                    .map(|&(x, y)| n0.madd(x, n1 * y))
+                    .fold(f64::NEG_INFINITY, f64::max);
+                for d in [
+                    0.0,
+                    0.5 * near,
+                    near,
+                    margin * (1.0 - 1e-6),
+                    margin * (1.0 + 1e-6),
+                    2.0 * margin,
+                    1e-3 * size,
+                ] {
+                    let s = random.range(-3.0 * size, 3.0 * size);
+                    let foot = lift(n0, n1) * (support + d) + lift(-n1, n0) * s;
+                    let origin = at(foot + axis * random.range(-2.0, 2.0));
+                    let across = lift(-n1, n0);
+                    for climb in [0.0, 0.7, -4.0, 1e3] {
+                        rays.push((origin, across + axis * climb));
+                    }
+                    for tilt in [0.0, 1e-14, 1e-12, 1e-11, 1e-9, 1e-7, 1e-6, 2e-6, 1e-4] {
+                        rays.push((origin, axis + across * tilt));
+                        rays.push((origin, -axis + across * tilt));
+                    }
+                }
+            }
+            // Along the extrusion beside the profile's samples, where a ray
+            // runs in the surface or misses it.
+            for &p in &with.at_steps {
+                let off = random.unit();
+                let off = (off - axis * axis.dot(off)).normalize().unwrap();
+                for d in [0.0, 0.5 * near, 2.0 * near, margin * (1.0 + 1e-6)] {
+                    rays.push((p + off * d, along));
+                }
+            }
+            // Across the profile, and anywhere about its box.
+            for _ in 0..64 {
+                let (v0, v1) = profile.domain();
+                let p = profile.evaluate(random.range(v0, v1));
+                rays.push((
+                    p + random.unit() * random.range(0.0, 2.0 * near),
+                    random.unit(),
+                ));
+                let x = random.range(hull.lo[0] - size, hull.hi[0] + size);
+                let y = random.range(hull.lo[1] - size, hull.hi[1] + size);
+                let origin = at(lift(x, y) + axis * random.range(-3.0, 3.0));
+                rays.push((origin, random.unit()));
+            }
+            for (k, &(origin, dir)) in rays.iter().enumerate() {
+                let read = |samples: &ProfileSamples| {
+                    ray_extrusion_crossings(origin, dir, &profile, samples, along, None, tol)
+                };
+                let (boxed, unboxed) = (read(&with), read(&without));
+                assert_eq!(
+                    boxed, unboxed,
+                    "case {case}, ray {k}: from {origin:?} along {dir:?}"
+                );
+                let flat = dir - axis * axis.dot(dir);
+                let along_ray = flat.length() <= 1e-12 * dir.length();
+                passed_over += usize::from(hull.misses(origin, dir, along_ray, near));
+                crossed += usize::from(unboxed.0 > 0);
+                grazed += usize::from(unboxed.1);
+                along_read += usize::from(along_ray);
+            }
+        }
+        // The rays reach every branch: passed over, crossing, grazing, and
+        // along the extrusion.
+        assert!(
+            passed_over > 1000 && crossed > 100 && grazed > 100 && along_read > 1000,
+            "passed over {passed_over}, crossed {crossed}, grazed {grazed}, along {along_read}"
+        );
     }
 
     /// A wire through the patch's four corners whose near edge bows into the
@@ -4807,6 +5317,127 @@ mod tests {
     /// A band from 0 to a quarter turn, and one across the ring's angle
     /// origin, read by their ring angles: a ray up out of the tube's centre
     /// crosses the band only where its angle lies between the end circles.
+    /// A ball's octant holds the points on it and near its arcs, and no
+    /// point beside the plane of one arc that another arc's plane keeps out.
+    #[test]
+    fn a_ball_face_trim_holds_only_its_own_patch() {
+        let mut topo = Topology::new();
+        let origin = Point3::new(0.0, 0.0, 0.0);
+        let octant = sphere_patch(
+            &mut topo,
+            3.0,
+            &[
+                Point3::new(3.0, 0.0, 0.0),
+                Point3::new(0.0, 3.0, 0.0),
+                Point3::new(0.0, 0.0, 3.0),
+            ],
+            &[origin, origin, origin],
+        );
+        let trim = SphereFaceTrim::new(&topo, octant).unwrap().unwrap();
+        let r = 3.0_f64.sqrt();
+        let near = 1e-6;
+        assert!(trim.holds_clear(Point3::new(r, r, r), near));
+        assert!(trim.holds(Point3::new(0.0, 1.8, 2.4), near), "on an arc");
+        assert!(
+            !trim.holds_clear(Point3::new(0.0, 1.8, 2.4), near),
+            "on an arc"
+        );
+        assert!(
+            !trim.holds(Point3::new(0.0, -1.8, 2.4), near),
+            "beside an arc's plane"
+        );
+        assert!(
+            !trim.holds(Point3::new(-r, r, r), near),
+            "a neighbouring octant"
+        );
+
+        // The ball less that octant, its arcs run the other way round.
+        let rest = sphere_patch(
+            &mut topo,
+            3.0,
+            &[
+                Point3::new(0.0, 0.0, 3.0),
+                Point3::new(0.0, 3.0, 0.0),
+                Point3::new(3.0, 0.0, 0.0),
+            ],
+            &[origin, origin, origin],
+        );
+        let trim = SphereFaceTrim::new(&topo, rest).unwrap().unwrap();
+        assert!(
+            trim.holds_clear(Point3::new(0.0, -1.8, 2.4), near),
+            "on an arc's plane, away from the arc"
+        );
+        assert!(trim.holds(Point3::new(0.0, 1.8, 2.4), near), "on an arc");
+        assert!(
+            !trim.holds_clear(Point3::new(0.0, 1.8, 2.4), near),
+            "on an arc"
+        );
+        assert!(
+            !trim.holds(Point3::new(r, r, r), near),
+            "the octant left out"
+        );
+    }
+
+    /// A ball less a cap and a bore's rim off its centre: a point of the face
+    /// on the far hemisphere, under the rim along the rim's axis, is clear of
+    /// the rim.
+    #[test]
+    fn a_ball_face_trim_reads_a_rim_on_its_own_hemisphere() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::SphericalSurface;
+
+        let mut topo = Topology::new();
+        let origin = Point3::new(0.0, 0.0, 0.0);
+        let cap_at = Point3::new(-2.5, 0.0, 0.0);
+        let cap_radius = (9.0_f64 - 6.25).sqrt();
+        let start = topo.add_vertex(Vertex::new(Point3::new(-2.5, cap_radius, 0.0), 1e-7));
+        let circle = Circle3D::new(cap_at, Vec3::new(1.0, 0.0, 0.0), cap_radius).unwrap();
+        let cap = topo.add_edge(Edge::new(start, start, EdgeCurve::Circle(circle)));
+        let outer = topo.add_wire(Wire::new(vec![OrientedEdge::new(cap, true)], true).unwrap());
+        let rim_at = |k: usize| {
+            #[allow(clippy::cast_precision_loss)]
+            let a = -std::f64::consts::TAU * k as f64 / 24.0;
+            let (x, y) = (0.5f64.madd(a.cos(), 1.0), 0.5 * a.sin());
+            Point3::new(x, y, (9.0 - x * x - y * y).sqrt())
+        };
+        let verts: Vec<_> = (0..24)
+            .map(|k| topo.add_vertex(Vertex::new(rim_at(k), 1e-7)))
+            .collect();
+        let edges: Vec<_> = (0..24)
+            .map(|k| {
+                let e = topo.add_edge(Edge::new(verts[k], verts[(k + 1) % 24], EdgeCurve::Line));
+                OrientedEdge::new(e, true)
+            })
+            .collect();
+        let inner = topo.add_wire(Wire::new(edges, true).unwrap());
+        let sphere = SphericalSurface::new(origin, 3.0).unwrap();
+        let face = topo.add_face(Face::new(outer, vec![inner], FaceSurface::Sphere(sphere)));
+        let trim = SphereFaceTrim::new(&topo, face).unwrap().unwrap();
+        let near = 1e-6;
+
+        let top = Point3::new(1.0, 0.0, 8.0_f64.sqrt());
+        assert!(!trim.holds(top, near), "the bore");
+        assert!(trim.holds_clear(Point3::new(0.0, 3.0, 0.0), near));
+        assert!(!trim.holds_clear(rim_at(0), near), "on the rim");
+        let rim_sum = (0..24).fold(Vec3::new(0.0, 0.0, 0.0), |acc, k| {
+            acc + (rim_at(k) - origin)
+        });
+        let axis = rim_sum.normalize().unwrap();
+        let q = rim_at(6) - origin;
+        let below = origin + (q - axis * (2.0 * q.dot(axis)));
+        assert!(
+            trim.holds_clear(below, near),
+            "under the rim, on the far side"
+        );
+
+        // Just inside the bore, closer to its rim than `near`.
+        let r = rim_at(0);
+        let toward = (Point3::new(1.0, 0.0, r.z()) - r).normalize().unwrap();
+        let inside = r + toward * (0.5 * near);
+        assert!(trim.holds(inside, near), "by the rim, inside the bore");
+        assert!(!trim.holds(r + toward * 1e-3, near), "inside the bore");
+    }
+
     #[test]
     fn a_partial_revolution_band_counts_crossings_between_its_ends() {
         use std::f64::consts::{FRAC_PI_2, FRAC_PI_4, PI, TAU};

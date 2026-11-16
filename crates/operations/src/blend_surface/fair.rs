@@ -72,7 +72,9 @@ const REACHES_BOUNDARY: f64 = 1e-9;
 /// # Errors
 ///
 /// Returns [`OperationsError::InvalidInput`] if `tolerance` is not positive
-/// and finite. A topology lookup can also fail.
+/// and finite, or if the faired surface folds back over itself where the
+/// fairing moved it. A fold where nothing moves is the input's, and stays. A
+/// topology lookup can also fail.
 pub fn fair_surface(
     topo: &mut Topology,
     face: FaceId,
@@ -91,9 +93,46 @@ pub fn fair_surface(
     let Some(faired) = fair_net(&source, &held, tolerance)? else {
         return crate::copy::copy_face(topo, face);
     };
+    let moved = moved_reach(&source, &faired);
+    let touched = |u: (f64, f64), v: (f64, f64)| {
+        moved
+            .iter()
+            .any(|(mu, mv)| u.0 < mu.1 && mu.0 < u.1 && v.0 < mv.1 && mv.0 < v.1)
+    };
+    super::refuse_fold(&faired, &touched, "the faired surface")?;
     let copy = crate::copy::copy_face(topo, face)?;
     topo.face_mut(copy)?.set_surface(FaceSurface::Nurbs(faired));
     Ok(copy)
+}
+
+/// The parameter rectangles over which a control point of `faired` differs
+/// from that of `source`: the support of its basis function. Outside them
+/// the two surfaces are one.
+fn moved_reach(source: &NurbsSurface, faired: &NurbsSurface) -> Vec<((f64, f64), (f64, f64))> {
+    let (pu, pv) = (source.degree_u(), source.degree_v());
+    let (knots_u, knots_v) = (source.knots_u(), source.knots_v());
+    let same = |a: Point3, b: Point3| {
+        a.x().to_bits() == b.x().to_bits()
+            && a.y().to_bits() == b.y().to_bits()
+            && a.z().to_bits() == b.z().to_bits()
+    };
+    let mut reach = Vec::new();
+    for (i, (before, after)) in source
+        .control_points()
+        .iter()
+        .zip(faired.control_points())
+        .enumerate()
+    {
+        for (j, (a, b)) in before.iter().zip(after).enumerate() {
+            if !same(*a, *b) {
+                reach.push((
+                    (knots_u[i], knots_u[i + pu + 1]),
+                    (knots_v[j], knots_v[j + pv + 1]),
+                ));
+            }
+        }
+    }
+    reach
 }
 
 /// Which control points must not move: those that reach the face's boundary,

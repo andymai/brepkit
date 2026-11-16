@@ -85,7 +85,7 @@ fn terms_at((p, su, sv): (Point3, Vec3, Vec3), about: Vec3) -> [f64; 8] {
 
 /// One edge of a wire in its traversal: its curve, end points, and the
 /// curve parameter it runs over from where the wire enters it.
-pub(super) struct BoundaryEdge<'a> {
+pub struct BoundaryEdge<'a> {
     pub curve: &'a EdgeCurve,
     pub start: Point3,
     pub end: Point3,
@@ -108,6 +108,8 @@ pub(super) struct Chart<'a, S: ParametricSurface> {
     /// wire as `u` is, and a wire winding round the tube needs nothing
     /// more, every integrand being periodic in it.
     pub v_periodic: bool,
+    /// The surface's integrals in `u` in closed form.
+    pub revolution: Revolution,
 }
 
 const TAU: f64 = std::f64::consts::TAU;
@@ -162,47 +164,248 @@ fn adaptive(
     Some(sum)
 }
 
-/// `∫₀ᵗᵘʳⁿ g(s, v) ds` by the trapezoid rule, exact for the low-order
-/// trigonometric integrands of a surface of revolution.
-fn turn_integral<S: ParametricSurface>(surface: &S, v: f64, about: Vec3) -> [f64; 8] {
-    const N: u32 = 32;
-    let mut acc = [0.0; 8];
-    for k in 0..N {
-        let s = TAU * f64::from(k) / f64::from(N);
-        add(
-            &mut acc,
-            &integrand(surface, s, v, about),
-            TAU / f64::from(N),
-        );
+/// `c₀ + Σₖ (cₖ cos ks + sₖ sin ks)` for `k` up to 3, as
+/// `[c₀, c₁, s₁, c₂, s₂, c₃, s₃]`.
+#[derive(Clone, Copy, Default)]
+struct Trig([f64; 7]);
+
+impl Trig {
+    fn linear(c0: f64, c1: f64, s1: f64) -> Self {
+        Self([c0, c1, s1, 0.0, 0.0, 0.0, 0.0])
     }
-    acc
+
+    /// The product with `d₀ + d₁ cos s + e₁ sin s`. The degree of `self`
+    /// is at most 2, so the product's is at most 3.
+    fn times(self, d0: f64, d1: f64, e1: f64) -> Self {
+        let [c0, c1, s1, c2, s2, ..] = self.0;
+        let (c, s) = ([c0, c1, c2], [0.0, s1, s2]);
+        let (mut cos, mut sin) = ([0.0; 4], [0.0; 4]);
+        for k in 0..3 {
+            cos[k] += c[k] * d0;
+            sin[k] += s[k] * d0;
+            // By the product-to-sum rules each of `cos ks` and `sin ks` times
+            // `cos s` or `sin s` is half a wave of `k + 1` and `k - 1`.
+            let (cd, ce, sd, se) = (
+                0.5 * c[k] * d1,
+                0.5 * c[k] * e1,
+                0.5 * s[k] * d1,
+                0.5 * s[k] * e1,
+            );
+            cos[k + 1] += cd - se;
+            sin[k + 1] += ce + sd;
+            if k == 0 {
+                // `cos(-s) = cos s` and `sin(-s) = -sin s`.
+                cos[1] += cd + se;
+                sin[1] -= sd - ce;
+            } else {
+                cos[k - 1] += cd + se;
+                sin[k - 1] += sd - ce;
+            }
+        }
+        Self([cos[0], cos[1], sin[1], cos[2], sin[2], cos[3], sin[3]])
+    }
+
+    fn sum(self, other: Self) -> Self {
+        Self(std::array::from_fn(|i| self.0[i] + other.0[i]))
+    }
+
+    fn scaled(self, w: f64) -> Self {
+        Self(self.0.map(|x| w * x))
+    }
+
+    /// `∫₀ᵘ`, with `waves` holding `sin ku` and `1 - cos ku` for `k` from 1
+    /// to 3.
+    fn integral(self, u: f64, waves: &[(f64, f64); 3]) -> f64 {
+        let mut sum = self.0[0] * u;
+        for (k, (&(sin_ku, versine), inverse)) in
+            waves.iter().zip([1.0, 0.5, 1.0 / 3.0]).enumerate()
+        {
+            sum += inverse * self.0[2 * k + 1].madd(sin_ku, self.0[2 * k + 2] * versine);
+        }
+        sum
+    }
 }
 
-/// `∫₀ᵘ g(s, v) ds` for any `u`: whole turns by [`turn_integral`], the rest
-/// by Gauss-Legendre in panels of at most a quarter turn.
-fn antiderivative<S: ParametricSurface>(surface: &S, u: f64, v: f64, about: Vec3) -> [f64; 8] {
-    let turns = (u / TAU).floor();
-    let rest = u - turns * TAU;
-    let mut acc = [0.0; 8];
-    if turns != 0.0 {
-        add(&mut acc, &turn_integral(surface, v, about), turns);
-    }
-    let gauss = gauss_legendre_points(10);
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let panels = (rest / std::f64::consts::FRAC_PI_2).ceil().max(1.0) as u32;
-    let width = rest / f64::from(panels);
-    for i in 0..panels {
-        let mid = width.madd(f64::from(i) + 0.5, 0.0);
-        for gp in gauss {
-            let s = (0.5 * width).madd(gp.x, mid);
-            add(
-                &mut acc,
-                &integrand(surface, s, v, about),
-                0.5 * width * gp.w,
-            );
+/// How the circle at each `v` of a surface of revolution is set: its radius
+/// `a` and height `b` along the axis, with their `v` derivatives.
+#[derive(Clone, Copy)]
+enum Profile {
+    Cylinder { radius: f64 },
+    Cone { cos_a: f64, sin_a: f64 },
+    Sphere { radius: f64 },
+    Torus { major: f64, minor: f64 },
+}
+
+impl Profile {
+    /// `(a, b, a', b')` at `v`.
+    fn at(self, v: f64) -> (f64, f64, f64, f64) {
+        match self {
+            Self::Cylinder { radius } => (radius, v, 0.0, 1.0),
+            Self::Cone { cos_a, sin_a } => (v * cos_a, v * sin_a, cos_a, sin_a),
+            Self::Sphere { radius } => {
+                let (sin_v, cos_v) = v.sin_cos();
+                (
+                    radius * cos_v,
+                    radius * sin_v,
+                    -radius * sin_v,
+                    radius * cos_v,
+                )
+            }
+            Self::Torus { major, minor } => {
+                let (sin_v, cos_v) = v.sin_cos();
+                (
+                    minor.madd(cos_v, major),
+                    minor * sin_v,
+                    -minor * sin_v,
+                    minor * cos_v,
+                )
+            }
         }
     }
-    acc
+}
+
+/// A cylinder, cone, sphere or torus as `p(u, v) = centre + a(v) (cos u x +
+/// sin u y) + b(v) z`. Along a circle of constant `v` its point and normal
+/// are trigonometric polynomials of degree one in `u` and its normal's length
+/// is constant, so each [`integrand`] is one of degree three at most and its
+/// integral in `u` has a closed form.
+#[derive(Clone, Copy)]
+pub(super) struct Revolution {
+    centre: Vec3,
+    x: Vec3,
+    y: Vec3,
+    z: Vec3,
+    profile: Profile,
+}
+
+impl Revolution {
+    pub(super) fn cylinder(s: &brepkit_math::surfaces::CylindricalSurface) -> Self {
+        let o = s.origin();
+        Self {
+            centre: Vec3::new(o.x(), o.y(), o.z()),
+            x: s.x_axis(),
+            y: s.y_axis(),
+            z: s.axis(),
+            profile: Profile::Cylinder { radius: s.radius() },
+        }
+    }
+
+    pub(super) fn cone(s: &brepkit_math::surfaces::ConicalSurface) -> Self {
+        let o = s.apex();
+        let (sin_a, cos_a) = s.half_angle().sin_cos();
+        Self {
+            centre: Vec3::new(o.x(), o.y(), o.z()),
+            x: s.x_axis(),
+            y: s.y_axis(),
+            z: s.axis(),
+            profile: Profile::Cone { cos_a, sin_a },
+        }
+    }
+
+    pub(super) fn sphere(s: &SphericalSurface) -> Self {
+        let o = s.center();
+        Self {
+            centre: Vec3::new(o.x(), o.y(), o.z()),
+            x: s.x_axis(),
+            y: s.y_axis(),
+            z: s.z_axis(),
+            profile: Profile::Sphere { radius: s.radius() },
+        }
+    }
+
+    pub(super) fn torus(s: &brepkit_math::surfaces::ToroidalSurface) -> Self {
+        let o = s.center();
+        Self {
+            centre: Vec3::new(o.x(), o.y(), o.z()),
+            x: s.x_axis(),
+            y: s.y_axis(),
+            z: s.z_axis(),
+            profile: Profile::Torus {
+                major: s.major_radius(),
+                minor: s.minor_radius(),
+            },
+        }
+    }
+
+    /// Each [`integrand`] at `v` as a trigonometric polynomial in `u`.
+    fn series(&self, v: f64, about: Vec3) -> [Trig; 8] {
+        let (a, b, da, db) = self.profile.at(v);
+        // `p - about = p0 + p1 cos u + p2 sin u`, and with the partials
+        // `a (-sin u x + cos u y)` and `a' (cos u x + sin u y) + b' z` the
+        // normal is `n0 + n1 cos u + n2 sin u`.
+        let p0 = self.centre - about + self.z * b;
+        let (p1, p2) = (self.x * a, self.y * a);
+        let n0 = self.x.cross(self.y) * (-a * da);
+        let (n1, n2) = (
+            self.y.cross(self.z) * (a * db),
+            self.z.cross(self.x) * (a * db),
+        );
+        let length = a.abs() * da.hypot(db);
+        let coords = |w: Vec3| [w.x(), w.y(), w.z()];
+        let (p0, p1, p2) = (coords(p0), coords(p1), coords(p2));
+        let (n0, n1, n2) = (coords(n0), coords(n1), coords(n2));
+        let p = |i: usize| Trig::linear(p0[i], p1[i], p2[i]);
+        let flux = (0..3)
+            .map(|i| p(i).times(n0[i], n1[i], n2[i]))
+            .fold(Trig::default(), Trig::sum)
+            .scaled(1.0 / 3.0);
+        let area = Trig::linear(length, 0.0, 0.0);
+        if about.length_squared() > 0.0 {
+            return [
+                area,
+                flux,
+                Trig::default(),
+                Trig::default(),
+                Trig::default(),
+                Trig::default(),
+                Trig::default(),
+                Trig::default(),
+            ];
+        }
+        let moment = |i: usize| {
+            p(i).times(p0[i], p1[i], p2[i])
+                .times(n0[i], n1[i], n2[i])
+                .scaled(0.5)
+        };
+        let centroid = |i: usize| p(i).scaled(length);
+        [
+            area,
+            flux,
+            moment(0),
+            moment(1),
+            moment(2),
+            centroid(0),
+            centroid(1),
+            centroid(2),
+        ]
+    }
+
+    /// `∫₀ᵘ g(s, v) ds` for each [`integrand`] `g`.
+    fn antiderivative(&self, u: f64, v: f64, about: Vec3) -> [f64; 8] {
+        // `1 - cos ku` as `2 sin²(ku / 2)`: the difference would round to
+        // nothing for a small `u`, where a sliver of a face is all of it.
+        let (sin_half, cos_half) = (0.5 * u).sin_cos();
+        let (sin_u, cos_u) = (
+            2.0 * sin_half * cos_half,
+            cos_half.madd(cos_half, -sin_half * sin_half),
+        );
+        let sin_three_halves = sin_u.madd(cos_half, cos_u * sin_half);
+        let (sin_2u, cos_2u) = (2.0 * sin_u * cos_u, cos_u.madd(cos_u, -sin_u * sin_u));
+        let waves = [
+            (sin_u, 2.0 * sin_half * sin_half),
+            (sin_2u, 2.0 * sin_u * sin_u),
+            (
+                sin_2u.madd(cos_u, cos_2u * sin_u),
+                2.0 * sin_three_halves * sin_three_halves,
+            ),
+        ];
+        self.series(v, about).map(|g| g.integral(u, &waves))
+    }
+
+    /// The mean of each [`integrand`] over a turn at `v`.
+    fn mean(&self, v: f64, about: Vec3) -> [f64; 8] {
+        self.series(v, about).map(|g| g.0[0])
+    }
 }
 
 /// `H(v) = ∫ ḡ` from `v_ref` to `v`, `ḡ` the mean over a turn.
@@ -221,8 +424,8 @@ fn mean_integral<S: ParametricSurface>(chart: &Chart<'_, S>, v: f64, about: Vec3
             let w = (0.5 * width).madd(gp.x, mid);
             add(
                 &mut acc,
-                &turn_integral(chart.surface, w, about),
-                0.5 * width * gp.w / TAU,
+                &chart.revolution.mean(w, about),
+                0.5 * width * gp.w,
             );
         }
     }
@@ -232,7 +435,7 @@ fn mean_integral<S: ParametricSurface>(chart: &Chart<'_, S>, v: f64, about: Vec3
 /// An edge's parameter span in traversal order, cut where the quadrature
 /// wants it: a conic every eighth of a turn (its parameter is its angle), a
 /// NURBS curve at its knots, a line in two.
-fn edge_pieces(edge: &BoundaryEdge<'_>) -> Vec<(f64, f64)> {
+pub fn edge_pieces(edge: &BoundaryEdge<'_>) -> Vec<(f64, f64)> {
     let span = edge.to - edge.from;
     let uniform = |n: u32| {
         (0..n)
@@ -381,7 +584,7 @@ pub(super) fn integrate_by_boundary<S: ParametricSurface>(
                         );
                         // A latitude (a rim circle about the axis) adds nothing.
                         if dv.abs() > 1e-12 * (1.0 + vn.abs()) {
-                            let g = antiderivative(chart.surface, un, vn, about);
+                            let g = chart.revolution.antiderivative(un, vn, about);
                             for (s, x) in sums.iter_mut().zip(g) {
                                 *s += w * dv * x;
                                 rounding = rounding.max((w * nv * x).abs());
@@ -529,7 +732,7 @@ fn boundary_wires<'t>(
 }
 
 /// [`boundary_wires`] for the wires `ids`.
-fn wires_of<'t>(
+pub fn wires_of<'t>(
     topo: &'t Topology,
     ids: &[brepkit_topology::wire::WireId],
 ) -> Result<Option<Vec<Vec<BoundaryEdge<'t>>>>, CheckError> {
@@ -668,6 +871,7 @@ pub(super) fn curved_face_by_boundary(
                 low: None,
                 high: None,
                 v_periodic: false,
+                revolution: Revolution::cylinder(s),
             };
             integrate_by_boundary(&chart, &wires, sign, about)
         }
@@ -692,6 +896,7 @@ pub(super) fn curved_face_by_boundary(
                 low,
                 high,
                 v_periodic: false,
+                revolution: Revolution::cone(s),
             };
             integrate_by_boundary(&chart, &wires, sign, about)
         }
@@ -737,6 +942,7 @@ pub(super) fn curved_face_by_boundary(
                 low: Some(-std::f64::consts::FRAC_PI_2),
                 high: Some(std::f64::consts::FRAC_PI_2),
                 v_periodic: false,
+                revolution: Revolution::sphere(&turned),
             };
             integrate_by_boundary(&chart, &wires, sign, about)
         }
@@ -750,6 +956,7 @@ pub(super) fn curved_face_by_boundary(
                 low: None,
                 high: None,
                 v_periodic: true,
+                revolution: Revolution::torus(t),
             };
             integrate_by_boundary(&chart, &wires, sign, about)
         }
@@ -797,6 +1004,7 @@ fn whole_torus_less_holes(
         low: None,
         high: None,
         v_periodic: true,
+        revolution: Revolution::torus(t),
     };
     for &hole in face.inner_wires() {
         let Some(wires) = wires_of(topo, &[hole])? else {
@@ -1520,4 +1728,284 @@ fn open_and_poleless(s: &brepkit_math::nurbs::surface::NurbsSurface) -> bool {
         && !same(&sides[0], &sides[1])
         && !same(&sides[2], &sides[3])
         && sides.iter().all(|p| length(p) > near)
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use brepkit_math::surfaces::{ConicalSurface, CylindricalSurface, ToroidalSurface};
+
+    use super::*;
+
+    /// `∫₀ᵗᵘʳⁿ g(s, v) ds` by the trapezoid rule, exact for the integrands of
+    /// a surface of revolution.
+    fn turn_by_trapezoid<S: ParametricSurface>(surface: &S, v: f64, about: Vec3) -> [f64; 8] {
+        const N: u32 = 32;
+        let mut acc = [0.0; 8];
+        for k in 0..N {
+            let s = TAU * f64::from(k) / f64::from(N);
+            add(
+                &mut acc,
+                &integrand(surface, s, v, about),
+                TAU / f64::from(N),
+            );
+        }
+        acc
+    }
+
+    /// `∫₀ᵘ g(s, v) ds` by quadrature: whole turns toward zero by the
+    /// trapezoid rule, the rest by Gauss-Legendre in panels of at most a
+    /// quarter turn, so a small `u` of either sign reads its own sliver.
+    fn by_quadrature<S: ParametricSurface>(surface: &S, u: f64, v: f64, about: Vec3) -> [f64; 8] {
+        let turns = (u / TAU).trunc();
+        let rest = u - turns * TAU;
+        let mut acc = [0.0; 8];
+        if turns != 0.0 {
+            add(&mut acc, &turn_by_trapezoid(surface, v, about), turns);
+        }
+        let gauss = gauss_legendre_points(10);
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let panels = (rest.abs() / std::f64::consts::FRAC_PI_2).ceil().max(1.0) as u32;
+        let width = rest / f64::from(panels);
+        for i in 0..panels {
+            let mid = width * (f64::from(i) + 0.5);
+            for gp in gauss {
+                let s = (0.5 * width).madd(gp.x, mid);
+                add(
+                    &mut acc,
+                    &integrand(surface, s, v, about),
+                    0.5 * width * gp.w,
+                );
+            }
+        }
+        acc
+    }
+
+    /// A fixed sequence of numbers in `[0, 1)`.
+    struct Draws(u64);
+
+    impl Draws {
+        fn next(&mut self) -> f64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            #[allow(clippy::cast_precision_loss)]
+            let x = (self.0 >> 11) as f64 / (1_u64 << 53) as f64;
+            x
+        }
+
+        fn within(&mut self, lo: f64, hi: f64) -> f64 {
+            (hi - lo).madd(self.next(), lo)
+        }
+
+        fn direction(&mut self) -> Vec3 {
+            loop {
+                let w = Vec3::new(
+                    self.within(-1.0, 1.0),
+                    self.within(-1.0, 1.0),
+                    self.within(-1.0, 1.0),
+                );
+                if (0.1..1.0).contains(&w.length()) {
+                    return w;
+                }
+            }
+        }
+
+        fn point(&mut self, reach: f64) -> Point3 {
+            let w = self.direction() * reach;
+            Point3::new(w.x(), w.y(), w.z())
+        }
+    }
+
+    /// The largest gap between the closed form and the quadrature at
+    /// `(u, v)`, against the largest integrand over the turn times the
+    /// length of `u`'s run, and the closed form's mean against the
+    /// trapezoid rule's.
+    fn gap<S: ParametricSurface>(
+        surface: &S,
+        revolution: &Revolution,
+        u: f64,
+        v: f64,
+        about: Vec3,
+    ) -> f64 {
+        let size = (0..64)
+            .flat_map(|k| integrand(surface, TAU * f64::from(k) / 64.0, v, about))
+            .fold(f64::MIN_POSITIVE, |m, x| m.max(x.abs()));
+        let closed = revolution.antiderivative(u, v, about);
+        let quadrature = by_quadrature(surface, u, v, about);
+        let mean = revolution.mean(v, about);
+        let turn = turn_by_trapezoid(surface, v, about);
+        let along = closed
+            .iter()
+            .zip(&quadrature)
+            .fold(0.0_f64, |m, (a, b)| m.max((a - b).abs()));
+        let over_turn = mean
+            .iter()
+            .zip(&turn)
+            .fold(0.0_f64, |m, (a, b)| m.max((TAU * a - b).abs()));
+        (along / (size * u.abs().max(1.0))).max(over_turn / (size * TAU))
+    }
+
+    /// The largest gap between the closed form and the quadrature at a small
+    /// `u`, each integral against its own integrand's largest size times
+    /// `|u|`: a sliver of a face is the whole of what it holds.
+    fn sliver_gap<S: ParametricSurface>(
+        surface: &S,
+        revolution: &Revolution,
+        u: f64,
+        v: f64,
+        about: Vec3,
+    ) -> f64 {
+        let mut size = [0.0_f64; 8];
+        for k in 0..64 {
+            let g = integrand(surface, TAU * f64::from(k) / 64.0, v, about);
+            for (m, x) in size.iter_mut().zip(g) {
+                *m = m.max(x.abs());
+            }
+        }
+        let closed = revolution.antiderivative(u, v, about);
+        let quadrature = by_quadrature(surface, u, v, about);
+        (0..8)
+            .filter(|&k| size[k] > 0.0)
+            .map(|k| (closed[k] - quadrature[k]).abs() / (size[k] * u.abs()))
+            .fold(0.0, f64::max)
+    }
+
+    #[test]
+    fn closed_form_antiderivative_keeps_a_sliver_of_a_turn() {
+        // A cylinder of radius 1e6 about z through the origin: over `u` up
+        // to 1e-8, its area moment along y is `r² (1 - cos u)`, all of it of
+        // second order in `u`.
+        let origin = Point3::new(0.0, 0.0, 0.0);
+        let radius = 1e6;
+        let wall = CylindricalSurface::with_ref_dir(
+            origin,
+            Vec3::new(0.0, 0.0, 1.0),
+            radius,
+            Vec3::new(1.0, 0.0, 0.0),
+        )
+        .unwrap();
+        let u = 1e-8;
+        let along_y =
+            Revolution::cylinder(&wall).antiderivative(u, 0.5, Vec3::new(0.0, 0.0, 0.0))[6];
+        let expected = radius * radius * 2.0 * (0.5 * u).sin().powi(2);
+        assert!(
+            (along_y - expected).abs() <= 1e-12 * expected.abs(),
+            "{along_y} against {expected}"
+        );
+
+        let mut draws = Draws(0x2545_f491_4f6c_dd1d);
+        let mut worst = 0.0_f64;
+        for _ in 0..40 {
+            let axis = draws.direction();
+            let ref_dir = draws.direction();
+            let reach = draws.within(0.0, 50.0);
+            let centre = draws.point(reach);
+            let radius = draws.within(0.1, 20.0);
+            let about = draws.direction() * 30.0;
+            let cylinder = CylindricalSurface::with_ref_dir(centre, axis, radius, ref_dir).unwrap();
+            let cone = ConicalSurface::with_ref_dir(centre, axis, draws.within(0.05, 1.5), ref_dir)
+                .unwrap();
+            let sphere =
+                SphericalSurface::with_axis_and_ref_dir(centre, radius, axis, ref_dir).unwrap();
+            let torus = ToroidalSurface::with_axis_and_ref_dir(
+                centre,
+                radius,
+                radius * draws.within(0.05, 0.9),
+                axis,
+                ref_dir,
+            )
+            .unwrap();
+            let (along, latitude, tube) = (
+                draws.within(1.0, 30.0),
+                draws.within(-1.5, 1.5),
+                draws.within(-TAU, TAU),
+            );
+            for u in [1e-12, -1e-12, 1e-8, -1e-8, 1e-5, -1e-5, 1e-3, -1e-3] {
+                for about in [Vec3::new(0.0, 0.0, 0.0), about] {
+                    worst = worst
+                        .max(sliver_gap(
+                            &cylinder,
+                            &Revolution::cylinder(&cylinder),
+                            u,
+                            along,
+                            about,
+                        ))
+                        .max(sliver_gap(&cone, &Revolution::cone(&cone), u, along, about))
+                        .max(sliver_gap(
+                            &sphere,
+                            &Revolution::sphere(&sphere),
+                            u,
+                            latitude,
+                            about,
+                        ))
+                        .max(sliver_gap(
+                            &torus,
+                            &Revolution::torus(&torus),
+                            u,
+                            tube,
+                            about,
+                        ));
+                }
+            }
+        }
+        assert!(worst < 2e-14, "worst relative gap {worst:e}");
+    }
+
+    #[test]
+    fn closed_form_antiderivative_agrees_with_quadrature() {
+        let mut draws = Draws(0x9e37_79b9_7f4a_7c15);
+        let mut worst = 0.0_f64;
+        let mut cases = 0;
+        for _ in 0..40 {
+            let axis = draws.direction();
+            let ref_dir = draws.direction();
+            let reach = draws.within(0.0, 50.0);
+            let centre = draws.point(reach);
+            let radius = draws.within(0.1, 20.0);
+            let abouts = [Vec3::new(0.0, 0.0, 0.0), draws.direction() * 30.0];
+            let cylinder = CylindricalSurface::with_ref_dir(centre, axis, radius, ref_dir).unwrap();
+            let cone = ConicalSurface::with_ref_dir(centre, axis, draws.within(0.05, 1.5), ref_dir)
+                .unwrap();
+            let sphere =
+                SphericalSurface::with_axis_and_ref_dir(centre, radius, axis, ref_dir).unwrap();
+            let torus = ToroidalSurface::with_axis_and_ref_dir(
+                centre,
+                radius,
+                radius * draws.within(0.05, 1.5),
+                axis,
+                ref_dir,
+            )
+            .unwrap();
+            for _ in 0..25 {
+                let u = draws.within(-3.0 * TAU, 3.0 * TAU);
+                let along = draws.within(-30.0, 30.0);
+                let latitude = draws.within(-1.55, 1.55);
+                let tube = draws.within(-TAU, TAU);
+                for about in abouts {
+                    worst = worst
+                        .max(gap(
+                            &cylinder,
+                            &Revolution::cylinder(&cylinder),
+                            u,
+                            along,
+                            about,
+                        ))
+                        .max(gap(&cone, &Revolution::cone(&cone), u, along, about))
+                        .max(gap(
+                            &sphere,
+                            &Revolution::sphere(&sphere),
+                            u,
+                            latitude,
+                            about,
+                        ))
+                        .max(gap(&torus, &Revolution::torus(&torus), u, tube, about));
+                    cases += 4;
+                }
+            }
+        }
+        assert_eq!(cases, 8000);
+        assert!(worst < 2e-14, "worst relative gap {worst:e}");
+    }
 }

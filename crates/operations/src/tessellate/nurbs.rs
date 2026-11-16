@@ -1208,11 +1208,12 @@ pub(super) fn iso_breaks_over(
             return 2;
         }
         let probes = span_probes(a, b, &knots[from..to]);
-        let (mut sag, mut turn) = (0.0_f64, 0.0_f64);
+        let (mut sag, mut turn, mut reach) = (0.0_f64, 0.0_f64, 0.0_f64);
         for row in 0..ROWS {
             #[allow(clippy::cast_precision_loss)]
             let o = o_lo + (o_hi - o_lo) * (row as f64 + 0.5) / ROWS as f64;
             let (pa, pb) = (point(a, o), point(b, o));
+            reach = reach.max((pb - pa).length());
             for &t in &probes {
                 sag = sag.max(off_chord(point(t, o), pa, pb));
             }
@@ -1242,7 +1243,10 @@ pub(super) fn iso_breaks_over(
                 turn = turn.max(turned);
             }
         }
-        let turn_ratio = if angular_tol > 0.0 {
+        // A span shorter than a tenth of the deflection on every row is not
+        // cut for its turn, as a spline edge's is not: where the surface
+        // barely moves, lines a hair apart cannot be told apart in (u, v).
+        let turn_ratio = if angular_tol > 0.0 && reach > 0.1 * deflection {
             turn / angular_tol
         } else {
             0.0

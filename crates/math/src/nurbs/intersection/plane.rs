@@ -965,7 +965,17 @@ fn trace_valley(
         // Whether the walk has left `start` behind, so that coming back
         // near it closes the curve.
         let mut away = false;
-        for _ in 0..MAX_VALLEY_STEPS {
+        // The walk's state, kept at each power of two of its steps: the
+        // walk is a function of it alone, so a walk that comes back to it
+        // exactly goes round the same steps until it runs out of them,
+        // and gives no curve now (Brent's cycle check).
+        let state = |p: (f64, f64), dir: (f64, f64), h: f64, away: bool| {
+            [p.0, p.1, dir.0, dir.1, h]
+                .map(f64::to_bits)
+                .map(|b| (b, away))
+        };
+        let mut mark = state(p, dir, h, away);
+        for taken in 1..=MAX_VALLEY_STEPS {
             // As far as the patch allows, up to one step.
             let reach = |x: f64, dx: f64, lo: f64, hi: f64| {
                 if dx > 0.0 {
@@ -1036,6 +1046,13 @@ fn trace_valley(
             }
             dir = e;
             p = next;
+            let now = state(p, dir, h, away);
+            if now == mark {
+                return None;
+            }
+            if taken.is_power_of_two() {
+                mark = now;
+            }
         }
         None
     };

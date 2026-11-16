@@ -2111,16 +2111,8 @@ fn intersect_analytic_analytic_impl(
     let v_range_b = v_range_hint_b.unwrap_or(default_v_b);
 
     // Compute characteristic surface dimensions for adaptive parameters.
-    let diag_a = {
-        let p00 = surf_a(u_range_a.0, v_range_a.0);
-        let p11 = surf_a(u_range_a.1, v_range_a.1);
-        (p00 - p11).length()
-    };
-    let diag_b = {
-        let p00 = surf_b(u_range_b.0, v_range_b.0);
-        let p11 = surf_b(u_range_b.1, v_range_b.1);
-        (p00 - p11).length()
-    };
+    let diag_a = patch_diagonal(surf_a.as_ref(), u_range_a, v_range_a);
+    let diag_b = patch_diagonal(surf_b.as_ref(), u_range_b, v_range_b);
     let char_size = diag_a.min(diag_b).max(0.1);
 
     // Sample surface A on a grid. For each grid point, project it
@@ -2283,6 +2275,24 @@ fn intersect_analytic_analytic_impl(
     }
 
     Ok(curves)
+}
+
+/// The diagonal of the patch `surf` spans over `u_range` by `v_range`: the
+/// chord between its first and last corners, or, for a patch closed both
+/// ways (a whole torus, whose last corner is its first), the chord from its
+/// first corner to its middle.
+fn patch_diagonal(
+    surf: &dyn Fn(f64, f64) -> Point3,
+    (u0, u1): (f64, f64),
+    (v0, v1): (f64, f64),
+) -> f64 {
+    let corner = (surf(u0, v0) - surf(u1, v1)).length();
+    let middle = (surf(u0, v0) - surf(f64::midpoint(u0, u1), f64::midpoint(v0, v1))).length();
+    if corner > 1e-9 * middle {
+        corner
+    } else {
+        middle
+    }
 }
 
 /// Try algebraic (closed-form or semi-algebraic) intersection for known
@@ -4188,12 +4198,21 @@ fn narrowest_ruling(roots: &impl Fn(f64) -> (f64, f64, f64)) -> Option<(f64, boo
 /// carries one loop, out along one root and back along the other, the two
 /// joined where the discriminant vanishes. Empty when no sample meets it (a
 /// window narrower than the sampling).
+///
+/// Each window is sampled afresh between its two ends, closer together near
+/// them: a window may hold only a few of the rulings sampled around the whole
+/// turn, and the roots swing fastest where they join, so a fit through those
+/// alone strays from the curve by far more than the tolerance (a ball beside a
+/// wide ring's wall).
 fn partial_ruling_loops(
     sweep: &CylindricalSurface,
     roots: &impl Fn(f64) -> (f64, f64, f64),
     samples: &[Option<(Point3, Point3)>],
 ) -> Vec<Vec<Point3>> {
-    let branch_point = |inside: usize, outside: usize| -> Point3 {
+    let lin_tol = Tolerance::new().linear;
+    // Where the discriminant vanishes between a meeting ruling and a missing
+    // one, approached from the meeting side.
+    let branch_u = |inside: usize, outside: usize| -> f64 {
         let (mut lo, mut hi) = (ruling_u(inside), ruling_u(outside));
         if (hi - lo).abs() > std::f64::consts::PI {
             hi += if hi < lo { TAU } else { -TAU };
@@ -4206,8 +4225,11 @@ fn partial_ruling_loops(
                 hi = mid;
             }
         }
-        let (_, vp, vm) = roots(lo);
-        sweep.evaluate(lo, 0.5 * (vp + vm))
+        lo
+    };
+    let joint = |u: f64| {
+        let (_, vp, vm) = roots(u);
+        sweep.evaluate(u, 0.5 * (vp + vm))
     };
     let Some(first_gap) = samples.iter().position(Option::is_none) else {
         return Vec::new();
@@ -4229,8 +4251,22 @@ fn partial_ruling_loops(
             k += 1;
         }
         let end = (start + run.len() - 1) % RULING_SAMPLES;
-        let head = branch_point(start, (start + RULING_SAMPLES - 1) % RULING_SAMPLES);
-        let tail = branch_point(end, (end + 1) % RULING_SAMPLES);
+        let u_head = branch_u(start, (start + RULING_SAMPLES - 1) % RULING_SAMPLES);
+        let u_tail = branch_u(end, (end + 1) % RULING_SAMPLES);
+        let span = (u_tail - u_head).rem_euclid(TAU);
+        #[allow(clippy::cast_precision_loss)]
+        let fresh: Option<Vec<(Point3, Point3)>> = (1..RULING_SAMPLES)
+            .map(|n| {
+                let t = n as f64 / RULING_SAMPLES as f64;
+                let u = span.madd(0.5 * (1.0 - (std::f64::consts::PI * t).cos()), u_head);
+                let (disc, vp, vm) = roots(u);
+                (disc >= -lin_tol).then(|| (sweep.evaluate(u, vp), sweep.evaluate(u, vm)))
+            })
+            .collect();
+        // A gap inside the window that the sampling stepped over: keep the
+        // sampled rulings, which stay on one side of it.
+        let run = fresh.unwrap_or(run);
+        let (head, tail) = (joint(u_head), joint(u_head + span));
         let mut pts = vec![head];
         pts.extend(run.iter().map(|p| p.0));
         pts.push(tail);
@@ -4682,6 +4718,50 @@ fn march_analytic_intersection(
     let max_angle = 10.0_f64.to_radians();
     let min_angle = 2.0_f64.to_radians();
 
+    // Whether `q` lies off either patch, its feet clamped to a patch's edge.
+    let off_patch = |q: Point3| {
+        let (ua, va) = project_analytic(a, q, u_range_a, v_range_a);
+        let (ub, vb) = project_analytic(b, q, u_range_b, v_range_b);
+        (!u_periodic_a && (ua <= u_range_a.0 || ua >= u_range_a.1))
+            || va <= v_range_a.0
+            || va >= v_range_a.1
+            || (!u_periodic_b && (ub <= u_range_b.0 || ub >= u_range_b.1))
+            || vb <= v_range_b.0
+            || vb >= v_range_b.1
+    };
+    // The point on the intersection that the step from `from` reaches.
+    let on_curve = |from: Point3, step: Vec3| {
+        correct_to_intersection(
+            a,
+            b,
+            surf_a,
+            norm_a,
+            surf_b,
+            norm_b,
+            from + step,
+            u_range_a,
+            v_range_a,
+            u_range_b,
+            v_range_b,
+            5,
+        )
+    };
+    // The last point on the intersection still on both patches along the
+    // step from `from`, whose end lies off a patch: on the patch's edge the
+    // step crosses, bisected; `None` when the step leaves at once.
+    let last_on_patch = |from: Point3, step: Vec3| {
+        let (mut lo, mut hi) = (0.0, 1.0);
+        for _ in 0..48 {
+            let s = f64::midpoint(lo, hi);
+            if off_patch(on_curve(from, step * s)) {
+                hi = s;
+            } else {
+                lo = s;
+            }
+        }
+        (lo > 0.0).then(|| on_curve(from, step * lo))
+    };
+
     // March forward from seed, collecting points.
     let mut forward = Vec::new();
     // March backward from seed, collecting points (reversed at end).
@@ -4741,8 +4821,20 @@ fn march_analytic_intersection(
                 || vb2 <= v_range_b.0
                 || vb2 >= v_range_b.1;
 
-            if out_a || out_b {
-                break;
+            // A step whose feet leave a patch can still end on it once the
+            // step is brought onto the intersection; then the march goes on
+            // from there.
+            let mut mid = mid;
+            if out_a || out_b || off_patch(mid) {
+                let end = on_curve(current, t_dir * h);
+                if off_patch(end) {
+                    // The step crosses a patch's edge. End the curve on that
+                    // edge, neither a step short of it nor past it, where the
+                    // faces' other sections meet it.
+                    points.extend(last_on_patch(current, t_dir * h));
+                    break;
+                }
+                mid = end;
             }
             if region.is_some_and(|r| !r.contains_point(mid)) {
                 points.push(mid);
@@ -4768,6 +4860,25 @@ fn march_analytic_intersection(
     let mut result = backward;
     result.push(seed);
     result.append(&mut forward);
+
+    // A seed settles onto the intersection with its feet clamped to the
+    // patches, so one can lie just past a patch's edge and end the curve
+    // there: move that end back onto the edge.
+    if let [first, second, ..] = result[..]
+        && off_patch(first)
+        && !off_patch(second)
+        && let Some(edge) = last_on_patch(second, first - second)
+    {
+        result[0] = edge;
+    }
+    if let [.., second, last] = result[..]
+        && off_patch(last)
+        && !off_patch(second)
+        && let Some(edge) = last_on_patch(second, last - second)
+        && let Some(end) = result.last_mut()
+    {
+        *end = edge;
+    }
 
     // Refine all points onto the intersection curve via Newton correction.
     for pt in &mut result {
@@ -6656,6 +6767,151 @@ mod tests {
         let (count, worst) = off_axis_loops(Point3::new(1.8, 0.0, 0.0), 0.5);
         assert_eq!(count, 1);
         assert!(worst < 5e-4, "loop leaves the surfaces by {worst}");
+    }
+
+    /// A ball through the wall of a ring far wider than it: the rulings that
+    /// meet the ball span a twelfth of the turn, and the loop through them
+    /// stays on both surfaces.
+    #[test]
+    fn a_ball_through_a_wide_wall_meets_it_in_one_close_loop() {
+        let centre = Point3::new(7.35, 0.0, 0.0);
+        let sphere = SphericalSurface::new(centre, 2.4145).unwrap();
+        let cyl =
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 9.15)
+                .unwrap();
+        let curves = algebraic_sphere_cylinder(&sphere, &cyl, true)
+            .unwrap()
+            .unwrap();
+        assert_eq!(curves.len(), 1);
+        let (t0, t1) = curves[0].curve.domain();
+        let mut worst: f64 = 0.0;
+        for k in 0..=2000 {
+            let p = curves[0]
+                .curve
+                .evaluate(t0 + (t1 - t0) * f64::from(k) / 2000.0);
+            let on_sphere = ((p - centre).length() - 2.4145).abs();
+            let on_cylinder = (p.x().hypot(p.y()) - 9.15).abs();
+            worst = worst.max(on_sphere).max(on_cylinder);
+        }
+        assert!(worst < 1e-6, "the loop leaves the surfaces by {worst}");
+    }
+
+    /// A whole torus ends where it starts both ways round; its size is read
+    /// from its first corner to its middle, across the ring.
+    #[test]
+    fn a_whole_torus_patch_spans_its_ring() {
+        let torus = ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), 50.0, 10.0).unwrap();
+        let size = patch_diagonal(&|u, v| torus.evaluate(u, v), (0.0, TAU), (0.0, TAU));
+        assert!((size - 100.0).abs() < 1e-9, "size {size}");
+    }
+
+    /// A cone's face, between two of its circles, and a cylinder's face
+    /// across it: each marched curve ends on the edge of one face's band,
+    /// where the other faces' sections meet it, not a march step short.
+    #[test]
+    fn marched_cone_cylinder_curves_end_on_the_band_edges() {
+        let half_angle = 14.0_f64.atan2(10.0);
+        let cone = ConicalSurface::new(
+            Point3::new(0.0, 0.0, 273.2),
+            Vec3::new(0.0, 0.0, -1.0),
+            half_angle,
+        )
+        .unwrap();
+        let cyl = CylindricalSurface::new(
+            Point3::new(0.0, -50.0, 215.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            60.0,
+        )
+        .unwrap();
+        // The cone from z = 192 down to z = 178, the cylinder from y = -40
+        // to y = 40.
+        let v_cone = (81.2 / half_angle.sin(), 95.2 / half_angle.sin());
+        let region = Aabb3 {
+            min: Point3::new(-59.98, -40.0, 178.0),
+            max: Point3::new(-47.23, 40.0, 192.0),
+        };
+        let curves = intersect_analytic_analytic_in_region(
+            AnalyticSurface::Cone(&cone),
+            AnalyticSurface::Cylinder(&cyl),
+            32,
+            Some(v_cone),
+            Some((10.0, 90.0)),
+            region,
+        )
+        .unwrap();
+        assert_eq!(curves.len(), 2);
+        for c in &curves {
+            let (t0, t1) = c.curve.domain();
+            for p in [c.curve.evaluate(t0), c.curve.evaluate(t1)] {
+                let on_edge = (p.z() - 192.0).abs() < 1e-6 || (p.y().abs() - 40.0).abs() < 1e-6;
+                assert!(on_edge, "a curve ends at {p:?}");
+            }
+        }
+    }
+
+    /// Long steps along the same cone and cylinder: a step whose predictor
+    /// leaves a band while the curve stays on it carries the march on, and
+    /// each end still lies on a band's edge.
+    #[test]
+    fn long_march_steps_end_on_the_band_edges() {
+        let half_angle = 14.0_f64.atan2(10.0);
+        let cone = ConicalSurface::new(
+            Point3::new(0.0, 0.0, 273.2),
+            Vec3::new(0.0, 0.0, -1.0),
+            half_angle,
+        )
+        .unwrap();
+        let cyl = CylindricalSurface::new(
+            Point3::new(0.0, -50.0, 215.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            60.0,
+        )
+        .unwrap();
+        let (a, b) = (
+            AnalyticSurface::Cone(&cone),
+            AnalyticSurface::Cylinder(&cyl),
+        );
+        let (surf_a, norm_a, u_a, _) = surface_closures(&a);
+        let (surf_b, norm_b, u_b, _) = surface_closures(&b);
+        let v_a = (81.2 / half_angle.sin(), 95.2 / half_angle.sin());
+        let v_b = (10.0, 90.0);
+        let seed = correct_to_intersection(
+            &a,
+            &b,
+            surf_a.as_ref(),
+            norm_a.as_ref(),
+            surf_b.as_ref(),
+            norm_b.as_ref(),
+            Point3::new(-53.0, -30.0, 187.0),
+            u_a,
+            v_a,
+            u_b,
+            v_b,
+            20,
+        );
+        for step in [0.5, 1.0, 2.0, 3.0] {
+            let points = march_analytic_intersection(
+                &a,
+                &b,
+                surf_a.as_ref(),
+                norm_a.as_ref(),
+                surf_b.as_ref(),
+                norm_b.as_ref(),
+                seed,
+                u_a,
+                v_a,
+                u_b,
+                v_b,
+                step,
+                true,
+                true,
+                None,
+            );
+            for p in [points[0], points[points.len() - 1]] {
+                let on_edge = (p.z() - 192.0).abs() < 1e-6 || (p.y().abs() - 40.0).abs() < 1e-6;
+                assert!(on_edge, "step {step}: the march ends at {p:?}");
+            }
+        }
     }
 
     #[test]

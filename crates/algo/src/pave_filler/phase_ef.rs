@@ -433,6 +433,8 @@ fn check_edge_face_pairs(
 
     let mut trims: Vec<Option<Option<crate::classifier::LateralTrim>>> =
         (0..faces.len()).map(|_| None).collect();
+    let mut sphere_trims: Vec<Option<Option<crate::classifier::SphereFaceTrim>>> =
+        (0..faces.len()).map(|_| None).collect();
     let mut regions: Vec<Option<Option<super::fill_face_info::PlaneRegion>>> =
         (0..faces.len()).map(|_| None).collect();
     let mut surveys = survey_pairs(
@@ -690,6 +692,38 @@ fn check_edge_face_pairs(
                 // the faces' boundaries; such a flip adds no crossing.
                 let rim = matches!(curve, EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_));
                 for (t, p) in found {
+                    let held = if rim {
+                        trim.holds_clear(p, 10.0 * tol.linear)
+                    } else {
+                        trim.holds(p, 10.0 * tol.linear)
+                    };
+                    if held
+                        && !crossings
+                            .iter()
+                            .any(|&(_, cp)| (p - cp).length() < tol.linear * 100.0)
+                    {
+                        crossings.push((t, p));
+                    }
+                }
+                crossings.sort_by(|a, b| a.0.total_cmp(&b.0));
+            }
+            // A curved edge crossing a ball between two samples (a ring's rim
+            // through a ball across it) shows only as the side of the sphere
+            // flipping, and counts where the face's own wires hold it.
+            if matches!(
+                curve,
+                EdgeCurve::NurbsCurve(_) | EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_)
+            ) && matches!(surface, FaceSurface::Sphere(_))
+                && let Some(trim) = sphere_trims[face_idx]
+                    .get_or_insert_with(|| {
+                        crate::classifier::SphereFaceTrim::new(topo, fid)
+                            .ok()
+                            .flatten()
+                    })
+                    .as_ref()
+            {
+                let rim = !matches!(curve, EdgeCurve::NurbsCurve(_));
+                for (t, p) in find_side_flips(&curve, start_pos, end_pos, t0, t1, surface, tol) {
                     let held = if rim {
                         trim.holds_clear(p, 10.0 * tol.linear)
                     } else {

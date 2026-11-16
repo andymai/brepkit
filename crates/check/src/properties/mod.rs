@@ -3,7 +3,7 @@
 pub mod accumulator;
 pub mod analytic;
 pub mod bbox;
-mod boundary;
+pub(crate) mod boundary;
 pub mod face_integrator;
 
 pub use accumulator::GProps;
