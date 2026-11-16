@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794804848606,
+  "lastUpdate": 1794806075965,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -71225,6 +71225,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24537725,
             "range": "± 117690",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "7c4f3a184b7baf8e18f03cd774a5e6e9d3f683bd",
+          "message": "fix(math): split a surface of degree zero, or not clamped, into its exact patches (#2506)\n\n## Summary\n\n`surface_to_bezier_patches` panicked with `attempt to divide by zero`\nfor a surface with a direction of degree zero. It now returns one\nconstant patch for each span of that direction. Each patch is now also\nthe surface over its span when a knot vector is not clamped. Closes\n#2479. Closes #2509.\n\nThe function raises each interior knot to the degree's multiplicity. It\nthen took a patch at each step of the degree through the control net\n(`(n_rows - 1) / degree_u`). `NurbsSurface::new` accepts a degree of\nzero, and a step of zero divides by zero. The same step took a patch\nacross an interior knot repeated past the degree. It also read the\ncontrol points of each span as its Bezier points. Where the knots at the\nends of a span fall short of the degree's multiplicity, that patch is a\ndifferent surface.\n\nThe function in `crates/math/src/nurbs/decompose.rs` now reads the spans\none by one:\n\n- `spans_of_width` returns each knot span `[knots[i], knots[i + 1]]` of\nthe domain that has width, however narrow. A bilinear sheet on the u\nknots 0, 0, 5e-16, 1, 1 runs from its first row to its second inside the\nfirst span.\n- `span_is_bezier` tells whether the control points `i - p` to `i` are\nthe Bezier points of span `i`. That is so when the `p` knots on each\nside of the span equal its end. Then the patch takes those control\npoints as they are, as before.\n- Otherwise the patch takes the Bezier points of the span by blossoming\nits de Boor points (`span_bezier`). `curve_bezier_between` now calls the\nsame function. This case comes at the ends of a knot vector that is not\nclamped (#2509). It also comes next to two knots nearer than `KNOT_EPS`\n(1e-15), which the insertion counts as one knot.\n- A blossomed Bezier point of weight zero over a numerator that is not\nzero has no point and weight. Weights of mixed sign can give one. The\nsplit then returns `MathError::PoleAtInfinity`, as the curve split does.\n\nFor a clamped surface with each interior knot at the degree's\nmultiplicity after the insertion, the patches are as before. I made the\ndegree-zero case work and did not return an error.\n`curve_to_bezier_segments` already splits a curve of degree zero into\nits spans, so the surface split now does the same.\n\nThe callers are `NurbsSurface::bezier_patches` (which\n`search_bezier_boxes`, `planar_patch_sections`,\n`find_ssi_seeds_subdivision` and `surfaces_apart` use),\n`RaySurface::new` and `intersect_curve_surface`. `search_bezier_boxes`\npasses over a direction of degree zero before it splits the surface. In\na scratch test, I gave a surface of degree (0, 2) to `RaySurface::new`,\n`intersect_curve_surface`, `surfaces_apart`, `intersect_nurbs_nurbs` and\n`intersect_plane_nurbs`. None of them panics.\n\n## Tests\n\n- `a_surface_of_degree_zero_cuts_one_patch` is the surface from #2479.\n- `a_degree_zero_direction_cuts_a_patch_per_span` has the u knots 0,\n0.25, 0.25, 1 and a rational quadratic in v: two patches.\n- `a_surface_of_degree_zero_both_ways_cuts_a_patch_per_cell` has six\npatches.\n- `a_knot_repeated_past_the_degree_cuts_no_patch_across_it` has two\npatches.\n- `a_narrow_span_keeps_its_patch` is the sheet on the u knots 0, 0,\n5e-16, 1, 1. It has two patches, and the box of the first reaches from x\n= 0 to x = 1.\n- `knots_a_hair_apart_cut_patches_on_the_surface` is quadratic in u on\nthe knots 0, 0, 0, 0.5, 0.5 + 2^-51, 1, 1, 1: three patches.\n- `a_surface_not_clamped_cuts_patches_on_its_domain` is a rational\nbicubic on the knots 0 to 8 each way: four patches.\n- `a_patch_with_a_pole_at_infinity_is_refused` has the weights 1, -1, 1\non a quadratic that is not clamped. The split returns `PoleAtInfinity`.\n- Each test of patches requires the count of patches and the degrees of\nthe surface. Each patch must match the surface to 1e-12 at 49 points\ninside its ranges.\n- On main, the first three tests panic with the division by zero, and\nthe fourth one gets three patches. Without the blossoming, the two tests\nafter `a_narrow_span_keeps_its_patch` fail.\n- `cargo test -p brepkit-math --lib`: 683 passed. `cargo clippy -p\nbrepkit-math --all-targets -- -D warnings` and\n`scripts/check-mul-add.sh` pass.\n- The four tests in `brepkit-operations` that use the split\n(`blend_surface`, `match_surface`, `fair_surface`,\n`blend_overshoot_area`), in release: 73 passed, 1 ignored.\n- The pose sweep and the truth audit at `b06b52548` give the same output\nas main `4e5184192`.\n- The pre-commit hook passed: `cargo fmt --check` and `cargo clippy\n--all-targets --all-features -- -D warnings`.",
+          "timestamp": "2026-11-15T21:10:55-08:00",
+          "tree_id": "68e84fa026c2d236b9a2907fee2421558b7a1024",
+          "url": "https://github.com/andymai/brepkit/commit/7c4f3a184b7baf8e18f03cd774a5e6e9d3f683bd"
+        },
+        "date": 1794806069066,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1088932,
+            "range": "± 8153",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1161386,
+            "range": "± 24523",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12727,
+            "range": "± 1023",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 694999,
+            "range": "± 7568",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24576953,
+            "range": "± 164829",
             "unit": "ns/iter"
           }
         ]
