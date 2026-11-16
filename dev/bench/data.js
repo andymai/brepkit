@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794806330138,
+  "lastUpdate": 1794806967147,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -71333,6 +71333,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24574000,
             "range": "± 75505",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "0ff2279d5c0c17a70a5e637d02e39ba0e18b3591",
+          "message": "fix(algo): read a section's windows against the face's true arcs (#2539)\n\n## Summary\n\nThe fuse of the `mars-rover` grouser onto its wheel fell back to a mesh\nof 8715 flat faces. It now gives a valid, exact solid of 37 faces (17\ncylinders, 20 planes). Closes #2487.\n\nThe wheel is a shell with radii 249.25 and 250. A ring at z = 60 to 64\nruns inside it from radius 224 to 249.25. The grouser's flat bottom at x\n= 249 and its side cross that ring within 0.25 of the ring's outer\ncircle.\n\nThe engine sends each section line to `clip_line_to_face_boundary`,\nwhich keeps the parts of the line that lie in the face. It read the\nmidpoint of each part against a polygon of 96 points on each circle. On\na radius of 249.25, the chords of that polygon lie up to 0.133 inside\nthe circle. The midpoints were at radius 249.17, so the polygon put them\noutside the face. The two ring faces got no sections, and the result had\n7 free edges.\n\n## What\n\n- `clip_line_to_face_boundary` in\n`crates/algo/src/builder/fill_images_faces.rs` reads each midpoint\nagainst `face_region_2d` first. That region holds the face's lines, arcs\nand ellipses as they are, and each NURBS edge as Bezier pieces.\n- The polygon still reads a midpoint within `boundary_eps` of the\nboundary. It also reads the midpoints on a face when the region for that\nface is not available.\n- The two midpoint tests use this order. One is for a face with no\nholes. The other is for a holed face that the line enters one time.\n\n## Tests\n\n- `a_grouser_fuses_onto_a_wheel` in\n`crates/io/tests/playground_example_repros_inmem.rs` is now active. The\nfuse runs with `mesh_fallback: false`. The result must be valid, keep a\ncurved face, and give a watertight mesh. It must hold a point in each\noperand and must not hold a point off both.\n- The same test compares volumes. The fused volume must equal the two\noperands' volumes less the volume of their intersect, to 1e-6. The\noperands measure 784541.49 and 10327.14, their intersect 501.56, and the\nfused solid 794367.08.\n- The test also reads 8000 points of a grid round the place where the\ngrouser crosses the ring. At each point, the fused solid must hold the\npoint exactly when one operand holds it.\n- On main, the same fuse in `replay_pair` gives a GFA result with 7 free\nedges, and the gate sends it to the mesh fallback.\n- On this branch: `playground_example_repros_inmem` passes (1 test, 2\nignored), and `cargo test -p brepkit-algo --lib` passes 426 tests.\n- On a tree with this change and the change for #2488, on `4e5184192`:\n- `cargo nextest run -p brepkit-math -p brepkit-algo -p brepkit-io -p\nbrepkit-operations -p brepkit-wasm -p brepkit-check -p brepkit-heal`\npasses 4343 tests, with 22 skipped.\n- The outputs of `pose_sweep` (497 lines) and `truth_audit` are the same\nas on `4e5184192`.\n- #2540 has the same change to `fuse_exactly` and `Grid` in the test\nfile, so the two PRs can merge in either order.\n\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes the `mars-rover` grouser fuse falling back to a mesh of 8715 flat\nfaces. It now produces a valid, watertight solid of 37 faces, closing\n#2487.\n\nThe ring inside the wheel (radius 249.25) had its section windows read\nagainst a 96-point sampled polygon per circle. Those chords lie up to\n0.133 inside the circle, so windows within 0.25 of the rim were\nclassified as outside, the ring received no sections, and the result had\n7 free edges.\n\n**Changes**\n- `clip_line_to_face_boundary` reads each window's midpoint against the\nface's true curves (lines, arcs, ellipses) first; the polygon only reads\npoints within `boundary_eps` of the boundary or when the curve region is\nunavailable.\n- The `a_grouser_fuses_onto_a_wheel` test is now enabled and checks\nfused volume against operands minus their intersection, and classifies\n8000 grid points where the grouser crosses the ring. On main, the same\nfuse produces 7 free edges and triggers the mesh fallback.\n\n<sup>Written for commit 66854167d46b7f55ee8be3ebeebb456685a87a2b.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2539?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2539?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2539&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-11-16T05:25:06Z",
+          "tree_id": "f7b76834d4aa8b021bcb2a136bef5eb261c87eda",
+          "url": "https://github.com/andymai/brepkit/commit/0ff2279d5c0c17a70a5e637d02e39ba0e18b3591"
+        },
+        "date": 1794806955071,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 804700,
+            "range": "± 21304",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 838637,
+            "range": "± 21257",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 9053,
+            "range": "± 15",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 491397,
+            "range": "± 8531",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 17981600,
+            "range": "± 24785",
             "unit": "ns/iter"
           }
         ]
