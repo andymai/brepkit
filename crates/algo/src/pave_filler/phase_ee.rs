@@ -127,6 +127,35 @@ struct EdgeData {
     bbox_min: Point3,
     /// Axis-aligned bounding box maximum corner.
     bbox_max: Point3,
+    /// The edge's sample points and chord sags, made for its first pair
+    /// that samples them and kept for the others.
+    sampled: std::cell::OnceCell<SampledEdgeChords>,
+}
+
+/// The [`SAMPLE_CHORDS`] chords of an edge: their `SAMPLE_CHORDS + 1` end
+/// points, evenly spaced in the edge's parameter, and for each chord a
+/// bound on how far the curve stands off it ([`chord_sags`]).
+struct SampledEdgeChords {
+    pts: Vec<SegmentEndpoint>,
+    sags: Vec<f64>,
+}
+
+/// How many chords a sampled edge is read along.
+const SAMPLE_CHORDS: usize = 32;
+
+impl SampledEdgeChords {
+    fn new(curve: &EdgeCurve, data: &EdgeData) -> Self {
+        let n = SAMPLE_CHORDS;
+        let pts: Vec<SegmentEndpoint> = (0..=n)
+            .map(|i| {
+                let t = data.t0 + (data.t1 - data.t0) * (i as f64 / n as f64);
+                let pos = curve.evaluate_with_endpoints(t, data.start_pos, data.end_pos);
+                SegmentEndpoint { t, pos }
+            })
+            .collect();
+        let sags = chord_sags(curve, &pts);
+        Self { pts, sags }
+    }
 }
 
 /// Collect pre-computed data for a set of edges.
@@ -146,6 +175,7 @@ fn collect_edge_data(topo: &Topology, edges: &[EdgeId]) -> Result<Vec<EdgeData>,
             t1,
             bbox_min: span.min,
             bbox_max: span.max,
+            sampled: std::cell::OnceCell::new(),
         });
     }
     Ok(data)
@@ -210,28 +240,17 @@ fn find_edge_edge_crossings(
         return Ok(line_circle_intersection(eb, ea, circle, tol, true));
     }
 
-    let n: usize = 32;
+    let n = SAMPLE_CHORDS;
     let mut crossings = Vec::new();
 
-    let pts_a: Vec<SegmentEndpoint> = (0..=n)
-        .map(|i| {
-            let t = ea.t0 + (ea.t1 - ea.t0) * (i as f64 / n as f64);
-            let pos = edge_a
-                .curve()
-                .evaluate_with_endpoints(t, ea.start_pos, ea.end_pos);
-            SegmentEndpoint { t, pos }
-        })
-        .collect();
-
-    let pts_b: Vec<SegmentEndpoint> = (0..=n)
-        .map(|i| {
-            let t = eb.t0 + (eb.t1 - eb.t0) * (i as f64 / n as f64);
-            let pos = edge_b
-                .curve()
-                .evaluate_with_endpoints(t, eb.start_pos, eb.end_pos);
-            SegmentEndpoint { t, pos }
-        })
-        .collect();
+    let sampled_a = ea
+        .sampled
+        .get_or_init(|| SampledEdgeChords::new(edge_a.curve(), ea));
+    let sampled_b = eb
+        .sampled
+        .get_or_init(|| SampledEdgeChords::new(edge_b.curve(), eb));
+    let (pts_a, sags_a) = (sampled_a.pts.as_slice(), sampled_a.sags.as_slice());
+    let (pts_b, sags_b) = (sampled_b.pts.as_slice(), sampled_b.sags.as_slice());
 
     let domain_a = (ea.t0.min(ea.t1) - tol.linear)..=(ea.t0.max(ea.t1) + tol.linear);
     let domain_b = (eb.t0.min(eb.t1) - tol.linear)..=(eb.t0.max(eb.t1) + tol.linear);
@@ -263,10 +282,13 @@ fn find_edge_edge_crossings(
     let mut alongside: Vec<(usize, usize)> = Vec::new();
     let mut alongside_hits: Vec<ChordApproach> = Vec::new();
     let mut crossed: Vec<Option<f64>> = vec![None; n * n];
+    let mut near: Vec<(usize, usize, ChordApproach)> = Vec::new();
     for i in 0..n {
         for j in 0..n {
-            // Quick distance check: if minimum endpoint distance exceeds
-            // the sum of segment lengths + tolerance, skip.
+            let (chord_a, chord_b) = ([&pts_a[i], &pts_a[i + 1]], [&pts_b[j], &pts_b[j + 1]]);
+            let reach = sags_a[i] + sags_b[j];
+            // Quick distance check: a point the two curves share lies
+            // within a chord's length and its sag of that chord's ends.
             let min_dist = (pts_a[i].pos - pts_b[j].pos)
                 .length()
                 .min((pts_a[i].pos - pts_b[j + 1].pos).length())
@@ -276,15 +298,12 @@ fn find_edge_edge_crossings(
             let seg_len_a = (pts_a[i + 1].pos - pts_a[i].pos).length();
             let seg_len_b = (pts_b[j + 1].pos - pts_b[j].pos).length();
 
-            if min_dist > seg_len_a + seg_len_b + tol.linear {
+            if min_dist > seg_len_a + seg_len_b + reach + tol.linear {
                 continue;
             }
 
-            if let Some(hit) = closest_segment_pair(
-                [&pts_a[i], &pts_a[i + 1]],
-                [&pts_b[j], &pts_b[j + 1]],
-                tol.linear,
-            ) && domain_a.contains(&hit.t_a)
+            if let Some(hit) = closest_segment_pair(chord_a, chord_b, tol.linear)
+                && domain_a.contains(&hit.t_a)
                 && domain_b.contains(&hit.t_b)
             {
                 if hit.parallel {
@@ -294,7 +313,44 @@ fn find_edge_edge_crossings(
                     crossed[i * n + j] = Some(hit.t_a);
                     read(&mut crossings, &hit);
                 }
+            } else if reach > 0.0
+                && let Some(hit) = closest_segment_pair(chord_a, chord_b, reach + tol.linear)
+            {
+                near.push((i, j, hit));
             }
+        }
+    }
+
+    // A chord stands off its curve by up to its sag, so where the two curves
+    // meet between sample points, the chords there pass within their two
+    // sags of each other. Where the curves are not in one plane, such chords
+    // can miss each other by more than the tolerance. Gauss-Newton on the
+    // curves, from the chords' closest points, reads such a crossing. A
+    // pair of chords whose spans hold a crossing read already is passed over.
+    for (i, j, hit) in near {
+        let spans = |t: f64, (p, q): (&SegmentEndpoint, &SegmentEndpoint)| {
+            t >= p.t.min(q.t) && t <= p.t.max(q.t)
+        };
+        if crossings.iter().any(|&(t_a, t_b, _)| {
+            spans(t_a, (&pts_a[i], &pts_a[i + 1])) && spans(t_b, (&pts_b[j], &pts_b[j + 1]))
+        }) {
+            continue;
+        }
+        if let Some((t_a, t_b, point)) = refine_on_curves(
+            (edge_a.curve(), ea),
+            (edge_b.curve(), eb),
+            (hit.t_a, hit.t_b),
+            tol.linear,
+        ) {
+            crossed[i * n + j] = Some(t_a);
+            let at = ChordApproach {
+                t_a,
+                t_b,
+                point,
+                gap: 0.0,
+                parallel: false,
+            };
+            read(&mut crossings, &at);
         }
     }
 
@@ -373,12 +429,93 @@ fn find_edge_edge_crossings(
     drop_crossings_along_one_curve(
         &mut crossings,
         &matched,
-        (edge_a.curve(), ea, &pts_a),
-        (edge_b.curve(), eb, &pts_b),
+        (edge_a.curve(), ea, pts_a),
+        (edge_b.curve(), eb, pts_b),
         tol.linear,
     );
 
     Ok(crossings)
+}
+
+/// For each sample chord of an edge, a bound on how far the edge's curve
+/// stands off the chord between the chord's two sample points.
+///
+/// A line is its chord. An arc of radius `r` over `d` radians, up to a half
+/// turn, stands off by at most `r (1 - cos(d / 2))`, at its middle, and a
+/// longer arc by at most its diameter. An ellipse arc over `d` radians
+/// stands off by at most `d^2 / 8` times the largest second derivative of
+/// the curve, which is its major radius. A B-spline between two knots lies
+/// in the hull of its Bezier poles when their weights are positive, so its
+/// farthest pole bounds it there. A piece with a weight that is not
+/// positive has no bound.
+fn chord_sags(curve: &EdgeCurve, pts: &[SegmentEndpoint]) -> Vec<f64> {
+    pts.windows(2)
+        .map(|w| {
+            let turn = (w[1].t - w[0].t).abs();
+            match curve {
+                EdgeCurve::Line => 0.0,
+                EdgeCurve::Circle(circle) if turn <= std::f64::consts::PI => {
+                    let half = (0.25 * turn).sin();
+                    2.0 * circle.radius() * half * half
+                }
+                EdgeCurve::Circle(circle) => 2.0 * circle.radius(),
+                EdgeCurve::Ellipse(ellipse) => ellipse.semi_major() * turn * turn / 8.0,
+                EdgeCurve::NurbsCurve(nurbs) => nurbs_chord_sag(nurbs, w),
+            }
+        })
+        .collect()
+}
+
+/// The farthest of the Bezier poles of a B-spline between two sample
+/// points from the chord between them, piece by piece between its knots.
+fn nurbs_chord_sag(
+    curve: &brepkit_math::nurbs::curve::NurbsCurve,
+    chord: &[SegmentEndpoint],
+) -> f64 {
+    let (d0, d1) = curve.domain();
+    let (lo, hi) = (
+        chord[0].t.min(chord[1].t).max(d0),
+        chord[0].t.max(chord[1].t).min(d1),
+    );
+    if lo > hi {
+        return f64::INFINITY;
+    }
+    let mut cuts = vec![lo];
+    cuts.extend(curve.knots().iter().copied().filter(|&k| k > lo && k < hi));
+    cuts.push(hi);
+    cuts.dedup_by(|a, b| (*a - *b).abs() <= 0.0);
+    let (from, to) = (chord[0].pos, chord[1].pos);
+    let mut sag = 0.0_f64;
+    for piece in cuts.windows(2) {
+        let Ok(poles) =
+            brepkit_math::nurbs::decompose::curve_bezier_between(curve, piece[0], piece[1])
+        else {
+            return f64::INFINITY;
+        };
+        for [x, y, z, w] in poles {
+            if w.is_nan() || w <= 0.0 {
+                return f64::INFINITY;
+            }
+            let off = distance_to_segment(Point3::new(x / w, y / w, z / w), (from, to));
+            if !off.is_finite() {
+                return f64::INFINITY;
+            }
+            sag = sag.max(off);
+        }
+    }
+    sag
+}
+
+/// The distance from `p` to the segment from `a` to `b`.
+fn distance_to_segment(p: Point3, (a, b): (Point3, Point3)) -> f64 {
+    let along = b - a;
+    let length2 = along.dot(along);
+    let s = if length2 > 0.0 {
+        ((p - a).dot(along) / length2).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    (p - (a + along * s)).length()
 }
 
 /// One edge of a pair: its curve, its data and its sample points.
@@ -1233,6 +1370,7 @@ mod tests {
             t1: 1.0,
             bbox_min: start,
             bbox_max: end,
+            sampled: std::cell::OnceCell::new(),
         }
     }
 
@@ -1245,6 +1383,7 @@ mod tests {
             t1,
             bbox_min: Point3::new(0.0, 0.0, 0.0),
             bbox_max: Point3::new(0.0, 0.0, 0.0),
+            sampled: std::cell::OnceCell::new(),
         }
     }
 
@@ -2276,6 +2415,101 @@ mod tests {
             assert_eq!(hits.len(), 1, "{hits:?}");
             assert!((hits[0].2 - through).length() < 1e-9, "{hits:?}");
         }
+    }
+
+    /// A line edge, or a degree-1 B-spline on the same line, through the
+    /// point of `curve` at 0.6 along `dir`, from `-1` to `1.3` times `dir`
+    /// from it, and that point.
+    fn lines_through(
+        topo: &mut Topology,
+        curve: &brepkit_math::nurbs::curve::NurbsCurve,
+        dir: Vec3,
+    ) -> ([EdgeId; 2], Point3) {
+        let through = curve.evaluate(0.6);
+        let (from, to) = (through - dir, through + dir * 1.3);
+        let spline = brepkit_math::nurbs::curve::NurbsCurve::new(
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![from, to],
+            vec![1.0; 2],
+        )
+        .unwrap();
+        (
+            [
+                add_edge(topo, from, to, EdgeCurve::Line),
+                add_edge(topo, from, to, EdgeCurve::NurbsCurve(spline)),
+            ],
+            through,
+        )
+    }
+
+    /// One crossing of `ea` and `eb`, either way round, at `through`.
+    fn crosses_once_at(topo: &Topology, ea: EdgeId, eb: EdgeId, through: Point3) {
+        for (ea, eb) in [(ea, eb), (eb, ea)] {
+            let hits = crossings(topo, ea, eb);
+            assert_eq!(hits.len(), 1, "{hits:?}");
+            assert!((hits[0].2 - through).length() < 1e-9, "{hits:?}");
+        }
+    }
+
+    /// A cubic arch in the plane `z = 0`, and a line across that plane
+    /// through the arch's point at 0.6, between two sample points. The
+    /// chords of the arch stand off it there, and a line out of its plane
+    /// passes them at a distance.
+    #[test]
+    fn a_line_across_the_plane_of_a_cubic_crosses_it_between_samples() {
+        let curve = arch(0.0);
+        let mut topo = Topology::new();
+        let ea = edge_on(&mut topo, &curve, 0.0, 1.0);
+        let (lines, through) = lines_through(&mut topo, &curve, Vec3::new(0.3, 0.2, 1.0));
+        for eb in lines {
+            crosses_once_at(&topo, ea, eb, through);
+        }
+    }
+
+    /// The arch with its inner poles 0.001 out of its plane, one up and one
+    /// down, and a line through its point at 0.6 along `(1, 1, 0)`.
+    #[test]
+    fn a_line_across_a_cubic_a_hair_out_of_plane_crosses_it_between_samples() {
+        let curve = arch(0.001);
+        let mut topo = Topology::new();
+        let ea = edge_on(&mut topo, &curve, 0.0, 1.0);
+        let (lines, through) = lines_through(&mut topo, &curve, Vec3::new(1.0, 1.0, 0.0));
+        for eb in lines {
+            crosses_once_at(&topo, ea, eb, through);
+        }
+    }
+
+    /// Two whole circles at right angles that meet at one point, between
+    /// the sample points of each.
+    #[test]
+    fn circles_at_right_angles_cross_between_samples() {
+        let a = Circle3D::new_with_ref(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            1.0,
+            Vec3::new(1.0, 0.0, 0.0),
+        )
+        .unwrap();
+        let through = a.evaluate(0.1);
+        let tangent = Vec3::new(-0.1_f64.sin(), 0.1_f64.cos(), 0.0);
+        let (radial, up) = (
+            Vec3::new(0.1_f64.cos(), 0.1_f64.sin(), 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+        );
+        // B's point at 0 lies 0.3 rad round from the point it shares with A.
+        let b = Circle3D::new_with_ref(
+            through + up * 0.5,
+            tangent,
+            0.5,
+            radial * 0.3_f64.sin() - up * 0.3_f64.cos(),
+        )
+        .unwrap();
+        let mut topo = Topology::new();
+        let (start_a, start_b) = (a.evaluate(0.0), b.evaluate(0.0));
+        let ea = add_edge(&mut topo, start_a, start_a, EdgeCurve::Circle(a));
+        let eb = add_edge(&mut topo, start_b, start_b, EdgeCurve::Circle(b));
+        crosses_once_at(&topo, ea, eb, through);
     }
 
     #[test]
