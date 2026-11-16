@@ -382,27 +382,32 @@ fn drilled_disc(topo: &mut Topology, top: f64, pose: &Mat4) -> SolidId {
 
 /// A hole drilled up from the bottom into the rim's chamfer touches neither
 /// the top nor the wall, but the chamfer would cut through its end: the
-/// pick is refused. A hole that stops short of the chamfer leaves it whole.
+/// pick is refused. A hole that stops short of the chamfer leaves it whole,
+/// even where its end lies within the chamfer's distance of the rim (at
+/// 2.6 its end reaches `r + z = 12.39`, where the chamfer's cone is at
+/// 12.5).
 #[test]
 fn a_hole_from_below_into_the_rims_chamfer_refuses_it() {
     let d = 0.5;
-    let kept = chamfered(d) - PI * 0.01 * 2.0;
     for (name, pose) in poses() {
         let mut topo = Topology::new();
         let into = drilled_disc(&mut topo, 2.8, &pose);
         let edges = outline(&topo, into, &pose);
         assert!(chamfer(&mut topo, into, &edges, d).is_err(), "{name}");
 
-        let short = drilled_disc(&mut topo, 2.0, &pose);
-        let edges = outline(&topo, short, &pose);
-        let result = chamfer(&mut topo, short, &edges, d).unwrap();
-        let report = validate_solid(&topo, result).unwrap();
-        assert!(report.is_valid(), "{name}: {:?}", report.issues);
-        let volume = solid_volume(&topo, result, 0.001).unwrap();
-        assert!(
-            (volume - kept).abs() < 1e-9 * kept,
-            "{name}: volume {volume}, expected {kept}"
-        );
+        for top in [2.0, 2.6] {
+            let kept = chamfered(d) - PI * 0.01 * top;
+            let short = drilled_disc(&mut topo, top, &pose);
+            let edges = outline(&topo, short, &pose);
+            let result = chamfer(&mut topo, short, &edges, d).unwrap();
+            let report = validate_solid(&topo, result).unwrap();
+            assert!(report.is_valid(), "{name} {top}: {:?}", report.issues);
+            let volume = solid_volume(&topo, result, 0.001).unwrap();
+            assert!(
+                (volume - kept).abs() < 1e-9 * kept,
+                "{name} {top}: volume {volume}, expected {kept}"
+            );
+        }
     }
 }
 

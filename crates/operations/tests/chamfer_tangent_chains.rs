@@ -497,6 +497,76 @@ fn a_notchs_corner_on_its_hollow_wall_takes_a_flat_chamfer() {
     }
 }
 
+/// The block `[-10, 0] x [-10, 10]` with a half disc of radius 5 on its side
+/// at `x = 0`, extruded 4 high: the edge where the block's side meets the
+/// disc's wall at `(0, 5)` is concave and runs along a ruling. Its chamfer
+/// fills a prism whose section is the triangle between the edge and the two
+/// contacts, less the disc's segment between the edge and the ruling, which
+/// the disc already fills.
+#[test]
+fn a_concave_corner_on_a_round_wall_fills_a_flat_chamfer() {
+    let (r, d, height) = (5.0_f64, 0.5_f64, 4.0);
+    let turn = 2.0 * (0.5 * d / r).asin();
+    let (cap, wall) = ([0.0, r + d], [r * turn.sin(), r * turn.cos()]);
+    let triangle = 0.5 * ((cap[0] - 0.0) * (wall[1] - r) - (cap[1] - r) * (wall[0] - 0.0)).abs();
+    let section = triangle - 0.5 * r * r * (turn - turn.sin());
+    let plain = 10.0 * 20.0 * height + 0.5 * PI * r * r * height;
+    for (name, pose) in poses() {
+        let mut topo = Topology::new();
+        let p = |t: &mut Topology, x: f64, y: f64| {
+            t.add_vertex(Vertex::new(Point3::new(x, y, 0.0), 1e-7))
+        };
+        let corners = [
+            p(&mut topo, -10.0, -10.0),
+            p(&mut topo, 0.0, -10.0),
+            p(&mut topo, 0.0, -r),
+            p(&mut topo, 0.0, r),
+            p(&mut topo, 0.0, 10.0),
+            p(&mut topo, -10.0, 10.0),
+        ];
+        let arc = EdgeCurve::Circle(
+            Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), r).unwrap(),
+        );
+        let edges: Vec<_> = (0..6)
+            .map(|i| {
+                let curve = if i == 2 { arc.clone() } else { EdgeCurve::Line };
+                let edge = Edge::new(corners[i], corners[(i + 1) % 6], curve);
+                OrientedEdge::new(topo.add_edge(edge), true)
+            })
+            .collect();
+        let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+        let plane = FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: 0.0,
+        };
+        let face = topo.add_face(Face::new(wire, Vec::new(), plane));
+        let solid = extrude(&mut topo, face, Vec3::new(0.0, 0.0, 1.0), height).unwrap();
+        let corner = solid_edges(&topo, solid)
+            .unwrap()
+            .into_iter()
+            .find(|&e| {
+                let edge = topo.edge(e).unwrap();
+                let a = topo.vertex(edge.start()).unwrap().point();
+                let b = topo.vertex(edge.end()).unwrap().point();
+                (a.z() - b.z()).abs() > 1.0 && a.x().abs() < 1e-9 && (a.y() - r).abs() < 1e-9
+            })
+            .unwrap();
+        transform_solid(&mut topo, solid, &pose).unwrap();
+
+        let result = chamfer(&mut topo, solid, &[corner], d).unwrap();
+
+        assert_exact(&topo, result, plain + section * height, name);
+        assert!(
+            inside(&topo, result, &pose, Point3::new(0.05, 5.05, 2.0)),
+            "{name}"
+        );
+        assert!(
+            !inside(&topo, result, &pose, Point3::new(0.4, 5.4, 2.0)),
+            "{name}"
+        );
+    }
+}
+
 /// Both rims of the D and its upright at `y = 5`: each rim's chamfer ends
 /// square at the back wall and cuts the other upright back from its end. At
 /// 2.1 the two cuts pass each other on that upright, 4 high, and the rims'

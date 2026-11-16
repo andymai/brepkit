@@ -1223,11 +1223,21 @@ fn plan_on(
     for (piece, piece_ends) in pieces.iter().zip(&piece_sections) {
         let section = piece_ends[0];
         let mut area = 0.5 * section.cap_dir.cross(section.wall_dir).length() * d * d;
+        // A wall running under the cap's outward side is a convex edge, whose
+        // triangle is material; above it, the triangle fills a corner.
+        let cap_out = if topo.face(piece.cap)?.is_reversed() {
+            -piece.cap_normal
+        } else {
+            piece.cap_normal
+        };
+        let convex = section.wall_dir.dot(cap_out) < 0.0;
         // Beside a ruling the triangle's wall side is an arc, which bulges
-        // into the material of a convex wall and out of a concave one's.
+        // inside its circle: into the region the chamfer takes or fills where
+        // that region lies inside the circle, that is, where a convex edge
+        // meets a round wall or a concave edge meets a hollow one.
         if let WallSide::Ruling { cylinder, turn } = &piece.wall_side {
             let bulge = 0.5 * cylinder.radius().powi(2) * (turn.abs() - turn.abs().sin());
-            if topo.face(piece.wall)?.is_reversed() {
+            if convex == topo.face(piece.wall)?.is_reversed() {
                 area -= bulge;
             } else {
                 area += bulge;
@@ -1249,18 +1259,7 @@ fn plan_on(
             }
             EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_) => return Ok(None),
         };
-        // A wall running under the cap's outward side is a convex edge, whose
-        // triangle is material; above it, the triangle fills a corner.
-        let cap_out = if topo.face(piece.cap)?.is_reversed() {
-            -piece.cap_normal
-        } else {
-            piece.cap_normal
-        };
-        let sign = if section.wall_dir.dot(cap_out) < 0.0 {
-            -1.0
-        } else {
-            1.0
-        };
+        let sign = if convex { -1.0 } else { 1.0 };
         volume_change += sign * area * path;
     }
     // The chamfers at a corner meet within a ball about it reaching its
@@ -1305,6 +1304,8 @@ struct Reach {
     axes: [Vec3; 3],
     lo: [f64; 3],
     hi: [f64; 3],
+    /// The pieces whose chamfer faces bound the region.
+    pieces: Vec<usize>,
 }
 
 impl Reach {
@@ -1426,6 +1427,101 @@ impl Reach {
     }
 }
 
+/// Points whose convex hull holds `face`: its boundary's vertices and the
+/// poles of its arcs, split to at most 60 degrees, or a NURBS curve's poles;
+/// and for a surface that can bulge past its boundary, a box about a sphere
+/// or a torus, or a NURBS surface's poles. A plane, cylinder or cone face
+/// lies in its boundary's hull: each point of it is on a segment, or a
+/// ruling, between two boundary points. `None` where a weight is not
+/// positive, so the poles do not bound the curve or surface.
+fn face_hull_points(topo: &Topology, face: FaceId) -> Result<Option<Vec<Point3>>, OperationsError> {
+    let mut points = Vec::new();
+    let data = topo.face(face)?;
+    for wid in std::iter::once(data.outer_wire()).chain(data.inner_wires().iter().copied()) {
+        for oe in topo.wire(wid)?.edges() {
+            let edge = topo.edge(oe.edge())?;
+            let (a, b) = (
+                topo.vertex(edge.start())?.point(),
+                topo.vertex(edge.end())?.point(),
+            );
+            points.extend([a, b]);
+            let conic = match edge.curve() {
+                EdgeCurve::Line => None,
+                EdgeCurve::Circle(c) => {
+                    Some((c.center(), c.u_axis() * c.radius(), c.v_axis() * c.radius()))
+                }
+                EdgeCurve::Ellipse(e) => Some((
+                    e.center(),
+                    e.u_axis() * e.semi_major(),
+                    e.v_axis() * e.semi_minor(),
+                )),
+                EdgeCurve::NurbsCurve(n) => {
+                    if !n.weights().iter().all(|w| *w > 0.0) {
+                        return Ok(None);
+                    }
+                    points.extend_from_slice(n.control_points());
+                    None
+                }
+            };
+            if let Some((center, u, v)) = conic {
+                let (t0, t1) = if edge.start() == edge.end() {
+                    (0.0, TAU)
+                } else {
+                    edge.curve().domain_with_endpoints(a, b)
+                };
+                let count = ((t1 - t0).abs() / (PI / 3.0)).ceil().max(1.0);
+                let step = (t1 - t0) / count;
+                let reach = 1.0 / (0.5 * step).cos();
+                let mut t = t0;
+                for _ in 0..count as usize {
+                    let mid = t + 0.5 * step;
+                    points.push(center + u * t.cos() + v * t.sin());
+                    points.push(center + (u * mid.cos() + v * mid.sin()) * reach);
+                    t += step;
+                }
+            }
+        }
+    }
+    let corners = |center: Point3, axes: [Vec3; 3], half: [f64; 3]| -> Vec<Point3> {
+        (0..8_usize)
+            .map(|k| {
+                let mut p = center;
+                for axis in 0..3 {
+                    let sign = if (k >> axis) & 1 == 0 { -1.0 } else { 1.0 };
+                    p = p + axes[axis] * (sign * half[axis]);
+                }
+                p
+            })
+            .collect()
+    };
+    match data.surface() {
+        FaceSurface::Plane { .. } | FaceSurface::Cylinder(_) | FaceSurface::Cone(_) => {}
+        FaceSurface::Sphere(sphere) => {
+            let world = [
+                Vec3::new(1.0, 0.0, 0.0),
+                Vec3::new(0.0, 1.0, 0.0),
+                Vec3::new(0.0, 0.0, 1.0),
+            ];
+            points.extend(corners(sphere.center(), world, [sphere.radius(); 3]));
+        }
+        FaceSurface::Torus(torus) => {
+            let outer = torus.major_radius() + torus.minor_radius();
+            points.extend(corners(
+                torus.center(),
+                [torus.x_axis(), torus.y_axis(), torus.z_axis()],
+                [outer, outer, torus.minor_radius()],
+            ));
+        }
+        FaceSurface::Nurbs(surface) => {
+            if !surface.weights().iter().flatten().all(|w| *w > 0.0) {
+                return Ok(None);
+            }
+            points.extend(surface.control_points().iter().flatten().copied());
+        }
+    }
+    Ok(Some(points))
+}
+
 /// Whether a face meets a reach's box: for a plane face, exactly, where its
 /// region meets the polygon its plane cuts from the box; for any other face,
 /// always, so that the box test alone decides it.
@@ -1537,6 +1633,7 @@ fn wedges_are_clear(
                         axes: [along, out, c.normal()],
                         lo: [-width, radius * half.cos() - reach, -reach],
                         hi: [width, radius + reach, reach],
+                        pieces: vec![index],
                     });
                     mid += step;
                 }
@@ -1551,6 +1648,7 @@ fn wedges_are_clear(
                     axes: [along, into, along.cross(into)],
                     lo: [-reach; 3],
                     hi: [run.length() + reach, reach, reach],
+                    pieces: vec![index],
                 });
             }
         }
@@ -1572,17 +1670,49 @@ fn wedges_are_clear(
             axes: frames[corner.pieces[0]],
             lo: [-radius; 3],
             hi: [radius; 3],
+            pieces: corner.pieces.to_vec(),
         });
+    }
+    // Each piece's chamfer face, and the sign of its level on the side it
+    // takes or fills, which holds the edge, where the other side is convex:
+    // either side of a plane, or the inside of a cone.
+    let mut kept: Vec<Option<(Band, f64)>> = Vec::with_capacity(plan.pieces.len());
+    for (index, piece) in plan.pieces.iter().enumerate() {
+        let [a, b] = plan.piece_sections[index];
+        let band = piece.band(&a, &b, d)?;
+        let removed = band.level(piece.midpoint()).signum();
+        let convex_kept = match band {
+            Band::Plane { .. } => true,
+            Band::Cone(_) => removed > 0.0,
+        };
+        kept.push(convex_kept.then_some((band, removed)));
     }
     for &face in faces {
         if own.contains(&face) {
             continue;
         }
+        let mut hull: Option<Option<Vec<Point3>>> = None;
         for reach in &reaches {
             match reach.face_box(topo, face)? {
-                Some(bounds) if !reach.meets(bounds) => {}
-                Some(_) if !plane_meets_reach(topo, face, reach)? => {}
-                _ => return Ok(false),
+                Some(bounds) if !reach.meets(bounds) => continue,
+                Some(_) if !plane_meets_reach(topo, face, reach)? => continue,
+                _ => {}
+            }
+            // The face's hull lies on the kept side of every chamfer face
+            // that bounds the region, where that side is convex.
+            if hull.is_none() {
+                hull = Some(face_hull_points(topo, face)?);
+            }
+            let Some(Some(points)) = &hull else {
+                return Ok(false);
+            };
+            for &index in &reach.pieces {
+                let Some((band, removed)) = &kept[index] else {
+                    return Ok(false);
+                };
+                if points.iter().any(|&p| band.level(p) * removed >= -tol) {
+                    return Ok(false);
+                }
             }
         }
     }
