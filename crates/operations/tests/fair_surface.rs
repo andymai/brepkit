@@ -739,3 +739,37 @@ fn the_energy_measure_reads_a_known_shape() {
     let got = bending_energy(&surface);
     assert!((got - want).abs() < 1e-5 * want, "{got} against {want}");
 }
+
+/// A bumpy sheet whose section runs out, back and out again, as the cubic
+/// with control values 0, 12, -6, 6 across it does, folds back over itself.
+/// The faired copy folds too, and is refused.
+#[test]
+fn a_surface_that_folds_is_not_faired() {
+    let count = 9;
+    let across = [0.0, 12.0, -6.0, 6.0];
+    let net: Vec<Vec<Point3>> = (0..count)
+        .map(|i| {
+            let y = 10.0 * i as f64 / (count - 1) as f64;
+            (0..4)
+                .map(|j| {
+                    let inside = i > 0 && i < count - 1 && j > 0 && j < 3;
+                    let bump = if inside && (i + j) % 2 == 0 { 0.3 } else { 0.0 };
+                    Point3::new(across[j], y, bump)
+                })
+                .collect()
+        })
+        .collect();
+    let weights = vec![vec![1.0; 4]; count];
+    let knots = (uniform_knots(count, 3), uniform_knots(4, 3));
+    let mut topo = Topology::new();
+    let mut b = Builder {
+        topo: &mut topo,
+        pose: Pose::turned(),
+    };
+    let (face, _) = net_sheet(&mut b, (3, 3), knots, &net, &weights);
+    let refused = fair_surface(&mut topo, face, 0.1);
+    let Err(OperationsError::InvalidInput { reason }) = refused else {
+        panic!("{refused:?}");
+    };
+    assert!(reason.contains("fold"), "{reason}");
+}

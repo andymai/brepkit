@@ -72,7 +72,8 @@ const REACHES_BOUNDARY: f64 = 1e-9;
 /// # Errors
 ///
 /// Returns [`OperationsError::InvalidInput`] if `tolerance` is not positive
-/// and finite. A topology lookup can also fail.
+/// and finite, or if the faired surface folds back over itself. A topology
+/// lookup can also fail.
 pub fn fair_surface(
     topo: &mut Topology,
     face: FaceId,
@@ -91,6 +92,7 @@ pub fn fair_surface(
     let Some(faired) = fair_net(&source, &held, tolerance)? else {
         return crate::copy::copy_face(topo, face);
     };
+    super::refuse_fold(&faired, "the faired surface")?;
     let copy = crate::copy::copy_face(topo, face)?;
     topo.face_mut(copy)?.set_surface(FaceSurface::Nurbs(faired));
     Ok(copy)

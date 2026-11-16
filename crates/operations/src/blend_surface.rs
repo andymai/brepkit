@@ -14,6 +14,7 @@
 
 mod chain;
 mod fair;
+mod fold;
 mod match_edge;
 mod neighbour;
 mod rows;
@@ -130,8 +131,9 @@ impl BlendSurfaceOptions {
 /// Returns [`OperationsError::InvalidInput`] if a weight is not positive and
 /// finite, either chain is empty, breaks, repeats an edge, doubles back or
 /// leaves its face, an edge is a seam of its face or not on its boundary, one
-/// chain is closed and the other open, or the chains touch away from their
-/// ends. A topology lookup can also fail.
+/// chain is closed and the other open, the chains touch away from their
+/// ends, or the surface folds back over itself: its normal turns over along
+/// a line. A topology lookup can also fail.
 pub fn blend_surface(
     topo: &mut Topology,
     chain_a: &[EdgeId],
@@ -233,6 +235,7 @@ pub fn blend_surface(
     }
 
     let surface = surface_from_rows(&space, &fitted, degree_across)?;
+    refuse_fold(&surface, "the blend surface")?;
     let bottom = a.chain.edge_joints();
     let top = b.chain.edge_joints();
     boundary_face(
@@ -247,6 +250,16 @@ pub fn blend_surface(
         closed,
         Vec::new(),
     )
+}
+
+/// An error naming where `surface` folds back over itself, if it does.
+fn refuse_fold(surface: &NurbsSurface, what: &str) -> Result<(), OperationsError> {
+    match fold::first_fold(surface) {
+        Some((u, v)) => Err(OperationsError::InvalidInput {
+            reason: format!("{what} folds back over itself near (u, v) = ({u:.4}, {v:.4})"),
+        }),
+        None => Ok(()),
+    }
 }
 
 fn bridge_rows(
