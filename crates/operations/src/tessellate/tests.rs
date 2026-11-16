@@ -4590,3 +4590,151 @@ fn only_twisted_cells_are_cut() {
     let widest = |lines: &[f64]| lines.windows(2).map(|p| p[1] - p[0]).fold(0.0, f64::max);
     assert!(widest(&us) * widest(&vs) <= 0.01 + 1e-12);
 }
+
+/// Area of the lens two circles of radii `a` and `b` overlap in when their
+/// centres lie `d` apart and each crosses the other.
+fn lens_area(a: f64, b: f64, d: f64) -> f64 {
+    let half_angle = |p: f64, q: f64| ((d * d + p * p - q * q) / (2.0 * d * p)).acos();
+    let kite = ((-d + a + b) * (d + a - b) * (d - a + b) * (d + a + b)).sqrt();
+    a * a * half_angle(a, b) + b * b * half_angle(b, a) - 0.5 * kite
+}
+
+/// Fuses `large` with a cylinder of radius `r` and height 44 standing on the
+/// same plane with its axis `off` from the large axis, both turned into
+/// `pose` first: 0 as built, 1 upside down, 2 turned off every axis, 3
+/// mirrored. The large wall's rim then runs up and down the notch the small
+/// cylinder cuts into it. Checks the fuse stays analytic and holds `volume`,
+/// and that its mesh is closed and holds the volume at each deflection.
+fn check_rim_notch_fuse(
+    make_large: impl Fn(&mut Topology) -> brepkit_topology::solid::SolidId,
+    r: f64,
+    off: f64,
+    volume: f64,
+) {
+    use brepkit_math::mat::Mat4;
+
+    for pose in 0..4 {
+        let mut topo = Topology::new();
+        let mut large = make_large(&mut topo);
+        let mut small = crate::primitives::make_cylinder(&mut topo, r, 44.0).unwrap();
+        crate::transform::transform_solid(&mut topo, small, &Mat4::translation(-off, 0.0, 0.0))
+            .unwrap();
+        for solid in [&mut large, &mut small] {
+            match pose {
+                1 => crate::transform::transform_solid(
+                    &mut topo,
+                    *solid,
+                    &Mat4::rotation_x(std::f64::consts::PI),
+                )
+                .unwrap(),
+                2 => crate::transform::transform_solid(
+                    &mut topo,
+                    *solid,
+                    &(Mat4::translation(3.0, -5.0, 7.0)
+                        * Mat4::rotation_x(0.37)
+                        * Mat4::rotation_z(1.1)),
+                )
+                .unwrap(),
+                3 => {
+                    *solid = crate::mirror::mirror(
+                        &mut topo,
+                        *solid,
+                        Point3::new(0.1, 0.0, 0.0),
+                        Vec3::new(1.0, 0.2, 0.3),
+                    )
+                    .unwrap();
+                }
+                _ => {}
+            }
+        }
+        let fused =
+            crate::boolean::boolean(&mut topo, crate::boolean::BooleanOp::Fuse, large, small)
+                .unwrap();
+        let faces = brepkit_topology::explorer::solid_faces(&topo, fused).unwrap();
+        assert!(faces.len() <= 8, "pose {pose}: {} faces", faces.len());
+        let exact = crate::measure::solid_volume(&topo, fused, 0.01).unwrap();
+        assert!(
+            (exact - volume).abs() < 1e-6 * volume,
+            "pose {pose}: solid volume {exact}, truth {volume}"
+        );
+        for deflection in [0.5, 0.1, 0.05, 0.01] {
+            let mesh = tessellate_solid(&topo, fused, deflection).unwrap();
+            assert_eq!(
+                boundary_edge_count(&mesh),
+                0,
+                "pose {pose}, deflection {deflection}: open edges"
+            );
+            assert_eq!(
+                non_manifold_edge_count(&mesh),
+                0,
+                "pose {pose}, deflection {deflection}: non-manifold edges"
+            );
+            let area: f64 = mesh
+                .indices
+                .chunks_exact(3)
+                .map(|t| {
+                    let [a, b, c] = [0, 1, 2].map(|k| mesh.positions[t[k] as usize]);
+                    0.5 * (b - a).cross(c - a).length()
+                })
+                .sum();
+            let meshed = signed_volume_raw(&mesh);
+            assert!(
+                (meshed - volume).abs() <= deflection * area,
+                "pose {pose}, deflection {deflection}: mesh volume {meshed}, truth {volume}"
+            );
+        }
+    }
+}
+
+/// A cylinder of radius 72 and height 84 fused with a smaller cylinder in its
+/// wall, both on one plane: the notch's sides run along the large wall's
+/// rulings, where every rim sample has one angle.
+#[test]
+fn a_cylinder_wall_notched_at_its_rim_meshes_closed() {
+    use std::f64::consts::PI;
+
+    for (r, off) in [(10.0, 70.0), (30.0, 80.0)] {
+        let volume = PI * 72.0 * 72.0 * 84.0 + 44.0 * (PI * r * r - lens_area(72.0, r, off));
+        check_rim_notch_fuse(
+            |topo| crate::primitives::make_cylinder(topo, 72.0, 84.0).unwrap(),
+            r,
+            off,
+            volume,
+        );
+    }
+}
+
+/// The same notch in a cone wall (radius 72 at the base, 50 at the top 84
+/// up): the notch's sides cross the cone's rulings, but climb so steeply
+/// that the angular zipper joins top rim samples to them across the notch.
+#[test]
+fn a_cone_wall_notched_at_its_rim_meshes_closed() {
+    use std::f64::consts::PI;
+
+    let wall = |z: f64| 72.0 - 22.0 * z / 84.0;
+    let frustum = PI * 84.0 / 3.0 * (72.0 * 72.0 + 72.0 * 50.0 + 50.0 * 50.0);
+    // Simpson's rule over the small cylinder's height for the part of its
+    // section outside the cone's.
+    let steps = 2000;
+    let h = 44.0 / f64::from(steps);
+    let outside = (0..=steps)
+        .map(|k| {
+            let weight = if k == 0 || k == steps {
+                1.0
+            } else if k % 2 == 1 {
+                4.0
+            } else {
+                2.0
+            };
+            weight * (PI * 100.0 - lens_area(wall(f64::from(k) * h), 10.0, 70.0))
+        })
+        .sum::<f64>()
+        * h
+        / 3.0;
+    check_rim_notch_fuse(
+        |topo| crate::primitives::make_cone(topo, 72.0, 50.0, 84.0).unwrap(),
+        10.0,
+        70.0,
+        frustum + outside,
+    );
+}
