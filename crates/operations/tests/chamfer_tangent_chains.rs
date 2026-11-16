@@ -522,6 +522,84 @@ fn rims_whose_chamfers_pass_each_other_on_the_wall_are_refused() {
     ));
 }
 
+/// A sector of radius 5 and opening `phi`, 3 high, its apex on the axis.
+fn sector_prism(topo: &mut Topology, phi: f64) -> SolidId {
+    let r = 5.0;
+    let p =
+        |t: &mut Topology, x: f64, y: f64| t.add_vertex(Vertex::new(Point3::new(x, y, 0.0), 1e-7));
+    let apex = p(topo, 0.0, 0.0);
+    let (s, c) = (0.5 * phi).sin_cos();
+    let low = p(topo, r * c, -r * s);
+    let high = p(topo, r * c, r * s);
+    let arc = EdgeCurve::Circle(
+        Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), r).unwrap(),
+    );
+    let edges = vec![
+        OrientedEdge::new(topo.add_edge(Edge::new(apex, low, EdgeCurve::Line)), true),
+        OrientedEdge::new(topo.add_edge(Edge::new(low, high, arc)), true),
+        OrientedEdge::new(topo.add_edge(Edge::new(high, apex, EdgeCurve::Line)), true),
+    ];
+    let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+    let plane = FaceSurface::Plane {
+        normal: Vec3::new(0.0, 0.0, 1.0),
+        d: 0.0,
+    };
+    let face = topo.add_face(Face::new(wire, Vec::new(), plane));
+    extrude(topo, face, Vec3::new(0.0, 0.0, 1.0), 3.0).unwrap()
+}
+
+/// The area of the sector of radius 5 and opening `phi` inset by `s`: its
+/// sides meet at `m = s / sin(phi / 2)` on the bisector and meet the circle
+/// of radius `rho = 5 - s` at the angles `+-tau`, `tau = phi / 2 -
+/// asin(s / rho)`. By Green's theorem about the apex it is `rho^2 tau - m
+/// rho sin(tau)`.
+fn inset_sector(phi: f64, s: f64) -> f64 {
+    let rho = 5.0 - s;
+    let m = s / (0.5 * phi).sin();
+    let tau = 0.5 * phi - (s / rho).asin();
+    rho * rho * tau - m * rho * tau.sin()
+}
+
+/// A sector's top outline, two lines meeting at its apex at 0.4 rad and an
+/// arc, takes a chamfer of 0.3 whose corners meet in mitres. At 1 the insets
+/// of the two lines cross past the arc's inset, so the contacts would pass
+/// each other, and the chamfer is refused.
+#[test]
+fn a_sectors_top_outline_takes_a_chamfer_its_insets_allow() {
+    let phi = 0.4;
+    let d = 0.3;
+    let taken: f64 = brepkit_math::quadrature::gauss_legendre_points(20)
+        .iter()
+        .map(|g| {
+            let s = 0.5 * d * (g.x + 1.0);
+            0.5 * d * g.w * (inset_sector(phi, 0.0) - inset_sector(phi, s))
+        })
+        .sum();
+    let expected = inset_sector(phi, 0.0) * 3.0 - taken;
+    for (name, pose) in poses() {
+        let mut topo = Topology::new();
+        let solid = sector_prism(&mut topo, phi);
+        let top = edges_at(&topo, solid, 3.0, |_, _| true);
+        assert_eq!(top.len(), 3);
+        transform_solid(&mut topo, solid, &pose).unwrap();
+
+        let result = chamfer(&mut topo, solid, &top, d).unwrap();
+
+        assert_exact(&topo, result, expected, name);
+        for cut in [Point3::new(0.5, 0.0, 2.98), Point3::new(4.95, 0.0, 2.98)] {
+            assert!(!inside(&topo, result, &pose, cut), "{name}: {cut:?}");
+        }
+        assert!(
+            inside(&topo, result, &pose, Point3::new(3.0, 0.0, 2.9)),
+            "{name}"
+        );
+    }
+    let mut topo = Topology::new();
+    let solid = sector_prism(&mut topo, phi);
+    let top = edges_at(&topo, solid, 3.0, |_, _| true);
+    assert!(chamfer(&mut topo, solid, &top, 1.0).is_err());
+}
+
 /// A selection no exact path takes must not come back with the solid's arcs
 /// flattened to chords: the planar rebuild reads only a face's corners.
 #[test]

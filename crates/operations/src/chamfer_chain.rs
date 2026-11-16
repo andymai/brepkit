@@ -1660,6 +1660,9 @@ fn plan_corner(
 #[allow(clippy::too_many_lines)]
 fn plan_is_clear(topo: &Topology, plan: &Plan, d: f64) -> Result<bool, OperationsError> {
     let tol = Tolerance::new().linear;
+    if !contacts_keep_order(plan, d)? {
+        return Ok(false);
+    }
     // The new boundary on each cap: each contact, a sliver's chord, and each
     // tangent end's cross edge, with where each may touch the cap's edges.
     let mut new_spans: Vec<(FaceId, Span, Vec<Point3>)> = Vec::new();
@@ -1685,11 +1688,11 @@ fn plan_is_clear(topo: &Topology, plan: &Plan, d: f64) -> Result<bool, Operation
                 else {
                     return Ok(false);
                 };
-                let t0 = circle.project(a);
+                let [s0, s1] = plan.piece_sections[index];
                 Span::Arc {
-                    sweep: (circle.project(b) - t0).rem_euclid(TAU),
+                    sweep: contact_sweep(piece, &circle, (a, s0.cap), (b, s1.cap)),
+                    t0: circle.project(a),
                     circle,
-                    t0,
                 }
             }
             EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_) => return Ok(false),
@@ -1874,6 +1877,55 @@ fn plan_is_clear(topo: &Topology, plan: &Plan, d: f64) -> Result<bool, Operation
                 .iter()
                 .any(|v| *v == b.start || *v == b.end);
             if a.wall == b.wall && !meet && wall_strips_overlap(topo, plan, i, j, d)? {
+                return Ok(false);
+            }
+        }
+    }
+    Ok(true)
+}
+
+/// How far round `circle`, the way the arc `piece` runs, a contact turns
+/// from `a` to `b`, which lie near its sections' points `at_a` and `at_b`. A
+/// corner can move an end back or on from its section by up to a half turn.
+fn contact_sweep(
+    piece: &Piece,
+    circle: &Circle3D,
+    (a, at_a): (Point3, Point3),
+    (b, at_b): (Point3, Point3),
+) -> f64 {
+    let (t0, t1) = piece
+        .curve
+        .domain_with_endpoints(piece.start_point, piece.end_point);
+    let moved =
+        |p: Point3, at: Point3| (circle.project(p) - circle.project(at) + PI).rem_euclid(TAU) - PI;
+    (t1 - t0) + moved(b, at_b) - moved(a, at_a)
+}
+
+/// Whether each piece's contacts still run the way its edge runs between
+/// the points where they end. A corner can move an end back or on, but a
+/// contact whose ends pass each other would fold its chamfer over.
+fn contacts_keep_order(plan: &Plan, d: f64) -> Result<bool, OperationsError> {
+    let tol = Tolerance::new().linear;
+    for (index, piece) in plan.pieces.iter().enumerate() {
+        let [s0, s1] = plan.piece_sections[index];
+        let (cap_a, wall_a) = plan.contact_ends(index, piece.start);
+        let (cap_b, wall_b) = plan.contact_ends(index, piece.end);
+        let curves = piece.contact_curves(&s0, d)?;
+        let sides = [
+            ((cap_a, s0.cap), (cap_b, s1.cap)),
+            ((wall_a, s0.wall), (wall_b, s1.wall)),
+        ];
+        for (curve, (a, b)) in curves.iter().zip(sides) {
+            let keeps = match curve {
+                EdgeCurve::Circle(circle) => {
+                    let sweep = contact_sweep(piece, circle, a, b);
+                    sweep > tol / circle.radius() && sweep < TAU
+                }
+                EdgeCurve::Line | EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_) => {
+                    (b.0 - a.0).dot(piece.tangent(piece.start_point)?) > tol
+                }
+            };
+            if !keeps {
                 return Ok(false);
             }
         }
