@@ -156,7 +156,8 @@ impl FaceLoops {
         if all.is_empty() {
             return Ok(None);
         }
-        let Some(chart) = drawing_of(face.surface(), &all) else {
+        let edges: Vec<&BoundaryEdge<'_>> = wires.iter().flatten().flatten().collect();
+        let Some(chart) = drawing_of(face.surface(), &all, &edges) else {
             return Ok(None);
         };
         let size = extent_3d(&all);
@@ -781,34 +782,96 @@ fn surface_along(
         .collect()
 }
 
-/// The drawing of a face's surface, from points along its wires.
+/// The least and the most of `along · (p - origin)` over the points `p` of
+/// the edges: exact for a line, and over the whole curve for a circle or an
+/// ellipse. A B-spline lies in its control points' hull, which bounds it.
+/// `None` for a B-spline with a weight that is not positive, or a bound that
+/// is not finite.
+fn reach(edges: &[&BoundaryEdge<'_>], origin: Point3, along: Vec3) -> Option<(f64, f64)> {
+    let mut out = (f64::INFINITY, f64::NEG_INFINITY);
+    let mut take = |lo: f64, hi: f64| out = (out.0.min(lo), out.1.max(hi));
+    let at = |p: Point3| along.dot(p - origin);
+    for e in edges {
+        match e.curve {
+            EdgeCurve::Line => {
+                let (a, b) = (
+                    at(e.curve.evaluate_with_endpoints(e.from, e.start, e.end)),
+                    at(e.curve.evaluate_with_endpoints(e.to, e.start, e.end)),
+                );
+                take(a.min(b), a.max(b));
+            }
+            EdgeCurve::Circle(c) => {
+                let mid = at(c.center());
+                let half = c.radius() * (along - c.normal() * along.dot(c.normal())).length();
+                take(mid - half, mid + half);
+            }
+            EdgeCurve::Ellipse(c) => {
+                let mid = at(c.center());
+                let (x, y) = (
+                    c.semi_major() * along.dot(c.u_axis()),
+                    c.semi_minor() * along.dot(c.v_axis()),
+                );
+                let half = x.hypot(y);
+                take(mid - half, mid + half);
+            }
+            EdgeCurve::NurbsCurve(n) => {
+                if n.weights().iter().any(|&w| w <= 0.0) {
+                    return None;
+                }
+                for &p in n.control_points() {
+                    let x = at(p);
+                    take(x, x);
+                }
+            }
+        }
+    }
+    (out.0.is_finite() && out.1.is_finite()).then_some(out)
+}
+
+/// The drawing of a face's surface, from points along its wires and the
+/// wires' edges.
 #[allow(clippy::too_many_lines)]
-fn drawing_of<'s>(surface: &'s FaceSurface, samples: &[Point3]) -> Option<Chart<'s>> {
+fn drawing_of<'s>(
+    surface: &'s FaceSurface,
+    samples: &[Point3],
+    edges: &[&BoundaryEdge<'_>],
+) -> Option<Chart<'s>> {
     match surface {
         FaceSurface::Plane { .. } => None,
         FaceSurface::Cylinder(s) => {
-            let vs: Vec<f64> = samples.iter().map(|&p| s.project_point(p).1).collect();
-            let low = vs.iter().copied().fold(f64::INFINITY, f64::min);
-            let high = vs.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-            let base = (high - low).max(s.radius()) - low;
+            // The wires' reach along the axis, which keeps the drawing's
+            // radius positive along the whole of each edge.
+            let (low, high) = reach(edges, s.origin(), s.axis())?;
             let r = s.radius();
+            let base = (high - low).max(r) - low;
+            // Along the axis one to one; round it `ρ / r`, at most where
+            // the wires reach farthest.
+            let most = (high + base).max(r) / r;
             Some(Chart {
                 drawing: Drawing::Annulus,
                 draw: Box::new(move |p, _| {
                     let (u, v) = s.project_point(p);
                     polar(v + base, u)
                 }),
-                // Along the axis one to one; round it `ρ / r`.
-                magnify: Box::new(move |p| (s.project_point(p).1 + base).max(r) / r),
+                magnify: Box::new(move |_| most),
                 bend: None,
             })
         }
         FaceSurface::Cone(s) => {
-            let vs: Vec<f64> = samples.iter().map(|&p| s.project_point(p).1).collect();
-            let slack = 1e-9 * vs.iter().fold(1.0_f64, |m, v| m.max(v.abs()));
-            let sign = if vs.iter().all(|&v| v >= -slack) {
+            // The side of the apex the wires lie on, by their reach along
+            // the axis, which `v` follows: `v` is the reach over `sin a`.
+            let (low, high) = reach(edges, s.apex(), s.axis())?;
+            let sin_a = s.half_angle().sin();
+            let (low, high) = if sin_a < 0.0 {
+                (-high, -low)
+            } else {
+                (low, high)
+            };
+            let slack = 1e-9 * low.abs().max(high.abs()).max(1.0);
+            // A cone flat to its axis has `v` the distance from the apex.
+            let sign = if sin_a.abs() <= 1e-15 || low >= -slack {
                 1.0
-            } else if vs.iter().all(|&v| v <= slack) {
+            } else if high <= slack {
                 -1.0
             } else {
                 return None;
@@ -830,6 +893,13 @@ fn drawing_of<'s>(surface: &'s FaceSurface, samples: &[Point3]) -> Option<Chart<
             let radius = s.radius();
             let far = clear_direction(samples, center)?;
             let near = -far;
+            // How near the wires come to the far pole, from their edges: the
+            // angle `α` from the near pole is at most `π` less that.
+            let closest = reach(edges, center, far)?.1 / radius;
+            if closest >= 1.0 - 1e-9 {
+                return None;
+            }
+            let farthest = std::f64::consts::PI - closest.max(-1.0).acos();
             let (e1, e2) = brepkit_math::frame::Frame3::from_normal(center, near)
                 .map(|f| (f.x, f.y))
                 .ok()?;
@@ -850,13 +920,17 @@ fn drawing_of<'s>(surface: &'s FaceSurface, samples: &[Point3]) -> Option<Chart<
                     }
                     Point2::new(flat.x() * angle / across, flat.y() * angle / across)
                 }),
-                // Toward the pole `1 / R`; round it `α / (R sin α)`.
-                magnify: Box::new(move |p| {
-                    angle_of(p).map_or(f64::INFINITY, |(_, a)| {
-                        let round = if a > 1e-9 { a / a.sin() } else { 1.0 };
-                        round.max(1.0) / radius
-                    })
-                }),
+                // Toward the pole `1 / R`; round it `α / (R sin α)`, which
+                // grows with `α`.
+                magnify: {
+                    let round = if farthest > 1e-9 {
+                        farthest / farthest.sin()
+                    } else {
+                        1.0
+                    };
+                    let most = round.max(1.0) / radius;
+                    Box::new(move |_| most)
+                },
                 bend: None,
             })
         }

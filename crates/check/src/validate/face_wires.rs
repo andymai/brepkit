@@ -1290,6 +1290,55 @@ mod tests {
         }
     }
 
+    /// A band of a cylinder whose lower rim, a B-spline of degree one, dips
+    /// to `z = -100` between the points the check samples along it: the
+    /// samples all lie at `z = 0`. A window inside the band passes, and a
+    /// window above it is reported.
+    #[test]
+    fn a_band_whose_rim_dips_between_its_samples_reads_its_windows() {
+        for (window_at, outside) in [((3.0, 7.0), false), ((12.0, 14.0), true)] {
+            let mut topo = Topology::default();
+            let at = |angle: f64, z: f64| Point3::new(3.0 * angle.cos(), 3.0 * angle.sin(), z);
+            let mut points = vec![at(0.0, 0.0), at(TAU / 32.0, -100.0)];
+            let mut knots = vec![0.0, 0.0, 1.0 / 32.0];
+            for k in 1..=16 {
+                points.push(at(TAU * f64::from(k) / 16.0, 0.0));
+                knots.push(f64::from(k) / 16.0);
+            }
+            knots.push(1.0);
+            let weights = vec![1.0; points.len()];
+            let dip =
+                brepkit_math::nurbs::curve::NurbsCurve::new(1, knots, points, weights).unwrap();
+            let va = vertex(&mut topo, [3.0, 0.0, 0.0]);
+            let vb = vertex(&mut topo, [3.0, 0.0, 10.0]);
+            let rim_a = topo.add_edge(Edge::new(va, va, EdgeCurve::NurbsCurve(dip)));
+            let rim_b = topo.add_edge(Edge::new(vb, vb, EdgeCurve::Circle(ring(10.0, 3.0))));
+            let seam = topo.add_edge(Edge::new(va, vb, EdgeCurve::Line));
+            let outer = topo.add_wire(
+                Wire::new(
+                    vec![
+                        OrientedEdge::new(rim_a, true),
+                        OrientedEdge::new(seam, true),
+                        OrientedEdge::new(rim_b, false),
+                        OrientedEdge::new(seam, false),
+                    ],
+                    true,
+                )
+                .unwrap(),
+            );
+            let hole = window(&mut topo, 1.0, window_at, THREE, true);
+            let face = topo.add_face(Face::new(outer, vec![hole], cylinder()));
+            let found = found(&topo, face);
+            assert_eq!(
+                found
+                    .as_ref()
+                    .is_some_and(|d| d.contains("outside the outer wire")),
+                outside,
+                "{window_at:?}: {found:?}"
+            );
+        }
+    }
+
     #[test]
     fn a_window_inside_a_window_of_a_cylinder_is_reported() {
         let mut topo = Topology::default();
