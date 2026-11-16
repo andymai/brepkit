@@ -1794,13 +1794,6 @@ fn split_periodic_face_by_winding_chain(
     let wrap_pi = |d: f64| -> f64 { (d + half).rem_euclid(period) - half };
     let u_opposite = (seam_u + half - u_start).rem_euclid(period) + u_start;
 
-    // `u` past the seam, carried on from the last of `path`'s samples.
-    let unwrapped_past_seam = |path: &[(f64, f64)], u: f64| -> f64 {
-        path.last().map_or_else(
-            || wrap_pi(u - seam_u),
-            |&(prev, _)| prev + wrap_pi(u - seam_u - prev),
-        )
-    };
     let traversal_start = |&(idx, fwd): &(usize, bool)| -> Point3 {
         let s = &sections[idx];
         if fwd { s.start } else { s.end }
@@ -1897,16 +1890,15 @@ fn split_periodic_face_by_winding_chain(
         for &(idx, fwd) in &chain {
             let s = &sections[idx];
             let (d0, d1) = s.curve_3d.domain_with_endpoints(s.start, s.end);
-            for k in 0..=HOLE_SAMPLES {
-                let f = f64::from(k) / f64::from(HOLE_SAMPLES);
+            let uv_at = |f: f64| {
                 let t = if fwd { f } else { 1.0 - f };
-                let p = s
-                    .curve_3d
-                    .evaluate_with_endpoints((d1 - d0).madd(t, d0), s.start, s.end);
-                let (u, v) = surface.project_point(p)?;
-                let d = unwrapped_past_seam(&path, u);
-                path.push((d, v));
-            }
+                surface.project_point(s.curve_3d.evaluate_with_endpoints(
+                    (d1 - d0).madd(t, d0),
+                    s.start,
+                    s.end,
+                ))
+            };
+            push_uv_path(&mut path, seam_u, period, 0.5 * close_tol, &uv_at)?;
         }
         separators.push(Separator {
             v_seam,
@@ -1954,17 +1946,15 @@ fn split_periodic_face_by_winding_chain(
             return Some(vec![(-half, v), (half, v)]);
         };
         let (t0, t1) = rim.curve_3d.domain_with_endpoints(rim.start_3d, rim.end_3d);
-        let mut path: Vec<(f64, f64)> = Vec::new();
-        for k in 0..=HOLE_SAMPLES {
-            let t = (t1 - t0).madd(f64::from(k) / f64::from(HOLE_SAMPLES), t0);
-            let (u, v) = surface.project_point(rim.curve_3d.evaluate_with_endpoints(
-                t,
+        let uv_at = |f: f64| {
+            surface.project_point(rim.curve_3d.evaluate_with_endpoints(
+                (t1 - t0).madd(f, t0),
                 rim.start_3d,
                 rim.end_3d,
-            ))?;
-            let d = unwrapped_past_seam(&path, u);
-            path.push((d, v));
-        }
+            ))
+        };
+        let mut path: Vec<(f64, f64)> = Vec::new();
+        push_uv_path(&mut path, seam_u, period, 0.5 * close_tol, &uv_at)?;
         Some(path)
     };
     let mut levels: Vec<Vec<(f64, f64)>> = Vec::with_capacity(n + 2);
@@ -2245,6 +2235,52 @@ fn closed_section_loops(
         loops.push(entries);
     }
     Some(loops)
+}
+
+/// Appends to `path` the `(u` past `seam_u`, unwrapped along the path`, v)`
+/// samples of the curve that `uv_at` reads over `[0, 1]`: [`HOLE_SAMPLES`]
+/// even steps, each halved while the curve's middle lies farther than
+/// `within` in `v` from the line between its ends, so a `v` read between two
+/// samples lies about that close to the curve.
+fn push_uv_path(
+    path: &mut Vec<(f64, f64)>,
+    seam_u: f64,
+    period: f64,
+    within: f64,
+    uv_at: &dyn Fn(f64) -> Option<(f64, f64)>,
+) -> Option<()> {
+    /// Halvings of one even step at most.
+    const DEPTH: u32 = 10;
+    let half = 0.5 * period;
+    let past = |from: f64, u: f64| from + ((u - seam_u - from + half).rem_euclid(period) - half);
+    let (u, v) = uv_at(0.0)?;
+    path.push((past(path.last().map_or(0.0, |p| p.0), u), v));
+    let mut left = 0.0;
+    for k in 1..=HOLE_SAMPLES {
+        let f = f64::from(k) / f64::from(HOLE_SAMPLES);
+        let (u, v) = uv_at(f)?;
+        let mut pending = vec![(f, u, v, 0)];
+        while let Some(&(right, ur, vr, depth)) = pending.last() {
+            let &(dl, vl) = path.last()?;
+            let mid = f64::midpoint(left, right);
+            let (um, vm) = uv_at(mid)?;
+            let dm = past(dl, um);
+            let dr = past(dm, ur);
+            let chord = if (dr - dl).abs() > f64::EPSILON {
+                (vr - vl).madd((dm - dl) / (dr - dl), vl)
+            } else {
+                vm
+            };
+            if depth < DEPTH && (vm - chord).abs() > within {
+                pending.push((mid, um, vm, depth + 1));
+            } else {
+                pending.pop();
+                path.push((past(dl, ur), vr));
+                left = right;
+            }
+        }
+    }
+    Some(())
 }
 
 /// The `v` where a path winding a lateral once, as `(u` past the seam
@@ -10872,6 +10908,28 @@ mod tests {
         brepkit_math::curves2d::Curve2D::Line(
             Line2D::new(Point2::new(0.0, 0.0), Vec2::new(1.0, 0.0)).unwrap(),
         )
+    }
+
+    /// Half of the ellipse `v = 2 + cos(u)` on a unit cylinder: read between
+    /// the samples, the path stays within its bound of the curve. Even steps
+    /// alone miss it by 1.2e-3 a sixty-fourth of a turn along.
+    #[test]
+    fn a_separator_path_reads_its_curve_between_samples() {
+        use std::f64::consts::{PI, TAU};
+        let uv_at = |f: f64| Some((PI * f, 2.0 + (PI * f).cos()));
+        let within = 5e-6;
+        let mut path = Vec::new();
+        push_uv_path(&mut path, 0.0, TAU, within, &uv_at).unwrap();
+        for k in 1..64 {
+            let u = PI * f64::from(k) / 64.0;
+            let v = winding_path_v_at(&path, u, TAU).unwrap();
+            assert!((v - (2.0 + u.cos())).abs() < 2.0 * within, "at {u}: {v}");
+        }
+        let mut coarse = Vec::new();
+        push_uv_path(&mut coarse, 0.0, TAU, f64::MAX, &uv_at).unwrap();
+        let u = PI / 64.0;
+        let v = winding_path_v_at(&coarse, u, TAU).unwrap();
+        assert!((v - (2.0 + u.cos())).abs() > 1e-3);
     }
 
     /// A closed spline among the sections is the general splitter's: its quarters
