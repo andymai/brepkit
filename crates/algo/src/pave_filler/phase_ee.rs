@@ -411,8 +411,10 @@ fn find_edge_edge_crossings(
             s.madd(a.to.t - a.from.t, a.from.t),
             t.madd(b.to.t - b.from.t, b.from.t),
         );
+        // A place where the curves touch along parallel tangents is a contact
+        // as a crossing is: the step for one curve below sorts the two.
         let ends = match refine((edge_a.curve(), ea), (edge_b.curve(), eb), seed, tol.linear) {
-            Refined::Met(t_a, t_b, point) => {
+            Refined::Met(t_a, t_b, point) | Refined::Along(t_a, t_b, point) => {
                 crossed[cell] = Some(t_a);
                 let at = ChordApproach {
                     t_a,
@@ -424,7 +426,6 @@ fn find_edge_edge_crossings(
                 read(&mut crossings, &at);
                 along(t_a, t_b) && shared(t_a, &a)
             }
-            Refined::Along => true,
             Refined::Apart => false,
         };
         if !isolated && !ends && can_split {
@@ -1141,7 +1142,7 @@ fn refine_on_curves(
 ) -> Option<(f64, f64, Point3)> {
     match refine(curve_a, curve_b, seed, tol) {
         Refined::Met(ta, tb, point) => Some((ta, tb, point)),
-        Refined::Along | Refined::Apart => None,
+        Refined::Along(..) | Refined::Apart => None,
     }
 }
 
@@ -1149,9 +1150,9 @@ fn refine_on_curves(
 enum Refined {
     /// The curves meet within the tolerance at these parameters and point.
     Met(f64, f64, Point3),
-    /// The search stopped where the curves lie within the tolerance and
-    /// their tangents run along each other.
-    Along,
+    /// The search stopped at these parameters and point, where the curves
+    /// lie within the tolerance and their tangents run along each other.
+    Along(f64, f64, Point3),
     /// The curves do not meet near the seed.
     Apart,
 }
@@ -1186,7 +1187,8 @@ fn refine(
         let det = a11.madd(a22, -(a12 * a12));
         if det.abs() <= 1e-12 * a11 * a22 {
             return if r.length() <= tol {
-                Refined::Along
+                let (pa, pb) = (at_a(ta), at_b(tb));
+                Refined::Along(ta, tb, pa + (pb - pa) * 0.5)
             } else {
                 Refined::Apart
             };
@@ -2781,10 +2783,11 @@ mod tests {
             ]
         };
         let v = Vec3::new;
-        for (r1, r2, start, scale) in [
-            (0.6, 0.61, -1.0, 1.0),
-            (19.0 / 32.0, 0.61, -1.02, 1.0),
-            (0.6, 0.61, -1.0, 0.02),
+        for (r1, r2, start, scale, along) in [
+            (0.6, 0.61, -1.0, 1.0, 1.0),
+            (19.0 / 32.0, 0.61, -1.02, 1.0, 1.0),
+            (0.6, 0.61, -1.0, 0.02, 1.0),
+            (0.6, 0.61, -1.0, 1.0, 1000.0),
         ] {
             let (c0, c1) = (scale * r1 * r2, -scale * (r1 + r2));
             let cubic = NurbsCurve::new(
@@ -2792,7 +2795,7 @@ mod tests {
                 vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
                 poles([
                     v(0.0, c0, 0.0),
-                    v(4.0, c1, c0),
+                    v(4.0 * along, c1, c0),
                     v(0.0, scale, c1),
                     v(0.0, 0.0, scale),
                 ]),
@@ -2802,23 +2805,63 @@ mod tests {
             let mut topo = Topology::new();
             let ea = edge_on(&mut topo, &cubic, 0.0, 1.0);
             let (from, to) = (
-                Point3::new(start, 0.0, 0.0),
-                Point3::new(start + 6.0, 0.0, 0.0),
+                Point3::new(start * along, 0.0, 0.0),
+                Point3::new((start + 6.0) * along, 0.0, 0.0),
             );
             let eb = add_edge(&mut topo, from, to, EdgeCurve::Line);
             for (ea, eb) in [(ea, eb), (eb, ea)] {
                 let mut hits: Vec<f64> = crossings(&topo, ea, eb).iter().map(|h| h.2.x()).collect();
                 hits.sort_by(f64::total_cmp);
-                assert_eq!(hits.len(), 2, "{r1} {scale}: {hits:?}");
-                // The curves meet at a sine of 0.003 times the scale or
-                // less, so a point within the tolerance of both can stand
-                // that far off along the axis.
-                let off = 1e-7 / scale;
+                assert_eq!(hits.len(), 2, "{r1} {scale} {along}: {hits:?}");
+                // The curves meet at a sine of 0.003 times the scale over
+                // the stretch along the axis, or less, so a point within the
+                // tolerance of both can stand that far off along the axis.
+                let off = 1e-7 * along * along / scale;
                 assert!(
-                    (hits[0] - 4.0 * r1).abs() < off && (hits[1] - 4.0 * r2).abs() < off,
-                    "{r1} {scale}: {hits:?}"
+                    (hits[0] - 4.0 * along * r1).abs() < off
+                        && (hits[1] - 4.0 * along * r2).abs() < off,
+                    "{r1} {scale} {along}: {hits:?}"
                 );
             }
+        }
+    }
+
+    /// A parabola `(u, 0.001 (u - 39/64)^2, 0)` touches the x axis between
+    /// two of its sample points, where its chords stand off the axis by
+    /// more than the tolerance: one contact.
+    #[test]
+    fn a_touch_between_sample_points_is_read_once() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        let c = 39.0 / 64.0;
+        let p = Point3::new;
+        let parabola = NurbsCurve::new(
+            2,
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            vec![
+                p(0.0, 0.001 * c * c, 0.0),
+                p(0.5, 0.001 * (c * c - c), 0.0),
+                p(1.0, 0.001 * (1.0 - c) * (1.0 - c), 0.0),
+            ],
+            vec![1.0; 3],
+        )
+        .unwrap();
+        let mut topo = Topology::new();
+        let ea = edge_on(&mut topo, &parabola, 0.0, 1.0);
+        let eb = add_edge(
+            &mut topo,
+            p(0.0, 0.0, 0.0),
+            p(1.0, 0.0, 0.0),
+            EdgeCurve::Line,
+        );
+        for (ea, eb) in [(ea, eb), (eb, ea)] {
+            let hits = crossings(&topo, ea, eb);
+            assert_eq!(hits.len(), 1, "{hits:?}");
+            // Within 0.01 of the touch, the parabola is within the
+            // tolerance of the axis.
+            assert!(
+                (hits[0].2.x() - c).abs() < 0.01 && hits[0].2.y().abs() < 1e-7,
+                "{hits:?}"
+            );
         }
     }
 
