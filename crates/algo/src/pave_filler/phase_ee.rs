@@ -286,7 +286,9 @@ fn find_edge_edge_crossings(
     for i in 0..n {
         for j in 0..n {
             let (chord_a, chord_b) = ([&pts_a[i], &pts_a[i + 1]], [&pts_b[j], &pts_b[j + 1]]);
-            let reach = sags_a[i] + sags_b[j];
+            // A chord whose curve has no bound on its sag is read by the
+            // chords alone.
+            let reach = Some(sags_a[i] + sags_b[j]).filter(|r| r.is_finite());
             // Quick distance check: a point the two curves share lies
             // within a chord's length and its sag of that chord's ends.
             let min_dist = (pts_a[i].pos - pts_b[j].pos)
@@ -298,7 +300,7 @@ fn find_edge_edge_crossings(
             let seg_len_a = (pts_a[i + 1].pos - pts_a[i].pos).length();
             let seg_len_b = (pts_b[j + 1].pos - pts_b[j].pos).length();
 
-            if min_dist > seg_len_a + seg_len_b + reach + tol.linear {
+            if min_dist > seg_len_a + seg_len_b + reach.unwrap_or(0.0) + tol.linear {
                 continue;
             }
 
@@ -313,7 +315,7 @@ fn find_edge_edge_crossings(
                     crossed[i * n + j] = Some(hit.t_a);
                     read(&mut crossings, &hit);
                 }
-            } else if reach > 0.0 {
+            } else if let Some(reach) = reach.filter(|&r| r > 0.0) {
                 let (s, t, gap) = segment_distance(
                     (chord_a[0].pos, chord_a[1].pos),
                     (chord_b[0].pos, chord_b[1].pos),
@@ -450,7 +452,7 @@ fn find_edge_edge_crossings(
 /// the curve, which is its major radius. A B-spline between two knots lies
 /// in the hull of its Bezier poles when their weights are positive, so its
 /// farthest pole bounds it there. A piece with a weight that is not
-/// positive has no bound.
+/// positive has no bound, and its chord gets an infinite sag.
 fn chord_sags(curve: &EdgeCurve, pts: &[SegmentEndpoint]) -> Vec<f64> {
     pts.windows(2)
         .map(|w| {
@@ -486,7 +488,7 @@ fn nurbs_chord_sag(
     let mut cuts = vec![lo];
     cuts.extend(curve.knots().iter().copied().filter(|&k| k > lo && k < hi));
     cuts.push(hi);
-    cuts.dedup_by(|a, b| (*a - *b).abs() <= 0.0);
+    cuts.dedup();
     let (from, to) = (chord[0].pos, chord[1].pos);
     let mut sag = 0.0_f64;
     for piece in cuts.windows(2) {
