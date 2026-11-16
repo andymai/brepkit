@@ -1,0 +1,19 @@
+crates/topology/src/owners.rs
+  s_0db8415e6f59cd::t_c2ea8011d9be9a 180-181,183-187
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "98db0789ce642dd78f3f2ff669a465cff4a91f63",
+  "prompts": {},
+  "sessions": {
+    "s_0db8415e6f59cd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "80c728ce-cbd9-4375-adac-8fbf308dc911",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
