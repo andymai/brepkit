@@ -212,7 +212,9 @@ impl BezierPatch {
 ///
 /// # Errors
 ///
-/// Returns an error if knot insertion fails or the surface is degenerate.
+/// Returns [`MathError::PoleAtInfinity`] if a blossomed patch has a control
+/// point at infinity, as weights of mixed sign can give, or another error if
+/// knot insertion fails or the surface is degenerate.
 pub fn surface_to_bezier_patches(surface: &NurbsSurface) -> Result<Vec<BezierPatch>, MathError> {
     let pu = surface.degree_u();
     let pv = surface.degree_v();
@@ -281,21 +283,30 @@ pub fn surface_to_bezier_patches(surface: &NurbsSurface) -> Result<Vec<BezierPat
                     patch_ws.push(ref_ws[row][col_start..col_end].to_vec());
                 }
             } else {
-                let rows = blossomed_rows.clone().unwrap_or_else(|| {
-                    (row_start..row_end)
-                        .map(|r| homogeneous(&ref_cps[r], &ref_ws[r]))
-                        .collect()
-                });
-                for row in rows {
-                    let along_v = &row[col_start..col_end];
-                    let net = if bezier_v {
-                        along_v.to_vec()
-                    } else {
-                        span_bezier(along_v, ref_knots_v, pv, sv, (v_start, v_end))
+                let (start, end) = if bezier_u {
+                    (v_start, v_end)
+                } else {
+                    (u_start, u_end)
+                };
+                for k in 0..=pu {
+                    let along_v = match &blossomed_rows {
+                        Some(rows) => std::borrow::Cow::Borrowed(&rows[k][col_start..col_end]),
+                        None => std::borrow::Cow::Owned(homogeneous(
+                            &ref_cps[row_start + k][col_start..col_end],
+                            &ref_ws[row_start + k][col_start..col_end],
+                        )),
                     };
-                    let (points, weights) = cartesian_row(&net);
+                    let net = if bezier_v {
+                        along_v.into_owned()
+                    } else {
+                        span_bezier(&along_v, ref_knots_v, pv, sv, (v_start, v_end))
+                    };
+                    let mut points = Vec::with_capacity(net.len());
+                    for &q in &net {
+                        points.push(cartesian(q).ok_or(MathError::PoleAtInfinity { start, end })?);
+                    }
                     patch_cps.push(points);
-                    patch_ws.push(weights);
+                    patch_ws.push(net.iter().map(|q| q[3]).collect());
                 }
             }
 
@@ -1460,6 +1471,28 @@ mod tests {
         let knots: Vec<f64> = (0..9).map(f64::from).collect();
         let s = NurbsSurface::new(3, 3, knots.clone(), knots, points, weights).expect("valid");
         patches_trace(&s, 4);
+    }
+
+    /// A sheet quadratic along u on the knots 0 to 5, clamped in neither
+    /// end, with the weights 1, -1, 1 along u: its one patch has a control
+    /// point at infinity, which the split refuses.
+    #[test]
+    fn a_patch_with_a_pole_at_infinity_is_refused() {
+        let p = Point3::new;
+        let row = |x: f64| vec![p(x, 0.0, 0.0), p(x, 1.0, 0.0)];
+        let s = NurbsSurface::new(
+            2,
+            1,
+            (0..6).map(f64::from).collect(),
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![row(0.0), row(1.0), row(2.0)],
+            vec![vec![1.0; 2], vec![-1.0; 2], vec![1.0; 2]],
+        )
+        .expect("valid");
+        assert!(matches!(
+            surface_to_bezier_patches(&s),
+            Err(MathError::PoleAtInfinity { .. })
+        ));
     }
 
     /// A bilinear sheet on knots 0, 0, 0.5, 0.5, 1, 1 along u, an interior
