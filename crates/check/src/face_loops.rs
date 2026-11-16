@@ -28,6 +28,7 @@
 //! direction: faces do not keep one convention for it. It is read from the
 //! other wires, which all lie on the face's side.
 
+use std::collections::HashMap;
 use std::f64::consts::TAU;
 
 use brepkit_math::madd::Madd;
@@ -528,11 +529,34 @@ struct Chart<'s> {
     drawing: Drawing,
     draw: Draw<'s>,
     magnify: Box<dyn Fn(Point3) -> f64 + 's>,
-    cell: Option<Cell<'s>>,
+    /// On a B-spline surface, how its parameters bend along a stretch of
+    /// it; `None` on an analytic surface, whose drawing bends smoothly.
+    bend: Option<Bend<'s>>,
 }
 
-/// The knot spans of a B-spline surface that a point lies in.
-type Cell<'s> = Box<dyn Fn(Point3) -> (usize, usize) + 's>;
+/// The knot span of a B-spline surface that parameters lie in.
+type Place<'s> = Box<dyn Fn((f64, f64)) -> (usize, usize) + 's>;
+
+/// A B-spline surface's parameters, each read as the fraction of its span,
+/// at a point, and bounds on the surface's second derivatives in them:
+/// `S_uu`, `S_uv` and `S_vv`. A stretch whose parameters move by `(du, dv)`
+/// strays from its parameters' chord by at most `m (du² B_uu + 2 |du dv|
+/// B_uv + dv² B_vv) / 8`, `m` the most the inverse of the surface's
+/// derivative stretches a length, beyond how far the stretch itself
+/// strays from straight.
+struct Bend<'s> {
+    params: Box<dyn Fn(Point3) -> (f64, f64) + 's>,
+    /// The knot span that parameters, read so, lie in.
+    place: Place<'s>,
+    /// Which parameters close on themselves, whose moves wrap.
+    closed: (bool, bool),
+    /// The bounds in each knot span, by the span's place as `place` reads
+    /// it, and their most over the surface.
+    second: HashMap<(usize, usize), [f64; 3]>,
+    most: [f64; 3],
+    /// How much more the drawing stretches than the parameters.
+    scale: f64,
+}
 
 /// The drawing of a face's surface, from points along its wires.
 #[allow(clippy::too_many_lines)]
@@ -553,7 +577,7 @@ fn drawing_of<'s>(surface: &'s FaceSurface, samples: &[Point3]) -> Option<Chart<
                 }),
                 // Along the axis one to one; round it `ρ / r`.
                 magnify: Box::new(move |p| (s.project_point(p).1 + base).max(r) / r),
-                cell: None,
+                bend: None,
             })
         }
         FaceSurface::Cone(s) => {
@@ -575,7 +599,7 @@ fn drawing_of<'s>(surface: &'s FaceSurface, samples: &[Point3]) -> Option<Chart<
                     polar((sign * v).max(0.0), u)
                 }),
                 magnify: Box::new(move |_| round.max(1.0)),
-                cell: None,
+                bend: None,
             })
         }
         FaceSurface::Sphere(s) => {
@@ -610,7 +634,7 @@ fn drawing_of<'s>(surface: &'s FaceSurface, samples: &[Point3]) -> Option<Chart<
                         round.max(1.0) / radius
                     })
                 }),
-                cell: None,
+                bend: None,
             })
         }
         FaceSurface::Torus(t) => {
@@ -625,7 +649,7 @@ fn drawing_of<'s>(surface: &'s FaceSurface, samples: &[Point3]) -> Option<Chart<
                 drawing: Drawing::Torus(Vec2::new(TAU, TAU)),
                 draw: Box::new(move |p, before| carry(t.project_point(p), before, (TAU, TAU))),
                 magnify: Box::new(move |_| most),
-                cell: None,
+                bend: None,
             })
         }
         FaceSurface::Nurbs(s) => nurbs_drawing(s, samples),
@@ -712,13 +736,64 @@ fn nurbs_drawing<'s>(
     // Each parameter is read as the fraction of its span, so a span far
     // shorter or longer than the other weighs as much in the drawing.
     let (pu, pv) = (u1 - u0, v1 - v0);
-    let cell: Cell<'s> = Box::new(move |p| {
-        let (u, v) = s.project_point(p);
-        (
-            s.knots_u().partition_point(|&k| k <= u),
-            s.knots_v().partition_point(|&k| k <= v),
-        )
-    });
+    // The second derivatives read on a grid of each knot span, doubled: a
+    // span's derivatives are smooth, and the grid comes near their most.
+    let spans = |knots: &[f64]| {
+        let mut breaks: Vec<f64> = knots.to_vec();
+        breaks.dedup();
+        breaks
+    };
+    let (su, sv) = (spans(s.knots_u()), spans(s.knots_v()));
+    let mut second: HashMap<(usize, usize), [f64; 3]> = HashMap::new();
+    let mut most = [0.0_f64; 3];
+    for wu in su.windows(2) {
+        for wv in sv.windows(2) {
+            let place = (
+                s.knots_u()
+                    .partition_point(|&k| k <= f64::midpoint(wu[0], wu[1])),
+                s.knots_v()
+                    .partition_point(|&k| k <= f64::midpoint(wv[0], wv[1])),
+            );
+            let span = second.entry(place).or_insert([0.0; 3]);
+            for i in 0..=4 {
+                for j in 0..=4 {
+                    let u = (wu[1] - wu[0]).madd(f64::from(i) / 4.0, wu[0]);
+                    let v = (wv[1] - wv[0]).madd(f64::from(j) / 4.0, wv[0]);
+                    let d = s.derivatives(u, v, 2);
+                    for (k, x) in [
+                        d[2][0].length() * pu * pu,
+                        d[1][1].length() * pu * pv,
+                        d[0][2].length() * pv * pv,
+                    ]
+                    .into_iter()
+                    .enumerate()
+                    {
+                        span[k] = span[k].max(2.0 * x);
+                        most[k] = most[k].max(2.0 * x);
+                    }
+                }
+            }
+        }
+    }
+    if !most.iter().all(|x| x.is_finite()) {
+        return None;
+    }
+    let bend = |scale: f64| Bend {
+        params: Box::new(move |p| {
+            let (u, v) = s.project_point(p);
+            ((u - u0) / pu, (v - v0) / pv)
+        }),
+        place: Box::new(move |(un, vn)| {
+            (
+                s.knots_u().partition_point(|&k| k <= pu.madd(un, u0)),
+                s.knots_v().partition_point(|&k| k <= pv.madd(vn, v0)),
+            )
+        }),
+        closed: (closed_u, closed_v),
+        second: second.clone(),
+        most,
+        scale,
+    };
     // How much a drawing whose `(u, v)` stretch by `factors(u, v)` stretches
     // a short length on the surface: at most the root of
     // `(d1² G22 + d2² G11) / det G`, `G` the surface's metric there. A
@@ -742,7 +817,7 @@ fn nurbs_drawing<'s>(
                 carry(((u - u0) / pu, (v - v0) / pv), before, (1.0, 1.0))
             }),
             magnify: magnify_by(Box::new(move |_, _| (1.0 / pu, 1.0 / pv))),
-            cell: Some(cell),
+            bend: Some(bend(1.0)),
         });
     }
     if !closed_u && !closed_v {
@@ -753,7 +828,7 @@ fn nurbs_drawing<'s>(
                 Point2::new((u - u0) / pu, (v - v0) / pv)
             }),
             magnify: magnify_by(Box::new(move |_, _| (1.0 / pu, 1.0 / pv))),
-            cell: Some(cell),
+            bend: Some(bend(1.0)),
         });
     }
     // Round the closed parameter, out along the other: `(angle, along,
@@ -807,7 +882,9 @@ fn nurbs_drawing<'s>(
                 (1.0 / width, around)
             }
         })),
-        cell: Some(cell),
+        // A polar drawing stretches the parameter round by up to a turn
+        // at twice the inner radius.
+        bend: Some(bend(2.0 * TAU)),
     })
 }
 
@@ -871,6 +948,7 @@ fn trace(wire: &[BoundaryEdge<'_>], chart: &Chart<'_>, sizes: &Sizes) -> Option<
         for f in PROBES {
             probes.push(draw(at((edge.to - edge.from).madd(f, edge.from)), None));
         }
+        let mut params: HashMap<u64, (f64, f64)> = HashMap::new();
         for (ta, tb) in edge_pieces(edge) {
             let start = draw(at(ta), points.last().copied());
             if points
@@ -905,13 +983,36 @@ fn trace(wire: &[BoundaryEdge<'_>], chart: &Chart<'_>, sizes: &Sizes) -> Option<
                 };
                 let off_3d = hull.unwrap_or(0.0);
                 let hull_short = hull.is_none() || off_3d > target_3d;
-                // A chord keeps to one knot span of a B-spline surface, where
-                // the drawing runs smoothly.
-                let across_knots = chart
-                    .cell
-                    .as_ref()
-                    .is_some_and(|cell| cell(at(ta)) != cell(at(tb)));
-                if (off > target || hull_short || across_knots || (b - a).length() > longest)
+                // On a B-spline surface a chord keeps to one knot span, where
+                // the drawing runs smoothly, and its parameters' bend counts.
+                let (bent, across_knots) = chart.bend.as_ref().map_or((0.0, false), |bend| {
+                    let mut params_at = |t: f64| {
+                        *params
+                            .entry(t.to_bits())
+                            .or_insert_with(|| (bend.params)(at(t)))
+                    };
+                    let ((ua, va), (ub, vb)) = (params_at(ta), params_at(tb));
+                    let step = |d: f64, closed: bool| {
+                        if closed {
+                            (d + 0.5).rem_euclid(1.0) - 0.5
+                        } else {
+                            d
+                        }
+                    };
+                    let (du, dv) = (
+                        step(ub - ua, bend.closed.0).abs(),
+                        step(vb - va, bend.closed.1).abs(),
+                    );
+                    let (from, to) = ((bend.place)((ua, va)), (bend.place)((ub, vb)));
+                    let [buu, buv, bvv] = bend.second.get(&from).copied().unwrap_or(bend.most);
+                    let curl = (du * du).madd(buu, (2.0 * du * dv).madd(buv, dv * dv * bvv));
+                    (0.125 * sizes.stretch * curl * bend.scale, from != to)
+                });
+                if (off > target
+                    || hull_short
+                    || across_knots
+                    || bent > target
+                    || (b - a).length() > longest)
                     && depth < MOST_HALVINGS
                 {
                     let mid = f64::midpoint(ta, tb);
@@ -922,7 +1023,7 @@ fn trace(wire: &[BoundaryEdge<'_>], chart: &Chart<'_>, sizes: &Sizes) -> Option<
                 }
                 // A piece whose stray is not bounded leaves the wire unread.
                 hull?;
-                sag = sag.max(2.0f64.madd(off, off_3d * sizes.stretch));
+                sag = sag.max(2.0f64.madd(off, off_3d * sizes.stretch) + bent);
                 points.push(b);
             }
         }
@@ -1293,6 +1394,65 @@ mod tests {
         for m in middles {
             let (u, v) = torus.project_point(m);
             assert_eq!(loops.band((0, 1), Point2::new(u, v)), None, "{m:?}");
+        }
+    }
+
+    /// A flat quintic patch whose `u` runs very unevenly along x, crowded at
+    /// both ends: a straight edge across it draws as a curve in `(u, v)`.
+    /// The drawn edge stays within the bound the chords carry.
+    #[test]
+    fn a_straight_edge_on_an_uneven_patch_stays_within_its_chords_bound() {
+        let xs = [0.0, 0.01, 0.01, 19.99, 19.99, 20.0];
+        let control = xs
+            .iter()
+            .map(|&x| {
+                (0..2)
+                    .map(|j| Point3::new(x, 20.0 * f64::from(j), 0.0))
+                    .collect()
+            })
+            .collect();
+        let patch = NurbsSurface::new(
+            5,
+            1,
+            [vec![0.0; 6], vec![1.0; 6]].concat(),
+            vec![0.0, 0.0, 1.0, 1.0],
+            control,
+            vec![vec![1.0; 2]; 6],
+        )
+        .unwrap();
+        let mut topo = Topology::default();
+        let corners = [[2.0, 2.0], [18.0, 18.0], [2.0, 18.0]]
+            .map(|c| topo.add_vertex(Vertex::new(Point3::new(c[0], c[1], 0.0), 1e-7)));
+        let edges = (0..3)
+            .map(|k| {
+                let e = topo.add_edge(Edge::new(corners[k], corners[(k + 1) % 3], EdgeCurve::Line));
+                OrientedEdge::new(e, true)
+            })
+            .collect();
+        let outer = topo.add_wire(Wire::new(edges, true).unwrap());
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        let circle = Circle3D::new(Point3::new(6.0, 12.0, 0.0), z, 1.0).unwrap();
+        let v = topo.add_vertex(Vertex::new(circle.evaluate(0.0), 1e-7));
+        let e = topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(circle)));
+        let hole = topo.add_wire(Wire::new(vec![OrientedEdge::new(e, true)], true).unwrap());
+        let face = topo.add_face(Face::new(
+            outer,
+            vec![hole],
+            FaceSurface::Nurbs(patch.clone()),
+        ));
+        let loops = FaceLoops::of(&topo, face, 1e-6).unwrap().unwrap();
+        let outline = loops.loops[0].as_ref().unwrap();
+        for k in 0..=400 {
+            let t = f64::from(k) / 400.0;
+            let p = Point3::new(2.0 + 16.0 * t, 2.0 + 16.0 * t, 0.0);
+            let (u, v) = patch.project_point(p);
+            let drawn = Point2::new(u, v);
+            let off = distance_to_boundary(&outline.pieces, drawn);
+            assert!(
+                off <= outline.sag + loops.reach,
+                "{t}: {off} past {}",
+                outline.sag
+            );
         }
     }
 }
