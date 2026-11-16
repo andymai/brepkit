@@ -45,9 +45,10 @@ const STRETCHES: u32 = 64;
 /// its meetings are not solved for.
 const MOST_HALVINGS: u32 = 16;
 
-/// The most stretches read along one edge where its meetings are not solved
-/// for. Past it the edge is left unread.
-const MOST_STRETCHES: usize = 4096;
+/// The most stretches read within one of an edge's first stretches where its
+/// meetings are not solved for. Past it the rest of that first stretch is
+/// left unread, and the edge's other first stretches are still read.
+const MOST_STRETCHES: usize = 256;
 
 /// A plane face.
 struct Flat {
@@ -443,35 +444,43 @@ fn shares_area(
                 cuts.dedup();
             }
             // A stretch that reads outside or inside the other face by more
-            // than its reach lies wholly there; one that does not is halved.
-            let mut pending: Vec<(f64, f64, u32)> =
-                cuts.windows(2).map(|w| (w[0], w[1], 0)).collect();
-            let mut read = 0;
-            while let Some((f0, f1, depth)) = pending.pop() {
-                read += 1;
-                if read > MOST_STRETCHES {
-                    break;
-                }
-                let mid = 0.5 * (f0 + f1);
-                let length = through(f0, mid, f1);
-                if length <= tol {
-                    continue;
-                }
-                let m = point(mid);
-                match other.side(m, reach(f0, f1, m)) {
-                    Some(false) => {}
-                    Some(true) => {
-                        if beside(mid, length) {
-                            return Ok(true);
-                        }
+            // than its reach lies wholly there. One whose ends and middle
+            // all lie on the other face's boundary runs along it, and is read
+            // beside its middle. Any other is halved.
+            for first in cuts.windows(2) {
+                let mut pending = vec![(first[0], first[1], 0_u32)];
+                let mut read = 0;
+                while let Some((f0, f1, depth)) = pending.pop() {
+                    read += 1;
+                    if read > MOST_STRETCHES {
+                        break;
                     }
-                    None => {
-                        if other.side(m, tol) != Some(false) && beside(mid, length) {
-                            return Ok(true);
+                    let mid = 0.5 * (f0 + f1);
+                    let length = through(f0, mid, f1);
+                    if length <= tol {
+                        continue;
+                    }
+                    let m = point(mid);
+                    match other.side(m, reach(f0, f1, m)) {
+                        Some(false) => {}
+                        Some(true) => {
+                            if beside(mid, length) {
+                                return Ok(true);
+                            }
                         }
-                        if depth < MOST_HALVINGS {
-                            pending.push((f0, mid, depth + 1));
-                            pending.push((mid, f1, depth + 1));
+                        None => {
+                            let on_boundary = other.side(m, tol);
+                            if on_boundary != Some(false) && beside(mid, length) {
+                                return Ok(true);
+                            }
+                            let along = on_boundary.is_none()
+                                && [f0, f1]
+                                    .iter()
+                                    .all(|&f| other.side(point(f), tol).is_none());
+                            if !along && depth < MOST_HALVINGS {
+                                pending.push((f0, mid, depth + 1));
+                                pending.push((mid, f1, depth + 1));
+                            }
                         }
                     }
                 }
@@ -1027,6 +1036,81 @@ mod tests {
         let mut b = Builder::default();
         spline_rectangle(&mut b, (0.0, 0.020), (10.0, 0.021));
         spline_rectangle(&mut b, (0.100, 0.03), (0.101, 5.0));
+        let solid = b.solid();
+        assert!(found(&b.topo, solid).is_empty());
+    }
+
+    /// A face whose outline is one closed straight B-spline through
+    /// `corners`, closing at the first corner.
+    fn spline_outline(b: &mut Builder, corners: &[[f64; 2]], normal: Vec3) {
+        let mut points: Vec<Point3> = corners
+            .iter()
+            .map(|c| Point3::new(c[0], c[1], 0.0))
+            .collect();
+        points.push(points[0]);
+        let n = points.len();
+        #[allow(clippy::cast_precision_loss)]
+        let mut knots: Vec<f64> = (0..n).map(|k| k as f64).collect();
+        knots.insert(0, 0.0);
+        knots.push(knots[knots.len() - 1]);
+        let line =
+            brepkit_math::nurbs::curve::NurbsCurve::new(1, knots, points, vec![1.0; n]).unwrap();
+        let v = b.vertex([corners[0][0], corners[0][1], 0.0]);
+        let e = b
+            .topo
+            .add_edge(Edge::new(v, v, EdgeCurve::NurbsCurve(line)));
+        let wire = b
+            .topo
+            .add_wire(Wire::new(vec![OrientedEdge::new(e, true)], true).unwrap());
+        let face = b.topo.add_face(Face::new(
+            wire,
+            vec![],
+            FaceSurface::Plane { normal, d: 0.0 },
+        ));
+        b.faces.push(face);
+    }
+
+    /// Two squares side by side, each outline one closed B-spline that
+    /// closes on the edge they share. A tab of the lower square reaches into
+    /// the upper one. The stretches along the shared edge do not keep the
+    /// rest of each outline from being read.
+    #[test]
+    fn a_tab_past_a_shared_edge_of_spline_outlines_is_reported() {
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        let mut b = Builder::default();
+        spline_outline(
+            &mut b,
+            &[
+                [10.0, 0.0],
+                [5.0, 0.0],
+                [5.0, 1.0],
+                [4.0, 1.0],
+                [4.0, 0.0],
+                [0.0, 0.0],
+                [0.0, -10.0],
+                [10.0, -10.0],
+            ],
+            z,
+        );
+        spline_outline(
+            &mut b,
+            &[[10.0, 0.0], [10.0, 10.0], [0.0, 10.0], [0.0, 0.0]],
+            -z,
+        );
+        let solid = b.solid();
+        assert_eq!(found(&b.topo, solid).len(), 1);
+
+        let mut b = Builder::default();
+        spline_outline(
+            &mut b,
+            &[[10.0, 0.0], [0.0, 0.0], [0.0, -10.0], [10.0, -10.0]],
+            z,
+        );
+        spline_outline(
+            &mut b,
+            &[[10.0, 0.0], [10.0, 10.0], [0.0, 10.0], [0.0, 0.0]],
+            -z,
+        );
         let solid = b.solid();
         assert!(found(&b.topo, solid).is_empty());
     }
