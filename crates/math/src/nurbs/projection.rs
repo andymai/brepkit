@@ -392,7 +392,10 @@ fn curve_newton_refine(
 ///
 /// Returns [`MathError::ConvergenceFailure`] if Newton iteration does not
 /// converge within the maximum number of iterations and the surface has a
-/// weight that is not positive.
+/// weight that is not positive, and where the proof does not settle within
+/// 512 halvings: two nearest points closer than its slack can need more,
+/// and so can a knot span whose weights differ by a factor of more than
+/// `1e100`.
 pub fn project_point_to_surface(
     surface: &NurbsSurface,
     point: Point3,
@@ -431,7 +434,7 @@ pub fn project_point_to_surface(
             iterations: MAX_ITERATIONS,
         });
     }
-    Ok(nearest::nearest(surface, index, point, tolerance, start))
+    nearest::nearest(surface, index, point, tolerance, start)
 }
 
 /// Find the point of a NURBS surface nearest a point known to lie on it or
@@ -1185,6 +1188,30 @@ mod tests {
         let found = project_point_to_surface(&narrow, Point3::new(0.0, 0.5, 0.1), 1e-9)
             .expect("projection");
         assert!((found.distance - 0.1).abs() < 1e-9, "{found:?}");
+    }
+
+    /// Weights of 1e-200 and 1 across a line put most of it at a parameter
+    /// near 1e-200, where no sum of the proof keeps its digits. The proof
+    /// fails there rather than prove the end of the line nearest.
+    #[test]
+    fn weights_too_far_apart_to_bound_fail_rather_than_mislead() {
+        let line = NurbsSurface::new(
+            0,
+            1,
+            vec![0.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![vec![Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 0.0, 0.0)]],
+            vec![vec![1e-200, 1.0]],
+        )
+        .expect("a surface");
+        let point = Point3::new(0.25, 0.0, 0.0);
+        assert!(line.evaluate(0.5, 1.0 / 3.0 * 1e-200).x() > 0.2);
+        let found = project_point_to_surface(&line, point, 1e-9);
+        assert!(
+            matches!(found, Err(MathError::ConvergenceFailure { .. }))
+                || found.as_ref().is_ok_and(|f| f.distance < 1e-6),
+            "{found:?}"
+        );
     }
 
     /// Weights of `1e-200` give the surface of weights of 1, though their

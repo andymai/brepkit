@@ -20,6 +20,7 @@
 
 use std::collections::BinaryHeap;
 
+use crate::MathError;
 use crate::aabb::Aabb3;
 use crate::nurbs::span_index::SpanIndex;
 use crate::nurbs::surface::NurbsSurface;
@@ -27,11 +28,14 @@ use crate::vec::Point3;
 
 use super::{SurfaceProjection, surface_descend};
 
-/// The most halvings of parts that one proof makes. A point with a whole
-/// curve of nearest points, or with two nearest points that the slack cannot
-/// tell apart, can need more; past this many, the nearest point found
-/// returns.
+/// The most halvings of parts that one proof makes. Two nearest points that
+/// the slack cannot tell apart can need more, and so can a span whose
+/// weights differ too much to bound; past this many, the proof fails.
 const MOST_HALVINGS: usize = 512;
+
+/// Weights of a part farther apart than this ratio leave the products of
+/// its bounds without digits: the squares of the least underflow.
+const WEIGHT_SPREAD: f64 = 1e100;
 
 /// The share of the largest coordinate of the point and the surface below
 /// which the slack of the proof does not go: rounding moves the sums of the
@@ -70,6 +74,9 @@ struct Cell {
     /// least ratio of the coefficients, or the squared distance to the box
     /// of the control points where that is more.
     floor: f64,
+    /// The weights spread too far for the coefficients to bound the part:
+    /// only its box does, and the bound from the curvature is not read.
+    rough: bool,
 }
 
 impl Cell {
@@ -129,13 +136,18 @@ struct Scratch {
 /// share of the size of the model that rounding can move a distance by.
 /// Each part of a patch whose bounds do not prove that is halved, up to
 /// [`MOST_HALVINGS`] times.
+///
+/// # Errors
+///
+/// Returns [`MathError::ConvergenceFailure`] where a part is left that the
+/// halvings did not settle.
 pub(super) fn nearest(
     surface: &NurbsSurface,
     index: &SpanIndex,
     point: Point3,
     tolerance: f64,
     start: SurfaceProjection,
-) -> SurfaceProjection {
+) -> Result<SurfaceProjection, MathError> {
     let hull = surface.aabb();
     let size = [hull.min, hull.max, point]
         .iter()
@@ -144,8 +156,11 @@ pub(super) fn nearest(
     let slack = tolerance.max(ROUNDING * size);
     let mut best = start;
     if best.distance <= slack {
-        return best;
+        return Ok(best);
     }
+    let unsettled = Err(MathError::ConvergenceFailure {
+        iterations: MOST_HALVINGS,
+    });
     let (u_min, u_max) = surface.domain_u();
     let (v_min, v_max) = surface.domain_v();
     let (rows, cols) = (surface.degree_u() + 1, surface.degree_v() + 1);
@@ -169,14 +184,11 @@ pub(super) fn nearest(
         let Some((net, u, v)) = index.bezier_net(surface, i) else {
             continue;
         };
-        if !net.iter().flatten().all(|c| c.is_finite()) {
-            return best;
-        }
         // A common factor of the weights leaves the surface as it is; taken
         // out, it cannot carry the products out of the range of a float.
         let scale = net.iter().fold(0.0_f64, |m, q| m.max(q[3].abs()));
-        if scale <= 0.0 {
-            return best;
+        if scale <= 0.0 || !net.iter().flatten().all(|c| c.is_finite()) {
+            return unsettled;
         }
         let points = net
             .iter()
@@ -200,7 +212,18 @@ pub(super) fn nearest(
             break;
         }
         let gaps = cell.gaps(bound);
-        let (at, gap, slope) = search.lowest(&cell, bound, &best, &gaps);
+        let (at, gap, slope) = if cell.rough {
+            // The sums for `g` lose their digits; the surface itself does
+            // not, and its middle may be nearer.
+            let middle = surface.evaluate(
+                f64::midpoint(cell.u.0, cell.u.1),
+                f64::midpoint(cell.v.0, cell.v.1),
+            );
+            let d = (middle - point).length_squared();
+            ([0.5, 0.5], d - bound, [0.0, 0.0])
+        } else {
+            search.lowest(&cell, bound, &best, &gaps)
+        };
         if gap < 0.0 {
             // Along a direction of degree zero the surface steps at each
             // knot, so the seed keeps to the middle of the part's span.
@@ -227,7 +250,7 @@ pub(super) fn nearest(
             if found.distance < best.distance {
                 best = found;
                 if best.distance <= slack {
-                    return best;
+                    return Ok(best);
                 }
                 heap.push(cell);
                 continue;
@@ -236,13 +259,16 @@ pub(super) fn nearest(
         let partials = search.second_partials(&gaps);
         let [ss, st, tt] = &partials;
         let bends = (ss.least(), tt.least(), st.largest_size());
-        if model_floor(at, gap, slope, bends) >= 0.0 || halvings >= MOST_HALVINGS {
+        if !cell.rough && model_floor(at, gap, slope, bends) >= 0.0 {
             continue;
+        }
+        if halvings >= MOST_HALVINGS {
+            return unsettled;
         }
         halvings += 1;
         heap.extend(search.halves(&cell, search.halve_along_u(&gaps, &partials), below(&best)));
     }
-    best
+    Ok(best)
 }
 
 /// The parameter `share` of the way across `range`, its end exactly at 1.
@@ -259,11 +285,21 @@ impl Search {
     /// than the square root of `bound`.
     fn cell(
         &self,
-        points: Vec<[f64; 4]>,
+        mut points: Vec<[f64; 4]>,
         u: (f64, f64),
         v: (f64, f64),
         bound: f64,
     ) -> Option<Cell> {
+        // A common factor of the weights leaves the part as it is; taken
+        // out, the products below stay in the range of a float.
+        let most = points.iter().fold(0.0_f64, |m, q| m.max(q[3]));
+        if most > 0.0 && most.is_finite() {
+            for q in &mut points {
+                for c in q.iter_mut() {
+                    *c /= most;
+                }
+            }
+        }
         // The part lies in the box of its points, which the point is at the
         // origin of: the box's squared distance from the origin bounds too.
         let hull = Aabb3::from_points(
@@ -298,16 +334,22 @@ impl Search {
                 }
             }
         }
-        // A ratio that is not a number bounds nothing, and leaves the floor
-        // at zero.
-        let floor = squares
-            .iter()
-            .zip(&weights)
-            .map(|(s, w)| s / w)
-            .fold(f64::INFINITY, |m, r| {
-                if r.is_nan() { 0.0_f64.min(m) } else { m.min(r) }
-            })
-            .max(hull);
+        let (least, most) = points.iter().fold((f64::INFINITY, 0.0_f64), |(lo, hi), q| {
+            (lo.min(q[3]), hi.max(q[3]))
+        });
+        let rough = least * WEIGHT_SPREAD < most
+            || !squares.iter().chain(&weights).all(|c| c.is_finite())
+            || weights.iter().any(|&w| w <= 0.0);
+        let floor = if rough {
+            hull
+        } else {
+            squares
+                .iter()
+                .zip(&weights)
+                .map(|(s, w)| s / w)
+                .fold(f64::INFINITY, f64::min)
+                .max(hull)
+        };
         (floor < bound).then_some(Cell {
             points,
             u,
@@ -315,6 +357,7 @@ impl Search {
             squares,
             weights,
             floor,
+            rough,
         })
     }
 
