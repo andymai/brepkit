@@ -1,0 +1,19 @@
+crates/operations/src/tessellate/solid.rs
+  s_0db8415e6f59cd::t_819ac51a113d1a 1405-1407
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "631277a9b0a73fc167a134c0bee9de0e185a4f9a",
+  "prompts": {},
+  "sessions": {
+    "s_0db8415e6f59cd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "80c728ce-cbd9-4375-adac-8fbf308dc911",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
