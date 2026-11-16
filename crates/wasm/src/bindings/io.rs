@@ -197,9 +197,10 @@ impl BrepKernel {
     ///
     /// # Errors
     ///
-    /// Returns an error if the STL data is malformed or empty, a part of
-    /// the mesh does not close, or a body lies in the material of another.
-    /// `importStlParts` returns each part of such a mesh.
+    /// Returns an error if the STL data is malformed or empty, two closed
+    /// bodies of the mesh cross, a part of the mesh does not close, or a
+    /// body lies in the material of another. `importStlParts` returns each
+    /// part of such a mesh.
     #[wasm_bindgen(js_name = "importStl")]
     pub fn import_stl(&mut self, data: &[u8]) -> Result<u32, JsError> {
         let mesh = brepkit_io::stl::reader::read_stl(data)?;
@@ -233,9 +234,10 @@ impl BrepKernel {
     ///
     /// # Errors
     ///
-    /// Returns an error if the arrays are malformed, a part of the mesh
-    /// does not close, or a body lies in the material of another.
-    /// `importIndexedMeshParts` returns each part of such a mesh.
+    /// Returns an error if the arrays are malformed, two closed bodies of
+    /// the mesh cross, a part of the mesh does not close, or a body lies in
+    /// the material of another. `importIndexedMeshParts` returns each part
+    /// of such a mesh.
     #[wasm_bindgen(js_name = "importIndexedMesh")]
     pub fn import_indexed_mesh(
         &mut self,
@@ -251,7 +253,9 @@ impl BrepKernel {
     ///
     /// Returns a JSON string `{ solids: number[], shells: number[] }`. A
     /// closed body is a solid, with each inward closed body in it as a
-    /// cavity. A body that does not close is a shell.
+    /// cavity. Two closed bodies that share an edge are two solids. A body
+    /// that does not close, and an inward closed body that crosses another
+    /// body, is a shell.
     ///
     /// # Errors
     ///
@@ -509,6 +513,43 @@ mod tests {
             )
         );
         assert_eq!(k.get_shell_faces(parts.shells[0]).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn two_indexed_cubes_that_share_an_edge_are_two_solids() {
+        let mut positions = cube_positions(0.0);
+        positions.extend(
+            cube_positions(10.0)
+                .chunks_exact(3)
+                .flat_map(|p| [p[0], p[1] + 10.0, p[2]]),
+        );
+        let mut indices = CUBE.to_vec();
+        indices.extend(CUBE.iter().map(|i| i + 8));
+
+        let mut k = BrepKernel::new();
+        let solid = k.import_indexed_mesh(&positions, &indices).unwrap();
+        assert_eq!(k.get_solid_pieces(solid).unwrap().len(), 2);
+        let mesh = indexed_mesh(&positions, &indices).unwrap();
+        let parts = mesh_parts(k.topo_mut(), &mesh).unwrap();
+        assert_eq!((parts.solids.len(), parts.shells.len()), (2, 0));
+    }
+
+    #[test]
+    fn two_indexed_cubes_that_cross_are_not_one_solid() {
+        let mut positions = cube_positions(0.0);
+        positions.extend(
+            cube_positions(5.0)
+                .chunks_exact(3)
+                .flat_map(|p| [p[0], p[1] + 5.0, p[2] + 5.0]),
+        );
+        let mut indices = CUBE.to_vec();
+        indices.extend(CUBE.iter().map(|i| i + 8));
+
+        let mut k = BrepKernel::new();
+        let mesh = indexed_mesh(&positions, &indices).unwrap();
+        assert!(brepkit_io::stl::import::import_mesh(k.topo_mut(), &mesh, TOL).is_err());
+        let parts = mesh_parts(k.topo_mut(), &mesh).unwrap();
+        assert_eq!((parts.solids.len(), parts.shells.len()), (2, 0));
     }
 
     #[test]

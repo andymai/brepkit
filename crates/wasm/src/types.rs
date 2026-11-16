@@ -21,7 +21,8 @@ pub struct GroupedMeshResult {
 pub struct MeshImportResult {
     /// A solid handle for each closed body, cavities included.
     pub solids: Vec<u32>,
-    /// A shell handle for each body that does not close.
+    /// A shell handle for each body that does not bound a solid: a body that
+    /// does not close, and an inward closed body that crosses another body.
     pub shells: Vec<u32>,
 }
 

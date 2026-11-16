@@ -3765,12 +3765,16 @@ struct ComponentMesh {
     faces: Vec<std::ops::Range<usize>>,
     min: Point3,
     max: Point3,
+    /// The component's own box (`component_aabb`), which its interior
+    /// point is read from.
+    bounds: (Point3, Point3),
 }
 
 impl ComponentMesh {
     fn new(topo: &Topology, comp: &[FaceId]) -> Option<Self> {
-        let (min, max) = component_aabb(topo, comp)?;
-        let deflection = ((max - min).length() * 1e-3).min(0.01);
+        let bounds = component_aabb(topo, comp)?;
+        let (min, max) = bounds;
+        let deflection = component_deflection(min, max);
         let mut triangles: Vec<[Point3; 3]> = Vec::new();
         let mut faces = Vec::with_capacity(comp.len());
         for &fid in comp {
@@ -3800,6 +3804,7 @@ impl ComponentMesh {
             faces,
             min,
             max,
+            bounds,
         })
     }
 
@@ -3845,7 +3850,7 @@ fn pieces_only_touch(topo: &Topology, pieces: &[Vec<FaceId>]) -> bool {
                 .enumerate()
                 .all(|(j, mesh)| i == j || mesh.as_ref().is_some_and(|m| !m.holds(p)))
         };
-        component_interior_point(topo, piece).is_some_and(outside_others)
+        interior_point_in(topo, piece, &own.triangles, own.bounds).is_some_and(outside_others)
             && face_witnesses(own, clear).is_some_and(|ws| {
                 ws.into_iter().all(|w| {
                     outside_others(w.inside)
@@ -3942,14 +3947,8 @@ fn triangles_hold(triangles: &[[Point3; 3]], p: Point3) -> bool {
 /// reads a trimmed torus face as its whole band. `None` when no point is
 /// found.
 fn component_interior_point(topo: &Topology, comp: &[FaceId]) -> Option<Point3> {
-    let (min, max) = component_aabb(topo, comp)?;
-    let centre = Point3::new(
-        (min.x() + max.x()) * 0.5,
-        (min.y() + max.y()) * 0.5,
-        (min.z() + max.z()) * 0.5,
-    );
-    let extent = (max - min).length();
-    let deflection = (extent * 1e-3).min(0.01);
+    let bounds = component_aabb(topo, comp)?;
+    let deflection = component_deflection(bounds.0, bounds.1);
     let mut triangles: Vec<[Point3; 3]> = Vec::new();
     for &fid in comp {
         let mesh = crate::tessellate::tessellate_with_uvs(topo, fid, deflection).ok()?;
@@ -3962,21 +3961,31 @@ fn component_interior_point(topo: &Topology, comp: &[FaceId]) -> Option<Point3> 
             ]);
         }
     }
+    interior_point_in(topo, comp, &triangles, bounds)
+}
+
+/// How finely a face component is meshed to read which points it holds: a
+/// thousandth of its box's diagonal, and no coarser than 0.01.
+fn component_deflection(min: Point3, max: Point3) -> f64 {
+    ((max - min).length() * 1e-3).min(0.01)
+}
+
+/// [`component_interior_point`] on the component's mesh already made at
+/// [`component_deflection`] of its box `bounds`.
+fn interior_point_in(
+    topo: &Topology,
+    comp: &[FaceId],
+    triangles: &[[Point3; 3]],
+    (min, max): (Point3, Point3),
+) -> Option<Point3> {
+    let centre = Point3::new(
+        (min.x() + max.x()) * 0.5,
+        (min.y() + max.y()) * 0.5,
+        (min.z() + max.z()) * 0.5,
+    );
+    let extent = (max - min).length();
     // A sqrt-prime direction cannot lie in a face plane or run along an edge.
-    let dir = Vec3::new(2.0_f64.sqrt(), 3.0_f64.sqrt(), 5.0_f64.sqrt())
-        .normalize()
-        .ok()?;
-    let holds = |p: Point3| {
-        triangles
-            .iter()
-            .filter(|&&[a, b, c]| {
-                brepkit_math::ray_triangle::watertight_ray_triangle_intersect(p, dir, a, b, c)
-                    .is_some_and(|hit| hit.t > 1e-9)
-            })
-            .count()
-            % 2
-            == 1
-    };
+    let holds = |p: Point3| triangles_hold(triangles, p);
     if holds(centre) {
         return Some(centre);
     }

@@ -165,11 +165,18 @@ fn blends_keep_their_continuity_between_different_surface_types() {
             let pose = Pose::turned();
             let (at, exit) = chain_exit(kind_a);
             let (at_b, exit_b) = chain_exit(kind_b);
+            // Two exits that run the same way have no cross product, and need a
+            // half turn about an axis square to them.
+            let axis = exit_b.cross(-exit).normalize().unwrap_or_else(|_| {
+                let side = if exit.x().abs() < 0.9 {
+                    Vec3::new(1.0, 0.0, 0.0)
+                } else {
+                    Vec3::new(0.0, 1.0, 0.0)
+                };
+                exit.cross(side).normalize().unwrap()
+            });
             let meet = Pose::turn(
-                exit_b
-                    .cross(-exit)
-                    .normalize()
-                    .unwrap_or(Vec3::new(0.0, 0.0, 1.0)),
+                axis,
                 exit_b.dot(-exit).clamp(-1.0, 1.0).acos(),
                 [0.0, 0.0, 0.0],
             );
@@ -208,7 +215,13 @@ fn blends_keep_their_continuity_between_different_surface_types() {
     table.print("blend_surface, every pair of types, turned pose");
 }
 
-/// A chain of two sides of each fixture: a corner on every surface type.
+/// The fixtures whose side after the chain runs nearly along the gap to the
+/// sheet across. Along that side the surface runs nearly the way it crosses,
+/// and it folds.
+const CORNERS_ALONG_THE_GAP: [&str; 2] = ["cone rim", "torus tube"];
+
+/// A chain of two sides of each fixture: a corner on every surface type,
+/// refused where the surface folds.
 #[test]
 fn a_chain_may_turn_a_corner_on_every_surface_type() {
     let mut table = Table::default();
@@ -222,15 +235,23 @@ fn a_chain_may_turn_a_corner_on_every_surface_type() {
                 let next = (at + 1) % a.boundary.len();
                 a.chain.push(a.boundary[next]);
                 b.chain.push(b.boundary[next]);
-                let face = blend_surface(
+                let made = blend_surface(
                     &mut topo,
                     &a.chain,
                     a.face,
                     &b.chain,
                     b.face,
                     &BlendSurfaceOptions::new(continuity),
-                )
-                .unwrap_or_else(|e| panic!("{kind} {pose_name} {continuity:?}: {e}"));
+                );
+                if CORNERS_ALONG_THE_GAP.contains(&kind) {
+                    let Err(OperationsError::InvalidInput { reason }) = made else {
+                        panic!("{kind} {pose_name} {continuity:?}: {made:?}");
+                    };
+                    assert!(reason.contains("fold"), "{kind}: {reason}");
+                    continue;
+                }
+                let face =
+                    made.unwrap_or_else(|e| panic!("{kind} {pose_name} {continuity:?}: {e}"));
                 let result = nurbs_of(&topo, face);
                 let (seam_a, seam_b) = both_seams(&topo, &result, &a, &b);
                 assert_seams(
@@ -247,9 +268,23 @@ fn a_chain_may_turn_a_corner_on_every_surface_type() {
     table.print("blend_surface, chains turning a corner: worst over 400 samples a seam");
 }
 
-/// A line, a tangent arc and a spline on a plane, each stored either way; the
-/// spline starts at a kink.
-fn mixed_plane_sheet(topo: &mut Topology, pose: Pose, flips: [bool; 3], z: f64) -> Sheet {
+/// The two points a mixed sheet's spline passes between its ends: it bends
+/// gently.
+const GENTLE: [(f64, f64); 2] = [(-2.6, 7.3), (-3.2, 8.7)];
+
+/// As [`GENTLE`], for a spline that hooks back toward the sheet across, with
+/// a radius of about 0.7 where the chains are 14 apart.
+const HOOKED: [(f64, f64); 2] = [(-3.5, 7.0), (-3.0, 8.5)];
+
+/// A line, a tangent arc and a spline through `bend` on a plane, each stored
+/// either way; the spline starts at a kink.
+fn mixed_plane_sheet(
+    topo: &mut Topology,
+    pose: Pose,
+    flips: [bool; 3],
+    z: f64,
+    bend: [(f64, f64); 2],
+) -> Sheet {
     let mut b = Builder { topo, pose };
     let p = |x: f64, y: f64| Point3::new(x, y, z);
     let corners = [
@@ -272,7 +307,12 @@ fn mixed_plane_sheet(topo: &mut Topology, pose: Pose, flips: [bool; 3], z: f64) 
     } else {
         b.arc(p(-2.0, 4.0), up, 2.0, v[1], v[2])
     };
-    let through = [p(-2.0, 6.0), p(-3.5, 7.0), p(-3.0, 8.5), p(-4.0, 10.0)];
+    let through = [
+        p(-2.0, 6.0),
+        p(bend[0].0, bend[0].1),
+        p(bend[1].0, bend[1].1),
+        p(-4.0, 10.0),
+    ];
     let spline = if flips[2] {
         let back: Vec<Point3> = through.iter().rev().copied().collect();
         b.spline(&back, v[3], v[2])
@@ -319,8 +359,9 @@ fn a_mixed_chain_blends_the_same_however_it_is_stored() {
             ] {
                 for reverse_list in [false, true] {
                     let mut topo = Topology::new();
-                    let mut a = mixed_plane_sheet(&mut topo, pose(), flips, 0.0);
-                    let b = mixed_plane_sheet(&mut topo, across.then(pose()), [false; 3], 0.0);
+                    let mut a = mixed_plane_sheet(&mut topo, pose(), flips, 0.0, GENTLE);
+                    let b =
+                        mixed_plane_sheet(&mut topo, across.then(pose()), [false; 3], 0.0, GENTLE);
                     if reverse_list {
                         a.chain.reverse();
                     }
@@ -359,11 +400,42 @@ fn a_mixed_chain_blends_the_same_however_it_is_stored() {
     }
 }
 
+/// Where a chain hooks back toward the chain across more tightly than the
+/// surface reaches out from it, the middle of the surface stops and runs back
+/// along the chains, and the surface folds. It is refused.
+#[test]
+fn a_chain_that_hooks_toward_the_other_tighter_than_the_reach_is_refused() {
+    let across = Pose::reflection(Point3::new(4.0, 0.0, 0.0), Vec3::new(1.0, 0.0, 0.0))
+        .then(Pose::turn(Vec3::new(0.0, 0.0, 1.0), 0.1, [0.0, 0.5, 1.0]));
+    for (pose_name, pose) in POSES {
+        for continuity in [BlendContinuity::G1, BlendContinuity::G2] {
+            let mut topo = Topology::new();
+            let a = mixed_plane_sheet(&mut topo, pose(), [false; 3], 0.0, HOOKED);
+            let b = mixed_plane_sheet(&mut topo, across.then(pose()), [false; 3], 0.0, HOOKED);
+            let refused = blend_surface(
+                &mut topo,
+                &a.chain,
+                a.face,
+                &b.chain,
+                b.face,
+                &BlendSurfaceOptions::new(continuity),
+            );
+            let Err(OperationsError::InvalidInput { reason }) = refused else {
+                panic!("{pose_name} {continuity:?}: {refused:?}");
+            };
+            assert!(
+                reason.contains("fold"),
+                "{pose_name} {continuity:?}: {reason}"
+            );
+        }
+    }
+}
+
 /// Two chains of different edge counts pair by arc length.
 #[test]
 fn chains_of_different_edge_counts_pair_by_arc_length() {
     let mut topo = Topology::new();
-    let a = mixed_plane_sheet(&mut topo, Pose::turned(), [false, true, false], 0.0);
+    let a = mixed_plane_sheet(&mut topo, Pose::turned(), [false, true, false], 0.0, GENTLE);
     let far =
         Pose::reflection(Point3::new(3.0, 0.0, 0.0), Vec3::new(1.0, 0.0, 0.0)).then(Pose::turned());
     let b = sheet(&mut topo, "plane", far);
@@ -1708,7 +1780,7 @@ fn an_ellipse_arc_is_a_chain_too() {
                     5.0,
                     2.0,
                     pose.vector(Vec3::new(0.0, -1.0, 0.0)),
-                    pose.vector(Vec3::new(2.0, 0.0, 0.0)).normalize().unwrap() * flip,
+                    pose.vector(Vec3::new(2.0, 0.0, 0.0)).normalize().unwrap(),
                 )
                 .unwrap_or_else(|e| panic!("{e}: {v_axis:?}")),
             )

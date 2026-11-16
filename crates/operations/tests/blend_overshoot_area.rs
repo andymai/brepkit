@@ -278,18 +278,28 @@ fn the_fold_measure_finds_a_fold_on_the_line_two_pieces_share() {
     assert_eq!(first_fold(&closing), None);
 }
 
-/// `blend_surface` returns a surface that folds. Tracked in #2469.
+/// A blend in one plane folds past a weight of 3 at G1 and of about 2.2 at
+/// G2, and is refused.
 #[test]
-#[ignore = "blend_surface does not refuse a surface that folds (#2469)"]
 fn a_blend_in_one_plane_that_folds_is_refused() {
+    let cases = [
+        (BlendContinuity::G1, [3.01, 3.5, 6.0, 20.0]),
+        (BlendContinuity::G2, [2.5, 3.5, 6.0, 20.0]),
+    ];
     for (name, pose) in poses() {
-        for weight in [3.01, 3.5, 6.0, 20.0] {
+        for (continuity, weight) in cases
+            .iter()
+            .flat_map(|(c, weights)| weights.iter().map(move |w| (*c, *w)))
+        {
             let mut topo = Topology::new();
-            let refused = blend(&mut topo, pose, 0.0, BlendContinuity::G1, weight);
+            let refused = blend(&mut topo, pose, 0.0, continuity, weight);
             let Err(OperationsError::InvalidInput { reason }) = refused else {
-                panic!("{name} weight {weight}: {refused:?}");
+                panic!("{name} {continuity:?} weight {weight}: {refused:?}");
             };
-            assert!(reason.contains("fold"), "{name} weight {weight}: {reason}");
+            assert!(
+                reason.contains("fold"),
+                "{name} {continuity:?} weight {weight}: {reason}"
+            );
         }
     }
 }

@@ -151,7 +151,8 @@ impl<'a> ChamferBuilder<'a> {
     /// 3. Build single-edge spines (no chain propagation in v1).
     /// 4. Compute stripes via analytic fast path or record failure.
     /// 5. Trim adjacent faces along contact curves, recording a stripe that
-    ///    cannot trim both its faces as a failure.
+    ///    cannot trim both its faces as a failure. A second edge that trims
+    ///    at a vertex of one trimmed before ends the build.
     /// 6. Assemble new solid from trimmed faces, blend faces, untouched
     ///    original faces, and the input's inner shells.
     ///
@@ -161,9 +162,10 @@ impl<'a> ChamferBuilder<'a> {
     /// # Errors
     ///
     /// Returns [`BlendError`] if no edges were specified, an edge lies on an
-    /// inner shell, or topology lookups fail. Individual edge failures are
-    /// recorded in [`BlendResult::failed`] rather than aborting the whole
-    /// operation.
+    /// inner shell, or topology lookups fail. Returns
+    /// [`BlendError::CornerFailure`] at the first vertex where two chamfered
+    /// edges that trimmed meet. Other edge failures are recorded in
+    /// [`BlendResult::failed`] rather than aborting the whole operation.
     pub fn build(self) -> Result<BlendResult, BlendError> {
         let Self {
             topo,
@@ -289,6 +291,11 @@ impl<'a> ChamferBuilder<'a> {
         // trims left on them.
         let mut trimmed: Vec<(EdgeId, StripeResult, [Option<EdgeId>; 2])> = Vec::new();
         let mut consumed: HashSet<FaceId> = HashSet::new();
+        // The end vertex of each open edge that trimmed. Two chamfers that
+        // meet at a vertex need a mitre between their planes, which this
+        // builder does not make: the second one to trim there ends the build
+        // before the work on the rest.
+        let mut ends_taken: HashMap<VertexId, EdgeId> = HashMap::new();
         for (edge_id, sr) in stripe_results {
             let stripe = &sr.stripe;
 
@@ -364,6 +371,16 @@ impl<'a> ChamferBuilder<'a> {
                 }
                 failed.push((edge_id, error));
                 continue;
+            }
+            if corners[0] != corners[1] {
+                for corner in corners {
+                    if ends_taken
+                        .insert(corner, edge_id)
+                        .is_some_and(|other| other != edge_id)
+                    {
+                        return Err(BlendError::CornerFailure { vertex: corner });
+                    }
+                }
             }
             consumed.extend(slivers);
             succeeded.push(edge_id);
