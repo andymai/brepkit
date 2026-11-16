@@ -183,31 +183,42 @@ pub(super) fn sample_wire_loop_uv_periodic(
                     let whole_periods = |at_start: f64, at_end: f64| {
                         let turns = (at_start / std::f64::consts::TAU).round();
                         let shift = turns * std::f64::consts::TAU;
-                        ((at_start - shift).abs() < 1e-2 && (at_end - shift).abs() < 1e-2)
-                            .then_some(shift)
+                        let residual = (at_start - shift).abs().max((at_end - shift).abs());
+                        (shift, (residual < 1e-2).then_some(residual))
                     };
                     let shifts = |t_first: f64, t_last: f64| {
                         let (first, last) = (nurbs.evaluate(t_first), nurbs.evaluate(t_last));
+                        let (du, u_fit) = whole_periods(
+                            edge.start_uv.x() - first.x(),
+                            edge.end_uv.x() - last.x(),
+                        );
+                        let (dv, v_fit) = whole_periods(
+                            edge.start_uv.y() - first.y(),
+                            edge.end_uv.y() - last.y(),
+                        );
+                        let fit = u_fit.zip(v_fit).map(|(a, b)| a.max(b));
                         (
-                            whole_periods(
-                                edge.start_uv.x() - first.x(),
-                                edge.end_uv.x() - last.x(),
-                            ),
-                            whole_periods(
-                                edge.start_uv.y() - first.y(),
-                                edge.end_uv.y() - last.y(),
-                            ),
+                            if u_fit.is_some() { du } else { 0.0 },
+                            if v_fit.is_some() { dv } else { 0.0 },
+                            fit,
                         )
                     };
                     // A section's pcurve runs the curve's own way, so a
                     // reverse edge is read from tn to t0; a boundary edge's
                     // is fit in traversal order. Read it the way whose ends
-                    // land on the edge's own.
+                    // land nearer the edge's own (on an edge shorter than the
+                    // fit's band, both ways land within it).
                     let (from, to) = if edge.forward { (t0, tn) } else { (tn, t0) };
-                    let (from, to, (du, dv)) = match (shifts(from, to), shifts(to, from)) {
-                        ((Some(du), Some(dv)), _) => (from, to, (du, dv)),
-                        (_, (Some(du), Some(dv))) => (to, from, (du, dv)),
-                        ((du, dv), _) => (from, to, (du.unwrap_or(0.0), dv.unwrap_or(0.0))),
+                    let (stored, turned) = (shifts(from, to), shifts(to, from));
+                    let reads_turned = match (stored.2, turned.2) {
+                        (Some(a), Some(b)) => b < a,
+                        (None, Some(_)) => true,
+                        _ => false,
+                    };
+                    let (from, to, (du, dv, _)) = if reads_turned {
+                        (to, from, turned)
+                    } else {
+                        (from, to, stored)
                     };
                     #[allow(clippy::cast_precision_loss)]
                     for i in 0..CURVE_SAMPLES {
@@ -317,10 +328,23 @@ mod tests {
     fn a_reverse_edge_samples_from_its_start_whichever_way_its_pcurve_runs() {
         let tau = std::f64::consts::TAU;
         let (a, b) = (Point2::new(1.0, 2.0), Point2::new(1.0, 4.0));
-        for (shift, pcurve) in [(0.0, (b, a)), (0.0, (a, b)), (tau, (b, a)), (tau, (a, b))] {
+        let short = Point2::new(1.0, 2.005);
+        for (shift, pcurve) in [
+            (0.0, (b, a)),
+            (0.0, (a, b)),
+            (tau, (b, a)),
+            (tau, (a, b)),
+            (0.0, (short, a)),
+            (0.0, (a, short)),
+        ] {
+            let end = if pcurve.0 == short || pcurve.1 == short {
+                short
+            } else {
+                b
+            };
             let uv = (
                 Point2::new(a.x(), a.y() + shift),
-                Point2::new(b.x(), b.y() + shift),
+                Point2::new(end.x(), end.y() + shift),
             );
             let pts = sample_wire_loop_uv_periodic(&[edge(pcurve, uv, false)], None, None);
             assert!((pts[0] - uv.0).length() < 1e-12, "{pcurve:?}: {pts:?}");
