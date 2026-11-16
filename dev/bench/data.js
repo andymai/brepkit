@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794804478639,
+  "lastUpdate": 1794804848606,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -71171,6 +71171,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 17782863,
             "range": "± 76357",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b0b9f03c76d014c7b5883910845de760ac3eeb91",
+          "message": "fix(blend): round a plane and a cylinder along the axis with a cylinder (#2518)\n\n## Summary\n\n`fillet_v2` along the straight edge between a plane and a cylinder whose\naxis is parallel to the plane gave a B-spline band. The band is now an\nexact cylinder of the fillet radius. Closes #2460.\n\n`plane_cylinder_fillet` in `crates/blend/src/analytic.rs` took only a\ncylinder whose axis is parallel to the normal of the plane. For any\nother axis it returned `None`, and the walker made the band.\n\nA plane and a cylinder whose axis is parallel to the plane meet on\nstraight lines along the axis. Along such a line, the center of the ball\nmoves on a line parallel to the axis. `plane_cylinder_fillet` now sends\nthis case to the new `plane_cylinder_side_fillet`. In the section across\nthe axis, the ball sits in the wedge between the two faces at the edge:\n\n- It is one radius off the plane, on the side that the wall goes to from\nthe edge.\n- It is `r_c + r` from the axis where the plane face goes away from the\naxis, and `r_c - r` where it goes toward the axis.\n- Of the two centers that satisfy these conditions, it takes the one on\nthe same side of the axis as the edge, along the plane.\n\n`into_face_from_edge` gives the direction into each face from the edge.\nThe rule is the same for a convex edge and a concave edge. The function\nreturns `None`, and the walker makes the band, in these conditions:\n\n- The spine is not a straight line along the axis on the two surfaces.\n- A face does not hold the spine's edge.\n- The plane is tangent to the wall at the edge.\n- No ball of the radius fits.\n\n## Tests\n\n- `crates/operations/tests/fillet_plane_vault.rs` adds a third pose,\nmirrored and turned. In each case, no face of the result is a B-spline.\nFor the straight edge, exactly one face is a cylinder of radius `r`\nalong the axis of the vault. The removed volume must agree with the\nclosed form to 1e-8. The limit was 1e-4.\n- `a_round_where_a_wall_rises_from_a_vault` and\n`a_round_where_a_wall_rises_from_a_dish` sweep a section along x. The\nsection has a wall that rises 4 above the vault, so the edge between\nthem is concave. Each case requires a valid solid and a watertight mesh\nat deflection 0.05 and 0.5. It also requires one more face, the\ncylinder, and the added volume to 1e-8 of its closed form. A point in\nthe filled corner is inside, and the center of the ball is outside. The\nradii are 1 and 2.5, in the three poses.\n- The bowed and dished vaults, with a convex or a concave edge, cover\nfour cases. The plane face goes toward the axis or away from it, and the\nball sits on either side of the plane. The largest volume error of a\nstraight edge is 3.7e-10.\n- With the code of main, the five tests of a straight edge fail with `a\nB-spline face`. The tests of an end arc and of a bore pass with the code\nof main and of this branch.\n- `cargo nextest run -p brepkit-blend -p brepkit-operations -p\nbrepkit-io -p brepkit-wasm` passes: 3,212 tests, 24 skipped.\n- `cargo clippy -p brepkit-blend -p brepkit-operations --all-targets --\n-D warnings`, the workspace clippy of the pre-commit hook, and `cargo\nfmt` pass.\n\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes the fillet between a plane and a cylinder whose axis is parallel\nto the plane, replacing the B-spline band with an exact cylinder of the\nfillet radius. Closes #2460. Adds `plane_cylinder_side_fillet` to handle\nthis case for both convex and concave edges, and extends the test suite\nto verify the round cylinder and volume accuracy to 1e-8 for bowed and\ndished vaults.\n\n<sup>Written for commit 7febc6db2cc4831b1fc81e62c41658a79f6c665b.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2518?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2518?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2518&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-11-15T20:49:14-08:00",
+          "tree_id": "33fb8d39329fd72690a6e79690ec34b6839a7bc0",
+          "url": "https://github.com/andymai/brepkit/commit/b0b9f03c76d014c7b5883910845de760ac3eeb91"
+        },
+        "date": 1794804839123,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1086450,
+            "range": "± 12684",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1131421,
+            "range": "± 8800",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12893,
+            "range": "± 47",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 688241,
+            "range": "± 3275",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24537725,
+            "range": "± 117690",
             "unit": "ns/iter"
           }
         ]
