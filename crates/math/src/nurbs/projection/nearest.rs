@@ -39,6 +39,10 @@ const MOST_HALVINGS: usize = 512;
 /// its bounds without digits: the squares of the least underflow.
 const WEIGHT_SPREAD: f64 = 1e100;
 
+/// A coordinate of a part, in the proof's unit, smaller than this has
+/// products with others like it below the least float.
+const TINY: f64 = 1e-140;
+
 /// The share of the largest coordinate of the point and the surface below
 /// which the slack of the proof does not go: rounding moves the sums of the
 /// proof by about this much, so a smaller slack proves nothing.
@@ -267,13 +271,11 @@ pub(super) fn nearest(
         scratch: RefCell::new(scratch),
         pool: RefCell::new(pool),
     };
-    let below = |best: &SurfaceProjection| (best.distance - slack).powi(2);
-
     // Each span lies in the box of the control points that shape it, so a
     // span whose box is no nearer than the bound holds no nearer point.
-    let mut heap = BinaryHeap::new();
-    let bound = below(&best);
-    for (i, _) in index.spans_within(point, bound.sqrt()) {
+    let mut nets = Vec::new();
+    let mut largest = 0.0_f64;
+    for (i, _) in index.spans_within(point, best.distance - slack) {
         let Some((net, u, v)) = index.bezier_net(surface, i) else {
             continue;
         };
@@ -298,7 +300,36 @@ pub(super) fn nearest(
                 w,
             ]
         }));
-        heap.extend(search.cell(points, u, v, bound, None));
+        if !points.iter().flatten().all(|c| c.is_finite()) {
+            return unsettled;
+        }
+        largest = points
+            .iter()
+            .flat_map(|q| &q[..3])
+            .fold(largest, |m, c| m.max(c.abs()));
+        nets.push((points, u, v));
+    }
+    // The proof reads lengths in a power of two at or above the largest
+    // coordinate taken from the point, so that their squares, and the
+    // differences of those, stay in the range of a float. Division by a
+    // power of two moves no digits.
+    if nets.is_empty() {
+        return Ok(best);
+    }
+    if !(largest > 0.0 && largest.is_finite()) {
+        return unsettled;
+    }
+    let unit = power_of_two_above(largest);
+    let per_unit = 1.0 / unit;
+    let below = |best: &SurfaceProjection| ((best.distance - slack) * per_unit).powi(2);
+    let mut heap = BinaryHeap::new();
+    for (mut points, u, v) in nets {
+        for q in &mut points {
+            for c in &mut q[..3] {
+                *c *= per_unit;
+            }
+        }
+        heap.extend(search.cell(points, u, v, below(&best), None));
     }
 
     let mut halvings = 0;
@@ -317,7 +348,7 @@ pub(super) fn nearest(
                 f64::midpoint(cell.u.0, cell.u.1),
                 f64::midpoint(cell.v.0, cell.v.1),
             );
-            let d = (middle - point).length_squared();
+            let d = ((middle - point) * per_unit).length_squared();
             ([0.5, 0.5], d - bound, [0.0, 0.0])
         } else {
             search.lowest(&cell, bound, &best, &gaps)
@@ -381,7 +412,13 @@ pub(super) fn nearest(
             let partials = search.second_partials(&gaps);
             let [ss, st, tt] = &partials;
             let bends = (ss.least(), tt.least(), st.largest_size());
-            settled = !cell.rough && model_floor(at, gap, slope, bends) >= 0.0;
+            // A bound that is not finite proves nothing: sums past the
+            // largest float give an infinite floor.
+            let floor = model_floor(at, gap, slope, bends);
+            settled = !cell.rough
+                && floor.is_finite()
+                && [bends.0, bends.1, bends.2].iter().all(|b| b.is_finite())
+                && floor >= 0.0;
             along_u = search.halve_along_u(&gaps, &partials);
             for grid in partials {
                 search.give_values(grid.values);
@@ -471,7 +508,14 @@ impl Search {
         let (least, most) = points.iter().fold((f64::INFINITY, 0.0_f64), |(lo, hi), q| {
             (lo.min(q[3]), hi.max(q[3]))
         });
+        // A coordinate this small has products below the least float, and
+        // they can lose their signs.
+        let tiny = points
+            .iter()
+            .flat_map(|q| &q[..3])
+            .any(|&c| c != 0.0 && c.abs() < TINY);
         let rough = least * WEIGHT_SPREAD < most
+            || tiny
             || !squares.iter().chain(&weights).all(|c| c.is_finite())
             || weights.iter().any(|&w| w <= 0.0);
         let floor = if rough {
@@ -869,6 +913,9 @@ fn with_derivatives(points: &[[f64; 4]], t: f64, work: &mut Vec<[f64; 4]>) -> [[
 /// Newton steps find from the best of `hint` and the two ends, and its bend
 /// is the least second derivative, from the coefficients.
 fn stays_positive(coefs: &[f64], hint: f64, work: &mut Vec<f64>) -> bool {
+    if !coefs.iter().all(|c| c.is_finite()) {
+        return false;
+    }
     if coefs.iter().all(|&c| c >= 0.0) {
         return true;
     }
@@ -918,7 +965,20 @@ fn stays_positive(coefs: &[f64], hint: f64, work: &mut Vec<f64>) -> bool {
         }
         (x, value, slope, curve) = (next, v, s, c);
     }
-    value >= 0.0 && value + quadratic_floor(x, slope, bend) >= 0.0
+    let floor = value + quadratic_floor(x, slope, bend);
+    value >= 0.0 && floor.is_finite() && floor >= 0.0
+}
+
+/// The least power of two at or above `x`, a positive finite float, held
+/// to the normal floats.
+fn power_of_two_above(x: f64) -> f64 {
+    const EXPONENT: u64 = 0x7ff0_0000_0000_0000;
+    let low = f64::from_bits(x.max(f64::MIN_POSITIVE).to_bits() & EXPONENT);
+    if low >= x || low >= f64::MAX / 2.0 {
+        low
+    } else {
+        low * 2.0
+    }
 }
 
 /// The polynomial with Bernstein coefficients `coefs` at `t`, with its

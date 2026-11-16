@@ -1369,6 +1369,61 @@ mod tests {
         );
     }
 
+    /// A straight run of `1e154` drawn as a quadratic: its squared sizes
+    /// stay below the largest float, but their second differences do not.
+    /// A bound that comes out infinite proves nothing.
+    #[test]
+    fn sums_past_the_largest_float_do_not_prove_a_part() {
+        let run = NurbsSurface::new(
+            0,
+            2,
+            vec![0.0, 1.0],
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            vec![vec![
+                Point3::new(-5e153, 0.0, 0.0),
+                Point3::new(0.0, 0.0, 0.0),
+                Point3::new(5e153, 0.0, 0.0),
+            ]],
+            vec![vec![1.0; 3]],
+        )
+        .expect("a surface");
+        let point = Point3::new(1e153, 0.0, 0.0);
+        assert!((run.evaluate(0.5, 0.6) - point).length() < 1e140);
+        let found = project_point_to_surface(&run, point, 1e-9);
+        assert!(
+            matches!(found, Err(MathError::ConvergenceFailure { .. }))
+                || found.as_ref().is_ok_and(|f| f.distance < 1e142),
+            "{found:?}"
+        );
+    }
+
+    /// A line `1e-130` long with weights of `1e-90` and 1: the products of
+    /// its coordinates fall below the least float unless the proof scales
+    /// them, and the point `8e-131` along it is on it.
+    #[test]
+    fn coordinates_near_the_least_float_still_bound_the_part() {
+        let line = NurbsSurface::new(
+            0,
+            1,
+            vec![0.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![vec![
+                Point3::new(0.0, 0.0, 0.0),
+                Point3::new(1e-130, 0.0, 0.0),
+            ]],
+            vec![vec![1e-90, 1.0]],
+        )
+        .expect("a surface");
+        let point = Point3::new(8e-131, 0.0, 0.0);
+        assert!((line.evaluate(0.5, 4e-90) - point).length() < 1e-141);
+        let found = project_point_to_surface(&line, point, 1e-150);
+        assert!(
+            matches!(found, Err(MathError::ConvergenceFailure { .. }))
+                || found.as_ref().is_ok_and(|f| f.distance < 1e-141),
+            "{found:?}"
+        );
+    }
+
     /// Weights of `1e-200` give the surface of weights of 1, though their
     /// squares are less than the least float.
     #[test]
