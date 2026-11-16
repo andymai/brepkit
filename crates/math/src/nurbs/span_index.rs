@@ -50,8 +50,10 @@ pub struct SpanIndex {
     boxes: Vec<Aabb3>,
     /// The boxes padded for rounding, in a BVH.
     bvh: Bvh,
-    /// The largest control box diagonal, the scale of the surface's pieces.
-    scale: f64,
+    /// The padding of each box for rounding: a share of the largest
+    /// control box diagonal, the scale of the surface's pieces, and a
+    /// share of the largest coordinate, which rounding moves points by.
+    pad: f64,
     /// Each span's sub-patch boxes, by span index, each made the first time
     /// a search reads it.
     sub_boxes: std::sync::OnceLock<Box<[std::sync::OnceLock<SubBoxes>]>>,
@@ -69,14 +71,14 @@ fn knot_spans(knots: &[f64], degree: usize, n: usize) -> Vec<(f64, f64, usize)> 
 impl SpanIndex {
     /// Index `surface`'s knot spans. `None` when a weight is not positive
     /// (or not a number), where the control boxes need not bound the
-    /// surface.
+    /// surface, or is too small for its products to keep their digits.
     #[must_use]
     pub fn new(surface: &NurbsSurface) -> Option<Self> {
         if surface
             .weights()
             .iter()
             .flatten()
-            .any(|&w| w.is_nan() || w <= 0.0)
+            .any(|&w| w <= 0.0 || !w.is_normal())
         {
             return None;
         }
@@ -108,7 +110,12 @@ impl SpanIndex {
         }
         // Pad each box for rounding, so the BVH holds every point a box
         // comes within a distance of.
-        let pad = 1e-9 * scale.max(1.0);
+        let largest = cps
+            .iter()
+            .flatten()
+            .flat_map(|p| [p.x(), p.y(), p.z()])
+            .fold(0.0_f64, |m, c| m.max(c.abs()));
+        let pad = 1e-9 * scale.max(1.0) + 1e-12 * largest;
         let padded: Vec<(usize, Aabb3)> = boxes
             .iter()
             .enumerate()
@@ -118,7 +125,7 @@ impl SpanIndex {
             spans,
             boxes,
             bvh: Bvh::build(&padded),
-            scale,
+            pad,
             sub_boxes: std::sync::OnceLock::new(),
         })
     }
@@ -183,7 +190,7 @@ impl SpanIndex {
     /// Span `i`'s sub-patch boxes, made the first time they are read.
     fn sub_boxes_of(&self, surface: &NurbsSurface, i: usize) -> Option<&SubBoxes> {
         let span = *self.spans.get(i)?;
-        let pad = 1e-9 * self.scale.max(1.0);
+        let pad = self.pad;
         Some(
             self.sub_boxes
                 .get_or_init(|| {
@@ -408,6 +415,59 @@ mod tests {
         for s in [u_wall(), heavy] {
             sub_patch_boxes_hold_the_span_of(&s);
         }
+    }
+
+    /// A small surface far from the origin: rounding there is about a ten
+    /// thousandth of a unit, far more than a share of the surface's size.
+    #[test]
+    fn sub_patch_boxes_hold_a_span_far_from_the_origin() {
+        let s = u_wall();
+        let far = NurbsSurface::new(
+            s.degree_u(),
+            s.degree_v(),
+            s.knots_u().to_vec(),
+            s.knots_v().to_vec(),
+            s.control_points()
+                .iter()
+                .map(|row| {
+                    row.iter()
+                        .map(|p| Point3::new(p.x() + 1e12, p.y() + 1e12, p.z() + 1e12))
+                        .collect()
+                })
+                .collect(),
+            s.weights().to_vec(),
+        )
+        .unwrap();
+        sub_patch_boxes_hold_the_span_of(&far);
+        let index = SpanIndex::new(&far).unwrap();
+        let p = far.evaluate(0.25, 0.0);
+        let b = Aabb3 { min: p, max: p };
+        assert!(!index.box_clears(&far, &b, 8e-7));
+    }
+
+    /// Weights below the least normal float leave the products of a span's
+    /// net without digits, so no index is made.
+    #[test]
+    fn subnormal_weights_get_no_index() {
+        let cps = (0..3)
+            .map(|i| {
+                (0..2)
+                    .map(|j| {
+                        Point3::new(f64::from(i), f64::from(j), if i == 1 { 1.0 } else { 0.0 })
+                    })
+                    .collect()
+            })
+            .collect();
+        let s = NurbsSurface::new(
+            2,
+            1,
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            cps,
+            vec![vec![1e-323; 2]; 3],
+        )
+        .unwrap();
+        assert!(SpanIndex::new(&s).is_none());
     }
 
     fn sub_patch_boxes_hold_the_span_of(s: &NurbsSurface) {
