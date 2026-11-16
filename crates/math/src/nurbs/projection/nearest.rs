@@ -18,7 +18,9 @@
 //! quadratic stays at or above zero, no point of the part is nearer than
 //! `d - slack`.
 
+use std::cell::RefCell;
 use std::collections::BinaryHeap;
+use std::rc::Rc;
 
 use crate::MathError;
 use crate::aabb::Aabb3;
@@ -48,8 +50,23 @@ const SETTLED: f64 = 1e-10;
 
 /// `C(p, i) C(p, j) / C(2p, i + j)` at `i * (p + 1) + j`: the share of the
 /// product of Bernstein terms `i` and `j` of degree `p` in term `i + j` of
-/// degree `2p`.
-fn product_shares(p: usize) -> Vec<f64> {
+/// degree `2p`. Each degree's shares are made once on each thread.
+fn product_shares(p: usize) -> Rc<[f64]> {
+    thread_local! {
+        static SHARES: RefCell<Vec<Option<Rc<[f64]>>>> = const { RefCell::new(Vec::new()) };
+    }
+    SHARES.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if cache.len() <= p {
+            cache.resize(p + 1, None);
+        }
+        cache[p]
+            .get_or_insert_with(|| make_product_shares(p).into())
+            .clone()
+    })
+}
+
+fn make_product_shares(p: usize) -> Vec<f64> {
     let choose = |n: usize, k: usize| -> f64 {
         (0..k).fold(1.0, |acc, m| acc * (n - m) as f64 / (m + 1) as f64)
     };
@@ -77,16 +94,21 @@ struct Cell {
     /// The weights spread too far for the coefficients to bound the part:
     /// only its box does, and the bound from the curvature is not read.
     rough: bool,
+    /// Where, in the part's own parameters, the lowest point of the part
+    /// it was cut from lies, held to it.
+    hint: Option<[f64; 2]>,
 }
 
 impl Cell {
-    /// The coefficients of `g = |q|² - c w²` on the part.
-    fn gaps(&self, c: f64) -> Vec<f64> {
-        self.squares
-            .iter()
-            .zip(&self.weights)
-            .map(|(s, w)| s - c * w)
-            .collect()
+    /// The coefficients of `g = |q|² - c w²` on the part, in `out`.
+    fn gaps(&self, c: f64, out: &mut Vec<f64>) {
+        out.clear();
+        out.extend(
+            self.squares
+                .iter()
+                .zip(&self.weights)
+                .map(|(s, w)| s - c * w),
+        );
     }
 }
 
@@ -116,11 +138,12 @@ struct Search {
     tolerance: f64,
     rows: usize,
     cols: usize,
-    shares_u: Vec<f64>,
-    shares_v: Vec<f64>,
+    shares_u: Rc<[f64]>,
+    shares_v: Rc<[f64]>,
     domain: [f64; 4],
     closed: (bool, bool),
-    scratch: std::cell::RefCell<Scratch>,
+    scratch: RefCell<Scratch>,
+    pool: RefCell<Pool>,
 }
 
 /// Room the evaluation of `g` works in, kept between evaluations.
@@ -129,6 +152,39 @@ struct Scratch {
     work: Vec<[f64; 4]>,
     rows: Vec<[[f64; 4]; 3]>,
     column: Vec<[f64; 4]>,
+}
+
+/// Lists that parts are done with, for the next parts to fill: a proof
+/// makes and drops many parts, each of a few short lists.
+#[derive(Default)]
+struct Pool {
+    points: Vec<Vec<[f64; 4]>>,
+    values: Vec<Vec<f64>>,
+}
+
+impl Search {
+    fn take_points(&self) -> Vec<[f64; 4]> {
+        let mut list = self.pool.borrow_mut().points.pop().unwrap_or_default();
+        list.clear();
+        list
+    }
+
+    fn take_values(&self) -> Vec<f64> {
+        let mut list = self.pool.borrow_mut().values.pop().unwrap_or_default();
+        list.clear();
+        list
+    }
+
+    fn give_values(&self, list: Vec<f64>) {
+        self.pool.borrow_mut().values.push(list);
+    }
+
+    fn give(&self, cell: Cell) {
+        let mut pool = self.pool.borrow_mut();
+        pool.points.push(cell.points);
+        pool.values.push(cell.squares);
+        pool.values.push(cell.weights);
+    }
 }
 
 /// The nearest point of `surface` to `point`, from `start`: no point of the
@@ -172,7 +228,8 @@ pub(super) fn nearest(
         shares_v: product_shares(cols - 1),
         domain: [u_min, u_max, v_min, v_max],
         closed: (surface.is_periodic_u(), surface.is_periodic_v()),
-        scratch: std::cell::RefCell::default(),
+        scratch: RefCell::default(),
+        pool: RefCell::default(),
     };
     let below = |best: &SurfaceProjection| (best.distance - slack).powi(2);
 
@@ -190,19 +247,17 @@ pub(super) fn nearest(
         if scale <= 0.0 || !net.iter().flatten().all(|c| c.is_finite()) {
             return unsettled;
         }
-        let points = net
-            .iter()
-            .map(|q| {
-                let w = q[3] / scale;
-                [
-                    q[0] / scale - w * point.x(),
-                    q[1] / scale - w * point.y(),
-                    q[2] / scale - w * point.z(),
-                    w,
-                ]
-            })
-            .collect();
-        heap.extend(search.cell(points, u, v, bound));
+        let mut points = search.take_points();
+        points.extend(net.iter().map(|q| {
+            let w = q[3] / scale;
+            [
+                q[0] / scale - w * point.x(),
+                q[1] / scale - w * point.y(),
+                q[2] / scale - w * point.z(),
+                w,
+            ]
+        }));
+        heap.extend(search.cell(points, u, v, bound, None));
     }
 
     let mut halvings = 0;
@@ -211,7 +266,8 @@ pub(super) fn nearest(
         if cell.floor >= bound {
             break;
         }
-        let gaps = cell.gaps(bound);
+        let mut gaps = search.take_values();
+        cell.gaps(bound, &mut gaps);
         let (at, gap, slope) = if cell.rough {
             // The sums for `g` lose their digits; the surface itself does
             // not, and its middle may be nearer.
@@ -252,21 +308,44 @@ pub(super) fn nearest(
                 if best.distance <= slack {
                     return Ok(best);
                 }
+                search.give_values(gaps);
                 heap.push(cell);
                 continue;
             }
         }
-        let partials = search.second_partials(&gaps);
-        let [ss, st, tt] = &partials;
-        let bends = (ss.least(), tt.least(), st.largest_size());
-        if !cell.rough && model_floor(at, gap, slope, bends) >= 0.0 {
+        // Along a way of degree one, `g` is a quadratic, whose least on each
+        // line across the part its three coefficients give exactly: such a
+        // part is only ever cut along the other way.
+        let (straight_u, straight_v) = (search.rows == 2, search.cols == 2);
+        let mut settled = !cell.rough
+            && (straight_u && search.settles_across(&gaps, true, at)
+                || straight_v && search.settles_across(&gaps, false, at));
+        let mut along_u = if straight_u {
+            search.cols == 1
+        } else {
+            search.rows != 1
+        };
+        if !settled && straight_u == straight_v {
+            let partials = search.second_partials(&gaps);
+            let [ss, st, tt] = &partials;
+            let bends = (ss.least(), tt.least(), st.largest_size());
+            settled = !cell.rough && model_floor(at, gap, slope, bends) >= 0.0;
+            along_u = search.halve_along_u(&gaps, &partials);
+            for grid in partials {
+                search.give_values(grid.values);
+            }
+        }
+        search.give_values(gaps);
+        if settled {
+            search.give(cell);
             continue;
         }
         if halvings >= MOST_HALVINGS {
             return unsettled;
         }
         halvings += 1;
-        heap.extend(search.halves(&cell, search.halve_along_u(&gaps, &partials), below(&best)));
+        let pieces = search.pieces(cell, along_u, at, below(&best));
+        heap.extend(pieces.into_iter().flatten());
     }
     Ok(best)
 }
@@ -289,6 +368,7 @@ impl Search {
         u: (f64, f64),
         v: (f64, f64),
         bound: f64,
+        hint: Option<[f64; 2]>,
     ) -> Option<Cell> {
         // A common factor of the weights leaves the part as it is; taken
         // out, the products below stay in the range of a float.
@@ -309,16 +389,16 @@ impl Search {
         )
         .distance_squared_to_point(Point3::new(0.0, 0.0, 0.0));
         if hull >= bound {
+            self.pool.borrow_mut().points.push(points);
             return None;
         }
         let (rows, cols) = (self.rows, self.cols);
         let wide = 2 * cols - 1;
         let len = (2 * rows - 1) * wide;
         let polynomial = points.iter().all(|q| q[3].to_bits() == 1.0_f64.to_bits());
-        let (mut squares, mut weights) = (vec![0.0; len], vec![1.0; len]);
-        if !polynomial {
-            weights.fill(0.0);
-        }
+        let (mut squares, mut weights) = (self.take_values(), self.take_values());
+        squares.resize(len, 0.0);
+        weights.resize(len, if polynomial { 1.0 } else { 0.0 });
         // Each pair of points adds to one coefficient, the same either way
         // round, so each pair is read once.
         for (n1, a) in points.iter().enumerate() {
@@ -350,7 +430,7 @@ impl Search {
                 .fold(f64::INFINITY, f64::min)
                 .max(hull)
         };
-        (floor < bound).then_some(Cell {
+        let cell = Cell {
             points,
             u,
             v,
@@ -358,7 +438,56 @@ impl Search {
             weights,
             floor,
             rough,
-        })
+            hint,
+        };
+        if floor < bound {
+            Some(cell)
+        } else {
+            self.give(cell);
+            None
+        }
+    }
+
+    /// Whether `g` stays at or above zero on the part, where it is a
+    /// quadratic across u (`across_u`) or across v. On each line across,
+    /// with Bernstein coefficients `b0`, `b1` and `b2`, that holds if and
+    /// only if `b0` and `b2` are not negative and `b1 ≥ -√(b0 b2)`: so where
+    /// `b0`, `b2`, and `b1` or `b0 b2 - b1²`, stay at or above zero along the
+    /// other way. `at` is the lowest point of `g` on the part.
+    fn settles_across(&self, gaps: &[f64], across_u: bool, at: [f64; 2]) -> bool {
+        let (du, dv) = (2 * (self.rows - 1), 2 * (self.cols - 1));
+        let mut lines = [self.take_values(), self.take_values(), self.take_values()];
+        for (k, line) in lines.iter_mut().enumerate() {
+            if across_u {
+                line.extend_from_slice(&gaps[k * (dv + 1)..=k * (dv + 1) + dv]);
+            } else {
+                line.extend((0..=du).map(|i| gaps[i * (dv + 1) + k]));
+            }
+        }
+        let hint = if across_u { at[1] } else { at[0] };
+        let [low, middle, high] = &lines;
+        let mut work = self.take_values();
+        let mut settled =
+            stays_positive(low, hint, &mut work) && stays_positive(high, hint, &mut work);
+        if settled && middle.iter().any(|&c| c < 0.0) {
+            let n = low.len() - 1;
+            let shares = product_shares(n);
+            let mut cross = self.take_values();
+            cross.resize(2 * n + 1, 0.0);
+            for i in 0..=n {
+                for j in 0..=n {
+                    cross[i + j] +=
+                        shares[i * (n + 1) + j] * (low[i] * high[j] - middle[i] * middle[j]);
+                }
+            }
+            settled = stays_positive(&cross, hint, &mut work);
+            self.give_values(cross);
+        }
+        self.give_values(work);
+        for line in lines {
+            self.give_values(line);
+        }
+        settled
     }
 
     /// The Bernstein coefficients of the second partials of `g` on the part,
@@ -367,7 +496,7 @@ impl Search {
         let (du, dv) = (2 * (self.rows - 1), 2 * (self.cols - 1));
         let at = |k: usize, l: usize| gaps[k * (dv + 1) + l];
         let grid = |rows: usize, cols: usize, scale: usize, value: &dyn Fn(usize, usize) -> f64| {
-            let mut values = Vec::with_capacity(rows * cols);
+            let mut values = self.take_values();
             for k in 0..rows {
                 for l in 0..cols {
                     values.push(scale as f64 * value(k, l));
@@ -454,8 +583,9 @@ impl Search {
 
     /// The lowest point of `g` on the part that Newton steps, held inside
     /// the part, find from the best of: the nearest point so far held to
-    /// the part, its middle, and its lowest corner, which `gaps` gives. Its
-    /// `(s, t)`, `g` there, and the gradient there.
+    /// the part, or the lowest point of the part it was cut from, its
+    /// middle, and its lowest corner, which `gaps` gives. Its `(s, t)`, `g`
+    /// there, and the gradient there.
     fn lowest(
         &self,
         cell: &Cell,
@@ -481,13 +611,15 @@ impl Search {
         .min_by(|a, b| a.0.total_cmp(&b.0))
         .map_or([0.0, 0.0], |(_, at)| at);
         let held = [share(best.u, cell.u), share(best.v, cell.v)];
-        let inside = |a: f64| a > 0.0 && a < 1.0;
+        let inside = |a: [f64; 2]| a.iter().all(|&a| a > 0.0 && a < 1.0);
         // A part that holds the nearest point so far has it for its lowest
-        // point, or as near as one Newton step finds.
-        let starts: &[[f64; 2]] = if inside(held[0]) && inside(held[1]) {
-            &[held]
-        } else {
-            &[held, [0.5, 0.5], corner]
+        // point, or as near as one Newton step finds. A part cut from
+        // another starts where the lowest point of that one lies.
+        let starts: &[[f64; 2]] = match cell.hint {
+            _ if inside(held) => &[held],
+            Some(hint) if inside(hint) => &[hint],
+            Some(hint) => &[hint, corner],
+            None => &[held, [0.5, 0.5], corner],
         };
         let mut x = starts[0];
         let (mut g, mut grad, mut hess) = self.gap_at(cell, c, x);
@@ -527,45 +659,86 @@ impl Search {
         (x, g, grad)
     }
 
-    /// The two halves of the part, across u or across v, by de Casteljau on
-    /// its control points.
-    fn halves(&self, cell: &Cell, along_u: bool, bound: f64) -> impl Iterator<Item = Cell> {
+    /// The pieces of the part, across u or across v, by de Casteljau on
+    /// its control points. Where its lowest point `at` lies inside it, the
+    /// middle piece is half the part, about that point: the bounds from the
+    /// curvature hold on a piece whose bends spread little, and they spread
+    /// least about the lowest point. Elsewhere the pieces are the halves.
+    fn pieces(&self, cell: Cell, along_u: bool, at: [f64; 2], bound: f64) -> Vec<Option<Cell>> {
+        let x = if along_u { at[0] } else { at[1] };
+        let mut cuts = Vec::with_capacity(2);
+        if x > 0.0 && x < 1.0 {
+            // A piece narrower than this share of the part is left joined
+            // to the piece beside it.
+            let least = 1.0 / 16.0;
+            if x - 0.25 > least {
+                cuts.push(x - 0.25);
+            }
+            if x + 0.25 < 1.0 - least {
+                cuts.push(x + 0.25);
+            }
+        } else {
+            cuts.push(0.5);
+        }
+        let (lo, hi) = if along_u { cell.u } else { cell.v };
+        let mut pieces = Vec::with_capacity(cuts.len() + 1);
+        let mut rest = self.take_points();
+        rest.extend_from_slice(&cell.points);
+        let mut from = 0.0;
+        let hint_in = |a: f64, b: f64| {
+            let mut hint = at;
+            let k = usize::from(!along_u);
+            hint[k] = ((at[k] - a) / (b - a)).clamp(0.0, 1.0);
+            Some(hint)
+        };
+        for &cut in &cuts {
+            let mut high = self.take_points();
+            self.split(&mut rest, &mut high, along_u, (cut - from) / (1.0 - from));
+            let range = (param_at(from, (lo, hi)), param_at(cut, (lo, hi)));
+            let (u, v) = if along_u {
+                (range, cell.v)
+            } else {
+                (cell.u, range)
+            };
+            pieces.push(self.cell(rest, u, v, bound, hint_in(from, cut)));
+            rest = high;
+            from = cut;
+        }
+        let range = (param_at(from, (lo, hi)), hi);
+        let (u, v) = if along_u {
+            (range, cell.v)
+        } else {
+            (cell.u, range)
+        };
+        pieces.push(self.cell(rest, u, v, bound, hint_in(from, 1.0)));
+        self.give(cell);
+        pieces
+    }
+
+    /// Split the part on `low` at `tau` of the way across u or across v:
+    /// `low` keeps the piece before, and `high` gets the piece after.
+    fn split(&self, low: &mut [[f64; 4]], high: &mut Vec<[f64; 4]>, along_u: bool, tau: f64) {
         let (rows, cols) = (self.rows, self.cols);
         let (n, m) = if along_u { (rows, cols) } else { (cols, rows) };
         let at = |k: usize, l: usize| if along_u { k * cols + l } else { l * cols + k };
-        let mut low = cell.points.clone();
-        let mut high = cell.points.clone();
-        let mut work = vec![[0.0; 4]; n];
+        high.clear();
+        high.extend_from_slice(low);
+        let mut scratch = self.scratch.borrow_mut();
+        let work = &mut scratch.work;
         for l in 0..m {
-            for (k, slot) in work.iter_mut().enumerate() {
-                *slot = cell.points[at(k, l)];
-            }
-            low[at(0, l)] = work[0];
+            work.clear();
+            work.extend((0..n).map(|k| low[at(k, l)]));
             high[at(n - 1, l)] = work[n - 1];
             for r in 1..n {
                 for k in 0..n - r {
                     for c in 0..4 {
-                        work[k][c] = 0.5 * (work[k][c] + work[k + 1][c]);
+                        work[k][c] = (1.0 - tau) * work[k][c] + tau * work[k + 1][c];
                     }
                 }
                 low[at(r, l)] = work[0];
                 high[at(n - 1 - r, l)] = work[n - 1 - r];
             }
         }
-        let halves = if along_u {
-            let mid = f64::midpoint(cell.u.0, cell.u.1);
-            [
-                self.cell(low, (cell.u.0, mid), cell.v, bound),
-                self.cell(high, (mid, cell.u.1), cell.v, bound),
-            ]
-        } else {
-            let mid = f64::midpoint(cell.v.0, cell.v.1);
-            [
-                self.cell(low, cell.u, (cell.v.0, mid), bound),
-                self.cell(high, cell.u, (mid, cell.v.1), bound),
-            ]
-        };
-        halves.into_iter().flatten()
     }
 }
 
@@ -599,6 +772,104 @@ fn with_derivatives(points: &[[f64; 4]], t: f64, work: &mut Vec<[f64; 4]>) -> [[
     [lerp(low, high), step(low, high, degree), second]
 }
 
+/// Whether the polynomial with Bernstein coefficients `coefs` stays at or
+/// above zero on `[0, 1]`: its coefficients do, or the quadratic it never
+/// goes below does. That quadratic is taken at its lowest point, which
+/// Newton steps find from the best of `hint` and the two ends, and its bend
+/// is the least second derivative, from the coefficients.
+fn stays_positive(coefs: &[f64], hint: f64, work: &mut Vec<f64>) -> bool {
+    if coefs.iter().all(|&c| c >= 0.0) {
+        return true;
+    }
+    let n = coefs.len().saturating_sub(1);
+    if n < 2 {
+        // A line has its least at an end, which its coefficient there is.
+        return false;
+    }
+    let bend = coefs
+        .windows(3)
+        .map(|w| w[2] - 2.0 * w[1] + w[0])
+        .fold(f64::INFINITY, f64::min)
+        * (n * (n - 1)) as f64;
+    let mut x = hint.clamp(0.0, 1.0);
+    let [mut value, mut slope, mut curve] = line_at(coefs, x, work);
+    let degree = n as f64;
+    let ends = [
+        (
+            0.0,
+            coefs[0],
+            degree * (coefs[1] - coefs[0]),
+            coefs[2] - 2.0 * coefs[1] + coefs[0],
+        ),
+        (
+            1.0,
+            coefs[n],
+            degree * (coefs[n] - coefs[n - 1]),
+            coefs[n] - 2.0 * coefs[n - 1] + coefs[n - 2],
+        ),
+    ];
+    for (end, v, s, c) in ends {
+        if v < value {
+            (x, value, slope, curve) = (end, v, s, degree * (degree - 1.0) * c);
+        }
+    }
+    for _ in 0..8 {
+        if curve <= 0.0 {
+            break;
+        }
+        let next = (x - slope / curve).clamp(0.0, 1.0);
+        let [v, s, c] = line_at(coefs, next, work);
+        if v.is_nan() || v >= value {
+            break;
+        }
+        let moved = (next - x).abs();
+        (x, value, slope, curve) = (next, v, s, c);
+        if moved < SETTLED {
+            break;
+        }
+    }
+    value >= 0.0 && value + quadratic_floor(x, slope, bend) >= 0.0
+}
+
+/// The polynomial with Bernstein coefficients `coefs` at `t`, with its
+/// first and second derivatives, by de Casteljau in `work`.
+fn line_at(coefs: &[f64], t: f64, work: &mut Vec<f64>) -> [f64; 3] {
+    let n = coefs.len() - 1;
+    work.clear();
+    work.extend_from_slice(coefs);
+    for level in 0..n.saturating_sub(2) {
+        for k in 0..n - level {
+            work[k] = (1.0 - t) * work[k] + t * work[k + 1];
+        }
+    }
+    let lerp = |a: f64, b: f64| (1.0 - t) * a + t * b;
+    let degree = n as f64;
+    match n {
+        0 => [work[0], 0.0, 0.0],
+        1 => [lerp(work[0], work[1]), work[1] - work[0], 0.0],
+        _ => {
+            let (low, high) = (lerp(work[0], work[1]), lerp(work[1], work[2]));
+            [
+                lerp(low, high),
+                degree * (high - low),
+                degree * (degree - 1.0) * (work[2] - 2.0 * work[1] + work[0]),
+            ]
+        }
+    }
+}
+
+/// The least of `slope h + bend h² / 2` over `h` in `[-x, 1 - x]`.
+fn quadratic_floor(x: f64, slope: f64, bend: f64) -> f64 {
+    let (lo, hi) = (-x, 1.0 - x);
+    let at = |h: f64| slope * h + 0.5 * bend * h * h;
+    let ends = at(lo).min(at(hi));
+    if bend > 0.0 {
+        ends.min(at((-slope / bend).clamp(lo, hi)))
+    } else {
+        ends
+    }
+}
+
 /// The least, on the part, of the quadratic that `g` never goes below:
 /// `g(x + h) ≥ g + slope · h + h_s² D_s / 2 + h_t² D_t / 2` while every
 /// Hessian on the part less `diag(D_s, D_t)` has no negative eigenvalue.
@@ -606,16 +877,7 @@ fn with_derivatives(points: &[[f64; 4]], t: f64, work: &mut Vec<[f64; 4]>) -> [[
 /// `D_s = a - e r` and `D_t = b - e / r` at each `r > 0`; the best of a few
 /// returns.
 fn model_floor(x: [f64; 2], gap: f64, slope: [f64; 2], (a, b, e): (f64, f64, f64)) -> f64 {
-    let along = |x: f64, slope: f64, bend: f64| {
-        let (lo, hi) = (-x, 1.0 - x);
-        let at = |h: f64| slope * h + 0.5 * bend * h * h;
-        let ends = at(lo).min(at(hi));
-        if bend > 0.0 {
-            ends.min(at((-slope / bend).clamp(lo, hi)))
-        } else {
-            ends
-        }
-    };
+    let along = quadratic_floor;
     if e <= 0.0 {
         return gap + along(x[0], slope[0], a) + along(x[1], slope[1], b);
     }

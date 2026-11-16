@@ -1109,6 +1109,78 @@ mod tests {
         assert_nearest("lune axis", &surfaces[2].1, &axis, (200, 200));
     }
 
+    /// A quarter of a cone, rational, of degree one along its rulings, and
+    /// the same with its parameters swapped: points on both sides of it,
+    /// near and far, and on its axis, where each ring of it is the same
+    /// distance away all round.
+    #[test]
+    fn points_round_a_ruled_surface_get_their_nearest_points() {
+        let half = std::f64::consts::FRAC_1_SQRT_2;
+        let ring = |r: f64, z: f64| {
+            vec![
+                Point3::new(r, 0.0, z),
+                Point3::new(r, r, z),
+                Point3::new(0.0, r, z),
+            ]
+        };
+        let rings = vec![ring(1.0, 0.0), ring(2.0, 1.0)];
+        let weights = vec![vec![1.0, half, 1.0]; 2];
+        let along_v = NurbsSurface::new(
+            1,
+            2,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            rings.clone(),
+            weights.clone(),
+        )
+        .expect("a cone");
+        let swap = |rows: &[Vec<Point3>]| -> Vec<Vec<Point3>> {
+            (0..rows[0].len())
+                .map(|j| rows.iter().map(|row| row[j]).collect())
+                .collect()
+        };
+        let swapped = |rows: &[Vec<f64>]| -> Vec<Vec<f64>> {
+            (0..rows[0].len())
+                .map(|j| rows.iter().map(|row| row[j]).collect())
+                .collect()
+        };
+        let along_u = NurbsSurface::new(
+            2,
+            1,
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            swap(&rings),
+            swapped(&weights),
+        )
+        .expect("a cone");
+        let mut state = 0x2545_f491_4f6c_dd1d_u64;
+        let mut unit = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            (state >> 11) as f64 / (1_u64 << 53) as f64
+        };
+        for (name, surface, grid) in [
+            ("cone along v", &along_v, (200, 800)),
+            ("cone along u", &along_u, (800, 200)),
+        ] {
+            let mut points = Vec::new();
+            for off in [0.0, 1e-6, 1e-3, 0.3, 0.9, 3.0] {
+                for _ in 0..16 {
+                    let (u, v) = (unit(), unit());
+                    let normal = surface.normal(u, v).unwrap_or(Vec3::new(0.0, 0.0, 1.0));
+                    points.push(surface.evaluate(u, v) + normal * (off * (2.0 * unit() - 1.0)));
+                }
+            }
+            points.extend(
+                [-1.0, 0.0, 0.5, 1.0, 2.0]
+                    .iter()
+                    .map(|&z| Point3::new(0.0, 0.0, z)),
+            );
+            assert_nearest(name, surface, &points, grid);
+        }
+    }
+
     /// A surface whose knots are not clamped: each span is still a Bezier
     /// patch of it, so the proof reads it as any other.
     #[test]
