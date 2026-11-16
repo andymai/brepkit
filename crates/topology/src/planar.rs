@@ -13,6 +13,10 @@ use crate::edge::EdgeCurve;
 use crate::face::FaceId;
 use crate::wire::{OrientedEdge, WireId};
 
+/// How far a NURBS edge's control points may stray from the segment between
+/// its ends for it to be read as that segment.
+const STRAIGHT_TOL: f64 = 1e-9;
+
 /// The plane through `origin` spanned by the orthonormal `x` and `y`.
 #[derive(Clone, Copy)]
 struct Plane2 {
@@ -32,11 +36,13 @@ impl Plane2 {
     }
 
     /// The edge from `a` to `b` along `curve` as the piece it is: `None` for
-    /// a NURBS curve, which has no exact piece.
+    /// a NURBS curve other than a straight one, which has no exact piece.
     fn exact_piece(self, curve: &EdgeCurve, a: Point3, b: Point3) -> Option<Boundary2> {
         match curve {
             EdgeCurve::Line => Some(Boundary2::Segment(self.point(a), self.point(b))),
-            EdgeCurve::NurbsCurve(_) => None,
+            EdgeCurve::NurbsCurve(_) => curve
+                .is_straight_between(a, b, STRAIGHT_TOL)
+                .then(|| Boundary2::Segment(self.point(a), self.point(b))),
             EdgeCurve::Circle(c) => {
                 let (t0, t1) = curve.domain_with_endpoints(a, b);
                 Some(Boundary2::Arc {
@@ -68,8 +74,9 @@ impl Plane2 {
 /// A planar face's boundary flattened into its plane, holes included.
 ///
 /// The plane runs through `origin`, spanned by the orthonormal `x` and `y`.
-/// A line becomes a segment, a circle or ellipse arc the arc it is. `None`
-/// when an edge is a NURBS curve.
+/// A line, or a NURBS curve lying on the segment between its ends, becomes
+/// that segment, and a circle or ellipse arc the arc it is. `None` when an
+/// edge is any other NURBS curve.
 ///
 /// # Errors
 ///
@@ -87,11 +94,18 @@ pub fn face_boundary_2d(
         .chain(face.inner_wires().iter().copied())
         .map(|w| topo.wire(w))
         .collect::<Result<_, _>>()?;
-    // A NURBS edge declines before any curve is projected: finding its
-    // span costs point projections the caller's fallback repeats.
+    // A curved NURBS edge declines before any curve is projected: finding
+    // its span costs point projections the caller's fallback repeats.
     for wire in &wires {
         for oe in wire.edges() {
-            if matches!(topo.edge(oe.edge())?.curve(), EdgeCurve::NurbsCurve(_)) {
+            let edge = topo.edge(oe.edge())?;
+            if matches!(edge.curve(), EdgeCurve::NurbsCurve(_))
+                && !edge.curve().is_straight_between(
+                    topo.vertex(edge.start())?.point(),
+                    topo.vertex(edge.end())?.point(),
+                    STRAIGHT_TOL,
+                )
+            {
                 return Ok(None);
             }
         }
@@ -111,8 +125,11 @@ pub fn face_boundary_2d(
 }
 
 /// One wire flattened into the plane through `origin` spanned by the
-/// orthonormal `x` and `y`, each line a segment and each circle or ellipse
-/// arc the arc it is. `None` when an edge is a NURBS curve.
+/// orthonormal `x` and `y`.
+///
+/// Each line, or NURBS curve lying on the segment between its ends, becomes
+/// that segment, and each circle or ellipse arc the arc it is. `None` when an
+/// edge is any other NURBS curve.
 ///
 /// # Errors
 ///

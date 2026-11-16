@@ -1,19 +1,24 @@
-//! Captured operands of three calls that fail in the brepjs playground
-//! examples (#2372), each a ready repro for its own issue. Each test states
-//! what the call must give, and is ignored until its issue closes.
+//! Captured operands of three calls from the brepjs playground examples
+//! (#2372). Each test states what the call must give; a test whose call
+//! still fails is ignored until its issue closes.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+use std::f64::consts::{PI, TAU};
 use std::path::Path;
 
 use brepkit_io::arena_io::deserialize_solid;
+use brepkit_math::quadrature::gauss_legendre_points;
 use brepkit_math::vec::Point3;
-use brepkit_operations::blend_ops::{all_blended, chamfer_v2};
 use brepkit_operations::boolean::{BooleanOp, BooleanOptions, boolean_with_options};
+use brepkit_operations::chamfer::chamfer;
 use brepkit_operations::classify::{PointClassification, classify_point};
+use brepkit_operations::measure::solid_volume;
 use brepkit_operations::tessellate::{is_watertight, tessellate_solid};
 use brepkit_operations::validate::validate_solid;
 use brepkit_topology::Topology;
+use brepkit_topology::edge::EdgeCurve;
 use brepkit_topology::explorer::{solid_edges, solid_faces};
+use brepkit_topology::face::{FaceId, FaceSurface};
 use brepkit_topology::solid::SolidId;
 
 fn load(name: &str, topo: &mut Topology) -> SolidId {
@@ -126,10 +131,215 @@ fn a_yoke_with_rounded_arms_fuses_onto_the_turrets_cap() {
     );
 }
 
+/// One piece of a flat outline, run the way its loop runs: a segment, or an
+/// arc about `center` sweeping `sweep` radians from the angle `from`
+/// (counter-clockwise when positive).
+#[derive(Clone, Copy)]
+enum Run2 {
+    Segment([f64; 2], [f64; 2]),
+    Arc {
+        center: [f64; 2],
+        radius: f64,
+        from: f64,
+        sweep: f64,
+    },
+}
+
+impl Run2 {
+    fn ends(self) -> [[f64; 2]; 2] {
+        match self {
+            Self::Segment(a, b) => [a, b],
+            Self::Arc {
+                center,
+                radius,
+                from,
+                sweep,
+            } => [from, from + sweep]
+                .map(|t| [center[0] + radius * t.cos(), center[1] + radius * t.sin()]),
+        }
+    }
+
+    /// The area term `(x dy - y dx) / 2` along the piece.
+    fn green(self) -> f64 {
+        match self {
+            Self::Segment(a, b) => 0.5 * (a[0] * b[1] - b[0] * a[1]),
+            Self::Arc {
+                center: [cx, cy],
+                radius: r,
+                from,
+                sweep,
+            } => {
+                let to = from + sweep;
+                0.5 * (r * r * sweep
+                    + r * (cx * (to.sin() - from.sin()) - cy * (to.cos() - from.cos())))
+            }
+        }
+    }
+
+    /// The piece moved `s` to its left.
+    fn inset(self, s: f64) -> Self {
+        match self {
+            Self::Segment(a, b) => {
+                let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+                let l = dx.hypot(dy);
+                let (lx, ly) = (-dy / l * s, dx / l * s);
+                Self::Segment([a[0] + lx, a[1] + ly], [b[0] + lx, b[1] + ly])
+            }
+            Self::Arc {
+                center,
+                radius,
+                from,
+                sweep,
+            } => Self::Arc {
+                center,
+                radius: radius - s * sweep.signum(),
+                from,
+                sweep,
+            },
+        }
+    }
+
+    /// Where the piece's curve meets `other`'s, nearest `near`.
+    fn crossing(self, other: Self, near: [f64; 2]) -> [f64; 2] {
+        let line_circle = |a: [f64; 2], b: [f64; 2], c: [f64; 2], r: f64| {
+            let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+            let l = dx.hypot(dy);
+            let (ux, uy) = (dx / l, dy / l);
+            let (wx, wy) = (a[0] - c[0], a[1] - c[1]);
+            let bb = wx * ux + wy * uy;
+            let root = (bb * bb - (wx * wx + wy * wy - r * r)).sqrt();
+            [-bb - root, -bb + root]
+                .map(|t| [a[0] + ux * t, a[1] + uy * t])
+                .into_iter()
+                .min_by(|p, q| {
+                    let dp = (p[0] - near[0]).hypot(p[1] - near[1]);
+                    let dq = (q[0] - near[0]).hypot(q[1] - near[1]);
+                    dp.total_cmp(&dq)
+                })
+                .unwrap()
+        };
+        match (self, other) {
+            (Self::Segment(a, b), Self::Arc { center, radius, .. })
+            | (Self::Arc { center, radius, .. }, Self::Segment(a, b)) => {
+                line_circle(a, b, center, radius)
+            }
+            (Self::Segment(a, b), Self::Segment(c, d)) => {
+                let (ux, uy, vx, vy) = (b[0] - a[0], b[1] - a[1], d[0] - c[0], d[1] - c[1]);
+                let den = ux * vy - uy * vx;
+                let t = ((c[0] - a[0]) * vy - (c[1] - a[1]) * vx) / den;
+                [a[0] + ux * t, a[1] + uy * t]
+            }
+            (Self::Arc { .. }, Self::Arc { .. }) => panic!("no arc-arc corner here"),
+        }
+    }
+
+    /// The piece with its start (or end) moved to `p` on its curve.
+    fn with_end(self, p: [f64; 2], at_start: bool) -> Self {
+        match self {
+            Self::Segment(a, b) => {
+                if at_start {
+                    Self::Segment(p, b)
+                } else {
+                    Self::Segment(a, p)
+                }
+            }
+            Self::Arc {
+                center,
+                radius,
+                from,
+                sweep,
+            } => {
+                let t = (p[1] - center[1]).atan2(p[0] - center[0]);
+                // The nearest angle to the old one, a small move.
+                let near = |old: f64| old + (t - old + PI).rem_euclid(TAU) - PI;
+                if at_start {
+                    let new_from = near(from);
+                    Self::Arc {
+                        center,
+                        radius,
+                        from: new_from,
+                        sweep: sweep - (new_from - from),
+                    }
+                } else {
+                    Self::Arc {
+                        center,
+                        radius,
+                        from,
+                        sweep: near(from + sweep) - from,
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The area inside a counter-clockwise loop of `runs` inset by `s`: each
+/// piece moved `s` to its left, two pieces meeting at an angle cut back to
+/// where they cross.
+fn inset_area(runs: &[Run2], s: f64) -> f64 {
+    let mut moved: Vec<Run2> = runs.iter().map(|r| r.inset(s)).collect();
+    let n = moved.len();
+    for i in 0..n {
+        let j = (i + 1) % n;
+        let (end, start) = (moved[i].ends()[1], moved[j].ends()[0]);
+        if (end[0] - start[0]).hypot(end[1] - start[1]) > 1e-12 {
+            let vertex = runs[i].ends()[1];
+            let p = moved[i].crossing(moved[j], vertex);
+            moved[i] = moved[i].with_end(p, false);
+            moved[j] = moved[j].with_end(p, true);
+        }
+    }
+    moved.iter().map(|r| r.green()).sum()
+}
+
+/// The outer loop of a face on a plane `z = const`, wound counter-clockwise
+/// about `+z`.
+fn flat_loop(topo: &Topology, face: FaceId) -> Vec<Run2> {
+    let wire = topo.wire(topo.face(face).unwrap().outer_wire()).unwrap();
+    let flat = |p: Point3| [p.x(), p.y()];
+    wire.edges()
+        .iter()
+        .map(|oe| {
+            let edge = topo.edge(oe.edge()).unwrap();
+            let (mut a, mut b) = (
+                topo.vertex(edge.start()).unwrap().point(),
+                topo.vertex(edge.end()).unwrap().point(),
+            );
+            if !oe.is_forward() {
+                std::mem::swap(&mut a, &mut b);
+            }
+            match edge.curve() {
+                EdgeCurve::Line => Run2::Segment(flat(a), flat(b)),
+                EdgeCurve::Circle(c) => {
+                    let center = flat(c.center());
+                    let angle = |p: Point3| (p.y() - center[1]).atan2(p.x() - center[0]);
+                    let (from, to) = (angle(a), angle(b));
+                    let ccw = (c.normal().z() > 0.0) == oe.is_forward();
+                    let sweep = if ccw {
+                        (to - from).rem_euclid(TAU)
+                    } else {
+                        -(from - to).rem_euclid(TAU)
+                    };
+                    Run2::Arc {
+                        center,
+                        radius: c.radius(),
+                        from,
+                        sweep,
+                    }
+                }
+                other => panic!("unexpected {}", other.type_tag()),
+            }
+        })
+        .collect()
+}
+
 /// `pocket-watch`: a bridge plate whose top outline, at z = 3.15, is 6 lines
-/// and 7 circle arcs.
+/// and 7 circle arcs, two of the lines meeting an arc at an angle. Its side
+/// walls stand square to the top and meet along straight edges stored as
+/// degree-1 NURBS curves. The cross-section `h` below the top is the outline
+/// inset by `d - h`, so the chamfer takes the integral of the top's area
+/// less the inset's over the inset from 0 to `d`.
 #[test]
-#[ignore = "TODO: enable when #2490 closes"]
 fn a_plates_top_outline_of_lines_and_arcs_takes_a_chamfer() {
     let mut topo = Topology::new();
     let plate = load("pocket_watch_bridge.bin", &mut topo);
@@ -144,8 +354,33 @@ fn a_plates_top_outline_of_lines_and_arcs_takes_a_chamfer() {
         })
         .collect();
     assert_eq!(outline.len(), 13);
-    let chamfered = chamfer_v2(&mut topo, plate, &outline, 0.1, 0.1)
-        .and_then(all_blended)
+    let top = solid_faces(&topo, plate)
+        .unwrap()
+        .into_iter()
+        .find(|&f| match topo.face(f).unwrap().surface() {
+            FaceSurface::Plane { normal, d } => normal.z() > 0.5 && (d - 3.15).abs() < 1e-9,
+            _ => false,
+        })
         .unwrap();
+    let runs = flat_loop(&topo, top);
+    let d = 0.1;
+    let whole = inset_area(&runs, 0.0);
+    let taken: f64 = gauss_legendre_points(20)
+        .iter()
+        .map(|g| {
+            let s = 0.5 * d * (g.x + 1.0);
+            0.5 * d * g.w * (whole - inset_area(&runs, s))
+        })
+        .sum();
+
+    let before = solid_volume(&topo, plate, 1e-3).unwrap();
+    let chamfered = chamfer(&mut topo, plate, &outline, d).unwrap();
     assert_holds(&topo, chamfered);
+    assert_eq!(solid_faces(&topo, chamfered).unwrap().len(), 15 + 13);
+    let after = solid_volume(&topo, chamfered, 1e-3).unwrap();
+    assert!(
+        (before - after - taken).abs() < 1e-9 * before,
+        "the chamfer takes {} where {taken} is right",
+        before - after
+    );
 }

@@ -204,6 +204,31 @@ impl EdgeCurve {
         }
     }
 
+    /// Whether the edge from `start` to `end` on this curve is the straight
+    /// segment between them: a line, or a NURBS curve whose control points
+    /// all lie within `tol` of that segment. With every weight positive the
+    /// curve lies in its control points' hull, so it lies on the segment.
+    #[must_use]
+    pub fn is_straight_between(&self, start: Point3, end: Point3, tol: f64) -> bool {
+        match self {
+            Self::Line => true,
+            Self::NurbsCurve(curve) => {
+                let chord = end - start;
+                let length2 = chord.dot(chord);
+                if length2 <= tol * tol
+                    || !curve.weights().iter().all(|w| w.is_finite() && *w > 0.0)
+                {
+                    return false;
+                }
+                curve.control_points().iter().all(|&p| {
+                    let along = ((p - start).dot(chord) / length2).clamp(0.0, 1.0);
+                    (start + chord * along - p).length() <= tol
+                })
+            }
+            Self::Circle(_) | Self::Ellipse(_) => false,
+        }
+    }
+
     /// Type tag string for debugging and serialization.
     #[must_use]
     pub const fn type_tag(&self) -> &'static str {

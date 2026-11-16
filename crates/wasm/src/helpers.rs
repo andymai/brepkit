@@ -1993,6 +1993,106 @@ mod fillet_tests {
         );
     }
 
+    /// `pick` chamfered by `d` through `try_chamfer` and through the chain
+    /// engine on a copy: the binding takes the chain engine's exact result,
+    /// valid and changed. Returns its volume.
+    fn try_chamfer_matches_the_chain_engine(
+        topo: &mut Topology,
+        solid: SolidId,
+        pick: &[EdgeId],
+        d: f64,
+    ) -> f64 {
+        use brepkit_operations::measure::solid_volume;
+        let before = solid_volume(topo, solid, 0.001).expect("volume");
+        let chained =
+            brepkit_operations::chamfer_chain::chamfer_tangent_chains(topo, solid, pick, d)
+                .expect("chain engine")
+                .expect("the chain engine takes the pick");
+        let exact = solid_volume(topo, chained, 0.001).expect("volume");
+        let cut = try_chamfer(topo, solid, pick, d).expect("chamfer");
+        assert!(
+            brepkit_operations::validate::validate_solid(topo, cut)
+                .expect("validate")
+                .is_valid()
+        );
+        let after = solid_volume(topo, cut, 0.001).expect("volume");
+        assert!(after < before - 1e-3, "the chamfer took nothing");
+        assert!(
+            (after - exact).abs() < 1e-9 * before,
+            "try_chamfer gave {after} where the chain engine gives {exact}"
+        );
+        after
+    }
+
+    /// The brepjs `panel-fuse-holder` example's cap: a disc with a slot
+    /// across its top, its top rim and the four edges where the slot's ends
+    /// meet the disc's wall chamfered by 0.6.
+    #[test]
+    fn try_chamfer_takes_a_slotted_caps_rim_and_slot_ends() {
+        use brepkit_math::mat::Mat4;
+        use brepkit_topology::edge::EdgeCurve;
+
+        let mut topo = Topology::new();
+        let disc =
+            brepkit_operations::primitives::make_cylinder(&mut topo, 9.4, 3.0).expect("disc");
+        let slot =
+            brepkit_operations::primitives::make_box(&mut topo, 30.0, 1.6, 2.0).expect("slot");
+        brepkit_operations::transform::transform_solid(
+            &mut topo,
+            slot,
+            &Mat4::translation(-15.0, -0.8, 2.0),
+        )
+        .expect("place");
+        let cap = brepkit_operations::boolean::boolean(
+            &mut topo,
+            brepkit_operations::boolean::BooleanOp::Cut,
+            disc,
+            slot,
+        )
+        .expect("cut");
+        let pick: Vec<EdgeId> = solid_edge_ids(&topo, cap)
+            .into_iter()
+            .filter(|&e| {
+                let edge = topo.edge(e).expect("edge");
+                let a = topo.vertex(edge.start()).expect("vertex").point();
+                let b = topo.vertex(edge.end()).expect("vertex").point();
+                match edge.curve() {
+                    EdgeCurve::Circle(_) => a.z() > 2.999 && b.z() > 2.999,
+                    EdgeCurve::Line => {
+                        a.x().hypot(a.y()) > 9.39
+                            && b.x().hypot(b.y()) > 9.39
+                            && (a.z() - b.z()).abs() > 0.5
+                            && a.z().min(b.z()) > 1.999
+                    }
+                    EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_) => false,
+                }
+            })
+            .collect();
+        assert_eq!(pick.len(), 8);
+        try_chamfer_matches_the_chain_engine(&mut topo, cap, &pick, 0.6);
+    }
+
+    /// The brepjs `pocket-watch` example's bridge plate, its top outline of
+    /// lines and arcs chamfered by 0.1.
+    #[cfg(feature = "io")]
+    #[test]
+    fn try_chamfer_takes_a_captured_plates_top_outline() {
+        let bytes = include_bytes!("../../io/tests/data/pocket_watch_bridge.bin");
+        let mut topo = Topology::new();
+        let plate = brepkit_io::arena_io::deserialize_solid(bytes, &mut topo).expect("fixture");
+        let outline: Vec<EdgeId> = solid_edge_ids(&topo, plate)
+            .into_iter()
+            .filter(|&e| {
+                let edge = topo.edge(e).expect("edge");
+                [edge.start(), edge.end()]
+                    .iter()
+                    .all(|&v| (topo.vertex(v).expect("vertex").point().z() - 3.15).abs() < 1e-9)
+            })
+            .collect();
+        assert_eq!(outline.len(), 13);
+        try_chamfer_matches_the_chain_engine(&mut topo, plate, &outline, 0.1);
+    }
+
     #[test]
     fn try_chamfer_passes_over_a_cylinders_seam() {
         use brepkit_operations::measure::solid_volume;
