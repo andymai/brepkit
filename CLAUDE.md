@@ -288,7 +288,7 @@ Quick reference — find the right file for any task:
 | Loft along guide rails and under end conditions | `loft/network.rs` |
 | Helical sweep | `helix.rs` |
 | Chamfer, Fillet | `chamfer.rs`, `fillet/` (mod, rolling_ball, g1_chain, geometry, radius_law, helpers, tests) |
-| Chamfer along tangent chains of lines and arcs | `chamfer_chain.rs` |
+| Chamfer along chains of lines and arcs (tangent joins, corners, cylinder rulings) | `chamfer_chain.rs` |
 | Shell (hollow solid) | `shell_op.rs` |
 | Draft (taper faces) | `draft.rs` |
 | Section / Split | `section.rs`, `split.rs` |

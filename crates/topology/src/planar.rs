@@ -903,11 +903,11 @@ mod tests {
         assert_eq!(wire_area_2d(&topo, w, x, y).unwrap(), None);
     }
 
-    /// A NURBS edge declines the flattening.
+    /// A curved NURBS edge declines the flattening.
     #[test]
-    fn a_nurbs_edge_declines() {
+    fn a_curved_nurbs_edge_declines() {
         let mut topo = Topology::new();
-        let face = half_disc(&mut topo, true);
+        let face = nurbs_half_disc(&mut topo, false, std::f64::consts::FRAC_1_SQRT_2);
         let (x, y) = (Vec3::new(1.0, 0.0, 0.0), Vec3::new(0.0, 1.0, 0.0));
         assert!(
             face_boundary_2d(&topo, face, Point3::new(0.0, 0.0, 0.0), x, y)
@@ -916,22 +916,37 @@ mod tests {
         );
     }
 
+    /// A NURBS edge lying on the segment between its ends flattens to that
+    /// segment.
+    #[test]
+    fn a_straight_nurbs_edge_flattens_to_its_segment() {
+        let mut topo = Topology::new();
+        let face = half_disc(&mut topo, true);
+        let (x, y) = (Vec3::new(1.0, 0.0, 0.0), Vec3::new(0.0, 1.0, 0.0));
+        let pieces = face_boundary_2d(&topo, face, Point3::new(0.0, 0.0, 0.0), x, y)
+            .unwrap()
+            .unwrap();
+        assert_eq!(pieces.len(), 2);
+        assert!(matches!(pieces[1], Boundary2::Segment(..)));
+        let inside = |px: f64, py: f64| point_in_region(&pieces, Point2::new(px, py), 1e-9);
+        assert_eq!(inside(0.0, 0.5), Some(true));
+        assert_eq!(inside(0.0, -0.01), Some(false));
+    }
+
     /// The region of a face in `z = 0`, read in the plane's own axes.
     fn region(topo: &Topology, face: FaceId) -> Option<PlanarRegion> {
         let (x, y) = (Vec3::new(1.0, 0.0, 0.0), Vec3::new(0.0, 1.0, 0.0));
         face_region_2d(topo, face, Point3::new(0.0, 0.0, 0.0), x, y, 1e-9).unwrap()
     }
 
-    /// A straight NURBS diameter is one piece, its chord, bounding it
-    /// exactly.
+    /// A straight NURBS diameter is an exact piece, its segment.
     #[test]
     fn a_straight_nurbs_edge_reads_as_its_line() {
         let mut topo = Topology::new();
         let face = half_disc(&mut topo, true);
         let region = region(&topo, face).unwrap();
-        assert_eq!(region.exact.len(), 1);
-        assert_eq!(region.beziers.len(), 1);
-        assert!(region.beziers[0].bound() < 1e-12);
+        assert_eq!(region.exact.len(), 2);
+        assert!(region.beziers.is_empty());
         assert!(region.contains_clear(Point2::new(0.0, 0.5), 1e-9));
         assert!(!region.contains_clear(Point2::new(0.0, -0.01), 1e-9));
     }
