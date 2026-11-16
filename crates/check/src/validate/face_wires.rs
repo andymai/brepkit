@@ -1715,4 +1715,38 @@ mod tests {
         assert!(matches!(one[..], [Some(_)]));
         assert_ne!(one, other);
     }
+
+    /// A patch 20 across whose `v` spans 1e-10: each parameter is read as
+    /// the fraction of its span, so the hole outside the outline reads clear
+    /// of it.
+    #[test]
+    fn a_hole_outside_an_outline_on_a_patch_of_unequal_spans_is_reported() {
+        let control = (0..2)
+            .map(|i| {
+                (0..2)
+                    .map(|j| Point3::new(20.0 * f64::from(i), 20.0 * f64::from(j), 0.0))
+                    .collect()
+            })
+            .collect();
+        let surface = FaceSurface::Nurbs(
+            brepkit_math::nurbs::surface::NurbsSurface::new(
+                1,
+                1,
+                vec![0.0, 0.0, 1.0, 1.0],
+                vec![0.0, 0.0, 1e-10, 1e-10],
+                control,
+                vec![vec![1.0; 2]; 2],
+            )
+            .unwrap(),
+        );
+        let mut topo = Topology::default();
+        let outer = square(&mut topo);
+        let inside = circle(&mut topo, [5.0, 5.0, 0.0], 2.0);
+        // Beyond the outline along `v` alone.
+        let outside = circle(&mut topo, [5.0, 15.0, 0.0], 2.0);
+        let face = topo.add_face(Face::new(outer, vec![inside], surface.clone()));
+        assert_eq!(found(&topo, face), None);
+        let face = topo.add_face(Face::new(outer, vec![outside], surface));
+        assert!(found(&topo, face).is_some_and(|d| d.contains("outside the outer wire")));
+    }
 }

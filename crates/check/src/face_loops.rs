@@ -234,7 +234,17 @@ impl FaceLoops {
         };
         let (la, lb) = (self.loops[a].as_ref()?, self.loops[b].as_ref()?);
         let at = |(fu, fv): (f64, f64)| Point2::new(fu * period.x(), fv * period.y());
-        let margin = 100.0 * self.reach;
+        // A point reads its side only clear of each wire's chords by more
+        // than they may stand off the wire.
+        let clear = |p: Point2, extra: f64| {
+            [la, lb].iter().all(|l| {
+                let margin = 2.0f64.madd(l.sag, self.reach) + extra;
+                copies(p, period, l, margin).is_some_and(|near| {
+                    near.iter()
+                        .all(|&c| distance_to_boundary(&l.pieces, c) > margin)
+                })
+            })
+        };
         let to = [
             (0.371, 0.613),
             (0.127, 0.883),
@@ -243,15 +253,11 @@ impl FaceLoops {
         ]
         .into_iter()
         .map(at)
-        .find(|&r| {
-            [la, lb].iter().all(|l| {
-                copies(r, period, l, margin).is_some_and(|near| {
-                    near.iter()
-                        .all(|&c| distance_to_boundary(&l.pieces, c) > margin)
-                })
-            })
-        })?;
+        .find(|&r| clear(r, 100.0 * self.reach))?;
         let from = Point2::new(q.x().rem_euclid(period.x()), q.y().rem_euclid(period.y()));
+        if !clear(from, 0.0) {
+            return None;
+        }
         let count = |p: Point2, r: Point2| {
             Some(
                 crossings(la, p, r, period, self.reach)? + crossings(lb, p, r, period, self.reach)?,
@@ -643,13 +649,15 @@ fn nurbs_drawing<'s>(
     );
     let pole_u0 = rows.first().is_some_and(|r| same(r));
     let pole_u1 = rows.last().is_some_and(|r| same(r));
+    // Each parameter is read as the fraction of its span, so a span far
+    // shorter or longer than the other weighs as much in the drawing.
+    let (pu, pv) = (u1 - u0, v1 - v0);
     if closed_u && closed_v {
-        let (pu, pv) = (u1 - u0, v1 - v0);
         return Some((
-            Drawing::Torus(Vec2::new(pu, pv)),
+            Drawing::Torus(Vec2::new(1.0, 1.0)),
             Box::new(move |p, before| {
                 let (u, v) = s.project_point(p);
-                carry((u - u0, v - v0), before, (pu, pv))
+                carry(((u - u0) / pu, (v - v0) / pv), before, (1.0, 1.0))
             }),
         ));
     }
@@ -658,7 +666,7 @@ fn nurbs_drawing<'s>(
             Drawing::Disc,
             Box::new(move |p, _| {
                 let (u, v) = s.project_point(p);
-                Point2::new(u, v)
+                Point2::new((u - u0) / pu, (v - v0) / pv)
             }),
         ));
     }
@@ -695,9 +703,9 @@ fn nurbs_drawing<'s>(
         Box::new(move |p, _| {
             let (angle, b) = parts(p);
             let rho = match from_start {
-                None => b - lo + width,
-                Some(true) => b - lo,
-                Some(false) => hi - b,
+                None => (b - lo) / width + 1.0,
+                Some(true) => (b - lo) / width,
+                Some(false) => (hi - b) / width,
             };
             polar(rho.max(0.0), angle)
         }),
@@ -796,8 +804,10 @@ fn trace(
             Boundary2::Segment(points[k], to)
         })
         .collect();
+    // The box holds the closing chord's end, a shift on from the first
+    // point.
     let (mut lo, mut hi) = (first, first);
-    for p in &points {
+    for p in points.iter().chain(std::iter::once(&(first + shift))) {
         lo = Point2::new(lo.x().min(p.x()), lo.y().min(p.y()));
         hi = Point2::new(hi.x().max(p.x()), hi.y().max(p.y()));
     }
@@ -1078,5 +1088,61 @@ mod tests {
             assert!(band.iter().all(|&s| s == band[0]));
         }
         assert_ne!(sides[0][0], sides[1][0]);
+    }
+
+    /// Two wires that wind a torus once each way, as loops of lines, half a
+    /// turn apart: a point on either wire, where its chords may stand off
+    /// it, reads neither band. Each wire's box holds its closing chord's end.
+    #[test]
+    fn a_point_on_a_winding_wire_reads_no_band() {
+        let torus =
+            brepkit_math::surfaces::ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), 6.0, 2.0)
+                .unwrap();
+        let mut topo = Topology::default();
+        let mut middles = Vec::new();
+        let mut wire = |topo: &mut Topology, shift: f64, keep: bool| {
+            let n = 24;
+            let corners: Vec<Point3> = (0..n)
+                .map(|k| {
+                    let t = TAU * f64::from(k) / f64::from(n);
+                    torus.evaluate(t + shift, 0.3f64.mul_add(t.sin(), t))
+                })
+                .collect();
+            let ids: Vec<_> = corners
+                .iter()
+                .map(|&p| topo.add_vertex(Vertex::new(p, 1e-7)))
+                .collect();
+            let edges = (0..corners.len())
+                .map(|k| {
+                    let j = (k + 1) % corners.len();
+                    if keep {
+                        middles.push(corners[k] + (corners[j] - corners[k]) * 0.5);
+                    }
+                    OrientedEdge::new(
+                        topo.add_edge(Edge::new(ids[k], ids[j], EdgeCurve::Line)),
+                        true,
+                    )
+                })
+                .collect();
+            topo.add_wire(Wire::new(edges, true).unwrap())
+        };
+        let outer = wire(&mut topo, 0.0, true);
+        let hole = wire(&mut topo, std::f64::consts::PI, false);
+        let face = topo.add_face(Face::new(
+            outer,
+            vec![hole],
+            FaceSurface::Torus(torus.clone()),
+        ));
+        let loops = FaceLoops::of(&topo, face, 1e-6).unwrap().unwrap();
+        for l in loops.loops.iter().flatten() {
+            assert!(!l.closes());
+            let end = l.points[0] + l.shift;
+            assert!(end.x() >= l.lo.x() && end.x() <= l.hi.x());
+            assert!(end.y() >= l.lo.y() && end.y() <= l.hi.y());
+        }
+        for m in middles {
+            let (u, v) = torus.project_point(m);
+            assert_eq!(loops.band((0, 1), Point2::new(u, v)), None, "{m:?}");
+        }
     }
 }
