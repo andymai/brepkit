@@ -1198,7 +1198,8 @@ fn survey_pairs(
 /// Boxes that together hold every point an edge's curve takes over its
 /// parameters `t0` to `t1`: a line's in eight pieces; a circle's or an
 /// ellipse's in sixteen arcs, each the box of its ends grown by the arc's sag
-/// bound (its largest radius times its angle squared over eight); a
+/// bound (the most its second derivative reaches, times its angle squared
+/// over eight); a
 /// B-spline's the boxes of the nets of the Bezier pieces the range runs
 /// over, each piece within the hull of its net. `None` where a weight is not
 /// positive or the pieces cannot be read.
@@ -1245,10 +1246,13 @@ fn curve_piece_boxes(
                     .collect(),
             )
         }
-        EdgeCurve::Circle(c) => Some(arcs(&|t| c.evaluate(t), c.radius())),
+        EdgeCurve::Circle(c) => Some(arcs(
+            &|t| c.evaluate(t),
+            conic_reach(c.radius(), c.radius(), c.u_axis(), c.v_axis()),
+        )),
         EdgeCurve::Ellipse(e) => Some(arcs(
             &|t| e.evaluate(t),
-            e.semi_major().abs().max(e.semi_minor().abs()),
+            conic_reach(e.semi_major(), e.semi_minor(), e.u_axis(), e.v_axis()),
         )),
         EdgeCurve::NurbsCurve(n) => {
             if n.weights().iter().any(|&w| w <= 0.0) {
@@ -1272,6 +1276,16 @@ fn curve_piece_boxes(
             (!boxes.is_empty()).then_some(boxes)
         }
     }
+}
+
+/// The most `|a cos t u + b sin t v|` reaches over `t`, the size of the
+/// second derivative of a conic on axes `u` and `v` that need not be unit or
+/// square: its square is no more than the larger of `(a |u|)²` and
+/// `(b |v|)²` plus `|a b u . v|`.
+fn conic_reach(a: f64, b: f64, u: Vec3, v: Vec3) -> f64 {
+    let (along_u, along_v) = ((a * u.length()).abs(), (b * v.length()).abs());
+    let most = along_u.max(along_v);
+    (most * most + (a * b * u.dot(v)).abs()).sqrt()
 }
 
 /// Find edge-surface crossings by sampling the distance to the surface and refining.
@@ -2301,6 +2315,41 @@ mod tests {
                 -0.3,
             ),
             (EdgeCurve::NurbsCurve(nurbs), a, b, 0.25, 0.9),
+            // Axes that are neither unit nor square, as a copy through a
+            // scaling or shearing transform keeps them.
+            (
+                EdgeCurve::Circle(
+                    Circle3D::with_axes(
+                        a,
+                        n,
+                        2.5,
+                        Vec3::new(3.0, 0.0, 0.0),
+                        Vec3::new(1.5, 0.5, 0.0),
+                    )
+                    .unwrap(),
+                ),
+                a,
+                a,
+                0.4,
+                2.9,
+            ),
+            (
+                EdgeCurve::Ellipse(
+                    Ellipse3D::with_axes(
+                        a,
+                        n,
+                        6.0,
+                        1.5,
+                        Vec3::new(0.0, 4.0, 0.0),
+                        Vec3::new(2.0, -3.0, 1.0),
+                    )
+                    .unwrap(),
+                ),
+                a,
+                a,
+                5.0,
+                -0.3,
+            ),
         ];
         for (curve, start, end, t0, t1) in &cases {
             let boxes = curve_piece_boxes(curve, *start, *end, *t0, *t1).unwrap();
