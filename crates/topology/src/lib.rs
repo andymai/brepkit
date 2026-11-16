@@ -125,6 +125,7 @@ pub mod edge;
 pub mod explorer;
 pub mod face;
 pub mod orientation;
+mod owners;
 
 pub mod pcurve;
 pub mod planar;
