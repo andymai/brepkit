@@ -13,6 +13,7 @@
 //! cuts, nearer and nearer the edge. A point inside both faces shows that
 //! they share an area.
 
+use std::collections::{HashSet, VecDeque};
 use std::f64::consts::TAU;
 
 use brepkit_math::aabb::Aabb3;
@@ -22,8 +23,8 @@ use brepkit_math::nurbs::decompose::curve_bezier_between;
 use brepkit_math::region2d::Boundary2;
 use brepkit_math::vec::{Point2, Point3, Vec2, Vec3};
 use brepkit_topology::Topology;
-use brepkit_topology::edge::EdgeCurve;
-use brepkit_topology::explorer::solid_faces;
+use brepkit_topology::edge::{EdgeCurve, EdgeId};
+use brepkit_topology::explorer::{face_edges, solid_faces};
 use brepkit_topology::face::{FaceId, FaceSurface};
 use brepkit_topology::planar::{PlanarRegion, face_boundary_2d, face_region_2d};
 use brepkit_topology::solid::SolidId;
@@ -46,9 +47,10 @@ const STRETCHES: u32 = 64;
 const MOST_HALVINGS: u32 = 16;
 
 /// The most stretches read within one of an edge's first stretches where its
-/// meetings are not solved for. Past it the rest of that first stretch is
-/// left unread, and the edge's other first stretches are still read.
-const MOST_STRETCHES: usize = 256;
+/// meetings are not solved for, halved breadth first, so the budget spreads
+/// over the whole first stretch. The edge's other first stretches have
+/// budgets of their own.
+const MOST_STRETCHES: usize = 128;
 
 /// A plane face.
 struct Flat {
@@ -326,18 +328,27 @@ fn meetings(piece: &Boundary2, others: &[Boundary2], tol: f64) -> Option<Vec<f64
     Some(cuts)
 }
 
+/// The other face of a pair: its region, its boundary as lines and arcs
+/// (`None` where it has a B-spline), and its edges.
+struct Other<'a> {
+    region: &'a PlanarRegion,
+    pieces: Option<&'a [Boundary2]>,
+    edges: &'a HashSet<EdgeId>,
+}
+
 /// Whether some point lies inside both faces, farther than `tol` from the
 /// boundary of each: read just inside `face`, beside each stretch of its
-/// edges between the points where they meet `other`'s boundary. `pieces`
-/// is that boundary as lines and arcs, `None` where it has a B-spline.
+/// edges between the points where they meet the other face's boundary.
+#[allow(clippy::too_many_lines)]
 fn shares_area(
     topo: &Topology,
     face_id: FaceId,
     region: &PlanarRegion,
-    (other, pieces): (&PlanarRegion, Option<&[Boundary2]>),
+    other_face: &Other<'_>,
     frame: &Frame3,
     tol: f64,
 ) -> Result<bool, CheckError> {
+    let (other, pieces) = (other_face.region, other_face.pieces);
     let flat = |p: Point3| {
         let d = p - frame.origin;
         Point2::new(d.dot(frame.x), d.dot(frame.y))
@@ -443,18 +454,27 @@ fn shares_area(
                 cuts.sort_by(f64::total_cmp);
                 cuts.dedup();
             }
-            // A stretch that reads outside or inside the other face by more
-            // than its reach lies wholly there. One whose ends and middle
-            // all lie on the other face's boundary runs along it, and is read
-            // beside its middle. Any other is halved.
-            for first in cuts.windows(2) {
-                let mut pending = vec![(first[0], first[1], 0_u32)];
-                let mut read = 0;
-                while let Some((f0, f1, depth)) = pending.pop() {
-                    read += 1;
-                    if read > MOST_STRETCHES {
-                        break;
+            // An edge the other face shares runs along its boundary: it is
+            // read beside the middle of each first stretch.
+            if other_face.edges.contains(&oe.edge()) {
+                for first in cuts.windows(2) {
+                    let mid = 0.5 * (first[0] + first[1]);
+                    if beside(mid, through(first[0], mid, first[1])) {
+                        return Ok(true);
                     }
+                }
+                continue;
+            }
+            // A stretch that reads outside or inside the other face by more
+            // than its reach lies wholly there, and one inside is read beside
+            // its middle. Any other is halved, and read beside its middle
+            // where that lies inside the other face, or where it is halved no
+            // more.
+            for first in cuts.windows(2) {
+                let mut pending = VecDeque::from([(first[0], first[1], 0_u32)]);
+                let mut read = 0;
+                while let Some((f0, f1, depth)) = pending.pop_front() {
+                    read += 1;
                     let mid = 0.5 * (f0 + f1);
                     let length = through(f0, mid, f1);
                     if length <= tol {
@@ -469,17 +489,17 @@ fn shares_area(
                             }
                         }
                         None => {
-                            let on_boundary = other.side(m, tol);
-                            if on_boundary != Some(false) && beside(mid, length) {
+                            let last =
+                                depth >= MOST_HALVINGS || read + pending.len() + 2 > MOST_STRETCHES;
+                            let near = other.side(m, tol);
+                            if (near == Some(true) || (last && near.is_none()))
+                                && beside(mid, length)
+                            {
                                 return Ok(true);
                             }
-                            let along = on_boundary.is_none()
-                                && [f0, f1]
-                                    .iter()
-                                    .all(|&f| other.side(point(f), tol).is_none());
-                            if !along && depth < MOST_HALVINGS {
-                                pending.push((f0, mid, depth + 1));
-                                pending.push((mid, f1, depth + 1));
+                            if !last {
+                                pending.push_back((f0, mid, depth + 1));
+                                pending.push_back((mid, f1, depth + 1));
                             }
                         }
                     }
@@ -548,8 +568,22 @@ pub fn check_faces_overlap(
                 continue;
             };
             let (pa, pb) = (pieces(a.face)?, pieces(b.face)?);
-            if shares_area(topo, a.face, &ra, (&rb, pb.as_deref()), &frame, tolerance)?
-                || shares_area(topo, b.face, &rb, (&ra, pa.as_deref()), &frame, tolerance)?
+            let edges = |face| -> Result<HashSet<EdgeId>, CheckError> {
+                Ok(face_edges(topo, face)?.into_iter().collect())
+            };
+            let (ea, eb) = (edges(a.face)?, edges(b.face)?);
+            let of_b = Other {
+                region: &rb,
+                pieces: pb.as_deref(),
+                edges: &eb,
+            };
+            let of_a = Other {
+                region: &ra,
+                pieces: pa.as_deref(),
+                edges: &ea,
+            };
+            if shares_area(topo, a.face, &ra, &of_b, &frame, tolerance)?
+                || shares_area(topo, b.face, &rb, &of_a, &frame, tolerance)?
             {
                 issues.push(ValidationIssue {
                     check: CheckId::SolidFacesOverlap,
@@ -1113,5 +1147,63 @@ mod tests {
         );
         let solid = b.solid();
         assert!(found(&b.topo, solid).is_empty());
+    }
+
+    /// A face under a B-spline of 64 cubic spans `y = 0.02 u (u - 0.5)
+    /// (u - 1)`, each span's ends and middle on `y = 0`, and a rectangle
+    /// above `y = 0` along it: each span's hump above the line lies in both.
+    #[test]
+    fn a_spline_edge_that_crosses_a_line_between_its_samples_is_reported() {
+        let spans = 64_u32;
+        let mut control = Vec::new();
+        for k in 0..spans {
+            let x = f64::from(k);
+            if k == 0 {
+                control.push(Point3::new(x, 0.0, 0.0));
+            }
+            control.push(Point3::new(x + 1.0 / 3.0, 0.02 / 6.0, 0.0));
+            control.push(Point3::new(x + 2.0 / 3.0, -0.02 / 6.0, 0.0));
+            control.push(Point3::new(x + 1.0, 0.0, 0.0));
+        }
+        let mut knots = vec![0.0; 4];
+        for k in 1..spans {
+            knots.extend([f64::from(k); 3]);
+        }
+        knots.extend([f64::from(spans); 4]);
+        let n = control.len();
+        let wavy =
+            brepkit_math::nurbs::curve::NurbsCurve::new(3, knots, control, vec![1.0; n]).unwrap();
+        let top = f64::from(spans);
+        let mut b = Builder::default();
+        let [p, q, r, t] = [[0.0, 0.0], [top, 0.0], [top, -10.0], [0.0, -10.0]]
+            .map(|c| b.vertex([c[0], c[1], 0.0]));
+        let curve = b
+            .topo
+            .add_edge(Edge::new(p, q, EdgeCurve::NurbsCurve(wavy)));
+        let edges = vec![
+            OrientedEdge::new(curve, true),
+            b.edge(q, r),
+            b.edge(r, t),
+            b.edge(t, p),
+        ];
+        let wire = b.topo.add_wire(Wire::new(edges, true).unwrap());
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        let face = b.topo.add_face(Face::new(
+            wire,
+            vec![],
+            FaceSurface::Plane { normal: -z, d: 0.0 },
+        ));
+        b.faces.push(face);
+        b.face(
+            &[
+                [0.0, 0.0, 0.0],
+                [top, 0.0, 0.0],
+                [top, 10.0, 0.0],
+                [0.0, 10.0, 0.0],
+            ],
+            [0.0, 0.0, 1.0],
+        );
+        let solid = b.solid();
+        assert_eq!(found(&b.topo, solid).len(), 1);
     }
 }
