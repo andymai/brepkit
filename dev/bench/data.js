@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794808143774,
+  "lastUpdate": 1794808363310,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -71549,6 +71549,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 18181127,
             "range": "± 53289",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "a2171c7fa436d00b192f932af76a1d5f8645ec59",
+          "message": "fix(math): march a section to the edge of its patches (#2540)\n\n## Summary\n\nThe fuse of the `robot-arm` yoke onto the turret's cap fell back to a\nmesh of 4073 flat faces. It now gives a valid, exact solid of 24 faces\n(1 cone, 8 cylinders, 9 planes, 6 tori). Closes #2488.\n\nThe yoke's rounded arms pass through the cap's cone. Two faults in the\nmarcher for two analytic surfaces left 20 free edges in the result:\n\n1. The cone and the four torus rounds got no section. The marcher sizes\na pair by the chord between the first and last corners of each patch. A\nwhole torus ends where it starts in both directions, so that chord was\n2e-14. The size fell to its floor of 0.1. The marcher then rejected the\npair: its nearest sample was 0.035 from the torus, and the limit was\n0.0094.\n2. The cone and the yoke's two side cylinders got sections that stopped\nshort of the faces' edges, by up to 0.95. The marcher stopped at the\nlast point before a step left a patch's band. The face splitter found no\nsection end on the cylinder's boundary and kept the face whole.\n\n## What\n\n- `patch_diagonal` in `crates/math/src/analytic_intersection.rs` gives\nthe size of a patch. A patch closed in both directions takes the chord\nfrom its first corner to its middle. On this torus of major radius 50,\nthat chord is 100.\n- `march_analytic_intersection` ends a curve on the edge of the patch\nthat a step leaves. It bisects the step for the last point on the\nintersection that stays on both patches.\n- A step leaves a patch when its end, brought onto the intersection,\nlies off that patch. When only the feet of the step's predictor or\nmidpoint lie off a patch, the march goes on from the corrected end.\n- A seed settles onto the intersection with its feet clamped to the\npatches, so it can lie just past an edge. When such a seed ends the\ncurve, the marcher moves that end onto the edge in the same way.\n\n## Tests\n\n- `a_yoke_with_rounded_arms_fuses_onto_the_turrets_cap` in\n`crates/io/tests/playground_example_repros_inmem.rs` is now active. The\nfuse runs with `mesh_fallback: false`. The result must be valid, keep a\ncurved face, and give a watertight mesh. It must hold a point in each\noperand and must not hold a point off both.\n- The same test compares volumes. The fused volume must equal the two\noperands' volumes less the volume of their intersect, to 1e-6. The\noperands measure 494520.19 and 1915175.87, their intersect 138435.98,\nand the fused solid 2271260.07.\n- The test also reads 4096 points of a grid where one round of the yoke\nand its side cylinder cross the cap's cone. At each point, the fused\nsolid must hold the point exactly when one operand holds it.\n- `a_whole_torus_patch_spans_its_ring` and\n`marched_cone_cylinder_curves_end_on_the_band_edges` test the two\nchanges in `brepkit-math`. The second uses the cap's cone and one side\ncylinder of the yoke. Each curve must end within 1e-6 of a band's edge.\n- `long_march_steps_end_on_the_band_edges` marches the same pair with\nsteps of 0.5, 1, 2 and 3. Each end must lie within 1e-6 of a band's\nedge. Before the corrected-end check, the step of 2 stopped 0.06 short\nof the cone's edge.\n- On main, `marched_cone_cylinder_curves_end_on_the_band_edges` fails:\none curve ends at (-55.355, -17.663, 191.853), 0.57 short of the edge.\n- On this branch: `playground_example_repros_inmem` passes (1 test, 2\nignored), and `cargo test -p brepkit-math --lib` passes 678 tests.\n- On this branch, `cargo nextest run --cargo-profile ci -p brepkit-math\n-p brepkit-algo -p brepkit-io -p brepkit-operations -p brepkit-wasm -p\nbrepkit-check -p brepkit-heal` passes 4347 tests, with 23 skipped.\n- On this branch, the outputs of `pose_sweep` (497 lines) and\n`truth_audit` are the same as on `4e5184192`.\n- #2539 has the same change to `fuse_exactly` and `Grid` in the test\nfile, so the two PRs can merge in either order.",
+          "timestamp": "2026-11-16T05:49:30Z",
+          "tree_id": "0441859156ee9049f7429adb6b58dc5c8efa4bf0",
+          "url": "https://github.com/andymai/brepkit/commit/a2171c7fa436d00b192f932af76a1d5f8645ec59"
+        },
+        "date": 1794808355754,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 889361,
+            "range": "± 2700",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 931454,
+            "range": "± 2592",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10665,
+            "range": "± 11",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 554749,
+            "range": "± 2005",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 20048129,
+            "range": "± 55553",
             "unit": "ns/iter"
           }
         ]
