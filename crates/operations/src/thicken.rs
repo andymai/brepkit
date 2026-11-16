@@ -936,7 +936,9 @@ mod tests {
     /// every edge bounds two faces. Thickened by 1 or -1 it holds
     /// (2π − 5e-9)/2 (11² − 10²) 20 or (2π − 5e-9)/2 (10² − 9²) 20. The
     /// validator measures an open edge by its chord, so it flags the four
-    /// rims as it does the face's own, and nothing else.
+    /// rims as it does the face's own. The two end walls lie within the
+    /// tolerance of each other, on one plane, facing each other: it flags
+    /// them as faces that cover one area. It flags nothing else.
     #[test]
     fn thicken_a_cylinder_sector_just_short_of_a_full_turn() {
         let span = std::f64::consts::TAU - 5e-9;
@@ -983,13 +985,17 @@ mod tests {
             }
             assert!(uses.values().all(|&n| n == 2), "{thickness}: {uses:?}");
             let report = crate::validate::validate_solid(&topo, wall).unwrap();
-            let rims = report
-                .issues
-                .iter()
-                .filter(|i| i.description.contains("near-zero length"))
-                .count();
+            let count = |text: &str| {
+                report
+                    .issues
+                    .iter()
+                    .filter(|i| i.description.contains(text))
+                    .count()
+            };
             assert!(
-                rims == 4 && report.issues.len() == 4,
+                count("near-zero length") == 4
+                    && count("cover the same area") == 1
+                    && report.issues.len() == 5,
                 "{thickness}: {:?}",
                 report.issues
             );

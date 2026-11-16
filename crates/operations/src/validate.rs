@@ -970,6 +970,7 @@ pub fn validate_solid_with_options(
     }
 
     issues.extend(wires_apart_issues(topo, &faces, scale)?);
+    issues.extend(faces_overlap_issues(topo, solid, scale)?);
 
     {
         let mut face_counts = std::collections::HashMap::new();
@@ -1070,6 +1071,27 @@ fn wires_apart_issues(
         }
     }
     Ok(issues)
+}
+
+/// An error for each pair of plane faces that lie on one plane and cover the
+/// same area.
+fn faces_overlap_issues(
+    topo: &Topology,
+    solid: SolidId,
+    scale: f64,
+) -> Result<Vec<ValidationIssue>, crate::OperationsError> {
+    let found =
+        brepkit_check::validate::face_overlap::check_faces_overlap(topo, solid, 1e-6 * scale)
+            .map_err(|e| crate::OperationsError::InvalidInput {
+                reason: e.to_string(),
+            })?;
+    Ok(found
+        .into_iter()
+        .map(|issue| ValidationIssue {
+            severity: Severity::Error,
+            description: issue.description,
+        })
+        .collect())
 }
 
 /// Whether a solid is inside out: its faces agree with each other, which the
@@ -1301,6 +1323,7 @@ pub fn validate_solid_relaxed_with_options(
     }
 
     issues.extend(wires_apart_issues(topo, &faces, scale)?);
+    issues.extend(faces_overlap_issues(topo, solid, scale)?);
 
     {
         let mut face_counts = std::collections::HashMap::new();
