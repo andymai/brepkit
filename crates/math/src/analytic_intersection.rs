@@ -4703,36 +4703,37 @@ fn march_analytic_intersection(
             || vb <= v_range_b.0
             || vb >= v_range_b.1
     };
+    // The point on the intersection that the step from `from` reaches.
+    let on_curve = |from: Point3, step: Vec3| {
+        correct_to_intersection(
+            a,
+            b,
+            surf_a,
+            norm_a,
+            surf_b,
+            norm_b,
+            from + step,
+            u_range_a,
+            v_range_a,
+            u_range_b,
+            v_range_b,
+            5,
+        )
+    };
     // The last point on the intersection still on both patches along the
-    // step from `from`, on the patch's edge the step crosses, bisected; `None`
-    // when the step leaves at once.
+    // step from `from`, whose end lies off a patch: on the patch's edge the
+    // step crosses, bisected; `None` when the step leaves at once.
     let last_on_patch = |from: Point3, step: Vec3| {
-        let on_curve = |s: f64| {
-            correct_to_intersection(
-                a,
-                b,
-                surf_a,
-                norm_a,
-                surf_b,
-                norm_b,
-                from + step * s,
-                u_range_a,
-                v_range_a,
-                u_range_b,
-                v_range_b,
-                5,
-            )
-        };
         let (mut lo, mut hi) = (0.0, 1.0);
         for _ in 0..48 {
             let s = f64::midpoint(lo, hi);
-            if off_patch(on_curve(s)) {
+            if off_patch(on_curve(from, step * s)) {
                 hi = s;
             } else {
                 lo = s;
             }
         }
-        (lo > 0.0).then(|| on_curve(lo))
+        (lo > 0.0).then(|| on_curve(from, step * lo))
     };
 
     // March forward from seed, collecting points.
@@ -4794,12 +4795,20 @@ fn march_analytic_intersection(
                 || vb2 <= v_range_b.0
                 || vb2 >= v_range_b.1;
 
+            // A step whose feet leave a patch can still end on it once the
+            // step is brought onto the intersection; then the march goes on
+            // from there.
+            let mut mid = mid;
             if out_a || out_b || off_patch(mid) {
-                // The step crosses a patch's edge. End the curve on that
-                // edge, neither a step short of it nor past it, where the
-                // faces' other sections meet it.
-                points.extend(last_on_patch(current, t_dir * h));
-                break;
+                let end = on_curve(current, t_dir * h);
+                if off_patch(end) {
+                    // The step crosses a patch's edge. End the curve on that
+                    // edge, neither a step short of it nor past it, where the
+                    // faces' other sections meet it.
+                    points.extend(last_on_patch(current, t_dir * h));
+                    break;
+                }
+                mid = end;
             }
             if region.is_some_and(|r| !r.contains_point(mid)) {
                 points.push(mid);
@@ -6783,6 +6792,71 @@ mod tests {
             for p in [c.curve.evaluate(t0), c.curve.evaluate(t1)] {
                 let on_edge = (p.z() - 192.0).abs() < 1e-6 || (p.y().abs() - 40.0).abs() < 1e-6;
                 assert!(on_edge, "a curve ends at {p:?}");
+            }
+        }
+    }
+
+    /// Long steps along the same cone and cylinder: a step whose predictor
+    /// leaves a band while the curve stays on it carries the march on, and
+    /// each end still lies on a band's edge.
+    #[test]
+    fn long_march_steps_end_on_the_band_edges() {
+        let half_angle = 14.0_f64.atan2(10.0);
+        let cone = ConicalSurface::new(
+            Point3::new(0.0, 0.0, 273.2),
+            Vec3::new(0.0, 0.0, -1.0),
+            half_angle,
+        )
+        .unwrap();
+        let cyl = CylindricalSurface::new(
+            Point3::new(0.0, -50.0, 215.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            60.0,
+        )
+        .unwrap();
+        let (a, b) = (
+            AnalyticSurface::Cone(&cone),
+            AnalyticSurface::Cylinder(&cyl),
+        );
+        let (surf_a, norm_a, u_a, _) = surface_closures(&a);
+        let (surf_b, norm_b, u_b, _) = surface_closures(&b);
+        let v_a = (81.2 / half_angle.sin(), 95.2 / half_angle.sin());
+        let v_b = (10.0, 90.0);
+        let seed = correct_to_intersection(
+            &a,
+            &b,
+            surf_a.as_ref(),
+            norm_a.as_ref(),
+            surf_b.as_ref(),
+            norm_b.as_ref(),
+            Point3::new(-53.0, -30.0, 187.0),
+            u_a,
+            v_a,
+            u_b,
+            v_b,
+            20,
+        );
+        for step in [0.5, 1.0, 2.0, 3.0] {
+            let points = march_analytic_intersection(
+                &a,
+                &b,
+                surf_a.as_ref(),
+                norm_a.as_ref(),
+                surf_b.as_ref(),
+                norm_b.as_ref(),
+                seed,
+                u_a,
+                v_a,
+                u_b,
+                v_b,
+                step,
+                true,
+                true,
+                None,
+            );
+            for p in [points[0], points[points.len() - 1]] {
+                let on_edge = (p.z() - 192.0).abs() < 1e-6 || (p.y().abs() - 40.0).abs() < 1e-6;
+                assert!(on_edge, "step {step}: the march ends at {p:?}");
             }
         }
     }
