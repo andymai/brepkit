@@ -30,11 +30,6 @@ use brepkit_topology::solid::SolidId;
 use super::checks::{CheckId, EntityRef, Severity, ValidationIssue};
 use crate::CheckError;
 
-/// A direction square to no common plane, which turns each plane's normal to
-/// one side, so that two faces on one plane read the same normal and offset
-/// whichever way round they face.
-const SIDE: Vec3 = Vec3::new(0.577_215_664_9, 0.618_033_988_7, 0.533_102_917_2);
-
 /// The most angle, in radians, between the normals of two faces read as on
 /// one plane.
 const MOST_TILT: f64 = 1e-4;
@@ -48,12 +43,13 @@ const STRETCHES: u32 = 64;
 /// its meetings are not solved for.
 const MOST_HALVINGS: u32 = 10;
 
-/// A plane face, its plane turned to [`SIDE`].
+/// A plane face.
 struct Flat {
     face: FaceId,
     normal: Vec3,
-    /// The plane's offset from the middle of the solid's plane faces, which
-    /// moves with the solid.
+    /// The plane's distance from the middle of the solid's plane faces,
+    /// which moves with the solid, and which two faces on one plane share
+    /// whichever way round they face.
     offset: f64,
     origin: Point3,
     bounds: Aabb3,
@@ -65,12 +61,9 @@ impl Flat {
         let FaceSurface::Plane { normal, .. } = face.surface() else {
             return Ok(None);
         };
-        let Ok(mut normal) = normal.normalize() else {
+        let Ok(normal) = normal.normalize() else {
             return Ok(None);
         };
-        if normal.dot(SIDE) < 0.0 {
-            normal = -normal;
-        }
         let Some(first) = topo.wire(face.outer_wire())?.edges().first() else {
             return Ok(None);
         };
@@ -92,9 +85,12 @@ impl Flat {
 
 /// Whether the two faces lie on one plane within `tol` and their boxes meet:
 /// the second's first vertex lies within `tol` of the first's plane, and the
-/// two planes part by no more than `tol` across the larger face.
+/// two planes part by no more than `tol` across the larger face. The faces
+/// may face either way.
 fn on_one_plane(a: &Flat, b: &Flat, tol: f64) -> bool {
-    let tilt = (a.normal - b.normal).length();
+    let tilt = (a.normal - b.normal)
+        .length()
+        .min((a.normal + b.normal).length());
     tilt <= MOST_TILT
         && tilt * a.size().max(b.size()) <= tol
         && a.normal.dot(b.origin - a.origin).abs() <= tol
@@ -355,9 +351,14 @@ fn shares_area(
             let (t0, t1) = curve.domain_with_endpoints(a, b);
             let at = |f: f64| (t1 - t0).madd(f, t0);
             let point = |f: f64| flat(curve.evaluate_with_endpoints(at(f), a, b));
+            // A stretch's length read through its middle: a closed edge's
+            // ends are one point.
+            let through = |f0: f64, mid: f64, f1: f64| {
+                (point(mid) - point(f0)).length() + (point(f1) - point(mid)).length()
+            };
             // A point inside both faces beside the edge at `f`, for a stretch
             // `length` long: each side of the edge in turn, from a quarter of
-            // the stretch away to just clear of the tolerance.
+            // the stretch away to twice the tolerance.
             let beside = |f: f64, length: f64| {
                 let m = point(f);
                 let along = curve.tangent_with_endpoints(at(f), a, b);
@@ -367,7 +368,7 @@ fn shares_area(
                 };
                 let mut step = 0.25 * length;
                 for _ in 0..64 {
-                    if step <= 16.0 * tol {
+                    if step <= 2.0 * tol {
                         break;
                     }
                     for s in [step, -step] {
@@ -390,8 +391,8 @@ fn shares_area(
                 cuts.sort_by(f64::total_cmp);
                 for pair in cuts.windows(2) {
                     let (f0, f1) = (pair[0], pair[1]);
-                    let length = (point(f1) - point(f0)).length();
                     let mid = 0.5 * (f0 + f1);
+                    let length = through(f0, mid, f1);
                     if length > tol
                         && other.side(point(mid), tol) != Some(false)
                         && beside(mid, length)
@@ -414,7 +415,7 @@ fn shares_area(
                 .collect();
             while let Some((f0, f1, depth)) = pending.pop() {
                 let mid = 0.5 * (f0 + f1);
-                let length = (point(f1) - point(f0)).length();
+                let length = through(f0, mid, f1);
                 if length <= tol {
                     continue;
                 }
@@ -464,7 +465,7 @@ pub fn check_faces_overlap(
     let centre = all.min + (all.max - all.min) * 0.5;
     let mut spread = 0.0_f64;
     for flat in &mut flats {
-        flat.offset = flat.normal.dot(flat.origin - centre);
+        flat.offset = flat.normal.dot(flat.origin - centre).abs();
         spread = spread.max((flat.origin - centre).length());
     }
     // Two faces on one plane: their offsets part by no more than the
@@ -850,5 +851,75 @@ mod tests {
         b.faces.push(face);
         let solid = b.solid();
         assert_eq!(found(&b.topo, solid).len(), 1);
+    }
+
+    /// Two squares that share a strip ten tolerances wide.
+    #[test]
+    fn a_strip_ten_tolerances_wide_in_common_is_reported() {
+        let mut b = Builder::default();
+        square(&mut b, (0.0, 0.0), 10.0, [0., 0., 1.]);
+        square(&mut b, (9.999_99, 0.0), 10.0, [0., 0., -1.]);
+        let solid = b.solid();
+        assert_eq!(found(&b.topo, solid).len(), 1);
+    }
+
+    /// Two discs about one centre, each bounded by one closed circle, the
+    /// smaller one on the larger.
+    #[test]
+    fn a_disc_on_a_larger_disc_is_reported() {
+        let mut b = Builder::default();
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        for (r, normal) in [(2.0, z), (1.0, -z)] {
+            let circle = Circle3D::new(Point3::new(0.0, 0.0, 0.0), z, r).unwrap();
+            let v = b.vertex([r, 0.0, 0.0]);
+            let e = b.topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(circle)));
+            let wire = b
+                .topo
+                .add_wire(Wire::new(vec![OrientedEdge::new(e, true)], true).unwrap());
+            let face = b.topo.add_face(Face::new(
+                wire,
+                vec![],
+                FaceSurface::Plane { normal, d: 0.0 },
+            ));
+            b.faces.push(face);
+        }
+        let solid = b.solid();
+        assert_eq!(found(&b.topo, solid).len(), 1);
+    }
+
+    /// Two overlapping squares on one plane whose stored normals part by
+    /// 2e-9 radians. The normals run round the circle square to `d`, and the
+    /// hair of tilt lies along `d`: a reading that turns each normal to the
+    /// side of `d` splits the two normals of each pair across that circle.
+    #[test]
+    fn faces_whose_normals_part_by_a_hair_are_read_on_one_plane() {
+        let d = Vec3::new(0.577_215_664_9, 0.618_033_988_7, 0.533_102_917_2)
+            .normalize()
+            .unwrap();
+        let ring = Frame3::from_normal(Point3::new(0.0, 0.0, 0.0), d).unwrap();
+        for k in 0..8 {
+            let turn = std::f64::consts::FRAC_PI_4 * f64::from(k);
+            let n = ring.x * turn.cos() + ring.y * turn.sin();
+            let frame = Frame3::from_normal(Point3::new(0.0, 0.0, 0.0), n).unwrap();
+            let hair = d * 1e-9;
+            let mut b = Builder::default();
+            let corner = |x: f64, y: f64| {
+                let p = Point3::new(0.0, 0.0, 0.0) + frame.x * x + frame.y * y;
+                [p.x(), p.y(), p.z()]
+            };
+            for ((x, y), normal) in [((0.0, 0.0), n + hair), ((5.0, 5.0), -(n - hair))] {
+                b.face(
+                    &[
+                        corner(x, y),
+                        corner(x + 10.0, y),
+                        corner(x + 10.0, y + 10.0),
+                        corner(x, y + 10.0),
+                    ],
+                    [normal.x(), normal.y(), normal.z()],
+                );
+            }
+            let solid = b.solid();
+            assert_eq!(found(&b.topo, solid).len(), 1, "turn {k}");
+        }
     }
 }
