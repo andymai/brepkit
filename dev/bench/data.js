@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794806075965,
+  "lastUpdate": 1794806330138,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -71279,6 +71279,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24576953,
             "range": "± 164829",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "256ed7d189ea67f3cc742e3a8e64810274238177",
+          "message": "fix(operations): refuse a blend or faired surface that folds (#2528)\n\n## Summary\n\n`blend_surface` and `fair_surface` could return a surface that folds\nback over itself: along a line, its normal vanishes and turns over. Both\nnow prove their result regular from its control points, and return\n`InvalidInput` where it folds. `fair_surface` checks the spans over\nwhich it moved a control point: a fold where nothing moves is the\ninput's, and stays. Closes #2469.\n\nThe check (`crates/operations/src/blend_surface/fold.rs`) uses the proof\nof `first_fold` in the test fixtures, and extends it to rational\nsurfaces:\n\n- On a Bezier patch with homogeneous control points `(H, w)`, the normal\nof `S = H / w` is `N / w³`, with `N = w (H_u x H_v) + w_v (H x H_u) +\nw_u (H_v x H)`. For a polynomial patch, `N = H_u x H_v`.\n- `N` is a polynomial. Inside the patch it is a blend of its Bernstein\ncoefficients with positive weights. If no coefficient points against\ntheir sum, `N` does not vanish inside the patch.\n- On a side of the patch, only the coefficients of that side have\nweight, and at a corner only one. So each side and each corner needs a\ncoefficient of its own along the sum. A side on an edge of the surface\nthat shrinks to a point has no normal, and the check lets it off.\n- The check halves a part that fails, up to 14 times along each\nparameter. A fold fails at every depth.\n- Two regular patches that meet on a knot line that is only C0 can still\nturn opposite ways there. The blend has such lines at the breaks of its\nchains, and a closed blend has its seam. The coefficients of `N` on the\ntwo sides must lie on one side of a plane. Else the check halves the two\nsides along the line.\n- The check reads each span from the blossoms of its homogeneous de Boor\npoints. So a knot vector that is not clamped needs no special case. It\ntakes the products about a corner of the part, so a part far from the\norigin keeps its digits.\n- A part whose weights are all of one sign, negative ones too, has a\nweight that does not vanish on it. A part whose weights change sign is\nnot regular: where the weight passes through zero, the surface runs off\nto infinity. Each span's weights lose their common factor first.\n- For `fair_surface`, the check reads only the spans in the support of a\ncontrol point that the fairing moved. Outside them the faired surface is\nthe input surface.\n\nThe check finds the five folds of the issue's table at the same `(u,\nv)`. Two of them came from faults in the test fixtures, and I fixed\nthose:\n\n- `blends_keep_their_continuity_between_different_surface_types` turns\nthe second sheet so that its exit runs against the first one. For two\ncylinder rims, both exits are `(0, 0, 1)`, so their cross product is\nzero. The fallback axis was `(0, 0, 1)` too, and a half turn about it\nleft the second rim facing away. The test now takes an axis square to\nthe exits.\n- `an_ellipse_arc_is_a_chain_too` built the arc of the sheet across with\nits minor axis turned two times. That sheet was a copy of the first one\nmoved along x, not its mirror image: its arc reached x = 12, not x = 8.\nThe arc is now the mirror image.\n\nThe other three fold because of their geometry, and the refusal is\ncorrect for them:\n\n- The spline of the mixed sheet hooks toward the sheet across, 14 away,\nwith a radius of about 0.7. There the middle of the blend stops and runs\nback along the chains. It folds at each weight I tried from 0.2 to 1.\n`a_mixed_chain_blends_the_same_however_it_is_stored` and\n`chains_of_different_edge_counts_pair_by_arc_length` now use a gentle\nspline. A new test requires the refusal for the hooked one.\n- On the cone's rim and on the torus's tube, the side after the chain\nruns nearly along the gap to the sheet across. On the cone, it is 27\ndegrees off the gap at the place I measured. Along that side the blend\nruns nearly the way it crosses, and it folds.\n`a_chain_may_turn_a_corner_on_every_surface_type` now requires the\nrefusal for these two fixtures.\n\n## Tests\n\n- `a_blend_in_one_plane_that_folds_is_refused` is no longer ignored. It\nalso covers G2 at weights 2.5, 3.5, 6 and 20, in three poses.\n-\n`a_chain_that_hooks_toward_the_other_tighter_than_the_reach_is_refused`:\nthe hooked mixed sheet, G1 and G2, in three poses.\n- `a_surface_that_folds_is_not_faired`: a sheet whose section runs out,\nback and out again. With bumps, `fair_surface` moves its points and\nrefuses the result. Without, nothing moves, and it returns the sheet as\nit was.\n- `a_fold_inside_a_hole_does_not_stop_the_fairing`: a trimmed face whose\nsurface folds inside its hole. `fair_surface` returns it, and the fold\nstays in the hole.\n- Five unit tests in `fold.rs` read a folded strip and a regular one,\npolynomial, rational and with negative weights. They also read a\nrational quarter cylinder and a strip that closes to a point. Two more\nstrips, one folded, have knots that are not clamped. For the strips, a\ndense sample of the normal agrees with each result.\n- Five more unit tests: a weight that passes through zero is not\nregular. The check does not read a part that the caller leaves out. A\nrational unit square passes at the origin and at an offset of 2^30;\nwithout the products about a corner, it fails at the offset. Strips with\nweights of `1e60` read as with weights of 1. Two linear pieces that run\n0, 1, 0 fold on the line they share, and a kinked strip does not.\n- `a_turn_on_the_seam_of_a_closed_surface_folds`: a tube whose closed\nsection turns back where it closes folds on its seam. A square tube does\nnot.\n- `cargo nextest run -p brepkit-operations` on the first commit: 2,244\npassed, 0 failed, 14 skipped. On the later commits, these pass: the test\nbinaries `blend_surface`, `blend_overshoot_area`, `fair_surface`,\n`match_surface` and `blend_integration`. The `blend_surface` unit tests\nand the wasm tests of blends and fairing pass too.\n- `cargo clippy --all-targets -- -D warnings` and `cargo fmt --all\n--check` pass.",
+          "timestamp": "2026-11-15T21:12:18-08:00",
+          "tree_id": "a2f4e82d06649e08c5bb0d5b7285fc90a22862b6",
+          "url": "https://github.com/andymai/brepkit/commit/256ed7d189ea67f3cc742e3a8e64810274238177"
+        },
+        "date": 1794806318496,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1098956,
+            "range": "± 2697",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1146138,
+            "range": "± 4575",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12796,
+            "range": "± 69",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 697296,
+            "range": "± 4107",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24574000,
+            "range": "± 75505",
             "unit": "ns/iter"
           }
         ]
