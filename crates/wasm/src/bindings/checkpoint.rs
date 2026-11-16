@@ -1,7 +1,5 @@
 //! Checkpoint / restore bindings for [`BrepKernel`].
 
-use std::rc::Rc;
-
 use wasm_bindgen::prelude::*;
 
 use crate::kernel::BrepKernel;
@@ -14,13 +12,15 @@ impl BrepKernel {
     /// Returns a checkpoint ID (zero-based index) that can be passed to
     /// `restore` or `discardCheckpoint`.
     ///
-    /// The snapshot is a clone of all topology, assembly, and sketch state.
-    /// Existing entity handles remain valid after restore.
+    /// The topology records each change after the checkpoint, so a restore
+    /// costs the changes and not the size of the topology. The assembly and
+    /// sketch state is copied. Existing entity handles remain valid after
+    /// restore.
     #[wasm_bindgen(js_name = "checkpoint")]
     pub fn checkpoint(&mut self) -> u32 {
         let id = self.checkpoints.len();
         self.checkpoints.push(Checkpoint {
-            topo: Rc::clone(&self.topo),
+            topo: self.topo.open_checkpoint(),
             assemblies: self.assemblies.clone(),
             sketches: self.sketches.clone(),
         });
@@ -46,7 +46,11 @@ impl BrepKernel {
             .checkpoints
             .get(idx)
             .ok_or_else(|| JsError::new(&format!("invalid checkpoint id: {checkpoint_id}")))?;
-        self.topo = Rc::clone(&cp.topo);
+        if !self.topo.restore_checkpoint(cp.topo) {
+            return Err(JsError::new(&format!(
+                "checkpoint {checkpoint_id} is not open in the topology"
+            )));
+        }
         self.assemblies = cp.assemblies.clone();
         self.sketches = cp.sketches.clone();
         // Discard checkpoints created after the restored one
@@ -62,9 +66,14 @@ impl BrepKernel {
     #[wasm_bindgen(js_name = "discardCheckpoint")]
     pub fn discard_checkpoint(&mut self, checkpoint_id: u32) -> Result<(), JsError> {
         let idx = checkpoint_id as usize;
-        if idx >= self.checkpoints.len() {
+        let Some(cp) = self.checkpoints.get(idx) else {
             return Err(JsError::new(&format!(
                 "invalid checkpoint id: {checkpoint_id}"
+            )));
+        };
+        if !self.topo.close_checkpoint(cp.topo) {
+            return Err(JsError::new(&format!(
+                "checkpoint {checkpoint_id} is not open in the topology"
             )));
         }
         self.checkpoints.truncate(idx);
@@ -194,6 +203,48 @@ mod tests {
 
         // Only cp0 and cp1 remain.
         assert_eq!(k.checkpoint_count(), 2);
+    }
+
+    /// A restore puts back the solids that ops after the checkpoint changed
+    /// in place, and the checkpoint stays open for the next restore.
+    #[test]
+    fn restore_puts_back_a_solid_changed_in_place_each_time() {
+        let mut k = BrepKernel::new();
+        let solid = make_box(&mut k, 4.0, 3.0, 2.0);
+        let batch = |k: &mut BrepKernel, json: &str| -> serde_json::Value {
+            let out: serde_json::Value = serde_json::from_str(&k.execute_batch(json)).unwrap();
+            out[0]["ok"].clone()
+        };
+        let bbox = format!(r#"[{{"op":"boundingBox","args":{{"solid":{solid}}}}}]"#);
+        let before = batch(&mut k, &bbox);
+        let edges = batch(
+            &mut k,
+            &format!(r#"[{{"op":"solidEdges","args":{{"solid":{solid}}}}}]"#),
+        );
+        let cp = k.checkpoint();
+        for _ in 0..2 {
+            let moved = batch(
+                &mut k,
+                &format!(
+                    r#"[{{"op":"transform","args":{{"solid":{solid},"matrix":[1,0,0,5,0,1,0,0,0,0,1,0,0,0,0,1]}}}}]"#
+                ),
+            );
+            assert!(moved.is_number());
+            assert_ne!(batch(&mut k, &bbox), before);
+            let rounded = batch(
+                &mut k,
+                &format!(
+                    r#"[{{"op":"fillet","args":{{"solid":{solid},"edges":{edges},"radius":0.5}}}}]"#
+                ),
+            );
+            assert!(rounded.is_number());
+            k.restore(cp).unwrap();
+            assert_eq!(batch(&mut k, &bbox), before);
+            assert!((volume(&k, solid) - 24.0).abs() < 1e-9);
+            let round = u32::try_from(rounded.as_u64().unwrap()).unwrap();
+            assert!(k.resolve_solid(round).is_err());
+        }
+        assert_eq!(k.checkpoint_count(), 1);
     }
 
     // ── discard ───────────────────────────────────────────────────

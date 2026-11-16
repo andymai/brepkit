@@ -1898,6 +1898,23 @@ pub fn convert_to_bspline(
     })
 }
 
+/// The NURBS surface that [`convert_to_bspline`] gives `face`, with no
+/// change to the topology. `None` for a face that is NURBS already.
+///
+/// # Errors
+///
+/// Returns an error if a topology lookup or the NURBS construction fails.
+pub fn face_bspline_surface(
+    topo: &Topology,
+    face: FaceId,
+) -> Result<Option<brepkit_math::nurbs::surface::NurbsSurface>, crate::OperationsError> {
+    brepkit_heal::custom::convert_to_bspline::face_bspline_surface(topo, face).map_err(|e| {
+        crate::OperationsError::InvalidInput {
+            reason: format!("convert_to_bspline failed: {e}"),
+        }
+    })
+}
+
 /// Recognize and replace NURBS surfaces and edges with their analytic
 /// (elementary) forms wherever possible.
 ///
