@@ -740,11 +740,22 @@ fn the_energy_measure_reads_a_known_shape() {
     assert!((got - want).abs() < 1e-5 * want, "{got} against {want}");
 }
 
-/// A bumpy sheet whose section runs out, back and out again, as the cubic
-/// with control values 0, 12, -6, 6 across it does, folds back over itself.
-/// The faired copy folds too, and is refused.
+/// A sheet whose section runs out, back and out again, as the cubic with
+/// control values 0, 12, -6, 6 across it does, folds back over itself. With
+/// bumps, the faired copy folds too; without, nothing moves, and the copy
+/// is the sheet. Either way it is refused.
 #[test]
 fn a_surface_that_folds_is_not_faired() {
+    for height in [0.3, 0.0] {
+        let refused = fair_surface_of_folded_sheet(height);
+        let Err(OperationsError::InvalidInput { reason }) = refused else {
+            panic!("bumps {height}: {refused:?}");
+        };
+        assert!(reason.contains("fold"), "bumps {height}: {reason}");
+    }
+}
+
+fn fair_surface_of_folded_sheet(height: f64) -> Result<FaceId, OperationsError> {
     let count = 9;
     let across = [0.0, 12.0, -6.0, 6.0];
     let net: Vec<Vec<Point3>> = (0..count)
@@ -753,7 +764,11 @@ fn a_surface_that_folds_is_not_faired() {
             (0..4)
                 .map(|j| {
                     let inside = i > 0 && i < count - 1 && j > 0 && j < 3;
-                    let bump = if inside && (i + j) % 2 == 0 { 0.3 } else { 0.0 };
+                    let bump = if inside && (i + j) % 2 == 0 {
+                        height
+                    } else {
+                        0.0
+                    };
                     Point3::new(across[j], y, bump)
                 })
                 .collect()
@@ -767,9 +782,102 @@ fn a_surface_that_folds_is_not_faired() {
         pose: Pose::turned(),
     };
     let (face, _) = net_sheet(&mut b, (3, 3), knots, &net, &weights);
-    let refused = fair_surface(&mut topo, face, 0.1);
-    let Err(OperationsError::InvalidInput { reason }) = refused else {
-        panic!("{refused:?}");
+    fair_surface(&mut topo, face, 0.1)
+}
+
+/// A face of `surface` within the parameter square through `corners`, with
+/// a hole through `hole`, its wires splines through points of the surface.
+fn trimmed_face(
+    topo: &mut Topology,
+    surface: &NurbsSurface,
+    corners: [(f64, f64); 4],
+    hole: [(f64, f64); 4],
+) -> FaceId {
+    let mut wire_of = |corners: [(f64, f64); 4]| {
+        let vertices: Vec<_> = corners
+            .iter()
+            .map(|&(u, v)| topo.add_vertex(Vertex::new(surface.evaluate(u, v), 1e-7)))
+            .collect();
+        let edges: Vec<_> = (0..4)
+            .map(|k| {
+                let (from, to) = (corners[k], corners[(k + 1) % 4]);
+                let points: Vec<Point3> = (0..=40)
+                    .map(|i| {
+                        let t = f64::from(i) / 40.0;
+                        surface.evaluate(from.0 + (to.0 - from.0) * t, from.1 + (to.1 - from.1) * t)
+                    })
+                    .collect();
+                let curve = interpolate(&points, 3).unwrap();
+                topo.add_edge(Edge::new(
+                    vertices[k],
+                    vertices[(k + 1) % 4],
+                    EdgeCurve::NurbsCurve(curve),
+                ))
+            })
+            .collect();
+        topo.add_wire(
+            Wire::new(
+                edges
+                    .into_iter()
+                    .map(|e| OrientedEdge::new(e, true))
+                    .collect(),
+                true,
+            )
+            .unwrap(),
+        )
     };
-    assert!(reason.contains("fold"), "{reason}");
+    let outer = wire_of(corners);
+    let inner = wire_of(hole);
+    topo.add_face(Face::new(
+        outer,
+        vec![inner],
+        FaceSurface::Nurbs(surface.clone()),
+    ))
+}
+
+/// A bumpy sheet whose net is pulled back at one point under a hole of its
+/// face folds there, inside the hole. The face itself does not fold, and
+/// `fair_surface` returns it; the fold stays where it was, outside the face.
+#[test]
+fn a_fold_inside_a_hole_does_not_stop_the_fairing() {
+    let count = 25;
+    let knots = uniform_knots(count, 3);
+    let net: Vec<Vec<Point3>> = (0..count)
+        .map(|i| {
+            let x = if i == 12 {
+                2.0
+            } else {
+                10.0 * i as f64 / (count - 1) as f64
+            };
+            (0..count)
+                .map(|j| {
+                    let y = 10.0 * j as f64 / (count - 1) as f64;
+                    let bump = if (i + j) % 2 == 0 { 0.05 } else { -0.05 };
+                    let x = if j == 12 {
+                        x
+                    } else {
+                        10.0 * i as f64 / (count - 1) as f64
+                    };
+                    Point3::new(x, y, 0.01 * x * y + bump)
+                })
+                .collect()
+        })
+        .collect();
+    let weights = vec![vec![1.0; count]; count];
+    let surface = NurbsSurface::new(3, 3, knots.clone(), knots, net, weights).unwrap();
+    let in_hole = |(u, v): (f64, f64)| (0.3..=0.7).contains(&u) && (0.3..=0.7).contains(&v);
+    let fold = surface_fixtures::fold::first_fold(&surface).expect("a fold");
+    assert!(in_hole((fold.u, fold.v)), "{fold:?}");
+
+    let mut topo = Topology::new();
+    let face = trimmed_face(
+        &mut topo,
+        &surface,
+        [(0.1, 0.1), (0.9, 0.1), (0.9, 0.9), (0.1, 0.9)],
+        [(0.3, 0.3), (0.3, 0.7), (0.7, 0.7), (0.7, 0.3)],
+    );
+    let result = fair_surface(&mut topo, face, 0.06).unwrap();
+    let after = nurbs_of(&topo, result);
+    let fold = surface_fixtures::fold::first_fold(&after).expect("the fold kept");
+    assert!(in_hole((fold.u, fold.v)), "{fold:?}");
 }

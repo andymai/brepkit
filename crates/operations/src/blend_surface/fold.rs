@@ -14,8 +14,6 @@
 //! no normal there. A part that fails is halved both ways and read again; a
 //! fold fails at every depth.
 
-use brepkit_math::nurbs::curve::NurbsCurve;
-use brepkit_math::nurbs::decompose::curve_bezier_between;
 use brepkit_math::nurbs::surface::NurbsSurface;
 use brepkit_math::vec::{Point3, Vec3};
 
@@ -27,30 +25,28 @@ const DEEPEST: u32 = 14;
 /// they are parallel, or it is nothing, to rounding.
 const PARALLEL: f64 = 1e-12;
 
-/// The first place `surface` folds: the middle `(u, v)` of the smallest part
-/// of it that could not be proved regular. `None` when it is regular
-/// everywhere off its collapsed edges, and for a surface of degree zero, which
-/// has no normal, or one with a weight that is not positive.
-pub(super) fn first_fold(surface: &NurbsSurface) -> Option<(f64, f64)> {
-    if surface.degree_u() == 0
-        || surface.degree_v() == 0
-        || surface
-            .weights()
-            .iter()
-            .flatten()
-            .any(|&w| w.is_nan() || w <= 0.0)
-    {
+/// The first place `surface` folds, in the parts of its domain that `meets`
+/// says may meet its face: the middle `(u, v)` of the smallest part that
+/// could not be proved regular. `None` when it is regular there off its
+/// collapsed edges, and for a surface of degree zero, which has no normal. A
+/// part where the weights change sign or reach zero is not regular: the
+/// surface runs off to infinity there.
+pub(super) fn first_fold(
+    surface: &NurbsSurface,
+    meets: &dyn Fn((f64, f64), (f64, f64)) -> bool,
+) -> Option<(f64, f64)> {
+    if surface.degree_u() == 0 || surface.degree_v() == 0 {
         return None;
     }
     let (domain_u, domain_v) = (surface.domain_u(), surface.domain_v());
-    for (net, u, v) in span_nets(surface)? {
+    for (net, u, v) in span_nets(surface) {
         let on_edge = [
             u.0 <= domain_u.0,
             u.1 >= domain_u.1,
             v.0 <= domain_v.0,
             v.1 >= domain_v.1,
         ];
-        if let Some(fold) = fold_in(&net, u, v, on_edge, 0) {
+        if let Some(fold) = fold_in(&net, (u, v), on_edge, meets, 0) {
             return Some(fold);
         }
     }
@@ -60,7 +56,7 @@ pub(super) fn first_fold(surface: &NurbsSurface) -> Option<(f64, f64)> {
 /// The Bezier net of each knot-span patch of `surface`, with its ranges of
 /// u and v, from the blossoms of each span's de Boor points: no knot is
 /// inserted, so a knot vector that is not clamped needs nothing more.
-fn span_nets(surface: &NurbsSurface) -> Option<Vec<SpanNet>> {
+fn span_nets(surface: &NurbsSurface) -> Vec<SpanNet> {
     let (pu, pv) = (surface.degree_u(), surface.degree_v());
     let (knots_u, knots_v) = (surface.knots_u(), surface.knots_v());
     let (points, weights) = (surface.control_points(), surface.weights());
@@ -69,40 +65,25 @@ fn span_nets(surface: &NurbsSurface) -> Option<Vec<SpanNet>> {
             .filter(|&i| knots[i] < knots[i + 1])
             .collect()
     };
-    // The span `[knots[i], knots[i + 1]]` of the curve on `points`, as the
-    // curve of those `p + 1` points alone over the knots that shape it.
-    let piece = |points: Vec<Point3>, weights: Vec<f64>, knots: &[f64], p: usize, i: usize| {
-        let local = NurbsCurve::new(p, knots[i - p..=i + p + 1].to_vec(), points, weights).ok()?;
-        curve_bezier_between(&local, knots[i], knots[i + 1]).ok()
-    };
     let spans_v = spans(knots_v, pv);
     let mut nets = Vec::new();
     for i in spans(knots_u, pu) {
         for &j in &spans_v {
             let rows: Vec<Vec<[f64; 4]>> = (i - pu..=i)
                 .map(|r| {
-                    piece(
-                        points[r][j - pv..=j].to_vec(),
-                        weights[r][j - pv..=j].to_vec(),
-                        knots_v,
-                        pv,
-                        j,
-                    )
+                    let homogeneous: Vec<[f64; 4]> = (j - pv..=j)
+                        .map(|c| {
+                            let (p, w) = (points[r][c], weights[r][c]);
+                            [p.x() * w, p.y() * w, p.z() * w, w]
+                        })
+                        .collect();
+                    span_bezier(&homogeneous, knots_v, pv, j)
                 })
-                .collect::<Option<_>>()?;
+                .collect();
             let mut net = vec![vec![[0.0; 4]; pv + 1]; pu + 1];
             for c in 0..=pv {
-                let (column, column_weights): (Vec<Point3>, Vec<f64>) = rows
-                    .iter()
-                    .map(|row| {
-                        let q = row[c];
-                        (Point3::new(q[0] / q[3], q[1] / q[3], q[2] / q[3]), q[3])
-                    })
-                    .unzip();
-                for (r, q) in piece(column, column_weights, knots_u, pu, i)?
-                    .into_iter()
-                    .enumerate()
-                {
+                let column: Vec<[f64; 4]> = rows.iter().map(|row| row[c]).collect();
+                for (r, q) in span_bezier(&column, knots_u, pu, i).into_iter().enumerate() {
                     net[r][c] = q;
                 }
             }
@@ -113,19 +94,44 @@ fn span_nets(surface: &NurbsSurface) -> Option<Vec<SpanNet>> {
             ));
         }
     }
-    Some(nets)
+    nets
+}
+
+/// The Bezier points of the span `[knots[i], knots[i + 1]]` of a curve of
+/// degree `p`, from the span's homogeneous de Boor points `d` (control
+/// points `i - p ..= i`): point `k` is the blossom at the span's start
+/// `p - k` times and its end `k` times.
+fn span_bezier(d: &[[f64; 4]], knots: &[f64], p: usize, i: usize) -> Vec<[f64; 4]> {
+    let (a, b) = (knots[i], knots[i + 1]);
+    (0..=p)
+        .map(|at_end| {
+            let mut work = d.to_vec();
+            for level in 1..=p {
+                let t = if level <= at_end { b } else { a };
+                for j in (level..=p).rev() {
+                    let (left, right) = (knots[i - p + j], knots[i + 1 + j - level]);
+                    let alpha = (t - left) / (right - left);
+                    let prev = work[j - 1];
+                    for (c, q) in work[j].iter_mut().zip(prev) {
+                        *c = (1.0 - alpha) * q + alpha * *c;
+                    }
+                }
+            }
+            work[p]
+        })
+        .collect()
 }
 
 /// `on_edge`: whether the part's sides at its least u, greatest u, least v
 /// and greatest v lie on the surface's own edges.
 fn fold_in(
     net: &[Vec<[f64; 4]>],
-    u: (f64, f64),
-    v: (f64, f64),
+    (u, v): ((f64, f64), (f64, f64)),
     on_edge: [bool; 4],
+    meets: &dyn Fn((f64, f64), (f64, f64)) -> bool,
     depth: u32,
 ) -> Option<(f64, f64)> {
-    if regular(net, on_edge) {
+    if !meets(u, v) || regular(net, on_edge) {
         return None;
     }
     let (mid_u, mid_v) = (f64::midpoint(u.0, u.1), f64::midpoint(v.0, v.1));
@@ -145,7 +151,7 @@ fn fold_in(
         ];
         for (quarter, quarter_v, edge_v) in halves_v {
             let edges = [edge_u[0], edge_u[1], edge_v[0], edge_v[1]];
-            if let Some(fold) = fold_in(&quarter, half_u, quarter_v, edges, depth + 1) {
+            if let Some(fold) = fold_in(&quarter, (half_u, quarter_v), edges, meets, depth + 1) {
                 return Some(fold);
             }
         }
@@ -206,6 +212,26 @@ fn scaled(scale: &Grid<f64>, of: &Grid<Vec3>) -> Grid<Vec3> {
 
 /// The coefficients of `N` (see the module notes) on a part.
 fn normal_coefficients(net: &[Vec<[f64; 4]>]) -> Grid<Vec3> {
+    // The normal does not change when the part moves, and products of
+    // points near the origin keep the digits that far ones lose.
+    let q0 = net[0][0];
+    let origin = [q0[0] / q0[3], q0[1] / q0[3], q0[2] / q0[3]];
+    let net: Vec<Vec<[f64; 4]>> = net
+        .iter()
+        .map(|row| {
+            row.iter()
+                .map(|q| {
+                    [
+                        q[0] - q[3] * origin[0],
+                        q[1] - q[3] * origin[1],
+                        q[2] - q[3] * origin[2],
+                        q[3],
+                    ]
+                })
+                .collect()
+        })
+        .collect();
+    let net = net.as_slice();
     let (rows, cols) = (net.len(), net[0].len());
     let (m, n) = ((rows - 1) as f64, (cols - 1) as f64);
     let point = |q: [f64; 4]| Vec3::new(q[0], q[1], q[2]);
@@ -257,6 +283,14 @@ fn normal_coefficients(net: &[Vec<[f64; 4]>]) -> Grid<Vec3> {
 /// coefficient of any size (it has shrunk to a curve or a point) is not
 /// regular.
 fn regular(net: &[Vec<[f64; 4]>], on_edge: [bool; 4]) -> bool {
+    // With the weights of one sign, the weight never vanishes on the part,
+    // and `N / w³` has the sign of `N` or the opposite all over it.
+    let weights = || net.iter().flatten().map(|q| q[3]);
+    if !(weights().all(|w| w > 0.0) || weights().all(|w| w < 0.0))
+        || !net.iter().flatten().flatten().all(|c| c.is_finite())
+    {
+        return false;
+    }
     let normal = normal_coefficients(net);
     let sum = normal
         .values
@@ -362,6 +396,11 @@ mod tests {
 
     use super::*;
 
+    /// The first fold anywhere on `surface`.
+    fn first_fold_test(surface: &NurbsSurface) -> Option<(f64, f64)> {
+        first_fold(surface, &|_, _| true)
+    }
+
     /// A strip along u over the plane cubic whose control `x` values are
     /// `xs`, with weights `weights` across, `rows` control rows along u.
     fn strip(xs: [f64; 4], weights: [f64; 4], rows: usize) -> NurbsSurface {
@@ -399,22 +438,23 @@ mod tests {
         seen.0 && seen.1
     }
 
+    /// Weights all negative leave the surface as it is, folds and all.
     #[test]
     fn a_section_that_runs_back_folds() {
-        for weights in [[1.0; 4], [1.0, 2.0, 0.5, 1.0]] {
+        for weights in [[1.0; 4], [1.0, 2.0, 0.5, 1.0], [-1.0, -2.0, -0.5, -1.0]] {
             let folded = strip([0.0, 12.0, -6.0, 6.0], weights, 3);
             assert!(turns_over(&folded), "{weights:?}");
-            let (_, v) = first_fold(&folded).expect("a fold");
+            let (_, v) = first_fold_test(&folded).expect("a fold");
             assert!((0.05..=0.95).contains(&v), "{weights:?}: v = {v}");
         }
     }
 
     #[test]
     fn a_section_that_runs_one_way_does_not_fold() {
-        for weights in [[1.0; 4], [1.0, 2.0, 0.5, 1.0]] {
+        for weights in [[1.0; 4], [1.0, 2.0, 0.5, 1.0], [-1.0, -2.0, -0.5, -1.0]] {
             let plain = strip([0.0, 2.0, 4.0, 6.0], weights, 4);
             assert!(!turns_over(&plain), "{weights:?}");
-            assert_eq!(first_fold(&plain), None, "{weights:?}");
+            assert_eq!(first_fold_test(&plain), None, "{weights:?}");
         }
     }
 
@@ -443,10 +483,10 @@ mod tests {
     fn a_spline_that_is_not_clamped_is_read_over_its_domain() {
         let one_way = unclamped([0.0, 1.0, 2.0, 3.0, 4.0, 5.0]);
         assert!(!turns_over_on(&one_way));
-        assert_eq!(first_fold(&one_way), None);
+        assert_eq!(first_fold_test(&one_way), None);
         let back = unclamped([0.0, 1.0, 4.0, 2.0, 5.0, 6.0]);
         assert!(turns_over_on(&back));
-        let (_, v) = first_fold(&back).expect("a fold");
+        let (_, v) = first_fold_test(&back).expect("a fold");
         assert!((2.0..=6.0).contains(&v), "v = {v}");
     }
 
@@ -464,6 +504,49 @@ mod tests {
             }
         }
         seen.0 && seen.1
+    }
+
+    /// Weights of 1, -3, 1 and 1 across give a weight that passes through
+    /// zero near v = 0.3, where the surface runs off to infinity: no part
+    /// there is regular.
+    #[test]
+    fn a_weight_that_passes_through_zero_is_not_regular() {
+        let across = strip([0.0, 2.0, 4.0, 6.0], [1.0, -3.0, 1.0, 1.0], 2);
+        let w = |v: f64| {
+            (1.0 - v).powi(3) - 9.0 * v * (1.0 - v).powi(2) + 3.0 * v * v * (1.0 - v) + v.powi(3)
+        };
+        assert!(w(0.0) > 0.0 && w(0.3) < 0.0);
+        assert!(first_fold_test(&across).is_some());
+    }
+
+    /// A rational bilinear unit square is regular wherever it lies: far from
+    /// the origin, the products of its points still keep their digits.
+    #[test]
+    fn a_rational_square_far_from_the_origin_does_not_fold() {
+        for shift in [0.0, 2.0_f64.powi(30)] {
+            let at = |x: f64, y: f64| Point3::new(x + shift, y + shift, 0.0);
+            let square = NurbsSurface::new(
+                1,
+                1,
+                vec![0.0, 0.0, 1.0, 1.0],
+                vec![0.0, 0.0, 1.0, 1.0],
+                vec![
+                    vec![at(0.0, 0.0), at(0.0, 1.0)],
+                    vec![at(1.0, 0.0), at(1.0, 1.0)],
+                ],
+                vec![vec![1.0, 2.0], vec![3.0, 4.0]],
+            )
+            .unwrap();
+            assert_eq!(first_fold_test(&square), None, "shift {shift}");
+        }
+    }
+
+    /// A part the face does not meet is not read.
+    #[test]
+    fn a_fold_outside_the_face_is_not_read() {
+        let folded = strip([0.0, 12.0, -6.0, 6.0], [1.0; 4], 3);
+        assert!(first_fold_test(&folded).is_some());
+        assert_eq!(first_fold(&folded, &|_, v| v.1 <= 0.02), None);
     }
 
     /// A quarter of a cylinder as a rational patch has a normal everywhere.
@@ -488,7 +571,7 @@ mod tests {
             weights,
         )
         .unwrap();
-        assert_eq!(first_fold(&quarter), None);
+        assert_eq!(first_fold_test(&quarter), None);
     }
 
     /// A strip whose edge at u = 1 has shrunk to a point has no normal
@@ -510,6 +593,6 @@ mod tests {
             vec![vec![1.0; 4]; 2],
         )
         .unwrap();
-        assert_eq!(first_fold(&closing), None);
+        assert_eq!(first_fold_test(&closing), None);
     }
 }

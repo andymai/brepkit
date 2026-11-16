@@ -235,7 +235,7 @@ pub fn blend_surface(
     }
 
     let surface = surface_from_rows(&space, &fitted, degree_across)?;
-    refuse_fold(&surface, "the blend surface")?;
+    refuse_fold(&surface, &|_, _| true, "the blend surface")?;
     let bottom = a.chain.edge_joints();
     let top = b.chain.edge_joints();
     boundary_face(
@@ -252,9 +252,14 @@ pub fn blend_surface(
     )
 }
 
-/// An error naming where `surface` folds back over itself, if it does.
-fn refuse_fold(surface: &NurbsSurface, what: &str) -> Result<(), OperationsError> {
-    match fold::first_fold(surface) {
+/// An error naming where `surface` folds back over itself, if it does, in
+/// the parts of its domain that `meets` says may meet its face.
+fn refuse_fold(
+    surface: &NurbsSurface,
+    meets: &dyn Fn((f64, f64), (f64, f64)) -> bool,
+    what: &str,
+) -> Result<(), OperationsError> {
+    match fold::first_fold(surface, meets) {
         Some((u, v)) => Err(OperationsError::InvalidInput {
             reason: format!("{what} folds back over itself near (u, v) = ({u:.4}, {v:.4})"),
         }),
