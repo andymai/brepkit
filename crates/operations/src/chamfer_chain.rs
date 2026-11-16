@@ -925,13 +925,13 @@ fn plan_chain(
     // every edge along one wall, the caps apart.
     for &cap in &common {
         if plane_normal(topo, cap)?.is_some()
-            && let Some(plan) = plan_on(topo, &adjacency, group, Common::Cap(cap), d)?
+            && let Some(plan) = plan_on(topo, faces, &adjacency, group, Common::Cap(cap), d)?
         {
             return Ok(Some(plan));
         }
     }
     for &wall in &common {
-        if let Some(plan) = plan_on(topo, &adjacency, group, Common::Wall(wall), d)? {
+        if let Some(plan) = plan_on(topo, faces, &adjacency, group, Common::Wall(wall), d)? {
             return Ok(Some(plan));
         }
     }
@@ -992,6 +992,7 @@ fn ruling_side(
 #[allow(clippy::too_many_lines)]
 fn plan_on(
     topo: &Topology,
+    faces: &[FaceId],
     adjacency: &AdjacencyIndex,
     group: &[EdgeId],
     common: Common,
@@ -1287,10 +1288,305 @@ fn plan_on(
         corner_allowance,
         curved,
     };
-    if !plan_is_clear(topo, &plan, d)? {
+    if !plan_is_clear(topo, &plan, d)? || !wedges_are_clear(topo, &plan, faces, d)? {
         return Ok(None);
     }
     Ok(Some(plan))
+}
+
+/// A box's least and greatest corners in some frame.
+type Box3 = ([f64; 3], [f64; 3]);
+
+/// A box in a frame of its own: the region one piece's chamfer, or one
+/// corner's, lies in. A piece's chamfer lies within `d` of its edge, and a
+/// corner's region within its farthest point's distance of its vertex.
+struct Reach {
+    origin: Point3,
+    axes: [Vec3; 3],
+    lo: [f64; 3],
+    hi: [f64; 3],
+}
+
+impl Reach {
+    fn local(&self, p: Point3) -> [f64; 3] {
+        let off = p - self.origin;
+        self.axes.map(|axis| off.dot(axis))
+    }
+
+    fn meets(&self, (lo, hi): Box3) -> bool {
+        (0..3).all(|k| lo[k] <= self.hi[k] && hi[k] >= self.lo[k])
+    }
+
+    /// The box of `face` in this frame: its boundary edges counted exactly,
+    /// which bound a plane, cylinder or cone face, and the poles or the
+    /// whole extent of a surface that can bulge past them. `None` for a
+    /// NURBS curve or surface with a weight that is not positive, which its
+    /// poles do not bound.
+    fn face_box(&self, topo: &Topology, face: FaceId) -> Result<Option<Box3>, OperationsError> {
+        let mut lo = [f64::INFINITY; 3];
+        let mut hi = [f64::NEG_INFINITY; 3];
+        let mut add = |p: [f64; 3]| {
+            for k in 0..3 {
+                lo[k] = lo[k].min(p[k]);
+                hi[k] = hi[k].max(p[k]);
+            }
+        };
+        let to_vec = |v: Vec3| {
+            let [x, y, z] = self.axes.map(|axis| v.dot(axis));
+            Vec3::new(x, y, z)
+        };
+        let at = |p: Point3| {
+            let [x, y, z] = self.local(p);
+            Point3::new(x, y, z)
+        };
+        let data = topo.face(face)?;
+        for wid in std::iter::once(data.outer_wire()).chain(data.inner_wires().iter().copied()) {
+            for oe in topo.wire(wid)?.edges() {
+                let edge = topo.edge(oe.edge())?;
+                let (a, b) = (
+                    topo.vertex(edge.start())?.point(),
+                    topo.vertex(edge.end())?.point(),
+                );
+                add(self.local(a));
+                add(self.local(b));
+                let span = |curve: &EdgeCurve| {
+                    if edge.start() == edge.end() {
+                        (0.0, TAU)
+                    } else {
+                        curve.domain_with_endpoints(a, b)
+                    }
+                };
+                let bounds = match edge.curve() {
+                    EdgeCurve::Line => continue,
+                    EdgeCurve::Circle(c) => {
+                        let (t0, t1) = span(edge.curve());
+                        Circle3D::with_axes(
+                            at(c.center()),
+                            to_vec(c.normal()),
+                            c.radius(),
+                            to_vec(c.u_axis()),
+                            to_vec(c.v_axis()),
+                        )?
+                        .arc_aabb(t0, t1)
+                    }
+                    EdgeCurve::Ellipse(e) => {
+                        let (t0, t1) = span(edge.curve());
+                        brepkit_math::curves::Ellipse3D::with_axes(
+                            at(e.center()),
+                            to_vec(e.normal()),
+                            e.semi_major(),
+                            e.semi_minor(),
+                            to_vec(e.u_axis()),
+                            to_vec(e.v_axis()),
+                        )?
+                        .arc_aabb(t0, t1)
+                    }
+                    EdgeCurve::NurbsCurve(n) => {
+                        if !n.weights().iter().all(|w| *w > 0.0) {
+                            return Ok(None);
+                        }
+                        for &p in n.control_points() {
+                            add(self.local(p));
+                        }
+                        continue;
+                    }
+                };
+                add([bounds.min.x(), bounds.min.y(), bounds.min.z()]);
+                add([bounds.max.x(), bounds.max.y(), bounds.max.z()]);
+            }
+        }
+        let around = |center: Point3, reach: f64| {
+            let c = self.local(center);
+            [c.map(|v| v - reach), c.map(|v| v + reach)]
+        };
+        match data.surface() {
+            FaceSurface::Plane { .. } | FaceSurface::Cylinder(_) | FaceSurface::Cone(_) => {}
+            FaceSurface::Sphere(sphere) => {
+                for p in around(sphere.center(), sphere.radius()) {
+                    add(p);
+                }
+            }
+            FaceSurface::Torus(torus) => {
+                for p in around(torus.center(), torus.major_radius() + torus.minor_radius()) {
+                    add(p);
+                }
+            }
+            FaceSurface::Nurbs(surface) => {
+                if !surface.weights().iter().flatten().all(|w| *w > 0.0) {
+                    return Ok(None);
+                }
+                for row in surface.control_points() {
+                    for &p in row {
+                        add(self.local(p));
+                    }
+                }
+            }
+        }
+        Ok(Some((lo, hi)))
+    }
+}
+
+/// Whether a face meets a reach's box: for a plane face, exactly, where its
+/// region meets the polygon its plane cuts from the box; for any other face,
+/// always, so that the box test alone decides it.
+fn plane_meets_reach(
+    topo: &Topology,
+    face: FaceId,
+    reach: &Reach,
+) -> Result<bool, OperationsError> {
+    let tol = Tolerance::new().linear;
+    let FaceSurface::Plane { normal, d } = *topo.face(face)?.surface() else {
+        return Ok(true);
+    };
+    // The box's corners, and where its edges cross the plane.
+    let corner = |k: usize| {
+        let pick = |axis: usize| {
+            if (k >> axis) & 1 == 0 {
+                reach.lo[axis]
+            } else {
+                reach.hi[axis]
+            }
+        };
+        reach.origin + reach.axes[0] * pick(0) + reach.axes[1] * pick(1) + reach.axes[2] * pick(2)
+    };
+    let level = |p: Point3| normal.dot(to_vec(p)) - d;
+    let mut cut: Vec<Point3> = Vec::new();
+    for a in 0..8_usize {
+        for axis in 0..3 {
+            if (a >> axis) & 1 == 1 {
+                continue;
+            }
+            let b = a | (1 << axis);
+            let (p, q) = (corner(a), corner(b));
+            let (lp, lq) = (level(p), level(q));
+            if lp.abs() <= tol {
+                cut.push(p);
+            }
+            if (lp < -tol && lq > tol) || (lp > tol && lq < -tol) {
+                cut.push(p + (q - p) * (lp / (lp - lq)));
+            }
+        }
+    }
+    if cut.is_empty() {
+        return Ok(false);
+    }
+    let Some(flat) = Flat::about(topo, face, cut[0])? else {
+        return Ok(true);
+    };
+    let region = convex_hull(&cut.iter().map(|&p| flat.point(p)).collect::<Vec<_>>());
+    let data = topo.face(face)?;
+    for wid in std::iter::once(data.outer_wire()).chain(data.inner_wires().iter().copied()) {
+        for oe in topo.wire(wid)?.edges() {
+            let Some(pieces) = flat.edge(topo, oe.edge())? else {
+                return Ok(true);
+            };
+            if pieces
+                .into_iter()
+                .any(|p| piece_meets_region(p, &region, tol))
+            {
+                return Ok(true);
+            }
+        }
+    }
+    // No edge meets the polygon: it lies wholly inside the face or outside.
+    let frame = Frame3::from_normal(cut[0], normal)?;
+    let Some(boundary) = face_boundary_2d(topo, face, cut[0], frame.x, frame.y)? else {
+        return Ok(true);
+    };
+    Ok(point_in_region(&boundary, Point2::new(0.0, 0.0), tol) != Some(false))
+}
+
+/// Whether every face of the solid the chain does not rebuild stays clear
+/// of the material its chamfers take or fill. A face whose box, in each
+/// piece's frame and each corner's, stays out of that piece's or corner's
+/// reach cannot meet it. A face that reaches in, such as a hole drilled
+/// from elsewhere up into a chamfer's wedge, refuses the chain.
+fn wedges_are_clear(
+    topo: &Topology,
+    plan: &Plan,
+    faces: &[FaceId],
+    d: f64,
+) -> Result<bool, OperationsError> {
+    let tol = Tolerance::new().linear;
+    let reach = d + tol;
+    let mut own: HashSet<FaceId> = HashSet::new();
+    let mut reaches: Vec<Reach> = Vec::new();
+    // Each piece's own frame, which turns with the solid.
+    let mut frames: Vec<[Vec3; 3]> = Vec::with_capacity(plan.pieces.len());
+    for (index, piece) in plan.pieces.iter().enumerate() {
+        own.extend([piece.cap, piece.wall]);
+        match &piece.curve {
+            EdgeCurve::Circle(c) => {
+                frames.push([c.u_axis(), c.v_axis(), c.normal()]);
+                // In stretches of at most 15 degrees, each a box along its
+                // chord, radially out from the axis, and along the axis.
+                let (t0, t1) = piece
+                    .curve
+                    .domain_with_endpoints(piece.start_point, piece.end_point);
+                let count = ((t1 - t0) / (PI / 12.0)).ceil().max(1.0);
+                let step = (t1 - t0) / count;
+                let half = 0.5 * step;
+                let radius = c.radius();
+                let mut mid = t0 + half;
+                for _ in 0..count as usize {
+                    let out = c.u_axis() * mid.cos() + c.v_axis() * mid.sin();
+                    let along = c.normal().cross(out);
+                    let width = radius * half.sin() + reach;
+                    reaches.push(Reach {
+                        origin: c.center(),
+                        axes: [along, out, c.normal()],
+                        lo: [-width, radius * half.cos() - reach, -reach],
+                        hi: [width, radius + reach, reach],
+                    });
+                    mid += step;
+                }
+            }
+            EdgeCurve::Line | EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_) => {
+                let run = piece.end_point - piece.start_point;
+                let along = run.normalize()?;
+                let into = plan.piece_sections[index][0].cap_dir;
+                frames.push([along, into, along.cross(into)]);
+                reaches.push(Reach {
+                    origin: piece.start_point,
+                    axes: [along, into, along.cross(into)],
+                    lo: [-reach; 3],
+                    hi: [run.length() + reach, reach, reach],
+                });
+            }
+        }
+    }
+    own.extend(plan.joints.iter().flat_map(|j| j.walls));
+    own.extend(plan.ends.iter().flat_map(|e| [e.wall, e.beyond]));
+    own.extend(plan.square_ends.iter().map(|e| e.face));
+    for corner in &plan.corners {
+        own.extend([corner.shared, corner.faces[0], corner.faces[1]]);
+        let at = topo.vertex(corner.vertex)?.point();
+        let radius = [Some(corner.meet), Some(corner.reach), corner.cut]
+            .into_iter()
+            .flatten()
+            .map(|p| (p - at).length())
+            .fold(d, f64::max)
+            + tol;
+        reaches.push(Reach {
+            origin: at,
+            axes: frames[corner.pieces[0]],
+            lo: [-radius; 3],
+            hi: [radius; 3],
+        });
+    }
+    for &face in faces {
+        if own.contains(&face) {
+            continue;
+        }
+        for reach in &reaches {
+            match reach.face_box(topo, face)? {
+                Some(bounds) if !reach.meets(bounds) => {}
+                Some(_) if !plane_meets_reach(topo, face, reach)? => {}
+                _ => return Ok(false),
+            }
+        }
+    }
+    Ok(true)
 }
 
 /// A free end where the cap's next edge carries straight on: the chain ends
@@ -1665,7 +1961,7 @@ fn plan_is_clear(topo: &Topology, plan: &Plan, d: f64) -> Result<bool, Operation
     }
     // The new boundary on each cap: each contact, a sliver's chord, and each
     // tangent end's cross edge, with where each may touch the cap's edges.
-    let mut new_spans: Vec<(FaceId, Span, Vec<Point3>)> = Vec::new();
+    let mut new_spans: Vec<(FaceId, Span, Vec<Point3>, Option<usize>)> = Vec::new();
     for (index, piece) in plan.pieces.iter().enumerate() {
         let (a, _) = plan.contact_ends(index, piece.start);
         let (b, _) = plan.contact_ends(index, piece.end);
@@ -1697,20 +1993,7 @@ fn plan_is_clear(topo: &Topology, plan: &Plan, d: f64) -> Result<bool, Operation
             }
             EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_) => return Ok(false),
         };
-        new_spans.push((piece.cap, span, allowed));
-    }
-    for corner in &plan.corners {
-        if let (Some(cut), Some(sliver)) = (corner.cut, &corner.sliver) {
-            let face = corner.faces[1];
-            if plan.pieces.iter().any(|p| p.cap == face) {
-                let Some(points) = polyline_within(sliver, corner.reach, cut, tol) else {
-                    return Ok(false);
-                };
-                for pair in points.windows(2) {
-                    new_spans.push((face, Span::Segment(pair[0], pair[1]), vec![corner.reach]));
-                }
-            }
-        }
+        new_spans.push((piece.cap, span, allowed, Some(index)));
     }
     for end in &plan.ends {
         let Some(section) = plan.section(end.vertex) else {
@@ -1724,12 +2007,12 @@ fn plan_is_clear(topo: &Topology, plan: &Plan, d: f64) -> Result<bool, Operation
         else {
             return Ok(false);
         };
-        new_spans.push((piece.cap, Span::Segment(at, section.cap), vec![at]));
+        new_spans.push((piece.cap, Span::Segment(at, section.cap), vec![at], None));
     }
     // Nor may it meet itself away from where its pieces join: across a narrow
     // neck, the two sides' new edges cross.
-    for (i, (cap, first, _)) in new_spans.iter().enumerate() {
-        for (other_cap, second, _) in &new_spans[i + 1..] {
+    for (i, (cap, first, _, _)) in new_spans.iter().enumerate() {
+        for (other_cap, second, _, _) in &new_spans[i + 1..] {
             if cap != other_cap {
                 continue;
             }
@@ -1789,7 +2072,7 @@ fn plan_is_clear(topo: &Topology, plan: &Plan, d: f64) -> Result<bool, Operation
                 let Some(span) = Span::of(&curve, a, b) else {
                     return Ok(false);
                 };
-                for (new_cap, new_span, allowed) in &new_spans {
+                for (new_cap, new_span, allowed, _) in &new_spans {
                     if *new_cap != cap {
                         continue;
                     }
@@ -1869,6 +2152,18 @@ fn plan_is_clear(topo: &Topology, plan: &Plan, d: f64) -> Result<bool, Operation
             return Ok(false);
         }
     }
+    // Nor may a corner's region, or a square end's triangle, hold anything
+    // else of their faces.
+    for corner in &plan.corners {
+        if !corner_is_clear(topo, plan, corner, d, &new_spans)? {
+            return Ok(false);
+        }
+    }
+    for end in &plan.square_ends {
+        if !square_end_is_clear(topo, plan, end)? {
+            return Ok(false);
+        }
+    }
     // Nor may two strips on one wall overlap, but where their edges meet.
     for i in 0..plan.pieces.len() {
         for j in i + 1..plan.pieces.len() {
@@ -1933,33 +2228,465 @@ fn contacts_keep_order(plan: &Plan, d: f64) -> Result<bool, OperationsError> {
     Ok(true)
 }
 
-/// Points along `curve` from `a` to `b` whose chords stay within `tol` of it:
-/// a chord whose middle strays further is halved, down to 1/4096 of the
-/// curve's parameters. `None` when a chord that short still strays.
-fn polyline_within(curve: &EdgeCurve, a: Point3, b: Point3, tol: f64) -> Option<Vec<Point3>> {
-    let EdgeCurve::NurbsCurve(nurbs) = curve else {
-        return Some(vec![a, b]);
-    };
-    let (t0, t1) = curve.domain_with_endpoints(a, b);
-    let shortest = (t1 - t0).abs() / 4096.0;
-    let mut points = vec![nurbs.evaluate(t0)];
-    // Chords still to read, the next one last.
-    let mut pending = vec![(t0, t1)];
-    while let Some((s0, s1)) = pending.pop() {
-        let (p, q) = (nurbs.evaluate(s0), nurbs.evaluate(s1));
-        let mid = nurbs.evaluate(0.5 * (s0 + s1));
-        let (stray, _, _) = segment_segment_distance(p, q, mid, mid);
-        if stray <= tol {
-            points.push(q);
-        } else if (s1 - s0).abs() <= shortest {
-            return None;
-        } else {
-            let half = 0.5 * (s0 + s1);
-            pending.push((half, s1));
-            pending.push((s0, half));
+/// A face laid flat about a point: a plane in its own frame, or a cylinder
+/// unrolled about the point's ruling, as the arc length round the axis from
+/// that ruling and the height along it. Lines on the plane and the
+/// cylinder's rulings and circles about its axis lie flat as segments.
+enum Flat {
+    Plane {
+        origin: Point3,
+        x: Vec3,
+        y: Vec3,
+        normal: Vec3,
+    },
+    Cylinder {
+        cylinder: CylindricalSurface,
+        u0: f64,
+    },
+}
+
+impl Flat {
+    /// `None` for a face that is neither a plane nor a cylinder.
+    fn about(topo: &Topology, face: FaceId, at: Point3) -> Result<Option<Self>, OperationsError> {
+        Ok(match topo.face(face)?.surface() {
+            FaceSurface::Plane { normal, .. } => {
+                let frame = Frame3::from_normal(at, *normal)?;
+                Some(Self::Plane {
+                    origin: at,
+                    x: frame.x,
+                    y: frame.y,
+                    normal: *normal,
+                })
+            }
+            FaceSurface::Cylinder(cylinder) => Some(Self::Cylinder {
+                u0: cylinder.project_point(at).0,
+                cylinder: cylinder.clone(),
+            }),
+            FaceSurface::Cone(_)
+            | FaceSurface::Sphere(_)
+            | FaceSurface::Torus(_)
+            | FaceSurface::Nurbs(_) => None,
+        })
+    }
+
+    fn point(&self, p: Point3) -> [f64; 2] {
+        match self {
+            Self::Plane { origin, x, y, .. } => [(p - *origin).dot(*x), (p - *origin).dot(*y)],
+            Self::Cylinder { cylinder, u0 } => {
+                let (u, h) = cylinder.project_point(p);
+                [((u - u0 + PI).rem_euclid(TAU) - PI) * cylinder.radius(), h]
+            }
         }
     }
-    Some(points)
+
+    /// `edge` laid flat, or `None` where it does not lie flat as segments
+    /// and arcs. A circle round a cylinder's axis lies flat as its run and
+    /// that run a whole turn either way, so a region near the unrolled
+    /// ruling meets it wherever it does.
+    fn edge(&self, topo: &Topology, edge: EdgeId) -> Result<Option<Vec<Piece2>>, OperationsError> {
+        let data = topo.edge(edge)?;
+        let (a, b) = (
+            topo.vertex(data.start())?.point(),
+            topo.vertex(data.end())?.point(),
+        );
+        let curve = read_curve(topo, edge)?;
+        Ok(match (self, &curve) {
+            (Self::Plane { .. }, EdgeCurve::Line) => {
+                Some(vec![Piece2::Segment(self.point(a), self.point(b))])
+            }
+            (Self::Plane { normal, .. }, EdgeCurve::Circle(c)) => {
+                if c.normal().cross(*normal).length() > JOIN_TOL {
+                    return Ok(None);
+                }
+                let (t0, t1) = if data.start() == data.end() {
+                    (0.0, TAU)
+                } else {
+                    curve.domain_with_endpoints(a, b)
+                };
+                let turn = if c.normal().dot(*normal) > 0.0 {
+                    1.0
+                } else {
+                    -1.0
+                };
+                let center = self.point(c.center());
+                let start = self.point(a);
+                Some(vec![Piece2::Arc {
+                    center,
+                    radius: c.radius(),
+                    from: (start[1] - center[1]).atan2(start[0] - center[0]),
+                    sweep: (t1 - t0) * turn,
+                }])
+            }
+            (Self::Cylinder { cylinder, .. }, EdgeCurve::Line) => {
+                let run = b - a;
+                if run.length() > JOIN_TOL
+                    && run.normalize()?.cross(cylinder.axis()).length() > JOIN_TOL
+                {
+                    return Ok(None);
+                }
+                Some(vec![Piece2::Segment(self.point(a), self.point(b))])
+            }
+            (Self::Cylinder { cylinder, .. }, EdgeCurve::Circle(c)) => {
+                let axis = cylinder.axis();
+                let coaxial = c.normal().cross(axis).length() < JOIN_TOL
+                    && (c.center() - cylinder.origin()).cross(axis).length() < JOIN_TOL;
+                if !coaxial {
+                    return Ok(None);
+                }
+                let (t0, t1) = if data.start() == data.end() {
+                    (0.0, TAU)
+                } else {
+                    curve.domain_with_endpoints(a, b)
+                };
+                let turn = if c.normal().dot(axis) > 0.0 {
+                    1.0
+                } else {
+                    -1.0
+                };
+                let [x0, h] = self.point(a);
+                let run = (t1 - t0) * turn * cylinder.radius();
+                let whole = TAU * cylinder.radius();
+                Some(
+                    [-whole, 0.0, whole]
+                        .iter()
+                        .map(|shift| Piece2::Segment([x0 + shift, h], [x0 + shift + run, h]))
+                        .collect(),
+                )
+            }
+            _ => None,
+        })
+    }
+}
+
+/// A segment or a circular arc in a flat face.
+#[derive(Clone, Copy)]
+enum Piece2 {
+    Segment([f64; 2], [f64; 2]),
+    Arc {
+        center: [f64; 2],
+        radius: f64,
+        from: f64,
+        sweep: f64,
+    },
+}
+
+/// The convex hull of `points`, counter-clockwise.
+fn convex_hull(points: &[[f64; 2]]) -> Vec<[f64; 2]> {
+    let mut sorted = points.to_vec();
+    sorted.sort_by(|p, q| p[0].total_cmp(&q[0]).then(p[1].total_cmp(&q[1])));
+    sorted.dedup_by(|p, q| (p[0] - q[0]).hypot(p[1] - q[1]) <= 1e-15);
+    if sorted.len() < 3 {
+        return sorted;
+    }
+    let turn = |o: [f64; 2], a: [f64; 2], b: [f64; 2]| {
+        (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+    };
+    let mut hull: Vec<[f64; 2]> = Vec::with_capacity(2 * sorted.len());
+    for pass in [false, true] {
+        let start = hull.len();
+        let ordered: Vec<[f64; 2]> = if pass {
+            sorted.iter().rev().copied().collect()
+        } else {
+            sorted.clone()
+        };
+        for p in ordered {
+            while hull.len() >= start + 2
+                && turn(hull[hull.len() - 2], hull[hull.len() - 1], p) <= 0.0
+            {
+                hull.pop();
+            }
+            hull.push(p);
+        }
+        hull.pop();
+    }
+    hull
+}
+
+/// The distance from `p` to the segment from `a` to `b`.
+fn to_segment(p: [f64; 2], a: [f64; 2], b: [f64; 2]) -> f64 {
+    let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+    let length2 = dx * dx + dy * dy;
+    let t = if length2 > 0.0 {
+        (((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / length2).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    (p[0] - a[0] - t * dx).hypot(p[1] - a[1] - t * dy)
+}
+
+/// Whether `p` lies in the convex polygon `region`, or within `tol` of it.
+fn region_holds(region: &[[f64; 2]], p: [f64; 2], tol: f64) -> bool {
+    let n = region.len();
+    if n == 0 {
+        return false;
+    }
+    if n < 3 {
+        let b = region[n - 1];
+        return to_segment(p, region[0], b) <= tol;
+    }
+    let inside = (0..n).all(|k| {
+        let (a, b) = (region[k], region[(k + 1) % n]);
+        (b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0]) >= 0.0
+    });
+    inside || (0..n).any(|k| to_segment(p, region[k], region[(k + 1) % n]) <= tol)
+}
+
+/// Whether two segments come within `tol` of each other.
+fn segments_meet(a: [f64; 2], b: [f64; 2], c: [f64; 2], d: [f64; 2], tol: f64) -> bool {
+    let cross = |o: [f64; 2], p: [f64; 2], q: [f64; 2]| {
+        (p[0] - o[0]) * (q[1] - o[1]) - (p[1] - o[1]) * (q[0] - o[0])
+    };
+    let (d1, d2) = (cross(c, d, a), cross(c, d, b));
+    let (d3, d4) = (cross(a, b, c), cross(a, b, d));
+    if d1 * d2 < 0.0 && d3 * d4 < 0.0 {
+        return true;
+    }
+    to_segment(a, c, d) <= tol
+        || to_segment(b, c, d) <= tol
+        || to_segment(c, a, b) <= tol
+        || to_segment(d, a, b) <= tol
+}
+
+/// Whether `piece` comes within `tol` of the convex polygon `region`: an
+/// end of it lies there, or it meets a side. An arc meets a side where the
+/// side passes within `tol` of its circle inside its sweep.
+fn piece_meets_region(piece: Piece2, region: &[[f64; 2]], tol: f64) -> bool {
+    let n = region.len();
+    let sides: Vec<([f64; 2], [f64; 2])> = match n {
+        0 => return false,
+        1 => vec![(region[0], region[0])],
+        2 => vec![(region[0], region[1])],
+        _ => (0..n).map(|k| (region[k], region[(k + 1) % n])).collect(),
+    };
+    match piece {
+        Piece2::Segment(a, b) => {
+            region_holds(region, a, tol)
+                || region_holds(region, b, tol)
+                || sides.iter().any(|&(c, d)| segments_meet(a, b, c, d, tol))
+        }
+        Piece2::Arc {
+            center,
+            radius,
+            from,
+            sweep,
+        } => {
+            let at = |t: f64| [center[0] + radius * t.cos(), center[1] + radius * t.sin()];
+            if region_holds(region, at(from), tol) || region_holds(region, at(from + sweep), tol) {
+                return true;
+            }
+            let slack = tol / radius;
+            let in_sweep = |p: [f64; 2]| {
+                let t = (p[1] - center[1]).atan2(p[0] - center[0]);
+                let off = if sweep >= 0.0 {
+                    (t - from).rem_euclid(TAU)
+                } else {
+                    (from - t).rem_euclid(TAU)
+                };
+                off <= sweep.abs() + slack || off >= TAU - slack
+            };
+            sides.iter().any(|&(c, d)| {
+                // The points of the side nearest and farthest from the
+                // circle's centre, and where it crosses the circle.
+                let (dx, dy) = (d[0] - c[0], d[1] - c[1]);
+                let (wx, wy) = (c[0] - center[0], c[1] - center[1]);
+                let a2 = dx * dx + dy * dy;
+                let mut candidates = vec![c, d];
+                if a2 > 0.0 {
+                    let t = (-(wx * dx + wy * dy) / a2).clamp(0.0, 1.0);
+                    candidates.push([c[0] + t * dx, c[1] + t * dy]);
+                    let b = 2.0 * (wx * dx + wy * dy);
+                    let disc = b * b - 4.0 * a2 * (wx * wx + wy * wy - radius * radius);
+                    if disc >= 0.0 {
+                        for root in [
+                            (-b - disc.sqrt()) / (2.0 * a2),
+                            (-b + disc.sqrt()) / (2.0 * a2),
+                        ] {
+                            if (0.0..=1.0).contains(&root) {
+                                candidates.push([c[0] + root * dx, c[1] + root * dy]);
+                            }
+                        }
+                    }
+                }
+                candidates.into_iter().any(|p| {
+                    ((p[0] - center[0]).hypot(p[1] - center[1]) - radius).abs() <= tol
+                        && in_sweep(p)
+                })
+            })
+        }
+    }
+}
+
+/// Where the tangents to `circle` at `a` and `b` meet, on the bisector of
+/// the shorter arc between them: with its ends, a hull holding that arc.
+/// `None` when the arc turns a quarter or more.
+fn arc_pole(circle: &Circle3D, a: Point3, b: Point3) -> Option<Point3> {
+    let (ra, rb) = (a - circle.center(), b - circle.center());
+    let turn = ra.cross(rb).length().atan2(ra.dot(rb));
+    if turn >= 0.5 * PI {
+        return None;
+    }
+    let bisector = (ra + rb).normalize().ok()?;
+    Some(circle.center() + bisector * (circle.radius() / (0.5 * turn).cos()))
+}
+
+/// Whether every edge of `face` but `planned`, and every new boundary span
+/// in `spans`, stays clear of the convex hull of `points` laid flat about
+/// `at`.
+fn hull_is_clear(
+    topo: &Topology,
+    face: FaceId,
+    at: Point3,
+    points: &[Point3],
+    planned: &HashSet<EdgeId>,
+    spans: &[&Span],
+) -> Result<bool, OperationsError> {
+    let tol = Tolerance::new().linear;
+    let Some(flat) = Flat::about(topo, face, at)? else {
+        return Ok(false);
+    };
+    let flat_points: Vec<[f64; 2]> = points.iter().map(|&p| flat.point(p)).collect();
+    let region = convex_hull(&flat_points);
+    let data = topo.face(face)?;
+    for wid in std::iter::once(data.outer_wire()).chain(data.inner_wires().iter().copied()) {
+        for oe in topo.wire(wid)?.edges() {
+            if planned.contains(&oe.edge()) {
+                continue;
+            }
+            let Some(pieces) = flat.edge(topo, oe.edge())? else {
+                return Ok(false);
+            };
+            if pieces
+                .into_iter()
+                .any(|p| piece_meets_region(p, &region, tol))
+            {
+                return Ok(false);
+            }
+        }
+    }
+    for span in spans {
+        let piece = match span {
+            Span::Segment(a, b) => Piece2::Segment(flat.point(*a), flat.point(*b)),
+            Span::Arc { circle, t0, sweep } => {
+                let Flat::Plane { normal, .. } = &flat else {
+                    return Ok(false);
+                };
+                let turn = if circle.normal().dot(*normal) > 0.0 {
+                    1.0
+                } else {
+                    -1.0
+                };
+                let center = flat.point(circle.center());
+                let start = flat.point(circle.evaluate(*t0));
+                Piece2::Arc {
+                    center,
+                    radius: circle.radius(),
+                    from: (start[1] - center[1]).atan2(start[0] - center[0]),
+                    sweep: sweep * turn,
+                }
+            }
+        };
+        if piece_meets_region(piece, &region, tol) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// Whether the region a corner takes from each of its three faces is clear
+/// of everything else on them. On each face the region lies in the hull of
+/// the vertex, each piece's section point and contact end there, the poles
+/// of an arc contact between the two, the third edge's new end and, on the
+/// face the sliver cuts, the sliver's poles.
+fn corner_is_clear(
+    topo: &Topology,
+    plan: &Plan,
+    corner: &Corner,
+    d: f64,
+    new_spans: &[(FaceId, Span, Vec<Point3>, Option<usize>)],
+) -> Result<bool, OperationsError> {
+    let at = topo.vertex(corner.vertex)?.point();
+    let planned: HashSet<EdgeId> = corner
+        .pieces
+        .iter()
+        .map(|&i| plan.pieces[i].edge)
+        .chain(std::iter::once(corner.third))
+        .collect();
+    for face in [corner.shared, corner.faces[0], corner.faces[1]] {
+        let mut points = vec![at];
+        for &index in &corner.pieces {
+            let piece = &plan.pieces[index];
+            let side = if face == piece.cap {
+                0
+            } else if face == piece.wall {
+                1
+            } else {
+                continue;
+            };
+            let section = plan.piece_sections[index][piece.slot(corner.vertex)];
+            let ends = plan.contact_ends(index, corner.vertex);
+            let (from, to) = if side == 0 {
+                (section.cap, ends.0)
+            } else {
+                (section.wall, ends.1)
+            };
+            points.extend([from, to]);
+            if let EdgeCurve::Circle(circle) =
+                &piece.contact_curves(&plan.piece_sections[index][0], d)?[side]
+                && (to - from).length() > JOIN_TOL
+            {
+                let Some(pole) = arc_pole(circle, from, to) else {
+                    return Ok(false);
+                };
+                points.push(pole);
+            }
+        }
+        if face == corner.faces[0] || face == corner.faces[1] {
+            points.push(corner.reach);
+        }
+        if face == corner.faces[1] {
+            points.extend(corner.cut);
+            if let Some(EdgeCurve::NurbsCurve(sliver)) = &corner.sliver {
+                points.extend(sliver.control_points());
+            }
+        }
+        let spans: Vec<&Span> = new_spans
+            .iter()
+            .filter(|(f, _, _, owner)| {
+                *f == face && owner.is_none_or(|o| !corner.pieces.contains(&o))
+            })
+            .map(|(_, span, _, _)| span)
+            .collect();
+        if !hull_is_clear(topo, face, at, &points, &planned, &spans)? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// Whether the triangle a square end cuts from its plane, or hands it, is
+/// clear of the plane's other edges: the hull of the vertex, the section's
+/// two points, and the pole of the stretch of an arc edge between the
+/// vertex and the section's point on it.
+fn square_end_is_clear(
+    topo: &Topology,
+    plan: &Plan,
+    end: &SquareEnd,
+) -> Result<bool, OperationsError> {
+    let Some(section) = plan.section(end.vertex) else {
+        return Ok(false);
+    };
+    let at = topo.vertex(end.vertex)?.point();
+    let mut points = vec![at, section.cap, section.wall];
+    for (edge, p) in end.edges.into_iter().zip([section.cap, section.wall]) {
+        if let EdgeCurve::Circle(circle) = read_curve(topo, edge)? {
+            let Some(pole) = arc_pole(&circle, at, p) else {
+                return Ok(false);
+            };
+            points.push(pole);
+        }
+    }
+    let planned: HashSet<EdgeId> = end.edges.into_iter().collect();
+    hull_is_clear(topo, end.face, at, &points, &planned, &[])
 }
 
 /// The angles (from `from` over `width`) and the heights along the axis
@@ -2949,10 +3676,9 @@ mod tests {
 
     use super::*;
 
-    /// A conic arc's polyline stays within the tolerance of the arc between
-    /// its points, and a line is its one chord.
+    /// A conic arc lies on both its surfaces and in the hull of its poles.
     #[test]
-    fn a_polyline_stays_within_its_conic() {
+    fn a_conic_arc_lies_on_both_surfaces_and_in_its_poles_hull() {
         let cone = ConicalSurface::new(
             Point3::new(0.0, 0.0, 10.0),
             Vec3::new(0.0, 0.0, -1.0),
@@ -2963,27 +3689,43 @@ mod tests {
         let on = |x: f64| Point3::new(x, 2.0, 10.0 - x.hypot(2.0));
         let (a, b) = (on(1.0), on(6.0));
         let curve = conic_arc(Vec3::new(0.0, 1.0, 0.0), &cone, a, b).unwrap();
-        let tol = 1e-7;
-        let points = polyline_within(&curve, a, b, tol).unwrap();
-        assert!(points.len() > 2);
-        assert!((points[0] - a).length() < 1e-12);
-        assert!((points[points.len() - 1] - b).length() < 1e-12);
         let EdgeCurve::NurbsCurve(nurbs) = &curve else {
             panic!("a conic arc is a NURBS curve");
         };
+        let flat = |p: Point3| [p.x(), p.z()];
+        let hull = convex_hull(
+            &nurbs
+                .control_points()
+                .iter()
+                .map(|&p| flat(p))
+                .collect::<Vec<_>>(),
+        );
         for k in 0..=200 {
             let p = nurbs.evaluate(f64::from(k) / 200.0);
             assert!(Band::Cone(cone.clone()).level(p).abs() < 1e-9);
             assert!((p.y() - 2.0).abs() < 1e-9);
-            let near = points
-                .windows(2)
-                .map(|w| segment_segment_distance(w[0], w[1], p, p).0)
-                .fold(f64::INFINITY, f64::min);
-            assert!(near <= 2.0 * tol, "{near}");
+            assert!(region_holds(&hull, flat(p), 1e-12));
         }
-        assert_eq!(
-            polyline_within(&EdgeCurve::Line, a, b, tol).unwrap(),
-            vec![a, b]
-        );
+    }
+
+    /// An arc meets a region where it passes through it, even where no end
+    /// lies inside and it crosses a side between two of its samples; it
+    /// does not where its sweep turns away.
+    #[test]
+    fn an_arc_meets_a_region_it_passes_through() {
+        let square = convex_hull(&[[-0.1, 0.95], [0.1, 0.95], [0.1, 1.05], [-0.1, 1.05]]);
+        let arc = |from: f64, sweep: f64| Piece2::Arc {
+            center: [0.0, 0.0],
+            radius: 1.0,
+            from,
+            sweep,
+        };
+        assert!(piece_meets_region(arc(0.0, PI), &square, 1e-9));
+        assert!(piece_meets_region(arc(PI, -PI), &square, 1e-9));
+        assert!(!piece_meets_region(arc(PI, PI), &square, 1e-9));
+        let far = Piece2::Segment([2.0, 0.0], [2.0, 3.0]);
+        assert!(!piece_meets_region(far, &square, 1e-9));
+        let through = Piece2::Segment([-1.0, 1.0], [1.0, 1.0]);
+        assert!(piece_meets_region(through, &square, 1e-9));
     }
 }
