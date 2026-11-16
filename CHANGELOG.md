@@ -1,5 +1,13 @@
 # Changelog
 
+## [4.11.27](https://github.com/andymai/brepkit/compare/v4.11.26...v4.11.27) (2026-11-16)
+
+
+### Bug Fixes
+
+* **algo:** cut a flat through a torus groove on a rod exactly ([#2543](https://github.com/andymai/brepkit/issues/2543)) ([84b2954](https://github.com/andymai/brepkit/commit/84b2954f745236cd7bc916178a7d20b1afa2cbbd))
+* **math:** prove a surface projection is the nearest point ([#2537](https://github.com/andymai/brepkit/issues/2537)) ([840ddce](https://github.com/andymai/brepkit/commit/840ddceba1d17935e4f64b7769bdc7c3413eca2f)), closes [#2470](https://github.com/andymai/brepkit/issues/2470)
+
 ## [4.11.26](https://github.com/andymai/brepkit/compare/v4.11.25...v4.11.26) (2026-11-16)
 
 
