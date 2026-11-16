@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794817294403,
+  "lastUpdate": 1794817472194,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -72035,6 +72035,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24997008,
             "range": "± 95334",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "bc18daac3c19f332843319cbbc968dc265e21bc9",
+          "message": "fix(algo): split a curve that shares its ends with another path before assembly (#2536)\n\n## Summary\n\nA box's bottom face holds the leading edge of an aerofoil prism and\ntilts about it. A cut by that box now leaves the exact part under the\nface: 1 NURBS face and 3 planes. Before, the assembly rejected every\nface and the cut fell back to a mesh. Closes #2450.\n\nThe tilted face cuts each cap along a chord from the nose vertex to the\nlower spline. Each cap is then bounded by two edges between the same two\npoints: the chord and a piece of the spline. `merge_duplicate_edges` in\n`crates/algo/src/builder/builder_solid.rs` keys edges by their two ends,\nso it took the chord and the spline piece for one edge.\n`remove_doubled_faces` then dropped the tool's face and the lower NURBS\nface as a doubled pair, and `excise_out_and_back_spurs` dropped both\ncaps as slits. No face stayed, and the assembly failed with `all faces\navoided (all have free edges)`.\n\nThe flood fill in `perform_loops` keys edges by their ends too. A fix in\nthe merge alone left each cap in a shell of its own.\n\n`separate_arcs_sharing_ends` already split two arcs with the same ends\nat their middles, for an imprint. It now also takes a line as a partner.\nIt reads two edges as one path when seven points along each lie on the\nother, by parameter or else by distance. A spline is also read at its\nknots and at the middle of each knot span. The tolerance is a thousandth\nof the shorter edge's length, kept between 1e-5 and 1e-2. A chord of a\nball's equator joins the path with the arc it stands for, as\n`merge_duplicate_edges` reads it.\n\nThe pass splits each path without a line at one vertex that all its\nedges share, at the path's middle. When the middle lies on a chord, the\nsplit moves to where the path stands farthest from the chords. The\nsearch reads the same steps as the path check. Otherwise the boundary\nrefinement would split the chord there too, and the merge would pair the\npieces again.\n\nA second fit of one path can lie off the shared vertex by more than\n1e-5. The pass then cuts that spline into the two spans its pieces run\nover. It also cuts a spline where a piece spans under 2e-6 of its\ndomain, too little to read from the piece's ends.\n`build_solid_with_origins` now calls the pass before `unify_boundaries`,\nas `build_regions` does.\n\nThe pass groups edges by their ends at 1e-7, and the weld in\n`unify_boundaries` later joins ends within 1e-5. Edges whose ends fall\nbetween the two escape the pass. A grouping by the weld's classes failed\n`a_rod_along_a_cone_is_exact`, so I filed #2550 for it. The tolerance\nalso reads two splines that bound a lens thinner than 1e-2 as one path:\n#2554.\n\n## Tests\n\n- `a_box_tilted_about_the_nose_leaves_the_part_under_its_face` in\n`crates/operations/tests/plane_through_nurbs_edges.rs` is no longer\nignored. It runs the cut in four poses. Each result must come without a\nmesh fallback, be valid, and have 1 NURBS face and 3 planes. Points on\nboth sides of the cut must classify right, and the volume must agree\nwith the section's area to 2e-3. On main, it fails in the first pose\nwith a mesh fallback.\n- The other three tests in that file pass.\n- `paths_that_part_by_more_than_a_fit_stay_apart` in `builder_solid.rs`\nkeeps two arches 0.5 apart over a length of 1000 as two paths. It also\nkeeps a line and a spline that meets it at its middle as two paths. A\npolyline that leaves the line by 0.1 over its first tenth only, and by\n1e-4 after that, stays a path of its own. Without the knot reads, it\nreads as the line. `a_spline_along_a_line_at_its_own_pace_is_the_line`\nreads a line and a spline along it at an uneven pace as one path.\n- `a_chord_and_two_fits_of_one_spline_unify_piece_by_piece` runs the\npass and `unify_boundaries` on two faces, each bounded by a chord and a\nspline that crosses it at its middle. The second face's spline is a fit\n4e-4 off the first. Each edge must have two uses, the chord must stay\nwhole, and each piece must run over its own span. With a split at the\nmiddle, the test fails with two edges of four uses.\n- `a_chord_and_a_short_bulge_unify_piece_by_piece` runs the pass and\n`unify_boundaries` on two faces. A chord and a polyline bound each face.\nThe polyline leaves the chord by 0.1 over its first tenth only, and by\n1e-8 after that. Each edge must have two uses, with the chord whole, and\neach piece must run within its ends. A second case puts the bulge's knot\n5e-8 into the domain. Each case fails with two edges of four uses: the\nfirst with even split steps only, the second with the whole curve kept.\n- `a_ball_chord_joins_the_arc_it_stands_for` requires a chord of a\nball's equator to merge with its arc. Without the chord rule, the test\nfails with three edges of one use. In a second case, a spline fit of the\narc comes first in the arc's path. The chord must still join that path,\nso the path stays whole and the rest of the circle splits.\n- Two fits of one fillet's edge in\n`crates/io/tests/scoop_taper_clip_inmem.rs`, 9.7 long, part by 4.1e-4.\nThe tests in that file pass, so those fits still read as one path.\n- `cargo nextest run --cargo-profile ci -p brepkit-algo -p brepkit-io -p\nbrepkit-operations -p brepkit-wasm -p brepkit-check -p brepkit-heal`:\n3650 passed, 23 skipped.\n- The pose sweep (495 lines, no fallback) and the truth audit give the\nsame output as main `4e5184192`.\n- `cargo clippy --all-targets --all-features -- -D warnings` and `cargo\nfmt --all -- --check` pass in the pre-commit hook.\n- `./scripts/check-mul-add.sh`, `./scripts/check-boundaries.sh` and\n`./scripts/check-doc-paths.sh` pass.",
+          "timestamp": "2026-11-16T08:20:40Z",
+          "tree_id": "80e1ddfa619d528f897d10946de7e22879756499",
+          "url": "https://github.com/andymai/brepkit/commit/bc18daac3c19f332843319cbbc968dc265e21bc9"
+        },
+        "date": 1794817464837,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 648935,
+            "range": "± 7082",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 678193,
+            "range": "± 11469",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 8178,
+            "range": "± 95",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 415330,
+            "range": "± 27468",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 15589868,
+            "range": "± 681620",
             "unit": "ns/iter"
           }
         ]
