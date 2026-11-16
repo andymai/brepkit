@@ -1,0 +1,25 @@
+crates/operations/src/blend_surface.rs
+  s_0db8415e6f59cd::t_b441e2f74381e2 238,255-262
+crates/operations/src/blend_surface/fair.rs
+  s_0db8415e6f59cd::t_af23eeadc1fd88 75-76,91-92,94,97,109,166-168,180-304,307,323
+crates/operations/src/blend_surface/fold.rs
+  s_0db8415e6f59cd::t_3dc13befbd7976 28-38,42,49,59,74-80,82,85-86,97-122,129,131,134,154,215-234,286-293,399-403,441,444,447,454,457,486,489,509-551,574,596
+crates/operations/tests/fair_surface.rs
+  s_0db8415e6f59cd::t_b47eddc1fb7f0a 743-746,749-758,767-771,785-827,829-882
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "2b07759a1132767e7a05f6c68d95bf68d394dc91",
+  "prompts": {},
+  "sessions": {
+    "s_0db8415e6f59cd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "80c728ce-cbd9-4375-adac-8fbf308dc911",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
