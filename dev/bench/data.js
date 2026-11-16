@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794800228728,
+  "lastUpdate": 1794804478639,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -71117,6 +71117,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24217868,
             "range": "± 61151",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "bc78568249ccdde3466356f8342fd78d935ac647",
+          "message": "fix(operations): mesh a wall whose rim runs round a notch (#2504)\n\n## Summary\n\nA cylinder (radius 72, height 84) and a smaller cylinder (radius 10,\nheight 44) stand on the plane z = 0, with axes 70 apart. Their fuse is\nexact. Its mesh had open edges on the large wall beside the notch: 4 at\na deflection of 0.5 and 7 at 0.05. The mesh is now closed at each\ndeflection. Closes #2486.\n\nThe notch cuts the bottom rim of the large wall. The rim runs along the\nbase, up one side of the notch, across its top, and down the other side.\n`tessellate_revolution_band_shared` in\n`crates/operations/src/tessellate/nonplanar.rs` meshes this wall. It\ntakes any rim that is a cycle of curved edges round the axis one time.\nIt sorted the samples of each rim by their angle round the axis, and\nswept triangles between the two rims.\n\nEach side of the notch runs along a ruling of the wall, so the two\nsamples of a side have one angle. The sort put the two corners of one\nside in the wrong order. The sweep then joined the top rim across the\nnotch, and no triangle held the edge on that side.\n\nA cone wall (radius 72 to 50, height 84) with the same notch had 45 to\n53 open edges. There the sides of the notch cross the rulings, but they\nclimb steeply. The sweep joined samples of the top rim to the sides\nacross the notch.\n\nThe change:\n\n- Each rim keeps the order in which its cycle of edges walks it\n(`rim_in_walk_order`). `ascending_from_least_angle` turns the rim to run\nup the angle and starts it at its least angle. For a rim that is a graph\nover the angle, this is the order of the old sort.\n- The mesher emits the band only when every triangle turns one way in\nthe unwrapped `(u, v)` of the surface (`turns_one_way`). Such triangles\ncover the band one time. Otherwise the mesher returns `Ok(false)`, and\n`tessellate_face_with_shared_edges` meshes the face with the CDT on the\nshared edge samples.\n- The check reads every candidate triangle, so a triangle with no area\nin `(u, v)` also sends the face to the CDT. Before, the mesher skipped\nsuch a triangle, and its rim segment stayed open. The band goes out as\none run, and `orient_triangle_run` turns the whole run outward with one\ndecision.\n- `tessellate_band_face_local`, the band for one cone face on its own,\nuses the same rim order and the same check. The two meshers share the\nsweep `zip_rims`.\n- The walk order of a rim uses the order of the samples on each edge.\n`tessellate_solid_core` in `solid.rs` splices pool points that lie on a\ncircle edge into the samples of that edge. It sorted them by the angle\nfrom `Circle3D::project`, which is in (-π, π]. An arc across π came out\nof order, and the splice did not take a point past π. The splice now\nsorts and tests the range by `along_arc`, the angle along the arc from\nits start.\n\n## Tests\n\n- `a_cylinder_wall_notched_at_its_rim_meshes_closed` fuses the two cases\nof the issue: radius 10 at 70, and radius 30 at 80.\n`a_cone_wall_notched_at_its_rim_meshes_closed` puts the first notch into\nthe cone wall.\n- Each test turns the operands into four poses before the fuse: as made,\nupside down, turned off every axis, and mirrored. The fuse must have 8\nfaces or fewer, and `solid_volume` must agree with the closed form to\n1e-6 of the volume.\n- The mesh at deflections 0.5, 0.1, 0.05 and 0.01 must have no open\nedges and no non-manifold edges. The difference between its volume and\nthe closed form must be at most the deflection times the mesh area.\n- The closed form of the cylinder case uses the area of the lens where\nthe two circles overlap. The cone case integrates that area over the\nheight with Simpson's rule.\n- Each test also meshes each curved face of the fuse on its own, at a\ndeflection of 0.05. The mesh area must be within 1% of the area from\n`face_area`. The notch takes 2.2% or more of the large wall.\n- On main, both tests fail at the first pose and a deflection of 0.5,\nwith open edges.\n- `samples_along_an_arc_keep_their_order_across_the_wrap` reads an arc\nfrom 2.8 to 3.5 with five samples, and three points off the arc.\n- CI ran the workspace tests on `fd3c1cdca`: 4874 passed, 0 failed, 24\nskipped. `CI Pass` is green.\n- `cargo check -p brepkit-operations --target wasm32-unknown-unknown`\npasses.\n- At `2c8335f14` and at `fd3c1cdca`, the pose sweep and the truth audit\ngive the same output as main `4e5184192`.\n- `cargo clippy -p brepkit-operations --all-targets -- -D warnings`,\n`cargo fmt --all` and the pre-commit hook pass.\n\nI tested other places of the notch round the cone, and found that the\nfuse itself falls back to a mesh at some of them. I filed that as #2503.",
+          "timestamp": "2026-11-15T20:44:23-08:00",
+          "tree_id": "7df78d5d57ec582c5c1c721e12d61882da22c27c",
+          "url": "https://github.com/andymai/brepkit/commit/bc78568249ccdde3466356f8342fd78d935ac647"
+        },
+        "date": 1794804465853,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 800406,
+            "range": "± 20163",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 839868,
+            "range": "± 10043",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 9046,
+            "range": "± 49",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 504031,
+            "range": "± 4458",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 17782863,
+            "range": "± 76357",
             "unit": "ns/iter"
           }
         ]
