@@ -1848,7 +1848,7 @@ fn rounded_shelled_body_classifies_cavity_outside() {
         .as_u64()
         .unwrap() as u32;
     let sid = k.resolve_solid(shelled).unwrap();
-    let topo = &*k.topo;
+    let topo = &k.topo;
     let cavity = brepkit_algo::classifier::classify_point(
         topo,
         sid,

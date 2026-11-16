@@ -14,7 +14,6 @@
 )]
 
 use brepkit_math::madd::Madd;
-use std::rc::Rc;
 
 use brepkit_math::curves::{Circle3D, Ellipse3D};
 use brepkit_math::curves2d::Line2D;
@@ -42,7 +41,7 @@ use crate::state::{Checkpoint, SketchState};
 /// invokes methods to create, transform, and query geometry.
 #[wasm_bindgen]
 pub struct BrepKernel {
-    pub(crate) topo: Rc<Topology>,
+    pub(crate) topo: Topology,
     pub(crate) assemblies: Vec<brepkit_operations::assembly::Assembly>,
     pub(crate) sketches: Vec<SketchState>,
     pub(crate) checkpoints: Vec<Checkpoint>,
@@ -57,7 +56,7 @@ impl BrepKernel {
     pub fn new() -> Self {
         crate::panics::install_hook();
         Self {
-            topo: Rc::new(Topology::new()),
+            topo: Topology::new(),
             assemblies: Vec::new(),
             sketches: Vec::new(),
             checkpoints: Vec::new(),
@@ -75,10 +74,9 @@ impl Default for BrepKernel {
 // ── Private helpers ────────────────────────────────────────────────
 
 impl BrepKernel {
-    /// Returns a mutable reference to the topology, cloning if shared
-    /// with any checkpoints (copy-on-write).
+    /// Returns a mutable reference to the topology.
     pub(crate) fn topo_mut(&mut self) -> &mut Topology {
-        Rc::make_mut(&mut self.topo)
+        &mut self.topo
     }
 
     /// Returns an immutable reference to the topology.
