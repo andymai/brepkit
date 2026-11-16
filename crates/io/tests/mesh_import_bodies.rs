@@ -610,20 +610,38 @@ fn two_stl_boxes_that_share_an_edge_are_two_solids() {
     }
 }
 
-/// The two cubes share the four points and the two triangles of a side.
+/// The two cubes share the four points and the two triangles of a side, so
+/// each edge of the side has two triangles at one angle. Two cubes that
+/// touch there and a wall of no thickness look the same: the edges do not
+/// pair off, and the cubes are one shell.
 #[test]
-fn two_cubes_that_share_a_side_are_two_solids() {
+fn duplicated_triangles_on_a_shared_side_make_one_shell() {
     let mut mesh = TriangleMesh::default();
     add_cube(&mut mesh, [0.0; 3], 10.0, false);
     add_cube(&mut mesh, [0.0, 0.0, 10.0], 10.0, false);
 
     let mut topo = Topology::new();
     let parts = import_mesh_parts(&mut topo, &mesh, 1e-7).unwrap();
-    assert_eq!((parts.solids.len(), parts.shells.len()), (2, 0));
-    for &solid in &parts.solids {
-        assert!((volume(&topo, solid) - 1000.0).abs() < 1e-9);
-        assert_valid(&topo, solid);
-    }
+    assert_eq!((parts.solids.len(), parts.shells.len()), (0, 1));
+    assert_eq!(topo.shell(parts.shells[0]).unwrap().faces().len(), 24);
+    assert!(import_mesh(&mut topo, &mesh, 1e-7).is_err());
+}
+
+/// Two triangles back to back on an edge of a cube: the edge has four
+/// triangles, two of them at one angle.
+#[test]
+fn a_double_sided_fin_on_the_edge_of_a_cube_makes_a_shell() {
+    let mut mesh = TriangleMesh::default();
+    add_cube(&mut mesh, [0.0; 3], 10.0, false);
+    mesh.positions.push(Point3::new(15.0, 15.0, 5.0));
+    // The edge from (10, 10, 0) to (10, 10, 10) is the edge from corner 2
+    // to corner 6.
+    mesh.indices.extend([2, 6, 8, 6, 2, 8]);
+
+    let mut topo = Topology::new();
+    let parts = import_mesh_parts(&mut topo, &mesh, 1e-7).unwrap();
+    assert_eq!((parts.solids.len(), parts.shells.len()), (0, 1));
+    assert_eq!(topo.shell(parts.shells[0]).unwrap().faces().len(), 14);
 }
 
 /// A triangle on the shared edge, wound against the rest of its cube, does
@@ -993,13 +1011,13 @@ fn add_box(mesh: &mut TriangleMesh, lo: [f64; 3], hi: [f64; 3], inward: bool) {
 }
 
 /// A reader with no normals in its file gives each vertex one direction.
-/// Over the two cubes, such normals sum to nothing, and the two cubes pair
-/// off at their shared side.
+/// Such normals say nothing, and the two cubes pair off at their shared
+/// edge by their winding.
 #[test]
-fn normals_in_one_direction_leave_two_cubes_that_share_a_side() {
+fn normals_in_one_direction_leave_two_cubes_that_share_an_edge() {
     let mut mesh = TriangleMesh::default();
     add_cube(&mut mesh, [0.0; 3], 10.0, false);
-    add_cube(&mut mesh, [0.0, 0.0, 10.0], 10.0, false);
+    add_cube(&mut mesh, [10.0, 10.0, 0.0], 10.0, false);
     mesh.normals = vec![Vec3::new(0.0, 0.0, 1.0); mesh.positions.len()];
 
     let mut topo = Topology::new();
@@ -1110,4 +1128,51 @@ fn an_outward_cube_on_the_wall_inside_a_cube_lies_in_it() {
     let mut topo = Topology::new();
     let err = import_mesh(&mut topo, &mesh, 1e-7).unwrap_err();
     assert!(err.to_string().contains("material"), "{err}");
+}
+
+/// Unit normals from `centre` out to each position from `first` on, or in
+/// to `centre` when `inward`.
+fn set_normals(mesh: &mut TriangleMesh, first: usize, centre: Point3, inward: bool) {
+    mesh.normals
+        .resize(mesh.positions.len(), Vec3::new(0.0, 0.0, 0.0));
+    for i in first..mesh.positions.len() {
+        let out = (mesh.positions[i] - centre).normalize().unwrap();
+        mesh.normals[i] = if inward { -out } else { out };
+    }
+}
+
+/// Both cubes are wound outward. The normals of the first point out and
+/// those of the second point in, so over the two the normals neither agree
+/// nor disagree with the winding: the shared edge does not pair off.
+#[test]
+fn normals_that_cancel_over_two_cubes_that_share_an_edge_make_a_shell() {
+    let mut mesh = TriangleMesh::default();
+    add_cube(&mut mesh, [0.0; 3], 10.0, false);
+    add_cube(&mut mesh, [10.0, 10.0, 0.0], 10.0, false);
+    set_normals(&mut mesh, 0, Point3::new(5.0, 5.0, 5.0), false);
+    set_normals(&mut mesh, 8, Point3::new(15.0, 15.0, 5.0), true);
+
+    let mut topo = Topology::new();
+    let parts = import_mesh_parts(&mut topo, &mesh, 1e-7).unwrap();
+    assert_eq!((parts.solids.len(), parts.shells.len()), (0, 1));
+    assert_eq!(topo.shell(parts.shells[0]).unwrap().faces().len(), 24);
+}
+
+/// The normals of the large box agree with its winding and outweigh the
+/// thin box, whose normals point against its winding. The thin box does
+/// not keep the winding that its pairs at the shared edge took.
+#[test]
+fn a_body_wound_against_its_normals_at_a_shared_edge_is_a_shell() {
+    let mut mesh = TriangleMesh::default();
+    add_box(&mut mesh, [0.0; 3], [20.0; 3], false);
+    set_normals(&mut mesh, 0, Point3::new(10.0, 10.0, 10.0), false);
+    let first = mesh.positions.len();
+    add_box(&mut mesh, [20.0, 20.0, 0.0], [25.0, 25.0, 20.0], false);
+    set_normals(&mut mesh, first, Point3::new(22.5, 22.5, 10.0), true);
+
+    let mut topo = Topology::new();
+    let parts = import_mesh_parts(&mut topo, &mesh, 1e-7).unwrap();
+    assert_eq!((parts.solids.len(), parts.shells.len()), (1, 1));
+    assert!((volume(&topo, parts.solids[0]) - 8000.0).abs() < 1e-9);
+    assert_eq!(topo.shell(parts.shells[0]).unwrap().faces().len(), 12);
 }

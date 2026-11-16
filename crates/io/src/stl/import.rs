@@ -47,6 +47,11 @@ pub struct MeshImport {
 ///   the two triangles run the edge in opposite directions. When two ways
 ///   to pair them do that, each pair holds the material between its two
 ///   triangles, so two closed bodies that share an edge are two bodies.
+/// - The triangles of such an edge do not pair off, and join one shell,
+///   when two of them lie at one angle (as two cubes that share a side do),
+///   or when the stored normals neither agree nor disagree with the
+///   winding. A body that does not keep the winding of its pairs is a
+///   shell too.
 /// - A body closes when each of its edges has two triangles that run it in
 ///   opposite directions. Triangles of a closed body that are wound against
 ///   their neighbours are turned.
@@ -114,7 +119,16 @@ impl MeshBodies {
             });
         }
 
-        let links = Links::read(&tris, &points, &votes, tolerance);
+        // Normals in one direction for each vertex (a reader's fill for a
+        // file with none) say nothing about the sides of the triangles that
+        // pair off round an edge.
+        let one_direction = mesh.normals.first().is_some_and(|first| {
+            let bits = |n: &Vec3| [n.x(), n.y(), n.z()].map(f64::to_bits);
+            mesh.normals.iter().all(|n| bits(n) == bits(first))
+        });
+        let no_votes = vec![0.0; votes.len()];
+        let pair_votes = if one_direction { &no_votes } else { &votes };
+        let links = Links::read(&tris, &points, pair_votes, tolerance);
         let mut bodies = split_bodies(&mut tris, &votes, &points, &links);
         let placement = assign_cavities(&mut bodies, &mut tris, &points, &links, tolerance);
         Ok(Self {
@@ -402,6 +416,9 @@ struct Links {
     /// At an edge of more than two triangles that pair off round it, the
     /// triangle across the edge from each one.
     pairs: HashMap<(usize, (usize, usize)), usize>,
+    /// For each triangle, whether the pairs took it as wound the other way.
+    /// Empty when no edge has more than two triangles.
+    facing: Vec<bool>,
 }
 
 impl Links {
@@ -414,10 +431,12 @@ impl Links {
             }
         }
         let mut pairs = HashMap::new();
-        if uses.values().any(|list| list.len() > 2) {
-            let turned = patch_turns(tris, &uses, votes);
+        let facing = if uses.values().any(|list| list.len() > 2) {
+            let (turned, unsure) = patch_turns(tris, &uses, votes);
             for (&key, list) in &uses {
-                if list.len() <= 2 {
+                // The triangles of an edge are in one group, so one of them
+                // tells whether its side is sure.
+                if list.len() <= 2 || unsure[list[0].0] {
                     continue;
                 }
                 for [s, t] in pair_round_edge(key, list, &turned, tris, points, tolerance) {
@@ -425,8 +444,23 @@ impl Links {
                     pairs.insert((t, key), s);
                 }
             }
+            turned
+        } else {
+            Vec::new()
+        };
+        Self {
+            uses,
+            pairs,
+            facing,
         }
-        Self { uses, pairs }
+    }
+
+    /// Whether the triangle `t` pairs off round one of its edges.
+    fn is_paired(&self, t: usize, tri: [usize; 3]) -> bool {
+        (0..3).any(|k| {
+            self.pairs
+                .contains_key(&(t, edge_key(tri[k], tri[(k + 1) % 3])))
+        })
     }
 
     /// The triangle across the edge `key` from `t`: the other triangle of an
@@ -444,17 +478,19 @@ impl Links {
 }
 
 /// For each triangle, whether it is wound against the side of the triangles
-/// joined to it through edges of two triangles.
+/// joined to it through edges of two triangles, and whether that side is
+/// unsure.
 ///
 /// Such a set takes the side of most of its triangles as they are wound.
-/// The sets joined through any edge turn over together when their stored
-/// normals point against their sides, as a closed body does in
-/// [`split_bodies`].
+/// The sets joined through any edge (a group) turn over together when
+/// their stored normals point against their sides, as a closed body does in
+/// [`split_bodies`]. When the normals of a group neither agree nor disagree
+/// with its sides, the side of the group is unsure.
 fn patch_turns(
     tris: &[[usize; 3]],
     uses: &HashMap<(usize, usize), Vec<(usize, bool)>>,
     votes: &[f64],
-) -> Vec<bool> {
+) -> (Vec<bool>, Vec<bool>) {
     let mut turn = vec![false; tris.len()];
     let mut seen = vec![false; tris.len()];
     let mut patch = Vec::new();
@@ -508,13 +544,19 @@ fn patch_turns(
         tally[g].0 += if turn[t] { -votes[t] } else { votes[t] };
         tally[g].1 += votes[t].abs();
     }
+    // The normals of a group decide when they agree, or disagree, three to
+    // one by weight: the rule that turns a closed body in `split_bodies`.
+    // A group with no normals keeps the side of its winding.
+    let mut unsure = vec![false; tris.len()];
     for t in 0..tris.len() {
         let (vote, weight) = tally[group_of(&mut group, t)];
         if vote < -0.5 * weight {
             turn[t] = !turn[t];
+        } else if weight > 0.0 && vote <= 0.5 * weight {
+            unsure[t] = true;
         }
     }
-    turn
+    (turn, unsure)
 }
 
 /// The first triangle of the group of `t`, in a forest of groups.
@@ -593,37 +635,22 @@ fn pair_round_edge(
         .collect();
     round.sort_by(|a, b| a.angle.total_cmp(&b.angle));
 
-    // The turn from one side to the next.
-    let gap = |a: &Side, b: &Side| {
-        let g = b.angle - a.angle;
-        if g < 0.0 {
-            g + std::f64::consts::TAU
+    // Two triangles at one angle (within the angular tolerance, or within
+    // the merge tolerance at their far corners) leave the order round the
+    // edge open. Two cubes that touch along a side and a wall of no
+    // thickness look the same there, so the edge does not pair off.
+    let angular = brepkit_math::tolerance::Tolerance::new().angular;
+    let close = (0..n).any(|i| {
+        let (a, b) = (&round[i], &round[(i + 1) % n]);
+        let gap = if i + 1 == n {
+            b.angle + std::f64::consts::TAU - a.angle
         } else {
-            g
-        }
-    };
-    // Start after the widest gap, so that no run of sides at one angle
-    // wraps round the end of the list.
-    let widest = (0..n)
-        .max_by(|&i, &j| {
-            gap(&round[i], &round[(i + 1) % n]).total_cmp(&gap(&round[j], &round[(j + 1) % n]))
-        })
-        .unwrap_or(0);
-    round.rotate_left((widest + 1) % n);
-    // At one angle (within the tolerance at the far corners), the sides
-    // that face up come first: two faces that touch hold no material
-    // between them.
-    let mut start = 0;
-    while start < n {
-        let mut end = start + 1;
-        while end < n
-            && gap(&round[end - 1], &round[end]) * round[end - 1].reach.min(round[end].reach)
-                <= tolerance.max(0.0)
-        {
-            end += 1;
-        }
-        round[start..end].sort_by_key(|side| !side.up);
-        start = end;
+            b.angle - a.angle
+        };
+        gap <= angular || gap * a.reach.min(b.reach) <= tolerance.max(0.0)
+    });
+    if close {
+        return Vec::new();
     }
 
     let fits = |shift: usize| {
@@ -737,6 +764,18 @@ fn split_bodies(
                     .copied()
                     .filter(|t| !is_turned.contains(t))
                     .collect();
+            }
+            // The pairs round an edge hold the material of the winding that
+            // they took. A body that ends up wound the other way is a shell.
+            if body.tris.iter().any(|&t| links.is_paired(t, tris[t])) {
+                let now: HashSet<usize> = turned.iter().copied().collect();
+                if body
+                    .tris
+                    .iter()
+                    .any(|&t| now.contains(&t) != links.facing[t])
+                {
+                    return None;
+                }
             }
             for &t in &turned {
                 tris[t].swap(1, 2);
