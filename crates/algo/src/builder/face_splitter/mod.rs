@@ -7599,7 +7599,10 @@ fn split_face_2d_impl(
     // one continuous span.
     let mut one_turn: Option<(f64, f64)> = None;
     if u_periodic
-        && matches!(surface, FaceSurface::Cone(_) | FaceSurface::Cylinder(_))
+        && matches!(
+            surface,
+            FaceSurface::Cone(_) | FaceSurface::Cylinder(_) | FaceSurface::Torus(_)
+        )
         && all_edges.len() > n_boundary_edges
         && let (Some(u_period), _) = super::pcurve_compute::surface_periods(&surface)
     {
@@ -7713,7 +7716,13 @@ fn split_face_2d_impl(
                 }
             }
             if max_gap > 0.05 {
-                let lo = gap_start + max_gap;
+                // A band round the axis over more than half the tube has only
+                // its two rims' tube angles for ends, and the wider gap
+                // between them runs across the face: its outline says where
+                // the face starts.
+                let lo =
+                    super::super::pave_filler::phase_ff::face_tube_window(topo, face_id, &surface)
+                        .map_or(gap_start + max_gap, |(start, _)| start);
                 for e in &mut all_edges {
                     let remap = |uv: Point2| -> Point2 {
                         let mut d = (uv.y() - lo).rem_euclid(v_period);
@@ -8932,8 +8941,28 @@ fn split_face_2d_impl(
             // along a section (a conic tongue off a cone's rim, the lens
             // between a cylinder's rim and an oblique plane's ellipse traced
             // on its strip) bounds a region of the face too; only a loop of
-            // sections alone is a hole.
-            let on_boundary = (matches!(surface, FaceSurface::Cone(_)) || strip)
+            // sections alone is a hole. A torus band's seam is a meridian
+            // arc, not a line, so its pieces read this way as well; but a
+            // section that retraces a stretch of the band's rim (two half
+            // rings meeting along it) closes a sliver with the rim, or runs
+            // out and back in the loop round the whole band, and neither
+            // bounds a piece of the face.
+            let torus_piece = matches!(surface, FaceSurface::Torus(_)) && {
+                let runs_both_ways = wire_loop.iter().any(|a| {
+                    a.source_edge_idx.is_some()
+                        && wire_loop.iter().any(|b| {
+                            b.source_edge_idx == a.source_edge_idx && b.forward != a.forward
+                        })
+                });
+                let pts = sample_wire_loop_uv_periodic(&wire_loop, u_per_opt, v_per_opt);
+                let perimeter: f64 = pts
+                    .iter()
+                    .zip(pts.iter().cycle().skip(1))
+                    .map(|(a, b)| (*b - *a).length())
+                    .sum();
+                !runs_both_ways && signed_area_2d(&pts).abs() > perimeter * tol.linear
+            };
+            let on_boundary = (matches!(surface, FaceSurface::Cone(_)) || torus_piece || strip)
                 && wire_loop.iter().any(|e| e.source_edge_idx.is_none())
                 && wire_loop.iter().any(|e| e.source_edge_idx.is_some());
             // On a partial band, a loop of sections alone (a strut poking

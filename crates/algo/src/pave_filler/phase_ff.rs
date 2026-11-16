@@ -2132,7 +2132,11 @@ fn in_window(v: f64, (v0, v1): (f64, f64), margin: f64, periodic: bool) -> bool 
 /// A torus face's tube-angle arc from its outer-wire samples, from `v0` to
 /// `v1 > v0` (past a turn when it crosses the angle's origin). `None` when
 /// the samples leave no arc out (a tube running all the way round).
-fn face_tube_window(topo: &Topology, face_id: FaceId, surface: &FaceSurface) -> Option<(f64, f64)> {
+pub fn face_tube_window(
+    topo: &Topology,
+    face_id: FaceId,
+    surface: &FaceSurface,
+) -> Option<(f64, f64)> {
     const N_GAP: usize = 64;
     let face = topo.face(face_id).ok()?;
     let wire = topo.wire(face.outer_wire()).ok()?;
