@@ -177,8 +177,14 @@ struct Links<const N: usize> {
 }
 
 impl<const N: usize> Links<N> {
+    /// Grows by at most an eighth of the slots, for the reason in
+    /// [`Arena::reserve`].
     fn reserve(&mut self, additional: usize) {
-        self.slots.reserve(additional);
+        let len = self.slots.len();
+        if self.slots.capacity() - len >= additional {
+            return;
+        }
+        self.slots.reserve_exact(additional.max(len / 8));
     }
 
     /// Adds a link from `from` to `to`.
