@@ -343,6 +343,7 @@ impl FaceLoops {
         // Each separator's side that holds the face: the side of all the
         // other wires.
         let mut face_sides: Vec<(Separator, bool)> = Vec::new();
+        let mut all_settle = true;
         for &s in &separators {
             let mut sides: Vec<(usize, bool)> = Vec::new();
             for &b in readable.iter().filter(|&&b| !s.holds(b)) {
@@ -356,6 +357,7 @@ impl FaceLoops {
                 }
             }
             let Some(&(_, first)) = sides.first() else {
+                all_settle = false;
                 continue;
             };
             let face_side = if s.holds(0) {
@@ -384,13 +386,14 @@ impl FaceLoops {
         }
         // An open end of the surface on the face's side of every wire lies
         // in the face, which then has no end there. Every wire's side is
-        // needed for that: a face with a wire that does not read is let be.
+        // needed for that: a face with a wire that does not read, or whose
+        // side the other wires do not settle, is let be.
         let ends: &[Point2] = match self.drawing {
             Drawing::Disc => &[FAR],
             Drawing::Annulus => &[FAR, Point2::new(0.0, 0.0)],
             Drawing::Sphere | Drawing::Torus(_) => &[],
         };
-        if readable.len() == n && face_sides.iter().any(|&(s, _)| s.holds(0)) {
+        if readable.len() == n && all_settle && face_sides.iter().any(|&(s, _)| s.holds(0)) {
             for &end in ends {
                 let held = face_sides.iter().all(|&(s, face_side)| {
                     let side = if end == FAR {
@@ -1641,6 +1644,51 @@ mod tests {
             let (u, v) = torus.project_point(m);
             assert_eq!(loops.band((0, 1), Point2::new(u, v)), None, "{m:?}");
         }
+    }
+
+    /// A wire's drawing: a polygon round `center` of radius `radius`, with
+    /// its chords standing off the wire by up to `sag`.
+    fn round_loop(center: Point2, radius: f64, sag: f64) -> Loop {
+        let points: Vec<Point2> = (0..64)
+            .map(|k| {
+                let at = polar(radius, TAU * f64::from(k) / 64.0);
+                Point2::new(center.x() + at.x(), center.y() + at.y())
+            })
+            .collect();
+        let pieces = (0..64)
+            .map(|k| Boundary2::Segment(points[k], points[(k + 1) % 64]))
+            .collect();
+        let probes = points.clone();
+        Loop {
+            points,
+            pieces,
+            shift: Vec2::new(0.0, 0.0),
+            sag,
+            lo: center - Vec2::new(radius, radius),
+            hi: center + Vec2::new(radius, radius),
+            probes,
+        }
+    }
+
+    /// A band of a cylinder between two rims, drawn round its axis 1e-3
+    /// apart. The outer rim's chords may stand off it by 1e-2, so no point
+    /// of the inner rim reads a side of it. The band's other end reads
+    /// nothing, and the check reports no hole.
+    #[test]
+    fn a_rim_with_no_settled_side_leaves_the_open_ends_unread() {
+        let origin = Point2::new(0.0, 0.0);
+        let loops = FaceLoops {
+            drawing: Drawing::Annulus,
+            loops: vec![
+                Some(round_loop(origin, 1.0, 1e-9)),
+                Some(round_loop(origin, 1.001, 1e-2)),
+            ],
+            reach: 1e-9,
+            whole: false,
+        };
+        assert_eq!(loops.side_of_wire(1, 0), None);
+        assert_eq!(loops.side_of_wire(0, 1), Some(false));
+        assert_eq!(loops.misplaced_hole(), None);
     }
 
     /// How far a surface strays from the straight line between a chord's
