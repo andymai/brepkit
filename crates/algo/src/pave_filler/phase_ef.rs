@@ -1111,9 +1111,6 @@ fn survey_pairs(
                 .map(brepkit_topology::face::Face::surface)
         })
         .collect();
-    let any_nurbs = surfaces
-        .iter()
-        .any(|s| matches!(s, Some(FaceSurface::Nurbs(_))));
     let mut pieces: Vec<Option<Vec<Aabb3>>> = (0..edges.len()).map(|_| None).collect();
     let mut pairs = Vec::new();
     for (edge_idx, &eid) in edges.iter().enumerate() {
@@ -1134,9 +1131,9 @@ fn survey_pairs(
             }
             Aabb3::try_from_points(pts).map(|a| a.expanded(tol.linear))
         };
-        if any_nurbs {
-            pieces[edge_idx] = curve_piece_boxes(curve, start_pos, end_pos, t0, t1);
-        }
+        // An edge's piece boxes serve only its pairs with B-spline faces,
+        // so they are made for the first such pair that is kept.
+        let mut boxed = false;
         for (face_idx, surface) in surfaces.iter().enumerate() {
             let Some(surface) = surface else {
                 continue;
@@ -1153,6 +1150,10 @@ fn survey_pairs(
                 && !ea.intersects(hull.expanded(tol.linear))
             {
                 continue;
+            }
+            if !boxed && matches!(surface, FaceSurface::Nurbs(_)) {
+                pieces[edge_idx] = curve_piece_boxes(curve, start_pos, end_pos, t0, t1);
+                boxed = true;
             }
             pairs.push(Pair {
                 edge_idx,

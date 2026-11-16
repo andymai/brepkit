@@ -343,7 +343,7 @@ fn halve(net: &[Hpoint], nu: usize, nv: usize, along_u: bool) -> (Vec<Hpoint>, V
         for r in 1..len {
             for k in 0..len - r {
                 for c in 0..4 {
-                    tmp[k][c] = 0.5 * (tmp[k][c] + tmp[k + 1][c]);
+                    tmp[k][c] = f64::midpoint(tmp[k][c], tmp[k + 1][c]);
                 }
             }
             lo[at(line, r)] = tmp[0];
@@ -418,7 +418,32 @@ mod tests {
 
     #[test]
     fn sub_patch_boxes_hold_their_span() {
-        let s = u_wall();
+        // Weights of 1e308 leave the surface as it is, and its homogeneous
+        // points stay finite; the sum of two of them does not, so the
+        // halvings must not form it.
+        let heavy = NurbsSurface::new(
+            2,
+            1,
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            [0.0, 0.5, 0.0]
+                .iter()
+                .enumerate()
+                .map(|(i, &z)| {
+                    let x = 0.05 * i as f64 + 0.9;
+                    vec![Point3::new(x, 0.0, z), Point3::new(x, 1.0, z)]
+                })
+                .collect(),
+            vec![vec![1e308; 2]; 3],
+        )
+        .unwrap();
+        for s in [u_wall(), heavy] {
+            sub_patch_boxes_hold_the_span_of(&s);
+        }
+    }
+
+    fn sub_patch_boxes_hold_the_span_of(s: &NurbsSurface) {
+        let s = s.clone();
         let index = SpanIndex::new(&s).unwrap();
         for i in 0..index.len() {
             let boxes = index.sub_boxes_of(&s, i).unwrap();
