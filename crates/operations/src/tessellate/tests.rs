@@ -4910,10 +4910,12 @@ fn samples_along_an_arc_keep_their_order_across_the_wrap() {
 }
 
 /// One face of `surface` bounded by `sides`, each a degree 1 to 3 spline
-/// given by its poles and running on from the last.
+/// given by its poles and running on from the last, or a straight edge where
+/// its index is in `lines`.
 fn spline_bounded_face(
     surface: NurbsSurface,
     sides: &[Vec<Point3>],
+    lines: &[usize],
 ) -> (
     Topology,
     brepkit_topology::face::FaceId,
@@ -4935,13 +4937,14 @@ fn spline_bounded_face(
             let degree = poles.len() - 1;
             let mut knots = vec![0.0; degree + 1];
             knots.extend(vec![1.0; degree + 1]);
-            let curve =
-                NurbsCurve::new(degree, knots, poles.clone(), vec![1.0; poles.len()]).unwrap();
-            let edge = Edge::new(
-                corners[k],
-                corners[(k + 1) % corners.len()],
-                EdgeCurve::NurbsCurve(curve),
-            );
+            let curve = if lines.contains(&k) {
+                EdgeCurve::Line
+            } else {
+                EdgeCurve::NurbsCurve(
+                    NurbsCurve::new(degree, knots, poles.clone(), vec![1.0; poles.len()]).unwrap(),
+                )
+            };
+            let edge = Edge::new(corners[k], corners[(k + 1) % corners.len()], curve);
             OrientedEdge::new(topo.add_edge(edge), true)
         })
         .collect();
@@ -4954,10 +4957,12 @@ fn spline_bounded_face(
 
 /// The face S(u, v) = (u, v - u^2, 0) over the trapezoid (0, 0), (1, 0),
 /// (0.8, 0.12), (0.1, 0.12), its long sides straight in space: the long
-/// sides' chords cross in (u, v), at u = 0.4. One long side is straight, or
-/// bends 6e-4 to either side of its chord and crosses it at its middle: no
-/// chord sags at its middle. After the chord split, the outline's chords in
-/// (u, v) cross nowhere.
+/// sides' chords cross in (u, v), at u = 0.4. One long side is a straight
+/// spline, a straight edge, or a spline that bends 6e-4 to either side of its
+/// chord and crosses it at its middle: no chord sags at its middle. A
+/// straight edge's line in (u, v) runs as far off it as the spline's: halving
+/// the spline alone leaves the crossing. After the chord split, the outline's
+/// chords in (u, v) cross nowhere.
 #[test]
 fn chords_of_straight_or_inflected_sides_that_cross_in_uv_are_split() {
     let p = Point3::new;
@@ -4986,14 +4991,18 @@ fn chords_of_straight_or_inflected_sides_that_cross_in_uv_are_split() {
         p(2.0 / 3.0, -0.002, 0.0),
         corners[1],
     ];
-    for bottom in [vec![corners[0], corners[1]], inflected] {
+    for (bottom, lines) in [
+        (vec![corners[0], corners[1]], vec![]),
+        (vec![corners[0], corners[1]], vec![0]),
+        (inflected, vec![]),
+    ] {
         let sides = vec![
             bottom.clone(),
             vec![corners[1], corners[2]],
             vec![corners[2], corners[3]],
             vec![corners[3], corners[0]],
         ];
-        let (topo, face, _) = spline_bounded_face(surface.clone(), &sides);
+        let (topo, face, _) = spline_bounded_face(surface.clone(), &sides, &lines);
         let on_face = FaceSurface::Nurbs(surface.clone());
         for deflection in [0.5, 0.1] {
             let wire = topo.wire(topo.face(face).unwrap().outer_wire()).unwrap();
@@ -5009,7 +5018,9 @@ fn chords_of_straight_or_inflected_sides_that_cross_in_uv_are_split() {
                 )
                 .unwrap();
                 edge_points.insert(oe.edge().index(), points);
-                params.insert(oe.edge().index(), ts.unwrap());
+                if let Some(ts) = ts {
+                    params.insert(oe.edge().index(), ts);
+                }
             }
             assert_eq!(edge_points[&wire.edges()[0].edge().index()].len(), 2);
             super::solid::split_crossing_spline_chords(
@@ -5043,7 +5054,7 @@ fn chords_of_straight_or_inflected_sides_that_cross_in_uv_are_split() {
                     assert!(
                         orient(a, b, c) * orient(a, b, d) >= 0.0
                             || orient(c, d, a) * orient(c, d, b) >= 0.0,
-                        "{} sides, deflection {deflection}: chords {i} and {j} cross in {outline:?}",
+                        "{} poles, lines {lines:?}, deflection {deflection}: chords {i} and {j} cross in {outline:?}",
                         bottom.len()
                     );
                 }
@@ -5082,7 +5093,7 @@ fn a_straight_spline_with_an_uneven_parameter_keeps_its_ends() {
         vec![p(100.0, 1.0, 0.0), p(0.0, 1.0, 0.0)],
         vec![p(0.0, 1.0, 0.0), p(0.0, 0.0, 0.0)],
     ];
-    let (topo, _, solid) = spline_bounded_face(surface, &sides);
+    let (topo, _, solid) = spline_bounded_face(surface, &sides, &[]);
     for deflection in [0.5, 0.01] {
         let mesh = tessellate_solid(&topo, solid, deflection).unwrap();
         let on_edge = mesh
