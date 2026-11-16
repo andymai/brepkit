@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794807571190,
+  "lastUpdate": 1794808143774,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -71495,6 +71495,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24824849,
             "range": "± 118885",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "3408aad5a42c90b5806ea4f96dd91ae8f5699d3e",
+          "message": "fix(check): report two flat faces of one solid that cover the same area (#2512)\n\n## Summary\n\n`validate_solid` accepted a solid with a flat face that lies on a part\nof another flat face. Each edge of such a solid has two uses and the\nfaces agree across each edge, so no check saw the fault.\n`validate_solid` now reports each pair of plane faces of one solid that\nlie on one plane and cover the same area, either way round. Closes\n#2459.\n\nThe new check is `check_faces_overlap` in\n`crates/check/src/validate/face_overlap.rs`, with\n`CheckId::SolidFacesOverlap`.\n\n- The check sorts the plane faces by the size of their offset from the\nmiddle of the solid's plane faces. Two faces on one plane share that\nsize whichever way they face. Within each run of offsets close to each\nother, it reads a face only against the faces whose boxes meet its own.\nIt sweeps the boxes along the axis the run spreads most along.\n- It reads a pair only when a vertex of one face lies within the\ntolerance of the other's plane, and the faces' boxes meet. The normals,\nup to their sign, must also agree within the tolerance over the faces'\nsize, and within 1e-4 radians.\n- It reads each face of such a pair in their common plane with\n`face_region_2d`, on the edges' own lines, arcs and B-splines.\n- It cuts each edge of each face where the edge meets the other face's\nboundary. It solves lines and arcs of circles exactly.\n- It reads a B-spline edge, or an arc of an ellipse against another arc,\nin stretches, a B-spline's kept to its knot spans. A stretch lies wholly\noutside or inside the other face only when its middle lies farther from\nthat face's boundary than the stretch reaches. An edge that both faces\nuse runs along the other face's boundary, and the check reads it beside\nthe middle of each first stretch. The check halves each other stretch,\nbreadth first, up to 128 stretches within each of an edge's first\nstretches.\n- Beside each stretch between two cuts, it reads points on each side of\nthe stretch's middle. The first is the edge's length away, and the last\nat the tolerance, which `side` keeps clear of each face's boundary. The\ncheck measures an edge along the chords between 64 even steps and a\nB-spline's knots. The check reads a stretch's length through its middle,\nso a closed edge has a length. If such a point lies inside both faces,\nthe faces share an area. The check does not report faces that meet only\nalong an edge or at a point.\n\n`validate_solid` and `validate_solid_relaxed` in operations report each\npair as an error.\n\nThe check found two more solids of this kind in the suite:\n\n- The round of the seam-stub prism in\n`regress_fillet_variable_retry_seam_stub.rs` ends on a wall that it does\nnot notch. A flat patch on that wall closes the round. That is the fault\nthat #2459 names for a runout patch. I filed #2511 for it, and I marked\nits three tests as ignored open repros.\n- `thicken_a_cylinder_sector_just_short_of_a_full_turn` builds a ring\nwith a slit 5e-8 wide. Its two end walls lie within the tolerance of\neach other on one plane. The test expected the four short rims only, and\nnow expects the pair of walls too.\n\nThe fillet of #2446 no longer makes the patch: the seven tests in\n`fillet_plane_vault.rs` pass with the check. So the new test builds the\nsolid from topology.\n\n## Tests\n\n- `crates/operations/tests/validate_faces_overlap.rs` builds a 10 cube\nwith a chamfer of 1 along one edge. Each end wall keeps its whole\nsquare, and a triangle on the wall, facing into the cube, closes the\nchamfer's end. `validate_solid` must report exactly two errors, the two\npairs of faces that cover the same area. These are its only errors, so\nwithout the new check the solid passes. The volume must be 995. The same\ncube with notched end walls must be valid.\n- Nineteen unit tests in `face_overlap.rs` cover the patched cube and\nthe plain chamfered cube. They also cover a face split in two halves,\ntwo faces that overlap facing one way, and a face inside another. A disc\nthat fills a ring's round hole passes, and the check reports a disc\nacross the hole's rim.\n- Four of the unit tests come from the review. The check reports two\nsquares that share a corner 0.1 across, or a strip 0.001 wide. Squares\nthat meet along an edge or at a corner pass. The check reports two faces\n0.01 across, one on the other, and two faces at `x = 1e6` on planes 1e-8\nradians apart. It also reports a half disc whose arc crosses a square's\nedge. The first three tests fail on the first commit of this branch.\n- Three more unit tests come from the second review. The check reports a\nstrip ten tolerances wide that two squares share, and a disc on a larger\ndisc about one centre. It also reports two overlapping squares whose\nstored normals part by 2e-9 radians, for eight normals round a circle.\nThe three tests fail on the second commit.\n- Two more unit tests come from the third review. The check reports two\nsquares seven tolerances across, one on the other. It also reports two\nthin rectangles of straight B-spline edges that cross, and passes two\nthat do not. The two tests fail on the third commit.\n- One more unit test comes from the fourth review. It has two squares\nside by side. Each outline is one closed straight B-spline that closes\non the edge they share. The check reports a tab of the lower square that\nreaches into the upper one, and passes the squares without the tab. The\ntest fails on the fourth commit.\n- One more unit test comes from the fifth review. A face lies under a\nB-spline of 64 cubic spans, each with its ends and middle on `y = 0`.\nThe check reports the humps of the spans that reach into a rectangle\nabove the line. The test fails on the fifth commit.\n- One more unit test comes from the note of the sixth review. The check\nreports two discs twenty tolerances across, one on the other, each\nbounded by one closed B-spline circle. The test fails on the sixth\ncommit.\n- One more unit test comes from the seventh review. The check reports\ntwo squares, one on the other, each bounded by one closed straight\nB-spline whose knots crowd its parameter into the first fifth. The test\nfails on the seventh commit.\n- One more unit test comes from the note of the eighth review. The check\nreports two squares three tolerances across, one on the other. The test\nfails on the eighth commit.\n- On the first commit, `cargo nextest run --no-fail-fast -p\nbrepkit-check -p brepkit-operations -p brepkit-io -p brepkit-wasm -p\nbrepkit-heal` ran 3229 tests: 3225 passed, and nextest skipped 24. The\nfour failures were the thicken test and the three seam-stub tests above.\nAfter the changes above, the thicken test passes and the three seam-stub\ntests do not run.\n- On each later commit: the 1150 tests of the operations library pass.\n`validate_faces_overlap`, `regress_fillet_variable_retry_seam_stub` and\n`fillet_plane_vault` pass. The three ignored seam-stub tests still\nreport the pairs of #2511.\n- On the last commit, `cargo nextest run --cargo-profile ci\n--no-fail-fast` for the same five crates ran 3240 tests: all passed, and\nnextest skipped 27, the three seam-stub tests among them.\n- On the ninth commit, the pose sweep and the truth audit give the same\noutput as `main`. The two later commits change only which pairs of faces\nthe check compares, not the result.\n- `cargo clippy --all-targets -- -D warnings` for the touched crates and\n`cargo fmt` pass. The boundary, doc path and `mul_add` scripts pass.\n\n## Cost\n\nRelease build, the check's share of `validate_solid`, a mean of five\nruns on the last commit:\n\n| Solid | Faces | `validate_solid` | The overlap check |\n| --- | ---: | ---: | ---: |\n| Plate with 1 hole | 7 | 0.161 ms | 0.001 ms |\n| Plate with 25 holes | 31 | 3.413 ms | 0.002 ms |\n| Plate with 900 holes | 906 | 130.897 ms | 0.006 ms |\n| Comb of 100 teeth along x | 404 | 1.998 ms | 0.097 ms |\n| Comb of 1000 teeth along x | 4004 | 19.988 ms | 1.022 ms |\n| Comb of 1000 teeth along y | 4004 | 20.251 ms | 1.003 ms |\n\nA plate is a box drilled through by `compound_cut`. A comb is an\nextruded outline whose 1000 tops lie on one plane.",
+          "timestamp": "2026-11-16T05:45:35Z",
+          "tree_id": "2720751b98af09dfd7ad530f0dcd46b4d31f9410",
+          "url": "https://github.com/andymai/brepkit/commit/3408aad5a42c90b5806ea4f96dd91ae8f5699d3e"
+        },
+        "date": 1794808134405,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 782923,
+            "range": "± 28437",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 849249,
+            "range": "± 24123",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 9085,
+            "range": "± 29",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 500157,
+            "range": "± 3849",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 18181127,
+            "range": "± 53289",
             "unit": "ns/iter"
           }
         ]
