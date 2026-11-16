@@ -204,6 +204,31 @@ impl EdgeCurve {
         }
     }
 
+    /// Whether the edge from `start` to `end` on this curve is the straight
+    /// segment between them: a line, or a NURBS curve whose control points
+    /// all lie within `tol` of that segment. With every weight positive the
+    /// curve lies in its control points' hull, so it lies on the segment.
+    #[must_use]
+    pub fn is_straight_between(&self, start: Point3, end: Point3, tol: f64) -> bool {
+        match self {
+            Self::Line => true,
+            Self::NurbsCurve(curve) => {
+                let chord = end - start;
+                let length2 = chord.dot(chord);
+                if length2 <= tol * tol
+                    || !curve.weights().iter().all(|w| w.is_finite() && *w > 0.0)
+                {
+                    return false;
+                }
+                curve.control_points().iter().all(|&p| {
+                    let along = ((p - start).dot(chord) / length2).clamp(0.0, 1.0);
+                    (start + chord * along - p).length() <= tol
+                })
+            }
+            Self::Circle(_) | Self::Ellipse(_) => false,
+        }
+    }
+
     /// Type tag string for debugging and serialization.
     #[must_use]
     pub const fn type_tag(&self) -> &'static str {
@@ -339,6 +364,29 @@ mod tests {
     use crate::arena::Arena;
     use crate::vertex::Vertex;
     use brepkit_math::vec::Point3;
+
+    /// A line, and a NURBS curve whose control points lie on the segment
+    /// between its ends, are straight; a NURBS curve with a control point
+    /// off the segment, or past its end, is not, and neither is an arc.
+    #[test]
+    fn is_straight_between_reads_the_control_points() {
+        let (a, b) = (Point3::new(0.0, 0.0, 0.0), Point3::new(2.0, 0.0, 0.0));
+        let nurbs = |points: Vec<Point3>| {
+            let knots = vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0];
+            EdgeCurve::NurbsCurve(NurbsCurve::new(2, knots, points, vec![1.0; 3]).unwrap())
+        };
+        assert!(EdgeCurve::Line.is_straight_between(a, b, 1e-9));
+        let on = nurbs(vec![a, Point3::new(0.5, 0.0, 0.0), b]);
+        assert!(on.is_straight_between(a, b, 1e-9));
+        let off = nurbs(vec![a, Point3::new(1.0, 1e-6, 0.0), b]);
+        assert!(!off.is_straight_between(a, b, 1e-9));
+        let past = nurbs(vec![a, Point3::new(3.0, 0.0, 0.0), b]);
+        assert!(!past.is_straight_between(a, b, 1e-9));
+        let arc = EdgeCurve::Circle(
+            Circle3D::new(Point3::new(1.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0).unwrap(),
+        );
+        assert!(!arc.is_straight_between(a, b, 1e-9));
+    }
 
     fn make_test_vertices() -> (VertexId, VertexId) {
         let mut arena: Arena<Vertex> = Arena::new();

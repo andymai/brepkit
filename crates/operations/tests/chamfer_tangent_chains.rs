@@ -1,5 +1,6 @@
 //! Chamfers along tangent chains of lines and arcs on one flat cap: an
-//! obround prism's bottom edges and an obround pocket's floor and mouth.
+//! obround prism's bottom edges and an obround pocket's floor and mouth. Also
+//! a D prism's corner edge along a ruling of its round wall.
 //!
 //! A chamfer of distance `d` sweeps a right triangle of area `d^2 / 2` along
 //! the chain, so it removes (or, on a concave edge, adds) that area times the
@@ -379,13 +380,9 @@ fn a_distance_past_the_arc_or_the_wall_is_refused() {
     assert!(chamfer(&mut topo, solid, &edges, HEIGHT + 1.0).is_err());
 }
 
-/// A selection no exact path takes must not come back with the solid's arcs
-/// flattened to chords: the planar rebuild reads only a face's corners.
-#[test]
-fn the_planar_rebuild_refuses_curved_edges() {
-    let mut topo = Topology::new();
-    // A D: a half disc about the origin closed by a straight back wall, whose
-    // back edge ends at a sharp corner with the arc's wall.
+/// A D: a half disc of radius 5 about the origin, closed by a straight back
+/// wall on `x = 0`, 4 high.
+fn d_prism(topo: &mut Topology) -> SolidId {
     let a = topo.add_vertex(Vertex::new(Point3::new(0.0, -5.0, 0.0), 1e-7));
     let b = topo.add_vertex(Vertex::new(Point3::new(0.0, 5.0, 0.0), 1e-7));
     let arc = EdgeCurve::Circle(
@@ -401,9 +398,12 @@ fn the_planar_rebuild_refuses_curved_edges() {
         d: 0.0,
     };
     let face = topo.add_face(Face::new(wire, Vec::new(), plane));
-    let solid = extrude(&mut topo, face, Vec3::new(0.0, 0.0, 1.0), 4.0).unwrap();
-    // The vertical edge at the corner between the wall and the arc's wall.
-    let corner = solid_edges(&topo, solid)
+    extrude(topo, face, Vec3::new(0.0, 0.0, 1.0), 4.0).unwrap()
+}
+
+/// The vertical edge of `solid` with its ends above `y = 0`.
+fn upper_upright(topo: &Topology, solid: SolidId) -> EdgeId {
+    solid_edges(topo, solid)
         .unwrap()
         .into_iter()
         .find(|&e| {
@@ -412,7 +412,296 @@ fn the_planar_rebuild_refuses_curved_edges() {
             let q = topo.vertex(edge.end()).unwrap().point();
             (p.z() - q.z()).abs() > 1.0 && p.y() > 0.0
         })
-        .unwrap();
+        .unwrap()
+}
+
+/// The D's corner edge between its back wall and its round wall runs along a
+/// ruling of the round wall: a plane through the back wall's contact and the
+/// ruling a chord `d` round the wall takes off a prism, square at both ends.
+/// Its section is the triangle between the edge and the two contacts and the
+/// disc's segment between the edge and the ruling, and the round wall keeps
+/// its circles.
+#[test]
+fn a_d_prisms_corner_on_its_round_wall_takes_a_flat_chamfer() {
+    let (r, d, height) = (5.0_f64, 0.5_f64, 4.0);
+    let turn = 2.0 * (0.5 * d / r).asin();
+    let (cap, wall) = ([0.0, r - d], [r * turn.sin(), r * turn.cos()]);
+    let triangle = 0.5 * ((cap[0] - 0.0) * (wall[1] - r) - (cap[1] - r) * (wall[0] - 0.0)).abs();
+    let section = triangle + 0.5 * r * r * (turn - turn.sin());
+    let expected = (0.5 * PI * r * r - section) * height;
+    for (name, pose) in poses() {
+        let mut topo = Topology::new();
+        let solid = d_prism(&mut topo);
+        let corner = upper_upright(&topo, solid);
+        transform_solid(&mut topo, solid, &pose).unwrap();
+
+        let result = chamfer(&mut topo, solid, &[corner], d).unwrap();
+
+        assert_exact(&topo, result, expected, name);
+        assert_eq!(census(&topo, result), (1, 4), "{name}");
+        assert!(
+            !inside(&topo, result, &pose, Point3::new(0.05, 4.95, 2.0)),
+            "{name}"
+        );
+        assert!(
+            inside(&topo, result, &pose, Point3::new(0.2, 4.6, 2.0)),
+            "{name}"
+        );
+    }
+}
+
+/// A block notched by a half cylinder of radius 5: the edge where the
+/// block's side meets the notch's hollow wall runs along a ruling of the
+/// wall. Its chamfer takes off a prism whose section is the triangle between
+/// the edge and the two contacts, less the disc's segment between the edge
+/// and the ruling, which the hollow wall leaves empty.
+#[test]
+fn a_notchs_corner_on_its_hollow_wall_takes_a_flat_chamfer() {
+    let (r, d, height) = (5.0_f64, 0.5_f64, 4.0);
+    let turn = 2.0 * (0.5 * d / r).asin();
+    let (cap, wall) = ([0.0, r + d], [r * turn.sin(), r * turn.cos()]);
+    let triangle = 0.5 * ((cap[0] - 0.0) * (wall[1] - r) - (cap[1] - r) * (wall[0] - 0.0)).abs();
+    let section = triangle - 0.5 * r * r * (turn - turn.sin());
+    let block = 10.0 * 20.0 * height - 0.5 * PI * r * r * height;
+    for (name, pose) in poses() {
+        let mut topo = Topology::new();
+        let solid = make_box(&mut topo, 10.0, 20.0, height).unwrap();
+        transform_solid(&mut topo, solid, &Mat4::translation(0.0, -10.0, 0.0)).unwrap();
+        let rod =
+            brepkit_operations::primitives::make_cylinder(&mut topo, r, height + 2.0).unwrap();
+        transform_solid(&mut topo, rod, &Mat4::translation(0.0, 0.0, -1.0)).unwrap();
+        let notched = boolean(&mut topo, BooleanOp::Cut, solid, rod).unwrap();
+        let corner = upper_upright(&topo, notched);
+        assert!(
+            (topo
+                .vertex(topo.edge(corner).unwrap().start())
+                .unwrap()
+                .point()
+                .x())
+            .abs()
+                < 1e-9
+        );
+        transform_solid(&mut topo, notched, &pose).unwrap();
+
+        let result = chamfer(&mut topo, notched, &[corner], d).unwrap();
+
+        assert_exact(&topo, result, block - section * height, name);
+        assert!(
+            !inside(&topo, result, &pose, Point3::new(0.05, 5.05, 2.0)),
+            "{name}"
+        );
+        assert!(
+            inside(&topo, result, &pose, Point3::new(0.4, 5.4, 2.0)),
+            "{name}"
+        );
+    }
+}
+
+/// The block `[-10, 0] x [-10, 10]` with a half disc of radius 5 on its side
+/// at `x = 0`, extruded 4 high: the edge where the block's side meets the
+/// disc's wall at `(0, 5)` is concave and runs along a ruling. Its chamfer
+/// fills a prism whose section is the triangle between the edge and the two
+/// contacts, less the disc's segment between the edge and the ruling, which
+/// the disc already fills.
+#[test]
+fn a_concave_corner_on_a_round_wall_fills_a_flat_chamfer() {
+    let (r, d, height) = (5.0_f64, 0.5_f64, 4.0);
+    let turn = 2.0 * (0.5 * d / r).asin();
+    let (cap, wall) = ([0.0, r + d], [r * turn.sin(), r * turn.cos()]);
+    let triangle = 0.5 * ((cap[0] - 0.0) * (wall[1] - r) - (cap[1] - r) * (wall[0] - 0.0)).abs();
+    let section = triangle - 0.5 * r * r * (turn - turn.sin());
+    let plain = 10.0 * 20.0 * height + 0.5 * PI * r * r * height;
+    for (name, pose) in poses() {
+        let mut topo = Topology::new();
+        let p = |t: &mut Topology, x: f64, y: f64| {
+            t.add_vertex(Vertex::new(Point3::new(x, y, 0.0), 1e-7))
+        };
+        let corners = [
+            p(&mut topo, -10.0, -10.0),
+            p(&mut topo, 0.0, -10.0),
+            p(&mut topo, 0.0, -r),
+            p(&mut topo, 0.0, r),
+            p(&mut topo, 0.0, 10.0),
+            p(&mut topo, -10.0, 10.0),
+        ];
+        let arc = EdgeCurve::Circle(
+            Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), r).unwrap(),
+        );
+        let edges: Vec<_> = (0..6)
+            .map(|i| {
+                let curve = if i == 2 { arc.clone() } else { EdgeCurve::Line };
+                let edge = Edge::new(corners[i], corners[(i + 1) % 6], curve);
+                OrientedEdge::new(topo.add_edge(edge), true)
+            })
+            .collect();
+        let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+        let plane = FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: 0.0,
+        };
+        let face = topo.add_face(Face::new(wire, Vec::new(), plane));
+        let solid = extrude(&mut topo, face, Vec3::new(0.0, 0.0, 1.0), height).unwrap();
+        let corner = solid_edges(&topo, solid)
+            .unwrap()
+            .into_iter()
+            .find(|&e| {
+                let edge = topo.edge(e).unwrap();
+                let a = topo.vertex(edge.start()).unwrap().point();
+                let b = topo.vertex(edge.end()).unwrap().point();
+                (a.z() - b.z()).abs() > 1.0 && a.x().abs() < 1e-9 && (a.y() - r).abs() < 1e-9
+            })
+            .unwrap();
+        transform_solid(&mut topo, solid, &pose).unwrap();
+
+        let result = chamfer(&mut topo, solid, &[corner], d).unwrap();
+
+        assert_exact(&topo, result, plain + section * height, name);
+        assert!(
+            inside(&topo, result, &pose, Point3::new(0.05, 5.05, 2.0)),
+            "{name}"
+        );
+        assert!(
+            !inside(&topo, result, &pose, Point3::new(0.4, 5.4, 2.0)),
+            "{name}"
+        );
+    }
+}
+
+/// Both rims of the D and its upright at `y = 5`: each rim's chamfer ends
+/// square at the back wall and cuts the other upright back from its end. At
+/// 2.1 the two cuts pass each other on that upright, 4 high, and the rims'
+/// strips on the round wall overlap, so no exact path takes the pick.
+#[test]
+fn rims_whose_chamfers_pass_each_other_on_the_wall_are_refused() {
+    let mut topo = Topology::new();
+    let solid = d_prism(&mut topo);
+    let mut pick: Vec<EdgeId> = solid_edges(&topo, solid)
+        .unwrap()
+        .into_iter()
+        .filter(|&e| !is_line(&topo, e))
+        .collect();
+    assert_eq!(pick.len(), 2);
+    pick.push(upper_upright(&topo, solid));
+
+    assert!(chamfer(&mut topo, solid, &pick, 2.1).is_err());
+    let result = chamfer(&mut topo, solid, &pick, 0.5).unwrap();
+    let report = validate_solid(&topo, result).unwrap();
+    assert!(report.is_valid(), "{:?}", report.issues);
+    assert!(is_watertight(
+        &tessellate_solid(&topo, result, 0.01).unwrap()
+    ));
+}
+
+/// A sector of radius 5 and opening `phi`, 3 high, its apex on the axis.
+fn sector_prism(topo: &mut Topology, phi: f64) -> SolidId {
+    let r = 5.0;
+    let p =
+        |t: &mut Topology, x: f64, y: f64| t.add_vertex(Vertex::new(Point3::new(x, y, 0.0), 1e-7));
+    let apex = p(topo, 0.0, 0.0);
+    let (s, c) = (0.5 * phi).sin_cos();
+    let low = p(topo, r * c, -r * s);
+    let high = p(topo, r * c, r * s);
+    let arc = EdgeCurve::Circle(
+        Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), r).unwrap(),
+    );
+    let edges = vec![
+        OrientedEdge::new(topo.add_edge(Edge::new(apex, low, EdgeCurve::Line)), true),
+        OrientedEdge::new(topo.add_edge(Edge::new(low, high, arc)), true),
+        OrientedEdge::new(topo.add_edge(Edge::new(high, apex, EdgeCurve::Line)), true),
+    ];
+    let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+    let plane = FaceSurface::Plane {
+        normal: Vec3::new(0.0, 0.0, 1.0),
+        d: 0.0,
+    };
+    let face = topo.add_face(Face::new(wire, Vec::new(), plane));
+    extrude(topo, face, Vec3::new(0.0, 0.0, 1.0), 3.0).unwrap()
+}
+
+/// The area of the sector of radius 5 and opening `phi` inset by `s`: its
+/// sides meet at `m = s / sin(phi / 2)` on the bisector and meet the circle
+/// of radius `rho = 5 - s` at the angles `+-tau`, `tau = phi / 2 -
+/// asin(s / rho)`. By Green's theorem about the apex it is `rho^2 tau - m
+/// rho sin(tau)`.
+fn inset_sector(phi: f64, s: f64) -> f64 {
+    let rho = 5.0 - s;
+    let m = s / (0.5 * phi).sin();
+    let tau = 0.5 * phi - (s / rho).asin();
+    rho * rho * tau - m * rho * tau.sin()
+}
+
+/// A sector's top outline, two lines meeting at its apex at 0.4 rad and an
+/// arc, takes a chamfer of 0.3 whose corners meet in mitres. At 1 the insets
+/// of the two lines cross past the arc's inset, so the contacts would pass
+/// each other, and the chamfer is refused.
+#[test]
+fn a_sectors_top_outline_takes_a_chamfer_its_insets_allow() {
+    let phi = 0.4;
+    let d = 0.3;
+    let taken: f64 = brepkit_math::quadrature::gauss_legendre_points(20)
+        .iter()
+        .map(|g| {
+            let s = 0.5 * d * (g.x + 1.0);
+            0.5 * d * g.w * (inset_sector(phi, 0.0) - inset_sector(phi, s))
+        })
+        .sum();
+    let expected = inset_sector(phi, 0.0) * 3.0 - taken;
+    for (name, pose) in poses() {
+        let mut topo = Topology::new();
+        let solid = sector_prism(&mut topo, phi);
+        let top = edges_at(&topo, solid, 3.0, |_, _| true);
+        assert_eq!(top.len(), 3);
+        transform_solid(&mut topo, solid, &pose).unwrap();
+
+        let result = chamfer(&mut topo, solid, &top, d).unwrap();
+
+        assert_exact(&topo, result, expected, name);
+        for cut in [Point3::new(0.5, 0.0, 2.98), Point3::new(4.95, 0.0, 2.98)] {
+            assert!(!inside(&topo, result, &pose, cut), "{name}: {cut:?}");
+        }
+        assert!(
+            inside(&topo, result, &pose, Point3::new(3.0, 0.0, 2.9)),
+            "{name}"
+        );
+    }
+    let mut topo = Topology::new();
+    let solid = sector_prism(&mut topo, phi);
+    let top = edges_at(&topo, solid, 3.0, |_, _| true);
+    assert!(chamfer(&mut topo, solid, &top, 1.0).is_err());
+}
+
+/// A selection no exact path takes must not come back with the solid's arcs
+/// flattened to chords: the planar rebuild reads only a face's corners.
+#[test]
+fn the_planar_rebuild_refuses_curved_edges() {
+    let mut topo = Topology::new();
+    // A lens: two arcs of radius sqrt(13) about (2, 0) and (-2, 0), meeting
+    // at an angle at (0, 3) and (0, -3).
+    let a = topo.add_vertex(Vertex::new(Point3::new(0.0, -3.0, 0.0), 1e-7));
+    let b = topo.add_vertex(Vertex::new(Point3::new(0.0, 3.0, 0.0), 1e-7));
+    let arc = |cx: f64| {
+        EdgeCurve::Circle(
+            Circle3D::new(
+                Point3::new(cx, 0.0, 0.0),
+                Vec3::new(0.0, 0.0, 1.0),
+                13.0_f64.sqrt(),
+            )
+            .unwrap(),
+        )
+    };
+    let edges = vec![
+        OrientedEdge::new(topo.add_edge(Edge::new(b, a, arc(2.0))), true),
+        OrientedEdge::new(topo.add_edge(Edge::new(a, b, arc(-2.0))), true),
+    ];
+    let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+    let plane = FaceSurface::Plane {
+        normal: Vec3::new(0.0, 0.0, 1.0),
+        d: 0.0,
+    };
+    let face = topo.add_face(Face::new(wire, Vec::new(), plane));
+    let solid = extrude(&mut topo, face, Vec3::new(0.0, 0.0, 1.0), 4.0).unwrap();
+    // The vertical edge at the corner between the two round walls.
+    let corner = upper_upright(&topo, solid);
 
     let refused = chamfer(&mut topo, solid, &[corner], 0.5);
 
