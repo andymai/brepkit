@@ -163,8 +163,8 @@ fn face_has_edge(topo: &Topology, face: FaceId, edge: EdgeId) -> Result<bool, Op
 /// The one face besides `not` that `edge` bounds.
 fn owner_of(topo: &Topology, edge: EdgeId, not: FaceId) -> Result<FaceId, OperationsError> {
     let mut found = None;
-    for (id, _) in topo.faces().iter() {
-        if id != not && face_has_edge(topo, id, edge)? {
+    for id in topo.faces_of_edge(edge) {
+        if id != not {
             if found.is_some() {
                 return Err(OperationsError::InvalidInput {
                     reason: format!(

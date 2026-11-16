@@ -12,6 +12,7 @@ use crate::compound::{Compound, CompoundId};
 use crate::compsolid::{CompSolid, CompSolidId};
 use crate::edge::{Edge, EdgeId};
 use crate::face::{Face, FaceId};
+use crate::owners::{Owners, Pending};
 use crate::pcurve::PCurveRegistry;
 use crate::shell::{Shell, ShellId};
 use crate::solid::{Solid, SolidId};
@@ -48,6 +49,8 @@ pub struct Topology {
     journals: Vec<Journal>,
     /// The number of checkpoints opened, which names the next one.
     checkpoints_opened: u64,
+    /// The wires of each edge and the faces of each wire.
+    owners: Owners,
 }
 
 /// A checkpoint that [`Topology::open_checkpoint`] opened: the place of its
@@ -74,6 +77,7 @@ impl Clone for Topology {
             pcurves: self.pcurves.clone(),
             journals: Vec::new(),
             checkpoints_opened: 0,
+            owners: self.owners.clone(),
         }
     }
 }
@@ -145,15 +149,18 @@ macro_rules! arena_get {
 
 /// Generates a mutable arena accessor method on [`Topology`].
 ///
-/// Usage: `arena_get_mut!(method_name, arena_field, EntityType, IdType, ErrorVariant)`
+/// Usage: `arena_get_mut!(method_name, arena_field, EntityType, IdType, ErrorVariant)`,
+/// with `, owner = Wire` or `, owner = Face` where an edit can change the
+/// links of [`Owners`].
 macro_rules! arena_get_mut {
-    ($method:ident, $field:ident, $T:ty, $Id:ty, $err:ident) => {
+    ($method:ident, $field:ident, $T:ty, $Id:ty, $err:ident $(, owner = $owner:ident)?) => {
         /// Returns an exclusive reference to the entity with the given ID.
         ///
         /// # Errors
         ///
         /// Returns a not-found error if the ID is invalid.
         pub fn $method(&mut self, id: $Id) -> Result<&mut $T, TopologyError> {
+            $(self.owners.hand_out(Pending::$owner(id), &self.wires, &self.faces);)?
             if let Some(journal) = self.journals.last_mut()
                 && id.index() < journal.base.$field
                 && let Some(value) = self.$field.get(id)
@@ -179,10 +186,17 @@ macro_rules! arena_api {
         id_from_index = $id_from_index:ident,
         T = $T:ty,
         Id = $Id:ty
+        $(, owner = $owner:ident)?
     ) => {
         /// Allocates a new entity in the arena and returns its typed handle.
         pub fn $add(&mut self, value: $T) -> $Id {
-            self.$arena.alloc(value)
+            let id = self.$arena.alloc(value);
+            $(
+                if let Some(data) = self.$arena.get(id) {
+                    self.owners.$owner(id, data, &self.$arena);
+                }
+            )?
+            id
         }
 
         /// Returns a shared reference to the arena for iteration and queries.
@@ -235,6 +249,7 @@ impl Topology {
         self.faces.reserve(faces);
         self.shells.reserve(shells);
         self.solids.reserve(solids);
+        self.owners.reserve(edges, wires);
     }
 
     arena_get!(vertex, vertices, Vertex, VertexId, VertexNotFound);
@@ -244,10 +259,10 @@ impl Topology {
     arena_get_mut!(edge_mut, edges, Edge, EdgeId, EdgeNotFound);
 
     arena_get!(wire, wires, Wire, WireId, WireNotFound);
-    arena_get_mut!(wire_mut, wires, Wire, WireId, WireNotFound);
+    arena_get_mut!(wire_mut, wires, Wire, WireId, WireNotFound, owner = Wire);
 
     arena_get!(face, faces, Face, FaceId, FaceNotFound);
-    arena_get_mut!(face_mut, faces, Face, FaceId, FaceNotFound);
+    arena_get_mut!(face_mut, faces, Face, FaceId, FaceNotFound, owner = Face);
 
     arena_get!(shell, shells, Shell, ShellId, ShellNotFound);
     arena_get_mut!(shell_mut, shells, Shell, ShellId, ShellNotFound);
@@ -306,7 +321,8 @@ impl Topology {
         count = num_wires,
         id_from_index = wire_id_from_index,
         T = Wire,
-        Id = WireId
+        Id = WireId,
+        owner = add_wire
     );
 
     arena_api!(
@@ -316,7 +332,8 @@ impl Topology {
         count = num_faces,
         id_from_index = face_id_from_index,
         T = Face,
-        Id = FaceId
+        Id = FaceId,
+        owner = add_face
     );
 
     arena_api!(
@@ -556,6 +573,11 @@ impl Topology {
                 hand_over!(compsolids);
             }
         } else {
+            // An old value can hold a link that `Owners` gave to another
+            // entity while the value was out, so each one gets its links
+            // again.
+            let wires: Vec<usize> = journal.wires.keys().copied().collect();
+            let faces: Vec<usize> = journal.faces.keys().copied().collect();
             macro_rules! put_back {
                 ($field:ident) => {
                     self.$field.truncate(journal.base.$field);
@@ -576,11 +598,38 @@ impl Topology {
             put_back!(solids);
             put_back!(compounds);
             put_back!(compsolids);
+            for id in wires
+                .into_iter()
+                .filter_map(|i| self.wires.id_from_index(i))
+            {
+                if let Some(data) = self.wires.get(id) {
+                    self.owners.add_wire(id, data, &self.wires);
+                }
+            }
+            for id in faces
+                .into_iter()
+                .filter_map(|i| self.faces.id_from_index(i))
+            {
+                if let Some(data) = self.faces.get(id) {
+                    self.owners.add_face(id, data, &self.faces);
+                }
+            }
             self.pcurves.undo_to(journal.pcurve_mark);
         }
         if self.journals.is_empty() {
             self.pcurves.end_undo();
         }
+    }
+
+    /// The faces that hold `edge` in one of their wires, in id order: none
+    /// for an id that is not valid.
+    ///
+    /// The topology keeps a link from each edge to its wires and from each
+    /// wire to its faces, so the cost is the wires and faces of `edge`, and
+    /// not the size of the topology.
+    #[must_use]
+    pub fn faces_of_edge(&self, edge: EdgeId) -> Vec<FaceId> {
+        self.owners.faces_of_edge(edge, &self.wires, &self.faces)
     }
 
     /// Builds an adjacency index for the given solid.

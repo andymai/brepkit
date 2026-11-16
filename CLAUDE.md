@@ -132,6 +132,7 @@ Quick reference — find the right file for any task:
 | Vertex, Edge, Wire, Face, Shell, Solid | `vertex.rs`, `edge.rs`, `wire.rs`, `face.rs`, `shell.rs`, `solid.rs` |
 | Compound, CompSolid | `compound.rs`, `compsolid.rs` |
 | Adjacency index (edge-to-face, face neighbors) | `adjacency.rs` |
+| The faces of an edge in the whole topology (`Topology::faces_of_edge`) | `owners.rs` |
 | Builder helpers | `builder.rs` |
 | Shape explorer (iterate children) | `explorer.rs` |
 | PCurve registry | `pcurve.rs` |
