@@ -1,0 +1,38 @@
+crates/heal/src/custom/convert_to_bspline.rs
+  s_0db8415e6f59cd::t_8213729f64b9cf 73-93
+  s_0db8415e6f59cd::t_5d1891323b89b9 94,103,111,116,118,520-580
+crates/operations/src/heal.rs
+  s_0db8415e6f59cd::t_a3470ba0f383e9 1901-1917
+.claude/skills/wasm-bindings/SKILL.md
+  s_0db8415e6f59cd::t_88f0bbc46d8178 27
+crates/io/src/iges/writer.rs
+  s_0db8415e6f59cd::t_5901904889b92a 81-83,88,95-104
+crates/topology/src/lib.rs
+  s_0db8415e6f59cd::t_ac0d2f68c0525b 147
+crates/topology/src/topology.rs
+  s_0db8415e6f59cd::t_2236fe83181339 46-47,49-58,62,76,94-96,99-101,420-504,517,520-521,679-823
+crates/wasm/src/bindings/checkpoint.rs
+  s_0db8415e6f59cd::t_0e46f26dcd5caa 15-18,23,49-53,69,73-77,208-249
+crates/wasm/src/bindings/gridfinity_tests.rs
+  s_0db8415e6f59cd::t_1107d7b7a71695 1851
+crates/wasm/src/kernel.rs
+  s_0db8415e6f59cd::t_b8905e435dc5b9 44,59,77,79
+crates/wasm/src/state.rs
+  s_0db8415e6f59cd::t_a8a81e18053cb4 3-5,8
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "2669976133c6a6d5fd51bba3837da35101ebf2ed",
+  "prompts": {},
+  "sessions": {
+    "s_0db8415e6f59cd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "80c728ce-cbd9-4375-adac-8fbf308dc911",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
