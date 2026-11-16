@@ -18,6 +18,7 @@ use std::f64::consts::TAU;
 use brepkit_math::aabb::Aabb3;
 use brepkit_math::frame::Frame3;
 use brepkit_math::madd::Madd;
+use brepkit_math::nurbs::decompose::curve_bezier_between;
 use brepkit_math::region2d::Boundary2;
 use brepkit_math::vec::{Point2, Point3, Vec2, Vec3};
 use brepkit_topology::Topology;
@@ -34,14 +35,19 @@ use crate::CheckError;
 /// one plane.
 const MOST_TILT: f64 = 1e-4;
 
-/// The stretches an edge is cut into where its meetings with the other
-/// face's boundary are not solved for: a B-spline edge, or an arc of an
-/// ellipse against another arc.
+/// The stretches an edge is first cut into where its meetings with the
+/// other face's boundary are not solved for: a B-spline edge, or an arc of
+/// an ellipse against another arc. A B-spline's stretches keep to its knot
+/// spans.
 const STRETCHES: u32 = 64;
 
 /// The most halvings of a stretch next to the other face's boundary where
 /// its meetings are not solved for.
-const MOST_HALVINGS: u32 = 10;
+const MOST_HALVINGS: u32 = 16;
+
+/// The most stretches read along one edge where its meetings are not solved
+/// for. Past it the edge is left unread.
+const MOST_STRETCHES: usize = 4096;
 
 /// A plane face.
 struct Flat {
@@ -358,7 +364,8 @@ fn shares_area(
             };
             // A point inside both faces beside the edge at `f`, for a stretch
             // `length` long: each side of the edge in turn, from a quarter of
-            // the stretch away to twice the tolerance.
+            // the stretch away to the tolerance, which `side` keeps clear of
+            // each face's boundary.
             let beside = |f: f64, length: f64| {
                 let m = point(f);
                 let along = curve.tangent_with_endpoints(at(f), a, b);
@@ -368,7 +375,7 @@ fn shares_area(
                 };
                 let mut step = 0.25 * length;
                 for _ in 0..64 {
-                    if step <= 2.0 * tol {
+                    if step <= tol {
                         break;
                     }
                     for s in [step, -step] {
@@ -402,31 +409,71 @@ fn shares_area(
                 }
                 continue;
             }
-            // Stretches halved where their ends and middle read differently
-            // against the other face, or lie on its boundary.
-            let mut pending: Vec<(f64, f64, u32)> = (0..STRETCHES)
-                .map(|k| {
-                    (
-                        f64::from(k) / f64::from(STRETCHES),
-                        f64::from(k + 1) / f64::from(STRETCHES),
-                        0,
-                    )
-                })
+            // A bound on how far the stretch from `f0` to `f1` reaches from
+            // `m`, its point at the middle: a line's half, an arc's half
+            // length, and a B-spline piece's farthest control point, which
+            // holds the piece when its weights are positive.
+            let reach = |f0: f64, f1: f64, m: Point2| match curve {
+                EdgeCurve::Line => 0.5 * (point(f1) - point(f0)).length(),
+                EdgeCurve::Circle(c) => 0.5 * c.radius() * (at(f1) - at(f0)).abs(),
+                EdgeCurve::Ellipse(e) => 0.5 * e.semi_major() * (at(f1) - at(f0)).abs(),
+                EdgeCurve::NurbsCurve(n) => curve_bezier_between(n, at(f0), at(f1))
+                    .ok()
+                    .filter(|hull| hull.iter().all(|c| c[3] > 0.0))
+                    .map_or(f64::INFINITY, |hull| {
+                        hull.iter()
+                            .map(|&[x, y, z, w]| {
+                                (flat(Point3::new(x / w, y / w, z / w)) - m).length()
+                            })
+                            .fold(0.0, f64::max)
+                    }),
+            };
+            let mut cuts: Vec<f64> = (0..=STRETCHES)
+                .map(|k| f64::from(k) / f64::from(STRETCHES))
                 .collect();
+            if let EdgeCurve::NurbsCurve(n) = curve {
+                let (lo, hi) = (t0.min(t1), t0.max(t1));
+                cuts.extend(
+                    n.knots()
+                        .iter()
+                        .filter(|&&k| k > lo && k < hi)
+                        .map(|&k| (k - t0) / (t1 - t0)),
+                );
+                cuts.sort_by(f64::total_cmp);
+                cuts.dedup();
+            }
+            // A stretch that reads outside or inside the other face by more
+            // than its reach lies wholly there; one that does not is halved.
+            let mut pending: Vec<(f64, f64, u32)> =
+                cuts.windows(2).map(|w| (w[0], w[1], 0)).collect();
+            let mut read = 0;
             while let Some((f0, f1, depth)) = pending.pop() {
+                read += 1;
+                if read > MOST_STRETCHES {
+                    break;
+                }
                 let mid = 0.5 * (f0 + f1);
                 let length = through(f0, mid, f1);
                 if length <= tol {
                     continue;
                 }
-                let sides = [f0, mid, f1].map(|f| other.side(point(f), tol));
-                if sides[1] != Some(false) && beside(mid, length) {
-                    return Ok(true);
-                }
-                let settled = sides.iter().all(|&s| s == Some(false));
-                if !settled && depth < MOST_HALVINGS {
-                    pending.push((f0, mid, depth + 1));
-                    pending.push((mid, f1, depth + 1));
+                let m = point(mid);
+                match other.side(m, reach(f0, f1, m)) {
+                    Some(false) => {}
+                    Some(true) => {
+                        if beside(mid, length) {
+                            return Ok(true);
+                        }
+                    }
+                    None => {
+                        if other.side(m, tol) != Some(false) && beside(mid, length) {
+                            return Ok(true);
+                        }
+                        if depth < MOST_HALVINGS {
+                            pending.push((f0, mid, depth + 1));
+                            pending.push((mid, f1, depth + 1));
+                        }
+                    }
                 }
             }
         }
@@ -921,5 +968,66 @@ mod tests {
             let solid = b.solid();
             assert_eq!(found(&b.topo, solid).len(), 1, "turn {k}");
         }
+    }
+
+    /// Two squares seven tolerances across, one on the other.
+    #[test]
+    fn two_squares_seven_tolerances_across_one_on_the_other_are_reported() {
+        let mut b = Builder::default();
+        square(&mut b, (0.0, 0.0), 7e-6, [0., 0., 1.]);
+        square(&mut b, (0.0, 0.0), 7e-6, [0., 0., -1.]);
+        let solid = b.solid();
+        assert_eq!(found(&b.topo, solid).len(), 1);
+    }
+
+    /// A rectangle whose edges are straight B-splines, each its own edge.
+    fn spline_rectangle(b: &mut Builder, (x0, y0): (f64, f64), (x1, y1): (f64, f64)) {
+        let corners = [[x0, y0, 0.0], [x1, y0, 0.0], [x1, y1, 0.0], [x0, y1, 0.0]];
+        let ids: Vec<VertexId> = corners.iter().map(|&c| b.vertex(c)).collect();
+        let edges = (0..4)
+            .map(|k| {
+                let (p, q) = (corners[k], corners[(k + 1) % 4]);
+                let line = brepkit_math::nurbs::curve::NurbsCurve::new(
+                    1,
+                    vec![0.0, 0.0, 1.0, 1.0],
+                    vec![Point3::new(p[0], p[1], p[2]), Point3::new(q[0], q[1], q[2])],
+                    vec![1.0, 1.0],
+                )
+                .unwrap();
+                let e = b.topo.add_edge(Edge::new(
+                    ids[k],
+                    ids[(k + 1) % 4],
+                    EdgeCurve::NurbsCurve(line),
+                ));
+                OrientedEdge::new(e, true)
+            })
+            .collect();
+        let wire = b.topo.add_wire(Wire::new(edges, true).unwrap());
+        let face = b.topo.add_face(Face::new(
+            wire,
+            vec![],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: 0.0,
+            },
+        ));
+        b.faces.push(face);
+    }
+
+    /// Two thin rectangles of B-spline edges that cross: none of the points
+    /// first read along either rectangle's edges lies inside the other.
+    #[test]
+    fn two_thin_spline_rectangles_that_cross_are_reported() {
+        let mut b = Builder::default();
+        spline_rectangle(&mut b, (0.0, 0.020), (10.0, 0.021));
+        spline_rectangle(&mut b, (0.100, -5.0), (0.101, 5.0));
+        let solid = b.solid();
+        assert_eq!(found(&b.topo, solid).len(), 1);
+
+        let mut b = Builder::default();
+        spline_rectangle(&mut b, (0.0, 0.020), (10.0, 0.021));
+        spline_rectangle(&mut b, (0.100, 0.03), (0.101, 5.0));
+        let solid = b.solid();
+        assert!(found(&b.topo, solid).is_empty());
     }
 }
