@@ -169,7 +169,13 @@ fn collect_edge_data(topo: &Topology, edges: &[EdgeId]) -> Result<Vec<EdgeData>,
         let start_pos = topo.vertex(edge.start())?.point();
         let end_pos = topo.vertex(edge.end())?.point();
         let (t0, t1) = edge.curve().domain_with_endpoints(start_pos, end_pos);
-        let span = super::helpers::edge_span_box(edge.curve(), start_pos, end_pos, 16);
+        // Sample points can miss the bulge of a B-spline between them, and
+        // a crossing there; the box of its Bezier poles holds it.
+        let span = match edge.curve() {
+            EdgeCurve::NurbsCurve(nurbs) => nurbs_pole_box(nurbs, (t0, t1)),
+            EdgeCurve::Line | EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => None,
+        }
+        .unwrap_or_else(|| super::helpers::edge_span_box(edge.curve(), start_pos, end_pos, 16));
 
         data.push(EdgeData {
             start_pos,
@@ -665,6 +671,36 @@ fn nurbs_span_bounds(
         }
     }
     (sag, half)
+}
+
+/// The box of the Bezier poles of a B-spline between the parameters `t0`
+/// and `t1`, which holds the curve there. `None` when a weight is not
+/// positive or the parameters leave the curve's domain.
+fn nurbs_pole_box(
+    curve: &brepkit_math::nurbs::curve::NurbsCurve,
+    (t0, t1): (f64, f64),
+) -> Option<brepkit_math::aabb::Aabb3> {
+    let (d0, d1) = curve.domain();
+    let (lo, hi) = (t0.min(t1).max(d0), t0.max(t1).min(d1));
+    if lo > hi {
+        return None;
+    }
+    let mut cuts = vec![lo];
+    cuts.extend(curve.knots().iter().copied().filter(|&k| k > lo && k < hi));
+    cuts.push(hi);
+    cuts.dedup();
+    let mut poles = Vec::new();
+    for piece in cuts.windows(2) {
+        let homogeneous =
+            brepkit_math::nurbs::decompose::curve_bezier_between(curve, piece[0], piece[1]).ok()?;
+        for [x, y, z, w] in homogeneous {
+            if w.is_nan() || w <= 0.0 {
+                return None;
+            }
+            poles.push(Point3::new(x / w, y / w, z / w));
+        }
+    }
+    Some(brepkit_math::aabb::Aabb3::from_points(poles))
 }
 
 /// Whether two tangent cones share no line: the lines of their axes part by
@@ -2863,6 +2899,42 @@ mod tests {
                 "{hits:?}"
             );
         }
+    }
+
+    /// A cubic arch whose top lies between two of its 17 sample points for
+    /// the edge's box, and a short line across the top above the highest of
+    /// them: the pair passes the boxes and gets its two crossings.
+    #[test]
+    fn a_line_across_the_top_of_an_arch_between_box_samples_crosses_it() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        let p = Point3::new;
+        let arch = NurbsCurve::new(
+            3,
+            vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+            vec![
+                p(0.0, 0.0, 0.0),
+                p(1.0, 2.0, 0.0),
+                p(3.0, 2.4, 0.0),
+                p(4.0, 0.0, 0.0),
+            ],
+            vec![1.0; 4],
+        )
+        .unwrap();
+        let height = |t: f64| arch.evaluate(t).y();
+        let sampled = (0..=16)
+            .map(|k| height(f64::from(k) / 16.0))
+            .fold(0.0, f64::max);
+        let top = (0..=100_000)
+            .map(|k| height(f64::from(k) / 1e5))
+            .fold(0.0, f64::max);
+        assert!(top - sampled > 1e-4, "{top} {sampled}");
+        let y = 0.5 * (top + sampled);
+        let mut topo = Topology::new();
+        let ea = edge_on(&mut topo, &arch, 0.0, 1.0);
+        let eb = add_edge(&mut topo, p(1.5, y, 0.0), p(2.5, y, 0.0), EdgeCurve::Line);
+        let mut arena = GfaArena::new();
+        check_edge_edge_pairs(&mut topo, &[ea], &[eb], Tolerance::default(), &mut arena).unwrap();
+        assert_eq!(arena.interference.ee.len(), 2);
     }
 
     /// A polyline of degree 1 that jumps back at its knot 0.51, taken twice:
