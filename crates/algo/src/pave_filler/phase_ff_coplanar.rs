@@ -194,11 +194,12 @@ fn compute_face_bbox(topo: &Topology, face_id: FaceId) -> Result<Aabb3, AlgoErro
 /// `p_start` to `p_end`, either way.
 ///
 /// Searches `arena.curves` for an intersection curve attached to `target`
-/// with both ends of the piece and the piece's middle at its own, so the
-/// coplanar phase does not duplicate a section the regular FF phase already
-/// gave that face. A longer section on the same line can have the middle of
-/// the piece, and an arc can have its ends. A curve attached only to the
-/// other face of the pair does not count: it never splits `target`.
+/// with both ends of the piece, so the coplanar phase does not duplicate a
+/// section the regular FF phase already gave that face. A longer section on
+/// the same line can have the middle of the piece. A curved section must
+/// also pass through the piece's middle at the middle of its parameters: an
+/// arc can have the ends of its chord. A curve attached only to the other
+/// face of the pair does not count: it never splits `target`.
 fn has_existing_section_at(
     arena: &GfaArena,
     topo: &Topology,
@@ -219,10 +220,19 @@ fn has_existing_section_at(
         let Some((s, e)) = section_ends(topo, arena, curve) else {
             return false;
         };
-        let (t0, t1) = curve.t_range;
-        let curve_mid = curve.curve.evaluate_with_endpoints(0.5 * (t0 + t1), s, e);
-        ((near(s, p_start) && near(e, p_end)) || (near(s, p_end) && near(e, p_start)))
-            && near(curve_mid, mid)
+        // A line section's parameters can run over its length or over 0 to 1,
+        // and with the two ends its middle is the piece's.
+        let on_piece = match &curve.curve {
+            EdgeCurve::Line => true,
+            EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_) => {
+                let (t0, t1) = curve.t_range;
+                near(
+                    curve.curve.evaluate_with_endpoints(0.5 * (t0 + t1), s, e),
+                    mid,
+                )
+            }
+        };
+        ((near(s, p_start) && near(e, p_end)) || (near(s, p_end) && near(e, p_start))) && on_piece
     })
 }
 
@@ -1643,5 +1653,41 @@ mod tests {
             tol,
         );
         assert!(!has_existing_section_at(&arena, &topo, target, p0, p1, tol));
+    }
+
+    /// A line section as the regular FF phase records one, its parameters
+    /// running over its length (0 to 5), is present for a piece with its
+    /// two ends.
+    #[test]
+    fn a_line_section_with_parameters_over_its_length_is_present() {
+        let tol = Tolerance::default();
+        let mut topo = Topology::new();
+        let mut arena = GfaArena::new();
+        let target_rim = rim(&mut topo, 9.0);
+        let target = face_down(&mut topo, vec![target_rim], vec![]);
+        let (from, to) = (Point3::new(0.0, 0.0, 0.0), Point3::new(5.0, 0.0, 0.0));
+        let (a, b) = (
+            topo.add_vertex(Vertex::new(from, 1e-7)),
+            topo.add_vertex(Vertex::new(to, 1e-7)),
+        );
+        let edge = topo.add_edge(Edge::new(a, b, EdgeCurve::Line));
+        let pb =
+            arena
+                .pave_blocks
+                .alloc(PaveBlock::new(edge, Pave::new(a, 0.0), Pave::new(b, 5.0)));
+        arena.curves.push(IntersectionCurveDS {
+            curve: EdgeCurve::Line,
+            face_a: target,
+            face_b: target,
+            bbox: Aabb3::from_points([from, to]),
+            pave_blocks: vec![pb],
+            t_range: (0.0, 5.0),
+        });
+        assert!(has_existing_section_at(
+            &arena, &topo, target, from, to, tol
+        ));
+        assert!(has_existing_section_at(
+            &arena, &topo, target, to, from, tol
+        ));
     }
 }
