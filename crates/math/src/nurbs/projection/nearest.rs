@@ -44,6 +44,10 @@ const WEIGHT_SPREAD: f64 = 1e100;
 /// proof by about this much, so a smaller slack proves nothing.
 const ROUNDING: f64 = 1e-12;
 
+/// How many times finer one way than the other a part of a surface of
+/// degree one is before the search cuts it across that way too.
+const FINER: f64 = 16.0;
+
 /// A Newton step on a part shorter than this share of it settles the
 /// lowest point: what is left moves the bound by the square of it.
 const SETTLED: f64 = 1e-10;
@@ -97,6 +101,8 @@ struct Cell {
     /// Where, in the part's own parameters, the lowest point of the part
     /// it was cut from lies, held to it.
     hint: Option<[f64; 2]>,
+    /// The part's size across u and across v, as shares of its span's.
+    share: [f64; 2],
 }
 
 impl Cell {
@@ -351,10 +357,14 @@ pub(super) fn nearest(
         let mut settled = !cell.rough
             && (straight_u && search.settles_across(&gaps, true, at)
                 || straight_v && search.settles_across(&gaps, false, at));
+        // Across the way of degree one, the bound is exact, but rounding
+        // in its sums is not: where `g` comes within rounding of zero, the
+        // part has to shrink both ways. So that way is cut too, once the
+        // part is far finer the other way.
         let mut along_u = if straight_u {
-            search.cols == 1
+            search.cols == 1 || cell.share[1] * FINER < cell.share[0]
         } else {
-            search.rows != 1
+            search.rows != 1 && cell.share[0] * FINER >= cell.share[1]
         };
         if !settled && straight_u == straight_v {
             let partials = search.second_partials(&gaps);
@@ -472,6 +482,7 @@ impl Search {
             floor,
             rough,
             hint,
+            share: [1.0, 1.0],
         };
         if floor < bound {
             Some(cell)
@@ -726,6 +737,14 @@ impl Search {
         let mut rest = self.take_points();
         rest.extend_from_slice(&cell.points);
         let mut from = 0.0;
+        let k = usize::from(!along_u);
+        let shared = |piece: Option<Cell>, a: f64, b: f64| {
+            piece.map(|mut piece| {
+                piece.share = cell.share;
+                piece.share[k] *= b - a;
+                piece
+            })
+        };
         let hint_in = |a: f64, b: f64| {
             let mut hint = at;
             let k = usize::from(!along_u);
@@ -741,7 +760,11 @@ impl Search {
             } else {
                 (cell.u, range)
             };
-            pieces.push(self.cell(rest, u, v, bound, hint_in(from, cut)));
+            pieces.push(shared(
+                self.cell(rest, u, v, bound, hint_in(from, cut)),
+                from,
+                cut,
+            ));
             rest = high;
             from = cut;
         }
@@ -751,7 +774,11 @@ impl Search {
         } else {
             (cell.u, range)
         };
-        pieces.push(self.cell(rest, u, v, bound, hint_in(from, 1.0)));
+        pieces.push(shared(
+            self.cell(rest, u, v, bound, hint_in(from, 1.0)),
+            from,
+            1.0,
+        ));
         self.give(cell);
         pieces
     }
