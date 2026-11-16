@@ -875,76 +875,99 @@ struct BoxNode {
 impl BoxTree {
     const LEAF: usize = 4;
 
+    /// Build the tree over `boxes`. The items take the order of the Morton
+    /// codes of their centres (the bits of the three coordinates in turn),
+    /// so the two halves of each run of items lie near each other. Boxes
+    /// round one centre (nested shells) take the order of their size.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     fn new(boxes: Vec<Bounds>) -> Self {
-        let mut items: Vec<usize> = (0..boxes.len()).collect();
+        let n = boxes.len();
+        let mut items: Vec<usize> = (0..n).collect();
         let mut nodes = Vec::new();
-        if boxes.is_empty() {
+        if n == 0 {
             return Self {
                 nodes,
                 items,
                 boxes,
             };
         }
+        let centre = |b: &Bounds| [0, 1, 2].map(|k| b.0[k] + b.1[k]);
+        let (mut low, mut high) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
+        for b in &boxes {
+            let c = centre(b);
+            for k in 0..3 {
+                low[k] = low[k].min(c[k]);
+                high[k] = high[k].max(c[k]);
+            }
+        }
+        let steps = f64::from((1_u32 << 21) - 1);
+        let scale = [0, 1, 2].map(|k| {
+            if high[k] > low[k] {
+                steps / (high[k] - low[k])
+            } else {
+                0.0
+            }
+        });
+        let keys: Vec<(u64, f64)> = boxes
+            .iter()
+            .map(|b| {
+                let c = centre(b);
+                let q = [0, 1, 2].map(|k| ((c[k] - low[k]) * scale[k]) as u64);
+                let mut code = 0_u64;
+                for bit in (0..21).rev() {
+                    for step in q {
+                        code = (code << 1) | ((step >> bit) & 1);
+                    }
+                }
+                (code, (0..3).map(|k| b.1[k] - b.0[k]).sum())
+            })
+            .collect();
+        items.sort_unstable_by(|&a, &b| {
+            keys[a]
+                .0
+                .cmp(&keys[b].0)
+                .then(keys[a].1.total_cmp(&keys[b].1))
+        });
+
         let empty = BoxNode {
             bounds: boxes[0],
             first: 0,
             count: 0,
         };
         nodes.push(empty);
-        let mut stack = vec![(0, 0, boxes.len())];
+        let mut stack = vec![(0, 0, n)];
         while let Some((node, start, end)) = stack.pop() {
-            let mut bounds = boxes[items[start]];
-            for &i in &items[start + 1..end] {
-                for k in 0..3 {
-                    bounds.0[k] = bounds.0[k].min(boxes[i].0[k]);
-                    bounds.1[k] = bounds.1[k].max(boxes[i].1[k]);
-                }
-            }
             if end - start <= Self::LEAF {
-                nodes[node] = BoxNode {
-                    bounds,
-                    first: start,
-                    count: end - start,
-                };
+                nodes[node].first = start;
+                nodes[node].count = end - start;
                 continue;
             }
-            // Split along the widest spread of the centres of the boxes.
-            // Boxes round one centre (nested shells) split by their size.
-            let (mut low, mut high) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
-            for &i in &items[start..end] {
-                for k in 0..3 {
-                    let centre = boxes[i].0[k] + boxes[i].1[k];
-                    low[k] = low[k].min(centre);
-                    high[k] = high[k].max(centre);
-                }
-            }
-            let spread = |k: usize| high[k] - low[k];
-            let axis = if spread(0) >= spread(1) && spread(0) >= spread(2) {
-                0
-            } else if spread(1) >= spread(2) {
-                1
-            } else {
-                2
-            };
-            let key = |i: usize| {
-                if spread(axis) > 0.0 {
-                    boxes[i].0[axis] + boxes[i].1[axis]
-                } else {
-                    (0..3).map(|k| boxes[i].1[k] - boxes[i].0[k]).sum()
-                }
-            };
             let mid = start + (end - start) / 2;
-            items[start..end]
-                .select_nth_unstable_by(mid - start, |&a, &b| key(a).total_cmp(&key(b)));
             let first = nodes.len();
             nodes.extend([empty, empty]);
-            nodes[node] = BoxNode {
-                bounds,
-                first,
-                count: 0,
-            };
+            nodes[node].first = first;
             stack.push((first, start, mid));
             stack.push((first + 1, mid, end));
+        }
+        // Children come after their node, so a walk back finds the box of
+        // each node from the boxes below it.
+        let union = |a: Bounds, b: &Bounds| -> Bounds {
+            (
+                [0, 1, 2].map(|k| a.0[k].min(b.0[k])),
+                [0, 1, 2].map(|k| a.1[k].max(b.1[k])),
+            )
+        };
+        for i in (0..nodes.len()).rev() {
+            let node = nodes[i];
+            nodes[i].bounds = if node.count == 0 {
+                union(nodes[node.first].bounds, &nodes[node.first + 1].bounds)
+            } else {
+                items[node.first..node.first + node.count]
+                    .iter()
+                    .fold(boxes[items[node.first]], |acc, &item| {
+                        union(acc, &boxes[item])
+                    })
+            };
         }
         Self {
             nodes,
