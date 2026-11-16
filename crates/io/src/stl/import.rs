@@ -1245,7 +1245,13 @@ impl Nesting {
                     && holds(&body_tree.boxes[d], &boxes[c])
                     && !crossing.contains(&(c.min(d), c.max(d)))
             };
-            if body_tree.each_meeting(&boxes[c], |d| !holds_c(d)) {
+            // A body with no box round its box lies in no body. The look
+            // stops after a few boxes, and the ray decides past them.
+            let mut look = 32;
+            if body_tree.each_meeting(&boxes[c], |d| {
+                look -= 1;
+                !holds_c(d) && look > 0
+            }) {
                 continue;
             }
             let members = &bodies[closed[c]].tris;
