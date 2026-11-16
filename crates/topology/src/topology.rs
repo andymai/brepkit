@@ -193,7 +193,7 @@ macro_rules! arena_api {
             let id = self.$arena.alloc(value);
             $(
                 if let Some(data) = self.$arena.get(id) {
-                    self.owners.$owner(id, data, &self.$arena);
+                    self.owners.$owner(id, data);
                 }
             )?
             id
@@ -573,11 +573,32 @@ impl Topology {
                 hand_over!(compsolids);
             }
         } else {
-            // An old value can hold a link that `Owners` gave to another
-            // entity while the value was out, so each one gets its links
-            // again.
+            // The links follow the values: those of each wire and face that
+            // the rollback drops or replaces go, and those of each old value
+            // come back.
+            self.owners.fold(&self.wires, &self.faces);
             let wires: Vec<usize> = journal.wires.keys().copied().collect();
             let faces: Vec<usize> = journal.faces.keys().copied().collect();
+            for (id, data) in self.wires.iter().skip(journal.base.wires) {
+                self.owners.remove_wire(id, data);
+            }
+            for (id, data) in self.faces.iter().skip(journal.base.faces) {
+                self.owners.remove_face(id, data);
+            }
+            for &index in &wires {
+                if let Some(id) = self.wires.id_from_index(index)
+                    && let Some(data) = self.wires.get(id)
+                {
+                    self.owners.remove_wire(id, data);
+                }
+            }
+            for &index in &faces {
+                if let Some(id) = self.faces.id_from_index(index)
+                    && let Some(data) = self.faces.get(id)
+                {
+                    self.owners.remove_face(id, data);
+                }
+            }
             macro_rules! put_back {
                 ($field:ident) => {
                     self.$field.truncate(journal.base.$field);
@@ -603,7 +624,7 @@ impl Topology {
                 .filter_map(|i| self.wires.id_from_index(i))
             {
                 if let Some(data) = self.wires.get(id) {
-                    self.owners.add_wire(id, data, &self.wires);
+                    self.owners.add_wire(id, data);
                 }
             }
             for id in faces
@@ -611,7 +632,7 @@ impl Topology {
                 .filter_map(|i| self.faces.id_from_index(i))
             {
                 if let Some(data) = self.faces.get(id) {
-                    self.owners.add_face(id, data, &self.faces);
+                    self.owners.add_face(id, data);
                 }
             }
             self.pcurves.undo_to(journal.pcurve_mark);
@@ -619,6 +640,11 @@ impl Topology {
         if self.journals.is_empty() {
             self.pcurves.end_undo();
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn owners(&self) -> &Owners {
+        &self.owners
     }
 
     /// The faces that hold `edge` in one of their wires, in id order: none

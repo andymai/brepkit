@@ -13,25 +13,25 @@ const NONE: usize = usize::MAX;
 
 /// The links of a [`Topology`](crate::Topology), by arena index.
 ///
-/// A link can be stale: an edit can take an edge out of a wire, and a
-/// rollback drops the entities that it added. A reader keeps a link only
-/// where the entities hold it now, so the one invariant is that no link is
-/// missing. `add_wire` and `add_face` record the links of a new entity, and
-/// [`Owners::fold`] records those of the wire or face that `wire_mut` or
-/// `face_mut` gave out last.
+/// The links of each wire and face are the ones it holds now, with one
+/// exception: the wire or face that `wire_mut` or `face_mut` gave out last
+/// has no links, and a reader reads it as it is now. `add_wire` and
+/// `add_face` record the links of a new entity, [`Owners::hand_out`] removes
+/// those of the entity it gives out and records those of the one before, and
+/// a rollback removes the links of each value it drops or puts back and
+/// records those of each value it restores. A wire that holds an edge two
+/// times has two links to it.
 #[derive(Debug, Default, Clone)]
 pub struct Owners {
     /// The first two wires of each edge.
     edge_wires: Vec<[usize; 2]>,
-    /// The third and later wires of an edge.
+    /// The other wires of an edge.
     more_edge_wires: HashMap<usize, Vec<usize>>,
     /// The first face of each wire.
     wire_faces: Vec<[usize; 1]>,
-    /// The second and later faces of a wire.
+    /// The other faces of a wire.
     more_wire_faces: HashMap<usize, Vec<usize>>,
-    /// The wire or face that `wire_mut` or `face_mut` gave out last. Its
-    /// edit can hold links that are not recorded, so a reader reads it as it
-    /// is now.
+    /// The wire or face that `wire_mut` or `face_mut` gave out last.
     pending: Option<Pending>,
 }
 
@@ -43,13 +43,25 @@ pub enum Pending {
 }
 
 impl Owners {
-    /// Records the links of the wire or face given out last, and makes `next`
-    /// the one given out last.
+    /// Records the links of the wire or face given out last, removes those
+    /// of `next`, and makes `next` the one given out last.
     ///
     /// The `&mut` borrow of the one given out last ends before this call, so
     /// its edit is complete.
     pub fn hand_out(&mut self, next: Pending, wires: &Arena<Wire>, faces: &Arena<Face>) {
         self.fold(wires, faces);
+        match next {
+            Pending::Wire(wire) => {
+                if let Some(data) = wires.get(wire) {
+                    self.remove_wire(wire, data);
+                }
+            }
+            Pending::Face(face) => {
+                if let Some(data) = faces.get(face) {
+                    self.remove_face(face, data);
+                }
+            }
+        }
         self.pending = Some(next);
     }
 
@@ -64,12 +76,12 @@ impl Owners {
         match self.pending.take() {
             Some(Pending::Wire(wire)) => {
                 if let Some(data) = wires.get(wire) {
-                    self.add_wire(wire, data, wires);
+                    self.add_wire(wire, data);
                 }
             }
             Some(Pending::Face(face)) => {
                 if let Some(data) = faces.get(face) {
-                    self.add_face(face, data, faces);
+                    self.add_face(face, data);
                 }
             }
             None => {}
@@ -77,43 +89,57 @@ impl Owners {
     }
 
     /// Records a link from each edge of `data` to `wire`.
-    pub fn add_wire(&mut self, wire: WireId, data: &Wire, wires: &Arena<Wire>) {
+    pub fn add_wire(&mut self, wire: WireId, data: &Wire) {
         for oe in data.edges() {
-            let edge = oe.edge();
             link(
                 &mut self.edge_wires,
                 &mut self.more_edge_wires,
-                edge.index(),
+                oe.edge().index(),
                 wire.index(),
-                |other| {
-                    wires
-                        .id_from_index(other)
-                        .and_then(|id| wires.get(id))
-                        .is_some_and(|w| wire_holds(w, edge))
-                },
+            );
+        }
+    }
+
+    /// Removes the links from the edges of `data` to `wire`.
+    pub fn remove_wire(&mut self, wire: WireId, data: &Wire) {
+        for oe in data.edges() {
+            unlink(
+                &mut self.edge_wires,
+                &mut self.more_edge_wires,
+                oe.edge().index(),
+                wire.index(),
             );
         }
     }
 
     /// Records a link from each wire of `data` to `face`.
-    pub fn add_face(&mut self, face: FaceId, data: &Face, faces: &Arena<Face>) {
+    pub fn add_face(&mut self, face: FaceId, data: &Face) {
         for wire in face_wires(data) {
             link(
                 &mut self.wire_faces,
                 &mut self.more_wire_faces,
                 wire.index(),
                 face.index(),
-                |other| {
-                    faces
-                        .id_from_index(other)
-                        .and_then(|id| faces.get(id))
-                        .is_some_and(|f| face_wires(f).any(|w| w == wire))
-                },
+            );
+        }
+    }
+
+    /// Removes the links from the wires of `data` to `face`.
+    pub fn remove_face(&mut self, face: FaceId, data: &Face) {
+        for wire in face_wires(data) {
+            unlink(
+                &mut self.wire_faces,
+                &mut self.more_wire_faces,
+                wire.index(),
+                face.index(),
             );
         }
     }
 
     /// The faces that hold `edge` in one of their wires, in id order.
+    ///
+    /// A link counts only where the entities hold it now. So a link that is
+    /// not true cannot give a wrong face.
     pub fn faces_of_edge(
         &self,
         edge: EdgeId,
@@ -133,8 +159,8 @@ impl Owners {
         for index in
             linked(&self.edge_wires, &self.more_edge_wires, edge.index()).chain(pending_wire)
         {
-            if let Some(wire) = holds_edge(index)
-                && !held_by.contains(&wire)
+            if !held_by.iter().any(|w| w.index() == index)
+                && let Some(wire) = holds_edge(index)
             {
                 held_by.push(wire);
             }
@@ -165,41 +191,40 @@ impl Owners {
     }
 }
 
-/// Adds `to` to the links of `from`, unless it is there. Where both slots
-/// are full, a stale one, which `holds` says no longer holds `from`, takes
-/// it.
+/// Adds a link from `from` to `to`.
 fn link<const N: usize>(
     slots: &mut Vec<[usize; N]>,
     more: &mut HashMap<usize, Vec<usize>>,
     from: usize,
     to: usize,
-    holds: impl Fn(usize) -> bool,
 ) {
     if slots.len() <= from {
         slots.resize(from + 1, [NONE; N]);
     }
-    let pair = &mut slots[from];
-    if pair.contains(&to) {
-        return;
-    }
-    // A slot is never emptied, so `more` holds links only once both slots
-    // are full.
-    if let Some(slot) = pair.iter_mut().find(|slot| **slot == NONE) {
-        *slot = to;
-        return;
-    }
-    if more.get(&from).is_some_and(|rest| rest.contains(&to)) {
-        return;
-    }
-    if let Some(slot) = pair.iter_mut().find(|slot| !holds(**slot)) {
-        *slot = to;
-        return;
-    }
-    let rest = more.entry(from).or_default();
-    if let Some(slot) = rest.iter_mut().find(|slot| !holds(**slot)) {
+    if let Some(slot) = slots[from].iter_mut().find(|slot| **slot == NONE) {
         *slot = to;
     } else {
-        rest.push(to);
+        more.entry(from).or_default().push(to);
+    }
+}
+
+/// Removes each link from `from` to `to`.
+fn unlink<const N: usize>(
+    slots: &mut [[usize; N]],
+    more: &mut HashMap<usize, Vec<usize>>,
+    from: usize,
+    to: usize,
+) {
+    if let Some(set) = slots.get_mut(from) {
+        for slot in set.iter_mut().filter(|slot| **slot == to) {
+            *slot = NONE;
+        }
+    }
+    if let Some(rest) = more.get_mut(&from) {
+        rest.retain(|&other| other != to);
+        if rest.is_empty() {
+            more.remove(&from);
+        }
     }
 }
 
@@ -271,6 +296,60 @@ mod tests {
                 expected,
                 "{context}: edge {}",
                 edge.index()
+            );
+        }
+        assert_exact(topo, context);
+    }
+
+    /// The stored links are the ones each wire and face holds now, apart
+    /// from the one given out last, which has none.
+    fn assert_exact(topo: &Topology, context: &str) {
+        let owners = topo.owners();
+        let mut edge_wires: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+        for (wire, data) in topo.wires().iter() {
+            if !matches!(owners.pending, Some(super::Pending::Wire(w)) if w == wire) {
+                for oe in data.edges() {
+                    edge_wires
+                        .entry(oe.edge().index())
+                        .or_default()
+                        .push(wire.index());
+                }
+            }
+        }
+        let mut wire_faces: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+        for (face, data) in topo.faces().iter() {
+            if !matches!(owners.pending, Some(super::Pending::Face(f)) if f == face) {
+                for wire in super::face_wires(data) {
+                    wire_faces
+                        .entry(wire.index())
+                        .or_default()
+                        .push(face.index());
+                }
+            }
+        }
+        let stored = |slots: &[[usize; 2]], more, from| {
+            let mut links: Vec<usize> = super::linked(slots, more, from).collect();
+            links.sort_unstable();
+            links
+        };
+        for from in 0..owners.edge_wires.len().max(topo.num_edges()) {
+            let mut expected = edge_wires.remove(&from).unwrap_or_default();
+            expected.sort_unstable();
+            assert_eq!(
+                stored(&owners.edge_wires, &owners.more_edge_wires, from),
+                expected,
+                "{context}: the stored wires of edge {from}"
+            );
+        }
+        for from in 0..owners.wire_faces.len().max(topo.num_wires()) {
+            let mut expected = wire_faces.remove(&from).unwrap_or_default();
+            expected.sort_unstable();
+            let mut links: Vec<usize> =
+                super::linked(&owners.wire_faces, &owners.more_wire_faces, from).collect();
+            links.sort_unstable();
+            assert_eq!(
+                links, expected,
+                "{context}: the stored faces of wire {from}"
             );
         }
     }
