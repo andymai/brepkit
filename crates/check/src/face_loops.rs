@@ -35,6 +35,7 @@ use brepkit_math::region2d::{Boundary2, distance_to_boundary, point_in_region};
 use brepkit_math::traits::ParametricSurface;
 use brepkit_math::vec::{Point2, Point3, Vec2, Vec3};
 use brepkit_topology::Topology;
+use brepkit_topology::edge::EdgeCurve;
 use brepkit_topology::face::{FaceId, FaceSurface};
 use brepkit_topology::wire::WireId;
 
@@ -118,6 +119,10 @@ pub struct FaceLoops {
     loops: Vec<Option<Loop>>,
     /// The drawing's linear tolerance.
     reach: f64,
+    /// The outline is the surface's seams alone, closed lines of no length:
+    /// the face is the whole surface less its holes, which then lies
+    /// outside the disc of each hole.
+    whole: bool,
 }
 
 /// A point's side of a wire, read as the parity of crossings.
@@ -167,10 +172,17 @@ impl FaceLoops {
                     .and_then(|w| trace(w, &*draw, drawing, scale, reach))
             })
             .collect();
+        let outline = topo.wire(face.outer_wire())?.edges();
+        let mut whole = !outline.is_empty();
+        for oe in outline {
+            let edge = topo.edge(oe.edge())?;
+            whole &= edge.start() == edge.end() && matches!(edge.curve(), EdgeCurve::Line);
+        }
         Ok(Some(Self {
             drawing,
             loops,
             reach,
+            whole,
         }))
     }
 
@@ -212,22 +224,47 @@ impl FaceLoops {
     }
 
     /// The parity of crossings of the two torus wires `a` and `b` by a path
-    /// from `q` to a fixed point: which of the two bands between them `q`
-    /// lies in.
+    /// from `q` to one fixed point clear of both: which of the two bands
+    /// between them `q` lies in. Every path between two points crosses the
+    /// pair as often, mod 2, so a path that passes a chord's end is
+    /// replaced by one through a point aside.
     fn band(&self, (a, b): (usize, usize), q: Point2) -> Side {
         let Drawing::Torus(period) = self.drawing else {
             return None;
         };
         let (la, lb) = (self.loops[a].as_ref()?, self.loops[b].as_ref()?);
-        [(0.371, 0.613), (0.127, 0.883), (0.759, 0.241)]
-            .into_iter()
-            .find_map(|(fu, fv)| {
-                let to = Point2::new(fu * period.x(), fv * period.y());
-                let from = Point2::new(q.x().rem_euclid(period.x()), q.y().rem_euclid(period.y()));
-                let n = crossings(la, from, to, period, self.reach)?
-                    + crossings(lb, from, to, period, self.reach)?;
-                Some(n % 2 == 1)
+        let at = |(fu, fv): (f64, f64)| Point2::new(fu * period.x(), fv * period.y());
+        let margin = 100.0 * self.reach;
+        let to = [
+            (0.371, 0.613),
+            (0.127, 0.883),
+            (0.759, 0.241),
+            (0.553, 0.067),
+        ]
+        .into_iter()
+        .map(at)
+        .find(|&r| {
+            [la, lb].iter().all(|l| {
+                copies(r, period, l, margin).is_some_and(|near| {
+                    near.iter()
+                        .all(|&c| distance_to_boundary(&l.pieces, c) > margin)
+                })
             })
+        })?;
+        let from = Point2::new(q.x().rem_euclid(period.x()), q.y().rem_euclid(period.y()));
+        let count = |p: Point2, r: Point2| {
+            Some(
+                crossings(la, p, r, period, self.reach)? + crossings(lb, p, r, period, self.reach)?,
+            )
+        };
+        let aside = [(0.211, 0.457), (0.689, 0.811), (0.433, 0.163)].map(at);
+        count(from, to)
+            .or_else(|| {
+                aside
+                    .into_iter()
+                    .find_map(|w| Some(count(from, w)? + count(w, to)?))
+            })
+            .map(|n| n % 2 == 1)
     }
 
     /// The wire's side of each separating wire: on a torus, the wires that
@@ -305,6 +342,7 @@ impl FaceLoops {
                     .iter()
                     .find(|&&(b, _)| b == 0)
                     .map(|&(_, side)| side)
+                    .or_else(|| (self.whole && matches!(s, Separator::One(_))).then_some(false))
                     .or_else(|| majority(&sides))
                     .unwrap_or(first)
             };
@@ -691,11 +729,18 @@ fn trace(
         }
         for (ta, tb) in edge_pieces(edge) {
             let start = draw(at(ta), points.last().copied());
-            if points.is_empty() {
+            if points
+                .last()
+                .is_none_or(|&last| (start - last).length() > reach)
+            {
                 points.push(start);
             }
-            let mut pending = vec![(ta, tb, start, 0_u32)];
-            while let Some((ta, tb, a, depth)) = pending.pop() {
+            // Each stretch is carried on from the point traced last, which
+            // is its start: a point carried from farther back can land a
+            // period away.
+            let mut pending = vec![(ta, tb, 0_u32)];
+            while let Some((ta, tb, depth)) = pending.pop() {
+                let a = *points.last()?;
                 let b = draw(at(tb), Some(a));
                 let thirds = [1.0 / 3.0, 0.5, 2.0 / 3.0].map(|f| {
                     let p = draw(at((tb - ta).madd(f, ta)), Some(a));
@@ -705,10 +750,9 @@ fn trace(
                 let off = thirds.iter().fold(0.0_f64, |m, &x| m.max(x));
                 if (off > target || (b - a).length() > longest) && depth < MOST_HALVINGS {
                     let mid = f64::midpoint(ta, tb);
-                    let m = draw(at(mid), Some(a));
                     // The second half is followed after the first.
-                    pending.push((mid, tb, m, depth + 1));
-                    pending.push((ta, mid, a, depth + 1));
+                    pending.push((mid, tb, depth + 1));
+                    pending.push((ta, mid, depth + 1));
                     continue;
                 }
                 sag = sag.max(2.0 * off);
@@ -933,5 +977,106 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    /// A loop round a torus's outer equator as one closed polynomial
+    /// B-spline of a single span, its middle more than half a turn from its
+    /// start: its drawing winds the torus once.
+    #[test]
+    fn a_single_span_spline_round_a_torus_winds_it() {
+        let torus =
+            brepkit_math::surfaces::ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), 6.0, 2.0)
+                .unwrap();
+        let degree = 8_usize;
+        #[allow(clippy::cast_precision_loss)]
+        let control: Vec<Point3> = (0..=degree)
+            .map(|k| {
+                let s = k as f64 / degree as f64;
+                let a = TAU * 0.1f64.mul_add((std::f64::consts::PI * s).sin(), s);
+                Point3::new(20.0 * a.cos(), 20.0 * a.sin(), 0.0)
+            })
+            .collect();
+        let mut knots = vec![0.0; degree + 1];
+        knots.extend(vec![1.0; degree + 1]);
+        let rim = brepkit_math::nurbs::curve::NurbsCurve::new(
+            degree,
+            knots,
+            control,
+            vec![1.0; degree + 1],
+        )
+        .unwrap();
+        let mut topo = Topology::default();
+        let start = rim.evaluate(0.0);
+        let v = topo.add_vertex(Vertex::new(start, 1e-7));
+        let e = topo.add_edge(Edge::new(v, v, EdgeCurve::NurbsCurve(rim)));
+        let outer = topo.add_wire(Wire::new(vec![OrientedEdge::new(e, true)], true).unwrap());
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        let top = Circle3D::new(Point3::new(0.0, 0.0, 2.0), z, 6.0).unwrap();
+        let w = topo.add_vertex(Vertex::new(top.evaluate(0.0), 1e-7));
+        let e = topo.add_edge(Edge::new(w, w, EdgeCurve::Circle(top)));
+        let hole = topo.add_wire(Wire::new(vec![OrientedEdge::new(e, false)], true).unwrap());
+        let face = topo.add_face(Face::new(outer, vec![hole], FaceSurface::Torus(torus)));
+        let loops = FaceLoops::of(&topo, face, 1e-6).unwrap().unwrap();
+        let outline = loops.loops[0].as_ref().unwrap();
+        assert!(
+            (outline.shift.x().abs() - TAU).abs() < 1e-9,
+            "{:?}",
+            outline.shift
+        );
+        assert!(outline.shift.y().abs() < 1e-9, "{:?}", outline.shift);
+    }
+
+    /// Two tube circles of a torus, at `u = 0.5` and `u = 1.5`, part it into
+    /// two bands. Every point of one band reads one side of the pair, also
+    /// where its path to the fixed point passes the end of a chord.
+    #[test]
+    fn each_band_between_two_tube_circles_reads_one_side() {
+        let (big, small) = (6.0, 2.0);
+        let torus =
+            brepkit_math::surfaces::ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), big, small)
+                .unwrap();
+        let mut topo = Topology::default();
+        let mut tube = |u: f64| {
+            let (s, c) = u.sin_cos();
+            let circle = Circle3D::new(
+                Point3::new(big * c, big * s, 0.0),
+                Vec3::new(-s, c, 0.0),
+                small,
+            )
+            .unwrap();
+            let v = topo.add_vertex(Vertex::new(circle.evaluate(0.0), 1e-7));
+            let e = topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(circle)));
+            topo.add_wire(Wire::new(vec![OrientedEdge::new(e, true)], true).unwrap())
+        };
+        let (outer, hole) = (tube(0.5), tube(1.5));
+        let face = topo.add_face(Face::new(outer, vec![hole], FaceSurface::Torus(torus)));
+        let loops = FaceLoops::of(&topo, face, 1e-6).unwrap().unwrap();
+        let mut sides = [Vec::new(), Vec::new()];
+        for i in 0..40 {
+            for j in 0..64 {
+                let v = TAU * f64::from(j) / 64.0;
+                let (inside, u) = if i < 20 {
+                    (0, 0.6 + 0.8 * f64::from(i) / 19.0)
+                } else {
+                    (1, 1.6 + 4.9 * f64::from(i - 20) / 19.0)
+                };
+                if let Some(side) = loops.band((0, 1), Point2::new(u, v)) {
+                    sides[inside].push(side);
+                }
+            }
+        }
+        // A point whose straight path to the fixed point passes the end of
+        // a chord of a tube circle.
+        for q in [
+            Point2::new(1.0, 2.714_428_281_870_906_5),
+            Point2::new(1.0, 4.0),
+        ] {
+            sides[0].push(loops.band((0, 1), q).unwrap());
+        }
+        for band in &sides {
+            assert!(band.len() > 1200, "{}", band.len());
+            assert!(band.iter().all(|&s| s == band[0]));
+        }
+        assert_ne!(sides[0][0], sides[1][0]);
     }
 }

@@ -1606,6 +1606,14 @@ mod tests {
         ));
         assert!(found(&topo, face).is_some_and(|d| d.contains("lies inside inner wire")));
 
+        // Two holes alone, one round the other.
+        let face = topo.add_face(Face::new(
+            outer,
+            vec![a, around_a],
+            FaceSurface::Torus(torus()),
+        ));
+        assert!(found(&topo, face).is_some_and(|d| d.contains("lies inside inner wire")));
+
         // A patch round the seams: a hole inside it passes, and with one
         // more beyond it, the two lie on two sides of the outline.
         let patch = torus_loop(&mut topo, (0.0, 0.0), (1.0, 1.0));
