@@ -947,7 +947,9 @@ enum Common {
 
 /// Into the wall's material from a line along a ruling of `cylinder`, and
 /// the turn about the axis to the contact a chord `d` away: the left of the
-/// wall's own traversal of the edge, about its outward normal.
+/// wall's stored traversal of the edge, about the cylinder's own normal. A
+/// reversed face flips both its normal and its traversal, as `build_chain`
+/// reads a face's use, so the two flips cancel.
 #[allow(clippy::too_many_arguments)]
 fn ruling_side(
     topo: &Topology,
@@ -978,13 +980,8 @@ fn ruling_side(
         return Ok(None);
     };
     let radial = (start - foot(start)).normalize()?;
-    let outward = if topo.face(wall)?.is_reversed() {
-        -radial
-    } else {
-        radial
-    };
     let traversal = if flag { along } else { -along };
-    let sign = outward.cross(traversal).dot(axis.cross(radial)).signum();
+    let sign = radial.cross(traversal).dot(axis.cross(radial)).signum();
     Ok(Some(WallSide::Ruling {
         cylinder: cylinder.clone(),
         turn: 2.0 * (0.5 * d / radius).asin() * sign,
@@ -1700,10 +1697,15 @@ fn plan_is_clear(topo: &Topology, plan: &Plan, d: f64) -> Result<bool, Operation
         new_spans.push((piece.cap, span, allowed));
     }
     for corner in &plan.corners {
-        if let Some(cut) = corner.cut {
+        if let (Some(cut), Some(sliver)) = (corner.cut, &corner.sliver) {
             let face = corner.faces[1];
             if plan.pieces.iter().any(|p| p.cap == face) {
-                new_spans.push((face, Span::Segment(corner.reach, cut), vec![corner.reach]));
+                let Some(points) = polyline_within(sliver, corner.reach, cut, tol) else {
+                    return Ok(false);
+                };
+                for pair in points.windows(2) {
+                    new_spans.push((face, Span::Segment(pair[0], pair[1]), vec![corner.reach]));
+                }
             }
         }
     }
@@ -1864,7 +1866,171 @@ fn plan_is_clear(topo: &Topology, plan: &Plan, d: f64) -> Result<bool, Operation
             return Ok(false);
         }
     }
+    // Nor may two strips on one wall overlap, but where their edges meet.
+    for i in 0..plan.pieces.len() {
+        for j in i + 1..plan.pieces.len() {
+            let (a, b) = (&plan.pieces[i], &plan.pieces[j]);
+            let meet = [a.start, a.end]
+                .iter()
+                .any(|v| *v == b.start || *v == b.end);
+            if a.wall == b.wall && !meet && wall_strips_overlap(topo, plan, i, j, d)? {
+                return Ok(false);
+            }
+        }
+    }
     Ok(true)
+}
+
+/// Points along `curve` from `a` to `b` whose chords stay within `tol` of it:
+/// a chord whose middle strays further is halved, down to 1/4096 of the
+/// curve's parameters. `None` when a chord that short still strays.
+fn polyline_within(curve: &EdgeCurve, a: Point3, b: Point3, tol: f64) -> Option<Vec<Point3>> {
+    let EdgeCurve::NurbsCurve(nurbs) = curve else {
+        return Some(vec![a, b]);
+    };
+    let (t0, t1) = curve.domain_with_endpoints(a, b);
+    let shortest = (t1 - t0).abs() / 4096.0;
+    let mut points = vec![nurbs.evaluate(t0)];
+    // Chords still to read, the next one last.
+    let mut pending = vec![(t0, t1)];
+    while let Some((s0, s1)) = pending.pop() {
+        let (p, q) = (nurbs.evaluate(s0), nurbs.evaluate(s1));
+        let mid = nurbs.evaluate(0.5 * (s0 + s1));
+        let (stray, _, _) = segment_segment_distance(p, q, mid, mid);
+        if stray <= tol {
+            points.push(q);
+        } else if (s1 - s0).abs() <= shortest {
+            return None;
+        } else {
+            let half = 0.5 * (s0 + s1);
+            pending.push((half, s1));
+            pending.push((s0, half));
+        }
+    }
+    Some(points)
+}
+
+/// The angles (from `from` over `width`) and the heights along the axis
+/// (from `low` to `high`) of the strip a chamfer takes from the cylinder
+/// wall under `piece`.
+fn cylinder_strip(
+    cylinder: &CylindricalSurface,
+    piece: &Piece,
+    d: f64,
+) -> Option<(f64, f64, f64, f64)> {
+    let axis = cylinder.axis();
+    let height = |p: Point3| axis.dot(p - cylinder.origin());
+    let angle = |p: Point3| cylinder.project_point(p).0;
+    match &piece.wall_side {
+        WallSide::Axis(dir) => {
+            let (u0, u1, um) = (
+                angle(piece.start_point),
+                angle(piece.end_point),
+                angle(piece.midpoint()),
+            );
+            let (from, width) = if (um - u0).rem_euclid(TAU) < (u1 - u0).rem_euclid(TAU) {
+                (u0, (u1 - u0).rem_euclid(TAU))
+            } else {
+                (u1, (u0 - u1).rem_euclid(TAU))
+            };
+            let (rim, other) = (
+                height(piece.start_point),
+                height(piece.start_point + *dir * d),
+            );
+            Some((from, width, rim.min(other), rim.max(other)))
+        }
+        WallSide::Ruling { turn, .. } => {
+            let u = angle(piece.start_point);
+            let (from, width) = if *turn > 0.0 {
+                (u, *turn)
+            } else {
+                ((u + turn).rem_euclid(TAU), -turn)
+            };
+            let (h0, h1) = (height(piece.start_point), height(piece.end_point));
+            Some((from, width, h0.min(h1), h0.max(h1)))
+        }
+        WallSide::Plane { .. } => None,
+    }
+}
+
+/// Whether some of the segment from `a` to `b` lies strictly inside the
+/// strip a line piece's chamfer takes from its plane wall: from `origin`
+/// along `along` for `length`, and across along `across` for up to `d`.
+fn segment_enters_strip(
+    (a, b): (Point3, Point3),
+    origin: Point3,
+    along: Vec3,
+    length: f64,
+    across: Vec3,
+    d: f64,
+) -> bool {
+    let tol = Tolerance::new().linear;
+    let (mut lo, mut hi) = (0.0_f64, 1.0_f64);
+    // Keep the parameters where `start + t * rate` lies within `(min, max)`.
+    let mut clip = |start: f64, rate: f64, min: f64, max: f64| {
+        if rate.abs() <= 1e-15 {
+            if start <= min || start >= max {
+                hi = lo - 1.0;
+            }
+            return;
+        }
+        let (t0, t1) = ((min - start) / rate, (max - start) / rate);
+        lo = lo.max(t0.min(t1));
+        hi = hi.min(t0.max(t1));
+    };
+    let (sa, sb) = ((a - origin).dot(along), (b - origin).dot(along));
+    let (ha, hb) = ((a - origin).dot(across), (b - origin).dot(across));
+    clip(sa, sb - sa, tol, length - tol);
+    clip(ha, hb - ha, tol, d + tol);
+    hi > lo + 1e-12
+}
+
+/// Whether two pieces along one wall, that share no vertex, take strips
+/// from it that overlap.
+fn wall_strips_overlap(
+    topo: &Topology,
+    plan: &Plan,
+    i: usize,
+    j: usize,
+    d: f64,
+) -> Result<bool, OperationsError> {
+    let tol = Tolerance::new().linear;
+    let (a, b) = (&plan.pieces[i], &plan.pieces[j]);
+    if let Some(cylinder) = cylinder_of(topo, a.wall)? {
+        let (Some((fa, wa, la, ha)), Some((fb, wb, lb, hb))) = (
+            cylinder_strip(&cylinder, a, d),
+            cylinder_strip(&cylinder, b, d),
+        ) else {
+            return Ok(true);
+        };
+        let slack = tol / cylinder.radius();
+        let angles =
+            (fb - fa).rem_euclid(TAU) < wa - slack || (fa - fb).rem_euclid(TAU) < wb - slack;
+        let heights = ha.min(hb) > la.max(lb) + tol;
+        return Ok(angles && heights);
+    }
+    // On a plane wall, each piece's edge and contact stay out of the other's
+    // strip.
+    for (first, second) in [(i, j), (j, i)] {
+        let (piece, other) = (&plan.pieces[first], &plan.pieces[second]);
+        let section = plan.piece_sections[first][0];
+        let run = piece.end_point - piece.start_point;
+        let along = run.normalize()?;
+        let [s0, s1] = plan.piece_sections[second];
+        for segment in [(other.start_point, other.end_point), (s0.wall, s1.wall)] {
+            if segment_enters_strip(
+                segment,
+                piece.start_point,
+                along,
+                run.length(),
+                section.wall_dir,
+                d,
+            ) {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
 }
 
 /// Whether the cylinder wall under `piece` keeps every edge but `planned` out
@@ -1884,35 +2050,12 @@ fn cylinder_wall_clear(
     let height = |p: Point3| axis.dot(p - cylinder.origin());
     let angle = |p: Point3| cylinder.project_point(p).0;
     let slack = tol / cylinder.radius();
-    // The angles the strip covers, from `from` over `width`, and whether a
-    // height range meets the heights it covers.
-    let (from, width, along_axis) = match &piece.wall_side {
-        WallSide::Axis(dir) => {
-            let (u0, u1, um) = (
-                angle(piece.start_point),
-                angle(piece.end_point),
-                angle(piece.midpoint()),
-            );
-            let (from, width) = if (um - u0).rem_euclid(TAU) < (u1 - u0).rem_euclid(TAU) {
-                (u0, (u1 - u0).rem_euclid(TAU))
-            } else {
-                (u1, (u0 - u1).rem_euclid(TAU))
-            };
-            (
-                from,
-                width,
-                Some((height(piece.start_point), dir.dot(axis))),
-            )
-        }
-        WallSide::Ruling { turn, .. } => {
-            let u = angle(piece.start_point);
-            if *turn > 0.0 {
-                (u, *turn, None)
-            } else {
-                ((u + turn).rem_euclid(TAU), -turn, None)
-            }
-        }
-        WallSide::Plane { .. } => return Ok(false),
+    let Some((from, width, _, _)) = cylinder_strip(&cylinder, piece, d) else {
+        return Ok(false);
+    };
+    let along_axis = match &piece.wall_side {
+        WallSide::Axis(dir) => Some((height(piece.start_point), dir.dot(axis))),
+        WallSide::Ruling { .. } | WallSide::Plane { .. } => None,
     };
     let (h0, h1) = (height(piece.start_point), height(piece.end_point));
     // Under an arc, from just below the rim to the contact; beside a ruling,
@@ -2170,6 +2313,34 @@ fn plane_through(normal: Vec3, p: Point3) -> FaceSurface {
     }
 }
 
+/// Whether an edge from `p0` to `p1` along `curve`, cut back to run from `q0`
+/// to `q1`, keeps a stretch the way it ran: two cuts from its two ends can
+/// pass each other.
+fn keeps_a_stretch(curve: &EdgeCurve, p0: Point3, p1: Point3, q0: Point3, q1: Point3) -> bool {
+    let tol = Tolerance::new().linear;
+    match curve {
+        EdgeCurve::Line => {
+            let run = p1 - p0;
+            (q1 - q0).dot(run) > tol * run.length()
+        }
+        EdgeCurve::Circle(c) => {
+            let slack = tol / c.radius();
+            let at = |p: Point3| {
+                let off = (c.project(p) - c.project(p0)).rem_euclid(TAU);
+                if off > TAU - slack { 0.0 } else { off }
+            };
+            let span = at(p1);
+            let to = if (q1 - p1).length() <= tol {
+                span
+            } else {
+                at(q1)
+            };
+            span > slack && at(q0) + slack < to && to <= span + slack
+        }
+        EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_) => false,
+    }
+}
+
 /// The flag with which an edge stored from `start` runs from `from`.
 fn runs_from(topo: &Topology, edge: EdgeId, from: VertexId) -> Result<bool, OperationsError> {
     Ok(topo.edge(edge)?.start() == from)
@@ -2313,6 +2484,11 @@ fn build_chain(
             }
         }
         let curve = read_curve(topo, edge)?;
+        let ends = [original_start, original_end, start, end];
+        let [p0, p1, q0, q1] = ends.map(|v| topo.vertex(v).map(Vertex::point));
+        if !keeps_a_stretch(&curve, p0?, p1?, q0?, q1?) {
+            return Ok(None);
+        }
         let shorter = topo.add_edge(Edge::new(start, end, curve));
         for face in faces {
             if !swaps.core(face, edge, vec![(shorter, true)]) {
@@ -2713,4 +2889,49 @@ pub fn chamfer_tangent_chains(
         return Ok(None);
     }
     Ok(Some(result))
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+    use super::*;
+
+    /// A conic arc's polyline stays within the tolerance of the arc between
+    /// its points, and a line is its one chord.
+    #[test]
+    fn a_polyline_stays_within_its_conic() {
+        let cone = ConicalSurface::new(
+            Point3::new(0.0, 0.0, 10.0),
+            Vec3::new(0.0, 0.0, -1.0),
+            std::f64::consts::FRAC_PI_4,
+        )
+        .unwrap();
+        // The plane y = 2 meets the cone, r = 10 - z, in a hyperbola.
+        let on = |x: f64| Point3::new(x, 2.0, 10.0 - x.hypot(2.0));
+        let (a, b) = (on(1.0), on(6.0));
+        let curve = conic_arc(Vec3::new(0.0, 1.0, 0.0), &cone, a, b).unwrap();
+        let tol = 1e-7;
+        let points = polyline_within(&curve, a, b, tol).unwrap();
+        assert!(points.len() > 2);
+        assert!((points[0] - a).length() < 1e-12);
+        assert!((points[points.len() - 1] - b).length() < 1e-12);
+        let EdgeCurve::NurbsCurve(nurbs) = &curve else {
+            panic!("a conic arc is a NURBS curve");
+        };
+        for k in 0..=200 {
+            let p = nurbs.evaluate(f64::from(k) / 200.0);
+            assert!(Band::Cone(cone.clone()).level(p).abs() < 1e-9);
+            assert!((p.y() - 2.0).abs() < 1e-9);
+            let near = points
+                .windows(2)
+                .map(|w| segment_segment_distance(w[0], w[1], p, p).0)
+                .fold(f64::INFINITY, f64::min);
+            assert!(near <= 2.0 * tol, "{near}");
+        }
+        assert_eq!(
+            polyline_within(&EdgeCurve::Line, a, b, tol).unwrap(),
+            vec![a, b]
+        );
+    }
 }

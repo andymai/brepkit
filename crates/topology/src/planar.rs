@@ -26,6 +26,17 @@ struct Plane2 {
 }
 
 impl Plane2 {
+    /// [`Self::exact_piece`], with a NURBS curve that lies on the segment
+    /// between its ends, within [`STRAIGHT_TOL`], read as that segment.
+    fn boundary_piece(self, curve: &EdgeCurve, a: Point3, b: Point3) -> Option<Boundary2> {
+        if matches!(curve, EdgeCurve::NurbsCurve(_))
+            && curve.is_straight_between(a, b, STRAIGHT_TOL)
+        {
+            return Some(Boundary2::Segment(self.point(a), self.point(b)));
+        }
+        self.exact_piece(curve, a, b)
+    }
+
     fn point(self, p: Point3) -> Point2 {
         let d = p - self.origin;
         Point2::new(d.dot(self.x), d.dot(self.y))
@@ -36,13 +47,11 @@ impl Plane2 {
     }
 
     /// The edge from `a` to `b` along `curve` as the piece it is: `None` for
-    /// a NURBS curve other than a straight one, which has no exact piece.
+    /// a NURBS curve, which has no exact piece.
     fn exact_piece(self, curve: &EdgeCurve, a: Point3, b: Point3) -> Option<Boundary2> {
         match curve {
             EdgeCurve::Line => Some(Boundary2::Segment(self.point(a), self.point(b))),
-            EdgeCurve::NurbsCurve(_) => curve
-                .is_straight_between(a, b, STRAIGHT_TOL)
-                .then(|| Boundary2::Segment(self.point(a), self.point(b))),
+            EdgeCurve::NurbsCurve(_) => None,
             EdgeCurve::Circle(c) => {
                 let (t0, t1) = curve.domain_with_endpoints(a, b);
                 Some(Boundary2::Arc {
@@ -118,7 +127,7 @@ pub fn face_boundary_2d(
                 topo.vertex(edge.start())?.point(),
                 topo.vertex(edge.end())?.point(),
             );
-            pieces.extend(plane.exact_piece(edge.curve(), a, b));
+            pieces.extend(plane.boundary_piece(edge.curve(), a, b));
         }
     }
     Ok(Some(pieces))
@@ -149,7 +158,7 @@ pub fn wire_boundary_2d(
             topo.vertex(edge.start())?.point(),
             topo.vertex(edge.end())?.point(),
         );
-        let Some(piece) = plane.exact_piece(edge.curve(), a, b) else {
+        let Some(piece) = plane.boundary_piece(edge.curve(), a, b) else {
             return Ok(None);
         };
         pieces.push(piece);
@@ -939,14 +948,16 @@ mod tests {
         face_region_2d(topo, face, Point3::new(0.0, 0.0, 0.0), x, y, 1e-9).unwrap()
     }
 
-    /// A straight NURBS diameter is an exact piece, its segment.
+    /// A straight NURBS diameter is one piece, its chord, bounding it
+    /// exactly.
     #[test]
     fn a_straight_nurbs_edge_reads_as_its_line() {
         let mut topo = Topology::new();
         let face = half_disc(&mut topo, true);
         let region = region(&topo, face).unwrap();
-        assert_eq!(region.exact.len(), 2);
-        assert!(region.beziers.is_empty());
+        assert_eq!(region.exact.len(), 1);
+        assert_eq!(region.beziers.len(), 1);
+        assert!(region.beziers[0].bound() < 1e-12);
         assert!(region.contains_clear(Point2::new(0.0, 0.5), 1e-9));
         assert!(!region.contains_clear(Point2::new(0.0, -0.01), 1e-9));
     }

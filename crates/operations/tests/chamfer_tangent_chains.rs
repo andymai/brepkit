@@ -450,6 +450,78 @@ fn a_d_prisms_corner_on_its_round_wall_takes_a_flat_chamfer() {
     }
 }
 
+/// A block notched by a half cylinder of radius 5: the edge where the
+/// block's side meets the notch's hollow wall runs along a ruling of the
+/// wall. Its chamfer takes off a prism whose section is the triangle between
+/// the edge and the two contacts, less the disc's segment between the edge
+/// and the ruling, which the hollow wall leaves empty.
+#[test]
+fn a_notchs_corner_on_its_hollow_wall_takes_a_flat_chamfer() {
+    let (r, d, height) = (5.0_f64, 0.5_f64, 4.0);
+    let turn = 2.0 * (0.5 * d / r).asin();
+    let (cap, wall) = ([0.0, r + d], [r * turn.sin(), r * turn.cos()]);
+    let triangle = 0.5 * ((cap[0] - 0.0) * (wall[1] - r) - (cap[1] - r) * (wall[0] - 0.0)).abs();
+    let section = triangle - 0.5 * r * r * (turn - turn.sin());
+    let block = 10.0 * 20.0 * height - 0.5 * PI * r * r * height;
+    for (name, pose) in poses() {
+        let mut topo = Topology::new();
+        let solid = make_box(&mut topo, 10.0, 20.0, height).unwrap();
+        transform_solid(&mut topo, solid, &Mat4::translation(0.0, -10.0, 0.0)).unwrap();
+        let rod =
+            brepkit_operations::primitives::make_cylinder(&mut topo, r, height + 2.0).unwrap();
+        transform_solid(&mut topo, rod, &Mat4::translation(0.0, 0.0, -1.0)).unwrap();
+        let notched = boolean(&mut topo, BooleanOp::Cut, solid, rod).unwrap();
+        let corner = upper_upright(&topo, notched);
+        assert!(
+            (topo
+                .vertex(topo.edge(corner).unwrap().start())
+                .unwrap()
+                .point()
+                .x())
+            .abs()
+                < 1e-9
+        );
+        transform_solid(&mut topo, notched, &pose).unwrap();
+
+        let result = chamfer(&mut topo, notched, &[corner], d).unwrap();
+
+        assert_exact(&topo, result, block - section * height, name);
+        assert!(
+            !inside(&topo, result, &pose, Point3::new(0.05, 5.05, 2.0)),
+            "{name}"
+        );
+        assert!(
+            inside(&topo, result, &pose, Point3::new(0.4, 5.4, 2.0)),
+            "{name}"
+        );
+    }
+}
+
+/// Both rims of the D and its upright at `y = 5`: each rim's chamfer ends
+/// square at the back wall and cuts the other upright back from its end. At
+/// 2.1 the two cuts pass each other on that upright, 4 high, and the rims'
+/// strips on the round wall overlap, so no exact path takes the pick.
+#[test]
+fn rims_whose_chamfers_pass_each_other_on_the_wall_are_refused() {
+    let mut topo = Topology::new();
+    let solid = d_prism(&mut topo);
+    let mut pick: Vec<EdgeId> = solid_edges(&topo, solid)
+        .unwrap()
+        .into_iter()
+        .filter(|&e| !is_line(&topo, e))
+        .collect();
+    assert_eq!(pick.len(), 2);
+    pick.push(upper_upright(&topo, solid));
+
+    assert!(chamfer(&mut topo, solid, &pick, 2.1).is_err());
+    let result = chamfer(&mut topo, solid, &pick, 0.5).unwrap();
+    let report = validate_solid(&topo, result).unwrap();
+    assert!(report.is_valid(), "{:?}", report.issues);
+    assert!(is_watertight(
+        &tessellate_solid(&topo, result, 0.01).unwrap()
+    ));
+}
+
 /// A selection no exact path takes must not come back with the solid's arcs
 /// flattened to chords: the planar rebuild reads only a face's corners.
 #[test]
