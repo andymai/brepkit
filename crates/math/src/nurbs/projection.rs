@@ -1168,6 +1168,45 @@ mod tests {
             .map(|k| Point3::new(0.5 * f64::from(k), 0.5, 0.4))
             .collect();
         assert_nearest("steps", &steps, &points, (2, 4000));
+        // A narrow middle step: its own points, not the next step's, are
+        // read for it.
+        let rows = [5.0, 0.0, 1.0]
+            .map(|x| vec![Point3::new(x, 0.0, 0.0), Point3::new(x, 1.0, 0.0)])
+            .to_vec();
+        let narrow = NurbsSurface::new(
+            0,
+            1,
+            vec![0.0, 0.01, 0.02, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            rows,
+            vec![vec![1.0, 1.0]; 3],
+        )
+        .expect("a surface");
+        let found = project_point_to_surface(&narrow, Point3::new(0.0, 0.5, 0.1), 1e-9)
+            .expect("projection");
+        assert!((found.distance - 0.1).abs() < 1e-9, "{found:?}");
+    }
+
+    /// Weights of `1e-200` give the surface of weights of 1, though their
+    /// squares are less than the least float.
+    #[test]
+    fn a_tiny_common_weight_does_not_matter() {
+        let strip = strip_that_bends_back(10.0);
+        let tiny = NurbsSurface::new(
+            strip.degree_u(),
+            strip.degree_v(),
+            strip.knots_u().to_vec(),
+            strip.knots_v().to_vec(),
+            strip.control_points().to_vec(),
+            vec![vec![1e-200; 4]; 2],
+        )
+        .expect("a surface");
+        for k in 1..20 {
+            let v = f64::from(k) / 20.0;
+            let point = tiny.evaluate(0.4, v);
+            let found = project_point_to_surface(&tiny, point, 1e-9).expect("projection");
+            assert!(found.distance < 1e-7, "v = {v}: {found:?}");
+        }
     }
 
     #[test]

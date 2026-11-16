@@ -172,14 +172,21 @@ pub(super) fn nearest(
         if !net.iter().flatten().all(|c| c.is_finite()) {
             return best;
         }
+        // A common factor of the weights leaves the surface as it is; taken
+        // out, it cannot carry the products out of the range of a float.
+        let scale = net.iter().fold(0.0_f64, |m, q| m.max(q[3].abs()));
+        if scale <= 0.0 {
+            return best;
+        }
         let points = net
             .iter()
             .map(|q| {
+                let w = q[3] / scale;
                 [
-                    q[0] - q[3] * point.x(),
-                    q[1] - q[3] * point.y(),
-                    q[2] - q[3] * point.z(),
-                    q[3],
+                    q[0] / scale - w * point.x(),
+                    q[1] / scale - w * point.y(),
+                    q[2] / scale - w * point.z(),
+                    w,
                 ]
             })
             .collect();
@@ -195,7 +202,20 @@ pub(super) fn nearest(
         let gaps = cell.gaps(bound);
         let (at, gap, slope) = search.lowest(&cell, bound, &best, &gaps);
         if gap < 0.0 {
-            let seed = (param_at(at[0], cell.u), param_at(at[1], cell.v));
+            // Along a direction of degree zero the surface steps at each
+            // knot, so the seed keeps to the middle of the part's span.
+            let seed = (
+                if search.rows == 1 {
+                    f64::midpoint(cell.u.0, cell.u.1)
+                } else {
+                    param_at(at[0], cell.u)
+                },
+                if search.cols == 1 {
+                    f64::midpoint(cell.v.0, cell.v.1)
+                } else {
+                    param_at(at[1], cell.v)
+                },
+            );
             let found = surface_descend(
                 surface,
                 point,
@@ -278,11 +298,15 @@ impl Search {
                 }
             }
         }
+        // A ratio that is not a number bounds nothing, and leaves the floor
+        // at zero.
         let floor = squares
             .iter()
             .zip(&weights)
             .map(|(s, w)| s / w)
-            .fold(f64::INFINITY, f64::min)
+            .fold(f64::INFINITY, |m, r| {
+                if r.is_nan() { 0.0_f64.min(m) } else { m.min(r) }
+            })
             .max(hull);
         (floor < bound).then_some(Cell {
             points,
