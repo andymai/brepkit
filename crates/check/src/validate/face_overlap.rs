@@ -5,37 +5,55 @@
 //! is open.
 //!
 //! The two faces are read in their common plane, each with its own lines,
-//! arcs and B-splines. A point just inside one face, beside one of its edges,
-//! that lies inside the other face shows that the two faces share an area.
-//! Where two faces share an area, the edge of one of them runs inside the
-//! other or along the other's edge on the same side, so such a point is
-//! found beside it.
+//! arcs and B-splines. The boundary of an area that two faces share runs
+//! along their edges: a stretch of an edge of one face lies inside the other
+//! face, or along an edge of the other with both faces on one side of it.
+//! So each edge of each face is cut where it meets the other face's
+//! boundary, and the face is read just inside each stretch between two
+//! cuts, nearer and nearer the edge. A point inside both faces shows that
+//! they share an area.
+
+use std::f64::consts::TAU;
 
 use brepkit_math::aabb::Aabb3;
 use brepkit_math::frame::Frame3;
+use brepkit_math::madd::Madd;
+use brepkit_math::region2d::Boundary2;
 use brepkit_math::vec::{Point2, Point3, Vec2, Vec3};
 use brepkit_topology::Topology;
 use brepkit_topology::edge::EdgeCurve;
 use brepkit_topology::explorer::solid_faces;
 use brepkit_topology::face::{FaceId, FaceSurface};
-use brepkit_topology::planar::{PlanarRegion, face_region_2d};
+use brepkit_topology::planar::{PlanarRegion, face_boundary_2d, face_region_2d};
 use brepkit_topology::solid::SolidId;
 
 use super::checks::{CheckId, EntityRef, Severity, ValidationIssue};
 use crate::CheckError;
-
-/// The fractions of an edge beside which a face's points are read.
-const FRACTIONS: [f64; 7] = [0.5, 0.25, 0.75, 0.125, 0.375, 0.625, 0.875];
 
 /// A direction square to no common plane, which turns each plane's normal to
 /// one side, so that two faces on one plane read the same normal and offset
 /// whichever way round they face.
 const SIDE: Vec3 = Vec3::new(0.577_215_664_9, 0.618_033_988_7, 0.533_102_917_2);
 
+/// The most angle, in radians, between the normals of two faces read as on
+/// one plane.
+const MOST_TILT: f64 = 1e-4;
+
+/// The stretches an edge is cut into where its meetings with the other
+/// face's boundary are not solved for: a B-spline edge, or an arc of an
+/// ellipse against another arc.
+const STRETCHES: u32 = 64;
+
+/// The most halvings of a stretch next to the other face's boundary where
+/// its meetings are not solved for.
+const MOST_HALVINGS: u32 = 10;
+
 /// A plane face, its plane turned to [`SIDE`].
 struct Flat {
     face: FaceId,
     normal: Vec3,
+    /// The plane's offset from the middle of the solid's plane faces, which
+    /// moves with the solid.
     offset: f64,
     origin: Point3,
     bounds: Aabb3,
@@ -61,7 +79,7 @@ impl Flat {
         Ok(Some(Self {
             face: face_id,
             normal,
-            offset: normal.dot(Vec3::new(origin.x(), origin.y(), origin.z())),
+            offset: 0.0,
             origin,
             bounds,
         }))
@@ -72,25 +90,249 @@ impl Flat {
     }
 }
 
-/// Whether the two faces lie on one plane within `tol` and their boxes meet.
+/// Whether the two faces lie on one plane within `tol` and their boxes meet:
+/// the second's first vertex lies within `tol` of the first's plane, and the
+/// two planes part by no more than `tol` across the larger face.
 fn on_one_plane(a: &Flat, b: &Flat, tol: f64) -> bool {
-    let reach = a.size().max(b.size());
-    (a.offset - b.offset).abs() <= tol
-        && (a.normal - b.normal).length() * reach <= tol
+    let tilt = (a.normal - b.normal).length();
+    tilt <= MOST_TILT
+        && tilt * a.size().max(b.size()) <= tol
+        && a.normal.dot(b.origin - a.origin).abs() <= tol
         && a.bounds.expanded(tol).intersects(b.bounds)
 }
 
-/// Points of `face` read in the plane of `frame`: for each edge, at
-/// [`FRACTIONS`], the point a little way to each side of the edge, the
-/// nearest that lies inside the face. Each is tested against `other`, and
-/// the first inside it returns `true`.
+/// An edge from `a` to `b` along `curve` in the plane of `frame`, as the
+/// piece it is: `None` for a B-spline.
+fn flat_piece(curve: &EdgeCurve, a: Point3, b: Point3, frame: &Frame3) -> Option<Boundary2> {
+    let point = |p: Point3| {
+        let d = p - frame.origin;
+        Point2::new(d.dot(frame.x), d.dot(frame.y))
+    };
+    let direction = |v: Vec3| Vec2::new(v.dot(frame.x), v.dot(frame.y));
+    let (t0, t1) = curve.domain_with_endpoints(a, b);
+    match curve {
+        EdgeCurve::Line => Some(Boundary2::Segment(point(a), point(b))),
+        EdgeCurve::NurbsCurve(_) => None,
+        EdgeCurve::Circle(c) => Some(Boundary2::Arc {
+            center: point(c.center()),
+            u: direction(c.u_axis()),
+            v: direction(c.v_axis()),
+            a: c.radius(),
+            b: c.radius(),
+            t0,
+            t1,
+        }),
+        EdgeCurve::Ellipse(e) => Some(Boundary2::Arc {
+            center: point(e.center()),
+            u: direction(e.u_axis()),
+            v: direction(e.v_axis()),
+            a: e.semi_major(),
+            b: e.semi_minor(),
+            t0,
+            t1,
+        }),
+    }
+}
+
+/// The fraction along `piece`, from 0 to 1, of the point `x` on or beside
+/// its line or curve, `None` past its ends by more than `tol`.
+fn fraction_of(piece: &Boundary2, x: Point2, tol: f64) -> Option<f64> {
+    match *piece {
+        Boundary2::Segment(a, b) => {
+            let d = b - a;
+            let len2 = d.dot(d);
+            if len2 <= 0.0 {
+                return None;
+            }
+            let f = (x - a).dot(d) / len2;
+            let slack = tol / len2.sqrt();
+            (-slack..=1.0 + slack)
+                .contains(&f)
+                .then_some(f.clamp(0.0, 1.0))
+        }
+        Boundary2::Arc {
+            center,
+            u,
+            v,
+            a,
+            b,
+            t0,
+            t1,
+        } => {
+            let w = x - center;
+            let theta = (w.dot(v) / b).atan2(w.dot(u) / a);
+            let slack = tol / a.min(b);
+            let mut rel = (theta - t0).rem_euclid(TAU);
+            if rel > TAU - slack {
+                rel -= TAU;
+            }
+            let span = t1 - t0;
+            (-slack..=span + slack)
+                .contains(&rel)
+                .then_some((rel / span).clamp(0.0, 1.0))
+        }
+    }
+}
+
+/// The ends of `piece`.
+fn ends(piece: &Boundary2) -> [Point2; 2] {
+    match *piece {
+        Boundary2::Segment(a, b) => [a, b],
+        Boundary2::Arc {
+            center,
+            u,
+            v,
+            a,
+            b,
+            t0,
+            t1,
+        } => [t0, t1].map(|t| center + u * (a * t.cos()) + v * (b * t.sin())),
+    }
+}
+
+/// The points where the line through `p` along `d` meets the conic of
+/// `arc`, as multiples of `d` from `p`; one point where it passes within
+/// `tol` of the conic without meeting it.
+fn line_meets_conic(p: Point2, d: Vec2, arc: &Boundary2, tol: f64) -> Vec<f64> {
+    let Boundary2::Arc {
+        center, u, v, a, b, ..
+    } = *arc
+    else {
+        return Vec::new();
+    };
+    let w = p - center;
+    let (x0, y0) = (w.dot(u) / a, w.dot(v) / b);
+    let (dx, dy) = (d.dot(u) / a, d.dot(v) / b);
+    let alpha = dx.madd(dx, dy * dy);
+    if alpha <= 0.0 {
+        return Vec::new();
+    }
+    let beta = 2.0 * x0.madd(dx, y0 * dy);
+    let gamma = x0.madd(x0, y0.madd(y0, -1.0));
+    let disc = beta.madd(beta, -4.0 * alpha * gamma);
+    if disc >= 0.0 {
+        let root = disc.sqrt();
+        return vec![
+            (-beta - root) / (2.0 * alpha),
+            (-beta + root) / (2.0 * alpha),
+        ];
+    }
+    let s = -beta / (2.0 * alpha);
+    let (x, y) = (dx.madd(s, x0), dy.madd(s, y0));
+    if (x.hypot(y) - 1.0).abs() * a.min(b) <= tol {
+        vec![s]
+    } else {
+        Vec::new()
+    }
+}
+
+/// The points where the carriers of two pieces meet, and the ends of a
+/// stretch where they run along each other. `None` for an arc of an
+/// ellipse against another arc, which are not solved for.
+fn carriers_meet(p: &Boundary2, q: &Boundary2, tol: f64) -> Option<Vec<Point2>> {
+    match (*p, *q) {
+        (Boundary2::Segment(a, b), Boundary2::Segment(c, e)) => {
+            let (d, f) = (b - a, e - c);
+            let denom = d.x().madd(f.y(), -(d.y() * f.x()));
+            let w = c - a;
+            let off_line = w.x().madd(d.y(), -(w.y() * d.x()));
+            if denom.abs() <= 1e-12 * d.length() * f.length() {
+                // Parallel: along each other where `q` lies on `p`'s line.
+                return Some(if off_line.abs() <= tol * d.length() {
+                    vec![c, e]
+                } else {
+                    Vec::new()
+                });
+            }
+            let s = w.x().madd(f.y(), -(w.y() * f.x())) / denom;
+            Some(vec![a + d * s])
+        }
+        (Boundary2::Segment(a, b), Boundary2::Arc { .. }) => {
+            let d = b - a;
+            Some(
+                line_meets_conic(a, d, q, tol)
+                    .into_iter()
+                    .map(|s| a + d * s)
+                    .collect(),
+            )
+        }
+        (Boundary2::Arc { .. }, Boundary2::Segment(c, e)) => {
+            let f = e - c;
+            Some(
+                line_meets_conic(c, f, p, tol)
+                    .into_iter()
+                    .map(|s| c + f * s)
+                    .collect(),
+            )
+        }
+        (
+            Boundary2::Arc {
+                center: c1,
+                a: a1,
+                b: b1,
+                ..
+            },
+            Boundary2::Arc {
+                center: c2,
+                a: a2,
+                b: b2,
+                ..
+            },
+        ) => {
+            let circle = |a: f64, b: f64| (a - b).abs() <= 1e-12 * a.abs().max(b.abs());
+            if !circle(a1, b1) || !circle(a2, b2) {
+                return None;
+            }
+            let between = c2 - c1;
+            let gap = between.length();
+            if gap <= tol {
+                // One centre: along each other where the radii agree.
+                return Some(if (a1 - a2).abs() <= tol {
+                    ends(q).to_vec()
+                } else {
+                    Vec::new()
+                });
+            }
+            if gap > a1 + a2 + tol || gap < (a1 - a2).abs() - tol {
+                return Some(Vec::new());
+            }
+            let along = (a1 * a1 - a2 * a2 + gap * gap) / (2.0 * gap);
+            let high = a1.madd(a1, -(along * along)).max(0.0).sqrt();
+            let axis = between * (1.0 / gap);
+            let foot = c1 + axis * along;
+            let side = Vec2::new(-axis.y(), axis.x());
+            Some(vec![foot + side * high, foot - side * high])
+        }
+    }
+}
+
+/// The fractions along `piece` at which it meets the pieces `others`, or
+/// starts or ends a stretch along one of them. `None` where a pair is not
+/// solved for.
+fn meetings(piece: &Boundary2, others: &[Boundary2], tol: f64) -> Option<Vec<f64>> {
+    let mut cuts = Vec::new();
+    for other in others {
+        for x in carriers_meet(piece, other, tol)? {
+            if fraction_of(other, x, tol).is_some()
+                && let Some(f) = fraction_of(piece, x, tol)
+            {
+                cuts.push(f);
+            }
+        }
+    }
+    Some(cuts)
+}
+
+/// Whether some point lies inside both faces, farther than `tol` from the
+/// boundary of each: read just inside `face`, beside each stretch of its
+/// edges between the points where they meet `other`'s boundary. `pieces`
+/// is that boundary as lines and arcs, `None` where it has a B-spline.
 fn shares_area(
     topo: &Topology,
     face_id: FaceId,
     region: &PlanarRegion,
-    other: &PlanarRegion,
+    (other, pieces): (&PlanarRegion, Option<&[Boundary2]>),
     frame: &Frame3,
-    size: f64,
     tol: f64,
 ) -> Result<bool, CheckError> {
     let flat = |p: Point3| {
@@ -111,33 +353,79 @@ fn shares_area(
                 continue;
             }
             let (t0, t1) = curve.domain_with_endpoints(a, b);
-            for f in FRACTIONS {
-                let t = t0 + (t1 - t0) * f;
-                let p = flat(curve.evaluate_with_endpoints(t, a, b));
-                let along = curve.tangent_with_endpoints(t, a, b);
-                let along = Vec2::new(along.dot(frame.x), along.dot(frame.y));
-                let Ok(across) = Vec2::new(-along.y(), along.x()).normalize() else {
-                    continue;
+            let at = |f: f64| (t1 - t0).madd(f, t0);
+            let point = |f: f64| flat(curve.evaluate_with_endpoints(at(f), a, b));
+            // A point inside both faces beside the edge at `f`, for a stretch
+            // `length` long: each side of the edge in turn, from a quarter of
+            // the stretch away to just clear of the tolerance.
+            let beside = |f: f64, length: f64| {
+                let m = point(f);
+                let along = curve.tangent_with_endpoints(at(f), a, b);
+                let Ok(across) = Vec2::new(-along.dot(frame.y), along.dot(frame.x)).normalize()
+                else {
+                    return false;
                 };
-                // The nearest point inside the face, of three steps each a
-                // sixteenth of the last, the smallest well clear of `tol`.
-                let mut step = 1e-3 * size;
-                for _ in 0..3 {
+                let mut step = 0.25 * length;
+                for _ in 0..64 {
                     if step <= 16.0 * tol {
                         break;
                     }
-                    let inside: Vec<Point2> = [step, -step]
-                        .into_iter()
-                        .map(|s| p + across * s)
-                        .filter(|&q| region.side(q, tol) == Some(true))
-                        .collect();
-                    if inside.iter().any(|&q| other.side(q, tol) == Some(true)) {
+                    for s in [step, -step] {
+                        let q = m + across * s;
+                        if region.side(q, tol) == Some(true) && other.side(q, tol) == Some(true) {
+                            return true;
+                        }
+                    }
+                    step *= 0.5;
+                }
+                false
+            };
+            let cuts = flat_piece(curve, a, b, frame)
+                .zip(pieces)
+                .and_then(|(piece, others)| meetings(&piece, others, tol));
+            if let Some(mut cuts) = cuts {
+                // Each stretch between two cuts lies inside the other face,
+                // outside it, or along its boundary.
+                cuts.extend([0.0, 1.0]);
+                cuts.sort_by(f64::total_cmp);
+                for pair in cuts.windows(2) {
+                    let (f0, f1) = (pair[0], pair[1]);
+                    let length = (point(f1) - point(f0)).length();
+                    let mid = 0.5 * (f0 + f1);
+                    if length > tol
+                        && other.side(point(mid), tol) != Some(false)
+                        && beside(mid, length)
+                    {
                         return Ok(true);
                     }
-                    if !inside.is_empty() {
-                        break;
-                    }
-                    step /= 16.0;
+                }
+                continue;
+            }
+            // Stretches halved where their ends and middle read differently
+            // against the other face, or lie on its boundary.
+            let mut pending: Vec<(f64, f64, u32)> = (0..STRETCHES)
+                .map(|k| {
+                    (
+                        f64::from(k) / f64::from(STRETCHES),
+                        f64::from(k + 1) / f64::from(STRETCHES),
+                        0,
+                    )
+                })
+                .collect();
+            while let Some((f0, f1, depth)) = pending.pop() {
+                let mid = 0.5 * (f0 + f1);
+                let length = (point(f1) - point(f0)).length();
+                if length <= tol {
+                    continue;
+                }
+                let sides = [f0, mid, f1].map(|f| other.side(point(f), tol));
+                if sides[1] != Some(false) && beside(mid, length) {
+                    return Ok(true);
+                }
+                let settled = sides.iter().all(|&s| s == Some(false));
+                if !settled && depth < MOST_HALVINGS {
+                    pending.push((f0, mid, depth + 1));
+                    pending.push((mid, f1, depth + 1));
                 }
             }
         }
@@ -166,11 +454,28 @@ pub fn check_faces_overlap(
             flats.push(flat);
         }
     }
+    let Some(first) = flats.first() else {
+        return Ok(Vec::new());
+    };
+    let mut all = first.bounds;
+    for flat in &flats {
+        all = all.union(flat.bounds);
+    }
+    let centre = all.min + (all.max - all.min) * 0.5;
+    let mut spread = 0.0_f64;
+    for flat in &mut flats {
+        flat.offset = flat.normal.dot(flat.origin - centre);
+        spread = spread.max((flat.origin - centre).length());
+    }
+    // Two faces on one plane: their offsets part by no more than the
+    // tolerance and the planes' tilt over the faces' distance from the
+    // middle.
+    let window = MOST_TILT.madd(spread, tolerance);
     flats.sort_by(|a, b| a.offset.total_cmp(&b.offset));
     let mut issues = Vec::new();
     for (i, a) in flats.iter().enumerate() {
         for b in &flats[i + 1..] {
-            if b.offset - a.offset > tolerance {
+            if b.offset - a.offset > window {
                 break;
             }
             if !on_one_plane(a, b, tolerance) {
@@ -181,11 +486,13 @@ pub fn check_faces_overlap(
             };
             let region =
                 |face| face_region_2d(topo, face, frame.origin, frame.x, frame.y, tolerance);
+            let pieces = |face| face_boundary_2d(topo, face, frame.origin, frame.x, frame.y);
             let (Some(ra), Some(rb)) = (region(a.face)?, region(b.face)?) else {
                 continue;
             };
-            if shares_area(topo, a.face, &ra, &rb, &frame, a.size(), tolerance)?
-                || shares_area(topo, b.face, &rb, &ra, &frame, b.size(), tolerance)?
+            let (pa, pb) = (pieces(a.face)?, pieces(b.face)?);
+            if shares_area(topo, a.face, &ra, (&rb, pb.as_deref()), &frame, tolerance)?
+                || shares_area(topo, b.face, &rb, (&ra, pa.as_deref()), &frame, tolerance)?
             {
                 issues.push(ValidationIssue {
                     check: CheckId::SolidFacesOverlap,
@@ -450,5 +757,98 @@ mod tests {
                 "centre {centre}"
             );
         }
+    }
+
+    fn square(b: &mut Builder, (x, y): (f64, f64), side: f64, normal: [f64; 3]) {
+        b.face(
+            &[
+                [x, y, 0.0],
+                [x + side, y, 0.0],
+                [x + side, y + side, 0.0],
+                [x, y + side, 0.0],
+            ],
+            normal,
+        );
+    }
+
+    /// Two squares whose corners overlap by 0.1, and two that share a strip
+    /// 0.001 wide: no point at a fixed fraction of an edge finds the shared
+    /// area, a point beside the edge stretch inside the other face does.
+    #[test]
+    fn a_small_corner_or_a_narrow_strip_in_common_is_reported() {
+        for (far, normal) in [((9.9, 9.9), [0., 0., 1.]), ((9.999, 0.0), [0., 0., -1.])] {
+            let mut b = Builder::default();
+            square(&mut b, (0.0, 0.0), 10.0, [0., 0., 1.]);
+            square(&mut b, far, 10.0, normal);
+            let solid = b.solid();
+            assert_eq!(found(&b.topo, solid).len(), 1, "{far:?}");
+        }
+        // Squares that meet along an edge, or at a corner, share no area.
+        for far in [(10.0, 0.0), (10.0, 10.0), (10.0, 3.0)] {
+            let mut b = Builder::default();
+            square(&mut b, (0.0, 0.0), 10.0, [0., 0., 1.]);
+            square(&mut b, far, 10.0, [0., 0., -1.]);
+            let solid = b.solid();
+            assert!(found(&b.topo, solid).is_empty(), "{far:?}");
+        }
+    }
+
+    /// Two faces 0.01 across, one on the other, are read at the scale of
+    /// the tolerance, not of their size.
+    #[test]
+    fn two_small_faces_one_on_the_other_are_reported() {
+        let mut b = Builder::default();
+        square(&mut b, (0.0, 0.0), 0.01, [0., 0., 1.]);
+        b.face(
+            &[[0.0, 0.0, 0.0], [0.01, 0.0, 0.0], [0.01, 0.01, 0.0]],
+            [0., 0., -1.],
+        );
+        let solid = b.solid();
+        assert_eq!(found(&b.topo, solid).len(), 1);
+    }
+
+    /// Far from the origin, two faces whose planes part by 1e-8 radians lie
+    /// within 1e-7 of each other: their offsets from the origin part by far
+    /// more than the tolerance, and from the solid's middle they do not.
+    #[test]
+    fn faces_far_from_the_origin_on_one_tilted_plane_are_reported() {
+        let mut b = Builder::default();
+        let x0 = 1e6;
+        square(&mut b, (x0, 0.0), 10.0, [0., 0., 1.]);
+        let z = |x: f64| -1e-8 * (x - x0);
+        b.face(
+            &[
+                [x0, 0.0, z(x0)],
+                [x0 + 10.0, 0.0, z(x0 + 10.0)],
+                [x0 + 10.0, 10.0, z(x0 + 10.0)],
+                [x0, 10.0, z(x0)],
+            ],
+            [1e-8, 0.0, 1.0],
+        );
+        let solid = b.solid();
+        assert_eq!(found(&b.topo, solid).len(), 1);
+    }
+
+    /// A half disc on a square, its arc across the square's edge.
+    #[test]
+    fn an_arc_across_an_edge_finds_the_area_beyond_it() {
+        let mut b = Builder::default();
+        square(&mut b, (0.0, 0.0), 10.0, [0., 0., 1.]);
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        let circle = Circle3D::new(Point3::new(10.05, 5.0, 0.0), z, 0.1).unwrap();
+        let (p, q) = (b.vertex([10.05, 5.1, 0.0]), b.vertex([10.05, 4.9, 0.0]));
+        let arc = b.topo.add_edge(Edge::new(p, q, EdgeCurve::Circle(circle)));
+        let chord = b.edge(q, p);
+        let wire = b
+            .topo
+            .add_wire(Wire::new(vec![OrientedEdge::new(arc, true), chord], true).unwrap());
+        let face = b.topo.add_face(Face::new(
+            wire,
+            vec![],
+            FaceSurface::Plane { normal: -z, d: 0.0 },
+        ));
+        b.faces.push(face);
+        let solid = b.solid();
+        assert_eq!(found(&b.topo, solid).len(), 1);
     }
 }
