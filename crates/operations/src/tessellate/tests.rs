@@ -5104,3 +5104,87 @@ fn a_straight_spline_with_an_uneven_parameter_keeps_its_ends() {
         assert_eq!(on_edge, 2, "deflection {deflection}");
     }
 }
+
+/// A plane face's outline runs along y = 0 from (0, 0) to (1, 0), then doubles
+/// back to (0.4, 0): the two straight edges overlap from x = 0.4 to 1. Across
+/// the first edge lies the face of S(u, v) = (u, v - u^2, 0), where that edge's
+/// line in (u, v) runs 0.25 off it: the chord split halves the first edge at
+/// (0.5, 0), inside the overlap, and nothing halves the second. The second
+/// edge takes the new sample too, or the plane face's mesh has a T there.
+#[test]
+fn an_edge_doubling_back_over_a_split_straight_edge_takes_its_samples() {
+    let p = Point3::new;
+    let mut topo = Topology::new();
+    let points = [
+        p(0.0, 0.0, 0.0),
+        p(1.0, 0.0, 0.0),
+        p(0.4, 0.0, 0.0),
+        p(0.4, -0.3, 0.0),
+        p(0.0, -0.3, 0.0),
+        p(0.8, 0.12, 0.0),
+        p(0.1, 0.12, 0.0),
+    ];
+    let v = points.map(|q| topo.add_vertex(Vertex::new(q, 1e-7)));
+    let mut line = |a: usize, b: usize| topo.add_edge(Edge::new(v[a], v[b], EdgeCurve::Line));
+    let (first, second) = (line(0, 1), line(1, 2));
+    let plane_sides = [first, second, line(2, 3), line(3, 4), line(4, 0)];
+    let spline_sides = [first, line(1, 5), line(5, 6), line(6, 0)];
+    let mut face = |edges: &[brepkit_topology::edge::EdgeId], surface: FaceSurface| {
+        let wire = Wire::new(
+            edges.iter().map(|&e| OrientedEdge::new(e, true)).collect(),
+            true,
+        )
+        .unwrap();
+        let wire = topo.add_wire(wire);
+        topo.add_face(Face::new(wire, vec![], surface))
+    };
+    let plane = face(
+        &plane_sides,
+        FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, -1.0),
+            d: 0.0,
+        },
+    );
+    let skewed = NurbsSurface::new(
+        2,
+        1,
+        vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+        vec![0.0, 0.0, 1.0, 1.0],
+        vec![
+            vec![p(0.0, 0.0, 0.0), p(0.0, 1.0, 0.0)],
+            vec![p(0.5, 0.0, 0.0), p(0.5, 1.0, 0.0)],
+            vec![p(1.0, -1.0, 0.0), p(1.0, 0.0, 0.0)],
+        ],
+        vec![vec![1.0; 2]; 3],
+    )
+    .unwrap();
+    let spline_face = face(&spline_sides, FaceSurface::Nurbs(skewed));
+    let mut edge_points = DetHashMap::default();
+    for &edge in plane_sides.iter().chain(&spline_sides) {
+        let (points, _) = super::edge_sampling::sample_edge_with_params(
+            &topo,
+            topo.edge(edge).unwrap(),
+            0.1,
+            brepkit_math::chord::DEFAULT_ANGULAR_TOL,
+            false,
+        )
+        .unwrap();
+        edge_points.insert(edge.index(), points);
+    }
+    super::solid::split_chords_and_share(
+        &topo,
+        &[plane, spline_face],
+        &mut edge_points,
+        DetHashMap::default(),
+        0.1,
+    )
+    .unwrap();
+    let middle = p(0.5, 0.0, 0.0);
+    let has = |edge: brepkit_topology::edge::EdgeId| {
+        edge_points[&edge.index()]
+            .iter()
+            .any(|&q| (q - middle).length() < 1e-12)
+    };
+    assert!(has(first), "{:?}", edge_points[&first.index()]);
+    assert!(has(second), "{:?}", edge_points[&second.index()]);
+}

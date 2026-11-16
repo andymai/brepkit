@@ -446,6 +446,8 @@ fn share_doubled_back_samples(
 /// the surface, meet: such a chord's reach covers how far that line strays
 /// from it, so only chords nearer each other than their two reaches are
 /// tested.
+///
+/// Returns whether it halved any chord.
 #[allow(clippy::too_many_lines)]
 pub(super) fn split_crossing_spline_chords(
     topo: &Topology,
@@ -453,7 +455,7 @@ pub(super) fn split_crossing_spline_chords(
     edge_points: &mut DetHashMap<usize, Vec<Point3>>,
     mut params: DetHashMap<usize, Vec<f64>>,
     deflection: f64,
-) -> Result<(), crate::OperationsError> {
+) -> Result<bool, crate::OperationsError> {
     // A face's projections of sample points, keyed by the point's bits, and
     // the surface's point there once it is read.
     type UvCache = DetHashMap<(u64, u64, u64), Option<((f64, f64), Option<Point3>)>>;
@@ -503,7 +505,7 @@ pub(super) fn split_crossing_spline_chords(
             .is_ok_and(|face| matches!(face.surface(), FaceSurface::Nurbs(_)))
     };
     if params.is_empty() && !faces.iter().any(spline_face) {
-        return Ok(());
+        return Ok(false);
     }
     let orient = |a: (f64, f64), b: (f64, f64), c: (f64, f64)| {
         (b.0 - a.0).madd(c.1 - a.1, -((b.1 - a.1) * (c.0 - a.0)))
@@ -512,6 +514,7 @@ pub(super) fn split_crossing_spline_chords(
     let mut caches: Vec<UvCache> = vec![UvCache::default(); faces.len()];
     // The edges the last round halved: a face none of them bound is as it was.
     let mut changed: Option<DetHashSet<usize>> = None;
+    let mut halved = false;
     for _ in 0..MAX_ROUNDS {
         let mut halve: DetHashSet<(usize, usize)> = DetHashSet::default();
         for (k, &face_id) in faces.iter().enumerate() {
@@ -785,6 +788,7 @@ pub(super) fn split_crossing_spline_chords(
         let mut edges: Vec<usize> = by_edge.keys().copied().collect();
         edges.sort_unstable();
         changed = Some(edges.iter().copied().collect());
+        halved = true;
         for idx in edges {
             let (Some(edge_id), Some(pts)) =
                 (topo.edge_id_from_index(idx), edge_points.get_mut(&idx))
@@ -810,6 +814,23 @@ pub(super) fn split_crossing_spline_chords(
                 pts.insert(index + 1, nurbs.evaluate(t));
             }
         }
+    }
+    Ok(halved)
+}
+
+/// [`split_crossing_spline_chords`], then the samples of edges that double
+/// back over each other shared again: a straight edge the split halved hands
+/// its new samples to the edge overlapping it, which a face across that edge
+/// alone need not have halved.
+pub(super) fn split_chords_and_share(
+    topo: &Topology,
+    faces: &[FaceId],
+    edge_points: &mut DetHashMap<usize, Vec<Point3>>,
+    params: DetHashMap<usize, Vec<f64>>,
+    deflection: f64,
+) -> Result<(), crate::OperationsError> {
+    if split_crossing_spline_chords(topo, faces, edge_points, params, deflection)? {
+        share_doubled_back_samples(topo, faces, edge_points)?;
     }
     Ok(())
 }
@@ -1115,7 +1136,7 @@ pub(super) fn tessellate_solid_core(
         }
     }
 
-    split_crossing_spline_chords(topo, &all_faces, &mut edge_points, edge_params, deflection)?;
+    split_chords_and_share(topo, &all_faces, &mut edge_points, edge_params, deflection)?;
     phase("circle_sync", &mut phase_t);
     let mut merged = TriangleMesh::default();
     let mut point_to_global: DetHashMap<(i64, i64, i64), u32> = DetHashMap::default();
