@@ -549,57 +549,75 @@ pub fn check_faces_overlap(
     }
     // Two faces on one plane: their offsets part by no more than the
     // tolerance and the planes' tilt over the faces' distance from the
-    // middle.
+    // middle. The faces fall in runs of offsets each within that of the
+    // next, and within a run, each face is read against the faces whose
+    // boxes meet its own along x.
     let window = MOST_TILT.madd(spread, tolerance);
     flats.sort_by(|a, b| a.offset.total_cmp(&b.offset));
+    let mut pairs: Vec<(usize, usize)> = Vec::new();
+    let mut first = 0;
+    while first < flats.len() {
+        let mut last = first + 1;
+        while last < flats.len() && flats[last].offset - flats[last - 1].offset <= window {
+            last += 1;
+        }
+        let mut run: Vec<usize> = (first..last).collect();
+        run.sort_by(|&i, &j| flats[i].bounds.min.x().total_cmp(&flats[j].bounds.min.x()));
+        for (k, &i) in run.iter().enumerate() {
+            for &j in &run[k + 1..] {
+                if flats[j].bounds.min.x() > flats[i].bounds.max.x() + tolerance {
+                    break;
+                }
+                if (flats[i].offset - flats[j].offset).abs() <= window
+                    && on_one_plane(&flats[i], &flats[j], tolerance)
+                {
+                    pairs.push((i.min(j), i.max(j)));
+                }
+            }
+        }
+        first = last;
+    }
+    pairs.sort_unstable();
     let mut issues = Vec::new();
-    for (i, a) in flats.iter().enumerate() {
-        for b in &flats[i + 1..] {
-            if b.offset - a.offset > window {
-                break;
-            }
-            if !on_one_plane(a, b, tolerance) {
-                continue;
-            }
-            let Ok(frame) = Frame3::from_normal(a.origin, a.normal) else {
-                continue;
-            };
-            let region =
-                |face| face_region_2d(topo, face, frame.origin, frame.x, frame.y, tolerance);
-            let pieces = |face| face_boundary_2d(topo, face, frame.origin, frame.x, frame.y);
-            let (Some(ra), Some(rb)) = (region(a.face)?, region(b.face)?) else {
-                continue;
-            };
-            let (pa, pb) = (pieces(a.face)?, pieces(b.face)?);
-            let edges = |face| -> Result<HashSet<EdgeId>, CheckError> {
-                Ok(face_edges(topo, face)?.into_iter().collect())
-            };
-            let (ea, eb) = (edges(a.face)?, edges(b.face)?);
-            let of_b = Other {
-                region: &rb,
-                pieces: pb.as_deref(),
-                edges: &eb,
-            };
-            let of_a = Other {
-                region: &ra,
-                pieces: pa.as_deref(),
-                edges: &ea,
-            };
-            if shares_area(topo, a.face, &ra, &of_b, &frame, tolerance)?
-                || shares_area(topo, b.face, &rb, &of_a, &frame, tolerance)?
-            {
-                issues.push(ValidationIssue {
-                    check: CheckId::SolidFacesOverlap,
-                    severity: Severity::Error,
-                    entity: EntityRef::Face(a.face),
-                    description: format!(
-                        "faces {} and {} lie on one plane and cover the same area",
-                        a.face.index(),
-                        b.face.index()
-                    ),
-                    deviation: None,
-                });
-            }
+    for (i, j) in pairs {
+        let (a, b) = (&flats[i], &flats[j]);
+        let Ok(frame) = Frame3::from_normal(a.origin, a.normal) else {
+            continue;
+        };
+        let region = |face| face_region_2d(topo, face, frame.origin, frame.x, frame.y, tolerance);
+        let pieces = |face| face_boundary_2d(topo, face, frame.origin, frame.x, frame.y);
+        let (Some(ra), Some(rb)) = (region(a.face)?, region(b.face)?) else {
+            continue;
+        };
+        let (pa, pb) = (pieces(a.face)?, pieces(b.face)?);
+        let edges = |face| -> Result<HashSet<EdgeId>, CheckError> {
+            Ok(face_edges(topo, face)?.into_iter().collect())
+        };
+        let (ea, eb) = (edges(a.face)?, edges(b.face)?);
+        let of_b = Other {
+            region: &rb,
+            pieces: pb.as_deref(),
+            edges: &eb,
+        };
+        let of_a = Other {
+            region: &ra,
+            pieces: pa.as_deref(),
+            edges: &ea,
+        };
+        if shares_area(topo, a.face, &ra, &of_b, &frame, tolerance)?
+            || shares_area(topo, b.face, &rb, &of_a, &frame, tolerance)?
+        {
+            issues.push(ValidationIssue {
+                check: CheckId::SolidFacesOverlap,
+                severity: Severity::Error,
+                entity: EntityRef::Face(a.face),
+                description: format!(
+                    "faces {} and {} lie on one plane and cover the same area",
+                    a.face.index(),
+                    b.face.index()
+                ),
+                deviation: None,
+            });
         }
     }
     Ok(issues)
