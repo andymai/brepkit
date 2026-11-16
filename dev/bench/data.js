@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794761722937,
+  "lastUpdate": 1794800228728,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -71063,6 +71063,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 17858071,
             "range": "± 53906",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "7295743f417082ad453356a34fc38a55759605eb",
+          "message": "fix(algo): keep a coplanar piece unless a section has its two ends (#2508)\n\n## Summary\n\nThe coplanar face-face phase dropped a section piece when its middle was\nthe middle of a longer section on the same face. It now drops a piece\nonly when a section on that face runs along the piece from one of its\nends to the other. Closes #2464.\n\n`has_existing_section_at` is in\n`crates/algo/src/pave_filler/phase_ff_coplanar.rs`. It compared the\nmiddle of the piece with the middle of the box of each section on the\ntarget face. It did not compare the ends.\n\nIn `a_block_with_its_edge_on_the_axis_takes_a_quarter_of_a_ring`, the\npiece from (2, 0, 0) to (3, 0, 0) splits the end of the ring. The\nsection of that end with the block face `y = 0` runs from (5, 0, 0) to\n(0, 0, 0), so the two have one middle. I put a trace in\n`process_coplanar_pair`. The phase now keeps that piece, the piece from\n(0, 2, 0) to (0, 3, 0), and their two copies at z = 10.\n\nThe check now reads the two ends of each section, with their parameters,\nfrom the paves of its pave blocks (`section_ends`). Both ends of the\npiece must match them, either way round. Then the kind of curve decides:\n\n- A line section is the piece. The regular FF phase gives a line section\nparameters over its length, and the coplanar phase gives it 0 to 1. So\nthe check does not read its parameters.\n- An arc of a circle or an ellipse stands off its chord the most at the\nmiddle of its parameters. Its tangent there runs along the chord. Its\npoint there must match the middle of the piece.\n- A B-spline lies in the hull of its Bezier poles when their weights are\npositive. Each pole of its part between the two ends must lie within 10\ntimes the linear tolerance of the piece (`spline_along_segment`).\n\nThe box test stays as a first filter. The boolean was exact without the\npiece, because the face splitter trims the long section to the ring.\n#2464 found no boolean that fails, so this PR adds no boolean test.\n\n## Tests\n\n- `a_piece_with_the_middle_of_a_longer_section_is_kept` builds two faces\non the plane z = 0. One is the end of a ring of radii 2 and 3. The other\nis the bottom of a block from the origin to (5, 5). The test records a\nsection on the ring's end from (5, 0, 0) to (0, 0, 0), and runs\n`process_coplanar_pair` on the two faces. The arena must then hold a\nsection from (2, 0, 0) to (3, 0, 0).\n- `a_piece_on_a_section_with_its_ends_is_present` records a section from\n(5, 0, 0) to (0, 0, 0). A piece with those ends is present, either way\nround. The piece from (2, 0, 0) to (3, 0, 0) is not present. A piece on\na face that the section does not split is not present. The chord of a\nquarter arc section is not present.\n- `a_line_section_with_parameters_over_its_length_is_present` records a\nline section with the parameters 0 to 5, as the regular FF phase does.\n- `a_spline_section_is_present_only_along_the_piece` records two cubic\nsections from (0, 0, 0) to (5, 0, 0). One runs along the line at an\nuneven speed, and it is present. The other weaves across the line\nthrough (2.5, 0, 0) at its middle parameter, and it is not present.\n- With the old check put back, the first two tests fail. With the middle\nparameter read for a line or a B-spline, the last two tests fail.\n- `cargo nextest run --no-fail-fast -p brepkit-algo -p brepkit-io -p\nbrepkit-operations -p brepkit-wasm -p brepkit-check -p brepkit-heal` at\n`b50050501`: 3647 passed, 24 skipped. The last commit changes only the\nB-spline case. The coplanar unit tests and `cargo clippy -p brepkit-algo\n--all-targets -- -D warnings` pass on it.\n- The pre-commit hook passed: `cargo fmt --check` and `cargo clippy\n--all-targets --all-features -- -D warnings`.",
+          "timestamp": "2026-11-15T19:33:30-08:00",
+          "tree_id": "0abb8a86e241e313a3dea9a57c496ee3f0e8fd49",
+          "url": "https://github.com/andymai/brepkit/commit/7295743f417082ad453356a34fc38a55759605eb"
+        },
+        "date": 1794800217135,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1077113,
+            "range": "± 22537",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1111921,
+            "range": "± 4402",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12515,
+            "range": "± 31",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 687403,
+            "range": "± 4636",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24217868,
+            "range": "± 61151",
             "unit": "ns/iter"
           }
         ]
