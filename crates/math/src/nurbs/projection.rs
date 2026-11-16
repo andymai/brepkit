@@ -1313,6 +1313,62 @@ mod tests {
         }
     }
 
+    /// Weights of `1e200` and `1e-200` across a line: taken as shares of
+    /// the larger, the smaller is less than the least float, and no sum of
+    /// the proof can bound the line.
+    #[test]
+    fn weights_whose_shares_underflow_fail() {
+        let line = NurbsSurface::new(
+            0,
+            1,
+            vec![0.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![vec![
+                Point3::new(10.0, 0.0, 0.0),
+                Point3::new(0.0, 0.0, 0.0),
+            ]],
+            vec![vec![1e200, 1e-200]],
+        )
+        .expect("a surface");
+        // Halfway along, 0.5 off the line: its nearest point is at a
+        // parameter that no float reaches, so no projection is proved.
+        let found = project_point_to_surface(&line, Point3::new(5.0, 0.5, 0.0), 1e-9);
+        assert!(
+            matches!(found, Err(MathError::ConvergenceFailure { .. })),
+            "{found:?}"
+        );
+    }
+
+    /// A ruled patch with one weight of `1e-90`: the products of the
+    /// coefficients at that corner fall below the least float, where one
+    /// that is negative must not count as zero.
+    #[test]
+    fn products_below_the_least_float_do_not_prove_a_part() {
+        let rows = [
+            [(-94.0, 0.99), (-500.0, 2.0), (-500.0, 1.0), (-500.0, 1.0)],
+            [(6.0, 0.99), (500.0, 2.0), (500.0, 1.0), (500.0, 1.0)],
+        ];
+        let patch = NurbsSurface::new(
+            1,
+            3,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+            rows.iter()
+                .map(|row| row.iter().map(|&(x, y)| Point3::new(x, y, 0.0)).collect())
+                .collect(),
+            vec![vec![1e-90, 1.0, 1.0, 1.0]; 2],
+        )
+        .expect("a surface");
+        let origin = Point3::new(0.0, 0.0, 0.0);
+        assert!((patch.evaluate(0.94, 0.0) - origin).length() < 0.991);
+        let found = project_point_to_surface(&patch, origin, 1e-9);
+        assert!(
+            matches!(found, Err(MathError::ConvergenceFailure { .. }))
+                || found.as_ref().is_ok_and(|f| f.distance <= 0.99 + 1e-9),
+            "{found:?}"
+        );
+    }
+
     /// Weights of `1e-200` give the surface of weights of 1, though their
     /// squares are less than the least float.
     #[test]

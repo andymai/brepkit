@@ -280,7 +280,12 @@ pub(super) fn nearest(
         // A common factor of the weights leaves the surface as it is; taken
         // out, it cannot carry the products out of the range of a float.
         let scale = net.iter().fold(0.0_f64, |m, q| m.max(q[3].abs()));
-        if scale <= 0.0 || !net.iter().flatten().all(|c| c.is_finite()) {
+        // A weight that is no longer a normal float once a share of the
+        // largest leaves no sum to bound the span with.
+        if scale <= 0.0
+            || !net.iter().flatten().all(|c| c.is_finite())
+            || net.iter().any(|q| !(q[3] / scale).is_normal())
+        {
             return unsettled;
         }
         let mut points = search.take_points();
@@ -354,9 +359,15 @@ pub(super) fn nearest(
         // line across the part its three coefficients give exactly: such a
         // part is only ever cut along the other way.
         let (straight_u, straight_v) = (search.rows == 2, search.cols == 2);
-        let mut settled = !cell.rough
-            && (straight_u && search.settles_across(&gaps, true, at)
-                || straight_v && search.settles_across(&gaps, false, at));
+        let (mut settled, mut lost) = (false, false);
+        for (straight, across_u) in [(straight_u, true), (straight_v, false)] {
+            if straight && !settled && !cell.rough {
+                match search.settles_across(&gaps, across_u, at) {
+                    Some(proved) => settled = proved,
+                    None => lost = true,
+                }
+            }
+        }
         // Across the way of degree one, the bound is exact, but rounding
         // in its sums is not: where `g` comes within rounding of zero, the
         // part has to shrink both ways. So that way is cut too, once the
@@ -366,7 +377,7 @@ pub(super) fn nearest(
         } else {
             search.rows != 1 && cell.share[0] * FINER >= cell.share[1]
         };
-        if !settled && straight_u == straight_v {
+        if !settled && (straight_u == straight_v || lost) {
             let partials = search.second_partials(&gaps);
             let [ss, st, tt] = &partials;
             let bends = (ss.least(), tt.least(), st.largest_size());
@@ -497,8 +508,10 @@ impl Search {
     /// with Bernstein coefficients `b0`, `b1` and `b2`, that holds if and
     /// only if `b0` and `b2` are not negative and `b1 ≥ -√(b0 b2)`: so where
     /// `b0`, `b2`, and `b1` or `b0 b2 - b1²`, stay at or above zero along the
-    /// other way. `at` is the lowest point of `g` on the part.
-    fn settles_across(&self, gaps: &[f64], across_u: bool, at: [f64; 2]) -> bool {
+    /// other way. `at` is the lowest point of `g` on the part. `None` where
+    /// a product of two coefficients falls below the least float, and so
+    /// can lose its sign.
+    fn settles_across(&self, gaps: &[f64], across_u: bool, at: [f64; 2]) -> Option<bool> {
         let (du, dv) = (2 * (self.rows - 1), 2 * (self.cols - 1));
         let mut lines = [self.take_values(), self.take_values(), self.take_values()];
         for (k, line) in lines.iter_mut().enumerate() {
@@ -526,20 +539,30 @@ impl Search {
             let shares = product_shares(n);
             let mut cross = self.take_values();
             cross.resize(2 * n + 1, 0.0);
+            let lost = |a: f64, b: f64| a != 0.0 && b != 0.0 && (a * b).abs() < f64::MIN_POSITIVE;
+            let mut whole = true;
             for i in 0..=n {
                 for j in 0..=n {
+                    whole &= !lost(low[i], high[j]) && !lost(middle[i], middle[j]);
                     cross[i + j] +=
                         shares[i * (n + 1) + j] * (low[i] * high[j] - middle[i] * middle[j]);
                 }
             }
-            settled = stays_positive(&cross, hint, &mut work);
+            settled = whole && stays_positive(&cross, hint, &mut work);
             self.give_values(cross);
+            if !whole {
+                self.give_values(work);
+                for line in lines {
+                    self.give_values(line);
+                }
+                return None;
+            }
         }
         self.give_values(work);
         for line in lines {
             self.give_values(line);
         }
-        settled
+        Some(settled)
     }
 
     /// The Bernstein coefficients of the second partials of `g` on the part,
