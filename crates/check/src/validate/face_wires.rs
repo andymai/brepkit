@@ -1838,4 +1838,92 @@ mod tests {
             );
         }
     }
+
+    /// The quintic bulge on a patch stretched a hundredfold along x: the
+    /// drawing stretches a length across the patch far more than along it.
+    #[test]
+    fn a_hole_under_a_stretched_splines_bulge_is_reported() {
+        let control = (0..2)
+            .map(|i| {
+                (0..2)
+                    .map(|j| Point3::new(2000.0 * f64::from(i), 20.0 * f64::from(j), 0.0))
+                    .collect()
+            })
+            .collect();
+        let surface = FaceSurface::Nurbs(
+            brepkit_math::nurbs::surface::NurbsSurface::new(
+                1,
+                1,
+                vec![0.0, 0.0, 1.0, 1.0],
+                vec![0.0, 0.0, 1.0, 1.0],
+                control,
+                vec![vec![1.0; 2]; 2],
+            )
+            .unwrap(),
+        );
+        let ys = [5.0, 25.0 / 9.0, 80.0 / 9.0, 10.0 / 9.0, 65.0 / 9.0, 5.0];
+        let bulge = brepkit_math::nurbs::curve::NurbsCurve::new(
+            5,
+            [vec![0.0; 6], vec![1.0; 6]].concat(),
+            (0..6)
+                .map(|k| Point3::new(200.0 * f64::from(k), ys[k as usize], 0.0))
+                .collect(),
+            vec![1.0; 6],
+        )
+        .unwrap();
+        let mut topo = Topology::default();
+        let corners = points(
+            &mut topo,
+            &[
+                [0.0, 5.0, 0.0],
+                [1000.0, 5.0, 0.0],
+                [1000.0, 10.0, 0.0],
+                [0.0, 10.0, 0.0],
+            ],
+        );
+        let lower = topo.add_edge(Edge::new(
+            corners[0],
+            corners[1],
+            EdgeCurve::NurbsCurve(bulge),
+        ));
+        let mut edges = vec![OrientedEdge::new(lower, true)];
+        for k in 1..4 {
+            let e = topo.add_edge(Edge::new(corners[k], corners[(k + 1) % 4], EdgeCurve::Line));
+            edges.push(OrientedEdge::new(e, true));
+        }
+        let outer = topo.add_wire(Wire::new(edges, true).unwrap());
+        let hole = circle(&mut topo, [850.0, 5.1, 0.0], 0.05);
+        let face = topo.add_face(Face::new(outer, vec![hole], surface));
+        assert!(found(&topo, face).is_some_and(|d| d.contains("outside the outer wire")));
+    }
+
+    /// A seamless band of a cylinder whose top rim does not read, a rational
+    /// circle with every weight negated: the band's open ends are not
+    /// inferred without it, and its window passes.
+    #[test]
+    fn a_band_with_a_rim_that_does_not_read_is_not_reported() {
+        let mut topo = Topology::default();
+        let bottom = ring_wire(&mut topo, 0.0, 3.0, true);
+        let top = {
+            let c = ring(10.0, 3.0);
+            let n =
+                brepkit_geometry::convert::curve_to_nurbs::circle_to_nurbs(&c, 0.0, TAU).unwrap();
+            let negated = brepkit_math::nurbs::curve::NurbsCurve::new(
+                n.degree(),
+                n.knots().to_vec(),
+                n.control_points().to_vec(),
+                n.weights().iter().map(|w| -w).collect(),
+            )
+            .unwrap();
+            closed(
+                &mut topo,
+                EdgeCurve::NurbsCurve(negated),
+                c.evaluate(0.0),
+                false,
+            )
+        };
+        let inside = window(&mut topo, 1.0, (3.0, 7.0), THREE, false);
+        let face = topo.add_face(Face::new(bottom, vec![top, inside], cylinder()));
+        assert_eq!(found(&topo, face), None);
+    }
 }

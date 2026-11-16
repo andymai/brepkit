@@ -155,30 +155,27 @@ impl FaceLoops {
         if all.is_empty() {
             return Ok(None);
         }
-        let Some((drawing, draw)) = drawing_of(face.surface(), &all) else {
+        let Some(chart) = drawing_of(face.surface(), &all) else {
             return Ok(None);
         };
         let size = extent_3d(&all);
-        // The drawing's size against the surface's, read wire by wire along
-        // each wire, so that a wire across a seam reads its own extent.
-        let (mut scale, mut stretch) = (0.0_f64, 0.0_f64);
+        // The drawing's extent, read wire by wire along each wire, so that a
+        // wire across a seam reads its own extent; and the most the drawing
+        // stretches a short length on the surface at the wires' points.
+        let mut scale = 0.0_f64;
         for wire in wires.iter().flatten() {
-            let points = samples(wire);
             let mut before = None;
-            let drawn: Vec<Point2> = points
+            let drawn: Vec<Point2> = samples(wire)
                 .iter()
                 .map(|&p| {
-                    let q = draw(p, before);
+                    let q = (chart.draw)(p, before);
                     before = Some(q);
                     q
                 })
                 .collect();
-            let (flat, solid) = (extent_2d(&drawn), extent_3d(&points));
-            scale = scale.max(flat);
-            if solid > 0.0 {
-                stretch = stretch.max(flat / solid);
-            }
+            scale = scale.max(extent_2d(&drawn));
         }
+        let stretch = all.iter().map(|&p| (chart.magnify)(p)).fold(0.0, f64::max);
         let scale = scale.max(f64::MIN_POSITIVE);
         let reach = (tolerance * stretch).max(1e-12 * scale);
         if !(scale.is_finite() && reach.is_finite()) {
@@ -192,7 +189,7 @@ impl FaceLoops {
         };
         let loops = wires
             .iter()
-            .map(|w| w.as_ref().and_then(|w| trace(w, &*draw, drawing, &sizes)))
+            .map(|w| w.as_ref().and_then(|w| trace(w, &chart, &sizes)))
             .collect();
         let outline = topo.wire(face.outer_wire())?.edges();
         let mut whole = !outline.is_empty();
@@ -201,7 +198,7 @@ impl FaceLoops {
             whole &= edge.start() == edge.end() && matches!(edge.curve(), EdgeCurve::Line);
         }
         Ok(Some(Self {
-            drawing,
+            drawing: chart.drawing,
             loops,
             reach,
             whole,
@@ -384,14 +381,14 @@ impl FaceLoops {
             face_sides.push((s, face_side));
         }
         // An open end of the surface on the face's side of every wire lies
-        // in the face, which then has no end there. The outline's side is
-        // needed for that: a face whose outline does not read is let be.
+        // in the face, which then has no end there. Every wire's side is
+        // needed for that: a face with a wire that does not read is let be.
         let ends: &[Point2] = match self.drawing {
             Drawing::Disc => &[FAR],
             Drawing::Annulus => &[FAR, Point2::new(0.0, 0.0)],
             Drawing::Sphere | Drawing::Torus(_) => &[],
         };
-        if face_sides.iter().any(|&(s, _)| s.holds(0)) {
+        if readable.len() == n && face_sides.iter().any(|&(s, _)| s.holds(0)) {
             for &end in ends {
                 let held = face_sides.iter().all(|&(s, face_side)| {
                     let side = if end == FAR {
@@ -524,8 +521,22 @@ fn polar(rho: f64, theta: f64) -> Point2 {
     Point2::new(rho * c, rho * s)
 }
 
+/// A surface's drawing: how it stands to the surface, the map, how much it
+/// stretches a short length on the surface at a point, and, on a B-spline
+/// surface, the knot spans a point lies in.
+struct Chart<'s> {
+    drawing: Drawing,
+    draw: Draw<'s>,
+    magnify: Box<dyn Fn(Point3) -> f64 + 's>,
+    cell: Option<Cell<'s>>,
+}
+
+/// The knot spans of a B-spline surface that a point lies in.
+type Cell<'s> = Box<dyn Fn(Point3) -> (usize, usize) + 's>;
+
 /// The drawing of a face's surface, from points along its wires.
-fn drawing_of<'s>(surface: &'s FaceSurface, samples: &[Point3]) -> Option<(Drawing, Draw<'s>)> {
+#[allow(clippy::too_many_lines)]
+fn drawing_of<'s>(surface: &'s FaceSurface, samples: &[Point3]) -> Option<Chart<'s>> {
     match surface {
         FaceSurface::Plane { .. } => None,
         FaceSurface::Cylinder(s) => {
@@ -533,13 +544,17 @@ fn drawing_of<'s>(surface: &'s FaceSurface, samples: &[Point3]) -> Option<(Drawi
             let low = vs.iter().copied().fold(f64::INFINITY, f64::min);
             let high = vs.iter().copied().fold(f64::NEG_INFINITY, f64::max);
             let base = (high - low).max(s.radius()) - low;
-            Some((
-                Drawing::Annulus,
-                Box::new(move |p, _| {
+            let r = s.radius();
+            Some(Chart {
+                drawing: Drawing::Annulus,
+                draw: Box::new(move |p, _| {
                     let (u, v) = s.project_point(p);
                     polar(v + base, u)
                 }),
-            ))
+                // Along the axis one to one; round it `ρ / r`.
+                magnify: Box::new(move |p| (s.project_point(p).1 + base).max(r) / r),
+                cell: None,
+            })
         }
         FaceSurface::Cone(s) => {
             let vs: Vec<f64> = samples.iter().map(|&p| s.project_point(p).1).collect();
@@ -551,45 +566,67 @@ fn drawing_of<'s>(surface: &'s FaceSurface, samples: &[Point3]) -> Option<(Drawi
             } else {
                 return None;
             };
-            Some((
-                Drawing::Disc,
-                Box::new(move |p, _| {
+            // Along a generator one to one; round the axis `1 / cos a`.
+            let round = 1.0 / s.half_angle().cos();
+            Some(Chart {
+                drawing: Drawing::Disc,
+                draw: Box::new(move |p, _| {
                     let (u, v) = s.project_point(p);
                     polar((sign * v).max(0.0), u)
                 }),
-            ))
+                magnify: Box::new(move |_| round.max(1.0)),
+                cell: None,
+            })
         }
         FaceSurface::Sphere(s) => {
             let center = s.center();
+            let radius = s.radius();
             let far = clear_direction(samples, center)?;
             let near = -far;
             let (e1, e2) = brepkit_math::frame::Frame3::from_normal(center, near)
                 .map(|f| (f.x, f.y))
                 .ok()?;
-            Some((
-                Drawing::Sphere,
-                Box::new(move |p, _| {
-                    let Ok(w) = (p - center).normalize() else {
+            let angle_of = move |p: Point3| {
+                let w = (p - center).normalize().ok()?;
+                let flat = Vec2::new(w.dot(e1), w.dot(e2));
+                Some((flat, flat.length().atan2(w.dot(near))))
+            };
+            Some(Chart {
+                drawing: Drawing::Sphere,
+                draw: Box::new(move |p, _| {
+                    let Some((flat, angle)) = angle_of(p) else {
                         return Point2::new(0.0, 0.0);
                     };
-                    let flat = Vec2::new(w.dot(e1), w.dot(e2));
                     let across = flat.length();
-                    let angle = across.atan2(w.dot(near));
                     if across <= 0.0 {
                         return Point2::new(angle, 0.0);
                     }
                     Point2::new(flat.x() * angle / across, flat.y() * angle / across)
                 }),
-            ))
+                // Toward the pole `1 / R`; round it `α / (R sin α)`.
+                magnify: Box::new(move |p| {
+                    angle_of(p).map_or(f64::INFINITY, |(_, a)| {
+                        let round = if a > 1e-9 { a / a.sin() } else { 1.0 };
+                        round.max(1.0) / radius
+                    })
+                }),
+                cell: None,
+            })
         }
         FaceSurface::Torus(t) => {
-            if t.minor_radius() >= t.major_radius() {
+            let (big, small) = (t.major_radius(), t.minor_radius());
+            if small >= big {
                 return None;
             }
-            Some((
-                Drawing::Torus(Vec2::new(TAU, TAU)),
-                Box::new(move |p, before| carry(t.project_point(p), before, (TAU, TAU))),
-            ))
+            // Round the ring `1 / (R + r cos v)`, at most `1 / (R - r)`;
+            // round the tube `1 / r`.
+            let most = (1.0 / (big - small)).max(1.0 / small);
+            Some(Chart {
+                drawing: Drawing::Torus(Vec2::new(TAU, TAU)),
+                draw: Box::new(move |p, before| carry(t.project_point(p), before, (TAU, TAU))),
+                magnify: Box::new(move |_| most),
+                cell: None,
+            })
         }
         FaceSurface::Nurbs(s) => nurbs_drawing(s, samples),
     }
@@ -633,10 +670,11 @@ fn clear_direction(samples: &[Point3], center: Point3) -> Option<Vec3> {
 
 /// The drawing of a B-spline surface: by which parameters it closes on
 /// itself, and at which ends of the other it shrinks to a point.
+#[allow(clippy::too_many_lines)]
 fn nurbs_drawing<'s>(
     s: &'s brepkit_math::nurbs::surface::NurbsSurface,
     samples: &[Point3],
-) -> Option<(Drawing, Draw<'s>)> {
+) -> Option<Chart<'s>> {
     let (u0, u1) = s.domain_u();
     let (v0, v1) = s.domain_v();
     // A span of the parameters too short to carry a point apart from its
@@ -674,23 +712,49 @@ fn nurbs_drawing<'s>(
     // Each parameter is read as the fraction of its span, so a span far
     // shorter or longer than the other weighs as much in the drawing.
     let (pu, pv) = (u1 - u0, v1 - v0);
+    let cell: Cell<'s> = Box::new(move |p| {
+        let (u, v) = s.project_point(p);
+        (
+            s.knots_u().partition_point(|&k| k <= u),
+            s.knots_v().partition_point(|&k| k <= v),
+        )
+    });
+    // How much a drawing whose `(u, v)` stretch by `factors(u, v)` stretches
+    // a short length on the surface: at most the root of
+    // `(d1² G22 + d2² G11) / det G`, `G` the surface's metric there. A
+    // point where the metric degenerates (a pole) reads nothing.
+    let magnify_by = move |factors: Box<dyn Fn(f64, f64) -> (f64, f64) + 's>| {
+        Box::new(move |p: Point3| {
+            let (u, v) = s.project_point(p);
+            let (su, sv) = (s.partial_u(u, v), s.partial_v(u, v));
+            let (g11, g12, g22) = (su.dot(su), su.dot(sv), sv.dot(sv));
+            let det = g11.madd(g22, -(g12 * g12));
+            let (d1, d2) = factors(u, v);
+            let m = ((d1 * d1).madd(g22, d2 * d2 * g11) / det).sqrt();
+            if det > 0.0 && m.is_finite() { m } else { 0.0 }
+        }) as Box<dyn Fn(Point3) -> f64 + 's>
+    };
     if closed_u && closed_v {
-        return Some((
-            Drawing::Torus(Vec2::new(1.0, 1.0)),
-            Box::new(move |p, before| {
+        return Some(Chart {
+            drawing: Drawing::Torus(Vec2::new(1.0, 1.0)),
+            draw: Box::new(move |p, before| {
                 let (u, v) = s.project_point(p);
                 carry(((u - u0) / pu, (v - v0) / pv), before, (1.0, 1.0))
             }),
-        ));
+            magnify: magnify_by(Box::new(move |_, _| (1.0 / pu, 1.0 / pv))),
+            cell: Some(cell),
+        });
     }
     if !closed_u && !closed_v {
-        return Some((
-            Drawing::Disc,
-            Box::new(move |p, _| {
+        return Some(Chart {
+            drawing: Drawing::Disc,
+            draw: Box::new(move |p, _| {
                 let (u, v) = s.project_point(p);
                 Point2::new((u - u0) / pu, (v - v0) / pv)
             }),
-        ));
+            magnify: magnify_by(Box::new(move |_, _| (1.0 / pu, 1.0 / pv))),
+            cell: Some(cell),
+        });
     }
     // Round the closed parameter, out along the other: `(angle, along,
     // span of along, pole at its start, pole at its end)`.
@@ -699,10 +763,11 @@ fn nurbs_drawing<'s>(
     } else {
         (1, (v0, v1), (u0, u1), pole_u0, pole_u1)
     };
+    let turn = span_round.1 - span_round.0;
     let parts = move |p: Point3| {
         let (u, v) = s.project_point(p);
         let (a, b) = if round == 0 { (u, v) } else { (v, u) };
-        (TAU * (a - span_round.0) / (span_round.1 - span_round.0), b)
+        (TAU * (a - span_round.0) / turn, b)
     };
     let (lo, hi) = along_span;
     let width = hi - lo;
@@ -720,18 +785,30 @@ fn nurbs_drawing<'s>(
         (true, true) if !near(lo) => (Drawing::Sphere, Some(false)),
         (true, true) => return None,
     };
-    Some((
+    let radius = move |b: f64| match from_start {
+        None => (b - lo) / width + 1.0,
+        Some(true) => (b - lo) / width,
+        Some(false) => (hi - b) / width,
+    };
+    Some(Chart {
         drawing,
-        Box::new(move |p, _| {
+        draw: Box::new(move |p, _| {
             let (angle, b) = parts(p);
-            let rho = match from_start {
-                None => (b - lo) / width + 1.0,
-                Some(true) => (b - lo) / width,
-                Some(false) => (hi - b) / width,
-            };
-            polar(rho.max(0.0), angle)
+            polar(radius(b).max(0.0), angle)
         }),
-    ))
+        // Round the closed parameter `ρ 2π / turn`, along the other
+        // `1 / width`.
+        magnify: magnify_by(Box::new(move |u, v| {
+            let (b, rho_scale) = if round == 0 { (v, 1) } else { (u, 0) };
+            let around = radius(b).max(0.0) * TAU / turn;
+            if rho_scale == 1 {
+                (around, 1.0 / width)
+            } else {
+                (1.0 / width, around)
+            }
+        })),
+        cell: Some(cell),
+    })
 }
 
 /// The drawing's sizes: its extent, its linear tolerance, the most it
@@ -777,12 +854,8 @@ fn hull_off_chord(
 /// A wire's drawing, its chords halved until each follows its curve to
 /// within a ten-thousandth of the drawing's `scale`. `None` for a wire
 /// that does not close, or closes on a point.
-fn trace(
-    wire: &[BoundaryEdge<'_>],
-    draw: &dyn Fn(Point3, Option<Point2>) -> Point2,
-    drawing: Drawing,
-    sizes: &Sizes,
-) -> Option<Loop> {
+fn trace(wire: &[BoundaryEdge<'_>], chart: &Chart<'_>, sizes: &Sizes) -> Option<Loop> {
+    let (draw, drawing) = (&chart.draw, chart.drawing);
     let (scale, reach) = (sizes.scale, sizes.reach);
     let target = 1e-4 * scale;
     let target_3d = 1e-4 * sizes.size;
@@ -828,7 +901,13 @@ fn trace(
                 };
                 let off_3d = hull.unwrap_or(0.0);
                 let hull_short = hull.is_none() || off_3d > target_3d;
-                if (off > target || hull_short || (b - a).length() > longest)
+                // A chord keeps to one knot span of a B-spline surface, where
+                // the drawing runs smoothly.
+                let across_knots = chart
+                    .cell
+                    .as_ref()
+                    .is_some_and(|cell| cell(at(ta)) != cell(at(tb)));
+                if (off > target || hull_short || across_knots || (b - a).length() > longest)
                     && depth < MOST_HALVINGS
                 {
                     let mid = f64::midpoint(ta, tb);

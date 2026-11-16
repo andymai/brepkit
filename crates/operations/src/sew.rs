@@ -83,6 +83,8 @@ pub fn sew_faces(
                 .skip(1)
                 .map(|hole| winding(hole, normal) * outline > 0.0)
                 .collect()
+        } else if face.inner_wires().is_empty() {
+            Vec::new()
         } else {
             brepkit_check::face_loops::FaceLoops::of(topo, fid, tol)?
                 .map(|loops| {
