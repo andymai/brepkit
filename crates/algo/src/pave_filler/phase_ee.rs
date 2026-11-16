@@ -345,8 +345,9 @@ fn find_edge_edge_crossings(
     // whose cones share a line are split in four, each half with its own
     // chord and sag, and searched the same way, down to `SPLIT_DEPTH` and
     // within `SPLIT_BUDGET` for the pair of edges. A crossing where the
-    // curves run along each other ends its search: the stretch along one
-    // curve is read whole below.
+    // curves run along each other, and stay together a quarter span each
+    // way, ends its search: the stretch along one curve is read whole
+    // below. A shallow crossing parts from the other curve in that quarter.
     let along = |t_a: f64, t_b: f64| {
         let da = edge_a
             .curve()
@@ -356,6 +357,21 @@ fn find_edge_edge_crossings(
             .tangent_with_endpoints(t_b, eb.start_pos, eb.end_pos);
         let cross = da.cross(db);
         cross.dot(cross) <= ALONG_SINE * ALONG_SINE * da.dot(da) * db.dot(db)
+    };
+    let samples_b: Vec<(f64, Point3)> = pts_b.iter().map(|p| (p.t, p.pos)).collect();
+    let (lo_b, hi_b) = (eb.t0.min(eb.t1), eb.t0.max(eb.t1));
+    let shared = |t_a: f64, span: &ChordSpan| {
+        let quarter = 0.25 * (span.to.t - span.from.t).abs();
+        let (lo_a, hi_a) = (ea.t0.min(ea.t1), ea.t0.max(ea.t1));
+        [t_a - quarter, t_a + quarter].into_iter().all(|t| {
+            let p = edge_a.curve().evaluate_with_endpoints(
+                t.clamp(lo_a, hi_a),
+                ea.start_pos,
+                ea.end_pos,
+            );
+            let ends = (eb.start_pos, eb.end_pos);
+            foot_on_curve(p, edge_b.curve(), ends, (lo_b, hi_b), &samples_b).1 <= tol.linear
+        })
     };
     let mut budget = SPLIT_BUDGET;
     let mut stack: Vec<(usize, ChordSpan, ChordSpan, usize)> = near
@@ -406,7 +422,7 @@ fn find_edge_edge_crossings(
                     parallel: false,
                 };
                 read(&mut crossings, &at);
-                along(t_a, t_b)
+                along(t_a, t_b) && shared(t_a, &a)
             }
             Refined::Along => true,
             Refined::Apart => false,
@@ -888,7 +904,16 @@ fn drop_crossings_along_one_curve(
     // A sample chord of A.
     let step = span / 32.0;
     let probe = span * 1e-5;
-    let marks = walk_marks(a, b);
+    // Two crossings can lie closer than a mark apart, with the curves
+    // parting between them. A mark halfway between each two keeps the walk
+    // from one from running on past the other.
+    let mut marks = walk_marks(a, b);
+    let mut places: Vec<f64> = crossings.iter().map(|c| c.0.clamp(lo, hi)).collect();
+    places.sort_by(f64::total_cmp);
+    marks.extend(places.windows(2).map(|w| f64::midpoint(w[0], w[1])));
+    marks.retain(|&t| t > lo && t < hi);
+    marks.sort_by(f64::total_cmp);
+    marks.dedup_by(|x, y| (*x - *y).abs() <= 1e-12 * span);
     // Follow A from `from`, which is on B, towards `side` (-1 or 1) to the
     // end of the stretch, from one mark to the next.
     let follow = |from: f64, side: f64| -> (f64, StretchEnd) {
@@ -2736,11 +2761,12 @@ mod tests {
         }
     }
 
-    /// A cubic `(4 t, y(t), t y(t))` with `y(t) = (t - r1) (t - r2)` meets
-    /// the x axis at `r1` and at `r2`, both inside its sample chord from
-    /// 19/32 to 20/32, and leaves the plane of the axis between them. A line
-    /// along the axis crosses it at both points: with `r1` 0.6 and 0.61, and
-    /// with `r1` at the sample point 19/32, where the chords meet.
+    /// A cubic `(4 t, s y(t), s t y(t))` with `y(t) = (t - r1) (t - r2)`
+    /// meets the x axis at `r1` and at `r2`, both inside its sample chord
+    /// from 19/32 to 20/32, and leaves the plane of the axis between them. A
+    /// line along the axis crosses it at both points: with `r1` 0.6 and 0.61,
+    /// with `r1` at the sample point 19/32, where the chords meet, and with
+    /// the scale `s` 0.02, where the curves meet at a sine of 6e-5.
     #[test]
     fn two_crossings_inside_one_pair_of_chords_are_both_read() {
         use brepkit_math::nurbs::curve::NurbsCurve;
@@ -2755,16 +2781,20 @@ mod tests {
             ]
         };
         let v = Vec3::new;
-        for (r1, r2, start) in [(0.6, 0.61, -1.0), (19.0 / 32.0, 0.61, -1.02)] {
-            let (c0, c1) = (r1 * r2, -(r1 + r2));
+        for (r1, r2, start, scale) in [
+            (0.6, 0.61, -1.0, 1.0),
+            (19.0 / 32.0, 0.61, -1.02, 1.0),
+            (0.6, 0.61, -1.0, 0.02),
+        ] {
+            let (c0, c1) = (scale * r1 * r2, -scale * (r1 + r2));
             let cubic = NurbsCurve::new(
                 3,
                 vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
                 poles([
                     v(0.0, c0, 0.0),
                     v(4.0, c1, c0),
-                    v(0.0, 1.0, c1),
-                    v(0.0, 0.0, 1.0),
+                    v(0.0, scale, c1),
+                    v(0.0, 0.0, scale),
                 ]),
                 vec![1.0; 4],
             )
@@ -2779,13 +2809,14 @@ mod tests {
             for (ea, eb) in [(ea, eb), (eb, ea)] {
                 let mut hits: Vec<f64> = crossings(&topo, ea, eb).iter().map(|h| h.2.x()).collect();
                 hits.sort_by(f64::total_cmp);
-                assert_eq!(hits.len(), 2, "{r1}: {hits:?}");
-                // The curves meet at a sine of 0.003 or less, so a point
-                // within the tolerance of both can stand that far off along
-                // the axis.
+                assert_eq!(hits.len(), 2, "{r1} {scale}: {hits:?}");
+                // The curves meet at a sine of 0.003 times the scale or
+                // less, so a point within the tolerance of both can stand
+                // that far off along the axis.
+                let off = 1e-7 / scale;
                 assert!(
-                    (hits[0] - 4.0 * r1).abs() < 1e-7 && (hits[1] - 4.0 * r2).abs() < 1e-7,
-                    "{r1}: {hits:?}"
+                    (hits[0] - 4.0 * r1).abs() < off && (hits[1] - 4.0 * r2).abs() < off,
+                    "{r1} {scale}: {hits:?}"
                 );
             }
         }
