@@ -4591,6 +4591,131 @@ fn only_twisted_cells_are_cut() {
     assert!(widest(&us) * widest(&vs) <= 0.01 + 1e-12);
 }
 
+/// A face of the parabolic cylinder z = y^2 whose (u, v) is skewed:
+/// S(u, v) = (10u, Y, Y^2) with Y = -2 + 6v + 4u(1 - u), over x in [0, 10],
+/// between the iso-line v = 0 and a straight spline edge along its ruling
+/// y = z = 0. The straight edge has no sag, but its chord's middle in (u, v)
+/// is (5, 1, 1) on the surface, 1.4 off the edge: unsplit, the face's outline
+/// in (u, v) takes in grid points 0.86 past the edge at deflection 0.5.
+#[test]
+fn a_straight_spline_edge_is_halved_where_its_chord_runs_off_it_in_uv() {
+    use brepkit_math::nurbs::curve::NurbsCurve;
+    use brepkit_topology::shell::Shell;
+    use brepkit_topology::solid::Solid;
+
+    // The Bezier coefficients of the product of two polynomials of degree
+    // (2, 1), as one of degree (4, 2).
+    let product = |a: &[[f64; 2]; 3], b: &[[f64; 2]; 3]| {
+        let choose = |n: usize, k: usize| -> f64 {
+            (0..k).fold(1.0, |c, i| c * (n - i) as f64 / (i + 1) as f64)
+        };
+        let mut out = [[0.0; 3]; 5];
+        for (i1, row1) in a.iter().enumerate() {
+            for (j1, &x1) in row1.iter().enumerate() {
+                for (i2, row2) in b.iter().enumerate() {
+                    for (j2, &x2) in row2.iter().enumerate() {
+                        out[i1 + i2][j1 + j2] += x1 * x2 * choose(2, i1) * choose(2, i2)
+                            / choose(4, i1 + i2)
+                            * choose(1, j1)
+                            * choose(1, j2)
+                            / choose(2, j1 + j2);
+                    }
+                }
+            }
+        }
+        out
+    };
+    let one = [[1.0; 2]; 3];
+    let x = [[0.0; 2], [5.0; 2], [10.0; 2]];
+    let y = [[-2.0, 4.0], [0.0, 6.0], [-2.0, 4.0]];
+    let (xs, ys, zs) = (product(&x, &one), product(&y, &one), product(&y, &y));
+    let net: Vec<Vec<Point3>> = (0..5)
+        .map(|i| {
+            (0..3)
+                .map(|j| Point3::new(xs[i][j], ys[i][j], zs[i][j]))
+                .collect()
+        })
+        .collect();
+    let surface = NurbsSurface::new(
+        4,
+        2,
+        vec![0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+        vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+        net.clone(),
+        vec![vec![1.0; 3]; 5],
+    )
+    .unwrap();
+    for (u, v) in [(0.3, 0.2), (0.5, 1.0 / 3.0), (0.9, 0.7)] {
+        let w = -2.0 + 6.0 * v + 4.0 * u * (1.0 - u);
+        let p = surface.evaluate(u, v);
+        assert!((p - Point3::new(10.0 * u, w, w * w)).length() < 1e-12);
+    }
+
+    let mut topo = Topology::new();
+    let corners = [
+        Point3::new(0.0, -2.0, 4.0),
+        Point3::new(10.0, -2.0, 4.0),
+        Point3::new(10.0, 0.0, 0.0),
+        Point3::new(0.0, 0.0, 0.0),
+    ];
+    let [v0, v1, v2, v3] = corners.map(|p| topo.add_vertex(Vertex::new(p, 1e-7)));
+    let curve = |degree: usize, points: Vec<Point3>| {
+        let mut knots = vec![0.0; degree + 1];
+        knots.extend(vec![1.0; degree + 1]);
+        let weights = vec![1.0; points.len()];
+        EdgeCurve::NurbsCurve(NurbsCurve::new(degree, knots, points, weights).unwrap())
+    };
+    // The iso-line v = 0, and the iso-lines u = 0 and u = 1 for v in
+    // [0, 1/3], parabolas from y = -2 to y = 0.
+    let low = curve(4, net.iter().map(|row| row[0]).collect());
+    let side = |x: f64| {
+        vec![
+            Point3::new(x, -2.0, 4.0),
+            Point3::new(x, -1.0, 0.0),
+            Point3::new(x, 0.0, 0.0),
+        ]
+    };
+    let right = curve(2, side(10.0));
+    let left = curve(2, side(0.0));
+    let straight = curve(1, vec![corners[3], corners[2]]);
+    let low = topo.add_edge(Edge::new(v0, v1, low));
+    let right = topo.add_edge(Edge::new(v1, v2, right));
+    let top = topo.add_edge(Edge::new(v3, v2, straight));
+    let left = topo.add_edge(Edge::new(v0, v3, left));
+    let wire = topo.add_wire(
+        Wire::new(
+            vec![
+                OrientedEdge::new(low, true),
+                OrientedEdge::new(right, true),
+                OrientedEdge::new(top, false),
+                OrientedEdge::new(left, false),
+            ],
+            true,
+        )
+        .unwrap(),
+    );
+    let face = topo.add_face(Face::new(wire, vec![], FaceSurface::Nurbs(surface)));
+    let shell = topo.add_shell(Shell::new(vec![face]).unwrap());
+    let solid = topo.add_solid(Solid::new(shell, vec![]));
+
+    for deflection in [0.5, 0.1, 0.05] {
+        let (mesh, offsets) = tessellate_solid_grouped_with_tolerance(
+            &topo,
+            solid,
+            deflection,
+            brepkit_math::chord::DEFAULT_ANGULAR_TOL,
+        )
+        .unwrap();
+        let triangles = face_group_triangles(&mesh, &offsets, 0);
+        // How far a point lies past the straight edge, which has no sag.
+        let (worst, _) = deviation_and_area(&triangles, &|p| p.y().max(0.0));
+        assert!(
+            worst <= deflection,
+            "deflection {deflection}: a point stands {worst} past the straight edge"
+        );
+    }
+}
+
 /// Area of the lens two circles of radii `a` and `b` overlap in when their
 /// centres lie `d` apart and each crosses the other.
 fn lens_area(a: f64, b: f64, d: f64) -> f64 {
@@ -4782,4 +4907,284 @@ fn samples_along_an_arc_keep_their_order_across_the_wrap() {
         let a = super::solid::along_arc(wrapped(off), 2.8, 0.7);
         assert!(!(-1e-8..=0.7 + 1e-8).contains(&a), "{off} reads {a}");
     }
+}
+
+/// One face of `surface` bounded by `sides`, each a degree 1 to 3 spline
+/// given by its poles and running on from the last, or a straight edge where
+/// its index is in `lines`.
+fn spline_bounded_face(
+    surface: NurbsSurface,
+    sides: &[Vec<Point3>],
+    lines: &[usize],
+) -> (
+    Topology,
+    brepkit_topology::face::FaceId,
+    brepkit_topology::solid::SolidId,
+) {
+    use brepkit_math::nurbs::curve::NurbsCurve;
+    use brepkit_topology::shell::Shell;
+    use brepkit_topology::solid::Solid;
+
+    let mut topo = Topology::new();
+    let corners: Vec<_> = sides
+        .iter()
+        .map(|poles| topo.add_vertex(Vertex::new(poles[0], 1e-7)))
+        .collect();
+    let edges: Vec<OrientedEdge> = sides
+        .iter()
+        .enumerate()
+        .map(|(k, poles)| {
+            let degree = poles.len() - 1;
+            let mut knots = vec![0.0; degree + 1];
+            knots.extend(vec![1.0; degree + 1]);
+            let curve = if lines.contains(&k) {
+                EdgeCurve::Line
+            } else {
+                EdgeCurve::NurbsCurve(
+                    NurbsCurve::new(degree, knots, poles.clone(), vec![1.0; poles.len()]).unwrap(),
+                )
+            };
+            let edge = Edge::new(corners[k], corners[(k + 1) % corners.len()], curve);
+            OrientedEdge::new(topo.add_edge(edge), true)
+        })
+        .collect();
+    let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+    let face = topo.add_face(Face::new(wire, vec![], FaceSurface::Nurbs(surface)));
+    let shell = topo.add_shell(Shell::new(vec![face]).unwrap());
+    let solid = topo.add_solid(Solid::new(shell, vec![]));
+    (topo, face, solid)
+}
+
+/// The face S(u, v) = (u, v - u^2, 0) over the trapezoid (0, 0), (1, 0),
+/// (0.8, 0.12), (0.1, 0.12), its long sides straight in space: the long
+/// sides' chords cross in (u, v), at u = 0.4. One long side is a straight
+/// spline, a straight edge, or a spline that bends 6e-4 to either side of its
+/// chord and crosses it at its middle: no chord sags at its middle. A
+/// straight edge's line in (u, v) runs as far off it as the spline's: halving
+/// the spline alone leaves the crossing. After the chord split, the outline's
+/// chords in (u, v) cross nowhere.
+#[test]
+fn chords_of_straight_or_inflected_sides_that_cross_in_uv_are_split() {
+    let p = Point3::new;
+    let surface = NurbsSurface::new(
+        2,
+        1,
+        vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+        vec![0.0, 0.0, 1.0, 1.0],
+        vec![
+            vec![p(0.0, 0.0, 0.0), p(0.0, 1.0, 0.0)],
+            vec![p(0.5, 0.0, 0.0), p(0.5, 1.0, 0.0)],
+            vec![p(1.0, -1.0, 0.0), p(1.0, 0.0, 0.0)],
+        ],
+        vec![vec![1.0; 2]; 3],
+    )
+    .unwrap();
+    let corners = [
+        p(0.0, 0.0, 0.0),
+        p(1.0, 0.0, 0.0),
+        p(0.8, 0.12, 0.0),
+        p(0.1, 0.12, 0.0),
+    ];
+    let inflected = vec![
+        corners[0],
+        p(1.0 / 3.0, 0.002, 0.0),
+        p(2.0 / 3.0, -0.002, 0.0),
+        corners[1],
+    ];
+    for (bottom, lines) in [
+        (vec![corners[0], corners[1]], vec![]),
+        (vec![corners[0], corners[1]], vec![0]),
+        (inflected, vec![]),
+    ] {
+        let sides = vec![
+            bottom.clone(),
+            vec![corners[1], corners[2]],
+            vec![corners[2], corners[3]],
+            vec![corners[3], corners[0]],
+        ];
+        let (topo, face, _) = spline_bounded_face(surface.clone(), &sides, &lines);
+        let on_face = FaceSurface::Nurbs(surface.clone());
+        for deflection in [0.5, 0.1] {
+            let wire = topo.wire(topo.face(face).unwrap().outer_wire()).unwrap();
+            let mut edge_points = DetHashMap::default();
+            let mut params = DetHashMap::default();
+            for oe in wire.edges() {
+                let (points, ts) = super::edge_sampling::sample_edge_with_params(
+                    &topo,
+                    topo.edge(oe.edge()).unwrap(),
+                    deflection,
+                    brepkit_math::chord::DEFAULT_ANGULAR_TOL,
+                    false,
+                )
+                .unwrap();
+                edge_points.insert(oe.edge().index(), points);
+                if let Some(ts) = ts {
+                    params.insert(oe.edge().index(), ts);
+                }
+            }
+            assert_eq!(edge_points[&wire.edges()[0].edge().index()].len(), 2);
+            super::solid::split_crossing_spline_chords(
+                &topo,
+                &[face],
+                &mut edge_points,
+                params,
+                deflection,
+            )
+            .unwrap();
+            let outline: Vec<(f64, f64)> = wire
+                .edges()
+                .iter()
+                .flat_map(|oe| {
+                    let points = &edge_points[&oe.edge().index()];
+                    points[..points.len() - 1].to_vec()
+                })
+                .map(|q| on_face.project_point(q).unwrap())
+                .collect();
+            let n = outline.len();
+            let orient = |a: (f64, f64), b: (f64, f64), c: (f64, f64)| {
+                (b.0 - a.0) * (c.1 - a.1) - (b.1 - a.1) * (c.0 - a.0)
+            };
+            for i in 0..n {
+                for j in i + 2..n {
+                    if (j + 1) % n == i {
+                        continue;
+                    }
+                    let (a, b) = (outline[i], outline[(i + 1) % n]);
+                    let (c, d) = (outline[j], outline[(j + 1) % n]);
+                    assert!(
+                        orient(a, b, c) * orient(a, b, d) >= 0.0
+                            || orient(c, d, a) * orient(c, d, b) >= 0.0,
+                        "{} poles, lines {lines:?}, deflection {deflection}: chords {i} and {j} cross in {outline:?}",
+                        bottom.len()
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// A straight spline whose parameter runs as t^3 along it, C(t) = (100 t^3,
+/// 0, 0), bounding a face of S(u, v) = (100 u, v, 0): its chord's middle in
+/// (u, v) is (50, 0, 0), on the edge, though the curve's middle by parameter
+/// is (12.5, 0, 0). The edge keeps its two ends.
+#[test]
+fn a_straight_spline_with_an_uneven_parameter_keeps_its_ends() {
+    let p = Point3::new;
+    let surface = NurbsSurface::new(
+        1,
+        1,
+        vec![0.0, 0.0, 1.0, 1.0],
+        vec![0.0, 0.0, 1.0, 1.0],
+        vec![
+            vec![p(0.0, 0.0, 0.0), p(0.0, 1.0, 0.0)],
+            vec![p(100.0, 0.0, 0.0), p(100.0, 1.0, 0.0)],
+        ],
+        vec![vec![1.0; 2]; 2],
+    )
+    .unwrap();
+    let sides = vec![
+        vec![
+            p(0.0, 0.0, 0.0),
+            p(0.0, 0.0, 0.0),
+            p(0.0, 0.0, 0.0),
+            p(100.0, 0.0, 0.0),
+        ],
+        vec![p(100.0, 0.0, 0.0), p(100.0, 1.0, 0.0)],
+        vec![p(100.0, 1.0, 0.0), p(0.0, 1.0, 0.0)],
+        vec![p(0.0, 1.0, 0.0), p(0.0, 0.0, 0.0)],
+    ];
+    let (topo, _, solid) = spline_bounded_face(surface, &sides, &[]);
+    for deflection in [0.5, 0.01] {
+        let mesh = tessellate_solid(&topo, solid, deflection).unwrap();
+        let on_edge = mesh
+            .positions
+            .iter()
+            .filter(|q| q.y().abs() < 1e-12)
+            .count();
+        assert_eq!(on_edge, 2, "deflection {deflection}");
+    }
+}
+
+/// A plane face's outline runs along y = 0 from (0, 0) to (1, 0), then doubles
+/// back to (0.4, 0): the two straight edges overlap from x = 0.4 to 1. Across
+/// the first edge lies the face of S(u, v) = (u, v - u^2, 0), where that edge's
+/// line in (u, v) runs 0.25 off it: the chord split halves the first edge at
+/// (0.5, 0), inside the overlap, and nothing halves the second. The second
+/// edge takes the new sample too, or the plane face's mesh has a T there.
+#[test]
+fn an_edge_doubling_back_over_a_split_straight_edge_takes_its_samples() {
+    let p = Point3::new;
+    let mut topo = Topology::new();
+    let points = [
+        p(0.0, 0.0, 0.0),
+        p(1.0, 0.0, 0.0),
+        p(0.4, 0.0, 0.0),
+        p(0.4, -0.3, 0.0),
+        p(0.0, -0.3, 0.0),
+        p(0.8, 0.12, 0.0),
+        p(0.1, 0.12, 0.0),
+    ];
+    let v = points.map(|q| topo.add_vertex(Vertex::new(q, 1e-7)));
+    let mut line = |a: usize, b: usize| topo.add_edge(Edge::new(v[a], v[b], EdgeCurve::Line));
+    let (first, second) = (line(0, 1), line(1, 2));
+    let plane_sides = [first, second, line(2, 3), line(3, 4), line(4, 0)];
+    let spline_sides = [first, line(1, 5), line(5, 6), line(6, 0)];
+    let mut face = |edges: &[brepkit_topology::edge::EdgeId], surface: FaceSurface| {
+        let wire = Wire::new(
+            edges.iter().map(|&e| OrientedEdge::new(e, true)).collect(),
+            true,
+        )
+        .unwrap();
+        let wire = topo.add_wire(wire);
+        topo.add_face(Face::new(wire, vec![], surface))
+    };
+    let plane = face(
+        &plane_sides,
+        FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, -1.0),
+            d: 0.0,
+        },
+    );
+    let skewed = NurbsSurface::new(
+        2,
+        1,
+        vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+        vec![0.0, 0.0, 1.0, 1.0],
+        vec![
+            vec![p(0.0, 0.0, 0.0), p(0.0, 1.0, 0.0)],
+            vec![p(0.5, 0.0, 0.0), p(0.5, 1.0, 0.0)],
+            vec![p(1.0, -1.0, 0.0), p(1.0, 0.0, 0.0)],
+        ],
+        vec![vec![1.0; 2]; 3],
+    )
+    .unwrap();
+    let spline_face = face(&spline_sides, FaceSurface::Nurbs(skewed));
+    let mut edge_points = DetHashMap::default();
+    for &edge in plane_sides.iter().chain(&spline_sides) {
+        let (points, _) = super::edge_sampling::sample_edge_with_params(
+            &topo,
+            topo.edge(edge).unwrap(),
+            0.1,
+            brepkit_math::chord::DEFAULT_ANGULAR_TOL,
+            false,
+        )
+        .unwrap();
+        edge_points.insert(edge.index(), points);
+    }
+    super::solid::split_chords_and_share(
+        &topo,
+        &[plane, spline_face],
+        &mut edge_points,
+        DetHashMap::default(),
+        0.1,
+    )
+    .unwrap();
+    let middle = p(0.5, 0.0, 0.0);
+    let has = |edge: brepkit_topology::edge::EdgeId| {
+        edge_points[&edge.index()]
+            .iter()
+            .any(|&q| (q - middle).length() < 1e-12)
+    };
+    assert!(has(first), "{:?}", edge_points[&first.index()]);
+    assert!(has(second), "{:?}", edge_points[&second.index()]);
 }
