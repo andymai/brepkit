@@ -2434,9 +2434,12 @@ impl SphereFaceTrim {
 
     fn reads(&self, point: Point3, near: f64) -> (bool, bool) {
         match &self.geom {
+            // A loop grazes along the whole of its planes; a point is near
+            // the face's boundary only where the other loops admit it too.
             FaceGeom::Sphere { loops, .. } => (
                 loops.iter().all(|l| l.admits(point, 0.0)),
-                loops.iter().any(|l| l.grazes(point, near)),
+                loops.iter().all(|l| l.admits(point, near))
+                    && loops.iter().any(|l| l.grazes(point, near)),
             ),
             FaceGeom::SphereTrim {
                 frame,
@@ -4877,6 +4880,41 @@ mod tests {
     /// A band from 0 to a quarter turn, and one across the ring's angle
     /// origin, read by their ring angles: a ray up out of the tube's centre
     /// crosses the band only where its angle lies between the end circles.
+    /// A ball's octant holds the points on it and near its arcs, and no
+    /// point beside the plane of one arc that another arc's plane keeps out.
+    #[test]
+    fn a_ball_face_trim_holds_only_its_own_patch() {
+        let mut topo = Topology::new();
+        let origin = Point3::new(0.0, 0.0, 0.0);
+        let octant = sphere_patch(
+            &mut topo,
+            3.0,
+            &[
+                Point3::new(3.0, 0.0, 0.0),
+                Point3::new(0.0, 3.0, 0.0),
+                Point3::new(0.0, 0.0, 3.0),
+            ],
+            &[origin, origin, origin],
+        );
+        let trim = SphereFaceTrim::new(&topo, octant).unwrap().unwrap();
+        let r = 3.0_f64.sqrt();
+        let near = 1e-6;
+        assert!(trim.holds_clear(Point3::new(r, r, r), near));
+        assert!(trim.holds(Point3::new(0.0, 1.8, 2.4), near), "on an arc");
+        assert!(
+            !trim.holds_clear(Point3::new(0.0, 1.8, 2.4), near),
+            "on an arc"
+        );
+        assert!(
+            !trim.holds(Point3::new(0.0, -1.8, 2.4), near),
+            "beside an arc's plane"
+        );
+        assert!(
+            !trim.holds(Point3::new(-r, r, r), near),
+            "a neighbouring octant"
+        );
+    }
+
     #[test]
     fn a_partial_revolution_band_counts_crossings_between_its_ends() {
         use std::f64::consts::{FRAC_PI_2, FRAC_PI_4, PI, TAU};
