@@ -263,14 +263,12 @@ pub fn surface_to_bezier_patches(surface: &NurbsSurface) -> Result<Vec<BezierPat
 
 /// The index `i` of each knot span `[knots[i], knots[i + 1]]` of nonzero
 /// width in the domain of a direction of degree `p` over `n` control points.
-/// With every interior knot at multiplicity `p` or more and the ends
-/// clamped, control points `i - p` to `i` are that span's Bezier points.
-/// Two knots nearer than [`KNOT_EPS`] are one knot, as knot insertion
-/// counts them, with no span between.
+/// Control points `i - p` to `i` hold the span in their hull, and with every
+/// interior knot at multiplicity `p` or more and the ends clamped they are
+/// its Bezier points. A span counts however narrow it is: the surface can
+/// cross a long way in it.
 fn spans_of_width(knots: &[f64], p: usize, n: usize) -> Vec<usize> {
-    (p..n)
-        .filter(|&i| knots[i + 1] - knots[i] >= KNOT_EPS)
-        .collect()
+    (p..n).filter(|&i| knots[i] < knots[i + 1]).collect()
 }
 
 /// The knots `surface_to_bezier_patches` inserts along one direction, in
@@ -1330,6 +1328,27 @@ mod tests {
         )
         .expect("valid");
         patches_trace(&s, 6);
+    }
+
+    /// A bilinear sheet on the u knots 0, 0, 5e-16, 1, 1: the sheet runs
+    /// from its first row to its second inside the narrow span, and a patch
+    /// holds that part too.
+    #[test]
+    fn a_narrow_span_keeps_its_patch() {
+        let p = Point3::new;
+        let row = |x: f64| vec![p(x, 0.0, 0.0), p(x, 1.0, 0.0)];
+        let s = NurbsSurface::new(
+            1,
+            1,
+            vec![0.0, 0.0, 5e-16, 1.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![row(0.0), row(1.0), row(2.0)],
+            vec![vec![1.0; 2]; 3],
+        )
+        .expect("valid");
+        patches_trace(&s, 2);
+        let narrow = surface_to_bezier_patches(&s).expect("valid");
+        assert!(narrow[0].aabb().min.x() <= 0.0 && narrow[0].aabb().max.x() >= 1.0);
     }
 
     /// A bilinear sheet on knots 0, 0, 0.5, 0.5, 1, 1 along u, an interior
