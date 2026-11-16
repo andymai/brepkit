@@ -1388,9 +1388,6 @@ pub(super) fn tessellate_solid_core(
     })
 }
 
-/// `BK_TESS_PHASES` (any value): log per-phase wall clock of the solid
-/// tessellation pipeline. Resolved once per process.
-#[cfg(not(target_arch = "wasm32"))]
 /// Where a sample at circle parameter `t` lies along an arc that starts at
 /// `start` and spans `span`: `t` unwrapped from the start, so the order of
 /// samples does not break where the parameter wraps (`project` gives an
@@ -1405,6 +1402,9 @@ pub(super) fn along_arc(t: f64, start: f64, span: f64) -> f64 {
     }
 }
 
+/// `BK_TESS_PHASES` (any value): log per-phase wall clock of the solid
+/// tessellation pipeline. Resolved once per process.
+#[cfg(not(target_arch = "wasm32"))]
 fn tess_phases() -> bool {
     static PHASES: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *PHASES.get_or_init(|| std::env::var("BK_TESS_PHASES").is_ok())
