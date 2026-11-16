@@ -317,6 +317,10 @@ fn find_edge_edge_crossings(
                 } else {
                     crossed[i * n + j] = Some(hit.t_a);
                     read(&mut crossings, &hit);
+                    // The two spans can hold another crossing beside it.
+                    if reach.is_some_and(|r| r > 0.0) {
+                        near.push((i, j));
+                    }
                 }
             } else if let Some(reach) = reach.filter(|&r| r > 0.0) {
                 let (_, _, gap) = segment_distance(
@@ -602,6 +606,15 @@ fn nurbs_span_bounds(
     cuts.extend(curve.knots().iter().copied().filter(|&k| k > lo && k < hi));
     cuts.push(hi);
     cuts.dedup();
+    // The curve can jump at a knot repeated past its degree, and no cone of
+    // tangents spans a jump.
+    let degree = curve.degree();
+    let jumps = curve
+        .knots()
+        // By value: -0 and 0 are one knot.
+        .chunk_by(|a, b| (a - b).abs() <= 0.0)
+        .any(|run| run[0] > lo && run[0] <= hi && run.len() > degree);
+    let axis = axis.filter(|_| !jumps);
     let (mut sag, mut half) = (0.0_f64, axis.map(|_| 0.0_f64));
     let mut poles: Vec<Point3> = Vec::new();
     for piece in cuts.windows(2) {
@@ -2723,10 +2736,11 @@ mod tests {
         }
     }
 
-    /// A cubic `(4 t, y(t), t y(t))` with `y(t) = (t - 0.6) (t - 0.61)`
-    /// meets the x axis at 0.6 and at 0.61, both inside its sample chord
-    /// from 19/32 to 20/32, and leaves the plane of the axis between them.
-    /// A line along the axis crosses it at both points.
+    /// A cubic `(4 t, y(t), t y(t))` with `y(t) = (t - r1) (t - r2)` meets
+    /// the x axis at `r1` and at `r2`, both inside its sample chord from
+    /// 19/32 to 20/32, and leaves the plane of the axis between them. A line
+    /// along the axis crosses it at both points: with `r1` 0.6 and 0.61, and
+    /// with `r1` at the sample point 19/32, where the chords meet.
     #[test]
     fn two_crossings_inside_one_pair_of_chords_are_both_read() {
         use brepkit_math::nurbs::curve::NurbsCurve;
@@ -2741,31 +2755,72 @@ mod tests {
             ]
         };
         let v = Vec3::new;
-        let (c0, c1) = (0.6 * 0.61, -(0.6 + 0.61));
-        let cubic = NurbsCurve::new(
-            3,
-            vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
-            poles([
-                v(0.0, c0, 0.0),
-                v(4.0, c1, c0),
-                v(0.0, 1.0, c1),
-                v(0.0, 0.0, 1.0),
-            ]),
+        for (r1, r2, start) in [(0.6, 0.61, -1.0), (19.0 / 32.0, 0.61, -1.02)] {
+            let (c0, c1) = (r1 * r2, -(r1 + r2));
+            let cubic = NurbsCurve::new(
+                3,
+                vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+                poles([
+                    v(0.0, c0, 0.0),
+                    v(4.0, c1, c0),
+                    v(0.0, 1.0, c1),
+                    v(0.0, 0.0, 1.0),
+                ]),
+                vec![1.0; 4],
+            )
+            .unwrap();
+            let mut topo = Topology::new();
+            let ea = edge_on(&mut topo, &cubic, 0.0, 1.0);
+            let (from, to) = (
+                Point3::new(start, 0.0, 0.0),
+                Point3::new(start + 6.0, 0.0, 0.0),
+            );
+            let eb = add_edge(&mut topo, from, to, EdgeCurve::Line);
+            for (ea, eb) in [(ea, eb), (eb, ea)] {
+                let mut hits: Vec<f64> = crossings(&topo, ea, eb).iter().map(|h| h.2.x()).collect();
+                hits.sort_by(f64::total_cmp);
+                assert_eq!(hits.len(), 2, "{r1}: {hits:?}");
+                // The curves meet at a sine of 0.003 or less, so a point
+                // within the tolerance of both can stand that far off along
+                // the axis.
+                assert!(
+                    (hits[0] - 4.0 * r1).abs() < 1e-7 && (hits[1] - 4.0 * r2).abs() < 1e-7,
+                    "{r1}: {hits:?}"
+                );
+            }
+        }
+    }
+
+    /// A polyline of degree 1 that jumps back at its knot 0.51, taken twice:
+    /// from (0, 0, 0) to (1, 0, 0), then from (0.99, 0.01, 0) to (1.99,
+    /// 0.01, 0). A line along y at x = 0.995 crosses both pieces inside the
+    /// one sample chord from 0.5 to 0.53125.
+    #[test]
+    fn a_line_crosses_both_sides_of_a_jump_inside_one_chord() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        let p = Point3::new;
+        let polyline = NurbsCurve::new(
+            1,
+            vec![0.0, 0.0, 0.51, 0.51, 1.0, 1.0],
+            vec![
+                p(0.0, 0.0, 0.0),
+                p(1.0, 0.0, 0.0),
+                p(0.99, 0.01, 0.0),
+                p(1.99, 0.01, 0.0),
+            ],
             vec![1.0; 4],
         )
         .unwrap();
         let mut topo = Topology::new();
-        let ea = edge_on(&mut topo, &cubic, 0.0, 1.0);
-        let (from, to) = (Point3::new(-1.0, 0.0, 0.0), Point3::new(5.0, 0.0, 0.0));
+        let ea = edge_on(&mut topo, &polyline, 0.0, 1.0);
+        let (from, to) = (p(0.995, -1.0, 0.0), p(0.995, 1.0, 0.0));
         let eb = add_edge(&mut topo, from, to, EdgeCurve::Line);
         for (ea, eb) in [(ea, eb), (eb, ea)] {
-            let mut hits: Vec<f64> = crossings(&topo, ea, eb).iter().map(|h| h.2.x()).collect();
+            let mut hits: Vec<f64> = crossings(&topo, ea, eb).iter().map(|h| h.2.y()).collect();
             hits.sort_by(f64::total_cmp);
             assert_eq!(hits.len(), 2, "{hits:?}");
-            // The curves meet at a sine of 0.003 at 0.6, so a point within
-            // the tolerance of both can stand that far off along the axis.
             assert!(
-                (hits[0] - 2.4).abs() < 1e-7 && (hits[1] - 2.44).abs() < 1e-7,
+                hits[0].abs() < 1e-9 && (hits[1] - 0.01).abs() < 1e-9,
                 "{hits:?}"
             );
         }
