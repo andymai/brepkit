@@ -442,9 +442,9 @@ fn share_doubled_back_samples(
 /// edge takes them too.
 ///
 /// Two chords can cross in (u, v) only where their lines in (u, v), read on
-/// the surface, meet: each chord's reach covers its curve's sag and how far
-/// that line strays from it, so only chords nearer each other than their two
-/// reaches are tested.
+/// the surface, meet: a spline chord's reach covers how far that line strays
+/// from it, so only chords nearer each other than their two reaches are
+/// tested.
 #[allow(clippy::too_many_lines)]
 pub(super) fn split_crossing_spline_chords(
     topo: &Topology,
@@ -453,8 +453,9 @@ pub(super) fn split_crossing_spline_chords(
     mut params: DetHashMap<usize, Vec<f64>>,
     deflection: f64,
 ) -> Result<(), crate::OperationsError> {
-    // A face's projections of sample points, keyed by the point's bits.
-    type UvCache = DetHashMap<(u64, u64, u64), Option<(f64, f64)>>;
+    // A face's projections of sample points, keyed by the point's bits, and
+    // the surface's point there once it is read.
+    type UvCache = DetHashMap<(u64, u64, u64), Option<((f64, f64), Option<Point3>)>>;
     const MAX_ROUNDS: usize = 8;
     // Chord ends closer than this are one sample.
     const SAME: f64 = 1e-9;
@@ -465,23 +466,12 @@ pub(super) fn split_crossing_spline_chords(
         index: usize,
         a: Point3,
         b: Point3,
-        // How far the chord's curve, or its line in (u, v) read on the
-        // surface, may stand off it.
+        // How far the chord's line in (u, v), read on the surface, may stand
+        // off it.
         reach: f64,
         // A spline chord's curve and the parameters of its two ends.
         span: Option<(&'a brepkit_math::nurbs::curve::NurbsCurve, f64, f64)>,
     }
-    // How far a point stands off the segment from `a` to `b`.
-    let off_segment = |p: Point3, a: Point3, b: Point3| {
-        let (d, w) = (b - a, p - a);
-        let length2 = d.dot(d);
-        let t = if length2 > 0.0 {
-            (w.dot(d) / length2).clamp(0.0, 1.0)
-        } else {
-            0.0
-        };
-        (w - d * t).length()
-    };
     // The parameters of each spline edge's samples, where its samples are
     // still those they were taken at.
     params.retain(|idx, ts| {
@@ -542,19 +532,10 @@ pub(super) fn split_crossing_spline_chords(
                     let edge = topo.edge(oe.edge())?;
                     for (index, pair) in pts.windows(2).enumerate() {
                         let (a, b) = (pair[0], pair[1]);
-                        // The sag is read off the chord at the span's quarters:
-                        // an inflected span can cross its chord at its middle.
                         let (reach, span) = match (edge.curve(), params.get(&idx)) {
                             (EdgeCurve::Line, _) => (0.0, None),
                             (EdgeCurve::NurbsCurve(nurbs), Some(ts)) => {
-                                let (t0, t1) = (ts[index], ts[index + 1]);
-                                let sag = [0.25, 0.5, 0.75]
-                                    .iter()
-                                    .map(|&f| {
-                                        off_segment(nurbs.evaluate((t1 - t0).madd(f, t0)), a, b)
-                                    })
-                                    .fold(0.0, f64::max);
-                                (2.0 * sag, Some((nurbs, t0, t1)))
+                                (SAME, Some((nurbs, ts[index], ts[index + 1])))
                             }
                             _ => (deflection, None),
                         };
@@ -573,37 +554,45 @@ pub(super) fn split_crossing_spline_chords(
                 continue;
             }
             let uv = &mut caches[k];
-            let mut to_uv = |p: Point3| {
-                *uv.entry((p.x().to_bits(), p.y().to_bits(), p.z().to_bits()))
-                    .or_insert_with(|| surface.project_point(p))
+            let mut read = |p: Point3, foot: bool| {
+                let entry = uv
+                    .entry((p.x().to_bits(), p.y().to_bits(), p.z().to_bits()))
+                    .or_insert_with(|| surface.project_point(p).map(|q| (q, None)));
+                if foot && let Some((q, at @ None)) = entry {
+                    *at = surface.evaluate(q.0, q.1);
+                }
+                *entry
             };
             // A curved face's (u, v) can stretch a chord's straight line in
             // (u, v) far off the chord in space: the mesh's edge there is that
-            // line on the surface. Each chord's reach takes in how far that
-            // line strays from it, read at its quarters with a margin, so a
-            // pair whose lines meet is tested; and a spline chord's line must
-            // hold the deflection of its curve at its middle. An edge can
-            // stand off its surface (a file's tolerance): the line is read
-            // with the ends' offsets carried along it. A plane's (u, v) is
-            // flat. A cone's apex and a sphere's poles have no u, so the
-            // middle of a chord on them is not read against its curve.
-            if !matches!(surface, FaceSurface::Plane { .. }) {
+            // line on the surface. Each spline chord's reach takes in how far
+            // that line strays from it, read at its quarters with a margin, so
+            // a pair whose lines meet is tested; and its line must hold the
+            // deflection of its curve at its middle. An edge can stand off its
+            // surface (a file's tolerance): the line is read with the ends'
+            // offsets carried along it. A plane's (u, v) is flat: there the
+            // line strays only as far as the chord's ends stand off the plane.
+            // A cone's apex and a sphere's poles have no u, so the middle of a
+            // chord on them is not read against its curve.
+            if let FaceSurface::Plane { normal, d } = surface {
+                let off = |p: Point3| (normal.dot(Vec3::new(p.x(), p.y(), p.z())) - d).abs();
+                for c in chords.iter_mut().filter(|c| c.span.is_some()) {
+                    c.reach += 2.0 * off(c.a).max(off(c.b));
+                }
+            } else {
                 let held = matches!(
                     surface,
                     FaceSurface::Nurbs(_) | FaceSurface::Cylinder(_) | FaceSurface::Torus(_)
                 );
-                for c in &mut chords {
-                    let (Some(a), Some(b)) = (to_uv(c.a), to_uv(c.b)) else {
+                for c in chords.iter_mut().filter(|c| c.span.is_some()) {
+                    let (Some((a, Some(at_a))), Some((b, Some(at_b)))) =
+                        (read(c.a, true), read(c.b, true))
+                    else {
                         continue;
                     };
                     if (a.0 - b.0).abs() > 0.5 * su || (a.1 - b.1).abs() > 0.5 * sv {
                         continue;
                     }
-                    let (Some(at_a), Some(at_b)) =
-                        (surface.evaluate(a.0, a.1), surface.evaluate(b.0, b.1))
-                    else {
-                        continue;
-                    };
                     let (off_a, off_b) = (c.a - at_a, c.b - at_b);
                     let line = |f: f64| {
                         surface
@@ -692,6 +681,7 @@ pub(super) fn split_crossing_spline_chords(
                 if gap > ci.reach + cj.reach {
                     return;
                 }
+                let mut to_uv = |p: Point3| read(p, false).map(|(q, _)| q);
                 let (Some(a), Some(b), Some(c), Some(d)) =
                     (to_uv(ci.a), to_uv(ci.b), to_uv(cj.a), to_uv(cj.b))
                 else {
