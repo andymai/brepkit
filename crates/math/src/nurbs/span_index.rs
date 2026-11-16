@@ -71,7 +71,8 @@ fn knot_spans(knots: &[f64], degree: usize, n: usize) -> Vec<(f64, f64, usize)> 
 impl SpanIndex {
     /// Index `surface`'s knot spans. `None` when a weight is not positive
     /// (or not a number), where the control boxes need not bound the
-    /// surface, or is too small for its products to keep their digits.
+    /// surface, or is too small for its products to keep their digits, or
+    /// a weighted coordinate overflows.
     #[must_use]
     pub fn new(surface: &NurbsSurface) -> Option<Self> {
         if surface
@@ -83,6 +84,18 @@ impl SpanIndex {
             return None;
         }
         let cps = surface.control_points();
+        // A weighted coordinate that overflows leaves the nets without
+        // their points.
+        let weighted = cps.iter().zip(surface.weights()).all(|(row, ws)| {
+            row.iter().zip(ws).all(|(p, &w)| {
+                [p.x() * w, p.y() * w, p.z() * w]
+                    .iter()
+                    .all(|c| c.is_finite())
+            })
+        });
+        if !weighted {
+            return None;
+        }
         let rows = cps.len();
         let cols = cps.first()?.len();
         let (pu, pv) = (surface.degree_u(), surface.degree_v());
@@ -445,10 +458,11 @@ mod tests {
         assert!(!index.box_clears(&far, &b, 8e-7));
     }
 
-    /// Weights below the least normal float leave the products of a span's
-    /// net without digits, so no index is made.
+    /// Weights below the least normal float, and weights whose products
+    /// with the coordinates overflow, leave a span's net without its
+    /// points, so no index is made.
     #[test]
-    fn subnormal_weights_get_no_index() {
+    fn weights_out_of_range_get_no_index() {
         let cps = (0..3)
             .map(|i| {
                 (0..2)
@@ -468,6 +482,20 @@ mod tests {
         )
         .unwrap();
         assert!(SpanIndex::new(&s).is_none());
+        // Weights of `1e308` on coordinates of 2 overflow.
+        let heavy = NurbsSurface::new(
+            1,
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![
+                vec![Point3::new(2.0, 0.0, 0.0), Point3::new(0.0, 1.0, 0.0)],
+                vec![Point3::new(0.0, 0.0, 1.0), Point3::new(0.0, 1.0, 1.0)],
+            ],
+            vec![vec![1e308; 2]; 2],
+        )
+        .unwrap();
+        assert!(SpanIndex::new(&heavy).is_none());
     }
 
     fn sub_patch_boxes_hold_the_span_of(s: &NurbsSurface) {
