@@ -1,0 +1,29 @@
+crates/operations/src/tessellate/nurbs.rs
+  s_0db8415e6f59cd::t_56bdba408af11f 1675
+CLAUDE.md
+  s_0db8415e6f59cd::t_0e23d32ffc411a 80
+crates/math/src/nurbs/projection.rs
+  s_0db8415e6f59cd::t_4ded631604d59c 16-17,383-389,394-395,404-406,411-432,434,438-439,443-444,450,946,948,950,956,964-965,980-981,984-985,987,989,992,994-995,999-1001,1015,1018,1020-1021,1027-1072,1074-1112,1129-1135,1138-1139,1141,1151-1170,1176-1181
+crates/math/src/nurbs/projection/nearest.rs
+  s_0db8415e6f59cd::t_7bc887347e48af 1-536,538-539,542,548,550,608
+  s_0db8415e6f59cd::t_c1da9b30ac718c 537,540-541,543-547,549,551-605,607
+  s_0db8415e6f59cd::t_d93c767b1cd65b 606,609-610
+crates/math/src/nurbs/span_index.rs
+  s_0db8415e6f59cd::t_ae423edd5c17ba 183-193,223-226,254-263
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "bfea038e070c1a6b2ea66047bd753860bf2a0ffd",
+  "prompts": {},
+  "sessions": {
+    "s_0db8415e6f59cd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "80c728ce-cbd9-4375-adac-8fbf308dc911",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
