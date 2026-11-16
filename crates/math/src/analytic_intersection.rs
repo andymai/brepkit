@@ -4198,12 +4198,21 @@ fn narrowest_ruling(roots: &impl Fn(f64) -> (f64, f64, f64)) -> Option<(f64, boo
 /// carries one loop, out along one root and back along the other, the two
 /// joined where the discriminant vanishes. Empty when no sample meets it (a
 /// window narrower than the sampling).
+///
+/// Each window is sampled afresh between its two ends, closer together near
+/// them: a window may hold only a few of the rulings sampled around the whole
+/// turn, and the roots swing fastest where they join, so a fit through those
+/// alone strays from the curve by far more than the tolerance (a ball beside a
+/// wide ring's wall).
 fn partial_ruling_loops(
     sweep: &CylindricalSurface,
     roots: &impl Fn(f64) -> (f64, f64, f64),
     samples: &[Option<(Point3, Point3)>],
 ) -> Vec<Vec<Point3>> {
-    let branch_point = |inside: usize, outside: usize| -> Point3 {
+    let lin_tol = Tolerance::new().linear;
+    // Where the discriminant vanishes between a meeting ruling and a missing
+    // one, approached from the meeting side.
+    let branch_u = |inside: usize, outside: usize| -> f64 {
         let (mut lo, mut hi) = (ruling_u(inside), ruling_u(outside));
         if (hi - lo).abs() > std::f64::consts::PI {
             hi += if hi < lo { TAU } else { -TAU };
@@ -4216,8 +4225,11 @@ fn partial_ruling_loops(
                 hi = mid;
             }
         }
-        let (_, vp, vm) = roots(lo);
-        sweep.evaluate(lo, 0.5 * (vp + vm))
+        lo
+    };
+    let joint = |u: f64| {
+        let (_, vp, vm) = roots(u);
+        sweep.evaluate(u, 0.5 * (vp + vm))
     };
     let Some(first_gap) = samples.iter().position(Option::is_none) else {
         return Vec::new();
@@ -4239,8 +4251,22 @@ fn partial_ruling_loops(
             k += 1;
         }
         let end = (start + run.len() - 1) % RULING_SAMPLES;
-        let head = branch_point(start, (start + RULING_SAMPLES - 1) % RULING_SAMPLES);
-        let tail = branch_point(end, (end + 1) % RULING_SAMPLES);
+        let u_head = branch_u(start, (start + RULING_SAMPLES - 1) % RULING_SAMPLES);
+        let u_tail = branch_u(end, (end + 1) % RULING_SAMPLES);
+        let span = (u_tail - u_head).rem_euclid(TAU);
+        #[allow(clippy::cast_precision_loss)]
+        let fresh: Option<Vec<(Point3, Point3)>> = (1..RULING_SAMPLES)
+            .map(|n| {
+                let t = n as f64 / RULING_SAMPLES as f64;
+                let u = span.madd(0.5 * (1.0 - (std::f64::consts::PI * t).cos()), u_head);
+                let (disc, vp, vm) = roots(u);
+                (disc >= -lin_tol).then(|| (sweep.evaluate(u, vp), sweep.evaluate(u, vm)))
+            })
+            .collect();
+        // A gap inside the window that the sampling stepped over: keep the
+        // sampled rulings, which stay on one side of it.
+        let run = fresh.unwrap_or(run);
+        let (head, tail) = (joint(u_head), joint(u_head + span));
         let mut pts = vec![head];
         pts.extend(run.iter().map(|p| p.0));
         pts.push(tail);
@@ -6741,6 +6767,33 @@ mod tests {
         let (count, worst) = off_axis_loops(Point3::new(1.8, 0.0, 0.0), 0.5);
         assert_eq!(count, 1);
         assert!(worst < 5e-4, "loop leaves the surfaces by {worst}");
+    }
+
+    /// A ball through the wall of a ring far wider than it: the rulings that
+    /// meet the ball span a twelfth of the turn, and the loop through them
+    /// stays on both surfaces.
+    #[test]
+    fn a_ball_through_a_wide_wall_meets_it_in_one_close_loop() {
+        let centre = Point3::new(7.35, 0.0, 0.0);
+        let sphere = SphericalSurface::new(centre, 2.4145).unwrap();
+        let cyl =
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 9.15)
+                .unwrap();
+        let curves = algebraic_sphere_cylinder(&sphere, &cyl, true)
+            .unwrap()
+            .unwrap();
+        assert_eq!(curves.len(), 1);
+        let (t0, t1) = curves[0].curve.domain();
+        let mut worst: f64 = 0.0;
+        for k in 0..=2000 {
+            let p = curves[0]
+                .curve
+                .evaluate(t0 + (t1 - t0) * f64::from(k) / 2000.0);
+            let on_sphere = ((p - centre).length() - 2.4145).abs();
+            let on_cylinder = (p.x().hypot(p.y()) - 9.15).abs();
+            worst = worst.max(on_sphere).max(on_cylinder);
+        }
+        assert!(worst < 1e-6, "the loop leaves the surfaces by {worst}");
     }
 
     /// A whole torus ends where it starts both ways round; its size is read

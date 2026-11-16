@@ -394,9 +394,32 @@ impl SphereLoop {
                     planes.iter().all(inside)
                 }
             }
+            // Within `slack` of the rim on its own side counts as outside the
+            // hole, as a plane's half-space admits a point within `slack`.
             Self::Rim { frame, flat } => {
                 (p - frame.origin).dot(frame.z) <= 0.0
                     || !point_in_polygon(rim_flat(frame, p), flat)
+                    || (slack > 0.0 && self.borders(p, slack))
+            }
+        }
+    }
+
+    /// Whether `p` lies within `near` of the loop's own boundary: for arcs, on
+    /// one of their planes and on the arc's side of each other plane; for a
+    /// rim, on the rim's hemisphere. [`Self::grazes`] reads the whole of each
+    /// plane, and a rim's projection from both hemispheres.
+    fn borders(&self, p: Point3, near: f64) -> bool {
+        match self {
+            Self::HalfSpaces { planes, any } => planes.iter().enumerate().any(|(i, &(c, n))| {
+                (p - c).dot(n).abs() <= near
+                    && planes.iter().enumerate().all(|(j, &(cj, nj))| {
+                        let side = (p - cj).dot(nj);
+                        // A hole's arcs bound the part the planes keep out.
+                        j == i || if *any { side <= near } else { side >= -near }
+                    })
+            }),
+            Self::Rim { frame, .. } => {
+                (p - frame.origin).dot(frame.z) >= -near && self.grazes(p, near)
             }
         }
     }
@@ -2390,6 +2413,79 @@ impl LateralTrim {
             | FaceSurface::Nurbs(_)
             | FaceSurface::Sphere(_)
             | FaceSurface::Torus(_) => (true, false),
+        }
+    }
+}
+
+/// A spherical face's wires, to read whether a point of its sphere lies on
+/// the face itself: the planes its loops lie in, or its wires in `(u, v)`
+/// about an axis clear of them, as the ray cast reads the face.
+pub struct SphereFaceTrim {
+    geom: FaceGeom,
+}
+
+impl SphereFaceTrim {
+    /// The trim of a spherical face. `None` for any other surface, or a face
+    /// whose wires neither planes nor a trim can read.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AlgoError`] if a topology lookup fails.
+    pub fn new(
+        topo: &Topology,
+        face_id: brepkit_topology::face::FaceId,
+    ) -> Result<Option<Self>, AlgoError> {
+        let face = topo.face(face_id)?;
+        let brepkit_topology::face::FaceSurface::Sphere(surface) = face.surface() else {
+            return Ok(None);
+        };
+        if let Some(loops) = sphere_face_loops(topo, face, surface)? {
+            return Ok(Some(Self {
+                geom: FaceGeom::Sphere {
+                    surface: surface.clone(),
+                    loops,
+                },
+            }));
+        }
+        Ok(sphere_trim(topo, face, surface)?.map(|geom| Self { geom }))
+    }
+
+    /// Whether `point`, on the face's sphere, lies on the face: within
+    /// `near` of a wire counts as on it.
+    pub fn holds(&self, point: Point3, near: f64) -> bool {
+        let (on, close) = self.reads(point, near);
+        on || close
+    }
+
+    /// Whether `point`, on the face's sphere, lies inside the face farther
+    /// than `near` from every wire.
+    pub fn holds_clear(&self, point: Point3, near: f64) -> bool {
+        let (on, close) = self.reads(point, near);
+        on && !close
+    }
+
+    fn reads(&self, point: Point3, near: f64) -> (bool, bool) {
+        match &self.geom {
+            // A loop grazes along the whole of its planes; a point is near
+            // the face's boundary only where the other loops admit it too.
+            FaceGeom::Sphere { loops, .. } => (
+                loops.iter().all(|l| l.admits(point, 0.0)),
+                loops.iter().all(|l| l.admits(point, near))
+                    && loops.iter().any(|l| l.borders(point, near)),
+            ),
+            FaceGeom::SphereTrim {
+                frame,
+                trim,
+                away,
+                beyond,
+                ..
+            } => {
+                let project = |p: Point3| frame.project(p);
+                let (u, v) = frame.project(point);
+                let (on, close) = trim.contains(u, v, *away, frame.radius_at(v), near, &project);
+                (on != *beyond, close)
+            }
+            _ => (true, false),
         }
     }
 }
@@ -5221,6 +5317,127 @@ mod tests {
     /// A band from 0 to a quarter turn, and one across the ring's angle
     /// origin, read by their ring angles: a ray up out of the tube's centre
     /// crosses the band only where its angle lies between the end circles.
+    /// A ball's octant holds the points on it and near its arcs, and no
+    /// point beside the plane of one arc that another arc's plane keeps out.
+    #[test]
+    fn a_ball_face_trim_holds_only_its_own_patch() {
+        let mut topo = Topology::new();
+        let origin = Point3::new(0.0, 0.0, 0.0);
+        let octant = sphere_patch(
+            &mut topo,
+            3.0,
+            &[
+                Point3::new(3.0, 0.0, 0.0),
+                Point3::new(0.0, 3.0, 0.0),
+                Point3::new(0.0, 0.0, 3.0),
+            ],
+            &[origin, origin, origin],
+        );
+        let trim = SphereFaceTrim::new(&topo, octant).unwrap().unwrap();
+        let r = 3.0_f64.sqrt();
+        let near = 1e-6;
+        assert!(trim.holds_clear(Point3::new(r, r, r), near));
+        assert!(trim.holds(Point3::new(0.0, 1.8, 2.4), near), "on an arc");
+        assert!(
+            !trim.holds_clear(Point3::new(0.0, 1.8, 2.4), near),
+            "on an arc"
+        );
+        assert!(
+            !trim.holds(Point3::new(0.0, -1.8, 2.4), near),
+            "beside an arc's plane"
+        );
+        assert!(
+            !trim.holds(Point3::new(-r, r, r), near),
+            "a neighbouring octant"
+        );
+
+        // The ball less that octant, its arcs run the other way round.
+        let rest = sphere_patch(
+            &mut topo,
+            3.0,
+            &[
+                Point3::new(0.0, 0.0, 3.0),
+                Point3::new(0.0, 3.0, 0.0),
+                Point3::new(3.0, 0.0, 0.0),
+            ],
+            &[origin, origin, origin],
+        );
+        let trim = SphereFaceTrim::new(&topo, rest).unwrap().unwrap();
+        assert!(
+            trim.holds_clear(Point3::new(0.0, -1.8, 2.4), near),
+            "on an arc's plane, away from the arc"
+        );
+        assert!(trim.holds(Point3::new(0.0, 1.8, 2.4), near), "on an arc");
+        assert!(
+            !trim.holds_clear(Point3::new(0.0, 1.8, 2.4), near),
+            "on an arc"
+        );
+        assert!(
+            !trim.holds(Point3::new(r, r, r), near),
+            "the octant left out"
+        );
+    }
+
+    /// A ball less a cap and a bore's rim off its centre: a point of the face
+    /// on the far hemisphere, under the rim along the rim's axis, is clear of
+    /// the rim.
+    #[test]
+    fn a_ball_face_trim_reads_a_rim_on_its_own_hemisphere() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::SphericalSurface;
+
+        let mut topo = Topology::new();
+        let origin = Point3::new(0.0, 0.0, 0.0);
+        let cap_at = Point3::new(-2.5, 0.0, 0.0);
+        let cap_radius = (9.0_f64 - 6.25).sqrt();
+        let start = topo.add_vertex(Vertex::new(Point3::new(-2.5, cap_radius, 0.0), 1e-7));
+        let circle = Circle3D::new(cap_at, Vec3::new(1.0, 0.0, 0.0), cap_radius).unwrap();
+        let cap = topo.add_edge(Edge::new(start, start, EdgeCurve::Circle(circle)));
+        let outer = topo.add_wire(Wire::new(vec![OrientedEdge::new(cap, true)], true).unwrap());
+        let rim_at = |k: usize| {
+            #[allow(clippy::cast_precision_loss)]
+            let a = -std::f64::consts::TAU * k as f64 / 24.0;
+            let (x, y) = (0.5f64.madd(a.cos(), 1.0), 0.5 * a.sin());
+            Point3::new(x, y, (9.0 - x * x - y * y).sqrt())
+        };
+        let verts: Vec<_> = (0..24)
+            .map(|k| topo.add_vertex(Vertex::new(rim_at(k), 1e-7)))
+            .collect();
+        let edges: Vec<_> = (0..24)
+            .map(|k| {
+                let e = topo.add_edge(Edge::new(verts[k], verts[(k + 1) % 24], EdgeCurve::Line));
+                OrientedEdge::new(e, true)
+            })
+            .collect();
+        let inner = topo.add_wire(Wire::new(edges, true).unwrap());
+        let sphere = SphericalSurface::new(origin, 3.0).unwrap();
+        let face = topo.add_face(Face::new(outer, vec![inner], FaceSurface::Sphere(sphere)));
+        let trim = SphereFaceTrim::new(&topo, face).unwrap().unwrap();
+        let near = 1e-6;
+
+        let top = Point3::new(1.0, 0.0, 8.0_f64.sqrt());
+        assert!(!trim.holds(top, near), "the bore");
+        assert!(trim.holds_clear(Point3::new(0.0, 3.0, 0.0), near));
+        assert!(!trim.holds_clear(rim_at(0), near), "on the rim");
+        let rim_sum = (0..24).fold(Vec3::new(0.0, 0.0, 0.0), |acc, k| {
+            acc + (rim_at(k) - origin)
+        });
+        let axis = rim_sum.normalize().unwrap();
+        let q = rim_at(6) - origin;
+        let below = origin + (q - axis * (2.0 * q.dot(axis)));
+        assert!(
+            trim.holds_clear(below, near),
+            "under the rim, on the far side"
+        );
+
+        // Just inside the bore, closer to its rim than `near`.
+        let r = rim_at(0);
+        let toward = (Point3::new(1.0, 0.0, r.z()) - r).normalize().unwrap();
+        let inside = r + toward * (0.5 * near);
+        assert!(trim.holds(inside, near), "by the rim, inside the bore");
+        assert!(!trim.holds(r + toward * 1e-3, near), "inside the bore");
+    }
+
     #[test]
     fn a_partial_revolution_band_counts_crossings_between_its_ends() {
         use std::f64::consts::{FRAC_PI_2, FRAC_PI_4, PI, TAU};
