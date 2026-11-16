@@ -207,7 +207,7 @@ impl BezierPatch {
 /// them as they are. Where they are not, because a knot at an end of the
 /// span falls short of the degree's multiplicity, the patch takes the
 /// span's Bezier points by blossoming: at the ends of a knot vector that is
-/// not clamped, and next to knots nearer than [`KNOT_EPS`], which the
+/// not clamped, and next to knots nearer than `KNOT_EPS` (1e-15), which the
 /// insertion counts as one knot.
 ///
 /// # Errors
