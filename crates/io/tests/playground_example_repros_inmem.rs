@@ -169,17 +169,17 @@ fn a_yoke_with_rounded_arms_fuses_onto_the_turrets_cap() {
     let cap = load("robot_arm_shoulder_cap.bin", &mut topo);
     let yoke = load("robot_arm_shoulder_yoke.bin", &mut topo);
     // In the cap under the yoke, in the middle of one arm of the yoke, and
-    // beside that arm. The grid holds the cap's cone, where the yoke's
-    // rounds pass through it.
+    // beside that arm. The grid holds the cap's cone where one round of the
+    // yoke and its side cylinder pass through it.
     fuse_exactly(
         &mut topo,
         cap,
         yoke,
         [[0.0, 0.0, 170.0], [0.0, -49.0, 250.0], [0.0, -60.0, 250.0]],
         &Grid {
-            lo: [-70.0, -70.0, 175.0],
-            hi: [70.0, 70.0, 195.0],
-            n: 20,
+            lo: [28.0, -52.0, 176.0],
+            hi: [64.0, 0.0, 194.0],
+            n: 16,
         },
     );
 }
