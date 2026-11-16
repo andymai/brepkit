@@ -4499,15 +4499,16 @@ fn convex_hull_2d(points: &[(f64, f64)]) -> Vec<(f64, f64)> {
 }
 
 /// Whether the convex hull of `points` overlaps a convex region by more than
-/// a rounding of their sizes (touching alone does not count).
+/// a rounding of the region's size (touching alone does not count). The
+/// rounding does not grow with the hull: a long edge through a small
+/// notch still crosses it.
 fn hull_overlaps_region(points: &[(f64, f64)], region: &[(f64, f64)]) -> bool {
     let hull = convex_hull_2d(points);
     if hull.is_empty() {
         return false;
     }
-    let scale = points
+    let scale = region
         .iter()
-        .chain(region.iter())
         .map(|&(x, y)| x.abs().max(y.abs()))
         .fold(0.0_f64, f64::max);
     let eps = 1e-9 * scale.max(1.0);
@@ -6695,6 +6696,16 @@ mod tests {
         ] {
             let (edge, a, b) = line(from, to);
             assert!(cap_edge_reaches_region(&edge, a, b, &flat, &region));
+        }
+        // A long line through the triangle near its side reaches it, and one
+        // as long just past the side does not.
+        for (y, reaches) in [(5e-4, true), (-5e-4, false)] {
+            let (edge, a, b) = line((-1e6, y), (1e6, y));
+            assert_eq!(
+                cap_edge_reaches_region(&edge, a, b, &flat, &NOTCH),
+                reaches,
+                "{y}"
+            );
         }
         // Along a side, or touching a corner, it does not.
         for (region, from, to) in [
