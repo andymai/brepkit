@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794810520782,
+  "lastUpdate": 1794811898608,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -71873,6 +71873,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 14488704,
             "range": "± 229614",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "0e3d2ba612e543143d7490d7955868b164c71e06",
+          "message": "fix(operations): revolve the other way for a negative angle (#2546)\n\n## Summary\n\nA revolve by a negative angle now turns the profile the other way about\nthe axis. Before, `revolve` and `revolveWire` refused any angle below\nzero. Part of #2502.\n\nThe brepjs playground example `sheet-metal-u-channel` revolves a\nU-bolt's arch: a disc of radius 4, revolved by `-Math.PI` about the `y`\naxis. The brepjs adapter passes the angle in degrees, so the kernel call\nwas `revolve(face, 0, 0, 0, 0, 1, 0, -180)`. The binding refused it\nbecause the angle was below 0, and brepjs reported `REVOLVE_FAILED`. The\nexample's other revolves use the default angle and pass.\n\n`revolve` in `crates/operations/src/revolve.rs` and `revolve_wire` in\n`crates/operations/src/sheet.rs` now take a negative angle, down to -2π,\nas the same size of turn about the reversed axis. The wasm bindings\n`revolve` and `revolveWire` take a negative angle down to -360 degrees.\nAn angle of zero, or larger than a turn either way, is still refused.\n\n## Tests\n\n- `crates/operations/tests/revolve_negative_angle.rs` revolves the\narch's disc by -π and by π. Each result must be valid and hold the\nvolume from Pappus's rule to 1e-4. A point above the axis must lie\ninside for -π and outside for π, and a point below the other way round.\n- In the same file, a turn of -2π must give the whole ring in one face.\n`revolve` must refuse angles of 0, -0, 2π + 0.1, -2π - 0.1 and NaN.\n- In the same file, a line revolved by -π/2 and by π/2 must sweep an\narea of 6π to 1e-6. The two sweeps must lie on opposite sides of the\nline's plane.\n- `a_negative_revolve_angle_turns_the_other_way` in\n`crates/wasm/src/bindings/operations.rs` revolves a square by -180\ndegrees through the binding. The volume must agree with Pappus's rule to\n1e-6, and the solid must lie above `z = 0`.\n- `cargo nextest run --cargo-profile ci -p brepkit-operations -p\nbrepkit-wasm`: 2530 passed, 19 skipped.\n- With a local wasm build of this change and the four fuse fixes for\n#2502 on the branch `fix/playground-fuse-roots`, `sheet-metal-u-channel`\npasses in `tests/playgroundExamples.test.ts` in brepjs.\n- `cargo clippy --all-targets --all-features -- -D warnings` and `cargo\nfmt --all -- --check` pass in the pre-commit hook.\n\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFace and wire revolves now accept negative angles, turning the profile\nthe opposite way instead of rejecting the operation. This allows\nnegative-angle sweeps such as the U-bolt arch to succeed through the\nwasm bindings.\n\n- Zero angles and angles beyond one full turn in either direction remain\ninvalid.\n- Tests verify sweep direction and resulting geometry for negative\nangles.\n\n<sup>Written for commit 7bdb317027117e5951a43b447d887ed58424d7f1.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2546?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2546?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2546&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-11-15T22:48:07-08:00",
+          "tree_id": "b2a0cfd89cfb5dc68614727ff1548f7b73570d5e",
+          "url": "https://github.com/andymai/brepkit/commit/0e3d2ba612e543143d7490d7955868b164c71e06"
+        },
+        "date": 1794811885999,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 891599,
+            "range": "± 2582",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 934061,
+            "range": "± 6830",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11013,
+            "range": "± 51",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 560979,
+            "range": "± 3551",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 20472767,
+            "range": "± 104180",
             "unit": "ns/iter"
           }
         ]
