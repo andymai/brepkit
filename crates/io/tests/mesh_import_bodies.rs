@@ -864,3 +864,125 @@ fn nested_shells_are_solids_with_a_cavity_each() {
         assert_eq!(topo.solid(solid).unwrap().inner_shells().len(), 1);
     }
 }
+
+/// Add a box with each side cut into `m` by `m` squares.
+fn add_grid_box(mesh: &mut TriangleMesh, lo: [f64; 3], hi: [f64; 3], m: u32, inward: bool) {
+    let at = |k: usize, i: u32| lo[k] + (hi[k] - lo[k]) * f64::from(i) / f64::from(m);
+    for axis in 0..3 {
+        for far in [false, true] {
+            let (u, v) = ((axis + 1) % 3, (axis + 2) % 3);
+            let base = u32::try_from(mesh.positions.len()).unwrap();
+            for i in 0..=m {
+                for j in 0..=m {
+                    let mut p = [0.0; 3];
+                    p[axis] = if far { hi[axis] } else { lo[axis] };
+                    p[u] = at(u, i);
+                    p[v] = at(v, j);
+                    mesh.positions.push(Point3::new(p[0], p[1], p[2]));
+                }
+            }
+            let id = |i: u32, j: u32| base + i * (m + 1) + j;
+            for i in 0..m {
+                for j in 0..m {
+                    let (a, b, c, d) = (id(i, j), id(i + 1, j), id(i + 1, j + 1), id(i, j + 1));
+                    if far == inward {
+                        mesh.indices.extend([a, c, b, a, d, c]);
+                    } else {
+                        mesh.indices.extend([a, b, c, a, c, d]);
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn a_grid_box_is_a_solid() {
+    let mut mesh = TriangleMesh::default();
+    add_grid_box(&mut mesh, [0.0; 3], [10.0; 3], 2, false);
+    let mut topo = Topology::new();
+    let solid = import_mesh(&mut topo, &mesh, 1e-7).unwrap();
+    assert!((volume(&topo, solid) - 1000.0).abs() < 1e-9);
+    assert_valid(&topo, solid);
+}
+
+/// Wound inward, with normals that point out: the normals turn each cube
+/// before its triangles pair off round the shared edge.
+#[test]
+fn normals_against_the_winding_turn_two_cubes_that_share_an_edge() {
+    let mut mesh = TriangleMesh::default();
+    add_cube(&mut mesh, [0.0; 3], 10.0, true);
+    add_cube(&mut mesh, [10.0, 10.0, 0.0], 10.0, true);
+    let centres = [Point3::new(5.0, 5.0, 5.0), Point3::new(15.0, 15.0, 5.0)];
+    mesh.normals = mesh
+        .positions
+        .iter()
+        .enumerate()
+        .map(|(i, &p)| p - centres[i / 8])
+        .collect();
+
+    let mut topo = Topology::new();
+    let parts = import_mesh_parts(&mut topo, &mesh, 1e-7).unwrap();
+    assert_eq!((parts.solids.len(), parts.shells.len()), (2, 0));
+    for &solid in &parts.solids {
+        assert!((volume(&topo, solid) - 1000.0).abs() < 1e-9);
+        assert_valid(&topo, solid);
+    }
+}
+
+/// With no tolerance, the margin of a test is the rounding of the
+/// coordinates near it, and a body far away does not change it.
+#[test]
+fn a_distant_body_does_not_change_what_lies_near_the_origin() {
+    let mut mesh = TriangleMesh::default();
+    add_cube(&mut mesh, [0.0; 3], 20.0, false);
+    add_cube(&mut mesh, [5.0; 3], 10.0, true);
+    add_cube(&mut mesh, [1e16; 3], 1024.0, false);
+
+    let mut topo = Topology::new();
+    let parts = import_mesh_parts(&mut topo, &mesh, 0.0).unwrap();
+    assert_eq!((parts.solids.len(), parts.shells.len()), (2, 0));
+    let with_cavity: Vec<_> = parts
+        .solids
+        .iter()
+        .filter(|&&s| topo.solid(s).unwrap().inner_shells().len() == 1)
+        .collect();
+    assert_eq!(with_cavity.len(), 1);
+    assert!((volume(&topo, *with_cavity[0]) - 7000.0).abs() < 1e-9);
+
+    let mut mesh = TriangleMesh::default();
+    add_cube(&mut mesh, [0.0; 3], 10.0, false);
+    add_cube(&mut mesh, [5.0; 3], 10.0, false);
+    add_cube(&mut mesh, [1e16; 3], 1024.0, false);
+    let mut topo = Topology::new();
+    assert!(import_mesh(&mut topo, &mesh, 0.0).is_err());
+}
+
+/// The sides of the cube on `[5, 15]` cross the finer cube along the edges
+/// of its triangles, where no triangle passes to both sides of the other.
+#[test]
+fn two_cubes_that_cross_along_edges_of_triangles_are_not_one_solid() {
+    let mut mesh = TriangleMesh::default();
+    add_grid_box(&mut mesh, [0.0; 3], [10.0; 3], 2, false);
+    add_cube(&mut mesh, [5.0; 3], 10.0, false);
+
+    let mut topo = Topology::new();
+    assert!(import_mesh(&mut topo, &mesh, 1e-7).is_err());
+    let parts = import_mesh_parts(&mut topo, &mesh, 1e-7).unwrap();
+    assert_eq!((parts.solids.len(), parts.shells.len()), (2, 0));
+}
+
+/// The cavity touches the wall of the finer box along a side, across lines
+/// of its triangles: they touch, and do not cross.
+#[test]
+fn a_cavity_that_touches_the_wall_of_a_finer_box_is_its_cavity() {
+    let mut mesh = TriangleMesh::default();
+    add_grid_box(&mut mesh, [0.0; 3], [20.0; 3], 4, false);
+    add_cube(&mut mesh, [10.0, 5.0, 5.0], 10.0, true);
+
+    let mut topo = Topology::new();
+    let solid = import_mesh(&mut topo, &mesh, 1e-7).unwrap();
+    assert_eq!(topo.solid(solid).unwrap().inner_shells().len(), 1);
+    assert!((volume(&topo, solid) - 7000.0).abs() < 1e-9);
+    assert_valid(&topo, solid);
+}

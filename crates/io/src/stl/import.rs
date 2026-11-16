@@ -114,9 +114,9 @@ impl MeshBodies {
             });
         }
 
-        let links = Links::read(&tris, &points, tolerance);
+        let links = Links::read(&tris, &points, &votes, tolerance);
         let mut bodies = split_bodies(&mut tris, &votes, &points, &links);
-        let placement = assign_cavities(&mut bodies, &mut tris, &points, tolerance);
+        let placement = assign_cavities(&mut bodies, &mut tris, &points, &links, tolerance);
         Ok(Self {
             points,
             tris,
@@ -405,7 +405,7 @@ struct Links {
 }
 
 impl Links {
-    fn read(tris: &[[usize; 3]], points: &[Point3], tolerance: f64) -> Self {
+    fn read(tris: &[[usize; 3]], points: &[Point3], votes: &[f64], tolerance: f64) -> Self {
         let mut uses: HashMap<(usize, usize), Vec<(usize, bool)>> = HashMap::new();
         for (t, tri) in tris.iter().enumerate() {
             for k in 0..3 {
@@ -415,7 +415,7 @@ impl Links {
         }
         let mut pairs = HashMap::new();
         if uses.values().any(|list| list.len() > 2) {
-            let turned = patch_turns(tris, &uses);
+            let turned = patch_turns(tris, &uses, votes);
             for (&key, list) in &uses {
                 if list.len() <= 2 {
                     continue;
@@ -443,11 +443,16 @@ impl Links {
     }
 }
 
-/// For each triangle, whether it is wound against most of the triangles
+/// For each triangle, whether it is wound against the side of the triangles
 /// joined to it through edges of two triangles.
+///
+/// Such a set takes the side of most of its triangles as they are wound,
+/// and turns over when its stored normals point against that side, as a
+/// closed body does in [`split_bodies`].
 fn patch_turns(
     tris: &[[usize; 3]],
     uses: &HashMap<(usize, usize), Vec<(usize, bool)>>,
+    votes: &[f64],
 ) -> Vec<bool> {
     let mut turn = vec![false; tris.len()];
     let mut seen = vec![false; tris.len()];
@@ -480,6 +485,16 @@ fn patch_turns(
             }
         }
         if patch.iter().filter(|&&t| turn[t]).count() * 2 > patch.len() {
+            for &t in &patch {
+                turn[t] = !turn[t];
+            }
+        }
+        let (mut vote, mut weight) = (0.0, 0.0);
+        for &t in &patch {
+            vote += if turn[t] { -votes[t] } else { votes[t] };
+            weight += votes[t].abs();
+        }
+        if vote < -0.5 * weight {
             for &t in &patch {
                 turn[t] = !turn[t];
             }
@@ -933,30 +948,31 @@ impl BoxTree {
 
     /// Visit each item whose box the segment from `p` to `q` meets.
     fn each_along(&self, p: Point3, q: Point3, visit: impl FnMut(usize) -> bool) -> bool {
-        let (p, q) = (coords(p), coords(q));
-        let d = [q[0] - p[0], q[1] - p[1], q[2] - p[2]];
-        self.walk(
-            |(lo, hi)| {
-                let (mut t0, mut t1) = (0.0_f64, 1.0_f64);
-                for k in 0..3 {
-                    if d[k] == 0.0 {
-                        if p[k] < lo[k] || p[k] > hi[k] {
-                            return false;
-                        }
-                        continue;
-                    }
-                    let (a, b) = ((lo[k] - p[k]) / d[k], (hi[k] - p[k]) / d[k]);
-                    t0 = t0.max(a.min(b));
-                    t1 = t1.min(a.max(b));
-                    if t0 > t1 {
-                        return false;
-                    }
-                }
-                true
-            },
-            visit,
-        )
+        let d = q - p;
+        self.walk(|b| segment_entry(b, p, d).is_some(), visit)
     }
+}
+
+/// Where the segment from `p` to `p + d` enters the box `bounds`, as a part
+/// of the segment, or `None` when it misses the box.
+fn segment_entry((lo, hi): &Bounds, p: Point3, d: Vec3) -> Option<f64> {
+    let (p, d) = (coords(p), [d.x(), d.y(), d.z()]);
+    let (mut t0, mut t1) = (0.0_f64, 1.0_f64);
+    for k in 0..3 {
+        if d[k] == 0.0 {
+            if p[k] < lo[k] || p[k] > hi[k] {
+                return None;
+            }
+            continue;
+        }
+        let (a, b) = ((lo[k] - p[k]) / d[k], (hi[k] - p[k]) / d[k]);
+        t0 = t0.max(a.min(b));
+        t1 = t1.min(a.max(b));
+        if t0 > t1 {
+            return None;
+        }
+    }
+    Some(t0)
 }
 
 /// How the closed bodies of a mesh sit together.
@@ -985,12 +1001,13 @@ fn assign_cavities(
     bodies: &mut [Body],
     tris: &mut [[usize; 3]],
     points: &[Point3],
+    links: &Links,
     tolerance: f64,
 ) -> Placement {
     let closed: Vec<usize> = (0..bodies.len())
         .filter(|&i| bodies[i].kind == BodyKind::Solid)
         .collect();
-    let nesting = Nesting::read(&closed, bodies, tris, points, tolerance);
+    let nesting = Nesting::read(&closed, bodies, tris, points, links, tolerance);
 
     // The cavities come from the winding of the mesh as it is.
     let outward: Vec<bool> = bodies.iter().map(|b| b.volume6 > 0.0).collect();
@@ -1020,6 +1037,36 @@ fn assign_cavities(
     }
 }
 
+/// The margins of the import at coordinates of a given size.
+#[derive(Clone, Copy)]
+struct Margins {
+    tolerance: f64,
+}
+
+impl Margins {
+    /// Two points within the merge tolerance are one point. With no
+    /// tolerance, the margin is the rounding of a coordinate of size
+    /// `reach`.
+    fn on(self, reach: f64) -> f64 {
+        if self.tolerance > 0.0 {
+            self.tolerance
+        } else {
+            8.0 * f64::EPSILON * reach
+        }
+    }
+
+    /// The margin of a box in a tree: [`Margins::on`], and the rounding of
+    /// the box tests.
+    fn pad(self, reach: f64) -> f64 {
+        self.on(reach).max(64.0 * f64::EPSILON * reach)
+    }
+}
+
+/// The largest size of a coordinate in `bounds`.
+fn reach_of((lo, hi): &Bounds) -> f64 {
+    lo.iter().chain(hi).fold(0.0_f64, |m, c| m.max(c.abs()))
+}
+
 /// Where the closed bodies of a mesh lie, each body by its place in the
 /// list of closed bodies.
 struct Nesting {
@@ -1031,11 +1078,13 @@ struct Nesting {
 }
 
 impl Nesting {
+    #[allow(clippy::too_many_lines)]
     fn read(
         closed: &[usize],
         bodies: &[Body],
         tris: &[[usize; 3]],
         points: &[Point3],
+        links: &Links,
         tolerance: f64,
     ) -> Self {
         let n = closed.len();
@@ -1046,31 +1095,25 @@ impl Nesting {
         if n < 2 {
             return out;
         }
+        let margins = Margins { tolerance };
         let corners = |t: usize| tris[t].map(|i| points[i]);
         let boxes: Vec<Bounds> = closed
             .iter()
             .map(|&i| point_bounds(bodies[i].tris.iter().flat_map(|&t| corners(t))))
             .collect();
-        let reach = boxes
-            .iter()
-            .flat_map(|(lo, hi)| lo.iter().chain(hi))
-            .fold(0.0_f64, |m, c| m.max(c.abs()));
-        // Two points within the merge tolerance are one point. With no
-        // tolerance, the margin is the rounding of a coordinate.
-        let on = if tolerance > 0.0 {
-            tolerance
-        } else {
-            8.0 * f64::EPSILON * reach
-        };
-        // The boxes in the trees take in the rounding of the box tests.
-        let pad = on.max(64.0 * f64::EPSILON * reach);
         let sizes: Vec<f64> = closed.iter().map(|&i| bodies[i].volume6.abs()).collect();
-        let body_tree = BoxTree::new(boxes.iter().map(|&b| grown(b, pad)).collect());
+        let outward: Vec<bool> = closed.iter().map(|&i| bodies[i].volume6 > 0.0).collect();
+        let body_tree = BoxTree::new(
+            boxes
+                .iter()
+                .map(|b| grown(*b, margins.pad(reach_of(b))))
+                .collect(),
+        );
 
         // Only the triangles of a body whose box meets the box of another
         // can cross or hold another body.
         let near: Vec<bool> = (0..n)
-            .map(|c| !body_tree.each_meeting(&grown(boxes[c], pad), |d| d == c))
+            .map(|c| !body_tree.each_meeting(&body_tree.boxes[c], |d| d == c))
             .collect();
         let mut tri_of = Vec::new();
         let mut owner = Vec::new();
@@ -1083,10 +1126,27 @@ impl Nesting {
         let tri_tree = BoxTree::new(
             tri_of
                 .iter()
-                .map(|&t| grown(point_bounds(corners(t)), pad))
+                .map(|&t| {
+                    let b = point_bounds(corners(t));
+                    grown(b, margins.pad(reach_of(&b)))
+                })
                 .collect(),
         );
 
+        // A triangle, with the far corner of the triangle across each edge.
+        let facet = |t: usize| {
+            let tri = tris[t];
+            Facet {
+                corners: corners(t),
+                beyond: [0, 1, 2].map(|k| {
+                    let key = edge_key(tri[k], tri[(k + 1) % 3]);
+                    let far = links
+                        .across(t, key)
+                        .and_then(|o| tris[o].into_iter().find(|&i| i != key.0 && i != key.1));
+                    points[far.unwrap_or(tri[(k + 2) % 3])]
+                }),
+            }
+        };
         let mut crossing: HashSet<(usize, usize)> = HashSet::new();
         for (item, &t) in tri_of.iter().enumerate() {
             let c = owner[item];
@@ -1096,11 +1156,11 @@ impl Nesting {
             }
             tri_tree.each_meeting(&bounds, |other| {
                 let d = owner[other];
-                if d > c
-                    && !crossing.contains(&(c, d))
-                    && triangles_cross(corners(t), corners(tri_of[other]), on)
-                {
-                    crossing.insert((c, d));
+                if d > c && !crossing.contains(&(c, d)) {
+                    let reach = reach_of(&bounds).max(reach_of(&tri_tree.boxes[other]));
+                    if triangles_cross(&facet(t), &facet(tri_of[other]), margins.on(reach)) {
+                        crossing.insert((c, d));
+                    }
                 }
                 true
             });
@@ -1110,34 +1170,56 @@ impl Nesting {
             out.crossed[d] = true;
         }
 
-        let ctx = Rays {
+        let mut scene = body_tree.boxes[0];
+        for (c, b) in body_tree.boxes.iter().enumerate() {
+            if near[c] {
+                scene = point_bounds([
+                    Point3::new(b.0[0], b.0[1], b.0[2]),
+                    Point3::new(b.1[0], b.1[1], b.1[2]),
+                    Point3::new(scene.0[0], scene.0[1], scene.0[2]),
+                    Point3::new(scene.1[0], scene.1[1], scene.1[2]),
+                ]);
+            }
+        }
+        let rays = Rays {
             tri_tree: &tri_tree,
             tri_of: &tri_of,
             owner: &owner,
             corners: &corners,
-            on,
-            pad,
+            body_boxes: &body_tree.boxes,
+            outward: &outward,
+            margins,
         };
         for c in (0..n).filter(|&c| near[c]) {
-            // The bodies whose boxes hold this body's box, smallest first.
-            let mut candidates = BinaryHeap::new();
-            body_tree.each_meeting(&boxes[c], |d| {
-                if d != c
+            // A body that can hold this one: larger, with a box that holds
+            // its box, and not across it.
+            let holds_c = |d: usize| {
+                d != c
                     && sizes[d] > sizes[c]
                     && holds(&body_tree.boxes[d], &boxes[c])
                     && !crossing.contains(&(c.min(d), c.max(d)))
-                {
-                    candidates.push(std::cmp::Reverse((Size(sizes[d]), d)));
-                }
-                true
-            });
-            let members = &bodies[closed[c]].tris;
-            while let Some(std::cmp::Reverse((_, d))) = candidates.pop() {
-                if ctx.lies_in(members, d, &body_tree.boxes[d]) {
-                    out.around[c] = Some(d);
-                    break;
-                }
+            };
+            if body_tree.each_meeting(&boxes[c], |d| !holds_c(d)) {
+                continue;
             }
+            let members = &bodies[closed[c]].tris;
+            out.around[c] = match rays.first_round(c, members, &scene, &holds_c) {
+                Some(Round::In(d)) => Some(d),
+                Some(Round::Free) => None,
+                // No ray decides: the bodies whose boxes hold this body's
+                // box, smallest first, each with rays of its own.
+                None => {
+                    let mut candidates = BinaryHeap::new();
+                    body_tree.each_meeting(&boxes[c], |d| {
+                        if holds_c(d) {
+                            candidates.push(std::cmp::Reverse((Size(sizes[d]), d)));
+                        }
+                        true
+                    });
+                    std::iter::from_fn(|| candidates.pop().map(|std::cmp::Reverse((_, d))| d))
+                        .find(|&d| rays.lies_in(members, d))
+                }
+            };
         }
         out
     }
@@ -1167,21 +1249,184 @@ struct Rays<'a, F: Fn(usize) -> [Point3; 3]> {
     tri_of: &'a [usize],
     owner: &'a [usize],
     corners: &'a F,
-    on: f64,
-    pad: f64,
+    /// The box of each closed body, with the margin of the tree.
+    body_boxes: &'a [Bounds],
+    outward: &'a [bool],
+    margins: Margins,
+}
+
+/// What a ray out of a closed body finds round it.
+#[derive(Clone, Copy)]
+enum Round {
+    /// The body lies directly in this closed body.
+    In(usize),
+    /// The body lies in no closed body.
+    Free,
+}
+
+/// A crossing of a ray with a triangle of a body.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct Hit {
+    /// The part of the ray before the crossing.
+    at: Size,
+    /// Two crossings closer than this may be read in the wrong order.
+    tie: Size,
+    body: usize,
+    /// Whether the ray leaves the body here.
+    exit: bool,
 }
 
 impl<F: Fn(usize) -> [Point3; 3]> Rays<'_, F> {
+    /// The body round the closed body `c` (of the triangles `members`):
+    /// the first body that a ray out of `c` leaves before it enters it.
+    /// `holder` tells the bodies that can hold `c`.
+    ///
+    /// The ray starts at the corner of `c` furthest along it, so it meets
+    /// no part of `c` and nothing in `c`. It reads the crossings in their
+    /// order, so it stops at the first body that it leaves: the body round
+    /// `c`. `None` when no ray decides.
+    fn first_round(
+        &self,
+        c: usize,
+        members: &[usize],
+        scene: &Bounds,
+        holder: &impl Fn(usize) -> bool,
+    ) -> Option<Round> {
+        for dir in RAYS {
+            let dir = Vec3::new(dir[0], dir[1], dir[2]);
+            let along = |p: &Point3| dir.dot(Vec3::new(p.x(), p.y(), p.z()));
+            let p = members
+                .iter()
+                .flat_map(|&t| (self.corners)(t))
+                .max_by(|a, b| along(a).total_cmp(&along(b)))?;
+            if self.touches(p, None, c) {
+                continue;
+            }
+            if let Some(found) = self.walk(c, p, dir, scene, holder) {
+                return Some(found);
+            }
+        }
+        None
+    }
+
+    /// The first body that the ray from `p` along `dir` leaves before it
+    /// enters it, of the bodies that `holder` accepts. `None` when the ray
+    /// meets an edge or a corner, or two crossings of one body are too
+    /// close to read their order.
+    fn walk(
+        &self,
+        c: usize,
+        p: Point3,
+        dir: Vec3,
+        scene: &Bounds,
+        holder: &impl Fn(usize) -> bool,
+    ) -> Option<Round> {
+        let q = p + dir * exit_along(p, dir, scene);
+        let d = q - p;
+        let length = d.length();
+        if length == 0.0 {
+            return None;
+        }
+        let tree = self.tri_tree;
+        let mut nodes = BinaryHeap::new();
+        if let Some(t) = tree
+            .nodes
+            .first()
+            .and_then(|n| segment_entry(&n.bounds, p, d))
+        {
+            nodes.push(std::cmp::Reverse((Size(t), 0)));
+        }
+        let mut hits: BinaryHeap<std::cmp::Reverse<Hit>> = BinaryHeap::new();
+        let mut crossings: HashMap<usize, Vec<f64>> = HashMap::new();
+        let mut read: HashSet<usize> = HashSet::new();
+        loop {
+            let next_node = nodes.peek().map(|std::cmp::Reverse((Size(t), _))| *t);
+            let next_hit = hits
+                .peek()
+                .map(|std::cmp::Reverse(hit)| hit.at.0 + hit.tie.0);
+            match (next_node, next_hit) {
+                // Each node that the ray enters before the next crossing
+                // (and its tie) is read first, so the crossings come in
+                // their order.
+                (Some(t), h) if h.is_none_or(|h| t <= h) => {
+                    let std::cmp::Reverse((_, n)) = nodes.pop()?;
+                    let node = tree.nodes[n];
+                    if node.count == 0 {
+                        for child in [node.first, node.first + 1] {
+                            if let Some(t) = segment_entry(&tree.nodes[child].bounds, p, d) {
+                                nodes.push(std::cmp::Reverse((Size(t), child)));
+                            }
+                        }
+                        continue;
+                    }
+                    for &item in &tree.items[node.first..node.first + node.count] {
+                        let body = self.owner[item];
+                        if body == c || segment_entry(&tree.boxes[item], p, d).is_none() {
+                            continue;
+                        }
+                        let tri = (self.corners)(self.tri_of[item]);
+                        if !segment_crosses(p, q, tri)? {
+                            continue;
+                        }
+                        let [a, b, e] = tri;
+                        let normal = (b - a).cross(e - a);
+                        let across = normal.dot(d);
+                        // A ray close to the plane of a triangle reads the
+                        // place of its crossing poorly.
+                        if across.abs() <= 1e-9 * normal.length() * length {
+                            return None;
+                        }
+                        let at = normal.dot(a - p) / across;
+                        let reach = reach_of(&tree.boxes[item]).max(reach_of(&point_bounds([p])));
+                        crossings.entry(body).or_default().push(at);
+                        hits.push(std::cmp::Reverse(Hit {
+                            at: Size(at),
+                            tie: Size(self.margins.pad(reach) / length),
+                            body,
+                            // `p` is behind the triangle, inside an outward
+                            // body, when the sign is positive.
+                            exit: (orient3d(a, b, e, p) > 0.0) == self.outward[body],
+                        }));
+                    }
+                }
+                (_, Some(_)) => {
+                    let std::cmp::Reverse(hit) = hits.pop()?;
+                    // The first crossing of a body tells whether it holds
+                    // `p`.
+                    if !read.insert(hit.body) {
+                        continue;
+                    }
+                    let close = crossings[&hit.body]
+                        .iter()
+                        .filter(|&&t| (t - hit.at.0).abs() <= hit.tie.0)
+                        .count();
+                    if close > 1 {
+                        return None;
+                    }
+                    if hit.exit && holder(hit.body) {
+                        // The count of crossings of that body alone, with
+                        // exact signs, has the last word.
+                        return self
+                            .crosses_odd(p, dir, hit.body)
+                            .filter(|&odd| odd)
+                            .map(|_| Round::In(hit.body));
+                    }
+                }
+                _ => return Some(Round::Free),
+            }
+        }
+    }
+
     /// Whether the closed body of the triangles `members` lies in the
-    /// closed body `outer`, whose box (with the margin of the tree) is
-    /// `bounds`.
+    /// closed body `outer`.
     ///
     /// One point of `members` decides, from the count of times a ray from
-    /// it crosses `outer`. A point within `on` of `outer` (the two bodies
-    /// touch there) decides nothing, and the next point is read: each
-    /// corner, then the centre of each triangle. A ray that meets an edge
-    /// or a corner of `outer` decides nothing, and the next ray is cast.
-    fn lies_in(&self, members: &[usize], outer: usize, bounds: &Bounds) -> bool {
+    /// it crosses `outer`. A point within the margin of `outer` (the two
+    /// bodies touch there) decides nothing, and the next point is read:
+    /// each corner, then the centre of each triangle. A ray that meets an
+    /// edge or a corner of `outer` decides nothing, and the next ray is
+    /// cast.
+    fn lies_in(&self, members: &[usize], outer: usize) -> bool {
         let mut read: HashSet<Point3Key> = HashSet::new();
         let corners = members.iter().flat_map(|&t| (self.corners)(t));
         let centres = members.iter().map(|&t| {
@@ -1193,13 +1438,11 @@ impl<F: Fn(usize) -> [Point3; 3]> Rays<'_, F> {
             )
         });
         for p in corners.chain(centres) {
-            if !read.insert(Point3Key::of(p)) || self.touches(p, outer) {
+            if !read.insert(Point3Key::of(p)) || self.touches(p, Some(outer), usize::MAX) {
                 continue;
             }
             for dir in RAYS {
-                if let Some(odd) =
-                    self.crosses_odd(p, Vec3::new(dir[0], dir[1], dir[2]), outer, bounds)
-                {
+                if let Some(odd) = self.crosses_odd(p, Vec3::new(dir[0], dir[1], dir[2]), outer) {
                     return odd;
                 }
             }
@@ -1207,15 +1450,21 @@ impl<F: Fn(usize) -> [Point3; 3]> Rays<'_, F> {
         false
     }
 
-    /// Whether `p` lies within `on` of a triangle of `outer`.
-    fn touches(&self, p: Point3, outer: usize) -> bool {
-        let at = grown(point_bounds([p]), self.pad);
+    /// Whether `p` lies within the margin of a triangle of the body `only`,
+    /// or of any body but `not` when `only` is `None`.
+    fn touches(&self, p: Point3, only: Option<usize>, not: usize) -> bool {
+        let reach = reach_of(&point_bounds([p]));
+        let at = grown(point_bounds([p]), self.margins.pad(reach));
         !self.tri_tree.each_meeting(&at, |item| {
-            if self.owner[item] != outer {
+            let body = self.owner[item];
+            if only.map_or(body == not, |o| body != o) {
                 return true;
             }
             let [a, b, c] = (self.corners)(self.tri_of[item]);
-            origin_to_triangle(a - p, b - p, c - p) > self.on
+            let on = self
+                .margins
+                .on(reach.max(reach_of(&self.tri_tree.boxes[item])));
+            origin_to_triangle(a - p, b - p, c - p) > on
         })
     }
 
@@ -1224,15 +1473,8 @@ impl<F: Fn(usize) -> [Point3; 3]> Rays<'_, F> {
     ///
     /// The ray stops past the box of `outer`, so it reads only the
     /// triangles near that body.
-    fn crosses_odd(&self, p: Point3, dir: Vec3, outer: usize, (lo, hi): &Bounds) -> Option<bool> {
-        let (from, along) = (coords(p), [dir.x(), dir.y(), dir.z()]);
-        let reach = (0..3)
-            .map(|k| {
-                let wall = if along[k] > 0.0 { hi[k] } else { lo[k] };
-                (wall - from[k]) / along[k]
-            })
-            .fold(f64::INFINITY, f64::min);
-        let q = p + dir * reach.max(0.0);
+    fn crosses_odd(&self, p: Point3, dir: Vec3, outer: usize) -> Option<bool> {
+        let q = p + dir * exit_along(p, dir, &self.body_boxes[outer]);
         let mut odd = false;
         let mut sure = true;
         self.tri_tree.each_along(p, q, |item| {
@@ -1247,6 +1489,19 @@ impl<F: Fn(usize) -> [Point3; 3]> Rays<'_, F> {
         });
         sure.then_some(odd)
     }
+}
+
+/// How far along `dir` the ray from `p` leaves the box `bounds`, which
+/// holds `p`.
+fn exit_along(p: Point3, dir: Vec3, (lo, hi): &Bounds) -> f64 {
+    let (from, along) = (coords(p), [dir.x(), dir.y(), dir.z()]);
+    (0..3)
+        .map(|k| {
+            let wall = if along[k] > 0.0 { hi[k] } else { lo[k] };
+            (wall - from[k]) / along[k]
+        })
+        .fold(f64::INFINITY, f64::min)
+        .max(0.0)
 }
 
 /// The bits of a point, to read each point once.
@@ -1294,53 +1549,82 @@ fn segment_crosses(p: Point3, q: Point3, [a, b, c]: [Point3; 3]) -> Option<bool>
     }
 }
 
-/// Whether two triangles cross: each passes through the plane of the
-/// other by more than `on` to both sides, and the two meet along a length
-/// of more than `on`. Two triangles that touch at a point, along an edge,
-/// or in one plane do not cross.
-fn triangles_cross(t: [Point3; 3], u: [Point3; 3], on: f64) -> bool {
-    let (Some(cut_t), Some(cut_u)) = (cut_by_plane(t, u, on), cut_by_plane(u, t, on)) else {
+/// A triangle of a closed body, with the far corner of the triangle across
+/// each of its edges: `beyond[k]` is across the edge from corner `k` to
+/// corner `k + 1`.
+struct Facet {
+    corners: [Point3; 3],
+    beyond: [Point3; 3],
+}
+
+/// Whether two triangles of two closed bodies cross: the surface of each
+/// body passes through the plane of the other triangle there, and the two
+/// meet along a length of more than `on`. Two triangles that touch at a
+/// point, along an edge, or in one plane do not cross.
+fn triangles_cross(t: &Facet, u: &Facet, on: f64) -> bool {
+    let (Some(cut_t), Some(cut_u)) = (
+        cut_by_plane(t, &u.corners, on),
+        cut_by_plane(u, &t.corners, on),
+    ) else {
         return false;
     };
-    let n_t = (t[1] - t[0]).cross(t[2] - t[0]);
-    let n_u = (u[1] - u[0]).cross(u[2] - u[0]);
+    let [t0, t1, t2] = t.corners;
+    let [u0, u1, u2] = u.corners;
+    let n_t = (t1 - t0).cross(t2 - t0);
+    let n_u = (u1 - u0).cross(u2 - u0);
     let Ok(line) = n_t.cross(n_u).normalize() else {
         return false;
     };
     let span = |(a, b): (Point3, Point3)| {
-        let (x, y) = (line.dot(a - t[0]), line.dot(b - t[0]));
+        let (x, y) = (line.dot(a - t0), line.dot(b - t0));
         (x.min(y), x.max(y))
     };
-    let ((t0, t1), (u0, u1)) = (span(cut_t), span(cut_u));
-    t1.min(u1) - t0.max(u0) > on
+    let ((a0, a1), (b0, b1)) = (span(cut_t), span(cut_u));
+    a1.min(b1) - a0.max(b0) > on
 }
 
-/// The part of the triangle `tri` in the plane of the triangle `other`, by
-/// its two ends, when `tri` passes more than `on` to each side of the
-/// plane.
-fn cut_by_plane(tri: [Point3; 3], other: [Point3; 3], on: f64) -> Option<(Point3, Point3)> {
+/// Where the surface of the body of `facet` passes through the plane of
+/// the triangle `other`, in `facet`, by its two ends.
+///
+/// - When `facet` passes more than `on` to each side of the plane, the
+///   part of `facet` in the plane.
+/// - When an edge of `facet` lies in the plane, and `facet` and the
+///   triangle across that edge are more than `on` to the two sides of the
+///   plane, that edge.
+fn cut_by_plane(facet: &Facet, other: &[Point3; 3], on: f64) -> Option<(Point3, Point3)> {
+    let tri = facet.corners;
     let normal = (other[1] - other[0])
         .cross(other[2] - other[0])
         .normalize()
         .ok()?;
-    let d = tri.map(|p| normal.dot(p - other[0]));
+    let side = |p: Point3| normal.dot(p - other[0]);
+    let d = tri.map(side);
     let (low, high) = (d[0].min(d[1]).min(d[2]), d[0].max(d[1]).max(d[2]));
-    if !(high > on && low < -on) {
-        return None;
-    }
-    let mut ends = Vec::with_capacity(2);
-    for k in 0..3 {
-        let m = (k + 1) % 3;
-        if d[k] == 0.0 {
-            ends.push(tri[k]);
-        } else if d[m] != 0.0 && (d[k] > 0.0) != (d[m] > 0.0) {
-            ends.push(tri[k] + (tri[m] - tri[k]) * (d[k] / (d[k] - d[m])));
+    if high > on && low < -on {
+        let mut ends = Vec::with_capacity(2);
+        for k in 0..3 {
+            let m = (k + 1) % 3;
+            if d[k] == 0.0 {
+                ends.push(tri[k]);
+            } else if d[m] != 0.0 && (d[k] > 0.0) != (d[m] > 0.0) {
+                ends.push(tri[k] + (tri[m] - tri[k]) * (d[k] / (d[k] - d[m])));
+            }
         }
+        return match ends[..] {
+            [a, b] => Some((a, b)),
+            _ => None,
+        };
     }
-    match ends[..] {
-        [a, b] => Some((a, b)),
-        _ => None,
-    }
+    (0..3).find_map(|k| {
+        let (m, far) = ((k + 1) % 3, (k + 2) % 3);
+        let beyond = side(facet.beyond[k]);
+        (d[k].abs() <= on
+            && d[m].abs() <= on
+            && d[far].abs() > on
+            && beyond.abs() > on
+            && (beyond > 0.0) != (d[far] > 0.0))
+            .then_some((tri[k], tri[m]))
+    })
 }
 
 /// The distance from the origin to the triangle `a b c`.
