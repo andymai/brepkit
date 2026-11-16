@@ -344,10 +344,29 @@ fn include_held(
     candidates: &[Point3],
     placement: Placement<'_>,
 ) {
-    let held = brepkit_check::classify::face_contains_each(topo, face_id, candidates)
-        .unwrap_or_else(|_| vec![true; candidates.len()]);
+    // A candidate the box already holds cannot grow it, held or not: only
+    // the others are read against the face (most of a torus band's circle
+    // of candidates along its axis, on a fillet).
+    let outside: Vec<Point3> = candidates
+        .iter()
+        .copied()
+        .filter(|&p| {
+            let q = placement.point(p);
+            !(aabb.min.x() <= q.x()
+                && q.x() <= aabb.max.x()
+                && aabb.min.y() <= q.y()
+                && q.y() <= aabb.max.y()
+                && aabb.min.z() <= q.z()
+                && q.z() <= aabb.max.z())
+        })
+        .collect();
+    if outside.is_empty() {
+        return;
+    }
+    let held = brepkit_check::classify::face_contains_each(topo, face_id, &outside)
+        .unwrap_or_else(|_| vec![true; outside.len()]);
     let mut rim: Option<Rim> = None;
-    for (&p, held) in candidates.iter().zip(held) {
+    for (&p, held) in outside.iter().zip(held) {
         if held || rim.get_or_insert_with(|| Rim::of(topo, face_id)).reaches(p) {
             aabb_include(aabb, placement.point(p));
         }
