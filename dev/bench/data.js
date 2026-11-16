@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794808719475,
+  "lastUpdate": 1794809160819,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -71657,6 +71657,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 18077155,
             "range": "± 69519",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "66281732+Robokan@users.noreply.github.com",
+            "name": "Eric Vaughan",
+            "username": "Robokan"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "be7eb0952269cbdf085548dd2b5d0e2965ef8bf3",
+          "message": "perf(boolean): the slowest booleans' ray casting, trims, touch gate, boxes, hole polygons and section seeds (#2496)\n\n## Summary\n\nSeven changes to where the slowest booleans on parts from real designs\nspent their time. Every result is unchanged: the 30 booleans timed\nbelow, and 210 others, write the same STEP byte for byte before and\nafter.\n\n- **A ray passes over an extrusion face whose profile it cannot meet**\n(`classifier/ray_cast.rs`). Extrusion faces have no box in the ray\ncaster's face index, since their crossing test also reads grazes off the\npatch, along the surface's run past its ends. So each one sat in the\nlist every ray reads. On a part with hundreds of extruded spline sides,\none boolean made 4.4 million extrusion tests, each walking the profile's\n65 or more sample intervals. A profile now keeps the box of its control\npoints in the plane square to the extrusion, which holds the profile\nwhile its weights are positive. The test counts a hit, or reads a graze,\nonly where the ray's line, seen along the extrusion, comes within the\ntolerance of the profile. So a line passing that box by more than the\ntolerance and the rounding reads nothing, and the test returns at once.\nA ray along the extrusion is read against the box as a point. The\nprofile's points at its 65 even steps, which such a ray is tested\nagainst, are now kept with its other samples instead of being evaluated\nfor every ray.\n- **A B-spline face's trim keeps the nearer foot of a boundary point**\n(`classifier/ray_cast.rs`). The trim projects each sample of a boundary\nedge by Newton from the sample before, and searches the whole surface\nwhen that Newton does not land on the surface. On a fitted surface with\nmany spans, the search settled on a foot 0.55 off for a point lying on\nthe surface. The next sample's Newton then started from that far foot\nand missed too. The edge's (u, v) ran off it, its samples were split to\nthe cap of 4096, and the turn search ran 692 golden-section searches of\n62 projections each. Of the two feet, the nearer is now kept.\n- **The touching-pieces gate meshes each piece once**\n(`boolean/mod.rs`). `pieces_only_touch` meshed each piece for its\nwitnesses, then again, at the same deflection of the same box, for its\ninterior point. The interior point is now read on the first mesh.\n- **A face's box candidates that the box already holds are not read**\n(`measure/bounding_box.rs`). A sphere or torus face's box takes the\nsurface's farthest points along each axis that the face holds, each read\nagainst the face. Along a torus's axis those are two circles of 360\npoints. A candidate inside the box built so far cannot grow it, held or\nnot, so only the others are read. On a filleted part, 86% were inside.\n- **A plane face's hole polygons are sampled once per pass**\n(`builder/fill_images_faces.rs`). Clipping a section line to a holed\nplane face read the face's hole polygons for every line, sampling each\ncurved hole edge 96 times, though the polygons are the face's own, in\nthe frame of its outline: only the crossings are the line's. They are\nnow kept with the face's loops for the pass. The arc crossing search\nalso reads its edge's span once (`edge_point_at`), not at every\nevaluation.\n- **A valley walk that comes back to a state it held gives up**\n(`nurbs/intersection/plane.rs`). `trace_valley` walks the floor of a\nvalley of a plane's distance on a B-spline patch in up to 4096 steps\neach way, settling across it by Newton each step, and a walk that runs\nout of steps gives no curve. Every walk that ran out had fallen into a\ncycle two to four states long within its first 64 steps and went round\nit to the limit. The walk is a function of its state alone (where it is,\nits direction and step, whether it has left its start), so the state is\nkept at each power of two of its steps (Brent's cycle check), and a walk\nthat meets it again stops there with no curve, the answer it would have\nreached.\n- **The seed grid takes a pair's root only where it can count**\n(`nurbs/intersection/surface_seeding.rs`). `find_ssi_seeds_grid` took a\nroot for every pair of the two patches' grid samples. A pair whose\nsquare passes both samples' nearest squares and the threshold's square\n(padded for its rounding) has a distance no nearer, since the root is\nmonotone, and changes nothing, so no root is taken for it.\n\n## Timing\n\n30 slow booleans from real designs, their inputs read from STEP first\n(several have bodies of more than one solid, run solid by solid). The\ntime is the booleans alone, the median of 3 runs, one case at a time:\n\n| | `main` | this branch |\n|---|---|---|\n| all 30 | 98.5 s | 89.1 s (1.11x) |\n| case 1 | 9.53 s | 4.74 s (2.01x) |\n| case 2 | 2.29 s | 1.10 s (2.08x) |\n| case 3 | 1.59 s | 0.87 s (1.84x) |\n| case 4 | 1.44 s | 0.93 s (1.55x) |\n| case 5 | 1.02 s | 0.64 s (1.61x) |\n\nThe fifth change, timed apart on the 60 slowest booleans (case 1 is the\nsame part as above; the rest move within run-to-run noise, all 60\ntogether 134.6 s before and 134.0 s after; their STEP the same byte for\nbyte):\n\n| | before | after |\n|---|---|---|\n| case 1 | 4.76 s | 3.63 s (1.31x) |\n\nThe sixth and seventh, timed apart on 297 slow booleans, once each\n(their STEP the same byte for byte): all 297 382.0 s before and 372.1 s\nafter; a part whose valley walks ran to the limit 0.298 s -> 0.086 s\n(3.45x), others 2.33 s -> 1.96 s and 1.15 s -> 0.95 s.\n\n## Tests\n\nalgo, operations, blend, io, topology, check and math tests pass\n(4,192); clippy and fmt are clean; the pose sweep and truth audit match\n`main` line for line.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\n---------\n\nCo-authored-by: Claude Opus 5.5 <noreply@anthropic.com>\nCo-authored-by: Andy Aragon <hi@andymai.com>",
+          "timestamp": "2026-11-15T22:02:05-08:00",
+          "tree_id": "e39538c8909e9b79ec3ca45c831fe4554c331bbb",
+          "url": "https://github.com/andymai/brepkit/commit/be7eb0952269cbdf085548dd2b5d0e2965ef8bf3"
+        },
+        "date": 1794809150376,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1114372,
+            "range": "± 1790",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1186547,
+            "range": "± 27339",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12740,
+            "range": "± 55",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 706418,
+            "range": "± 14470",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26089642,
+            "range": "± 156666",
             "unit": "ns/iter"
           }
         ]
