@@ -1269,7 +1269,10 @@ fn piece_boxes(
             conic_reach(e.semi_major(), e.semi_minor(), e.u_axis(), e.v_axis()),
         )),
         EdgeCurve::NurbsCurve(n) => {
-            if n.weights().iter().any(|&w| w <= 0.0) {
+            // A weight below the least normal float can carry the curve out
+            // of its control box, as one that is not positive can.
+            let unbounded = |w: &f64| *w <= 0.0 || !w.is_normal();
+            if n.weights().iter().any(unbounded) {
                 return None;
             }
             let segments = brepkit_math::nurbs::decompose::curve_to_bezier_segments(n).ok()?;
@@ -1280,7 +1283,7 @@ fn piece_boxes(
                     k.first().is_some_and(|&a| a <= hi) && k.last().is_some_and(|&b| b >= lo)
                 })
                 .map(|seg| {
-                    if seg.weights().iter().any(|&w| w <= 0.0) {
+                    if seg.weights().iter().any(unbounded) {
                         return None;
                     }
                     Aabb3::try_from_points(seg.control_points().iter().copied())
@@ -2386,6 +2389,17 @@ mod tests {
                 2.9,
             ),
         ];
+        // Weights below the least normal float give no boxes.
+        let tiny = f64::from_bits(1);
+        let line = NurbsCurve::new(
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![Point3::new(1.0, 0.0, 1.0), Point3::new(1.0, 1.0, 1.0)],
+            vec![tiny, tiny],
+        )
+        .unwrap();
+        let (s, e) = (Point3::new(1.0, 0.0, 1.0), Point3::new(1.0, 1.0, 1.0));
+        assert!(curve_piece_boxes(&EdgeCurve::NurbsCurve(line), s, e, 0.0, 1.0).is_none());
         for (curve, start, end, t0, t1) in &cases {
             let boxes = curve_piece_boxes(curve, *start, *end, *t0, *t1).unwrap();
             for k in 0..=2000 {
