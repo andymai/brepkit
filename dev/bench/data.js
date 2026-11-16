@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794809382642,
+  "lastUpdate": 1794809567528,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -71765,6 +71765,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25176203,
             "range": "± 137270",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "59ff8e4b21859dd81e0444624294c17eb041593d",
+          "message": "fix(io): split bodies at shared edges and find crossings in a mesh import (#2505)\n\n## Summary\n\nA mesh import read two cubes that share an edge as one shell, and no\nsolid. It read a body that crosses another body as in it or apart, from\none point. To find the body round each closed body, it compared each\npair of closed bodies. It summed a solid angle over each triangle of the\nouter body.\n\nNow two bodies that share an edge are two solids, and the import finds\nbodies that cross. Box trees find the body round each body. Closes\n#2449. Closes #2453. Closes #2468. Closes #2507.\n\n### Edges of more than two triangles (#2449)\n\nAt an edge of more than two triangles, the triangles pair off by their\norder round the edge. In each pair, the two triangles run the edge in\nopposite directions. Before the import makes the pairs, each set of\ntriangles joined through edges of two triangles takes the winding of\nmost of its triangles. The sets joined through any edge (a group) turn\nover together when their stored normals point against their sides, as a\nclosed body does. So one triangle wound against its cube, or a cube\nwound against its normals, does not change the pairs.\n\nTwo ways to pair the triangles can both fit. Then each pair takes the\nwedge that both of its triangles face away from: the material of the\nbody.\n\n- Two cubes that share an edge are two solids. Each has vertices and\nedges of its own.\n- Two inward cubes that share an edge, in a cube, are one cavity of that\ncube. The material round the edge is the cube, so the cavity pinches at\nthe edge. Each pair round the edge has an edge of its own, and the solid\nis valid.\n- An edge whose triangles do not pair off joins all of its triangles in\none shell, as on main. The import does not guess a pairing in these\ncases:\n  - The edge has an odd count of triangles, or no way to pair them fits.\n- Two triangles lie at one angle round the edge, within the angular\ntolerance (1e-12) or within the merge tolerance at their far corners.\nTwo cubes that touch along a side and a wall of no thickness look the\nsame there. So two cubes that share a side, with the same two triangles\non it, are one shell.\n- The stored normals of the group neither agree nor disagree with its\nwinding, three to one by weight. That ratio is the rule that turns a\nclosed body by its normals on main. A group whose triangles all have one\nnormal at each corner (a reader's fill for a file with none) gives no\nvote. The import reads this for each group, so true normals in another\ngroup do not change it.\n- A body that does not keep the winding that its pairs took is a shell.\nThe normals of its group can decide one way and the normals of the body\nthe other.\n- In a mesh wound inside out, the winding puts the material round the\ntwo cubes. The two cubes that share an edge are then one valid solid of\nvolume 2000, which pinches at the edge. #2510 has that case.\n\n### Bodies that cross (#2453)\n\nTwo closed bodies cross when a triangle of one passes through a triangle\nof the other. The surface of each body must pass through the plane of\nthe other triangle there, in one of two ways:\n\n- The triangle passes more than the tolerance to both sides of the\nplane.\n- An edge of the triangle lies in the plane, and the triangle across\nthat edge is on the other side.\n\nThe two triangles must also meet along a length of more than the\ntolerance. Two bodies that touch at a point, along an edge, or in one\nplane do not cross. A tree of the triangle boxes finds the pairs to\ntest.\n\nI chose this behaviour for `import_mesh_parts`:\n\n- An outward body that crosses another body is a solid. Each outward\nclosed body bounds a solid alone, and an outward body in another body is\na solid already.\n- An inward body that crosses another body is a shell. It does not lie\nin a body, so it is not a cavity. Its winding says that it bounds a\nvoid, so a turn to a solid is a guess.\n- `import_mesh` returns an error when two closed bodies cross, and adds\nnothing to the topology. On main it returned one solid for two outward\ncubes that cross, and for two bars that cross.\n\nIn the example of #2453, the L-shaped prism is a solid of volume 15 with\nno cavity. The cube is a shell of 12 faces.\n\nTwo bodies can also overlap with no triangle that crosses another\n(#2507). Two equal cubes, the second moved along one axis, meet only in\nplanes of their sides. Take two triangles of two bodies in one plane,\nwith the insides of both bodies to one side of the plane. Then one body\nlies in the other, or the two cross. When neither body lies in the\nother, the import reads the two as bodies that cross. Two cubes that\ntouch along a side from the two sides of it do not meet this way.\n\n### The body round each body (#2468)\n\n- A tree of the body boxes finds the bodies whose box meets the box of\nanother body. Only their triangles go into a tree of triangle boxes.\n- Each tree puts its boxes in the Morton order of their centres, and\nsplits each run of boxes in half. Boxes round one centre, as the boxes\nof nested shells, take the order of their size.\n- A walk of the triangle tree in pairs of nodes finds the pairs of\ntriangles of two bodies whose boxes meet. It drops a pair of nodes whose\ntriangles are all in one body.\n- A body with no box round its box lies in no body. The import looks at\nup to 32 boxes for one, and the ray decides past them.\n- A ray starts at the corner of the body furthest along the ray, so it\nmeets no part of the body and nothing in it. It reads the crossings in\ntheir order through the triangle tree. The first body that the ray\nleaves before it enters it is the body round this body. A count of the\ncrossings of that body alone, with exact signs (`orient3d`), must agree.\n- Some rays decide nothing, and the import casts the next of four rays.\nThese are:\n  - a ray from a corner within the tolerance of another body\n  - a ray that meets an edge or a corner\n  - a ray with two crossings of one body too close to order\n- a ray that first leaves a body that crosses another: that body need\nnot be the smallest round the body\n- a ray that leaves two bodies that can hold the body at one place: the\ntwo can come in either order\n- When no ray decides, the import tests the bodies whose box holds the\nbody's box, from the smallest. Each test counts the crossings of a ray\nfrom a point of the body, and the ray stops past the box of the other\nbody. A point within the tolerance of that body decides nothing, and the\nimport reads the next point: each corner, then the centre of each\ntriangle.\n- With no tolerance, the margin of each test comes from the coordinates\nnear it. A body far away does not change it.\n\nI timed `import_mesh_parts` on five meshes in a release build, three\nruns each, and kept the best run. The meshes are in an untracked test\nfile, not in this PR.\n\n| Mesh | Triangles | main `4e5184192` | this branch |\n|---|---:|---:|---:|\n| 27,000 separate cubes, each a little larger than the one before |\n324,000 | 1.230 s | 0.580 s |\n| 2,000 nested shells, outward and inward in turn | 24,000 | 0.658 s |\n0.045 s |\n| A box of 120,000 triangles with 1,000 cavities | 132,000 | 2.366 s |\n0.198 s |\n| A box of 480,000 triangles | 480,000 | 0.800 s | 0.753 s |\n| Two boxes of 480,000 triangles, one in the other | 960,000 | 1.764 s |\n1.894 s |\n\nThe two builds ran back to back on a shared machine. A second run of\nthis branch gave 1.010 s for the box of 480,000 triangles, so the noise\nis about 30%. The last row is about 7% slower than main. The import\nbuilds a tree of the triangles of the two bodies, to test them for\ncrossings.\n\n### wasm\n\nThe bindings return the same types. `importStl` and `importIndexedMesh`\nnow return a solid for bodies that share an edge, and an error for\nbodies that cross. The `import*Parts` bindings return two solids for\nbodies that share an edge, and a shell for an inward body that crosses\nanother. The doc comments in `crates/wasm/src/bindings/io.rs` and\n`crates/wasm/src/types.rs` say so. brepjs calls `importStl` and\n`importIndexedMesh`, and no `import*Parts` binding.\n\n## Tests\n\n- `crates/io/tests/mesh_import_bodies.rs` has 30 new tests. Seventeen\nfail on main:\n- Two cubes that share an edge: 2 solids, 16 vertices, 36 edges, each\nvalid with a volume of 1000. As one solid, 2 pieces and a volume of\n2000.\n- Two STL boxes that share an edge, and one triangle turned on the\nshared edge: 2 valid solids.\n- Two cubes that share an edge, wound inward with normals that point\nout, or with all normals in one direction: 2 valid solids. With all\nnormals in one direction, beside a third cube with normals that point\nout: 3 valid solids.\n- Two inward cubes that share an edge in a cube: 1 valid solid, 1\ncavity, a volume of 25000.\n- A large box whose normals agree, and a thin box wound against its\nnormals, share an edge. They give a solid of 8000 and a shell of 12\nfaces.\n  - The prism and the cube of #2453, and two cubes that cross.\n- Two bars that cross like a plus sign, and two inward cubes that cross\nin a cube.\n- A cube cut into 2 by 2 squares on each side, crossed by a cube along\nthe edges of its triangles.\n- A cavity in a cube with no tolerance, beside a cube at 1e16, and two\ncubes that cross beside that far cube.\n- Two cubes that overlap and meet only in the planes of their sides: an\nerror that says they cross. The same two cubes moved to 2^30 give the\nsame error.\n- An inward octahedron with its six corners on the sides of a cube: a\ncavity of the cube, decided from the centre of a triangle.\n- Thirteen new tests pass on main and on this branch:\n- Shells, as on main: two cubes that share a side, and two cubes whose\nnormals cancel.\n- Shells, as on main: a double-sided fin on the edge of a cube, and a\nfin of one triangle.\n- A cavity that touches the wall of its body along a side, and the same\nin a box cut into squares. A box cut into squares is a solid.\n- Two cubes that touch along a side, and an outward cube on the wall\ninside a cube.\n- A cavity in two bodies that cross goes to the smaller. An island in a\ncavity on the wall of its body is a solid of its own.\n  - 1000 separate cubes, and 200 nested shells.\n- `crates/wasm/src/bindings/io.rs` has 2 new tests: two indexed cubes\nthat share an edge, and two that cross.\n- I turned off two steps one at a time, to make sure that each runs.\nWith no winding of the triangle sets, two tests fail: the turned\ntriangle, and the cubes wound against their normals. With votes from\nnormals in one direction, the test of those normals fails.\n- I counted the paths with a print. In the nested shells, the ordered\nray decides the body round each of the 199 inner shells. In the\noctahedron, each corner touches the cube, and the scan of the boxes\ndecides.\n- `cargo nextest run --cargo-profile ci -p brepkit-io -p brepkit-wasm`\nat `ed6e39eac`: 819 passed and 10 skipped. Nine of the skipped tests\ncarry `#[ignore]` on main too. The tenth is the untracked timing test.\n- The pre-commit hook (fmt and clippy over the workspace) passes on each\ncommit.",
+          "timestamp": "2026-11-16T06:09:13Z",
+          "tree_id": "867b48c88aefc6d6014cc4f31487697229e6a87f",
+          "url": "https://github.com/andymai/brepkit/commit/59ff8e4b21859dd81e0444624294c17eb041593d"
+        },
+        "date": 1794809556390,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 634186,
+            "range": "± 9919",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 686162,
+            "range": "± 34442",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 7929,
+            "range": "± 139",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 421162,
+            "range": "± 20039",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 15205803,
+            "range": "± 347818",
             "unit": "ns/iter"
           }
         ]
