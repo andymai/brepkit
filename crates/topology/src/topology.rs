@@ -460,7 +460,8 @@ impl Topology {
     /// close, and `mark` stays open.
     ///
     /// Returns `false`, and changes nothing, if `mark` is not open or a
-    /// transaction is open.
+    /// transaction that opened after it is still open. In a transaction
+    /// that opened before it, `mark` works on the changes after it alone.
     #[must_use]
     pub fn restore_checkpoint(&mut self, mark: Checkpoint) -> bool {
         if !self.is_open(mark) {
@@ -476,7 +477,8 @@ impl Topology {
     /// changes.
     ///
     /// Returns `false`, and changes nothing, if `mark` is not open or a
-    /// transaction is open.
+    /// transaction that opened after it is still open. In a transaction
+    /// that opened before it, `mark` works on the changes after it alone.
     #[must_use]
     pub fn close_checkpoint(&mut self, mark: Checkpoint) -> bool {
         if !self.is_open(mark) {
@@ -866,6 +868,24 @@ mod tests {
         assert!(topo.restore_checkpoint(mark));
         assert!((x_of(&topo, v0) - 4.0).abs() < 1e-12);
         assert!(topo.close_checkpoint(mark));
+
+        // In the transaction, the checkpoint restores and closes on its own
+        // changes, and the transaction's failure still undoes them all.
+        let failed: Result<(), ()> = topo.transaction(|topo| {
+            *topo.vertex_mut(v0).unwrap() = at(7.0);
+            let inner = topo.open_checkpoint();
+            *topo.vertex_mut(v0).unwrap() = at(8.0);
+            topo.add_vertex(at(9.0));
+            assert!(topo.restore_checkpoint(inner));
+            assert!((x_of(topo, v0) - 7.0).abs() < 1e-12);
+            assert_eq!(counts(topo), before);
+            *topo.vertex_mut(v0).unwrap() = at(10.0);
+            assert!(topo.close_checkpoint(inner));
+            Err(())
+        });
+        assert!(failed.is_err());
+        assert!((x_of(&topo, v0) - 4.0).abs() < 1e-12);
+        assert_eq!(counts(&topo), before);
 
         // A panic in the transaction undoes the checkpoint's changes too.
         let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
