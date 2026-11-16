@@ -1,0 +1,19 @@
+crates/math/src/nurbs/decompose.rs
+  s_0db8415e6f59cd::t_64df38cf69ba3d 114-132,134,148,206-212,251-267,272,278-299,324-325,330-355,505,508,1423-1464
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "58aa13103147590f965698d4cb1593d602aa93a1",
+  "prompts": {},
+  "sessions": {
+    "s_0db8415e6f59cd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "80c728ce-cbd9-4375-adac-8fbf308dc911",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
