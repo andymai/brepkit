@@ -1,0 +1,19 @@
+crates/io/src/stl/import.rs
+  s_0db8415e6f59cd::t_603f126ee55278 987-1045,1251-1259,1261-1271
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f734be1cc2938192e39a5860ccccc7e11c57512c",
+  "prompts": {},
+  "sessions": {
+    "s_0db8415e6f59cd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "80c728ce-cbd9-4375-adac-8fbf308dc911",
+        "model": "unknown"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
