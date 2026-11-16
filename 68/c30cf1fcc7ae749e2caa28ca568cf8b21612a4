@@ -1,0 +1,21 @@
+crates/operations/src/chamfer_chain.rs
+  s_0db8415e6f59cd::t_dd8cc28d3b1a61 1074-1089,1091,1095,1098,1101
+crates/operations/tests/chamfer_corner_regions.rs
+  s_0db8415e6f59cd::t_6fcbb35934767c 426-474
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "68c30cf1fcc7ae749e2caa28ca568cf8b21612a4",
+  "prompts": {},
+  "sessions": {
+    "s_0db8415e6f59cd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "80c728ce-cbd9-4375-adac-8fbf308dc911",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
