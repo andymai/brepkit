@@ -23,14 +23,10 @@ const NONE: usize = usize::MAX;
 /// times has two links to it.
 #[derive(Debug, Default, Clone)]
 pub struct Owners {
-    /// The first two wires of each edge.
-    edge_wires: Vec<[usize; 2]>,
-    /// The other wires of an edge.
-    more_edge_wires: HashMap<usize, Vec<usize>>,
-    /// The first face of each wire.
-    wire_faces: Vec<[usize; 1]>,
-    /// The other faces of a wire.
-    more_wire_faces: HashMap<usize, Vec<usize>>,
+    /// The wires of each edge.
+    edge_wires: Links<2>,
+    /// The faces of each wire.
+    wire_faces: Links<1>,
     /// The wire or face that `wire_mut` or `face_mut` gave out last.
     pending: Option<Pending>,
 }
@@ -91,48 +87,28 @@ impl Owners {
     /// Records a link from each edge of `data` to `wire`.
     pub fn add_wire(&mut self, wire: WireId, data: &Wire) {
         for oe in data.edges() {
-            link(
-                &mut self.edge_wires,
-                &mut self.more_edge_wires,
-                oe.edge().index(),
-                wire.index(),
-            );
+            self.edge_wires.add(oe.edge().index(), wire.index());
         }
     }
 
     /// Removes the links from the edges of `data` to `wire`.
     pub fn remove_wire(&mut self, wire: WireId, data: &Wire) {
         for oe in data.edges() {
-            unlink(
-                &mut self.edge_wires,
-                &mut self.more_edge_wires,
-                oe.edge().index(),
-                wire.index(),
-            );
+            self.edge_wires.remove(oe.edge().index(), wire.index());
         }
     }
 
     /// Records a link from each wire of `data` to `face`.
     pub fn add_face(&mut self, face: FaceId, data: &Face) {
         for wire in face_wires(data) {
-            link(
-                &mut self.wire_faces,
-                &mut self.more_wire_faces,
-                wire.index(),
-                face.index(),
-            );
+            self.wire_faces.add(wire.index(), face.index());
         }
     }
 
     /// Removes the links from the wires of `data` to `face`.
     pub fn remove_face(&mut self, face: FaceId, data: &Face) {
         for wire in face_wires(data) {
-            unlink(
-                &mut self.wire_faces,
-                &mut self.more_wire_faces,
-                wire.index(),
-                face.index(),
-            );
+            self.wire_faces.remove(wire.index(), face.index());
         }
     }
 
@@ -156,9 +132,7 @@ impl Owners {
             Some(Pending::Wire(wire)) => Some(wire.index()),
             _ => None,
         };
-        for index in
-            linked(&self.edge_wires, &self.more_edge_wires, edge.index()).chain(pending_wire)
-        {
+        for index in self.edge_wires.of(edge.index()).chain(pending_wire) {
             if !held_by.iter().any(|w| w.index() == index)
                 && let Some(wire) = holds_edge(index)
             {
@@ -168,7 +142,7 @@ impl Owners {
 
         let mut found: Vec<FaceId> = Vec::new();
         for wire in held_by {
-            for index in linked(&self.wire_faces, &self.more_wire_faces, wire.index()) {
+            for index in self.wire_faces.of(wire.index()) {
                 if let Some(face) = faces.id_from_index(index)
                     && faces
                         .get(face)
@@ -191,56 +165,78 @@ impl Owners {
     }
 }
 
-/// Adds a link from `from` to `to`.
-fn link<const N: usize>(
-    slots: &mut Vec<[usize; N]>,
-    more: &mut HashMap<usize, Vec<usize>>,
-    from: usize,
-    to: usize,
-) {
-    if slots.len() <= from {
-        slots.resize(from + 1, [NONE; N]);
-    }
-    if let Some(slot) = slots[from].iter_mut().find(|slot| **slot == NONE) {
-        *slot = to;
-    } else {
-        more.entry(from).or_default().push(to);
-    }
+/// The links from each entity of one kind, by arena index.
+#[derive(Debug, Default, Clone)]
+struct Links<const N: usize> {
+    /// The first `N` links of each entity.
+    slots: Vec<[usize; N]>,
+    /// One bit for each entity: whether `more` holds links of it.
+    spilled: Vec<u64>,
+    /// The other links.
+    more: HashMap<usize, Vec<usize>>,
 }
 
-/// Removes each link from `from` to `to`.
-fn unlink<const N: usize>(
-    slots: &mut [[usize; N]],
-    more: &mut HashMap<usize, Vec<usize>>,
-    from: usize,
-    to: usize,
-) {
-    if let Some(set) = slots.get_mut(from) {
-        for slot in set.iter_mut().filter(|slot| **slot == to) {
-            *slot = NONE;
-        }
+impl<const N: usize> Links<N> {
+    fn reserve(&mut self, additional: usize) {
+        self.slots.reserve(additional);
     }
-    if let Some(rest) = more.get_mut(&from) {
-        rest.retain(|&other| other != to);
-        if rest.is_empty() {
-            more.remove(&from);
-        }
-    }
-}
 
-/// The links of `from`.
-fn linked<'a, const N: usize>(
-    slots: &'a [[usize; N]],
-    more: &'a HashMap<usize, Vec<usize>>,
-    from: usize,
-) -> impl Iterator<Item = usize> + 'a {
-    slots
-        .get(from)
-        .into_iter()
-        .flatten()
-        .copied()
-        .filter(|&to| to != NONE)
-        .chain(more.get(&from).into_iter().flatten().copied())
+    /// Adds a link from `from` to `to`.
+    fn add(&mut self, from: usize, to: usize) {
+        if self.slots.len() <= from {
+            self.slots.resize(from + 1, [NONE; N]);
+        }
+        if let Some(slot) = self.slots[from].iter_mut().find(|slot| **slot == NONE) {
+            *slot = to;
+            return;
+        }
+        self.more.entry(from).or_default().push(to);
+        let word = from / 64;
+        if self.spilled.len() <= word {
+            self.spilled.resize(word + 1, 0);
+        }
+        self.spilled[word] |= 1 << (from % 64);
+    }
+
+    /// Removes each link from `from` to `to`.
+    fn remove(&mut self, from: usize, to: usize) {
+        if let Some(set) = self.slots.get_mut(from) {
+            for slot in set.iter_mut().filter(|slot| **slot == to) {
+                *slot = NONE;
+            }
+        }
+        if self.is_spilled(from)
+            && let Some(rest) = self.more.get_mut(&from)
+        {
+            rest.retain(|&other| other != to);
+            if rest.is_empty() {
+                self.more.remove(&from);
+                self.spilled[from / 64] &= !(1 << (from % 64));
+            }
+        }
+    }
+
+    fn is_spilled(&self, from: usize) -> bool {
+        self.spilled
+            .get(from / 64)
+            .is_some_and(|word| word & (1 << (from % 64)) != 0)
+    }
+
+    /// The links from `from`.
+    fn of(&self, from: usize) -> impl Iterator<Item = usize> + '_ {
+        let rest = if self.is_spilled(from) {
+            self.more.get(&from)
+        } else {
+            None
+        };
+        self.slots
+            .get(from)
+            .into_iter()
+            .flatten()
+            .copied()
+            .filter(|&to| to != NONE)
+            .chain(rest.into_iter().flatten().copied())
+    }
 }
 
 fn wire_holds(wire: &Wire, edge: EdgeId) -> bool {
@@ -327,30 +323,28 @@ mod tests {
                 }
             }
         }
-        let stored = |slots: &[[usize; 2]], more, from| {
-            let mut links: Vec<usize> = super::linked(slots, more, from).collect();
-            links.sort_unstable();
-            links
-        };
-        for from in 0..owners.edge_wires.len().max(topo.num_edges()) {
+        for from in 0..owners.edge_wires.slots.len().max(topo.num_edges()) {
             let mut expected = edge_wires.remove(&from).unwrap_or_default();
             expected.sort_unstable();
+            let mut stored: Vec<usize> = owners.edge_wires.of(from).collect();
+            stored.sort_unstable();
             assert_eq!(
-                stored(&owners.edge_wires, &owners.more_edge_wires, from),
-                expected,
+                stored, expected,
                 "{context}: the stored wires of edge {from}"
             );
         }
-        for from in 0..owners.wire_faces.len().max(topo.num_wires()) {
+        for from in 0..owners.wire_faces.slots.len().max(topo.num_wires()) {
             let mut expected = wire_faces.remove(&from).unwrap_or_default();
             expected.sort_unstable();
-            let mut links: Vec<usize> =
-                super::linked(&owners.wire_faces, &owners.more_wire_faces, from).collect();
-            links.sort_unstable();
+            let mut stored: Vec<usize> = owners.wire_faces.of(from).collect();
+            stored.sort_unstable();
             assert_eq!(
-                links, expected,
+                stored, expected,
                 "{context}: the stored faces of wire {from}"
             );
+        }
+        for links in [&owners.edge_wires.more, &owners.wire_faces.more] {
+            assert!(links.values().all(|rest| !rest.is_empty()), "{context}");
         }
     }
 
