@@ -1729,12 +1729,17 @@ fn split_sections_at_seam_meridian(
 /// interior point per band. A bore through a tube's wall crosses the bore's
 /// own wall along two such loops, giving three bands.
 ///
+/// Sections that wind nothing close into loops clear of the seam: each is a
+/// hole in the band it lies in, and a disc of its own (a rail through a post
+/// whose end sits in another rail).
+///
 /// Returns `None` (caller falls through) unless: the boundary reads as a
-/// band stack; EVERY section belongs to a winding chain; each chain has a
+/// band stack; at least one section chain winds the lateral; each chain has a
 /// vertex on the seam meridian (the seam-anchoring pre-step guarantees this
 /// for winding chains); every chain sample stays strictly between the
-/// stack's ends; and the chains do not cross (their order along the seam is
-/// their order across the face).
+/// stack's ends; the chains do not cross (their order along the seam is
+/// their order across the face); and every other section belongs to a loop
+/// of winding zero clear of the seam inside one band.
 #[allow(clippy::too_many_lines)]
 fn split_periodic_face_by_winding_chain(
     surface: &FaceSurface,
@@ -1750,19 +1755,21 @@ fn split_periodic_face_by_winding_chain(
         v_opposite: f64,
         lower: Vec<OrientedPCurveEdge>,
         upper: Vec<OrientedPCurveEdge>,
+        /// `(u` past the seam, unwrapped along the chain`, v)`.
+        path: Vec<(f64, f64)>,
     }
 
     let (u_start, period) = special_cases::band_period(surface)?;
     let half = 0.5 * period;
     let close_tol = tol * 100.0;
 
-    // Every section must belong to some winding chain; any other section
-    // would be silently dropped, so the face is deferred instead.
     let mut chains: Vec<Vec<(usize, bool)>> = Vec::new();
     let mut free: Vec<usize> = (0..sections.len()).collect();
     while !free.is_empty() {
         let subset: Vec<SectionEdge> = free.iter().map(|&i| sections[i].clone()).collect();
-        let (chain, _winding) = winding_chain_in(&subset, surface, tol, true, period)?;
+        let Some((chain, _winding)) = winding_chain_in(&subset, surface, tol, true, period) else {
+            break;
+        };
         let used: Vec<usize> = chain.iter().map(|&(k, _)| free[k]).collect();
         chains.push(chain.iter().map(|&(k, fwd)| (free[k], fwd)).collect());
         free.retain(|i| !used.contains(i));
@@ -1770,6 +1777,8 @@ fn split_periodic_face_by_winding_chain(
     if chains.is_empty() {
         return None;
     }
+    // The rest must close into holes; a section left out would be dropped.
+    let hole_loops = closed_section_loops(sections, &free, tol)?;
 
     let special_cases::BandStack {
         seam_u,
@@ -1785,6 +1794,13 @@ fn split_periodic_face_by_winding_chain(
     let wrap_pi = |d: f64| -> f64 { (d + half).rem_euclid(period) - half };
     let u_opposite = (seam_u + half - u_start).rem_euclid(period) + u_start;
 
+    // `u` past the seam, carried on from the last of `path`'s samples.
+    let unwrapped_past_seam = |path: &[(f64, f64)], u: f64| -> f64 {
+        path.last().map_or_else(
+            || wrap_pi(u - seam_u),
+            |&(prev, _)| prev + wrap_pi(u - seam_u - prev),
+        )
+    };
     let traversal_start = |&(idx, fwd): &(usize, bool)| -> Point3 {
         let s = &sections[idx];
         if fwd { s.start } else { s.end }
@@ -1876,11 +1892,28 @@ fn split_periodic_face_by_winding_chain(
             }
             Some(out)
         };
+        // Read finer than the samples above: a hole may lie close beside it.
+        let mut path: Vec<(f64, f64)> = Vec::new();
+        for &(idx, fwd) in &chain {
+            let s = &sections[idx];
+            let (d0, d1) = s.curve_3d.domain_with_endpoints(s.start, s.end);
+            for k in 0..=HOLE_SAMPLES {
+                let f = f64::from(k) / f64::from(HOLE_SAMPLES);
+                let t = if fwd { f } else { 1.0 - f };
+                let p = s
+                    .curve_3d
+                    .evaluate_with_endpoints((d1 - d0).madd(t, d0), s.start, s.end);
+                let (u, v) = surface.project_point(p)?;
+                let d = unwrapped_past_seam(&path, u);
+                path.push((d, v));
+            }
+        }
         separators.push(Separator {
             v_seam,
             v_opposite,
             lower: build_chain(chain_is_lower_role)?,
             upper: build_chain(!chain_is_lower_role)?,
+            path,
         });
     }
 
@@ -1913,11 +1946,156 @@ fn split_periodic_face_by_winding_chain(
         })
     };
 
+    // Each hole lies in one band: the one below every separator and rim
+    // that passes above it, read at each of its samples.
+    let n = separators.len();
+    let end_path = |end: &special_cases::BandEnd<'_>, v: f64| -> Option<Vec<(f64, f64)>> {
+        let special_cases::BandEnd::Rim(rim) = end else {
+            return Some(vec![(-half, v), (half, v)]);
+        };
+        let (t0, t1) = rim.curve_3d.domain_with_endpoints(rim.start_3d, rim.end_3d);
+        let mut path: Vec<(f64, f64)> = Vec::new();
+        for k in 0..=HOLE_SAMPLES {
+            let t = (t1 - t0).madd(f64::from(k) / f64::from(HOLE_SAMPLES), t0);
+            let (u, v) = surface.project_point(rim.curve_3d.evaluate_with_endpoints(
+                t,
+                rim.start_3d,
+                rim.end_3d,
+            ))?;
+            let d = unwrapped_past_seam(&path, u);
+            path.push((d, v));
+        }
+        Some(path)
+    };
+    let mut levels: Vec<Vec<(f64, f64)>> = Vec::with_capacity(n + 2);
+    levels.push(end_path(&bot, v_bot)?);
+    levels.extend(separators.iter().map(|s| s.path.clone()));
+    levels.push(end_path(&top, v_top)?);
+    let band_of = |d: f64, v: f64| -> Option<usize> {
+        let mut below = 0;
+        for level in &levels {
+            let at = winding_path_v_at(level, d, period)?;
+            if (at - v).abs() < close_tol {
+                return None;
+            }
+            if at < v {
+                below += 1;
+            }
+        }
+        (1..=n + 1).contains(&below).then(|| below - 1)
+    };
+    // Whether the band's lower edge runs toward increasing `u`, which makes
+    // its outer wire run counterclockwise in `(u, v)`.
+    let along_u = {
+        let mid = f64::midpoint(v_bot, v_top);
+        let du = surface.evaluate(seam_u + 1e-4, mid)? - surface.evaluate(seam_u - 1e-4, mid)?;
+        ref_tan.dot(du) > 0.0
+    };
+    let mut band_holes: Vec<Vec<Vec<OrientedPCurveEdge>>> = vec![Vec::new(); n + 1];
+    let mut band_hole_uv: Vec<Vec<Vec<Point2>>> = vec![Vec::new(); n + 1];
+    let mut discs: Vec<SplitSubFace> = Vec::new();
+    for entries in &hole_loops {
+        let mut uv: Vec<Point2> = Vec::new();
+        let mut band: Option<usize> = None;
+        for &(idx, fwd) in entries {
+            let s = &sections[idx];
+            let (d0, d1) = s.curve_3d.domain_with_endpoints(s.start, s.end);
+            for k in 0..HOLE_SAMPLES {
+                let f = f64::from(k) / f64::from(HOLE_SAMPLES);
+                let t = if fwd { f } else { 1.0 - f };
+                let p = s
+                    .curve_3d
+                    .evaluate_with_endpoints((d1 - d0).madd(t, d0), s.start, s.end);
+                let (u, v) = surface.project_point(p)?;
+                let raw = wrap_pi(u - seam_u);
+                let in_band = band_of(raw, v)?;
+                if band.is_some_and(|b| b != in_band) {
+                    return None;
+                }
+                band = Some(in_band);
+                let d = uv
+                    .last()
+                    .map_or(raw, |prev: &Point2| prev.x() + wrap_pi(raw - prev.x()));
+                uv.push(Point2::new(d, v));
+            }
+        }
+        let band = band?;
+        // An inner wire cannot cross the seam the face is cut open along.
+        let (lo, hi) = uv.iter().fold((f64::MAX, f64::MIN), |(lo, hi), p| {
+            (lo.min(p.x()), hi.max(p.x()))
+        });
+        let clear = |a: f64, b: f64| a >= HOLE_SEAM_CLEARANCE && b <= period - HOLE_SEAM_CLEARANCE;
+        if !clear(lo, hi) && !clear(-hi, -lo) {
+            return None;
+        }
+        let face_left = (signed_area_2d(&uv) > 0.0) == along_u;
+        let reversed_entries: Vec<(usize, bool)> =
+            entries.iter().rev().map(|&(i, f)| (i, !f)).collect();
+        let (disc, hole) = if face_left {
+            (entries.clone(), reversed_entries)
+        } else {
+            (reversed_entries, entries.clone())
+        };
+        let materialize = |loop_entries: &[(usize, bool)]| -> Option<Vec<OrientedPCurveEdge>> {
+            let mut out = Vec::with_capacity(loop_entries.len());
+            let mut u_prev: Option<f64> = None;
+            for &(idx, fwd) in loop_entries {
+                let s = &sections[idx];
+                let (from, to) = if fwd {
+                    (s.start, s.end)
+                } else {
+                    (s.end, s.start)
+                };
+                let (u_raw0, v0) = surface.project_point(from)?;
+                let (u_raw1, v1) = surface.project_point(to)?;
+                let u0 = u_prev.map_or_else(
+                    || {
+                        let past = (u_raw0 - seam_u).rem_euclid(period);
+                        if along_u {
+                            seam_u + past
+                        } else {
+                            seam_u + past - period
+                        }
+                    },
+                    |prev| prev + wrap_pi(u_raw0 - prev),
+                );
+                let u1 = u0 + wrap_pi(u_raw1 - u_raw0);
+                u_prev = Some(u1);
+                out.push(OrientedPCurveEdge {
+                    curve_3d: s.curve_3d.clone(),
+                    pcurve: match rank {
+                        Rank::A => s.pcurve_a.clone(),
+                        Rank::B => s.pcurve_b.clone(),
+                    },
+                    start_uv: Point2::new(u0, v0),
+                    end_uv: Point2::new(u1, v1),
+                    start_3d: from,
+                    end_3d: to,
+                    forward: fwd,
+                    source_edge_idx: None,
+                    pave_block_id: s.pave_block_id,
+                });
+            }
+            Some(out)
+        };
+        let inside = point_inside_loop_uv(&uv)?;
+        discs.push(SplitSubFace {
+            surface: surface.clone(),
+            outer_wire: materialize(&disc)?,
+            inner_wires: Vec::new(),
+            reversed,
+            parent: face_id,
+            rank,
+            precomputed_interior: Some(surface.evaluate(seam_u + inside.x(), inside.y())?),
+        });
+        band_holes[band].push(materialize(&hole)?);
+        band_hole_uv[band].push(uv);
+    }
+
     // Each band: its lower separator in the lower role, the seam up, its
     // upper separator in the upper role, the seam back down. The rims close
     // the end bands.
-    let n = separators.len();
-    let mut bands = Vec::with_capacity(n + 1);
+    let mut bands = Vec::with_capacity(n + 1 + discs.len());
     for k in 0..=n {
         let (mut wire, v_low, q_low) = if k == 0 {
             (bot.edges(), v_bot, q_bot)
@@ -1937,17 +2115,128 @@ fn split_periodic_face_by_winding_chain(
             wire.extend(separators[k].upper.iter().cloned());
         }
         wire.push(mk_seam(v_high, v_low)?);
+        // A sample on the meridian opposite the seam, clear of the band's
+        // holes.
+        let d_opposite = wrap_pi(u_opposite - seam_u);
+        let v_inside = [0.5, 0.25, 0.75, 0.125, 0.375, 0.625, 0.875]
+            .into_iter()
+            .map(|f| (q_high - q_low).madd(f, q_low))
+            .find(|&v| {
+                band_hole_uv[k].iter().all(|uv| {
+                    [d_opposite - period, d_opposite, d_opposite + period]
+                        .into_iter()
+                        .all(|d| !super::classify_2d::point_in_polygon_2d(Point2::new(d, v), uv))
+                })
+            })?;
         bands.push(SplitSubFace {
             surface: surface.clone(),
             outer_wire: wire,
-            inner_wires: Vec::new(),
+            inner_wires: std::mem::take(&mut band_holes[k]),
             reversed,
             parent: face_id,
             rank,
-            precomputed_interior: Some(surface.evaluate(u_opposite, f64::midpoint(q_low, q_high))?),
+            precomputed_interior: Some(surface.evaluate(u_opposite, v_inside)?),
         });
     }
+    bands.extend(discs);
     Some(bands)
+}
+
+/// Samples along each piece of a hole, or along a rim, read on a lateral.
+const HOLE_SAMPLES: u32 = 32;
+/// How near the seam meridian, in `u`, a hole may come: one crossing it
+/// would need cutting there, which an inner wire cannot take.
+const HOLE_SEAM_CLEARANCE: f64 = 1e-6;
+
+/// The sections at `free` chained by their ends into closed loops, as
+/// `(section, traversed start to end)` entries; `None` if one does not close.
+fn closed_section_loops(
+    sections: &[SectionEdge],
+    free: &[usize],
+    tol: f64,
+) -> Option<Vec<Vec<(usize, bool)>>> {
+    use std::collections::{HashMap, HashSet};
+
+    let qscale = 1.0 / tol.max(1e-12);
+    let q3 = |p: Point3| -> (i64, i64, i64) {
+        (
+            (p.x() * qscale).round() as i64,
+            (p.y() * qscale).round() as i64,
+            (p.z() * qscale).round() as i64,
+        )
+    };
+    let mut adj: HashMap<(i64, i64, i64), Vec<(usize, bool)>> = HashMap::new();
+    for &i in free {
+        adj.entry(q3(sections[i].start))
+            .or_default()
+            .push((i, true));
+        adj.entry(q3(sections[i].end)).or_default().push((i, false));
+    }
+    let mut used: HashSet<usize> = HashSet::new();
+    let mut loops = Vec::new();
+    for &first in free {
+        if used.contains(&first) {
+            continue;
+        }
+        let origin = q3(sections[first].start);
+        let (mut cur, mut fwd) = (first, true);
+        let mut entries = Vec::new();
+        loop {
+            used.insert(cur);
+            entries.push((cur, fwd));
+            let s = &sections[cur];
+            let to = if fwd { s.end } else { s.start };
+            if q3(to) == origin {
+                break;
+            }
+            let &(next, next_fwd) = adj.get(&q3(to))?.iter().find(|(j, _)| !used.contains(j))?;
+            cur = next;
+            fwd = next_fwd;
+        }
+        loops.push(entries);
+    }
+    Some(loops)
+}
+
+/// The `v` where a path winding a lateral once, as `(u` past the seam
+/// unwrapped along it`, v)` samples, passes `u` past the seam `d`; `None`
+/// where it passes there more than once or not at all.
+fn winding_path_v_at(path: &[(f64, f64)], d: f64, period: f64) -> Option<f64> {
+    let mut found: Option<f64> = None;
+    for turn in [-2.0, -1.0, 0.0, 1.0, 2.0] {
+        let target = period.madd(turn, d);
+        for w in path.windows(2) {
+            let ((d0, v0), (d1, v1)) = (w[0], w[1]);
+            let (lo, hi) = if d0 < d1 { (d0, d1) } else { (d1, d0) };
+            if (hi - lo).abs() < f64::EPSILON || target < lo || target >= hi {
+                continue;
+            }
+            let v = (v1 - v0).madd((target - d0) / (d1 - d0), v0);
+            match found {
+                Some(prev) if (prev - v).abs() > 1e-9 => return None,
+                _ => found = Some(v),
+            }
+        }
+    }
+    found
+}
+
+/// A point inside a closed `(u, v)` polygon: the middle of the widest span
+/// it leaves on the line through its mean `v`.
+fn point_inside_loop_uv(uv: &[Point2]) -> Option<Point2> {
+    #[allow(clippy::cast_precision_loss)]
+    let v = uv.iter().map(|p| p.y()).sum::<f64>() / uv.len() as f64;
+    let mut cuts: Vec<f64> = Vec::new();
+    for k in 0..uv.len() {
+        let (a, b) = (uv[k], uv[(k + 1) % uv.len()]);
+        if (a.y() <= v) != (b.y() <= v) {
+            cuts.push((b.x() - a.x()).madd((v - a.y()) / (b.y() - a.y()), a.x()));
+        }
+    }
+    cuts.sort_by(f64::total_cmp);
+    cuts.chunks_exact(2)
+        .max_by(|a, b| (a[1] - a[0]).total_cmp(&(b[1] - b[0])))
+        .map(|span| Point2::new(f64::midpoint(span[0], span[1]), v))
 }
 
 /// Split a u-periodic cylinder/cone lateral (two closed rims, or a pointed
