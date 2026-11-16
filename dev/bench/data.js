@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794815220631,
+  "lastUpdate": 1794817294403,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -71981,6 +71981,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 19749402,
             "range": "± 39179",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f1d7eaedbf3a794444bed71cbffe88bc1843328d",
+          "message": "fix(check): read a curved face's holes in its surface's parameters (#2532)\n\n## Summary\n\n`validate_solid` reported a hole that lies outside its face's outline,\nor inside another hole, only on a plane face (#2451). `sew_faces`\nreversed a hole that runs the same way round as the outline only on a\nplane face (#2472). Both now read the wires of a cylinder, cone, sphere,\nring torus or B-spline face too. Closes #2451. Closes #2472.\n\n`FaceLoops` in `crates/check/src/face_loops.rs` draws a curved face's\nwires in a plane made from the surface's parameters. The check reads\neach edge on its own curve, and halves each chord until it follows its\ncurve to 1e-4 of the drawing's size. It reads a chord at five uneven\npoints, each against the chord's point at the same fraction. It also\nhalves a B-spline piece until its control points lie within 1e-4 of the\nwires' size of its chord. A piece whose stray it cannot bound leaves its\nwire unread.\n\nEach drawing gives how much it stretches a short length on the surface.\nThe drawing's tolerance and the stray of a chord use the most of that\nstretch. A B-spline drawing reads it from the surface's metric at the\nwires' sample points (#2552). An analytic drawing reads it from its\nradii, as a bound over the wires' reach.\n\nThe check reads the wires' reach from the edges' curves. The reach is\nexact for a line, and holds the whole circle or ellipse for a conic\nedge. A B-spline edge with positive weights lies in its control points'\nhull. The cylinder's radius offset, the cone's side of its apex and the\nsphere's distance from its far pole come from this reach.\n\nOn a B-spline surface, the chord's stray also counts how far the surface\nstrays from straight along the chord's parameters. In each knot cell on\nthe chord's path, the surface along the chord is a rational Bezier\ncurve. The curve lies in the hull of its control points. The check reads\nthose points from the cell's control points by blossoming, and takes\ntheir most distance from the chord between the curve's ends. It reads\nonly the cells on the chords' paths.\n\nThe check halves a chord through more than 64 cells, or along which a\nweight is not positive. Where such a chord stays after the last halving,\nthe check does not read its wire.\n\n| Surface | Drawing |\n| --- | --- |\n| Cylinder, or B-spline surface closed in one parameter with no pole |\nAnnulus: the angle round the axis, and the distance along it, as polar\ncoordinates |\n| Cone, or such a B-spline surface with a pole at one end | Disc: polar\ncoordinates with the apex or the pole at the origin |\n| Sphere, or such a B-spline surface with a pole at each end | Disc: the\nangle from one pole, round that pole. For a sphere, the other pole is\nthe direction farthest from the wires, at least 2 degrees from each |\n| Open B-spline surface | Its `(u, v)`, each as the fraction of its span\n|\n| Ring torus, or B-spline surface closed in both parameters | Its `(u,\nv)`, carried on across each seam, a B-spline's as the fraction of each\nspan |\n\nIn the polar drawings, a wire runs across a seam without a break. A\npoint's side of a wire is the parity of a ray's crossings of the wire's\nchords. On a torus, the check reads a point at each of its copies a\nperiod apart. It carries each chord on from the point traced last.\n\nTwo wires that wind a torus part it into two bands, and the check reads\nthem as a pair. It counts their crossings on paths to one fixed point\nclear of both wires. It reads a point only where the point lies clear of\neach wire's chords by more than the chords may stand off the wire.\n\nThe check reads the side of a wire that holds the face from the face's\nother wires, not from the way round the wires run. As #2451 says, a\nsphere face need not run its outline counter-clockwise about its normal.\n`check_face_wires_apart` reports a hole of a curved face in each of\nthese cases:\n\n- The other wires do not all lie on one side of the outline, or of a\nhole.\n- The face reaches an open end of its surface, as with a window above a\ncylinder's band. The check reads this only when every wire of the face\nreads, and the other wires settle each wire's side.\n- On a whole torus, whose outline is its seams alone, a hole lies inside\nanother hole.\n- On a cone or an open B-spline surface, the hole lies outside the\noutline, as on a plane.\n\n`sew_faces` reverses a hole of a curved face that runs the outline's way\nround. The face then lies to the left of one of the two wires and to the\nright of the other.\n\nThe check gives up on a face it cannot read, and then reports nothing.\nSuch a face is on a spindle torus, on a cone across its apex, or on a\nsphere with no clear pole. It is also on a closed B-spline surface whose\nwires reach both poles, or whose parameters span next to nothing. On a\nsphere, the check also gives up where the edges' reach toward the far\npole is at least `1 - 1e-9` times the radius. On a cylinder, cone or\nsphere, it gives up on a B-spline edge with a weight that is not\npositive.\n\nThe check reads a span of copies a period apart only up to 16 periods.\nIt reads a B-spline surface's period only where the period is finite and\nnot next to nothing. Past those bounds, the check cannot read the face.\n\n## Tests\n\n- `sew_turns_a_curved_faces_hole_given_its_outlines_way_round` in\n`sew.rs` fuses a tube of radius 3 to a cylinder of radius 10, and to a\nball of radius 10. The test turns the hole of the curved face round, so\nthat it runs the outline's way round. It then welds the faces of the\nfused solid.\n- The welded solid must be valid and must hold the fused solid's volume\nto 1e-9, with its faces pointing out. Its mesh must have no free\nhalf-edge. The cylinder's fused volume must match the closed form to\n1e-6. With the `sew.rs` of `main`, the cylinder case holds 6138.596\nagainst 6427.775.\n- 11 new unit tests in `face_wires.rs` cover these cases:\n- a cylinder: a window beyond its band, a window inside a window, and a\nband with no seam, either rim the outer wire;\n  - a cone: windows inside and beyond its band, and a band with no seam;\n- a sphere: holes on one side or on both sides of the outline, and\nnested holes, with each wire run each way round;\n  - B-spline surfaces: a sphere, a cylinder and an open patch;\n- a torus: holes across its seams, a patch, and holes in both bands\nbetween two tube circles;\n- a hole whose way round turns with the hole and with the outline, on a\nsphere, a cylinder and a torus.\n- Four unit tests in `face_loops.rs` cover the bounds on a span of\ncopies, and a closed B-spline surface whose parameter spans 1e-300. From\nthe first review: a single B-spline span round a torus reads as winding\nit, and each band between two tube circles reads one side. The two fail\non the first commit.\n- From the first review, `a_toruss_holes_are_read_across_its_seams` also\nreports a whole torus with two holes, one round the other. That case\nfails on the first commit.\n- Two tests come from the second review. A point on a wire that winds a\ntorus reads neither band, and each such wire's box holds the end of its\nclosing chord. The check reports a hole beyond the outline along `v`\nalone, on a patch whose `v` spans 1e-10. Both tests fail on the second\ncommit.\n- Two tests come from the third review. The check reports a small hole\nunder the bulge of a quintic B-spline edge, between three of its points\nthat lie on a line. A patch of a torus 2e-5 across reads the same at the\nseam `u = 0` and at `u = 1`. Both tests fail on the third commit.\n- Two tests come from the fourth review. A seamless band of a cylinder\nwhose top rim does not read passes; the test fails on the fourth commit.\nThe check also reports the small hole under the bulge on a patch\nstretched a hundredfold along x.\n- One test comes from the fifth review. It has a flat patch whose `u`\nruns unevenly along x. Holes just either side of a straight edge read on\ntheir own sides of it.\n- From the sixth review, a test draws a straight edge across a flat\nquintic patch whose `u` runs very unevenly along x. Each of 401 points\nof the drawn edge lies within the bound that the traced chords carry.\n- Two tests come from the seventh review. A patch `(20 u, 20 v + f(u),\n0)` has `f''` zero at `u` = 0, 1/4, 1/2, 3/4 and 1. Its second\nderivatives on a five by five grid are all zero. The stray that the\ncheck reads holds against 2001 samples along two chords. It also holds\nalong three chords of a rational patch over two knot spans. On a short\nchord of that patch, it is at most twice the sampled stray.\n- The other test traces a small face with a hole, in one corner of a\nflat spline of 40 by 40 knot cells. It reads only cells whose first\nknots are knots 4 to 8 in each parameter, and at most 30 cells.\n- One test comes from the eighth review. The lower rim of a cylinder's\nband is a B-spline of degree one. It dips to `z = -100` between the 17\npoints that the check samples along it. A window inside the band passes,\nand the check reports a window above it. The first case fails on\n500bd489d.\n- One test comes from the ninth review. It draws the two round rims of a\nband 1e-3 apart, and lets the outer rim's chords stand off it by 1e-2.\nNo point of the inner rim reads a side of the outer rim, and the check\nreports no hole. The test fails on 928177c4d.\n- `cargo test -p brepkit-check --lib`: the 36 tests of `face_wires.rs`\nand the 9 of `face_loops.rs` pass. `validate_wires_apart`,\n`check_curved_faces` and `cylinder_wall_windows` in operations pass.\n- On 928177c4d, `cargo nextest run --cargo-profile ci --no-fail-fast -p\nbrepkit-check -p brepkit-operations -p brepkit-io -p brepkit-heal -p\nbrepkit-wasm` ran 3327 tests: 3326 passed, 1 failed, and nextest skipped\n24. The failed test is\n`a_cavity_that_touches_the_wall_of_a_finer_box_is_its_cavity` in\n`brepkit-io`, which fails with `main` merged in (#2551).\n- On 018864744, the `validate_wires_apart`, `check_curved_faces`,\n`cylinder_wall_windows` and `curved_face_bounds` tests in operations ran\n13 tests, and all passed. The 71 operations unit tests whose names hold\n`sew_` or `validate` passed.\n- On f1fc7fadc, the pose sweep (495 lines) and the truth audit (40\nlines) give the same output as `main` at 0e3d2ba61. That commit differs\nfrom `main` at d1173db88 only in a test file of `brepkit-io`.\n- `cargo clippy --all-targets -- -D warnings` for the touched crates and\n`cargo fmt` pass. The boundary, doc path and `mul_add` scripts pass.\n\n## Cost\n\nThe table gives `check_face_wires_apart` on 928177c4d in a release\nbuild, a mean of five runs. The face is a band of a cylinder of radius\n3n and height 4n with n by n windows. The B-spline rows use the same\ncylinder as a rational B-spline surface.\n\n| Surface | Windows | `check_face_wires_apart` | `FaceLoops::of` and\n`misplaced_hole`, timed apart | `check_face_wires_apart` on ba74fec76 |\n| --- | ---: | ---: | ---: | ---: |\n| Cylinder | 1 | 0.376 ms | 0.356 ms | 0.381 ms |\n| Cylinder | 25 | 1.095 ms | 1.108 ms | 1.136 ms |\n| Cylinder | 900 | 22.339 ms | 18.188 ms | 25.266 ms |\n| B-spline | 1 | 19.452 ms | 17.558 ms | 18.103 ms |\n| B-spline | 25 | 63.295 ms | 61.958 ms | 59.915 ms |\n\nA face with no hole returns before the check reads any curve.",
+          "timestamp": "2026-11-16T08:17:59Z",
+          "tree_id": "23eb03d5162e4a25c50ecf96a5746a1387793216",
+          "url": "https://github.com/andymai/brepkit/commit/f1d7eaedbf3a794444bed71cbffe88bc1843328d"
+        },
+        "date": 1794817286773,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1105404,
+            "range": "± 6974",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1153225,
+            "range": "± 3962",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12626,
+            "range": "± 60",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 699042,
+            "range": "± 2151",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24997008,
+            "range": "± 95334",
             "unit": "ns/iter"
           }
         ]
