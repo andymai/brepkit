@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794809160819,
+  "lastUpdate": 1794809382642,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -71711,6 +71711,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26089642,
             "range": "± 156666",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "fa3f76b1502845b56843bfabe85037bfb1c13d71",
+          "message": "fix(algo): read an edge crossing between sample points out of one plane (#2530)\n\n## Summary\n\nThe edge-edge phase missed a crossing between two curved edges that are\nnot in one plane when the curves cross between sample points. It now\nreads that crossing on the curves. It also reads each crossing when two\nof them lie inside the same pair of sample chords. Closes #2458.\n\n`find_edge_edge_crossings` (`crates/algo/src/pave_filler/phase_ee.rs`)\nsamples each edge into 32 chords, and reads a crossing where two chords\ncome within the linear tolerance. A chord stands off its curve between\nits two sample points. Where the curves cross out of one plane, the two\nchords there can pass each other at up to that standoff. For the cubic\narch and the line in the issue, `find_edge_edge_crossings` returned no\ncrossing.\n\nEach chord now has a span (`ChordSpan::of`). The span has a sag, a bound\non how far its curve stands off the chord. It also has a cone that holds\nthe directions of its tangents:\n\n- A line has a sag of zero, and its tangent is its chord.\n- An arc of radius `r` over `d` radians has a sag of `r (1 - cos(d /\n2))`. Its tangent turns by `d`, and the chord halves that turn.\n- An ellipse arc over `d` radians has a sag of `d^2 / 8` times its major\nradius, which bounds its second derivative. Its tangent stays between\nits two end tangents.\n- A B-spline piece between two knots lies in the hull of its Bezier\npoles when the weights are positive. Its sag is the distance of its\nfarthest pole from the chord. Each tangent lies in the cone of the\ndifferences of its poles, each later pole less an earlier one. A span\nacross a knot repeated past the degree gets no cone, because the curve\ncan jump there. A weight that is not positive gives no bound.\n\nThe search for crossings works by this argument. A point that the two\ncurves share, inside two spans, lies within the sag of each chord. So\nthe two chords are at most the sum of their sags apart\n(`segment_distance` gives their least distance). Each pair of chords\nthat near goes into the search, also a pair where the chords meet. A\nchord with no bound keeps the old reading by the chords alone.\n\nTwo curves cross at most once over two spans whose cones share no line,\nbecause the line through two crossings would lie in both cones. For each\npair of spans, `refine` runs Gauss-Newton on the two curves from the\nclosest points of the chords. A converged point is a crossing. The\nsearch splits a pair whose cones share a line in four, and searches the\nfour again. Each half has its own chord, sag and cone.\n\nGauss-Newton can end on parallel tangents with the curves within the\ntolerance. That place is a contact, and the phase keeps it as it keeps a\ncrossing. The search stops there only if the curves also stay together a\nquarter span each way, because `drop_crossings_along_one_curve` reads\nsuch a stretch whole. A shallow crossing parts from the other curve in\nthat quarter, so the search goes on past it. The search halves a pair of\nchords more than half their sags apart before it runs Gauss-Newton. The\nsplits stop at depth 8 and at 64 for a pair of edges.\n\n`drop_crossings_along_one_curve` walks from each crossing that is all\nbut tangent to find where the curves part. The walk now has a mark\nhalfway between each two crossings. So it does not run from one shallow\ncrossing past another where the curves part between them.\n\nThe phase passes over a pair of edges whose boxes do not meet. The box\nof a B-spline edge held 17 of its points, and a bulge between two of\nthem could stand out of it. The box of the edge's Bezier poles\n(`nurbs_pole_box`) now holds the curve.\n\nEach edge now keeps its sample points and its spans for all of its pairs\n(in a `OnceCell` in `EdgeData`). Before, the phase sampled the edge\nagain for each pair.\n\nI timed `find_edge_edge_crossings` in release on five pairs of edges,\n500 calls each. The edge data stays between calls, as the phase keeps it\nfor all pairs of an edge. The branch ran before and after main, so each\nbranch cell has two times:\n\n| Pair | main | this branch |\n|---|---:|---:|\n| Two edges on one arch lifted out of its plane | 43 µs | 200 to 229 µs\n|\n| The arch and the line from the issue | 11 µs | 11 to 15 µs |\n| Two circles that cross in one plane | 12 µs | 12 to 16 µs |\n| The arch and a copy of it 0.002 above it | 15 µs | 137 to 165 µs |\n| The arch and a far arch that meets its box | 12 µs | 10 µs |\n\nMain reads no crossing for the line from the issue. The pairs that cost\nmore are B-spline edges that run near each other along their length.\nThere the search splits spans until the sags part them, or until the\nbudget ends. The first pair of a B-spline edge also makes its spans,\nabout 10 µs for the edge.\n\n## Cost on whole booleans\n\nI timed 17 booleans on captured operands from `crates/io/tests/data` in\nrelease. The cases come from the replays in `crates/io/tests/` (kumiko\nstruts and lattice, fillet and scoop taper clips, scoop ramps, glyph\nruling, interior fillet). Main is `7c4f3a184`, and the branch is this PR\nmerged with it (`41bce8a8d`). Each case ran 5 times on each side, one\nprocess per run, with main and the branch in turns. The table gives\nmedians.\n\n`BK_GFA_TIME=1` gave the EE phase time. For these runs only, I set its\nlog to four decimals of a millisecond on both sides.\n\n| Case | total, main (ms) | total, branch (ms) | change | EE, main (ms)\n| EE, branch (ms) | EE change / total |\n|---|---:|---:|---:|---:|---:|---:|\n| kumiko_strut_fuse | 9.9 | 10.0 | +1.4% | 0.155 | 0.214 | +0.59% |\n| kumiko_diag_fuse | 30.0 | 30.1 | +0.4% | 0.015 | 0.013 | -0.01% |\n| kumiko_lattice_cut_strut | 93.5 | 95.3 | +1.9% | 0.682 | 0.762 |\n+0.09% |\n| kumiko_lattice_cut_wedge | 5.7 | 5.6 | -2.9% | 0.040 | 0.034 | -0.09%\n|\n| fillet_taper_common | 98.8 | 99.6 | +0.8% | 0.264 | 0.327 | +0.06% |\n| fillet_taper_cut | 102.3 | 105.0 | +2.7% | 0.252 | 0.347 | +0.09% |\n| fillet_taper_fuse | 102.7 | 98.9 | -3.7% | 0.257 | 0.320 | +0.06% |\n| scoop_taper_common | 29.1 | 28.8 | -1.0% | 0.143 | 0.171 | +0.10% |\n| scoop_taper_cut | 29.7 | 29.5 | -0.5% | 0.148 | 0.174 | +0.09% |\n| scoop_taper_fuse | 29.9 | 30.0 | +0.4% | 0.143 | 0.168 | +0.08% |\n| taper_scoop_bin_fuse | 67.5 | 68.2 | +1.0% | 0.400 | 0.443 | +0.06% |\n| scoop_ramp_fuse | 8.0 | 7.8 | -1.9% | 0.067 | 0.109 | +0.52% |\n| scoop_ramp_cut | 7.6 | 7.5 | -1.5% | 0.062 | 0.106 | +0.58% |\n| scoop_ramp_common | 7.4 | 7.5 | +1.4% | 0.065 | 0.109 | +0.60% |\n| glyph_ruling_cut | 195.1 | 195.9 | +0.4% | 0.219 | 0.773 | +0.28% |\n| interior_fillet_fuse | 180.9 | 180.3 | -0.4% | 0.519 | 0.698 | +0.10%\n|\n| interior_fillet_scoops_fuse | 53.3 | 51.8 | -2.7% | 0.198 | 0.261 |\n+0.12% |\n| **sum** | 1051.3 | 1051.8 | +0.1% | 3.628 | 5.029 | +0.13% |\n\nEach case gave the same face and edge counts on both sides, so the other\nphases do the same work. The change in total time stays within the noise\nof the machine, from -3.7% to +2.7%. The EE phase adds at most 0.60% of\nthe total time of a case. So I did not change the gate.\n\n`replay_pair` runs two booleans on a pair. I ran it 3 times on three of\nthe pairs. Each line gives the median of the EE time of its two booleans\ntogether:\n\n- glyph cut: 0.44 ms on main, 1.43 ms on the branch.\n- lattice strut cut: 1.38 ms on main, 1.22 ms on the branch.\n- interior fillet fuse: 1.35 ms on main, 1.59 ms on the branch.\n\nThese agree with the table.\n\n## Tests\n\n- `a_line_across_the_plane_of_a_cubic_crosses_it_between_samples` is the\ncase from the issue. The arch is in the plane z = 0, and a line goes\nthrough its point at 0.6 along (0.3, 0.2, 1). The line is a line edge\nand a degree-1 B-spline.\n- `a_line_across_a_cubic_a_hair_out_of_plane_crosses_it_between_samples`\nlifts the inner poles of the arch 0.001 out of the plane, one up and one\ndown. The line goes through the point at 0.6 along (1, 1, 0).\n- `circles_at_right_angles_cross_between_samples` has two whole circles\nin planes at right angles, which meet at one point between the sample\npoints of each.\n- `two_crossings_inside_one_pair_of_chords_are_both_read` has a cubic\nthat meets a line twice inside one pair of chords, out of the line's\nplane. It meets it at 0.6 and 0.61, and at 19/32 and 0.61.\n- The same test runs with the y and z of the cubic scaled by 0.02, where\nthe curves meet at a sine of 6e-5. It also runs with x scaled by 1000.\n- `a_touch_between_sample_points_is_read_once` has a parabola that\ntouches a line between two sample points. The phase reads one contact.\n- `a_line_crosses_both_sides_of_a_jump_inside_one_chord` has a polyline\nthat jumps back at a knot. A line crosses both of its pieces inside one\nchord.\n- `a_line_across_the_top_of_an_arch_between_box_samples_crosses_it` runs\n`check_edge_edge_pairs` on an arch and a short line across its top,\nabove the highest of the 17 points. The pair gets two crossings.\n- `segment_distance_reads_an_end_against_the_inside_of_the_other` checks\nthe least distance where one end of a segment is nearest the inside of\nthe other.\n- Each crossing test requires the count of crossings, with each edge as\nA and as B, and each point.\n- Without the search on the curves, the first three tests fail. Without\nthe splits, the cubic test fails. Without the chord hits in the search,\nor without the rule for a jump, the jump test fails. Without the\nquarter-span check or the halfway marks, the scaled cubic fails. Without\nthe contact, the touch test fails. With the box of 17 points, the arch\ntest fails.\n- `cargo test -p brepkit-algo --lib phase_ee`: 40 passed. This includes\nthe tests of edges along one curve with the arch lifted out of its plane\n(`twist` 0.5).\n- `cargo nextest run --cargo-profile ci --no-fail-fast -p brepkit-algo\n-p brepkit-io -p brepkit-operations -p brepkit-wasm -p brepkit-check -p\nbrepkit-heal` at `fed748a9d`: 3652 passed, 24 skipped.\n- The pose sweep and the truth audit at `fed748a9d` give the same output\nas main `4e5184192`. The pose sweep took 7.9 s, against 7.6 s on main,\none run each on a loaded machine.\n- The pre-commit hook passed: `cargo fmt --check` and `cargo clippy\n--all-targets --all-features -- -D warnings`. `scripts/check-mul-add.sh`\npassed.",
+          "timestamp": "2026-11-16T06:04:09Z",
+          "tree_id": "0d3891232cc89df9ac30d1d109522b8289671397",
+          "url": "https://github.com/andymai/brepkit/commit/fa3f76b1502845b56843bfabe85037bfb1c13d71"
+        },
+        "date": 1794809370316,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1111717,
+            "range": "± 16328",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1164933,
+            "range": "± 30131",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13306,
+            "range": "± 21",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 705767,
+            "range": "± 4264",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25176203,
+            "range": "± 137270",
             "unit": "ns/iter"
           }
         ]
