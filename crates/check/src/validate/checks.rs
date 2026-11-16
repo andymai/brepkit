@@ -51,6 +51,9 @@ pub enum CheckId {
     SolidEulerCharacteristic,
     /// Same face ID appears in multiple shells.
     SolidDuplicateFaces,
+    /// Two plane faces of the solid lie on one plane and cover the same
+    /// area.
+    SolidFacesOverlap,
 }
 
 /// Issue severity.

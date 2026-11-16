@@ -78,47 +78,31 @@ pub fn write_iges(topo: &Topology, solids: &[SolidId]) -> Result<String, IoError
     Ok(ctx.finish())
 }
 
-/// The exact rational B-spline surface of each curved analytic face. Conversion
-/// works in place, so it runs on a copy of the arena, in which faces keep their
-/// ids. Everything else is written from the solid as it stands: a plane stays a
-/// plane, and an edge stays exact.
+/// The exact rational B-spline surface of each curved analytic face, made
+/// from the face alone. Everything else is written from the solid as it
+/// stands: a plane stays a plane, and an edge stays exact.
 fn rational_surfaces(
     topo: &Topology,
     solids: &[SolidId],
 ) -> Result<HashMap<FaceId, NurbsSurface>, IoError> {
-    let mut curved = Vec::new();
+    let mut surfaces = HashMap::new();
     for &solid in solids {
         for face in solid_faces(topo, solid).map_err(topo_err)? {
             match topo.face(face).map_err(topo_err)?.surface() {
                 FaceSurface::Cylinder(_)
                 | FaceSurface::Cone(_)
                 | FaceSurface::Sphere(_)
-                | FaceSurface::Torus(_) => curved.push(face),
+                | FaceSurface::Torus(_) => {
+                    if surfaces.contains_key(&face) {
+                        continue;
+                    }
+                    let nurbs = brepkit_operations::heal::face_bspline_surface(topo, face)?
+                        .ok_or_else(|| IoError::InvalidTopology {
+                            reason: "a curved face has no exact B-spline form".to_string(),
+                        })?;
+                    surfaces.insert(face, nurbs);
+                }
                 FaceSurface::Plane { .. } | FaceSurface::Nurbs(_) => {}
-            }
-        }
-    }
-    let mut surfaces = HashMap::new();
-    if curved.is_empty() {
-        return Ok(surfaces);
-    }
-    let mut copy = topo.clone();
-    for &solid in solids {
-        brepkit_operations::heal::convert_to_bspline(&mut copy, solid)?;
-    }
-    for face in curved {
-        match copy.face(face).map_err(topo_err)?.surface() {
-            FaceSurface::Nurbs(nurbs) => {
-                surfaces.insert(face, nurbs.clone());
-            }
-            FaceSurface::Plane { .. }
-            | FaceSurface::Cylinder(_)
-            | FaceSurface::Cone(_)
-            | FaceSurface::Sphere(_)
-            | FaceSurface::Torus(_) => {
-                return Err(IoError::InvalidTopology {
-                    reason: "a curved face has no exact B-spline form".to_string(),
-                });
             }
         }
     }
