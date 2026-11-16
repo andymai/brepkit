@@ -137,6 +137,7 @@ pub fn build_solid_with_origins(
         sources.push(Some(sf.source_face));
     }
 
+    separate_arcs_sharing_ends(topo, &mut face_ids)?;
     unify_boundaries(topo, &mut face_ids, &mut sources)?;
 
     // Step 0b2: Drop doubled faces — two (or more) selected faces whose outer
@@ -3630,12 +3631,18 @@ fn split_arc_edges_at_collinear_vertices(
     Ok(())
 }
 
-/// Split each curved edge in two where another curved edge joins the same two
-/// points along a different path.
+/// Split each curved edge in two where another edge joins the same two points
+/// along a different path.
 ///
-/// A boolean keeps one side of a section, but an imprint keeps every piece, so a
-/// closed rim cut once beside its seam, or a ball's equator cut across, reaches
-/// assembly as two arcs [`merge_duplicate_edges`] would take for one edge.
+/// Assembly tells edges apart by their ends, so two paths between one pair of
+/// points would read as one edge. An imprint keeps every piece of a section,
+/// so a closed rim cut once beside its seam, or a ball's equator cut across,
+/// reaches assembly as two arcs with the same ends. A plane through a vertex of
+/// a cap that crosses the cap leaves it bounded by a piece of its spline and
+/// the section's chord between the same two points.
+///
+/// The pieces of one path share their new middle vertex. A path with a line
+/// on it stays whole: its ends are the key of the line.
 ///
 /// # Errors
 ///
@@ -3648,14 +3655,11 @@ pub fn separate_arcs_sharing_ends(
     use brepkit_topology::vertex::Vertex;
 
     let mut seen: HashSet<EdgeId> = HashSet::new();
-    let mut groups: BTreeMap<VPair, Vec<(EdgeId, Point3)>> = BTreeMap::new();
+    let mut groups: BTreeMap<VPair, Vec<EdgeId>> = BTreeMap::new();
     for &fid in face_ids.iter() {
         for (edge_id, _) in face_edge_uses(topo, fid)? {
             let edge = topo.edge(edge_id)?;
-            if !seen.insert(edge_id)
-                || matches!(edge.curve(), EdgeCurve::Line)
-                || edge.start() == edge.end()
-            {
+            if !seen.insert(edge_id) || edge.start() == edge.end() {
                 continue;
             }
             let (sp, ep) = (
@@ -3663,51 +3667,152 @@ pub fn separate_arcs_sharing_ends(
                 topo.vertex(edge.end())?.point(),
             );
             let (qs, qe) = (quantize_point(sp, MERGE_TOL), quantize_point(ep, MERGE_TOL));
-            let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
-            let mid = edge
-                .curve()
-                .evaluate_with_endpoints(0.5 * (t0 + t1), sp, ep);
+            if qs == qe {
+                continue;
+            }
             groups
                 .entry(if qs <= qe { (qs, qe) } else { (qe, qs) })
                 .or_default()
-                .push((edge_id, mid));
+                .push(edge_id);
         }
     }
 
+    let is_line = |topo: &Topology, e: EdgeId| {
+        topo.edge(e)
+            .is_ok_and(|edge| matches!(edge.curve(), EdgeCurve::Line))
+    };
     let mut replacements: HashMap<EdgeId, Vec<OrientedEdge>> = HashMap::new();
     for group in groups.values() {
-        let Some(&(_, first)) = group.first() else {
-            continue;
-        };
-        if group
-            .iter()
-            .all(|&(_, mid)| (mid - first).length() <= MERGE_TOL * 10.0)
-        {
+        if group.len() < 2 || group.iter().all(|&e| is_line(topo, e)) {
             continue;
         }
-        let mut placed: Vec<(Point3, brepkit_topology::vertex::VertexId)> = Vec::new();
-        for &(edge_id, mid) in group {
-            let found = placed
-                .iter()
-                .find(|(at, _)| (*at - mid).length() <= MERGE_TOL * 10.0)
-                .map(|&(_, vertex)| vertex);
-            let middle = found.unwrap_or_else(|| {
-                let vertex = topo.add_vertex(Vertex::new(mid, MERGE_TOL));
-                placed.push((mid, vertex));
-                vertex
-            });
-            let edge = topo.edge(edge_id)?;
-            let (start, end, curve) = (edge.start(), edge.end(), edge.curve().clone());
-            let head = topo.add_edge(Edge::new(start, middle, curve.clone()));
-            let tail = topo.add_edge(Edge::new(middle, end, curve));
-            replacements.insert(
-                edge_id,
-                vec![OrientedEdge::new(head, true), OrientedEdge::new(tail, true)],
+        let mut paths: Vec<Vec<EdgeId>> = Vec::new();
+        for &e in group {
+            let mut joined = false;
+            for path in &mut paths {
+                if edges_share_path(topo, path[0], e)? {
+                    path.push(e);
+                    joined = true;
+                    break;
+                }
+            }
+            if !joined {
+                paths.push(vec![e]);
+            }
+        }
+        if paths.len() < 2 {
+            continue;
+        }
+        paths.retain(|path| !path.iter().any(|&e| is_line(topo, e)));
+        for path in &paths {
+            let first = topo.edge(path[0])?;
+            let (sp, ep) = (
+                topo.vertex(first.start())?.point(),
+                topo.vertex(first.end())?.point(),
             );
+            let (t0, t1) = first.curve().domain_with_endpoints(sp, ep);
+            let mid = first
+                .curve()
+                .evaluate_with_endpoints(0.5 * (t0 + t1), sp, ep);
+            let middle = topo.add_vertex(Vertex::new(mid, MERGE_TOL));
+            for &edge_id in path {
+                let edge = topo.edge(edge_id)?;
+                let (start, end, curve) = (edge.start(), edge.end(), edge.curve().clone());
+                let head = topo.add_edge(Edge::new(start, middle, curve.clone()));
+                let tail = topo.add_edge(Edge::new(middle, end, curve));
+                replacements.insert(
+                    edge_id,
+                    vec![OrientedEdge::new(head, true), OrientedEdge::new(tail, true)],
+                );
+            }
         }
     }
+    if replacements.is_empty() {
+        return Ok(());
+    }
+    log::debug!(
+        "separate_arcs_sharing_ends: split {} edges",
+        replacements.len()
+    );
     replace_edges(topo, face_ids, &replacements)
 }
+
+/// Whether two edges with the same ends run along one path.
+///
+/// Edges whose middles meet are one path. Otherwise the points a quarter, half
+/// and three quarters along each must lie on the other, read by distance, not
+/// by parameter, so a line and a spline that traces it agree whatever their
+/// parameterizations.
+fn edges_share_path(topo: &Topology, a: EdgeId, b: EdgeId) -> Result<bool, AlgoError> {
+    use brepkit_topology::edge::EdgeCurve;
+
+    let (ea, eb) = (topo.edge(a)?, topo.edge(b)?);
+    if matches!(ea.curve(), EdgeCurve::Line) && matches!(eb.curve(), EdgeCurve::Line) {
+        return Ok(true);
+    }
+    let (at_a, at_b) = (edge_path(topo, ea)?, edge_path(topo, eb)?);
+    let span =
+        |at: &dyn Fn(f64) -> Point3| (at(0.5) - at(0.0)).length() + (at(1.0) - at(0.5)).length();
+    let tol = (PATH_REL_TOL * span(&at_a).min(span(&at_b))).max(PATH_ABS_TOL);
+    if (at_a(0.5) - at_b(0.5)).length() <= tol {
+        return Ok(true);
+    }
+    for f in [0.25, 0.5, 0.75] {
+        if distance_to_path(&at_b, at_a(f)) > tol || distance_to_path(&at_a, at_b(f)) > tol {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// An edge's point at `f` of the way along its own parameter domain.
+fn edge_path<'a>(
+    topo: &Topology,
+    edge: &'a brepkit_topology::edge::Edge,
+) -> Result<impl Fn(f64) -> Point3 + 'a, AlgoError> {
+    let (sp, ep) = (
+        topo.vertex(edge.start())?.point(),
+        topo.vertex(edge.end())?.point(),
+    );
+    let curve = edge.curve();
+    let (t0, t1) = curve.domain_with_endpoints(sp, ep);
+    Ok(move |f: f64| curve.evaluate_with_endpoints((t1 - t0).madd(f, t0), sp, ep))
+}
+
+/// The distance from `p` to the curve `at` traces over `[0, 1]`, refined from
+/// its nearest of `PATH_SAMPLES` even steps.
+fn distance_to_path(at: &dyn Fn(f64) -> Point3, p: Point3) -> f64 {
+    let n = f64::from(PATH_SAMPLES);
+    let off = |f: f64| (at(f) - p).length();
+    let (nearest, best) = (0..=PATH_SAMPLES).map(|i| (i, off(f64::from(i) / n))).fold(
+        (0, f64::MAX),
+        |acc, (i, d)| if d < acc.1 { (i, d) } else { acc },
+    );
+    let (mut lo, mut hi) = (
+        f64::from(nearest.saturating_sub(1)) / n,
+        f64::from((nearest + 1).min(PATH_SAMPLES)) / n,
+    );
+    for _ in 0..PATH_REFINE_STEPS {
+        let (m1, m2) = ((hi - lo).madd(1.0 / 3.0, lo), (hi - lo).madd(2.0 / 3.0, lo));
+        if off(m1) <= off(m2) {
+            hi = m2;
+        } else {
+            lo = m1;
+        }
+    }
+    best.min(off(0.5 * (lo + hi)))
+}
+
+/// Even parameter steps a curve is read at to find its point nearest another.
+const PATH_SAMPLES: u32 = 32;
+/// Ternary steps that refine that nearest point.
+const PATH_REFINE_STEPS: usize = 30;
+/// How far, as a share of the shorter edge's length, two paths may part and
+/// still be one edge: well above a fitted curve's error, well below the bulge
+/// of a spline over its chord.
+const PATH_REL_TOL: f64 = 1e-3;
+/// The least such distance, for short edges.
+const PATH_ABS_TOL: f64 = 1e-5;
 
 /// Rebuild the faces whose wires use a replaced edge, each replaced by its
 /// chain of pieces in the edge's own direction.
