@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794837173097,
+  "lastUpdate": 1794852535455,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -72467,6 +72467,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 23957053,
             "range": "± 181079",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "5ea81acdac09bb0b2641b0b9cbe3d92fd0e6aeba",
+          "message": "perf(topology): keep the faces of each edge as the topology is built (#2559)\n\nTopology keeps a link from each edge to its wires and from each wire to\nits faces, and faces_of_edge reads them. match_surface finds the face of\nits target edge from the links, not from a walk over every face of the\ntopology.\n\nCloses #2456",
+          "timestamp": "2026-11-16T10:05:41-08:00",
+          "tree_id": "2bdf93771ca4d811b7a3fc7c14ac5541cc0d5144",
+          "url": "https://github.com/andymai/brepkit/commit/5ea81acdac09bb0b2641b0b9cbe3d92fd0e6aeba"
+        },
+        "date": 1794852527913,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 909202,
+            "range": "± 1813",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 955584,
+            "range": "± 3740",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11127,
+            "range": "± 16",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 567717,
+            "range": "± 1335",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 20445316,
+            "range": "± 49258",
             "unit": "ns/iter"
           }
         ]
