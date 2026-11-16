@@ -4604,7 +4604,8 @@ fn lens_area(a: f64, b: f64, d: f64) -> f64 {
 /// `pose` first: 0 as built, 1 upside down, 2 turned off every axis, 3
 /// mirrored. The large wall's rim then runs up and down the notch the small
 /// cylinder cuts into it. Checks the fuse stays analytic and holds `volume`,
-/// and that its mesh is closed and holds the volume at each deflection.
+/// that its mesh is closed and holds the volume at each deflection, and that
+/// each curved face meshed on its own covers its area.
 fn check_rim_notch_fuse(
     make_large: impl Fn(&mut Topology) -> brepkit_topology::solid::SolidId,
     r: f64,
@@ -4681,6 +4682,29 @@ fn check_rim_notch_fuse(
             assert!(
                 (meshed - volume).abs() <= deflection * area,
                 "pose {pose}, deflection {deflection}: mesh volume {meshed}, truth {volume}"
+            );
+        }
+        // Each wall meshed on its own covers its own area, not the notch.
+        for &face in &faces {
+            if matches!(
+                topo.face(face).unwrap().surface(),
+                FaceSurface::Plane { .. }
+            ) {
+                continue;
+            }
+            let area = crate::measure::face_area(&topo, face, 0.001).unwrap();
+            let mesh = tessellate(&topo, face, 0.05).unwrap();
+            let meshed: f64 = mesh
+                .indices
+                .chunks_exact(3)
+                .map(|t| {
+                    let [a, b, c] = [0, 1, 2].map(|k| mesh.positions[t[k] as usize]);
+                    0.5 * (b - a).cross(c - a).length()
+                })
+                .sum();
+            assert!(
+                (meshed - area).abs() <= 0.01 * area,
+                "pose {pose}: {face:?} meshed alone covers {meshed}, area {area}"
             );
         }
     }
