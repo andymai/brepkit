@@ -1,7 +1,7 @@
 crates/check/src/face_loops.rs
-  s_0db8415e6f59cd::t_08c31f4a6d8535 237-247,256,258-260,652-654,657,660,669,706-708,807-808,810,1092-1147
+  s_0db8415e6f59cd::t_dac60f0f11bd69 237-247,256,258-260,652-654,657,660,669,706-708,807-808,810,1092-1147
 crates/check/src/validate/face_wires.rs
-  s_0db8415e6f59cd::t_8a0a3d2d298e3b 1718-1751
+  s_0db8415e6f59cd::t_717807c2bc370a 1718-1751
 ---
 {
   "schema_version": "authorship/3.0.0",
