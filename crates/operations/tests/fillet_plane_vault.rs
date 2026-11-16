@@ -9,7 +9,9 @@
 //!
 //! The arc bows past the straight line from the corner to the contact's
 //! end, so the notch reaches past it too: a bore through the end walls in
-//! that sliver is in the round's way, and the round is refused.
+//! that sliver is in the round's way, and the round is refused. So it is
+//! where each end wall's edge on the vault is a B-spline that traces the
+//! arc.
 //!
 //! The round along an end wall's arc is a torus band about the vault's
 //! axis; it ends on the axial planes through the arc's ends.
@@ -23,6 +25,7 @@
 use std::f64::consts::{FRAC_PI_4, PI, TAU};
 
 use brepkit_check::classify::{ClassifyOptions, PointClassification, classify_point};
+use brepkit_geometry::convert::circle_to_nurbs;
 use brepkit_math::curves::Circle3D;
 use brepkit_math::mat::Mat4;
 use brepkit_math::surfaces::CylindricalSurface;
@@ -527,10 +530,33 @@ fn a_round_where_a_wall_rises_from_a_dish() {
     }
 }
 
+/// Gives each arc of the solid as the B-spline that traces it.
+fn arcs_as_splines(topo: &mut Topology, solid: SolidId) {
+    for edge_id in solid_edges(topo, solid).unwrap() {
+        let edge = topo.edge(edge_id).unwrap();
+        let EdgeCurve::Circle(circle) = edge.curve().clone() else {
+            continue;
+        };
+        let (p, q) = (
+            topo.vertex(edge.start()).unwrap().point(),
+            topo.vertex(edge.end()).unwrap().point(),
+        );
+        let (t0, t1) = edge.curve().domain_with_endpoints(p, q);
+        let spline = circle_to_nurbs(&circle, t0, t1).unwrap();
+        topo.edge_mut(edge_id)
+            .unwrap()
+            .set_curve(EdgeCurve::NurbsCurve(spline));
+    }
+}
+
 /// The bowed box with a bore of radius `bore` along x through both end
-/// walls at (`y`, `z`), and its straight top edge on the wall y = 0.
-fn bored_vault(topo: &mut Topology, y: f64, z: f64, bore: f64) -> (SolidId, EdgeId) {
+/// walls at (`y`, `z`), and its straight top edge on the wall y = 0. With
+/// `splines`, each end wall's edge on the vault is a B-spline.
+fn bored_vault(topo: &mut Topology, y: f64, z: f64, bore: f64, splines: bool) -> (SolidId, EdgeId) {
     let (solid, _) = vaulted_box(topo, BOWED, Pick::Along { far: false });
+    if splines {
+        arcs_as_splines(topo, solid);
+    }
     let drill = make_cylinder(topo, bore, SIDE + 2.0).unwrap();
     let lay = Mat4::translation(-1.0, y, z) * Mat4::rotation_y(std::f64::consts::FRAC_PI_2);
     transform_solid(topo, drill, &lay).unwrap();
@@ -553,6 +579,15 @@ fn bored_vault(topo: &mut Topology, y: f64, z: f64, bore: f64) -> (SolidId, Edge
 
 #[test]
 fn a_bore_between_the_arc_and_its_chord_is_in_the_rounds_way() {
+    bore_between_the_arc_and_its_chord(false);
+}
+
+#[test]
+fn a_bore_between_a_spline_arc_and_its_chord_is_in_the_rounds_way() {
+    bore_between_the_arc_and_its_chord(true);
+}
+
+fn bore_between_the_arc_and_its_chord(splines: bool) {
     let r = 2.5;
     // The contact's end on the vault, as in `removed`, and the middle of
     // the arc from the corner to it: the bore lies between that and the
@@ -571,7 +606,7 @@ fn a_bore_between_the_arc_and_its_chord_is_in_the_rounds_way() {
         axis.1 + (chord.1 - axis.1) * middle,
     );
     let mut topo = Topology::new();
-    let (solid, edge) = bored_vault(&mut topo, y, z, sag / 4.0);
+    let (solid, edge) = bored_vault(&mut topo, y, z, sag / 4.0, splines);
     let result = fillet_v2(&mut topo, solid, &[edge], r).and_then(all_blended);
     let refusal = result.expect_err("a round over a bore in its end's way");
     assert!(
@@ -582,9 +617,18 @@ fn a_bore_between_the_arc_and_its_chord_is_in_the_rounds_way() {
 
 #[test]
 fn a_bore_clear_of_the_rounds_end_stays() {
+    bore_clear_of_the_rounds_end(false);
+}
+
+#[test]
+fn a_bore_clear_of_the_rounds_end_stays_by_spline_arcs() {
+    bore_clear_of_the_rounds_end(true);
+}
+
+fn bore_clear_of_the_rounds_end(splines: bool) {
     let r = 2.5;
     let mut topo = Topology::new();
-    let (solid, edge) = bored_vault(&mut topo, HALF, HALF, 1.0);
+    let (solid, edge) = bored_vault(&mut topo, HALF, HALF, 1.0, splines);
     let before = solid_volume(&topo, solid, 1e-3).unwrap();
     let result = fillet_v2(&mut topo, solid, &[edge], r)
         .and_then(all_blended)
