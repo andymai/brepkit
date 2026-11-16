@@ -162,6 +162,31 @@ struct Pool {
     values: Vec<Vec<f64>>,
 }
 
+/// The most lists of each kind that a thread keeps between proofs.
+const KEPT_LISTS: usize = 64;
+
+thread_local! {
+    /// The room and the lists of the last proof on this thread, for the
+    /// next: most proofs are short, and would spend much of their time
+    /// making these afresh.
+    static ROOM: RefCell<Option<(Scratch, Pool)>> = const { RefCell::new(None) };
+}
+
+impl Drop for Search {
+    fn drop(&mut self) {
+        let scratch = std::mem::take(self.scratch.get_mut());
+        let mut pool = std::mem::take(self.pool.get_mut());
+        pool.points.truncate(KEPT_LISTS);
+        pool.values.truncate(KEPT_LISTS);
+        // A thread that is ending has no room to keep, and needs none.
+        let _ = ROOM.try_with(|room| {
+            if let Ok(mut room) = room.try_borrow_mut() {
+                *room = Some((scratch, pool));
+            }
+        });
+    }
+}
+
 impl Search {
     fn take_points(&self) -> Vec<[f64; 4]> {
         let mut list = self.pool.borrow_mut().points.pop().unwrap_or_default();
@@ -220,6 +245,11 @@ pub(super) fn nearest(
     let (u_min, u_max) = surface.domain_u();
     let (v_min, v_max) = surface.domain_v();
     let (rows, cols) = (surface.degree_u() + 1, surface.degree_v() + 1);
+    let (scratch, pool) = ROOM
+        .try_with(|room| room.try_borrow_mut().ok().and_then(|mut room| room.take()))
+        .ok()
+        .flatten()
+        .unwrap_or_default();
     let search = Search {
         tolerance,
         rows,
@@ -228,8 +258,8 @@ pub(super) fn nearest(
         shares_v: product_shares(cols - 1),
         domain: [u_min, u_max, v_min, v_max],
         closed: (surface.is_periodic_u(), surface.is_periodic_v()),
-        scratch: RefCell::default(),
-        pool: RefCell::default(),
+        scratch: RefCell::new(scratch),
+        pool: RefCell::new(pool),
     };
     let below = |best: &SurfaceProjection| (best.distance - slack).powi(2);
 
@@ -264,6 +294,7 @@ pub(super) fn nearest(
     while let Some(cell) = heap.pop() {
         let bound = below(&best);
         if cell.floor >= bound {
+            search.give(cell);
             break;
         }
         let mut gaps = search.take_values();
@@ -347,6 +378,9 @@ pub(super) fn nearest(
         let pieces = search.pieces(cell, along_u, at, below(&best));
         heap.extend(pieces.into_iter().flatten());
     }
+    for cell in heap {
+        search.give(cell);
+    }
     Ok(best)
 }
 
@@ -373,7 +407,7 @@ impl Search {
         // A common factor of the weights leaves the part as it is; taken
         // out, the products below stay in the range of a float.
         let most = points.iter().fold(0.0_f64, |m, q| m.max(q[3]));
-        if most > 0.0 && most.is_finite() {
+        if most > 0.0 && most.is_finite() && most.to_bits() != 1.0_f64.to_bits() {
             for q in &mut points {
                 for c in q.iter_mut() {
                     *c /= most;
@@ -382,11 +416,10 @@ impl Search {
         }
         // The part lies in the box of its points, which the point is at the
         // origin of: the box's squared distance from the origin bounds too.
-        let hull = Aabb3::from_points(
-            points
-                .iter()
-                .map(|q| Point3::new(q[0] / q[3], q[1] / q[3], q[2] / q[3])),
-        )
+        let hull = Aabb3::from_points(points.iter().map(|q| {
+            let w = q[3];
+            Point3::new(q[0] / w, q[1] / w, q[2] / w)
+        }))
         .distance_squared_to_point(Point3::new(0.0, 0.0, 0.0));
         if hull >= bound {
             self.pool.borrow_mut().points.push(points);
@@ -646,15 +679,15 @@ impl Search {
             } else if within(full[0]) && !within(full[1]) {
                 next[0] = (x[0] - (grad[0] + h_st * (next[1] - x[1])) / h_ss).clamp(0.0, 1.0);
             }
+            let moved = (next[0] - x[0]).abs().max((next[1] - x[1]).abs());
+            if moved < SETTLED {
+                break;
+            }
             let (g_next, grad_next, hess_next) = self.gap_at(cell, c, next);
             if g_next.is_nan() || g_next >= g {
                 break;
             }
-            let moved = (next[0] - x[0]).abs().max((next[1] - x[1]).abs());
             (x, g, grad, hess) = (next, g_next, grad_next, hess_next);
-            if moved < SETTLED {
-                break;
-            }
         }
         (x, g, grad)
     }
@@ -818,15 +851,14 @@ fn stays_positive(coefs: &[f64], hint: f64, work: &mut Vec<f64>) -> bool {
             break;
         }
         let next = (x - slope / curve).clamp(0.0, 1.0);
+        if (next - x).abs() < SETTLED {
+            break;
+        }
         let [v, s, c] = line_at(coefs, next, work);
         if v.is_nan() || v >= value {
             break;
         }
-        let moved = (next - x).abs();
         (x, value, slope, curve) = (next, v, s, c);
-        if moved < SETTLED {
-            break;
-        }
     }
     value >= 0.0 && value + quadratic_floor(x, slope, bend) >= 0.0
 }
