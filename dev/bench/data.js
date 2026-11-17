@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794887065260,
+  "lastUpdate": 1794888484000,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -72845,6 +72845,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25763460,
             "range": "± 107214",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ad7e21b44f4e44c2a1001d4fa63c6e781eec7f68",
+          "message": "fix(math): refuse a control point at infinity after a knot insertion (#2564)\n\n## Summary\n\n`curve_knot_insert` (`crates/math/src/nurbs/knot_ops.rs`) changed the\ncurve when a new control point got a weight of zero (#2527). The\ninsertion blends the control points in homogeneous form and then divides\neach one by its weight. For a weight of zero it kept the numerator as\nthe point. Evaluation multiplies the point by its weight, so the curve\nlost that numerator. Weights of mixed sign can blend to such a weight.\n\nOn the rational quadratic of the issue, a knot at 1 moved the curve by\nup to 6.9. A knot at 1.5 moved it by up to 14.5.\n\nThe same conversion was in three more places: `curve_knot_remove`,\n`curve_degree_elevate`, and `insert_along_rows`, which\n`surface_to_bezier_patches` uses to raise each knot to full\nmultiplicity.\n\nAll four now read the net through one function, `cartesian_net` in\n`crates/math/src/nurbs/mod.rs`. It returns `MathError::PoleAtInfinity`\nfor a point whose weight is zero and whose numerator is not zero.\n`curve_to_bezier_segments` and the blossomed patches already returned\nthis error, and they now share its conversion (`cartesian`). A point\nwhose weight and numerator are both zero adds nothing to the curve, so\nit stays allowed, as before.\n\nThe error carries the span that the operation reshapes. The message of\n`PoleAtInfinity` now reads \"the rational form over [start, end]\",\nbecause the error now comes from more than the Bezier form.\n\nFixes #2527\n\n## Test plan\n\n- `a_knot_that_puts_a_control_point_at_infinity_is_refused` builds the\ncurve of the issue. A knot at 0.5 keeps the curve within 1e-12 at 41\npoints, and knots at 1 and 1.5 return `PoleAtInfinity`.\n- `a_surface_whose_refinement_puts_a_point_at_infinity_is_refused`\nbuilds a surface whose rows are that curve, and\n`surface_to_bezier_patches` returns `PoleAtInfinity`.\n- The `brepkit-math` library tests pass (704), and `cargo clippy -p\nbrepkit-math --all-targets -- -D warnings` passes.\n\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes a bug where knot insertion silently changed the curve. When a new\ncontrol point's weight blended to zero, `curve_knot_insert` kept the\npoint's bare numerator, which evaluation then dropped, shifting the\ncurve by up to 14.5 on a rational quadratic with mixed-sign weights.\n\n- The same conversion existed in `curve_knot_remove`,\n`curve_degree_elevate`, and `insert_along_rows` (which\n`surface_to_bezier_patches` uses to refine a surface).\n- All four now route through a shared conversion that returns\n`MathError::PoleAtInfinity` for a weight of zero over a nonzero\nnumerator, matching the existing Bezier-form behavior. Points whose\nweight and numerator are both zero still pass through unchanged.\n- The error's `start` and `end` now describe the span the operation\nreshapes rather than just the Bezier form.\n\n<sup>Written for commit f7cbe4a0dd87cd1bd3f733bc7b394b7373b3d5a8.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2564?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2564?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2564&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-11-17T04:04:54Z",
+          "tree_id": "ae2416327a96962c4a15780c2e2d03e9ec74b922",
+          "url": "https://github.com/andymai/brepkit/commit/ad7e21b44f4e44c2a1001d4fa63c6e781eec7f68"
+        },
+        "date": 1794888471206,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 677863,
+            "range": "± 10430",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 714943,
+            "range": "± 31464",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 8842,
+            "range": "± 82",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 423818,
+            "range": "± 5687",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 15586491,
+            "range": "± 520937",
             "unit": "ns/iter"
           }
         ]
