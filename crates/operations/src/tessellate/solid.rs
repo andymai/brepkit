@@ -14,7 +14,9 @@ use super::TriangleMesh;
 use super::edge_sampling::{
     circle_param_range, sample_edge, sample_edge_with_params, segments_for_chord_deviation_a,
 };
-use super::mesh_ops::{dedupe_coincident_triangles, split_pinched_chords, weld_boundary_vertices};
+use super::mesh_ops::{
+    NO_RIM_FACE, dedupe_coincident_triangles, split_pinched_chords, weld_boundary_vertices,
+};
 use super::nonplanar::{
     circle_pole_params, tessellate_latitude_band_shared, tessellate_nonplanar_cdt,
     tessellate_nonplanar_snap, tessellate_revolution_band_shared, tessellate_torus_notch_band,
@@ -1788,7 +1790,53 @@ pub(super) fn tessellate_solid_core(
     }
 
     phase("normals", &mut phase_t);
-    let repeated = weld_boundary_vertices(&mut merged, deflection, tri_faces.as_mut());
+    // A sample only on edges that one face uses lies on that face's free
+    // rim. Two such samples of one face are no crack between faces: welded,
+    // they would collapse a face narrower than the weld's reach. A join that
+    // two faces hold with separate edges is still welded.
+    let mut on_shared = vec![false; merged.positions.len()];
+    for (edge_idx, global_ids) in &edge_global_indices {
+        if edge_face_map
+            .get(edge_idx)
+            .is_some_and(|faces| faces.len() > 1)
+        {
+            for &gid in global_ids {
+                if let Some(mark) = on_shared.get_mut(gid as usize) {
+                    *mark = true;
+                }
+            }
+        }
+    }
+    // A sample where the free rims of two faces meet is on neither alone.
+    let mut rim_face = vec![NO_RIM_FACE; merged.positions.len()];
+    let mut on_two_rims = vec![false; merged.positions.len()];
+    for (edge_idx, global_ids) in &edge_global_indices {
+        let Some(faces) = edge_face_map.get(edge_idx) else {
+            continue;
+        };
+        let &[face] = faces.as_slice() else {
+            continue;
+        };
+        #[allow(clippy::cast_possible_truncation)]
+        let face = face.index() as u32;
+        for &gid in global_ids {
+            let gid = gid as usize;
+            if on_shared.get(gid).copied().unwrap_or(true) {
+                continue;
+            }
+            if rim_face[gid] == NO_RIM_FACE {
+                rim_face[gid] = face;
+            } else if rim_face[gid] != face {
+                on_two_rims[gid] = true;
+            }
+        }
+    }
+    for (face, &mixed) in rim_face.iter_mut().zip(&on_two_rims) {
+        if mixed {
+            *face = NO_RIM_FACE;
+        }
+    }
+    let repeated = weld_boundary_vertices(&mut merged, deflection, &rim_face, tri_faces.as_mut());
 
     // A face no mesher covered, or whose rim the weld collapsed beside a
     // neighbour's crack, leaves a hole the caller cannot see from the mesh.
