@@ -482,9 +482,6 @@ pub fn drawn_edge_samples(
 /// The `rim_face` of a vertex that lies on no face's free rim alone.
 pub(super) const NO_RIM_FACE: u32 = u32::MAX;
 
-/// How many of its nearest partners a rim sample can weld to.
-const RIM_PARTNERS: usize = 8;
-
 /// Weld remaining boundary vertices by merging coincident positions.
 ///
 /// Uses union-find over a spatial hash grid to merge boundary vertices that
@@ -580,23 +577,21 @@ pub(super) fn weld_boundary_vertices(
 
     // A pair without a rim sample joins at once: until the rim pairs below,
     // no cluster holds a rim sample, and the clusters such pairs make do not
-    // depend on the order of the joins. A pair with a rim sample waits for
-    // the nearest-first pass, and each sample keeps only its nearest
-    // `RIM_PARTNERS` there, so a dense rim queues a bounded number of pairs.
+    // depend on the order of the joins. A pair of two samples on one face's
+    // rim never joins and is not queued. Only a pair of a rim sample with a
+    // vertex off that rim waits for the nearest-first pass.
     let rim_of = |v: u32| rim_face.get(v as usize).copied().unwrap_or(NO_RIM_FACE);
     let mut pairs: Vec<(f64, u32, u32)> = Vec::new();
-    let mut partners: Vec<(f64, u32)> = Vec::new();
     for &vid in &boundary_verts {
         let p = mesh.positions[vid as usize];
         let (cx, cy, cz) = cell_key(p);
-        partners.clear();
 
         for dx in -1..=1 {
             for dy in -1..=1 {
                 for dz in -1..=1 {
                     if let Some(cell) = grid.get(&(cx + dx, cy + dy, cz + dz)) {
                         for &other in cell {
-                            if other == vid {
+                            if other <= vid {
                                 continue;
                             }
                             let gap = (p - mesh.positions[other as usize]).length();
@@ -605,33 +600,23 @@ pub(super) fn weld_boundary_vertices(
                             }
                             let (rim, other_rim) = (rim_of(vid), rim_of(other));
                             if rim == NO_RIM_FACE && other_rim == NO_RIM_FACE {
-                                if other > vid {
-                                    let (ra, rb) =
-                                        (uf_find(&mut parent, vid), uf_find(&mut parent, other));
-                                    parent[ra.max(rb) as usize] = ra.min(rb);
-                                }
+                                let (ra, rb) =
+                                    (uf_find(&mut parent, vid), uf_find(&mut parent, other));
+                                parent[ra.max(rb) as usize] = ra.min(rb);
                             } else if rim != other_rim {
-                                partners.push((gap, other));
+                                pairs.push((gap, vid, other));
                             }
                         }
                     }
                 }
             }
         }
-        partners.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
-        pairs.extend(
-            partners
-                .iter()
-                .take(RIM_PARTNERS)
-                .map(|&(gap, other)| (gap, vid.min(other), vid.max(other))),
-        );
     }
     // The nearest pairs join first: a crack's own pairs take their samples
     // before a pair across a narrow face can. Rooting at the smallest index
     // makes each cluster's representative its least member, whatever the
     // order of the joins.
     pairs.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)));
-    pairs.dedup_by(|a, b| a.1 == b.1 && a.2 == b.2);
     for (_, a, b) in pairs {
         let (ra, rb) = (uf_find(&mut parent, a), uf_find(&mut parent, b));
         if ra == rb
