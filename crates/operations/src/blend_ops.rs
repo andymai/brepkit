@@ -987,11 +987,17 @@ pub fn fillet_v2_with_corners(
     Ok(result)
 }
 
-/// Chamfer edges with two distances (v2 engine).
+/// Chamfer edges with two distances (v2 engine), `d1` on each edge's first
+/// face in the solid's face order and `d2` on its other face.
+///
+/// A pick of closed circular rims, or of chains of lines and arcs (see
+/// [`crate::chamfer_chain::chamfer_tangent_chains`]), is cut exactly by
+/// those paths first; any other pick goes to the walking engine.
 ///
 /// # Errors
 /// Returns `OperationsError` if distances are non-positive, edges are empty,
-/// or the blend computation fails.
+/// a rim's distance consumes its cap or wall, or the blend computation
+/// fails.
 pub fn chamfer_v2(
     topo: &mut Topology,
     solid: SolidId,
@@ -1009,6 +1015,22 @@ pub fn chamfer_v2(
             reason: "no edges specified".into(),
         });
     }
+    if let Some(pairs) = on_first_faces(topo, solid, edges)?
+        && let Some(result) = crate::chamfer::chamfer_exactly_on(topo, solid, &pairs, d1, d2)?
+    {
+        return Ok(chamfered_whole(result, &pairs));
+    }
+    chamfer_v2_walking(topo, solid, edges, d1, d2)
+}
+
+/// [`chamfer_v2`] by the walking engine alone.
+pub(crate) fn chamfer_v2_walking(
+    topo: &mut Topology,
+    solid: SolidId,
+    edges: &[EdgeId],
+    d1: f64,
+    d2: f64,
+) -> Result<BlendResult, OperationsError> {
     let mut builder = ChamferBuilder::new(topo, solid);
     builder.add_edges_asymmetric(edges, d1, d2);
     let built = builder.build()?;
@@ -1018,10 +1040,14 @@ pub fn chamfer_v2(
 /// Chamfer edges with two distances (v2 engine), `d1` on each edge's
 /// reference face and `d2` on its other face.
 ///
+/// Rims and chains of lines and arcs are cut exactly first, as in
+/// [`chamfer_v2`].
+///
 /// # Errors
 /// Returns `OperationsError` if distances are non-positive, edges are empty,
-/// a reference face does not border its edge, or the blend computation
-/// fails.
+/// an edge has two different reference faces, a reference face does not
+/// border its edge, a rim's distance consumes its cap or wall, or the blend
+/// computation fails.
 pub fn chamfer_v2_on(
     topo: &mut Topology,
     solid: SolidId,
@@ -1039,17 +1065,44 @@ pub fn chamfer_v2_on(
             reason: "no edges specified".into(),
         });
     }
+    let mut pairs: Vec<(EdgeId, FaceId)> = Vec::with_capacity(edges.len());
+    for &(edge, face) in edges {
+        match pairs.iter().find(|&&(e, _)| e == edge) {
+            Some(&(_, other)) if other != face => {
+                return Err(OperationsError::InvalidInput {
+                    reason: format!("chamfer edge {edge:?} has two reference faces"),
+                });
+            }
+            Some(_) => {}
+            None => pairs.push((edge, face)),
+        }
+    }
+    // A reference off its edge, or an edge off the outer shell, goes to the
+    // walking engine, which refuses it.
+    let adjacency = topo.build_adjacency(solid)?;
+    let bordered = pairs.iter().all(|&(edge, face)| {
+        let around = adjacency.faces_for_edge(edge);
+        around.len() == 2 && around.contains(&face)
+    });
+    if bordered
+        && let Some(result) = crate::chamfer::chamfer_exactly_on(topo, solid, &pairs, d1, d2)?
+    {
+        return Ok(chamfered_whole(result, &pairs));
+    }
     let mut builder = ChamferBuilder::new(topo, solid);
     builder.add_edges_asymmetric_on(edges, d1, d2);
     let built = builder.build()?;
     own_cavities(topo, solid, built, "chamfer")
 }
 
-/// Chamfer edges with distance and angle (v2 engine).
+/// Chamfer edges with distance and angle (v2 engine): `distance` on each
+/// edge's first face in the solid's face order, and `distance * tan(angle)`
+/// on its other face, as [`chamfer_v2`] takes them.
 ///
 /// # Errors
 /// Returns `OperationsError` if distance is non-positive, angle is out of
-/// range (0, pi/2), edges are empty, or the blend computation fails.
+/// range (0, pi/2), edges are empty, a rim's distance consumes its cap or
+/// wall, or the blend computation fails.
 pub fn chamfer_distance_angle(
     topo: &mut Topology,
     solid: SolidId,
@@ -1072,10 +1125,49 @@ pub fn chamfer_distance_angle(
             reason: "no edges specified".into(),
         });
     }
+    let other = distance * angle.tan();
+    if let Some(pairs) = on_first_faces(topo, solid, edges)?
+        && let Some(result) =
+            crate::chamfer::chamfer_exactly_on(topo, solid, &pairs, distance, other)?
+    {
+        return Ok(chamfered_whole(result, &pairs));
+    }
     let mut builder = ChamferBuilder::new(topo, solid);
     builder.add_edges_distance_angle(edges, distance, angle);
     let built = builder.build()?;
     own_cavities(topo, solid, built, "chamfer")
+}
+
+/// Each edge, once, with its first face in the outer shell's face order,
+/// the face the walking chamfer sets `d1` on. `None` when an edge does not
+/// lie between two faces of the outer shell.
+fn on_first_faces(
+    topo: &Topology,
+    solid: SolidId,
+    edges: &[EdgeId],
+) -> Result<Option<Vec<(EdgeId, FaceId)>>, OperationsError> {
+    let adjacency = topo.build_adjacency(solid)?;
+    let mut pairs: Vec<(EdgeId, FaceId)> = Vec::with_capacity(edges.len());
+    for &edge in edges {
+        if pairs.iter().any(|&(e, _)| e == edge) {
+            continue;
+        }
+        let [first, _] = adjacency.faces_for_edge(edge) else {
+            return Ok(None);
+        };
+        pairs.push((edge, *first));
+    }
+    Ok(Some(pairs))
+}
+
+/// An exact chamfer of every edge in `pairs` as a blend result.
+fn chamfered_whole(solid: SolidId, pairs: &[(EdgeId, FaceId)]) -> BlendResult {
+    BlendResult {
+        solid,
+        succeeded: pairs.iter().map(|&(e, _)| e).collect(),
+        failed: Vec::new(),
+        is_partial: false,
+    }
 }
 
 /// Fillet edges with per-edge radius laws (v2 walking engine).
