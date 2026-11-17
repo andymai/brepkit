@@ -15,8 +15,8 @@ There are three fillet code paths and two chamfer paths. "v1 vs v2" is a simplif
 
 ### Chamfer engines
 
-- **flat-bevel chamfer** `crates/operations/src/chamfer.rs`, `pub fn chamfer` → `chamfer_core` → `FaceSpec` assembly (`assemble_solid_mixed`). Planar-only: it refuses curved edges rather than rebuilding them as chords, after `chamfer` has offered the selection to the rim path and to `chamfer_chain.rs` (chains of lines and arcs along one cap or one wall: tangent joins, corners between two picked edges, straight edges along a cylinder's rulings). NOT the blend engine and NOT the same code as the v1 fillet bevel. If a `chamfer` (no V2) bug is "refuses NURBS faces," it is this engine.
-- **v2 chamfer** `blend_ops::chamfer_v2` and `chamfer_distance_angle` in `crates/blend`.
+- **flat-bevel chamfer** `crates/operations/src/chamfer.rs`, `pub fn chamfer` → `chamfer_core` → `FaceSpec` assembly (`assemble_solid_mixed`). Planar-only: it refuses curved edges rather than rebuilding them as chords, after `chamfer` has offered the selection to the rim path and to `chamfer_chain.rs` (chains of lines and arcs along one cap or one wall: tangent joins, corners between two picked edges, straight edges along a cylinder's rulings, free ends on a plane square or slanted to the edge). NOT the blend engine and NOT the same code as the v1 fillet bevel. If a `chamfer` (no V2) bug is "refuses NURBS faces," it is this engine.
+- **v2 chamfer** `blend_ops::chamfer_v2`, `chamfer_v2_on` and `chamfer_distance_angle`. They offer a pick to the rim path and the chain path (`chamfer::chamfer_exactly_on`, two distances) first, and give any other pick to `ChamferBuilder` in `crates/blend`, which trims plane faces only.
 
 ### The dispatcher
 
@@ -37,8 +37,8 @@ If `filter_filletable_edges` drops all edges, or no engine yields a closed shell
 | `filletVariable` | `fillet_variable` | v1 `fillet::fillet_variable` |
 | `chamfer` | `chamfer_solid` → `chamfer::chamfer` | flat-bevel chamfer (planar-only) |
 | `filletV2` | `fillet_v2` | v2 `blend_ops::fillet_v2` |
-| `chamferV2` | `chamfer_v2` | v2 `blend_ops::chamfer_v2` |
-| `chamferDistanceAngle` | `chamfer_distance_angle` | v2 `blend_ops::chamfer_distance_angle` |
+| `chamferV2` | `chamfer_v2` | `blend_ops::chamfer_v2`: rims and chains exactly, then the v2 builder |
+| `chamferDistanceAngle` | `chamfer_distance_angle` | `blend_ops::chamfer_distance_angle`: rims and chains exactly, then the v2 builder |
 
 `executeBatch` (`bindings/batch.rs`) mirrors this: op `"fillet"` → `try_fillet`, `"chamfer"` → `chamfer::chamfer`, `"filletVariable"` → `fillet::fillet_variable`.
 
