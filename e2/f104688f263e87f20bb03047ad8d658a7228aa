@@ -1,0 +1,23 @@
+crates/operations/src/tessellate/mesh_ops.rs
+  s_489e8e320eebde::t_a864a537a99111 482-484,490-492,500,559-562,595
+crates/operations/src/tessellate/solid.rs
+  s_489e8e320eebde::t_df82e1410456e0 17-19,1765-1768,1771,1773-1793,1795-1802,1806-1811
+crates/operations/src/tessellate/tests.rs
+  s_489e8e320eebde::t_87c504244c88f5 5250-5303
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e2f104688f263e87f20bb03047ad8d658a7228aa",
+  "prompts": {},
+  "sessions": {
+    "s_489e8e320eebde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1a2a9261-2019-4199-aa4f-06130071c8f0",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
