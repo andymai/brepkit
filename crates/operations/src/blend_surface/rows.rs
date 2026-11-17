@@ -51,6 +51,12 @@ pub(super) fn smoother(x: f64) -> f64 {
     x * x * x * (x * (6.0 * x - 15.0) + 10.0)
 }
 
+/// The slope of [`smoother`]: `30 x^2 (1 - x)^2`.
+pub(super) fn smoother_slope(x: f64) -> f64 {
+    let y = x * (1.0 - x);
+    30.0 * y * y
+}
+
 /// What each piece's rows need added to meet at its breaks.
 pub(super) struct Ramps {
     /// `(jump at start of piece, jump at end of piece)`, each half the gap.
