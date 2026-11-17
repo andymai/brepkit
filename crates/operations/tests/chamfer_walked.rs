@@ -685,3 +685,81 @@ fn a_rim_round_a_torus_tube_takes_a_chamfer() {
         assert_eq!(contacts, ["nurbs_curve"], "{name}");
     }
 }
+
+/// That a chamfer refused `edge` and left `solid` as it was: the result is
+/// the input, the edge is in `failed` and nothing in `succeeded`, and the
+/// input is still valid and watertight, with its volume `before`. The text
+/// of the edge's failure.
+fn refused(
+    topo: &Topology,
+    solid: SolidId,
+    built: &brepkit_blend::BlendResult,
+    edge: EdgeId,
+    before: f64,
+    what: &str,
+) -> String {
+    assert_eq!(built.solid, solid, "{what}: a new solid");
+    assert!(built.succeeded.is_empty(), "{what}: {:?}", built.succeeded);
+    let failure = built
+        .failed
+        .iter()
+        .find(|(e, _)| *e == edge)
+        .unwrap_or_else(|| panic!("{what}: the edge is not in failed"));
+    assert!(validate_solid(topo, solid).unwrap().is_valid(), "{what}");
+    assert!(
+        is_watertight(&tessellate_solid(topo, solid, 0.01).unwrap()),
+        "{what}: its mesh is open"
+    );
+    let now = solid_volume(topo, solid, 0.001).unwrap();
+    assert!(
+        (now - before).abs() <= 1e-12 * before,
+        "{what}: {now} against {before}"
+    );
+    format!("{:?}", failure.1)
+}
+
+/// The common part of two cylinders of radius 2 and height 4 whose axes lie
+/// 3 apart, and its two ridges, one stored up and one down.
+fn lens(topo: &mut Topology) -> (SolidId, Vec<EdgeId>) {
+    let a = make_cylinder(topo, 2.0, 4.0).unwrap();
+    let b = make_cylinder(topo, 2.0, 4.0).unwrap();
+    transform_solid(topo, b, &Mat4::translation(3.0, 0.0, 0.0)).unwrap();
+    let lens = boolean(topo, BooleanOp::Intersect, a, b).unwrap();
+    let ridges: Vec<EdgeId> = solid_edges(topo, lens)
+        .unwrap()
+        .into_iter()
+        .filter(|&e| {
+            let edge = topo.edge(e).unwrap();
+            [edge.start(), edge.end()]
+                .into_iter()
+                .all(|v| (topo.vertex(v).unwrap().point().x() - 1.5).abs() < 1e-6)
+        })
+        .collect();
+    (lens, ridges)
+}
+
+/// A lens's ridge, where the builder cannot close the chamfer's ends: each
+/// ridge is refused on its own, and the solid comes back as it was, from
+/// the builder and from `chamfer_v2`.
+#[test]
+fn a_ridge_whose_chamfer_ends_do_not_close_is_refused_on_its_own() {
+    let mut topo = Topology::new();
+    let (solid, ridges) = lens(&mut topo);
+    assert_eq!(ridges.len(), 2);
+    let before = solid_volume(&topo, solid, 0.001).unwrap();
+    for &ridge in &ridges {
+        let what = format!("{ridge:?}");
+        let mut builder = ChamferBuilder::new(&mut topo, solid);
+        builder.add_edges_symmetric(&[ridge], 0.3);
+        let built = builder.build().unwrap();
+        refused(&topo, solid, &built, ridge, before, &what);
+        let built = chamfer_v2(&mut topo, solid, &[ridge], 0.3, 0.3).unwrap();
+        refused(&topo, solid, &built, ridge, before, &what);
+    }
+    let mut builder = ChamferBuilder::new(&mut topo, solid);
+    builder.add_edges_symmetric(&ridges, 0.3);
+    let built = builder.build().unwrap();
+    for &ridge in &ridges {
+        refused(&topo, solid, &built, ridge, before, "both ridges");
+    }
+}

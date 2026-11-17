@@ -29,6 +29,7 @@ use crate::walker::{Walker, WalkerConfig, interpolate_chamfer_band};
 use crate::{BlendError, BlendResult};
 
 /// Internal representation of a chamfer edge set with its distance parameters.
+#[derive(Clone)]
 enum ChamferEdgeSet {
     /// Two explicit distances (d1 on face 1, d2 on face 2).
     TwoDistance {
@@ -160,6 +161,9 @@ impl<'a> ChamferBuilder<'a> {
     ///    at a vertex of one trimmed before ends the build.
     /// 6. Assemble new solid from trimmed faces, blend faces, untouched
     ///    original faces, and the input's inner shells.
+    /// 7. If a stripe that trimmed a curved face cannot build its chamfer
+    ///    face or close its ends, record it as failed and build again
+    ///    without it.
     ///
     /// The input solid comes through unchanged, whether the build succeeds
     /// or fails.
@@ -181,30 +185,49 @@ impl<'a> ChamferBuilder<'a> {
         // chamfer's ends rewrites its end faces' wires, all in place on faces
         // the input shares with the result.
         let snapshot = SolidSnapshot::capture(topo, solid)?;
-        let result = ChamferBuilder {
-            topo: &mut *topo,
-            solid,
-            edge_sets,
-        }
-        .build_in_place();
-        match result {
-            Ok(result) => {
-                let preserve = snapshot.clone_result_source_faces(topo, result.solid);
-                let restore = snapshot.restore(topo);
-                match (preserve, restore) {
-                    (Ok(()), Ok(())) => Ok(result),
-                    (Err(error), _) | (_, Err(error)) => Err(error),
-                }
+        // Curved stripes whose chamfer faces or ends failed in an earlier
+        // pass, each with its failure: the next pass leaves them out.
+        let mut left_out: Vec<(EdgeId, BlendError)> = Vec::new();
+        loop {
+            let skip: HashSet<EdgeId> = left_out.iter().map(|(edge, _)| *edge).collect();
+            let pass = ChamferBuilder {
+                topo: &mut *topo,
+                solid,
+                edge_sets: edge_sets.clone(),
             }
-            Err(error) => {
-                snapshot.restore(topo)?;
-                Err(error)
+            .build_in_place(&skip);
+            match pass {
+                Ok(Pass::Built(mut result)) => {
+                    result.failed.append(&mut left_out);
+                    result.is_partial = result.solid != solid && !result.failed.is_empty();
+                    let preserve = snapshot.clone_result_source_faces(topo, result.solid);
+                    let restore = snapshot.restore(topo);
+                    return match (preserve, restore) {
+                        (Ok(()), Ok(())) => Ok(result),
+                        (Err(error), _) | (_, Err(error)) => Err(error),
+                    };
+                }
+                Ok(Pass::Without(edges, error)) => {
+                    snapshot.restore(topo)?;
+                    let Some((&first, rest)) = edges.split_first() else {
+                        return Err(error);
+                    };
+                    let again: Vec<(EdgeId, BlendError)> =
+                        rest.iter().map(|&edge| (edge, restated(&error))).collect();
+                    left_out.push((first, error));
+                    left_out.extend(again);
+                }
+                Err(error) => {
+                    snapshot.restore(topo)?;
+                    return Err(error);
+                }
             }
         }
     }
 
+    /// One pass of [`Self::build`], with the edges in `skip` left out.
     #[allow(clippy::too_many_lines)]
-    fn build_in_place(self) -> Result<BlendResult, BlendError> {
+    fn build_in_place(self, skip: &HashSet<EdgeId>) -> Result<Pass, BlendError> {
         let scope = trimmer::SplitScope::of_solid(self.topo, self.solid)?;
         let adjacency = self.topo.build_adjacency(self.solid)?;
         let solid = self.topo.solid(self.solid)?;
@@ -270,6 +293,7 @@ impl<'a> ChamferBuilder<'a> {
                 },
             ));
         }
+        all_edges.retain(|(edge, _, _)| !skip.contains(edge));
 
         let topo = self.topo;
 
@@ -308,6 +332,9 @@ impl<'a> ChamferBuilder<'a> {
         // builder does not make: the second one to trim there ends the build
         // before the work on the rest.
         let mut ends_taken: HashMap<VertexId, EdgeId> = HashMap::new();
+        // The stripes that trimmed a curved face, which main's builder
+        // refused at the trim: a later failure of one of them leaves it out.
+        let mut curved_edges: Vec<EdgeId> = Vec::new();
         for (edge_id, sr) in stripe_results {
             let stripe = &sr.stripe;
 
@@ -446,67 +473,36 @@ impl<'a> ChamferBuilder<'a> {
             }
             consumed.extend(slivers);
             succeeded.push(edge_id);
+            if curved {
+                curved_edges.push(edge_id);
+            }
             trimmed.push((edge_id, sr, contacts));
         }
 
         // If no stripe trimmed, return the original solid with all failures.
         if trimmed.is_empty() {
-            return Ok(BlendResult {
+            return Ok(Pass::Built(BlendResult {
                 solid: self.solid,
                 succeeded: Vec::new(),
                 failed,
                 is_partial: false,
-            });
+            }));
         }
 
         let mut blend_face_ids: Vec<FaceId> = Vec::new();
         let mut cross_edges: Vec<CrossEdge> = Vec::new();
 
-        for (edge_id, sr, [c1, c2]) in &trimmed {
-            // Reuse the trimmed neighbours' contact edges (mirrors the fillet
-            // builder): a freshly minted duplicate leaves both copies use-1
-            // and opens the shell along the chamfer flanks.
-            if sr.stripe.spine.is_closed() {
-                let supports = [sr.stripe.face1, sr.stripe.face2]
-                    .map(|f| face_replacements.get(&f).copied().unwrap_or(f));
-                let face = closed_chamfer_face(topo, &sr.stripe, [*c1, *c2], supports)?;
-                blend_face_ids.push(face);
-                continue;
-            }
-            let info = crate::builder_utils::create_chamfer_face_with_contacts(
-                topo, &sr.stripe, *c1, *c2,
-            )?;
-            orient_chamfer_face(topo, info.face, &sr.stripe)?;
-            if let (
-                FaceSurface::Nurbs(_) | FaceSurface::Cone(_) | FaceSurface::Cylinder(_),
-                [Some(c1), Some(c2)],
-            ) = (&sr.stripe.surface, [*c1, *c2])
-            {
-                let supports = [sr.stripe.face1, sr.stripe.face2]
-                    .map(|f| face_replacements.get(&f).copied().unwrap_or(f));
-                run_against_supports(topo, info.face, [(supports[0], c1), (supports[1], c2)])?;
-            }
-            // A closed rim has no end faces to take its cross edges. The
-            // spine runs the chamfered edge forward, so the cross edge at its
-            // end cuts off the edge's end vertex and the one at its start,
-            // the edge's start vertex.
-            if !sr.stripe.spine.is_closed() {
-                let chamfered = topo.edge(*edge_id)?;
-                let ends = [
-                    info.cross_end.map(|c| (c, chamfered.end())),
-                    info.cross_start.map(|c| (c, chamfered.start())),
-                ];
-                for ((edge, from, to), corner) in ends.into_iter().flatten() {
-                    cross_edges.push(CrossEdge {
-                        edge,
-                        from,
-                        to,
-                        corner,
-                        chamfer: info.face,
-                    });
+        for (edge_id, sr, contacts) in &trimmed {
+            match chamfer_face_of(topo, *edge_id, &sr.stripe, *contacts, &face_replacements) {
+                Ok((face, ends)) => {
+                    blend_face_ids.push(face);
+                    cross_edges.extend(ends);
                 }
+                Err(error) if curved_edges.contains(edge_id) => {
+                    return Ok(Pass::Without(vec![*edge_id], error));
+                }
+                Err(error) => return Err(error),
             }
-            blend_face_ids.push(info.face);
         }
 
         let mut result_faces: Vec<FaceId> = original_faces
@@ -515,7 +511,18 @@ impl<'a> ChamferBuilder<'a> {
             .filter(|fid| !consumed.contains(fid))
             .collect();
 
-        close_chamfer_ends(topo, &result_faces, &cross_edges)?;
+        if let Err(error) = close_chamfer_ends(topo, &result_faces, &cross_edges) {
+            // The open curved stripes take their ends' failure.
+            let open: Vec<EdgeId> = trimmed
+                .iter()
+                .filter(|(edge, sr, _)| curved_edges.contains(edge) && !sr.stripe.spine.is_closed())
+                .map(|(edge, _, _)| *edge)
+                .collect();
+            if open.is_empty() {
+                return Err(error);
+            }
+            return Ok(Pass::Without(open, error));
+        }
         result_faces.extend(&blend_face_ids);
 
         let new_shell = Shell::new(result_faces)?;
@@ -524,13 +531,84 @@ impl<'a> ChamferBuilder<'a> {
         let new_solid_id = topo.add_solid(new_solid);
 
         let is_partial = !failed.is_empty();
-        Ok(BlendResult {
+        Ok(Pass::Built(BlendResult {
             solid: new_solid_id,
             succeeded,
             failed,
             is_partial,
-        })
+        }))
     }
+}
+
+/// What one pass of [`ChamferBuilder::build`] gives: the result, or curved
+/// stripes to leave out of the next pass, with the failure that stopped
+/// this one.
+enum Pass {
+    Built(BlendResult),
+    Without(Vec<EdgeId>, BlendError),
+}
+
+/// The same failure again, for each further edge that one failure stopped.
+fn restated(error: &BlendError) -> BlendError {
+    match error {
+        BlendError::TrimmingFailure { face } => BlendError::TrimmingFailure { face: *face },
+        BlendError::UnsupportedSurface { face, surface_tag } => BlendError::UnsupportedSurface {
+            face: *face,
+            surface_tag: surface_tag.clone(),
+        },
+        BlendError::CornerFailure { vertex } => BlendError::CornerFailure { vertex: *vertex },
+        other => BlendError::PlanningFailure {
+            reason: other.to_string(),
+        },
+    }
+}
+
+/// The chamfer face of a trimmed stripe on the edge `edge_id`, with the
+/// cross edges at its ends. It reuses the contact edges that the trims left
+/// on its two faces (a fresh duplicate leaves both copies used once and
+/// opens the shell along the chamfer's flanks).
+fn chamfer_face_of(
+    topo: &mut Topology,
+    edge_id: EdgeId,
+    stripe: &crate::stripe::Stripe,
+    [c1, c2]: [Option<EdgeId>; 2],
+    face_replacements: &HashMap<FaceId, FaceId>,
+) -> Result<(FaceId, Vec<CrossEdge>), BlendError> {
+    let supports =
+        [stripe.face1, stripe.face2].map(|f| face_replacements.get(&f).copied().unwrap_or(f));
+    if stripe.spine.is_closed() {
+        let face = closed_chamfer_face(topo, stripe, [c1, c2], supports)?;
+        return Ok((face, Vec::new()));
+    }
+    let info = crate::builder_utils::create_chamfer_face_with_contacts(topo, stripe, c1, c2)?;
+    orient_chamfer_face(topo, info.face, stripe)?;
+    if let (
+        FaceSurface::Nurbs(_) | FaceSurface::Cone(_) | FaceSurface::Cylinder(_),
+        [Some(c1), Some(c2)],
+    ) = (&stripe.surface, [c1, c2])
+    {
+        run_against_supports(topo, info.face, [(supports[0], c1), (supports[1], c2)])?;
+    }
+    // The spine runs the chamfered edge forward, so the cross edge at its
+    // end cuts off the edge's end vertex and the one at its start, the
+    // edge's start vertex.
+    let chamfered = topo.edge(edge_id)?;
+    let ends = [
+        info.cross_end.map(|c| (c, chamfered.end())),
+        info.cross_start.map(|c| (c, chamfered.start())),
+    ];
+    let cross = ends
+        .into_iter()
+        .flatten()
+        .map(|((edge, from, to), corner)| CrossEdge {
+            edge,
+            from,
+            to,
+            corner,
+            chamfer: info.face,
+        })
+        .collect();
+    Ok((info.face, cross))
 }
 
 /// The far edge of a trimmed face left as that edge and the contact along
@@ -1543,7 +1621,6 @@ fn compute_chamfer_stripe(
 
     let surf1 = topo.face(face1)?.surface().clone();
     let surf2 = topo.face(face2)?.surface().clone();
-
     let spine = Spine::from_single_edge(topo, edge_id)?;
 
     if let Some(result) =
