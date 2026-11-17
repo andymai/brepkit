@@ -55,11 +55,28 @@ impl<'a> Arc<'a> {
             topo.vertex(edge.end())?.point(),
         );
         let curve = edge.curve();
+        Ok(Self::spanning(
+            edge_id,
+            curve,
+            ends,
+            curve.domain_with_endpoints(ends.0, ends.1),
+            forward,
+        ))
+    }
+
+    /// The edge's stretch over the parameters `span`, run as `forward` says.
+    fn spanning(
+        edge_id: EdgeId,
+        curve: &'a EdgeCurve,
+        ends: (Point3, Point3),
+        span: (f64, f64),
+        forward: bool,
+    ) -> Self {
         let mut arc = Self {
             edge: edge_id,
             curve,
             ends,
-            span: curve.domain_with_endpoints(ends.0, ends.1),
+            span,
             forward,
             fractions: Vec::new(),
             points: Vec::new(),
@@ -82,7 +99,78 @@ impl<'a> Arc<'a> {
                 arc.hi[k] = arc.hi[k].max(c);
             }
         }
-        Ok(arc)
+        arc
+    }
+
+    /// The edge in stretches none of which can cross itself, in the wire's
+    /// direction: a line, a circle or an ellipse whole, and a B-spline
+    /// split until each stretch's control points run one way. A curve
+    /// whose control points all step forward along one direction moves
+    /// forward along it (its positive weights keep it from crossing a line
+    /// more often than its control points do), so it cannot come back to
+    /// cross itself.
+    fn stretches(self) -> Vec<Self> {
+        const DEPTH: u32 = 12;
+        let EdgeCurve::NurbsCurve(nurbs) = self.curve else {
+            return vec![self];
+        };
+        let one_way = |points: &[Point3]| {
+            let (Some(&first), Some(&last)) = (points.first(), points.last()) else {
+                return false;
+            };
+            let along = last - first;
+            points
+                .windows(2)
+                .all(|pair| (pair[1] - pair[0]).dot(along) > 0.0)
+        };
+        let whole: Option<Vec<Point3>> = nurbs
+            .weights()
+            .iter()
+            .all(|&w| w > 0.0)
+            .then(|| nurbs.control_points().to_vec());
+        if whole.is_some_and(|points| one_way(&points)) {
+            return vec![self];
+        }
+        let (t0, t1) = self.span;
+        let (lo, hi) = (t0.min(t1), t0.max(t1));
+        let mut cuts: Vec<f64> = std::iter::once(lo)
+            .chain(nurbs.knots().iter().copied().filter(|&k| k > lo && k < hi))
+            .chain(std::iter::once(hi))
+            .collect();
+        cuts.dedup();
+        let bezier = |a: f64, b: f64| -> Option<Vec<Point3>> {
+            let hull = curve_bezier_between(nurbs, a, b).ok()?;
+            hull.iter()
+                .map(|&[x, y, z, w]| (w > 0.0).then(|| Point3::new(x / w, y / w, z / w)))
+                .collect()
+        };
+        let mut spans = Vec::new();
+        let mut stack: Vec<(f64, f64, u32)> = cuts
+            .windows(2)
+            .rev()
+            .map(|pair| (pair[0], pair[1], 0))
+            .collect();
+        while let Some((a, b, depth)) = stack.pop() {
+            if depth >= DEPTH || bezier(a, b).is_some_and(|points| one_way(&points)) {
+                spans.push((a, b));
+            } else {
+                let mid = 0.5 * (a + b);
+                stack.push((mid, b, depth + 1));
+                stack.push((a, mid, depth + 1));
+            }
+        }
+        // `span` runs from `t0`; the wire runs from `t0` when `forward`.
+        let rising = t1 >= t0;
+        if !rising {
+            spans = spans.iter().rev().map(|&(a, b)| (b, a)).collect();
+        }
+        if !self.forward {
+            spans.reverse();
+        }
+        spans
+            .into_iter()
+            .map(|span| Self::spanning(self.edge, self.curve, self.ends, span, self.forward))
+            .collect()
     }
 
     /// The fractions at which the edge is read: the two ends of a line, and
@@ -496,8 +584,12 @@ fn wires_cross(surface: &FaceSurface, a: &[Arc<'_>], b: &[Arc<'_>], tol: f64) ->
     })
 }
 
-/// Whether `wire` crosses itself, as [`wires_cross`] reads a wire against
-/// itself, with the pairs of edges it reads found by a sweep.
+/// Whether `wire`, its edges cut into stretches that cannot cross
+/// themselves ([`Arc::stretches`]), crosses itself, as [`wires_cross`]
+/// reads a wire against itself, with the pairs of stretches it reads found
+/// by a sweep. `uses[k]` is the place in the wire of the edge stretch `k`
+/// belongs to, so the stretches of one B-spline that loops are read against
+/// each other.
 ///
 /// The edges are swept in the order their boxes start along the axis the
 /// wire spans most, and an edge is read against the edges whose boxes,
@@ -505,7 +597,7 @@ fn wires_cross(surface: &FaceSurface, a: &[Arc<'_>], b: &[Arc<'_>], tol: f64) ->
 /// pair is read once. A meeting at the vertex two edges in a row share is
 /// the wire running on, which never crosses: it is kept as a neighbour of
 /// the other meetings, and its sides are not read.
-fn wire_crosses_itself(surface: &FaceSurface, wire: &[Arc<'_>], tol: f64) -> bool {
+fn wire_crosses_itself(surface: &FaceSurface, wire: &[Arc<'_>], uses: &[usize], tol: f64) -> bool {
     let count = wire.len();
     let mut lo = [f64::INFINITY; 3];
     let mut hi = [f64::NEG_INFINITY; 3];
@@ -532,7 +624,8 @@ fn wire_crosses_itself(surface: &FaceSurface, wire: &[Arc<'_>], tol: f64) -> boo
     for &j in &order {
         active.retain(|&i| end(i) >= start(j));
         for &i in &active {
-            if wire[i].edge == wire[j].edge {
+            // Two uses of one edge (a seam) lie along each other.
+            if wire[i].edge == wire[j].edge && uses[i] != uses[j] {
                 continue;
             }
             let (a, b) = (i.min(j), i.max(j));
@@ -762,6 +855,23 @@ pub fn check_face_wires_apart(
     Ok(vec![])
 }
 
+/// A wire's edges cut into stretches that cannot cross themselves, and for
+/// each stretch the place of its edge in the wire.
+fn wire_stretches(
+    topo: &Topology,
+    wire_id: WireId,
+) -> Result<(Vec<Arc<'_>>, Vec<usize>), CheckError> {
+    let mut stretches = Vec::new();
+    let mut uses = Vec::new();
+    for (place, oe) in topo.wire(wire_id)?.edges().iter().enumerate() {
+        for stretch in Arc::of(topo, oe.edge(), oe.is_forward())?.stretches() {
+            stretches.push(stretch);
+            uses.push(place);
+        }
+    }
+    Ok((stretches, uses))
+}
+
 /// Check that no wire of a plane face crosses itself.
 ///
 /// No edge of a wire may cross another edge of the same wire. Edges that
@@ -783,13 +893,9 @@ pub fn check_face_wires_simple(
         return Ok(vec![]);
     }
     for wire_id in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
-        let arcs = topo
-            .wire(wire_id)?
-            .edges()
-            .iter()
-            .map(|oe| Arc::of(topo, oe.edge(), oe.is_forward()))
-            .collect::<Result<Vec<_>, _>>()?;
-        if arcs.len() > 1 && wire_crosses_itself(face.surface(), &arcs, tolerance) {
+        let (stretches, uses) = wire_stretches(topo, wire_id)?;
+        if stretches.len() > 1 && wire_crosses_itself(face.surface(), &stretches, &uses, tolerance)
+        {
             return Ok(vec![issue(
                 face_id,
                 format!("wire {} crosses itself", wire_id.index()),
@@ -965,6 +1071,59 @@ mod tests {
         assert_eq!(crossed(&topo, face), None);
     }
 
+    /// A cubic and the line between its ends, on a plane.
+    fn cubic_and_chord(topo: &mut Topology, control: [[f64; 2]; 4]) -> FaceId {
+        let points: Vec<Point3> = control
+            .iter()
+            .map(|&[x, y]| Point3::new(x, y, 0.0))
+            .collect();
+        let cubic = brepkit_math::nurbs::curve::NurbsCurve::new(
+            3,
+            vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+            points.clone(),
+            vec![1.0; 4],
+        )
+        .unwrap();
+        let a = vertex(topo, [points[0].x(), points[0].y(), 0.0]);
+        let b = vertex(topo, [points[3].x(), points[3].y(), 0.0]);
+        let curve = topo.add_edge(Edge::new(a, b, EdgeCurve::NurbsCurve(cubic)));
+        let chord = topo.add_edge(Edge::new(b, a, EdgeCurve::Line));
+        let wire = topo.add_wire(
+            Wire::new(
+                vec![
+                    OrientedEdge::new(curve, true),
+                    OrientedEdge::new(chord, true),
+                ],
+                true,
+            )
+            .unwrap(),
+        );
+        flat(topo, wire, vec![])
+    }
+
+    /// A cubic whose control points run out and back loops over itself,
+    /// crossing at (0.5, 0.5625): one edge, so no pair of edges shows it.
+    #[test]
+    fn a_cubic_that_loops_over_itself_is_reported() {
+        let mut topo = Topology::new();
+        let face = cubic_and_chord(&mut topo, [[0.0, 0.0], [3.0, 3.0], [-2.0, 3.0], [1.0, 0.0]]);
+        assert!(crossed(&topo, face).is_some_and(|d| d.contains("crosses itself")));
+    }
+
+    /// Cubics whose control points run out and back without the curve
+    /// coming back over itself, and one whose control points run one way.
+    #[test]
+    fn cubics_that_do_not_loop_pass() {
+        for control in [
+            [[0.0, 0.0], [-1.0, 1.0], [2.0, 1.0], [1.0, 0.0]],
+            [[0.0, 0.0], [0.3, 1.0], [0.7, 1.0], [1.0, 0.0]],
+        ] {
+            let mut topo = Topology::new();
+            let face = cubic_and_chord(&mut topo, control);
+            assert_eq!(crossed(&topo, face), None, "{control:?}");
+        }
+    }
+
     /// The swept search flags a wire exactly where the search of every pair
     /// of its edges does: random outlines of lines and arcs, many of them
     /// crossing themselves, on a plane.
@@ -1038,7 +1197,7 @@ mod tests {
                 .unwrap();
             let every_pair = wires_cross(&surface, &arcs, &arcs, 1e-6);
             assert_eq!(
-                wire_crosses_itself(&surface, &arcs, 1e-6),
+                wire_crosses_itself(&surface, &arcs, &(0..arcs.len()).collect::<Vec<_>>(), 1e-6),
                 every_pair,
                 "round {round}: {corners:?}"
             );
