@@ -2361,7 +2361,10 @@ fn try_algebraic_intersection(
             if let Some(rulings) = shared_apex_cones(c1, c2, v_range_a, v_range_b)? {
                 return Ok(Some(rulings));
             }
-            algebraic_cone_cone(c1, c2)
+            if let Some(curves) = algebraic_cone_cone(c1, c2)? {
+                return Ok(Some(curves));
+            }
+            Ok(algebraic_parallel_cone_cone(c1, c2, v_range_a, v_range_b))
         }
         (AnalyticSurface::Cone(cone), AnalyticSurface::Sphere(sphere)) => {
             Ok(ruling_cone_sphere(cone, sphere, true))
@@ -4490,6 +4493,131 @@ fn algebraic_parallel_cone_cylinder(
     Ok(Some(curves))
 }
 
+/// Cone-cone intersection for PARALLEL (or antiparallel) axes that do not
+/// coincide, with openings of unequal slope (equal slopes give the exact
+/// conic of [`offset_parallel_cone_cone`]).
+///
+/// Every plane across the axes cuts each cone in a circle about a fixed
+/// centre, the two centres `d` apart, and both radii change linearly with the
+/// height. Two coplanar circles meet at
+/// `u = phi0 +/- acos((d^2 + rho1^2 - rho2^2) / (2*d*rho1))` on the first
+/// cone, which gives two branches parameterised exactly by its own `v`. They
+/// exist where `|rho1 - rho2| <= d <= rho1 + rho2` on both nappes, conditions
+/// linear in `v`, and join where one of the first holds with equality: there
+/// `u` changes like the square root of the distance in `v`, so the samples
+/// close in on both ends of the span.
+///
+/// `None` (the marcher's case) when the axes are not parallel or coincide,
+/// when a cone is flat or a line, or when nothing bounds the span.
+fn algebraic_parallel_cone_cone(
+    c1: &ConicalSurface,
+    c2: &ConicalSurface,
+    v_range_1: Option<(f64, f64)>,
+    v_range_2: Option<(f64, f64)>,
+) -> Option<Vec<IntersectionCurve>> {
+    let axis = c1.axis();
+    let sigma = axis.dot(c2.axis());
+    if sigma.abs() < 1.0 - 1e-10 {
+        return None;
+    }
+    let sigma = sigma.signum();
+    let delta = c2.apex() - c1.apex();
+    let along = delta.dot(axis);
+    let perp = delta - axis * along;
+    let d = perp.length();
+    if d < 1e-9 {
+        return None;
+    }
+    let phi0 = perp.dot(c1.y_axis()).atan2(perp.dot(c1.x_axis()));
+    let (sin1, cos1) = c1.half_angle().sin_cos();
+    let (sin2, cos2) = c2.half_angle().sin_cos();
+    if [sin1, cos1, sin2, cos2].iter().any(|&x| x < 1e-12) {
+        return None;
+    }
+    // The second cone's radius at the first one's `v`, `a + b v`, from the
+    // height `v sin1` above the first apex.
+    let slope2 = cos2 / sin2;
+    let (a, b) = (-sigma * along * slope2, sigma * sin1 * slope2);
+    let (mut lo, mut hi) = (0.0_f64, f64::INFINITY);
+    // Each condition `k v + c >= 0`: the second nappe, then the circles
+    // meeting (`rho1 + rho2 >= d`, `rho2 - rho1 <= d`, `rho1 - rho2 <= d`).
+    for (k, c) in [
+        (b, a),
+        (cos1 + b, a - d),
+        (b - cos1, a + d),
+        (cos1 - b, d - a),
+    ] {
+        if k > 1e-12 {
+            lo = lo.max(-c / k);
+        } else if k < -1e-12 {
+            hi = hi.min(-c / k);
+        } else if c < 0.0 {
+            return Some(Vec::new());
+        }
+    }
+    if let Some((p, q)) = v_range_1 {
+        lo = lo.max(p.min(q));
+        hi = hi.min(p.max(q));
+    }
+    if let Some((p, q)) = v_range_2 {
+        let to_v1 = |v2: f64| sigma.madd(v2 * sin2, along) / sin1;
+        let (p, q) = (to_v1(p), to_v1(q));
+        lo = lo.max(p.min(q));
+        hi = hi.min(p.max(q));
+    }
+    if !hi.is_finite() {
+        return None;
+    }
+    if hi - lo <= 1e-12 {
+        return Some(Vec::new());
+    }
+
+    let n_samples = 128;
+    let mut plus: Vec<Point3> = Vec::with_capacity(n_samples + 1);
+    let mut minus: Vec<Point3> = Vec::with_capacity(n_samples + 1);
+    #[allow(clippy::cast_precision_loss)]
+    for i in 0..=n_samples {
+        let t = i as f64 / n_samples as f64;
+        let v = (hi - lo).madd(0.5 * (1.0 - (std::f64::consts::PI * t).cos()), lo);
+        let rho1 = v * cos1;
+        let rho2 = b.madd(v, a);
+        if rho1 < 1e-12 {
+            // The first apex, a point of the curve only where it lies on the
+            // second cone; `u` means nothing there.
+            if (rho2 - d).abs() < 1e-12 {
+                let apex = c1.apex();
+                plus.push(apex);
+                minus.push(apex);
+            }
+            continue;
+        }
+        let cos_alpha = (d.madd(d, rho1 * rho1) - rho2 * rho2) / (2.0 * d * rho1);
+        let alpha = cos_alpha.clamp(-1.0, 1.0).acos();
+        plus.push(c1.evaluate(phi0 + alpha, v));
+        minus.push(c1.evaluate(phi0 - alpha, v));
+    }
+
+    let mut curves = Vec::new();
+    for pts in [&plus, &minus] {
+        if pts.len() < 4 {
+            continue;
+        }
+        let points: Vec<IntersectionPoint> = pts
+            .iter()
+            .map(|&p| IntersectionPoint {
+                point: p,
+                param1: c1.project_point(p),
+                param2: c2.project_point(p),
+            })
+            .collect();
+        // One branch alone would leave the section chain short of the piece
+        // this path exists to supply: defer the pair instead.
+        let curve = interpolate(pts, 3).ok()?;
+        curves.push(IntersectionCurve { curve, points });
+    }
+    Some(curves)
+}
+
 /// Algebraic sphere-sphere intersection.
 ///
 /// Two spheres intersect in a circle lying in the radical plane.
@@ -5769,6 +5897,82 @@ mod tests {
                 .unwrap()
                 .unwrap();
             assert_eq!(curves.len(), 2, "two branches at ({x}, {y})");
+        }
+    }
+
+    /// A frustum (radius 72 to 50 over 84) and a smaller one standing beside
+    /// its axis on the same base (radius 10 to 5 over 44, axis 70 away): the
+    /// smaller one notches the base rim, and the section is an arch from the
+    /// rim up to where the two circles at one height touch, in two branches
+    /// that meet there. Each lies on both cones, between its samples too.
+    #[test]
+    fn parallel_cones_give_two_exact_branches() {
+        use crate::traits::ParametricCurve;
+        let frustum = |x: f64, r_big: f64, r_small: f64, h: f64| {
+            let apex = h + r_small * h / (r_big - r_small);
+            let cone = ConicalSurface::new(
+                Point3::new(x, 0.0, apex),
+                Vec3::new(0.0, 0.0, -1.0),
+                apex.atan2(r_big),
+            )
+            .unwrap();
+            // `v` at height `z`, from the apex down the wall.
+            let v = move |z: f64| (apex - z) / apex.atan2(r_big).sin();
+            (cone, v(h), v(0.0))
+        };
+        let (big, big_top, big_base) = frustum(0.0, 72.0, 50.0, 84.0);
+        for (x, flip) in [(-70.0_f64, false), (70.0, true)] {
+            let (small, small_top, small_base) = frustum(x, 10.0, 5.0, 44.0);
+            let (first, second) = if flip {
+                (AnalyticSurface::Cone(&small), AnalyticSurface::Cone(&big))
+            } else {
+                (AnalyticSurface::Cone(&big), AnalyticSurface::Cone(&small))
+            };
+            let (hint_first, hint_second) = if flip {
+                ((small_top, small_base), (big_top, big_base))
+            } else {
+                ((big_top, big_base), (small_top, small_base))
+            };
+            let curves = intersect_analytic_analytic_bounded(
+                first,
+                second,
+                32,
+                Some(hint_first),
+                Some(hint_second),
+            )
+            .unwrap();
+            assert_eq!(curves.len(), 2, "x = {x}: the two branches");
+            // The circles touch where 72 - 22 z / 84 + 10 - 5 z / 44 = 70.
+            let touch = 12.0 / (22.0 / 84.0 + 5.0 / 44.0);
+            let mut tops = Vec::new();
+            for c in &curves {
+                let (t0, t1) = c.curve.domain();
+                let ends = [
+                    ParametricCurve::evaluate(&c.curve, t0),
+                    ParametricCurve::evaluate(&c.curve, t1),
+                ];
+                let (low, high) = if ends[0].z() < ends[1].z() {
+                    (ends[0], ends[1])
+                } else {
+                    (ends[1], ends[0])
+                };
+                assert!(low.z().abs() < 1e-9, "x = {x}: starts at z = {}", low.z());
+                assert!((high.z() - touch).abs() < 1e-9, "x = {x}: tops at {high:?}");
+                tops.push(high);
+                for k in 0..=256 {
+                    let p = ParametricCurve::evaluate(
+                        &c.curve,
+                        (t1 - t0).madd(f64::from(k) / 256.0, t0),
+                    );
+                    let on_big = p.x().hypot(p.y()) - (72.0 - 22.0 * p.z() / 84.0);
+                    let on_small = (p.x() - x).hypot(p.y()) - (10.0 - 5.0 * p.z() / 44.0);
+                    assert!(
+                        on_big.abs() < 1e-6 && on_small.abs() < 1e-6,
+                        "x = {x}: {p:?} off by {on_big}, {on_small}"
+                    );
+                }
+            }
+            assert!((tops[0] - tops[1]).length() < 1e-9, "x = {x}: {tops:?}");
         }
     }
 
