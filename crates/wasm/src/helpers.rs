@@ -978,42 +978,55 @@ mod fillet_tests {
     #[test]
     fn a_blend_costs_the_same_among_other_shapes() {
         type Blend = fn(&mut Topology, SolidId, &[EdgeId]) -> SolidId;
+        const BATCH: usize = 8;
         let fillet: Blend = |topo, solid, edges| try_fillet(topo, solid, edges, 1.0).unwrap();
         let chamfer: Blend = |topo, solid, edges| try_chamfer(topo, solid, edges, 1.0).unwrap();
+        // A chamfer takes well under a millisecond, so one slow pass of a
+        // shared CI runner can move a single sample past the bound. Each
+        // sample times a batch of blends, and the two topologies take their
+        // samples in turn so a slow spell reaches both.
         let measure = |topo: &mut Topology, blend: Blend| {
-            let mut least = f64::INFINITY;
-            let mut made = Vec::new();
-            for _ in 0..5 {
-                let solid =
-                    brepkit_operations::primitives::make_box(topo, 20.0, 20.0, 20.0).unwrap();
-                let edges = solid_edge_ids(topo, solid);
+            let boxes: Vec<(SolidId, Vec<EdgeId>)> = (0..BATCH)
+                .map(|_| {
+                    let solid =
+                        brepkit_operations::primitives::make_box(topo, 20.0, 20.0, 20.0).unwrap();
+                    (solid, solid_edge_ids(topo, solid))
+                })
+                .collect();
+            let mut made = Vec::with_capacity(BATCH);
+            let start = std::time::Instant::now();
+            for (solid, edges) in &boxes {
                 let before = (topo.num_edges(), topo.num_wires(), topo.num_faces());
-                let start = std::time::Instant::now();
-                blend(topo, solid, &edges);
-                least = least.min(start.elapsed().as_secs_f64());
+                blend(topo, *solid, edges);
                 made.push((
                     topo.num_edges() - before.0,
                     topo.num_wires() - before.1,
                     topo.num_faces() - before.2,
                 ));
             }
-            (least, made)
+            (start.elapsed().as_secs_f64(), made)
         };
         for (name, blend) in [("fillet", fillet), ("chamfer", chamfer)] {
             let mut alone = Topology::new();
-            let (time_alone, made_alone) = measure(&mut alone, blend);
             let mut crowded = Topology::new();
             for _ in 0..20_000 {
                 brepkit_operations::primitives::make_box(&mut crowded, 10.0, 10.0, 10.0).unwrap();
             }
-            let (time_crowded, made_crowded) = measure(&mut crowded, blend);
-            assert_eq!(
-                made_alone, made_crowded,
-                "{name}: the entities a blend makes must not depend on the other shapes"
-            );
+            let (mut time_alone, mut time_crowded) = (f64::INFINITY, f64::INFINITY);
+            for _ in 0..5 {
+                let (t, made_alone) = measure(&mut alone, blend);
+                time_alone = time_alone.min(t);
+                let (t, made_crowded) = measure(&mut crowded, blend);
+                time_crowded = time_crowded.min(t);
+                assert_eq!(
+                    made_alone, made_crowded,
+                    "{name}: the entities a blend makes must not depend on the other shapes"
+                );
+            }
             assert!(
                 time_crowded < 3.0 * time_alone,
-                "{name}: {time_crowded:.6} s among 20,000 other boxes, {time_alone:.6} s alone"
+                "{name}: {time_crowded:.6} s among 20,000 other boxes, {time_alone:.6} s alone \
+                 (each for {BATCH} blends)"
             );
         }
     }
