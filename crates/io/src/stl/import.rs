@@ -49,7 +49,10 @@ pub struct MeshImport {
 ///   triangles, so two closed bodies that share an edge are two bodies.
 ///   When the import turns each body at such an edge (see below), the
 ///   triangles pair off again round the material after the turn, and the
-///   import places the bodies of the new pairs again.
+///   import places the bodies of the new pairs again. When the triangles of
+///   two surfaces (sets of triangles joined through edges of two triangles)
+///   alternate round the edge, the two surfaces cross there: each pairs with
+///   itself, and the two bodies cross.
 /// - The triangles of such an edge do not pair off, and join one shell,
 ///   when two of them lie at one angle (as two cubes that share a side do),
 ///   or when the stored normals neither agree nor disagree with the
@@ -124,7 +127,12 @@ impl MeshBodies {
 
         let mut links = Links::read(&tris, &points, &votes, &directions, tolerance);
         let mut bodies = split_bodies(&mut tris, &votes, &points, &links);
-        let placement = place_bodies(&mut bodies, &mut tris, &points, &mut links, tolerance);
+        let source = Source {
+            points: &points,
+            votes: &votes,
+            tolerance,
+        };
+        let placement = place_bodies(&mut bodies, &mut tris, &mut links, source);
         Ok(Self {
             points,
             tris,
@@ -431,6 +439,10 @@ struct Links {
     /// For each triangle, whether the pairs took it as wound the other way.
     /// Empty when no edge has more than two triangles.
     facing: Vec<bool>,
+    /// For each triangle, the first triangle of the set joined to it
+    /// through edges of two triangles. Empty when no edge has more than two
+    /// triangles.
+    patch: Vec<usize>,
 }
 
 impl Links {
@@ -449,27 +461,32 @@ impl Links {
             }
         }
         let mut pairs = HashMap::new();
-        let facing = if uses.values().any(|list| list.len() > 2) {
-            let (turned, unsure) = patch_turns(tris, &uses, votes, directions);
+        let (facing, patch) = if uses.values().any(|list| list.len() > 2) {
+            let (turned, unsure, patch) = patch_turns(tris, &uses, votes, directions);
             for (&key, list) in &uses {
                 // The triangles of an edge are in one group, so one of them
                 // tells whether its side is sure.
                 if list.len() <= 2 || unsure[list[0].0] {
                     continue;
                 }
-                for [s, t] in pair_round_edge(key, list, &turned, tris, points, tolerance) {
+                let sides = Sides {
+                    turned: &turned,
+                    patch: &patch,
+                };
+                for [s, t] in pair_round_edge(key, list, sides, tris, points, tolerance) {
                     pairs.insert((s, key), t);
                     pairs.insert((t, key), s);
                 }
             }
-            turned
+            (turned, patch)
         } else {
-            Vec::new()
+            (Vec::new(), Vec::new())
         };
         Self {
             uses,
             pairs,
             facing,
+            patch,
         }
     }
 
@@ -496,8 +513,8 @@ impl Links {
 }
 
 /// For each triangle, whether it is wound against the side of the triangles
-/// joined to it through edges of two triangles, and whether that side is
-/// unsure.
+/// joined to it through edges of two triangles, whether that side is
+/// unsure, and the first triangle of that set.
 ///
 /// Such a set takes the side of most of its triangles as they are wound.
 /// The sets joined through any edge (a group) turn over together when
@@ -511,9 +528,10 @@ fn patch_turns(
     uses: &HashMap<(usize, usize), Vec<(usize, bool)>>,
     votes: &[f64],
     directions: &[Direction],
-) -> (Vec<bool>, Vec<bool>) {
+) -> (Vec<bool>, Vec<bool>, Vec<usize>) {
     let mut turn = vec![false; tris.len()];
     let mut seen = vec![false; tris.len()];
+    let mut patch_of = vec![0; tris.len()];
     let mut patch = Vec::new();
     for seed in 0..tris.len() {
         if seen[seed] {
@@ -546,6 +564,9 @@ fn patch_turns(
             for &t in &patch {
                 turn[t] = !turn[t];
             }
+        }
+        for &t in &patch {
+            patch_of[t] = seed;
         }
     }
 
@@ -589,7 +610,7 @@ fn patch_turns(
             unsure[t] = true;
         }
     }
-    (turn, unsure)
+    (turn, unsure, patch_of)
 }
 
 /// The first triangle of the group of `t`, in a forest of groups.
@@ -601,6 +622,14 @@ fn group_of(group: &mut [usize], mut t: usize) -> usize {
     t
 }
 
+/// For each triangle, the side that the pairs take it to face (see
+/// [`patch_turns`]), and the set of triangles that it is in.
+#[derive(Clone, Copy)]
+struct Sides<'a> {
+    turned: &'a [bool],
+    patch: &'a [usize],
+}
+
 /// The pairs of triangles round an edge of more than two triangles, each
 /// pair the two sides of one body at the edge. Empty when they do not pair
 /// off.
@@ -610,10 +639,15 @@ fn group_of(group: &mut [usize], mut t: usize) -> usize {
 /// body, so the pairs come from the rotation in which no pair does. When
 /// both rotations fit, each pair takes the wedge that both of its triangles
 /// face away from: the material of the body.
+///
+/// Two surfaces cross at the edge when their triangles alternate round it:
+/// two cubes that share an edge, the second turned by 45 degrees round it,
+/// do. Then each surface pairs with itself, so the two bodies stay apart
+/// and [`assign_cavities`] finds that they cross.
 fn pair_round_edge(
     (lo, hi): (usize, usize),
     list: &[(usize, bool)],
-    turned: &[bool],
+    sides: Sides<'_>,
     tris: &[[usize; 3]],
     points: &[Point3],
     tolerance: f64,
@@ -626,6 +660,39 @@ fn pair_round_edge(
         /// Whether the triangle faces the way that the angle grows.
         up: bool,
         tri: usize,
+        /// The first triangle of its set joined through edges of two
+        /// triangles: its surface.
+        patch: usize,
+    }
+
+    /// The pairs when two surfaces cross at the edge: each surface has two
+    /// triangles round the edge, which run it in opposite directions, and
+    /// the triangles of two of them alternate round it. Each pair is the
+    /// two triangles of one surface.
+    fn crossing_surfaces(round: &[Side]) -> Option<Vec<[usize; 2]>> {
+        let mut first: HashMap<usize, Option<usize>> = HashMap::new();
+        let mut pairs = Vec::with_capacity(round.len() / 2);
+        // Surfaces that do not cross nest round the edge, as brackets do:
+        // the last surface to start is the first to end.
+        let mut open = Vec::new();
+        let mut nested = true;
+        for (i, side) in round.iter().enumerate() {
+            match first.get(&side.patch) {
+                None => {
+                    first.insert(side.patch, Some(i));
+                    open.push(side.patch);
+                }
+                Some(&Some(j)) if round[j].up != side.up => {
+                    first.insert(side.patch, None);
+                    pairs.push([round[j].tri, side.tri]);
+                    if nested && open.pop() != Some(side.patch) {
+                        nested = false;
+                    }
+                }
+                Some(_) => return None,
+            }
+        }
+        (!nested && pairs.len() * 2 == round.len()).then_some(pairs)
     }
 
     let n = list.len();
@@ -661,8 +728,9 @@ fn pair_round_edge(
             Side {
                 angle: y.atan2(x),
                 reach: x.hypot(y),
-                up: forward != turned[tri],
+                up: forward != sides.turned[tri],
                 tri,
+                patch: sides.patch[tri],
             }
         })
         .collect();
@@ -684,6 +752,9 @@ fn pair_round_edge(
     });
     if close {
         return Vec::new();
+    }
+    if let Some(pairs) = crossing_surfaces(&round) {
+        return pairs;
     }
 
     let fits = |shift: usize| {
@@ -1186,6 +1257,16 @@ const RAYS: [[f64; 3]; 4] = [
     [-1.0, -0.414_2, -0.302_7],
 ];
 
+/// What the import read from a mesh: its merged points, the vote of the
+/// stored normals of each triangle (see [`mesh_triangles`]), and the merge
+/// tolerance.
+#[derive(Clone, Copy)]
+struct Source<'a> {
+    points: &'a [Point3],
+    votes: &'a [f64],
+    tolerance: f64,
+}
+
 /// What the import makes of an inward closed body.
 #[derive(Debug, Clone, Copy)]
 enum Fate {
@@ -1208,28 +1289,20 @@ enum Fate {
 fn place_bodies(
     bodies: &mut Vec<Body>,
     tris: &mut [[usize; 3]],
-    points: &[Point3],
     links: &mut Links,
-    tolerance: f64,
+    source: Source<'_>,
 ) -> Placement {
     // An edge pairs off again once, so the loop ends.
     let mut paired_again = HashSet::new();
     loop {
-        let (placement, fates) = assign_cavities(bodies, tris, points, links, tolerance);
+        let (placement, fates) =
+            assign_cavities(bodies, tris, source.points, links, source.tolerance);
         let turned: Vec<usize> = fates
             .iter()
             .filter(|(_, fate)| matches!(fate, Fate::Turn))
             .map(|&(i, _)| i)
             .collect();
-        if pair_after_turns(
-            bodies,
-            &turned,
-            tris,
-            points,
-            links,
-            tolerance,
-            &mut paired_again,
-        ) {
+        if pair_after_turns(bodies, &turned, tris, links, source, &mut paired_again) {
             continue;
         }
         for (i, fate) in fates {
@@ -1304,18 +1377,24 @@ fn assign_cavities(
 /// Two inward cubes that share an edge, in no body, are then two solids and
 /// not one solid that pinches at the edge.
 ///
-/// The import has not turned the bodies yet, so each new body has the
-/// winding of the mesh. A new body with no volume is a shell, as in
-/// [`split_bodies`]. An edge in `paired_again` does not pair off again.
+/// The import has not turned the bodies yet. Each new body takes its side
+/// from the winding of the mesh and from its own stored normals (see
+/// [`take_side`]), as a closed body does in [`split_bodies`]. A new body
+/// with no volume is a shell. An edge in `paired_again` does not pair off
+/// again.
 fn pair_after_turns(
     bodies: &mut Vec<Body>,
     turned: &[usize],
-    tris: &[[usize; 3]],
-    points: &[Point3],
+    tris: &mut [[usize; 3]],
     links: &mut Links,
-    tolerance: f64,
+    source: Source<'_>,
     paired_again: &mut HashSet<(usize, usize)>,
 ) -> bool {
+    let Source {
+        points,
+        votes,
+        tolerance,
+    } = source;
     if turned.is_empty() || links.pairs.is_empty() {
         return false;
     }
@@ -1349,7 +1428,11 @@ fn pair_after_turns(
                 if list.iter().any(|&(u, _)| body_of[u] == usize::MAX) {
                     continue;
                 }
-                let pairs = pair_round_edge(key, list, &facing, tris, points, tolerance);
+                let sides = Sides {
+                    turned: &facing,
+                    patch: &links.patch,
+                };
+                let pairs = pair_round_edge(key, list, sides, tris, points, tolerance);
                 if pairs
                     .iter()
                     .any(|&[s, u]| links.pairs.get(&(s, key)) != Some(&u))
@@ -1410,6 +1493,7 @@ fn pair_after_turns(
             }
         }
         members.sort_unstable();
+        take_side(&members, tris, links, votes);
         let (volume6, terms) = signed_volume6(&members, tris, points);
         let closed = volume6.abs() > 1e-12 * terms;
         split.push(Body {
@@ -1434,6 +1518,42 @@ fn pair_after_turns(
     order.sort_unstable_by_key(|body| body.tris[0]);
     *bodies = order;
     true
+}
+
+/// Turn a closed body, wound to one side, to the side that [`split_bodies`]
+/// gives a closed body: the side of most of its triangles as the mesh winds
+/// them, then the other side when its stored normals point against that.
+///
+/// The import can already have turned some of the triangles from their
+/// winding in the mesh; `links` holds that winding.
+fn take_side(members: &[usize], tris: &mut [[usize; 3]], links: &Links, votes: &[f64]) {
+    let turned: Vec<bool> = members
+        .iter()
+        .map(|&t| {
+            let tri = tris[t];
+            let key = edge_key(tri[0], tri[1]);
+            links.uses[&key]
+                .iter()
+                .any(|&(u, forward)| u == t && forward != runs_up(tri, key))
+        })
+        .collect();
+    // Of the two sides, the one that turns fewer triangles of the mesh, as
+    // in `consistent_turns`: on a tie, the first triangle keeps its winding.
+    let count = turned.iter().filter(|&&was| was).count();
+    let mut flip = count * 2 > members.len() || (count * 2 == members.len() && turned[0]);
+    let (mut vote, mut weight) = (0.0, 0.0);
+    for (&t, &was) in members.iter().zip(&turned) {
+        vote += if was == flip { votes[t] } else { -votes[t] };
+        weight += votes[t].abs();
+    }
+    if vote < -0.5 * weight {
+        flip = !flip;
+    }
+    if flip {
+        for &t in members {
+            tris[t].swap(1, 2);
+        }
+    }
 }
 
 /// The margins of the import at coordinates of a given size.

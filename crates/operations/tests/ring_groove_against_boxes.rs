@@ -1,7 +1,7 @@
 //! A rod with a groove, the cut of a torus ring round its axis, against
 //! boxes that take parts of the groove: a flat across the groove's seam, the
-//! top off down to the middle of the groove, a slot across it and a notch out
-//! of its side. Each is cut, intersected and fused, upright, turned and
+//! top off down to the middle of the groove, a slot across it, a notch out
+//! of its side and a corner whose floor lies in it. Each is cut, intersected and fused, upright, turned and
 //! mirrored, without the mesh fallback, and measured against an integral.
 //!
 //! The groove's torus band is a whole turn about the axis, with a meridian
@@ -13,7 +13,9 @@
 //! antipode, which reads either way. And a groove over more than half the
 //! tube (a ring narrower than the rod) read as a flat polygon in the ray
 //! cast, its tube angles centred on the mean of its edges' start vertices,
-//! which leans toward one rim.
+//! which leans toward one rim. A box wall's loop round the tube was cut at
+//! the box's edges alone, so its part over the top of the tube, off the
+//! band, stayed as a section of the band.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::f64::consts::{PI, TAU};
@@ -28,8 +30,10 @@ use brepkit_operations::tessellate::{is_watertight, tessellate_solid};
 use brepkit_operations::transform::transform_solid;
 use brepkit_operations::validate::validate_solid;
 use brepkit_topology::Topology;
+use brepkit_topology::edge::EdgeCurve;
 use brepkit_topology::explorer::solid_faces;
 use brepkit_topology::face::FaceSurface;
+use brepkit_topology::solid::SolidId;
 
 const RADIUS: f64 = 6.0;
 const HEIGHT: f64 = 16.0;
@@ -180,7 +184,13 @@ fn poses() -> [(&'static str, Mat4); 3] {
     ]
 }
 
-fn check(major: f64, block: &Block, op: BooleanOp, pose: &Mat4, label: &str) {
+fn check(
+    major: f64,
+    block: &Block,
+    op: BooleanOp,
+    pose: &Mat4,
+    label: &str,
+) -> (Topology, SolidId) {
     let label = format!("{label}, ring of radius {major}, {op:?}");
     let mut topo = Topology::new();
     let rod = make_cylinder(&mut topo, RADIUS, HEIGHT).unwrap();
@@ -263,6 +273,7 @@ fn check(major: f64, block: &Block, op: BooleanOp, pose: &Mat4, label: &str) {
             }
         }
     }
+    (topo, solid)
 }
 
 fn check_all(majors: &[f64], block: &Block, label: &str) {
@@ -347,4 +358,55 @@ fn a_notch_out_of_the_grooves_side() {
         size: [5.0, 5.0, 1.0],
     };
     check_all(&[5.9], &block, "notch");
+}
+
+/// The box's floor lies inside the groove. Each wall meets the whole tube in
+/// a loop, of which only the part between the band's rims lies on the band:
+/// with a ring of radius 5.9 or 6 the rest runs on over the top of the tube.
+/// With a ring of radius 6.1 or 6.3 the band's lower rim runs 0.2 or 0.011
+/// below the floor, and the wall's arc between the two lies off the wall.
+#[test]
+fn a_corner_whose_floor_lies_in_the_groove() {
+    let block = Block {
+        lo: [2.0, 2.0, 1.9],
+        size: [10.0, 10.0, 10.0],
+    };
+    check_all(&[5.9, 6.0, 6.1, 6.3], &block, "corner");
+}
+
+/// A flat through the axis meets the groove's band in two meridian
+/// circles. The pieces of the band keep them as exact circular arcs.
+/// Turned, the ring of radius 5.9 falls back to a mesh (#2595).
+#[test]
+fn a_flat_through_the_axis_keeps_the_grooves_meridians_circular() {
+    let block = Block {
+        lo: [0.0, -10.0, -2.0],
+        size: [20.0, 20.0, 20.0],
+    };
+    for major in [5.9, 6.0, 6.1, 6.3] {
+        for op in [BooleanOp::Cut, BooleanOp::Intersect, BooleanOp::Fuse] {
+            for (pose_name, pose) in poses() {
+                if major < 6.0 && pose_name == "turned" {
+                    continue;
+                }
+                let label = format!("flat through the axis, {pose_name}");
+                let (topo, solid) = check(major, &block, op, &pose, &label);
+                for face in solid_faces(&topo, solid).unwrap() {
+                    let face = topo.face(face).unwrap();
+                    for wire in
+                        std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied())
+                    {
+                        for oe in topo.wire(wire).unwrap().edges() {
+                            let curve = topo.edge(oe.edge()).unwrap().curve();
+                            assert!(
+                                matches!(curve, EdgeCurve::Line | EdgeCurve::Circle(_)),
+                                "{label}, ring of radius {major}, {op:?}: a {} edge",
+                                curve.type_tag()
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
 }

@@ -6033,6 +6033,95 @@ pub fn split_face_2d(
     distribute_cap_circles(topo, face_id, base, &cap_sections, &cap_points, rank, frame)
 }
 
+/// The face's ball in a chart whose poles lie off the face and clear of its
+/// wires and sections. At a pole every `u` names one point: a wire or a
+/// section that reaches one jumps in `u` there, and the traces cannot follow
+/// it. A pole inside the face would make its outline wind the chart. `None`
+/// for any other surface, for a face with no sections, for a face whose
+/// outline is all chords (a hemisphere of `make_sphere`, whose own paths
+/// read its poles), and for a face whose edges keep clear of its poles.
+fn pole_clear_sphere(
+    topo: &Topology,
+    face_id: FaceId,
+    face: &brepkit_topology::face::Face,
+    sections: &[SectionEdge],
+) -> Option<FaceSurface> {
+    // Samples per edge: a half turn of a great circle is read every 2.8
+    // degrees, inside the 5.7 degrees that counts as near a pole.
+    const SAMPLES: u32 = 64;
+    const CANDIDATES: u32 = 256;
+    let FaceSurface::Sphere(sphere) = face.surface() else {
+        return None;
+    };
+    if sections.is_empty() {
+        return None;
+    }
+    let center = sphere.center();
+    let mut dirs: Vec<Vec3> = Vec::new();
+    let sample = |dirs: &mut Vec<Vec3>, curve: &EdgeCurve, start: Point3, end: Point3| {
+        let (t0, t1) = curve.domain_with_endpoints(start, end);
+        for k in 0..=SAMPLES {
+            let t = (t1 - t0).madd(f64::from(k) / f64::from(SAMPLES), t0);
+            let d = curve.evaluate_with_endpoints(t, start, end) - center;
+            let len = d.length();
+            if len > 0.0 {
+                dirs.push(d * (1.0 / len));
+            }
+        }
+    };
+    let mut chords_only = true;
+    for (i, wid) in std::iter::once(face.outer_wire())
+        .chain(face.inner_wires().iter().copied())
+        .enumerate()
+    {
+        let wire = topo.wire(wid).ok()?;
+        for oe in wire.edges() {
+            let edge = topo.edge(oe.edge()).ok()?;
+            let start = topo.vertex(edge.start()).ok()?.point();
+            let end = topo.vertex(edge.end()).ok()?.point();
+            if i == 0 && !(matches!(edge.curve(), EdgeCurve::Line) && (start - end).length() > 0.0)
+            {
+                chords_only = false;
+            }
+            sample(&mut dirs, edge.curve(), start, end);
+        }
+    }
+    if chords_only {
+        return None;
+    }
+    for s in sections {
+        sample(&mut dirs, &s.curve_3d, s.start, s.end);
+    }
+    // The cosine of the angle from the nearer pole about `axis` to the
+    // nearest sample.
+    let nearest = |axis: Vec3| dirs.iter().fold(0.0_f64, |m, d| m.max(d.dot(axis).abs()));
+    if nearest(sphere.z_axis()) < 0.1_f64.cos() {
+        return None;
+    }
+    let trim = crate::classifier::SphereFaceTrim::new(topo, face_id).ok()??;
+    let radius = sphere.radius();
+    let off_face = |axis: Vec3| {
+        [axis, -axis]
+            .iter()
+            .all(|&a| !trim.holds(center + a * radius, 1e-6 * radius))
+    };
+    let golden = std::f64::consts::PI * (3.0 - 5.0_f64.sqrt());
+    let best = (0..CANDIDATES)
+        .map(|i| {
+            let z = 1.0 - (2.0 * f64::from(i) + 1.0) / f64::from(CANDIDATES);
+            let r = (1.0 - z * z).max(0.0).sqrt();
+            let (s, c) = (golden * f64::from(i)).sin_cos();
+            Vec3::new(r * c, r * s, z)
+        })
+        .filter(|&axis| off_face(axis))
+        .map(|axis| (nearest(axis), axis))
+        .min_by(|a, b| a.0.total_cmp(&b.0))?
+        .1;
+    brepkit_math::surfaces::SphericalSurface::with_axis(center, radius, best)
+        .ok()
+        .map(FaceSurface::Sphere)
+}
+
 /// The centroid of a closed curved section's samples when every sample
 /// clears the face outline by a twentieth of the loop's extent (a loop that
 /// touches the outline is no cap).
@@ -6462,7 +6551,38 @@ fn split_face_2d_impl(
     let sections: &[SectionEdge] = deduped_sections.as_deref().unwrap_or(sections);
     let trace_split =
         std::env::var("BK_SPLIT_TRACE").is_ok_and(|v| v == format!("{}", face_id.index()));
-    let surface = face.surface().clone();
+    let rechart = pole_clear_sphere(topo, face_id, face, sections);
+    // The sections' pcurves and end hints read the face's own chart.
+    let recharted_sections: Vec<SectionEdge>;
+    let sections: &[SectionEdge] = match &rechart {
+        Some(chart) => {
+            recharted_sections = sections
+                .iter()
+                .map(|s| {
+                    let pcurve = super::pcurve_compute::compute_pcurve_on_surface(
+                        &s.curve_3d,
+                        s.start,
+                        s.end,
+                        chart,
+                        &[],
+                        None,
+                    );
+                    SectionEdge {
+                        pcurve_a: pcurve.clone(),
+                        pcurve_b: pcurve,
+                        start_uv_a: None,
+                        end_uv_a: None,
+                        start_uv_b: None,
+                        end_uv_b: None,
+                        ..s.clone()
+                    }
+                })
+                .collect();
+            &recharted_sections
+        }
+        None => sections,
+    };
+    let surface = rechart.unwrap_or_else(|| face.surface().clone());
     let reversed = face.is_reversed();
     let is_plane = matches!(surface, FaceSurface::Plane { .. });
     if trace_split {
@@ -9345,6 +9465,75 @@ fn split_face_2d_impl(
         };
     let use_structural_classification =
         (u_periodic || partial_band_chain_split) && !sections.is_empty();
+    // The way the face's outline winds in (u, v), where it bounds an area
+    // there: a face round a pole of its chart (a whole hemisphere) does not.
+    let outline_sign = {
+        let (u_period, v_period) = super::pcurve_compute::surface_periods(&surface);
+        let mut uv: Vec<Point2> = sample_wire_outline(topo, face.outer_wire())
+            .into_iter()
+            .filter_map(|p| surface.project_point(p).map(|(u, v)| Point2::new(u, v)))
+            .collect();
+        super::pcurve_compute::unwrap_periodic_params_pub(&mut uv, u_period, v_period);
+        let area = signed_area_2d(&uv);
+        let perimeter: f64 = uv
+            .iter()
+            .zip(uv.iter().cycle().skip(1))
+            .map(|(a, b)| (*b - *a).length())
+            .sum();
+        (uv.len() >= 3 && area.abs() > 1e-3 * perimeter).then(|| area.signum())
+    };
+    // A loop that runs along the outline and back along sections lying
+    // within a fiftieth of the surface's radius of it is the sliver between
+    // a section and a boundary arc of nearly one circle. A face with one is
+    // kept as the seam rule alone reads it: its sliver as a piece leaves the
+    // solid's mesh open at the tip and its interior unclear.
+    let near_outline = |wl: &[OrientedPCurveEdge]| -> bool {
+        let sample = |e: &OrientedPCurveEdge, n: u32| -> Vec<Point3> {
+            let (s3, e3) = if e.forward {
+                (e.start_3d, e.end_3d)
+            } else {
+                (e.end_3d, e.start_3d)
+            };
+            let (t0, t1) = e.curve_3d.domain_with_endpoints(s3, e3);
+            (0..=n)
+                .map(|k| {
+                    e.curve_3d.evaluate_with_endpoints(
+                        (t1 - t0).madd(f64::from(k) / f64::from(n), t0),
+                        s3,
+                        e3,
+                    )
+                })
+                .collect()
+        };
+        let outline: Vec<Point3> = wl
+            .iter()
+            .filter(|e| e.source_edge_idx.is_none())
+            .flat_map(|e| sample(e, 64))
+            .collect();
+        let near = 0.02 * surface.estimate_radius();
+        !outline.is_empty()
+            && wl
+                .iter()
+                .filter(|e| e.source_edge_idx.is_some())
+                .flat_map(|e| sample(e, 8))
+                .all(|q| outline.iter().any(|o| (*o - q).length() <= near))
+    };
+    let has_sliver = use_structural_classification && loops.iter().any(|wl| near_outline(wl));
+    // A loop along the outline and a section bounds a piece only where it
+    // winds as the outline does: one that runs against it closes round the
+    // rest of the surface.
+    let winds_with_outline = |wl: &[OrientedPCurveEdge]| -> bool {
+        let pts = sample_wire_loop_uv_periodic(wl, u_per_opt, v_per_opt);
+        let area = signed_area_2d(&pts);
+        let perimeter: f64 = pts
+            .iter()
+            .zip(pts.iter().cycle().skip(1))
+            .map(|(a, b)| (*b - *a).length())
+            .sum();
+        !has_sliver
+            && outline_sign
+                .is_some_and(|sign| area.abs() > perimeter * tol.linear && area * sign > 0.0)
+    };
 
     for wire_loop in loops {
         if use_structural_classification {
@@ -9381,7 +9570,10 @@ fn split_face_2d_impl(
                     .sum();
                 !runs_both_ways && signed_area_2d(&pts).abs() > perimeter * tol.linear
             };
-            let on_boundary = (matches!(surface, FaceSurface::Cone(_)) || torus_piece || strip)
+            let on_boundary = (matches!(surface, FaceSurface::Cone(_))
+                || torus_piece
+                || strip
+                || (!matches!(surface, FaceSurface::Torus(_)) && winds_with_outline(&wire_loop)))
                 && wire_loop.iter().any(|e| e.source_edge_idx.is_none())
                 && wire_loop.iter().any(|e| e.source_edge_idx.is_some());
             // On a partial band, a loop of sections alone (a strut poking
