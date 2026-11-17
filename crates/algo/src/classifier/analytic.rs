@@ -500,10 +500,12 @@ pub fn try_build_analytic_classifier(
         return Some(AnalyticClassifier::Sphere { center, radius });
     }
 
-    // Cylinder + plane caps.
+    // Cylinder + plane caps. A cone among them narrows the solid inside the
+    // pipe the cylinder model reads (a shaft's taper to a smaller end disc).
     if has_cylinder
         && has_planar
         && !has_sphere
+        && !has_cone
         && let Some(c) = try_build_cylinder_classifier(topo, shell.faces(), cylinder_info?, &tol)
     {
         return Some(c);
