@@ -23,6 +23,7 @@ use brepkit_check::classify::{ClassifyOptions, PointClassification, classify_poi
 use brepkit_math::mat::Mat4;
 use brepkit_math::quadrature::gauss_legendre_points;
 use brepkit_math::vec::Point3;
+use brepkit_operations::blend_ops::chamfer_v2;
 use brepkit_operations::boolean::{BooleanOp, boolean};
 use brepkit_operations::chamfer::chamfer;
 use brepkit_operations::measure::{oriented_solid_volume, solid_volume};
@@ -31,6 +32,7 @@ use brepkit_operations::tessellate::{is_watertight, tessellate_solid};
 use brepkit_operations::transform::transform_solid;
 use brepkit_operations::validate::validate_solid;
 use brepkit_topology::Topology;
+use brepkit_topology::adjacency::AdjacencyIndex;
 use brepkit_topology::edge::{EdgeCurve, EdgeId};
 use brepkit_topology::explorer::{solid_edges, solid_faces};
 use brepkit_topology::face::FaceSurface;
@@ -76,6 +78,28 @@ struct Hole {
     along_y: bool,
     radius: f64,
     depth: f64,
+}
+
+/// How far one edge's chamfer reaches: `face` into the cap or the slot's
+/// side, and `wall` along the wall, a chord round it beside a ruling.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Setback {
+    face: f64,
+    wall: f64,
+}
+
+impl Setback {
+    const fn even(d: f64) -> Self {
+        Self { face: d, wall: d }
+    }
+}
+
+/// The chamfers on one half of the cap, beyond one side of the slot: of the
+/// top rim's arcs there, and of the two rulings at that side's ends.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct Half {
+    rim: Option<Setback>,
+    rulings: Option<Setback>,
 }
 
 impl Cap {
@@ -141,6 +165,14 @@ impl Cap {
             .collect()
     }
 
+    /// The top rim's arcs alone.
+    fn rim(self, topo: &Topology, cap: SolidId, pose: &Mat4) -> Vec<EdgeId> {
+        self.pick(topo, cap, pose, true)
+            .into_iter()
+            .filter(|&e| matches!(topo.edge(e).unwrap().curve(), EdgeCurve::Circle(_)))
+            .collect()
+    }
+
     /// The area of the disc of radius `rho` beyond the slot's side, `y >= c`.
     fn segment_beyond_slot(self, rho: f64) -> f64 {
         let c = self.c;
@@ -150,11 +182,11 @@ impl Cap {
     /// The slot side's contact `s` and the wall's contact `w` of a ruling's
     /// chamfer at the corner `(x0, c)`, and the area of the triangle between
     /// the three with the disc's segment between the corner and `w`.
-    fn ruling_section(self, d: f64) -> ([f64; 2], [f64; 2], f64) {
+    fn ruling_section(self, setback: Setback) -> ([f64; 2], [f64; 2], f64) {
         let (r, c, x0) = (self.r, self.c, self.x0());
-        let turn = 2.0 * (0.5 * d / r).asin();
+        let turn = 2.0 * (0.5 * setback.wall / r).asin();
         let at = (c / r).asin() + turn;
-        let s = [x0 - d, c];
+        let s = [x0 - setback.face, c];
         let w = [r * at.cos(), r * at.sin()];
         let triangle = 0.5 * ((s[0] - x0) * (w[1] - c) - (s[1] - c) * (w[0] - x0)).abs();
         (s, w, triangle + 0.5 * r * r * (turn - turn.sin()))
@@ -183,32 +215,53 @@ impl Cap {
         triangle + 0.5 * rho * rho * (phi - phi.sin())
     }
 
-    /// The chamfered cap's volume: below the floor the whole disc, above it
-    /// the cross-section at each height. With `rim`, the cone cuts the disc
-    /// back to `rho(z)` above `H - d`, and stops cutting the corners where
-    /// `rho` falls to the side's contact's distance from the axis.
+    /// The chamfered cap's volume with `d` on every edge: the rulings, and
+    /// with `rim` the top rim's arcs.
     fn chamfered_volume(self, d: f64, rim: bool) -> f64 {
-        let (s, w, _) = self.ruling_section(d);
-        let rho = |z: f64| {
-            if rim && z > H - d {
-                self.r - (z - (H - d))
-            } else {
-                self.r
-            }
+        let half = Half {
+            rim: rim.then_some(Setback::even(d)),
+            rulings: Some(Setback::even(d)),
         };
+        self.volume([half; 2])
+    }
+
+    /// The chamfered cap's volume: below the floor the whole disc, above it
+    /// the cross-section of each half at each height.
+    fn volume(self, halves: [Half; 2]) -> f64 {
+        PI * self.r * self.r * self.floor + halves.iter().map(|&h| self.half_volume(h)).sum::<f64>()
+    }
+
+    /// One half's volume above the floor. With a rim chamfer the cone cuts
+    /// the disc back to `rho(z)` above `H - wall`, and stops cutting the
+    /// rulings' corners where `rho` falls to the side's contact's distance
+    /// from the axis.
+    fn half_volume(self, half: Half) -> f64 {
+        let rho = |z: f64| match half.rim {
+            Some(rim) if z > H - rim.wall => self.r - (z - (H - rim.wall)) * rim.face / rim.wall,
+            _ => self.r,
+        };
+        let cut = half.rulings.map(|setback| {
+            let (s, w, _) = self.ruling_section(setback);
+            (s, w)
+        });
         let section = |z: f64| {
             let r = rho(z);
-            2.0 * (self.segment_beyond_slot(r) - 2.0 * self.corner_cut(r, s, w))
+            self.segment_beyond_slot(r) - cut.map_or(0.0, |(s, w)| 2.0 * self.corner_cut(r, s, w))
         };
-        let lower = PI * self.r * self.r * self.floor;
-        if !rim {
-            return lower + integral(self.floor, H, section);
+        let mut breaks = vec![self.floor, H];
+        if let Some(rim) = half.rim {
+            breaks.push(H - rim.wall);
+            if let Some((s, _)) = cut {
+                breaks.push(H - rim.wall + (self.r - s[0].hypot(s[1])) * rim.wall / rim.face);
+            }
         }
-        let reach = H - d + (self.r - s[0].hypot(s[1]));
-        lower
-            + integral(self.floor, H - d, section)
-            + integral(H - d, reach, section)
-            + integral(reach, H, section)
+        breaks.retain(|&z| z >= self.floor && z <= H);
+        breaks.sort_by(f64::total_cmp);
+        breaks.dedup();
+        breaks
+            .windows(2)
+            .map(|w| integral(w[0], w[1], section))
+            .sum()
     }
 
     fn plain_volume(self) -> f64 {
@@ -216,6 +269,42 @@ impl Cap {
         let band = 2.0 * (c * (r * r - c * c).sqrt() + r * r * (c / r).asin());
         PI * r * r * H - band * (H - self.floor)
     }
+}
+
+/// What `chamfer_v2` takes on each half with `d1` on each edge's first
+/// face in the cap's face order and `d2` on its other face.
+fn halves(
+    topo: &Topology,
+    cap: SolidId,
+    pose: &Mat4,
+    edges: &[EdgeId],
+    (d1, d2): (f64, f64),
+) -> [Half; 2] {
+    let inverse = pose.inverse().unwrap();
+    let adjacency = AdjacencyIndex::build(topo, cap).unwrap();
+    let mut halves = [Half::default(); 2];
+    for &e in edges {
+        let edge = topo.edge(e).unwrap();
+        let first = adjacency.faces_for_edge(e)[0];
+        let setback = match topo.face(first).unwrap().surface() {
+            FaceSurface::Cylinder(_) => Setback { face: d2, wall: d1 },
+            _ => Setback { face: d1, wall: d2 },
+        };
+        let y = inverse
+            .mul_point(topo.vertex(edge.start()).unwrap().point())
+            .y();
+        let half = &mut halves[usize::from(y < 0.0)];
+        let slot = match edge.curve() {
+            EdgeCurve::Circle(_) => &mut half.rim,
+            _ => &mut half.rulings,
+        };
+        assert!(
+            slot.is_none_or(|s| s == setback),
+            "one half's arcs, and its rulings, each take one chamfer"
+        );
+        *slot = Some(setback);
+    }
+    halves
 }
 
 /// Upright, turned about one axis and about all three, and mirrored.
@@ -344,7 +433,7 @@ fn the_top_rim_and_the_slots_end_edges_take_one_chamfer() {
 #[test]
 fn the_slots_end_edges_alone_take_off_their_prisms() {
     let d = 0.6;
-    let (_, _, area) = EXAMPLE.ruling_section(d);
+    let (_, _, area) = EXAMPLE.ruling_section(Setback::even(d));
     let expected = EXAMPLE.plain_volume() - 4.0 * area * (H - EXAMPLE.floor);
     assert!((expected - EXAMPLE.chamfered_volume(d, false)).abs() < 1e-9 * expected);
     for (name, pose) in poses() {
@@ -468,6 +557,179 @@ fn a_slot_shallower_than_the_chamfer_refuses_it() {
         let cap = SHALLOW.build(&mut topo, &pose, &[]);
         let edges = SHALLOW.pick(&topo, cap, &pose, true);
         assert_eq!(edges.len(), 8, "{name}");
+        assert!(chamfer(&mut topo, cap, &edges, 0.6).is_err(), "{name}");
+    }
+}
+
+/// The top rim's arcs alone: the rim's cone runs on to each side of the
+/// slot, which it meets in a hyperbola from the side's top edge down to the
+/// ruling at the slot's end, and takes a sliver of the side. The rulings
+/// stay sharp below the cone.
+#[test]
+fn the_top_rim_alone_ends_on_the_slots_sides() {
+    let d = 0.6;
+    let half = Half {
+        rim: Some(Setback::even(d)),
+        rulings: None,
+    };
+    let expected = EXAMPLE.volume([half; 2]);
+    for (name, pose) in poses() {
+        let mut topo = Topology::new();
+        let cap = EXAMPLE.build(&mut topo, &pose, &[]);
+        let edges = EXAMPLE.rim(&topo, cap, &pose);
+        assert_eq!(edges.len(), 4, "{name}: four arcs");
+
+        let result = chamfer(&mut topo, cap, &edges, d).unwrap();
+
+        let x0 = EXAMPLE.x0();
+        assert_exact(
+            &topo,
+            result,
+            expected,
+            &pose,
+            &[
+                [0.0, 8.7, 2.9],
+                [x0 - 0.05, 0.85, 2.3],
+                [x0 - 1.0, 0.85, 2.95],
+                [-(x0 - 1.0), -0.85, 2.95],
+            ],
+            &[
+                [0.0, 9.3, 2.95],
+                [x0 - 0.05, 0.85, 2.95],
+                [-(x0 - 0.05), -0.85, 2.95],
+                [0.0, -9.3, 2.95],
+            ],
+            name,
+        );
+        assert_eq!(census(&topo, result), (4, 1, 6), "{name}");
+    }
+}
+
+/// The wide slot's rim alone: its cone meets each side 0.94 from the
+/// corner along the top and 0.5 down the ruling.
+#[test]
+fn a_wide_slots_rim_alone_ends_on_its_sides() {
+    let d = 0.5;
+    let half = Half {
+        rim: Some(Setback::even(d)),
+        rulings: None,
+    };
+    let expected = WIDE.volume([half; 2]);
+    for (name, pose) in poses() {
+        let mut topo = Topology::new();
+        let cap = WIDE.build(&mut topo, &pose, &[]);
+        let edges = WIDE.rim(&topo, cap, &pose);
+        assert_eq!(edges.len(), 4, "{name}");
+
+        let result = chamfer(&mut topo, cap, &edges, d).unwrap();
+
+        assert_exact(
+            &topo,
+            result,
+            expected,
+            &pose,
+            &[[0.0, 4.3, 2.9], [2.0, 4.05, 2.5], [2.95, 4.02, 2.45]],
+            &[[2.8, 4.05, 2.9], [0.0, 4.95, 2.95], [-2.8, -4.05, 2.9]],
+            name,
+        );
+    }
+}
+
+/// The example's pick through `chamfer_v2` with two distances: 0.6 on each
+/// edge's first face in the cap's face order and 0.4 on its other face.
+#[test]
+fn chamfer_v2_takes_the_example_pick_with_two_distances() {
+    let distances = (0.6, 0.4);
+    for (name, pose) in poses() {
+        let mut topo = Topology::new();
+        let cap = EXAMPLE.build(&mut topo, &pose, &[]);
+        let mut edges = EXAMPLE.pick(&topo, cap, &pose, true);
+        assert_eq!(edges.len(), 8, "{name}");
+        let halves = halves(&topo, cap, &pose, &edges, distances);
+        assert!(
+            halves
+                .iter()
+                .all(|h| h.rim.is_some() && h.rulings.is_some()),
+            "{name}"
+        );
+
+        let result = chamfer_v2(&mut topo, cap, &edges, distances.0, distances.1).unwrap();
+
+        assert!(result.failed.is_empty(), "{name}: {:?}", result.failed);
+        let mut succeeded = result.succeeded.clone();
+        succeeded.sort_by_key(|e| e.index());
+        edges.sort_by_key(|e| e.index());
+        assert_eq!(succeeded, edges, "{name}");
+        assert_exact(
+            &topo,
+            result.solid,
+            EXAMPLE.volume(halves),
+            &pose,
+            &[[0.0, 8.5, 2.9], [0.0, -8.5, 2.9]],
+            &[[0.0, 9.35, 2.98], [0.0, -9.35, 2.98]],
+            name,
+        );
+        assert_eq!(census(&topo, result.solid), (4, 1, 10), "{name}");
+    }
+}
+
+/// The top rim alone through `chamfer_v2` with two distances.
+#[test]
+fn chamfer_v2_takes_the_top_rim_alone_with_two_distances() {
+    let distances = (0.6, 0.4);
+    for (name, pose) in poses() {
+        let mut topo = Topology::new();
+        let cap = EXAMPLE.build(&mut topo, &pose, &[]);
+        let edges = EXAMPLE.rim(&topo, cap, &pose);
+        let halves = halves(&topo, cap, &pose, &edges, distances);
+
+        let result = chamfer_v2(&mut topo, cap, &edges, distances.0, distances.1).unwrap();
+
+        assert!(result.failed.is_empty(), "{name}: {:?}", result.failed);
+        assert_eq!(result.succeeded.len(), 4, "{name}");
+        assert_exact(
+            &topo,
+            result.solid,
+            EXAMPLE.volume(halves),
+            &pose,
+            &[[0.0, 8.5, 2.9]],
+            &[[0.0, 9.35, 2.98]],
+            name,
+        );
+        assert_eq!(census(&topo, result.solid), (4, 1, 6), "{name}");
+    }
+}
+
+/// The wide slot's rim alone with a blind hole in the sliver its cone cuts
+/// from a side: the chamfer would cut into the hole, so the pick is
+/// refused.
+#[test]
+fn a_hole_in_the_sliver_refuses_the_rim_alone() {
+    let hole = Hole {
+        at: [2.3, WIDE.c - 0.05, 2.95],
+        along_y: true,
+        radius: 0.03,
+        depth: 0.3,
+    };
+    for (name, pose) in poses() {
+        let mut topo = Topology::new();
+        let cap = WIDE.build(&mut topo, &pose, std::slice::from_ref(&hole));
+        let edges = WIDE.rim(&topo, cap, &pose);
+        assert_eq!(edges.len(), 4, "{name}");
+        assert!(chamfer(&mut topo, cap, &edges, 0.5).is_err(), "{name}");
+    }
+}
+
+/// The rim alone on a slot only 0.1 deep: the cone's contact on the wall
+/// lies 0.6 down, past the foot of the ruling at the slot's end, so the
+/// chamfer would cut the floor as well. The pick is refused.
+#[test]
+fn the_rim_alone_over_a_shallow_slot_is_refused() {
+    for (name, pose) in poses() {
+        let mut topo = Topology::new();
+        let cap = SHALLOW.build(&mut topo, &pose, &[]);
+        let edges = SHALLOW.rim(&topo, cap, &pose);
+        assert_eq!(edges.len(), 4, "{name}");
         assert!(chamfer(&mut topo, cap, &edges, 0.6).is_err(), "{name}");
     }
 }

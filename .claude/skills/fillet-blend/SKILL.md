@@ -17,7 +17,7 @@ You are working on `fillet`, `chamfer`, `filletV2`, `chamferV2`, `chamferDistanc
 |---|---|---|
 | `fillet` "succeeded" but shape looks unchanged | Compare (F,E,V) and volume before/after; equal = silent no-op | Step 2 |
 | Bug in default `fillet` / batch `fillet` | It chains THREE engines; find which one produced the result | Step 1 |
-| Bug only in `filletV2`/`chamferV2` | Pure `crates/blend` walking engine | Step 4 |
+| Bug only in `filletV2`/`chamferV2` | `crates/blend` walking engine (`chamferV2` offers rims and chains of lines and arcs to `chamfer.rs` and `chamfer_chain.rs` first) | Step 4 |
 | `chamfer` (no V2) rejects curved faces | Flat-bevel engine in `chamfer.rs` is planar-only, not blend | reference.md |
 | Full closed rim fillet leaves free edges | Known open bug (rolling-ball); single-edge case works | reference.md |
 | Filleted lip goes non-manifold at cap planes | Latent v2-trimmer edge-sharing risk (not the passing d5 guard) | reference.md |
@@ -38,7 +38,7 @@ Map from a bug report to code:
 |---|---|
 | `fillet`, `filletWithEvolution`, batch `fillet` | `try_fillet` chain: rolling-ball → v2 → bevel |
 | `filletV2` | pure v2 `blend_ops::fillet_v2` |
-| `chamferV2`, `chamferDistanceAngle` | pure v2 `blend_ops::chamfer_v2` / `chamfer_distance_angle` |
+| `chamferV2`, `chamferDistanceAngle` | `blend_ops::chamfer_v2` / `chamfer_distance_angle`: the rim and chain paths exactly, then the v2 builder |
 | `chamfer` | flat-bevel engine `chamfer::chamfer` (planar-only, separate code) |
 | `filletVariable` | v1 `fillet::fillet_variable` |
 
