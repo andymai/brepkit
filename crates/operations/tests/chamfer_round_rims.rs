@@ -11,8 +11,9 @@ use std::f64::consts::PI;
 use brepkit_check::classify::{ClassifyOptions, PointClassification, classify_point};
 use brepkit_math::mat::Mat4;
 use brepkit_math::vec::Point3;
+use brepkit_operations::blend_ops::{chamfer_distance_angle, chamfer_v2, chamfer_v2_on};
 use brepkit_operations::boolean::{BooleanOp, boolean};
-use brepkit_operations::chamfer::chamfer;
+use brepkit_operations::chamfer::{chamfer, chamfer_two_on};
 use brepkit_operations::measure::{oriented_solid_volume, solid_volume};
 use brepkit_operations::primitives::{make_box, make_cone, make_cylinder};
 use brepkit_operations::tessellate::{is_watertight, tessellate_solid};
@@ -20,7 +21,8 @@ use brepkit_operations::transform::transform_solid;
 use brepkit_operations::validate::validate_solid;
 use brepkit_topology::Topology;
 use brepkit_topology::edge::{EdgeCurve, EdgeId};
-use brepkit_topology::explorer::{solid_edges, solid_faces};
+use brepkit_topology::explorer::{face_edges, solid_edges, solid_faces};
+use brepkit_topology::face::{FaceId, FaceSurface};
 use brepkit_topology::solid::SolidId;
 
 /// The closed circle edges of `solid` at height `z`.
@@ -359,8 +361,6 @@ fn untouched(topo: &Topology, solid: SolidId) -> Vec<brepkit_topology::face::Fac
 /// Through `chamfer`, and through `chamfer_v2` with two distances.
 #[test]
 fn a_rim_chamfer_keeps_the_trims_it_does_not_replace() {
-    use brepkit_operations::blend_ops::chamfer_v2;
-
     let mut topo = Topology::new();
     let hollow = rod_with_a_cavity(&mut topo);
     trim_every_face(&mut topo, hollow);
@@ -382,5 +382,117 @@ fn a_rim_chamfer_keeps_the_trims_it_does_not_replace() {
         }
         let report = validate_solid(&topo, result).unwrap();
         assert!(report.is_valid(), "{:?}", report.issues);
+    }
+}
+
+/// Both rims of a cylinder of radius 3, 1 high, or of a frustum from radius
+/// 3 down to 2 over a height of 1 (its wall `sqrt 2` long), each with its
+/// cap as the reference face when a call takes one.
+fn short_wall(topo: &mut Topology, frustum: bool) -> (SolidId, Vec<(EdgeId, FaceId)>) {
+    let solid = if frustum {
+        make_cone(topo, 3.0, 2.0, 1.0).unwrap()
+    } else {
+        make_cylinder(topo, 3.0, 1.0).unwrap()
+    };
+    let mut rims = rims_at(topo, solid, 0.0);
+    rims.extend(rims_at(topo, solid, 1.0));
+    let picks = rims
+        .into_iter()
+        .map(|rim| {
+            let cap = solid_faces(topo, solid)
+                .unwrap()
+                .into_iter()
+                .find(|&f| {
+                    matches!(topo.face(f).unwrap().surface(), FaceSurface::Plane { .. })
+                        && face_edges(topo, f).unwrap().contains(&rim)
+                })
+                .unwrap();
+            (rim, cap)
+        })
+        .collect();
+    (solid, picks)
+}
+
+/// Two rims of one short wall whose chamfers take the whole wall, or cross
+/// on it, are refused through each entry point. Each chamfer as long as the
+/// wall left the other rim's band running to a rim that was gone, and
+/// came back as success with an open shell.
+#[test]
+fn two_rims_whose_chamfers_take_or_cross_their_wall_are_refused() {
+    let slant = 2.0_f64.sqrt();
+    for (frustum, whole, past) in [(false, 1.0, 0.6), (true, slant, 0.8)] {
+        for wall in [whole, past] {
+            let what = format!("frustum {frustum}, {wall} along the wall");
+            let mut topo = Topology::new();
+            let (solid, picks) = short_wall(&mut topo, frustum);
+            let rims: Vec<EdgeId> = picks.iter().map(|&(e, _)| e).collect();
+            assert!(chamfer(&mut topo, solid, &rims, wall).is_err(), "{what}");
+            assert!(
+                chamfer_v2_on(&mut topo, solid, &picks, 0.4, wall).is_err(),
+                "{what}"
+            );
+            assert!(
+                chamfer_two_on(&mut topo, solid, &picks, 0.4, wall).is_err(),
+                "{what}"
+            );
+            // `chamfer_v2` and `chamfer_distance_angle` set their first
+            // distance on each rim's first face, the wall.
+            let first = topo.build_adjacency(solid).unwrap().faces_for_edge(rims[0])[0];
+            assert!(!matches!(
+                topo.face(first).unwrap().surface(),
+                FaceSurface::Plane { .. }
+            ));
+            assert!(
+                chamfer_v2(&mut topo, solid, &rims, wall, 0.4).is_err(),
+                "{what}"
+            );
+            assert!(
+                chamfer_distance_angle(&mut topo, solid, &rims, wall, (0.4 / wall).atan()).is_err(),
+                "{what}"
+            );
+        }
+    }
+}
+
+/// Two rims of one short wall whose chamfers meet on it take the wall
+/// between them: the two cones share their wall circle. Each takes off its
+/// revolved triangle.
+#[test]
+fn two_rims_whose_chamfers_meet_take_their_wall() {
+    let half = 0.5 * 2.0_f64.sqrt();
+    // The bottom rim's cap runs in from radius 3, the top's from 2, and the
+    // wall runs in and up at 45 degrees on the frustum, straight up on the
+    // cylinder.
+    let cases = [
+        (false, 0.5, 9.0 * PI, (3.0, 3.0), (0.0, 1.0)),
+        (true, half, 19.0 * PI / 3.0, (3.0, 2.0), (-half, half)),
+    ];
+    for (frustum, wall, whole, (bottom, top), (run, rise)) in cases {
+        for cap in [wall, 0.4] {
+            let what = format!("frustum {frustum}, cap {cap}");
+            let expected = whole
+                - ring(bottom, -cap, (run * wall, rise * wall))
+                - ring(top, -cap, (-run * wall, rise * wall));
+            let mut topo = Topology::new();
+            let (solid, picks) = short_wall(&mut topo, frustum);
+            let result = if (cap - wall).abs() < 1e-12 {
+                let rims: Vec<EdgeId> = picks.iter().map(|&(e, _)| e).collect();
+                chamfer(&mut topo, solid, &rims, wall).unwrap()
+            } else {
+                let built = chamfer_v2_on(&mut topo, solid, &picks, cap, wall).unwrap();
+                assert!(built.failed.is_empty(), "{what}: {:?}", built.failed);
+                built.solid
+            };
+            let report = validate_solid(&topo, result).unwrap();
+            assert!(report.is_valid(), "{what}: {:?}", report.issues);
+            let volume = solid_volume(&topo, result, 0.001).unwrap();
+            assert!(
+                (volume - expected).abs() < 1e-9 * expected,
+                "{what}: volume {volume}, expected {expected}"
+            );
+            let mesh = tessellate_solid(&topo, result, 0.01).unwrap();
+            assert!(is_watertight(&mesh), "{what}: its mesh is open");
+            assert_eq!(solid_faces(&topo, result).unwrap().len(), 4, "{what}");
+        }
     }
 }

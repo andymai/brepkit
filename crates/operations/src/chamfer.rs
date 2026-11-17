@@ -1182,7 +1182,9 @@ fn replace_in_wire(
 /// circle moves into the cap, the wall's rim moves along the wall's rulings,
 /// and a cone band joins the two. `distances` gives each rim its cap and
 /// wall distances from the rim's edge, cap face and wall face. The result is
-/// a new solid; `None` unless every edge is such a rim.
+/// a new solid; `None` unless every edge is such a rim. Two rims of one wall
+/// whose chamfers would cross on it, or one of which would take the whole
+/// wall, are refused; two that meet take the wall between them.
 #[allow(clippy::too_many_lines)]
 fn chamfer_circular_rims(
     topo: &mut Topology,
@@ -1200,11 +1202,41 @@ fn chamfer_circular_rims(
     use brepkit_topology::wire::{OrientedEdge, Wire};
 
     let mut circles = Vec::with_capacity(edges.len());
+    // Each rim's wall, its place along the wall's rulings, and its distance
+    // along them.
+    let mut on_walls: Vec<(FaceId, f64, f64)> = Vec::with_capacity(edges.len());
+    let mut seen = HashSet::with_capacity(edges.len());
     for &edge in edges {
+        if !seen.insert(edge) {
+            continue;
+        }
         let Some(rim) = find_rim(topo, solid, edge)? else {
             return Ok(None);
         };
         let (cap_d, wall_d) = distances(edge, rim.cap, rim.wall);
+        let point = topo.vertex(topo.edge(rim.edge)?.start())?.point();
+        let Some((_, v)) = topo.face(rim.wall)?.surface().project_point(point) else {
+            return Ok(None);
+        };
+        // Two rims of one wall: a chamfer as long as the wall (to a file's
+        // digits, as below) takes it whole and leaves the other rim's band
+        // running to a rim that is gone, and two longer than the wall cross.
+        // Two that meet share their wall circle.
+        let slack = 1e-6 * rim.circle.radius().max(1.0);
+        for &(wall, other_v, other_d) in &on_walls {
+            let gap = (v - other_v).abs();
+            if wall == rim.wall
+                && (wall_d.max(other_d) >= gap - slack || wall_d + other_d > gap + slack)
+            {
+                return Err(crate::OperationsError::InvalidInput {
+                    reason: format!(
+                        "chamfer distances {other_d} and {wall_d} along one wall reach past \
+                         each other or across the whole wall between two rims"
+                    ),
+                });
+            }
+        }
+        on_walls.push((rim.wall, v, wall_d));
         circles.push((rim.circle, cap_d, wall_d));
     }
     let copy = crate::copy::copy_solid(topo, solid)?;
