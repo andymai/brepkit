@@ -1475,3 +1475,51 @@ fn two_cubes_that_share_an_edge_are_two_solids_in_each_pose() {
         assert_eq!(solid_pieces(&mut topo, joined).unwrap().len(), 2, "{name}");
     }
 }
+
+/// A hook round the corner `(10, 10)`: from that corner it runs along `+x`
+/// and `+y`, and its other arm, `x` from 5 to 8, reaches down to `y = 5`.
+const HOOK: [(f64, f64); 8] = [
+    (10.0, 10.0),
+    (20.0, 10.0),
+    (20.0, 20.0),
+    (5.0, 20.0),
+    (5.0, 5.0),
+    (8.0, 5.0),
+    (8.0, 15.0),
+    (10.0, 15.0),
+];
+const HOOK_CAPS: [[u32; 3]; 6] = [
+    [0, 1, 2],
+    [0, 2, 7],
+    [7, 2, 3],
+    [7, 3, 6],
+    [6, 3, 4],
+    [6, 4, 5],
+];
+
+/// The cube and the hook-shaped prism share the cube's edge at `(10, 10)`,
+/// and the arm of the hook passes through the cube.
+#[test]
+fn a_cube_and_a_prism_that_share_an_edge_and_cross_are_not_one_solid() {
+    for inward in [false, true] {
+        let mut mesh = TriangleMesh::default();
+        add_cube(&mut mesh, [0.0; 3], 10.0, false);
+        add_prism(&mut mesh, &HOOK, &HOOK_CAPS, 10.0);
+        if inward {
+            for tri in mesh.indices.chunks_exact_mut(3) {
+                tri.swap(1, 2);
+            }
+        }
+
+        let mut topo = Topology::new();
+        let err = import_mesh(&mut topo, &mesh, 1e-7).unwrap_err();
+        assert!(err.to_string().contains("cross"), "inward {inward}: {err}");
+        let parts = import_mesh_parts(&mut topo, &mesh, 1e-7).unwrap();
+        let expected = if inward { (0, 2) } else { (2, 0) };
+        assert_eq!(
+            (parts.solids.len(), parts.shells.len()),
+            expected,
+            "inward {inward}"
+        );
+    }
+}

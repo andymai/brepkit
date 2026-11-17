@@ -48,7 +48,8 @@ pub struct MeshImport {
 ///   to pair them do that, each pair holds the material between its two
 ///   triangles, so two closed bodies that share an edge are two bodies.
 ///   When the import turns each body at such an edge (see below), the
-///   triangles pair off again round the material after the turn.
+///   triangles pair off again round the material after the turn, and the
+///   import places the bodies of the new pairs again.
 /// - The triangles of such an edge do not pair off, and join one shell,
 ///   when two of them lie at one angle (as two cubes that share a side do),
 ///   or when the stored normals neither agree nor disagree with the
@@ -123,16 +124,7 @@ impl MeshBodies {
 
         let mut links = Links::read(&tris, &points, &votes, &directions, tolerance);
         let mut bodies = split_bodies(&mut tris, &votes, &points, &links);
-        let (placement, turned) =
-            assign_cavities(&mut bodies, &mut tris, &points, &links, tolerance);
-        pair_after_turns(
-            &mut bodies,
-            &turned,
-            &mut tris,
-            &points,
-            &mut links,
-            tolerance,
-        );
+        let placement = place_bodies(&mut bodies, &mut tris, &points, &mut links, tolerance);
         Ok(Self {
             points,
             tris,
@@ -1194,17 +1186,79 @@ const RAYS: [[f64; 3]; 4] = [
     [-1.0, -0.414_2, -0.302_7],
 ];
 
-/// Make each inward closed body a cavity of the outward body that it lies
-/// directly in, a shell when it crosses another body, or turn it into a
-/// solid when it lies in no outward body. Returns how the bodies sit
-/// together, and the bodies that it turned.
-fn assign_cavities(
-    bodies: &mut [Body],
+/// What the import makes of an inward closed body.
+#[derive(Debug, Clone, Copy)]
+enum Fate {
+    /// A shell: the body crosses another body.
+    Shell,
+    /// A cavity of the outward body with this index.
+    Cavity(usize),
+    /// A solid: the body lies in no outward body, and the import turns it.
+    Turn,
+}
+
+/// Place the closed bodies, and give each inward closed body its fate (see
+/// [`assign_cavities`]).
+///
+/// When the triangles round an edge pair off again for the turns (see
+/// [`pair_after_turns`]), the bodies of the new pairs replace the old
+/// bodies, each with the winding of the mesh. The import then places all
+/// the closed bodies again, so a new body that crosses another body is a
+/// shell, as any inward body that crosses another body is.
+fn place_bodies(
+    bodies: &mut Vec<Body>,
     tris: &mut [[usize; 3]],
+    points: &[Point3],
+    links: &mut Links,
+    tolerance: f64,
+) -> Placement {
+    // An edge pairs off again once, so the loop ends.
+    let mut paired_again = HashSet::new();
+    loop {
+        let (placement, fates) = assign_cavities(bodies, tris, points, links, tolerance);
+        let turned: Vec<usize> = fates
+            .iter()
+            .filter(|(_, fate)| matches!(fate, Fate::Turn))
+            .map(|&(i, _)| i)
+            .collect();
+        if pair_after_turns(
+            bodies,
+            &turned,
+            tris,
+            points,
+            links,
+            tolerance,
+            &mut paired_again,
+        ) {
+            continue;
+        }
+        for (i, fate) in fates {
+            match fate {
+                Fate::Shell => bodies[i].kind = BodyKind::Open,
+                Fate::Cavity(j) => bodies[i].kind = BodyKind::Cavity(j),
+                Fate::Turn => {
+                    for &t in &bodies[i].tris {
+                        tris[t].swap(1, 2);
+                    }
+                    bodies[i].volume6 = -bodies[i].volume6;
+                }
+            }
+        }
+        return placement;
+    }
+}
+
+/// The fate of each inward closed body: a cavity of the outward body that it
+/// lies directly in, a shell when it crosses another body, or a turn into a
+/// solid when it lies in no outward body. Returns how the bodies sit
+/// together after those fates, and the fates.
+fn assign_cavities(
+    bodies: &[Body],
+    tris: &[[usize; 3]],
     points: &[Point3],
     links: &Links,
     tolerance: f64,
-) -> (Placement, Vec<usize>) {
+) -> (Placement, Vec<(usize, Fate)>) {
     let closed: Vec<usize> = (0..bodies.len())
         .filter(|&i| bodies[i].kind == BodyKind::Solid)
         .collect();
@@ -1212,38 +1266,37 @@ fn assign_cavities(
 
     // The cavities come from the winding of the mesh as it is.
     let outward: Vec<bool> = bodies.iter().map(|b| b.volume6 > 0.0).collect();
-    let mut turned = Vec::new();
+    let mut solid = outward.clone();
+    let mut fates = Vec::new();
     for (c, &i) in closed.iter().enumerate() {
         if outward[i] {
             continue;
         }
-        if nesting.crossed[c] {
-            bodies[i].kind = BodyKind::Open;
+        let fate = if nesting.crossed[c] {
+            Fate::Shell
         } else if let Some(j) = nesting.around[c].map(|d| closed[d]).filter(|&j| outward[j]) {
-            bodies[i].kind = BodyKind::Cavity(j);
+            Fate::Cavity(j)
         } else {
-            for &t in &bodies[i].tris {
-                tris[t].swap(1, 2);
-            }
-            bodies[i].volume6 = -bodies[i].volume6;
-            turned.push(i);
-        }
+            solid[i] = true;
+            Fate::Turn
+        };
+        fates.push((i, fate));
     }
     // The overlap comes from the result: a turned body is a solid too.
-    let overlap = closed.iter().zip(&nesting.around).any(|(&i, around)| {
-        bodies[i].kind == BodyKind::Solid
-            && around.is_some_and(|d| bodies[closed[d]].kind == BodyKind::Solid)
-    });
+    let overlap = closed
+        .iter()
+        .zip(&nesting.around)
+        .any(|(&i, around)| solid[i] && around.is_some_and(|d| solid[closed[d]]));
     let placement = Placement {
         overlap,
         crossing: nesting.crossed.contains(&true),
     };
-    (placement, turned)
+    (placement, fates)
 }
 
 /// Pair again the triangles round each edge of more than two triangles
-/// whose bodies [`assign_cavities`] all turned, and split those bodies by
-/// the new pairs.
+/// whose bodies the import turns, and split those bodies by the new pairs.
+/// Returns whether any pair changed.
 ///
 /// When both ways to pair the triangles of an edge fit, each pair holds the
 /// material of the winding. A turn of every triangle round the edge puts
@@ -1251,19 +1304,20 @@ fn assign_cavities(
 /// Two inward cubes that share an edge, in no body, are then two solids and
 /// not one solid that pinches at the edge.
 ///
-/// A turned body keeps its place, so each new body is a solid. A new body
-/// that faces inward is turned too, and a new body with no volume is a
-/// shell, as in [`split_bodies`].
+/// The import has not turned the bodies yet, so each new body has the
+/// winding of the mesh. A new body with no volume is a shell, as in
+/// [`split_bodies`]. An edge in `paired_again` does not pair off again.
 fn pair_after_turns(
     bodies: &mut Vec<Body>,
     turned: &[usize],
-    tris: &mut [[usize; 3]],
+    tris: &[[usize; 3]],
     points: &[Point3],
     links: &mut Links,
     tolerance: f64,
-) {
+    paired_again: &mut HashSet<(usize, usize)>,
+) -> bool {
     if turned.is_empty() || links.pairs.is_empty() {
-        return;
+        return false;
     }
     let mut body_of = vec![usize::MAX; tris.len()];
     for &i in turned {
@@ -1282,7 +1336,7 @@ fn pair_after_turns(
     // triangle that was not turned keeps its pairs: each pair still runs
     // the edge in opposite directions.
     let mut changed: HashMap<(usize, usize), Vec<[usize; 2]>> = HashMap::new();
-    let mut seen: HashSet<(usize, usize)> = HashSet::new();
+    let mut seen = paired_again.clone();
     for &i in turned {
         for &t in &bodies[i].tris {
             let tri = tris[t];
@@ -1306,11 +1360,12 @@ fn pair_after_turns(
         }
     }
     if changed.is_empty() {
-        return;
+        return false;
     }
 
     let mut affected = vec![false; bodies.len()];
     for (&key, pairs) in &changed {
+        paired_again.insert(key);
         for &(u, _) in &links.uses[&key] {
             affected[body_of[u]] = true;
         }
@@ -1331,9 +1386,8 @@ fn pair_after_turns(
     }
     seeds.sort_unstable();
 
-    // The pairs of a turned body run its edges in opposite directions on
-    // both sides of the turn, and the new pairs do too: each new body is
-    // closed, and wound to one side.
+    // The pairs of a turned body run its edges in opposite directions, and
+    // the new pairs do too: each new body is closed, and wound to one side.
     let mut split = Vec::new();
     for seed in seeds {
         if !free[seed] {
@@ -1357,51 +1411,29 @@ fn pair_after_turns(
         }
         members.sort_unstable();
         let (volume6, terms) = signed_volume6(&members, tris, points);
-        let body = if volume6.abs() <= 1e-12 * terms {
-            Body {
-                tris: members,
-                kind: BodyKind::Open,
-                volume6: 0.0,
-            }
-        } else {
-            if volume6 < 0.0 {
-                for &t in &members {
-                    tris[t].swap(1, 2);
-                }
-            }
-            Body {
-                tris: members,
-                kind: BodyKind::Solid,
-                volume6: volume6.abs(),
-            }
-        };
-        split.push(body);
+        let closed = volume6.abs() > 1e-12 * terms;
+        split.push(Body {
+            tris: members,
+            kind: if closed {
+                BodyKind::Solid
+            } else {
+                BodyKind::Open
+            },
+            volume6: if closed { volume6 } else { 0.0 },
+        });
     }
 
-    // Back in the order of each body's first triangle. A cavity names its
-    // owner by its index, and a turned body owns no cavity.
-    let mut order: Vec<(usize, Body)> = std::mem::take(bodies)
+    // Back in the order of each body's first triangle. No body is a cavity
+    // yet, so no index of a body needs to move with it.
+    let mut order: Vec<Body> = std::mem::take(bodies)
         .into_iter()
         .enumerate()
-        .filter(|(i, _)| !affected[*i])
-        .chain(split.into_iter().map(|body| (usize::MAX, body)))
+        .filter_map(|(i, body)| (!affected[i]).then_some(body))
+        .chain(split)
         .collect();
-    order.sort_unstable_by_key(|(_, body)| body.tris[0]);
-    let mut index = vec![usize::MAX; affected.len()];
-    for (k, &(i, _)) in order.iter().enumerate() {
-        if i != usize::MAX {
-            index[i] = k;
-        }
-    }
-    *bodies = order
-        .into_iter()
-        .map(|(_, mut body)| {
-            if let BodyKind::Cavity(owner) = body.kind {
-                body.kind = BodyKind::Cavity(index[owner]);
-            }
-            body
-        })
-        .collect();
+    order.sort_unstable_by_key(|body| body.tris[0]);
+    *bodies = order;
+    true
 }
 
 /// The margins of the import at coordinates of a given size.
