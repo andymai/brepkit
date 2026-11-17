@@ -422,18 +422,29 @@ fn pointed_cone_seam(
     topo: &Topology,
     fid: FaceId,
 ) -> Result<Option<brepkit_topology::edge::EdgeId>, crate::OperationsError> {
+    use brepkit_topology::edge::EdgeCurve;
+
     let face = topo.face(fid)?;
-    let FaceSurface::Cone(cone) = face.surface() else {
-        return Ok(None);
+    // A cone's apex, or a sphere's poles: a spherical cap's seam meridian
+    // runs up to its pole and back down just as a pointed cone's line does.
+    let points = match face.surface() {
+        FaceSurface::Cone(cone) => vec![cone.apex()],
+        FaceSurface::Sphere(sphere) => {
+            let pole = sphere.z_axis() * sphere.radius();
+            vec![sphere.center() + pole, sphere.center() - pole]
+        }
+        _ => return Ok(None),
     };
-    let apex = cone.apex();
     for oe in topo.wire(face.outer_wire())?.edges() {
         let edge = topo.edge(oe.edge())?;
-        if !matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Line) {
+        if !matches!(edge.curve(), EdgeCurve::Line | EdgeCurve::Circle(_))
+            || edge.start() == edge.end()
+        {
             continue;
         }
         for vid in [edge.start(), edge.end()] {
-            if (topo.vertex(vid)?.point() - apex).length() < 1e-7 {
+            let at = topo.vertex(vid)?.point();
+            if points.iter().any(|&p| (at - p).length() < 1e-7) {
                 return Ok(Some(oe.edge()));
             }
         }
