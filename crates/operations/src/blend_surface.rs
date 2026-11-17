@@ -59,6 +59,10 @@ const MOST_NEAR_PAIRS: usize = 1 << 16;
 const SHARED_END_LEAST: f64 = 1e-6;
 const SHARED_END_MOST: f64 = 1e-3;
 
+/// Two pairings of open chains whose [`agreement`] differs by less than this
+/// share of a sample are alike, and the nearer pairing is taken.
+const AGREEMENT_TIE: f64 = 1e-9;
+
 /// The continuity a blend surface keeps with the face beside each chain.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BlendContinuity {
@@ -115,6 +119,8 @@ impl BlendSurfaceOptions {
 /// to chain B (`v = 1`), and its normal agrees with face A's along chain A.
 /// Which end of chain B meets which end of chain A is whichever keeps the
 /// surface least twisted, and a closed pair starts at the least twisted place.
+/// For open chains, that is the way whose ruled surface between the chains
+/// keeps its normals at the two chains most nearly the same way.
 ///
 /// Chains with the same number of edges pair edge by edge; otherwise they pair
 /// by arc length, so that corners meet where the arc length says they do.
@@ -375,9 +381,17 @@ fn pair_chains(a: &Chain, b: &mut Chain) -> bool {
             start_f
         };
         *b = b.started_at(start);
-    } else if twist(&backward, 0) < twist(&forward, 0) {
-        run_back = true;
-        *b = back_chain;
+    } else {
+        let (agree_f, agree_b) = (agreement(&from_a, &forward), agreement(&from_a, &backward));
+        let back = if (agree_b - agree_f).abs() > AGREEMENT_TIE * SAMPLES as f64 {
+            agree_b > agree_f
+        } else {
+            twist(&backward, 0) < twist(&forward, 0)
+        };
+        if back {
+            run_back = true;
+            *b = back_chain;
+        }
     }
 
     let joints_a = a.joints();
@@ -400,6 +414,30 @@ fn pair_chains(a: &Chain, b: &mut Chain) -> bool {
         }
     }
     run_back
+}
+
+/// How well the ruled surface between two open chains, sampled at the same
+/// `s`, keeps one side up: for each step along them, the cosine between its
+/// normals at the two chains, times the sine of the angle each chain makes
+/// with the line between them. A pairing whose ruled surface turns over
+/// between the chains scores low, even where its chains are nearer: two
+/// chains that turn a corner can meet corner to corner with their sides
+/// exchanged, each side of one chain against the other side of the other.
+fn agreement(a: &[Point3], b: &[Point3]) -> f64 {
+    a.windows(2)
+        .zip(b.windows(2))
+        .map(|(a, b)| {
+            let along_a = (a[1] - a[0]).normalize();
+            let along_b = (b[1] - b[0]).normalize();
+            let across = ((b[0] - a[0]) + (b[1] - a[1])).normalize();
+            match (along_a, along_b, across) {
+                (Ok(along_a), Ok(along_b), Ok(across)) => {
+                    along_a.cross(across).dot(along_b.cross(across))
+                }
+                _ => 0.0,
+            }
+        })
+        .sum()
 }
 
 /// The smallest distance between the chains at the same `s` away from any end

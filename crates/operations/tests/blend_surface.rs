@@ -25,6 +25,7 @@ use brepkit_topology::edge::{Edge, EdgeCurve, EdgeId};
 use brepkit_topology::explorer::{face_edges, solid_faces};
 use brepkit_topology::face::{Face, FaceId, FaceSurface};
 use brepkit_topology::wire::{OrientedEdge, Wire};
+use surface_fixtures::fold::first_fold;
 use surface_fixtures::{
     Builder, KINDS, Pose, Sheet, Worst, across_pose, assert_wire_sound, chain_exit, gap_to_chain,
     leaves_the_face, measure_seam, measure_seam_at, net_sheet, sheet, surface_of,
@@ -215,13 +216,11 @@ fn blends_keep_their_continuity_between_different_surface_types() {
     table.print("blend_surface, every pair of types, turned pose");
 }
 
-/// The fixtures whose side after the chain runs nearly along the gap to the
-/// sheet across. Along that side the surface runs nearly the way it crosses,
-/// and it folds.
-const CORNERS_ALONG_THE_GAP: [&str; 2] = ["cone rim", "torus tube"];
-
-/// A chain of two sides of each fixture: a corner on every surface type,
-/// refused where the surface folds.
+/// A chain of two sides of each fixture: a corner on every surface type.
+///
+/// On the cone's rim and the torus's tube, the side after the chain runs
+/// nearly along the gap to the sheet across. Each side still pairs with its
+/// image across, not with the other side, and the surface does not fold.
 #[test]
 fn a_chain_may_turn_a_corner_on_every_surface_type() {
     let mut table = Table::default();
@@ -235,30 +234,20 @@ fn a_chain_may_turn_a_corner_on_every_surface_type() {
                 let next = (at + 1) % a.boundary.len();
                 a.chain.push(a.boundary[next]);
                 b.chain.push(b.boundary[next]);
-                let made = blend_surface(
+                let context = format!("{kind} corner {pose_name} {continuity:?}");
+                let face = blend_surface(
                     &mut topo,
                     &a.chain,
                     a.face,
                     &b.chain,
                     b.face,
                     &BlendSurfaceOptions::new(continuity),
-                );
-                if CORNERS_ALONG_THE_GAP.contains(&kind) {
-                    let Err(OperationsError::InvalidInput { reason }) = made else {
-                        panic!("{kind} {pose_name} {continuity:?}: {made:?}");
-                    };
-                    assert!(reason.contains("fold"), "{kind}: {reason}");
-                    continue;
-                }
-                let face =
-                    made.unwrap_or_else(|e| panic!("{kind} {pose_name} {continuity:?}: {e}"));
+                )
+                .unwrap_or_else(|e| panic!("{context}: {e}"));
                 let result = nurbs_of(&topo, face);
+                assert_eq!(first_fold(&result), None, "{context}");
                 let (seam_a, seam_b) = both_seams(&topo, &result, &a, &b);
-                assert_seams(
-                    &format!("{kind} corner {pose_name} {continuity:?}"),
-                    continuity,
-                    &[seam_a, seam_b],
-                );
+                assert_seams(&context, continuity, &[seam_a, seam_b]);
                 let mut joined = seam_a;
                 joined.join(seam_b);
                 table.add(surface_of(kind), continuity, joined);
