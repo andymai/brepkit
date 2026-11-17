@@ -12,10 +12,12 @@
 //! at an angle, with one face in common and the third edge at the vertex left
 //! sharp, the two chamfers meet along the curve where their faces cross (a
 //! mitre). A chain's free end stops where the next edge carries straight on,
-//! and ends in a flat triangle across the edge, or at a plane square to the
-//! edge, which takes the chamfer's end. Nothing here depends on how the solid
-//! is posed. The result's volume is checked against the change that each
-//! edge's triangle makes along it before it is returned.
+//! and ends in a flat triangle across the edge, or at a plane through the
+//! end, square or slanted to the edge, which takes the chamfer's end. Each
+//! edge can take one distance into its cap and another along its wall.
+//! Nothing here depends on how the solid is posed. The result's volume is
+//! checked against the change that each edge's triangle makes along it
+//! before it is returned.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::f64::consts::{PI, TAU};
@@ -73,6 +75,10 @@ struct Piece {
     cap_sign: f64,
     /// Into the wall's material.
     wall_side: WallSide,
+    /// How far the chamfer reaches into the cap and along the wall (a chord
+    /// round a cylinder beside a ruling).
+    cap_d: f64,
+    wall_d: f64,
 }
 
 #[derive(Clone)]
@@ -134,17 +140,22 @@ impl Piece {
             .evaluate_with_endpoints(0.5 * (t0 + t1), self.start_point, self.end_point)
     }
 
+    /// The farther of the chamfer's two reaches.
+    fn reach(&self) -> f64 {
+        self.cap_d.max(self.wall_d)
+    }
+
     /// The chamfer's triangle at `p` on the edge.
-    fn section(&self, p: Point3, d: f64) -> Result<Section, OperationsError> {
+    fn section(&self, p: Point3) -> Result<Section, OperationsError> {
         let tangent = self.tangent(p)?;
         let cap_dir = self.cap_normal.cross(tangent) * self.cap_sign;
         let wall = match &self.wall_side {
-            WallSide::Plane { normal, sign } => p + normal.cross(tangent) * (sign * d),
-            WallSide::Axis(axis) => p + *axis * d,
+            WallSide::Plane { normal, sign } => p + normal.cross(tangent) * (sign * self.wall_d),
+            WallSide::Axis(axis) => p + *axis * self.wall_d,
             WallSide::Ruling { cylinder, turn } => turn_about(cylinder, p, *turn),
         };
         Ok(Section {
-            cap: p + cap_dir * d,
+            cap: p + cap_dir * self.cap_d,
             wall,
             cap_dir,
             wall_dir: (wall - p).normalize()?,
@@ -153,11 +164,11 @@ impl Piece {
 
     /// The curves the contacts run on, on the cap and on the wall, from the
     /// section `at` the edge's point `p`.
-    fn tracks(&self, p: Point3, at: &Section, d: f64) -> Result<[Track; 2], OperationsError> {
+    fn tracks(&self, p: Point3, at: &Section) -> Result<[Track; 2], OperationsError> {
         Ok(match &self.curve {
             EdgeCurve::Circle(c) => {
                 let radial = (p - c.center()).normalize()?;
-                let radius = c.radius() + at.cap_dir.dot(radial) * d;
+                let radius = c.radius() + at.cap_dir.dot(radial) * self.cap_d;
                 [
                     Track::Circle(Circle3D::with_axes(
                         c.center(),
@@ -167,7 +178,7 @@ impl Piece {
                         c.v_axis(),
                     )?),
                     Track::Circle(Circle3D::with_axes(
-                        c.center() + at.wall_dir * d,
+                        c.center() + at.wall_dir * self.wall_d,
                         c.normal(),
                         c.radius(),
                         c.u_axis(),
@@ -187,13 +198,13 @@ impl Piece {
 
     /// The surface of the chamfer face, from its sections at the edge's start
     /// `a` and end `b`.
-    fn band(&self, a: &Section, b: &Section, d: f64) -> Result<Band, OperationsError> {
+    fn band(&self, a: &Section, b: &Section) -> Result<Band, OperationsError> {
         Ok(match &self.curve {
             EdgeCurve::Circle(c) => {
                 let radial = (self.start_point - c.center()).normalize()?;
-                let r1 = c.radius() + a.cap_dir.dot(radial) * d;
+                let r1 = c.radius() + a.cap_dir.dot(radial) * self.cap_d;
                 let r2 = c.radius();
-                let wall_center = c.center() + a.wall_dir * d;
+                let wall_center = c.center() + a.wall_dir * self.wall_d;
                 // The cone through the cap's and the wall's circles.
                 let t0 = -r1 / (r2 - r1);
                 let apex = c.center() + (wall_center - c.center()) * t0;
@@ -214,11 +225,11 @@ impl Piece {
 
     /// The contact's curve for the cap and the wall, between two of its
     /// points.
-    fn contact_curves(&self, a: &Section, d: f64) -> Result<[EdgeCurve; 2], OperationsError> {
+    fn contact_curves(&self, a: &Section) -> Result<[EdgeCurve; 2], OperationsError> {
         Ok(match &self.curve {
             EdgeCurve::Circle(c) => {
                 let radial = (self.start_point - c.center()).normalize()?;
-                let radius = c.radius() + a.cap_dir.dot(radial) * d;
+                let radius = c.radius() + a.cap_dir.dot(radial) * self.cap_d;
                 [
                     EdgeCurve::Circle(Circle3D::with_axes(
                         c.center(),
@@ -228,7 +239,7 @@ impl Piece {
                         c.v_axis(),
                     )?),
                     EdgeCurve::Circle(Circle3D::with_axes(
-                        c.center() + a.wall_dir * d,
+                        c.center() + a.wall_dir * self.wall_d,
                         c.normal(),
                         c.radius(),
                         c.u_axis(),
@@ -489,19 +500,29 @@ struct End {
     beyond: FaceId,
 }
 
-/// A chain's free end at a plane square to its edge, whose plane holds the
-/// end's section. The plane's edge along the cap (and along the wall) runs
-/// on from the vertex through the section's point there, which splits it,
-/// or runs the other way, so that the plane takes the stretch from the
-/// vertex to the point as well (an end at an inside corner).
-struct SquareEnd {
+/// A chain's free end at a plane through its vertex that holds the plane's
+/// edges along the cap and along the wall. The contacts end where they reach
+/// those edges, and the plane takes the curve where the chamfer face crosses
+/// it between the two points: the end's section, where the plane stands
+/// square to the edge, and a line or a conic where it slants. Each edge runs
+/// on from the vertex through its point, which splits it, or, at a square
+/// end, the other way, so that the plane takes the stretch from the vertex
+/// to the point as well (an end at an inside corner).
+struct PlaneEnd {
     vertex: VertexId,
     piece: usize,
     face: FaceId,
     /// The plane's edges along the cap and along the wall.
     edges: [EdgeId; 2],
-    /// Whether each section point splits its edge.
+    /// Whether each point splits its edge.
     split: [bool; 2],
+    /// Where the contacts end, on the cap and on the wall.
+    points: [Point3; 2],
+    /// From the cap's point to the wall's, between the chamfer face and the
+    /// plane.
+    cross: EdgeCurve,
+    /// Whether the plane slants to the edge.
+    slanted: bool,
 }
 
 /// Two edges meeting at an angle, with `shared` the face along both and
@@ -550,13 +571,14 @@ struct Plan {
     sections: Vec<(VertexId, Section)>,
     joints: Vec<Joint>,
     ends: Vec<End>,
-    square_ends: Vec<SquareEnd>,
+    plane_ends: Vec<PlaneEnd>,
     corners: Vec<Corner>,
     /// The chain's change in the solid's volume, each edge's triangle swept
     /// along it.
     volume_change: f64,
-    /// How far the change may stray from `volume_change` at the corners,
-    /// where the chamfers meet past their edges' ends.
+    /// How far the change may stray from `volume_change` at the corners and
+    /// the slanted ends, where the chamfers end past or short of their edges'
+    /// ends.
     corner_allowance: f64,
     /// Whether the chain needs this path: it holds an arc or a ruling of a
     /// cylinder, or stops at a curved neighbour, where the other engines'
@@ -576,6 +598,10 @@ impl Plan {
         self.corners.iter().find(|c| c.vertex == vertex)
     }
 
+    fn plane_end(&self, vertex: VertexId) -> Option<&PlaneEnd> {
+        self.plane_ends.iter().find(|e| e.vertex == vertex)
+    }
+
     /// Where piece `index`'s contacts end at `vertex`: on its cap, then on
     /// its wall.
     fn contact_ends(&self, index: usize, vertex: VertexId) -> (Point3, Point3) {
@@ -588,18 +614,15 @@ impl Plan {
                 (on_other, on_shared)
             };
         }
+        if let Some(end) = self.plane_end(vertex) {
+            return (end.points[0], end.points[1]);
+        }
         let s = self.piece_sections[index][piece.slot(vertex)];
         (s.cap, s.wall)
     }
 
     /// Whether `p`, on `cap`, lies in the strip a chamfer takes from it.
-    fn strip_holds(
-        &self,
-        cap: FaceId,
-        p: Point3,
-        d: f64,
-        tol: f64,
-    ) -> Result<bool, OperationsError> {
+    fn strip_holds(&self, cap: FaceId, p: Point3, tol: f64) -> Result<bool, OperationsError> {
         for (piece, sections) in self.pieces.iter().zip(&self.piece_sections) {
             if piece.cap != cap {
                 continue;
@@ -613,7 +636,7 @@ impl Plan {
                     let offset = p - piece.start_point;
                     let s = offset.dot(tangent);
                     let h = offset.dot(section.cap_dir);
-                    s > tol && s < length - tol && h > tol && h <= d + tol
+                    s > tol && s < length - tol && h > tol && h <= piece.cap_d + tol
                 }
                 EdgeCurve::Circle(c) => {
                     let radial = (piece.start_point - c.center()).normalize()?;
@@ -623,7 +646,7 @@ impl Plan {
                         .curve
                         .domain_with_endpoints(piece.start_point, piece.end_point);
                     let swept = (c.project(p) - t0).rem_euclid(TAU);
-                    swept < t1 - t0 && h > tol && h <= d + tol
+                    swept < t1 - t0 && h > tol && h <= piece.cap_d + tol
                 }
                 EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_) => false,
             };
@@ -897,13 +920,35 @@ fn other_face(adjacency: &AdjacencyIndex, edge: EdgeId, face: FaceId) -> Option<
     })
 }
 
+/// How far a chamfer reaches into each face of each picked edge: `near`
+/// into the edge's reference face and `far` into its other face, or `near`
+/// into both where the edge has no reference.
+struct Distances {
+    near: f64,
+    far: f64,
+    reference: HashMap<EdgeId, FaceId>,
+}
+
+impl Distances {
+    fn on(&self, edge: EdgeId, face: FaceId) -> f64 {
+        match self.reference.get(&edge) {
+            Some(&reference) if reference != face => self.far,
+            _ => self.near,
+        }
+    }
+
+    fn least(&self) -> f64 {
+        self.near.min(self.far)
+    }
+}
+
 /// Read one connected group of selected edges off the solid as a chain, or
 /// `None` when it is not one this path can build exactly.
 fn plan_chain(
     topo: &Topology,
     faces: &[FaceId],
     group: &[EdgeId],
-    d: f64,
+    distances: &Distances,
 ) -> Result<Option<Plan>, OperationsError> {
     let adjacency = AdjacencyIndex::build_from_faces(topo, faces)?;
     // The faces along every edge of the group.
@@ -925,13 +970,21 @@ fn plan_chain(
     // every edge along one wall, the caps apart.
     for &cap in &common {
         if plane_normal(topo, cap)?.is_some()
-            && let Some(plan) = plan_on(topo, faces, &adjacency, group, Common::Cap(cap), d)?
+            && let Some(plan) =
+                plan_on(topo, faces, &adjacency, group, Common::Cap(cap), distances)?
         {
             return Ok(Some(plan));
         }
     }
     for &wall in &common {
-        if let Some(plan) = plan_on(topo, faces, &adjacency, group, Common::Wall(wall), d)? {
+        if let Some(plan) = plan_on(
+            topo,
+            faces,
+            &adjacency,
+            group,
+            Common::Wall(wall),
+            distances,
+        )? {
             return Ok(Some(plan));
         }
     }
@@ -996,10 +1049,10 @@ fn plan_on(
     adjacency: &AdjacencyIndex,
     group: &[EdgeId],
     common: Common,
-    d: f64,
+    distances: &Distances,
 ) -> Result<Option<Plan>, OperationsError> {
     let tol = Tolerance::new().linear;
-    let step = d * 1e-3;
+    let step = distances.least() * 1e-3;
 
     let mut pieces = Vec::with_capacity(group.len());
     for &edge in group {
@@ -1025,6 +1078,7 @@ fn plan_on(
         let Some(cap_normal) = plane_normal(topo, cap)? else {
             return Ok(None);
         };
+        let (cap_d, wall_d) = (distances.on(edge, cap), distances.on(edge, wall));
         let wall_side = match &curve {
             EdgeCurve::Line => {
                 if let Some(normal) = plane_normal(topo, wall)? {
@@ -1045,7 +1099,7 @@ fn plan_on(
                         edge,
                         start_point,
                         end_point,
-                        d,
+                        wall_d,
                     )?
                     else {
                         return Ok(None);
@@ -1115,6 +1169,8 @@ fn plan_on(
             end_point,
             cap_sign: 1.0,
             wall_side,
+            cap_d,
+            wall_d,
         };
         let m = piece.midpoint();
         let across = cap_normal.cross(piece.tangent(m)?);
@@ -1129,8 +1185,8 @@ fn plan_on(
     let mut uses: Vec<(VertexId, Vec<usize>)> = Vec::new();
     for (index, piece) in pieces.iter().enumerate() {
         piece_sections.push([
-            piece.section(piece.start_point, d)?,
-            piece.section(piece.end_point, d)?,
+            piece.section(piece.start_point)?,
+            piece.section(piece.end_point)?,
         ]);
         for vertex in [piece.start, piece.end] {
             match uses.iter_mut().find(|(v, _)| *v == vertex) {
@@ -1145,7 +1201,7 @@ fn plan_on(
     let mut sections: Vec<(VertexId, Section)> = Vec::new();
     let mut joints = Vec::new();
     let mut ends = Vec::new();
-    let mut square_ends = Vec::new();
+    let mut plane_ends = Vec::new();
     let mut corners = Vec::new();
     let mut curved = pieces.iter().any(|p| {
         matches!(p.curve, EdgeCurve::Circle(_)) || matches!(p.wall_side, WallSide::Ruling { .. })
@@ -1157,8 +1213,7 @@ fn plan_on(
                 let (first, second) = (&pieces[a], &pieces[b]);
                 let through = first.leaving(vertex)? + second.leaving(vertex)?;
                 if through.length() > JOIN_TOL {
-                    let Some(corner) =
-                        plan_corner(topo, &pieces, &piece_sections, a, b, vertex, d)?
+                    let Some(corner) = plan_corner(topo, &pieces, &piece_sections, a, b, vertex)?
                     else {
                         return Ok(None);
                     };
@@ -1180,7 +1235,7 @@ fn plan_on(
                 sections.push((vertex, sa));
                 let ruling = ruling_along(topo, first.wall, vertex, sa.wall_dir)?;
                 if let Some((_, length)) = ruling
-                    && length <= d + tol
+                    && length <= first.wall_d + tol
                 {
                     return Ok(None);
                 }
@@ -1213,14 +1268,14 @@ fn plan_on(
                 let section = piece_sections[a][piece.slot(vertex)];
                 sections.push((vertex, section));
                 if let Some((end, beyond_curved)) =
-                    plan_tangent_end(topo, adjacency, piece, &section, vertex, d)?
+                    plan_tangent_end(topo, adjacency, piece, &section, vertex)?
                 {
                     curved |= beyond_curved;
                     ends.push(end);
                 } else if let Some(end) =
-                    plan_square_end(topo, adjacency, a, piece, &section, vertex)?
+                    plan_plane_end(topo, adjacency, a, piece, &piece_sections[a], vertex)?
                 {
-                    square_ends.push(end);
+                    plane_ends.push(end);
                 } else {
                     return Ok(None);
                 }
@@ -1233,7 +1288,8 @@ fn plan_on(
     let mut volume_change = 0.0;
     for (piece, piece_ends) in pieces.iter().zip(&piece_sections) {
         let section = piece_ends[0];
-        let mut area = 0.5 * section.cap_dir.cross(section.wall_dir).length() * d * d;
+        let mut area =
+            0.5 * section.cap_dir.cross(section.wall_dir).length() * piece.cap_d * piece.wall_d;
         // A wall running under the cap's outward side is a convex edge, whose
         // triangle is material; above it, the triangle fills a corner.
         let cap_out = if topo.face(piece.cap)?.is_reversed() {
@@ -1260,13 +1316,13 @@ fn plan_on(
                 let radial = (piece.start_point - c.center()).normalize()?;
                 let toward = section.cap_dir.dot(radial);
                 // A cap point past the arc's axis has no circle to run on.
-                if c.radius() + toward * d <= tol {
+                if c.radius() + toward * piece.cap_d <= tol {
                     return Ok(None);
                 }
                 let (t0, t1) = piece
                     .curve
                     .domain_with_endpoints(piece.start_point, piece.end_point);
-                (t1 - t0) * (c.radius() + toward * d / 3.0)
+                (t1 - t0) * (c.radius() + toward * piece.cap_d / 3.0)
             }
             EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_) => return Ok(None),
         };
@@ -1274,7 +1330,7 @@ fn plan_on(
         volume_change += sign * area * path;
     }
     // The chamfers at a corner meet within a ball about it reaching its
-    // farthest point.
+    // farthest point, and a slanted end stops within one about its vertex.
     let mut corner_allowance = 0.0;
     for corner in &corners {
         let at = topo.vertex(corner.vertex)?.point();
@@ -1282,7 +1338,11 @@ fn plan_on(
             .into_iter()
             .flatten()
             .map(|p| (p - at).length())
-            .fold(d, f64::max);
+            .fold(corner_reach(&pieces, corner), f64::max);
+        corner_allowance += 4.0 / 3.0 * PI * reach.powi(3);
+    }
+    for end in plane_ends.iter().filter(|e| e.slanted) {
+        let reach = end_reach(topo, &pieces[end.piece], end)?;
         corner_allowance += 4.0 / 3.0 * PI * reach.powi(3);
     }
 
@@ -1292,13 +1352,13 @@ fn plan_on(
         sections,
         joints,
         ends,
-        square_ends,
+        plane_ends,
         corners,
         volume_change,
         corner_allowance,
         curved,
     };
-    if !plan_is_clear(topo, &plan, d)? || !wedges_are_clear(topo, &plan, faces, d)? {
+    if !plan_is_clear(topo, &plan)? || !wedges_are_clear(topo, &plan, faces)? {
         return Ok(None);
     }
     Ok(Some(plan))
@@ -1612,16 +1672,15 @@ fn wedges_are_clear(
     topo: &Topology,
     plan: &Plan,
     faces: &[FaceId],
-    d: f64,
 ) -> Result<bool, OperationsError> {
     let tol = Tolerance::new().linear;
-    let reach = d + tol;
     let mut own: HashSet<FaceId> = HashSet::new();
     let mut reaches: Vec<Reach> = Vec::new();
     // Each piece's own frame, which turns with the solid.
     let mut frames: Vec<[Vec3; 3]> = Vec::with_capacity(plan.pieces.len());
     for (index, piece) in plan.pieces.iter().enumerate() {
         own.extend([piece.cap, piece.wall]);
+        let reach = piece.reach() + tol;
         match &piece.curve {
             EdgeCurve::Circle(c) => {
                 frames.push([c.u_axis(), c.v_axis(), c.normal()]);
@@ -1666,7 +1725,7 @@ fn wedges_are_clear(
     }
     own.extend(plan.joints.iter().flat_map(|j| j.walls));
     own.extend(plan.ends.iter().flat_map(|e| [e.wall, e.beyond]));
-    own.extend(plan.square_ends.iter().map(|e| e.face));
+    own.extend(plan.plane_ends.iter().map(|e| e.face));
     for corner in &plan.corners {
         own.extend([corner.shared, corner.faces[0], corner.faces[1]]);
         let at = topo.vertex(corner.vertex)?.point();
@@ -1674,7 +1733,7 @@ fn wedges_are_clear(
             .into_iter()
             .flatten()
             .map(|p| (p - at).length())
-            .fold(d, f64::max)
+            .fold(corner_reach(&plan.pieces, corner), f64::max)
             + tol;
         reaches.push(Reach {
             origin: at,
@@ -1684,13 +1743,24 @@ fn wedges_are_clear(
             pieces: corner.pieces.to_vec(),
         });
     }
+    // A slanted end's contacts can run on past its section.
+    for end in plan.plane_ends.iter().filter(|e| e.slanted) {
+        let radius = end_reach(topo, &plan.pieces[end.piece], end)? + tol;
+        reaches.push(Reach {
+            origin: topo.vertex(end.vertex)?.point(),
+            axes: frames[end.piece],
+            lo: [-radius; 3],
+            hi: [radius; 3],
+            pieces: vec![end.piece],
+        });
+    }
     // Each piece's chamfer face, and the sign of its level on the side it
     // takes or fills, which holds the edge, where the other side is convex:
     // either side of a plane, or the inside of a cone.
     let mut kept: Vec<Option<(Band, f64)>> = Vec::with_capacity(plan.pieces.len());
     for (index, piece) in plan.pieces.iter().enumerate() {
         let [a, b] = plan.piece_sections[index];
-        let band = piece.band(&a, &b, d)?;
+        let band = piece.band(&a, &b)?;
         let removed = band.level(piece.midpoint()).signum();
         let convex_kept = match band {
             Band::Plane { .. } => true,
@@ -1739,7 +1809,6 @@ fn plan_tangent_end(
     piece: &Piece,
     section: &Section,
     vertex: VertexId,
-    d: f64,
 ) -> Result<Option<(End, bool)>, OperationsError> {
     let tol = Tolerance::new().linear;
     if matches!(piece.wall_side, WallSide::Ruling { .. }) {
@@ -1777,7 +1846,7 @@ fn plan_tangent_end(
     let Some((ruling, length)) = ruling_along(topo, piece.wall, vertex, section.wall_dir)? else {
         return Ok(None);
     };
-    if length <= d + tol
+    if length <= piece.wall_d + tol
         || beyond == piece.wall
         || !adjacency.faces_for_edge(ruling).contains(&beyond)
     {
@@ -1858,15 +1927,18 @@ fn side_along(
     }
 }
 
-/// A free end at a plane square to the edge (see [`SquareEnd`]).
-fn plan_square_end(
+/// A free end at a plane through the vertex (see [`PlaneEnd`]).
+#[allow(clippy::too_many_lines)]
+fn plan_plane_end(
     topo: &Topology,
     adjacency: &AdjacencyIndex,
     index: usize,
     piece: &Piece,
-    section: &Section,
+    sections: &[Section; 2],
     vertex: VertexId,
-) -> Result<Option<SquareEnd>, OperationsError> {
+) -> Result<Option<PlaneEnd>, OperationsError> {
+    let tol = Tolerance::new().linear;
+    let section = sections[piece.slot(vertex)];
     let others = |face: FaceId| -> Result<Vec<EdgeId>, OperationsError> {
         Ok(edges_at(topo, face, vertex)?
             .into_iter()
@@ -1886,50 +1958,107 @@ fn plan_square_end(
     let Some(normal) = plane_normal(topo, face)? else {
         return Ok(None);
     };
-    let tangent = piece.tangent(piece.at(vertex))?;
-    if face != also || normal.cross(tangent).length() > JOIN_TOL {
+    if face != also {
         return Ok(None);
     }
+    let edges = [*cap_edge, *wall_edge];
+    let at = piece.at(vertex);
+    let slanted = normal.cross(piece.tangent(at)?).length() > JOIN_TOL;
+    let (points, cross) = if slanted {
+        // Each contact runs on, or back, along its track to the plane's
+        // straight edge on its face.
+        let tracks = piece.tracks(at, &section)?;
+        let mut points = [section.cap, section.wall];
+        for (side, track) in tracks.iter().enumerate() {
+            if !matches!(read_curve(topo, edges[side])?, EdgeCurve::Line) {
+                return Ok(None);
+            }
+            let far = topo.vertex(far_end(topo, edges[side], vertex)?)?.point();
+            let Some(p) = track.meets_line(at, far - at, points[side], tol) else {
+                return Ok(None);
+            };
+            points[side] = p;
+        }
+        let plane = Band::Plane {
+            normal,
+            d: normal.dot(to_vec(at)),
+        };
+        let band = piece.band(&sections[0], &sections[1])?;
+        let Some(cross) = crossing_curve(&band, &plane, points[0], points[1]) else {
+            return Ok(None);
+        };
+        (points, cross)
+    } else {
+        ([section.cap, section.wall], EdgeCurve::Line)
+    };
     let (Some(cap_side), Some(wall_side)) = (
-        side_along(topo, *cap_edge, vertex, section.cap)?,
-        side_along(topo, *wall_edge, vertex, section.wall)?,
+        side_along(topo, edges[0], vertex, points[0])?,
+        side_along(topo, edges[1], vertex, points[1])?,
     ) else {
         return Ok(None);
     };
     let split = [cap_side > 0.0, wall_side > 0.0];
-    if !split[0] && !split[1] {
+    if (!split[0] && !split[1]) || (slanted && !(split[0] && split[1])) {
         return Ok(None);
     }
-    // The cross edge crosses no other edge of the plane.
-    let tol = Tolerance::new().linear;
-    let cross = Span::Segment(section.cap, section.wall);
-    let data = topo.face(face)?;
-    for wid in std::iter::once(data.outer_wire()).chain(data.inner_wires().iter().copied()) {
-        for oe in topo.wire(wid)?.edges() {
-            if oe.edge() == *cap_edge || oe.edge() == *wall_edge {
-                continue;
-            }
-            let e = topo.edge(oe.edge())?;
-            let curve = read_curve(topo, oe.edge())?;
-            let Some(span) = Span::of(
-                &curve,
-                topo.vertex(e.start())?.point(),
-                topo.vertex(e.end())?.point(),
-            ) else {
-                return Ok(None);
-            };
-            if !cross.touches(&span, tol).is_empty() {
-                return Ok(None);
+    // The cross edge crosses no other edge of the plane: a square end's
+    // segment here, a slanted end's curve within its region's hull later.
+    if !slanted {
+        let cross = Span::Segment(points[0], points[1]);
+        let data = topo.face(face)?;
+        for wid in std::iter::once(data.outer_wire()).chain(data.inner_wires().iter().copied()) {
+            for oe in topo.wire(wid)?.edges() {
+                if edges.contains(&oe.edge()) {
+                    continue;
+                }
+                let e = topo.edge(oe.edge())?;
+                let curve = read_curve(topo, oe.edge())?;
+                let Some(span) = Span::of(
+                    &curve,
+                    topo.vertex(e.start())?.point(),
+                    topo.vertex(e.end())?.point(),
+                ) else {
+                    return Ok(None);
+                };
+                if !cross.touches(&span, tol).is_empty() {
+                    return Ok(None);
+                }
             }
         }
     }
-    Ok(Some(SquareEnd {
+    Ok(Some(PlaneEnd {
         vertex,
         piece: index,
         face,
-        edges: [*cap_edge, *wall_edge],
+        edges,
         split,
+        points,
+        cross,
+        slanted,
     }))
+}
+
+/// How far from its vertex a slanted end's chamfer can reach: the piece's
+/// reach, the contacts' ends and the poles of the curve between them.
+fn end_reach(topo: &Topology, piece: &Piece, end: &PlaneEnd) -> Result<f64, OperationsError> {
+    let at = topo.vertex(end.vertex)?.point();
+    let poles = match &end.cross {
+        EdgeCurve::NurbsCurve(curve) => curve.control_points().to_vec(),
+        EdgeCurve::Line | EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => Vec::new(),
+    };
+    Ok(end
+        .points
+        .iter()
+        .chain(&poles)
+        .map(|&p| (p - at).length())
+        .fold(piece.reach(), f64::max))
+}
+
+/// The farther reach of a corner's two pieces.
+fn corner_reach(pieces: &[Piece], corner: &Corner) -> f64 {
+    pieces[corner.pieces[0]]
+        .reach()
+        .max(pieces[corner.pieces[1]].reach())
 }
 
 /// A corner between pieces `a` and `b` at `vertex` (see [`Corner`]).
@@ -1941,7 +2070,6 @@ fn plan_corner(
     a: usize,
     b: usize,
     vertex: VertexId,
-    d: f64,
 ) -> Result<Option<Corner>, OperationsError> {
     let tol = Tolerance::new().linear;
     let (pa, pb) = (&pieces[a], &pieces[b]);
@@ -1980,8 +2108,8 @@ fn plan_corner(
 
     let section_at = |index: usize, piece: &Piece| piece_sections[index][piece.slot(vertex)];
     let (sa, sb) = (section_at(a, pa), section_at(b, pb));
-    let tracks_a = pa.tracks(at, &sa, d)?;
-    let tracks_b = pb.tracks(at, &sb, d)?;
+    let tracks_a = pa.tracks(at, &sa)?;
+    let tracks_b = pb.tracks(at, &sb)?;
     // Each piece's track on the shared face, then on its other face.
     let split = |p: &Piece, tracks: [Track; 2]| {
         let [cap, wall] = tracks;
@@ -1996,7 +2124,7 @@ fn plan_corner(
     let Some(meet) = shared_a.meets(&shared_b, at, tol) else {
         return Ok(None);
     };
-    if (meet - at).length() > 10.0 * d {
+    if (meet - at).length() > 10.0 * pa.reach().max(pb.reach()) {
         return Ok(None);
     }
     let on_third = |track: &Track| -> Option<(Point3, f64)> {
@@ -2010,8 +2138,8 @@ fn plan_corner(
     };
 
     let bands = [
-        pa.band(&piece_sections[a][0], &piece_sections[a][1], d)?,
-        pb.band(&piece_sections[b][0], &piece_sections[b][1], d)?,
+        pa.band(&piece_sections[a][0], &piece_sections[a][1])?,
+        pb.band(&piece_sections[b][0], &piece_sections[b][1])?,
     ];
     let (order, reach, cut, sliver) = if (reach_a - reach_b).length() <= JOIN_TOL {
         ([a, b], reach_a + (reach_b - reach_a) * 0.5, None, None)
@@ -2036,7 +2164,7 @@ fn plan_corner(
         };
         let near_track = split(
             near_piece,
-            near_piece.tracks(at, &section_at(second, near_piece), d)?,
+            near_piece.tracks(at, &section_at(second, near_piece))?,
         )
         .1;
         let along = |t: f64| -> Point3 {
@@ -2095,9 +2223,9 @@ fn plan_corner(
 /// Whether a plan's new boundary meets nothing it must not, on its caps, on
 /// its walls, and against itself.
 #[allow(clippy::too_many_lines)]
-fn plan_is_clear(topo: &Topology, plan: &Plan, d: f64) -> Result<bool, OperationsError> {
+fn plan_is_clear(topo: &Topology, plan: &Plan) -> Result<bool, OperationsError> {
     let tol = Tolerance::new().linear;
-    if !contacts_keep_order(plan, d)? {
+    if !contacts_keep_order(plan)? {
         return Ok(false);
     }
     // The new boundary on each cap: each contact, a sliver's chord, and each
@@ -2113,7 +2241,7 @@ fn plan_is_clear(topo: &Topology, plan: &Plan, d: f64) -> Result<bool, Operation
             {
                 allowed.push(plan.contact_ends(index, vertex).0);
             }
-            if plan.square_ends.iter().any(|e| e.vertex == vertex) {
+            if plan.plane_end(vertex).is_some() {
                 allowed.push(plan.contact_ends(index, vertex).0);
             }
         }
@@ -2121,7 +2249,7 @@ fn plan_is_clear(topo: &Topology, plan: &Plan, d: f64) -> Result<bool, Operation
             EdgeCurve::Line => Span::Segment(a, b),
             EdgeCurve::Circle(_) => {
                 let [EdgeCurve::Circle(circle), _] =
-                    piece.contact_curves(&plan.piece_sections[index][0], d)?
+                    piece.contact_curves(&plan.piece_sections[index][0])?
                 else {
                     return Ok(false);
                 };
@@ -2171,7 +2299,7 @@ fn plan_is_clear(topo: &Topology, plan: &Plan, d: f64) -> Result<bool, Operation
     }
 
     // Each cap's other edges: what is left of a corner's third edge or a
-    // square end's edge past the point the chamfer moves its end to.
+    // plane end's edge past the point the chamfer moves its end to.
     let mut kept_from: HashMap<EdgeId, Vec<(VertexId, Point3)>> = HashMap::new();
     for corner in &plan.corners {
         kept_from
@@ -2179,15 +2307,12 @@ fn plan_is_clear(topo: &Topology, plan: &Plan, d: f64) -> Result<bool, Operation
             .or_default()
             .push((corner.vertex, corner.reach));
     }
-    for end in &plan.square_ends {
+    for end in &plan.plane_ends {
         if end.split[0] {
-            let Some(section) = plan.section(end.vertex) else {
-                return Ok(false);
-            };
             kept_from
                 .entry(end.edges[0])
                 .or_default()
-                .push((end.vertex, section.cap));
+                .push((end.vertex, end.points[0]));
         }
     }
     let piece_edges: HashSet<EdgeId> = plan.pieces.iter().map(|p| p.edge).collect();
@@ -2244,7 +2369,7 @@ fn plan_is_clear(topo: &Topology, plan: &Plan, d: f64) -> Result<bool, Operation
                     if cut_to.iter().any(|&to| (p - to).length() <= 10.0 * tol) {
                         continue;
                     }
-                    if plan.strip_holds(cap, p, d, tol)? {
+                    if plan.strip_holds(cap, p, tol)? {
                         return Ok(false);
                     }
                 }
@@ -2257,7 +2382,7 @@ fn plan_is_clear(topo: &Topology, plan: &Plan, d: f64) -> Result<bool, Operation
     planned.extend(plan.joints.iter().map(|j| j.ruling));
     planned.extend(plan.ends.iter().map(|e| e.ruling));
     planned.extend(plan.corners.iter().map(|c| c.third));
-    planned.extend(plan.square_ends.iter().flat_map(|e| e.edges));
+    planned.extend(plan.plane_ends.iter().flat_map(|e| e.edges));
     for (index, piece) in plan.pieces.iter().enumerate() {
         let section = plan.piece_sections[index][0];
         let wall = topo.face(piece.wall)?;
@@ -2284,24 +2409,24 @@ fn plan_is_clear(topo: &Topology, plan: &Plan, d: f64) -> Result<bool, Operation
                 for v in [edge.start(), edge.end()] {
                     let height =
                         (topo.vertex(v)?.point() - piece.start_point).dot(section.wall_dir);
-                    if height <= d + tol {
+                    if height <= piece.wall_d + tol {
                         return Ok(false);
                     }
                 }
             }
-        } else if !cylinder_wall_clear(topo, piece, d, &planned)? {
+        } else if !cylinder_wall_clear(topo, piece, &planned)? {
             return Ok(false);
         }
     }
-    // Nor may a corner's region, or a square end's triangle, hold anything
-    // else of their faces.
+    // Nor may a corner's region, or a plane end's, hold anything else of
+    // their faces.
     for corner in &plan.corners {
-        if !corner_is_clear(topo, plan, corner, d, &new_spans)? {
+        if !corner_is_clear(topo, plan, corner, &new_spans)? {
             return Ok(false);
         }
     }
-    for end in &plan.square_ends {
-        if !square_end_is_clear(topo, plan, end)? {
+    for end in &plan.plane_ends {
+        if !plane_end_is_clear(topo, plan, end, &new_spans)? {
             return Ok(false);
         }
     }
@@ -2312,7 +2437,7 @@ fn plan_is_clear(topo: &Topology, plan: &Plan, d: f64) -> Result<bool, Operation
             let meet = [a.start, a.end]
                 .iter()
                 .any(|v| *v == b.start || *v == b.end);
-            if a.wall == b.wall && !meet && wall_strips_overlap(topo, plan, i, j, d)? {
+            if a.wall == b.wall && !meet && wall_strips_overlap(topo, plan, i, j)? {
                 return Ok(false);
             }
         }
@@ -2340,13 +2465,13 @@ fn contact_sweep(
 /// Whether each piece's contacts still run the way its edge runs between
 /// the points where they end. A corner can move an end back or on, but a
 /// contact whose ends pass each other would fold its chamfer over.
-fn contacts_keep_order(plan: &Plan, d: f64) -> Result<bool, OperationsError> {
+fn contacts_keep_order(plan: &Plan) -> Result<bool, OperationsError> {
     let tol = Tolerance::new().linear;
     for (index, piece) in plan.pieces.iter().enumerate() {
         let [s0, s1] = plan.piece_sections[index];
         let (cap_a, wall_a) = plan.contact_ends(index, piece.start);
         let (cap_b, wall_b) = plan.contact_ends(index, piece.end);
-        let curves = piece.contact_curves(&s0, d)?;
+        let curves = piece.contact_curves(&s0)?;
         let sides = [
             ((cap_a, s0.cap), (cap_b, s1.cap)),
             ((wall_a, s0.wall), (wall_b, s1.wall)),
@@ -2742,7 +2867,6 @@ fn corner_is_clear(
     topo: &Topology,
     plan: &Plan,
     corner: &Corner,
-    d: f64,
     new_spans: &[(FaceId, Span, Vec<Point3>, Option<usize>)],
 ) -> Result<bool, OperationsError> {
     let at = topo.vertex(corner.vertex)?.point();
@@ -2772,7 +2896,7 @@ fn corner_is_clear(
             };
             points.extend([from, to]);
             if let EdgeCurve::Circle(circle) =
-                &piece.contact_curves(&plan.piece_sections[index][0], d)?[side]
+                &piece.contact_curves(&plan.piece_sections[index][0])?[side]
                 && (to - from).length() > JOIN_TOL
             {
                 let Some(pole) = arc_pole(circle, from, to) else {
@@ -2804,21 +2928,21 @@ fn corner_is_clear(
     Ok(true)
 }
 
-/// Whether the triangle a square end cuts from its plane, or hands it, is
-/// clear of the plane's other edges: the hull of the vertex, the section's
-/// two points, and the pole of the stretch of an arc edge between the
-/// vertex and the section's point on it.
-fn square_end_is_clear(
+/// Whether the region a plane end cuts from its plane, or hands it, is clear
+/// of the plane's other edges: the hull of the vertex, the contacts' two
+/// ends, the pole of the stretch of an arc edge between the vertex and its
+/// point, and the poles of a slanted end's curve. A slanted end's contacts
+/// end off its section, so the region each takes from its cap or its wall
+/// between the section and the end must be clear as well, as at a corner.
+fn plane_end_is_clear(
     topo: &Topology,
     plan: &Plan,
-    end: &SquareEnd,
+    end: &PlaneEnd,
+    new_spans: &[(FaceId, Span, Vec<Point3>, Option<usize>)],
 ) -> Result<bool, OperationsError> {
-    let Some(section) = plan.section(end.vertex) else {
-        return Ok(false);
-    };
     let at = topo.vertex(end.vertex)?.point();
-    let mut points = vec![at, section.cap, section.wall];
-    for (edge, p) in end.edges.into_iter().zip([section.cap, section.wall]) {
+    let mut points = vec![at, end.points[0], end.points[1]];
+    for (edge, p) in end.edges.into_iter().zip(end.points) {
         if let EdgeCurve::Circle(circle) = read_curve(topo, edge)? {
             let Some(pole) = arc_pole(&circle, at, p) else {
                 return Ok(false);
@@ -2826,18 +2950,50 @@ fn square_end_is_clear(
             points.push(pole);
         }
     }
+    if let EdgeCurve::NurbsCurve(curve) = &end.cross {
+        points.extend_from_slice(curve.control_points());
+    }
     let planned: HashSet<EdgeId> = end.edges.into_iter().collect();
-    hull_is_clear(topo, end.face, at, &points, &planned, &[])
+    if !hull_is_clear(topo, end.face, at, &points, &planned, &[])? {
+        return Ok(false);
+    }
+    if !end.slanted {
+        return Ok(true);
+    }
+    let piece = &plan.pieces[end.piece];
+    let section = plan.piece_sections[end.piece][piece.slot(end.vertex)];
+    let curves = piece.contact_curves(&plan.piece_sections[end.piece][0])?;
+    let planned: HashSet<EdgeId> = [piece.edge, end.edges[0], end.edges[1]]
+        .into_iter()
+        .collect();
+    for (side, face) in [piece.cap, piece.wall].into_iter().enumerate() {
+        let from = if side == 0 { section.cap } else { section.wall };
+        let to = end.points[side];
+        let mut points = vec![at, from, to];
+        if let EdgeCurve::Circle(circle) = &curves[side]
+            && (to - from).length() > JOIN_TOL
+        {
+            let Some(pole) = arc_pole(circle, from, to) else {
+                return Ok(false);
+            };
+            points.push(pole);
+        }
+        let spans: Vec<&Span> = new_spans
+            .iter()
+            .filter(|(f, _, _, owner)| *f == face && *owner != Some(end.piece))
+            .map(|(_, span, _, _)| span)
+            .collect();
+        if !hull_is_clear(topo, face, at, &points, &planned, &spans)? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 /// The angles (from `from` over `width`) and the heights along the axis
 /// (from `low` to `high`) of the strip a chamfer takes from the cylinder
 /// wall under `piece`.
-fn cylinder_strip(
-    cylinder: &CylindricalSurface,
-    piece: &Piece,
-    d: f64,
-) -> Option<(f64, f64, f64, f64)> {
+fn cylinder_strip(cylinder: &CylindricalSurface, piece: &Piece) -> Option<(f64, f64, f64, f64)> {
     let axis = cylinder.axis();
     let height = |p: Point3| axis.dot(p - cylinder.origin());
     let angle = |p: Point3| cylinder.project_point(p).0;
@@ -2855,7 +3011,7 @@ fn cylinder_strip(
             };
             let (rim, other) = (
                 height(piece.start_point),
-                height(piece.start_point + *dir * d),
+                height(piece.start_point + *dir * piece.wall_d),
             );
             Some((from, width, rim.min(other), rim.max(other)))
         }
@@ -2912,15 +3068,13 @@ fn wall_strips_overlap(
     plan: &Plan,
     i: usize,
     j: usize,
-    d: f64,
 ) -> Result<bool, OperationsError> {
     let tol = Tolerance::new().linear;
     let (a, b) = (&plan.pieces[i], &plan.pieces[j]);
     if let Some(cylinder) = cylinder_of(topo, a.wall)? {
-        let (Some((fa, wa, la, ha)), Some((fb, wb, lb, hb))) = (
-            cylinder_strip(&cylinder, a, d),
-            cylinder_strip(&cylinder, b, d),
-        ) else {
+        let (Some((fa, wa, la, ha)), Some((fb, wb, lb, hb))) =
+            (cylinder_strip(&cylinder, a), cylinder_strip(&cylinder, b))
+        else {
             return Ok(true);
         };
         let slack = tol / cylinder.radius();
@@ -2944,7 +3098,7 @@ fn wall_strips_overlap(
                 along,
                 run.length(),
                 section.wall_dir,
-                d,
+                piece.wall_d,
             ) {
                 return Ok(true);
             }
@@ -2959,7 +3113,6 @@ fn wall_strips_overlap(
 fn cylinder_wall_clear(
     topo: &Topology,
     piece: &Piece,
-    d: f64,
     planned: &HashSet<EdgeId>,
 ) -> Result<bool, OperationsError> {
     let tol = Tolerance::new().linear;
@@ -2970,7 +3123,7 @@ fn cylinder_wall_clear(
     let height = |p: Point3| axis.dot(p - cylinder.origin());
     let angle = |p: Point3| cylinder.project_point(p).0;
     let slack = tol / cylinder.radius();
-    let Some((from, width, _, _)) = cylinder_strip(&cylinder, piece, d) else {
+    let Some((from, width, _, _)) = cylinder_strip(&cylinder, piece) else {
         return Ok(false);
     };
     let along_axis = match &piece.wall_side {
@@ -2983,7 +3136,7 @@ fn cylinder_wall_clear(
     let meets_heights = |a: f64, b: f64| match along_axis {
         Some((rim, sign)) => {
             let (lo, hi) = ((a - rim) * sign, (b - rim) * sign);
-            lo.max(hi) > tol && lo.min(hi) <= d + tol
+            lo.max(hi) > tol && lo.min(hi) <= piece.wall_d + tol
         }
         None => a.max(b) > h0.min(h1) + tol && a.min(b) < h0.max(h1) - tol,
     };
@@ -3086,18 +3239,23 @@ fn connected_groups(
     Ok(groups)
 }
 
-/// Each edge of `original` paired with its image in `copy`, which lists its
-/// faces, wires and edges in the same order.
-fn edge_images(
+/// Each edge's and each face's image in a copy of a solid.
+type Images = (HashMap<EdgeId, EdgeId>, HashMap<FaceId, FaceId>);
+
+/// Each edge and each face of `original` paired with its image in `copy`,
+/// which lists its faces, wires and edges in the same order.
+fn images_in(
     topo: &Topology,
     original: SolidId,
     copy: SolidId,
-) -> Result<Option<HashMap<EdgeId, EdgeId>>, OperationsError> {
+) -> Result<Option<Images>, OperationsError> {
     let from = brepkit_topology::explorer::solid_faces(topo, original)?;
     let to = brepkit_topology::explorer::solid_faces(topo, copy)?;
     if from.len() != to.len() {
         return Ok(None);
     }
+    let face_images: HashMap<FaceId, FaceId> =
+        from.iter().copied().zip(to.iter().copied()).collect();
     let mut images = HashMap::new();
     for (&a, &b) in from.iter().zip(&to) {
         let (fa, fb) = (topo.face(a)?, topo.face(b)?);
@@ -3120,7 +3278,7 @@ fn edge_images(
             }
         }
     }
-    Ok(Some(images))
+    Ok(Some((images, face_images)))
 }
 
 /// Edges with the flag each takes, in order.
@@ -3293,21 +3451,21 @@ struct BuiltCorner {
 /// walls and neighbours are rewritten in place. Returns the new faces, or
 /// `None` when the shell's faces do not agree on the edges they share.
 #[allow(clippy::too_many_lines)]
-fn build_chain(
-    topo: &mut Topology,
-    plan: &Plan,
-    d: f64,
-) -> Result<Option<Vec<FaceId>>, OperationsError> {
+fn build_chain(topo: &mut Topology, plan: &Plan) -> Result<Option<Vec<FaceId>>, OperationsError> {
     let tol = Tolerance::new().linear;
     let mut cap_vertex: HashMap<VertexId, VertexId> = HashMap::new();
     let mut wall_vertex: HashMap<VertexId, VertexId> = HashMap::new();
     let mut across: HashMap<VertexId, EdgeId> = HashMap::new();
     for &(vertex, section) in &plan.sections {
-        let c = topo.add_vertex(Vertex::new(section.cap, tol));
-        let w = topo.add_vertex(Vertex::new(section.wall, tol));
+        let (points, curve) = match plan.plane_end(vertex) {
+            Some(end) => (end.points, end.cross.clone()),
+            None => ([section.cap, section.wall], EdgeCurve::Line),
+        };
+        let c = topo.add_vertex(Vertex::new(points[0], tol));
+        let w = topo.add_vertex(Vertex::new(points[1], tol));
         cap_vertex.insert(vertex, c);
         wall_vertex.insert(vertex, w);
-        across.insert(vertex, topo.add_edge(Edge::new(c, w, EdgeCurve::Line)));
+        across.insert(vertex, topo.add_edge(Edge::new(c, w, curve)));
     }
 
     let mut swaps = Swaps::default();
@@ -3340,10 +3498,10 @@ fn build_chain(
         );
     }
 
-    // At a square end, each side's point splits its edge or the plane takes
+    // At a plane end, each side's point splits its edge or the plane takes
     // the stretch back to the vertex.
     let mut stretch: HashMap<(VertexId, usize), EdgeId> = HashMap::new();
-    for end in &plan.square_ends {
+    for end in &plan.plane_ends {
         let piece = &plan.pieces[end.piece];
         let points = [cap_vertex[&end.vertex], wall_vertex[&end.vertex]];
         for side in 0..2 {
@@ -3482,7 +3640,7 @@ fn build_chain(
 
     // What a side's run takes on at a vertex before the contact (`at_start`)
     // or after it: a tangent end's cross edge on the cap, a corner's sliver
-    // on the face it cuts, or a square end's stretch back to the vertex.
+    // on the face it cuts, or a plane end's stretch back to the vertex.
     let extra = |topo: &Topology,
                  index: usize,
                  side: usize,
@@ -3540,8 +3698,8 @@ fn build_chain(
             return Ok(None);
         }
 
-        let [cap_curve, wall_curve] = piece.contact_curves(&a, d)?;
-        let band = match piece.band(&a, &b, d)? {
+        let [cap_curve, wall_curve] = piece.contact_curves(&a)?;
+        let band = match piece.band(&a, &b)? {
             Band::Cone(cone) => {
                 let Some(cylinder) = cylinder_of(topo, piece.wall)? else {
                     return Ok(None);
@@ -3608,9 +3766,9 @@ fn build_chain(
         new_faces.push(topo.add_face(face));
     }
 
-    // A square end's plane takes the cross edge, and the stretch on a side
+    // A plane end's plane takes the cross edge, and the stretch on a side
     // that does not split, between its two edges at the vertex.
-    for end in &plan.square_ends {
+    for end in &plan.plane_ends {
         let points = [cap_vertex[&end.vertex], wall_vertex[&end.vertex]];
         let mut entering = None;
         for side in 0..2 {
@@ -3707,8 +3865,10 @@ fn build_chain(
 /// its rulings. An edge tangent to the next shares its section with it. An
 /// edge meeting the next at an angle meets it in a mitre, where the sharp
 /// edge between their other faces is left unselected. A free end stops where
-/// the next edge carries straight on, or at a plane square to the edge. A
-/// selection of plain lines that meet no curved neighbour is left to the
+/// the next edge carries straight on, or at a plane through the end that
+/// holds the plane's edges along the cap and the wall: square to the edge,
+/// or slanted, where the chamfer face meets the plane in a line or a conic.
+/// A selection of plain lines that meet no curved neighbour is left to the
 /// other engines.
 ///
 /// Returns `None`, leaving `solid` as it was, when the selection is not one
@@ -3719,14 +3879,78 @@ fn build_chain(
 ///
 /// Returns an error if a topology lookup fails, or the chamfer would break
 /// into one of the solid's cavities.
-#[allow(clippy::too_many_lines)]
 pub fn chamfer_tangent_chains(
     topo: &mut Topology,
     solid: SolidId,
     edges: &[EdgeId],
     d: f64,
 ) -> Result<Option<SolidId>, OperationsError> {
-    if d <= 0.0 || edges.is_empty() {
+    if d <= 0.0 {
+        return Ok(None);
+    }
+    let distances = Distances {
+        near: d,
+        far: d,
+        reference: HashMap::new(),
+    };
+    chamfer_chains(topo, solid, edges, &distances)
+}
+
+/// [`chamfer_tangent_chains`] with two distances.
+///
+/// The chamfer reaches `d1` into each edge's reference face and `d2` into
+/// its other face. Where two edges of a chain meet tangent, each face must
+/// take the same distance from both.
+///
+/// # Errors
+///
+/// Returns an error if a topology lookup fails, or the chamfer would break
+/// into one of the solid's cavities.
+pub fn chamfer_tangent_chains_on(
+    topo: &mut Topology,
+    solid: SolidId,
+    edges: &[(EdgeId, FaceId)],
+    d1: f64,
+    d2: f64,
+) -> Result<Option<SolidId>, OperationsError> {
+    if d1 <= 0.0 || d2 <= 0.0 {
+        return Ok(None);
+    }
+    // Each reference one of its edge's two faces, and one for each edge.
+    let outer = topo
+        .shell(topo.solid(solid)?.outer_shell())?
+        .faces()
+        .to_vec();
+    let adjacency = AdjacencyIndex::build_from_faces(topo, &outer)?;
+    let mut reference = HashMap::with_capacity(edges.len());
+    for &(edge, face) in edges {
+        let around = adjacency.faces_for_edge(edge);
+        if around.len() != 2
+            || !around.contains(&face)
+            || reference
+                .insert(edge, face)
+                .is_some_and(|other| other != face)
+        {
+            return Ok(None);
+        }
+    }
+    let ids: Vec<EdgeId> = edges.iter().map(|&(e, _)| e).collect();
+    let distances = Distances {
+        near: d1,
+        far: d2,
+        reference,
+    };
+    chamfer_chains(topo, solid, &ids, &distances)
+}
+
+#[allow(clippy::too_many_lines)]
+fn chamfer_chains(
+    topo: &mut Topology,
+    solid: SolidId,
+    edges: &[EdgeId],
+    distances: &Distances,
+) -> Result<Option<SolidId>, OperationsError> {
+    if edges.is_empty() {
         return Ok(None);
     }
     let outer_faces = topo
@@ -3736,7 +3960,7 @@ pub fn chamfer_tangent_chains(
     let groups = connected_groups(topo, edges)?;
     let mut plans = Vec::with_capacity(groups.len());
     for group in &groups {
-        let Some(plan) = plan_chain(topo, &outer_faces, group, d)? else {
+        let Some(plan) = plan_chain(topo, &outer_faces, group, distances)? else {
             return Ok(None);
         };
         plans.push(plan);
@@ -3749,23 +3973,26 @@ pub fn chamfer_tangent_chains(
     let allowance: f64 = plans.iter().map(|p| p.corner_allowance).sum();
 
     let copy = crate::copy::copy_solid(topo, solid)?;
-    let Some(images) = edge_images(topo, solid, copy)? else {
+    let Some((images, face_images)) = images_in(topo, solid, copy)? else {
         return Ok(None);
+    };
+    let mut reference = HashMap::with_capacity(distances.reference.len());
+    for (edge, face) in &distances.reference {
+        let (Some(&e), Some(&f)) = (images.get(edge), face_images.get(face)) else {
+            return Ok(None);
+        };
+        reference.insert(e, f);
+    }
+    let image_distances = Distances {
+        near: distances.near,
+        far: distances.far,
+        reference,
     };
     let data = topo.solid(copy)?;
     let (outer, inners) = (data.outer_shell(), data.inner_shells().to_vec());
     // A copy leaves its pcurves behind, and a face this chamfer never touches
     // keeps its trims.
-    let source = topo.solid(solid)?;
-    let source_shells: Vec<_> = std::iter::once(source.outer_shell())
-        .chain(source.inner_shells().iter().copied())
-        .collect();
-    let copied_shells: Vec<_> = std::iter::once(outer)
-        .chain(inners.iter().copied())
-        .collect();
-    for (&from, &to) in source_shells.iter().zip(&copied_shells) {
-        crate::cavities::copy_pcurves(topo, from, to)?;
-    }
+    crate::cavities::copy_solid_pcurves(topo, solid, copy)?;
     let mut faces = topo.shell(outer)?.faces().to_vec();
     let mut made = Vec::new();
     for group in &groups {
@@ -3779,10 +4006,10 @@ pub fn chamfer_tangent_chains(
         // Read after the chains before it, which shorten rulings this one
         // shares and leave new edges on a cap or wall it shares, which it
         // must clear.
-        let Some(plan) = plan_chain(topo, &faces, &image, d)? else {
+        let Some(plan) = plan_chain(topo, &faces, &image, &image_distances)? else {
             return Ok(None);
         };
-        let Some(new_faces) = build_chain(topo, &plan, d)? else {
+        let Some(new_faces) = build_chain(topo, &plan)? else {
             return Ok(None);
         };
         faces.extend_from_slice(&new_faces);
@@ -3793,7 +4020,7 @@ pub fn chamfer_tangent_chains(
     crate::cavities::clear_of_own_cavities(topo, result, &made, "chamfer")?;
 
     // The closed form decides whether what was built is what was meant.
-    let deflection = (d * 0.01).max(1e-4);
+    let deflection = (distances.least() * 0.01).max(1e-4);
     let before = crate::measure::solid_volume(topo, solid, deflection)?;
     let after = crate::measure::solid_volume(topo, result, deflection)?;
     let oriented = crate::measure::oriented_solid_volume(topo, result, deflection)?;

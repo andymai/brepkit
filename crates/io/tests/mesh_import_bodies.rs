@@ -3,6 +3,8 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+use std::f64::consts::FRAC_PI_2;
+
 use brepkit_io::stl::writer::StlFormat;
 use brepkit_io::stl::{import_mesh, import_mesh_parts, read_stl, write_stl};
 use brepkit_math::mat::Mat4;
@@ -1206,5 +1208,355 @@ fn normals_in_one_direction_beside_true_normals_leave_two_cubes_that_share_an_ed
     for &solid in &parts.solids {
         assert!((volume(&topo, solid) - 1000.0).abs() < 1e-9);
         assert_valid(&topo, solid);
+    }
+}
+
+/// Wound inside out, the two cubes put the material round them, and their
+/// triangles pair off across the void round the shared edge. The import
+/// turns the closed body that they make, and the pairs follow the turn.
+#[test]
+fn two_inward_cubes_that_share_an_edge_are_two_solids() {
+    let mut mesh = TriangleMesh::default();
+    add_cube(&mut mesh, [0.0; 3], 10.0, true);
+    add_cube(&mut mesh, [10.0, 10.0, 0.0], 10.0, true);
+
+    let mut topo = Topology::new();
+    let parts = import_mesh_parts(&mut topo, &mesh, 1e-7).unwrap();
+    assert_eq!((parts.solids.len(), parts.shells.len()), (2, 0));
+    assert_eq!(topo.vertices().len(), 16);
+    assert_eq!(topo.edges().len(), 36);
+    for &solid in &parts.solids {
+        assert!((volume(&topo, solid) - 1000.0).abs() < 1e-9);
+        assert_valid(&topo, solid);
+        assert_eq!(solid_pieces(&mut topo, solid).unwrap(), vec![solid]);
+    }
+
+    let mut topo = Topology::new();
+    let joined = import_mesh(&mut topo, &mesh, 1e-7).unwrap();
+    assert!((volume(&topo, joined) - 2000.0).abs() < 1e-9);
+    assert_eq!(solid_pieces(&mut topo, joined).unwrap().len(), 2);
+}
+
+/// Normals that point in agree with the winding: both put the material
+/// round the cubes. The cubes lie in no body, so the import turns them.
+#[test]
+fn two_inward_cubes_with_inward_normals_that_share_an_edge_are_two_solids() {
+    let mut mesh = TriangleMesh::default();
+    add_cube(&mut mesh, [0.0; 3], 10.0, true);
+    add_cube(&mut mesh, [10.0, 10.0, 0.0], 10.0, true);
+    set_normals(&mut mesh, 0, Point3::new(5.0, 5.0, 5.0), true);
+    set_normals(&mut mesh, 8, Point3::new(15.0, 15.0, 5.0), true);
+
+    let mut topo = Topology::new();
+    let parts = import_mesh_parts(&mut topo, &mesh, 1e-7).unwrap();
+    assert_eq!((parts.solids.len(), parts.shells.len()), (2, 0));
+    for &solid in &parts.solids {
+        assert!((volume(&topo, solid) - 1000.0).abs() < 1e-9);
+        assert_valid(&topo, solid);
+    }
+}
+
+/// Add a cube of edge `size` with one edge on the z axis from `z = lift`,
+/// turned by `angle` round that axis.
+fn add_turned_cube(mesh: &mut TriangleMesh, angle: f64, lift: f64, size: f64, inward: bool) {
+    let first = mesh.positions.len();
+    add_cube(mesh, [0.0, 0.0, lift], size, inward);
+    let (s, c) = angle.sin_cos();
+    for p in &mut mesh.positions[first..] {
+        *p = Point3::new(c * p.x() - s * p.y(), s * p.x() + c * p.y(), p.z());
+    }
+}
+
+/// Three cubes share the edge on the z axis, with a gap of 30 degrees
+/// between each two.
+#[test]
+fn three_cubes_round_one_edge_are_three_solids() {
+    for inward in [false, true] {
+        let mut mesh = TriangleMesh::default();
+        for k in 0..3 {
+            let angle = f64::from(k) * std::f64::consts::TAU / 3.0;
+            add_turned_cube(&mut mesh, angle, 0.0, 10.0, inward);
+        }
+
+        let mut topo = Topology::new();
+        let parts = import_mesh_parts(&mut topo, &mesh, 1e-7).unwrap();
+        assert_eq!(
+            (parts.solids.len(), parts.shells.len()),
+            (3, 0),
+            "inward {inward}"
+        );
+        assert_eq!(topo.vertices().len(), 24);
+        for &solid in &parts.solids {
+            assert!((volume(&topo, solid) - 1000.0).abs() < 1e-9);
+            assert_valid(&topo, solid);
+        }
+
+        let mut topo = Topology::new();
+        let joined = import_mesh(&mut topo, &mesh, 1e-7).unwrap();
+        assert!((volume(&topo, joined) - 3000.0).abs() < 1e-9);
+        assert_eq!(solid_pieces(&mut topo, joined).unwrap().len(), 3);
+    }
+}
+
+/// A chain of three cubes, each two of them with an edge in common. Each
+/// cube is a solid of its own, whichever way each cube is wound.
+#[test]
+fn a_chain_of_cubes_that_share_edges_is_a_solid_for_each_cube_in_any_winding() {
+    for winding in 0..8_u32 {
+        let inward = |k: u32| winding & (1 << k) != 0;
+        let mut mesh = TriangleMesh::default();
+        add_cube(&mut mesh, [0.0; 3], 10.0, inward(0));
+        add_cube(&mut mesh, [10.0, 10.0, 0.0], 10.0, inward(1));
+        add_cube(&mut mesh, [20.0, 0.0, 0.0], 10.0, inward(2));
+
+        let mut topo = Topology::new();
+        let parts = import_mesh_parts(&mut topo, &mesh, 1e-7).unwrap();
+        assert_eq!(
+            (parts.solids.len(), parts.shells.len()),
+            (3, 0),
+            "winding {winding:03b}"
+        );
+        for &solid in &parts.solids {
+            assert!((volume(&topo, solid) - 1000.0).abs() < 1e-9);
+            assert_valid(&topo, solid);
+        }
+
+        let mut topo = Topology::new();
+        let joined = import_mesh(&mut topo, &mesh, 1e-7).unwrap();
+        assert!((volume(&topo, joined) - 3000.0).abs() < 1e-9);
+        assert_eq!(solid_pieces(&mut topo, joined).unwrap().len(), 3);
+    }
+}
+
+#[test]
+fn two_inward_cubes_that_touch_at_a_corner_are_two_solids() {
+    let mut mesh = TriangleMesh::default();
+    add_cube(&mut mesh, [0.0; 3], 10.0, true);
+    add_cube(&mut mesh, [10.0; 3], 10.0, true);
+
+    let mut topo = Topology::new();
+    let parts = import_mesh_parts(&mut topo, &mesh, 1e-7).unwrap();
+    assert_eq!((parts.solids.len(), parts.shells.len()), (2, 0));
+    for &solid in &parts.solids {
+        assert!((volume(&topo, solid) - 1000.0).abs() < 1e-9);
+        assert_valid(&topo, solid);
+    }
+}
+
+/// The inward cube round the two cubes lies in no body, and the two cubes
+/// lie directly in it: the import turns all three. The two cubes then lie
+/// in the material of the large one.
+#[test]
+fn two_inward_cubes_that_share_an_edge_in_an_inward_cube_are_solids_in_a_solid() {
+    let mut mesh = TriangleMesh::default();
+    add_cube(&mut mesh, [0.0; 3], 30.0, true);
+    add_cube(&mut mesh, [5.0, 5.0, 10.0], 10.0, true);
+    add_cube(&mut mesh, [15.0, 15.0, 10.0], 10.0, true);
+
+    let mut topo = Topology::new();
+    let parts = import_mesh_parts(&mut topo, &mesh, 1e-7).unwrap();
+    assert_eq!((parts.solids.len(), parts.shells.len()), (3, 0));
+    assert_eq!(
+        sorted_volumes(&topo, &parts.solids),
+        [1000.0, 1000.0, 27000.0]
+    );
+    for &solid in &parts.solids {
+        assert_valid(&topo, solid);
+    }
+
+    let mut topo = Topology::new();
+    let err = import_mesh(&mut topo, &mesh, 1e-7).unwrap_err();
+    assert!(err.to_string().contains("material"), "{err}");
+}
+
+/// The two inward cubes lie in the cavity of a cube: in a void, so the
+/// import turns them into two islands.
+#[test]
+fn two_inward_cubes_that_share_an_edge_in_a_cavity_are_two_islands() {
+    let mut mesh = TriangleMesh::default();
+    add_cube(&mut mesh, [0.0; 3], 40.0, false);
+    add_cube(&mut mesh, [5.0; 3], 30.0, true);
+    add_cube(&mut mesh, [10.0, 10.0, 15.0], 10.0, true);
+    add_cube(&mut mesh, [20.0, 20.0, 15.0], 10.0, true);
+
+    let mut topo = Topology::new();
+    let parts = import_mesh_parts(&mut topo, &mesh, 1e-7).unwrap();
+    assert_eq!((parts.solids.len(), parts.shells.len()), (3, 0));
+    assert_eq!(
+        sorted_volumes(&topo, &parts.solids),
+        [1000.0, 1000.0, 37000.0]
+    );
+    for &solid in &parts.solids {
+        assert_valid(&topo, solid);
+    }
+
+    let mut topo = Topology::new();
+    let joined = import_mesh(&mut topo, &mesh, 1e-7).unwrap();
+    assert!((volume(&topo, joined) - 39000.0).abs() < 1e-9);
+    assert_eq!(solid_pieces(&mut topo, joined).unwrap().len(), 3);
+}
+
+/// The second cube is turned by 120 degrees round the z axis, and moved up
+/// by half its edge. The two touch along half of an edge, with no corner in
+/// common there, and do not cross.
+#[test]
+fn two_cubes_that_touch_along_half_an_edge_are_one_solid() {
+    for inward in [false, true] {
+        let mut mesh = TriangleMesh::default();
+        add_turned_cube(&mut mesh, 0.0, 0.0, 10.0, inward);
+        add_turned_cube(&mut mesh, 120f64.to_radians(), 5.0, 10.0, inward);
+
+        let mut topo = Topology::new();
+        let parts = import_mesh_parts(&mut topo, &mesh, 1e-7).unwrap();
+        assert_eq!(
+            (parts.solids.len(), parts.shells.len()),
+            (2, 0),
+            "inward {inward}"
+        );
+        for &solid in &parts.solids {
+            assert!((volume(&topo, solid) - 1000.0).abs() < 1e-9);
+            assert_valid(&topo, solid);
+        }
+
+        let mut topo = Topology::new();
+        let joined = import_mesh(&mut topo, &mesh, 1e-7).unwrap();
+        assert!((volume(&topo, joined) - 2000.0).abs() < 1e-9);
+        assert_eq!(solid_pieces(&mut topo, joined).unwrap().len(), 2);
+    }
+}
+
+/// The second cube is turned by 45 degrees: the cubes cross along half of
+/// an edge.
+#[test]
+fn two_cubes_that_cross_along_half_an_edge_are_not_one_solid() {
+    for inward in [false, true] {
+        let mut mesh = TriangleMesh::default();
+        add_turned_cube(&mut mesh, 0.0, 0.0, 10.0, inward);
+        add_turned_cube(&mut mesh, 45f64.to_radians(), 5.0, 10.0, inward);
+
+        let mut topo = Topology::new();
+        let err = import_mesh(&mut topo, &mesh, 1e-7).unwrap_err();
+        assert!(err.to_string().contains("cross"), "{err}");
+        let parts = import_mesh_parts(&mut topo, &mesh, 1e-7).unwrap();
+        let expected = if inward { (0, 2) } else { (2, 0) };
+        assert_eq!((parts.solids.len(), parts.shells.len()), expected);
+    }
+}
+
+/// A mirror winds each triangle the other way. The two cubes that share an
+/// edge are two solids in each pose: as they are, turned, mirrored, and
+/// turned and mirrored.
+#[test]
+fn two_cubes_that_share_an_edge_are_two_solids_in_each_pose() {
+    let turn = Mat4::rotation_z(0.7) * Mat4::rotation_y(0.4) * Mat4::rotation_x(1.1);
+    let mirror = Mat4::scale(-1.0, 1.0, 1.0);
+    for (name, pose) in [
+        ("upright", Mat4::scale(1.0, 1.0, 1.0)),
+        ("turned", turn),
+        ("mirrored", mirror),
+        ("turned and mirrored", mirror * turn),
+    ] {
+        let mut mesh = TriangleMesh::default();
+        add_cube(&mut mesh, [0.0; 3], 10.0, false);
+        add_cube(&mut mesh, [10.0, 10.0, 0.0], 10.0, false);
+        for p in &mut mesh.positions {
+            *p = pose.mul_point(*p);
+        }
+
+        let mut topo = Topology::new();
+        let parts = import_mesh_parts(&mut topo, &mesh, 1e-7).unwrap();
+        assert_eq!((parts.solids.len(), parts.shells.len()), (2, 0), "{name}");
+        for &solid in &parts.solids {
+            assert!((volume(&topo, solid) - 1000.0).abs() < 1e-9, "{name}");
+            assert_valid(&topo, solid);
+        }
+
+        let mut topo = Topology::new();
+        let joined = import_mesh(&mut topo, &mesh, 1e-7).unwrap();
+        assert!((volume(&topo, joined) - 2000.0).abs() < 1e-9, "{name}");
+        assert_eq!(solid_pieces(&mut topo, joined).unwrap().len(), 2, "{name}");
+    }
+}
+
+/// A hook round the corner `(10, 10)`: from that corner it runs along `+x`
+/// and `+y`, and its other arm, `x` from 5 to 8, reaches down to `y = 5`.
+const HOOK: [(f64, f64); 8] = [
+    (10.0, 10.0),
+    (20.0, 10.0),
+    (20.0, 20.0),
+    (5.0, 20.0),
+    (5.0, 5.0),
+    (8.0, 5.0),
+    (8.0, 15.0),
+    (10.0, 15.0),
+];
+const HOOK_CAPS: [[u32; 3]; 6] = [
+    [0, 1, 2],
+    [0, 2, 7],
+    [7, 2, 3],
+    [7, 3, 6],
+    [6, 3, 4],
+    [6, 4, 5],
+];
+
+/// The cube and the hook-shaped prism share the cube's edge at `(10, 10)`,
+/// and the arm of the hook passes through the cube.
+#[test]
+fn a_cube_and_a_prism_that_share_an_edge_and_cross_are_not_one_solid() {
+    for inward in [false, true] {
+        let mut mesh = TriangleMesh::default();
+        add_cube(&mut mesh, [0.0; 3], 10.0, false);
+        add_prism(&mut mesh, &HOOK, &HOOK_CAPS, 10.0);
+        if inward {
+            for tri in mesh.indices.chunks_exact_mut(3) {
+                tri.swap(1, 2);
+            }
+        }
+
+        let mut topo = Topology::new();
+        let err = import_mesh(&mut topo, &mesh, 1e-7).unwrap_err();
+        assert!(err.to_string().contains("cross"), "inward {inward}: {err}");
+        let parts = import_mesh_parts(&mut topo, &mesh, 1e-7).unwrap();
+        let expected = if inward { (0, 2) } else { (2, 0) };
+        assert_eq!(
+            (parts.solids.len(), parts.shells.len()),
+            expected,
+            "inward {inward}"
+        );
+    }
+}
+
+/// The second cube is turned by a little less than 90 degrees, and its
+/// corners move in `x` by `-2.5e-8` at `z = 5` to `-0.5e-8` at `z = 15`. It
+/// lies against the side `x = 0` of the first cube within the tolerance,
+/// and the two touch.
+#[test]
+fn two_cubes_that_touch_along_half_an_edge_within_the_tolerance_are_one_solid() {
+    for inward in [false, true] {
+        let mut mesh = TriangleMesh::default();
+        add_turned_cube(&mut mesh, 0.0, 0.0, 10.0, inward);
+        let first = mesh.positions.len();
+        add_turned_cube(&mut mesh, FRAC_PI_2 - 1e-9, 5.0, 10.0, inward);
+        for p in &mut mesh.positions[first..] {
+            let shift = -2.5e-8 + (p.z() - 5.0) * 2e-9;
+            *p = Point3::new(p.x() + shift, p.y(), p.z());
+        }
+
+        let mut topo = Topology::new();
+        let parts = import_mesh_parts(&mut topo, &mesh, 1e-7).unwrap();
+        assert_eq!(
+            (parts.solids.len(), parts.shells.len()),
+            (2, 0),
+            "inward {inward}"
+        );
+        for &solid in &parts.solids {
+            assert!((volume(&topo, solid) - 1000.0).abs() < 1e-6);
+            assert_valid(&topo, solid);
+        }
+
+        let mut topo = Topology::new();
+        let joined = import_mesh(&mut topo, &mesh, 1e-7).unwrap();
+        assert!((volume(&topo, joined) - 2000.0).abs() < 1e-6);
+        assert_eq!(solid_pieces(&mut topo, joined).unwrap().len(), 2);
     }
 }
