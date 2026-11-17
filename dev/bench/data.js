@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794895071861,
+  "lastUpdate": 1794895278531,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -73277,6 +73277,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 18532740,
             "range": "± 45713",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "3c8d1104a2b9fd95f3e8d4d4bca4d978e30bf56a",
+          "message": "fix(tessellate): keep a shell's free rim out of the boundary weld (#2569)\n\n## Summary\n\n`tessellate_solid` gives no triangles for the flat spline face of #2548\nat deflection 0.5, and one triangle at 0.1. The face is the only face of\nits shell. With this change, the solid's mesh covers the face, with area\n0.102 at each deflection in the test.\n\nThe face meshers do not lose the triangles. The CDT gives 4 triangles at\n0.5, and `tessellate` of the face alone gives area 0.102. The weld after\nthe face meshers drops them. `weld_boundary_vertices` joins each\nboundary vertex of the mesh to the boundary vertices within twice the\ndeflection, to close cracks between faces. On this shell, each edge\nbelongs to one face, so each sample of the face is a boundary vertex.\nThe trapezoid is 0.12 high, so the weld joined its two long sides.\n\n- A sample that lies only on edges that one face uses is on the free rim\nof that face. `edge_to_face_map` gives the faces of each edge, and a\nseam edge counts twice. The weld never joins two samples on the free rim\nof the same face, directly or through samples of other faces.\n- A pair of a rim sample with a vertex off that rim joins in rounds. In\neach round, each cluster keeps its nearest partner that it may join, and\nthose pairs join nearest first. The weld refuses a join whose two\nclusters hold samples of one face's rim. The rounds keep one pair for\neach cluster, so the memory grows with the samples, not with their\npairs.\n- The weld still joins samples of two different faces. Two faces can\nhold one join with two separate edges, each used once, and their samples\ncan round to different cells of the merge grid. The weld closes that\ncrack as before.\n- A pair with no rim sample joins at once, as before. These vertices\nweld as before:\n  - a sample where the free rims of two faces meet\n  - a sample on an edge that two faces use\n  - a vertex that a face mesher adds\n- In a closed solid, each edge has at least two face uses, so the weld\ndoes the same as before.\n\n## Test plan\n\n- The new test\n`a_flat_spline_face_in_a_skewed_parameter_space_meshes_whole` meshes the\nface and the solid at deflections 0.5, 0.1, 0.01 and 0.001, upright,\nturned and mirrored. Each mesh has area 0.102 within 1e-9, and no\ntriangle folds back. On main the test fails: the solid at 0.5 has 0\ntriangles.\n- The new test\n`a_join_held_by_two_edges_is_welded_across_the_merge_grid` meshes two\nrectangles side by side, each the only user of its edges, with a gap of\n6e-8 between their sides. The rectangles are 1 high, and then 0.12 high.\nAt deflections 0.5 and 0.1, each mesh has 4 triangles, area twice the\nheight, 6 boundary edges and no non-manifold edge. If the weld skips\nevery free-rim sample, the 1 high pair has 8 boundary edges. If the weld\nrefuses only a direct pair on one rim, the 0.12 high pair fails at 0.5.\n- The new test `a_dense_join_held_by_two_arcs_welds_sample_to_sample`\nmeshes a half disc and a half ring that meet along two arcs 3e-7 apart.\nAt deflection 0.5, each arc's samples lie within the weld's reach of\neach other. The mesh has the area of the two faces meshed alone, no open\nedge along the join, and no non-manifold edge. On main the weld\ncollapses that mesh to area 0.\n- `cargo nextest run --cargo-profile ci -p brepkit-operations -p\nbrepkit-io -p brepkit-wasm` at afa82e5e8: 3129 passed, 22 skipped.\n- The `pose_sweep` and `truth_audit` examples (release) give the same\noutput as on main at d4bb06c56.\n- The pre-commit hook (fmt, clippy) passes.\n\nFixes #2548",
+          "timestamp": "2026-11-17T05:56:37Z",
+          "tree_id": "ef9e6d178d27f9241c7dcbeeb3bb982efefa4c44",
+          "url": "https://github.com/andymai/brepkit/commit/3c8d1104a2b9fd95f3e8d4d4bca4d978e30bf56a"
+        },
+        "date": 1794895265294,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 911375,
+            "range": "± 27460",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 958413,
+            "range": "± 1505",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11541,
+            "range": "± 92",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 570160,
+            "range": "± 2998",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 20503115,
+            "range": "± 206487",
             "unit": "ns/iter"
           }
         ]
