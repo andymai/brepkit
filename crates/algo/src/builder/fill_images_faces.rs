@@ -4938,10 +4938,7 @@ fn clip_line_to_face_boundary(
                 }
             }
             for &(k, p) in &hits {
-                if places
-                    .iter()
-                    .any(|&(_, _, q)| (q - p).length() <= tol * 100.0)
-                {
+                if places.iter().any(|&(_, _, q)| (q - p).length() <= tol) {
                     continue;
                 }
                 places.push((k, fraction_on(k, p)?, p));

@@ -695,18 +695,11 @@ fn split_sections_at_rim_vertices(
                             let Some(piece) = arena.pave_blocks.get(leaf) else {
                                 continue;
                             };
-                            candidates.extend([(piece.start.vertex, 0), (piece.end.vertex, 0)]);
-                            let mut waiting = piece.extra_paves.clone();
-                            if piece.start.parameter > piece.end.parameter {
-                                waiting.sort_by(|a, b| b.parameter.total_cmp(&a.parameter));
-                            } else {
-                                waiting.sort_by(|a, b| a.parameter.total_cmp(&b.parameter));
-                            }
                             candidates.extend(
-                                waiting
-                                    .iter()
+                                make_blocks::piece_vertices(topo, arena, piece)
+                                    .into_iter()
                                     .enumerate()
-                                    .map(|(k, pave)| (pave.vertex, k + 1)),
+                                    .map(|(k, vertex)| (vertex, usize::from(k >= 2))),
                             );
                         }
                     }

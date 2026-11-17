@@ -2509,3 +2509,88 @@ fn a_rim_section_divides_once_at_two_waiting_paves_in_one_place() {
         "the section's cut {cut:?} is not a vertex of the rim's pieces {rim_vertices:?}"
     );
 }
+
+/// A whole rim with its seam at angle 0 and two crossings waiting on it
+/// either side of the angle's wrap, at -pi + 5e-10 and pi - 5e-10, one place
+/// in space: a section across that place divides once, at the vertex the
+/// rim keeps when its block splits round the seam.
+#[test]
+fn a_rim_section_divides_at_the_vertex_a_rim_keeps_across_its_wrap() {
+    use crate::ds::{IntersectionCurveDS, Pave, PaveBlock};
+    use std::f64::consts::{FRAC_PI_2, PI, TAU};
+    let mut topo = Topology::new();
+    let mut arena = GfaArena::new();
+    let circle = brepkit_math::curves::Circle3D::new(
+        Point3::new(0.0, 0.0, 0.0),
+        Vec3::new(0.0, 0.0, 1.0),
+        5.0,
+    )
+    .unwrap();
+    let at = |t: f64| topo_point(&circle, t);
+    let seam = topo.add_vertex(Vertex::new(at(0.0), 1e-7));
+    let rim = topo.add_edge(Edge::new(seam, seam, EdgeCurve::Circle(circle.clone())));
+    let wire = topo.add_wire(Wire::new(vec![OrientedEdge::new(rim, true)], true).unwrap());
+    let face = topo.add_face(Face::new(
+        wire,
+        vec![],
+        FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: 0.0,
+        },
+    ));
+    let (below, above) = (-PI + 5e-10, PI - 5e-10);
+    let (low, high) = (
+        topo.add_vertex(Vertex::new(at(below), 1e-7)),
+        topo.add_vertex(Vertex::new(at(above), 1e-7)),
+    );
+    let mut rim_block = PaveBlock::new(rim, Pave::new(seam, 0.0), Pave::new(seam, TAU));
+    rim_block.extra_paves.push(Pave::new(low, below));
+    rim_block.extra_paves.push(Pave::new(high, above));
+    let rim_block = arena.pave_blocks.alloc(rim_block);
+    arena.edge_pave_blocks.insert(rim, vec![rim_block]);
+
+    let (t0, t1) = (FRAC_PI_2, 3.0 * FRAC_PI_2);
+    let (s, e) = (
+        topo.add_vertex(Vertex::new(at(t0), 1e-7)),
+        topo.add_vertex(Vertex::new(at(t1), 1e-7)),
+    );
+    let section_edge = topo.add_edge(Edge::new(s, e, EdgeCurve::Circle(circle.clone())));
+    let pb = arena.pave_blocks.alloc(PaveBlock::new(
+        section_edge,
+        Pave::new(s, t0),
+        Pave::new(e, t1),
+    ));
+    arena.curves.push(IntersectionCurveDS {
+        curve: EdgeCurve::Circle(circle.clone()),
+        face_a: face,
+        face_b: face,
+        bbox: brepkit_math::aabb::Aabb3::from_points([at(t0), at(PI), at(t1)]),
+        pave_blocks: vec![pb],
+        t_range: (t0, t1),
+    });
+
+    super::split_sections_at_rim_vertices(
+        &mut topo,
+        brepkit_math::tolerance::Tolerance::new(),
+        &mut arena,
+    )
+    .unwrap();
+    super::make_blocks::perform(&mut topo, &mut arena).unwrap();
+
+    assert_eq!(arena.curves.len(), 2, "the section did not divide once");
+    let cut = arena
+        .pave_blocks
+        .get(arena.curves[0].pave_blocks[0])
+        .unwrap()
+        .end
+        .vertex;
+    let rim_vertices: Vec<_> = arena.edge_pave_blocks[&rim]
+        .iter()
+        .filter_map(|&id| arena.pave_blocks.get(id))
+        .flat_map(|piece| [piece.start.vertex, piece.end.vertex])
+        .collect();
+    assert!(
+        rim_vertices.contains(&cut),
+        "the section's cut {cut:?} is not a vertex of the rim's pieces {rim_vertices:?}"
+    );
+}
