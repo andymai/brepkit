@@ -8941,12 +8941,15 @@ fn split_face_2d_impl(
     let mut woven_trace = false;
     if !woven_curved_holes.is_empty() && (strip || !u_periodic) && !v_periodic {
         let rim_ccw = signed_area_2d(&sample_wire_loop_uv(&all_edges[..n_boundary_edges])) > 0.0;
+        // Read along the curves: a region of one or two curved edges has
+        // no area between its vertices alone.
+        let curve_area = |lp: &[OrientedPCurveEdge]| signed_area_2d(&sample_wire_loop_uv(lp));
         let dcel = super::wire_builder::build_wire_loops_dcel_measured(
             &all_edges,
             tol.linear,
             false,
             false,
-            None,
+            Some(&curve_area),
             Some(rim_ccw),
         );
         if !dcel.is_empty()
