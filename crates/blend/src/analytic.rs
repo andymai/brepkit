@@ -1377,11 +1377,13 @@ pub fn plane_cylinder_chamfer(
     } else {
         let p_spine_end = spine.evaluate(topo, spine_len)?;
         let u_end_raw = ParametricSurface::project_point(cyl, p_spine_end).0;
-        if u_end_raw > u_start {
-            u_end_raw
-        } else {
-            u_end_raw + 2.0 * PI
-        }
+        // The arc runs the way its middle lies, round either way.
+        let p_spine_mid = spine.evaluate(topo, 0.5 * spine_len)?;
+        arc_span_end(
+            u_start,
+            ParametricSurface::project_point(cyl, p_spine_mid).0,
+            u_end_raw,
+        )
     };
 
     let contact_plane = circle_arc_to_nurbs(&contact_plane_circle, u_start, u_end)?;
@@ -1925,11 +1927,9 @@ pub fn plane_cone_chamfer(
     } else {
         let p_spine_end = spine.evaluate(topo, spine_len)?;
         let u_end_raw = u_at(p_spine_end);
-        if u_end_raw > u_start {
-            u_end_raw
-        } else {
-            u_end_raw + 2.0 * PI
-        }
+        // The arc runs the way its middle lies, round either way.
+        let p_spine_mid = spine.evaluate(topo, 0.5 * spine_len)?;
+        arc_span_end(u_start, u_at(p_spine_mid), u_end_raw)
     };
 
     let contact_plane = circle_arc_to_nurbs(&contact_plane_circle, u_start, u_end)?;
@@ -2500,11 +2500,9 @@ pub fn plane_sphere_chamfer(
     } else {
         let p_spine_end = spine.evaluate(topo, spine_len)?;
         let u_end_raw = u_at(p_spine_end);
-        if u_end_raw > u_start {
-            u_end_raw
-        } else {
-            u_end_raw + 2.0 * PI
-        }
+        // The arc runs the way its middle lies, round either way.
+        let p_spine_mid = spine.evaluate(topo, 0.5 * spine_len)?;
+        arc_span_end(u_start, u_at(p_spine_mid), u_end_raw)
     };
 
     // 9) 3D contact circles around the n_p_inward axis.
@@ -3653,11 +3651,9 @@ pub fn sphere_sphere_chamfer(
     } else {
         let p_spine_end = spine.evaluate(topo, spine_len)?;
         let u_end_raw = u_at(p_spine_end);
-        if u_end_raw > u_start {
-            u_end_raw
-        } else {
-            u_end_raw + 2.0 * PI
-        }
+        // The arc runs the way its middle lies, round either way.
+        let p_spine_mid = spine.evaluate(topo, 0.5 * spine_len)?;
+        arc_span_end(u_start, u_at(p_spine_mid), u_end_raw)
     };
 
     let contact1_center = c1 + axis * p1_z_from_c1;
@@ -3909,11 +3905,9 @@ pub fn sphere_cylinder_chamfer(
     } else {
         let p_spine_end = spine.evaluate(topo, spine_len)?;
         let u_end_raw = u_at(p_spine_end);
-        if u_end_raw > u_start {
-            u_end_raw
-        } else {
-            u_end_raw + 2.0 * PI
-        }
+        // The arc runs the way its middle lies, round either way.
+        let p_spine_mid = spine.evaluate(topo, 0.5 * spine_len)?;
+        arc_span_end(u_start, u_at(p_spine_mid), u_end_raw)
     };
 
     let sph_contact_center = c_s + cyl_axis * z_sph;
@@ -4215,11 +4209,9 @@ pub fn sphere_cone_chamfer(
     } else {
         let p_spine_end = spine.evaluate(topo, spine_len)?;
         let u_end_raw = u_at(p_spine_end);
-        if u_end_raw > u_start {
-            u_end_raw
-        } else {
-            u_end_raw + 2.0 * PI
-        }
+        // The arc runs the way its middle lies, round either way.
+        let p_spine_mid = spine.evaluate(topo, 0.5 * spine_len)?;
+        arc_span_end(u_start, u_at(p_spine_mid), u_end_raw)
     };
 
     let sph_contact_center = c_s + cone_axis * z_sph;
@@ -5002,11 +4994,9 @@ pub fn cone_cone_coaxial_chamfer(
     } else {
         let p_spine_end = spine.evaluate(topo, spine_len)?;
         let u_end_raw = u_at(p_spine_end);
-        if u_end_raw > u_start {
-            u_end_raw
-        } else {
-            u_end_raw + 2.0 * PI
-        }
+        // The arc runs the way its middle lies, round either way.
+        let p_spine_mid = spine.evaluate(topo, 0.5 * spine_len)?;
+        arc_span_end(u_start, u_at(p_spine_mid), u_end_raw)
     };
 
     let c1_center = apex1 + a_cone * z_c1;
@@ -5361,7 +5351,7 @@ fn arc_span_end(u_start: f64, u_mid: f64, u_end: f64) -> f64 {
 /// `brepkit-geometry`. The geometry crate has the same algorithm in
 /// `convert::curve_to_nurbs::circle_to_nurbs`; consolidating both into the
 /// math layer is a follow-up.
-fn circle_arc_to_nurbs(
+pub fn circle_arc_to_nurbs(
     circle: &brepkit_math::curves::Circle3D,
     t_start: f64,
     t_end: f64,

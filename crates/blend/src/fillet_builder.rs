@@ -5797,7 +5797,7 @@ fn mirror_law(law: &RadiusLaw) -> RadiusLaw {
 
 /// The side of a blend band at its `row`-th row of control points, along `v`:
 /// the band's own boundary curve there.
-fn band_side(
+pub(crate) fn band_side(
     band: &brepkit_math::nurbs::surface::NurbsSurface,
     row: usize,
 ) -> Result<brepkit_math::nurbs::curve::NurbsCurve, BlendError> {
@@ -5817,7 +5817,7 @@ fn band_side(
     )?)
 }
 
-fn face_u_period(surface: &FaceSurface) -> Option<f64> {
+pub(crate) fn face_u_period(surface: &FaceSurface) -> Option<f64> {
     match surface {
         FaceSurface::Cylinder(_)
         | FaceSurface::Cone(_)
@@ -5837,7 +5837,7 @@ fn face_u_period(surface: &FaceSurface) -> Option<f64> {
 /// the analytic helper's inward-normal frame instead of the support face's
 /// frame. An affine projection of the homogeneous control polygon preserves
 /// the degree, knots, weights, and parameter domain.
-fn build_planar_pcurve_from_contact(
+pub(crate) fn build_planar_pcurve_from_contact(
     surface: &dyn brepkit_math::traits::ParametricSurface,
     contact: &brepkit_math::nurbs::curve::NurbsCurve,
 ) -> Result<(brepkit_math::curves2d::Curve2D, f64, f64), BlendError> {
@@ -5864,7 +5864,7 @@ fn build_planar_pcurve_from_contact(
 /// Open contacts use their endpoint line. Closed periodic contacts are
 /// sampled through one full carrier domain and unwrapped across the U seam;
 /// projecting equal endpoints alone would collapse them to a zero vector.
-fn build_pcurve_from_contact(
+pub(crate) fn build_pcurve_from_contact(
     surf: &dyn brepkit_math::traits::ParametricSurface,
     contact: &brepkit_math::nurbs::curve::NurbsCurve,
     u_period: Option<f64>,
