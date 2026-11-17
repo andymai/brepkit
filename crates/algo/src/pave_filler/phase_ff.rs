@@ -2647,11 +2647,17 @@ fn restrict_curves_to_faces(
         // its window and crossing neither face's boundary, misses that face
         // (a ball on a frustum's axis meets its extended wall just above the
         // top). Upright its box misses the wall's; turned, only this reads it.
+        // A plane face's margin scales with its box, so a circle in the hole
+        // of a thin ring (a torus lip's section just inside a funnel's rim)
+        // reads in that margin all round; its exact region reads it off.
         if closed
             && let EdgeCurve::Circle(circle) = &raw.curve
-            && [&ext_a, &ext_b]
+            && ([&ext_a, &ext_b]
                 .iter()
                 .any(|ext| (0..N).all(|i| ext.clear_of(pt(i), 10.0 * tol.linear)))
+                || [fa, fb]
+                    .into_iter()
+                    .any(|f| plane_face_clear_of(topo, f, (0..N).map(pt), tol)))
             && closed_circle_boundary_crossings(topo, fa, fb, circle, tol).len() < 2
         {
             continue;
@@ -2659,6 +2665,47 @@ fn restrict_curves_to_faces(
         out.push(raw);
     }
     out
+}
+
+/// Whether `face` is a plane face and every point of `points` lies off it by
+/// more than ten times the linear tolerance, read against its boundary curves
+/// as they are. `false` for any other face, or when the region cannot be read.
+fn plane_face_clear_of(
+    topo: &Topology,
+    face: FaceId,
+    points: impl Iterator<Item = Point3>,
+    tol: Tolerance,
+) -> bool {
+    let depth = 10.0 * tol.linear;
+    let Ok(data) = topo.face(face) else {
+        return false;
+    };
+    let FaceSurface::Plane { normal, .. } = data.surface() else {
+        return false;
+    };
+    let Some(origin) = topo
+        .wire(data.outer_wire())
+        .ok()
+        .and_then(|w| w.edges().first().copied())
+        .and_then(|oe| topo.edge(oe.edge()).ok())
+        .and_then(|e| topo.vertex(e.start()).ok())
+        .map(brepkit_topology::vertex::Vertex::point)
+    else {
+        return false;
+    };
+    let frame = crate::builder::plane_frame::PlaneFrame::from_normal_and_point(*normal, origin);
+    let Ok(Some(region)) = brepkit_topology::planar::face_region_2d(
+        topo,
+        face,
+        frame.origin(),
+        frame.u_axis(),
+        frame.v_axis(),
+        tol.linear,
+    ) else {
+        return false;
+    };
+    let mut points = points.peekable();
+    points.peek().is_some() && points.all(|p| region.side(frame.project(p), depth) == Some(false))
 }
 
 /// A closed NURBS section whose in-both run wraps its start, restarted at a
