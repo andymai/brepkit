@@ -17,6 +17,7 @@ use brepkit_math::vec::{Point2, Point3, Vec3};
 use brepkit_topology::Topology;
 use brepkit_topology::edge::{EdgeCurve, EdgeId};
 use brepkit_topology::face::{FaceId, FaceSurface};
+use brepkit_topology::planar::PlanarRegion;
 use brepkit_topology::solid::SolidId;
 use brepkit_topology::vertex::Vertex;
 
@@ -115,6 +116,13 @@ struct PlanarContainment {
     /// The face's inner wires, sampled as the outer one is.
     holes: Vec<Vec<Point2>>,
     margin: f64,
+    /// The outer wire read on its own lines, arcs and NURBS pieces, in
+    /// `frame`. The polygon cuts inside each arc by up to a chord's
+    /// sagitta, and the margin that covers that reaches up to twice the
+    /// sagitta past the arc: 2.4 on a whole circle of radius 249.25.
+    outer: Option<PlanarRegion>,
+    /// A point this near the outer wire lies on it.
+    near: f64,
 }
 
 impl PlanarContainment {
@@ -141,6 +149,13 @@ impl FaceContainment {
             return true;
         };
         let p2 = planar.frame.project(pt);
+        if let Some(inside) = planar
+            .outer
+            .as_ref()
+            .and_then(|outer| outer.side(p2, planar.near))
+        {
+            return inside;
+        }
         point_in_polygon_2d(p2, &planar.polygon)
             || distance_to_polygon_boundary(p2, &planar.polygon) <= planar.margin
     }
@@ -271,6 +286,14 @@ fn build_face_containment(
             // twice the largest keeps true near-boundary crossings accepted.
             let margin = (2.0 * max_sag).max(tol.linear * 10.0);
             let frame = PlaneFrame::from_normal_and_point(*normal, outer_points[0]);
+            let outer = brepkit_topology::planar::wire_region_2d(
+                topo,
+                outer_wire_id,
+                frame.origin(),
+                frame.u_axis(),
+                frame.v_axis(),
+                tol.linear,
+            )?;
             let polygon: Vec<Point2> = outer_points.iter().map(|&p| frame.project(p)).collect();
             let holes = hole_points
                 .iter()
@@ -283,6 +306,8 @@ fn build_face_containment(
                     polygon,
                     holes,
                     margin,
+                    outer,
+                    near: 10.0 * tol.linear,
                 }),
             });
         }
@@ -2445,5 +2470,100 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// The radii in `z = 60` at which lines through the ring `245 <= r <=
+    /// 249.25` there cross it, each line through the plane at one of
+    /// `radii` and at the angle `deg`, its outer circle cut at `cuts`.
+    fn ring_crossings(radii: &[f64], deg: f64, cuts: &[f64]) -> Vec<f64> {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::vec::Vec3;
+        use brepkit_topology::edge::Edge;
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let mut topo = Topology::new();
+        let z_axis = Vec3::new(0.0, 0.0, 1.0);
+        let center = Point3::new(0.0, 0.0, 60.0);
+        let at = |r: f64, a: f64| Point3::new(r * a.cos(), r * a.sin(), 60.0);
+        let mut outer_edges = Vec::new();
+        let outer_circle = Circle3D::new(center, z_axis, 249.25).unwrap();
+        let ends: Vec<_> = cuts
+            .iter()
+            .map(|&a| topo.add_vertex(Vertex::new(at(249.25, a), 1e-7)))
+            .collect();
+        for (k, &v) in ends.iter().enumerate() {
+            let next = ends[(k + 1) % ends.len()];
+            let arc = Edge::new(v, next, EdgeCurve::Circle(outer_circle.clone()));
+            outer_edges.push(OrientedEdge::new(topo.add_edge(arc), true));
+        }
+        let outer = topo.add_wire(Wire::new(outer_edges, true).unwrap());
+        let inner_circle = Circle3D::new(center, z_axis, 245.0).unwrap();
+        let v_in = topo.add_vertex(Vertex::new(at(245.0, 0.0), 1e-7));
+        let rim = topo.add_edge(Edge::new(v_in, v_in, EdgeCurve::Circle(inner_circle)));
+        let hole = topo.add_wire(Wire::new(vec![OrientedEdge::new(rim, false)], true).unwrap());
+        let ring = topo.add_face(Face::new(
+            outer,
+            vec![hole],
+            FaceSurface::Plane {
+                normal: z_axis,
+                d: 60.0,
+            },
+        ));
+        let a = deg.to_radians();
+        let lines: Vec<_> = radii
+            .iter()
+            .map(|&r| {
+                let p = at(r, a);
+                let lean = Vec3::new(0.3, -0.2, 5.0);
+                let s = topo.add_vertex(Vertex::new(p - lean, 1e-7));
+                let e = topo.add_vertex(Vertex::new(p + lean, 1e-7));
+                topo.add_edge(Edge::new(s, e, EdgeCurve::Line))
+            })
+            .collect();
+        let mut arena = GfaArena::new();
+        check_edge_face_pairs(
+            &mut topo,
+            &lines,
+            (&[], &[]),
+            &[ring],
+            &[HashSet::new()],
+            Tolerance::new(),
+            &mut arena,
+        )
+        .unwrap();
+        arena
+            .interference
+            .ef
+            .iter()
+            .filter_map(|i| match i {
+                Interference::EF {
+                    new_vertex: Some(v),
+                    ..
+                } => topo
+                    .vertex(*v)
+                    .ok()
+                    .map(|v| v.point().x().hypot(v.point().y())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// A line through the plane of a ring of radius 249.25 crosses the ring
+    /// only where the ring's own circle holds the crossing: not 0.066 or
+    /// 0.098 past it, whether the circle is one edge or three, at a sample
+    /// of the circle or between two, and up to it from inside.
+    #[test]
+    fn a_ring_holds_crossings_only_inside_its_circle() {
+        for cuts in [vec![0.0], vec![0.0, 2.0, 4.1]] {
+            for deg in [0.0, 5.625 / 2.0, 47.3, 200.0] {
+                let past = ring_crossings(&[249.316, 249.348, 249.25 + 1e-4], deg, &cuts);
+                assert!(past.is_empty(), "cuts {cuts:?}, {deg} deg: {past:?}");
+                let held = ring_crossings(&[249.25 - 1e-4, 249.2, 247.0], deg, &cuts);
+                assert_eq!(held.len(), 3, "cuts {cuts:?}, {deg} deg: {held:?}");
+            }
+        }
+        let rim = ring_crossings(&[249.25], 47.3, &[0.0]);
+        assert_eq!(rim.len(), 1, "{rim:?}");
     }
 }
