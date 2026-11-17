@@ -1823,7 +1823,10 @@ fn split_sections_at_seam_meridian(
         let p = s
             .curve_3d
             .evaluate_with_endpoints(0.5 * (lo + hi), s.start, s.end);
-        if (p - s.start).length() <= tol * 10.0 || (p - s.end).length() <= tol * 10.0 {
+        // The sign of the wrapped offset also flips half a turn from the
+        // seam, where a span read the long way round crosses instead.
+        let on_seam = delta_u(p).is_some_and(|d| d.abs() < 1e-6);
+        if !on_seam || (p - s.start).length() <= tol * 10.0 || (p - s.end).length() <= tol * 10.0 {
             out.push(s.clone());
             continue;
         }
@@ -7536,7 +7539,16 @@ fn split_face_2d_impl(
                 }
             }
         }
-        if matches!(surface, FaceSurface::Cylinder(_)) || torus_band {
+        // A pointed cone's two seam copies meet at its apex, which a trace
+        // cut open along the seam cannot close across.
+        let frustum = match &surface {
+            FaceSurface::Cone(cone) => boundary_edges.iter().all(|e| {
+                (e.start_3d - cone.apex()).length() > tol.linear
+                    && (e.end_3d - cone.apex()).length() > tol.linear
+            }),
+            _ => false,
+        };
+        if matches!(surface, FaceSurface::Cylinder(_)) || torus_band || frustum {
             walked_from_closed_rim = walk_boundary_from_closed_rim(&mut boundary_edges);
         }
     }
@@ -8339,7 +8351,10 @@ fn split_face_2d_impl(
             .iter()
             .zip(boundary.iter().cycle().skip(1))
             .all(|(a, b)| (b.start_uv.x() - a.end_uv.x()).abs() < 1e-9);
-        let cylinder = matches!(surface, FaceSurface::Cylinder(_));
+        // A frustum walked from its closed rims lies in one turn as a
+        // cylinder does.
+        let cylinder = matches!(surface, FaceSurface::Cylinder(_))
+            || matches!(surface, FaceSurface::Cone(_)) && walked_from_closed_rim;
         if (cylinder && walked_from_closed_rim || torus_band && unbroken)
             && (hi - lo - u_period).abs() < 1e-6
         {

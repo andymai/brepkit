@@ -208,3 +208,77 @@ fn a_rod_along_a_cone_is_exact() {
         }
     }
 }
+
+/// A rod parallel to a frustum's axis through its wall and out through its
+/// top: the loop the rod's wall leaves on the frustum's wall is cut off by
+/// the top, so the section is two branches ending on the top's rim.
+#[test]
+fn a_rod_leaving_through_a_frustums_top_is_exact() {
+    let (x, y) = (1.2_f64, 0.5_f64);
+    let n = 200_000;
+    let h = 6.0 / f64::from(n);
+    let mut both = 0.0;
+    for i in 0..=n {
+        let w = if i == 0 || i == n {
+            1.0
+        } else if i % 2 == 1 {
+            4.0
+        } else {
+            2.0
+        };
+        both += w * lens(h.mul_add(-0.25 * f64::from(i), 3.0), ROD, x.hypot(y));
+    }
+    let both = both * h / 3.0;
+    let frustum = PI * 6.0 / 3.0 * 1.5f64.mul_add(4.5, 9.0);
+    let rod = PI * ROD * ROD * 20.0;
+    for name in ["upright", "turned", "mirrored", "scaled"] {
+        for (op, truth) in [
+            (BooleanOp::Cut, frustum - both),
+            (BooleanOp::Intersect, both),
+            (BooleanOp::Fuse, frustum + rod - both),
+        ] {
+            let label = format!("{name} {op:?}");
+            let mut topo = Topology::new();
+            let a = make_cone(&mut topo, 3.0, 1.5, 6.0).unwrap();
+            let b = make_cylinder(&mut topo, ROD, 20.0).unwrap();
+            transform_solid(&mut topo, b, &Mat4::translation(x, y, -10.0)).unwrap();
+            let (a, b) = (posed(&mut topo, a, name), posed(&mut topo, b, name));
+            let result = boolean(&mut topo, op, a, b).unwrap();
+            let faces = solid_faces(&topo, result).unwrap();
+            let tags: Vec<&str> = faces
+                .iter()
+                .map(|&f| topo.face(f).unwrap().surface().type_tag())
+                .collect();
+            assert!(
+                faces.len() <= 8 && tags.contains(&"cone") && tags.contains(&"cylinder"),
+                "{label}: surfaces {tags:?}"
+            );
+            assert!(
+                validate_solid(&topo, result).unwrap().is_valid(),
+                "{label}: invalid"
+            );
+            let mesh = tessellate_solid(&topo, result, 0.01).unwrap();
+            assert!(is_watertight(&mesh), "{label}: open or non-manifold mesh");
+            let volume = solid_volume(&topo, result, 0.01).unwrap();
+            assert!(
+                (volume - truth).abs() < 1e-4,
+                "{label}: volume {volume}, truth {truth}"
+            );
+            // On the rod's axis halfway up: inside both.
+            let at = classify_point(
+                &topo,
+                result,
+                placed(Point3::new(x, y, 3.0), name),
+                0.01,
+                1e-7,
+            )
+            .unwrap();
+            let want = if op == BooleanOp::Cut {
+                PointClassification::Outside
+            } else {
+                PointClassification::Inside
+            };
+            assert_eq!(at, want, "{label}: on the rod's axis");
+        }
+    }
+}
