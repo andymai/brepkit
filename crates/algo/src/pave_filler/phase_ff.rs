@@ -2772,11 +2772,43 @@ fn trim_torus_oval_to_box_face(
     }
 
     // Exact box-edge ∩ torus crossings that lie ON the edge segment AND ON the
-    // oval. The crossing point is EXACT; `on_oval_tol` only has to confirm the
-    // crossing belongs to THIS oval (vs a different oval branch on the same
-    // plane, which is ≳1 mm away) — so it must exceed the MARCHED oval's
-    // approximation error (~0.1 mm), well below the inter-branch separation.
-    let on_oval_tol = 0.3_f64;
+    // oval. The crossing point is EXACT, and it lies on one loop of this
+    // plane's section only: another loop can run closer than any fixed band
+    // (a thin tube's two loops through its centre, a tube's diameter apart).
+    // So a crossing belongs to this loop when it lies on it: on a conic to
+    // rounding, and on a fitted loop within the loop's own fit to the
+    // section, read as the farthest its samples stray from the torus or the
+    // plane.
+    let off_section = |q: Point3| -> f64 {
+        let w = q - torus.center();
+        let h = torus.z_axis().dot(w);
+        let radial = (w - torus.z_axis() * h).length();
+        let off_torus = ((radial - torus.major_radius()).hypot(h) - torus.minor_radius()).abs();
+        let off_plane = (plane_n.dot(Vec3::new(q.x(), q.y(), q.z())) - plane_d).abs();
+        off_torus.max(off_plane)
+    };
+    let fit = match &raw.curve {
+        EdgeCurve::NurbsCurve(_) => (0..=256)
+            .map(|i| {
+                let t = (raw.t_range.1 - raw.t_range.0).madd(f64::from(i) / 256.0, raw.t_range.0);
+                off_section(raw.curve.evaluate_with_endpoints(t, raw.p_start, raw.p_end))
+            })
+            .fold(0.0, f64::max),
+        EdgeCurve::Line | EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => 0.0,
+    };
+    let reach = 4.0f64.madd(fit, 100.0 * tol.linear);
+    let off_oval = |p: Point3| -> f64 {
+        match &raw.curve {
+            EdgeCurve::Circle(c) => (c.evaluate(c.project(p)) - p).length(),
+            EdgeCurve::Ellipse(e) => (e.evaluate(e.project(p)) - p).length(),
+            EdgeCurve::NurbsCurve(n) => {
+                brepkit_math::nurbs::projection::project_point_to_curve(n, p, 1e-12)
+                    .map_or(f64::INFINITY, |c| c.distance)
+            }
+            EdgeCurve::Line => f64::INFINITY,
+        }
+    };
+    let on_oval = |p: Point3| off_oval(p) <= reach;
     let dedup_tol = tol.linear * 100.0;
     let mut crossings: Vec<Point3> = Vec::new();
     for &(s, en) in &box_edges {
@@ -2790,20 +2822,7 @@ fn trim_torus_oval_to_box_face(
                 continue; // off the edge segment
             }
             let p = s + dir * t;
-            // Must lie on the oval (the marched NURBS), else it's a crossing of
-            // a DIFFERENT oval branch on this plane.
-            let mut min_d = f64::MAX;
-            for i in 0..=128 {
-                let tt = raw.t_range.0 + (raw.t_range.1 - raw.t_range.0) * f64::from(i) / 128.0;
-                min_d = min_d.min(
-                    (raw.curve
-                        .evaluate_with_endpoints(tt, raw.p_start, raw.p_end)
-                        - p)
-                        .length(),
-                );
-            }
-            let on_oval = min_d < on_oval_tol;
-            if on_oval && !crossings.iter().any(|c| (*c - p).length() < dedup_tol) {
+            if on_oval(p) && !crossings.iter().any(|c| (*c - p).length() < dedup_tol) {
                 crossings.push(p);
             }
         }
@@ -2812,7 +2831,10 @@ fn trim_torus_oval_to_box_face(
     // The torus face's own rims end it as the box face's edges end the box:
     // an arc kept on past a rim (a wall's oval running on over the top of a
     // groove's tube) lies off the face. A seam, run once each way, ends
-    // nothing.
+    // nothing. A circle (a meridian or a parallel) is not cut at the rims
+    // here: the arcs this trim keeps are refitted as splines, and the exact
+    // circle splitter ends a circle at the rims itself.
+    let fitted = matches!(raw.curve, EdgeCurve::NurbsCurve(_));
     let torus_wires: Vec<_> = topo.face(torus_face).map_or_else(
         |_| Vec::new(),
         |face| {
@@ -2831,7 +2853,7 @@ fn trim_torus_oval_to_box_face(
                 .collect::<Vec<_>>()
         })
         .collect();
-    for &edge_id in &torus_edges {
+    for &edge_id in torus_edges.iter().filter(|_| fitted) {
         if torus_edges.iter().filter(|&&e| e == edge_id).count() > 1 {
             continue;
         }
@@ -2866,15 +2888,7 @@ fn trim_torus_oval_to_box_face(
             }
         };
         for p in points {
-            let on_oval = (0..=128).any(|i| {
-                let tt = raw.t_range.0 + (raw.t_range.1 - raw.t_range.0) * f64::from(i) / 128.0;
-                (raw.curve
-                    .evaluate_with_endpoints(tt, raw.p_start, raw.p_end)
-                    - p)
-                    .length()
-                    < on_oval_tol
-            });
-            if on_oval && !crossings.iter().any(|c| (*c - p).length() < dedup_tol) {
+            if on_oval(p) && !crossings.iter().any(|c| (*c - p).length() < dedup_tol) {
                 crossings.push(p);
             }
         }
