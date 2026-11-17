@@ -5188,3 +5188,62 @@ fn an_edge_doubling_back_over_a_split_straight_edge_takes_its_samples() {
     assert!(has(first), "{:?}", edge_points[&first.index()]);
     assert!(has(second), "{:?}", edge_points[&second.index()]);
 }
+
+/// The face S(u, v) = (u, v - u^2, 0) over the trapezoid (0, 0), (1, 0),
+/// (0.8, 0.12), (0.1, 0.12), of area 0.102, the only face of its shell. The
+/// face and the solid mesh it whole and unfolded at every deflection, upright,
+/// turned and mirrored: the weld leaves the shell's own rim alone, though the
+/// rim's sides lie nearer than the weld reaches at a coarse deflection.
+#[test]
+fn a_flat_spline_face_in_a_skewed_parameter_space_meshes_whole() {
+    use brepkit_math::mat::Mat4;
+
+    let p = Point3::new;
+    let poses = [
+        Mat4::identity(),
+        Mat4::translation(3.0, -2.0, 5.0) * Mat4::rotation_x(0.7) * Mat4::rotation_z(0.4),
+        Mat4::scale(-1.0, 1.0, 1.0) * Mat4::rotation_y(1.1),
+    ];
+    for pose in poses {
+        let q = |x: f64, y: f64| pose.mul_point(p(x, y, 0.0));
+        let surface = NurbsSurface::new(
+            2,
+            1,
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![
+                vec![q(0.0, 0.0), q(0.0, 1.0)],
+                vec![q(0.5, 0.0), q(0.5, 1.0)],
+                vec![q(1.0, -1.0), q(1.0, 0.0)],
+            ],
+            vec![vec![1.0; 2]; 3],
+        )
+        .unwrap();
+        let corners = [q(0.0, 0.0), q(1.0, 0.0), q(0.8, 0.12), q(0.1, 0.12)];
+        let sides: Vec<Vec<Point3>> = (0..4)
+            .map(|k| vec![corners[k], corners[(k + 1) % 4]])
+            .collect();
+        let (topo, face, solid) = spline_bounded_face(surface, &sides, &[]);
+        for deflection in [0.5, 0.1, 0.01, 0.001] {
+            for (what, mesh) in [
+                ("solid", tessellate_solid(&topo, solid, deflection).unwrap()),
+                ("face", tessellate(&topo, face, deflection).unwrap()),
+            ] {
+                let mut area = 0.0;
+                let mut vector_area = Vec3::new(0.0, 0.0, 0.0);
+                for t in mesh.indices.chunks_exact(3) {
+                    let [a, b, c] = [0, 1, 2].map(|k| mesh.positions[t[k] as usize]);
+                    let n = (b - a).cross(c - a);
+                    area += n.length() / 2.0;
+                    vector_area += n * 0.5;
+                }
+                assert!(
+                    (area - 0.102).abs() < 1e-9 && (vector_area.length() - 0.102).abs() < 1e-9,
+                    "{what} at {deflection} in {pose:?}: {} triangles, area {area}, vector area {}",
+                    mesh.indices.len() / 3,
+                    vector_area.length()
+                );
+            }
+        }
+    }
+}

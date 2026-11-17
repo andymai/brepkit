@@ -1760,7 +1760,28 @@ pub(super) fn tessellate_solid_core(
     }
 
     phase("normals", &mut phase_t);
-    let repeated = weld_boundary_vertices(&mut merged, deflection, tri_faces.as_mut());
+    // A sample only on edges that one face uses lies on the shell's own
+    // rim, not on a crack between two faces: welded to its neighbours, it
+    // would collapse a face narrower than the weld's reach.
+    let mut on_rim = vec![false; merged.positions.len()];
+    let mut on_shared = vec![false; merged.positions.len()];
+    for (edge_idx, global_ids) in &edge_global_indices {
+        let rim = edge_face_map
+            .get(edge_idx)
+            .is_some_and(|faces| faces.len() == 1);
+        let marks = if rim { &mut on_rim } else { &mut on_shared };
+        for &gid in global_ids {
+            if let Some(mark) = marks.get_mut(gid as usize) {
+                *mark = true;
+            }
+        }
+    }
+    let rim_only: Vec<bool> = on_rim
+        .iter()
+        .zip(&on_shared)
+        .map(|(&rim, &shared)| rim && !shared)
+        .collect();
+    let repeated = weld_boundary_vertices(&mut merged, deflection, &rim_only, tri_faces.as_mut());
 
     // A face no mesher covered, or whose rim the weld collapsed beside a
     // neighbour's crack, leaves a hole the caller cannot see from the mesh.

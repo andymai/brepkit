@@ -484,6 +484,8 @@ pub fn drawn_edge_samples(
 /// Uses union-find over a spatial hash grid to merge boundary vertices that
 /// are within `weld_tol` of each other. Rewrites triangle indices and removes
 /// degenerate triangles (where merged indices create duplicate vertices).
+/// A vertex marked in `fixed` takes no part in the weld, and a vertex past
+/// the end of `fixed` is not marked.
 /// `tri_faces` is the parallel tri -> face attribution array; entries for
 /// removed degenerate triangles are filtered alongside. Returns whether any
 /// directed edge was used twice before the weld: two faces bridging the same
@@ -491,6 +493,7 @@ pub fn drawn_edge_samples(
 pub(super) fn weld_boundary_vertices(
     mesh: &mut TriangleMesh,
     deflection: f64,
+    fixed: &[bool],
     tri_faces: Option<&mut Vec<u32>>,
 ) -> bool {
     let n_verts = mesh.positions.len();
@@ -518,6 +521,7 @@ pub(super) fn weld_boundary_vertices(
             boundary_set.insert(b);
         }
     }
+    boundary_set.retain(|&v| !fixed.get(v as usize).copied().unwrap_or(false));
 
     if boundary_set.is_empty() {
         return repeated;
