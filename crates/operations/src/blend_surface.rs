@@ -182,7 +182,7 @@ pub fn blend_surface(
         });
     }
     face_a_upward(&mut a)?;
-    if pair_chains(&a.chain, &mut b.chain) {
+    if pair_chains(&a.chain, &mut b.chain, Pairing::OneSideUp) {
         b.sign = -b.sign;
     }
 
@@ -493,10 +493,23 @@ fn face_a_upward(a: &mut Side) -> Result<(), OperationsError> {
     Ok(())
 }
 
+/// Which way [`pair_chains`] runs an open chain B against chain A.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Pairing {
+    /// The way whose ruled surface between the chains keeps one side up (see
+    /// [`agreement`]), or the nearer way where both do alike: a blend
+    /// bridges the chains, and folds over where that surface turns over.
+    OneSideUp,
+    /// The way that moves chain B least on to chain A: a match moves an edge
+    /// on to its target.
+    Nearest,
+}
+
 /// Run chain `b`, and start it if it is closed, so that it lies least twisted
 /// against chain `a`, and bring together the joins of chains of equal edge
-/// counts. Returns whether `b` now runs the other way.
-fn pair_chains(a: &Chain, b: &mut Chain) -> bool {
+/// counts. An open `b` runs the way `pairing` asks for; a closed one starts
+/// and runs where it is nearest. Returns whether `b` now runs the other way.
+fn pair_chains(a: &Chain, b: &mut Chain, pairing: Pairing) -> bool {
     const SAMPLES: usize = 128;
     let along = |chain: &Chain| -> Vec<Point3> {
         let last = if chain.closed { SAMPLES } else { SAMPLES - 1 };
@@ -545,11 +558,18 @@ fn pair_chains(a: &Chain, b: &mut Chain) -> bool {
         };
         *b = b.started_at(start);
     } else {
-        let (agree_f, agree_b) = (agreement(&from_a, &forward), agreement(&from_a, &backward));
-        let back = if (agree_b - agree_f).abs() > AGREEMENT_TIE * SAMPLES as f64 {
-            agree_b > agree_f
-        } else {
-            twist(&backward, 0) < twist(&forward, 0)
+        let nearer_back = || twist(&backward, 0) < twist(&forward, 0);
+        let back = match pairing {
+            Pairing::OneSideUp => {
+                let (agree_f, agree_b) =
+                    (agreement(&from_a, &forward), agreement(&from_a, &backward));
+                if (agree_b - agree_f).abs() > AGREEMENT_TIE * SAMPLES as f64 {
+                    agree_b > agree_f
+                } else {
+                    nearer_back()
+                }
+            }
+            Pairing::Nearest => nearer_back(),
         };
         if back {
             run_back = true;
