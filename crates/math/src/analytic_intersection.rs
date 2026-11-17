@@ -4569,11 +4569,13 @@ fn algebraic_parallel_cone_cone(
         (b - cos1, a + d, true),
         (cos1 - b, d - a, true),
     ] {
-        if k > 1e-12 {
+        // However small, a slope moves the bound: slopes nearly equal to
+        // each other hold their condition only far out, past `-c / k`.
+        if k > 0.0 {
             if -c / k > lo {
                 (lo, lo_touch) = (-c / k, touch);
             }
-        } else if k < -1e-12 {
+        } else if k < 0.0 {
             if -c / k < hi {
                 (hi, hi_touch) = (-c / k, touch);
             }
@@ -6106,6 +6108,30 @@ mod tests {
             );
             assert!((a - b).length() < 1e-9, "branches part at {a:?} and {b:?}");
         }
+    }
+
+    /// Two cones of one axis direction whose slopes differ by about `5e-13`:
+    /// the narrower circle starts inside the wider one, a unit clear of its
+    /// rim, and reaches it only near `v = 2e12`. Within a span out to `4e12`
+    /// the cones meet, so the path does not call them apart.
+    #[test]
+    fn nearly_equal_slopes_meet_far_out() {
+        let up = Vec3::new(0.0, 0.0, 1.0);
+        let wide = ConicalSurface::new(Point3::new(0.0, 0.0, 0.0), up, std::f64::consts::FRAC_PI_4)
+            .unwrap();
+        let (sin1, cos1) = std::f64::consts::FRAC_PI_4.sin_cos();
+        // `rho2 - rho1 = (b - cos1) v + a`, with `b - cos1 = 5e-13` and
+        // `a = -(d + 1)` for axes `d = 1` apart.
+        let slope = (cos1 + 5e-13) / sin1;
+        let along = 2.0 / slope;
+        let narrow =
+            ConicalSurface::new(Point3::new(1.0, 0.0, along), up, (1.0 / slope).atan()).unwrap();
+        let curves = algebraic_parallel_cone_cone(&wide, &narrow, Some((0.0, 4e12)), None);
+        assert!(
+            !curves.as_ref().is_some_and(Vec::is_empty),
+            "called apart: {:?}",
+            curves.map(|c| c.len())
+        );
     }
 
     /// Axes `1e-5` radians apart, which a dot product within `1e-10` of one
