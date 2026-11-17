@@ -652,25 +652,25 @@ fn interpolate_rows(
             for j in k..n.min(k + band) {
                 matrix[i][j] -= factor * matrix[k][j];
             }
-            let source = rhs[k].clone();
-            for (value, &from) in rhs[i].iter_mut().zip(&source) {
+            let (above, below) = rhs.split_at_mut(i);
+            for (value, &from) in below[0].iter_mut().zip(&above[k]) {
                 *value -= factor * from;
             }
         }
     }
     for k in (0..n).rev() {
-        let mut value = rhs[k].clone();
+        let (upto, after) = rhs.split_at_mut(k + 1);
+        let value = &mut upto[k];
         for j in k + 1..n.min(k + band) {
             let factor = matrix[k][j];
-            for (out, &from) in value.iter_mut().zip(&rhs[j]) {
+            for (out, &from) in value.iter_mut().zip(&after[j - k - 1]) {
                 *out -= factor * from;
             }
         }
         let pivot = matrix[k][k];
-        for out in &mut value {
+        for out in value.iter_mut() {
             *out /= pivot;
         }
-        rhs[k] = value;
     }
     if rhs.iter().flatten().any(|value| !value.is_finite()) {
         return Err(BlendError::Math(brepkit_math::MathError::EmptyInput));
