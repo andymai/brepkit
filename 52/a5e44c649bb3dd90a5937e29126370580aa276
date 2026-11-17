@@ -1,0 +1,31 @@
+crates/math/src/cdt/insert.rs
+  s_489e8e320eebde::t_9a8df441b1966d 266-268,304
+crates/math/src/cdt/mod.rs
+  s_489e8e320eebde::t_d2172a35dabf91 38,84-91,98-104,129,149-151,326,331
+crates/math/src/cdt/tests.rs
+  s_489e8e320eebde::t_1a52013e6b039d 1060-1111
+crates/math/src/det_hash.rs
+  s_489e8e320eebde::t_7396432bf2b197 82-213,270-306
+crates/operations/benches/cad_operations.rs
+  s_489e8e320eebde::t_f372f87434bf29 249-272,717
+crates/operations/src/tessellate/mesh_ops.rs
+  s_489e8e320eebde::t_510980d7da0814 3,217,219-229,231-237,239,258-265,269-272,275-286,288,291,295,298,519-520
+crates/operations/src/tessellate/solid.rs
+  s_489e8e320eebde::t_5f0fe049722f64 4,1173-1174,1177-1186,1191-1196,1207-1230,1266,1269-1282,1285-1286,1293,1295,1332-1334,1346
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "52a5e44c649bb3dd90a5937e29126370580aa276",
+  "prompts": {},
+  "sessions": {
+    "s_489e8e320eebde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1a2a9261-2019-4199-aa4f-06130071c8f0",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
