@@ -1,0 +1,42 @@
+crates/operations/tests/chamfer_walked.rs
+  s_489e8e320eebde::t_4bb7ea39f14e52 179-227,297,306-307,344,362-366,369-370,372-375,379-381,383-384,386-398,421,435-436,440,442-443,450-451,454-455
+  s_489e8e320eebde::t_5c826b645618bc 3-4,87-89,399-420,422-434,437-439,441,444-449,452
+  s_489e8e320eebde::t_bd2d2902cb291f 367-368,371
+  s_489e8e320eebde::t_ca7aeaa6da7851 376-378,382
+  s_489e8e320eebde::t_875df953686958 239-245
+  s_489e8e320eebde::t_690386a63466f8 76-77,84-86,100-102,147,258-264
+  s_489e8e320eebde::t_2909b1f4c2a242 453
+  s_489e8e320eebde::t_a39565f7f9e87f 456
+  s_489e8e320eebde::t_57271ca24277f3 457
+  s_489e8e320eebde::t_ba6094b82b95b7 237,246-247,265-266
+  s_489e8e320eebde::t_3a436ba56db06a 16,20
+  s_489e8e320eebde::t_0d9138c4e68965 21,28,36-37,41-42,345-361,385
+crates/math/src/nurbs/fitting.rs
+  s_489e8e320eebde::t_7fc5b9ee63d2ea 1029-1051,1053-1056
+  s_489e8e320eebde::t_2f70b2ede0468b 1052
+  s_489e8e320eebde::t_7fa7585f674626 59-103
+crates/blend/src/chamfer_builder.rs
+  s_489e8e320eebde::t_dbf22336dd2a99 940,942
+  s_489e8e320eebde::t_875df953686958 869-870,877-880,967-970,988-990
+  s_489e8e320eebde::t_43c45116a070b2 861-862,866,871-876,881-898
+  s_489e8e320eebde::t_43175b03005808 849-852
+  s_489e8e320eebde::t_7de91dd274574c 908-931,934-939,941,943-945,954-956,965-966,971-978,985-987,991,1021-1025,1051-1052
+  s_489e8e320eebde::t_bfff562c58d320 10-12,14,16
+  s_489e8e320eebde::t_1efc47e2cbf6ac 932-933,946-953,957-964,979-984,992-1020,1026-1050
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "2fe5bc0124cd55b2a0bf23b458cae550c8249339",
+  "prompts": {},
+  "sessions": {
+    "s_489e8e320eebde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1a2a9261-2019-4199-aa4f-06130071c8f0",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
