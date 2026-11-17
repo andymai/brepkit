@@ -1660,7 +1660,8 @@ fn boundary_seam_u(
 /// between their endpoints (chain pieces subtend well under a half-turn);
 /// pieces already ending on the seam, or not straddling it, pass through
 /// unchanged. Split halves clear their UV hints and pave block id, matching
-/// `presplit_sections_at_registry`.
+/// `presplit_sections_at_registry`, and take pcurves of their own: the
+/// parent's would give each half the parent's ends in `(u, v)`.
 fn split_sections_at_seam_meridian(
     sections: &[SectionEdge],
     surface: &FaceSurface,
@@ -1698,7 +1699,10 @@ fn split_sections_at_seam_meridian(
         let p = s
             .curve_3d
             .evaluate_with_endpoints(0.5 * (lo + hi), s.start, s.end);
-        if (p - s.start).length() <= tol * 10.0 || (p - s.end).length() <= tol * 10.0 {
+        // The sign of the wrapped offset also flips half a turn from the
+        // seam, where a span read the long way round crosses instead.
+        let on_seam = delta_u(p).is_some_and(|d| d.abs() < 1e-6);
+        if !on_seam || (p - s.start).length() <= tol * 10.0 || (p - s.end).length() <= tol * 10.0 {
             out.push(s.clone());
             continue;
         }
@@ -1712,6 +1716,16 @@ fn split_sections_at_seam_meridian(
             piece.start_uv_b = None;
             piece.end_uv_b = None;
             piece.pave_block_id = None;
+            let pcurve = super::pcurve_compute::compute_pcurve_on_surface(
+                &piece.curve_3d,
+                piece.start,
+                piece.end,
+                surface,
+                &[],
+                None,
+            );
+            piece.pcurve_a = pcurve.clone();
+            piece.pcurve_b = pcurve;
         }
         out.push(first);
         out.push(second);
@@ -6950,12 +6964,12 @@ fn split_face_2d_impl(
     // seam meridian makes the crossing point a section ENDPOINT, so the
     // boundary-splitting below anchors the seam edge at the same 3D point
     // and the graphs share a vertex.
-    // A conic section crossing a cone's seam ruling needs the same anchor to
-    // pass from one seam copy to the other.
+    // A section crossing a cone's or cylinder's seam ruling needs the same
+    // anchor to pass from one seam copy to the other.
     let seam_anchored_sections: Vec<SectionEdge>;
     let sections: &[SectionEdge] = if !is_plane
         && super::pcurve_compute::surface_periods(&surface).0.is_some()
-        && (matches!(surface, FaceSurface::Cone(_))
+        && (matches!(surface, FaceSurface::Cone(_) | FaceSurface::Cylinder(_))
             || sections_form_winding_chain(sections, &surface, tol.linear))
         && let Some(seam_u) = boundary_seam_u(&boundary_edges, &surface, tol.linear)
     {
