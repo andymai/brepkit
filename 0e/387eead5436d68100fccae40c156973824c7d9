@@ -1,0 +1,21 @@
+crates/check/src/face_loops.rs
+  s_489e8e320eebde::t_2f71e8b1811412 564-565
+crates/check/src/face_loops/bound.rs
+  s_489e8e320eebde::t_49f495e7160573 137-138,146-149,151-152,217-219,403,1074-1153
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "0e387eead5436d68100fccae40c156973824c7d9",
+  "prompts": {},
+  "sessions": {
+    "s_489e8e320eebde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1a2a9261-2019-4199-aa4f-06130071c8f0",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
