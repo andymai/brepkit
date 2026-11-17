@@ -1,29 +1,29 @@
 .claude/skills/roadmap/SKILL.md
-  s_489e8e320eebde::t_5f9b7b6a58c131 172,204
+  s_489e8e320eebde::t_1c2db50d6857cf 172,204
 crates/algo/src/builder/face_splitter/edge_splitting.rs
-  s_489e8e320eebde::t_192ba2246feee2 140-141,442-448
+  s_489e8e320eebde::t_582471bbafd7c6 140-141,442-448
 crates/algo/src/builder/face_splitter/mod.rs
-  s_489e8e320eebde::t_787201ca8a477e 7152-7178,7183-7197,7200-7202,7218,7979-7983,7999-8009,8011-8012
+  s_489e8e320eebde::t_497e48bbb173a4 7152-7178,7183-7197,7200-7202,7218,7979-7983,7999-8009,8011-8012
 crates/algo/src/builder/fill_images_faces.rs
-  s_489e8e320eebde::t_36f4b558d933cc 2781-2785,2787-2795
+  s_489e8e320eebde::t_0939c1942c6713 2781-2785,2787-2795
 crates/algo/src/classifier/ray_cast.rs
-  s_489e8e320eebde::t_324fba1241275e 4029-4034,4037-4045,4048,4050-4051
+  s_489e8e320eebde::t_9efef08bbce79e 4029-4034,4037-4045,4048,4050-4051
 crates/algo/src/pave_filler/fill_face_info.rs
-  s_489e8e320eebde::t_c4edaad97989f6 39-42,446-474
+  s_489e8e320eebde::t_82deb724ad1ad1 39-42,446-474
 crates/io/tests/playground_example_repros_inmem.rs
-  s_489e8e320eebde::t_a7bf5905d5c53b 10,87-93,97,99,102-106,143,179-211
+  s_489e8e320eebde::t_79ee7eecf31cc7 10,87-93,97,99,102-106,143,179-211
 crates/math/src/lib.rs
-  s_489e8e320eebde::t_e4981438e4697a 205-210
+  s_489e8e320eebde::t_8422a32da0fac1 205-210
 crates/math/src/nurbs/decompose.rs
-  s_489e8e320eebde::t_ac2fd56c67f57c 9,369,374,418-419,427,434,436,477,479,484,487-488,490-491,500-502,603-604,1295-1323
+  s_489e8e320eebde::t_9c59b9f707febe 9,369,374,418-419,427,434,436,477,479,484,487-488,490-491,500-502,603-604,1295-1323
 crates/math/src/nurbs/knot_ops.rs
-  s_489e8e320eebde::t_8fd9a9b63cba78 9,23-25,98,218-219,448,826-863
+  s_489e8e320eebde::t_95f8169588b40d 9,23-25,98,218-219,448,826-863
 crates/math/src/nurbs/mod.rs
-  s_489e8e320eebde::t_d8c8a3ebfb0561 41-82
+  s_489e8e320eebde::t_ad0ba7d04d34db 41-82
 crates/operations/tests/fillet_round_rims.rs
-  s_489e8e320eebde::t_103701b11890d0 594-596,598-603
+  s_489e8e320eebde::t_3f73b6a0f16d3d 594-596,598-603
 crates/operations/tests/ring_groove_against_boxes.rs
-  s_489e8e320eebde::t_bf300940fdb6b7 1-350
+  s_489e8e320eebde::t_2ec9838bb90a8e 1-350
 ---
 {
   "schema_version": "authorship/3.0.0",
