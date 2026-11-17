@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794892769422,
+  "lastUpdate": 1794894843963,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -73169,6 +73169,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25435368,
             "range": "± 213675",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "2b62a0bfe91ce45880b23644963cc9a590977efc",
+          "message": "chore(main): release 4.11.29 (#2565)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[4.11.29](https://github.com/andymai/brepkit/compare/v4.11.28...v4.11.29)\n(2026-11-17)\n\n\n### Bug Fixes\n\n* **algo,operations:** keep a spherical cap's seam to its pole\n([#2561](https://github.com/andymai/brepkit/issues/2561))\n([c9f7aed](https://github.com/andymai/brepkit/commit/c9f7aed150eb6e3a409874fc2bd26fc249b034bc))\n* **algo:** cut a rod's torus groove exactly across its seam and its\nmiddle ([#2575](https://github.com/andymai/brepkit/issues/2575))\n([4311993](https://github.com/andymai/brepkit/commit/4311993890f36b95d9075d99a4a9a0250305ec28))\n* **algo:** keep a conic leaf that crosses a plane out of the plane's\nface ([#2572](https://github.com/andymai/brepkit/issues/2572))\n([03c48a5](https://github.com/andymai/brepkit/commit/03c48a540574cfe583cde2ba7475b4a8374ef624))\n* **algo:** read a plane face's outer wire on its arcs for EF crossings\n([#2566](https://github.com/andymai/brepkit/issues/2566))\n([38db3e9](https://github.com/andymai/brepkit/commit/38db3e918c2af1e2895c56d78356a4b6db7af71e))\n* **heal:** join straight edges a fuse leaves in pieces across the whole\nsolid ([#2562](https://github.com/andymai/brepkit/issues/2562))\n([1fc2bdd](https://github.com/andymai/brepkit/commit/1fc2bdd04d75d384bebdac26c6c0372329d3d92e))\n* **heal:** leave a slit's pieces alone when joining split edges\n([#2567](https://github.com/andymai/brepkit/issues/2567))\n([f6c1c56](https://github.com/andymai/brepkit/commit/f6c1c56be5ae0e63c4fc8b99da23b4d8fa5f97e5))\n* **math:** refuse a control point at infinity after a knot insertion\n([#2564](https://github.com/andymai/brepkit/issues/2564))\n([ad7e21b](https://github.com/andymai/brepkit/commit/ad7e21b44f4e44c2a1001d4fa63c6e781eec7f68))\n* **tessellate:** keep the CDT grid off a face's constrained edges\n([#2582](https://github.com/andymai/brepkit/issues/2582))\n([cd1cfa0](https://github.com/andymai/brepkit/commit/cd1cfa015a50c8d8493edb318fc4bf324347a631))\n\n\n### Performance\n\n* **tessellate:** mesh a filleted box in half the time\n([#2581](https://github.com/andymai/brepkit/issues/2581))\n([84770d9](https://github.com/andymai/brepkit/commit/84770d94bd74b8f255fa83ba9da87dff85e7f0a0))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-11-17T05:50:34Z",
+          "tree_id": "e66c252dc02784dbdbeb8dc74afb3d6c048c16f1",
+          "url": "https://github.com/andymai/brepkit/commit/2b62a0bfe91ce45880b23644963cc9a590977efc"
+        },
+        "date": 1794894831144,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 820396,
+            "range": "± 22938",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 856818,
+            "range": "± 48363",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10126,
+            "range": "± 79",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 516028,
+            "range": "± 7683",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 18411816,
+            "range": "± 60921",
             "unit": "ns/iter"
           }
         ]
