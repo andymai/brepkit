@@ -770,6 +770,87 @@ fn a_pocket_in_the_stub_face_below_the_round_is_refused() {
     );
 }
 
+/// The seam prism sheared as it rises, along `y` by `1 / sqrt(3)` of its
+/// height: the floor meets the wall along `P1-P2` at 60 degrees, and the
+/// faces at `x = 20` stay on that plane.
+fn sheared_seam_prism(topo: &mut Topology) -> (SolidId, [Point3; 5]) {
+    let (lx, ly, stub, height) = (20.0, 20.0, 0.05, 20.0);
+    let points = [
+        Point3::new(0.0, 0.0, 0.0),
+        Point3::new(lx, 0.0, 0.0),
+        Point3::new(lx, stub, 0.0),
+        Point3::new(lx, ly, 0.0),
+        Point3::new(0.0, ly, 0.0),
+    ];
+    let wire = make_polygon_wire(topo, &points, Tolerance::new().linear).unwrap();
+    let face = topo.add_face(Face::new(
+        wire,
+        vec![],
+        FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, -1.0),
+            d: 0.0,
+        },
+    ));
+    let rise = Vec3::new(0.0, 1.0 / 3.0_f64.sqrt(), 1.0) * height;
+    (extrude(topo, face, rise, height).unwrap(), points)
+}
+
+/// On the sheared prism the `r1` round meets its wall 12 above the floor,
+/// higher than its radius. A pocket in the stub face 9 above the floor, a
+/// hundredth off that wall, lies in the corner the round takes, and the
+/// build refuses it. A pocket 15 above the floor stays clear of the round.
+#[test]
+fn a_pocket_under_a_round_of_an_acute_corner_is_refused() {
+    let shift = 1.0 / 3.0_f64.sqrt();
+    let build = |low: f64| {
+        let mut topo = Topology::new();
+        let (solid, [p1, p2, p3, p4, _]) = sheared_seam_prism(&mut topo);
+        let pocket = brepkit_operations::primitives::make_box(&mut topo, 0.2, 0.03, 0.01).unwrap();
+        transform_solid(
+            &mut topo,
+            pocket,
+            &Mat4::translation(19.9, low * shift + 0.01, low),
+        )
+        .unwrap();
+        let pocketed = brepkit_operations::boolean::boolean(
+            &mut topo,
+            brepkit_operations::boolean::BooleanOp::Cut,
+            solid,
+            pocket,
+        )
+        .unwrap();
+        let laws = vec![
+            (edge_at(&topo, pocketed, p1, p2), RadiusLaw::Constant(8.0)),
+            (edge_at(&topo, pocketed, p3, p4), RadiusLaw::Constant(2.0)),
+        ];
+        let result = fillet_v2_variable(&mut topo, pocketed, laws);
+        (topo, result)
+    };
+    match build(9.0).1 {
+        Err(brepkit_operations::OperationsError::Blend(
+            brepkit_blend::BlendError::PlanningFailure { reason },
+        )) => assert!(
+            reason.contains("runs past a short edge"),
+            "the pocket under the round's end must refuse the crossing, got {reason}"
+        ),
+        Err(other) => panic!("expected the crossing's refusal, got {other}"),
+        Ok(result) => panic!(
+            "a pocket under the round's end must be refused, got {} successes",
+            result.succeeded.len()
+        ),
+    }
+    let (topo, result) = build(15.0);
+    let result = result.unwrap();
+    assert_genuinely_filleted(
+        &topo,
+        &result,
+        2,
+        &[8.0, 2.0],
+        0,
+        "pocket clear of the round",
+    );
+}
+
 /// The seam prism with its stub face a triangle: the edge between the two
 /// wall faces runs from `P3` up to the top of the edge at `P2`.
 fn triangular_stub_prism(topo: &mut Topology) -> (SolidId, [Point3; 5]) {

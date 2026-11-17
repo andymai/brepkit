@@ -6184,25 +6184,26 @@ fn plan_stub_crossing(
 
     let f_run = wire_run_between(topo, f, (b_f_contact, v_bf), (a_f_contact, v_af))?;
     // A hole of a face that loses part of its region must lie clear of that
-    // part: on the end plane, within `A`'s cylinder or past its reach from
-    // `F` or from `WA`; on `F`, past `A`'s reach from `WA` or `B`'s from
-    // `W1`. Each test holds on a convex set, a cylinder or a half-space.
-    let depth = |plane: Option<(Vec3, f64)>| {
-        move |p: Point3| plane.map_or(f64::NEG_INFINITY, |(normal, at)| at - normal.dot(to(p)))
+    // part. A round takes the corner between its two faces and its arc,
+    // which lies within the triangle of the edge and its two contacts: no
+    // farther from either face than its contact on the other. So a hole is
+    // clear on the end plane within `A`'s cylinder, or as far from `F` as
+    // `s` or from `WA` as `A`'s contact on `F`; and on `F`, as far from `WA`
+    // as that contact or from `W1` as `B`'s contact on `F`. Each test holds
+    // on a convex set, a cylinder or a half-space.
+    let past = |plane: Option<(Vec3, f64)>, contact: Point3| {
+        let depth = move |p: Point3| plane.map(|(normal, at)| at - normal.dot(to(p)));
+        let reach = depth(contact);
+        move |p: Point3| matches!((depth(p), reach), (Some(d), Some(r)) if d >= r)
     };
-    let (from_f, from_wa) = (
-        depth(outward_plane_of(topo, f)),
-        depth(outward_plane_of(topo, wa)),
-    );
-    let from_w1 = depth(Some((n, level)));
-    let rb = section_b.radius;
+    let (f_plane, wa_plane) = (outward_plane_of(topo, f), outward_plane_of(topo, wa));
     let inside_a = |p: Point3| {
         let w = p - cylinder.origin();
         (w - axis * w.dot(axis)).length() <= ra
     };
-    let past_a_from_f = |p: Point3| from_f(p) >= ra;
-    let past_a_from_wa = |p: Point3| from_wa(p) >= ra;
-    let past_b_from_w1 = |p: Point3| from_w1(p) >= rb;
+    let past_a_from_f = past(f_plane, s);
+    let past_a_from_wa = past(wa_plane, af_end);
+    let past_b_from_w1 = past(Some((n, level)), bf_end);
     let on_end_plane: [&dyn Fn(Point3) -> bool; 3] = [&inside_a, &past_a_from_f, &past_a_from_wa];
     let on_f: [&dyn Fn(Point3) -> bool; 2] = [&past_a_from_wa, &past_b_from_w1];
     if !holes_clear(topo, w0, &on_end_plane)?
