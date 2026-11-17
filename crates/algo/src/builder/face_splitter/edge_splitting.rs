@@ -248,10 +248,17 @@ fn split_edges_at_3d_points(
             } else {
                 project_point_on_surface(split_3d, surface, &[], None)
             };
-            // On the copy inside the edge's own unwrapped span, from its start
-            // to its end: the edge runs that span, so the split's place along
-            // it reads the copy, also on an arc over half a turn.
-            let split_uv = if nurbs_by_projection {
+            // On the copy the edge runs on at the split. A spline's parameter
+            // need not run evenly in u (its knots), so walk along it from the
+            // edge's start; an arc's, a ring's and a ruling's parameter runs
+            // evenly in the surface's, so the split's place in the edge's own
+            // unwrapped span reads the copy, also on an arc over half a turn.
+            let split_uv = if !nurbs_by_projection {
+                split_uv
+            } else if let EdgeCurve::NurbsCurve(_) = edge.curve_3d {
+                walked_uv(&edge, t, surface, periods)
+                    .map_or(split_uv, |near| on_copy_near(split_uv, near, periods))
+            } else {
                 let span_end = match closed_ring_dir {
                     Some(dir) => brepkit_math::vec::Point2::new(
                         std::f64::consts::TAU.madd(dir, edge.start_uv.x()),
@@ -264,8 +271,6 @@ fn split_edges_at_3d_points(
                     (span_end.y() - edge.start_uv.y()).madd(t, edge.start_uv.y()),
                 );
                 on_copy_near(split_uv, along, periods)
-            } else {
-                split_uv
             };
             let mut pcurve = boundary_piece_pcurve(&edge, prev_3d, split_3d, surface, frame);
             if nurbs_by_projection {
@@ -594,6 +599,73 @@ pub(super) fn shifted_pcurve(
     }
 }
 
+/// The surface parameters of `edge` at fraction `t` of its domain, unwrapped
+/// continuously from the edge's start UV over a walk along its curve. `None`
+/// on a surface with no period.
+///
+/// A step is taken when its middle and its end each move less than an
+/// eighth of a period from the point before, and halved when not: a span of
+/// the curve dense in u on few of its parameters, or one that goes round a
+/// whole period, does not read as a short step.
+fn walked_uv(
+    edge: &OrientedPCurveEdge,
+    t: f64,
+    surface: &FaceSurface,
+    periods: (Option<f64>, Option<f64>),
+) -> Option<brepkit_math::vec::Point2> {
+    use brepkit_math::vec::Point2;
+    const FIRST_STEPS: f64 = 16.0;
+    const MAX_HALVINGS: u32 = 16;
+    if periods.0.is_none() && periods.1.is_none() {
+        return None;
+    }
+    let at =
+        crate::builder::pcurve_compute::edge_point_at(&edge.curve_3d, edge.start_3d, edge.end_3d);
+    // The fractions run from the domain's first end, which is the edge's
+    // end when the domain runs against the edge.
+    let from = if (at(1.0) - edge.start_3d).length() < (at(0.0) - edge.start_3d).length() {
+        1.0
+    } else {
+        0.0
+    };
+    let uv_at = |f: f64, near: Point2| {
+        surface
+            .project_point(at(f))
+            .map(|(u, v)| on_copy_near(Point2::new(u, v), near, periods))
+    };
+    let small = |a: Point2, b: Point2| {
+        periods.0.is_none_or(|p| (b.x() - a.x()).abs() < 0.125 * p)
+            && periods.1.is_none_or(|p| (b.y() - a.y()).abs() < 0.125 * p)
+    };
+    let (mut f, mut uv) = (from, edge.start_uv);
+    let first_step = (t - from) / FIRST_STEPS;
+    let mut step = first_step;
+    let mut halvings = 0;
+    let mut last = false;
+    while !last {
+        last = (t - f).abs() <= step.abs();
+        let next = if last { t } else { f + step };
+        let mid = 0.5 * (f + next);
+        match uv_at(mid, uv).and_then(|m| uv_at(next, m).map(|n| (m, n))) {
+            Some((m, n)) if halvings < MAX_HALVINGS && !(small(uv, m) && small(m, n)) => {
+                step *= 0.5;
+                halvings += 1;
+                last = false;
+            }
+            Some((_, n)) => {
+                (f, uv) = (next, n);
+                halvings = 0;
+                step = (2.0 * step)
+                    .abs()
+                    .min(first_step.abs())
+                    .copysign(first_step);
+            }
+            None => f = next,
+        }
+    }
+    Some(uv)
+}
+
 /// `uv` moved by whole periods to the copy nearest `near`.
 fn on_copy_near(
     uv: brepkit_math::vec::Point2,
@@ -681,8 +753,11 @@ fn find_splits_on_nurbs_by_projection(
     if hi < d1 - slack {
         span = curve_split(&span, hi).ok()?.0;
     }
-    // With positive weights the control polygon holds the part, so a point
-    // farther from its box than the tolerance is off the edge.
+    // The weave's contact test reads a point within the weld band of the
+    // edge as on it (a fitted curve's error), so the split takes the same
+    // band. With positive weights the control polygon holds the part, so a
+    // point farther than that from its box is off the edge.
+    let band = tol * 100.0;
     let boxed = span.weights().iter().all(|&w| w.is_finite() && w > 0.0);
     let (mut bmin, mut bmax) = (span.control_points()[0], span.control_points()[0]);
     for p in span.control_points() {
@@ -698,12 +773,12 @@ fn find_splits_on_nurbs_by_projection(
         );
     }
     let outside = |p: Point3| {
-        p.x() < bmin.x() - tol
-            || p.y() < bmin.y() - tol
-            || p.z() < bmin.z() - tol
-            || p.x() > bmax.x() + tol
-            || p.y() > bmax.y() + tol
-            || p.z() > bmax.z() + tol
+        p.x() < bmin.x() - band
+            || p.y() < bmin.y() - band
+            || p.z() < bmin.z() - band
+            || p.x() > bmax.x() + band
+            || p.y() > bmax.y() + band
+            || p.z() > bmax.z() + band
     };
     let mut splits: Vec<(f64, Point3)> = Vec::new();
     for &sp in split_pts_3d {
@@ -713,7 +788,7 @@ fn find_splits_on_nurbs_by_projection(
         let Ok(hit) = project_point_to_curve(&span, sp, tol * 1e-3) else {
             continue;
         };
-        if hit.distance > tol {
+        if hit.distance > band {
             continue;
         }
         let t = (hit.parameter - dom0) / dom_span;
@@ -1600,6 +1675,90 @@ mod hole_copy_tests {
                 .min_by(|p, q| (*p - uv).length().total_cmp(&(*q - uv).length()))
                 .unwrap(),
         }
+    }
+
+    /// A woven hole's spline edge and a section's end 5e-7 off it, the error
+    /// of a fitted curve: the weave's contact test takes the end as on the
+    /// edge, and the split makes the junction there.
+    #[test]
+    fn a_hole_spline_splits_at_a_section_end_its_fit_error_off_it() {
+        let cyl =
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0)
+                .unwrap();
+        let surface = FaceSurface::Cylinder(cyl);
+        let angle = 0.2_f64;
+        let (a, b) = (
+            Point3::new(angle.cos(), angle.sin(), 0.0),
+            Point3::new(angle.cos(), angle.sin(), 2.0),
+        );
+        let uv = |p: Point3| {
+            let (u, v) = surface.project_point(p).unwrap();
+            Point2::new(u, v)
+        };
+        let ruling =
+            NurbsCurve::new(1, vec![0.0, 0.0, 1.0, 1.0], vec![a, b], vec![1.0, 1.0]).unwrap();
+        let edge = OrientedPCurveEdge {
+            curve_3d: EdgeCurve::NurbsCurve(ruling),
+            pcurve: Curve2D::Line(Line2D::new(uv(a), uv(b) - uv(a)).unwrap()),
+            start_uv: uv(a),
+            end_uv: uv(b),
+            start_3d: a,
+            end_3d: b,
+            forward: true,
+            source_edge_idx: None,
+            pave_block_id: None,
+        };
+        let off = Point3::new(angle.cos() * (1.0 + 5e-7), angle.sin() * (1.0 + 5e-7), 1.0);
+        let pieces = split_hole_edges_at_3d_points(vec![edge], &[off], None, &surface, 1e-7);
+        assert_eq!(
+            pieces.len(),
+            2,
+            "the spline did not split at the section's end"
+        );
+        assert!((pieces[0].end_3d - off).length() < 1e-12);
+    }
+
+    /// A woven hole's spline rim over u = 0 to 5 whose first four fifths
+    /// in u lie on the first tenth of its knots: a split at u = 3.9 sits at
+    /// a tenth of the way by parameter, and still takes the copy of the
+    /// period the rim runs on there.
+    #[test]
+    fn a_hole_spline_with_uneven_knots_splits_on_its_own_copy() {
+        let cyl =
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0)
+                .unwrap();
+        let surface = FaceSurface::Cylinder(cyl);
+        let z = 3.0;
+        let on = |u: f64| surface.evaluate(u, z).unwrap();
+        let us: Vec<f64> = (0..=10).map(|k| 0.5 * f64::from(k)).collect();
+        let poles: Vec<Point3> = us.iter().map(|&u| on(u)).collect();
+        let mut knots = vec![0.0, 0.0];
+        knots.extend((1..=8).map(|k| 0.0125 * f64::from(k)));
+        knots.extend([0.55, 1.0, 1.0]);
+        let rim = NurbsCurve::new(1, knots, poles.clone(), vec![1.0; poles.len()]).unwrap();
+        let edge = OrientedPCurveEdge {
+            curve_3d: EdgeCurve::NurbsCurve(rim),
+            pcurve: Curve2D::Line(
+                Line2D::new(
+                    Point2::new(0.0, z),
+                    Point2::new(5.0, z) - Point2::new(0.0, z),
+                )
+                .unwrap(),
+            ),
+            start_uv: Point2::new(0.0, z),
+            end_uv: Point2::new(5.0, z),
+            start_3d: poles[0],
+            end_3d: poles[10],
+            forward: true,
+            source_edge_idx: None,
+            pave_block_id: None,
+        };
+        let split = poles[7] + (poles[8] - poles[7]) * 0.8;
+        let pieces = split_hole_edges_at_3d_points(vec![edge], &[split], None, &surface, 1e-7);
+        assert_eq!(pieces.len(), 2);
+        let u = pieces[0].end_uv.x();
+        assert!((u - 3.9).abs() < 0.05, "the split took u = {u}");
+        assert!((pieces[1].start_uv.x() - u).abs() < 1e-12);
     }
 
     /// A woven hole's rim arc on a cylinder that runs from u = 0 to u = 5,
