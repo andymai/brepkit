@@ -1,0 +1,37 @@
+.claude/skills/roadmap/SKILL.md
+  s_489e8e320eebde::t_883b87ed2919c9 207
+crates/algo/src/builder/face_splitter/mod.rs
+  s_489e8e320eebde::t_4d6bf0f5d693d1 1193-1317,9449-9459,11476-11552
+crates/algo/src/pave_filler/phase_ff.rs
+  s_489e8e320eebde::t_edd8fe743b0602 4571-4582,4621-4625,4628-4631,11371-11423
+crates/io/tests/cube_truss_fuse_inmem.rs
+  s_489e8e320eebde::t_6ce4677e971c11 1-277
+crates/operations/src/tessellate/mesh_ops.rs
+  s_489e8e320eebde::t_145b1b83683acd 527-531,533-546,548-556,562-571,574,578-582
+crates/operations/src/tessellate/nonplanar.rs
+  s_489e8e320eebde::t_5c8e5374199ef7 1554-2149
+crates/operations/src/tessellate/nurbs.rs
+  s_489e8e320eebde::t_43ff25e8b7e93b 158-167,231
+crates/operations/src/tessellate/solid.rs
+  s_489e8e320eebde::t_0a50e37dca0fdc 21-23,2155-2166,2302-2312
+crates/operations/src/tessellate/tests.rs
+  s_489e8e320eebde::t_5b78d9e6466b8b 5431-5965
+crates/operations/tests/struts_across_a_seam.rs
+  s_489e8e320eebde::t_83000183b2856e 1-212
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "69425d87a5f00c43caae021febb50d95b99e5a32",
+  "prompts": {},
+  "sessions": {
+    "s_489e8e320eebde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1a2a9261-2019-4199-aa4f-06130071c8f0",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
