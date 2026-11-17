@@ -5801,8 +5801,8 @@ fn a_tall_cylinder_wall_keeps_its_triangles_within_the_tolerances() {
 /// A unit sphere's face below z = 0.5, bounded by the circle there in three
 /// arcs, its wire counterclockwise about the outward normal round the face:
 /// the arcs close a small cap above the circle in their hemisphere, which is
-/// not the face. The mesh covers the face below the circle, with the area
-/// of that zone within the deflection.
+/// not the face. Facing out of the sphere or into it, the face meshes below
+/// the circle, with the area of that zone within the deflection.
 #[test]
 fn a_sphere_zone_bounded_by_three_arcs_meshes_on_its_own_side() {
     use brepkit_math::curves::Circle3D;
@@ -5832,11 +5832,19 @@ fn a_sphere_zone_bounded_by_three_arcs_meshes_on_its_own_side() {
         .collect();
     let wire = topo.add_wire(Wire::new(edges, true).unwrap());
     let sphere = SphericalSurface::new(p(0.0, 0.0, 0.0), 1.0).unwrap();
-    let face = topo.add_face(Face::new(wire, vec![], FaceSurface::Sphere(sphere)));
-    let shell = topo.add_shell(Shell::new(vec![face]).unwrap());
-    let solid = topo.add_solid(Solid::new(shell, vec![]));
     let zone = 2.0 * std::f64::consts::PI * 1.5;
-    for (deflection, angle) in [(0.5, 1.0), (0.1, 10f64.to_radians())] {
+    let mut solids = Vec::new();
+    for reversed in [false, true] {
+        let mut face = Face::new(wire, vec![], FaceSurface::Sphere(sphere.clone()));
+        face.set_reversed(reversed);
+        let face = topo.add_face(face);
+        let shell = topo.add_shell(Shell::new(vec![face]).unwrap());
+        solids.push(topo.add_solid(Solid::new(shell, vec![])));
+    }
+    for (solid, (deflection, angle)) in solids
+        .into_iter()
+        .flat_map(|solid| [(solid, (0.5, 1.0)), (solid, (0.1, 10f64.to_radians()))])
+    {
         let mesh = tessellate_solid_with_tolerance(&topo, solid, deflection, angle).unwrap();
         let mut area = 0.0;
         for t in mesh.indices.chunks_exact(3) {

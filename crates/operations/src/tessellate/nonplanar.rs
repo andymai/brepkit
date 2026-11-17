@@ -1653,9 +1653,9 @@ pub(super) fn tessellate_sphere_triangle_shared(
         return Ok(false);
     }
     // The rows cover the patch that the arcs close within that hemisphere.
-    // The face lies on the left of its wire about its own normal: the patch
-    // is the face only when the wire turns counterclockwise about `axis`, or
-    // clockwise for a face whose normal points into the sphere.
+    // The face lies on the left of its wire about the sphere's outward
+    // normal, whichever way the face itself faces: the patch is the face
+    // only when the wire turns counterclockwise about `axis`.
     let rim: Vec<Point3> = sides
         .iter()
         .flat_map(|side| side[1..].iter().map(|&gid| point_of(gid) - center))
@@ -1669,7 +1669,7 @@ pub(super) fn tessellate_sphere_triangle_shared(
                 .dot(axis)
         })
         .sum();
-    if (turning > 0.0) == face_data.is_reversed() {
+    if turning <= 0.0 {
         return Ok(false);
     }
 
