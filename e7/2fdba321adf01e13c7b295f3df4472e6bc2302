@@ -1,0 +1,21 @@
+crates/operations/src/chamfer.rs
+  s_489e8e320eebde::t_b7d9fd84f80f05 1185-1187,1205-1208,1210-1212,1217-1239
+crates/operations/tests/chamfer_round_rims.rs
+  s_489e8e320eebde::t_01746a8c7b3cb9 14,16,24-25,387-498
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e72fdba321adf01e13c7b295f3df4472e6bc2302",
+  "prompts": {},
+  "sessions": {
+    "s_489e8e320eebde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1a2a9261-2019-4199-aa4f-06130071c8f0",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
