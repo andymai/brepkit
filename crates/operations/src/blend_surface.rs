@@ -558,18 +558,24 @@ fn pair_chains(a: &Chain, b: &mut Chain, pairing: Pairing) -> bool {
         };
         *b = b.started_at(start);
     } else {
-        let nearer_back = || twist(&backward, 0) < twist(&forward, 0);
         let back = match pairing {
             Pairing::OneSideUp => {
+                // Each way read as it will run: its joins moved on to A's.
+                let aligned = |chain: &Chain| {
+                    let mut chain = chain.clone();
+                    align_joints(a, &mut chain);
+                    along(&chain)
+                };
+                let (forward, backward) = (aligned(b), aligned(&back_chain));
                 let (agree_f, agree_b) =
                     (agreement(&from_a, &forward), agreement(&from_a, &backward));
                 if (agree_b - agree_f).abs() > AGREEMENT_TIE * SAMPLES as f64 {
                     agree_b > agree_f
                 } else {
-                    nearer_back()
+                    twist(&backward, 0) < twist(&forward, 0)
                 }
             }
-            Pairing::Nearest => nearer_back(),
+            Pairing::Nearest => twist(&backward, 0) < twist(&forward, 0),
         };
         if back {
             run_back = true;
@@ -577,6 +583,13 @@ fn pair_chains(a: &Chain, b: &mut Chain, pairing: Pairing) -> bool {
         }
     }
 
+    align_joints(a, b);
+    run_back
+}
+
+/// Put the joins of `b` on those of `a` when the chains have as many, and
+/// otherwise snap each join of `b` within `1e-3` of one of `a`'s on to it.
+fn align_joints(a: &Chain, b: &mut Chain) {
     let joints_a = a.joints();
     let joints_b = b.joints();
     if joints_a.len() == joints_b.len() {
@@ -596,7 +609,6 @@ fn pair_chains(a: &Chain, b: &mut Chain, pairing: Pairing) -> bool {
             b.set_joints(&snapped);
         }
     }
-    run_back
 }
 
 /// How well the ruled surface between two open chains, sampled at the same

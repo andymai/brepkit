@@ -438,6 +438,74 @@ fn a_chain_that_hooks_toward_the_other_tighter_than_the_reach_reaches_less_far()
     }
 }
 
+/// A flat quad through `corners` in `pose`, with the chain of its first two
+/// sides: a corner.
+fn corner_quad(topo: &mut Topology, pose: Pose, corners: [Point3; 4]) -> Sheet {
+    let mut b = Builder { topo, pose };
+    let v: Vec<_> = corners.iter().map(|&c| b.vertex(c)).collect();
+    let edges: Vec<_> = (0..4).map(|i| b.line(v[i], v[(i + 1) % 4])).collect();
+    let walk = edges.iter().map(|&e| OrientedEdge::new(e, true)).collect();
+    let wire = b.topo.add_wire(Wire::new(walk, true).unwrap());
+    let normal = pose.vector(
+        (corners[1] - corners[0])
+            .cross(corners[3] - corners[0])
+            .normalize()
+            .unwrap(),
+    );
+    let d = normal.dot(pose.point(corners[0]) - Point3::new(0.0, 0.0, 0.0));
+    let face = b.topo.add_face(Face::new(
+        wire,
+        Vec::new(),
+        FaceSurface::Plane { normal, d },
+    ));
+    let middle = corners[0] + (corners[2] - corners[0]) * 0.5;
+    Sheet {
+        face,
+        chain: vec![edges[0], edges[1]],
+        inside: pose.point(middle),
+        boundary: edges,
+    }
+}
+
+/// Two chains that turn a corner in different proportions: A runs 10 up and
+/// 2 across, B 3 up and 8 across. Their corners meet, so B's sides are spread
+/// over A's before the surface is built. B runs the way that keeps the ruled
+/// surface between the chains one side up as they are paired then, and the
+/// surface does not fold.
+#[test]
+fn chains_turning_a_corner_in_different_proportions_pair_as_they_run() {
+    let p = |x: f64, y: f64| Point3::new(x, y, 0.0);
+    for (pose_name, pose) in POSES {
+        for continuity in [BlendContinuity::G1, BlendContinuity::G2] {
+            let context = format!("{pose_name} {continuity:?}");
+            let mut topo = Topology::new();
+            let a = corner_quad(
+                &mut topo,
+                pose(),
+                [p(0.0, 0.0), p(0.0, 10.0), p(-2.0, 10.0), p(-2.0, 0.0)],
+            );
+            let b = corner_quad(
+                &mut topo,
+                pose(),
+                [p(8.0, 6.0), p(8.0, 9.0), p(16.0, 9.0), p(16.0, 6.0)],
+            );
+            let face = blend_surface(
+                &mut topo,
+                &a.chain,
+                a.face,
+                &b.chain,
+                b.face,
+                &BlendSurfaceOptions::new(continuity),
+            )
+            .unwrap_or_else(|e| panic!("{context}: {e}"));
+            let result = nurbs_of(&topo, face);
+            assert_eq!(first_fold(&result), None, "{context}");
+            let (seam_a, seam_b) = both_seams(&topo, &result, &a, &b);
+            assert_seams(&context, continuity, &[seam_a, seam_b]);
+        }
+    }
+}
+
 /// Two chains of different edge counts pair by arc length.
 #[test]
 fn chains_of_different_edge_counts_pair_by_arc_length() {
