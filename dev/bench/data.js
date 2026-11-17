@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794897835371,
+  "lastUpdate": 1794902073434,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -73493,6 +73493,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 20469287,
             "range": "± 30868",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c6d3b5325de3cce4588c2d256a743a94e5f1c2a2",
+          "message": "chore(main): release 4.11.30 (#2605)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[4.11.30](https://github.com/andymai/brepkit/compare/v4.11.29...v4.11.30)\n(2026-11-17)\n\n\n### Bug Fixes\n\n* **algo:** separate paths that weld together, and the two sides of a\nthin lens ([#2579](https://github.com/andymai/brepkit/issues/2579))\n([b25bef8](https://github.com/andymai/brepkit/commit/b25bef89f74a89a095ca0ef7485d5ebf114a91f7)),\ncloses [#2550](https://github.com/andymai/brepkit/issues/2550)\n[#2554](https://github.com/andymai/brepkit/issues/2554)\n* **io:** pair the triangles round a shared edge again after a turn\n([#2580](https://github.com/andymai/brepkit/issues/2580))\n([d6ae204](https://github.com/andymai/brepkit/commit/d6ae204d4638a07037b3da4dda91122111474870)),\ncloses [#2510](https://github.com/andymai/brepkit/issues/2510)\n* **operations:** blend a chain that turns a corner or hooks back,\ninstead of refusing it\n([#2591](https://github.com/andymai/brepkit/issues/2591))\n([bb04eb2](https://github.com/andymai/brepkit/commit/bb04eb20ebbbe445c0ca06a6190838dd51ed091f))\n* **operations:** chamfer round edges with two distances and end chains\non slanted planes\n([#2571](https://github.com/andymai/brepkit/issues/2571))\n([08d5be5](https://github.com/andymai/brepkit/commit/08d5be5b672ed71f587d99c135fc7aed07a37bc3))\n* **tessellate:** keep a shell's free rim out of the boundary weld\n([#2569](https://github.com/andymai/brepkit/issues/2569))\n([3c8d110](https://github.com/andymai/brepkit/commit/3c8d1104a2b9fd95f3e8d4d4bca4d978e30bf56a)),\ncloses [#2548](https://github.com/andymai/brepkit/issues/2548)\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-11-17T07:51:20Z",
+          "tree_id": "717d85a7edf8466cd92de7aa241863ca92d810f2",
+          "url": "https://github.com/andymai/brepkit/commit/c6d3b5325de3cce4588c2d256a743a94e5f1c2a2"
+        },
+        "date": 1794902066056,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 914269,
+            "range": "± 2472",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 960438,
+            "range": "± 1883",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11307,
+            "range": "± 33",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 573196,
+            "range": "± 2271",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 20467819,
+            "range": "± 45966",
             "unit": "ns/iter"
           }
         ]
