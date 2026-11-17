@@ -18,6 +18,7 @@ use brepkit_operations::compound_ops::fuse_all;
 use brepkit_operations::measure::solid_volume;
 use brepkit_operations::primitives::make_sphere;
 use brepkit_operations::revolve::revolve;
+use brepkit_operations::tessellate::{boundary_edge_count, tessellate_solid};
 use brepkit_operations::transform::transform_solid;
 use brepkit_operations::validate::validate_solid;
 use brepkit_topology::Topology;
@@ -240,6 +241,8 @@ fn a_second_ball_across_a_flat_ring_fuses_onto_it() {
         let fused = exact_fuse(&mut topo, first, two, name);
         let report = validate_solid(&topo, fused).unwrap();
         assert!(report.is_valid(), "{name}: {:?}", report.issues);
+        let mesh = tessellate_solid(&topo, fused, 0.005).unwrap();
+        assert_eq!(boundary_edge_count(&mesh), 0, "{name}: open mesh");
         assert_eq!(
             census(&topo, fused),
             BTreeMap::from([("cylinder", 4), ("plane", 4), ("sphere", 4)]),

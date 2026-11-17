@@ -17,6 +17,7 @@ use brepkit_operations::boolean::{self, BooleanOp, BooleanOptions};
 use brepkit_operations::classify::{PointClassification, classify_point};
 use brepkit_operations::measure::solid_volume;
 use brepkit_operations::primitives::{make_cylinder, make_sphere};
+use brepkit_operations::tessellate::{boundary_edge_count, tessellate_solid};
 use brepkit_operations::transform::transform_solid;
 use brepkit_operations::validate::validate_solid;
 use brepkit_topology::Topology;
@@ -175,23 +176,34 @@ fn two_rods_ending_at_one_balls_centre_fuse_onto_it() {
     // each built from the ball's centre, or from its far end where its flag
     // is set (its end cap at the ball). With `swap` the second rod meets the
     // ball first.
-    for (roll, yaw, pitch, swap, (first_far, second_far)) in [
-        (0.3, 2.2, 0.4, false, (false, false)),
-        (0.0, 2.2, 0.4, false, (false, false)),
-        (1.1, 1.3, -0.7, false, (false, false)),
+    // `mirror_too` adds the scene mirrored in `y`.
+    for (roll, yaw, pitch, swap, (first_far, second_far), mirror_too) in [
+        (0.3, 2.2, 0.4, false, (false, false), true),
+        (0.0, 2.2, 0.4, false, (false, false), true),
+        (1.1, 1.3, -0.7, false, (false, false), true),
         // A wire guard's rib stepping down: the caps meet on the equator.
-        (0.3, PI, 0.41, false, (false, false)),
-        (0.3, PI, -0.41, false, (true, false)),
-        (0.3, PI, 0.41, true, (false, true)),
+        (0.3, PI, 0.41, false, (false, false), true),
+        (0.3, PI, -0.41, false, (true, false), false),
+        (0.3, PI, 0.41, true, (false, true), true),
         // Both axes in the equator's plane: the caps meet at the poles.
-        (0.3, 2.2, 0.0, false, (false, false)),
+        (0.3, 2.2, 0.0, false, (false, false), true),
         // The second rod's cap runs through both poles.
-        (0.0, 2.2, 0.4, true, (false, false)),
+        (0.0, 2.2, 0.4, true, (false, false), true),
     ] {
-        for at in [Point3::new(0.0, 0.0, 0.0), Point3::new(28.638, -8.1, 2.65)] {
+        let poses = [
+            (Point3::new(0.0, 0.0, 0.0), false),
+            (Point3::new(28.638, -8.1, 2.65), false),
+            (Point3::new(28.638, -8.1, 2.65), true),
+        ];
+        for (at, mirrored) in poses.into_iter().filter(|&(_, m)| mirror_too || !m) {
             let name = format!(
-                "roll {roll}, yaw {yaw}, pitch {pitch}, swap {swap}, far ends {first_far} {second_far}, at {at:?}"
+                "roll {roll}, yaw {yaw}, pitch {pitch}, swap {swap}, far ends {first_far} {second_far}, at {at:?}, mirrored {mirrored}"
             );
+            let pose = if mirrored {
+                Mat4::scale(1.0, -1.0, 1.0)
+            } else {
+                Mat4::identity()
+            };
             let lay = |yaw: f64, pitch: f64, far_end: bool| {
                 let base = Mat4::translation(at.x(), at.y(), at.z())
                     * Mat4::rotation_z(yaw)
@@ -218,6 +230,11 @@ fn two_rods_ending_at_one_balls_centre_fuse_onto_it() {
             transform_solid(&mut topo, ball, &Mat4::translation(at.x(), at.y(), at.z())).unwrap();
             let other = make_cylinder(&mut topo, RADIUS, length).unwrap();
             transform_solid(&mut topo, other, &lay(yaw, pitch, second_far)).unwrap();
+            if mirrored {
+                for solid in [rod, ball, other] {
+                    transform_solid(&mut topo, solid, &pose).unwrap();
+                }
+            }
             let (one, two) = if swap { (other, rod) } else { (rod, other) };
             let first = exact_fuse(&mut topo, one, ball, &name);
             let fused = exact_fuse(&mut topo, first, two, &name);
@@ -228,6 +245,8 @@ fn two_rods_ending_at_one_balls_centre_fuse_onto_it() {
             assert_eq!(kinds.get("plane"), Some(&2), "{name}: {kinds:?}");
             assert!(kinds.contains_key("sphere"), "{name}: {kinds:?}");
             assert_eq!(edges_not_used_twice(&topo, fused), 0, "{name}");
+            let mesh = tessellate_solid(&topo, fused, 0.005).unwrap();
+            assert_eq!(boundary_edge_count(&mesh), 0, "{name}: open mesh");
             // The rods, less their overlap, and the wedge of the ball
             // outside both: its two planes meet at the angle between the
             // rods' axes.
@@ -238,7 +257,8 @@ fn two_rods_ending_at_one_balls_centre_fuse_onto_it() {
                 (volume - expected).abs() < 1e-4 * expected,
                 "{name}: volume {volume} should be {expected}"
             );
-            let class = |v: Vec3| classify_point(&topo, fused, at + v, 0.01, 1e-7).unwrap();
+            let class =
+                |v: Vec3| classify_point(&topo, fused, pose.mul_point(at + v), 0.01, 1e-7).unwrap();
             let away = -(a + b) * (1.0 / (a + b).length());
             let side = a.cross(b) * (1.0 / a.cross(b).length());
             for (v, want) in [
