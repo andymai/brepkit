@@ -5181,8 +5181,11 @@ fn split_cylinder_band_by_arrangement(
                 breaks.push(hv);
             }
         }
+        // Read round the turn: a vertex on the seam registers at u = 0 and
+        // splits both of the seam's copies, at 0 and at 2 pi.
         for &(mu, mv) in &marks {
-            if (mu - u).abs() <= cov && mv > v0 + tol && mv < v1 - tol {
+            let du = (mu - u).rem_euclid(TAU);
+            if du.min(TAU - du) <= cov && mv > v0 + tol && mv < v1 - tol {
                 breaks.push(mv);
             }
         }
@@ -11691,6 +11694,118 @@ mod tests {
             extents[1] >= 2.0 - 1.0e-6,
             "kept comb should reach the top rim v = 2"
         );
+    }
+
+    /// [`cylinder_band_partial_notch_splits_into_comb_and_rectangle`] with the
+    /// seam split at v = 1 ahead of time: the band's two copies of the seam,
+    /// at u = 0 and at u = 2 pi, split at the same heights.
+    #[test]
+    fn cylinder_band_splits_both_copies_of_a_split_seam_alike() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::CylindricalSurface;
+
+        let cyl =
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0)
+                .unwrap();
+        let surface = FaceSurface::Cylinder(cyl);
+        let circle = |z: f64| {
+            Circle3D::new(Point3::new(0.0, 0.0, z), Vec3::new(0.0, 0.0, 1.0), 1.0)
+                .map(EdgeCurve::Circle)
+                .unwrap()
+        };
+        let boundary = [
+            cyl_edge(
+                EdgeCurve::Line,
+                Point3::new(1.0, 0.0, 0.0),
+                Point3::new(1.0, 0.0, 1.0),
+            ),
+            cyl_edge(
+                EdgeCurve::Line,
+                Point3::new(1.0, 0.0, 1.0),
+                Point3::new(1.0, 0.0, 2.0),
+            ),
+            cyl_edge(
+                circle(0.0),
+                Point3::new(1.0, 0.0, 0.0),
+                Point3::new(-1.0, 0.0, 0.0),
+            ),
+            cyl_edge(
+                circle(0.0),
+                Point3::new(-1.0, 0.0, 0.0),
+                Point3::new(1.0, 0.0, 0.0),
+            ),
+            cyl_edge(
+                circle(2.0),
+                Point3::new(1.0, 0.0, 2.0),
+                Point3::new(-1.0, 0.0, 2.0),
+            ),
+            cyl_edge(
+                circle(2.0),
+                Point3::new(-1.0, 0.0, 2.0),
+                Point3::new(1.0, 0.0, 2.0),
+            ),
+        ];
+        let n_boundary = boundary.len();
+        let sections = [
+            cyl_edge(
+                EdgeCurve::Line,
+                Point3::new(0.0, 1.0, 0.0),
+                Point3::new(0.0, 1.0, 1.0),
+            ),
+            cyl_edge(
+                EdgeCurve::Line,
+                Point3::new(-1.0, 0.0, 0.0),
+                Point3::new(-1.0, 0.0, 1.0),
+            ),
+            cyl_edge(
+                circle(1.0),
+                Point3::new(0.0, 1.0, 1.0),
+                Point3::new(-1.0, 0.0, 1.0),
+            ),
+        ];
+        let all_edges: Vec<OrientedPCurveEdge> = boundary.into_iter().chain(sections).collect();
+
+        let mut topo = Topology::new();
+        let face_id = make_unit_square_face(&mut topo);
+        let result = split_cylinder_band_by_arrangement(
+            &surface,
+            &all_edges,
+            n_boundary,
+            Rank::A,
+            false,
+            face_id,
+            1.0e-7,
+        )
+        .expect("cylinder band arrangement must trace the notch");
+
+        let seam_u: Vec<f64> = result
+            .iter()
+            .flat_map(|sub| &sub.outer_wire)
+            .filter(|e| matches!(e.curve_3d, EdgeCurve::Line))
+            .filter(|e| (e.start_3d.x() - 1.0).abs() < 1e-9 && e.start_3d.y().abs() < 1e-9)
+            .map(|e| e.start_uv.x())
+            .collect();
+        let (lo, hi) = seam_u
+            .iter()
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), &u| {
+                (lo.min(u), hi.max(u))
+            });
+        let heights = |u: f64| {
+            let mut vs: Vec<i64> = result
+                .iter()
+                .flat_map(|sub| &sub.outer_wire)
+                .filter(|e| matches!(e.curve_3d, EdgeCurve::Line))
+                .filter(|e| (e.start_uv.x() - u).abs() < 1e-6 && (e.end_uv.x() - u).abs() < 1e-6)
+                .flat_map(|e| [e.start_uv.y(), e.end_uv.y()])
+                .map(|v| (v * 1.0e6).round() as i64)
+                .collect();
+            vs.sort_unstable();
+            vs.dedup();
+            vs
+        };
+        assert!(hi - lo > 6.0, "both copies of the seam bound a region");
+        assert_eq!(heights(lo), heights(hi), "the seam's copies split apart");
+        assert_eq!(heights(lo), vec![0, 1_000_000, 2_000_000]);
     }
 
     /// A tilted (non-axis-aligned) section makes the cut non-rectilinear, so the
