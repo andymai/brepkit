@@ -2743,11 +2743,16 @@ fn trim_torus_oval_to_box_face(
     if (raw.p_start - raw.p_end).length() > 1e-6 {
         return None; // open curve — not a closed oval
     }
-    let (torus, torus_ext, plane_face, plane_ext) = match (surf_a, surf_b) {
-        (FaceSurface::Torus(t), FaceSurface::Plane { .. }) => (t, ext_a, fb, ext_b),
-        (FaceSurface::Plane { .. }, FaceSurface::Torus(t)) => (t, ext_b, fa, ext_a),
-        _ => return None,
-    };
+    let (torus, torus_face, torus_ext, plane_face, plane_ext, (plane_n, plane_d)) =
+        match (surf_a, surf_b) {
+            (FaceSurface::Torus(t), FaceSurface::Plane { normal, d }) => {
+                (t, fa, ext_a, fb, ext_b, (*normal, *d))
+            }
+            (FaceSurface::Plane { normal, d }, FaceSurface::Torus(t)) => {
+                (t, fb, ext_b, fa, ext_a, (*normal, *d))
+            }
+            _ => return None,
+        };
 
     // The box face's straight boundary edges (its rectangle sides).
     let face = topo.face(plane_face).ok()?;
@@ -2804,6 +2809,77 @@ fn trim_torus_oval_to_box_face(
         }
     }
 
+    // The torus face's own rims end it as the box face's edges end the box:
+    // an arc kept on past a rim (a wall's oval running on over the top of a
+    // groove's tube) lies off the face. A seam, run once each way, ends
+    // nothing.
+    let torus_wires: Vec<_> = topo.face(torus_face).map_or_else(
+        |_| Vec::new(),
+        |face| {
+            std::iter::once(face.outer_wire())
+                .chain(face.inner_wires().iter().copied())
+                .collect()
+        },
+    );
+    let torus_edges: Vec<brepkit_topology::edge::EdgeId> = torus_wires
+        .iter()
+        .filter_map(|&w| topo.wire(w).ok())
+        .flat_map(|w| {
+            w.edges()
+                .iter()
+                .map(brepkit_topology::wire::OrientedEdge::edge)
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    for &edge_id in &torus_edges {
+        if torus_edges.iter().filter(|&&e| e == edge_id).count() > 1 {
+            continue;
+        }
+        let Ok(edge) = topo.edge(edge_id) else {
+            continue;
+        };
+        let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) else {
+            continue;
+        };
+        let (sp, ep) = (sv.point(), ev.point());
+        let points = match edge.curve() {
+            EdgeCurve::Line => line_segment_plane_crossing(sp, ep, plane_n, plane_d)
+                .into_iter()
+                .collect(),
+            EdgeCurve::Circle(c) => circle_arc_plane_crossings(c, sp, ep, plane_n, plane_d),
+            EdgeCurve::Ellipse(e) => conic_arc_plane_crossings(
+                |t| e.evaluate(t),
+                |q| e.project(q),
+                sp,
+                ep,
+                plane_n,
+                plane_d,
+            ),
+            curve @ EdgeCurve::NurbsCurve(_) => {
+                let (t0, t1) = curve.domain_with_endpoints(sp, ep);
+                super::phase_ef::find_edge_plane_crossings(
+                    curve, sp, ep, t0, t1, plane_n, plane_d, tol,
+                )
+                .into_iter()
+                .map(|(_, p)| p)
+                .collect()
+            }
+        };
+        for p in points {
+            let on_oval = (0..=128).any(|i| {
+                let tt = raw.t_range.0 + (raw.t_range.1 - raw.t_range.0) * f64::from(i) / 128.0;
+                (raw.curve
+                    .evaluate_with_endpoints(tt, raw.p_start, raw.p_end)
+                    - p)
+                    .length()
+                    < on_oval_tol
+            });
+            if on_oval && !crossings.iter().any(|c| (*c - p).length() < dedup_tol) {
+                crossings.push(p);
+            }
+        }
+    }
+
     // No boundary crossing: the oval is wholly inside (or outside) the box face.
     if crossings.is_empty() {
         // Whole on both faces → keep whole; otherwise the caller's
@@ -2819,6 +2895,42 @@ fn trim_torus_oval_to_box_face(
     if crossings.len() < 2 {
         return None;
     }
+
+    // The box face's outline is its straight edges, so it says exactly
+    // whether a point of its plane lies on the face. The extent's boundary
+    // margin does not: an arc from the box's floor to a rim just below it
+    // has its middle within that margin of the floor.
+    let (ax0, ax1) = {
+        let (nx, ny, nz) = (plane_n.x().abs(), plane_n.y().abs(), plane_n.z().abs());
+        if nx >= ny && nx >= nz {
+            (1, 2)
+        } else if ny >= nz {
+            (0, 2)
+        } else {
+            (0, 1)
+        }
+    };
+    let on_box = |p: Point3| -> bool {
+        let c = |q: Point3, a: usize| [q.x(), q.y(), q.z()][a];
+        let (px, py) = (c(p, ax0), c(p, ax1));
+        let mut inside = false;
+        let mut nearest = f64::MAX;
+        for &(s, e) in &box_edges {
+            let (x0, y0, x1, y1) = (c(s, ax0), c(s, ax1), c(e, ax0), c(e, ax1));
+            if (y0 > py) != (y1 > py) && px < (x1 - x0).madd((py - y0) / (y1 - y0), x0) {
+                inside = !inside;
+            }
+            let (dx, dy) = (x1 - x0, y1 - y0);
+            let len2 = dx.madd(dx, dy * dy);
+            let t = if len2 > 0.0 {
+                ((px - x0).madd(dx, (py - y0) * dy) / len2).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            nearest = nearest.min(dx.madd(t, x0 - px).hypot(dy.madd(t, y0 - py)));
+        }
+        inside || nearest <= tol.linear
+    };
 
     // Find each crossing's parameter on the closed oval (densest sample).
     let n_dense = 1024usize;
@@ -2895,7 +3007,7 @@ fn trim_torus_oval_to_box_face(
             continue;
         }
         let mid = pts[pts.len() / 2];
-        if !plane_ext.contains(mid) || !torus_ext.contains(mid) {
+        if !plane_ext.contains(mid) || !torus_ext.contains(mid) || !on_box(mid) {
             continue;
         }
         let last = pts.len() - 1;
