@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794910832337,
+  "lastUpdate": 1794912982282,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -73871,6 +73871,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 18737057,
             "range": "± 68660",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c46825f3c9e8a0893f57dfcc609a4b021da319a5",
+          "message": "fix(algo): end a box wall's torus loop at the torus face's rims (#2584)\n\n## Summary\n\nA box corner whose floor lies inside a torus groove on a rod fell back\nto a mesh, for rings of radius 6 and 5.9. The cut, the intersection and\nthe fuse are now exact, upright, turned and mirrored. Fixes #2573.\n\nThis change needs #2575, which is now on main.\n\nThe rod has a radius of 6. The groove is the cut of a torus ring of\nminor radius 0.32 about its axis, at z = 2. The box is 10 x 10 x 10 with\nits low corner at (2, 2, 1.9). Two faults stopped the cut:\n\n- `trim_torus_oval_to_box_face` cut a box wall's loop round the tube at\nthe box's straight edges alone, and kept each arc whose middle lay on\nboth faces. With the ring of radius 6, the wall x = 2 meets the tube\nabove the floor in one arc, over the top of the tube. The arc runs from\n(2, 5.333, 1.9) to (2, 5.978, 1.9). Its middle lies at the top of the\ntube, on the band's rim. So the arc stayed, and its outer half, at the\ntube angles 5.965 to 1.573, became a section of the band. The face\nsplitter then split the band into nothing.\n- With rings of radius 6.1 and 6.3, the band's lower rim runs 0.2 and\n0.011 below the floor. The wall's arc between the floor and that rim\nlies below the wall. Its middle was inside the margin of the wall's\nextent, which is 1% of the wall's smaller side (0.1 here). With the\nfirst change alone, such an arc stayed, and the result had free and\nnon-manifold edges.\n\nThe changes:\n\n- `trim_torus_oval_to_box_face` also cuts the loop where it crosses the\nedges of the torus face: its outline and its holes, without its seams.\n`trim_ellipse_to_boundary_crossings` does the same for a cylinder or a\ncone.\n- An arc stays only when its middle also lies inside the wall's outline,\nwhich the wall's straight edges give exactly.\n- A crossing of a box edge or a rim belongs to a loop only when it lies\non that loop. On a circle or an ellipse, the test is the distance to its\nprojection. On a fitted loop, the distance to the curve must be within 4\ntimes the loop's error and 1e-5.\n- Each of 257 samples of a fitted loop gives an error. It is the sum of\nthe sample's distances from the torus and the plane, over the sine of\nthe angle between the surfaces' normals. The trim holds that sine to at\nleast 1e-3. The torus distance is to the nearer tube circle in the\nsample's plane through the axis. The plane distance uses the plane's\nunit normal.\n- The trim leaves a circle (a meridian or a parallel) whole at the rims.\nThe exact circle splitter ends it there, so its arcs stay circles.\n\nOn #2575's head, all 18 results of the corner with the rings of radius\n5.9 and 6 fall back. Without the second change, the cut with the ring of\nradius 6.1, turned, falls back.\n\nThe review of `754059b63` found two faults, and the last two changes fix\nthem:\n\n- The trim took a crossing on a loop when the crossing lay within 0.3 of\n129 samples of the loop. A thin tube's two loops through its centre run\n0.2 apart, so each loop took the other's crossings. In\n`thin_ring_under_a_tilted_box.rs`, all 16 booleans fell back.\n- A flat through the axis cut the band's meridian circles at the rims,\nand the trim refitted the arcs as splines. Each result had 8 uses of\nspline edges, where main has none.\n\nThe review of `338cef92d` found that the loop's error was too small near\na tangent, where the two surfaces meet at a small angle. Take a ring of\nradii 400 and 150 and a box wall 0.01 inside its outer equator. A box\nedge's exact crossings lay 1.7e-5 off the fitted loop. The bound was\n1.13e-5, so the trim left the loop uncut at the edge. The intersection\ncame out 2.2% short (0.03738 against 0.03822), where main falls back.\nThe sine in the error fixes it.\n\nThe review of `faee0c6f8` found two more faults in that error. A spindle\ntorus has a minor radius past its major one, as at a fillet's corner.\nIts sheet across the axis belongs to the other tube circle. An exact\npoint there read up to twice the major radius off the surface. And a\nplane face's normal need not be a unit vector, so the plane's residual\nwas not a distance.\n\n## Tests\n\n- `a_corner_whose_floor_lies_in_the_groove` in\n`crates/operations/tests/ring_groove_against_boxes.rs` is new. It cuts,\nintersects and fuses the rod and the box for rings of radius 5.9, 6, 6.1\nand 6.3, upright, turned and mirrored, with `mesh_fallback: false`.\n- Each result must be valid and watertight, with only plane, cylinder\nand torus faces. Points round the groove must classify as the analytic\nshape says. The volume must agree to 1e-6 with an integral over the\ndistance from the axis.\n- `crates/operations/tests/thin_ring_under_a_tilted_box.rs` is new. A\nring of radii 4 and 0.1 meets a box 2 wide. The box's floor passes\nthrough the ring's centre, turned by 0, 0.005, 0.01 and 0.02 about x.\n- It runs the cut and the intersection, upright and turned. Each result\nmust be valid and watertight. Its volume must agree to 1e-6 with half of\nan integral of the ring inside the box's slab. On `754059b63` and on\nmain, the test fails.\n- `crates/operations/tests/torus_near_tangent_wall.rs` is new. A ring of\nradii 400 and 150 meets a box whose wall lies 0.01 inside the outer\nequator. The box's edge crosses the wall's loop at y = 0.3 or y = 1. The\nsame scene at a hundredth of the size runs too.\n- Each result must be valid and watertight. The volume the box takes\n(the intersection, or the ring less the cut) must agree to 2e-5 with an\nintegral. The cut also has 1e-13 of the ring's volume for rounding.\n- The test measures each turned result back in the ring's own frame, and\nruns the intersection and the cut in both poses. The full-size\nintersection must agree to 1e-5 with 1e6 times the small scene's.\n- On `338cef92d` the test fails: the intersection and the cut each take\n2.2% too little, upright and turned. On main the large scene falls back.\n- `a_point_of_the_section_has_no_error_on_either_sheet` and\n`a_scaled_plane_equation_gives_the_same_error` in `phase_ff.rs` are new\nunit tests. The first reads points on rings (4, 1.5) and spindles (1, 2)\nand (0.1, 2.45), the radii of the gridfinity fillet's corner.\n- On `faee0c6f8` both fail: a point on the spindle (1, 2) read an error\nof 0.87, and the scaled plane doubled the error. `make_torus` refuses a\nspindle, so no boolean test builds one.\n- `a_flat_through_the_axis_keeps_the_grooves_meridians_circular` in\n`ring_groove_against_boxes.rs` is new. It takes the half x > 0 off the\ngrooved rod for the four rings and asserts that every edge is a line or\na circle.\n- On `754059b63` it fails with a spline edge. The ring of radius 5.9,\nturned, falls back on main and on this branch, so the test leaves it out\n(#2595).\n- `cargo nextest run --cargo-profile ci -p brepkit-algo -p brepkit-io -p\nbrepkit-operations -p brepkit-wasm -p brepkit-check -p brepkit-heal`:\n3898 tests run, 3898 passed, 22 skipped, on main at `6b6fe1d8b` with\nthis change. `cargo test -p brepkit-wasm --lib gridfinity`: 27 passed.\n- On main at `3c8d1104a` with and without this change, the pose sweep\n(495 lines) and the truth audit (40 lines) give the same output.\n- The seeded random sweep runs seeds 1, 2 and 3 with 150 cases and seed\n4 with 300. On main at `6b6fe1d8b` with and without this change, each of\nits 750 cases gets the same class: 489 good, 253 errors, 8 bad. The\ncoordinator's baseline at `3c8d1104a` gives the same.\n- I ran two probes on main at `c6d3b5325` and on this branch. The first\nmakes 720 booleans. Rods with rings of five radii (5.5 to 6.3) meet 16\nboxes, as a cut, an intersection and a fuse, in three poses.\n- On main, 699 results are exact, valid, watertight and within 1e-6 of\nthe integral. On this branch, 717 are, and no result is worse. The other\n3 are the flat through the axis with the ring of radius 5.9, turned\n(#2595).\n- The second probe makes 912 booleans of `make_torus(4, 1.5)` with 144\nboxes and 8 slabs, upright and turned. On main, 822 results are within\n1e-6. On this branch, 843 are, and no result is worse.\n- 2 more results of that probe are now exact, valid and watertight, and\nfell back before. Their volumes are 2.0e-6 off the integral. The first\nreads the same volume at every deflection from 0.01 to 0.00003. They are\nthe intersection, turned, with the boxes of half size 2 at (0.1, 3.05,\n-0.4) and (0.1, 3.05, 0.37).\n- 7 other results of that probe are 1.3e-6 to 1.5e-5 off the integral,\nthe same before and after this change.\n- The roadmap's torus row now lists the corner as exact.\n- `cargo clippy --all-targets --all-features -- -D warnings` and `cargo\nfmt --all -- --check` pass in the pre-commit hook.",
+          "timestamp": "2026-11-17T10:52:52Z",
+          "tree_id": "e4fc1802645c2ac2d03e4c73a6de5242b64633f6",
+          "url": "https://github.com/andymai/brepkit/commit/c46825f3c9e8a0893f57dfcc609a4b021da319a5"
+        },
+        "date": 1794912971832,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 910783,
+            "range": "± 12232",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 961790,
+            "range": "± 3276",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11397,
+            "range": "± 15",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 574672,
+            "range": "± 3687",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 21225613,
+            "range": "± 416439",
             "unit": "ns/iter"
           }
         ]
