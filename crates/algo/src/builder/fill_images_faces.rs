@@ -2778,10 +2778,21 @@ fn build_section_edges(
                         // Project the start 3D point to UV.
                         let start_uv = face.surface().project_point(start);
                         if let Some((su, sv)) = start_uv {
-                            // Sample the curve at t=0.25 to determine winding direction.
+                            // Sample the curve a quarter turn on from its start to
+                            // determine winding direction. A closed circle's domain
+                            // starts at its own angle origin, which need not be the
+                            // start: a quarter of the way on from there can be the
+                            // start's antipode, which reads either way round.
                             let (t0, t1) = curve_3d.domain_with_endpoints(start, end);
-                            let mid_3d =
-                                curve_3d.evaluate_with_endpoints(t0 + (t1 - t0) * 0.25, start, end);
+                            let t_start = match &curve_3d {
+                                EdgeCurve::Circle(c) => c.project(start),
+                                _ => t0,
+                            };
+                            let mid_3d = curve_3d.evaluate_with_endpoints(
+                                (t1 - t0).madd(0.25, t_start),
+                                start,
+                                end,
+                            );
                             let mid_uv = face.surface().project_point(mid_3d);
                             if let Some((mu, _mv)) = mid_uv {
                                 // Determine winding: does the curve go in +u or -u
