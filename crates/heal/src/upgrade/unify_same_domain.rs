@@ -99,13 +99,31 @@ impl UnionFind {
     }
 }
 
-/// Merge adjacent faces that share the same underlying surface.
+/// Merge adjacent faces that share the same underlying surface, then (with
+/// `unify_edges`) straight edges left in pieces along a line between the
+/// same two planar faces.
 ///
 /// # Errors
 ///
 /// Returns [`HealError`] if entity lookups fail during merging.
-#[allow(clippy::too_many_lines)]
 pub fn unify_same_domain(
+    topo: &mut Topology,
+    solid_id: SolidId,
+    options: &UnifyOptions,
+) -> Result<(SolidId, UnifyResult), HealError> {
+    let (solid_id, mut result) = unify_faces(topo, solid_id, options)?;
+    if options.unify_edges {
+        let merged = merge_split_edges(topo, solid_id, options)?;
+        if merged > 0 {
+            result.edges_merged += merged;
+            result.status = Status::DONE1;
+        }
+    }
+    Ok((solid_id, result))
+}
+
+#[allow(clippy::too_many_lines)]
+fn unify_faces(
     topo: &mut Topology,
     solid_id: SolidId,
     options: &UnifyOptions,
@@ -346,6 +364,193 @@ pub fn unify_same_domain(
 /// A closed manifold shell pairs every edge exactly twice; free (once) and
 /// over-shared (3+) edges are both defects. Used to prove a merge did not make
 /// the shell worse before committing it.
+/// One wire's edges with a split pair about to be joined (`merge_split_edges`).
+struct Rewrite {
+    wire: WireId,
+    /// Where the joined edge goes: the pair's first slot.
+    slot: usize,
+    forward: bool,
+    old: Vec<OrientedEdge>,
+    closed: bool,
+}
+
+/// Join straight edges that a vertex splits along one line, across the whole
+/// solid: where exactly two line edges meet at a vertex, run on in the same
+/// direction, and are used by the same faces, all of them planar, both are
+/// replaced by one edge in every wire that uses them (each face's wires
+/// keep sharing the new edge).  The per-wire merge in `unify_faces` gives
+/// each wire its own new edge, so it undoes itself whenever the face across
+/// the line keeps the pieces (an extrude of several profiles leaves a side
+/// face's bottom edge in one piece per profile even after the faces merge).
+/// Planar faces only: the new edge needs no pcurves.  Reverted if it would
+/// leave more unpaired edges than before.
+fn merge_split_edges(
+    topo: &mut Topology,
+    solid_id: SolidId,
+    options: &UnifyOptions,
+) -> Result<usize, HealError> {
+    use brepkit_topology::edge::EdgeId;
+    use brepkit_topology::explorer::solid_faces;
+    use brepkit_topology::face::FaceSurface;
+    use brepkit_topology::vertex::VertexId;
+
+    let faces = solid_faces(topo, solid_id)?;
+    let mut wires: Vec<(FaceId, WireId)> = Vec::new();
+    for &fid in &faces {
+        let face = topo.face(fid)?;
+        wires.push((fid, face.outer_wire()));
+        for &w in face.inner_wires() {
+            wires.push((fid, w));
+        }
+    }
+    let snapshots: Vec<(WireId, Wire)> = wires
+        .iter()
+        .map(|&(_, w)| topo.wire(w).map(|x| (w, x.clone())))
+        .collect::<Result<_, _>>()?;
+    let bad_before = unpaired_edge_count(topo, &faces)?;
+
+    let mut merged = 0usize;
+    let mut skip: HashSet<VertexId> = HashSet::new();
+    loop {
+        // edge -> the faces and wires using it; vertex -> the edges at it
+        let mut uses: HashMap<EdgeId, Vec<(FaceId, WireId)>> = HashMap::new();
+        let mut at_vertex: HashMap<VertexId, Vec<EdgeId>> = HashMap::new();
+        for &(fid, wid) in &wires {
+            for oe in topo.wire(wid)?.edges() {
+                uses.entry(oe.edge()).or_default().push((fid, wid));
+            }
+        }
+        for &eid in uses.keys() {
+            let e = topo.edge(eid)?;
+            for v in [e.start(), e.end()] {
+                let list = at_vertex.entry(v).or_default();
+                if !list.contains(&eid) {
+                    list.push(eid);
+                }
+            }
+        }
+        let mut found = None;
+        let mut vertices: Vec<VertexId> = at_vertex.keys().copied().collect();
+        vertices.sort_unstable_by_key(|v| v.index()); // (a stable order: deterministic results)
+        for v in vertices {
+            let es = &at_vertex[&v];
+            if es.len() != 2 || skip.contains(&v) {
+                continue;
+            }
+            let (e1, e2) = (es[0], es[1]);
+            let (a, b) = (topo.edge(e1)?, topo.edge(e2)?);
+            if !matches!(a.curve(), EdgeCurve::Line) || !matches!(b.curve(), EdgeCurve::Line) {
+                continue;
+            }
+            let far1 = if a.end() == v { a.start() } else { a.end() };
+            let far2 = if b.end() == v { b.start() } else { b.end() };
+            if far1 == far2 || a.start() == a.end() || b.start() == b.end() {
+                continue;
+            }
+            let (p1, pv, p2) = (
+                topo.vertex(far1)?.point(),
+                topo.vertex(v)?.point(),
+                topo.vertex(far2)?.point(),
+            );
+            let (Ok(d1), Ok(d2)) = ((pv - p1).normalize(), (p2 - pv).normalize()) else {
+                continue;
+            };
+            if d1.dot(d2) < 1.0 - options.angular_tolerance.max(1e-9) {
+                continue; // a corner, not a straight run
+            }
+            let mut f1: Vec<FaceId> = uses[&e1].iter().map(|&(f, _)| f).collect();
+            let mut f2: Vec<FaceId> = uses[&e2].iter().map(|&(f, _)| f).collect();
+            f1.sort_unstable_by_key(|f| f.index());
+            f2.sort_unstable_by_key(|f| f.index());
+            if f1 != f2 || f1.len() != 2 {
+                continue;
+            }
+            let mut planar = true;
+            for &f in &f1 {
+                if !matches!(topo.face(f)?.surface(), FaceSurface::Plane { .. })
+                    || topo.pcurves().contains(e1, f)
+                    || topo.pcurves().contains(e2, f)
+                {
+                    planar = false;
+                }
+            }
+            if !planar {
+                continue;
+            }
+            // the new edge runs the way e1 does
+            let (start, end) = if a.end() == v {
+                (far1, far2)
+            } else {
+                (far2, far1)
+            };
+            found = Some((v, e1, e2, start, end));
+            break;
+        }
+        let Some((v, e1, e2, start, end)) = found else {
+            break;
+        };
+        let new_edge = Edge::new(start, end, EdgeCurve::Line);
+        let mut touched: Vec<WireId> = uses[&e1].iter().map(|&(_, w)| w).collect();
+        touched.sort_unstable_by_key(|w| w.index());
+        touched.dedup();
+        let mut ok = true;
+        let mut rewrites: Vec<Rewrite> = Vec::new();
+        for wid in &touched {
+            let wire = topo.wire(*wid)?;
+            let closed = wire.is_closed();
+            let old: Vec<OrientedEdge> = wire.edges().to_vec();
+            let n = old.len();
+            let i1 = old.iter().position(|oe| oe.edge() == e1);
+            let i2 = old.iter().position(|oe| oe.edge() == e2);
+            let (Some(i1), Some(i2)) = (i1, i2) else {
+                ok = false;
+                break;
+            };
+            let adjacent = (i1 + 1) % n == i2 || (i2 + 1) % n == i1;
+            if !adjacent || (!closed && (i1.abs_diff(i2) != 1)) {
+                ok = false;
+                break;
+            }
+            let first = if (i1 + 1) % n == i2 { i1 } else { i2 }; // the pair's first slot
+            rewrites.push(Rewrite {
+                wire: *wid,
+                slot: first,
+                forward: old[i1].is_forward(),
+                old,
+                closed,
+            });
+        }
+        if !ok {
+            skip.insert(v); // (not a clean run in every wire: left as it is)
+            continue;
+        }
+        let new_edge = topo.add_edge(new_edge);
+        for r in rewrites {
+            let mut edges: Vec<OrientedEdge> = Vec::with_capacity(r.old.len() - 1);
+            for (k, oe) in r.old.iter().enumerate() {
+                if k == r.slot {
+                    edges.push(OrientedEdge::new(new_edge, r.forward));
+                } else if oe.edge() != e1 && oe.edge() != e2 {
+                    edges.push(*oe);
+                }
+            }
+            *topo.wire_mut(r.wire)? = Wire::new(edges, r.closed)?;
+        }
+        merged += 1;
+    }
+
+    if merged > 0 && unpaired_edge_count(topo, &faces)? > bad_before {
+        log::warn!(
+            "unify_same_domain: reverting {merged} split-edge joins (unpaired edges would rise)"
+        );
+        for (wid, original) in snapshots {
+            *topo.wire_mut(wid)? = original;
+        }
+        return Ok(0);
+    }
+    Ok(merged)
+}
+
 fn unpaired_edge_count(topo: &Topology, faces: &[FaceId]) -> Result<usize, HealError> {
     let mut uses: HashMap<usize, usize> = HashMap::new();
     for &fid in faces {
