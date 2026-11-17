@@ -6491,6 +6491,64 @@ fn move_edge_in_uv(e: &mut OrientedPCurveEdge, du: f64, dv: f64) {
     }
 }
 
+/// The pieces of a curved face's `hole` split where section `ends` lie on
+/// it, on the copy of the period those ends' UVs take, or `None` when no end
+/// lies on it.
+fn weave_curved_hole(
+    hole: &[OrientedPCurveEdge],
+    ends: &[(Point3, Point2)],
+    surface: &FaceSurface,
+    tol: f64,
+) -> Option<Vec<OrientedPCurveEdge>> {
+    let weld = tol * 100.0;
+    let (u_period, v_period) = super::pcurve_compute::surface_periods(surface);
+    let nearest = |x: f64, target: f64, period: Option<f64>| match period {
+        Some(p) => x - ((x - target) / p).round() * p,
+        None => x,
+    };
+    let on_hole: Vec<(Point3, Point2)> = ends
+        .iter()
+        .copied()
+        .filter(|&(p, _)| hole.iter().any(|e| point_on_oriented_edge(e, p, weld)))
+        .collect();
+    if on_hole.is_empty() {
+        return None;
+    }
+    let pts: Vec<Point3> = on_hole.iter().map(|&(p, _)| p).collect();
+    let mut pieces =
+        edge_splitting::split_hole_edges_at_3d_points(hole.to_vec(), &pts, None, surface, tol);
+    // The hole's own UVs come from its own walk, which can sit a period away
+    // from the face's window: move it to the copy whose point under a
+    // section's end lies at that end's UV. Only an end with a piece's end
+    // under it can say which copy: the split can refuse an end that the
+    // contact test takes (within the weld band, outside the splitter's own).
+    let piece_ends: Vec<(Point3, Point2)> = pieces
+        .iter()
+        .flat_map(|e| [(e.start_3d, e.start_uv), (e.end_3d, e.end_uv)])
+        .collect();
+    let (anchor_uv, at) = on_hole.iter().find_map(|&(p, uv)| {
+        piece_ends
+            .iter()
+            .find(|&&(q, _)| (q - p).length() <= weld)
+            .map(|&(_, at)| (uv, at))
+    })?;
+    let du = nearest(at.x(), anchor_uv.x(), u_period) - at.x();
+    let dv = nearest(at.y(), anchor_uv.y(), v_period) - at.y();
+    for e in &mut pieces {
+        move_edge_in_uv(e, du, dv);
+        for &(p, uv) in &on_hole {
+            if (e.start_3d - p).length() <= weld {
+                e.start_uv = uv;
+            }
+            if (e.end_3d - p).length() <= weld {
+                e.end_uv = uv;
+            }
+        }
+        e.source_edge_idx = None;
+    }
+    Some(pieces)
+}
+
 /// Whether `p` lies on `e` within `band`, read along its curve between its
 /// ends.
 fn point_on_oriented_edge(e: &OrientedPCurveEdge, p: Point3, band: f64) -> bool {
@@ -6528,6 +6586,29 @@ fn point_on_oriented_edge(e: &OrientedPCurveEdge, p: Point3, band: f64) -> bool 
             span = kept;
         }
         return project_point_to_curve(&span, p, band * 1e-3).is_ok_and(|hit| hit.distance <= band);
+    }
+    // A circle or an ellipse is read at its own projection, which its
+    // splitter takes too: a chord of a long arc lies up to its sag inside
+    // the arc, and a point in that lens is not on it.
+    let conic = match &e.curve_3d {
+        EdgeCurve::Circle(c) => {
+            let angle = c.project(p);
+            Some((angle, c.evaluate(angle)))
+        }
+        EdgeCurve::Ellipse(el) => {
+            let angle = el.project(p);
+            Some((angle, el.evaluate(angle)))
+        }
+        EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => None,
+    };
+    if let Some((angle, foot)) = conic {
+        use std::f64::consts::TAU;
+        let along = if t1 >= t0 {
+            (angle - t0).rem_euclid(TAU)
+        } else {
+            (t0 - angle).rem_euclid(TAU)
+        };
+        return along <= (t1 - t0).abs() && (foot - p).length() <= band;
     }
     let at = |k: u32| {
         e.curve_3d.evaluate_with_endpoints(
@@ -9008,60 +9089,15 @@ fn split_face_2d_impl(
     // the pendant pass would drop it.
     let mut woven_curved_holes: Vec<usize> = Vec::new();
     if !is_plane && !original_inner_wires.is_empty() && all_edges.len() > n_boundary_edges {
-        let weld = tol.linear * 100.0;
         let ends: Vec<(Point3, Point2)> = all_edges[n_boundary_edges..]
             .iter()
             .flat_map(|e| [(e.start_3d, e.start_uv), (e.end_3d, e.end_uv)])
             .collect();
-        let (u_period, v_period) = super::pcurve_compute::surface_periods(&surface);
-        let nearest = |x: f64, target: f64, period: Option<f64>| match period {
-            Some(p) => x - ((x - target) / p).round() * p,
-            None => x,
-        };
         for (hi, hole) in original_inner_wires.iter().enumerate() {
-            let on_hole: Vec<(Point3, Point2)> = ends
-                .iter()
-                .copied()
-                .filter(|&(p, _)| hole.iter().any(|e| point_on_oriented_edge(e, p, weld)))
-                .collect();
-            let Some(&(anchor_3d, anchor_uv)) = on_hole.first() else {
-                continue;
-            };
-            let pts: Vec<Point3> = on_hole.iter().map(|&(p, _)| p).collect();
-            let mut pieces = edge_splitting::split_hole_edges_at_3d_points(
-                hole.clone(),
-                &pts,
-                None,
-                &surface,
-                tol.linear,
-            );
-            // The hole's own UVs come from its own walk, which can sit a
-            // period away from the face's window: move it to the copy whose
-            // point under the section's end lies at that end's UV.
-            let Some(at) = pieces
-                .iter()
-                .flat_map(|e| [(e.start_3d, e.start_uv), (e.end_3d, e.end_uv)])
-                .find(|&(p, _)| (p - anchor_3d).length() <= weld)
-                .map(|(_, uv)| uv)
-            else {
-                continue;
-            };
-            let du = nearest(at.x(), anchor_uv.x(), u_period) - at.x();
-            let dv = nearest(at.y(), anchor_uv.y(), v_period) - at.y();
-            for e in &mut pieces {
-                move_edge_in_uv(e, du, dv);
-                for &(p, uv) in &on_hole {
-                    if (e.start_3d - p).length() <= weld {
-                        e.start_uv = uv;
-                    }
-                    if (e.end_3d - p).length() <= weld {
-                        e.end_uv = uv;
-                    }
-                }
-                e.source_edge_idx = None;
+            if let Some(pieces) = weave_curved_hole(hole, &ends, &surface, tol.linear) {
+                all_edges.extend(pieces);
+                woven_curved_holes.push(hi);
             }
-            all_edges.extend(pieces);
-            woven_curved_holes.push(hi);
         }
     }
     let all_edges = super::wire_builder::remove_pendant_sections(
@@ -12426,6 +12462,135 @@ mod tests {
         assert!(on_first(Point3::new(0.25, 0.0, 0.0)));
         assert!(!on_first(Point3::new(0.504, 0.1, 0.0)));
         assert!(!on_first(Point3::new(0.75, 0.0, 0.0)));
+    }
+
+    /// A window on a cylinder of radius 38 over one radian (u = 0.2 to 1.2)
+    /// from z = 3 to 4.5, the fan bore's scale: its bottom rim, its right
+    /// ruling, its top rim run back, and its left ruling.
+    fn bore_window() -> (FaceSurface, Vec<OrientedPCurveEdge>) {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::curves2d::{Curve2D, Line2D};
+        use brepkit_math::surfaces::CylindricalSurface;
+        let surface = FaceSurface::Cylinder(
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 38.0)
+                .unwrap(),
+        );
+        let at = |u: f64, v: f64| surface.evaluate(u, v).unwrap();
+        let rim = |z: f64| {
+            EdgeCurve::Circle(
+                Circle3D::new(Point3::new(0.0, 0.0, z), Vec3::new(0.0, 0.0, 1.0), 38.0).unwrap(),
+            )
+        };
+        let edge = |curve: EdgeCurve, a: Point2, b: Point2, forward: bool| OrientedPCurveEdge {
+            curve_3d: curve,
+            pcurve: Curve2D::Line(Line2D::new(a, b - a).unwrap()),
+            start_uv: a,
+            end_uv: b,
+            start_3d: at(a.x(), a.y()),
+            end_3d: at(b.x(), b.y()),
+            forward,
+            source_edge_idx: None,
+            pave_block_id: None,
+        };
+        let (u0, u1, z0, z1) = (0.2, 1.2, 3.0, 4.5);
+        let hole = vec![
+            edge(rim(z0), Point2::new(u0, z0), Point2::new(u1, z0), true),
+            edge(
+                EdgeCurve::Line,
+                Point2::new(u1, z0),
+                Point2::new(u1, z1),
+                true,
+            ),
+            edge(rim(z1), Point2::new(u1, z1), Point2::new(u0, z1), false),
+            edge(
+                EdgeCurve::Line,
+                Point2::new(u0, z1),
+                Point2::new(u0, z0),
+                true,
+            ),
+        ];
+        (surface, hole)
+    }
+
+    /// A point between a chord of the first sampling interval and the arc,
+    /// 1e-4 off the chord's middle, lies about 1.06e-3 off the bore window's
+    /// rim: it is off the rim, as a point 2e-5 outside is, and a point 5e-6
+    /// outside is on it.
+    #[test]
+    fn a_point_inside_a_long_arcs_sampling_chord_is_off_the_arc() {
+        let (surface, hole) = bore_window();
+        let at = |u: f64, v: f64| surface.evaluate(u, v).unwrap();
+        let out = |u: f64, by: f64| {
+            let p = at(u, 3.0);
+            p + Vec3::new(p.x(), p.y(), 0.0).normalize().unwrap() * by
+        };
+        let step = 1.0 / 64.0;
+        let chord_middle = at(0.2, 3.0) + (at(0.2 + step, 3.0) - at(0.2, 3.0)) * 0.5;
+        let lens = chord_middle
+            + (at(0.2 + 0.5 * step, 3.0) - chord_middle)
+                .normalize()
+                .unwrap()
+                * 1e-4;
+        let band = 1e-5;
+        for rim in [&hole[0], &hole[2]] {
+            let z = rim.start_3d.z();
+            let lift = |p: Point3| Point3::new(p.x(), p.y(), z);
+            assert!(!point_on_oriented_edge(rim, lift(lens), band));
+            assert!(point_on_oriented_edge(
+                rim,
+                lift(at(0.2 + 0.5 * step, 3.0)),
+                band
+            ));
+            assert!(point_on_oriented_edge(rim, lift(out(0.7, 5e-6)), band));
+            assert!(!point_on_oriented_edge(rim, lift(out(0.7, 2e-5)), band));
+            assert!(!point_on_oriented_edge(rim, lift(at(1.4, 3.0)), band));
+        }
+    }
+
+    /// The bore window's bottom rim with three section ends: one inside a
+    /// sampling chord, one 5e-7 outside the rim (both off the rim for its
+    /// split), then one on it at u = 0.9 whose UV lies a period on. The hole
+    /// still weaves at the last end, and moves a period to that end's UV.
+    #[test]
+    fn a_curved_hole_weaves_at_its_contact_after_near_misses() {
+        let (surface, hole) = bore_window();
+        let at = |u: f64, v: f64| surface.evaluate(u, v).unwrap();
+        let step = 1.0 / 64.0;
+        let chord_middle = at(0.2, 3.0) + (at(0.2 + step, 3.0) - at(0.2, 3.0)) * 0.5;
+        let lens = chord_middle
+            + (at(0.2 + 0.5 * step, 3.0) - chord_middle)
+                .normalize()
+                .unwrap()
+                * 1e-4;
+        let near = {
+            let p = at(0.6, 3.0);
+            p + Vec3::new(p.x(), p.y(), 0.0).normalize().unwrap() * 5e-7
+        };
+        let tau = std::f64::consts::TAU;
+        let contact = at(0.9, 3.0);
+        let uv = |p: Point3| {
+            let (u, v) = surface.project_point(p).unwrap();
+            Point2::new(u, v)
+        };
+        let ends = [
+            (lens, uv(lens)),
+            (near, uv(near)),
+            (contact, Point2::new(0.9 + tau, 3.0)),
+        ];
+        let pieces =
+            weave_curved_hole(&hole, &ends, &surface, 1e-7).expect("the hole stayed whole");
+        assert_eq!(pieces.len(), 5);
+        let into = pieces
+            .iter()
+            .find(|e| (e.end_3d - contact).length() < 1e-9)
+            .expect("no piece ends at the contact");
+        assert!((into.end_uv - Point2::new(0.9 + tau, 3.0)).length() < 1e-9);
+        assert!(
+            pieces
+                .iter()
+                .all(|e| e.start_uv.x() > tau && e.start_uv.x() < tau + 1.3),
+            "the hole did not move to the contact's copy"
+        );
     }
 
     /// A woven hole's piece whose pcurve is a NURBS arc, moved a period along
