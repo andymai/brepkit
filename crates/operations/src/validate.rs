@@ -1049,20 +1049,24 @@ pub fn validate_solid_with_options(
     Ok(ValidationReport { issues })
 }
 
-/// An error for each face with a hole that crosses its outline or another
-/// hole, or on a plane lies outside the outline or inside another hole.
+/// An error for each face with a wire that crosses itself, with a hole that
+/// crosses its outline or another hole, or on a plane with a hole outside
+/// the outline or inside another hole.
 fn wires_apart_issues(
     topo: &Topology,
     faces: &[brepkit_topology::face::FaceId],
     scale: f64,
 ) -> Result<Vec<ValidationIssue>, crate::OperationsError> {
+    use brepkit_check::validate::face_wires::{check_face_wires_apart, check_face_wires_simple};
     let mut issues = Vec::new();
     for &fid in faces {
-        let found =
-            brepkit_check::validate::face_wires::check_face_wires_apart(topo, fid, 1e-6 * scale)
-                .map_err(|e| crate::OperationsError::InvalidInput {
-                    reason: e.to_string(),
-                })?;
+        let read = |found: Result<Vec<_>, brepkit_check::CheckError>| {
+            found.map_err(|e| crate::OperationsError::InvalidInput {
+                reason: e.to_string(),
+            })
+        };
+        let mut found = read(check_face_wires_simple(topo, fid, 1e-6 * scale))?;
+        found.extend(read(check_face_wires_apart(topo, fid, 1e-6 * scale))?);
         for issue in found {
             issues.push(ValidationIssue {
                 severity: Severity::Error,

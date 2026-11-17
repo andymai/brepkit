@@ -682,6 +682,38 @@ pub fn check_face_wires_apart(
     Ok(vec![])
 }
 
+/// Check that no wire of a face crosses itself.
+///
+/// No edge of a wire may cross another edge of the same wire. Edges that
+/// meet at a vertex, run along each other, or touch without crossing are
+/// not reported. `tolerance` is the gap within which two edges meet.
+///
+/// # Errors
+///
+/// Returns an error if topology lookups fail.
+pub fn check_face_wires_simple(
+    topo: &Topology,
+    face_id: FaceId,
+    tolerance: f64,
+) -> Result<Vec<ValidationIssue>, CheckError> {
+    let face = topo.face(face_id)?;
+    for wire_id in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+        let arcs = topo
+            .wire(wire_id)?
+            .edges()
+            .iter()
+            .map(|oe| Arc::of(topo, oe.edge(), oe.is_forward()))
+            .collect::<Result<Vec<_>, _>>()?;
+        if arcs.len() > 1 && wires_cross(face.surface(), &arcs, &arcs, tolerance) {
+            return Ok(vec![issue(
+                face_id,
+                format!("wire {} crosses itself", wire_id.index()),
+            )]);
+        }
+    }
+    Ok(vec![])
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -763,6 +795,89 @@ mod tests {
             .into_iter()
             .next()
             .map(|i| i.description)
+    }
+
+    fn crossed(topo: &Topology, face: FaceId) -> Option<String> {
+        check_face_wires_simple(topo, face, 1e-6)
+            .unwrap()
+            .into_iter()
+            .next()
+            .map(|i| i.description)
+    }
+
+    #[test]
+    fn a_square_outline_does_not_cross_itself() {
+        let mut topo = Topology::new();
+        let outer = square(&mut topo);
+        let hole = circle(&mut topo, [5.0, 5.0, 0.0], 2.0);
+        let face = flat(&mut topo, outer, vec![hole]);
+        assert_eq!(crossed(&topo, face), None);
+    }
+
+    /// The outline the issue's fillet left on the floor: its two contacts
+    /// cross, so the outline runs out past one and back.
+    #[test]
+    fn an_outline_whose_contacts_cross_is_reported() {
+        let mut topo = Topology::new();
+        let corners = points(
+            &mut topo,
+            &[
+                [20.0, 3.0, 0.0],
+                [0.0, 3.0, 0.0],
+                [0.0, 20.0, 0.0],
+                [19.0, 20.0, 0.0],
+                [19.0, 0.0, 0.0],
+            ],
+        );
+        let outer = polygon(&mut topo, &corners);
+        let face = flat(&mut topo, outer, vec![]);
+        assert!(crossed(&topo, face).is_some_and(|d| d.contains("crosses itself")));
+    }
+
+    /// Two loops that meet at one vertex touch there and do not cross.
+    #[test]
+    fn an_outline_pinched_at_a_vertex_passes() {
+        let mut topo = Topology::new();
+        let c = points(
+            &mut topo,
+            &[
+                [0.0, 0.0, 0.0],
+                [10.0, 0.0, 0.0],
+                [5.0, 5.0, 0.0],
+                [10.0, 10.0, 0.0],
+                [0.0, 10.0, 0.0],
+            ],
+        );
+        let outer = polygon(&mut topo, &[c[0], c[1], c[2], c[3], c[4], c[2]]);
+        let face = flat(&mut topo, outer, vec![]);
+        assert_eq!(crossed(&topo, face), None);
+    }
+
+    /// A bow tie: the outline crosses itself between its vertices.
+    #[test]
+    fn a_bow_tie_is_reported() {
+        let mut topo = Topology::new();
+        let corners = points(
+            &mut topo,
+            &[
+                [0.0, 0.0, 0.0],
+                [10.0, 10.0, 0.0],
+                [10.0, 0.0, 0.0],
+                [0.0, 10.0, 0.0],
+            ],
+        );
+        let outer = polygon(&mut topo, &corners);
+        let face = flat(&mut topo, outer, vec![]);
+        assert!(crossed(&topo, face).is_some());
+    }
+
+    /// A hole of circle and seam on a cylinder band, and the band's own
+    /// outline that runs up its seam and back down, cross nothing.
+    #[test]
+    fn a_cylinder_band_and_its_window_do_not_cross_themselves() {
+        let mut topo = Topology::new();
+        let face = windowed_band(&mut topo, 0.3, 2.0, 3.0);
+        assert_eq!(crossed(&topo, face), None);
     }
 
     #[test]
