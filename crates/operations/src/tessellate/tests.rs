@@ -5248,12 +5248,14 @@ fn a_flat_spline_face_in_a_skewed_parameter_space_meshes_whole() {
     }
 }
 
-/// Two unit squares side by side in z = 0, each the only user of its own
+/// Two rectangles side by side in z = 0, each the only user of its own
 /// edges, the second's left side 6e-8 to the right of the first's right
 /// side: the sides' samples round to different cells of the merge grid, so
 /// the two faces meet across a crack the size of the gap. The weld closes
-/// that crack, a join between two faces, and leaves each square's own rim
-/// as it is.
+/// that crack, a join between two faces, and leaves each rectangle's own rim
+/// as it is, though at 0.12 high the rectangles are narrower than its reach:
+/// each corner of the join welds to the corner beside it across the crack,
+/// and the corners above or below stay apart.
 #[test]
 fn a_join_held_by_two_edges_is_welded_across_the_merge_grid() {
     use brepkit_topology::shell::Shell;
@@ -5261,7 +5263,7 @@ fn a_join_held_by_two_edges_is_welded_across_the_merge_grid() {
 
     let p = Point3::new;
     let mut topo = Topology::new();
-    let mut square = |corners: [Point3; 4]| {
+    let square = |topo: &mut Topology, corners: [Point3; 4]| {
         let v = corners.map(|q| topo.add_vertex(Vertex::new(q, 1e-7)));
         let edges = (0..4)
             .map(|k| {
@@ -5280,24 +5282,45 @@ fn a_join_held_by_two_edges_is_welded_across_the_merge_grid() {
         ))
     };
     let x = 1.0 + 6e-8;
-    let left = square([
-        p(0.0, 0.0, 0.0),
-        p(1.0, 0.0, 0.0),
-        p(1.0, 1.0, 0.0),
-        p(0.0, 1.0, 0.0),
-    ]);
-    let right = square([
-        p(x, 0.0, 0.0),
-        p(2.0, 0.0, 0.0),
-        p(2.0, 1.0, 0.0),
-        p(x, 1.0, 0.0),
-    ]);
-    let shell = topo.add_shell(Shell::new(vec![left, right]).unwrap());
-    let solid = topo.add_solid(Solid::new(shell, vec![]));
-    for deflection in [0.5, 0.1] {
-        let mesh = tessellate_solid(&topo, solid, deflection).unwrap();
-        assert_eq!(mesh.indices.len(), 12, "deflection {deflection}");
-        assert_eq!(boundary_edge_count(&mesh), 6, "deflection {deflection}");
-        assert_eq!(non_manifold_edge_count(&mesh), 0, "deflection {deflection}");
+    let mut solids = Vec::new();
+    for h in [1.0, 0.12] {
+        let left = square(
+            &mut topo,
+            [
+                p(0.0, 0.0, 0.0),
+                p(1.0, 0.0, 0.0),
+                p(1.0, h, 0.0),
+                p(0.0, h, 0.0),
+            ],
+        );
+        let right = square(
+            &mut topo,
+            [
+                p(x, 0.0, 0.0),
+                p(2.0, 0.0, 0.0),
+                p(2.0, h, 0.0),
+                p(x, h, 0.0),
+            ],
+        );
+        let shell = topo.add_shell(Shell::new(vec![left, right]).unwrap());
+        solids.push((h, topo.add_solid(Solid::new(shell, vec![]))));
+    }
+    for (h, solid) in solids {
+        for deflection in [0.5, 0.1] {
+            let mesh = tessellate_solid(&topo, solid, deflection).unwrap();
+            let area: f64 = mesh
+                .indices
+                .chunks_exact(3)
+                .map(|t| {
+                    let [a, b, c] = [0, 1, 2].map(|k| mesh.positions[t[k] as usize]);
+                    (b - a).cross(c - a).length() / 2.0
+                })
+                .sum();
+            let what = format!("height {h}, deflection {deflection}");
+            assert_eq!(mesh.indices.len(), 12, "{what}");
+            assert!((area - 2.0 * h).abs() < 1e-6, "{what}: area {area}");
+            assert_eq!(boundary_edge_count(&mesh), 6, "{what}");
+            assert_eq!(non_manifold_edge_count(&mesh), 0, "{what}");
+        }
     }
 }

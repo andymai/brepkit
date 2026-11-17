@@ -487,9 +487,10 @@ pub(super) const NO_RIM_FACE: u32 = u32::MAX;
 /// Uses union-find over a spatial hash grid to merge boundary vertices that
 /// are within `weld_tol` of each other. Rewrites triangle indices and removes
 /// degenerate triangles (where merged indices create duplicate vertices).
-/// Two vertices on the free rim of one face never weld: `rim_face` gives the
-/// face of each vertex that lies only on that face's free rim, and
-/// [`NO_RIM_FACE`] (or a vertex past its end) for any other vertex.
+/// A weld never joins two vertices on the free rim of one face, directly or
+/// through other vertices: `rim_face` gives the face of each vertex that
+/// lies only on that face's free rim, and [`NO_RIM_FACE`] (or a vertex past
+/// its end) for any other vertex.
 /// `tri_faces` is the parallel tri -> face attribution array; entries for
 /// removed degenerate triangles are filtered alongside. Returns whether any
 /// directed edge was used twice before the weld: two faces bridging the same
@@ -543,23 +544,18 @@ pub(super) fn weld_boundary_vertices(
         }
         x
     }
-    // Rooting at the smallest index makes the cluster representative a pure
-    // function of the weld partition, independent of union call order.
-    #[allow(clippy::items_after_statements)]
-    fn uf_union(parent: &mut [u32], a: u32, b: u32) {
-        let ra = uf_find(parent, a);
-        let rb = uf_find(parent, b);
-        if ra != rb {
-            let (root, child) = (ra.min(rb), ra.max(rb));
-            parent[child as usize] = root;
+    let mut parent: Vec<u32> = (0..n_verts as u32).collect();
+    // The faces whose free rim each cluster holds a sample of. A cluster
+    // never takes two samples of one face's rim, not even through a sample
+    // of another face.
+    let mut cluster_rims: Vec<Vec<u32>> = vec![Vec::new(); n_verts];
+    for &vid in &boundary_verts {
+        if let Some(&face) = rim_face.get(vid as usize)
+            && face != NO_RIM_FACE
+        {
+            cluster_rims[vid as usize].push(face);
         }
     }
-
-    let mut parent: Vec<u32> = (0..n_verts as u32).collect();
-    let on_one_rim = |a: u32, b: u32| {
-        let face = rim_face.get(a as usize).copied().unwrap_or(NO_RIM_FACE);
-        face != NO_RIM_FACE && rim_face.get(b as usize) == Some(&face)
-    };
 
     let weld_tol = deflection.max(1e-6) * 2.0;
     let inv_cell = 1.0 / weld_tol;
@@ -579,6 +575,7 @@ pub(super) fn weld_boundary_vertices(
         grid.entry(cell_key(p)).or_default().push(vid);
     }
 
+    let mut pairs: Vec<(f64, u32, u32)> = Vec::new();
     for &vid in &boundary_verts {
         let p = mesh.positions[vid as usize];
         let (cx, cy, cz) = cell_key(p);
@@ -591,15 +588,34 @@ pub(super) fn weld_boundary_vertices(
                             if other <= vid {
                                 continue;
                             }
-                            let q = mesh.positions[other as usize];
-                            if (p - q).length() < weld_tol && !on_one_rim(vid, other) {
-                                uf_union(&mut parent, vid, other);
+                            let gap = (p - mesh.positions[other as usize]).length();
+                            if gap < weld_tol {
+                                pairs.push((gap, vid, other));
                             }
                         }
                     }
                 }
             }
         }
+    }
+    // The nearest pairs join first: a crack's own pairs take their samples
+    // before a pair across a narrow face can. Rooting at the smallest index
+    // makes each cluster's representative its least member, whatever the
+    // order of the joins.
+    pairs.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)));
+    for (_, a, b) in pairs {
+        let (ra, rb) = (uf_find(&mut parent, a), uf_find(&mut parent, b));
+        if ra == rb
+            || cluster_rims[ra as usize]
+                .iter()
+                .any(|face| cluster_rims[rb as usize].contains(face))
+        {
+            continue;
+        }
+        let (root, child) = (ra.min(rb), ra.max(rb));
+        parent[child as usize] = root;
+        let rims = std::mem::take(&mut cluster_rims[child as usize]);
+        cluster_rims[root as usize].extend(rims);
     }
 
     let mut changed = false;
