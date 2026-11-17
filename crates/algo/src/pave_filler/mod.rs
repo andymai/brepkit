@@ -127,6 +127,7 @@ impl<'a> PaveFiller<'a> {
         pave_co_endpoint_curves(self.topo, &[self.solid_a, self.solid_b], self.tol, arena)?;
         pave_chords_across_conics(self.topo, self.tol, arena)?;
         split_co_endpoint_sections(self.topo, self.tol, arena)?;
+        split_sections_at_rim_vertices(self.topo, self.tol, arena)?;
 
         Ok(())
     }
@@ -618,6 +619,238 @@ fn split_co_endpoint_sections(
     Ok(())
 }
 
+/// Split each open circle section at the vertices of the boundary arcs of
+/// its two faces that run along its circle, inside its span. A section along
+/// a chain of rim arcs (a cone's rim on a coaxial wall, broken where two
+/// faces of the part's back meet it) then runs arc for arc with the chain,
+/// and each piece links to the boundary edge it lies on instead of standing
+/// beside the chain as a second copy of it.
+fn split_sections_at_rim_vertices(
+    topo: &mut Topology,
+    tol: Tolerance,
+    arena: &mut GfaArena,
+) -> Result<(), AlgoError> {
+    use std::f64::consts::TAU;
+
+    use brepkit_topology::edge::{Edge, EdgeCurve};
+    use brepkit_topology::face::FaceId;
+    use brepkit_topology::vertex::VertexId;
+
+    use crate::ds::{Interference, Pave, PaveBlock};
+
+    let near = tol.linear * 10.0;
+    for index in 0..arena.curves.len() {
+        let original = arena.curves[index].clone();
+        let EdgeCurve::Circle(circle) = &original.curve else {
+            continue;
+        };
+        let &[pb_id] = original.pave_blocks.as_slice() else {
+            continue;
+        };
+        let Some(pb) = arena.pave_blocks.get(pb_id) else {
+            continue;
+        };
+        let (start, end) = (pb.start, pb.end);
+        let (sv, ev) = (
+            arena.resolve_vertex(start.vertex),
+            arena.resolve_vertex(end.vertex),
+        );
+        let (t0, t1) = (start.parameter, end.parameter);
+        let whole = sv == ev && (t1 - t0 - TAU).abs() <= 1e-9;
+        if (sv == ev && !whole) || t1 - t0 <= 0.0 || t1 - t0 > TAU + 1e-9 {
+            continue;
+        }
+        let along = |p: brepkit_math::vec::Point3| {
+            let t = circle.project(p);
+            (t - t0).rem_euclid(TAU) + t0
+        };
+        let ang = near / circle.radius();
+        // Each candidate carries the rank MakeBlocks gives it on its rim: a
+        // block's own ends stay, and of waiting paves that coincide it keeps
+        // the first along the block. Coincident candidates here take the
+        // same one, by the same test (`make_blocks::same_pave`), so that each
+        // cut is a vertex of the rim's pieces.
+        let mut candidates: Vec<(VertexId, usize)> = Vec::new();
+        for face_id in [original.face_a, original.face_b] {
+            let face = topo.face(face_id)?;
+            for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied())
+            {
+                for oe in topo.wire(wid)?.edges() {
+                    let edge = topo.edge(oe.edge())?;
+                    let EdgeCurve::Circle(rim) = edge.curve() else {
+                        continue;
+                    };
+                    if (rim.radius() - circle.radius()).abs() > near
+                        || (rim.center() - circle.center()).length() > near
+                        || rim.normal().cross(circle.normal()).length() > 1e-9
+                    {
+                        continue;
+                    }
+                    candidates.extend([(edge.start(), 0), (edge.end(), 0)]);
+                    // The rim's blocks split only in MakeBlocks, after this
+                    // pass: a crossing found by EE or EF still waits among a
+                    // block's extra paves.
+                    if let Some(blocks) = arena.edge_pave_blocks.get(&oe.edge()) {
+                        for leaf in arena.collect_leaf_pave_blocks(blocks) {
+                            let Some(piece) = arena.pave_blocks.get(leaf) else {
+                                continue;
+                            };
+                            candidates.extend(
+                                make_blocks::piece_vertices(topo, arena, piece)
+                                    .into_iter()
+                                    .enumerate()
+                                    .map(|(k, vertex)| (vertex, usize::from(k >= 2))),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        let linear = tol.linear;
+        let same = |topo: &Topology, a: VertexId, b: VertexId| {
+            a == b
+                || matches!(
+                    (topo.vertex(a), topo.vertex(b)),
+                    (Ok(p), Ok(q)) if (p.point() - q.point()).length() <= linear
+                )
+        };
+        let mut cuts: Vec<(f64, VertexId, usize)> = Vec::new();
+        for (vertex, rank) in candidates {
+            let vid = arena.resolve_vertex(vertex);
+            if same(topo, vid, sv) || same(topo, vid, ev) {
+                continue;
+            }
+            let p = topo.vertex(vid)?.point();
+            if (circle.evaluate(circle.project(p)) - p).length() > near {
+                continue;
+            }
+            let t = along(p);
+            if t <= t0 + ang || t >= t1 - ang {
+                continue;
+            }
+            match cuts.iter_mut().find(|c| same(topo, c.1, vid)) {
+                Some(kept) => {
+                    if (rank, vid.index()) < (kept.2, kept.1.index()) {
+                        *kept = (t, vid, rank);
+                    }
+                }
+                None => cuts.push((t, vid, rank)),
+            }
+        }
+        let mut cuts: Vec<(f64, VertexId)> = cuts.into_iter().map(|(t, v, _)| (t, v)).collect();
+        if cuts.is_empty() {
+            continue;
+        }
+        cuts.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let mut paves = vec![start];
+        paves.extend(cuts.iter().map(|&(t, vid)| Pave::new(vid, t)));
+        paves.push(end);
+        // A whole circle splits only into arcs under half a turn, at least
+        // three of them: an open arc's pcurve runs the short way round, and
+        // two arcs between the same two vertices would weld into one edge.
+        if whole
+            && (paves.len() < 4
+                || paves
+                    .windows(2)
+                    .any(|w| w[1].parameter - w[0].parameter >= std::f64::consts::PI))
+        {
+            continue;
+        }
+        // A piece from one boundary vertex of a face to another that runs
+        // off that face's boundary gets a vertex at its middle. The boundary
+        // joins the two ends along another path, and a reader that takes the
+        // piece by its chord or by its ends sees that path: the hole weave
+        // leaves out an arc whose chord lies along a hole's straight side,
+        // and the assembler welds two edges between the same two vertices.
+        let mut rims: Vec<(FaceId, Vec<VertexId>)> = Vec::new();
+        for face_id in [original.face_a, original.face_b] {
+            let face = topo.face(face_id)?;
+            let mut vertices = Vec::new();
+            for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied())
+            {
+                for oe in topo.wire(wid)?.edges() {
+                    let edge = topo.edge(oe.edge())?;
+                    vertices.extend([edge.start(), edge.end()]);
+                    if let Some(blocks) = arena.edge_pave_blocks.get(&oe.edge()) {
+                        for leaf in arena.collect_leaf_pave_blocks(blocks) {
+                            if let Some(piece) = arena.pave_blocks.get(leaf) {
+                                vertices.extend([piece.start.vertex, piece.end.vertex]);
+                                vertices.extend(piece.extra_paves.iter().map(|pave| pave.vertex));
+                            }
+                        }
+                    }
+                }
+            }
+            let mut resolved: Vec<VertexId> = vertices
+                .into_iter()
+                .map(|v| arena.resolve_vertex(v))
+                .collect();
+            resolved.sort_unstable_by_key(|v| v.index());
+            resolved.dedup();
+            rims.push((face_id, resolved));
+        }
+        let mut with_middles: Vec<Pave> = Vec::with_capacity(2 * paves.len());
+        for w in paves.windows(2) {
+            with_middles.push(w[0]);
+            let (a, b) = (
+                arena.resolve_vertex(w[0].vertex),
+                arena.resolve_vertex(w[1].vertex),
+            );
+            let tm = 0.5 * (w[0].parameter + w[1].parameter);
+            let middle = circle.evaluate(tm);
+            let on_rim = |vertices: &[VertexId], v: VertexId| {
+                vertices
+                    .binary_search_by_key(&v.index(), |r| r.index())
+                    .is_ok()
+            };
+            let across = rims.iter().any(|(face_id, vertices)| {
+                on_rim(vertices, a)
+                    && on_rim(vertices, b)
+                    && !phase_ff::point_on_face_edges(topo, *face_id, middle, near)
+            });
+            if across {
+                let vid =
+                    topo.add_vertex(brepkit_topology::vertex::Vertex::new(middle, tol.linear));
+                with_middles.push(Pave::new(vid, tm));
+            }
+        }
+        if let Some(&last) = paves.last() {
+            with_middles.push(last);
+        }
+        let paves = with_middles;
+        for (k, w) in paves.windows(2).enumerate() {
+            let piece_edge =
+                topo.add_edge(Edge::new(w[0].vertex, w[1].vertex, original.curve.clone()));
+            let piece_pb = arena
+                .pave_blocks
+                .alloc(PaveBlock::new(piece_edge, w[0], w[1]));
+            if k == 0 {
+                let first = &mut arena.curves[index];
+                first.pave_blocks = vec![piece_pb];
+                first.t_range = (w[0].parameter, w[1].parameter);
+                continue;
+            }
+            let piece_index = arena.curves.len();
+            let mut piece = original.clone();
+            piece.pave_blocks = vec![piece_pb];
+            piece.t_range = (w[0].parameter, w[1].parameter);
+            arena.curves.push(piece);
+            arena.interference.ff.push(Interference::FF {
+                f1: original.face_a,
+                f2: original.face_b,
+                curve_index: piece_index,
+            });
+            if let Some(skipped) = arena.curve_skip_faces.get(&index).cloned() {
+                arena.curve_skip_faces.insert(piece_index, skipped);
+            }
+            if let Some(extra) = arena.curve_extra_faces.get(&index).cloned() {
+                arena.curve_extra_faces.insert(piece_index, extra);
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Run the complete PaveFiller pipeline (both stages).
 ///
 /// **Stage 1 — Intersection** (reads `&Topology`):
@@ -775,6 +1008,7 @@ pub fn run_pave_filler_with_edges(
     pave_co_endpoint_curves(topo, sources, tol, arena)?;
     pave_chords_across_conics(topo, tol, arena)?;
     split_co_endpoint_sections(topo, tol, arena)?;
+    split_sections_at_rim_vertices(topo, tol, arena)?;
 
     // Stage 2: Resolution (solid-agnostic — reads the accumulated arena).
     make_blocks::perform(topo, arena)?;

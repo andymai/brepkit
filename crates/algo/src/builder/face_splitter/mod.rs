@@ -3779,6 +3779,24 @@ fn arrangement_regions_from_combined(
     frame: &PlaneFrame,
     tol: f64,
 ) -> Option<Vec<SplitSubFace>> {
+    // A closed rim (a whole circle, one edge from a vertex back to itself)
+    // has no chord, and the region it bounds would be lost with it.
+    if combined_edges.iter().any(|e| {
+        !matches!(e.curve_3d, EdgeCurve::Line)
+            && (e.start_uv - e.end_uv).length() <= tol
+            && (e.curve_3d.evaluate_with_endpoints(
+                {
+                    let (t0, t1) = e.curve_3d.domain_with_endpoints(e.start_3d, e.end_3d);
+                    0.5 * (t0 + t1)
+                },
+                e.start_3d,
+                e.end_3d,
+            ) - e.start_3d)
+                .length()
+                > tol
+    }) {
+        return None;
+    }
     // The even-odd nesting pass resolves the nested overlapping faces (a holed
     // cap whose holes/sections form a component separate from the outer
     // boundary) and drops the air regions that fill the original holes.
@@ -5292,12 +5310,25 @@ fn split_cylinder_band_by_arrangement(
     // at every vertical generator's u interior to its span (whose v-range reaches
     // the ring). Emit undirected sub-segments; dedup collapses duplicates.
     let mut sub: Vec<((i64, i64), (i64, i64))> = Vec::new();
+    // Every endpoint the edges brought cuts the frame lines through it too: a
+    // ring section broken at a vertex of its own (where a partner face's rim
+    // meets it) overlaps the whole ring a generator pair puts at its height,
+    // and the two would stand side by side as different edges.
+    let marks: Vec<(f64, f64)> = verts.values().map(|&(u, v, _)| (u, v)).collect();
 
     for &(u, v0, v1) in &verticals {
         let mut breaks: Vec<f64> = vec![v0, v1];
         for &(hv, hu0, hu1) in &horizontals {
             if hv > v0 + tol && hv < v1 - tol && u >= hu0 - cov && u <= hu1 + cov {
                 breaks.push(hv);
+            }
+        }
+        // Read round the turn: a vertex on the seam registers at u = 0 and
+        // splits both of the seam's copies, at 0 and at 2 pi.
+        for &(mu, mv) in &marks {
+            let du = (mu - u).rem_euclid(TAU);
+            if du.min(TAU - du) <= cov && mv > v0 + tol && mv < v1 - tol {
+                breaks.push(mv);
             }
         }
         breaks.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
@@ -5320,6 +5351,11 @@ fn split_cylinder_band_by_arrangement(
         for &(vu, vv0, vv1) in &verticals {
             if vu > u0 + cov && vu < u1 - cov && v >= vv0 - tol && v <= vv1 + tol {
                 breaks.push(vu);
+            }
+        }
+        for &(mu, mv) in &marks {
+            if (mv - v).abs() <= tol && mu > u0 + cov && mu < u1 - cov {
+                breaks.push(mu);
             }
         }
         breaks.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
@@ -9667,14 +9703,21 @@ fn split_face_2d_impl(
     // one loop (a section run out and back, or a smooth section passing a
     // junction where another branches off), and one that closed a section
     // on its own reverse left the region it bounds unsplit. The DCEL face
-    // trace partitions the arrangement itself; adopt it when it strictly
-    // refines the greedy partition and is clean by every loop-health
-    // signature. Holes no section reaches stay out of the arrangement and
-    // attach whole afterwards, so they do not bar the trace.
+    // trace partitions the arrangement itself; adopt it when it has at least
+    // the greedy partition's regions and is clean by every loop-health
+    // signature. As many regions is not too few: a greedy walk that turns
+    // right at a vertex where a left turn bounds its region traces a pinched
+    // loop in place of that region and still counts as many (a disc under
+    // three coplanar faces of a yoke's back, where a cap's arc and a small
+    // arc leave one end of a line). Holes no section reaches stay out of the
+    // arrangement and attach whole afterwards, so they do not bar the trace.
+    // Holes woven in bar it only while the greedy walk holds no spur: their
+    // edges then run one way only, and a region outside the face runs them
+    // the other way (an annulus round a hole that two lenses of a spigot's
+    // wall bite into).
     if is_plane
         && !sections.is_empty()
-        && woven_inner_wires.is_empty()
-        && !holes_promoted
+        && ((woven_inner_wires.is_empty() && !holes_promoted) || woven_spur)
         && (loops
             .iter()
             .any(|lp| split_loop_at_pinch_vertices(lp, tol.linear).len() != 1)
@@ -9691,7 +9734,7 @@ fn split_face_2d_impl(
             Some(&frame_area),
             Some(!cw_loops),
         );
-        if dcel.len() > greedy_region_count(&loops, tol.linear, Some(frame))
+        if dcel.len() >= greedy_region_count(&loops, tol.linear, Some(frame))
             && !dcel
                 .iter()
                 .any(|lp| loop_has_degenerate_area(lp, tol.linear, Some(frame)))
@@ -12428,6 +12471,118 @@ mod tests {
                 "{middle:?}"
             );
         }
+    }
+
+    /// [`cylinder_band_partial_notch_splits_into_comb_and_rectangle`] with the
+    /// seam split at v = 1 ahead of time: the band's two copies of the seam,
+    /// at u = 0 and at u = 2 pi, split at the same heights.
+    #[test]
+    fn cylinder_band_splits_both_copies_of_a_split_seam_alike() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::CylindricalSurface;
+
+        let cyl =
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0)
+                .unwrap();
+        let surface = FaceSurface::Cylinder(cyl);
+        let circle = |z: f64| {
+            Circle3D::new(Point3::new(0.0, 0.0, z), Vec3::new(0.0, 0.0, 1.0), 1.0)
+                .map(EdgeCurve::Circle)
+                .unwrap()
+        };
+        let boundary = [
+            cyl_edge(
+                EdgeCurve::Line,
+                Point3::new(1.0, 0.0, 0.0),
+                Point3::new(1.0, 0.0, 1.0),
+            ),
+            cyl_edge(
+                EdgeCurve::Line,
+                Point3::new(1.0, 0.0, 1.0),
+                Point3::new(1.0, 0.0, 2.0),
+            ),
+            cyl_edge(
+                circle(0.0),
+                Point3::new(1.0, 0.0, 0.0),
+                Point3::new(-1.0, 0.0, 0.0),
+            ),
+            cyl_edge(
+                circle(0.0),
+                Point3::new(-1.0, 0.0, 0.0),
+                Point3::new(1.0, 0.0, 0.0),
+            ),
+            cyl_edge(
+                circle(2.0),
+                Point3::new(1.0, 0.0, 2.0),
+                Point3::new(-1.0, 0.0, 2.0),
+            ),
+            cyl_edge(
+                circle(2.0),
+                Point3::new(-1.0, 0.0, 2.0),
+                Point3::new(1.0, 0.0, 2.0),
+            ),
+        ];
+        let n_boundary = boundary.len();
+        let sections = [
+            cyl_edge(
+                EdgeCurve::Line,
+                Point3::new(0.0, 1.0, 0.0),
+                Point3::new(0.0, 1.0, 1.0),
+            ),
+            cyl_edge(
+                EdgeCurve::Line,
+                Point3::new(-1.0, 0.0, 0.0),
+                Point3::new(-1.0, 0.0, 1.0),
+            ),
+            cyl_edge(
+                circle(1.0),
+                Point3::new(0.0, 1.0, 1.0),
+                Point3::new(-1.0, 0.0, 1.0),
+            ),
+        ];
+        let all_edges: Vec<OrientedPCurveEdge> = boundary.into_iter().chain(sections).collect();
+
+        let mut topo = Topology::new();
+        let face_id = make_unit_square_face(&mut topo);
+        let result = split_cylinder_band_by_arrangement(
+            &surface,
+            &all_edges,
+            n_boundary,
+            Rank::A,
+            false,
+            face_id,
+            1.0e-7,
+        )
+        .expect("cylinder band arrangement must trace the notch");
+
+        let seam_u: Vec<f64> = result
+            .iter()
+            .flat_map(|sub| &sub.outer_wire)
+            .filter(|e| matches!(e.curve_3d, EdgeCurve::Line))
+            .filter(|e| (e.start_3d.x() - 1.0).abs() < 1e-9 && e.start_3d.y().abs() < 1e-9)
+            .map(|e| e.start_uv.x())
+            .collect();
+        let (lo, hi) = seam_u
+            .iter()
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), &u| {
+                (lo.min(u), hi.max(u))
+            });
+        let heights = |u: f64| {
+            let mut vs: Vec<i64> = result
+                .iter()
+                .flat_map(|sub| &sub.outer_wire)
+                .filter(|e| matches!(e.curve_3d, EdgeCurve::Line))
+                .filter(|e| (e.start_uv.x() - u).abs() < 1e-6 && (e.end_uv.x() - u).abs() < 1e-6)
+                .flat_map(|e| [e.start_uv.y(), e.end_uv.y()])
+                .map(|v| (v * 1.0e6).round() as i64)
+                .collect();
+            vs.sort_unstable();
+            vs.dedup();
+            vs
+        };
+        assert!(hi - lo > 6.0, "both copies of the seam bound a region");
+        assert_eq!(heights(lo), heights(hi), "the seam's copies split apart");
+        assert_eq!(heights(lo), vec![0, 1_000_000, 2_000_000]);
     }
 
     /// A tilted (non-axis-aligned) section makes the cut non-rectilinear, so the
