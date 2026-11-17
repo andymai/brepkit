@@ -6311,6 +6311,44 @@ fn walk_boundary_from_closed_rim(edges: &mut [OrientedPCurveEdge]) -> bool {
     true
 }
 
+/// Whether `p` lies on `e` within `band`, read along its curve between its
+/// ends.
+fn point_on_oriented_edge(e: &OrientedPCurveEdge, p: Point3, band: f64) -> bool {
+    const SAMPLES: u32 = 64;
+    if (e.start_3d - p).length() <= band || (e.end_3d - p).length() <= band {
+        return true;
+    }
+    let (s3, e3) = if e.forward {
+        (e.start_3d, e.end_3d)
+    } else {
+        (e.end_3d, e.start_3d)
+    };
+    let (t0, t1) = e.curve_3d.domain_with_endpoints(s3, e3);
+    let at = |k: u32| {
+        e.curve_3d.evaluate_with_endpoints(
+            (t1 - t0).madd(f64::from(k) / f64::from(SAMPLES), t0),
+            s3,
+            e3,
+        )
+    };
+    (0..SAMPLES).any(|k| {
+        let (a, b) = (at(k), at(k + 1));
+        let d = b - a;
+        let l2 = d.dot(d);
+        let f = if l2 > 0.0 {
+            ((p - a).dot(d) / l2).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let sag = (at(k) + (at(k + 1) - at(k)) * 0.5 - {
+            let tm = (t1 - t0).madd((f64::from(k) + 0.5) / f64::from(SAMPLES), t0);
+            e.curve_3d.evaluate_with_endpoints(tm, s3, e3)
+        })
+        .length();
+        (a + d * f - p).length() <= band + sag
+    })
+}
+
 /// Move a section edge's ends by whole periods into the one-turn window
 /// `[lo, lo + period]` its face's boundary spans. An open section's interior
 /// lies inside the window, so its curve's samples, unwrapped from the
@@ -8746,6 +8784,65 @@ fn split_face_2d_impl(
             log::debug!("{r}");
         }
     }
+    // A curved face's hole that a section ends on joins the arrangement: the
+    // section bridges the face to the opening (a strut's footprint on a bore,
+    // closed by the bottom of a window cut through the bore). Attached whole
+    // after the split, the hole would leave the section's end dangling, and
+    // the pendant pass would drop it.
+    let mut woven_curved_holes: Vec<usize> = Vec::new();
+    if !is_plane && !original_inner_wires.is_empty() && all_edges.len() > n_boundary_edges {
+        let weld = tol.linear * 100.0;
+        let ends: Vec<(Point3, Point2)> = all_edges[n_boundary_edges..]
+            .iter()
+            .flat_map(|e| [(e.start_3d, e.start_uv), (e.end_3d, e.end_uv)])
+            .collect();
+        let (u_period, v_period) = super::pcurve_compute::surface_periods(&surface);
+        let nearest = |x: f64, target: f64, period: Option<f64>| match period {
+            Some(p) => x - ((x - target) / p).round() * p,
+            None => x,
+        };
+        for (hi, hole) in original_inner_wires.iter().enumerate() {
+            let on_hole: Vec<(Point3, Point2)> = ends
+                .iter()
+                .copied()
+                .filter(|&(p, _)| hole.iter().any(|e| point_on_oriented_edge(e, p, weld)))
+                .collect();
+            let Some(&(anchor_3d, anchor_uv)) = on_hole.first() else {
+                continue;
+            };
+            let pts: Vec<Point3> = on_hole.iter().map(|&(p, _)| p).collect();
+            let mut pieces =
+                split_boundary_edges_at_3d_points(hole.clone(), &pts, None, &surface, tol.linear);
+            // The hole's own UVs come from its own walk, which can sit a
+            // period away from the face's window: move it to the copy whose
+            // point under the section's end lies at that end's UV.
+            let Some(at) = pieces
+                .iter()
+                .flat_map(|e| [(e.start_3d, e.start_uv), (e.end_3d, e.end_uv)])
+                .find(|&(p, _)| (p - anchor_3d).length() <= weld)
+                .map(|(_, uv)| uv)
+            else {
+                continue;
+            };
+            let du = nearest(at.x(), anchor_uv.x(), u_period) - at.x();
+            let dv = nearest(at.y(), anchor_uv.y(), v_period) - at.y();
+            for e in &mut pieces {
+                e.start_uv = Point2::new(e.start_uv.x() + du, e.start_uv.y() + dv);
+                e.end_uv = Point2::new(e.end_uv.x() + du, e.end_uv.y() + dv);
+                for &(p, uv) in &on_hole {
+                    if (e.start_3d - p).length() <= weld {
+                        e.start_uv = uv;
+                    }
+                    if (e.end_3d - p).length() <= weld {
+                        e.end_uv = uv;
+                    }
+                }
+                e.source_edge_idx = None;
+            }
+            all_edges.extend(pieces);
+            woven_curved_holes.push(hi);
+        }
+    }
     let all_edges = super::wire_builder::remove_pendant_sections(
         &all_edges, tol.linear, u_periodic, v_periodic,
     );
@@ -8836,6 +8933,30 @@ fn split_face_2d_impl(
     });
     // Build wire loops via angular-sorting traversal.
     let mut loops = build_wire_loops(&all_edges, tol.linear, u_periodic && !strip, v_periodic);
+    // A woven hole's edges run one way only, and at a corner of the hole
+    // where a section leaves on the material's side (a strut's footprint
+    // under a window), the greedy walk turns into the hole's next side. The
+    // face trace of the strip reads each region whole, and an orbit that
+    // runs a rim or hole edge backward lies outside the face.
+    let mut woven_trace = false;
+    if !woven_curved_holes.is_empty() && (strip || !u_periodic) && !v_periodic {
+        let rim_ccw = signed_area_2d(&sample_wire_loop_uv(&all_edges[..n_boundary_edges])) > 0.0;
+        let dcel = super::wire_builder::build_wire_loops_dcel_measured(
+            &all_edges,
+            tol.linear,
+            false,
+            false,
+            None,
+            Some(rim_ccw),
+        );
+        if !dcel.is_empty()
+            && !wire_loops_have_degenerate_area(&dcel, tol.linear)
+            && !wire_loops_self_cross(&dcel, tol.linear)
+        {
+            loops = dcel;
+            woven_trace = true;
+        }
+    }
     if trace_split {
         let mut rows: Vec<String> = all_edges
             .iter()
@@ -9274,6 +9395,7 @@ fn split_face_2d_impl(
         }
     } else if u_periodic
         && !v_periodic
+        && !woven_trace
         && !sections.is_empty()
         && matches!(&surface, FaceSurface::Cylinder(_))
     {
@@ -10016,7 +10138,10 @@ fn split_face_2d_impl(
             .map(|pts| super::classify_2d::sample_interior_point(pts))
             .collect();
 
-        for hole in &original_inner_wires {
+        for (hi, hole) in original_inner_wires.iter().enumerate() {
+            if woven_curved_holes.contains(&hi) {
+                continue;
+            }
             let hole_pts = sample_wire_loop_uv(hole);
             let assigned = if hole_pts.len() >= 3 {
                 let probe = super::classify_2d::sample_interior_point(&hole_pts);
