@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794889565862,
+  "lastUpdate": 1794890108691,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -73007,6 +73007,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 15256442,
             "range": "± 84237",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f6c1c56be5ae0e63c4fc8b99da23b4d8fa5f97e5",
+          "message": "fix(heal): leave a slit's pieces alone when joining split edges (#2567)\n\n## Summary\n\n#2562 added `merge_split_edges` in\n`crates/heal/src/upgrade/unify_same_domain.rs`. It joins two collinear\nline pieces at a vertex when both pieces have the same two face uses. A\nslit that a face's wire runs out and back also gives two uses, but by\none face. For such a pair, the rewrite kept one copy of the joined edge\nfor both runs of the slit. The unpaired-edge check then found the new\nedge used once, and it undid every join of the pass, also the correct\nones.\n\nNow each wire must use each of the two pieces one time, or the pass\nleaves that vertex as it is.\n\nThe doc comment of `unpaired_edge_count` also goes back above that\nfunction. In #2562 it moved above the new `Rewrite` struct.\n\n## Test plan\n\n- `a_slit_stays_and_the_other_pieces_join` builds a cube whose top back\nedge is in two pieces, and whose top face holds a slit of two pieces.\nThe pass joins the back edge, keeps the slit, and leaves no unpaired\nedge. Without the new condition, the pass returns 0 joins and the test\nfails.\n- The `brepkit-heal` tests pass (98), and so do the 3 tests of\n`crates/operations/tests/split_edges_join.rs` from #2562.\n- `cargo clippy -p brepkit-heal --all-targets -- -D warnings` passes.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes `merge_split_edges` so a slit's pieces no longer get joined, which\nwas causing the unpaired-edge check to undo every join in the pass.\n\n- A wire that runs a piece twice (a slit across a face) now leaves that\nvertex alone; each piece must be used exactly once per wire.\n- Moves the `unpaired_edge_count` doc comment back above the function,\nnow counting an edge's uses rather than its faces.\n- Adds a test covering a cube with a slit and a split back edge.\n\n<sup>Written for commit d9fce252134bd5404933e604f325d4c2b2313f98.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2567?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2567?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2567&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-11-17T04:31:19Z",
+          "tree_id": "ef9941040c89719a040a4295c0b6891d393ee8f1",
+          "url": "https://github.com/andymai/brepkit/commit/f6c1c56be5ae0e63c4fc8b99da23b4d8fa5f97e5"
+        },
+        "date": 1794890100741,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1133403,
+            "range": "± 19288",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1193406,
+            "range": "± 83566",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13773,
+            "range": "± 163",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 709138,
+            "range": "± 3122",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25372815,
+            "range": "± 59807",
             "unit": "ns/iter"
           }
         ]
