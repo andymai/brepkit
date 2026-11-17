@@ -553,9 +553,10 @@ fn merge_split_edges(
     Ok(merged)
 }
 
-/// Count edges of `faces` that are NOT shared by exactly two of them.
+/// Count edges that the wires of `faces` do not use exactly two times. A
+/// slit that one face's wire runs out and back is two uses.
 ///
-/// A closed manifold shell pairs every edge exactly twice; free (once) and
+/// A closed manifold shell uses every edge exactly twice; free (once) and
 /// over-shared (3+) edges are both defects. Used to prove a merge did not make
 /// the shell worse before committing it.
 fn unpaired_edge_count(topo: &Topology, faces: &[FaceId]) -> Result<usize, HealError> {
