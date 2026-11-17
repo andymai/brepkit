@@ -1,6 +1,6 @@
 //! Two rods of a ball's radius that end at its centre, along -x and +y, with
 //! the ball turned about x. Turned near a quarter turn, the ball's equator
-//! lies within a hundredth of a radian of the second rod's end cap.
+//! lies within 0.011 radians of the second rod's end cap.
 #![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 
 use std::f64::consts::PI;
