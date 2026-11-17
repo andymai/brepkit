@@ -104,8 +104,8 @@ impl Cdt {
         // with two sub-constraints: (e0, vi) and (vi, e1).
         let split_key = sorted_pair(e0, e1);
         if self.constraints.remove(&split_key) {
-            self.constraints.insert(sorted_pair(e0, vi));
-            self.constraints.insert(sorted_pair(vi, e1));
+            self.constrain(sorted_pair(e0, vi));
+            self.constrain(sorted_pair(vi, e1));
         }
 
         let t0 = tri_idx;
@@ -263,7 +263,9 @@ impl Cdt {
     /// is restored around the inserted vertex. Uses an explicit stack to
     /// avoid stack overflow on large meshes.
     fn legalize(&mut self, tri_idx: usize, edge_local: usize, inserted_vertex: usize) {
-        let mut stack = vec![(tri_idx, edge_local, inserted_vertex)];
+        let mut stack = std::mem::take(&mut self.legalize_stack);
+        stack.clear();
+        stack.push((tri_idx, edge_local, inserted_vertex));
 
         while let Some((ti, el, vi)) = stack.pop() {
             let Some(adj) = self.triangles[ti].adj[el] else {
@@ -278,7 +280,7 @@ impl Cdt {
             let e1 = self.triangles[ti].v[(el + 2) % 3];
 
             // Don't flip constrained edges.
-            if self.constraints.contains(&sorted_pair(e0, e1)) {
+            if self.is_constrained(e0, e1) {
                 continue;
             }
 
@@ -299,6 +301,7 @@ impl Cdt {
                 self.push_legalize_toward(&mut stack, adj, vi);
             }
         }
+        self.legalize_stack = stack;
     }
 
     /// Push a legalize task for the edge of `tri_idx` that faces away from `vi`.

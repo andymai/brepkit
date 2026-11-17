@@ -91,8 +91,8 @@ impl Cdt {
                         if mid != e0 && mid != e1 {
                             // Replace old constraint (e0,e1) with two sub-constraints.
                             self.constraints.remove(&sorted_pair(e0, e1));
-                            self.constraints.insert(sorted_pair(e0, mid));
-                            self.constraints.insert(sorted_pair(mid, e1));
+                            self.constrain(sorted_pair(e0, mid));
+                            self.constrain(sorted_pair(mid, e1));
                         }
                         if mid == v0 || mid == v1 {
                             // The crossing degenerated onto one of our own
@@ -109,9 +109,9 @@ impl Cdt {
                         // crossings otherwise branches with nothing to stop it
                         // (#1517).
                         self.recover_edge_depth(v0, mid, 0, level + 1)?;
-                        self.constraints.insert(sorted_pair(v0, mid));
+                        self.constrain(sorted_pair(v0, mid));
                         self.recover_edge_depth(mid, v1, 0, level + 1)?;
-                        self.constraints.insert(sorted_pair(mid, v1));
+                        self.constrain(sorted_pair(mid, v1));
                         return Ok(());
                     }
                     // Intersection computation failed — give up gracefully.
@@ -169,9 +169,9 @@ impl Cdt {
         // chains the constraint into slivers the region's fill reads wrong.
         if let Some(on) = self.lone_vertex_on_segment(v0, v1) {
             self.recover_edge_depth(v0, on, 0, level + 1)?;
-            self.constraints.insert(sorted_pair(v0, on));
+            self.constrain(sorted_pair(v0, on));
             self.recover_edge_depth(on, v1, 0, level + 1)?;
-            self.constraints.insert(sorted_pair(on, v1));
+            self.constrain(sorted_pair(on, v1));
             return Ok(());
         }
 
@@ -193,9 +193,9 @@ impl Cdt {
             });
         }
         self.recover_edge_depth(v0, mid, depth + 1, level + 1)?;
-        self.constraints.insert(sorted_pair(v0, mid));
+        self.constrain(sorted_pair(v0, mid));
         self.recover_edge_depth(mid, v1, depth + 1, level + 1)?;
-        self.constraints.insert(sorted_pair(mid, v1));
+        self.constrain(sorted_pair(mid, v1));
         Ok(())
     }
 
