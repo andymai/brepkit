@@ -66,9 +66,10 @@ pub fn interpolate(points: &[Point3], degree: usize) -> Result<NurbsCurve, MathE
 ///
 /// # Errors
 ///
-/// Returns an error if there are fewer than 2 points, the counts differ, a
-/// parameter or a coordinate is not finite, the parameters do not rise
-/// strictly from 0 to 1, or the linear system is singular.
+/// Returns an error if there are fewer than 2 points, the counts differ,
+/// `degree` is 0 or not below the point count, a parameter or a coordinate
+/// is not finite, the parameters do not rise strictly from 0 to 1, or the
+/// linear system is singular.
 pub fn interpolate_at(
     points: &[Point3],
     params: &[f64],
@@ -77,6 +78,13 @@ pub fn interpolate_at(
     let n = points.len();
     if n < 2 || params.len() != n {
         return Err(MathError::EmptyInput);
+    }
+    if degree == 0 || degree >= n {
+        return Err(MathError::ParameterOutOfRange {
+            value: degree as f64,
+            min: 1.0,
+            max: (n - 1) as f64,
+        });
     }
     // A NaN fails every comparison below, so it would pass them all.
     if let Some(&bad) = params.iter().find(|t| !t.is_finite()) {
@@ -114,10 +122,9 @@ pub fn interpolate_at(
             max: 1.0,
         });
     }
-    let p = degree.min(n - 1);
-    let knots = build_interpolation_knots(params, p, n);
-    let control_points = solve_interpolation(points, params, &knots, p)?;
-    NurbsCurve::new(p, knots, control_points, vec![1.0; n])
+    let knots = build_interpolation_knots(params, degree, n);
+    let control_points = solve_interpolation(points, params, &knots, degree)?;
+    NurbsCurve::new(degree, knots, control_points, vec![1.0; n])
 }
 
 /// Approximate a set of points with a NURBS curve of specified number
@@ -1057,6 +1064,22 @@ mod tests {
             let t = f64::from(k) / 90.0;
             assert!((curve.evaluate(t) - cubic(t)).length() < 1e-12, "at {t}");
         }
+    }
+
+    /// Degree 0 averages no parameters into a knot (0 / 0), and a degree
+    /// as high as the point count leaves no room for the clamped ends.
+    #[test]
+    fn interpolate_at_refuses_degree_zero_and_a_degree_too_high_for_the_points() {
+        let points = [
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(1.0, 0.0, 0.0),
+            Point3::new(2.0, 1.0, 0.0),
+        ];
+        let params = [0.0, 0.5, 1.0];
+        assert!(interpolate_at(&points, &params, 0).is_err());
+        assert!(interpolate_at(&points, &params, 3).is_err());
+        assert!(interpolate_at(&points, &params, 1).is_ok());
+        assert!(interpolate_at(&points, &params, 2).is_ok());
     }
 
     #[test]
