@@ -1,7 +1,7 @@
 //! Chamfers the walking engine builds on a curved face: the ellipse where a
 //! slanted plane cuts a rod, which no closed form chamfers, a closed circular
 //! rim, arcs of a circle and of the ellipse that end at planes square to
-//! them, and the rim of a ball cut by a plane.
+//! them, the rim of a ball cut by a plane, and a rim round a torus's tube.
 //!
 //! A chamfer of `c` into the cap and `w` along the wall puts each contact in
 //! the section square to the edge, `c` from the edge's point along the cap
@@ -28,7 +28,7 @@ use brepkit_operations::boolean::{BooleanOp, boolean};
 use brepkit_operations::chamfer::chamfer;
 use brepkit_operations::extrude::extrude;
 use brepkit_operations::measure::solid_volume;
-use brepkit_operations::primitives::{make_box, make_cone, make_cylinder, make_sphere};
+use brepkit_operations::primitives::{make_box, make_cone, make_cylinder, make_sphere, make_torus};
 use brepkit_operations::tessellate::{is_watertight, tessellate_solid};
 use brepkit_operations::transform::transform_solid;
 use brepkit_operations::validate::validate_solid;
@@ -584,5 +584,104 @@ fn a_balls_rim_takes_one_chamfer_whichever_way_its_poles_lie() {
                 assert!(off < 1e-6, "{what}: the {kind}'s contact lies {off} off");
             }
         }
+    }
+}
+
+/// The torus: radius 4 round its axis, 1.5 round its tube.
+const TORUS: (f64, f64) = (4.0, 1.5);
+
+/// Half the torus, on the side `x >= 0`, placed by `pose`, and one of the
+/// two circles where the plane `x = 0` cuts its tube.
+fn half_torus(topo: &mut Topology, pose: &Mat4) -> (SolidId, EdgeId) {
+    let torus = make_torus(topo, TORUS.0, TORUS.1, 32).unwrap();
+    let half = make_box(topo, 10.0, 20.0, 10.0).unwrap();
+    transform_solid(topo, half, &Mat4::translation(0.0, -10.0, -5.0)).unwrap();
+    let kept = boolean(topo, BooleanOp::Intersect, torus, half).unwrap();
+    let rim = solid_edges(topo, kept)
+        .unwrap()
+        .into_iter()
+        .find(|&e| {
+            let edge = topo.edge(e).unwrap();
+            edge.start() == edge.end() && matches!(edge.curve(), EdgeCurve::Circle(_))
+        })
+        .expect("a rim");
+    transform_solid(topo, kept, pose).unwrap();
+    (kept, rim)
+}
+
+/// The volume a chamfer of `cap` into the plane `x = 0` and a chord `wall`
+/// along the torus takes off one of the half torus's rims, by the tube
+/// formula. The rim is a circle of radius `r` round the tube's centre, at
+/// the angle `v` round it. In the section square to the rim, `a` runs in
+/// toward the tube's centre and `b` along `x`, and a point stands for
+/// `r (1 - a / r) dv da db`. The region lies between the torus's trace in
+/// the section and the chord from the plane's contact to the torus's.
+fn torus_rim_chamfer(cap: f64, wall: f64) -> f64 {
+    let (big, r) = TORUS;
+    let section = |v: f64| {
+        // The torus's trace `b` along `x`: its root in `a` nearest the rim.
+        let wall_at = |b: f64| {
+            let off = |a: f64| {
+                let (rho, z) = (big + (r - a) * v.cos(), (r - a) * v.sin());
+                (rho.hypot(b) - big).powi(2) + z * z - r * r
+            };
+            let (mut lo, mut hi) = (-0.5 * r, 0.5 * r);
+            for _ in 0..200 {
+                let mid = 0.5 * (lo + hi);
+                if off(mid) > 0.0 {
+                    lo = mid;
+                } else {
+                    hi = mid;
+                }
+            }
+            0.5 * (lo + hi)
+        };
+        // The torus's contact: the chord `wall` from the rim.
+        let (mut lo, mut hi) = (0.0, wall);
+        for _ in 0..200 {
+            let mid = 0.5 * (lo + hi);
+            if wall_at(mid).powi(2) + mid * mid < wall * wall {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        let b_t = 0.5 * (lo + hi);
+        let a_t = wall_at(b_t);
+        let strip = |b: f64| {
+            let (from, to) = (wall_at(b), cap + (a_t - cap) * (b / b_t));
+            let f = |a: f64| a - 0.5 * a * a / r;
+            f(to) - f(from)
+        };
+        r * integral(0.0, b_t, 4, strip)
+    };
+    integral(0.0, TAU, 16, section)
+}
+
+/// A rim of the half torus winds round the tube, so the torus face's seam
+/// there runs along `v`, not along `u`: the walking chamfer starts its
+/// contacts on that seam and cuts the rim exactly.
+#[test]
+fn a_rim_round_a_torus_tube_takes_a_chamfer() {
+    let (d1, d2) = (0.3, 0.25);
+    for (name, pose) in poses() {
+        let mut topo = Topology::new();
+        let (half, rim) = half_torus(&mut topo, &pose);
+        let (cap, wall) = on_faces(&topo, half, rim, (d1, d2));
+        let before = solid_volume(&topo, half, 0.001).unwrap();
+        let side = wall_of(&topo, half, rim);
+        let mut builder = ChamferBuilder::new(&mut topo, half);
+        builder.add_edges_asymmetric(&[rim], d1, d2);
+        let built = builder.build().unwrap();
+        assert!(built.failed.is_empty(), "{name}: {:?}", built.failed);
+        assert_removed(
+            &topo,
+            built.solid,
+            before,
+            torus_rim_chamfer(cap, wall),
+            name,
+        );
+        let contacts = wall_contacts(&topo, &side, built.solid, name);
+        assert_eq!(contacts, ["nurbs_curve"], "{name}");
     }
 }

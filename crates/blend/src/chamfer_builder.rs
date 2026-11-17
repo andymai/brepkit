@@ -702,33 +702,27 @@ fn orient_chamfer_face(
 }
 
 /// Starts a closed stripe's contacts where the contact on its seamed face
-/// crosses that face's seam: the seam runs through the chamfered edge's
-/// vertex, and the trim shortens it at the contact's vertex. A closed spine
-/// starts at its curve's first parameter, which need not be that vertex.
-/// Both contacts are cut at one parameter and rejoined, and a walked band is
-/// rebuilt from its rotated sides, so the band's straight row there stays
-/// the band's seam. A face without a seam leaves the stripe as it is; two
-/// seamed faces are refused.
+/// crosses that face's seam: an edge that the face's wires run once each
+/// way, through the chamfered edge's vertex, along u or along v. The trim
+/// shortens that seam at the contact's vertex. A closed spine starts at its
+/// curve's first parameter, which need not be that vertex. Both contacts are
+/// cut at one parameter and rejoined, and a walked band is rebuilt from its
+/// rotated sides, so the band's straight row there stays the band's seam. A
+/// stripe whose faces have no seam there stays as it is; two seamed faces
+/// are refused.
 fn start_at_seam(
     topo: &Topology,
     edge_id: EdgeId,
     stripe: &mut crate::stripe::Stripe,
 ) -> Result<(), BlendError> {
     const SAMPLES: usize = 256;
-    let periodic = |face: FaceId| -> Result<Option<(f64, f64)>, BlendError> {
-        let surface = topo.face(face)?.surface();
-        Ok(match surface {
-            FaceSurface::Cylinder(_)
-            | FaceSurface::Cone(_)
-            | FaceSurface::Sphere(_)
-            | FaceSurface::Torus(_) => Some((0.0, std::f64::consts::TAU)),
-            FaceSurface::Nurbs(n) if n.is_periodic_u() => Some(n.domain_u()),
-            FaceSurface::Plane { .. } | FaceSurface::Nurbs(_) => None,
-        })
-    };
-    let (face, side, (u0, u1)) = match (periodic(stripe.face1)?, periodic(stripe.face2)?) {
-        (Some(range), None) => (stripe.face1, 0, range),
-        (None, Some(range)) => (stripe.face2, 1, range),
+    let vertex = topo.edge(edge_id)?.start();
+    let (face, side, (along, seam, period)) = match (
+        seam_through(topo, stripe.face1, vertex)?,
+        seam_through(topo, stripe.face2, vertex)?,
+    ) {
+        (Some(found), None) => (stripe.face1, 0, found),
+        (None, Some(found)) => (stripe.face2, 1, found),
         (None, None) => return Ok(()),
         (Some(_), Some(_)) => {
             return Err(BlendError::UnsupportedSurface {
@@ -737,11 +731,12 @@ fn start_at_seam(
             });
         }
     };
-    let period = u1 - u0;
     let surface = topo.face(face)?.surface().clone();
-    let u_of = |p: Point3| surface.project_point(p).map_or(0.0, |(u, _)| u);
-    let vertex = topo.vertex(topo.edge(edge_id)?.start())?.point();
-    let seam = u_of(vertex);
+    let across = |p: Point3| {
+        surface
+            .project_point(p)
+            .map_or(0.0, |(u, v)| if along == 0 { u } else { v })
+    };
     let contact = if side == 0 {
         &stripe.contact1
     } else {
@@ -751,7 +746,7 @@ fn start_at_seam(
     let at = |f: f64| c0 + f * (c1 - c0);
     // The contact's turn from the seam, in (-period/2, period/2].
     let off = |t: f64| {
-        let d = (u_of(contact.evaluate(t)) - seam).rem_euclid(period);
+        let d = (across(contact.evaluate(t)) - seam).rem_euclid(period);
         if d > 0.5 * period { d - period } else { d }
     };
     if off(c0).abs() <= 1e-12 * period {
@@ -809,6 +804,69 @@ fn start_at_seam(
         )?);
     }
     Ok(())
+}
+
+/// The seam of `face` through `vertex`: which parameter (0 for u, 1 for v)
+/// an edge that the face's wires run twice holds constant there, its value
+/// at the vertex, and the surface's period in it. `None` when no such edge
+/// ends at the vertex.
+fn seam_through(
+    topo: &Topology,
+    face: FaceId,
+    vertex: VertexId,
+) -> Result<Option<(usize, f64, f64)>, BlendError> {
+    let f = topo.face(face)?;
+    let surface = f.surface();
+    let periods = [
+        crate::fillet_builder::face_u_period(surface),
+        face_v_period(surface),
+    ];
+    if periods.iter().all(Option::is_none) {
+        return Ok(None);
+    }
+    let mut uses: Vec<(EdgeId, usize)> = Vec::new();
+    for wid in std::iter::once(f.outer_wire()).chain(f.inner_wires().iter().copied()) {
+        for oe in topo.wire(wid)?.edges() {
+            match uses.iter_mut().find(|(edge, _)| *edge == oe.edge()) {
+                Some((_, count)) => *count += 1,
+                None => uses.push((oe.edge(), 1)),
+            }
+        }
+    }
+    let at = topo.vertex(vertex)?.point();
+    let Some(here) = surface.project_point(at) else {
+        return Ok(None);
+    };
+    for (edge_id, count) in uses {
+        let edge = topo.edge(edge_id)?;
+        if count < 2 || (edge.start() != vertex && edge.end() != vertex) {
+            continue;
+        }
+        let (a, b) = (
+            topo.vertex(edge.start())?.point(),
+            topo.vertex(edge.end())?.point(),
+        );
+        let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
+        let middle = edge.curve().evaluate_with_endpoints(0.5 * (t0 + t1), a, b);
+        let Some(there) = surface.project_point(middle) else {
+            continue;
+        };
+        for (k, period) in periods.into_iter().enumerate() {
+            let Some(period) = period else {
+                continue;
+            };
+            let (from, to) = if k == 0 {
+                (here.0, there.0)
+            } else {
+                (here.1, there.1)
+            };
+            let d = (to - from).rem_euclid(period);
+            if d.min(period - d) <= 1e-9 * period {
+                return Ok(Some((k, from, period)));
+            }
+        }
+    }
+    Ok(None)
 }
 
 /// The closed curve `curve` starting at its parameter `t`: its run from `t`
