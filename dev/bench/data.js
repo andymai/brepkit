@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794891686914,
+  "lastUpdate": 1794892769422,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -73115,6 +73115,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 20412075,
             "range": "± 29174",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "84770d94bd74b8f255fa83ba9da87dff85e7f0a0",
+          "message": "perf(tessellate): mesh a filleted box in half the time (#2581)\n\n## Summary\n\nTake a 20 box with its 12 edges filleted at r = 1.\n`tessellate_solid_with_tolerance` at deflection 0.1 and 10 degrees\nmeshes it in 1.0 ms in the new criterion bench, against 2.1 ms on main.\nThis mesh is the gate on the result of a fillet (#2515). In every mesh\nthat I compared, the indices, positions and normals are the same bit for\nbit as on main.\n\nI sampled the main thread's stack with gdb, 250 times, while a profiling\nbuild meshed the box in a loop. On main, the time went to hashing and to\none predicate:\n\n| Where | Share of samples on main |\n|---|---:|\n| CDT point insertion in the face meshers | 42% |\n| ... of which the exact in-circle predicate | 20% |\n| Set of visited cells in the circle splice | 16% |\n| Dedupe of coincident triangles | 10% |\n| Weld of boundary vertices | 4% |\n\n## Changes\n\n- The circle splice (`circle_refine_scan`) finds the pool points that\nlie on each circle edge. It walked the whole circle for each quarter\narc, and hashed 27 cells at each step with byte-wise FNV. It now walks\nonly the arc of an open edge. It keeps the pool's ids in runs sorted by\ncell, and hashes cells with a new `WordHasher`. Two points at the same\nplace on an arc keep the lower id, so the order of the walk decides\nnothing.\n- `WordHasher` (`brepkit_math::det_hash`) is a fixed-seed hasher that\nfolds each integer into its state with one add and one multiply.\n`DetHasher` uses eight multiplies for each `u64`. No result depends on\nthe iteration order of a map that uses it.\n- `fast_in_circle` in the CDT sent each near-zero in-circle test to the\nexact predicate. On this mesh, 582 of 5984 tests took that path. In 397\nof them, the x values of the four points form two equal pairs, and so do\nthe y values. Such points are the corners of a rectangle along the axes\n(a cell of a structured grid), or lie on one line along an axis. Their\nexact determinant is zero, and the test now returns zero for them\nwithout the exact predicate.\n- `dedupe_coincident_triangles` allocated a list for each triangle key.\nIt now keeps, for each triangle, the earlier triangle with the same key,\nand reads only the keys with two or more triangles.\n- The CDT marks each vertex that ends a constraint. `legalize` looks up\nan edge in the constraint set only when both its ends have a mark.\n`legalize` also keeps its stack between calls.\n- The CDT's grid for duplicate points and the weld's map of half-edges\nuse `WordHashMap`.\n- The new bench `mesh filleted box (fillet gate)` in `cad_operations`\ntimes the gate's mesh.\n\n## Cost\n\nCriterion (`cargo bench -p brepkit-operations --bench cad_operations`),\ntwo runs on each tree in turns, main at 1fc2bdd04:\n\n| Bench | main | branch |\n|---|---:|---:|\n| `mesh filleted box (fillet gate)` | 2.13, 2.14 ms | 1.02, 1.01 ms |\n| `tessellate box∩sphere (tol=0.01)` | 4.53, 4.48 ms | 1.91, 2.01 ms |\n| `tessellate 64-hole plate` | 6.59, 6.39 ms | 4.33, 5.44 ms |\n| `mesh sphere (tol=0.01)` | 105.9, 105.1 µs | 106.8, 105.1 µs |\n\nA probe that I did not commit (profiling build) took the median of 500\nmeshes, in five rounds in turns. The table gives the median of the five\nround medians:\n\n| Measure | main | branch |\n|---|---:|---:|\n| The solid's mesh | 2.56 ms | 1.14 ms |\n| The 26 faces one at a time, `tessellate_with_tolerance` at the same 10\ndegrees | 1.45 ms | 0.92 ms |\n\nThe issue compares the solid's mesh with 0.7 ms for its faces one at a\ntime. That time is at the default angle of 0.35 rad, where the faces\ngive 460 triangles. At 10 degrees, the faces one at a time give the same\n1356 triangles as the solid's mesh. On this branch, they cost 0.92 ms.\n\nI also meshed the 357 arena fixtures in `crates/io/tests/data` at\ndeflection 0.1 (10 degrees) and at 0.02 (0.2 rad). In one run on each\ntree, all of them took 4878 ms on main and 2197 ms on this branch.\n\n## Test plan\n\n- A digest of each mesh (indices, and the bits of positions and normals)\nis the same on main and on this branch for:\n  - the filleted box, upright, turned and mirrored\n- 11 solids (primitives, booleans and fillets) in three poses at\ndeflections 0.5, 0.1 and 0.02, also from the grouped mesher and from\neach face alone\n  - the 357 arena fixtures at the two deflections above\n- New tests: `points_paired_on_both_axes_read_on_the_circle`,\n`word_hash_is_fixed_and_tells_keys_apart` and\n`neighbouring_cells_take_distinct_low_bits`.\n- `cargo nextest run --cargo-profile ci -p brepkit-math -p\nbrepkit-operations -p brepkit-io -p brepkit-wasm` at 213433795: 3855\npassed, 22 skipped.\n- The `pose_sweep` and `truth_audit` examples (release) give the same\noutput as on main at 1fc2bdd04.\n- This branch merges with #2569 without conflicts. Both change\n`weld_boundary_vertices`.\n- The pre-commit hook (fmt, clippy) passes.\n\nRefs #2515\n\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nMeshes a filleted box in about half the time — the fillet-gate bench\ndrops from 2.1 ms to 1.0 ms — with bit-for-bit identical indices,\npositions, and normals.\n\nProfiling traced most of the time to hashing and one predicate. The\nchanges:\n- The circle splice walks only the open arc of each circle edge instead\nof the whole circle, and reads pool points from runs sorted by cell.\n- Adds `WordHasher`, a deterministic hasher that folds integers with one\nadd and one multiply; the CDT's duplicate-point grid and the weld's\nhalf-edge map now use it.\n- The in-circle test returns zero directly when the four points form two\nequal pairs on each axis (rectangle corners or a line), skipping the\nexact predicate's slowest path.\n- `dedupe_coincident_triangles` chains triangles per key in one pass\ninstead of allocating a list for each key.\n- `legalize` keeps its stack between calls and consults the constraint\nset only for edges whose vertices are marked constraint ends.\n- Adds the `mesh filleted box (fillet gate)` bench, plus tests for the\nhasher and the predicate shortcut.\n\nThe whole arena fixture set and 11 solids in multiple poses and\ndeflections mesh identically to main; aggregate meshing time halves\n(4878 ms → 2197 ms).\n\n<sup>Written for commit 21343379584edca3e197cc3f6c02a51a1549a89a.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2581?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2581?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2581&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-11-16T21:15:35-08:00",
+          "tree_id": "a558b695a97fdf85d149a9b5a3efef6d91b25c41",
+          "url": "https://github.com/andymai/brepkit/commit/84770d94bd74b8f255fa83ba9da87dff85e7f0a0"
+        },
+        "date": 1794892756876,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1130368,
+            "range": "± 3562",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1184668,
+            "range": "± 5193",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13746,
+            "range": "± 133",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 710626,
+            "range": "± 3923",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25435368,
+            "range": "± 213675",
             "unit": "ns/iter"
           }
         ]
