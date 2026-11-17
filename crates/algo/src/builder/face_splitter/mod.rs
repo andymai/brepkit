@@ -7149,40 +7149,57 @@ fn split_face_2d_impl(
         }
     }
 
+    // A torus band round the axis has a meridian arc for its seam, at one u
+    // from end to end, where a cylinder or cone has a line.
+    let torus_band = matches!(surface, FaceSurface::Torus(_)) && u_periodic && !v_periodic;
+    let meridian = |e: &OrientedPCurveEdge| match (&surface, &e.curve_3d) {
+        (FaceSurface::Torus(t), EdgeCurve::Circle(c)) => {
+            torus_band
+                && (e.start_3d - e.end_3d).length() >= 1e-10
+                && (c.radius() - t.minor_radius()).abs() <= tol.linear
+                && c.normal().dot(t.z_axis()).abs() <= 1e-9
+                && c.normal().dot(c.center() - t.center()).abs() <= tol.linear
+        }
+        _ => false,
+    };
+    // A meridian's two ends project to `u` on either side of the angle's
+    // origin when the seam lies on it.
+    for e in &mut boundary_edges {
+        if meridian(e) {
+            e.end_uv = Point2::new(e.start_uv.x(), e.end_uv.y());
+        }
+    }
+    let seam_u_opt = boundary_edges.iter().find_map(|e| {
+        if matches!(e.curve_3d, EdgeCurve::Line) || meridian(e) {
+            surface.project_point(e.start_3d).map(|(u, _)| u)
+        } else {
+            None
+        }
+    });
     // For periodic faces, align closed boundary edge UV with seam edge UV.
     // The same 3D vertex projects to u=0 (from circle unwrapping) and u=seam
     // (from Line edge projection). Shift the circle UV so it starts at seam_u.
     let mut walked_from_closed_rim = false;
-    if u_periodic {
-        let seam_u_opt = boundary_edges.iter().find_map(|e| {
-            if matches!(e.curve_3d, EdgeCurve::Line) {
-                surface.project_point(e.start_3d).map(|(u, _)| u)
-            } else {
-                None
-            }
-        });
-        if let Some(seam_u) = seam_u_opt {
-            for edge in &mut boundary_edges {
-                if (edge.start_3d - edge.end_3d).length() < 1e-10 {
-                    // Closed edge: shift UV so start_uv.x() == seam_u. One
-                    // already starting on a copy of the seam's u was placed
-                    // there by the boundary walk, in step with its seam
-                    // lines, and stays.
-                    let shift = seam_u - edge.start_uv.x();
-                    let on_seam_copy = matches!(surface, FaceSurface::Cone(_))
-                        && (shift
-                            - (shift / std::f64::consts::TAU).round() * std::f64::consts::TAU)
-                            .abs()
-                            <= 1e-6;
-                    if shift.abs() > 0.01 && !on_seam_copy {
-                        edge.start_uv = Point2::new(edge.start_uv.x() + shift, edge.start_uv.y());
-                        edge.end_uv = Point2::new(edge.end_uv.x() + shift, edge.end_uv.y());
-                    }
+    if u_periodic && let Some(seam_u) = seam_u_opt {
+        for edge in &mut boundary_edges {
+            if (edge.start_3d - edge.end_3d).length() < 1e-10 {
+                // Closed edge: shift UV so start_uv.x() == seam_u. One
+                // already starting on a copy of the seam's u was placed
+                // there by the boundary walk, in step with its seam
+                // lines, and stays.
+                let shift = seam_u - edge.start_uv.x();
+                let on_seam_copy = matches!(surface, FaceSurface::Cone(_))
+                    && (shift - (shift / std::f64::consts::TAU).round() * std::f64::consts::TAU)
+                        .abs()
+                        <= 1e-6;
+                if shift.abs() > 0.01 && !on_seam_copy {
+                    edge.start_uv = Point2::new(edge.start_uv.x() + shift, edge.start_uv.y());
+                    edge.end_uv = Point2::new(edge.end_uv.x() + shift, edge.end_uv.y());
                 }
             }
-            if matches!(surface, FaceSurface::Cylinder(_)) {
-                walked_from_closed_rim = walk_boundary_from_closed_rim(&mut boundary_edges);
-            }
+        }
+        if matches!(surface, FaceSurface::Cylinder(_)) || torus_band {
+            walked_from_closed_rim = walk_boundary_from_closed_rim(&mut boundary_edges);
         }
     }
 
@@ -7198,19 +7215,7 @@ fn split_face_2d_impl(
     // neighbouring face shares: the pieces meeting at one rejoin afterwards.
     let mut trace_splits: Vec<Point3> = Vec::new();
     if u_periodic && !sections.is_empty() {
-        // Find the seam Line edge's vertex UV to determine seam_u.
-        let seam_u = {
-            let mut su = 0.0_f64;
-            for edge in &boundary_edges {
-                if matches!(edge.curve_3d, EdgeCurve::Line)
-                    && let Some((u, _)) = surface.project_point(edge.start_3d)
-                {
-                    su = u;
-                    break;
-                }
-            }
-            su
-        };
+        let seam_u = seam_u_opt.unwrap_or(0.0);
         let anti_u = (seam_u + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU);
 
         for edge in &boundary_edges {
@@ -7971,9 +7976,11 @@ fn split_face_2d_impl(
     // principal one; a section projected to its principal u would then sit
     // a period away from the rims it ends on. Move each section by whole
     // periods so its midpoint falls inside the window. A cylinder's boundary
-    // walked from a closed rim spans exactly one turn, and its sections go
-    // in end by end (`place_section_in_turn`): their own end UVs need not be
-    // one continuous span.
+    // walked from a closed rim spans exactly one turn, and so does a torus
+    // band's outline run unbroken round the axis; their sections go in end
+    // by end (`place_section_in_turn`): their own end UVs need not be one
+    // continuous span. Traced glued at its seam, a band's rim piece over half
+    // a turn long reads as running back the short way.
     let mut one_turn: Option<(f64, f64)> = None;
     if u_periodic
         && matches!(
@@ -7989,14 +7996,20 @@ fn split_face_2d_impl(
             .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), u| {
                 (lo.min(u), hi.max(u))
             });
-        if matches!(surface, FaceSurface::Cylinder(_)) {
-            if walked_from_closed_rim && (hi - lo - u_period).abs() < 1e-6 {
-                for e in &mut all_edges[n_boundary_edges..] {
-                    place_section_in_turn(e, &surface, lo, u_period);
-                }
-                one_turn = Some((lo, u_period));
+        let boundary = &all_edges[..n_boundary_edges];
+        let unbroken = boundary
+            .iter()
+            .zip(boundary.iter().cycle().skip(1))
+            .all(|(a, b)| (b.start_uv.x() - a.end_uv.x()).abs() < 1e-9);
+        let cylinder = matches!(surface, FaceSurface::Cylinder(_));
+        if (cylinder && walked_from_closed_rim || torus_band && unbroken)
+            && (hi - lo - u_period).abs() < 1e-6
+        {
+            for e in &mut all_edges[n_boundary_edges..] {
+                place_section_in_turn(e, &surface, lo, u_period);
             }
-        } else if hi - lo > 0.5 * u_period {
+            one_turn = Some((lo, u_period));
+        } else if !cylinder && hi - lo > 0.5 * u_period {
             for e in &mut all_edges[n_boundary_edges..] {
                 let mid = f64::midpoint(e.start_uv.x(), e.end_uv.x());
                 let shift = -((mid - lo) / u_period).floor() * u_period;

@@ -137,7 +137,8 @@ pub(super) fn split_boundary_edges_at_3d_points(
         // surface's u when the circle's normal opposes the axis (an
         // apex-up cone's rims, a mirrored cylinder's).
         let closed_ring_dir = (matches!(edge.curve_3d, EdgeCurve::Circle(_))
-            && matches!(surface, FaceSurface::Cylinder(_) | FaceSurface::Cone(_))
+            && (matches!(surface, FaceSurface::Cylinder(_) | FaceSurface::Cone(_))
+                || matches!(surface, FaceSurface::Torus(_)) && is_parallel_ring(&edge))
             && (edge.start_3d - edge.end_3d).length() < tol)
             .then(|| {
                 let native = if edge.end_uv.x() < edge.start_uv.x() {
@@ -436,6 +437,13 @@ pub(super) fn find_splits_on_circle(
     splits.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
     splits.dedup_by(|a, b| (a.0 - b.0).abs() < tol);
     splits
+}
+
+/// Whether a closed circle on a torus is a parallel, a turn of `u` at one
+/// tube angle `v`, and not a meridian, a turn of `v` at one `u`.
+fn is_parallel_ring(edge: &OrientedPCurveEdge) -> bool {
+    (edge.start_uv.y() - edge.end_uv.y()).abs() < 1e-9
+        && ((edge.end_uv.x() - edge.start_uv.x()).abs() - std::f64::consts::TAU).abs() < 1e-6
 }
 
 /// True when a circle boundary edge is an open iso-v rim on a cylinder/cone —

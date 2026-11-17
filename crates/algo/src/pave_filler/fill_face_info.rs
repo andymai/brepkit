@@ -36,6 +36,10 @@ const ON_SURFACE_BAND_FACTOR: f64 = 100.0;
 /// bands cannot separate the two classes.
 const IN_FACE_MAX_DEVIATION_RATIO: f64 = 0.2;
 
+/// The sine of the largest angle at which a circle or ellipse leaf leaving a
+/// plane still grazes it rather than crosses it.
+const CONIC_GRAZE_SIN: f64 = 1e-3;
+
 /// Absolute ceiling on the ratio band. A LONG leaf crossing at a shallow
 /// angle keeps a small deviation/chord ratio while sitting a macroscopic
 /// distance off the face — the kumiko band's slope-bottom edge crosses a
@@ -436,6 +440,35 @@ fn fill_ef_in(topo: &Topology, arena: &mut GfaArena) {
                             !r.on_boundary(psv.point(), on_band)
                                 || !r.on_boundary(pev.point(), on_band)
                         })
+                    {
+                        return false;
+                    }
+                    // A circle or ellipse leaf with one end on a plane and the
+                    // other off it crosses the plane at that end and lies in
+                    // it nowhere else, unless its tangent there lies in the
+                    // plane: then it grazes the plane. A rim of radius 249.25
+                    // crossing a plane at 2.6 degrees stands 0.149 off it at
+                    // 4% of its chord.
+                    let conic = matches!(
+                        edge.curve(),
+                        brepkit_topology::edge::EdgeCurve::Circle(_)
+                            | brepkit_topology::edge::EdgeCurve::Ellipse(_)
+                    );
+                    if conic
+                        && ends > on_band
+                        && middle > on_band
+                        && let FaceSurface::Plane { normal, .. } = &surface
+                        && let Ok(normal) = normal.normalize()
+                        && [(t0, psv.point()), (t1, pev.point())]
+                            .into_iter()
+                            .any(|(t, p)| {
+                                dist_to_surface(&surface, p).is_some_and(|d| d <= on_band)
+                                    && edge
+                                        .curve()
+                                        .tangent_with_endpoints(t, osp, oep)
+                                        .normalize()
+                                        .is_ok_and(|u| u.dot(normal).abs() > CONIC_GRAZE_SIN)
+                            })
                     {
                         return false;
                     }
