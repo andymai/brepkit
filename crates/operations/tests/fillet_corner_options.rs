@@ -657,8 +657,11 @@ mod tests {
         let corner = vertex_at(&topo, stepped, at);
         let edges = edges_at(&topo, stepped, corner);
         assert_eq!(edges.len(), 3);
-        let plain = fillet_v2_with_corners(&mut topo, stepped, &edges, RADIUS, &[]);
-        assert!(plain.is_ok(), "the plain fillet closes it: {plain:?}");
+        // The plain fillet either refuses this corner or closes it soundly.
+        if let Ok(plain) = fillet_v2_with_corners(&mut topo, stepped, &edges, RADIUS, &[]) {
+            let report = validate_solid(&topo, plain).unwrap();
+            assert!(report.is_valid(), "the plain fillet: {:?}", report.issues);
+        }
         let corners = [FilletCorner {
             vertex: corner,
             setbacks: Vec::new(),

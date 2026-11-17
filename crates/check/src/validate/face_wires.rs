@@ -682,11 +682,13 @@ pub fn check_face_wires_apart(
     Ok(vec![])
 }
 
-/// Check that no wire of a face crosses itself.
+/// Check that no wire of a plane face crosses itself.
 ///
 /// No edge of a wire may cross another edge of the same wire. Edges that
 /// meet at a vertex, run along each other, or touch without crossing are
-/// not reported. `tolerance` is the gap within which two edges meet.
+/// not reported. `tolerance` is the gap within which two edges meet. A
+/// curved face is not read: on cones, frustums and tori the side test
+/// reported crossings of wires that do not cross.
 ///
 /// # Errors
 ///
@@ -697,6 +699,9 @@ pub fn check_face_wires_simple(
     tolerance: f64,
 ) -> Result<Vec<ValidationIssue>, CheckError> {
     let face = topo.face(face_id)?;
+    if !face.surface().is_planar() {
+        return Ok(vec![]);
+    }
     for wire_id in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
         let arcs = topo
             .wire(wire_id)?

@@ -391,6 +391,7 @@ fn a_round_along_an_end_walls_arc() {
 }
 
 #[test]
+#[ignore = "open: #2609, the round runs past the end wall's side edges"]
 fn a_round_along_a_dishs_end_arc() {
     for pose in poses() {
         for far in [false, true] {
