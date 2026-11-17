@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794912982282,
+  "lastUpdate": 1794914698284,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -73925,6 +73925,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 21225613,
             "range": "± 416439",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "eeb097a3c14d41b5031fd68e992224ee00864a17",
+          "message": "fix(algo): keep the cylinder classifier off a solid with a cone (#2614)\n\n## Summary\n\nThe analytic classifier read a solid of planes, a cylinder and a cone as\na pipe of the cylinder's radius between its end planes. A shaft that\ntapers along a cone to a smaller end disc then held points beside the\ntaper. The classifier now builds that pipe only for a solid with no\ncone. Refs #2524.\n\nThe brepjs playground example `universal-joint` trims a yoke's fork (two\nears and a bridge, 68 planes) to its turned outside. The turned outside\nis a cylinder of radius 47 from x = -46 to 22 that tapers along a cone\nto radius 34 at x = -62. On main, `classify_analytic` reads (-50, 0,\n44.5) as inside it, where the ray cast reads outside. The bridge's\ncorners beside the taper then stayed in the intersect.\n\nThe raw result had 18 free edges and 20 edges on more than two faces.\nThe boolean fell back to a mesh of 133 planes. With this change the\nintersect is exact: 74 faces (2 cones, 4 cylinders, 68 planes).\n\nThe example's `fuseAll` of the yoke and its two discs still falls back\non a second fault, so #2524 stays open. I wrote what I found in the\nissue.\n\n## The change\n\n`try_build_analytic_classifier` in\n`crates/algo/src/classifier/analytic.rs` takes the cylinder-and-caps\nmodel only when the solid has no cone face. A solid with planes, a\ncylinder and a cone goes on to the convex model and then to the ray\ncast. The convex model refuses this shaft: its cone's vertices lie past\nthe cylinder's axial range.\n\n## Tests\n\n- `crates/operations/tests/tapered_shaft_classify.rs` is new. It\nrevolves the turned outside from its profile.\n`the_analytic_classifier_reads_the_taper` reads four points beside and\ninside the taper. `a_block_across_the_taper_intersects_it_exactly`\nintersects the bridge's block with it, with `mesh_fallback: false`. The\nresult must be valid and watertight and keep the cone. Over a 16 x 16 x\n16 grid, points farther than 0.05 from every surface must read as the\nexact block and shaft read them.\n- `a_yokes_fork_trims_to_its_turned_outside_exactly` in\n`crates/io/tests/playground_example_repros_inmem.rs` intersects the\ncaptured fork and turned outside (`universal_joint_fork.bin`,\n`universal_joint_turned_outside.bin`). It checks the result as above,\nthree probes, and a 14 x 14 x 14 grid against the two operands.\n- Without the change, all three tests fail: the classifier reads (-50,\n0, 44.5) as inside, and each intersect needs the mesh fallback.\n- `cargo nextest run --cargo-profile ci -p brepkit-algo -p brepkit-io -p\nbrepkit-operations -p brepkit-wasm -p brepkit-check -p brepkit-heal -p\nbrepkit-math`: 4594 tests run, 4594 passed, 22 skipped. `cargo test -p\nbrepkit-wasm --lib gridfinity`: 27 passed.\n- On `08d5be5b6` with and without this change, the pose sweep (495\nlines) and the truth audit (40 lines) give the same output.\n\n## Capture\n\nI captured the intersect's operands with `serializeSolid` from an\nuntracked probe in brepjs at `6befb017`, on a wasm build of main at\n`f6c1c56be`. brepjs itself loads `brepkit-wasm` 4.11.19. Its captures of\nthe example's `fuseAll` operands are the same as the main build's, byte\nfor byte.\n\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes the analytic classifier misreading a solid with a cone as a\ncylinder�s radius pipe, which made booleans on tapered shafts keep\npoints where the taper narrows. Solids with a cone now skip the\ncylinder-and-caps model and use the convex model or ray cast, so the\nuniversal‑joint yoke trim produces an exact 74‑face intersection instead\nof falling back to a mesh.\n\n- Adds regression tests for a cylindric‑to‑cone shaft and a block across\nthe taper, plus a playground repro using captured operands.\n- The yoke's `fuseAll` still meshes due to a separate fault, so #2524\nremains open.\n\n<sup>Written for commit 1c34e050c2520659e2599f422a024897b65a0cac.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2614?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2614?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2614&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-11-17T03:20:15-08:00",
+          "tree_id": "001b7abba0842cfb12ba5d2f9953b6ebd20d8ec3",
+          "url": "https://github.com/andymai/brepkit/commit/eeb097a3c14d41b5031fd68e992224ee00864a17"
+        },
+        "date": 1794914689255,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1145147,
+            "range": "± 17697",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1201708,
+            "range": "± 39634",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13562,
+            "range": "± 138",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 732892,
+            "range": "± 1839",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25856979,
+            "range": "± 134656",
             "unit": "ns/iter"
           }
         ]
