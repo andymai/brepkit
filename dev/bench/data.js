@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794884774726,
+  "lastUpdate": 1794886124688,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -72683,6 +72683,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 20369657,
             "range": "± 37963",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "80e54cb6f59ce529e7ddc0cd6fe5ee443d6479d5",
+          "message": "test(wasm): time the blend cost test over batches taken in turn (#2563)\n\n## Summary\n\n`a_blend_costs_the_same_among_other_shapes`\n(`crates/wasm/src/helpers.rs`) failed one time on CI because of its time\nlimit alone (#2557). The test took the least of five single blends in an\nempty topology, and then the least of five among 20,000 other boxes. A\nchamfer takes less than 1 ms. So one slow spell of the shared runner in\nthe second series moved the ratio to 3.65, past the limit of 3.\n\nNow each sample times a batch of 8 blends on 8 new boxes, and the two\ntopologies take their samples in turn, five rounds each. A slow spell\nthen reaches both series. The test still keeps the least sample of each\nseries and the limit of 3. It compares the entities that the blends make\nin each round, not only in the last one.\n\nThe fault that the test guards against is larger than the limit. On the\nwasm build in #2454, the fault made a chamfer 13 times as slow among\n20,000 boxes as in an empty kernel. It made a fillet 8 times as slow.\n\nFixes #2557\n\n## Test plan\n\n- `cargo test --profile ci -p brepkit-wasm --lib\na_blend_costs_the_same_among_other_shapes` passes in 0.50 s.\n- `cargo clippy -p brepkit-wasm --all-targets -- -D warnings` passes.\n\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes the flaky `a_blend_costs_the_same_among_other_shapes` test, which\nfailed once when a single slow spell on a shared CI runner pushed a\none-blend timing sample past the ratio limit of 3.\n\nEach sample now times a batch of 8 blends, and the alone and crowded\ntopologies take their samples in turn so a slow spell reaches both\nseries. The test still keeps the least sample per series and the limit\nof 3, and it compares the entities each round makes, not just the last.\nThe fault the test guards against makes a chamfer 13 times slower and a\nfillet 8 times slower among 20,000 boxes.\n\nFixes #2557.\n\n<sup>Written for commit 9fcca71e85b48cabf193afcc516f496f28aacfb2.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2563?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2563?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2563&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-11-17T03:24:42Z",
+          "tree_id": "e6be4c9ee9621f788c3c136488e48a1398c33bde",
+          "url": "https://github.com/andymai/brepkit/commit/80e54cb6f59ce529e7ddc0cd6fe5ee443d6479d5"
+        },
+        "date": 1794886111977,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1131707,
+            "range": "± 21370",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1180673,
+            "range": "± 4237",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13642,
+            "range": "± 105",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 729640,
+            "range": "± 57379",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25271885,
+            "range": "± 72674",
             "unit": "ns/iter"
           }
         ]
