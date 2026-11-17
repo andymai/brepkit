@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794888484000,
+  "lastUpdate": 1794889131179,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -72899,6 +72899,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 15586491,
             "range": "± 520937",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "4311993890f36b95d9075d99a4a9a0250305ec28",
+          "message": "fix(algo): cut a rod's torus groove exactly across its seam and its middle (#2575)\n\n## Summary\n\nFour box cuts through a torus groove on a rod fell back to a mesh. They\nare a flat that takes off the groove's seam, the top off down to the\nmiddle of the groove, a slot and a notch. Each is now exact, as a cut,\nan intersection and a fuse, upright, turned and mirrored. Fixes #2544.\nFixes #2545.\n\nThe rod has a radius of 6, and the groove is the cut of a torus ring of\nminor radius 0.32 about its axis. The groove's torus band is a whole\nturn about the axis, and its seam is a meridian arc. Four faults stopped\nthe cuts:\n\n- The face splitter traced the band glued at its seam. The walk reads\nthe way that a rim piece leaves a vertex from its chord in (u, v).\nAcross a glued seam, it reads a chord over half a turn the short way.\nThe flat past x = 2 cuts the band at u = 1.23 and u = 5.05, which leaves\na rim piece 3.82 long. At u = 1.23 the walk read that piece as running\nback, and it joined the kept piece and a removed piece in one loop. The\nresult had 4 free edges.\n- The plane z = 2 meets the band in the circle round the inside of the\ntube, through the middle vertex of the seam. `build_section_edges` read\nthe circle's way round at a quarter of its domain from the circle's own\nangle origin. That origin is a quarter turn from the circle's start, so\nthe point it read was the start's antipode. The circle then read as\nrunning up in u where it runs down. The band's lower piece ran the\ncircle the same way as the cap: 1 shared edge with inconsistent face\norientations.\n- With a ring of radius 5.9, the band covers the tube angles 1.25 to\n5.03. `torus_trim_geom` in the ray cast centred the band's tube angles\non the mean of the start vertices of its edges, which gave 1.95. The far\nrim was then 3.08 away, past the reach of 2.75, so the band read as a\nflat polygon. The rays along x and y from (0, 0, 2) crossed nothing, and\nthe cap at z = 2 read as outside.\n- In the turned pose, one seam arc of the 5.9 ring started at u = 2 pi\nand ended at u = 0. The seam lies on the angle origin, and each end took\nits own copy of it.\n\nThe changes:\n\n- The face splitter lays a torus band round the axis out in one turn of\nu, and places each section in that turn. It traces the band as a strip,\nas it does a cylinder wall.\n- It finds the band's seam as a circle of the tube's radius in a plane\nthrough the axis. The seam's two ends take one u, and the splitter walks\nthe outline from a closed rim.\n- `split_boundary_edges_at_3d_points` reads the pieces of a closed rim\non a torus in the rim's own span of u, as on a cylinder.\n- `build_section_edges` reads a closed circle's way round a quarter turn\non from its start.\n- `torus_trim_geom` centres the tube angles on the middle of the arc\nthat samples of the wires cover.\n\nI removed each change in turn, and each time a test in\n`ring_groove_against_boxes.rs` failed:\n\n- Without the strip layout, the flat and the top fail.\n- Without the walk from a closed rim, the top fails. The same is true\nfor the one u at the seam, the span of a closed rim and the circle's way\nround.\n- Without the centred tube angles, the top, the slot and the notch fail.\n\n## Tests\n\n- `crates/operations/tests/ring_groove_against_boxes.rs` is new. It\nmakes 72 booleans of a grooved rod and a box with `mesh_fallback:\nfalse`. The flat past x = 2 meets rings of radius 5.9, 6, 6.1 and 6.3.\nThe top meets 5.9 and 6, and the slot and the notch meet 5.9.\n- The test cuts, intersects and fuses each pair, upright, in the issues'\nturned pose and mirrored. On main at `d4bb06c56`, the four tests of\nthese cases fail.\n- Each result must be valid and watertight at a deflection of 0.01, with\nonly plane, cylinder and torus faces. Up to 54 points round the groove\nmust classify as the analytic shape says.\n- The volume must agree to 1e-6 with an integral over the distance from\nthe axis. `the_volume_integral_meets_closed_forms` checks that integral\nagainst three closed forms to 1e-10.\n- `a_rods_top_rim_round_across_a_hole_is_refused` in\n`fillet_round_rims.rs` failed, because the round across the hole now\nbuilds. The result is valid, and its mesh is watertight at deflections\nof 0.1, 0.01 and 0.001.\n- Its volume agrees to 3e-8 with the drilled rod less the round's strip\noutside the hole. The test is now\n`a_rods_top_rim_round_across_a_hole_cuts_it_back`, and it checks that.\n- `cargo nextest run --cargo-profile ci -p brepkit-algo -p brepkit-io -p\nbrepkit-operations -p brepkit-wasm -p brepkit-check -p brepkit-heal`:\n3830 tests run, 3830 passed, 22 skipped. `cargo test -p brepkit-wasm\n--lib gridfinity`: 27 passed.\n- On `d4bb06c56` with and without this change, the pose sweep (495\nlines) and the truth audit (40 lines) give the same output.\n- I ran a probe of 675 booleans on main and on this branch. Rods with\nrings of five radii (5.5 to 6.3) meet 15 boxes, as a cut, an\nintersection and a fuse, in three poses.\n- On main, 401 results are exact, valid, watertight and within 1e-6 of\nthe integral. On this branch, 651 are, and no result is worse.\n- Of the other 24 results, 18 are a box corner whose floor lies in the\ngroove. These fall back on main too (#2573).\n- The last 6 are notches whose mesh opens at a deflection of 0.01\n(#2574). 4 of them are the same on main, and 2 fall back on main.\n- A second probe makes 912 booleans of `make_torus(4, 1.5)` with 144\nboxes and 8 slabs, upright and turned. Its output is the same on main\nand on this branch.\n- The roadmap's torus row now lists these cuts as exact.\n- `cargo clippy --all-targets --all-features -- -D warnings` and `cargo\nfmt --all -- --check` pass in the pre-commit hook.\n\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFour cuts through a torus groove on a rod — a flat across the seam, the\ntop off down to the groove's middle, a slot and a notch — now resolve\nexactly as cuts, intersections and fuses instead of falling back to a\nmesh.\n\n- The face splitter lays a torus band round the axis in one turn of `u`\nand traces it as a strip, reads a meridian seam's two ends as one `u`,\nand walks the outline from a closed rim.\n- `build_section_edges` reads a closed circle's winding a quarter turn\non from its start, not from the circle's own angle origin.\n- `torus_trim_geom` centres the tube angles on the middle of the arc its\nsamples cover, so a band spanning more than half the tube no longer\nreads as a flat polygon in the ray cast.\n\nA fillet round on a rod's top rim across a hole now builds and is cut\nback, where it was previously refused. New test\n`crates/operations/tests/ring_groove_against_boxes.rs` checks 72\nbooleans across three poses and four ring radii for validity,\nwatertightness and volume against an analytic integral. Fixes #2544 and\n#2545.\n\n<sup>Written for commit e492018f8b5168ff4d9431c982da1b428629fe2d.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2575?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2575?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2575&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-11-17T04:15:30Z",
+          "tree_id": "3ee8d35256dcdf38a283237e6c274cb08593bac4",
+          "url": "https://github.com/andymai/brepkit/commit/4311993890f36b95d9075d99a4a9a0250305ec28"
+        },
+        "date": 1794889119000,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 907298,
+            "range": "± 1485",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 958405,
+            "range": "± 7281",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11374,
+            "range": "± 574",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 564559,
+            "range": "± 3187",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 20481437,
+            "range": "± 77936",
             "unit": "ns/iter"
           }
         ]
