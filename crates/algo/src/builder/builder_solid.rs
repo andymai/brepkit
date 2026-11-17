@@ -3884,8 +3884,8 @@ fn separate_arcs_sharing_ends(
 /// The seam's path is bounded by two faces of one input face, running it
 /// opposite ways, and lies along an edge that input face's wires run both
 /// ways. One of the two faces is the lens: an outer wire of the seam's edge
-/// and one edge of another path, and no holes. The other face runs no edge
-/// of that path.
+/// and one edge of another path, and no holes. The other face runs along no
+/// stretch of that edge.
 fn seam_beside_lens(
     topo: &Topology,
     face_ids: &[FaceId],
@@ -3945,25 +3945,56 @@ fn seam_beside_lens(
             } else {
                 continue;
             };
-            let Some(path_of_partner) = paths
+            if !paths
                 .iter()
                 .enumerate()
-                .find(|&(j, other)| j != k && other.contains(&partner))
-                .map(|(_, other)| other)
-            else {
+                .any(|(j, other)| j != k && other.contains(&partner))
+            {
                 continue;
-            };
-            // A face across the seam that runs the partner's path too would
-            // run it out and back once the partner took the seam's place.
-            let runs_partner = face_edge_uses(topo, face_ids[across])?
-                .iter()
-                .any(|(e, _)| path_of_partner.contains(e));
+            }
+            // A face across the seam that runs along the partner, whole or in
+            // pieces, would run it out and back once the partner took the
+            // seam's place.
+            let mut runs_partner = false;
+            for (e, _) in face_edge_uses(topo, face_ids[across])? {
+                if !path.contains(&e) && runs_along(topo, e, partner)? {
+                    runs_partner = true;
+                    break;
+                }
+            }
             if !runs_partner {
                 return Ok(Some((k, partner, fi)));
             }
         }
     }
     Ok(None)
+}
+
+/// Whether `edge` runs along a stretch of `other`: two points of it next to
+/// each other, at the steps [`path_parting`] reads and at its ends, lie on
+/// `other` within the tolerance of two fits of one path, and further apart
+/// than twice that, so an edge leaving `other`'s end along its tangent does
+/// not count.
+fn runs_along(topo: &Topology, edge: EdgeId, other: EdgeId) -> Result<bool, AlgoError> {
+    if edge == other {
+        return Ok(true);
+    }
+    let tol = path_tolerance(topo, edge, other)?;
+    let (e, o) = (topo.edge(edge)?, topo.edge(other)?);
+    let (at, along) = (edge_path(topo, e)?, edge_path(topo, o)?);
+    let mut steps = path_steps(topo, e)?;
+    steps.extend([0.0, 1.0]);
+    steps.sort_by(f64::total_cmp);
+    let mut previous: Option<Point3> = None;
+    for f in steps {
+        let p = at(f);
+        let on = distance_to_path(&along, p) <= tol;
+        if on && previous.is_some_and(|q| (p - q).length() > 2.0 * tol) {
+            return Ok(true);
+        }
+        previous = on.then_some(p);
+    }
+    Ok(false)
 }
 
 /// Whether `edge` is a piece of a seam of the input face `source`, an edge
@@ -5725,13 +5756,14 @@ mod tests {
     }
 
     /// Two faces of one seamed wall, each between a piece of the seam and the
-    /// same curve, run both of the seam's ways and the curve's. The curve
-    /// cannot take the seam's place, as the face across the seam would then
-    /// run it out and back, so both faces stay, each with its piece of the
-    /// seam.
+    /// same curve, run both of the seam's ways and the curve's, the second
+    /// face's curve whole or in two pieces. The curve cannot take the seam's
+    /// place, as the face across the seam would then run it out and back, so
+    /// both faces stay, each with its piece of the seam.
     #[test]
     fn two_lenses_on_one_curve_keep_their_seam() {
         two_lenses_keep_their_seam(false);
+        two_lenses_keep_their_seam(true);
     }
 
     fn two_lenses_keep_their_seam(split: bool) {
