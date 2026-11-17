@@ -4073,7 +4073,9 @@ fn lies_on_seam_of(topo: &Topology, source: FaceId, edge: EdgeId) -> Result<bool
                     circle.project(ep)
                 };
                 let slack = PATH_MIN_TOL / circle.radius();
-                same_circle && (from - s0).rem_euclid(TAU) + (t1 - t0) <= s1 - s0 + slack
+                let whole_turn = seam.start() == seam.end();
+                same_circle
+                    && (whole_turn || (from - s0).rem_euclid(TAU) + (t1 - t0) <= s1 - s0 + slack)
             }
             (EdgeCurve::NurbsCurve(span), EdgeCurve::NurbsCurve(curve)) => {
                 let (t0, t1) = piece.curve().domain_with_endpoints(sp, ep);
@@ -5920,6 +5922,45 @@ mod tests {
         let home = topo.add_edge(Edge::new(far, to, EdgeCurveOf::Line));
         let leaving = face_of(&mut topo, &[(leave, true), (home, true)], plane);
         assert!(!face_runs_along(&topo, leaving, &[], curve, &[curve]).unwrap());
+    }
+
+    /// A ring's face runs the circle across its tube both ways, as its seam.
+    /// An arc of that circle across the circle's own start, from -0.2 to 0.2
+    /// radians, and the arc the long way round between the same points, are
+    /// both pieces of the seam.
+    #[test]
+    fn an_arc_of_a_whole_seam_circle_is_a_piece_of_it() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::ToroidalSurface;
+        use brepkit_topology::edge::Edge;
+        use brepkit_topology::vertex::Vertex;
+
+        let mut topo = Topology::new();
+        let ring =
+            FaceSurface::Torus(ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), 3.0, 1.0).unwrap());
+        let tube =
+            Circle3D::new(Point3::new(3.0, 0.0, 0.0), Vec3::new(0.0, 1.0, 0.0), 1.0).unwrap();
+        let equator =
+            Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 4.0).unwrap();
+        let corner = topo.add_vertex(Vertex::new(Point3::new(4.0, 0.0, 0.0), 1e-7));
+        let across = topo.add_edge(Edge::new(corner, corner, EdgeCurveOf::Circle(tube.clone())));
+        let around = topo.add_edge(Edge::new(corner, corner, EdgeCurveOf::Circle(equator)));
+        let source = face_of(
+            &mut topo,
+            &[
+                (across, true),
+                (around, true),
+                (across, false),
+                (around, false),
+            ],
+            ring,
+        );
+        let before = topo.add_vertex(Vertex::new(tube.evaluate(-0.2), 1e-7));
+        let after = topo.add_vertex(Vertex::new(tube.evaluate(0.2), 1e-7));
+        let short = topo.add_edge(Edge::new(before, after, EdgeCurveOf::Circle(tube.clone())));
+        let long = topo.add_edge(Edge::new(after, before, EdgeCurveOf::Circle(tube)));
+        assert!(lies_on_seam_of(&topo, source, short).unwrap());
+        assert!(lies_on_seam_of(&topo, source, long).unwrap());
     }
 
     /// Three arches between one pair of points, each bounding a face of its
