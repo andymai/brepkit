@@ -6016,6 +6016,13 @@ pub fn split_face_2d(
     distribute_cap_circles(topo, face_id, base, &cap_sections, &cap_points, rank, frame)
 }
 
+fn outer_wire_has_no_seam(topo: &Topology, face: &brepkit_topology::face::Face) -> bool {
+    topo.wire(face.outer_wire()).is_ok_and(|wire| {
+        let mut seen = std::collections::HashSet::new();
+        wire.edges().iter().all(|oe| seen.insert(oe.edge()))
+    })
+}
+
 /// The centroid of a closed curved section's samples when every sample
 /// clears the face outline by a twentieth of the loop's extent (a loop that
 /// touches the outline is no cap).
@@ -9303,6 +9310,10 @@ fn split_face_2d_impl(
         };
     let use_structural_classification =
         (u_periodic || partial_band_chain_split) && !sections.is_empty();
+    // A face whose outline never runs along one edge both ways has no seam:
+    // a band cut open short of a turn, or a ball's patch. No loop of it then
+    // holds a seam line, and the loops along its outline are its pieces.
+    let seamless = use_structural_classification && outer_wire_has_no_seam(topo, face);
 
     for wire_loop in loops {
         if use_structural_classification {
@@ -9339,7 +9350,10 @@ fn split_face_2d_impl(
                     .sum();
                 !runs_both_ways && signed_area_2d(&pts).abs() > perimeter * tol.linear
             };
-            let on_boundary = (matches!(surface, FaceSurface::Cone(_)) || torus_piece || strip)
+            let on_boundary = (matches!(surface, FaceSurface::Cone(_))
+                || torus_piece
+                || strip
+                || (seamless && !matches!(surface, FaceSurface::Torus(_))))
                 && wire_loop.iter().any(|e| e.source_edge_idx.is_none())
                 && wire_loop.iter().any(|e| e.source_edge_idx.is_some());
             // On a partial band, a loop of sections alone (a strut poking
