@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794886803838,
+  "lastUpdate": 1794887065260,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -72791,6 +72791,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 21137547,
             "range": "± 334462",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "628ad9359aad948f0a35192d61ee2d95ad2b15f7",
+          "message": "test(algo): count every ray beside a B-spline trim's long side (#2568)\n\n## Summary\n\nThis PR adds a test with a sweep of 833 rays like the one in #2535. On\nmain, each ray that the test reads counts its hits inside the face. The\nlibrary code does not change.\n\n- In #2535, the face is a triangle trimmed from the strip of #2470. A\nray beside its long side counted 1 or 2 crossings where its hits inside\nthe triangle give 0.\n- `UvTrim::contains` reads where an edge crosses the hit's `u` with\n`UvEdge::v_at`. For a B-spline face, `v_at` projects the edge's points\nwith `NurbsTrim::project`, which calls `project_point_to_surface`.\n- #2537 made `project_point_to_surface` prove that its result is the\nnearest point of the surface. So `v_at` now reads the long side where it\nis. Before #2537, a search from the coarse grid put some of the side's\npoints 0.5 to 1.4 off.\n\n`every_ray_beside_a_nurbs_trims_long_side_counts_its_hits_inside` casts\nthe sweep: 119 values of `u` from 0.205 to 0.795, and 7 offsets `dv`\nfrom -0.01 to 0.1 from the long side. Each ray starts 1e-3 above the\nstrip and runs in along its normal. The test skips the 4 points that lie\non or below the triangle's side `v = 0`. Each of the other 829 rays must\ncount its hits inside the triangle and read no graze.\n\nThe strip and its triangle move to a helper, `strip_triangle`, that\n`a_nurbs_trim_keeps_the_nearer_foot_of_an_edge_off_its_surface` also\nuses.\n\nFixes #2535\n\n## Test plan\n\n- The new test passes on main (d4bb06c56).\n- On 2cd58ad2a, the commit before #2537, the new test fails on 70 rays.\nThey have `u` from 0.285 to 0.325 or from 0.525 to 0.545, the ranges in\n#2535.\n- `cargo test -p brepkit-algo --lib`: 448 passed.\n\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nAdds a test sweeping 829 rays beside a B-spline trim's long side, fixing\n#2535 by pinning the crossing count that regressed before the projection\nfix in #2537.\n\n- The library code is unchanged; the test and its `strip_triangle`\nhelper move shared setup out of the existing projection test.\n- Each ray counts its hits inside the trimmed triangle and reads no\ngraze; before #2537, 70 of the rays counted 1 or 2 crossings where the\nhits give 0.\n\n<sup>Written for commit b6dbadaedcc1b89a3b7f9606680b11fc854b425d.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2568?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2568?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2568&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-11-17T03:38:03Z",
+          "tree_id": "b7936f2d2791b56abfc02bd2d76f28d21e273d3c",
+          "url": "https://github.com/andymai/brepkit/commit/628ad9359aad948f0a35192d61ee2d95ad2b15f7"
+        },
+        "date": 1794887054054,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1116050,
+            "range": "± 13532",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1199869,
+            "range": "± 44919",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13464,
+            "range": "± 17",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 714043,
+            "range": "± 12713",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25763460,
+            "range": "± 107214",
             "unit": "ns/iter"
           }
         ]
