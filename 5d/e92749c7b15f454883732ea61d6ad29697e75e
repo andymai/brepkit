@@ -1,0 +1,63 @@
+.claude/skills/roadmap/SKILL.md
+  s_489e8e320eebde::t_9000ab4fef5e34 147,173,187-188,207,2375-2377
+CLAUDE.md
+  s_489e8e320eebde::t_13abf363cf10dc 238
+crates/algo/src/builder/face_splitter/conversion.rs
+  s_489e8e320eebde::t_c76b697428192a 277-292,330-334,339-390
+crates/algo/src/builder/face_splitter/edge_splitting.rs
+  s_489e8e320eebde::t_10833fa148652d 407,414-417
+crates/algo/src/builder/face_splitter/mod.rs
+  s_489e8e320eebde::t_eb87303a8cec96 1840-1853,6158-6246,6676-6707,7212-7213,7217,9588-9656,9693-9696
+crates/algo/src/pave_filler/phase_ff.rs
+  s_489e8e320eebde::t_f1745eb9e56f49 276-282,2714-2760,2798-2807,2827-2858,2872-2873,2875-2938,2960-2995,3071,8382-8389,8391,8393-8400,8493-8500,8546-8547,9525-9567
+crates/blend/src/corner.rs
+  s_489e8e320eebde::t_68dfa3bed6374c 5681-6611,8062-8119
+crates/blend/src/fillet_builder.rs
+  s_489e8e320eebde::t_37a831782044f3 1320-1337,1339-1340,1345-1362,2535
+crates/check/src/face_loops.rs
+  s_489e8e320eebde::t_b2522bed3c4284 46-49,548-550,558-570,671,721-747,749-763,765-768,938,983,1022,1046,1057,1079-1104,1128-1153,1217,1253-1256,1259-1285,1294-1297,1300,1735,1898,1903-1904,1908,1913-2119
+crates/check/src/face_loops/bound.rs
+  s_489e8e320eebde::t_33b60b6541f788 1-1306
+crates/check/src/validate/face_wires.rs
+  s_489e8e320eebde::t_f1ed1fb2f8ed03 624-653,656,683-688,696,712,714,874-911
+crates/io/src/stl/import.rs
+  s_489e8e320eebde::t_4acdf62cd7761b 52-55,130-135,442-445,464-465,472-476,481,483,489,516-517,531,534,568-570,613,625-632,642-646,650,663-695,731,733,756-758,1260-1269,1293,1298-1299,1305,1380-1384,1388,1390,1393-1397,1431-1435,1496,1523-1558
+crates/io/tests/mesh_import_bodies.rs
+  s_489e8e320eebde::t_0c8a10aec42f01 6,1563-1703
+crates/operations/src/boolean/assembly.rs
+  s_489e8e320eebde::t_3dcef8111083bf 621-643
+crates/operations/src/boolean/tests.rs
+  s_489e8e320eebde::t_46e2a00d3eb0c4 9588-9620
+crates/operations/tests/balls_on_a_flat_ring.rs
+  s_489e8e320eebde::t_44064af3052c76 15,21,105-116,160,226-277
+crates/operations/tests/random_boolean_sweep.rs
+  s_489e8e320eebde::t_08f0ad9ea01e0b 1-751
+crates/operations/tests/regress_fillet_variable_retry_seam_stub.rs
+  s_489e8e320eebde::t_b09104edcf08c4 20-25,29-32,46,50,52-53,57,76-81,215,219,466-1006,1011-1017,1032-1045
+crates/operations/tests/ring_groove_against_boxes.rs
+  s_489e8e320eebde::t_916c6723ad4cc8 3-4,16-18,33,36,187-193,276,362-412
+crates/operations/tests/rod_ending_in_a_ball.rs
+  s_489e8e320eebde::t_48eee9db2a9fec 15-16,20,31-42,82,125-277
+crates/operations/tests/thin_ring_under_a_tilted_box.rs
+  s_489e8e320eebde::t_04e13064065275 1-98
+crates/operations/tests/torus_near_tangent_wall.rs
+  s_489e8e320eebde::t_13aa8623bbf651 1-135
+crates/operations/tests/two_rods_at_a_turned_ball.rs
+  s_489e8e320eebde::t_2c6449d3ecd602 1-121
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5de92749c7b15f454883732ea61d6ad29697e75e",
+  "prompts": {},
+  "sessions": {
+    "s_489e8e320eebde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1a2a9261-2019-4199-aa4f-06130071c8f0",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
