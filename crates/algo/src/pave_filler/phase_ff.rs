@@ -273,8 +273,13 @@ pub fn perform(
         } = interf
             && let Ok(v) = topo.vertex(arena.resolve_vertex(*vid))
         {
-            for &owner in edge_faces.get(edge).into_iter().flatten() {
-                junction_registry.add_crossing(owner, *face, v.point());
+            let owners = edge_faces.get(edge).map_or(&[][..], Vec::as_slice);
+            for &owner in owners {
+                // A seam runs inside its face, which lies on both sides of
+                // it: no section of that face ends where it crosses one.
+                if owners.iter().filter(|&&f| f == owner).count() == 1 {
+                    junction_registry.add_crossing(owner, *face, v.point());
+                }
             }
         }
     }
@@ -2706,6 +2711,53 @@ fn start_outside_windows(
     })
 }
 
+/// How far a sample of a fitted plane x torus section can lie from the true
+/// section: its distances from the torus and the plane bound its error
+/// along the two surfaces' normals, and across the section that error grows
+/// as the angle between the normals closes (a plane near a tangent to the
+/// tube), so their sum is divided by the sine of that angle, held to at
+/// least 1e-3. The torus distance is to the nearer of the two tube circles
+/// in the sample's plane through the axis: on a spindle torus, the tube
+/// centred across the axis carries the sheet there. The plane's normal need
+/// not be a unit vector.
+fn section_sample_error(
+    torus: &brepkit_math::surfaces::ToroidalSurface,
+    (plane_n, plane_d): (Vec3, f64),
+    q: Point3,
+) -> f64 {
+    let scale = plane_n.length();
+    if scale <= 0.0 {
+        return f64::INFINITY;
+    }
+    let normal = plane_n * (1.0 / scale);
+    let off_plane = (normal.dot(Vec3::new(q.x(), q.y(), q.z())) - plane_d / scale).abs();
+    let w = q - torus.center();
+    let h = torus.z_axis().dot(w);
+    let radial = w - torus.z_axis() * h;
+    let rho = radial.length();
+    let outward = if rho > 0.0 {
+        radial * (1.0 / rho)
+    } else {
+        torus.x_axis()
+    };
+    let (to_q, off_torus) = [1.0, -1.0]
+        .into_iter()
+        .map(|side| {
+            let to_q = q - (torus.center() + outward * (side * torus.major_radius()));
+            let off = (to_q.length() - torus.minor_radius()).abs();
+            (to_q, off)
+        })
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .unwrap_or((Vec3::new(0.0, 0.0, 0.0), f64::INFINITY));
+    let off_tube = to_q.length();
+    let sine = if off_tube > 0.0 {
+        (to_q * (1.0 / off_tube)).cross(normal).length()
+    } else {
+        0.0
+    };
+    (off_torus + off_plane) / sine.max(1e-3)
+}
+
 /// Trim a plane×torus oval to its EXACT in-box arc at the box-edge∩torus
 /// crossings (the analogue of box∩sphere's `emit_split_circle_arcs`, for a
 /// marched torus oval instead of a `Circle`).
@@ -2743,11 +2795,16 @@ fn trim_torus_oval_to_box_face(
     if (raw.p_start - raw.p_end).length() > 1e-6 {
         return None; // open curve — not a closed oval
     }
-    let (torus, torus_ext, plane_face, plane_ext) = match (surf_a, surf_b) {
-        (FaceSurface::Torus(t), FaceSurface::Plane { .. }) => (t, ext_a, fb, ext_b),
-        (FaceSurface::Plane { .. }, FaceSurface::Torus(t)) => (t, ext_b, fa, ext_a),
-        _ => return None,
-    };
+    let (torus, torus_face, torus_ext, plane_face, plane_ext, (plane_n, plane_d)) =
+        match (surf_a, surf_b) {
+            (FaceSurface::Torus(t), FaceSurface::Plane { normal, d }) => {
+                (t, fa, ext_a, fb, ext_b, (*normal, *d))
+            }
+            (FaceSurface::Plane { normal, d }, FaceSurface::Torus(t)) => {
+                (t, fb, ext_b, fa, ext_a, (*normal, *d))
+            }
+            _ => return None,
+        };
 
     // The box face's straight boundary edges (its rectangle sides).
     let face = topo.face(plane_face).ok()?;
@@ -2767,11 +2824,38 @@ fn trim_torus_oval_to_box_face(
     }
 
     // Exact box-edge ∩ torus crossings that lie ON the edge segment AND ON the
-    // oval. The crossing point is EXACT; `on_oval_tol` only has to confirm the
-    // crossing belongs to THIS oval (vs a different oval branch on the same
-    // plane, which is ≳1 mm away) — so it must exceed the MARCHED oval's
-    // approximation error (~0.1 mm), well below the inter-branch separation.
-    let on_oval_tol = 0.3_f64;
+    // oval. The crossing point is EXACT, and it lies on one loop of this
+    // plane's section only: another loop can run closer than any fixed band
+    // (a thin tube's two loops through its centre, a tube's diameter apart).
+    // So a crossing belongs to this loop when it lies on it: on a conic to
+    // rounding, and on a fitted loop within the loop's own error
+    // (`section_sample_error` at its samples).
+    let fit = match &raw.curve {
+        EdgeCurve::NurbsCurve(_) => (0..=256)
+            .map(|i| {
+                let t = (raw.t_range.1 - raw.t_range.0).madd(f64::from(i) / 256.0, raw.t_range.0);
+                section_sample_error(
+                    torus,
+                    (plane_n, plane_d),
+                    raw.curve.evaluate_with_endpoints(t, raw.p_start, raw.p_end),
+                )
+            })
+            .fold(0.0, f64::max),
+        EdgeCurve::Line | EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => 0.0,
+    };
+    let reach = 4.0f64.madd(fit, 100.0 * tol.linear);
+    let off_oval = |p: Point3| -> f64 {
+        match &raw.curve {
+            EdgeCurve::Circle(c) => (c.evaluate(c.project(p)) - p).length(),
+            EdgeCurve::Ellipse(e) => (e.evaluate(e.project(p)) - p).length(),
+            EdgeCurve::NurbsCurve(n) => {
+                brepkit_math::nurbs::projection::project_point_to_curve(n, p, 1e-12)
+                    .map_or(f64::INFINITY, |c| c.distance)
+            }
+            EdgeCurve::Line => f64::INFINITY,
+        }
+    };
+    let on_oval = |p: Point3| off_oval(p) <= reach;
     let dedup_tol = tol.linear * 100.0;
     let mut crossings: Vec<Point3> = Vec::new();
     for &(s, en) in &box_edges {
@@ -2785,20 +2869,73 @@ fn trim_torus_oval_to_box_face(
                 continue; // off the edge segment
             }
             let p = s + dir * t;
-            // Must lie on the oval (the marched NURBS), else it's a crossing of
-            // a DIFFERENT oval branch on this plane.
-            let mut min_d = f64::MAX;
-            for i in 0..=128 {
-                let tt = raw.t_range.0 + (raw.t_range.1 - raw.t_range.0) * f64::from(i) / 128.0;
-                min_d = min_d.min(
-                    (raw.curve
-                        .evaluate_with_endpoints(tt, raw.p_start, raw.p_end)
-                        - p)
-                        .length(),
-                );
+            if on_oval(p) && !crossings.iter().any(|c| (*c - p).length() < dedup_tol) {
+                crossings.push(p);
             }
-            let on_oval = min_d < on_oval_tol;
-            if on_oval && !crossings.iter().any(|c| (*c - p).length() < dedup_tol) {
+        }
+    }
+
+    // The torus face's own rims end it as the box face's edges end the box:
+    // an arc kept on past a rim (a wall's oval running on over the top of a
+    // groove's tube) lies off the face. A seam, run once each way, ends
+    // nothing. A circle (a meridian or a parallel) is not cut at the rims
+    // here: the arcs this trim keeps are refitted as splines, and the exact
+    // circle splitter ends a circle at the rims itself.
+    let fitted = matches!(raw.curve, EdgeCurve::NurbsCurve(_));
+    let torus_wires: Vec<_> = topo.face(torus_face).map_or_else(
+        |_| Vec::new(),
+        |face| {
+            std::iter::once(face.outer_wire())
+                .chain(face.inner_wires().iter().copied())
+                .collect()
+        },
+    );
+    let torus_edges: Vec<brepkit_topology::edge::EdgeId> = torus_wires
+        .iter()
+        .filter_map(|&w| topo.wire(w).ok())
+        .flat_map(|w| {
+            w.edges()
+                .iter()
+                .map(brepkit_topology::wire::OrientedEdge::edge)
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    for &edge_id in torus_edges.iter().filter(|_| fitted) {
+        if torus_edges.iter().filter(|&&e| e == edge_id).count() > 1 {
+            continue;
+        }
+        let Ok(edge) = topo.edge(edge_id) else {
+            continue;
+        };
+        let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) else {
+            continue;
+        };
+        let (sp, ep) = (sv.point(), ev.point());
+        let points = match edge.curve() {
+            EdgeCurve::Line => line_segment_plane_crossing(sp, ep, plane_n, plane_d)
+                .into_iter()
+                .collect(),
+            EdgeCurve::Circle(c) => circle_arc_plane_crossings(c, sp, ep, plane_n, plane_d),
+            EdgeCurve::Ellipse(e) => conic_arc_plane_crossings(
+                |t| e.evaluate(t),
+                |q| e.project(q),
+                sp,
+                ep,
+                plane_n,
+                plane_d,
+            ),
+            curve @ EdgeCurve::NurbsCurve(_) => {
+                let (t0, t1) = curve.domain_with_endpoints(sp, ep);
+                super::phase_ef::find_edge_plane_crossings(
+                    curve, sp, ep, t0, t1, plane_n, plane_d, tol,
+                )
+                .into_iter()
+                .map(|(_, p)| p)
+                .collect()
+            }
+        };
+        for p in points {
+            if on_oval(p) && !crossings.iter().any(|c| (*c - p).length() < dedup_tol) {
                 crossings.push(p);
             }
         }
@@ -2819,6 +2956,42 @@ fn trim_torus_oval_to_box_face(
     if crossings.len() < 2 {
         return None;
     }
+
+    // The box face's outline is its straight edges, so it says exactly
+    // whether a point of its plane lies on the face. The extent's boundary
+    // margin does not: an arc from the box's floor to a rim just below it
+    // has its middle within that margin of the floor.
+    let (ax0, ax1) = {
+        let (nx, ny, nz) = (plane_n.x().abs(), plane_n.y().abs(), plane_n.z().abs());
+        if nx >= ny && nx >= nz {
+            (1, 2)
+        } else if ny >= nz {
+            (0, 2)
+        } else {
+            (0, 1)
+        }
+    };
+    let on_box = |p: Point3| -> bool {
+        let c = |q: Point3, a: usize| [q.x(), q.y(), q.z()][a];
+        let (px, py) = (c(p, ax0), c(p, ax1));
+        let mut inside = false;
+        let mut nearest = f64::MAX;
+        for &(s, e) in &box_edges {
+            let (x0, y0, x1, y1) = (c(s, ax0), c(s, ax1), c(e, ax0), c(e, ax1));
+            if (y0 > py) != (y1 > py) && px < (x1 - x0).madd((py - y0) / (y1 - y0), x0) {
+                inside = !inside;
+            }
+            let (dx, dy) = (x1 - x0, y1 - y0);
+            let len2 = dx.madd(dx, dy * dy);
+            let t = if len2 > 0.0 {
+                ((px - x0).madd(dx, (py - y0) * dy) / len2).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            nearest = nearest.min(dx.madd(t, x0 - px).hypot(dy.madd(t, y0 - py)));
+        }
+        inside || nearest <= tol.linear
+    };
 
     // Find each crossing's parameter on the closed oval (densest sample).
     let n_dense = 1024usize;
@@ -2895,7 +3068,7 @@ fn trim_torus_oval_to_box_face(
             continue;
         }
         let mid = pts[pts.len() / 2];
-        if !plane_ext.contains(mid) || !torus_ext.contains(mid) {
+        if !plane_ext.contains(mid) || !torus_ext.contains(mid) || !on_box(mid) {
             continue;
         }
         let last = pts.len() - 1;
@@ -8206,12 +8379,25 @@ fn emit_split_circle_arcs(
                 // seam vertex), so endpoint-only bounds collapse to a line at
                 // the seam and the face's radial extent is lost — which then
                 // wrongly rejects every in-face section-arc midpoint.
+                // Samples of an arc miss its extreme by the sagitta between
+                // them: a cap's rim then leaves the arc along its bottom out
+                // of the cap's box.
+                let arc = match edge.curve() {
+                    EdgeCurve::Circle(c) => Some(c.arc_aabb(t0, t1)),
+                    EdgeCurve::Ellipse(e) => Some(e.arc_aabb(t0, t1)),
+                    EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => None,
+                };
                 let n = 8;
-                for i in 0..=n {
+                let samples = (0..=n).map(|i| {
                     let frac = f64::from(i) / f64::from(n);
-                    let p = edge
-                        .curve()
-                        .evaluate_with_endpoints(t0 + (t1 - t0) * frac, sp, ep);
+                    edge.curve()
+                        .evaluate_with_endpoints(t0 + (t1 - t0) * frac, sp, ep)
+                });
+                let points: Vec<Point3> = match arc {
+                    Some(b) => vec![b.min, b.max],
+                    None => samples.collect(),
+                };
+                for p in points {
                     min = Point3::new(min.x().min(p.x()), min.y().min(p.y()), min.z().min(p.z()));
                     max = Point3::new(max.x().max(p.x()), max.y().max(p.y()), max.z().max(p.z()));
                     any = true;
@@ -8304,6 +8490,14 @@ fn emit_split_circle_arcs(
             .flatten()
     };
     let (trim_a, trim_b) = (lateral(face_a), lateral(face_b));
+    // A ball's patch read against its own wires: one half-space from the
+    // whole outline holds the arcs a quarter of the ball leaves out.
+    let ball = |fid: FaceId| {
+        crate::classifier::SphereFaceTrim::new(topo, fid)
+            .ok()
+            .flatten()
+    };
+    let (ball_a, ball_b) = (ball(face_a), ball(face_b));
     // The sagitta band applies per chord, and only to a chord short enough to
     // be one of a rim arc's sixteen samples on this circle: a straight side
     // (a turned box face's ten-unit edge) would otherwise widen the band by
@@ -8349,6 +8543,8 @@ fn emit_split_circle_arcs(
             && in_region(&loops_b, p)
             && trim_a.as_ref().is_none_or(|t| t.holds(p, side_eps))
             && trim_b.as_ref().is_none_or(|t| t.holds(p, side_eps))
+            && ball_a.as_ref().is_none_or(|t| t.holds(p, side_eps))
+            && ball_b.as_ref().is_none_or(|t| t.holds(p, side_eps))
     };
 
     // Pass 1: determine which arcs survive the AABB filter, *before*
@@ -9325,6 +9521,49 @@ fn piece_side(
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::*;
+
+    /// A point on a torus and a plane lies on their section: its error is
+    /// rounding, on a spindle torus's sheet across the axis as on a ring's
+    /// tube.
+    #[test]
+    fn a_point_of_the_section_has_no_error_on_either_sheet() {
+        use brepkit_math::surfaces::ToroidalSurface;
+        for (major, minor) in [(4.0, 1.5), (1.0, 2.0), (0.1, 2.45)] {
+            let torus = ToroidalSurface::new(Point3::new(0.3, -0.2, 0.5), major, minor).unwrap();
+            for i in 0..12 {
+                for j in 0..12 {
+                    let (u, v) = (0.5 + f64::from(i) * 0.5, 0.25 + f64::from(j) * 0.5);
+                    let q = torus.evaluate(u, v);
+                    // A plane through the point, across the surface there.
+                    let normal = Vec3::new(0.6, 0.0, 0.8);
+                    let d = normal.dot(Vec3::new(q.x(), q.y(), q.z()));
+                    let error = section_sample_error(&torus, (normal, d), q);
+                    assert!(
+                        error < 1e-9,
+                        "torus ({major}, {minor}) at ({u}, {v}): error {error}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// A plane's equation need not have a unit normal: the same plane
+    /// written at twice the scale gives the same error.
+    #[test]
+    fn a_scaled_plane_equation_gives_the_same_error() {
+        use brepkit_math::surfaces::ToroidalSurface;
+        let torus = ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), 4.0, 1.5).unwrap();
+        // A point on the torus, 0.25 above the plane z = 0.5.
+        let q = torus.evaluate(0.7, 0.5);
+        let level = q.z() - 0.25;
+        let unit = section_sample_error(&torus, (Vec3::new(0.0, 0.0, 1.0), level), q);
+        let scaled = section_sample_error(&torus, (Vec3::new(0.0, 0.0, 2.0), 2.0 * level), q);
+        assert!(unit > 0.0);
+        assert!(
+            (scaled - unit).abs() <= 1e-12 * unit,
+            "unit {unit}, scaled {scaled}"
+        );
+    }
 
     /// A cone about z with half-angle π/6 from its radial plane, stored over
     /// its generator from 18 to 22, meets the flat NURBS rectangle x = 16 to

@@ -274,8 +274,22 @@ pub(super) fn boundary_edges_to_pcurve_with_images<S: std::hash::BuildHasher>(
         let start_3d = start_v.point();
         let end_3d = end_v.point();
 
-        let pcurve =
-            compute_pcurve_on_surface(edge.curve(), start_3d, end_3d, surface, wire_pts, frame);
+        // Two arcs of a great circle join antipodal points, and the shorter
+        // arc between the ends cannot tell them apart: a ball's arc is read
+        // along its own span.
+        let pcurve = if matches!(surface, FaceSurface::Sphere(_)) {
+            super::super::pcurve_compute::compute_boundary_pcurve_on_surface(
+                edge.curve(),
+                if forward { start_3d } else { end_3d },
+                if forward { end_3d } else { start_3d },
+                forward,
+                surface,
+                wire_pts,
+                frame,
+            )
+        } else {
+            compute_pcurve_on_surface(edge.curve(), start_3d, end_3d, surface, wire_pts, frame)
+        };
 
         // For closed edges (start_3d approx end_3d, e.g. full circle), projecting
         // start and end to UV gives the same point. Use pcurve sampling to
@@ -313,8 +327,65 @@ pub(super) fn boundary_edges_to_pcurve_with_images<S: std::hash::BuildHasher>(
     }
     if frame.is_none() {
         resolve_seam_endpoint_uv(&mut result, surface);
+        if matches!(surface, FaceSurface::Sphere(_)) {
+            for e in &mut result {
+                align_pcurve_to_ends(e);
+            }
+        }
     }
     result
+}
+
+/// Move a fitted pcurve onto its edge's ends: by whole turns of `u` where
+/// the walk along the boundary moved the ends a turn from the samples, and
+/// by the small gap between an edge's vertex and its curve. The trace reads
+/// an edge's way out of a vertex from its pcurve only where the two meet,
+/// and a chord across a long arc of a ball can point the wrong way.
+fn align_pcurve_to_ends(e: &mut OrientedPCurveEdge) {
+    use brepkit_math::curves2d::{Curve2D, NurbsCurve2D};
+    use brepkit_math::madd::Madd;
+    use std::f64::consts::TAU;
+    const NEAR: f64 = 1e-6;
+    let Curve2D::Nurbs(n) = &e.pcurve else {
+        return;
+    };
+    let (knots, degree) = (n.knots(), n.degree());
+    let count = n.control_points().len();
+    // Only a clamped curve starts and ends at its end control points.
+    let clamped = knots.len() == count + degree + 1
+        && knots[..=degree]
+            .iter()
+            .all(|&k| (k - knots[0]).abs() <= 1e-12)
+        && knots[knots.len() - 1 - degree..]
+            .iter()
+            .all(|&k| (k - knots[knots.len() - 1]).abs() <= 1e-12);
+    if !clamped || count < 2 {
+        return;
+    }
+    let (a, b) = (n.control_points()[0], n.control_points()[count - 1]);
+    let turns = |from: Point2, to: Point2| -> Option<f64> {
+        let k = ((to.x() - from.x()) / TAU).round();
+        ((TAU.madd(k, from.x()) - to.x()).abs() < NEAR && (from.y() - to.y()).abs() < NEAR)
+            .then_some(k)
+    };
+    let (k, first, last) = match (
+        turns(a, e.start_uv).zip(turns(b, e.end_uv)),
+        turns(b, e.start_uv).zip(turns(a, e.end_uv)),
+    ) {
+        (Some((k, l)), _) if (k - l).abs() < 0.5 => (k, e.start_uv, e.end_uv),
+        (_, Some((k, l))) if (k - l).abs() < 0.5 => (k, e.end_uv, e.start_uv),
+        _ => return,
+    };
+    let mut moved: Vec<Point2> = n
+        .control_points()
+        .iter()
+        .map(|p| Point2::new(TAU.madd(k, p.x()), p.y()))
+        .collect();
+    moved[0] = first;
+    moved[count - 1] = last;
+    if let Ok(curve) = NurbsCurve2D::new(degree, knots.to_vec(), moved, n.weights().to_vec()) {
+        e.pcurve = Curve2D::Nurbs(curve);
+    }
 }
 
 /// An open edge's image pieces in walk order from `from`, where the walk
