@@ -1551,6 +1551,602 @@ pub(super) fn tessellate_latitude_band_shared(
     Ok(true)
 }
 
+/// A sphere face bounded by three arcs (a fillet's setback corner, a
+/// sphere's octant), two of which the shared samples split into the same
+/// number `m` of segments, is meshed in rows from the corner between those
+/// two: row `s` runs from the `s`-th sample of one to the `s`-th of the
+/// other in `s` segments, or fewer where the row is shorter than `s` side
+/// segments, and the third side is the last row. A point
+/// between is the mean of the three points that lines along the three
+/// sides give it, read on the side samples, and pushed out onto the sphere.
+/// Two rows join in order along them, each step by the shorter of its two
+/// new edges. An edge inside the patch that turns by more than `SQRT_2`
+/// times `angular_tol` is then halved. The rims are the shared samples
+/// themselves, so the face closes with its neighbours.
+///
+/// Returns `Ok(false)` and leaves the mesh as it was, for the CDT to take
+/// the face, in these cases:
+/// - the face is not such a patch, or the wire does not run counterclockwise
+///   round the patch about the sphere's outward normal;
+/// - a chord turning by `SQRT_2` times `angular_tol` would stand off the
+///   sphere by more than `deflection`;
+/// - the patch reaches the hemisphere opposite its samples' mean direction;
+/// - a triangle faces into the sphere (a fold, which a side bending far
+///   into the patch gives), or stands off it by more than `deflection`.
+pub(super) fn tessellate_sphere_triangle_shared(
+    topo: &Topology,
+    face_data: &brepkit_topology::face::Face,
+    deflection: f64,
+    angular_tol: f64,
+    edge_global_indices: &DetHashMap<usize, Vec<u32>>,
+    merged: &mut TriangleMesh,
+    point_to_global: &mut DetHashMap<(i64, i64, i64), u32>,
+) -> Result<bool, crate::OperationsError> {
+    let FaceSurface::Sphere(sphere) = face_data.surface() else {
+        return Ok(false);
+    };
+    if !face_data.inner_wires().is_empty() {
+        return Ok(false);
+    }
+    let wire = topo.wire(face_data.outer_wire())?;
+    if wire.edges().len() != 3 {
+        return Ok(false);
+    }
+    let mut sides: Vec<Vec<u32>> = Vec::with_capacity(3);
+    for oe in wire.edges() {
+        let edge = topo.edge(oe.edge())?;
+        if !matches!(edge.curve(), EdgeCurve::Circle(_)) || edge.start() == edge.end() {
+            return Ok(false);
+        }
+        let Some(gids) = edge_global_indices.get(&oe.edge().index()) else {
+            return Ok(false);
+        };
+        if gids.len() < 2 {
+            return Ok(false);
+        }
+        let mut side = gids.clone();
+        if !oe.is_forward() {
+            side.reverse();
+        }
+        sides.push(side);
+    }
+    if (0..3).any(|k| sides[k].last() != sides[(k + 1) % 3].first()) {
+        return Ok(false);
+    }
+    // The corner whose two sides hold the same count of samples is the
+    // apex: the sides then run apex to `b`, `b` to `c`, and `c` back.
+    let Some(apex) = (0..3).find(|&k| sides[k].len() == sides[(k + 2) % 3].len()) else {
+        return Ok(false);
+    };
+    sides.rotate_left(apex);
+    let along_b = &sides[0];
+    let base = &sides[1];
+    let along_c: Vec<u32> = sides[2].iter().rev().copied().collect();
+    let m = along_b.len() - 1;
+
+    let (center, radius) = (sphere.center(), sphere.radius());
+    // An edge inside the patch may turn by as much as the diagonal of a
+    // grid cell whose sides turn by the angle tolerance, the bound the CDT's
+    // interior grid keeps. Where the deflection holds edges shorter than
+    // that, the rows' triangles would stand further off the sphere than
+    // their edges' chords, and the CDT takes the face.
+    let by_angle = if angular_tol > 0.0 {
+        angular_tol * std::f64::consts::SQRT_2
+    } else {
+        std::f64::consts::PI
+    };
+    let by_sag = 2.0 * (1.0 - (deflection / radius).min(1.0)).acos();
+    if by_sag < by_angle {
+        return Ok(false);
+    }
+    let point_of = |gid: u32| merged.positions[gid as usize];
+    let mut mean = Vec3::new(0.0, 0.0, 0.0);
+    for side in &sides {
+        for &gid in &side[1..] {
+            mean += point_of(gid) - center;
+        }
+    }
+    let Ok(axis) = mean.normalize() else {
+        return Ok(false);
+    };
+    if sides
+        .iter()
+        .flatten()
+        .any(|&gid| (point_of(gid) - center).dot(axis) <= 1e-9 * radius)
+    {
+        return Ok(false);
+    }
+    // The rows cover the patch that the arcs close within that hemisphere.
+    // The face lies on the left of its wire about the sphere's outward
+    // normal, whichever way the face itself faces: the patch is the face
+    // only when the wire turns counterclockwise about `axis`.
+    let rim: Vec<Point3> = sides
+        .iter()
+        .flat_map(|side| side[1..].iter().map(|&gid| point_of(gid) - center))
+        .map(|d| Point3::new(d.x(), d.y(), d.z()))
+        .collect();
+    let origin = Point3::new(0.0, 0.0, 0.0);
+    let turning: f64 = (0..rim.len())
+        .map(|k| {
+            (rim[k] - origin)
+                .cross(rim[(k + 1) % rim.len()] - origin)
+                .dot(axis)
+        })
+        .sum();
+    if turning <= 0.0 {
+        return Ok(false);
+    }
+
+    let b_points: Vec<Point3> = along_b.iter().map(|&gid| point_of(gid)).collect();
+    let c_points: Vec<Point3> = along_c.iter().map(|&gid| point_of(gid)).collect();
+    let base_points: Vec<Point3> = base.iter().map(|&gid| point_of(gid)).collect();
+    let lerp = |a: Point3, b: Point3, f: f64| a + (b - a) * f;
+    // A side's polyline at a fraction of its samples, `x` in `[0, 1]`.
+    let side_at = |points: &[Point3], x: f64| -> Point3 {
+        #[allow(clippy::cast_precision_loss)]
+        let at = x.clamp(0.0, 1.0) * (points.len() - 1) as f64;
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let k = (at.floor() as usize).min(points.len() - 2);
+        #[allow(clippy::cast_precision_loss)]
+        lerp(points[k], points[k + 1], at - k as f64)
+    };
+    let gap = |a: Point3, b: Point3| (a - b).length();
+    #[allow(clippy::cast_precision_loss)]
+    let mf = m as f64;
+
+    let pos_start = merged.positions.len();
+    let idx_start = merged.indices.len();
+    let ptg_start = point_to_global.len();
+    // Row `s` runs from the `s`-th sample towards `b` to the `s`-th towards
+    // `c` in up to `s` segments, at the barycentric level `s / m` from the
+    // apex.
+    let mut rows: Vec<Vec<u32>> = Vec::with_capacity(m + 1);
+    rows.push(vec![along_b[0]]);
+    for s in 1..m {
+        // A row that turns through less than `s` of the side segments
+        // beside it takes fewer segments, so a narrow patch takes triangles
+        // for its area and not for its sides' length. An octant's rows turn
+        // through at least `s` of them and keep `s`.
+        let turn = |p: Point3, q: Point3| {
+            let (u, v) = (p - center, q - center);
+            u.cross(v).length().atan2(u.dot(v))
+        };
+        let spacing = turn(b_points[s - 1], b_points[s]).max(turn(c_points[s - 1], c_points[s]));
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let count = if spacing > 0.0 {
+            ((turn(b_points[s], c_points[s]) / spacing).ceil() as usize).clamp(1, s)
+        } else {
+            s
+        };
+        let mut row = Vec::with_capacity(count + 1);
+        row.push(along_b[s]);
+        #[allow(clippy::cast_precision_loss)]
+        let (sf, cf) = (s as f64, count as f64);
+        for j in 1..count {
+            #[allow(clippy::cast_precision_loss)]
+            let f = j as f64 / cf;
+            // Barycentric weights of the apex, `b` and `c`.
+            let (beta, gamma) = (sf / mf * (1.0 - f), sf / mf * f);
+            let in_row = lerp(b_points[s], c_points[s], f);
+            let across_b = lerp(
+                side_at(&b_points, beta),
+                side_at(&base_points, 1.0 - beta),
+                gamma / (1.0 - beta),
+            );
+            let across_c = lerp(
+                side_at(&c_points, gamma),
+                side_at(&base_points, gamma),
+                beta / (1.0 - gamma),
+            );
+            let blend = Point3::new(
+                (in_row.x() + across_b.x() + across_c.x()) / 3.0,
+                (in_row.y() + across_b.y() + across_c.y()) / 3.0,
+                (in_row.z() + across_b.z() + across_c.z()) / 3.0,
+            );
+            let Ok(out) = (blend - center).normalize() else {
+                rollback(merged, point_to_global, pos_start, idx_start, ptg_start);
+                return Ok(false);
+            };
+            let point = center + out * radius;
+            let key = point_merge_key(point, MERGE_GRID);
+            let gid = *point_to_global.entry(key).or_insert_with(|| {
+                #[allow(clippy::cast_possible_truncation)]
+                let idx = merged.positions.len() as u32;
+                merged.positions.push(point);
+                merged.normals.push(out);
+                idx
+            });
+            row.push(gid);
+        }
+        row.push(along_c[s]);
+        rows.push(row);
+    }
+    rows.push(base.clone());
+    // Each pair of rows is joined in order along them: each triangle runs
+    // from one row to the next, and of the two that can come next, the one
+    // with the shorter new edge does.
+    for s in 0..m {
+        let (upper, lower) = (&rows[s], &rows[s + 1]);
+        let (mut i, mut l) = (0, 0);
+        while i + 1 < upper.len() || l + 1 < lower.len() {
+            let lower_next = l + 1 < lower.len()
+                && (i + 1 == upper.len()
+                    || gap(
+                        position_of(merged, upper[i]),
+                        position_of(merged, lower[l + 1]),
+                    ) <= gap(
+                        position_of(merged, lower[l]),
+                        position_of(merged, upper[i + 1]),
+                    ));
+            if lower_next {
+                merged
+                    .indices
+                    .extend_from_slice(&[upper[i], lower[l], lower[l + 1]]);
+                l += 1;
+            } else {
+                merged
+                    .indices
+                    .extend_from_slice(&[upper[i], lower[l], upper[i + 1]]);
+                i += 1;
+            }
+        }
+    }
+
+    // One winding for the whole patch, then every triangle must face out of
+    // the sphere and keep within the deflection of it.
+    let outward = |t: &[u32]| {
+        let [a, b, c] = [0, 1, 2].map(|k| merged.positions[t[k] as usize]);
+        let middle = Point3::new(
+            (a.x() + b.x() + c.x()) / 3.0,
+            (a.y() + b.y() + c.y()) / 3.0,
+            (a.z() + b.z() + c.z()) / 3.0,
+        );
+        let normal = (b - a).cross(c - a);
+        (normal.dot(middle - center), normal, a)
+    };
+    let facing: f64 = merged.indices[idx_start..]
+        .chunks_exact(3)
+        .map(|t| outward(t).0)
+        .sum();
+    if facing < 0.0 {
+        for t in merged.indices[idx_start..].chunks_exact_mut(3) {
+            t.swap(1, 2);
+        }
+    }
+    // An edge inside the patch longer than that bound is halved, and so are
+    // the two triangles on it.
+    let halved = halve_long_sphere_edges(
+        merged,
+        point_to_global,
+        idx_start,
+        (center, radius),
+        by_angle.cos(),
+    );
+    let outward = |t: &[u32]| {
+        let [a, b, c] = [0, 1, 2].map(|k| merged.positions[t[k] as usize]);
+        let middle = a + ((b - a) + (c - a)) * (1.0 / 3.0);
+        let normal = (b - a).cross(c - a);
+        (normal.dot(middle - center), normal, a)
+    };
+    let sound = halved
+        && merged.indices[idx_start..].chunks_exact(3).all(|t| {
+            let (facing, normal, corner) = outward(t);
+            let Ok(unit) = normal.normalize() else {
+                return false;
+            };
+            facing > 0.0 && radius - (corner - center).dot(unit).abs() <= deflection
+        });
+    if !sound {
+        rollback(merged, point_to_global, pos_start, idx_start, ptg_start);
+        return Ok(false);
+    }
+    Ok(true)
+}
+
+/// Halve each edge inside a patch of a sphere's mesh (from `idx_start` on)
+/// whose ends lie further apart than the angle whose cosine is `min_cos`,
+/// at its middle pushed out onto the sphere, longest first, with the two
+/// triangles on it. An edge of the patch's rim, held by one triangle, is
+/// never halved. Returns `false` when the halving runs past a bound.
+fn halve_long_sphere_edges(
+    merged: &mut TriangleMesh,
+    point_to_global: &mut DetHashMap<(i64, i64, i64), u32>,
+    idx_start: usize,
+    (center, radius): (Point3, f64),
+    min_cos: f64,
+) -> bool {
+    use brepkit_math::det_hash::{WordHashMap, WordState};
+
+    let key = |a: u32, b: u32| (a.min(b), a.max(b));
+    let cos_between = |merged: &TriangleMesh, a: u32, b: u32| {
+        let (p, q) = (
+            position_of(merged, a) - center,
+            position_of(merged, b) - center,
+        );
+        p.dot(q) / (p.length() * q.length())
+    };
+    let long_edge = |merged: &TriangleMesh, t: &[u32]| {
+        (0..3).any(|i| cos_between(merged, t[i], t[(i + 1) % 3]) < min_cos)
+    };
+    if !merged.indices[idx_start..]
+        .chunks_exact(3)
+        .any(|t| long_edge(merged, t))
+    {
+        return true;
+    }
+    let mut tris: Vec<[u32; 3]> = merged.indices[idx_start..]
+        .chunks_exact(3)
+        .map(|t| [t[0], t[1], t[2]])
+        .collect();
+    // The triangles on each edge: an edge of the rim has one, and an edge
+    // with a third is never halved.
+    let mut owners: WordHashMap<(u32, u32), Owners> =
+        WordHashMap::with_capacity_and_hasher(tris.len() * 2, WordState);
+    for (k, t) in tris.iter().enumerate() {
+        for i in 0..3 {
+            owners.entry(key(t[i], t[(i + 1) % 3])).or_default().add(k);
+        }
+    }
+    // Longest first: the heap orders by `1 - cos`, then by the ends.
+    let mut long: std::collections::BinaryHeap<(u64, u32, u32)> = owners
+        .iter()
+        .filter(|(_, held)| held.pair().is_some())
+        .filter_map(|(&(a, b), _)| {
+            let c = cos_between(merged, a, b);
+            (c < min_cos).then(|| ((1.0 - c).to_bits(), a, b))
+        })
+        .collect();
+    let bound = 4 * tris.len() + 64;
+    let mut halvings = 0;
+    while let Some((_, a, b)) = long.pop() {
+        let Some(held) = owners.get(&key(a, b)).and_then(Owners::pair) else {
+            continue;
+        };
+        owners.remove(&key(a, b));
+        halvings += 1;
+        if halvings > bound {
+            return false;
+        }
+        let (pa, pb) = (position_of(merged, a), position_of(merged, b));
+        let Ok(out) = (pa + (pb - pa) * 0.5 - center).normalize() else {
+            return false;
+        };
+        let point = center + out * radius;
+        let m = *point_to_global
+            .entry(point_merge_key(point, MERGE_GRID))
+            .or_insert_with(|| {
+                #[allow(clippy::cast_possible_truncation)]
+                let idx = merged.positions.len() as u32;
+                merged.positions.push(point);
+                merged.normals.push(out);
+                idx
+            });
+        let mut fresh = vec![key(a, m), key(m, b)];
+        for t in held {
+            // Turn the triangle to start at the edge's first end in its own
+            // winding: (p, q, x) with {p, q} = {a, b}.
+            let tri = tris[t];
+            let Some(at) = (0..3).find(|&i| key(tri[i], tri[(i + 1) % 3]) == key(a, b)) else {
+                return false;
+            };
+            let (p, q, x) = (tri[at], tri[(at + 1) % 3], tri[(at + 2) % 3]);
+            let n = tris.len();
+            tris[t] = [p, m, x];
+            tris.push([m, q, x]);
+            owners.entry(key(p, m)).or_default().add(t);
+            owners.entry(key(m, q)).or_default().add(n);
+            let middle = owners.entry(key(m, x)).or_default();
+            middle.add(t);
+            middle.add(n);
+            if let Some(held) = owners.get_mut(&key(q, x)) {
+                held.replace(t, n);
+            }
+            fresh.push(key(m, x));
+        }
+        for (u, v) in fresh {
+            let c = cos_between(merged, u, v);
+            if c < min_cos && owners.get(&(u, v)).and_then(Owners::pair).is_some() {
+                long.push(((1.0 - c).to_bits(), u, v));
+            }
+        }
+    }
+    merged.indices.truncate(idx_start);
+    for t in tris {
+        merged.indices.extend_from_slice(&t);
+    }
+    true
+}
+
+/// A cylinder face bounded by two arcs and two straight sides along the
+/// axis, each side holding only its two ends in the shared samples (a
+/// fillet's stripe between two plane faces), is meshed as one strip between
+/// the arcs: the arcs' samples join in order along them, each step by the
+/// shorter of its two new edges. The rims are the shared samples themselves,
+/// so the face closes with its neighbours.
+///
+/// Returns `Ok(false)` and leaves the mesh as it was when the face is not
+/// such a strip, when a triangle faces into the cylinder, or when a triangle
+/// spans more of the cylinder's turn than a chord may at `deflection` or
+/// than `SQRT_2` times `angular_tol`. The CDT takes the face then.
+pub(super) fn tessellate_cylinder_strip_shared(
+    topo: &Topology,
+    face_data: &brepkit_topology::face::Face,
+    deflection: f64,
+    angular_tol: f64,
+    edge_global_indices: &DetHashMap<usize, Vec<u32>>,
+    merged: &mut TriangleMesh,
+) -> Result<bool, crate::OperationsError> {
+    let FaceSurface::Cylinder(cylinder) = face_data.surface() else {
+        return Ok(false);
+    };
+    if !face_data.inner_wires().is_empty() {
+        return Ok(false);
+    }
+    let wire = topo.wire(face_data.outer_wire())?;
+    if wire.edges().len() != 4 {
+        return Ok(false);
+    }
+    let axis = cylinder.axis();
+    let mut sides: Vec<(bool, Vec<u32>)> = Vec::with_capacity(4);
+    for oe in wire.edges() {
+        let edge = topo.edge(oe.edge())?;
+        let Some(gids) = edge_global_indices.get(&oe.edge().index()) else {
+            return Ok(false);
+        };
+        let mut side = gids.clone();
+        if !oe.is_forward() {
+            side.reverse();
+        }
+        let arc = matches!(edge.curve(), EdgeCurve::Circle(_)) && edge.start() != edge.end();
+        if arc {
+            if side.len() < 2 {
+                return Ok(false);
+            }
+        } else {
+            if side.len() != 2 {
+                return Ok(false);
+            }
+            let chord = position_of(merged, side[1]) - position_of(merged, side[0]);
+            if chord.cross(axis).length() > 1e-9 * chord.length().max(1.0) {
+                return Ok(false);
+            }
+        }
+        sides.push((arc, side));
+    }
+    if (0..4).any(|k| sides[k].1.last() != sides[(k + 1) % 4].1.first()) {
+        return Ok(false);
+    }
+    let Some(first) =
+        (0..2).find(|&k| sides[k].0 && sides[k + 2].0 && !sides[k + 1].0 && !sides[(k + 3) % 4].0)
+    else {
+        return Ok(false);
+    };
+    sides.rotate_left(first);
+    let lower = &sides[0].1;
+    let upper: Vec<u32> = sides[2].1.iter().rev().copied().collect();
+
+    let idx_start = merged.indices.len();
+    // Across the axis only: the arcs' distance along it is the same for
+    // every pair, and on a long strip it would drown the difference.
+    let gap = |merged: &TriangleMesh, a: u32, b: u32| {
+        let d = position_of(merged, a) - position_of(merged, b);
+        (d - axis * d.dot(axis)).length()
+    };
+    let (mut i, mut l) = (0, 0);
+    while i + 1 < upper.len() || l + 1 < lower.len() {
+        let lower_next = l + 1 < lower.len()
+            && (i + 1 == upper.len()
+                || gap(merged, upper[i], lower[l + 1]) <= gap(merged, lower[l], upper[i + 1]));
+        if lower_next {
+            merged
+                .indices
+                .extend_from_slice(&[upper[i], lower[l], lower[l + 1]]);
+            l += 1;
+        } else {
+            merged
+                .indices
+                .extend_from_slice(&[upper[i], lower[l], upper[i + 1]]);
+            i += 1;
+        }
+    }
+
+    // One winding for the whole strip, then every triangle must face out of
+    // the cylinder, and the arc of the turn it spans must be no longer than
+    // a chord may span at the deflection, nor than `SQRT_2` times the angle
+    // tolerance.
+    let (origin, radius) = (cylinder.origin(), cylinder.radius());
+    let outward = |merged: &TriangleMesh, t: &[u32]| {
+        let [a, b, c] = [0, 1, 2].map(|k| position_of(merged, t[k]));
+        let middle = a + ((b - a) + (c - a)) * (1.0 / 3.0);
+        let off_axis = middle - origin;
+        let radial = off_axis - axis * off_axis.dot(axis);
+        (b - a).cross(c - a).dot(radial)
+    };
+    let facing: f64 = merged.indices[idx_start..]
+        .chunks_exact(3)
+        .map(|t| outward(merged, t))
+        .sum();
+    if facing < 0.0 {
+        for t in merged.indices[idx_start..].chunks_exact_mut(3) {
+            t.swap(1, 2);
+        }
+    }
+    let by_angle = if angular_tol > 0.0 {
+        angular_tol * std::f64::consts::SQRT_2
+    } else {
+        TAU
+    };
+    let reach = (2.0 * (1.0 - (deflection / radius).min(1.0)).acos()).min(by_angle);
+    let turn = |p: Point3| cylinder.project_point(p).0.rem_euclid(TAU);
+    let sound = merged.indices[idx_start..].chunks_exact(3).all(|t| {
+        let mut turns = [0, 1, 2].map(|k| turn(position_of(merged, t[k])));
+        turns.sort_by(f64::total_cmp);
+        // The shortest arc holding all three: the turn less its widest gap.
+        let widest = (turns[1] - turns[0])
+            .max(turns[2] - turns[1])
+            .max(TAU - (turns[2] - turns[0]));
+        outward(merged, t) > 0.0 && TAU - widest <= reach
+    });
+    if !sound {
+        merged.indices.truncate(idx_start);
+        return Ok(false);
+    }
+    Ok(true)
+}
+
+/// The triangles on one edge of a patch: up to two, and a mark for more.
+#[derive(Clone, Copy)]
+struct Owners([usize; 2], u8);
+
+impl Default for Owners {
+    fn default() -> Self {
+        Self([usize::MAX; 2], 0)
+    }
+}
+
+impl Owners {
+    fn add(&mut self, triangle: usize) {
+        if let Some(slot) = self.0.get_mut(usize::from(self.1)) {
+            *slot = triangle;
+        }
+        self.1 = self.1.saturating_add(1);
+    }
+
+    fn pair(&self) -> Option<[usize; 2]> {
+        (self.1 == 2).then_some(self.0)
+    }
+
+    fn replace(&mut self, old: usize, new: usize) {
+        for slot in &mut self.0 {
+            if *slot == old {
+                *slot = new;
+            }
+        }
+    }
+}
+
+fn position_of(merged: &TriangleMesh, gid: u32) -> Point3 {
+    merged.positions[gid as usize]
+}
+
+/// Take back what a structured mesher added from `pos_start`, `idx_start`
+/// and `ptg_start` on.
+fn rollback(
+    merged: &mut TriangleMesh,
+    point_to_global: &mut DetHashMap<(i64, i64, i64), u32>,
+    pos_start: usize,
+    idx_start: usize,
+    ptg_start: usize,
+) {
+    merged.positions.truncate(pos_start);
+    merged.normals.truncate(pos_start);
+    merged.indices.truncate(idx_start);
+    if point_to_global.len() > ptg_start {
+        #[allow(clippy::cast_possible_truncation)]
+        point_to_global.retain(|_, gid| (*gid as usize) < pos_start);
+    }
+}
+
 /// Make a contiguous run of triangles (added from `idx_start` onward) wind
 /// consistently outward. The run is already wound coherently (one orientation)
 /// by construction; this only decides whether that single orientation needs a
