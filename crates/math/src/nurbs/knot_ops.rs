@@ -6,6 +6,7 @@ use crate::MathError;
 use crate::nurbs::basis;
 use crate::nurbs::curve::NurbsCurve;
 use crate::nurbs::surface::NurbsSurface;
+use crate::nurbs::{cartesian_net, span_around};
 use crate::vec::Point3;
 
 /// Tolerance for knot-value and related parametric-space equality comparisons.
@@ -19,7 +20,9 @@ pub(crate) const KNOT_EPS: f64 = 1e-15;
 ///
 /// # Errors
 ///
-/// Returns an error if the resulting curve cannot be constructed.
+/// Returns [`MathError::PoleAtInfinity`] if a new control point is at
+/// infinity, as weights of mixed sign can blend to, or another error if the
+/// resulting curve cannot be constructed.
 pub fn curve_knot_insert(curve: &NurbsCurve, u: f64, r: usize) -> Result<NurbsCurve, MathError> {
     if r == 0 {
         return Ok(curve.clone());
@@ -92,19 +95,7 @@ pub fn curve_knot_insert(curve: &NurbsCurve, u: f64, r: usize) -> Result<NurbsCu
         current_knots = new_kv;
     }
 
-    // Convert back from homogeneous.
-    let new_cps: Vec<Point3> = current_qw
-        .iter()
-        .map(|h| {
-            if h[3] == 0.0 {
-                Point3::new(h[0], h[1], h[2])
-            } else {
-                Point3::new(h[0] / h[3], h[1] / h[3], h[2] / h[3])
-            }
-        })
-        .collect();
-    let new_ws: Vec<f64> = current_qw.iter().map(|h| h[3]).collect();
-
+    let (new_cps, new_ws) = cartesian_net(&current_qw, span_around(knots, u))?;
     NurbsCurve::new(p, current_knots, new_cps, new_ws)
 }
 
@@ -224,7 +215,8 @@ pub fn surface_knot_insert_v(
 ///
 /// Returns [`MathError::ConvergenceFailure`] when the knot cannot be removed
 /// within the requested tolerance (the curve geometry depends on that knot
-/// too strongly).
+/// too strongly), and [`MathError::PoleAtInfinity`] if a new control point
+/// is at infinity.
 /// Returns an error if the resulting curve cannot be constructed.
 #[allow(
     clippy::similar_names,
@@ -453,19 +445,7 @@ pub fn curve_knot_remove(
     // Build new knot vector.
     let new_knots = removed_knots;
 
-    // Convert back from homogeneous.
-    let new_cps: Vec<Point3> = new_pw
-        .iter()
-        .map(|h| {
-            if h[3] == 0.0 {
-                Point3::new(h[0], h[1], h[2])
-            } else {
-                Point3::new(h[0] / h[3], h[1] / h[3], h[2] / h[3])
-            }
-        })
-        .collect();
-    let new_ws: Vec<f64> = new_pw.iter().map(|h| h[3]).collect();
-
+    let (new_cps, new_ws) = cartesian_net(&new_pw, span_around(knots, u))?;
     NurbsCurve::new(p, new_knots, new_cps, new_ws)
 }
 
@@ -839,6 +819,44 @@ mod tests {
                     && (p1.y() - p2.y()).abs() < 1e-14
                     && (p1.z() - p2.z()).abs() < 1e-14,
                 "noop should preserve shape exactly at u={u}"
+            );
+        }
+    }
+
+    /// A rational quadratic whose weights change sign: a knot at 1 or 1.5
+    /// blends a new control point to a weight of zero over a numerator that
+    /// is not zero.
+    fn mixed_sign_quadratic() -> NurbsCurve {
+        NurbsCurve::new(
+            2,
+            vec![0.0, 0.0, 0.0, 1.0, 2.0, 2.0, 2.0],
+            vec![
+                Point3::new(0.0, 0.0, 0.0),
+                Point3::new(1.0, 1.0, 0.0),
+                Point3::new(2.0, 0.0, 0.0),
+                Point3::new(3.0, 1.0, 0.0),
+            ],
+            vec![1.0, 1.0, -1.0, 1.0],
+        )
+        .expect("valid")
+    }
+
+    #[test]
+    fn a_knot_that_puts_a_control_point_at_infinity_is_refused() {
+        let c = mixed_sign_quadratic();
+        let kept = curve_knot_insert(&c, 0.5, 1).expect("valid");
+        for i in 0..=40 {
+            let u = f64::from(i) / 20.0;
+            let off = (kept.evaluate(u) - c.evaluate(u)).length();
+            assert!(off < 1e-12, "at {u}: {off}");
+        }
+        for u in [1.0, 1.5] {
+            assert!(
+                matches!(
+                    curve_knot_insert(&c, u, 1),
+                    Err(MathError::PoleAtInfinity { .. })
+                ),
+                "a knot at {u}"
             );
         }
     }
