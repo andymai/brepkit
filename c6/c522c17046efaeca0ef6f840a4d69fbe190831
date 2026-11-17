@@ -1,0 +1,23 @@
+crates/operations/src/blend_surface.rs
+  s_489e8e320eebde::t_970125a3a4dbe5 62-63
+  s_489e8e320eebde::t_433098e8f66ad6 419-420
+  s_489e8e320eebde::t_9b00e4fcbfeefa 64-65,122-123,384-394,421-442
+crates/operations/tests/blend_surface.rs
+  s_489e8e320eebde::t_f6ecfc05033d8e 28,219-223,237-238,245-246,248,250
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c6c522c17046efaeca0ef6f840a4d69fbe190831",
+  "prompts": {},
+  "sessions": {
+    "s_489e8e320eebde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1a2a9261-2019-4199-aa4f-06130071c8f0",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
