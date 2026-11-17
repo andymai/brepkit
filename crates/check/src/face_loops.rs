@@ -2032,8 +2032,8 @@ mod tests {
         a_parabola_into_a_crawl_stays_within_its_chords_bound(5e-5);
     }
 
-    /// The crawl starts and ends at double knots, where the surface's
-    /// derivative jumps a thousandfold.
+    /// The crawl starts and ends at double knots, where `dx/du` jumps
+    /// between about 20 and 0.001.
     #[test]
     fn a_parabola_into_a_crawl_between_double_knots_stays_within_its_chords_bound() {
         a_parabola_into_a_crawl_stays_within_its_chords_bound(0.0);
