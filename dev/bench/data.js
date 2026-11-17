@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794920664659,
+  "lastUpdate": 1794920967133,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -74141,6 +74141,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 16554112,
             "range": "± 667522",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "382bf3e4ea05ae72b140a33ce3baa041e5eb9121",
+          "message": "fix(algo): fuse struts across a cylinder's seam and struts that start at one point exactly (#2597)\n\n## Summary\n\nTwo struts that enter one cylinder wall across its seam now fuse\nexactly. The `fuseAll` of the brepjs playground example\n`cube-truss-frame` now returns the exact frame. Before, the second strut\ngave edges that three faces use, and the truss fell back to a mesh.\nFixes #2519. Fixes #2521.\n\n**A second strut across a wall's seam** (#2519). The first fuse leaves a\nhole across the wall's seam. The wall's outer wire then runs round the\nhole on each copy of the seam. On the second fuse, the face splitter's\ngreedy trace found the three correct loops. The DCEL trace that\n`split_face_2d_impl` consults on a cylinder found a fourth loop: the\nreversed twins of the first hole's edges. That loop goes round the hole\nand winds like a region.\n\nThe splitter took the DCEL loops because there were more of them. It\nkept the fourth loop as a hole of the wall, so the first hole's edges\nwere in the outer wire and in a hole. The new\n`periodic_boundary_runs_ccw` reads which way the wall's boundary runs,\nfrom `-∮ v du` over its edges. The DCEL trace gets that sense as\n`rim_ccw` and drops each loop that runs a boundary edge the other way.\n\nThe function halves each edge's pieces, at most 14 times, until the\ntrapezoid over a piece agrees with the two over its halves. The sum of\ntheir differences is its error bound. Where the integral does not clear\ntwice that bound, or the boundary winds, it returns no sense. The DCEL\ntrace then keeps every loop, as it did before.\n\nThis was the fault in the truss. `fuse_cluster` first tries `fuse_n` on\nall 20 struts, rejects its invalid result, and fuses them one at a time.\nOn `main` the ninth of those fuses met this fault and fell back to a\nmesh.\n\n**A rim that touches a wall** (#2521). Two struts start at one point,\nand the rim of one strut's cap touches the other strut's wall at two\npoints. `edge_surface_crossings` read four touches near one point,\n0.000012 to 0.000024 apart. `trim_ellipse_to_boundary_crossings` made\nthree arcs between them. Their ends merged into one vertex, so each arc\nbecame a closed ellipse on the wall.\n\nTouches with the edge's distance to the surface under four tolerances\nbetween them are now one touch. A root exactly on a sample now counts as\na crossing when the signs a step to either side differ. So the two\ncrossings of a shallow pair stay two.\n\n`fuse_n` of all 20 struts is still invalid (#2592, #2593). Chord 1 fused\nwith struts 5 and 7, one at a time, still falls back (#2594). The\ntruss's one-at-a-time fuse is exact all the same.\n\n## Test\n\n- `crates/operations/tests/struts_across_a_seam.rs` builds the ring of\n#2519: two chords of radius 25 and two posts of radius 8. It uses four\nposes, with the chords turned 0, 90 and 180 degrees about their axes. It\nfuses them one at a time without the mesh fallback, and once more with\nthe last fuse on the raw engine. It checks validity, two faces on each\nedge, and the faces (4 cylinders, 4 planes). It also checks the volume\nagainst Simpson's rule within 1e-6, and the class of 15 points. On\n`main` the fuse needs the mesh fallback, and the raw engine gives 4\nedges on three faces.\n- `crates/io/tests/cube_truss_fuse_inmem.rs` loads the 20 operands that\nI captured from the brepjs call\n(`crates/io/tests/data/cube_truss_struts.bin`), as captured, turned and\nmirrored. `fuse_all` of all 20 gives 20 cylinders and 8 planes, valid,\nwithin 1e-6 of a line integral over the cylinders (3753031.512).\n`fuse_n` and the pairwise fuse of struts 4 and 6, which start at one\npoint, give the exact union. On `main` the truss fuse fails with\n`cluster fuse degraded to mesh fallback`, and `fuse_n` of struts 4 and 6\ngives 3 free edges and 2 edges on three faces.\n- `a_thin_band_between_tilted_rims_reads_its_sense` in\n`crates/algo/src/builder/face_splitter/mod.rs` reads the band `cos u <=\nv <= cos u + 1e-4` on a unit cylinder, with its two rims cut at\ndifferent angles. Its boundary runs counter-clockwise, and the same\nboundary reversed runs clockwise. With eight samples per edge, the sum\nread the band as clockwise.\n- `conic_edge_crossings_keep_a_shallow_pair` and\n`line_edge_crossings_keep_a_shallow_pair_on_samples` in\n`crates/algo/src/pave_filler/phase_ff.rs` cross a cylinder twice, 0.001\napart, with the edge under four tolerances inside the cylinder between\nthe crossings. In the second test each crossing is exactly on a sample.\nBoth tests find two crossings. Without the sign test, the second test\nfinds one.\n- `cargo nextest run` of `brepkit-algo`, `brepkit-io`,\n`brepkit-operations`, `brepkit-wasm`, `brepkit-check` and\n`brepkit-heal`: 3892 passed, 22 skipped. `cargo test -p brepkit-wasm\n--lib gridfinity`: 27 passed.\n- I ran the seeded random boolean sweep (seeds 1 to 4, 750 cases) and\ncompared it with `main` at 3c8d1104a. No case is worse. One case that\nfailed on `main` is good.\n- At 4c5a89db0, the pose sweep and the truth audit printed the same\noutput as `main` at cd1cfa015.",
+          "timestamp": "2026-11-17T13:05:40Z",
+          "tree_id": "c6e8391df2f07c0d8787d6450a1069e95781e9bc",
+          "url": "https://github.com/andymai/brepkit/commit/382bf3e4ea05ae72b140a33ce3baa041e5eb9121"
+        },
+        "date": 1794920959504,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1118833,
+            "range": "± 4612",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1167666,
+            "range": "± 2998",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13379,
+            "range": "± 26",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 711896,
+            "range": "± 3956",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25688390,
+            "range": "± 928457",
             "unit": "ns/iter"
           }
         ]
