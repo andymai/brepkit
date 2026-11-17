@@ -1,0 +1,19 @@
+crates/operations/src/blend_ops.rs
+  s_489e8e320eebde::t_64dcd90a710ef2 58-82,1040,1070,1103
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9728097e2587b52e526435b52250bdfc7f525043",
+  "prompts": {},
+  "sessions": {
+    "s_489e8e320eebde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1a2a9261-2019-4199-aa4f-06130071c8f0",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
