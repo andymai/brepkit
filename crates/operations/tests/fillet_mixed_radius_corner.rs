@@ -323,6 +323,85 @@ fn a_pocket_in_the_wall_under_the_crossing_is_refused() {
     );
 }
 
+/// A box sheared along `y` by `1 / sqrt(3)` of its height: its floor meets
+/// the wall along the `x` edge at 60 degrees, so the r = 8 round along that
+/// edge meets its wall 12 above the floor. A pocket in the wall `x = 0`
+/// 9 above the floor, a hundredth off the sheared wall, lies in the corner
+/// that round takes, and the build refuses it. A pocket 15 above the floor
+/// stays clear of the round.
+#[test]
+fn a_pocket_under_a_round_of_an_acute_corner_is_refused() {
+    let shift = 1.0 / 3.0_f64.sqrt();
+    let build = |low: f64| {
+        let mut topo = Topology::new();
+        let outline = [
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(20.0, 0.0, 0.0),
+            Point3::new(20.0, 20.0, 0.0),
+            Point3::new(0.0, 20.0, 0.0),
+        ];
+        let wire = make_polygon_wire(&mut topo, &outline, Tolerance::new().linear).unwrap();
+        let face = topo.add_face(Face::new(
+            wire,
+            vec![],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, -1.0),
+                d: 0.0,
+            },
+        ));
+        let solid = extrude(&mut topo, face, Vec3::new(0.0, shift, 1.0) * 20.0, 20.0).unwrap();
+        let pocket = make_box(&mut topo, 0.2, 0.03, 0.01).unwrap();
+        transform_solid(
+            &mut topo,
+            pocket,
+            &Mat4::translation(-0.1, low * shift + 0.01, low),
+        )
+        .unwrap();
+        let pocketed = brepkit_operations::boolean::boolean(
+            &mut topo,
+            brepkit_operations::boolean::BooleanOp::Cut,
+            solid,
+            pocket,
+        )
+        .unwrap();
+        let laws = vec![
+            (
+                edge_at(&topo, pocketed, outline[0], outline[1]),
+                RadiusLaw::Constant(8.0),
+            ),
+            (
+                edge_at(&topo, pocketed, outline[0], outline[3]),
+                RadiusLaw::Constant(2.0),
+            ),
+        ];
+        let result = fillet_v2_variable(&mut topo, pocketed, laws);
+        (topo, result)
+    };
+    match build(9.0).1 {
+        Err(brepkit_operations::OperationsError::Blend(
+            brepkit_blend::BlendError::PlanningFailure { reason },
+        )) => assert!(reason.contains("cross at vertex"), "{reason}"),
+        Err(other) => panic!("expected the crossing's refusal, got {other}"),
+        Ok(result) => panic!(
+            "a pocket under the crossing must be refused, got {} successes",
+            result.succeeded.len()
+        ),
+    }
+    let (topo, result) = build(15.0);
+    let result = result.unwrap();
+    assert!(
+        result.succeeded.len() == 2 && result.failed.is_empty() && !result.is_partial,
+        "{:?}",
+        result.failed
+    );
+    let report = validate_solid(&topo, result.solid).unwrap();
+    assert!(report.is_valid(), "{:?}", report.issues);
+    assert!(
+        is_watertight(&tessellate_solid(&topo, result.solid, 0.01).unwrap()),
+        "open mesh"
+    );
+}
+
 /// A wall that curves away from the corner holds no plane for the wider
 /// round to end on, and the build refuses the corner instead of returning
 /// rounds that cross through each other.

@@ -6876,22 +6876,21 @@ fn plan_junction_crossing(
         &b.surface,
     )?;
 
-    // A hole of `WB` or `F` must lie clear of the part the crossing takes:
-    // on `WB`, within `A`'s cylinder or past its reach from `F` or from
-    // `WA`; on `F`, past `A`'s reach from `WA` or `B`'s from `WB`.
-    let depth = |plane: Option<(Vec3, f64)>| {
-        move |p: Point3| plane.map_or(f64::NEG_INFINITY, |(normal, at)| at - normal.dot(to(p)))
+    // A hole of `WB` or `F` must lie clear of the part the crossing takes.
+    // Each round takes no more than the corner within its contacts' reach of
+    // its two faces (see `plan_stub_crossing`). So a hole is clear on `WB`
+    // within `A`'s cylinder, or as far from `F` as `s` or from `WA` as `A`'s
+    // contact on `F`; and on `F`, as far from `WA` as that contact or from
+    // `WB` as `B`'s contact on `F`.
+    let past = |plane: Option<(Vec3, f64)>, contact: Point3| {
+        let depth = move |p: Point3| plane.map(|(normal, at)| at - normal.dot(to(p)));
+        let reach = depth(contact);
+        move |p: Point3| matches!((depth(p), reach), (Some(d), Some(r)) if d >= r)
     };
-    let (from_f, from_wa) = (
-        depth(outward_plane_of(topo, f)),
-        depth(outward_plane_of(topo, wa)),
-    );
-    let from_wb = depth(Some((n, level)));
-    let rb = section_b.radius;
     let inside_a = |p: Point3| across(p).length() <= ra;
-    let past_a_from_f = |p: Point3| from_f(p) >= ra;
-    let past_a_from_wa = |p: Point3| from_wa(p) >= ra;
-    let past_b_from_wb = |p: Point3| from_wb(p) >= rb;
+    let past_a_from_f = past(outward_plane_of(topo, f), s);
+    let past_a_from_wa = past(outward_plane_of(topo, wa), af_end);
+    let past_b_from_wb = past(Some((n, level)), bf_end);
     let on_wb: [&dyn Fn(Point3) -> bool; 3] = [&inside_a, &past_a_from_f, &past_a_from_wa];
     let on_f: [&dyn Fn(Point3) -> bool; 2] = [&past_a_from_wa, &past_b_from_wb];
     if !holes_clear(topo, wb, &on_wb)? || !holes_clear(topo, f, &on_f)? {
