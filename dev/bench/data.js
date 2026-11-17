@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794884542688,
+  "lastUpdate": 1794884774726,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -72629,6 +72629,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 20483168,
             "range": "± 59207",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "66281732+Robokan@users.noreply.github.com",
+            "name": "Eric Vaughan",
+            "username": "Robokan"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "1fc2bdd04d75d384bebdac26c6c0372329d3d92e",
+          "message": "fix(heal): join straight edges a fuse leaves in pieces across the whole solid (#2562)\n\n## Summary\n\nFusing a block onto the end of a thinner one merges their coplanar side\nand bottom faces, but each long edge along those faces stays split where\nthe blocks met.\n\n`unify_same_domain` did try to join collinear edges, but one wire at a\ntime. Each merged face got its own copy of the joined edge, so the face\nacross the edge no longer shared it, the unpaired-edge check undid the\nmerge, and the pieces stayed. Picking such an edge then picked one\npiece, and an operation along the whole edge (a chamfer, say) failed.\n\nA new solid-level pass joins two line edges that:\n\n- meet at a vertex and run on in one direction;\n- are used by the same two planar faces.\n\nIt replaces the pair with one edge in every wire that uses it, so both\nfaces keep sharing it. The pass is reverted if the solid's unpaired\nedges would rise.\n\n## Test\n\n`crates/operations/tests/split_edges_join.rs` fuses boxes and checks the\nresult's face, edge and vertex counts and its volume:\n\n- an L-shaped step: 8 faces, 18 edges, 12 vertices. On `main` it has 20\nedges and 14 vertices (two side edges left in pieces), so this test\nfails there.\n- three boxes side by side making one plain box (6, 12, 8);\n- two bars crossing flush, where every vertex is a real corner and\nnothing must join (14, 36, 24).\n\n`cargo test -p brepkit-heal -p brepkit-algo -p brepkit-operations -p\nbrepkit-io` passes (`compound_cut_edge_tangent_tools_stays_analytic`\nfails in a full parallel run on Linux with or without this change, and\npasses alone). The pose sweep and truth audit are unchanged.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes straight edges left in pieces after a fuse, so edges along merged\ncoplanar faces are now joined across the whole solid instead of staying\nsplit where the blocks met. Previously the edge merge ran per wire,\ngiving each merged face its own copy of the joined edge; the face across\nthe edge no longer shared it, the unpaired-edge check undid the merge,\nand picking such an edge picked one piece, making a chamfer along it\nfail.\n\nA new solid-level pass now joins two line edges that meet at a vertex,\nrun on in one direction, and are used by the same two planar faces,\nreplacing the pair with one edge in every wire that uses it. The pass is\nreverted if the solid's unpaired edges would rise.\n\n**Tests**\n\n- Adds `crates/operations/tests/split_edges_join.rs` covering an\nL-shaped step, three side-by-side boxes, and a flush cross.\n- The L-shaped step now reports 8 faces, 18 edges, 12 vertices; on\n`main` it had 20 edges and 14 vertices, so the test fails there.\n\n<sup>Written for commit f322f4d309690cf6571196563f7d12aa4db19faf.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2562?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-11-16T18:59:08-08:00",
+          "tree_id": "17d49354c691e1c7547d733c9b08057a7dabc600",
+          "url": "https://github.com/andymai/brepkit/commit/1fc2bdd04d75d384bebdac26c6c0372329d3d92e"
+        },
+        "date": 1794884763971,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 911230,
+            "range": "± 5925",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 954492,
+            "range": "± 3094",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11278,
+            "range": "± 20",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 569927,
+            "range": "± 7834",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 20369657,
+            "range": "± 37963",
             "unit": "ns/iter"
           }
         ]
