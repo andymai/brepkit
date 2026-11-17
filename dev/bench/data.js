@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794910234622,
+  "lastUpdate": 1794910832337,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -73817,6 +73817,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25549579,
             "range": "± 141795",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "bf4209b96eb99cbcd17d3c938efaff3f32b1a455",
+          "message": "fix(blend): build two rounds that cross past a short edge (#2590)\n\n## Summary\n\n`fillet_v2_variable` rounds the seam-stub prism of\n`crates/operations/tests/regress_fillet_variable_retry_seam_stub.rs`\n(#2511). The round along `P1-P2` (r = 8) ends at `P2` on the plane `x =\n20`. That plane holds two faces: the stub face (y from 0 to 0.05) and\nthe face past it. The floor edge of the face past it, `P3-P4`, has its\nown round (r = 2).\n\nOn main, each round runs to the end of its own edge. A flat patch on `x\n= 20` closes the end of the r = 8 round. The patch lies on both wall\nfaces, so `validate_solid` reports two pairs of faces that cover the\nsame area. The two rounds also cross through each other. The outer wire\nof the floor crosses itself, and the solid measures 7482.580 where the\nrounded prism holds 7487.374.\n\nWith this change, the two rounds meet along a crease, and no patch\ncloses the end. `apply_stub_crossings` in `crates/blend/src/corner.rs`\nruns before the corner pass. It finds two ends of different rounds that\na straight edge left sharp joins. The section of one round on their\ncommon face must reach past that edge. Then it builds the crossing:\n\n- The crease is where the two cylinders meet, a cubic fitted on both by\n`fitted_crease`. It starts at `(18, 8, 0)`, where the contacts on the\nfloor cross. It ends at `(20, 2.708, 2)`, where the contact of the r = 2\nround on the wall meets the r = 8 round.\n- From there the r = 8 round ends on `x = 20` along its section. The\nsection splits where it crosses the edge between the two wall faces, at\n`(20, 0.05, 7.107)`, and each wall face loses its piece of the corner.\n- The floor loses the corner both rounds take. The stub, the start\nsection of the r = 2 round and the pieces of the two vertical edges\nbelow the round go.\n\n`edge_enters_cylinder` finds where an edge enters the r = 8 round. A\nstraight edge meets it where a quadratic says. Along a curved edge, the\nsearch passes over a stretch only where the speed bound of the edge\nkeeps it outside the round.\n\nTwo crossings can change one stub face, at its floor and at its top. A\nlater crossing reads the stub face as an earlier crossing left it, and\nthe builder takes the last copy.\n\nBefore it changes a face, the crossing reads the hull of each hole of\nthe stub face, the face past it and the floor. Where a hole does not lie\nwholly in the kept region, the build refuses the crossing.\n\nA round takes no more than the corner within its contacts' reach of its\ntwo faces, so the test reads that reach from the contacts. Where the\nfaces meet at less than a right angle, the reach is more than the\nradius. No hole may touch the new outline: each stays a weld's width\n(1e-5 for each unit of radius) clear of the part taken. On a triangular\nstub face, the end of the round goes in where its ends meet the two\nedges that stay. Where another round's end already notched the stub\nface, the copy takes over that round's registered edges. A piece of `E`\nthat a trim cut at the round's contact stays as it is.\n\nThe stub face can be a face of the input solid. The crossing changes a\ncopy of that face and makes new pieces of the two vertical edges, so the\ninput keeps its topology.\n\nWhere the faces past the stub cannot take the crossing, the build\nreturns `PlanningFailure` and makes no patch. In\n`curved_continuation_is_recognized_from_its_tangent`, the wall past the\nstub is a cylinder that leaves the plane `x = 20`.\n\nFixes #2511\n\n## Test plan\n\n- `rounds_that_cross_past_the_stub_keep_the_rounded_volume` (new) rounds\nthe prism upright, turned and mirrored. Each pose requires 10 faces (3\nof them cylinders), a valid solid, a watertight mesh at deflection 0.25\nand 4 points read inside or outside. The volume must be within 1e-6 of\nan oracle worked out apart from the B-Rep. The oracle is the prism less\nthe three rounds, plus the part both crossing rounds take. In each pose,\n`solid_volume` reads 7487.374205340 against 7487.374205351.\n- `a_tall_wall_takes_the_crossing_as_a_short_one` (new) rounds the prism\n4000 high, upright, turned and mirrored. The r = 8 round meets the edge\nbetween the wall faces at z = 7.107, and the edge leaves the round at z\n= 8.893. Each pose requires a valid solid, a watertight mesh, and the\nvolume the rounds take within 1e-5 of the oracle.\n- `crossings_at_both_ends_of_the_stub_wall` (new) rounds the floor edges\nand the top edges, so two crossings change the stub face. Each of three\nposes requires a valid solid, a watertight mesh, 3 points read inside or\noutside, and the volume within 1e-6 of the oracle.\n- `a_pocket_in_the_stub_face_below_the_round_is_refused` (new): a pocket\n0.1 deep in the stub face at z = 1 to 2 gets `PlanningFailure`. With the\npocket at z = 15 to 16, the crossing builds, and the volume is within\n1e-9 of the oracle less the pocket.\n- `a_pocket_that_touches_the_rounds_end_is_refused` (new): a pocket in\nthe face past the stub has its corner on the r = 8 round's end, at y =\n1.6 and z = 3.2. It gets `PlanningFailure`; without the clearance, the\ncrossing builds.\n- `a_pocket_under_a_round_of_an_acute_corner_is_refused` (new): a\nsheared prism, whose floor meets the wall along `P1-P2` at 60 degrees.\nThe r = 8 round meets that wall 12 above the floor. A pocket in the stub\nface 9 above the floor gets `PlanningFailure`. A pocket 15 above the\nfloor builds, valid and watertight. With the radius as the reach, the\nfirst pocket builds.\n- `a_triangular_stub_face_takes_the_crossing` (new): the edge between\nthe wall faces runs from `P3` to the top of the edge at `P2`. The mirror\nturns the wire of the stub face the other way. Upright, turned and\nmirrored, the result is valid and watertight, and the volume is within\n1e-9 of the oracle.\n- `a_stub_face_notched_by_another_round_takes_the_crossing` (new) adds a\nround of r = 0.03 along the top of `P1-P2`, whose end notches the stub\nface. In three poses the result is valid and watertight, and the volume\nis within 1e-9 of the oracle less that round. Without the rebinding of\nowners, the assembly audit fails.\n- `cylinder_entry_tests` (new, unit): an arc 400 long dips into a thin\ncylinder over 0.09 of its length, and another arc passes it.\n- `seam_stub_miter_runout_is_watertight` and\n`continuation_run_boundary_is_the_radius` are no longer ignored and pass\nwith the overlap check of #2459.\n- `curved_continuation_is_recognized_from_its_tangent` now requires that\n`PlanningFailure`. The admissibility check still takes the seam from the\ntangent of the arc, so the request does not get `RadiusTooLarge`.\n- With the blend code of main, 4 of the 7 tests in the file fail. They\nare the new test, the two tests no longer ignored, and the curved test.\n- `cargo nextest run -p brepkit-blend -p brepkit-operations` on the\nbranch with main merged: 2539 pass, 13 skip. `cargo nextest run -p\nbrepkit-wasm -p brepkit-io`: 827 pass, 6 skip.\n- `cargo clippy -p brepkit-blend -p brepkit-operations --all-targets --\n-D warnings` passes.\n\n## Not in this PR\n\n- #2587: two rounds of different radii that meet at one box corner cross\nthrough each other, and `validate_solid` reports no issue.\n- #2588: a round that ends across a short edge fails when no round\ncontinues past it.\n- #2589: the build refuses the round whose end runs past the stub on to\na curved wall.",
+          "timestamp": "2026-11-17T10:16:54Z",
+          "tree_id": "69230d07281c02eecee16d2f84cb021f7658c608",
+          "url": "https://github.com/andymai/brepkit/commit/bf4209b96eb99cbcd17d3c938efaff3f32b1a455"
+        },
+        "date": 1794910819993,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 816928,
+            "range": "± 22767",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 872053,
+            "range": "± 19806",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 9818,
+            "range": "± 17",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 522999,
+            "range": "± 5944",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 18737057,
+            "range": "± 68660",
             "unit": "ns/iter"
           }
         ]
