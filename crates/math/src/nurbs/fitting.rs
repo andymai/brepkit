@@ -66,9 +66,9 @@ pub fn interpolate(points: &[Point3], degree: usize) -> Result<NurbsCurve, MathE
 ///
 /// # Errors
 ///
-/// Returns an error if there are fewer than 2 points, the counts differ,
-/// the parameters do not rise strictly from 0 to 1, or the linear system
-/// is singular.
+/// Returns an error if there are fewer than 2 points, the counts differ, a
+/// parameter or a coordinate is not finite, the parameters do not rise
+/// strictly from 0 to 1, or the linear system is singular.
 pub fn interpolate_at(
     points: &[Point3],
     params: &[f64],
@@ -77,6 +77,25 @@ pub fn interpolate_at(
     let n = points.len();
     if n < 2 || params.len() != n {
         return Err(MathError::EmptyInput);
+    }
+    // A NaN fails every comparison below, so it would pass them all.
+    if let Some(&bad) = params.iter().find(|t| !t.is_finite()) {
+        return Err(MathError::ParameterOutOfRange {
+            value: bad,
+            min: 0.0,
+            max: 1.0,
+        });
+    }
+    if let Some(bad) = points
+        .iter()
+        .flat_map(|p| [p.x(), p.y(), p.z()])
+        .find(|c| !c.is_finite())
+    {
+        return Err(MathError::ParameterOutOfRange {
+            value: bad,
+            min: f64::MIN,
+            max: f64::MAX,
+        });
     }
     if let Some(&bad) = [params[0], params[n - 1] - 1.0]
         .iter()
@@ -1052,6 +1071,28 @@ mod tests {
         assert!(interpolate_at(&points, &[0.0, 1.0, 1.0], 2).is_err());
         assert!(interpolate_at(&points, &[0.0, 1.0], 2).is_err());
         assert!(interpolate_at(&points, &[0.0, 0.4, 1.0], 2).is_ok());
+    }
+
+    #[test]
+    fn interpolate_at_refuses_a_parameter_or_a_point_that_is_not_finite() {
+        let points = [
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(1.0, 0.0, 0.0),
+            Point3::new(2.0, 1.0, 0.0),
+        ];
+        for params in [
+            [f64::NAN, 0.5, 1.0],
+            [0.0, f64::NAN, 1.0],
+            [0.0, 0.5, f64::NAN],
+            [0.0, f64::INFINITY, 1.0],
+        ] {
+            assert!(interpolate_at(&points, &params, 2).is_err(), "{params:?}");
+        }
+        for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let mut off = points;
+            off[1] = Point3::new(1.0, bad, 0.0);
+            assert!(interpolate_at(&off, &[0.0, 0.5, 1.0], 2).is_err(), "{bad}");
+        }
     }
 
     #[test]
