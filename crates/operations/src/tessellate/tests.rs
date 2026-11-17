@@ -5863,3 +5863,37 @@ fn a_sphere_zone_bounded_by_three_arcs_meshes_on_its_own_side() {
         );
     }
 }
+
+/// A curve reads as one straight segment only when it is one: degree 1 with
+/// two control points. Control points along a line far longer than their
+/// offsets from it, as of a turn round a thin cylinder rising far, do not
+/// make a segment.
+#[test]
+fn only_a_one_segment_curve_reads_as_straight() {
+    use brepkit_math::nurbs::curve::NurbsCurve;
+
+    let p = Point3::new;
+    let segment = NurbsCurve::new(
+        1,
+        vec![0.0, 0.0, 1.0, 1.0],
+        vec![p(0.0, 0.0, 0.0), p(0.0, 0.0, 18.0)],
+        vec![1.0, 1.0],
+    )
+    .unwrap();
+    assert!(super::nurbs::runs_straight(&segment));
+    let r = 0.001;
+    let turn = NurbsCurve::new(
+        2,
+        vec![0.0, 0.0, 0.0, 0.5, 0.5, 1.0, 1.0, 1.0],
+        vec![
+            p(r, 0.0, 0.0),
+            p(r, r, 2.5e9),
+            p(-r, r, 5e9),
+            p(-r, -r, 7.5e9),
+            p(r, -r, 1e10),
+        ],
+        vec![1.0, 0.7, 1.0, 0.7, 1.0],
+    )
+    .unwrap();
+    assert!(!super::nurbs::runs_straight(&turn));
+}
