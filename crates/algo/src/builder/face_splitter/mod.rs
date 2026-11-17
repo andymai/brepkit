@@ -6440,54 +6440,14 @@ fn walk_boundary_from_closed_rim(edges: &mut [OrientedPCurveEdge]) -> bool {
 /// the old copy of the period reads as stale, and the walkers then take the
 /// edge's chord for its direction at each end.
 fn move_edge_in_uv(e: &mut OrientedPCurveEdge, du: f64, dv: f64) {
-    use brepkit_math::curves2d::{Circle2D, Curve2D, Ellipse2D, Line2D, NurbsCurve2D};
     use brepkit_math::vec::Vec2;
-    use std::f64::consts::{FRAC_PI_2, PI, TAU};
     if du == 0.0 && dv == 0.0 {
         return;
     }
     let by = Vec2::new(du, dv);
     e.start_uv = e.start_uv + by;
     e.end_uv = e.end_uv + by;
-    let moved = match &e.pcurve {
-        Curve2D::Line(line) => {
-            let origin = line.evaluate(0.0);
-            Line2D::new(origin + by, line.evaluate(1.0) - origin)
-                .ok()
-                .map(Curve2D::Line)
-        }
-        Curve2D::Circle(circle) => {
-            let centre = circle.evaluate(0.0) + (circle.evaluate(PI) - circle.evaluate(0.0)) * 0.5;
-            Circle2D::new(centre + by, circle.circumference() / TAU)
-                .ok()
-                .map(Curve2D::Circle)
-        }
-        Curve2D::Ellipse(ellipse) => {
-            let centre =
-                ellipse.evaluate(0.0) + (ellipse.evaluate(PI) - ellipse.evaluate(0.0)) * 0.5;
-            let (major, minor) = (
-                ellipse.evaluate(0.0) - centre,
-                ellipse.evaluate(FRAC_PI_2) - centre,
-            );
-            Ellipse2D::new(
-                centre + by,
-                major.length(),
-                minor.length(),
-                major.y().atan2(major.x()),
-            )
-            .ok()
-            .map(Curve2D::Ellipse)
-        }
-        Curve2D::Nurbs(nurbs) => NurbsCurve2D::new(
-            nurbs.degree(),
-            nurbs.knots().to_vec(),
-            nurbs.control_points().iter().map(|&p| p + by).collect(),
-            nurbs.weights().to_vec(),
-        )
-        .ok()
-        .map(Curve2D::Nurbs),
-    };
-    if let Some(pcurve) = moved {
+    if let Some(pcurve) = edge_splitting::shifted_pcurve(&e.pcurve, du, dv) {
         e.pcurve = pcurve;
     }
 }
