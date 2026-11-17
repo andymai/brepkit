@@ -6380,6 +6380,31 @@ fn point_on_oriented_edge(e: &OrientedPCurveEdge, p: Point3, band: f64) -> bool 
         (e.end_3d, e.start_3d)
     };
     let (t0, t1) = e.curve_3d.domain_with_endpoints(s3, e3);
+    // A spline is read by projection onto the part the edge runs on: fixed
+    // samples along its parameter can step over a short knot span (an
+    // imported polyline's spike) and miss a point on it.
+    if let EdgeCurve::NurbsCurve(whole) = &e.curve_3d {
+        use brepkit_math::nurbs::knot_ops::curve_split;
+        use brepkit_math::nurbs::projection::project_point_to_curve;
+        use brepkit_math::traits::ParametricCurve;
+        let (lo, hi) = (t0.min(t1), t0.max(t1));
+        let (d0, d1) = ParametricCurve::domain(whole);
+        let slack = 1e-9 * (d1 - d0);
+        let mut span = whole.clone();
+        if lo > d0 + slack {
+            let Ok((_, rest)) = curve_split(&span, lo) else {
+                return false;
+            };
+            span = rest;
+        }
+        if hi < d1 - slack {
+            let Ok((kept, _)) = curve_split(&span, hi) else {
+                return false;
+            };
+            span = kept;
+        }
+        return project_point_to_curve(&span, p, band * 1e-3).is_ok_and(|hit| hit.distance <= band);
+    }
     let at = |k: u32| {
         e.curve_3d.evaluate_with_endpoints(
             (t1 - t0).madd(f64::from(k) / f64::from(SAMPLES), t0),
@@ -12040,6 +12065,73 @@ mod tests {
             extents[1] >= 2.0 - 1.0e-6,
             "kept comb should reach the top rim v = 2"
         );
+    }
+
+    /// A hole edge that is a degree-1 spline with a spike in one short knot
+    /// span holds the spike's tip and its sides, where fixed samples along
+    /// the parameter step over the span.
+    #[test]
+    fn a_point_on_a_short_span_of_a_spline_hole_edge_is_on_it() {
+        use brepkit_math::curves2d::{Curve2D, Line2D};
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        use brepkit_math::vec::Vec2;
+        let spline = NurbsCurve::new(
+            1,
+            vec![0.0, 0.0, 0.503, 0.504, 0.505, 1.0, 1.0],
+            vec![
+                Point3::new(0.0, 0.0, 0.0),
+                Point3::new(0.503, 0.0, 0.0),
+                Point3::new(0.504, 0.1, 0.0),
+                Point3::new(0.505, 0.0, 0.0),
+                Point3::new(1.0, 0.0, 0.0),
+            ],
+            vec![1.0; 5],
+        )
+        .unwrap();
+        let edge = OrientedPCurveEdge {
+            curve_3d: EdgeCurve::NurbsCurve(spline),
+            pcurve: Curve2D::Line(Line2D::new(Point2::new(0.0, 0.0), Vec2::new(1.0, 0.0)).unwrap()),
+            start_uv: Point2::new(0.0, 0.0),
+            end_uv: Point2::new(1.0, 0.0),
+            start_3d: Point3::new(0.0, 0.0, 0.0),
+            end_3d: Point3::new(1.0, 0.0, 0.0),
+            forward: true,
+            source_edge_idx: None,
+            pave_block_id: None,
+        };
+        let band = 1e-5;
+        assert!(point_on_oriented_edge(
+            &edge,
+            Point3::new(0.504, 0.1, 0.0),
+            band
+        ));
+        assert!(point_on_oriented_edge(
+            &edge,
+            Point3::new(0.5035, 0.05, 0.0),
+            band
+        ));
+        assert!(point_on_oriented_edge(
+            &edge,
+            Point3::new(0.75, 0.0, 0.0),
+            band
+        ));
+        assert!(!point_on_oriented_edge(
+            &edge,
+            Point3::new(0.504, 0.2, 0.0),
+            band
+        ));
+        assert!(!point_on_oriented_edge(
+            &edge,
+            Point3::new(0.75, 0.01, 0.0),
+            band
+        ));
+        // An edge on the part before the spike holds none of it.
+        let mut first_part = edge;
+        first_part.end_3d = Point3::new(0.503, 0.0, 0.0);
+        let on_first = |p: Point3| point_on_oriented_edge(&first_part, p, band);
+        assert!(on_first(Point3::new(0.25, 0.0, 0.0)));
+        assert!(!on_first(Point3::new(0.504, 0.1, 0.0)));
+        assert!(!on_first(Point3::new(0.75, 0.0, 0.0)));
     }
 
     /// A woven hole's piece whose pcurve is a NURBS arc, moved a period along
