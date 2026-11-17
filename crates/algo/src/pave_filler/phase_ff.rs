@@ -8183,23 +8183,23 @@ fn emit_split_circle_arcs(
                 let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) else {
                     continue;
                 };
-                let (sp, ep) = (sv.point(), ev.point());
-                let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
-                // Sample along the curve, not just endpoints: a cylinder/cone
-                // lateral face's circular edges are closed (start == end at the
-                // seam vertex), so endpoint-only bounds collapse to a line at
-                // the seam and the face's radial extent is lost — which then
-                // wrongly rejects every in-face section-arc midpoint.
-                let n = 8;
-                for i in 0..=n {
-                    let frac = f64::from(i) / f64::from(n);
-                    let p = edge
-                        .curve()
-                        .evaluate_with_endpoints(t0 + (t1 - t0) * frac, sp, ep);
-                    min = Point3::new(min.x().min(p.x()), min.y().min(p.y()), min.z().min(p.z()));
-                    max = Point3::new(max.x().max(p.x()), max.y().max(p.y()), max.z().max(p.z()));
-                    any = true;
-                }
+                // Each edge's whole span: a cylinder's or cone's rim starts
+                // and ends at its seam vertex, so its endpoints alone shrink
+                // the box to the seam and every arc in the face reads outside.
+                // A conic edge is bounded exactly: samples miss its extremes
+                // by their chords' sag, which drops an arc just inside a rim.
+                let b = super::helpers::edge_span_box(edge.curve(), sv.point(), ev.point(), 8);
+                min = Point3::new(
+                    min.x().min(b.min.x()),
+                    min.y().min(b.min.y()),
+                    min.z().min(b.min.z()),
+                );
+                max = Point3::new(
+                    max.x().max(b.max.x()),
+                    max.y().max(b.max.y()),
+                    max.z().max(b.max.z()),
+                );
+                any = true;
             }
         }
         if !any {
