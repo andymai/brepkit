@@ -3,7 +3,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use std::f64::consts::FRAC_PI_2;
+use std::f64::consts::{FRAC_PI_2, FRAC_PI_4};
 
 use brepkit_io::stl::writer::StlFormat;
 use brepkit_io::stl::{import_mesh, import_mesh_parts, read_stl, write_stl};
@@ -1559,4 +1559,88 @@ fn two_cubes_that_touch_along_half_an_edge_within_the_tolerance_are_one_solid() 
         assert!((volume(&topo, joined) - 2000.0).abs() < 1e-6);
         assert_eq!(solid_pieces(&mut topo, joined).unwrap().len(), 2);
     }
+}
+
+/// The second cube is the first turned by 45 degrees round their shared
+/// edge on the z axis, so the two cross along it. In each pose and in each
+/// winding, the import reads them as two bodies that cross.
+#[test]
+fn two_cubes_that_cross_at_a_shared_edge_are_not_one_solid() {
+    let turn = Mat4::rotation_z(0.7) * Mat4::rotation_y(0.4) * Mat4::rotation_x(1.1);
+    let mirror = Mat4::scale(-1.0, 1.0, 1.0);
+    for inward in [false, true] {
+        for (name, pose, mirrored) in [
+            ("upright", Mat4::scale(1.0, 1.0, 1.0), false),
+            ("turned", turn, false),
+            ("mirrored", mirror, true),
+            ("turned and mirrored", mirror * turn, true),
+        ] {
+            let mut mesh = TriangleMesh::default();
+            add_turned_cube(&mut mesh, 0.0, 0.0, 10.0, inward);
+            add_turned_cube(&mut mesh, FRAC_PI_4, 0.0, 10.0, inward);
+            for p in &mut mesh.positions {
+                *p = pose.mul_point(*p);
+            }
+
+            let mut topo = Topology::new();
+            let err = import_mesh(&mut topo, &mesh, 1e-7).unwrap_err();
+            assert!(
+                err.to_string().contains("cross"),
+                "{name}, inward {inward}: {err}"
+            );
+            // A mirror winds each triangle the other way.
+            let expected = if inward == mirrored { (2, 0) } else { (0, 2) };
+            let mut topo = Topology::new();
+            let parts = import_mesh_parts(&mut topo, &mesh, 1e-7).unwrap();
+            assert_eq!(
+                (parts.solids.len(), parts.shells.len()),
+                expected,
+                "{name}, inward {inward}"
+            );
+            for &solid in &parts.solids {
+                assert!((volume(&topo, solid) - 1000.0).abs() < 1e-6, "{name}");
+                assert_valid(&topo, solid);
+            }
+            for &shell in &parts.shells {
+                assert_eq!(topo.shell(shell).unwrap().faces().len(), 12);
+            }
+        }
+    }
+}
+
+/// A flat sheet runs through the edge of a cube on the z axis, at 45 and
+/// 225 degrees round it, and past the cube at both ends of the edge. The
+/// sheet crosses the cube there, so the two do not join: the cube is a
+/// solid and the sheet a shell.
+#[test]
+fn a_sheet_through_the_edge_of_a_cube_leaves_the_cube_a_solid() {
+    let mut mesh = TriangleMesh::default();
+    add_cube(&mut mesh, [0.0; 3], 10.0, false);
+    let base = u32::try_from(mesh.positions.len()).unwrap();
+    mesh.positions.extend([
+        Point3::new(0.0, 0.0, 0.0),
+        Point3::new(0.0, 0.0, 10.0),
+        Point3::new(0.0, 0.0, -5.0),
+        Point3::new(0.0, 0.0, 15.0),
+        Point3::new(5.0, 5.0, 5.0),
+        Point3::new(-5.0, -5.0, 5.0),
+    ]);
+    let [o, z, low, high, a, b] = [0, 1, 2, 3, 4, 5].map(|i: u32| base + i);
+    for tri in [
+        [o, z, a],
+        [z, high, a],
+        [low, o, a],
+        [z, o, b],
+        [high, z, b],
+        [o, low, b],
+    ] {
+        mesh.indices.extend(tri);
+    }
+
+    let mut topo = Topology::new();
+    let parts = import_mesh_parts(&mut topo, &mesh, 1e-7).unwrap();
+    assert_eq!((parts.solids.len(), parts.shells.len()), (1, 1));
+    assert!((volume(&topo, parts.solids[0]) - 1000.0).abs() < 1e-9);
+    assert_valid(&topo, parts.solids[0]);
+    assert_eq!(topo.shell(parts.shells[0]).unwrap().faces().len(), 6);
 }
