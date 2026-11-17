@@ -689,6 +689,206 @@ fn rounds_that_cross_past_the_stub_keep_the_rounded_volume() {
     }
 }
 
+/// The three rounds of the seam prism, through the carried points.
+fn seam_laws(
+    topo: &Topology,
+    solid: SolidId,
+    [p1, p2, p3, p4, p5]: [Point3; 5],
+    carry: &dyn Fn(Point3) -> Point3,
+) -> Vec<(EdgeId, RadiusLaw)> {
+    vec![
+        (
+            edge_at(topo, solid, carry(p1), carry(p2)),
+            RadiusLaw::Constant(8.0),
+        ),
+        (
+            edge_at(topo, solid, carry(p5), carry(p1)),
+            RadiusLaw::Constant(8.0),
+        ),
+        (
+            edge_at(topo, solid, carry(p3), carry(p4)),
+            RadiusLaw::Constant(2.0),
+        ),
+    ]
+}
+
+/// A blind pocket in the stub face, `y` from 0.01 to 0.04 and `z` from
+/// `low` to `low + 1`, 0.1 deep.
+fn pocket_the_stub(topo: &mut Topology, solid: SolidId, low: f64) -> SolidId {
+    let pocket = brepkit_operations::primitives::make_box(topo, 0.2, 0.03, 1.0).unwrap();
+    transform_solid(topo, pocket, &Mat4::translation(19.9, 0.01, low)).unwrap();
+    brepkit_operations::boolean::boolean(
+        topo,
+        brepkit_operations::boolean::BooleanOp::Cut,
+        solid,
+        pocket,
+    )
+    .unwrap()
+}
+
+/// A pocket in the stub face below the `r1` round's end would lose the wall
+/// round it while its own walls stay: the build refuses it. A pocket high
+/// on the stub face stays clear of the round, and the crossing is built.
+#[test]
+fn a_pocket_in_the_stub_face_below_the_round_is_refused() {
+    let mut topo = Topology::new();
+    let (solid, points) = seam_stub_prism(&mut topo, 20.0);
+    let pocketed = pocket_the_stub(&mut topo, solid, 1.0);
+    let laws = seam_laws(&topo, pocketed, points, &|p| p);
+    match fillet_v2_variable(&mut topo, pocketed, laws) {
+        Err(brepkit_operations::OperationsError::Blend(
+            brepkit_blend::BlendError::PlanningFailure { reason },
+        )) => assert!(
+            reason.contains("runs past a short edge"),
+            "the pocket under the round's end must refuse the crossing, got {reason}"
+        ),
+        Err(other) => panic!("expected the crossing's refusal, got {other}"),
+        Ok(result) => panic!(
+            "a pocket under the round's end must be refused, got {} successes",
+            result.succeeded.len()
+        ),
+    }
+
+    let mut topo = Topology::new();
+    let (solid, points) = seam_stub_prism(&mut topo, 20.0);
+    let pocketed = pocket_the_stub(&mut topo, solid, 15.0);
+    let laws = seam_laws(&topo, pocketed, points, &|p| p);
+    let result = fillet_v2_variable(&mut topo, pocketed, laws).unwrap();
+    assert_genuinely_filleted(
+        &topo,
+        &result,
+        3,
+        &[8.0, 2.0],
+        0,
+        "pocket clear of the round",
+    );
+    let truth = 8000.0 - 0.1 * 0.03 * 1.0 - seam_prism_taken(8.0, 2.0);
+    let volume = solid_volume(&topo, result.solid, 0.001).unwrap();
+    assert!(
+        (volume - truth).abs() < 1e-9 * truth,
+        "volume {volume}, expected {truth}"
+    );
+}
+
+/// The seam prism with its stub face a triangle: the edge between the two
+/// wall faces runs from `P3` up to the top of the edge at `P2`.
+fn triangular_stub_prism(topo: &mut Topology) -> (SolidId, [Point3; 5]) {
+    let (solid, points) = seam_stub_prism(topo, 20.0);
+    let up = |p: Point3| Point3::new(p.x(), p.y(), 20.0);
+    let [_, p2, p3, p4, _] = points;
+    let top_stub = edge_at(topo, solid, up(p2), up(p3));
+    let top_on = edge_at(topo, solid, up(p3), up(p4));
+    let seam = edge_at(topo, solid, p3, up(p3));
+    let apex = {
+        let edge = topo.edge(top_stub).unwrap();
+        [edge.start(), edge.end()]
+            .into_iter()
+            .find(|&v| (topo.vertex(v).unwrap().point() - up(p2)).length() < 1e-9)
+            .unwrap()
+    };
+    let gone = {
+        let edge = topo.edge(seam).unwrap();
+        [edge.start(), edge.end()]
+            .into_iter()
+            .find(|&v| (topo.vertex(v).unwrap().point() - up(p3)).length() < 1e-9)
+            .unwrap()
+    };
+    for edge in [top_on, seam] {
+        let data = topo.edge_mut(edge).unwrap();
+        if data.start() == gone {
+            data.set_start(apex);
+        } else {
+            data.set_end(apex);
+        }
+    }
+    for face in solid_faces(topo, solid).unwrap() {
+        let wire = topo.face(face).unwrap().outer_wire();
+        let edges = topo.wire(wire).unwrap().edges().to_vec();
+        if edges.iter().any(|oe| oe.edge() == top_stub) {
+            let kept: Vec<OrientedEdge> = edges
+                .into_iter()
+                .filter(|oe| oe.edge() != top_stub)
+                .collect();
+            let wire = topo.add_wire(Wire::new(kept, true).unwrap());
+            topo.face_mut(face).unwrap().set_outer_wire(wire);
+        }
+    }
+    let report = brepkit_operations::validate::validate_solid(topo, solid).unwrap();
+    assert!(
+        report.is_valid(),
+        "the triangular stub prism: {:?}",
+        report.issues
+    );
+    (solid, points)
+}
+
+/// A stub face that is a triangle keeps two edges and the end of the round
+/// between them, whichever way its wire runs.
+#[test]
+fn a_triangular_stub_face_takes_the_crossing() {
+    for name in ["upright", "turned", "mirrored"] {
+        let mut topo = Topology::new();
+        let (solid, points) = triangular_stub_prism(&mut topo);
+        let turn =
+            Mat4::translation(3.0, -1.0, 2.0) * Mat4::rotation_z(0.4) * Mat4::rotation_x(0.6);
+        let solid = match name {
+            "turned" => {
+                transform_solid(&mut topo, solid, &turn).unwrap();
+                solid
+            }
+            "mirrored" => mirror(
+                &mut topo,
+                solid,
+                Point3::new(0.0, 0.0, 0.0),
+                Vec3::new(1.0, 0.0, 0.0),
+            )
+            .unwrap(),
+            _ => solid,
+        };
+        let carry = |p: Point3| match name {
+            "turned" => turn.mul_point(p),
+            "mirrored" => Point3::new(-p.x(), p.y(), p.z()),
+            _ => p,
+        };
+        let laws = seam_laws(&topo, solid, points, &carry);
+        let result = fillet_v2_variable(&mut topo, solid, laws).unwrap();
+        assert_genuinely_filleted(&topo, &result, 3, &[8.0, 2.0], 0, name);
+        let truth = seam_prism_volume(8.0, 2.0);
+        let volume = solid_volume(&topo, result.solid, 0.001).unwrap();
+        assert!(
+            (volume - truth).abs() < 1e-9 * truth,
+            "{name}: volume {volume}, expected {truth}"
+        );
+    }
+}
+
+/// A round of radius 0.03 along the top of the edge `P1-P2` ends within
+/// the stub face, which takes its notch before the crossing at the floor
+/// copies that face.
+#[test]
+fn a_stub_face_notched_by_another_round_takes_the_crossing() {
+    let small = 0.03;
+    for name in ["upright", "turned", "mirrored"] {
+        let mut topo = Topology::new();
+        let (solid, points, carry) = posed_seam_prism(&mut topo, 20.0, name);
+        let up = |p: Point3| carry(Point3::new(p.x(), p.y(), 20.0));
+        let mut laws = seam_laws(&topo, solid, points, &carry);
+        laws.push((
+            edge_at(&topo, solid, up(points[0]), up(points[1])),
+            RadiusLaw::Constant(small),
+        ));
+        let result = fillet_v2_variable(&mut topo, solid, laws).unwrap();
+        assert_genuinely_filleted(&topo, &result, 4, &[8.0, 2.0, small], 0, name);
+        let truth = seam_prism_volume(8.0, 2.0)
+            - small * small * (1.0 - std::f64::consts::FRAC_PI_4) * 20.0;
+        let volume = solid_volume(&topo, result.solid, 0.001).unwrap();
+        assert!(
+            (volume - truth).abs() < 1e-9 * truth,
+            "{name}: volume {volume}, expected {truth}"
+        );
+    }
+}
+
 /// The seam is recognized from the continuation contour's *tangent at the
 /// shared vertex*. This fixture's continuation leaves `P3` exactly along the
 /// stub's direction on a circle arc and then curves away, so its chord points

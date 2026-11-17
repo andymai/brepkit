@@ -5721,6 +5721,10 @@ struct StubCrossing {
     /// `E` and `E'`, as `W0` holds them, and their ends at `P` and `P'`.
     e: EdgeId,
     e_prime: EdgeId,
+    /// Whether a trim already cut `E` at `s`, and the piece of `E` that
+    /// runs on from `s` on `WA` and `W0` (`E` itself when it is whole).
+    split_at_s: bool,
+    e_up: EdgeId,
     v_p: VertexId,
     v_p_prime: VertexId,
     /// The edges each face loses between the edges it keeps.
@@ -5928,6 +5932,61 @@ fn outward_plane_of(topo: &Topology, face_id: FaceId) -> Option<(Vec3, f64)> {
     Some((*normal * (sign / length), d * sign / length))
 }
 
+/// Points whose hull holds `edge`'s curve: a line's two ends, the square
+/// about a circle or the rectangle about an ellipse in its plane, or a
+/// B-spline's control points. `None` for a B-spline with a weight that is
+/// not positive, whose control points need not hold it.
+fn edge_hull(topo: &Topology, edge_id: EdgeId) -> Option<Vec<Point3>> {
+    let edge = topo.edge(edge_id).ok()?;
+    let ends = [
+        topo.vertex(edge.start()).ok()?.point(),
+        topo.vertex(edge.end()).ok()?.point(),
+    ];
+    let around = |centre: Point3, u: Vec3, v: Vec3| {
+        [(1.0, 1.0), (1.0, -1.0), (-1.0, 1.0), (-1.0, -1.0)]
+            .map(|(a, b)| centre + u * a + v * b)
+            .to_vec()
+    };
+    match edge.curve() {
+        EdgeCurve::Line => Some(ends.to_vec()),
+        EdgeCurve::Circle(circle) => Some(around(
+            circle.center(),
+            circle.u_axis() * circle.radius(),
+            circle.v_axis() * circle.radius(),
+        )),
+        EdgeCurve::Ellipse(ellipse) => Some(around(
+            ellipse.center(),
+            ellipse.u_axis() * ellipse.semi_major(),
+            ellipse.v_axis() * ellipse.semi_minor(),
+        )),
+        EdgeCurve::NurbsCurve(curve) => curve
+            .weights()
+            .iter()
+            .all(|&w| w.is_finite() && w > 0.0)
+            .then(|| curve.control_points().to_vec()),
+    }
+}
+
+/// Whether each hole of `face` lies wholly where one of `clear` holds: the
+/// test holds at every point of the hull of the hole's edges, so at every
+/// point of the hole when the test holds on a convex set. `None` where a
+/// hole's hull cannot be read.
+fn holes_clear(topo: &Topology, face: FaceId, clear: &[&dyn Fn(Point3) -> bool]) -> Option<bool> {
+    for &wire_id in topo.face(face).ok()?.inner_wires() {
+        let mut hull = Vec::new();
+        for oe in topo.wire(wire_id).ok()?.edges() {
+            hull.extend(edge_hull(topo, oe.edge())?);
+        }
+        if !clear
+            .iter()
+            .any(|test| hull.iter().all(|&point| test(point)))
+        {
+            return Some(false);
+        }
+    }
+    Some(true)
+}
+
 /// Work out the crossing of two rounds across a stub (see [`StubCrossing`]):
 /// `A` ends at `ja`, `B` at `jb`.
 #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
@@ -6063,12 +6122,25 @@ fn plan_stub_crossing(
     let (stub, v_p, v_p_prime) = wire_edge_between(topo, w0, p, p_prime, tol)?;
     let e = wire_neighbour_at(topo, w0, stub, v_p)?;
     let e_prime = wire_neighbour_at(topo, w0, stub, v_p_prime)?;
-    if ![e, e_prime].iter().all(|&edge| {
+    // `E` runs whole from `P`, on `WA` and `W0` both, or a trim already cut
+    // it at `s`: its piece below `s` is then on `W0` alone, and the piece
+    // above runs on from `s` on both.
+    let split_at_s = {
+        let edge = topo.edge(e).ok()?;
+        edge.start() == v_s || edge.end() == v_s
+    };
+    let e_up = if split_at_s {
+        wire_neighbour_at(topo, w0, e, v_s)?
+    } else {
+        e
+    };
+    if ![e, e_up, e_prime].iter().all(|&edge| {
         topo.edge(edge)
             .is_ok_and(|e| matches!(e.curve(), EdgeCurve::Line))
-    }) || !in_outer_wire(topo, wa, e)
+    }) || !in_outer_wire(topo, wa, e_up)
         || !in_outer_wire(topo, w1, e_prime)
-        || !edge_passes(topo, e, s, tol)
+        || !edge_passes(topo, e_up, s, tol)
+        || (split_at_s && in_outer_wire(topo, wa, e))
     {
         return None;
     }
@@ -6111,8 +6183,45 @@ fn plan_stub_crossing(
     )?;
 
     let f_run = wire_run_between(topo, f, (b_f_contact, v_bf), (a_f_contact, v_af))?;
-    let wa_run = wire_run_between(topo, wa, (a_w_contact, v_s), (e, v_p))?;
-    let w0_run = wire_run_between(topo, w0, (e, v_p), (e_prime, v_p_prime))?;
+    // A hole of a face that loses part of its region must lie clear of that
+    // part: on the end plane, within `A`'s cylinder or past its reach from
+    // `F` or from `WA`; on `F`, past `A`'s reach from `WA` or `B`'s from
+    // `W1`. Each test holds on a convex set, a cylinder or a half-space.
+    let depth = |plane: Option<(Vec3, f64)>| {
+        move |p: Point3| plane.map_or(f64::NEG_INFINITY, |(normal, at)| at - normal.dot(to(p)))
+    };
+    let (from_f, from_wa) = (
+        depth(outward_plane_of(topo, f)),
+        depth(outward_plane_of(topo, wa)),
+    );
+    let from_w1 = depth(Some((n, level)));
+    let rb = section_b.radius;
+    let inside_a = |p: Point3| {
+        let w = p - cylinder.origin();
+        (w - axis * w.dot(axis)).length() <= ra
+    };
+    let past_a_from_f = |p: Point3| from_f(p) >= ra;
+    let past_a_from_wa = |p: Point3| from_wa(p) >= ra;
+    let past_b_from_w1 = |p: Point3| from_w1(p) >= rb;
+    let on_end_plane: [&dyn Fn(Point3) -> bool; 3] = [&inside_a, &past_a_from_f, &past_a_from_wa];
+    let on_f: [&dyn Fn(Point3) -> bool; 2] = [&past_a_from_wa, &past_b_from_w1];
+    if !holes_clear(topo, w0, &on_end_plane)?
+        || !holes_clear(topo, w1, &on_end_plane)?
+        || !holes_clear(topo, f, &on_f)?
+    {
+        return None;
+    }
+    let (wa_run, w0_run) = if split_at_s {
+        (
+            wire_run_between(topo, wa, (a_w_contact, v_s), (e_up, v_s))?,
+            wire_run_between(topo, w0, (e_up, v_s), (e_prime, v_p_prime))?,
+        )
+    } else {
+        (
+            wire_run_between(topo, wa, (a_w_contact, v_s), (e, v_p))?,
+            wire_run_between(topo, w0, (e, v_p), (e_prime, v_p_prime))?,
+        )
+    };
     let w1_run = wire_run_between(topo, w1, (b_w_contact, v_bw), (e_prime, v_p_prime))?;
     Some(StubCrossing {
         a_face,
@@ -6134,6 +6243,8 @@ fn plan_stub_crossing(
         v_bw,
         e,
         e_prime,
+        split_at_s,
+        e_up,
         v_p,
         v_p_prime,
         f_run,
@@ -6194,7 +6305,9 @@ fn end_reaches_past_stub(
 
 /// Put `new` into `face`'s outer wire where `before` and `after` meet,
 /// once the edges between them are gone: it runs from the end of whichever
-/// of the two comes first to the start of the other.
+/// of the two comes first to the start of the other. On a wire of those two
+/// edges alone each comes first once round the loop; the order whose ends
+/// `new` joins is the one it fills.
 fn insert_between(
     topo: &mut Topology,
     face: FaceId,
@@ -6212,22 +6325,27 @@ fn insert_between(
         .iter()
         .position(|oe| oe.edge() == after)
         .ok_or_else(fail)?;
-    let (first, at) = if (i + 1) % count == j {
-        (i, j)
-    } else if (j + 1) % count == i {
-        (j, i)
-    } else {
-        return Err(fail());
+    let (new_start, new_end) = {
+        let edge = topo.edge(new)?;
+        (edge.start(), edge.end())
     };
-    let from = edges[first].oriented_end(topo.edge(edges[first].edge())?);
-    let new_edge = topo.edge(new)?;
-    let forward = if new_edge.start() == from {
-        true
-    } else if new_edge.end() == from {
-        false
-    } else {
-        return Err(fail());
-    };
+    let mut fit = None;
+    for (first, second) in [(i, j), (j, i)] {
+        if (first + 1) % count != second {
+            continue;
+        }
+        let from = edges[first].oriented_end(topo.edge(edges[first].edge())?);
+        let to = edges[second].oriented_start(topo.edge(edges[second].edge())?);
+        if new_start == from && new_end == to {
+            fit = Some((second, true));
+        } else if new_end == from && new_start == to {
+            fit = Some((second, false));
+        }
+        if fit.is_some() {
+            break;
+        }
+    }
+    let (at, forward) = fit.ok_or_else(fail)?;
     let mut out = edges;
     out.insert(at, OrientedEdge::new(new, forward));
     let wire = topo.add_wire(Wire::new(out, true)?);
@@ -6296,7 +6414,11 @@ fn apply_stub_crossing(
         };
         Ok::<_, BlendError>(topo.add_edge(Edge::new(start, end, EdgeCurve::Line)))
     };
-    let e_new = piece(topo, plan.e, plan.v_p, plan.v_s)?;
+    let e_new = if plan.split_at_s {
+        plan.e_up
+    } else {
+        piece(topo, plan.e, plan.v_p, plan.v_s)?
+    };
     let e_prime_new = piece(topo, plan.e_prime, plan.v_p_prime, vt)?;
     let crease = topo.add_edge(Edge::new(vq, vr, plan.crease.clone()));
     // The pieces of `A`'s section run as its edge does, so each stays the
@@ -6330,7 +6452,9 @@ fn apply_stub_crossing(
     )?;
     drop_from_outer_wire(topo, plan.f, &plan.f_run)?;
     drop_from_outer_wire(topo, plan.wa, &plan.wa_run)?;
-    replace_in_outer_wire(topo, plan.wa, plan.e, &[(e_new, true)])?;
+    if !plan.split_at_s {
+        replace_in_outer_wire(topo, plan.wa, plan.e, &[(e_new, true)])?;
+    }
     let w0 = {
         let face = topo.face(plan.w0)?;
         let (outer, inner, surface) = (
@@ -6345,8 +6469,13 @@ fn apply_stub_crossing(
         };
         topo.add_face(copy)
     };
+    // Edges the stub face shares with another round's end keep their
+    // registered owner on the face that now stands for it.
+    registry.rebind_owner_face(plan.w0, w0);
     drop_from_outer_wire(topo, w0, &plan.w0_run)?;
-    replace_in_outer_wire(topo, w0, plan.e, &[(e_new, true)])?;
+    if !plan.split_at_s {
+        replace_in_outer_wire(topo, w0, plan.e, &[(e_new, true)])?;
+    }
     replace_in_outer_wire(topo, w0, plan.e_prime, &[(e_prime_new, true)])?;
     insert_between(topo, w0, (e_new, e_prime_new), on_w0)?;
     drop_from_outer_wire(topo, plan.w1, &plan.w1_run)?;
