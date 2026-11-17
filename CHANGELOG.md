@@ -1,5 +1,27 @@
 # Changelog
 
+## [4.11.31](https://github.com/andymai/brepkit/compare/v4.11.30...v4.11.31) (2026-11-17)
+
+
+### Bug Fixes
+
+* **algo:** end a box wall's torus loop at the torus face's rims ([#2584](https://github.com/andymai/brepkit/issues/2584)) ([c46825f](https://github.com/andymai/brepkit/commit/c46825f3c9e8a0893f57dfcc609a4b021da319a5))
+* **algo:** fuse a funnel's torus lip and a cup's lug exactly ([#2601](https://github.com/andymai/brepkit/issues/2601)) ([b8c67be](https://github.com/andymai/brepkit/commit/b8c67be755a59fb9c0c54643677f4f6d32a1e8ed))
+* **algo:** fuse struts across a cylinder's seam and struts that start at one point exactly ([#2597](https://github.com/andymai/brepkit/issues/2597)) ([382bf3e](https://github.com/andymai/brepkit/commit/382bf3e4ea05ae72b140a33ce3baa041e5eb9121))
+* **algo:** fuse two rods at one ball and a second ball across a flat ring exactly ([#2583](https://github.com/andymai/brepkit/issues/2583)) ([b3188d0](https://github.com/andymai/brepkit/commit/b3188d0d86b5da8219747b71df127c7aa24baa01))
+* **algo:** keep the cylinder classifier off a solid with a cone ([#2614](https://github.com/andymai/brepkit/issues/2614)) ([eeb097a](https://github.com/andymai/brepkit/commit/eeb097a3c14d41b5031fd68e992224ee00864a17))
+* **blend:** build two rounds of different radii that cross at a corner ([#2611](https://github.com/andymai/brepkit/issues/2611)) ([3a1535d](https://github.com/andymai/brepkit/commit/3a1535d5359b52bc6c466b7b8cbf81cf696bc042))
+* **blend:** build two rounds that cross past a short edge ([#2590](https://github.com/andymai/brepkit/issues/2590)) ([bf4209b](https://github.com/andymai/brepkit/commit/bf4209b96eb99cbcd17d3c938efaff3f32b1a455))
+* **check:** bound a B-spline drawing's stretch over each chord ([#2606](https://github.com/andymai/brepkit/issues/2606)) ([6b6fe1d](https://github.com/andymai/brepkit/commit/6b6fe1d8bfeb05e2e5436ea9fd6b9fe05a231e51))
+* **io:** pair each surface with itself where two cross at an edge ([#2602](https://github.com/andymai/brepkit/issues/2602)) ([9506f9d](https://github.com/andymai/brepkit/commit/9506f9d2b47ba7e393eaeb4648eac8592318eafe)), closes [#2576](https://github.com/andymai/brepkit/issues/2576)
+* **math,algo:** keep a solid that notches a cone's base rim exact at every angle ([#2586](https://github.com/andymai/brepkit/issues/2586)) ([c552087](https://github.com/andymai/brepkit/commit/c552087388016fa61776a67a8d0caeede66dcf8a))
+
+
+### Performance
+
+* **measure:** integrate a solid's faces on all cores ([#2612](https://github.com/andymai/brepkit/issues/2612)) ([cbbceaf](https://github.com/andymai/brepkit/commit/cbbceaf0f571cd8be230d5ab5735b4a0bcc18e20))
+* **tessellate:** mesh fillet corners and stripes as structured patches ([#2625](https://github.com/andymai/brepkit/issues/2625)) ([54db542](https://github.com/andymai/brepkit/commit/54db542fafd0e678f95d253b8f37855c4f020f8c)), closes [#2515](https://github.com/andymai/brepkit/issues/2515)
+
 ## [4.11.30](https://github.com/andymai/brepkit/compare/v4.11.29...v4.11.30) (2026-11-17)
 
 
