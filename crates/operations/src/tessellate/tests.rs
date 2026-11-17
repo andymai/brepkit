@@ -5247,3 +5247,57 @@ fn a_flat_spline_face_in_a_skewed_parameter_space_meshes_whole() {
         }
     }
 }
+
+/// Two unit squares side by side in z = 0, each the only user of its own
+/// edges, the second's left side 6e-8 to the right of the first's right
+/// side: the sides' samples round to different cells of the merge grid, so
+/// the two faces meet across a crack the size of the gap. The weld closes
+/// that crack, a join between two faces, and leaves each square's own rim
+/// as it is.
+#[test]
+fn a_join_held_by_two_edges_is_welded_across_the_merge_grid() {
+    use brepkit_topology::shell::Shell;
+    use brepkit_topology::solid::Solid;
+
+    let p = Point3::new;
+    let mut topo = Topology::new();
+    let mut square = |corners: [Point3; 4]| {
+        let v = corners.map(|q| topo.add_vertex(Vertex::new(q, 1e-7)));
+        let edges = (0..4)
+            .map(|k| {
+                let edge = Edge::new(v[k], v[(k + 1) % 4], EdgeCurve::Line);
+                OrientedEdge::new(topo.add_edge(edge), true)
+            })
+            .collect();
+        let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+        topo.add_face(Face::new(
+            wire,
+            vec![],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: 0.0,
+            },
+        ))
+    };
+    let x = 1.0 + 6e-8;
+    let left = square([
+        p(0.0, 0.0, 0.0),
+        p(1.0, 0.0, 0.0),
+        p(1.0, 1.0, 0.0),
+        p(0.0, 1.0, 0.0),
+    ]);
+    let right = square([
+        p(x, 0.0, 0.0),
+        p(2.0, 0.0, 0.0),
+        p(2.0, 1.0, 0.0),
+        p(x, 1.0, 0.0),
+    ]);
+    let shell = topo.add_shell(Shell::new(vec![left, right]).unwrap());
+    let solid = topo.add_solid(Solid::new(shell, vec![]));
+    for deflection in [0.5, 0.1] {
+        let mesh = tessellate_solid(&topo, solid, deflection).unwrap();
+        assert_eq!(mesh.indices.len(), 12, "deflection {deflection}");
+        assert_eq!(boundary_edge_count(&mesh), 6, "deflection {deflection}");
+        assert_eq!(non_manifold_edge_count(&mesh), 0, "deflection {deflection}");
+    }
+}

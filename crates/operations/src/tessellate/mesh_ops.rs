@@ -479,13 +479,17 @@ pub fn drawn_edge_samples(
     Ok(out)
 }
 
+/// The `rim_face` of a vertex that lies on no face's free rim alone.
+pub(super) const NO_RIM_FACE: u32 = u32::MAX;
+
 /// Weld remaining boundary vertices by merging coincident positions.
 ///
 /// Uses union-find over a spatial hash grid to merge boundary vertices that
 /// are within `weld_tol` of each other. Rewrites triangle indices and removes
 /// degenerate triangles (where merged indices create duplicate vertices).
-/// A vertex marked in `fixed` takes no part in the weld, and a vertex past
-/// the end of `fixed` is not marked.
+/// Two vertices on the free rim of one face never weld: `rim_face` gives the
+/// face of each vertex that lies only on that face's free rim, and
+/// [`NO_RIM_FACE`] (or a vertex past its end) for any other vertex.
 /// `tri_faces` is the parallel tri -> face attribution array; entries for
 /// removed degenerate triangles are filtered alongside. Returns whether any
 /// directed edge was used twice before the weld: two faces bridging the same
@@ -493,7 +497,7 @@ pub fn drawn_edge_samples(
 pub(super) fn weld_boundary_vertices(
     mesh: &mut TriangleMesh,
     deflection: f64,
-    fixed: &[bool],
+    rim_face: &[u32],
     tri_faces: Option<&mut Vec<u32>>,
 ) -> bool {
     let n_verts = mesh.positions.len();
@@ -521,7 +525,6 @@ pub(super) fn weld_boundary_vertices(
             boundary_set.insert(b);
         }
     }
-    boundary_set.retain(|&v| !fixed.get(v as usize).copied().unwrap_or(false));
 
     if boundary_set.is_empty() {
         return repeated;
@@ -553,6 +556,10 @@ pub(super) fn weld_boundary_vertices(
     }
 
     let mut parent: Vec<u32> = (0..n_verts as u32).collect();
+    let on_one_rim = |a: u32, b: u32| {
+        let face = rim_face.get(a as usize).copied().unwrap_or(NO_RIM_FACE);
+        face != NO_RIM_FACE && rim_face.get(b as usize) == Some(&face)
+    };
 
     let weld_tol = deflection.max(1e-6) * 2.0;
     let inv_cell = 1.0 / weld_tol;
@@ -585,7 +592,7 @@ pub(super) fn weld_boundary_vertices(
                                 continue;
                             }
                             let q = mesh.positions[other as usize];
-                            if (p - q).length() < weld_tol {
+                            if (p - q).length() < weld_tol && !on_one_rim(vid, other) {
                                 uf_union(&mut parent, vid, other);
                             }
                         }
