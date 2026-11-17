@@ -359,11 +359,6 @@ fn unify_faces(
     ))
 }
 
-/// Count edges of `faces` that are NOT shared by exactly two of them.
-///
-/// A closed manifold shell pairs every edge exactly twice; free (once) and
-/// over-shared (3+) edges are both defects. Used to prove a merge did not make
-/// the shell worse before committing it.
 /// One wire's edges with a split pair about to be joined (`merge_split_edges`).
 struct Rewrite {
     wire: WireId,
@@ -506,6 +501,13 @@ fn merge_split_edges(
                 ok = false;
                 break;
             };
+            // A wire that runs a piece twice (a slit across a face) would
+            // keep one copy of the joined edge for the two runs.
+            let once = |e| old.iter().filter(|oe| oe.edge() == e).count() == 1;
+            if !once(e1) || !once(e2) {
+                ok = false;
+                break;
+            }
             let adjacent = (i1 + 1) % n == i2 || (i2 + 1) % n == i1;
             if !adjacent || (!closed && (i1.abs_diff(i2) != 1)) {
                 ok = false;
@@ -551,6 +553,12 @@ fn merge_split_edges(
     Ok(merged)
 }
 
+/// Count edges that the wires of `faces` do not use exactly two times. A
+/// slit that one face's wire runs out and back is two uses.
+///
+/// A closed manifold shell uses every edge exactly twice; free (once) and
+/// over-shared (3+) edges are both defects. Used to prove a merge did not make
+/// the shell worse before committing it.
 fn unpaired_edge_count(topo: &Topology, faces: &[FaceId]) -> Result<usize, HealError> {
     let mut uses: HashMap<usize, usize> = HashMap::new();
     for &fid in faces {
@@ -2500,5 +2508,140 @@ mod merge_tests {
         let merged = merge_collinear_edges(&mut topo, wire, &UnifyOptions::default()).unwrap();
         assert_eq!(merged, 2);
         assert_eq!(topo.wire(wire).unwrap().edges().len(), 1);
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod split_edge_tests {
+    use brepkit_math::vec::{Point3, Vec3};
+    use brepkit_topology::Topology;
+    use brepkit_topology::edge::{Edge, EdgeCurve, EdgeId};
+    use brepkit_topology::face::{Face, FaceSurface};
+    use brepkit_topology::shell::Shell;
+    use brepkit_topology::solid::Solid;
+    use brepkit_topology::vertex::{Vertex, VertexId};
+    use brepkit_topology::wire::{OrientedEdge, Wire};
+
+    use super::*;
+
+    /// A 10 cube whose top back edge is in two pieces at `(5, 10, 10)`, and
+    /// whose top face holds a slit of two pieces from `(5, 0, 10)` to
+    /// `(5, 5, 10)`, which its wire runs out and back. The slit's middle
+    /// vertex holds two collinear pieces that only the top face uses, two
+    /// times each.
+    #[test]
+    fn a_slit_stays_and_the_other_pieces_join() {
+        let mut topo = Topology::default();
+        let mut v = |x: f64, y: f64, z: f64| -> VertexId {
+            topo.add_vertex(Vertex::new(Point3::new(x, y, z), 1e-7))
+        };
+        let (b0, b1, b2, b3) = (
+            v(0.0, 0.0, 0.0),
+            v(10.0, 0.0, 0.0),
+            v(10.0, 10.0, 0.0),
+            v(0.0, 10.0, 0.0),
+        );
+        let (t0, t1, t2, t3) = (
+            v(0.0, 0.0, 10.0),
+            v(10.0, 0.0, 10.0),
+            v(10.0, 10.0, 10.0),
+            v(0.0, 10.0, 10.0),
+        );
+        let back = v(5.0, 10.0, 10.0);
+        let front = v(5.0, 0.0, 10.0);
+        let slit_mid = v(5.0, 2.5, 10.0);
+        let slit_tip = v(5.0, 5.0, 10.0);
+        let mut e = |a: VertexId, b: VertexId| -> EdgeId {
+            topo.add_edge(Edge::new(a, b, EdgeCurve::Line))
+        };
+        let (e01, e12, e23, e30) = (e(b0, b1), e(b1, b2), e(b2, b3), e(b3, b0));
+        let (v0, v1, v2, v3) = (e(b0, t0), e(b1, t1), e(b2, t2), e(b3, t3));
+        let (t0f, ft1, t12, t2b, bt3, t30) = (
+            e(t0, front),
+            e(front, t1),
+            e(t1, t2),
+            e(t2, back),
+            e(back, t3),
+            e(t3, t0),
+        );
+        let (fs, st) = (e(front, slit_mid), e(slit_mid, slit_tip));
+
+        let mut face = |edges: &[(EdgeId, bool)], normal: Vec3, d: f64| {
+            let oes = edges
+                .iter()
+                .map(|&(e, f)| OrientedEdge::new(e, f))
+                .collect();
+            let wire = topo.add_wire(Wire::new(oes, true).unwrap());
+            topo.add_face(Face::new(wire, vec![], FaceSurface::Plane { normal, d }))
+        };
+        let faces = vec![
+            face(
+                &[
+                    (t0f, true),
+                    (fs, true),
+                    (st, true),
+                    (st, false),
+                    (fs, false),
+                    (ft1, true),
+                    (t12, true),
+                    (t2b, true),
+                    (bt3, true),
+                    (t30, true),
+                ],
+                Vec3::new(0.0, 0.0, 1.0),
+                10.0,
+            ),
+            face(
+                &[
+                    (e01, true),
+                    (v1, true),
+                    (ft1, false),
+                    (t0f, false),
+                    (v0, false),
+                ],
+                Vec3::new(0.0, -1.0, 0.0),
+                0.0,
+            ),
+            face(
+                &[(e12, true), (v2, true), (t12, false), (v1, false)],
+                Vec3::new(1.0, 0.0, 0.0),
+                10.0,
+            ),
+            face(
+                &[
+                    (e23, true),
+                    (v3, true),
+                    (bt3, false),
+                    (t2b, false),
+                    (v2, false),
+                ],
+                Vec3::new(0.0, 1.0, 0.0),
+                10.0,
+            ),
+            face(
+                &[(e30, true), (v0, true), (t30, false), (v3, false)],
+                Vec3::new(-1.0, 0.0, 0.0),
+                0.0,
+            ),
+            face(
+                &[(e30, false), (e23, false), (e12, false), (e01, false)],
+                Vec3::new(0.0, 0.0, -1.0),
+                0.0,
+            ),
+        ];
+        let shell = topo.add_shell(Shell::new(faces.clone()).unwrap());
+        let solid = topo.add_solid(Solid::new(shell, vec![]));
+
+        let joined = merge_split_edges(&mut topo, solid, &UnifyOptions::default()).unwrap();
+
+        assert_eq!(joined, 1, "the back edge's two pieces join, the slit stays");
+        assert_eq!(unpaired_edge_count(&topo, &faces).unwrap(), 0);
+        let top = topo
+            .wire(topo.face(faces[0]).unwrap().outer_wire())
+            .unwrap();
+        let uses = |e: EdgeId| top.edges().iter().filter(|oe| oe.edge() == e).count();
+        assert_eq!((uses(fs), uses(st)), (2, 2));
+        assert_eq!((uses(t2b), uses(bt3)), (0, 0));
     }
 }
