@@ -8195,12 +8195,25 @@ fn emit_split_circle_arcs(
                 // seam vertex), so endpoint-only bounds collapse to a line at
                 // the seam and the face's radial extent is lost — which then
                 // wrongly rejects every in-face section-arc midpoint.
+                // Samples of an arc miss its extreme by the sagitta between
+                // them: a cap's rim then leaves the arc along its bottom out
+                // of the cap's box.
+                let arc = match edge.curve() {
+                    EdgeCurve::Circle(c) => Some(c.arc_aabb(t0, t1)),
+                    EdgeCurve::Ellipse(e) => Some(e.arc_aabb(t0, t1)),
+                    EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => None,
+                };
                 let n = 8;
-                for i in 0..=n {
+                let samples = (0..=n).map(|i| {
                     let frac = f64::from(i) / f64::from(n);
-                    let p = edge
-                        .curve()
-                        .evaluate_with_endpoints(t0 + (t1 - t0) * frac, sp, ep);
+                    edge.curve()
+                        .evaluate_with_endpoints(t0 + (t1 - t0) * frac, sp, ep)
+                });
+                let points: Vec<Point3> = match arc {
+                    Some(b) => vec![b.min, b.max],
+                    None => samples.collect(),
+                };
+                for p in points {
                     min = Point3::new(min.x().min(p.x()), min.y().min(p.y()), min.z().min(p.z()));
                     max = Point3::new(max.x().max(p.x()), max.y().max(p.y()), max.z().max(p.z()));
                     any = true;
