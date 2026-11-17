@@ -2776,22 +2776,38 @@ fn trim_torus_oval_to_box_face(
     // plane's section only: another loop can run closer than any fixed band
     // (a thin tube's two loops through its centre, a tube's diameter apart).
     // So a crossing belongs to this loop when it lies on it: on a conic to
-    // rounding, and on a fitted loop within the loop's own fit to the
-    // section, read as the farthest its samples stray from the torus or the
-    // plane.
-    let off_section = |q: Point3| -> f64 {
+    // rounding, and on a fitted loop within the loop's own error. A sample's
+    // distances from the torus and the plane bound its error along the two
+    // surfaces' normals. Across the section that error grows as the angle
+    // between the normals closes (a plane near a tangent to the tube), so
+    // each sample's distances are divided by the sine of that angle, held
+    // to at least 1e-3.
+    let section_error = |q: Point3| -> f64 {
         let w = q - torus.center();
         let h = torus.z_axis().dot(w);
-        let radial = (w - torus.z_axis() * h).length();
-        let off_torus = ((radial - torus.major_radius()).hypot(h) - torus.minor_radius()).abs();
+        let radial = w - torus.z_axis() * h;
+        let rho = radial.length();
         let off_plane = (plane_n.dot(Vec3::new(q.x(), q.y(), q.z())) - plane_d).abs();
-        off_torus.max(off_plane)
+        let tube_centre = if rho > 0.0 {
+            torus.center() + radial * (torus.major_radius() / rho)
+        } else {
+            torus.center()
+        };
+        let to_q = q - tube_centre;
+        let off_tube = to_q.length();
+        let off_torus = (off_tube - torus.minor_radius()).abs();
+        let sine = if off_tube > 0.0 {
+            (to_q * (1.0 / off_tube)).cross(plane_n).length() / plane_n.length()
+        } else {
+            0.0
+        };
+        (off_torus + off_plane) / sine.max(1e-3)
     };
     let fit = match &raw.curve {
         EdgeCurve::NurbsCurve(_) => (0..=256)
             .map(|i| {
                 let t = (raw.t_range.1 - raw.t_range.0).madd(f64::from(i) / 256.0, raw.t_range.0);
-                off_section(raw.curve.evaluate_with_endpoints(t, raw.p_start, raw.p_end))
+                section_error(raw.curve.evaluate_with_endpoints(t, raw.p_start, raw.p_end))
             })
             .fold(0.0, f64::max),
         EdgeCurve::Line | EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => 0.0,
