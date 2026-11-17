@@ -1,0 +1,22 @@
+crates/algo/src/pave_filler/phase_ff_coplanar.rs
+  s_489e8e320eebde::t_f26eadf6777929 1896-1966,1971-1972
+  s_489e8e320eebde::t_988f32b7bfbc4d 571-590
+  s_489e8e320eebde::t_54f8b5037d94ff 625-707,709,1973
+  s_489e8e320eebde::t_4df271156a724f 708,710-713,1967-1970,1974-1982
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ced2d524501f9da765d191d1f3007ed5649ba0d1",
+  "prompts": {},
+  "sessions": {
+    "s_489e8e320eebde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1a2a9261-2019-4199-aa4f-06130071c8f0",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
