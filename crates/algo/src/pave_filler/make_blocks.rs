@@ -35,6 +35,76 @@ fn same_pave(topo: &Topology, arena: &GfaArena, a: Pave, b: Pave) -> bool {
         )
 }
 
+/// A block's paves as MakeBlocks splits it at them.
+struct BlockPaves {
+    start: Pave,
+    end: Pave,
+    closed: bool,
+    descending: bool,
+    /// The extra paves in the order the block is walked, one of each group
+    /// that coincides.
+    paves: Vec<Pave>,
+    /// Those of `paves` that are not at either end.
+    interior: Vec<Pave>,
+}
+
+/// The paves MakeBlocks splits `pb` at: a closed block's parameters wrapped
+/// round its seam, sorted along the block, and one kept of each group that
+/// coincides (the first along the block).
+fn block_paves(topo: &Topology, arena: &GfaArena, pb: &crate::ds::PaveBlock) -> BlockPaves {
+    let (mut start, mut end, mut extra_paves) = (pb.start, pb.end, pb.extra_paves.clone());
+    let closed = arena.resolve_vertex(start.vertex) == arena.resolve_vertex(end.vertex);
+    // A closed circle's block spans the curve's own period from its angular
+    // origin, but its one vertex sits wherever the seam was placed. Anchor
+    // the children at that seam so their vertex order follows the walk
+    // around the rim; otherwise a child between the origin and the seam
+    // reads backwards and its edge covers the complementary arc.
+    if closed && let Some(seam) = super::helpers::closed_seam_parameter(topo, pb.original_edge) {
+        use std::f64::consts::TAU;
+        start.parameter = seam;
+        end.parameter = seam + TAU;
+        for pave in &mut extra_paves {
+            pave.parameter = seam + (pave.parameter - seam).rem_euclid(TAU);
+        }
+    }
+    let descending = start.parameter > end.parameter;
+    extra_paves.sort_by(|a, b| {
+        if descending {
+            b.parameter.total_cmp(&a.parameter)
+        } else {
+            a.parameter.total_cmp(&b.parameter)
+        }
+    });
+    extra_paves.dedup_by(|a, b| same_pave(topo, arena, *a, *b));
+    let interior: Vec<Pave> = extra_paves
+        .iter()
+        .copied()
+        .filter(|&pave| !same_pave(topo, arena, pave, start) && !same_pave(topo, arena, pave, end))
+        .collect();
+    BlockPaves {
+        start,
+        end,
+        closed,
+        descending,
+        paves: extra_paves,
+        interior,
+    }
+}
+
+/// The vertices a block's pieces end at once MakeBlocks splits it: its two
+/// ends, then the extra paves it keeps, in the order it walks them.
+pub(super) fn piece_vertices(
+    topo: &Topology,
+    arena: &GfaArena,
+    pb: &crate::ds::PaveBlock,
+) -> Vec<brepkit_topology::vertex::VertexId> {
+    let paves = block_paves(topo, arena, pb);
+    [paves.start.vertex, paves.end.vertex]
+        .into_iter()
+        .chain(paves.interior.iter().map(|pave| pave.vertex))
+        .collect()
+}
+
 /// Split all pave blocks at their extra paves.
 ///
 /// After this, each pave block represents a contiguous edge segment
@@ -75,33 +145,18 @@ pub fn perform(topo: &mut Topology, arena: &mut GfaArena) -> Result<(), AlgoErro
 
             if has_extras {
                 // Snapshot all data we need before mutating
-                let (original_edge, mut start, mut end, mut extra_paves) = {
-                    let pb = match arena.pave_blocks.get(pb_id) {
-                        Some(pb) => pb,
-                        None => continue,
-                    };
-                    (pb.original_edge, pb.start, pb.end, pb.extra_paves.clone())
+                let Some(pb) = arena.pave_blocks.get(pb_id) else {
+                    continue;
                 };
-                let closed = arena.resolve_vertex(start.vertex) == arena.resolve_vertex(end.vertex);
-                // A closed circle's block spans the curve's own period from
-                // its angular origin, but its one vertex sits wherever the
-                // seam was placed. Anchor the children at that seam so their
-                // vertex order follows the walk around the rim; otherwise a
-                // child between the origin and the seam reads backwards and
-                // its edge covers the complementary arc.
-                if closed
-                    && let Some(seam) = super::helpers::closed_seam_parameter(topo, original_edge)
-                {
-                    use std::f64::consts::TAU;
-                    start.parameter = seam;
-                    end.parameter = seam + TAU;
-                    for pave in &mut extra_paves {
-                        pave.parameter = seam + (pave.parameter - seam).rem_euclid(TAU);
-                    }
-                }
-
-                let mut sorted_paves = extra_paves;
-                let descending = start.parameter > end.parameter;
+                let original_edge = pb.original_edge;
+                let BlockPaves {
+                    start,
+                    end,
+                    closed,
+                    descending,
+                    paves: mut sorted_paves,
+                    interior,
+                } = block_paves(topo, arena, pb);
                 let along = |a: &Pave, b: &Pave| {
                     if descending {
                         b.parameter.total_cmp(&a.parameter)
@@ -109,15 +164,6 @@ pub fn perform(topo: &mut Topology, arena: &mut GfaArena) -> Result<(), AlgoErro
                         a.parameter.total_cmp(&b.parameter)
                     }
                 };
-                sorted_paves.sort_by(along);
-                sorted_paves.dedup_by(|a, b| same_pave(topo, arena, *a, *b));
-                let interior: Vec<Pave> = sorted_paves
-                    .iter()
-                    .copied()
-                    .filter(|&pave| {
-                        !same_pave(topo, arena, pave, start) && !same_pave(topo, arena, pave, end)
-                    })
-                    .collect();
                 if closed {
                     let mids = midpoint_paves_of_both_arcs(
                         topo,

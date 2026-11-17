@@ -603,3 +603,155 @@ fn a_yokes_fork_trims_to_its_turned_outside_exactly() {
     }
     assert!(read > grid.n.pow(3) / 2, "only {read} points read");
 }
+
+/// `universal-joint`: the yoke trimmed as in
+/// [`a_yokes_fork_trims_to_its_turned_outside_exactly`], on the disc of
+/// radius 52 from x = -72 to -62 at the back of the flange. The yoke's back
+/// is three faces in the disc's face at x = -62: the bridge between the
+/// ears and two caps past them. Upright, turned and that turn mirrored.
+#[test]
+fn a_yoke_fuses_onto_its_flange_disc() {
+    let exact = BooleanOptions {
+        mesh_fallback: false,
+        ..BooleanOptions::default()
+    };
+    let turn = Mat4::translation(4.0, -3.0, 2.0)
+        * Mat4::rotation_x(0.37)
+        * Mat4::rotation_y(-0.81)
+        * Mat4::rotation_z(1.13);
+    for pose in [Mat4::identity(), turn, Mat4::scale(-1.0, 1.0, 1.0) * turn] {
+        let mut topo = Topology::new();
+        let fork = load("universal_joint_fork.bin", &mut topo);
+        let outside = load("universal_joint_turned_outside.bin", &mut topo);
+        let disc = load("universal_joint_flange_disc.bin", &mut topo);
+        for solid in [fork, outside, disc] {
+            brepkit_operations::transform::transform_solid(&mut topo, solid, &pose).unwrap();
+        }
+        let yoke =
+            boolean_with_options(&mut topo, BooleanOp::Intersect, fork, outside, exact).unwrap();
+        // In the bridge, in the disc past the back, and beside the disc.
+        fuse_exactly_posed(
+            &mut topo,
+            yoke,
+            disc,
+            [[-50.0, 0.0, 30.0], [-67.0, 0.0, 45.0], [-67.0, 0.0, 55.0]],
+            &Grid {
+                lo: [-66.0, -40.0, -40.0],
+                hi: [-58.0, 40.0, 40.0],
+                n: 14,
+            },
+            &pose,
+        );
+    }
+}
+
+/// [`a_yoke_fuses_onto_its_flange_disc`] with the trimmed yoke as the
+/// example hands it on, read back from its own arena, so its faces and edges
+/// come in a new order. The walk round the disc's face at x = -62 meets the
+/// caps' arcs and the bridge's lines in another order too.
+#[test]
+fn a_yoke_read_back_fuses_onto_its_flange_disc() {
+    let turn = Mat4::translation(4.0, -3.0, 2.0)
+        * Mat4::rotation_x(0.37)
+        * Mat4::rotation_y(-0.81)
+        * Mat4::rotation_z(1.13);
+    for pose in [Mat4::identity(), turn, Mat4::scale(-1.0, 1.0, 1.0) * turn] {
+        let mut topo = Topology::new();
+        let yoke = load("universal_joint_yoke.bin", &mut topo);
+        let disc = load("universal_joint_flange_disc.bin", &mut topo);
+        for solid in [yoke, disc] {
+            brepkit_operations::transform::transform_solid(&mut topo, solid, &pose).unwrap();
+        }
+        fuse_exactly_posed(
+            &mut topo,
+            yoke,
+            disc,
+            [[-50.0, 0.0, 30.0], [-67.0, 0.0, 45.0], [-67.0, 0.0, 55.0]],
+            &Grid {
+                lo: [-66.0, -40.0, -40.0],
+                hi: [-58.0, 40.0, 40.0],
+                n: 14,
+            },
+            &pose,
+        );
+    }
+}
+
+/// `universal-joint`: the yoke trimmed as in
+/// [`a_yokes_fork_trims_to_its_turned_outside_exactly`], fused in one call
+/// with the flange's disc of radius 52 from x = -72 to -62 and its spigot of
+/// radius 34 from x = -65 to -59. The yoke's back is three faces in the
+/// disc's face at x = -62, where the cone's rim meets the spigot's wall.
+/// Upright, turned and that turn mirrored.
+#[test]
+fn a_yoke_fuses_onto_its_stepped_flange() {
+    let exact = BooleanOptions {
+        mesh_fallback: false,
+        ..BooleanOptions::default()
+    };
+    let turn = Mat4::translation(4.0, -3.0, 2.0)
+        * Mat4::rotation_x(0.37)
+        * Mat4::rotation_y(-0.81)
+        * Mat4::rotation_z(1.13);
+    for pose in [Mat4::identity(), turn, Mat4::scale(-1.0, 1.0, 1.0) * turn] {
+        // The example makes the flange's two discs before the fork.
+        let mut topo = Topology::new();
+        let disc = load("universal_joint_flange_disc.bin", &mut topo);
+        let spigot = load("universal_joint_flange_spigot.bin", &mut topo);
+        let fork = load("universal_joint_fork.bin", &mut topo);
+        let outside = load("universal_joint_turned_outside.bin", &mut topo);
+        for solid in [fork, outside, disc, spigot] {
+            brepkit_operations::transform::transform_solid(&mut topo, solid, &pose).unwrap();
+        }
+        let yoke =
+            boolean_with_options(&mut topo, BooleanOp::Intersect, fork, outside, exact).unwrap();
+        let volume = |topo: &Topology, s| solid_volume(topo, s, 0.01).unwrap();
+        let parts = [yoke, disc, spigot];
+        let sum: f64 = parts.iter().map(|&s| volume(&topo, s)).sum();
+        let compound = topo.add_compound(brepkit_topology::compound::Compound::new(parts.to_vec()));
+        let fused = brepkit_operations::compound_ops::fuse_all(&mut topo, compound).unwrap();
+        assert_holds(&topo, fused);
+        assert!(
+            solid_faces(&topo, fused).unwrap().iter().any(|&f| topo
+                .face(f)
+                .unwrap()
+                .surface()
+                .type_tag()
+                == "cone"),
+            "the taper is gone"
+        );
+        // The spigot's half inside the disc and its slab between the yoke's
+        // sides past the disc's face.
+        let (r, half): (f64, f64) = (34.0, 21.0);
+        let slab = 2.0 * (half * (r * r - half * half).sqrt() + r * r * (half / r).asin());
+        let vf = volume(&topo, fused);
+        let expected = sum - PI * r * r * 3.0 - slab * 3.0;
+        assert!(
+            (vf - expected).abs() < 1e-6 * vf,
+            "fused {vf}, expected {expected}"
+        );
+        let grid = Grid {
+            lo: [-66.0, -40.0, -40.0],
+            hi: [-56.0, 40.0, 40.0],
+            n: 14,
+        };
+        let mut read = 0;
+        for p in grid.points() {
+            let q = pose.mul_point(Point3::new(p[0], p[1], p[2]));
+            let q = [q.x(), q.y(), q.z()];
+            let Some(f) = holds(&topo, fused, q) else {
+                continue;
+            };
+            let Some(held) = parts
+                .iter()
+                .map(|&s| holds(&topo, s, q))
+                .collect::<Option<Vec<bool>>>()
+            else {
+                continue;
+            };
+            assert_eq!(f, held.contains(&true), "at {q:?}");
+            read += 1;
+        }
+        assert!(read > grid.n.pow(3) / 2, "only {read} points read");
+    }
+}
