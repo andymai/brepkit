@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794854800952,
+  "lastUpdate": 1794884542688,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -72575,6 +72575,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 18837542,
             "range": "± 76003",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "66281732+Robokan@users.noreply.github.com",
+            "name": "Eric Vaughan",
+            "username": "Robokan"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c9f7aed150eb6e3a409874fc2bd26fc249b034bc",
+          "message": "fix(algo,operations): keep a spherical cap's seam to its pole (#2561)\n\n## Summary\n\nA STEP file writes a spherical cap as one sphere face whose outer wire\nruns round its rim, then up its seam meridian to the pole and straight\nback down. Two cleanups read that seam as an out-and-back spur:\n\n- `builder_solid`'s `excise_out_and_back_spurs` left the cap a slit\nface, and the cap was dropped from the result;\n- `heal`'s `remove_wire_spurs` stripped the seam from the wire.\n\nA fuse of such a part with a box nowhere near the cap came out open and\nfell back to the mesh boolean.\n\nBoth cleanups already spare a pointed cone's seam, the line its wire\nruns up to the apex and back. They now spare a sphere's seam meridian\ntoo: a line or circle edge of the outer wire, with two distinct\nvertices, one of them at either pole.\n\n## Test\n\n`crates/io/tests/sphere_cap_seam_fuse.rs` reads a part with a spherical\ncap and a box from STEP and fuses them. The result must keep its sphere\nface, stay under 100 faces (no mesh fallback), and have the expected\nvolume to 1e-6. It fails on `main`: the fuse falls back, 1346 faces.\n\n`cargo test -p brepkit-algo -p brepkit-operations -p brepkit-io` passes;\nthe pose sweep and truth audit are unchanged.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes the spherical cap's seam meridian being treated as an out-and-back\nspur during cleanup, so fusing a STEP part with a cap no longer falls\nback to the mesh boolean.\n\nPreviously `excise_out_and_back_spurs` in `builder_solid` left the cap a\nslit face and dropped it, and `remove_wire_spurs` in `heal` stripped the\nseam from the wire, leaving the shell open. Both now exempt a cap's seam\nthe way they already exempt a pointed cone's seam: a line or circle edge\nof the outer wire with two distinct vertices, one at either pole.\n\n**Test**\n- Adds `sphere_cap_part.step` and `sphere_cap_box.step` fixtures and a\nfuse test asserting the sphere face survives, the result has under 100\nfaces, and the volume matches to 1e-6; it fails on `main` with 1346\nfaces.\n\n<sup>Written for commit f1bee2d7f645479787e0c7800e60a80afc097d19.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2561?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-11-16T18:59:04-08:00",
+          "tree_id": "8494c5bb5c84551f2cf492e235f5359227da1d26",
+          "url": "https://github.com/andymai/brepkit/commit/c9f7aed150eb6e3a409874fc2bd26fc249b034bc"
+        },
+        "date": 1794884534788,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 913081,
+            "range": "± 4720",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 959266,
+            "range": "± 1343",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11387,
+            "range": "± 96",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 568782,
+            "range": "± 1839",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 20483168,
+            "range": "± 59207",
             "unit": "ns/iter"
           }
         ]
