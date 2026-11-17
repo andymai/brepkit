@@ -1644,3 +1644,60 @@ fn a_sheet_through_the_edge_of_a_cube_leaves_the_cube_a_solid() {
     assert_valid(&topo, parts.solids[0]);
     assert_eq!(topo.shell(parts.shells[0]).unwrap().faces().len(), 6);
 }
+
+/// The hook of `HOOK`, with its outer arms out to 40.
+const BIG_HOOK: [(f64, f64); 8] = [
+    (10.0, 10.0),
+    (40.0, 10.0),
+    (40.0, 40.0),
+    (5.0, 40.0),
+    (5.0, 5.0),
+    (8.0, 5.0),
+    (8.0, 35.0),
+    (10.0, 35.0),
+];
+
+/// Add each triangle of `part` with corners of its own. Each corner takes
+/// the normal of its triangle as the triangle is wound, or the other way
+/// when `against`.
+fn add_with_normals(mesh: &mut TriangleMesh, part: &TriangleMesh, against: bool) {
+    mesh.normals
+        .resize(mesh.positions.len(), Vec3::new(0.0, 0.0, 0.0));
+    for tri in part.indices.chunks_exact(3) {
+        let [a, b, c] = [tri[0], tri[1], tri[2]].map(|i| part.positions[i as usize]);
+        let normal = (b - a).cross(c - a).normalize().unwrap();
+        let base = u32::try_from(mesh.positions.len()).unwrap();
+        mesh.positions.extend([a, b, c]);
+        mesh.normals
+            .extend([if against { -normal } else { normal }; 3]);
+        mesh.indices.extend([base, base + 1, base + 2]);
+    }
+}
+
+/// The cube and the larger hook share an edge and cross, both wound
+/// inward. The normals of the cube point out, against its winding. The
+/// normals of the hook point in, with its winding, and outweigh those of the
+/// cube. Each body takes the side of its own normals: the cube is an
+/// outward solid, and the hook is an inward body that crosses it: a shell.
+#[test]
+fn a_cube_and_a_hook_that_cross_take_the_sides_of_their_own_normals() {
+    let mut cube = TriangleMesh::default();
+    add_cube(&mut cube, [0.0; 3], 10.0, true);
+    let mut hook = TriangleMesh::default();
+    add_prism(&mut hook, &BIG_HOOK, &HOOK_CAPS, 10.0);
+    for tri in hook.indices.chunks_exact_mut(3) {
+        tri.swap(1, 2);
+    }
+    let mut mesh = TriangleMesh::default();
+    add_with_normals(&mut mesh, &cube, true);
+    add_with_normals(&mut mesh, &hook, false);
+
+    let mut topo = Topology::new();
+    let err = import_mesh(&mut topo, &mesh, 1e-7).unwrap_err();
+    assert!(err.to_string().contains("cross"), "{err}");
+    let parts = import_mesh_parts(&mut topo, &mesh, 1e-7).unwrap();
+    assert_eq!((parts.solids.len(), parts.shells.len()), (1, 1));
+    assert!((volume(&topo, parts.solids[0]) - 1000.0).abs() < 1e-9);
+    assert_valid(&topo, parts.solids[0]);
+    assert_eq!(topo.shell(parts.shells[0]).unwrap().faces().len(), 28);
+}

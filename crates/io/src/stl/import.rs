@@ -127,7 +127,12 @@ impl MeshBodies {
 
         let mut links = Links::read(&tris, &points, &votes, &directions, tolerance);
         let mut bodies = split_bodies(&mut tris, &votes, &points, &links);
-        let placement = place_bodies(&mut bodies, &mut tris, &points, &mut links, tolerance);
+        let source = Source {
+            points: &points,
+            votes: &votes,
+            tolerance,
+        };
+        let placement = place_bodies(&mut bodies, &mut tris, &mut links, source);
         Ok(Self {
             points,
             tris,
@@ -1252,6 +1257,16 @@ const RAYS: [[f64; 3]; 4] = [
     [-1.0, -0.414_2, -0.302_7],
 ];
 
+/// What the import read from a mesh: its merged points, the vote of the
+/// stored normals of each triangle (see [`mesh_triangles`]), and the merge
+/// tolerance.
+#[derive(Clone, Copy)]
+struct Source<'a> {
+    points: &'a [Point3],
+    votes: &'a [f64],
+    tolerance: f64,
+}
+
 /// What the import makes of an inward closed body.
 #[derive(Debug, Clone, Copy)]
 enum Fate {
@@ -1274,28 +1289,20 @@ enum Fate {
 fn place_bodies(
     bodies: &mut Vec<Body>,
     tris: &mut [[usize; 3]],
-    points: &[Point3],
     links: &mut Links,
-    tolerance: f64,
+    source: Source<'_>,
 ) -> Placement {
     // An edge pairs off again once, so the loop ends.
     let mut paired_again = HashSet::new();
     loop {
-        let (placement, fates) = assign_cavities(bodies, tris, points, links, tolerance);
+        let (placement, fates) =
+            assign_cavities(bodies, tris, source.points, links, source.tolerance);
         let turned: Vec<usize> = fates
             .iter()
             .filter(|(_, fate)| matches!(fate, Fate::Turn))
             .map(|&(i, _)| i)
             .collect();
-        if pair_after_turns(
-            bodies,
-            &turned,
-            tris,
-            points,
-            links,
-            tolerance,
-            &mut paired_again,
-        ) {
+        if pair_after_turns(bodies, &turned, tris, links, source, &mut paired_again) {
             continue;
         }
         for (i, fate) in fates {
@@ -1370,18 +1377,24 @@ fn assign_cavities(
 /// Two inward cubes that share an edge, in no body, are then two solids and
 /// not one solid that pinches at the edge.
 ///
-/// The import has not turned the bodies yet, so each new body has the
-/// winding of the mesh. A new body with no volume is a shell, as in
-/// [`split_bodies`]. An edge in `paired_again` does not pair off again.
+/// The import has not turned the bodies yet. Each new body takes its side
+/// from the winding of the mesh and from its own stored normals (see
+/// [`take_side`]), as a closed body does in [`split_bodies`]. A new body
+/// with no volume is a shell. An edge in `paired_again` does not pair off
+/// again.
 fn pair_after_turns(
     bodies: &mut Vec<Body>,
     turned: &[usize],
-    tris: &[[usize; 3]],
-    points: &[Point3],
+    tris: &mut [[usize; 3]],
     links: &mut Links,
-    tolerance: f64,
+    source: Source<'_>,
     paired_again: &mut HashSet<(usize, usize)>,
 ) -> bool {
+    let Source {
+        points,
+        votes,
+        tolerance,
+    } = source;
     if turned.is_empty() || links.pairs.is_empty() {
         return false;
     }
@@ -1480,6 +1493,7 @@ fn pair_after_turns(
             }
         }
         members.sort_unstable();
+        take_side(&members, tris, links, votes);
         let (volume6, terms) = signed_volume6(&members, tris, points);
         let closed = volume6.abs() > 1e-12 * terms;
         split.push(Body {
@@ -1504,6 +1518,42 @@ fn pair_after_turns(
     order.sort_unstable_by_key(|body| body.tris[0]);
     *bodies = order;
     true
+}
+
+/// Turn a closed body, wound to one side, to the side that [`split_bodies`]
+/// gives a closed body: the side of most of its triangles as the mesh winds
+/// them, then the other side when its stored normals point against that.
+///
+/// The import can already have turned some of the triangles from their
+/// winding in the mesh; `links` holds that winding.
+fn take_side(members: &[usize], tris: &mut [[usize; 3]], links: &Links, votes: &[f64]) {
+    let turned: Vec<bool> = members
+        .iter()
+        .map(|&t| {
+            let tri = tris[t];
+            let key = edge_key(tri[0], tri[1]);
+            links.uses[&key]
+                .iter()
+                .any(|&(u, forward)| u == t && forward != runs_up(tri, key))
+        })
+        .collect();
+    // Of the two sides, the one that turns fewer triangles of the mesh, as
+    // in `consistent_turns`: on a tie, the first triangle keeps its winding.
+    let count = turned.iter().filter(|&&was| was).count();
+    let mut flip = count * 2 > members.len() || (count * 2 == members.len() && turned[0]);
+    let (mut vote, mut weight) = (0.0, 0.0);
+    for (&t, &was) in members.iter().zip(&turned) {
+        vote += if was == flip { votes[t] } else { -votes[t] };
+        weight += votes[t].abs();
+    }
+    if vote < -0.5 * weight {
+        flip = !flip;
+    }
+    if flip {
+        for &t in members {
+            tris[t].swap(1, 2);
+        }
+    }
 }
 
 /// The margins of the import at coordinates of a given size.
