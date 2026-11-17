@@ -5324,3 +5324,107 @@ fn a_join_held_by_two_edges_is_welded_across_the_merge_grid() {
         }
     }
 }
+
+/// A half disc of radius 1 and a half ring from radius 1 + 3e-7 to 2, in
+/// z = 0, each the only user of its own edges: the two arcs stand 3e-7
+/// apart, so their samples round to different cells of the merge grid. At
+/// deflection 0.5 the weld reaches past several samples of each arc. Each
+/// sample of one arc welds to the sample beside it on the other: the join
+/// keeps no crack, and neither face loses area to the weld.
+#[test]
+fn a_dense_join_held_by_two_arcs_welds_sample_to_sample() {
+    use brepkit_math::curves::Circle3D;
+    use brepkit_topology::shell::Shell;
+    use brepkit_topology::solid::Solid;
+
+    let p = Point3::new;
+    let r = 1.0 + 3e-7;
+    let mut topo = Topology::new();
+    let v = [
+        p(1.0, 0.0, 0.0),
+        p(-1.0, 0.0, 0.0),
+        p(r, 0.0, 0.0),
+        p(2.0, 0.0, 0.0),
+        p(-2.0, 0.0, 0.0),
+        p(-r, 0.0, 0.0),
+    ]
+    .map(|q| topo.add_vertex(Vertex::new(q, 1e-7)));
+    let arc = |radius: f64| {
+        EdgeCurve::Circle(
+            Circle3D::new(p(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), radius).unwrap(),
+        )
+    };
+    let mut edge =
+        |a: usize, b: usize, curve: EdgeCurve| topo.add_edge(Edge::new(v[a], v[b], curve));
+    let disc_arc = edge(0, 1, arc(1.0));
+    let diameter = edge(1, 0, EdgeCurve::Line);
+    let right = edge(2, 3, EdgeCurve::Line);
+    let outer = edge(3, 4, arc(2.0));
+    let left = edge(4, 5, EdgeCurve::Line);
+    let ring_arc = edge(2, 5, arc(r));
+    let mut face = |edges: &[(brepkit_topology::edge::EdgeId, bool)]| {
+        let wire = Wire::new(
+            edges
+                .iter()
+                .map(|&(e, forward)| OrientedEdge::new(e, forward))
+                .collect(),
+            true,
+        )
+        .unwrap();
+        let wire = topo.add_wire(wire);
+        topo.add_face(Face::new(
+            wire,
+            vec![],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: 0.0,
+            },
+        ))
+    };
+    let disc = face(&[(disc_arc, true), (diameter, true)]);
+    let ring = face(&[
+        (right, true),
+        (outer, true),
+        (left, true),
+        (ring_arc, false),
+    ]);
+    let shell = topo.add_shell(Shell::new(vec![disc, ring]).unwrap());
+    let solid = topo.add_solid(Solid::new(shell, vec![]));
+    let area = |mesh: &TriangleMesh| -> f64 {
+        mesh.indices
+            .chunks_exact(3)
+            .map(|t| {
+                let [a, b, c] = [0, 1, 2].map(|k| mesh.positions[t[k] as usize]);
+                (b - a).cross(c - a).length() / 2.0
+            })
+            .sum()
+    };
+    for deflection in [0.5, 0.1] {
+        let mesh = tessellate_solid(&topo, solid, deflection).unwrap();
+        let alone = area(&tessellate(&topo, disc, deflection).unwrap())
+            + area(&tessellate(&topo, ring, deflection).unwrap());
+        assert!(
+            (area(&mesh) - alone).abs() < 1e-5,
+            "deflection {deflection}: area {} against {alone}",
+            area(&mesh)
+        );
+        assert_eq!(non_manifold_edge_count(&mesh), 0, "deflection {deflection}");
+        let directed: DetHashSet<(u32, u32)> = mesh
+            .indices
+            .chunks_exact(3)
+            .flat_map(|t| [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])])
+            .collect();
+        for &(a, b) in &directed {
+            if directed.contains(&(b, a)) {
+                continue;
+            }
+            let middle = (mesh.positions[a as usize] - p(0.0, 0.0, 0.0)
+                + (mesh.positions[b as usize] - p(0.0, 0.0, 0.0)))
+                * 0.5;
+            assert!(
+                (middle.length() - 1.0).abs() > 0.05,
+                "deflection {deflection}: an open edge along the join at {middle:?}"
+            );
+        }
+    }
+}

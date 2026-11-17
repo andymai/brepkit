@@ -545,17 +545,6 @@ pub(super) fn weld_boundary_vertices(
         x
     }
     let mut parent: Vec<u32> = (0..n_verts as u32).collect();
-    // The faces whose free rim each cluster holds a sample of. A cluster
-    // never takes two samples of one face's rim, not even through a sample
-    // of another face.
-    let mut cluster_rims: Vec<Vec<u32>> = vec![Vec::new(); n_verts];
-    for &vid in &boundary_verts {
-        if let Some(&face) = rim_face.get(vid as usize)
-            && face != NO_RIM_FACE
-        {
-            cluster_rims[vid as usize].push(face);
-        }
-    }
 
     let weld_tol = deflection.max(1e-6) * 2.0;
     let inv_cell = 1.0 / weld_tol;
@@ -574,62 +563,109 @@ pub(super) fn weld_boundary_vertices(
         let p = mesh.positions[vid as usize];
         grid.entry(cell_key(p)).or_default().push(vid);
     }
-
-    // A pair without a rim sample joins at once: until the rim pairs below,
-    // no cluster holds a rim sample, and the clusters such pairs make do not
-    // depend on the order of the joins. A pair of two samples on one face's
-    // rim never joins and is not queued. Only a pair of a rim sample with a
-    // vertex off that rim waits for the nearest-first pass.
-    let rim_of = |v: u32| rim_face.get(v as usize).copied().unwrap_or(NO_RIM_FACE);
-    let mut pairs: Vec<(f64, u32, u32)> = Vec::new();
-    for &vid in &boundary_verts {
-        let p = mesh.positions[vid as usize];
+    let positions = &mesh.positions;
+    // The vertices within reach of `vid` that follow it in id order.
+    let reach_of = |vid: u32, near: &mut Vec<(f64, u32)>| {
+        near.clear();
+        let p = positions[vid as usize];
         let (cx, cy, cz) = cell_key(p);
-
         for dx in -1..=1 {
             for dy in -1..=1 {
                 for dz in -1..=1 {
                     if let Some(cell) = grid.get(&(cx + dx, cy + dy, cz + dz)) {
                         for &other in cell {
-                            if other <= vid {
-                                continue;
-                            }
-                            let gap = (p - mesh.positions[other as usize]).length();
-                            if gap >= weld_tol {
-                                continue;
-                            }
-                            let (rim, other_rim) = (rim_of(vid), rim_of(other));
-                            if rim == NO_RIM_FACE && other_rim == NO_RIM_FACE {
-                                let (ra, rb) =
-                                    (uf_find(&mut parent, vid), uf_find(&mut parent, other));
-                                parent[ra.max(rb) as usize] = ra.min(rb);
-                            } else if rim != other_rim {
-                                pairs.push((gap, vid, other));
+                            let gap = (p - positions[other as usize]).length();
+                            if other > vid && gap < weld_tol {
+                                near.push((gap, other));
                             }
                         }
                     }
                 }
             }
         }
-    }
-    // The nearest pairs join first: a crack's own pairs take their samples
-    // before a pair across a narrow face can. Rooting at the smallest index
-    // makes each cluster's representative its least member, whatever the
-    // order of the joins.
-    pairs.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)));
-    for (_, a, b) in pairs {
-        let (ra, rb) = (uf_find(&mut parent, a), uf_find(&mut parent, b));
-        if ra == rb
-            || cluster_rims[ra as usize]
-                .iter()
-                .any(|face| cluster_rims[rb as usize].contains(face))
-        {
-            continue;
+    };
+    let rim_of = |v: u32| rim_face.get(v as usize).copied().unwrap_or(NO_RIM_FACE);
+
+    // A pair without a rim sample joins at once: no cluster holds a rim
+    // sample yet, and the clusters such pairs make do not depend on the
+    // order of the joins. Rooting at the smallest index makes each
+    // cluster's representative its least member.
+    let mut near: Vec<(f64, u32)> = Vec::new();
+    let mut rim_pairs = false;
+    for &vid in &boundary_verts {
+        reach_of(vid, &mut near);
+        for &(_, other) in &near {
+            let (rim, other_rim) = (rim_of(vid), rim_of(other));
+            if rim == NO_RIM_FACE && other_rim == NO_RIM_FACE {
+                let (ra, rb) = (uf_find(&mut parent, vid), uf_find(&mut parent, other));
+                parent[ra.max(rb) as usize] = ra.min(rb);
+            } else if rim != other_rim {
+                rim_pairs = true;
+            }
         }
-        let (root, child) = (ra.min(rb), ra.max(rb));
-        parent[child as usize] = root;
-        let rims = std::mem::take(&mut cluster_rims[child as usize]);
-        cluster_rims[root as usize].extend(rims);
+    }
+
+    // A pair with a rim sample joins in rounds. In each round, each cluster
+    // takes its nearest partner that it may join, and those joins run
+    // nearest first: a crack's own pairs join before a pair across a narrow
+    // face. No cluster takes two samples of one face's rim, not even through
+    // a sample of another face. A round keeps one pair for each cluster, so
+    // the weld's memory grows with its samples, not with their pairs, and
+    // the nearest pair of a round always joins, so the rounds end.
+    let mut cluster_rims: DetHashMap<u32, Vec<u32>> = DetHashMap::default();
+    if rim_pairs {
+        for &vid in &boundary_verts {
+            if rim_of(vid) != NO_RIM_FACE {
+                cluster_rims.entry(vid).or_default().push(rim_of(vid));
+            }
+        }
+    }
+    let clash = |rims: &DetHashMap<u32, Vec<u32>>, ra: u32, rb: u32| {
+        rims.get(&ra)
+            .zip(rims.get(&rb))
+            .is_some_and(|(a, b)| a.iter().any(|face| b.contains(face)))
+    };
+    let nearer = |a: &(f64, u32, u32), b: &(f64, u32, u32)| {
+        a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2))
+    };
+    let mut best: DetHashMap<u32, (f64, u32, u32)> = DetHashMap::default();
+    let mut joining = rim_pairs;
+    while joining {
+        best.clear();
+        for &vid in &boundary_verts {
+            reach_of(vid, &mut near);
+            for &(gap, other) in &near {
+                if rim_of(vid) == rim_of(other) {
+                    continue;
+                }
+                let (ra, rb) = (uf_find(&mut parent, vid), uf_find(&mut parent, other));
+                if ra == rb || clash(&cluster_rims, ra, rb) {
+                    continue;
+                }
+                let pair = (gap, vid, other);
+                for root in [ra, rb] {
+                    let held = best.entry(root).or_insert(pair);
+                    if nearer(&pair, held).is_lt() {
+                        *held = pair;
+                    }
+                }
+            }
+        }
+        let mut round: Vec<(f64, u32, u32)> = best.values().copied().collect();
+        joining = !round.is_empty();
+        round.sort_by(nearer);
+        round.dedup_by(|a, b| a.1 == b.1 && a.2 == b.2);
+        for (_, a, b) in round {
+            let (ra, rb) = (uf_find(&mut parent, a), uf_find(&mut parent, b));
+            if ra == rb || clash(&cluster_rims, ra, rb) {
+                continue;
+            }
+            let (root, child) = (ra.min(rb), ra.max(rb));
+            parent[child as usize] = root;
+            if let Some(rims) = cluster_rims.remove(&child) {
+                cluster_rims.entry(root).or_default().extend(rims);
+            }
+        }
     }
 
     let mut changed = false;
