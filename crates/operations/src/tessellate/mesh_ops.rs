@@ -1,6 +1,6 @@
 //! Mesh validation and boundary operations.
 
-use brepkit_math::det_hash::{DetHashMap, DetHashSet};
+use brepkit_math::det_hash::{DetHashMap, DetHashSet, WordHashMap, WordState};
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
 use brepkit_topology::face::FaceSurface;
@@ -208,35 +208,35 @@ pub(super) fn dedupe_coincident_triangles(
     const POS_GRID: f64 = COINCIDENT_DEDUPE_GRID;
 
     type TriKey = [(i64, i64, i64); 3];
-    type TriRefs = Vec<(usize, bool)>;
 
     let tri_count = mesh.indices.len() / 3;
     if tri_count < 2 {
         return;
     }
 
+    let s = 1.0 / POS_GRID;
     #[allow(clippy::cast_possible_truncation)]
-    let quant = |p: Point3| -> (i64, i64, i64) {
-        let s = 1.0 / POS_GRID;
-        (
-            (p.x() * s).round() as i64,
-            (p.y() * s).round() as i64,
-            (p.z() * s).round() as i64,
-        )
-    };
+    let quantized: Vec<(i64, i64, i64)> = mesh
+        .positions
+        .iter()
+        .map(|p| {
+            (
+                (p.x() * s).round() as i64,
+                (p.y() * s).round() as i64,
+                (p.z() * s).round() as i64,
+            )
+        })
+        .collect();
 
-    let mut by_key: DetHashMap<TriKey, TriRefs> = DetHashMap::default();
+    // Each key's latest triangle, and for each triangle the one before it
+    // with its key: the triangles of a key form a chain, read back to front.
+    let mut latest: WordHashMap<TriKey, usize> =
+        WordHashMap::with_capacity_and_hasher(tri_count, WordState);
+    let mut earlier = vec![usize::MAX; tri_count];
+    let mut parity = vec![true; tri_count];
+    let mut repeated = false;
     for t in 0..tri_count {
-        let (a, b, c) = (
-            mesh.indices[t * 3] as usize,
-            mesh.indices[t * 3 + 1] as usize,
-            mesh.indices[t * 3 + 2] as usize,
-        );
-        let mut tri_pts = [
-            quant(mesh.positions[a]),
-            quant(mesh.positions[b]),
-            quant(mesh.positions[c]),
-        ];
+        let mut tri_pts = [0, 1, 2].map(|k| quantized[mesh.indices[t * 3 + k] as usize]);
         // Sort tri_pts ascending; track parity of the sort permutation.
         let mut parity_even = true;
         if tri_pts[0] > tri_pts[1] {
@@ -255,29 +255,47 @@ pub(super) fn dedupe_coincident_triangles(
         if tri_pts[0] == tri_pts[1] || tri_pts[1] == tri_pts[2] {
             continue;
         }
-        by_key.entry(tri_pts).or_default().push((t, parity_even));
+        parity[t] = parity_even;
+        if let Some(before) = latest.insert(tri_pts, t) {
+            earlier[t] = before;
+            repeated = true;
+        }
+    }
+    if !repeated {
+        return;
     }
 
     let mut keep = vec![true; tri_count];
-    for tris in by_key.values() {
-        if tris.len() < 2 {
+    let mut grouped = vec![false; tri_count];
+    let mut tris: Vec<usize> = Vec::new();
+    for last in (0..tri_count).rev() {
+        if earlier[last] == usize::MAX || grouped[last] {
             continue;
         }
-        let (even, odd): (Vec<_>, Vec<_>) = tris.iter().partition(|&&(_, p)| p);
+        tris.clear();
+        let mut t = last;
+        loop {
+            grouped[t] = true;
+            tris.push(t);
+            if earlier[t] == usize::MAX {
+                break;
+            }
+            t = earlier[t];
+        }
+        tris.reverse();
+        let (even, odd): (Vec<usize>, Vec<usize>) = tris.iter().partition(|&&t| parity[t]);
         let cancel_pairs = even.len().min(odd.len());
-        for &(t, _) in even.iter().take(cancel_pairs) {
+        for &t in even.iter().take(cancel_pairs) {
             keep[t] = false;
         }
-        for &(t, _) in odd.iter().take(cancel_pairs) {
+        for &t in odd.iter().take(cancel_pairs) {
             keep[t] = false;
         }
         // Of the surviving same-winding triangles, keep only one.
-        let leftover_even: Vec<_> = even.iter().skip(cancel_pairs).copied().collect();
-        let leftover_odd: Vec<_> = odd.iter().skip(cancel_pairs).copied().collect();
-        for &(t, _) in leftover_even.iter().skip(1) {
+        for &t in even.iter().skip(cancel_pairs).skip(1) {
             keep[t] = false;
         }
-        for &(t, _) in leftover_odd.iter().skip(1) {
+        for &t in odd.iter().skip(cancel_pairs).skip(1) {
             keep[t] = false;
         }
     }
@@ -498,7 +516,8 @@ pub(super) fn weld_boundary_vertices(
         return false;
     }
 
-    let mut half_edges: DetHashMap<(u32, u32), usize> = DetHashMap::default();
+    let mut half_edges: WordHashMap<(u32, u32), usize> =
+        WordHashMap::with_capacity_and_hasher(mesh.indices.len(), WordState);
     for tri in mesh.indices.chunks_exact(3) {
         let (i0, i1, i2) = (tri[0], tri[1], tri[2]);
         *half_edges.entry((i0, i1)).or_default() += 1;
