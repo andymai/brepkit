@@ -4026,20 +4026,29 @@ fn torus_trim_geom(
     face: &brepkit_topology::face::Face,
     surface: &brepkit_math::surfaces::ToroidalSurface,
 ) -> Result<Option<FaceGeom>, AlgoError> {
-    let mut vertices = Vec::new();
+    // The middle of the arc of tube angles the wires cover, across from the
+    // widest gap their samples leave. A mean of the vertices' tube angles
+    // leans toward the rim where a seam's pieces start, and a band past half
+    // the tube then reaches the far side from it.
+    const PIECES: u32 = 16;
+    let mut tube_angles = Vec::new();
     for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
         for oe in topo.wire(wid)?.edges() {
-            vertices.push(topo.vertex(topo.edge(oe.edge())?.start())?.point());
+            let edge = topo.edge(oe.edge())?;
+            let start = topo.vertex(edge.start())?.point();
+            let end = topo.vertex(edge.end())?.point();
+            let (t0, t1) = edge.curve().domain_with_endpoints(start, end);
+            for i in 0..=PIECES {
+                let t = (t1 - t0).madd(f64::from(i) / f64::from(PIECES), t0);
+                let p = edge.curve().evaluate_with_endpoints(t, start, end);
+                tube_angles.push(surface.project_point(p).1);
+            }
         }
     }
-    let (sin, cos) = vertices.iter().fold((0.0, 0.0), |(s, c), &p| {
-        let v = surface.project_point(p).1;
-        (s + v.sin(), c + v.cos())
-    });
-    if sin.hypot(cos) <= 1e-9 * vertices.len() as f64 {
+    let Some((gap_start, gap_end)) = largest_u_gap(&tube_angles) else {
         return Ok(None);
-    }
-    let v_mid = sin.atan2(cos);
+    };
+    let v_mid = wrap_pi((gap_start - gap_end).rem_euclid(TAU).madd(0.5, gap_end));
     let project = |p: Point3| torus_patch_uv(surface, v_mid, p);
     let radius = |v: f64| torus_radius_at(surface, v);
     let Some(trim) = UvTrim::new(topo, face, &project, &radius)? else {
