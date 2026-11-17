@@ -496,6 +496,86 @@ fn wires_cross(surface: &FaceSurface, a: &[Arc<'_>], b: &[Arc<'_>], tol: f64) ->
     })
 }
 
+/// Whether `wire` crosses itself, as [`wires_cross`] reads a wire against
+/// itself, with the pairs of edges it reads found by a sweep.
+///
+/// The edges are swept in the order their boxes start along the axis the
+/// wire spans most, and an edge is read against the edges whose boxes,
+/// grown by the edges' sags and `tol`, it still overlaps on that axis. Each
+/// pair is read once. A meeting at the vertex two edges in a row share is
+/// the wire running on, which never crosses: it is kept as a neighbour of
+/// the other meetings, and its sides are not read.
+fn wire_crosses_itself(surface: &FaceSurface, wire: &[Arc<'_>], tol: f64) -> bool {
+    let count = wire.len();
+    let mut lo = [f64::INFINITY; 3];
+    let mut hi = [f64::NEG_INFINITY; 3];
+    for arc in wire {
+        for k in 0..3 {
+            lo[k] = lo[k].min(arc.lo[k]);
+            hi[k] = hi[k].max(arc.hi[k]);
+        }
+    }
+    let axis = (0..3)
+        .max_by(|&i, &j| (hi[i] - lo[i]).total_cmp(&(hi[j] - lo[j])))
+        .unwrap_or(0);
+    let start = |i: usize| wire[i].lo[axis] - wire[i].sag - 0.5 * tol;
+    let end = |i: usize| wire[i].hi[axis] + wire[i].sag + 0.5 * tol;
+    let mut order: Vec<usize> = (0..count).filter(|&i| wire[i].length > tol).collect();
+    order.sort_by(|&i, &j| start(i).total_cmp(&start(j)).then(i.cmp(&j)));
+    // Where the wire runs on from edge `i` to edge `j`, the vertex they share.
+    let runs_on = |i: usize, j: usize| -> Option<Point3> {
+        let (from, to) = (wire[i].at(1.0), wire[j].at(0.0));
+        ((i + 1) % count == j && (from - to).length() <= tol).then_some(from)
+    };
+    let mut all: Vec<(Meeting, f64, bool)> = Vec::new();
+    let mut active: Vec<usize> = Vec::new();
+    for &j in &order {
+        active.retain(|&i| end(i) >= start(j));
+        for &i in &active {
+            if wire[i].edge == wire[j].edge {
+                continue;
+            }
+            let (a, b) = (i.min(j), i.max(j));
+            let reach = (1e-2 * wire[a].length.min(wire[b].length)).max(100.0 * tol);
+            let shared = [runs_on(a, b), runs_on(b, a)];
+            for (fa, fb) in meetings(&wire[a], &wire[b], tol) {
+                let at = wire[b].at(fb);
+                let running_on = shared
+                    .iter()
+                    .flatten()
+                    .any(|&vertex| (vertex - at).length() <= 10.0 * tol);
+                all.push((
+                    Meeting {
+                        a: (a, fa),
+                        b: (b, fb),
+                        at,
+                    },
+                    reach,
+                    running_on,
+                ));
+            }
+        }
+        active.push(j);
+    }
+    all.iter()
+        .filter(|(_, _, running_on)| !running_on)
+        .any(|(meeting, reach, _)| {
+            let d = all
+                .iter()
+                .map(|(other, _, _)| (other.at - meeting.at).length())
+                .filter(|&gap| gap > 10.0 * tol)
+                .fold(*reach, |d, gap| d.min(0.25 * gap));
+            let swapped = Meeting {
+                a: meeting.b,
+                b: meeting.a,
+                at: meeting.at,
+            };
+            d >= 10.0 * tol
+                && (crosses(surface, wire, wire, meeting, d, tol)
+                    || crosses(surface, wire, wire, &swapped, d, tol))
+        })
+}
+
 fn issue(face_id: FaceId, description: String) -> ValidationIssue {
     ValidationIssue {
         check: CheckId::FaceWiresIntersect,
@@ -709,7 +789,7 @@ pub fn check_face_wires_simple(
             .iter()
             .map(|oe| Arc::of(topo, oe.edge(), oe.is_forward()))
             .collect::<Result<Vec<_>, _>>()?;
-        if arcs.len() > 1 && wires_cross(face.surface(), &arcs, &arcs, tolerance) {
+        if arcs.len() > 1 && wire_crosses_itself(face.surface(), &arcs, tolerance) {
             return Ok(vec![issue(
                 face_id,
                 format!("wire {} crosses itself", wire_id.index()),
@@ -883,6 +963,95 @@ mod tests {
         let mut topo = Topology::new();
         let face = windowed_band(&mut topo, 0.3, 2.0, 3.0);
         assert_eq!(crossed(&topo, face), None);
+    }
+
+    /// The swept search flags a wire exactly where the search of every pair
+    /// of its edges does: random outlines of lines and arcs, many of them
+    /// crossing themselves, on a plane.
+    #[test]
+    fn the_swept_search_flags_what_the_search_of_every_pair_flags() {
+        let mut state: u64 = 0x2587;
+        let mut next = move || {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            #[allow(clippy::cast_precision_loss)]
+            let unit = (state >> 11) as f64 / (1_u64 << 53) as f64;
+            unit
+        };
+        let (mut crossed, mut clear) = (0, 0);
+        for round in 0..400 {
+            let mut topo = Topology::new();
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let count = 3 + (next() * 25.0) as usize;
+            // Points round a circle, each pushed in or out, some swapped so
+            // the outline doubles back across itself.
+            let mut corners: Vec<[f64; 3]> = (0..count)
+                .map(|k| {
+                    #[allow(clippy::cast_precision_loss)]
+                    let angle = TAU * (k as f64 + 0.4 * next()) / count as f64;
+                    let r = 10.0 * (0.4 + next());
+                    [r * angle.cos(), r * angle.sin(), 0.0]
+                })
+                .collect();
+            if round % 3 == 0 && count > 4 {
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                let k = (next() * (count - 2) as f64) as usize;
+                corners.swap(k, k + 2);
+            }
+            let vertices = points(&mut topo, &corners);
+            let mut edges = Vec::with_capacity(count);
+            for k in 0..count {
+                let (a, b) = (vertices[k], vertices[(k + 1) % count]);
+                let (pa, pb) = (
+                    topo.vertex(a).unwrap().point(),
+                    topo.vertex(b).unwrap().point(),
+                );
+                let curve = if next() < 0.4 {
+                    // An arc through both ends that bows to one side.
+                    let mid = pa + (pb - pa) * 0.5;
+                    let chord = pb - pa;
+                    let side = Z.cross(chord).normalize().unwrap();
+                    let centre = mid + side * (chord.length() * (next() - 0.5) * 3.0);
+                    let normal = (pa - centre).cross(pb - centre).normalize().unwrap();
+                    EdgeCurve::Circle(
+                        Circle3D::new(centre, normal, (pa - centre).length()).unwrap(),
+                    )
+                } else {
+                    EdgeCurve::Line
+                };
+                edges.push(OrientedEdge::new(
+                    topo.add_edge(Edge::new(a, b, curve)),
+                    true,
+                ));
+            }
+            let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+            let face = flat(&mut topo, wire, vec![]);
+            let surface = topo.face(face).unwrap().surface().clone();
+            let arcs = topo
+                .wire(wire)
+                .unwrap()
+                .edges()
+                .iter()
+                .map(|oe| Arc::of(&topo, oe.edge(), oe.is_forward()))
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+            let every_pair = wires_cross(&surface, &arcs, &arcs, 1e-6);
+            assert_eq!(
+                wire_crosses_itself(&surface, &arcs, 1e-6),
+                every_pair,
+                "round {round}: {corners:?}"
+            );
+            if every_pair {
+                crossed += 1;
+            } else {
+                clear += 1;
+            }
+        }
+        assert!(
+            crossed > 50 && clear > 50,
+            "{crossed} crossed, {clear} clear"
+        );
     }
 
     #[test]
