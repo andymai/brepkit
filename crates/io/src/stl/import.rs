@@ -1968,15 +1968,32 @@ struct Facet {
 }
 
 /// Whether two triangles of two closed bodies cross: the surface of each
-/// body passes through the plane of the other triangle there, and the two
-/// meet along a length of more than `on`. Two triangles that touch at a
-/// point, along an edge, or in one plane do not cross.
+/// body passes through the other surface there, and the two meet along a
+/// length of more than `on`. Two triangles that touch at a point, along an
+/// edge, or in one plane do not cross.
+///
+/// Where a triangle of each body has an edge on one line, each surface is
+/// two triangles round the line. The two surfaces cross there when the
+/// triangles of the two bodies alternate round the line.
 fn triangles_cross(t: &Facet, u: &Facet, on: f64) -> bool {
     let (Some(cut_t), Some(cut_u)) = (
         cut_by_plane(t, &u.corners, on),
         cut_by_plane(u, &t.corners, on),
     ) else {
         return false;
+    };
+    let through = match (cut_t, cut_u) {
+        (Cut::Edge { k, .. }, Cut::Edge { k: j, .. }) => alternate_round_edge(t, k, u, j),
+        (Cut::Edge { passes, .. }, Cut::Through(..))
+        | (Cut::Through(..), Cut::Edge { passes, .. }) => passes,
+        (Cut::Through(..), Cut::Through(..)) => true,
+    };
+    if !through {
+        return false;
+    }
+    let ends = |facet: &Facet, cut: Cut| match cut {
+        Cut::Through(a, b) => (a, b),
+        Cut::Edge { k, .. } => (facet.corners[k], facet.corners[(k + 1) % 3]),
     };
     let [t0, t1, t2] = t.corners;
     let [u0, u1, u2] = u.corners;
@@ -1989,8 +2006,60 @@ fn triangles_cross(t: &Facet, u: &Facet, on: f64) -> bool {
         let (x, y) = (line.dot(a - t0), line.dot(b - t0));
         (x.min(y), x.max(y))
     };
-    let ((a0, a1), (b0, b1)) = (span(cut_t), span(cut_u));
+    let ((a0, a1), (b0, b1)) = (span(ends(t, cut_t)), span(ends(u, cut_u)));
     a1.min(b1) - a0.max(b0) > on
+}
+
+/// Whether the two triangles of each of two bodies round a line alternate
+/// round it: `t` and the triangle across its edge from corner `k`, and `u`
+/// and the triangle across its edge from corner `j`, with both edges on the
+/// line. With exact signs. A triangle of one body in the plane of a
+/// triangle of the other decides nothing here: the two lie in one plane.
+fn alternate_round_edge(t: &Facet, k: usize, u: &Facet, j: usize) -> bool {
+    let (p, q) = (t.corners[k], t.corners[(k + 1) % 3]);
+    let (a, b) = (t.corners[(k + 2) % 3], t.beyond[k]);
+    let (c, d) = (u.corners[(j + 2) % 3], u.beyond[j]);
+    // The sign of the turn round the line from one far corner to another.
+    let turn = |x: Point3, y: Point3| orient3d(p, q, x, y);
+    let (ac, cb, ad, db, ab) = (turn(a, c), turn(c, b), turn(a, d), turn(d, b), turn(a, b));
+    if [ac, cb, ad, db].contains(&0.0) {
+        return false;
+    }
+    if ab == 0.0 {
+        // `a` and `b` in one plane with the line: the two triangles lie
+        // back to back, or flat across the line.
+        let axis = q - p;
+        let off = |x: Point3| {
+            let w = x - p;
+            w - axis * (w.dot(axis) / axis.dot(axis))
+        };
+        if off(a).dot(off(b)) >= 0.0 {
+            return false;
+        }
+    }
+    // Whether a corner lies in the wedge that turns from `a` to `b`.
+    let inside = |ax: f64, xb: f64| {
+        if ab > 0.0 {
+            ax > 0.0 && xb > 0.0
+        } else if ab < 0.0 {
+            ax > 0.0 || xb > 0.0
+        } else {
+            ax > 0.0
+        }
+    };
+    inside(ac, cb) != inside(ad, db)
+}
+
+/// Where the plane of a triangle meets a triangle of another body.
+#[derive(Clone, Copy)]
+enum Cut {
+    /// The triangle passes more than the tolerance to both sides of the
+    /// plane: its part in the plane, by its two ends.
+    Through(Point3, Point3),
+    /// The edge from corner `k` to corner `k + 1` lies in the plane, and the
+    /// far corner is off it. `passes` tells whether the triangle across the
+    /// edge is more than the tolerance to the other side of the plane.
+    Edge { k: usize, passes: bool },
 }
 
 /// Whether two triangles of two closed bodies lie in one plane, within
@@ -2075,15 +2144,13 @@ fn clip_to_triangle(polygon: Vec<[f64; 2]>, clip: &[[f64; 2]; 3]) -> Vec<[f64; 2
     out
 }
 
-/// Where the surface of the body of `facet` passes through the plane of
-/// the triangle `other`, in `facet`, by its two ends.
+/// Where the plane of the triangle `other` meets `facet`.
 ///
 /// - When `facet` passes more than `on` to each side of the plane, the
 ///   part of `facet` in the plane.
-/// - When an edge of `facet` lies in the plane, and `facet` and the
-///   triangle across that edge are more than `on` to the two sides of the
-///   plane, that edge.
-fn cut_by_plane(facet: &Facet, other: &[Point3; 3], on: f64) -> Option<(Point3, Point3)> {
+/// - When an edge of `facet` lies in the plane, and its far corner more
+///   than `on` off it, that edge.
+fn cut_by_plane(facet: &Facet, other: &[Point3; 3], on: f64) -> Option<Cut> {
     let tri = facet.corners;
     let normal = (other[1] - other[0])
         .cross(other[2] - other[0])
@@ -2103,19 +2170,17 @@ fn cut_by_plane(facet: &Facet, other: &[Point3; 3], on: f64) -> Option<(Point3, 
             }
         }
         return match ends[..] {
-            [a, b] => Some((a, b)),
+            [a, b] => Some(Cut::Through(a, b)),
             _ => None,
         };
     }
     (0..3).find_map(|k| {
         let (m, far) = ((k + 1) % 3, (k + 2) % 3);
         let beyond = side(facet.beyond[k]);
-        (d[k].abs() <= on
-            && d[m].abs() <= on
-            && d[far].abs() > on
-            && beyond.abs() > on
-            && (beyond > 0.0) != (d[far] > 0.0))
-            .then_some((tri[k], tri[m]))
+        (d[k].abs() <= on && d[m].abs() <= on && d[far].abs() > on).then_some(Cut::Edge {
+            k,
+            passes: beyond.abs() > on && (beyond > 0.0) != (d[far] > 0.0),
+        })
     })
 }
 

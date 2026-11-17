@@ -1254,6 +1254,48 @@ fn two_inward_cubes_with_inward_normals_that_share_an_edge_are_two_solids() {
     }
 }
 
+/// Add a cube of edge `size` with one edge on the z axis from `z = lift`,
+/// turned by `angle` round that axis.
+fn add_turned_cube(mesh: &mut TriangleMesh, angle: f64, lift: f64, size: f64, inward: bool) {
+    let first = mesh.positions.len();
+    add_cube(mesh, [0.0, 0.0, lift], size, inward);
+    let (s, c) = angle.sin_cos();
+    for p in &mut mesh.positions[first..] {
+        *p = Point3::new(c * p.x() - s * p.y(), s * p.x() + c * p.y(), p.z());
+    }
+}
+
+/// Three cubes share the edge on the z axis, with a gap of 30 degrees
+/// between each two.
+#[test]
+fn three_cubes_round_one_edge_are_three_solids() {
+    for inward in [false, true] {
+        let mut mesh = TriangleMesh::default();
+        for k in 0..3 {
+            let angle = f64::from(k) * std::f64::consts::TAU / 3.0;
+            add_turned_cube(&mut mesh, angle, 0.0, 10.0, inward);
+        }
+
+        let mut topo = Topology::new();
+        let parts = import_mesh_parts(&mut topo, &mesh, 1e-7).unwrap();
+        assert_eq!(
+            (parts.solids.len(), parts.shells.len()),
+            (3, 0),
+            "inward {inward}"
+        );
+        assert_eq!(topo.vertices().len(), 24);
+        for &solid in &parts.solids {
+            assert!((volume(&topo, solid) - 1000.0).abs() < 1e-9);
+            assert_valid(&topo, solid);
+        }
+
+        let mut topo = Topology::new();
+        let joined = import_mesh(&mut topo, &mesh, 1e-7).unwrap();
+        assert!((volume(&topo, joined) - 3000.0).abs() < 1e-9);
+        assert_eq!(solid_pieces(&mut topo, joined).unwrap().len(), 3);
+    }
+}
+
 /// A chain of three cubes, each two of them with an edge in common. Each
 /// cube is a solid of its own, whichever way each cube is wound.
 #[test]
@@ -1350,6 +1392,53 @@ fn two_inward_cubes_that_share_an_edge_in_a_cavity_are_two_islands() {
     let joined = import_mesh(&mut topo, &mesh, 1e-7).unwrap();
     assert!((volume(&topo, joined) - 39000.0).abs() < 1e-9);
     assert_eq!(solid_pieces(&mut topo, joined).unwrap().len(), 3);
+}
+
+/// The second cube is turned by 120 degrees round the z axis, and moved up
+/// by half its edge. The two touch along half of an edge, with no corner in
+/// common there, and do not cross.
+#[test]
+fn two_cubes_that_touch_along_half_an_edge_are_one_solid() {
+    for inward in [false, true] {
+        let mut mesh = TriangleMesh::default();
+        add_turned_cube(&mut mesh, 0.0, 0.0, 10.0, inward);
+        add_turned_cube(&mut mesh, 120f64.to_radians(), 5.0, 10.0, inward);
+
+        let mut topo = Topology::new();
+        let parts = import_mesh_parts(&mut topo, &mesh, 1e-7).unwrap();
+        assert_eq!(
+            (parts.solids.len(), parts.shells.len()),
+            (2, 0),
+            "inward {inward}"
+        );
+        for &solid in &parts.solids {
+            assert!((volume(&topo, solid) - 1000.0).abs() < 1e-9);
+            assert_valid(&topo, solid);
+        }
+
+        let mut topo = Topology::new();
+        let joined = import_mesh(&mut topo, &mesh, 1e-7).unwrap();
+        assert!((volume(&topo, joined) - 2000.0).abs() < 1e-9);
+        assert_eq!(solid_pieces(&mut topo, joined).unwrap().len(), 2);
+    }
+}
+
+/// The second cube is turned by 45 degrees: the cubes cross along half of
+/// an edge.
+#[test]
+fn two_cubes_that_cross_along_half_an_edge_are_not_one_solid() {
+    for inward in [false, true] {
+        let mut mesh = TriangleMesh::default();
+        add_turned_cube(&mut mesh, 0.0, 0.0, 10.0, inward);
+        add_turned_cube(&mut mesh, 45f64.to_radians(), 5.0, 10.0, inward);
+
+        let mut topo = Topology::new();
+        let err = import_mesh(&mut topo, &mesh, 1e-7).unwrap_err();
+        assert!(err.to_string().contains("cross"), "{err}");
+        let parts = import_mesh_parts(&mut topo, &mesh, 1e-7).unwrap();
+        let expected = if inward { (0, 2) } else { (2, 0) };
+        assert_eq!((parts.solids.len(), parts.shells.len()), expected);
+    }
 }
 
 /// A mirror winds each triangle the other way. The two cubes that share an
