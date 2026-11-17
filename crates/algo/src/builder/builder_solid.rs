@@ -3922,7 +3922,11 @@ fn seam_beside_lens(
         if *other != Some(source) || face_a.is_reversed() != face_b.is_reversed() {
             continue;
         }
-        if !lies_on_seam_of(topo, source, path[0])? {
+        let mut pieces = true;
+        for &e in path {
+            pieces &= lies_on_seam_of(topo, source, e)?;
+        }
+        if !pieces {
             continue;
         }
         for (fi, seam_edge, across) in [(fa, ea, fb), (fb, eb, fa)] {
@@ -3962,9 +3966,14 @@ fn seam_beside_lens(
     Ok(None)
 }
 
-/// Whether `edge` lies along a seam of the input face `source`: an edge its
-/// wires run both ways.
+/// Whether `edge` is a piece of a seam of the input face `source`, an edge
+/// its wires run both ways: a line between two points of a seam line, an arc
+/// of a seam circle's own circle within the seam's span, or a span of a seam
+/// spline's own curve within the seam's span.
 fn lies_on_seam_of(topo: &Topology, source: FaceId, edge: EdgeId) -> Result<bool, AlgoError> {
+    use brepkit_topology::edge::EdgeCurve;
+    use std::f64::consts::TAU;
+
     let mut ways: HashMap<EdgeId, (bool, bool)> = HashMap::new();
     for (e, forward) in face_edge_uses(topo, source)? {
         let way = ways.entry(e).or_default();
@@ -3974,21 +3983,53 @@ fn lies_on_seam_of(topo: &Topology, source: FaceId, edge: EdgeId) -> Result<bool
             way.1 = true;
         }
     }
-    let at = edge_path(topo, topo.edge(edge)?)?;
-    let points = [at(0.0), at(0.5), at(1.0)];
+    let piece = topo.edge(edge)?;
+    let (sp, ep) = (
+        topo.vertex(piece.start())?.point(),
+        topo.vertex(piece.end())?.point(),
+    );
     for (&seam, &(forth, back)) in &ways {
         if !(forth && back) {
             continue;
         }
         let seam = topo.edge(seam)?;
-        if seam.start() == seam.end() {
-            continue;
-        }
-        let along = edge_path(topo, seam)?;
-        if points
-            .iter()
-            .all(|&p| distance_to_path(&along, p) <= PATH_MIN_TOL)
-        {
+        let (a, b) = (
+            topo.vertex(seam.start())?.point(),
+            topo.vertex(seam.end())?.point(),
+        );
+        let on_seam = match (piece.curve(), seam.curve()) {
+            (EdgeCurve::Line, EdgeCurve::Line) => {
+                let ab = b - a;
+                let off = |p: Point3| {
+                    let t = ((p - a).dot(ab) / ab.dot(ab).max(f64::MIN_POSITIVE)).clamp(0.0, 1.0);
+                    (p - a - ab * t).length()
+                };
+                ab.length() > PATH_MIN_TOL && off(sp) <= PATH_MIN_TOL && off(ep) <= PATH_MIN_TOL
+            }
+            (EdgeCurve::Circle(arc), EdgeCurve::Circle(circle)) => {
+                let same_circle = (arc.center() - circle.center()).length() <= PATH_MIN_TOL
+                    && (arc.radius() - circle.radius()).abs() <= PATH_MIN_TOL
+                    && arc.normal().cross(circle.normal()).length() <= PATH_ANGLE_TOL;
+                // The piece's sweep, from where it starts round the seam
+                // circle's own way, within the seam's sweep.
+                let (t0, t1) = piece.curve().domain_with_endpoints(sp, ep);
+                let (s0, s1) = seam.curve().domain_with_endpoints(a, b);
+                let from = if arc.normal().dot(circle.normal()) > 0.0 {
+                    circle.project(sp)
+                } else {
+                    circle.project(ep)
+                };
+                let slack = PATH_MIN_TOL / circle.radius();
+                same_circle && (from - s0).rem_euclid(TAU) + (t1 - t0) <= s1 - s0 + slack
+            }
+            (EdgeCurve::NurbsCurve(span), EdgeCurve::NurbsCurve(curve)) => {
+                let (t0, t1) = piece.curve().domain_with_endpoints(sp, ep);
+                let (s0, s1) = seam.curve().domain_with_endpoints(a, b);
+                span == curve && t0.min(t1) >= s0.min(s1) && t0.max(t1) <= s0.max(s1)
+            }
+            _ => false,
+        };
+        if on_seam {
             return Ok(true);
         }
     }
@@ -4280,6 +4321,9 @@ const PATH_REL_TOL: f64 = 1e-3;
 /// The least such distance: above the weld band, so a fitted curve's error
 /// keeps it on its own path.
 const PATH_MIN_TOL: f64 = 1e-5;
+/// How far apart, as the sine of their angle, two circles' axes may lie and
+/// the circles still be one.
+const PATH_ANGLE_TOL: f64 = 1e-9;
 /// The largest such distance, so a long lens between two splines stays two
 /// paths whatever its length.
 const PATH_MAX_TOL: f64 = 1e-2;
@@ -5659,6 +5703,25 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// The wall's lens beside a spline that meets the seam at its ends and its
+    /// middle, and leaves it by 0.05 radians at its quarters. The spline is no
+    /// piece of the seam: it stays an edge, and the lens a face.
+    #[test]
+    fn a_spline_that_meets_a_seam_at_three_points_stays_an_edge() {
+        let wavy: Vec<Point3> = (0..=40)
+            .map(|i| {
+                let t = f64::from(i) / 40.0;
+                on_wall(0.05 * (std::f64::consts::TAU * t).sin(), t.madd(0.6, 0.2))
+            })
+            .collect();
+        let mut topo = Topology::new();
+        let (mut face_ids, mut sources) = wall_beside_a_lens(&mut topo, true, Some(through(&wavy)));
+        settle_faces(&mut topo, &mut face_ids, &mut sources, None).unwrap();
+        assert_eq!(face_ids.len(), 3, "the lens stays a face");
+        let uses = edge_use_counts(&topo, &face_ids);
+        assert!(uses.values().all(|&n| n == 2), "{uses:?}");
     }
 
     /// Two faces of one seamed wall, each between a piece of the seam and the
