@@ -550,6 +550,29 @@ fn a_plates_top_outline_of_lines_and_arcs_takes_a_chamfer() {
     );
 }
 
+/// `axial-fan`: the frame's shell (flanges and a duct of bore 38, with the
+/// lead slot cut through the duct's wall from z = 3 to 4.5) and the wide
+/// strut, 4.4 wide from z = 0 to 3, under the slot. The strut's footprint on
+/// the bore meets the slot's window along the window's bottom edge.
+#[test]
+fn a_strut_fuses_into_the_fans_frame_under_its_slot() {
+    let mut topo = Topology::new();
+    let shell = load("axial_fan_frame_shell.bin", &mut topo);
+    let strut = load("axial_fan_wide_strut.bin", &mut topo);
+    // In the duct's wall, in the strut inside the bore, and on the axis.
+    fuse_exactly(
+        &mut topo,
+        shell,
+        strut,
+        [[38.7, 0.0, 12.0], [13.435, -21.92, 1.5], [0.0, 0.0, 12.0]],
+        &Grid {
+            lo: [18.6, -35.1, 0.5],
+            hi: [26.6, -27.1, 5.5],
+            n: 16,
+        },
+    );
+}
+
 /// `universal-joint`: a yoke's fork (two ears and a bridge, 68 planes) and
 /// the turned outside it is trimmed to, a cylinder of radius 47 that tapers
 /// along a cone to radius 34 at x = -62. The bridge's corners stand outside
