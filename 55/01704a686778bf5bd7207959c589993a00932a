@@ -1,0 +1,21 @@
+crates/blend/src/corner.rs
+  s_489e8e320eebde::t_04c43a0ebe7bee 5935-5939,6199-6201,6205,6210
+crates/operations/tests/regress_fillet_variable_retry_seam_stub.rs
+  s_489e8e320eebde::t_df8e3f9066ed13 773-806
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5501704a686778bf5bd7207959c589993a00932a",
+  "prompts": {},
+  "sessions": {
+    "s_489e8e320eebde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1a2a9261-2019-4199-aa4f-06130071c8f0",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
