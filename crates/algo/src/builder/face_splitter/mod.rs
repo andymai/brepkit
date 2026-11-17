@@ -6311,6 +6311,62 @@ fn walk_boundary_from_closed_rim(edges: &mut [OrientedPCurveEdge]) -> bool {
     true
 }
 
+/// Move an edge's UVs and its pcurve together by `(du, dv)`: a pcurve left on
+/// the old copy of the period reads as stale, and the walkers then take the
+/// edge's chord for its direction at each end.
+fn move_edge_in_uv(e: &mut OrientedPCurveEdge, du: f64, dv: f64) {
+    use brepkit_math::curves2d::{Circle2D, Curve2D, Ellipse2D, Line2D, NurbsCurve2D};
+    use brepkit_math::vec::Vec2;
+    use std::f64::consts::{FRAC_PI_2, PI, TAU};
+    if du == 0.0 && dv == 0.0 {
+        return;
+    }
+    let by = Vec2::new(du, dv);
+    e.start_uv = e.start_uv + by;
+    e.end_uv = e.end_uv + by;
+    let moved = match &e.pcurve {
+        Curve2D::Line(line) => {
+            let origin = line.evaluate(0.0);
+            Line2D::new(origin + by, line.evaluate(1.0) - origin)
+                .ok()
+                .map(Curve2D::Line)
+        }
+        Curve2D::Circle(circle) => {
+            let centre = circle.evaluate(0.0) + (circle.evaluate(PI) - circle.evaluate(0.0)) * 0.5;
+            Circle2D::new(centre + by, circle.circumference() / TAU)
+                .ok()
+                .map(Curve2D::Circle)
+        }
+        Curve2D::Ellipse(ellipse) => {
+            let centre =
+                ellipse.evaluate(0.0) + (ellipse.evaluate(PI) - ellipse.evaluate(0.0)) * 0.5;
+            let (major, minor) = (
+                ellipse.evaluate(0.0) - centre,
+                ellipse.evaluate(FRAC_PI_2) - centre,
+            );
+            Ellipse2D::new(
+                centre + by,
+                major.length(),
+                minor.length(),
+                major.y().atan2(major.x()),
+            )
+            .ok()
+            .map(Curve2D::Ellipse)
+        }
+        Curve2D::Nurbs(nurbs) => NurbsCurve2D::new(
+            nurbs.degree(),
+            nurbs.knots().to_vec(),
+            nurbs.control_points().iter().map(|&p| p + by).collect(),
+            nurbs.weights().to_vec(),
+        )
+        .ok()
+        .map(Curve2D::Nurbs),
+    };
+    if let Some(pcurve) = moved {
+        e.pcurve = pcurve;
+    }
+}
+
 /// Whether `p` lies on `e` within `band`, read along its curve between its
 /// ends.
 fn point_on_oriented_edge(e: &OrientedPCurveEdge, p: Point3, band: f64) -> bool {
@@ -8827,8 +8883,7 @@ fn split_face_2d_impl(
             let du = nearest(at.x(), anchor_uv.x(), u_period) - at.x();
             let dv = nearest(at.y(), anchor_uv.y(), v_period) - at.y();
             for e in &mut pieces {
-                e.start_uv = Point2::new(e.start_uv.x() + du, e.start_uv.y() + dv);
-                e.end_uv = Point2::new(e.end_uv.x() + du, e.end_uv.y() + dv);
+                move_edge_in_uv(e, du, dv);
                 for &(p, uv) in &on_hole {
                     if (e.start_3d - p).length() <= weld {
                         e.start_uv = uv;
@@ -11985,6 +12040,51 @@ mod tests {
             extents[1] >= 2.0 - 1.0e-6,
             "kept comb should reach the top rim v = 2"
         );
+    }
+
+    /// A woven hole's piece whose pcurve is a NURBS arc, moved a period along
+    /// u to the face's window: its pcurve moves with its ends, so it still
+    /// starts and ends where the edge does.
+    #[test]
+    fn a_hole_moved_a_period_keeps_its_curved_pcurve_on_its_ends() {
+        use brepkit_math::curves2d::{Curve2D, NurbsCurve2D};
+        let w = std::f64::consts::FRAC_1_SQRT_2;
+        let arc = NurbsCurve2D::new(
+            2,
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            vec![
+                Point2::new(3.7, 3.0),
+                Point2::new(3.75, 3.6),
+                Point2::new(3.8, 3.0),
+            ],
+            vec![1.0, w, 1.0],
+        )
+        .unwrap();
+        let (start, end) = (arc.evaluate(0.0), arc.evaluate(1.0));
+        let mut edge = OrientedPCurveEdge {
+            curve_3d: EdgeCurve::Line,
+            pcurve: Curve2D::Nurbs(arc),
+            start_uv: start,
+            end_uv: end,
+            start_3d: Point3::new(0.0, 0.0, 0.0),
+            end_3d: Point3::new(1.0, 0.0, 0.0),
+            forward: true,
+            source_edge_idx: None,
+            pave_block_id: None,
+        };
+        let du = std::f64::consts::TAU;
+        move_edge_in_uv(&mut edge, du, 0.0);
+        assert!((edge.start_uv.x() - (start.x() + du)).abs() < 1e-12);
+        assert!(matches!(edge.pcurve, Curve2D::Nurbs(_)), "not a NURBS arc");
+        if let Curve2D::Nurbs(moved) = &edge.pcurve {
+            assert!((moved.evaluate(0.0) - edge.start_uv).length() < 1e-12);
+            assert!((moved.evaluate(1.0) - edge.end_uv).length() < 1e-12);
+            let middle = moved.evaluate(0.5);
+            assert!(
+                (middle.x() - (3.75 + du)).abs() < 1e-9 && middle.y() > 3.1,
+                "{middle:?}"
+            );
+        }
     }
 
     /// A tilted (non-axis-aligned) section makes the cut non-rectilinear, so the
