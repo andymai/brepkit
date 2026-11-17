@@ -19,7 +19,8 @@ use super::neighbour::{Neighbour, Side};
 use super::rows::{Ramps, dedup_breaks, piece_of, row_tolerance};
 use super::spline::{Space, fit_grid, fit_rows, solve_grid};
 use super::{
-    ALONG_DEGREE, MatchContinuity, SideJoints, boundary_face, pair_chains, surface_from_net, tilted,
+    ALONG_DEGREE, MatchContinuity, Pairing, SideJoints, boundary_face, pair_chains,
+    surface_from_net, tilted,
 };
 use crate::OperationsError;
 
@@ -237,7 +238,7 @@ fn match_onto(
         if bottom.closed != side.chain.closed {
             return Err(shape_mismatch());
         }
-        if pair_chains(&bottom, &mut side.chain) {
+        if pair_chains(&bottom, &mut side.chain, Pairing::Nearest) {
             side.sign = -side.sign;
         }
     }
@@ -245,7 +246,7 @@ fn match_onto(
         if bottom.closed != chain.closed {
             return Err(shape_mismatch());
         }
-        pair_chains(&bottom, chain);
+        pair_chains(&bottom, chain, Pairing::Nearest);
     }
     let chain: &Chain = match (&side, &chain_alone) {
         (Some(side), _) => &side.chain,
@@ -980,7 +981,7 @@ fn far_side_of_loop(
             .collect();
         let mut far = Chain::from_walk(topo, &walk, true)?;
         if let Some(along) = &bottom.chain {
-            pair_chains(along, &mut far);
+            pair_chains(along, &mut far, Pairing::Nearest);
         }
         let from = neighbour.unwrap_near(neighbour.locate(far.point(0.0))?, bottom.start());
         return Ok((SideTrace::of(neighbour, Some(far), from)?, Vec::new()));

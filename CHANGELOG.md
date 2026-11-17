@@ -1,5 +1,35 @@
 # Changelog
 
+## [4.11.30](https://github.com/andymai/brepkit/compare/v4.11.29...v4.11.30) (2026-11-17)
+
+
+### Bug Fixes
+
+* **algo:** separate paths that weld together, and the two sides of a thin lens ([#2579](https://github.com/andymai/brepkit/issues/2579)) ([b25bef8](https://github.com/andymai/brepkit/commit/b25bef89f74a89a095ca0ef7485d5ebf114a91f7)), closes [#2550](https://github.com/andymai/brepkit/issues/2550) [#2554](https://github.com/andymai/brepkit/issues/2554)
+* **io:** pair the triangles round a shared edge again after a turn ([#2580](https://github.com/andymai/brepkit/issues/2580)) ([d6ae204](https://github.com/andymai/brepkit/commit/d6ae204d4638a07037b3da4dda91122111474870)), closes [#2510](https://github.com/andymai/brepkit/issues/2510)
+* **operations:** blend a chain that turns a corner or hooks back, instead of refusing it ([#2591](https://github.com/andymai/brepkit/issues/2591)) ([bb04eb2](https://github.com/andymai/brepkit/commit/bb04eb20ebbbe445c0ca06a6190838dd51ed091f))
+* **operations:** chamfer round edges with two distances and end chains on slanted planes ([#2571](https://github.com/andymai/brepkit/issues/2571)) ([08d5be5](https://github.com/andymai/brepkit/commit/08d5be5b672ed71f587d99c135fc7aed07a37bc3))
+* **tessellate:** keep a shell's free rim out of the boundary weld ([#2569](https://github.com/andymai/brepkit/issues/2569)) ([3c8d110](https://github.com/andymai/brepkit/commit/3c8d1104a2b9fd95f3e8d4d4bca4d978e30bf56a)), closes [#2548](https://github.com/andymai/brepkit/issues/2548)
+
+## [4.11.29](https://github.com/andymai/brepkit/compare/v4.11.28...v4.11.29) (2026-11-17)
+
+
+### Bug Fixes
+
+* **algo,operations:** keep a spherical cap's seam to its pole ([#2561](https://github.com/andymai/brepkit/issues/2561)) ([c9f7aed](https://github.com/andymai/brepkit/commit/c9f7aed150eb6e3a409874fc2bd26fc249b034bc))
+* **algo:** cut a rod's torus groove exactly across its seam and its middle ([#2575](https://github.com/andymai/brepkit/issues/2575)) ([4311993](https://github.com/andymai/brepkit/commit/4311993890f36b95d9075d99a4a9a0250305ec28))
+* **algo:** keep a conic leaf that crosses a plane out of the plane's face ([#2572](https://github.com/andymai/brepkit/issues/2572)) ([03c48a5](https://github.com/andymai/brepkit/commit/03c48a540574cfe583cde2ba7475b4a8374ef624))
+* **algo:** read a plane face's outer wire on its arcs for EF crossings ([#2566](https://github.com/andymai/brepkit/issues/2566)) ([38db3e9](https://github.com/andymai/brepkit/commit/38db3e918c2af1e2895c56d78356a4b6db7af71e))
+* **heal:** join straight edges a fuse leaves in pieces across the whole solid ([#2562](https://github.com/andymai/brepkit/issues/2562)) ([1fc2bdd](https://github.com/andymai/brepkit/commit/1fc2bdd04d75d384bebdac26c6c0372329d3d92e))
+* **heal:** leave a slit's pieces alone when joining split edges ([#2567](https://github.com/andymai/brepkit/issues/2567)) ([f6c1c56](https://github.com/andymai/brepkit/commit/f6c1c56be5ae0e63c4fc8b99da23b4d8fa5f97e5))
+* **math:** refuse a control point at infinity after a knot insertion ([#2564](https://github.com/andymai/brepkit/issues/2564)) ([ad7e21b](https://github.com/andymai/brepkit/commit/ad7e21b44f4e44c2a1001d4fa63c6e781eec7f68))
+* **tessellate:** keep the CDT grid off a face's constrained edges ([#2582](https://github.com/andymai/brepkit/issues/2582)) ([cd1cfa0](https://github.com/andymai/brepkit/commit/cd1cfa015a50c8d8493edb318fc4bf324347a631))
+
+
+### Performance
+
+* **tessellate:** mesh a filleted box in half the time ([#2581](https://github.com/andymai/brepkit/issues/2581)) ([84770d9](https://github.com/andymai/brepkit/commit/84770d94bd74b8f255fa83ba9da87dff85e7f0a0))
+
 ## [4.11.28](https://github.com/andymai/brepkit/compare/v4.11.27...v4.11.28) (2026-11-16)
 
 
