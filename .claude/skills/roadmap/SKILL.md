@@ -2368,6 +2368,9 @@ One line each; the fixture/PR carries the story. Newest first.
   edge ids), `audit_bin.rs` (HALFEDGE directed oracle — the authoritative winding
   oracle), `orient_scan.rs` / `fuse_orient.rs`, fillet instruments (`BK_FORCE_V2`,
   `BK_PIECES`, `BK_CORNER_TRACE`, `BK_TRIM_TRACE`, `BK_SPLIT_PREPASS`, `BK_NOTCH_TRACE`).
+  Seeded random boolean sweep with an independent volume oracle (balls, rods, boxes, five poses,
+  no mesh fallback): `crates/operations/tests/random_boolean_sweep.rs`, ignored `sweep` test run
+  by `SWEEP_SEED` / `SWEEP_N` / `SWEEP_ONLY` (module doc says how to read GOOD / BAD / ERR).
 
 ## Subsystem trap notes (crates without their own skill)
 
