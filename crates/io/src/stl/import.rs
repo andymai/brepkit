@@ -2006,9 +2006,11 @@ struct Facet {
 ///
 /// Where a triangle of each body has an edge on one line, each surface is
 /// two triangles round the line. The two surfaces cross there when the
-/// triangles of the two bodies alternate round the line. When the two edges
-/// have no line in common, each body must pass through the plane of the
-/// triangle of the other.
+/// triangles of the two bodies alternate round the line, read from the line
+/// of each edge. When the two edges have no line in common, each body must
+/// pass through the plane of the triangle of the other.
+///
+/// The answer does not change when `t` and `u` change places.
 fn triangles_cross(t: &Facet, u: &Facet, on: f64) -> bool {
     let (Some(cut_t), Some(cut_u)) = (
         cut_by_plane(t, &u.corners, on),
@@ -2018,7 +2020,15 @@ fn triangles_cross(t: &Facet, u: &Facet, on: f64) -> bool {
     };
     let through = match (cut_t, cut_u) {
         (Cut::Edge { k, passes: pt }, Cut::Edge { k: j, passes: pu }) => {
-            alternate_round_edge(t, k, u, j, on).unwrap_or(pt && pu)
+            // The two lines are up to `on` apart, so the order round each
+            // can differ near the tolerance: a contact there is no crossing.
+            match (
+                alternate_round_edge(t, k, u, j, on),
+                alternate_round_edge(u, j, t, k, on),
+            ) {
+                (Some(one), Some(other)) => one && other,
+                _ => pt && pu,
+            }
         }
         (Cut::Edge { passes, .. }, Cut::Through(..))
         | (Cut::Through(..), Cut::Edge { passes, .. }) => passes,
@@ -2038,8 +2048,11 @@ fn triangles_cross(t: &Facet, u: &Facet, on: f64) -> bool {
     let Ok(line) = n_t.cross(n_u).normalize() else {
         return false;
     };
+    // From a point near both triangles, the same in either order: then the
+    // spans only change sign when `t` and `u` change places.
+    let origin = Point3::new(t0.x().min(u0.x()), t0.y().min(u0.y()), t0.z().min(u0.z()));
     let span = |(a, b): (Point3, Point3)| {
-        let (x, y) = (line.dot(a - t0), line.dot(b - t0));
+        let (x, y) = (line.dot(a - origin), line.dot(b - origin));
         (x.min(y), x.max(y))
     };
     let ((a0, a1), (b0, b1)) = (span(ends(t, cut_t)), span(ends(u, cut_u)));
@@ -2656,5 +2669,56 @@ mod tests {
         assert_eq!(alternate_round_edge(&t, 0, &u, 0, 1e-7), None);
         assert!(triangles_cross(&t, &u, 1e-7));
         assert!(triangles_cross(&u, &t, 1e-7));
+    }
+
+    /// The triangles of `u` round an edge beside the z axis: the edge from
+    /// `(x0, 0, 2)` to `(x1, 0, 12)`, the far corner at 200 degrees round it,
+    /// and the far corner of the triangle across the edge at `(x_far, 5, 7)`,
+    /// 90 degrees round it within the tolerance.
+    fn beside_axis(x0: f64, x1: f64, x_far: f64) -> Facet {
+        let (s, c) = 200f64.to_radians().sin_cos();
+        let mid = 0.5 * (x0 + x1);
+        Facet {
+            corners: [
+                Point3::new(x0, 0.0, 2.0),
+                Point3::new(x1, 0.0, 12.0),
+                Point3::new(mid + 10.0 * c, 10.0 * s, 7.0),
+            ],
+            beyond: [Point3::new(x_far, 5.0, 7.0); 3],
+        }
+    }
+
+    /// The edge of `u` runs 0.9 of the tolerance off the axis, and the
+    /// triangle across it lies within twice the tolerance of the plane of
+    /// the triangle of `t` at 90 degrees: the two bodies touch. Read from
+    /// the line of the edge of `u`, the gap is a little over twice the
+    /// tolerance, so the order of the two must not change the answer.
+    #[test]
+    fn triangles_beside_an_offset_edge_touch_in_either_order() {
+        let on = 1e-7;
+        let t = on_axis(
+            0.0,
+            Point3::new(10.0, 0.0, 5.0),
+            Point3::new(0.0, 10.0, 5.0),
+        );
+        let u = beside_axis(-0.9 * on, -0.9 * on, 1.8 * on);
+        assert!(!triangles_cross(&t, &u, on));
+        assert!(!triangles_cross(&u, &t, on));
+    }
+
+    /// The edge of `u` leans off the axis, by 0.9 of the tolerance at the
+    /// end of the edge of `t`. The triangles touch as in
+    /// `triangles_beside_an_offset_edge_touch_in_either_order`.
+    #[test]
+    fn triangles_beside_a_tilted_edge_touch_in_either_order() {
+        let on = 1e-7;
+        let t = on_axis(
+            0.0,
+            Point3::new(10.0, 0.0, 5.0),
+            Point3::new(0.0, 10.0, 5.0),
+        );
+        let u = beside_axis(0.0, -1.125 * on, 1.9 * on);
+        assert!(!triangles_cross(&t, &u, on));
+        assert!(!triangles_cross(&u, &t, on));
     }
 }
