@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794916553186,
+  "lastUpdate": 1794916766080,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -74033,6 +74033,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25819227,
             "range": "± 142270",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b8c67be755a59fb9c0c54643677f4f6d32a1e8ed",
+          "message": "fix(algo): fuse a funnel's torus lip and a cup's lug exactly (#2601)\n\n## Summary\n\nTwo brepjs playground examples fell back to a mesh in a `fuseAll`\nbecause the first pair of the call failed. Both pairs now fuse exactly.\nFixes #2523. Fixes #2522.\n\n- `rotary-potentiometer` (#2523): a cup and a lug that stands on the\ncup's rim. The fuse now gives 12 faces (5 cylinders, 7 planes).\n- `conical-pour-funnel` (#2522): the funnel's body and its rolled lip, a\nwhole torus on the body's axis. The fuse now gives 10 faces (4 cones, 4\ncylinders, 1 plane, 1 torus).\n\nThe funnel's `fuseAll` still falls back on two later pairs. I filed them\nas #2598 (the hang tab through the lip) and #2599 (a rib across the\nbody's seam). I also filed #2600: a lip that leans off the axis still\nfalls back.\n\n## The cup and the lug (#2523)\n\nThe lug is a profile revolved 20 degrees. Its bottom lies in the plane\nof the cup's rim, and the revolve stores the lug's rims as rational\nquadratic NURBS arcs. The coplanar phase read every NURBS boundary edge\nas 16 chords. The chords of the lug's outer rim lay inside the cup's rim\nring, so the phase gave the rim face 22 line sections. The rim face did\nnot split, and the assembly failed with `open 1-face growth shell spans\nthe result`.\n\n`face_region_2d` in `phase_ff_coplanar.rs` now reads a NURBS edge as the\narc of a circle when the edge is a circular arc. Such an edge is a\nrational quadratic with every weight positive. Each knot span's two\ncontrol legs are equal. Its middle weight over the root of the product\nof its end weights is the sine of half the angle at its middle control\npoint. All spans lie on one circle, and other NURBS edges keep their\nchords. With the arcs, the phase gives the rim face one section, and the\nrim splits in two.\n\n## The funnel and the lip (#2522)\n\nTwo faults stacked.\n\n- Phase FF had no exact path for a cone and a torus on one axis. The\nmarcher fitted closed NURBS loops, and the face splitter left the bowl's\ninner cone whole with its loop. The torus then had a loop that wound its\nring, and classification failed. `exact_cone_torus` in\n`analytic_intersection.rs` now gives the circles. In a half-plane\nthrough the axis, each crossing of a cone's generator with the tube's\ncross-section sweeps one circle. Phase FF and the analytic dispatch in\nmath use it.\n- The plane of the rim meets the torus in a circle of radius 79.931,\ninside the hole of the rim's ring (radii 80 to 82.263). `FaceExtent`\nreads a plane face with a margin of a hundredth of its box. That is\nabout 1.6 here, so phase FF kept that circle on the torus.\n`plane_face_clear_of` now drops a closed circle off a plane face bounded\nby lines and circle arcs. Every edge must stay farther than ten times\nthe linear tolerance from the circle, and one point of the circle must\nlie off the face. Without this, the fuse was exact but split the torus\nface in two.\n\n## Tests\n\n- `crates/operations/tests/revolved_rim_fuses.rs` is new. It builds the\ntwo pairs as the examples build them and fuses each upright, turned and\nmirrored, with `mesh_fallback: false`. Each result must be valid and\nwatertight, with the expected face census. Over a grid of 14 x 14 x 14\npoints round the contact, the result must hold a point exactly where an\noperand holds it.\n- Each volume in that test must be within 1e-6 of the closed form. For\nthe cup and the lug that is 534.8300. For the funnel it is 58091.8737:\nthe body and the lip, less their common part, which the test integrates\nalong rays in the tube's section.\n- `crates/io/tests/playground_example_repros_inmem.rs` has two new tests\non the operands captured from the examples, in the same three poses,\nwith the file's existing checks.\n- `exact_cone_torus_meets_a_coaxial_cone_in_circles`,\n`a_rational_quadratic_rim_reads_as_its_arc`,\n`a_rational_quadratic_off_its_circle_keeps_its_chords` and\n`a_circle_into_a_thin_ring_between_its_samples_is_not_off_it` are new\nunit tests. The new cases are a cone 0.0005 off the torus's axis with a\nfar apex, and a circle into a ring between its samples. Another is a\nparabola on the quarter circle's control points, with weights 1e-12,\n1e-6 and 1.\n- On main at `cd1cfa015`, both tests of `revolved_rim_fuses.rs` fail\nbecause each fuse needs the mesh fallback. The two new tests of\n`playground_example_repros_inmem.rs` fail too.\n- `cargo nextest run --cargo-profile ci -p brepkit-algo -p brepkit-io -p\nbrepkit-operations -p brepkit-wasm -p brepkit-check -p brepkit-heal -p\nbrepkit-math` at `ad53ffe92` (with main at `3c8d1104a` merged): 4582\ntests run, 4582 passed, 22 skipped. `cargo test -p brepkit-wasm --lib\ngridfinity`: 27 passed.\n- On `cd1cfa015` with and without this change, the pose sweep (495\nlines) and the truth audit (40 lines) give the same output.\n- On a wasm build of this branch, the `rotary-potentiometer` example\nevaluates and meshes with the brepjs helper that the playground tests\nuse. `conical-pour-funnel` still fails in its `fuseAll` (#2598, #2599).\n\n## Capture\n\nbrepjs at `6befb017` loads `brepkit-wasm` 4.11.19. I captured the\noperands of each `fuseAll` with `serializeSolid` from an untracked\nprobe, and again with a wasm build of main at `f6c1c56be`. The two\ncaptures are the same, byte for byte.",
+          "timestamp": "2026-11-17T11:55:55Z",
+          "tree_id": "dece2bf50cc5bd960731a0fb998f9f5364c70b20",
+          "url": "https://github.com/andymai/brepkit/commit/b8c67be755a59fb9c0c54643677f4f6d32a1e8ed"
+        },
+        "date": 1794916756951,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 667997,
+            "range": "± 6507",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 711760,
+            "range": "± 12084",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 8562,
+            "range": "± 96",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 431312,
+            "range": "± 3691",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 15951189,
+            "range": "± 273848",
             "unit": "ns/iter"
           }
         ]
