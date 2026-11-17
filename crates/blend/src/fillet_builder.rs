@@ -1317,26 +1317,48 @@ impl<'a> FilletBuilder<'a> {
         // The ordered junction solver needs the final copy-on-write support
         // faces so residual terminal edges can be registered as runout
         // boundaries instead of being closed by positional repair.
-        let stripe_support_faces: Vec<(FaceId, FaceId)> = stripes
-            .iter()
-            .map(|stripe| {
-                (
-                    face_replacements
-                        .get(&stripe.face1)
-                        .copied()
-                        .unwrap_or(stripe.face1),
-                    face_replacements
-                        .get(&stripe.face2)
-                        .copied()
-                        .unwrap_or(stripe.face2),
-                )
-            })
-            .collect();
+        let support_faces_of = |face_replacements: &std::collections::HashMap<FaceId, FaceId>| {
+            stripes
+                .iter()
+                .map(|stripe| {
+                    (
+                        face_replacements
+                            .get(&stripe.face1)
+                            .copied()
+                            .unwrap_or(stripe.face1),
+                        face_replacements
+                            .get(&stripe.face2)
+                            .copied()
+                            .unwrap_or(stripe.face2),
+                    )
+                })
+                .collect::<Vec<(FaceId, FaceId)>>()
+        };
+        let mut stripe_support_faces = support_faces_of(&face_replacements);
         if let Some(fillet_plan) = plan.as_ref() {
-            let corner_results = corner::compute_ordered_corners(
+            let current = |face: FaceId| face_replacements.get(&face).copied().unwrap_or(face);
+            let (crossed, stub_faces) = corner::apply_stub_crossings(
                 topo,
                 &stripes,
                 &fillet_plan.junctions,
+                &contour_to_stripe,
+                &stripe_support_faces,
+                &stripe_faces,
+                &current,
+                &mut boundary_registry,
+            )?;
+            face_replacements.extend(stub_faces);
+            stripe_support_faces = support_faces_of(&face_replacements);
+            let junctions: Vec<crate::fillet_plan::VertexJunction> = fillet_plan
+                .junctions
+                .iter()
+                .filter(|junction| !crossed.contains(&junction.vertex))
+                .cloned()
+                .collect();
+            let corner_results = corner::compute_ordered_corners(
+                topo,
+                &stripes,
+                &junctions,
                 &contour_to_stripe,
                 &blend_cross_handles,
                 &stripe_support_faces,
@@ -2510,7 +2532,7 @@ fn edge_lies_on(topo: &Topology, edge: &Edge, on: &Edge, tol: f64) -> Result<boo
 /// / ((u_{j+p} - u_j) w)`, where the `N_{j,p-1}` sum to one, `w` is at least
 /// the least weight and `C` lies in the control points' hull, so `|P - C|`
 /// is at most their spread.
-fn speed_bound(curve: &EdgeCurve, a: Point3, b: Point3) -> Option<f64> {
+pub(crate) fn speed_bound(curve: &EdgeCurve, a: Point3, b: Point3) -> Option<f64> {
     match curve {
         EdgeCurve::Line => Some((b - a).length()),
         EdgeCurve::Circle(circle) => Some(circle.radius()),
