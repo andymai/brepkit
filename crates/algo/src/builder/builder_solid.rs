@@ -3862,7 +3862,8 @@ pub fn separate_arcs_sharing_ends(
 /// The seam's path is bounded by two faces of one input face, running it
 /// opposite ways, and lies along an edge that input face's wires run both
 /// ways. One of the two faces is the lens: an outer wire of the seam's edge
-/// and one edge of another path, and no holes.
+/// and one edge of another path, and no holes. The other face runs no edge
+/// of that path.
 fn seam_beside_lens(
     topo: &Topology,
     face_ids: &[FaceId],
@@ -3902,7 +3903,7 @@ fn seam_beside_lens(
         if !lies_on_seam_of(topo, source, path[0])? {
             continue;
         }
-        for (fi, seam_edge) in [(fa, ea), (fb, eb)] {
+        for (fi, seam_edge, across) in [(fa, ea, fb), (fb, eb, fa)] {
             let face = topo.face(face_ids[fi])?;
             if !face.inner_wires().is_empty() {
                 continue;
@@ -3918,11 +3919,20 @@ fn seam_beside_lens(
             } else {
                 continue;
             };
-            if paths
+            let Some(path_of_partner) = paths
                 .iter()
                 .enumerate()
-                .any(|(j, other)| j != k && other.contains(&partner))
-            {
+                .find(|&(j, other)| j != k && other.contains(&partner))
+                .map(|(_, other)| other)
+            else {
+                continue;
+            };
+            // A face across the seam that runs the partner's path too would
+            // run it out and back once the partner took the seam's place.
+            let runs_partner = face_edge_uses(topo, face_ids[across])?
+                .iter()
+                .any(|(e, _)| path_of_partner.contains(e));
+            if !runs_partner {
                 return Ok(Some((k, partner)));
             }
         }
@@ -5465,6 +5475,72 @@ mod tests {
         }
     }
 
+    /// A unit cylinder's wall from `z = 0` to `z = 1`, opened along the line
+    /// at `x = 1`, `y = 0`: its wire runs that line both ways when `seam`,
+    /// and runs a second line there back otherwise.
+    fn opened_wall(topo: &mut Topology, seam: bool) -> (FaceId, FaceSurface) {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::CylindricalSurface;
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::Wire;
+
+        let axis = Vec3::new(0.0, 0.0, 1.0);
+        let wall = FaceSurface::Cylinder(
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), axis, 1.0).unwrap(),
+        );
+        let foot = topo.add_vertex(Vertex::new(Point3::new(1.0, 0.0, 0.0), 1e-7));
+        let head = topo.add_vertex(Vertex::new(Point3::new(1.0, 0.0, 1.0), 1e-7));
+        let rim = |topo: &mut Topology, v, z: f64| {
+            let circle = Circle3D::new(Point3::new(0.0, 0.0, z), axis, 1.0).unwrap();
+            topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(circle)))
+        };
+        let (bottom, top) = (rim(topo, foot, 0.0), rim(topo, head, 1.0));
+        let generator = topo.add_edge(Edge::new(foot, head, EdgeCurve::Line));
+        let back = if seam {
+            generator
+        } else {
+            topo.add_edge(Edge::new(foot, head, EdgeCurve::Line))
+        };
+        let wire = topo.add_wire(
+            Wire::new(
+                vec![
+                    OrientedEdge::new(bottom, true),
+                    OrientedEdge::new(generator, true),
+                    OrientedEdge::new(top, false),
+                    OrientedEdge::new(back, false),
+                ],
+                true,
+            )
+            .unwrap(),
+        );
+        (topo.add_face(Face::new(wire, vec![], wall.clone())), wall)
+    }
+
+    /// A face from its edges and their directions.
+    fn face_of(topo: &mut Topology, edges: &[(EdgeId, bool)], surface: FaceSurface) -> FaceId {
+        use brepkit_topology::face::Face;
+        use brepkit_topology::wire::Wire;
+
+        let edges = edges
+            .iter()
+            .map(|&(e, forward)| OrientedEdge::new(e, forward))
+            .collect();
+        let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+        topo.add_face(Face::new(wire, vec![], surface))
+    }
+
+    /// A point on the unit cylinder's wall.
+    fn on_wall(u: f64, z: f64) -> Point3 {
+        Point3::new(u.cos(), u.sin(), z)
+    }
+
+    /// The curve a spline through `points` traces.
+    fn through(points: &[Point3]) -> EdgeCurveOf {
+        EdgeCurveOf::NurbsCurve(brepkit_math::nurbs::fitting::interpolate(points, 2).unwrap())
+    }
+
     /// A loop across a cylinder's seam cuts the wall into a face beside the
     /// seam and a lens between a piece of the seam and the loop's short side,
     /// both kept, with a cap on the loop. The loop's short side takes the
@@ -5473,74 +5549,18 @@ mod tests {
     /// wall, it stays an edge and the lens a face.
     #[test]
     fn a_lens_beside_a_seam_joins_the_face_across_it() {
-        use brepkit_math::surfaces::CylindricalSurface;
         use brepkit_topology::edge::{Edge, EdgeCurve};
-        use brepkit_topology::face::Face;
         use brepkit_topology::vertex::Vertex;
-        use brepkit_topology::wire::Wire;
 
-        let on_wall = |u: f64, z: f64| Point3::new(u.cos(), u.sin(), z);
-        let through = |points: &[Point3]| {
-            EdgeCurve::NurbsCurve(brepkit_math::nurbs::fitting::interpolate(points, 2).unwrap())
-        };
         for seam in [true, false] {
             let mut topo = Topology::new();
-            let wall = FaceSurface::Cylinder(
-                CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0)
-                    .unwrap(),
-            );
-            let foot = topo.add_vertex(Vertex::new(on_wall(0.0, 0.0), 1e-7));
-            let head = topo.add_vertex(Vertex::new(on_wall(0.0, 1.0), 1e-7));
-            let rim = |topo: &mut Topology, v, z: f64| {
-                let circle = brepkit_math::curves::Circle3D::new(
-                    Point3::new(0.0, 0.0, z),
-                    Vec3::new(0.0, 0.0, 1.0),
-                    1.0,
-                )
-                .unwrap();
-                topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(circle)))
-            };
-            let (bottom, top) = (rim(&mut topo, foot, 0.0), rim(&mut topo, head, 1.0));
-            let generator = topo.add_edge(Edge::new(foot, head, EdgeCurve::Line));
-            let back = if seam {
-                OrientedEdge::new(generator, false)
-            } else {
-                let other = topo.add_edge(Edge::new(foot, head, EdgeCurve::Line));
-                OrientedEdge::new(other, false)
-            };
-            let source_wire = topo.add_wire(
-                Wire::new(
-                    vec![
-                        OrientedEdge::new(bottom, true),
-                        OrientedEdge::new(generator, true),
-                        OrientedEdge::new(top, false),
-                        back,
-                    ],
-                    true,
-                )
-                .unwrap(),
-            );
-            let source = topo.add_face(Face::new(source_wire, vec![], wall.clone()));
-
+            let (source, wall) = opened_wall(&mut topo, seam);
             let low = topo.add_vertex(Vertex::new(on_wall(0.0, 0.2), 1e-7));
             let high = topo.add_vertex(Vertex::new(on_wall(0.0, 0.8), 1e-7));
             let side = topo.add_vertex(Vertex::new(on_wall(0.6, 0.5), 1e-7));
             let short = || through(&[on_wall(0.0, 0.2), on_wall(-0.1, 0.5), on_wall(0.0, 0.8)]);
             let upper = || through(&[on_wall(0.0, 0.8), on_wall(0.4, 0.75), on_wall(0.6, 0.5)]);
             let lower = || through(&[on_wall(0.6, 0.5), on_wall(0.4, 0.25), on_wall(0.0, 0.2)]);
-            let face = |topo: &mut Topology, edges: Vec<(EdgeId, bool)>, surface: FaceSurface| {
-                let wire = topo.add_wire(
-                    Wire::new(
-                        edges
-                            .into_iter()
-                            .map(|(e, forward)| OrientedEdge::new(e, forward))
-                            .collect(),
-                        true,
-                    )
-                    .unwrap(),
-                );
-                topo.add_face(Face::new(wire, vec![], surface))
-            };
             let beside_seam = topo.add_edge(Edge::new(low, high, EdgeCurve::Line));
             let lens_seam = topo.add_edge(Edge::new(high, low, EdgeCurve::Line));
             let lens_short = topo.add_edge(Edge::new(low, high, short()));
@@ -5554,15 +5574,15 @@ mod tests {
                 d: 0.0,
             };
             let mut face_ids = vec![
-                face(
+                face_of(
                     &mut topo,
-                    vec![(beside_seam, true), (up, true), (down, true)],
+                    &[(beside_seam, true), (up, true), (down, true)],
                     wall.clone(),
                 ),
-                face(&mut topo, vec![(lens_seam, true), (lens_short, true)], wall),
-                face(
+                face_of(&mut topo, &[(lens_seam, true), (lens_short, true)], wall),
+                face_of(
                     &mut topo,
-                    vec![(cap_short, false), (cap_down, false), (cap_up, false)],
+                    &[(cap_short, false), (cap_down, false), (cap_up, false)],
                     cap,
                 ),
             ];
@@ -5591,6 +5611,47 @@ mod tests {
                 assert_eq!(face_ids.len(), 3, "the lens stays a face");
                 assert_eq!(lines, 1, "the line stays an edge");
             }
+        }
+    }
+
+    /// Two faces of one seamed wall, each a lens between a piece of the seam
+    /// and the same curve, run both of the seam's ways and the curve's. The
+    /// curve cannot take the seam's place, as each face would then run it out
+    /// and back, so both faces stay.
+    #[test]
+    fn two_lenses_on_one_curve_keep_their_seam() {
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::vertex::Vertex;
+
+        let mut topo = Topology::new();
+        let (source, wall) = opened_wall(&mut topo, true);
+        let low = topo.add_vertex(Vertex::new(on_wall(0.0, 0.2), 1e-7));
+        let high = topo.add_vertex(Vertex::new(on_wall(0.0, 0.8), 1e-7));
+        let curve = || through(&[on_wall(0.0, 0.2), on_wall(-0.1, 0.5), on_wall(0.0, 0.8)]);
+        let seam_up = topo.add_edge(Edge::new(low, high, EdgeCurve::Line));
+        let seam_down = topo.add_edge(Edge::new(high, low, EdgeCurve::Line));
+        let curve_up = topo.add_edge(Edge::new(low, high, curve()));
+        let curve_down = topo.add_edge(Edge::new(high, low, curve()));
+        let mut face_ids = vec![
+            face_of(
+                &mut topo,
+                &[(seam_up, true), (curve_down, true)],
+                wall.clone(),
+            ),
+            face_of(&mut topo, &[(seam_down, true), (curve_up, true)], wall),
+        ];
+        let mut sources = vec![Some(source), Some(source)];
+        separate_arcs_sharing_ends(&mut topo, &mut face_ids, &sources).unwrap();
+        unify_boundaries(&mut topo, &mut face_ids, &mut sources).unwrap();
+        excise_out_and_back_spurs(&mut topo, &mut face_ids, &mut sources);
+        assert_eq!(face_ids.len(), 2, "both faces stay");
+        for &fid in &face_ids {
+            let lines = face_edge_uses(&topo, fid)
+                .unwrap()
+                .iter()
+                .filter(|(e, _)| matches!(topo.edge(*e).unwrap().curve(), EdgeCurve::Line))
+                .count();
+            assert_eq!(lines, 1, "each face keeps its piece of the seam");
         }
     }
 
