@@ -73,7 +73,12 @@ use brepkit_topology::wire::{OrientedEdge, Wire};
 /// independent contour, and so how much real material continues past the
 /// stub.
 fn seam_stub_prism(topo: &mut Topology, p4y: f64) -> (SolidId, [Point3; 5]) {
-    let (lx, ly, stub, height) = (20.0, 20.0, 0.05, 20.0);
+    seam_stub_prism_of_height(topo, p4y, 20.0)
+}
+
+/// [`seam_stub_prism`] of any height.
+fn seam_stub_prism_of_height(topo: &mut Topology, p4y: f64, height: f64) -> (SolidId, [Point3; 5]) {
+    let (lx, ly, stub) = (20.0, 20.0, 0.05);
     let p1 = Point3::new(0.0, 0.0, 0.0);
     let p2 = Point3::new(lx, 0.0, 0.0);
     let p3 = Point3::new(lx, stub, 0.0);
@@ -467,6 +472,12 @@ fn continuation_run_boundary_is_the_radius() {
 /// wide (`z = r2 (1 - cos phi)`), and the `r1` round takes it from `y = stub`
 /// to where its arc is at that height.
 fn seam_prism_volume(r1: f64, r2: f64) -> f64 {
+    20.0_f64.powi(3) - seam_prism_taken(r1, r2)
+}
+
+/// The volume the three rounds take off the seam prism (see
+/// [`seam_prism_volume`]), whatever its height above `r1`.
+fn seam_prism_taken(r1: f64, r2: f64) -> f64 {
     use std::f64::consts::{FRAC_PI_2, FRAC_PI_4};
     const STEPS: u32 = 20_000;
     let (side, stub) = (20.0_f64, 0.05);
@@ -481,7 +492,123 @@ fn seam_prism_volume(r1: f64, r2: f64) -> f64 {
         let reach = r1 - (r1 * r1 - (r1 - z).powi(2)).sqrt();
         both += width * (reach - stub) * r2 * phi.sin() * step;
     }
-    side.powi(3) - (2.0 * corner(r1) * side - shared) - corner(r2) * (side - stub) + both
+    (2.0 * corner(r1) * side - shared) + corner(r2) * (side - stub) - both
+}
+
+/// The seam prism in a pose, with a function that carries its points there.
+fn posed_seam_prism(
+    topo: &mut Topology,
+    height: f64,
+    name: &str,
+) -> (SolidId, [Point3; 5], impl Fn(Point3) -> Point3 + use<>) {
+    let turn = Mat4::translation(3.0, -1.0, 2.0) * Mat4::rotation_z(0.4) * Mat4::rotation_x(0.6);
+    let (solid, points) = seam_stub_prism_of_height(topo, 20.0, height);
+    let solid = match name {
+        "turned" => {
+            transform_solid(topo, solid, &turn).unwrap();
+            solid
+        }
+        "mirrored" => mirror(
+            topo,
+            solid,
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(1.0, 0.0, 0.0),
+        )
+        .unwrap(),
+        _ => solid,
+    };
+    let mirrored = name == "mirrored";
+    let turned = name == "turned";
+    let carry = move |p: Point3| -> Point3 {
+        if turned {
+            turn.mul_point(p)
+        } else if mirrored {
+            Point3::new(-p.x(), p.y(), p.z())
+        } else {
+            p
+        }
+    };
+    (solid, points, carry)
+}
+
+/// The crossing of the rounds past the stub does not depend on the height of
+/// the walls they end on. On a prism 4000 high, the `r1` round meets the edge
+/// between the two wall faces 7.1 above the floor, a small part of that
+/// edge's length.
+#[test]
+fn a_tall_wall_takes_the_crossing_as_a_short_one() {
+    let (r1, r2, height) = (8.0, 2.0, 4000.0);
+    for name in ["upright", "turned", "mirrored"] {
+        let mut topo = Topology::new();
+        let (solid, [p1, p2, p3, p4, p5], carry) = posed_seam_prism(&mut topo, height, name);
+        let edge_laws = vec![
+            (
+                edge_at(&topo, solid, carry(p1), carry(p2)),
+                RadiusLaw::Constant(r1),
+            ),
+            (
+                edge_at(&topo, solid, carry(p5), carry(p1)),
+                RadiusLaw::Constant(r1),
+            ),
+            (
+                edge_at(&topo, solid, carry(p3), carry(p4)),
+                RadiusLaw::Constant(r2),
+            ),
+        ];
+        let result = fillet_v2_variable(&mut topo, solid, edge_laws).unwrap();
+        assert_genuinely_filleted(&topo, &result, 3, &[r1, r2], 0, name);
+        let taken = 400.0 * height - solid_volume(&topo, result.solid, 0.001).unwrap();
+        let truth = seam_prism_taken(r1, r2);
+        assert!(
+            (taken - truth).abs() < 1e-5 * truth,
+            "{name}: the rounds take {taken}, expected {truth}"
+        );
+    }
+}
+
+/// The rounds cross past the stub at the floor and at the top: the second
+/// crossing ends its `r1` round on the stub face as the first one left it.
+#[test]
+fn crossings_at_both_ends_of_the_stub_wall() {
+    let (r1, r2, height) = (8.0, 2.0, 20.0);
+    let truth = 400.0 * height - 2.0 * seam_prism_taken(r1, r2);
+    for name in ["upright", "turned", "mirrored"] {
+        let mut topo = Topology::new();
+        let (solid, [p1, p2, p3, p4, p5], carry) = posed_seam_prism(&mut topo, height, name);
+        let up = |p: Point3| carry(Point3::new(p.x(), p.y(), height));
+        let mut edge_laws = Vec::new();
+        for level in [&carry as &dyn Fn(Point3) -> Point3, &up] {
+            edge_laws.extend([
+                (
+                    edge_at(&topo, solid, level(p1), level(p2)),
+                    RadiusLaw::Constant(r1),
+                ),
+                (
+                    edge_at(&topo, solid, level(p5), level(p1)),
+                    RadiusLaw::Constant(r1),
+                ),
+                (
+                    edge_at(&topo, solid, level(p3), level(p4)),
+                    RadiusLaw::Constant(r2),
+                ),
+            ]);
+        }
+        let result = fillet_v2_variable(&mut topo, solid, edge_laws).unwrap();
+        assert_genuinely_filleted(&topo, &result, 6, &[r1, r2], 0, name);
+        let volume = solid_volume(&topo, result.solid, 0.001).unwrap();
+        assert!(
+            (volume - truth).abs() < 1e-6 * truth,
+            "{name}: volume {volume}, expected {truth}"
+        );
+        for (p, expected) in [
+            (Point3::new(19.5, 1.0, 1.0), PointClassification::Outside),
+            (Point3::new(19.5, 1.0, 19.0), PointClassification::Outside),
+            (Point3::new(19.99, 0.02, 10.0), PointClassification::Inside),
+        ] {
+            let read = classify_point(&topo, result.solid, carry(p), 0.01, 1e-7).unwrap();
+            assert_eq!(read, expected, "{name}: {p:?}");
+        }
+    }
 }
 
 /// The `r1` round along `P1-P2` and the `r2` round along `P3-P4` cross past

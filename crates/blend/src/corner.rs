@@ -5700,6 +5700,8 @@ struct StubCrossing {
     b_face: FaceId,
     f: FaceId,
     wa: FaceId,
+    /// The stub face of the input, and the face that stands for it now.
+    w0_source: FaceId,
     w0: FaceId,
     w1: FaceId,
     /// `A`'s section at `P`, its contact on `F` and its contact on `WA`.
@@ -5735,54 +5737,107 @@ struct StubCrossing {
     arc: EdgeCurve,
 }
 
-/// The first point of `edge`, walked from its end `from`, where `side`
-/// changes sign, from positive there.
-fn edge_meets(
+/// A cylinder as its origin, unit axis and radius.
+type Barrel = (Point3, Vec3, f64);
+
+/// The first point of `edge`, walked from its end `from`, where it enters
+/// the cylinder `barrel`, from outside it there.
+///
+/// A straight edge meets the cylinder where a quadratic in its length says.
+/// Along a curved one, the distance from the cylinder changes no faster
+/// than the edge's speed bound: a stretch whose ends lie farther outside
+/// than that bound lets it travel is wholly outside, and any other stretch
+/// is halved, so no stretch inside the cylinder is passed over.
+fn edge_enters_cylinder(
     topo: &Topology,
     edge_id: EdgeId,
     from: VertexId,
-    side: &dyn Fn(Point3) -> f64,
+    (origin, axis, radius): Barrel,
 ) -> Option<Point3> {
-    const SAMPLES: u32 = 256;
     let edge = topo.edge(edge_id).ok()?;
     let (a, b) = (
         topo.vertex(edge.start()).ok()?.point(),
         topo.vertex(edge.end()).ok()?.point(),
     );
-    let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
-    let (t0, t1) = if edge.start() == from {
-        (t0, t1)
+    let (near, far) = if edge.start() == from {
+        (a, b)
     } else if edge.end() == from {
-        (t1, t0)
+        (b, a)
     } else {
         return None;
     };
-    let at = |f: f64| {
-        edge.curve()
-            .evaluate_with_endpoints((t1 - t0).madd(f, t0), a, b)
-    };
-    if side(at(0.0)) <= 0.0 {
+    let across = |v: Vec3| v - axis * v.dot(axis);
+    let off = |p: Point3| across(p - origin).length() - radius;
+    if off(near) <= 0.0 {
         return None;
     }
-    let (mut lo, mut hi) = (0.0, None);
-    for k in 1..=SAMPLES {
-        let f = f64::from(k) / f64::from(SAMPLES);
-        if side(at(f)) <= 0.0 {
-            hi = Some(f);
-            break;
+    let straight = match edge.curve() {
+        EdgeCurve::Line => true,
+        EdgeCurve::NurbsCurve(curve) => {
+            let points = curve.control_points();
+            let chord = b - a;
+            let length2 = chord.length_squared();
+            curve.degree() == 1
+                && length2 > 0.0
+                && points
+                    .iter()
+                    .all(|&p| (p - a).cross(chord).length_squared() <= 1e-24 * length2 * length2)
+                && points
+                    .windows(2)
+                    .all(|pair| (pair[1] - pair[0]).dot(chord) >= 0.0)
         }
-        lo = f;
+        EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => false,
+    };
+    if straight {
+        // `|w + d s|^2 = radius^2` across the axis, for `s` from 0 at `near`
+        // to 1 at `far`.
+        let (w, d) = (across(near - origin), across(far - near));
+        let (qa, qb, qc) = (d.dot(d), w.dot(d), w.dot(w) - radius * radius);
+        let disc = qb.madd(qb, -(qa * qc));
+        if qa <= 0.0 || disc < 0.0 || qb >= 0.0 {
+            return None;
+        }
+        // The nearer root, read without cancellation: `qc / q` with
+        // `q = -(qb - sqrt(disc))`.
+        let s = qc / (disc.sqrt() - qb);
+        return (0.0..=1.0).contains(&s).then(|| near + (far - near) * s);
     }
-    let mut hi = hi?;
-    for _ in 0..100 {
+    let speed = crate::fillet_builder::speed_bound(edge.curve(), a, b)?;
+    let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
+    let (t_near, t_far) = if edge.start() == from {
+        (t0, t1)
+    } else {
+        (t1, t0)
+    };
+    let at = |t: f64| edge.curve().evaluate_with_endpoints(t, a, b);
+    let f = |t: f64| off(at(t));
+    let eps = 1e-12 * radius.max(1.0);
+    let mut budget = 100_000_u32;
+    let mut stack = vec![(t_near, f(t_near), t_far, f(t_far))];
+    // Stretches nearer `from` are read first, so the first point found is
+    // the first along the edge.
+    while let Some((lo, f_lo, hi, f_hi)) = stack.pop() {
+        budget = budget.checked_sub(1)?;
+        let reach = speed * (hi - lo).abs();
+        if f_hi > 0.0 && 0.5 * (f_lo + f_hi - reach) > 0.0 {
+            continue;
+        }
+        if reach <= eps {
+            if f_hi <= 0.0 {
+                return Some(at(hi));
+            }
+            continue;
+        }
         let mid = 0.5 * (lo + hi);
-        if side(at(mid)) > 0.0 {
-            lo = mid;
+        let f_mid = f(mid);
+        if f_mid <= 0.0 {
+            stack.clear();
         } else {
-            hi = mid;
+            stack.push((mid, f_mid, hi, f_hi));
         }
+        stack.push((lo, f_lo, mid, f_mid));
     }
-    Some(at(0.5 * (lo + hi)))
+    None
 }
 
 /// Whether `point` lies on the circular arc `edge`, within its span.
@@ -5884,6 +5939,7 @@ fn plan_stub_crossing(
     support_faces: &[(FaceId, FaceId)],
     stripe_faces: &[Option<FaceId>],
     current: &dyn Fn(FaceId) -> FaceId,
+    moved: &dyn Fn(FaceId) -> FaceId,
 ) -> Option<StubCrossing> {
     let (a, b) = (stripes.get(ia)?, stripes.get(ib)?);
     let (a_face, b_face) = ((*stripe_faces.get(ia)?)?, (*stripe_faces.get(ib)?)?);
@@ -5931,13 +5987,13 @@ fn plan_stub_crossing(
             None
         }
     };
-    let f = pick(ia, a, f_source)?;
-    if pick(ib, b, f_source)? != f {
+    let f = moved(pick(ia, a, f_source)?);
+    if moved(pick(ib, b, f_source)?) != f {
         return None;
     }
-    let wa = pick(ia, a, wa_source)?;
-    let w1 = pick(ib, b, w1_source)?;
-    let w0 = current(w0_source);
+    let wa = moved(pick(ia, a, wa_source)?);
+    let w1 = moved(pick(ib, b, w1_source)?);
+    let w0 = moved(current(w0_source));
     // The faces changed in place are this build's own trimmed copies.
     if f == f_source || wa == wa_source || w1 == w1_source {
         return None;
@@ -5961,11 +6017,7 @@ fn plan_stub_crossing(
     }
     let to = |p: Point3| Vec3::new(p.x(), p.y(), p.z());
     let on_plane = |p: Point3| (n.dot(to(p)) - level).abs() <= tol;
-    let origin = cylinder.origin();
-    let off_a = |p: Point3| {
-        let w = p - origin;
-        (w - axis * w.dot(axis)).length() - ra
-    };
+    let barrel = (cylinder.origin(), axis, ra);
 
     let section_a = contact_section_at_vertex(ja.vertex, a, topo)?;
     let section_b = contact_section_at_vertex(jb.vertex, b, topo)?;
@@ -6027,8 +6079,8 @@ fn plan_stub_crossing(
         b_f_contact,
         af_end + (bf_end - af_end) * 0.5,
     )?;
-    let r = edge_meets(topo, b_w_contact, v_bw, &off_a)?;
-    let t = edge_meets(topo, e_prime, v_p_prime, &off_a)?;
+    let r = edge_enters_cylinder(topo, b_w_contact, v_bw, barrel)?;
+    let t = edge_enters_cylinder(topo, e_prime, v_p_prime, barrel)?;
     if (q - af_end).length() <= tol || (q - bf_end).length() <= tol {
         return None;
     }
@@ -6067,6 +6119,7 @@ fn plan_stub_crossing(
         b_face,
         f,
         wa,
+        w0_source,
         w0,
         w1,
         a_section,
@@ -6362,7 +6415,10 @@ pub fn apply_stub_crossings(
         })
         .collect();
     let mut closed = std::collections::HashSet::new();
-    let mut replaced = Vec::new();
+    // A stub face a crossing changed stands for its source from then on,
+    // so a later crossing on the same face reads it as that one left it.
+    let mut copies: std::collections::HashMap<FaceId, FaceId> = std::collections::HashMap::new();
+    let mut replaced: std::collections::HashMap<FaceId, FaceId> = std::collections::HashMap::new();
     for &(ja, ia) in &terminals {
         for &(jb, ib) in &terminals {
             if ia == ib
@@ -6377,6 +6433,12 @@ pub fn apply_stub_crossings(
             }
             // A runout patch here would lie on the end plane over the faces
             // past the stub, or off the part where they turn away from it.
+            let moved = |mut face: FaceId| {
+                while let Some(&copy) = copies.get(&face) {
+                    face = copy;
+                }
+                face
+            };
             let Some(plan) = plan_stub_crossing(
                 topo,
                 (ja, jb),
@@ -6385,6 +6447,7 @@ pub fn apply_stub_crossings(
                 support_faces,
                 stripe_faces,
                 current,
+                &moved,
             ) else {
                 return Err(BlendError::PlanningFailure {
                     reason: format!(
@@ -6395,18 +6458,17 @@ pub fn apply_stub_crossings(
                 });
             };
             let w0 = apply_stub_crossing(topo, &plan, registry)?;
-            if let Some(&source) = ja.face_fan.iter().find(|&&face| current(face) == plan.w0) {
-                replaced.push((source, w0));
-            }
+            copies.insert(plan.w0, w0);
+            replaced.insert(plan.w0_source, w0);
             closed.insert(ja.vertex);
             closed.insert(jb.vertex);
         }
     }
-    Ok((closed, replaced))
+    Ok((closed, replaced.into_iter().collect()))
 }
 
-/// The terminal vertices stub crossings close, and each stub face with the
-/// face that now stands for it.
+/// The terminal vertices stub crossings close, and each stub face they
+/// changed with the face that stands for it at the end.
 pub type StubCrossings = (std::collections::HashSet<VertexId>, Vec<(FaceId, FaceId)>);
 
 /// Solve every original planned junction exactly once.
@@ -7859,6 +7921,64 @@ mod tests {
                 "t={t}: signed normal dot {dot} != sin^2(t)={expected}"
             );
         }
+    }
+}
+
+/// Where an edge enters a cylinder: a long arc that dips into a thin
+/// cylinder over a short stretch, far shorter than any even step along it.
+#[cfg(test)]
+mod cylinder_entry_tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use super::*;
+    use brepkit_math::curves::Circle3D;
+
+    #[test]
+    fn a_long_arc_that_dips_into_a_thin_cylinder_enters_it() {
+        let mut topo = Topology::new();
+        let circle = Circle3D::new(
+            Point3::new(0.0, 100.999, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            100.0,
+        )
+        .unwrap();
+        let nearest = circle.project(Point3::new(0.0, 0.0, 0.0));
+        let (from, to) = (
+            circle.evaluate(nearest - 2.0),
+            circle.evaluate(nearest + 2.0),
+        );
+        let a = topo.add_vertex(Vertex::new(from, TOL));
+        let b = topo.add_vertex(Vertex::new(to, TOL));
+        let edge = topo.add_edge(Edge::new(a, b, EdgeCurve::Circle(circle)));
+        let barrel = (Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0);
+        // The arc meets the cylinder where y = (100.999^2 - 100^2 + 1) / (2 * 100.999).
+        let y = (100.999_f64.powi(2) - 1e4 + 1.0) / (2.0 * 100.999);
+        let x = (1.0 - y * y).sqrt();
+        for (start, side) in [(a, from.x().signum()), (b, to.x().signum())] {
+            let entry = edge_enters_cylinder(&topo, edge, start, barrel)
+                .expect("the arc dips into the cylinder");
+            assert!(
+                (entry - Point3::new(side * x, y, 0.0)).length() < 1e-9,
+                "from {start:?} the arc enters at {entry:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_arc_that_passes_the_cylinder_does_not_enter_it() {
+        let mut topo = Topology::new();
+        let circle = Circle3D::new(
+            Point3::new(0.0, 101.001, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            100.0,
+        )
+        .unwrap();
+        let nearest = circle.project(Point3::new(0.0, 0.0, 0.0));
+        let a = topo.add_vertex(Vertex::new(circle.evaluate(nearest - 2.0), TOL));
+        let b = topo.add_vertex(Vertex::new(circle.evaluate(nearest + 2.0), TOL));
+        let edge = topo.add_edge(Edge::new(a, b, EdgeCurve::Circle(circle)));
+        let barrel = (Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0);
+        assert!(edge_enters_cylinder(&topo, edge, a, barrel).is_none());
     }
 }
 
