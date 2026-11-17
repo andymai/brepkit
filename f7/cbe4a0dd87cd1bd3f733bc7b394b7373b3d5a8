@@ -1,0 +1,28 @@
+crates/math/src/nurbs/decompose.rs
+  s_489e8e320eebde::t_7751d1efecfe3a 369,374,418-419,427,434,436,477,479,484,487-488,490-491,500-502,603-604,1295-1321
+  s_489e8e320eebde::t_b6d5bdcc9c8f4a 9
+  s_489e8e320eebde::t_abc70e98a3a197 1322-1323
+crates/math/src/lib.rs
+  s_489e8e320eebde::t_7751d1efecfe3a 205-210
+crates/math/src/nurbs/mod.rs
+  s_489e8e320eebde::t_7751d1efecfe3a 41-82
+crates/math/src/nurbs/knot_ops.rs
+  s_489e8e320eebde::t_7751d1efecfe3a 9,23-25,98,218-219,448,826-859,861-862
+  s_489e8e320eebde::t_6294687e9a0f11 860,863
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f7cbe4a0dd87cd1bd3f733bc7b394b7373b3d5a8",
+  "prompts": {},
+  "sessions": {
+    "s_489e8e320eebde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1a2a9261-2019-4199-aa4f-06130071c8f0",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
