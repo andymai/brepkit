@@ -247,6 +247,78 @@ fn rounds_of_nearly_one_radius_meet_along_their_crease() {
     }
 }
 
+/// A pocket in the narrower round's wall where the wider round's end takes
+/// that wall away would keep its walls with nothing round it: the build
+/// refuses the corner. A pocket clear of the corner leaves it to be built.
+#[test]
+fn a_pocket_in_the_wall_under_the_crossing_is_refused() {
+    let pocketed = |topo: &mut Topology, low: Point3, size: Vec3| {
+        let solid = make_box(topo, 20.0, 20.0, 20.0).unwrap();
+        let pocket = make_box(topo, size.x(), size.y(), size.z()).unwrap();
+        transform_solid(topo, pocket, &Mat4::translation(low.x(), low.y(), low.z())).unwrap();
+        brepkit_operations::boolean::boolean(
+            topo,
+            brepkit_operations::boolean::BooleanOp::Cut,
+            solid,
+            pocket,
+        )
+        .unwrap()
+    };
+    let origin = Point3::new(0.0, 0.0, 0.0);
+    let laws = |topo: &Topology, solid: SolidId| {
+        vec![
+            (
+                edge_at(topo, solid, origin, Point3::new(20.0, 0.0, 0.0)),
+                RadiusLaw::Constant(3.0),
+            ),
+            (
+                edge_at(topo, solid, origin, Point3::new(0.0, 20.0, 0.0)),
+                RadiusLaw::Constant(1.0),
+            ),
+        ]
+    };
+
+    let mut topo = Topology::new();
+    let solid = pocketed(
+        &mut topo,
+        Point3::new(-0.1, 0.05, 1.3),
+        Vec3::new(0.2, 0.1, 0.3),
+    );
+    let edges = laws(&topo, solid);
+    match fillet_v2_variable(&mut topo, solid, edges) {
+        Err(brepkit_operations::OperationsError::Blend(
+            brepkit_blend::BlendError::PlanningFailure { reason },
+        )) => assert!(reason.contains("cross at vertex"), "{reason}"),
+        Err(other) => panic!("expected the crossing's refusal, got {other}"),
+        Ok(result) => panic!(
+            "a pocket under the crossing must be refused, got {} successes",
+            result.succeeded.len()
+        ),
+    }
+
+    let mut topo = Topology::new();
+    let solid = pocketed(
+        &mut topo,
+        Point3::new(-0.1, 5.0, 5.0),
+        Vec3::new(0.2, 1.0, 1.0),
+    );
+    let edges = laws(&topo, solid);
+    let result = fillet_v2_variable(&mut topo, solid, edges).unwrap();
+    assert!(
+        result.failed.is_empty() && !result.is_partial,
+        "{:?}",
+        result.failed
+    );
+    let report = validate_solid(&topo, result.solid).unwrap();
+    assert!(report.is_valid(), "{:?}", report.issues);
+    let truth = 8000.0 - 0.1 - corner(3.0) * 20.0 - corner(1.0) * 20.0 + both_take(3.0, 1.0);
+    let volume = solid_volume(&topo, result.solid, 0.001).unwrap();
+    assert!(
+        (volume - truth).abs() < 1e-8 * truth,
+        "volume {volume}, expected {truth}"
+    );
+}
+
 /// A wall that curves away from the corner holds no plane for the wider
 /// round to end on, and the build refuses the corner instead of returning
 /// rounds that cross through each other.

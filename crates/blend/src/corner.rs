@@ -6875,6 +6875,27 @@ fn plan_junction_crossing(
         &b.surface,
     )?;
 
+    // A hole of `WB` or `F` must lie clear of the part the crossing takes:
+    // on `WB`, within `A`'s cylinder or past its reach from `F` or from
+    // `WA`; on `F`, past `A`'s reach from `WA` or `B`'s from `WB`.
+    let depth = |plane: Option<(Vec3, f64)>| {
+        move |p: Point3| plane.map_or(f64::NEG_INFINITY, |(normal, at)| at - normal.dot(to(p)))
+    };
+    let (from_f, from_wa) = (
+        depth(outward_plane_of(topo, f)),
+        depth(outward_plane_of(topo, wa)),
+    );
+    let from_wb = depth(Some((n, level)));
+    let rb = section_b.radius;
+    let inside_a = |p: Point3| across(p).length() <= ra;
+    let past_a_from_f = |p: Point3| from_f(p) >= ra;
+    let past_a_from_wa = |p: Point3| from_wa(p) >= ra;
+    let past_b_from_wb = |p: Point3| from_wb(p) >= rb;
+    let on_wb: [&dyn Fn(Point3) -> bool; 3] = [&inside_a, &past_a_from_f, &past_a_from_wa];
+    let on_f: [&dyn Fn(Point3) -> bool; 2] = [&past_a_from_wa, &past_b_from_wb];
+    if !holes_clear(topo, wb, &on_wb)? || !holes_clear(topo, f, &on_f)? {
+        return None;
+    }
     let f_run = wire_run_between(topo, f, (b_f_contact, v_bf), (a_f_contact, v_af))?;
     let wb_run = wire_run_between(topo, wb, (b_w_contact, v_bw), (e_up, v_s))?;
     Some(JunctionCrossing {
