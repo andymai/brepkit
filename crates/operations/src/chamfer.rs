@@ -66,10 +66,36 @@ pub fn chamfer(
     // engine's chamfer, which keeps the faces it does not touch as they are.
     let faces = brepkit_topology::explorer::solid_faces(topo, solid)?;
     if has_curved_edge(topo, &faces)? {
-        let result = crate::blend_ops::chamfer_v2(topo, solid, edges, distance, distance)?;
+        let result = crate::blend_ops::chamfer_v2_walking(topo, solid, edges, distance, distance)?;
         return crate::blend_ops::all_blended(result);
     }
     chamfer_core(topo, solid, edges, ChamferDistances::Symmetric(distance))
+}
+
+/// Chamfer `edges` exactly, `d1` into each edge's reference face and `d2`
+/// into its other face, when they are closed circular rims or chains of
+/// lines and arcs (see [`crate::chamfer_chain::chamfer_tangent_chains`]).
+/// `None` for any other pick. Each reference face must border its edge.
+pub(crate) fn chamfer_exactly_on(
+    topo: &mut Topology,
+    solid: SolidId,
+    edges: &[(EdgeId, FaceId)],
+    d1: f64,
+    d2: f64,
+) -> Result<Option<SolidId>, crate::OperationsError> {
+    let ids: Vec<EdgeId> = edges.iter().map(|&(e, _)| e).collect();
+    let on_wall = |edge: EdgeId, wall: FaceId| edges.iter().any(|&(e, f)| e == edge && f == wall);
+    let split = |edge: EdgeId, _cap: FaceId, wall: FaceId| {
+        if on_wall(edge, wall) {
+            (d2, d1)
+        } else {
+            (d1, d2)
+        }
+    };
+    if let Some(result) = chamfer_circular_rims(topo, solid, &ids, &split)? {
+        return Ok(Some(result));
+    }
+    crate::chamfer_chain::chamfer_tangent_chains_on(topo, solid, edges, d1, d2)
 }
 
 /// Asymmetric chamfer: `d1` on the first adjacent face, `d2` on the second.
@@ -109,10 +135,10 @@ pub fn chamfer_asymmetric(
 /// other face.
 ///
 /// A distance-and-angle chamfer is `d2 = d1 * tan(angle)`. Closed circular
-/// rims between a cap and a coaxial wall (a hole's mouth, a rod's end) are
-/// cut here; other edges go to the blend engine's chamfer, which keeps the
-/// faces it does not touch, holes and curves included. One call takes rims
-/// or other edges, not both.
+/// rims between a cap and a coaxial wall (a hole's mouth, a rod's end) and
+/// chains of lines and arcs are cut exactly; other edges go to the blend
+/// engine's chamfer, which keeps the faces it does not touch, holes and
+/// curves included. One call takes rims or other edges, not both.
 ///
 /// # Errors
 ///
@@ -159,17 +185,6 @@ pub fn chamfer_two_on(
         return Err(crate::OperationsError::InvalidInput {
             reason: "closed circular rims cannot be chamfered together with other edges".into(),
         });
-    }
-    let on_wall = |edge: EdgeId, wall: FaceId| edges.iter().any(|&(e, f)| e == edge && f == wall);
-    let split = |edge: EdgeId, _cap: FaceId, wall: FaceId| {
-        if on_wall(edge, wall) {
-            (d2, d1)
-        } else {
-            (d1, d2)
-        }
-    };
-    if let Some(result) = chamfer_circular_rims(topo, solid, &ids, &split)? {
-        return Ok(result);
     }
     let blended = crate::blend_ops::chamfer_v2_on(topo, solid, edges, d1, d2)
         .and_then(crate::blend_ops::all_blended);
