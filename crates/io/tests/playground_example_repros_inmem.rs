@@ -7,6 +7,7 @@ use std::f64::consts::{PI, TAU};
 use std::path::Path;
 
 use brepkit_io::arena_io::deserialize_solid;
+use brepkit_math::mat::Mat4;
 use brepkit_math::quadrature::gauss_legendre_points;
 use brepkit_math::vec::Point3;
 use brepkit_operations::boolean::{BooleanOp, BooleanOptions, boolean_with_options};
@@ -83,14 +84,26 @@ impl Grid {
 /// curved face, holds `in_a` (in `a` alone) and `in_b` (in `b` alone), and
 /// does not hold `off`. Its volume is the operands' less their common part,
 /// and over `grid` it holds a point exactly where either operand does.
-fn fuse_exactly(
+fn fuse_exactly(topo: &mut Topology, a: SolidId, b: SolidId, probes: [[f64; 3]; 3], grid: &Grid) {
+    fuse_exactly_posed(topo, a, b, probes, grid, &Mat4::identity());
+}
+
+/// [`fuse_exactly`] for operands moved by `pose`, the probes and the grid
+/// given where they lie before the move.
+fn fuse_exactly_posed(
     topo: &mut Topology,
     a: SolidId,
     b: SolidId,
-    [in_a, in_b, off]: [[f64; 3]; 3],
+    probes: [[f64; 3]; 3],
     grid: &Grid,
+    pose: &Mat4,
 ) {
     use PointClassification::{Inside, Outside};
+    let moved = |p: [f64; 3]| {
+        let q = pose.mul_point(Point3::new(p[0], p[1], p[2]));
+        [q.x(), q.y(), q.z()]
+    };
+    let [in_a, in_b, off] = probes.map(moved);
     for (solid, own, other) in [(a, in_a, in_b), (b, in_b, in_a)] {
         assert_eq!(class_of(topo, solid, own), Inside, "probe {own:?}");
         assert_eq!(class_of(topo, solid, other), Outside, "probe {other:?}");
@@ -127,7 +140,7 @@ fn fuse_exactly(
     );
 
     let mut read = 0;
-    for p in grid.points() {
+    for p in grid.points().map(moved) {
         let (Some(f), Some(ia), Some(ib)) =
             (holds(topo, fused, p), holds(topo, a, p), holds(topo, b, p))
         else {
@@ -161,6 +174,39 @@ fn a_grouser_fuses_onto_a_wheel() {
             n: 20,
         },
     );
+}
+
+/// [`a_grouser_fuses_onto_a_wheel`] with the wheel and the grouser turned
+/// together so that the wheel's axis leans off every coordinate axis. The
+/// circle of radius 249.25 on each face of the ring crosses the grouser's
+/// face nearest the axis at 2.6 degrees, and its arc from there to the
+/// grouser's side stands up to 0.166 off that face.
+#[test]
+fn a_grouser_fuses_onto_a_tilted_wheel() {
+    for pose in [
+        Mat4::rotation_x(0.37),
+        Mat4::rotation_y(-0.81),
+        Mat4::rotation_x(0.37) * Mat4::rotation_y(-0.81) * Mat4::rotation_z(1.13),
+    ] {
+        let mut topo = Topology::new();
+        let wheel = load("mars_rover_wheel.bin", &mut topo);
+        let grouser = load("mars_rover_grouser.bin", &mut topo);
+        for solid in [wheel, grouser] {
+            brepkit_operations::transform::transform_solid(&mut topo, solid, &pose).unwrap();
+        }
+        fuse_exactly_posed(
+            &mut topo,
+            wheel,
+            grouser,
+            [[0.0, 249.6, 0.0], [255.0, 15.84, 100.0], [0.0, 0.0, 0.0]],
+            &Grid {
+                lo: [248.6, 3.0, 50.0],
+                hi: [258.0, 16.0, 95.0],
+                n: 20,
+            },
+            &pose,
+        );
+    }
 }
 
 /// `robot-arm`: the turret's cap, a cylinder with a cone on it, and a yoke
