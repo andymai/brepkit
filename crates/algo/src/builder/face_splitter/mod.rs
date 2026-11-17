@@ -1190,6 +1190,32 @@ fn attach_whole_holes(sub_faces: &mut [SplitSubFace], holes: &[Vec<OrientedPCurv
     }
 }
 
+/// Whether the boundary of a u-periodic face runs counter-clockwise in
+/// `(u, v)`, read as the sign of `-∮ v du` over its edges: `du` along each
+/// edge does not depend on the period copy its ends sit at, so the edges can
+/// come in any order. A band's two rims run a turn each way and its seam
+/// copies cancel, so the integral is the face's signed area. `None` when it
+/// is too small to read.
+fn periodic_boundary_runs_ccw(
+    boundary: &[OrientedPCurveEdge],
+    surface: &FaceSurface,
+) -> Option<bool> {
+    use std::f64::consts::TAU;
+    let mut integral = 0.0;
+    let mut length = 0.0;
+    for e in boundary {
+        let mut pts = sampling::sample_wire_loop_uv_on_surface(std::slice::from_ref(e), surface);
+        let last = *pts.last()?;
+        let end_u = e.end_uv.x() - ((e.end_uv.x() - last.x()) / TAU).round() * TAU;
+        pts.push(Point2::new(end_u, e.end_uv.y()));
+        for w in pts.windows(2) {
+            integral -= 0.5 * (w[0].y() + w[1].y()) * (w[1].x() - w[0].x());
+            length += (w[1] - w[0]).length();
+        }
+    }
+    (integral.abs() > 1e-9 * length * length.max(1.0)).then_some(integral > 0.0)
+}
+
 /// Whether a loop the DCEL traced on a u-periodic face is that face's
 /// outside: the face stops short of a full turn, and the trace keeps every
 /// region on its left, so the outside is a loop of boundary edges alone that
@@ -9151,7 +9177,17 @@ fn split_face_2d_impl(
         // deleting the notch strip). The DCEL face trace enumerates the true
         // subdivision; adopt it only when it strictly refines the greedy
         // partition and is clean by every loop-health signature.
-        let mut dcel = build_wire_loops_dcel(&all_edges, tol.linear, u_periodic, v_periodic);
+        // A hole across the seam that an earlier cut left notches the
+        // boundary, and the trace closes the notch's reversed twins round the
+        // hole: a loop on the face's outside that winds like a region.
+        let mut dcel = build_wire_loops_dcel_measured(
+            &all_edges,
+            tol.linear,
+            u_periodic,
+            v_periodic,
+            None,
+            periodic_boundary_runs_ccw(&all_edges[..n_boundary_edges], &surface),
+        );
         dcel.retain(|lp| !is_periodic_face_outside(lp, &surface));
         // This branch is u-periodic by its gate: the pinch splitter is
         // unsafe on the glued seam graph (see the DCEL consult above), so
