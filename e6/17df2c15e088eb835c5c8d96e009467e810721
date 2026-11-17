@@ -1,0 +1,61 @@
+crates/check/src/validate/face_wires.rs
+  s_489e8e320eebde::t_e02e3e7c62e2cd 58-74,79,102-173,587-671,890-939,1023-1246
+  s_489e8e320eebde::t_bd24deef98edd7 1247
+crates/operations/tests/fillet_mixed_radius_corner.rs
+  s_489e8e320eebde::t_e02e3e7c62e2cd 1-648
+crates/operations/tests/fillet_plane_vault.rs
+  s_489e8e320eebde::t_e02e3e7c62e2cd 394
+crates/io/tests/playground_example_repros_inmem.rs
+  s_489e8e320eebde::t_e02e3e7c62e2cd 513-564
+  s_489e8e320eebde::t_72c3574cf82c8a 512
+  s_489e8e320eebde::t_8b88df2eb20128 565
+crates/operations/tests/regress_fillet_variable_retry_seam_stub.rs
+  s_489e8e320eebde::t_e02e3e7c62e2cd 20-25,29-32,46,50,52-53,57,76-81,215,219,466-1006,1011-1017,1032-1045
+crates/algo/src/pave_filler/phase_ff.rs
+  s_489e8e320eebde::t_e02e3e7c62e2cd 2714-2760,2798-2807,2827-2858,2872-2873,2875-2938,2960-2995,3071,9509-9550
+  s_489e8e320eebde::t_bff8f8ac8dfba2 9551
+crates/operations/tests/fillet_concave_corner_ends.rs
+  s_489e8e320eebde::t_e02e3e7c62e2cd 153,161
+crates/operations/tests/torus_near_tangent_wall.rs
+  s_489e8e320eebde::t_e02e3e7c62e2cd 1-135
+crates/blend/src/fillet_builder.rs
+  s_489e8e320eebde::t_e02e3e7c62e2cd 1320-1337,1339-1340,1345-1373,2546
+crates/algo/src/classifier/analytic.rs
+  s_489e8e320eebde::t_e02e3e7c62e2cd 503-504,508
+crates/operations/tests/ring_groove_against_boxes.rs
+  s_489e8e320eebde::t_e02e3e7c62e2cd 3-4,16-18,33,36,187-193,276,362-412
+crates/operations/tests/tapered_shaft_classify.rs
+  s_489e8e320eebde::t_e02e3e7c62e2cd 1-149
+crates/operations/tests/regress_fillet_miter_needs_convex_corner.rs
+  s_489e8e320eebde::t_e02e3e7c62e2cd 68
+crates/io/tests/data/universal_joint_fork.bin
+  s_489e8e320eebde::t_e02e3e7c62e2cd 1
+crates/io/tests/data/universal_joint_turned_outside.bin
+  s_489e8e320eebde::t_e02e3e7c62e2cd 1
+crates/operations/tests/fillet_corner_options.rs
+  s_489e8e320eebde::t_e02e3e7c62e2cd 660-664
+crates/operations/tests/thin_ring_under_a_tilted_box.rs
+  s_489e8e320eebde::t_e02e3e7c62e2cd 1-98
+.claude/skills/roadmap/SKILL.md
+  s_489e8e320eebde::t_e02e3e7c62e2cd 147,173
+crates/blend/src/corner.rs
+  s_489e8e320eebde::t_e02e3e7c62e2cd 401-412,426,5157-5177,5712,5714-5807,5809-5822,5824-5833,5835-5857,5860-5862,5866-5871,5873,5875,5878-5896,5898-5940,5942-5944,5946,5948-5950,5952-5960,5962-5964,5966-7270,8531-8588
+crates/operations/src/validate.rs
+  s_489e8e320eebde::t_e02e3e7c62e2cd 1052-1054,1060,1063-1069
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e617df2c15e088eb835c5c8d96e009467e810721",
+  "prompts": {},
+  "sessions": {
+    "s_489e8e320eebde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1a2a9261-2019-4199-aa4f-06130071c8f0",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
