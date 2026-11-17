@@ -8183,23 +8183,36 @@ fn emit_split_circle_arcs(
                 let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) else {
                     continue;
                 };
-                // Each edge's whole span: a cylinder's or cone's rim starts
-                // and ends at its seam vertex, so its endpoints alone shrink
-                // the box to the seam and every arc in the face reads outside.
-                // A conic edge is bounded exactly: samples miss its extremes
-                // by their chords' sag, which drops an arc just inside a rim.
-                let b = super::helpers::edge_span_box(edge.curve(), sv.point(), ev.point(), 8);
-                min = Point3::new(
-                    min.x().min(b.min.x()),
-                    min.y().min(b.min.y()),
-                    min.z().min(b.min.z()),
-                );
-                max = Point3::new(
-                    max.x().max(b.max.x()),
-                    max.y().max(b.max.y()),
-                    max.z().max(b.max.z()),
-                );
-                any = true;
+                let (sp, ep) = (sv.point(), ev.point());
+                let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
+                // Sample along the curve, not just endpoints: a cylinder/cone
+                // lateral face's circular edges are closed (start == end at the
+                // seam vertex), so endpoint-only bounds collapse to a line at
+                // the seam and the face's radial extent is lost — which then
+                // wrongly rejects every in-face section-arc midpoint.
+                // Samples of an arc miss its extreme by the sagitta between
+                // them: a cap's rim then leaves the arc along its bottom out
+                // of the cap's box.
+                let arc = match edge.curve() {
+                    EdgeCurve::Circle(c) => Some(c.arc_aabb(t0, t1)),
+                    EdgeCurve::Ellipse(e) => Some(e.arc_aabb(t0, t1)),
+                    EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => None,
+                };
+                let n = 8;
+                let samples = (0..=n).map(|i| {
+                    let frac = f64::from(i) / f64::from(n);
+                    edge.curve()
+                        .evaluate_with_endpoints(t0 + (t1 - t0) * frac, sp, ep)
+                });
+                let points: Vec<Point3> = match arc {
+                    Some(b) => vec![b.min, b.max],
+                    None => samples.collect(),
+                };
+                for p in points {
+                    min = Point3::new(min.x().min(p.x()), min.y().min(p.y()), min.z().min(p.z()));
+                    max = Point3::new(max.x().max(p.x()), max.y().max(p.y()), max.z().max(p.z()));
+                    any = true;
+                }
             }
         }
         if !any {

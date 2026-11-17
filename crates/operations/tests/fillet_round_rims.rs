@@ -591,15 +591,16 @@ fn a_rods_top_rim_round_over_a_hole_on_its_seam_is_refused() {
 }
 
 /// A hole crossing the circle the round's contact runs along notches the
-/// round's band from its edge on the top, which the cut back does not yet
-/// build, so the round is refused, not built as a top whose outline
-/// crosses its hole.
+/// round's band from its edge on the top. The hole is cut back through the
+/// round as above, and the result is short of the drilled rod by the rim's
+/// strip less the part of it in the hole.
 #[test]
-fn a_rods_top_rim_round_across_a_hole_is_refused() {
-    assert!(
-        round_a_drilled_rods_top(3.5, 1.0, 0.8, 2.0).is_err(),
-        "a round across the hole was built"
-    );
+fn a_rods_top_rim_round_across_a_hole_cuts_it_back() {
+    let (offset, hole) = (3.5, 0.8);
+    let (topo, solid, before) =
+        round_a_drilled_rods_top(offset, 1.0, hole, 2.0).expect("the round across the hole builds");
+    let change = -(rounded_off(RADIUS, 2.0) - strip_in_hole(RADIUS, 2.0, offset, hole));
+    assert_sound_and_changed_by(&topo, solid, before, change);
 }
 
 /// The same hole wholly inside the contact's circle keeps the round, and the
