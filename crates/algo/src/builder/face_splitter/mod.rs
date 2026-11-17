@@ -8892,8 +8892,13 @@ fn split_face_2d_impl(
                 continue;
             };
             let pts: Vec<Point3> = on_hole.iter().map(|&(p, _)| p).collect();
-            let mut pieces =
-                split_boundary_edges_at_3d_points(hole.clone(), &pts, None, &surface, tol.linear);
+            let mut pieces = edge_splitting::split_hole_edges_at_3d_points(
+                hole.clone(),
+                &pts,
+                None,
+                &surface,
+                tol.linear,
+            );
             // The hole's own UVs come from its own walk, which can sit a
             // period away from the face's window: move it to the copy whose
             // point under the section's end lies at that end's UV.
@@ -12125,6 +12130,22 @@ mod tests {
             Point3::new(0.75, 0.01, 0.0),
             band
         ));
+        // The weave's split finds the tip where the contact test does.
+        let plane = FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: 0.0,
+        };
+        let tip = Point3::new(0.504, 0.1, 0.0);
+        let pieces = edge_splitting::split_hole_edges_at_3d_points(
+            vec![edge.clone()],
+            &[tip],
+            None,
+            &plane,
+            1e-7,
+        );
+        assert_eq!(pieces.len(), 2, "the spline did not split at its tip");
+        assert!((pieces[0].end_3d - tip).length() < 1e-7);
+        assert!((pieces[1].start_3d - tip).length() < 1e-7);
         // An edge on the part before the spike holds none of it.
         let mut first_part = edge;
         first_part.end_3d = Point3::new(0.503, 0.0, 0.0);

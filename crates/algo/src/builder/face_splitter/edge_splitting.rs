@@ -19,13 +19,38 @@ use super::sampling::normalize_angle_in_span;
 /// split points onto the curve via `Circle3D::project` / `Ellipse3D::project`
 /// and checks distance from the curve. Creates sub-arc edges with pcurves
 /// computed via sampling.
-#[allow(clippy::too_many_lines)]
 pub(super) fn split_boundary_edges_at_3d_points(
     edges: Vec<OrientedPCurveEdge>,
     split_pts_3d: &[Point3],
     frame: Option<&PlaneFrame>,
     surface: &FaceSurface,
     tol: f64,
+) -> Vec<OrientedPCurveEdge> {
+    split_edges_at_3d_points(edges, split_pts_3d, frame, surface, tol, false)
+}
+
+/// [`split_boundary_edges_at_3d_points`] for a hole woven into a curved
+/// face's arrangement, at the ends of the sections that reach it. A spline
+/// edge splits where projection onto the part of the spline the edge runs on
+/// finds the point, as the weave's contact test finds it.
+pub(super) fn split_hole_edges_at_3d_points(
+    edges: Vec<OrientedPCurveEdge>,
+    split_pts_3d: &[Point3],
+    frame: Option<&PlaneFrame>,
+    surface: &FaceSurface,
+    tol: f64,
+) -> Vec<OrientedPCurveEdge> {
+    split_edges_at_3d_points(edges, split_pts_3d, frame, surface, tol, true)
+}
+
+#[allow(clippy::too_many_lines)]
+fn split_edges_at_3d_points(
+    edges: Vec<OrientedPCurveEdge>,
+    split_pts_3d: &[Point3],
+    frame: Option<&PlaneFrame>,
+    surface: &FaceSurface,
+    tol: f64,
+    nurbs_by_projection: bool,
 ) -> Vec<OrientedPCurveEdge> {
     let mut result = Vec::new();
     for edge in edges {
@@ -41,6 +66,11 @@ pub(super) fn split_boundary_edges_at_3d_points(
             // partition anchors on it — the chord-based line fallback rejects
             // on-curve points by the sagitta, leaving the shared edge whole on
             // one face and split on the other (cross-face desync).
+            EdgeCurve::NurbsCurve(_) if nurbs_by_projection => {
+                find_splits_on_nurbs_by_projection(&edge, split_pts_3d, tol).unwrap_or_else(|| {
+                    find_splits_on_nurbs_section(&edge, split_pts_3d, tol, false)
+                })
+            }
             EdgeCurve::NurbsCurve(_) => {
                 find_splits_on_nurbs_section(&edge, split_pts_3d, tol, false)
             }
@@ -474,6 +504,92 @@ pub(super) fn circle_edge_is_iso_v_rim(
 /// same normalized-[0,1]-over-`domain_with_endpoints` convention as
 /// `evaluate_edge_at_t`'s NURBS arm, returned in order ALONG THE EDGE
 /// (descending `t` when the stored curve runs `end_3d` → `start_3d`).
+/// Split parameters on a spline edge by projection onto the part of the
+/// spline the edge runs on, in the fractions of its domain that
+/// [`find_splits_on_nurbs_section`] gives, and in the edge's order. `None`
+/// when the edge is not a spline or its part cannot be cut out.
+fn find_splits_on_nurbs_by_projection(
+    edge: &OrientedPCurveEdge,
+    split_pts_3d: &[Point3],
+    tol: f64,
+) -> Option<Vec<(f64, Point3)>> {
+    use brepkit_math::nurbs::knot_ops::curve_split;
+    use brepkit_math::nurbs::projection::project_point_to_curve;
+    use brepkit_math::traits::ParametricCurve;
+    let EdgeCurve::NurbsCurve(whole) = &edge.curve_3d else {
+        return None;
+    };
+    let (dom0, dom1) = edge
+        .curve_3d
+        .domain_with_endpoints(edge.start_3d, edge.end_3d);
+    let dom_span = dom1 - dom0;
+    if dom_span.abs() <= f64::EPSILON {
+        return None;
+    }
+    let (lo, hi) = (dom0.min(dom1), dom0.max(dom1));
+    let (d0, d1) = ParametricCurve::domain(whole);
+    let slack = 1e-9 * (d1 - d0);
+    let mut span = whole.clone();
+    if lo > d0 + slack {
+        span = curve_split(&span, lo).ok()?.1;
+    }
+    if hi < d1 - slack {
+        span = curve_split(&span, hi).ok()?.0;
+    }
+    // The control polygon holds the part, so a point farther from its box
+    // than the tolerance is off the edge.
+    let (mut bmin, mut bmax) = (span.control_points()[0], span.control_points()[0]);
+    for p in span.control_points() {
+        bmin = Point3::new(
+            bmin.x().min(p.x()),
+            bmin.y().min(p.y()),
+            bmin.z().min(p.z()),
+        );
+        bmax = Point3::new(
+            bmax.x().max(p.x()),
+            bmax.y().max(p.y()),
+            bmax.z().max(p.z()),
+        );
+    }
+    let outside = |p: Point3| {
+        p.x() < bmin.x() - tol
+            || p.y() < bmin.y() - tol
+            || p.z() < bmin.z() - tol
+            || p.x() > bmax.x() + tol
+            || p.y() > bmax.y() + tol
+            || p.z() > bmax.z() + tol
+    };
+    let mut splits: Vec<(f64, Point3)> = Vec::new();
+    for &sp in split_pts_3d {
+        if outside(sp) {
+            continue;
+        }
+        let Ok(hit) = project_point_to_curve(&span, sp, tol * 1e-3) else {
+            continue;
+        };
+        if hit.distance > tol {
+            continue;
+        }
+        let t = (hit.parameter - dom0) / dom_span;
+        if t <= tol || t >= 1.0 - tol {
+            continue;
+        }
+        splits.push((t, sp));
+    }
+    splits.sort_by(|a, b| a.0.total_cmp(&b.0));
+    splits.dedup_by(|a, b| (a.0 - b.0).abs() < tol);
+    let first = edge
+        .curve_3d
+        .evaluate_with_endpoints(dom0, edge.start_3d, edge.end_3d);
+    let last = edge
+        .curve_3d
+        .evaluate_with_endpoints(dom1, edge.start_3d, edge.end_3d);
+    if (last - edge.start_3d).length() < (first - edge.start_3d).length() {
+        splits.reverse();
+    }
+    Some(splits)
+}
+
 pub(super) fn find_splits_on_nurbs_section(
     edge: &OrientedPCurveEdge,
     split_pts_3d: &[Point3],
