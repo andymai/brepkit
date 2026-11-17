@@ -536,8 +536,9 @@ fn find_splits_on_nurbs_by_projection(
     if hi < d1 - slack {
         span = curve_split(&span, hi).ok()?.0;
     }
-    // The control polygon holds the part, so a point farther from its box
-    // than the tolerance is off the edge.
+    // With positive weights the control polygon holds the part, so a point
+    // farther from its box than the tolerance is off the edge.
+    let boxed = span.weights().iter().all(|&w| w.is_finite() && w > 0.0);
     let (mut bmin, mut bmax) = (span.control_points()[0], span.control_points()[0]);
     for p in span.control_points() {
         bmin = Point3::new(
@@ -561,7 +562,7 @@ fn find_splits_on_nurbs_by_projection(
     };
     let mut splits: Vec<(f64, Point3)> = Vec::new();
     for &sp in split_pts_3d {
-        if outside(sp) {
+        if boxed && outside(sp) {
             continue;
         }
         let Ok(hit) = project_point_to_curve(&span, sp, tol * 1e-3) else {

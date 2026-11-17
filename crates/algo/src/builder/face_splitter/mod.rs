@@ -12072,6 +12072,49 @@ mod tests {
         );
     }
 
+    /// A quadratic hole edge over (0, 0), (1, 1), (2, 0) with weights 1, -0.5
+    /// and 1 runs through (1, -1), outside its control polygon's box: the
+    /// weave's split still finds it there.
+    #[test]
+    fn a_spline_hole_edge_with_a_negative_weight_splits_outside_its_control_box() {
+        use brepkit_math::curves2d::{Curve2D, Line2D};
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        use brepkit_math::vec::Vec2;
+        let spline = NurbsCurve::new(
+            2,
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            vec![
+                Point3::new(0.0, 0.0, 0.0),
+                Point3::new(1.0, 1.0, 0.0),
+                Point3::new(2.0, 0.0, 0.0),
+            ],
+            vec![1.0, -0.5, 1.0],
+        )
+        .unwrap();
+        let low = Point3::new(1.0, -1.0, 0.0);
+        assert!((spline.evaluate(0.5) - low).length() < 1e-12);
+        let edge = OrientedPCurveEdge {
+            curve_3d: EdgeCurve::NurbsCurve(spline),
+            pcurve: Curve2D::Line(Line2D::new(Point2::new(0.0, 0.0), Vec2::new(2.0, 0.0)).unwrap()),
+            start_uv: Point2::new(0.0, 0.0),
+            end_uv: Point2::new(2.0, 0.0),
+            start_3d: Point3::new(0.0, 0.0, 0.0),
+            end_3d: Point3::new(2.0, 0.0, 0.0),
+            forward: true,
+            source_edge_idx: None,
+            pave_block_id: None,
+        };
+        let plane = FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: 0.0,
+        };
+        let pieces =
+            edge_splitting::split_hole_edges_at_3d_points(vec![edge], &[low], None, &plane, 1e-7);
+        assert_eq!(pieces.len(), 2, "the spline did not split at (1, -1)");
+        assert!((pieces[0].end_3d - low).length() < 1e-7);
+        assert!((pieces[1].start_3d - low).length() < 1e-7);
+    }
+
     /// A hole edge that is a degree-1 spline with a spike in one short knot
     /// span holds the spike's tip and its sides, where fixed samples along
     /// the parameter step over the span.
