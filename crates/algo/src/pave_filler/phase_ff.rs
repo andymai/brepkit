@@ -2657,7 +2657,7 @@ fn restrict_curves_to_faces(
                 .any(|ext| (0..N).all(|i| ext.clear_of(pt(i), 10.0 * tol.linear)))
                 || [fa, fb]
                     .into_iter()
-                    .any(|f| plane_face_clear_of(topo, f, (0..N).map(pt), tol)))
+                    .any(|f| plane_face_clear_of(topo, f, circle, tol)))
             && closed_circle_boundary_crossings(topo, fa, fb, circle, tol).len() < 2
         {
             continue;
@@ -2667,15 +2667,20 @@ fn restrict_curves_to_faces(
     out
 }
 
-/// Whether `face` is a plane face and every point of `points` lies off it by
-/// more than ten times the linear tolerance, read against its boundary curves
-/// as they are. `false` for any other face, or when the region cannot be read.
+/// Whether `face` is a plane face that the whole `circle`, in its plane,
+/// lies off. Every boundary edge must be a line or a circle arc, each kept
+/// farther than ten times the linear tolerance from the circle: then the
+/// circle crosses no edge and lies wholly on one side, which one point of it
+/// decides against the face's exact region. `false` for any other face, an
+/// edge of another kind, an edge near the circle, or a region that cannot be
+/// read.
 fn plane_face_clear_of(
     topo: &Topology,
     face: FaceId,
-    points: impl Iterator<Item = Point3>,
+    circle: &brepkit_math::curves::Circle3D,
     tol: Tolerance,
 ) -> bool {
+    use std::f64::consts::TAU;
     let depth = 10.0 * tol.linear;
     let Ok(data) = topo.face(face) else {
         return false;
@@ -2683,6 +2688,65 @@ fn plane_face_clear_of(
     let FaceSurface::Plane { normal, .. } = data.surface() else {
         return false;
     };
+    let (center, radius) = (circle.center(), circle.radius());
+    // The least and the most distance from the circle's centre to a point of
+    // the edge, all in the face's plane.
+    let reach = |edge: &brepkit_topology::edge::Edge| -> Option<(f64, f64)> {
+        let (a, b) = (
+            topo.vertex(edge.start()).ok()?.point(),
+            topo.vertex(edge.end()).ok()?.point(),
+        );
+        match edge.curve() {
+            EdgeCurve::Line => {
+                let d = b - a;
+                let len2 = d.dot(d);
+                let t = if len2 > 0.0 {
+                    ((center - a).dot(d) / len2).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                let near = (a + d * t - center).length();
+                Some((near, (a - center).length().max((b - center).length())))
+            }
+            curve @ EdgeCurve::Circle(arc) => {
+                let (t0, t1) = curve.domain_with_endpoints(a, b);
+                let offset = center - arc.center();
+                let along = offset.dot(arc.normal());
+                let flat = offset - arc.normal() * along;
+                let gap = flat.length();
+                let to = |t: f64| (arc.evaluate(t) - center).length();
+                let (mut near, mut far) = (to(t0).min(to(t1)), to(t0).max(to(t1)));
+                if gap > 0.0 {
+                    let toward = flat.dot(arc.v_axis()).atan2(flat.dot(arc.u_axis()));
+                    let on_arc = |t: f64| (t - t0).rem_euclid(TAU) <= t1 - t0 || (t1 - t0) >= TAU;
+                    if on_arc(toward) {
+                        near = near.min(to(toward));
+                    }
+                    if on_arc(toward + std::f64::consts::PI) {
+                        far = far.max(to(toward + std::f64::consts::PI));
+                    }
+                } else {
+                    near = arc.radius().hypot(along);
+                    far = near;
+                }
+                Some((near, far))
+            }
+            EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_) => None,
+        }
+    };
+    for wid in std::iter::once(data.outer_wire()).chain(data.inner_wires().iter().copied()) {
+        let Ok(wire) = topo.wire(wid) else {
+            return false;
+        };
+        for oe in wire.edges() {
+            let Some((near, far)) = topo.edge(oe.edge()).ok().and_then(&reach) else {
+                return false;
+            };
+            if near <= radius + depth && far >= radius - depth {
+                return false;
+            }
+        }
+    }
     let Some(origin) = topo
         .wire(data.outer_wire())
         .ok()
@@ -2704,8 +2768,7 @@ fn plane_face_clear_of(
     ) else {
         return false;
     };
-    let mut points = points.peekable();
-    points.peek().is_some() && points.all(|p| region.side(frame.project(p), depth) == Some(false))
+    region.side(frame.project(circle.evaluate(0.0)), depth) == Some(false)
 }
 
 /// A closed NURBS section whose in-both run wraps its start, restarted at a
@@ -9374,6 +9437,93 @@ fn piece_side(
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::*;
+
+    /// The ring in `z = 0` between radii 10 and 10.02 about the origin, its
+    /// rims whole circles, or rational quadratics in four quarters when
+    /// `spline`.
+    fn thin_ring(topo: &mut Topology, spline: bool) -> FaceId {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_topology::face::Face;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        let mut rim = |radius: f64, forward: bool| {
+            let circle = Circle3D::new(Point3::new(0.0, 0.0, 0.0), z, radius).unwrap();
+            let start = topo.add_vertex(Vertex::new(circle.evaluate(0.0), 1e-7));
+            let curve = if spline {
+                let s = std::f64::consts::FRAC_1_SQRT_2;
+                let corners = [
+                    (1.0, 0.0),
+                    (1.0, 1.0),
+                    (0.0, 1.0),
+                    (-1.0, 1.0),
+                    (-1.0, 0.0),
+                    (-1.0, -1.0),
+                    (0.0, -1.0),
+                    (1.0, -1.0),
+                    (1.0, 0.0),
+                ];
+                EdgeCurve::NurbsCurve(
+                    brepkit_math::nurbs::curve::NurbsCurve::new(
+                        2,
+                        vec![
+                            0.0, 0.0, 0.0, 0.25, 0.25, 0.5, 0.5, 0.75, 0.75, 1.0, 1.0, 1.0,
+                        ],
+                        corners
+                            .iter()
+                            .map(|&(x, y)| Point3::new(radius * x, radius * y, 0.0))
+                            .collect(),
+                        vec![1.0, s, 1.0, s, 1.0, s, 1.0, s, 1.0],
+                    )
+                    .unwrap(),
+                )
+            } else {
+                EdgeCurve::Circle(circle)
+            };
+            let edge = topo.add_edge(Edge::new(start, start, curve));
+            topo.add_wire(Wire::new(vec![OrientedEdge::new(edge, forward)], true).unwrap())
+        };
+        let outer = rim(10.02, true);
+        let hole = rim(10.0, false);
+        topo.add_face(Face::new(
+            outer,
+            vec![hole],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: 0.0,
+            },
+        ))
+    }
+
+    /// A circle of radius 9.99 whose centre lies 0.01001 off the thin ring's
+    /// runs into the ring along a short arc between 24 samples of it. It
+    /// is not off the ring, whichever way the rims are stored. A circle of
+    /// radius 9.9 about the ring's centre lies in its hole: off the ring with
+    /// circle rims, and not read off it with spline rims, whose crossings
+    /// with the circle the check does not compute.
+    #[test]
+    fn a_circle_into_a_thin_ring_between_its_samples_is_not_off_it() {
+        use brepkit_math::curves::Circle3D;
+        let tol = Tolerance::default();
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        // Its centre lies off the ring's halfway between two of the samples'
+        // directions, where it reaches radius 10.00001.
+        let (sin, cos) = (std::f64::consts::PI / 24.0).sin_cos();
+        let into = Circle3D::new(Point3::new(0.01001 * cos, 0.01001 * sin, 0.0), z, 9.99).unwrap();
+        let in_hole = Circle3D::new(Point3::new(0.0, 0.0, 0.0), z, 9.9).unwrap();
+        for spline in [false, true] {
+            let mut topo = Topology::new();
+            let ring = thin_ring(&mut topo, spline);
+            assert!(
+                !plane_face_clear_of(&topo, ring, &into, tol),
+                "spline {spline}: the circle into the ring reads off it"
+            );
+            assert_eq!(
+                plane_face_clear_of(&topo, ring, &in_hole, tol),
+                !spline,
+                "spline {spline}: the circle in the hole"
+            );
+        }
+    }
 
     /// A cone about z with half-angle π/6 from its radial plane, stored over
     /// its generator from 18 to 22, meets the flat NURBS rectangle x = 16 to
