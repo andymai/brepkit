@@ -1712,6 +1712,20 @@ fn split_sections_at_seam_meridian(
             piece.start_uv_b = None;
             piece.end_uv_b = None;
             piece.pave_block_id = None;
+            // A fitted pcurve spans the whole section, and its ends would
+            // stand for the piece's ends.
+            if !matches!(piece.curve_3d, EdgeCurve::Line) {
+                let pcurve = super::pcurve_compute::compute_pcurve_on_surface(
+                    &piece.curve_3d,
+                    piece.start,
+                    piece.end,
+                    surface,
+                    &[],
+                    None,
+                );
+                piece.pcurve_a = pcurve.clone();
+                piece.pcurve_b = pcurve;
+            }
         }
         out.push(first);
         out.push(second);
@@ -6957,12 +6971,12 @@ fn split_face_2d_impl(
     // seam meridian makes the crossing point a section ENDPOINT, so the
     // boundary-splitting below anchors the seam edge at the same 3D point
     // and the graphs share a vertex.
-    // A conic section crossing a cone's seam ruling needs the same anchor to
-    // pass from one seam copy to the other.
+    // A section crossing a cone's or a cylinder's seam ruling needs the same
+    // anchor to pass from one seam copy to the other.
     let seam_anchored_sections: Vec<SectionEdge>;
     let sections: &[SectionEdge] = if !is_plane
         && super::pcurve_compute::surface_periods(&surface).0.is_some()
-        && (matches!(surface, FaceSurface::Cone(_))
+        && (matches!(surface, FaceSurface::Cone(_) | FaceSurface::Cylinder(_))
             || sections_form_winding_chain(sections, &surface, tol.linear))
         && let Some(seam_u) = boundary_seam_u(&boundary_edges, &surface, tol.linear)
     {
