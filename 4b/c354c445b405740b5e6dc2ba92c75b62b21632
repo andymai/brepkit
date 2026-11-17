@@ -1,0 +1,21 @@
+crates/operations/src/tessellate/nurbs.rs
+  s_489e8e320eebde::t_19d6e063d0962b 158-165
+crates/operations/src/tessellate/tests.rs
+  s_489e8e320eebde::t_4eac2a6a2f9413 5866-5899
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "4bc354c445b405740b5e6dc2ba92c75b62b21632",
+  "prompts": {},
+  "sessions": {
+    "s_489e8e320eebde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1a2a9261-2019-4199-aa4f-06130071c8f0",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
