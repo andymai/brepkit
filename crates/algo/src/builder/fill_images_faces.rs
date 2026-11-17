@@ -4706,16 +4706,37 @@ fn clip_line_to_face_boundary(
             .filter(|l| l.outer.len() >= 3)?;
         // Where the ruling crosses a hole's edges, read on the edges' own
         // curves: the sampled loops place a crossing on a curved edge's
-        // chords, off the edge the run must end on. The loops only say which
-        // runs lie in the face.
+        // chords, off the edge the run must end on. The crossings also say
+        // which runs lie in a hole: the ruling's line, run on past the hole
+        // both ways, crosses each hole's loop an odd number of times after a
+        // point inside it. The sampled outer loop still reads the rest.
         let normal = face
             .surface()
             .project_point(line_start + line_dir * 0.5)
             .map(|(u, v)| face.surface().normal(u, v))
             .and_then(|n| n.normalize().ok());
-        let mut hole_crossings: Vec<f64> = Vec::new();
+        let mut hole_hits: Vec<Vec<f64>> = Vec::new();
         for &hole in face.inner_wires() {
-            for oe in topo.wire(hole).ok()?.edges() {
+            let wire = topo.wire(hole).ok()?;
+            let mut reach = line_len;
+            for oe in wire.edges() {
+                let edge = topo.edge(oe.edge()).ok()?;
+                let (a, b) = (
+                    topo.vertex(edge.start()).ok()?.point(),
+                    topo.vertex(edge.end()).ok()?.point(),
+                );
+                let (d0, d1) = edge.curve().domain_with_endpoints(a, b);
+                for k in 0..=8 {
+                    let t = (d1 - d0).madd(f64::from(k) / 8.0, d0);
+                    let p = edge.curve().evaluate_with_endpoints(t, a, b);
+                    reach = reach.max(2.0 * (p - line_start).length());
+                }
+            }
+            // Past every point sampled on the hole by twice its distance: an
+            // edge bulges past its samples by less than that.
+            let far = line_dir * (reach / line_len);
+            let mut hits: Vec<f64> = Vec::new();
+            for oe in wire.edges() {
                 let edge = topo.edge(oe.edge()).ok()?;
                 if matches!(edge.curve(), EdgeCurve::Line) {
                     // A straight edge on a cylinder or cone is a ruling too,
@@ -4726,44 +4747,58 @@ fn clip_line_to_face_boundary(
                     topo.vertex(oe.oriented_start(edge)).ok()?.point(),
                     topo.vertex(oe.oriented_end(edge)).ok()?.point(),
                 );
-                let hits = arc_segment_crossings(
+                let found = arc_segment_crossings(
                     edge.curve(),
                     sp,
                     ep,
                     oe.oriented_start(edge) == oe.oriented_end(edge),
                     oe.is_forward(),
-                    line_start - line_dir,
-                    line_end + line_dir,
+                    line_start - far,
+                    line_end + far,
                     tol,
                     normal,
                 );
-                for (p, _) in hits {
-                    if (p - line_start).cross(line_dir).length() > 1e-3 * line_len {
-                        continue;
-                    }
-                    let t = (p - line_start).dot(line_dir) / (line_len * line_len);
-                    if (0.0..=1.0).contains(&t) {
-                        hole_crossings.push(t);
+                for (p, _) in found {
+                    if (p - line_start).cross(line_dir).length() <= 1e-3 * line_len {
+                        hits.push((p - line_start).dot(line_dir) / (line_len * line_len));
                     }
                 }
             }
+            // A crossing at a vertex between two curved edges comes from both.
+            hits.sort_by(f64::total_cmp);
+            hits.dedup_by(|a, b| (*a - *b).abs() < 1e-9);
+            hole_hits.push(hits);
         }
+        let hole_crossings = hole_hits
+            .iter()
+            .flatten()
+            .copied()
+            .filter(|t| (0.0..=1.0).contains(t));
         let mut borders: Vec<f64> = crossings
             .iter()
             .chain(crossings_ext.iter())
-            .chain(hole_crossings.iter())
+            .copied()
+            .chain(hole_crossings)
             .map(|t| t.clamp(0.0, 1.0))
             .chain([0.0, 1.0])
             .collect();
         borders.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         borders.dedup_by(|a, b| (*a - *b).abs() < 1e-9);
         let eps = crate::builder::classify_2d::boundary_eps(&loops.outer);
+        let in_hole = |t: f64| {
+            hole_hits
+                .iter()
+                .any(|hits| hits.iter().filter(|&&h| h > t).count() % 2 == 1)
+        };
         let in_face = |t: f64| {
-            loops.to_uv(line_start + line_dir * t).is_some_and(|q| {
-                loops.contains(q)
-                    || crate::builder::classify_2d::distance_to_polygon_boundary(q, &loops.outer)
-                        <= eps
-            })
+            !in_hole(t)
+                && loops.to_uv(line_start + line_dir * t).is_some_and(|q| {
+                    crate::builder::classify_2d::point_in_polygon_2d(q, &loops.outer)
+                        || crate::builder::classify_2d::distance_to_polygon_boundary(
+                            q,
+                            &loops.outer,
+                        ) <= eps
+                })
         };
         let mut windows: Vec<(f64, f64)> = Vec::new();
         for w in borders.windows(2) {
@@ -6099,6 +6134,92 @@ mod clip_tests {
         assert!(near(runs[0].0, 3.0) && near(runs[0].1, 5.0), "{out:?}");
         assert!(
             near(runs[1].0, top_of(u)) && near(runs[1].1, 14.0),
+            "{out:?}: the top is at {}",
+            top_of(u)
+        );
+    }
+
+    /// [`a_ruling_from_inside_the_band_meets_a_windows_curved_top_on_it`] with
+    /// a short ruling that starts 0.0001 below the window's elliptic top,
+    /// inside the window: it keeps only its run above the top.
+    #[test]
+    fn a_short_ruling_from_just_inside_a_curved_window_starts_on_its_top() {
+        use brepkit_math::curves::Ellipse3D;
+        use brepkit_math::surfaces::CylindricalSurface;
+        let mut topo = Topology::new();
+        let r = 3.75;
+        let z_axis = Vec3::new(0.0, 0.0, 1.0);
+        let at = |u: f64, z: f64| Point3::new(r * u.cos(), r * u.sin(), z);
+        let top_of = |u: f64| 7.0 + r * u.cos();
+        let (w0, w1) = (0.6, 1.0);
+        let corners = [
+            at(0.0, 0.0),
+            at(0.0, 14.0),
+            at(w0, 5.0),
+            at(w1, 5.0),
+            at(w1, top_of(w1)),
+            at(w0, top_of(w0)),
+        ];
+        let v = corners.map(|c| topo.add_vertex(Vertex::new(c, 1e-7)));
+        let arc = |topo: &mut Topology, a: usize, b: usize, z: f64| {
+            let circle = Circle3D::new(Point3::new(0.0, 0.0, z), z_axis, r).unwrap();
+            topo.add_edge(Edge::new(v[a], v[b], EdgeCurve::Circle(circle)))
+        };
+        let line = |topo: &mut Topology, a: usize, b: usize| {
+            topo.add_edge(Edge::new(v[a], v[b], EdgeCurve::Line))
+        };
+        let seam = line(&mut topo, 0, 1);
+        let outer = [
+            (arc(&mut topo, 0, 0, 0.0), true),
+            (seam, true),
+            (arc(&mut topo, 1, 1, 14.0), false),
+            (seam, false),
+        ];
+        let top = Ellipse3D::new_with_ref(
+            Point3::new(0.0, 0.0, 7.0),
+            Vec3::new(-1.0, 0.0, 1.0),
+            r * std::f64::consts::SQRT_2,
+            r,
+            Vec3::new(1.0, 0.0, 1.0),
+        )
+        .unwrap();
+        let top = topo.add_edge(Edge::new(v[5], v[4], EdgeCurve::Ellipse(top)));
+        let window = [
+            (line(&mut topo, 2, 5), true),
+            (top, true),
+            (line(&mut topo, 3, 4), false),
+            (arc(&mut topo, 2, 3, 5.0), false),
+        ];
+        let wire = |topo: &mut Topology, edges: &[(brepkit_topology::edge::EdgeId, bool)]| {
+            let w = Wire::new(
+                edges
+                    .iter()
+                    .map(|&(e, fwd)| OrientedEdge::new(e, fwd))
+                    .collect(),
+                true,
+            )
+            .unwrap();
+            topo.add_wire(w)
+        };
+        let (wid, hole) = (wire(&mut topo, &outer), wire(&mut topo, &window));
+        let cyl = CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), z_axis, r).unwrap();
+        let face = topo.add_face(Face::new(wid, vec![hole], FaceSurface::Cylinder(cyl)));
+        let u = 0.8125;
+        let out = clip_line_to_face_boundary(
+            &topo,
+            face,
+            at(u, top_of(u) - 0.0001),
+            at(u, top_of(u) + 0.1),
+            1e-7,
+            &FaceLoopsCache::default(),
+            None,
+        )
+        .expect("the ruling runs in the face past the window's top");
+        assert_eq!(out.len(), 1, "{out:?}");
+        let (a, b) = out[0];
+        let (lo, hi) = (a.z().min(b.z()), a.z().max(b.z()));
+        assert!(
+            (lo - top_of(u)).abs() < 1e-7 && (hi - (top_of(u) + 0.1)).abs() < 1e-9,
             "{out:?}: the top is at {}",
             top_of(u)
         );

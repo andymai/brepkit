@@ -665,7 +665,12 @@ fn split_sections_at_rim_vertices(
             (t - t0).rem_euclid(TAU) + t0
         };
         let ang = near / circle.radius();
-        let mut cuts: Vec<(f64, VertexId)> = Vec::new();
+        // Each candidate carries the rank MakeBlocks gives it on its rim: a
+        // block's own ends stay, and of waiting paves that coincide it keeps
+        // the first along the block. Coincident candidates here take the
+        // same one, by the same test (`make_blocks::same_pave`), so that each
+        // cut is a vertex of the rim's pieces.
+        let mut candidates: Vec<(VertexId, usize)> = Vec::new();
         for face_id in [original.face_a, original.face_b] {
             let face = topo.face(face_id)?;
             for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied())
@@ -681,35 +686,65 @@ fn split_sections_at_rim_vertices(
                     {
                         continue;
                     }
-                    let mut vertices = vec![edge.start(), edge.end()];
+                    candidates.extend([(edge.start(), 0), (edge.end(), 0)]);
                     // The rim's blocks split only in MakeBlocks, after this
                     // pass: a crossing found by EE or EF still waits among a
                     // block's extra paves.
                     if let Some(blocks) = arena.edge_pave_blocks.get(&oe.edge()) {
                         for leaf in arena.collect_leaf_pave_blocks(blocks) {
-                            if let Some(piece) = arena.pave_blocks.get(leaf) {
-                                vertices.extend([piece.start.vertex, piece.end.vertex]);
-                                vertices.extend(piece.extra_paves.iter().map(|pave| pave.vertex));
+                            let Some(piece) = arena.pave_blocks.get(leaf) else {
+                                continue;
+                            };
+                            candidates.extend([(piece.start.vertex, 0), (piece.end.vertex, 0)]);
+                            let mut waiting = piece.extra_paves.clone();
+                            if piece.start.parameter > piece.end.parameter {
+                                waiting.sort_by(|a, b| b.parameter.total_cmp(&a.parameter));
+                            } else {
+                                waiting.sort_by(|a, b| a.parameter.total_cmp(&b.parameter));
                             }
-                        }
-                    }
-                    for vertex in vertices {
-                        let vid = arena.resolve_vertex(vertex);
-                        if vid == sv || vid == ev || cuts.iter().any(|&(_, c)| c == vid) {
-                            continue;
-                        }
-                        let p = topo.vertex(vid)?.point();
-                        if (circle.evaluate(circle.project(p)) - p).length() > near {
-                            continue;
-                        }
-                        let t = along(p);
-                        if t > t0 + ang && t < t1 - ang {
-                            cuts.push((t, vid));
+                            candidates.extend(
+                                waiting
+                                    .iter()
+                                    .enumerate()
+                                    .map(|(k, pave)| (pave.vertex, k + 1)),
+                            );
                         }
                     }
                 }
             }
         }
+        let linear = tol.linear;
+        let same = |topo: &Topology, a: VertexId, b: VertexId| {
+            a == b
+                || matches!(
+                    (topo.vertex(a), topo.vertex(b)),
+                    (Ok(p), Ok(q)) if (p.point() - q.point()).length() <= linear
+                )
+        };
+        let mut cuts: Vec<(f64, VertexId, usize)> = Vec::new();
+        for (vertex, rank) in candidates {
+            let vid = arena.resolve_vertex(vertex);
+            if same(topo, vid, sv) || same(topo, vid, ev) {
+                continue;
+            }
+            let p = topo.vertex(vid)?.point();
+            if (circle.evaluate(circle.project(p)) - p).length() > near {
+                continue;
+            }
+            let t = along(p);
+            if t <= t0 + ang || t >= t1 - ang {
+                continue;
+            }
+            match cuts.iter_mut().find(|c| same(topo, c.1, vid)) {
+                Some(kept) => {
+                    if (rank, vid.index()) < (kept.2, kept.1.index()) {
+                        *kept = (t, vid, rank);
+                    }
+                }
+                None => cuts.push((t, vid, rank)),
+            }
+        }
+        let mut cuts: Vec<(f64, VertexId)> = cuts.into_iter().map(|(t, v, _)| (t, v)).collect();
         if cuts.is_empty() {
             continue;
         }

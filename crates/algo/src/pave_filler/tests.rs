@@ -2414,3 +2414,98 @@ fn a_rim_section_divides_at_a_pave_still_waiting_on_the_rim() {
 fn topo_point(circle: &brepkit_math::curves::Circle3D, t: f64) -> Point3 {
     circle.evaluate(t)
 }
+
+/// [`a_rim_section_divides_at_a_pave_still_waiting_on_the_rim`] with two
+/// crossings waiting on the rim 5e-9 apart: the section divides once, at the
+/// vertex the rim keeps when its blocks split, and no piece is left between
+/// the two.
+#[test]
+fn a_rim_section_divides_once_at_two_waiting_paves_in_one_place() {
+    use crate::ds::{IntersectionCurveDS, Pave, PaveBlock};
+    let mut topo = Topology::new();
+    let mut arena = GfaArena::new();
+    let circle = brepkit_math::curves::Circle3D::new(
+        Point3::new(0.0, 0.0, 0.0),
+        Vec3::new(0.0, 0.0, 1.0),
+        5.0,
+    )
+    .unwrap();
+    let at = |t: f64| topo_point(&circle, t);
+    let (a, b) = (
+        topo.add_vertex(Vertex::new(at(0.0), 1e-7)),
+        topo.add_vertex(Vertex::new(at(std::f64::consts::PI), 1e-7)),
+    );
+    let rim = topo.add_edge(Edge::new(a, b, EdgeCurve::Circle(circle.clone())));
+    let chord = topo.add_edge(Edge::new(b, a, EdgeCurve::Line));
+    let wire = topo.add_wire(
+        Wire::new(
+            vec![OrientedEdge::new(rim, true), OrientedEdge::new(chord, true)],
+            true,
+        )
+        .unwrap(),
+    );
+    let face = topo.add_face(Face::new(
+        wire,
+        vec![],
+        FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: 0.0,
+        },
+    ));
+    let quarter = std::f64::consts::FRAC_PI_2;
+    let mut rim_block = PaveBlock::new(rim, Pave::new(a, 0.0), Pave::new(b, std::f64::consts::PI));
+    let later = topo.add_vertex(Vertex::new(at(quarter + 1e-9), 1e-7));
+    let first = topo.add_vertex(Vertex::new(at(quarter), 1e-7));
+    rim_block.extra_paves.push(Pave::new(later, quarter + 1e-9));
+    rim_block.extra_paves.push(Pave::new(first, quarter));
+    let rim_block = arena.pave_blocks.alloc(rim_block);
+    arena.edge_pave_blocks.insert(rim, vec![rim_block]);
+
+    let (t0, t1) = (
+        std::f64::consts::FRAC_PI_4,
+        3.0 * std::f64::consts::FRAC_PI_4,
+    );
+    let (s, e) = (
+        topo.add_vertex(Vertex::new(at(t0), 1e-7)),
+        topo.add_vertex(Vertex::new(at(t1), 1e-7)),
+    );
+    let section_edge = topo.add_edge(Edge::new(s, e, EdgeCurve::Circle(circle.clone())));
+    let pb = arena.pave_blocks.alloc(PaveBlock::new(
+        section_edge,
+        Pave::new(s, t0),
+        Pave::new(e, t1),
+    ));
+    arena.curves.push(IntersectionCurveDS {
+        curve: EdgeCurve::Circle(circle.clone()),
+        face_a: face,
+        face_b: face,
+        bbox: brepkit_math::aabb::Aabb3::from_points([at(t0), at(t1)]),
+        pave_blocks: vec![pb],
+        t_range: (t0, t1),
+    });
+
+    super::split_sections_at_rim_vertices(
+        &mut topo,
+        brepkit_math::tolerance::Tolerance::new(),
+        &mut arena,
+    )
+    .unwrap();
+    super::make_blocks::perform(&mut topo, &mut arena).unwrap();
+
+    assert_eq!(arena.curves.len(), 2, "the section divided more than once");
+    let cut = arena
+        .pave_blocks
+        .get(arena.curves[0].pave_blocks[0])
+        .unwrap()
+        .end
+        .vertex;
+    let rim_vertices: Vec<_> = arena.edge_pave_blocks[&rim]
+        .iter()
+        .filter_map(|&id| arena.pave_blocks.get(id))
+        .flat_map(|piece| [piece.start.vertex, piece.end.vertex])
+        .collect();
+    assert!(
+        rim_vertices.contains(&cut),
+        "the section's cut {cut:?} is not a vertex of the rim's pieces {rim_vertices:?}"
+    );
+}
