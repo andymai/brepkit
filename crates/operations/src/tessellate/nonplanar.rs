@@ -3065,11 +3065,37 @@ fn cdt_in_surface_frame(
         let hole_polys = &hole_polys;
         let inner = |lines: &[f64]| lines[1..lines.len().max(2) - 1].to_vec();
         let (us, vs) = (inner(&us), inner(&vs));
+        // A grid point on a constrained edge (the outline or a hole, each
+        // sampled once for the whole solid) would split that edge at a
+        // vertex the face across it does not have, and the mesh would open
+        // there: such points are left out.
+        let on_constraint = {
+            let vertices = cdt.vertices();
+            let segments: Vec<(Point2, Point2)> = cdt
+                .constraint_edges()
+                .iter()
+                .map(|&(a, b)| (vertices[a], vertices[b]))
+                .collect();
+            let xs: Vec<f64> = us
+                .iter()
+                .map(|&u| to_cdt(Point2::new(u, 0.0)).x())
+                .collect();
+            let ys: Vec<f64> = vs
+                .iter()
+                .map(|&v| to_cdt(Point2::new(0.0, v)).y())
+                .collect();
+            grid_points_on_segments(&xs, &ys, &segments)
+        };
+        let on_constraint = &on_constraint;
         let vs = &vs;
         let interior_pts: Vec<Point2> = us
             .iter()
-            .flat_map(|&u| {
-                vs.iter().filter_map(move |&v| {
+            .enumerate()
+            .flat_map(|(i, &u)| {
+                vs.iter().enumerate().filter_map(move |(j, &v)| {
+                    if on_constraint.contains(&(i, j)) {
+                        return None;
+                    }
                     let parameter = Point2::new(u, v);
                     // Nested inner wires alternate void and island, so a
                     // point is void at odd depth.
@@ -5424,6 +5450,43 @@ fn interior_grid_resolution(
     }
 }
 
+/// The points `(xs[i], ys[j])` of a grid that lie on one of `segments`, by
+/// the exact orientation test the triangulation locates a point with.
+fn grid_points_on_segments(
+    xs: &[f64],
+    ys: &[f64],
+    segments: &[(brepkit_math::vec::Point2, brepkit_math::vec::Point2)],
+) -> DetHashSet<(usize, usize)> {
+    use brepkit_math::vec::Point2;
+    let sorted = |values: &[f64]| {
+        let mut order: Vec<usize> = (0..values.len()).collect();
+        order.sort_by(|&a, &b| values[a].total_cmp(&values[b]));
+        order
+    };
+    let (x_order, y_order) = (sorted(xs), sorted(ys));
+    let within = |values: &[f64], order: &[usize], lo: f64, hi: f64| {
+        let first = order.partition_point(|&k| values[k] < lo);
+        let last = order.partition_point(|&k| values[k] <= hi);
+        order[first..last].to_vec()
+    };
+    let mut on = DetHashSet::default();
+    for &(a, b) in segments {
+        let columns = within(xs, &x_order, a.x().min(b.x()), a.x().max(b.x()));
+        if columns.is_empty() {
+            continue;
+        }
+        for j in within(ys, &y_order, a.y().min(b.y()), a.y().max(b.y())) {
+            for &i in &columns {
+                let point = Point2::new(xs[i], ys[j]);
+                if brepkit_math::predicates::orient2d(a, b, point) == 0.0 {
+                    on.insert((i, j));
+                }
+            }
+        }
+    }
+    on
+}
+
 /// Check if a 2D point is inside a polygon defined by (u, v) coordinates.
 /// Uses the winding number algorithm for robustness.
 pub(super) fn point_in_polygon_2d(polygon: &[(f64, f64)], pt: brepkit_math::vec::Point2) -> bool {
@@ -5580,6 +5643,27 @@ pub(super) fn tessellate_nonplanar_snap(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Grid points on a segment along a grid line, or on a slanted one
+    /// through grid points, are found; the others are not.
+    #[test]
+    fn grid_points_on_a_segment_are_found_exactly() {
+        use brepkit_math::vec::Point2;
+        let xs = [0.5, 1.0, 1.5, 2.0];
+        let ys = [1.0, 0.25, 0.5, 0.75];
+        let along = (Point2::new(0.75, 0.5), Point2::new(2.0, 0.5));
+        let slanted = (Point2::new(0.0, 0.0), Point2::new(1.0, 1.0));
+        let near = (
+            Point2::new(0.0, 0.25 + 1e-12),
+            Point2::new(3.0, 0.25 + 1e-12),
+        );
+        let on = grid_points_on_segments(&xs, &ys, &[along, slanted, near]);
+        let mut found: Vec<(usize, usize)> = on.into_iter().collect();
+        found.sort_unstable();
+        // Along y = 0.5 from x = 0.75: x = 1, 1.5 and 2. On the slant: (0.5,
+        // 0.5) and (1, 1). Beside y = 0.25 by 1e-12: none.
+        assert_eq!(found, vec![(0, 2), (1, 0), (1, 2), (2, 2), (3, 2)]);
+    }
 
     #[test]
     fn a_seam_beside_coinciding_samples_takes_bounded_spans() {
