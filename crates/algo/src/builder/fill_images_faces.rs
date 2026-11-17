@@ -1447,8 +1447,8 @@ struct SeamAnchor {
 /// circle at the seam's u parameter; for each closed NURBS curve that winds
 /// such a surface's period once, the point where it crosses the seam and the
 /// curve re-parameterized to start there; for a window of a closed NURBS
-/// loop, the window cut at the seam crossings inside it. Keyed by the curve's
-/// arena index.
+/// loop or an open NURBS section, the curve cut at the seam crossings inside
+/// it. Keyed by the curve's arena index.
 fn compute_seam_anchors(topo: &Topology, arena: &GfaArena) -> BTreeMap<usize, SeamAnchor> {
     use std::f64::consts::TAU;
 
@@ -1458,7 +1458,8 @@ fn compute_seam_anchors(topo: &Topology, arena: &GfaArena) -> BTreeMap<usize, Se
             let faces = [curve_ds.face_a, curve_ds.face_b];
             let (d0, d1) = nurbs.domain();
             let (w0, w1) = curve_ds.t_range;
-            if w1 - w0 < (d1 - d0) * (1.0 - 1e-9) {
+            let open = (nurbs.evaluate(d0) - nurbs.evaluate(d1)).length() > SEAM_ON_CIRCLE_TOL;
+            if open || w1 - w0 < (d1 - d0) * (1.0 - 1e-9) {
                 if let Some(seam) = cut_window_at_seams(topo, arena, idx, nurbs) {
                     anchors.insert(idx, seam);
                 }
@@ -1821,11 +1822,71 @@ fn seam_crossings_of_contractible_loop(
     crossings
 }
 
+/// The parameters inside `window` where an open NURBS section crosses
+/// `face`'s seam meridian. Each face the section bounds is cut there, so a
+/// wall whose seam the section crosses and the face across it share the
+/// vertex at the crossing. Empty for a face with no seam.
+fn seam_crossings_of_open_curve(
+    topo: &Topology,
+    face: &Face,
+    nurbs: &brepkit_math::nurbs::curve::NurbsCurve,
+    (w0, w1): (f64, f64),
+) -> Vec<f64> {
+    use std::f64::consts::{PI, TAU};
+    const SAMPLES: u32 = 64;
+    let surface = face.surface();
+    if !matches!(surface, FaceSurface::Cylinder(_) | FaceSurface::Cone(_)) {
+        return Vec::new();
+    }
+    let Some(seam_u) = face_seam_u(topo, face) else {
+        return Vec::new();
+    };
+    let wrap = |d: f64| (d + PI).rem_euclid(TAU) - PI;
+    let delta = |t: f64| {
+        surface
+            .project_point(nurbs.evaluate(t))
+            .map(|(u, _)| wrap(u - seam_u))
+    };
+    let param = |k: u32| w0 + (w1 - w0) * f64::from(k) / f64::from(SAMPLES);
+    let Some(samples) = (0..=SAMPLES)
+        .map(|k| delta(param(k)))
+        .collect::<Option<Vec<f64>>>()
+    else {
+        return Vec::new();
+    };
+    let mut crossings = Vec::new();
+    for k in 1..=SAMPLES {
+        let (prev, d) = (samples[k as usize - 1], samples[k as usize]);
+        // A crossing exactly at an inner sample belongs to the step that
+        // reaches it, when the curve goes on to the other side.
+        let crosses = if d == 0.0 && k < SAMPLES {
+            prev * samples[k as usize + 1] < 0.0
+        } else {
+            prev * d < 0.0
+        };
+        if !crosses || (prev - d).abs() >= PI {
+            continue;
+        }
+        let (mut lo, mut hi) = (param(k - 1), param(k));
+        for _ in 0..60 {
+            let tm = 0.5 * (lo + hi);
+            match delta(tm) {
+                Some(dm) if (dm > 0.0) == (prev > 0.0) => lo = tm,
+                Some(_) => hi = tm,
+                None => break,
+            }
+        }
+        crossings.push(0.5 * (lo + hi));
+    }
+    crossings
+}
+
 /// A section that is a window of a closed loop (the loop crosses a boundary
 /// of one of its faces, a ball's equator, and each face keeps its own arc) is
 /// an open curve: it is cut at the seam crossings inside the window only, so
-/// no face receives the arcs of the loop that lie on another. `None` when the
-/// window crosses no seam and has no twin, or a split fails.
+/// no face receives the arcs of the loop that lie on another. An open
+/// section is cut at its own crossings alike. `None` when the window crosses
+/// no seam and has no twin, or a split fails.
 fn cut_window_at_seams(
     topo: &Topology,
     arena: &GfaArena,
@@ -1838,10 +1899,17 @@ fn cut_window_at_seams(
     let (Some(from), Some(to)) = curve_endpoints(topo, arena, curve_ds) else {
         return None;
     };
+    let closed = (nurbs.evaluate(d0) - nurbs.evaluate(d1)).length() <= SEAM_ON_CIRCLE_TOL;
     let mut cuts: Vec<f64> = [curve_ds.face_a, curve_ds.face_b]
         .iter()
         .filter_map(|&fid| topo.face(fid).ok())
-        .flat_map(|face| seam_crossings_of_contractible_loop(topo, face, nurbs))
+        .flat_map(|face| {
+            if closed {
+                seam_crossings_of_contractible_loop(topo, face, nurbs)
+            } else {
+                seam_crossings_of_open_curve(topo, face, nurbs, (w0, w1))
+            }
+        })
         .filter(|&t| {
             let p = nurbs.evaluate(t);
             t > w0
@@ -1853,7 +1921,10 @@ fn cut_window_at_seams(
     // The loop's other window ends where this one does, and the edge merge
     // would weld two uncut windows into one edge: a vertex midway keeps them
     // apart.
-    if cuts.is_empty() && shares_both_ends_with_another_section(topo, arena, idx, from, to) {
+    if cuts.is_empty()
+        && closed
+        && shares_both_ends_with_another_section(topo, arena, idx, from, to)
+    {
         cuts.push(0.5 * (w0 + w1));
     }
     if cuts.is_empty() {
