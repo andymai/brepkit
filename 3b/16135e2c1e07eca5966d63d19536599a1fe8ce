@@ -1,0 +1,23 @@
+crates/algo/src/pave_filler/phase_ff.rs
+  s_489e8e320eebde::t_fcdbb2b571573e 2775-2811,2825,2834-2837,2856,2891
+crates/operations/tests/ring_groove_against_boxes.rs
+  s_489e8e320eebde::t_5ac837bf729cff 33,36,187-193,276,376-412
+crates/operations/tests/thin_ring_under_a_tilted_box.rs
+  s_489e8e320eebde::t_360e322783279a 1-98
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3b16135e2c1e07eca5966d63d19536599a1fe8ce",
+  "prompts": {},
+  "sessions": {
+    "s_489e8e320eebde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1a2a9261-2019-4199-aa4f-06130071c8f0",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
