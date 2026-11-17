@@ -273,8 +273,13 @@ pub fn perform(
         } = interf
             && let Ok(v) = topo.vertex(arena.resolve_vertex(*vid))
         {
-            for &owner in edge_faces.get(edge).into_iter().flatten() {
-                junction_registry.add_crossing(owner, *face, v.point());
+            let owners = edge_faces.get(edge).map_or(&[][..], Vec::as_slice);
+            for &owner in owners {
+                // A seam runs inside its face, which lies on both sides of
+                // it: no section of that face ends where it crosses one.
+                if owners.iter().filter(|&&f| f == owner).count() == 1 {
+                    junction_registry.add_crossing(owner, *face, v.point());
+                }
             }
         }
     }
