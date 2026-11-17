@@ -1349,10 +1349,21 @@ impl<'a> FilletBuilder<'a> {
             )?;
             face_replacements.extend(stub_faces);
             stripe_support_faces = support_faces_of(&face_replacements);
+            let met = corner::apply_junction_crossings(
+                topo,
+                &stripes,
+                &fillet_plan.junctions,
+                &contour_to_stripe,
+                &stripe_support_faces,
+                &stripe_faces,
+                &mut boundary_registry,
+            )?;
             let junctions: Vec<crate::fillet_plan::VertexJunction> = fillet_plan
                 .junctions
                 .iter()
-                .filter(|junction| !crossed.contains(&junction.vertex))
+                .filter(|junction| {
+                    !crossed.contains(&junction.vertex) && !met.contains(&junction.vertex)
+                })
                 .cloned()
                 .collect();
             let corner_results = corner::compute_ordered_corners(
