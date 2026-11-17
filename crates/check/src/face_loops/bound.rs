@@ -134,7 +134,8 @@ struct Run {
 
 impl<'s> Bend<'s> {
     /// The bounds of a B-spline surface drawn as `frame` describes, closed
-    /// in the parameters `closed`. The frame's pole is filled in later.
+    /// in the parameters `closed`. The frame's pole is filled in later. A
+    /// surface whose knots are not all finite and rising gets no bound.
     pub(super) fn new(surface: &'s NurbsSurface, closed: (bool, bool), frame: Frame) -> Self {
         let (u0, u1) = surface.domain_u();
         let (v0, v1) = surface.domain_v();
@@ -142,8 +143,13 @@ impl<'s> Bend<'s> {
         let rows = surface.control_points();
         let weights = surface.weights();
         let (nu, nv) = (rows.len(), rows.first().map_or(0, Vec::len));
+        let rising = |knots: &[f64]| {
+            knots.iter().all(|k| k.is_finite()) && knots.windows(2).all(|w| w[0] <= w[1])
+        };
+        let sound = rising(surface.knots_u()) && rising(surface.knots_v());
         let fractions = |knots: &[f64], degree: usize, count: usize, start: f64, length: f64| {
-            knots.get(degree..=count).map_or_else(Vec::new, |k| {
+            let k = knots.get(degree..=count).filter(|_| sound && length > 0.0);
+            k.map_or_else(Vec::new, |k| {
                 k.iter().map(|&k| (k - start) / length).collect()
             })
         };
@@ -208,6 +214,9 @@ impl<'s> Bend<'s> {
     /// from the drawn chord; infinite where none holds. A bound at or under
     /// `target` from the pole ends the search.
     pub(super) fn sag(&self, chord: &Chord, target: f64) -> f64 {
+        if self.fractions.iter().any(|f| f.len() < 2) {
+            return f64::INFINITY;
+        }
         let near = self.near_pole(chord).unwrap_or(f64::INFINITY);
         if near <= target {
             return near;
@@ -391,7 +400,7 @@ impl<'s> Bend<'s> {
                 while k < inner.len() {
                     let x = inner[k];
                     // The knots rise, so those not past `x` are `x`.
-                    let times = inner[k..].iter().take_while(|&&y| y <= x).count();
+                    let times = inner[k..].iter().take_while(|&&y| y <= x).count().max(1);
                     if times > degree && lo[d] < x + m && x + m < hi[d] {
                         return true;
                     }
@@ -1060,5 +1069,85 @@ pub(super) fn conic_off(curve: &EdgeCurve, ta: f64, tb: f64) -> f64 {
         EdgeCurve::Circle(c) => 2.0 * c.radius(),
         EdgeCurve::Ellipse(c) => (0.125 * run * run).min(2.0) * c.semi_major(),
         EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => 0.0,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use super::*;
+    use crate::face_loops::FaceLoops;
+    use brepkit_topology::Topology;
+    use brepkit_topology::edge::Edge;
+    use brepkit_topology::face::{Face, FaceSurface};
+    use brepkit_topology::vertex::Vertex;
+    use brepkit_topology::wire::{OrientedEdge, Wire};
+
+    /// A flat patch 15 by 20, of degree one, with the knots `knots_u`.
+    fn patch(knots_u: Vec<f64>) -> NurbsSurface {
+        let control = (0..4)
+            .map(|i| {
+                (0..2)
+                    .map(|j| Point3::new(5.0 * f64::from(i), 20.0 * f64::from(j), 0.0))
+                    .collect()
+            })
+            .collect();
+        NurbsSurface::new(
+            1,
+            1,
+            knots_u,
+            vec![0.0, 0.0, 1.0, 1.0],
+            control,
+            vec![vec![1.0; 2]; 4],
+        )
+        .unwrap()
+    }
+
+    /// A knot that is not a number, or one that falls back, leaves the
+    /// surface without a bound: a chord on it reads none, and a face on it
+    /// reads no wire.
+    #[test]
+    fn a_surface_with_a_broken_knot_bounds_no_chord() {
+        for knots in [
+            vec![0.0, 0.0, f64::NAN, 0.5, 1.0, 1.0],
+            vec![0.0, 0.0, 0.6, 0.4, 1.0, 1.0],
+        ] {
+            let surface = patch(knots);
+            let bend = Bend::new(&surface, (false, false), Frame::Flat);
+            let chord = Chord {
+                from: (0.2, 0.3),
+                by: (0.4, 0.2),
+                ends: (Point2::new(0.2, 0.3), Point2::new(0.6, 0.5)),
+                ends_3d: (Point3::new(3.0, 6.0, 0.0), Point3::new(9.0, 10.0, 0.0)),
+                off: 0.0,
+                miss: 0.0,
+            };
+            assert!(bend.sag(&chord, 1e-4).is_infinite());
+            let mut topo = Topology::default();
+            let corners = [[2.0, 2.0], [12.0, 2.0], [12.0, 18.0], [2.0, 18.0]]
+                .map(|c| topo.add_vertex(Vertex::new(Point3::new(c[0], c[1], 0.0), 1e-7)));
+            let edges = (0..4)
+                .map(|k| {
+                    let e =
+                        topo.add_edge(Edge::new(corners[k], corners[(k + 1) % 4], EdgeCurve::Line));
+                    OrientedEdge::new(e, true)
+                })
+                .collect();
+            let outer = topo.add_wire(Wire::new(edges, true).unwrap());
+            let face = topo.add_face(Face::new(outer, vec![], FaceSurface::Nurbs(surface)));
+            let loops = FaceLoops::of(&topo, face, 1e-7).unwrap();
+            assert!(loops.is_none_or(|l| l.loops.iter().all(Option::is_none)));
+        }
+    }
+
+    /// The count of a knot's copies moves on past a knot that is not a
+    /// number.
+    #[test]
+    fn a_knot_that_is_not_a_number_does_not_stall_the_count_of_its_copies() {
+        let surface = patch(vec![0.0, 0.0, 0.3, 0.6, 1.0, 1.0]);
+        let mut bend = Bend::new(&surface, (false, false), Frame::Flat);
+        bend.fractions[0] = vec![0.0, f64::NAN, f64::NAN, 0.5, 1.0];
+        assert!(!bend.tears([0.0, 0.0], [1.0, 1.0]));
     }
 }

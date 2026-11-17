@@ -561,7 +561,8 @@ struct Bend<'s> {
     /// weights differ.
     seams: [Option<f64>; 2],
     /// Each parameter's knots from the first to the last of its span, as
-    /// fractions of the span.
+    /// fractions of the span; empty where the knots are not all finite and
+    /// rising, which leaves the surface without a bound.
     fractions: [Vec<f64>; 2],
     /// Each knot cell's net, by the indices of its first knots, read once.
     nets: std::cell::RefCell<HashMap<(usize, usize), Net>>,
