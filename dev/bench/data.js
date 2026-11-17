@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794928242028,
+  "lastUpdate": 1794932558936,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -74411,6 +74411,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25555641,
             "range": "± 81347",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "fd67303b0795550a63e28d2b970ea692226b0988",
+          "message": "fix(algo): fuse a strut into a bore under its window exactly (#2626)\n\n## Summary\n\nThe brepjs playground example `axial-fan` fuses its frame in one\n`fuseAll`: the shell, a base disc and four struts. The shell's duct has\na bore of radius 38, and a lead slot cuts a window through the duct's\nwall from z = 3 to 4.5. The wide strut (4.4 wide, z = 0 to 3) runs into\nthe wall under the slot, so its top is the window's floor.\n\nOn main, that `fuseAll` throws `cluster fuse degraded to mesh fallback`.\nThe raw fuse of the shell and the wide strut alone leaves 5 free edges\nand 1 edge on three faces. With this change, the pair is exact (44\nfaces) and so is the `fuseAll` (76 faces: 6 cones, 23 cylinders, 47\nplanes). Fixes #2525.\n\nOn a wasm build of this branch, the example's next `fuseAll` fails: the\nstator stack. I filed that as #2624.\n\n## The change\n\n- `split_face_2d_impl` in `crates/algo/src/builder/face_splitter/mod.rs`\nweaves a curved face's hole into the arrangement when a section ends on\nit. The bore's cylinder face holds the window as a hole. Phase FF gives\nit the strut's two sides and two arcs at z = 3, which end on the\nwindow's corners. The splitter wove holes into plane faces only, so\nthose sections dangled, and the pendant pass dropped them. The face then\nstayed whole.\n- The woven hole's edges split at the sections' ends. They move by whole\nperiods to the face's window in u, since a hole's own UVs can sit a\nperiod away. The move takes its copy from a section's end that the split\nput on a piece's end. A woven hole is no longer attached whole after the\nsplit.\n- The contact test reads a circle or an ellipse hole edge at the curve's\nown projection, as its splitter does. On a rim of radius 38 over one\nradian, each of 64 sampling chords lies up to 1.16e-3 inside the arc. A\npoint in that lens read as on the rim.\n- The splitter finds a section's end on a spline hole edge by projection\nonto the part the edge runs on. Fixed samples can step over a short knot\nspan. It splits the edge there by the same projection. Both the contact\ntest and the split take a point within 100 times the linear tolerance as\non the edge. So an end at a fitted curve's error from the edge also\nsplits it.\n- On a spline, the new vertex takes its copy of the period from a walk\nalong the curve from the edge's start. A spline's parameter need not run\nevenly in u. On a rim arc, the vertex takes the copy next to its place\nalong the edge's own unwrapped span. The walk stops with no copy on a\nvalue that is not finite, on a step too small to move, or after 4096\nsteps. The spline's vertex then takes its copy from its span. Each\npiece's pcurve follows the vertex.\n- The splitter traces a face with a woven hole by the DCEL faces of its\nstrip, with the rim and hole edges run forward. At the window's corner,\nthe greedy walk turned into the window's next side, away from the arc\nthat leaves on the material's side. In the mirrored pose this left no\nouter shell. The trace reads each region's area along its curves, so\nthat a region of one or two curved edges stays. A hole moved by a period\ncarries its pcurves along. A pcurve left on the old copy reads as stale,\nand the walkers then take the edge's chord.\n\n## Tests\n\n- `crates/operations/tests/strut_under_a_window.rs` is new. It builds a\nduct wall from radius 38 to 42 less the slot, and fuses the strut into\nit upright, turned and mirrored. Each result must be valid and\nwatertight. Its volume must match the operands' volumes less their\ncommon part, to 1e-6. Over a 16 x 16 x 16 grid round the window's floor,\nit must hold a point where an operand does.\n- `a_strut_fuses_into_the_fans_frame_under_its_slot` in\n`crates/io/tests/playground_example_repros_inmem.rs` fuses the captured\nshell and strut (`axial_fan_frame_shell.bin`,\n`axial_fan_wide_strut.bin`). It checks three probes, the volume and a 16\nx 16 x 16 grid in the same way.\n- `a_strut_fuses_into_a_wall_under_a_leaning_slot` is the same test\nunder a slot whose sides lean, so the window's sides are ellipses on the\nbore. Its woven hole moves a period with 12 NURBS pcurves.\n`a_hole_moved_a_period_keeps_its_curved_pcurve_on_its_ends` checks that\na moved NURBS pcurve still starts and ends at the edge's UVs. That unit\ntest fails when the pcurve stays put; the leaning-slot test passes\neither way.\n- `a_point_on_a_short_span_of_a_spline_hole_edge_is_on_it` puts a point\non a spike in a knot span 0.002 long, which the fixed samples missed. It\nalso checks that the hole's split makes a vertex at the spike's tip.\n`a_hole_edge_on_a_later_copy_of_the_period_splits_on_that_copy` splits a\nspline ruling laid out a period past the surface's own u, and fails when\nthe split takes the principal u.\n`a_hole_arc_over_half_a_turn_splits_inside_its_own_span` splits a rim\narc from u = 0 to 5 at four fifths.\n- `a_hole_spline_splits_at_a_section_end_its_fit_error_off_it` puts a\nsection's end 5e-7 off a spline ruling, and fails when the split takes\nthe linear tolerance.\n`a_hole_spline_with_uneven_knots_splits_on_its_own_copy` splits a spline\nrim from u = 0 to 5 whose first four fifths in u lie on the first tenth\nof its knots. It fails when the split takes the copy from its fraction\nof the domain (u = -2.38 in place of 3.9).\n`the_walk_along_a_spline_returns_on_values_that_are_not_finite` gives\nthe walk a NaN or infinite fraction and a NaN start UV, and checks that\nit returns with no copy.\n- `a_point_inside_a_long_arcs_sampling_chord_is_off_the_arc` puts a\npoint 1e-4 off the middle of the first sampling chord of that rim, about\n1.06e-3 off the arc. That point and a point 2e-5 outside the rim must be\noff both rims of a window. A point 5e-6 outside must be on them. Before\nthe fix, the point in the lens read as on the rim.\n- `a_curved_hole_weaves_at_its_contact_after_near_misses` gives that\nwindow three section ends. The first is the point in the lens, and the\nsecond lies 5e-7 outside the rim, where the circle splitter refuses it.\nThe third is on the rim, and its UV lies a period on. The hole must\nsplit at the last end and move a period. Before the fix, the hole stayed\nwhole.\n- With the weave turned off, both tests need the mesh fallback. Without\nthe DCEL trace, the native test failed in its mirrored pose.\n- `cargo nextest run --cargo-profile ci -p brepkit-algo -p brepkit-io -p\nbrepkit-operations -p brepkit-wasm -p brepkit-check -p brepkit-heal -p\nbrepkit-math` on `db1baaf9f`: 4741 tests run, 4741 passed, 24 skipped.\n`cargo test -p brepkit-wasm --lib gridfinity`: 27 passed.\n- The pose sweep (495 lines) and the truth audit (40 lines) give the\nsame output on main at `74d304e4f` and on `db1baaf9f`.\n- I ran the seeded random boolean sweep on `db1baaf9f` (seeds 1 to 3\nwith 150 cases, seed 4 with 300) against main at `3c8d1104a`. No case is\nworse, and 11 are better. The branch has 500 good, 244 errors and 6 bad,\nwhere main has 489, 253 and 8.\n\n## Capture\n\nI captured the operands with `serializeSolid` from an untracked probe in\nbrepjs, on wasm builds of main and of this branch. The two builds give\nthe frame `fuseAll` the same six operands, byte for byte. On this\nbranch's build, with brepjs at `0ab0bd27`, that `fuseAll` gives 76 faces\nin 42 ms.",
+          "timestamp": "2026-11-17T16:19:22Z",
+          "tree_id": "9fdcd54b0732751df3e3e0df86d0110013fc71e4",
+          "url": "https://github.com/andymai/brepkit/commit/fd67303b0795550a63e28d2b970ea692226b0988"
+        },
+        "date": 1794932554353,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 911926,
+            "range": "± 2945",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 959369,
+            "range": "± 119347",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11379,
+            "range": "± 41",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 580020,
+            "range": "± 4314",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 20544136,
+            "range": "± 59245",
             "unit": "ns/iter"
           }
         ]
