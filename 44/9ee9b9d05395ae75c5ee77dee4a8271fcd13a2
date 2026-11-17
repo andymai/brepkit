@@ -1,0 +1,19 @@
+crates/check/src/validate/face_wires.rs
+  s_489e8e320eebde::t_0bea3591328792 499-578,792,968-1056
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "449ee9b9d05395ae75c5ee77dee4a8271fcd13a2",
+  "prompts": {},
+  "sessions": {
+    "s_489e8e320eebde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1a2a9261-2019-4199-aa4f-06130071c8f0",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
