@@ -4473,7 +4473,16 @@ fn clip_line_to_face_boundary(
     let holed_plane_partial = crossings.len() < 2
         && !face.inner_wires().is_empty()
         && matches!(face.surface(), FaceSurface::Plane { .. });
-    if crossings.len() < 2 && !single_crossing_ok && !holed_plane_partial {
+    // A ruling of a cylinder or cone that starts inside the face, where
+    // another section crosses it, and runs to the rim crosses the boundary
+    // once (a block's side meeting a disc's wall from the circle where a
+    // coaxial cone stands on it). The face's own loops read its windows.
+    let lateral_partial = crossings.len() < 2
+        && matches!(
+            face.surface(),
+            FaceSurface::Cylinder(_) | FaceSurface::Cone(_)
+        );
+    if crossings.len() < 2 && !single_crossing_ok && !holed_plane_partial && !lateral_partial {
         return None;
     }
 
@@ -4691,6 +4700,37 @@ fn clip_line_to_face_boundary(
                 inside.then_some((w[0], w[1]))
             })
             .collect()
+    } else if lateral_partial {
+        let loops = face_loops
+            .get(topo, face_id)
+            .filter(|l| l.outer.len() >= 3)?;
+        let mut borders: Vec<f64> = crossings
+            .iter()
+            .chain(crossings_ext.iter())
+            .map(|t| t.clamp(0.0, 1.0))
+            .chain([0.0, 1.0])
+            .collect();
+        borders.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        borders.dedup_by(|a, b| (*a - *b).abs() < 1e-9);
+        let eps = crate::builder::classify_2d::boundary_eps(&loops.outer);
+        let in_face = |t: f64| {
+            loops.to_uv(line_start + line_dir * t).is_some_and(|q| {
+                loops.contains(q)
+                    || crate::builder::classify_2d::distance_to_polygon_boundary(q, &loops.outer)
+                        <= eps
+            })
+        };
+        let mut windows: Vec<(f64, f64)> = Vec::new();
+        for w in borders.windows(2) {
+            if !in_face(f64::midpoint(w[0], w[1])) {
+                continue;
+            }
+            match windows.last_mut() {
+                Some(last) if (last.1 - w[0]).abs() < 1e-9 => last.1 = w[1],
+                _ => windows.push((w[0], w[1])),
+            }
+        }
+        windows
     } else if matches!(
         face.surface(),
         FaceSurface::Cylinder(_) | FaceSurface::Cone(_)

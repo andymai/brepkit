@@ -3637,6 +3637,24 @@ fn arrangement_regions_from_combined(
     frame: &PlaneFrame,
     tol: f64,
 ) -> Option<Vec<SplitSubFace>> {
+    // A closed rim (a whole circle, one edge from a vertex back to itself)
+    // has no chord, and the region it bounds would be lost with it.
+    if combined_edges.iter().any(|e| {
+        !matches!(e.curve_3d, EdgeCurve::Line)
+            && (e.start_uv - e.end_uv).length() <= tol
+            && (e.curve_3d.evaluate_with_endpoints(
+                {
+                    let (t0, t1) = e.curve_3d.domain_with_endpoints(e.start_3d, e.end_3d);
+                    0.5 * (t0 + t1)
+                },
+                e.start_3d,
+                e.end_3d,
+            ) - e.start_3d)
+                .length()
+                > tol
+    }) {
+        return None;
+    }
     // The even-odd nesting pass resolves the nested overlapping faces (a holed
     // cap whose holes/sections form a component separate from the outer
     // boundary) and drops the air regions that fill the original holes.
@@ -5150,12 +5168,22 @@ fn split_cylinder_band_by_arrangement(
     // at every vertical generator's u interior to its span (whose v-range reaches
     // the ring). Emit undirected sub-segments; dedup collapses duplicates.
     let mut sub: Vec<((i64, i64), (i64, i64))> = Vec::new();
+    // Every endpoint the edges brought cuts the frame lines through it too: a
+    // ring section broken at a vertex of its own (where a partner face's rim
+    // meets it) overlaps the whole ring a generator pair puts at its height,
+    // and the two would stand side by side as different edges.
+    let marks: Vec<(f64, f64)> = verts.values().map(|&(u, v, _)| (u, v)).collect();
 
     for &(u, v0, v1) in &verticals {
         let mut breaks: Vec<f64> = vec![v0, v1];
         for &(hv, hu0, hu1) in &horizontals {
             if hv > v0 + tol && hv < v1 - tol && u >= hu0 - cov && u <= hu1 + cov {
                 breaks.push(hv);
+            }
+        }
+        for &(mu, mv) in &marks {
+            if (mu - u).abs() <= cov && mv > v0 + tol && mv < v1 - tol {
+                breaks.push(mv);
             }
         }
         breaks.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
@@ -5178,6 +5206,11 @@ fn split_cylinder_band_by_arrangement(
         for &(vu, vv0, vv1) in &verticals {
             if vu > u0 + cov && vu < u1 - cov && v >= vv0 - tol && v <= vv1 + tol {
                 breaks.push(vu);
+            }
+        }
+        for &(mu, mv) in &marks {
+            if (mv - v).abs() <= tol && mu > u0 + cov && mu < u1 - cov {
+                breaks.push(mu);
             }
         }
         breaks.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
@@ -9213,14 +9246,21 @@ fn split_face_2d_impl(
     // one loop (a section run out and back, or a smooth section passing a
     // junction where another branches off), and one that closed a section
     // on its own reverse left the region it bounds unsplit. The DCEL face
-    // trace partitions the arrangement itself; adopt it when it strictly
-    // refines the greedy partition and is clean by every loop-health
-    // signature. Holes no section reaches stay out of the arrangement and
-    // attach whole afterwards, so they do not bar the trace.
+    // trace partitions the arrangement itself; adopt it when it has at least
+    // the greedy partition's regions and is clean by every loop-health
+    // signature. As many regions is not too few: a greedy walk that turns
+    // right at a vertex where a left turn bounds its region traces a pinched
+    // loop in place of that region and still counts as many (a disc under
+    // three coplanar faces of a yoke's back, where a cap's arc and a small
+    // arc leave one end of a line). Holes no section reaches stay out of the
+    // arrangement and attach whole afterwards, so they do not bar the trace.
+    // Holes woven in bar it only while the greedy walk holds no spur: their
+    // edges then run one way only, and a region outside the face runs them
+    // the other way (an annulus round a hole that two lenses of a spigot's
+    // wall bite into).
     if is_plane
         && !sections.is_empty()
-        && woven_inner_wires.is_empty()
-        && !holes_promoted
+        && ((woven_inner_wires.is_empty() && !holes_promoted) || woven_spur)
         && (loops
             .iter()
             .any(|lp| split_loop_at_pinch_vertices(lp, tol.linear).len() != 1)
@@ -9237,7 +9277,7 @@ fn split_face_2d_impl(
             Some(&frame_area),
             Some(!cw_loops),
         );
-        if dcel.len() > greedy_region_count(&loops, tol.linear, Some(frame))
+        if dcel.len() >= greedy_region_count(&loops, tol.linear, Some(frame))
             && !dcel
                 .iter()
                 .any(|lp| loop_has_degenerate_area(lp, tol.linear, Some(frame)))
