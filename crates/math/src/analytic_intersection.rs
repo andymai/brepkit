@@ -4346,7 +4346,7 @@ fn algebraic_parallel_cone_cylinder(
     v_range_cyl: Option<(f64, f64)>,
 ) -> Result<Option<Vec<IntersectionCurve>>, MathError> {
     let axis = cone.axis();
-    if axis.dot(cyl.axis()).abs() < 1.0 - 1e-10 {
+    if axis.cross(cyl.axis()).length() > Tolerance::new().angular {
         return Ok(None); // Skew or oblique: `ruling_cone_cylinder` traces it.
     }
 
@@ -4493,6 +4493,20 @@ fn algebraic_parallel_cone_cylinder(
     Ok(Some(curves))
 }
 
+/// How many times a parallel cone-cone branch's fitted curve may be refined
+/// where it strays.
+const PARALLEL_CONES_FIT_ROUNDS: usize = 8;
+
+/// The distance from `p` to the nappe of `cone` nearest it, for a point near
+/// the cone's wall: the distance in `p`'s meridian plane to the generator.
+fn cone_wall_distance(cone: &ConicalSurface, p: Point3) -> f64 {
+    let rel = p - cone.apex();
+    let along = rel.dot(cone.axis());
+    let across = (rel - cone.axis() * along).length();
+    let (sin, cos) = cone.half_angle().sin_cos();
+    across.madd(sin, -along * cos)
+}
+
 /// Cone-cone intersection for PARALLEL (or antiparallel) axes that do not
 /// coincide, with openings of unequal slope (equal slopes give the exact
 /// conic of [`offset_parallel_cone_cone`]).
@@ -4503,24 +4517,30 @@ fn algebraic_parallel_cone_cylinder(
 /// `u = phi0 +/- acos((d^2 + rho1^2 - rho2^2) / (2*d*rho1))` on the first
 /// cone, which gives two branches parameterised exactly by its own `v`. They
 /// exist where `|rho1 - rho2| <= d <= rho1 + rho2` on both nappes, conditions
-/// linear in `v`, and join where one of the first holds with equality: there
-/// `u` changes like the square root of the distance in `v`, so the samples
-/// close in on both ends of the span.
+/// linear in `v`, and join where one of the first holds with equality, where
+/// the circles touch. There `u` changes like the square root of the distance
+/// in `v`, so the samples close in on both ends of the span, and the branches
+/// end at the one point where the circles touch.
 ///
-/// `None` (the marcher's case) when the axes are not parallel or coincide,
-/// when a cone is flat or a line, or when nothing bounds the span.
+/// Halfway between each pair of points the fitted curve must lie within a
+/// quarter of the linear tolerance of both cones; where it strays, the
+/// section's own point there joins the fit.
+///
+/// `None` (the marcher's case) when the axes are not parallel to the angular
+/// tolerance or coincide, when a cone is flat or a line, when nothing bounds
+/// the span, or when a fit still strays.
 fn algebraic_parallel_cone_cone(
     c1: &ConicalSurface,
     c2: &ConicalSurface,
     v_range_1: Option<(f64, f64)>,
     v_range_2: Option<(f64, f64)>,
 ) -> Option<Vec<IntersectionCurve>> {
+    let tol = Tolerance::new();
     let axis = c1.axis();
-    let sigma = axis.dot(c2.axis());
-    if sigma.abs() < 1.0 - 1e-10 {
+    if axis.cross(c2.axis()).length() > tol.angular {
         return None;
     }
-    let sigma = sigma.signum();
+    let sigma = axis.dot(c2.axis()).signum();
     let delta = c2.apex() - c1.apex();
     let along = delta.dot(axis);
     let perp = delta - axis * along;
@@ -4538,32 +4558,43 @@ fn algebraic_parallel_cone_cone(
     // height `v sin1` above the first apex.
     let slope2 = cos2 / sin2;
     let (a, b) = (-sigma * along * slope2, sigma * sin1 * slope2);
+    // The span, and whether each end is where the circles touch.
     let (mut lo, mut hi) = (0.0_f64, f64::INFINITY);
+    let (mut lo_touch, mut hi_touch) = (false, false);
     // Each condition `k v + c >= 0`: the second nappe, then the circles
     // meeting (`rho1 + rho2 >= d`, `rho2 - rho1 <= d`, `rho1 - rho2 <= d`).
-    for (k, c) in [
-        (b, a),
-        (cos1 + b, a - d),
-        (b - cos1, a + d),
-        (cos1 - b, d - a),
+    for (k, c, touch) in [
+        (b, a, false),
+        (cos1 + b, a - d, true),
+        (b - cos1, a + d, true),
+        (cos1 - b, d - a, true),
     ] {
         if k > 1e-12 {
-            lo = lo.max(-c / k);
+            if -c / k > lo {
+                (lo, lo_touch) = (-c / k, touch);
+            }
         } else if k < -1e-12 {
-            hi = hi.min(-c / k);
+            if -c / k < hi {
+                (hi, hi_touch) = (-c / k, touch);
+            }
         } else if c < 0.0 {
             return Some(Vec::new());
         }
     }
+    let mut clip = |p: f64, q: f64| {
+        if p.min(q) > lo {
+            (lo, lo_touch) = (p.min(q), false);
+        }
+        if p.max(q) < hi {
+            (hi, hi_touch) = (p.max(q), false);
+        }
+    };
     if let Some((p, q)) = v_range_1 {
-        lo = lo.max(p.min(q));
-        hi = hi.min(p.max(q));
+        clip(p, q);
     }
     if let Some((p, q)) = v_range_2 {
         let to_v1 = |v2: f64| sigma.madd(v2 * sin2, along) / sin1;
-        let (p, q) = (to_v1(p), to_v1(q));
-        lo = lo.max(p.min(q));
-        hi = hi.min(p.max(q));
+        clip(to_v1(p), to_v1(q));
     }
     if !hi.is_finite() {
         return None;
@@ -4572,47 +4603,106 @@ fn algebraic_parallel_cone_cone(
         return Some(Vec::new());
     }
 
-    let n_samples = 128;
-    let mut plus: Vec<Point3> = Vec::with_capacity(n_samples + 1);
-    let mut minus: Vec<Point3> = Vec::with_capacity(n_samples + 1);
-    #[allow(clippy::cast_precision_loss)]
-    for i in 0..=n_samples {
-        let t = i as f64 / n_samples as f64;
-        let v = (hi - lo).madd(0.5 * (1.0 - (std::f64::consts::PI * t).cos()), lo);
+    // The two points at `v`, or `None` at the first apex off the second cone.
+    let at = |v: f64, touch: bool| -> Option<(Point3, Point3)> {
         let rho1 = v * cos1;
         let rho2 = b.madd(v, a);
         if rho1 < 1e-12 {
-            // The first apex, a point of the curve only where it lies on the
-            // second cone; `u` means nothing there.
-            if (rho2 - d).abs() < 1e-12 {
-                let apex = c1.apex();
-                plus.push(apex);
-                minus.push(apex);
-            }
-            continue;
+            // `u` means nothing at the apex, a point of the curve only where
+            // it lies on the second cone.
+            return ((rho2 - d).abs() < 1e-12).then(|| (c1.apex(), c1.apex()));
         }
         let cos_alpha = (d.madd(d, rho1 * rho1) - rho2 * rho2) / (2.0 * d * rho1);
+        if touch {
+            // Rounding leaves `cos_alpha` off +/-1 there, and `acos` turns
+            // that into a gap between the branches' ends.
+            let p = c1.evaluate(
+                if cos_alpha >= 0.0 {
+                    phi0
+                } else {
+                    phi0 + std::f64::consts::PI
+                },
+                v,
+            );
+            return Some((p, p));
+        }
         let alpha = cos_alpha.clamp(-1.0, 1.0).acos();
-        plus.push(c1.evaluate(phi0 + alpha, v));
-        minus.push(c1.evaluate(phi0 - alpha, v));
+        Some((c1.evaluate(phi0 + alpha, v), c1.evaluate(phi0 - alpha, v)))
+    };
+    // Samples are spaced evenly in `t`, which runs `v` like a square from
+    // each end, where `u` runs like the square root of `v`.
+    let v_at = |t: f64| (hi - lo).madd(0.5 * (1.0 - (std::f64::consts::PI * t).cos()), lo);
+    let n_samples = 128;
+    let mut plus: Vec<(f64, Point3)> = Vec::with_capacity(n_samples + 1);
+    let mut minus: Vec<(f64, Point3)> = Vec::with_capacity(n_samples + 1);
+    #[allow(clippy::cast_precision_loss)]
+    for i in 0..=n_samples {
+        let t = i as f64 / n_samples as f64;
+        let touch = (i == 0 && lo_touch) || (i == n_samples && hi_touch);
+        if let Some((p, m)) = at(v_at(t), touch) {
+            plus.push((t, p));
+            minus.push((t, m));
+        }
     }
 
+    let off = |p: Point3| {
+        cone_wall_distance(c1, p)
+            .abs()
+            .max(cone_wall_distance(c2, p).abs())
+    };
     let mut curves = Vec::new();
-    for pts in [&plus, &minus] {
-        if pts.len() < 4 {
+    for (branch, side) in [(&mut plus, 0), (&mut minus, 1)] {
+        if branch.len() < 4 {
             continue;
         }
-        let points: Vec<IntersectionPoint> = pts
+        let mut rounds = 0;
+        // One branch alone would leave the section chain short of the piece
+        // this path exists to supply: a branch that fails defers the pair.
+        let curve = loop {
+            let positions: Vec<Point3> = branch.iter().map(|&(_, p)| p).collect();
+            let curve = interpolate(&positions, 3).ok()?;
+            let params = crate::nurbs::fitting::chord_length_params(&positions);
+            let errors: Vec<f64> = (0..positions.len() - 1)
+                .map(|k| off(curve.evaluate(f64::midpoint(params[k], params[k + 1]))))
+                .collect();
+            if errors.iter().all(|&e| e <= 0.25 * tol.linear) {
+                break curve;
+            }
+            if rounds == PARALLEL_CONES_FIT_ROUNDS {
+                return None;
+            }
+            rounds += 1;
+            // Every span within a factor of four of the limit is split, and
+            // a stray's neighbours too: the fit through new points moves the
+            // error onto the spans beside them.
+            let mut split: Vec<usize> = (0..errors.len())
+                .filter(|&k| errors[k] > 0.0625 * tol.linear)
+                .flat_map(|k| {
+                    let stray = errors[k] > 0.25 * tol.linear;
+                    let (first, last) = if stray {
+                        (k.saturating_sub(1), k + 1)
+                    } else {
+                        (k, k)
+                    };
+                    first..=last.min(errors.len() - 1)
+                })
+                .collect();
+            split.sort_unstable();
+            split.dedup();
+            for &k in split.iter().rev() {
+                let t = f64::midpoint(branch[k].0, branch[k + 1].0);
+                let (p, m) = at(v_at(t), false)?;
+                branch.insert(k + 1, (t, if side == 0 { p } else { m }));
+            }
+        };
+        let points = branch
             .iter()
-            .map(|&p| IntersectionPoint {
+            .map(|&(_, p)| IntersectionPoint {
                 point: p,
                 param1: c1.project_point(p),
                 param2: c2.project_point(p),
             })
             .collect();
-        // One branch alone would leave the section chain short of the piece
-        // this path exists to supply: defer the pair instead.
-        let curve = interpolate(pts, 3).ok()?;
         curves.push(IntersectionCurve { curve, points });
     }
     Some(curves)
@@ -5974,6 +6064,75 @@ mod tests {
             }
             assert!((tops[0] - tops[1]).length() < 1e-9, "x = {x}: {tops:?}");
         }
+    }
+
+    /// Apices 1 apart, radii `z` and `1.001 z` at the height `z`: the circles
+    /// meet from `z = 1 / 2.001` up to `z = 1000`, and the two branches, fitted
+    /// over that long span, lie on both cones between their points and meet
+    /// at both ends.
+    #[test]
+    fn parallel_cones_of_nearly_equal_slope_trace_on_both() {
+        use crate::traits::ParametricCurve;
+        let up = Vec3::new(0.0, 0.0, 1.0);
+        let first =
+            ConicalSurface::new(Point3::new(0.0, 0.0, 0.0), up, std::f64::consts::FRAC_PI_4)
+                .unwrap();
+        let second =
+            ConicalSurface::new(Point3::new(1.0, 0.0, 0.0), up, (1.0 / 1.001_f64).atan()).unwrap();
+        let curves = algebraic_parallel_cone_cone(&first, &second, None, None).unwrap();
+        assert_eq!(curves.len(), 2, "the two branches");
+        let mut ends = Vec::new();
+        for c in &curves {
+            let (t0, t1) = c.curve.domain();
+            ends.push(ParametricCurve::evaluate(&c.curve, t0));
+            ends.push(ParametricCurve::evaluate(&c.curve, t1));
+            for k in 0..=4096 {
+                let p =
+                    ParametricCurve::evaluate(&c.curve, (t1 - t0).madd(f64::from(k) / 4096.0, t0));
+                let on_first = p.x().hypot(p.y()) - p.z();
+                let on_second = (p.x() - 1.0).hypot(p.y()) - 1.001 * p.z();
+                assert!(
+                    on_first.abs() < 1e-7 && on_second.abs() < 1e-7,
+                    "{p:?} off by {on_first}, {on_second}"
+                );
+            }
+        }
+        let (low, high) = (1.0 / 2.001, 1000.0);
+        for (k, z) in [(0, low), (1, high)] {
+            let (a, b) = (ends[k], ends[2 + k]);
+            assert!(
+                (a.z() - z).abs() < 1e-6 * z,
+                "branch end at {a:?}, not z = {z}"
+            );
+            assert!((a - b).length() < 1e-9, "branches part at {a:?} and {b:?}");
+        }
+    }
+
+    /// Axes `1e-5` radians apart, which a dot product within `1e-10` of one
+    /// read as parallel: the parallel cone-cone and cone-cylinder paths both
+    /// decline them.
+    #[test]
+    fn nearly_parallel_axes_take_neither_parallel_path() {
+        let tilt = 1e-5_f64;
+        let down = Vec3::new(0.0, 0.0, -1.0);
+        let tilted = Vec3::new(tilt.sin(), 0.0, -tilt.cos());
+        let big = ConicalSurface::new(
+            Point3::new(0.0, 0.0, 274.909_090_909),
+            down,
+            274.909_090_909_f64.atan2(72.0),
+        )
+        .unwrap();
+        let small =
+            ConicalSurface::new(Point3::new(-70.0, 0.0, 88.0), tilted, 88.0_f64.atan2(10.0))
+                .unwrap();
+        assert!(algebraic_parallel_cone_cone(&big, &small, None, None).is_none());
+        let cone = ConicalSurface::new(Point3::new(0.0, 0.0, 3.0), down, 2.0_f64.atan()).unwrap();
+        let rod = CylindricalSurface::new(Point3::new(1.2, 0.5, -10.0), tilted, 0.6).unwrap();
+        assert!(
+            algebraic_parallel_cone_cylinder(&cone, &rod, None, None)
+                .unwrap()
+                .is_none()
+        );
     }
 
     /// A coaxial pair has no radical line; the algebraic path must defer rather
