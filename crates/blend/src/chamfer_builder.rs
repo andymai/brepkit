@@ -929,8 +929,8 @@ fn face_v_period(surface: &FaceSurface) -> Option<f64> {
 /// straight line run at an even rate (a circle round a cylinder's or a
 /// cone's axis), the pcurve is that line. Elsewhere a cubic interpolates the
 /// image at more and more points, until between them it lies within `FIT`
-/// of the image, in pieces that meet at the curve's corners. `None` when no
-/// such cubic comes within it.
+/// times one more than the curve's size of the image, in pieces that meet at
+/// the curve's corners. `None` when no such cubic comes within it.
 fn pcurve_along(
     support: &dyn ParametricSurface,
     periods: [Option<f64>; 2],
@@ -941,7 +941,13 @@ fn pcurve_along(
     const FIRST: u32 = 16;
     const LAST: u32 = 4096;
     let (t0, t1) = curve.domain_with_endpoints(start, end);
-    let fit = FIT * (1.0 + start.x().abs().max(start.y().abs()).max(start.z().abs()));
+    // The tolerance scales with the curve's size, not with where it lies.
+    let size = brepkit_math::aabb::Aabb3::try_from_points((0..=FIRST).map(|k| {
+        let f = f64::from(k) / f64::from(FIRST);
+        curve.evaluate_with_endpoints((t1 - t0).madd(f, t0), start, end)
+    }))
+    .map_or(0.0, |aabb| (aabb.max - aabb.min).length());
+    let fit = FIT * (1.0 + size);
     let on = |uv: Point2| support.evaluate(uv.x(), uv.y());
     let mut pieces: Vec<f64> = corners(curve)
         .into_iter()
@@ -1937,5 +1943,55 @@ mod tests {
             );
         }
         assert_contacts(&stripe, [(r - d, 0.0), (wall_r, wall_z)]);
+    }
+
+    /// The arc of the ellipse where the plane `z = 4 + 0.3 y` cuts a
+    /// cylinder of radius 2, from 30 to 150 degrees round the axis, with
+    /// both moved `shift` along x: how far its pcurve on the cylinder
+    /// strays from it, and whether that pcurve is a line.
+    fn ellipse_arc_pcurve(shift: f64) -> (f64, bool) {
+        use brepkit_math::surfaces::CylindricalSurface;
+        let cylinder =
+            CylindricalSurface::new(Point3::new(shift, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 2.0)
+                .unwrap();
+        let root3 = 3.0_f64.sqrt();
+        // The arc is the image of a circle's third under an affine map,
+        // so it is exact as a rational quadratic.
+        let contact = brepkit_math::nurbs::curve::NurbsCurve::new(
+            2,
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            vec![
+                Point3::new(shift + root3, 1.0, 4.3),
+                Point3::new(shift, 4.0, 5.2),
+                Point3::new(shift - root3, 1.0, 4.3),
+            ],
+            vec![1.0, 0.5, 1.0],
+        )
+        .unwrap();
+        let ends = (contact.evaluate(0.0), contact.evaluate(1.0));
+        let curve = EdgeCurve::NurbsCurve(contact.clone());
+        let pcurve =
+            pcurve_along(&cylinder, [Some(std::f64::consts::TAU), None], &curve, ends).unwrap();
+        let (t0, t1) = (pcurve.t_start(), pcurve.t_end());
+        let worst = (0..=200)
+            .map(|k| {
+                let f = f64::from(k) / 200.0;
+                let uv = pcurve.evaluate(t0 + (t1 - t0) * f);
+                (ParametricSurface::evaluate(&cylinder, uv.x(), uv.y()) - contact.evaluate(f))
+                    .length()
+            })
+            .fold(0.0_f64, f64::max);
+        (worst, matches!(pcurve.curve(), Curve2D::Line(_)))
+    }
+
+    /// The fit's tolerance follows the size of the contact, not where it
+    /// lies: 1e7 from the origin, the pcurve comes as close as at the origin.
+    #[test]
+    fn pcurve_along_fits_as_closely_far_from_the_origin() {
+        let (near, near_line) = ellipse_arc_pcurve(0.0);
+        let (far, far_line) = ellipse_arc_pcurve(1e7);
+        assert!(!near_line && !far_line, "a line for a curved image");
+        assert!(near < 1e-6, "{near} off at the origin");
+        assert!(far < 1e-6, "{far} off 1e7 from the origin");
     }
 }
