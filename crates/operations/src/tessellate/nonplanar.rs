@@ -1560,12 +1560,12 @@ pub(super) fn tessellate_latitude_band_shared(
 /// sides give it, read on the side samples, and pushed out onto the sphere.
 /// Two rows join in order along them, each step by the shorter of its two
 /// new edges. An edge inside the patch that turns by more than `SQRT_2`
-/// times `angular_tol`, or whose chord stands off the sphere by more than
-/// `deflection`, is then halved. The rims are the shared samples
+/// times `angular_tol` is then halved. The rims are the shared samples
 /// themselves, so the face closes with its neighbours.
 ///
 /// Returns `Ok(false)` and leaves the mesh as it was when the face is not
-/// such a patch, when the patch reaches the hemisphere opposite its samples'
+/// such a patch, when a chord turning by that much would stand off the
+/// sphere by more than `deflection`, when the patch reaches the hemisphere opposite its samples'
 /// mean direction, when a triangle faces into the sphere (a fold, which a
 /// side bending far into the patch gives), or when a triangle stands off the
 /// sphere by more than `deflection`. The CDT takes the face then.
@@ -1621,6 +1621,20 @@ pub(super) fn tessellate_sphere_triangle_shared(
     let m = along_b.len() - 1;
 
     let (center, radius) = (sphere.center(), sphere.radius());
+    // An edge inside the patch may turn by as much as the diagonal of a
+    // grid cell whose sides turn by the angle tolerance, the bound the CDT's
+    // interior grid keeps. Where the deflection holds edges shorter than
+    // that, the rows' triangles would stand further off the sphere than
+    // their edges' chords, and the CDT takes the face.
+    let by_angle = if angular_tol > 0.0 {
+        angular_tol * std::f64::consts::SQRT_2
+    } else {
+        std::f64::consts::PI
+    };
+    let by_sag = 2.0 * (1.0 - (deflection / radius).min(1.0)).acos();
+    if by_sag < by_angle {
+        return Ok(false);
+    }
     let point_of = |gid: u32| merged.positions[gid as usize];
     let mut mean = Vec3::new(0.0, 0.0, 0.0);
     for side in &sides {
@@ -1759,23 +1773,14 @@ pub(super) fn tessellate_sphere_triangle_shared(
             t.swap(1, 2);
         }
     }
-    // No edge inside the patch may turn by more than the diagonal of a grid
-    // cell whose sides turn by the angle tolerance, the bound the CDT's
-    // interior grid keeps, nor stand off the sphere by more than the
-    // deflection: a longer one is halved, and so are the two triangles on
-    // it.
-    let by_angle = if angular_tol > 0.0 {
-        angular_tol
-    } else {
-        std::f64::consts::PI
-    };
-    let by_sag = 2.0 * (1.0 - (deflection / radius).min(1.0)).acos();
+    // An edge inside the patch longer than that bound is halved, and so are
+    // the two triangles on it.
     let halved = halve_long_sphere_edges(
         merged,
         point_to_global,
         idx_start,
         (center, radius),
-        (by_angle * std::f64::consts::SQRT_2).min(by_sag).cos(),
+        by_angle.cos(),
     );
     let outward = |t: &[u32]| {
         let [a, b, c] = [0, 1, 2].map(|k| merged.positions[t[k] as usize]);
