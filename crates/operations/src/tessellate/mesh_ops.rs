@@ -524,36 +524,62 @@ pub(super) fn weld_boundary_vertices(
         return false;
     }
 
-    let mut half_edges: WordHashMap<(u32, u32), usize> =
-        WordHashMap::with_capacity_and_hasher(mesh.indices.len(), WordState);
-    for tri in mesh.indices.chunks_exact(3) {
-        let (i0, i1, i2) = (tri[0], tri[1], tri[2]);
-        *half_edges.entry((i0, i1)).or_default() += 1;
-        *half_edges.entry((i1, i2)).or_default() += 1;
-        *half_edges.entry((i2, i0)).or_default() += 1;
+    // The half-edges leaving each vertex, sorted, in one array.
+    if mesh.indices.iter().any(|&idx| idx as usize >= n_verts) {
+        return false;
     }
-    let repeated = half_edges.values().any(|&count| count > 1);
+    let mut first = vec![0usize; n_verts + 1];
+    for tri in mesh.indices.chunks_exact(3) {
+        for &a in tri {
+            first[a as usize + 1] += 1;
+        }
+    }
+    for v in 0..n_verts {
+        first[v + 1] += first[v];
+    }
+    let mut targets = vec![0u32; first[n_verts]];
+    let mut fill = first.clone();
+    for tri in mesh.indices.chunks_exact(3) {
+        for (a, b) in [(tri[0], tri[1]), (tri[1], tri[2]), (tri[2], tri[0])] {
+            targets[fill[a as usize]] = b;
+            fill[a as usize] += 1;
+        }
+    }
+    for v in 0..n_verts {
+        targets[first[v]..first[v + 1]].sort_unstable();
+    }
+    let leaving = |v: u32| &targets[first[v as usize]..first[v as usize + 1]];
+    let repeated = (0..n_verts).any(|v| {
+        targets[first[v]..first[v + 1]]
+            .windows(2)
+            .any(|w| w[0] == w[1])
+    });
 
     // Boundary vertices: incident on an edge only one triangle uses. An edge
     // two faces share the same way round is no crack: where a rim curls
     // back through itself, the cap and the wall both run its loop that way,
     // and welding its closely spaced samples would collapse the loop.
-    let mut boundary_set: DetHashSet<u32> = DetHashSet::default();
-    for (&(a, b), &count) in &half_edges {
-        if count == 1 && !half_edges.contains_key(&(b, a)) {
-            boundary_set.insert(a);
-            boundary_set.insert(b);
+    let mut on_boundary = vec![false; n_verts];
+    #[allow(clippy::cast_possible_truncation)]
+    for a in 0..n_verts as u32 {
+        let out = leaving(a);
+        for (k, &b) in out.iter().enumerate() {
+            let once = (k == 0 || out[k - 1] != b) && out.get(k + 1) != Some(&b);
+            if once && leaving(b).binary_search(&a).is_err() {
+                on_boundary[a as usize] = true;
+                on_boundary[b as usize] = true;
+            }
         }
     }
-
-    if boundary_set.is_empty() {
+    if !on_boundary.iter().any(|&b| b) {
         return repeated;
     }
 
-    // Sorted iteration keeps grid-cell contents and union order independent
-    // of DetHashSet iteration order, so welded meshes are reproducible.
-    let mut boundary_verts: Vec<u32> = boundary_set.into_iter().collect();
-    boundary_verts.sort_unstable();
+    // Ascending ids keep grid-cell contents and union order reproducible.
+    #[allow(clippy::cast_possible_truncation)]
+    let boundary_verts: Vec<u32> = (0..n_verts as u32)
+        .filter(|&v| on_boundary[v as usize])
+        .collect();
 
     #[allow(clippy::items_after_statements)]
     fn uf_find(parent: &mut [u32], mut x: u32) -> u32 {
