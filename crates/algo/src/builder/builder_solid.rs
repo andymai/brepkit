@@ -137,26 +137,7 @@ pub fn build_solid_with_origins(
         sources.push(Some(sf.source_face));
     }
 
-    separate_arcs_sharing_ends(topo, &mut face_ids, &sources)?;
-    unify_boundaries(topo, &mut face_ids, &mut sources)?;
-
-    // Step 0b2: Drop doubled faces — two (or more) selected faces whose outer
-    // wires reference the identical set of (merged) edge entities. Such faces
-    // are geometrically coincident copies bounding zero volume between them
-    // (e.g. the baseplate dovetail groove cut: the slanted slab wall and the
-    // groove flank each emit the same corner triangle, and after edge-merging
-    // both reference the same three edges). Keeping them makes every shared edge
-    // incident to 3+ faces (non-manifold). Removing the whole group is sound:
-    // coincident faces with one identical boundary cancel.
-    remove_doubled_faces(topo, &mut face_ids, &mut sources);
-
-    // Step 0b3: Excise out-and-back spurs — the same edge traversed forward
-    // then immediately backward is a zero-width excursion contributing two
-    // uses of one edge to a single face (a coincident-ring re-trace woven
-    // through a wall's wire at a concave corner). Removing the pair never
-    // changes the enclosed region. A face whose outer wire collapses below
-    // 3 edges was ONLY the excursion (a slit) and is dropped entirely.
-    excise_out_and_back_spurs(topo, &mut face_ids, &mut sources);
+    settle_faces(topo, &mut face_ids, &mut sources, None)?;
 
     if face_ids.is_empty() {
         return Err(AlgoError::AssemblyFailed(
@@ -204,6 +185,42 @@ pub fn build_solid_with_origins(
         .map(|f| (f, face_source.get(&f).copied().flatten()))
         .collect();
     Ok((solid_id, origins))
+}
+
+/// Bring the selected faces to one set of edges, then drop doubled faces and
+/// out-and-back spurs. `walls` holds the input faces of a split's partitions,
+/// whose faces [`drop_doubled_boundary_faces`] keeps; without them every face
+/// is boundary.
+fn settle_faces(
+    topo: &mut Topology,
+    face_ids: &mut Vec<FaceId>,
+    sources: &mut Vec<Option<FaceId>>,
+    walls: Option<&HashSet<FaceId>>,
+) -> Result<(), AlgoError> {
+    separate_arcs_sharing_ends(topo, face_ids, sources)?;
+    unify_boundaries(topo, face_ids, sources)?;
+
+    // Step 0b2: Drop doubled faces — two (or more) selected faces whose outer
+    // wires reference the identical set of (merged) edge entities. Such faces
+    // are geometrically coincident copies bounding zero volume between them
+    // (e.g. the baseplate dovetail groove cut: the slanted slab wall and the
+    // groove flank each emit the same corner triangle, and after edge-merging
+    // both reference the same three edges). Keeping them makes every shared edge
+    // incident to 3+ faces (non-manifold). Removing the whole group is sound:
+    // coincident faces with one identical boundary cancel.
+    match walls {
+        Some(walls) => drop_doubled_boundary_faces(topo, face_ids, sources, walls)?,
+        None => remove_doubled_faces(topo, face_ids, sources),
+    }
+
+    // Step 0b3: Excise out-and-back spurs — the same edge traversed forward
+    // then immediately backward is a zero-width excursion contributing two
+    // uses of one edge to a single face (a coincident-ring re-trace woven
+    // through a wall's wire at a concave corner). Removing the pair never
+    // changes the enclosed region. A face whose outer wire collapses below
+    // 3 edges was ONLY the excursion (a slit) and is dropped entirely.
+    excise_out_and_back_spurs(topo, face_ids, sources);
+    Ok(())
 }
 
 /// Bring the selected faces to one set of edges: weld what the pave filler
@@ -372,10 +389,7 @@ pub fn build_regions(
         .chain(partitions)
         .map(|sf| Some(sf.source_face))
         .collect();
-    separate_arcs_sharing_ends(topo, &mut face_ids, &sources)?;
-    unify_boundaries(topo, &mut face_ids, &mut sources)?;
-    drop_doubled_boundary_faces(topo, &mut face_ids, &mut sources, &wall_sources)?;
-    excise_out_and_back_spurs(topo, &mut face_ids, &mut sources);
+    settle_faces(topo, &mut face_ids, &mut sources, Some(&wall_sources))?;
 
     let walls: Vec<bool> = sources
         .iter()
@@ -3671,17 +3685,17 @@ fn split_arc_edges_at_collinear_vertices(
 ///
 /// A seam is no boundary: where a face is a lens between a piece of its
 /// surface's seam and another path, and the face across the seam is of the
-/// same input face, the other path takes the seam's place. The lens then
-/// runs out and back along that path, and the face across the seam covers
-/// both. `sources` holds the input face of each face.
+/// same input face, the other path takes the seam's place. The lens leaves
+/// the list, and the face across the seam covers both. `sources` holds the
+/// input face of each face, and loses the lens's entry with it.
 ///
 /// # Errors
 ///
 /// Returns [`AlgoError`] on a topology lookup failure.
-pub fn separate_arcs_sharing_ends(
+fn separate_arcs_sharing_ends(
     topo: &mut Topology,
-    face_ids: &mut [FaceId],
-    sources: &[Option<FaceId>],
+    face_ids: &mut Vec<FaceId>,
+    sources: &mut Vec<Option<FaceId>>,
 ) -> Result<(), AlgoError> {
     use brepkit_topology::edge::{Edge, EdgeCurve};
     use brepkit_topology::vertex::Vertex;
@@ -3731,6 +3745,7 @@ pub fn separate_arcs_sharing_ends(
     };
     let mut replacements: HashMap<EdgeId, Vec<OrientedEdge>> = HashMap::new();
     let mut folds: Vec<(EdgeId, EdgeId, bool)> = Vec::new();
+    let mut lenses: HashSet<usize> = HashSet::new();
     for group in groups.values() {
         if group.len() < 2 || group.iter().all(|&e| is_line(topo, e)) {
             continue;
@@ -3759,13 +3774,15 @@ pub fn separate_arcs_sharing_ends(
                 },
             }
         }
-        if let Some((seam, partner)) = seam_beside_lens(topo, face_ids, sources, &faces_of, &paths)?
+        if let Some((seam, partner, lens)) =
+            seam_beside_lens(topo, face_ids, sources, &faces_of, &paths)?
         {
             let partner_start = class(topo.edge(partner)?.start());
             for &e in &paths[seam] {
                 let forward = class(topo.edge(e)?.start()) == partner_start;
                 folds.push((e, partner, forward));
             }
+            lenses.insert(lens);
             paths.remove(seam);
         }
         if paths.len() < 2 {
@@ -3853,11 +3870,16 @@ pub fn separate_arcs_sharing_ends(
         "separate_arcs_sharing_ends: split {split} edges, folded {} seam edges",
         folds.len()
     );
-    replace_edges(topo, face_ids, &replacements)
+    replace_edges(topo, face_ids, &replacements)?;
+    let mut place = 0..;
+    retain_aligned(face_ids, sources, |_| {
+        !place.next().is_some_and(|i| lenses.contains(&i))
+    });
+    Ok(())
 }
 
-/// The path of `paths` that is a piece of a seam with a lens beside it, and
-/// the lens's edge on another path.
+/// The path of `paths` that is a piece of a seam with a lens beside it, the
+/// lens's edge on another path, and the lens's place in the face list.
 ///
 /// The seam's path is bounded by two faces of one input face, running it
 /// opposite ways, and lies along an edge that input face's wires run both
@@ -3870,7 +3892,7 @@ fn seam_beside_lens(
     sources: &[Option<FaceId>],
     faces_of: &HashMap<EdgeId, Vec<(usize, bool)>>,
     paths: &[Vec<EdgeId>],
-) -> Result<Option<(usize, EdgeId)>, AlgoError> {
+) -> Result<Option<(usize, EdgeId, usize)>, AlgoError> {
     for (k, path) in paths.iter().enumerate() {
         let mut uses: Vec<(usize, bool, EdgeId)> = Vec::new();
         for &e in path {
@@ -3933,7 +3955,7 @@ fn seam_beside_lens(
                 .iter()
                 .any(|(e, _)| path_of_partner.contains(e));
             if !runs_partner {
-                return Ok(Some((k, partner)));
+                return Ok(Some((k, partner, fi)));
             }
         }
     }
@@ -5434,8 +5456,8 @@ mod tests {
             face(&mut topo, wave(4e-4), false, shift),
         ];
         let mut sources = vec![None, None];
-        let unsourced = vec![None; face_ids.len()];
-        separate_arcs_sharing_ends(&mut topo, &mut face_ids, &unsourced).unwrap();
+        let mut unsourced = vec![None; face_ids.len()];
+        separate_arcs_sharing_ends(&mut topo, &mut face_ids, &mut unsourced).unwrap();
         unify_boundaries(&mut topo, &mut face_ids, &mut sources).unwrap();
 
         let mut uses: HashMap<EdgeId, usize> = HashMap::new();
@@ -5541,86 +5563,116 @@ mod tests {
         EdgeCurveOf::NurbsCurve(brepkit_math::nurbs::fitting::interpolate(points, 2).unwrap())
     }
 
+    /// A unit cylinder's wall cut by a loop across its seam: the face beside
+    /// the seam, the lens between the seam's piece from `z = 0.2` to `z = 0.8`
+    /// and the loop's short side, and a cap on the loop, with the input face
+    /// of each. `along` replaces the seam's piece with another curve between
+    /// its ends.
+    fn wall_beside_a_lens(
+        topo: &mut Topology,
+        seam: bool,
+        along: Option<EdgeCurveOf>,
+    ) -> (Vec<FaceId>, Vec<Option<FaceId>>) {
+        use brepkit_topology::edge::Edge;
+        use brepkit_topology::vertex::Vertex;
+
+        let (source, wall) = opened_wall(topo, seam);
+        let low = topo.add_vertex(Vertex::new(on_wall(0.0, 0.2), 1e-7));
+        let high = topo.add_vertex(Vertex::new(on_wall(0.0, 0.8), 1e-7));
+        let side = topo.add_vertex(Vertex::new(on_wall(0.6, 0.5), 1e-7));
+        let piece = || along.clone().unwrap_or(EdgeCurveOf::Line);
+        let short = || through(&[on_wall(0.0, 0.2), on_wall(-0.1, 0.5), on_wall(0.0, 0.8)]);
+        let upper = || through(&[on_wall(0.0, 0.8), on_wall(0.4, 0.75), on_wall(0.6, 0.5)]);
+        let lower = || through(&[on_wall(0.6, 0.5), on_wall(0.4, 0.25), on_wall(0.0, 0.2)]);
+        let beside_seam = topo.add_edge(Edge::new(low, high, piece()));
+        let lens_seam = topo.add_edge(Edge::new(high, low, piece()));
+        let lens_short = topo.add_edge(Edge::new(low, high, short()));
+        let up = topo.add_edge(Edge::new(high, side, upper()));
+        let down = topo.add_edge(Edge::new(side, low, lower()));
+        let cap_short = topo.add_edge(Edge::new(low, high, short()));
+        let cap_up = topo.add_edge(Edge::new(high, side, upper()));
+        let cap_down = topo.add_edge(Edge::new(side, low, lower()));
+        let cap = FaceSurface::Plane {
+            normal: Vec3::new(1.0, 0.0, 0.0),
+            d: 0.0,
+        };
+        let face_ids = vec![
+            face_of(
+                topo,
+                &[(beside_seam, true), (up, true), (down, true)],
+                wall.clone(),
+            ),
+            face_of(topo, &[(lens_seam, true), (lens_short, true)], wall),
+            face_of(
+                topo,
+                &[(cap_short, false), (cap_down, false), (cap_up, false)],
+                cap,
+            ),
+        ];
+        (face_ids, vec![Some(source), Some(source), None])
+    }
+
+    /// How many faces use each edge of `face_ids`.
+    fn edge_use_counts(topo: &Topology, face_ids: &[FaceId]) -> HashMap<EdgeId, usize> {
+        let mut uses: HashMap<EdgeId, usize> = HashMap::new();
+        for &fid in face_ids {
+            for (edge, _) in face_edge_uses(topo, fid).unwrap() {
+                *uses.entry(edge).or_default() += 1;
+            }
+        }
+        uses
+    }
+
+    /// The lines among `edges`.
+    fn lines_of(topo: &Topology, edges: impl Iterator<Item = EdgeId>) -> usize {
+        edges
+            .filter(|&e| matches!(topo.edge(e).unwrap().curve(), EdgeCurveOf::Line))
+            .count()
+    }
+
     /// A loop across a cylinder's seam cuts the wall into a face beside the
     /// seam and a lens between a piece of the seam and the loop's short side,
     /// both kept, with a cap on the loop. The loop's short side takes the
-    /// seam's place: the lens runs out and back along it and goes, and the
-    /// face beside the seam covers both. Where the line is no seam of the
-    /// wall, it stays an edge and the lens a face.
+    /// seam's place: the lens goes, and the face beside the seam covers both.
+    /// The wall and the cap then share all three edges of the loop, and both
+    /// stay through the doubled-face filter of a solid's and of a split's
+    /// assembly. Where the line is no seam of the wall, it stays an edge and
+    /// the lens a face.
     #[test]
     fn a_lens_beside_a_seam_joins_the_face_across_it() {
-        use brepkit_topology::edge::{Edge, EdgeCurve};
-        use brepkit_topology::vertex::Vertex;
-
-        for seam in [true, false] {
-            let mut topo = Topology::new();
-            let (source, wall) = opened_wall(&mut topo, seam);
-            let low = topo.add_vertex(Vertex::new(on_wall(0.0, 0.2), 1e-7));
-            let high = topo.add_vertex(Vertex::new(on_wall(0.0, 0.8), 1e-7));
-            let side = topo.add_vertex(Vertex::new(on_wall(0.6, 0.5), 1e-7));
-            let short = || through(&[on_wall(0.0, 0.2), on_wall(-0.1, 0.5), on_wall(0.0, 0.8)]);
-            let upper = || through(&[on_wall(0.0, 0.8), on_wall(0.4, 0.75), on_wall(0.6, 0.5)]);
-            let lower = || through(&[on_wall(0.6, 0.5), on_wall(0.4, 0.25), on_wall(0.0, 0.2)]);
-            let beside_seam = topo.add_edge(Edge::new(low, high, EdgeCurve::Line));
-            let lens_seam = topo.add_edge(Edge::new(high, low, EdgeCurve::Line));
-            let lens_short = topo.add_edge(Edge::new(low, high, short()));
-            let up = topo.add_edge(Edge::new(high, side, upper()));
-            let down = topo.add_edge(Edge::new(side, low, lower()));
-            let cap_short = topo.add_edge(Edge::new(low, high, short()));
-            let cap_up = topo.add_edge(Edge::new(high, side, upper()));
-            let cap_down = topo.add_edge(Edge::new(side, low, lower()));
-            let cap = FaceSurface::Plane {
-                normal: Vec3::new(1.0, 0.0, 0.0),
-                d: 0.0,
-            };
-            let mut face_ids = vec![
-                face_of(
-                    &mut topo,
-                    &[(beside_seam, true), (up, true), (down, true)],
-                    wall.clone(),
-                ),
-                face_of(&mut topo, &[(lens_seam, true), (lens_short, true)], wall),
-                face_of(
-                    &mut topo,
-                    &[(cap_short, false), (cap_down, false), (cap_up, false)],
-                    cap,
-                ),
-            ];
-            let mut sources = vec![Some(source), Some(source), None];
-            separate_arcs_sharing_ends(&mut topo, &mut face_ids, &sources).unwrap();
-            unify_boundaries(&mut topo, &mut face_ids, &mut sources).unwrap();
-            excise_out_and_back_spurs(&mut topo, &mut face_ids, &mut sources);
-
-            let mut uses: HashMap<EdgeId, usize> = HashMap::new();
-            for &fid in &face_ids {
-                for (edge, _) in face_edge_uses(&topo, fid).unwrap() {
-                    *uses.entry(edge).or_default() += 1;
+        for walls in [None, Some(HashSet::new())] {
+            for seam in [true, false] {
+                let mut topo = Topology::new();
+                let (mut face_ids, mut sources) = wall_beside_a_lens(&mut topo, seam, None);
+                settle_faces(&mut topo, &mut face_ids, &mut sources, walls.as_ref()).unwrap();
+                let uses = edge_use_counts(&topo, &face_ids);
+                let lines = lines_of(&topo, uses.keys().copied());
+                if seam {
+                    assert_eq!(face_ids.len(), 2, "the wall and the cap stay");
+                    assert_eq!(lines, 0, "no piece of the seam stays");
+                    assert!(uses.values().all(|&n| n == 2), "{uses:?}");
+                    let joined = face_edge_uses(&topo, face_ids[0]).unwrap();
+                    assert_eq!(joined.len(), 3, "the loop's three edges bound the wall");
+                } else {
+                    assert_eq!(face_ids.len(), 3, "the lens stays a face");
+                    assert_eq!(lines, 1, "the line stays an edge");
                 }
-            }
-            let lines = uses
-                .keys()
-                .filter(|&&e| matches!(topo.edge(e).unwrap().curve(), EdgeCurve::Line))
-                .count();
-            if seam {
-                assert_eq!(face_ids.len(), 2, "the lens joins the face beside the seam");
-                assert_eq!(lines, 0, "no piece of the seam stays");
-                assert!(uses.values().all(|&n| n == 2), "{uses:?}");
-                let joined = face_edge_uses(&topo, face_ids[0]).unwrap();
-                assert_eq!(joined.len(), 3, "the loop's three edges bound the wall");
-            } else {
-                assert_eq!(face_ids.len(), 3, "the lens stays a face");
-                assert_eq!(lines, 1, "the line stays an edge");
             }
         }
     }
 
-    /// Two faces of one seamed wall, each a lens between a piece of the seam
-    /// and the same curve, run both of the seam's ways and the curve's. The
-    /// curve cannot take the seam's place, as each face would then run it out
-    /// and back, so both faces stay.
+    /// Two faces of one seamed wall, each between a piece of the seam and the
+    /// same curve, run both of the seam's ways and the curve's. The curve
+    /// cannot take the seam's place, as the face across the seam would then
+    /// run it out and back, so both faces stay, each with its piece of the
+    /// seam.
     #[test]
     fn two_lenses_on_one_curve_keep_their_seam() {
-        use brepkit_topology::edge::{Edge, EdgeCurve};
+        two_lenses_keep_their_seam(false);
+    }
+
+    fn two_lenses_keep_their_seam(split: bool) {
+        use brepkit_topology::edge::Edge;
         use brepkit_topology::vertex::Vertex;
 
         let mut topo = Topology::new();
@@ -5628,31 +5680,32 @@ mod tests {
         let low = topo.add_vertex(Vertex::new(on_wall(0.0, 0.2), 1e-7));
         let high = topo.add_vertex(Vertex::new(on_wall(0.0, 0.8), 1e-7));
         let curve = || through(&[on_wall(0.0, 0.2), on_wall(-0.1, 0.5), on_wall(0.0, 0.8)]);
-        let seam_up = topo.add_edge(Edge::new(low, high, EdgeCurve::Line));
-        let seam_down = topo.add_edge(Edge::new(high, low, EdgeCurve::Line));
+        let seam_up = topo.add_edge(Edge::new(low, high, EdgeCurveOf::Line));
+        let seam_down = topo.add_edge(Edge::new(high, low, EdgeCurveOf::Line));
         let curve_up = topo.add_edge(Edge::new(low, high, curve()));
-        let curve_down = topo.add_edge(Edge::new(high, low, curve()));
+        let mut across = vec![(seam_up, true)];
+        if split {
+            let middle = edge_path(&topo, topo.edge(curve_up).unwrap()).unwrap()(0.5);
+            let middle = topo.add_vertex(Vertex::new(middle, 1e-7));
+            across.push((topo.add_edge(Edge::new(high, middle, curve())), true));
+            across.push((topo.add_edge(Edge::new(middle, low, curve())), true));
+        } else {
+            across.push((topo.add_edge(Edge::new(high, low, curve())), true));
+        }
         let mut face_ids = vec![
-            face_of(
-                &mut topo,
-                &[(seam_up, true), (curve_down, true)],
-                wall.clone(),
-            ),
+            face_of(&mut topo, &across, wall.clone()),
             face_of(&mut topo, &[(seam_down, true), (curve_up, true)], wall),
         ];
         let mut sources = vec![Some(source), Some(source)];
-        separate_arcs_sharing_ends(&mut topo, &mut face_ids, &sources).unwrap();
-        unify_boundaries(&mut topo, &mut face_ids, &mut sources).unwrap();
-        excise_out_and_back_spurs(&mut topo, &mut face_ids, &mut sources);
-        assert_eq!(face_ids.len(), 2, "both faces stay");
+        settle_faces(&mut topo, &mut face_ids, &mut sources, None).unwrap();
+        assert_eq!(face_ids.len(), 2, "{split}: both faces stay");
         for &fid in &face_ids {
-            let lines = face_edge_uses(&topo, fid)
-                .unwrap()
-                .iter()
-                .filter(|(e, _)| matches!(topo.edge(*e).unwrap().curve(), EdgeCurve::Line))
-                .count();
-            assert_eq!(lines, 1, "each face keeps its piece of the seam");
+            let edges = face_edge_uses(&topo, fid).unwrap();
+            let lines = lines_of(&topo, edges.iter().map(|&(e, _)| e));
+            assert_eq!(lines, 1, "{split}: each face keeps its piece of the seam");
         }
+        let uses = edge_use_counts(&topo, &face_ids);
+        assert!(uses.values().all(|&n| n == 2), "{split}: {uses:?}");
     }
 
     /// A lens between two arches that part by 5e-3 over a length of 1000,
@@ -5697,8 +5750,8 @@ mod tests {
                 face_ids.insert(0, lens);
             }
             let mut sources = vec![None; face_ids.len()];
-            let unsourced = vec![None; face_ids.len()];
-            separate_arcs_sharing_ends(&mut topo, &mut face_ids, &unsourced).unwrap();
+            let mut unsourced = vec![None; face_ids.len()];
+            separate_arcs_sharing_ends(&mut topo, &mut face_ids, &mut unsourced).unwrap();
             unify_boundaries(&mut topo, &mut face_ids, &mut sources).unwrap();
             let lens = face_ids[if beside_first { 3 } else { 0 }];
             let mut uses: HashMap<EdgeId, usize> = HashMap::new();
@@ -5768,8 +5821,8 @@ mod tests {
             };
             let mut face_ids = vec![face(true), face(false)];
             let mut sources = vec![None, None];
-            let unsourced = vec![None; face_ids.len()];
-            separate_arcs_sharing_ends(&mut topo, &mut face_ids, &unsourced).unwrap();
+            let mut unsourced = vec![None; face_ids.len()];
+            separate_arcs_sharing_ends(&mut topo, &mut face_ids, &mut unsourced).unwrap();
             unify_boundaries(&mut topo, &mut face_ids, &mut sources).unwrap();
             let mut uses: HashMap<EdgeId, usize> = HashMap::new();
             for &fid in &face_ids {
@@ -5834,8 +5887,8 @@ mod tests {
             face(&mut topo, circle(), plane.clone()),
         ];
         let mut sources = vec![None, None];
-        let unsourced = vec![None; face_ids.len()];
-        separate_arcs_sharing_ends(&mut topo, &mut face_ids, &unsourced).unwrap();
+        let mut unsourced = vec![None; face_ids.len()];
+        separate_arcs_sharing_ends(&mut topo, &mut face_ids, &mut unsourced).unwrap();
         unify_boundaries(&mut topo, &mut face_ids, &mut sources).unwrap();
         let mut uses: HashMap<EdgeId, usize> = HashMap::new();
         for &fid in &face_ids {
@@ -5882,8 +5935,8 @@ mod tests {
             face(&mut topo, circle(), plane),
             face(&mut topo, EdgeCurve::Line, ball),
         ];
-        let unsourced = vec![None; face_ids.len()];
-        separate_arcs_sharing_ends(&mut topo, &mut face_ids, &unsourced).unwrap();
+        let mut unsourced = vec![None; face_ids.len()];
+        separate_arcs_sharing_ends(&mut topo, &mut face_ids, &mut unsourced).unwrap();
         for &fid in &face_ids {
             let uses = face_edge_uses(&topo, fid).unwrap();
             assert_eq!(uses.len(), 3, "the near edge whole and the rest in two");
