@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794909995129,
+  "lastUpdate": 1794910234622,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -73763,6 +73763,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 21162236,
             "range": "± 180331",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b3188d0d86b5da8219747b71df127c7aa24baa01",
+          "message": "fix(algo): fuse two rods at one ball and a second ball across a flat ring exactly (#2583)\n\n## Summary\n\nTwo rods that end at the centre of one ball now fuse exactly, and so\ndoes a second ball across a flat ring. Before, the face splitter split a\nface of each into nothing, and the fuse fell back to a mesh. Fixes\n#2526. Refs #2520 and #2502.\n\nThe work on #2502 from the branch\n`fix/cylinder-holes-beside-winding-loop` merged with #2549, so this\nbranch starts from `main`.\n\n## What\n\n**A face with no seam** (#2526). The first ball cuts a window round the\nring wall's seam, so the wall has no seam left. The second ball split\nthe wall into three loops. On a `u`-periodic face, the face splitter\nread a loop as a piece when it held a seam line. It also did so on a\ncone, a torus and a cylinder laid out as one turn. It read all three\nloops as holes.\n\nNow such a loop bounds a piece on every surface but a torus, where it\nwinds as the outline does in `(u, v)`. A torus keeps its own test. This\nalso keeps the piece between a rod's rim and a second rod's wall where a\nball cut the rim.\n\nSome faces keep the seam rule, as on `main`. In such a face, the\nsections of a loop lie within a fiftieth of the surface's radius of the\nloop's own outline. That loop is the sliver between a section and a\nboundary arc of nearly one circle. Read as a piece, it made the fuse\nfall back or left the mesh open at its tip (#2615).\n\n**A rod onto a ball cut by another rod** (#2520). Five faults showed in\nthe issue's repro, and a sixth in a wire guard's rib:\n\n1. The filter for the arcs of a closed section circle read a ball face\nby one half-space from its outline. A quarter of the ball took an arc of\nthe second rod's cap circle that lies outside the quarter. The filter\nnow also reads each ball face with `SphereFaceTrim`.\n2. `find_splits_on_circle` read a reversed boundary arc from its start\nto its end, which is the rest of its circle. A section end on the rim's\nother half split the arc. A reversed arc on any face but a NURBS face\nnow reads along its own span.\n3. Phase FF ends a section's window at a boundary crossing within one\nsample step. It also took the crossing of the first rod's seam. The\nsection between the two rod walls then lost its piece from the cap rims\nto that seam. A face lies on both sides of its seam, so the registry no\nlonger keeps a seam's crossing.\n4. The whole section crosses the first rod's seam. The face splitter\nsplit a section at a seam only on a cone and for a chain that winds the\nsurface. It now also does so on a cylinder, and each piece gets its own\npcurve.\n5. The face splitter read the loops of the ball faces as holes, as in\n#2526.\n6. The same filter as in 1 bounded each face by eight samples of each\nboundary edge. The samples of a rod's cap rim missed the rim's lowest\npoint, so the filter dropped the ball's arc along it. That arc then came\nonly from the rod's wall, which touches the ball along the circle and\ngave no section in some poses. Circle and ellipse edges now bound the\nbox by their exact arcs.\n\n**Poles of a ball.** The caps of two rods in the ball's equator plane\nmeet at its poles. A rod in that plane has a cap through both poles. At\na pole every `u` names one point, and the traces could not follow a wire\nor a section through it.\n\nNow the face splitter moves the chart of a ball face whose edges come\nwithin 0.1 radians of a pole. The new chart's poles lie off the face and\nclear of its edges. A face whose outline is all chords keeps its chart.\nThe boundary pcurves of a ball face run along each arc's own span,\nbecause two arcs of a great circle join antipodal points. They also run\nonto the edge's ends in `(u, v)`.\n\n**The boolean's strict gate.** The gate only logged the findings of\n`validate_solid`. A cut whose result had a hole outside its face's\noutline returned that solid (#2604). The gate now reads each face's\nholes with the new `check_face_holes_placed` in `brepkit-check`. A hole\noutside its face's outline or inside another hole sends the boolean to\nits fallback. Holes that cross go through, because the fuse of two equal\ncylinders at right angles leaves two crossing ellipses on each wall.\n\n#2603 lists a fault on `main` that this branch does not fix.\n\n## Tests\n\n- `a_second_ball_across_a_flat_ring_fuses_onto_it` in\n`crates/operations/tests/balls_on_a_flat_ring.rs` fuses the ring with\ntwo balls in four poses. Each fuse declines the mesh fallback. Each\nresult must be valid and have 4 cylinders, 4 planes and 4 sphere faces,\nwith each edge on two faces and a closed mesh. The volume must agree\nwith the ring and the two balls less their shared slices to 1e-5. Eleven\npoints must classify on the right side.\n- `two_rods_ending_at_one_balls_centre_fuse_onto_it` in\n`crates/operations/tests/rod_ending_in_a_ball.rs` fuses two rods and a\nball in eight poses, at the origin and away from it. It also mirrors\nseven of them in `y`. The poses include the issue's repro, a wire\nguard's rib that steps down, rods built from their far ends, and caps\nthrough the poles. Each result must be valid and exact, with 2\ncylinders, 2 planes, a sphere face, and each edge on two faces. Its mesh\nmust have no open edge, and seven points must classify on the right\nside.\n- The same test compares the volume to 1e-4 with the rods, less their\noverlap, and the wedge of the ball outside both. The overlap sums the\nexact lengths where lines along one rod pass through the other, over a\n2000 by 2000 polar grid. The wedge is (2/3)(pi - angle) r^3.\n- `crates/operations/tests/two_rods_at_a_turned_ball.rs` came from a\nreview. Its ball turns 1.56 to 1.58 radians about `x`, so its equator\nlies within 0.011 radians of the second rod's cap. The fuse must stay\nexact turned and mirrored, the result must mesh closed, and a bar cut\nthrough it must stay valid.\n- `the_strict_gate_rejects_a_hole_outside_its_face` puts a hole outside\na cube's top face. The strict gate must refuse it.\n- `only_a_misplaced_hole_reads_as_out_of_place` in\n`crates/check/src/validate/face_wires.rs`: two holes that cross do not\nread as out of place, and a hole outside the outline or inside another\nhole does.\n- The other tests in the two first files now decline the mesh fallback\non each fuse. The global fallback counter they read counts the fuses of\nevery test that runs at the same time in that binary.\n- `cargo nextest run --cargo-profile ci` for `brepkit-algo`,\n`brepkit-io`, `brepkit-operations`, `brepkit-wasm`, `brepkit-check` and\n`brepkit-heal`: 3899 passed, 22 skipped.\n- `cargo test -p brepkit-wasm --lib gridfinity`: 27 passed.\n- `pose_sweep` (495 lines) and `truth_audit` (40 lines) give the same\noutput on `main` at `6b6fe1d8b` and on this branch.\n- The seeded random boolean sweep runs 750 cases over seeds 1 to 4.\nAgainst `main` at `3c8d1104a`, no case gets worse. Ten more cases are\nexact and valid, with a closed mesh and a volume within 2e-4: 499\nagainst 489.\n\n## The playground examples of #2502\n\nI copied the wire joints of two examples into native code, with the\nparts that brepjs builds. I fused each with `fuse_all`:\n\n- One rib leg of `fan-guard` and its mirror image fuse without a mesh\nfallback, and each result is valid. A leg has three rods, two balls and\nthe eye's torus. I did not build the rest of that example.\n- Seven of the nine cable cores of `wall-mount-flanged-junction-box`\nfuse without a mesh fallback, and each result is valid. The other two\nfall back (#2577).\n\n#2578 lists 23 poses of two rods at one ball that still fall back. The\nrib's first ball, mirrored, falls back too, so the test leaves that one\npose out of its mirrored set.",
+          "timestamp": "2026-11-17T10:05:18Z",
+          "tree_id": "d4f7110114e85454477b1af4a8a21bb042b45b15",
+          "url": "https://github.com/andymai/brepkit/commit/b3188d0d86b5da8219747b71df127c7aa24baa01"
+        },
+        "date": 1794910220012,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1130425,
+            "range": "± 5739",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1185825,
+            "range": "± 3208",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13486,
+            "range": "± 271",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 720040,
+            "range": "± 4391",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25549579,
+            "range": "± 141795",
             "unit": "ns/iter"
           }
         ]
