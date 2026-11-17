@@ -2706,6 +2706,53 @@ fn start_outside_windows(
     })
 }
 
+/// How far a sample of a fitted plane x torus section can lie from the true
+/// section: its distances from the torus and the plane bound its error
+/// along the two surfaces' normals, and across the section that error grows
+/// as the angle between the normals closes (a plane near a tangent to the
+/// tube), so their sum is divided by the sine of that angle, held to at
+/// least 1e-3. The torus distance is to the nearer of the two tube circles
+/// in the sample's plane through the axis: on a spindle torus, the tube
+/// centred across the axis carries the sheet there. The plane's normal need
+/// not be a unit vector.
+fn section_sample_error(
+    torus: &brepkit_math::surfaces::ToroidalSurface,
+    (plane_n, plane_d): (Vec3, f64),
+    q: Point3,
+) -> f64 {
+    let scale = plane_n.length();
+    if scale <= 0.0 {
+        return f64::INFINITY;
+    }
+    let normal = plane_n * (1.0 / scale);
+    let off_plane = (normal.dot(Vec3::new(q.x(), q.y(), q.z())) - plane_d / scale).abs();
+    let w = q - torus.center();
+    let h = torus.z_axis().dot(w);
+    let radial = w - torus.z_axis() * h;
+    let rho = radial.length();
+    let outward = if rho > 0.0 {
+        radial * (1.0 / rho)
+    } else {
+        torus.x_axis()
+    };
+    let (to_q, off_torus) = [1.0, -1.0]
+        .into_iter()
+        .map(|side| {
+            let to_q = q - (torus.center() + outward * (side * torus.major_radius()));
+            let off = (to_q.length() - torus.minor_radius()).abs();
+            (to_q, off)
+        })
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .unwrap_or((Vec3::new(0.0, 0.0, 0.0), f64::INFINITY));
+    let off_tube = to_q.length();
+    let sine = if off_tube > 0.0 {
+        (to_q * (1.0 / off_tube)).cross(normal).length()
+    } else {
+        0.0
+    };
+    (off_torus + off_plane) / sine.max(1e-3)
+}
+
 /// Trim a plane×torus oval to its EXACT in-box arc at the box-edge∩torus
 /// crossings (the analogue of box∩sphere's `emit_split_circle_arcs`, for a
 /// marched torus oval instead of a `Circle`).
@@ -2776,38 +2823,17 @@ fn trim_torus_oval_to_box_face(
     // plane's section only: another loop can run closer than any fixed band
     // (a thin tube's two loops through its centre, a tube's diameter apart).
     // So a crossing belongs to this loop when it lies on it: on a conic to
-    // rounding, and on a fitted loop within the loop's own error. A sample's
-    // distances from the torus and the plane bound its error along the two
-    // surfaces' normals. Across the section that error grows as the angle
-    // between the normals closes (a plane near a tangent to the tube), so
-    // each sample's distances are divided by the sine of that angle, held
-    // to at least 1e-3.
-    let section_error = |q: Point3| -> f64 {
-        let w = q - torus.center();
-        let h = torus.z_axis().dot(w);
-        let radial = w - torus.z_axis() * h;
-        let rho = radial.length();
-        let off_plane = (plane_n.dot(Vec3::new(q.x(), q.y(), q.z())) - plane_d).abs();
-        let tube_centre = if rho > 0.0 {
-            torus.center() + radial * (torus.major_radius() / rho)
-        } else {
-            torus.center()
-        };
-        let to_q = q - tube_centre;
-        let off_tube = to_q.length();
-        let off_torus = (off_tube - torus.minor_radius()).abs();
-        let sine = if off_tube > 0.0 {
-            (to_q * (1.0 / off_tube)).cross(plane_n).length() / plane_n.length()
-        } else {
-            0.0
-        };
-        (off_torus + off_plane) / sine.max(1e-3)
-    };
+    // rounding, and on a fitted loop within the loop's own error
+    // (`section_sample_error` at its samples).
     let fit = match &raw.curve {
         EdgeCurve::NurbsCurve(_) => (0..=256)
             .map(|i| {
                 let t = (raw.t_range.1 - raw.t_range.0).madd(f64::from(i) / 256.0, raw.t_range.0);
-                section_error(raw.curve.evaluate_with_endpoints(t, raw.p_start, raw.p_end))
+                section_sample_error(
+                    torus,
+                    (plane_n, plane_d),
+                    raw.curve.evaluate_with_endpoints(t, raw.p_start, raw.p_end),
+                )
             })
             .fold(0.0, f64::max),
         EdgeCurve::Line | EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => 0.0,
@@ -9451,6 +9477,49 @@ fn piece_side(
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::*;
+
+    /// A point on a torus and a plane lies on their section: its error is
+    /// rounding, on a spindle torus's sheet across the axis as on a ring's
+    /// tube.
+    #[test]
+    fn a_point_of_the_section_has_no_error_on_either_sheet() {
+        use brepkit_math::surfaces::ToroidalSurface;
+        for (major, minor) in [(4.0, 1.5), (1.0, 2.0), (0.1, 2.45)] {
+            let torus = ToroidalSurface::new(Point3::new(0.3, -0.2, 0.5), major, minor).unwrap();
+            for i in 0..12 {
+                for j in 0..12 {
+                    let (u, v) = (0.5 + f64::from(i) * 0.5, 0.25 + f64::from(j) * 0.5);
+                    let q = torus.evaluate(u, v);
+                    // A plane through the point, across the surface there.
+                    let normal = Vec3::new(0.6, 0.0, 0.8);
+                    let d = normal.dot(Vec3::new(q.x(), q.y(), q.z()));
+                    let error = section_sample_error(&torus, (normal, d), q);
+                    assert!(
+                        error < 1e-9,
+                        "torus ({major}, {minor}) at ({u}, {v}): error {error}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// A plane's equation need not have a unit normal: the same plane
+    /// written at twice the scale gives the same error.
+    #[test]
+    fn a_scaled_plane_equation_gives_the_same_error() {
+        use brepkit_math::surfaces::ToroidalSurface;
+        let torus = ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), 4.0, 1.5).unwrap();
+        // A point on the torus, 0.25 above the plane z = 0.5.
+        let q = torus.evaluate(0.7, 0.5);
+        let level = q.z() - 0.25;
+        let unit = section_sample_error(&torus, (Vec3::new(0.0, 0.0, 1.0), level), q);
+        let scaled = section_sample_error(&torus, (Vec3::new(0.0, 0.0, 2.0), 2.0 * level), q);
+        assert!(unit > 0.0);
+        assert!(
+            (scaled - unit).abs() <= 1e-12 * unit,
+            "unit {unit}, scaled {scaled}"
+        );
+    }
 
     /// A cone about z with half-angle π/6 from its radial plane, stored over
     /// its generator from 18 to 22, meets the flat NURBS rectangle x = 16 to

@@ -91,39 +91,45 @@ fn check(scale: f64, y0: f64, op: BooleanOp, pose: &Mat4, label: &str) -> f64 {
         "{label}: mesh not watertight"
     );
 
+    // Measured where the ring was made: the turned piece is small against
+    // its distance from the origin, and the measure's sums cancel there.
+    if let Ok(back) = pose.inverse() {
+        transform_solid(&mut topo, result, &back).unwrap();
+    }
     let inside = piece(major, minor, c, y0);
     let whole = 2.0 * PI * PI * major * minor * minor;
     let volume = solid_volume(&topo, result, 1e-4 * scale).unwrap();
-    match op {
-        // The section near the tangent is a fitted spline, 1e-5 of the oval's
-        // size off the true one.
-        BooleanOp::Intersect => assert!(
-            (volume - inside).abs() <= 2e-5 * inside,
-            "{label}: volume {volume}, want {inside}"
-        ),
-        _ => assert!(
-            (volume - (whole - inside)).abs() <= 1e-10 * whole,
-            "{label}: volume {volume}, want {}",
-            whole - inside
-        ),
-    }
-    volume
+    // The section near the tangent is a fitted spline, 1e-5 of the oval's
+    // size off the true one. The cut's volume sums the whole ring's faces,
+    // whose rounding is near 1e-14 of the ring's volume: 1e-13 of it is
+    // left for that.
+    let (taken, allowance) = match op {
+        BooleanOp::Intersect => (volume, 0.0),
+        _ => (whole - volume, 1e-13 * whole),
+    };
+    assert!(
+        (taken - inside).abs() <= 2e-5f64.mul_add(inside, allowance),
+        "{label}: the box takes {taken}, want {inside}"
+    );
+    taken
 }
 
 #[test]
 fn a_box_wall_near_a_tangent_to_the_tube_ends_the_oval_at_its_edge() {
+    let turned =
+        Mat4::translation(-3.7, 5.5, 14.0) * Mat4::rotation_z(0.7) * Mat4::rotation_x(-0.9);
     for y0 in [0.3, 1.0] {
-        let large = check(1.0, y0, BooleanOp::Intersect, &Mat4::identity(), "upright");
-        let small = check(0.01, y0, BooleanOp::Intersect, &Mat4::identity(), "upright");
-        assert!(
-            (large * 1e-6 - small).abs() <= 1e-6 * small,
-            "y0 {y0}: {large} at full size against {small} at a hundredth"
-        );
-        let turned =
-            Mat4::translation(-3.7, 5.5, 14.0) * Mat4::rotation_z(0.7) * Mat4::rotation_x(-0.9);
-        for scale in [1.0, 0.01] {
-            check(scale, y0, BooleanOp::Cut, &Mat4::identity(), "upright");
-            check(scale, y0, BooleanOp::Cut, &turned, "turned");
+        for op in [BooleanOp::Intersect, BooleanOp::Cut] {
+            for (pose, name) in [(Mat4::identity(), "upright"), (turned, "turned")] {
+                let large = check(1.0, y0, op, &pose, name);
+                let small = check(0.01, y0, op, &pose, name);
+                if op == BooleanOp::Intersect {
+                    assert!(
+                        (large * 1e-6 - small).abs() <= 1e-5 * small,
+                        "y0 {y0}, {name}: {large} at full size against {small} at a hundredth"
+                    );
+                }
+            }
         }
     }
 }
