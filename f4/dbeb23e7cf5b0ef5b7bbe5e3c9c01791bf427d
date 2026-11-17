@@ -1,0 +1,19 @@
+crates/operations/tests/fillet_mixed_radius_corner.rs
+  s_489e8e320eebde::t_dd5b21ccc0e39b 314-317
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f4dbeb23e7cf5b0ef5b7bbe5e3c9c01791bf427d",
+  "prompts": {},
+  "sessions": {
+    "s_489e8e320eebde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1a2a9261-2019-4199-aa4f-06130071c8f0",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
