@@ -718,6 +718,66 @@ fn refused(
     format!("{:?}", failure.1)
 }
 
+/// A cylinder (3, 4) or a frustum (3 to 1, 4 high) whose wall is put in its
+/// B-spline form, which closes round on itself, placed by `pose`, and its
+/// bottom or top rim.
+fn b_spline_walled(
+    topo: &mut Topology,
+    frustum: bool,
+    top: bool,
+    pose: &Mat4,
+) -> (SolidId, EdgeId) {
+    let solid = if frustum {
+        make_cone(topo, 3.0, 1.0, 4.0).unwrap()
+    } else {
+        make_cylinder(topo, 3.0, 4.0).unwrap()
+    };
+    let height = if top { 4.0 } else { 0.0 };
+    let rim = solid_edges(topo, solid)
+        .unwrap()
+        .into_iter()
+        .find(|&e| {
+            matches!(topo.edge(e).unwrap().curve(),
+                EdgeCurve::Circle(c) if (c.center().z() - height).abs() < 1e-9)
+        })
+        .unwrap();
+    for face in solid_faces(topo, solid).unwrap() {
+        if topo.face(face).unwrap().surface().is_planar() {
+            continue;
+        }
+        let wall = brepkit_heal::custom::convert_to_bspline::face_bspline_surface(topo, face)
+            .unwrap()
+            .unwrap();
+        topo.face_mut(face)
+            .unwrap()
+            .set_surface(FaceSurface::Nurbs(wall));
+    }
+    transform_solid(topo, solid, pose).unwrap();
+    (solid, rim)
+}
+
+/// The walking chamfer does not trim a B-spline face that closes round on
+/// itself: a rim on one is refused, and the solid comes back as it was.
+#[test]
+fn a_rim_on_a_closed_b_spline_wall_is_refused() {
+    for (frustum, top) in [(false, false), (false, true), (true, false)] {
+        for (name, pose) in poses() {
+            let what = format!("frustum {frustum} top {top} {name}");
+            let mut topo = Topology::new();
+            let (solid, rim) = b_spline_walled(&mut topo, frustum, top, &pose);
+            let before = solid_volume(&topo, solid, 0.001).unwrap();
+            let mut builder = ChamferBuilder::new(&mut topo, solid);
+            builder.add_edges_asymmetric(&[rim], 0.4, 0.25);
+            let built = builder.build().unwrap();
+            let why = refused(&topo, solid, &built, rim, before, &what);
+            assert!(why.starts_with("UnsupportedSurface"), "{what}: {why}");
+            let built = chamfer_v2(&mut topo, solid, &[rim], 0.4, 0.25).unwrap();
+            let why = refused(&topo, solid, &built, rim, before, &what);
+            assert!(why.starts_with("UnsupportedSurface"), "{what}: {why}");
+        }
+    }
+}
+
 /// The common part of two cylinders of radius 2 and height 4 whose axes lie
 /// 3 apart, and its two ridges, one stored up and one down.
 fn lens(topo: &mut Topology) -> (SolidId, Vec<EdgeId>) {

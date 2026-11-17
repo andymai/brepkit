@@ -1621,6 +1621,20 @@ fn compute_chamfer_stripe(
 
     let surf1 = topo.face(face1)?.surface().clone();
     let surf2 = topo.face(face2)?.surface().clone();
+    // Across the seam of a B-spline face that closes round on itself, the
+    // contact's pcurve leaves the knot domain, and the trimmed face's mesh
+    // and measure come out wrong as well.
+    for (face, surface) in [(face1, &surf1), (face2, &surf2)] {
+        if let FaceSurface::Nurbs(nurbs) = surface
+            && (nurbs.is_periodic_u() || nurbs.is_periodic_v())
+        {
+            return Err(BlendError::UnsupportedSurface {
+                face,
+                surface_tag: "a B-spline face that closes round on itself".to_owned(),
+            });
+        }
+    }
+
     let spine = Spine::from_single_edge(topo, edge_id)?;
 
     if let Some(result) =
