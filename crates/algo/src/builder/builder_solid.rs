@@ -197,7 +197,6 @@ fn settle_faces(
     sources: &mut Vec<Option<FaceId>>,
     walls: Option<&HashSet<FaceId>>,
 ) -> Result<(), AlgoError> {
-    separate_arcs_sharing_ends(topo, face_ids, sources)?;
     unify_boundaries(topo, face_ids, sources)?;
 
     // Step 0b2: Drop doubled faces — two (or more) selected faces whose outer
@@ -223,7 +222,8 @@ fn settle_faces(
     Ok(())
 }
 
-/// Bring the selected faces to one set of edges: weld what the pave filler
+/// Bring the selected faces to one set of edges: drop degenerate slivers,
+/// separate two paths between one pair of points, weld what the pave filler
 /// left apart and split each edge where a neighbour does, then merge, so faces
 /// meeting along a boundary reference the same edge entity.
 fn unify_boundaries(
@@ -251,6 +251,11 @@ fn unify_boundaries(
     // slivers removed above, so they would survive as free edges).
     remove_zero_length_edges(topo, face_ids)?;
 
+    // The separation reads the classes the weld below joins vertices into,
+    // from the vertices the cleanup above leaves.
+    let mut welds = Welds::of(topo, face_ids)?;
+    separate_arcs_sharing_ends(topo, face_ids, sources, &welds)?;
+
     // Step 0a-pre3: Weld vertices that are coincident within snap tolerance.
     // Intersection in the pavefiller can place a vertex a few ULPs short of an
     // exact pre-existing vertex (e.g. a coincident-arc tangent point landing at
@@ -259,7 +264,7 @@ fn unify_boundaries(
     // the two faces' partitions and the shared boundary stays open. Snapping
     // them to one canonical vertex (and dropping the resulting zero-length
     // slivers) lets the merge below see identical partitions.
-    weld_coincident_vertices(topo, face_ids)?;
+    weld_coincident_vertices(topo, face_ids, &mut welds)?;
 
     // Step 0a: Split Line edges at intermediate collinear vertices.
     // Adjacent faces can partition the same geometric boundary differently
@@ -2977,84 +2982,103 @@ fn is_degenerate_line_sliver(topo: &Topology, fid: FaceId) -> bool {
     true
 }
 
-/// The vertex [`weld_coincident_vertices`] welds each vertex of the faces
-/// onto, for each vertex it moves.
-fn weld_classes(
-    topo: &Topology,
-    face_ids: &[FaceId],
-) -> Result<
-    HashMap<brepkit_topology::vertex::VertexId, brepkit_topology::vertex::VertexId>,
-    AlgoError,
-> {
-    use brepkit_topology::vertex::VertexId;
+/// The vertex each vertex of the faces welds onto: the lowest-index vertex
+/// read before it within `100 * MERGE_TOL`, among those that weld onto no
+/// other. One map serves the separation of paths and the weld, so the two
+/// read the same classes: vertices read later, such as the middles the
+/// separation adds, join it without moving the vertices read before them.
+#[derive(Default)]
+struct Welds {
+    /// Each vertex that moves, with the vertex it moves onto.
+    onto: HashMap<brepkit_topology::vertex::VertexId, brepkit_topology::vertex::VertexId>,
+    /// Every vertex read.
+    seen: HashSet<brepkit_topology::vertex::VertexId>,
+    /// The vertices that stay, by the cell of a hash at the weld's reach.
+    kept: HashMap<(i64, i64, i64), Vec<(brepkit_topology::vertex::VertexId, Point3)>>,
+}
 
-    let snap = MERGE_TOL * 100.0;
-
-    // Collect distinct vertices (id + position) referenced by the faces.
-    let mut seen: HashSet<VertexId> = HashSet::new();
-    let mut verts: Vec<(VertexId, Point3)> = Vec::new();
-    for &fid in face_ids {
-        let face = topo.face(fid)?;
-        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
-            for oe in topo.wire(wid)?.edges() {
-                let edge = topo.edge(oe.edge())?;
-                for vid in [edge.start(), edge.end()] {
-                    if seen.insert(vid) {
-                        verts.push((vid, topo.vertex(vid)?.point()));
-                    }
-                }
-            }
-        }
+impl Welds {
+    /// The welds of the vertices of `face_ids`.
+    fn of(topo: &Topology, face_ids: &[FaceId]) -> Result<Self, AlgoError> {
+        let mut welds = Self::default();
+        welds.read(topo, face_ids)?;
+        Ok(welds)
     }
-    // Deterministic clustering order.
-    verts.sort_by_key(|(vid, _)| vid.index());
 
-    // Coarse spatial hash at snap resolution maps a cell to canonical
-    // vertices already chosen there; a candidate only needs to probe its own
-    // and the 26 neighbouring cells to find a canonical within `snap`.
-    let cell = |p: Point3| -> (i64, i64, i64) {
-        let s = 1.0 / snap;
-        (
-            (p.x() * s).floor() as i64,
-            (p.y() * s).floor() as i64,
-            (p.z() * s).floor() as i64,
-        )
-    };
-    let mut buckets: HashMap<(i64, i64, i64), Vec<(VertexId, Point3)>> = HashMap::new();
-    let mut weld: HashMap<VertexId, VertexId> = HashMap::new();
-    for &(vid, p) in &verts {
-        let c = cell(p);
-        // Pick the lowest-index canonical within `snap` across the 27 cells,
-        // not merely the first one probed, so the choice is independent of cell
-        // iteration order. Canonicals are added in `VertexId` order, so any
-        // match already has a lower index than `vid`.
-        let mut canonical: Option<VertexId> = None;
-        for dz in -1..=1 {
-            for dy in -1..=1 {
-                for dx in -1..=1 {
-                    let nc = (c.0 + dx, c.1 + dy, c.2 + dz);
-                    if let Some(list) = buckets.get(&nc) {
-                        for &(cid, cp) in list {
-                            if (cp - p).length() <= snap
-                                && canonical.is_none_or(|b| cid.index() < b.index())
-                            {
-                                canonical = Some(cid);
-                            }
+    /// The vertex `v` welds onto, or `v` itself.
+    fn class(&self, v: brepkit_topology::vertex::VertexId) -> brepkit_topology::vertex::VertexId {
+        self.onto.get(&v).copied().unwrap_or(v)
+    }
+
+    /// Read the vertices of `face_ids` not read yet, in `VertexId` order.
+    fn read(&mut self, topo: &Topology, face_ids: &[FaceId]) -> Result<(), AlgoError> {
+        use brepkit_topology::vertex::VertexId;
+
+        let snap = MERGE_TOL * 100.0;
+
+        // Collect distinct vertices (id + position) referenced by the faces.
+        let mut verts: Vec<(VertexId, Point3)> = Vec::new();
+        for &fid in face_ids {
+            let face = topo.face(fid)?;
+            for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied())
+            {
+                for oe in topo.wire(wid)?.edges() {
+                    let edge = topo.edge(oe.edge())?;
+                    for vid in [edge.start(), edge.end()] {
+                        if self.seen.insert(vid) {
+                            verts.push((vid, topo.vertex(vid)?.point()));
                         }
                     }
                 }
             }
         }
-        match canonical {
-            Some(cid) => {
-                weld.insert(vid, cid);
+        // Deterministic clustering order.
+        verts.sort_by_key(|(vid, _)| vid.index());
+
+        // Coarse spatial hash at snap resolution maps a cell to canonical
+        // vertices already chosen there; a candidate only needs to probe its own
+        // and the 26 neighbouring cells to find a canonical within `snap`.
+        let cell = |p: Point3| -> (i64, i64, i64) {
+            let s = 1.0 / snap;
+            (
+                (p.x() * s).floor() as i64,
+                (p.y() * s).floor() as i64,
+                (p.z() * s).floor() as i64,
+            )
+        };
+        for &(vid, p) in &verts {
+            let c = cell(p);
+            // Pick the lowest-index canonical within `snap` across the 27
+            // cells, not merely the first one probed, so the choice is
+            // independent of cell iteration order.
+            let mut canonical: Option<VertexId> = None;
+            for dz in -1..=1 {
+                for dy in -1..=1 {
+                    for dx in -1..=1 {
+                        let nc = (c.0 + dx, c.1 + dy, c.2 + dz);
+                        if let Some(list) = self.kept.get(&nc) {
+                            for &(cid, cp) in list {
+                                if (cp - p).length() <= snap
+                                    && canonical.is_none_or(|b| cid.index() < b.index())
+                                {
+                                    canonical = Some(cid);
+                                }
+                            }
+                        }
+                    }
+                }
             }
-            None => {
-                buckets.entry(c).or_default().push((vid, p));
+            match canonical {
+                Some(cid) => {
+                    self.onto.insert(vid, cid);
+                }
+                None => {
+                    self.kept.entry(c).or_default().push((vid, p));
+                }
             }
         }
+        Ok(())
     }
-    Ok(weld)
 }
 
 /// Weld vertices on the selected faces that are coincident within the snap
@@ -3072,15 +3096,20 @@ fn weld_classes(
 /// in `VertexId` order and each non-canonical vertex maps to the lowest-index
 /// canonical vertex within `snap`. The pass is O(V log V) and runs on every
 /// `build_solid`, but returns early without rebuilding when nothing welds.
-fn weld_coincident_vertices(topo: &mut Topology, face_ids: &mut [FaceId]) -> Result<(), AlgoError> {
+fn weld_coincident_vertices(
+    topo: &mut Topology,
+    face_ids: &mut [FaceId],
+    welds: &mut Welds,
+) -> Result<(), AlgoError> {
     use brepkit_topology::edge::{Edge, EdgeCurve, EdgeId};
     use brepkit_topology::vertex::VertexId;
 
-    let weld = weld_classes(topo, face_ids)?;
+    welds.read(topo, face_ids)?;
+    let weld = &welds.onto;
     if weld.is_empty() {
         return Ok(());
     }
-    let resolve = |vid: VertexId| -> VertexId { weld.get(&vid).copied().unwrap_or(vid) };
+    let resolve = |vid: VertexId| -> VertexId { welds.class(vid) };
 
     // Cache rewritten edges so a shared EdgeId is rebuilt once and stays shared.
     let mut edge_remap: HashMap<EdgeId, Option<EdgeId>> = HashMap::new();
@@ -3696,14 +3725,14 @@ fn separate_arcs_sharing_ends(
     topo: &mut Topology,
     face_ids: &mut Vec<FaceId>,
     sources: &mut Vec<Option<FaceId>>,
+    welds: &Welds,
 ) -> Result<(), AlgoError> {
     use brepkit_topology::edge::{Edge, EdgeCurve};
     use brepkit_topology::vertex::Vertex;
 
     // Edges are grouped by the vertices the weld in `unify_boundaries` joins
     // their ends to, so two paths whose ends lie a weld apart meet here too.
-    let weld = weld_classes(topo, face_ids)?;
-    let class = |v: brepkit_topology::vertex::VertexId| weld.get(&v).copied().unwrap_or(v).index();
+    let class = |v: brepkit_topology::vertex::VertexId| welds.class(v).index();
     let mut seen: HashSet<EdgeId> = HashSet::new();
     let mut groups: BTreeMap<(usize, usize), Vec<EdgeId>> = BTreeMap::new();
     // A ball's equator is chords standing for arcs of its circle, which the
@@ -5556,8 +5585,6 @@ mod tests {
             face(&mut topo, wave(4e-4), false, shift),
         ];
         let mut sources = vec![None, None];
-        let mut unsourced = vec![None; face_ids.len()];
-        separate_arcs_sharing_ends(&mut topo, &mut face_ids, &mut unsourced).unwrap();
         unify_boundaries(&mut topo, &mut face_ids, &mut sources).unwrap();
 
         let mut uses: HashMap<EdgeId, usize> = HashMap::new();
@@ -5963,6 +5990,56 @@ mod tests {
         assert!(lies_on_seam_of(&topo, source, long).unwrap());
     }
 
+    /// The chord and spline faces of the test above, the second face's ends
+    /// 9e-6 along from the first's, beside a sliver whose vertex lies 9e-6
+    /// before the first face's start and comes first. With the sliver, the
+    /// two starts weld to different vertices; once the sliver goes, they weld
+    /// together. The paths are still separated, so every edge has two uses.
+    #[test]
+    fn a_dropped_sliver_parts_no_paths_the_weld_joins() {
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::vertex::Vertex;
+
+        let wave = |lift: f64| {
+            let pts: Vec<Point3> = (0..=40)
+                .map(|i| {
+                    let t = f64::from(i) / 40.0;
+                    let w = t.madd(2.0, -1.0);
+                    Point3::new(t, t * (1.0 - t) * w.madd(w, 4.0 * lift), 0.0)
+                })
+                .collect();
+            EdgeCurve::NurbsCurve(brepkit_math::nurbs::fitting::interpolate(&pts, 3).unwrap())
+        };
+        let plane = FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: 0.0,
+        };
+        let mut topo = Topology::new();
+        let lone = topo.add_vertex(Vertex::new(Point3::new(0.0, 0.0, 0.0), 1e-7));
+        let far = topo.add_vertex(Vertex::new(Point3::new(0.0, -5.0, 0.0), 1e-7));
+        let out = topo.add_edge(Edge::new(lone, far, EdgeCurve::Line));
+        let sliver = face_of(&mut topo, &[(out, true), (out, false)], plane.clone());
+        let mut face = |along: f64, lift: f64, spline_first: bool| {
+            let a = topo.add_vertex(Vertex::new(Point3::new(along, 0.0, 0.0), 1e-7));
+            let b = topo.add_vertex(Vertex::new(Point3::new(1.0 + along, 0.0, 0.0), 1e-7));
+            let spline = topo.add_edge(Edge::new(a, b, wave(lift)));
+            let chord = topo.add_edge(Edge::new(a, b, EdgeCurve::Line));
+            face_of(
+                &mut topo,
+                &[(spline, spline_first), (chord, !spline_first)],
+                plane.clone(),
+            )
+        };
+        let first = face(9e-6, 0.0, true);
+        let second = face(18e-6, 4e-4, false);
+        let mut face_ids = vec![sliver, first, second];
+        let mut sources = vec![None; face_ids.len()];
+        settle_faces(&mut topo, &mut face_ids, &mut sources, None).unwrap();
+        assert_eq!(face_ids.len(), 2, "the sliver goes");
+        let uses = edge_use_counts(&topo, &face_ids);
+        assert!(uses.values().all(|&n| n == 2), "{uses:?}");
+    }
+
     /// Three arches between one pair of points, each bounding a face of its
     /// own, part by 0.0075 from each neighbour and by 0.015 across the two
     /// outer ones, over the 0.01 two fits of one path may part. The outer two
@@ -5990,7 +6067,6 @@ mod tests {
             })
             .collect();
         let mut sources = vec![None; face_ids.len()];
-        separate_arcs_sharing_ends(&mut topo, &mut face_ids, &mut sources).unwrap();
         unify_boundaries(&mut topo, &mut face_ids, &mut sources).unwrap();
         let edges = |fid: FaceId| -> HashSet<EdgeId> {
             face_edge_uses(&topo, fid)
@@ -6047,8 +6123,6 @@ mod tests {
                 face_ids.insert(0, lens);
             }
             let mut sources = vec![None; face_ids.len()];
-            let mut unsourced = vec![None; face_ids.len()];
-            separate_arcs_sharing_ends(&mut topo, &mut face_ids, &mut unsourced).unwrap();
             unify_boundaries(&mut topo, &mut face_ids, &mut sources).unwrap();
             let lens = face_ids[if beside_first { 3 } else { 0 }];
             let mut uses: HashMap<EdgeId, usize> = HashMap::new();
@@ -6118,8 +6192,6 @@ mod tests {
             };
             let mut face_ids = vec![face(true), face(false)];
             let mut sources = vec![None, None];
-            let mut unsourced = vec![None; face_ids.len()];
-            separate_arcs_sharing_ends(&mut topo, &mut face_ids, &mut unsourced).unwrap();
             unify_boundaries(&mut topo, &mut face_ids, &mut sources).unwrap();
             let mut uses: HashMap<EdgeId, usize> = HashMap::new();
             for &fid in &face_ids {
@@ -6184,8 +6256,6 @@ mod tests {
             face(&mut topo, circle(), plane.clone()),
         ];
         let mut sources = vec![None, None];
-        let mut unsourced = vec![None; face_ids.len()];
-        separate_arcs_sharing_ends(&mut topo, &mut face_ids, &mut unsourced).unwrap();
         unify_boundaries(&mut topo, &mut face_ids, &mut sources).unwrap();
         let mut uses: HashMap<EdgeId, usize> = HashMap::new();
         for &fid in &face_ids {
@@ -6233,7 +6303,8 @@ mod tests {
             face(&mut topo, EdgeCurve::Line, ball),
         ];
         let mut unsourced = vec![None; face_ids.len()];
-        separate_arcs_sharing_ends(&mut topo, &mut face_ids, &mut unsourced).unwrap();
+        let welds = Welds::of(&topo, &face_ids).unwrap();
+        separate_arcs_sharing_ends(&mut topo, &mut face_ids, &mut unsourced, &welds).unwrap();
         for &fid in &face_ids {
             let uses = face_edge_uses(&topo, fid).unwrap();
             assert_eq!(uses.len(), 3, "the near edge whole and the rest in two");
