@@ -7194,7 +7194,16 @@ fn split_face_2d_impl(
                     }
                 }
             }
-            if matches!(surface, FaceSurface::Cylinder(_)) {
+            // A pointed cone's two seam copies meet at its apex, which a
+            // trace cut open along the seam cannot close across.
+            let frustum = match &surface {
+                FaceSurface::Cone(cone) => boundary_edges.iter().all(|e| {
+                    (e.start_3d - cone.apex()).length() > tol.linear
+                        && (e.end_3d - cone.apex()).length() > tol.linear
+                }),
+                _ => false,
+            };
+            if matches!(surface, FaceSurface::Cylinder(_)) || frustum {
                 walked_from_closed_rim = walk_boundary_from_closed_rim(&mut boundary_edges);
             }
         }
@@ -8003,7 +8012,7 @@ fn split_face_2d_impl(
             .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), u| {
                 (lo.min(u), hi.max(u))
             });
-        if matches!(surface, FaceSurface::Cylinder(_)) {
+        if matches!(surface, FaceSurface::Cylinder(_)) || walked_from_closed_rim {
             if walked_from_closed_rim && (hi - lo - u_period).abs() < 1e-6 {
                 for e in &mut all_edges[n_boundary_edges..] {
                     place_section_in_turn(e, &surface, lo, u_period);
