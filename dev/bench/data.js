@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794896670250,
+  "lastUpdate": 1794897636289,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -73385,6 +73385,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25554737,
             "range": "± 49680",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "d6ae204d4638a07037b3da4dda91122111474870",
+          "message": "fix(io): pair the triangles round a shared edge again after a turn (#2580)\n\n## Summary\n\n`import_mesh_parts` pairs the triangles round an edge of more than two\ntriangles by the winding of the mesh (#2505). When both ways to pair\nthem fit, each pair holds the material of the winding. Two cubes of edge\n10 that share an edge and are wound inward put the material round the\ncubes. On main the import pairs their triangles across the void and\njoins the cubes in one closed body. That body faces inward and lies in\nno body, so the import turns it into one solid that pinches at the edge\n(#2510).\n\nNow the import pairs the triangles round such an edge again after the\nturn. The two cubes come back as two valid solids of volume 1000, with\n16 vertices and 36 edges in all. The same cubes wound outward give the\nsame result.\n\n### Pairs after a turn\n\n- `assign_cavities` gives each inward closed body its fate (a cavity, a\nshell, or a turn) and changes no body.\n- `pair_after_turns` takes each edge whose triangles pair off, with all\nof its triangles in bodies that the import turns. It pairs them again,\nwith each triangle wound the other way. When the pairs change, the\ntriangles of those bodies make new bodies through the new pairs.\n- An edge with a triangle that the import does not turn keeps its pairs.\nThe two triangles of each of those pairs still run the edge in opposite\ndirections.\n- `place_bodies` runs the two in a loop. The new bodies keep the winding\nof the mesh, and the import places all the closed bodies again. It gives\nthe bodies their fates when no pair changes. An edge pairs off again\nonly once, so the loop ends.\n- A cube and a hook-shaped prism share an edge, and the arm of the hook\npasses through the cube. Wound inward, the two are now two shells, and\n`import_mesh` returns its error that they cross. The first placement\nsees one body there, and no crossing.\n- The rule that picks the bodies to turn does not change. Two inward\ncubes that share an edge, in an inward cube, are three solids: the\nimport turns all three. `import_mesh` then returns its error that a body\nlies in the material of another.\n\n### Bodies that touch along a line\n\nThe second commit changes the test for two closed bodies that cross. A\ntriangle of each body can have an edge on one line. There, the import\ntested each body against the plane of the triangle of the other. Two\nbodies that only touch along the line can pass that test. Now the two\nbodies cross at the line only when their triangles alternate round it:\n\n- The order comes from the angles round the line of each edge. The two\ntriangles cross there only when both orders say so, so the order of the\ntwo triangles does not change the answer.\n- A triangle in the plane of another triangle, on the far side of the\nline, takes part.\n- Take a triangle within twice the tolerance of the plane of a triangle\nof the other body, on the same side of the line. Then the two bodies\ntouch there: the other edge can be one tolerance off the line, so the\nside is not sure.\n- The other edge can be more than the tolerance off the line. Then the\ntwo edges have no line in common, and the plane test decides as before.\n\n- Three cubes of edge 10 share one edge, each turned by 120 degrees from\nthe one before. On main, `import_mesh` returns an error that the cubes\ncross. Now it returns one solid of volume 3000 in 3 pieces.\n- Two cubes on the z axis touch along half of an edge. The second is the\nfirst turned by 120 degrees and moved up by 5. On main, `import_mesh`\nreturns the same error, and `import_mesh_parts` returns 2 shells for the\ninward mesh. Now the results are one solid of volume 2000 and two\nsolids.\n- With the second cube turned by 45 degrees, the two cubes cross along\nhalf of the edge. `import_mesh` returns the error on main and on this\nbranch.\n\n### Not fixed\n\nTwo cubes that cross at a shared edge of the mesh come back as one solid\nthat is not valid. Main and this branch give the same result. I filed\n#2576, and added a row for it to the roadmap skill.\n\n## Tests\n\n- `crates/io/tests/mesh_import_bodies.rs` has 12 new tests. Nine fail on\nmain:\n- Two inward cubes that share an edge: 2 valid solids of volume 1000, 16\nvertices and 36 edges. With normals that point in: 2 valid solids of\nvolume 1000.\n- Two cubes that share an edge in four poses: upright, turned, mirrored,\nand turned and mirrored. A mirror winds the mesh inward.\n- Three cubes round one edge, wound outward and inward: 3 solids of\nvolume 1000.\n- A chain of three cubes that share edges, in each of the 8 windings: 3\nsolids of volume 1000.\n- Two inward cubes that share an edge in an inward cube (3 solids), and\nin the cavity of a cube (2 islands and the cube).\n- Two cubes that touch along half of an edge, wound outward and inward.\n  - The cube and the hook-shaped prism, wound outward and inward.\n- Three new tests pass on main and on this branch:\n  - Two inward cubes that touch at a corner.\n  - Two cubes that cross along half of an edge.\n- Two cubes that touch along half of an edge within the tolerance. The\nsecond cube turns 1e-9 short of 90 degrees, and its corners move in `x`\nby -2.5e-8 to -0.5e-8.\n- `crates/io/src/stl/import.rs` has 6 new unit tests of\n`triangles_cross`:\n- Triangles that alternate, with one in the plane of another. It fails\nat `9371f0fdf`.\n  - Triangles that do not alternate.\n- Triangles in one plane within the tolerance. It fails at `9371f0fdf`.\n  - Edges on two lines: the plane test decides.\n- Triangles beside an edge 0.9 of the tolerance off the line, and beside\nan edge that leans off it, in both orders. At `1e6aa1b56`, each finds a\ncrossing in one order and a contact in the other.\n- Each expected volume comes from the edges of the cubes, and the tests\ncompare it with `solid_volume`. The tests run `validate_solid` on each\nsolid, except for the cubes that cross.\n- At `9371f0fdf`, seven of the new tests fail with `pair_after_turns`\nturned off. With the test for crossings of main, two new tests fail.\nThey are three cubes round one edge, and two cubes that touch along half\nof an edge.\n- At `9371f0fdf`, the hook-shaped prism wound inward and the cubes that\ntouch within the tolerance fail.\n- `cargo nextest run --cargo-profile ci -p brepkit-io -p brepkit-wasm`\nat `1174b6a21` (with main merged): 846 passed and 6 skipped.\n- The pre-commit hook (fmt and clippy over the workspace) passes on each\ncommit.\n\nFixes #2510",
+          "timestamp": "2026-11-17T06:36:55Z",
+          "tree_id": "457086de70144c739782f200ea83ba65394ae489",
+          "url": "https://github.com/andymai/brepkit/commit/d6ae204d4638a07037b3da4dda91122111474870"
+        },
+        "date": 1794897623854,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 793085,
+            "range": "± 17003",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 875520,
+            "range": "± 20653",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 9636,
+            "range": "± 17",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 516630,
+            "range": "± 8645",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 18627913,
+            "range": "± 38203",
             "unit": "ns/iter"
           }
         ]
