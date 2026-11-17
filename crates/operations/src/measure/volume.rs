@@ -3292,8 +3292,9 @@ pub fn volume_from_direct_face_tessellation(
     deflection: f64,
 ) -> Result<f64, crate::OperationsError> {
     let about = sum_anchor(topo, solid);
-    let mut total: f64 = 0.0;
-    for fid in brepkit_topology::explorer::solid_faces(topo, solid)? {
+    // Each face's term is worked out on its own (on rayon's pool off wasm)
+    // and the terms are summed in the faces' order, as one loop would.
+    let face_term = |fid: FaceId| -> Result<f64, crate::OperationsError> {
         let face = topo.face(fid)?;
 
         // Use exact analytical volume for analytic surface faces. The
@@ -3310,8 +3311,7 @@ pub fn volume_from_direct_face_tessellation(
             if vol_trace_enabled() {
                 log::debug!("VOL_TRACE holed developable face {fid:?} -> {flux}");
             }
-            total += flux * 6.0;
-            continue;
+            return Ok(flux * 6.0);
         }
         match face.surface() {
             FaceSurface::Cylinder(_) => {
@@ -3319,12 +3319,10 @@ pub fn volume_from_direct_face_tessellation(
                 if vol_trace_enabled() {
                     log::debug!("VOL_TRACE direct cyl face {:?} -> {}", fid, v / 6.0);
                 }
-                total += v;
-                continue;
+                return Ok(v);
             }
             FaceSurface::Cone(_) => {
-                total += analytic_cone_signed_volume(topo, fid, about)? * 6.0;
-                continue;
+                return Ok(analytic_cone_signed_volume(topo, fid, about)? * 6.0);
             }
             FaceSurface::Sphere(_) => {
                 let flux = match sphere_patch_flux(topo, fid, about)? {
@@ -3333,18 +3331,15 @@ pub fn volume_from_direct_face_tessellation(
                 };
                 // Neither closed form fits: the face's own mesh below.
                 if let Some(flux) = flux {
-                    total += flux * 6.0;
-                    continue;
+                    return Ok(flux * 6.0);
                 }
             }
             FaceSurface::Torus(_) => {
-                total += analytic_torus_signed_volume(topo, fid, about)? * 6.0;
-                continue;
+                return Ok(analytic_torus_signed_volume(topo, fid, about)? * 6.0);
             }
             FaceSurface::Plane { .. } => {
                 if let Some(flux) = planar_face_flux(topo, fid, about)? {
-                    total += flux * 6.0;
-                    continue;
+                    return Ok(flux * 6.0);
                 }
             }
             FaceSurface::Nurbs(_) => {}
@@ -3374,7 +3369,20 @@ pub fn volume_from_direct_face_tessellation(
                 tri_count
             );
         }
-        total += face_total;
+        Ok(face_total)
+    };
+    let faces = brepkit_topology::explorer::solid_faces(topo, solid)?;
+    #[cfg(not(target_arch = "wasm32"))]
+    let terms: Vec<Result<f64, crate::OperationsError>> = {
+        use rayon::prelude::*;
+        faces.par_iter().map(|&fid| face_term(fid)).collect()
+    };
+    #[cfg(target_arch = "wasm32")]
+    let terms: Vec<Result<f64, crate::OperationsError>> =
+        faces.iter().map(|&fid| face_term(fid)).collect();
+    let mut total: f64 = 0.0;
+    for term in terms {
+        total += term?;
     }
 
     Ok((total / 6.0).abs())
