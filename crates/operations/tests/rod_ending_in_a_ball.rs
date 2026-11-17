@@ -172,24 +172,25 @@ fn two_rods_ending_at_one_balls_centre_fuse_onto_it() {
     // lies in a great circle of the ball.
     let length = 10.0;
     // The first rod lies along -x and the second at (yaw, pitch) from it,
-    // each built from the ball's centre, or from its far end where
-    // `from_far_end` (its end cap at the ball). With `swap` the second rod
-    // meets the ball first.
-    for (roll, yaw, pitch, swap, from_far_end) in [
-        (0.3, 2.2, 0.4, false, false),
-        (0.0, 2.2, 0.4, false, false),
-        (1.1, 1.3, -0.7, false, false),
+    // each built from the ball's centre, or from its far end where its flag
+    // is set (its end cap at the ball). With `swap` the second rod meets the
+    // ball first.
+    for (roll, yaw, pitch, swap, (first_far, second_far)) in [
+        (0.3, 2.2, 0.4, false, (false, false)),
+        (0.0, 2.2, 0.4, false, (false, false)),
+        (1.1, 1.3, -0.7, false, (false, false)),
         // A wire guard's rib stepping down: the caps meet on the equator.
-        (0.3, PI, 0.41, false, false),
-        (0.3, PI, -0.41, false, true),
+        (0.3, PI, 0.41, false, (false, false)),
+        (0.3, PI, -0.41, false, (true, false)),
+        (0.3, PI, 0.41, true, (false, true)),
         // Both axes in the equator's plane: the caps meet at the poles.
-        (0.3, 2.2, 0.0, false, false),
+        (0.3, 2.2, 0.0, false, (false, false)),
         // The second rod's cap runs through both poles.
-        (0.0, 2.2, 0.4, true, false),
+        (0.0, 2.2, 0.4, true, (false, false)),
     ] {
         for at in [Point3::new(0.0, 0.0, 0.0), Point3::new(28.638, -8.1, 2.65)] {
             let name = format!(
-                "roll {roll}, yaw {yaw}, pitch {pitch}, swap {swap}, far end {from_far_end}, at {at:?}"
+                "roll {roll}, yaw {yaw}, pitch {pitch}, swap {swap}, far ends {first_far} {second_far}, at {at:?}"
             );
             let lay = |yaw: f64, pitch: f64, far_end: bool| {
                 let base = Mat4::translation(at.x(), at.y(), at.z())
@@ -212,11 +213,11 @@ fn two_rods_ending_at_one_balls_centre_fuse_onto_it() {
             let (a, b) = (along(0.0, 0.0), along(yaw, pitch));
             let mut topo = Topology::new();
             let rod = make_cylinder(&mut topo, RADIUS, length).unwrap();
-            transform_solid(&mut topo, rod, &lay(0.0, 0.0, from_far_end)).unwrap();
+            transform_solid(&mut topo, rod, &lay(0.0, 0.0, first_far)).unwrap();
             let ball = make_sphere(&mut topo, RADIUS, 32).unwrap();
             transform_solid(&mut topo, ball, &Mat4::translation(at.x(), at.y(), at.z())).unwrap();
             let other = make_cylinder(&mut topo, RADIUS, length).unwrap();
-            transform_solid(&mut topo, other, &lay(yaw, pitch, false)).unwrap();
+            transform_solid(&mut topo, other, &lay(yaw, pitch, second_far)).unwrap();
             let (one, two) = if swap { (other, rod) } else { (rod, other) };
             let first = exact_fuse(&mut topo, one, ball, &name);
             let fused = exact_fuse(&mut topo, first, two, &name);
