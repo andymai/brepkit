@@ -1,0 +1,23 @@
+crates/check/src/validate/face_wires.rs
+  s_489e8e320eebde::t_55df302c286574 624-653,656,683-688,696,712,714,874-911
+crates/operations/src/boolean/assembly.rs
+  s_489e8e320eebde::t_4366a03902ab2a 621-641
+crates/operations/src/validate.rs
+  s_489e8e320eebde::t_ce975f27a37213 1054
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6abe3da87c8bcf4a7ab0bc506f8055c5f4fb3100",
+  "prompts": {},
+  "sessions": {
+    "s_489e8e320eebde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1a2a9261-2019-4199-aa4f-06130071c8f0",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
