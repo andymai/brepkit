@@ -149,6 +149,10 @@ pub struct Cdt {
     /// The edges `legalize` has still to test, kept between calls so that
     /// each point inserted does not allocate it again.
     legalize_stack: Vec<(usize, usize, usize)>,
+    /// Whether a vertex ends a constraint, now or before a split: a vertex
+    /// not marked ends none, so an edge at it needs no lookup in
+    /// `constraints`.
+    constraint_ends: Vec<bool>,
 }
 
 /// Uniform grid over the inserted vertices, so finding the vertices that lie
@@ -329,7 +333,25 @@ impl Cdt {
             recovery_inserts: 0,
             vertex_grid: VertexGrid::default(),
             legalize_stack: Vec::new(),
+            constraint_ends: Vec::new(),
         }
+    }
+
+    /// Record the edge `key` as a constraint.
+    fn constrain(&mut self, key: (usize, usize)) {
+        let end = key.0.max(key.1);
+        if self.constraint_ends.len() <= end {
+            self.constraint_ends.resize(end + 1, false);
+        }
+        self.constraint_ends[key.0] = true;
+        self.constraint_ends[key.1] = true;
+        self.constraints.insert(key);
+    }
+
+    /// Whether the edge between `a` and `b` is a constraint.
+    fn is_constrained(&self, a: usize, b: usize) -> bool {
+        let ends = |v: usize| self.constraint_ends.get(v).copied().unwrap_or(false);
+        ends(a) && ends(b) && self.constraints.contains(&sorted_pair(a, b))
     }
 
     /// Insert a point into the triangulation.
@@ -504,7 +526,7 @@ impl Cdt {
 
         // Recover the edge by flipping.
         self.recover_edge(v0, v1)?;
-        self.constraints.insert(key);
+        self.constrain(key);
         Ok(())
     }
 

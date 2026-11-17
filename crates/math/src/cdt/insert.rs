@@ -104,8 +104,8 @@ impl Cdt {
         // with two sub-constraints: (e0, vi) and (vi, e1).
         let split_key = sorted_pair(e0, e1);
         if self.constraints.remove(&split_key) {
-            self.constraints.insert(sorted_pair(e0, vi));
-            self.constraints.insert(sorted_pair(vi, e1));
+            self.constrain(sorted_pair(e0, vi));
+            self.constrain(sorted_pair(vi, e1));
         }
 
         let t0 = tri_idx;
@@ -280,7 +280,7 @@ impl Cdt {
             let e1 = self.triangles[ti].v[(el + 2) % 3];
 
             // Don't flip constrained edges.
-            if self.constraints.contains(&sorted_pair(e0, e1)) {
+            if self.is_constrained(e0, e1) {
                 continue;
             }
 
