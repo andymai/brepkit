@@ -6030,6 +6030,95 @@ pub fn split_face_2d(
     distribute_cap_circles(topo, face_id, base, &cap_sections, &cap_points, rank, frame)
 }
 
+/// The face's ball in a chart whose poles lie off the face and clear of its
+/// wires and sections. At a pole every `u` names one point: a wire or a
+/// section that reaches one jumps in `u` there, and the traces cannot follow
+/// it. A pole inside the face would make its outline wind the chart. `None`
+/// for any other surface, for a face with no sections, for a face whose
+/// outline is all chords (a hemisphere of `make_sphere`, whose own paths
+/// read its poles), and for a face whose edges keep clear of its poles.
+fn pole_clear_sphere(
+    topo: &Topology,
+    face_id: FaceId,
+    face: &brepkit_topology::face::Face,
+    sections: &[SectionEdge],
+) -> Option<FaceSurface> {
+    // Samples per edge: a half turn of a great circle is read every 2.8
+    // degrees, inside the 5.7 degrees that counts as near a pole.
+    const SAMPLES: u32 = 64;
+    const CANDIDATES: u32 = 256;
+    let FaceSurface::Sphere(sphere) = face.surface() else {
+        return None;
+    };
+    if sections.is_empty() {
+        return None;
+    }
+    let center = sphere.center();
+    let mut dirs: Vec<Vec3> = Vec::new();
+    let sample = |dirs: &mut Vec<Vec3>, curve: &EdgeCurve, start: Point3, end: Point3| {
+        let (t0, t1) = curve.domain_with_endpoints(start, end);
+        for k in 0..=SAMPLES {
+            let t = (t1 - t0).madd(f64::from(k) / f64::from(SAMPLES), t0);
+            let d = curve.evaluate_with_endpoints(t, start, end) - center;
+            let len = d.length();
+            if len > 0.0 {
+                dirs.push(d * (1.0 / len));
+            }
+        }
+    };
+    let mut chords_only = true;
+    for (i, wid) in std::iter::once(face.outer_wire())
+        .chain(face.inner_wires().iter().copied())
+        .enumerate()
+    {
+        let wire = topo.wire(wid).ok()?;
+        for oe in wire.edges() {
+            let edge = topo.edge(oe.edge()).ok()?;
+            let start = topo.vertex(edge.start()).ok()?.point();
+            let end = topo.vertex(edge.end()).ok()?.point();
+            if i == 0 && !(matches!(edge.curve(), EdgeCurve::Line) && (start - end).length() > 0.0)
+            {
+                chords_only = false;
+            }
+            sample(&mut dirs, edge.curve(), start, end);
+        }
+    }
+    if chords_only {
+        return None;
+    }
+    for s in sections {
+        sample(&mut dirs, &s.curve_3d, s.start, s.end);
+    }
+    // The cosine of the angle from the nearer pole about `axis` to the
+    // nearest sample.
+    let nearest = |axis: Vec3| dirs.iter().fold(0.0_f64, |m, d| m.max(d.dot(axis).abs()));
+    if nearest(sphere.z_axis()) < 0.1_f64.cos() {
+        return None;
+    }
+    let trim = crate::classifier::SphereFaceTrim::new(topo, face_id).ok()??;
+    let radius = sphere.radius();
+    let off_face = |axis: Vec3| {
+        [axis, -axis]
+            .iter()
+            .all(|&a| !trim.holds(center + a * radius, 1e-6 * radius))
+    };
+    let golden = std::f64::consts::PI * (3.0 - 5.0_f64.sqrt());
+    let best = (0..CANDIDATES)
+        .map(|i| {
+            let z = 1.0 - (2.0 * f64::from(i) + 1.0) / f64::from(CANDIDATES);
+            let r = (1.0 - z * z).max(0.0).sqrt();
+            let (s, c) = (golden * f64::from(i)).sin_cos();
+            Vec3::new(r * c, r * s, z)
+        })
+        .filter(|&axis| off_face(axis))
+        .map(|axis| (nearest(axis), axis))
+        .min_by(|a, b| a.0.total_cmp(&b.0))?
+        .1;
+    brepkit_math::surfaces::SphericalSurface::with_axis(center, radius, best)
+        .ok()
+        .map(FaceSurface::Sphere)
+}
+
 fn outer_wire_has_no_seam(topo: &Topology, face: &brepkit_topology::face::Face) -> bool {
     topo.wire(face.outer_wire()).is_ok_and(|wire| {
         let mut seen = std::collections::HashSet::new();
@@ -6466,7 +6555,38 @@ fn split_face_2d_impl(
     let sections: &[SectionEdge] = deduped_sections.as_deref().unwrap_or(sections);
     let trace_split =
         std::env::var("BK_SPLIT_TRACE").is_ok_and(|v| v == format!("{}", face_id.index()));
-    let surface = face.surface().clone();
+    let rechart = pole_clear_sphere(topo, face_id, face, sections);
+    // The sections' pcurves and end hints read the face's own chart.
+    let recharted_sections: Vec<SectionEdge>;
+    let sections: &[SectionEdge] = match &rechart {
+        Some(chart) => {
+            recharted_sections = sections
+                .iter()
+                .map(|s| {
+                    let pcurve = super::pcurve_compute::compute_pcurve_on_surface(
+                        &s.curve_3d,
+                        s.start,
+                        s.end,
+                        chart,
+                        &[],
+                        None,
+                    );
+                    SectionEdge {
+                        pcurve_a: pcurve.clone(),
+                        pcurve_b: pcurve,
+                        start_uv_a: None,
+                        end_uv_a: None,
+                        start_uv_b: None,
+                        end_uv_b: None,
+                        ..s.clone()
+                    }
+                })
+                .collect();
+            &recharted_sections
+        }
+        None => sections,
+    };
+    let surface = rechart.unwrap_or_else(|| face.surface().clone());
     let reversed = face.is_reversed();
     let is_plane = matches!(surface, FaceSurface::Plane { .. });
     if trace_split {

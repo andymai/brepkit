@@ -171,21 +171,38 @@ fn two_rods_ending_at_one_balls_centre_fuse_onto_it() {
     // A wire guard's two struts meeting at one ball: each rod's end cap
     // lies in a great circle of the ball.
     let length = 10.0;
-    for (roll, yaw, pitch) in [
-        (0.3, 2.2, 0.4),
-        (0.0, 2.2, 0.4),
-        (1.1, 1.3, -0.7),
+    // The first rod lies along -x and the second at (yaw, pitch) from it,
+    // each built from the ball's centre, or from its far end where
+    // `from_far_end` (its end cap at the ball). With `swap` the second rod
+    // meets the ball first.
+    for (roll, yaw, pitch, swap, from_far_end) in [
+        (0.3, 2.2, 0.4, false, false),
+        (0.0, 2.2, 0.4, false, false),
+        (1.1, 1.3, -0.7, false, false),
         // A wire guard's rib stepping down: the caps meet on the equator.
-        (0.3, PI, 0.41),
+        (0.3, PI, 0.41, false, false),
+        (0.3, PI, -0.41, false, true),
+        // Both axes in the equator's plane: the caps meet at the poles.
+        (0.3, 2.2, 0.0, false, false),
+        // The second rod's cap runs through both poles.
+        (0.0, 2.2, 0.4, true, false),
     ] {
         for at in [Point3::new(0.0, 0.0, 0.0), Point3::new(28.638, -8.1, 2.65)] {
-            let name = format!("roll {roll}, yaw {yaw}, pitch {pitch}, at {at:?}");
-            let lay = |yaw: f64, pitch: f64| {
-                Mat4::translation(at.x(), at.y(), at.z())
+            let name = format!(
+                "roll {roll}, yaw {yaw}, pitch {pitch}, swap {swap}, far end {from_far_end}, at {at:?}"
+            );
+            let lay = |yaw: f64, pitch: f64, far_end: bool| {
+                let base = Mat4::translation(at.x(), at.y(), at.z())
                     * Mat4::rotation_z(yaw)
                     * Mat4::rotation_y(pitch)
-                    * Mat4::rotation_y(-FRAC_PI_2)
-                    * Mat4::rotation_z(roll)
+                    * Mat4::rotation_y(-FRAC_PI_2);
+                if far_end {
+                    base * Mat4::translation(0.0, 0.0, length)
+                        * Mat4::rotation_x(PI)
+                        * Mat4::rotation_z(roll)
+                } else {
+                    base * Mat4::rotation_z(roll)
+                }
             };
             let along = |yaw: f64, pitch: f64| {
                 let p = (Mat4::rotation_z(yaw) * Mat4::rotation_y(pitch))
@@ -195,13 +212,14 @@ fn two_rods_ending_at_one_balls_centre_fuse_onto_it() {
             let (a, b) = (along(0.0, 0.0), along(yaw, pitch));
             let mut topo = Topology::new();
             let rod = make_cylinder(&mut topo, RADIUS, length).unwrap();
-            transform_solid(&mut topo, rod, &lay(0.0, 0.0)).unwrap();
+            transform_solid(&mut topo, rod, &lay(0.0, 0.0, from_far_end)).unwrap();
             let ball = make_sphere(&mut topo, RADIUS, 32).unwrap();
             transform_solid(&mut topo, ball, &Mat4::translation(at.x(), at.y(), at.z())).unwrap();
             let other = make_cylinder(&mut topo, RADIUS, length).unwrap();
-            transform_solid(&mut topo, other, &lay(yaw, pitch)).unwrap();
-            let first = exact_fuse(&mut topo, rod, ball, &name);
-            let fused = exact_fuse(&mut topo, first, other, &name);
+            transform_solid(&mut topo, other, &lay(yaw, pitch, false)).unwrap();
+            let (one, two) = if swap { (other, rod) } else { (rod, other) };
+            let first = exact_fuse(&mut topo, one, ball, &name);
+            let fused = exact_fuse(&mut topo, first, two, &name);
             let report = validate_solid(&topo, fused).unwrap();
             assert!(report.is_valid(), "{name}: {:?}", report.issues);
             let kinds = census(&topo, fused);
