@@ -1232,7 +1232,11 @@ fn assemble_pieces(
     selected: &[bop::SelectedFace],
 ) -> Result<SolidId, AlgoError> {
     let mut faces: Vec<FaceId> = selected.iter().map(|piece| piece.face_id).collect();
-    builder_solid::separate_arcs_sharing_ends(topo, &mut faces)?;
+    let sources: Vec<Option<FaceId>> = selected
+        .iter()
+        .map(|piece| Some(piece.source_face))
+        .collect();
+    builder_solid::separate_arcs_sharing_ends(topo, &mut faces, &sources)?;
     let selected: Vec<bop::SelectedFace> = faces
         .into_iter()
         .zip(selected)
