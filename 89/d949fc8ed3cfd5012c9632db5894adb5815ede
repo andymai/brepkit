@@ -1,0 +1,57 @@
+.claude/skills/roadmap/SKILL.md
+  s_489e8e320eebde::t_f5729909fe9670 147,173,187-188,208,2376-2378
+crates/algo/src/builder/face_splitter/conversion.rs
+  s_489e8e320eebde::t_65db552f0c3d52 277-292,330-334,339-390
+crates/algo/src/builder/face_splitter/edge_splitting.rs
+  s_489e8e320eebde::t_3700d7cdca48d9 407,414-417
+crates/algo/src/builder/face_splitter/mod.rs
+  s_489e8e320eebde::t_a67471dbf0f600 1715-1728,6033-6121,6551-6582,7087-7088,7092,9453-9521,9558-9561
+crates/algo/src/pave_filler/phase_ff.rs
+  s_489e8e320eebde::t_da6654b4c489a9 276-282,2824-2870,2908-2917,2937-2968,2982-2983,2985-3048,3070-3105,3181,8494-8501,8503,8505-8512,8605-8612,8658-8659,9724-9766
+crates/blend/src/corner.rs
+  s_489e8e320eebde::t_d4bda75941b301 5681-6611,8062-8119
+crates/blend/src/fillet_builder.rs
+  s_489e8e320eebde::t_22dc8db2d5c647 1320-1337,1339-1340,1345-1362,2535
+crates/check/src/validate/face_wires.rs
+  s_489e8e320eebde::t_23baa78ef14b00 624-653,656,683-688,696,712,714,874-911
+crates/io/src/stl/import.rs
+  s_489e8e320eebde::t_e747bd1ab821f9 52-55,130-135,442-445,464-465,472-476,481,483,489,516-517,531,534,568-570,613,625-632,642-646,650,663-695,731,733,756-758,1260-1269,1293,1298-1299,1305,1380-1384,1388,1390,1393-1397,1431-1435,1496,1523-1558
+crates/io/tests/mesh_import_bodies.rs
+  s_489e8e320eebde::t_837493c8881779 6,1563-1703
+crates/operations/src/boolean/assembly.rs
+  s_489e8e320eebde::t_66e9327e34aedf 621-643
+crates/operations/src/boolean/tests.rs
+  s_489e8e320eebde::t_f3642d524c6ff2 9588-9620
+crates/operations/tests/balls_on_a_flat_ring.rs
+  s_489e8e320eebde::t_06f16ac4f8d915 15,21,105-116,160,226-277
+crates/operations/tests/random_boolean_sweep.rs
+  s_489e8e320eebde::t_68da2c56fd2fa3 1-751
+crates/operations/tests/regress_fillet_variable_retry_seam_stub.rs
+  s_489e8e320eebde::t_4538c140c67911 20-25,29-32,46,50,52-53,57,76-81,215,219,466-1006,1011-1017,1032-1045
+crates/operations/tests/ring_groove_against_boxes.rs
+  s_489e8e320eebde::t_0a90d542385c38 3-4,16-18,33,36,187-193,276,362-412
+crates/operations/tests/rod_ending_in_a_ball.rs
+  s_489e8e320eebde::t_64b57157f63cf9 15-16,20,31-42,82,125-277
+crates/operations/tests/thin_ring_under_a_tilted_box.rs
+  s_489e8e320eebde::t_b526e36ad430b6 1-98
+crates/operations/tests/torus_near_tangent_wall.rs
+  s_489e8e320eebde::t_4153c16459d1a9 1-135
+crates/operations/tests/two_rods_at_a_turned_ball.rs
+  s_489e8e320eebde::t_b86db9fdc0996c 1-121
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "89d949fc8ed3cfd5012c9632db5894adb5815ede",
+  "prompts": {},
+  "sessions": {
+    "s_489e8e320eebde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1a2a9261-2019-4199-aa4f-06130071c8f0",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
