@@ -235,6 +235,7 @@ Quick reference — find the right file for any task:
 | Ray-surface intersection (all types + solvers) | `classify/ray_surface.rs` |
 | UV boundary polygon, containment tests | `classify/boundary.rs` |
 | A curved face's wires drawn in a plane from its surface's parameters (a point's side of a wire, a wire's way round) | `face_loops.rs` |
+| A bound over each chord on how far a wire drawn on a B-spline surface strays from it | `face_loops/bound.rs` |
 | Point-in-solid classification (ray casting) | `classify/mod.rs` |
 | Winding number classifier | `classify/winding.rs` |
 | CheckId enum, ValidationReport, severity | `validate/checks.rs` |
