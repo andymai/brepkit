@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794889131179,
+  "lastUpdate": 1794889565862,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -72953,6 +72953,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 20481437,
             "range": "± 77936",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "03c48a540574cfe583cde2ba7475b4a8374ef624",
+          "message": "fix(algo): keep a conic leaf that crosses a plane out of the plane's face (#2572)\n\n## Summary\n\nThe `mars-rover` fuse of #2487 is now exact in three poses that tilt the\nwheel's axis off the coordinate axes. On main, it needs the mesh\nfallback in each of them. Both operands turn 0.37 about x, -0.81 about\ny, or by both turns and 1.13 about z.\n\n- `fill_ef_in` in `crates/algo/src/pave_filler/fill_face_info.rs` puts\nthe leaves next to an EF crossing in the face's `pave_blocks_in` when\nthey lie in the face. A curved leaf passes when it stands off the face's\nsurface by at most 20% of its chord.\n- The ring's circle of radius 249.25 at `z = 60` and at `z = 64` crosses\nthe grouser's face `x = 249` at 2.6 degrees. The leaf from that crossing\nto the grouser's side stands 0.166 and 0.149 off the plane, 3.5% and\n3.7% of its chord. The gate kept both leaves in the grouser's face,\nupright and turned.\n- Turned 0.37 about x, the two pieces of the grouser's face next to the\nring took the arcs into their wires. The raw fuse had 4 free edges, and\nthe operations layer rejected it for 2 unclosed wires. Upright, the fuse\nclosed with the same leaves in place.\n- Now take a circle or ellipse leaf with one end on a plane face's\nsurface and the other end off it. It lies in the face only when its\ntangent at the end on the plane lies in the plane. The sine of the angle\nbetween them must be at most `CONIC_GRAZE_SIN` (1e-3). A leaf that\ntouches the plane keeps the ratio gate.\n`fuse_shelled_box_with_socket_loft`, the case that #1168 set the ratio\nfor, passes.\n\nThe roadmap skill gets one line in its Closed section.\n\n## Test plan\n\n- `a_grouser_fuses_onto_a_tilted_wheel` fuses the wheel and the grouser\nin the three turned poses, with the mesh fallback declined. It reuses\nthe checks of `a_grouser_fuses_onto_a_wheel`, with the probes and the\ngrid of 8000 points turned too. The fuse is valid and watertight and\nkeeps a curved face, and the probes classify right. Its volume matches\nthe operands' volumes less their common part. At each grid point that\nthe three solids classify, the fuse holds the point where either operand\nholds it. On main (1fc2bdd04), the test fails at the first fuse.\n- `cargo nextest run` on `brepkit-algo`, `brepkit-io`,\n`brepkit-operations`, `brepkit-wasm`, `brepkit-check` and\n`brepkit-heal`: 3826 tests run, 3826 passed, 22 skipped. `cargo test -p\nbrepkit-wasm --lib gridfinity`: 27 passed.\n- `pose_sweep` (495 result rows) and `truth_audit` give the same output\non main and on this branch.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes the `mars-rover` fuse so it is exact in three poses that tilt the\nwheel's axis off the coordinate axes, where on main it needed the mesh\nfallback.\n\n- `fill_ef_in` kept a circle or ellipse leaf next to an EF crossing in a\nplane face when it stood off the plane by at most 20% of its chord. The\nring's circle of radius 249.25 crosses the grouser's face `x = 249` at\n2.6 degrees, and the arc to the grouser's side stands 0.149 off the\nplane at 4% of its chord; with the wheel tilted, that leaf opened the\nface's wire and broke the fuse.\n- A circle or ellipse leaf with one end on a plane and the other off it\nnow lies in the face only when its tangent at the end on the plane lies\nin the plane, to a sine of `CONIC_GRAZE_SIN` (1e-3). Leaves that touch\nthe plane keep the previous ratio gate.\n- `a_grouser_fuses_onto_a_tilted_wheel` fuses the wheel and grouser in\nthree tilted poses without the mesh fallback, reusing the probes and\ngrid of the upright test.\n\n<sup>Written for commit e492f03cf03d38870fba6a6bd3615fd48f9fd305.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2572?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2572?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2572&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-11-17T04:22:41Z",
+          "tree_id": "d4f2e2e008bb069dd2aeb10189a497135a2c3536",
+          "url": "https://github.com/andymai/brepkit/commit/03c48a540574cfe583cde2ba7475b4a8374ef624"
+        },
+        "date": 1794889551308,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 652694,
+            "range": "± 11862",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 663741,
+            "range": "± 3630",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 8436,
+            "range": "± 118",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 419497,
+            "range": "± 5583",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 15256442,
+            "range": "± 84237",
             "unit": "ns/iter"
           }
         ]
