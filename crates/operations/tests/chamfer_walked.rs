@@ -1,6 +1,7 @@
 //! Chamfers the walking engine builds on a curved face: the ellipse where a
 //! slanted plane cuts a rod, which no closed form chamfers, a closed circular
-//! rim, and an arc that ends at two planes through its axis.
+//! rim, and arcs of a circle and of the ellipse that end at planes square to
+//! them.
 //!
 //! A chamfer of `c` into the cap and `w` along the wall puts each contact in
 //! the section square to the edge, `c` from the edge's point along the cap
@@ -12,15 +13,19 @@
 //! in the section and the chord from the wall's contact to the cap's.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+use std::collections::HashSet;
 use std::f64::consts::{PI, TAU};
 
 use brepkit_blend::chamfer_builder::ChamferBuilder;
+use brepkit_check::validate::{CheckId, ValidateOptions};
+use brepkit_math::curves::Circle3D;
 use brepkit_math::mat::Mat4;
 use brepkit_math::quadrature::gauss_legendre_points;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_operations::blend_ops::chamfer_v2;
 use brepkit_operations::boolean::{BooleanOp, boolean};
 use brepkit_operations::chamfer::chamfer;
+use brepkit_operations::extrude::extrude;
 use brepkit_operations::measure::solid_volume;
 use brepkit_operations::primitives::{make_box, make_cone, make_cylinder};
 use brepkit_operations::tessellate::{is_watertight, tessellate_solid};
@@ -28,10 +33,13 @@ use brepkit_operations::transform::transform_solid;
 use brepkit_operations::validate::validate_solid;
 use brepkit_topology::Topology;
 use brepkit_topology::adjacency::AdjacencyIndex;
-use brepkit_topology::edge::{EdgeCurve, EdgeId};
+use brepkit_topology::builder::make_planar_face_from_wire;
+use brepkit_topology::edge::{Edge, EdgeCurve, EdgeId};
 use brepkit_topology::explorer::{solid_edges, solid_faces};
 use brepkit_topology::face::FaceSurface;
 use brepkit_topology::solid::SolidId;
+use brepkit_topology::vertex::Vertex;
+use brepkit_topology::wire::{OrientedEdge, Wire};
 
 /// The rod: radius 2, 5 high.
 const R: f64 = 2.0;
@@ -65,15 +73,20 @@ fn integral(a: f64, b: f64, panels: u32, f: impl Fn(f64) -> f64) -> f64 {
         .sum()
 }
 
-/// The rod cut by the slanted plane, placed by `pose`, and its rim.
-fn slanted_rod(topo: &mut Topology, pose: &Mat4) -> (SolidId, EdgeId) {
+/// The rod cut by the slanted plane.
+fn slanted_cut(topo: &mut Topology) -> SolidId {
     let rod = make_cylinder(topo, R, 5.0).unwrap();
     let cutter = make_box(topo, 10.0, 10.0, 10.0).unwrap();
     let place = Mat4::translation(0.0, 0.0, 4.0)
         * Mat4::rotation_x(TILT)
         * Mat4::translation(-5.0, -5.0, 0.0);
     transform_solid(topo, cutter, &place).unwrap();
-    let cut = boolean(topo, BooleanOp::Cut, rod, cutter).unwrap();
+    boolean(topo, BooleanOp::Cut, rod, cutter).unwrap()
+}
+
+/// The rod cut by the slanted plane, placed by `pose`, and its rim.
+fn slanted_rod(topo: &mut Topology, pose: &Mat4) -> (SolidId, EdgeId) {
+    let cut = slanted_cut(topo);
     transform_solid(topo, cut, pose).unwrap();
     let rim = solid_edges(topo, cut)
         .unwrap()
@@ -84,8 +97,9 @@ fn slanted_rod(topo: &mut Topology, pose: &Mat4) -> (SolidId, EdgeId) {
 }
 
 /// The volume a chamfer of `cap` into the slanted cap and `wall` along the
-/// wall takes off the rod's ellipse, by the tube formula.
-fn ellipse_chamfer(cap: f64, wall: f64) -> f64 {
+/// wall takes off the rod's ellipse from `from` to `to` round the axis, by
+/// the tube formula.
+fn ellipse_chamfer(cap: f64, wall: f64, (from, to): (f64, f64)) -> f64 {
     let t = TILT.tan();
     let up = Vec3::new(0.0, -TILT.sin(), TILT.cos());
     let section = |th: f64| {
@@ -130,7 +144,7 @@ fn ellipse_chamfer(cap: f64, wall: f64) -> f64 {
         };
         speed * integral(b2, 0.0, 4, strip)
     };
-    integral(0.0, TAU, 16, section)
+    integral(from, to, 16, section)
 }
 
 /// How far each face of `edge` the chamfer reaches when `chamfer_v2` sets
@@ -162,6 +176,55 @@ fn assert_removed(topo: &Topology, result: SolidId, before: f64, removed: f64, w
     );
 }
 
+/// The edges of `solid` and the curved face of its `edge`, by its surface
+/// written out, which a trim of the face keeps.
+fn wall_of(topo: &Topology, solid: SolidId, edge: EdgeId) -> (HashSet<EdgeId>, String) {
+    let wall = AdjacencyIndex::build(topo, solid)
+        .unwrap()
+        .faces_for_edge(edge)
+        .iter()
+        .map(|&f| topo.face(f).unwrap().surface())
+        .find(|surface| !surface.is_planar())
+        .expect("a curved face");
+    let edges = solid_edges(topo, solid).unwrap().into_iter().collect();
+    (edges, format!("{wall:?}"))
+}
+
+/// The curves of the edges that the chamfer added to the wall in `result`,
+/// each with its pcurve there. Before that, it asserts the same-parameter
+/// check on each edge of `result`: the edge's pcurve read at one fraction of
+/// its span gives the point of its curve at that fraction of the edge's span.
+fn wall_contacts(
+    topo: &Topology,
+    (old, wall): &(HashSet<EdgeId>, String),
+    result: SolidId,
+    what: &str,
+) -> Vec<&'static str> {
+    let report =
+        brepkit_check::validate::validate_solid(topo, result, &ValidateOptions::default()).unwrap();
+    let off: Vec<_> = report
+        .issues
+        .iter()
+        .filter(|issue| issue.check == CheckId::EdgeSameParameter)
+        .collect();
+    assert!(off.is_empty(), "{what}: {off:?}");
+    let mut curves = Vec::new();
+    for face in solid_faces(topo, result).unwrap() {
+        let f = topo.face(face).unwrap();
+        if format!("{:?}", f.surface()) != *wall {
+            continue;
+        }
+        for w in std::iter::once(f.outer_wire()).chain(f.inner_wires().iter().copied()) {
+            for oe in topo.wire(w).unwrap().edges() {
+                if !old.contains(&oe.edge()) && topo.pcurves().get(oe.edge(), face).is_some() {
+                    curves.push(topo.edge(oe.edge()).unwrap().curve().type_tag());
+                }
+            }
+        }
+    }
+    curves
+}
+
 /// The ellipse where a plane slanted 0.3 rad cuts a rod: `chamfer` at 0.5
 /// and `chamfer_v2` at 0.5 and 0.3 walk a ruled band round it, which cuts
 /// the cap and the wall along its contacts.
@@ -171,8 +234,17 @@ fn the_ellipse_where_a_slanted_plane_cuts_a_rod_takes_a_chamfer() {
         let mut topo = Topology::new();
         let (rod, rim) = slanted_rod(&mut topo, &pose);
         let before = solid_volume(&topo, rod, 0.001).unwrap();
+        let side = wall_of(&topo, rod, rim);
         let result = chamfer(&mut topo, rod, &[rim], 0.5).unwrap();
-        assert_removed(&topo, result, before, ellipse_chamfer(0.5, 0.5), name);
+        assert_removed(
+            &topo,
+            result,
+            before,
+            ellipse_chamfer(0.5, 0.5, (0.0, TAU)),
+            name,
+        );
+        let contacts = wall_contacts(&topo, &side, result, name);
+        assert_eq!(contacts, ["nurbs_curve"], "{name}");
         let bands = solid_faces(&topo, result)
             .unwrap()
             .into_iter()
@@ -183,7 +255,15 @@ fn the_ellipse_where_a_slanted_plane_cuts_a_rod_takes_a_chamfer() {
         let (cap, wall) = on_faces(&topo, rod, rim, (0.5, 0.3));
         let built = chamfer_v2(&mut topo, rod, &[rim], 0.5, 0.3).unwrap();
         assert!(built.failed.is_empty(), "{name}: {:?}", built.failed);
-        assert_removed(&topo, built.solid, before, ellipse_chamfer(cap, wall), name);
+        assert_removed(
+            &topo,
+            built.solid,
+            before,
+            ellipse_chamfer(cap, wall, (0.0, TAU)),
+            name,
+        );
+        let contacts = wall_contacts(&topo, &side, built.solid, name);
+        assert_eq!(contacts, ["nurbs_curve"], "{name}");
     }
 }
 
@@ -214,6 +294,7 @@ fn the_walking_chamfer_cuts_a_closed_rim_exactly() {
             let (cap, wall) = on_faces(&topo, solid, rim, (d1, d2));
             transform_solid(&mut topo, solid, &pose).unwrap();
             let before = solid_volume(&topo, solid, 0.001).unwrap();
+            let side = wall_of(&topo, solid, rim);
             let mut builder = ChamferBuilder::new(&mut topo, solid);
             builder.add_edges_asymmetric(&[rim], d1, d2);
             let built = builder.build().unwrap();
@@ -222,6 +303,8 @@ fn the_walking_chamfer_cuts_a_closed_rim_exactly() {
             let centroid = 3.0 - (cap + wall * rise.cos()) / 3.0;
             let what = format!("frustum {frustum} {name}");
             assert_removed(&topo, built.solid, before, TAU * centroid * area, &what);
+            let contacts = wall_contacts(&topo, &side, built.solid, &what);
+            assert_eq!(contacts, ["circle"], "{what}");
         }
     }
 }
@@ -256,5 +339,119 @@ fn a_sectors_arc_ends_on_its_radial_planes() {
         // A quarter turn of the ring.
         let removed = 0.25 * PI * cap * wall * (R - cap / 3.0);
         assert_removed(&topo, built.solid, before, removed, name);
+    }
+}
+
+/// The sector of a rod from `from` round the axis for `turns` of a turn,
+/// placed by `pose`, and the arc of its top rim.
+fn rod_sector(topo: &mut Topology, from: f64, turns: f64, pose: &Mat4) -> (SolidId, EdgeId) {
+    let at = |th: f64| Point3::new(R * th.cos(), R * th.sin(), 0.0);
+    let centre = topo.add_vertex(Vertex::new(Point3::new(0.0, 0.0, 0.0), 1e-7));
+    let first = topo.add_vertex(Vertex::new(at(from), 1e-7));
+    let last = topo.add_vertex(Vertex::new(at(from + turns * TAU), 1e-7));
+    let rim = Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), R).unwrap();
+    let edges = [
+        Edge::new(centre, first, EdgeCurve::Line),
+        Edge::new(first, last, EdgeCurve::Circle(rim)),
+        Edge::new(last, centre, EdgeCurve::Line),
+    ]
+    .map(|edge| OrientedEdge::new(topo.add_edge(edge), true));
+    let wire = topo.add_wire(Wire::new(edges.to_vec(), true).unwrap());
+    let profile = make_planar_face_from_wire(topo, wire).unwrap();
+    let sector = extrude(topo, profile, Vec3::new(0.0, 0.0, 1.0), 4.0).unwrap();
+    let arc = solid_edges(topo, sector)
+        .unwrap()
+        .into_iter()
+        .find(|&e| {
+            let edge = topo.edge(e).unwrap();
+            matches!(edge.curve(), EdgeCurve::Circle(_))
+                && (topo.vertex(edge.start()).unwrap().point().z() - 4.0).abs() < 1e-9
+        })
+        .unwrap();
+    transform_solid(topo, sector, pose).unwrap();
+    (sector, arc)
+}
+
+/// The walking chamfer cuts the wall of a rod's sector along a circle that
+/// runs a quarter turn or three quarters, each to a plane through the axis,
+/// and across the wall's seam: the contact's pcurve on the wall runs its
+/// whole arc, the long way round for the three quarters.
+#[test]
+fn the_walking_chamfer_runs_a_sectors_arc_on_its_wall() {
+    let (d1, d2) = (0.4, 0.25);
+    for (from, turns) in [(0.5, 0.25), (0.25 * PI, 0.75)] {
+        for (name, pose) in poses() {
+            let mut topo = Topology::new();
+            let (sector, arc) = rod_sector(&mut topo, from, turns, &pose);
+            let (cap, wall) = on_faces(&topo, sector, arc, (d1, d2));
+            let before = solid_volume(&topo, sector, 0.001).unwrap();
+            let side = wall_of(&topo, sector, arc);
+            let mut builder = ChamferBuilder::new(&mut topo, sector);
+            builder.add_edges_asymmetric(&[arc], d1, d2);
+            let built = builder.build().unwrap();
+            let what = format!("{turns} turn {name}");
+            assert!(built.failed.is_empty(), "{what}: {:?}", built.failed);
+            let removed = turns * TAU * 0.5 * cap * wall * (R - cap / 3.0);
+            assert_removed(&topo, built.solid, before, removed, &what);
+            let contacts = wall_contacts(&topo, &side, built.solid, &what);
+            assert_eq!(contacts, ["circle"], "{what}");
+        }
+    }
+}
+
+/// The slanted rod cut back to the arc of its ellipse from `θ = π/6` to
+/// `5π/6` by the two planes square to the ellipse there, placed by `pose`,
+/// and that arc.
+fn ellipse_arc(topo: &mut Topology, pose: &Mat4) -> (SolidId, EdgeId) {
+    let mut solid = slanted_cut(topo);
+    let t = TILT.tan();
+    // Each block's face `x = 0` lies on the plane square to the ellipse at
+    // `th`, and the block reaches away from the arc.
+    for (th, away) in [(5.0 * PI / 6.0, 1.0), (PI / 6.0, -1.0)] {
+        let at = Point3::new(R * th.cos(), R * th.sin(), 4.0 + R * t * th.sin());
+        let ahead = Vec3::new(-th.sin(), th.cos(), t * th.cos()) * away;
+        let ahead = ahead * (1.0 / ahead.length());
+        let place = Mat4::translation(at.x(), at.y(), at.z())
+            * Mat4::rotation_z(ahead.y().atan2(ahead.x()))
+            * Mat4::rotation_y(-ahead.z().asin())
+            * Mat4::translation(0.0, -5.0, -5.0);
+        let block = make_box(topo, 10.0, 10.0, 10.0).unwrap();
+        transform_solid(topo, block, &place).unwrap();
+        solid = boolean(topo, BooleanOp::Cut, solid, block).unwrap();
+    }
+    let arc = solid_edges(topo, solid)
+        .unwrap()
+        .into_iter()
+        .find(|&e| {
+            let edge = topo.edge(e).unwrap();
+            matches!(edge.curve(), EdgeCurve::Ellipse(_))
+                && [edge.start(), edge.end()]
+                    .into_iter()
+                    .all(|v| topo.vertex(v).unwrap().point().z() > 4.0)
+        })
+        .expect("the arc");
+    transform_solid(topo, solid, pose).unwrap();
+    (solid, arc)
+}
+
+/// An arc of the slanted rod's ellipse that ends on the planes square to
+/// it: the walking chamfer's contact on the wall rises and falls as it runs
+/// round, and its pcurve follows it.
+#[test]
+fn the_walking_chamfer_runs_an_ellipse_arc_on_its_wall() {
+    for (name, pose) in poses() {
+        let mut topo = Topology::new();
+        let (solid, arc) = ellipse_arc(&mut topo, &pose);
+        let (cap, wall) = on_faces(&topo, solid, arc, (0.5, 0.3));
+        let before = solid_volume(&topo, solid, 0.001).unwrap();
+        let side = wall_of(&topo, solid, arc);
+        let mut builder = ChamferBuilder::new(&mut topo, solid);
+        builder.add_edges_asymmetric(&[arc], 0.5, 0.3);
+        let built = builder.build().unwrap();
+        assert!(built.failed.is_empty(), "{name}: {:?}", built.failed);
+        let removed = ellipse_chamfer(cap, wall, (PI / 6.0, 5.0 * PI / 6.0));
+        assert_removed(&topo, built.solid, before, removed, name);
+        let contacts = wall_contacts(&topo, &side, built.solid, name);
+        assert_eq!(contacts, ["nurbs_curve"], "{name}");
     }
 }

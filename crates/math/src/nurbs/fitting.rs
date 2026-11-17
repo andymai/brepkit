@@ -56,6 +56,51 @@ pub fn interpolate(points: &[Point3], degree: usize) -> Result<NurbsCurve, MathE
     NurbsCurve::new(p, knots, control_points, weights)
 }
 
+/// Interpolate a B-spline curve through `points` at the curve parameters
+/// `params`, one for each point.
+///
+/// The parameters rise strictly from 0 to 1. The interior knots average
+/// them (The NURBS Book, eq. 9.8), so the curve passes through each point
+/// at its own parameter. A caller that needs the curve's parameter to match
+/// another curve's (a pcurve against its edge) gives those parameters here.
+///
+/// # Errors
+///
+/// Returns an error if there are fewer than 2 points, the counts differ,
+/// the parameters do not rise strictly from 0 to 1, or the linear system
+/// is singular.
+pub fn interpolate_at(
+    points: &[Point3],
+    params: &[f64],
+    degree: usize,
+) -> Result<NurbsCurve, MathError> {
+    let n = points.len();
+    if n < 2 || params.len() != n {
+        return Err(MathError::EmptyInput);
+    }
+    if let Some(&bad) = [params[0], params[n - 1] - 1.0]
+        .iter()
+        .find(|value| value.abs() > f64::EPSILON)
+    {
+        return Err(MathError::ParameterOutOfRange {
+            value: bad,
+            min: 0.0,
+            max: 1.0,
+        });
+    }
+    if let Some(pair) = params.windows(2).find(|pair| pair[1] <= pair[0]) {
+        return Err(MathError::ParameterOutOfRange {
+            value: pair[1],
+            min: pair[0],
+            max: 1.0,
+        });
+    }
+    let p = degree.min(n - 1);
+    let knots = build_interpolation_knots(params, p, n);
+    let control_points = solve_interpolation(points, params, &knots, p)?;
+    NurbsCurve::new(p, knots, control_points, vec![1.0; n])
+}
+
 /// Approximate a set of points with a NURBS curve of specified number
 /// of control points.
 ///
@@ -979,6 +1024,34 @@ mod tests {
     fn interpolate_single_point_error() {
         let pts = vec![Point3::new(0.0, 0.0, 0.0)];
         assert!(interpolate(&pts, 3).is_err());
+    }
+
+    /// A cubic sampled at its own parameters, bunched toward one end, comes
+    /// back as itself: each point at its parameter, and the points between.
+    #[test]
+    fn interpolate_at_returns_a_cubic_at_its_own_parameters() {
+        let cubic = |t: f64| Point3::new(t, t * t * t - t, 2.0 * t * t);
+        let params: Vec<f64> = (0..=9).map(|k| (f64::from(k) / 9.0).powi(2)).collect();
+        let points: Vec<Point3> = params.iter().map(|&t| cubic(t)).collect();
+        let curve = interpolate_at(&points, &params, 3).unwrap();
+        for k in 0..=90 {
+            let t = f64::from(k) / 90.0;
+            assert!((curve.evaluate(t) - cubic(t)).length() < 1e-12, "at {t}");
+        }
+    }
+
+    #[test]
+    fn interpolate_at_refuses_parameters_off_zero_to_one_or_out_of_order() {
+        let points = [
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(1.0, 0.0, 0.0),
+            Point3::new(2.0, 1.0, 0.0),
+        ];
+        assert!(interpolate_at(&points, &[0.0, 0.5, 0.9], 2).is_err());
+        assert!(interpolate_at(&points, &[0.1, 0.5, 1.0], 2).is_err());
+        assert!(interpolate_at(&points, &[0.0, 1.0, 1.0], 2).is_err());
+        assert!(interpolate_at(&points, &[0.0, 1.0], 2).is_err());
+        assert!(interpolate_at(&points, &[0.0, 0.4, 1.0], 2).is_ok());
     }
 
     #[test]
