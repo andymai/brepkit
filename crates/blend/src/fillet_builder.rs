@@ -1333,10 +1333,28 @@ impl<'a> FilletBuilder<'a> {
             })
             .collect();
         if let Some(fillet_plan) = plan.as_ref() {
-            let corner_results = corner::compute_ordered_corners(
+            let current = |face: FaceId| face_replacements.get(&face).copied().unwrap_or(face);
+            let (crossed, stub_faces) = corner::apply_stub_crossings(
                 topo,
                 &stripes,
                 &fillet_plan.junctions,
+                &contour_to_stripe,
+                &stripe_support_faces,
+                &stripe_faces,
+                &current,
+                &mut boundary_registry,
+            )?;
+            face_replacements.extend(stub_faces);
+            let junctions: Vec<crate::fillet_plan::VertexJunction> = fillet_plan
+                .junctions
+                .iter()
+                .filter(|junction| !crossed.contains(&junction.vertex))
+                .cloned()
+                .collect();
+            let corner_results = corner::compute_ordered_corners(
+                topo,
+                &stripes,
+                &junctions,
                 &contour_to_stripe,
                 &blend_cross_handles,
                 &stripe_support_faces,
