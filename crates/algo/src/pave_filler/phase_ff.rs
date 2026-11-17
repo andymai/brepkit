@@ -4568,7 +4568,18 @@ fn edge_surface_crossings(
             }
             roots.push((0.5 * (lo + hi), true));
         } else if fa.abs().min(fb.abs()) <= 4.0 * tol {
-            roots.push((if fa.abs() <= fb.abs() { a } else { b }, false));
+            let (t, ft) = if fa.abs() <= fb.abs() {
+                (a, fa)
+            } else {
+                (b, fb)
+            };
+            // A crossing exactly on a sample reads zero there, so neither
+            // interval beside it changes sign: the signs a step to either
+            // side say whether the edge crosses there or only touches.
+            let (lo, hi) = (t0.min(t1), t0.max(t1));
+            let step = b - a;
+            let crosses = ft == 0.0 && f((t - step).max(lo)) * f((t + step).min(hi)) < 0.0;
+            roots.push((t, crosses));
         }
     }
     // A shallow crossing leaves a run of near-zero leaves around its root:
@@ -4607,12 +4618,17 @@ fn edge_surface_crossings(
         }
         group.clear();
     };
+    // Where the edge touches the surface, its distance stays near zero for
+    // far longer than ten tolerances (a circle inside a cylinder and tangent
+    // to it), and the touches found along that run are one.
+    let near_zero_between =
+        |a: f64, b: f64| (1..4).all(|k| f((b - a).madd(f64::from(k) / 4.0, a)).abs() <= 4.0 * tol);
     let mut group: Vec<(f64, bool)> = Vec::new();
     for r in roots {
-        if group
-            .last()
-            .is_some_and(|g: &(f64, bool)| (at(g.0) - at(r.0)).length() > 10.0 * tol)
-        {
+        if group.last().is_some_and(|g: &(f64, bool)| {
+            (at(g.0) - at(r.0)).length() > 10.0 * tol
+                && (g.1 || r.1 || !near_zero_between(g.0, r.0))
+        }) {
             flush(&mut group, &mut out);
         }
         group.push(r);
@@ -11349,6 +11365,59 @@ mod tests {
         for p in hits {
             assert!((p.x() - 0.9995).abs() < 1e-6, "{p:?}");
             assert!((p.y().abs() - 0.031_61).abs() < 1e-4, "{p:?}");
+        }
+    }
+
+    /// A unit circle meeting a cylinder twice 0.001 rad apart, with the
+    /// circle under four tolerances inside the cylinder between the two
+    /// crossings: both crossings are found, and are not read as one touch.
+    #[test]
+    fn conic_edge_crossings_keep_a_shallow_pair() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::CylindricalSurface;
+
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        let circle =
+            Circle3D::new_with_ref(Point3::new(0.0, 0.0, 0.0), z, 1.0, Vec3::new(1.0, 0.0, 0.0))
+                .unwrap();
+        let (c, half) = (0.5_f64, 0.0005_f64);
+        let radius = (1.0 - 2.0 * c * half.cos() + c * c).sqrt();
+        let cylinder = FaceSurface::Cylinder(
+            CylindricalSurface::new(Point3::new(c, 0.0, -1.0), z, radius).unwrap(),
+        );
+        let (sp, ep) = (circle.evaluate(-1.0), circle.evaluate(1.0));
+        let mut hits = edge_surface_crossings(&EdgeCurve::Circle(circle), sp, ep, &cylinder, 1e-7);
+        hits.sort_by(|a, b| a.y().total_cmp(&b.y()));
+        assert_eq!(hits.len(), 2, "{hits:?}");
+        for (p, y) in hits.iter().zip([-half.sin(), half.sin()]) {
+            assert!((p.y() - y).abs() < 1e-6, "{p:?}");
+        }
+    }
+
+    /// A line meeting a cylinder twice, each time exactly at one of its
+    /// samples, and under four tolerances inside the cylinder between the two
+    /// crossings: both crossings are found, and are not read as one touch.
+    #[test]
+    fn line_edge_crossings_keep_a_shallow_pair_on_samples() {
+        use brepkit_math::surfaces::CylindricalSurface;
+
+        // 2001, 2002000 and 2002001 are a Pythagorean triple, so the line
+        // y = h meets the cylinder of radius r exactly at x = ±x0.
+        let scale = 2.0_f64.powi(-22);
+        let (x0, h, r) = (2001.0 * scale, 2_002_000.0 * scale, 2_002_001.0 * scale);
+        let cylinder = FaceSurface::Cylinder(
+            CylindricalSurface::new(Point3::new(0.0, 0.0, -1.0), Vec3::new(0.0, 0.0, 1.0), r)
+                .unwrap(),
+        );
+        let (sp, ep) = (
+            Point3::new(-16.0 * x0, h, 0.0),
+            Point3::new(16.0 * x0, h, 0.0),
+        );
+        let mut hits = edge_surface_crossings(&EdgeCurve::Line, sp, ep, &cylinder, 1e-7);
+        hits.sort_by(|a, b| a.x().total_cmp(&b.x()));
+        assert_eq!(hits.len(), 2, "{hits:?}");
+        for (p, x) in hits.iter().zip([-x0, x0]) {
+            assert!((p.x() - x).abs() < 1e-9, "{p:?}");
         }
     }
 

@@ -1190,6 +1190,131 @@ fn attach_whole_holes(sub_faces: &mut [SplitSubFace], holes: &[Vec<OrientedPCurv
     }
 }
 
+/// Whether the boundary of a u-periodic face runs counter-clockwise in
+/// `(u, v)`, read as the sign of `-∮ v du` over its edges: `du` along each
+/// edge does not depend on the period copy its ends sit at, so the edges can
+/// come in any order. A band's two rims run a turn each way and its seam
+/// copies cancel, so the integral is the face's signed area. Each edge is
+/// integrated in pieces halved until a piece and its two halves agree, and
+/// the sum of those differences bounds the error. `None` when the boundary
+/// winds, or the integral does not clear its bound.
+fn periodic_boundary_runs_ccw(
+    boundary: &[OrientedPCurveEdge],
+    surface: &FaceSurface,
+) -> Option<bool> {
+    let v0 = surface.project_point(boundary.first()?.start_3d)?.1;
+    for tol in [1e-4, 1e-7, 1e-10] {
+        let (mut area, mut bound, mut turn, mut size) = (0.0, 0.0, 0.0, 0.0);
+        for e in boundary {
+            let piece = edge_minus_v_du(e, surface, v0, tol)?;
+            area += piece.area;
+            bound += piece.bound;
+            turn += piece.turn;
+            size += piece.size;
+        }
+        if turn.abs() > 1e-6 {
+            return None;
+        }
+        // Rounding in each piece's product, beyond its estimated error.
+        let bound = bound + 1e-13 * size;
+        if area.abs() > 2.0 * bound {
+            return Some(area > 0.0);
+        }
+    }
+    None
+}
+
+/// One boundary edge's share of `-∮ (v - v0) du`, in traversal order.
+struct BoundaryIntegral {
+    area: f64,
+    bound: f64,
+    /// The net change of `u` along the edge.
+    turn: f64,
+    /// The sum of `|v - v0| |du|` over the pieces, the scale of rounding.
+    size: f64,
+}
+
+/// [`BoundaryIntegral`] of edge `e`, from 16 even pieces of its parameter,
+/// each halved until the trapezoid over a piece and the two over its halves
+/// differ by at most `tol` per unit of `|du|`.
+fn edge_minus_v_du(
+    e: &OrientedPCurveEdge,
+    surface: &FaceSurface,
+    v0: f64,
+    tol: f64,
+) -> Option<BoundaryIntegral> {
+    use std::f64::consts::{PI, TAU};
+    // A piece's ends, each its edge fraction and its `(u, v - v0)`.
+    type End = (f64, (f64, f64));
+    const PIECES: u32 = 16;
+    const DEPTH: u32 = 14;
+    let wrap = |d: f64| (d + PI).rem_euclid(TAU) - PI;
+    let closed = (e.start_3d - e.end_3d).length() < 1e-10;
+    let turn = if e.forward { TAU } else { -TAU };
+    let (s3, e3) = if e.forward {
+        (e.start_3d, e.end_3d)
+    } else {
+        (e.end_3d, e.start_3d)
+    };
+    let (t0, t1) = e.curve_3d.domain_with_endpoints(s3, e3);
+    // The domain runs from the stored start (a marched curve's from either
+    // end): read it backwards where it starts at the traversal's end.
+    let flip = if closed {
+        !e.forward
+    } else {
+        let p0 = e.curve_3d.evaluate_with_endpoints(t0, s3, e3);
+        (p0 - e.start_3d).length() > (p0 - e.end_3d).length()
+    };
+    let point = |f: f64| -> Point3 {
+        match &e.curve_3d {
+            EdgeCurve::Line => e.start_3d + (e.end_3d - e.start_3d) * f,
+            EdgeCurve::Circle(c) if closed => c.evaluate(turn.madd(f, c.project(e.start_3d))),
+            EdgeCurve::Ellipse(el) if closed => el.evaluate(turn.madd(f, el.project(e.start_3d))),
+            curve => {
+                let g = if flip { 1.0 - f } else { f };
+                curve.evaluate_with_endpoints((t1 - t0).madd(g, t0), s3, e3)
+            }
+        }
+    };
+    let at = |f: f64, u_near: f64| -> Option<(f64, f64)> {
+        let (u, v) = surface.project_point(point(f))?;
+        Some((u_near + wrap(u - u_near), v - v0))
+    };
+    let trapezoid = |a: (f64, f64), b: (f64, f64)| -0.5 * (a.1 + b.1) * (b.0 - a.0);
+    let mut out = BoundaryIntegral {
+        area: 0.0,
+        bound: 0.0,
+        turn: 0.0,
+        size: 0.0,
+    };
+    let mut stack: Vec<(End, End, u32)> = Vec::new();
+    let mut prev = at(0.0, e.start_uv.x())?;
+    let first = prev;
+    for k in 1..=PIECES {
+        let f = f64::from(k) / f64::from(PIECES);
+        let next = at(f, prev.0)?;
+        stack.push(((f - 1.0 / f64::from(PIECES), prev), (f, next), 0));
+        prev = next;
+    }
+    out.turn = prev.0 - first.0;
+    while let Some(((fa, a), (fb, b), depth)) = stack.pop() {
+        let fm = 0.5 * (fa + fb);
+        let m = at(fm, a.0)?;
+        let one = trapezoid(a, b);
+        let two = trapezoid(a, m) + trapezoid(m, b);
+        let diff = (two - one).abs();
+        if diff <= tol.madd((b.0 - a.0).abs(), 1e-15 * (a.1.abs() + b.1.abs())) || depth >= DEPTH {
+            out.area += two;
+            out.bound += diff;
+            out.size += 0.5 * (a.1.abs() + b.1.abs()) * (b.0 - a.0).abs();
+            continue;
+        }
+        stack.push(((fa, a), (fm, m), depth + 1));
+        stack.push(((fm, m), (fb, b), depth + 1));
+    }
+    Some(out)
+}
+
 /// Whether a loop the DCEL traced on a u-periodic face is that face's
 /// outside: the face stops short of a full turn, and the trace keeps every
 /// region on its left, so the outside is a loop of boundary edges alone that
@@ -9321,7 +9446,17 @@ fn split_face_2d_impl(
         // deleting the notch strip). The DCEL face trace enumerates the true
         // subdivision; adopt it only when it strictly refines the greedy
         // partition and is clean by every loop-health signature.
-        let mut dcel = build_wire_loops_dcel(&all_edges, tol.linear, u_periodic, v_periodic);
+        // A hole across the seam that an earlier cut left notches the
+        // boundary, and the trace closes the notch's reversed twins round the
+        // hole: a loop on the face's outside that winds like a region.
+        let mut dcel = build_wire_loops_dcel_measured(
+            &all_edges,
+            tol.linear,
+            u_periodic,
+            v_periodic,
+            None,
+            periodic_boundary_runs_ccw(&all_edges[..n_boundary_edges], &surface),
+        );
         dcel.retain(|lp| !is_periodic_face_outside(lp, &surface));
         // This branch is u-periodic by its gate: the pinch splitter is
         // unsafe on the glued seam graph (see the DCEL consult above), so
@@ -11336,6 +11471,83 @@ mod tests {
                 "from {start_at}: its cells run {swept} round the circle, not once each way"
             );
         }
+    }
+
+    /// A band of a unit cylinder between two tilted rims 1e-4 apart,
+    /// `cos u <= v <= cos u + 1e-4`, its rims cut into pieces at different
+    /// angles: its boundary runs counter-clockwise (area about 2π·1e-4), and
+    /// the same boundary run the other way runs clockwise.
+    #[test]
+    fn a_thin_band_between_tilted_rims_reads_its_sense() {
+        use brepkit_math::curves::Ellipse3D;
+        use brepkit_math::surfaces::CylindricalSurface;
+        use std::f64::consts::{FRAC_1_SQRT_2, FRAC_PI_2, PI, TAU};
+
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        let cyl = CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), z, 1.0).unwrap();
+        let surface = FaceSurface::Cylinder(cyl);
+        let rim = |lift: f64| {
+            Ellipse3D::with_axes(
+                Point3::new(0.0, 0.0, lift),
+                Vec3::new(-FRAC_1_SQRT_2, 0.0, FRAC_1_SQRT_2),
+                2.0_f64.sqrt(),
+                1.0,
+                Vec3::new(FRAC_1_SQRT_2, 0.0, FRAC_1_SQRT_2),
+                Vec3::new(0.0, 1.0, 0.0),
+            )
+            .unwrap()
+        };
+        let uv = |p: Point3| {
+            let (u, v) = surface.project_point(p).unwrap();
+            Point2::new(u, v)
+        };
+        let edge = |curve: EdgeCurve, from: Point3, to: Point3, forward: bool| OrientedPCurveEdge {
+            curve_3d: curve,
+            pcurve: dummy_pcurve(),
+            start_uv: uv(from),
+            end_uv: uv(to),
+            start_3d: from,
+            end_3d: to,
+            forward,
+            source_edge_idx: None,
+            pave_block_id: None,
+        };
+        let (low, high) = (rim(0.0), rim(1e-4));
+        let mut band = Vec::new();
+        for w in [0.0, FRAC_PI_2, 1.25 * PI, TAU].windows(2) {
+            let (a, b) = (low.evaluate(w[0]), low.evaluate(w[1]));
+            band.push(edge(EdgeCurve::Ellipse(low.clone()), a, b, true));
+        }
+        band.push(edge(
+            EdgeCurve::Line,
+            low.evaluate(TAU),
+            high.evaluate(TAU),
+            true,
+        ));
+        for w in [TAU, 1.5 * PI, PI, FRAC_PI_2, 0.0].windows(2) {
+            let (a, b) = (high.evaluate(w[0]), high.evaluate(w[1]));
+            band.push(edge(EdgeCurve::Ellipse(high.clone()), a, b, false));
+        }
+        band.push(edge(
+            EdgeCurve::Line,
+            high.evaluate(0.0),
+            low.evaluate(0.0),
+            true,
+        ));
+        assert_eq!(periodic_boundary_runs_ccw(&band, &surface), Some(true));
+        let reversed: Vec<OrientedPCurveEdge> = band
+            .iter()
+            .rev()
+            .map(|e| OrientedPCurveEdge {
+                start_uv: e.end_uv,
+                end_uv: e.start_uv,
+                start_3d: e.end_3d,
+                end_3d: e.start_3d,
+                forward: !e.forward,
+                ..e.clone()
+            })
+            .collect();
+        assert_eq!(periodic_boundary_runs_ccw(&reversed, &surface), Some(false));
     }
 
     /// The boundary of a cylinder wall 300 degrees round, one unit tall: run
