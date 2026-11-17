@@ -568,6 +568,26 @@ fn face_region_2d(
                         circle: circle.clone(),
                     })
                 }
+                EdgeCurve::NurbsCurve(nurbs)
+                    if let Some(arc) = nurbs_arc(
+                        edge.curve(),
+                        nurbs,
+                        (v_start, v_end),
+                        (p2_start, p2_end),
+                        oe.is_forward(),
+                        frame,
+                    ) =>
+                {
+                    grow(Point2::new(
+                        arc.center.x() - arc.radius,
+                        arc.center.y() - arc.radius,
+                    ));
+                    grow(Point2::new(
+                        arc.center.x() + arc.radius,
+                        arc.center.y() + arc.radius,
+                    ));
+                    Shape2::Arc(arc)
+                }
                 EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_) => {
                     let (t0, t1) = edge.curve().domain_with_endpoints(v_start, v_end);
                     let mut samples: Vec<Point2> = (1..POLY_SAMPLES)
@@ -600,6 +620,95 @@ fn face_region_2d(
         }
     }
     Ok(Region2 { edges, lo, hi })
+}
+
+/// The arc a NURBS boundary edge traces in the pair's frame, when it is a
+/// circular arc (a partial revolve's rim): degree two or less with every
+/// weight positive, so each knot span is a conic, and five points of each
+/// span (its ends and quarters) on the circle through the edge's ends and
+/// middle (three points of a closed edge). Five points fix a conic, so each
+/// span is that circle. `p2_start` and `p2_end` are the edge's ends in its
+/// wire's direction, `forward` that direction against the edge's own.
+fn nurbs_arc(
+    curve: &EdgeCurve,
+    nurbs: &brepkit_math::nurbs::curve::NurbsCurve,
+    (v_start, v_end): (Point3, Point3),
+    (p2_start, p2_end): (Point2, Point2),
+    forward: bool,
+    frame: &PlaneFrame2D,
+) -> Option<Arc2> {
+    use std::f64::consts::{PI, TAU};
+    if nurbs.degree() > 2 || !nurbs.weights().iter().all(|w| w.is_finite() && *w > 0.0) {
+        return None;
+    }
+    let (t0, t1) = curve.domain_with_endpoints(v_start, v_end);
+    if t1 <= t0 {
+        return None;
+    }
+    let at = |t: f64| frame.project(curve.evaluate_with_endpoints(t, v_start, v_end));
+    let span = t1 - t0;
+    let closed = (v_start - v_end).length() < 1e-9;
+    let (a, b, c) = if closed {
+        (
+            at(t0),
+            at(span.madd(1.0 / 3.0, t0)),
+            at(span.madd(2.0 / 3.0, t0)),
+        )
+    } else {
+        (at(t0), at(span.madd(0.5, t0)), at(t1))
+    };
+    let center = circumcenter(a, b, c)?;
+    let radius = (a.x() - center.x()).hypot(a.y() - center.y());
+    let off = |p: Point2| ((p.x() - center.x()).hypot(p.y() - center.y()) - radius).abs();
+    let eps = 1e-9 * (1.0 + radius);
+    let mut breaks: Vec<f64> = std::iter::once(t0)
+        .chain(nurbs.knots().iter().copied().filter(|&k| k > t0 && k < t1))
+        .chain(std::iter::once(t1))
+        .collect();
+    breaks.dedup();
+    let on_circle = breaks
+        .windows(2)
+        .all(|w| (0..=4).all(|k| off(at((w[1] - w[0]).madd(f64::from(k) / 4.0, w[0]))) <= eps));
+    if !on_circle || off(p2_start) > eps || off(p2_end) > eps {
+        return None;
+    }
+    let a0 = angle_of(center, p2_start);
+    let sweep = if closed {
+        // The edge runs with its parameters; a quarter of the way along
+        // shows which way round that is in the frame.
+        let quarter =
+            (angle_of(center, at(span.madd(0.25, t0))) - angle_of(center, at(t0))).rem_euclid(TAU);
+        if (quarter < PI) == forward { TAU } else { -TAU }
+    } else {
+        let ccw = (angle_of(center, p2_end) - a0).rem_euclid(TAU);
+        let to_mid = (angle_of(center, at(span.madd(0.5, t0))) - a0).rem_euclid(TAU);
+        if to_mid <= ccw { ccw } else { ccw - TAU }
+    };
+    let circle =
+        brepkit_math::curves::Circle3D::new(frame.unproject(center), frame.normal, radius).ok()?;
+    Some(Arc2 {
+        center,
+        radius,
+        a0,
+        sweep,
+        circle,
+    })
+}
+
+/// The centre of the circle through three points, `None` when they are
+/// collinear.
+fn circumcenter(a: Point2, b: Point2, c: Point2) -> Option<Point2> {
+    let (bx, by) = (b.x() - a.x(), b.y() - a.y());
+    let (cx, cy) = (c.x() - a.x(), c.y() - a.y());
+    let d = 2.0 * bx.madd(cy, -(by * cx));
+    let scale = bx.hypot(by).max(cx.hypot(cy));
+    if d.abs() <= 1e-12 * scale * scale {
+        return None;
+    }
+    let (b2, c2) = (bx.madd(bx, by * by), cx.madd(cx, cy * cy));
+    let ux = cy.madd(b2, -(by * c2)) / d;
+    let uy = bx.madd(c2, -(cx * b2)) / d;
+    Some(Point2::new(a.x() + ux, a.y() + uy))
 }
 
 /// Even-odd containment against the exact boundary (segments and arcs;
@@ -1781,6 +1890,93 @@ mod tests {
             for (a, b) in [(from, to), (to, from)] {
                 let found = has_existing_section_at(&arena, &topo, target, a, b, tol);
                 assert_eq!(found, present);
+            }
+        }
+    }
+
+    /// The rational quadratic that traces `circle` from its parameter 0
+    /// through `quarters` quarter turns, each a span with its corner
+    /// weighted by cos 45 degrees.
+    fn rational_arc(circle: &Circle3D, quarters: usize) -> brepkit_math::nurbs::curve::NurbsCurve {
+        use std::f64::consts::{FRAC_1_SQRT_2, FRAC_PI_4, SQRT_2};
+        let along = |k: usize, reach: f64| {
+            #[allow(clippy::cast_precision_loss)]
+            let t = FRAC_PI_4 * k as f64;
+            circle.center() + (circle.u_axis() * t.cos() + circle.v_axis() * t.sin()) * reach
+        };
+        let r = circle.radius();
+        let points: Vec<Point3> = (0..=2 * quarters)
+            .map(|k| along(k, if k % 2 == 0 { r } else { r * SQRT_2 }))
+            .collect();
+        let weights = (0..=2 * quarters)
+            .map(|k| if k % 2 == 0 { 1.0 } else { FRAC_1_SQRT_2 })
+            .collect();
+        let mut knots = vec![0.0; 3];
+        for q in 1..quarters {
+            #[allow(clippy::cast_precision_loss)]
+            let at = q as f64 / quarters as f64;
+            knots.extend([at, at]);
+        }
+        knots.extend([1.0; 3]);
+        brepkit_math::nurbs::curve::NurbsCurve::new(2, knots, points, weights).unwrap()
+    }
+
+    /// A rim stored as a rational quadratic, whole or a quarter turn, reads
+    /// as the arc the same rim stored as a circle reads, either way round.
+    #[test]
+    fn a_rational_quadratic_rim_reads_as_its_arc() {
+        let frame = PlaneFrame2D::canonical(Vec3::new(0.0, 0.0, -1.0), 0.0);
+        let circle =
+            Circle3D::new(Point3::new(1.0, -2.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 3.0).unwrap();
+        for quarters in [4, 1] {
+            for forward in [true, false] {
+                let mut topo = Topology::new();
+                let start = topo.add_vertex(Vertex::new(circle.evaluate(0.0), 1e-7));
+                let end = if quarters == 4 {
+                    start
+                } else {
+                    topo.add_vertex(Vertex::new(
+                        circle.evaluate(std::f64::consts::FRAC_PI_2),
+                        1e-7,
+                    ))
+                };
+                let mut shape_of = |curve: EdgeCurve| {
+                    let rim = topo.add_edge(Edge::new(start, end, curve));
+                    let mut loop_edges = vec![OrientedEdge::new(rim, forward)];
+                    if quarters == 1 {
+                        let chord = topo.add_edge(Edge::new(end, start, EdgeCurve::Line));
+                        loop_edges.push(OrientedEdge::new(chord, forward));
+                        if !forward {
+                            loop_edges.reverse();
+                        }
+                    }
+                    let face = face_down(&mut topo, loop_edges, vec![]);
+                    let region = face_region_2d(&topo, face, &frame).unwrap();
+                    let edge = region.edges.into_iter().find(|e| e.eid == rim).unwrap();
+                    match edge.shape {
+                        Shape2::Arc(arc) => Some(arc),
+                        Shape2::Seg | Shape2::Poly(_) => None,
+                    }
+                };
+                let label = format!("{quarters} quarters, forward {forward}");
+                let exact = shape_of(EdgeCurve::Circle(circle.clone())).expect(&label);
+                let spline =
+                    shape_of(EdgeCurve::NurbsCurve(rational_arc(&circle, quarters))).expect(&label);
+                assert!(
+                    (exact.center.x() - spline.center.x()).abs() < 1e-12
+                        && (exact.center.y() - spline.center.y()).abs() < 1e-12,
+                    "{label}: centre"
+                );
+                assert!(
+                    (exact.radius - spline.radius).abs() < 1e-12,
+                    "{label}: radius"
+                );
+                let turn = (exact.a0 - spline.a0).rem_euclid(std::f64::consts::TAU);
+                assert!(
+                    turn.min(std::f64::consts::TAU - turn) < 1e-12,
+                    "{label}: start"
+                );
+                assert!((exact.sweep - spline.sweep).abs() < 1e-12, "{label}: sweep");
             }
         }
     }
