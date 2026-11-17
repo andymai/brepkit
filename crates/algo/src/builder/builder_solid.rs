@@ -3945,24 +3945,18 @@ fn seam_beside_lens(
             } else {
                 continue;
             };
-            if !paths
+            let Some(partner_path) = paths
                 .iter()
                 .enumerate()
-                .any(|(j, other)| j != k && other.contains(&partner))
-            {
+                .find(|&(j, other)| j != k && other.contains(&partner))
+                .map(|(_, other)| other)
+            else {
                 continue;
-            }
+            };
             // A face across the seam that runs along the partner, whole or in
             // pieces, would run it out and back once the partner took the
             // seam's place.
-            let mut runs_partner = false;
-            for (e, _) in face_edge_uses(topo, face_ids[across])? {
-                if !path.contains(&e) && runs_along(topo, e, partner)? {
-                    runs_partner = true;
-                    break;
-                }
-            }
-            if !runs_partner {
+            if !face_runs_along(topo, face_ids[across], path, partner, partner_path)? {
                 return Ok(Some((k, partner, fi)));
             }
         }
@@ -3970,29 +3964,57 @@ fn seam_beside_lens(
     Ok(None)
 }
 
-/// Whether `edge` runs along a stretch of `other`: two points of it next to
-/// each other, at the steps [`path_parting`] reads and at its ends, lie on
-/// `other` within the tolerance of two fits of one path, and further apart
-/// than twice that, so an edge leaving `other`'s end along its tangent does
-/// not count.
-fn runs_along(topo: &Topology, edge: EdgeId, other: EdgeId) -> Result<bool, AlgoError> {
-    if edge == other {
-        return Ok(true);
-    }
-    let tol = path_tolerance(topo, edge, other)?;
-    let (e, o) = (topo.edge(edge)?, topo.edge(other)?);
-    let (at, along) = (edge_path(topo, e)?, edge_path(topo, o)?);
-    let mut steps = path_steps(topo, e)?;
-    steps.extend([0.0, 1.0]);
-    steps.sort_by(f64::total_cmp);
-    let mut previous: Option<Point3> = None;
-    for f in steps {
-        let p = at(f);
-        let on = distance_to_path(&along, p) <= tol;
-        if on && previous.is_some_and(|q| (p - q).length() > 2.0 * tol) {
-            return Ok(true);
+/// Whether a wire of `face` runs along a stretch of `partner`, whole or in
+/// pieces: an edge of `partner_path`, or points of the wire that lie on
+/// `partner` one after another, read along the wire across its edges at the
+/// steps [`path_parting`] reads and at each edge's ends, over more than twice
+/// the tolerance of two fits of `partner`'s path. A run within that of one
+/// point is an edge leaving `partner`'s end along its tangent. The wire is
+/// read twice round, so a run across its first edge counts whole; the edges
+/// in `skip` break runs.
+fn face_runs_along(
+    topo: &Topology,
+    face: FaceId,
+    skip: &[EdgeId],
+    partner: EdgeId,
+    partner_path: &[EdgeId],
+) -> Result<bool, AlgoError> {
+    let along_edge = topo.edge(partner)?;
+    let along = edge_path(topo, along_edge)?;
+    let span = (along(0.5) - along(0.0)).length() + (along(1.0) - along(0.5)).length();
+    let tol = (PATH_REL_TOL * span).clamp(PATH_MIN_TOL, PATH_MAX_TOL);
+    let face = topo.face(face)?;
+    for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+        let wire = topo.wire(wid)?.edges();
+        let mut run: Option<Point3> = None;
+        for oe in wire.iter().chain(wire) {
+            let e = oe.edge();
+            if partner_path.contains(&e) {
+                return Ok(true);
+            }
+            if skip.contains(&e) {
+                run = None;
+                continue;
+            }
+            let edge = topo.edge(e)?;
+            let at = edge_path(topo, edge)?;
+            let mut steps = path_steps(topo, edge)?;
+            steps.extend([0.0, 1.0]);
+            steps.sort_by(f64::total_cmp);
+            if !oe.is_forward() {
+                steps.reverse();
+            }
+            for f in steps {
+                let p = at(f);
+                if distance_to_path(&along, p) > tol {
+                    run = None;
+                } else if run.is_some_and(|q| (p - q).length() > 2.0 * tol) {
+                    return Ok(true);
+                } else if run.is_none() {
+                    run = Some(p);
+                }
+            }
         }
-        previous = on.then_some(p);
     }
     Ok(false)
 }
@@ -5756,18 +5778,30 @@ mod tests {
         assert!(uses.values().all(|&n| n == 2), "{uses:?}");
     }
 
-    /// Two faces of one seamed wall, each between a piece of the seam and the
-    /// same curve, run both of the seam's ways and the curve's, the second
-    /// face's curve whole or in two pieces. The curve cannot take the seam's
-    /// place, as the face across the seam would then run it out and back, so
-    /// both faces stay, each with its piece of the seam.
-    #[test]
-    fn two_lenses_on_one_curve_keep_their_seam() {
-        two_lenses_keep_their_seam(false);
-        two_lenses_keep_their_seam(true);
+    /// How the face across the seam runs the curve the lens runs.
+    #[derive(Clone, Copy, Debug)]
+    enum Across {
+        /// As an edge of its own on the same curve.
+        Whole,
+        /// As two edges on the same curve, split at its middle.
+        Halves,
+        /// As a fit of the curve through 1001 of its points, densely knotted.
+        Dense,
     }
 
-    fn two_lenses_keep_their_seam(split: bool) {
+    /// Two faces of one seamed wall, each between a piece of the seam and the
+    /// same curve, run both of the seam's ways and the curve's, the second
+    /// face's curve whole, in two pieces, or as a dense fit. The curve cannot
+    /// take the seam's place, as the face across the seam would then run it
+    /// out and back, so both faces stay, each with its piece of the seam.
+    #[test]
+    fn two_lenses_on_one_curve_keep_their_seam() {
+        for across in [Across::Whole, Across::Halves, Across::Dense] {
+            two_lenses_keep_their_seam(across);
+        }
+    }
+
+    fn two_lenses_keep_their_seam(how: Across) {
         use brepkit_topology::edge::Edge;
         use brepkit_topology::vertex::Vertex;
 
@@ -5780,13 +5814,25 @@ mod tests {
         let seam_down = topo.add_edge(Edge::new(high, low, EdgeCurveOf::Line));
         let curve_up = topo.add_edge(Edge::new(low, high, curve()));
         let mut across = vec![(seam_up, true)];
-        if split {
-            let middle = edge_path(&topo, topo.edge(curve_up).unwrap()).unwrap()(0.5);
-            let middle = topo.add_vertex(Vertex::new(middle, 1e-7));
-            across.push((topo.add_edge(Edge::new(high, middle, curve())), true));
-            across.push((topo.add_edge(Edge::new(middle, low, curve())), true));
-        } else {
-            across.push((topo.add_edge(Edge::new(high, low, curve())), true));
+        let at =
+            |topo: &Topology, f: f64| edge_path(topo, topo.edge(curve_up).unwrap()).unwrap()(f);
+        match how {
+            Across::Whole => {
+                across.push((topo.add_edge(Edge::new(high, low, curve())), true));
+            }
+            Across::Halves => {
+                let middle = topo.add_vertex(Vertex::new(at(&topo, 0.5), 1e-7));
+                across.push((topo.add_edge(Edge::new(high, middle, curve())), true));
+                across.push((topo.add_edge(Edge::new(middle, low, curve())), true));
+            }
+            Across::Dense => {
+                let points: Vec<Point3> = (0..=1000)
+                    .map(|i| at(&topo, f64::from(i) / 1000.0))
+                    .collect();
+                let fit = brepkit_math::nurbs::fitting::interpolate(&points, 3).unwrap();
+                let fit = EdgeCurveOf::NurbsCurve(fit);
+                across.push((topo.add_edge(Edge::new(high, low, fit)), true));
+            }
         }
         let mut face_ids = vec![
             face_of(&mut topo, &across, wall.clone()),
@@ -5794,14 +5840,86 @@ mod tests {
         ];
         let mut sources = vec![Some(source), Some(source)];
         settle_faces(&mut topo, &mut face_ids, &mut sources, None).unwrap();
-        assert_eq!(face_ids.len(), 2, "{split}: both faces stay");
+        assert_eq!(face_ids.len(), 2, "{how:?}: both faces stay");
         for &fid in &face_ids {
             let edges = face_edge_uses(&topo, fid).unwrap();
             let lines = lines_of(&topo, edges.iter().map(|&(e, _)| e));
-            assert_eq!(lines, 1, "{split}: each face keeps its piece of the seam");
+            assert_eq!(lines, 1, "{how:?}: each face keeps its piece of the seam");
         }
         let uses = edge_use_counts(&topo, &face_ids);
-        assert!(uses.values().all(|&n| n == 2), "{split}: {uses:?}");
+        assert!(uses.values().all(|&n| n == 2), "{how:?}: {uses:?}");
+    }
+
+    /// A face whose wire runs a curve 1e-4 long in eight pieces of 1.25e-5,
+    /// each shorter than twice the tolerance of the curve's path, runs along
+    /// the curve. A face whose wire leaves the end of a curve along its
+    /// tangent, through points packed within 1e-4 of the end, does not.
+    #[test]
+    fn a_face_runs_along_a_curve_in_short_pieces() {
+        use brepkit_topology::edge::Edge;
+        use brepkit_topology::vertex::Vertex;
+
+        let plane = FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: 0.0,
+        };
+        let mut topo = Topology::new();
+        let bulge = || {
+            spline(
+                2,
+                &[(0.0, 0.0), (5e-5, 3e-5), (1e-4, 0.0)],
+                vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            )
+        };
+        let start = topo.add_vertex(Vertex::new(Point3::new(0.0, 0.0, 0.0), 1e-7));
+        let end = topo.add_vertex(Vertex::new(Point3::new(1e-4, 0.0, 0.0), 1e-7));
+        let partner = topo.add_edge(Edge::new(start, end, bulge()));
+        let points: Vec<Point3> = {
+            let at = edge_path(&topo, topo.edge(partner).unwrap()).unwrap();
+            (0..=8).map(|k| at(f64::from(k) / 8.0)).collect()
+        };
+        let mut corners = vec![start];
+        for &p in &points[1..8] {
+            corners.push(topo.add_vertex(Vertex::new(p, 1e-7)));
+        }
+        corners.push(end);
+        let mut wire: Vec<(EdgeId, bool)> = corners
+            .windows(2)
+            .map(|pair| (topo.add_edge(Edge::new(pair[0], pair[1], bulge())), true))
+            .collect();
+        let back = topo.add_edge(Edge::new(end, start, EdgeCurveOf::Line));
+        wire.push((back, true));
+        let pieces = face_of(&mut topo, &wire, plane.clone());
+        assert!(face_runs_along(&topo, pieces, &[back], partner, &[partner]).unwrap());
+
+        let arch = || {
+            spline(
+                2,
+                &[(0.0, 0.0), (0.5, 0.3), (1.0, 0.0)],
+                vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            )
+        };
+        let from = topo.add_vertex(Vertex::new(Point3::new(0.0, 0.0, 0.0), 1e-7));
+        let to = topo.add_vertex(Vertex::new(Point3::new(1.0, 0.0, 0.0), 1e-7));
+        let curve = topo.add_edge(Edge::new(from, to, arch()));
+        // A polyline leaves the arch's end along its tangent, (1, -0.6), and
+        // a line runs back.
+        let mut onward: Vec<(f64, f64)> = (0..=50)
+            .map(|k| {
+                let d = 2e-6 * f64::from(k);
+                (d.madd(1.0, 1.0), -0.6 * d)
+            })
+            .collect();
+        onward.push((2.0, -0.6));
+        let n = onward.len();
+        let mut knots = vec![0.0, 0.0];
+        knots.extend((1..n - 1).map(|k| k as f64 / (n - 1) as f64));
+        knots.extend([1.0, 1.0]);
+        let far = topo.add_vertex(Vertex::new(Point3::new(2.0, -0.6, 0.0), 1e-7));
+        let leave = topo.add_edge(Edge::new(to, far, spline(1, &onward, knots)));
+        let home = topo.add_edge(Edge::new(far, to, EdgeCurveOf::Line));
+        let leaving = face_of(&mut topo, &[(leave, true), (home, true)], plane);
+        assert!(!face_runs_along(&topo, leaving, &[], curve, &[curve]).unwrap());
     }
 
     /// Three arches between one pair of points, each bounding a face of its
