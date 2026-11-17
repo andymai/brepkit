@@ -486,3 +486,57 @@ fn a_plates_top_outline_of_lines_and_arcs_takes_a_chamfer() {
         before - after
     );
 }
+
+/// `universal-joint`: a yoke's fork (two ears and a bridge, 68 planes) and
+/// the turned outside it is trimmed to, a cylinder of radius 47 that tapers
+/// along a cone to radius 34 at x = -62. The bridge's corners stand outside
+/// the cone.
+#[test]
+fn a_yokes_fork_trims_to_its_turned_outside_exactly() {
+    use PointClassification::{Inside, Outside};
+    let exact = BooleanOptions {
+        mesh_fallback: false,
+        ..BooleanOptions::default()
+    };
+    let mut topo = Topology::new();
+    let fork = load("universal_joint_fork.bin", &mut topo);
+    let outside = load("universal_joint_turned_outside.bin", &mut topo);
+    let yoke = boolean_with_options(&mut topo, BooleanOp::Intersect, fork, outside, exact).unwrap();
+    assert_holds(&topo, yoke);
+    assert!(
+        solid_faces(&topo, yoke).unwrap().iter().any(|&f| topo
+            .face(f)
+            .unwrap()
+            .surface()
+            .type_tag()
+            == "cone"),
+        "the taper is gone"
+    );
+    // In the bridge inside the cone, at a bridge corner outside it, and in
+    // an ear inside the cylinder.
+    for (p, want) in [
+        ([-55.0, 0.0, 30.0], Inside),
+        ([-55.0, 0.0, 44.0], Outside),
+        ([0.0, 18.0, 40.0], Inside),
+    ] {
+        assert_eq!(class_of(&topo, yoke, p), want, "at {p:?}");
+    }
+    let grid = Grid {
+        lo: [-63.0, -22.0, -46.0],
+        hi: [-37.0, 22.0, 46.0],
+        n: 14,
+    };
+    let mut read = 0;
+    for p in grid.points() {
+        let (Some(y), Some(f), Some(o)) = (
+            holds(&topo, yoke, p),
+            holds(&topo, fork, p),
+            holds(&topo, outside, p),
+        ) else {
+            continue;
+        };
+        assert_eq!(y, f && o, "at {p:?}");
+        read += 1;
+    }
+    assert!(read > grid.n.pow(3) / 2, "only {read} points read");
+}
