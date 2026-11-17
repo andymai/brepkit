@@ -2672,10 +2672,11 @@ pub fn exact_cone_torus(
     let axis = cone.axis();
     let (major, minor) = (torus.major_radius(), torus.minor_radius());
     let offset = torus.center() - cone.apex();
-    let scale = major + minor + offset.length();
+    // The cone's axis must pass the torus's centre within the torus's own
+    // scale: an apex far away does not widen the band.
     if minor >= major
         || axis.cross(torus.z_axis()).length() > 1e-9
-        || offset.cross(axis).length() > 1e-9 * scale
+        || offset.cross(axis).length() > 1e-9 * (major + minor)
     {
         return Ok(None);
     }
@@ -6742,6 +6743,14 @@ mod tests {
         let offset = ConicalSurface::new(Point3::new(0.5, 0.0, -5.0), z, quarter).unwrap();
         assert!(exact_cone_torus(&tilted, &torus).unwrap().is_none());
         assert!(exact_cone_torus(&offset, &torus).unwrap().is_none());
+        // A near cylinder whose apex lies a million below, its axis 0.0005
+        // beside the torus's: radius 4.75 at the torus, off its axis.
+        let far = ConicalSurface::new(Point3::new(0.0005, 0.0, -1e6), z, (1e6_f64 / 4.75).atan())
+            .unwrap();
+        assert!(
+            exact_cone_torus(&far, &torus).unwrap().is_none(),
+            "a cone off the torus's axis by 0.0005 is not coaxial, however far its apex"
+        );
         let spindle = ToroidalSurface::with_axis_and_ref_dir(
             Point3::new(0.0, 0.0, 0.0),
             1.0,
