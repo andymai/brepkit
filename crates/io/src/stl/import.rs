@@ -47,6 +47,12 @@ pub struct MeshImport {
 ///   the two triangles run the edge in opposite directions. When two ways
 ///   to pair them do that, each pair holds the material between its two
 ///   triangles, so two closed bodies that share an edge are two bodies.
+///   When the import turns each body at such an edge (see below), the
+///   triangles pair off again round the material after the turn, and the
+///   import places the bodies of the new pairs again. When the triangles of
+///   two surfaces (sets of triangles joined through edges of two triangles)
+///   alternate round the edge, the two surfaces cross there: each pairs with
+///   itself, and the two bodies cross.
 /// - The triangles of such an edge do not pair off, and join one shell,
 ///   when two of them lie at one angle (as two cubes that share a side do),
 ///   or when the stored normals neither agree nor disagree with the
@@ -119,9 +125,14 @@ impl MeshBodies {
             });
         }
 
-        let links = Links::read(&tris, &points, &votes, &directions, tolerance);
+        let mut links = Links::read(&tris, &points, &votes, &directions, tolerance);
         let mut bodies = split_bodies(&mut tris, &votes, &points, &links);
-        let placement = assign_cavities(&mut bodies, &mut tris, &points, &links, tolerance);
+        let source = Source {
+            points: &points,
+            votes: &votes,
+            tolerance,
+        };
+        let placement = place_bodies(&mut bodies, &mut tris, &mut links, source);
         Ok(Self {
             points,
             tris,
@@ -428,6 +439,10 @@ struct Links {
     /// For each triangle, whether the pairs took it as wound the other way.
     /// Empty when no edge has more than two triangles.
     facing: Vec<bool>,
+    /// For each triangle, the first triangle of the set joined to it
+    /// through edges of two triangles. Empty when no edge has more than two
+    /// triangles.
+    patch: Vec<usize>,
 }
 
 impl Links {
@@ -446,27 +461,32 @@ impl Links {
             }
         }
         let mut pairs = HashMap::new();
-        let facing = if uses.values().any(|list| list.len() > 2) {
-            let (turned, unsure) = patch_turns(tris, &uses, votes, directions);
+        let (facing, patch) = if uses.values().any(|list| list.len() > 2) {
+            let (turned, unsure, patch) = patch_turns(tris, &uses, votes, directions);
             for (&key, list) in &uses {
                 // The triangles of an edge are in one group, so one of them
                 // tells whether its side is sure.
                 if list.len() <= 2 || unsure[list[0].0] {
                     continue;
                 }
-                for [s, t] in pair_round_edge(key, list, &turned, tris, points, tolerance) {
+                let sides = Sides {
+                    turned: &turned,
+                    patch: &patch,
+                };
+                for [s, t] in pair_round_edge(key, list, sides, tris, points, tolerance) {
                     pairs.insert((s, key), t);
                     pairs.insert((t, key), s);
                 }
             }
-            turned
+            (turned, patch)
         } else {
-            Vec::new()
+            (Vec::new(), Vec::new())
         };
         Self {
             uses,
             pairs,
             facing,
+            patch,
         }
     }
 
@@ -493,8 +513,8 @@ impl Links {
 }
 
 /// For each triangle, whether it is wound against the side of the triangles
-/// joined to it through edges of two triangles, and whether that side is
-/// unsure.
+/// joined to it through edges of two triangles, whether that side is
+/// unsure, and the first triangle of that set.
 ///
 /// Such a set takes the side of most of its triangles as they are wound.
 /// The sets joined through any edge (a group) turn over together when
@@ -508,9 +528,10 @@ fn patch_turns(
     uses: &HashMap<(usize, usize), Vec<(usize, bool)>>,
     votes: &[f64],
     directions: &[Direction],
-) -> (Vec<bool>, Vec<bool>) {
+) -> (Vec<bool>, Vec<bool>, Vec<usize>) {
     let mut turn = vec![false; tris.len()];
     let mut seen = vec![false; tris.len()];
+    let mut patch_of = vec![0; tris.len()];
     let mut patch = Vec::new();
     for seed in 0..tris.len() {
         if seen[seed] {
@@ -543,6 +564,9 @@ fn patch_turns(
             for &t in &patch {
                 turn[t] = !turn[t];
             }
+        }
+        for &t in &patch {
+            patch_of[t] = seed;
         }
     }
 
@@ -586,7 +610,7 @@ fn patch_turns(
             unsure[t] = true;
         }
     }
-    (turn, unsure)
+    (turn, unsure, patch_of)
 }
 
 /// The first triangle of the group of `t`, in a forest of groups.
@@ -598,6 +622,14 @@ fn group_of(group: &mut [usize], mut t: usize) -> usize {
     t
 }
 
+/// For each triangle, the side that the pairs take it to face (see
+/// [`patch_turns`]), and the set of triangles that it is in.
+#[derive(Clone, Copy)]
+struct Sides<'a> {
+    turned: &'a [bool],
+    patch: &'a [usize],
+}
+
 /// The pairs of triangles round an edge of more than two triangles, each
 /// pair the two sides of one body at the edge. Empty when they do not pair
 /// off.
@@ -607,10 +639,15 @@ fn group_of(group: &mut [usize], mut t: usize) -> usize {
 /// body, so the pairs come from the rotation in which no pair does. When
 /// both rotations fit, each pair takes the wedge that both of its triangles
 /// face away from: the material of the body.
+///
+/// Two surfaces cross at the edge when their triangles alternate round it:
+/// two cubes that share an edge, the second turned by 45 degrees round it,
+/// do. Then each surface pairs with itself, so the two bodies stay apart
+/// and [`assign_cavities`] finds that they cross.
 fn pair_round_edge(
     (lo, hi): (usize, usize),
     list: &[(usize, bool)],
-    turned: &[bool],
+    sides: Sides<'_>,
     tris: &[[usize; 3]],
     points: &[Point3],
     tolerance: f64,
@@ -623,6 +660,39 @@ fn pair_round_edge(
         /// Whether the triangle faces the way that the angle grows.
         up: bool,
         tri: usize,
+        /// The first triangle of its set joined through edges of two
+        /// triangles: its surface.
+        patch: usize,
+    }
+
+    /// The pairs when two surfaces cross at the edge: each surface has two
+    /// triangles round the edge, which run it in opposite directions, and
+    /// the triangles of two of them alternate round it. Each pair is the
+    /// two triangles of one surface.
+    fn crossing_surfaces(round: &[Side]) -> Option<Vec<[usize; 2]>> {
+        let mut first: HashMap<usize, Option<usize>> = HashMap::new();
+        let mut pairs = Vec::with_capacity(round.len() / 2);
+        // Surfaces that do not cross nest round the edge, as brackets do:
+        // the last surface to start is the first to end.
+        let mut open = Vec::new();
+        let mut nested = true;
+        for (i, side) in round.iter().enumerate() {
+            match first.get(&side.patch) {
+                None => {
+                    first.insert(side.patch, Some(i));
+                    open.push(side.patch);
+                }
+                Some(&Some(j)) if round[j].up != side.up => {
+                    first.insert(side.patch, None);
+                    pairs.push([round[j].tri, side.tri]);
+                    if nested && open.pop() != Some(side.patch) {
+                        nested = false;
+                    }
+                }
+                Some(_) => return None,
+            }
+        }
+        (!nested && pairs.len() * 2 == round.len()).then_some(pairs)
     }
 
     let n = list.len();
@@ -658,8 +728,9 @@ fn pair_round_edge(
             Side {
                 angle: y.atan2(x),
                 reach: x.hypot(y),
-                up: forward != turned[tri],
+                up: forward != sides.turned[tri],
                 tri,
+                patch: sides.patch[tri],
             }
         })
         .collect();
@@ -681,6 +752,9 @@ fn pair_round_edge(
     });
     if close {
         return Vec::new();
+    }
+    if let Some(pairs) = crossing_surfaces(&round) {
+        return pairs;
     }
 
     let fits = |shift: usize| {
@@ -1183,16 +1257,81 @@ const RAYS: [[f64; 3]; 4] = [
     [-1.0, -0.414_2, -0.302_7],
 ];
 
-/// Make each inward closed body a cavity of the outward body that it lies
-/// directly in, a shell when it crosses another body, or turn it into a
-/// solid when it lies in no outward body.
-fn assign_cavities(
-    bodies: &mut [Body],
+/// What the import read from a mesh: its merged points, the vote of the
+/// stored normals of each triangle (see [`mesh_triangles`]), and the merge
+/// tolerance.
+#[derive(Clone, Copy)]
+struct Source<'a> {
+    points: &'a [Point3],
+    votes: &'a [f64],
+    tolerance: f64,
+}
+
+/// What the import makes of an inward closed body.
+#[derive(Debug, Clone, Copy)]
+enum Fate {
+    /// A shell: the body crosses another body.
+    Shell,
+    /// A cavity of the outward body with this index.
+    Cavity(usize),
+    /// A solid: the body lies in no outward body, and the import turns it.
+    Turn,
+}
+
+/// Place the closed bodies, and give each inward closed body its fate (see
+/// [`assign_cavities`]).
+///
+/// When the triangles round an edge pair off again for the turns (see
+/// [`pair_after_turns`]), the bodies of the new pairs replace the old
+/// bodies, each with the winding of the mesh. The import then places all
+/// the closed bodies again, so a new body that crosses another body is a
+/// shell, as any inward body that crosses another body is.
+fn place_bodies(
+    bodies: &mut Vec<Body>,
     tris: &mut [[usize; 3]],
+    links: &mut Links,
+    source: Source<'_>,
+) -> Placement {
+    // An edge pairs off again once, so the loop ends.
+    let mut paired_again = HashSet::new();
+    loop {
+        let (placement, fates) =
+            assign_cavities(bodies, tris, source.points, links, source.tolerance);
+        let turned: Vec<usize> = fates
+            .iter()
+            .filter(|(_, fate)| matches!(fate, Fate::Turn))
+            .map(|&(i, _)| i)
+            .collect();
+        if pair_after_turns(bodies, &turned, tris, links, source, &mut paired_again) {
+            continue;
+        }
+        for (i, fate) in fates {
+            match fate {
+                Fate::Shell => bodies[i].kind = BodyKind::Open,
+                Fate::Cavity(j) => bodies[i].kind = BodyKind::Cavity(j),
+                Fate::Turn => {
+                    for &t in &bodies[i].tris {
+                        tris[t].swap(1, 2);
+                    }
+                    bodies[i].volume6 = -bodies[i].volume6;
+                }
+            }
+        }
+        return placement;
+    }
+}
+
+/// The fate of each inward closed body: a cavity of the outward body that it
+/// lies directly in, a shell when it crosses another body, or a turn into a
+/// solid when it lies in no outward body. Returns how the bodies sit
+/// together after those fates, and the fates.
+fn assign_cavities(
+    bodies: &[Body],
+    tris: &[[usize; 3]],
     points: &[Point3],
     links: &Links,
     tolerance: f64,
-) -> Placement {
+) -> (Placement, Vec<(usize, Fate)>) {
     let closed: Vec<usize> = (0..bodies.len())
         .filter(|&i| bodies[i].kind == BodyKind::Solid)
         .collect();
@@ -1200,29 +1339,220 @@ fn assign_cavities(
 
     // The cavities come from the winding of the mesh as it is.
     let outward: Vec<bool> = bodies.iter().map(|b| b.volume6 > 0.0).collect();
+    let mut solid = outward.clone();
+    let mut fates = Vec::new();
     for (c, &i) in closed.iter().enumerate() {
         if outward[i] {
             continue;
         }
-        if nesting.crossed[c] {
-            bodies[i].kind = BodyKind::Open;
+        let fate = if nesting.crossed[c] {
+            Fate::Shell
         } else if let Some(j) = nesting.around[c].map(|d| closed[d]).filter(|&j| outward[j]) {
-            bodies[i].kind = BodyKind::Cavity(j);
+            Fate::Cavity(j)
         } else {
-            for &t in &bodies[i].tris {
-                tris[t].swap(1, 2);
-            }
-            bodies[i].volume6 = -bodies[i].volume6;
-        }
+            solid[i] = true;
+            Fate::Turn
+        };
+        fates.push((i, fate));
     }
     // The overlap comes from the result: a turned body is a solid too.
-    let overlap = closed.iter().zip(&nesting.around).any(|(&i, around)| {
-        bodies[i].kind == BodyKind::Solid
-            && around.is_some_and(|d| bodies[closed[d]].kind == BodyKind::Solid)
-    });
-    Placement {
+    let overlap = closed
+        .iter()
+        .zip(&nesting.around)
+        .any(|(&i, around)| solid[i] && around.is_some_and(|d| solid[closed[d]]));
+    let placement = Placement {
         overlap,
         crossing: nesting.crossed.contains(&true),
+    };
+    (placement, fates)
+}
+
+/// Pair again the triangles round each edge of more than two triangles
+/// whose bodies the import turns, and split those bodies by the new pairs.
+/// Returns whether any pair changed.
+///
+/// When both ways to pair the triangles of an edge fit, each pair holds the
+/// material of the winding. A turn of every triangle round the edge puts
+/// the material in the other wedges, so the triangles pair off round those.
+/// Two inward cubes that share an edge, in no body, are then two solids and
+/// not one solid that pinches at the edge.
+///
+/// The import has not turned the bodies yet. Each new body takes its side
+/// from the winding of the mesh and from its own stored normals (see
+/// [`take_side`]), as a closed body does in [`split_bodies`]. A new body
+/// with no volume is a shell. An edge in `paired_again` does not pair off
+/// again.
+fn pair_after_turns(
+    bodies: &mut Vec<Body>,
+    turned: &[usize],
+    tris: &mut [[usize; 3]],
+    links: &mut Links,
+    source: Source<'_>,
+    paired_again: &mut HashSet<(usize, usize)>,
+) -> bool {
+    let Source {
+        points,
+        votes,
+        tolerance,
+    } = source;
+    if turned.is_empty() || links.pairs.is_empty() {
+        return false;
+    }
+    let mut body_of = vec![usize::MAX; tris.len()];
+    for &i in turned {
+        for &t in &bodies[i].tris {
+            body_of[t] = i;
+        }
+    }
+    let facing: Vec<bool> = links
+        .facing
+        .iter()
+        .zip(&body_of)
+        .map(|(&facing, &body)| facing != (body != usize::MAX))
+        .collect();
+
+    // The edges whose pairs change, with their new pairs. An edge with a
+    // triangle that was not turned keeps its pairs: each pair still runs
+    // the edge in opposite directions.
+    let mut changed: HashMap<(usize, usize), Vec<[usize; 2]>> = HashMap::new();
+    let mut seen = paired_again.clone();
+    for &i in turned {
+        for &t in &bodies[i].tris {
+            let tri = tris[t];
+            for k in 0..3 {
+                let key = edge_key(tri[k], tri[(k + 1) % 3]);
+                if !links.pairs.contains_key(&(t, key)) || !seen.insert(key) {
+                    continue;
+                }
+                let list = &links.uses[&key];
+                if list.iter().any(|&(u, _)| body_of[u] == usize::MAX) {
+                    continue;
+                }
+                let sides = Sides {
+                    turned: &facing,
+                    patch: &links.patch,
+                };
+                let pairs = pair_round_edge(key, list, sides, tris, points, tolerance);
+                if pairs
+                    .iter()
+                    .any(|&[s, u]| links.pairs.get(&(s, key)) != Some(&u))
+                {
+                    changed.insert(key, pairs);
+                }
+            }
+        }
+    }
+    if changed.is_empty() {
+        return false;
+    }
+
+    let mut affected = vec![false; bodies.len()];
+    for (&key, pairs) in &changed {
+        paired_again.insert(key);
+        for &(u, _) in &links.uses[&key] {
+            affected[body_of[u]] = true;
+        }
+        for &[s, u] in pairs {
+            links.pairs.insert((s, key), u);
+            links.pairs.insert((u, key), s);
+        }
+    }
+    let mut free = vec![false; tris.len()];
+    let mut seeds = Vec::new();
+    for (i, body) in bodies.iter().enumerate() {
+        if affected[i] {
+            for &t in &body.tris {
+                free[t] = true;
+                seeds.push(t);
+            }
+        }
+    }
+    seeds.sort_unstable();
+
+    // The pairs of a turned body run its edges in opposite directions, and
+    // the new pairs do too: each new body is closed, and wound to one side.
+    let mut split = Vec::new();
+    for seed in seeds {
+        if !free[seed] {
+            continue;
+        }
+        free[seed] = false;
+        let mut members = vec![seed];
+        let mut next = 0;
+        while next < members.len() {
+            let t = members[next];
+            next += 1;
+            let tri = tris[t];
+            for k in 0..3 {
+                if let Some(other) = links.across(t, edge_key(tri[k], tri[(k + 1) % 3]))
+                    && free[other]
+                {
+                    free[other] = false;
+                    members.push(other);
+                }
+            }
+        }
+        members.sort_unstable();
+        take_side(&members, tris, links, votes);
+        let (volume6, terms) = signed_volume6(&members, tris, points);
+        let closed = volume6.abs() > 1e-12 * terms;
+        split.push(Body {
+            tris: members,
+            kind: if closed {
+                BodyKind::Solid
+            } else {
+                BodyKind::Open
+            },
+            volume6: if closed { volume6 } else { 0.0 },
+        });
+    }
+
+    // Back in the order of each body's first triangle. No body is a cavity
+    // yet, so no index of a body needs to move with it.
+    let mut order: Vec<Body> = std::mem::take(bodies)
+        .into_iter()
+        .enumerate()
+        .filter_map(|(i, body)| (!affected[i]).then_some(body))
+        .chain(split)
+        .collect();
+    order.sort_unstable_by_key(|body| body.tris[0]);
+    *bodies = order;
+    true
+}
+
+/// Turn a closed body, wound to one side, to the side that [`split_bodies`]
+/// gives a closed body: the side of most of its triangles as the mesh winds
+/// them, then the other side when its stored normals point against that.
+///
+/// The import can already have turned some of the triangles from their
+/// winding in the mesh; `links` holds that winding.
+fn take_side(members: &[usize], tris: &mut [[usize; 3]], links: &Links, votes: &[f64]) {
+    let turned: Vec<bool> = members
+        .iter()
+        .map(|&t| {
+            let tri = tris[t];
+            let key = edge_key(tri[0], tri[1]);
+            links.uses[&key]
+                .iter()
+                .any(|&(u, forward)| u == t && forward != runs_up(tri, key))
+        })
+        .collect();
+    // Of the two sides, the one that turns fewer triangles of the mesh, as
+    // in `consistent_turns`: on a tie, the first triangle keeps its winding.
+    let count = turned.iter().filter(|&&was| was).count();
+    let mut flip = count * 2 > members.len() || (count * 2 == members.len() && turned[0]);
+    let (mut vote, mut weight) = (0.0, 0.0);
+    for (&t, &was) in members.iter().zip(&turned) {
+        vote += if was == flip { votes[t] } else { -votes[t] };
+        weight += votes[t].abs();
+    }
+    if vote < -0.5 * weight {
+        flip = !flip;
+    }
+    if flip {
+        for &t in members {
+            tris[t].swap(1, 2);
+        }
     }
 }
 
@@ -1790,15 +2120,46 @@ struct Facet {
 }
 
 /// Whether two triangles of two closed bodies cross: the surface of each
-/// body passes through the plane of the other triangle there, and the two
-/// meet along a length of more than `on`. Two triangles that touch at a
-/// point, along an edge, or in one plane do not cross.
+/// body passes through the other surface there, and the two meet along a
+/// length of more than `on`. Two triangles that touch at a point, along an
+/// edge, or in one plane do not cross.
+///
+/// Where a triangle of each body has an edge on one line, each surface is
+/// two triangles round the line. The two surfaces cross there when the
+/// triangles of the two bodies alternate round the line, read from the line
+/// of each edge. When the two edges have no line in common, each body must
+/// pass through the plane of the triangle of the other.
+///
+/// The answer does not change when `t` and `u` change places.
 fn triangles_cross(t: &Facet, u: &Facet, on: f64) -> bool {
     let (Some(cut_t), Some(cut_u)) = (
         cut_by_plane(t, &u.corners, on),
         cut_by_plane(u, &t.corners, on),
     ) else {
         return false;
+    };
+    let through = match (cut_t, cut_u) {
+        (Cut::Edge { k, passes: pt }, Cut::Edge { k: j, passes: pu }) => {
+            // The two lines are up to `on` apart, so the order round each
+            // can differ near the tolerance: a contact there is no crossing.
+            match (
+                alternate_round_edge(t, k, u, j, on),
+                alternate_round_edge(u, j, t, k, on),
+            ) {
+                (Some(one), Some(other)) => one && other,
+                _ => pt && pu,
+            }
+        }
+        (Cut::Edge { passes, .. }, Cut::Through(..))
+        | (Cut::Through(..), Cut::Edge { passes, .. }) => passes,
+        (Cut::Through(..), Cut::Through(..)) => true,
+    };
+    if !through {
+        return false;
+    }
+    let ends = |facet: &Facet, cut: Cut| match cut {
+        Cut::Through(a, b) => (a, b),
+        Cut::Edge { k, .. } => (facet.corners[k], facet.corners[(k + 1) % 3]),
     };
     let [t0, t1, t2] = t.corners;
     let [u0, u1, u2] = u.corners;
@@ -1807,12 +2168,81 @@ fn triangles_cross(t: &Facet, u: &Facet, on: f64) -> bool {
     let Ok(line) = n_t.cross(n_u).normalize() else {
         return false;
     };
+    // From a point near both triangles, the same in either order: then the
+    // spans only change sign when `t` and `u` change places.
+    let origin = Point3::new(t0.x().min(u0.x()), t0.y().min(u0.y()), t0.z().min(u0.z()));
     let span = |(a, b): (Point3, Point3)| {
-        let (x, y) = (line.dot(a - t0), line.dot(b - t0));
+        let (x, y) = (line.dot(a - origin), line.dot(b - origin));
         (x.min(y), x.max(y))
     };
-    let ((a0, a1), (b0, b1)) = (span(cut_t), span(cut_u));
+    let ((a0, a1), (b0, b1)) = (span(ends(t, cut_t)), span(ends(u, cut_u)));
     a1.min(b1) - a0.max(b0) > on
+}
+
+/// Whether the two triangles of each of two bodies round a line alternate
+/// round it: `t` and the triangle across its edge from corner `k`, and `u`
+/// and the triangle across its edge from corner `j`.
+///
+/// - `None` when the edge of `u` is more than `on` off the line of the edge
+///   of `t` where the two edges run side by side: the two have no line in
+///   common.
+/// - `Some(false)` when a triangle of one body and a triangle of the other
+///   lie on one side of the line, with the far corner of the shorter one
+///   within `2 * on` of the plane of the other. The edge of `u` can be `on`
+///   off the line, so the side of one to the other is not sure.
+fn alternate_round_edge(t: &Facet, k: usize, u: &Facet, j: usize, on: f64) -> Option<bool> {
+    let (p, q) = (t.corners[k], t.corners[(k + 1) % 3]);
+    let axis = (q - p).normalize().ok()?;
+    let off = |x: Point3| {
+        let w = x - p;
+        w - axis * w.dot(axis)
+    };
+    let (r0, r1) = (u.corners[j], u.corners[(j + 1) % 3]);
+    let (s0, s1) = ((r0 - p).dot(axis), (r1 - p).dot(axis));
+    if (s1 - s0).abs() <= on {
+        return None;
+    }
+    let (lo, hi) = (s0.min(s1).max(0.0), s0.max(s1).min((q - p).dot(axis)));
+    let at = |s: f64| r0 + (r1 - r0) * ((s - s0) / (s1 - s0));
+    if hi < lo || off(at(lo)).length() > on || off(at(hi)).length() > on {
+        return None;
+    }
+
+    // Each far corner in the plane across the line, with `a` on the first
+    // axis.
+    let x_axis = off(t.corners[(k + 2) % 3]).normalize().ok()?;
+    let y_axis = axis.cross(x_axis);
+    let flat = |x: Point3| {
+        let w = off(x);
+        [w.dot(x_axis), w.dot(y_axis)]
+    };
+    let [a, b] = [t.corners[(k + 2) % 3], t.beyond[k]].map(flat);
+    let [c, d] = [u.corners[(j + 2) % 3], u.beyond[j]].map(flat);
+    let together = |x: [f64; 2], y: [f64; 2]| {
+        let reach = x[0].hypot(x[1]).max(y[0].hypot(y[1]));
+        x[0].madd(y[0], x[1] * y[1]) > 0.0
+            && x[0].madd(y[1], -(x[1] * y[0])).abs() <= 2.0 * on * reach
+    };
+    if together(a, b) || together(c, d) || [a, b].iter().any(|&x| together(x, c) || together(x, d))
+    {
+        return Some(false);
+    }
+    // Whether a far corner lies in the wedge that turns from `a` to `b`.
+    let angle = |x: [f64; 2]| x[1].atan2(x[0]).rem_euclid(std::f64::consts::TAU);
+    let inside = |x: [f64; 2]| angle(x) > 0.0 && angle(x) < angle(b);
+    Some(inside(c) != inside(d))
+}
+
+/// Where the plane of a triangle meets a triangle of another body.
+#[derive(Clone, Copy)]
+enum Cut {
+    /// The triangle passes more than the tolerance to both sides of the
+    /// plane: its part in the plane, by its two ends.
+    Through(Point3, Point3),
+    /// The edge from corner `k` to corner `k + 1` lies in the plane, and the
+    /// far corner is off it. `passes` tells whether the triangle across the
+    /// edge is more than the tolerance to the other side of the plane.
+    Edge { k: usize, passes: bool },
 }
 
 /// Whether two triangles of two closed bodies lie in one plane, within
@@ -1897,15 +2327,13 @@ fn clip_to_triangle(polygon: Vec<[f64; 2]>, clip: &[[f64; 2]; 3]) -> Vec<[f64; 2
     out
 }
 
-/// Where the surface of the body of `facet` passes through the plane of
-/// the triangle `other`, in `facet`, by its two ends.
+/// Where the plane of the triangle `other` meets `facet`.
 ///
 /// - When `facet` passes more than `on` to each side of the plane, the
 ///   part of `facet` in the plane.
-/// - When an edge of `facet` lies in the plane, and `facet` and the
-///   triangle across that edge are more than `on` to the two sides of the
-///   plane, that edge.
-fn cut_by_plane(facet: &Facet, other: &[Point3; 3], on: f64) -> Option<(Point3, Point3)> {
+/// - When an edge of `facet` lies in the plane, and its far corner more
+///   than `on` off it, that edge.
+fn cut_by_plane(facet: &Facet, other: &[Point3; 3], on: f64) -> Option<Cut> {
     let tri = facet.corners;
     let normal = (other[1] - other[0])
         .cross(other[2] - other[0])
@@ -1925,19 +2353,17 @@ fn cut_by_plane(facet: &Facet, other: &[Point3; 3], on: f64) -> Option<(Point3, 
             }
         }
         return match ends[..] {
-            [a, b] => Some((a, b)),
+            [a, b] => Some(Cut::Through(a, b)),
             _ => None,
         };
     }
     (0..3).find_map(|k| {
         let (m, far) = ((k + 1) % 3, (k + 2) % 3);
         let beyond = side(facet.beyond[k]);
-        (d[k].abs() <= on
-            && d[m].abs() <= on
-            && d[far].abs() > on
-            && beyond.abs() > on
-            && (beyond > 0.0) != (d[far] > 0.0))
-            .then_some((tri[k], tri[m]))
+        (d[k].abs() <= on && d[m].abs() <= on && d[far].abs() > on).then_some(Cut::Edge {
+            k,
+            passes: beyond.abs() > on && (beyond > 0.0) != (d[far] > 0.0),
+        })
     })
 }
 
@@ -2267,5 +2693,152 @@ mod tests {
         // Only the valid triangle should remain.
         assert_eq!(parts.shells.len(), 1);
         assert_eq!(topo.shell(parts.shells[0]).unwrap().faces().len(), 1);
+    }
+
+    /// A triangle with its edge on the z axis from `z` to `z + 10`, its far
+    /// corner at `far`, and the far corner of the triangle across that edge
+    /// at `beyond`.
+    fn on_axis(z: f64, far: Point3, beyond: Point3) -> Facet {
+        Facet {
+            corners: [
+                Point3::new(0.0, 0.0, z),
+                Point3::new(0.0, 0.0, z + 10.0),
+                far,
+            ],
+            beyond: [beyond, far, far],
+        }
+    }
+
+    /// Round the axis, one body has triangles at 0 and 90 degrees, and the
+    /// other at 45 and 180 degrees: they alternate as 0, 45, 90, 180. The
+    /// triangle at 180 degrees is in the plane of the one at 0 degrees.
+    #[test]
+    fn triangles_that_alternate_round_a_line_cross_with_one_in_the_plane_of_another() {
+        let t = on_axis(
+            0.0,
+            Point3::new(10.0, 0.0, 5.0),
+            Point3::new(0.0, 10.0, 5.0),
+        );
+        let u = on_axis(
+            2.0,
+            Point3::new(10.0, 10.0, 7.0),
+            Point3::new(-10.0, 0.0, 7.0),
+        );
+        assert!(triangles_cross(&t, &u, 1e-7));
+        assert!(triangles_cross(&u, &t, 1e-7));
+    }
+
+    /// Round the axis, one body has triangles at 0 and 90 degrees, and the
+    /// other at 180 and 270 degrees: they touch along the axis.
+    #[test]
+    fn triangles_that_do_not_alternate_round_a_line_do_not_cross() {
+        let t = on_axis(
+            0.0,
+            Point3::new(10.0, 0.0, 5.0),
+            Point3::new(0.0, 10.0, 5.0),
+        );
+        let u = on_axis(
+            2.0,
+            Point3::new(0.0, -10.0, 7.0),
+            Point3::new(-10.0, 0.0, 7.0),
+        );
+        assert!(!triangles_cross(&t, &u, 1e-7));
+        assert!(!triangles_cross(&u, &t, 1e-7));
+    }
+
+    /// One body has triangles at 30 and 90 degrees round the axis, and the
+    /// other at 200 degrees and 1e-8 short of 90 degrees: in the plane of
+    /// the triangle at 90 degrees, within the tolerance. The two bodies touch
+    /// there.
+    #[test]
+    fn triangles_round_a_line_in_one_plane_within_the_tolerance_do_not_cross() {
+        let t = on_axis(
+            0.0,
+            Point3::new(0.0, 10.0, 5.0),
+            Point3::new(8.66, 5.0, 5.0),
+        );
+        let u = on_axis(
+            2.0,
+            Point3::new(-9.4, -3.4, 7.0),
+            Point3::new(1e-8, 10.0, 7.0),
+        );
+        assert!(!triangles_cross(&t, &u, 1e-7));
+        assert!(!triangles_cross(&u, &t, 1e-7));
+    }
+
+    /// The edge of `u` runs beside the axis, 1e-3 off it in the plane of
+    /// `t`, and `u` leans 1e-5 out of that plane, so each edge lies within
+    /// the tolerance of the plane of the other triangle. The two edges have no
+    /// line in common, and the planes decide: `u` passes into the wedge of
+    /// the other body, 1e-4 deep at its far corner.
+    #[test]
+    fn triangles_with_edges_on_two_lines_cross_by_their_planes() {
+        let t = on_axis(
+            0.0,
+            Point3::new(10.0, 0.0, 5.0),
+            Point3::new(0.0, 10.0, 5.0),
+        );
+        let u = Facet {
+            corners: [
+                Point3::new(-1e-3, 0.0, 2.0),
+                Point3::new(-1e-3, 0.0, 12.0),
+                Point3::new(10.0 - 1e-3, 1e-4, 7.0),
+            ],
+            beyond: [Point3::new(-1e-3, -10.0, 7.0); 3],
+        };
+        assert_eq!(alternate_round_edge(&t, 0, &u, 0, 1e-7), None);
+        assert!(triangles_cross(&t, &u, 1e-7));
+        assert!(triangles_cross(&u, &t, 1e-7));
+    }
+
+    /// The triangles of `u` round an edge beside the z axis: the edge from
+    /// `(x0, 0, 2)` to `(x1, 0, 12)`, the far corner at 200 degrees round it,
+    /// and the far corner of the triangle across the edge at `(x_far, 5, 7)`,
+    /// 90 degrees round it within the tolerance.
+    fn beside_axis(x0: f64, x1: f64, x_far: f64) -> Facet {
+        let (s, c) = 200f64.to_radians().sin_cos();
+        let mid = 0.5 * (x0 + x1);
+        Facet {
+            corners: [
+                Point3::new(x0, 0.0, 2.0),
+                Point3::new(x1, 0.0, 12.0),
+                Point3::new(mid + 10.0 * c, 10.0 * s, 7.0),
+            ],
+            beyond: [Point3::new(x_far, 5.0, 7.0); 3],
+        }
+    }
+
+    /// The edge of `u` runs 0.9 of the tolerance off the axis, and the
+    /// triangle across it lies within twice the tolerance of the plane of
+    /// the triangle of `t` at 90 degrees: the two bodies touch. Read from
+    /// the line of the edge of `u`, the gap is a little over twice the
+    /// tolerance, so the order of the two must not change the answer.
+    #[test]
+    fn triangles_beside_an_offset_edge_touch_in_either_order() {
+        let on = 1e-7;
+        let t = on_axis(
+            0.0,
+            Point3::new(10.0, 0.0, 5.0),
+            Point3::new(0.0, 10.0, 5.0),
+        );
+        let u = beside_axis(-0.9 * on, -0.9 * on, 1.8 * on);
+        assert!(!triangles_cross(&t, &u, on));
+        assert!(!triangles_cross(&u, &t, on));
+    }
+
+    /// The edge of `u` leans off the axis, by 0.9 of the tolerance at the
+    /// end of the edge of `t`. The triangles touch as in
+    /// `triangles_beside_an_offset_edge_touch_in_either_order`.
+    #[test]
+    fn triangles_beside_a_tilted_edge_touch_in_either_order() {
+        let on = 1e-7;
+        let t = on_axis(
+            0.0,
+            Point3::new(10.0, 0.0, 5.0),
+            Point3::new(0.0, 10.0, 5.0),
+        );
+        let u = beside_axis(0.0, -1.125 * on, 1.9 * on);
+        assert!(!triangles_cross(&t, &u, on));
+        assert!(!triangles_cross(&u, &t, on));
     }
 }

@@ -191,6 +191,27 @@ impl RunCurve {
         d.normalize().ok()
     }
 
+    /// How fast the unit tangent turns per unit length at arc-length fraction
+    /// `x`, toward the centre of curvature; zero where the derivative
+    /// vanishes. The same whichever way the curve is run.
+    pub fn bend(&self, x: f64) -> Vec3 {
+        let zero = Vec3::new(0.0, 0.0, 0.0);
+        let t = self.t_at(self.w_at(x));
+        let first = self.derivative(t);
+        let second = match &self.curve {
+            EdgeCurve::Line => return zero,
+            EdgeCurve::Circle(c) => c.center() - c.evaluate(t),
+            EdgeCurve::Ellipse(e) => e.center() - e.evaluate(t),
+            EdgeCurve::NurbsCurve(n) => n.derivatives(t, 2).get(2).copied().unwrap_or(zero),
+        };
+        let speed_squared = first.length_squared();
+        if speed_squared <= 0.0 {
+            return zero;
+        }
+        let along = first * (second.dot(first) / speed_squared);
+        (second - along) * (1.0 / speed_squared)
+    }
+
     /// The curve's interior knots on this run, as arc-length fractions.
     pub fn knot_fractions(&self) -> Vec<f64> {
         self.interior_knots()
@@ -527,11 +548,29 @@ impl Chain {
     /// to, so that what stands at a knot reads as this piece's side of it.
     pub fn point_and_tangent(
         &self,
-        (lo, hi): (f64, f64),
+        piece: (f64, f64),
         s: f64,
     ) -> Result<(Point3, Vec3, Point3), OperationsError> {
-        let segment = self.segment_at(0.5 * (lo + hi));
+        let (segment, at, tangent) = self.read_inside(piece, s)?;
         let point = segment.run.point(segment.fraction(s));
+        Ok((point, tangent, segment.run.point(at)))
+    }
+
+    /// The curvature vector at `s`, read where [`Self::point_and_tangent`]
+    /// reads the tangent.
+    pub fn bend(&self, piece: (f64, f64), s: f64) -> Result<Vec3, OperationsError> {
+        let (segment, at, _) = self.read_inside(piece, s)?;
+        Ok(segment.run.bend(at))
+    }
+
+    /// The segment of the piece `(lo, hi)`, the fraction along it to read at
+    /// for `s`, and the unit tangent there.
+    fn read_inside(
+        &self,
+        (lo, hi): (f64, f64),
+        s: f64,
+    ) -> Result<(&Segment, f64, Vec3), OperationsError> {
+        let segment = self.segment_at(0.5 * (lo + hi));
         let inward = if s > 0.5 * (lo + hi) {
             lo - hi
         } else {
@@ -541,7 +580,7 @@ impl Chain {
             let read = (s + step * inward).clamp(lo + INSIDE, hi - INSIDE);
             let at = segment.fraction(read);
             if let Some(tangent) = segment.run.tangent(at) {
-                return Ok((point, tangent, segment.run.point(at)));
+                return Ok((segment, at, tangent));
             }
         }
         Err(OperationsError::InvalidInput {
@@ -581,7 +620,7 @@ impl Chain {
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-    use brepkit_math::curves::Ellipse3D;
+    use brepkit_math::curves::{Circle3D, Ellipse3D};
     use brepkit_math::nurbs::fitting::interpolate;
 
     use super::*;
@@ -633,6 +672,60 @@ mod tests {
                 backward.tangent(1.0 - x).unwrap(),
             );
             assert!((a + b).length() < 1e-7, "{a:?} and {b:?}");
+        }
+    }
+
+    /// The bend of a circle points to its centre with length one over its
+    /// radius. On an ellipse and a spline it is the turn of the unit tangent
+    /// over a short step of arc length, either way along the run.
+    #[test]
+    fn a_run_bends_as_its_tangent_turns() {
+        let center = Point3::new(1.0, 2.0, 3.0);
+        let circle = Circle3D::new(center, Vec3::new(0.0, 0.6, 0.8), 3.0).unwrap();
+        let (start, end) = (circle.evaluate(0.3), circle.evaluate(2.0));
+        for against in [false, true] {
+            let run = RunCurve::new(EdgeCurve::Circle(circle.clone()), start, end, against);
+            for i in 0..=10 {
+                let x = f64::from(i) / 10.0;
+                let expected = (center - run.point(x)) * (1.0 / 9.0);
+                assert!((run.bend(x) - expected).length() < 1e-12, "at {x}");
+            }
+        }
+
+        let ellipse = Ellipse3D::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            3.0,
+            1.0,
+        )
+        .unwrap();
+        let ellipse_ends = (
+            ParametricCurve::evaluate(&ellipse, 0.2),
+            ParametricCurve::evaluate(&ellipse, 2.5),
+        );
+        let points = [
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(1.0, 2.0, 0.0),
+            Point3::new(3.0, 2.0, 1.0),
+            Point3::new(4.0, 0.0, 1.0),
+        ];
+        let spline = interpolate(&points, 3).unwrap();
+        let curves = [
+            (EdgeCurve::Ellipse(ellipse), ellipse_ends),
+            (EdgeCurve::NurbsCurve(spline), (points[0], points[3])),
+        ];
+        for (curve, (start, end)) in curves {
+            for against in [false, true] {
+                let run = RunCurve::new(curve.clone(), start, end, against);
+                let h = 1e-4;
+                for i in 1..10 {
+                    let x = f64::from(i) / 10.0;
+                    let turn = (run.tangent(x + h).unwrap() - run.tangent(x - h).unwrap())
+                        * (1.0 / (2.0 * h * run.length()));
+                    let error = (run.bend(x) - turn).length();
+                    assert!(error < 1e-6 * turn.length().max(1.0), "at {x}: {error}");
+                }
+            }
         }
     }
 }
