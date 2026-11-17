@@ -1,0 +1,29 @@
+crates/operations/tests/revolved_rim_fuses.rs
+  s_489e8e320eebde::t_9b24ce58810587 1-303
+crates/io/tests/data/conical_pour_funnel_body.bin
+  s_489e8e320eebde::t_ec772f43a0a892 1
+crates/io/tests/data/conical_pour_funnel_lip.bin
+  s_489e8e320eebde::t_be257fdf58c547 1
+crates/io/tests/data/rotary_potentiometer_cup.bin
+  s_489e8e320eebde::t_e5f7ecb8a150bf 1
+crates/io/tests/data/rotary_potentiometer_lug.bin
+  s_489e8e320eebde::t_618d4adeffd8c2 1
+crates/io/tests/playground_example_repros_inmem.rs
+  s_489e8e320eebde::t_92fe63af733fca 1-2,211-274
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "82756edf6d8e6f934a2f05025b039c6ecd0c8bd5",
+  "prompts": {},
+  "sessions": {
+    "s_489e8e320eebde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1a2a9261-2019-4199-aa4f-06130071c8f0",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
