@@ -1,0 +1,27 @@
+crates/operations/src/tessellate/mesh_ops.rs
+  s_489e8e320eebde::t_0f3e621edcf6ee 527-531,533-546,548-556,562-571,574,578-582
+crates/operations/src/tessellate/nonplanar.rs
+  s_489e8e320eebde::t_0825e0611d0939 1554-2089
+crates/operations/src/tessellate/nurbs.rs
+  s_489e8e320eebde::t_f2b54c2f491548 158-181,245
+crates/operations/src/tessellate/solid.rs
+  s_489e8e320eebde::t_ebcecf35677f68 21-23,2155-2165,2301-2311
+crates/operations/src/tessellate/tests.rs
+  s_489e8e320eebde::t_1fc99e98b8765d 5431-5710
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "65c2982846817df7a5b1b943dcb2137b3cec7485",
+  "prompts": {},
+  "sessions": {
+    "s_489e8e320eebde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1a2a9261-2019-4199-aa4f-06130071c8f0",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
