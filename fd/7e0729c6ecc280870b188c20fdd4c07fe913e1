@@ -1,0 +1,25 @@
+CLAUDE.md
+  s_489e8e320eebde::t_bfdc8e73f811df 238
+crates/check/src/face_loops.rs
+  s_489e8e320eebde::t_5abc941886a227 46-49,548-550,558-570,671,721-747,749-763,765-768,938,983,1022,1046,1057,1079-1104,1128-1153,1217,1253-1256,1259-1285,1294-1297,1300,1735,1898,1903-1904,1908,1913-2119
+crates/check/src/face_loops/bound.rs
+  s_489e8e320eebde::t_ee12e94c703a07 1-1306
+crates/operations/src/measure/volume.rs
+  s_489e8e320eebde::t_557206d97f0a7f 3295-3297,3314,3322,3325,3334,3338,3342,3372-3385
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "fd7e0729c6ecc280870b188c20fdd4c07fe913e1",
+  "prompts": {},
+  "sessions": {
+    "s_489e8e320eebde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1a2a9261-2019-4199-aa4f-06130071c8f0",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
