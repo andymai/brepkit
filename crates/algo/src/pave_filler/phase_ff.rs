@@ -4324,12 +4324,17 @@ fn edge_surface_crossings(
         }
         group.clear();
     };
+    // Where the edge touches the surface, its distance stays near zero for
+    // far longer than ten tolerances (a circle inside a cylinder and tangent
+    // to it), and the touches found along that run are one.
+    let near_zero_between =
+        |a: f64, b: f64| (1..4).all(|k| f((b - a).madd(f64::from(k) / 4.0, a)).abs() <= 4.0 * tol);
     let mut group: Vec<(f64, bool)> = Vec::new();
     for r in roots {
-        if group
-            .last()
-            .is_some_and(|g: &(f64, bool)| (at(g.0) - at(r.0)).length() > 10.0 * tol)
-        {
+        if group.last().is_some_and(|g: &(f64, bool)| {
+            (at(g.0) - at(r.0)).length() > 10.0 * tol
+                && (g.1 || r.1 || !near_zero_between(g.0, r.0))
+        }) {
             flush(&mut group, &mut out);
         }
         group.push(r);
