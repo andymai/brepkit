@@ -6024,6 +6024,24 @@ fn compute_raw_curves(
             }
         }
 
+        (FaceSurface::Cone(cone), FaceSurface::Torus(torus))
+        | (FaceSurface::Torus(torus), FaceSurface::Cone(cone)) => {
+            // A cone sharing a torus's axis meets it in circles about that
+            // axis (a rolled lip on a funnel's rim).
+            match analytic_intersection::exact_cone_torus(cone, torus)? {
+                Some(exacts) => Ok(exact_raw_curves(exacts)),
+                None => {
+                    if let (Some(aa), Some(ab)) = (surf_a.as_analytic(), surf_b.as_analytic()) {
+                        analytic_analytic_intersection(
+                            &aa, &ab, v_range_a, v_range_b, bbox_a, bbox_b,
+                        )
+                    } else {
+                        Ok(Vec::new())
+                    }
+                }
+            }
+        }
+
         (FaceSurface::Cylinder(cylinder), FaceSurface::Torus(torus))
         | (FaceSurface::Torus(torus), FaceSurface::Cylinder(cylinder)) => {
             // A cylinder sharing a torus's axis meets it in circles about

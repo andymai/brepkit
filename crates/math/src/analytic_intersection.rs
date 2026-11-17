@@ -2408,7 +2408,12 @@ fn try_algebraic_intersection(
                 exact_circle_curves(exacts, |p| (t1.project_point(p), t2.project_point(p)))
             })
             .transpose(),
-        _ => Ok(None),
+        (AnalyticSurface::Cone(c), AnalyticSurface::Torus(t)) => exact_cone_torus(c, t)?
+            .map(|exacts| exact_circle_curves(exacts, |p| (c.project_point(p), t.project_point(p))))
+            .transpose(),
+        (AnalyticSurface::Torus(t), AnalyticSurface::Cone(c)) => exact_cone_torus(c, t)?
+            .map(|exacts| exact_circle_curves(exacts, |p| (t.project_point(p), c.project_point(p))))
+            .transpose(),
     }
 }
 
@@ -2639,6 +2644,60 @@ pub fn exact_cylinder_torus(
         &[(cylinder.radius(), height), (cylinder.radius(), -height)],
     )
     .map(Some)
+}
+
+/// Exact intersection of a ring torus with a cone sharing its axis.
+///
+/// In a half-plane through the axis, a generator of the cone runs from the
+/// apex at the half angle `a` from the radial direction, and the tube's
+/// cross-section is a circle of the minor radius `r` about `(R, h)`: `R` the
+/// major radius, `h` the torus centre's height above the apex along the
+/// cone's axis. The generator meets that circle at `v = t ± √(r² − p²)`
+/// along it, `t = R cos a + h sin a` the foot of the perpendicular from the
+/// centre and `p = |R sin a − h cos a|` its length. Each root ahead of the
+/// apex sweeps a circle about the axis. A generator within the linear
+/// tolerance of tangent to the cross-section touches the tube along the one
+/// circle at its foot.
+///
+/// `None` (defer to the marcher) unless the axes lie on one line, and for a
+/// horn or spindle torus, whose tube reaches the axis.
+///
+/// # Errors
+///
+/// Returns an error if a section circle cannot be built.
+pub fn exact_cone_torus(
+    cone: &ConicalSurface,
+    torus: &ToroidalSurface,
+) -> Result<Option<Vec<ExactIntersectionCurve>>, MathError> {
+    let axis = cone.axis();
+    let (major, minor) = (torus.major_radius(), torus.minor_radius());
+    let offset = torus.center() - cone.apex();
+    let scale = major + minor + offset.length();
+    if minor >= major
+        || axis.cross(torus.z_axis()).length() > 1e-9
+        || offset.cross(axis).length() > 1e-9 * scale
+    {
+        return Ok(None);
+    }
+    let linear = Tolerance::new().linear;
+    let (sin_a, cos_a) = cone.half_angle().sin_cos();
+    let height = offset.dot(axis);
+    let foot = major.madd(cos_a, height * sin_a);
+    let reach = major.madd(sin_a, -(height * cos_a)).abs();
+    let roots = if (reach - minor).abs() <= linear {
+        vec![foot]
+    } else if reach > minor {
+        Vec::new()
+    } else {
+        let half = ((minor - reach) * (minor + reach)).sqrt();
+        vec![foot - half, foot + half]
+    };
+    let crossings: Vec<(f64, f64)> = roots
+        .into_iter()
+        .filter(|&v| v * cos_a > linear)
+        .map(|v| (v * cos_a, v * sin_a))
+        .collect();
+    circles_about_axis(cone.apex(), axis, &crossings).map(Some)
 }
 
 /// Exact intersection of a torus with a sphere centred on its axis.
@@ -6627,6 +6686,75 @@ mod tests {
             exact_sphere_torus(&ball(0.0, 2.5), &spindle)
                 .unwrap()
                 .is_none()
+        );
+    }
+
+    /// A 45 degree cone about the axis of the ring (4, 1.5), its apex at
+    /// `z = apex` below the ring: its generator `ρ = z − apex` stands
+    /// `|4 + apex| / √2` from the tube's centre in the half-plane.
+    #[test]
+    fn exact_cone_torus_meets_a_coaxial_cone_in_circles() {
+        let torus = ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), 4.0, 1.5).unwrap();
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        let quarter = std::f64::consts::FRAC_PI_4;
+        let cone = |apex: f64, axis: Vec3| {
+            ConicalSurface::new(Point3::new(0.0, 0.0, apex), axis, quarter).unwrap()
+        };
+        let on_cone = |apex: f64| move |p: Point3| p.x().hypot(p.y()) - (p.z() - apex);
+        let curves = exact_cone_torus(&cone(-5.0, z), &torus).unwrap().unwrap();
+        let circles = circles_of(&curves);
+        assert_eq!(
+            (curves.len(), circles.len()),
+            (2, 2),
+            "a wall through the tube"
+        );
+        let worst = worst_off(&circles, &torus, on_cone(-5.0));
+        assert!(worst < 1e-12, "{worst}");
+        assert!(
+            exact_cone_torus(&cone(-8.0, z), &torus)
+                .unwrap()
+                .unwrap()
+                .is_empty(),
+            "a wall clear of the tube misses it"
+        );
+        let touch = -4.0 - 1.5 * std::f64::consts::SQRT_2;
+        let curves = exact_cone_torus(&cone(touch, z), &torus).unwrap().unwrap();
+        let circles = circles_of(&curves);
+        assert_eq!(circles.len(), 1, "a wall touching the tube");
+        let worst = worst_off(&circles, &torus, on_cone(touch));
+        assert!(worst < 1e-12, "{worst}");
+        assert_eq!(
+            exact_cone_torus(&cone(touch + 1e-6, z), &torus)
+                .unwrap()
+                .unwrap()
+                .len(),
+            2,
+            "a wall into the tube by more than the tolerance crosses it twice"
+        );
+        // The cone's axis may run either way along the torus's.
+        let below = ConicalSurface::new(Point3::new(0.0, 0.0, 5.0), -z, quarter).unwrap();
+        let curves = exact_cone_torus(&below, &torus).unwrap().unwrap();
+        let circles = circles_of(&curves);
+        assert_eq!(circles.len(), 2);
+        let worst = worst_off(&circles, &torus, |p| p.x().hypot(p.y()) - (5.0 - p.z()));
+        assert!(worst < 1e-12, "{worst}");
+        let tilted = cone(-5.0, Vec3::new(0.0, 0.1, 1.0));
+        let offset = ConicalSurface::new(Point3::new(0.5, 0.0, -5.0), z, quarter).unwrap();
+        assert!(exact_cone_torus(&tilted, &torus).unwrap().is_none());
+        assert!(exact_cone_torus(&offset, &torus).unwrap().is_none());
+        let spindle = ToroidalSurface::with_axis_and_ref_dir(
+            Point3::new(0.0, 0.0, 0.0),
+            1.0,
+            2.0,
+            z,
+            Vec3::new(1.0, 0.0, 0.0),
+        )
+        .unwrap();
+        assert!(
+            exact_cone_torus(&cone(-5.0, z), &spindle)
+                .unwrap()
+                .is_none(),
+            "a spindle torus's tube reaches the axis"
         );
     }
 
