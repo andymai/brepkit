@@ -286,3 +286,101 @@ fn oversized_distances_are_refused() {
     let rims = rims_at(&topo, tube, 10.0);
     assert!(chamfer(&mut topo, tube, &rims, 0.5).is_err());
 }
+
+/// A rod of radius 3, 10 high, less a cavity: a cylinder of radius 1 from
+/// z = 3 to 7 about the rod's axis.
+fn rod_with_a_cavity(topo: &mut Topology) -> SolidId {
+    let rod = make_cylinder(topo, 3.0, 10.0).unwrap();
+    let cavity = make_cylinder(topo, 1.0, 4.0).unwrap();
+    transform_solid(topo, cavity, &Mat4::translation(0.0, 0.0, 3.0)).unwrap();
+    let hollow = boolean(topo, BooleanOp::Cut, rod, cavity).unwrap();
+    assert_eq!(topo.solid(hollow).unwrap().inner_shells().len(), 1);
+    hollow
+}
+
+/// Registers a line pcurve, its own for each, on every edge of every face of
+/// `solid`, standing in for the UV trims a curved face is meshed by.
+fn trim_every_face(topo: &mut Topology, solid: SolidId) {
+    use brepkit_math::curves2d::{Curve2D, Line2D};
+    use brepkit_math::vec::{Point2, Vec2};
+    use brepkit_topology::pcurve::PCurve;
+
+    let mut k = 0.0;
+    for face in solid_faces(topo, solid).unwrap() {
+        for edge in brepkit_topology::explorer::face_edges(topo, face).unwrap() {
+            k += 1.0;
+            let line = Line2D::new(Point2::new(k, 0.5 * k), Vec2::new(1.0, k)).unwrap();
+            topo.pcurves_mut()
+                .set(edge, face, PCurve::new(Curve2D::Line(line), 0.0, 1.0));
+        }
+    }
+}
+
+/// Each face's pcurves, read at the ends and middle of each one, in the
+/// order of the face's wires.
+fn trims(topo: &Topology, faces: &[brepkit_topology::face::FaceId]) -> Vec<Vec<[f64; 2]>> {
+    faces
+        .iter()
+        .map(|&face| {
+            let mut points = Vec::new();
+            for edge in brepkit_topology::explorer::face_edges(topo, face).unwrap() {
+                if let Some(pcurve) = topo.pcurves().get(edge, face) {
+                    let (t0, t1) = (pcurve.t_start(), pcurve.t_end());
+                    for t in [t0, 0.5 * (t0 + t1), t1] {
+                        let p = pcurve.evaluate(t);
+                        points.push([p.x(), p.y()]);
+                    }
+                }
+            }
+            points
+        })
+        .collect()
+}
+
+/// The faces of `solid`'s cavity, and its bottom cap.
+fn untouched(topo: &Topology, solid: SolidId) -> Vec<brepkit_topology::face::FaceId> {
+    let shell = topo.solid(solid).unwrap().inner_shells()[0];
+    let mut faces = topo.shell(shell).unwrap().faces().to_vec();
+    let bottom = rims_at(topo, solid, 0.0)[0];
+    faces.extend(solid_faces(topo, solid).unwrap().into_iter().filter(|&f| {
+        matches!(
+            topo.face(f).unwrap().surface(),
+            brepkit_topology::face::FaceSurface::Plane { .. }
+        ) && brepkit_topology::explorer::face_edges(topo, f)
+            .unwrap()
+            .contains(&bottom)
+    }));
+    faces
+}
+
+/// A rim chamfer keeps the trims of the faces it does not touch, the
+/// cavity's and the bottom cap's, and drops the trims of the edge uses it
+/// replaces: every pcurve left on a face lies on an edge the face uses.
+/// Through `chamfer`, and through `chamfer_v2` with two distances.
+#[test]
+fn a_rim_chamfer_keeps_the_trims_it_does_not_replace() {
+    use brepkit_operations::blend_ops::chamfer_v2;
+
+    let mut topo = Topology::new();
+    let hollow = rod_with_a_cavity(&mut topo);
+    trim_every_face(&mut topo, hollow);
+    let before = trims(&topo, &untouched(&topo, hollow));
+    assert!(before.iter().all(|points| !points.is_empty()), "{before:?}");
+    let rim = rims_at(&topo, hollow, 10.0)[0];
+
+    let equal = chamfer(&mut topo, hollow, &[rim], 0.5).unwrap();
+    let two = chamfer_v2(&mut topo, hollow, &[rim], 0.5, 0.3).unwrap();
+    assert!(two.failed.is_empty(), "{:?}", two.failed);
+
+    for result in [equal, two.solid] {
+        assert_eq!(trims(&topo, &untouched(&topo, result)), before);
+        for face in solid_faces(&topo, result).unwrap() {
+            let used = brepkit_topology::explorer::face_edges(&topo, face).unwrap();
+            for (edge, _) in topo.pcurves().pcurves_for_face(face) {
+                assert!(used.contains(&edge), "{face:?} keeps a trim of {edge:?}");
+            }
+        }
+        let report = validate_solid(&topo, result).unwrap();
+        assert!(report.is_valid(), "{:?}", report.issues);
+    }
+}

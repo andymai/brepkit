@@ -3992,16 +3992,7 @@ fn chamfer_chains(
     let (outer, inners) = (data.outer_shell(), data.inner_shells().to_vec());
     // A copy leaves its pcurves behind, and a face this chamfer never touches
     // keeps its trims.
-    let source = topo.solid(solid)?;
-    let source_shells: Vec<_> = std::iter::once(source.outer_shell())
-        .chain(source.inner_shells().iter().copied())
-        .collect();
-    let copied_shells: Vec<_> = std::iter::once(outer)
-        .chain(inners.iter().copied())
-        .collect();
-    for (&from, &to) in source_shells.iter().zip(&copied_shells) {
-        crate::cavities::copy_pcurves(topo, from, to)?;
-    }
+    crate::cavities::copy_solid_pcurves(topo, solid, copy)?;
     let mut faces = topo.shell(outer)?.faces().to_vec();
     let mut made = Vec::new();
     for group in &groups {

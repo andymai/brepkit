@@ -1208,6 +1208,9 @@ fn chamfer_circular_rims(
         circles.push((rim.circle, cap_d, wall_d));
     }
     let copy = crate::copy::copy_solid(topo, solid)?;
+    // A copy leaves its pcurves behind, and a face this chamfer never touches
+    // keeps its trims.
+    crate::cavities::copy_solid_pcurves(topo, solid, copy)?;
     let tol = Tolerance::new().linear;
     let mut bands = Vec::with_capacity(circles.len());
     let mut dropped = Vec::new();
@@ -1402,6 +1405,7 @@ fn chamfer_circular_rims(
             let cap_face = topo.face_mut(rim.cap)?;
             cap_face.set_outer_wire(new_outer);
             *cap_face.inner_wires_mut() = new_inners;
+            topo.pcurves_mut().remove(rim.edge, rim.cap);
         }
 
         // The wall takes its new rim, and its seam now ends there.
@@ -1433,6 +1437,8 @@ fn chamfer_circular_rims(
                 &[(rim.edge, wall_edge), (old_seam, new_seam)],
             )?;
             topo.face_mut(rim.wall)?.set_outer_wire(new_wall_outer);
+            topo.pcurves_mut().remove(rim.edge, rim.wall);
+            topo.pcurves_mut().remove(old_seam, rim.wall);
         }
 
         // The band: a cone through both new circles.
@@ -1527,6 +1533,9 @@ fn chamfer_circular_rims(
             dropped.push(rim.cap);
         }
     }
+
+    let gone: HashSet<FaceId> = dropped.iter().copied().collect();
+    topo.pcurves_mut().remove_faces(&gone);
 
     // Each band joins the shell holding its cap.
     let data = topo.solid(copy)?;
