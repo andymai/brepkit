@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794908503087,
+  "lastUpdate": 1794909995129,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -73709,6 +73709,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 18891664,
             "range": "± 79256",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "9713d6ec7bfdc5a25bc5a9c4f266cdf1c872af4d",
+          "message": "test(operations): add a seeded random boolean sweep with an independent volume oracle (#2617)\n\n## Summary\n\nThis adds a seeded random boolean sweep as the ignored test `sweep` in\n`crates/operations/tests/random_boolean_sweep.rs`, with the normal test\n`oracle_sanity` beside it. Nothing outside the test changes, apart from\none line in the roadmap skill that points to the sweep.\n\nEach case starts from a ball or a cylinder. It then cuts, fuses or\nintersects one to three tools in turn: rods along x, y or z, balls and\nboxes. The case runs in one of five poses, with the mesh fallback off.\n`oracle` gives the volume of the exact result from slices in z and lines\nin x. On each line it uses the exact interval in y of each solid. Planar\ncaps and box faces lie on cell boundaries.\n\n`SWEEP_SEED`, `SWEEP_N` and `SWEEP_ONLY` choose the cases. Each case\nprints one line: `GOOD`, `BAD`, `ERR@<k>`, `EMPTYEXP` or `PANIC`. A\n`BAD` result is exact, but invalid, open in its mesh or more than 2e-4\noff in volume. The module doc says how to run it and read a line.\n\nThe oracle integrates over a box round the result, not round all the\nsolids. With the box round all the solids, four of the eight `BAD` lines\non `main` for seeds 1 to 4 came from the oracle:\n\n| seed, case | volume from the kernel | from 19200 cells over the\nresult's box | rel. error of 2400 cells over all solids |\n|---|---|---|---|\n| 1, 149 | 9.94300e-5 | 9.94296e-5 | 3.77e-4 |\n| 2, 122 | 4.855560e-3 | 4.855558e-3 | -2.80e-4 |\n| 2, 141 | 1.714535e-3 | 1.714537e-3 | -7.46e-3 |\n| 4, 146 | 3.156044e-3 | 3.156048e-3 | 3.49e-4 |\n\nFor seed 2, case 141, a one-dimensional integral of the rod's segment\nunder the cylinder's cap gives 1.7145353e-3. `oracle_sanity` holds the\noracle against that sliver. It also holds it against closed forms: a\nball, a box, a cylinder, a ball less a tunnel and a ball less a blind\nrod.\n\n## Tests\n\n- `oracle_sanity` passes: each of its 6 volumes is within 2e-5 of its\nclosed form.\n- I ran the sweep for seeds 1 to 4 (N 150, 150, 150 and 300) on `main`\nat `08d5be5b6` with this oracle:\n\n| seed | GOOD | BAD | ERR | EMPTYEXP |\n|---|---|---|---|---|\n| 1 | 103 | 1 | 39 | 7 |\n| 2 | 101 | 1 | 38 | 10 |\n| 3 | 104 | 2 | 34 | 10 |\n| 4 | 185 | 0 | 97 | 18 |\n\n- The `ERR` and `EMPTYEXP` counts are the same as the runs on `main`\nwith the oracle over all solids. The four `BAD` cases left are kernel\nfaults, and they fail the same way on `main` at `6b6fe1d8b`. I filed\nthem as #2618 (seed 1, case 17 and seed 2, case 51), #2619 (seed 3, case\n137) and #2620 (seed 3, case 109).\n- `cargo clippy --all-targets --all-features -- -D warnings` (the\npre-commit hook) and `cargo fmt --all --check` pass, and\n`./scripts/check-doc-paths.sh` passes.\n\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nAdds a seeded random sweep of booleans on balls, cylinders, rods and\nboxes, holding each exact result against a volume found independently of\nthe kernel. It runs as the ignored `sweep` test; `SWEEP_SEED`, `SWEEP_N`\nand `SWEEP_ONLY` choose the cases, and each prints one `GOOD`, `BAD`,\n`ERR` or `EMPTYEXP` line. `oracle_sanity` verifies the oracle against\nclosed forms and a one-dimensional sliver. The roadmap skill gains a\nline pointing at the sweep.\n\n**Results**\n- The oracle integrates over a box round the result: with a box round\nall the solids, four of the eight `BAD` lines on `main` came from the\noracle itself.\n- Over seeds 1 to 4 the sweep finds four real kernel faults: ISSUE_HOLES\n(seed 1 case 17, seed 2 case 51), ISSUE_ORIENT (seed 3 case 137) and\nISSUE_MESH (seed 3 case 109).\n\n<sup>Written for commit 918bf3d22ecb80707fc285f0f6ce377b26574a0e.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2617?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2617?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2617&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-11-17T10:03:16Z",
+          "tree_id": "c252a21073b5014d3debd6a8c96e9c63e88d38b4",
+          "url": "https://github.com/andymai/brepkit/commit/9713d6ec7bfdc5a25bc5a9c4f266cdf1c872af4d"
+        },
+        "date": 1794909985030,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 926849,
+            "range": "± 4689",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 978442,
+            "range": "± 28753",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11560,
+            "range": "± 12",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 574385,
+            "range": "± 12480",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 21162236,
+            "range": "± 180331",
             "unit": "ns/iter"
           }
         ]
