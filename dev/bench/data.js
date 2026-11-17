@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794897636289,
+  "lastUpdate": 1794897835371,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -73439,6 +73439,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 18627913,
             "range": "± 38203",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "bb04eb20ebbbe445c0ca06a6190838dd51ed091f",
+          "message": "fix(operations): blend a chain that turns a corner or hooks back, instead of refusing it (#2591)\n\n## Summary\n\n`blend_surface` refused three chain pairs from #2529 because the surface\nfolded. It now blends them without a fold, at the default weight of 1.\nFixes #2529.\n\nThe two cases have different roots.\n\n**A chain that turns a corner on a cone's rim or a torus's tube.** On\n`main`, these two corners fold at every weight I tried. One weight for\nboth chains, from 0.05 to 1.5, folds in all three poses at G1 and G2.\nSeparate weights for A and B, from 0.1 to 4 each (an 8 by 8 grid), fold\ntoo. So a shorter reach does not help here.\n\nThe fault is in `pair_chains`. For open chains, it ran chain B the way\nwith the smaller sum of squared distances to chain A at the same `s`.\nFor these two L-shaped chains, that way put each side of chain A against\nthe other side of chain B. The ruled surface between such a pairing\nturns over between the chains, and the blend does too.\n\nFor a blend, `pair_chains` now runs open chain B the way whose ruled\nsurface turns least between the two chains. For each step along the\nchains, the score adds the cosine between the surface's normals at the\ntwo chains. Each cosine counts times the sine of the angle each chain\nmakes with the line between them. The score reads each way on a copy of\nchain B whose joins already lie on chain A's, as B will run. The\ndistance decides only where the two ways get the same score.\n\nClosed chains keep the distance rule. `match_surface` keeps it too,\nbecause it moves each end of the edge to the target end that moves it\nleast.\n\n| corner | new score, forward | new score, backward | distance sum on\n`main`, forward | distance sum on `main`, backward |\n|---|---|---|---|---|\n| cone rim | 49.01 | 61.71 | 1.777e4 | 1.919e4 |\n| torus tube | -26.96 | 60.31 | 2.258e4 | 2.349e4 |\n\nThe table shows the upright and turned poses. The mirrored pose gives\nthe same numbers with forward and backward exchanged. In the\n`blend_surface` test binary, the new rule changes the way only for these\ntwo corners and in two tests that require a refusal. Those two tests\nstill get their refusals.\n\n**A chain whose spline hooks toward the chain across**, with a radius of\nabout 0.7 where the chains are 14 apart. The rows of control points next\nto each chain lie along a handle that leaves the chain, the weight times\nthe gap long. Where the chain bends toward the way off its face, the\nhandles of points beside each other close on each other.\n\nThey cross where `r (off . T' - t') = cos t`. Here `r` is the handle's\nlength and `T'` the chain's curvature vector. The tilt `t` turns a\nhandle toward the chain's direction near a corner. On `main`, of the\nweights I tried, this blend folds from 0.2 at G1 and from 0.15 at G2.\n\nEach piece of the chain between breaks now keeps one share of its reach.\nWith that share, the closing stays at most half the way to a crossing,\nat each of 33 points along the piece. On a piece where the handles open\nout, the share is 1. At a join, both pieces take the smaller share. Each\npiece then goes to its own share across its length, as the corner tilts\ndo, so the rows meet at each join.\n\nI chose one share per piece for a reason. A share read at each point\nstill folded the hooked blend, from a weight of 0.15 at G1 and 0.1 at\nG2.\n\nA shorter handle in the same direction keeps the tangent plane, so G1\ndoes not change. The G2 row reads its curvature from the shorter handle,\nso G2 does not change either.\n\n## Tests\n\n- `a_chain_may_turn_a_corner_on_every_surface_type` now requires a blend\nfor all 11 fixture kinds, the cone rim and torus tube too. The fold\ncheck of the test fixtures finds no fold in any of them.\n-\n`a_chain_that_hooks_toward_the_other_tighter_than_the_reach_reaches_less_far`\nreplaces the refusal test. In three poses at G1 and G2, the blend does\nnot fold and keeps G0, G1 and G2 along both chains. The line at one end\nof chain A keeps the whole reach (1 within 1e-7). The hooked end keeps\nabout 0.06 of it at G1 and 0.05 at G2.\n- `chains_turning_a_corner_in_different_proportions_pair_as_they_run`:\nchain A runs 10 up and 2 across, chain B 3 up and 8 across, at G1 and G2\nin three poses. Scored before the joins move on to chain A's, the way B\nruns folds (refused at (u, v) = (0, 0.197)). Scored after, the blend\ndoes not fold.\n- `each_end_of_the_edge_meets_the_target_end_that_moves_it_least` (in\n`match_surface`): a short target across the edge's line, at G0 and G1 in\nthree poses. There the two rules disagree, and the match takes the\nnearer way.\n- `a_run_bends_as_its_tangent_turns`: the curvature vector of a circle,\nan ellipse and a spline, both ways along each.\n- With the change, the corners of the cone rim and the torus tube blend\nat each weight I tried from 0.05 to 1.5. The hooked chains blend at each\nweight I tried from 0.05 to 1. The corner of the cylinder across still\nfolds at weights of 0.05 and 0.1, as on `main`.\n- These test binaries pass: `blend_surface` (37), `fair_surface` (17),\n`match_surface` (20), `blend_overshoot_area` (5) and `blend_integration`\n(15). The `blend_surface` unit tests pass (31), and so do the four wasm\nbatch tests of blends, matches and fairing.\n- Time: for each fixture kind, I blend one chain and a corner chain at\nG1 and G2 in the turned pose. I take the best of five runs of each\nblend, and add the four, in two rounds against `main`.\n- The four blends on the wavy spline sheet take 397 and 420 ms, against\n377 and 501 ms on `main`. On the rational spline sheet they take 91 and\n96 ms, against 89 and 146 ms.\n- For the cone rim and the torus tube, `main` refuses the two corner\nblends. There the four take 470 to 530 ms and 140 to 210 ms on `main`,\nand 17 to 23 ms and 16 ms now.\n  - The other kinds take 11 to 37 ms on both.\n- `cargo clippy --all-targets --all-features -- -D warnings` and `cargo\nfmt --all --check` pass.",
+          "timestamp": "2026-11-17T06:40:38Z",
+          "tree_id": "db19472d1525ba0dab8a23a25faf84021e8b0353",
+          "url": "https://github.com/andymai/brepkit/commit/bb04eb20ebbbe445c0ca06a6190838dd51ed091f"
+        },
+        "date": 1794897827584,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 912971,
+            "range": "± 1652",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 958600,
+            "range": "± 1748",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11307,
+            "range": "± 116",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 577170,
+            "range": "± 1919",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 20469287,
+            "range": "± 30868",
             "unit": "ns/iter"
           }
         ]
