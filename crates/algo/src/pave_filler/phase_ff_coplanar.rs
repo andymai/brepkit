@@ -623,12 +623,13 @@ fn face_region_2d(
 }
 
 /// The arc a NURBS boundary edge traces in the pair's frame, when it is a
-/// circular arc (a partial revolve's rim): degree two or less with every
-/// weight positive, so each knot span is a conic, and five points of each
-/// span (its ends and quarters) on the circle through the edge's ends and
-/// middle (three points of a closed edge). Five points fix a conic, so each
-/// span is that circle. `p2_start` and `p2_end` are the edge's ends in its
-/// wire's direction, `forward` that direction against the edge's own.
+/// circular arc (a partial revolve's rim). Each knot span of a rational
+/// quadratic with positive weights is a conic, and the span is a circular
+/// arc exactly when its two control legs are equal and its middle weight,
+/// over the root of the product of its end weights, is the sine of half the
+/// angle at its middle control point (the cosine of half its sweep). Every
+/// span must lie on one circle. `p2_start` and `p2_end` are the edge's ends
+/// in its wire's direction, `forward` that direction against the edge's own.
 fn nurbs_arc(
     curve: &EdgeCurve,
     nurbs: &brepkit_math::nurbs::curve::NurbsCurve,
@@ -638,7 +639,7 @@ fn nurbs_arc(
     frame: &PlaneFrame2D,
 ) -> Option<Arc2> {
     use std::f64::consts::{PI, TAU};
-    if nurbs.degree() > 2 || !nurbs.weights().iter().all(|w| w.is_finite() && *w > 0.0) {
+    if nurbs.degree() != 2 || !nurbs.weights().iter().all(|w| w.is_finite() && *w > 0.0) {
         return None;
     }
     let (t0, t1) = curve.domain_with_endpoints(v_start, v_end);
@@ -648,28 +649,61 @@ fn nurbs_arc(
     let at = |t: f64| frame.project(curve.evaluate_with_endpoints(t, v_start, v_end));
     let span = t1 - t0;
     let closed = (v_start - v_end).length() < 1e-9;
-    let (a, b, c) = if closed {
-        (
-            at(t0),
-            at(span.madd(1.0 / 3.0, t0)),
-            at(span.madd(2.0 / 3.0, t0)),
-        )
-    } else {
-        (at(t0), at(span.madd(0.5, t0)), at(t1))
-    };
-    let center = circumcenter(a, b, c)?;
-    let radius = (a.x() - center.x()).hypot(a.y() - center.y());
-    let off = |p: Point2| ((p.x() - center.x()).hypot(p.y() - center.y()) - radius).abs();
-    let eps = 1e-9 * (1.0 + radius);
     let mut breaks: Vec<f64> = std::iter::once(t0)
         .chain(nurbs.knots().iter().copied().filter(|&k| k > t0 && k < t1))
         .chain(std::iter::once(t1))
         .collect();
     breaks.dedup();
-    let on_circle = breaks
-        .windows(2)
-        .all(|w| (0..=4).all(|k| off(at((w[1] - w[0]).madd(f64::from(k) / 4.0, w[0]))) <= eps));
-    if !on_circle || off(p2_start) > eps || off(p2_end) > eps {
+    let mut circle_2d: Option<(Point2, f64)> = None;
+    for w in breaks.windows(2) {
+        let poles = brepkit_math::nurbs::decompose::curve_bezier_between(nurbs, w[0], w[1]).ok()?;
+        let [first, middle, last] = poles.as_slice() else {
+            return None;
+        };
+        let mut points = [Point2::new(0.0, 0.0); 3];
+        let mut weights = [0.0; 3];
+        for (k, &[x, y, z, h]) in [first, middle, last].into_iter().enumerate() {
+            if h.is_nan() || h <= 0.0 {
+                return None;
+            }
+            let pole = Point3::new(x / h, y / h, z / h);
+            if (pole - frame.origin).dot(frame.normal).abs()
+                > 1e-9 * (1.0 + (pole - frame.origin).length())
+            {
+                return None;
+            }
+            points[k] = frame.project(pole);
+            weights[k] = h;
+        }
+        let leg = |a: Point2, b: Point2| (b.x() - a.x()).hypot(b.y() - a.y());
+        let (l0, l1) = (leg(points[1], points[0]), leg(points[1], points[2]));
+        if l0 <= 0.0 || l1 <= 0.0 || (l0 - l1).abs() > 1e-9 * (l0 + l1) {
+            return None;
+        }
+        let cos_apex = ((points[0].x() - points[1].x()) * (points[2].x() - points[1].x())
+            + (points[0].y() - points[1].y()) * (points[2].y() - points[1].y()))
+            / (l0 * l1);
+        let sin_half_apex = (0.5 * (1.0 - cos_apex)).max(0.0).sqrt();
+        let shape = weights[1] / (weights[0] * weights[2]).sqrt();
+        if (shape - sin_half_apex).abs() > 1e-9 {
+            return None;
+        }
+        let center = circumcenter(points[0], at(0.5 * (w[0] + w[1])), points[2])?;
+        let radius = leg(center, points[0]);
+        let eps = 1e-9 * (1.0 + radius);
+        match circle_2d {
+            None => circle_2d = Some((center, radius)),
+            Some((c, r)) => {
+                if leg(c, center) > eps || (r - radius).abs() > eps {
+                    return None;
+                }
+            }
+        }
+    }
+    let (center, radius) = circle_2d?;
+    let eps = 1e-9 * (1.0 + radius);
+    let off = |p: Point2| ((p.x() - center.x()).hypot(p.y() - center.y()) - radius).abs();
+    if off(p2_start) > eps || off(p2_end) > eps {
         return None;
     }
     let a0 = angle_of(center, p2_start);
@@ -1919,6 +1953,43 @@ mod tests {
         }
         knots.extend([1.0; 3]);
         brepkit_math::nurbs::curve::NurbsCurve::new(2, knots, points, weights).unwrap()
+    }
+
+    /// A rational quadratic on the quarter circle's control points whose
+    /// weights spread a millionfold is a parabola, not the arc: its ends and
+    /// quarter points lie within 6e-12 of the unit circle, yet near
+    /// `t = 1e-6` it strays 0.06 off it. It keeps its chords.
+    #[test]
+    fn a_rational_quadratic_off_its_circle_keeps_its_chords() {
+        let frame = PlaneFrame2D::canonical(Vec3::new(0.0, 0.0, -1.0), 0.0);
+        let p = |x: f64, y: f64| Point3::new(x, y, 0.0);
+        let curve = brepkit_math::nurbs::curve::NurbsCurve::new(
+            2,
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            vec![p(1.0, 0.0), p(1.0, 1.0), p(0.0, 1.0)],
+            vec![1e-12, 1e-6, 1.0],
+        )
+        .unwrap();
+        let stray = (curve.evaluate(1e-6) - p(0.0, 0.0)).length() - 1.0;
+        assert!(stray.abs() > 0.05, "{stray}");
+        let mut topo = Topology::new();
+        let [east, north, origin] =
+            [p(1.0, 0.0), p(0.0, 1.0), p(0.0, 0.0)].map(|q| topo.add_vertex(Vertex::new(q, 1e-7)));
+        let arc = topo.add_edge(Edge::new(east, north, EdgeCurve::NurbsCurve(curve)));
+        let down = topo.add_edge(Edge::new(north, origin, EdgeCurve::Line));
+        let back = topo.add_edge(Edge::new(origin, east, EdgeCurve::Line));
+        let face = face_down(
+            &mut topo,
+            vec![
+                OrientedEdge::new(arc, true),
+                OrientedEdge::new(down, true),
+                OrientedEdge::new(back, true),
+            ],
+            vec![],
+        );
+        let region = face_region_2d(&topo, face, &frame).unwrap();
+        let edge = region.edges.iter().find(|e| e.eid == arc).unwrap();
+        assert!(matches!(edge.shape, Shape2::Poly(_)), "read as an arc");
     }
 
     /// A rim stored as a rational quadratic, whole or a quarter turn, reads
