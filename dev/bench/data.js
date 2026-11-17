@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794895278531,
+  "lastUpdate": 1794896670250,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -73331,6 +73331,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 20503115,
             "range": "± 206487",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "08d5be5b672ed71f587d99c135fc7aed07a37bc3",
+          "message": "fix(operations): chamfer round edges with two distances and end chains on slanted planes (#2571)\n\n## Summary\n\nTwo chamfers of round edges failed. On main, `chamfer_v2` gives every\npick to `ChamferBuilder`, which trims plane faces only. A rod's top rim\nchamfered at 1.0 and 0.5 records a `TrimmingFailure`. The slotted cap\nfrom #2489, with its eight edges chamfered at 0.6 and 0.4, fails on all\neight edges. brepjs calls `chamferV2` for each chamfer with two\ndifferent distances, so these chamfers fail in brepjs. Also, `chamfer`\nof that cap's top rim alone (four arcs) returns `4 edge(s) could not be\nblended`.\n\nWith this change, each of these picks takes an exact chamfer. Each\nresult is valid and watertight, and its volume agrees with an\nindependent value to 1e-9. Fixes #2513. Fixes #2514.\n\n## What changes\n\n- `chamfer_v2`, `chamfer_v2_on` and `chamfer_distance_angle` offer a\npick to the rim path in `chamfer.rs` and then to the chain path in\n`chamfer_chain.rs`, through the new `chamfer::chamfer_exactly_on`. Each\nedge takes `d1` on its first face in the outer shell's face order, as in\n`ChamferBuilder`. For `chamfer_v2_on`, it takes `d1` on its reference\nface. Any other pick goes to `ChamferBuilder`, as before.\n- The chain chamfer reads a distance for each face of each edge, and\n`chamfer_tangent_chains_on` takes `d1` and `d2` with a reference face\nfor each edge. Where two edges of a chain meet tangent, their sections\nmust still agree, so the two distances must fall on the same faces.\n- A chain's free end can stop at a plane that slants to its edge. The\nplane must hold the plane's edges along the cap and along the wall at\nthe vertex, both straight. Each contact runs on its circle or line to\nthat edge. The chamfer face meets the plane in a line or a conic\n(`crossing_curve`, an exact rational quadratic). For a rim's cone and a\nflat parallel to the axis, the conic is a hyperbola. An end square to\nits edge works as before.\n- The chain path refuses a slanted end when anything else lies in the\nregion that it cuts. The check reads the plane in the hull of the\nvertex, the two contact ends and the conic's poles. It reads the cap and\nthe wall between the section and each contact end, as at a corner. The\nwedge check gets a box about the vertex, and the volume check allows a\nball about it.\n- `chamfer` calls the walking chamfer directly after its own rim and\nchain tries. `chamfer_two_on` keeps its own rim try, which reads every\nshell, so a cavity's rim still takes its chamfer. Before that try, it\nrefuses an edge with two different reference faces, with the same error\nas `chamfer_v2_on`.\n- `chamfer_v2_on` refuses an edge with two different reference faces,\nand checks each reference before it drops repeats.\n`chamfer_tangent_chains_on` returns `None` when a reference face does\nnot border its edge.\n- The rim path copies the solid's pcurves to its copy, as the chain path\ndoes, through the new `cavities::copy_solid_pcurves`. It drops the\npcurves of the edge uses it replaces, so a face it does not touch keeps\nits trims.\n- The rim path refuses two picked rims of one wall when one chamfer\ntakes the whole wall, or when the two cross on it. Two chamfers that\nmeet on the wall take it, and their cones share the wall circle.\n\n## Test plan\n\n- `chamfer_v2_cuts_a_closed_rim_exactly` replaces\n`chamfer_v2_records_a_closed_rim_as_failed`. It chamfers the bottom rims\nof a cylinder and a frustum at 0.4 and 0.25, upright, turned and\nmirrored, through `chamfer_v2` and `chamfer_distance_angle`. The volume\nmust agree to 1e-9 with the closed form, the rim's triangle swept round\nthe axis.\n- `chamfer_slot_ends.rs` reads its cross-section oracle with a distance\nfor each face, on each half of the cap. New tests in four poses chamfer\nthe top rim alone at 0.6 (#2514) and the wide slot's rim alone at 0.5.\nTwo more run the example's pick and the rim alone through `chamfer_v2`\nat 0.6 and 0.4 (#2513). Each result must be valid and watertight, agree\nwith the oracle to 1e-9, and classify points inside and outside.\n- Two tests in four poses check refusals. One drills a blind hole in the\nsliver that the wide slot's cone cuts from a side. The other chamfers\nthe rim alone over a slot 0.1 deep. A temporary print showed that the\nnew hull check on the end plane refuses the hole.\n- `chamfer_rim_to_a_flat.rs` chamfers the top arc of a shaft with a\nflat, and a hole's top rim that a slot cuts open (a hollow wall). Each\nruns at 0.5 and through `chamfer_v2` at 0.5 and 0.3, in four poses,\nagainst a cross-section oracle to 1e-9.\n- Three tests pin the reference checks, and each fails on `ca9313165`.\n`a_cavitys_rim_takes_two_distances` chamfers a cavity's ceiling rim\nthrough `chamfer_two_on` in three poses, against a closed form.\n`chamfer_v2_on_takes_one_bordering_reference_for_each_edge` and\n`a_reference_off_its_edge_is_not_a_chain` check refusals.\n- `a_rim_chamfer_keeps_the_trims_it_does_not_replace` sets a pcurve on\neach edge of each face of a rod with a cavity, and chamfers its top rim\nthrough `chamfer` and `chamfer_v2`. The cavity and the bottom cap keep\ntheir pcurves, and each pcurve left on a face lies on an edge that the\nface uses. Without the copy, or without the drop, the test fails.\n- `a_rim_takes_one_bordering_reference` in `two_distance_chamfers.rs`\npicks a rod's rim with its cap and again with its wall, and with a\nreference off the rim. `chamfer_two_on` must refuse each pick. Without\nthe check, the cap and wall pick succeeded with `d2` on the cap.\n- `two_rims_whose_chamfers_take_or_cross_their_wall_are_refused` picks\nboth rims of a cylinder 1 high and of a frustum whose wall is `sqrt 2`\nlong. It runs `chamfer`, `chamfer_v2`, `chamfer_v2_on`, `chamfer_two_on`\nand `chamfer_distance_angle`, each at the wall's length and past half of\nit. Without the check, `chamfer` at 1.0 on the cylinder returned a solid\nwith an open shell.\n- `two_rims_whose_chamfers_meet_take_their_wall` chamfers both rims at\nhalf the wall's length, through `chamfer` and `chamfer_v2_on`. Each\nresult is valid and watertight, and its volume agrees with the closed\nform to 1e-9.\n- `batch_chamfer_v2_reports_an_edge_it_could_not_blend` used a\ncylinder's rim, which now takes the chamfer. It now uses the ellipse\nwhere a slanted cut meets a cylinder (#2570).\n- `cargo nextest run --cargo-profile ci` for operations, wasm, io and\nblend: 3329 tests passed, 22 skipped. On `62b3054b6`, after a merge of\nmain, the operations and wasm suites pass (2622 tests, 20 skipped).\n- `cargo clippy --all-targets -- -D warnings` for operations and wasm,\n`cargo fmt --all`, and the boundary, `mul_add` and doc path scripts\npass.\n- The change does not touch boolean, classification, measurement or\ntessellation code, so I did not run the pose sweep or the truth audit.\n\n## Not in this change\n\n- `ChamferBuilder` still trims plane faces only. A pair with no analytic\nchamfer, such as the ellipse in #2570, still fails in both `chamfer` and\n`chamfer_v2`.\n- `chamfer_v2` still refuses two chamfered edges at a box corner\n(`chamfer_v2_refuses_edges_meeting_at_a_vertex`), because the chain path\nleaves a pick of plane faces to the builder. The roadmap row says so.",
+          "timestamp": "2026-11-17T06:20:35Z",
+          "tree_id": "cd12471b43b927a3fbb40b8dca99e2dc2c283480",
+          "url": "https://github.com/andymai/brepkit/commit/08d5be5b672ed71f587d99c135fc7aed07a37bc3"
+        },
+        "date": 1794896659736,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1134113,
+            "range": "± 2540",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1188216,
+            "range": "± 2874",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13492,
+            "range": "± 78",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 719626,
+            "range": "± 2886",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25554737,
+            "range": "± 49680",
             "unit": "ns/iter"
           }
         ]
