@@ -5642,11 +5642,14 @@ fn compound_cut_by_two_keyhole_pins_meeting_on_a_knuckle_face_stays_exact() {
 }
 
 /// The knuckle bracket cut once by its two keyhole pins fused into one
-/// tool: the result needs its faces unified, so under `without_repair_unify`
-/// the cut fails and reports the decline. A cut that needs no repair, by the
-/// fitted pin alone, is untouched by the switch.
+/// tool. The tool's step ring (radii 0.925 and 1.0) lies on the knuckle face
+/// at z = 4, and the cut builds it without the face unification that repairs
+/// a GFA result: under `without_repair_unify` neither cut declines. Over a
+/// grid round the pins, the fused tool's cut holds a point where the bracket
+/// does and the tool does not.
 #[test]
-fn a_cut_needing_its_faces_unified_fails_when_the_caller_declines_it() {
+fn a_cut_by_two_pins_meeting_on_a_knuckle_face_needs_no_repair() {
+    use crate::classify::PointClassification::{Inside, OnBoundary};
     let mut topo = Topology::new();
     let bracket = knuckle_bracket(&mut topo);
     let pin = keyhole(&mut topo, 0.925, 0.508, 4.2, -1.0, 5.0);
@@ -5659,10 +5662,29 @@ fn a_cut_needing_its_faces_unified_fails_when_the_caller_declines_it() {
     let tool = boolean(&mut topo, BooleanOp::Fuse, pin, bore).unwrap();
     let target = crate::copy::copy_solid(&mut topo, bracket).unwrap();
     let (cut, declined) = without_repair_unify(|| boolean(&mut topo, BooleanOp::Cut, target, tool));
-    assert!(
-        cut.is_err() && declined,
-        "the fused tool's cut was not declined"
-    );
+    assert!(!declined, "the fused tool's cut needs its faces unified");
+    let cut = cut.unwrap();
+    let report = crate::validate::validate_solid(&topo, cut).unwrap();
+    assert!(report.is_valid(), "invalid: {report:?}");
+    let n = 20;
+    let mut read = 0;
+    #[allow(clippy::cast_precision_loss)]
+    let at = |s: usize, lo: f64, hi: f64| lo + (hi - lo) * (s as f64 + 0.5) / n as f64;
+    for i in 0..n {
+        for j in 0..n {
+            for k in 0..n {
+                let p = Point3::new(at(i, 4.0, 8.0), at(j, 3.0, 7.0), at(k, -0.5, 10.5));
+                let class = |s| crate::classify::classify_point(&topo, s, p, 0.01, 1e-7).unwrap();
+                let (b, t, c) = (class(bracket), class(tool), class(cut));
+                if [b, t, c].contains(&OnBoundary) {
+                    continue;
+                }
+                assert_eq!(c == Inside, b == Inside && t != Inside, "at {p:?}");
+                read += 1;
+            }
+        }
+    }
+    assert!(read > n * n * n / 2, "only {read} points read");
 }
 
 /// A keyhole pin: a rod fused with a box whose end faces are flush with the
