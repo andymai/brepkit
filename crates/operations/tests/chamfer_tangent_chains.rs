@@ -1097,3 +1097,51 @@ fn an_asymmetric_chamfer_reads_a_hole_by_its_own_faces_set_back() {
         "{readings:?}"
     );
 }
+
+/// A reference face must border its edge: the D's top arc with the bottom
+/// cap as its reference is not a chain this path builds, nor is an arc
+/// with two references.
+#[test]
+fn a_reference_off_its_edge_is_not_a_chain() {
+    use brepkit_operations::chamfer_chain::chamfer_tangent_chains_on;
+    use brepkit_topology::explorer::face_edges;
+
+    let mut topo = Topology::new();
+    let solid = d_prism(&mut topo);
+    let arc_at = |topo: &Topology, z: f64| {
+        solid_edges(topo, solid)
+            .unwrap()
+            .into_iter()
+            .find(|&e| {
+                let edge = topo.edge(e).unwrap();
+                matches!(edge.curve(), EdgeCurve::Circle(_))
+                    && (topo.vertex(edge.start()).unwrap().point().z() - z).abs() < 1e-9
+            })
+            .unwrap()
+    };
+    let (top_arc, bottom_arc) = (arc_at(&topo, 4.0), arc_at(&topo, 0.0));
+    let cap_of = |topo: &Topology, edge| {
+        solid_faces(topo, solid)
+            .unwrap()
+            .into_iter()
+            .find(|&f| {
+                matches!(topo.face(f).unwrap().surface(), FaceSurface::Plane { .. })
+                    && face_edges(topo, f).unwrap().contains(&edge)
+            })
+            .unwrap()
+    };
+    let (top, bottom) = (cap_of(&topo, top_arc), cap_of(&topo, bottom_arc));
+
+    for pick in [
+        vec![(top_arc, bottom)],
+        vec![(top_arc, top), (top_arc, bottom)],
+    ] {
+        let built = chamfer_tangent_chains_on(&mut topo, solid, &pick, 0.6, 0.3).unwrap();
+        assert!(built.is_none(), "{pick:?}");
+    }
+    assert!(
+        chamfer_tangent_chains_on(&mut topo, solid, &[(top_arc, top)], 0.6, 0.3)
+            .unwrap()
+            .is_some()
+    );
+}
