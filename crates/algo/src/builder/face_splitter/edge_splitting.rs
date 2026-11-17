@@ -248,8 +248,22 @@ fn split_edges_at_3d_points(
             } else {
                 project_point_on_surface(split_3d, surface, &[], None)
             };
+            // On the copy inside the edge's own unwrapped span, from its start
+            // to its end: the edge runs that span, so the split's place along
+            // it reads the copy, also on an arc over half a turn.
             let split_uv = if nurbs_by_projection {
-                on_copy_near(split_uv, prev_uv, periods)
+                let span_end = match closed_ring_dir {
+                    Some(dir) => brepkit_math::vec::Point2::new(
+                        std::f64::consts::TAU.madd(dir, edge.start_uv.x()),
+                        edge.start_uv.y(),
+                    ),
+                    None => edge.end_uv,
+                };
+                let along = brepkit_math::vec::Point2::new(
+                    (span_end.x() - edge.start_uv.x()).madd(t, edge.start_uv.x()),
+                    (span_end.y() - edge.start_uv.y()).madd(t, edge.start_uv.y()),
+                );
+                on_copy_near(split_uv, along, periods)
             } else {
                 split_uv
             };
@@ -1586,6 +1600,54 @@ mod hole_copy_tests {
                 .min_by(|p, q| (*p - uv).length().total_cmp(&(*q - uv).length()))
                 .unwrap(),
         }
+    }
+
+    /// A woven hole's rim arc on a cylinder that runs from u = 0 to u = 5,
+    /// more than half a turn, split at four fifths of the way: the split
+    /// stays at u = 4, inside the arc's own span, and both pieces run on in
+    /// u as the arc does.
+    #[test]
+    fn a_hole_arc_over_half_a_turn_splits_inside_its_own_span() {
+        use brepkit_math::curves::Circle3D;
+        let cyl =
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0)
+                .unwrap();
+        let surface = FaceSurface::Cylinder(cyl);
+        let z = 3.0;
+        let on = |u: f64| surface.evaluate(u, z).unwrap();
+        let (a, b) = (on(0.0), on(5.0));
+        let circle =
+            Circle3D::new(Point3::new(0.0, 0.0, z), Vec3::new(0.0, 0.0, 1.0), 1.0).unwrap();
+        let (ta, tb) = (circle.project(a), circle.project(b));
+        let rim = EdgeCurve::Circle(circle);
+        assert!((tb - ta).rem_euclid(std::f64::consts::TAU) > std::f64::consts::PI);
+        let edge = OrientedPCurveEdge {
+            curve_3d: rim,
+            pcurve: Curve2D::Line(
+                Line2D::new(
+                    Point2::new(0.0, z),
+                    Point2::new(5.0, z) - Point2::new(0.0, z),
+                )
+                .unwrap(),
+            ),
+            start_uv: Point2::new(0.0, z),
+            end_uv: Point2::new(5.0, z),
+            start_3d: a,
+            end_3d: b,
+            forward: true,
+            source_edge_idx: None,
+            pave_block_id: None,
+        };
+        let pieces = split_hole_edges_at_3d_points(vec![edge], &[on(4.0)], None, &surface, 1e-7);
+        assert_eq!(pieces.len(), 2);
+        let us: Vec<f64> = pieces
+            .iter()
+            .flat_map(|p| [p.start_uv.x(), p.end_uv.x()])
+            .collect();
+        assert!(
+            us.windows(2).all(|w| w[1] >= w[0] - 1e-9) && (us[1] - 4.0).abs() < 1e-9,
+            "{us:?}"
+        );
     }
 
     /// A woven hole's spline edge, a ruling of a cylinder laid out on the
