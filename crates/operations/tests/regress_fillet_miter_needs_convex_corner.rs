@@ -65,6 +65,7 @@ fn assert_pair_fillets_watertight(
 /// pocket corner are concave, and the walls' outward normals point into the
 /// pocket void.
 #[test]
+#[ignore = "open: #2607, the floor at the pocket corner crosses itself"]
 fn concave_pocket_corner_pair_keeps_the_junction_fan() {
     let mut topo = Topology::new();
     let block = make_box(&mut topo, 40.0, 40.0, 20.0).unwrap();

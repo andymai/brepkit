@@ -1,6 +1,5 @@
-//! Captured operands of three calls from the brepjs playground examples
-//! (#2372). Each test states what the call must give; a test whose call
-//! still fails is ignored until its issue closes.
+//! Captured operands of calls from the brepjs playground examples. Each
+//! test states what the call must give.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::f64::consts::{PI, TAU};
@@ -207,6 +206,70 @@ fn a_grouser_fuses_onto_a_tilted_wheel() {
             &pose,
         );
     }
+}
+
+/// The poses a captured pair is fused in: as captured, turned about a
+/// leaning axis, and that turn mirrored.
+fn poses() -> [Mat4; 3] {
+    let turn = Mat4::translation(4.0, -3.0, 2.0)
+        * Mat4::rotation_x(0.37)
+        * Mat4::rotation_y(-0.81)
+        * Mat4::rotation_z(1.13);
+    [Mat4::identity(), turn, Mat4::scale(-1.0, 1.0, 1.0) * turn]
+}
+
+/// The pair saved as `first` and `second`, fused in each of [`poses`].
+fn fuse_captured_pair(first: &str, second: &str, probes: [[f64; 3]; 3], grid: &Grid) {
+    for pose in poses() {
+        let mut topo = Topology::new();
+        let a = load(first, &mut topo);
+        let b = load(second, &mut topo);
+        for solid in [a, b] {
+            brepkit_operations::transform::transform_solid(&mut topo, solid, &pose).unwrap();
+        }
+        fuse_exactly_posed(&mut topo, a, b, probes, grid, &pose);
+    }
+}
+
+/// `conical-pour-funnel`: the funnel's body (four cones, four cylinders and
+/// two planes) and its rolled lip, a whole torus of radii 81.93 and 2 on
+/// the body's axis at z = 70.5. The tube covers the flat ring of the rim
+/// between the wall's two cones and crosses each cone along one circle.
+#[test]
+fn a_rolled_lip_fuses_onto_a_funnels_rim() {
+    // In the wall halfway up, in the tube outside the rim, and in the bowl.
+    // The grid holds the rim and the tube where it crosses the wall.
+    fuse_captured_pair(
+        "conical_pour_funnel_body.bin",
+        "conical_pour_funnel_lip.bin",
+        [[40.6, 0.0, 30.0], [83.5, 0.0, 70.5], [0.0, 0.0, 30.0]],
+        &Grid {
+            lo: [77.0, -4.0, 67.0],
+            hi: [85.0, 4.0, 73.0],
+            n: 14,
+        },
+    );
+}
+
+/// `rotary-potentiometer`: a cup, its wall of radius 12 and its bore of
+/// radius 11.5 from its rim at z = -3.2 down, and a lug revolved 20 degrees
+/// that stands on the rim up to z = 0.4. The lug's bottom lies in the rim's
+/// plane, and its outer and inner faces lie on the wall's and the bore's
+/// cylinders above the rim.
+#[test]
+fn a_lug_on_a_cups_rim_fuses_onto_it() {
+    // In the cup's floor, in the lug's step, and in the cup's hollow. The
+    // grid holds the lug and the rim and wall under it.
+    fuse_captured_pair(
+        "rotary_potentiometer_cup.bin",
+        "rotary_potentiometer_lug.bin",
+        [[0.0, 0.0, -11.55], [9.526, 5.5, 0.2], [0.0, 0.0, -5.0]],
+        &Grid {
+            lo: [7.0, 2.5, -5.0],
+            hi: [12.5, 9.0, 1.0],
+            n: 14,
+        },
+    );
 }
 
 /// `robot-arm`: the turret's cap, a cylinder with a cone on it, and a yoke
@@ -485,4 +548,58 @@ fn a_plates_top_outline_of_lines_and_arcs_takes_a_chamfer() {
         "the chamfer takes {} where {taken} is right",
         before - after
     );
+}
+
+/// `universal-joint`: a yoke's fork (two ears and a bridge, 68 planes) and
+/// the turned outside it is trimmed to, a cylinder of radius 47 that tapers
+/// along a cone to radius 34 at x = -62. The bridge's corners stand outside
+/// the cone.
+#[test]
+fn a_yokes_fork_trims_to_its_turned_outside_exactly() {
+    use PointClassification::{Inside, Outside};
+    let exact = BooleanOptions {
+        mesh_fallback: false,
+        ..BooleanOptions::default()
+    };
+    let mut topo = Topology::new();
+    let fork = load("universal_joint_fork.bin", &mut topo);
+    let outside = load("universal_joint_turned_outside.bin", &mut topo);
+    let yoke = boolean_with_options(&mut topo, BooleanOp::Intersect, fork, outside, exact).unwrap();
+    assert_holds(&topo, yoke);
+    assert!(
+        solid_faces(&topo, yoke).unwrap().iter().any(|&f| topo
+            .face(f)
+            .unwrap()
+            .surface()
+            .type_tag()
+            == "cone"),
+        "the taper is gone"
+    );
+    // In the bridge inside the cone, at a bridge corner outside it, and in
+    // an ear inside the cylinder.
+    for (p, want) in [
+        ([-55.0, 0.0, 30.0], Inside),
+        ([-55.0, 0.0, 44.0], Outside),
+        ([0.0, 18.0, 40.0], Inside),
+    ] {
+        assert_eq!(class_of(&topo, yoke, p), want, "at {p:?}");
+    }
+    let grid = Grid {
+        lo: [-63.0, -22.0, -46.0],
+        hi: [-37.0, 22.0, 46.0],
+        n: 14,
+    };
+    let mut read = 0;
+    for p in grid.points() {
+        let (Some(y), Some(f), Some(o)) = (
+            holds(&topo, yoke, p),
+            holds(&topo, fork, p),
+            holds(&topo, outside, p),
+        ) else {
+            continue;
+        };
+        assert_eq!(y, f && o, "at {p:?}");
+        read += 1;
+    }
+    assert!(read > grid.n.pow(3) / 2, "only {read} points read");
 }
