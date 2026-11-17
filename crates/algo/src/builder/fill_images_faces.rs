@@ -4704,9 +4704,31 @@ fn clip_line_to_face_boundary(
         let loops = face_loops
             .get(topo, face_id)
             .filter(|l| l.outer.len() >= 3)?;
+        // A ruling is straight in the surface's parameters too, so where it
+        // crosses a hole's sampled loop there reads in the same fraction.
+        let mut hole_crossings: Vec<f64> = Vec::new();
+        if let (Some(a), Some(b)) = (loops.to_uv(line_start), loops.to_uv(line_end)) {
+            let d = b - a;
+            for hole in &loops.holes {
+                for (p, q) in hole.iter().zip(hole.iter().cycle().skip(1)) {
+                    let e = *q - *p;
+                    let den = d.x().madd(e.y(), -(d.y() * e.x()));
+                    if den.abs() <= f64::EPSILON * d.length() * e.length() {
+                        continue;
+                    }
+                    let w = *p - a;
+                    let t = w.x().madd(e.y(), -(w.y() * e.x())) / den;
+                    let s = w.x().madd(d.y(), -(w.y() * d.x())) / den;
+                    if (0.0..=1.0).contains(&t) && (0.0..=1.0).contains(&s) {
+                        hole_crossings.push(t);
+                    }
+                }
+            }
+        }
         let mut borders: Vec<f64> = crossings
             .iter()
             .chain(crossings_ext.iter())
+            .chain(hole_crossings.iter())
             .map(|t| t.clamp(0.0, 1.0))
             .chain([0.0, 1.0])
             .collect();
@@ -5889,6 +5911,83 @@ mod clip_tests {
                 .all(|&(a, b)| a.z().max(b.z()) <= 2.0 + 1e-9 || a.z().min(b.z()) >= 4.0 - 1e-9),
             "{out:?}"
         );
+    }
+
+    /// A ruling that starts inside a cylinder's whole band and runs out
+    /// through its top rim crosses the boundary once, and on its way crosses
+    /// a window cut through the band: it keeps the two runs beside the
+    /// window.
+    #[test]
+    fn a_ruling_from_inside_the_band_skips_a_window() {
+        use brepkit_math::surfaces::CylindricalSurface;
+        let mut topo = Topology::new();
+        let r = 3.75;
+        let z_axis = Vec3::new(0.0, 0.0, 1.0);
+        let at = |u: f64, z: f64| Point3::new(r * u.cos(), r * u.sin(), z);
+        let (w0, w1) = (0.6, 1.0);
+        let corners = [
+            at(0.0, 0.0),
+            at(0.0, 10.0),
+            at(w0, 5.0),
+            at(w1, 5.0),
+            at(w1, 7.0),
+            at(w0, 7.0),
+        ];
+        let v = corners.map(|c| topo.add_vertex(Vertex::new(c, 1e-7)));
+        let arc = |topo: &mut Topology, a: usize, b: usize, z: f64| {
+            let circle = Circle3D::new(Point3::new(0.0, 0.0, z), z_axis, r).unwrap();
+            topo.add_edge(Edge::new(v[a], v[b], EdgeCurve::Circle(circle)))
+        };
+        let line = |topo: &mut Topology, a: usize, b: usize| {
+            topo.add_edge(Edge::new(v[a], v[b], EdgeCurve::Line))
+        };
+        let seam = line(&mut topo, 0, 1);
+        let outer = [
+            (arc(&mut topo, 0, 0, 0.0), true),
+            (seam, true),
+            (arc(&mut topo, 1, 1, 10.0), false),
+            (seam, false),
+        ];
+        let window = [
+            (line(&mut topo, 2, 5), true),
+            (arc(&mut topo, 5, 4, 7.0), true),
+            (line(&mut topo, 3, 4), false),
+            (arc(&mut topo, 2, 3, 5.0), false),
+        ];
+        let wire = |topo: &mut Topology, edges: &[(brepkit_topology::edge::EdgeId, bool)]| {
+            let w = Wire::new(
+                edges
+                    .iter()
+                    .map(|&(e, fwd)| OrientedEdge::new(e, fwd))
+                    .collect(),
+                true,
+            )
+            .unwrap();
+            topo.add_wire(w)
+        };
+        let (wid, hole) = (wire(&mut topo, &outer), wire(&mut topo, &window));
+        let cyl = CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), z_axis, r).unwrap();
+        let face = topo.add_face(Face::new(wid, vec![hole], FaceSurface::Cylinder(cyl)));
+        let u = 0.8;
+        let out = clip_line_to_face_boundary(
+            &topo,
+            face,
+            at(u, 3.0),
+            at(u, 12.0),
+            1e-7,
+            &FaceLoopsCache::default(),
+            None,
+        )
+        .expect("the ruling runs in the face beside the window");
+        let mut runs: Vec<(f64, f64)> = out
+            .iter()
+            .map(|&(a, b)| (a.z().min(b.z()), a.z().max(b.z())))
+            .collect();
+        runs.sort_by(|a, b| a.0.total_cmp(&b.0));
+        assert_eq!(runs.len(), 2, "{out:?}");
+        let near = |a: f64, b: f64| (a - b).abs() < 1e-9;
+        assert!(near(runs[0].0, 3.0) && near(runs[0].1, 5.0), "{out:?}");
+        assert!(near(runs[1].0, 7.0) && near(runs[1].1, 10.0), "{out:?}");
     }
 
     #[test]

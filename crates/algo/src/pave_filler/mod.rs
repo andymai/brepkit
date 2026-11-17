@@ -682,10 +682,14 @@ fn split_sections_at_rim_vertices(
                         continue;
                     }
                     let mut vertices = vec![edge.start(), edge.end()];
+                    // The rim's blocks split only in MakeBlocks, after this
+                    // pass: a crossing found by EE or EF still waits among a
+                    // block's extra paves.
                     if let Some(blocks) = arena.edge_pave_blocks.get(&oe.edge()) {
                         for leaf in arena.collect_leaf_pave_blocks(blocks) {
                             if let Some(piece) = arena.pave_blocks.get(leaf) {
                                 vertices.extend([piece.start.vertex, piece.end.vertex]);
+                                vertices.extend(piece.extra_paves.iter().map(|pave| pave.vertex));
                             }
                         }
                     }
@@ -743,6 +747,7 @@ fn split_sections_at_rim_vertices(
                         for leaf in arena.collect_leaf_pave_blocks(blocks) {
                             if let Some(piece) = arena.pave_blocks.get(leaf) {
                                 vertices.extend([piece.start.vertex, piece.end.vertex]);
+                                vertices.extend(piece.extra_paves.iter().map(|pave| pave.vertex));
                             }
                         }
                     }
