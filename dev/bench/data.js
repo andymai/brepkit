@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794890108691,
+  "lastUpdate": 1794891686914,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -73061,6 +73061,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25372815,
             "range": "± 59807",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "cd1cfa015a50c8d8493edb318fc4bf324347a631",
+          "message": "fix(tessellate): keep the CDT grid off a face's constrained edges (#2582)\n\n## Summary\n\nThe CDT mesher of a curved face lays a grid of interior points. A grid\npoint that lay exactly on an edge of the face's outline or of a hole\nsplit that edge in this face alone. The face across the edge kept the\nedge's shared samples, so the mesh opened between the two faces. The\nmesher now leaves such points out. Fixes #2574.\n\nThe case from the issue is a rod of radius 6 with a ring cavity (major\nradius 5.5, minor radius 0.32, centre at z = 2). A 3 x 6 x 3 box with\nits low corner at (5, -3, 2) cuts it. The box's floor meets the cavity's\ntorus face in arcs at one tube angle, and the torus face holds the notch\nas a hole.\n\nSome points of the grid of `cdt_in_surface_frame` lie exactly on the\nhole's edges along that tube angle. `point_in_polygon_2d` keeps such a\npoint. The CDT locates a point exactly on a triangle edge as on that\nedge (`on_edge_tol = 0.0`, with an exact orientation test). On a\nconstrained edge, it then splits the edge at the point.\n\n`tessellate_solid` at a deflection of 0.01 gave 7 boundary edges for the\ncut, all at z = 2. The torus face held points on the arcs, for example\n(5.1753, 0.2198, 2), that the plane face did not hold. At 0.1 and 0.001\nthe mesh closed.\n\nThe change:\n\n- `grid_points_on_segments` in\n`crates/operations/src/tessellate/nonplanar.rs` finds the grid points\nthat lie on a segment, with the exact orientation test that the CDT\nuses. It reads only the grid lines inside each segment's box.\n- `cdt_in_surface_frame` reads the CDT's constrained edges (the outline\nand the holes) after it inserts them, and leaves out the grid points on\nthem.\n\nThe change applies to every face that this mesher takes. Only a grid\npoint exactly on a constrained edge leaves the grid.\n\n## Tests\n\n- `crates/operations/tests/ring_cavity_notch_mesh.rs` is new. It cuts,\nintersects and fuses the rod with the cavity and the box, upright,\nturned and mirrored, with `mesh_fallback: false`. Each result must be\nvalid, and its mesh must be watertight at deflections of 0.1, 0.03,\n0.01, 0.003 and 0.001.\n- On main at `628ad9359`, the test fails: the cut, upright, has 7\nboundary edges at 0.01.\n- `grid_points_on_a_segment_are_found_exactly` is a new unit test. It\nfinds the grid points on a segment along a grid line and on a slanted\nsegment, and none beside a segment by 1e-12.\n- `cargo nextest run --cargo-profile ci -p brepkit-algo -p brepkit-io -p\nbrepkit-operations -p brepkit-wasm -p brepkit-check -p brepkit-heal`:\n3829 tests run, 3829 passed, 22 skipped.\n- On `628ad9359` with and without this change, the pose sweep (495\nlines) and the truth audit (40 lines) give the same output.\n- I ran a probe of 675 booleans with and without this change. Rods with\nrings of five radii (5.5 to 6.3) meet 15 boxes, as a cut, an\nintersection and a fuse, in three poses.\n- On main at `628ad9359`, 4 more results are exact, valid, watertight\nand within 1e-6 of an integral. They are the notch through the cavity,\nas a cut and a fuse. No other result changes.\n- On the branch of #2575 (`e492018f8`), 6 more results are: the notch\nthrough the groove or the cavity. No other result changes.\n- `cargo clippy --all-targets --all-features -- -D warnings` and `cargo\nfmt --all -- --check` pass in the pre-commit hook.",
+          "timestamp": "2026-11-17T04:57:51Z",
+          "tree_id": "213f58ba295b91376c79c5eaa77085f1755ac3e8",
+          "url": "https://github.com/andymai/brepkit/commit/cd1cfa015a50c8d8493edb318fc4bf324347a631"
+        },
+        "date": 1794891674647,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 907796,
+            "range": "± 24160",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 953564,
+            "range": "± 2869",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11457,
+            "range": "± 123",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 563157,
+            "range": "± 2543",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 20412075,
+            "range": "± 29174",
             "unit": "ns/iter"
           }
         ]
