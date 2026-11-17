@@ -1,0 +1,20 @@
+crates/io/tests/cube_truss_fuse_inmem.rs
+  s_489e8e320eebde::t_510d84e97fed61 1-286
+  s_489e8e320eebde::t_933cd4273682b6 287-298
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3c859fdb9455ca98e27e366a1342e60e36c86382",
+  "prompts": {},
+  "sessions": {
+    "s_489e8e320eebde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1a2a9261-2019-4199-aa4f-06130071c8f0",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
