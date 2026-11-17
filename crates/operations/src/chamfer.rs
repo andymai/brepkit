@@ -155,9 +155,9 @@ pub fn chamfer_asymmetric(
 /// # Errors
 ///
 /// Returns an error if either distance is zero or negative, no edges are
-/// given, a reference face does not border its edge, the edges mix rims
-/// with other edges, a distance consumes a face, or the blend engine fails
-/// on an edge.
+/// given, a reference face does not border its edge, an edge has two
+/// different reference faces, the edges mix rims with other edges, a
+/// distance consumes a face, or the blend engine fails on an edge.
 pub fn chamfer_two_on(
     topo: &mut Topology,
     solid: SolidId,
@@ -177,10 +177,19 @@ pub fn chamfer_two_on(
     }
     let faces = brepkit_topology::explorer::solid_faces(topo, solid)?;
     let adjacency = brepkit_topology::adjacency::AdjacencyIndex::build_from_faces(topo, &faces)?;
+    let mut reference: HashMap<EdgeId, FaceId> = HashMap::with_capacity(edges.len());
     for &(edge, face) in edges {
         if !adjacency.faces_for_edge(edge).contains(&face) {
             return Err(crate::OperationsError::InvalidInput {
                 reason: format!("chamfer reference face {face:?} does not border edge {edge:?}"),
+            });
+        }
+        if reference
+            .insert(edge, face)
+            .is_some_and(|other| other != face)
+        {
+            return Err(crate::OperationsError::InvalidInput {
+                reason: format!("chamfer edge {edge:?} has two reference faces"),
             });
         }
     }

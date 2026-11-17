@@ -645,3 +645,64 @@ fn a_cavitys_rim_takes_two_distances() {
         );
     }
 }
+
+/// One reference face for each edge: a rod's rim picked with its cap and
+/// again with its wall is refused, as is a reference that does not border
+/// its edge, before any path builds it. The same reference twice is one
+/// pick.
+#[test]
+fn a_rim_takes_one_bordering_reference() {
+    let mut topo = Topology::new();
+    let rod = make_cylinder(&mut topo, 3.0, 10.0).unwrap();
+    let rim_at = |topo: &Topology, z: f64| {
+        brepkit_topology::explorer::solid_edges(topo, rod)
+            .unwrap()
+            .into_iter()
+            .find(|&e| {
+                matches!(topo.edge(e).unwrap().curve(),
+                    EdgeCurve::Circle(c) if (c.center().z() - z).abs() < 1e-9)
+            })
+            .unwrap()
+    };
+    let (rim, bottom_rim) = (rim_at(&topo, 10.0), rim_at(&topo, 0.0));
+    let face_of = |topo: &Topology, edge, planar: bool| {
+        brepkit_topology::explorer::solid_faces(topo, rod)
+            .unwrap()
+            .into_iter()
+            .find(|&f| {
+                matches!(topo.face(f).unwrap().surface(), FaceSurface::Plane { .. }) == planar
+                    && brepkit_topology::explorer::face_edges(topo, f)
+                        .unwrap()
+                        .contains(&edge)
+            })
+            .unwrap()
+    };
+    let (cap, wall, bottom) = (
+        face_of(&topo, rim, true),
+        face_of(&topo, rim, false),
+        face_of(&topo, bottom_rim, true),
+    );
+
+    for pick in [
+        [(rim, cap), (rim, wall)],
+        [(rim, wall), (rim, cap)],
+        [(rim, cap), (rim, bottom)],
+    ] {
+        let refused = chamfer_two_on(&mut topo, rod, &pick, 0.5, 0.3);
+        assert!(
+            matches!(refused, Err(OperationsError::InvalidInput { .. })),
+            "{pick:?}: {:?}",
+            refused.map(|_| ())
+        );
+    }
+    let once = chamfer_two_on(&mut topo, rod, &[(rim, cap)], 0.5, 0.3).unwrap();
+    let twice = chamfer_two_on(&mut topo, rod, &[(rim, cap), (rim, cap)], 0.5, 0.3).unwrap();
+    let want = 90.0 * PI - PI * 0.5 * 0.3 * (3.0 - 0.5 / 3.0);
+    for result in [once, twice] {
+        let volume = solid_volume(&topo, result, 0.001).unwrap();
+        assert!(
+            (volume - want).abs() < 1e-9 * want,
+            "volume {volume}, want {want}"
+        );
+    }
+}
