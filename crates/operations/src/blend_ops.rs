@@ -1045,8 +1045,9 @@ pub(crate) fn chamfer_v2_walking(
 ///
 /// # Errors
 /// Returns `OperationsError` if distances are non-positive, edges are empty,
-/// a reference face does not border its edge, a rim's distance consumes its
-/// cap or wall, or the blend computation fails.
+/// an edge has two different reference faces, a reference face does not
+/// border its edge, a rim's distance consumes its cap or wall, or the blend
+/// computation fails.
 pub fn chamfer_v2_on(
     topo: &mut Topology,
     solid: SolidId,
@@ -1064,13 +1065,21 @@ pub fn chamfer_v2_on(
             reason: "no edges specified".into(),
         });
     }
-    let adjacency = topo.build_adjacency(solid)?;
     let mut pairs: Vec<(EdgeId, FaceId)> = Vec::with_capacity(edges.len());
     for &(edge, face) in edges {
-        if !pairs.iter().any(|&(e, _)| e == edge) {
-            pairs.push((edge, face));
+        match pairs.iter().find(|&&(e, _)| e == edge) {
+            Some(&(_, other)) if other != face => {
+                return Err(OperationsError::InvalidInput {
+                    reason: format!("chamfer edge {edge:?} has two reference faces"),
+                });
+            }
+            Some(_) => {}
+            None => pairs.push((edge, face)),
         }
     }
+    // A reference off its edge, or an edge off the outer shell, goes to the
+    // walking engine, which refuses it.
+    let adjacency = topo.build_adjacency(solid)?;
     let bordered = pairs.iter().all(|&(edge, face)| {
         let around = adjacency.faces_for_edge(edge);
         around.len() == 2 && around.contains(&face)
@@ -1092,7 +1101,8 @@ pub fn chamfer_v2_on(
 ///
 /// # Errors
 /// Returns `OperationsError` if distance is non-positive, angle is out of
-/// range (0, pi/2), edges are empty, or the blend computation fails.
+/// range (0, pi/2), edges are empty, a rim's distance consumes its cap or
+/// wall, or the blend computation fails.
 pub fn chamfer_distance_angle(
     topo: &mut Topology,
     solid: SolidId,

@@ -591,3 +591,57 @@ fn a_cavity_survives_a_chamfer_of_an_outer_edge() {
         "volume {volume}, want {want}"
     );
 }
+
+/// A cavity's rim: a 10 block less a round cavity of radius 2 from z = 3 to
+/// 7, its ceiling's rim chamfered 0.5 into the ceiling and 0.3 down the
+/// wall. The chamfer fills the corner: the rim's triangle swept round the
+/// axis, upright, turned and mirrored.
+#[test]
+fn a_cavitys_rim_takes_two_distances() {
+    let (c, w) = (0.5, 0.3);
+    let want = 1000.0 - 16.0 * PI + PI * c * w * (2.0 - c / 3.0);
+    let poses = [
+        ("upright", Mat4::translation(0.0, 0.0, 0.0)),
+        ("turned", Mat4::rotation_x(0.4) * Mat4::rotation_y(1.1)),
+        ("mirrored", Mat4::scale(-1.0, 1.0, 1.0)),
+    ];
+    for (name, pose) in poses {
+        let mut topo = Topology::new();
+        let block = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+        let cavity = make_cylinder(&mut topo, 2.0, 4.0).unwrap();
+        transform_solid(&mut topo, cavity, &Mat4::translation(5.0, 5.0, 3.0)).unwrap();
+        let hollow = boolean(&mut topo, BooleanOp::Cut, block, cavity).unwrap();
+        assert_eq!(topo.solid(hollow).unwrap().inner_shells().len(), 1);
+        let rim = brepkit_topology::explorer::solid_edges(&topo, hollow)
+            .unwrap()
+            .into_iter()
+            .find(|&e| {
+                let edge = topo.edge(e).unwrap();
+                matches!(edge.curve(), EdgeCurve::Circle(_))
+                    && (topo.vertex(edge.start()).unwrap().point().z() - 7.0).abs() < 1e-9
+            })
+            .unwrap();
+        let ceiling = brepkit_topology::explorer::solid_faces(&topo, hollow)
+            .unwrap()
+            .into_iter()
+            .find(|&f| {
+                matches!(topo.face(f).unwrap().surface(), FaceSurface::Plane { .. })
+                    && brepkit_topology::explorer::face_edges(&topo, f)
+                        .unwrap()
+                        .contains(&rim)
+            })
+            .unwrap();
+        transform_solid(&mut topo, hollow, &pose).unwrap();
+
+        let cut = chamfer_two_on(&mut topo, hollow, &[(rim, ceiling)], c, w).unwrap();
+
+        assert_eq!(topo.solid(cut).unwrap().inner_shells().len(), 1, "{name}");
+        let report = validate_solid(&topo, cut).unwrap();
+        assert!(report.is_valid(), "{name}: {:?}", report.issues);
+        let volume = solid_volume(&topo, cut, 0.001).unwrap();
+        assert!(
+            (volume - want).abs() < 1e-9 * want,
+            "{name}: volume {volume}, want {want}"
+        );
+    }
+}

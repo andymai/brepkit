@@ -599,3 +599,57 @@ fn chamfer_v2_cuts_a_closed_rim_exactly() {
         }
     }
 }
+
+/// `chamfer_v2_on` takes one reference face for each edge, one that borders
+/// it: a rod's top rim with its bottom cap as a second reference, or with
+/// its cap and its wall, is refused. The same reference twice is one pick.
+#[test]
+fn chamfer_v2_on_takes_one_bordering_reference_for_each_edge() {
+    use brepkit_operations::blend_ops::chamfer_v2_on;
+    use brepkit_topology::explorer::face_edges;
+
+    let mut topo = Topology::new();
+    let rod = make_cylinder(&mut topo, 3.0, 10.0).unwrap();
+    let rim_at = |topo: &Topology, z: f64| {
+        solid_edges(topo, rod)
+            .unwrap()
+            .into_iter()
+            .find(|&e| {
+                let edge = topo.edge(e).unwrap();
+                matches!(edge.curve(), EdgeCurve::Circle(c) if (c.center().z() - z).abs() < 1e-9)
+            })
+            .unwrap()
+    };
+    let (top_rim, bottom_rim) = (rim_at(&topo, 10.0), rim_at(&topo, 0.0));
+    let face_of = |topo: &Topology, edge, planar: bool| {
+        solid_faces(topo, rod)
+            .unwrap()
+            .into_iter()
+            .find(|&f| {
+                matches!(topo.face(f).unwrap().surface(), FaceSurface::Plane { .. }) == planar
+                    && face_edges(topo, f).unwrap().contains(&edge)
+            })
+            .unwrap()
+    };
+    let (top, bottom, wall) = (
+        face_of(&topo, top_rim, true),
+        face_of(&topo, bottom_rim, true),
+        face_of(&topo, top_rim, false),
+    );
+
+    for refs in [[top, bottom], [bottom, top], [top, wall]] {
+        let pick = [(top_rim, refs[0]), (top_rim, refs[1])];
+        assert!(
+            chamfer_v2_on(&mut topo, rod, &pick, 1.0, 0.5).is_err(),
+            "{refs:?}"
+        );
+    }
+    let once = chamfer_v2_on(&mut topo, rod, &[(top_rim, top)], 1.0, 0.5).unwrap();
+    let twice = chamfer_v2_on(&mut topo, rod, &[(top_rim, top), (top_rim, top)], 1.0, 0.5).unwrap();
+    assert!(once.failed.is_empty() && twice.failed.is_empty());
+    let (a, b) = (
+        solid_volume(&topo, once.solid, 0.001).unwrap(),
+        solid_volume(&topo, twice.solid, 0.001).unwrap(),
+    );
+    assert!((a - b).abs() < 1e-9 * a, "{a} vs {b}");
+}

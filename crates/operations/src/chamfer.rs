@@ -83,6 +83,21 @@ pub(crate) fn chamfer_exactly_on(
     d1: f64,
     d2: f64,
 ) -> Result<Option<SolidId>, crate::OperationsError> {
+    if let Some(result) = rims_on(topo, solid, edges, d1, d2)? {
+        return Ok(Some(result));
+    }
+    crate::chamfer_chain::chamfer_tangent_chains_on(topo, solid, edges, d1, d2)
+}
+
+/// [`chamfer_circular_rims`] with `d1` into each rim's reference face and
+/// `d2` into its other face, on any shell of the solid.
+fn rims_on(
+    topo: &mut Topology,
+    solid: SolidId,
+    edges: &[(EdgeId, FaceId)],
+    d1: f64,
+    d2: f64,
+) -> Result<Option<SolidId>, crate::OperationsError> {
     let ids: Vec<EdgeId> = edges.iter().map(|&(e, _)| e).collect();
     let on_wall = |edge: EdgeId, wall: FaceId| edges.iter().any(|&(e, f)| e == edge && f == wall);
     let split = |edge: EdgeId, _cap: FaceId, wall: FaceId| {
@@ -92,10 +107,7 @@ pub(crate) fn chamfer_exactly_on(
             (d1, d2)
         }
     };
-    if let Some(result) = chamfer_circular_rims(topo, solid, &ids, &split)? {
-        return Ok(Some(result));
-    }
-    crate::chamfer_chain::chamfer_tangent_chains_on(topo, solid, edges, d1, d2)
+    chamfer_circular_rims(topo, solid, &ids, &split)
 }
 
 /// Asymmetric chamfer: `d1` on the first adjacent face, `d2` on the second.
@@ -185,6 +197,10 @@ pub fn chamfer_two_on(
         return Err(crate::OperationsError::InvalidInput {
             reason: "closed circular rims cannot be chamfered together with other edges".into(),
         });
+    }
+    // A cavity's rim as well: the v2 chamfers read the outer shell alone.
+    if let Some(result) = rims_on(topo, solid, edges, d1, d2)? {
+        return Ok(result);
     }
     let blended = crate::blend_ops::chamfer_v2_on(topo, solid, edges, d1, d2)
         .and_then(crate::blend_ops::all_blended);

@@ -12,10 +12,12 @@
 //! at an angle, with one face in common and the third edge at the vertex left
 //! sharp, the two chamfers meet along the curve where their faces cross (a
 //! mitre). A chain's free end stops where the next edge carries straight on,
-//! and ends in a flat triangle across the edge, or at a plane square to the
-//! edge, which takes the chamfer's end. Nothing here depends on how the solid
-//! is posed. The result's volume is checked against the change that each
-//! edge's triangle makes along it before it is returned.
+//! and ends in a flat triangle across the edge, or at a plane through the
+//! end, square or slanted to the edge, which takes the chamfer's end. Each
+//! edge can take one distance into its cap and another along its wall.
+//! Nothing here depends on how the solid is posed. The result's volume is
+//! checked against the change that each edge's triangle makes along it
+//! before it is returned.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::f64::consts::{PI, TAU};
@@ -3914,11 +3916,20 @@ pub fn chamfer_tangent_chains_on(
     if d1 <= 0.0 || d2 <= 0.0 {
         return Ok(None);
     }
+    // Each reference one of its edge's two faces, and one for each edge.
+    let outer = topo
+        .shell(topo.solid(solid)?.outer_shell())?
+        .faces()
+        .to_vec();
+    let adjacency = AdjacencyIndex::build_from_faces(topo, &outer)?;
     let mut reference = HashMap::with_capacity(edges.len());
     for &(edge, face) in edges {
-        if reference
-            .insert(edge, face)
-            .is_some_and(|other| other != face)
+        let around = adjacency.faces_for_edge(edge);
+        if around.len() != 2
+            || !around.contains(&face)
+            || reference
+                .insert(edge, face)
+                .is_some_and(|other| other != face)
         {
             return Ok(None);
         }
