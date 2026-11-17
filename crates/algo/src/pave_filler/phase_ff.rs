@@ -8288,6 +8288,14 @@ fn emit_split_circle_arcs(
             .flatten()
     };
     let (trim_a, trim_b) = (lateral(face_a), lateral(face_b));
+    // A ball's patch read against its own wires: one half-space from the
+    // whole outline holds the arcs a quarter of the ball leaves out.
+    let ball = |fid: FaceId| {
+        crate::classifier::SphereFaceTrim::new(topo, fid)
+            .ok()
+            .flatten()
+    };
+    let (ball_a, ball_b) = (ball(face_a), ball(face_b));
     // The sagitta band applies per chord, and only to a chord short enough to
     // be one of a rim arc's sixteen samples on this circle: a straight side
     // (a turned box face's ten-unit edge) would otherwise widen the band by
@@ -8333,6 +8341,8 @@ fn emit_split_circle_arcs(
             && in_region(&loops_b, p)
             && trim_a.as_ref().is_none_or(|t| t.holds(p, side_eps))
             && trim_b.as_ref().is_none_or(|t| t.holds(p, side_eps))
+            && ball_a.as_ref().is_none_or(|t| t.holds(p, side_eps))
+            && ball_b.as_ref().is_none_or(|t| t.holds(p, side_eps))
     };
 
     // Pass 1: determine which arcs survive the AABB filter, *before*
