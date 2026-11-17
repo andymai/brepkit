@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794894843963,
+  "lastUpdate": 1794895071861,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -73223,6 +73223,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 18411816,
             "range": "± 60921",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b25bef89f74a89a095ca0ef7485d5ebf114a91f7",
+          "message": "fix(algo): separate paths that weld together, and the two sides of a thin lens (#2579)\n\n## Summary\n\n`separate_arcs_sharing_ends` in\n`crates/algo/src/builder/builder_solid.rs` finds two paths between one\npair of points and splits them, so that the assembly does not take them\nfor one edge. This PR fixes two cases that it missed.\n\n### Edges whose ends weld together (#2550)\n\nThe pass grouped edges by their ends quantized at `MERGE_TOL` (1e-7).\nThe weld in `unify_boundaries` joins vertices within 1e-5. Two paths\nwhose ends fell in different 1e-7 cells but welded together escaped the\npass.\n\nThe pass now groups edges by the vertices that the weld joins their ends\nto. One map, `Welds`, serves the separation and the weld.\n`unify_boundaries` reads it after it drops degenerate slivers and\nzero-length edges, so both stages read the same classes. The middles\nthat the separation adds join the map without moving the vertices read\nbefore them.\n\nWith that grouping alone, `a_rod_along_a_cone_is_exact` failed for the\nrod at (1.2, 0.5), Intersect, in each pose. There, the face splitter\ngives the builder two cone faces. A piece of the cone's seam and the\nloop's long side bound the first. The second is a lens between the same\nseam piece and the loop's short side.\n\nOn `main`, the merge took the short side as the one edge for the seam\npiece. It did so because the weld rebuilt the seam piece with a higher\nedge id. The lens then ran out and back along the short side, and\n`excise_out_and_back_spurs` dropped it. One cone face of area 2.5289\nstayed. With the new grouping, the pass split the short side, and two\ncone faces of area 2.4283 and 0.1007 stayed. In the solid's mesh, the\nsmall face covered 0.0939, 6.7% short.\n\nA seam is no boundary, so the pass now folds such a lens. The fold\napplies where a face is a lens between a piece of a seam and another\npath. The face across the seam must come from the same input face. The\nother path then takes the seam's place, and the lens leaves the face\nlist. The result no longer depends on the order of edge ids.\n\nA seam is an edge that the input face's wires run both ways. An edge is\na piece of a seam only by its curve:\n\n- a line between two points of a seam line;\n- an arc of the seam circle's own circle, within the seam's sweep (any\narc, where the seam runs a whole turn);\n- a span of the seam spline's own curve, within the seam's span.\n\nSo a line or spline from a section or an imprint stays an edge. The face\nacross the seam must not run along a stretch of the lens's curve, whole\nor in pieces. Otherwise it would run the curve out and back. The check\nreads each wire of that face along its edges, so short pieces and\ndensely knotted fits count.\n\n`settle_faces` now holds the steps from the cleanup to the spur\nexcision, and a solid's and a split's assembly both call it. An imprint\nno longer runs the separation before `build_solid`, which runs it.\n\n### Two sides of a thin lens (#2554)\n\nThe pass read two edges as one path when they parted by less than a\ntolerance. The tolerance is a thousandth of the shorter edge's length,\nkept between 1e-5 and 1e-2. Two splines that bound a thin lens part by\nless than that, so the merge took them for one edge and the lens\ncollapsed.\n\nTwo edges of one face's wire are now one path only when they part by\nless than 1e-5, as two copies of one seam do. Edges of different faces\nkeep the wider tolerance. Two fits of one fillet edge in\n`crates/io/tests/scoop_taper_clip_inmem.rs` need it: they part by\n4.1e-4. Edges now join their nearest path first, so a fit beside one\nside of a lens does not join the other side. Two edges that part by more\nthan they may keep their paths apart, so fits between two paths do not\njoin them into one.\n\n## Tests\n\n- `a_chord_and_two_fits_of_one_spline_unify_piece_by_piece` also runs\nwith the second face's ends 2e-7 off the first face's ends. With the\nquantized grouping, that case fails with four pieces of one use each.\n- `a_lens_beside_a_seam_joins_the_face_across_it` builds a cylinder wall\ncut by a loop across its seam, with a lens beside the seam and a cap on\nthe loop. It runs `settle_faces` as a solid's and a split's assembly do.\nThe wall and the cap must stay, no line may stay, and each edge must\nhave two uses. Where the line is no seam of the wall, the lens stays a\nface. If the lens stays until the spur excision, the test fails with no\nface left.\n- `a_spline_that_meets_a_seam_at_three_points_stays_an_edge` puts a\nspline in the seam's place. The spline meets the seam at its ends and\nmiddle and leaves it by 0.05 radians at its quarters. The lens must stay\na face. With the three-sample seam test, it fails with two faces.\n- `two_lenses_on_one_curve_keep_their_seam` builds two faces of one\nseamed wall, each between a piece of the seam and the same curve. The\nsecond face runs the curve whole, in two pieces, or as a fit through\n1001 of its points. Both faces must stay, each with its piece of the\nseam. On `aa7d6aed9`, the case in two pieces fails with no face left. On\n`8f60fa6d2`, the dense fit fails the same way.\n- `a_face_runs_along_a_curve_in_short_pieces` runs a curve 1e-4 long in\neight pieces of 1.25e-5, each shorter than twice the tolerance. The face\nmust read as running along the curve. A face that leaves a curve's end\nalong its tangent must not. With the guard of `8f60fa6d2`, the first\ncase fails.\n- `an_arc_of_a_whole_seam_circle_is_a_piece_of_it` takes a ring's tube\ncircle as a whole-turn seam. An arc from -0.2 to 0.2 radians and the arc\nthe long way round must both read as pieces of it. On `8f60fa6d2`, the\nfirst fails.\n- `a_dropped_sliver_parts_no_paths_the_weld_joins` puts the chord and\nspline faces 9e-6 apart, beside a sliver whose vertex lies 9e-6 before\nthem and comes first. Each edge must have two uses after `settle_faces`.\nOn `8f60fa6d2`, four pieces have one use each.\n- `fits_between_two_paths_do_not_join_them` builds three arches between\none pair of points, each in a face of its own. Neighbours part by\n0.0075, and the outer two by 0.015. The outer two must share no edge.\nWith only one face's edges kept apart, they share an edge.\n- `a_thin_lens_keeps_its_two_sides` builds a lens between two arches\nthat part by 5e-3 over a length of 1000. A face lies beside each arch,\nand a face spans the outer arches. The lens must keep four edges, and\neach edge must have two uses. Without the rule for one face's wire, it\nfails with two edges of four uses.\n- `a_rod_along_a_cone_is_exact` passes. I ran the rod in four positions,\nfour poses and three operations. Each result has the same face types and\nface areas as on `main`.\n- `cargo nextest run --cargo-profile ci -p brepkit-algo -p brepkit-io -p\nbrepkit-operations -p brepkit-wasm -p brepkit-check -p brepkit-heal`:\n3844 passed, 22 skipped.\n- The pose sweep (495 lines, no fallback) and the truth audit give the\nsame output as `main` at `cd1cfa015`, merged into the branch.\n- `cargo test -p brepkit-wasm --lib gridfinity`: 27 passed.\n- `cargo clippy --all-targets --all-features -- -D warnings` and `cargo\nfmt --all -- --check` pass in the pre-commit hook.\n`./scripts/check-mul-add.sh`, `./scripts/check-boundaries.sh` and\n`./scripts/check-doc-paths.sh` pass.\n\nFixes #2550\nFixes #2554",
+          "timestamp": "2026-11-17T05:54:18Z",
+          "tree_id": "231788b8935a62ce34205ad6a6469d77c3ea065e",
+          "url": "https://github.com/andymai/brepkit/commit/b25bef89f74a89a095ca0ef7485d5ebf114a91f7"
+        },
+        "date": 1794895061613,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 834800,
+            "range": "± 16330",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 854230,
+            "range": "± 23332",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 9967,
+            "range": "± 28",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 508271,
+            "range": "± 4388",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 18532740,
+            "range": "± 45713",
             "unit": "ns/iter"
           }
         ]
