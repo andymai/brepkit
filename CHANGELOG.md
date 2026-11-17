@@ -1,5 +1,16 @@
 # Changelog
 
+## [4.11.30](https://github.com/andymai/brepkit/compare/v4.11.29...v4.11.30) (2026-11-17)
+
+
+### Bug Fixes
+
+* **algo:** separate paths that weld together, and the two sides of a thin lens ([#2579](https://github.com/andymai/brepkit/issues/2579)) ([b25bef8](https://github.com/andymai/brepkit/commit/b25bef89f74a89a095ca0ef7485d5ebf114a91f7)), closes [#2550](https://github.com/andymai/brepkit/issues/2550) [#2554](https://github.com/andymai/brepkit/issues/2554)
+* **io:** pair the triangles round a shared edge again after a turn ([#2580](https://github.com/andymai/brepkit/issues/2580)) ([d6ae204](https://github.com/andymai/brepkit/commit/d6ae204d4638a07037b3da4dda91122111474870)), closes [#2510](https://github.com/andymai/brepkit/issues/2510)
+* **operations:** blend a chain that turns a corner or hooks back, instead of refusing it ([#2591](https://github.com/andymai/brepkit/issues/2591)) ([bb04eb2](https://github.com/andymai/brepkit/commit/bb04eb20ebbbe445c0ca06a6190838dd51ed091f))
+* **operations:** chamfer round edges with two distances and end chains on slanted planes ([#2571](https://github.com/andymai/brepkit/issues/2571)) ([08d5be5](https://github.com/andymai/brepkit/commit/08d5be5b672ed71f587d99c135fc7aed07a37bc3))
+* **tessellate:** keep a shell's free rim out of the boundary weld ([#2569](https://github.com/andymai/brepkit/issues/2569)) ([3c8d110](https://github.com/andymai/brepkit/commit/3c8d1104a2b9fd95f3e8d4d4bca4d978e30bf56a)), closes [#2548](https://github.com/andymai/brepkit/issues/2548)
+
 ## [4.11.29](https://github.com/andymai/brepkit/compare/v4.11.28...v4.11.29) (2026-11-17)
 
 
