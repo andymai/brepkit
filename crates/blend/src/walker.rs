@@ -536,6 +536,47 @@ fn section_arc(sec: &CircSection) -> ([Point3; 3], f64) {
 /// or not finite (a run of sections at one place), or when a solved weight
 /// is not positive.
 pub fn interpolate_blend_surface(sections: &[CircSection]) -> Result<NurbsSurface, BlendError> {
+    interpolate_rows(
+        sections,
+        |sec| {
+            let (points, w_mid) = section_arc(sec);
+            vec![(points[0], 1.0), (points[1], w_mid), (points[2], 1.0)]
+        },
+        2,
+        vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+    )
+}
+
+/// Build a chamfer band that passes through every one of its sections: a
+/// ruled surface whose rows across are the straight segments from each
+/// section's first contact to its second, interpolated along the band as
+/// [`interpolate_blend_surface`] interpolates arcs. Its first row of control
+/// points is the band's side on the first surface, and its second the side
+/// on the second.
+///
+/// # Errors
+///
+/// As [`interpolate_blend_surface`].
+pub fn interpolate_chamfer_band(sections: &[CircSection]) -> Result<NurbsSurface, BlendError> {
+    interpolate_rows(
+        sections,
+        |sec| vec![(sec.p1, 1.0), (sec.p2, 1.0)],
+        1,
+        vec![0.0, 0.0, 1.0, 1.0],
+    )
+}
+
+/// The surface whose rows across, of degree `degree_u` over `knots_u`, are
+/// `rows` of each section (homogeneous points with their weights),
+/// interpolated through the sections along the band.
+#[allow(clippy::too_many_lines)]
+fn interpolate_rows(
+    sections: &[CircSection],
+    rows: impl Fn(&CircSection) -> Vec<(Point3, f64)>,
+    degree_u: usize,
+    knots_u: Vec<f64>,
+) -> Result<NurbsSurface, BlendError> {
+    let count = degree_u + 1;
     let n = sections.len();
     if n < 2 {
         return Err(BlendError::Math(brepkit_math::MathError::EmptyInput));
@@ -583,14 +624,12 @@ pub fn interpolate_blend_surface(sections: &[CircSection]) -> Result<NurbsSurfac
             }
         }
     }
-    // Twelve right-hand sides: three arc rows of homogeneous points.
-    let mut rhs: Vec<[f64; 12]> = sections
+    // Four right-hand sides for each row: its homogeneous point.
+    let mut rhs: Vec<Vec<f64>> = sections
         .iter()
         .map(|sec| {
-            let (points, w_mid) = section_arc(sec);
-            let weights = [1.0, w_mid, 1.0];
-            let mut out = [0.0; 12];
-            for (k, (point, weight)) in points.iter().zip(weights).enumerate() {
+            let mut out = vec![0.0; 4 * count];
+            for (k, (point, weight)) in rows(sec).into_iter().take(count).enumerate() {
                 out[4 * k] = point.x() * weight;
                 out[4 * k + 1] = point.y() * weight;
                 out[4 * k + 2] = point.z() * weight;
@@ -613,33 +652,37 @@ pub fn interpolate_blend_surface(sections: &[CircSection]) -> Result<NurbsSurfac
             for j in k..n.min(k + band) {
                 matrix[i][j] -= factor * matrix[k][j];
             }
-            let source = rhs[k];
-            for (value, &from) in rhs[i].iter_mut().zip(&source) {
+            let (above, below) = rhs.split_at_mut(i);
+            for (value, &from) in below[0].iter_mut().zip(&above[k]) {
                 *value -= factor * from;
             }
         }
     }
     for k in (0..n).rev() {
-        let mut value = rhs[k];
+        let (upto, after) = rhs.split_at_mut(k + 1);
+        let value = &mut upto[k];
         for j in k + 1..n.min(k + band) {
             let factor = matrix[k][j];
-            for (out, &from) in value.iter_mut().zip(&rhs[j]) {
+            for (out, &from) in value.iter_mut().zip(&after[j - k - 1]) {
                 *out -= factor * from;
             }
         }
         let pivot = matrix[k][k];
-        for out in &mut value {
+        for out in value.iter_mut() {
             *out /= pivot;
         }
-        rhs[k] = value;
     }
     if rhs.iter().flatten().any(|value| !value.is_finite()) {
         return Err(BlendError::Math(brepkit_math::MathError::EmptyInput));
     }
-    let mut control_points = (0..3).map(|_| Vec::with_capacity(n)).collect::<Vec<_>>();
-    let mut weights = (0..3).map(|_| Vec::with_capacity(n)).collect::<Vec<_>>();
+    let mut control_points = (0..count)
+        .map(|_| Vec::with_capacity(n))
+        .collect::<Vec<_>>();
+    let mut weights = (0..count)
+        .map(|_| Vec::with_capacity(n))
+        .collect::<Vec<_>>();
     for solved in &rhs {
-        for k in 0..3 {
+        for k in 0..count {
             let weight = solved[4 * k + 3];
             if weight <= 1e-9 {
                 return Err(BlendError::Math(brepkit_math::MathError::EmptyInput));
@@ -653,9 +696,9 @@ pub fn interpolate_blend_surface(sections: &[CircSection]) -> Result<NurbsSurfac
         }
     }
     Ok(NurbsSurface::new(
-        2,
+        degree_u,
         degree_v,
-        vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+        knots_u,
         knots_v,
         control_points,
         weights,
@@ -1073,6 +1116,35 @@ mod tests {
     /// Two sections at one place give the band no length to run along: the
     /// interpolation refuses them, and the band built on them as control
     /// points still stands.
+    #[test]
+    fn interpolate_chamfer_band_is_straight_across_through_its_sections() {
+        let sections = boss_foot_sections(&[0.0, 0.1, 0.35, 0.5, 0.9, 1.2, 1.5]);
+        let band = interpolate_chamfer_band(&sections).unwrap();
+        assert_eq!(band.degree_u(), 1);
+        let mut params = vec![0.0];
+        for pair in sections.windows(2) {
+            let step = (pair[1].center - pair[0].center)
+                .length()
+                .max((pair[1].p1 - pair[0].p1).length())
+                .max((pair[1].p2 - pair[0].p2).length());
+            params.push(params[params.len() - 1] + step);
+        }
+        let total = params[params.len() - 1];
+        for (sec, param) in sections.iter().zip(&params) {
+            let v = param / total;
+            for k in 0..=8 {
+                let f = f64::from(k) / 8.0;
+                let want = sec.p1 + (sec.p2 - sec.p1) * f;
+                let got = band.evaluate(f, v);
+                assert!(
+                    (got - want).length() < 1e-12,
+                    "at {f} of the section at {}",
+                    sec.t
+                );
+            }
+        }
+    }
+
     #[test]
     fn interpolate_blend_surface_refuses_coincident_sections() {
         let sections = boss_foot_sections(&[0.4, 0.4]);

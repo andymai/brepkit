@@ -408,10 +408,17 @@ impl BlendFunction for EvolRadBlend {
 
 /// Two-distance chamfer blend function.
 ///
-/// The chamfer is defined by two distances `d1` and `d2` from the edge,
-/// measured along each surface. The constraint system is:
-/// - `f1 = nplan · (midpoint - guide)` (planarity)
-/// - `f2..f4 = (P1 + d1·npn1) - (P2 + d2·npn2)` (offset matching)
+/// Each contact lies in the section plane through the guide point, square
+/// to the spine, on its own surface, at its distance from the guide point:
+/// `d1` from it on surface 1 and `d2` on surface 2 (each a chord, as a
+/// chamfer's legs are straight). The two contacts do not depend on each
+/// other, so the system is two of two equations:
+/// - `f1 = nplan · (P1 - guide)`, `f2 = (|P1 - guide|^2 - d1^2) / (2 d1)`
+/// - `f3 = nplan · (P2 - guide)`, `f4 = (|P2 - guide|^2 - d2^2) / (2 d2)`
+///
+/// Each distance term is scaled to read as a length near its root. A chord
+/// meets the surface's section on either side of the guide point: the
+/// walker's start picks the side.
 #[derive(Debug, Clone)]
 pub struct ChamferBlend {
     /// Distance from edge along surface 1.
@@ -428,34 +435,13 @@ impl BlendFunction for ChamferBlend {
         params: &BlendParams,
         ctx: &BlendContext,
     ) -> [f64; 4] {
-        let p1 = surf1.evaluate(params.u1, params.v1);
-        let p2 = surf2.evaluate(params.u2, params.v2);
-        let n1 = surf1.normal(params.u1, params.v1);
-        let n2 = surf2.normal(params.u2, params.v2);
-
-        let npn1 = project_normal_to_section(n1, ctx.nplan);
-        let npn2 = project_normal_to_section(n2, ctx.nplan);
-
-        let mid = Point3::new(
-            (p1.x() + p2.x()) * 0.5,
-            (p1.y() + p2.y()) * 0.5,
-            (p1.z() + p2.z()) * 0.5,
-        );
-        let diff = mid - ctx.guide_point;
-        let f1 = ctx.nplan.dot(Vec3::new(diff.x(), diff.y(), diff.z()));
-
-        let c1 = Point3::new(
-            p1.x() + self.d1 * npn1.x(),
-            p1.y() + self.d1 * npn1.y(),
-            p1.z() + self.d1 * npn1.z(),
-        );
-        let c2 = Point3::new(
-            p2.x() + self.d2 * npn2.x(),
-            p2.y() + self.d2 * npn2.y(),
-            p2.z() + self.d2 * npn2.z(),
-        );
-
-        [f1, c1.x() - c2.x(), c1.y() - c2.y(), c1.z() - c2.z()]
+        let leg = |p: Point3, d: f64| {
+            let off = p - ctx.guide_point;
+            [ctx.nplan.dot(off), (off.dot(off) - d * d) / (2.0 * d)]
+        };
+        let [f1, f2] = leg(surf1.evaluate(params.u1, params.v1), self.d1);
+        let [f3, f4] = leg(surf2.evaluate(params.u2, params.v2), self.d2);
+        [f1, f2, f3, f4]
     }
 
     fn jacobian(
@@ -465,60 +451,21 @@ impl BlendFunction for ChamferBlend {
         params: &BlendParams,
         ctx: &BlendContext,
     ) -> [[f64; 4]; 4] {
-        let du1 = surf1.partial_u(params.u1, params.v1);
-        let dv1 = surf1.partial_v(params.u1, params.v1);
-        let du2 = surf2.partial_u(params.u2, params.v2);
-        let dv2 = surf2.partial_v(params.u2, params.v2);
-
-        // Include finite-difference ∂npn/∂u terms for convergence on
-        // curved surfaces (same approach as ConstRadBlend).
-        let h = 1e-7;
-        let dnpn1_du1 =
-            ConstRadBlend::finite_diff_npn(surf1, params.u1, params.v1, h, 0.0, ctx.nplan);
-        let dnpn1_dv1 =
-            ConstRadBlend::finite_diff_npn(surf1, params.u1, params.v1, 0.0, h, ctx.nplan);
-        let dnpn2_du2 =
-            ConstRadBlend::finite_diff_npn(surf2, params.u2, params.v2, h, 0.0, ctx.nplan);
-        let dnpn2_dv2 =
-            ConstRadBlend::finite_diff_npn(surf2, params.u2, params.v2, 0.0, h, ctx.nplan);
-
-        let nplan = ctx.nplan;
-
-        let row0 = [
-            0.5 * nplan.dot(du1),
-            0.5 * nplan.dot(dv1),
-            0.5 * nplan.dot(du2),
-            0.5 * nplan.dot(dv2),
-        ];
-
-        // Rows 1-3: ∂(c1 - c2)/∂(u1,v1,u2,v2)
-        // c1 = P1 + d1*npn1, c2 = P2 + d2*npn2
-        let col0 = Vec3::new(
-            du1.x() + self.d1 * dnpn1_du1.x(),
-            du1.y() + self.d1 * dnpn1_du1.y(),
-            du1.z() + self.d1 * dnpn1_du1.z(),
-        );
-        let col1 = Vec3::new(
-            dv1.x() + self.d1 * dnpn1_dv1.x(),
-            dv1.y() + self.d1 * dnpn1_dv1.y(),
-            dv1.z() + self.d1 * dnpn1_dv1.z(),
-        );
-        let col2 = Vec3::new(
-            -(du2.x() + self.d2 * dnpn2_du2.x()),
-            -(du2.y() + self.d2 * dnpn2_du2.y()),
-            -(du2.z() + self.d2 * dnpn2_du2.z()),
-        );
-        let col3 = Vec3::new(
-            -(dv2.x() + self.d2 * dnpn2_dv2.x()),
-            -(dv2.y() + self.d2 * dnpn2_dv2.y()),
-            -(dv2.z() + self.d2 * dnpn2_dv2.z()),
-        );
-
+        let rows = |surf: &dyn ParametricSurface, u: f64, v: f64, d: f64| {
+            let off = surf.evaluate(u, v) - ctx.guide_point;
+            let (du, dv) = (surf.partial_u(u, v), surf.partial_v(u, v));
+            (
+                [ctx.nplan.dot(du), ctx.nplan.dot(dv)],
+                [off.dot(du) / d, off.dot(dv) / d],
+            )
+        };
+        let (a1, b1) = rows(surf1, params.u1, params.v1, self.d1);
+        let (a2, b2) = rows(surf2, params.u2, params.v2, self.d2);
         [
-            row0,
-            [col0.x(), col1.x(), col2.x(), col3.x()],
-            [col0.y(), col1.y(), col2.y(), col3.y()],
-            [col0.z(), col1.z(), col2.z(), col3.z()],
+            [a1[0], a1[1], 0.0, 0.0],
+            [b1[0], b1[1], 0.0, 0.0],
+            [0.0, 0.0, a2[0], a2[1]],
+            [0.0, 0.0, b2[0], b2[1]],
         ]
     }
 
@@ -887,58 +834,67 @@ mod tests {
         }
     }
 
+    /// Square planes along `y`: the contacts lie `d1` along plane 1 and `d2`
+    /// up plane 2 from the guide point, in its section plane.
     #[test]
     fn chamfer_residual_at_known_solution() {
         let (p1, p2) = make_test_planes();
-        let d1 = 3.0;
-        let d2 = 3.0;
-        let y = 5.0;
-
+        let (d1, d2, y) = (3.0, 2.0, 5.0);
         let blend = ChamferBlend { d1, d2 };
         let ctx = make_test_context(y);
-
-        // Same as fillet: contact at (d1, y, 0) and (0, y, d2)
-        // npn1 for plane1 (normal=(0,0,1), nplan=(0,1,0)):
-        //   cross = (0,1,0)×(0,0,1) = (1,0,0)
-        //   npn = (1,0,0)×(0,1,0) = (0,0,1) → same as normal, sign positive
-        //   Wait: cross×nplan = (1,0,0)×(0,1,0) = (0,0,1)
-        //   npn1 = (0,0,1), length=1, dot(normal, npn)=1 → keep sign → (0,0,1)
-        // npn2 for plane2 (normal=(-1,0,0)):
-        //   cross = (0,1,0)×(-1,0,0) = (0,0,1)
-        //   npn = (0,0,1)×(0,1,0) = ... wait let me recalc
-        //   cross = nplan × normal = (0,1,0)×(-1,0,0) = (0·0 - 0·0, 0·(-1) - 1·0, 1·0 - 0·(-1)) = (0,0,1)
-        //   npn = cross × nplan = (0,0,1)×(0,1,0) = (0·0-1·1, 1·0-0·0, 0·1-0·0) = (-1,0,0)
-        //   dot(normal, npn) = (-1)·(-1)+0+0 = 1 ≥ 0 → keep sign → (-1,0,0)
-        // c1 = P1 + d1*npn1 = (d1, y, 0) + d1*(0,0,1) = (d1, y, d1)
-        // c2 = P2 + d2*npn2 = (0, y, d2) + d2*(-1,0,0) = (-d2, y, d2)
-        // c1 - c2 = (d1+d2, 0, d1-d2)
-        // For symmetric chamfer (d1=d2): (2d, 0, 0) ≠ 0
-        // So for chamfer, the constraint is different from fillet!
-        // The chamfer solution would be where c1 = c2.
-        // (d1, y, d1) = (-d2, y, d2) → d1 = -d2 (impossible for positive distances)
-        // This means the symmetric chamfer on 90° planes doesn't have a solution with this
-        // formulation. The chamfer formulation works differently from fillet.
-        // For chamfer, let me just verify the Jacobian matches FD instead.
-
-        // With npn1=(0,0,1), npn2=(1,0,0):
-        // c1 = (u1, v1, d1), c2 = (d2, u2, v2)
-        // c1=c2: u1=d2, v1=u2, d1=v2
-        // Planarity: mid_y = y → v1 = y (since v1=u2)
-        // So: u1=d2, v1=y, u2=y, v2=d1
-
+        // P1 = (d1, y, 0) on plane 1, P2 = (0, y, d2) on plane 2.
         let params = BlendParams {
-            u1: d2,
+            u1: d1,
             v1: y,
             u2: y,
-            v2: d1,
+            v2: d2,
         };
-
         let res = blend.value(&p1, &p2, &params, &ctx);
-        let norm = (res[0] * res[0] + res[1] * res[1] + res[2] * res[2] + res[3] * res[3]).sqrt();
-        assert!(
-            norm < 1e-10,
-            "chamfer residual should be ~0 at known solution, got {res:?} (norm={norm})"
+        assert!(res.iter().all(|r| r.abs() < 1e-12), "{res:?}");
+        let off = blend.value(
+            &p1,
+            &p2,
+            &BlendParams {
+                u1: d1 + 0.1,
+                v1: y + 0.2,
+                u2: y,
+                v2: d2,
+            },
+            &ctx,
         );
+        assert!(off[0].abs() > 0.1 && off[1].abs() > 0.05, "{off:?}");
+    }
+
+    /// The analytic Jacobian matches central differences of the residual.
+    #[test]
+    fn chamfer_jacobian_matches_finite_differences() {
+        let (p1, p2) = make_test_planes();
+        let blend = ChamferBlend { d1: 1.5, d2: 0.7 };
+        let ctx = make_test_context(2.0);
+        let at = [1.1, 2.3, 1.9, 0.4];
+        let params = |x: [f64; 4]| BlendParams {
+            u1: x[0],
+            v1: x[1],
+            u2: x[2],
+            v2: x[3],
+        };
+        let jac = blend.jacobian(&p1, &p2, &params(at), &ctx);
+        let h = 1e-6;
+        for col in 0..4 {
+            let (mut plus, mut minus) = (at, at);
+            plus[col] += h;
+            minus[col] -= h;
+            let fp = blend.value(&p1, &p2, &params(plus), &ctx);
+            let fm = blend.value(&p1, &p2, &params(minus), &ctx);
+            for row in 0..4 {
+                let fd = (fp[row] - fm[row]) / (2.0 * h);
+                assert!(
+                    (fd - jac[row][col]).abs() < 1e-6,
+                    "[{row}][{col}]: {fd} vs {}",
+                    jac[row][col]
+                );
+            }
+        }
     }
 
     #[test]

@@ -55,6 +55,31 @@ fn own_cavities(
     Ok(result)
 }
 
+/// A walking-engine chamfer's result as a solid of its own, refused where
+/// it is not a valid solid: the builder does not read what else lies in the
+/// regions its chamfers cut, such as a hole in the triangle an end takes
+/// from its end face, which it would leave outside that face.
+fn valid_chamfer(
+    topo: &mut Topology,
+    solid: SolidId,
+    built: BlendResult,
+) -> Result<BlendResult, OperationsError> {
+    let result = own_cavities(topo, solid, built, "chamfer")?;
+    if result.solid != solid {
+        let report = crate::validate::validate_solid(topo, result.solid)?;
+        if let Some(issue) = report
+            .issues
+            .iter()
+            .find(|issue| issue.severity == crate::validate::Severity::Error)
+        {
+            return Err(OperationsError::InvalidInput {
+                reason: format!("the chamfer leaves an invalid solid: {}", issue.description),
+            });
+        }
+    }
+    Ok(result)
+}
+
 /// Fillet edges with constant radius — the production engine.
 ///
 /// Runs the corrected [`FilletBuilder`]: one ordered contour per G1 run,
@@ -1034,7 +1059,7 @@ pub(crate) fn chamfer_v2_walking(
     let mut builder = ChamferBuilder::new(topo, solid);
     builder.add_edges_asymmetric(edges, d1, d2);
     let built = builder.build()?;
-    own_cavities(topo, solid, built, "chamfer")
+    valid_chamfer(topo, solid, built)
 }
 
 /// Chamfer edges with two distances (v2 engine), `d1` on each edge's
@@ -1092,7 +1117,7 @@ pub fn chamfer_v2_on(
     let mut builder = ChamferBuilder::new(topo, solid);
     builder.add_edges_asymmetric_on(edges, d1, d2);
     let built = builder.build()?;
-    own_cavities(topo, solid, built, "chamfer")
+    valid_chamfer(topo, solid, built)
 }
 
 /// Chamfer edges with distance and angle (v2 engine): `distance` on each
@@ -1135,7 +1160,7 @@ pub fn chamfer_distance_angle(
     let mut builder = ChamferBuilder::new(topo, solid);
     builder.add_edges_distance_angle(edges, distance, angle);
     let built = builder.build()?;
-    own_cavities(topo, solid, built, "chamfer")
+    valid_chamfer(topo, solid, built)
 }
 
 /// Each edge, once, with its first face in the outer shell's face order,
