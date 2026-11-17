@@ -311,6 +311,10 @@ fn a_pocket_in_the_wall_under_the_crossing_is_refused() {
     );
     let report = validate_solid(&topo, result.solid).unwrap();
     assert!(report.is_valid(), "{:?}", report.issues);
+    assert!(
+        is_watertight(&tessellate_solid(&topo, result.solid, 0.01).unwrap()),
+        "open mesh"
+    );
     let truth = 8000.0 - 0.1 - corner(3.0) * 20.0 - corner(1.0) * 20.0 + both_take(3.0, 1.0);
     let volume = solid_volume(&topo, result.solid, 0.001).unwrap();
     assert!(
