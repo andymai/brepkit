@@ -655,6 +655,84 @@ fn a_hole_narrows_the_band_or_is_refused() {
     assert!(matches!(refused, Err(OperationsError::InvalidInput { .. })));
 }
 
+/// Each end of the edge meets the end of the target that moves it least. The
+/// target here is short and lies across the edge's line, so that the other
+/// pairing is the one whose ruled surface from the edge to the target keeps
+/// one side up: the way a blend pairs its chains, but not a match.
+#[test]
+fn each_end_of_the_edge_meets_the_target_end_that_moves_it_least() {
+    let ends = [Point3::new(3.0, 0.0, 0.0), Point3::new(1.068, 0.518, 0.0)];
+    for (pose_name, pose) in POSES {
+        for continuity in [MatchContinuity::G0, MatchContinuity::G1] {
+            let context = format!("{pose_name} {continuity:?}");
+            let mut topo = Topology::new();
+            let source = sheet(&mut topo, "plane", pose());
+            let mut b = Builder {
+                topo: &mut topo,
+                pose: pose(),
+            };
+            let v = [
+                b.vertex(ends[0]),
+                b.vertex(ends[1]),
+                b.vertex(Point3::new(6.0, 3.0, 0.0)),
+            ];
+            let target = b.line(v[0], v[1]);
+            if continuity == MatchContinuity::G1 {
+                let walk = vec![
+                    OrientedEdge::new(target, true),
+                    OrientedEdge::new(b.line(v[1], v[2]), true),
+                    OrientedEdge::new(b.line(v[2], v[0]), true),
+                ];
+                let wire = b.topo.add_wire(Wire::new(walk, true).unwrap());
+                let normal = pose().vector(Vec3::new(0.0, 0.0, 1.0));
+                let d = normal.dot(pose().point(ends[0]) - Point3::new(0.0, 0.0, 0.0));
+                b.topo.add_face(Face::new(
+                    wire,
+                    Vec::new(),
+                    FaceSurface::Plane { normal, d },
+                ));
+            }
+            let face = match_surface(&mut topo, source.face, source.chain[0], target, continuity)
+                .unwrap_or_else(|e| panic!("{context}: {e}"));
+            let surface = nurbs_of(&topo, face);
+            // The side at `u = 0` runs from the edge's end there to the far
+            // corner beside it.
+            let edge_ends = [
+                pose().point(Point3::new(0.0, 0.0, 0.0)),
+                pose().point(Point3::new(0.0, 10.0, 0.0)),
+            ];
+            let far = surface.evaluate(0.0, 1.0);
+            let edge_ends = if (far - edge_ends[0]).length() < (far - edge_ends[1]).length() {
+                edge_ends
+            } else {
+                [edge_ends[1], edge_ends[0]]
+            };
+            let target_ends = [pose().point(ends[0]), pose().point(ends[1])];
+            // How far a straight edge moves on to a straight target, as the
+            // mean of the squared distance along them.
+            let movement = |to: [Point3; 2]| {
+                let (d0, d1) = (to[0] - edge_ends[0], to[1] - edge_ends[1]);
+                (d0.dot(d0) + d1.dot(d1) + d0.dot(d1)) / 3.0
+            };
+            let forward = movement(target_ends);
+            let backward = movement([target_ends[1], target_ends[0]]);
+            let least = if forward < backward {
+                target_ends
+            } else {
+                [target_ends[1], target_ends[0]]
+            };
+            let moved = [surface.evaluate(0.0, 0.0), surface.evaluate(1.0, 0.0)];
+            for (k, (got, wanted)) in moved.iter().zip(least).enumerate() {
+                assert!(
+                    (*got - wanted).length() < 1e-9,
+                    "{context}: end {k} went to {got:?}, not {wanted:?} \
+                     (movement {forward} forward, {backward} backward)"
+                );
+            }
+        }
+    }
+}
+
 fn refusal(result: Result<FaceId, OperationsError>) -> String {
     match result {
         Err(OperationsError::InvalidInput { reason }) => reason,

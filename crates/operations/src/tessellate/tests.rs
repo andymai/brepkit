@@ -5188,3 +5188,243 @@ fn an_edge_doubling_back_over_a_split_straight_edge_takes_its_samples() {
     assert!(has(first), "{:?}", edge_points[&first.index()]);
     assert!(has(second), "{:?}", edge_points[&second.index()]);
 }
+
+/// The face S(u, v) = (u, v - u^2, 0) over the trapezoid (0, 0), (1, 0),
+/// (0.8, 0.12), (0.1, 0.12), of area 0.102, the only face of its shell. The
+/// face and the solid mesh it whole and unfolded at every deflection, upright,
+/// turned and mirrored: the weld leaves the shell's own rim alone, though the
+/// rim's sides lie nearer than the weld reaches at a coarse deflection.
+#[test]
+fn a_flat_spline_face_in_a_skewed_parameter_space_meshes_whole() {
+    use brepkit_math::mat::Mat4;
+
+    let p = Point3::new;
+    let poses = [
+        Mat4::identity(),
+        Mat4::translation(3.0, -2.0, 5.0) * Mat4::rotation_x(0.7) * Mat4::rotation_z(0.4),
+        Mat4::scale(-1.0, 1.0, 1.0) * Mat4::rotation_y(1.1),
+    ];
+    for pose in poses {
+        let q = |x: f64, y: f64| pose.mul_point(p(x, y, 0.0));
+        let surface = NurbsSurface::new(
+            2,
+            1,
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![
+                vec![q(0.0, 0.0), q(0.0, 1.0)],
+                vec![q(0.5, 0.0), q(0.5, 1.0)],
+                vec![q(1.0, -1.0), q(1.0, 0.0)],
+            ],
+            vec![vec![1.0; 2]; 3],
+        )
+        .unwrap();
+        let corners = [q(0.0, 0.0), q(1.0, 0.0), q(0.8, 0.12), q(0.1, 0.12)];
+        let sides: Vec<Vec<Point3>> = (0..4)
+            .map(|k| vec![corners[k], corners[(k + 1) % 4]])
+            .collect();
+        let (topo, face, solid) = spline_bounded_face(surface, &sides, &[]);
+        for deflection in [0.5, 0.1, 0.01, 0.001] {
+            for (what, mesh) in [
+                ("solid", tessellate_solid(&topo, solid, deflection).unwrap()),
+                ("face", tessellate(&topo, face, deflection).unwrap()),
+            ] {
+                let mut area = 0.0;
+                let mut vector_area = Vec3::new(0.0, 0.0, 0.0);
+                for t in mesh.indices.chunks_exact(3) {
+                    let [a, b, c] = [0, 1, 2].map(|k| mesh.positions[t[k] as usize]);
+                    let n = (b - a).cross(c - a);
+                    area += n.length() / 2.0;
+                    vector_area += n * 0.5;
+                }
+                assert!(
+                    (area - 0.102).abs() < 1e-9 && (vector_area.length() - 0.102).abs() < 1e-9,
+                    "{what} at {deflection} in {pose:?}: {} triangles, area {area}, vector area {}",
+                    mesh.indices.len() / 3,
+                    vector_area.length()
+                );
+            }
+        }
+    }
+}
+
+/// Two rectangles side by side in z = 0, each the only user of its own
+/// edges, the second's left side 6e-8 to the right of the first's right
+/// side: the sides' samples round to different cells of the merge grid, so
+/// the two faces meet across a crack the size of the gap. The weld closes
+/// that crack, a join between two faces, and leaves each rectangle's own rim
+/// as it is, though at 0.12 high the rectangles are narrower than its reach:
+/// each corner of the join welds to the corner beside it across the crack,
+/// and the corners above or below stay apart.
+#[test]
+fn a_join_held_by_two_edges_is_welded_across_the_merge_grid() {
+    use brepkit_topology::shell::Shell;
+    use brepkit_topology::solid::Solid;
+
+    let p = Point3::new;
+    let mut topo = Topology::new();
+    let square = |topo: &mut Topology, corners: [Point3; 4]| {
+        let v = corners.map(|q| topo.add_vertex(Vertex::new(q, 1e-7)));
+        let edges = (0..4)
+            .map(|k| {
+                let edge = Edge::new(v[k], v[(k + 1) % 4], EdgeCurve::Line);
+                OrientedEdge::new(topo.add_edge(edge), true)
+            })
+            .collect();
+        let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+        topo.add_face(Face::new(
+            wire,
+            vec![],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: 0.0,
+            },
+        ))
+    };
+    let x = 1.0 + 6e-8;
+    let mut solids = Vec::new();
+    for h in [1.0, 0.12] {
+        let left = square(
+            &mut topo,
+            [
+                p(0.0, 0.0, 0.0),
+                p(1.0, 0.0, 0.0),
+                p(1.0, h, 0.0),
+                p(0.0, h, 0.0),
+            ],
+        );
+        let right = square(
+            &mut topo,
+            [
+                p(x, 0.0, 0.0),
+                p(2.0, 0.0, 0.0),
+                p(2.0, h, 0.0),
+                p(x, h, 0.0),
+            ],
+        );
+        let shell = topo.add_shell(Shell::new(vec![left, right]).unwrap());
+        solids.push((h, topo.add_solid(Solid::new(shell, vec![]))));
+    }
+    for (h, solid) in solids {
+        for deflection in [0.5, 0.1] {
+            let mesh = tessellate_solid(&topo, solid, deflection).unwrap();
+            let area: f64 = mesh
+                .indices
+                .chunks_exact(3)
+                .map(|t| {
+                    let [a, b, c] = [0, 1, 2].map(|k| mesh.positions[t[k] as usize]);
+                    (b - a).cross(c - a).length() / 2.0
+                })
+                .sum();
+            let what = format!("height {h}, deflection {deflection}");
+            assert_eq!(mesh.indices.len(), 12, "{what}");
+            assert!((area - 2.0 * h).abs() < 1e-6, "{what}: area {area}");
+            assert_eq!(boundary_edge_count(&mesh), 6, "{what}");
+            assert_eq!(non_manifold_edge_count(&mesh), 0, "{what}");
+        }
+    }
+}
+
+/// A half disc of radius 1 and a half ring from radius 1 + 3e-7 to 2, in
+/// z = 0, each the only user of its own edges: the two arcs stand 3e-7
+/// apart, so their samples round to different cells of the merge grid. At
+/// deflection 0.5 the weld reaches past several samples of each arc. Each
+/// sample of one arc welds to the sample beside it on the other: the join
+/// keeps no crack, and neither face loses area to the weld.
+#[test]
+fn a_dense_join_held_by_two_arcs_welds_sample_to_sample() {
+    use brepkit_math::curves::Circle3D;
+    use brepkit_topology::shell::Shell;
+    use brepkit_topology::solid::Solid;
+
+    let p = Point3::new;
+    let r = 1.0 + 3e-7;
+    let mut topo = Topology::new();
+    let v = [
+        p(1.0, 0.0, 0.0),
+        p(-1.0, 0.0, 0.0),
+        p(r, 0.0, 0.0),
+        p(2.0, 0.0, 0.0),
+        p(-2.0, 0.0, 0.0),
+        p(-r, 0.0, 0.0),
+    ]
+    .map(|q| topo.add_vertex(Vertex::new(q, 1e-7)));
+    let arc = |radius: f64| {
+        EdgeCurve::Circle(
+            Circle3D::new(p(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), radius).unwrap(),
+        )
+    };
+    let mut edge =
+        |a: usize, b: usize, curve: EdgeCurve| topo.add_edge(Edge::new(v[a], v[b], curve));
+    let disc_arc = edge(0, 1, arc(1.0));
+    let diameter = edge(1, 0, EdgeCurve::Line);
+    let right = edge(2, 3, EdgeCurve::Line);
+    let outer = edge(3, 4, arc(2.0));
+    let left = edge(4, 5, EdgeCurve::Line);
+    let ring_arc = edge(2, 5, arc(r));
+    let mut face = |edges: &[(brepkit_topology::edge::EdgeId, bool)]| {
+        let wire = Wire::new(
+            edges
+                .iter()
+                .map(|&(e, forward)| OrientedEdge::new(e, forward))
+                .collect(),
+            true,
+        )
+        .unwrap();
+        let wire = topo.add_wire(wire);
+        topo.add_face(Face::new(
+            wire,
+            vec![],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: 0.0,
+            },
+        ))
+    };
+    let disc = face(&[(disc_arc, true), (diameter, true)]);
+    let ring = face(&[
+        (right, true),
+        (outer, true),
+        (left, true),
+        (ring_arc, false),
+    ]);
+    let shell = topo.add_shell(Shell::new(vec![disc, ring]).unwrap());
+    let solid = topo.add_solid(Solid::new(shell, vec![]));
+    let area = |mesh: &TriangleMesh| -> f64 {
+        mesh.indices
+            .chunks_exact(3)
+            .map(|t| {
+                let [a, b, c] = [0, 1, 2].map(|k| mesh.positions[t[k] as usize]);
+                (b - a).cross(c - a).length() / 2.0
+            })
+            .sum()
+    };
+    for deflection in [0.5, 0.1] {
+        let mesh = tessellate_solid(&topo, solid, deflection).unwrap();
+        let alone = area(&tessellate(&topo, disc, deflection).unwrap())
+            + area(&tessellate(&topo, ring, deflection).unwrap());
+        assert!(
+            (area(&mesh) - alone).abs() < 1e-5,
+            "deflection {deflection}: area {} against {alone}",
+            area(&mesh)
+        );
+        assert_eq!(non_manifold_edge_count(&mesh), 0, "deflection {deflection}");
+        let directed: DetHashSet<(u32, u32)> = mesh
+            .indices
+            .chunks_exact(3)
+            .flat_map(|t| [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])])
+            .collect();
+        for &(a, b) in &directed {
+            if directed.contains(&(b, a)) {
+                continue;
+            }
+            let middle = (mesh.positions[a as usize] - p(0.0, 0.0, 0.0)
+                + (mesh.positions[b as usize] - p(0.0, 0.0, 0.0)))
+                * 0.5;
+            assert!(
+                (middle.length() - 1.0).abs() > 0.05,
+                "deflection {deflection}: an open edge along the join at {middle:?}"
+            );
+        }
+    }
+}

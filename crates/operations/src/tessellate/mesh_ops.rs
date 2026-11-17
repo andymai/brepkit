@@ -1,6 +1,6 @@
 //! Mesh validation and boundary operations.
 
-use brepkit_math::det_hash::{DetHashMap, DetHashSet};
+use brepkit_math::det_hash::{DetHashMap, DetHashSet, WordHashMap, WordState};
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
 use brepkit_topology::face::FaceSurface;
@@ -208,35 +208,35 @@ pub(super) fn dedupe_coincident_triangles(
     const POS_GRID: f64 = COINCIDENT_DEDUPE_GRID;
 
     type TriKey = [(i64, i64, i64); 3];
-    type TriRefs = Vec<(usize, bool)>;
 
     let tri_count = mesh.indices.len() / 3;
     if tri_count < 2 {
         return;
     }
 
+    let s = 1.0 / POS_GRID;
     #[allow(clippy::cast_possible_truncation)]
-    let quant = |p: Point3| -> (i64, i64, i64) {
-        let s = 1.0 / POS_GRID;
-        (
-            (p.x() * s).round() as i64,
-            (p.y() * s).round() as i64,
-            (p.z() * s).round() as i64,
-        )
-    };
+    let quantized: Vec<(i64, i64, i64)> = mesh
+        .positions
+        .iter()
+        .map(|p| {
+            (
+                (p.x() * s).round() as i64,
+                (p.y() * s).round() as i64,
+                (p.z() * s).round() as i64,
+            )
+        })
+        .collect();
 
-    let mut by_key: DetHashMap<TriKey, TriRefs> = DetHashMap::default();
+    // Each key's latest triangle, and for each triangle the one before it
+    // with its key: the triangles of a key form a chain, read back to front.
+    let mut latest: WordHashMap<TriKey, usize> =
+        WordHashMap::with_capacity_and_hasher(tri_count, WordState);
+    let mut earlier = vec![usize::MAX; tri_count];
+    let mut parity = vec![true; tri_count];
+    let mut repeated = false;
     for t in 0..tri_count {
-        let (a, b, c) = (
-            mesh.indices[t * 3] as usize,
-            mesh.indices[t * 3 + 1] as usize,
-            mesh.indices[t * 3 + 2] as usize,
-        );
-        let mut tri_pts = [
-            quant(mesh.positions[a]),
-            quant(mesh.positions[b]),
-            quant(mesh.positions[c]),
-        ];
+        let mut tri_pts = [0, 1, 2].map(|k| quantized[mesh.indices[t * 3 + k] as usize]);
         // Sort tri_pts ascending; track parity of the sort permutation.
         let mut parity_even = true;
         if tri_pts[0] > tri_pts[1] {
@@ -255,29 +255,47 @@ pub(super) fn dedupe_coincident_triangles(
         if tri_pts[0] == tri_pts[1] || tri_pts[1] == tri_pts[2] {
             continue;
         }
-        by_key.entry(tri_pts).or_default().push((t, parity_even));
+        parity[t] = parity_even;
+        if let Some(before) = latest.insert(tri_pts, t) {
+            earlier[t] = before;
+            repeated = true;
+        }
+    }
+    if !repeated {
+        return;
     }
 
     let mut keep = vec![true; tri_count];
-    for tris in by_key.values() {
-        if tris.len() < 2 {
+    let mut grouped = vec![false; tri_count];
+    let mut tris: Vec<usize> = Vec::new();
+    for last in (0..tri_count).rev() {
+        if earlier[last] == usize::MAX || grouped[last] {
             continue;
         }
-        let (even, odd): (Vec<_>, Vec<_>) = tris.iter().partition(|&&(_, p)| p);
+        tris.clear();
+        let mut t = last;
+        loop {
+            grouped[t] = true;
+            tris.push(t);
+            if earlier[t] == usize::MAX {
+                break;
+            }
+            t = earlier[t];
+        }
+        tris.reverse();
+        let (even, odd): (Vec<usize>, Vec<usize>) = tris.iter().partition(|&&t| parity[t]);
         let cancel_pairs = even.len().min(odd.len());
-        for &(t, _) in even.iter().take(cancel_pairs) {
+        for &t in even.iter().take(cancel_pairs) {
             keep[t] = false;
         }
-        for &(t, _) in odd.iter().take(cancel_pairs) {
+        for &t in odd.iter().take(cancel_pairs) {
             keep[t] = false;
         }
         // Of the surviving same-winding triangles, keep only one.
-        let leftover_even: Vec<_> = even.iter().skip(cancel_pairs).copied().collect();
-        let leftover_odd: Vec<_> = odd.iter().skip(cancel_pairs).copied().collect();
-        for &(t, _) in leftover_even.iter().skip(1) {
+        for &t in even.iter().skip(cancel_pairs).skip(1) {
             keep[t] = false;
         }
-        for &(t, _) in leftover_odd.iter().skip(1) {
+        for &t in odd.iter().skip(cancel_pairs).skip(1) {
             keep[t] = false;
         }
     }
@@ -479,11 +497,18 @@ pub fn drawn_edge_samples(
     Ok(out)
 }
 
+/// The `rim_face` of a vertex that lies on no face's free rim alone.
+pub(super) const NO_RIM_FACE: u32 = u32::MAX;
+
 /// Weld remaining boundary vertices by merging coincident positions.
 ///
 /// Uses union-find over a spatial hash grid to merge boundary vertices that
 /// are within `weld_tol` of each other. Rewrites triangle indices and removes
 /// degenerate triangles (where merged indices create duplicate vertices).
+/// A weld never joins two vertices on the free rim of one face, directly or
+/// through other vertices: `rim_face` gives the face of each vertex that
+/// lies only on that face's free rim, and [`NO_RIM_FACE`] (or a vertex past
+/// its end) for any other vertex.
 /// `tri_faces` is the parallel tri -> face attribution array; entries for
 /// removed degenerate triangles are filtered alongside. Returns whether any
 /// directed edge was used twice before the weld: two faces bridging the same
@@ -491,6 +516,7 @@ pub fn drawn_edge_samples(
 pub(super) fn weld_boundary_vertices(
     mesh: &mut TriangleMesh,
     deflection: f64,
+    rim_face: &[u32],
     tri_faces: Option<&mut Vec<u32>>,
 ) -> bool {
     let n_verts = mesh.positions.len();
@@ -498,7 +524,8 @@ pub(super) fn weld_boundary_vertices(
         return false;
     }
 
-    let mut half_edges: DetHashMap<(u32, u32), usize> = DetHashMap::default();
+    let mut half_edges: WordHashMap<(u32, u32), usize> =
+        WordHashMap::with_capacity_and_hasher(mesh.indices.len(), WordState);
     for tri in mesh.indices.chunks_exact(3) {
         let (i0, i1, i2) = (tri[0], tri[1], tri[2]);
         *half_edges.entry((i0, i1)).or_default() += 1;
@@ -536,18 +563,6 @@ pub(super) fn weld_boundary_vertices(
         }
         x
     }
-    // Rooting at the smallest index makes the cluster representative a pure
-    // function of the weld partition, independent of union call order.
-    #[allow(clippy::items_after_statements)]
-    fn uf_union(parent: &mut [u32], a: u32, b: u32) {
-        let ra = uf_find(parent, a);
-        let rb = uf_find(parent, b);
-        if ra != rb {
-            let (root, child) = (ra.min(rb), ra.max(rb));
-            parent[child as usize] = root;
-        }
-    }
-
     let mut parent: Vec<u32> = (0..n_verts as u32).collect();
 
     let weld_tol = deflection.max(1e-6) * 2.0;
@@ -567,26 +582,107 @@ pub(super) fn weld_boundary_vertices(
         let p = mesh.positions[vid as usize];
         grid.entry(cell_key(p)).or_default().push(vid);
     }
-
-    for &vid in &boundary_verts {
-        let p = mesh.positions[vid as usize];
+    let positions = &mesh.positions;
+    // The vertices within reach of `vid` that follow it in id order.
+    let reach_of = |vid: u32, near: &mut Vec<(f64, u32)>| {
+        near.clear();
+        let p = positions[vid as usize];
         let (cx, cy, cz) = cell_key(p);
-
         for dx in -1..=1 {
             for dy in -1..=1 {
                 for dz in -1..=1 {
                     if let Some(cell) = grid.get(&(cx + dx, cy + dy, cz + dz)) {
                         for &other in cell {
-                            if other <= vid {
-                                continue;
-                            }
-                            let q = mesh.positions[other as usize];
-                            if (p - q).length() < weld_tol {
-                                uf_union(&mut parent, vid, other);
+                            let gap = (p - positions[other as usize]).length();
+                            if other > vid && gap < weld_tol {
+                                near.push((gap, other));
                             }
                         }
                     }
                 }
+            }
+        }
+    };
+    let rim_of = |v: u32| rim_face.get(v as usize).copied().unwrap_or(NO_RIM_FACE);
+
+    // A pair without a rim sample joins at once: no cluster holds a rim
+    // sample yet, and the clusters such pairs make do not depend on the
+    // order of the joins. Rooting at the smallest index makes each
+    // cluster's representative its least member.
+    let mut near: Vec<(f64, u32)> = Vec::new();
+    let mut rim_pairs = false;
+    for &vid in &boundary_verts {
+        reach_of(vid, &mut near);
+        for &(_, other) in &near {
+            let (rim, other_rim) = (rim_of(vid), rim_of(other));
+            if rim == NO_RIM_FACE && other_rim == NO_RIM_FACE {
+                let (ra, rb) = (uf_find(&mut parent, vid), uf_find(&mut parent, other));
+                parent[ra.max(rb) as usize] = ra.min(rb);
+            } else if rim != other_rim {
+                rim_pairs = true;
+            }
+        }
+    }
+
+    // A pair with a rim sample joins in rounds. In each round, each cluster
+    // takes its nearest partner that it may join, and those joins run
+    // nearest first: a crack's own pairs join before a pair across a narrow
+    // face. No cluster takes two samples of one face's rim, not even through
+    // a sample of another face. A round keeps one pair for each cluster, so
+    // the weld's memory grows with its samples, not with their pairs, and
+    // the nearest pair of a round always joins, so the rounds end.
+    let mut cluster_rims: DetHashMap<u32, Vec<u32>> = DetHashMap::default();
+    if rim_pairs {
+        for &vid in &boundary_verts {
+            if rim_of(vid) != NO_RIM_FACE {
+                cluster_rims.entry(vid).or_default().push(rim_of(vid));
+            }
+        }
+    }
+    let clash = |rims: &DetHashMap<u32, Vec<u32>>, ra: u32, rb: u32| {
+        rims.get(&ra)
+            .zip(rims.get(&rb))
+            .is_some_and(|(a, b)| a.iter().any(|face| b.contains(face)))
+    };
+    let nearer = |a: &(f64, u32, u32), b: &(f64, u32, u32)| {
+        a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2))
+    };
+    let mut best: DetHashMap<u32, (f64, u32, u32)> = DetHashMap::default();
+    let mut joining = rim_pairs;
+    while joining {
+        best.clear();
+        for &vid in &boundary_verts {
+            reach_of(vid, &mut near);
+            for &(gap, other) in &near {
+                if rim_of(vid) == rim_of(other) {
+                    continue;
+                }
+                let (ra, rb) = (uf_find(&mut parent, vid), uf_find(&mut parent, other));
+                if ra == rb || clash(&cluster_rims, ra, rb) {
+                    continue;
+                }
+                let pair = (gap, vid, other);
+                for root in [ra, rb] {
+                    let held = best.entry(root).or_insert(pair);
+                    if nearer(&pair, held).is_lt() {
+                        *held = pair;
+                    }
+                }
+            }
+        }
+        let mut round: Vec<(f64, u32, u32)> = best.values().copied().collect();
+        joining = !round.is_empty();
+        round.sort_by(nearer);
+        round.dedup_by(|a, b| a.1 == b.1 && a.2 == b.2);
+        for (_, a, b) in round {
+            let (ra, rb) = (uf_find(&mut parent, a), uf_find(&mut parent, b));
+            if ra == rb || clash(&cluster_rims, ra, rb) {
+                continue;
+            }
+            let (root, child) = (ra.min(rb), ra.max(rb));
+            parent[child as usize] = root;
+            if let Some(rims) = cluster_rims.remove(&child) {
+                cluster_rims.entry(root).or_default().extend(rims);
             }
         }
     }

@@ -247,6 +247,30 @@ fn on_source_face(
     Ok(false)
 }
 
+/// [`copy_pcurves`] for each shell of `copy`, a copy of the solid
+/// `original`, which lists its shells in the original's order.
+///
+/// # Errors
+///
+/// Returns an error if a topology lookup fails.
+pub fn copy_solid_pcurves(
+    topo: &mut Topology,
+    original: SolidId,
+    copy: SolidId,
+) -> Result<(), OperationsError> {
+    let shells = |topo: &Topology, solid: SolidId| -> Result<Vec<ShellId>, OperationsError> {
+        let data = topo.solid(solid)?;
+        Ok(std::iter::once(data.outer_shell())
+            .chain(data.inner_shells().iter().copied())
+            .collect())
+    };
+    let (from, to) = (shells(topo, original)?, shells(topo, copy)?);
+    for (&from, &to) in from.iter().zip(&to) {
+        copy_pcurves(topo, from, to)?;
+    }
+    Ok(())
+}
+
 /// Registers on `copy`'s faces the pcurves of `original`'s, which
 /// `copy_shells` leaves behind: a curved cavity face keeps its UV trims.
 /// The copy lists faces, wires and edges in the original's order.

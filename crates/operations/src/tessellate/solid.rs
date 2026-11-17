@@ -1,7 +1,7 @@
 //! Solid-level tessellation orchestration.
 
 use brepkit_geometry::extrema::segment_segment_distance;
-use brepkit_math::det_hash::{DetHashMap, DetHashSet};
+use brepkit_math::det_hash::{DetHashMap, DetHashSet, WordHashMap, WordHashSet, WordState};
 use brepkit_math::madd::Madd;
 use brepkit_math::traits::ParametricSurface;
 use brepkit_math::vec::{Point3, Vec3};
@@ -14,7 +14,9 @@ use super::TriangleMesh;
 use super::edge_sampling::{
     circle_param_range, sample_edge, sample_edge_with_params, segments_for_chord_deviation_a,
 };
-use super::mesh_ops::{dedupe_coincident_triangles, split_pinched_chords, weld_boundary_vertices};
+use super::mesh_ops::{
+    NO_RIM_FACE, dedupe_coincident_triangles, split_pinched_chords, weld_boundary_vertices,
+};
 use super::nonplanar::{
     circle_pole_params, tessellate_latitude_band_shared, tessellate_nonplanar_cdt,
     tessellate_nonplanar_snap, tessellate_revolution_band_shared, tessellate_torus_notch_band,
@@ -1170,39 +1172,30 @@ pub(super) fn tessellate_solid_core(
         // below must find every pool point lying ON each circle edge; scanning
         // the whole pool per circle is O(circle-edges × pool-points) and
         // dominated a 1274-face export tessellation at 90% of its wall clock
-        // (gh #1500). Instead, bucket the pool once and walk each circle at
-        // cell-sized arc steps, inspecting the 3×3×3 neighborhood of each
+        // (gh #1500). Instead, bucket the pool once and walk each arc at
+        // cell-sized steps, inspecting the 3×3×3 neighborhood of each
         // visited cell — sound because a candidate sits within
         // `refine_tol + step/2 ≤ cell` of some walked sample, so its cell
-        // index differs by at most 1 per axis.
-        let (grid_cell, point_grid) = {
-            let mut lo = Point3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY);
-            let mut hi = Point3::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
+        // index differs by at most 1 per axis. A point beyond an open arc's
+        // ends is never spliced into it, so only the arc is walked.
+        let has_circle = edge_indices.iter().any(|&edge_idx| {
+            topo.edge_id_from_index(edge_idx)
+                .and_then(|edge_id| topo.edge(edge_id).ok())
+                .is_some_and(|edge| matches!(edge.curve(), EdgeCurve::Circle(_)))
+        });
+        let mut lo = Point3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY);
+        let mut hi = Point3::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
+        if has_circle {
             for p in &merged.positions {
                 lo = Point3::new(lo.x().min(p.x()), lo.y().min(p.y()), lo.z().min(p.z()));
                 hi = Point3::new(hi.x().max(p.x()), hi.y().max(p.y()), hi.z().max(p.z()));
             }
-            let diag = (hi - lo).length();
-            let cell = if diag.is_finite() && diag > 0.0 {
-                (diag / 128.0).max(refine_tol * 4.0)
-            } else {
-                refine_tol.max(1e-3)
-            };
-            let inv = 1.0 / cell;
-            let key = |p: &Point3| -> (i64, i64, i64) {
-                #[allow(clippy::cast_possible_truncation)]
-                (
-                    (p.x() * inv).floor() as i64,
-                    (p.y() * inv).floor() as i64,
-                    (p.z() * inv).floor() as i64,
-                )
-            };
-            let mut grid: DetHashMap<(i64, i64, i64), Vec<u32>> = DetHashMap::default();
-            for (gid, p) in merged.positions.iter().enumerate() {
-                #[allow(clippy::cast_possible_truncation)]
-                grid.entry(key(p)).or_default().push(gid as u32);
-            }
-            (cell, grid)
+        }
+        let diag = (hi - lo).length();
+        let grid_cell = if diag.is_finite() && diag > 0.0 {
+            (diag / 128.0).max(refine_tol * 4.0)
+        } else {
+            refine_tol.max(1e-3)
         };
         let grid_inv = 1.0 / grid_cell;
         let cell_of = |p: &Point3| -> (i64, i64, i64) {
@@ -1213,6 +1206,30 @@ pub(super) fn tessellate_solid_core(
                 (p.z() * grid_inv).floor() as i64,
             )
         };
+        // The pool's ids sorted by cell, each cell's own ascending, and the
+        // run of each cell in that order.
+        let mut by_cell: Vec<((i64, i64, i64), u32)> = Vec::new();
+        if has_circle {
+            #[allow(clippy::cast_possible_truncation)]
+            by_cell.extend(
+                merged
+                    .positions
+                    .iter()
+                    .enumerate()
+                    .map(|(gid, p)| (cell_of(p), gid as u32)),
+            );
+            by_cell.sort_unstable();
+        }
+        let pool_by_cell: Vec<u32> = by_cell.iter().map(|&(_, gid)| gid).collect();
+        let mut cell_runs: WordHashMap<(i64, i64, i64), (usize, usize)> =
+            WordHashMap::with_capacity_and_hasher(by_cell.len(), WordState);
+        for (k, &(cell, _)) in by_cell.iter().enumerate() {
+            cell_runs
+                .entry(cell)
+                .and_modify(|run| run.1 = k + 1)
+                .or_insert((k, k + 1));
+        }
+        let mut visited: WordHashSet<(i64, i64, i64)> = WordHashSet::default();
 
         for &edge_idx in &edge_indices {
             let Some(edge_id) = topo.edge_id_from_index(edge_idx) else {
@@ -1248,25 +1265,36 @@ pub(super) fn tessellate_solid_core(
                 .get(&edge_idx)
                 .cloned()
                 .unwrap_or_default();
-            let existing_gids: DetHashSet<u32> = existing_gids_vec.iter().copied().collect();
+            let existing_gids: WordHashSet<u32> = existing_gids_vec.iter().copied().collect();
 
             let candidates: Vec<u32> = {
-                let steps = ((std::f64::consts::TAU * circle.radius() * grid_inv).ceil() as usize)
-                    .clamp(8, 8192);
-                let mut visited: DetHashSet<(i64, i64, i64)> = DetHashSet::default();
+                use std::f64::consts::TAU;
+                let span = t_max - t_min;
+                let walk_arc = !is_closed && span.is_finite() && span > 0.0 && span < TAU;
+                let (first, span, steps) = if walk_arc {
+                    let steps =
+                        ((span * circle.radius() * grid_inv).ceil() as usize).clamp(1, 8192);
+                    (t_min, span, steps)
+                } else {
+                    let steps = ((TAU * circle.radius() * grid_inv).ceil() as usize).clamp(8, 8192);
+                    (0.0, TAU, steps)
+                };
+                // A whole turn's last step would land on its first.
+                let last = if walk_arc { steps } else { steps - 1 };
+                visited.clear();
                 let mut cand: Vec<u32> = Vec::new();
                 #[allow(clippy::cast_precision_loss)]
-                for i in 0..steps {
-                    let t = std::f64::consts::TAU * (i as f64) / (steps as f64);
+                for i in 0..=last {
+                    let t = span.madd(i as f64 / steps as f64, first);
                     let (cx, cy, cz) = cell_of(&circle.evaluate(t));
                     for dx in -1..=1_i64 {
                         for dy in -1..=1_i64 {
                             for dz in -1..=1_i64 {
                                 let c = (cx + dx, cy + dy, cz + dz);
                                 if visited.insert(c)
-                                    && let Some(gids) = point_grid.get(&c)
+                                    && let Some(&(from, to)) = cell_runs.get(&c)
                                 {
-                                    cand.extend_from_slice(gids);
+                                    cand.extend_from_slice(&pool_by_cell[from..to]);
                                 }
                             }
                         }
@@ -1303,7 +1331,9 @@ pub(super) fn tessellate_solid_core(
                 continue;
             }
 
-            insertions.sort_by(|a, b| a.0.total_cmp(&b.0));
+            // The walk's order is no order along the arc: two points at the
+            // same place keep the lower id.
+            insertions.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
             insertions.dedup_by(|a, b| (a.0 - b.0).abs() < 1e-8);
 
             let mut all_with_t: Vec<(f64, u32)> = existing_gids_vec
@@ -1315,7 +1345,7 @@ pub(super) fn tessellate_solid_core(
                 .collect();
             all_with_t.extend(insertions);
             all_with_t.sort_by(|a, b| a.0.total_cmp(&b.0));
-            let mut seen_gids = DetHashSet::default();
+            let mut seen_gids = WordHashSet::default();
             all_with_t.retain(|(_, gid)| seen_gids.insert(*gid));
 
             let refined: Vec<u32> = all_with_t.into_iter().map(|(_, gid)| gid).collect();
@@ -1760,7 +1790,53 @@ pub(super) fn tessellate_solid_core(
     }
 
     phase("normals", &mut phase_t);
-    let repeated = weld_boundary_vertices(&mut merged, deflection, tri_faces.as_mut());
+    // A sample only on edges that one face uses lies on that face's free
+    // rim. Two such samples of one face are no crack between faces: welded,
+    // they would collapse a face narrower than the weld's reach. A join that
+    // two faces hold with separate edges is still welded.
+    let mut on_shared = vec![false; merged.positions.len()];
+    for (edge_idx, global_ids) in &edge_global_indices {
+        if edge_face_map
+            .get(edge_idx)
+            .is_some_and(|faces| faces.len() > 1)
+        {
+            for &gid in global_ids {
+                if let Some(mark) = on_shared.get_mut(gid as usize) {
+                    *mark = true;
+                }
+            }
+        }
+    }
+    // A sample where the free rims of two faces meet is on neither alone.
+    let mut rim_face = vec![NO_RIM_FACE; merged.positions.len()];
+    let mut on_two_rims = vec![false; merged.positions.len()];
+    for (edge_idx, global_ids) in &edge_global_indices {
+        let Some(faces) = edge_face_map.get(edge_idx) else {
+            continue;
+        };
+        let &[face] = faces.as_slice() else {
+            continue;
+        };
+        #[allow(clippy::cast_possible_truncation)]
+        let face = face.index() as u32;
+        for &gid in global_ids {
+            let gid = gid as usize;
+            if on_shared.get(gid).copied().unwrap_or(true) {
+                continue;
+            }
+            if rim_face[gid] == NO_RIM_FACE {
+                rim_face[gid] = face;
+            } else if rim_face[gid] != face {
+                on_two_rims[gid] = true;
+            }
+        }
+    }
+    for (face, &mixed) in rim_face.iter_mut().zip(&on_two_rims) {
+        if mixed {
+            *face = NO_RIM_FACE;
+        }
+    }
+    let repeated = weld_boundary_vertices(&mut merged, deflection, &rim_face, tri_faces.as_mut());
 
     // A face no mesher covered, or whose rim the weld collapsed beside a
     // neighbour's crack, leaves a hole the caller cannot see from the mesh.

@@ -1214,18 +1214,38 @@ mod batch_tests {
         assert_eq!(kernel.topo().solid(hollow).unwrap().inner_shells().len(), 1);
     }
 
-    /// A v2 chamfer of an edge the blend engine leaves out (a cylinder's
-    /// rim) is an error, not the input solid handed back as the result.
+    /// A v2 chamfer of an edge the blend engine leaves out (the ellipse
+    /// where a slanted cut meets a cylinder) is an error, not the input solid
+    /// handed back as the result.
     #[test]
     fn batch_chamfer_v2_reports_an_edge_it_could_not_blend() {
         use crate::handles::{edge_id_to_u32, solid_id_to_u32};
+        use brepkit_math::mat::Mat4;
         let mut kernel = BrepKernel::new();
-        let cylinder =
+        let rod =
             brepkit_operations::primitives::make_cylinder(kernel.topo_mut(), 2.0, 5.0).unwrap();
+        let cutter =
+            brepkit_operations::primitives::make_box(kernel.topo_mut(), 10.0, 10.0, 10.0).unwrap();
+        let tilt = Mat4::translation(0.0, 0.0, 4.0)
+            * Mat4::rotation_x(0.3)
+            * Mat4::translation(-5.0, -5.0, 0.0);
+        brepkit_operations::transform::transform_solid(kernel.topo_mut(), cutter, &tilt).unwrap();
+        let cylinder = brepkit_operations::boolean::boolean(
+            kernel.topo_mut(),
+            brepkit_operations::boolean::BooleanOp::Cut,
+            rod,
+            cutter,
+        )
+        .unwrap();
         let rim = brepkit_topology::explorer::solid_edges(kernel.topo(), cylinder)
             .unwrap()
             .into_iter()
-            .find(|&e| matches!(kernel.topo().edge(e).unwrap().curve(), EdgeCurve::Circle(_)))
+            .find(|&e| {
+                matches!(
+                    kernel.topo().edge(e).unwrap().curve(),
+                    EdgeCurve::Ellipse(_)
+                )
+            })
             .unwrap();
         let block =
             brepkit_operations::primitives::make_box(kernel.topo_mut(), 2.0, 2.0, 2.0).unwrap();
