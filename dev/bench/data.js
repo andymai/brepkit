@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794916766080,
+  "lastUpdate": 1794920664659,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -74087,6 +74087,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 15951189,
             "range": "± 273848",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "54db542fafd0e678f95d253b8f37855c4f020f8c",
+          "message": "perf(tessellate): mesh fillet corners and stripes as structured patches (#2625)\n\n## Summary\n\nThe fillet gate meshes its result with `tessellate_solid_with_tolerance`\nat deflection 0.1 and 10 degrees. Take a 20 box with its 12 edges\nfilleted at r = 1. In criterion, its mesh takes 0.29 to 0.31 ms, against\n1.03 ms on main. The fillet itself takes 0.29 to 0.31 ms in the same\nruns, so the gate now costs about what the fillet costs (#2515).\n\nI sampled the main thread's stack with gdb, 200 times, while a profiling\nbuild of main meshed the box in a loop. The CDT of the 8 spherical\ncorners held 101 samples, and the CDT of the 12 cylinder stripes held\n32.\n\n## Changes\n\n- `tessellate_sphere_triangle_shared` meshes a sphere face bounded by\nthree arcs when two arcs hold the same count of shared samples. Upright,\nthe corners' arcs hold 10 or 11 samples, so each corner has such a pair.\nRows run from the corner between those two arcs, and the third arc is\nthe last row. Row `s` takes `s` segments, or fewer where it turns\nthrough fewer side segments. A point inside is the mean of three lines\nread on the arcs' samples, pushed out onto the sphere.\n- A face lies on the left of its wire about its surface's normal,\nwhichever way the face faces. So the side test does not read the face's\nreversal.\n- The mesher halves an edge inside the patch that turns by more than\n`SQRT_2` times the angle tolerance. That is the diagonal of a grid cell\nwhose sides turn by the tolerance, the bound that the CDT's interior\ngrid keeps.\n- The CDT takes the face in these cases:\n- the wire does not run counterclockwise round the patch about the\nsphere's outward normal, so the face is the rest of the sphere\n- a chord that turns by `SQRT_2` times the tolerance would stand off the\nsphere by more than the deflection\n  - a triangle faces into the sphere\n  - a triangle stands off the sphere by more than the deflection\n- `tessellate_cylinder_strip_shared` meshes a cylinder face bounded by\ntwo arcs and two straight sides that hold only their ends as one strip\nbetween the arcs. That is a fillet's stripe between two plane faces. The\nstrip joins the arcs by their distance across the axis. The CDT takes\nthe face when a triangle spans too long an arc of the turn. The bound is\nthe arc of a chord at the deflection, or `SQRT_2` times the angle.\n- Both meshers keep the shared rim samples, so the mesh stays closed.\n`tessellate_solid_for_boolean` (`circle_floor`) keeps the CDT for these\nfaces.\n- `compute_angular_range` walks a NURBS edge of degree 1 with two\ncontrol points in one piece, as a line. The fillet's contact edges are\nsuch segments.\n- `weld_boundary_vertices` finds boundary half-edges in sorted arrays,\nnot a hash map.\n\n## Cost\n\nCriterion (`cargo bench -p brepkit-operations --bench cad_operations`),\ntwo runs on each tree, main at 3c8d1104a. I ran the branch's head after\nmain, on the same machine:\n\n| Bench | main | branch |\n|---|---:|---:|\n| `mesh filleted box (fillet gate)` | 1.036, 1.031 ms | 0.305, 0.306 ms\n|\n| `box+fillet (walking), empty topology` | 294, 296 µs | 290, 292 µs |\n| `tessellate box∩sphere (tol=0.01)` | 1.929, 1.926 ms | 1.908, 1.935 ms\n|\n| `tessellate 64-hole plate` | 5.687, 4.251 ms | 4.129, 4.258 ms |\n\nAt cefea0f83, which meshes the box the same way, the gate's mesh took\n0.294 and 0.293 ms. The fillet took 290 and 291 µs. At 4bc354c44, the\ngate's mesh took 0.318 and 0.325 ms.\n\nI also ran a probe that I did not commit, a profiling build with the\nmedian of 500 meshes in five rounds in turns. There the median round\ntook 1.184 ms on main and 0.389 ms on the branch. In an earlier run of\nthe probe, the fillet took about 0.335 ms.\n\n## Mesh\n\nThe mesh changes. The table compares main with the branch on the\nfilleted box at the gate's deflection and angle. The surface gap is how\nfar a triangle comes inside the sphere. The volume error is the mesh\nvolume less the exact 7949.83.\n\n| Pose | Triangles | Corner triangles | Longest corner edge | Surface\ngap | Volume error | Smallest corner angle |\n|---|---|---|---|---|---|---|\n| upright | 1356 / 1016 | 1115 / 775 | 14.13° / 14.11° | 0.0076 / 0.0095\n| -0.789 / -0.803 | 1.6° / 31.0° |\n| turned | 1396 / 1042 | 1144 / 794 | 13.45° / 14.11° | 0.0069 / 0.0095\n| -0.745 / -0.764 | 1.6° / 31.0° |\n| mirrored | 1408 / 1042 | 1156 / 794 | 13.45° / 14.11° | 0.0069 /\n0.0095 | -0.744 / -0.785 | 1.6° / 31.0° |\n\n- No mesh that I compared changes its count of open edges, and the\nfilleted box and `box ∩ sphere` have none on either tree. In those two\nsolids, each sphere triangle stays within the deflection of its sphere.\nNo sphere edge turns by more than `SQRT_2` times the angle.\n- The largest change that I found is `box ∩ sphere(7)` at 0.1 and 10\ndegrees. It goes from 390 to 114 triangles, and its longest sphere edge\ngoes from 10.14 to 14.11 degrees. Its surface gap goes from 0.031 to\n0.067, and its volume error from -1.00 to -3.06 (exact 179.6).\n- Of the 357 arena fixtures in `crates/io/tests/data`, meshed at\ndeflection 0.1 (10 degrees) and 0.02 (0.2 rad), 344 of 714 meshes\nchange. No change alters a boundary-edge count, and 3 alter a triangle\ncount. The largest relative change is 4.2e-5 in volume and 3.9e-5 in\narea.\n- Of 11 other solids (primitives, booleans and fillets, three poses,\nthree deflections), only the filleted box and `box ∩ sphere` change.\n\n## Test plan\n\n- New tests: `a_spherical_octant_meshes_in_rows_between_its_rims` (fails\non main: a triangle under 20 degrees),\n`the_corners_of_a_filleted_box_mesh_within_the_deflection` and\n`a_quarter_cylinder_wall_meshes_as_one_strip_between_its_arcs`.\n- `a_sphere_zone_bounded_by_three_arcs_meshes_on_its_own_side` meshes\nthe zone facing out and facing in. It fails on c468f72cd and on\n041e675cf, with a triangle above the rim.\n- `a_tall_cylinder_wall_keeps_its_triangles_within_the_tolerances` fails\non c468f72cd, with a strip triangle across 20 degrees at a 10 degree\nangle.\n- `only_a_one_segment_curve_reads_as_straight` checks that\n`runs_straight` refuses a turn round a cylinder of radius 0.001 rising\n1e10.\n- `a_narrow_sphere_patch_takes_triangles_for_its_area` meshes a patch\nfrom a pole to the equator between meridians 4 degrees apart. The branch\nmeshes it in rows, in 150 triangles. On 4bc354c44 the rows took 2984\ntriangles and failed their checks, and the CDT made 356, so the test\nfails there.\n- `cargo nextest run --cargo-profile ci -p brepkit-operations -p\nbrepkit-io -p brepkit-wasm` on the branch head: 3148 passed, 22 skipped.\n- The `pose_sweep` and `truth_audit` examples (release) give the same\noutput as on main at 3c8d1104a.\n- The pre-commit hook (fmt, clippy) passes.\n\nRefs #2515",
+          "timestamp": "2026-11-17T05:01:10-08:00",
+          "tree_id": "b187d2bbe6d38d43eb66bbd8321c6d1e5df18649",
+          "url": "https://github.com/andymai/brepkit/commit/54db542fafd0e678f95d253b8f37855c4f020f8c"
+        },
+        "date": 1794920654532,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 709347,
+            "range": "± 10387",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 742631,
+            "range": "± 17710",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 9385,
+            "range": "± 347",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 455240,
+            "range": "± 19853",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 16554112,
+            "range": "± 667522",
             "unit": "ns/iter"
           }
         ]
