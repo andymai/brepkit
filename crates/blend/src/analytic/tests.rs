@@ -1246,12 +1246,12 @@ fn plane_sphere_fillet_concave_rejects_spindle_radius() {
 /// Convex plane-sphere chamfer: a sphere intersecting a plate from
 /// above (post-on-slab). The chamfer cuts the rim with a flat conical
 /// slice tangent to plate at radial `r_p+d1` and to the sphere at
-/// arc-length `d2` along the meridian toward the apex.
+/// a chord `d2` along the meridian toward the apex.
 ///
 /// For sphere center at (0, 0, h)=(0, 0, 1), R=2, plate top at z=0
 /// with raw outward +z (chamfer dispatcher uses raw, no orient), and
 /// symmetric d1=d2=0.3:
-///   - δ = d2/R = 0.15
+///   - δ = 2 asin(d2/(2R)) ≈ 0.1501, the turn whose chord is d2
 ///   - Sphere contact at radial r_p·cos δ + h·sin δ ≈ √3·0.989 + 1·0.149 ≈ 1.862
 ///     and z = h(1−cos δ) + r_p·sin δ ≈ 0.011 + √3·0.149 ≈ 0.270
 ///   - Plate contact at radial r_p+d1 = √3+0.3 ≈ 2.032 (z=0)
@@ -1280,12 +1280,22 @@ fn plane_sphere_chamfer_convex_emits_cone() {
     let eid = topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(circle)));
     let spine = Spine::from_single_edge(&topo, eid).unwrap();
 
-    let w1 = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, true)], true).unwrap());
+    // The plate lies outside the rim: a square with the rim as its hole.
+    let corners = [(-5.0, -5.0), (5.0, -5.0), (5.0, 5.0), (-5.0, 5.0)]
+        .map(|(x, y)| topo.add_vertex(Vertex::new(Point3::new(x, y, 0.0), 1e-7)));
+    let sides: Vec<OrientedEdge> = (0..4)
+        .map(|k| {
+            let side = Edge::new(corners[k], corners[(k + 1) % 4], EdgeCurve::Line);
+            OrientedEdge::new(topo.add_edge(side), true)
+        })
+        .collect();
+    let outline = topo.add_wire(Wire::new(sides, true).unwrap());
+    let hole = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, false)], true).unwrap());
     // Chamfer convention: dispatcher passes the surface's RAW normal
     // (no orient). Plate slab top has raw outward = +z.
     let face_plate = topo.add_face(Face::new(
-        w1,
-        vec![],
+        outline,
+        vec![hole],
         FaceSurface::Plane {
             normal: Vec3::new(0.0, 0.0, 1.0),
             d: 0.0,
@@ -1317,7 +1327,7 @@ fn plane_sphere_chamfer_convex_emits_cone() {
     };
 
     // Predicted contacts.
-    let delta = d / big_r;
+    let delta = 2.0 * (0.5 * d / big_r).asin();
     let (sin_d, cos_d) = delta.sin_cos();
     let sphere_radial_pred = r_p * cos_d + h_real * sin_d;
     let sphere_axial_pred = h_real * (1.0 - cos_d) + r_p * sin_d;
@@ -1387,7 +1397,7 @@ fn plane_sphere_chamfer_convex_emits_cone() {
 /// For sphere at (0, 0, −h)=(0, 0, −1) (below plate), R=2, plate top
 /// raw outward +z, n_p_inward=+z (chamfer convention), face reversed,
 /// d=0.3:
-///   - δ = d/R = 0.15
+///   - δ = 2 asin(d/(2R)) ≈ 0.1501, the turn whose chord is d
 ///   - sphere_radial = r_p·cos δ + (−1)(−1)·sin δ ≈ 1.862 (same as convex)
 ///   - sphere_axial  = (−1)(1−cos δ) + (−1)·r_p·sin δ ≈ −0.270 (BELOW plate)
 ///   - Δr = −0.170, Δz = −0.270
@@ -1415,10 +1425,22 @@ fn plane_sphere_chamfer_concave_emits_cone() {
     let eid = topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(circle)));
     let spine = Spine::from_single_edge(&topo, eid).unwrap();
 
-    let w1 = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, true)], true).unwrap());
+    // The plate lies outside the rim: a square with the rim as its hole.
+    let corners = [(-5.0, -5.0), (5.0, -5.0), (5.0, 5.0), (-5.0, 5.0)]
+        .map(|(x, y)| topo.add_vertex(Vertex::new(Point3::new(x, y, 0.0), 1e-7)));
+    let sides: Vec<OrientedEdge> = (0..4)
+        .map(|k| {
+            let side = Edge::new(corners[k], corners[(k + 1) % 4], EdgeCurve::Line);
+            OrientedEdge::new(topo.add_edge(side), true)
+        })
+        .collect();
+    let outline = topo.add_wire(Wire::new(sides, true).unwrap());
+    let hole = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, false)], true).unwrap());
+    // Chamfer convention: dispatcher passes the surface's RAW normal
+    // (no orient). Plate slab top has raw outward = +z.
     let face_plate = topo.add_face(Face::new(
-        w1,
-        vec![],
+        outline,
+        vec![hole],
         FaceSurface::Plane {
             normal: Vec3::new(0.0, 0.0, 1.0),
             d: 0.0,
@@ -1457,7 +1479,7 @@ fn plane_sphere_chamfer_concave_emits_cone() {
     // Predicted contacts (concave: signed_offset = -1, h_signed = -1).
     let h_signed = -h_real;
     let signed_offset = -1.0_f64;
-    let delta = d / big_r;
+    let delta = 2.0 * (0.5 * d / big_r).asin();
     let (sin_d, cos_d) = delta.sin_cos();
     let sphere_radial_pred = r_p * cos_d + signed_offset * h_signed * sin_d;
     let sphere_axial_pred = h_signed * (1.0 - cos_d) + signed_offset * r_p * sin_d;
@@ -1972,7 +1994,7 @@ fn sphere_sphere_fillet_mixed_emits_torus() {
 ///
 /// For sphere1 at origin (R=2), sphere2 at (0, 0, 3) (R=2.5), D=3,
 /// both faces NOT reversed, symmetric d=0.4:
-///   - δ1 = 0.2, δ2 = 0.16
+///   - δ1 ≈ 0.2003, δ2 ≈ 0.1602 (the turns whose chords are d)
 ///   - contact1 at radial r_p·cos δ1 + a₀·sin δ1 ≈ 1.844,
 ///     z ≈ a₀·cos δ1 − r_p·sin δ1 ≈ 0.774 (z<a₀: below spine)
 ///   - contact2 at radial r_p·cos δ2 + (D−a₀)·sin δ2 ≈ 1.932,
@@ -2021,8 +2043,8 @@ fn sphere_sphere_chamfer_convex_emits_cone() {
     };
 
     // Predicted contacts.
-    let delta1 = d / big_r1;
-    let delta2 = d / big_r2;
+    let delta1 = 2.0 * (0.5 * d / big_r1).asin();
+    let delta2 = 2.0 * (0.5 * d / big_r2).asin();
     let (sin1, cos1) = delta1.sin_cos();
     let (sin2, cos2) = delta2.sin_cos();
     let p1_r = r_p * cos1 + a0 * sin1;
@@ -2254,7 +2276,7 @@ fn sphere_cylinder_chamfer_convex_emits_cone() {
     };
 
     // Predicted contacts.
-    let delta = d / big_r_s;
+    let delta = 2.0 * (0.5 * d / big_r_s).asin();
     let (sin_d, cos_d) = delta.sin_cos();
     let r_sph_pred = r_c * cos_d - h_s * sin_d;
     let z_sph_pred = h_s * cos_d + r_c * sin_d;
@@ -2325,7 +2347,7 @@ fn sphere_cylinder_chamfer_convex_emits_cone() {
 /// test confirms it works for the symmetric concave case.
 ///
 /// For R1=2, R2=2.5, D=3, both faces REVERSED, symmetric d=0.4:
-///   - δ1 = 0.2, δ2 = 0.16, a₀ ≈ 1.125, r_p ≈ 1.654
+///   - δ1 ≈ 0.2003, δ2 ≈ 0.1602, a₀ ≈ 1.125, r_p ≈ 1.654
 ///   - p1_r = r_p·cos δ1 − a₀·sin δ1 ≈ 1.398
 ///     (less than convex r_p+a₀_term ≈ 1.844 — going toward axis)
 ///   - p1_z = a₀·cos δ1 + r_p·sin δ1 ≈ 1.432
@@ -2382,8 +2404,8 @@ fn sphere_sphere_chamfer_both_concave_emits_cone() {
     };
 
     // Predicted contacts with s1 = s2 = -1.
-    let delta1 = d / big_r1;
-    let delta2 = d / big_r2;
+    let delta1 = 2.0 * (0.5 * d / big_r1).asin();
+    let delta2 = 2.0 * (0.5 * d / big_r2).asin();
     let (sin1, cos1) = delta1.sin_cos();
     let (sin2, cos2) = delta2.sin_cos();
     let p1_r = r_p * cos1 - a0 * sin1; // s1 = -1 ⇒ -a0
@@ -2614,7 +2636,7 @@ fn sphere_cylinder_chamfer_both_concave_emits_cone() {
     };
 
     // Predicted contacts with s_sph = s_cyl = -1.
-    let delta = d / big_r_s;
+    let delta = 2.0 * (0.5 * d / big_r_s).asin();
     let (sin_d, cos_d) = delta.sin_cos();
     let r_sph_pred = r_c * cos_d + h_s * sin_d; // s_sph=-1 flips sphere arm
     let z_sph_pred = h_s * cos_d - r_c * sin_d; // s_sph=-1 flips axial offset
@@ -2709,7 +2731,7 @@ fn sphere_cylinder_chamfer_mixed_emits_cone() {
     };
 
     // Predicted contacts (s_sph=+1, s_cyl=-1).
-    let delta = d / big_r_s;
+    let delta = 2.0 * (0.5 * d / big_r_s).asin();
     let (sin_d, cos_d) = delta.sin_cos();
     let r_sph_pred = r_c * cos_d - h_s * sin_d; // sphere convex arm
     let z_sph_pred = h_s * cos_d + r_c * sin_d;
@@ -2824,8 +2846,8 @@ fn try_analytic_chamfer_cylinder_sphere_dispatch_swaps_correctly() {
     // contacts and confirming they match: cyl axial offset from
     // spine = d1_outer (going INTO cyl).
     let z_cyl_pred = h_s - d1_outer;
-    // sphere geodesic δ = d2_outer / R_s
-    let delta = d2_outer / big_r_s;
+    // the turn on the sphere whose chord is d2_outer
+    let delta = 2.0 * (0.5 * d2_outer / big_r_s).asin();
     let (sin_d, cos_d) = delta.sin_cos();
     let r_sph_pred = r_c * cos_d - h_s * sin_d;
     let z_sph_pred = h_s * cos_d + r_c * sin_d;
@@ -3333,7 +3355,7 @@ fn sphere_cone_chamfer_convex_emits_cone() {
     };
 
     // Predicted contacts.
-    let delta = d / big_r_s;
+    let delta = 2.0 * (0.5 * d / big_r_s).asin();
     let (sin_d, cos_d) = delta.sin_cos();
     let sphere_arm_sign = -1.0_f64; // spine_z > 0
     let r_sph_pred = r_spine * cos_d + sphere_arm_sign * z_spine * sin_d;
@@ -3484,7 +3506,7 @@ fn sphere_cone_chamfer_both_concave_emits_cone() {
 
     // Predicted contacts with s_sph = s_cone = -1.
     // sphere_arm_sign = -spine_sign · s_sph = -1·-1 = +1 (flipped from convex).
-    let delta = d / big_r_s;
+    let delta = 2.0 * (0.5 * d / big_r_s).asin();
     let (sin_d, cos_d) = delta.sin_cos();
     let sphere_arm_sign = 1.0_f64; // s_sph = -1, spine_sign = +1
     let r_sph_pred = r_spine * cos_d + sphere_arm_sign * z_spine * sin_d;
@@ -3608,7 +3630,7 @@ fn sphere_cone_chamfer_mixed_emits_cone() {
     };
 
     // Predicted contacts (s_sph=+1, s_cone=-1).
-    let delta = d / big_r_s;
+    let delta = 2.0 * (0.5 * d / big_r_s).asin();
     let (sin_d, cos_d) = delta.sin_cos();
     // sphere_arm_sign = -spine_sign · s_sph = -1 · +1 = -1 (convex sphere).
     let r_sph_pred = r_spine * cos_d - z_spine * sin_d;
@@ -4565,8 +4587,8 @@ fn cylinder_cylinder_chamfer_convex_emits_plane() {
     };
 
     // Predicted contacts.
-    let dtheta1 = d / r1; // y_sign=+1, s1=+1
-    let dtheta2 = -d / r2; // y_sign=+1, s2=+1, negation
+    let dtheta1 = 2.0 * (0.5 * d / r1).asin(); // y_sign=+1, s1=+1
+    let dtheta2 = -2.0 * (0.5 * d / r2).asin(); // y_sign=+1, s2=+1, negation
     let (sin1, cos1) = dtheta1.sin_cos();
     let (sin2, cos2) = dtheta2.sin_cos();
     let c1_x = x_spine * cos1 - y_spine * sin1;
@@ -4693,8 +4715,8 @@ fn cylinder_cylinder_chamfer_both_concave_negative_y_emits_plane() {
     // Predicted contacts. y_sign = -1, s1 = s2 = -1.
     // dtheta_1 = (-1)·(-1)·d/r1 = +d/r1
     // dtheta_2 = -(-1)·(-1)·d/r2 = -d/r2
-    let dtheta1 = d / r1;
-    let dtheta2 = -d / r2;
+    let dtheta1 = 2.0 * (0.5 * d / r1).asin();
+    let dtheta2 = -2.0 * (0.5 * d / r2).asin();
     let (sin1, cos1) = dtheta1.sin_cos();
     let (sin2, cos2) = dtheta2.sin_cos();
     let c1_x = x_spine * cos1 - y_spine * sin1;

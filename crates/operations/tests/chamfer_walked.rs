@@ -1,7 +1,7 @@
 //! Chamfers the walking engine builds on a curved face: the ellipse where a
 //! slanted plane cuts a rod, which no closed form chamfers, a closed circular
-//! rim, and arcs of a circle and of the ellipse that end at planes square to
-//! them.
+//! rim, arcs of a circle and of the ellipse that end at planes square to
+//! them, and the rim of a ball cut by a plane.
 //!
 //! A chamfer of `c` into the cap and `w` along the wall puts each contact in
 //! the section square to the edge, `c` from the edge's point along the cap
@@ -21,13 +21,14 @@ use brepkit_check::validate::{CheckId, ValidateOptions};
 use brepkit_math::curves::Circle3D;
 use brepkit_math::mat::Mat4;
 use brepkit_math::quadrature::gauss_legendre_points;
+use brepkit_math::surfaces::SphericalSurface;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_operations::blend_ops::chamfer_v2;
 use brepkit_operations::boolean::{BooleanOp, boolean};
 use brepkit_operations::chamfer::chamfer;
 use brepkit_operations::extrude::extrude;
 use brepkit_operations::measure::solid_volume;
-use brepkit_operations::primitives::{make_box, make_cone, make_cylinder};
+use brepkit_operations::primitives::{make_box, make_cone, make_cylinder, make_sphere};
 use brepkit_operations::tessellate::{is_watertight, tessellate_solid};
 use brepkit_operations::transform::transform_solid;
 use brepkit_operations::validate::validate_solid;
@@ -453,5 +454,135 @@ fn the_walking_chamfer_runs_an_ellipse_arc_on_its_wall() {
         assert_removed(&topo, built.solid, before, removed, name);
         let contacts = wall_contacts(&topo, &side, built.solid, name);
         assert_eq!(contacts, ["nurbs_curve"], "{name}");
+    }
+}
+
+/// The plane that cuts the ball: `z = BALL_CUT`.
+const BALL_CUT: f64 = 1.0;
+
+/// A ball of radius `R` cut by the plane `z = BALL_CUT`, its part below kept,
+/// placed by `pose`, and the circle where the plane cuts it. With `turned`,
+/// the ball's faces read the same sphere about poles turned 0.6 rad off `z`.
+fn capped_ball(topo: &mut Topology, turned: bool, pose: &Mat4) -> (SolidId, EdgeId) {
+    let ball = make_sphere(topo, R, 32).unwrap();
+    let lid = make_box(topo, 10.0, 10.0, 10.0).unwrap();
+    transform_solid(topo, lid, &Mat4::translation(-5.0, -5.0, BALL_CUT)).unwrap();
+    let capped = boolean(topo, BooleanOp::Cut, ball, lid).unwrap();
+    if turned {
+        let poles = Vec3::new(0.0, -0.6_f64.sin(), 0.6_f64.cos());
+        for face in solid_faces(topo, capped).unwrap() {
+            let FaceSurface::Sphere(sphere) = topo.face(face).unwrap().surface() else {
+                continue;
+            };
+            let turned = SphericalSurface::with_axis(sphere.center(), R, poles).unwrap();
+            topo.face_mut(face)
+                .unwrap()
+                .set_surface(FaceSurface::Sphere(turned));
+        }
+    }
+    let rim = solid_edges(topo, capped)
+        .unwrap()
+        .into_iter()
+        .find(|&e| matches!(topo.edge(e).unwrap().curve(), EdgeCurve::Circle(_)))
+        .expect("the rim");
+    transform_solid(topo, capped, pose).unwrap();
+    (capped, rim)
+}
+
+/// A chamfer of `cap` into the plane and a chord `wall` down the ball from
+/// the rim: the volume it takes off, by Pappus's theorem, and each contact's
+/// distance from the axis and height, the plane's first. The region it takes
+/// off in a half-plane through the axis lies between the rim's point, the
+/// two contacts and the ball's meridian, and `∮ r²/2 dz` round it gives the
+/// moment `∫∫ r dA`.
+fn ball_chamfer(cap: f64, wall: f64) -> (f64, [(f64, f64); 2]) {
+    let edge = (BALL_CUT, (R * R - BALL_CUT * BALL_CUT).sqrt());
+    let rim = (edge.1, edge.0);
+    let from = edge.0.atan2(edge.1);
+    let to = from - 2.0 * (0.5 * wall / R).asin();
+    let plane = (rim.0 - cap, rim.1);
+    let ball = (R * to.cos(), R * to.sin());
+    let line = |(r0, z0): (f64, f64), (r1, z1): (f64, f64)| {
+        0.5 * (z1 - z0) * (r0 * r0 + r0 * r1 + r1 * r1) / 3.0
+    };
+    let meridian = |a: f64| 0.5 * R.powi(3) * (a.sin() - a.sin().powi(3) / 3.0);
+    let moment = line(rim, plane) + line(plane, ball) + meridian(from) - meridian(to);
+    (TAU * moment.abs(), [plane, ball])
+}
+
+/// The farthest from the circle round the axis at `(r, z)` that a new edge
+/// of `result` with a pcurve on a face of kind `kind` lies, read with `pose`
+/// undone, and how many such edges there are.
+fn off_circle(
+    topo: &Topology,
+    old: &HashSet<EdgeId>,
+    result: SolidId,
+    pose: &Mat4,
+    kind: &str,
+    (r, z): (f64, f64),
+) -> (usize, f64) {
+    let undo = pose.inverse().unwrap();
+    let (mut count, mut worst) = (0, 0.0_f64);
+    for face in solid_faces(topo, result).unwrap() {
+        let f = topo.face(face).unwrap();
+        if f.surface().type_tag() != kind {
+            continue;
+        }
+        for w in std::iter::once(f.outer_wire()).chain(f.inner_wires().iter().copied()) {
+            for oe in topo.wire(w).unwrap().edges() {
+                let id = oe.edge();
+                if old.contains(&id) || topo.pcurves().get(id, face).is_none() {
+                    continue;
+                }
+                count += 1;
+                let edge = topo.edge(id).unwrap();
+                let a = topo.vertex(edge.start()).unwrap().point();
+                let b = topo.vertex(edge.end()).unwrap().point();
+                let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
+                for k in 0..=64 {
+                    let t = t0 + (t1 - t0) * f64::from(k) / 64.0;
+                    let p = undo.mul_point(edge.curve().evaluate_with_endpoints(t, a, b));
+                    let off = (p.x().hypot(p.y()) - r).hypot(p.z() - z);
+                    worst = worst.max(off);
+                }
+            }
+        }
+    }
+    (count, worst)
+}
+
+/// A chamfer's distance along a ball is a chord, as along every other
+/// curved face: the rim of a ball cut by a plane takes one chamfer whether
+/// the ball's poles lie along the plane's normal (a cone of the closed form)
+/// or turned off it (a walked band).
+#[test]
+fn a_balls_rim_takes_one_chamfer_whichever_way_its_poles_lie() {
+    let (d1, d2) = (0.3, 0.6);
+    for turned in [false, true] {
+        for (name, pose) in poses() {
+            let mut topo = Topology::new();
+            let (ball, rim) = capped_ball(&mut topo, turned, &pose);
+            let (cap, wall) = on_faces(&topo, ball, rim, (d1, d2));
+            let (removed, [plane, sphere]) = ball_chamfer(cap, wall);
+            let before = solid_volume(&topo, ball, 0.001).unwrap();
+            let old: HashSet<EdgeId> = solid_edges(&topo, ball).unwrap().into_iter().collect();
+            let mut builder = ChamferBuilder::new(&mut topo, ball);
+            builder.add_edges_asymmetric(&[rim], d1, d2);
+            let built = builder.build().unwrap();
+            let what = format!("turned {turned} {name}");
+            assert!(built.failed.is_empty(), "{what}: {:?}", built.failed);
+            let band = solid_faces(&topo, built.solid)
+                .unwrap()
+                .into_iter()
+                .map(|f| topo.face(f).unwrap().surface().type_tag())
+                .find(|&tag| tag == "cone" || tag == "nurbs");
+            assert_eq!(band, Some(if turned { "nurbs" } else { "cone" }), "{what}");
+            assert_removed(&topo, built.solid, before, removed, &what);
+            for (kind, at) in [("plane", plane), ("sphere", sphere)] {
+                let (count, off) = off_circle(&topo, &old, built.solid, &pose, kind, at);
+                assert_eq!(count, 1, "{what}: contacts on the {kind}");
+                assert!(off < 1e-6, "{what}: the {kind}'s contact lies {off} off");
+            }
+        }
     }
 }
