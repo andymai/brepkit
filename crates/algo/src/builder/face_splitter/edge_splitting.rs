@@ -253,12 +253,8 @@ fn split_edges_at_3d_points(
             // edge's start; an arc's, a ring's and a ruling's parameter runs
             // evenly in the surface's, so the split's place in the edge's own
             // unwrapped span reads the copy, also on an arc over half a turn.
-            let split_uv = if !nurbs_by_projection {
-                split_uv
-            } else if let EdgeCurve::NurbsCurve(_) = edge.curve_3d {
-                walked_uv(&edge, t, surface, periods)
-                    .map_or(split_uv, |near| on_copy_near(split_uv, near, periods))
-            } else {
+            // A walk that cannot finish falls back to that span.
+            let split_uv = if nurbs_by_projection {
                 let span_end = match closed_ring_dir {
                     Some(dir) => brepkit_math::vec::Point2::new(
                         std::f64::consts::TAU.madd(dir, edge.start_uv.x()),
@@ -270,7 +266,15 @@ fn split_edges_at_3d_points(
                     (span_end.x() - edge.start_uv.x()).madd(t, edge.start_uv.x()),
                     (span_end.y() - edge.start_uv.y()).madd(t, edge.start_uv.y()),
                 );
-                on_copy_near(split_uv, along, periods)
+                let near = match edge.curve_3d {
+                    EdgeCurve::NurbsCurve(_) => {
+                        walked_uv(&edge, t, surface, periods).unwrap_or(along)
+                    }
+                    EdgeCurve::Line | EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => along,
+                };
+                on_copy_near(split_uv, near, periods)
+            } else {
+                split_uv
             };
             let mut pcurve = boundary_piece_pcurve(&edge, prev_3d, split_3d, surface, frame);
             if nurbs_by_projection {
@@ -601,7 +605,9 @@ pub(super) fn shifted_pcurve(
 
 /// The surface parameters of `edge` at fraction `t` of its domain, unwrapped
 /// continuously from the edge's start UV over a walk along its curve. `None`
-/// on a surface with no period.
+/// on a surface with no period, and when the walk cannot finish: a value
+/// that is not finite, a projection that fails, a step too small to move,
+/// or more than `MAX_STEPS` steps.
 ///
 /// A step is taken when its middle and its end each move less than an
 /// eighth of a period from the point before, and halved when not: a span of
@@ -616,7 +622,9 @@ fn walked_uv(
     use brepkit_math::vec::Point2;
     const FIRST_STEPS: f64 = 16.0;
     const MAX_HALVINGS: u32 = 16;
-    if periods.0.is_none() && periods.1.is_none() {
+    const MAX_STEPS: u32 = 4096;
+    let finite = |p: Point2| p.x().is_finite() && p.y().is_finite();
+    if periods.0.is_none() && periods.1.is_none() || !t.is_finite() || !finite(edge.start_uv) {
         return None;
     }
     let at =
@@ -631,7 +639,9 @@ fn walked_uv(
     let uv_at = |f: f64, near: Point2| {
         surface
             .project_point(at(f))
-            .map(|(u, v)| on_copy_near(Point2::new(u, v), near, periods))
+            .map(|(u, v)| Point2::new(u, v))
+            .filter(|&p| finite(p))
+            .map(|p| on_copy_near(p, near, periods))
     };
     let small = |a: Point2, b: Point2| {
         periods.0.is_none_or(|p| (b.x() - a.x()).abs() < 0.125 * p)
@@ -641,29 +651,35 @@ fn walked_uv(
     let first_step = (t - from) / FIRST_STEPS;
     let mut step = first_step;
     let mut halvings = 0;
-    let mut last = false;
-    while !last {
-        last = (t - f).abs() <= step.abs();
-        let next = if last { t } else { f + step };
-        let mid = 0.5 * (f + next);
-        match uv_at(mid, uv).and_then(|m| uv_at(next, m).map(|n| (m, n))) {
-            Some((m, n)) if halvings < MAX_HALVINGS && !(small(uv, m) && small(m, n)) => {
-                step *= 0.5;
-                halvings += 1;
-                last = false;
-            }
-            Some((_, n)) => {
-                (f, uv) = (next, n);
-                halvings = 0;
-                step = (2.0 * step)
-                    .abs()
-                    .min(first_step.abs())
-                    .copysign(first_step);
-            }
-            None => f = next,
+    for _ in 0..MAX_STEPS {
+        let tiny = f64::EPSILON * f.abs().max(1.0);
+        if (t - f).abs() <= tiny {
+            return Some(uv);
         }
+        // A step at least `tiny` long always moves `f`.
+        if step.abs() < tiny {
+            return None;
+        }
+        let last = (t - f).abs() <= step.abs();
+        let next = if last { t } else { f + step };
+        let m = uv_at(0.5 * (f + next), uv)?;
+        let n = uv_at(next, m)?;
+        if halvings < MAX_HALVINGS && !(small(uv, m) && small(m, n)) {
+            step *= 0.5;
+            halvings += 1;
+            continue;
+        }
+        if last {
+            return Some(n);
+        }
+        (f, uv) = (next, n);
+        halvings = 0;
+        step = (2.0 * step)
+            .abs()
+            .min(first_step.abs())
+            .copysign(first_step);
     }
-    Some(uv)
+    None
 }
 
 /// `uv` moved by whole periods to the copy nearest `near`.
@@ -1718,20 +1734,14 @@ mod hole_copy_tests {
         assert!((pieces[0].end_3d - off).length() < 1e-12);
     }
 
-    /// A woven hole's spline rim over u = 0 to 5 whose first four fifths
-    /// in u lie on the first tenth of its knots: a split at u = 3.9 sits at
-    /// a tenth of the way by parameter, and still takes the copy of the
-    /// period the rim runs on there.
-    #[test]
-    fn a_hole_spline_with_uneven_knots_splits_on_its_own_copy() {
-        let cyl =
-            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0)
-                .unwrap();
-        let surface = FaceSurface::Cylinder(cyl);
+    /// A spline rim on a unit cylinder at z = 3 over u = 0 to 5, through
+    /// poles at every half unit of u, whose first four fifths in u lie on
+    /// the first tenth of its knots; with its poles.
+    fn uneven_rim(surface: &FaceSurface) -> (OrientedPCurveEdge, Vec<Point3>) {
         let z = 3.0;
-        let on = |u: f64| surface.evaluate(u, z).unwrap();
-        let us: Vec<f64> = (0..=10).map(|k| 0.5 * f64::from(k)).collect();
-        let poles: Vec<Point3> = us.iter().map(|&u| on(u)).collect();
+        let poles: Vec<Point3> = (0..=10)
+            .map(|k| surface.evaluate(0.5 * f64::from(k), z).unwrap())
+            .collect();
         let mut knots = vec![0.0, 0.0];
         knots.extend((1..=8).map(|k| 0.0125 * f64::from(k)));
         knots.extend([0.55, 1.0, 1.0]);
@@ -1753,12 +1763,50 @@ mod hole_copy_tests {
             source_edge_idx: None,
             pave_block_id: None,
         };
+        (edge, poles)
+    }
+
+    fn unit_cylinder() -> FaceSurface {
+        FaceSurface::Cylinder(
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0)
+                .unwrap(),
+        )
+    }
+
+    /// A woven hole's spline rim with uneven knots ([`uneven_rim`]): a split
+    /// at u = 3.9 sits at a tenth of the way by parameter, and still takes
+    /// the copy of the period the rim runs on there.
+    #[test]
+    fn a_hole_spline_with_uneven_knots_splits_on_its_own_copy() {
+        let surface = unit_cylinder();
+        let (edge, poles) = uneven_rim(&surface);
         let split = poles[7] + (poles[8] - poles[7]) * 0.8;
         let pieces = split_hole_edges_at_3d_points(vec![edge], &[split], None, &surface, 1e-7);
         assert_eq!(pieces.len(), 2);
         let u = pieces[0].end_uv.x();
         assert!((u - 3.9).abs() < 0.05, "the split took u = {u}");
         assert!((pieces[1].start_uv.x() - u).abs() < 1e-12);
+    }
+
+    /// The walk along a spline returns for a fraction or a start UV that is
+    /// not finite, and gives no copy; for a finite fraction it gives one.
+    #[test]
+    fn the_walk_along_a_spline_returns_on_values_that_are_not_finite() {
+        let surface = unit_cylinder();
+        let periods = crate::builder::pcurve_compute::surface_periods(&surface);
+        let (edge, _) = uneven_rim(&surface);
+        for t in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert!(walked_uv(&edge, t, &surface, periods).is_none(), "t = {t}");
+        }
+        let mut lost = edge.clone();
+        lost.start_uv = Point2::new(f64::NAN, 3.0);
+        assert!(walked_uv(&lost, 0.05, &surface, periods).is_none());
+        let walked = walked_uv(&edge, 0.1, &surface, periods).unwrap();
+        assert!(
+            (walked.x() - 4.0).abs() < 1e-9,
+            "the walk took u = {}",
+            walked.x()
+        );
     }
 
     /// A woven hole's rim arc on a cylinder that runs from u = 0 to u = 5,
