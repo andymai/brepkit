@@ -2006,7 +2006,9 @@ struct Facet {
 ///
 /// Where a triangle of each body has an edge on one line, each surface is
 /// two triangles round the line. The two surfaces cross there when the
-/// triangles of the two bodies alternate round the line.
+/// triangles of the two bodies alternate round the line. When the two edges
+/// have no line in common, each body must pass through the plane of the
+/// triangle of the other.
 fn triangles_cross(t: &Facet, u: &Facet, on: f64) -> bool {
     let (Some(cut_t), Some(cut_u)) = (
         cut_by_plane(t, &u.corners, on),
@@ -2015,7 +2017,9 @@ fn triangles_cross(t: &Facet, u: &Facet, on: f64) -> bool {
         return false;
     };
     let through = match (cut_t, cut_u) {
-        (Cut::Edge { k, .. }, Cut::Edge { k: j, .. }) => alternate_round_edge(t, k, u, j),
+        (Cut::Edge { k, passes: pt }, Cut::Edge { k: j, passes: pu }) => {
+            alternate_round_edge(t, k, u, j, on).unwrap_or(pt && pu)
+        }
         (Cut::Edge { passes, .. }, Cut::Through(..))
         | (Cut::Through(..), Cut::Edge { passes, .. }) => passes,
         (Cut::Through(..), Cut::Through(..)) => true,
@@ -2044,42 +2048,56 @@ fn triangles_cross(t: &Facet, u: &Facet, on: f64) -> bool {
 
 /// Whether the two triangles of each of two bodies round a line alternate
 /// round it: `t` and the triangle across its edge from corner `k`, and `u`
-/// and the triangle across its edge from corner `j`, with both edges on the
-/// line. With exact signs. A triangle of one body in the plane of a
-/// triangle of the other decides nothing here: the two lie in one plane.
-fn alternate_round_edge(t: &Facet, k: usize, u: &Facet, j: usize) -> bool {
+/// and the triangle across its edge from corner `j`.
+///
+/// - `None` when the edge of `u` is more than `on` off the line of the edge
+///   of `t` where the two edges run side by side: the two have no line in
+///   common.
+/// - `Some(false)` when a triangle of one body and a triangle of the other
+///   lie on one side of the line, with the far corner of the shorter one
+///   within `2 * on` of the plane of the other. The edge of `u` can be `on`
+///   off the line, so the side of one to the other is not sure.
+fn alternate_round_edge(t: &Facet, k: usize, u: &Facet, j: usize, on: f64) -> Option<bool> {
     let (p, q) = (t.corners[k], t.corners[(k + 1) % 3]);
-    let (a, b) = (t.corners[(k + 2) % 3], t.beyond[k]);
-    let (c, d) = (u.corners[(j + 2) % 3], u.beyond[j]);
-    // The sign of the turn round the line from one far corner to another.
-    let turn = |x: Point3, y: Point3| orient3d(p, q, x, y);
-    let (ac, cb, ad, db, ab) = (turn(a, c), turn(c, b), turn(a, d), turn(d, b), turn(a, b));
-    if [ac, cb, ad, db].contains(&0.0) {
-        return false;
-    }
-    if ab == 0.0 {
-        // `a` and `b` in one plane with the line: the two triangles lie
-        // back to back, or flat across the line.
-        let axis = q - p;
-        let off = |x: Point3| {
-            let w = x - p;
-            w - axis * (w.dot(axis) / axis.dot(axis))
-        };
-        if off(a).dot(off(b)) >= 0.0 {
-            return false;
-        }
-    }
-    // Whether a corner lies in the wedge that turns from `a` to `b`.
-    let inside = |ax: f64, xb: f64| {
-        if ab > 0.0 {
-            ax > 0.0 && xb > 0.0
-        } else if ab < 0.0 {
-            ax > 0.0 || xb > 0.0
-        } else {
-            ax > 0.0
-        }
+    let axis = (q - p).normalize().ok()?;
+    let off = |x: Point3| {
+        let w = x - p;
+        w - axis * w.dot(axis)
     };
-    inside(ac, cb) != inside(ad, db)
+    let (r0, r1) = (u.corners[j], u.corners[(j + 1) % 3]);
+    let (s0, s1) = ((r0 - p).dot(axis), (r1 - p).dot(axis));
+    if (s1 - s0).abs() <= on {
+        return None;
+    }
+    let (lo, hi) = (s0.min(s1).max(0.0), s0.max(s1).min((q - p).dot(axis)));
+    let at = |s: f64| r0 + (r1 - r0) * ((s - s0) / (s1 - s0));
+    if hi < lo || off(at(lo)).length() > on || off(at(hi)).length() > on {
+        return None;
+    }
+
+    // Each far corner in the plane across the line, with `a` on the first
+    // axis.
+    let x_axis = off(t.corners[(k + 2) % 3]).normalize().ok()?;
+    let y_axis = axis.cross(x_axis);
+    let flat = |x: Point3| {
+        let w = off(x);
+        [w.dot(x_axis), w.dot(y_axis)]
+    };
+    let [a, b] = [t.corners[(k + 2) % 3], t.beyond[k]].map(flat);
+    let [c, d] = [u.corners[(j + 2) % 3], u.beyond[j]].map(flat);
+    let together = |x: [f64; 2], y: [f64; 2]| {
+        let reach = x[0].hypot(x[1]).max(y[0].hypot(y[1]));
+        x[0].madd(y[0], x[1] * y[1]) > 0.0
+            && x[0].madd(y[1], -(x[1] * y[0])).abs() <= 2.0 * on * reach
+    };
+    if together(a, b) || together(c, d) || [a, b].iter().any(|&x| together(x, c) || together(x, d))
+    {
+        return Some(false);
+    }
+    // Whether a far corner lies in the wedge that turns from `a` to `b`.
+    let angle = |x: [f64; 2]| x[1].atan2(x[0]).rem_euclid(std::f64::consts::TAU);
+    let inside = |x: [f64; 2]| angle(x) > 0.0 && angle(x) < angle(b);
+    Some(inside(c) != inside(d))
 }
 
 /// Where the plane of a triangle meets a triangle of another body.
@@ -2542,5 +2560,101 @@ mod tests {
         // Only the valid triangle should remain.
         assert_eq!(parts.shells.len(), 1);
         assert_eq!(topo.shell(parts.shells[0]).unwrap().faces().len(), 1);
+    }
+
+    /// A triangle with its edge on the z axis from `z` to `z + 10`, its far
+    /// corner at `far`, and the far corner of the triangle across that edge
+    /// at `beyond`.
+    fn on_axis(z: f64, far: Point3, beyond: Point3) -> Facet {
+        Facet {
+            corners: [
+                Point3::new(0.0, 0.0, z),
+                Point3::new(0.0, 0.0, z + 10.0),
+                far,
+            ],
+            beyond: [beyond, far, far],
+        }
+    }
+
+    /// Round the axis, one body has triangles at 0 and 90 degrees, and the
+    /// other at 45 and 180 degrees: they alternate as 0, 45, 90, 180. The
+    /// triangle at 180 degrees is in the plane of the one at 0 degrees.
+    #[test]
+    fn triangles_that_alternate_round_a_line_cross_with_one_in_the_plane_of_another() {
+        let t = on_axis(
+            0.0,
+            Point3::new(10.0, 0.0, 5.0),
+            Point3::new(0.0, 10.0, 5.0),
+        );
+        let u = on_axis(
+            2.0,
+            Point3::new(10.0, 10.0, 7.0),
+            Point3::new(-10.0, 0.0, 7.0),
+        );
+        assert!(triangles_cross(&t, &u, 1e-7));
+        assert!(triangles_cross(&u, &t, 1e-7));
+    }
+
+    /// Round the axis, one body has triangles at 0 and 90 degrees, and the
+    /// other at 180 and 270 degrees: they touch along the axis.
+    #[test]
+    fn triangles_that_do_not_alternate_round_a_line_do_not_cross() {
+        let t = on_axis(
+            0.0,
+            Point3::new(10.0, 0.0, 5.0),
+            Point3::new(0.0, 10.0, 5.0),
+        );
+        let u = on_axis(
+            2.0,
+            Point3::new(0.0, -10.0, 7.0),
+            Point3::new(-10.0, 0.0, 7.0),
+        );
+        assert!(!triangles_cross(&t, &u, 1e-7));
+        assert!(!triangles_cross(&u, &t, 1e-7));
+    }
+
+    /// One body has triangles at 30 and 90 degrees round the axis, and the
+    /// other at 200 degrees and 1e-8 short of 90 degrees: in the plane of
+    /// the triangle at 90 degrees, within the tolerance. The two bodies touch
+    /// there.
+    #[test]
+    fn triangles_round_a_line_in_one_plane_within_the_tolerance_do_not_cross() {
+        let t = on_axis(
+            0.0,
+            Point3::new(0.0, 10.0, 5.0),
+            Point3::new(8.66, 5.0, 5.0),
+        );
+        let u = on_axis(
+            2.0,
+            Point3::new(-9.4, -3.4, 7.0),
+            Point3::new(1e-8, 10.0, 7.0),
+        );
+        assert!(!triangles_cross(&t, &u, 1e-7));
+        assert!(!triangles_cross(&u, &t, 1e-7));
+    }
+
+    /// The edge of `u` runs beside the axis, 1e-3 off it in the plane of
+    /// `t`, and `u` leans 1e-5 out of that plane, so each edge lies within
+    /// the tolerance of the plane of the other triangle. The two edges have no
+    /// line in common, and the planes decide: `u` passes into the wedge of
+    /// the other body, 1e-4 deep at its far corner.
+    #[test]
+    fn triangles_with_edges_on_two_lines_cross_by_their_planes() {
+        let t = on_axis(
+            0.0,
+            Point3::new(10.0, 0.0, 5.0),
+            Point3::new(0.0, 10.0, 5.0),
+        );
+        let u = Facet {
+            corners: [
+                Point3::new(-1e-3, 0.0, 2.0),
+                Point3::new(-1e-3, 0.0, 12.0),
+                Point3::new(10.0 - 1e-3, 1e-4, 7.0),
+            ],
+            beyond: [Point3::new(-1e-3, -10.0, 7.0); 3],
+        };
+        assert_eq!(alternate_round_edge(&t, 0, &u, 0, 1e-7), None);
+        assert!(triangles_cross(&t, &u, 1e-7));
+        assert!(triangles_cross(&u, &t, 1e-7));
     }
 }

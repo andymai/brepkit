@@ -3,6 +3,8 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+use std::f64::consts::FRAC_PI_2;
+
 use brepkit_io::stl::writer::StlFormat;
 use brepkit_io::stl::{import_mesh, import_mesh_parts, read_stl, write_stl};
 use brepkit_math::mat::Mat4;
@@ -1521,5 +1523,40 @@ fn a_cube_and_a_prism_that_share_an_edge_and_cross_are_not_one_solid() {
             expected,
             "inward {inward}"
         );
+    }
+}
+
+/// The second cube is turned by a little less than 90 degrees, and its
+/// corners move in `x` by `-2.5e-8` at `z = 5` to `-0.5e-8` at `z = 15`. It
+/// lies against the side `x = 0` of the first cube within the tolerance,
+/// and the two touch.
+#[test]
+fn two_cubes_that_touch_along_half_an_edge_within_the_tolerance_are_one_solid() {
+    for inward in [false, true] {
+        let mut mesh = TriangleMesh::default();
+        add_turned_cube(&mut mesh, 0.0, 0.0, 10.0, inward);
+        let first = mesh.positions.len();
+        add_turned_cube(&mut mesh, FRAC_PI_2 - 1e-9, 5.0, 10.0, inward);
+        for p in &mut mesh.positions[first..] {
+            let shift = -2.5e-8 + (p.z() - 5.0) * 2e-9;
+            *p = Point3::new(p.x() + shift, p.y(), p.z());
+        }
+
+        let mut topo = Topology::new();
+        let parts = import_mesh_parts(&mut topo, &mesh, 1e-7).unwrap();
+        assert_eq!(
+            (parts.solids.len(), parts.shells.len()),
+            (2, 0),
+            "inward {inward}"
+        );
+        for &solid in &parts.solids {
+            assert!((volume(&topo, solid) - 1000.0).abs() < 1e-6);
+            assert_valid(&topo, solid);
+        }
+
+        let mut topo = Topology::new();
+        let joined = import_mesh(&mut topo, &mesh, 1e-7).unwrap();
+        assert!((volume(&topo, joined) - 2000.0).abs() < 1e-6);
+        assert_eq!(solid_pieces(&mut topo, joined).unwrap().len(), 2);
     }
 }
