@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794914698284,
+  "lastUpdate": 1794916553186,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -73979,6 +73979,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25856979,
             "range": "± 134656",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "3a1535d5359b52bc6c466b7b8cbf81cf696bc042",
+          "message": "fix(blend): build two rounds of different radii that cross at a corner (#2611)\n\n## Summary\n\n`fillet_v2_variable` rounds two edges of a 20 mm box that meet at one\ncorner, at r = 3 and r = 1 (#2587). The third edge stays sharp. On main,\neach round runs to the corner, and a ruled B-spline face between the two\nend sections closes it. The rounds cross through each other. The outline\nof the bottom face crosses itself, `validate_solid` reports nothing, and\nthe solid measures 7957.367 where the rounded box holds 7957.505.\n\nFirst I measured how wide the fault is. The sweep rounds edge pairs and\ntriples at a corner of a 20 mm box and of a box of 20 by 14 by 6. Each\ncase runs upright, turned and mirrored. It runs `fillet_v2_variable` and\nthe wasm `try_fillet_variable` path, and for one radius `fillet_v2` and\nthe wasm `try_fillet` too. The oracle for two rounds is the box less\nwhat each round takes, plus what both take, a closed form with a 1-D\nintegral. For three rounds of one radius it is the closed form of the\nball corner.\n\n| Corner | Runs | Before | After |\n|---|---|---|---|\n| Two rounds of different radii | 126 | 126 wrong by volume (relative\nerror 2e-5 to 7e-4), all read as valid | 126 exact (largest relative\nerror 9.2e-12) |\n| Two or three rounds of one radius | 96 | 96 exact | 96 exact |\n| Three rounds of different radii | 30 | 30 refused with `CornerFailure`\n| 30 refused with `CornerFailure` (#2610) |\n\nWith this change, `apply_junction_crossings` in\n`crates/blend/src/corner.rs` runs before the corner pass. It finds two\nrounds of different radii at a corner of three faces whose contacts on\ntheir shared face cross. Then it builds their meeting:\n\n- The crease is where the two rounds meet, a cubic fitted on both by\n`fitted_crease`. It starts where their contacts on the shared face\ncross. It ends where the contact of the narrower round on its wall meets\nthe wider round.\n- From there the wider round ends where its cylinder meets the plane of\nthat wall. That end is a circle where the wall stands square to the\nround, else an ellipse (`cylinder_plane_arc`). The wall loses the corner\nthe wider round takes.\n- The shared face loses the corner both rounds take.\n\nFor radii that differ very little, the crease can end within the vertex\ntolerance of the narrower round's contact end. It then ends at that\nvertex. Rounds within 1e-7 of one radius keep the mitre.\n\nWhere the crossing cannot build the meeting, the build returns\n`PlanningFailure` and makes no band. Two cases are a wall that is not a\nplane, and a hole in a face where the crossing takes material. The hole\ntest reads each round's reach from its contacts. Where the round's faces\nmeet at less than a right angle, that reach is more than its radius.\n\n`validate_solid` now reports a plane face whose wire crosses itself\n(`check_face_wires_simple` in\n`crates/check/src/validate/face_wires.rs`). It uses the meeting search\nand side test that `check_face_wires_apart` uses for holes. With the\nblend code of the base, it reports a face that crosses itself in each\nwrong result of the new box and prism tests. On cones, frustums and tori\nit reported crossings of wires that do not cross, so it reads plane\nfaces only.\n\nThe check sweeps a wire's edges along the axis the wire spans most, and\nreads each pair whose grown boxes overlap once. It does not read the\nsides of a meeting where the wire runs on from one edge to the next. The\ncheck cuts a B-spline edge whose control points do not run one way into\nstretches whose control points do. A curve whose control points run one\nway cannot cross itself, and the check reads the stretches of one edge\nagainst each other. That finds a cubic that loops over itself inside one\nedge.\n\n| Fixture | Faces | Wire edges | Longest wire | Before | After |\n|---|---|---|---|---|---|\n| `glyph_ruling_plate` | 232 | 1290 | 35 | 41.8 ms | 16.1 ms |\n| `kumiko_wrap_first_band` | 194 | 978 | 52 | 17.6 ms | 8.0 ms |\n| `kumiko_wrap_first_band_slab_base` | 284 | 1596 | 79 | 24.9 ms | 8.3\nms |\n| `goma_wall_band` | 663 | 5858 | 28 | 57.4 ms | 3.2 ms |\n| `kumiko_lattice_band_b` | 653 | 5918 | 113 | 59.9 ms | 3.2 ms |\n\nEach time is the mean of five runs of the check over every face, in the\n`ci` profile. No face of these fixtures crosses itself, before or after.\n\nOn plane faces, the check found four more results that cross themselves,\nwhich their tests read as valid. Those tests now wait on #2607, #2608\nand #2609. `a_rolling_corner_with_no_ball_is_refused` now takes a\nrefusal of its plain fillet, which crosses itself too (#2607).\n\nThis branch starts from #2590 (`fix/round-end-short-edge-wall`), because\nit uses that PR's crease points, cylinder entry and wire helpers. The PR\ntargets that branch.\n\nFixes #2587\n\n## Test plan\n\n- `crates/operations/tests/fillet_mixed_radius_corner.rs` (new) checks\neach case upright, turned and mirrored. Each built case requires both\nrounds, a valid solid, a watertight mesh and the volume within 1e-8 of\nthe oracle.\n- A box corner: each of the three edge pairs at radii 3 and 1, 1 and 3,\n3 and 3.01, and 8 and 2. It also requires 8 faces with 2 cylinders, and\n64 points near the corner read inside or outside as the oracle says.\n  - A slab 6 thick at radii 5.99 and 1, and 2 and 5.9.\n  - Radii 1e-4, 1e-5, 1e-6 and 1.5e-7 apart.\n- Prism corners at 56 degrees and at an obtuse angle, both ways round,\nagainst a volume oracle that clips the outline at each height.\n- A pocket in the narrower round's wall under the crossing gets\n`PlanningFailure`, and a pocket clear of it builds. A pocket whose\ncorner lies on the wider round's end gets `PlanningFailure` too; without\nthe clearance of a weld's width, it builds.\n- On a box sheared so that its floor meets one wall at 60 degrees, the r\n= 8 round meets that wall 12 above the floor. A pocket 9 above the floor\ngets `PlanningFailure`, and one 15 above it builds. With the radius as\nthe reach, the first pocket builds.\n  - A corner beside a curved wall gets `PlanningFailure`.\n- With the blend code of the base, the five tests of that file that\nexisted then all fail.\n- Unit tests of `check_face_wires_simple`: the check reports a bow tie\nand the outline of the issue. It also reports a cubic with control\npoints (0, 0), (3, 3), (-2, 3) and (1, 0), closed by a line. It passes a\nsquare with a hole, a wire pinched at a vertex, a windowed cylinder\nband, and two cubics that do not loop. Without the cut into stretches,\nthe looped cubic passes.\n- `the_swept_search_flags_what_the_search_of_every_pair_flags` takes 400\nrandom outlines of lines and arcs, over 50 of them crossed and over 50\nclear. The sweep flags the same wires as the search of every pair of\nedges.\n- With the swept check, the four ignored tests still report the same\nfaces, and the base comparison reports the same faces.\n- `cargo nextest run -p brepkit-algo -p brepkit-io -p brepkit-operations\n-p brepkit-wasm -p brepkit-check -p brepkit-heal -p brepkit-blend`, with\nmain merged: 4113 pass, 23 skip.\n- The pose sweep and the truth audit match the base line for line, run\nwith the check on every face.\n- `cargo clippy --all-targets --all-features -- -D warnings` passes\n(pre-commit hook).\n\n## Not in this PR\n\n- #2610: three rounds of different radii at one corner get\n`CornerFailure`.\n- #2607: two rounds of one radius at a concave corner leave a face that\ncrosses itself.\n- #2608: a round along a concave edge to a sloping arm leaves its end\nface crossing itself.\n- #2609: a round along a dished vault's end arc runs past the end wall's\nside edges.",
+          "timestamp": "2026-11-17T11:51:44Z",
+          "tree_id": "93a09cfb45818c7fb9ead82c01dc3eadb4030bf4",
+          "url": "https://github.com/andymai/brepkit/commit/3a1535d5359b52bc6c466b7b8cbf81cf696bc042"
+        },
+        "date": 1794916545808,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1143526,
+            "range": "± 4467",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1195601,
+            "range": "± 45935",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13640,
+            "range": "± 81",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 730074,
+            "range": "± 7228",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25819227,
+            "range": "± 142270",
             "unit": "ns/iter"
           }
         ]
