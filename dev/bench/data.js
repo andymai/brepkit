@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794902073434,
+  "lastUpdate": 1794906528523,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -73547,6 +73547,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 20467819,
             "range": "± 45966",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "66281732+Robokan@users.noreply.github.com",
+            "name": "Eric Vaughan",
+            "username": "Robokan"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "cbbceaf0f571cd8be230d5ab5735b4a0bcc18e20",
+          "message": "perf(measure): integrate a solid's faces on all cores (#2612)\n\n## Summary\n\n`volume_from_direct_face_tessellation` works out each face's term (a\nclosed form, or the face's mesh and the flux over it) one face after\nanother. The faces are independent, so their terms are now worked out on\nrayon's pool and then summed in the faces' order, as the loop did. Every\nvolume comes out the same to the last bit. wasm keeps the loop.\n\n## Speed\n\n`solid_volume` at deflection 0.05 on 436 solids from real parts\n(booleans' inputs and results, many with B-spline faces), one process,\ntwo runs each, taken in turn:\n\n| | before | after |\n|---|---|---|\n| total | 40.1 s, 40.6 s | 30.2 s, 31.1 s |\n\nThe rest is meshing single large faces, which this does not split.\n\n## Testing\n\n- Every one of the 436 volumes is identical, to the last bit, before and\nafter.\n- `cargo test` for algo, operations, blend, io and topology: 3617\npassed.\n- Pose sweep and truth audit: identical to `main` line for line.\n- Clippy and fmt clean; `brepkit-operations` checks for\n`wasm32-unknown-unknown`.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nParallelizes face-term computation in\n`volume_from_direct_face_tessellation` on rayon's pool for native\nbuilds. Terms are summed in face order, keeping every volume\nbit-identical to the old sequential loop; wasm keeps the loop.\n\n**Performance**\n- `solid_volume` at deflection 0.05 on 436 solids from real parts took\n~30 s per run after, down from ~40 s.\n\n**Validation**\n- All 436 volumes are bit-identical before and after; the pose sweep and\ntruth audit match `main`.\n- 3617 tests pass; clippy, fmt, and the `wasm32-unknown-unknown` build\nare clean.\n\n<sup>Written for commit 8b44f7b86f2a8f1f2733851f7744e4bfccd0b339.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2612?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-11-17T01:04:16-08:00",
+          "tree_id": "867c1c78a7cbc22b8665c8f2c76380ec3bb617cc",
+          "url": "https://github.com/andymai/brepkit/commit/cbbceaf0f571cd8be230d5ab5735b4a0bcc18e20"
+        },
+        "date": 1794906518712,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1130600,
+            "range": "± 2289",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1208475,
+            "range": "± 92800",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13673,
+            "range": "± 44",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 715625,
+            "range": "± 3619",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25683026,
+            "range": "± 139849",
             "unit": "ns/iter"
           }
         ]
