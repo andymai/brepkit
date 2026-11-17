@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794886124688,
+  "lastUpdate": 1794886803838,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -72737,6 +72737,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25271885,
             "range": "± 72674",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "38db3e918c2af1e2895c56d78356a4b6db7af71e",
+          "message": "fix(algo): read a plane face's outer wire on its arcs for EF crossings (#2566)\n\n## Summary\n\nThe EF phase now drops an edge's crossing with a plane face where the\ncrossing lies outside the arcs of the face's outer wire. Before this\nchange, `FaceContainment::accepts` in\n`crates/algo/src/pave_filler/phase_ef.rs` kept a crossing up to twice a\nchord's sagitta past an arc.\n\n- `accepts` read the outer wire as a polygon of 32 samples on each edge.\nIt also kept a point within a margin of that polygon: twice the largest\nsagitta of a chord on a curved edge.\n- On a whole circle of radius 249.25, that margin is 2.4. In the\n`mars-rover` fuse, the grouser's edge `Id(46)` kept its crossings with\nthe wheel's ring faces `Id(11)` and `Id(15)`. These crossings lie 0.066\nand 0.098 outside the ring's circle, and each one put a pave on the\nedge.\n- `accepts` now reads the outer wire on its own lines, arcs and NURBS\npieces with `brepkit_topology::planar::wire_region_2d`. A point within\n10 times the linear tolerance of the wire lies on it.\n- The polygon and its margin stay for a point that the region does not\nsettle (`PlanarRegion::side` gives `None`). The face's box keeps its\nmargin.\n- `accepts` reads the outer wire only, as before, so it keeps a crossing\nin a hole of the face.\n\nEarlier changes set the margin for other cases: #761 (half the longest\nchord), #919 (curved edges only) and #2017 (twice the largest sagitta).\nTheir tests `scooplabel_bracket_fuse_has_no_degenerate_sections` and the\n11 tests of `kumiko_lattice_piece_cut_inmem.rs` pass on this branch.\n\nThe roadmap skill gets one line in its Closed section.\n\nFixes #2541\n\n## Test plan\n\n- `a_ring_holds_crossings_only_inside_its_circle` casts lines through a\nring in `z = 60` between radii 245 and 249.25. The outer circle is one\nedge or three, and the lines cross the plane at four angles. Crossings\nat radii 249.316, 249.348 and 249.2501 give no pave. Crossings at\n249.2499, 249.2 and 247.0 give one pave each, and so does a crossing on\nthe circle. On main, the test fails at its first case: the three\ncrossings outside the circle each give a pave.\n- The `replay_pair` example on the `mars-rover` operands: the log no\nlonger shows the crossings of `Id(46)` with `Id(11)` and `Id(15)`. The\nfuse is the same on main and on this branch: 45 faces (17 cylinders, 28\nplanes), no free or shared-by-three edges, volume 794704.108.\n- `cargo nextest run` on `brepkit-algo`, `brepkit-io`,\n`brepkit-operations`, `brepkit-wasm`, `brepkit-check` and\n`brepkit-heal`: 3822 tests run, 3822 passed, 22 skipped. `cargo test -p\nbrepkit-wasm --lib gridfinity`: 27 passed.\n- `pose_sweep` gives the same output on main and on this branch (495\nresult rows).\n- `truth_audit` gives the same output on main and on this branch.\n- I fused the `mars-rover` operands in more poses, with the mesh\nfallback declined. The poses are as read, mirrored, turned 1.13 about z,\nturned 90 degrees about x, and moved. Each fuse is valid and watertight,\nwith 37 faces (17 cylinders). Its volume differs from the operands'\nvolumes less their common part by less than 5e-11 of it. Main gives the\nsame results.\n- Turned 0.37 about x or -0.81 about y, the same fuse needs the mesh\nfallback on main and on this branch alike. #2572 fixes those poses.",
+          "timestamp": "2026-11-17T03:36:29Z",
+          "tree_id": "e820b376587001c7a4ce04685a1238050a00547e",
+          "url": "https://github.com/andymai/brepkit/commit/38db3e918c2af1e2895c56d78356a4b6db7af71e"
+        },
+        "date": 1794886793681,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 914565,
+            "range": "± 22840",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 963735,
+            "range": "± 18208",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11432,
+            "range": "± 38",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 567797,
+            "range": "± 3023",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 21137547,
+            "range": "± 334462",
             "unit": "ns/iter"
           }
         ]
