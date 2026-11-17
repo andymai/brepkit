@@ -1164,7 +1164,7 @@ pub fn build_imprint(
     let (sub_faces, unsplit, whole) =
         fill_images_faces::fill_images_faces(&mut topo, arena, &edge_images, &ranks, true, tol);
     refuse_unsplit(&unsplit, &whole)?;
-    let solid = assemble_pieces(&mut topo, &select_all(&sub_faces))?;
+    let solid = assemble::assemble_solid(&mut topo, &select_all(&sub_faces), &[])?;
     Ok((topo, solid))
 }
 
@@ -1222,27 +1222,8 @@ pub fn build_split_by_faces(
             return Ok((topo, regions));
         }
     }
-    let solid = assemble_pieces(&mut topo, &boundary)?;
+    let solid = assemble::assemble_solid(&mut topo, &boundary, &[])?;
     Ok((topo, vec![solid]))
-}
-
-/// One solid from every piece of its faces.
-fn assemble_pieces(
-    topo: &mut Topology,
-    selected: &[bop::SelectedFace],
-) -> Result<SolidId, AlgoError> {
-    let mut faces: Vec<FaceId> = selected.iter().map(|piece| piece.face_id).collect();
-    builder_solid::separate_arcs_sharing_ends(topo, &mut faces)?;
-    let selected: Vec<bop::SelectedFace> = faces
-        .into_iter()
-        .zip(selected)
-        .map(|(face_id, piece)| bop::SelectedFace {
-            face_id,
-            source_face: piece.source_face,
-            reversed: piece.reversed,
-        })
-        .collect();
-    assemble::assemble_solid(topo, &selected, &[])
 }
 
 /// No phase found anything between the solid and its tools.
