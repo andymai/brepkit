@@ -180,12 +180,27 @@ impl<'s> Bend<'s> {
         } else {
             None
         };
+        // One power of two for every weight brings the most to between one
+        // and two: the surface stays the same, and the nets' products keep
+        // their digits.
+        let most = weights
+            .iter()
+            .flatten()
+            .fold(0.0_f64, |m, w| m.max(w.abs()));
+        let unit = if most.is_finite() && most > 0.0 {
+            #[allow(clippy::cast_possible_truncation)]
+            let e = most.log2().floor() as i32;
+            2.0_f64.powi(-e)
+        } else {
+            1.0
+        };
         Self {
             surface,
             start: (u0, v0),
             length: (pu, pv),
             closed,
             frame,
+            unit,
             seams: [seam_u, seam_v],
             fractions: [
                 fractions(surface.knots_u(), surface.degree_u(), nu, u0, pu),
@@ -254,7 +269,7 @@ impl<'s> Bend<'s> {
         if let Some(net) = self.nets.borrow().get(&(iu, iv)) {
             return Some(Rc::clone(net));
         }
-        let net: Net = cell_net(self.surface, iu, iv)?.into();
+        let net: Net = cell_net(self.surface, iu, iv, self.unit)?.into();
         #[cfg(test)]
         super::CELLS_READ.with(|read| read.borrow_mut().insert((iu, iv)));
         self.nets.borrow_mut().insert((iu, iv), Rc::clone(&net));
@@ -396,12 +411,16 @@ impl<'s> Bend<'s> {
             }
             for m in (first as i64)..=(last as i64) {
                 let m = m as f64;
-                let mut k = 0;
-                while k < inner.len() {
+                // The knots strictly inside the box: every copy of a knot
+                // lies inside or none does.
+                let start = inner.partition_point(|&x| x + m <= lo[d]);
+                let end = inner.partition_point(|&x| x + m < hi[d]);
+                let mut k = start;
+                while k < end {
                     let x = inner[k];
                     // The knots rise, so those not past `x` are `x`.
-                    let times = inner[k..].iter().take_while(|&&y| y <= x).count().max(1);
-                    if times > degree && lo[d] < x + m && x + m < hi[d] {
+                    let times = inner[k..end].iter().take_while(|&&y| y <= x).count().max(1);
+                    if times > degree {
                         return true;
                     }
                     k += times;
@@ -480,7 +499,7 @@ impl<'s> Bend<'s> {
         let hi_l = [wa[0].max(wb[0]), wa[1].max(wb[1])];
         let first = reference(self.measure(lo_l, hi_l)?);
         let sigma = least_singular(first[0], first[1]) / h[3];
-        if !(sigma > 0.0 && d.is_finite()) {
+        if !(sigma > 0.0 && sigma.is_finite() && d.is_finite()) {
             return None;
         }
         let mut r = (2.0 * d / sigma).max(1e-12);
@@ -516,11 +535,14 @@ impl<'s> Bend<'s> {
             }
             let parts = self.parts(lo, hi)?;
             let stretch = self.least_stretch(&parts, s0, reference(measure), measure);
-            if stretch.is_nan() || stretch <= 0.0 {
+            // A stretch that is not finite bounds nothing: its sums lost
+            // their digits.
+            if !stretch.is_finite() || stretch <= 0.0 {
                 return None;
             }
             if reach < stretch * r {
-                return Some(reach / stretch + self.bow(wa, wb));
+                let sag = reach / stretch + self.bow(wa, wb);
+                return sag.is_finite().then_some(sag);
             }
             r = 2.0 * reach / stretch;
             if r.is_nan() || r >= 1.0 {
@@ -739,8 +761,9 @@ fn seam(a: &[Point3], b: &[Point3], wa: &[f64], wb: &[f64]) -> Option<f64> {
 }
 
 /// The Bezier net of the knot cell whose first knots have indices
-/// `(iu, iv)`. `None` where a weight on the way is not positive.
-fn cell_net(s: &NurbsSurface, iu: usize, iv: usize) -> Option<Vec<[f64; 4]>> {
+/// `(iu, iv)`, with each weight times `unit`. `None` where a weight on the
+/// way is not positive.
+fn cell_net(s: &NurbsSurface, iu: usize, iv: usize, unit: f64) -> Option<Vec<[f64; 4]>> {
     let (p, q) = (s.degree_u(), s.degree_v());
     let (ku, kv) = (s.knots_u(), s.knots_v());
     let (rows, weights) = (s.control_points(), s.weights());
@@ -753,7 +776,7 @@ fn cell_net(s: &NurbsSurface, iu: usize, iv: usize) -> Option<Vec<[f64; 4]>> {
         let (mut points, mut w) = (Vec::with_capacity(p + 1), Vec::with_capacity(p + 1));
         for i in iu.checked_sub(p)?..=iu {
             points.push(*rows.get(i)?.get(j)?);
-            w.push(*weights.get(i)?.get(j)?);
+            w.push(*weights.get(i)?.get(j)? * unit);
         }
         let knots = ku.get(iu - p..=iu + p + 1)?.to_vec();
         let row = NurbsCurve::new(p, knots, points, w).ok()?;
@@ -1139,6 +1162,136 @@ mod tests {
             let loops = FaceLoops::of(&topo, face, 1e-7).unwrap();
             assert!(loops.is_none_or(|l| l.loops.iter().all(Option::is_none)));
         }
+    }
+
+    /// A flat patch 10 by 10 of degree one reads the same bound with all
+    /// its weights 1e100 as with all of them 1: weights of one size give the
+    /// same surface. Without the power of two that brings the weights down,
+    /// the sums overflow, and the chord reads no bound rather than nothing.
+    #[test]
+    fn a_patch_whose_weights_are_all_huge_reads_the_bound_of_weights_of_one() {
+        let control = (0..2)
+            .map(|i| {
+                (0..2)
+                    .map(|j| Point3::new(10.0 * f64::from(i), 10.0 * f64::from(j), 0.0))
+                    .collect()
+            })
+            .collect::<Vec<Vec<Point3>>>();
+        let sags: Vec<f64> = [(1.0, None), (1e100, None), (1e100, Some(1.0))]
+            .iter()
+            .map(|&(w, unit)| {
+                let surface = NurbsSurface::new(
+                    1,
+                    1,
+                    vec![0.0, 0.0, 1.0, 1.0],
+                    vec![0.0, 0.0, 1.0, 1.0],
+                    control.clone(),
+                    vec![vec![w; 2]; 2],
+                )
+                .unwrap();
+                let mut bend = Bend::new(&surface, (false, false), Frame::Flat);
+                if let Some(unit) = unit {
+                    bend.unit = unit;
+                }
+                let chord = Chord {
+                    from: (0.2, 0.3),
+                    by: (0.4, 0.2),
+                    ends: (Point2::new(0.2, 0.3), Point2::new(0.6, 0.5)),
+                    ends_3d: (Point3::new(2.0, 3.0, 0.0), Point3::new(6.0, 5.0, 0.0)),
+                    off: 0.01,
+                    miss: 0.0,
+                };
+                bend.sag(&chord, 1e-4)
+            })
+            .collect();
+        // The edge may lie 0.01 off the run, which the patch stretches by
+        // 10 in each fraction.
+        assert!((sags[0] - 1e-3).abs() < 1e-12, "{sags:?}");
+        assert!((sags[1] - sags[0]).abs() < 1e-12, "{sags:?}");
+        assert!(sags[2].is_infinite(), "{sags:?}");
+    }
+
+    /// Whether a box holds a knot repeated more often than the degree, read
+    /// against every inner knot.
+    fn tears_by_scan(bend: &Bend<'_>, lo: [f64; 2], hi: [f64; 2]) -> bool {
+        (0..2).any(|d| {
+            let f = &bend.fractions[d];
+            let (degree, ..) = bend.along(d);
+            let inner = &f[1..f.len() - 1];
+            let shifts: Vec<f64> = if bend.closes(d) {
+                (-2..=3).map(f64::from).collect()
+            } else {
+                vec![0.0]
+            };
+            shifts.iter().any(|&m| {
+                inner.iter().any(|&x| {
+                    let times = inner.iter().filter(|&&y| y.total_cmp(&x).is_eq()).count();
+                    times > degree && lo[d] < x + m && x + m < hi[d]
+                })
+            })
+        })
+    }
+
+    /// On a surface of 120 knot spans, closed in `u`, with knots taken twice
+    /// and three times, the knots read inside each of many boxes are those
+    /// that a scan of every knot finds.
+    #[test]
+    fn a_box_finds_its_torn_knots_among_many_spans() {
+        let mut knots_u = vec![0.0; 3];
+        for k in 1..120 {
+            let x = f64::from(k) / 120.0;
+            let times = if k % 13 == 0 {
+                3
+            } else if k % 7 == 0 {
+                2
+            } else {
+                1
+            };
+            knots_u.extend(std::iter::repeat_n(x, times));
+        }
+        knots_u.extend([1.0; 3]);
+        let rows = knots_u.len() - 3;
+        let control = (0..rows)
+            .map(|i| {
+                #[allow(clippy::cast_precision_loss)]
+                let x = i as f64;
+                (0..2)
+                    .map(|j| Point3::new(x, 10.0 * f64::from(j), 0.0))
+                    .collect()
+            })
+            .collect();
+        let surface = NurbsSurface::new(
+            2,
+            1,
+            knots_u,
+            vec![0.0, 0.0, 1.0, 1.0],
+            control,
+            vec![vec![1.0; 2]; rows],
+        )
+        .unwrap();
+        let mut found = 0;
+        for closed in [false, true] {
+            let bend = Bend::new(&surface, (closed, false), Frame::Flat);
+            let mut seed = 0x9e37_79b9_u32;
+            let mut next = || {
+                seed ^= seed << 13;
+                seed ^= seed >> 17;
+                seed ^= seed << 5;
+                f64::from(seed) / f64::from(u32::MAX)
+            };
+            for _ in 0..2000 {
+                let (a, b) = if closed {
+                    (2.0f64.madd(next(), -0.5), 0.1 * next())
+                } else {
+                    (next(), 0.1 * next())
+                };
+                let (lo, hi) = ([a, 0.2], [a + b, 0.4]);
+                let tears = bend.tears(lo, hi);
+                assert_eq!(tears, tears_by_scan(&bend, lo, hi), "{lo:?} {hi:?}");
+                found += usize::from(tears);
+            }
+        }
+        assert!(found > 100, "{found}");
     }
 
     /// The count of a knot's copies moves on past a knot that is not a

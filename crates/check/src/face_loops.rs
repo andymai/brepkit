@@ -557,6 +557,8 @@ struct Bend<'s> {
     closed: (bool, bool),
     /// How the drawing stands to the parameters' fractions.
     frame: Frame,
+    /// The power of two that brings the most weight to between one and two.
+    unit: f64,
     /// The gap across each closed parameter's seam; `None` where the seam's
     /// weights differ.
     seams: [Option<f64>; 2],
