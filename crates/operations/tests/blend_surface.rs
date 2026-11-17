@@ -389,33 +389,51 @@ fn a_mixed_chain_blends_the_same_however_it_is_stored() {
     }
 }
 
-/// Where a chain hooks back toward the chain across more tightly than the
-/// surface reaches out from it, the middle of the surface stops and runs back
-/// along the chains, and the surface folds. It is refused.
+/// A chain hooks back toward the chain across more tightly than the surface
+/// reaches out from it. At the whole reach, handles beside each other cross
+/// there, and the middle of the surface runs back along the chains. The
+/// piece that hooks reaches out less far: the surface does not fold, and the
+/// other end of the chain keeps the whole reach.
 #[test]
-fn a_chain_that_hooks_toward_the_other_tighter_than_the_reach_is_refused() {
+fn a_chain_that_hooks_toward_the_other_tighter_than_the_reach_reaches_less_far() {
     let across = Pose::reflection(Point3::new(4.0, 0.0, 0.0), Vec3::new(1.0, 0.0, 0.0))
         .then(Pose::turn(Vec3::new(0.0, 0.0, 1.0), 0.1, [0.0, 0.5, 1.0]));
     for (pose_name, pose) in POSES {
         for continuity in [BlendContinuity::G1, BlendContinuity::G2] {
+            let context = format!("{pose_name} {continuity:?}");
             let mut topo = Topology::new();
             let a = mixed_plane_sheet(&mut topo, pose(), [false; 3], 0.0, HOOKED);
             let b = mixed_plane_sheet(&mut topo, across.then(pose()), [false; 3], 0.0, HOOKED);
-            let refused = blend_surface(
+            let face = blend_surface(
                 &mut topo,
                 &a.chain,
                 a.face,
                 &b.chain,
                 b.face,
                 &BlendSurfaceOptions::new(continuity),
-            );
-            let Err(OperationsError::InvalidInput { reason }) = refused else {
-                panic!("{pose_name} {continuity:?}: {refused:?}");
+            )
+            .unwrap_or_else(|e| panic!("{context}: {e}"));
+            let result = nurbs_of(&topo, face);
+            assert_eq!(first_fold(&result), None, "{context}");
+            let seam_a = measure_seam(&result, 0.0, &surface_of_face(&topo, a.face), SAMPLES);
+            let seam_b = measure_seam(&result, 1.0, &surface_of_face(&topo, b.face), SAMPLES);
+            assert_seams(&context, continuity, &[seam_a, seam_b]);
+            assert!(gap_to_chain(&topo, &result, 0.0, &a.chain, CHAIN_SAMPLES) < 1e-8);
+            assert!(gap_to_chain(&topo, &result, 1.0, &b.chain, CHAIN_SAMPLES) < 1e-8);
+            // The leaving speed against the whole reach, the weight of 1 times
+            // the gap, at the two ends of chain A: the line and the hook.
+            let reach_kept = |u: f64| {
+                let across = (result.evaluate(u, 1.0) - result.evaluate(u, 0.0)).length();
+                result.derivatives(u, 0.0, 1)[0][1].length() / across
             };
-            assert!(
-                reason.contains("fold"),
-                "{pose_name} {continuity:?}: {reason}"
-            );
+            let (first, last) = (reach_kept(0.0), reach_kept(1.0));
+            let (line, hook) = if first > last {
+                (first, last)
+            } else {
+                (last, first)
+            };
+            assert!((line - 1.0).abs() < 1e-7, "{context}: {line}");
+            assert!(hook < 0.5, "{context}: {hook}");
         }
     }
 }

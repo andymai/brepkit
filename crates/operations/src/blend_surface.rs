@@ -37,7 +37,7 @@ use brepkit_topology::wire::{OrientedEdge, Wire, WireId};
 use crate::OperationsError;
 use chain::Chain;
 use neighbour::Side;
-use rows::{Ramps, dedup_breaks, row_tolerance, smoother};
+use rows::{Ramps, dedup_breaks, row_tolerance, smoother, smoother_slope};
 use spline::{Space, fit_rows};
 
 /// The degree along a chain. High enough that a fit converges fast, so the
@@ -58,6 +58,18 @@ const MOST_NEAR_PAIRS: usize = 1 << 16;
 /// the longer chain's length, and the most, as a share of the shorter's.
 const SHARED_END_LEAST: f64 = 1e-6;
 const SHARED_END_MOST: f64 = 1e-3;
+
+/// How far toward crossing the handles beside it a handle may close: see
+/// [`handle_share`].
+const CLOSING: f64 = 0.5;
+
+/// How sharply [`handle_share`] turns from keeping the whole reach to holding
+/// the closing at [`CLOSING`].
+const CLOSING_SHARPNESS: i32 = 8;
+
+/// The steps along each piece at which [`Handles::measure`] reads how its
+/// handles close.
+const SHARE_SAMPLES: u32 = 32;
 
 /// Two pairings of open chains whose [`agreement`] differs by less than this
 /// share of a sample are alike, and the nearer pairing is taken.
@@ -90,6 +102,11 @@ pub struct BlendSurfaceOptions {
     pub continuity: BlendContinuity,
     /// How far the surface carries on along face A's tangent plane before
     /// turning, as a multiple of the distance between the chains. Positive.
+    ///
+    /// Along a piece of chain A that bends toward the way off face A, or where
+    /// the way off turns back after a corner, the surface carries on less far,
+    /// so that the directions it leaves along from points beside each other
+    /// on the chain do not cross.
     pub weight_a: f64,
     /// As `weight_a`, for face B.
     pub weight_b: f64,
@@ -191,30 +208,20 @@ pub fn blend_surface(
     dedup_breaks(&mut breaks);
 
     let closed = a.chain.closed;
-    let bridge =
-        |tilts_a: &[(f64, f64)], tilts_b: &[(f64, f64)], lo: f64, hi: f64, piece: usize, s: f64| {
-            bridge_rows(
-                &a,
-                &b,
-                options,
-                (tilts_a[piece], tilts_b[piece]),
-                (lo, hi),
-                s,
-            )
-        };
+    let bridge = |handles: &Handles, lo: f64, hi: f64, piece: usize, s: f64| {
+        bridge_rows(&a, &b, options, handles.of(piece), (lo, hi), s)
+    };
 
-    let mut tilts_a = a.tilts(&breaks)?;
-    let mut tilts_b = b.tilts(&breaks)?;
+    let mut handles = Handles::measure(&a, &b, options, &breaks)?;
     let mut ramps = Ramps::measure(&breaks, closed, tolerance, |piece, lo, hi, s| {
-        bridge(&tilts_a, &tilts_b, lo, hi, piece, s)
+        bridge(&handles, lo, hi, piece, s)
     })?;
     if ramps.needs_bands() {
         breaks.extend(ramps.band_breaks(&breaks));
         dedup_breaks(&mut breaks);
-        tilts_a = a.tilts(&breaks)?;
-        tilts_b = b.tilts(&breaks)?;
+        handles = Handles::measure(&a, &b, options, &breaks)?;
         ramps = Ramps::measure(&breaks, closed, tolerance, |piece, lo, hi, s| {
-            bridge(&tilts_a, &tilts_b, lo, hi, piece, s)
+            bridge(&handles, lo, hi, piece, s)
         })?;
     }
 
@@ -227,7 +234,7 @@ pub fn blend_surface(
         |s| {
             let piece = rows::piece_of(&breaks, s);
             let (lo, hi) = (breaks[piece], breaks[piece + 1]);
-            let mut values = bridge(&tilts_a, &tilts_b, lo, hi, piece, s)?;
+            let mut values = bridge(&handles, lo, hi, piece, s)?;
             ramps.apply(piece, lo, hi, s, &mut values);
             Ok(values)
         },
@@ -273,11 +280,163 @@ fn refuse_fold(
     }
 }
 
-fn bridge_rows(
+/// How the handles of each piece leave their chains: the tilt of the way
+/// off each chain at each end of the piece (see [`Side::tilts`]), and the
+/// share of its reach each handle keeps along the piece (see
+/// [`handle_share`]), with what it is multiplied by at each end. At a join
+/// both pieces keep the lesser share, and each turns to its own share across
+/// the piece as a tilt does, so the reach changes no faster than the piece
+/// is long.
+struct Handles {
+    pieces: Vec<PieceHandles>,
+}
+
+/// One piece's part of [`Handles`].
+#[derive(Clone, Copy)]
+struct PieceHandles {
+    tilt_a: (f64, f64),
+    tilt_b: (f64, f64),
+    share_a: f64,
+    share_b: f64,
+    ends_a: (f64, f64),
+    ends_b: (f64, f64),
+}
+
+impl Handles {
+    fn measure(
+        a: &Side,
+        b: &Side,
+        options: &BlendSurfaceOptions,
+        breaks: &[f64],
+    ) -> Result<Self, OperationsError> {
+        let tilts_a = a.tilts(breaks)?;
+        let tilts_b = b.tilts(breaks)?;
+        let count = breaks.len() - 1;
+        let mut pieces = Vec::with_capacity(count);
+        for piece in 0..count {
+            let range = (breaks[piece], breaks[piece + 1]);
+            let tilts = (tilts_a[piece], tilts_b[piece]);
+            let (mut share_a, mut share_b) = (1.0_f64, 1.0_f64);
+            for k in 0..=SHARE_SAMPLES {
+                let along = f64::from(k) / f64::from(SHARE_SAMPLES);
+                let s = range.0 + (range.1 - range.0) * along;
+                let (at_a, at_b) = handle_shares(a, b, options, tilts, range, s)?;
+                share_a = share_a.min(at_a);
+                share_b = share_b.min(at_b);
+            }
+            pieces.push(PieceHandles {
+                tilt_a: tilts.0,
+                tilt_b: tilts.1,
+                share_a,
+                share_b,
+                ends_a: (1.0, 1.0),
+                ends_b: (1.0, 1.0),
+            });
+        }
+        let joins = if a.chain.closed { count } else { count - 1 };
+        for join in 0..joins {
+            let (left, right) = (join, (join + 1) % count);
+            let least_a = pieces[left].share_a.min(pieces[right].share_a);
+            let least_b = pieces[left].share_b.min(pieces[right].share_b);
+            pieces[left].ends_a.1 = least_a / pieces[left].share_a;
+            pieces[right].ends_a.0 = least_a / pieces[right].share_a;
+            pieces[left].ends_b.1 = least_b / pieces[left].share_b;
+            pieces[right].ends_b.0 = least_b / pieces[right].share_b;
+        }
+        Ok(Self { pieces })
+    }
+
+    fn of(&self, piece: usize) -> PieceHandles {
+        self.pieces[piece]
+    }
+}
+
+/// The share of its reach each handle keeps at `s` in a piece, by
+/// [`handle_share`].
+fn handle_shares(
     a: &Side,
     b: &Side,
     options: &BlendSurfaceOptions,
     (tilt_a, tilt_b): ((f64, f64), (f64, f64)),
+    piece: (f64, f64),
+    s: f64,
+) -> Result<(f64, f64), OperationsError> {
+    let along = (s - piece.0) / (piece.1 - piece.0);
+    let across = (b.chain.point(s) - a.chain.point(s)).length();
+    // The handle row farthest out along the way off the chain: the inner
+    // rows close no faster than it.
+    let farthest = match options.continuity {
+        BlendContinuity::G1 => 1.0 / 3.0,
+        BlendContinuity::G2 => 0.4,
+    };
+    Ok((
+        handle_share(
+            a,
+            piece,
+            s,
+            tilt_a,
+            along,
+            farthest * options.weight_a * across,
+        )?,
+        handle_share(
+            b,
+            piece,
+            s,
+            tilt_b,
+            along,
+            farthest * options.weight_b * across,
+        )?,
+    ))
+}
+
+/// The share of `reach` that a handle leaving `side`'s chain at `s` keeps,
+/// so that it falls short of crossing the handles beside it.
+///
+/// A handle runs from the chain along `D = cos(t) off + sin(t) T`, with `t`
+/// the tilt. Handles of length `r` leaving a chain that bends toward the way
+/// off it, or whose tilt turns back toward the way off, close on each other:
+/// the handle at the next point along the chain crosses this one where
+/// `r (off . T' - t') = cos(t)`, with `T'` the chain's curvature vector and
+/// `t'` how fast the tilt turns, both per unit length. The share is 1 where
+/// handles open out, and holds the closing well short of crossing.
+fn handle_share(
+    side: &Side,
+    piece: (f64, f64),
+    s: f64,
+    (from, to): (f64, f64),
+    along: f64,
+    reach: f64,
+) -> Result<f64, OperationsError> {
+    let bend = side.chain.bend(piece, s)?;
+    let tilt = from + (to - from) * smoother(along);
+    let turn = (to - from) * smoother_slope(along) / side.chain.length_between(piece.0, piece.1);
+    // Below this bound on `k` the share is 1 to rounding, and the way off
+    // the chain, which costs a projection on to the face, is not needed.
+    let most = reach * (bend.length() + turn.abs()) / (tilt.cos() * CLOSING);
+    if most <= 1e-2 {
+        return Ok(1.0);
+    }
+    let off = side.station(piece, s)?.off;
+    let closing = reach * (off.dot(bend) - turn) / tilt.cos();
+    if closing <= 0.0 {
+        return Ok(1.0);
+    }
+    // `(1 + k^p)^(-1/p)`: 1 to rounding while `k` is small, and `1 / k` as
+    // it grows, so that the closing it leaves never passes `CLOSING`.
+    let k = closing / CLOSING;
+    let p = f64::from(CLOSING_SHARPNESS);
+    Ok(if k <= 1.0 {
+        (1.0 + k.powi(CLOSING_SHARPNESS)).powf(-1.0 / p)
+    } else {
+        (1.0 + k.powi(-CLOSING_SHARPNESS)).powf(-1.0 / p) / k
+    })
+}
+
+fn bridge_rows(
+    a: &Side,
+    b: &Side,
+    options: &BlendSurfaceOptions,
+    handles: PieceHandles,
     piece: (f64, f64),
     s: f64,
 ) -> Result<Vec<Vec3>, OperationsError> {
@@ -285,10 +444,14 @@ fn bridge_rows(
     let at_a = a.station(piece, s)?;
     let at_b = b.station(piece, s)?;
     let across = (at_b.point - at_a.point).length();
+    let ramp =
+        |(start, end): (f64, f64)| start.powf(smoother(1.0 - along)) * end.powf(smoother(along));
+    let reach_a = options.weight_a * across * handles.share_a * ramp(handles.ends_a);
+    let reach_b = options.weight_b * across * handles.share_b * ramp(handles.ends_b);
     let pa = at_a.point - Point3::new(0.0, 0.0, 0.0);
     let pb = at_b.point - Point3::new(0.0, 0.0, 0.0);
-    let da = tilted(at_a.off, at_a.tangent, tilt_a, along) * (options.weight_a * across);
-    let db = tilted(at_b.off, at_b.tangent, tilt_b, along) * (options.weight_b * across);
+    let da = tilted(at_a.off, at_a.tangent, handles.tilt_a, along) * reach_a;
+    let db = tilted(at_b.off, at_b.tangent, handles.tilt_b, along) * reach_b;
     Ok(match options.continuity {
         BlendContinuity::G1 => vec![pa, pa + da * (1.0 / 3.0), pb + db * (1.0 / 3.0), pb],
         BlendContinuity::G2 => {
