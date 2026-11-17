@@ -4587,8 +4587,9 @@ fn cone_wall_distance(cone: &ConicalSurface, p: Point3) -> f64 {
 /// section's own point there joins the fit.
 ///
 /// `None` (the marcher's case) when the axes are not parallel to the angular
-/// tolerance or coincide, when a cone is flat or a line, when nothing bounds
-/// the span, or when a fit still strays.
+/// tolerance or coincide, when a cone is flat or a line, when a range reaches
+/// a cone's negative nappe, when nothing bounds the span, or when a fit still
+/// strays.
 fn algebraic_parallel_cone_cone(
     c1: &ConicalSurface,
     c2: &ConicalSurface,
@@ -4596,6 +4597,14 @@ fn algebraic_parallel_cone_cone(
     v_range_2: Option<(f64, f64)>,
 ) -> Option<Vec<IntersectionCurve>> {
     let tol = Tolerance::new();
+    // The span below runs on both cones' positive nappes only.
+    if [v_range_1, v_range_2]
+        .into_iter()
+        .flatten()
+        .any(|(p, q)| p.min(q) < -tol.linear)
+    {
+        return None;
+    }
     let axis = c1.axis();
     if axis.cross(c2.axis()).length() > tol.angular {
         return None;
@@ -6192,6 +6201,31 @@ mod tests {
             "called apart: {:?}",
             curves.map(|c| c.len())
         );
+    }
+
+    /// Two cones of one axis direction, a unit apart, bounded on their
+    /// negative nappes: both hold `(0.125, sqrt(15)/8, -0.5)`, at `v` about
+    /// -0.707 on the first and -1.118 on the second. The path traces positive
+    /// nappes only, so it leaves the pair to the marcher and does not call the
+    /// cones apart.
+    #[test]
+    fn parallel_cones_bounded_on_their_negative_nappes_go_to_the_marcher() {
+        let up = Vec3::new(0.0, 0.0, 1.0);
+        let wide = ConicalSurface::new(Point3::new(0.0, 0.0, 0.0), up, std::f64::consts::FRAC_PI_4)
+            .unwrap();
+        let narrow = ConicalSurface::new(Point3::new(1.0, 0.0, 0.0), up, 0.5_f64.atan()).unwrap();
+        let shared = Point3::new(0.125, 15.0_f64.sqrt() / 8.0, -0.5);
+        for cone in [&wide, &narrow] {
+            assert!(off_cone(cone, shared).0 < 1e-12);
+        }
+        let (r1, r2) = (std::f64::consts::SQRT_2, 5.0_f64.sqrt());
+        let curves = algebraic_parallel_cone_cone(
+            &wide,
+            &narrow,
+            Some((-r1, -r1 / 3.0)),
+            Some((-r2, -r2 / 3.0)),
+        );
+        assert!(curves.is_none(), "{:?} curves", curves.map(|c| c.len()));
     }
 
     /// Axes `1e-5` radians apart, which a dot product within `1e-10` of one
