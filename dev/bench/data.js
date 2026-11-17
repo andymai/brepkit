@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794921841756,
+  "lastUpdate": 1794924639626,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -74249,6 +74249,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25587366,
             "range": "± 160441",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "dfc1eba0cce640f7efc1507cb88e25f8853843a3",
+          "message": "chore(main): release 4.11.31 (#2613)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[4.11.31](https://github.com/andymai/brepkit/compare/v4.11.30...v4.11.31)\n(2026-11-17)\n\n\n### Bug Fixes\n\n* **algo:** end a box wall's torus loop at the torus face's rims\n([#2584](https://github.com/andymai/brepkit/issues/2584))\n([c46825f](https://github.com/andymai/brepkit/commit/c46825f3c9e8a0893f57dfcc609a4b021da319a5))\n* **algo:** fuse a funnel's torus lip and a cup's lug exactly\n([#2601](https://github.com/andymai/brepkit/issues/2601))\n([b8c67be](https://github.com/andymai/brepkit/commit/b8c67be755a59fb9c0c54643677f4f6d32a1e8ed))\n* **algo:** fuse struts across a cylinder's seam and struts that start\nat one point exactly\n([#2597](https://github.com/andymai/brepkit/issues/2597))\n([382bf3e](https://github.com/andymai/brepkit/commit/382bf3e4ea05ae72b140a33ce3baa041e5eb9121))\n* **algo:** fuse two rods at one ball and a second ball across a flat\nring exactly ([#2583](https://github.com/andymai/brepkit/issues/2583))\n([b3188d0](https://github.com/andymai/brepkit/commit/b3188d0d86b5da8219747b71df127c7aa24baa01))\n* **algo:** keep the cylinder classifier off a solid with a cone\n([#2614](https://github.com/andymai/brepkit/issues/2614))\n([eeb097a](https://github.com/andymai/brepkit/commit/eeb097a3c14d41b5031fd68e992224ee00864a17))\n* **blend:** build two rounds of different radii that cross at a corner\n([#2611](https://github.com/andymai/brepkit/issues/2611))\n([3a1535d](https://github.com/andymai/brepkit/commit/3a1535d5359b52bc6c466b7b8cbf81cf696bc042))\n* **blend:** build two rounds that cross past a short edge\n([#2590](https://github.com/andymai/brepkit/issues/2590))\n([bf4209b](https://github.com/andymai/brepkit/commit/bf4209b96eb99cbcd17d3c938efaff3f32b1a455))\n* **check:** bound a B-spline drawing's stretch over each chord\n([#2606](https://github.com/andymai/brepkit/issues/2606))\n([6b6fe1d](https://github.com/andymai/brepkit/commit/6b6fe1d8bfeb05e2e5436ea9fd6b9fe05a231e51))\n* **io:** pair each surface with itself where two cross at an edge\n([#2602](https://github.com/andymai/brepkit/issues/2602))\n([9506f9d](https://github.com/andymai/brepkit/commit/9506f9d2b47ba7e393eaeb4648eac8592318eafe)),\ncloses [#2576](https://github.com/andymai/brepkit/issues/2576)\n* **math,algo:** keep a solid that notches a cone's base rim exact at\nevery angle ([#2586](https://github.com/andymai/brepkit/issues/2586))\n([c552087](https://github.com/andymai/brepkit/commit/c552087388016fa61776a67a8d0caeede66dcf8a))\n\n\n### Performance\n\n* **measure:** integrate a solid's faces on all cores\n([#2612](https://github.com/andymai/brepkit/issues/2612))\n([cbbceaf](https://github.com/andymai/brepkit/commit/cbbceaf0f571cd8be230d5ab5735b4a0bcc18e20))\n* **tessellate:** mesh fillet corners and stripes as structured patches\n([#2625](https://github.com/andymai/brepkit/issues/2625))\n([54db542](https://github.com/andymai/brepkit/commit/54db542fafd0e678f95d253b8f37855c4f020f8c)),\ncloses [#2515](https://github.com/andymai/brepkit/issues/2515)\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-11-17T14:07:25Z",
+          "tree_id": "70a616665ff504044719c7619907cb827e549dc5",
+          "url": "https://github.com/andymai/brepkit/commit/dfc1eba0cce640f7efc1507cb88e25f8853843a3"
+        },
+        "date": 1794924626691,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 683958,
+            "range": "± 7003",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 716009,
+            "range": "± 9031",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 8845,
+            "range": "± 199",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 439627,
+            "range": "± 3967",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 15930622,
+            "range": "± 334732",
             "unit": "ns/iter"
           }
         ]
