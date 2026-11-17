@@ -273,8 +273,13 @@ pub fn perform(
         } = interf
             && let Ok(v) = topo.vertex(arena.resolve_vertex(*vid))
         {
-            for &owner in edge_faces.get(edge).into_iter().flatten() {
-                junction_registry.add_crossing(owner, *face, v.point());
+            let owners = edge_faces.get(edge).map_or(&[][..], Vec::as_slice);
+            for &owner in owners {
+                // A seam runs inside its face, which lies on both sides of
+                // it: no section of that face ends where it crosses one.
+                if owners.iter().filter(|&&f| f == owner).count() == 1 {
+                    junction_registry.add_crossing(owner, *face, v.point());
+                }
             }
         }
     }
@@ -8190,12 +8195,25 @@ fn emit_split_circle_arcs(
                 // seam vertex), so endpoint-only bounds collapse to a line at
                 // the seam and the face's radial extent is lost — which then
                 // wrongly rejects every in-face section-arc midpoint.
+                // Samples of an arc miss its extreme by the sagitta between
+                // them: a cap's rim then leaves the arc along its bottom out
+                // of the cap's box.
+                let arc = match edge.curve() {
+                    EdgeCurve::Circle(c) => Some(c.arc_aabb(t0, t1)),
+                    EdgeCurve::Ellipse(e) => Some(e.arc_aabb(t0, t1)),
+                    EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => None,
+                };
                 let n = 8;
-                for i in 0..=n {
+                let samples = (0..=n).map(|i| {
                     let frac = f64::from(i) / f64::from(n);
-                    let p = edge
-                        .curve()
-                        .evaluate_with_endpoints(t0 + (t1 - t0) * frac, sp, ep);
+                    edge.curve()
+                        .evaluate_with_endpoints(t0 + (t1 - t0) * frac, sp, ep)
+                });
+                let points: Vec<Point3> = match arc {
+                    Some(b) => vec![b.min, b.max],
+                    None => samples.collect(),
+                };
+                for p in points {
                     min = Point3::new(min.x().min(p.x()), min.y().min(p.y()), min.z().min(p.z()));
                     max = Point3::new(max.x().max(p.x()), max.y().max(p.y()), max.z().max(p.z()));
                     any = true;
@@ -8288,6 +8306,14 @@ fn emit_split_circle_arcs(
             .flatten()
     };
     let (trim_a, trim_b) = (lateral(face_a), lateral(face_b));
+    // A ball's patch read against its own wires: one half-space from the
+    // whole outline holds the arcs a quarter of the ball leaves out.
+    let ball = |fid: FaceId| {
+        crate::classifier::SphereFaceTrim::new(topo, fid)
+            .ok()
+            .flatten()
+    };
+    let (ball_a, ball_b) = (ball(face_a), ball(face_b));
     // The sagitta band applies per chord, and only to a chord short enough to
     // be one of a rim arc's sixteen samples on this circle: a straight side
     // (a turned box face's ten-unit edge) would otherwise widen the band by
@@ -8333,6 +8359,8 @@ fn emit_split_circle_arcs(
             && in_region(&loops_b, p)
             && trim_a.as_ref().is_none_or(|t| t.holds(p, side_eps))
             && trim_b.as_ref().is_none_or(|t| t.holds(p, side_eps))
+            && ball_a.as_ref().is_none_or(|t| t.holds(p, side_eps))
+            && ball_b.as_ref().is_none_or(|t| t.holds(p, side_eps))
     };
 
     // Pass 1: determine which arcs survive the AABB filter, *before*
