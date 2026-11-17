@@ -66,10 +66,48 @@ pub fn chamfer(
     // engine's chamfer, which keeps the faces it does not touch as they are.
     let faces = brepkit_topology::explorer::solid_faces(topo, solid)?;
     if has_curved_edge(topo, &faces)? {
-        let result = crate::blend_ops::chamfer_v2(topo, solid, edges, distance, distance)?;
+        let result = crate::blend_ops::chamfer_v2_walking(topo, solid, edges, distance, distance)?;
         return crate::blend_ops::all_blended(result);
     }
     chamfer_core(topo, solid, edges, ChamferDistances::Symmetric(distance))
+}
+
+/// Chamfer `edges` exactly, `d1` into each edge's reference face and `d2`
+/// into its other face, when they are closed circular rims or chains of
+/// lines and arcs (see [`crate::chamfer_chain::chamfer_tangent_chains`]).
+/// `None` for any other pick. Each reference face must border its edge.
+pub(crate) fn chamfer_exactly_on(
+    topo: &mut Topology,
+    solid: SolidId,
+    edges: &[(EdgeId, FaceId)],
+    d1: f64,
+    d2: f64,
+) -> Result<Option<SolidId>, crate::OperationsError> {
+    if let Some(result) = rims_on(topo, solid, edges, d1, d2)? {
+        return Ok(Some(result));
+    }
+    crate::chamfer_chain::chamfer_tangent_chains_on(topo, solid, edges, d1, d2)
+}
+
+/// [`chamfer_circular_rims`] with `d1` into each rim's reference face and
+/// `d2` into its other face, on any shell of the solid.
+fn rims_on(
+    topo: &mut Topology,
+    solid: SolidId,
+    edges: &[(EdgeId, FaceId)],
+    d1: f64,
+    d2: f64,
+) -> Result<Option<SolidId>, crate::OperationsError> {
+    let ids: Vec<EdgeId> = edges.iter().map(|&(e, _)| e).collect();
+    let on_wall = |edge: EdgeId, wall: FaceId| edges.iter().any(|&(e, f)| e == edge && f == wall);
+    let split = |edge: EdgeId, _cap: FaceId, wall: FaceId| {
+        if on_wall(edge, wall) {
+            (d2, d1)
+        } else {
+            (d1, d2)
+        }
+    };
+    chamfer_circular_rims(topo, solid, &ids, &split)
 }
 
 /// Asymmetric chamfer: `d1` on the first adjacent face, `d2` on the second.
@@ -109,17 +147,17 @@ pub fn chamfer_asymmetric(
 /// other face.
 ///
 /// A distance-and-angle chamfer is `d2 = d1 * tan(angle)`. Closed circular
-/// rims between a cap and a coaxial wall (a hole's mouth, a rod's end) are
-/// cut here; other edges go to the blend engine's chamfer, which keeps the
-/// faces it does not touch, holes and curves included. One call takes rims
-/// or other edges, not both.
+/// rims between a cap and a coaxial wall (a hole's mouth, a rod's end) and
+/// chains of lines and arcs are cut exactly; other edges go to the blend
+/// engine's chamfer, which keeps the faces it does not touch, holes and
+/// curves included. One call takes rims or other edges, not both.
 ///
 /// # Errors
 ///
 /// Returns an error if either distance is zero or negative, no edges are
-/// given, a reference face does not border its edge, the edges mix rims
-/// with other edges, a distance consumes a face, or the blend engine fails
-/// on an edge.
+/// given, a reference face does not border its edge, an edge has two
+/// different reference faces, the edges mix rims with other edges, a
+/// distance consumes a face, or the blend engine fails on an edge.
 pub fn chamfer_two_on(
     topo: &mut Topology,
     solid: SolidId,
@@ -139,10 +177,19 @@ pub fn chamfer_two_on(
     }
     let faces = brepkit_topology::explorer::solid_faces(topo, solid)?;
     let adjacency = brepkit_topology::adjacency::AdjacencyIndex::build_from_faces(topo, &faces)?;
+    let mut reference: HashMap<EdgeId, FaceId> = HashMap::with_capacity(edges.len());
     for &(edge, face) in edges {
         if !adjacency.faces_for_edge(edge).contains(&face) {
             return Err(crate::OperationsError::InvalidInput {
                 reason: format!("chamfer reference face {face:?} does not border edge {edge:?}"),
+            });
+        }
+        if reference
+            .insert(edge, face)
+            .is_some_and(|other| other != face)
+        {
+            return Err(crate::OperationsError::InvalidInput {
+                reason: format!("chamfer edge {edge:?} has two reference faces"),
             });
         }
     }
@@ -160,15 +207,8 @@ pub fn chamfer_two_on(
             reason: "closed circular rims cannot be chamfered together with other edges".into(),
         });
     }
-    let on_wall = |edge: EdgeId, wall: FaceId| edges.iter().any(|&(e, f)| e == edge && f == wall);
-    let split = |edge: EdgeId, _cap: FaceId, wall: FaceId| {
-        if on_wall(edge, wall) {
-            (d2, d1)
-        } else {
-            (d1, d2)
-        }
-    };
-    if let Some(result) = chamfer_circular_rims(topo, solid, &ids, &split)? {
+    // A cavity's rim as well: the v2 chamfers read the outer shell alone.
+    if let Some(result) = rims_on(topo, solid, edges, d1, d2)? {
         return Ok(result);
     }
     let blended = crate::blend_ops::chamfer_v2_on(topo, solid, edges, d1, d2)
@@ -1151,7 +1191,9 @@ fn replace_in_wire(
 /// circle moves into the cap, the wall's rim moves along the wall's rulings,
 /// and a cone band joins the two. `distances` gives each rim its cap and
 /// wall distances from the rim's edge, cap face and wall face. The result is
-/// a new solid; `None` unless every edge is such a rim.
+/// a new solid; `None` unless every edge is such a rim. Two rims of one wall
+/// whose chamfers would cross on it, or one of which would take the whole
+/// wall, are refused; two that meet take the wall between them.
 #[allow(clippy::too_many_lines)]
 fn chamfer_circular_rims(
     topo: &mut Topology,
@@ -1169,14 +1211,47 @@ fn chamfer_circular_rims(
     use brepkit_topology::wire::{OrientedEdge, Wire};
 
     let mut circles = Vec::with_capacity(edges.len());
+    // Each rim's wall, its place along the wall's rulings, and its distance
+    // along them.
+    let mut on_walls: Vec<(FaceId, f64, f64)> = Vec::with_capacity(edges.len());
+    let mut seen = HashSet::with_capacity(edges.len());
     for &edge in edges {
+        if !seen.insert(edge) {
+            continue;
+        }
         let Some(rim) = find_rim(topo, solid, edge)? else {
             return Ok(None);
         };
         let (cap_d, wall_d) = distances(edge, rim.cap, rim.wall);
+        let point = topo.vertex(topo.edge(rim.edge)?.start())?.point();
+        let Some((_, v)) = topo.face(rim.wall)?.surface().project_point(point) else {
+            return Ok(None);
+        };
+        // Two rims of one wall: a chamfer as long as the wall (to a file's
+        // digits, as below) takes it whole and leaves the other rim's band
+        // running to a rim that is gone, and two longer than the wall cross.
+        // Two that meet share their wall circle.
+        let slack = 1e-6 * rim.circle.radius().max(1.0);
+        for &(wall, other_v, other_d) in &on_walls {
+            let gap = (v - other_v).abs();
+            if wall == rim.wall
+                && (wall_d.max(other_d) >= gap - slack || wall_d + other_d > gap + slack)
+            {
+                return Err(crate::OperationsError::InvalidInput {
+                    reason: format!(
+                        "chamfer distances {other_d} and {wall_d} along one wall reach past \
+                         each other or across the whole wall between two rims"
+                    ),
+                });
+            }
+        }
+        on_walls.push((rim.wall, v, wall_d));
         circles.push((rim.circle, cap_d, wall_d));
     }
     let copy = crate::copy::copy_solid(topo, solid)?;
+    // A copy leaves its pcurves behind, and a face this chamfer never touches
+    // keeps its trims.
+    crate::cavities::copy_solid_pcurves(topo, solid, copy)?;
     let tol = Tolerance::new().linear;
     let mut bands = Vec::with_capacity(circles.len());
     let mut dropped = Vec::new();
@@ -1371,6 +1446,7 @@ fn chamfer_circular_rims(
             let cap_face = topo.face_mut(rim.cap)?;
             cap_face.set_outer_wire(new_outer);
             *cap_face.inner_wires_mut() = new_inners;
+            topo.pcurves_mut().remove(rim.edge, rim.cap);
         }
 
         // The wall takes its new rim, and its seam now ends there.
@@ -1402,6 +1478,8 @@ fn chamfer_circular_rims(
                 &[(rim.edge, wall_edge), (old_seam, new_seam)],
             )?;
             topo.face_mut(rim.wall)?.set_outer_wire(new_wall_outer);
+            topo.pcurves_mut().remove(rim.edge, rim.wall);
+            topo.pcurves_mut().remove(old_seam, rim.wall);
         }
 
         // The band: a cone through both new circles.
@@ -1496,6 +1574,9 @@ fn chamfer_circular_rims(
             dropped.push(rim.cap);
         }
     }
+
+    let gone: HashSet<FaceId> = dropped.iter().copied().collect();
+    topo.pcurves_mut().remove_faces(&gone);
 
     // Each band joins the shell holding its cap.
     let data = topo.solid(copy)?;

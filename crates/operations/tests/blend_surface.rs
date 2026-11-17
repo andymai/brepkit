@@ -25,6 +25,7 @@ use brepkit_topology::edge::{Edge, EdgeCurve, EdgeId};
 use brepkit_topology::explorer::{face_edges, solid_faces};
 use brepkit_topology::face::{Face, FaceId, FaceSurface};
 use brepkit_topology::wire::{OrientedEdge, Wire};
+use surface_fixtures::fold::first_fold;
 use surface_fixtures::{
     Builder, KINDS, Pose, Sheet, Worst, across_pose, assert_wire_sound, chain_exit, gap_to_chain,
     leaves_the_face, measure_seam, measure_seam_at, net_sheet, sheet, surface_of,
@@ -215,13 +216,11 @@ fn blends_keep_their_continuity_between_different_surface_types() {
     table.print("blend_surface, every pair of types, turned pose");
 }
 
-/// The fixtures whose side after the chain runs nearly along the gap to the
-/// sheet across. Along that side the surface runs nearly the way it crosses,
-/// and it folds.
-const CORNERS_ALONG_THE_GAP: [&str; 2] = ["cone rim", "torus tube"];
-
-/// A chain of two sides of each fixture: a corner on every surface type,
-/// refused where the surface folds.
+/// A chain of two sides of each fixture: a corner on every surface type.
+///
+/// On the cone's rim and the torus's tube, the side after the chain runs
+/// nearly along the gap to the sheet across. Each side still pairs with its
+/// image across, not with the other side, and the surface does not fold.
 #[test]
 fn a_chain_may_turn_a_corner_on_every_surface_type() {
     let mut table = Table::default();
@@ -235,30 +234,20 @@ fn a_chain_may_turn_a_corner_on_every_surface_type() {
                 let next = (at + 1) % a.boundary.len();
                 a.chain.push(a.boundary[next]);
                 b.chain.push(b.boundary[next]);
-                let made = blend_surface(
+                let context = format!("{kind} corner {pose_name} {continuity:?}");
+                let face = blend_surface(
                     &mut topo,
                     &a.chain,
                     a.face,
                     &b.chain,
                     b.face,
                     &BlendSurfaceOptions::new(continuity),
-                );
-                if CORNERS_ALONG_THE_GAP.contains(&kind) {
-                    let Err(OperationsError::InvalidInput { reason }) = made else {
-                        panic!("{kind} {pose_name} {continuity:?}: {made:?}");
-                    };
-                    assert!(reason.contains("fold"), "{kind}: {reason}");
-                    continue;
-                }
-                let face =
-                    made.unwrap_or_else(|e| panic!("{kind} {pose_name} {continuity:?}: {e}"));
+                )
+                .unwrap_or_else(|e| panic!("{context}: {e}"));
                 let result = nurbs_of(&topo, face);
+                assert_eq!(first_fold(&result), None, "{context}");
                 let (seam_a, seam_b) = both_seams(&topo, &result, &a, &b);
-                assert_seams(
-                    &format!("{kind} corner {pose_name} {continuity:?}"),
-                    continuity,
-                    &[seam_a, seam_b],
-                );
+                assert_seams(&context, continuity, &[seam_a, seam_b]);
                 let mut joined = seam_a;
                 joined.join(seam_b);
                 table.add(surface_of(kind), continuity, joined);
@@ -400,33 +389,119 @@ fn a_mixed_chain_blends_the_same_however_it_is_stored() {
     }
 }
 
-/// Where a chain hooks back toward the chain across more tightly than the
-/// surface reaches out from it, the middle of the surface stops and runs back
-/// along the chains, and the surface folds. It is refused.
+/// A chain hooks back toward the chain across more tightly than the surface
+/// reaches out from it. At the whole reach, handles beside each other cross
+/// there, and the middle of the surface runs back along the chains. The
+/// piece that hooks reaches out less far: the surface does not fold, and the
+/// other end of the chain keeps the whole reach.
 #[test]
-fn a_chain_that_hooks_toward_the_other_tighter_than_the_reach_is_refused() {
+fn a_chain_that_hooks_toward_the_other_tighter_than_the_reach_reaches_less_far() {
     let across = Pose::reflection(Point3::new(4.0, 0.0, 0.0), Vec3::new(1.0, 0.0, 0.0))
         .then(Pose::turn(Vec3::new(0.0, 0.0, 1.0), 0.1, [0.0, 0.5, 1.0]));
     for (pose_name, pose) in POSES {
         for continuity in [BlendContinuity::G1, BlendContinuity::G2] {
+            let context = format!("{pose_name} {continuity:?}");
             let mut topo = Topology::new();
             let a = mixed_plane_sheet(&mut topo, pose(), [false; 3], 0.0, HOOKED);
             let b = mixed_plane_sheet(&mut topo, across.then(pose()), [false; 3], 0.0, HOOKED);
-            let refused = blend_surface(
+            let face = blend_surface(
                 &mut topo,
                 &a.chain,
                 a.face,
                 &b.chain,
                 b.face,
                 &BlendSurfaceOptions::new(continuity),
-            );
-            let Err(OperationsError::InvalidInput { reason }) = refused else {
-                panic!("{pose_name} {continuity:?}: {refused:?}");
+            )
+            .unwrap_or_else(|e| panic!("{context}: {e}"));
+            let result = nurbs_of(&topo, face);
+            assert_eq!(first_fold(&result), None, "{context}");
+            let seam_a = measure_seam(&result, 0.0, &surface_of_face(&topo, a.face), SAMPLES);
+            let seam_b = measure_seam(&result, 1.0, &surface_of_face(&topo, b.face), SAMPLES);
+            assert_seams(&context, continuity, &[seam_a, seam_b]);
+            assert!(gap_to_chain(&topo, &result, 0.0, &a.chain, CHAIN_SAMPLES) < 1e-8);
+            assert!(gap_to_chain(&topo, &result, 1.0, &b.chain, CHAIN_SAMPLES) < 1e-8);
+            // The leaving speed against the whole reach, the weight of 1 times
+            // the gap, at the two ends of chain A: the line and the hook.
+            let reach_kept = |u: f64| {
+                let across = (result.evaluate(u, 1.0) - result.evaluate(u, 0.0)).length();
+                result.derivatives(u, 0.0, 1)[0][1].length() / across
             };
-            assert!(
-                reason.contains("fold"),
-                "{pose_name} {continuity:?}: {reason}"
+            let (first, last) = (reach_kept(0.0), reach_kept(1.0));
+            let (line, hook) = if first > last {
+                (first, last)
+            } else {
+                (last, first)
+            };
+            assert!((line - 1.0).abs() < 1e-7, "{context}: {line}");
+            assert!(hook < 0.5, "{context}: {hook}");
+        }
+    }
+}
+
+/// A flat quad through `corners` in `pose`, with the chain of its first two
+/// sides: a corner.
+fn corner_quad(topo: &mut Topology, pose: Pose, corners: [Point3; 4]) -> Sheet {
+    let mut b = Builder { topo, pose };
+    let v: Vec<_> = corners.iter().map(|&c| b.vertex(c)).collect();
+    let edges: Vec<_> = (0..4).map(|i| b.line(v[i], v[(i + 1) % 4])).collect();
+    let walk = edges.iter().map(|&e| OrientedEdge::new(e, true)).collect();
+    let wire = b.topo.add_wire(Wire::new(walk, true).unwrap());
+    let normal = pose.vector(
+        (corners[1] - corners[0])
+            .cross(corners[3] - corners[0])
+            .normalize()
+            .unwrap(),
+    );
+    let d = normal.dot(pose.point(corners[0]) - Point3::new(0.0, 0.0, 0.0));
+    let face = b.topo.add_face(Face::new(
+        wire,
+        Vec::new(),
+        FaceSurface::Plane { normal, d },
+    ));
+    let middle = corners[0] + (corners[2] - corners[0]) * 0.5;
+    Sheet {
+        face,
+        chain: vec![edges[0], edges[1]],
+        inside: pose.point(middle),
+        boundary: edges,
+    }
+}
+
+/// Two chains that turn a corner in different proportions: A runs 10 up and
+/// 2 across, B 3 up and 8 across. Their corners meet, so B's sides are spread
+/// over A's before the surface is built. B runs the way that keeps the ruled
+/// surface between the chains one side up as they are paired then, and the
+/// surface does not fold.
+#[test]
+fn chains_turning_a_corner_in_different_proportions_pair_as_they_run() {
+    let p = |x: f64, y: f64| Point3::new(x, y, 0.0);
+    for (pose_name, pose) in POSES {
+        for continuity in [BlendContinuity::G1, BlendContinuity::G2] {
+            let context = format!("{pose_name} {continuity:?}");
+            let mut topo = Topology::new();
+            let a = corner_quad(
+                &mut topo,
+                pose(),
+                [p(0.0, 0.0), p(0.0, 10.0), p(-2.0, 10.0), p(-2.0, 0.0)],
             );
+            let b = corner_quad(
+                &mut topo,
+                pose(),
+                [p(8.0, 6.0), p(8.0, 9.0), p(16.0, 9.0), p(16.0, 6.0)],
+            );
+            let face = blend_surface(
+                &mut topo,
+                &a.chain,
+                a.face,
+                &b.chain,
+                b.face,
+                &BlendSurfaceOptions::new(continuity),
+            )
+            .unwrap_or_else(|e| panic!("{context}: {e}"));
+            let result = nurbs_of(&topo, face);
+            assert_eq!(first_fold(&result), None, "{context}");
+            let (seam_a, seam_b) = both_seams(&topo, &result, &a, &b);
+            assert_seams(&context, continuity, &[seam_a, seam_b]);
         }
     }
 }
