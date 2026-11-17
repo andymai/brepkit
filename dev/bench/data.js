@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794920967133,
+  "lastUpdate": 1794921841756,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -74195,6 +74195,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25688390,
             "range": "± 928457",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c552087388016fa61776a67a8d0caeede66dcf8a",
+          "message": "fix(math,algo): keep a solid that notches a cone's base rim exact at every angle (#2586)\n\n## Summary\n\nA smaller solid that stands in a cone's wall on the cone's base notches\nthe cone's base rim. On `main`, most such booleans fall back to a mesh,\nand some come out exact but wrong. With this change, every case of the\nsweep below is exact, valid and watertight, and holds the right volume.\n\nThe sweep takes the cone `make_cone(72, 50, 84)` from #2503. The smaller\nsolid is a cylinder (radius 10) or a cone (radius 10 to 5), 44 tall,\nwith its axis 70 from the cone's axis. It puts the smaller solid at 64\nangles round the axis and at the angle 2. It runs Cut, Intersect and\nFuse, upright, turned and mirrored, with `mesh_fallback: false`. That is\n1170 booleans:\n\n| | `main` | this branch |\n| --- | --- | --- |\n| cylinder, 585 cases | 375 fail | 0 fail |\n| smaller cone, 585 cases | 580 fail, 5 not run | 0 fail |\n\nOn `main`, 944 cases need the mesh fallback. 9 come out exact but\ninvalid or with the wrong volume, for example the cylinder at 1.669 rad,\nmirrored, Cut: invalid and 21% short. Two cases still ran after 300 s,\nand the sweep did not run the 5 cases after them.\n\nThere are five roots. The first three are where a section crosses the\nseam of either wall, which happens at some angles only:\n\n- The face splitter did not split a section at a cylinder's seam unless\nthe sections wound the wall. When it split a section at a seam, each\nhalf kept its parent's pcurve and took the parent's ends in (u, v). The\nsplitter now splits a section at a cylinder's seam as at a cone's seam.\nEach half gets its own pcurve, and the splitter refuses a split point\nhalf a turn from the seam.\n- Only the wall's face splitter split an open NURBS section at a seam,\nso the face across kept it whole. `compute_seam_anchors` now cuts it at\neach seam it crosses, for both faces.\n- The face splitter traced a frustum's wall with its seam glued, so a\nvertex on the seam offered the edges at both of its copies. The trace\nthen joined the regions on both sides of a section into one loop. The\nwall now takes the one-turn layout and strip trace that a cylinder's\nwall takes. A pointed cone keeps the glued trace, because its two seam\ncopies meet at the apex.\n- Two cones with parallel axes and openings of unequal slope went to the\nmarcher, which gave 72 fragments of one section.\n`algebraic_parallel_cone_cone` traces the two branches exactly from the\nlaw of cosines at each height. It ends both branches at the one point\nwhere the circles touch. It refines each fit until the fit lies within a\nquarter of the linear tolerance of both cones. A fit that still strays\ndefers the pair to the marcher.\n- Phase FF keeps an arc of a closed section circle only when its\nmidpoint lies in each face's box. That box came from 8 samples per edge,\nso a tilted rim lost up to 7.6% of its radius at its extremes. Phase FF\nthen dropped an arc just inside such a rim. The box now takes line,\ncircle and ellipse edges exactly.\n\nThe parallel cone-cone and cone-cylinder paths now take two axes as\nparallel only when their cross product is within the angular tolerance.\nThe dot-product test they used let the axes stand 1.4e-5 radians apart.\nThe cone-cone path also bounds its span by every nonzero slope. It read\na slope of 5e-13 as constant, and it returned no curves for cones that\nmeet far out.\n\nTwo roadmap rows close with this change. `cone_cut_parallel_to_its_axis`\nnow requires all 162 of its cases to build exactly (it listed 108). A\nrod parallel to a frustum's axis can leave through the frustum's top\n(`make_cone(3, 1.5, 6)`, rod at (1.2, 0.5)). It needs the mesh fallback\non `main` and is exact here.\n\n## Test\n\n- `crates/operations/tests/cone_rim_notch.rs` runs the 1170 cases in six\ntests. Each result must be exact, valid and watertight, with a volume\nwithin 1e-7 of the lens-section integral (the worst is 7.35e-9). All six\ntests fail on `main`.\n- `cone_cut_parallel_to_its_axis` in\n`crates/operations/tests/cone_plane_cut.rs` now requires every case to\nbuild.\n- `a_rod_leaving_through_a_frustums_top_is_exact` in\n`crates/operations/tests/rod_along_a_cone.rs` checks the rod in a\nfrustum in four poses.\n- `crates/operations/tests/cone_through_a_cone_wall.rs` stands\n`make_cone(10, 8, 84)` on the base of `make_cone(72, 50, 84)`, 59 from\nits axis, at 16 angles in three poses. The section is a closed loop of\ntwo branches clear of both frustums' rims. The test fails before this\nchange: rounding left a gap of about 1e-6 between the branches' ends,\nand the face splitter dropped both branches.\n- `parallel_cones_give_two_exact_branches` checks that both branches lie\non both cones to 1e-6 and meet where the circles touch.\n- `parallel_cones_of_nearly_equal_slope_trace_on_both` takes apices 1\napart and radii z and 1.001 z. Both branches lie on both cones to 1e-7\nand meet at both ends. Before this change the fit strayed by 1.5e-3.\n- `nearly_parallel_axes_take_neither_parallel_path` tilts one axis by\n1e-5 radians. Both parallel paths decline the pair, where before they\ntraced it as parallel.\n- `nearly_equal_slopes_meet_far_out` takes slopes that differ by 5e-13.\nThe path no longer returns an empty set of curves for them.\n- `crates/operations/tests/rod_up_into_a_ball.rs` is a rod that ends\ninside a turned ball, off its axis, so the arch on the rod's wall\ncrosses the wall's seam. Cut, Intersect and Fuse are exact in five\nposes, with a volume within 1e-6 of a polar integral over the rod's\ncross-section. Before the cylinder seam split, the Intersect needed the\nmesh fallback.\n\nA seeded random sweep runs 750 booleans of balls, rods and boxes (seeds\n1 to 4). It gives 440 good results on this branch and 434 on `main`. The\nsweep's volume check calls one case worse, but its oracle slices the\nrod's top 3.8e-4 too high, which adds 0.52%. That case is the\n`rod_up_into_a_ball.rs` case, which matches the polar integral to 7e-8.\nNo other case gets worse.\n\n`cargo nextest run --cargo-profile ci -p brepkit-math -p brepkit-algo -p\nbrepkit-check -p brepkit-heal -p brepkit-operations -p brepkit-io -p\nbrepkit-wasm` passes: 4587 tests, 22 skipped.\n\nAt 6b5f5cdb7, the pose sweep and the truth audit print the same output\nas `main` at 628ad9359. `cargo test -p brepkit-wasm --lib gridfinity`\npasses (27 tests).\n\nFixes #2503\n\n---------\n\nCo-authored-by: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-11-17T13:19:54Z",
+          "tree_id": "b870ab7ab684383f795352bd7b9074a88e5a0b17",
+          "url": "https://github.com/andymai/brepkit/commit/c552087388016fa61776a67a8d0caeede66dcf8a"
+        },
+        "date": 1794921826601,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1125670,
+            "range": "± 4381",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1180568,
+            "range": "± 7605",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13523,
+            "range": "± 93",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 719621,
+            "range": "± 2188",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25587366,
+            "range": "± 160441",
             "unit": "ns/iter"
           }
         ]
