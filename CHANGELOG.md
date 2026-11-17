@@ -1,5 +1,13 @@
 # Changelog
 
+## [4.11.32](https://github.com/andymai/brepkit/compare/v4.11.31...v4.11.32) (2026-11-17)
+
+
+### Bug Fixes
+
+* **algo:** fuse a strut into a bore under its window exactly ([#2626](https://github.com/andymai/brepkit/issues/2626)) ([fd67303](https://github.com/andymai/brepkit/commit/fd67303b0795550a63e28d2b970ea692226b0988))
+* **algo:** fuse a yoke onto a stepped flange exactly ([#2623](https://github.com/andymai/brepkit/issues/2623)) ([74d304e](https://github.com/andymai/brepkit/commit/74d304e4f8bf0d8da7893a51c5e25a0178d0288a))
+
 ## [4.11.31](https://github.com/andymai/brepkit/compare/v4.11.30...v4.11.31) (2026-11-17)
 
 
