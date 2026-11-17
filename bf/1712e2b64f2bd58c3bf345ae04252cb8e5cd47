@@ -1,0 +1,36 @@
+crates/operations/tests/yoke_on_a_flange.rs
+  s_489e8e320eebde::t_76823fc00a51ca 1-185
+  s_489e8e320eebde::t_0a4a729f33b5bc 186-276
+crates/algo/src/builder/face_splitter/mod.rs
+  s_489e8e320eebde::t_2f0f4c83ad6329 3640-3657,5171-5175,5184-5188,5211-5215,9249-9260,9263,9280
+crates/algo/src/builder/fill_images_faces.rs
+  s_489e8e320eebde::t_b39417369fcbe8 4476-4485,4703-4733
+crates/algo/src/pave_filler/mod.rs
+  s_489e8e320eebde::t_2e340ba8d2290a 130,622-820,978
+crates/algo/src/pave_filler/phase_ff.rs
+  s_489e8e320eebde::t_f3d4a2f1e85052 2296
+crates/io/tests/data/universal_joint_flange_disc.bin
+  s_489e8e320eebde::t_7525b787d9120a 1
+crates/io/tests/data/universal_joint_flange_spigot.bin
+  s_489e8e320eebde::t_38d3f7cad4d268 1
+crates/io/tests/data/universal_joint_yoke.bin
+  s_489e8e320eebde::t_58b9d8e896fa66 1
+crates/io/tests/playground_example_repros_inmem.rs
+  s_489e8e320eebde::t_52fde4e25fc7cc 543-694
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "bf1712e2b64f2bd58c3bf345ae04252cb8e5cd47",
+  "prompts": {},
+  "sessions": {
+    "s_489e8e320eebde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1a2a9261-2019-4199-aa4f-06130071c8f0",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
