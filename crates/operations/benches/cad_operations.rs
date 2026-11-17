@@ -246,6 +246,30 @@ fn bench_mesh_sphere_fine(c: &mut Criterion) {
     });
 }
 
+/// The solid mesh that the gate on a fillet's result reads: `box(20,20,20)`
+/// with all 12 edges filleted at r = 1 by the walking engine, meshed at a
+/// deflection of 0.1 and an angle of 10 degrees.
+fn bench_mesh_filleted_box_gate(c: &mut Criterion) {
+    use brepkit_operations::blend_ops::fillet_v2;
+    let mut topo = Topology::new();
+    let solid = primitives::make_box(&mut topo, 20.0, 20.0, 20.0).unwrap();
+    let edges = collect_edges(&topo, solid);
+    let rounded = fillet_v2(&mut topo, solid, &edges, 1.0).unwrap().solid;
+    c.bench_function("mesh filleted box (fillet gate)", |b| {
+        b.iter(|| {
+            black_box(
+                tessellate::tessellate_solid_with_tolerance(
+                    &topo,
+                    rounded,
+                    0.1,
+                    10f64.to_radians(),
+                )
+                .unwrap(),
+            );
+        });
+    });
+}
+
 // ===========================================================================
 // Measurement — matches kernel-comparison "Measurement" group
 // ===========================================================================
@@ -690,7 +714,7 @@ criterion_group! {
 criterion_group! {
     name = meshing_bench;
     config = fast_config();
-    targets = bench_mesh_box_coarse, bench_mesh_sphere_fine,
+    targets = bench_mesh_box_coarse, bench_mesh_sphere_fine, bench_mesh_filleted_box_gate,
 }
 
 criterion_group! {
