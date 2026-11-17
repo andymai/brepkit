@@ -155,6 +155,30 @@ pub(super) fn compute_axial_range(
     }
 }
 
+/// Whether a NURBS curve runs along one straight line without turning back:
+/// its weights are positive and its control points lie on the line through
+/// the first and the last, in order along it. Such a curve covers its chord
+/// and no more, as a line does.
+fn runs_straight(nurbs: &brepkit_math::nurbs::curve::NurbsCurve) -> bool {
+    let points = nurbs.control_points();
+    let (Some(&first), Some(&last)) = (points.first(), points.last()) else {
+        return false;
+    };
+    let length = (last - first).length();
+    if length <= 0.0 || nurbs.weights().iter().any(|&w| w <= 0.0) {
+        return false;
+    }
+    let direction = (last - first) * (1.0 / length);
+    let mut along = 0.0;
+    points.iter().all(|&p| {
+        let offset = p - first;
+        let t = offset.dot(direction);
+        let straight = (offset - direction * t).length() <= 1e-12 * length && t >= along;
+        along = t;
+        straight
+    })
+}
+
 /// Compute the angular (u) range for an analytic face from its wire boundary.
 ///
 /// Each edge of the outer wire is walked along its own span, just inside its
@@ -218,6 +242,7 @@ where
             EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => {
                 ((t1 - t0).abs() / (PI / 16.0)).ceil().max(1.0) as u32
             }
+            EdgeCurve::NurbsCurve(nurbs) if runs_straight(nurbs) => 1,
             EdgeCurve::NurbsCurve(_) => 32,
         };
         let points: Vec<Point3> = (0..=pieces)

@@ -5428,3 +5428,283 @@ fn a_dense_join_held_by_two_arcs_welds_sample_to_sample() {
         }
     }
 }
+
+/// How near a triangle comes to `p`: the distance from `p` to the nearest
+/// point of the triangle `a`, `b`, `c`.
+fn triangle_distance(p: Point3, a: Point3, b: Point3, c: Point3) -> f64 {
+    let (ab, ac, ap) = (b - a, c - a, p - a);
+    let (d1, d2) = (ab.dot(ap), ac.dot(ap));
+    if d1 <= 0.0 && d2 <= 0.0 {
+        return ap.length();
+    }
+    let bp = p - b;
+    let (d3, d4) = (ab.dot(bp), ac.dot(bp));
+    if d3 >= 0.0 && d4 <= d3 {
+        return bp.length();
+    }
+    let vc = d1 * d4 - d3 * d2;
+    if vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0 {
+        return (p - (a + ab * (d1 / (d1 - d3)))).length();
+    }
+    let cp = p - c;
+    let (d5, d6) = (ab.dot(cp), ac.dot(cp));
+    if d6 >= 0.0 && d5 <= d6 {
+        return cp.length();
+    }
+    let vb = d5 * d2 - d1 * d6;
+    if vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0 {
+        return (p - (a + ac * (d2 / (d2 - d6)))).length();
+    }
+    let va = d3 * d6 - d5 * d4;
+    if va <= 0.0 && d4 - d3 >= 0.0 && d5 - d6 >= 0.0 {
+        let w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
+        return (p - (b + (c - b) * w)).length();
+    }
+    let total = va + vb + vc;
+    (p - (a + ab * (vb / total) + ac * (vc / total))).length()
+}
+
+/// A sphere's octant as the only face of its shell, bounded by three
+/// quarter circles, upright, turned and mirrored, at the fillet gate's
+/// deflection and angle and at a coarse one: its rims hold `n` segments
+/// each, and the face meshes in rows between them, at least `n * n`
+/// triangles, no angle of which is under 20 degrees. Every triangle faces
+/// out of the sphere and stands off it by no more than the deflection, no
+/// edge turns by more than `SQRT_2` times the angle, and the mesh's area
+/// lies between the octant's and the octant's shrunk by the deflection.
+#[test]
+fn a_spherical_octant_meshes_in_rows_between_its_rims() {
+    use brepkit_math::curves::Circle3D;
+    use brepkit_math::mat::Mat4;
+    use brepkit_math::surfaces::SphericalSurface;
+    use brepkit_topology::shell::Shell;
+    use brepkit_topology::solid::Solid;
+
+    let r = 2.0;
+    let center = Point3::new(1.0, -2.0, 0.5);
+    let poses = [
+        Mat4::identity(),
+        Mat4::rotation_x(0.7) * Mat4::rotation_z(0.4),
+        Mat4::scale(-1.0, 1.0, 1.0) * Mat4::rotation_y(1.1),
+    ];
+    for pose in poses {
+        let turn = |v: Vec3| {
+            let p = pose.mul_point(Point3::new(v.x(), v.y(), v.z()));
+            let o = pose.mul_point(Point3::new(0.0, 0.0, 0.0));
+            p - o
+        };
+        let axes = [
+            turn(Vec3::new(1.0, 0.0, 0.0)),
+            turn(Vec3::new(0.0, 1.0, 0.0)),
+            turn(Vec3::new(0.0, 0.0, 1.0)),
+        ];
+        let mut topo = Topology::new();
+        let corners = axes.map(|a| topo.add_vertex(Vertex::new(center + a * r, 1e-7)));
+        let edges: Vec<OrientedEdge> = (0..3)
+            .map(|k| {
+                let (a, b) = (axes[k], axes[(k + 1) % 3]);
+                let circle = Circle3D::new(center, a.cross(b), r).unwrap();
+                let edge = Edge::new(corners[k], corners[(k + 1) % 3], EdgeCurve::Circle(circle));
+                OrientedEdge::new(topo.add_edge(edge), true)
+            })
+            .collect();
+        let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+        let sphere = SphericalSurface::new(center, r).unwrap();
+        let face = topo.add_face(Face::new(wire, vec![], FaceSurface::Sphere(sphere)));
+        let shell = topo.add_shell(Shell::new(vec![face]).unwrap());
+        let solid = topo.add_solid(Solid::new(shell, vec![]));
+        let octant = std::f64::consts::PI * r * r / 2.0;
+        for (deflection, angle) in [(0.5, 0.35), (0.1, 10f64.to_radians())] {
+            let mesh = tessellate_solid_with_tolerance(&topo, solid, deflection, angle).unwrap();
+            let what = format!("{pose:?} at {deflection}");
+            let rim = boundary_edge_count(&mesh);
+            assert_eq!(rim % 3, 0, "{what}: {rim} rim edges");
+            let n = rim / 3;
+            assert!(mesh.indices.len() / 3 >= n * n, "{what}");
+            let mut area = 0.0;
+            for t in mesh.indices.chunks_exact(3) {
+                let [a, b, c] = [0, 1, 2].map(|k| mesh.positions[t[k] as usize]);
+                for (p, q, w) in [(a, b, c), (b, c, a), (c, a, b)] {
+                    let turn = (p - center).dot(q - center) / (r * r);
+                    assert!(
+                        turn.clamp(-1.0, 1.0).acos() <= std::f64::consts::SQRT_2 * angle + 1e-9,
+                        "{what}: a long edge"
+                    );
+                    let corner = (q - p).dot(w - p) / ((q - p).length() * (w - p).length());
+                    assert!(corner.acos() >= 20f64.to_radians(), "{what}: a sliver");
+                }
+                let normal = (b - a).cross(c - a);
+                let middle = a + ((b - a) + (c - a)) * (1.0 / 3.0);
+                assert!(
+                    normal.dot(middle - center) > 0.0,
+                    "{what}: a triangle faces in"
+                );
+                let sag = r - triangle_distance(center, a, b, c);
+                assert!(sag <= deflection, "{what}: sag {sag}");
+                area += normal.length() / 2.0;
+            }
+            let shrunk = octant * (1.0 - deflection / r).powi(2);
+            assert!(
+                area <= octant && area >= shrunk,
+                "{what}: area {area} of {octant}"
+            );
+        }
+    }
+}
+
+/// A 20 box with its 12 edges filleted at r = 1 has a spherical octant at
+/// each corner. Upright, turned and mirrored, the solid's mesh is closed,
+/// and on each corner every triangle faces out of its sphere and stands off
+/// it by no more than the deflection. At the fillet gate's deflection and
+/// angle and at a coarse one, the corners mesh in rows, no angle of a
+/// triangle under 20 degrees.
+#[test]
+fn the_corners_of_a_filleted_box_mesh_within_the_deflection() {
+    use brepkit_math::mat::Mat4;
+
+    let poses = [
+        None,
+        Some(Mat4::translation(0.3, -0.2, 0.7) * Mat4::rotation_x(0.7) * Mat4::rotation_z(0.4)),
+        Some(Mat4::scale(-1.0, 1.0, 1.0) * Mat4::rotation_y(1.1)),
+    ];
+    for pose in poses {
+        let mut topo = Topology::new();
+        let b = crate::primitives::make_box(&mut topo, 20.0, 20.0, 20.0).unwrap();
+        let edges = brepkit_topology::explorer::solid_edges(&topo, b).unwrap();
+        let solid = crate::blend_ops::fillet_v2(&mut topo, b, &edges, 1.0)
+            .unwrap()
+            .solid;
+        if let Some(m) = pose {
+            crate::transform::transform_solid(&mut topo, solid, &m).unwrap();
+        }
+        let faces = brepkit_topology::explorer::solid_faces(&topo, solid).unwrap();
+        for (deflection, angle) in [(0.1, 10f64.to_radians()), (0.5, 0.35), (0.01, 0.2)] {
+            let (mesh, offsets) =
+                tessellate_solid_grouped_with_tolerance(&topo, solid, deflection, angle).unwrap();
+            let what = format!("{pose:?} at {deflection}");
+            assert_eq!(boundary_edge_count(&mesh), 0, "{what}");
+            assert_eq!(non_manifold_edge_count(&mesh), 0, "{what}");
+            let mut corners = 0;
+            for (i, &f) in faces.iter().enumerate() {
+                let face = topo.face(f).unwrap();
+                let FaceSurface::Sphere(sphere) = face.surface() else {
+                    continue;
+                };
+                corners += 1;
+                let (center, r) = (sphere.center(), sphere.radius());
+                let sense = if face.is_reversed() { -1.0 } else { 1.0 };
+                let tris = &mesh.indices[offsets[i] as usize..offsets[i + 1] as usize];
+                assert!(!tris.is_empty(), "{what}: an empty corner");
+                for t in tris.chunks_exact(3) {
+                    let [a, b, c] = [0, 1, 2].map(|k| mesh.positions[t[k] as usize]);
+                    let normal = (b - a).cross(c - a);
+                    let middle = a + ((b - a) + (c - a)) * (1.0 / 3.0);
+                    assert!(
+                        sense * normal.dot(middle - center) > 0.0,
+                        "{what}: a triangle faces in"
+                    );
+                    let sag = r - triangle_distance(center, a, b, c);
+                    assert!(sag <= deflection, "{what}: sag {sag}");
+                    if deflection >= 0.1 {
+                        for (p, q, w) in [(a, b, c), (b, c, a), (c, a, b)] {
+                            let corner = (q - p).dot(w - p) / ((q - p).length() * (w - p).length());
+                            assert!(corner.acos() >= 20f64.to_radians(), "{what}: a sliver");
+                        }
+                    }
+                }
+            }
+            assert_eq!(corners, 8, "{what}");
+        }
+    }
+}
+
+/// A quarter of a cylinder's wall as the only face of its shell, bounded by
+/// two arcs and two straight sides along the axis, upright, turned and
+/// mirrored: the face meshes as one strip between the arcs, one triangle
+/// for each segment of either arc. Every triangle faces out of the
+/// cylinder, and no point of it lies further inside than the deflection.
+#[test]
+fn a_quarter_cylinder_wall_meshes_as_one_strip_between_its_arcs() {
+    use brepkit_math::curves::Circle3D;
+    use brepkit_math::mat::Mat4;
+    use brepkit_math::surfaces::CylindricalSurface;
+    use brepkit_topology::shell::Shell;
+    use brepkit_topology::solid::Solid;
+
+    let (r, h) = (2.0, 5.0);
+    let origin = Point3::new(1.0, -2.0, 0.5);
+    let poses = [
+        Mat4::identity(),
+        Mat4::rotation_x(0.7) * Mat4::rotation_z(0.4),
+        Mat4::scale(-1.0, 1.0, 1.0) * Mat4::rotation_y(1.1),
+    ];
+    for pose in poses {
+        let turn = |v: Vec3| {
+            let p = pose.mul_point(Point3::new(v.x(), v.y(), v.z()));
+            p - pose.mul_point(Point3::new(0.0, 0.0, 0.0))
+        };
+        let (x, y, axis) = (
+            turn(Vec3::new(1.0, 0.0, 0.0)),
+            turn(Vec3::new(0.0, 1.0, 0.0)),
+            turn(Vec3::new(0.0, 0.0, 1.0)),
+        );
+        let mut topo = Topology::new();
+        let corners = [
+            origin + x * r,
+            origin + y * r,
+            origin + y * r + axis * h,
+            origin + x * r + axis * h,
+        ]
+        .map(|q| topo.add_vertex(Vertex::new(q, 1e-7)));
+        let arc =
+            |z: f64| EdgeCurve::Circle(Circle3D::new(origin + axis * z, x.cross(y), r).unwrap());
+        let mut edge = |a: usize, b: usize, curve: EdgeCurve| {
+            topo.add_edge(Edge::new(corners[a], corners[b], curve))
+        };
+        let low = edge(0, 1, arc(0.0));
+        let side = edge(1, 2, EdgeCurve::Line);
+        let high = edge(3, 2, arc(h));
+        let back = edge(3, 0, EdgeCurve::Line);
+        let wire = Wire::new(
+            vec![
+                OrientedEdge::new(low, true),
+                OrientedEdge::new(side, true),
+                OrientedEdge::new(high, false),
+                OrientedEdge::new(back, true),
+            ],
+            true,
+        )
+        .unwrap();
+        let wire = topo.add_wire(wire);
+        let surface = CylindricalSurface::new(origin, axis, r).unwrap();
+        let face = topo.add_face(Face::new(wire, vec![], FaceSurface::Cylinder(surface)));
+        let shell = topo.add_shell(Shell::new(vec![face]).unwrap());
+        let solid = topo.add_solid(Solid::new(shell, vec![]));
+        for (deflection, angle) in [(0.5, 0.35), (0.1, 10f64.to_radians()), (0.01, 0.2)] {
+            let mesh = tessellate_solid_with_tolerance(&topo, solid, deflection, angle).unwrap();
+            let what = format!("{pose:?} at {deflection}");
+            let rim = boundary_edge_count(&mesh);
+            assert_eq!(mesh.indices.len() / 3, rim - 2, "{what}");
+            for t in mesh.indices.chunks_exact(3) {
+                let [a, b, c] = [0, 1, 2].map(|k| mesh.positions[t[k] as usize]);
+                let off_axis = |p: Point3| {
+                    let d = p - origin;
+                    d - axis * d.dot(axis)
+                };
+                let middle = a + ((b - a) + (c - a)) * (1.0 / 3.0);
+                assert!(
+                    (b - a).cross(c - a).dot(off_axis(middle)) > 0.0,
+                    "{what}: faces in"
+                );
+                for i in 0..=10 {
+                    for j in 0..=10 - i {
+                        let p =
+                            a + (b - a) * (f64::from(i) / 10.0) + (c - a) * (f64::from(j) / 10.0);
+                        let inside = r - off_axis(p).length();
+                        assert!(inside <= deflection, "{what}: {inside} inside");
+                    }
+                }
+            }
+        }
+    }
+}

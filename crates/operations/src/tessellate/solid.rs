@@ -18,9 +18,9 @@ use super::mesh_ops::{
     NO_RIM_FACE, dedupe_coincident_triangles, split_pinched_chords, weld_boundary_vertices,
 };
 use super::nonplanar::{
-    circle_pole_params, tessellate_latitude_band_shared, tessellate_nonplanar_cdt,
-    tessellate_nonplanar_snap, tessellate_revolution_band_shared, tessellate_torus_notch_band,
-    tessellate_torus_two_rim_band,
+    circle_pole_params, tessellate_cylinder_strip_shared, tessellate_latitude_band_shared,
+    tessellate_nonplanar_cdt, tessellate_nonplanar_snap, tessellate_revolution_band_shared,
+    tessellate_sphere_triangle_shared, tessellate_torus_notch_band, tessellate_torus_two_rim_band,
 };
 use super::nurbs::{compute_angular_range, compute_v_param_range};
 use super::planar::{
@@ -2152,7 +2152,17 @@ pub(super) fn tessellate_face_with_shared_edges(
         let band_handled = band_eligible
             && tessellate_revolution_band_shared(topo, face_data, edge_global_indices, merged)?;
 
-        if band_handled {
+        // The mesh boolean's meshes (`circle_floor`) stay on the CDT.
+        if band_handled
+            || (!circle_floor
+                && tessellate_cylinder_strip_shared(
+                    topo,
+                    face_data,
+                    deflection,
+                    edge_global_indices,
+                    merged,
+                )?)
+        {
             // done — watertight structured band emitted
         } else if is_standard_rect {
             // Partial bands and holed full bands have a simple polygon
@@ -2288,7 +2298,17 @@ pub(super) fn tessellate_face_with_shared_edges(
                 edge_global_indices,
                 merged,
                 point_to_global,
-            )?);
+            )?)
+            || (!circle_floor
+                && tessellate_sphere_triangle_shared(
+                    topo,
+                    face_data,
+                    deflection,
+                    angular_tol,
+                    edge_global_indices,
+                    merged,
+                    point_to_global,
+                )?);
 
         if !handled_band {
             let pos_save = merged.positions.len();
