@@ -794,9 +794,39 @@ pub fn check_face_wires_apart(
     face_id: FaceId,
     tolerance: f64,
 ) -> Result<Vec<ValidationIssue>, CheckError> {
+    Ok(face_wires_issue(topo, face_id, tolerance, true)?
+        .into_iter()
+        .collect())
+}
+
+/// Check that a face's holes lie inside its outline and outside each other.
+///
+/// Reports what [`check_face_wires_apart`] reports for a hole outside the
+/// outline or inside another hole. A face whose wires cross is not reported,
+/// because crossing wires have no inside and outside to compare.
+///
+/// # Errors
+///
+/// Returns an error if topology lookups fail.
+pub fn check_face_holes_placed(
+    topo: &Topology,
+    face_id: FaceId,
+    tolerance: f64,
+) -> Result<Vec<ValidationIssue>, CheckError> {
+    Ok(face_wires_issue(topo, face_id, tolerance, false)?
+        .into_iter()
+        .collect())
+}
+
+fn face_wires_issue(
+    topo: &Topology,
+    face_id: FaceId,
+    tolerance: f64,
+    report_crossing: bool,
+) -> Result<Option<ValidationIssue>, CheckError> {
     let face = topo.face(face_id)?;
     if face.inner_wires().is_empty() {
-        return Ok(vec![]);
+        return Ok(None);
     }
     let wire_ids: Vec<WireId> = std::iter::once(face.outer_wire())
         .chain(face.inner_wires().iter().copied())
@@ -823,10 +853,12 @@ pub fn check_face_wires_apart(
                 } else {
                     "another inner wire"
                 };
-                return Ok(vec![issue(
-                    face_id,
-                    format!("inner wire {} crosses {name}", wire_ids[i].index()),
-                )]);
+                return Ok(report_crossing.then(|| {
+                    issue(
+                        face_id,
+                        format!("inner wire {} crosses {name}", wire_ids[i].index()),
+                    )
+                }));
             }
         }
     }
@@ -834,7 +866,7 @@ pub fn check_face_wires_apart(
         if let Some(description) =
             misplaced_hole(topo, &wire_ids, &wires, &bounds, *normal, tolerance)?
         {
-            return Ok(vec![issue(face_id, description)]);
+            return Ok(Some(issue(face_id, description)));
         }
     } else if let Some(misplaced) =
         FaceLoops::of(topo, face_id, tolerance)?.and_then(|loops| loops.misplaced_hole())
@@ -850,9 +882,9 @@ pub fn check_face_wires_apart(
                 wire_ids[other].index()
             ),
         };
-        return Ok(vec![issue(face_id, description)]);
+        return Ok(Some(issue(face_id, description)));
     }
-    Ok(vec![])
+    Ok(None)
 }
 
 /// A wire's edges cut into stretches that cannot cross themselves, and for
@@ -1284,6 +1316,44 @@ mod tests {
             found(&topo, face)
                 .unwrap()
                 .contains("crosses another inner wire")
+        );
+    }
+
+    #[test]
+    fn only_a_misplaced_hole_reads_as_out_of_place() {
+        let placed = |topo: &Topology, face| {
+            check_face_holes_placed(topo, face, 1e-6)
+                .unwrap()
+                .into_iter()
+                .next()
+                .map(|i| i.description)
+        };
+        let mut topo = Topology::default();
+        let outer = square(&mut topo);
+        let crossing = vec![
+            circle(&mut topo, [4.0, 5.0, 0.0], 2.0),
+            circle(&mut topo, [6.0, 5.0, 0.0], 2.0),
+        ];
+        let face = flat(&mut topo, outer, crossing);
+        assert!(found(&topo, face).is_some());
+        assert_eq!(placed(&topo, face), None);
+        let outside = circle(&mut topo, [20.0, 5.0, 0.0], 2.0);
+        let face = flat(&mut topo, outer, vec![outside]);
+        assert_eq!(placed(&topo, face), found(&topo, face));
+        assert!(
+            placed(&topo, face)
+                .unwrap()
+                .contains("outside the outer wire")
+        );
+        let nested = vec![
+            circle(&mut topo, [5.0, 5.0, 0.0], 3.0),
+            circle(&mut topo, [5.5, 5.0, 0.0], 1.0),
+        ];
+        let face = flat(&mut topo, outer, nested);
+        assert!(
+            placed(&topo, face)
+                .unwrap()
+                .contains("lies inside inner wire")
         );
     }
 

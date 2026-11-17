@@ -9585,3 +9585,36 @@ fn fuse_box_top_crossing_plate_hole_keeps_the_open_part() {
         );
     }
 }
+
+/// A hole that lies outside its face's outline passes the edge counts of the
+/// strict gate, but its face bounds the wrong region: the gate rejects it.
+#[test]
+fn the_strict_gate_rejects_a_hole_outside_its_face() {
+    let mut topo = Topology::new();
+    let cube = make_unit_cube_manifold_at(&mut topo, 0.0, 0.0, 0.0);
+    super::assembly::validate_boolean_result(&topo, cube).unwrap();
+    let top = brepkit_topology::explorer::solid_faces(&topo, cube)
+        .unwrap()
+        .into_iter()
+        .find(|&f| {
+            matches!(topo.face(f).unwrap().surface(), FaceSurface::Plane { normal, d }
+                if normal.z() > 0.5 && (*d - 1.0).abs() < 1e-9)
+        })
+        .unwrap();
+    let corners = [(2.0, 0.4), (2.0, 0.6), (2.2, 0.6), (2.2, 0.4)]
+        .map(|(x, y)| topo.add_vertex(Vertex::new(Point3::new(x, y, 1.0), 1e-7)));
+    let edges: Vec<OrientedEdge> = (0..4)
+        .map(|i| {
+            let e = topo.add_edge(Edge::new(corners[i], corners[(i + 1) % 4], EdgeCurve::Line));
+            OrientedEdge::new(e, true)
+        })
+        .collect();
+    let hole = topo.add_wire(Wire::new(edges, true).unwrap());
+    let (outer, surface) = {
+        let face = topo.face(top).unwrap();
+        (face.outer_wire(), face.surface().clone())
+    };
+    *topo.face_mut(top).unwrap() = Face::new(outer, vec![hole], surface);
+    let err = super::assembly::validate_boolean_result(&topo, cube).unwrap_err();
+    assert!(err.to_string().contains("misplaced hole"), "{err}");
+}

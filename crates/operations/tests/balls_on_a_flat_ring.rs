@@ -12,12 +12,13 @@ use std::f64::consts::{PI, TAU};
 
 use brepkit_math::mat::Mat4;
 use brepkit_math::vec::{Point3, Vec3};
-use brepkit_operations::boolean::{self, BooleanOp};
+use brepkit_operations::boolean::{self, BooleanOp, BooleanOptions};
 use brepkit_operations::classify::{PointClassification, classify_point};
 use brepkit_operations::compound_ops::fuse_all;
 use brepkit_operations::measure::solid_volume;
 use brepkit_operations::primitives::make_sphere;
 use brepkit_operations::revolve::revolve;
+use brepkit_operations::tessellate::{boundary_edge_count, tessellate_solid};
 use brepkit_operations::transform::transform_solid;
 use brepkit_operations::validate::validate_solid;
 use brepkit_topology::Topology;
@@ -101,6 +102,18 @@ fn union_volume(balls: u32) -> f64 {
     ring + f64::from(balls) * (ball - shared())
 }
 
+/// A fuse that errors where it would fall back to a mesh.
+fn exact_fuse(topo: &mut Topology, a: SolidId, b: SolidId, name: &str) -> SolidId {
+    let opts = BooleanOptions {
+        mesh_fallback: false,
+        unify_faces: false,
+        ..BooleanOptions::default()
+    };
+    boolean::boolean_with_options(topo, BooleanOp::Fuse, a, b, opts)
+        .map_err(|e| format!("{name}: {e}"))
+        .unwrap()
+}
+
 fn census(topo: &Topology, solid: SolidId) -> BTreeMap<&'static str, usize> {
     let mut m = BTreeMap::new();
     for f in solid_faces(topo, solid).unwrap() {
@@ -144,13 +157,7 @@ fn a_ball_across_a_flat_ring_fuses_onto_it() {
         let one = ball(&mut topo, 0.0);
         transform_solid(&mut topo, band, &pose).unwrap();
         transform_solid(&mut topo, one, &pose).unwrap();
-        let before = boolean::mesh_fallback_count();
-        let fused = boolean::boolean(&mut topo, BooleanOp::Fuse, band, one).unwrap();
-        assert_eq!(
-            boolean::mesh_fallback_count(),
-            before,
-            "mesh fallback, {name}"
-        );
+        let fused = exact_fuse(&mut topo, band, one, name);
         let report = validate_solid(&topo, fused).unwrap();
         assert!(report.is_valid(), "{name}: {:?}", report.issues);
         assert_eq!(
@@ -215,4 +222,56 @@ fn seven_balls_round_a_flat_ring_fuse_in_one() {
         (volume - expected).abs() < 1e-5 * expected,
         "volume {volume} should be {expected}"
     );
+}
+
+#[test]
+fn a_second_ball_across_a_flat_ring_fuses_onto_it() {
+    // The first ball cuts a window round each wall's seam, so the walls
+    // the second ball crosses have no seam left.
+    let expected = union_volume(2);
+    for (name, pose) in poses() {
+        let mut topo = Topology::new();
+        let band = ring(&mut topo);
+        let one = ball(&mut topo, 0.0);
+        let two = ball(&mut topo, TAU / 7.0);
+        for solid in [band, one, two] {
+            transform_solid(&mut topo, solid, &pose).unwrap();
+        }
+        let first = exact_fuse(&mut topo, band, one, name);
+        let fused = exact_fuse(&mut topo, first, two, name);
+        let report = validate_solid(&topo, fused).unwrap();
+        assert!(report.is_valid(), "{name}: {:?}", report.issues);
+        let mesh = tessellate_solid(&topo, fused, 0.005).unwrap();
+        assert_eq!(boundary_edge_count(&mesh), 0, "{name}: open mesh");
+        assert_eq!(
+            census(&topo, fused),
+            BTreeMap::from([("cylinder", 4), ("plane", 4), ("sphere", 4)]),
+            "{name}"
+        );
+        assert_eq!(edges_not_used_twice(&topo, fused), 0, "{name}");
+        let volume = solid_volume(&topo, fused, 0.001).unwrap();
+        assert!(
+            (volume - expected).abs() < 1e-5 * expected,
+            "{name}: volume {volume} should be {expected}"
+        );
+        let class =
+            |p: Point3| classify_point(&topo, fused, pose.mul_point(p), 0.01, 1e-7).unwrap();
+        let (c, s) = ((TAU / 7.0).cos(), (TAU / 7.0).sin());
+        let round = |r: f64, z: f64| Point3::new(r * c, r * s, z);
+        for (p, want) in [
+            (round(PITCH, 2.0), PointClassification::Inside),
+            (round(PITCH, -2.0), PointClassification::Inside),
+            (round(PITCH + 2.2, 0.0), PointClassification::Inside),
+            (round(PITCH - 2.2, 0.0), PointClassification::Inside),
+            (round(PITCH, 2.5), PointClassification::Outside),
+            (round(OUTER + 0.3, 1.0), PointClassification::Inside),
+            (round(OUTER + 0.3, 2.0), PointClassification::Outside),
+            (Point3::new(PITCH, 0.0, 2.0), PointClassification::Inside),
+            (Point3::new(0.0, 7.35, 0.0), PointClassification::Inside),
+            (Point3::new(0.0, 7.35, 0.5), PointClassification::Outside),
+            (Point3::new(0.0, 0.0, 0.0), PointClassification::Outside),
+        ] {
+            assert_eq!(class(p), want, "{name} at {p:?}");
+        }
+    }
 }
