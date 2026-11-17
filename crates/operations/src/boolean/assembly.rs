@@ -618,6 +618,19 @@ pub(super) fn validate_boolean_result(
 ) -> Result<(), crate::OperationsError> {
     validate_boolean_result_lenient(topo, solid)?;
 
+    // A hole outside its face's outline, inside another hole, or across
+    // either, passes every count above: its face bounds the wrong region,
+    // its mesh opens, and its volume misreads.
+    let holed: Vec<_> = brepkit_topology::explorer::solid_faces(topo, solid)?
+        .into_iter()
+        .filter(|&fid| topo.face(fid).is_ok_and(|f| !f.inner_wires().is_empty()))
+        .collect();
+    if let Some(issue) = crate::validate::wires_apart_issues(topo, &holed, 1.0)?.first() {
+        return Err(crate::OperationsError::InvalidInput {
+            reason: format!("boolean result has a misplaced hole: {}", issue.description),
+        });
+    }
+
     // Unclosed wires and non-manifold edges are hard failures here: both
     // defects break downstream tessellation and export, so a GFA result
     // carrying them must fail safe to the mesh fallback.

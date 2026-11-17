@@ -1051,7 +1051,7 @@ pub fn validate_solid_with_options(
 
 /// An error for each face with a hole that crosses its outline or another
 /// hole, or on a plane lies outside the outline or inside another hole.
-fn wires_apart_issues(
+pub(crate) fn wires_apart_issues(
     topo: &Topology,
     faces: &[brepkit_topology::face::FaceId],
     scale: f64,
