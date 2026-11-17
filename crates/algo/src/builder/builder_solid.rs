@@ -4128,9 +4128,11 @@ fn split_edge_curve(
 /// edges.
 ///
 /// Edges join nearest first, and two paths do not join where an edge of each
-/// bounds one face, as two sides of a lens do, unless the two edges part by
-/// less than [`PATH_MIN_TOL`], as two copies of one seam do. `faces_of` holds
-/// the faces each edge bounds, by their places in the face list.
+/// parts from the other by more than they may, so fits between two paths do
+/// not bridge them. Two edges of one face may part by [`PATH_MIN_TOL`] at
+/// most, as two copies of one seam do, so the two sides of a lens stay apart.
+/// `faces_of` holds the faces each edge bounds, by their places in the face
+/// list.
 fn paths_among(
     topo: &Topology,
     members: &[EdgeId],
@@ -4156,8 +4158,7 @@ fn paths_among(
             };
             match path_parting(topo, a, b, tol)? {
                 Some(d) => near.push((d, i, j)),
-                None if lens => apart.push((i, j)),
-                None => {}
+                None => apart.push((i, j)),
             }
         }
     }
@@ -5801,6 +5802,48 @@ mod tests {
         }
         let uses = edge_use_counts(&topo, &face_ids);
         assert!(uses.values().all(|&n| n == 2), "{split}: {uses:?}");
+    }
+
+    /// Three arches between one pair of points, each bounding a face of its
+    /// own, part by 0.0075 from each neighbour and by 0.015 across the two
+    /// outer ones, over the 0.01 two fits of one path may part. The outer two
+    /// do not become one edge through the middle one.
+    #[test]
+    fn fits_between_two_paths_do_not_join_them() {
+        use brepkit_topology::edge::Edge;
+        use brepkit_topology::vertex::Vertex;
+
+        let clamped = vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0];
+        let arch = |h: f64| spline(2, &[(0.0, 0.0), (500.0, h), (1000.0, 0.0)], clamped.clone());
+        let plane = FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: 0.0,
+        };
+        let mut topo = Topology::new();
+        let a = topo.add_vertex(Vertex::new(Point3::new(0.0, 0.0, 0.0), 1e-7));
+        let b = topo.add_vertex(Vertex::new(Point3::new(1000.0, 0.0, 0.0), 1e-7));
+        let mut face_ids: Vec<FaceId> = [(0.0, 100.0), (0.015, 200.0), (0.03, 300.0)]
+            .iter()
+            .map(|&(low, high)| {
+                let low = topo.add_edge(Edge::new(a, b, arch(low)));
+                let high = topo.add_edge(Edge::new(a, b, arch(high)));
+                face_of(&mut topo, &[(low, true), (high, false)], plane.clone())
+            })
+            .collect();
+        let mut sources = vec![None; face_ids.len()];
+        separate_arcs_sharing_ends(&mut topo, &mut face_ids, &mut sources).unwrap();
+        unify_boundaries(&mut topo, &mut face_ids, &mut sources).unwrap();
+        let edges = |fid: FaceId| -> HashSet<EdgeId> {
+            face_edge_uses(&topo, fid)
+                .unwrap()
+                .into_iter()
+                .map(|(e, _)| e)
+                .collect()
+        };
+        assert!(
+            edges(face_ids[0]).is_disjoint(&edges(face_ids[2])),
+            "the outer arches share an edge"
+        );
     }
 
     /// A lens between two arches that part by 5e-3 over a length of 1000,
