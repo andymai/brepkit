@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794906528523,
+  "lastUpdate": 1794906784398,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -73601,6 +73601,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25683026,
             "range": "± 139849",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "6b6fe1d8bfeb05e2e5436ea9fd6b9fe05a231e51",
+          "message": "fix(check): bound a B-spline drawing's stretch over each chord (#2606)\n\n## Summary\n\n`FaceLoops::of` draws a curved face's wires in a plane. `trace` gives\neach chord a sag: how far the drawn wire can lie from the chord. On a\nB-spline surface, `trace` took two bounds in space into the drawing with\nthe most stretch at 17 points on each edge. A knot span that crawls\nbetween those points stretches more, and a point near the wire could\nthen read on the wrong side. Now each chord gets a bound over a box of\nparameters round it, and a chord with no bound leaves its wire unread.\nFixes #2552.\n\nThe bound:\n\n- Each point of the edge between a chord's ends lies within `d` in space\nof the surface along the chord's straight run of parameters. `d` is the\nsum of three distances. The first is the edge's distance from the line\nbetween its ends. The second is how far the surface along the run strays\nfrom that line. The third is how far the projections of the ends miss\nthem.\n- A box round the run gets a lower bound `λ` on how much the surface\nstretches a step in it. `λ` comes from the hulls of the derivative nets\nof the knot cells in the box. The bound reads each hull against a\nreference: the nets' derivative at the run's middle, or their mean.\nWhere `d / λ` is less than the box's reach past the run, the edge stays\nin the box. The drawn wire then lies within `d / λ` of the drawing of\nthe run.\n- Where no box holds the edge, `trace` halves the chord. After the last\nhalving, the wire does not read.\n- A polar drawing stretches the fraction round by `2π ρ` in the box's\nmeasure, so `λ` stays clear of nothing near a pole. The bound adds how\nfar the polar drawing bows the run off the drawn chord.\n- A knot repeated as often as the degree breaks the derivative. The nets\non both sides count in the hull, so the bound holds across that knot. A\nknot repeated more often leaves the chord without a bound.\n- Near a pole of a polar drawing, the edge's distance from the pole\nbounds its drawn radius. That bound comes from the hulls of the nets of\nthe knot cells next to the pole.\n- A B-spline surface with a pole at each end draws one pole as its rim.\nThat pole is the one that the edges keep farther from, by a lower bound\nfrom their curves. The 17 points chose it before.\n- A surface whose knots are not all finite and rising gets no bound. The\nnets take every weight times one power of two, which brings the most\nweight to between one and two. A stretch or a sag that is not finite\nbounds nothing.\n- The check for a knot repeated more often than the degree reads only\nthe knots inside the box.\n\nThe head of `crates/check/src/face_loops/bound.rs` gives the argument.\nEach knot cell's Bezier net is now read once for each face, and the\nsurface's stray along a chord reads that net too.\n\n## Tests\n\n- `a_parabola_into_a_crawling_knot_span_stays_within_its_chords_bound`:\na flat patch `(x(u), 20 v, 0)` holds `x` within 5e-6 of 10 over the knot\nspan from `u = 0.495` to `0.505`. Knot spans 5e-5 long at each side of\nit turn the pace. The outline's left side is a parabola whose vertex\ntouches `x = 10` between the points that `main` reads. On `main`, a\npoint on the face beside the vertex reads outside the outline. On this\nbranch the outline reads, and 4001 points of the drawn parabola lie\nwithin the bound of its chords.\n-\n`a_parabola_into_a_crawl_between_double_knots_stays_within_its_chords_bound`:\nthe same patch with a double knot at each end of the crawl, where\n`dx/du` jumps between about 20 and 0.001. It fails on `main` in the same\nway.\n- `a_hole_through_a_spline_spheres_pole_reads_from_that_pole`: a face on\na rational B-spline sphere of radius 5, above the latitude -30 degrees.\nIts hole is a circle 40 degrees across through the north pole, half way\nbetween two of the 17 points on it. Both wires read, no hole reads\nmisplaced, and 2001 points of the drawn hole lie within its bound. A\npoint in the hole reads inside it, and a point beyond it reads outside.\nOn `main`, the point in the hole reads no side of the hole. In a run\nwith prints, the chords that touch the pole took the pole's bound.\n- `a_surface_with_a_broken_knot_bounds_no_chord`: with a knot that is\nnot a number, or one that falls back, a chord reads no bound and the\nface reads no wire.\n`a_knot_that_is_not_a_number_does_not_stall_the_count_of_its_copies`\nhangs without the fix in the second commit.\n-\n`a_patch_whose_weights_are_all_huge_reads_the_bound_of_weights_of_one`:\na flat patch reads the same sag, 1e-3, with all its weights 1e100 as\nwith all of them 1. Before the fix in e8ef35300, the weights 1e100 gave\na sag of 0. With the weights not brought down, the chord reads no bound.\n- `a_box_finds_its_torn_knots_among_many_spans`: a surface has 120 knot\nspans, with knots taken twice and three times. Open and closed, 4000\nboxes on it find a knot repeated more often than the degree where a scan\nof every knot finds one.\n- `a_face_reads_only_the_knot_cells_its_wires_reach` now lets the face\nread the knot spans whose first knots are 3 to 9, up to 49 cells. The\nbox round a chord on a knot line reaches the span beside it. The face\nreads 36 cells.\n- `cargo test -p brepkit-check --lib`: 158 passed.\n- `cargo nextest run --cargo-profile ci` for `brepkit-algo`,\n`brepkit-io`, `brepkit-operations`, `brepkit-wasm`, `brepkit-check` and\n`brepkit-heal`, started on 63c61fae4, ran 3841 tests: all passed, and\nnextest skipped 22. On 1a4f5be3e, with `main` merged in, the run for\n`brepkit-check` and `brepkit-operations` ran 2471 tests: all passed, and\nnextest skipped 16.\n- Before e8ef35300, the pose sweep (495 lines) and the truth audit (40\nlines) gave the same output as `main` at 84770d94b.\n- `cargo clippy --all-targets -- -D warnings` for `brepkit-check` and\n`cargo fmt` pass. The boundary, doc path and `mul_add` scripts pass.\n\n## Cost\n\nThe table gives `check_face_wires_apart`, the best of 7 runs in the `ci`\nprofile. The face is a band of a cylinder of radius 3n and height 4n\nwith n by n windows. The B-spline rows use the same cylinder from\n`to_nurbs`. The machine's load average was 21 to 24.\n\n| Surface | Windows | `main` | This branch |\n| --- | ---: | ---: | ---: |\n| Cylinder | 1 | 0.473 ms | 0.560 ms |\n| Cylinder | 25 | 1.621 ms | 1.826 ms |\n| Cylinder | 900 | 30.428 ms | 27.921 ms |\n| B-spline | 1 | 25.415 ms | 3.651 ms |\n| B-spline | 25 | 56.361 ms | 17.391 ms |\n| B-spline | 100 | 108.438 ms | 63.255 ms |\n\nThe cylinder's sag comes from the same sum as on `main`. In three more\nruns, taken in turn, 25 windows took 1.374 to 1.750 ms on `main` and\n1.382 to 1.683 ms on this branch. 900 windows took 26.850 to 34.716 ms\non `main` and 27.562 to 28.623 ms on this branch.",
+          "timestamp": "2026-11-17T01:05:38-08:00",
+          "tree_id": "a7dcdb82a9ed83ed8a5ea5489b3c6cb6059b2ef2",
+          "url": "https://github.com/andymai/brepkit/commit/6b6fe1d8bfeb05e2e5436ea9fd6b9fe05a231e51"
+        },
+        "date": 1794906774450,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1180327,
+            "range": "± 3983",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1238842,
+            "range": "± 2388",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 14629,
+            "range": "± 599",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 747837,
+            "range": "± 2706",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26738434,
+            "range": "± 75179",
             "unit": "ns/iter"
           }
         ]
