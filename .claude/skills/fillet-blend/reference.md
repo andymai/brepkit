@@ -16,7 +16,7 @@ There are three fillet code paths and two chamfer paths. "v1 vs v2" is a simplif
 ### Chamfer engines
 
 - **flat-bevel chamfer** `crates/operations/src/chamfer.rs`, `pub fn chamfer` → `chamfer_core` → `FaceSpec` assembly (`assemble_solid_mixed`). Planar-only: it refuses curved edges rather than rebuilding them as chords, after `chamfer` has offered the selection to the rim path and to `chamfer_chain.rs` (chains of lines and arcs along one cap or one wall: tangent joins, corners between two picked edges, straight edges along a cylinder's rulings, free ends on a plane square or slanted to the edge). NOT the blend engine and NOT the same code as the v1 fillet bevel. If a `chamfer` (no V2) bug is "refuses NURBS faces," it is this engine.
-- **v2 chamfer** `blend_ops::chamfer_v2`, `chamfer_v2_on` and `chamfer_distance_angle`. They offer a pick to the rim path and the chain path (`chamfer::chamfer_exactly_on`, two distances) first, and give any other pick to `ChamferBuilder` in `crates/blend`, which trims plane faces only.
+- **v2 chamfer** `blend_ops::chamfer_v2`, `chamfer_v2_on` and `chamfer_distance_angle`. They offer a pick to the rim path and the chain path (`chamfer::chamfer_exactly_on`, two distances) first, and give any other pick to `ChamferBuilder` in `crates/blend`. The builder takes an analytic stripe where one applies and walks a ruled band (`ChamferBlend`, `interpolate_chamfer_band`) where none does. It trims a plane-only stripe with `trim_face_to_corners` and any stripe on a curved face with `trim_parametric_face_batch`.
 
 ### The dispatcher
 

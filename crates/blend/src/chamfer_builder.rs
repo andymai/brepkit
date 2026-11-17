@@ -7,23 +7,29 @@
 use brepkit_math::madd::Madd;
 use std::collections::{HashMap, HashSet};
 
-use brepkit_math::vec::{Point3, Vec3};
+use brepkit_math::curves2d::{Curve2D, Line2D, NurbsCurve2D};
+use brepkit_math::traits::ParametricSurface;
+use brepkit_math::vec::{Point2, Point3, Vec3};
 use brepkit_topology::Topology;
-use brepkit_topology::edge::EdgeId;
-use brepkit_topology::face::{FaceId, FaceSurface};
+use brepkit_topology::edge::{Edge, EdgeCurve, EdgeId};
+use brepkit_topology::face::{Face, FaceId, FaceSurface};
+use brepkit_topology::pcurve::PCurve;
 use brepkit_topology::shell::Shell;
 use brepkit_topology::solid::{Solid, SolidId};
 use brepkit_topology::vertex::VertexId;
 use brepkit_topology::wire::{OrientedEdge, Wire, WireId};
 
 use crate::analytic;
+use crate::blend_func::{BlendParams, ChamferBlend};
 use crate::builder_utils::{SolidSnapshot, sample_nurbs_endpoints};
 use crate::spine::Spine;
 use crate::stripe::StripeResult;
 use crate::trimmer::{self, TrimKeep};
+use crate::walker::{Walker, WalkerConfig, interpolate_chamfer_band};
 use crate::{BlendError, BlendResult};
 
 /// Internal representation of a chamfer edge set with its distance parameters.
+#[derive(Clone)]
 enum ChamferEdgeSet {
     /// Two explicit distances (d1 on face 1, d2 on face 2).
     TwoDistance {
@@ -155,6 +161,9 @@ impl<'a> ChamferBuilder<'a> {
     ///    at a vertex of one trimmed before ends the build.
     /// 6. Assemble new solid from trimmed faces, blend faces, untouched
     ///    original faces, and the input's inner shells.
+    /// 7. If a stripe that trimmed a curved face cannot build its chamfer
+    ///    face or close its ends, record it as failed and build again
+    ///    without it.
     ///
     /// The input solid comes through unchanged, whether the build succeeds
     /// or fails.
@@ -176,30 +185,49 @@ impl<'a> ChamferBuilder<'a> {
         // chamfer's ends rewrites its end faces' wires, all in place on faces
         // the input shares with the result.
         let snapshot = SolidSnapshot::capture(topo, solid)?;
-        let result = ChamferBuilder {
-            topo: &mut *topo,
-            solid,
-            edge_sets,
-        }
-        .build_in_place();
-        match result {
-            Ok(result) => {
-                let preserve = snapshot.clone_result_source_faces(topo, result.solid);
-                let restore = snapshot.restore(topo);
-                match (preserve, restore) {
-                    (Ok(()), Ok(())) => Ok(result),
-                    (Err(error), _) | (_, Err(error)) => Err(error),
-                }
+        // Curved stripes whose chamfer faces or ends failed in an earlier
+        // pass, each with its failure: the next pass leaves them out.
+        let mut left_out: Vec<(EdgeId, BlendError)> = Vec::new();
+        loop {
+            let skip: HashSet<EdgeId> = left_out.iter().map(|(edge, _)| *edge).collect();
+            let pass = ChamferBuilder {
+                topo: &mut *topo,
+                solid,
+                edge_sets: edge_sets.clone(),
             }
-            Err(error) => {
-                snapshot.restore(topo)?;
-                Err(error)
+            .build_in_place(&skip);
+            match pass {
+                Ok(Pass::Built(mut result)) => {
+                    result.failed.append(&mut left_out);
+                    result.is_partial = result.solid != solid && !result.failed.is_empty();
+                    let preserve = snapshot.clone_result_source_faces(topo, result.solid);
+                    let restore = snapshot.restore(topo);
+                    return match (preserve, restore) {
+                        (Ok(()), Ok(())) => Ok(result),
+                        (Err(error), _) | (_, Err(error)) => Err(error),
+                    };
+                }
+                Ok(Pass::Without(edges, error)) => {
+                    snapshot.restore(topo)?;
+                    let Some((&first, rest)) = edges.split_first() else {
+                        return Err(error);
+                    };
+                    let again: Vec<(EdgeId, BlendError)> =
+                        rest.iter().map(|&edge| (edge, restated(&error))).collect();
+                    left_out.push((first, error));
+                    left_out.extend(again);
+                }
+                Err(error) => {
+                    snapshot.restore(topo)?;
+                    return Err(error);
+                }
             }
         }
     }
 
+    /// One pass of [`Self::build`], with the edges in `skip` left out.
     #[allow(clippy::too_many_lines)]
-    fn build_in_place(self) -> Result<BlendResult, BlendError> {
+    fn build_in_place(self, skip: &HashSet<EdgeId>) -> Result<Pass, BlendError> {
         let scope = trimmer::SplitScope::of_solid(self.topo, self.solid)?;
         let adjacency = self.topo.build_adjacency(self.solid)?;
         let solid = self.topo.solid(self.solid)?;
@@ -265,6 +293,7 @@ impl<'a> ChamferBuilder<'a> {
                 },
             ));
         }
+        all_edges.retain(|(edge, _, _)| !skip.contains(edge));
 
         let topo = self.topo;
 
@@ -275,7 +304,14 @@ impl<'a> ChamferBuilder<'a> {
         let mut stripe_results: Vec<(EdgeId, StripeResult)> = Vec::new();
 
         for &(edge_id, d1, d2) in &all_edges {
-            match compute_chamfer_stripe(topo, &adjacency, edge_id, d1, d2) {
+            let stripe =
+                compute_chamfer_stripe(topo, &adjacency, edge_id, d1, d2).and_then(|mut sr| {
+                    if sr.stripe.spine.is_closed() {
+                        start_at_seam(topo, edge_id, &mut sr.stripe)?;
+                    }
+                    Ok(sr)
+                });
+            match stripe {
                 Ok(mut sr) => {
                     run_to_end_planes(topo, &original_faces, edge_id, &mut sr.stripe)?;
                     stripe_results.push((edge_id, sr));
@@ -296,6 +332,9 @@ impl<'a> ChamferBuilder<'a> {
         // builder does not make: the second one to trim there ends the build
         // before the work on the rest.
         let mut ends_taken: HashMap<VertexId, EdgeId> = HashMap::new();
+        // The stripes that trimmed a curved face, which main's builder
+        // refused at the trim: a later failure of one of them leaves it out.
+        let mut curved_edges: Vec<EdgeId> = Vec::new();
         for (edge_id, sr) in stripe_results {
             let stripe = &sr.stripe;
 
@@ -322,12 +361,58 @@ impl<'a> ChamferBuilder<'a> {
             let mut slivers = Vec::new();
             let chamfered = topo.edge(edge_id)?;
             let corners = [chamfered.start(), chamfered.end()];
+            // A stripe on a curved face is trimmed along its contact curves
+            // in each face's own parameters, as the fillet builder trims; an
+            // open one ends on planes that hold its end sections.
+            let curved = matches!(stripe.surface, FaceSurface::Nurbs(_))
+                || faces
+                    .iter()
+                    .any(|&f| topo.face(f).is_ok_and(|face| !face.surface().is_planar()));
+            if curved
+                && !stripe.spine.is_closed()
+                && !ends_on_section_planes(topo, &original_faces, edge_id, stripe)?
+            {
+                failed.push((
+                    edge_id,
+                    BlendError::UnsupportedSurface {
+                        face: stripe.face1,
+                        surface_tag: "a curved chamfer ending off a plane square to its edge"
+                            .to_owned(),
+                    },
+                ));
+                continue;
+            }
+            // Faces beside the two that a split of a shared edge hands a copy,
+            // with what each mapped to before.
+            let mut incident: Vec<(FaceId, Option<FaceId>)> = Vec::new();
             for (slot, (face, contact)) in faces
                 .into_iter()
                 .zip([&stripe.contact1, &stripe.contact2])
                 .enumerate()
             {
                 let current = face_replacements.get(&face).copied().unwrap_or(face);
+                if curved {
+                    match trim_along(topo, &scope, current, contact, keep, stripe.spine_edges()) {
+                        Ok(batch) => {
+                            contacts[slot] = batch.contact_edges.first().copied();
+                            face_replacements.insert(face, batch.trimmed_face);
+                            for &(source, copy) in &batch.incident_replacements {
+                                let original = face_replacements
+                                    .iter()
+                                    .find(|&(_, &now)| now == source)
+                                    .map_or(source, |(&original, _)| original);
+                                incident
+                                    .push((original, face_replacements.get(&original).copied()));
+                                face_replacements.insert(original, copy);
+                            }
+                        }
+                        Err(e) => {
+                            failure = Some(e);
+                            break;
+                        }
+                    }
+                    continue;
+                }
                 match trimmer::trim_face_to_corners(
                     topo,
                     &scope,
@@ -363,7 +448,11 @@ impl<'a> ChamferBuilder<'a> {
                 }
             }
             if let Some(error) = failure {
-                for (face, prior) in faces.into_iter().zip(before) {
+                for (face, prior) in incident
+                    .into_iter()
+                    .rev()
+                    .chain(faces.into_iter().zip(before))
+                {
                     match prior {
                         Some(f) => face_replacements.insert(face, f),
                         None => face_replacements.remove(&face),
@@ -384,51 +473,36 @@ impl<'a> ChamferBuilder<'a> {
             }
             consumed.extend(slivers);
             succeeded.push(edge_id);
+            if curved {
+                curved_edges.push(edge_id);
+            }
             trimmed.push((edge_id, sr, contacts));
         }
 
         // If no stripe trimmed, return the original solid with all failures.
         if trimmed.is_empty() {
-            return Ok(BlendResult {
+            return Ok(Pass::Built(BlendResult {
                 solid: self.solid,
                 succeeded: Vec::new(),
                 failed,
                 is_partial: false,
-            });
+            }));
         }
 
         let mut blend_face_ids: Vec<FaceId> = Vec::new();
         let mut cross_edges: Vec<CrossEdge> = Vec::new();
 
-        for (edge_id, sr, [c1, c2]) in &trimmed {
-            // Reuse the trimmed neighbours' contact edges (mirrors the fillet
-            // builder): a freshly minted duplicate leaves both copies use-1
-            // and opens the shell along the chamfer flanks.
-            let info = crate::builder_utils::create_chamfer_face_with_contacts(
-                topo, &sr.stripe, *c1, *c2,
-            )?;
-            orient_chamfer_face(topo, info.face, &sr.stripe)?;
-            // A closed rim has no end faces to take its cross edges. The
-            // spine runs the chamfered edge forward, so the cross edge at its
-            // end cuts off the edge's end vertex and the one at its start,
-            // the edge's start vertex.
-            if !sr.stripe.spine.is_closed() {
-                let chamfered = topo.edge(*edge_id)?;
-                let ends = [
-                    info.cross_end.map(|c| (c, chamfered.end())),
-                    info.cross_start.map(|c| (c, chamfered.start())),
-                ];
-                for ((edge, from, to), corner) in ends.into_iter().flatten() {
-                    cross_edges.push(CrossEdge {
-                        edge,
-                        from,
-                        to,
-                        corner,
-                        chamfer: info.face,
-                    });
+        for (edge_id, sr, contacts) in &trimmed {
+            match chamfer_face_of(topo, *edge_id, &sr.stripe, *contacts, &face_replacements) {
+                Ok((face, ends)) => {
+                    blend_face_ids.push(face);
+                    cross_edges.extend(ends);
                 }
+                Err(error) if curved_edges.contains(edge_id) => {
+                    return Ok(Pass::Without(vec![*edge_id], error));
+                }
+                Err(error) => return Err(error),
             }
-            blend_face_ids.push(info.face);
         }
 
         let mut result_faces: Vec<FaceId> = original_faces
@@ -437,7 +511,18 @@ impl<'a> ChamferBuilder<'a> {
             .filter(|fid| !consumed.contains(fid))
             .collect();
 
-        close_chamfer_ends(topo, &result_faces, &cross_edges)?;
+        if let Err(error) = close_chamfer_ends(topo, &result_faces, &cross_edges) {
+            // The open curved stripes take their ends' failure.
+            let open: Vec<EdgeId> = trimmed
+                .iter()
+                .filter(|(edge, sr, _)| curved_edges.contains(edge) && !sr.stripe.spine.is_closed())
+                .map(|(edge, _, _)| *edge)
+                .collect();
+            if open.is_empty() {
+                return Err(error);
+            }
+            return Ok(Pass::Without(open, error));
+        }
         result_faces.extend(&blend_face_ids);
 
         let new_shell = Shell::new(result_faces)?;
@@ -446,13 +531,84 @@ impl<'a> ChamferBuilder<'a> {
         let new_solid_id = topo.add_solid(new_solid);
 
         let is_partial = !failed.is_empty();
-        Ok(BlendResult {
+        Ok(Pass::Built(BlendResult {
             solid: new_solid_id,
             succeeded,
             failed,
             is_partial,
-        })
+        }))
     }
+}
+
+/// What one pass of [`ChamferBuilder::build`] gives: the result, or curved
+/// stripes to leave out of the next pass, with the failure that stopped
+/// this one.
+enum Pass {
+    Built(BlendResult),
+    Without(Vec<EdgeId>, BlendError),
+}
+
+/// The same failure again, for each further edge that one failure stopped.
+fn restated(error: &BlendError) -> BlendError {
+    match error {
+        BlendError::TrimmingFailure { face } => BlendError::TrimmingFailure { face: *face },
+        BlendError::UnsupportedSurface { face, surface_tag } => BlendError::UnsupportedSurface {
+            face: *face,
+            surface_tag: surface_tag.clone(),
+        },
+        BlendError::CornerFailure { vertex } => BlendError::CornerFailure { vertex: *vertex },
+        other => BlendError::PlanningFailure {
+            reason: other.to_string(),
+        },
+    }
+}
+
+/// The chamfer face of a trimmed stripe on the edge `edge_id`, with the
+/// cross edges at its ends. It reuses the contact edges that the trims left
+/// on its two faces (a fresh duplicate leaves both copies used once and
+/// opens the shell along the chamfer's flanks).
+fn chamfer_face_of(
+    topo: &mut Topology,
+    edge_id: EdgeId,
+    stripe: &crate::stripe::Stripe,
+    [c1, c2]: [Option<EdgeId>; 2],
+    face_replacements: &HashMap<FaceId, FaceId>,
+) -> Result<(FaceId, Vec<CrossEdge>), BlendError> {
+    let supports =
+        [stripe.face1, stripe.face2].map(|f| face_replacements.get(&f).copied().unwrap_or(f));
+    if stripe.spine.is_closed() {
+        let face = closed_chamfer_face(topo, stripe, [c1, c2], supports)?;
+        return Ok((face, Vec::new()));
+    }
+    let info = crate::builder_utils::create_chamfer_face_with_contacts(topo, stripe, c1, c2)?;
+    orient_chamfer_face(topo, info.face, stripe)?;
+    if let (
+        FaceSurface::Nurbs(_) | FaceSurface::Cone(_) | FaceSurface::Cylinder(_),
+        [Some(c1), Some(c2)],
+    ) = (&stripe.surface, [c1, c2])
+    {
+        run_against_supports(topo, info.face, [(supports[0], c1), (supports[1], c2)])?;
+    }
+    // The spine runs the chamfered edge forward, so the cross edge at its
+    // end cuts off the edge's end vertex and the one at its start, the
+    // edge's start vertex.
+    let chamfered = topo.edge(edge_id)?;
+    let ends = [
+        info.cross_end.map(|c| (c, chamfered.end())),
+        info.cross_start.map(|c| (c, chamfered.start())),
+    ];
+    let cross = ends
+        .into_iter()
+        .flatten()
+        .map(|((edge, from, to), corner)| CrossEdge {
+            edge,
+            from,
+            to,
+            corner,
+            chamfer: info.face,
+        })
+        .collect();
+    Ok((info.face, cross))
 }
 
 /// The far edge of a trimmed face left as that edge and the contact along
@@ -621,6 +777,568 @@ fn orient_chamfer_face(
         topo.face_mut(face)?.set_reversed(true);
     }
     Ok(())
+}
+
+/// Starts a closed stripe's contacts where the contact on its seamed face
+/// crosses that face's seam: an edge that the face's wires run once each
+/// way, through the chamfered edge's vertex, along u or along v. The trim
+/// shortens that seam at the contact's vertex. A closed spine starts at its
+/// curve's first parameter, which need not be that vertex. Both contacts are
+/// cut at one parameter and rejoined, and a walked band is rebuilt from its
+/// rotated sides, so the band's straight row there stays the band's seam. A
+/// stripe whose faces have no seam there stays as it is; two seamed faces
+/// are refused.
+fn start_at_seam(
+    topo: &Topology,
+    edge_id: EdgeId,
+    stripe: &mut crate::stripe::Stripe,
+) -> Result<(), BlendError> {
+    const SAMPLES: usize = 256;
+    let vertex = topo.edge(edge_id)?.start();
+    let (face, side, (along, seam, period)) = match (
+        seam_through(topo, stripe.face1, vertex)?,
+        seam_through(topo, stripe.face2, vertex)?,
+    ) {
+        (Some(found), None) => (stripe.face1, 0, found),
+        (None, Some(found)) => (stripe.face2, 1, found),
+        (None, None) => return Ok(()),
+        (Some(_), Some(_)) => {
+            return Err(BlendError::UnsupportedSurface {
+                face: stripe.face1,
+                surface_tag: "a closed chamfer between two seamed faces".to_owned(),
+            });
+        }
+    };
+    let surface = topo.face(face)?.surface().clone();
+    let across = |p: Point3| {
+        surface
+            .project_point(p)
+            .map_or(0.0, |(u, v)| if along == 0 { u } else { v })
+    };
+    let contact = if side == 0 {
+        &stripe.contact1
+    } else {
+        &stripe.contact2
+    };
+    let (c0, c1) = contact.domain();
+    let at = |f: f64| c0 + f * (c1 - c0);
+    // The contact's turn from the seam, in (-period/2, period/2].
+    let off = |t: f64| {
+        let d = (across(contact.evaluate(t)) - seam).rem_euclid(period);
+        if d > 0.5 * period { d - period } else { d }
+    };
+    if off(c0).abs() <= 1e-12 * period {
+        return Ok(());
+    }
+    // Where the turn crosses zero between two samples, not where it wraps.
+    let mut bracket = None;
+    for k in 0..SAMPLES {
+        #[allow(clippy::cast_precision_loss)]
+        let (a, b) = (
+            at(k as f64 / SAMPLES as f64),
+            at((k + 1) as f64 / SAMPLES as f64),
+        );
+        let (fa, fb) = (off(a), off(b));
+        if fa == 0.0 {
+            bracket = Some((a, a));
+            break;
+        }
+        if fa.signum() != fb.signum() && (fa - fb).abs() < 0.5 * period {
+            bracket = Some((a, b));
+            break;
+        }
+    }
+    let Some((mut lo, mut hi)) = bracket else {
+        return Err(BlendError::TrimmingFailure { face });
+    };
+    for _ in 0..100 {
+        let mid = 0.5 * (lo + hi);
+        if mid <= lo || mid >= hi {
+            break;
+        }
+        if off(mid).signum() == off(lo).signum() {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    let t = 0.5 * (lo + hi);
+    stripe.contact1 = rotated(&stripe.contact1, t)?;
+    stripe.contact2 = rotated(&stripe.contact2, t)?;
+    if let FaceSurface::Nurbs(band) = &stripe.surface {
+        stripe.surface = FaceSurface::Nurbs(brepkit_math::nurbs::surface::NurbsSurface::new(
+            band.degree_u(),
+            stripe.contact1.degree(),
+            band.knots_u().to_vec(),
+            stripe.contact1.knots().to_vec(),
+            vec![
+                stripe.contact1.control_points().to_vec(),
+                stripe.contact2.control_points().to_vec(),
+            ],
+            vec![
+                stripe.contact1.weights().to_vec(),
+                stripe.contact2.weights().to_vec(),
+            ],
+        )?);
+    }
+    Ok(())
+}
+
+/// The seam of `face` through `vertex`: which parameter (0 for u, 1 for v)
+/// an edge that the face's wires run twice holds constant there, its value
+/// at the vertex, and the surface's period in it. `None` when no such edge
+/// ends at the vertex.
+fn seam_through(
+    topo: &Topology,
+    face: FaceId,
+    vertex: VertexId,
+) -> Result<Option<(usize, f64, f64)>, BlendError> {
+    let f = topo.face(face)?;
+    let surface = f.surface();
+    let periods = [
+        crate::fillet_builder::face_u_period(surface),
+        face_v_period(surface),
+    ];
+    if periods.iter().all(Option::is_none) {
+        return Ok(None);
+    }
+    let mut uses: Vec<(EdgeId, usize)> = Vec::new();
+    for wid in std::iter::once(f.outer_wire()).chain(f.inner_wires().iter().copied()) {
+        for oe in topo.wire(wid)?.edges() {
+            match uses.iter_mut().find(|(edge, _)| *edge == oe.edge()) {
+                Some((_, count)) => *count += 1,
+                None => uses.push((oe.edge(), 1)),
+            }
+        }
+    }
+    let at = topo.vertex(vertex)?.point();
+    let Some(here) = surface.project_point(at) else {
+        return Ok(None);
+    };
+    for (edge_id, count) in uses {
+        let edge = topo.edge(edge_id)?;
+        if count < 2 || (edge.start() != vertex && edge.end() != vertex) {
+            continue;
+        }
+        let (a, b) = (
+            topo.vertex(edge.start())?.point(),
+            topo.vertex(edge.end())?.point(),
+        );
+        let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
+        let middle = edge.curve().evaluate_with_endpoints(0.5 * (t0 + t1), a, b);
+        let Some(there) = surface.project_point(middle) else {
+            continue;
+        };
+        for (k, period) in periods.into_iter().enumerate() {
+            let Some(period) = period else {
+                continue;
+            };
+            let (from, to) = if k == 0 {
+                (here.0, there.0)
+            } else {
+                (here.1, there.1)
+            };
+            let d = (to - from).rem_euclid(period);
+            if d.min(period - d) <= 1e-9 * period {
+                return Ok(Some((k, from, period)));
+            }
+        }
+    }
+    Ok(None)
+}
+
+/// The closed curve `curve` starting at its parameter `t`: its run from `t`
+/// to its end, then from its start to `t`, joined where the curve closes.
+fn rotated(
+    curve: &brepkit_math::nurbs::curve::NurbsCurve,
+    t: f64,
+) -> Result<brepkit_math::nurbs::curve::NurbsCurve, BlendError> {
+    let (t0, t1) = curve.domain();
+    if t - t0 <= 1e-12 * (t1 - t0) || t1 - t <= 1e-12 * (t1 - t0) {
+        return Ok(curve.clone());
+    }
+    let (left, right) = brepkit_math::nurbs::knot_ops::curve_split(curve, t)?;
+    let p = curve.degree();
+    let (lk, rk) = (left.knots(), right.knots());
+    let (lw, rw) = (left.weights(), right.weights());
+    let (Some(&end_weight), Some(&start_weight)) = (rw.last(), lw.first()) else {
+        return Err(BlendError::Math(brepkit_math::MathError::EmptyInput));
+    };
+    if rk.len() < p + 1 || lk.len() < p + 1 || start_weight <= 0.0 {
+        return Err(BlendError::Math(brepkit_math::MathError::EmptyInput));
+    }
+    let shift = t1 - t0;
+    let mut knots = rk[..rk.len() - (p + 1)].to_vec();
+    knots.extend(std::iter::repeat_n(t1, p));
+    knots.extend(lk[p + 1..].iter().map(|k| k + shift));
+    let mut points = right.control_points().to_vec();
+    points.extend_from_slice(&left.control_points()[1..]);
+    let scale = end_weight / start_weight;
+    let mut weights = rw.to_vec();
+    weights.extend(lw[1..].iter().map(|w| w * scale));
+    Ok(brepkit_math::nurbs::curve::NurbsCurve::new(
+        p, knots, points, weights,
+    )?)
+}
+
+/// Trims `face` along a stripe's `contact` in the face's own parameters,
+/// keeping the side `keep` names. The contact's pcurve runs with the curve
+/// that the contact edge stores: on a plane, a NURBS contact's control
+/// points map into the plane's frame, and a circle or a contact on a curved
+/// face takes [`pcurve_along`].
+fn trim_along(
+    topo: &mut Topology,
+    scope: &trimmer::SplitScope,
+    face: FaceId,
+    contact: &brepkit_math::nurbs::curve::NurbsCurve,
+    keep: TrimKeep,
+    spine_edges: &[EdgeId],
+) -> Result<trimmer::BatchTrimResult, BlendError> {
+    // The trimmer's weld distance: ends this close make one closed contact.
+    const CLOSED: f64 = 1e-7;
+    let surface = topo.face(face)?.surface().clone();
+    let mut adapter = None;
+    let support = crate::builder_utils::surface_ref_or_adapter(&surface, &mut adapter);
+    let ends = sample_nurbs_endpoints(contact);
+    // A contact that is a circle (an analytic band's) is stored as one, as
+    // the faces' own rims are, so the meshes of the faces along it agree.
+    let curve = as_circle(contact)
+        .map_or_else(|| EdgeCurve::NurbsCurve(contact.clone()), EdgeCurve::Circle);
+    let pcurve = match &curve {
+        EdgeCurve::NurbsCurve(nurbs) if surface.is_planar() => {
+            let (pcurve, start, end) =
+                crate::fillet_builder::build_planar_pcurve_from_contact(support, nurbs)?;
+            PCurve::new(pcurve, start, end)
+        }
+        EdgeCurve::Line
+        | EdgeCurve::Circle(_)
+        | EdgeCurve::Ellipse(_)
+        | EdgeCurve::NurbsCurve(_) => {
+            let start = ends[0];
+            let end = if (ends[1] - start).length() <= CLOSED {
+                start
+            } else {
+                ends[1]
+            };
+            let periods = [
+                crate::fillet_builder::face_u_period(&surface),
+                face_v_period(&surface),
+            ];
+            pcurve_along(support, periods, &curve, (start, end))
+                .ok_or(BlendError::TrimmingFailure { face })?
+        }
+    };
+    let mut restriction = trimmer::ParametricRestriction::new(ends, keep);
+    restriction.source_edges = spine_edges.to_vec();
+    restriction.curve = Some(curve);
+    restriction.pcurve = Some(pcurve);
+    trimmer::trim_parametric_face_batch(
+        topo,
+        scope,
+        face,
+        &[restriction],
+        trimmer::BoundarySplitPolicy::All,
+    )
+}
+
+/// The period of `surface` in v: the torus's, and a NURBS surface's that
+/// closes round in v.
+fn face_v_period(surface: &FaceSurface) -> Option<f64> {
+    match surface {
+        FaceSurface::Torus(_) => Some(std::f64::consts::TAU),
+        FaceSurface::Nurbs(nurbs) if nurbs.is_periodic_v() => {
+            let (v0, v1) = nurbs.domain_v();
+            (v1 > v0).then_some(v1 - v0)
+        }
+        FaceSurface::Plane { .. }
+        | FaceSurface::Cylinder(_)
+        | FaceSurface::Cone(_)
+        | FaceSurface::Sphere(_)
+        | FaceSurface::Nurbs(_) => None,
+    }
+}
+
+/// The pcurve on `support` of `curve` run from `start` to `end`, over the
+/// curve's own parameters between them: one fraction of each span gives one
+/// point. The image of the curve in the surface's parameters is read along
+/// the curve, across the seams of `periods` (u, v). Where that image is a
+/// straight line run at an even rate (a circle round a cylinder's or a
+/// cone's axis), the pcurve is that line. Elsewhere a cubic interpolates the
+/// image at more and more points, until between them it lies within `FIT`
+/// times one more than the curve's size of the image, in pieces that meet at
+/// the curve's corners. `None` when no such cubic comes within it.
+fn pcurve_along(
+    support: &dyn ParametricSurface,
+    periods: [Option<f64>; 2],
+    curve: &EdgeCurve,
+    (start, end): (Point3, Point3),
+) -> Option<PCurve> {
+    const FIT: f64 = 1e-7;
+    const FIRST: u32 = 16;
+    const LAST: u32 = 4096;
+    let (t0, t1) = curve.domain_with_endpoints(start, end);
+    // The tolerance scales with the curve's size, not with where it lies.
+    let size = brepkit_math::aabb::Aabb3::try_from_points((0..=FIRST).map(|k| {
+        let f = f64::from(k) / f64::from(FIRST);
+        curve.evaluate_with_endpoints((t1 - t0).madd(f, t0), start, end)
+    }))
+    .map_or(0.0, |aabb| (aabb.max - aabb.min).length());
+    let fit = FIT * (1.0 + size);
+    let on = |uv: Point2| support.evaluate(uv.x(), uv.y());
+    let mut pieces: Vec<f64> = corners(curve)
+        .into_iter()
+        .map(|t| (t - t0) / (t1 - t0))
+        .filter(|f| *f > 1e-9 && *f < 1.0 - 1e-9)
+        .collect();
+    pieces.sort_by(f64::total_cmp);
+    pieces.insert(0, 0.0);
+    pieces.push(1.0);
+    let mut steps = FIRST;
+    while steps <= LAST {
+        let count = 2 * steps;
+        let step = |k: u32| f64::from(k) / f64::from(count);
+        let mut fractions = vec![0.0];
+        for piece in pieces.windows(2) {
+            fractions.extend((1..=count).map(|k| (piece[1] - piece[0]).madd(step(k), piece[0])));
+        }
+        let mut image: Vec<Point2> = Vec::with_capacity(fractions.len());
+        for &f in &fractions {
+            let point = curve.evaluate_with_endpoints((t1 - t0).madd(f, t0), start, end);
+            let (mut u, mut v) = support.project_point(point);
+            if let Some(last) = image.last() {
+                for (value, (period, reference)) in [
+                    (&mut u, (periods[0], last.x())),
+                    (&mut v, (periods[1], last.y())),
+                ] {
+                    if let Some(period) = period {
+                        *value -= period * ((*value - reference) / period).round();
+                    }
+                }
+            }
+            image.push(Point2::new(u, v));
+        }
+        let near = |at: Point2, k: usize| (on(at) - on(image[k])).length() <= fit;
+        let (first, chord) = (image[0], image[image.len() - 1] - image[0]);
+        if fractions
+            .iter()
+            .enumerate()
+            .all(|(k, &f)| near(first + chord * f, k))
+        {
+            let line = Line2D::new(first, chord).ok()?;
+            return Some(PCurve::new(Curve2D::Line(line), 0.0, chord.length()));
+        }
+        let params: Vec<f64> = (0..=steps)
+            .map(|k| f64::from(k) / f64::from(steps))
+            .collect();
+        let flat = |p: Point3| Point2::new(p.x(), p.y());
+        let mut knots = vec![0.0; 4];
+        let mut points: Vec<Point2> = Vec::new();
+        let mut within = true;
+        for (index, piece) in pieces.windows(2).enumerate() {
+            let base = index * count as usize;
+            let run = &image[base..=base + count as usize];
+            let nodes: Vec<Point3> = run
+                .iter()
+                .step_by(2)
+                .map(|uv| Point3::new(uv.x(), uv.y(), 0.0))
+                .collect();
+            let cubic = brepkit_math::nurbs::fitting::interpolate_at(&nodes, &params, 3).ok()?;
+            within &= (1..count)
+                .step_by(2)
+                .all(|k| near(flat(cubic.evaluate(step(k))), base + k as usize));
+            let inner = &cubic.knots()[4..cubic.knots().len() - 4];
+            knots.extend(
+                inner
+                    .iter()
+                    .map(|&k| (piece[1] - piece[0]).madd(k, piece[0])),
+            );
+            knots.extend(std::iter::repeat_n(piece[1], 3));
+            let skip = usize::from(index > 0);
+            points.extend(cubic.control_points()[skip..].iter().copied().map(flat));
+        }
+        if within {
+            knots.push(1.0);
+            let weights = vec![1.0; points.len()];
+            let pcurve = NurbsCurve2D::new(3, knots, points, weights).ok()?;
+            return Some(PCurve::new(Curve2D::Nurbs(pcurve), 0.0, 1.0));
+        }
+        steps *= 2;
+    }
+    None
+}
+
+/// The parameters of `curve` where it may turn a corner: the knots of a
+/// NURBS curve that reach its degree in number, inside its domain.
+fn corners(curve: &EdgeCurve) -> Vec<f64> {
+    let EdgeCurve::NurbsCurve(nurbs) = curve else {
+        return Vec::new();
+    };
+    let (d0, d1) = nurbs.domain();
+    let same = 1e-12 * (d1 - d0).abs();
+    let knots = nurbs.knots();
+    let mut found = Vec::new();
+    let mut i = 0;
+    while i < knots.len() {
+        let knot = knots[i];
+        let run = knots[i..]
+            .iter()
+            .take_while(|&&k| (k - knot).abs() <= same)
+            .count();
+        if run >= nurbs.degree() && knot - d0 > same && d1 - knot > same {
+            found.push(knot);
+        }
+        i += run;
+    }
+    found
+}
+
+/// Turns `face`'s outer wire round where it runs its contact edges the way
+/// their support faces do: each edge must run one way in its support and
+/// the other in the chamfer face, read about each face's outward side.
+fn run_against_supports(
+    topo: &mut Topology,
+    face: FaceId,
+    contacts: [(FaceId, EdgeId); 2],
+) -> Result<(), BlendError> {
+    let runs = |topo: &Topology, face: FaceId, edge: EdgeId| -> Result<Option<bool>, BlendError> {
+        let f = topo.face(face)?;
+        for wid in std::iter::once(f.outer_wire()).chain(f.inner_wires().iter().copied()) {
+            if let Some(oe) = topo.wire(wid)?.edges().iter().find(|oe| oe.edge() == edge) {
+                return Ok(Some(oe.is_forward() != f.is_reversed()));
+            }
+        }
+        Ok(None)
+    };
+    let mut against = [false; 2];
+    for (slot, (support, edge)) in contacts.into_iter().enumerate() {
+        let (Some(theirs), Some(ours)) = (runs(topo, support, edge)?, runs(topo, face, edge)?)
+        else {
+            return Err(BlendError::TrimmingFailure { face });
+        };
+        against[slot] = theirs != ours;
+    }
+    match against {
+        [true, true] => Ok(()),
+        [false, false] => {
+            let wire = topo.wire(topo.face(face)?.outer_wire())?;
+            let reversed: Vec<OrientedEdge> = wire
+                .edges()
+                .iter()
+                .rev()
+                .map(|oe| OrientedEdge::new(oe.edge(), !oe.is_forward()))
+                .collect();
+            let wire = topo.add_wire(Wire::new(reversed, true)?);
+            topo.face_mut(face)?.set_outer_wire(wire);
+            Ok(())
+        }
+        _ => Err(BlendError::TrimmingFailure { face }),
+    }
+}
+
+/// The circle `contact` runs on, starting at its start and running its way,
+/// when every point of it lies on that circle; `None` for any other curve.
+fn as_circle(
+    contact: &brepkit_math::nurbs::curve::NurbsCurve,
+) -> Option<brepkit_math::curves::Circle3D> {
+    const SAMPLES: u32 = 32;
+    let (t0, t1) = contact.domain();
+    let at = |f: f64| contact.evaluate(t0 + f * (t1 - t0));
+    let (a, b, c) = (at(0.0), at(1.0 / 3.0), at(2.0 / 3.0));
+    // The circumcircle of three of its points.
+    let (ab, ac) = (b - a, c - a);
+    let normal = ab.cross(ac);
+    let n2 = normal.dot(normal);
+    if n2 <= 1e-24 * ab.dot(ab) * ac.dot(ac) {
+        return None;
+    }
+    let center =
+        a + (normal.cross(ab) * ac.dot(ac) + ac.cross(normal) * ab.dot(ab)) * (1.0 / (2.0 * n2));
+    let radius = (a - center).length();
+    let tol = 1e-9 * radius.max(1.0);
+    let axis = normal.normalize().ok()?;
+    for k in 0..=SAMPLES {
+        let p = at(f64::from(k) / f64::from(SAMPLES));
+        if ((p - center).length() - radius).abs() > tol || axis.dot(p - center).abs() > tol {
+            return None;
+        }
+    }
+    // The circle runs about its normal from `a` the way the contact does.
+    let ahead = contact.derivatives(t0, 1)[1];
+    let normal = if (a - center).cross(ahead).dot(axis) >= 0.0 {
+        axis
+    } else {
+        -axis
+    };
+    brepkit_math::curves::Circle3D::new_with_ref(
+        center,
+        normal,
+        radius,
+        (a - center).normalize().ok()?,
+    )
+    .ok()
+}
+
+/// The chamfer face of a closed stripe: its two closed contact edges and one
+/// seam between their vertices, the band's straight row there, used once
+/// each way. The band's outward side leans the way its two neighbours face,
+/// and each contact runs against its neighbour's use of it, both read about
+/// each face's outward side.
+fn closed_chamfer_face(
+    topo: &mut Topology,
+    stripe: &crate::stripe::Stripe,
+    contacts: [Option<EdgeId>; 2],
+    supports: [FaceId; 2],
+) -> Result<FaceId, BlendError> {
+    const ON: f64 = 1e-6;
+    let refuse = || BlendError::TrimmingFailure { face: stripe.face1 };
+    let [Some(c1), Some(c2)] = contacts else {
+        return Err(refuse());
+    };
+    let mut vertices = [None, None];
+    for (slot, (edge, contact)) in [(c1, &stripe.contact1), (c2, &stripe.contact2)]
+        .into_iter()
+        .enumerate()
+    {
+        let e = topo.edge(edge)?;
+        let at = topo.vertex(e.start())?.point();
+        if e.start() != e.end() || (at - contact.evaluate(contact.domain().0)).length() > ON {
+            return Err(refuse());
+        }
+        vertices[slot] = Some(e.start());
+    }
+    let [Some(v1), Some(v2)] = vertices else {
+        return Err(refuse());
+    };
+    let seam = topo.add_edge(Edge::new(v1, v2, brepkit_topology::edge::EdgeCurve::Line));
+    let loop_of = |flags: [bool; 2]| {
+        vec![
+            OrientedEdge::new(c1, flags[0]),
+            OrientedEdge::new(seam, true),
+            OrientedEdge::new(c2, flags[1]),
+            OrientedEdge::new(seam, false),
+        ]
+    };
+    let wire = topo.add_wire(Wire::new(loop_of([true, false]), true)?);
+    let face = topo.add_face(Face::new(wire, Vec::new(), stripe.surface.clone()));
+    orient_chamfer_face(topo, face, stripe)?;
+    let band_reversed = topo.face(face)?.is_reversed();
+    let mut flags = [true, true];
+    for (slot, (support, edge)) in supports.into_iter().zip([c1, c2]).enumerate() {
+        let f = topo.face(support)?;
+        let mut theirs = None;
+        for wid in std::iter::once(f.outer_wire()).chain(f.inner_wires().iter().copied()) {
+            if let Some(oe) = topo.wire(wid)?.edges().iter().find(|oe| oe.edge() == edge) {
+                theirs = Some(oe.is_forward() != f.is_reversed());
+            }
+        }
+        let Some(theirs) = theirs else {
+            return Err(refuse());
+        };
+        flags[slot] = theirs == band_reversed;
+    }
+    let wire = topo.add_wire(Wire::new(loop_of(flags), true)?);
+    topo.face_mut(face)?.set_outer_wire(wire);
+    Ok(face)
 }
 
 /// A chamfer's cross edge at one end: it runs `from` one contact point `to`
@@ -903,6 +1621,19 @@ fn compute_chamfer_stripe(
 
     let surf1 = topo.face(face1)?.surface().clone();
     let surf2 = topo.face(face2)?.surface().clone();
+    // Across the seam of a B-spline face that closes round on itself, the
+    // contact's pcurve leaves the knot domain, and the trimmed face's mesh
+    // and measure come out wrong as well.
+    for (face, surface) in [(face1, &surf1), (face2, &surf2)] {
+        if let FaceSurface::Nurbs(nurbs) = surface
+            && (nurbs.is_periodic_u() || nurbs.is_periodic_v())
+        {
+            return Err(BlendError::UnsupportedSurface {
+                face,
+                surface_tag: "a B-spline face that closes round on itself".to_owned(),
+            });
+        }
+    }
 
     let spine = Spine::from_single_edge(topo, edge_id)?;
 
@@ -912,21 +1643,202 @@ fn compute_chamfer_stripe(
         return Ok(result);
     }
 
+    if face1 == face2 {
+        return Err(BlendError::UnsupportedSurface {
+            face: face1,
+            surface_tag: format!("{} seam (one face on both sides)", surf1.type_tag()),
+        });
+    }
     log::debug!(
         target: "brepkit_approx",
-        "chamfer: analytic path unavailable for {}+{} — v1 has no walker fallback, returning UnsupportedSurface",
+        "chamfer: analytic path unavailable for {}+{} — walking an approximate NURBS band",
         surf1.type_tag(),
         surf2.type_tag()
     );
-    // v1: no walker fallback for non-analytic surface pairs.
-    Err(BlendError::UnsupportedSurface {
-        face: face1,
-        surface_tag: format!(
-            "{}+{} (walker not yet integrated)",
-            surf1.type_tag(),
-            surf2.type_tag()
-        ),
+    walk_chamfer_stripe(topo, edge_id, [face1, face2], spine, d1, d2)
+}
+
+/// A chamfer stripe walked along its edge where no closed form holds (a
+/// slanted plane's ellipse on a cylinder): at each station of the spine,
+/// each contact lies in the section square to the spine, on its face's
+/// surface, its distance from the spine point (see [`ChamferBlend`]). The
+/// band is ruled, straight across from contact to contact, and passes
+/// through every walked section; its two sides are the contacts.
+///
+/// # Errors
+///
+/// Returns [`BlendError`] when the walk does not start or does not reach the
+/// spine's end, or the band cannot be fitted.
+fn walk_chamfer_stripe(
+    topo: &Topology,
+    edge_id: EdgeId,
+    [face1, face2]: [FaceId; 2],
+    spine: Spine,
+    d1: f64,
+    d2: f64,
+) -> Result<StripeResult, BlendError> {
+    let surf1 = topo.face(face1)?.surface().clone();
+    let surf2 = topo.face(face2)?.surface().clone();
+    let (mut adapter1, mut adapter2) = (None, None);
+    let ps1 = crate::builder_utils::surface_ref_or_adapter(&surf1, &mut adapter1);
+    let ps2 = crate::builder_utils::surface_ref_or_adapter(&surf2, &mut adapter2);
+    let blend = ChamferBlend { d1, d2 };
+    let walker = Walker::new(&blend, ps1, ps2, &spine, topo, WalkerConfig::default());
+
+    // A chord meets a surface's section on either side of the spine: the
+    // start takes the one into the face.
+    let length = spine.length();
+    let start_point = spine.evaluate(topo, 0.0)?;
+    let tangent = spine.tangent(topo, 0.0)?;
+    let guess =
+        |ps: &dyn ParametricSurface, face: FaceId, d: f64| -> Result<(f64, f64), BlendError> {
+            let into = into_face_at(topo, face, edge_id, &spine, start_point, tangent)?;
+            Ok(ps.project_point(start_point + into * d))
+        };
+    let (u1, v1) = guess(ps1, face1, d1)?;
+    let (u2, v2) = guess(ps2, face2, d2)?;
+    let (start, _) = walker
+        .solve_section(0.0, Some(BlendParams { u1, v1, u2, v2 }))
+        .ok_or(BlendError::StartSolutionFailure {
+            edge: edge_id,
+            t: 0.0,
+        })?;
+    let walk = walker.walk(start, 0.0, length)?;
+    let band = interpolate_chamfer_band(&walk.sections)?;
+    let contact1 = crate::fillet_builder::band_side(&band, 0)?;
+    let contact2 = crate::fillet_builder::band_side(&band, 1)?;
+    let pcurve = |ps: &dyn ParametricSurface,
+                  surf: &FaceSurface,
+                  contact: &brepkit_math::nurbs::curve::NurbsCurve|
+     -> Result<brepkit_math::curves2d::Curve2D, BlendError> {
+        if surf.is_planar() {
+            Ok(crate::fillet_builder::build_planar_pcurve_from_contact(ps, contact)?.0)
+        } else {
+            crate::fillet_builder::build_pcurve_from_contact(
+                ps,
+                contact,
+                crate::fillet_builder::face_u_period(surf),
+            )
+        }
+    };
+    let pcurve1 = pcurve(ps1, &surf1, &contact1)?;
+    let pcurve2 = pcurve(ps2, &surf2, &contact2)?;
+    Ok(StripeResult {
+        stripe: crate::stripe::Stripe {
+            spine,
+            surface: FaceSurface::Nurbs(band),
+            pcurve1,
+            pcurve2,
+            contact1,
+            contact2,
+            face1,
+            face2,
+            sections: walk.sections,
+        },
+        new_edges: Vec::new(),
     })
+}
+
+/// The direction into `face` from the spine at `point`, square to the
+/// spine's `tangent` in the face's tangent plane: the side
+/// [`crate::builder_utils::into_face_from_edge`] reads at the edge's middle,
+/// carried along the spine.
+fn into_face_at(
+    topo: &Topology,
+    face: FaceId,
+    edge: EdgeId,
+    spine: &Spine,
+    point: Point3,
+    tangent: Vec3,
+) -> Result<Vec3, BlendError> {
+    let surface = topo.face(face)?.surface();
+    let across = |p: Point3, t: Vec3| -> Result<Vec3, BlendError> {
+        let (u, v) = surface.project_point(p).unwrap_or((0.0, 0.0));
+        Ok(surface.normal(u, v).cross(t).normalize()?)
+    };
+    let half = 0.5 * spine.length();
+    let middle = across(spine.evaluate(topo, half)?, spine.tangent(topo, half)?)?;
+    let Some(into) = crate::builder_utils::into_face_from_edge(topo, face, edge)? else {
+        return Err(BlendError::TrimmingFailure { face });
+    };
+    let here = across(point, tangent)?;
+    Ok(if middle.dot(into) < 0.0 { -here } else { here })
+}
+
+/// Whether each end of an open stripe on a curved face lies on a plane that
+/// holds its end section, which takes the chamfer's cross edge there: the
+/// plane stands square to the edge.
+fn ends_on_section_planes(
+    topo: &Topology,
+    faces: &[FaceId],
+    edge_id: EdgeId,
+    stripe: &crate::stripe::Stripe,
+) -> Result<bool, BlendError> {
+    let (Some(first), Some(last)) = (stripe.sections.first(), stripe.sections.last()) else {
+        return Ok(false);
+    };
+    let start_point = stripe.spine.evaluate(topo, 0.0)?;
+    let edge = topo.edge(edge_id)?;
+    let near_start = (topo.vertex(edge.start())?.point() - start_point).length()
+        <= (topo.vertex(edge.end())?.point() - start_point).length();
+    let vertices = if near_start {
+        [edge.start(), edge.end()]
+    } else {
+        [edge.end(), edge.start()]
+    };
+    for (vertex, section) in vertices.into_iter().zip([first, last]) {
+        if !end_plane_holds(topo, faces, [stripe.face1, stripe.face2], vertex, section)? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// Whether the one face through `vertex` other than the stripe's two is a
+/// plane through both of `section`'s contacts.
+fn end_plane_holds(
+    topo: &Topology,
+    faces: &[FaceId],
+    stripe_faces: [FaceId; 2],
+    vertex: VertexId,
+    section: &crate::section::CircSection,
+) -> Result<bool, BlendError> {
+    let mut found = None;
+    for &fid in faces {
+        if stripe_faces.contains(&fid) {
+            continue;
+        }
+        let face = topo.face(fid)?;
+        let mut through = false;
+        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            for oe in topo.wire(wid)?.edges() {
+                let e = topo.edge(oe.edge())?;
+                through |= e.start() == vertex || e.end() == vertex;
+            }
+        }
+        if through {
+            if found.is_some() {
+                return Ok(false);
+            }
+            found = Some(fid);
+        }
+    }
+    let Some(end) = found else {
+        return Ok(false);
+    };
+    let FaceSurface::Plane { normal, d } = *topo.face(end)?.surface() else {
+        return Ok(false);
+    };
+    let on = |p: Point3| {
+        let scale = 1.0 + p.x().abs().max(p.y().abs()).max(p.z().abs());
+        (normal
+            .x()
+            .madd(p.x(), normal.y().madd(p.y(), normal.z() * p.z()))
+            - d)
+            .abs()
+            <= 1e-7 * scale
+    };
+    Ok(on(section.p1) && on(section.p2))
 }
 
 #[cfg(test)]
@@ -1035,6 +1947,35 @@ mod tests {
         assert!(result.is_err(), "empty edge set should produce an error");
     }
 
+    /// A closed curve started again at an inner parameter is the same curve,
+    /// from the point there round to it.
+    #[test]
+    fn a_closed_curve_rotated_is_the_same_curve() {
+        use brepkit_math::curves::Circle3D;
+        let circle =
+            Circle3D::new(Point3::new(1.0, 2.0, 3.0), Vec3::new(0.0, 0.6, 0.8), 2.5).unwrap();
+        let curve =
+            crate::analytic::circle_arc_to_nurbs(&circle, 0.0, std::f64::consts::TAU).unwrap();
+        let (t0, t1) = curve.domain();
+        for f in [0.13, 0.5, 0.77] {
+            let t = t0 + f * (t1 - t0);
+            let turned = rotated(&curve, t).unwrap();
+            let (s0, s1) = turned.domain();
+            assert!((turned.evaluate(s0) - curve.evaluate(t)).length() < 1e-12);
+            assert!((turned.evaluate(s1) - curve.evaluate(t)).length() < 1e-12);
+            for k in 0..=64 {
+                let p = turned.evaluate(s0 + (s1 - s0) * f64::from(k) / 64.0);
+                let off = ((p - circle.center()).length() - circle.radius()).abs()
+                    + (p - circle.center()).dot(circle.normal()).abs();
+                assert!(off < 1e-12, "{off:e} off the circle at {k}");
+            }
+            // Its points run the way the curve's do.
+            let ahead =
+                |c: &brepkit_math::nurbs::curve::NurbsCurve, at: f64| c.derivatives(at, 1)[1];
+            assert!(ahead(&turned, s0).dot(ahead(&curve, t)) > 0.0);
+        }
+    }
+
     /// A wall and a cap on a closed circular rim of `radius` at z = 0, laid
     /// out as the cylinder and cone primitives lay out their bottom rims:
     /// the wall first, running the rim forward, then the cap (outward -z)
@@ -1078,21 +2019,6 @@ mod tests {
         );
     }
 
-    /// The trimmer cannot cut a face along a closed rim, so the builder
-    /// records the rim as failed and hands the solid back as it was.
-    fn assert_rim_refused(topo: &mut Topology, solid: SolidId, rim: EdgeId, d: f64) {
-        let mut builder = ChamferBuilder::new(topo, solid);
-        builder.add_edges_symmetric(&[rim], d);
-        let result = builder.build().unwrap();
-        assert_eq!(result.solid, solid);
-        assert!(result.succeeded.is_empty());
-        assert!(
-            matches!(result.failed[..], [(e, BlendError::TrimmingFailure { .. })] if e == rim),
-            "{:?}",
-            result.failed
-        );
-    }
-
     /// A cylinder's bottom rim: the stripe is an exact 45-degree cone from
     /// radius `r - d` on the cap to height `d` up the wall (not below the
     /// cap).
@@ -1127,7 +2053,6 @@ mod tests {
             );
         }
         assert_contacts(&stripe, [(r - d, 0.0), (r, d)]);
-        assert_rim_refused(&mut topo, solid, rim, d);
     }
 
     /// A frustum's bottom rim (radius 3, wall at `alpha = atan2(6, 3)` from
@@ -1167,6 +2092,55 @@ mod tests {
             );
         }
         assert_contacts(&stripe, [(r - d, 0.0), (wall_r, wall_z)]);
-        assert_rim_refused(&mut topo, solid, rim, d);
+    }
+
+    /// The arc of the ellipse where the plane `z = 4 + 0.3 y` cuts a
+    /// cylinder of radius 2, from 30 to 150 degrees round the axis, with
+    /// both moved `shift` along x: how far its pcurve on the cylinder
+    /// strays from it, and whether that pcurve is a line.
+    fn ellipse_arc_pcurve(shift: f64) -> (f64, bool) {
+        use brepkit_math::surfaces::CylindricalSurface;
+        let cylinder =
+            CylindricalSurface::new(Point3::new(shift, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 2.0)
+                .unwrap();
+        let root3 = 3.0_f64.sqrt();
+        // The arc is the image of a circle's third under an affine map,
+        // so it is exact as a rational quadratic.
+        let contact = brepkit_math::nurbs::curve::NurbsCurve::new(
+            2,
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            vec![
+                Point3::new(shift + root3, 1.0, 4.3),
+                Point3::new(shift, 4.0, 5.2),
+                Point3::new(shift - root3, 1.0, 4.3),
+            ],
+            vec![1.0, 0.5, 1.0],
+        )
+        .unwrap();
+        let ends = (contact.evaluate(0.0), contact.evaluate(1.0));
+        let curve = EdgeCurve::NurbsCurve(contact.clone());
+        let pcurve =
+            pcurve_along(&cylinder, [Some(std::f64::consts::TAU), None], &curve, ends).unwrap();
+        let (t0, t1) = (pcurve.t_start(), pcurve.t_end());
+        let worst = (0..=200)
+            .map(|k| {
+                let f = f64::from(k) / 200.0;
+                let uv = pcurve.evaluate(t0 + (t1 - t0) * f);
+                (ParametricSurface::evaluate(&cylinder, uv.x(), uv.y()) - contact.evaluate(f))
+                    .length()
+            })
+            .fold(0.0_f64, f64::max);
+        (worst, matches!(pcurve.curve(), Curve2D::Line(_)))
+    }
+
+    /// The fit's tolerance follows the size of the contact, not where it
+    /// lies: 1e7 from the origin, the pcurve comes as close as at the origin.
+    #[test]
+    fn pcurve_along_fits_as_closely_far_from_the_origin() {
+        let (near, near_line) = ellipse_arc_pcurve(0.0);
+        let (far, far_line) = ellipse_arc_pcurve(1e7);
+        assert!(!near_line && !far_line, "a line for a curved image");
+        assert!(near < 1e-6, "{near} off at the origin");
+        assert!(far < 1e-6, "{far} off 1e7 from the origin");
     }
 }

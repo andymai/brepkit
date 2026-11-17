@@ -1150,6 +1150,9 @@ fn is_side(s: &NurbsSurface, c: &NurbsCurve, k: usize, reach: f64) -> bool {
 /// from each corner of the domain to the next, each side of the surface
 /// shown to be its edge, a straight edge by the side's control points lying
 /// on it, and a NURBS, circle or ellipse edge by being the side's own curve.
+/// A band closed along `v`, its first and last rows across `u` one curve (a
+/// blend round a closed rim), is the whole surface when its wire runs both
+/// closed sides and its seam row once each way.
 /// The surface has clamped knots and positive weights none more than
 /// [`MAX_WEIGHT_RATIO`] times another, so its sides are the outer rows of
 /// its control points, which bound them, and its integrands are smooth in
@@ -1191,13 +1194,16 @@ pub(super) fn nurbs_face_over_domain(
     let weighted = s.weights().iter().flatten().all(|w| w.is_finite())
         && w_lo > 0.0
         && w_hi <= MAX_WEIGHT_RATIO * w_lo;
+    // A band closed along `v` (round a closed rim) is the whole surface when
+    // its wire runs both closed sides and its one seam row each way.
+    let closed_v = !open_and_poleless(s) && closed_along_v_and_poleless(s);
     if !face.inner_wires().is_empty()
         || !weighted
         || !clamped(s.knots_u(), s.degree_u())
         || !clamped(s.knots_v(), s.degree_v())
         || !continuous(s.knots_u(), s.degree_u())
         || !continuous(s.knots_v(), s.degree_v())
-        || !open_and_poleless(s)
+        || !(closed_v || open_and_poleless(s))
     {
         return Ok(None);
     }
@@ -1224,10 +1230,15 @@ pub(super) fn nurbs_face_over_domain(
     };
     let ws = s.weights();
     // Matched to the shortest side: a tolerance taken from the whole patch
-    // would let a long thin one's trim pass for its side.
-    let shortest = (0..4)
-        .map(|k| (corners[(k + 1) % 4] - corners[k]).length())
-        .fold(f64::INFINITY, f64::min);
+    // would let a long thin one's trim pass for its side. A closed band's
+    // sides along `v` start and end at one corner: its seam is the measure.
+    let shortest = if closed_v {
+        (corners[1] - corners[0]).length()
+    } else {
+        (0..4)
+            .map(|k| (corners[(k + 1) % 4] - corners[k]).length())
+            .fold(f64::INFINITY, f64::min)
+    };
     if !shortest.is_finite() || shortest <= 0.0 {
         return Ok(None);
     }
@@ -1249,7 +1260,18 @@ pub(super) fn nurbs_face_over_domain(
         let (Some(i), Some(j)) = (corner_of(a), corner_of(b)) else {
             return Ok(None);
         };
-        let k = if (i + 1) % 4 == j {
+        let k = if closed_v {
+            // Corners 0 and 3 are one point, and 1 and 2: each closed side
+            // starts and ends at its own, and the seam runs between them as
+            // side 0 one way and side 2 the other.
+            match (i, j) {
+                (0, 0) => 3,
+                (1, 1) => 1,
+                (0, 1) | (1, 0) if !covered[0] => 0,
+                (0, 1) | (1, 0) if !covered[2] => 2,
+                _ => return Ok(None),
+            }
+        } else if (i + 1) % 4 == j {
             i
         } else if (j + 1) % 4 == i {
             j
@@ -1698,6 +1720,32 @@ fn edge_velocity(curve: &EdgeCurve, t: f64, start: Point3, end: Point3) -> Vec3 
 /// Whether a NURBS surface neither closes on itself along `u` or `v` nor
 /// shrinks to a point along a side.
 fn open_and_poleless(s: &brepkit_math::nurbs::surface::NurbsSurface) -> bool {
+    let (sides, near) = side_samples(s);
+    let length = |pts: &[Point3]| pts.windows(2).map(|w| (w[1] - w[0]).length()).sum::<f64>();
+    let same =
+        |a: &[Point3], b: &[Point3]| a.iter().zip(b).all(|(p, q)| (*p - *q).length() <= near);
+    !same(&sides[0], &sides[1])
+        && !same(&sides[2], &sides[3])
+        && sides.iter().all(|p| length(p) > near)
+}
+
+/// Whether a NURBS surface closes on itself along `v` alone, its first and
+/// last rows across `u` one curve (a band round a closed rim), and shrinks
+/// to a point along no side.
+fn closed_along_v_and_poleless(s: &brepkit_math::nurbs::surface::NurbsSurface) -> bool {
+    let (sides, near) = side_samples(s);
+    let length = |pts: &[Point3]| pts.windows(2).map(|w| (w[1] - w[0]).length()).sum::<f64>();
+    let same =
+        |a: &[Point3], b: &[Point3]| a.iter().zip(b).all(|(p, q)| (*p - *q).length() <= near);
+    !same(&sides[0], &sides[1])
+        && same(&sides[2], &sides[3])
+        && sides.iter().all(|p| length(p) > near)
+}
+
+/// Samples along each side of a NURBS surface's domain, `u = u0`, `u = u1`,
+/// `v = v0` and `v = v1` in turn, and the distance within which two points
+/// of it are one; an empty list and no distance for a surface of no size.
+fn side_samples(s: &brepkit_math::nurbs::surface::NurbsSurface) -> ([Vec<Point3>; 4], f64) {
     const N: u32 = 8;
     let (u0, u1) = s.domain_u();
     let (v0, v1) = s.domain_v();
@@ -1722,12 +1770,14 @@ fn open_and_poleless(s: &brepkit_math::nurbs::surface::NurbsSurface) -> bool {
     ];
     let size = sides.iter().map(|p| length(p)).fold(0.0_f64, f64::max);
     let near = 1e-9 * size.max(1.0);
-    let same =
-        |a: &[Point3], b: &[Point3]| a.iter().zip(b).all(|(p, q)| (*p - *q).length() <= near);
-    size > near
-        && !same(&sides[0], &sides[1])
-        && !same(&sides[2], &sides[3])
-        && sides.iter().all(|p| length(p) > near)
+    if size > near {
+        (sides, near)
+    } else {
+        (
+            [Vec::new(), Vec::new(), Vec::new(), Vec::new()],
+            f64::INFINITY,
+        )
+    }
 }
 
 #[cfg(test)]
