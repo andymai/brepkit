@@ -770,6 +770,40 @@ fn a_pocket_in_the_stub_face_below_the_round_is_refused() {
     );
 }
 
+/// A pocket in the face past the stub whose corner lies on the `r1` round's
+/// end, the rest of it in the kept wall: kept, the hole would touch the
+/// wall's new outline with no edge or vertex in common, and the build
+/// refuses it.
+#[test]
+fn a_pocket_that_touches_the_rounds_end_is_refused() {
+    let mut topo = Topology::new();
+    let (solid, points) = seam_stub_prism(&mut topo, 20.0);
+    // (1.6 - 8)^2 + (3.2 - 8)^2 = 64: the corner lies on the round's arc.
+    let pocket = brepkit_operations::primitives::make_box(&mut topo, 0.2, 0.1, 0.1).unwrap();
+    transform_solid(&mut topo, pocket, &Mat4::translation(19.9, 1.6, 3.2)).unwrap();
+    let pocketed = brepkit_operations::boolean::boolean(
+        &mut topo,
+        brepkit_operations::boolean::BooleanOp::Cut,
+        solid,
+        pocket,
+    )
+    .unwrap();
+    let laws = seam_laws(&topo, pocketed, points, &|p| p);
+    match fillet_v2_variable(&mut topo, pocketed, laws) {
+        Err(brepkit_operations::OperationsError::Blend(
+            brepkit_blend::BlendError::PlanningFailure { reason },
+        )) => assert!(
+            reason.contains("runs past a short edge"),
+            "the pocket on the round's end must refuse the crossing, got {reason}"
+        ),
+        Err(other) => panic!("expected the crossing's refusal, got {other}"),
+        Ok(result) => panic!(
+            "a pocket on the round's end must be refused, got {} successes",
+            result.succeeded.len()
+        ),
+    }
+}
+
 /// The seam prism sheared as it rises, along `y` by `1 / sqrt(3)` of its
 /// height: the floor meets the wall along `P1-P2` at 60 degrees, and the
 /// faces at `x = 20` stay on that plane.
