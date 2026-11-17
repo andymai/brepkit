@@ -202,11 +202,12 @@ pub enum MathError {
         iterations: usize,
     },
 
-    /// A rational curve's Bezier form over a span has a control point at
-    /// infinity: its homogeneous weight is zero while its numerator is not,
-    /// so it has no Cartesian point to store. Weights of mixed sign can
-    /// cancel to such a weight.
-    #[error("the Bezier form over [{start}, {end}] has a control point at infinity")]
+    /// A rational curve's or surface's control net over a span, after a
+    /// knot insertion or removal, a degree elevation or in Bezier form, has
+    /// a control point at infinity: its homogeneous weight is zero while its
+    /// numerator is not, so it has no Cartesian point to store. Weights of
+    /// mixed sign can cancel to such a weight.
+    #[error("the rational form over [{start}, {end}] has a control point at infinity")]
     PoleAtInfinity {
         /// Start of the span.
         start: f64,

@@ -6,6 +6,7 @@ use crate::madd::Madd;
 use crate::nurbs::curve::NurbsCurve;
 use crate::nurbs::knot_ops::KNOT_EPS;
 use crate::nurbs::surface::NurbsSurface;
+use crate::nurbs::{cartesian, cartesian_net, span_around};
 use crate::vec::Point3;
 
 /// Decompose a NURBS curve into Bezier segments.
@@ -51,26 +52,6 @@ pub fn curve_to_bezier_segments(curve: &NurbsCurve) -> Result<Vec<NurbsCurve>, M
         segments.push(NurbsCurve::new(p, knots, points, weights)?);
     }
     Ok(segments)
-}
-
-/// A homogeneous point `[w x, w y, w z, w]` as its point, the origin for a
-/// weight of zero over a numerator of zero (it adds nothing to the curve).
-/// `None` for a point at infinity: a weight of zero over a numerator that is
-/// not, or a quotient that overflows. Evaluation scales a point by its
-/// weight, so it would drop that numerator.
-fn cartesian(q: [f64; 4]) -> Option<Point3> {
-    let point = if q[3] == 0.0 {
-        if q[..3].iter().any(|&c| c != 0.0) {
-            return None;
-        }
-        Point3::new(0.0, 0.0, 0.0)
-    } else {
-        Point3::new(q[0] / q[3], q[1] / q[3], q[2] / q[3])
-    };
-    [point.x(), point.y(), point.z()]
-        .iter()
-        .all(|c| c.is_finite())
-        .then_some(point)
 }
 
 /// The rational Bezier form of `curve` from parameter `a` to parameter `b`.
@@ -348,22 +329,6 @@ fn span_is_bezier(knots: &[f64], p: usize, i: usize) -> bool {
         && knots[i + 1..=i + p].iter().all(|&k| same(k, knots[i + 1]))
 }
 
-/// A row of homogeneous points `[w x, w y, w z, w]` as points and weights,
-/// a point of weight zero kept as its numerator.
-fn cartesian_row(h: &[[f64; 4]]) -> (Vec<Point3>, Vec<f64>) {
-    let row = h
-        .iter()
-        .map(|h| {
-            if h[3] == 0.0 {
-                Point3::new(h[0], h[1], h[2])
-            } else {
-                Point3::new(h[0] / h[3], h[1] / h[3], h[2] / h[3])
-            }
-        })
-        .collect();
-    (row, h.iter().map(|h| h[3]).collect())
-}
-
 /// The knots `surface_to_bezier_patches` inserts along one direction, in
 /// order, each with the count it asks for: every interior knot of `knots`
 /// short of multiplicity `p`.
@@ -401,12 +366,12 @@ fn refine_to_full_multiplicity(surface: &NurbsSurface) -> Result<NurbsSurface, M
         return Err(MathError::EmptyInput);
     }
     for (u, r) in along_u {
-        insert_along_rows(&mut cps, &mut ws, &mut knots_u, pu, u, r);
+        insert_along_rows(&mut cps, &mut ws, &mut knots_u, pu, u, r)?;
     }
     if !along_v.is_empty() {
         let (mut cols, mut wcols) = (transpose(&cps), transpose(&ws));
         for (v, r) in along_v {
-            insert_along_rows(&mut cols, &mut wcols, &mut knots_v, pv, v, r);
+            insert_along_rows(&mut cols, &mut wcols, &mut knots_v, pv, v, r)?;
         }
         cps = transpose(&cols);
         ws = transpose(&wcols);
@@ -450,7 +415,8 @@ fn row_view<'a>(
 
 /// [`crate::nurbs::knot_ops::curve_knot_insert`] of `u`, `r` times, on
 /// every column of the grid at once (its rows run along the curves): the
-/// same multiplicity cap, homogeneous points, blends and knot vector.
+/// same multiplicity cap, homogeneous points, blends, knot vector and
+/// refusal of a control point at infinity.
 fn insert_along_rows(
     cps: &mut Vec<Vec<Point3>>,
     ws: &mut Vec<Vec<f64>>,
@@ -458,15 +424,16 @@ fn insert_along_rows(
     p: usize,
     u: f64,
     r: usize,
-) {
+) -> Result<(), MathError> {
     let s = knots
         .iter()
         .filter(|&&kv| (kv - u).abs() < KNOT_EPS)
         .count();
     let r = r.min(p.saturating_sub(s));
     if r == 0 {
-        return;
+        return Ok(());
     }
+    let span = span_around(knots, u);
     // Each row is blended in homogeneous form and written back; a row the
     // blends do not touch is only taken there and back, which leaves a row
     // whose weights are all exactly 1 as it was, so such a row stays in
@@ -507,20 +474,21 @@ fn insert_along_rows(
         .zip(std::mem::take(ws))
         .map(Some)
         .collect();
+    let mut grid = Vec::with_capacity(rows.len());
     for row in rows {
-        let (row, wrow) = match row {
+        grid.push(match row {
             Row::Kept(at) => match old[at].take() {
                 Some((row, wrow)) if wrow.iter().all(|&w| w.to_bits() == 1.0_f64.to_bits()) => {
                     (row, wrow)
                 }
-                Some((row, wrow)) => cartesian_row(&homogeneous(&row, &wrow)),
+                Some((row, wrow)) => cartesian_net(&homogeneous(&row, &wrow), span)?,
                 None => continue,
             },
-            Row::Blended(h) => cartesian_row(&h),
-        };
-        cps.push(row);
-        ws.push(wrow);
+            Row::Blended(h) => cartesian_net(&h, span)?,
+        });
     }
+    (*cps, *ws) = grid.into_iter().unzip();
+    Ok(())
 }
 
 /// Elevate the degree of a NURBS curve by `t` (A5.9).
@@ -529,7 +497,9 @@ fn insert_along_rows(
 ///
 /// # Errors
 ///
-/// Returns an error if the resulting curve cannot be constructed.
+/// Returns [`MathError::PoleAtInfinity`] if an elevated control point is at
+/// infinity, as weights of mixed sign can blend to, or another error if the
+/// resulting curve cannot be constructed.
 pub fn curve_degree_elevate(curve: &NurbsCurve, t: usize) -> Result<NurbsCurve, MathError> {
     if t == 0 {
         return Ok(curve.clone());
@@ -630,19 +600,8 @@ pub fn curve_degree_elevate(curve: &NurbsCurve, t: usize) -> Result<NurbsCurve, 
         return Ok(curve.clone());
     }
 
-    // Convert back from homogeneous.
-    let new_cps: Vec<Point3> = all_cps
-        .iter()
-        .map(|h| {
-            if h[3] == 0.0 {
-                Point3::new(h[0], h[1], h[2])
-            } else {
-                Point3::new(h[0] / h[3], h[1] / h[3], h[2] / h[3])
-            }
-        })
-        .collect();
-    let new_ws: Vec<f64> = all_cps.iter().map(|h| h[3]).collect();
-
+    let (u0, u1) = curve.domain();
+    let (new_cps, new_ws) = cartesian_net(&all_cps, (u0, u1))?;
     NurbsCurve::new(new_p, all_knots, new_cps, new_ws)
 }
 
@@ -1331,6 +1290,35 @@ mod tests {
             let off = (raised.evaluate(t) - c.evaluate(t)).length();
             assert!(off < 1e-12, "at {t}: {off}");
         }
+    }
+
+    /// Rows of a rational quadratic whose weights change sign: raising its
+    /// knot at 1 to full multiplicity puts a control point at infinity, and
+    /// the patches are refused rather than built from the bare numerator.
+    #[test]
+    fn a_surface_whose_refinement_puts_a_point_at_infinity_is_refused() {
+        let p = Point3::new;
+        let row = |z: f64| {
+            vec![
+                p(0.0, 0.0, z),
+                p(1.0, 1.0, z),
+                p(2.0, 0.0, z),
+                p(3.0, 1.0, z),
+            ]
+        };
+        let s = NurbsSurface::new(
+            2,
+            1,
+            vec![0.0, 0.0, 0.0, 1.0, 2.0, 2.0, 2.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            transpose(&[row(0.0), row(1.0)]),
+            vec![vec![1.0; 2], vec![1.0; 2], vec![-1.0; 2], vec![1.0; 2]],
+        )
+        .expect("valid");
+        assert!(matches!(
+            surface_to_bezier_patches(&s),
+            Err(MathError::PoleAtInfinity { .. })
+        ));
     }
 
     /// A surface's Bezier patches trace it: each at 7 by 7 points inside its
