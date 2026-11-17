@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794906784398,
+  "lastUpdate": 1794908503087,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -73655,6 +73655,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26738434,
             "range": "± 75179",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "9506f9d2b47ba7e393eaeb4648eac8592318eafe",
+          "message": "fix(io): pair each surface with itself where two cross at an edge (#2602)\n\n## Summary\n\nTwo cubes of edge 10 share the edge from (0, 0, 0) to (0, 0, 10). The\nsecond cube is the first turned by 45 degrees round that edge, so the\ntwo cross. On main, `import_mesh_parts` returns one solid of volume 2000\nthat `validate_solid` reports as not valid, and `import_mesh` returns\nthat solid with no error (#2576).\n\nNow `import_mesh` returns its error that two closed bodies cross.\n`import_mesh_parts` returns two valid solids of volume 1000 for the\noutward mesh, and two shells for the inward mesh.\n\nThis work builds on #2580 and on its test for crossings at a shared\nline. The branch started from the branch of #2580, and now holds main\nwith #2580 merged.\n\n### Cause\n\nRound the edge, the four triangles are at 0, 45, 90 and 135 degrees. The\nfirst cube has the triangles at 0 and 90 degrees. Only one way to pair\nthem gives pairs whose two triangles run the edge in opposite\ndirections. Each of those pairs has a triangle of each cube, so the\nimport joined the two cubes in one body. The test for bodies that cross\ncompares only two different bodies, so it did not run.\n\n### Fix\n\n- `patch_turns` also returns the surface of each triangle: the set of\ntriangles joined to it through edges of two triangles.\n- `pair_round_edge` reads the surfaces of the triangles in their order\nround the edge. Each surface can have two triangles at the edge, which\nrun it in opposite directions. When the triangles of two surfaces\nalternate, the two cross at the edge. Then each surface pairs with\nitself.\n- The two cubes are then two closed bodies, and the placement finds that\nthey cross at the shared line. Two cubes that cross along half of an\nedge give the same results.\n- Surfaces that do not alternate pair as before. An outward cube and an\ninward cube on one edge also have only one way to pair. Their surfaces\ndo not alternate, so their pairs stay the same.\n\nA flat sheet that runs through the edge of a cube and into the cube also\nalternates with the cube. At `1174b6a21`, the cube and the sheet are one\nshell. Now the cube is a solid and the sheet is a shell.\n\nI moved the row for #2576 in the roadmap skill to its Closed section.\n\n### Sides of the bodies of new pairs\n\nCopilot found this on #2580. When the triangles round an edge pair off\nagain after a turn, the turned body splits into new bodies. Each new\nbody kept the side that its whole group took from the stored normals.\nNow `take_side` gives each new body its side as `split_bodies` gives a\nclosed body. A new body takes the side of most of its triangles as the\nmesh winds them. Its own stored normals can then turn it to the other\nside.\n\nA cube and a larger hook-shaped prism share an edge and cross, both\nwound inward. The normals of the cube point out, against its winding.\nThe normals of the hook point in, and outweigh those of the cube. At\n`bdb0f8301` the two are two shells. Now the cube is an outward solid of\nvolume 1000, and the hook is a shell.\n\n## Tests\n\n- `crates/io/tests/mesh_import_bodies.rs` has 3 new tests. The first two\nfail at `1174b6a21`, the head of #2580:\n- Two cubes that cross at a shared edge, in each winding and in four\nposes (upright, turned, mirrored, and turned and mirrored).\n`import_mesh` returns the error for bodies that cross.\n`import_mesh_parts` returns 2 valid solids of volume 1000, or 2 shells\nof 12 faces.\n- The sheet through the edge of a cube: 1 valid solid of volume 1000 and\n1 shell of 6 faces.\n- The cube and the hook with their normals: 1 valid solid of volume 1000\nand 1 shell of 28 faces. `import_mesh` returns the error for bodies that\ncross. The test fails at `bdb0f8301`, with 2 shells.\n- With `crossing_surfaces` turned off, both new tests fail.\n- The 66 earlier tests in the file pass. One of them is the chain of\nthree cubes in each of the 8 windings, with an outward and an inward\ncube on one edge.\n- `cargo nextest run --cargo-profile ci -p brepkit-io -p brepkit-wasm`\nat `5b67029aa` (main merged): 849 passed and 6 skipped.\n- The pre-commit hook (fmt and clippy over the workspace) passes.\n\nFixes #2576",
+          "timestamp": "2026-11-17T09:38:02Z",
+          "tree_id": "8356507730b807035f54e70e1cf3243530d9e144",
+          "url": "https://github.com/andymai/brepkit/commit/9506f9d2b47ba7e393eaeb4648eac8592318eafe"
+        },
+        "date": 1794908488288,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 838526,
+            "range": "± 22538",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 875409,
+            "range": "± 13616",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 9866,
+            "range": "± 13",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 510228,
+            "range": "± 2797",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 18891664,
+            "range": "± 79256",
             "unit": "ns/iter"
           }
         ]
