@@ -1555,7 +1555,8 @@ pub(super) fn tessellate_latitude_band_shared(
 /// sphere's octant), two of which the shared samples split into the same
 /// number `m` of segments, is meshed in rows from the corner between those
 /// two: row `s` runs from the `s`-th sample of one to the `s`-th of the
-/// other in `s` segments, and the third side is the last row. A point
+/// other in `s` segments, or fewer where the row is shorter than `s` side
+/// segments, and the third side is the last row. A point
 /// between is the mean of the three points that lines along the three
 /// sides give it, read on the side samples, and pushed out onto the sphere.
 /// Two rows join in order along them, each step by the shorter of its two
@@ -1563,12 +1564,15 @@ pub(super) fn tessellate_latitude_band_shared(
 /// times `angular_tol` is then halved. The rims are the shared samples
 /// themselves, so the face closes with its neighbours.
 ///
-/// Returns `Ok(false)` and leaves the mesh as it was when the face is not
-/// such a patch, when a chord turning by that much would stand off the
-/// sphere by more than `deflection`, when the patch reaches the hemisphere opposite its samples'
-/// mean direction, when a triangle faces into the sphere (a fold, which a
-/// side bending far into the patch gives), or when a triangle stands off the
-/// sphere by more than `deflection`. The CDT takes the face then.
+/// Returns `Ok(false)` and leaves the mesh as it was, for the CDT to take
+/// the face, in these cases:
+/// - the face is not such a patch, or the wire does not run counterclockwise
+///   round the patch about the sphere's outward normal;
+/// - a chord turning by `SQRT_2` times `angular_tol` would stand off the
+///   sphere by more than `deflection`;
+/// - the patch reaches the hemisphere opposite its samples' mean direction;
+/// - a triangle faces into the sphere (a fold, which a side bending far
+///   into the patch gives), or stands off it by more than `deflection`.
 pub(super) fn tessellate_sphere_triangle_shared(
     topo: &Topology,
     face_data: &brepkit_topology::face::Face,
@@ -1694,17 +1698,33 @@ pub(super) fn tessellate_sphere_triangle_shared(
     let idx_start = merged.indices.len();
     let ptg_start = point_to_global.len();
     // Row `s` runs from the `s`-th sample towards `b` to the `s`-th towards
-    // `c` in `s` segments, at the barycentric level `s / m` from the apex.
+    // `c` in up to `s` segments, at the barycentric level `s / m` from the
+    // apex.
     let mut rows: Vec<Vec<u32>> = Vec::with_capacity(m + 1);
     rows.push(vec![along_b[0]]);
     for s in 1..m {
-        let mut row = Vec::with_capacity(s + 1);
+        // A row that turns through less than `s` of the side segments
+        // beside it takes fewer segments, so a narrow patch takes triangles
+        // for its area and not for its sides' length. An octant's rows turn
+        // through at least `s` of them and keep `s`.
+        let turn = |p: Point3, q: Point3| {
+            let (u, v) = (p - center, q - center);
+            u.cross(v).length().atan2(u.dot(v))
+        };
+        let spacing = turn(b_points[s - 1], b_points[s]).max(turn(c_points[s - 1], c_points[s]));
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let count = if spacing > 0.0 {
+            ((turn(b_points[s], c_points[s]) / spacing).ceil() as usize).clamp(1, s)
+        } else {
+            s
+        };
+        let mut row = Vec::with_capacity(count + 1);
         row.push(along_b[s]);
         #[allow(clippy::cast_precision_loss)]
-        let sf = s as f64;
-        for j in 1..s {
+        let (sf, cf) = (s as f64, count as f64);
+        for j in 1..count {
             #[allow(clippy::cast_precision_loss)]
-            let f = j as f64 / sf;
+            let f = j as f64 / cf;
             // Barycentric weights of the apex, `b` and `c`.
             let (beta, gamma) = (sf / mf * (1.0 - f), sf / mf * f);
             let in_row = lerp(b_points[s], c_points[s], f);

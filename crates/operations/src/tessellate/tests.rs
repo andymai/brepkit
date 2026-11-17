@@ -5897,3 +5897,69 @@ fn only_a_one_segment_curve_reads_as_straight() {
     .unwrap();
     assert!(!super::nurbs::runs_straight(&turn));
 }
+
+/// A unit sphere's patch from the pole down to the equator between two
+/// meridians 4 degrees apart, the only face of its shell: its long sides
+/// hold some 45 segments each and its base 2. The patch meshes closed in
+/// no more than four triangles for each segment of a long side, with no
+/// edge turning by more than `SQRT_2` times the angle. Rows as long as its
+/// sides would take the square of a side's segments.
+#[test]
+fn a_narrow_sphere_patch_takes_triangles_for_its_area() {
+    use brepkit_math::curves::Circle3D;
+    use brepkit_math::surfaces::SphericalSurface;
+    use brepkit_topology::shell::Shell;
+    use brepkit_topology::solid::Solid;
+
+    let p = Point3::new;
+    let o = p(0.0, 0.0, 0.0);
+    let gap = 4f64.to_radians();
+    let mut topo = Topology::new();
+    let corners = [
+        p(0.0, 0.0, 1.0),
+        p(1.0, 0.0, 0.0),
+        p(gap.cos(), gap.sin(), 0.0),
+    ]
+    .map(|q| topo.add_vertex(Vertex::new(q, 1e-7)));
+    let arc = |normal: Vec3| EdgeCurve::Circle(Circle3D::new(o, normal, 1.0).unwrap());
+    // A circle runs counterclockwise about its normal, so each normal is
+    // the cross product of its arc's start and end.
+    let sides = [
+        Vec3::new(0.0, 1.0, 0.0),
+        Vec3::new(0.0, 0.0, 1.0),
+        Vec3::new(gap.sin(), -gap.cos(), 0.0),
+    ];
+    let edges: Vec<OrientedEdge> = (0..3)
+        .map(|k| {
+            let edge = Edge::new(corners[k], corners[(k + 1) % 3], arc(sides[k]));
+            OrientedEdge::new(topo.add_edge(edge), true)
+        })
+        .collect();
+    let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+    let sphere = SphericalSurface::new(o, 1.0).unwrap();
+    let face = topo.add_face(Face::new(wire, vec![], FaceSurface::Sphere(sphere)));
+    let shell = topo.add_shell(Shell::new(vec![face]).unwrap());
+    let solid = topo.add_solid(Solid::new(shell, vec![]));
+    let mesh = tessellate_solid_with_tolerance(&topo, solid, 0.01, 2f64.to_radians()).unwrap();
+    let side = boundary_edge_count(&mesh) / 2;
+    assert!(side >= 45, "{side}");
+    assert_eq!(non_manifold_edge_count(&mesh), 0);
+    assert!(
+        mesh.indices.len() / 3 <= 4 * side,
+        "{} triangles",
+        mesh.indices.len() / 3
+    );
+    let bound = std::f64::consts::SQRT_2 * 2f64.to_radians() + 1e-9;
+    for tri in mesh.indices.chunks_exact(3) {
+        for k in 0..3 {
+            let a = mesh.positions[tri[k] as usize] - o;
+            let b = mesh.positions[tri[(k + 1) % 3] as usize] - o;
+            let turn = a.cross(b).length().atan2(a.dot(b));
+            assert!(
+                turn <= bound,
+                "an edge turns by {} degrees",
+                turn.to_degrees()
+            );
+        }
+    }
+}
