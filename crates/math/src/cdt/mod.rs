@@ -35,7 +35,7 @@ mod locate;
 #[cfg(test)]
 mod tests;
 
-use crate::det_hash::DetHashSet;
+use crate::det_hash::{DetHashSet, WordHashMap, WordState};
 use crate::madd::Madd;
 
 use crate::MathError;
@@ -81,10 +81,25 @@ fn fast_in_circle(a: Point2, b: Point2, c: Point2, d: Point2) -> f64 {
 
     if det > errbound || det < -errbound {
         det
+    } else if splits_into_equal_pairs([a.x(), b.x(), c.x(), d.x()])
+        && splits_into_equal_pairs([a.y(), b.y(), c.y(), d.y()])
+    {
+        // The corners of a rectangle along the axes (a structured grid's
+        // cell), or points on one line along an axis: the exact determinant
+        // is zero, and the exact predicate would take its slowest path to
+        // say so.
+        0.0
     } else {
         // Near zero — use exact predicate
         in_circle(a, b, c, d)
     }
+}
+
+/// Whether the four values are two pairs of equal values.
+#[inline]
+#[allow(clippy::float_cmp)]
+fn splits_into_equal_pairs([p, q, r, s]: [f64; 4]) -> bool {
+    (p == q && r == s) || (p == r && q == s) || (p == s && q == r)
 }
 
 // ---------------------------------------------------------------------------
@@ -111,7 +126,7 @@ pub struct Cdt {
     /// Number of super-triangle vertices at the start of the vertex list.
     super_count: usize,
     /// Spatial hash for O(1) amortized duplicate point detection.
-    dup_grid: std::collections::HashMap<(i64, i64), Vec<usize>>,
+    dup_grid: WordHashMap<(i64, i64), Vec<usize>>,
     /// Last successfully located triangle — used as starting point for the
     /// walking search to exploit spatial coherence in insertion order.
     last_located: usize,
@@ -131,6 +146,9 @@ pub struct Cdt {
     recovery_inserts: usize,
     /// Index for the on-segment vertex scan in `insert_constraint`.
     vertex_grid: VertexGrid,
+    /// The edges `legalize` has still to test, kept between calls so that
+    /// each point inserted does not allocate it again.
+    legalize_stack: Vec<(usize, usize, usize)>,
 }
 
 /// Uniform grid over the inserted vertices, so finding the vertices that lie
@@ -305,11 +323,12 @@ impl Cdt {
             triangles,
             constraints: DetHashSet::default(),
             super_count: 3,
-            dup_grid: std::collections::HashMap::new(),
+            dup_grid: WordHashMap::with_capacity_and_hasher(n, WordState),
             last_located: 0,
             vertex_tri,
             recovery_inserts: 0,
             vertex_grid: VertexGrid::default(),
+            legalize_stack: Vec::new(),
         }
     }
 

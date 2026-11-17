@@ -263,7 +263,9 @@ impl Cdt {
     /// is restored around the inserted vertex. Uses an explicit stack to
     /// avoid stack overflow on large meshes.
     fn legalize(&mut self, tri_idx: usize, edge_local: usize, inserted_vertex: usize) {
-        let mut stack = vec![(tri_idx, edge_local, inserted_vertex)];
+        let mut stack = std::mem::take(&mut self.legalize_stack);
+        stack.clear();
+        stack.push((tri_idx, edge_local, inserted_vertex));
 
         while let Some((ti, el, vi)) = stack.pop() {
             let Some(adj) = self.triangles[ti].adj[el] else {
@@ -299,6 +301,7 @@ impl Cdt {
                 self.push_legalize_toward(&mut stack, adj, vi);
             }
         }
+        self.legalize_stack = stack;
     }
 
     /// Push a legalize task for the edge of `tri_idx` that faces away from `vi`.

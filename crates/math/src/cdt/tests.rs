@@ -1057,3 +1057,55 @@ fn constraint_is_not_chained_through_a_cluster_on_it() {
         );
     }
 }
+
+/// Four values in two equal pairs on each axis put the points at the corners
+/// of a rectangle along the axes, or on one line along an axis: the exact
+/// predicate reads every such set on its circle, and the shortcut in
+/// `fast_in_circle` answers the same without it.
+#[test]
+#[allow(clippy::float_cmp)]
+fn points_paired_on_both_axes_read_on_the_circle() {
+    let p = Point2::new;
+    let sets = [
+        [p(0.1, -3.3), p(0.7, -3.3), p(0.7, 2.9), p(0.1, 2.9)],
+        [
+            p(1e-3, 0.3),
+            p(1e5, 0.3),
+            p(1e5, 0.300_000_000_000_000_04),
+            p(1e-3, 0.300_000_000_000_000_04),
+        ],
+        [
+            p(-7.25, 1.0 / 3.0),
+            p(13.0, 1.0 / 3.0),
+            p(13.0, 2.0 / 3.0),
+            p(-7.25, 2.0 / 3.0),
+        ],
+        [p(2.0, 0.1), p(2.0, 0.7), p(2.0, 0.3), p(2.0, 0.5)],
+    ];
+    for set in sets {
+        for [i, j, k, l] in [
+            [0, 1, 2, 3],
+            [1, 2, 3, 0],
+            [0, 2, 1, 3],
+            [3, 1, 0, 2],
+            [2, 0, 3, 1],
+        ] {
+            let (a, b, c, d) = (set[i], set[j], set[k], set[l]);
+            assert_eq!(in_circle(a, b, c, d), 0.0, "{set:?} {:?}", [i, j, k, l]);
+            assert_eq!(
+                fast_in_circle(a, b, c, d),
+                0.0,
+                "{set:?} {:?}",
+                [i, j, k, l]
+            );
+        }
+    }
+    // One value off its pair: the exact predicate decides, and its sign
+    // stands.
+    let (a, b, c) = (p(0.0, 0.0), p(1.0, 0.0), p(1.0, 1.0));
+    let d = p(1e-17, 1.0);
+    assert_eq!(
+        fast_in_circle(a, b, c, d).signum(),
+        in_circle(a, b, c, d).signum()
+    );
+}
