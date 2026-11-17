@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794932558936,
+  "lastUpdate": 1794935346296,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -74465,6 +74465,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 20544136,
             "range": "± 59245",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "1844fdc0031d1ae27bf0923f7a25a1143ae089ca",
+          "message": "chore(main): release 4.11.32 (#2636)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[4.11.32](https://github.com/andymai/brepkit/compare/v4.11.31...v4.11.32)\n(2026-11-17)\n\n\n### Bug Fixes\n\n* **algo:** fuse a strut into a bore under its window exactly\n([#2626](https://github.com/andymai/brepkit/issues/2626))\n([fd67303](https://github.com/andymai/brepkit/commit/fd67303b0795550a63e28d2b970ea692226b0988))\n* **algo:** fuse a yoke onto a stepped flange exactly\n([#2623](https://github.com/andymai/brepkit/issues/2623))\n([74d304e](https://github.com/andymai/brepkit/commit/74d304e4f8bf0d8da7893a51c5e25a0178d0288a))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-11-17T17:05:51Z",
+          "tree_id": "b82ffd0fab077ff348f9617200ca32afed01fd82",
+          "url": "https://github.com/andymai/brepkit/commit/1844fdc0031d1ae27bf0923f7a25a1143ae089ca"
+        },
+        "date": 1794935339706,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 711589,
+            "range": "± 28172",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 727367,
+            "range": "± 4949",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 8891,
+            "range": "± 226",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 441547,
+            "range": "± 6024",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 16291733,
+            "range": "± 630008",
             "unit": "ns/iter"
           }
         ]
