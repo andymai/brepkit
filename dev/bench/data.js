@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794926312309,
+  "lastUpdate": 1794928242028,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -74357,6 +74357,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25603952,
             "range": "± 31176",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "74d304e4f8bf0d8da7893a51c5e25a0178d0288a",
+          "message": "fix(algo): fuse a yoke onto a stepped flange exactly (#2623)\n\n## Summary\n\nThe brepjs playground example `universal-joint` fuses a trimmed yoke\nwith the two discs of its flange in one `fuseAll`. The disc has radius\n52 from x = -72 to -62. The spigot has radius 34 from x = -65 to -59.\nThe yoke's turned outside tapers along a cone to radius 34 at x = -62,\nso the cone's rim lies on the spigot's wall.\n\nBefore this change, with #2614's classifier, that `fuseAll` throws\n`cluster fuse degraded to mesh fallback`. With this change it is exact:\n78 faces (2 cones, 7 cylinders, 69 planes). Fixes #2524.\n\nOn a wasm build of this branch, the example's next `fuseAll` fails: the\ncross, whose two trunnion pairs are cylinders of one radius that cross.\nI filed that as #2622.\n\n## The change\n\n- `split_sections_at_rim_vertices` in\n`crates/algo/src/pave_filler/mod.rs` runs after\n`split_co_endpoint_sections` in both pave filler pipelines. It splits\neach circle section at the vertices of its two faces' rim arcs on the\nsame circle, inside the section's span. The cone's arcs on the spigot's\nwall came whole, beside the yoke's rim arcs, which the back's faces\nsplit at y = ±19.287, z = ±28.\n- The pass also reads the paves that EE and EF leave on a rim's blocks\nbefore MakeBlocks splits them. Paves in one place give one cut, at the\nvertex MakeBlocks keeps there. The pass reads that vertex from\nMakeBlocks' own rule, which wraps a closed rim's parameters round its\nseam first. A whole circle splits only into three or more arcs, each\nunder half a turn.\n- The same pass puts a vertex mid-way on a piece between two boundary\nvertices of one face, when the piece leaves that face's edges. On the\ndisc's face at x = -62, the spigot's circle cuts two lenses off the hole\nthat the yoke's back leaves. Each lens is an arc and the hole's straight\nside between the same ends. The assembler welded the two, or the arc\ndropped out before the walk: its chord lies along that side.\n- `clip_line_to_face_boundary` in\n`crates/algo/src/builder/fill_images_faces.rs` keeps the windows inside\nthe face of a line on a cylinder or cone that crosses the face's\nboundary once. The yoke's sides y = ±21 cut the spigot's wall along\nrulings that start on the circle at x = -62, and the clip dropped them.\nSuch a ruling also splits where it crosses the face's holes, read on the\nhole edges' own curves. The parity of those crossings along the ruling's\nline says which runs lie in a hole. A hit is a crossing only where the\nhole's loop, walked both ways from it, first clears the ruling on\nopposite sides. Hits between the same two clear points count once.\n- `split_cylinder_band_by_arrangement` in\n`crates/algo/src/builder/face_splitter/mod.rs` breaks each of its lines\nat every vertex on it. A vertex on the seam breaks both of the seam's\ncopies, at u = 0 and at u = 2π. The ring at x = -62 that a pair of\nrulings adds stood beside the ring section's own pieces.\n- When the greedy walk on a plane face holds a pinched loop, the DCEL\ntrace replaces it at as many regions too. Without it, the yoke read back\nfrom its own arena needs the mesh fallback to fuse with the disc alone.\n- The plane DCEL trace also runs on a face with woven holes when the\ngreedy walk holds a spur. `arrangement_regions_from_combined` returns no\nresult when one of its edges is a whole circle, which has no chord. In\nthe native test's mirrored pose, the disc's face took that arrangement,\nwhich lost the ring between the radii 34 and 52.\n\n## Tests\n\n- `crates/operations/tests/yoke_on_a_flange.rs` is new. It builds the\nyoke from primitives as the example does.\n`a_yoke_fuses_onto_its_flange_disc` fuses it with the disc, and\n`a_yoke_fuses_onto_its_stepped_flange` fuses it with both discs in one\n`fuse_all`. Each result must be valid and watertight and keep the cone,\nupright, turned and mirrored. Its volume must match the operands'\nvolumes less their overlaps, to 1e-6. Over a 14 x 14 x 14 grid, each\nresult must hold a point where an operand does.\n- In `crates/io/tests/playground_example_repros_inmem.rs`,\n`a_yoke_fuses_onto_its_flange_disc`,\n`a_yoke_read_back_fuses_onto_its_flange_disc` and\n`a_yoke_fuses_onto_its_stepped_flange` fuse the captured operands in the\nsame three poses. The fixtures are `universal_joint_flange_disc.bin`,\n`universal_joint_flange_spigot.bin` and `universal_joint_yoke.bin`.\n- On #2614's head `1c34e050c`, both\n`a_yoke_fuses_onto_its_stepped_flange` tests fail with `cluster fuse\ndegraded to mesh fallback`.\n`a_yoke_read_back_fuses_onto_its_flange_disc` fails because it needs the\nmesh fallback. I also turned each of the seven parts off with a\ntemporary switch, one at a time. Each time, one or more of these tests\nfailed.\n- `a_cut_needing_its_faces_unified_fails_when_the_caller_declines_it`\nfailed on this branch: the knuckle bracket's cut by its two fused\nkeyhole pins needs no face unification now. On #2614's head, the same\ncut with the repair allowed gives 246 faces, and this branch gives 30. I\nrewrote the test as\n`a_cut_by_two_pins_meeting_on_a_knuckle_face_needs_no_repair`. Over a 20\nx 20 x 20 grid, the cut must hold a point where the bracket does and the\ntool does not.\n- `a_rim_section_divides_at_a_pave_still_waiting_on_the_rim` in\n`crates/algo/src/pave_filler/tests.rs` and\n`a_ruling_from_inside_the_band_skips_a_window` in\n`crates/algo/src/builder/fill_images_faces.rs` pin the waiting paves and\nthe hole crossings.\n`a_ruling_from_inside_the_band_meets_a_windows_curved_top_on_it` puts\nthe hole crossing on a window's elliptic top, where the sampled loop was\n0.000201 off. `cylinder_band_splits_both_copies_of_a_split_seam_alike`\nsplits a seam ahead of time.\n- `a_rim_section_divides_once_at_two_waiting_paves_in_one_place` puts\ntwo waiting paves 5e-9 apart on a rim of radius 5.\n`a_rim_section_divides_at_the_vertex_a_rim_keeps_across_its_wrap` puts\nthem either side of a closed rim's wrap.\n`a_short_ruling_from_just_inside_a_curved_window_starts_on_its_top`\nstarts a ruling 0.0001 under the elliptic top. Each fails without its\npart.\n- `a_ruling_through_a_holes_tip_only_touches_it` runs a ruling through\nthe tip of a lens between z = 7 ± x, and fails without the rule.\n`a_ruling_through_a_tiny_lenss_tip_only_touches_it` does the same on a\nband of radius 0.001.\n`a_ruling_along_a_lenss_tangent_tip_only_touches_it` has lens sides that\nleave the tip along the ruling, on a band of radius 10. Both fail with a\nfixed step from the tip.\n`a_ruling_through_a_windows_vertices_crosses_it` (a crossing at two\nvertices) and `a_ruling_tangent_to_a_holes_edge_only_touches_it` (a\ntouch inside a spline edge) pass with or without the change.\n- `cargo nextest run --cargo-profile ci -p brepkit-algo -p brepkit-io -p\nbrepkit-operations -p brepkit-wasm -p brepkit-check -p brepkit-heal -p\nbrepkit-math`: 4715 tests run, 4715 passed, 24 skipped. `cargo test -p\nbrepkit-wasm --lib gridfinity`: 27 passed.\n- The pose sweep (495 lines) and the truth audit (40 lines) give the\nsame output on main at `dfc1eba0c` and on `52d7f2c0a`.\n- I ran the seeded random boolean sweep on `52d7f2c0a` (seeds 1 to 3\nwith 150 cases, seed 4 with 300) against main at `3c8d1104a`. No case is\nworse, and 11 are better. The branch has 500 good, 244 errors and 6 bad,\nwhere main has 489, 253 and 8.\n\n## Capture\n\nI captured the operands with `serializeSolid` from an untracked probe in\nbrepjs at `0ab0bd27`, on wasm builds of main and of this branch. The two\nbuilds give the same fork, turned outside and discs, byte for byte. The\nyoke fixture is the intersect that this branch's build gives. With this\nbranch, the example's `fuseAll` of the yoke and its discs gives 78 faces\nin 87 ms.",
+          "timestamp": "2026-11-17T15:06:45Z",
+          "tree_id": "3f4ee456f7a0cce1434c7e3481ac193cc842012c",
+          "url": "https://github.com/andymai/brepkit/commit/74d304e4f8bf0d8da7893a51c5e25a0178d0288a"
+        },
+        "date": 1794928230433,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1139568,
+            "range": "± 86799",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1191161,
+            "range": "± 2972",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13504,
+            "range": "± 1311",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 732422,
+            "range": "± 3273",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25555641,
+            "range": "± 81347",
             "unit": "ns/iter"
           }
         ]
