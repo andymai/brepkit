@@ -511,39 +511,145 @@ fn fillet_cone_bottom_rim_produces_torus() {
     }
 }
 
-/// The blend chamfer cannot trim a cap or a wall along a closed rim, so a
-/// cylinder's or a frustum's bottom rim is recorded as failed and the solid
-/// comes back as it was, closed. The cone each rim's stripe would take is
-/// checked in the chamfer builder's own tests.
+/// A cylinder's and a frustum's bottom rims take a two-distance chamfer:
+/// `d1` on the rim's first face in the solid's face order and `d2` on the
+/// other, the cap's along its radius and the wall's along its rulings. The
+/// cut is the triangle between the rim and the two contacts swept round the
+/// axis, which `chamfer_distance_angle` cuts as well, upright, turned and
+/// mirrored.
 #[test]
-fn chamfer_v2_records_a_closed_rim_as_failed() {
-    let mut topo = Topology::new();
-    let primitives = [
-        ("cylinder", make_cylinder(&mut topo, 2.0, 4.0).unwrap()),
-        ("frustum", make_cone(&mut topo, 3.0, 1.0, 4.0).unwrap()),
+fn chamfer_v2_cuts_a_closed_rim_exactly() {
+    use brepkit_math::mat::Mat4;
+    use brepkit_operations::tessellate::{is_watertight, tessellate_solid};
+    use brepkit_operations::transform::transform_solid;
+    use brepkit_topology::adjacency::AdjacencyIndex;
+    use std::f64::consts::PI;
+
+    let (d1, d2) = (0.4, 0.25);
+    let poses = [
+        ("upright", Mat4::translation(0.0, 0.0, 0.0)),
+        ("turned", Mat4::rotation_x(0.4) * Mat4::rotation_y(1.1)),
+        ("mirrored", Mat4::scale(-1.0, 1.0, 1.0)),
     ];
-    for (name, solid) in primitives {
-        let bottom_rim = solid_edges(&topo, solid)
+    // Radius 3 at the base; the frustum's wall rises 4 as it closes in by 2.
+    let slope = 2.0_f64.atan2(1.0);
+    let primitives: [(&str, f64, f64); 2] = [
+        ("cylinder", 16.0 * PI, 0.5 * PI),
+        ("frustum", 52.0 * PI / 3.0, slope),
+    ];
+    for (name, whole, rise) in primitives {
+        for (pose_name, pose) in &poses {
+            let mut topo = Topology::new();
+            let solid = if name == "cylinder" {
+                make_cylinder(&mut topo, 2.0, 4.0).unwrap()
+            } else {
+                make_cone(&mut topo, 3.0, 1.0, 4.0).unwrap()
+            };
+            let rim = solid_edges(&topo, solid)
+                .unwrap()
+                .into_iter()
+                .find(|&eid| {
+                    let edge = topo.edge(eid).unwrap();
+                    matches!(edge.curve(), EdgeCurve::Circle(c) if c.center().z().abs() < 1e-9)
+                })
+                .unwrap();
+            let radius = match topo.edge(rim).unwrap().curve() {
+                EdgeCurve::Circle(c) => c.radius(),
+                _ => unreachable!(),
+            };
+            let first = AdjacencyIndex::build(&topo, solid)
+                .unwrap()
+                .faces_for_edge(rim)[0];
+            let (cap, wall) = match topo.face(first).unwrap().surface() {
+                FaceSurface::Plane { .. } => (d1, d2),
+                _ => (d2, d1),
+            };
+            transform_solid(&mut topo, solid, pose).unwrap();
+            let area = 0.5 * cap * wall * rise.sin();
+            let centroid = radius - (cap + wall * rise.cos()) / 3.0;
+            let expected = whole - 2.0 * PI * centroid * area;
+            let what = format!("{name} {pose_name}");
+
+            let result = chamfer_v2(&mut topo, solid, &[rim], d1, d2).unwrap();
+            assert!(result.failed.is_empty(), "{what}: {:?}", result.failed);
+            assert_eq!(result.succeeded, vec![rim], "{what}");
+            let angled =
+                chamfer_distance_angle(&mut topo, solid, &[rim], d1, (d2 / d1).atan()).unwrap();
+            assert!(angled.failed.is_empty(), "{what}: {:?}", angled.failed);
+
+            for chamfered in [result.solid, angled.solid] {
+                let report = validate_solid(&topo, chamfered).unwrap();
+                assert!(report.is_valid(), "{what}: {:?}", report.issues);
+                let volume = solid_volume(&topo, chamfered, 0.001).unwrap();
+                assert!(
+                    (volume - expected).abs() < 1e-9 * expected,
+                    "{what}: volume {volume}, expected {expected}"
+                );
+                assert!(
+                    is_watertight(&tessellate_solid(&topo, chamfered, 0.01).unwrap()),
+                    "{what}: its mesh is open"
+                );
+                let cones = solid_faces(&topo, chamfered)
+                    .unwrap()
+                    .into_iter()
+                    .filter(|&f| matches!(topo.face(f).unwrap().surface(), FaceSurface::Cone(_)))
+                    .count();
+                assert_eq!(cones, if name == "cylinder" { 1 } else { 2 }, "{what}");
+            }
+        }
+    }
+}
+
+/// `chamfer_v2_on` takes one reference face for each edge, one that borders
+/// it: a rod's top rim with its bottom cap as a second reference, or with
+/// its cap and its wall, is refused. The same reference twice is one pick.
+#[test]
+fn chamfer_v2_on_takes_one_bordering_reference_for_each_edge() {
+    use brepkit_operations::blend_ops::chamfer_v2_on;
+    use brepkit_topology::explorer::face_edges;
+
+    let mut topo = Topology::new();
+    let rod = make_cylinder(&mut topo, 3.0, 10.0).unwrap();
+    let rim_at = |topo: &Topology, z: f64| {
+        solid_edges(topo, rod)
             .unwrap()
             .into_iter()
-            .find(|&eid| {
-                let edge = topo.edge(eid).unwrap();
-                matches!(edge.curve(), EdgeCurve::Circle(c) if c.center().z().abs() < 1e-9)
+            .find(|&e| {
+                let edge = topo.edge(e).unwrap();
+                matches!(edge.curve(), EdgeCurve::Circle(c) if (c.center().z() - z).abs() < 1e-9)
             })
-            .unwrap();
-        let before = solid_volume(&topo, solid, 0.01).unwrap();
+            .unwrap()
+    };
+    let (top_rim, bottom_rim) = (rim_at(&topo, 10.0), rim_at(&topo, 0.0));
+    let face_of = |topo: &Topology, edge, planar: bool| {
+        solid_faces(topo, rod)
+            .unwrap()
+            .into_iter()
+            .find(|&f| {
+                matches!(topo.face(f).unwrap().surface(), FaceSurface::Plane { .. }) == planar
+                    && face_edges(topo, f).unwrap().contains(&edge)
+            })
+            .unwrap()
+    };
+    let (top, bottom, wall) = (
+        face_of(&topo, top_rim, true),
+        face_of(&topo, bottom_rim, true),
+        face_of(&topo, top_rim, false),
+    );
 
-        let result = chamfer_v2(&mut topo, solid, &[bottom_rim], 0.4, 0.4).unwrap();
-        assert_eq!(result.solid, solid, "{name}");
-        assert!(result.succeeded.is_empty(), "{name}");
-        assert_eq!(result.failed.len(), 1, "{name}: {:?}", result.failed);
-        assert_eq!(result.failed[0].0, bottom_rim, "{name}");
-        let report = validate_solid(&topo, solid).unwrap();
-        assert!(report.is_valid(), "{name}: {:?}", report.issues);
-        let after = solid_volume(&topo, solid, 0.01).unwrap();
+    for refs in [[top, bottom], [bottom, top], [top, wall]] {
+        let pick = [(top_rim, refs[0]), (top_rim, refs[1])];
         assert!(
-            (after - before).abs() < 1e-9 * before,
-            "{name}: {after} vs {before}"
+            chamfer_v2_on(&mut topo, rod, &pick, 1.0, 0.5).is_err(),
+            "{refs:?}"
         );
     }
+    let once = chamfer_v2_on(&mut topo, rod, &[(top_rim, top)], 1.0, 0.5).unwrap();
+    let twice = chamfer_v2_on(&mut topo, rod, &[(top_rim, top), (top_rim, top)], 1.0, 0.5).unwrap();
+    assert!(once.failed.is_empty() && twice.failed.is_empty());
+    let (a, b) = (
+        solid_volume(&topo, once.solid, 0.001).unwrap(),
+        solid_volume(&topo, twice.solid, 0.001).unwrap(),
+    );
+    assert!((a - b).abs() < 1e-9 * a, "{a} vs {b}");
 }
