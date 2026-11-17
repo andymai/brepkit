@@ -2159,6 +2159,7 @@ pub(super) fn tessellate_face_with_shared_edges(
                     topo,
                     face_data,
                     deflection,
+                    angular_tol,
                     edge_global_indices,
                     merged,
                 )?)

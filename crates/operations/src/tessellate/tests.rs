@@ -5493,11 +5493,15 @@ fn a_spherical_octant_meshes_in_rows_between_its_rims() {
             let o = pose.mul_point(Point3::new(0.0, 0.0, 0.0));
             p - o
         };
-        let axes = [
+        let mut axes = [
             turn(Vec3::new(1.0, 0.0, 0.0)),
             turn(Vec3::new(0.0, 1.0, 0.0)),
             turn(Vec3::new(0.0, 0.0, 1.0)),
         ];
+        // The wire runs counterclockwise about the outward normal.
+        if axes[0].cross(axes[1]).dot(axes[2]) < 0.0 {
+            axes.swap(1, 2);
+        }
         let mut topo = Topology::new();
         let corners = axes.map(|a| topo.add_vertex(Vertex::new(center + a * r, 1e-7)));
         let edges: Vec<OrientedEdge> = (0..3)
@@ -5706,5 +5710,148 @@ fn a_quarter_cylinder_wall_meshes_as_one_strip_between_its_arcs() {
                 }
             }
         }
+    }
+}
+
+/// A cylinder wall of radius 1 as the only face of its shell, between two
+/// arcs `span` round the axis and `height` apart, joined by two straight
+/// sides.
+fn cylinder_wall(span: f64, height: f64) -> (Topology, brepkit_topology::solid::SolidId) {
+    use brepkit_math::curves::Circle3D;
+    use brepkit_math::surfaces::CylindricalSurface;
+    use brepkit_topology::shell::Shell;
+    use brepkit_topology::solid::Solid;
+
+    let p = Point3::new;
+    let z = Vec3::new(0.0, 0.0, 1.0);
+    let mut topo = Topology::new();
+    let (c, s) = (span.cos(), span.sin());
+    let corners = [
+        p(1.0, 0.0, 0.0),
+        p(c, s, 0.0),
+        p(c, s, height),
+        p(1.0, 0.0, height),
+    ]
+    .map(|q| topo.add_vertex(Vertex::new(q, 1e-7)));
+    let arc = |h: f64| EdgeCurve::Circle(Circle3D::new(p(0.0, 0.0, h), z, 1.0).unwrap());
+    let mut edge = |a: usize, b: usize, curve: EdgeCurve| {
+        topo.add_edge(Edge::new(corners[a], corners[b], curve))
+    };
+    let low = edge(0, 1, arc(0.0));
+    let side = edge(1, 2, EdgeCurve::Line);
+    let high = edge(3, 2, arc(height));
+    let back = edge(3, 0, EdgeCurve::Line);
+    let wire = Wire::new(
+        vec![
+            OrientedEdge::new(low, true),
+            OrientedEdge::new(side, true),
+            OrientedEdge::new(high, false),
+            OrientedEdge::new(back, true),
+        ],
+        true,
+    )
+    .unwrap();
+    let wire = topo.add_wire(wire);
+    let surface = CylindricalSurface::new(p(0.0, 0.0, 0.0), z, 1.0).unwrap();
+    let face = topo.add_face(Face::new(wire, vec![], FaceSurface::Cylinder(surface)));
+    let shell = topo.add_shell(Shell::new(vec![face]).unwrap());
+    let solid = topo.add_solid(Solid::new(shell, vec![]));
+    (topo, solid)
+}
+
+/// Walls 1e9 tall, where the arcs' distance along the axis drowns their
+/// distance across it: a quarter wall at deflection 0.5 and 10 degrees, and
+/// a wall round 270 degrees at deflection 0.9 with no angle limit. The arc
+/// of the turn each triangle spans holds no more than `SQRT_2` times the
+/// angle, and no point of a triangle lies further inside the wall than the
+/// deflection.
+#[test]
+fn a_tall_cylinder_wall_keeps_its_triangles_within_the_tolerances() {
+    use std::f64::consts::{FRAC_PI_2, SQRT_2, TAU};
+
+    for (span, deflection, angle) in [
+        (FRAC_PI_2, 0.5, 10f64.to_radians()),
+        (1.5 * std::f64::consts::PI, 0.9, 0.0),
+    ] {
+        let (topo, solid) = cylinder_wall(span, 1e9);
+        let mesh = tessellate_solid_with_tolerance(&topo, solid, deflection, angle).unwrap();
+        assert!(!mesh.indices.is_empty());
+        let what = format!("span {span}");
+        for t in mesh.indices.chunks_exact(3) {
+            let [a, b, c] = [0, 1, 2].map(|k| mesh.positions[t[k] as usize]);
+            if angle > 0.0 {
+                let mut turns = [a, b, c].map(|q| q.y().atan2(q.x()).rem_euclid(TAU));
+                turns.sort_by(f64::total_cmp);
+                let widest = (turns[1] - turns[0])
+                    .max(turns[2] - turns[1])
+                    .max(TAU - (turns[2] - turns[0]));
+                assert!(TAU - widest <= SQRT_2 * angle + 1e-9, "{what}: {turns:?}");
+            }
+            for i in 0..=10 {
+                for j in 0..=10 - i {
+                    let q = a + (b - a) * (f64::from(i) / 10.0) + (c - a) * (f64::from(j) / 10.0);
+                    let inside = 1.0 - q.x().hypot(q.y());
+                    assert!(inside <= deflection + 1e-9, "{what}: {inside} inside");
+                }
+            }
+        }
+    }
+}
+
+/// A unit sphere's face below z = 0.5, bounded by the circle there in three
+/// arcs, its wire counterclockwise about the outward normal round the face:
+/// the arcs close a small cap above the circle in their hemisphere, which is
+/// not the face. The mesh covers the face below the circle, with the area
+/// of that zone within the deflection.
+#[test]
+fn a_sphere_zone_bounded_by_three_arcs_meshes_on_its_own_side() {
+    use brepkit_math::curves::Circle3D;
+    use brepkit_math::surfaces::SphericalSurface;
+    use brepkit_topology::shell::Shell;
+    use brepkit_topology::solid::Solid;
+
+    let p = Point3::new;
+    let rho = 0.75f64.sqrt();
+    let mut topo = Topology::new();
+    // Clockwise about +z, so counterclockwise about the zone's outward
+    // normal seen from below.
+    let corners = [0.0, -1.0, -2.0].map(|k: f64| {
+        let a = k * std::f64::consts::TAU / 3.0;
+        topo.add_vertex(Vertex::new(p(rho * a.cos(), rho * a.sin(), 0.5), 1e-7))
+    });
+    let circle = Circle3D::new(p(0.0, 0.0, 0.5), Vec3::new(0.0, 0.0, -1.0), rho).unwrap();
+    let edges: Vec<OrientedEdge> = (0..3)
+        .map(|k| {
+            let edge = Edge::new(
+                corners[k],
+                corners[(k + 1) % 3],
+                EdgeCurve::Circle(circle.clone()),
+            );
+            OrientedEdge::new(topo.add_edge(edge), true)
+        })
+        .collect();
+    let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+    let sphere = SphericalSurface::new(p(0.0, 0.0, 0.0), 1.0).unwrap();
+    let face = topo.add_face(Face::new(wire, vec![], FaceSurface::Sphere(sphere)));
+    let shell = topo.add_shell(Shell::new(vec![face]).unwrap());
+    let solid = topo.add_solid(Solid::new(shell, vec![]));
+    let zone = 2.0 * std::f64::consts::PI * 1.5;
+    for (deflection, angle) in [(0.5, 1.0), (0.1, 10f64.to_radians())] {
+        let mesh = tessellate_solid_with_tolerance(&topo, solid, deflection, angle).unwrap();
+        let mut area = 0.0;
+        for t in mesh.indices.chunks_exact(3) {
+            let [a, b, c] = [0, 1, 2].map(|k| mesh.positions[t[k] as usize]);
+            let middle = a + ((b - a) + (c - a)) * (1.0 / 3.0);
+            assert!(
+                middle.z() <= 0.5 + 1e-9,
+                "at {deflection}: a triangle above the rim"
+            );
+            area += (b - a).cross(c - a).length() / 2.0;
+        }
+        let shrunk = zone * (1.0 - deflection).powi(2);
+        assert!(
+            area <= zone && area >= shrunk,
+            "at {deflection}: area {area} of {zone}"
+        );
     }
 }

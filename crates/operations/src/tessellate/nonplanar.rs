@@ -1652,6 +1652,26 @@ pub(super) fn tessellate_sphere_triangle_shared(
     {
         return Ok(false);
     }
+    // The rows cover the patch that the arcs close within that hemisphere.
+    // The face lies on the left of its wire about its own normal: the patch
+    // is the face only when the wire turns counterclockwise about `axis`, or
+    // clockwise for a face whose normal points into the sphere.
+    let rim: Vec<Point3> = sides
+        .iter()
+        .flat_map(|side| side[1..].iter().map(|&gid| point_of(gid) - center))
+        .map(|d| Point3::new(d.x(), d.y(), d.z()))
+        .collect();
+    let origin = Point3::new(0.0, 0.0, 0.0);
+    let turning: f64 = (0..rim.len())
+        .map(|k| {
+            (rim[k] - origin)
+                .cross(rim[(k + 1) % rim.len()] - origin)
+                .dot(axis)
+        })
+        .sum();
+    if (turning > 0.0) == face_data.is_reversed() {
+        return Ok(false);
+    }
 
     let b_points: Vec<Point3> = along_b.iter().map(|&gid| point_of(gid)).collect();
     let c_points: Vec<Point3> = along_c.iter().map(|&gid| point_of(gid)).collect();
@@ -1926,12 +1946,13 @@ fn halve_long_sphere_edges(
 ///
 /// Returns `Ok(false)` and leaves the mesh as it was when the face is not
 /// such a strip, when a triangle faces into the cylinder, or when a triangle
-/// spans more of the cylinder's turn than its chords may at `deflection`.
-/// The CDT takes the face then.
+/// spans more of the cylinder's turn than a chord may at `deflection` or
+/// than `SQRT_2` times `angular_tol`. The CDT takes the face then.
 pub(super) fn tessellate_cylinder_strip_shared(
     topo: &Topology,
     face_data: &brepkit_topology::face::Face,
     deflection: f64,
+    angular_tol: f64,
     edge_global_indices: &DetHashMap<usize, Vec<u32>>,
     merged: &mut TriangleMesh,
 ) -> Result<bool, crate::OperationsError> {
@@ -1985,8 +2006,11 @@ pub(super) fn tessellate_cylinder_strip_shared(
     let upper: Vec<u32> = sides[2].1.iter().rev().copied().collect();
 
     let idx_start = merged.indices.len();
+    // Across the axis only: the arcs' distance along it is the same for
+    // every pair, and on a long strip it would drown the difference.
     let gap = |merged: &TriangleMesh, a: u32, b: u32| {
-        (position_of(merged, a) - position_of(merged, b)).length()
+        let d = position_of(merged, a) - position_of(merged, b);
+        (d - axis * d.dot(axis)).length()
     };
     let (mut i, mut l) = (0, 0);
     while i + 1 < upper.len() || l + 1 < lower.len() {
@@ -2007,7 +2031,9 @@ pub(super) fn tessellate_cylinder_strip_shared(
     }
 
     // One winding for the whole strip, then every triangle must face out of
-    // the cylinder and span no more of its turn than a chord may.
+    // the cylinder, and the arc of the turn it spans must be no longer than
+    // a chord may span at the deflection, nor than `SQRT_2` times the angle
+    // tolerance.
     let (origin, radius) = (cylinder.origin(), cylinder.radius());
     let outward = |merged: &TriangleMesh, t: &[u32]| {
         let [a, b, c] = [0, 1, 2].map(|k| position_of(merged, t[k]));
@@ -2025,12 +2051,21 @@ pub(super) fn tessellate_cylinder_strip_shared(
             t.swap(1, 2);
         }
     }
-    let reach = 2.0 * (1.0 - (deflection / radius).min(1.0)).acos();
-    let turn = |p: Point3| cylinder.project_point(p).0;
+    let by_angle = if angular_tol > 0.0 {
+        angular_tol * std::f64::consts::SQRT_2
+    } else {
+        TAU
+    };
+    let reach = (2.0 * (1.0 - (deflection / radius).min(1.0)).acos()).min(by_angle);
+    let turn = |p: Point3| cylinder.project_point(p).0.rem_euclid(TAU);
     let sound = merged.indices[idx_start..].chunks_exact(3).all(|t| {
-        let [a, b, c] = [0, 1, 2].map(|k| turn(position_of(merged, t[k])));
-        let span = |x: f64, y: f64| (x - y).rem_euclid(TAU).min((y - x).rem_euclid(TAU));
-        outward(merged, t) > 0.0 && span(a, b).max(span(b, c)).max(span(c, a)) <= reach
+        let mut turns = [0, 1, 2].map(|k| turn(position_of(merged, t[k])));
+        turns.sort_by(f64::total_cmp);
+        // The shortest arc holding all three: the turn less its widest gap.
+        let widest = (turns[1] - turns[0])
+            .max(turns[2] - turns[1])
+            .max(TAU - (turns[2] - turns[0]));
+        outward(merged, t) > 0.0 && TAU - widest <= reach
     });
     if !sound {
         merged.indices.truncate(idx_start);
