@@ -5963,6 +5963,11 @@ fn outward_plane_of(topo: &Topology, face_id: FaceId) -> Option<(Vec3, f64)> {
     Some((*normal * (sign / length), d * sign / length))
 }
 
+/// How far, for each unit of the round's radius, a hole of a face a
+/// crossing trims must stay clear of the part it takes: the gap within which
+/// two edges weld into one.
+const HOLE_CLEARANCE: f64 = 1e-5;
+
 /// Points whose hull holds `edge`'s curve: a line's two ends, the square
 /// about a circle or the rectangle about an ellipse in its plane, or a
 /// B-spline's control points. `None` for a B-spline with a weight that is
@@ -6222,15 +6227,18 @@ fn plan_stub_crossing(
     // `s` or from `WA` as `A`'s contact on `F`; and on `F`, as far from `WA`
     // as that contact or from `W1` as `B`'s contact on `F`. Each test holds
     // on a convex set, a cylinder or a half-space.
+    // A hole on the new outline would touch it with no edge in common: each
+    // test also keeps the hole a weld's width clear of the part taken.
+    let clearance = HOLE_CLEARANCE * ra.max(1.0);
     let past = |plane: Option<(Vec3, f64)>, contact: Point3| {
         let depth = move |p: Point3| plane.map(|(normal, at)| at - normal.dot(to(p)));
         let reach = depth(contact);
-        move |p: Point3| matches!((depth(p), reach), (Some(d), Some(r)) if d >= r)
+        move |p: Point3| matches!((depth(p), reach), (Some(d), Some(r)) if d >= r + clearance)
     };
     let (f_plane, wa_plane) = (outward_plane_of(topo, f), outward_plane_of(topo, wa));
     let inside_a = |p: Point3| {
         let w = p - cylinder.origin();
-        (w - axis * w.dot(axis)).length() <= ra
+        (w - axis * w.dot(axis)).length() <= ra - clearance
     };
     let past_a_from_f = past(f_plane, s);
     let past_a_from_wa = past(wa_plane, af_end);
@@ -6881,13 +6889,14 @@ fn plan_junction_crossing(
     // its two faces (see `plan_stub_crossing`). So a hole is clear on `WB`
     // within `A`'s cylinder, or as far from `F` as `s` or from `WA` as `A`'s
     // contact on `F`; and on `F`, as far from `WA` as that contact or from
-    // `WB` as `B`'s contact on `F`.
+    // `WB` as `B`'s contact on `F`, each a weld's width clear.
+    let clearance = HOLE_CLEARANCE * ra.max(1.0);
     let past = |plane: Option<(Vec3, f64)>, contact: Point3| {
         let depth = move |p: Point3| plane.map(|(normal, at)| at - normal.dot(to(p)));
         let reach = depth(contact);
-        move |p: Point3| matches!((depth(p), reach), (Some(d), Some(r)) if d >= r)
+        move |p: Point3| matches!((depth(p), reach), (Some(d), Some(r)) if d >= r + clearance)
     };
-    let inside_a = |p: Point3| across(p).length() <= ra;
+    let inside_a = |p: Point3| across(p).length() <= ra - clearance;
     let past_a_from_f = past(outward_plane_of(topo, f), s);
     let past_a_from_wa = past(outward_plane_of(topo, wa), af_end);
     let past_b_from_wb = past(Some((n, level)), bf_end);

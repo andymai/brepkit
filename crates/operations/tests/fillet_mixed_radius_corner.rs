@@ -323,6 +323,49 @@ fn a_pocket_in_the_wall_under_the_crossing_is_refused() {
     );
 }
 
+/// A pocket in the narrower round's wall whose corner lies on the wider
+/// round's end, the rest of it in the kept wall: kept, the hole would touch
+/// the wall's new outline with no edge in common, and the build refuses it.
+#[test]
+fn a_pocket_that_touches_the_wider_rounds_end_is_refused() {
+    let mut topo = Topology::new();
+    let solid = make_box(&mut topo, 20.0, 20.0, 20.0).unwrap();
+    // On the wall x = 0, the r = 3 round's end is the circle about
+    // (y, z) = (3, 3), and the pocket's corner nearest the floor lies on it,
+    // above the r = 1 round's contact at z = 1.
+    let (y, z) = (3.0 - 3.0 * 0.4_f64.cos(), 3.0 - 3.0 * 0.4_f64.sin());
+    let pocket = make_box(&mut topo, 0.2, 0.05, 0.05).unwrap();
+    transform_solid(&mut topo, pocket, &Mat4::translation(-0.1, y, z)).unwrap();
+    let pocketed = brepkit_operations::boolean::boolean(
+        &mut topo,
+        brepkit_operations::boolean::BooleanOp::Cut,
+        solid,
+        pocket,
+    )
+    .unwrap();
+    let origin = Point3::new(0.0, 0.0, 0.0);
+    let laws = vec![
+        (
+            edge_at(&topo, pocketed, origin, Point3::new(20.0, 0.0, 0.0)),
+            RadiusLaw::Constant(3.0),
+        ),
+        (
+            edge_at(&topo, pocketed, origin, Point3::new(0.0, 20.0, 0.0)),
+            RadiusLaw::Constant(1.0),
+        ),
+    ];
+    match fillet_v2_variable(&mut topo, pocketed, laws) {
+        Err(brepkit_operations::OperationsError::Blend(
+            brepkit_blend::BlendError::PlanningFailure { reason },
+        )) => assert!(reason.contains("cross at vertex"), "{reason}"),
+        Err(other) => panic!("expected the crossing's refusal, got {other}"),
+        Ok(result) => panic!(
+            "a pocket on the round's end must be refused, got {} successes",
+            result.succeeded.len()
+        ),
+    }
+}
+
 /// A box sheared along `y` by `1 / sqrt(3)` of its height: its floor meets
 /// the wall along the `x` edge at 60 degrees, so the r = 8 round along that
 /// edge meets its wall 12 above the floor. A pocket in the wall `x = 0`
