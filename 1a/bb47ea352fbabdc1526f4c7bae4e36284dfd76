@@ -1,0 +1,21 @@
+crates/blend/src/corner.rs
+  s_489e8e320eebde::t_e858456a9fa360 6878-6898
+crates/operations/tests/fillet_mixed_radius_corner.rs
+  s_489e8e320eebde::t_61f660e76a5dd7 250-321
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1abb47ea352fbabdc1526f4c7bae4e36284dfd76",
+  "prompts": {},
+  "sessions": {
+    "s_489e8e320eebde": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1a2a9261-2019-4199-aa4f-06130071c8f0",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
