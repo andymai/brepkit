@@ -9450,6 +9450,75 @@ fn split_face_2d_impl(
         };
     let use_structural_classification =
         (u_periodic || partial_band_chain_split) && !sections.is_empty();
+    // The way the face's outline winds in (u, v), where it bounds an area
+    // there: a face round a pole of its chart (a whole hemisphere) does not.
+    let outline_sign = {
+        let (u_period, v_period) = super::pcurve_compute::surface_periods(&surface);
+        let mut uv: Vec<Point2> = sample_wire_outline(topo, face.outer_wire())
+            .into_iter()
+            .filter_map(|p| surface.project_point(p).map(|(u, v)| Point2::new(u, v)))
+            .collect();
+        super::pcurve_compute::unwrap_periodic_params_pub(&mut uv, u_period, v_period);
+        let area = signed_area_2d(&uv);
+        let perimeter: f64 = uv
+            .iter()
+            .zip(uv.iter().cycle().skip(1))
+            .map(|(a, b)| (*b - *a).length())
+            .sum();
+        (uv.len() >= 3 && area.abs() > 1e-3 * perimeter).then(|| area.signum())
+    };
+    // A loop that runs along the outline and back along sections lying
+    // within a fiftieth of the surface's radius of it is the sliver between
+    // a section and a boundary arc of nearly one circle. A face with one is
+    // kept as the seam rule alone reads it: its sliver as a piece leaves the
+    // solid's mesh open at the tip and its interior unclear.
+    let near_outline = |wl: &[OrientedPCurveEdge]| -> bool {
+        let sample = |e: &OrientedPCurveEdge, n: u32| -> Vec<Point3> {
+            let (s3, e3) = if e.forward {
+                (e.start_3d, e.end_3d)
+            } else {
+                (e.end_3d, e.start_3d)
+            };
+            let (t0, t1) = e.curve_3d.domain_with_endpoints(s3, e3);
+            (0..=n)
+                .map(|k| {
+                    e.curve_3d.evaluate_with_endpoints(
+                        (t1 - t0).madd(f64::from(k) / f64::from(n), t0),
+                        s3,
+                        e3,
+                    )
+                })
+                .collect()
+        };
+        let outline: Vec<Point3> = wl
+            .iter()
+            .filter(|e| e.source_edge_idx.is_none())
+            .flat_map(|e| sample(e, 64))
+            .collect();
+        let near = 0.02 * surface.estimate_radius();
+        !outline.is_empty()
+            && wl
+                .iter()
+                .filter(|e| e.source_edge_idx.is_some())
+                .flat_map(|e| sample(e, 8))
+                .all(|q| outline.iter().any(|o| (*o - q).length() <= near))
+    };
+    let has_sliver = use_structural_classification && loops.iter().any(|wl| near_outline(wl));
+    // A loop along the outline and a section bounds a piece only where it
+    // winds as the outline does: one that runs against it closes round the
+    // rest of the surface.
+    let winds_with_outline = |wl: &[OrientedPCurveEdge]| -> bool {
+        let pts = sample_wire_loop_uv_periodic(wl, u_per_opt, v_per_opt);
+        let area = signed_area_2d(&pts);
+        let perimeter: f64 = pts
+            .iter()
+            .zip(pts.iter().cycle().skip(1))
+            .map(|(a, b)| (*b - *a).length())
+            .sum();
+        !has_sliver
+            && outline_sign
+                .is_some_and(|sign| area.abs() > perimeter * tol.linear && area * sign > 0.0)
+    };
 
     for wire_loop in loops {
         if use_structural_classification {
@@ -9486,7 +9555,10 @@ fn split_face_2d_impl(
                     .sum();
                 !runs_both_ways && signed_area_2d(&pts).abs() > perimeter * tol.linear
             };
-            let on_boundary = (torus_piece || !matches!(surface, FaceSurface::Torus(_)))
+            let on_boundary = (matches!(surface, FaceSurface::Cone(_))
+                || torus_piece
+                || strip
+                || (!matches!(surface, FaceSurface::Torus(_)) && winds_with_outline(&wire_loop)))
                 && wire_loop.iter().any(|e| e.source_edge_idx.is_none())
                 && wire_loop.iter().any(|e| e.source_edge_idx.is_some());
             // On a partial band, a loop of sections alone (a strut poking
