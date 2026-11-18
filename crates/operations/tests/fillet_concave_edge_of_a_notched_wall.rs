@@ -34,7 +34,7 @@ fn block(topo: &mut Topology, at: [f64; 3], size: [f64; 3]) -> SolidId {
 
 /// The pocket's edge at `x = 20, y = 10`, rounded by `r`, the whole part
 /// turned about `z` by `turn`. The part's bottom is tilted about `x` by
-/// `tilt`.
+/// `tilt`, so the round's lower end runs on to a sloping face.
 fn round_the_pocket_corner(r: f64, turn: f64, tilt: f64) {
     let mut topo = Topology::new();
     let bottom = if tilt == 0.0 { 1.0 } else { -5.0 };
@@ -123,5 +123,13 @@ fn a_concave_edge_of_a_notched_wall_is_filled() {
     for r in [1.0, 2.0] {
         round_the_pocket_corner(r, 0.0, 0.0);
         round_the_pocket_corner(r, 0.7, 0.0);
+    }
+}
+
+#[test]
+fn a_concave_edge_of_a_notched_wall_runs_on_to_a_sloping_bottom() {
+    for r in [1.0, 2.0] {
+        round_the_pocket_corner(r, 0.0, 0.15);
+        round_the_pocket_corner(r, 0.7, 0.15);
     }
 }

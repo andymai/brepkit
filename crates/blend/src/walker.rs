@@ -287,6 +287,48 @@ impl<'a, F: BlendFunction> Walker<'a, F> {
         Some((params, sec))
     }
 
+    /// Rolls the ball on past an end of the spine, the spine carried on
+    /// along its tangent there: sections at each `step` out to `reach`
+    /// beyond the start (`at_end` false) or the end, outward, each seeded
+    /// from the last. Stops at the first section Newton cannot solve.
+    pub(crate) fn walk_past_end(
+        &self,
+        at_end: bool,
+        from: BlendParams,
+        step: f64,
+        reach: f64,
+    ) -> Vec<CircSection> {
+        let mut sections = Vec::new();
+        if step <= 0.0 || reach <= 0.0 {
+            return sections;
+        }
+        let s = if at_end { self.spine.length() } else { 0.0 };
+        let (Ok(point), Ok(tangent)) = (
+            self.spine.evaluate(self.topo, s),
+            self.spine.tangent(self.topo, s),
+        ) else {
+            return sections;
+        };
+        let outward = if at_end { tangent } else { -tangent };
+        let mut params = from;
+        let mut past = 0.0;
+        #[allow(clippy::while_float)]
+        while past < reach {
+            past = (past + step).min(reach);
+            let ctx = BlendContext {
+                guide_point: point + outward * past,
+                nplan: tangent,
+                t: if at_end { 1.0 } else { 0.0 },
+            };
+            let Some(solved) = self.newton_solve(params, &ctx) else {
+                break;
+            };
+            params = solved;
+            sections.push(self.func.section(self.surf1, self.surf2, &params, &ctx));
+        }
+        sections
+    }
+
     /// Walk the blend along the spine from `s_start` to `s_end`.
     ///
     /// Uses adaptive step control: starts with a large step, halves on Newton
@@ -371,7 +413,20 @@ impl<'a, F: BlendFunction> Walker<'a, F> {
                 step_count -= 1;
                 continue;
             }
-            if let Some(converged) = self.newton_solve(predicted, &ctx_next) {
+            // A contact leaping far along its face while the spine moves a
+            // little is the solve landing on another branch (a ball too big
+            // for a hollow of a face, wedged where the contact runs away):
+            // not a step either, so it halves like a solve that fails.
+            let solved = self.newton_solve(predicted, &ctx_next).filter(|converged| {
+                sections.last().is_none_or(|last| {
+                    let sec = self
+                        .func
+                        .section(self.surf1, self.surf2, converged, &ctx_next);
+                    let moved = (sec.p1 - last.p1).length().max((sec.p2 - last.p2).length());
+                    moved <= MAX_CONTACT_SPEED * clamped_step
+                })
+            });
+            if let Some(converged) = solved {
                 nplan = ctx_next.nplan;
                 prev_params = Some(params);
                 prev_s = s;
@@ -404,6 +459,10 @@ impl<'a, F: BlendFunction> Walker<'a, F> {
     }
 }
 
+/// How far a contact may move along its face for each unit the spine moves:
+/// past it, a step has jumped to another solution (see [`Walker::walk`]).
+const MAX_CONTACT_SPEED: f64 = 100.0;
+
 /// The shortest step, as a share of the spine, that a turn of the spine's
 /// direction can refuse (a kink in a G1 chain read from a file must not
 /// halve the step for ever).
@@ -411,7 +470,7 @@ const MIN_TURN_STEP: f64 = 1e-3;
 
 /// `(u, v)` moved by whole turns into the range of each direction in which
 /// `surface` closes on itself.
-fn wrap_params(surface: &dyn ParametricSurface, u: f64, v: f64) -> (f64, f64) {
+pub fn wrap_params(surface: &dyn ParametricSurface, u: f64, v: f64) -> (f64, f64) {
     let wrap = |x: f64, range: Option<(f64, f64)>| match range {
         Some((a, b)) if b - a > f64::EPSILON => a + (x - a).rem_euclid(b - a),
         _ => x,
