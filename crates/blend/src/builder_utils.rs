@@ -149,7 +149,7 @@ pub fn seam_curve(
 /// Create the blend face for a periodic (closed rim) stripe.
 ///
 /// The stripe is one full-revolution roll: both contacts are closed edges
-/// (start == end vertex) and the two cross-sections are the same seam segment
+/// (start == end vertex), or closed chains of pieces, and the two cross-sections are the same seam segment
 /// traversed in opposite directions. Canonical solids store that seam as a
 /// single edge entity used twice in the band wire (the source cylinder's own
 /// seam does exactly this). Minting a twin arc per direction would leave each
@@ -163,38 +163,47 @@ pub fn create_periodic_blend_face(
     topo: &mut Topology,
     stripe: &Stripe,
     registry: &mut crate::boundary_registry::BoundaryRegistry,
-    contact1: crate::boundary_registry::BoundaryHandle,
-    contact2: crate::boundary_registry::BoundaryHandle,
+    chain1: &[crate::boundary_registry::BoundaryHandle],
+    chain2: &[crate::boundary_registry::BoundaryHandle],
 ) -> Result<BlendFaceInfo, BlendError> {
-    let entry1 = registry
-        .entry(contact1)
-        .ok_or_else(|| BlendError::PlanningFailure {
-            reason: format!("unknown periodic contact boundary {contact1}"),
+    // Each contact is one closed edge, or a closed contact cut where it
+    // crosses its support's seam: the band runs the chain whole, from the
+    // vertex it closes on and back.
+    fn band_run(
+        topo: &mut Topology,
+        registry: &mut crate::boundary_registry::BoundaryRegistry,
+        chain: &[crate::boundary_registry::BoundaryHandle],
+    ) -> Result<(VertexId, Vec<OrientedEdge>), BlendError> {
+        let mut run = Vec::with_capacity(chain.len());
+        for &handle in chain {
+            let entry = registry
+                .entry(handle)
+                .ok_or_else(|| BlendError::PlanningFailure {
+                    reason: format!("unknown periodic contact boundary {handle}"),
+                })?;
+            if entry.edge_id().is_none() {
+                return Err(BlendError::PlanningFailure {
+                    reason: format!("periodic contact boundary {handle:?} was not materialized"),
+                });
+            }
+            run.push(registry.oriented_edge(topo, handle, 1)?);
+        }
+        if run.first().is_some_and(|oriented| !oriented.is_forward()) {
+            run.reverse();
+        }
+        let first = run.first().ok_or_else(|| BlendError::PlanningFailure {
+            reason: "empty periodic contact chain".to_owned(),
         })?;
-    let entry2 = registry
-        .entry(contact2)
-        .ok_or_else(|| BlendError::PlanningFailure {
-            reason: format!("unknown periodic contact boundary {contact2}"),
-        })?;
-    if entry1.edge_id().is_none() {
-        return Err(BlendError::PlanningFailure {
-            reason: format!("periodic contact boundary {contact1:?} was not materialized"),
-        });
+        let start = first.oriented_start(topo.edge(first.edge())?);
+        Ok((start, run))
     }
-    if entry2.edge_id().is_none() {
-        return Err(BlendError::PlanningFailure {
-            reason: format!("periodic contact boundary {contact2:?} was not materialized"),
-        });
-    }
-    let v1 = entry1.start.vertex;
-    let v2 = entry2.start.vertex;
+    let (v1, run1) = band_run(topo, registry, chain1)?;
+    let (v2, run2) = band_run(topo, registry, chain2)?;
     if v1 == v2 {
         return Err(BlendError::PlanningFailure {
             reason: "periodic blend seam vertices coincide".to_owned(),
         });
     }
-    let contact1_oriented = registry.oriented_edge(topo, contact1, 1)?;
-    let contact2_oriented = registry.oriented_edge(topo, contact2, 1)?;
     let seam_curve = seam_curve(
         &stripe.surface,
         &stripe.sections,
@@ -202,16 +211,11 @@ pub fn create_periodic_blend_face(
         topo.vertex(v2)?.point(),
     );
     let seam = topo.add_edge(Edge::new(v1, v2, seam_curve));
-    let wire = Wire::new(
-        vec![
-            contact1_oriented,
-            OrientedEdge::new(seam, true),
-            contact2_oriented,
-            OrientedEdge::new(seam, false),
-        ],
-        true,
-    )?;
-    let wire_id = topo.add_wire(wire);
+    let mut edges = run1;
+    edges.push(OrientedEdge::new(seam, true));
+    edges.extend(run2);
+    edges.push(OrientedEdge::new(seam, false));
+    let wire_id = topo.add_wire(Wire::new(edges, true)?);
     let face = topo.add_face(Face::new(wire_id, Vec::new(), stripe.surface.clone()));
     Ok(BlendFaceInfo {
         face,
@@ -500,17 +504,17 @@ pub fn create_blend_face_from_registry(
     topo: &mut Topology,
     stripe: &Stripe,
     registry: &mut crate::boundary_registry::BoundaryRegistry,
-    contact1: (crate::boundary_registry::BoundaryHandle, usize),
-    contact2: (crate::boundary_registry::BoundaryHandle, usize),
+    contact1: &[(crate::boundary_registry::BoundaryHandle, usize)],
+    contact2: &[(crate::boundary_registry::BoundaryHandle, usize)],
     cross_end: Option<(crate::boundary_registry::BoundaryHandle, usize)>,
     cross_start: Option<(crate::boundary_registry::BoundaryHandle, usize)>,
 ) -> Result<BlendFaceInfo, BlendError> {
     let mut boundaries = Vec::with_capacity(4);
-    boundaries.push(contact1);
+    boundaries.extend_from_slice(contact1);
     if let Some(boundary) = cross_end {
         boundaries.push(boundary);
     }
-    boundaries.push(contact2);
+    boundaries.extend_from_slice(contact2);
     if let Some(boundary) = cross_start {
         boundaries.push(boundary);
     }

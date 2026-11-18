@@ -168,6 +168,13 @@ impl Spine {
         &self.edges
     }
 
+    /// Whether each edge, in [`Self::edges`]' order, runs from its stored
+    /// start to its end along the chain.
+    #[must_use]
+    pub fn directions(&self) -> &[bool] {
+        &self.directions
+    }
+
     /// Map a global spine parameter `s in [0, length]` to `(edge_index, local_t in [0,1])`.
     #[must_use]
     pub fn locate(&self, s: f64) -> (usize, f64) {
