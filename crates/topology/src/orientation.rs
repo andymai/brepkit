@@ -443,15 +443,18 @@ pub fn normalize_face_normals(
         }
     }
     // With no seed to read the convention from (every input face around the
-    // result was rebuilt), the result's own faces vote: a closed shell walks
-    // every face's boundary the same way about its effective normal, so the
-    // few that disagree are the ones built backwards. Seeds that read but
-    // disagree among themselves still decide nothing.
-    if !seed_read {
-        convention = readings
-            .iter()
-            .map(|&(_, positive)| if positive { 1.0 } else { -1.0 })
-            .sum();
+    // result was rebuilt), the convention is the one every reading is taken
+    // in: a boundary running counterclockwise about its face's effective
+    // normal, which a file is written in. A vote of the result's own faces
+    // could go the other way where the faces built backwards outnumber the
+    // input faces rebuilt around them (a slab rounded round both outlines:
+    // seven trimmed input faces, a dozen bands), and then every loop came
+    // out running backwards about a normal facing out, which a file reader
+    // takes as a hole on a closed surface. Seeds that read but disagree
+    // among themselves still decide nothing. A shell that comes out facing
+    // inward as a whole is the caller's to turn.
+    if !seed_read && !readings.is_empty() {
+        convention = 1.0;
     }
     let flips: Vec<FaceId> = if convention == 0.0 {
         Vec::new()
@@ -616,7 +619,7 @@ mod tests {
     }
 
     #[test]
-    fn without_seeds_the_faces_vote_on_the_convention() {
+    fn without_seeds_a_face_turned_inside_out_is_turned_back() {
         let mut topo = Topology::new();
         let cube = make_unit_cube_manifold(&mut topo);
         let faces = solid_faces(&topo, cube).unwrap();
@@ -632,6 +635,35 @@ mod tests {
         turn_inside_out(&mut topo, faces[2]);
         assert_eq!(normalize_face_normals(&mut topo, &faces, &[]).unwrap(), 1);
         assert_eq!(flags(&topo), before);
+    }
+
+    /// Half the faces, or most of them, turned: without seeds the convention
+    /// is the readings' own, a boundary counterclockwise about the face's
+    /// effective normal, so the turned faces are turned back however many
+    /// they are (a vote went with the majority, and left every face's loop
+    /// running backwards about its normal).
+    #[test]
+    fn without_seeds_turned_faces_are_turned_back_however_many() {
+        for turned in [3, 5] {
+            let mut topo = Topology::new();
+            let cube = make_unit_cube_manifold(&mut topo);
+            let faces = solid_faces(&topo, cube).unwrap();
+            let flags = |topo: &Topology| -> Vec<bool> {
+                faces
+                    .iter()
+                    .map(|&f| topo.face(f).unwrap().is_reversed())
+                    .collect()
+            };
+            let before = flags(&topo);
+            for &face_id in &faces[..turned] {
+                turn_inside_out(&mut topo, face_id);
+            }
+            assert_eq!(
+                normalize_face_normals(&mut topo, &faces, &[]).unwrap(),
+                turned
+            );
+            assert_eq!(flags(&topo), before, "{turned} turned");
+        }
     }
 
     #[test]
@@ -963,9 +995,9 @@ mod tests {
     /// A B-spline wall whose last control row stands off its first, evenly
     /// or at one corner only, is not read as periodic, and its seam samples
     /// could fall at either end of the domain. Such a seed gives no reading,
-    /// so the faces vote: with two of the cube's faces turned the vote turns
-    /// those two back, and with four turned it turns the other two. A seed
-    /// reading of either sign would turn four in one of the two cases.
+    /// so the convention is the readings' own and the turned faces, two or
+    /// four of the cube's, are turned back. A seed reading backwards would
+    /// turn the other faces instead.
     #[test]
     fn a_seamed_bspline_seed_not_quite_closed_gives_no_reading() {
         for (gap, corner) in [(1e-6, false), (1e-4, false), (1e-4, true)] {
@@ -979,7 +1011,7 @@ mod tests {
                 }
                 assert_eq!(
                     normalize_face_normals(&mut topo, &faces, &[wall]).unwrap(),
-                    2,
+                    turned,
                     "gap {gap}, at one corner {corner}, {turned} turned"
                 );
             }
@@ -1075,8 +1107,8 @@ mod tests {
 
     /// The torus band's loop crosses the tube's seam. Round the axis the
     /// surface is periodic, but round the tube it closes only to within
-    /// `gap`, so nothing unwraps that crossing: the seed gives no reading
-    /// and the faces vote, with two and with four of the cube's faces turned.
+    /// `gap`, so nothing unwraps that crossing: the seed gives no reading,
+    /// and the turned faces, two or four of the cube's, are turned back.
     #[test]
     fn a_seamed_seed_wrapping_a_direction_not_periodic_gives_no_reading() {
         for gap in [1e-6, 1e-4] {
@@ -1095,7 +1127,7 @@ mod tests {
                 }
                 assert_eq!(
                     normalize_face_normals(&mut topo, &faces, &[band]).unwrap(),
-                    2,
+                    turned,
                     "gap {gap}, {turned} turned"
                 );
             }
