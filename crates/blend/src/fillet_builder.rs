@@ -33,6 +33,9 @@ use crate::stripe::{Stripe, StripeResult};
 use crate::trimmer;
 use crate::walker::{Walker, WalkerConfig, approximate_blend_surface, interpolate_blend_surface};
 use crate::{BlendError, BlendResult};
+
+mod wall_run_up;
+
 type BlendCrossEdge = (EdgeId, VertexId, VertexId);
 type BlendCrossPair = (Option<BlendCrossEdge>, Option<BlendCrossEdge>);
 type BlendCrossHandlePair = (
@@ -1963,6 +1966,8 @@ impl<'a> FilletBuilder<'a> {
         let result_faces = split_pinched_faces(topo, result_faces, &input_edges)?;
         let result_faces = drop_contact_slivers(topo, result_faces, &input_edges)?;
         let result_faces = extend_caps_over_runouts(topo, result_faces, &input_edges)?;
+        let result_faces =
+            wall_run_up::run_walls_up_over_runouts(topo, result_faces, &input_edges)?;
         let new_shell = match Shell::new(result_faces) {
             Ok(shell) => shell,
             Err(error) => {
