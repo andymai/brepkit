@@ -13,8 +13,9 @@
 use brepkit_math::tolerance::Tolerance;
 use brepkit_topology::Topology;
 use brepkit_topology::edge::EdgeCurve;
+use brepkit_topology::vertex::VertexId;
 
-use crate::ds::{GfaArena, PaveBlockId};
+use crate::ds::{GfaArena, Pave, PaveBlock, PaveBlockId};
 use crate::error::AlgoError;
 
 /// Quantized 3D position pair for endpoint matching.
@@ -83,6 +84,11 @@ pub fn perform(topo: &Topology, tol: Tolerance, arena: &mut GfaArena) -> Result<
     let mut closed_index: std::collections::HashMap<QCircle, Vec<PaveBlockId>> =
         std::collections::HashMap::new();
 
+    // Open boundary leaf PBs by their resolved end vertices, for sections
+    // that lie along a boundary edge split where the section is not.
+    let mut boundary_by_vertex: std::collections::HashMap<VertexId, Vec<PaveBlockId>> =
+        std::collections::HashMap::new();
+
     let all_edge_pbs: Vec<Vec<PaveBlockId>> = arena
         .edge_pave_blocks
         .values()
@@ -106,6 +112,10 @@ pub fn perform(topo: &Topology, tol: Tolerance, arena: &mut GfaArena) -> Result<
             let qe = qpt(ep);
             let key = if qs <= qe { (qs, qe) } else { (qe, qs) };
             boundary_index.entry(key).or_default().push(pb_id);
+            if sv != ev {
+                boundary_by_vertex.entry(sv).or_default().push(pb_id);
+                boundary_by_vertex.entry(ev).or_default().push(pb_id);
+            }
 
             if sv == ev
                 && let Ok(edge) = topo.edge(pb.original_edge)
@@ -179,6 +189,19 @@ pub fn perform(topo: &Topology, tol: Tolerance, arena: &mut GfaArena) -> Result<
                 log::trace!("link_existing: no boundary PB at position");
             }
 
+            if !linked_this && sv != ev {
+                let pieces = link_along_split_arc(
+                    topo,
+                    tol,
+                    arena,
+                    &boundary_by_vertex,
+                    section_pb_id,
+                    &section_curve,
+                );
+                linked += pieces;
+                linked_this = pieces > 0;
+            }
+
             // Fallback for full closed circles: the endpoint-pair key uses
             // the seam vertex, which is arbitrary, so coincident circles
             // with different seams never share a key. Match on quantized
@@ -214,6 +237,146 @@ pub fn perform(topo: &Topology, tol: Tolerance, arena: &mut GfaArena) -> Result<
     }
 
     Ok(())
+}
+
+/// Link a section arc that runs along a boundary arc the pave filler split
+/// where the section is not (a rim shared by two coincident walls, split at
+/// a vertex of one): the boundary pieces from the section's start to its end
+/// on the same circle split the section at their vertices, and each piece
+/// of it joins its boundary piece. Without this the section stays one edge
+/// beside the rim's pieces, and the two bound a sliver of no area. Returns
+/// how many pieces were linked: none unless every piece was.
+fn link_along_split_arc(
+    topo: &Topology,
+    tol: Tolerance,
+    arena: &mut GfaArena,
+    boundary_by_vertex: &std::collections::HashMap<VertexId, Vec<PaveBlockId>>,
+    section_pb_id: PaveBlockId,
+    section_curve: &EdgeCurve,
+) -> usize {
+    use std::f64::consts::TAU;
+    const MAX_PIECES: usize = 8;
+    let EdgeCurve::Circle(circle) = section_curve else {
+        return 0;
+    };
+    let Some(section) = arena.pave_blocks.get(section_pb_id) else {
+        return 0;
+    };
+    let (start, end, original_edge) = (section.start, section.end, section.original_edge);
+    let (t0, t1) = (
+        start.parameter.min(end.parameter),
+        start.parameter.max(end.parameter),
+    );
+    if t1 - t0 >= TAU - 1e-9 {
+        return 0;
+    }
+    let (sv, ev) = (
+        arena.resolve_vertex(start.vertex),
+        arena.resolve_vertex(end.vertex),
+    );
+    // The section's own parameter of a point on its circle, strictly inside
+    // its span.
+    let inside = |p: brepkit_math::vec::Point3| -> Option<f64> {
+        let t = t0 + (circle.project(p) - t0).rem_euclid(TAU);
+        ((circle.evaluate(t) - p).length() <= tol.linear * 100.0 && t > t0 + 1e-9 && t < t1 - 1e-9)
+            .then_some(t)
+    };
+    let point = |v: VertexId| {
+        topo.vertex(v)
+            .ok()
+            .map(brepkit_topology::vertex::Vertex::point)
+    };
+    // Walk boundary pieces on this circle from the start vertex, each one
+    // lying inside the section's span, until the end vertex.
+    let mut chain: Vec<(PaveBlockId, VertexId)> = Vec::new();
+    let mut at = sv;
+    while at != ev && chain.len() < MAX_PIECES {
+        let next = boundary_by_vertex.get(&at).and_then(|pbs| {
+            pbs.iter().find_map(|&pb_id| {
+                if chain.iter().any(|&(c, _)| c == pb_id) {
+                    return None;
+                }
+                let pb = arena.pave_blocks.get(pb_id)?;
+                let edge = topo.edge(pb.original_edge).ok()?;
+                if !curves_compatible(section_curve, edge.curve(), tol) {
+                    return None;
+                }
+                let EdgeCurve::Circle(own) = edge.curve() else {
+                    return None;
+                };
+                let (a, b) = (
+                    arena.resolve_vertex(pb.start.vertex),
+                    arena.resolve_vertex(pb.end.vertex),
+                );
+                let other = if a == at { b } else { a };
+                let mid = own.evaluate(f64::midpoint(pb.start.parameter, pb.end.parameter));
+                inside(mid)?;
+                Some((pb_id, other))
+            })
+        });
+        let Some((pb_id, other)) = next else {
+            return 0;
+        };
+        chain.push((pb_id, other));
+        at = other;
+    }
+    if at != ev || chain.len() < 2 {
+        return 0;
+    }
+    // Split the section at the chain's inner vertices, in the order the
+    // section runs.
+    let mut cuts: Vec<Pave> = Vec::with_capacity(chain.len() - 1);
+    for &(_, v) in &chain[..chain.len() - 1] {
+        let Some(t) = point(v).and_then(inside) else {
+            return 0;
+        };
+        cuts.push(Pave::new(v, t));
+    }
+    if start.parameter > end.parameter {
+        cuts.sort_by(|a, b| b.parameter.total_cmp(&a.parameter));
+    } else {
+        cuts.sort_by(|a, b| a.parameter.total_cmp(&b.parameter));
+    }
+    let mut children = Vec::with_capacity(cuts.len() + 1);
+    let mut from = start;
+    for pave in cuts.into_iter().chain(std::iter::once(end)) {
+        children.push(
+            arena
+                .pave_blocks
+                .alloc(PaveBlock::new(original_edge, from, pave)),
+        );
+        from = pave;
+    }
+    if let Some(pb) = arena.pave_blocks.get_mut(section_pb_id) {
+        pb.children.clone_from(&children);
+    }
+    let mut linked = 0;
+    for child in children {
+        let Some(pb) = arena.pave_blocks.get(child) else {
+            continue;
+        };
+        let ends = [
+            arena.resolve_vertex(pb.start.vertex),
+            arena.resolve_vertex(pb.end.vertex),
+        ];
+        let partner = chain.iter().find_map(|&(pb_id, _)| {
+            let b = arena.pave_blocks.get(pb_id)?;
+            let mut theirs = [
+                arena.resolve_vertex(b.start.vertex),
+                arena.resolve_vertex(b.end.vertex),
+            ];
+            let mut ours = ends;
+            theirs.sort_by_key(|v| v.index());
+            ours.sort_by_key(|v| v.index());
+            (theirs == ours).then_some(pb_id)
+        });
+        if let Some(partner) = partner
+            && try_link(topo, tol, arena, child, section_curve, partner)
+        {
+            linked += 1;
+        }
+    }
+    linked
 }
 
 /// Attempt to link a section PB with a boundary PB into a CommonBlock.

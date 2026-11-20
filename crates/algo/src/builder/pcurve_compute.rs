@@ -100,6 +100,18 @@ pub fn compute_boundary_pcurve_on_surface(
     {
         return compute_pcurve_on_surface(curve_3d, start, end, surface, wire_pts, frame);
     }
+    if let FaceSurface::Plane { normal, .. } = surface {
+        let owned;
+        let f = if let Some(fr) = frame {
+            fr
+        } else {
+            owned = PlaneFrame::from_plane_face(*normal, wire_pts);
+            &owned
+        };
+        if let Some(arc) = plane_conic_arc(curve_3d, stored_start, stored_end, forward, f) {
+            return arc;
+        }
+    }
     let mut pts_3d = Vec::with_capacity(PCURVE_SAMPLES + 1);
     sample_edge_uniform_native(
         curve_3d,
@@ -132,6 +144,66 @@ pub fn compute_boundary_pcurve_on_surface(
         uv
     };
     pcurve_through_uv_samples(uv_pts, start, end, surface)
+}
+
+/// A circle or ellipse arc in a plane's frame, exactly: the frame maps the
+/// conic `c + cos t a + sin t b` affinely, so its image is the conic through
+/// the projected centre and axes, built as rational quadratic pieces of at
+/// most a quarter turn, from the traversal's start to its end on [0, 1].
+///
+/// A fit through a fixed number of samples drifts at the ends of a long
+/// arc (7e-3 rad off the tangent of a hole's rim piece running most of the
+/// way round), and the walk then reads the piece as turning off the arc it
+/// continues. `None` for other curves, or an arc of no sweep.
+fn plane_conic_arc(
+    curve_3d: &EdgeCurve,
+    stored_start: Point3,
+    stored_end: Point3,
+    forward: bool,
+    frame: &PlaneFrame,
+) -> Option<Curve2D> {
+    let centre = match curve_3d {
+        EdgeCurve::Circle(c) => c.center(),
+        EdgeCurve::Ellipse(e) => e.center(),
+        EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => return None,
+    };
+    let at = |t: f64| curve_3d.evaluate_with_endpoints(t, stored_start, stored_end);
+    let c = frame.project(centre);
+    let a = frame.project(at(0.0)) - c;
+    let b = frame.project(at(std::f64::consts::FRAC_PI_2)) - c;
+    let (t0, t1) = curve_3d.domain_with_endpoints(stored_start, stored_end);
+    let (ta, tb) = if forward { (t0, t1) } else { (t1, t0) };
+    let sweep = tb - ta;
+    if !sweep.is_finite() || sweep.abs() < 1e-12 {
+        return None;
+    }
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let pieces = (sweep.abs() / std::f64::consts::FRAC_PI_2).ceil().max(1.0) as usize;
+    #[allow(clippy::cast_precision_loss)]
+    let step = sweep / pieces as f64;
+    let on = |t: f64| c + a * t.cos() + b * t.sin();
+    let w = (step * 0.5).cos();
+    let mut points = vec![on(ta)];
+    let mut weights = vec![1.0];
+    let mut knots = vec![0.0; 3];
+    for k in 0..pieces {
+        #[allow(clippy::cast_precision_loss)]
+        let lo = (k as f64).madd(step, ta);
+        let mid = 0.5f64.madd(step, lo);
+        points.push(c + (a * mid.cos() + b * mid.sin()) * (1.0 / w));
+        weights.push(w);
+        points.push(on(lo + step));
+        weights.push(1.0);
+        #[allow(clippy::cast_precision_loss)]
+        let knot = (k + 1) as f64 / pieces as f64;
+        if k + 1 < pieces {
+            knots.extend([knot, knot]);
+        }
+    }
+    knots.extend([1.0; 3]);
+    NurbsCurve2D::new(2, knots, points, weights)
+        .ok()
+        .map(Curve2D::Nurbs)
 }
 
 /// A pcurve through UV samples running from `start` to `end`: a `Line2D`

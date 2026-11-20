@@ -36,6 +36,7 @@ pub use power_basis::PowerBasis1D;
 pub use projection::{
     CurveProjection, SurfaceProjection, project_point_to_curve, project_point_to_surface,
 };
+pub use span_index::{LineHit, SpanIndex};
 pub use surface::NurbsSurface;
 pub use surface_fitting::interpolate_surface;
 

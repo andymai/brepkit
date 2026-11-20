@@ -221,7 +221,16 @@ fn is_on_boundary(
             FaceSurface::Cone(cone) => analytic::point_to_cone(point, cone).0,
             FaceSurface::Sphere(sph) => analytic::point_to_sphere(point, sph).0,
             FaceSurface::Torus(tor) => analytic::point_to_torus(point, tor).0,
-            FaceSurface::Nurbs(_) => 0.0,
+            // A B-spline surface's sub-patch boxes bound it from below.
+            FaceSurface::Nurbs(n) => {
+                if n.span_index()
+                    .is_some_and(|ix| ix.clear_of(n, point, tolerance))
+                {
+                    tolerance
+                } else {
+                    0.0
+                }
+            }
         };
         if to_surface >= tolerance {
             continue;

@@ -1,6 +1,7 @@
 //! Plane-NURBS surface intersection.
 
 use crate::MathError;
+use crate::aabb::Aabb3;
 use crate::madd::Madd;
 use crate::nurbs::curve::NurbsCurve;
 use crate::nurbs::projection::{project_point_to_surface, project_point_to_surface_from};
@@ -30,6 +31,25 @@ pub fn intersect_plane_nurbs(
     plane_normal: Vec3,
     plane_d: f64,
     samples: usize,
+) -> Result<Vec<IntersectionCurve>, MathError> {
+    intersect_plane_nurbs_in_region(surface, plane_normal, plane_d, samples, None)
+}
+
+/// Intersect a plane with a NURBS surface, keeping only the section's runs
+/// through `region` (all of it when `None`).
+///
+/// Each run kept is fitted to the section within its tolerance, as the whole
+/// section is.
+///
+/// # Errors
+///
+/// Returns an error if NURBS evaluation fails or curve fitting fails.
+pub fn intersect_plane_nurbs_in_region(
+    surface: &NurbsSurface,
+    plane_normal: Vec3,
+    plane_d: f64,
+    samples: usize,
+    region: Option<Aabb3>,
 ) -> Result<Vec<IntersectionCurve>, MathError> {
     let n = samples.max(10);
 
@@ -420,11 +440,18 @@ pub fn intersect_plane_nurbs(
         off: &off,
         settle: &settle,
     };
+    let chains: Vec<Vec<IntersectionPoint>> = match region {
+        None => ordered_chains,
+        Some(region) => ordered_chains
+            .iter()
+            .flat_map(|chain| runs_through_region(chain, region))
+            .collect(),
+    };
     // A chain along one of the surface's own parameter curves is that curve:
     // nothing to fit.
-    let mut curves = Vec::with_capacity(ordered_chains.len());
+    let mut curves = Vec::with_capacity(chains.len());
     let mut to_fit: Vec<Vec<IntersectionPoint>> = Vec::new();
-    for chain in ordered_chains {
+    for chain in chains {
         match iso_section(surface, plane_normal, plane_d, &chain) {
             Some(curve) => curves.push(curve),
             None => to_fit.push(chain),
@@ -1362,6 +1389,63 @@ fn encloses(ring: &[IntersectionPoint], (u, v): (f64, f64)) -> bool {
         }
     }
     inside
+}
+
+/// Whether the section between two of its points may pass through
+/// `region`: the box of their chord, padded by half the chord (the section
+/// may bow out that far), meets it.
+fn gap_meets(a: &IntersectionPoint, b: &IntersectionPoint, region: Aabb3) -> bool {
+    let pad = 0.5 * (b.point - a.point).length();
+    Aabb3::from_points([a.point, b.point])
+        .expanded(pad)
+        .intersects(region)
+}
+
+/// The runs of `chain` through `region`, each with one point beyond it on
+/// either side. A closed chain is turned to start in a gap clear of the
+/// region, so a run is never cut in two at the chain's seam.
+fn runs_through_region(chain: &[IntersectionPoint], region: Aabb3) -> Vec<Vec<IntersectionPoint>> {
+    let n = chain.len();
+    if n < 2 {
+        return Vec::new();
+    }
+    let closed = (chain[0].point - chain[n - 1].point).length() < 1e-9;
+    let mut pts: Vec<IntersectionPoint> = chain.to_vec();
+    if closed {
+        let gaps = n - 1;
+        let clear = |g: usize| !gap_meets(&chain[g], &chain[g + 1], region);
+        let Some(g) =
+            (0..gaps).find(|&g| clear(g) && clear((g + gaps - 1) % gaps) && clear((g + 1) % gaps))
+        else {
+            // Every gap is near the region: the whole loop is the run.
+            return vec![pts];
+        };
+        // Start the loop at the far end of the clear gap.
+        pts = chain[g + 1..n].to_vec();
+        pts.extend_from_slice(&chain[1..=g + 1]);
+    }
+    let gaps = pts.len() - 1;
+    let meets: Vec<bool> = pts
+        .windows(2)
+        .map(|w| gap_meets(&w[0], &w[1], region))
+        .collect();
+    let keep: Vec<bool> = (0..gaps)
+        .map(|g| meets[g] || (g > 0 && meets[g - 1]) || (g + 1 < gaps && meets[g + 1]))
+        .collect();
+    let mut runs = Vec::new();
+    let mut g = 0;
+    while g < gaps {
+        if !keep[g] {
+            g += 1;
+            continue;
+        }
+        let first = g;
+        while g < gaps && keep[g] {
+            g += 1;
+        }
+        runs.push(pts[first..=g].to_vec());
+    }
+    runs
 }
 
 /// The parameter a boundary crossing holds fixed during refinement.

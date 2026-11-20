@@ -889,6 +889,16 @@ impl NurbsSurface {
             .as_deref()
     }
 
+    /// The surface's knot spans indexed by their control boxes, shared (see
+    /// [`Self::span_index`]).
+    #[must_use]
+    pub fn span_index_shared(&self) -> Option<std::sync::Arc<crate::nurbs::span_index::SpanIndex>> {
+        self.caches
+            .span_index
+            .get_or_init(|| crate::nurbs::span_index::SpanIndex::new(self).map(std::sync::Arc::new))
+            .clone()
+    }
+
     pub(crate) fn coarse_grid(&self) -> &crate::nurbs::projection::CoarseGrid {
         self.caches
             .coarse_grid

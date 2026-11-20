@@ -1145,9 +1145,9 @@ mod tests {
                 for &(v0, v1) in &panels {
                     for gv in rule {
                         let v = (0.5 * (v1 - v0)).madd(gv.x, 0.5 * (v0 + v1));
-                        let d = surface.derivatives(u, v, 1);
+                        let d = surface.first_derivatives(u, v);
                         let w = 0.25 * (u1 - u0) * (v1 - v0) * gu.w * gv.w;
-                        brute += w * d[1][0].cross(d[0][1]).length();
+                        brute += w * d.1.cross(d.2).length();
                     }
                 }
             }
