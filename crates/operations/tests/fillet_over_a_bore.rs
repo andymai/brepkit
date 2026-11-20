@@ -257,7 +257,7 @@ fn round_as_the_direct_fillet(
 /// A pin across a slot meets each wall in a circle, as a bore meets its
 /// faces, but its material lies inside its wall: it is no bore, and a round
 /// of the slot's edge keeps it. Clear of the band, the round takes off its
-/// strip alone. Under the band, the round is the direct fillet's.
+/// strip alone. Under the band, the round is refused.
 #[test]
 fn a_pin_under_a_round_is_kept() {
     let mut topo = Topology::new();
@@ -277,10 +277,29 @@ fn a_pin_under_a_round_is_kept() {
         "removed {removed}, want {want}"
     );
 
+    // Under the band, the pin's circle lies wholly between the rounded edge
+    // and the round's contact on the wall: trimmed, the wall would keep it
+    // as a loop outside its outline, the pin standing through the band. The
+    // round is refused, directly and as `fillet_v2`, as for any hole under
+    // an open round's band.
     let mut topo = Topology::new();
     let (solid, edge) = pinned_channel(&mut topo, 13.0);
-    let result = round_as_the_direct_fillet(&mut topo, solid, &[edge], 4.0);
-    assert!(inside(&topo, result, [15.0, 10.0, 13.0]), "pin lost");
+    let mut builder = FilletBuilder::new(&mut topo, solid);
+    builder.add_edges(&[edge], 4.0);
+    assert!(
+        builder
+            .build()
+            .map_err(|e| e.to_string())
+            .and_then(|r| all_blended(r).map_err(|e| e.to_string()))
+            .is_err(),
+        "a round over the pin is refused"
+    );
+    assert!(
+        fillet_v2(&mut topo, solid, &[edge], 4.0)
+            .and_then(all_blended)
+            .is_err(),
+        "a round over the pin is refused"
+    );
 }
 
 /// A spool: a hub of radius 3 between two flanges of radius 10 meets each

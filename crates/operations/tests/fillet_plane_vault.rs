@@ -14,7 +14,7 @@
 //! arc.
 //!
 //! The round along an end wall's arc is a torus band about the vault's
-//! axis; it ends on the axial planes through the arc's ends.
+//! axis; its contacts run on to the side walls, which it notches.
 //!
 //! The round along the straight edge is a cylinder of the round's radius:
 //! the ball's centre runs along a line parallel to the vault's axis. A wall
@@ -22,7 +22,7 @@
 //! the corner.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use std::f64::consts::{FRAC_PI_4, PI, TAU};
+use std::f64::consts::{FRAC_PI_2, PI, TAU};
 
 use brepkit_check::classify::{ClassifyOptions, PointClassification, classify_point};
 use brepkit_geometry::convert::circle_to_nurbs;
@@ -220,15 +220,41 @@ fn removed(vault: Vault, pick: Pick, r: f64) -> f64 {
     let big = vault.radius;
     match pick {
         Pick::Along { .. } => corner_area(vault, r, false) * SIDE,
-        // A square corner turned about the vault's axis between the axial
-        // planes through the arc's ends: the square less its quarter disc,
-        // each at its own distance from the axis.
+        // The round's section, a square corner less its quarter disc,
+        // turned about the vault's axis and run on to the side walls
+        // y = 0 and y = SIDE: the band does not stop on the axial planes
+        // through the arc's ends but runs each contact on to the wall it
+        // meets there, as a round ending on a tilted end face does, so at
+        // a distance rho from the axis the section turns through
+        // 2 asin(HALF / rho). Integrated over rho in closed form, F, and
+        // over the quarter disc's arc, x = r (1 - cos t), by Simpson's rule.
         Pick::Across { .. } => {
-            let turn = 2.0 * (HALF / big).asin();
-            let sign = if vault.dished { 1.0 } else { -1.0 };
-            let square = r * r * (big + sign * r / 2.0);
-            let disc = FRAC_PI_4 * r * r * (big + sign * (r - 4.0 * r / (3.0 * PI)));
-            turn * (square - disc)
+            let f = |rho: f64| {
+                rho * rho * (HALF / rho).asin() + HALF * (rho * rho - HALF * HALF).sqrt()
+            };
+            let strip = |t: f64| {
+                let (lo, hi) = if vault.dished {
+                    (big, big + r - r * t.sin())
+                } else {
+                    (big - r + r * t.sin(), big)
+                };
+                (f(hi) - f(lo)) * r * t.sin()
+            };
+            let n = 2000;
+            let h = FRAC_PI_2 / f64::from(n);
+            let sum: f64 = (0..=n)
+                .map(|i| {
+                    let w = if i == 0 || i == n {
+                        1.0
+                    } else if i % 2 == 1 {
+                        4.0
+                    } else {
+                        2.0
+                    };
+                    w * strip(f64::from(i) * h)
+                })
+                .sum();
+            sum * h / 3.0
         }
     }
 }
@@ -559,7 +585,7 @@ fn bored_vault(topo: &mut Topology, y: f64, z: f64, bore: f64, splines: bool) ->
         arcs_as_splines(topo, solid);
     }
     let drill = make_cylinder(topo, bore, SIDE + 2.0).unwrap();
-    let lay = Mat4::translation(-1.0, y, z) * Mat4::rotation_y(std::f64::consts::FRAC_PI_2);
+    let lay = Mat4::translation(-1.0, y, z) * Mat4::rotation_y(FRAC_PI_2);
     transform_solid(topo, drill, &lay).unwrap();
     let solid = boolean(topo, BooleanOp::Cut, solid, drill).unwrap();
     assert!(validate_solid(topo, solid).unwrap().is_valid());
