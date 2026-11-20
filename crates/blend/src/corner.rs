@@ -584,6 +584,26 @@ fn crossing_rounds_ellipse(
     .then_some(ellipse)
 }
 
+/// How far `point` lies from `surface`: its projection, refined by a few
+/// Gauss-Newton steps, as a B-spline's projection stops about `1e-7` short
+/// of its foot, ten times what a crease is held to.
+fn surface_distance(surface: &FaceSurface, point: Point3) -> Option<f64> {
+    let (mut u, mut v) = surface.project_point(point)?;
+    for _ in 0..4 {
+        let r = surface.evaluate(u, v)? - point;
+        let (su, sv) = (surface.partial_u(u, v)?, surface.partial_v(u, v)?);
+        let (a, b, c) = (su.dot(su), su.dot(sv), sv.dot(sv));
+        let det = a.madd(c, -b * b);
+        if det.abs() <= 1e-300 {
+            break;
+        }
+        let (gu, gv) = (su.dot(r), sv.dot(r));
+        u -= c.madd(gu, -b * gv) / det;
+        v -= a.madd(gv, -b * gu) / det;
+    }
+    Some((surface.evaluate(u, v)? - point).length())
+}
+
 /// An extruded mitre's crease as a cubic through `sample(count)`, its points
 /// laid on both stripes' surfaces `first` and `second`, their count doubled
 /// until the cubic lies on both between them, read at the quarters between
@@ -594,13 +614,7 @@ fn fitted_crease(
     second: &FaceSurface,
 ) -> Option<EdgeCurve> {
     let tol = CREASE_FIT;
-    let off = |p: Point3| -> Option<f64> {
-        let on = |surface: &FaceSurface| -> Option<f64> {
-            let (u, v) = surface.project_point(p)?;
-            Some((surface.evaluate(u, v)? - p).length())
-        };
-        Some(on(first)?.max(on(second)?))
-    };
+    let off = |p: Point3| Some(surface_distance(first, p)?.max(surface_distance(second, p)?));
     let mut count = EXTRUDED_CREASE_POINTS;
     loop {
         let points = sample(count)?;
@@ -1707,14 +1721,51 @@ pub fn set_back_convex_trihedral_stripes(
                 reason: "trihedral setbacks consume an entire stripe".to_owned(),
             });
         }
-        let first = result.stripe.sections[0].clone();
-        let last = result.stripe.sections[1].clone();
-        result.stripe.contact1 = trim_nurbs_curve(&result.stripe.contact1, start, end)?;
-        result.stripe.contact2 = trim_nurbs_curve(&result.stripe.contact2, start, end)?;
-        result.stripe.sections = vec![
-            interpolate_section(&first, &last, start),
-            interpolate_section(&first, &last, end),
-        ];
+        let stripe = &result.stripe;
+        if matches!(stripe_centreline(stripe), Some(Centreline::Circle { .. })) {
+            // A circular stripe's contacts are rational arcs, whose parameter
+            // does not run with the angle: trim them where the turned
+            // sections meet them.
+            let section = |fraction: f64| {
+                section_at_fraction(topo, stripe, fraction).ok_or_else(|| {
+                    BlendError::PlanningFailure {
+                        reason: "a set-back section of a circular stripe".to_owned(),
+                    }
+                })
+            };
+            let (first, last) = (section(start)?, section(end)?);
+            let trim = |curve: &NurbsCurve| {
+                let nearer = |section: &CircSection| {
+                    let at = |point: Point3| {
+                        brepkit_math::nurbs::projection::project_point_to_curve(curve, point, TOL)
+                            .map_or(f64::INFINITY, |projection| projection.distance)
+                    };
+                    if at(section.p1) <= at(section.p2) {
+                        section.p1
+                    } else {
+                        section.p2
+                    }
+                };
+                trim_nurbs_curve_at_points(
+                    curve,
+                    (start > TOL).then(|| nearer(&first)),
+                    (end < 1.0 - TOL).then(|| nearer(&last)),
+                )
+            };
+            let (contact1, contact2) = (trim(&stripe.contact1)?, trim(&stripe.contact2)?);
+            result.stripe.contact1 = contact1;
+            result.stripe.contact2 = contact2;
+            result.stripe.sections = vec![first, last];
+        } else {
+            let first = result.stripe.sections[0].clone();
+            let last = result.stripe.sections[1].clone();
+            result.stripe.contact1 = trim_nurbs_curve(&result.stripe.contact1, start, end)?;
+            result.stripe.contact2 = trim_nurbs_curve(&result.stripe.contact2, start, end)?;
+            result.stripe.sections = vec![
+                interpolate_section(&first, &last, start),
+                interpolate_section(&first, &last, end),
+            ];
+        }
         setback_edges.extend(original_stripes[index].spine_edges().iter().copied());
     }
 
@@ -1805,25 +1856,23 @@ fn convex_trihedral_setback(
     // material at a convex corner and in the air at a pocket's, and only the
     // right side's centre lies on the stripes' centerlines.
     for signed_radius in [radius, -radius] {
-        let Some(center) = trihedral_ball_centre(topo, signed_radius, &support_faces) else {
+        let Some(center) =
+            junction_ball_centre(topo, signed_radius, &support_faces, indices, stripes)
+        else {
             return Ok(None);
         };
         let mut fractions = Vec::with_capacity(indices.len());
         for &index in indices {
             let stripe = &stripes[index];
-            let start = stripe.sections[0].center;
-            let direction = stripe.sections[1].center - start;
-            let length_squared = direction.dot(direction);
-            if length_squared <= TOL * TOL {
+            if (stripe.sections[1].center - stripe.sections[0].center).length() <= TOL {
                 return Err(BlendError::CornerFailure { vertex });
             }
-            let fraction = (center - start).dot(direction) / length_squared;
-            let projected = start + direction * fraction;
             // A setback trims the stripe end down to the rolling-ball center,
             // so the center must lie on the bounded stripe centerline. A short
             // spine whose two ends' setbacks meet is refused when the trims are
             // applied ("trihedral setbacks consume an entire stripe").
-            if (TOL..=1.0 - TOL).contains(&fraction) && (projected - center).length() <= TOL * 100.0
+            if let Some(fraction) = centreline_fraction(topo, stripe, center)
+                .filter(|fraction| (TOL..=1.0 - TOL).contains(fraction))
             {
                 fractions.push(fraction);
             }
@@ -1945,6 +1994,254 @@ fn trihedral_ball_centre(topo: &Topology, radius: f64, support_faces: &[FaceId])
     ))
 }
 
+/// The path of a two-section analytic stripe's ball centre: the tube's
+/// centre circle for a toroidal band (a plane and a cylinder round its rim),
+/// else the straight line between its sections' centres (a cylindrical band
+/// between two planes, or a plane and a cylinder along its ruling).
+enum Centreline {
+    Line(Point3, Point3),
+    Circle {
+        centre: Point3,
+        axis: Vec3,
+        radius: f64,
+    },
+}
+
+fn stripe_centreline(stripe: &Stripe) -> Option<Centreline> {
+    if stripe.sections.len() != 2 {
+        return None;
+    }
+    Some(match &stripe.surface {
+        FaceSurface::Torus(torus) => Centreline::Circle {
+            centre: torus.center(),
+            axis: torus.z_axis(),
+            radius: torus.major_radius(),
+        },
+        _ => Centreline::Line(stripe.sections[0].center, stripe.sections[1].center),
+    })
+}
+
+/// Whether `point` lies on `centreline` within `tolerance`.
+fn on_centreline(centreline: &Centreline, point: Point3, tolerance: f64) -> bool {
+    match *centreline {
+        Centreline::Line(start, end) => {
+            let direction = end - start;
+            let length_squared = direction.dot(direction);
+            if length_squared <= TOL * TOL {
+                return false;
+            }
+            let fraction = (point - start).dot(direction) / length_squared;
+            (start + direction * fraction - point).length() <= tolerance
+        }
+        Centreline::Circle {
+            centre,
+            axis,
+            radius,
+        } => {
+            let offset = point - centre;
+            let height = offset.dot(axis);
+            let radial = (offset - axis * height).length();
+            height.abs() <= tolerance && (radial - radius).abs() <= tolerance
+        }
+    }
+}
+
+/// The rolling-ball centre of a convex trihedral corner whose supports are
+/// not all planes (a plane, a plane and a cylinder: a slot's end face, its
+/// top and the arc it runs round): the closest approach of two incident
+/// stripes' straight centrelines, when it lies on every incident stripe's
+/// centreline. Each centreline is the path of a ball touching that stripe's
+/// two supports, so a point on all three touches all three faces.
+fn centreline_ball_centre(indices: &[usize], stripes: &[Stripe]) -> Option<Point3> {
+    let centrelines: Vec<Centreline> = indices
+        .iter()
+        .map(|&index| stripe_centreline(&stripes[index]))
+        .collect::<Option<_>>()?;
+    let mut lines = centrelines
+        .iter()
+        .filter_map(|centreline| match *centreline {
+            Centreline::Line(start, end) => Some((start, end - start)),
+            Centreline::Circle { .. } => None,
+        });
+    let (a, u) = lines.next()?;
+    let (b, v) = lines.next()?;
+    let w = a - b;
+    let (uu, uv, vv) = (u.dot(u), u.dot(v), v.dot(v));
+    let denominator = uu * vv - uv * uv;
+    if denominator <= 1e-12 * uu * vv {
+        return None;
+    }
+    let s = (uv * v.dot(w) - vv * u.dot(w)) / denominator;
+    let t = (uu * v.dot(w) - uv * u.dot(w)) / denominator;
+    let on_first = a + u * s;
+    let on_second = b + v * t;
+    let centre = on_first + (on_second - on_first) * 0.5;
+    centrelines
+        .iter()
+        .all(|centreline| on_centreline(centreline, centre, TOL * 100.0))
+        .then_some(centre)
+}
+
+/// The ball centre of a convex trihedral corner: the three support planes'
+/// common offset, or, when a support is curved, the point the incident
+/// stripes' centrelines share.
+fn junction_ball_centre(
+    topo: &Topology,
+    radius: f64,
+    support_faces: &[FaceId],
+    indices: &[usize],
+    stripes: &[Stripe],
+) -> Option<Point3> {
+    trihedral_ball_centre(topo, radius, support_faces)
+        .or_else(|| centreline_ball_centre(indices, stripes))
+}
+
+/// Where `centre` lies along `stripe`'s centreline, as a fraction from its
+/// first section (0) to its second (1): by length along a straight one, by
+/// angle round a circular one (its sweep read from the spine, which turns
+/// round the same axis). `None` when the centre is off the centreline.
+fn centreline_fraction(topo: &Topology, stripe: &Stripe, centre: Point3) -> Option<f64> {
+    let centreline = stripe_centreline(stripe)?;
+    if !on_centreline(&centreline, centre, TOL * 100.0) {
+        return None;
+    }
+    match centreline {
+        Centreline::Line(start, end) => {
+            let direction = end - start;
+            Some((centre - start).dot(direction) / direction.dot(direction))
+        }
+        Centreline::Circle {
+            centre: axis_point,
+            axis,
+            ..
+        } => {
+            let sweep = circle_stripe_sweep(topo, stripe, axis_point, axis)?;
+            let angle = signed_angle_about(
+                axis_point,
+                axis,
+                stripe.sections[0].center,
+                centre,
+                sweep.signum(),
+            )?;
+            Some(angle / sweep)
+        }
+    }
+}
+
+/// The angle, signed about `axis`, a circular stripe sweeps from its first
+/// section to its second, read the way its spine runs.
+fn circle_stripe_sweep(
+    topo: &Topology,
+    stripe: &Stripe,
+    axis_point: Point3,
+    axis: Vec3,
+) -> Option<f64> {
+    if stripe.spine.is_closed() {
+        return None;
+    }
+    let start = stripe.sections[0].center;
+    let middle = stripe
+        .spine
+        .evaluate(topo, 0.5 * stripe.spine.length())
+        .ok()?;
+    let direction = signed_angle_about(axis_point, axis, start, middle, 0.0)?.signum();
+    signed_angle_about(
+        axis_point,
+        axis,
+        start,
+        stripe.sections[1].center,
+        direction,
+    )
+    .filter(|sweep| sweep.abs() > TOL)
+}
+
+/// The angle about `axis` from `from` to `to`, in (-pi, pi], or wrapped into
+/// the turn `direction` gives (`1.0` for [0, 2 pi), `-1.0` for (-2 pi, 0]).
+fn signed_angle_about(
+    axis_point: Point3,
+    axis: Vec3,
+    from: Point3,
+    to: Point3,
+    direction: f64,
+) -> Option<f64> {
+    let radial = |point: Point3| {
+        let offset = point - axis_point;
+        offset - axis * offset.dot(axis)
+    };
+    let x = radial(from);
+    let length = x.length();
+    if length <= TOL {
+        return None;
+    }
+    let x = x * (1.0 / length);
+    let y = axis.cross(x);
+    let target = radial(to);
+    let angle = target.dot(y).atan2(target.dot(x));
+    Some(if direction > 0.0 && angle < 0.0 {
+        angle + std::f64::consts::TAU
+    } else if direction < 0.0 && angle > 0.0 {
+        angle - std::f64::consts::TAU
+    } else {
+        angle
+    })
+}
+
+/// `point` turned by `angle` about the line through `axis_point` along the
+/// unit `axis`.
+fn rotate_about(point: Point3, axis_point: Point3, axis: Vec3, angle: f64) -> Point3 {
+    let offset = point - axis_point;
+    let (sin, cos) = angle.sin_cos();
+    let along = axis * offset.dot(axis);
+    let across = offset - along;
+    axis_point + along + across * cos + axis.cross(across) * sin
+}
+
+/// `stripe`'s section at `fraction` of its sweep: interpolated along a
+/// straight centreline, turned about the axis along a circular one.
+fn section_at_fraction(topo: &Topology, stripe: &Stripe, fraction: f64) -> Option<CircSection> {
+    let (first, last) = (&stripe.sections[0], &stripe.sections[1]);
+    let mut section = interpolate_section(first, last, fraction);
+    if let Some(Centreline::Circle {
+        centre: axis_point,
+        axis,
+        ..
+    }) = stripe_centreline(stripe)
+    {
+        let angle = circle_stripe_sweep(topo, stripe, axis_point, axis)? * fraction;
+        section.p1 = rotate_about(first.p1, axis_point, axis, angle);
+        section.p2 = rotate_about(first.p2, axis_point, axis, angle);
+        section.center = rotate_about(first.center, axis_point, axis, angle);
+    }
+    Some(section)
+}
+
+/// Trim a contact curve to the stretch between the points nearest `start`
+/// and `end` (either `None` to keep that end).
+fn trim_nurbs_curve_at_points(
+    curve: &NurbsCurve,
+    start: Option<Point3>,
+    end: Option<Point3>,
+) -> Result<NurbsCurve, BlendError> {
+    let parameter = |point: Point3| -> Result<f64, BlendError> {
+        let projection =
+            brepkit_math::nurbs::projection::project_point_to_curve(curve, point, TOL)?;
+        if projection.distance > TOL * 100.0 {
+            return Err(BlendError::PlanningFailure {
+                reason: "a set-back section misses its stripe's contact".to_owned(),
+            });
+        }
+        Ok(projection.parameter)
+    };
+    let mut trimmed = curve.clone();
+    if let Some(point) = start {
+        trimmed = curve_split(&trimmed, parameter(point)?)?.1;
+    }
+    if let Some(point) = end {
+        trimmed = curve_split(&trimmed, parameter(point)?)?.0;
+    }
+    Ok(trimmed)
+}
+
 /// Classify whether a trihedral junction's terminal sections were
 /// trimmed to the solved ball centre, `None` when no ball centre exists.
 ///
@@ -1996,7 +2293,9 @@ fn setback_trimmed_classification(
     // A ball in the material is a convex corner's, one in the air a pocket's.
     let mut most = None;
     for signed_radius in [radius, -radius] {
-        let Some(ball_centre) = trihedral_ball_centre(topo, signed_radius, &support_faces) else {
+        let Some(ball_centre) =
+            junction_ball_centre(topo, signed_radius, &support_faces, indices, stripes)
+        else {
             return Ok(None);
         };
         let mut at_ball_centre = 0_usize;
@@ -2574,6 +2873,11 @@ fn face_edge_forward(topo: &Topology, face_id: FaceId, edge_id: EdgeId) -> Optio
 }
 
 /// Return the source vertices at the ends of an open spine in traversal order.
+///
+/// Each edge's sense along the chain is the spine's own: read again from the
+/// edges, an edge running back along the chain read as running forward, the
+/// spine ended at the near end of its last edge, and that terminal was never
+/// closed.
 fn source_spine_endpoints(
     topo: &Topology,
     stripe: &Stripe,
@@ -2582,31 +2886,7 @@ fn source_spine_endpoints(
         return Ok(None);
     }
     let edges = stripe.spine.edges();
-    let mut directions = vec![true; edges.len()];
-    if edges.len() > 1 {
-        let first = topo.edge(edges[0])?;
-        let next = topo.edge(edges[1])?;
-        if first.end() != next.start()
-            && first.end() != next.end()
-            && (first.start() == next.start() || first.start() == next.end())
-        {
-            directions[0] = false;
-        }
-    }
-    for index in 1..edges.len() {
-        let previous = topo.edge(edges[index - 1])?;
-        let previous_end = if directions[index - 1] {
-            previous.end()
-        } else {
-            previous.start()
-        };
-        let edge = topo.edge(edges[index])?;
-        directions[index] = if edge.start() == previous_end {
-            true
-        } else {
-            edge.end() == previous_end
-        };
-    }
+    let directions = stripe.spine.directions();
     let first = topo.edge(edges[0])?;
     let last = topo.edge(edges[edges.len() - 1])?;
     let start = if directions[0] {
@@ -4979,6 +5259,31 @@ impl CapRoundSpine {
     }
 }
 
+/// The capped corner's round along `P` where it is a torus (see
+/// [`plan_capped_torus_corner`]): its spine, a circle about the torus's
+/// axis `r` below `P`, raised onto `P`, and the sign that makes the reach
+/// positive toward the wall.
+struct TorusCapSpine {
+    center: Point3,
+    axis: Vec3,
+    major: f64,
+    sign: f64,
+}
+
+impl TorusCapSpine {
+    /// How far `point` lies in the plane from the round's spine toward the
+    /// wall: `r` on the wall's trace, `0` on the round's contact with `P`.
+    fn reach(&self, point: Point3) -> f64 {
+        let d = point - self.center;
+        let radial = d - self.axis * d.dot(self.axis);
+        self.sign * (radial.length() - self.major)
+    }
+}
+
+/// The number of points the torus round's capped crease and notch are
+/// fitted through.
+const CAPPED_POINTS: usize = 17;
+
 /// Everything [`apply_capped_corner`] changes, worked out before it
 /// changes anything.
 struct CappedCorner {
@@ -5012,10 +5317,14 @@ struct CappedCorner {
     x: Point3,
     e: Point3,
     f: Point3,
-    /// The crease from `x` to `e` and the notch from `e` to `f`, each an
-    /// arc of an ellipse running up its angle.
-    crease: brepkit_math::curves::Ellipse3D,
-    notch: brepkit_math::curves::Ellipse3D,
+    /// The crease from `x` to `e` and the notch from `e` to `f`: each an
+    /// arc of an ellipse running up its angle, or for a torus round a
+    /// curve fitted from `x` to `e` and from `e` to `f`.
+    crease: EdgeCurve,
+    notch: EdgeCurve,
+    /// The cap round's contact on `P` as rebuilt to end at `f`, where it
+    /// is no line.
+    t_cap_curve: Option<EdgeCurve>,
 }
 
 /// The edge of `face`'s outer wire whose two ends lie at `a` and `b`.
@@ -5498,8 +5807,340 @@ fn plan_capped_corner(
         x,
         e,
         f,
-        crease,
-        notch,
+        crease: EdgeCurve::Ellipse(crease),
+        notch: EdgeCurve::Ellipse(notch),
+        t_cap_curve: None,
+    })
+}
+
+/// Work out the capped corner at `junction` (see [`apply_capped_corner`])
+/// where the round along the end plane, `t`, is a torus about an axis
+/// square to `P` (a curved outline's edge on `P`) and `k` is the
+/// extrusion's round. The crease and notch have no closed form here: each
+/// is fitted through points found on both rounds, and the torus's contact
+/// on `P` is rebuilt as the circle through `f`.
+#[allow(clippy::too_many_lines, clippy::too_many_arguments)]
+fn plan_capped_torus_corner(
+    topo: &Topology,
+    junction: &VertexJunction,
+    stripes: &[Stripe],
+    (t, k): (usize, usize),
+    support_faces: &[(FaceId, FaceId)],
+    stripe_faces: &[Option<FaceId>],
+) -> Option<CappedCorner> {
+    let (st, sk) = (stripes.get(t)?, stripes.get(k)?);
+    let (t_face, k_face) = ((*stripe_faces.get(t)?)?, (*stripe_faces.get(k)?)?);
+    let &[retained_source] = junction.unselected_sharp_edges.as_slice() else {
+        return None;
+    };
+    if !matches!(topo.edge(retained_source).ok()?.curve(), EdgeCurve::Line) {
+        return None;
+    }
+    // The shared wall, and each round's own face, as trimmed.
+    let wall_source = [st.face1, st.face2]
+        .into_iter()
+        .find(|&f| f == sk.face1 || f == sk.face2)?;
+    let current = |stripe: usize, s: &Stripe, source: FaceId| -> Option<FaceId> {
+        let &(f1, f2) = support_faces.get(stripe)?;
+        if source == s.face1 {
+            Some(f1)
+        } else if source == s.face2 {
+            Some(f2)
+        } else {
+            None
+        }
+    };
+    let cap_source = if st.face1 == wall_source {
+        st.face2
+    } else {
+        st.face1
+    };
+    let side_source = if sk.face1 == wall_source {
+        sk.face2
+    } else {
+        sk.face1
+    };
+    if cap_source == side_source {
+        return None;
+    }
+    let wall = current(t, st, wall_source)?;
+    if current(k, sk, wall_source)? != wall {
+        return None;
+    }
+    let cap = current(t, st, cap_source)?;
+    let side = current(k, sk, side_source)?;
+    let cap_face = topo.face(cap).ok()?;
+    let n = cap_face.effective_plane_normal()?.normalize().ok()?;
+    let FaceSurface::Plane { normal, d } = cap_face.surface() else {
+        return None;
+    };
+    let level = d / normal.length() * if cap_face.is_reversed() { -1.0 } else { 1.0 };
+    let side_face = topo.face(side).ok()?;
+    let m = side_face.effective_plane_normal()?.normalize().ok()?;
+    if m.dot(n).abs() > 1e-9 {
+        return None;
+    }
+    let side_level = match side_face.surface() {
+        FaceSurface::Plane { normal, d } => {
+            d / normal.length() * if side_face.is_reversed() { -1.0 } else { 1.0 }
+        }
+        _ => return None,
+    };
+    let to_point = |p: Point3| Vec3::new(p.x(), p.y(), p.z());
+    let on_cap = |p: Point3, tol: f64| (n.dot(to_point(p)) - level).abs() <= tol;
+    let on_side = |p: Point3, tol: f64| (m.dot(to_point(p)) - side_level).abs() <= tol;
+
+    // The extrusion's round: a cylinder standing square to `P`.
+    let FaceSurface::Cylinder(k_cyl) = &sk.surface else {
+        return None;
+    };
+    let r = k_cyl.radius();
+    if r <= TOL || k_cyl.axis().normalize().ok()?.dot(n).abs() < 1.0 - 1e-9 {
+        return None;
+    }
+    let tol = 1e-6 * r.max(1.0);
+    let vertex = topo.vertex(junction.vertex).ok()?.point();
+    if !on_cap(vertex, tol) || !on_side(vertex, tol) {
+        return None;
+    }
+    // The retained edge runs along `P` and `Q` from the corner.
+    let retained = topo.edge(retained_source).ok()?;
+    let far = if retained.start() == junction.vertex {
+        retained.end()
+    } else if retained.end() == junction.vertex {
+        retained.start()
+    } else {
+        return None;
+    };
+    let far_point = topo.vertex(far).ok()?.point();
+    if !on_cap(far_point, tol) || !on_side(far_point, tol) {
+        return None;
+    }
+    let along = (far_point - vertex).normalize().ok()?;
+    let length = (far_point - vertex).length();
+
+    // The end sections at the corner: the extrusion round's lies in `P`.
+    let section_t = contact_section_at_vertex(junction.vertex, st, topo)?;
+    let section_k = contact_section_at_vertex(junction.vertex, sk, topo)?;
+    if (section_t.radius - r).abs() > tol || (section_k.radius - r).abs() > tol {
+        return None;
+    }
+    let (t_cap_point, t_wall_point) = if on_cap(section_t.p1, tol) {
+        (section_t.p1, section_t.p2)
+    } else if on_cap(section_t.p2, tol) {
+        (section_t.p2, section_t.p1)
+    } else {
+        return None;
+    };
+    let (k_side_point, k_wall_point) = if on_side(section_k.p1, tol) {
+        (section_k.p1, section_k.p2)
+    } else if on_side(section_k.p2, tol) {
+        (section_k.p2, section_k.p1)
+    } else {
+        return None;
+    };
+    let centre = section_k.center;
+    if ![k_side_point, k_wall_point, centre]
+        .iter()
+        .all(|&p| on_cap(p, tol))
+    {
+        return None;
+    }
+
+    // The round along `P`: a torus about an axis square to `P`, its spine
+    // a circle a radius below `P`.
+    let FaceSurface::Torus(torus) = &st.surface else {
+        return None;
+    };
+    let axis = torus.z_axis().normalize().ok()?;
+    if axis.dot(n).abs() < 1.0 - 1e-9 || (torus.minor_radius() - r).abs() > tol {
+        return None;
+    }
+    let c = torus.center();
+    if (n.dot(to_point(c)) - (level - r)).abs() > tol {
+        return None;
+    }
+    let lifted = c + n * r;
+    let probe = TorusCapSpine {
+        center: lifted,
+        axis,
+        major: torus.major_radius(),
+        sign: 1.0,
+    };
+    let sign = if probe.reach(k_wall_point) >= 0.0 {
+        1.0
+    } else {
+        -1.0
+    };
+    let spine = TorusCapSpine { sign, ..probe };
+    // The wall's trace is the spine's reach `r`: the wall stands square
+    // to `P` along the round.
+    if (spine.reach(k_wall_point) - r).abs() > tol || spine.reach(t_cap_point).abs() > tol {
+        return None;
+    }
+
+    // The crease: the extrusion round's quarter, from its wall contact
+    // round to its contact on `Q`, each ruling meeting the cap round
+    // `r - sqrt(r^2 - reach^2)` below `P`.
+    let u0 = (k_wall_point - centre).normalize().ok()?;
+    let u1 = (k_side_point - centre).normalize().ok()?;
+    let theta = u0.dot(u1).clamp(-1.0, 1.0).acos();
+    if theta <= 1e-6 || theta >= std::f64::consts::PI - 1e-6 {
+        return None;
+    }
+    let w = (u1 - u0 * u0.dot(u1)).normalize().ok()?;
+    let depth = |reach: f64| r - (r * r - reach * reach).max(0.0).sqrt();
+    let reach_side = spine.reach(k_side_point);
+    // Only the corner whose crease meets `Q` below `P` (the wall and `Q`
+    // meeting at more than a right angle) is built here.
+    if reach_side <= tol || reach_side > r {
+        return None;
+    }
+    let mut crease = Vec::with_capacity(CAPPED_POINTS);
+    for i in 0..CAPPED_POINTS {
+        let phi = theta * (i as f64) / ((CAPPED_POINTS - 1) as f64);
+        let p = centre + (u0 * phi.cos() + w * phi.sin()) * r;
+        let reach = spine.reach(p);
+        if !(-tol..=r + tol).contains(&reach) {
+            return None;
+        }
+        crease.push(p - n * depth(reach.clamp(0.0, r)));
+    }
+    // The notch: the cap round's trace on `Q`, from where the crease meets
+    // `Q` along the retained edge to where the round's contact on `P` does.
+    let start = (k_side_point - vertex).dot(along);
+    if (vertex + along * start - k_side_point).length() > tol || start >= length {
+        return None;
+    }
+    let reach_at = |lambda: f64| spine.reach(vertex + along * lambda);
+    // The first point past `start` where the reach runs out.
+    let step = r / 32.0;
+    let steps = ((length - start) / step).ceil();
+    if !steps.is_finite() || steps > 1e6 {
+        return None;
+    }
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let hi = (1..=steps as usize)
+        .map(|i| (start + step * i as f64).min(length))
+        .find(|&lambda| reach_at(lambda) <= 0.0)?;
+    let (mut lo, mut hi) = ((hi - step).max(start), hi);
+    for _ in 0..200 {
+        let mid = 0.5 * (lo + hi);
+        if reach_at(mid) > 0.0 {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    let lambda_f = 0.5 * (lo + hi);
+    let mut notch = Vec::with_capacity(CAPPED_POINTS);
+    for i in 0..CAPPED_POINTS {
+        let lambda = start + (lambda_f - start) * (i as f64) / ((CAPPED_POINTS - 1) as f64);
+        let reach = reach_at(lambda).clamp(0.0, r);
+        notch.push(vertex + along * lambda - n * depth(reach));
+    }
+    let (x, e, f) = (crease[0], *crease.last()?, *notch.last()?);
+    if (notch[0] - e).length() > tol {
+        return None;
+    }
+
+    // The edges at the corner as the trim left them.
+    let (t_section, t_cap_end, t_wall_end) =
+        wire_edge_between(topo, t_face, t_cap_point, t_wall_point, tol)?;
+    let (k_section, k_wall_end, k_side_end) =
+        wire_edge_between(topo, k_face, k_wall_point, k_side_point, tol)?;
+    let t_wall = wire_neighbour_at(topo, t_face, t_section, t_wall_end)?;
+    let t_cap = wire_neighbour_at(topo, t_face, t_section, t_cap_end)?;
+    let k_wall = wire_neighbour_at(topo, k_face, k_section, k_wall_end)?;
+    let k_side = wire_neighbour_at(topo, k_face, k_section, k_side_end)?;
+    if !in_outer_wire(topo, wall, t_wall)
+        || !in_outer_wire(topo, wall, k_wall)
+        || !in_outer_wire(topo, cap, t_cap)
+        || !in_outer_wire(topo, side, k_side)
+    {
+        return None;
+    }
+    let retained_piece = wire_neighbour_at(topo, side, k_side, k_side_end)?;
+    let piece = topo.edge(retained_piece).ok()?;
+    if !matches!(piece.curve(), EdgeCurve::Line) || !in_outer_wire(topo, cap, retained_piece) {
+        return None;
+    }
+    if !edge_passes(topo, retained_piece, f, tol)
+        || !edge_passes(topo, t_wall, x, tol)
+        || !edge_passes(topo, k_wall, x, tol)
+        || !edge_passes(topo, k_side, e, tol)
+    {
+        return None;
+    }
+    // The cap round's contact on `P`, run on (or back) to `f`.
+    let cap_edge = topo.edge(t_cap).ok()?;
+    let cap_far = topo
+        .vertex(if cap_edge.start() == t_cap_end {
+            cap_edge.end()
+        } else {
+            cap_edge.start()
+        })
+        .ok()?
+        .point();
+    let t_cap_curve = {
+        // A circle about the torus's axis through `f`, turning the way
+        // the old contact runs: a point just in from its far end lies
+        // on the new arc between its ends.
+        let axis_point = spine.center + spine.axis * (cap_far - spine.center).dot(spine.axis);
+        let (from, to) = if cap_edge.start() == t_cap_end {
+            (f, cap_far)
+        } else {
+            (cap_far, f)
+        };
+        let (a0, a1) = cap_edge.curve().domain_with_endpoints(
+            topo.vertex(cap_edge.start()).ok()?.point(),
+            topo.vertex(cap_edge.end()).ok()?.point(),
+        );
+        let s = if cap_edge.start() == t_cap_end {
+            a1 + (a0 - a1) * 0.01
+        } else {
+            a0 + (a1 - a0) * 0.01
+        };
+        let probe = cap_edge.curve().evaluate_with_endpoints(
+            s,
+            topo.vertex(cap_edge.start()).ok()?.point(),
+            topo.vertex(cap_edge.end()).ok()?.point(),
+        );
+        let radius = (f - axis_point).length();
+        if ((cap_far - axis_point).length() - radius).abs() > tol {
+            return None;
+        }
+        let turns = |circle: &brepkit_math::curves::Circle3D, p: Point3| {
+            (circle.project(p) - circle.project(from)).rem_euclid(std::f64::consts::TAU)
+        };
+        [spine.axis, -spine.axis].into_iter().find_map(|normal| {
+            let circle = brepkit_math::curves::Circle3D::new(axis_point, normal, radius).ok()?;
+            (turns(&circle, probe) < turns(&circle, to)).then_some(EdgeCurve::Circle(circle))
+        })?
+    };
+    Some(CappedCorner {
+        t_face,
+        t_wall,
+        t_cap,
+        t_section,
+        k_face,
+        k_wall,
+        k_side,
+        k_section,
+        wall,
+        cap,
+        side,
+        retained: retained_piece,
+        t_wall_end,
+        t_cap_end,
+        k_wall_end,
+        k_side_end,
+        x,
+        e,
+        f,
+        crease: EdgeCurve::NurbsCurve(brepkit_math::nurbs::fitting::interpolate(&crease, 3).ok()?),
+        notch: EdgeCurve::NurbsCurve(brepkit_math::nurbs::fitting::interpolate(&notch, 3).ok()?),
+        t_cap_curve: Some(t_cap_curve),
     })
 }
 
@@ -5560,8 +6201,9 @@ fn drop_from_outer_wire(
 /// wall `C` meets an end plane `P` and a plane side `Q`, both standing
 /// square to `P`: `P ∩ C` is rounded (a cylinder), `C ∩ Q` is rounded
 /// (the extrusion's round, a cylinder square to `P`), and `P ∩ Q` is left
-/// sharp, the wall meeting `Q` at more than a right angle. A curved wall,
-/// whose round along `P` is a torus, is not built here.
+/// sharp, the wall meeting `Q` at more than a right angle. A curved wall
+/// whose round along `P` is a torus is built the same way, its crease and
+/// notch fitted (see [`plan_capped_torus_corner`]).
 ///
 /// At depth `t` below `P` the cap round is the wall's trace inset by
 /// `w = r - sqrt(r^2 - (r - t)^2)`, and the extrusion round is its one
@@ -5590,7 +6232,9 @@ fn apply_capped_corner(
         return Ok(false);
     }
     let Some(plan) = [(a, b), (b, a)].into_iter().find_map(|pair| {
-        plan_capped_corner(topo, junction, stripes, pair, support_faces, stripe_faces)
+        plan_capped_corner(topo, junction, stripes, pair, support_faces, stripe_faces).or_else(
+            || plan_capped_torus_corner(topo, junction, stripes, pair, support_faces, stripe_faces),
+        )
     }) else {
         return Ok(false);
     };
@@ -5636,7 +6280,7 @@ fn apply_capped_corner(
         } else {
             edge.set_end(vf);
         }
-        edge.set_curve(EdgeCurve::Line);
+        edge.set_curve(plan.t_cap_curve.clone().unwrap_or(EdgeCurve::Line));
     }
     for (edge, faces) in [
         (plan.t_wall, [plan.wall, plan.t_face]),
@@ -5649,8 +6293,8 @@ fn apply_capped_corner(
             topo.pcurves_mut().remove(edge, face);
         }
     }
-    let crease = topo.add_edge(Edge::new(vx, ve, EdgeCurve::Ellipse(plan.crease.clone())));
-    let notch = topo.add_edge(Edge::new(ve, vf, EdgeCurve::Ellipse(plan.notch.clone())));
+    let crease = topo.add_edge(Edge::new(vx, ve, plan.crease.clone()));
+    let notch = topo.add_edge(Edge::new(ve, vf, plan.notch.clone()));
 
     // The cap round's section ran from its contact on `P` to the wall's;
     // it is now the notch back from `f` to `e` and the crease on to `x`.
@@ -7342,6 +7986,7 @@ mod tests {
                         contact2: line_curve(start_p2, end_p2),
                         face1: contour.side1,
                         face2: contour.side2,
+                        beyond: Default::default(),
                         sections: vec![
                             CircSection {
                                 p1: start_p1,
@@ -7639,6 +8284,7 @@ mod tests {
             .unwrap(),
             face1: face_xy,
             face2: face_xz,
+            beyond: Default::default(),
             sections: vec![
                 CircSection {
                     p1: Point3::new(radius, 0.0, radius),
@@ -7698,6 +8344,7 @@ mod tests {
             .unwrap(),
             face1: face_xy,
             face2: face_yz,
+            beyond: Default::default(),
             sections: vec![
                 CircSection {
                     p1: Point3::new(0.0, radius, radius),
@@ -7757,6 +8404,7 @@ mod tests {
             .unwrap(),
             face1: face_xz,
             face2: face_yz,
+            beyond: Default::default(),
             sections: vec![
                 CircSection {
                     p1: Point3::new(0.0, radius, radius),
@@ -8528,6 +9176,45 @@ mod tests {
                 "t={t}: signed normal dot {dot} != sin^2(t)={expected}"
             );
         }
+    }
+    /// A spine whose middle edge is stored running back along the chain
+    /// ends at the far end of its last edge: read as running forward, the
+    /// middle edge sent the chain back to the last edge's near end, and the
+    /// round's far terminal was never closed.
+    #[test]
+    fn spine_ends_read_past_an_edge_stored_backwards() {
+        let mut topo = Topology::new();
+        let points = [0.0, 1.0, 2.0, 3.0].map(|x| Point3::new(x, 0.0, 0.0));
+        let v = points.map(|p| topo.add_vertex(Vertex::new(p, TOL)));
+        let edges = vec![
+            topo.add_edge(Edge::new(v[0], v[1], EdgeCurve::Line)),
+            topo.add_edge(Edge::new(v[2], v[1], EdgeCurve::Line)),
+            topo.add_edge(Edge::new(v[2], v[3], EdgeCurve::Line)),
+        ];
+        let spine = Spine::from_chain(&topo, edges).unwrap();
+        assert_eq!(spine.directions(), &[true, false, true]);
+        // Any face: the spine's ends are read from its edges alone.
+        let solid = make_box(&mut topo, Vec3::new(1.0, 1.0, 1.0));
+        let face = solid_shell_faces(&topo, solid)[0];
+        let stripe = Stripe {
+            spine,
+            surface: FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: 0.0,
+            },
+            pcurve1: line_pcurve(),
+            pcurve2: line_pcurve(),
+            contact1: line_curve(points[0], points[3]),
+            contact2: line_curve(points[0], points[3]),
+            face1: face,
+            face2: face,
+            beyond: Default::default(),
+            sections: Vec::new(),
+        };
+        assert_eq!(
+            source_spine_endpoints(&topo, &stripe).unwrap(),
+            Some((v[0], v[3]))
+        );
     }
 }
 

@@ -8,8 +8,8 @@
 //!
 //! At each end the round's section lies in the cap, its contacts ending on
 //! the cap's two corner edges: the flat side's line and the wall's
-//! B-spline rim. The cap notch took lines only, so the cap was left whole
-//! and the mesh open there. It now splits the B-spline rim where the
+//! B-spline rim. The cap notch took lines and arcs only, so the cap was left
+//! whole and the mesh open there. It now splits the B-spline rim where the
 //! contact ends on it, as it splits a line.
 //!
 //! The removed volume is `H` times the corner's area between the side, the

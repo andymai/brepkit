@@ -1,17 +1,17 @@
-//! A drilled plate's bottom edges at its two ends chamfered by the blend
-//! engine by exactly the plate's thickness: each end face is consumed
-//! whole. The chamfer runs from the bottom up to the end's top edge, which
-//! it shares with the top face, and the end face goes. The result is valid,
-//! watertight, and takes off a prism of `t^2 / 2` per unit length at each
-//! end.
+//! A drilled plate's bottom edges at its two ends chamfered by exactly the
+//! plate's thickness: each end face is consumed whole. The chamfer runs from
+//! the bottom up to the end's top edge, which it shares with the top face,
+//! and the end face goes. The hole gives the body curved edges, so the
+//! chamfer goes to the blend engine. The result is valid, watertight, and
+//! takes off a prism of `t^2 / 2` per unit length at each end.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::f64::consts::PI;
 
 use brepkit_math::mat::Mat4;
 use brepkit_math::vec::Point3;
-use brepkit_operations::blend_ops::{all_blended, chamfer_v2};
 use brepkit_operations::boolean::{BooleanOp, boolean};
+use brepkit_operations::chamfer::chamfer;
 use brepkit_operations::measure::solid_volume;
 use brepkit_operations::primitives::{make_box, make_cylinder};
 use brepkit_operations::tessellate::{is_watertight, tessellate_solid};
@@ -48,9 +48,7 @@ fn check(pose: &Mat4) {
         .collect();
     assert_eq!(ends.len(), 2);
     let faces = solid_faces(&topo, drilled).unwrap().len();
-    let result = chamfer_v2(&mut topo, drilled, &ends, THICK, THICK)
-        .and_then(all_blended)
-        .unwrap_or_else(|e| panic!("{e}"));
+    let result = chamfer(&mut topo, drilled, &ends, THICK).unwrap_or_else(|e| panic!("{e}"));
     let report = validate_solid(&topo, result).unwrap();
     assert!(report.is_valid(), "invalid: {report:?}");
     let mesh = tessellate_solid(&topo, result, 0.05).unwrap();

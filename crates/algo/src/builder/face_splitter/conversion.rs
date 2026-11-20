@@ -1,12 +1,14 @@
 //! Coordinate/type conversions between 3D, UV, and topology types.
 
+use brepkit_math::madd::Madd;
 use brepkit_math::vec::{Point2, Point3, Vec3};
 use brepkit_topology::Topology;
 use brepkit_topology::face::FaceSurface;
 use brepkit_topology::vertex::Vertex;
 
 use super::super::pcurve_compute::{
-    compute_pcurve_on_surface, project_point_on_surface, sample_edge_to_uv,
+    compute_boundary_pcurve_on_surface, compute_pcurve_on_surface, project_point_on_surface,
+    sample_edge_to_uv,
 };
 use super::super::plane_frame::PlaneFrame;
 use super::super::split_types::OrientedPCurveEdge;
@@ -274,14 +276,22 @@ pub(super) fn boundary_edges_to_pcurve_with_images<S: std::hash::BuildHasher>(
         let start_3d = start_v.point();
         let end_3d = end_v.point();
 
-        // Two arcs of a great circle join antipodal points, and the shorter
-        // arc between the ends cannot tell them apart: a ball's arc is read
-        // along its own span.
-        let pcurve = if matches!(surface, FaceSurface::Sphere(_)) {
-            super::super::pcurve_compute::compute_boundary_pcurve_on_surface(
+        // A plane's boundary arc traces its own span: the shorter way round
+        // between its ends is its complement when it is the major arc (a
+        // wall's notch where a bore crosses its rim above the bore's centre),
+        // and the walker read the notch as leaving the way the bore's lower
+        // arc does. Two arcs of a great circle join antipodal points, and the
+        // shorter arc cannot tell them apart either: a ball's arc too.
+        let pcurve = if matches!(surface, FaceSurface::Plane { .. } | FaceSurface::Sphere(_)) {
+            let (stored_start, stored_end) = if forward {
+                (start_3d, end_3d)
+            } else {
+                (end_3d, start_3d)
+            };
+            compute_boundary_pcurve_on_surface(
                 edge.curve(),
-                if forward { start_3d } else { end_3d },
-                if forward { end_3d } else { start_3d },
+                stored_start,
+                stored_end,
                 forward,
                 surface,
                 wire_pts,
@@ -474,7 +484,35 @@ fn resolve_seam_endpoint_uv(edges: &mut [OrientedPCurveEdge], surface: &FaceSurf
         .iter()
         .position(|e| at_apex(e.start_3d) && !at_apex(e.end_3d));
     // Walk from an edge anchored off the seam so continuity has a reference.
-    let Some(first) = leaves_apex.or_else(|| edges.iter().position(|e| !at_seam(e.start_uv.x())))
+    // A closed rim that starts on a seam line, as the STEP reader starts a
+    // closed circle at its vertex: its samples run from the vertex, so a rim
+    // walked against its curve is traversed from its stored end back to its
+    // start. (One starting elsewhere keeps the walk's own reading.)
+    let seam_line_at = |u: f64| {
+        edges.iter().any(|l| {
+            matches!(l.curve_3d, brepkit_topology::edge::EdgeCurve::Line)
+                && (l.start_uv.x() - l.end_uv.x()).abs() <= 1e-9
+                && (l.start_uv.x() - u)
+                    .rem_euclid(TAU)
+                    .min((u - l.start_uv.x()).rem_euclid(TAU))
+                    <= 1e-9
+        })
+    };
+    let anchored: Vec<bool> = edges
+        .iter()
+        .map(|e| (e.start_3d - e.end_3d).length() < 1e-10 && seam_line_at(e.start_uv.x()))
+        .collect();
+    // A wall whose seam is at u = 0 itself has every piece starting on it:
+    // its seam lines are then the reference, or its rims stay as sampled and
+    // the far one lies a turn off the wall.
+    let Some(first) = leaves_apex
+        .or_else(|| edges.iter().position(|e| !at_seam(e.start_uv.x())))
+        .or_else(|| {
+            edges.iter().position(|e| {
+                matches!(e.curve_3d, brepkit_topology::edge::EdgeCurve::Line)
+                    && (e.start_uv.x() - e.end_uv.x()).abs() <= 1e-9
+            })
+        })
     else {
         return;
     };
@@ -491,7 +529,7 @@ fn resolve_seam_endpoint_uv(edges: &mut [OrientedPCurveEdge], surface: &FaceSurf
     // projects to, so shifting it "nearest" would move it a period away
     // from the seam lines it shares vertices with.
     let nearest = |u: f64, target: f64| -> f64 { u - ((u - target) / TAU).round() * TAU };
-    let mut cur = if leaves_apex.is_some() {
+    let mut cur = if leaves_apex.is_some() || (anchored[first] && !edges[first].forward) {
         edges[first].end_uv.x()
     } else {
         edges[first].start_uv.x()
@@ -499,6 +537,26 @@ fn resolve_seam_endpoint_uv(edges: &mut [OrientedPCurveEdge], surface: &FaceSurf
     for k in 0..n {
         let e = &mut edges[(first + k) % n];
         let is_closed = (e.start_3d - e.end_3d).length() < 1e-10;
+        if is_closed && anchored[(first + k) % n] && matches!(surface, FaceSurface::Cylinder(_)) {
+            // It starts where the walk is, on the seam line it leaves from:
+            // moved by whole periods onto the running u (reached by a seam
+            // line a turn away from the copy it is stored at, it lay a turn
+            // off the rest of the wall). Its start_uv is where its turn
+            // starts, as the closed-rim split reads it, and its end_uv keeps
+            // the curve's own sense; the walk goes on a turn in the
+            // traversal's (walked against its curve, a bore's far rim had
+            // been laid a turn below the wall).
+            let native: f64 = if e.end_uv.x() < e.start_uv.x() {
+                -1.0
+            } else {
+                1.0
+            };
+            let shift = nearest(e.start_uv.x(), cur) - e.start_uv.x();
+            e.start_uv = Point2::new(e.start_uv.x() + shift, e.start_uv.y());
+            e.end_uv = Point2::new(e.end_uv.x() + shift, e.end_uv.y());
+            cur = if e.forward { native } else { -native }.madd(TAU, e.start_uv.x());
+            continue;
+        }
         if is_closed && !matches!(surface, FaceSurface::Cone(_)) {
             cur = e.end_uv.x();
             continue;
@@ -677,6 +735,37 @@ pub(super) fn is_point_on_boundary_uv(
     false
 }
 
+/// The parameter along `line` of the first copy of `p`, shifted by whole
+/// periods of `surface`, that the line runs through ahead of its start.
+/// `None` on a surface with no period, or when no copy lies on the line.
+fn first_periodic_copy_on_line(
+    line: &brepkit_math::curves2d::Line2D,
+    p: Point2,
+    surface: &FaceSurface,
+) -> Option<f64> {
+    let (u_period, v_period) = super::super::pcurve_compute::surface_periods(surface);
+    if u_period.is_none() && v_period.is_none() {
+        return None;
+    }
+    let shifts = |period: Option<f64>| -> Vec<f64> {
+        period.map_or_else(
+            || vec![0.0],
+            |p| (-2..=2).map(|k| f64::from(k) * p).collect(),
+        )
+    };
+    let mut best: Option<f64> = None;
+    for du in shifts(u_period) {
+        for dv in shifts(v_period) {
+            let copy = Point2::new(p.x() + du, p.y() + dv);
+            let t = line.project(copy);
+            if t > 1e-9 && line.distance_to_point(copy) <= 1e-6 && best.is_none_or(|b| t < b) {
+                best = Some(t);
+            }
+        }
+    }
+    best
+}
+
 /// Extract UV endpoints from a pcurve's evaluation rather than independent
 /// surface projection. This ensures consistency -- e.g. a pcurve that goes
 /// from (pi, v) to (2pi, v) won't have its end snapped to (0, v) by the
@@ -696,6 +785,13 @@ pub(super) fn uv_endpoints_from_pcurve(
             // 3D endpoint and computing the 2D distance along the line.
             let su = line.evaluate(0.0);
             let eu_proj = project_point_on_surface(end_3d, surface, wire_pts, None);
+            // On a periodic surface the projection lands in the surface's
+            // own window, which can be whole periods off the line's run (an
+            // arc leaving u = 0 towards -u projects its end near 2pi): the
+            // line ends at the first copy of that point it runs through.
+            if let Some(t) = first_periodic_copy_on_line(line, eu_proj, surface) {
+                return (su, line.evaluate(t));
+            }
             let du = eu_proj.x() - su.x();
             let dv = eu_proj.y() - su.y();
             let len_2d = (du * du + dv * dv).sqrt();

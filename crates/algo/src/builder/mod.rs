@@ -1730,7 +1730,16 @@ fn sample_face_interior(
         {
             return Ok(pt);
         }
-        if let Some(mid) = closed_mid
+        // Only on a surface that wraps round in u: on an open B-spline a
+        // closed edge is a hole bridged into the outline (its wire runs out
+        // to it and back), and its u at the middle of the v range can land
+        // on the hole's own rim.
+        let wraps = match face.surface() {
+            brepkit_topology::face::FaceSurface::Nurbs(s) => s.is_periodic_u(),
+            _ => true,
+        };
+        if wraps
+            && let Some(mid) = closed_mid
             && v_max - v_min > tol.linear
             && let Some((u, _)) = face.surface().project_point(mid)
             && let Some(pt) = face.surface().evaluate(u, 0.5 * (v_min + v_max))
@@ -2569,6 +2578,86 @@ mod tests {
         let mut topo = Topology::new();
         let face = nurbs_ring_face(&mut topo, outer, nurbs_arc(hole, turn, 4));
         sample_radius(&topo, face)
+    }
+
+    /// A flat B-spline face over the square `|x|, |y| <= 10` in `z = 0`,
+    /// open in both directions, with a round hole of radius 3 about the
+    /// origin bridged into its one loop: the loop runs in from (10, 0) to the
+    /// hole's vertex (3, 0), round the hole, and back out. The closed edge
+    /// is a hole, not a rim of a band, so the sample must not take its u at
+    /// the middle of the face's v range: that is (-3, 0), on the hole's rim.
+    #[test]
+    fn sample_face_interior_steps_off_a_bridged_hole_on_an_open_b_spline() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::nurbs::surface::NurbsSurface;
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::{Face, FaceSurface};
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        let mut topo = Topology::new();
+        let p = |x: f64, y: f64| Point3::new(x, y, 0.0);
+        let surface = NurbsSurface::new(
+            1,
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![
+                vec![p(-10.0, -10.0), p(-10.0, 10.0)],
+                vec![p(10.0, -10.0), p(10.0, 10.0)],
+            ],
+            vec![vec![1.0, 1.0], vec![1.0, 1.0]],
+        )
+        .unwrap();
+        let corners = [
+            p(-10.0, -10.0),
+            p(10.0, -10.0),
+            p(10.0, 0.0),
+            p(10.0, 10.0),
+            p(-10.0, 10.0),
+        ];
+        let v: Vec<_> = corners
+            .iter()
+            .map(|&c| topo.add_vertex(Vertex::new(c, 1e-7)))
+            .collect();
+        let hole_v = topo.add_vertex(Vertex::new(p(3.0, 0.0), 1e-7));
+        let line = |topo: &mut Topology, a, b| topo.add_edge(Edge::new(a, b, EdgeCurve::Line));
+        let sides: Vec<_> = (0..5)
+            .map(|i| line(&mut topo, v[i], v[(i + 1) % 5]))
+            .collect();
+        let bridge = line(&mut topo, v[2], hole_v);
+        let circle = Circle3D::new_with_ref(
+            p(0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            3.0,
+            Vec3::new(1.0, 0.0, 0.0),
+        )
+        .unwrap();
+        let hole = topo.add_edge(Edge::new(hole_v, hole_v, EdgeCurve::Circle(circle)));
+        let wire = Wire::new(
+            vec![
+                OrientedEdge::new(sides[0], true),
+                OrientedEdge::new(sides[1], true),
+                OrientedEdge::new(bridge, true),
+                OrientedEdge::new(hole, false),
+                OrientedEdge::new(bridge, false),
+                OrientedEdge::new(sides[2], true),
+                OrientedEdge::new(sides[3], true),
+                OrientedEdge::new(sides[4], true),
+            ],
+            true,
+        )
+        .unwrap();
+        let wire = topo.add_wire(wire);
+        let face = topo.add_face(Face::new(wire, vec![], FaceSurface::Nurbs(surface)));
+
+        let pt = sample_face_interior(&topo, face, Tolerance::default()).unwrap();
+        let r = pt.x().hypot(pt.y());
+        assert!(pt.z().abs() < 1e-9, "sample {pt:?} off the face's plane");
+        assert!(
+            r > 3.1 && pt.x().abs() < 10.0 && pt.y().abs() < 10.0,
+            "sample {pt:?} not clear of the hole"
+        );
     }
 
     /// A NURBS hole with a zero weight has no control-point hull to bound

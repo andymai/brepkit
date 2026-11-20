@@ -204,6 +204,40 @@ pub(super) fn exact_hole(
         .collect()
 }
 
+/// [`exact_hole`], with a NURBS edge read as a fine polyline through its
+/// curve (every 1/64 of its span) rather than refusing the loop: a loop of
+/// arcs and splines keeps its arcs exact, which a polygon of the whole loop
+/// reads by their chords.
+pub(super) fn region_with_fitted_splines(
+    wire: &[OrientedPCurveEdge],
+    frame: &super::super::plane_frame::PlaneFrame,
+) -> Option<Vec<Boundary2>> {
+    let mut pieces = Vec::with_capacity(wire.len());
+    for e in wire {
+        if let EdgeCurve::NurbsCurve(_) = &e.curve_3d {
+            let (s3, e3) = if e.forward {
+                (e.start_3d, e.end_3d)
+            } else {
+                (e.end_3d, e.start_3d)
+            };
+            let (t0, t1) = e.curve_3d.domain_with_endpoints(s3, e3);
+            let mut pts: Vec<Point2> = (0..=64)
+                .map(|k| {
+                    let t = (t1 - t0).madd(f64::from(k) / 64.0, t0);
+                    frame.project(e.curve_3d.evaluate_with_endpoints(t, s3, e3))
+                })
+                .collect();
+            if !e.forward {
+                pts.reverse();
+            }
+            pieces.extend(pts.windows(2).map(|w| Boundary2::Segment(w[0], w[1])));
+        } else {
+            pieces.extend(exact_hole(std::slice::from_ref(e), frame)?);
+        }
+    }
+    Some(pieces)
+}
+
 /// Find a UV point inside the outer wire but outside all holes.
 ///
 /// Steps inward from each outer-wire edge midpoint, then from each vertex,

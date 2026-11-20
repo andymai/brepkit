@@ -1,13 +1,18 @@
 //! Curve-surface intersection.
 
 use crate::MathError;
+use crate::aabb::Aabb3;
 use crate::madd::Madd;
 use crate::nurbs::curve::NurbsCurve;
 use crate::nurbs::decompose::{curve_to_bezier_segments, surface_to_bezier_patches};
+use crate::nurbs::span_index::knot_spans;
 use crate::nurbs::surface::NurbsSurface;
 use crate::vec::{Point3, Vec3};
 
 use super::MAX_NEWTON_ITER;
+
+/// A parameter interval.
+type Interval = (f64, f64);
 
 /// A curve-surface intersection hit with parameters on both entities.
 #[derive(Debug, Clone, Copy)]
@@ -22,9 +27,9 @@ pub struct CurveSurfaceHit {
 
 /// Find all intersection points between a NURBS curve and a NURBS surface.
 ///
-/// Decomposes both into Bezier segments/patches, performs AABB filtering,
-/// then refines candidates with Newton iteration on the coupled 3x3 system
-/// `C(t) - S(u,v) = 0`.
+/// Pairs the curve's knot spans with the surface's by their control boxes,
+/// narrows each pair by subdivision, then refines candidates with Newton
+/// iteration on the coupled 3x3 system `C(t) - S(u,v) = 0`.
 ///
 /// # Parameters
 ///
@@ -34,9 +39,95 @@ pub struct CurveSurfaceHit {
 ///
 /// # Errors
 ///
-/// Returns an error if Bezier decomposition fails.
+/// Returns an error if Bezier decomposition fails (on a surface whose spans
+/// cannot be indexed).
 #[allow(clippy::too_many_lines)]
 pub fn intersect_curve_surface(
+    curve: &NurbsCurve,
+    surface: &NurbsSurface,
+    tolerance: f64,
+) -> Result<Vec<CurveSurfaceHit>, MathError> {
+    const DEPTH: u32 = 12;
+    const REACH: f64 = 1.5;
+    let Some(index) = surface.span_index() else {
+        return intersect_curve_surface_patches(curve, surface, tolerance);
+    };
+    // Use a generous dedup threshold: many seeds converge to the same root,
+    // and we want to collapse them. 1e-6 in 3D space is well below any
+    // meaningful geometric distinction at CAD tolerances.
+    let dedup_dist = tolerance.max(1e-6) * 10.0;
+    let dedup_sq = dedup_dist * dedup_dist;
+    let mut hits: Vec<CurveSurfaceHit> = Vec::new();
+
+    // Each curve span against each surface span whose control box meets
+    // its own, searched by halving whichever of `t`, `u` and `v` reaches
+    // farthest, and dropping a piece pair whose middles lie farther apart
+    // than their half-widths along the derivatives reach (with a margin for
+    // curvature). Newton's method runs from the middles of the pairs left
+    // at the finest level. A fitted patch can hold tens of thousands of
+    // spans whose control boxes overlap a boundary curve's: seeding every
+    // such pair by sampling ran for minutes.
+    let cps = curve.control_points();
+    let p = curve.degree();
+    let mut stack: Vec<(Interval, Interval, Interval, u32)> = Vec::new();
+    for (t0, t1, last) in knot_spans(curve.knots(), p, cps.len()) {
+        let bound = Aabb3::from_points(cps[last - p..=last].iter().copied()).expanded(dedup_dist);
+        for (us, vs) in index.spans_meeting(&bound) {
+            stack.push(((t0, t1), us, vs, 0));
+            while let Some((ts, us, vs, depth)) = stack.pop() {
+                let tm = f64::midpoint(ts.0, ts.1);
+                let (um, vm) = (f64::midpoint(us.0, us.1), f64::midpoint(vs.0, vs.1));
+                let cd = curve.derivatives(tm, 1);
+                let sd = surface.first_derivatives(um, vm);
+                let reach_t = cd[1].length() * (ts.1 - ts.0);
+                let reach_u = sd.1.length() * (us.1 - us.0);
+                let reach_v = sd.2.length() * (vs.1 - vs.0);
+                let gap = (cd[0] - sd.0).length();
+                if gap > REACH * 0.5 * (reach_t + reach_u + reach_v) + dedup_dist {
+                    continue;
+                }
+                if depth < DEPTH {
+                    let half = |(lo, hi): (f64, f64)| {
+                        let m = f64::midpoint(lo, hi);
+                        [(lo, m), (m, hi)]
+                    };
+                    if reach_t >= reach_u && reach_t >= reach_v {
+                        for h in half(ts) {
+                            stack.push((h, us, vs, depth + 1));
+                        }
+                    } else if reach_u >= reach_v {
+                        for h in half(us) {
+                            stack.push((ts, h, vs, depth + 1));
+                        }
+                    } else {
+                        for h in half(vs) {
+                            stack.push((ts, us, h, depth + 1));
+                        }
+                    }
+                    continue;
+                }
+                if let Some(hit) = refine_curve_surface_point(curve, surface, tm, um, vm, tolerance)
+                {
+                    let dup = hits.iter().any(|h: &CurveSurfaceHit| {
+                        let d = h.point - hit.point;
+                        d.x().madd(d.x(), d.y().madd(d.y(), d.z() * d.z())) < dedup_sq
+                    });
+                    if !dup {
+                        hits.push(hit);
+                    }
+                }
+            }
+        }
+    }
+
+    // Sort by curve parameter for deterministic output.
+    hits.sort_by(|a, b| a.t.partial_cmp(&b.t).unwrap_or(std::cmp::Ordering::Equal));
+    Ok(hits)
+}
+
+/// [`intersect_curve_surface`] by Bezier decomposition, for a surface whose
+/// spans cannot be indexed (a weight that is not positive).
+fn intersect_curve_surface_patches(
     curve: &NurbsCurve,
     surface: &NurbsSurface,
     tolerance: f64,

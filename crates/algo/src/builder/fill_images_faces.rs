@@ -377,6 +377,7 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
         // route it through the split that adopts the shared edges.
         let sections =
             drop_boundary_duplicates_beside_real_sections(topo, face_id, sections, tol.linear);
+        let sections = drop_sections_covered_by_others(topo, face_id, sections);
         log::debug!(
             "fill_images_faces: face {:?} has_sections={} sections={}",
             face_id,
@@ -672,6 +673,15 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
                 }
             };
 
+            // A piece with no clear interior whose wires run out and back
+            // along the same curves (two coincident rims split alike, the
+            // section linked to one and the other kept beside it) bounds no
+            // area: it is no face of the result, and its edges' twins are
+            // joined when the result's duplicate edges merge.
+            if interior_unclear && folded_sliver(topo, resolved_face_id, tol.linear) {
+                log::debug!("fill_images_faces: dropped folded sliver {resolved_face_id:?}");
+                continue;
+            }
             sub_faces.push(SubFace {
                 face_id: resolved_face_id,
                 source_face: face_id,
@@ -2715,6 +2725,14 @@ fn build_section_edges(
                     continue;
                 }
 
+                // A section in pieces, each sharing its edge with one of this
+                // face's own boundary edges, lies on the boundary: the face
+                // already has those edges, which the whole curve would trace
+                // again beside them.
+                if section_pieces_on_face_boundary(topo, arena, curve_ds, face_id) {
+                    continue;
+                }
+
                 // Find start/end 3D points by evaluating the curve at its
                 // parametric endpoints. For closed curves (circles), start ≈ end.
                 let (start, end) = curve_endpoints(topo, arena, curve_ds);
@@ -2943,8 +2961,31 @@ fn build_section_edges(
 
                 let intervals: Vec<(Point3, Point3)> =
                     if matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Line) {
+                        // The coplanar phase gives a partner's curved edge
+                        // as its chord, as a section of both faces: a chord
+                        // along a curved edge of either face is that edge,
+                        // and splits nothing.
+                        let coplanar = opposing_face.is_some_and(|of| {
+                            match (
+                                face.surface(),
+                                topo.face(of).map(brepkit_topology::face::Face::surface),
+                            ) {
+                                (
+                                    FaceSurface::Plane { normal, d },
+                                    Ok(FaceSurface::Plane {
+                                        normal: other,
+                                        d: other_d,
+                                    }),
+                                ) => {
+                                    let same = normal.dot(*other);
+                                    (same.abs() - 1.0).abs() <= 1e-9
+                                        && (d - same.signum() * other_d).abs() <= tol
+                                }
+                                _ => false,
+                            }
+                        });
                         let Some(clipped_list) = clip_line_to_face_boundary(
-                            topo, face_id, raw_start, raw_end, tol, face_loops, None,
+                            topo, face_id, raw_start, raw_end, tol, face_loops, None, coplanar,
                         ) else {
                             continue;
                         };
@@ -2995,18 +3036,37 @@ fn build_section_edges(
                                 // pair parts, while the coplanar phase does
                                 // for planes.
                                 let curved = !matches!(face.surface(), FaceSurface::Plane { .. });
+                                // So is a run along the opposing face's edge
+                                // where that face itself lies on this one (a
+                                // tool's B-spline side flush on a part's
+                                // wall): its outline is where the wall parts.
+                                let of_on_this = match (
+                                    face.surface(),
+                                    topo.face(of).map(brepkit_topology::face::Face::surface),
+                                ) {
+                                    (FaceSurface::Nurbs(this), Ok(FaceSurface::Nurbs(other))) => {
+                                        crate::builder::same_domain::nurbs_patch_lies_on(
+                                            this,
+                                            other,
+                                            &this.aabb(),
+                                            &other.aabb(),
+                                        )
+                                    }
+                                    _ => false,
+                                };
                                 let across_on_this = |e: EdgeId| {
-                                    curved
-                                        && adjacency.get(topo).is_some_and(|adj| {
-                                            face_across_lies_on(
-                                                topo,
-                                                adj,
-                                                e,
-                                                of,
-                                                face.surface(),
-                                                op_tol,
-                                            )
-                                        })
+                                    of_on_this
+                                        || curved
+                                            && adjacency.get(topo).is_some_and(|adj| {
+                                                face_across_lies_on(
+                                                    topo,
+                                                    adj,
+                                                    e,
+                                                    of,
+                                                    face.surface(),
+                                                    op_tol,
+                                                )
+                                            })
                                 };
                                 clip_line_to_face_boundary(
                                     topo,
@@ -3016,6 +3076,7 @@ fn build_section_edges(
                                     tol,
                                     face_loops,
                                     Some(&across_on_this),
+                                    coplanar,
                                 )
                             }) {
                                 Some(subs) => {
@@ -3325,6 +3386,46 @@ fn closed_curve_coincides_with_boundary(
     false
 }
 
+/// Whether a section curve is split into two or more pieces that each share
+/// their edge with an edge of `face_id`'s own boundary (a rim shared by two
+/// coincident walls, which the pave filler split at a vertex of one).
+fn section_pieces_on_face_boundary(
+    topo: &Topology,
+    arena: &GfaArena,
+    curve_ds: &crate::ds::IntersectionCurveDS,
+    face_id: FaceId,
+) -> bool {
+    let Ok(face) = topo.face(face_id) else {
+        return false;
+    };
+    let own: Vec<EdgeId> = std::iter::once(face.outer_wire())
+        .chain(face.inner_wires().iter().copied())
+        .filter_map(|wid| topo.wire(wid).ok())
+        .flat_map(|wire| {
+            wire.edges()
+                .iter()
+                .map(brepkit_topology::wire::OrientedEdge::edge)
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    let leaves = arena.collect_leaf_pave_blocks(&curve_ds.pave_blocks);
+    leaves.len() >= 2
+        && leaves.iter().all(|pb| {
+            arena
+                .pb_to_cb
+                .get(pb)
+                .and_then(|&cb| arena.common_blocks.get(cb))
+                .is_some_and(|cb| {
+                    cb.pave_blocks.iter().any(|&other| {
+                        arena
+                            .pave_blocks
+                            .get(other)
+                            .is_some_and(|o| own.contains(&o.original_edge))
+                    })
+                })
+        })
+}
+
 /// Whether a section sampled as `section_pts` (3D points along its interior)
 /// lies entirely on one of `face`'s own boundary edges — i.e. it is a redundant
 /// self-hole intersection that does not partition the face interior.
@@ -3435,6 +3536,78 @@ fn section_on_existing_boundary(
 
 /// `sections` less those duplicating one of a curved face's outer-wire edges
 /// end to end, when at least one section is not such a duplicate.
+/// On a B-spline face, a section every point of which lies on the other
+/// sections (the same edge reached from two face pairs, or an edge and the
+/// same curve in two pieces) is dropped: a tool's outline flush on a part's
+/// B-spline wall arrives once from each face it bounds and again from the
+/// planes meeting it, and the loops through the copies never close.
+fn drop_sections_covered_by_others(
+    topo: &Topology,
+    face_id: FaceId,
+    mut sections: Vec<SectionEdge>,
+) -> Vec<SectionEdge> {
+    const GAP: f64 = 1e-5;
+    if !topo
+        .face(face_id)
+        .is_ok_and(|f| matches!(f.surface(), FaceSurface::Nurbs(_)))
+        || sections.len() < 2
+    {
+        return sections;
+    }
+    // Each section's parameter range, read once: on a B-spline section it
+    // projects both ends on to the curve, and the test below reads every
+    // section at a few hundred parameters for each point of every other.
+    let mut domains: Vec<(f64, f64)> = sections
+        .iter()
+        .map(|sec| sec.curve_3d.domain_with_endpoints(sec.start, sec.end))
+        .collect();
+    let at = |sec: &SectionEdge, (t0, t1): (f64, f64), t: f64| {
+        sec.curve_3d
+            .evaluate_with_endpoints(t0 + (t1 - t0) * t, sec.start, sec.end)
+    };
+    let gap = |sec: &SectionEdge, domain: (f64, f64), p: Point3| -> f64 {
+        const N: u32 = 64;
+        let (mut best, mut k_best) = (f64::INFINITY, 0);
+        for k in 0..=N {
+            let d = (at(sec, domain, f64::from(k) / f64::from(N)) - p).length();
+            if d < best {
+                (best, k_best) = (d, k);
+            }
+        }
+        let (mut lo, mut hi) = (
+            f64::from(k_best.saturating_sub(1)) / f64::from(N),
+            f64::from((k_best + 1).min(N)) / f64::from(N),
+        );
+        for _ in 0..60 {
+            let (a, b) = (lo + (hi - lo) / 3.0, hi - (hi - lo) / 3.0);
+            if (at(sec, domain, a) - p).length() <= (at(sec, domain, b) - p).length() {
+                hi = b;
+            } else {
+                lo = a;
+            }
+        }
+        best.min((at(sec, domain, 0.5 * (lo + hi)) - p).length())
+    };
+    let mut i = 0;
+    while i < sections.len() {
+        let covered = (0..=8).all(|k| {
+            let p = at(&sections[i], domains[i], f64::from(k) / 8.0);
+            sections
+                .iter()
+                .zip(&domains)
+                .enumerate()
+                .any(|(j, (other, &domain))| j != i && gap(other, domain, p) <= GAP)
+        }) && (sections[i].start - sections[i].end).length() > GAP;
+        if covered {
+            sections.remove(i);
+            domains.remove(i);
+        } else {
+            i += 1;
+        }
+    }
+    sections
+}
+
 fn drop_boundary_duplicates_beside_real_sections(
     topo: &Topology,
     face_id: FaceId,
@@ -4282,6 +4455,61 @@ struct BoundaryArc {
     forward: bool,
 }
 
+/// A straight section along a whole cylinder wall's axis (a wall with no
+/// holes, bounded by its two rims and the seam): `Some(true)` when both
+/// ends lie between the rims, so the line lies on the wall end to end;
+/// `Some(false)` when it runs past a rim. `None` for any other face or
+/// line, which the boundary clip reads. A ruling inside the band crosses no
+/// boundary, and the planar polygon test the clip falls back on means
+/// nothing on a curved wall: a parallel cylinder's wall crossing a ring of
+/// small holes lost every such line, and the wall never split.
+fn ruling_inside_band(
+    topo: &Topology,
+    face: &brepkit_topology::face::Face,
+    line_start: Point3,
+    line_end: Point3,
+    tol: f64,
+) -> Option<bool> {
+    let FaceSurface::Cylinder(cyl) = face.surface() else {
+        return None;
+    };
+    if !face.inner_wires().is_empty() {
+        return None;
+    }
+    let axis = cyl.axis().normalize().ok()?;
+    let span = line_end - line_start;
+    if span.length() <= tol || span.normalize().ok()?.cross(axis).length() > 1e-9 {
+        return None;
+    }
+    let off_axis = |p: Point3| {
+        let w = p - cyl.origin();
+        (w - axis * w.dot(axis)).length()
+    };
+    if (off_axis(line_start) - cyl.radius()).abs() > tol * 100.0 {
+        return None;
+    }
+    // The band: two closed circular rims and seam lines, nothing else.
+    let mut rims: Vec<f64> = Vec::new();
+    for oe in topo.wire(face.outer_wire()).ok()?.edges() {
+        let edge = topo.edge(oe.edge()).ok()?;
+        let at = topo.vertex(edge.start()).ok()?.point();
+        match edge.curve() {
+            EdgeCurve::Circle(_) if edge.start() == edge.end() => {
+                rims.push((at - cyl.origin()).dot(axis));
+            }
+            EdgeCurve::Line => {}
+            _ => return None,
+        }
+    }
+    let [a, b] = rims[..] else {
+        return None;
+    };
+    let (lo, hi) = (a.min(b), a.max(b));
+    let along = |p: Point3| (p - cyl.origin()).dot(axis);
+    let inside = |p: Point3| along(p) >= lo - tol && along(p) <= hi + tol;
+    Some(inside(line_start) && inside(line_end))
+}
+
 impl BoundaryArc {
     /// Whether `p` is on the edge's own curve, within `tol`.
     fn holds(&self, p: Point3, tol: f64) -> bool {
@@ -4324,6 +4552,10 @@ impl BoundaryArc {
     }
 }
 
+/// A place on a hole's loop: an edge's index and a fraction along it, in
+/// steps of 1e-9.
+type LoopPlace = (usize, i64);
+
 /// Clip a 3D line segment to a face's boundary polygon.
 ///
 /// Collects the outer wire vertices as line segments, then finds where
@@ -4331,12 +4563,11 @@ impl BoundaryArc {
 /// Every in-face `(start, end)` interval of the line (a section can cross a
 /// face in multiple material windows), or `None` when nothing lies inside.
 /// A piece lying on one of the face's boundary edges is dropped unless
-/// `keep_run_along` accepts that edge.
-/// A place on a hole's loop: an edge's index and a fraction along it, in
-/// steps of 1e-9.
-type LoopPlace = (usize, i64);
-
-#[allow(clippy::too_many_lines)]
+/// `keep_run_along` accepts that edge. A piece along a curved edge's chord
+/// lies on the edge only where its middle is on the curve too, unless
+/// `chords_are_edges`: a coplanar partner's section stands for a curved
+/// edge of this face by its chord.
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn clip_line_to_face_boundary(
     topo: &Topology,
     face_id: FaceId,
@@ -4345,9 +4576,27 @@ fn clip_line_to_face_boundary(
     tol: f64,
     face_loops: &FaceLoopsCache,
     keep_run_along: Option<&dyn Fn(EdgeId) -> bool>,
+    chords_are_edges: bool,
 ) -> Option<Vec<(Point3, Point3)>> {
     let face = topo.face(face_id).ok()?;
     let wire = topo.wire(face.outer_wire()).ok()?;
+
+    if let Some(inside) = ruling_inside_band(topo, face, line_start, line_end, tol) {
+        return inside.then(|| vec![(line_start, line_end)]);
+    }
+    // A line lying on a B-spline face, inside its outline in (u, v) (a
+    // tool's edge flush on a part's wall): the chord clip below reads the
+    // face's outline in 3D, which a curved wall's is not.
+    if matches!(face.surface(), FaceSurface::Nurbs(_))
+        && let Some(loops) = face_loops.get(topo, face_id)
+        && (1..8).all(|k| {
+            let p = line_start + (line_end - line_start) * (f64::from(k) / 8.0);
+            loops.distance_to_surface(p).is_some_and(|d| d <= 1e-6)
+                && loops.to_uv(p).is_some_and(|q| loops.contains(q))
+        })
+    {
+        return Some(vec![(line_start, line_end)]);
+    }
 
     // Collect boundary edges as line segments (vertex positions in traversal
     // order); for curved edges keep the geometry so the section line can be
@@ -5089,13 +5338,19 @@ fn clip_line_to_face_boundary(
             let start_dist = point_to_segment_dist_3d(clipped_start, *seg_start, *seg_end);
             let end_dist = point_to_segment_dist_3d(clipped_end, *seg_start, *seg_end);
             // The chord stands for a straight edge only. A piece between the
-            // ends of a curved edge lies on its chord, and across the face
+            // ends of a spline edge lies on its chord, and across the face
             // (the chord of an aerofoil cap, from its nose to its trailing
-            // edge), unless its middle is on the curve too.
+            // edge), unless its middle is on the curve too. A circle's or an
+            // ellipse's chord is still read as the edge: a section along it
+            // runs between the arc's own split vertices, cut there by the
+            // face the section comes from (a D's flat across a disc's rim),
+            // and kept, it split the disc a second time.
             let on_edge = || {
-                boundary_arcs[k].as_ref().is_none_or(|arc| {
-                    arc.holds(clipped_start + (clipped_end - clipped_start) * 0.5, tol)
-                })
+                chords_are_edges
+                    || boundary_arcs[k].as_ref().is_none_or(|arc| {
+                        !matches!(arc.curve, EdgeCurve::NurbsCurve(_))
+                            || arc.holds(clipped_start + (clipped_end - clipped_start) * 0.5, tol)
+                    })
             };
             if start_dist < tol
                 && end_dist < tol
@@ -5884,18 +6139,24 @@ fn hole_key(inner: &[super::split_types::OrientedPCurveEdge]) -> Vec<HoleEdgeKey
 /// aligned with the curve parameterization — an open arc edge implicitly
 /// spans the CCW range from its start vertex to its end vertex, so storing
 /// traversal order for a reverse-traversed arc would flip the geometry to
-/// the complementary arc. Closed curved edges (start == end) cannot encode
-/// direction via vertices and keep the pcurve flag for winding.
+/// the complementary arc. A piece of a closed NURBS curve is the same: its
+/// vertices in traversal order would read the rest of the loop. Closed
+/// curved edges (start == end) cannot encode direction via vertices and
+/// keep the pcurve flag for winding.
 fn instantiate_wire_edge(
     topo: &mut Topology,
     start_vid: brepkit_topology::vertex::VertexId,
     end_vid: brepkit_topology::vertex::VertexId,
     pcurve_edge: &super::split_types::OrientedPCurveEdge,
 ) -> (brepkit_topology::edge::EdgeId, bool) {
-    let is_arc = matches!(
-        pcurve_edge.curve_3d,
-        EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_)
-    );
+    let is_arc = match &pcurve_edge.curve_3d {
+        EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => true,
+        EdgeCurve::NurbsCurve(n) => {
+            let (d0, d1) = n.domain();
+            (n.evaluate(d0) - n.evaluate(d1)).length() < 1e-5
+        }
+        EdgeCurve::Line => false,
+    };
     if is_arc && start_vid != end_vid && !pcurve_edge.forward {
         let edge_id = topo.add_edge(Edge::new(end_vid, start_vid, pcurve_edge.curve_3d.clone()));
         (edge_id, false)
@@ -6092,6 +6353,7 @@ mod clip_tests {
             1e-7,
             &FaceLoopsCache::default(),
             None,
+            false,
         )
         .expect("the ruling crosses the face");
         let high = out
@@ -6161,6 +6423,7 @@ mod clip_tests {
             1e-7,
             &FaceLoopsCache::default(),
             None,
+            false,
         );
         assert!(
             out.iter()
@@ -6234,6 +6497,7 @@ mod clip_tests {
             1e-7,
             &FaceLoopsCache::default(),
             None,
+            false,
         )
         .expect("the ruling runs in the face beside the window");
         let mut runs: Vec<(f64, f64)> = out
@@ -6321,6 +6585,7 @@ mod clip_tests {
             1e-7,
             &FaceLoopsCache::default(),
             None,
+            false,
         )
         .expect("the ruling runs in the face beside the window");
         let mut runs: Vec<(f64, f64)> = out
@@ -6412,6 +6677,7 @@ mod clip_tests {
             1e-7,
             &FaceLoopsCache::default(),
             None,
+            false,
         )
         .expect("the ruling runs in the face past the window's top");
         assert_eq!(out.len(), 1, "{out:?}");
@@ -6480,6 +6746,7 @@ mod clip_tests {
             1e-7,
             &FaceLoopsCache::default(),
             None,
+            false,
         )
         .unwrap_or_default();
         let mut runs: Vec<(f64, f64)> = out
@@ -6697,6 +6964,7 @@ mod clip_tests {
             1e-7,
             &FaceLoopsCache::default(),
             None,
+            false,
         );
         let segs = out.expect("a through-chord far from the seam must be kept");
         assert_eq!(segs.len(), 1);
@@ -6724,6 +6992,7 @@ mod clip_tests {
             1e-7,
             &FaceLoopsCache::default(),
             None,
+            false,
         );
         let segs = out.expect("single-crossing interior→rim chord must be kept");
         assert_eq!(segs.len(), 1);
@@ -6751,6 +7020,7 @@ mod clip_tests {
             1e-7,
             &FaceLoopsCache::default(),
             None,
+            false,
         );
         assert!(out.is_none());
     }
@@ -8107,4 +8377,61 @@ fn distance_to_runs(p: Point3, runs: &[Vec<Point3>]) -> f64 {
     runs.iter()
         .flat_map(|run| run.windows(2).map(|w| to_segment(w[0], w[1])))
         .fold(f64::INFINITY, f64::min)
+}
+
+/// Whether every edge of the face's wires has another edge of them with the
+/// same two ends (either way) and the same middle, within `tol`: wires that
+/// run out and back along the same curves, bounding no area.
+fn folded_sliver(topo: &Topology, face_id: FaceId, tol: f64) -> bool {
+    let Ok(face) = topo.face(face_id) else {
+        return false;
+    };
+    let mut edges: Vec<(
+        brepkit_math::vec::Point3,
+        brepkit_math::vec::Point3,
+        brepkit_math::vec::Point3,
+    )> = Vec::new();
+    for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+        let Ok(wire) = topo.wire(wid) else {
+            return false;
+        };
+        for oe in wire.edges() {
+            let Ok(edge) = topo.edge(oe.edge()) else {
+                return false;
+            };
+            let (Ok(a), Ok(b)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) else {
+                return false;
+            };
+            let (a, b) = (a.point(), b.point());
+            let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
+            let mid = edge
+                .curve()
+                .evaluate_with_endpoints(f64::midpoint(t0, t1), a, b);
+            edges.push((a, b, mid));
+        }
+    }
+    if edges.len() < 2 || !edges.len().is_multiple_of(2) {
+        return false;
+    }
+    let close =
+        |p: brepkit_math::vec::Point3, q: brepkit_math::vec::Point3| (p - q).length() <= tol;
+    let mut used = vec![false; edges.len()];
+    for i in 0..edges.len() {
+        if used[i] {
+            continue;
+        }
+        let (a, b, m) = edges[i];
+        let Some(j) = (0..edges.len()).find(|&j| {
+            j != i
+                && !used[j]
+                && close(edges[j].2, m)
+                && ((close(edges[j].0, a) && close(edges[j].1, b))
+                    || (close(edges[j].0, b) && close(edges[j].1, a)))
+        }) else {
+            return false;
+        };
+        used[i] = true;
+        used[j] = true;
+    }
+    true
 }

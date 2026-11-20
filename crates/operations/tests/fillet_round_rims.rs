@@ -27,7 +27,7 @@ use brepkit_operations::transform::transform_solid;
 use brepkit_operations::validate::validate_solid;
 use brepkit_topology::Topology;
 use brepkit_topology::edge::{EdgeCurve, EdgeId};
-use brepkit_topology::explorer::solid_edges;
+use brepkit_topology::explorer::{solid_edges, solid_faces};
 use brepkit_topology::face::FaceSurface;
 use brepkit_topology::solid::SolidId;
 
@@ -213,23 +213,46 @@ fn a_bores_mouth_in_an_elliptical_plate_rounds_off() {
     assert_rim_fillet_changes_by(&mut topo, body, (RADIUS, 8.0), 1.0, -removed);
 }
 
-/// A bore's mouth fillet wider than its plate is thick would put the wall
-/// contact past the plate's far face: it is refused, never a solid that
-/// crosses itself.
+/// A bore's mouth fillet wider than its plate is thick: the ball rests on
+/// the plate's top and pivots on the bore's bottom rim, the bore's wall
+/// goes, and the round runs from the top to the bottom rim. Each height
+/// loses the annulus from the bore out to the ball's circle, its centre
+/// `r` below the top and `r` from the bottom rim.
 #[test]
-fn a_bores_mouth_fillet_wider_than_its_plate_is_refused() {
+fn a_bores_mouth_fillet_wider_than_its_plate_pivots_on_the_far_rim() {
+    const T: f64 = 2.0;
+    const N: usize = 2000;
+    let r: f64 = 3.0;
     let mut topo = Topology::new();
-    let plate = make_box(&mut topo, 30.0, 30.0, 2.0).unwrap();
+    let plate = make_box(&mut topo, 30.0, 30.0, T).unwrap();
     let bore = make_cylinder(&mut topo, RADIUS, 6.0).unwrap();
     transform_solid(&mut topo, bore, &Mat4::translation(15.0, 15.0, -2.0)).unwrap();
     let body = boolean(&mut topo, BooleanOp::Cut, plate, bore).unwrap();
-    let edge = rim_at(&topo, body, RADIUS, 2.0);
-    let Ok(result) = fillet_v2(&mut topo, body, &[edge], 3.0) else {
-        return;
+    let before = solid_volume(&topo, body, 1e-3).unwrap();
+    let edge = rim_at(&topo, body, RADIUS, T);
+    let result = fillet_v2(&mut topo, body, &[edge], r).unwrap();
+    assert!(result.failed.is_empty(), "{:?}", result.failed);
+    // The plate's six faces and the round: the bore's wall is gone.
+    assert_eq!(solid_faces(&topo, result.solid).unwrap().len(), 7);
+    let report = validate_solid(&topo, result.solid).unwrap();
+    assert!(report.is_valid(), "{:?}", report.issues);
+    let mesh = tessellate_solid(&topo, result.solid, 0.01).unwrap();
+    assert!(is_watertight(&mesh), "mesh open");
+    let lost = before - solid_volume(&topo, result.solid, 1e-3).unwrap();
+    let centre = RADIUS + (r * r - (r - T).powi(2)).sqrt();
+    let h = T / N as f64;
+    let annulus = |z: f64| {
+        let ball = centre - (r * r - (z - (T - r)).powi(2)).sqrt();
+        PI * (ball * ball - RADIUS * RADIUS)
     };
+    let mut expected = annulus(0.0) + annulus(T);
+    for i in 1..N {
+        expected += annulus(i as f64 * h) * if i % 2 == 1 { 4.0 } else { 2.0 };
+    }
+    expected *= h / 3.0;
     assert!(
-        !result.failed.is_empty() || result.solid == body,
-        "a fillet wider than the plate must not build"
+        (lost - expected).abs() <= 1e-4 * expected,
+        "removed {lost}, the pivoting ball takes off {expected}"
     );
 }
 

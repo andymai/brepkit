@@ -151,13 +151,35 @@ impl<'a> SurfaceEvaluator<'a> {
     /// both basis values and first derivatives. If the cross product of the
     /// partial derivatives is degenerate, falls back to the surface's own
     /// `normal()` method, and ultimately to `(0, 0, 1)`.
-    #[allow(clippy::many_single_char_names, clippy::too_many_lines)]
     pub fn normal(&mut self, u: f64, v: f64) -> Vec3 {
-        if self.surface.degree_u().max(self.surface.degree_v()) > basis::MAX_STACK_OUTPUT {
-            return self
-                .surface
+        let cross = match self.point_and_partials(u, v) {
+            Some((_, du, dv)) => du.cross(dv),
+            None => Vec3::new(0.0, 0.0, 0.0),
+        };
+        if cross.length_squared() > 1e-30 {
+            cross
+                .normalize()
+                .unwrap_or_else(|_| Vec3::new(0.0, 0.0, 1.0))
+        } else {
+            // Fall back to the surface's own normal method.
+            self.surface
                 .normal(u, v)
-                .unwrap_or_else(|_| Vec3::new(0.0, 0.0, 1.0));
+                .unwrap_or_else(|_| Vec3::new(0.0, 0.0, 1.0))
+        }
+    }
+
+    /// The point at `(u, v)` and the partial derivatives `S_u` and `S_v`
+    /// there, or `None` where the weights vanish.
+    ///
+    /// Uses precomputed power-basis coefficients with Horner evaluation for
+    /// both basis values and first derivatives, with no heap allocation;
+    /// past the stack buffers' degree it defers to the surface.
+    #[allow(clippy::many_single_char_names)]
+    pub fn point_and_partials(&mut self, u: f64, v: f64) -> Option<(Point3, Vec3, Vec3)> {
+        if self.surface.degree_u().max(self.surface.degree_v()) > basis::MAX_STACK_OUTPUT {
+            let d = self.surface.first_derivatives(u, v);
+            let p = d.0;
+            return Some((Point3::new(p.x(), p.y(), p.z()), d.1, d.2));
         }
         self.ensure_power_basis();
 
@@ -221,10 +243,7 @@ impl<'a> SurfaceEvaluator<'a> {
 
         // Apply rational quotient rule: d/du = (S_u - W_u * P) / W_0
         if w0.abs() < f64::MIN_POSITIVE {
-            return self
-                .surface
-                .normal(u, v)
-                .unwrap_or_else(|_| Vec3::new(0.0, 0.0, 1.0));
+            return None;
         }
 
         let inv_w0 = 1.0 / w0;
@@ -242,18 +261,7 @@ impl<'a> SurfaceEvaluator<'a> {
             (sv[1] - wv * py) * inv_w0,
             (sv[2] - wv * pz) * inv_w0,
         );
-
-        let cross = du.cross(dv);
-        if cross.length_squared() > 1e-30 {
-            cross
-                .normalize()
-                .unwrap_or_else(|_| Vec3::new(0.0, 0.0, 1.0))
-        } else {
-            // Fall back to the surface's own normal method.
-            self.surface
-                .normal(u, v)
-                .unwrap_or_else(|_| Vec3::new(0.0, 0.0, 1.0))
-        }
+        Some((Point3::new(px, py, pz), du, dv))
     }
 }
 

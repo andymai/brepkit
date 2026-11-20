@@ -276,6 +276,14 @@ pub(super) fn nearest(
     let mut nets = Vec::new();
     let mut largest = 0.0_f64;
     for (i, _) in index.spans_within(point, best.distance - slack) {
+        // Its sub-patch boxes bound a span as its control box does, far
+        // closer: a span none of whose sub-patches comes nearer than the
+        // bound holds no nearer point, and its part would be dropped once
+        // made (a point a few millimetres off a fitted skin has hundreds of
+        // spans whose control boxes reach it).
+        if index.sub_gap(surface, i, point) >= best.distance - slack {
+            continue;
+        }
         let Some((net, u, v)) = index.bezier_net(surface, i) else {
             continue;
         };
