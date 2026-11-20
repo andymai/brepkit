@@ -219,6 +219,12 @@ fn a_line_through_the_axis_sweeps_the_cone_its_face_is_on() {
 /// origin in the XZ plane turning about `±Y`, with the seam from the
 /// equator to the pole running along that circle itself.
 fn dome_step(about_plus_y: bool) -> String {
+    dome_step_with_seam(about_plus_y, None)
+}
+
+/// [`dome_step`], its seam on its own CIRCLE record when `seam_about_plus_y`
+/// is given: the profile's circle written again, turning about `±Y`.
+fn dome_step_with_seam(about_plus_y: bool, seam_about_plus_y: Option<bool>) -> String {
     let mut s = StepText::new();
     let (equator_point, pole) = (s.vertex([5.0, 0.0, 0.0]), s.vertex([0.0, 0.0, 5.0]));
     let equator_circle = s.circle([0.0; 3], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0], 5.0);
@@ -226,9 +232,19 @@ fn dome_step(about_plus_y: bool) -> String {
     let y = if about_plus_y { 1.0 } else { -1.0 };
     let profile = s.circle([0.0; 3], [0.0, y, 0.0], [1.0, 0.0, 0.0], 5.0);
     // About -Y the circle turns from +X up to +Z; about +Y it turns down.
+    let (seam_curve, seam_plus_y) = match seam_about_plus_y {
+        None => (profile, about_plus_y),
+        Some(plus_y) => {
+            let y = if plus_y { 1.0 } else { -1.0 };
+            (
+                s.circle([0.0; 3], [0.0, y, 0.0], [1.0, 0.0, 0.0], 5.0),
+                plus_y,
+            )
+        }
+    };
     let seam = s.add(format!(
-        "EDGE_CURVE('',#{equator_point},#{pole},#{profile},{})",
-        if about_plus_y { ".F." } else { ".T." }
+        "EDGE_CURVE('',#{equator_point},#{pole},#{seam_curve},{})",
+        if seam_plus_y { ".F." } else { ".T." }
     ));
     let (origin, up) = (s.point([0.0; 3]), s.direction([0.0, 0.0, 1.0]));
     let axis = s.add(format!("AXIS1_PLACEMENT('',#{origin},#{up})"));
@@ -283,6 +299,43 @@ fn a_circle_about_a_point_of_the_axis_sweeps_a_sphere() {
             facing(&topo, faces[0], Point3::new(0.0, 0.0, 0.0)).dot(up) < -0.99,
             "{label}: the floor faces up"
         );
+    }
+}
+
+/// Some writers give the seam its own CIRCLE record, the profile's circle
+/// written again (either way round); that seam still says which side of the
+/// axis the dome is on. The side was read only from an edge on the profile's
+/// own record, and taken from either side otherwise: half these domes faced
+/// into the solid, which then held the wrong volume.
+#[test]
+fn a_seam_on_its_own_copy_of_the_profile_says_the_dome_s_side() {
+    for about_plus_y in [true, false] {
+        for seam_plus_y in [true, false] {
+            let label = format!("profile about +y {about_plus_y}, seam about +y {seam_plus_y}");
+            let mut topo = Topology::new();
+            let solids = read_step(
+                &dome_step_with_seam(about_plus_y, Some(seam_plus_y)),
+                &mut topo,
+            )
+            .unwrap();
+            let faces = solid_faces(&topo, solids[0]).unwrap();
+            assert_eq!(
+                topo.face(faces[1]).unwrap().surface().type_tag(),
+                "sphere",
+                "{label}"
+            );
+            assert!(
+                facing(&topo, faces[1], Point3::new(0.0, 0.0, 5.0)).dot(Vec3::new(0.0, 0.0, 1.0))
+                    > 0.99,
+                "{label}: the dome faces in at its pole"
+            );
+            let volume = oriented_solid_volume(&topo, solids[0], 0.01).unwrap();
+            let expected = 2.0 / 3.0 * PI * 125.0;
+            assert!(
+                (volume - expected).abs() <= 1e-3 * expected,
+                "{label}: volume {volume}, a half ball of 5 holds {expected}"
+            );
+        }
     }
 }
 

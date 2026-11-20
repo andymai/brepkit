@@ -2,10 +2,11 @@
 //!
 //! A round of radius `r` along a right-angled edge sets its contact back by
 //! `r` on each face. With both edges of the top rounded, the two contacts on
-//! it meet at `2r = W`; past that, each lies nearer the other round's edge
-//! than its own, and the top between the swapped contacts would be a loop
-//! that crosses itself. Such rounds are refused; below `W / 2` the two
-//! rounds leave a strip of the top between them.
+//! it meet at `2r = W`; below that the two rounds leave a strip of the top
+//! between them. Past it, each contact lies nearer the other round's edge
+//! than its own: the first round is kept, and the second rests on its side
+//! and pivots on the first's contact on the top, so the top goes and the
+//! rounds meet along that line.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::f64::consts::PI;
@@ -69,14 +70,38 @@ fn assert_strip_left(pose: Option<Mat4>) {
     );
 }
 
-fn assert_refused(pose: Option<Mat4>, r: f64) {
+/// The volume the two rounds take off where they cross: the first's corner
+/// strip, and under the second, pivoting with its centre `h` below the
+/// top, from the first's contact (`y = r`) to its own side, by Simpson's
+/// rule in its angle about its axis.
+fn crossing_removed(r: f64) -> f64 {
+    const N: usize = 2000;
+    let h = (r * r - (W - 2.0 * r).powi(2)).sqrt();
+    let reach = ((2.0 * r - W) / r).acos();
+    let f = |t: f64| (h - r * t.sin()) * r * t.sin();
+    let step = reach / N as f64;
+    let mut sum = f(0.0) + f(reach);
+    for i in 1..N {
+        sum += f(i as f64 * step) * if i % 2 == 1 { 4.0 } else { 2.0 };
+    }
+    L * (r * r * (1.0 - PI / 4.0) + sum * step / 3.0)
+}
+
+fn assert_pivoted(pose: Option<Mat4>, r: f64) {
     let mut topo = Topology::new();
     let (solid, edges) = ridge(&mut topo, pose);
-    let refused = match fillet_v2(&mut topo, solid, &edges, r) {
-        Err(_) => true,
-        Ok(result) => !result.failed.is_empty(),
-    };
-    assert!(refused, "r = {r} on a top {W} wide must be refused");
+    let result = fillet_v2(&mut topo, solid, &edges, r).unwrap();
+    assert!(result.failed.is_empty(), "r = {r}: {:?}", result.failed);
+    let report = validate_solid(&topo, result.solid).unwrap();
+    assert!(report.is_valid(), "r = {r}: {:?}", report.issues);
+    let mesh = tessellate_solid(&topo, result.solid, 0.01).unwrap();
+    assert!(is_watertight(&mesh), "r = {r}: mesh open");
+    let removed = L * W * H - solid_volume(&topo, result.solid, 1e-3).unwrap();
+    let expected = crossing_removed(r);
+    assert!(
+        (removed - expected).abs() <= 1e-6 * L * W * H,
+        "r = {r}: removed {removed}, the pivoting round takes off {expected}"
+    );
 }
 
 #[test]
@@ -85,16 +110,16 @@ fn rounds_that_leave_a_strip_between_them() {
 }
 
 #[test]
-fn rounds_whose_contacts_pass_each_other_are_refused() {
+fn rounds_whose_contacts_pass_each_other_pivot() {
     for r in [1.02, 1.5] {
-        assert_refused(None, r);
+        assert_pivoted(None, r);
     }
 }
 
 #[test]
-fn a_turned_ridge_keeps_its_strip_or_refuses_the_rounds() {
+fn a_turned_ridge_keeps_its_strip_or_pivots() {
     assert_strip_left(Some(turned()));
     for r in [1.02, 1.5] {
-        assert_refused(Some(turned()), r);
+        assert_pivoted(Some(turned()), r);
     }
 }
