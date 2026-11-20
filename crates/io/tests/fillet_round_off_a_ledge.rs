@@ -1,15 +1,19 @@
-//! A plate whose B-spline wall stands up from a ledge, the wall's foot
-//! rounded at r = 30 along the ledge, which runs out to a tip at each end
-//! of the round tighter than the round.
+//! Rounds whose contact on a ledge runs off the ledge's outline before the
+//! round's end, near a tip tighter than the round.
 //!
-//! The round adds material over the ledge, and near each tip its contact on
-//! the ledge runs off the ledge's outline before the round's end: at one
-//! end across the tip's arc, at the other past it and across the straight
-//! edge beyond. The round ended in the plane square to its spine, closed by
-//! a runout patch, and the ledge's outline ran out along the contact past
-//! its own edge and back: a loop crossing itself. The walls under the ledge
-//! now run up to the band, which ends on its intersections with them, and
-//! the ledge ends where the contact comes back on to it.
+//! Each round ended in the plane square to its spine, closed by a runout
+//! patch, and the ledge's outline ran out along the contact past its own
+//! edge and back: a loop crossing itself. The walls under the ledge now
+//! meet the band, which ends on its intersections with them, and the ledge
+//! ends where the contact comes back on to it.
+//!
+//! - A plate whose B-spline wall stands up from a ledge, the wall's foot
+//!   rounded at r = 30 (concave: the walls under the ledge run up to the
+//!   band). At one end the contact runs off across the tip's arc, at the
+//!   other past it and across the straight edge beyond.
+//! - A plate's top rim rounded at r = 50 along a B-spline wall, the top
+//!   narrowing to a tip at one end (convex: the walls under the top's
+//!   outline are cut down to the band).
 //!
 //! Read from STEP, as a file gives the part.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -28,8 +32,10 @@ use brepkit_topology::explorer::{solid_edges, solid_faces};
 use brepkit_topology::face::FaceSurface;
 use brepkit_topology::solid::SolidId;
 
-fn load(topo: &mut Topology) -> SolidId {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/leg_ledge_tips.step");
+fn load(topo: &mut Topology, name: &str) -> SolidId {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/data")
+        .join(name);
     read_step(&std::fs::read_to_string(path).unwrap(), topo).unwrap()[0]
 }
 
@@ -121,7 +127,7 @@ fn self_crossings(topo: &Topology, solid: SolidId) -> usize {
 #[test]
 fn the_walls_under_a_ledge_run_up_to_a_round_run_off_it() {
     let mut topo = Topology::new();
-    let plate = load(&mut topo);
+    let plate = load(&mut topo, "leg_ledge_tips.step");
     let picks = [
         Point3::new(-499.785_853_451_442_2, -237.953_139_994_871_66, 0.0),
         Point3::new(-179.578_193_242_226_77, -92.161_784_578_229_76, 0.0),
@@ -148,6 +154,38 @@ fn the_walls_under_a_ledge_run_up_to_a_round_run_off_it() {
     let expected = 91_719_505.63;
     assert!(
         (volume - expected).abs() < 1e-4 * expected,
+        "volume {volume}, expected {expected}"
+    );
+}
+
+#[test]
+fn the_walls_under_a_tip_are_cut_down_to_a_rim_round_run_off_it() {
+    let mut topo = Topology::new();
+    let plate = load(&mut topo, "leg_ankle_tip.step");
+    let picks = [Point3::new(
+        -125.183_950_877_462_46,
+        -467.764_179_096_078_07,
+        120.0,
+    )]
+    .map(|p| edge_through(&topo, plate, p));
+    let result = fillet_v2(&mut topo, plate, &picks, 50.0).unwrap();
+    assert!(result.failed.is_empty(), "{:?}", result.failed);
+    let report = validate_solid(&topo, result.solid).unwrap();
+    assert!(report.is_valid(), "{:?}", report.issues);
+    assert_eq!(
+        self_crossings(&topo, result.solid),
+        0,
+        "a loop crosses itself"
+    );
+    // The part's fifteen faces and the band, no runout patch.
+    assert_eq!(solid_faces(&topo, result.solid).unwrap().len(), 16);
+    let mesh = tessellate_solid(&topo, result.solid, 0.5).unwrap();
+    assert!(is_watertight(&mesh), "mesh not watertight");
+    // Another kernel's measure of its result of the same fillet.
+    let volume = solid_volume(&topo, result.solid, 0.1).unwrap();
+    let expected = 37_674_025.42;
+    assert!(
+        (volume - expected).abs() < 1e-5 * expected,
         "volume {volume}, expected {expected}"
     );
 }

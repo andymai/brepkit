@@ -6255,13 +6255,12 @@ fn walked_run_back(
         pivot,
         ..
     } = walked;
-    // A contact on a side face ends on the cap's corner edge with that face.
-    // A round that swallowed a narrow face has its sections pivoted and its
-    // contact on the wall refitted through them: it ends on its corner edge
+    // A contact on a side face ends on the cap's corner edge with that face,
     // within as far as the edge stands off the face (a B-spline skin's edge
-    // stands off it), and that fit. Any other round's walked contact ends on
-    // it within the walk's own tolerance; one missing it by more is left to
-    // the runout.
+    // stands off it, a file's tolerance) and the walk's own tolerance. A
+    // round that swallowed a narrow face has its sections pivoted and its
+    // contact on the wall refitted through them, within that fit too. A
+    // contact missing its corner edge by more is left to the runout.
     let sides = [contour.side1, contour.side2]
         .map(|side| topo.face(side).map(|f| f.surface().clone()))
         .into_iter()
@@ -6284,7 +6283,7 @@ fn walked_run_back(
     let corner_tol = if pivot.is_some() {
         tol.max(1e-5 + slack)
     } else {
-        tol
+        tol.max(tol + slack)
     };
     let mut contacts = Vec::with_capacity(2);
     let mut cut = false;

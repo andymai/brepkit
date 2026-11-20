@@ -1,28 +1,32 @@
-//! A concave round run off its ledge: the walls under the ledge run up to
-//! the band.
+//! A round run off its ledge: the walls under the ledge meet the band.
 //!
-//! A concave round between a wall and a ledge standing out from its foot
-//! adds material over the ledge. Where the ledge narrows to a tip tighter
-//! than the round, the round's contact on the ledge runs off the ledge's
-//! outline before the round's end, and the material it adds hangs past the
-//! ledge. The walls under the ledge then carry on up to the band: the band
-//! ends on the chain of its intersections with those walls, from its
-//! contact on the wall, down each wall the ledge's outline passes, to where
-//! its contact comes back on to the ledge across the outline.
+//! A round between a wall and a ledge (a face along the wall's foot, or its
+//! top) has its contact on the ledge. Where the ledge narrows to a tip
+//! tighter than the round, that contact runs off the ledge's outline
+//! before the round's end, and the band hangs past the ledge. The walls
+//! under the ledge's outline there then meet the band: the band ends on
+//! the chain of its intersections with them, from its contact on the
+//! wall, across each wall the ledge's outline passes, to where its contact
+//! comes back on to the ledge across the outline.
 //!
 //! The round is first built as it ends in the plane square to its spine,
 //! closed by a runout patch of three edges: the band's end section `b`
 //! from its contact on the wall `P` to its contact on the ledge `E`, the
-//! wall's run up `w` from the ledge's corner `C` to `P`, and a line `l` on
+//! wall's edge `w` from the ledge's corner `C` to `P`, and a line `l` on
 //! the ledge from `C` to `E`. The ledge's outline from `C` runs on through
 //! the edges `e1 .. ek` (each between the ledge and a wall `Wi` under it)
 //! until the contact `c` from `E` crosses it at `X`, on `ek`. That patch
-//! goes; each wall `Wi` takes, in place of its piece of the outline, the
-//! run up from the piece's start to the band, the band's intersection with
-//! the wall, and the run down to the piece's end (the last wall the piece
-//! of `ek` beyond `X` instead); the band takes the chain of intersections
-//! in place of `b`, and the ledge and the band each take the contact from
-//! `X` on.
+//! goes; each wall `Wi` takes the band's intersection with it in place of
+//! its piece of the outline, and the ledge and the band each take the
+//! contact from `X` on.
+//!
+//! A concave round (adding material over the ledge) has the walls run up to
+//! the band: each wall's surface is carried on past the ledge, and between
+//! two walls the edge they meet in is carried on up to the band. A convex
+//! one (taking material off the ledge's tip) has them cut down to it: the
+//! edge two walls meet in is cut where the band crosses it, and the round's
+//! wall, which ran up its corner edge from `P` and back down, keeps the
+//! edge's piece below `P`.
 
 use brepkit_math::nurbs::surface::NurbsSurface;
 use brepkit_math::vec::{Point3, Vec3};
@@ -32,13 +36,16 @@ use brepkit_topology::face::{FaceId, FaceSurface};
 use brepkit_topology::vertex::{Vertex, VertexId};
 use brepkit_topology::wire::{OrientedEdge, WireId};
 
-use super::{band_meets_cap, edge_nearest, rewrite_wire, straight_edge};
+use super::{
+    band_meets_cap, cylinder_meets_cap, edge_nearest, rewrite_wire, straight_edge, torus_meets_cap,
+    torus_parallel_meets_plane, torus_parallel_meets_surface,
+};
 use crate::BlendError;
 
 /// The most edges of the ledge's outline a contact may run off past.
 const MOST_WALLS: usize = 4;
 
-/// Runs the walls under a ledge up to each concave round run off it
+/// Has the walls under a ledge meet each round run off it
 /// ([`run_walls_up`]), each runout patch in turn. Returns the faces left.
 pub(super) fn run_walls_up_over_runouts(
     topo: &mut Topology,
@@ -373,7 +380,7 @@ struct Patch {
     b: (EdgeId, FaceId, WireId),
     w: EdgeId,
     l: (EdgeId, FaceId, WireId),
-    wall: FaceId,
+    wall: (FaceId, WireId),
     corner: VertexId,
     p: VertexId,
     e: VertexId,
@@ -403,7 +410,10 @@ fn patches(
     }
     let mut found = Vec::new();
     for b in 0..3 {
-        if !matches!(topo.face(users[b].0)?.surface(), FaceSurface::Nurbs(_)) {
+        if !matches!(
+            topo.face(users[b].0)?.surface(),
+            FaceSurface::Nurbs(_) | FaceSurface::Torus(_) | FaceSurface::Cylinder(_)
+        ) {
             continue;
         }
         for (kw, kl) in [((b + 1) % 3, (b + 2) % 3), ((b + 2) % 3, (b + 1) % 3)] {
@@ -435,7 +445,7 @@ fn patches(
                 b: (ring[b].edge(), users[b].0, users[b].1),
                 w: ring[kw].edge(),
                 l: (ring[kl].edge(), users[kl].0, users[kl].1),
-                wall,
+                wall: users[kw],
                 corner,
                 p,
                 e,
@@ -445,9 +455,9 @@ fn patches(
     Ok(found)
 }
 
-/// Runs the walls under a ledge up to a concave round run off it, where
-/// `face_id` is the round's runout patch (see the module's docs). Returns
-/// whether it did; the patch is then to go.
+/// Has the walls under a ledge meet a round run off it, where `face_id` is
+/// the round's runout patch (see the module's docs). Returns whether it
+/// did; the patch is then to go.
 #[allow(clippy::too_many_lines)]
 fn run_walls_up(
     topo: &mut Topology,
@@ -459,7 +469,7 @@ fn run_walls_up(
         if let Some(plan) = plan_run_up(topo, faces, face_id, &patch)? {
             build_run_up(topo, &patch, plan)?;
             log::debug!(
-                "runout {face_id:?}: the round runs off its ledge at corner {:?}, the walls under it run up to the band",
+                "runout {face_id:?}: the round runs off its ledge at corner {:?}, the walls under it meet the band",
                 patch.corner
             );
             return Ok(true);
@@ -467,6 +477,125 @@ fn run_walls_up(
     }
     Ok(false)
 }
+
+/// Where a convex round's `P` lies on the edge its wall and the first wall
+/// meet in at the corner: that edge and `P`'s parameter on it, `None`
+/// where there is no such edge or `P` is off it.
+fn corner_cut(
+    topo: &Topology,
+    patch: &Patch,
+    first: &(FaceId, WireId, EdgeId, VertexId),
+    pp: Point3,
+    tol: f64,
+) -> Result<Option<(EdgeId, f64)>, BlendError> {
+    let wall_edges = topo.wire(patch.wall.1)?.edges().to_vec();
+    let first_edges = topo.wire(first.1)?.edges().to_vec();
+    let Some(join) = wall_edges.iter().map(OrientedEdge::edge).find(|&e| {
+        e != patch.w
+            && e != first.2
+            && first_edges.iter().any(|oe| oe.edge() == e)
+            && topo
+                .edge(e)
+                .is_ok_and(|edge| edge.start() == patch.corner || edge.end() == patch.corner)
+    }) else {
+        return Ok(None);
+    };
+    let edge = topo.edge(join)?.clone();
+    let (curve, a, b) = edge_curve(topo, &edge)?;
+    let (t0, t1) = curve.domain_with_endpoints(a, b);
+    let (t, gap) = nearest_param((&curve, a, b), (t0, t1), pp);
+    let inside = (t - t0.min(t1)).min(t0.max(t1) - t) > 1e-6 * (t1 - t0).abs();
+    Ok((gap <= tol && inside).then_some((join, t)))
+}
+
+/// Where the band crosses `edge`, first from its end `from`: the edge's
+/// parameter and the point, `None` where it does not cross it.
+fn band_crossing_on_edge(
+    topo: &Topology,
+    band: &FaceSurface,
+    edge_id: EdgeId,
+    from: VertexId,
+    tol: f64,
+) -> Result<Option<(f64, Point3)>, BlendError> {
+    const SAMPLES: usize = 200;
+    let edge = topo.edge(edge_id)?.clone();
+    let (curve, a, b) = edge_curve(topo, &edge)?;
+    let (t0, t1) = curve.domain_with_endpoints(a, b);
+    let (ta, tb) = if edge.start() == from {
+        (t0, t1)
+    } else {
+        (t1, t0)
+    };
+    let offset = |t: f64| surface_offset(band, curve.evaluate_with_endpoints(t, a, b));
+    #[allow(clippy::cast_precision_loss)]
+    let at = |k: usize| ta + (tb - ta) * (k as f64) / (SAMPLES as f64);
+    let Some(mut last) = offset(at(1)) else {
+        return Ok(None);
+    };
+    let mut bracket = None;
+    for k in 2..=SAMPLES {
+        let Some(next) = offset(at(k)) else {
+            return Ok(None);
+        };
+        if (last <= 0.0) != (next <= 0.0) {
+            bracket = Some((at(k - 1), at(k), last <= 0.0));
+            break;
+        }
+        last = next;
+    }
+    let Some((mut lo, mut hi, low_inside)) = bracket else {
+        return Ok(None);
+    };
+    for _ in 0..100 {
+        let middle = f64::midpoint(lo, hi);
+        match offset(middle) {
+            Some(off) if (off <= 0.0) == low_inside => lo = middle,
+            Some(_) => hi = middle,
+            None => return Ok(None),
+        }
+    }
+    let t = f64::midpoint(lo, hi);
+    let point = curve.evaluate_with_endpoints(t, a, b);
+    let on = band
+        .project_point(point)
+        .and_then(|(u, v)| band.evaluate(u, v))
+        .is_some_and(|q| (q - point).length() <= tol);
+    Ok(on.then_some((t, point)))
+}
+
+/// The band's intersection with a wall from `a` to `b`: for a fitted band
+/// its rows followed to the wall, for a torus its parallels, for a
+/// cylinder its rulings.
+fn band_meets_wall(
+    band: &FaceSurface,
+    wall: &FaceSurface,
+    a: Point3,
+    b: Point3,
+    tol: f64,
+) -> Option<EdgeCurve> {
+    match band {
+        FaceSurface::Torus(torus) => match wall {
+            FaceSurface::Plane { normal, d } => torus_meets_cap(torus, a, b, |v, near| {
+                torus_parallel_meets_plane(torus, *normal, *d, v, near)
+            }),
+            _ => torus_meets_cap(torus, a, b, |v, near| {
+                torus_parallel_meets_surface(torus, wall, v, near, tol)
+            }),
+        },
+        FaceSurface::Cylinder(cylinder) => match wall {
+            FaceSurface::Plane { normal, d } => {
+                crate::builder_utils::cylinder_plane_arc(cylinder, *normal, *d, a, b)
+            }
+            _ => cylinder_meets_cap(cylinder, wall, a, b),
+        },
+        _ => band_meets_cap(band, a, b, |point| surface_offset(wall, point)),
+    }
+}
+
+/// Where the band meets the edge two walls meet in: that edge's end on the
+/// ledge, the point, and (where the band crosses the edge itself) the edge
+/// and the point's parameter on it.
+type Top = (VertexId, Point3, Option<(EdgeId, f64)>);
 
 /// What the run up builds: the walls' faces and wires and the outline's
 /// edges they meet the ledge in (from the corner on), the walls' surfaces
@@ -476,7 +605,8 @@ fn run_walls_up(
 struct RunUp {
     walls: Vec<(FaceId, WireId, EdgeId, VertexId)>,
     surfaces: Vec<FaceSurface>,
-    tops: Vec<(VertexId, Point3)>,
+    tops: Vec<Top>,
+    corner: Option<(EdgeId, f64)>,
     contact: EdgeId,
     tc: f64,
     te: f64,
@@ -561,7 +691,7 @@ fn plan_run_up(
         let Some((wall, wall_wire)) = one_use(topo, faces, ledge, edge_id)? else {
             return Ok(None);
         };
-        if wall == face_id || wall == band_face || wall == patch.wall {
+        if wall == face_id || wall == band_face || wall == patch.wall.0 {
             return Ok(None);
         }
         walls.push((wall, wall_wire, edge_id, from));
@@ -590,7 +720,12 @@ fn plan_run_up(
         };
         surfaces.push(surface);
     }
-    if surface_offset(&surfaces[0], pp).is_none_or(|off| off.abs() > tol) {
+    // The corner: a concave round's wall contact ends on the first wall's
+    // surface run on above the ledge; a convex round's on the edge the
+    // round's wall and the first wall meet in at the corner (the round's
+    // wall running up it from `P` to the corner and back down).
+    let corner = corner_cut(topo, patch, &walls[0], pp, tol)?;
+    if corner.is_none() && surface_offset(&surfaces[0], pp).is_none_or(|off| off.abs() > tol) {
         return Ok(None);
     }
     // Between walls `i` and `i + 1`, the straight edge they meet in at the
@@ -621,22 +756,26 @@ fn plan_run_up(
         } else {
             join_edge.start()
         };
+        // A convex round's band crosses the edge below the ledge; a concave
+        // round's meets the edge carried on above it.
+        if let Some((t, point)) = band_crossing_on_edge(topo, &band, join, vertex, tol)? {
+            tops.push((vertex, point, Some((join, t))));
+            continue;
+        }
         let vp = topo.vertex(vertex)?.point();
         let up = (vp - topo.vertex(below)?.point()).normalize()?;
         let Some(top) = line_meets_band(&band, vp, up, 4.0 * scale, tol) else {
             return Ok(None);
         };
-        tops.push((vertex, top));
+        tops.push((vertex, top, None));
     }
     // The band's intersection with each wall, `P` to `X` across them.
     let mut ends = vec![pp];
-    ends.extend(tops.iter().map(|&(_, top)| top));
+    ends.extend(tops.iter().map(|&(_, top, _)| top));
     ends.push(x);
     let mut meets = Vec::with_capacity(walls.len());
     for (k, surface) in surfaces.iter().enumerate() {
-        let Some(meet) = band_meets_cap(&band, ends[k], ends[k + 1], |point| {
-            surface_offset(surface, point)
-        }) else {
+        let Some(meet) = band_meets_wall(&band, surface, ends[k], ends[k + 1], tol) else {
             return Ok(None);
         };
         meets.push(meet);
@@ -653,6 +792,7 @@ fn plan_run_up(
         walls,
         surfaces,
         tops,
+        corner,
         contact,
         tc,
         te,
@@ -661,13 +801,15 @@ fn plan_run_up(
     }))
 }
 
-/// Builds a planned run up: the walls run on and rewired, the band's end
-/// and the ledge cut at `X`.
+/// Builds a planned run up: the walls run on (or cut down) and rewired,
+/// the band's end and the ledge cut at `X`.
+#[allow(clippy::too_many_lines)]
 fn build_run_up(topo: &mut Topology, patch: &Patch, plan: RunUp) -> Result<(), BlendError> {
     let RunUp {
         walls,
         surfaces,
         tops,
+        corner,
         contact,
         tc,
         te,
@@ -679,7 +821,7 @@ fn build_run_up(topo: &mut Topology, patch: &Patch, plan: RunUp) -> Result<(), B
     let x_vertex = topo.add_vertex(Vertex::new(x, 1e-7));
     let top_vertices: Vec<VertexId> = tops
         .iter()
-        .map(|&(_, top)| topo.add_vertex(Vertex::new(top, 1e-7)))
+        .map(|&(_, top, _)| topo.add_vertex(Vertex::new(top, 1e-7)))
         .collect();
     // The chain of the band's intersections, `P` to `X`.
     let mut chain_vertices = vec![patch.p];
@@ -690,12 +832,26 @@ fn build_run_up(topo: &mut Topology, patch: &Patch, plan: RunUp) -> Result<(), B
         .enumerate()
         .map(|(k, curve)| topo.add_edge(Edge::new(chain_vertices[k], chain_vertices[k + 1], curve)))
         .collect();
-    // The runs up between walls, from the ledge to the band.
-    let runs: Vec<EdgeId> = tops
-        .iter()
-        .zip(&top_vertices)
-        .map(|(&(vertex, _), &top)| topo.add_edge(Edge::new(vertex, top, EdgeCurve::Line)))
-        .collect();
+    // Between walls: a run up from the ledge to the band (concave), or the
+    // edge they meet in cut where the band crosses it, its piece below kept
+    // (convex). The same at the corner, between the round's wall and the
+    // first wall.
+    let mut runs: Vec<Option<EdgeId>> = Vec::with_capacity(tops.len());
+    let mut pieces: Vec<(EdgeId, EdgeId)> = Vec::new();
+    for (&(vertex, _, cut), &top) in tops.iter().zip(&top_vertices) {
+        if let Some((join, t)) = cut {
+            let keep_end = topo.edge(join)?.start() == vertex;
+            pieces.push((join, edge_piece(topo, join, t, top, keep_end)?));
+            runs.push(None);
+        } else {
+            runs.push(Some(topo.add_edge(Edge::new(vertex, top, EdgeCurve::Line))));
+        }
+    }
+    if let Some((join, t)) = corner {
+        let keep_end = topo.edge(join)?.start() == patch.corner;
+        pieces.push((join, edge_piece(topo, join, t, patch.p, keep_end)?));
+    }
+    let piece_of = |edge: EdgeId| pieces.iter().find(|(whole, _)| *whole == edge).map(|p| p.1);
     // The contact from `X` on, and the last edge from `X` on.
     let contact_edge = topo.edge(contact)?.clone();
     let contact_kept = edge_piece(topo, contact, tc, x_vertex, contact_edge.start() == patch.e)?;
@@ -741,14 +897,39 @@ fn build_run_up(topo: &mut Topology, patch: &Patch, plan: RunUp) -> Result<(), B
             vec![oe]
         }
     })?;
-    // Each wall: its piece of the outline replaced by the run up, the band's
-    // intersection and the run down (the last wall's by the run up, the
-    // intersection and its edge from `X` on).
+    // The round's wall: a convex round's spur up the corner and back goes,
+    // the corner edge's piece below `P` in its place.
+    if corner.is_some() {
+        rewrite_wire(topo, patch.wall.1, |oe| {
+            if oe.edge() == patch.w {
+                vec![]
+            } else if let Some(piece) = piece_of(oe.edge()) {
+                vec![OrientedEdge::new(piece, oe.is_forward())]
+            } else {
+                vec![oe]
+            }
+        })?;
+    }
+    // Each wall: its piece of the outline replaced by the run up (where
+    // concave), the band's intersection and the run down (where concave),
+    // the last wall's by those and its edge from `X` on; the edges it
+    // meets its neighbours in replaced by their pieces below the band
+    // (where convex).
     for (k, &(wall, wire, edge, from)) in walls.iter().enumerate() {
-        let up = if k == 0 { patch.w } else { runs[k - 1] };
-        let mut steps = vec![(up, from), (chain[k], chain_vertices[k])];
+        let mut steps = Vec::with_capacity(3);
+        let up = if k == 0 {
+            corner.is_none().then_some(patch.w)
+        } else {
+            runs[k - 1]
+        };
+        if let Some(up) = up {
+            steps.push((up, from));
+        }
+        steps.push((chain[k], chain_vertices[k]));
         if k + 1 < walls.len() {
-            steps.push((runs[k], chain_vertices[k + 1]));
+            if let Some(down) = runs[k] {
+                steps.push((down, chain_vertices[k + 1]));
+            }
         } else {
             steps.push((last_kept, x_vertex));
         }
@@ -765,6 +946,8 @@ fn build_run_up(topo: &mut Topology, patch: &Patch, plan: RunUp) -> Result<(), B
                 } else {
                     reversed(&forward)
                 }
+            } else if let Some(piece) = piece_of(oe.edge()) {
+                vec![OrientedEdge::new(piece, oe.is_forward())]
             } else {
                 vec![oe]
             }
