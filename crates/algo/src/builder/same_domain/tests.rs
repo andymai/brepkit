@@ -1642,3 +1642,49 @@ fn a_level_band_takes_circle_rims_only() {
     );
     assert!(band(true).is_none());
 }
+
+/// A wall swept up `UP` from a cubic in the plane z = `z0`, `height` tall
+/// (negative: swept down), the cubic run backwards when `backwards`, and
+/// pushed `off` along y.
+fn swept_wall(z0: f64, height: f64, backwards: bool, off: f64) -> FaceSurface {
+    let mut row = [(0.0, 0.0), (10.0, -30.0), (50.0, -30.0), (60.0, 0.0)];
+    if backwards {
+        row.reverse();
+    }
+    let control_points = row
+        .iter()
+        .map(|&(x, y)| {
+            vec![
+                Point3::new(x, y + off, z0),
+                Point3::new(x, y + off, z0 + height),
+            ]
+        })
+        .collect();
+    FaceSurface::Nurbs(
+        brepkit_math::nurbs::surface::NurbsSurface::new(
+            3,
+            1,
+            vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            control_points,
+            vec![vec![1.0, 1.0]; 4],
+        )
+        .unwrap(),
+    )
+}
+
+#[test]
+fn spline_walls_of_one_surface_are_same_domain() {
+    let tol = Tolerance::new();
+    let wall = swept_wall(0.0, 10.0, false, 0.0);
+    // The same wall, taller and swept down from its top with its cubic run
+    // the other way: another net, the same normal (both flips cancel).
+    let down = swept_wall(12.0, -14.0, true, 0.0);
+    assert_eq!(surfaces_same_domain(&wall, &down, tol), Some(true));
+    // Swept up with the cubic backwards: the normal turns over.
+    let back = swept_wall(-1.0, 12.0, true, 0.0);
+    assert_eq!(surfaces_same_domain(&wall, &back, tol), Some(false));
+    // A wall beside it, 1e-3 off, is another surface.
+    let beside = swept_wall(0.0, 10.0, false, 1e-3);
+    assert_eq!(surfaces_same_domain(&wall, &beside, tol), None);
+}

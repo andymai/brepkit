@@ -21,6 +21,7 @@ use brepkit_topology::solid::SolidId;
 use brepkit_topology::vertex::Vertex;
 
 use crate::builder::face_splitter::edge_curve_is_straight;
+use crate::builder::same_domain::nurbs_patch_lies_on;
 use crate::ds::{GfaArena, Interference, IntersectionCurveDS, Pave, PaveBlock};
 use crate::error::AlgoError;
 
@@ -395,8 +396,15 @@ pub fn perform(
 
             let v_range_a = v_ranges_a[idx_a];
             let v_range_b = v_ranges_b[idx_b];
-            let raw_curves =
-                compute_raw_curves(surf_a, surf_b, bbox_a, bbox_b, v_range_a, v_range_b)?;
+            let raw_curves = match (surf_a, surf_b) {
+                (FaceSurface::Nurbs(na), FaceSurface::Nurbs(nb))
+                    if nurbs_patch_lies_on(na, nb, bbox_a, bbox_b)
+                        || nurbs_patch_lies_on(nb, na, bbox_b, bbox_a) =>
+                {
+                    coincident_boundary_curves(topo, (fa, na), (fb, nb))
+                }
+                _ => compute_raw_curves(surf_a, surf_b, bbox_a, bbox_b, v_range_a, v_range_b)?,
+            };
             if std::env::var("BK_RAWC").is_ok() {
                 log::debug!(
                     "RAWC a[{idx_a}]={} b[{idx_b}]={} n={}",
@@ -830,11 +838,17 @@ pub fn perform(
                 .map(|raw| {
                     pull_ends_onto_corners(topo, arena, (fa, surf_a), (fb, surf_b), raw, tol)
                 })
-                .filter_map(|raw| {
-                    if matches!(raw.curve, EdgeCurve::NurbsCurve(_)) {
-                        onto_lying_boundary_edge(topo, (fa, surf_a), (fb, surf_b), raw, tol)
-                    } else {
-                        Some(raw)
+                .flat_map(|raw| {
+                    if !matches!(raw.curve, EdgeCurve::NurbsCurve(_)) {
+                        return vec![raw];
+                    }
+                    match onto_flush_spline_edges(topo, (fa, surf_a), (fb, surf_b), &raw, tol) {
+                        Some(edges) => edges,
+                        None => {
+                            onto_lying_boundary_edge(topo, (fa, surf_a), (fb, surf_b), raw, tol)
+                                .into_iter()
+                                .collect()
+                        }
                     }
                 })
                 .flat_map(|raw| split_lens_off_boundary_edge(topo, fa, fb, raw, tol))
@@ -1187,6 +1201,115 @@ fn face_boundary_edges(
         .filter_map(|wid| topo.wire(wid).ok())
         .flat_map(|wire| wire.edges().iter())
         .filter_map(|oe| topo.edge(oe.edge()).ok())
+}
+
+/// A section along an edge's curve, its range running forward: an edge
+/// stored against its curve reads its domain backwards, and the section's
+/// trims split the curve at its start and then its end.
+fn forward_raw(
+    curve: EdgeCurve,
+    bbox: Aabb3,
+    (t0, t1): (f64, f64),
+    (a, b): (Point3, Point3),
+) -> RawCurve {
+    let (t_range, p_start, p_end) = if t0 <= t1 {
+        ((t0, t1), a, b)
+    } else {
+        ((t1, t0), b, a)
+    };
+    RawCurve {
+        curve,
+        bbox,
+        t_range,
+        p_start,
+        p_end,
+    }
+}
+
+/// A marched section running along B-spline boundary edges of one face that
+/// lie on the other face's surface end to end (a tool's outline flush on a
+/// part's B-spline wall), re-emitted as those edges whole. The march along
+/// them stops wherever its solve gives out, or runs on past the corner
+/// where its trim to the faces' outlines reads the spline by chords; left
+/// so, it ends off every vertex, and the edges themselves, which the
+/// coincident faces' own pair imprints, are taken as its duplicates.
+fn onto_flush_spline_edges(
+    topo: &Topology,
+    (fa, surf_a): (FaceId, &FaceSurface),
+    (fb, surf_b): (FaceId, &FaceSurface),
+    raw: &RawCurve,
+    tol: Tolerance,
+) -> Option<Vec<RawCurve>> {
+    const PROBES: u32 = 32;
+    let band = JunctionRegistry::ADOPT_MAX;
+    let probes: Vec<Point3> = (0..=PROBES)
+        .map(|k| {
+            let t = (raw.t_range.1 - raw.t_range.0)
+                .madd(f64::from(k) / f64::from(PROBES), raw.t_range.0);
+            raw.curve.evaluate_with_endpoints(t, raw.p_start, raw.p_end)
+        })
+        .collect();
+    for (owner, other) in [(fa, surf_b), (fb, surf_a)] {
+        // The owner's B-spline edges lying on the other surface.
+        let flush: Vec<(
+            &brepkit_topology::edge::Edge,
+            Point3,
+            Point3,
+            Vec<Point3>,
+            f64,
+        )> = face_boundary_edges(topo, owner)
+            .filter(|e| matches!(e.curve(), EdgeCurve::NurbsCurve(_)))
+            .filter_map(|e| {
+                let a = topo.vertex(e.start()).ok()?.point();
+                let b = topo.vertex(e.end()).ok()?.point();
+                let (along, sag) = edge_chords(topo, e)?;
+                ((a - b).length() > band
+                    && along
+                        .iter()
+                        .all(|&p| surface_gap(other, p).is_some_and(|g| g <= 10.0 * tol.linear)))
+                .then_some((e, a, b, along, sag))
+            })
+            .collect();
+        if flush.is_empty() {
+            continue;
+        }
+        let length: f64 = probes.windows(2).map(|w| (w[1] - w[0]).length()).sum();
+        let reach = 2e-2 * length;
+        let mut used = vec![false; flush.len()];
+        let mut covered = true;
+        for (k, &q) in probes.iter().enumerate() {
+            let interior = k >= 2 && k + 2 <= probes.len();
+            let allow = |sag: f64| if interior { band + sag } else { reach + sag };
+            let Some(i) = flush
+                .iter()
+                .position(|(_, _, _, along, sag)| polyline_gap(along, q) <= allow(*sag))
+            else {
+                covered = false;
+                break;
+            };
+            used[i] |= interior;
+        }
+        if !covered || !used.iter().any(|&u| u) {
+            continue;
+        }
+        return Some(
+            flush
+                .iter()
+                .zip(&used)
+                .filter(|(_, u)| **u)
+                .map(|((e, a, b, along, _), _)| {
+                    let (t0, t1) = e.curve().domain_with_endpoints(*a, *b);
+                    forward_raw(
+                        e.curve().clone(),
+                        Aabb3::from_points(along.iter().copied()),
+                        (t0, t1),
+                        (*a, *b),
+                    )
+                })
+                .collect(),
+        );
+    }
+    None
 }
 
 /// A marched section lying along an analytic boundary edge of one face that
@@ -1694,6 +1817,14 @@ enum FaceExtent {
         /// azimuth and tube angle, off the point by up to twice the major
         /// radius; a march against the exact rational torus traces it.
         own_sheet: bool,
+        /// A NURBS face's own trim, read on the patch: its points placed by
+        /// a search of the patch's knot spans and held by its wires, holes
+        /// included, however they wind round a closed patch. It replaces the
+        /// window, gap and polygon, which a patch with hundreds of spans
+        /// defeats (its points project far off from a coarse grid's seed).
+        nurbs: Option<Box<crate::classifier::SpanTrim>>,
+        /// The last point `nurbs` placed, the start for the next.
+        hint: std::cell::Cell<Option<(f64, f64)>>,
     },
 }
 
@@ -1883,6 +2014,10 @@ impl FaceExtent {
                 None => (nurbs_face_uv_polygon(topo, face_id, surface), Vec::new()),
             };
             let uv_poly = uv_poly.map(|(poly, sag)| (poly, 2.0f64.madd(sag, 1e-7)));
+            let nurbs = crate::classifier::SpanTrim::of_face(topo, face_id)
+                .ok()
+                .flatten()
+                .map(Box::new);
             Some(Self::Analytic {
                 surface: surface.clone(),
                 v0,
@@ -1895,6 +2030,8 @@ impl FaceExtent {
                 uv_holes,
                 uv_base,
                 own_sheet,
+                nurbs,
+                hint: std::cell::Cell::new(None),
             })
         }
     }
@@ -1931,11 +2068,15 @@ impl FaceExtent {
             Self::Analytic {
                 exact_window,
                 uv_poly,
+                nurbs,
                 ..
-            } => match uv_poly {
-                Some((_, band)) => *band <= 1e-6,
-                None => *exact_window,
-            },
+            } => {
+                nurbs.is_none()
+                    && match uv_poly {
+                        Some((_, band)) => *band <= 1e-6,
+                        None => *exact_window,
+                    }
+            }
         }
     }
 
@@ -1975,6 +2116,11 @@ impl FaceExtent {
                             || point_to_polygon_dist(uv, h) <= depth
                     })
             }
+            Self::Analytic {
+                nurbs: Some(trim),
+                hint,
+                ..
+            } => trim.contains_strict(p, hint, depth),
             Self::Analytic {
                 surface,
                 v0,
@@ -2034,6 +2180,11 @@ impl FaceExtent {
                         && point_to_polygon_dist(uv, h) > *margin
                 })
             }
+            Self::Analytic {
+                nurbs: Some(trim),
+                hint,
+                ..
+            } => trim.contains(p, hint, 10.0 * Tolerance::new().linear),
             Self::Analytic {
                 surface,
                 v0,
@@ -2642,6 +2793,40 @@ fn restrict_curves_to_faces(
             && b1 - b0 < N
             && !matches!(surf_a, FaceSurface::Plane { .. })
             && !matches!(surf_b, FaceSurface::Plane { .. })
+        {
+            emit_curve_windows(
+                topo, fa, fb, &raw, ext_a, ext_b, &inb, N, closed, tol, junctions, &mut out,
+            );
+            continue;
+        }
+        // OPEN section of a NURBS patch across a plane face whose boundary
+        // holds curves (a disc's rim): `trim_open_curve_to_plane_face_lines`
+        // trims against straight edges only, and the patch's own splitter
+        // never trims it, so it would cross the patch whole, far past the
+        // plane face, and the sections round the plane face never close on
+        // the patch. Emit its in-both windows, whose ends land on the plane
+        // face's rim.
+        let rimmed_by_curves = |f: FaceId, surf: &FaceSurface| {
+            matches!(surf, FaceSurface::Plane { .. })
+                && topo.face(f).is_ok_and(|face| {
+                    std::iter::once(face.outer_wire())
+                        .chain(face.inner_wires().iter().copied())
+                        .filter_map(|w| topo.wire(w).ok())
+                        .flat_map(|w| {
+                            w.edges()
+                                .iter()
+                                .map(brepkit_topology::wire::OrientedEdge::edge)
+                        })
+                        .filter_map(|e| topo.edge(e).ok())
+                        .any(|e| !edge_curve_is_straight(e.curve()))
+                })
+        };
+        if !closed
+            && window_open_curves
+            && b1 - b0 < N
+            && matches!(raw.curve, EdgeCurve::NurbsCurve(_))
+            && ((matches!(surf_a, FaceSurface::Nurbs(_)) && rimmed_by_curves(fb, surf_b))
+                || (matches!(surf_b, FaceSurface::Nurbs(_)) && rimmed_by_curves(fa, surf_a)))
         {
             emit_curve_windows(
                 topo, fa, fb, &raw, ext_a, ext_b, &inb, N, closed, tol, junctions, &mut out,
@@ -5922,7 +6107,7 @@ fn compute_face_bbox(topo: &Topology, face_id: FaceId, tol: Tolerance) -> Result
         }
     }
 
-    // A sphere or torus face bulges beyond its boundary edges (a hemisphere's
+    // A sphere, torus or NURBS face bulges beyond its boundary edges (a hemisphere's
     // only boundary is its equatorial circle; a full torus's are two degenerate
     // seam points), so the boundary-sampled bbox underestimates the true extent
     // and the broad-phase would wrongly reject genuinely intersecting pairs.
@@ -5943,6 +6128,9 @@ fn compute_face_bbox(topo: &Topology, face_id: FaceId, tol: Tolerance) -> Result
         FaceSurface::Torus(t) if face_boundary_all_degenerate(topo, face_id, tol)? => {
             Some(t.aabb())
         }
+        // A NURBS face can bulge far past its boundary (a lofted wall
+        // between its two rims); its control net bounds it.
+        FaceSurface::Nurbs(n) => Some(n.aabb()),
         _ => None,
     };
 
@@ -6400,6 +6588,16 @@ fn compute_raw_curves(
             }
         }
 
+        (FaceSurface::Cylinder(c1), FaceSurface::Cylinder(c2))
+            if cylinders_side_by_side(c1, c2) =>
+        {
+            Ok(side_by_side_cylinder_lines(c1, c2, bbox_a, bbox_b))
+        }
+
+        (FaceSurface::Cylinder(c1), FaceSurface::Cylinder(c2)) if cylinders_cross(c1, c2) => {
+            Ok(crossing_cylinder_arcs(c1, c2)?)
+        }
+
         (FaceSurface::Cone(c1), FaceSurface::Cone(c2)) => {
             // Coaxial cones meet at a single circle that coincides with their
             // shared cap rim. Emit it as an exact Circle so the closed-circle
@@ -6573,7 +6771,7 @@ fn compute_raw_curves(
 
         (FaceSurface::Plane { normal, d }, FaceSurface::Nurbs(nurbs))
         | (FaceSurface::Nurbs(nurbs), FaceSurface::Plane { normal, d }) => {
-            plane_nurbs_intersection(*normal, *d, nurbs)
+            plane_nurbs_intersection_in(*normal, *d, nurbs, bbox_a, bbox_b)
         }
 
         (analytic_surf, FaceSurface::Nurbs(nurbs)) if analytic_surf.as_analytic().is_some() => {
@@ -7084,6 +7282,139 @@ fn plane_cylinder_parallel_lines(
     Ok(results)
 }
 
+/// Whether two cylinders have parallel axes that are not the same line.
+fn cylinders_side_by_side(
+    c1: &brepkit_math::surfaces::CylindricalSurface,
+    c2: &brepkit_math::surfaces::CylindricalSurface,
+) -> bool {
+    let (a1, a2) = (c1.axis(), c2.axis());
+    if a1.cross(a2).length() > 1e-9 {
+        return false;
+    }
+    let w = c2.origin() - c1.origin();
+    (w - a1 * w.dot(a1)).length() > Tolerance::new().linear
+}
+
+/// The section of two cylinders with parallel axes: the lines along the
+/// axis through the points where their circles cross, trimmed to both
+/// faces' boxes. Their circles crossing twice give two lines; touching or
+/// apart, none (a grazing line splits neither face). Marched instead, each
+/// line came back as overlapping fitted pieces short of both rims.
+fn side_by_side_cylinder_lines(
+    c1: &brepkit_math::surfaces::CylindricalSurface,
+    c2: &brepkit_math::surfaces::CylindricalSurface,
+    bbox_a: &Aabb3,
+    bbox_b: &Aabb3,
+) -> Vec<RawCurve> {
+    let axis = c1.axis();
+    let Ok(dir) = axis.normalize() else {
+        return Vec::new();
+    };
+    let w = c2.origin() - c1.origin();
+    let across = w - dir * w.dot(dir);
+    let gap = across.length();
+    let (r1, r2) = (c1.radius(), c2.radius());
+    if gap >= r1 + r2 - 1e-9 || gap <= (r1 - r2).abs() + 1e-9 {
+        return Vec::new();
+    }
+    let e = across * (1.0 / gap);
+    let f = dir.cross(e);
+    // Along `e` from axis 1 to the chord through both crossings, and half
+    // the chord's length.
+    let along = (gap * gap + r1 * r1 - r2 * r2) / (2.0 * gap);
+    let half = (r1 * r1 - along * along).max(0.0).sqrt();
+    let mut lines = Vec::with_capacity(2);
+    for side in [1.0, -1.0] {
+        let base = c1.origin() + e * along + f * (side * half);
+        let t_range = trim_t_range_to_aabb(base, dir, bbox_a, bbox_b);
+        if (t_range.1 - t_range.0).abs() < 1e-9 {
+            continue;
+        }
+        let (p0, p1) = (base + dir * t_range.0, base + dir * t_range.1);
+        lines.push(RawCurve {
+            curve: EdgeCurve::Line,
+            bbox: Aabb3::from_points([p0, p1]),
+            t_range,
+            p_start: p0,
+            p_end: p1,
+        });
+    }
+    lines
+}
+
+/// Whether two cylinders of one radius cross: their axes meet at an angle.
+/// They then meet in two ellipses that touch each other where the
+/// cylinders touch, at the two ends of the axes' common perpendicular.
+fn cylinders_cross(
+    c1: &brepkit_math::surfaces::CylindricalSurface,
+    c2: &brepkit_math::surfaces::CylindricalSurface,
+) -> bool {
+    let tol = Tolerance::new();
+    let cross = c1.axis().cross(c2.axis());
+    let sin = cross.length();
+    if sin < 1e-6 || (c1.radius() - c2.radius()).abs() > tol.linear {
+        return false;
+    }
+    let gap = (c2.origin() - c1.origin()).dot(cross) / sin;
+    gap.abs() <= tol.linear
+}
+
+/// The section of two crossing cylinders of one radius `r`, as the four
+/// half ellipses between the points where they touch, each in two quarters. With `a1`, `a2` the
+/// axes at angle `θ` meeting at `o`, and `m` their common perpendicular, the
+/// ellipses lie in the planes bisecting the axes: one has semi-axes
+/// `r / sin(θ/2)` along `a1 + a2` and `r` along `m`, the other
+/// `r / cos(θ/2)` along `a1 - a2` and `r` along `m`. Both pass through the
+/// touch points `o ± r m`; split there, each wall sees two saddles that wind
+/// it and two lenses inside the other cylinder, joined at those points.
+fn crossing_cylinder_arcs(
+    c1: &brepkit_math::surfaces::CylindricalSurface,
+    c2: &brepkit_math::surfaces::CylindricalSurface,
+) -> Result<Vec<RawCurve>, AlgoError> {
+    use std::f64::consts::{FRAC_PI_2, PI};
+
+    let (a1, a2) = (c1.axis(), c2.axis());
+    let r = c1.radius();
+    let m = a1.cross(a2).normalize()?;
+    // Where the axes meet: the point of axis 1 closest to axis 2.
+    let w = c1.origin() - c2.origin();
+    let alpha = a1.dot(a2);
+    let s = (alpha * w.dot(a2) - w.dot(a1)) / (1.0 - alpha * alpha);
+    let o = c1.origin() + a1 * s;
+    let mut arcs = Vec::with_capacity(8);
+    for d in [a1 + a2, a1 - a2] {
+        let d = d.normalize()?;
+        // `d` leans from axis 1 by half the angle to axis 2 (or its
+        // supplement); its component across axis 1 reaches radius `r`.
+        let across = (1.0 - d.dot(a1).powi(2)).max(0.0).sqrt();
+        let ellipse =
+            brepkit_math::curves::Ellipse3D::with_axes(o, d.cross(m), r / across, r, d, m)?;
+        // Each half in two at its major vertex: an open arc reads as its
+        // shorter way round between its ends, which a half turn lacks.
+        for t_range in [
+            (-FRAC_PI_2, 0.0),
+            (0.0, FRAC_PI_2),
+            (FRAC_PI_2, PI),
+            (PI, PI + FRAC_PI_2),
+        ] {
+            let p_start = ParametricCurve::evaluate(&ellipse, t_range.0);
+            let p_end = ParametricCurve::evaluate(&ellipse, t_range.1);
+            let samples = (0..=16).map(|k| {
+                let t = t_range.0 + (t_range.1 - t_range.0) * f64::from(k) / 16.0;
+                ParametricCurve::evaluate(&ellipse, t)
+            });
+            arcs.push(RawCurve {
+                bbox: Aabb3::from_points(samples),
+                curve: EdgeCurve::Ellipse(ellipse.clone()),
+                t_range,
+                p_start,
+                p_end,
+            });
+        }
+    }
+    Ok(arcs)
+}
+
 /// Exact section circles and ellipses as raw curves over their full turn.
 fn exact_raw_curves(exacts: Vec<analytic_intersection::ExactIntersectionCurve>) -> Vec<RawCurve> {
     let domain = (0.0, std::f64::consts::TAU);
@@ -7430,13 +7761,52 @@ fn touches_along(
     }
 }
 
-/// Plane-NURBS intersection.
+/// Plane-NURBS intersection over the whole surface.
+#[cfg(test)]
 fn plane_nurbs_intersection(
     normal: Vec3,
     d: f64,
     nurbs: &brepkit_math::nurbs::surface::NurbsSurface,
 ) -> Result<Vec<RawCurve>, AlgoError> {
-    let isect_curves = nurbs_isect::intersect_plane_nurbs(nurbs, normal, d, NURBS_SAMPLES)?;
+    plane_nurbs_section(normal, d, nurbs, None)
+}
+
+/// Plane-NURBS intersection between two faces.
+///
+/// Only the section within both faces' boxes can lie on both faces, so only
+/// its runs there are kept, refined to hold to the true section.
+fn plane_nurbs_intersection_in(
+    normal: Vec3,
+    d: f64,
+    nurbs: &brepkit_math::nurbs::surface::NurbsSurface,
+    bbox_a: &Aabb3,
+    bbox_b: &Aabb3,
+) -> Result<Vec<RawCurve>, AlgoError> {
+    let region = Aabb3 {
+        min: Point3::new(
+            bbox_a.min.x().max(bbox_b.min.x()),
+            bbox_a.min.y().max(bbox_b.min.y()),
+            bbox_a.min.z().max(bbox_b.min.z()),
+        ),
+        max: Point3::new(
+            bbox_a.max.x().min(bbox_b.max.x()),
+            bbox_a.max.y().min(bbox_b.max.y()),
+            bbox_a.max.z().min(bbox_b.max.z()),
+        ),
+    }
+    .expanded(Tolerance::new().linear * 10.0);
+    plane_nurbs_section(normal, d, nurbs, Some(region))
+}
+
+/// The section of `nurbs` by the plane, kept within `region` if given.
+fn plane_nurbs_section(
+    normal: Vec3,
+    d: f64,
+    nurbs: &brepkit_math::nurbs::surface::NurbsSurface,
+    region: Option<Aabb3>,
+) -> Result<Vec<RawCurve>, AlgoError> {
+    let isect_curves =
+        nurbs_isect::intersect_plane_nurbs_in_region(nurbs, normal, d, NURBS_SAMPLES, region)?;
 
     let mut results = Vec::new();
     let touching: Vec<bool> = (0..isect_curves.len())
@@ -7466,6 +7836,54 @@ fn plane_nurbs_intersection(
 }
 
 /// NURBS-NURBS intersection.
+/// The sections of two coincident B-spline faces: each face's boundary
+/// edges lying on the other's surface. Where one face lies on the other
+/// (a tool's side flush on a part's wall) these are the outline the wall
+/// is split along; the trim to both faces that follows keeps the stretch
+/// inside each.
+fn coincident_boundary_curves(
+    topo: &Topology,
+    (fa, na): (FaceId, &brepkit_math::nurbs::surface::NurbsSurface),
+    (fb, nb): (FaceId, &brepkit_math::nurbs::surface::NurbsSurface),
+) -> Vec<RawCurve> {
+    const GAP: f64 = 1e-6;
+    let mut out: Vec<RawCurve> = Vec::new();
+    for (face, onto) in [(fb, na), (fa, nb)] {
+        for edge in face_boundary_edges(topo, face) {
+            let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) else {
+                continue;
+            };
+            let (sp, ep) = (sv.point(), ev.point());
+            let curve = edge.curve();
+            let (t0, t1) = curve.domain_with_endpoints(sp, ep);
+            let samples: Vec<Point3> = (0..=16)
+                .map(|k| {
+                    curve.evaluate_with_endpoints(t0 + (t1 - t0) * f64::from(k) / 16.0, sp, ep)
+                })
+                .collect();
+            let lies = samples.iter().all(|&p| {
+                brepkit_math::nurbs::projection::project_point_to_surface(onto, p, GAP * 1e-2)
+                    .is_ok_and(|proj| proj.distance <= GAP)
+            });
+            // An edge both faces hold is already shared.
+            let dup = out.iter().any(|r| {
+                ((r.p_start - sp).length() <= GAP && (r.p_end - ep).length() <= GAP)
+                    || ((r.p_start - ep).length() <= GAP && (r.p_end - sp).length() <= GAP)
+            });
+            if !lies || dup || (sp - ep).length() <= GAP {
+                continue;
+            }
+            out.push(forward_raw(
+                curve.clone(),
+                Aabb3::from_points(samples.iter().copied()),
+                (t0, t1),
+                (sp, ep),
+            ));
+        }
+    }
+    out
+}
+
 fn nurbs_nurbs_intersection(
     na: &brepkit_math::nurbs::surface::NurbsSurface,
     nb: &brepkit_math::nurbs::surface::NurbsSurface,
@@ -7780,13 +8198,48 @@ fn circle_exits_plane_boundary(
             let Ok(edge) = topo.edge(oe.edge()) else {
                 continue;
             };
-            if !matches!(edge.curve(), EdgeCurve::Line) {
-                continue;
-            }
             let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) else {
                 continue;
             };
             let (sp, ep) = (sv.point(), ev.point());
+            if !matches!(edge.curve(), EdgeCurve::Line) {
+                // A curved edge in the plane crosses the circle where its
+                // distance from the centre passes the radius (a wall's
+                // junction with the plane, bulging past it by a fraction of
+                // a millimetre over an arc no probe below lands in).
+                const PIECES: u32 = 64;
+                let curve = edge.curve();
+                let (t0, t1) = curve.domain_with_endpoints(sp, ep);
+                let at = |f: f64| curve.evaluate_with_endpoints((t1 - t0).madd(f, t0), sp, ep);
+                let off = |f: f64| (at(f) - circle.center()).length() - circle.radius();
+                for k in 0..PIECES {
+                    let (mut lo, mut hi) = (
+                        f64::from(k) / f64::from(PIECES),
+                        f64::from(k + 1) / f64::from(PIECES),
+                    );
+                    let (mut f_lo, f_hi) = (off(lo), off(hi));
+                    if f_lo * f_hi >= 0.0 {
+                        continue;
+                    }
+                    for _ in 0..60 {
+                        let mid = f64::midpoint(lo, hi);
+                        let f_mid = off(mid);
+                        if (f_mid > 0.0) == (f_lo > 0.0) {
+                            (lo, f_lo) = (mid, f_mid);
+                        } else {
+                            hi = mid;
+                        }
+                    }
+                    let p = at(f64::midpoint(lo, hi));
+                    let at_endpoint = (p - sp).length() < tol.linear * 10.0
+                        || (p - ep).length() < tol.linear * 10.0;
+                    if !at_endpoint {
+                        return true;
+                    }
+                    probes.push(circle.project(p).rem_euclid(tau));
+                }
+                continue;
+            }
             for (p, t) in circle.intersect_segment(sp, ep, tol.linear) {
                 let at_endpoint =
                     (p - sp).length() < tol.linear * 10.0 || (p - ep).length() < tol.linear * 10.0;
@@ -8004,6 +8457,7 @@ fn circle_face_hits(
             // edge running along the circle (a fillet's contact curve) adds no
             // crossing, as a coincident arc does not.
             curve @ EdgeCurve::NurbsCurve(_) => {
+                const PIECES: u32 = 64;
                 let off_circle = |p: Point3| (circle.evaluate(circle.project(p)) - p).length();
                 let (t0, t1) = curve.domain_with_endpoints(sv.point(), ev.point());
                 let mid = curve.evaluate_with_endpoints(0.5 * (t0 + t1), sv.point(), ev.point());
@@ -8013,6 +8467,48 @@ fn circle_face_hits(
                             let t = circle.project(p).rem_euclid(std::f64::consts::TAU);
                             edge_hits.push((t, p, Some(oe.edge())));
                         }
+                    }
+                }
+                // An edge in the circle's plane crossing it between its
+                // ends (a wall's junction with a plane face, bulging past a
+                // bore's circle over a short arc): where its distance from
+                // the centre passes the radius by more than the tolerance on
+                // both sides. One running along the circle (a fillet's
+                // contact curve) only wavers about it.
+                let at = |f: f64| {
+                    curve.evaluate_with_endpoints((t1 - t0).madd(f, t0), sv.point(), ev.point())
+                };
+                let in_plane = (0..=PIECES).all(|k| {
+                    circle
+                        .normal()
+                        .dot(at(f64::from(k) / f64::from(PIECES)) - circle.center())
+                        .abs()
+                        <= tol.linear * 100.0
+                });
+                if in_plane && off_circle(mid) > tol.linear * 10.0 {
+                    let clear = tol.linear * 10.0;
+                    let gap = |f: f64| (at(f) - circle.center()).length() - circle.radius();
+                    for k in 0..PIECES {
+                        let (mut lo, mut hi) = (
+                            f64::from(k) / f64::from(PIECES),
+                            f64::from(k + 1) / f64::from(PIECES),
+                        );
+                        let (mut g_lo, g_hi) = (gap(lo), gap(hi));
+                        if g_lo * g_hi >= 0.0 || g_lo.abs() <= clear || g_hi.abs() <= clear {
+                            continue;
+                        }
+                        for _ in 0..60 {
+                            let m = f64::midpoint(lo, hi);
+                            let g = gap(m);
+                            if (g > 0.0) == (g_lo > 0.0) {
+                                (lo, g_lo) = (m, g);
+                            } else {
+                                hi = m;
+                            }
+                        }
+                        let p = circle.evaluate(circle.project(at(f64::midpoint(lo, hi))));
+                        let t = circle.project(p).rem_euclid(std::f64::consts::TAU);
+                        edge_hits.push((t, p, Some(oe.edge())));
                     }
                 }
             }
@@ -9043,7 +9539,12 @@ fn split_plane_line_at_curved_boundaries(
                 matches!(e.curve(), EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_))
             })
         });
-        if !curved {
+        // A hole the polygon clips cannot see either: they bound the line by
+        // the outline alone, and a ruling across a hole's mouth (a pin
+        // straddling a wall where a bore opens, or a pin through a part's
+        // underside where a boss's square foot joins it) ran on through it.
+        let holed = with_holes && !face.inner_wires().is_empty();
+        if !curved && !holed {
             continue;
         }
         let mut hits: Vec<Point3> = Vec::new();
@@ -9364,13 +9865,26 @@ fn line_face_intervals(
                 let qb = 2.0 * x0.madd(dx, y0 * dy);
                 let qc = x0.madd(x0, y0 * y0) - 1.0;
                 let disc = qb.madd(qb, -4.0 * qa * qc);
-                if disc < 0.0 {
+                // A line tangent to the arc's conic: its two roots, a
+                // rounding apart (or none, a rounding short), bound a chord
+                // whose sagitta (on the conic's tightest bend, `b^2 / a`
+                // for `a >= b`) is within tolerance. It touches the conic
+                // at one point, which cuts it there: a run between the two
+                // roots would read as a meeting, and with no cut the run
+                // through the touch point reads as on the boundary.
+                let half_chord = disc.abs().sqrt() / (2.0 * qa) * len;
+                let tightest = a.min(b) * a.min(b) / a.max(b);
+                let roots = if half_chord * half_chord <= 2.0 * tightest * tol {
+                    vec![-qb / (2.0 * qa)]
+                } else if disc < 0.0 {
                     continue;
-                }
-                for s in [
-                    (-qb - disc.sqrt()) / (2.0 * qa),
-                    (-qb + disc.sqrt()) / (2.0 * qa),
-                ] {
+                } else {
+                    vec![
+                        (-qb - disc.sqrt()) / (2.0 * qa),
+                        (-qb + disc.sqrt()) / (2.0 * qa),
+                    ]
+                };
+                for s in roots {
                     let t = s.madd(dy, y0).atan2(s.madd(dx, x0));
                     if t0 + (t - t0).rem_euclid(std::f64::consts::TAU) <= t1 + 1e-9 {
                         cuts.push(s);

@@ -130,14 +130,24 @@ pub fn try_analytic_fillet(
             Ok(Some(result))
         }
         (FaceSurface::Plane { normal, d }, FaceSurface::Cylinder(cyl)) => {
-            plane_cylinder_fillet(*normal, *d, cyl, spine, topo, radius, face1, face2)
+            match plane_cylinder_fillet(*normal, *d, cyl, spine, topo, radius, face1, face2)? {
+                Some(result) => Ok(Some(result)),
+                None => {
+                    plane_cylinder_ruling_fillet(*normal, cyl, spine, topo, radius, face1, face2)
+                }
+            }
         }
         (FaceSurface::Cylinder(cyl), FaceSurface::Plane { normal, d }) => {
             // Plane is on side 2; swap to keep the analytic helper's argument
             // order canonical (plane first), and remember to swap the
             // resulting Stripe's face/pcurve/contact assignments.
             let mut result =
-                plane_cylinder_fillet(*normal, *d, cyl, spine, topo, radius, face2, face1)?;
+                match plane_cylinder_fillet(*normal, *d, cyl, spine, topo, radius, face2, face1)? {
+                    Some(result) => Some(result),
+                    None => plane_cylinder_ruling_fillet(
+                        *normal, cyl, spine, topo, radius, face2, face1,
+                    )?,
+                };
             if let Some(ref mut r) = result {
                 swap_stripe_sides(r);
             }
@@ -597,6 +607,7 @@ fn plane_plane_fillet(
         contact2,
         face1,
         face2,
+        beyond: Default::default(),
         sections: vec![section_start, section_end],
     };
 
@@ -720,6 +731,7 @@ fn plane_plane_chamfer(
         contact2,
         face1,
         face2,
+        beyond: Default::default(),
         sections: vec![section_start, section_end],
     };
 
@@ -974,6 +986,7 @@ pub fn plane_cylinder_fillet(
         contact2: contact_cyl,
         face1: face_plane,
         face2: face_cyl,
+        beyond: Default::default(),
         sections: vec![section_start, section_end],
     };
     Ok(Some(StripeResult {
@@ -1150,7 +1163,164 @@ fn plane_cylinder_side_fillet(
         contact2,
         face1: face_plane,
         face2: face_cyl,
+        beyond: Default::default(),
         sections: vec![section_start, section_end],
+    };
+    Ok(Some(StripeResult {
+        stripe,
+        new_edges: Vec::new(),
+    }))
+}
+
+/// Fillet between a plane and a cylinder meeting along one of its rulings
+/// (the plane parallel to the axis, cutting the wall): the result is a
+/// cylinder of the fillet's radius about a line parallel to the axis.
+///
+/// In the section square to the axis the plane is a line and the wall a
+/// circle. The ball's centre is the point at `radius` from both, on their
+/// material side for a convex edge or their void side for a concave one:
+/// the meet, nearest the edge, of the line offset by `radius` and the circle
+/// offset to `R -/+ radius`. Returns `None` for any other pose, or when the
+/// contacts would not land on both faces (the walker then takes the edge).
+///
+/// # Errors
+/// Returns `BlendError` if topology lookups or math operations fail.
+#[allow(clippy::too_many_arguments)]
+fn plane_cylinder_ruling_fillet(
+    n_p_inward: Vec3,
+    cyl: &CylindricalSurface,
+    spine: &Spine,
+    topo: &Topology,
+    radius: f64,
+    face_plane: FaceId,
+    face_cyl: FaceId,
+) -> Result<Option<StripeResult>, BlendError> {
+    const PARALLEL_TOL: f64 = 1e-7;
+    let axis = cyl.axis();
+    if spine.is_closed() || spine.edges().len() != 1 || n_p_inward.dot(axis).abs() > PARALLEL_TOL {
+        return Ok(None);
+    }
+    let p_start = spine.evaluate(topo, 0.0)?;
+    let p_end = spine.evaluate(topo, spine.length())?;
+    let run = p_end - p_start;
+    let length = run.length();
+    if length <= ANALYTIC_TOL_LIN || run.cross(axis).length() > PARALLEL_TOL * length {
+        return Ok(None);
+    }
+    let tangent = run * (1.0 / length);
+    let radial = |point: Point3| {
+        let offset = point - cyl.origin();
+        offset - axis * offset.dot(axis)
+    };
+    let Ok(outward) = radial(p_start).normalize() else {
+        return Ok(None);
+    };
+    // Where the plane face lies off the edge, and the wall's material side
+    // there: a convex edge's plane face reaches into the wall's material.
+    let plane_raw_normal = if topo.face(face_plane)?.is_reversed() {
+        n_p_inward
+    } else {
+        -n_p_inward
+    };
+    let Some(into_plane) =
+        material_contact_direction(topo, face_plane, spine, plane_raw_normal, tangent)
+    else {
+        return Ok(None);
+    };
+    let cylinder_reversed = topo.face(face_cyl)?.is_reversed();
+    let wall_inward = if cylinder_reversed { outward } else { -outward };
+    let side = if into_plane.dot(wall_inward) > 0.0 {
+        1.0
+    } else {
+        -1.0
+    };
+    let offset_radius = if cylinder_reversed {
+        cyl.radius() + side * radius
+    } else {
+        cyl.radius() - side * radius
+    };
+    if offset_radius <= ANALYTIC_TOL_LIN {
+        return Ok(None);
+    }
+    // The offset plane through the edge, walked along `across`, meets the
+    // offset circle where `t^2 + 2 t b + c = 0`.
+    let across = axis.cross(n_p_inward).normalize()?;
+    let base = radial(p_start + n_p_inward * (side * radius));
+    let b = base.dot(across);
+    let c = base.dot(base) - offset_radius * offset_radius;
+    let discriminant = b * b - c;
+    if discriminant < 0.0 {
+        return Ok(None);
+    }
+    let root = discriminant.sqrt();
+    let t = if (-b + root).abs() <= (-b - root).abs() {
+        -b + root
+    } else {
+        -b - root
+    };
+    let centre_offset = n_p_inward * (side * radius) + across * t;
+    let at = |point: Point3| {
+        let centre = point + centre_offset;
+        let plane_contact = centre - n_p_inward * (side * radius);
+        let towards = radial(centre).normalize().unwrap_or(outward);
+        let wall_contact = centre + towards * (cyl.radius() - radial(centre).length());
+        (centre, plane_contact, wall_contact)
+    };
+    let (centre_start, plane_start, wall_start) = at(p_start);
+    let (centre_end, plane_end, wall_end) = at(p_end);
+    // Each contact must lie off the edge on its own face's side.
+    if (plane_start - p_start).dot(into_plane) <= 0.0 {
+        return Ok(None);
+    }
+    let Some(into_wall) = material_contact_direction(topo, face_cyl, spine, outward, tangent)
+    else {
+        return Ok(None);
+    };
+    if (wall_start - p_start).dot(into_wall) <= 0.0 {
+        return Ok(None);
+    }
+
+    let band = CylindricalSurface::new(centre_start, tangent, radius)?;
+    let pcurve_plane = {
+        let adapter = crate::builder_utils::PlaneAdapter::from_normal_and_d(n_p_inward, 0.0);
+        let (u0, v0) = adapter.project_point(plane_start);
+        let (u1, v1) = adapter.project_point(plane_end);
+        Curve2D::Line(Line2D::new(
+            brepkit_math::vec::Point2::new(u0, v0),
+            brepkit_math::vec::Vec2::new(u1 - u0, v1 - v0),
+        )?)
+    };
+    let pcurve_wall = {
+        let (u0, v0) = ParametricSurface::project_point(cyl, wall_start);
+        let (_, v1) = ParametricSurface::project_point(cyl, wall_end);
+        Curve2D::Line(Line2D::new(
+            brepkit_math::vec::Point2::new(u0, v0),
+            brepkit_math::vec::Vec2::new(0.0, v1 - v0),
+        )?)
+    };
+    let section = |p1: Point3, p2: Point3, center: Point3, t: f64| CircSection {
+        p1,
+        p2,
+        center,
+        radius,
+        uv1: (t, 0.0),
+        uv2: (t, 0.0),
+        t,
+    };
+    let stripe = Stripe {
+        spine: spine.clone(),
+        surface: FaceSurface::Cylinder(band),
+        pcurve1: pcurve_plane,
+        pcurve2: pcurve_wall,
+        contact1: nurbs_line(plane_start, plane_end)?,
+        contact2: nurbs_line(wall_start, wall_end)?,
+        face1: face_plane,
+        face2: face_cyl,
+        beyond: Default::default(),
+        sections: vec![
+            section(plane_start, wall_start, centre_start, 0.0),
+            section(plane_end, wall_end, centre_end, 1.0),
+        ],
     };
     Ok(Some(StripeResult {
         stripe,
@@ -1447,6 +1617,7 @@ pub fn plane_cylinder_chamfer(
         contact2: contact_cyl,
         face1: face_plane,
         face2: face_cyl,
+        beyond: Default::default(),
         sections: vec![section_start, section_end],
     };
 
@@ -1692,6 +1863,7 @@ pub fn plane_cone_fillet(
         contact2: contact_cone,
         face1: face_plane,
         face2: face_cone,
+        beyond: Default::default(),
         sections: vec![section_start, section_end],
     };
 
@@ -1989,6 +2161,7 @@ pub fn plane_cone_chamfer(
         contact2: contact_cone,
         face1: face_plane,
         face2: face_cone,
+        beyond: Default::default(),
         sections: vec![section_start, section_end],
     };
 
@@ -2289,6 +2462,7 @@ pub fn plane_sphere_fillet(
         contact2: contact_sphere,
         face1: face_plane,
         face2: face_sphere,
+        beyond: Default::default(),
         sections: vec![section_start, section_end],
     };
     Ok(Some(StripeResult {
@@ -2588,6 +2762,7 @@ pub fn plane_sphere_chamfer(
         contact2: contact_sphere,
         face1: face_plane,
         face2: face_sphere,
+        beyond: Default::default(),
         sections: vec![section_start, section_end],
     };
     Ok(Some(StripeResult {
@@ -2854,6 +3029,7 @@ pub fn sphere_sphere_fillet(
         contact2,
         face1,
         face2,
+        beyond: Default::default(),
         sections: vec![section_start, section_end],
     };
     Ok(Some(StripeResult {
@@ -3124,6 +3300,7 @@ pub fn sphere_cylinder_fillet(
         contact2: contact_cyl,
         face1: face_sphere,
         face2: face_cyl,
+        beyond: Default::default(),
         sections: vec![section_start, section_end],
     };
     Ok(Some(StripeResult {
@@ -3454,6 +3631,7 @@ pub fn sphere_cone_fillet(
         contact2: contact_cone,
         face1: face_sphere,
         face2: face_cone,
+        beyond: Default::default(),
         sections: vec![section_start, section_end],
     };
     Ok(Some(StripeResult {
@@ -3728,6 +3906,7 @@ pub fn sphere_sphere_chamfer(
         contact2,
         face1,
         face2,
+        beyond: Default::default(),
         sections: vec![section_start, section_end],
     };
     Ok(Some(StripeResult {
@@ -3996,6 +4175,7 @@ pub fn sphere_cylinder_chamfer(
         contact2: contact_cyl,
         face1: face_sphere,
         face2: face_cyl,
+        beyond: Default::default(),
         sections: vec![section_start, section_end],
     };
     Ok(Some(StripeResult {
@@ -4302,6 +4482,7 @@ pub fn sphere_cone_chamfer(
         contact2: contact_cone,
         face1: face_sphere,
         face2: face_cone,
+        beyond: Default::default(),
         sections: vec![section_start, section_end],
     };
     Ok(Some(StripeResult {
@@ -4559,6 +4740,7 @@ pub fn cylinder_cylinder_fillet(
         contact2,
         face1,
         face2,
+        beyond: Default::default(),
         sections: vec![section_start, section_end],
     };
     Ok(Some(StripeResult {
@@ -4822,6 +5004,7 @@ pub fn cone_cone_coaxial_fillet(
         contact2,
         face1,
         face2,
+        beyond: Default::default(),
         sections: vec![section_start, section_end],
     };
     Ok(Some(StripeResult {
@@ -5077,6 +5260,7 @@ pub fn cone_cone_coaxial_chamfer(
         contact2,
         face1,
         face2,
+        beyond: Default::default(),
         sections: vec![section_start, section_end],
     };
     Ok(Some(StripeResult {
@@ -5322,6 +5506,7 @@ pub fn cylinder_cylinder_chamfer(
         contact2,
         face1,
         face2,
+        beyond: Default::default(),
         sections: vec![section_start, section_end],
     };
     Ok(Some(StripeResult {

@@ -198,6 +198,20 @@ impl EdgeCurve {
                     {
                         return (pa.parameter, pb.parameter);
                     }
+                    // The forward sub-arc across the seam has a `(t0, t1)`
+                    // form too when it ends or starts on the closure point,
+                    // which projects to the domain's start: it runs to the
+                    // domain's end, or from its start (the last piece of a
+                    // closed intersection loop split along it).
+                    if !curve_open && pa.distance < WELD_EPS && pb.distance < WELD_EPS && dt < 0.0 {
+                        if (end - p1).length() < WELD_EPS && d1 - pa.parameter > 1e-6 * (d1 - d0) {
+                            return (pa.parameter, d1);
+                        }
+                        if (start - p0).length() < WELD_EPS && pb.parameter - d0 > 1e-6 * (d1 - d0)
+                        {
+                            return (d0, pb.parameter);
+                        }
+                    }
                 }
                 (d0, d1)
             }

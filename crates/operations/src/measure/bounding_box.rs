@@ -632,6 +632,26 @@ fn include_nurbs_edge_hull(
 /// Include the projected control points of a homogeneous Bezier segment after
 /// `depth` midpoint subdivisions.
 fn include_bezier_hull(aabb: &mut Aabb3, poles: &[[f64; 4]], depth: usize) {
+    // The halves' poles are weighted means of these, so where every one of
+    // these lies inside the box, held off its sides by more than rounding
+    // could carry a mean, no point the halving reaches grows the box: most
+    // edges of a solid lie well inside the box of the rest.
+    if depth > 0 && poles.iter().all(|p| p[3] > 0.0) {
+        let inside = poles.iter().all(|p| {
+            let q = [p[0] / p[3], p[1] / p[3], p[2] / p[3]];
+            let (lo, hi) = (
+                [aabb.min.x(), aabb.min.y(), aabb.min.z()],
+                [aabb.max.x(), aabb.max.y(), aabb.max.z()],
+            );
+            (0..3).all(|k| {
+                let margin = 1e-12 * q[k].abs().max(lo[k].abs()).max(hi[k].abs()).max(1.0);
+                q[k] >= lo[k] + margin && q[k] <= hi[k] - margin
+            })
+        });
+        if inside {
+            return;
+        }
+    }
     if depth == 0 || poles.len() < 2 {
         for p in poles {
             if p[3] > 0.0 {

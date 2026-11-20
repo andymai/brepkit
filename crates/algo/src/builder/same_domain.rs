@@ -21,7 +21,9 @@ use std::hash::BuildHasher;
 use super::SubFace;
 use crate::ds::{GfaArena, Rank};
 use crate::error::AlgoError;
+use brepkit_math::aabb::Aabb3;
 use brepkit_math::tolerance::Tolerance;
+use brepkit_math::vec::Point3;
 use brepkit_topology::Topology;
 use brepkit_topology::face::{FaceId, FaceSurface};
 
@@ -2633,6 +2635,80 @@ fn same_source_complementary_split(
     }
 }
 
+/// Whether `nb` lies on `na` wherever the two faces' boxes meet: a grid
+/// of `nb`'s points in that overlap, each within 1e-6 of `na`. Two such
+/// patches (an extruded outline's wall and a tool cut from the same
+/// sketch) have no section curve; marching them returns scraps along
+/// wherever the solver happens to land.
+#[allow(clippy::redundant_pub_crate)]
+pub(crate) fn nurbs_patch_lies_on(
+    na: &brepkit_math::nurbs::surface::NurbsSurface,
+    nb: &brepkit_math::nurbs::surface::NurbsSurface,
+    bbox_a: &Aabb3,
+    bbox_b: &Aabb3,
+) -> bool {
+    nurbs_patch_on(na, nb, bbox_a, bbox_b).is_some()
+}
+
+/// As [`nurbs_patch_lies_on`], and whether the two patches' normals agree
+/// where they meet (read where they both turn cleanly, the votes of every
+/// held point summed).
+fn nurbs_patch_on(
+    na: &brepkit_math::nurbs::surface::NurbsSurface,
+    nb: &brepkit_math::nurbs::surface::NurbsSurface,
+    bbox_a: &Aabb3,
+    bbox_b: &Aabb3,
+) -> Option<bool> {
+    const N: usize = 9;
+    const GAP: f64 = 1e-6;
+    let lo = Point3::new(
+        bbox_a.min.x().max(bbox_b.min.x()) - GAP,
+        bbox_a.min.y().max(bbox_b.min.y()) - GAP,
+        bbox_a.min.z().max(bbox_b.min.z()) - GAP,
+    );
+    let hi = Point3::new(
+        bbox_a.max.x().min(bbox_b.max.x()) + GAP,
+        bbox_a.max.y().min(bbox_b.max.y()) + GAP,
+        bbox_a.max.z().min(bbox_b.max.z()) + GAP,
+    );
+    if lo.x() > hi.x() || lo.y() > hi.y() || lo.z() > hi.z() {
+        return None;
+    }
+    let inside = |p: Point3| {
+        p.x() >= lo.x()
+            && p.x() <= hi.x()
+            && p.y() >= lo.y()
+            && p.y() <= hi.y()
+            && p.z() >= lo.z()
+            && p.z() <= hi.z()
+    };
+    let (u0, u1) = nb.domain_u();
+    let (v0, v1) = nb.domain_v();
+    let mut held = 0usize;
+    let mut agree = 0.0;
+    for i in 0..N {
+        for j in 0..N {
+            #[allow(clippy::cast_precision_loss)]
+            let (fu, fv) = (i as f64 / (N - 1) as f64, j as f64 / (N - 1) as f64);
+            let (u, v) = (u0 + (u1 - u0) * fu, v0 + (v1 - v0) * fv);
+            let p = nb.evaluate(u, v);
+            if !inside(p) {
+                continue;
+            }
+            match brepkit_math::nurbs::projection::project_point_to_surface(na, p, GAP * 1e-2) {
+                Ok(proj) if proj.distance <= GAP => {
+                    held += 1;
+                    if let (Ok(a), Ok(b)) = (na.normal(proj.u, proj.v), nb.normal(u, v)) {
+                        agree += a.dot(b);
+                    }
+                }
+                _ => return None,
+            }
+        }
+    }
+    (held >= N * 2).then_some(agree >= 0.0)
+}
+
 /// Check if two surfaces represent the same geometric domain.
 ///
 /// Returns `Some(true)` for same-direction normals (CoplanarSame),
@@ -2733,6 +2809,14 @@ pub(crate) fn surfaces_same_domain(
             // The torus normal points out of the tube whichever way the axis
             // runs, so coincident tori always share their normals.
             Some(true)
+        }
+        // Two B-spline patches of one surface built apart (a wall and the
+        // filler cut from the same sketch): no parameters to compare, so
+        // each patch's points are held to the other.
+        (FaceSurface::Nurbs(na), FaceSurface::Nurbs(nb)) => {
+            let (ba, bb) = (na.aabb(), nb.aabb());
+            let same = nurbs_patch_on(na, nb, &ba, &bb)?;
+            nurbs_patch_on(nb, na, &bb, &ba).map(|_| same)
         }
         _ => None,
     }
