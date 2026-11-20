@@ -799,15 +799,11 @@ fn analytic_cone_face_area(
                 && let brepkit_topology::edge::EdgeCurve::Circle(circle) = edge.curve()
                 && let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end()))
             {
-                let ts = circle.project(sv.point());
-                let te = circle.project(ev.point());
-                let fwd = (te - ts).rem_euclid(std::f64::consts::TAU);
-                let mid_t = if fwd <= std::f64::consts::PI {
-                    ts + fwd * 0.5
-                } else {
-                    ts - (std::f64::consts::TAU - fwd) * 0.5
-                };
-                let mid = circle.evaluate(mid_t);
+                // The arc's own domain says which way round it runs: taken the
+                // shorter way, the two halves of a split circle can both sample
+                // one side, and the band reads half its turn or all of it.
+                let (t0, t1) = edge.curve().domain_with_endpoints(sv.point(), ev.point());
+                let mid = circle.evaluate(f64::midpoint(t0, t1));
                 let (u, _) = cone.project_point(mid);
                 u_vals.push(u);
             }
@@ -879,15 +875,11 @@ fn analytic_torus_face_area(
                 && let brepkit_topology::edge::EdgeCurve::Circle(circle) = edge.curve()
                 && let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end()))
             {
-                let ts = circle.project(sv.point());
-                let te = circle.project(ev.point());
-                let fwd = (te - ts).rem_euclid(std::f64::consts::TAU);
-                let mid_t = if fwd <= std::f64::consts::PI {
-                    ts + fwd * 0.5
-                } else {
-                    ts - (std::f64::consts::TAU - fwd) * 0.5
-                };
-                let mid = circle.evaluate(mid_t);
+                // The arc's own domain says which way round it runs: taken the
+                // shorter way, the two halves of a split circle can both sample
+                // one side, and the band reads half its turn or all of it.
+                let (t0, t1) = edge.curve().domain_with_endpoints(sv.point(), ev.point());
+                let mid = circle.evaluate(f64::midpoint(t0, t1));
                 let (u, _) = tor.project_point(mid);
                 u_vals.push(u);
             }

@@ -699,6 +699,65 @@ fn cdt_dense_cluster_with_constraint() {
     }
 }
 
+/// A long tapered slot whose straight sides meet its end arcs at reflex
+/// corners: recovering a side by flips stalls where neither end of the
+/// corridor of crossing edges has a convex quad, though one in its middle
+/// does. Bisecting the side then adds a vertex the polygon does not have,
+/// which a caller meshing a face's outline cannot keep.
+#[test]
+fn long_slot_side_recovers_without_steiner_points() {
+    let raw = [
+        (0.000, 0.000),
+        (-0.833, 0.520),
+        (-1.760, 0.842),
+        (-2.736, 0.950),
+        (-3.712, 0.838),
+        (-4.638, 0.512),
+        (-5.468, -0.011),
+        (-6.162, -0.706),
+        (-6.684, -1.538),
+        (-7.008, -2.465),
+        (-7.117, -3.440),
+        (-7.009, -4.410),
+        (-6.689, -5.332),
+        (-6.173, -6.161),
+        (-5.486, -6.855),
+        (-227.338, 172.381),
+        (-228.261, 172.516),
+        (-229.127, 172.864),
+        (-229.887, 173.405),
+        (-230.499, 174.110),
+        (-230.929, 174.938),
+        (-231.152, 175.844),
+        (-231.157, 176.777),
+        (-230.943, 177.685),
+        (-230.521, 178.518),
+        (-229.917, 179.228),
+        (-229.162, 179.777),
+        (-228.300, 180.134),
+        (-227.378, 180.279),
+        (-226.448, 180.203),
+        (-225.562, 179.911),
+        (-224.768, 179.420),
+        (-224.113, 178.756),
+        (-223.631, 177.957),
+        (-223.350, 177.067),
+    ];
+    let pts: Vec<Point2> = raw.iter().map(|&(x, y)| Point2::new(x, y)).collect();
+    let mut cdt = Cdt::new((Point2::new(-260.0, -30.0), Point2::new(30.0, 210.0)));
+    let ids: Vec<usize> = pts.iter().map(|&p| cdt.insert_point(p).unwrap()).collect();
+    let before = cdt.vertices().len();
+    for i in 0..ids.len() {
+        cdt.insert_constraint(ids[i], ids[(i + 1) % ids.len()])
+            .unwrap();
+    }
+    assert_eq!(
+        cdt.vertices().len(),
+        before,
+        "constraint recovery added vertices"
+    );
+}
+
 use proptest::prelude::*;
 
 proptest! {

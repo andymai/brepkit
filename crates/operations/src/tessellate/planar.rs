@@ -691,7 +691,23 @@ fn find_interior_seed(polygon: &[brepkit_math::vec::Point2]) -> brepkit_math::ve
         return polygon[0];
     }
 
-    for i in 0..n {
+    // Step in from the first vertex whose shorter edge is not a hair. The seed
+    // steps a fraction of that edge, so a vertex at a corner where two sampled
+    // curves meet a hair apart (the last edge ending just past the first,
+    // which makes a sliver lobe) gives a seed in the lobe, and the flood from
+    // it stops there. Such vertices, shorter than half the median, go last.
+    let shorter_edge = |i: usize| {
+        let (p, c, q) = (polygon[(i + n - 1) % n], polygon[i], polygon[(i + 1) % n]);
+        (p.x() - c.x())
+            .hypot(p.y() - c.y())
+            .min((q.x() - c.x()).hypot(q.y() - c.y()))
+    };
+    let mut lengths: Vec<f64> = (0..n).map(shorter_edge).collect();
+    lengths.sort_by(f64::total_cmp);
+    let hair = 0.5 * lengths[n / 2];
+    let mut order: Vec<usize> = (0..n).collect();
+    order.sort_by_key(|&i| shorter_edge(i) < hair);
+    for i in order {
         let prev = polygon[(i + n - 1) % n];
         let curr = polygon[i];
         let next = polygon[(i + 1) % n];

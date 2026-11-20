@@ -503,13 +503,19 @@ pub(super) fn sample_edge_with_params(
     // marched section's end sits ~1e-8 off the pave, a fillet's contact curve
     // 1.4e-6 off its corner), enough to land in another merge cell than the
     // neighbouring edge's end and leave a sliver an exporter collapses: its
-    // ends are the vertices every edge meeting there shares. A hundredth of
-    // the deflection keeps the mesh within its own error. Its samples already
-    // run start to end; the analytic curves' ends are exact.
-    if !matches!(edge.curve(), EdgeCurve::NurbsCurve(_)) {
+    // ends are the vertices every edge meeting there shares. A file's vertex
+    // can sit off any of its curves, circles too, by the file's tolerance
+    // (6e-4 on a part read from STEP), and an end left unsnapped there broke
+    // the face's outline at one deflection and not the next: ends within a
+    // file's tolerance snap too, never by more than the deflection. The
+    // samples already run start to end; a closed circle's start is its
+    // frame's, not its vertex.
+    if matches!(edge.curve(), EdgeCurve::Line)
+        || (edge.is_closed() && !matches!(edge.curve(), EdgeCurve::NurbsCurve(_)))
+    {
         return Ok((points, nurbs_params));
     }
-    let snap = (1e-2 * deflection).max(1e-6);
+    let snap = (1e-2 * deflection).max(deflection.min(1e-3)).max(1e-6);
     let mut points = points;
     let (start, end) = (
         topo.vertex(edge.start())?.point(),

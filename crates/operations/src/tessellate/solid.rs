@@ -730,6 +730,24 @@ pub(super) fn split_crossing_spline_chords(
                 {
                     return;
                 }
+                // Chords lying along one line in (u, v) (two edges whose
+                // samples project onto one rim of the surface) overlap however
+                // finely they are cut: halving them only adds samples on the
+                // other's chords, every round.
+                let reach2 = |p: (f64, f64), q: (f64, f64)| {
+                    let (dx, dy) = (q.0 - p.0, q.1 - p.1);
+                    dx.madd(dx, dy * dy)
+                };
+                let (ab2, cd2) = (reach2(a, b), reach2(c, d));
+                if ab2 > 0.0
+                    && cd2 > 0.0
+                    && orient(a, b, c).abs() <= TOUCH * ab2
+                    && orient(a, b, d).abs() <= TOUCH * ab2
+                    && orient(c, d, a).abs() <= TOUCH * cd2
+                    && orient(c, d, b).abs() <= TOUCH * cd2
+                {
+                    return;
+                }
                 let crosses = orient(a, b, c) * orient(a, b, d) < 0.0
                     && orient(c, d, a) * orient(c, d, b) < 0.0;
                 // A sample lying on the other chord makes a T: the face

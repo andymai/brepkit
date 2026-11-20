@@ -312,11 +312,12 @@ pub fn compute_sphere_v_range(
 ) -> (f64, f64) {
     use std::f64::consts::FRAC_PI_2;
 
+    // Each edge's start as the wire runs it.
     let mut wire_pts = Vec::new();
     if let Ok(wire) = topo.wire(face_data.outer_wire()) {
         for oe in wire.edges() {
             if let Ok(edge) = topo.edge(oe.edge())
-                && let Ok(vertex) = topo.vertex(edge.start())
+                && let Ok(vertex) = topo.vertex(oe.oriented_start(edge))
             {
                 wire_pts.push(vertex.point());
             }
@@ -327,31 +328,58 @@ pub fn compute_sphere_v_range(
         return (-FRAC_PI_2, FRAC_PI_2);
     }
 
+    // A face of latitudes and meridians (the grid's faces) spans exactly
+    // the latitudes its boundary reaches: a band between two circles, a cap
+    // whose seam runs to its pole.
+    let mut lo = f64::MAX;
+    let mut hi = f64::MIN;
+    if let Ok(wire) = topo.wire(face_data.outer_wire()) {
+        for oe in wire.edges() {
+            let Ok(edge) = topo.edge(oe.edge()) else {
+                continue;
+            };
+            let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) else {
+                continue;
+            };
+            let (p0, p1) = (sv.point(), ev.point());
+            let (t0, t1) = edge.curve().domain_with_endpoints(p0, p1);
+            for k in 0..=8 {
+                let t = (t1 - t0).madd(f64::from(k) / 8.0, t0);
+                let v = sphere
+                    .project_point(edge.curve().evaluate_with_endpoints(t, p0, p1))
+                    .1;
+                lo = lo.min(v);
+                hi = hi.max(v);
+            }
+        }
+    }
+    if hi - lo > 1e-9 {
+        return (lo.max(-FRAC_PI_2), hi.min(FRAC_PI_2));
+    }
+
     let avg_v: f64 = wire_pts
         .iter()
         .map(|pt| sphere.project_point(*pt).1)
         .sum::<f64>()
         / wire_pts.len() as f64;
 
-    let signed_area = projected_signed_area(&wire_pts);
+    // A cap under one latitude: the wire winds counter-clockwise about the
+    // sphere's own axis round a cap toward its north pole. Read about that
+    // axis, not +Z, which a cap turned on its side sees edge on.
+    let centre = sphere.center();
+    let axis = sphere.z_axis();
+    let signed_area: f64 = (0..wire_pts.len())
+        .map(|i| {
+            let a = wire_pts[i] - centre;
+            let b = wire_pts[(i + 1) % wire_pts.len()] - centre;
+            a.cross(b).dot(axis)
+        })
+        .sum();
     if signed_area > 0.0 {
         (avg_v, FRAC_PI_2)
     } else {
         (-FRAC_PI_2, avg_v)
     }
-}
-
-/// Signed area of a polygon projected onto the XY plane.
-/// Positive = CCW winding from +Z, negative = CW.
-#[must_use]
-pub fn projected_signed_area(pts: &[Point3]) -> f64 {
-    let n = pts.len();
-    let mut area = 0.0;
-    for i in 0..n {
-        let j = (i + 1) % n;
-        area += pts[i].x() * pts[j].y() - pts[j].x() * pts[i].y();
-    }
-    area * 0.5
 }
 
 /// Determine the [`AnalyticKind`] for sphere tessellation based on v-range.
@@ -1683,11 +1711,32 @@ pub(super) fn point_triangle_distance(p: Point3, a: Point3, b: Point3, c: Point3
 }
 
 /// The parameters of a point of a face's boundary on the face's surface.
+///
+/// The point lies on the surface to the tolerance of the boundary's edges,
+/// which a file's or a fitted section's edges can pass (a section 8e-5 off a
+/// fitted wing skin). Where the proof of a nearest point does not settle
+/// for such a point, the nearest point found, unproven, still places it:
+/// without it the point, and the face's mesh around it, is lost.
 pub(super) fn project_boundary_point(
     surface: &brepkit_math::nurbs::surface::NurbsSurface,
     point: Point3,
 ) -> Result<brepkit_math::nurbs::projection::SurfaceProjection, brepkit_math::MathError> {
-    brepkit_math::nurbs::projection::project_point_to_surface(surface, point, 1e-6)
+    use brepkit_math::nurbs::projection::{
+        project_point_to_surface, project_point_to_surface_from,
+    };
+    project_point_to_surface(surface, point, 1e-6).or_else(|err| {
+        // An unbounded tolerance takes the search's point without the
+        // proof; Newton from there settles it.
+        let size = {
+            let b = surface.aabb();
+            (b.max - b.min).length()
+        };
+        project_point_to_surface(surface, point, f64::MAX)
+            .and_then(|q| project_point_to_surface_from(surface, point, (q.u, q.v), 1e-6))
+            .ok()
+            .filter(|q| q.distance <= 1e-3 * size.max(1.0))
+            .ok_or(err)
+    })
 }
 
 /// Tessellate a NURBS surface via curvature-adaptive subdivision.
