@@ -177,10 +177,18 @@ pub(super) fn sample_wire_loop_uv_periodic(
                 if has_period {
                     // Steps well under half a period, so the unwrap below
                     // keeps the edge's own run: a rim half spans exactly
-                    // half a turn, which it would read either way.
+                    // half a turn, which it would read either way. Only the
+                    // periodic directions are stepped: a wall's height in
+                    // model units needs no unwrapping.
                     let d = edge.end_uv - edge.start_uv;
+                    let turn = |delta: f64, period: Option<f64>| {
+                        period.map_or(0.0, |p| delta.abs() * std::f64::consts::TAU / p)
+                    };
                     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                    let steps = (d.x().abs().max(d.y().abs()) / 1.0).ceil().max(1.0) as usize;
+                    let steps = turn(d.x(), u_period)
+                        .max(turn(d.y(), v_period))
+                        .ceil()
+                        .max(1.0) as usize;
                     #[allow(clippy::cast_precision_loss)]
                     for i in 1..steps {
                         let t = i as f64 / steps as f64;
@@ -416,5 +424,27 @@ mod tests {
         let pts = sample_wire_loop_uv_periodic(&[edge((off(b), off(a)), (a, b), true)], None, None);
         assert!((pts[0] - off(a)).length() < 1e-12, "{pts:?}");
         assert!(pts.windows(2).all(|w| w[1].x() > w[0].x()), "{pts:?}");
+    }
+
+    fn line(a: Point2, b: Point2) -> OrientedPCurveEdge {
+        OrientedPCurveEdge {
+            pcurve: Curve2D::Line(brepkit_math::curves2d::Line2D::new(a, b - a).unwrap()),
+            ..edge((a, b), (a, b), true)
+        }
+    }
+
+    /// On a cylinder only `u` turns: a ruling 100 000 high is its two ends,
+    /// and a rim half (half a turn) is stepped under a radian at a time
+    /// whatever the wall's height.
+    #[test]
+    fn a_line_is_stepped_along_its_periodic_direction_only() {
+        let tau = std::f64::consts::TAU;
+        let ruling = line(Point2::new(1.0, 0.0), Point2::new(1.0, 1e5));
+        let pts = sample_wire_loop_uv_periodic(&[ruling], Some(tau), None);
+        assert_eq!(pts.len(), 2, "{} samples", pts.len());
+        let rim = line(Point2::new(0.0, 1e5), Point2::new(tau / 2.0, 1e5));
+        let pts = sample_wire_loop_uv_periodic(&[rim], Some(tau), None);
+        assert_eq!(pts.len(), 5, "{pts:?}");
+        assert!(pts.windows(2).all(|w| w[1].x() - w[0].x() < 1.0), "{pts:?}");
     }
 }
