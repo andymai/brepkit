@@ -11,6 +11,16 @@
 //! back, a loop crossing itself. A contact now ends on its corner edge
 //! within as far as the edge stands off its face.
 //!
+//! And a wing's top rounded along its rim at r = 7.5, the top narrowing to
+//! a tip at the round's end, whose skin there leans back from the corner:
+//! the round is cut back to the tip's skin, its contact on the wing's side
+//! ending on the leaning edge the two skins meet in. That edge stands off
+//! both skins by 1e-3, and the contact, cut on the tip's skin, missed it by
+//! more than its stand-off from the side alone, so the end was left to a
+//! runout patch whose line on the top crossed the top's outline. A contact
+//! now ends on its corner edge within the edge's stand-off from its face
+//! and the cap together.
+//!
 //! Read from STEP, as a file gives the part.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -28,8 +38,10 @@ use brepkit_topology::explorer::{solid_edges, solid_faces};
 use brepkit_topology::face::FaceSurface;
 use brepkit_topology::solid::SolidId;
 
-fn load(topo: &mut Topology) -> SolidId {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/wing_rib_ends.step");
+fn load(topo: &mut Topology, name: &str) -> SolidId {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/data")
+        .join(name);
     read_step(&std::fs::read_to_string(path).unwrap(), topo).unwrap()[0]
 }
 
@@ -121,7 +133,7 @@ fn self_crossings(topo: &Topology, solid: SolidId) -> usize {
 #[test]
 fn walked_rounds_end_on_a_skin_s_corner_edges() {
     let mut topo = Topology::new();
-    let rib = load(&mut topo);
+    let rib = load(&mut topo, "wing_rib_ends.step");
     let picks = [
         Point3::new(
             -7.747_083_556_110_797,
@@ -153,6 +165,41 @@ fn walked_rounds_end_on_a_skin_s_corner_edges() {
     let expected = 2.059_604;
     assert!(
         (volume - expected).abs() < 1e-3 * expected,
+        "volume {volume}, expected {expected}"
+    );
+}
+
+#[test]
+fn a_rim_round_run_off_a_tip_ends_on_the_tip_s_leaning_skin() {
+    let mut topo = Topology::new();
+    let wing = load(&mut topo, "wing_tip_rim_round.step");
+    let pick = edge_through(
+        &topo,
+        wing,
+        Point3::new(
+            -87.632_942_610_794_05,
+            5.038_403_081_347_64,
+            -53.895_161_789_232_574,
+        ),
+    );
+    let result = fillet_v2(&mut topo, wing, &[pick], 7.5).unwrap();
+    assert!(result.failed.is_empty(), "{:?}", result.failed);
+    let report = validate_solid(&topo, result.solid).unwrap();
+    assert!(report.is_valid(), "{:?}", report.issues);
+    assert_eq!(
+        self_crossings(&topo, result.solid),
+        0,
+        "a loop crosses itself"
+    );
+    // The part's sixty faces and the band, no runout patch.
+    assert_eq!(solid_faces(&topo, result.solid).unwrap().len(), 61);
+    let mesh = tessellate_solid(&topo, result.solid, 0.5).unwrap();
+    assert!(is_watertight(&mesh), "mesh not watertight");
+    // Another kernel's measure of its result of the same fillet.
+    let volume = solid_volume(&topo, result.solid, 0.1).unwrap();
+    let expected = 1_968_939.47;
+    assert!(
+        (volume - expected).abs() < 1e-4 * expected,
         "volume {volume}, expected {expected}"
     );
 }

@@ -6218,8 +6218,9 @@ fn walked_run_back(
         ..
     } = walked;
     // A contact on a side face ends on the cap's corner edge with that face,
-    // within as far as the edge stands off the face (a B-spline skin's edge
-    // stands off it, a file's tolerance) and the walk's own tolerance. A
+    // within as far as the edge stands off the face and the cap (a B-spline
+    // skin's edge stands off both, a file's tolerance: the contact is cut on
+    // the cap's surface) and the walk's own tolerance. A
     // round that swallowed a narrow face has its sections pivoted and its
     // contact on the wall refitted through them, within that fit too. A
     // contact missing its corner edge by more is left to the runout.
@@ -6238,8 +6239,12 @@ fn walked_run_back(
             .iter()
             .map(|surface| edge_off_surface(edge.curve(), a, b, surface))
             .fold(f64::INFINITY, f64::min);
+        let cap_off = match run_on {
+            RunOnCap::Face(cap) => edge_off_surface(edge.curve(), a, b, topo.face(cap)?.surface()),
+            RunOnCap::Plane(..) => 0.0,
+        };
         if off.is_finite() {
-            slack = slack.max(off);
+            slack = slack.max(off + if cap_off.is_finite() { cap_off } else { 0.0 });
         }
     }
     let corner_tol = if pivot.is_some() {
