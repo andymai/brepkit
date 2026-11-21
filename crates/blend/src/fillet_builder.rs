@@ -1029,62 +1029,37 @@ impl<'a> FilletBuilder<'a> {
                     }
                     let start_point = topo.vertex(start)?.point();
                     let end_point = topo.vertex(end)?.point();
-                    let curve = match (cap, &stripe.surface) {
-                        (Some(&RunOnCap::Plane(normal, d)), FaceSurface::Cylinder(cylinder)) => {
-                            crate::builder_utils::cylinder_plane_arc(
-                                cylinder,
-                                normal,
-                                d,
-                                start_point,
-                                end_point,
-                            )
-                        }
-                        (Some(&RunOnCap::Plane(normal, d)), FaceSurface::Torus(torus)) => {
-                            torus_meets_cap(torus, start_point, end_point, |v, near| {
-                                torus_parallel_meets_plane(torus, normal, d, v, near)
-                            })
-                        }
-                        (Some(&RunOnCap::Face(cap)), FaceSurface::Torus(torus)) => {
-                            let cap = topo.face(cap)?.surface();
-                            let tol = 1e-7 * torus.major_radius().max(1.0);
-                            torus_meets_cap(torus, start_point, end_point, |v, near| {
-                                torus_parallel_meets_surface(torus, cap, v, near, tol)
-                            })
-                        }
-                        (Some(&cap), FaceSurface::Nurbs(_)) => {
-                            let scale = (start_point - end_point).length().max(1.0);
-                            band_meets_cap(&stripe.surface, start_point, end_point, |p| {
-                                cap_offset(topo, cap, p, 1e-6 * scale)
-                            })
-                        }
-                        (Some(&RunOnCap::Face(cap)), FaceSurface::Cylinder(cylinder)) => {
-                            // A chord would leave the band's end off the cap.
-                            Some(
-                                cylinder_meets_cap(
-                                    cylinder,
-                                    topo.face(cap)?.surface(),
+                    let curve = match cap {
+                        // A chord would leave the band's end off the cap and
+                        // off the band.
+                        Some(&cap) => band_meets_run_on_cap(
+                            topo,
+                            &stripe.surface,
+                            cap,
+                            start_point,
+                            end_point,
+                        )?
+                        .ok_or_else(|| BlendError::PlanningFailure {
+                            reason: match cap {
+                                RunOnCap::Plane(..) => {
+                                    "the round's end on its tilted cap cannot be traced".to_owned()
+                                }
+                                RunOnCap::Face(face) => format!(
+                                    "the round's end on face {} cannot be traced",
+                                    face.index()
+                                ),
+                            },
+                        })?,
+                        None => section
+                            .and_then(|section| {
+                                crate::builder_utils::cross_section_curve(
+                                    section,
                                     start_point,
                                     end_point,
                                 )
-                                .ok_or_else(|| {
-                                    BlendError::PlanningFailure {
-                                        reason: format!(
-                                            "the round's end on face {} cannot be traced",
-                                            cap.index()
-                                        ),
-                                    }
-                                })?,
-                            )
-                        }
-                        _ => section.and_then(|section| {
-                            crate::builder_utils::cross_section_curve(
-                                section,
-                                start_point,
-                                end_point,
-                            )
-                        }),
-                    }
-                    .unwrap_or(EdgeCurve::Line);
+                            })
+                            .unwrap_or(EdgeCurve::Line),
+                    };
                     // Two stripes meeting tangentially across a seam between
                     // faces on one surface end at the same section. The
                     // second band becomes the second owner of the first
@@ -6676,8 +6651,7 @@ fn torus_run_on(
             return Ok(None);
         }
     }
-    let scale = (section.p1 - section.p2).length();
-    let tol = 1e-6 * scale.max(1.0);
+    let tol = torus_cap_tol(torus, section.p1, section.p2);
     let mut contacts = Vec::with_capacity(2);
     for (contact, at, support) in [
         (&stripe.contact1, section.p1, stripe.face1),
@@ -6808,6 +6782,54 @@ fn torus_meets_cap(
         .map(EdgeCurve::NurbsCurve)
 }
 
+/// The tolerance a torus round's run-on holds its contacts to, which the
+/// trace of its end across a curved cap takes too: a millionth of the tube's
+/// chord between the contacts' parallels through `a` and `b`, and a
+/// millionth at least.
+fn torus_cap_tol(torus: &brepkit_math::surfaces::ToroidalSurface, a: Point3, b: Point3) -> f64 {
+    let (_, va) = torus.project_point(a);
+    let (_, vb) = torus.project_point(b);
+    let chord = 2.0 * torus.minor_radius() * (0.5 * wrapped(vb - va)).sin().abs();
+    1e-6 * chord.max(1.0)
+}
+
+/// The curve where a band run on to `cap` meets it between the contact ends
+/// `a` and `b`. `None` where the trace fails, and for a band of a kind no
+/// run-on makes (one other than a cylinder, a torus or a walked band).
+fn band_meets_run_on_cap(
+    topo: &Topology,
+    band: &FaceSurface,
+    cap: RunOnCap,
+    a: Point3,
+    b: Point3,
+) -> Result<Option<EdgeCurve>, BlendError> {
+    Ok(match (cap, band) {
+        (RunOnCap::Plane(normal, d), FaceSurface::Cylinder(cylinder)) => {
+            crate::builder_utils::cylinder_plane_arc(cylinder, normal, d, a, b)
+        }
+        (RunOnCap::Face(cap), FaceSurface::Cylinder(cylinder)) => {
+            cylinder_meets_cap(cylinder, topo.face(cap)?.surface(), a, b)
+        }
+        (RunOnCap::Plane(normal, d), FaceSurface::Torus(torus)) => {
+            torus_meets_cap(torus, a, b, |v, near| {
+                torus_parallel_meets_plane(torus, normal, d, v, near)
+            })
+        }
+        (RunOnCap::Face(cap), FaceSurface::Torus(torus)) => {
+            let cap = topo.face(cap)?.surface();
+            let tol = torus_cap_tol(torus, a, b);
+            torus_meets_cap(torus, a, b, |v, near| {
+                torus_parallel_meets_surface(torus, cap, v, near, tol)
+            })
+        }
+        (_, FaceSurface::Nurbs(_)) => {
+            let scale = (a - b).length().max(1.0);
+            band_meets_cap(band, a, b, |p| cap_offset(topo, cap, p, 1e-6 * scale))
+        }
+        (_, FaceSurface::Plane { .. } | FaceSurface::Cone(_) | FaceSurface::Sphere(_)) => None,
+    })
+}
+
 /// Whether a stripe's terminal vertex sits on a planar cap whose two edges
 /// at the vertex the stripe's contacts end on (lines, a spline profile's
 /// rim, or a vault's end arc), or on a curved cap the stripe was run on to: the end-cap notch can replace that
@@ -6846,23 +6868,44 @@ fn terminal_cap_is_notchable(
         ) {
             return Ok(false);
         }
-        // Seen along the band's axis, the notch lies in the triangle between
-        // its ends and the corner, as on a planar cap seen square to it. A
-        // band that is no cylinder (a torus round, a walked band) has no one
-        // axis to see it along: its run-on already ended its contacts on the
-        // cap's corner edges.
-        let FaceSurface::Cylinder(cylinder) = &stripe.surface else {
-            return Ok(true);
-        };
+        // Seen along the band's axis at its end, the notch lies in the
+        // triangle between its ends and the corner, as on a planar cap seen
+        // square to it. A torus round's axis there is its parallels'
+        // tangent, a walked band's its end section's normal.
         let Some(section) = end_section(topo, stripe, vertex)? else {
             return Ok(false);
+        };
+        let view = match &stripe.surface {
+            FaceSurface::Cylinder(cylinder) => cylinder.axis(),
+            FaceSurface::Torus(torus) => {
+                let (u, _) = torus.project_point(section.center);
+                torus.y_axis() * u.cos() - torus.x_axis() * u.sin()
+            }
+            FaceSurface::Nurbs(_) => {
+                let Ok(normal) = (section.p1 - section.center)
+                    .cross(section.p2 - section.center)
+                    .normalize()
+                else {
+                    return Ok(false);
+                };
+                normal
+            }
+            FaceSurface::Plane { .. } | FaceSurface::Cone(_) | FaceSurface::Sphere(_) => {
+                return Ok(false);
+            }
         };
         let near_ends = [
             (&stripe.contact1, section.p1),
             (&stripe.contact2, section.p2),
         ]
         .map(|(contact, at)| contact_end_at(contact, at).0);
-        let end_curve = cylinder_meets_cap(cylinder, face.surface(), near_ends[0], near_ends[1]);
+        let end_curve = band_meets_run_on_cap(
+            topo,
+            &stripe.surface,
+            RunOnCap::Face(*cap),
+            near_ends[0],
+            near_ends[1],
+        )?;
         let end_hull = match &end_curve {
             Some(EdgeCurve::NurbsCurve(curve))
                 if curve.weights().iter().all(|w| w.is_finite() && *w > 0.0) =>
@@ -6871,14 +6914,7 @@ fn terminal_cap_is_notchable(
             }
             _ => None,
         };
-        return notch_stays_clear(
-            topo,
-            face,
-            junction.vertex,
-            cylinder.axis(),
-            near_ends,
-            end_hull,
-        );
+        return notch_stays_clear(topo, face, junction.vertex, view, near_ends, end_hull);
     }
     // The corner sits on the cap's outer wire (a convex fillet) or on one of
     // its holes (a concave one ending on a cup's rim); the notch replaces it
@@ -7024,10 +7060,11 @@ fn edge_off_surface(
 
 /// Whether a cap's notch at `corner`, ending at `near_ends`, stays clear of
 /// the cap's other boundaries, seen along `view` (the normal of a planar cap,
-/// or the axis of a band run on to a curved one). The notch lies in the
-/// triangle between its ends and the corner, so no other boundary of the cap
-/// may reach into that triangle (a fillet wider than a cup's wall would cross
-/// its mouth): that is an error. `Ok(false)` where the view cannot be read.
+/// or the axis at its end of a band run on to a curved one). The notch lies
+/// in the triangle between its ends and the corner, so no other boundary of
+/// the cap may reach into that triangle (a fillet wider than a cup's wall
+/// would cross its mouth): that is an error. `Ok(false)` where the view
+/// cannot be read.
 ///
 /// On a curved cap, the notch lies in the triangle only while the cap does
 /// not turn parallel to the axis over it, and the checks below take that
