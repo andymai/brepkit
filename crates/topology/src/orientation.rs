@@ -291,7 +291,8 @@ fn nurbs_uv_winding(
 /// Orientation propagation can make edge senses consistent while leaving a
 /// reconstructed face's effective surface normal backwards. This pass
 /// calibrates the solid's boundary-walk convention from authoritative input
-/// `seeds` (or, when no seed reads one, from the majority of `faces`), then
+/// `seeds` (or, when no seed reads one, takes the convention every reading
+/// is taken in, and turns only the faces whose reading is exact), then
 /// triple-flips disagreeing result faces: reverse each wire,
 /// invert its raw edge senses, and toggle the face reversal flag. The triple
 /// flip changes the effective normal without disturbing shared-edge senses.
@@ -313,7 +314,9 @@ pub fn normalize_face_normals(
     let seed_set: DetHashSet<FaceId> = seeds.iter().copied().collect();
     let mut convention = 0.0;
     let mut seed_read = false;
-    let mut readings: Vec<(FaceId, bool)> = Vec::new();
+    // Each face read, whether its reading runs positive, and whether it is
+    // exact: a plane's, or a winding read in `(u, v)`.
+    let mut readings: Vec<(FaceId, bool, bool)> = Vec::new();
 
     for &face_id in seeds.iter().chain(faces.iter()) {
         let face = topo.face(face_id)?;
@@ -424,6 +427,7 @@ pub fn normalize_face_normals(
             FaceSurface::Nurbs(nurbs) if seamed => nurbs_uv_winding(&surface, nurbs, &points, true),
             _ => uv_winding(&surface, &points),
         };
+        let exact = reading.is_some() || matches!(surface, FaceSurface::Plane { .. });
         let integral = match reading {
             Some(area) if reversed => -area,
             Some(area) => area,
@@ -439,7 +443,7 @@ pub fn normalize_face_normals(
             convention += integral.signum();
             seed_read = true;
         } else {
-            readings.push((face_id, integral > 0.0));
+            readings.push((face_id, integral > 0.0, exact));
         }
     }
     // With no seed to read the convention from (every input face around the
@@ -453,7 +457,14 @@ pub fn normalize_face_normals(
     // takes as a hole on a closed surface. Seeds that read but disagree
     // among themselves still decide nothing. A shell that comes out facing
     // inward as a whole is the caller's to turn.
-    if !seed_read && !readings.is_empty() {
+    //
+    // A curved face read about its samples' centroid (a sphere's) is read
+    // as the smaller side of its loop, the wrong side of a cap larger than a
+    // hemisphere. A seed's convention can still overrule the faces such a
+    // reading is shared with; with no seed, nothing checks it, and the face
+    // is left as it was built.
+    let unseeded = !seed_read;
+    if unseeded && !readings.is_empty() {
         convention = 1.0;
     }
     let flips: Vec<FaceId> = if convention == 0.0 {
@@ -461,8 +472,8 @@ pub fn normalize_face_normals(
     } else {
         readings
             .iter()
-            .filter(|&&(_, positive)| positive != (convention > 0.0))
-            .map(|&(face_id, _)| face_id)
+            .filter(|&&(_, positive, exact)| positive != (convention > 0.0) && (exact || !unseeded))
+            .map(|&(face_id, _, _)| face_id)
             .collect()
     };
 
@@ -635,6 +646,55 @@ mod tests {
         turn_inside_out(&mut topo, faces[2]);
         assert_eq!(normalize_face_normals(&mut topo, &faces, &[]).unwrap(), 1);
         assert_eq!(flags(&topo), before);
+    }
+
+    /// A unit ball cut at z = -0.5, its larger cap kept and closed by a disc,
+    /// both faces built right. The cap's single loop, read about its
+    /// samples' centroid, reads the smaller side of the sphere it bounds:
+    /// with no seed the cap is left as built, and so is the disc, its
+    /// reading exact. Built backwards, the disc is turned back.
+    #[test]
+    fn without_seeds_a_cap_larger_than_a_hemisphere_is_left_as_built() {
+        use brepkit_math::surfaces::SphericalSurface;
+        for disc_turned in [false, true] {
+            let mut topo = Topology::new();
+            let rho = 0.75_f64.sqrt();
+            let start = topo.add_vertex(Vertex::new(Point3::new(rho, 0.0, -0.5), 1e-7));
+            let rim =
+                Circle3D::new(Point3::new(0.0, 0.0, -0.5), Vec3::new(0.0, 0.0, 1.0), rho).unwrap();
+            let edge = topo.add_edge(Edge::new(start, start, EdgeCurve::Circle(rim)));
+            let cap_wire =
+                topo.add_wire(Wire::new(vec![OrientedEdge::new(edge, true)], true).unwrap());
+            let disc_wire =
+                topo.add_wire(Wire::new(vec![OrientedEdge::new(edge, false)], true).unwrap());
+            let sphere = SphericalSurface::new(Point3::new(0.0, 0.0, 0.0), 1.0).unwrap();
+            let cap = topo.add_face(Face::new(cap_wire, vec![], FaceSurface::Sphere(sphere)));
+            let disc = topo.add_face(Face::new(
+                disc_wire,
+                vec![],
+                FaceSurface::Plane {
+                    normal: Vec3::new(0.0, 0.0, -1.0),
+                    d: 0.5,
+                },
+            ));
+            let faces = [cap, disc];
+            let flags = |topo: &Topology| -> Vec<bool> {
+                faces
+                    .iter()
+                    .map(|&f| topo.face(f).unwrap().is_reversed())
+                    .collect()
+            };
+            let before = flags(&topo);
+            if disc_turned {
+                turn_inside_out(&mut topo, disc);
+            }
+            assert_eq!(
+                normalize_face_normals(&mut topo, &faces, &[]).unwrap(),
+                usize::from(disc_turned),
+                "disc turned {disc_turned}"
+            );
+            assert_eq!(flags(&topo), before, "disc turned {disc_turned}");
+        }
     }
 
     /// Half the faces, or most of them, turned: without seeds the convention
@@ -1002,18 +1062,24 @@ mod tests {
     fn a_seamed_bspline_seed_not_quite_closed_gives_no_reading() {
         for (gap, corner) in [(1e-6, false), (1e-4, false), (1e-4, true)] {
             for turned in [2, 4] {
-                let mut topo = Topology::new();
-                let cube = make_unit_cube_manifold(&mut topo);
-                let faces = solid_faces(&topo, cube).unwrap();
-                let wall = bspline_seamed_wall(&mut topo, gap, corner);
-                for &face_id in &faces[..turned] {
-                    turn_inside_out(&mut topo, face_id);
+                for seed_turned in [false, true] {
+                    let mut topo = Topology::new();
+                    let cube = make_unit_cube_manifold(&mut topo);
+                    let faces = solid_faces(&topo, cube).unwrap();
+                    let wall = bspline_seamed_wall(&mut topo, gap, corner);
+                    if seed_turned {
+                        turn_inside_out(&mut topo, wall);
+                    }
+                    for &face_id in &faces[..turned] {
+                        turn_inside_out(&mut topo, face_id);
+                    }
+                    assert_eq!(
+                        normalize_face_normals(&mut topo, &faces, &[wall]).unwrap(),
+                        turned,
+                        "gap {gap}, at one corner {corner}, {turned} turned, \
+                         seed turned {seed_turned}"
+                    );
                 }
-                assert_eq!(
-                    normalize_face_normals(&mut topo, &faces, &[wall]).unwrap(),
-                    turned,
-                    "gap {gap}, at one corner {corner}, {turned} turned"
-                );
             }
         }
     }
@@ -1112,7 +1178,7 @@ mod tests {
     #[test]
     fn a_seamed_seed_wrapping_a_direction_not_periodic_gives_no_reading() {
         for gap in [1e-6, 1e-4] {
-            for turned in [2, 4] {
+            for (turned, seed_turned) in [(2, false), (4, false), (2, true), (4, true)] {
                 let mut topo = Topology::new();
                 let cube = make_unit_cube_manifold(&mut topo);
                 let faces = solid_faces(&topo, cube).unwrap();
@@ -1122,13 +1188,16 @@ mod tests {
                     _ => (false, false),
                 };
                 assert_eq!(periodic, (true, false), "gap {gap}");
+                if seed_turned {
+                    turn_inside_out(&mut topo, band);
+                }
                 for &face_id in &faces[..turned] {
                     turn_inside_out(&mut topo, face_id);
                 }
                 assert_eq!(
                     normalize_face_normals(&mut topo, &faces, &[band]).unwrap(),
                     turned,
-                    "gap {gap}, {turned} turned"
+                    "gap {gap}, {turned} turned, seed turned {seed_turned}"
                 );
             }
         }
