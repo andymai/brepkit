@@ -1814,6 +1814,10 @@ impl SpanTrim {
         };
         let mut loops_3d = Vec::new();
         let mut band = 0.0_f64;
+        // A line is sampled at its ends alone, which a line across the patch
+        // from border to border shares with the patch's own edges: its
+        // middle tells the two apart.
+        let mut line_middles: Vec<Point3> = Vec::new();
         for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
             let mut pts: Vec<Point3> = Vec::new();
             for oe in topo.wire(wid)?.edges() {
@@ -1833,6 +1837,9 @@ impl SpanTrim {
                     curve.evaluate_with_endpoints((t1 - t0).madd(k / f64::from(pieces), t0), sp, ep)
                 };
                 let mut along: Vec<Point3> = (0..=pieces).map(|k| at(f64::from(k))).collect();
+                if pieces == 1 {
+                    line_middles.push(at(0.5));
+                }
                 for k in 0..pieces {
                     let (a, b) = (along[k as usize], along[k as usize + 1]);
                     let mid = at(f64::from(k) + 0.5);
@@ -1911,7 +1918,13 @@ impl SpanTrim {
                 || (v - v_dom.0).abs() <= eps_v
                 || (v_dom.1 - v).abs() <= eps_v
         };
-        let whole = face.inner_wires().is_empty() && loops_uv.iter().flatten().all(on_border);
+        let whole = face.inner_wires().is_empty()
+            && loops_uv.iter().flatten().all(on_border)
+            && line_middles.iter().all(|&p| {
+                index
+                    .closest_point(surface, p)
+                    .is_some_and(|(u, v, _)| on_border(&Point2::new(u, v)))
+            });
         Ok(Some(Self {
             surface: surface.clone(),
             index,
@@ -6240,5 +6253,42 @@ mod tests {
         };
         assert!(geom_box(&band(0.0, 2.0), tol).is_some());
         assert!(geom_box(&band(0.0, f64::NAN), tol).is_none());
+    }
+
+    /// The flat patch `(u, v, 0)` over the unit square, its face the left
+    /// half: a line from the bottom border to the top one closes it, so
+    /// every wire end lies on the patch's border, but the face is not the
+    /// whole patch, and a point on the right half is off it.
+    #[test]
+    fn a_nurbs_face_cut_across_its_patch_by_a_line_is_not_the_whole_patch() {
+        use brepkit_math::nurbs::surface::NurbsSurface;
+        let mut topo = Topology::new();
+        let p = Point3::new;
+        let surface = NurbsSurface::new(
+            1,
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![
+                vec![p(0.0, 0.0, 0.0), p(0.0, 1.0, 0.0)],
+                vec![p(1.0, 0.0, 0.0), p(1.0, 1.0, 0.0)],
+            ],
+            vec![vec![1.0; 2]; 2],
+        )
+        .unwrap();
+        let corners = [(0.0, 0.0), (0.5, 0.0), (0.5, 1.0), (0.0, 1.0)]
+            .map(|(x, y)| topo.add_vertex(Vertex::new(p(x, y, 0.0), 1e-7)));
+        let edges: Vec<_> = (0..4)
+            .map(|i| {
+                let edge = Edge::new(corners[i], corners[(i + 1) % 4], EdgeCurve::Line);
+                OrientedEdge::new(topo.add_edge(edge), true)
+            })
+            .collect();
+        let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+        let face_id = topo.add_face(Face::new(wire, vec![], FaceSurface::Nurbs(surface)));
+        let trim = SpanTrim::of_face(&topo, face_id).unwrap().unwrap();
+        let on = |q: Point3| trim.contains_strict(q, &std::cell::Cell::new(None), 1e-3);
+        assert!(on(p(0.25, 0.5, 0.0)));
+        assert!(!on(p(0.75, 0.5, 0.0)));
     }
 }
