@@ -2684,29 +2684,56 @@ fn nurbs_patch_on(
     };
     let (u0, u1) = nb.domain_u();
     let (v0, v1) = nb.domain_v();
+    #[allow(clippy::cast_precision_loss)]
+    let at = |i: f64, j: f64| {
+        let (fu, fv) = (i / (N - 1) as f64, j / (N - 1) as f64);
+        (u0 + (u1 - u0) * fu, v0 + (v1 - v0) * fv)
+    };
+    let lies_on = |p: Point3| {
+        brepkit_math::nurbs::projection::project_point_to_surface(na, p, GAP * 1e-2)
+            .ok()
+            .filter(|proj| proj.distance <= GAP)
+    };
     let mut held = 0usize;
+    let mut held_at = [[false; N]; N];
     let mut agree = 0.0;
-    for i in 0..N {
-        for j in 0..N {
+    for (i, row) in held_at.iter_mut().enumerate() {
+        for (j, cell) in row.iter_mut().enumerate() {
             #[allow(clippy::cast_precision_loss)]
-            let (fu, fv) = (i as f64 / (N - 1) as f64, j as f64 / (N - 1) as f64);
-            let (u, v) = (u0 + (u1 - u0) * fu, v0 + (v1 - v0) * fv);
+            let (u, v) = at(i as f64, j as f64);
             let p = nb.evaluate(u, v);
             if !inside(p) {
                 continue;
             }
-            match brepkit_math::nurbs::projection::project_point_to_surface(na, p, GAP * 1e-2) {
-                Ok(proj) if proj.distance <= GAP => {
-                    held += 1;
-                    if let (Ok(a), Ok(b)) = (na.normal(proj.u, proj.v), nb.normal(u, v)) {
-                        agree += a.dot(b);
-                    }
-                }
-                _ => return None,
+            let proj = lies_on(p)?;
+            held += 1;
+            *cell = true;
+            if let (Ok(a), Ok(b)) = (na.normal(proj.u, proj.v), nb.normal(u, v)) {
+                agree += a.dot(b);
             }
         }
     }
-    (held >= N * 2).then_some(agree >= 0.0)
+    // Samples outside the overlap are passed over, so two patches crossing
+    // along grid lines (a flat patch and a wave meeting it at a quarter and
+    // three quarters of its span) hold every sample left. Patches that lie
+    // on each other hold whole cells of the grid, their middles included.
+    let mut cells = 0usize;
+    for i in 0..N - 1 {
+        for j in 0..N - 1 {
+            if !(held_at[i][j] && held_at[i + 1][j] && held_at[i][j + 1] && held_at[i + 1][j + 1]) {
+                continue;
+            }
+            #[allow(clippy::cast_precision_loss)]
+            let (u, v) = at(i as f64 + 0.5, j as f64 + 0.5);
+            let p = nb.evaluate(u, v);
+            if !inside(p) {
+                return None;
+            }
+            lies_on(p)?;
+            cells += 1;
+        }
+    }
+    (held >= N * 2 && cells > 0).then_some(agree >= 0.0)
 }
 
 /// Check if two surfaces represent the same geometric domain.

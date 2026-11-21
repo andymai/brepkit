@@ -1688,3 +1688,55 @@ fn spline_walls_of_one_surface_are_same_domain() {
     let beside = swept_wall(0.0, 10.0, false, 1e-3);
     assert_eq!(surfaces_same_domain(&wall, &beside, tol), None);
 }
+
+/// The flat patch `(u, v, 0)` over the unit square.
+fn flat_patch(x0: f64, x1: f64) -> brepkit_math::nurbs::surface::NurbsSurface {
+    brepkit_math::nurbs::surface::NurbsSurface::new(
+        1,
+        1,
+        vec![0.0, 0.0, 1.0, 1.0],
+        vec![0.0, 0.0, 1.0, 1.0],
+        vec![
+            vec![Point3::new(x0, 0.0, 0.0), Point3::new(x0, 1.0, 0.0)],
+            vec![Point3::new(x1, 0.0, 0.0), Point3::new(x1, 1.0, 0.0)],
+        ],
+        vec![vec![1.0; 2]; 2],
+    )
+    .unwrap()
+}
+
+/// A wave `(u, v, u² - u + 3/16)` crosses the flat patch along `u = 1/4`
+/// and `u = 3/4`, two lines of the test's sample grid. Its samples off the
+/// flat patch lie outside the two patches' common box and are passed over,
+/// so every sample left lies on the flat patch: the patches cross, they do
+/// not lie on each other. A flat patch over part of the other does.
+#[test]
+fn a_patch_crossing_another_along_sample_lines_does_not_lie_on_it() {
+    let flat = flat_patch(0.0, 1.0);
+    let z = [3.0 / 16.0, -5.0 / 16.0, 3.0 / 16.0];
+    let wave = brepkit_math::nurbs::surface::NurbsSurface::new(
+        2,
+        1,
+        vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+        vec![0.0, 0.0, 1.0, 1.0],
+        (0..3)
+            .map(|i| {
+                let x = 0.5 * f64::from(i);
+                vec![
+                    Point3::new(x, 0.0, z[i as usize]),
+                    Point3::new(x, 1.0, z[i as usize]),
+                ]
+            })
+            .collect(),
+        vec![vec![1.0; 2]; 3],
+    )
+    .unwrap();
+    for u in [0.25, 0.75] {
+        assert!(wave.evaluate(u, 0.5).z().abs() < 1e-12);
+    }
+    let (bf, bw) = (flat.aabb(), wave.aabb());
+    assert!(!nurbs_patch_lies_on(&flat, &wave, &bf, &bw));
+    assert!(!nurbs_patch_lies_on(&wave, &flat, &bw, &bf));
+    let part = flat_patch(0.2, 0.7);
+    assert!(nurbs_patch_lies_on(&flat, &part, &bf, &part.aabb()));
+}
