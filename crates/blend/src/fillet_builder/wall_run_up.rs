@@ -27,6 +27,13 @@
 //! edge two walls meet in is cut where the band crosses it, and the round's
 //! wall, which ran up its corner edge from `P` and back down, keeps the
 //! edge's piece below `P`.
+//!
+//! The wall at the round's end may itself run on under the ledge's outline
+//! from the corner (a boss's wall standing above the ledge beside the
+//! round, below it beyond): it is then the first wall, and `w` goes, the
+//! wall's outline reaching `P` down `w`'s neighbour. Where the outline
+//! passes a little beyond the band's end section before the contact
+//! crosses it, the band is run on past its end (its last span carried on).
 
 use brepkit_math::nurbs::surface::NurbsSurface;
 use brepkit_math::vec::{Point3, Vec3};
@@ -210,6 +217,192 @@ fn run_on_surface(surface: &FaceSurface, reach: f64) -> Option<FaceSurface> {
         return Some(FaceSurface::Nurbs(surface));
     }
     None
+}
+
+/// The band's surface run on past its end section `b` by about the runout
+/// patch's size, its parameters unchanged where it was (the last span's
+/// polynomial carried on). `None` for a band that is not a B-spline, or
+/// whose end section is not on an end of its domain.
+fn band_run_on(
+    topo: &Topology,
+    patch: &Patch,
+    band: &FaceSurface,
+) -> Result<Option<FaceSurface>, BlendError> {
+    let FaceSurface::Nurbs(nurbs) = band else {
+        return Ok(None);
+    };
+    let [pp, cp, ep] = [patch.p, patch.corner, patch.e].map(|v| topo.vertex(v).map(Vertex::point));
+    let (pp, cp, ep) = (pp?, cp?, ep?);
+    let reach = (pp - cp).length().max((ep - cp).length());
+    let b_edge = topo.edge(patch.b.0)?.clone();
+    let (curve, start, end) = edge_curve(topo, &b_edge)?;
+    let (t0, t1) = curve.domain_with_endpoints(start, end);
+    let middle = curve.evaluate_with_endpoints(f64::midpoint(t0, t1), start, end);
+    let Some((u, v)) = band.project_point(middle) else {
+        return Ok(None);
+    };
+    let ((u0, u1), (v0, v1)) = (nurbs.domain_u(), nurbs.domain_v());
+    let at = |x: f64, end: f64, lo: f64, hi: f64| (x - end).abs() <= 1e-6 * (hi - lo);
+    let (along_v, at_end, lo, hi) = if at(v, v1, v0, v1) {
+        (true, true, v0, v1)
+    } else if at(v, v0, v0, v1) {
+        (true, false, v0, v1)
+    } else if at(u, u1, u0, u1) {
+        (false, true, u0, u1)
+    } else if at(u, u0, u0, u1) {
+        (false, false, u0, u1)
+    } else {
+        return Ok(None);
+    };
+    let edge_of = if at_end { hi } else { lo };
+    let step = 1e-3 * (hi - lo) * if at_end { -1.0 } else { 1.0 };
+    let point = |t: f64| {
+        if along_v {
+            nurbs.evaluate(u, t)
+        } else {
+            nurbs.evaluate(t, v)
+        }
+    };
+    let speed = (point(edge_of) - point(edge_of + step)).length() / step.abs();
+    if !(speed > 0.0 && reach > 0.0) {
+        return Ok(None);
+    }
+    Ok(nurbs_run_on(nurbs, along_v, at_end, reach / speed).map(FaceSurface::Nurbs))
+}
+
+/// `surface` run on by `by` in its parameter past one end of its domain
+/// (along v or u, at the end or the start).
+fn nurbs_run_on(
+    surface: &NurbsSurface,
+    along_v: bool,
+    at_end: bool,
+    by: f64,
+) -> Option<NurbsSurface> {
+    let mut work = surface.clone();
+    if !along_v {
+        work = nurbs_transposed(&work)?;
+    }
+    if !at_end {
+        work = nurbs_mirrored_v(&work)?;
+    }
+    let mut out = nurbs_run_on_v_end(&work, by)?;
+    if !at_end {
+        out = nurbs_mirrored_v(&out)?;
+    }
+    if !along_v {
+        out = nurbs_transposed(&out)?;
+    }
+    Some(out)
+}
+
+/// `surface` with u and v swapped.
+fn nurbs_transposed(surface: &NurbsSurface) -> Option<NurbsSurface> {
+    let (points, weights) = (surface.control_points(), surface.weights());
+    let cols = points.first().map_or(0, Vec::len);
+    let swap = |grid: &[Vec<f64>]| -> Vec<Vec<f64>> {
+        (0..cols)
+            .map(|j| grid.iter().map(|row| row[j]).collect())
+            .collect()
+    };
+    let swapped: Vec<Vec<Point3>> = (0..cols)
+        .map(|j| points.iter().map(|row| row[j]).collect())
+        .collect();
+    NurbsSurface::new(
+        surface.degree_v(),
+        surface.degree_u(),
+        surface.knots_v().to_vec(),
+        surface.knots_u().to_vec(),
+        swapped,
+        swap(weights),
+    )
+    .ok()
+}
+
+/// `surface` with v run the other way over the same domain.
+fn nurbs_mirrored_v(surface: &NurbsSurface) -> Option<NurbsSurface> {
+    let knots = surface.knots_v();
+    let (lo, hi) = (*knots.first()?, *knots.last()?);
+    let mirrored: Vec<f64> = knots.iter().rev().map(|&t| lo + hi - t).collect();
+    let flip = |row: &Vec<Point3>| row.iter().rev().copied().collect::<Vec<_>>();
+    let flip_w = |row: &Vec<f64>| row.iter().rev().copied().collect::<Vec<_>>();
+    NurbsSurface::new(
+        surface.degree_u(),
+        surface.degree_v(),
+        surface.knots_u().to_vec(),
+        mirrored,
+        surface.control_points().iter().map(flip).collect(),
+        surface.weights().iter().map(flip_w).collect(),
+    )
+    .ok()
+}
+
+/// `surface` run on by `by` past the end of v: the last span's knot
+/// raised to the degree, so its control points are that span's Bezier
+/// points, and those extrapolated by de Casteljau's steps.
+fn nurbs_run_on_v_end(surface: &NurbsSurface, by: f64) -> Option<NurbsSurface> {
+    let degree = surface.degree_v();
+    let knots = surface.knots_v();
+    let end = *knots.last()?;
+    let span_start = knots.iter().rev().copied().find(|&t| t < end)?;
+    let multiplicity = knots
+        .iter()
+        .filter(|&&t| (t - span_start).abs() <= 1e-12 * (end - span_start))
+        .count();
+    let surface = if multiplicity < degree {
+        brepkit_math::nurbs::knot_ops::surface_knot_insert_v(
+            surface,
+            span_start,
+            degree - multiplicity,
+        )
+        .ok()?
+    } else {
+        surface.clone()
+    };
+    let t = (end + by - span_start) / (end - span_start);
+    let mut points = surface.control_points().to_vec();
+    let mut weights = surface.weights().to_vec();
+    let cols = points.first().map_or(0, Vec::len);
+    if cols < degree + 1 {
+        return None;
+    }
+    let first = cols - degree - 1;
+    for (row, row_weights) in points.iter_mut().zip(weights.iter_mut()) {
+        let mut bezier: Vec<[f64; 4]> = (first..cols)
+            .map(|j| {
+                let (p, w) = (row[j], row_weights[j]);
+                [p.x() * w, p.y() * w, p.z() * w, w]
+            })
+            .collect();
+        let mut left = vec![bezier[0]];
+        for level in 1..=degree {
+            for k in 0..=(degree - level) {
+                let (a, b) = (bezier[k], bezier[k + 1]);
+                bezier[k] = [0, 1, 2, 3].map(|i| a[i] + (b[i] - a[i]) * t);
+            }
+            left.push(bezier[0]);
+        }
+        for (k, h) in left.iter().enumerate() {
+            if h[3] <= 0.0 {
+                return None;
+            }
+            row[first + k] = Point3::new(h[0] / h[3], h[1] / h[3], h[2] / h[3]);
+            row_weights[first + k] = h[3];
+        }
+    }
+    let mut run_knots = surface.knots_v().to_vec();
+    let len = run_knots.len();
+    for knot in &mut run_knots[len - degree - 1..] {
+        *knot = end + by;
+    }
+    NurbsSurface::new(
+        surface.degree_u(),
+        degree,
+        surface.knots_u().to_vec(),
+        run_knots,
+        points,
+        weights,
+    )
+    .ok()
 }
 
 /// An edge's curve between its stored ends, and those ends' points.
@@ -466,7 +659,19 @@ fn run_walls_up(
     input_edges: &std::collections::HashSet<EdgeId>,
 ) -> Result<bool, BlendError> {
     for patch in patches(topo, faces, face_id, input_edges)? {
-        if let Some(plan) = plan_run_up(topo, faces, face_id, &patch)? {
+        let band = topo.face(patch.b.1)?.surface().clone();
+        let mut plan = plan_run_up(topo, faces, face_id, &patch, &band)?;
+        // The ledge's outline may pass a little beyond the band's end
+        // section before the contact crosses it: the band run on past it.
+        if plan.is_none()
+            && let Some(longer) = band_run_on(topo, &patch, &band)?
+        {
+            plan = plan_run_up(topo, faces, face_id, &patch, &longer)?.map(|plan| RunUp {
+                band: Some(longer),
+                ..plan
+            });
+        }
+        if let Some(plan) = plan {
             build_run_up(topo, &patch, plan)?;
             log::debug!(
                 "runout {face_id:?}: the round runs off its ledge at corner {:?}, the walls under it meet the band",
@@ -612,6 +817,8 @@ struct RunUp {
     te: f64,
     x: Point3,
     meets: Vec<EdgeCurve>,
+    /// The band's surface run on past its end, where the plan needed it.
+    band: Option<FaceSurface>,
 }
 
 /// Plans a runout patch's run up, `None` where the round does not run off
@@ -624,10 +831,10 @@ fn plan_run_up(
     faces: &[FaceId],
     face_id: FaceId,
     patch: &Patch,
+    band: &FaceSurface,
 ) -> Result<Option<RunUp>, BlendError> {
     let (b_id, band_face, band_wire) = patch.b;
     let (l_id, ledge, ledge_wire) = patch.l;
-    let band = topo.face(band_face)?.surface().clone();
     let [pp, cp, ep] = [patch.p, patch.corner, patch.e].map(|v| topo.vertex(v).map(Vertex::point));
     let (pp, cp, ep) = (pp?, cp?, ep?);
     let scale = (pp - cp).length().max((ep - cp).length()).max(1e-9);
@@ -691,7 +898,10 @@ fn plan_run_up(
         let Some((wall, wall_wire)) = one_use(topo, faces, ledge, edge_id)? else {
             return Ok(None);
         };
-        if wall == face_id || wall == band_face || wall == patch.wall.0 {
+        // The round's own wall may run on under the ledge from the corner
+        // (a wall the ledge crosses, the round on its upper part): it is
+        // then the first wall, its edge up from the corner dropped.
+        if wall == face_id || wall == band_face || (wall == patch.wall.0 && step > 1) {
             return Ok(None);
         }
         walls.push((wall, wall_wire, edge_id, from));
@@ -758,13 +968,13 @@ fn plan_run_up(
         };
         // A convex round's band crosses the edge below the ledge; a concave
         // round's meets the edge carried on above it.
-        if let Some((t, point)) = band_crossing_on_edge(topo, &band, join, vertex, tol)? {
+        if let Some((t, point)) = band_crossing_on_edge(topo, band, join, vertex, tol)? {
             tops.push((vertex, point, Some((join, t))));
             continue;
         }
         let vp = topo.vertex(vertex)?.point();
         let up = (vp - topo.vertex(below)?.point()).normalize()?;
-        let Some(top) = line_meets_band(&band, vp, up, 4.0 * scale, tol) else {
+        let Some(top) = line_meets_band(band, vp, up, 4.0 * scale, tol) else {
             return Ok(None);
         };
         tops.push((vertex, top, None));
@@ -775,7 +985,7 @@ fn plan_run_up(
     ends.push(x);
     let mut meets = Vec::with_capacity(walls.len());
     for (k, surface) in surfaces.iter().enumerate() {
-        let Some(meet) = band_meets_wall(&band, surface, ends[k], ends[k + 1], tol) else {
+        let Some(meet) = band_meets_wall(band, surface, ends[k], ends[k + 1], tol) else {
             return Ok(None);
         };
         meets.push(meet);
@@ -798,6 +1008,7 @@ fn plan_run_up(
         te,
         x,
         meets,
+        band: None,
     }))
 }
 
@@ -815,8 +1026,12 @@ fn build_run_up(topo: &mut Topology, patch: &Patch, plan: RunUp) -> Result<(), B
         te,
         x,
         meets,
+        band,
     } = plan;
-    let (b_id, _, band_wire) = patch.b;
+    let (b_id, band_face, band_wire) = patch.b;
+    if let Some(band) = band {
+        topo.face_mut(band_face)?.set_surface(band);
+    }
     let (l_id, _, ledge_wire) = patch.l;
     let x_vertex = topo.add_vertex(Vertex::new(x, 1e-7));
     let top_vertices: Vec<VertexId> = tops
@@ -915,16 +1130,20 @@ fn build_run_up(topo: &mut Topology, patch: &Patch, plan: RunUp) -> Result<(), B
     // the last wall's by those and its edge from `X` on; the edges it
     // meets its neighbours in replaced by their pieces below the band
     // (where convex).
+    let own_wall = walls[0].0 == patch.wall.0;
     for (k, &(wall, wire, edge, from)) in walls.iter().enumerate() {
         let mut steps = Vec::with_capacity(3);
         let up = if k == 0 {
-            corner.is_none().then_some(patch.w)
+            (corner.is_none() && !own_wall).then_some(patch.w)
         } else {
             runs[k - 1]
         };
         if let Some(up) = up {
             steps.push((up, from));
         }
+        // On the round's own wall `w`, from the corner up to `P`, goes: the
+        // wall's outline already reaches `P` down `w`'s neighbour.
+        let drop_w = k == 0 && own_wall;
         steps.push((chain[k], chain_vertices[k]));
         if k + 1 < walls.len() {
             if let Some(down) = runs[k] {
@@ -937,9 +1156,11 @@ fn build_run_up(topo: &mut Topology, patch: &Patch, plan: RunUp) -> Result<(), B
         let stored = topo.edge(edge)?.clone();
         topo.face_mut(wall)?.set_surface(surfaces[k].clone());
         rewrite_wire(topo, wire, |oe| {
-            if oe.edge() == edge {
+            if drop_w && oe.edge() == patch.w {
+                vec![]
+            } else if oe.edge() == edge {
                 // The piece taken this way runs from `from` when its oriented
-                // start is.
+                // start is (from `P` on the round's own wall).
                 let from_start = (stored.start() == from) == oe.is_forward();
                 if from_start {
                     forward.clone()
