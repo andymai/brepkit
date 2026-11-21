@@ -14,6 +14,11 @@
 //! - A plate's top rim rounded at r = 50 along a B-spline wall, the top
 //!   narrowing to a tip at one end (convex: the walls under the top's
 //!   outline are cut down to the band).
+//! - A plate whose B-spline wall ends at a boss's cylinder wall, the
+//!   wall's foot rounded at r = 30: the cylinder stands above the ledge
+//!   beside the round's end and runs on under the ledge's outline, a
+//!   little past the band's end section, so the cylinder itself runs up
+//!   to the band, which is run on past its end to meet it.
 //!
 //! Read from STEP, as a file gives the part.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -41,6 +46,11 @@ fn load(topo: &mut Topology, name: &str) -> SolidId {
 
 /// The edge of `solid` passing nearest `p`.
 fn edge_through(topo: &Topology, solid: SolidId, p: Point3) -> EdgeId {
+    edge_near(topo, solid, p, 0.05)
+}
+
+/// The edge of `solid` passing nearest `p`, within `within` of it.
+fn edge_near(topo: &Topology, solid: SolidId, p: Point3, within: f64) -> EdgeId {
     let off = |e: EdgeId| {
         let edge = topo.edge(e).unwrap();
         let (a, b) = (
@@ -61,7 +71,7 @@ fn edge_through(topo: &Topology, solid: SolidId, p: Point3) -> EdgeId {
         .copied()
         .min_by(|&a, &b| off(a).total_cmp(&off(b)))
         .unwrap();
-    assert!(off(best) < 0.05, "no edge through {p:?}: {}", off(best));
+    assert!(off(best) < within, "no edge through {p:?}: {}", off(best));
     best
 }
 
@@ -186,6 +196,42 @@ fn the_walls_under_a_tip_are_cut_down_to_a_rim_round_run_off_it() {
     let expected = 37_674_025.42;
     assert!(
         (volume - expected).abs() < 1e-5 * expected,
+        "volume {volume}, expected {expected}"
+    );
+}
+
+#[test]
+fn a_wall_beside_a_round_s_end_runs_on_under_the_ledge_and_up_to_the_band() {
+    let mut topo = Topology::new();
+    let plate = load(&mut topo, "leg_ledge_wall_corner.step");
+    // As a pick gives them: points beside the edges (one 0.9 off its
+    // B-spline edge).
+    let picks = [
+        Point3::new(-627.894_148_889_057_9, 41.256_629_256_441_26, 0.0),
+        Point3::new(-545.043_640_911_132_8, -235.758_747_827_397_15, 0.0),
+        Point3::new(-272.577_438_603_194_2, -137.983_627_301_885_04, 0.0),
+    ]
+    .map(|p| edge_near(&topo, plate, p, 1.0));
+    let result = fillet_v2(&mut topo, plate, &picks, 30.0).unwrap();
+    assert!(result.failed.is_empty(), "{:?}", result.failed);
+    let report = validate_solid(&topo, result.solid).unwrap();
+    assert!(report.is_valid(), "{:?}", report.issues);
+    assert_eq!(
+        self_crossings(&topo, result.solid),
+        0,
+        "a loop crosses itself"
+    );
+    // The part's seventeen faces and the band, no runout patches.
+    assert_eq!(solid_faces(&topo, result.solid).unwrap().len(), 18);
+    let mesh = tessellate_solid(&topo, result.solid, 0.5).unwrap();
+    assert!(is_watertight(&mesh), "mesh not watertight");
+    // Another kernel's measure of its result of the same fillet. The band
+    // is a B-spline face, which the measure takes off its mesh: at 0.1 it
+    // reads 1e-4 light.
+    let volume = solid_volume(&topo, result.solid, 0.1).unwrap();
+    let expected = 93_180_093.95;
+    assert!(
+        (volume - expected).abs() < 2e-4 * expected,
         "volume {volume}, expected {expected}"
     );
 }
