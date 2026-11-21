@@ -637,7 +637,7 @@ fn revolution_sphere_band(
 ) -> Result<Option<(FaceSurface, bool)>, brepkit_math::MathError> {
     let to_center = arc_center - axis_origin;
     let on_axis = axis_origin + axis * to_center.dot(axis);
-    if (arc_center - on_axis).length() > 1e-6 * arc_radius.max(1.0) {
+    if (arc_center - on_axis).length() > 1e-6 * arc_radius {
         return Ok(None);
     }
     let surface = brepkit_math::surfaces::SphericalSurface::with_axis(on_axis, arc_radius, axis)?;
@@ -3901,6 +3901,25 @@ mod tests {
                 "full segmented revolve (ccw={ccw}) volume should be ~{expected:.2}, \
                  got {vol:.2} (rel_err={rel_err:.2e})"
             );
+        }
+    }
+
+    /// A quarter arc of radius 0.01 about a centre 8e-7 off the axis, 8e-5
+    /// of its radius, sweeps no sphere; 5e-9 off, under a millionth of its
+    /// radius, it does.
+    #[test]
+    fn a_small_arc_off_the_axis_by_more_than_a_millionth_of_its_radius_sweeps_no_sphere() {
+        let axis = Vec3::new(0.0, 0.0, 1.0);
+        let origin = Point3::new(0.0, 0.0, 0.0);
+        let r = 0.01;
+        let h = r * std::f64::consts::FRAC_1_SQRT_2;
+        for (off, sphere) in [(8e-7, false), (5e-9, true)] {
+            let centre = Point3::new(off, 0.0, 0.0);
+            let chord = (Point3::new(off + r, 0.0, 0.0), Point3::new(off, 0.0, r));
+            let mid = Point3::new(off + h, 0.0, h);
+            let band =
+                revolution_sphere_band(centre, r, chord, origin, axis, PI / 2.0, mid).unwrap();
+            assert_eq!(band.is_some(), sphere, "{off} off the axis");
         }
     }
 }
