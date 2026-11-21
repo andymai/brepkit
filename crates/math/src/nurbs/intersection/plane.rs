@@ -442,10 +442,29 @@ pub fn intersect_plane_nurbs_in_region(
     };
     let chains: Vec<Vec<IntersectionPoint>> = match region {
         None => ordered_chains,
-        Some(region) => ordered_chains
-            .iter()
-            .flat_map(|chain| runs_through_region(chain, region))
-            .collect(),
+        Some(region) => {
+            let step = (u_step, v_step);
+            let kept = RegionReach {
+                region,
+                spans: surface
+                    .span_index_shared()
+                    .map(|index| index.spans_meeting(&region)),
+                step,
+            };
+            // A chain along one of the surface's own parameter curves is
+            // kept whole, to be read as that curve below: a run cut from it
+            // would be fitted through its samples alone, and miss what the
+            // curve does between them.
+            let mut chains = Vec::with_capacity(ordered_chains.len());
+            for chain in ordered_chains {
+                if iso_section(surface, plane_normal, plane_d, &chain).is_some() {
+                    chains.push(chain);
+                } else {
+                    chains.extend(runs_through_region(&chain, &kept));
+                }
+            }
+            chains
+        }
     };
     // A chain along one of the surface's own parameter curves is that curve:
     // nothing to fit.
@@ -1391,20 +1410,53 @@ fn encloses(ring: &[IntersectionPoint], (u, v): (f64, f64)) -> bool {
     inside
 }
 
-/// Whether the section between two of its points may pass through
-/// `region`: the box of their chord, padded by half the chord (the section
-/// may bow out that far), meets it.
-fn gap_meets(a: &IntersectionPoint, b: &IntersectionPoint, region: Aabb3) -> bool {
-    let pad = 0.5 * (b.point - a.point).length();
-    Aabb3::from_points([a.point, b.point])
-        .expanded(pad)
-        .intersects(region)
+/// The region a plane section is kept in, with what bounds the surface
+/// there: the parameter rectangles of the knot spans whose control boxes
+/// meet it (`None` where the spans are not indexed), and the sample grid's
+/// step in `u` and `v`.
+struct RegionReach {
+    region: Aabb3,
+    spans: Option<Vec<SpanRect>>,
+    step: (f64, f64),
+}
+
+/// A knot span's parameter rectangle, `(u0, u1)` and `(v0, v1)`.
+type SpanRect = ((f64, f64), (f64, f64));
+
+impl RegionReach {
+    /// Whether the section between two of its points may pass through the
+    /// region. Two points next to each other on a chain cross the sample
+    /// grid in one cell, and the section between them stays in it. The
+    /// surface over the cell lies in the control boxes of the spans the cell
+    /// meets, so a gap whose cell meets no span reaching the region stays
+    /// clear of it. The chord's box, padded by half the chord, answers first.
+    fn gap_meets(&self, a: &IntersectionPoint, b: &IntersectionPoint) -> bool {
+        let pad = 0.5 * (b.point - a.point).length();
+        if Aabb3::from_points([a.point, b.point])
+            .expanded(pad)
+            .intersects(self.region)
+        {
+            return true;
+        }
+        let Some(spans) = &self.spans else {
+            return true;
+        };
+        let ((ua, va), (ub, vb)) = (a.param1, b.param1);
+        let (u0, u1) = (ua.min(ub) - self.step.0, ua.max(ub) + self.step.0);
+        let (v0, v1) = (va.min(vb) - self.step.1, va.max(vb) + self.step.1);
+        spans
+            .iter()
+            .any(|&((su0, su1), (sv0, sv1))| su0 <= u1 && u0 <= su1 && sv0 <= v1 && v0 <= sv1)
+    }
 }
 
 /// The runs of `chain` through `region`, each with one point beyond it on
 /// either side. A closed chain is turned to start in a gap clear of the
 /// region, so a run is never cut in two at the chain's seam.
-fn runs_through_region(chain: &[IntersectionPoint], region: Aabb3) -> Vec<Vec<IntersectionPoint>> {
+fn runs_through_region(
+    chain: &[IntersectionPoint],
+    reach: &RegionReach,
+) -> Vec<Vec<IntersectionPoint>> {
     let n = chain.len();
     if n < 2 {
         return Vec::new();
@@ -1413,7 +1465,7 @@ fn runs_through_region(chain: &[IntersectionPoint], region: Aabb3) -> Vec<Vec<In
     let mut pts: Vec<IntersectionPoint> = chain.to_vec();
     if closed {
         let gaps = n - 1;
-        let clear = |g: usize| !gap_meets(&chain[g], &chain[g + 1], region);
+        let clear = |g: usize| !reach.gap_meets(&chain[g], &chain[g + 1]);
         let Some(g) =
             (0..gaps).find(|&g| clear(g) && clear((g + gaps - 1) % gaps) && clear((g + 1) % gaps))
         else {
@@ -1427,7 +1479,7 @@ fn runs_through_region(chain: &[IntersectionPoint], region: Aabb3) -> Vec<Vec<In
     let gaps = pts.len() - 1;
     let meets: Vec<bool> = pts
         .windows(2)
-        .map(|w| gap_meets(&w[0], &w[1], region))
+        .map(|w| reach.gap_meets(&w[0], &w[1]))
         .collect();
     let keep: Vec<bool> = (0..gaps)
         .map(|g| meets[g] || (g > 0 && meets[g - 1]) || (g + 1 < gaps && meets[g + 1]))
