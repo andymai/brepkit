@@ -526,7 +526,7 @@ fn analytic_revolution_solid_volume(topo: &Topology, solid: SolidId) -> Option<f
         let c = match face.surface() {
             FaceSurface::Cylinder(_) => analytic_cylinder_signed_volume(topo, fid, about).ok()?,
             FaceSurface::Cone(_) => analytic_cone_signed_volume(topo, fid, about).ok()?,
-            FaceSurface::Torus(_) => analytic_torus_signed_volume(topo, fid, about).ok()?,
+            FaceSurface::Torus(_) => analytic_torus_signed_volume(topo, fid, about).ok()??,
             FaceSurface::Plane { .. } => *cap_volumes.get(&fid)?,
             FaceSurface::Nurbs(_) => 0.0, // degenerate on-axis band
             FaceSurface::Sphere(_) => return None,
@@ -2697,12 +2697,15 @@ fn sphere_patch_flux(
 ///   `P(u,v) = C + (R + r*cos_v)*(cos_u*ex + sin_u*ey) + r*sin_v*ez`
 /// the outward normal `n = cos_v*(cos_u*ex + sin_u*ey) + sin_v*ez`,
 /// and `dA = r*(R + r*cos_v) du dv`.
+///
+/// `None` for a face with a hole that winds either angle (one of two loops
+/// round the tube), which bounds no region of its own to take away.
 #[allow(clippy::too_many_lines)]
 fn analytic_torus_signed_volume(
     topo: &Topology,
     face_id: FaceId,
     about: Point3,
-) -> Result<f64, crate::OperationsError> {
+) -> Result<Option<f64>, crate::OperationsError> {
     let face = topo.face(face_id)?;
     let tor = match face.surface() {
         FaceSurface::Torus(t) => t,
@@ -2715,9 +2718,10 @@ fn analytic_torus_signed_volume(
 
     let mut holes = 0.0;
     for &wire in face.inner_wires() {
-        if let Some(hole) = torus_hole_flux(topo, tor, wire, about)? {
-            holes += hole;
-        }
+        let Some(hole) = torus_hole_flux(topo, tor, wire, about)? else {
+            return Ok(None);
+        };
+        holes += hole;
     }
     let wire = topo.wire(face.outer_wire())?;
     // The whole ring's flux is its volume about any point.
@@ -2729,7 +2733,7 @@ fn analytic_torus_signed_volume(
             * tor.minor_radius()
             * tor.minor_radius();
         let vol = ring - holes;
-        return Ok(if face.is_reversed() { -vol } else { vol });
+        return Ok(Some(if face.is_reversed() { -vol } else { vol }));
     }
     // A face trimmed by a free-form curve (a plane's loop around the tube) is
     // no box in (u, v); its boundary walk up one side and down the other
@@ -2738,7 +2742,7 @@ fn analytic_torus_signed_volume(
         && let Some(outer) = torus_hole_flux(topo, tor, face.outer_wire(), about)?
     {
         let vol = outer - holes;
-        return Ok(if face.is_reversed() { -vol } else { vol });
+        return Ok(Some(if face.is_reversed() { -vol } else { vol }));
     }
     let mut u_vals = Vec::new();
     let mut v_vals = Vec::new();
@@ -2799,7 +2803,7 @@ fn analytic_torus_signed_volume(
     let v_min = v_vals.iter().copied().fold(f64::INFINITY, f64::min);
     let v_max = v_vals.iter().copied().fold(f64::NEG_INFINITY, f64::max);
     if sector.is_none() && (v_max - v_min).abs() < 1e-15 {
-        return Ok(0.0);
+        return Ok(Some(0.0));
     }
 
     // The minor (v) angle is periodic, so the raw [min, max] span is wrong for
@@ -2934,7 +2938,7 @@ fn analytic_torus_signed_volume(
     let vol =
         (1.0 / 3.0) * (s_coeff * s_u_integral + (cz_coeff + rcos_coeff + const_coeff) * du) - holes;
 
-    Ok(if face.is_reversed() { -vol } else { vol })
+    Ok(Some(if face.is_reversed() { -vol } else { vol }))
 }
 
 /// Divergence flux `(1/3) ∫ (P − about)·N dA` of the region of a torus that
@@ -3068,25 +3072,23 @@ pub fn volume_from_direct_face_tessellation(
     // their shared edge differ (a chord against the curve it sags from) the
     // gap's flux grows with its distance from the anchor: take the solid's
     // own centre, not the origin a part may sit far from.
-    // The torus closed forms below read wrong about a point off the
-    // torus's axis (a torus cut by planes, measured about its piece's
-    // centre, summed short), so a solid with torus faces keeps the old
-    // anchor.
-    let has_torus = brepkit_topology::explorer::solid_faces(topo, solid)?
-        .into_iter()
-        .any(|f| {
-            topo.face(f)
-                .is_ok_and(|f| matches!(f.surface(), FaceSurface::Torus(_)))
-        });
-    let about = if has_torus {
-        sum_anchor(topo, solid)
-    } else {
-        solid_centre(topo, solid)
-    };
+    let about = solid_centre(topo, solid);
     // Each face's term is worked out on its own (on rayon's pool off wasm)
     // and the terms are summed in the faces' order, as one loop would.
     let face_term = |fid: FaceId| -> Result<f64, crate::OperationsError> {
         let face = topo.face(fid)?;
+
+        // A sphere or torus face is integrated along its wires, which holds
+        // for every outline: the closed forms below read most faces as a
+        // box in the surface's two angles, which a collar round a box's
+        // corners or a band between two loops round a tube is not.
+        if matches!(
+            face.surface(),
+            FaceSurface::Sphere(_) | FaceSurface::Torus(_)
+        ) && let Some(volume) = brepkit_check::properties::exact_face_volume(topo, fid, about)?
+        {
+            return Ok(volume * 6.0);
+        }
 
         // Use exact analytical volume for analytic surface faces. The
         // closed forms below take a cylinder or cone face as a band between
@@ -3127,7 +3129,11 @@ pub fn volume_from_direct_face_tessellation(
                 }
             }
             FaceSurface::Torus(_) => {
-                return Ok(analytic_torus_signed_volume(topo, fid, about)? * 6.0);
+                // A hole the closed form cannot read: the face's own mesh
+                // below.
+                if let Some(flux) = analytic_torus_signed_volume(topo, fid, about)? {
+                    return Ok(flux * 6.0);
+                }
             }
             FaceSurface::Plane { .. } => {
                 if let Some(flux) = planar_face_flux(topo, fid, about)? {
@@ -4520,6 +4526,29 @@ mod tests {
         }
     }
 
+    /// A hole round the ring (the tube's outer equator) bounds no region on
+    /// its own: the closed form declines the face rather than read the
+    /// whole ring with the hole dropped.
+    #[test]
+    fn torus_closed_form_declines_a_hole_round_the_ring() {
+        let (big, small) = (4.0, 1.0);
+        let mut topo = Topology::new();
+        let torus = crate::primitives::make_torus(&mut topo, big, small, 32).unwrap();
+        let face = brepkit_topology::explorer::solid_faces(&topo, torus).unwrap()[0];
+        let equator = Circle3D::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            big + small,
+        )
+        .unwrap();
+        let at = topo.add_vertex(Vertex::new(Point3::new(big + small, 0.0, 0.0), 1e-7));
+        let edge = topo.add_edge(Edge::new(at, at, EdgeCurve::Circle(equator)));
+        let hole = topo.add_wire(Wire::new(vec![OrientedEdge::new(edge, true)], true).unwrap());
+        topo.face_mut(face).unwrap().inner_wires_mut().push(hole);
+        let read = analytic_torus_signed_volume(&topo, face, Point3::new(0.0, 0.0, 0.0)).unwrap();
+        assert!(read.is_none(), "read {read:?}");
+    }
+
     #[test]
     fn torus_band_with_a_rim_split_opposite_its_seam_reads_the_whole_turn() {
         use brepkit_math::surfaces::ToroidalSurface;
@@ -4560,7 +4589,9 @@ mod tests {
                 + big * small * (v2 - v1));
         let split = split_rim_at_antipode(&mut topo, band, low);
         for face in [band, split] {
-            let read = analytic_torus_signed_volume(&topo, face, about).unwrap();
+            let read = analytic_torus_signed_volume(&topo, face, about)
+                .unwrap()
+                .unwrap();
             assert!(
                 (read.abs() - expected).abs() <= 1e-9 * expected,
                 "band reads {read}, expected {expected}"
