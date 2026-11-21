@@ -1734,6 +1734,7 @@ fn walk_chamfer_stripe(
             face1,
             face2,
             sections: walk.sections,
+            beyond: Default::default(),
         },
         new_edges: Vec::new(),
     })

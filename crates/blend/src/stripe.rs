@@ -31,6 +31,12 @@ pub struct Stripe {
     pub face2: FaceId,
     /// Cross-sections computed during walking.
     pub sections: Vec<CircSection>,
+    /// A walked band's sections rolled on past its spine's start (`[0]`) and
+    /// end (`[1]`), outward from the spine, the spine carried on along its
+    /// end tangent and the ball kept on both faces' surfaces: where an end
+    /// is run on to a tilted cap, the band is carried on through them.
+    /// Empty for analytic bands.
+    pub beyond: [Vec<CircSection>; 2],
 }
 
 /// Result from computing a single stripe (before topology reconstruction).

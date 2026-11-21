@@ -328,25 +328,29 @@ pub fn build_wire_loops_dcel_measured(
             .or_default()
             .push(i);
     }
-    for (i, e) in edges.iter().enumerate() {
-        if twin[i].is_some() {
-            continue;
-        }
-        let rev_key = (key_of(e.end_uv), key_of(e.start_uv));
-        if let Some(cands) = by_pair.get(&rev_key) {
-            let pick = cands
-                .iter()
-                .copied()
-                .filter(|&j| j != i && twin[j].is_none())
-                .max_by_key(|&j| {
-                    usize::from(
-                        edges[j].source_edge_idx.is_some()
-                            && edges[j].source_edge_idx == e.source_edge_idx,
-                    )
-                });
-            if let Some(j) = pick {
-                twin[i] = Some(j);
-                twin[j] = Some(i);
+    // Same-source pairs first: a boundary arc sharing both ends with a
+    // section (a wall's notch over a bore, the bore's arc below it) must not
+    // take the section's forward half before its reverse half pairs with it.
+    for same_source_only in [true, false] {
+        for (i, e) in edges.iter().enumerate() {
+            if twin[i].is_some() {
+                continue;
+            }
+            let rev_key = (key_of(e.end_uv), key_of(e.start_uv));
+            if let Some(cands) = by_pair.get(&rev_key) {
+                let same = |j: usize| {
+                    edges[j].source_edge_idx.is_some()
+                        && edges[j].source_edge_idx == e.source_edge_idx
+                };
+                let pick = cands
+                    .iter()
+                    .copied()
+                    .filter(|&j| j != i && twin[j].is_none() && (!same_source_only || same(j)))
+                    .max_by_key(|&j| usize::from(same(j)));
+                if let Some(j) = pick {
+                    twin[i] = Some(j);
+                    twin[j] = Some(i);
+                }
             }
         }
     }
@@ -446,29 +450,29 @@ pub fn build_wire_loops_dcel_measured(
         // stored at whichever period copy their pcurve produced — a raw
         // shoelace over mixed copies is garbage (the full-period remainder
         // band read as strongly negative and was dropped as "outer"). Lift
-        // each successive vertex by the minimal image against its
-        // predecessor; the net lift after closing the orbit is the WINDING —
-        // nonzero only for the unbounded rim rings of a periodic face.
-        let lift = |val: f64, anchor: f64, period: Option<f64>| -> f64 {
+        // the orbit half by half, each by its own step taken the short way
+        // round; the net lift after closing the orbit is the WINDING —
+        // nonzero only for the unbounded rim rings of a periodic face. A
+        // step of exactly half a period (a rim cut in halves, as files write
+        // circles) keeps its stored direction: lifting each vertex against
+        // the last left that to the last bit, and a band below such a rim
+        // read as winding with no area and was dropped.
+        let step = |d: f64, period: Option<f64>| -> f64 {
             match period {
-                Some(p) if p > 1e-12 => val + ((anchor - val) / p).round() * p,
-                _ => val,
+                Some(p) if p > 1e-12 && d.abs() > p * 0.5 * (1.0 + 1e-9) => d - (d / p).round() * p,
+                _ => d,
             }
         };
         let mut area = 0.0;
         let mut perimeter = 0.0;
         let first = halves[orbit[0]].start_uv;
         let mut prev = first;
-        let mut lifted_first = first;
-        for k in 0..orbit.len() {
-            let raw = halves[orbit[(k + 1) % orbit.len()]].start_uv;
+        for &i in &orbit {
+            let d = halves[i].end_uv - halves[i].start_uv;
             let b = Point2::new(
-                lift(raw.x(), prev.x(), u_period),
-                lift(raw.y(), prev.y(), v_period),
+                prev.x() + step(d.x(), u_period),
+                prev.y() + step(d.y(), v_period),
             );
-            if k + 1 == orbit.len() {
-                lifted_first = b;
-            }
             // Taken from the first vertex: far from the origin the
             // products of raw parameters round away a small orbit's area.
             let (p, q) = (prev - first, b - first);
@@ -476,6 +480,7 @@ pub fn build_wire_loops_dcel_measured(
             perimeter += (b - prev).length();
             prev = b;
         }
+        let lifted_first = prev;
         // An orbit that winds a period ends a period from its start, and
         // its sum about the origin holds this term for the gap between.
         let gap = lifted_first - first;
@@ -671,15 +676,19 @@ fn edge_angle_at_vertex_periodic(
     v_period: Option<f64>,
 ) -> f64 {
     let (mut dx, mut dy) = pcurve_tangent_at_endpoint(edge, at_start);
+    // A step of exactly half a period reads the same either way round (a
+    // rim cut in halves, as files write circles), so only a step past the
+    // half by more than rounding wraps; at the half the edge keeps its
+    // stored direction rather than whichever way the last bit tips it.
     if let Some(period) = u_period {
         let half = period * 0.5;
-        if dx.abs() > half {
+        if dx.abs() > half * (1.0 + 1e-9) {
             dx -= dx.signum() * period;
         }
     }
     if let Some(period) = v_period {
         let half = period * 0.5;
-        if dy.abs() > half {
+        if dy.abs() > half * (1.0 + 1e-9) {
             dy -= dy.signum() * period;
         }
     }
@@ -1352,8 +1361,8 @@ mod tests {
         // lifted shoelace must bridge the copies.
         let u2 = TAU;
         let edges = vec![
-            // bottom rim pieces, all spans < pi (the lift precondition;
-            // real rim chains arrive pre-split well below pi)
+            // bottom rim pieces, each lifted by its own step the short way
+            // round (a step of exactly half a turn keeps its direction)
             make_line_edge(Point2::new(0.0, 0.0), Point2::new(1.0, 0.0)),
             make_line_edge(Point2::new(1.0, 0.0), Point2::new(2.0, 0.0)),
             make_line_edge(Point2::new(2.0, 0.0), Point2::new(4.0, 0.0)),
@@ -1424,6 +1433,53 @@ mod tests {
             loops[0].len(),
             10,
             "band uses all eight rim pieces + the section twice"
+        );
+    }
+
+    #[test]
+    fn dcel_band_under_a_rim_in_halves_is_kept() {
+        // A pin's wall below the mouth of a hole of its own radius: the seam
+        // at u = a, the pin's end rim in two halves of exactly half a turn
+        // (as files write circles), and the hole's rim above in pieces. Each
+        // half reads the same either way round; read the wrong way, the
+        // band wound the period with no area and was dropped.
+        let a = 1.283_690_632_958_161_4;
+        let p = Point2::new;
+        let edges = vec![
+            make_line_edge(p(a, 30.0), p(a, 0.0)),
+            make_line_edge(p(a, 0.0), p(4.425_283_286_547_954_6, 0.0)),
+            make_line_edge(p(4.425_283_286_547_954_6, 0.0), p(a + TAU, 0.0)),
+            make_line_edge(p(a + TAU, 0.0), p(a + TAU, 30.0)),
+            make_line_edge(p(a + TAU, 30.0), p(4.778_341_232_904_937, 30.0)),
+            make_line_edge(
+                p(4.778_341_232_904_937, 30.0),
+                p(1.989_806_525_672_153_8, 30.0),
+            ),
+            make_line_edge(
+                p(1.989_806_525_672_153_8, 30.0),
+                p(1.636_748_579_315_157_5, 30.0),
+            ),
+            make_line_edge(p(1.636_748_579_315_157_5, 30.0), p(a, 30.0)),
+        ];
+        let loops = build_wire_loops_dcel(&edges, 1e-7, true, false);
+        assert_eq!(loops.len(), 1, "the band below the rim is one region");
+        assert_eq!(loops[0].len(), 8);
+    }
+
+    #[test]
+    fn a_half_turn_step_keeps_its_stored_direction() {
+        // A rim half of a cylinder, a hair past half a turn by rounding,
+        // leaves its start heading +u as stored; wrapped, it read as heading
+        // -u, and the face trace walked the rim backwards out of the face.
+        let start = 1.989_806_525_672_153_8;
+        let half = make_line_edge(
+            Point2::new(start, 0.0),
+            Point2::new(start + std::f64::consts::PI * (1.0 + 1e-15), 0.0),
+        );
+        let angle = edge_angle_at_vertex_periodic(&half, true, Some(TAU), None);
+        assert!(
+            angle.abs() < 1e-9 || (angle - TAU).abs() < 1e-9,
+            "angle {angle}"
         );
     }
 

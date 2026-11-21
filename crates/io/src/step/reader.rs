@@ -135,6 +135,10 @@ struct StepBuilder<'a> {
     legacy_cones: bool,
 }
 
+/// A hole of a face read as lunes: its loop and the arc round the closed
+/// direction it covers, as angles `lo..hi` with `lo` in `[0, TAU)`.
+type PoleClosedHole = (brepkit_topology::wire::WireId, f64, f64);
+
 impl<'a> StepBuilder<'a> {
     fn new(
         topo: &'a mut Topology,
@@ -342,7 +346,12 @@ impl<'a> StepBuilder<'a> {
         // up to a pole at each end; it reads as the sphere it is. Its normal
         // may point in, which turns the face's own flag around.
         let (sphere, inward) = match self.build_surface(surface_ref)? {
-            FaceSurface::Sphere(sphere) => (sphere, false),
+            // A whole ball has no rim for a frame to fit; it is split about
+            // `+Z`, as brepkit builds a ball.
+            FaceSurface::Sphere(sphere) => (
+                Self::default_sphere(sphere.center(), sphere.radius())?,
+                false,
+            ),
             FaceSurface::Nurbs(n) => match nurbs_as_sphere(&n) {
                 Some((sphere, outward)) => (sphere, !outward),
                 None => return Ok(None),
@@ -404,8 +413,12 @@ impl<'a> StepBuilder<'a> {
     /// (a ball or a lemon written as one face) has no edge to bound it. It
     /// reads as the lunes brepkit's revolve builds: the surface cut along
     /// meridians where it is only C0 (knots raised to full multiplicity), each
-    /// piece a face between two meridian edges from pole to pole. `None` for
-    /// any other face.
+    /// piece a face between two meridian edges from pole to pole. The face
+    /// may also have edge loops that do not wind round the closed direction
+    /// (a ball with a cap cut off beside its axis): with a vertex loop at a
+    /// pole the face holds both poles, so each such loop is a hole, carried
+    /// by the lune it lies in, the meridians moved off it. `None` for any
+    /// other face.
     #[allow(clippy::too_many_lines)]
     fn build_pole_closed_face(
         &mut self,
@@ -420,14 +433,21 @@ impl<'a> StepBuilder<'a> {
         if list_refs.is_empty() {
             return Ok(None);
         }
+        // Edge loops are holes the lunes carry: (bound, loop).
+        let mut hole_loops = Vec::new();
         for &bound_ref in &list_refs {
             let Some(&loop_ref) = parse_refs(&self.get_entity(bound_ref)?.attrs.clone()).first()
             else {
                 return Ok(None);
             };
-            if self.get_entity(loop_ref)?.entity_type != "VERTEX_LOOP" {
-                return Ok(None);
+            match self.get_entity(loop_ref)?.entity_type.as_str() {
+                "VERTEX_LOOP" => {}
+                "EDGE_LOOP" => hole_loops.push((bound_ref, loop_ref)),
+                _ => return Ok(None),
             }
+        }
+        if hole_loops.len() == list_refs.len() {
+            return Ok(None);
         }
         let list_set: std::collections::HashSet<u64> = list_refs.iter().copied().collect();
         let Some(&surface_ref) = parse_refs(&attrs)
@@ -496,6 +516,10 @@ impl<'a> StepBuilder<'a> {
             }
         };
 
+        let orient_tail = attrs.trim_end_matches(')').trim();
+        let file_reversed = orient_tail.ends_with(".F.") || orient_tail.ends_with(".FALSE.");
+        let face_reversed = file_reversed != swapped;
+
         // Split values round v: its ends and its interior knots, or its
         // middle when it has none, each raised to multiplicity p.
         let p = n.degree_v();
@@ -503,16 +527,47 @@ impl<'a> StepBuilder<'a> {
         if v1 <= v0 {
             return Ok(None);
         }
+        // Each hole, a loop that does not wind round v (the face holds both
+        // poles, as the vertex loop says), and the arc round v it covers.
+        let Some(holes) = self.pole_closed_holes(&n, &hole_loops, file_reversed != swapped)? else {
+            return Ok(None);
+        };
+        let angle = |v: f64| std::f64::consts::TAU * (v - v0) / (v1 - v0);
+        let covered = |v: f64| {
+            let a = angle(v);
+            holes.iter().any(|&(_, lo, hi)| {
+                let margin = 1e-2;
+                (a - (lo - margin)).rem_euclid(std::f64::consts::TAU) <= hi - lo + 2.0 * margin
+            })
+        };
+        if covered(v0) {
+            return Ok(None);
+        }
         // Relative to the domain: a file's knots can all lie within 1e-12.
         let eps = 1e-12 * (v1 - v0);
         let mut splits = vec![v0];
         for &k in n.knots_v() {
-            if k > v0 + eps && k < v1 - eps && splits.last().is_none_or(|&l| k > l + eps) {
+            if k > v0 + eps
+                && k < v1 - eps
+                && splits.last().is_none_or(|&l| k > l + eps)
+                && !covered(k)
+            {
                 splits.push(k);
             }
         }
         if splits.len() < 2 {
-            splits.push(0.5 * (v0 + v1));
+            // The free value farthest round from v0.
+            let far = (1..64)
+                .map(|k| (v1 - v0).madd(f64::from(k) / 64.0, v0))
+                .filter(|&v| !covered(v))
+                .min_by(|a, b| {
+                    let mid = 0.5 * (v0 + v1);
+                    (a - mid).abs().total_cmp(&(b - mid).abs())
+                });
+            let Some(far) = far else {
+                return Ok(None);
+            };
+            splits.push(far);
         }
         splits.push(v1);
         let run = |n: &NurbsSurface, v: f64| -> (usize, usize) {
@@ -572,9 +627,6 @@ impl<'a> StepBuilder<'a> {
                     .add_edge(Edge::new(pole_a, pole_b, EdgeCurve::NurbsCurve(curve))),
             );
         }
-        let orient_tail = attrs.trim_end_matches(')').trim();
-        let face_reversed =
-            (orient_tail.ends_with(".F.") || orient_tail.ends_with(".FALSE.")) != swapped;
         let mut lunes = Vec::with_capacity(edges.len());
         for k in 0..edges.len() {
             let (a, b) = (splits[k], splits[k + 1]);
@@ -615,14 +667,84 @@ impl<'a> StepBuilder<'a> {
             })?;
             let wire = self.topo.add_wire(wire);
             let surface = FaceSurface::Nurbs(piece);
+            let inner: Vec<_> = holes
+                .iter()
+                .filter(|&&(_, lo, hi)| {
+                    let mid = 0.5 * (lo + hi);
+                    mid > angle(a) && mid < angle(b)
+                })
+                .map(|&(wire, _, _)| wire)
+                .collect();
             lunes.push(if face_reversed == flip {
-                self.topo.add_face(Face::new(wire, Vec::new(), surface))
+                self.topo.add_face(Face::new(wire, inner, surface))
             } else {
-                self.topo
-                    .add_face(Face::new_reversed(wire, Vec::new(), surface))
+                self.topo.add_face(Face::new_reversed(wire, inner, surface))
             });
         }
         Ok(Some(lunes))
+    }
+
+    /// The holes of a face [`Self::build_pole_closed_face`] cuts into
+    /// lunes: each edge loop built about the surface's normal (`turned`
+    /// when the surface's u and v were swapped or the face is reversed) and
+    /// the arc round `n`'s closed v it covers, as angles `lo..hi` with `lo`
+    /// in `[0, TAU)`. `None` when a loop winds round v (it is a rim, not a
+    /// hole) or does not project.
+    fn pole_closed_holes(
+        &mut self,
+        n: &brepkit_math::nurbs::surface::NurbsSurface,
+        loops: &[(u64, u64)],
+        turned: bool,
+    ) -> Result<Option<Vec<PoleClosedHole>>, IoError> {
+        use brepkit_math::nurbs::projection::project_point_to_surface;
+        use std::f64::consts::{PI, TAU};
+
+        let (v0, v1) = n.domain_v();
+        let mut holes = Vec::with_capacity(loops.len());
+        for &(bound_ref, loop_ref) in loops {
+            let bound_tail = self.get_entity(bound_ref)?.attrs.clone();
+            let bound_tail = bound_tail.trim_end_matches(')').trim();
+            let bound_reversed = bound_tail.ends_with(".F.") || bound_tail.ends_with(".FALSE.");
+            let reverse = (!self.legacy_bounds && bound_reversed) != turned;
+            let wire = self.build_edge_loop(loop_ref, reverse)?;
+            let mut angles = Vec::new();
+            for oe in self.topo.wire(wire)?.edges() {
+                let e = self.topo.edge(oe.edge())?;
+                let (a, b) = (
+                    self.topo.vertex(e.start())?.point(),
+                    self.topo.vertex(e.end())?.point(),
+                );
+                let (t0, t1) = e.curve().domain_with_endpoints(a, b);
+                for k in 0..32 {
+                    let t = (t1 - t0).madd(f64::from(k) / 32.0, t0);
+                    let p = e.curve().evaluate_with_endpoints(t, a, b);
+                    let Ok(proj) = project_point_to_surface(n, p, 1e-9) else {
+                        return Ok(None);
+                    };
+                    angles.push((TAU * (proj.v - v0) / (v1 - v0)).rem_euclid(TAU));
+                }
+            }
+            if angles.len() < 3 {
+                return Ok(None);
+            }
+            let turn: f64 = (0..angles.len())
+                .map(|i| (angles[(i + 1) % angles.len()] - angles[i] + PI).rem_euclid(TAU) - PI)
+                .sum();
+            if turn.abs() > PI {
+                return Ok(None);
+            }
+            // The loop covers all but the widest gap between its angles.
+            angles.sort_by(f64::total_cmp);
+            let (mut gap, mut after) = (TAU + angles[0] - angles[angles.len() - 1], angles[0]);
+            for w in angles.windows(2) {
+                if w[1] - w[0] > gap {
+                    gap = w[1] - w[0];
+                    after = w[1];
+                }
+            }
+            holes.push((wire, after, after + TAU - gap));
+        }
+        Ok(Some(holes))
     }
 
     #[allow(clippy::too_many_lines)]
@@ -746,30 +868,45 @@ impl<'a> StepBuilder<'a> {
         let surface = match surface {
             Extrusion::Surface(surface) => surface,
             Extrusion::Spline(curve, along) => {
-                let mut span = (f64::INFINITY, f64::NEG_INFINITY);
-                for wire in std::iter::once(outer).chain(inner_wires.iter().copied()) {
-                    for oe in self.topo.wire(wire)?.edges() {
-                        let edge = self.topo.edge(oe.edge())?;
-                        let (lo, hi) = edge_height_span(
-                            edge.curve(),
-                            self.topo.vertex(edge.start())?.point(),
-                            self.topo.vertex(edge.end())?.point(),
-                            along,
-                        );
-                        span = (span.0.min(lo), span.1.max(hi));
-                    }
-                }
-                if !(span.0.is_finite() && span.1.is_finite()) {
-                    return Err(IoError::ParseError {
+                self.swept_face_surface(&curve, along, outer, &inner_wires, surface_ref)?
+            }
+            Extrusion::Conic(conic, along) => {
+                let curve = self
+                    .conic_cover(&conic, along, outer, &inner_wires)
+                    .and_then(|(t0, t1)| conic_arc_nurbs(&conic, t0, t1).ok())
+                    .ok_or_else(|| IoError::ParseError {
                         reason: format!(
                             "SURFACE_OF_LINEAR_EXTRUSION #{surface_ref}: face has no extent"
                         ),
-                    });
-                }
-                spline_extrusion(&curve, along, span).map_err(|e| IoError::ParseError {
-                    reason: format!("SURFACE_OF_LINEAR_EXTRUSION #{surface_ref}: {e}"),
-                })?
+                    })?;
+                self.swept_face_surface(&curve, along, outer, &inner_wires, surface_ref)?
             }
+        };
+
+        // A face with holes keeps the file's frame only where its circles fit
+        // it.
+        let surface = match surface {
+            FaceSurface::Sphere(sphere) if !inner_wires.is_empty() => {
+                FaceSurface::Sphere(self.holed_sphere_frame(sphere, outer, &inner_wires)?)
+            }
+            surface => surface,
+        };
+        // A cap written as its rim and a seam run out to a pole and back reads
+        // as one written with a vertex loop at that pole: the rim alone.
+        let (outer, cap_pole) = match (&surface, loop_vertex) {
+            (FaceSurface::Sphere(sphere), None) if inner_wires.is_empty() => {
+                match self.cap_rim_and_spur(sphere, outer)? {
+                    Some((rim, pole)) => (rim, Some(pole)),
+                    None => (outer, None),
+                }
+            }
+            _ => (outer, None),
+        };
+        let surface = match (surface, loop_vertex.or(cap_pole)) {
+            (FaceSurface::Sphere(sphere), Some(pole)) if inner_wires.is_empty() => {
+                FaceSurface::Sphere(self.sphere_about_cap(sphere, outer, pole)?)
+            }
+            (surface, _) => surface,
         };
 
         // Turning a face over flips its normal, not the side of its surface
@@ -790,6 +927,148 @@ impl<'a> StepBuilder<'a> {
             self.vertex_loops.insert(face_id, vertex);
         }
         Ok(face_id)
+    }
+
+    /// A sphere face with holes keeps the file's frame when its circles fit
+    /// it: each a latitude (about the frame's axis) or a meridian (through
+    /// its poles). Otherwise it takes the sphere's default frame, about
+    /// `+Z`, as every sphere face read before: in a frame its holes cross
+    /// at random, a seam the wire runs both ways (from a rim to the pole)
+    /// can cross a hole a later boolean cuts, which neither the face
+    /// splitter nor the mesher takes, and the result's dome is written
+    /// wrong.
+    fn holed_sphere_frame(
+        &self,
+        sphere: brepkit_math::surfaces::SphericalSurface,
+        outer: brepkit_topology::wire::WireId,
+        inner: &[brepkit_topology::wire::WireId],
+    ) -> Result<brepkit_math::surfaces::SphericalSurface, IoError> {
+        let (center, radius, axis) = (sphere.center(), sphere.radius(), sphere.z_axis());
+        let tol = 1e-6 * radius;
+        let mut circles = 0_usize;
+        for &wire in std::iter::once(&outer).chain(inner) {
+            for oe in self.topo.wire(wire)?.edges() {
+                let EdgeCurve::Circle(circle) = self.topo.edge(oe.edge())?.curve() else {
+                    continue;
+                };
+                let (n, off) = (circle.normal(), circle.center() - center);
+                let latitude = n.cross(axis).length() <= 1e-6 && off.cross(axis).length() <= tol;
+                let meridian = n.dot(axis).abs() <= 1e-6 && off.length() <= tol;
+                if !(latitude || meridian) {
+                    return Self::default_sphere(center, radius);
+                }
+                circles += 1;
+            }
+        }
+        if circles > 0 {
+            return Ok(sphere);
+        }
+        Self::default_sphere(center, radius)
+    }
+
+    fn default_sphere(
+        center: Point3,
+        radius: f64,
+    ) -> Result<brepkit_math::surfaces::SphericalSurface, IoError> {
+        brepkit_math::surfaces::SphericalSurface::new(center, radius).map_err(|e| {
+            IoError::ParseError {
+                reason: format!("sphere: {e}"),
+            }
+        })
+    }
+
+    /// A loop of one closed circle and one edge run out from its vertex and
+    /// back (a cap's seam, written up to a pole of the frame the file chose):
+    /// the loop of the circle alone, and the spur's far end. The spur bounds
+    /// no area, and off the frame brepkit gives the sphere it is no seam.
+    /// `None` too for a rim that is a latitude of the file's frame.
+    fn cap_rim_and_spur(
+        &mut self,
+        sphere: &brepkit_math::surfaces::SphericalSurface,
+        outer: brepkit_topology::wire::WireId,
+    ) -> Result<
+        Option<(
+            brepkit_topology::wire::WireId,
+            brepkit_topology::vertex::VertexId,
+        )>,
+        IoError,
+    > {
+        let edges = self.topo.wire(outer)?.edges().to_vec();
+        if edges.len() != 3 {
+            return Ok(None);
+        }
+        for k in 0..3 {
+            let rim = edges[k];
+            let (a, b) = (edges[(k + 1) % 3], edges[(k + 2) % 3]);
+            if a.edge() != b.edge() || a.is_forward() == b.is_forward() || rim.edge() == a.edge() {
+                continue;
+            }
+            let rim_edge = self.topo.edge(rim.edge())?;
+            let EdgeCurve::Circle(circle) = rim_edge.curve() else {
+                continue;
+            };
+            if rim_edge.start() != rim_edge.end() {
+                continue;
+            }
+            // A rim that is a latitude of the file's frame already lies on
+            // the grid, its seam on the frame's own: the cap reads as written.
+            if circle.normal().cross(sphere.z_axis()).length() <= 1e-9 {
+                return Ok(None);
+            }
+            let at = rim_edge.start();
+            let spur = self.topo.edge(a.edge())?;
+            let pole = match (spur.start() == at, spur.end() == at) {
+                (true, false) => spur.end(),
+                (false, true) => spur.start(),
+                _ => continue,
+            };
+            let wire = Wire::new(vec![rim], true).map_err(|e| IoError::ParseError {
+                reason: format!("sphere cap rim: {e}"),
+            })?;
+            return Ok(Some((self.topo.add_wire(wire), pole)));
+        }
+        Ok(None)
+    }
+
+    /// A sphere face bounded by one circle and a vertex loop is the cap on
+    /// the vertex's side of the circle: a ball cut by a tilted plane, written
+    /// with the sphere's pole as its vertex. Seen from the sphere's own axis
+    /// the circle winds no pole, and its loop alone encloses the smaller cap,
+    /// which the meshers took. About the circle's axis, pointing to the
+    /// vertex's side, the face is the cap round that pole, under a latitude.
+    fn sphere_about_cap(
+        &self,
+        sphere: brepkit_math::surfaces::SphericalSurface,
+        outer: brepkit_topology::wire::WireId,
+        pole: brepkit_topology::vertex::VertexId,
+    ) -> Result<brepkit_math::surfaces::SphericalSurface, IoError> {
+        let [oe] = self.topo.wire(outer)?.edges() else {
+            return Ok(sphere);
+        };
+        let edge = self.topo.edge(oe.edge())?;
+        let EdgeCurve::Circle(circle) = edge.curve() else {
+            return Ok(sphere);
+        };
+        if edge.start() != edge.end() {
+            return Ok(sphere);
+        }
+        let side = circle
+            .normal()
+            .dot(self.topo.vertex(pole)?.point() - circle.center());
+        if side.abs() <= 1e-6 * sphere.radius() {
+            return Ok(sphere);
+        }
+        let axis = if side > 0.0 {
+            circle.normal()
+        } else {
+            -circle.normal()
+        };
+        Ok(brepkit_math::surfaces::SphericalSurface::with_axis(
+            sphere.center(),
+            sphere.radius(),
+            axis,
+        )
+        .unwrap_or(sphere))
     }
 
     fn build_surface(&self, surface_ref: u64) -> Result<FaceSurface, IoError> {
@@ -875,11 +1154,16 @@ impl<'a> StepBuilder<'a> {
                 let radius = floats.first().copied().ok_or_else(|| IoError::ParseError {
                     reason: format!("SPHERICAL_SURFACE #{surface_ref} missing radius"),
                 })?;
-                let (center, _axis, _ref_dir) = self.build_axis2_placement(axis_ref)?;
-                let sphere = brepkit_math::surfaces::SphericalSurface::new(center, radius)
-                    .map_err(|e| IoError::ParseError {
-                        reason: format!("SPHERICAL_SURFACE #{surface_ref}: {e}"),
-                    })?;
+                // The file's frame: its latitude circles and meridian seams
+                // then lie on the (u, v) grid, however the sphere is turned.
+                let (center, axis, ref_dir) = self.build_axis2_placement(axis_ref)?;
+                let sphere = brepkit_math::surfaces::SphericalSurface::with_axis_and_ref_dir(
+                    center, radius, axis, ref_dir,
+                )
+                .or_else(|_| brepkit_math::surfaces::SphericalSurface::new(center, radius))
+                .map_err(|e| IoError::ParseError {
+                    reason: format!("SPHERICAL_SURFACE #{surface_ref}: {e}"),
+                })?;
                 Ok(FaceSurface::Sphere(sphere))
             }
             "TOROIDAL_SURFACE" => {
@@ -1138,6 +1422,127 @@ impl<'a> StepBuilder<'a> {
         Ok(EdgeCurve::NurbsCurve(nurbs))
     }
 
+    /// The B-spline surface of `curve` swept along `along` over the heights
+    /// the face's edges span.
+    fn swept_face_surface(
+        &self,
+        curve: &brepkit_math::nurbs::NurbsCurve,
+        along: Vec3,
+        outer: brepkit_topology::wire::WireId,
+        inner_wires: &[brepkit_topology::wire::WireId],
+        surface_ref: u64,
+    ) -> Result<FaceSurface, IoError> {
+        let mut span = (f64::INFINITY, f64::NEG_INFINITY);
+        for wire in std::iter::once(outer).chain(inner_wires.iter().copied()) {
+            for oe in self.topo.wire(wire)?.edges() {
+                let edge = self.topo.edge(oe.edge())?;
+                let (lo, hi) = edge_height_span(
+                    edge.curve(),
+                    self.topo.vertex(edge.start())?.point(),
+                    self.topo.vertex(edge.end())?.point(),
+                    along,
+                );
+                span = (span.0.min(lo), span.1.max(hi));
+            }
+        }
+        if !(span.0.is_finite() && span.1.is_finite()) {
+            return Err(IoError::ParseError {
+                reason: format!("SURFACE_OF_LINEAR_EXTRUSION #{surface_ref}: face has no extent"),
+            });
+        }
+        spline_extrusion(curve, along, span).map_err(|e| IoError::ParseError {
+            reason: format!("SURFACE_OF_LINEAR_EXTRUSION #{surface_ref}: {e}"),
+        })
+    }
+
+    /// The arc of `conic` (a circle or an ellipse) that a face swept from it
+    /// along `along` covers: its edges' points slid along `along` on to the
+    /// conic's plane, read as angles, and the turn less its widest gap. A
+    /// face closing round the conic takes the whole turn from the conic's
+    /// start. A surface wrapping on past its face would carry the rest of
+    /// the conic's sweep, which a neighbouring face (the other half of a
+    /// split tube) lies on.
+    fn conic_cover(
+        &self,
+        conic: &EdgeCurve,
+        along: Vec3,
+        outer: brepkit_topology::wire::WireId,
+        inner_wires: &[brepkit_topology::wire::WireId],
+    ) -> Option<(f64, f64)> {
+        use std::f64::consts::{PI, TAU};
+        const GAP: f64 = 1e-6;
+        let (centre, normal) = match conic {
+            EdgeCurve::Circle(c) => (c.center(), c.normal()),
+            EdgeCurve::Ellipse(e) => (e.center(), e.normal()),
+            EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => return None,
+        };
+        let slide = along.dot(normal);
+        if slide.abs() < 1e-9 {
+            return None;
+        }
+        let angle = |p: Point3| {
+            let q = p - along * ((p - centre).dot(normal) / slide);
+            let t = match conic {
+                EdgeCurve::Circle(c) => c.project(q),
+                EdgeCurve::Ellipse(e) => e.project(q),
+                EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => 0.0,
+            };
+            t.rem_euclid(TAU)
+        };
+        // Each edge covers the arcs between its consecutive samples, read
+        // the short way round; they are laid in one turn, split at its end.
+        let mut covered: Vec<(f64, f64)> = Vec::new();
+        for wire in std::iter::once(outer).chain(inner_wires.iter().copied()) {
+            for oe in self.topo.wire(wire).ok()?.edges() {
+                let edge = self.topo.edge(oe.edge()).ok()?;
+                let start = self.topo.vertex(edge.start()).ok()?.point();
+                let end = self.topo.vertex(edge.end()).ok()?.point();
+                let (t0, t1) = edge.curve().domain_with_endpoints(start, end);
+                let at = |k: u32| {
+                    let t = t0 + (t1 - t0) * f64::from(k) / 16.0;
+                    angle(edge.curve().evaluate_with_endpoints(t, start, end))
+                };
+                for k in 0..16 {
+                    let (a, b) = (at(k), at(k + 1));
+                    let step = (b - a + PI).rem_euclid(TAU) - PI;
+                    let (lo, hi) = if step >= 0.0 {
+                        (a, a + step)
+                    } else {
+                        (a + step, a)
+                    };
+                    if lo < 0.0 {
+                        covered.push((lo + TAU, TAU));
+                        covered.push((0.0, hi));
+                    } else if hi > TAU {
+                        covered.push((lo, TAU));
+                        covered.push((0.0, hi - TAU));
+                    } else {
+                        covered.push((lo, hi));
+                    }
+                }
+            }
+        }
+        covered.sort_by(|a, b| a.0.total_cmp(&b.0));
+        // The widest stretch no edge covers, the wrap included: the arc runs
+        // from its far side round to its near side.
+        let (first, _) = *covered.first()?;
+        let mut reach = first;
+        let mut gap = (0.0, 0.0, 0.0);
+        for &(lo, hi) in &covered {
+            if lo - reach > gap.0 {
+                gap = (lo - reach, lo, reach + TAU);
+            }
+            reach = reach.max(hi);
+        }
+        if first + TAU - reach > gap.0 {
+            gap = (first + TAU - reach, first, reach);
+        }
+        if gap.0 < GAP {
+            return Some((0.0, TAU));
+        }
+        Some((gap.1, gap.2))
+    }
+
     /// A surface of linear extrusion: its swept curve moved along a vector.
     /// A line sweeps a plane, a circle swept along its axis a cylinder, and a
     /// B-spline curve the B-spline surface that is linear across the sweep.
@@ -1189,13 +1594,16 @@ impl<'a> StepBuilder<'a> {
                 ))
             }
             EdgeCurve::NurbsCurve(curve) => Ok((Extrusion::Spline(curve, along), false)),
-            EdgeCurve::Line | EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => {
-                Err(IoError::UnsupportedEntity {
-                    entity: format!(
-                        "SURFACE_OF_LINEAR_EXTRUSION #{surface_ref} of this curve and direction"
-                    ),
-                })
+            // An elliptic cylinder, or a circle swept aslant: the conic as a
+            // rational B-spline over the arc each face takes of it.
+            conic @ (EdgeCurve::Ellipse(_) | EdgeCurve::Circle(_)) => {
+                Ok((Extrusion::Conic(conic, along), false))
             }
+            EdgeCurve::Line => Err(IoError::UnsupportedEntity {
+                entity: format!(
+                    "SURFACE_OF_LINEAR_EXTRUSION #{surface_ref} of this curve and direction"
+                ),
+            }),
         }
     }
 
@@ -1307,16 +1715,59 @@ impl<'a> StepBuilder<'a> {
                 }
                 let (start, end) = (point_of(refs[0])?, point_of(refs[1])?);
                 boundary.points.extend([start, end]);
-                if self.plain_curve_ref(refs[2])? == profile {
+                // The profile itself, or the same circle written again (a
+                // seam some writers give its own CIRCLE entity), running
+                // the profile's way round or the other.
+                let curve = self.plain_curve_ref(refs[2])?;
+                let along = if curve == profile {
+                    Some(true)
+                } else {
+                    self.same_circle(curve, profile)?
+                };
+                if let Some(along) = along {
                     let tail = attrs.trim_end_matches(')').trim();
                     let against = tail.ends_with(".F.") || tail.ends_with(".FALSE.");
-                    boundary
-                        .on_profile
-                        .push(if against { (end, start) } else { (start, end) });
+                    boundary.on_profile.push(if against == along {
+                        (end, start)
+                    } else {
+                        (start, end)
+                    });
                 }
             }
         }
         Ok(boundary)
+    }
+
+    /// Whether CIRCLE entities `a` and `b` are one circle (the same centre,
+    /// radius and plane, to a file's digits): `Some(true)` where they run
+    /// the same way round, `Some(false)` where they run opposite ways, and
+    /// `None` where they differ or either is not a circle.
+    fn same_circle(&self, a: u64, b: u64) -> Result<Option<bool>, IoError> {
+        let circle = |r: u64| -> Result<Option<(Point3, Vec3, f64)>, IoError> {
+            let entity = self.get_entity(r)?;
+            if entity.entity_type != "CIRCLE" {
+                return Ok(None);
+            }
+            let (Some(&axis), Some(&radius)) = (
+                parse_refs(&entity.attrs).first(),
+                parse_floats(&entity.attrs).first(),
+            ) else {
+                return Ok(None);
+            };
+            let (center, normal, _) = self.build_axis2_placement(axis)?;
+            Ok(normal
+                .normalize()
+                .ok()
+                .map(|normal| (center, normal, radius)))
+        };
+        let (Some((ca, na, ra)), Some((cb, nb, rb))) = (circle(a)?, circle(b)?) else {
+            return Ok(None);
+        };
+        let tol = 1e-9 * (1.0 + ra.abs() + (ca - Point3::new(0.0, 0.0, 0.0)).length());
+        if (ca - cb).length() > tol || (ra - rb).abs() > tol || na.cross(nb).length() > 1e-9 {
+            return Ok(None);
+        }
+        Ok(Some(na.dot(nb) > 0.0))
     }
 
     /// The unit direction of a VECTOR entity.
@@ -1616,6 +2067,9 @@ fn spans_lie_on_sphere(
 enum Extrusion {
     Surface(FaceSurface),
     Spline(brepkit_math::nurbs::NurbsCurve, Vec3),
+    /// A circle or an ellipse swept along a direction: a B-spline over the
+    /// arc each face covers.
+    Conic(EdgeCurve, Vec3),
 }
 
 /// The lowest and highest heights along unit `along` that an edge from
@@ -1668,6 +2122,52 @@ fn conic_height_span(h0: f64, a: f64, b: f64, (t0, t1): (f64, f64)) -> (f64, f64
         }
     }
     span
+}
+
+/// The arc `t0..t1` of a circle or an ellipse as a rational quadratic
+/// B-spline, in pieces of at most a quarter turn: each piece's middle
+/// control point is the conic's point at its middle angle pushed out from
+/// the centre by the secant of half its sweep, as a circle's is (an ellipse
+/// is a circle's affine image), weighted by that cosine. Its knots are the
+/// pieces' angles.
+fn conic_arc_nurbs(
+    conic: &EdgeCurve,
+    t0: f64,
+    t1: f64,
+) -> Result<brepkit_math::nurbs::NurbsCurve, brepkit_math::MathError> {
+    use std::f64::consts::FRAC_PI_2;
+    let (centre, at): (Point3, Box<dyn Fn(f64) -> Point3 + '_>) = match conic {
+        EdgeCurve::Circle(c) => (c.center(), Box::new(|t| c.evaluate(t))),
+        EdgeCurve::Ellipse(e) => (e.center(), Box::new(|t| e.evaluate(t))),
+        EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => {
+            return Err(brepkit_math::MathError::ParameterOutOfRange {
+                value: t0,
+                min: t0,
+                max: t1,
+            });
+        }
+    };
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let pieces = ((t1 - t0) / FRAC_PI_2 - 1e-9).ceil().max(1.0) as u32;
+    let sweep = (t1 - t0) / f64::from(pieces);
+    let w = (sweep / 2.0).cos();
+    let mut control_points = Vec::new();
+    let mut weights = Vec::new();
+    let mut knots = vec![t0; 3];
+    for k in 0..pieces {
+        let a = t0 + sweep * f64::from(k);
+        control_points.push(at(a));
+        weights.push(1.0);
+        control_points.push(centre + (at(a + sweep / 2.0) - centre) * (1.0 / w));
+        weights.push(w);
+        if k > 0 {
+            knots.extend([a, a]);
+        }
+    }
+    control_points.push(at(t1));
+    weights.push(1.0);
+    knots.extend([t1; 3]);
+    brepkit_math::nurbs::NurbsCurve::new(2, knots, control_points, weights)
 }
 
 /// `curve` swept along unit `along` far enough to cover heights `lo..=hi`
@@ -3297,6 +3797,229 @@ mod tests {
         let union = 48.0 + 10.0 / 3.0 * std::f64::consts::PI;
         let volume = brepkit_operations::measure::solid_volume(&topo, fused, 0.001).unwrap();
         assert!((volume - union).abs() < 1e-3 * union, "{volume} vs {union}");
+    }
+
+    /// The lower half of a ball of radius 2 about the origin, its sphere
+    /// written in the frame about `axis`, its wire running along its rim
+    /// (z = 0) and down the arc about `seam` from (2, 0, 0) to `pole`, out
+    /// and back, as some writers write a hemisphere.
+    fn hemisphere_step(axis: [f64; 3], seam: [f64; 3], pole: [f64; 3]) -> String {
+        let d = |v: [f64; 3]| format!("({:?},{:?},{:?})", v[0], v[1], v[2]);
+        format!(
+            "ISO-10303-21;\nHEADER;\nENDSEC;\nDATA;\n\
+            #1 = MANIFOLD_SOLID_BREP('',#2);\n\
+            #2 = CLOSED_SHELL('',(#3,#40));\n\
+            #3 = ADVANCED_FACE('',(#4),#30,.T.);\n\
+            #4 = FACE_BOUND('',#5,.T.);\n\
+            #5 = EDGE_LOOP('',(#6,#7,#8));\n\
+            #6 = ORIENTED_EDGE('',*,*,#10,.F.);\n\
+            #7 = ORIENTED_EDGE('',*,*,#20,.T.);\n\
+            #8 = ORIENTED_EDGE('',*,*,#20,.F.);\n\
+            #10 = EDGE_CURVE('',#11,#11,#13,.T.);\n\
+            #11 = VERTEX_POINT('',#12);\n\
+            #12 = CARTESIAN_POINT('',(2.,0.,0.));\n\
+            #13 = CIRCLE('',#14,2.);\n\
+            #14 = AXIS2_PLACEMENT_3D('',#15,#16,#17);\n\
+            #15 = CARTESIAN_POINT('',(0.,0.,0.));\n\
+            #16 = DIRECTION('',(0.,0.,1.));\n\
+            #17 = DIRECTION('',(1.,0.,0.));\n\
+            #20 = EDGE_CURVE('',#11,#21,#23,.T.);\n\
+            #21 = VERTEX_POINT('',#22);\n\
+            #22 = CARTESIAN_POINT('',{});\n\
+            #23 = CIRCLE('',#24,2.);\n\
+            #24 = AXIS2_PLACEMENT_3D('',#15,#25,#17);\n\
+            #25 = DIRECTION('',{});\n\
+            #30 = SPHERICAL_SURFACE('',#31,2.);\n\
+            #31 = AXIS2_PLACEMENT_3D('',#15,#32,#17);\n\
+            #32 = DIRECTION('',{});\n\
+            #40 = ADVANCED_FACE('',(#41),#44,.T.);\n\
+            #41 = FACE_BOUND('',#42,.T.);\n\
+            #42 = EDGE_LOOP('',(#43));\n\
+            #43 = ORIENTED_EDGE('',*,*,#10,.T.);\n\
+            #44 = PLANE('',#14);\n\
+            ENDSEC;\nEND-ISO-10303-21;\n",
+            d(pole),
+            d(seam),
+            d(axis)
+        )
+    }
+
+    /// The axis of the sphere a hemisphere reads on and the number of edge
+    /// uses in its sphere face's loop, after checking that it reads as the
+    /// hemisphere and that cutting off its bottom (below z = -1) leaves the
+    /// slab.
+    fn hemisphere_axis(step: &str, cut: bool) -> (Vec3, usize) {
+        let mut topo = Topology::new();
+        let solids = read_step(step, &mut topo).unwrap();
+        assert_eq!(solids.len(), 1);
+        let report = brepkit_operations::validate::validate_solid(&topo, solids[0]).unwrap();
+        assert!(report.is_valid(), "{report:?}");
+        let half = 16.0 * std::f64::consts::PI / 3.0;
+        let volume = brepkit_operations::measure::solid_volume(&topo, solids[0], 0.001).unwrap();
+        assert!((volume - half).abs() < 1e-3 * half, "{volume} vs {half}");
+        let (axis, rim) = brepkit_topology::explorer::solid_faces(&topo, solids[0])
+            .unwrap()
+            .into_iter()
+            .find_map(|f| {
+                let face = topo.face(f).unwrap();
+                match face.surface() {
+                    FaceSurface::Sphere(sphere) => Some((
+                        sphere.z_axis(),
+                        topo.wire(face.outer_wire()).unwrap().edges().len(),
+                    )),
+                    _ => None,
+                }
+            })
+            .unwrap();
+        if !cut {
+            return (axis, rim);
+        }
+
+        let block = brepkit_operations::primitives::make_box(&mut topo, 6.0, 6.0, 2.0).unwrap();
+        let shift = brepkit_math::mat::Mat4::translation(-3.0, -3.0, -3.0);
+        brepkit_operations::transform::transform_solid(&mut topo, block, &shift).unwrap();
+        let slab = brepkit_operations::boolean::boolean(
+            &mut topo,
+            brepkit_operations::boolean::BooleanOp::Cut,
+            solids[0],
+            block,
+        )
+        .unwrap();
+        let report = brepkit_operations::validate::validate_solid(&topo, slab).unwrap();
+        assert!(report.is_valid(), "{report:?}");
+        // pi times the integral of 4 - z^2 over -1..0.
+        let want = 11.0 * std::f64::consts::PI / 3.0;
+        let volume = brepkit_operations::measure::solid_volume(&topo, slab, 0.001).unwrap();
+        assert!((volume - want).abs() < 1e-3 * want, "{volume} vs {want}");
+        (axis, rim)
+    }
+
+    /// A hemisphere written as its rim and a seam run down to the pole of
+    /// the frame its sphere is written in, out and back, reads as a cap about
+    /// its rim's axis, the rim alone its loop: the rim is then the sphere's
+    /// equator. Read in a frame its rim is no latitude of, its rim lay off
+    /// the `(u, v)` grid and a ball's mirror image cut differently from it.
+    /// A rim already a latitude keeps the file's frame and its seam.
+    #[test]
+    fn a_hemisphere_s_seam_to_its_frame_s_pole_reads_as_a_cap() {
+        for (axis, seam, pole, uses, cut) in [
+            // Turned: a = (0, 0.6, 0.8), the seam its meridian through
+            // (2, 0, 0) down to its pole -2a.
+            (
+                [0.0, 0.6, 0.8],
+                [0.0, 0.8, -0.6],
+                [0.0, -1.2, -1.6],
+                1,
+                true,
+            ),
+            // About -Z, the rim its equator and the seam its meridian. Its
+            // cut is `a_seamed_hemisphere_cut_across_its_seam_splits_it`.
+            (
+                [0.0, 0.0, -1.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0, -2.0],
+                3,
+                false,
+            ),
+        ] {
+            let (read, rim) = hemisphere_axis(&hemisphere_step(axis, seam, pole), cut);
+            assert!(
+                (read - Vec3::new(0.0, 0.0, -1.0)).length() < 1e-9,
+                "{axis:?}: {read:?}"
+            );
+            assert_eq!(rim, uses, "{axis:?}");
+        }
+    }
+
+    /// The hemisphere about -Z that keeps its seam, cut by a box below
+    /// z = -1: the latitude at z = -1 crosses the seam, which runs from the
+    /// rim to the pole and back, and the seam is not split there, so the
+    /// band keeps the whole seam with the latitude as a hole across it (an
+    /// invalid face, though its volume is right).
+    #[test]
+    #[ignore = "ready repro: a sphere's seam run to its pole and back is not split by a latitude section"]
+    fn a_seamed_hemisphere_cut_across_its_seam_splits_it() {
+        hemisphere_axis(
+            &hemisphere_step([0.0, 0.0, -1.0], [0.0, 1.0, 0.0], [0.0, 0.0, -2.0]),
+            true,
+        );
+    }
+
+    /// A ball cut by a tilted plane, its sphere face written with the
+    /// sphere's pole as a vertex loop and the cut circle as its one edge
+    /// loop: the face is the big part round that pole. Its loop alone
+    /// encloses the small cap on the sphere's own axis, which the mesher
+    /// took, so the body's centre came out in the cap.
+    #[test]
+    fn tilted_cut_ball_meshes_the_side_its_vertex_loop_names() {
+        // Radius 2, cut at distance 1 along n = (0, 0.96, 0.28), far enough
+        // from the sphere's axis that the cap misses its pole; the circle's
+        // axis points out of the material.
+        let step = "ISO-10303-21;\nHEADER;\nENDSEC;\nDATA;\n\
+            #1 = MANIFOLD_SOLID_BREP('',#2);\n\
+            #2 = CLOSED_SHELL('',(#3,#30));\n\
+            #3 = ADVANCED_FACE('',(#4,#7),#8,.T.);\n\
+            #4 = FACE_BOUND('',#5,.T.);\n\
+            #5 = VERTEX_LOOP('',#6);\n\
+            #6 = VERTEX_POINT('',#13);\n\
+            #13 = CARTESIAN_POINT('',(0.,0.,-2.));\n\
+            #7 = FACE_BOUND('',#14,.T.);\n\
+            #14 = EDGE_LOOP('',(#15));\n\
+            #15 = ORIENTED_EDGE('',*,*,#16,.F.);\n\
+            #16 = EDGE_CURVE('',#17,#17,#18,.T.);\n\
+            #17 = VERTEX_POINT('',#19);\n\
+            #19 = CARTESIAN_POINT('',(1.7320508075688772,0.96,0.28));\n\
+            #18 = CIRCLE('',#21,1.7320508075688772);\n\
+            #21 = AXIS2_PLACEMENT_3D('',#22,#23,#24);\n\
+            #22 = CARTESIAN_POINT('',(0.,0.96,0.28));\n\
+            #23 = DIRECTION('',(0.,0.96,0.28));\n\
+            #24 = DIRECTION('',(1.,0.,0.));\n\
+            #8 = SPHERICAL_SURFACE('',#9,2.);\n\
+            #9 = AXIS2_PLACEMENT_3D('',#10,#11,#12);\n\
+            #10 = CARTESIAN_POINT('',(0.,0.,0.));\n\
+            #11 = DIRECTION('',(0.,0.,1.));\n\
+            #12 = DIRECTION('',(1.,0.,0.));\n\
+            #30 = ADVANCED_FACE('',(#31),#34,.T.);\n\
+            #31 = FACE_BOUND('',#32,.T.);\n\
+            #32 = EDGE_LOOP('',(#33));\n\
+            #33 = ORIENTED_EDGE('',*,*,#16,.T.);\n\
+            #34 = PLANE('',#21);\n\
+            ENDSEC;\nEND-ISO-10303-21;\n";
+        let mut topo = Topology::new();
+        let solids = read_step(step, &mut topo).unwrap();
+        assert_eq!(solids.len(), 1);
+        let pi = std::f64::consts::PI;
+        // The ball less a cap 1 high: 32 pi / 3 - 5 pi / 3.
+        let body = 9.0 * pi;
+        let volume = brepkit_operations::measure::solid_volume(&topo, solids[0], 0.01).unwrap();
+        assert!((volume - body).abs() < 1e-3 * body, "{volume} vs {body}");
+        // The sphere face has 2 pi R (R + d) of the sphere, and its mesh
+        // covers that, not the cap's 2 pi R (R - d).
+        let sphere_face = brepkit_topology::explorer::solid_faces(&topo, solids[0])
+            .unwrap()
+            .into_iter()
+            .find(|&f| matches!(topo.face(f).unwrap().surface(), FaceSurface::Sphere(_)))
+            .unwrap();
+        let mesh = brepkit_operations::tessellate::tessellate(&topo, sphere_face, 0.01).unwrap();
+        let meshed: f64 = mesh
+            .indices
+            .chunks_exact(3)
+            .map(|t| {
+                let [a, b, c] = [t[0], t[1], t[2]].map(|i| mesh.positions[i as usize]);
+                0.5 * (b - a).cross(c - a).length()
+            })
+            .sum();
+        let big = 2.0 * pi * 2.0 * 3.0;
+        assert!((meshed - big).abs() < 1e-2 * big, "{meshed} vs {big}");
+        // The cap's moment taken off the ball's: the centre sits a quarter
+        // of the way back along -n.
+        let centre =
+            brepkit_operations::measure::solid_center_of_mass(&topo, solids[0], 0.01).unwrap();
+        let expected = Point3::new(0.0, -0.24, -0.07);
+        assert!(
+            (centre - expected).length() < 1e-3,
+            "{centre:?} vs {expected:?}"
+        );
     }
 
     #[test]

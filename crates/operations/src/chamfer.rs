@@ -193,6 +193,8 @@ pub fn chamfer_two_on(
             });
         }
     }
+    let joined = join_picked_pieces(topo, solid, edges)?;
+    let edges = joined.as_deref().unwrap_or(edges);
     let ids: Vec<EdgeId> = edges.iter().map(|&(e, _)| e).collect();
     // The rim chamfer takes a selection only when every edge is a rim, and
     // the blend engine cannot close a rim, so a mixed selection has no path.
@@ -234,6 +236,112 @@ pub fn chamfer_two_on(
             .map_err(|_| error)
         }
     }
+}
+
+/// A straight edge left in pieces (as a fuse can leave it) picked piece by
+/// piece would take a chamfer per piece, the chamfers meeting end to end
+/// with no face to close them against. When two picked edges are collinear
+/// pieces sharing a vertex and the same two faces, the solid's split edges
+/// are joined first, and each pick moves to the joined edge holding it,
+/// with its reference face. `None` when no picks are pieces.
+fn join_picked_pieces(
+    topo: &mut Topology,
+    solid: SolidId,
+    edges: &[(EdgeId, FaceId)],
+) -> Result<Option<Vec<(EdgeId, FaceId)>>, crate::OperationsError> {
+    use brepkit_topology::edge::EdgeCurve;
+    let segment =
+        |topo: &Topology, e: EdgeId| -> Result<Option<(Point3, Point3)>, crate::OperationsError> {
+            let edge = topo.edge(e)?;
+            if !matches!(edge.curve(), EdgeCurve::Line) {
+                return Ok(None);
+            }
+            Ok(Some((
+                topo.vertex(edge.start())?.point(),
+                topo.vertex(edge.end())?.point(),
+            )))
+        };
+    let adjacency = topo.build_adjacency(solid)?;
+    let faces_of = |e: EdgeId| {
+        let mut f: Vec<usize> = adjacency
+            .faces_for_edge(e)
+            .iter()
+            .map(|f| f.index())
+            .collect();
+        f.sort_unstable();
+        f
+    };
+    let mut pieces = false;
+    'pairs: for (i, &(a, _)) in edges.iter().enumerate() {
+        let Some((a0, a1)) = segment(topo, a)? else {
+            continue;
+        };
+        for &(b, _) in &edges[i + 1..] {
+            let Some((b0, b1)) = segment(topo, b)? else {
+                continue;
+            };
+            let (ea, eb) = (topo.edge(a)?, topo.edge(b)?);
+            let shared = [ea.start(), ea.end()]
+                .iter()
+                .any(|v| *v == eb.start() || *v == eb.end());
+            let (da, db) = (a1 - a0, b1 - b0);
+            let collinear = da.cross(db).length() <= 1e-9 * da.length() * db.length();
+            if shared && collinear && faces_of(a) == faces_of(b) {
+                pieces = true;
+                break 'pairs;
+            }
+        }
+    }
+    if !pieces {
+        return Ok(None);
+    }
+    let picks: Vec<(Point3, FaceId)> = edges
+        .iter()
+        .map(
+            |&(e, f)| -> Result<(Point3, FaceId), crate::OperationsError> {
+                let edge = topo.edge(e)?;
+                let (p, q) = (
+                    topo.vertex(edge.start())?.point(),
+                    topo.vertex(edge.end())?.point(),
+                );
+                Ok((p + (q - p) * 0.5, f))
+            },
+        )
+        .collect::<Result<_, _>>()?;
+    let opts = brepkit_heal::upgrade::unify_same_domain::UnifyOptions {
+        unify_faces: false,
+        ..Default::default()
+    };
+    brepkit_heal::upgrade::unify_same_domain::unify_same_domain(topo, solid, &opts).map_err(
+        |e| crate::OperationsError::InvalidInput {
+            reason: format!("joining a picked edge's pieces: {e}"),
+        },
+    )?;
+    let mut out: Vec<(EdgeId, FaceId)> = Vec::new();
+    for (mid, face) in picks {
+        let mut hit = None;
+        for oe in topo.wire(topo.face(face)?.outer_wire())?.edges() {
+            let Some((p, q)) = segment(topo, oe.edge())? else {
+                continue;
+            };
+            let d = q - p;
+            let t = (mid - p).dot(d) / d.dot(d).max(1e-300);
+            if (0.0..=1.0).contains(&t) && (p + d * t - mid).length() <= 1e-7 * d.length().max(1.0)
+            {
+                hit = Some(oe.edge());
+                break;
+            }
+        }
+        let Some(e) = hit else {
+            return Err(crate::OperationsError::InvalidInput {
+                reason: "a picked chamfer edge was lost joining its pieces".into(),
+            });
+        };
+        if !out.iter().any(|&(o, _)| o == e) {
+            out.push((e, face));
+        }
+    }
+    Ok(Some(out))
 }
 
 /// How chamfer distances are assigned to edges.
