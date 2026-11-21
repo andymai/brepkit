@@ -3199,8 +3199,9 @@ const TRIANGLE_CHUNK: usize = 3 * 1024;
 /// sag, and the triangles' `(u, v)` alone would then trim the face short.
 ///
 /// A triangle keeps its flat contribution where the surface does not
-/// reproduce its corners (a `u` unwrapped past a period, say), or where its
-/// `(u, v)` winding disagrees with its own.
+/// reproduce its corners (a `u` unwrapped past a period, say), where a
+/// corner sits at a pole, or where its `(u, v)` winding disagrees with its
+/// own.
 fn surface_flux_over_mesh(
     uv_mesh: &tessellate::TriangleMeshUV,
     nurbs: Option<&brepkit_math::nurbs::surface::NurbsSurface>,
@@ -3236,7 +3237,12 @@ fn surface_flux_over_mesh(
         (back(u, periods.0), back(v, periods.1))
     };
     // Each vertex's offset from the surface at its (u, v), or `None` past
-    // what a sag can explain.
+    // what a sag can explain, or at a pole. A pole (a cone's apex, where a
+    // ruled patch runs to a point) is one point for a whole side of the
+    // domain, so its vertex has no (u, v) of its own: the mesh gives it one
+    // end of that side, and a triangle from it to the rim, read over its
+    // (u, v), sweeps round the surface towards that end instead of running
+    // up the strip it spans.
     let mut ev = s.evaluator();
     let tol = (10.0 * deflection).max(1e-6);
     let offsets: Vec<Option<Vec3>> = pos
@@ -3244,7 +3250,12 @@ fn surface_flux_over_mesh(
         .zip(uvs)
         .map(|(p, uv)| {
             let (u, v) = wrap(uv[0], uv[1]);
-            let d = *p - ev.point(u, v);
+            let (at, s_u, s_v) = ev.point_and_partials(u, v)?;
+            let (lu, lv) = (s_u.length(), s_v.length());
+            if lu.min(lv) <= 1e-9 * lu.max(lv) {
+                return None;
+            }
+            let d = *p - at;
             (d.length() <= tol).then_some(d)
         })
         .collect();
