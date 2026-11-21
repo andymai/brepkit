@@ -189,7 +189,6 @@ fn a_round_past_a_disc_s_thickness_pivots_on_the_bottom_rim() {
 /// rim: the ball rests on the narrow bore's wall and pivots on the wide
 /// bore's rim, and the ledge goes.
 #[test]
-#[ignore = "the volume check needs a measure exact on B-spline and torus bands, which brepkit-operations' does not yet give to 1e-4"]
 fn a_round_past_a_counterbore_ledge_pivots_on_the_wide_bore() {
     const NARROW: f64 = 3.0;
     const WIDE: f64 = 3.4;

@@ -148,9 +148,8 @@ fn walked_rounds_end_on_a_skin_s_corner_edges() {
     assert_eq!(solid_faces(&topo, result.solid).unwrap().len(), 22);
     let mesh = tessellate_solid(&topo, result.solid, 0.01).unwrap();
     assert!(is_watertight(&mesh), "mesh not watertight");
-    // Another kernel's measure of its result of the same fillet. The bands
-    // are B-spline faces, which the measure takes off their mesh: fine.
-    let volume = solid_volume(&topo, result.solid, 1e-4).unwrap();
+    // Another kernel's measure of its result of the same fillet.
+    let volume = solid_volume(&topo, result.solid, 0.001).unwrap();
     let expected = 2.059_604;
     assert!(
         (volume - expected).abs() < 1e-3 * expected,

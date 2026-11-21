@@ -147,13 +147,11 @@ fn the_walls_under_a_ledge_run_up_to_a_round_run_off_it() {
     assert_eq!(solid_faces(&topo, result.solid).unwrap().len(), 15);
     let mesh = tessellate_solid(&topo, result.solid, 0.5).unwrap();
     assert!(is_watertight(&mesh), "mesh not watertight");
-    // Another kernel's result of the same fillet, as brepkit measures it
-    // finely. The band is a B-spline face, which the measure takes off its
-    // mesh: at 0.1 it reads 9e-5 light.
+    // As brepkit measures another kernel's result of the same fillet.
     let volume = solid_volume(&topo, result.solid, 0.1).unwrap();
     let expected = 91_719_505.63;
     assert!(
-        (volume - expected).abs() < 1e-4 * expected,
+        (volume - expected).abs() < 1e-5 * expected,
         "volume {volume}, expected {expected}"
     );
 }

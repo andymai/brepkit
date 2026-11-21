@@ -592,6 +592,38 @@ fn a_cavity_survives_a_chamfer_of_an_outer_edge() {
     );
 }
 
+/// Both bottom end edges of the box with pieced ends, each picked as its
+/// two pieces, chamfered 30 along the bottom and 12 up the ends: each edge
+/// takes one chamfer along its whole length, not one per piece meeting end
+/// to end with no face to close them against.
+#[test]
+fn a_straight_edge_picked_in_pieces_takes_one_chamfer() {
+    let (d1, d2) = (30.0, 12.0);
+    let mut topo = Topology::new();
+    let solid = box_with_pieced_ends(&mut topo);
+    let mut picks = Vec::new();
+    for x in [-100.0, 100.0] {
+        for (y0, y1) in [(-40.0, -36.0), (-36.0, 40.0)] {
+            let edge = edge_between(
+                &topo,
+                solid,
+                Point3::new(x, y0, -20.0),
+                Point3::new(x, y1, -20.0),
+            );
+            picks.push((edge, plane_along(&topo, solid, edge, [0.0, 0.0, -1.0])));
+        }
+    }
+    let cut = chamfer_two_on(&mut topo, solid, &picks, d1, d2).unwrap();
+    let report = validate_solid(&topo, cut).unwrap();
+    assert!(report.is_valid(), "{:?}", report.issues);
+    let want = 200.0 * 80.0 * 20.0 - 2.0 * 0.5 * d1 * d2 * 80.0;
+    let volume = solid_volume(&topo, cut, 0.001).unwrap();
+    assert!(
+        (volume - want).abs() < 1e-6 * want,
+        "volume {volume}, want {want}"
+    );
+}
+
 /// A cavity's rim: a 10 block less a round cavity of radius 2 from z = 3 to
 /// 7, its ceiling's rim chamfered 0.5 into the ceiling and 0.3 down the
 /// wall. The chamfer fills the corner: the rim's triangle swept round the

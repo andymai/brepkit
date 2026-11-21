@@ -361,7 +361,6 @@ fn an_elliptic_slabs_two_rims_round_off_together() {
 /// from the wall, and the wall goes. At height `z` the section is the
 /// outline set in by `d(z)`, of area `A - P d + pi d^2`.
 #[test]
-#[ignore = "the volume check needs a measure exact on B-spline and torus bands, which brepkit-operations' does not yet give to 1e-4"]
 fn crossing_rounds_on_both_rims_pivot() {
     let length = perimeter();
     for r in [2.5, 3.0] {
