@@ -622,6 +622,97 @@ fn a_straight_edge_picked_in_pieces_takes_one_chamfer() {
         (volume - want).abs() < 1e-6 * want,
         "volume {volume}, want {want}"
     );
+    // The pieces are joined on a copy: the picked solid keeps them.
+    let kept = brepkit_topology::explorer::solid_edges(&topo, solid).unwrap();
+    for (edge, _) in picks {
+        assert!(kept.contains(&edge), "piece {edge:?} left the picked solid");
+    }
+}
+
+/// The two pieces of one bottom end edge picked with different reference
+/// faces, the bottom for one and the end for the other: joined, the edge
+/// would take one of them silently, so the chamfer is refused.
+#[test]
+fn pieces_of_one_edge_with_two_reference_faces_are_refused() {
+    let mut topo = Topology::new();
+    let solid = box_with_pieced_ends(&mut topo);
+    let bottom = [0.0, 0.0, -1.0];
+    let end = [-1.0, 0.0, 0.0];
+    let picks: Vec<(EdgeId, FaceId)> = [((-40.0, -36.0), bottom), ((-36.0, 40.0), end)]
+        .into_iter()
+        .map(|((y0, y1), normal)| {
+            let edge = edge_between(
+                &topo,
+                solid,
+                Point3::new(-100.0, y0, -20.0),
+                Point3::new(-100.0, y1, -20.0),
+            );
+            (edge, plane_along(&topo, solid, edge, normal))
+        })
+        .collect();
+    let error = chamfer_two_on(&mut topo, solid, &picks, 30.0, 12.0).unwrap_err();
+    assert!(
+        error.to_string().contains("two different reference faces"),
+        "{error}"
+    );
+}
+
+/// The box with pieced ends with a square pocket 20 wide and 5 deep sunk
+/// into its top: both bottom end edges picked as their pieces, and one of
+/// the pocket's rim edges, which lies on the top face's hole, picked
+/// against the top. Joining the pieces finds the rim edge on the hole, so
+/// the selection reaches the blend engine, which answers it as it answers
+/// the rim edge picked alone.
+#[test]
+fn a_hole_rim_pick_is_found_after_its_pieces_join() {
+    let (d1, d2) = (4.0, 2.0);
+    let mut topo = Topology::new();
+    let block = box_with_pieced_ends(&mut topo);
+    let pocket = make_box(&mut topo, 20.0, 20.0, 10.0).unwrap();
+    transform_solid(&mut topo, pocket, &Mat4::translation(-10.0, -10.0, -5.0)).unwrap();
+    let solid = boolean(&mut topo, BooleanOp::Cut, block, pocket).unwrap();
+    let mut picks = Vec::new();
+    for x in [-100.0, 100.0] {
+        for (y0, y1) in [(-40.0, -36.0), (-36.0, 40.0)] {
+            let edge = edge_between(
+                &topo,
+                solid,
+                Point3::new(x, y0, -20.0),
+                Point3::new(x, y1, -20.0),
+            );
+            picks.push((edge, plane_along(&topo, solid, edge, [0.0, 0.0, -1.0])));
+        }
+    }
+    let rim = edge_between(
+        &topo,
+        solid,
+        Point3::new(-10.0, -10.0, 0.0),
+        Point3::new(10.0, -10.0, 0.0),
+    );
+    let top = plane_along(&topo, solid, rim, [0.0, 0.0, 1.0]);
+    assert!(
+        !topo.face(top).unwrap().inner_wires().is_empty(),
+        "the pocket's rim is on the top face's hole"
+    );
+    let alone = chamfer_two_on(&mut topo, solid, &[(rim, top)], d1, d2).map(|_| ());
+    picks.push((rim, top));
+    let together = chamfer_two_on(&mut topo, solid, &picks, d1, d2).map(|_| ());
+    let reason = |r: &Result<(), OperationsError>| match r {
+        Ok(()) => "ok".to_owned(),
+        Err(e) => e.to_string(),
+    };
+    assert!(
+        !reason(&together).contains("lost joining its pieces"),
+        "{}",
+        reason(&together)
+    );
+    assert_eq!(
+        reason(&together).contains("could not be blended"),
+        reason(&alone).contains("could not be blended"),
+        "together: {}, alone: {}",
+        reason(&together),
+        reason(&alone)
+    );
 }
 
 /// A cavity's rim: a 10 block less a round cavity of radius 2 from z = 3 to
