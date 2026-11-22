@@ -352,6 +352,11 @@ fn ellipse_project_finds_the_nearest_point() {
     let t = wide.project(p);
     assert!((t - 0.3_f64.acos()).abs() < 1e-12, "{t}");
     assert!(((wide.evaluate(t) - p).length_squared() - 3.8).abs() < 1e-12);
+    // A point so far off that the squares of its coordinates overflow: its
+    // nearest point is where the normal runs along `(1, 1)`, `tan t = b / a`.
+    let far = centre + wide.u_axis() * 1e200 + wide.v_axis() * 1e200;
+    let t = wide.project(far);
+    assert!((t - 2.0_f64.atan2(3.0)).abs() < 1e-12, "{t}");
     // At the centre of a circle every point is nearest: `0`. At the centre
     // of a longer ellipse, the end of its shorter semi-axis.
     assert!(ellipses[2].project(centre).abs() < 1e-15);

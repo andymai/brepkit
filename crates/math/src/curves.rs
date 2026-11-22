@@ -949,7 +949,7 @@ fn lagrange_root(n0: f64, d: f64, z1: f64) -> f64 {
     let (mut lo, mut hi) = if f < 0.0 {
         (z1, 1.0)
     } else {
-        (1.0, n0.madd(n0, z1 * z1).sqrt())
+        (1.0, n0.hypot(z1))
     };
     // Halving alone ends within the 2100 halvings a double's exponent range
     // allows; Newton ends far sooner.
