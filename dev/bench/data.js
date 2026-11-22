@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795321372577,
+  "lastUpdate": 1795324178704,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -74681,6 +74681,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 21405001,
             "range": "± 68756",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "a173f078af567e8cdb7654fd27cdeb65973cac18",
+          "message": "fix(io,math,operations,algo): read STL sides by vertex order, end CDT flip cycles, and put sphere bands on their spheres (#2655)\n\n## Summary\n\nThis change fixes five gaps in mesh import, the constrained\ntriangulation, revolve, the STEP reader and the face splitter:\n\n- `importStlParts` read a cavity whose triangles wind inward, but whose\n`facet normal` lines point outward, as a second solid (#2638). It now\nreads the cavity, as `importIndexedMeshParts` does for the same\ntriangles.\n- The CDT could flip one edge back and forth until its pass limit\n(#2652, item 1).\n- A revolved sphere band left its vertices and meridian arcs up to 1e-6\nr off its sphere (#2652, item 2).\n- The STEP reader kept the file's frame for a sphere band with no holes,\nalso where the band's rims do not fit that frame. The band's mesh was\nthen open (#2652, item 3).\n- On a curved face, a section could end between 1e-7 and 1e-5 off a\nwoven hole's circle or ellipse. The hole did not split there (#2637).\n\nFixes #2638, fixes #2652, fixes #2637.\n\n## The change\n\n- **Mesh import (#2638).** `split_bodies` in\n`crates/io/src/stl/import.rs` turned a closed body over when its stored\nnormals voted against its winding. On the issue's file, the inner box\nvoted -3600 of a weight of 3600, so it became a solid. The import now\nreads a triangle's side from its vertex order only. This applies to the\nvote of a closed body and the turn of a triangle in an open body. It\nalso applies to the pairing at a shared edge and to the side a body\ntakes.\n- **CDT flips (#2652, item 1).** `flip_any_crossing_edge` in\n`crates/math/src/cdt/constraints.rs` flipped the convex crossing edge\nwith the lowest index. Where the constraint crossed both diagonals of\nthat quad, the new diagonal took the same slot, and the next pass\nflipped it back. A flip that removes a crossing now goes first. A flip\nthat keeps the count puts its new diagonal behind older edges. The\nrecovery takes no second undo in a row. When it has no flip left, it\ngoes to the split at once.\n- **Revolved sphere band (#2652, item 2).** `revolution_sphere_band` put\nthe sphere's centre on the axis but left the vertices and meridian arcs\non the input arc. A new `axis_sphere_meridian` puts the centre at the\naxis point equally far from both arc ends, measured from the arc\ncentre's foot on the axis. The arc's edge in each ring and in the start\ncap is the sphere's meridian. It takes the arc only when both ends lie\nwithin the linear tolerance of that meridian. `revolution_sphere_band`\nnow takes only a centre within 1e-7 of the axis.\n- **STEP sphere frame (#2652, item 3).** A sphere face with no holes and\nno cap kept the file's frame. About +X, both poles lie on the band, and\nthe mesh was open. `crates/io/src/step/reader.rs` now gives these faces\nthe frame test that faces with holes take. It keeps the file's frame\nwhen every circle is a latitude or a meridian of it. Else it tries +Z,\nthen the frame about the first rim, then +Z.\n- **Hole splits in the weld band (#2637).** In hole mode,\n`find_splits_on_circle` and `find_splits_on_ellipse` accepted a point\nonly within 1e-7, while `point_on_oriented_edge` takes 1e-5. They now\ntake 1e-5 in hole mode and split at the point's foot on the curve.\nBoundary mode keeps 1e-7. `find_splits_on_line` already took 1e-5.\n\n## Tests\n\n- `crates/io/tests/mesh_import_bodies.rs`:\n`an_stl_cavity_wound_inward_with_outward_normal_lines_is_a_cavity` and\n`an_stl_island_in_a_cavity_with_outward_normal_lines_is_a_solid_of_its_own`,\neach on ASCII and binary STL. The cavity file gives 1 solid of 7000 with\n2 shells (before: 2 solids, 8000 and 1000). The island file gives 2\nsolids, 1000 and 19000 (before: 3).\n`stl_parts_read_a_cavity_from_its_vertex_order` in\n`crates/wasm/src/bindings/io.rs` does the same through the binding.\n- Four tests pinned the old vote and now pin the vertex order:\n`normals_against_the_winding_do_not_turn_a_body`,\n`normals_that_cancel_over_two_cubes_that_share_an_edge_leave_two_solids`,\n`a_body_wound_against_its_normals_at_a_shared_edge_keeps_its_winding`\nand\n`a_cube_and_a_hook_that_cross_keep_their_winding_whatever_their_normals`.\n-\n`a_constraint_recovers_by_flips_where_a_quad_has_both_diagonals_across_it`\nin `crates/math/src/cdt/tests.rs` fails before the change (35 vertices\nagainst 34). Over 4000 random corridors, the fallback flips fell from\n406,102 to 39,851, and the flip-backs from 344,621 to 7. The cases with\na Steiner point fell from 823 to 0. One corridor of 28,499 triangles\ntook 71.3 ms and 115,556 flips before, and takes 1.8 ms and 14 flips\nnow.\n- `crates/operations/tests/revolve_sphere_band_off_axis.rs` revolves an\narc of radius 100 with its centre 5e-7 off the axis. It turns a full\nturn and a quarter turn, upright, tilted and moved, and mirrored. It\nalso gives the axis by a point 1e6 or -1e6 along it. Each vertex and\nedge sample lies within 1e-7 of the sphere (5.0e-7 before). Each result\nis valid, its volume matches the closed form to 1e-7, and its mesh is\nwatertight at deflections 0.5 and 0.05.\n- `an_arc_a_hair_off_the_axis_takes_one_meridian_from_any_axis_point` in\n`revolve.rs` gives the same meridian, centred on the axis, for axis\npoints 0, 1e6 and -1e6. Measured from the axis point, the 1e6 point gave\nno meridian.\n`a_large_arc_whose_ends_no_sphere_about_the_axis_holds_sweeps_no_sphere`\ntakes a radius 1e6 arc whose ends lie 3.75e-7 off any meridian, and now\nmakes no sphere band.\n- `crates/io/tests/step_sphere_band_frame.rs` reads a hand-written STEP\nzone (radius 10, rims at z = 5 and -5) in 7 frames and poses. The\nsphere's axis lies along the band's axis, the solid is valid, and its\nvolume is exact. The mesh is watertight and within 0.3% of that volume.\nBefore, 4 of the 7 meshes were open.\n- `a_hole_conic_splits_at_a_section_end_its_fit_error_off_it` in\n`edge_splitting.rs` splits a circle arc and an ellipse arc at an end\n5e-7 off each, and not at an end 2e-5 off. Boundary mode does not split.\n`a_curved_hole_weaves_at_its_contact_after_near_misses` now expects the\nnear end to split the rim (6 pieces, 5 before).\n- The pose sweep (495 lines) and the truth audit (40 lines) give the\nsame output on main at `bf716d5cf` and on this branch.\n- `cargo nextest run --no-fail-fast -p brepkit-algo -p brepkit-io -p\nbrepkit-operations -p brepkit-wasm -p brepkit-check -p brepkit-heal -p\nbrepkit-math` on `ea6de66f4`: 4888 tests run, 4888 passed, 32 skipped.\n\n## Still open\n\n- An STL that is inside out in full, with a cavity and with correct\nnormal lines, now gives 2 solids. `import_mesh` refuses it as an\noverlap. Before, the normal vote turned it back.\n- `sheet.rs` (the revolve of an open wire) does not move an arc onto the\naxis sphere. An arc there between 1e-7 and 1e-6 r off the axis now gets\nthe exact B-spline band, not a sphere.\n- A STEP sphere face whose circles fit none of the frames still falls\nback to +Z.\n- A profile arc that crosses the axis gives a solid that\n`validate_solid` accepts, with the right volume, but its mesh is open. I\nfiled it as #2659.\n- For #2637, I know no model that ends a section that far off an\nanalytic hole edge. The tests are at unit level.",
+          "timestamp": "2026-11-22T05:06:10Z",
+          "tree_id": "8206749adf51ce6807419ce951d522fbdd5861ef",
+          "url": "https://github.com/andymai/brepkit/commit/a173f078af567e8cdb7654fd27cdeb65973cac18"
+        },
+        "date": 1795324169644,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 954666,
+            "range": "± 2310",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1013742,
+            "range": "± 33521",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11501,
+            "range": "± 111",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 626571,
+            "range": "± 4669",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 21458320,
+            "range": "± 45888",
             "unit": "ns/iter"
           }
         ]
