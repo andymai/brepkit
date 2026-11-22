@@ -4801,11 +4801,36 @@ fn clip_line_to_face_boundary(
     // another section crosses it, and runs to the rim crosses the boundary
     // once (a block's side meeting a disc's wall from the circle where a
     // coaxial cone stands on it). The face's own loops read its windows.
-    let lateral_partial = crossings.len() < 2
-        && matches!(
-            face.surface(),
-            FaceSurface::Cylinder(_) | FaceSurface::Cone(_)
-        );
+    //
+    // So do they for any ruling on a cylinder with no holes (a holed face's
+    // sections feed the hole weave whole), unless it runs along one of the
+    // wall's lines. A ruling lies on the surface, and a chord of a curved
+    // edge cuts inside it, so the two meet only at the chord's ends. Read
+    // in the plane the two directions span, they cross wherever their
+    // shadows do, which turns with the pose, and two such crossings behind
+    // a ruling inside a wall leave it no window. A cone keeps the chord
+    // reading: a pointed cone halved through its axis needs it.
+    let lateral = matches!(
+        face.surface(),
+        FaceSurface::Cylinder(_) | FaceSurface::Cone(_)
+    );
+    let ruling_on_holeless_cylinder = matches!(face.surface(), FaceSurface::Cylinder(_))
+        && face.inner_wires().is_empty()
+        && {
+            let mid = line_start + line_dir * 0.5;
+            face.surface()
+                .project_point(mid)
+                .and_then(|(u, v)| face.surface().evaluate(u, v))
+                .is_some_and(|foot| (foot - mid).length() <= 100.0 * tol)
+        }
+        && !boundary_segments
+            .iter()
+            .zip(&boundary_arcs)
+            .any(|(&(a, b), arc)| {
+                let off = |p: Point3| (p - line_start).cross(line_dir).length() / line_len;
+                arc.is_none() && off(a) <= tol && off(b) <= tol
+            });
+    let lateral_partial = lateral && (crossings.len() < 2 || ruling_on_holeless_cylinder);
     if crossings.len() < 2 && !single_crossing_ok && !holed_plane_partial && !lateral_partial {
         return None;
     }
