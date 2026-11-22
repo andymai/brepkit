@@ -31,12 +31,20 @@
 //! `cutAllBisect` no longer retries a throwing n-way cut by recursively
 //! bisecting (re-running the expensive NURBS-faced `pcut1` each time).
 //!
-//! `honeycomb_cut_no_longer_throws` locks in that pcut0..3 all return Ok. A
-//! residual remains: the cuts leave some free edges (an open shell), because the
-//! cap's correct partition introduces vertices its NEIGHBOR analytic faces don't
-//! yet share (a cross-face partition-consistency gap, not an assembler failure).
-//! `honeycomb_cut_residual_documented` pins those residual free-edge counts so a
-//! future cross-face-reconciliation fix is forced to update them (toward free=0).
+//! `honeycomb_cut_no_longer_throws` locks in that pcut0, pcut2 and pcut3 return
+//! Ok. A residual remains: the cuts leave some free edges (an open shell),
+//! because the cap's correct partition introduces vertices its NEIGHBOR
+//! analytic faces don't yet share (a cross-face partition-consistency gap, not
+//! an assembler failure). `honeycomb_cut_residual_documented` pins those
+//! residual free-edge counts so a future cross-face-reconciliation fix is forced
+//! to update them (toward free=0).
+//!
+//! The raw engine refuses pcut1. Its honeycomb wall crosses the body's inner
+//! wall at y = -40.55, a planar B-spline face, in sections the face splitter
+//! does not lay out, so that face would stand whole across a section with the
+//! tool on one side of it and not the other. The raw result was an open shell
+//! (50 free edges). `operations::boolean`, which the tool calls, still builds
+//! pcut1's cut exactly: `honeycomb_pcut1_holds_in_the_boolean`.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -141,7 +149,6 @@ fn honeycomb_cut_no_longer_throws() {
     // retries a throwing n-way cut, so the multi-minute hang is gone.
     for tool in [
         "a2hcomb_pcut0.bin",
-        "a2hcomb_pcut1.bin",
         "a2hcomb_pcut2.bin",
         "a2hcomb_pcut3.bin",
     ] {
@@ -238,11 +245,10 @@ fn honeycomb_cut_residual_documented() {
     // classifier (the O-shape chamfer-strip fix): pcut1 IMPROVED 83 -> 50
     // and pcut2 30 -> 28 (unanimous generic re-casts correcting grazed
     // cardinal votes), pcut3 held 0, over-shared stayed 0 everywhere.
-    let residual_free: &[(&str, usize)] = &[
-        ("a2hcomb_pcut1.bin", 50),
-        ("a2hcomb_pcut2.bin", 28),
-        ("a2hcomb_pcut3.bin", 0),
-    ];
+    //
+    // pcut1 left the list when the raw engine began to refuse it (see the
+    // module note); its last raw count was 50.
+    let residual_free: &[(&str, usize)] = &[("a2hcomb_pcut2.bin", 28), ("a2hcomb_pcut3.bin", 0)];
     for &(tool, expect_free) in residual_free {
         let mut topo = Topology::new();
         let body = build_wallcut_body(&mut topo);
@@ -259,4 +265,35 @@ fn honeycomb_cut_residual_documented() {
              ceiling {expect_free} (regression in the cap arrangement?)"
         );
     }
+}
+
+/// The raw engine refuses pcut1 rather than keep the body's inner wall whole
+/// across the tool's wall, and the boolean the tool calls still builds the cut
+/// exactly: valid, with its cones and cylinders, no mesh.
+#[test]
+fn honeycomb_pcut1_holds_in_the_boolean() {
+    use brepkit_operations::boolean::{BooleanOptions, boolean_with_options};
+    let mut topo = Topology::new();
+    let body = build_wallcut_body(&mut topo);
+    let p = load("a2hcomb_pcut1.bin", &mut topo);
+    let raw = gfa::boolean(&mut topo, BooleanOp::Cut, body, p);
+    assert!(
+        matches!(raw, Err(brepkit_algo::error::AlgoError::FaceSplitFailed(_))),
+        "the raw engine must refuse pcut1: {raw:?}"
+    );
+    let options = BooleanOptions {
+        mesh_fallback: false,
+        ..BooleanOptions::default()
+    };
+    let r = boolean_with_options(
+        &mut topo,
+        brepkit_operations::boolean::BooleanOp::Cut,
+        body,
+        p,
+        options,
+    )
+    .unwrap();
+    let report = brepkit_operations::validate::validate_solid(&topo, r).unwrap();
+    assert!(report.is_valid(), "{:?}", report.issues);
+    assert!(curved_count(&topo, r) > 0);
 }
