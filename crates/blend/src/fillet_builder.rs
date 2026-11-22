@@ -5151,8 +5151,9 @@ fn point_on_edge(
 }
 
 /// `point`'s distance from an edge, or from its trace on `onto` (each of
-/// its points projected on to that surface): its nearest sample, refined
-/// by golden section between the sample's neighbours.
+/// its points projected on to that surface): in closed form for a line or
+/// an arc with no `onto`, else its nearest sample, refined by golden section
+/// between the sample's neighbours.
 fn edge_distance(
     topo: &Topology,
     edge_id: EdgeId,
@@ -5170,41 +5171,56 @@ fn edge_nearest(
     point: Point3,
     onto: Option<&FaceSurface>,
 ) -> Result<(f64, Point3), BlendError> {
-    const SAMPLES: usize = 64;
+    let Some(onto) = onto else {
+        return Ok(EdgeReads::new(topo, edge_id)?.nearest(point));
+    };
     let edge = topo.edge(edge_id)?;
     let (a, b) = (
         topo.vertex(edge.start())?.point(),
         topo.vertex(edge.end())?.point(),
     );
     let curve = edge.curve();
-    let (t0, t1) = curve.domain_with_endpoints(a, b);
     let at = |t: f64| {
         let on = curve.evaluate_with_endpoints(t, a, b);
         let on = match onto {
-            Some(FaceSurface::Plane { normal, d }) => {
+            FaceSurface::Plane { normal, d } => {
                 on - *normal
                     * ((normal.dot(Vec3::new(on.x(), on.y(), on.z())) - d)
                         / normal.length_squared())
             }
-            Some(surface) => surface
+            surface => surface
                 .project_point(on)
                 .and_then(|(u, v)| surface.evaluate(u, v))
                 .unwrap_or(on),
-            None => on,
         };
         ((on - point).length(), on)
     };
-    let dist = |t: f64| at(t).0;
+    let (t0, t1) = curve.domain_with_endpoints(a, b);
+    let (lo, hi) = nearest_bracket(t0, t1, |t| at(t).0);
+    Ok(at(golden_least(lo, hi, |t| at(t).0)))
+}
+
+/// Points along a curve's domain `t0` to `t1` at which a nearest point is
+/// first looked for.
+const NEAREST_SAMPLES: usize = 64;
+
+/// The parameters of the even samples either side of the sample of `t0`
+/// to `t1` at which `dist` is least.
+fn nearest_bracket(t0: f64, t1: f64, dist: impl Fn(f64) -> f64) -> (f64, f64) {
     #[allow(clippy::cast_precision_loss)]
-    let param = |k: usize| t0 + (t1 - t0) * (k as f64) / (SAMPLES as f64);
-    let nearest = (0..=SAMPLES)
-        .min_by(|&i, &j| dist(param(i)).total_cmp(&dist(param(j))))
-        .unwrap_or(0);
-    // Golden-section refinement between the nearest sample's neighbours.
-    let (mut lo, mut hi) = (
+    let param = |k: usize| t0 + (t1 - t0) * (k as f64) / (NEAREST_SAMPLES as f64);
+    let nearest = (0..=NEAREST_SAMPLES)
+        .map(|k| (k, dist(param(k))))
+        .min_by(|x, y| x.1.total_cmp(&y.1))
+        .map_or(0, |(k, _)| k);
+    (
         param(nearest.saturating_sub(1)),
-        param((nearest + 1).min(SAMPLES)),
-    );
+        param((nearest + 1).min(NEAREST_SAMPLES)),
+    )
+}
+
+/// Where `dist` is least between `lo` and `hi`, by golden section.
+fn golden_least(mut lo: f64, mut hi: f64, dist: impl Fn(f64) -> f64) -> f64 {
     let ratio = 0.5 * (5.0_f64.sqrt() - 1.0);
     for _ in 0..80 {
         let (x1, x2) = (hi - ratio * (hi - lo), lo + ratio * (hi - lo));
@@ -5214,7 +5230,161 @@ fn edge_nearest(
             lo = x1;
         }
     }
-    Ok(at(f64::midpoint(lo, hi)))
+    f64::midpoint(lo, hi)
+}
+
+/// One edge, read for the distances of many points from it: a line or an
+/// arc in closed form; any other curve from the nearest of its even samples,
+/// taken once. A B-spline is refined from that sample by Newton steps on the
+/// squared distance, each step halved until it comes nearer, an ellipse by
+/// golden section, each between the samples either side.
+struct EdgeReads<'a> {
+    curve: &'a EdgeCurve,
+    a: Point3,
+    b: Point3,
+    samples: Vec<(f64, Point3)>,
+}
+
+impl<'a> EdgeReads<'a> {
+    fn new(topo: &'a Topology, edge_id: EdgeId) -> Result<Self, BlendError> {
+        let edge = topo.edge(edge_id)?;
+        let (a, b) = (
+            topo.vertex(edge.start())?.point(),
+            topo.vertex(edge.end())?.point(),
+        );
+        let curve = edge.curve();
+        let samples = match curve {
+            EdgeCurve::Line | EdgeCurve::Circle(_) => Vec::new(),
+            EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_) => {
+                let (t0, t1) = curve.domain_with_endpoints(a, b);
+                (0..=NEAREST_SAMPLES)
+                    .map(|k| {
+                        #[allow(clippy::cast_precision_loss)]
+                        let t = t0 + (t1 - t0) * (k as f64) / (NEAREST_SAMPLES as f64);
+                        (t, curve.evaluate_with_endpoints(t, a, b))
+                    })
+                    .collect()
+            }
+        };
+        Ok(Self {
+            curve,
+            a,
+            b,
+            samples,
+        })
+    }
+
+    /// `point`'s distance from the edge, and the edge's point nearest it.
+    fn nearest(&self, point: Point3) -> (f64, Point3) {
+        if let Some(on) = nearest_on_line_or_arc(self.curve, self.a, self.b, point) {
+            return ((on - point).length(), on);
+        }
+        let Some((k, &(t, at))) = self.samples.iter().enumerate().min_by(|x, y| {
+            (x.1.1 - point)
+                .length_squared()
+                .total_cmp(&(y.1.1 - point).length_squared())
+        }) else {
+            return ((self.a - point).length(), self.a);
+        };
+        let last = self.samples.len() - 1;
+        let (lo, hi) = (
+            self.samples[k.saturating_sub(1)].0,
+            self.samples[(k + 1).min(last)].0,
+        );
+        let on = match self.curve {
+            EdgeCurve::NurbsCurve(nurbs) => {
+                newton_nearest(nurbs, point, (t, at), (lo.min(hi), lo.max(hi)))
+            }
+            curve => {
+                let dist =
+                    |t: f64| (curve.evaluate_with_endpoints(t, self.a, self.b) - point).length();
+                curve.evaluate_with_endpoints(golden_least(lo, hi, dist), self.a, self.b)
+            }
+        };
+        ((on - point).length(), on)
+    }
+}
+
+/// The point of `curve` between `lo` and `hi` nearest `point`, from its point
+/// `at` at `t`: Gauss-Newton steps on the squared distance, each halved until
+/// it comes nearer, so each point taken is nearer than the last.
+fn newton_nearest(
+    curve: &brepkit_math::nurbs::curve::NurbsCurve,
+    point: Point3,
+    (mut t, mut at): (f64, Point3),
+    (lo, hi): (f64, f64),
+) -> Point3 {
+    const MOST_STEPS: usize = 64;
+    const MOST_HALVINGS: usize = 8;
+    let mut gap = (at - point).length_squared();
+    for _ in 0..MOST_STEPS {
+        let Some(&speed) = curve.derivatives(t, 1).get(1) else {
+            break;
+        };
+        let speed_sq = speed.dot(speed);
+        if speed_sq <= 0.0 {
+            break;
+        }
+        let mut step = -speed.dot(at - point) / speed_sq;
+        let mut nearer = false;
+        for _ in 0..MOST_HALVINGS {
+            let next = (t + step).clamp(lo, hi);
+            if (next - t).abs() <= f64::EPSILON * t.abs().max(hi - lo) {
+                break;
+            }
+            let on = curve.evaluate(next);
+            let next_gap = (on - point).length_squared();
+            if next_gap < gap {
+                (t, at, gap) = (next, on, next_gap);
+                nearer = true;
+                break;
+            }
+            step *= 0.5;
+        }
+        if !nearer {
+            break;
+        }
+    }
+    at
+}
+
+/// The point of a line or a circular arc from `a` to `b` nearest `point`:
+/// on the segment, its foot clamped to the ends; on the arc, the point at
+/// `point`'s angle about the axis where the arc spans it, else the end
+/// nearer in angle (the distance grows with the turn from that angle).
+/// `None` for any other curve.
+fn nearest_on_line_or_arc(
+    curve: &EdgeCurve,
+    a: Point3,
+    b: Point3,
+    point: Point3,
+) -> Option<Point3> {
+    match curve {
+        EdgeCurve::Line => {
+            let along = b - a;
+            let length_sq = along.dot(along);
+            let s = if length_sq > 0.0 {
+                ((point - a).dot(along) / length_sq).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            Some(a + along * s)
+        }
+        EdgeCurve::Circle(circle) => {
+            let (t0, t1) = curve.domain_with_endpoints(a, b);
+            let (lo, hi) = (t0.min(t1), t0.max(t1));
+            let t = lo + (circle.project(point) - lo).rem_euclid(std::f64::consts::TAU);
+            let on = |t: f64| curve.evaluate_with_endpoints(t, a, b);
+            Some(if t <= hi {
+                on(t)
+            } else if (point - on(lo)).length() <= (point - on(hi)).length() {
+                on(lo)
+            } else {
+                on(hi)
+            })
+        }
+        EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_) => None,
+    }
 }
 
 /// Where the line `origin + run * s` passes through an edge: the edge's
@@ -11238,6 +11408,115 @@ mod tests {
     /// The notch triangle at a corner filleted r 6: the arc's ends on the two
     /// corner edges and the corner itself.
     const NOTCH: [(f64, f64); 3] = [(6.0, 0.0), (0.0, 0.0), (0.0, 6.0)];
+
+    /// The nearest point of a line or an arc, in closed form, is the nearest
+    /// of 200001 even samples to within the samples' spacing: on a segment,
+    /// on a quarter arc tilted out of its plane's frame, run either way, and
+    /// on a whole circle, from points beside, past the ends and off the
+    /// plane.
+    #[test]
+    fn the_nearest_point_of_a_line_or_arc_is_the_nearest_sample() {
+        use brepkit_math::curves::Circle3D;
+        const SAMPLES: u32 = 200_000;
+        let p = Point3::new;
+        let tilted = Circle3D::new(p(1.0, -2.0, 0.5), Vec3::new(0.2, 0.3, 1.0), 3.0).unwrap();
+        let (t0, t1) = (0.4, 0.4 + std::f64::consts::FRAC_PI_2);
+        let (s, e) = (tilted.evaluate(t0), tilted.evaluate(t1));
+        let whole = tilted.evaluate(1.0);
+        let cases = [
+            (EdgeCurve::Line, p(0.0, 0.0, 0.0), p(10.0, 2.0, -1.0)),
+            (EdgeCurve::Circle(tilted.clone()), s, e),
+            (EdgeCurve::Circle(tilted.clone()), e, s),
+            (EdgeCurve::Circle(tilted), whole, whole),
+        ];
+        let points = [
+            p(4.0, 3.0, 0.0),
+            p(-3.0, -1.0, 2.0),
+            p(12.0, 5.0, -4.0),
+            p(1.0, -2.0, 6.0),
+            p(3.0, 1.0, 0.7),
+            p(-2.5, -4.0, 0.0),
+        ];
+        for (curve, a, b) in &cases {
+            let (t0, t1) = curve.domain_with_endpoints(*a, *b);
+            let at = |k: u32| {
+                curve.evaluate_with_endpoints(
+                    t0 + (t1 - t0) * f64::from(k) / f64::from(SAMPLES),
+                    *a,
+                    *b,
+                )
+            };
+            let spacing = (0..SAMPLES)
+                .map(|k| (at(k + 1) - at(k)).length())
+                .fold(0.0, f64::max);
+            for &point in &points {
+                let on = nearest_on_line_or_arc(curve, *a, *b, point).unwrap();
+                let sampled = (0..=SAMPLES)
+                    .map(|k| (at(k) - point).length())
+                    .fold(f64::INFINITY, f64::min);
+                let found = (on - point).length();
+                assert!(
+                    found <= sampled + 1e-12 && sampled - found <= spacing,
+                    "{curve:?} from {point:?}: {found}, sampled {sampled}"
+                );
+            }
+        }
+    }
+
+    /// A B-spline edge's nearest point, from its nearest sample by Newton
+    /// steps, is the nearest of 200001 even samples to within their spacing,
+    /// run either way; a point on the edge reads as on it.
+    #[test]
+    fn the_nearest_point_of_a_spline_edge_is_the_nearest_sample() {
+        const SAMPLES: u32 = 200_000;
+        let p = Point3::new;
+        let curve = brepkit_math::nurbs::curve::NurbsCurve::new(
+            3,
+            vec![0.0, 0.0, 0.0, 0.0, 0.5, 1.0, 1.0, 1.0, 1.0],
+            vec![
+                p(0.0, 0.0, 0.0),
+                p(2.0, 3.0, 0.5),
+                p(4.0, -2.0, 1.0),
+                p(6.0, 4.0, -0.5),
+                p(8.0, 0.0, 0.0),
+            ],
+            vec![1.0, 0.8, 1.2, 0.9, 1.0],
+        )
+        .unwrap();
+        let (start, end) = (curve.evaluate(0.0), curve.evaluate(1.0));
+        let on_it = curve.evaluate(0.37);
+        let points = [
+            p(3.0, 2.0, 0.0),
+            p(-1.0, -1.0, 1.0),
+            p(9.0, 1.0, -1.0),
+            p(5.0, 0.5, 3.0),
+            on_it,
+        ];
+        for reversed in [false, true] {
+            let mut topo = Topology::new();
+            let v0 = topo.add_vertex(Vertex::new(start, 1e-7));
+            let v1 = topo.add_vertex(Vertex::new(end, 1e-7));
+            let (from, to) = if reversed { (v1, v0) } else { (v0, v1) };
+            let edge = topo.add_edge(Edge::new(from, to, EdgeCurve::NurbsCurve(curve.clone())));
+            let reads = EdgeReads::new(&topo, edge).unwrap();
+            let at = |k: u32| curve.evaluate(f64::from(k) / f64::from(SAMPLES));
+            let spacing = (0..SAMPLES)
+                .map(|k| (at(k + 1) - at(k)).length())
+                .fold(0.0, f64::max);
+            for &point in &points {
+                let (found, on) = reads.nearest(point);
+                assert!(((on - point).length() - found).abs() < 1e-15);
+                let sampled = (0..=SAMPLES)
+                    .map(|k| (at(k) - point).length())
+                    .fold(f64::INFINITY, f64::min);
+                assert!(
+                    found <= sampled + 1e-12 && sampled - found <= spacing,
+                    "reversed {reversed}, from {point:?}: {found}, sampled {sampled}"
+                );
+            }
+            assert!(reads.nearest(on_it).0 < 1e-12);
+        }
+    }
 
     /// The piece of a B-spline edge a spur leaves runs between the split and
     /// the edge's own vertex: where the edge runs against its curve, and

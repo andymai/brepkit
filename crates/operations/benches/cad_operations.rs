@@ -397,6 +397,80 @@ fn bench_box_blend_among_other_shapes(c: &mut Criterion) {
     }
 }
 
+/// The top rim of an L block rounded r 0.5 by the walking engine: the L
+/// made by a fuse of `box(10,4,3)` and `box(4,10,3)`, whose top keeps the
+/// boxes' seams (8 rim edges, made again with the seams merged), and the
+/// same L extruded from its outline (6 rim edges). At the inside corner the
+/// round's contact runs off its ledge, and the walls under the ledge are run
+/// up to the band.
+fn bench_l_rim_fillet(c: &mut Criterion) {
+    use brepkit_math::vec::Point3;
+    use brepkit_operations::blend_ops::fillet_v2;
+    use brepkit_topology::builder::{make_planar_face_from_wire, make_polygon_wire};
+    use criterion::BatchSize;
+
+    let rim = |topo: &Topology, solid| -> Vec<brepkit_topology::edge::EdgeId> {
+        collect_edges(topo, solid)
+            .into_iter()
+            .filter(|&e| {
+                let edge = topo.edge(e).unwrap();
+                let a = topo.vertex(edge.start()).unwrap().point();
+                let b = topo.vertex(edge.end()).unwrap().point();
+                let seam = |u: f64, v: f64, w: f64, z: f64| {
+                    (u - 4.0).abs() < 1e-9 && (v - 4.0).abs() < 1e-9 && w.max(z) <= 4.0 + 1e-9
+                };
+                (a.z() - 3.0).abs() < 1e-9
+                    && (b.z() - 3.0).abs() < 1e-9
+                    && !seam(a.x(), b.x(), a.y(), b.y())
+                    && !seam(a.y(), b.y(), a.x(), b.x())
+            })
+            .collect()
+    };
+    let mut fused = Topology::new();
+    let a = primitives::make_box(&mut fused, 10.0, 4.0, 3.0).unwrap();
+    let b = primitives::make_box(&mut fused, 4.0, 10.0, 3.0).unwrap();
+    let fused_l = boolean(&mut fused, BooleanOp::Fuse, a, b).unwrap();
+    let fused_rim = rim(&fused, fused_l);
+
+    let mut extruded = Topology::new();
+    let outline = [
+        (0.0, 0.0),
+        (10.0, 0.0),
+        (10.0, 4.0),
+        (4.0, 4.0),
+        (4.0, 10.0),
+        (0.0, 10.0),
+    ]
+    .map(|(x, y)| Point3::new(x, y, 0.0));
+    let wire = make_polygon_wire(&mut extruded, &outline, 1e-7).unwrap();
+    let face = make_planar_face_from_wire(&mut extruded, wire).unwrap();
+    let extruded_l =
+        brepkit_operations::extrude::extrude(&mut extruded, face, Vec3::new(0.0, 0.0, 1.0), 3.0)
+            .unwrap();
+    let extruded_rim = rim(&extruded, extruded_l);
+
+    for (label, baseline, solid, edges) in [
+        ("fused L rim+fillet (walking)", &fused, fused_l, &fused_rim),
+        (
+            "extruded L rim+fillet (walking)",
+            &extruded,
+            extruded_l,
+            &extruded_rim,
+        ),
+    ] {
+        c.bench_function(label, |b| {
+            b.iter_batched(
+                || baseline.clone(),
+                |mut topo| {
+                    black_box(fillet_v2(&mut topo, solid, edges, 0.5).unwrap());
+                    topo
+                },
+                BatchSize::LargeInput,
+            );
+        });
+    }
+}
+
 /// Multi-boolean: plate(50,50,10) with 4 cylinder holes.
 fn bench_multi_boolean(c: &mut Criterion) {
     c.bench_function("multi-boolean model", |b| {
@@ -747,6 +821,7 @@ criterion_group! {
         bench_box_fillet_all,
         bench_box_fillet_all_rolling_ball,
         bench_box_blend_among_other_shapes,
+        bench_l_rim_fillet,
         bench_multi_boolean,
 }
 
