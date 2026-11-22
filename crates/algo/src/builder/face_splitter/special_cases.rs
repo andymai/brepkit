@@ -4910,7 +4910,21 @@ pub(super) fn split_face_with_internal_loops(
         }
         // So is a hole of the face all on that side: a ball's hole where a
         // small ball stood, inside the loop of a third ball cut across it,
-        // left on the remainder, lies inside the remainder's new hole.
+        // left on the remainder, lies inside the remainder's new hole. Only
+        // a loop in one plane bounds its cap by that plane: the loop where a
+        // rod meets the ball is not, and its mean plane can take in a hole
+        // that lies outside it.
+        let in_plane: Vec<bool> = loops
+            .iter()
+            .zip(&caps)
+            .map(|(l, cap)| {
+                cap.is_some_and(|(c, n, _)| {
+                    sample_edges_3d(l)
+                        .iter()
+                        .all(|p| (*p - c).dot(n).abs() <= tol_3d * 100.0)
+                })
+            })
+            .collect();
         for (hi, hole) in original_inner_wires.iter().enumerate() {
             if consumed_holes.contains(&hi) {
                 continue;
@@ -4921,6 +4935,9 @@ pub(super) fn split_face_with_internal_loops(
                 let Some((c, n, d)) = cap else {
                     continue;
                 };
+                if !in_plane[li] {
+                    continue;
+                }
                 if !pts.is_empty()
                     && pts.iter().all(|p| (*p - *c).dot(*n) > tol_3d * 100.0)
                     && best.is_none_or(|(bd, _)| *d > bd)
