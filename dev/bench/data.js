@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795375864267,
+  "lastUpdate": 1795378823045,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -75491,6 +75491,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 19634353,
             "range": "± 95422",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ba5d0334de448af1bd9897ab318d250a9862dcd5",
+          "message": "fix(math,check): measure a block with a long D-shaped hole, a closed B-spline wall and a torus corner alike in every pose (#2696)\n\n## Summary\n\nOn main, `solid_volume` reads some exact solids differently from pose to\npose, or far from their closed form:\n\n- a 24 x 24 x 1000 block with a D-shaped hole reads 1.9e-5 low when\ntilted (#2663);\n- a frustum with a B-spline wall, chamfered at its rim, reads 2.2e-5\nhigh at deflection 0.001 (#2665);\n- the corner of a cube inside a torus reads up to 1.46e-8 off its\nintegral mirrored (the residual half of #2674).\n\nWith this change, each of them reads within about 3e-11 of its closed\nform in every pose. In the pose sweep, 337 lines move closer to the\ntruth and none changes its face count, validity or misreads.\n\nFixes #2663, fixes #2665. For #2674, this PR fixes the residual, and the\nspeed half stays open.\n\n## The change\n\n- **A long thin ellipse (#2663).** A flat that leans 5e-8 off a bore's\naxis meets the bore along an ellipse. That ellipse is 2e8 across,\ncentred 1e8 away.\n- `Ellipse3D::project` took the angle of the point drawn onto the\nellipse's major circle. That angle gives the nearest point only on a\ncircle. Turned, the 1e-8 rounding of the centre moved that angle up to\n0.07 along the curve. The edge then missed its vertices, the exact\nboundary integral declined the face, and the block read 6.2 low.\n- `project` now returns the nearest point for every input. It reflects\nthe point into the first quadrant and uses closed forms on the axes.\nElsewhere it finds the root of the Lagrange function by Newton within a\nclosed-form bracket. Its docs give the answer at each tie: the centre of\na circle gives 0.\n- It scales the point and the semi-axes by a power of two near the\nlonger semi-axis, so no square overflows or underflows. A point more\nthan 1e100 semi-axes off reads its nearest point from its direction. An\nellipse whose shorter semi-axis is below the rounding of the longer one\nreads as its longer axis, with no division by the short axis.\n- Upright, the boundary integral took dv/dt from a 5-point stencil,\nwhich magnified the 1.5e-8 rounding of each point. It now takes dv/dt\nfrom the edge's velocity.\n- **Edges off their surface.** That edge velocity is wrong for an edge\nthat lies off its surface. The 32 chords along the equator of\n`make_sphere` are such edges. `Revolution::dv_dt` now differentiates the\nprojection that each chart uses:\n  - a cylinder: the axial velocity;\n- a cone: the axial velocity over sin α, or the radial velocity over cos\nα where the sine vanishes;\n- a ball or a torus: (cos v·ż − sin v·ρ̇) over the point's distance from\nthe meridian's centre.\n- **A closed B-spline wall (#2665).** The boundary integral declined\nevery face on a closed NURBS surface. So the whole solid went to the\nper-face meshes, where each triangle takes one smooth quadrature rule.\nThe wall's rows have double knots, where the surface is only C0. One\ntriangle across u = 0.5 carried 2.17e-5 of the 2.23e-5 error. The\nintegral now cuts a face on a surface closed in one direction open at\nits seam. It then integrates along the boundary, with a whole-turn term\nfor each period that a wire runs on.\n- **Rounding in the halving test.** Along a NURBS edge on the start\nruling, the integrand F is about 0, and each piece integrates only\nrounding. The halving test sized that rounding from |F| itself, so it\nnever settled, and the face fell to the mesh path. It now bounds F's\nrounding by its slope bound times a few ulps of `u`. A side that closes\non itself no longer sets the side tolerance to 0. A row of constant v\nadds nothing only where the edge is proven to be the surface's own side.\nEvery other edge keeps its term.\n- **A torus face far from u = 0 (#2674). The boundary integral on a\nsurface of revolution started at the frame's u = 0. Mirrored, the torus\npatch sits at u ≈ 5.2. So each edge term was about 12 against a face\nflux of 0.234, and the sum lost its digits. The integral now starts at\nthe face's own first wire.\n\n## Tests\n\n- `volume_in_every_pose.rs` measures in several poses against closed\nforms:\n\n| Solid | main | this PR |\n|---|---|---|\n| Block with a D-shaped hole (323259.6525846) | upright -1.7e-8, tilted\n-1.9e-5, mirrored -2.0e-8 | 1.2e-11 to 2.7e-11 |\n| Chamfered B-spline frustum, deflection 0.001 | 2.2e-5 high | within\n1.6e-10 |\n| Cube corner in a torus (0.0100165694786558) | turned 4.1e-10, tilted\n3.6e-9, mirrored -1.46e-8 | 2.4e-11 |\n| Ball less a corner | (caught a regression on this branch: -9.7e-4) |\nwithin 1e-14 |\n| Rod with a cone at each end, rims of 24 chords | (caught a regression\non this branch: -3.7e-3) | exact to the closed form |\n\n- `ellipse_project_finds_the_nearest_point` checks an 11 x 11 grid of\npoints (inside, on both axes, at the centre, far off) for four ellipses\nagainst a dense scan. `ellipse_project_holds_a_long_thin_arc_turned`\npins the long thin arc. `ellipse_project_reads_alike_at_every_scale`\ngives the same angles at scales from 1e-200 to 1e200, and finite nearest\npoints on 7 thin ellipses down to semi-axes (1, 5e-324). A call takes 56\nns on the curve and 145 to 152 ns for any point in a profiling build.\n- `fillet_round_off_a_ledge` reads 37674021.618, as on main, against\nanother kernel's 37674025.42. A converged mesh volume agrees to about\n2e-6.\n- `plate_hole_split_wall_fuse` measures each periodic B-spline wall in\n12 to 18 ms, and the test runs in 0.164 s.\n- `a_sheared_b_spline_patch_keeps_a_trim_with_a_small_slope` keeps an\nedge with a slope of 2⁻¹⁷ in `v`. A bound on rounding dropped it,\n3.81e-6 low.\n- `fillet_flat_beside_a_wall.rs` now measures in each pose and no longer\nturns the result back upright first. On main, two of its tests fail that\nway.\n- `a_rim_on_a_closed_b_spline_wall_chamfers_exactly` in\n`chamfer_walked.rs` now measures at 0.001. On main it fails.\n- Profiling build: the chamfered frustum takes 93 ms against 115 ms, and\nthe whole B-spline frustum 7 ms against 90 ms.\n- `brepkit-math --lib` (735), `brepkit-check --lib` (168), brepkit-algo\nand brepkit-blend (736) pass.\n- With no stop at the first failure: all 96 io test files that call\n`solid_volume` (344 passed) and all 243 operations test files (1130\npassed).\n- The brepkit-operations lib tests for measure, revolve, sweep, loft and\nheal pass. So do 21 integration test files with volume, measure, chamfer\nor fillet_flat in their names, and about 20 other ball, torus, revolve\nand spline files.\n- `check-mul-add.sh` passes.\n- **Truth audit:** no face count, validity or fallback changed. Seven\nlines move closer to the truth. Four lines grow by about the resolution\nof the audit's own truth (largest: ring corner Intersect mirrored, 2e-10\nto 3e-10).\n- **Pose sweep:** 380 lines changed, 337 lower and 43 higher, by 1e-12\nor less, except \"ball column 2.5 + rod mx\" (7.2e-10 to 7.3e-10). For\n\"ball | x > 0.01, y > -1\" a&b, an independent integral converged to\n1e-15 gives 41.687661422232. This PR reads it within 1.4e-14 in all\nposes, and main was up to 1.06e-12 off.\n\n## Still open\n\n- `solid_volume` still integrates a mesh for some NURBS faces. These are\nfaces on a surface with a pole or closed both ways, and faces with a\nwire round the closed direction. When one face of a solid declines, all\nits NURBS faces take the mesh path.\n- `nurbs_face_by_boundary` takes dv from the edge's 3D velocity, so an\nedge off a NURBS surface gives a first-order error.\n- The speed half of #2674.",
+          "timestamp": "2026-11-22T20:16:16Z",
+          "tree_id": "5a47c5a71882308e7a4f75b7cf0998057cdb97b9",
+          "url": "https://github.com/andymai/brepkit/commit/ba5d0334de448af1bd9897ab318d250a9862dcd5"
+        },
+        "date": 1795378810222,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1180781,
+            "range": "± 54793",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1245586,
+            "range": "± 112624",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13396,
+            "range": "± 112",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 784692,
+            "range": "± 11972",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26688120,
+            "range": "± 742874",
             "unit": "ns/iter"
           }
         ]
