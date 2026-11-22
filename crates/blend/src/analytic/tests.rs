@@ -5702,3 +5702,89 @@ fn plane_cone_fillet_open_arc_sweeps_its_own_quarter_either_way_round() {
         );
     }
 }
+
+/// The corner of a D-shaped hole where its flat `y = 5` meets its bore of
+/// radius 10 about `z`, both reversed faces (the hole's walls, their
+/// surfaces' normals pointing into the material) whose wires wind about
+/// those normals: the flat runs the corner down `z`, the bore up it. The
+/// round of 1 along the ruling rests in the hole, its axis 1 off the flat
+/// and 9 from the bore's axis, and touches the flat at `x = sqrt(65)` and
+/// the bore at 10/9 of its axis's point.
+#[test]
+fn plane_cylinder_ruling_fillet_reads_reversed_faces_from_their_wires() {
+    use brepkit_math::surfaces::CylindricalSurface;
+
+    let (wall, flat, r) = (10.0_f64, 5.0_f64, 1.0_f64);
+    let x = (wall * wall - flat * flat).sqrt();
+    let mut topo = Topology::new();
+    let v0 = topo.add_vertex(Vertex::new(Point3::new(x, flat, 0.0), 1e-7));
+    let v1 = topo.add_vertex(Vertex::new(Point3::new(x, flat, 10.0), 1e-7));
+    let corner = topo.add_edge(Edge::new(v0, v1, EdgeCurve::Line));
+    let flat_wire =
+        topo.add_wire(Wire::new(vec![OrientedEdge::new(corner, false)], false).unwrap());
+    let face_plane = topo.add_face(Face::new_reversed(
+        flat_wire,
+        vec![],
+        FaceSurface::Plane {
+            normal: Vec3::new(0.0, 1.0, 0.0),
+            d: flat,
+        },
+    ));
+    let bore = CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), wall)
+        .unwrap();
+    let bore_wire = topo.add_wire(Wire::new(vec![OrientedEdge::new(corner, true)], false).unwrap());
+    let face_cyl = topo.add_face(Face::new_reversed(
+        bore_wire,
+        vec![],
+        FaceSurface::Cylinder(bore.clone()),
+    ));
+    // Each face lies on its wire's left about its surface's normal: the
+    // flat toward -x from the corner, the bore round toward +x and -y.
+    let into_flat = crate::builder_utils::into_face_from_edge(&topo, face_plane, corner)
+        .unwrap()
+        .unwrap();
+    let into_bore = crate::builder_utils::into_face_from_edge(&topo, face_cyl, corner)
+        .unwrap()
+        .unwrap();
+    assert!(into_flat.x() < -0.99, "the flat lies toward {into_flat:?}");
+    assert!(
+        into_bore.x() > 0.0 && into_bore.y() < 0.0,
+        "the bore lies toward {into_bore:?}"
+    );
+
+    let spine = Spine::from_single_edge(&topo, corner).unwrap();
+    // The material lies past the flat, at y > 5.
+    let n_p_inward = Vec3::new(0.0, 1.0, 0.0);
+    let result =
+        plane_cylinder_ruling_fillet(n_p_inward, &bore, &spine, &topo, r, face_plane, face_cyl)
+            .unwrap()
+            .expect("the ruling round");
+    let FaceSurface::Cylinder(band) = &result.stripe.surface else {
+        panic!("a band of {}", result.stripe.surface.type_tag());
+    };
+    let centre_x = ((wall - r).powi(2) - (flat - r).powi(2)).sqrt();
+    let o = band.origin();
+    assert!((band.radius() - r).abs() < 1e-12);
+    assert!(
+        (o.x() - centre_x).abs() < 1e-9 && (o.y() - (flat - r)).abs() < 1e-9,
+        "the band's axis passes {o:?}, not ({centre_x}, {})",
+        flat - r
+    );
+    let section = &result.stripe.sections[0];
+    let on_flat = Point3::new(centre_x, flat, 0.0);
+    let on_bore = Point3::new(
+        centre_x * wall / (wall - r),
+        (flat - r) * wall / (wall - r),
+        0.0,
+    );
+    assert!(
+        (section.p1 - on_flat).length() < 1e-9,
+        "touches the flat at {:?}",
+        section.p1
+    );
+    assert!(
+        (section.p2 - on_bore).length() < 1e-9,
+        "touches the bore at {:?}",
+        section.p2
+    );
+}
