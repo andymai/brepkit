@@ -851,7 +851,7 @@ pub fn perform(
                         }
                     }
                 })
-                .flat_map(|raw| split_lens_off_boundary_edge(topo, fa, fb, raw, tol))
+                .flat_map(|raw| split_lens_off_boundary_edge(topo, arena, fa, fb, raw, tol))
                 .collect();
             // Emit the EXACT faceted-ramp arcs with registry-aware endpoint
             // resolution: each arc's endpoints are bit-identical to the shared
@@ -1445,9 +1445,14 @@ fn polyline_fraction(along: &[Point3], q: Point3) -> f64 {
 /// endpoints with the section: a lens (a scoop bulging into a corner wall
 /// between two crossings of the wall's seam line), which
 /// `merge_duplicate_edges` folds into one edge, putting the seam line on the
-/// scoop face.
+/// scoop face. The halves meet where another boundary edge of the pair
+/// crosses the section between its ends, when one does (a rod's seam at
+/// the bottom of its U on a bore): a split beside that crossing would leave
+/// a sliver of the section between the two. Elsewhere they meet at its
+/// middle.
 fn split_lens_off_boundary_edge(
     topo: &Topology,
+    arena: &GfaArena,
     fa: FaceId,
     fb: FaceId,
     raw: RawCurve,
@@ -1478,6 +1483,8 @@ fn split_lens_off_boundary_edge(
     if !lens {
         return vec![raw];
     }
+    let (t_mid, p_mid) =
+        crossing_inside_section(topo, arena, fa, fb, &raw).unwrap_or((t_mid, p_mid));
     vec![
         RawCurve {
             curve: raw.curve.clone(),
@@ -1494,6 +1501,73 @@ fn split_lens_off_boundary_edge(
             p_end: raw.p_end,
         },
     ]
+}
+
+/// Where a boundary edge of one face of the pair crosses the other face
+/// on a marched section, clear of its ends: the crossing's vertex position
+/// and its parameter on the section, the crossing nearest the section's
+/// middle when several lie on it.
+fn crossing_inside_section(
+    topo: &Topology,
+    arena: &GfaArena,
+    fa: FaceId,
+    fb: FaceId,
+    raw: &RawCurve,
+) -> Option<(f64, Point3)> {
+    use brepkit_math::nurbs::projection::project_point_to_curve;
+    let EdgeCurve::NurbsCurve(curve) = &raw.curve else {
+        return None;
+    };
+    let boundary = |f: FaceId| -> Vec<brepkit_topology::edge::EdgeId> {
+        topo.face(f).ok().map_or_else(Vec::new, |face| {
+            std::iter::once(face.outer_wire())
+                .chain(face.inner_wires().iter().copied())
+                .filter_map(|w| topo.wire(w).ok())
+                .flat_map(|w| {
+                    w.edges()
+                        .iter()
+                        .map(brepkit_topology::wire::OrientedEdge::edge)
+                        .collect::<Vec<_>>()
+                })
+                .collect()
+        })
+    };
+    let (edges_a, edges_b) = (boundary(fa), boundary(fb));
+    let (t0, t1) = raw.t_range;
+    let t_mid = 0.5 * (t0 + t1);
+    let clear = 0.05 * (t1 - t0);
+    let mut best: Option<(f64, Point3)> = None;
+    for i in &arena.interference.ef {
+        let crate::ds::Interference::EF {
+            edge,
+            face,
+            new_vertex: Some(v),
+            ..
+        } = i
+        else {
+            continue;
+        };
+        if !((*face == fb && edges_a.contains(edge)) || (*face == fa && edges_b.contains(edge))) {
+            continue;
+        }
+        let Ok(vertex) = topo.vertex(arena.resolve_vertex(*v)) else {
+            continue;
+        };
+        let p = vertex.point();
+        let Ok(hit) = project_point_to_curve(curve, p, 1e-12) else {
+            continue;
+        };
+        if hit.distance > JunctionRegistry::ADOPT_MAX
+            || hit.parameter <= t0 + clear
+            || hit.parameter >= t1 - clear
+        {
+            continue;
+        }
+        if best.is_none_or(|(t, _)| (hit.parameter - t_mid).abs() < (t - t_mid).abs()) {
+            best = Some((hit.parameter, p));
+        }
+    }
+    best
 }
 
 /// Distance from `p` to a face's unbounded surface; `None` when no foot is
@@ -1806,8 +1880,10 @@ enum FaceExtent {
         /// trimmed patch ends across both parameters (a scoop clipped by a
         /// tapered envelope's corner curves), which a `v` window alone misses.
         uv_poly: Option<(Vec<brepkit_math::vec::Point2>, f64)>,
-        /// Holes of a partial band's `uv_poly`, in the same `(u, v)`.
-        uv_holes: Vec<Vec<brepkit_math::vec::Point2>>,
+        /// Holes of the face in `(u, v)`: a partial band's, read from
+        /// `uv_base` like its `uv_poly`, or a whole cylinder or cone band's,
+        /// each read round a turn from its own middle.
+        uv_holes: Vec<UvHole>,
         /// The angle `uv_poly`'s `u` is read round a turn from: the middle of
         /// the angle a partial band leaves out.
         uv_base: Option<f64>,
@@ -1826,6 +1902,15 @@ enum FaceExtent {
         /// The last point `nurbs` placed, the start for the next.
         hint: std::cell::Cell<Option<(f64, f64)>>,
     },
+}
+
+/// A hole of a curved face in its surface's `(u, v)`, `u` read round a
+/// turn from `base` when one is given, with the band its sampled edges can
+/// sag across.
+struct UvHole {
+    poly: Vec<brepkit_math::vec::Point2>,
+    base: Option<f64>,
+    band: f64,
 }
 
 impl FaceExtent {
@@ -2007,11 +2092,25 @@ impl FaceExtent {
                 _ => None,
             };
             let (uv_poly, uv_holes) = match uv_base {
-                Some(base) => lateral_face_uv_polygon(topo, face_id, surface, base)
-                    .map_or((None, Vec::new()), |(poly, sag, holes)| {
+                Some(base) => lateral_face_uv_polygon(topo, face_id, surface, base).map_or(
+                    (None, Vec::new()),
+                    |(poly, sag, holes)| {
+                        let band = 2.0f64.madd(sag, 1e-7);
+                        let holes = holes
+                            .into_iter()
+                            .map(|poly| UvHole {
+                                poly,
+                                base: Some(base),
+                                band,
+                            })
+                            .collect();
                         (Some((poly, sag)), holes)
-                    }),
-                None => (nurbs_face_uv_polygon(topo, face_id, surface), Vec::new()),
+                    },
+                ),
+                None => (
+                    nurbs_face_uv_polygon(topo, face_id, surface),
+                    whole_band_uv_holes(topo, face_id, surface),
+                ),
             };
             let uv_poly = uv_poly.map(|(poly, sag)| (poly, 2.0f64.madd(sag, 1e-7)));
             let nurbs = crate::classifier::SpanTrim::of_face(topo, face_id)
@@ -2133,6 +2232,9 @@ impl FaceExtent {
                 own_sheet,
                 ..
             } => surface.project_point(p).is_some_and(|(u, v)| {
+                use crate::builder::classify_2d::{
+                    distance_to_polygon_boundary, point_in_polygon_2d,
+                };
                 // Unlike `contains` (conservative keep on projection failure),
                 // the STRICT gate fails closed: an unprojectable point cannot
                 // certify a genuine interior crossing.
@@ -2142,18 +2244,15 @@ impl FaceExtent {
                 let in_v = in_window(v, (*v0, *v1), -depth, *periodic_v);
                 let in_u = u_gap.is_none_or(|gap| !crate::classifier::u_in_gap(u, gap));
                 let in_poly = uv_poly.as_ref().is_none_or(|(poly, _)| {
-                    use crate::builder::classify_2d::{
-                        distance_to_polygon_boundary, point_in_polygon_2d,
-                    };
                     let uv = brepkit_math::vec::Point2::new(rebase_u(u, *uv_base), v);
-                    point_in_polygon_2d(uv, poly)
-                        && distance_to_polygon_boundary(uv, poly) > depth
-                        && !uv_holes.iter().any(|h| {
-                            point_in_polygon_2d(uv, h)
-                                || distance_to_polygon_boundary(uv, h) <= depth
-                        })
+                    point_in_polygon_2d(uv, poly) && distance_to_polygon_boundary(uv, poly) > depth
                 });
-                in_v && in_u && in_poly
+                let in_hole = uv_holes.iter().any(|h| {
+                    let uv = brepkit_math::vec::Point2::new(rebase_u(u, h.base), v);
+                    point_in_polygon_2d(uv, &h.poly)
+                        || distance_to_polygon_boundary(uv, &h.poly) <= depth
+                });
+                in_v && in_u && in_poly && !in_hole
             }),
         }
     }
@@ -2198,24 +2297,24 @@ impl FaceExtent {
                 own_sheet,
                 ..
             } => surface.project_point(p).is_none_or(|(u, v)| {
+                use crate::builder::classify_2d::{
+                    distance_to_polygon_boundary, point_in_polygon_2d,
+                };
                 if *own_sheet && !on_own_sheet(surface, p, u, v) {
                     return false;
                 }
                 let in_v = in_window(v, (*v0, *v1), *margin, *periodic_v);
                 let in_u = u_gap.is_none_or(|gap| !crate::classifier::u_in_gap(u, gap));
                 let in_poly = uv_poly.as_ref().is_none_or(|(poly, band)| {
-                    use crate::builder::classify_2d::{
-                        distance_to_polygon_boundary, point_in_polygon_2d,
-                    };
                     let uv = brepkit_math::vec::Point2::new(rebase_u(u, *uv_base), v);
-                    (point_in_polygon_2d(uv, poly)
-                        || distance_to_polygon_boundary(uv, poly) <= *band)
-                        && !uv_holes.iter().any(|h| {
-                            point_in_polygon_2d(uv, h)
-                                && distance_to_polygon_boundary(uv, h) > *band
-                        })
+                    point_in_polygon_2d(uv, poly) || distance_to_polygon_boundary(uv, poly) <= *band
                 });
-                in_v && in_u && in_poly
+                let in_hole = uv_holes.iter().any(|h| {
+                    let uv = brepkit_math::vec::Point2::new(rebase_u(u, h.base), v);
+                    point_in_polygon_2d(uv, &h.poly)
+                        && distance_to_polygon_boundary(uv, &h.poly) > h.band
+                });
+                in_v && in_u && in_poly && !in_hole
             }),
         }
     }
@@ -5876,6 +5975,44 @@ fn lateral_face_uv_polygon(
     let rect = (hi.x() - lo.x()) * (hi.y() - lo.y());
     (poly.len() >= 3 && (!holes.is_empty() || area < rect * (1.0 - 1e-6)))
         .then_some((poly, sag, holes))
+}
+
+/// A whole cylinder or cone band's holes in `(u, v)` (a window cut through
+/// a tube's wall). Each hole's `u` is read round a turn from half a turn
+/// before its own middle, so a hole across the surface's seam stays one
+/// polygon. A wire that winds the axis bounds no polygon and is left out.
+fn whole_band_uv_holes(topo: &Topology, face_id: FaceId, surface: &FaceSurface) -> Vec<UvHole> {
+    use std::f64::consts::{PI, TAU};
+    if !matches!(surface, FaceSurface::Cylinder(_) | FaceSurface::Cone(_)) {
+        return Vec::new();
+    }
+    let Ok(face) = topo.face(face_id) else {
+        return Vec::new();
+    };
+    let step = |from: f64, to: f64| from + (to - from + PI).rem_euclid(TAU) - PI;
+    face.inner_wires()
+        .iter()
+        .filter_map(|&w| {
+            let (raw, _) = wire_uv_polygon(topo, w, surface, None)?;
+            let first = raw.first()?.x();
+            let (mut lo, mut hi, mut at) = (first, first, first);
+            for p in &raw[1..] {
+                at = step(at, p.x());
+                lo = lo.min(at);
+                hi = hi.max(at);
+            }
+            if (step(at, first) - first).abs() > PI || hi - lo >= TAU {
+                return None;
+            }
+            let base = 0.5f64.madd(lo + hi, -PI);
+            let (poly, sag) = wire_uv_polygon(topo, w, surface, Some(base))?;
+            Some(UvHole {
+                poly,
+                base: Some(base),
+                band: 2.0f64.madd(sag, 1e-7),
+            })
+        })
+        .collect()
 }
 
 /// A face's outer wire sampled into its surface's `(u, v)` with the chords'

@@ -8282,12 +8282,23 @@ fn split_face_2d_impl(
                 !is_point_on_boundary_uv(p, &surface, &boundary_edges, uv_tol)
             })
         };
+        // A section that ends on a hole runs from it, as from the outer
+        // boundary: a rod's footprint on a bore, in a U from a window's
+        // bottom edge and back, closes on the window, not on itself.
+        let on_hole = |p: Point3| {
+            original_inner_wires
+                .iter()
+                .flatten()
+                .any(|e| point_on_oriented_edge(e, p, tol.linear * 100.0))
+        };
         let endpoints_internal = whole_ring
             || sections.iter().all(|s| {
                 let start_on_boundary =
-                    is_point_on_boundary_uv(s.start, &surface, &boundary_edges, uv_tol);
+                    is_point_on_boundary_uv(s.start, &surface, &boundary_edges, uv_tol)
+                        || on_hole(s.start);
                 let end_on_boundary =
-                    is_point_on_boundary_uv(s.end, &surface, &boundary_edges, uv_tol);
+                    is_point_on_boundary_uv(s.end, &surface, &boundary_edges, uv_tol)
+                        || on_hole(s.end);
                 (!start_on_boundary && !end_on_boundary) || touches_only(s)
             });
         // Winding veto: on a u-periodic lateral, a section chain that winds
@@ -11139,7 +11150,30 @@ fn split_face_2d_impl(
                 .is_some_and(|sign| area.abs() > perimeter * tol.linear && area * sign > 0.0)
     };
 
+    // A woven hole's pieces carry no section index, like the outline's
+    // edges. A loop runs on the outline only where it holds an outline edge.
+    let on_outline = |e: &OrientedPCurveEdge| {
+        let weld = 100.0 * tol.linear;
+        all_edges[..n_boundary_edges].iter().any(|b| {
+            ((b.start_3d - e.start_3d).length() <= weld && (b.end_3d - e.end_3d).length() <= weld)
+                || ((b.start_3d - e.end_3d).length() <= weld
+                    && (b.end_3d - e.start_3d).length() <= weld)
+        })
+    };
     for wire_loop in loops {
+        // On a wall traced with a woven hole, a loop of the hole's pieces and
+        // sections only (a window's sides and a rod's U from its bottom edge)
+        // is read by its winding: the piece the U cuts off the window's edge
+        // is a region, the window widened by it a hole of the region round
+        // it.
+        if use_structural_classification && woven_trace && !wire_loop.iter().any(&on_outline) {
+            if loop_eff_area(&wire_loop) > 0.0 {
+                outers.push((wire_loop, 1.0));
+            } else {
+                holes.push(wire_loop);
+            }
+            continue;
+        }
         if use_structural_classification {
             // Structural: a loop containing both Line edges (seam) and
             // non-Line edges (section arcs / circles) is a band = outer.
