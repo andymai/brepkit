@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795338326856,
+  "lastUpdate": 1795338890223,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -75005,6 +75005,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26145435,
             "range": "± 64490",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "8a63d77c663d89247e82ecb1c4223a9b8ebe61df",
+          "message": "fix(algo,operations): mesh seamless ball faces and lobe holes, read a ball face's extent by its wires, and close thin ball faces (#2679)\n\n## Summary\n\nThree cases where rods and balls meet came back wrong, open or refused:\n\n- A ball can touch the rim of a cylinder wall with no seam. The fuse and\nthe cut gave meshes that were open (64 open edges), or 1.2% high in\nvolume (#2603).\n- A bar cut through two rods at a ball came back invalid, with a hole\noutside its face (#2604). The strict gate refuses that result on main.\n- A thin ball face between the ball's equator and a rod's cap meshed\nopen (#2615). Turned near a quarter turn, the fuse of two rods at a ball\nfell back.\n\nWith this change, each of them is exact, valid and watertight in every\npose tested, with its volume against an integral. No pose of the\n256-pose sweep of two rods at a ball comes back wrong.\n\nFixes #2603, fixes #2604, fixes #2615.\n\n## The change\n\n- **One loop, no seam (#2603).** Through both poles, the mesher's chart\nread the loop as the lune on its other side. Where it runs round neither\npole, the face holds both poles and the loop runs clockwise. In both\ncases the mesher meshed the wrong side. `sphere_face_recharted` now\nmeshes such a face on the same sphere with its poles moved off the loop.\n- **A lobe hole (#2603).** Turned pi/2, the wall's hole came as a lobe\nof its outer wire, closed at the rim point. The mesh's flood did not\nreach it. `pinched_hole_lobes` now floods the lobe as a hole.\n- **A sphere face's extent (#2604).** Phase FF read a ball face's extent\nas the band of latitudes its outline spans. The bar's second crossing of\nthe ball lies inside a rod, off the face, but became a hole of the face.\n`FaceExtent::Analytic` now also reads the point against the face's own\nwires (`SphereFaceTrim`). The short-arc rescue then dropped a rod cap's\nshort arc on a ball quarter as lying on a face's edge. It now drops an\narc only when it lies on both faces' edges. It also drops one on a\nface's edge that a face on the partner's surface bounds too.\n- **A thin face (#2615).** Between the equator and the cap circle, the\nequator's arc kept 9 samples and the cap circle's 33. Their chords\ncrossed near the sliver's tip. Arcs on sphere faces now join the\nchord-halving pass in `split_crossing_spline_chords`, with chords across\nthe seam unwrapped. The face splitter's sliver rule (`has_sliver`) kept\nsuch faces whole only because of that open mesh, so I removed it.\n\n## Tests\n\n- `ball_on_a_seamless_wall_rim.rs`: fuse and cut in 4 poses, with the\nball turned 0, 0.3 and pi/2. Each is valid, within 1e-6 of an integral,\nand watertight, and its mesh volume is within 0.5%. Before, the meshes\nhad 64 and 58 open edges, and the turned ball's mesh read 12.551 against\n12.401.\n- `a_bar_cut_through_two_rods_at_a_ball_is_exact` in\n`two_rods_at_a_turned_ball.rs`, upright, turned and mirrored: 31.0166272\nagainst an integrated 31.0166251. Before, the result was invalid at\n31.0844. The test fuses the two rods first, because the issue's order\nstill falls back (#2578).\n- `a_thin_ball_face_beside_a_rods_cap_meshes_closed` (spins 1.54 and\n1.55 in 3 poses) and\n`two_rods_at_a_ball_turned_near_a_quarter_turn_fuse_exactly` (spins\n1.555, 1.56, 1.58 and 1.59 in 3 poses, with points classified). Before,\nspin 1.55 meshed with 6 open edges and the others fell back.\n- The sphere and ball test files, `rod_ending_in_a_ball`,\n`kumiko_strut_fuse_inmem`, and the lib tests for `tessellate`,\n`phase_ff`, `face_splitter` and `boolean` pass.\n- Review fixes, each with a unit test that fails before it:\n- `pinched_hole_lobes` parts a pinched loop into simple cycles, so two\nholes pinched at one vertex are two holes, wherever the loop starts.\n- The short-arc rule looks for a same-domain face beside a rim among the\noperands' faces only.\n- Each chord on a sphere is unwrapped along itself, and two chords are\nlaid in one turn by their middles. A chord across the seam then meets a\nchord it crosses.\n- The strict gate keeps a ball face's rim clear by a distance. On a\nsphere or a torus, its v window uses the angle that distance turns.\n- With these, all of brepkit-algo and the ball, rod, sphere, torus,\nkumiko, strut and taper test files pass: 774 tests.\n- The pose sweep gives the same output as main. The truth audit differs\nfrom the baseline in one line, \"ball slab z 1..2 Cut\" at 8e-16 against\n9e-16. That change came with #2671, now on main.\n- `cargo nextest run --no-fail-fast -p brepkit-algo -p brepkit-io -p\nbrepkit-operations -p brepkit-wasm -p brepkit-check -p brepkit-heal -p\nbrepkit-math` on `dee7c4ac2`: 4905 tests run, 4905 passed, 32 skipped.\nAfter a merge of main with #2658,\n`a_taper_pin_cut_the_engine_cannot_build_is_refused_not_wrong` and the\nball and rod test files pass too (34 tests).\n\n## Still open\n\n- #2578: the rod fused second can have its cap at the ball. The face\nsplitter then traces only one of the two pieces of a ball face whose\nsection ends at a pole vertex. 17 of the 256 poses fall back, none\nwrong.\n- #2648: the ball's equator lies 3.2e-7 inside the second rod's wall.\nPhase EF reads it as crossing the wall at 12 parameters, and the wall\ngets a third piece.\n- Spins 1.565 to 1.585 near a quarter turn still fall back in some\nposes.",
+          "timestamp": "2026-11-22T09:10:30Z",
+          "tree_id": "32f2fd695c38d7c3636e4608585eb2f7e640656b",
+          "url": "https://github.com/andymai/brepkit/commit/8a63d77c663d89247e82ecb1c4223a9b8ebe61df"
+        },
+        "date": 1795338877093,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1178028,
+            "range": "± 10809",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1255318,
+            "range": "± 11273",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12690,
+            "range": "± 65",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 797455,
+            "range": "± 12456",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25383656,
+            "range": "± 1681534",
             "unit": "ns/iter"
           }
         ]
