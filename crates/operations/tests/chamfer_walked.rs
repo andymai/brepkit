@@ -599,6 +599,64 @@ fn a_balls_rim_takes_one_chamfer_whichever_way_its_poles_lie() {
     }
 }
 
+/// The ball of [`capped_ball`] with both its faces read about `poles`,
+/// placed by `pose`, and its rim.
+fn capped_ball_about(topo: &mut Topology, poles: Vec3, pose: &Mat4) -> (SolidId, EdgeId) {
+    let (ball, rim) = capped_ball(topo, false, &Mat4::translation(0.0, 0.0, 0.0));
+    for face in solid_faces(topo, ball).unwrap() {
+        let FaceSurface::Sphere(sphere) = topo.face(face).unwrap().surface() else {
+            continue;
+        };
+        let about = SphericalSurface::with_axis(sphere.center(), R, poles).unwrap();
+        topo.face_mut(face)
+            .unwrap()
+            .set_surface(FaceSurface::Sphere(about));
+    }
+    transform_solid(topo, ball, pose).unwrap();
+    (ball, rim)
+}
+
+/// A ball's rim whose contact on the ball runs through a pole of the ball's
+/// parameters, the north or the south one, at two places round the contact:
+/// the chamfer is the one Pappus's theorem gives, its contacts lie on their
+/// circles, and their pcurves follow them.
+#[test]
+fn a_balls_rim_chamfers_when_its_contact_runs_through_a_pole() {
+    let (d1, d2) = (0.3, 0.6);
+    for (round, side) in [(0.0_f64, 1.0), (1.0, -1.0)] {
+        for (name, pose) in poses() {
+            let what = format!("round {round} side {side} {name}");
+            let mut topo = Topology::new();
+            let (ball, rim) = capped_ball(&mut topo, false, &Mat4::translation(0.0, 0.0, 0.0));
+            let (cap, wall) = on_faces(&topo, ball, rim, (d1, d2));
+            let (removed, [plane, sphere]) = ball_chamfer(cap, wall);
+            let on_contact = Vec3::new(sphere.0 * round.cos(), sphere.0 * round.sin(), sphere.1);
+            let mut topo = Topology::new();
+            let (ball, rim) = capped_ball_about(&mut topo, on_contact * (side / R), &pose);
+            let before = solid_volume(&topo, ball, 0.001).unwrap();
+            let old: HashSet<EdgeId> = solid_edges(&topo, ball).unwrap().into_iter().collect();
+            let side_of = wall_of(&topo, ball, rim);
+            let mut builder = ChamferBuilder::new(&mut topo, ball);
+            builder.add_edges_asymmetric(&[rim], d1, d2);
+            let built = builder.build().unwrap();
+            assert!(built.failed.is_empty(), "{what}: {:?}", built.failed);
+            assert_removed(&topo, built.solid, before, removed, &what);
+            for (kind, at) in [("plane", plane), ("sphere", sphere)] {
+                let (count, off) = off_circle(&topo, &old, built.solid, &pose, kind, at);
+                assert_eq!(count, 1, "{what}: contacts on the {kind}");
+                assert!(off < 1e-6, "{what}: the {kind}'s contact lies {off} off");
+            }
+            assert_eq!(wall_contacts(&topo, &side_of, built.solid, &what).len(), 1);
+            if name != "upright" {
+                continue;
+            }
+            let built = chamfer_v2(&mut topo, ball, &[rim], d1, d2).unwrap();
+            assert!(built.failed.is_empty(), "{what}: {:?}", built.failed);
+            assert_removed(&topo, built.solid, before, removed, &what);
+        }
+    }
+}
+
 /// The torus: radius 4 round its axis, 1.5 round its tube.
 const TORUS: (f64, f64) = (4.0, 1.5);
 

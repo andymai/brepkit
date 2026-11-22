@@ -1024,7 +1024,19 @@ fn trim_along(
                 crate::fillet_builder::face_u_period(&surface),
                 face_v_period(&surface),
             ];
-            pcurve_along(support, periods, &curve, (start, end))
+            // A sphere's parameters close up at its poles.
+            let poles: Vec<Point3> = match &surface {
+                FaceSurface::Sphere(sphere) => [1.0, -1.0]
+                    .iter()
+                    .map(|&side| sphere.center() + sphere.z_axis() * (side * sphere.radius()))
+                    .collect(),
+                FaceSurface::Plane { .. }
+                | FaceSurface::Cylinder(_)
+                | FaceSurface::Cone(_)
+                | FaceSurface::Torus(_)
+                | FaceSurface::Nurbs(_) => Vec::new(),
+            };
+            pcurve_along(support, periods, &poles, &curve, (start, end))
                 .ok_or(BlendError::TrimmingFailure { face })?
         }
     };
@@ -1069,9 +1081,17 @@ fn face_v_period(surface: &FaceSurface) -> Option<f64> {
 /// lies within `FIT` times one more than the curve's size of the curve, in
 /// pieces that meet at the curve's corners. `None` when no such cubic comes
 /// within it, or the image runs across the end of such a domain.
+///
+/// At one of `poles`, where every u gives one point (a sphere's poles), u
+/// is free and the curve's image jumps there. Each piece of the image ends
+/// at the pole with the u its own run leads to, and the pcurve runs along
+/// the pole's line from one to the other, over a span of parameter so short
+/// that the curve moves less than a tenth of the fit in it.
+#[allow(clippy::too_many_lines)]
 fn pcurve_along(
     support: &dyn ParametricSurface,
     periods: [Option<f64>; 2],
+    poles: &[Point3],
     curve: &EdgeCurve,
     (start, end): (Point3, Point3),
 ) -> Option<PCurve> {
@@ -1079,22 +1099,36 @@ fn pcurve_along(
     const FIRST: u32 = 16;
     const LAST: u32 = 4096;
     let (t0, t1) = curve.domain_with_endpoints(start, end);
+    let at = |f: f64| curve.evaluate_with_endpoints((t1 - t0).madd(f, t0), start, end);
+    let samples: Vec<Point3> = (0..=FIRST)
+        .map(|k| at(f64::from(k) / f64::from(FIRST)))
+        .collect();
     // The tolerance scales with the curve's size, not with where it lies.
-    let size = brepkit_math::aabb::Aabb3::try_from_points((0..=FIRST).map(|k| {
-        let f = f64::from(k) / f64::from(FIRST);
-        curve.evaluate_with_endpoints((t1 - t0).madd(f, t0), start, end)
-    }))
-    .map_or(0.0, |aabb| (aabb.max - aabb.min).length());
+    let size = brepkit_math::aabb::Aabb3::try_from_points(samples.iter().copied())
+        .map_or(0.0, |aabb| (aabb.max - aabb.min).length());
     let fit = FIT * (1.0 + size);
+    let length: f64 = samples.windows(2).map(|w| (w[1] - w[0]).length()).sum();
     let on = |uv: Point2| support.evaluate(uv.x(), uv.y());
+    let crossings = pole_crossings(&at, poles, fit);
+    let at_pole = |f: f64| crossings.iter().any(|&c| (c - f).abs() <= 1e-9);
     let mut pieces: Vec<f64> = corners(curve)
         .into_iter()
         .map(|t| (t - t0) / (t1 - t0))
+        .chain(crossings.iter().copied())
         .filter(|f| *f > 1e-9 && *f < 1.0 - 1e-9)
         .collect();
     pieces.sort_by(f64::total_cmp);
+    pieces.dedup_by(|a, b| (*a - *b).abs() <= 1e-9);
     pieces.insert(0, 0.0);
     pieces.push(1.0);
+    let gap = 0.1 * fit / length.max(fit);
+    if !crossings.is_empty()
+        && pieces
+            .windows(2)
+            .any(|piece| piece[1] - piece[0] <= 2.0 * gap)
+    {
+        return None;
+    }
     let mut steps = FIRST;
     while steps <= LAST {
         let count = 2 * steps;
@@ -1103,12 +1137,15 @@ fn pcurve_along(
         for piece in pieces.windows(2) {
             fractions.extend((1..=count).map(|k| (piece[1] - piece[0]).madd(step(k), piece[0])));
         }
-        let mut points: Vec<Point3> = Vec::with_capacity(fractions.len());
+        let mut on_curve: Vec<Point3> = Vec::with_capacity(fractions.len());
         let mut image: Vec<Point2> = Vec::with_capacity(fractions.len());
         for &f in &fractions {
-            let point = curve.evaluate_with_endpoints((t1 - t0).madd(f, t0), start, end);
+            let point = at(f);
             let (mut u, mut v) = support.project_point(point);
             if let Some(last) = image.last() {
+                if at_pole(f) {
+                    u = last.x();
+                }
                 for (value, (period, reference)) in [
                     (&mut u, (periods[0], last.x())),
                     (&mut v, (periods[1], last.y())),
@@ -1118,7 +1155,7 @@ fn pcurve_along(
                     }
                 }
             }
-            points.push(point);
+            on_curve.push(point);
             image.push(Point2::new(u, v));
         }
         // A surface that closes round within its own domain (a B-spline
@@ -1150,12 +1187,13 @@ fn pcurve_along(
             }
         }
         // The pcurve read through the surface must lie on the curve itself.
-        let near = |at: Point2, k: usize| (on(at) - points[k]).length() <= fit;
+        let near = |at: Point2, k: usize| (on(at) - on_curve[k]).length() <= fit;
         let (first, chord) = (image[0], image[image.len() - 1] - image[0]);
-        if fractions
-            .iter()
-            .enumerate()
-            .all(|(k, &f)| near(first + chord * f, k))
+        if crossings.is_empty()
+            && fractions
+                .iter()
+                .enumerate()
+                .all(|(k, &f)| near(first + chord * f, k))
         {
             let line = Line2D::new(first, chord).ok()?;
             return Some(PCurve::new(Curve2D::Line(line), 0.0, chord.length()));
@@ -1164,12 +1202,22 @@ fn pcurve_along(
             .map(|k| f64::from(k) / f64::from(steps))
             .collect();
         let flat = |p: Point3| Point2::new(p.x(), p.y());
-        let mut knots = vec![0.0; 4];
-        let mut points: Vec<Point2> = Vec::new();
+        // A run's end at a pole takes the u its next three points lead to.
+        let lead = |a: Point2, b: Point2, c: Point2, end: Point2| {
+            Point2::new(3.0_f64.madd(a.x() - b.x(), c.x()), end.y())
+        };
+        let mut fits = Vec::with_capacity(pieces.len() - 1);
         let mut within = true;
         for (index, piece) in pieces.windows(2).enumerate() {
             let base = index * count as usize;
-            let run = &image[base..=base + count as usize];
+            let mut run = image[base..=base + count as usize].to_vec();
+            let last = run.len() - 1;
+            if at_pole(piece[0]) {
+                run[0] = lead(run[1], run[2], run[3], run[0]);
+            }
+            if at_pole(piece[1]) {
+                run[last] = lead(run[last - 1], run[last - 2], run[last - 3], run[last]);
+            }
             let nodes: Vec<Point3> = run
                 .iter()
                 .step_by(2)
@@ -1179,17 +1227,35 @@ fn pcurve_along(
             within &= (1..count)
                 .step_by(2)
                 .all(|k| near(flat(cubic.evaluate(step(k))), base + k as usize));
-            let inner = &cubic.knots()[4..cubic.knots().len() - 4];
-            knots.extend(
-                inner
-                    .iter()
-                    .map(|&k| (piece[1] - piece[0]).madd(k, piece[0])),
-            );
-            knots.extend(std::iter::repeat_n(piece[1], 3));
-            let skip = usize::from(index > 0);
-            points.extend(cubic.control_points()[skip..].iter().copied().map(flat));
+            fits.push(cubic);
         }
         if within {
+            let mut knots = vec![0.0; 4];
+            let mut points: Vec<Point2> = Vec::new();
+            for (index, (piece, cubic)) in pieces.windows(2).zip(&fits).enumerate() {
+                // A run that ends at a pole inside the curve gives way, just
+                // short of it, to the pole's line, which runs to the next
+                // run's start.
+                let next = fits
+                    .get(index + 1)
+                    .filter(|_| at_pole(piece[1]))
+                    .and_then(|cubic| cubic.control_points().first().copied().map(flat));
+                let end = if next.is_some() {
+                    piece[1] - gap
+                } else {
+                    piece[1]
+                };
+                let inner = &cubic.knots()[4..cubic.knots().len() - 4];
+                knots.extend(inner.iter().map(|&k| (end - piece[0]).madd(k, piece[0])));
+                knots.extend(std::iter::repeat_n(end, 3));
+                let skip = usize::from(index > 0);
+                points.extend(cubic.control_points()[skip..].iter().copied().map(flat));
+                if let (Some(to), Some(&from)) = (next, points.last()) {
+                    let along = to - from;
+                    points.extend([from + along * (1.0 / 3.0), from + along * (2.0 / 3.0), to]);
+                    knots.extend(std::iter::repeat_n(piece[1], 3));
+                }
+            }
             knots.push(1.0);
             let weights = vec![1.0; points.len()];
             let pcurve = NurbsCurve2D::new(3, knots, points, weights).ok()?;
@@ -1198,6 +1264,39 @@ fn pcurve_along(
         steps *= 2;
     }
     None
+}
+
+/// The fractions of the run of `at` over 0 to 1 where it passes within
+/// `within` of one of `poles`.
+fn pole_crossings(at: &dyn Fn(f64) -> Point3, poles: &[Point3], within: f64) -> Vec<f64> {
+    const SAMPLES: u32 = 256;
+    let mut found = Vec::new();
+    for &pole in poles {
+        let gap = |f: f64| (at(f) - pole).length();
+        let mut nearest = (0.0, f64::INFINITY);
+        for k in 0..=SAMPLES {
+            let f = f64::from(k) / f64::from(SAMPLES);
+            let d = gap(f);
+            if d < nearest.1 {
+                nearest = (f, d);
+            }
+        }
+        let step = 1.0 / f64::from(SAMPLES);
+        let (mut lo, mut hi) = ((nearest.0 - step).max(0.0), (nearest.0 + step).min(1.0));
+        for _ in 0..200 {
+            let third = (hi - lo) / 3.0;
+            if gap(lo + third) < gap(hi - third) {
+                hi -= third;
+            } else {
+                lo += third;
+            }
+        }
+        let f = f64::midpoint(lo, hi);
+        if gap(f) <= within {
+            found.push(f);
+        }
+    }
+    found
 }
 
 /// The parameters of `curve` where it may turn a corner: the knots of a
@@ -2140,8 +2239,14 @@ mod tests {
         .unwrap();
         let ends = (contact.evaluate(0.0), contact.evaluate(1.0));
         let curve = EdgeCurve::NurbsCurve(contact.clone());
-        let pcurve =
-            pcurve_along(&cylinder, [Some(std::f64::consts::TAU), None], &curve, ends).unwrap();
+        let pcurve = pcurve_along(
+            &cylinder,
+            [Some(std::f64::consts::TAU), None],
+            &[],
+            &curve,
+            ends,
+        )
+        .unwrap();
         let (t0, t1) = (pcurve.t_start(), pcurve.t_end());
         let worst = (0..=200)
             .map(|k| {
