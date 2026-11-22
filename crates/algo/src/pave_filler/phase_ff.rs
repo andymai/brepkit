@@ -2154,12 +2154,19 @@ impl FaceExtent {
                 if *own_sheet && !on_own_sheet(surface, p, u, v) {
                     return false;
                 }
-                if let (Some(trim), FaceSurface::Sphere(sphere)) = (ball, surface)
-                    && !trim.holds_clear(p, depth * sphere.radius())
+                if let (Some(trim), FaceSurface::Sphere(_)) = (ball, surface)
+                    && !trim.holds_clear(p, depth)
                 {
                     return false;
                 }
-                let in_v = in_window(v, (*v0, *v1), -depth, *periodic_v);
+                // `depth` is a distance; a sphere's or a torus's `v` is an
+                // angle about the radius it turns on.
+                let v_depth = match surface {
+                    FaceSurface::Sphere(sphere) => depth / sphere.radius(),
+                    FaceSurface::Torus(torus) => depth / torus.minor_radius(),
+                    _ => depth,
+                };
+                let in_v = in_window(v, (*v0, *v1), -v_depth, *periodic_v);
                 let in_u = u_gap.is_none_or(|gap| !crate::classifier::u_in_gap(u, gap));
                 let in_poly = uv_poly.as_ref().is_none_or(|(poly, _)| {
                     use crate::builder::classify_2d::{
@@ -12864,5 +12871,46 @@ mod tests {
             tol,
             Some(&with_stray)
         ));
+    }
+
+    /// The strict gate's depth is a distance on any ball: a point 9e-5 above
+    /// the rim of a radius 10 ball's cap lies clear of a depth of 1e-5, and
+    /// one 5e-6 above it does not.
+    #[test]
+    fn a_large_balls_rim_is_kept_clear_by_a_distance() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::SphericalSurface;
+        use brepkit_topology::face::Face;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let tol = Tolerance::default();
+        let mut topo = Topology::default();
+        let rim = Circle3D::new(Point3::new(0.0, 0.0, 6.0), Vec3::new(0.0, 0.0, 1.0), 8.0).unwrap();
+        let v0 = topo.add_vertex(Vertex::new(Point3::new(8.0, 0.0, 6.0), 1e-7));
+        let edge = topo.add_edge(Edge::new(v0, v0, EdgeCurve::Circle(rim)));
+        let surface =
+            FaceSurface::Sphere(SphericalSurface::new(Point3::new(0.0, 0.0, 0.0), 10.0).unwrap());
+        let cap = |topo: &mut Topology, forward: bool| {
+            let wire =
+                topo.add_wire(Wire::new(vec![OrientedEdge::new(edge, forward)], true).unwrap());
+            topo.add_face(Face::new(wire, vec![], surface.clone()))
+        };
+        let above = |rise: f64| {
+            let z = 6.0 + rise;
+            let r = (100.0 - z * z).sqrt();
+            Point3::new(r * 0.6, r * 0.8, z)
+        };
+        let mut checked = false;
+        for forward in [true, false] {
+            let face = cap(&mut topo, forward);
+            let range = face_v_range(&topo, face, &surface);
+            let extent = FaceExtent::new(&topo, face, &surface, range, tol).unwrap();
+            if !extent.contains_strict(above(3.0), 0.0) {
+                continue;
+            }
+            checked = true;
+            assert!(extent.contains_strict(above(9e-5), 1e-5));
+            assert!(!extent.contains_strict(above(5e-6), 1e-5));
+        }
+        assert!(checked, "neither cap holds the pole");
     }
 }
