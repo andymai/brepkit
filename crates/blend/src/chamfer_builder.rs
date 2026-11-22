@@ -1061,12 +1061,14 @@ fn face_v_period(surface: &FaceSurface) -> Option<f64> {
 /// The pcurve on `support` of `curve` run from `start` to `end`, over the
 /// curve's own parameters between them: one fraction of each span gives one
 /// point. The image of the curve in the surface's parameters is read along
-/// the curve, across the seams of `periods` (u, v). Where that image is a
-/// straight line run at an even rate (a circle round a cylinder's or a
-/// cone's axis), the pcurve is that line. Elsewhere a cubic interpolates the
-/// image at more and more points, until between them it lies within `FIT`
-/// times one more than the curve's size of the image, in pieces that meet at
-/// the curve's corners. `None` when no such cubic comes within it.
+/// the curve, across the seams of `periods` (u, v), and moved by whole
+/// turns into the domain of a surface that closes within it. Where that
+/// image is a straight line run at an even rate (a circle round a
+/// cylinder's or a cone's axis), the pcurve is that line. Elsewhere a cubic
+/// interpolates the image at more and more points, until between them it
+/// lies within `FIT` times one more than the curve's size of the curve, in
+/// pieces that meet at the curve's corners. `None` when no such cubic comes
+/// within it, or the image runs across the end of such a domain.
 fn pcurve_along(
     support: &dyn ParametricSurface,
     periods: [Option<f64>; 2],
@@ -1101,6 +1103,7 @@ fn pcurve_along(
         for piece in pieces.windows(2) {
             fractions.extend((1..=count).map(|k| (piece[1] - piece[0]).madd(step(k), piece[0])));
         }
+        let mut points: Vec<Point3> = Vec::with_capacity(fractions.len());
         let mut image: Vec<Point2> = Vec::with_capacity(fractions.len());
         for &f in &fractions {
             let point = curve.evaluate_with_endpoints((t1 - t0).madd(f, t0), start, end);
@@ -1115,9 +1118,39 @@ fn pcurve_along(
                     }
                 }
             }
+            points.push(point);
             image.push(Point2::new(u, v));
         }
-        let near = |at: Point2, k: usize| (on(at) - on(image[k])).length() <= fit;
+        // A surface that closes round within its own domain (a B-spline
+        // wall) gives the curve's points there only: the image, read on
+        // across the seam, moves back by whole turns to lie in the domain.
+        // An image that runs across the domain's end has no pcurve here.
+        for (axis, domain) in [(0, support.closed_u()), (1, support.closed_v())] {
+            let Some((lo, hi)) = domain else {
+                continue;
+            };
+            let period = hi - lo;
+            let value = |p: &Point2| if axis == 0 { p.x() } else { p.y() };
+            let (least, most) = image
+                .iter()
+                .fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), p| {
+                    (a.min(value(p)), b.max(value(p)))
+                });
+            let slack = 1e-9 * period;
+            let shift = period * ((least - lo + slack) / period).floor();
+            if most - shift > hi + slack {
+                return None;
+            }
+            for p in &mut image {
+                *p = if axis == 0 {
+                    Point2::new(p.x() - shift, p.y())
+                } else {
+                    Point2::new(p.x(), p.y() - shift)
+                };
+            }
+        }
+        // The pcurve read through the surface must lie on the curve itself.
+        let near = |at: Point2, k: usize| (on(at) - points[k]).length() <= fit;
         let (first, chord) = (image[0], image[image.len() - 1] - image[0]);
         if fractions
             .iter()
@@ -1621,19 +1654,6 @@ fn compute_chamfer_stripe(
 
     let surf1 = topo.face(face1)?.surface().clone();
     let surf2 = topo.face(face2)?.surface().clone();
-    // Across the seam of a B-spline face that closes round on itself, the
-    // contact's pcurve leaves the knot domain, and the trimmed face's mesh
-    // and measure come out wrong as well.
-    for (face, surface) in [(face1, &surf1), (face2, &surf2)] {
-        if let FaceSurface::Nurbs(nurbs) = surface
-            && (nurbs.is_periodic_u() || nurbs.is_periodic_v())
-        {
-            return Err(BlendError::UnsupportedSurface {
-                face,
-                surface_tag: "a B-spline face that closes round on itself".to_owned(),
-            });
-        }
-    }
 
     let spine = Spine::from_single_edge(topo, edge_id)?;
 

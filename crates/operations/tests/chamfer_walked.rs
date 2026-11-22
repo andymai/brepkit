@@ -164,13 +164,25 @@ fn on_faces(topo: &Topology, solid: SolidId, edge: EdgeId, (d1, d2): (f64, f64))
 /// Valid, watertight, and `removed` less than `before`, to `1e-6` of what
 /// it took off.
 fn assert_removed(topo: &Topology, result: SolidId, before: f64, removed: f64, what: &str) {
+    assert_removed_measured(topo, result, before, removed, what, 0.001);
+}
+
+/// [`assert_removed`], with the result measured at `deflection`.
+fn assert_removed_measured(
+    topo: &Topology,
+    result: SolidId,
+    before: f64,
+    removed: f64,
+    what: &str,
+    deflection: f64,
+) {
     let report = validate_solid(topo, result).unwrap();
     assert!(report.is_valid(), "{what}: {:?}", report.issues);
     assert!(
         is_watertight(&tessellate_solid(topo, result, 0.01).unwrap()),
         "{what}: its mesh is open"
     );
-    let took = before - solid_volume(topo, result, 0.001).unwrap();
+    let took = before - solid_volume(topo, result, deflection).unwrap();
     assert!(
         (took - removed).abs() < 1e-6 * removed,
         "{what}: took off {took}, expected {removed}"
@@ -756,24 +768,42 @@ fn b_spline_walled(
     (solid, rim)
 }
 
-/// The walking chamfer does not trim a B-spline face that closes round on
-/// itself: a rim on one is refused, and the solid comes back as it was.
+/// A cylinder's rims and a frustum's bottom rim on their walls put in
+/// B-spline form, which closes round on itself: the walking chamfer cuts
+/// each exactly, as on the analytic walls, and the pcurve of each contact
+/// on the wall follows its edge within the wall's knot domain.
 #[test]
-fn a_rim_on_a_closed_b_spline_wall_is_refused() {
+fn a_rim_on_a_closed_b_spline_wall_chamfers_exactly() {
+    let (d1, d2) = (0.4, 0.25);
+    // The frustum's wall rises 4 as it closes in by 2.
+    let slope = 2.0_f64.atan2(1.0);
     for (frustum, top) in [(false, false), (false, true), (true, false)] {
         for (name, pose) in poses() {
             let what = format!("frustum {frustum} top {top} {name}");
             let mut topo = Topology::new();
             let (solid, rim) = b_spline_walled(&mut topo, frustum, top, &pose);
-            let before = solid_volume(&topo, solid, 0.001).unwrap();
+            let (cap, wall) = on_faces(&topo, solid, rim, (d1, d2));
+            let rise = if frustum { slope } else { 0.5 * PI };
+            let area = 0.5 * cap * wall * rise.sin();
+            let removed = TAU * (3.0 - (cap + wall * rise.cos()) / 3.0) * area;
+            // The measure of a B-spline cone trimmed along a circle is
+            // 2.2e-5 high at 0.001 and comes down to 2.3e-8 at 1e-6.
+            let deflection = if frustum { 1e-5 } else { 0.001 };
+            let before = solid_volume(&topo, solid, deflection).unwrap();
+            let side = wall_of(&topo, solid, rim);
             let mut builder = ChamferBuilder::new(&mut topo, solid);
-            builder.add_edges_asymmetric(&[rim], 0.4, 0.25);
+            builder.add_edges_asymmetric(&[rim], d1, d2);
             let built = builder.build().unwrap();
-            let why = refused(&topo, solid, &built, rim, before, &what);
-            assert!(why.starts_with("UnsupportedSurface"), "{what}: {why}");
-            let built = chamfer_v2(&mut topo, solid, &[rim], 0.4, 0.25).unwrap();
-            let why = refused(&topo, solid, &built, rim, before, &what);
-            assert!(why.starts_with("UnsupportedSurface"), "{what}: {why}");
+            assert!(built.failed.is_empty(), "{what}: {:?}", built.failed);
+            assert_removed_measured(&topo, built.solid, before, removed, &what, deflection);
+            assert_eq!(wall_contacts(&topo, &side, built.solid, &what).len(), 1);
+            if name != "upright" {
+                continue;
+            }
+            let built = chamfer_v2(&mut topo, solid, &[rim], d1, d2).unwrap();
+            assert!(built.failed.is_empty(), "{what}: {:?}", built.failed);
+            assert_removed_measured(&topo, built.solid, before, removed, &what, deflection);
+            assert_eq!(wall_contacts(&topo, &side, built.solid, &what).len(), 1);
         }
     }
 }
