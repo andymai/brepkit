@@ -445,6 +445,13 @@ impl Revolution {
         self.series(v, about).map(|g| g.integral(u, &waves))
     }
 
+    /// The most each [`integrand`] can be at `v`, the sum of its waves'
+    /// sizes: how far [`Self::antiderivative`] moves for a step in `u`.
+    fn slope_bound(&self, v: f64, about: Vec3) -> [f64; 8] {
+        self.series(v, about)
+            .map(|g| g.0.iter().fold(0.0, |sum, c| sum + c.abs()))
+    }
+
     /// The mean of each [`integrand`] over a turn at `v`.
     fn mean(&self, v: f64, about: Vec3) -> [f64; 8] {
         self.series(v, about).map(|g| g.0[0])
@@ -652,9 +659,17 @@ pub(super) fn integrate_by_boundary<S: ParametricSurface>(
                         // A latitude (a rim circle about the axis) adds nothing.
                         if dv.abs() > 1e-12 * (1.0 + vn.abs()) {
                             let g = from_start.antiderivative(un - u_from, vn, about);
-                            for (s, x) in sums.iter_mut().zip(g) {
+                            // `F` rounds as `u` does, by its slope's ulps of
+                            // `u`, which counts where `F` itself is near
+                            // nothing: along an edge on the ruling where the
+                            // wires start, every piece's integral is rounding.
+                            let slopes = chart.revolution.slope_bound(vn, about);
+                            let u_rounding = 4.0 * f64::EPSILON * (1.0 + un.abs() + u_from.abs());
+                            for ((s, x), slope) in sums.iter_mut().zip(g).zip(slopes) {
                                 *s += w * dv * x;
-                                rounding = rounding.max((w * nv * x).abs());
+                                rounding = rounding
+                                    .max((w * nv * x).abs())
+                                    .max((w * dv * slope).abs() * u_rounding);
                             }
                         }
                         sums[8] += w * (un * dv - vn * du);
