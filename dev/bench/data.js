@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795338890223,
+  "lastUpdate": 1795339429748,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -75059,6 +75059,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25383656,
             "range": "± 1681534",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c7f7717a74b27c17019479edb77be9a90a3f0e46",
+          "message": "fix(blend): build concave rounds before the convex rounds they meet at a corner (#2681)\n\n## Summary\n\nWhere a concave round meets convex rounds at a corner, `fillet_v2` gave\na face whose outline crosses itself, or an open mesh (#2607). With this\nchange, those corners build valid and watertight, with the closed-form\nvolume.\n\nThree more issues no longer reproduce on main, and their tests now run.\n#2608 and #2609 went with #2646, and #2616 with the walking fillet's\nseam fixes.\n\nFixes #2607, fixes #2608, fixes #2609, fixes #2616.\n\n## The change\n\n- **Concave rounds first.** A concave round and convex rounds can meet\nat a step's corner and touch at one point. With three rounds,\n`build_junction_fan` closed the corner with a sphere about the vertex,\nand the floor and the wall then crossed themselves. With two, the\ncontacts ran past each other.\n- `concave_first` (new,\n`crates/blend/src/fillet_builder/concave_first.rs`) acts only where a\njunction joins a concave contour to a convex one. It builds the concave\nrounds first, then the rest of each convex edge. A new edge that joins\ntwo convex rounds of one radius, tangent to both, is the concave round's\nend arc. Its round is a quarter torus.\n- **Straight B-spline contacts.** A concave round's contact is a\nstraight B-spline. A face with two contacts ending on such an edge ran\nits wire out along the edge and back, which made faces of zero area.\n`trimmer::is_straight` now treats a straight B-spline, or a piece of\none, as a spoke, so the trim splits the edge at each contact end.\n- **One pass where the concave rounds cannot go first.** The builder\nthen rounds all the edges in one pass, as main does. This applies in\nthree cases:\n- a concave round takes a convex round's whole edge (the depth-step\nscoop, #2680);\n  - a convex round at the corner varies in radius;\n  - either stage fails or leaves an edge unrounded.\n\n## Tests\n\n- `crates/operations/tests/fillet_concave_and_convex_corner.rs`: four\ncases of a stepped block and a slot through a plate, upright, turned and\nmirrored, at radii (2, 2) and (3, 1.5). Each checks the closed-form\nvolume (Pappus for the quarter torus), `validate_solid`, a watertight\nmesh at 0.1 and 0.01, and that no face has zero area. Before, the\nthree-round corner was invalid at 48022.06 against 48000.1345, and the\nslot left 12 open mesh edges and 14 faces of zero area.\n- `concave_pocket_corner_pair_keeps_the_junction_fan` runs again and\nchecks the overlap's closed form `r^3 (5/3 - pi/2)` to 1e-5 at r = 2 and\n3.5, in 3 poses.\n- `full_capture_fillet_is_complete_and_closed` in\n`crates/io/tests/cross_one_row_fillet_inmem.rs` now requires a valid\nsolid and a watertight mesh. Before, the capture had 56 validation\nerrors and 1,710 open mesh edges.\n- #2608: the two concave end-tab tests run again, with\n`concave_corner_of_a_mirrored_plate_and_arm` added. #2609:\n`a_round_along_a_dishs_end_arc` runs again.\n- #2616: `crates/operations/tests/fillet_slanted_rod_rim.rs` rounds the\nellipse where a slanted plane cuts a rod at r = 0.3, 0.5 and 0.8. The\nresult is valid and watertight. The removed volume is within 1e-4 of an\nintegral of the region a ball rolling inside the rod cannot reach.\n- On `903bd071b`, these pass:\n- the brepkit-blend lib (214 tests) and the wasm lib's fillet tests\n(36);\n- the fillet, chamfer, corner, scoop, round and blend test files of\nbrepkit-operations (390 passed, 1 ignored);\n- the same test files of brepkit-io (113 passed, 2 skipped), with\n`depthstep_fillet_variable_is_watertight`.\n\n## Still open\n\n- #2588, #2589 and #2610 stay honest refusals. I commented the root of\neach and the next step.\n- #2680: the depth-step scoop's fillet closes, but on main and here\n`validate_solid` finds a wire that crosses itself.\n- The cross one-row capture reads 64,965.53 against its 64,968 oracle,\nand `oriented_solid_volume` reads 64,961.34.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nWhere a concave round meets convex rounds at a corner, `fillet_v2`\nproduced a face whose outline crossed itself or an open mesh. These\ncorners now build valid and watertight, with the closed-form volume.\n\n**The change**\n- Concave rounds are built first; the convex rounds then run along what\nis left of their edges, and where a concave round's end joins two\nequal-radius convex rounds, they run on round it as a quarter torus.\n- A straight B-spline contact is now treated as a spoke, so a face with\ntwo contacts ending on one such edge gets it split at each end instead\nof gaining zero-area faces.\n- Where a concave round takes a convex round's whole edge, a convex\nround's radius varies, or a stage fails, the rounds fall back to one\npass; the staged attempt runs in a topology transaction, so it leaves\nnothing behind.\n- Leftover edge matching now uses a tolerance from the compared edges'\nown size, with a roundoff allowance for coordinates far from the origin,\nso neither a long solid's end arc nor a solid moved far off is confused\nwith a straight edge piece.\n\nThe fix also closes the concave end-tab, dished-vault end-arc, and\nslanted-rod-rim cases (#2608, #2609, #2616); volume checks on the pocket\ncorner and the stepped-block corners match the closed forms.\n\n<sup>Written for commit 7035ce39aebb3d98ba20628b1415e9c8ac574336.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2681?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2681?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2681&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-11-22T09:20:29Z",
+          "tree_id": "d94cd12c5eb7b1494d7e3f1df6a3aae4372020b7",
+          "url": "https://github.com/andymai/brepkit/commit/c7f7717a74b27c17019479edb77be9a90a3f0e46"
+        },
+        "date": 1795339417382,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 997463,
+            "range": "± 42473",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1013730,
+            "range": "± 8477",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11214,
+            "range": "± 19",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 655233,
+            "range": "± 3497",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 21423460,
+            "range": "± 296312",
             "unit": "ns/iter"
           }
         ]
