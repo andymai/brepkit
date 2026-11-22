@@ -4245,63 +4245,36 @@ fn component_aabb(topo: &Topology, comp: &[FaceId]) -> Option<(Point3, Point3)> 
     Some((aabb.min, aabb.max))
 }
 
-/// Does the closed surface made of `faces` enclose `p`?
+/// Whether the closed surface that `classifier` holds encloses the piece made
+/// of `inner`, read at the first vertex of `inner` that lies off that
+/// surface.
 ///
-/// Ray-parity against the component's own tessellation. Read-only by design:
-/// building a temporary solid per component would add entities to an arena that
-/// never reclaims, which is the growth cliff fixed in #1237.
-///
-/// `watertight_ray_triangle_intersect` reports exactly one hit on a shared edge,
-/// so parity is meaningful across face boundaries. The direction is deliberately
-/// irrational so the ray does not graze a face boundary or lie in a face plane —
-/// the degeneracy that makes axis-aligned probes unreliable on the feature-plane
-/// intersections these pieces are full of. Returns `None` when the component
-/// cannot be tessellated, so callers can fall back rather than guess.
-fn component_encloses_point(
+/// The classifier casts rays against the faces' own surfaces, analytic and
+/// NURBS, trimmed by their wires: a piece just inside the wall reads as
+/// inside however near it lies, which a mesh of the wall cannot promise
+/// (its chords pass inside the surface by up to the deflection). It builds
+/// nothing in the arena, which never reclaims what it holds. `None` when no
+/// vertex of `inner` stands off the surface or a face cannot be read, so
+/// callers can fall back rather than guess.
+fn piece_encloses(
     topo: &Topology,
-    faces: &[FaceId],
-    p: Point3,
-    deflection: f64,
+    classifier: &brepkit_check::classify::SolidClassifier<'_>,
+    inner: &[FaceId],
 ) -> Option<bool> {
-    // A sqrt-prime direction: irrational in every component, so the ray cannot
-    // lie in a face plane or run along an edge — the same generic-direction
-    // escape the ray-cast classifier uses for degenerate probes.
-    let dir = Vec3::new(2.0_f64.sqrt(), 3.0_f64.sqrt(), 5.0_f64.sqrt())
-        .normalize()
-        .ok()?;
-    let mut crossings = 0usize;
-    let mut any_triangle = false;
-    for &fid in faces {
-        let mesh = crate::tessellate::tessellate_with_uvs(topo, fid, deflection).ok()?;
-        let pos = &mesh.mesh.positions;
-        for tri in mesh.mesh.indices.chunks_exact(3) {
-            let (a, b, c) = (
-                pos[tri[0] as usize],
-                pos[tri[1] as usize],
-                pos[tri[2] as usize],
-            );
-            any_triangle = true;
-            if let Some(hit) =
-                brepkit_math::ray_triangle::watertight_ray_triangle_intersect(p, dir, a, b, c)
-                && hit.t > 1e-9
-            {
-                crossings += 1;
-            }
-        }
-    }
-    any_triangle.then_some(crossings % 2 == 1)
-}
-
-/// Any vertex position on `faces`, for use as a probe point.
-fn any_vertex_of(topo: &Topology, faces: &[FaceId]) -> Option<Point3> {
-    for &fid in faces {
+    use brepkit_check::classify::{ClassifyOptions, PointClassification};
+    let options = ClassifyOptions::default();
+    for &fid in inner {
         let face = topo.face(fid).ok()?;
-        let wire = topo.wire(face.outer_wire()).ok()?;
-        if let Some(oe) = wire.edges().first()
-            && let Ok(edge) = topo.edge(oe.edge())
-            && let Ok(v) = topo.vertex(edge.start())
-        {
-            return Some(v.point());
+        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            for oe in topo.wire(wid).ok()?.edges() {
+                let edge = topo.edge(oe.edge()).ok()?;
+                let p = topo.vertex(edge.start()).ok()?.point();
+                match classifier.classify(p, &options).ok()? {
+                    PointClassification::Inside => return Some(true),
+                    PointClassification::Outside => return Some(false),
+                    PointClassification::OnBoundary => {}
+                }
+            }
         }
     }
     None
@@ -4398,19 +4371,22 @@ fn components_are_disjoint_pieces(topo: &Topology, components: &[Vec<FaceId>]) -
     // each order is probed on its own. If the probe cannot be evaluated the
     // pair falls back to the conservative answer.
     for outer in 0..boxes.len() {
+        let mut classifier = None;
         for inner in 0..boxes.len() {
             if outer == inner || !may_nest(outer, inner) {
                 continue;
             }
-            let diag = (boxes[outer].1.max - boxes[outer].1.min).length();
-            let deflection = (diag / 200.0).max(1e-4);
-            let Some(probe) = any_vertex_of(topo, &components[inner]) else {
+            if classifier.is_none() {
+                classifier =
+                    brepkit_check::classify::SolidClassifier::of_faces(topo, &components[outer])
+                        .ok();
+            }
+            let Some(classifier) = classifier.as_ref() else {
                 return false;
             };
-            match component_encloses_point(topo, &components[outer], probe, deflection) {
-                Some(true) => return false,
+            match piece_encloses(topo, classifier, &components[inner]) {
+                Some(true) | None => return false,
                 Some(false) => {}
-                None => return false,
             }
         }
     }

@@ -8237,6 +8237,53 @@ fn a_cavity_whose_face_box_reaches_past_its_ball_is_nested() {
     }
 }
 
+/// A ball 0.07 inside the wall of a ball round it, turned about the axis so
+/// that its vertices sit between the outer ball's, nests in it whichever
+/// order the two come in, and so does one 0.001 inside. Read against a mesh
+/// of the outer ball, whose chords pass inside its surface by up to the
+/// deflection, the count of crossings read the inner ball's vertex as
+/// outside; which wall gaps passed hung on the mesh's sample count.
+#[test]
+fn a_ball_just_inside_its_balls_wall_nests_whichever_order_it_comes_in() {
+    use brepkit_math::mat::Mat4;
+    use brepkit_topology::explorer::solid_faces;
+    let turn = Mat4::rotation_z(0.7) * Mat4::rotation_x(0.4) * Mat4::rotation_y(1.1);
+    for ((name, pose), radius) in [
+        ("upright", Mat4::identity()),
+        ("turned", turn),
+        ("mirrored", Mat4::scale(1.0, -1.0, 1.0)),
+    ]
+    .into_iter()
+    .flat_map(|p| [9.93, 9.999].map(|r| (p, r)))
+    {
+        let mut topo = Topology::new();
+        let ball = crate::primitives::make_sphere(&mut topo, 10.0, 32).unwrap();
+        let inner = crate::primitives::make_sphere(&mut topo, radius, 32).unwrap();
+        crate::transform::transform_solid(
+            &mut topo,
+            inner,
+            &Mat4::rotation_z(std::f64::consts::PI / 27.0),
+        )
+        .unwrap();
+        for s in [ball, inner] {
+            crate::transform::transform_solid(&mut topo, s, &pose).unwrap();
+        }
+        let (ball_faces, inner_faces) = (
+            solid_faces(&topo, ball).unwrap(),
+            solid_faces(&topo, inner).unwrap(),
+        );
+        for (order, comps) in [
+            ("first", vec![inner_faces.clone(), ball_faces.clone()]),
+            ("second", vec![ball_faces, inner_faces]),
+        ] {
+            assert!(
+                !super::components_are_disjoint_pieces(&topo, &comps),
+                "{name}: the inner ball of radius {radius} nests in the ball, listed {order}"
+            );
+        }
+    }
+}
+
 /// Multi-region Euler acceptance must tolerate genus per piece.
 ///
 /// `euler_balanced` used to compare against a fixed bound of 2, i.e. it assumed
