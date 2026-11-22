@@ -10,6 +10,8 @@
 //! - The corner of a cube that reaches into a torus: three flats and a patch
 //!   of the torus a sixth of a turn from where its frame's angle starts, or
 //!   most of a turn the other way once mirrored.
+//! - A ball less a corner: the ball's halves meet along a polygon of chords
+//!   of its equator, which lie inside the ball.
 
 #[cfg(test)]
 mod tests {
@@ -23,7 +25,9 @@ mod tests {
     use brepkit_operations::blend_ops::chamfer_v2;
     use brepkit_operations::boolean::{BooleanOp, boolean};
     use brepkit_operations::measure::solid_volume;
-    use brepkit_operations::primitives::{make_box, make_cone, make_cylinder, make_torus};
+    use brepkit_operations::primitives::{
+        make_box, make_cone, make_cylinder, make_sphere, make_torus,
+    };
     use brepkit_operations::transform::transform_solid;
     use brepkit_topology::Topology;
     use brepkit_topology::edge::EdgeCurve;
@@ -158,11 +162,10 @@ mod tests {
     /// The cube's corner that reaches into the torus, `(x, y, z)` least.
     const CORNER: [f64; 3] = [2.4, 4.6, 0.5];
 
-    /// The area of the disc of radius `rho` about the torus's axis beyond
-    /// the corner's lines `x = 2.4` and `y = 4.6`: the circle stays inside
-    /// the cube's other sides.
-    fn corner_cap(rho: f64) -> f64 {
-        let [x0, y0, _] = CORNER;
+    /// The area of the disc of radius `rho` about the `z` axis beyond the
+    /// lines `x = x0` and `y = y0`, where the circle stays inside a cube's
+    /// other sides.
+    fn corner_cap(rho: f64, (x0, y0): (f64, f64)) -> f64 {
         if rho * rho <= x0.mul_add(x0, y0 * y0) {
             return 0.0;
         }
@@ -184,7 +187,7 @@ mod tests {
         let reach = x0.hypot(y0) - MAJOR;
         let top = MINOR.mul_add(MINOR, -reach * reach).sqrt();
         let expected = integral(z0, top, 8, |z| {
-            corner_cap(MAJOR + MINOR.mul_add(MINOR, -z * z).sqrt())
+            corner_cap(MAJOR + MINOR.mul_add(MINOR, -z * z).sqrt(), (x0, y0))
         });
         for (name, pose) in poses() {
             let mut topo = Topology::new();
@@ -194,6 +197,33 @@ mod tests {
             let piece = boolean(&mut topo, BooleanOp::Intersect, ring, cube).unwrap();
             transform_solid(&mut topo, piece, &pose).unwrap();
             let volume = solid_volume(&topo, piece, 1e-3).unwrap();
+            assert!(
+                (volume - expected).abs() < 1e-9 * expected,
+                "{name}: {volume}, expected {expected}, off {:e}",
+                (volume - expected) / expected
+            );
+        }
+    }
+
+    #[test]
+    fn a_ball_less_a_corner_measures_alike_in_every_pose() {
+        // The corner `x > 1, y > 1.2, z > 0.8` takes the disc of the ball's
+        // section beyond its two lines, up to where the section's rim passes
+        // the corner's edge.
+        let (x0, y0, z0) = (1.0_f64, 1.2_f64, 0.8);
+        let top = (9.0 - x0.mul_add(x0, y0 * y0)).sqrt();
+        let corner = integral(z0, top, 8, |z| {
+            corner_cap(z.mul_add(-z, 9.0).sqrt(), (x0, y0))
+        });
+        let expected = 36.0 * PI - corner;
+        for (name, pose) in poses() {
+            let mut topo = Topology::new();
+            let ball = make_sphere(&mut topo, 3.0, 32).unwrap();
+            let cube = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+            transform_solid(&mut topo, cube, &Mat4::translation(x0, y0, z0)).unwrap();
+            let rest = boolean(&mut topo, BooleanOp::Cut, ball, cube).unwrap();
+            transform_solid(&mut topo, rest, &pose).unwrap();
+            let volume = solid_volume(&topo, rest, 1e-3).unwrap();
             assert!(
                 (volume - expected).abs() < 1e-9 * expected,
                 "{name}: {volume}, expected {expected}, off {:e}",

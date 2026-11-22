@@ -327,6 +327,29 @@ impl Revolution {
         }
     }
 
+    /// How far `p` lies from the centre of the meridian through it at `u`,
+    /// where the meridian is a circle (a sphere's centre, the centre of a
+    /// torus's tube), against the circle's radius; one where the meridian
+    /// is straight. A point off the surface by `d` moves the latitude of its
+    /// nearest point on the surface `1 + d / radius` times slower.
+    fn meridian_stretch(&self, p: Point3, u: f64) -> f64 {
+        let p = Vec3::new(p.x(), p.y(), p.z());
+        let (centre, radius) = match self.profile {
+            Profile::Cylinder { .. } | Profile::Cone { .. } => return 1.0,
+            Profile::Sphere { radius } => (self.centre, radius),
+            Profile::Torus { major, minor } => {
+                let (sin, cos) = u.sin_cos();
+                (self.centre + (self.x * cos + self.y * sin) * major, minor)
+            }
+        };
+        let reach = (p - centre).length();
+        if reach > 1e-9 * radius {
+            reach / radius
+        } else {
+            1.0
+        }
+    }
+
     /// The same surface with `u` taken from `angle`: `u - angle` in it is
     /// `u` here.
     fn turned(self, angle: f64) -> Self {
@@ -601,15 +624,19 @@ pub(super) fn integrate_by_boundary<S: ParametricSurface>(
                         let [u1, u2, u3, u4] =
                             [t + h, t - h, t + 2.0 * h, t - 2.0 * h].map(|x| at(x).0);
                         let du = 8.0f64.madd(wrap_pi(u1 - u2), -wrap_pi(u3 - u4)) / (12.0 * h);
-                        // `dv/dt` from the curve's velocity: the surface's
+                        // `dv/dt` of the edge's nearest points on the
+                        // surface, from the edge's velocity: the surface's
                         // partials are square to each other, and its `v`
                         // partial never vanishes. A stencil's differences
                         // carry the rounding of each point, which a curve far
                         // from its own centre (a long arc of a huge ellipse)
-                        // has in plenty.
+                        // has in plenty. An edge off the surface (a chord of
+                        // a ball's equator) runs its nearest points slower
+                        // where the meridian curves.
                         let sv = chart.surface.partial_v(un, vn);
                         let dv = sv.dot(edge_velocity(edge.curve, t, edge.start, edge.end))
-                            / sv.length_squared();
+                            / (sv.length_squared()
+                                * chart.revolution.meridian_stretch(point(t), un));
                         // Each difference rounds by an ulp of its coordinate.
                         let (nu, nv) = (
                             1.5 * f64::EPSILON * (1.0 + un.abs()) / h.abs(),
