@@ -17,9 +17,10 @@ mod tests {
 
     use std::f64::consts::{FRAC_PI_2, FRAC_PI_4, PI};
 
+    use brepkit_blend::radius_law::RadiusLaw;
     use brepkit_math::mat::Mat4;
     use brepkit_math::vec::{Point3, Vec3};
-    use brepkit_operations::blend_ops::{all_blended, fillet_v2};
+    use brepkit_operations::blend_ops::{all_blended, fillet_v2, fillet_v2_variable};
     use brepkit_operations::boolean::{BooleanOp, boolean};
     use brepkit_operations::extrude::extrude;
     use brepkit_operations::measure::solid_volume;
@@ -122,6 +123,36 @@ mod tests {
         volume
     }
 
+    /// Rounds `edges` of `solid` by the variable-radius path, each at the
+    /// constant radius `r`, and checks the result is valid, watertight and
+    /// of volume `want`.
+    fn rounds_by_law_to(
+        label: &str,
+        topo: &mut Topology,
+        solid: SolidId,
+        edges: &[EdgeId],
+        r: f64,
+        want: f64,
+    ) {
+        let laws = edges
+            .iter()
+            .map(|&edge| (edge, RadiusLaw::Constant(r)))
+            .collect();
+        let result = fillet_v2_variable(topo, solid, laws)
+            .and_then(all_blended)
+            .unwrap_or_else(|e| panic!("{label}: {e}"));
+        assert_ne!(result, solid, "{label}: nothing rounded");
+        let report = validate_solid(topo, result).unwrap();
+        assert!(report.is_valid(), "{label}: invalid: {report:?}");
+        let mesh = tessellate_solid(topo, result, 0.02).unwrap();
+        assert!(is_watertight(&mesh), "{label}: mesh not watertight");
+        let volume = solid_volume(topo, result, 0.001).unwrap();
+        assert!(
+            (volume - want).abs() <= 1e-6 * want,
+            "{label}: volume {volume}, want {want}"
+        );
+    }
+
     fn poses() -> [(&'static str, Mat4); 3] {
         [
             ("upright", Mat4::identity()),
@@ -153,6 +184,35 @@ mod tests {
                     r,
                     Some(VOLUME - rim_rounds_take(r)),
                 );
+            }
+        }
+    }
+
+    /// The variable-radius path rounds the fused L's rim, at one radius
+    /// along each edge, to the volume the extruded L's rim rounds to.
+    #[test]
+    fn the_rim_of_a_fused_l_rounds_by_law_as_the_extruded_one() {
+        for r in [0.5, 1.0] {
+            let mut topo = Topology::new();
+            let extruded = extruded_l(&mut topo);
+            let rim = edges_where(&topo, extruded, on_top);
+            let want = rounds_to(
+                &format!("extruded r {r}"),
+                &mut topo,
+                extruded,
+                &rim,
+                r,
+                None,
+            );
+            assert!((want - (VOLUME - rim_rounds_take(r))).abs() <= 1e-6 * want);
+            for (pose_name, pose) in poses() {
+                let label = format!("by law, {pose_name} r {r}");
+                let mut topo = Topology::new();
+                let l = fused_l(&mut topo);
+                let rim = edges_where(&topo, l, |a, b| on_top(a, b) && !on_seam(a, b));
+                assert_eq!(rim.len(), 8, "{label}: the rim's pieces");
+                transform_solid(&mut topo, l, &pose).unwrap();
+                rounds_by_law_to(&label, &mut topo, l, &rim, r, want);
             }
         }
     }

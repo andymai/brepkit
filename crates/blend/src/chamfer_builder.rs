@@ -64,6 +64,12 @@ enum ChamferEdgeSet {
 ///
 /// Collects edge sets with their distance parameters, then computes and
 /// assembles the chamfered solid in a single `build()` call.
+///
+/// The builder does not check where its result's faces lie, or that a
+/// pcurve it gives an edge follows that edge. Those checks live in a crate
+/// above this one. Use `brepkit_operations::blend_ops::chamfer_v2`,
+/// `chamfer_v2_on` or `chamfer_distance_angle`, which refuse an invalid
+/// result.
 pub struct ChamferBuilder<'a> {
     topo: &'a mut Topology,
     solid: SolidId,

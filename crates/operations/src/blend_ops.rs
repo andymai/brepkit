@@ -1,10 +1,12 @@
 //! Thin wrappers around `brepkit-blend` for the operations API.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use brepkit_blend::BlendResult;
 use brepkit_blend::chamfer_builder::ChamferBuilder;
 use brepkit_blend::fillet_builder::FilletBuilder;
+use brepkit_blend::radius_law::RadiusLaw;
 use brepkit_math::madd::Madd;
 use brepkit_math::tolerance::Tolerance;
 use brepkit_math::vec::{Point3, Vec3};
@@ -207,16 +209,7 @@ fn fillet_directly(
 }
 
 /// `edges` rounded on a copy of `solid` with the flat seams at the picks
-/// gone. A boolean can keep two faces of one plane as pieces that meet in a
-/// flat seam. The corner solver finds the face two rounds share by its
-/// identity, so two rounds that meet where a seam cuts that face find none.
-/// On the copy, the plane faces that a seam at an end of a pick divides are
-/// merged: faces of one plane within the linear tolerance
-/// ([`crate::query::edges_in_one_surface`]) and facing one way. No edge is
-/// joined to another, so each pick is its own edge on the copy.
-///
-/// A picked seam is passed over, as the walking engine passes it over. `None`
-/// where a pick is not an edge of `solid`, where no flat seam meets a pick,
+/// gone (see [`without_flat_seams`]). `None` where there is no such copy,
 /// or where the fillet of the copy fails or leaves an invalid solid.
 fn fillet_across_flat_seams(
     topo: &mut Topology,
@@ -224,6 +217,62 @@ fn fillet_across_flat_seams(
     edges: &[EdgeId],
     radius: f64,
 ) -> Result<Option<BlendResult>, OperationsError> {
+    let Some(merged) = without_flat_seams(topo, solid, edges)? else {
+        return Ok(None);
+    };
+    let result = match fillet_directly(topo, merged.copy, &merged.targets, radius) {
+        Ok(result) => result,
+        Err(e) => {
+            log::debug!("fillet across flat seams: the joined solid's fillet fails: {e}");
+            return Ok(None);
+        }
+    };
+    Ok(merged.whole(result))
+}
+
+/// A copy of a solid with the flat seams at some picked edges merged away,
+/// and the picks on it.
+struct WithoutFlatSeams {
+    copy: SolidId,
+    /// The picks that are not seams, each once, in the order given.
+    picks: Vec<EdgeId>,
+    /// The copy's edge for each of `picks`.
+    targets: Vec<EdgeId>,
+}
+
+impl WithoutFlatSeams {
+    /// A blend of the copy as a blend of every pick, or `None` where it
+    /// left the copy as it was or any pick out.
+    fn whole(self, result: BlendResult) -> Option<BlendResult> {
+        if result.solid == self.copy || !result.failed.is_empty() {
+            return None;
+        }
+        Some(BlendResult {
+            solid: result.solid,
+            succeeded: self.picks,
+            failed: Vec::new(),
+            is_partial: false,
+        })
+    }
+}
+
+/// A copy of `solid` with the flat seams at the picks gone. A boolean can
+/// keep two faces of one plane as pieces that meet in a flat seam. The corner
+/// solver finds the face two blends share by its identity, so two blends
+/// that meet where a seam cuts that face find none. On the copy, the plane
+/// faces that a seam at an end of a pick divides are merged: faces of one
+/// plane within the linear tolerance ([`crate::query::edges_in_one_surface`])
+/// and facing one way. No edge is joined to another, so each pick is its
+/// own edge on the copy.
+///
+/// A picked seam is passed over, as the walking engine passes it over. `None`
+/// where a pick is not an edge of `solid`, or where no flat seam meets a
+/// pick.
+fn without_flat_seams(
+    topo: &mut Topology,
+    solid: SolidId,
+    edges: &[EdgeId],
+) -> Result<Option<WithoutFlatSeams>, OperationsError> {
     use brepkit_heal::upgrade::unify_same_domain::{UnifyOptions, unify_face_groups};
     let all = brepkit_topology::explorer::solid_edges(topo, solid)?;
     let known: HashSet<EdgeId> = all.iter().copied().collect();
@@ -323,21 +372,10 @@ fn fillet_across_flat_seams(
     if targets.len() != picks.len() {
         return Ok(None);
     }
-    let result = match fillet_directly(topo, copy, &targets, radius) {
-        Ok(result) => result,
-        Err(e) => {
-            log::debug!("fillet across flat seams: the joined solid's fillet fails: {e}");
-            return Ok(None);
-        }
-    };
-    if result.solid == copy || !result.failed.is_empty() {
-        return Ok(None);
-    }
-    Ok(Some(BlendResult {
-        solid: result.solid,
-        succeeded: picks,
-        failed: Vec::new(),
-        is_partial: false,
+    Ok(Some(WithoutFlatSeams {
+        copy,
+        picks,
+        targets,
     }))
 }
 
@@ -1543,30 +1581,110 @@ fn chamfered_whole(solid: SolidId, pairs: &[(EdgeId, FaceId)]) -> BlendResult {
 
 /// Fillet edges with per-edge radius laws (v2 walking engine).
 ///
+/// A result is refused, and a fillet failing at flat seams made again with
+/// them merged, as in [`fillet_v2`].
+///
 /// # Errors
 /// Returns `OperationsError` if `edge_laws` is empty or the blend
 /// computation fails.
 pub fn fillet_v2_variable(
     topo: &mut Topology,
     solid: SolidId,
-    edge_laws: Vec<(EdgeId, brepkit_blend::radius_law::RadiusLaw)>,
+    edge_laws: Vec<(EdgeId, RadiusLaw)>,
 ) -> Result<BlendResult, OperationsError> {
     if edge_laws.is_empty() {
         return Err(OperationsError::InvalidInput {
             reason: "no edges specified".into(),
         });
     }
+    // A law is used again for the retry, and a custom law cannot be copied,
+    // so each attempt gets a law that reads the shared one.
+    let shared: Vec<(EdgeId, Arc<RadiusLaw>)> = edge_laws
+        .into_iter()
+        .map(|(edge, law)| (edge, Arc::new(law)))
+        .collect();
+    let direct = fillet_by_laws(topo, solid, laws_of(&shared));
+    if direct.as_ref().is_ok_and(|result| result.failed.is_empty()) {
+        return direct;
+    }
+    match fillet_by_laws_across_flat_seams(topo, solid, &shared) {
+        Ok(Some(result)) => return Ok(result),
+        Ok(None) => {}
+        Err(e) => log::debug!("variable fillet across flat seams: {e}"),
+    }
+    direct
+}
+
+/// Each law of `shared` as a law of its own.
+fn laws_of(shared: &[(EdgeId, Arc<RadiusLaw>)]) -> Vec<(EdgeId, RadiusLaw)> {
+    shared
+        .iter()
+        .map(|(edge, law)| (*edge, law_reading(law)))
+        .collect()
+}
+
+/// A law equal to `law`: the same law where it is a closed form, else one
+/// that reads it.
+fn law_reading(law: &Arc<RadiusLaw>) -> RadiusLaw {
+    match **law {
+        RadiusLaw::Constant(r) => RadiusLaw::Constant(r),
+        RadiusLaw::Linear { start, end } => RadiusLaw::Linear { start, end },
+        RadiusLaw::SCurve { start, end } => RadiusLaw::SCurve { start, end },
+        RadiusLaw::Custom(_) => {
+            let law = Arc::clone(law);
+            RadiusLaw::Custom(Box::new(move |t| law.evaluate(t)))
+        }
+    }
+}
+
+/// The edges of `shared` rounded by their laws on a copy of `solid` with
+/// the flat seams at them gone (see [`without_flat_seams`]). `None` where
+/// there is no such copy, where an edge is given more than one law, or
+/// where the fillet of the copy fails or leaves an invalid solid.
+fn fillet_by_laws_across_flat_seams(
+    topo: &mut Topology,
+    solid: SolidId,
+    shared: &[(EdgeId, Arc<RadiusLaw>)],
+) -> Result<Option<BlendResult>, OperationsError> {
+    let edges: Vec<EdgeId> = shared.iter().map(|&(edge, _)| edge).collect();
+    let Some(merged) = without_flat_seams(topo, solid, &edges)? else {
+        return Ok(None);
+    };
+    let mut laws = Vec::with_capacity(merged.picks.len());
+    for (pick, &target) in merged.picks.iter().zip(&merged.targets) {
+        let mut given = shared.iter().filter(|(edge, _)| edge == pick);
+        let (Some((_, law)), None) = (given.next(), given.next()) else {
+            return Ok(None);
+        };
+        laws.push((target, law_reading(law)));
+    }
+    let result = match fillet_by_laws(topo, merged.copy, laws) {
+        Ok(result) => result,
+        Err(e) => {
+            log::debug!("variable fillet across flat seams: the joined solid's fillet fails: {e}");
+            return Ok(None);
+        }
+    };
+    Ok(merged.whole(result))
+}
+
+/// `edge_laws` of `solid` rounded by the walking engine as they are.
+fn fillet_by_laws(
+    topo: &mut Topology,
+    solid: SolidId,
+    edge_laws: Vec<(EdgeId, RadiusLaw)>,
+) -> Result<BlendResult, OperationsError> {
     // Group tangent-continuous runs with an identical constant radius into
     // one edge set. The builder still computes per-edge stripes inside a
     // set, so grouping does not remove in-run junctions by itself; it keeps
     // each run under one radius law and gives downstream corner handling a
     // consistent picture of which junctions are true radius-change or
     // angular corners.
-    let mut remaining: Vec<(EdgeId, brepkit_blend::radius_law::RadiusLaw)> = edge_laws;
-    let mut chains: Vec<(Vec<EdgeId>, brepkit_blend::radius_law::RadiusLaw)> = Vec::new();
+    let mut remaining: Vec<(EdgeId, RadiusLaw)> = edge_laws;
+    let mut chains: Vec<(Vec<EdgeId>, RadiusLaw)> = Vec::new();
     while let Some((seed, law)) = remaining.pop() {
         let seed_r = match law {
-            brepkit_blend::radius_law::RadiusLaw::Constant(r) => Some(r),
+            RadiusLaw::Constant(r) => Some(r),
             _ => None,
         };
         let mut chain = vec![seed];
@@ -1575,8 +1693,7 @@ pub fn fillet_v2_variable(
                 let mut grew = false;
                 let mut i = 0;
                 while i < remaining.len() {
-                    let brepkit_blend::radius_law::RadiusLaw::Constant(cand_r) = remaining[i].1
-                    else {
+                    let RadiusLaw::Constant(cand_r) = remaining[i].1 else {
                         i += 1;
                         continue;
                     };
@@ -1725,6 +1842,37 @@ mod tests {
 
     fn p(x: f64, y: f64, z: f64) -> Point3 {
         Point3::new(x, y, z)
+    }
+
+    /// A law read for a second attempt keeps its kind, which the grouping of
+    /// constant runs reads, and gives the radii of the law it reads.
+    #[test]
+    fn a_law_read_again_keeps_its_kind_and_radii() {
+        use brepkit_blend::radius_law::RadiusLaw;
+        let laws = [
+            RadiusLaw::Constant(0.5),
+            RadiusLaw::Linear {
+                start: 0.2,
+                end: 0.8,
+            },
+            RadiusLaw::SCurve {
+                start: 0.8,
+                end: 0.3,
+            },
+            RadiusLaw::Custom(Box::new(|t| 0.3 + t * t)),
+        ];
+        for law in laws {
+            let shared = std::sync::Arc::new(law);
+            let read = super::law_reading(&shared);
+            assert_eq!(
+                std::mem::discriminant(&read),
+                std::mem::discriminant(&*shared)
+            );
+            for k in 0..=8 {
+                let t = f64::from(k) / 8.0;
+                assert!((read.evaluate(t) - shared.evaluate(t)).abs() < 1e-15);
+            }
+        }
     }
 
     /// A cutter of radius 0.5 standing on (0, 10) from z = -0.05 to 10.05.

@@ -61,6 +61,14 @@ fn distinct_edges(edges: &[EdgeId]) -> Vec<EdgeId> {
 ///
 /// Collects edge sets with their radius laws, then computes and assembles
 /// the filleted solid in a single `build()` call.
+///
+/// The builder does not check its result. It checks how its faces share
+/// edges, not where the faces lie, so a result can have a face whose wire
+/// crosses itself, a hole across its face's outline, or two plane faces over
+/// one area, with no edge in [`BlendResult::failed`]. Those checks live in
+/// a crate above this one. Use `brepkit_operations::blend_ops::fillet_v2`
+/// or `fillet_v2_variable`, which refuse such a result and make a fillet
+/// across flat seams again with the seams merged.
 pub struct FilletBuilder<'a> {
     topo: &'a mut Topology,
     solid: SolidId,
@@ -106,6 +114,9 @@ impl<'a> FilletBuilder<'a> {
     /// 4. Trim adjacent faces along contact curves.
     /// 5. Assemble new solid from trimmed faces, blend faces, and untouched
     ///    original faces.
+    ///
+    /// The result is not checked for faults in where its faces lie (see
+    /// [`FilletBuilder`]).
     ///
     /// # Errors
     ///
