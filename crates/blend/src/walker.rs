@@ -210,6 +210,31 @@ impl<'a, F: BlendFunction> Walker<'a, F> {
         BlendParams { u1, v1, u2, v2 }
     }
 
+    /// Whether a step from `from` (whose section is `last`) to the section
+    /// `next` keeps to one branch: solved from `from` at the step's middle
+    /// `s_mid`, each contact must lie within three quarters of the step's
+    /// move of both ends. On one branch it lies about half way; a step that
+    /// leaps to another branch makes the leap in one half.
+    fn splits_evenly(
+        &self,
+        from: BlendParams,
+        last: &CircSection,
+        next: &CircSection,
+        s_mid: f64,
+    ) -> bool {
+        let Ok(ctx) = self.make_context(s_mid) else {
+            return false;
+        };
+        let Some(mid) = self.newton_solve(from, &ctx) else {
+            return false;
+        };
+        let mid = self.func.section(self.surf1, self.surf2, &mid, &ctx);
+        let apart =
+            |a: &CircSection, b: &CircSection| (a.p1 - b.p1).length().max((a.p2 - b.p2).length());
+        let moved = apart(last, next);
+        apart(last, &mid) <= 0.75 * moved && apart(&mid, next) <= 0.75 * moved
+    }
+
     /// Run Newton-Raphson iteration to convergence from an initial guess.
     ///
     /// Returns the converged parameters, or `None` if convergence fails.
@@ -416,7 +441,11 @@ impl<'a, F: BlendFunction> Walker<'a, F> {
             // A contact leaping far along its face while the spine moves a
             // little is the solve landing on another branch (a ball too big
             // for a hollow of a face, wedged where the contact runs away):
-            // not a step either, so it halves like a solve that fails.
+            // not a step either, so it halves like a solve that fails. A
+            // contact that runs fast along its branch (a radius growing
+            // much faster than the spine runs) moves half as far by the
+            // step's middle, where a leap to another branch does all or
+            // none of its move.
             let solved = self.newton_solve(predicted, &ctx_next).filter(|converged| {
                 sections.last().is_none_or(|last| {
                     let sec = self
@@ -424,6 +453,12 @@ impl<'a, F: BlendFunction> Walker<'a, F> {
                         .section(self.surf1, self.surf2, converged, &ctx_next);
                     let moved = (sec.p1 - last.p1).length().max((sec.p2 - last.p2).length());
                     moved <= MAX_CONTACT_SPEED * clamped_step
+                        || self.splits_evenly(
+                            params,
+                            last,
+                            &sec,
+                            s + direction * 0.5 * clamped_step,
+                        )
                 })
             });
             if let Some(converged) = solved {
