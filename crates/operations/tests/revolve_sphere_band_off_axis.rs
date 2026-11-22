@@ -12,6 +12,7 @@ mod tests {
     use brepkit_math::vec::{Point3, Vec3};
     use brepkit_operations::measure::solid_volume;
     use brepkit_operations::revolve::revolve;
+    use brepkit_operations::tessellate::{is_watertight, tessellate_solid};
     use brepkit_operations::validate::validate_solid;
     use brepkit_topology::Topology;
     use brepkit_topology::builder::make_face_from_wire;
@@ -89,8 +90,14 @@ mod tests {
             .map(|&p| topo.add_vertex(Vertex::new(p, 1e-7)))
             .collect();
         let centre = f.at(off, 0.0);
-        let normal = f.out.cross(f.axis);
-        let arc = Circle3D::new_with_ref(centre, -normal, r, pts[0] - centre).unwrap();
+        // About `out × axis`, the arc runs from its low end out past the
+        // equator to its high end, the short way, and not over the poles
+        // across the axis.
+        let arc = Circle3D::new_with_ref(centre, f.out.cross(f.axis), r, pts[0] - centre).unwrap();
+        let swept = EdgeCurve::Circle(arc.clone());
+        let (t0, t1) = swept.domain_with_endpoints(pts[0], pts[1]);
+        let mid = swept.evaluate_with_endpoints(0.5 * (t0 + t1), pts[0], pts[1]);
+        assert!((mid - f.at(off + r, 0.0)).length() < 1e-9 * r);
         let mut edge = |a: usize, b: usize, curve: EdgeCurve| {
             OrientedEdge::new(topo.add_edge(Edge::new(vs[a], vs[b], curve)), true)
         };
@@ -142,11 +149,15 @@ mod tests {
         // The arc swept about its own centre, with the band of width `off`
         // that the centre's place adds.
         let whole = std::f64::consts::PI * (2.0 * r * r * h - 2.0 * h * h * h / 3.0);
+        // The axis is also given by a point far along it, which must not
+        // change the band.
         for (label, f) in frames() {
-            for angle in [TAU, FRAC_PI_2] {
+            for (angle, along) in [(TAU, 0.0), (FRAC_PI_2, 0.0), (TAU, 1e6), (FRAC_PI_2, -1e6)] {
+                let label = format!("{label} axis point {along}");
                 let mut topo = Topology::new();
                 let face = band_profile(&mut topo, &f, r, off);
-                let solid = revolve(&mut topo, face, f.origin, f.axis, angle).unwrap();
+                let axis_point = f.origin + f.axis * along;
+                let solid = revolve(&mut topo, face, axis_point, f.axis, angle).unwrap();
                 let (gap, spheres) = largest_gap_to_spheres(&topo, solid);
                 assert!(spheres > 0, "{label} {angle}: no sphere face");
                 assert!(
@@ -161,6 +172,26 @@ mod tests {
                     (volume - exact).abs() < 1e-7 * exact,
                     "{label} {angle}: {volume} against {exact}"
                 );
+                for deflection in [0.5, 0.05] {
+                    let mesh = tessellate_solid(&topo, solid, deflection).unwrap();
+                    assert!(
+                        is_watertight(&mesh),
+                        "{label} {angle} at {deflection}: the mesh is open"
+                    );
+                    let mesh_volume: f64 = mesh
+                        .indices
+                        .chunks_exact(3)
+                        .map(|t| {
+                            let [a, b, c] =
+                                [t[0], t[1], t[2]].map(|i| mesh.positions[i as usize] - axis_point);
+                            a.dot(b.cross(c)) / 6.0
+                        })
+                        .sum();
+                    assert!(
+                        (mesh_volume - exact).abs() < 5e-3 * exact,
+                        "{label} {angle} at {deflection}: mesh volume {mesh_volume} against {exact}"
+                    );
+                }
             }
         }
     }
