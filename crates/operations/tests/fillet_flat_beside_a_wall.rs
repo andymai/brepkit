@@ -1,10 +1,11 @@
-//! Rounds where a flat meets a cylinder wall along a line, the flat a hair
-//! off parallel to the wall's axis: `y + 5e-8 z = 5` beside a wall of
-//! radius 10 about the `z` axis.
+//! Rounds where a flat meets a cylinder wall along a line: `y = 5` beside a
+//! wall of radius 10 about the `z` axis, exactly parallel to the axis or
+//! leaning off it, `y + 5e-8 z = 5`.
 //!
 //! - A D-shaped hole through a block, both its corners rounded at 1: the
 //!   flat and the bore are both reversed faces, whose wires wind about
-//!   their surfaces' normals.
+//!   their surfaces' normals. Exactly parallel, each corner's band is an
+//!   exact cylinder; leaning, the walker takes it.
 //! - A D-shaped rod 10000 long, one corner rounded at 1: a band laid
 //!   straight along the corner is off the wall by 3.6e-5 at its far end.
 //!
@@ -22,7 +23,7 @@ mod tests {
 
     use brepkit_blend::fillet_builder::FilletBuilder;
     use brepkit_math::mat::Mat4;
-    use brepkit_math::vec::Point3;
+    use brepkit_math::vec::{Point3, Vec3};
     use brepkit_operations::boolean::{BooleanOp, boolean};
     use brepkit_operations::measure::solid_volume;
     use brepkit_operations::primitives::{make_box, make_cylinder};
@@ -32,7 +33,7 @@ mod tests {
     use brepkit_topology::Topology;
     use brepkit_topology::adjacency::AdjacencyIndex;
     use brepkit_topology::edge::EdgeId;
-    use brepkit_topology::explorer::{edge_to_face_map, solid_edges};
+    use brepkit_topology::explorer::{edge_to_face_map, solid_edges, solid_faces};
     use brepkit_topology::face::FaceSurface;
     use brepkit_topology::solid::SolidId;
 
@@ -78,12 +79,13 @@ mod tests {
         0.5 * twice.abs()
     }
 
-    /// `corner_area` integrated over `z` from 0 to `length`.
-    fn corner_volume(length: f64) -> f64 {
+    /// `corner_area` integrated over `z` from 0 to `length`, the flat at
+    /// `y = 5 - tilt z`.
+    fn corner_volume(length: f64, tilt: f64) -> f64 {
         const STEPS: u32 = 50;
         let h = length / f64::from(STEPS);
         (0..STEPS)
-            .map(|k| corner_area((-TILT).mul_add(h * (f64::from(k) + 0.5), FLAT)) * h)
+            .map(|k| corner_area((-tilt).mul_add(h * (f64::from(k) + 0.5), FLAT)) * h)
             .sum()
     }
 
@@ -144,16 +146,17 @@ mod tests {
         worst
     }
 
-    /// Rounds `edges` of `solid` placed by `pose`, and the volume the round
-    /// adds, read with the result turned back upright: a long part's volume
-    /// read in a turned pose moves by about 2e-5 of the whole.
+    /// Rounds `edges` of `solid` placed by `pose`: the volume the round
+    /// adds, read with the result turned back upright (a long part's volume
+    /// read in a turned pose moves by about 2e-5 of the whole), and the
+    /// result as it then stands.
     fn round(
         topo: &mut Topology,
         solid: SolidId,
         edges: &[EdgeId],
         pose: &Mat4,
         what: &str,
-    ) -> f64 {
+    ) -> (f64, SolidId) {
         let before = solid_volume(topo, solid, 1e-3).unwrap();
         transform_solid(topo, solid, pose).unwrap();
         let mut builder = FilletBuilder::new(topo, solid);
@@ -167,36 +170,98 @@ mod tests {
         let mesh = tessellate_solid(topo, built.solid, 0.05).unwrap();
         assert!(is_watertight(&mesh), "{what}: open mesh");
         transform_solid(topo, built.solid, &pose.inverse().unwrap()).unwrap();
-        solid_volume(topo, built.solid, 1e-3).unwrap() - before
+        (
+            solid_volume(topo, built.solid, 1e-3).unwrap() - before,
+            built.solid,
+        )
     }
 
-    /// The flat `y = 5 - 5e-8 z` and the side of it toward the axis, as a
+    /// The flat `y = 5 - tilt z` and the side of it toward the axis, as a
     /// box turned about `x` through the origin.
-    fn toward_axis(topo: &mut Topology, length: f64) -> SolidId {
+    fn toward_axis(topo: &mut Topology, length: f64, tilt: f64) -> SolidId {
         let keep = make_box(topo, 2.0 * WALL, 2.0 * WALL, length + 40.0).unwrap();
         let place =
-            Mat4::rotation_x(TILT.atan()) * Mat4::translation(-WALL, FLAT - 2.0 * WALL, -20.0);
+            Mat4::rotation_x(tilt.atan()) * Mat4::translation(-WALL, FLAT - 2.0 * WALL, -20.0);
         transform_solid(topo, keep, &place).unwrap();
         keep
+    }
+
+    /// A block `length` long less the D-shaped hole, its flat leaning
+    /// `tilt` off the bore's axis, and the hole's two corners.
+    fn d_hole(topo: &mut Topology, length: f64, tilt: f64) -> (SolidId, Vec<EdgeId>) {
+        let block = make_box(topo, 24.0, 24.0, length).unwrap();
+        transform_solid(topo, block, &Mat4::translation(-12.0, -12.0, 0.0)).unwrap();
+        let rod = make_cylinder(topo, WALL, length + 20.0).unwrap();
+        transform_solid(topo, rod, &Mat4::translation(0.0, 0.0, -10.0)).unwrap();
+        let keep = toward_axis(topo, length, tilt);
+        let d = boolean(topo, BooleanOp::Intersect, rod, keep).unwrap();
+        let holed = boolean(topo, BooleanOp::Cut, block, d).unwrap();
+        let edges = corners(topo, holed, 0.5 * length);
+        (holed, edges)
+    }
+
+    /// The flat exactly parallel to the bore: each corner takes an exact
+    /// cylinder band of radius 1 in the hole, its axis 1 off the flat and 9
+    /// from the bore's axis, on the corner's side of the hole.
+    #[test]
+    fn a_d_holes_corners_round_exactly_where_its_flat_is_parallel_to_the_bore() {
+        let length = 100.0;
+        let expected = 2.0 * corner_volume(length, 0.0);
+        let x_axis = ((WALL - R).powi(2) - (FLAT - R).powi(2)).sqrt();
+        for (name, pose) in poses() {
+            let what = format!("parallel D hole, {name}");
+            let mut topo = Topology::new();
+            let (holed, edges) = d_hole(&mut topo, length, 0.0);
+            assert_eq!(edges.len(), 2, "{what}");
+            let (filled, result) = round(&mut topo, holed, &edges, &pose, &what);
+            assert!(
+                (filled - expected).abs() < 1e-6 * expected,
+                "{what}: filled {filled}, expected {expected}"
+            );
+            let mut axes: Vec<f64> = Vec::new();
+            for face in solid_faces(&topo, result).unwrap() {
+                let FaceSurface::Cylinder(band) = topo.face(face).unwrap().surface() else {
+                    continue;
+                };
+                if (band.radius() - WALL).abs() < 1e-9 {
+                    continue;
+                }
+                assert!(
+                    (band.radius() - R).abs() < 1e-9,
+                    "{what}: a band of {}",
+                    band.radius()
+                );
+                assert!(
+                    band.axis().cross(Vec3::new(0.0, 0.0, 1.0)).length() < 1e-9,
+                    "{what}: a band not along the bore"
+                );
+                let o = band.origin();
+                assert!(
+                    (o.y() - (FLAT - R)).abs() < 1e-7,
+                    "{what}: a band's axis at y = {}",
+                    o.y()
+                );
+                axes.push(o.x());
+            }
+            axes.sort_by(f64::total_cmp);
+            assert_eq!(axes.len(), 2, "{what}: bands {axes:?}");
+            assert!(
+                (axes[0] + x_axis).abs() < 1e-7 && (axes[1] - x_axis).abs() < 1e-7,
+                "{what}: bands' axes at x = {axes:?}, expected +-{x_axis}"
+            );
+        }
     }
 
     #[test]
     fn a_d_holes_corners_round_where_its_flat_leans_off_the_bore() {
         let length = 1000.0;
-        let expected = 2.0 * corner_volume(length);
+        let expected = 2.0 * corner_volume(length, TILT);
         for (name, pose) in poses() {
             let what = format!("D hole, {name}");
             let mut topo = Topology::new();
-            let block = make_box(&mut topo, 24.0, 24.0, length).unwrap();
-            transform_solid(&mut topo, block, &Mat4::translation(-12.0, -12.0, 0.0)).unwrap();
-            let rod = make_cylinder(&mut topo, WALL, length + 20.0).unwrap();
-            transform_solid(&mut topo, rod, &Mat4::translation(0.0, 0.0, -10.0)).unwrap();
-            let keep = toward_axis(&mut topo, length);
-            let d = boolean(&mut topo, BooleanOp::Intersect, rod, keep).unwrap();
-            let holed = boolean(&mut topo, BooleanOp::Cut, block, d).unwrap();
-            let edges = corners(&topo, holed, 0.5 * length);
+            let (holed, edges) = d_hole(&mut topo, length, TILT);
             assert_eq!(edges.len(), 2, "{what}");
-            let filled = round(&mut topo, holed, &edges, &pose, &what);
+            let (filled, _) = round(&mut topo, holed, &edges, &pose, &what);
             assert!(
                 (filled - expected).abs() < 1e-3 * expected,
                 "{what}: filled {filled}, expected {expected}"
@@ -207,16 +272,16 @@ mod tests {
     #[test]
     fn a_long_d_rods_corner_rounds_where_its_flat_leans_off_the_wall() {
         let length = 10_000.0;
-        let expected = corner_volume(length);
+        let expected = corner_volume(length, TILT);
         for (name, pose) in poses() {
             let what = format!("D rod, {name}");
             let mut topo = Topology::new();
             let rod = make_cylinder(&mut topo, WALL, length).unwrap();
-            let keep = toward_axis(&mut topo, length);
+            let keep = toward_axis(&mut topo, length, TILT);
             let d = boolean(&mut topo, BooleanOp::Intersect, rod, keep).unwrap();
             let edges = corners(&topo, d, 0.5 * length);
             assert_eq!(edges.len(), 2, "{what}");
-            let removed = -round(&mut topo, d, &edges[..1], &pose, &what);
+            let removed = -round(&mut topo, d, &edges[..1], &pose, &what).0;
             assert!(
                 (removed - expected).abs() < 1e-5 * expected,
                 "{what}: took off {removed}, expected {expected}"
