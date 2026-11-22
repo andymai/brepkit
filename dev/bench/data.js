@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795339429748,
+  "lastUpdate": 1795342333187,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -75113,6 +75113,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 21423460,
             "range": "± 296312",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "7f07e6574d7dbe6ed97a36a571369e0c73f3ca7f",
+          "message": "chore(main): release 4.11.35 (#2684)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[4.11.35](https://github.com/andymai/brepkit/compare/v4.11.34...v4.11.35)\n(2026-11-22)\n\n\n### Bug Fixes\n\n* **algo,operations:** mesh seamless ball faces and lobe holes, read a\nball face's extent by its wires, and close thin ball faces\n([#2679](https://github.com/andymai/brepkit/issues/2679))\n([8a63d77](https://github.com/andymai/brepkit/commit/8a63d77c663d89247e82ecb1c4223a9b8ebe61df))\n* **blend:** build concave rounds before the convex rounds they meet at\na corner ([#2681](https://github.com/andymai/brepkit/issues/2681))\n([c7f7717](https://github.com/andymai/brepkit/commit/c7f7717a74b27c17019479edb77be9a90a3f0e46))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-11-22T10:08:13Z",
+          "tree_id": "55d4969722f328b5ad4914d3742990757c1808c7",
+          "url": "https://github.com/andymai/brepkit/commit/7f07e6574d7dbe6ed97a36a571369e0c73f3ca7f"
+        },
+        "date": 1795342319306,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1188862,
+            "range": "± 13194",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1254040,
+            "range": "± 2951",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13908,
+            "range": "± 954",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 859045,
+            "range": "± 51188",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26813410,
+            "range": "± 127376",
             "unit": "ns/iter"
           }
         ]
