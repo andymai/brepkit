@@ -2878,29 +2878,9 @@ fn build_section_edges(
                         None,
                     );
 
-                    // A closed section's pcurve ends where it starts, so a loop
-                    // round the axis of a periodic face takes its end UV from its
-                    // run in u, which makes the face splitter see a full-width cut.
                     let is_closed = (start - end).length() < tol * 100.0;
-                    let (u_per, _v_per) = super::pcurve_compute::surface_periods(face.surface());
-                    let (start_uv_pt, end_uv_pt) = if let Some(period) = u_per.filter(|_| is_closed)
-                    {
-                        match closed_section_end_uvs(&curve_3d, start, face.surface(), period) {
-                            Some((s, e)) => (Some(s), Some(e)),
-                            None => (Some(pcurve.evaluate(0.0)), Some(pcurve.evaluate(1.0))),
-                        }
-                    } else if matches!(pcurve, brepkit_math::curves2d::Curve2D::Line(_)) {
-                        // Line2D pcurves use arc-length parameterization, so
-                        // `evaluate(1.0)` is one UV unit along the line, not the
-                        // endpoint (e.g. a horizontal circle on a cylinder maps
-                        // to a Line2D spanning the angular extent). Leave the
-                        // endpoints unset; downstream consumers fall back to
-                        // `uv_endpoints_from_pcurve`, which measures the true
-                        // 2D length.
-                        (None, None)
-                    } else {
-                        (Some(pcurve.evaluate(0.0)), Some(pcurve.evaluate(1.0)))
-                    };
+                    let (start_uv_pt, end_uv_pt) =
+                        section_end_uv_hints(&curve_3d, start, is_closed, face.surface(), &pcurve);
 
                     sections.push(SectionEdge {
                         curve_3d,
@@ -3237,6 +3217,42 @@ fn build_section_edges(
     sections
 }
 
+/// The end UVs a section hands the face splitter, or none for the splitter
+/// to recover from the pcurve.
+fn section_end_uv_hints(
+    curve_3d: &EdgeCurve,
+    start: Point3,
+    is_closed: bool,
+    surface: &FaceSurface,
+    pcurve: &brepkit_math::curves2d::Curve2D,
+) -> (
+    Option<brepkit_math::vec::Point2>,
+    Option<brepkit_math::vec::Point2>,
+) {
+    // A closed section's pcurve ends where it starts, so a loop round the axis
+    // of a periodic face takes its end UV from its run in u, which makes the
+    // face splitter see a full-width cut.
+    let (u_per, _v_per) = super::pcurve_compute::surface_periods(surface);
+    if let Some((s, e)) = u_per
+        .filter(|_| is_closed)
+        .and_then(|period| closed_section_end_uvs(curve_3d, start, surface, period))
+    {
+        return (Some(s), Some(e));
+    }
+    if matches!(pcurve, brepkit_math::curves2d::Curve2D::Line(_)) {
+        // Line2D pcurves use arc-length parameterization, so
+        // `evaluate(1.0)` is one UV unit along the line, not the
+        // endpoint (e.g. a horizontal circle on a cylinder maps
+        // to a Line2D spanning the angular extent). Leave the
+        // endpoints unset; downstream consumers fall back to
+        // `uv_endpoints_from_pcurve`, which measures the true
+        // 2D length.
+        (None, None)
+    } else {
+        (Some(pcurve.evaluate(0.0)), Some(pcurve.evaluate(1.0)))
+    }
+}
+
 /// The UVs at the ends of a closed section on a face periodic in `u`. The
 /// end lies past the start by the section's run in `u`: one period for a loop
 /// round the axis, either way, and none for a loop on one side of it. `None`
@@ -3312,8 +3328,8 @@ fn conic_turns_about_u_axis(
 }
 
 /// The run in `u` along a closed spline section, in radians, proved piece by
-/// piece. A rational Bezier piece with positive weights lies in the hull of
-/// its control points. When that hull lies in an open half-plane about the
+/// piece. A rational Bezier piece whose weights share a sign lies in the hull
+/// of its control points. When that hull lies in an open half-plane about the
 /// axis, seen along it, the piece turns about the axis by the wrapped angle
 /// between its ends. Each span of the knots is halved until its pieces pass.
 /// `None` when a piece still fails after many halvings: the curve passes
@@ -3345,7 +3361,7 @@ fn spline_u_run(
     let mut run = 0.0;
     while let Some((a, b, halvings)) = pieces.pop() {
         let hull = brepkit_math::nurbs::decompose::curve_bezier_between(curve, a, b).ok()?;
-        let turned = if hull.iter().all(|q| q[3] > 0.0) {
+        let turned = if hull.iter().all(|q| q[3] > 0.0) || hull.iter().all(|q| q[3] < 0.0) {
             hull.iter()
                 .map(|&q| angle_of(q))
                 .collect::<Option<Vec<f64>>>()
@@ -7893,6 +7909,96 @@ mod tests {
             );
             assert!((e.y() - s.y()).abs() < 1e-9, "{s:?} {e:?}");
         }
+    }
+
+    /// A rational quadratic circle round a cylinder's axis with every weight
+    /// negated, which is the same circle: its end UVs lie a turn apart, one
+    /// way round as written and the other way reversed, and never hold the
+    /// end its line pcurve puts one unit along.
+    #[test]
+    fn a_spline_circle_with_negated_weights_runs_a_turn() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        use brepkit_math::surfaces::CylindricalSurface;
+        use std::f64::consts::{FRAC_1_SQRT_2, TAU};
+        let surface = FaceSurface::Cylinder(
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 2.0)
+                .unwrap(),
+        );
+        let corners: Vec<Point3> = [
+            (1.0, 0.0),
+            (1.0, 1.0),
+            (0.0, 1.0),
+            (-1.0, 1.0),
+            (-1.0, 0.0),
+            (-1.0, -1.0),
+            (0.0, -1.0),
+            (1.0, -1.0),
+            (1.0, 0.0),
+        ]
+        .into_iter()
+        .map(|(x, y)| Point3::new(2.0 * x, 2.0 * y, 1.0))
+        .collect();
+        let weights: Vec<f64> = (0..9)
+            .map(|k| if k % 2 == 1 { -FRAC_1_SQRT_2 } else { -1.0 })
+            .collect();
+        let knots = vec![
+            0.0, 0.0, 0.0, 0.25, 0.25, 0.5, 0.5, 0.75, 0.75, 1.0, 1.0, 1.0,
+        ];
+        let circle =
+            EdgeCurve::NurbsCurve(NurbsCurve::new(2, knots, corners.clone(), weights).unwrap());
+        let start = corners[0];
+        for (curve, turns) in [(circle.reversed().unwrap(), -1.0), (circle, 1.0)] {
+            let pcurve = super::super::pcurve_compute::compute_pcurve_on_surface(
+                &curve,
+                start,
+                start,
+                &surface,
+                &[],
+                None,
+            );
+            let (s, e) = section_end_uv_hints(&curve, start, true, &surface, &pcurve);
+            let (s, e) = (s.unwrap(), e.unwrap());
+            assert!(
+                (e.x() - s.x() - turns * TAU).abs() < 1e-9,
+                "turns {turns}: {s:?} {e:?} from {pcurve:?}"
+            );
+            assert!((e.y() - s.y()).abs() < 1e-9, "{s:?} {e:?}");
+        }
+    }
+
+    /// A closed spline whose weights change sign, so that it runs off to
+    /// infinity and back, has no run in `u` to prove. Its line pcurve's end
+    /// is left unset for the splitter to recover, not put one unit along.
+    #[test]
+    fn a_section_with_no_proved_run_leaves_a_line_pcurves_end_unset() {
+        use brepkit_math::curves2d::{Curve2D, Line2D};
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        use brepkit_math::surfaces::CylindricalSurface;
+        use brepkit_math::vec::{Point2, Vec2};
+        let surface = FaceSurface::Cylinder(
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 2.0)
+                .unwrap(),
+        );
+        let start = Point3::new(2.0, 0.0, 1.0);
+        let curve = EdgeCurve::NurbsCurve(
+            NurbsCurve::new(
+                2,
+                vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+                vec![start, Point3::new(0.0, 2.0, 1.0), start],
+                vec![1.0, -2.0, 1.0],
+            )
+            .unwrap(),
+        );
+        let (su, sv) = surface.project_point(start).unwrap();
+        let line = Curve2D::Line(Line2D::new(Point2::new(su, sv), Vec2::new(1.0, 0.0)).unwrap());
+        assert_eq!(
+            closed_section_end_uvs(&curve, start, &surface, std::f64::consts::TAU),
+            None
+        );
+        assert_eq!(
+            section_end_uv_hints(&curve, start, true, &surface, &line),
+            (None, None)
+        );
     }
 
     /// A run 0.001 inside the top of a closed ellipse seamed a 64th of a
