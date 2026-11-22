@@ -5307,7 +5307,11 @@ impl<'a> EdgeReads<'a> {
 
 /// The point of `curve` between `lo` and `hi` nearest `point`, from its point
 /// `at` at `t`: Gauss-Newton steps on the squared distance, each halved until
-/// it comes nearer, so each point taken is nearer than the last.
+/// it comes nearer, so each point taken is nearer than the last. The steps
+/// are kept where they stop at a point the distance curves up from, or at
+/// an end of the span they step out past. Where they stop anywhere else (a
+/// peak of the distance, where a step is zero), at a point of no speed, or
+/// without settling, the span is searched instead ([`span_nearest`]).
 fn newton_nearest(
     curve: &brepkit_math::nurbs::curve::NurbsCurve,
     point: Point3,
@@ -5318,18 +5322,24 @@ fn newton_nearest(
     const MOST_HALVINGS: usize = 8;
     let mut gap = (at - point).length_squared();
     for _ in 0..MOST_STEPS {
-        let Some(&speed) = curve.derivatives(t, 1).get(1) else {
+        let derivatives = curve.derivatives(t, 2);
+        let (Some(&speed), Some(&bend)) = (derivatives.get(1), derivatives.get(2)) else {
             break;
         };
         let speed_sq = speed.dot(speed);
         if speed_sq <= 0.0 {
             break;
         }
-        let mut step = -speed.dot(at - point) / speed_sq;
+        let off = at - point;
+        let mut step = -speed.dot(off) / speed_sq;
         let mut nearer = false;
+        let mut settled = false;
         for _ in 0..MOST_HALVINGS {
             let next = (t + step).clamp(lo, hi);
             if (next - t).abs() <= f64::EPSILON * t.abs().max(hi - lo) {
+                // Half the second derivative of the squared distance.
+                let curving = speed_sq + bend.dot(off);
+                settled = t + step < lo || t + step > hi || curving > 0.0;
                 break;
             }
             let on = curve.evaluate(next);
@@ -5341,11 +5351,41 @@ fn newton_nearest(
             }
             step *= 0.5;
         }
+        if settled {
+            return at;
+        }
         if !nearer {
             break;
         }
     }
-    at
+    span_nearest(curve, point, (lo, hi), (gap, at))
+}
+
+/// The point of `curve` between `lo` and `hi` nearest `point`, by search: the
+/// nearest of 17 even points of the span, refined by golden section between
+/// its neighbours, or `best` (a squared distance and its point) where that
+/// is nearer. Never farther than `best` or the span's ends.
+fn span_nearest(
+    curve: &brepkit_math::nurbs::curve::NurbsCurve,
+    point: Point3,
+    (lo, hi): (f64, f64),
+    best: (f64, Point3),
+) -> Point3 {
+    const POINTS: usize = 16;
+    let gap = |t: f64| (curve.evaluate(t) - point).length_squared();
+    #[allow(clippy::cast_precision_loss)]
+    let param = |k: usize| lo + (hi - lo) * (k as f64) / (POINTS as f64);
+    let (k, sampled) = (0..=POINTS)
+        .map(|k| (k, gap(param(k))))
+        .min_by(|x, y| x.1.total_cmp(&y.1))
+        .unwrap_or((0, f64::INFINITY));
+    let refined = golden_least(param(k.saturating_sub(1)), param((k + 1).min(POINTS)), gap);
+    [(gap(refined), refined), (sampled, param(k))]
+        .into_iter()
+        .map(|(g, t)| (g, curve.evaluate(t)))
+        .chain(std::iter::once(best))
+        .min_by(|x, y| x.0.total_cmp(&y.0))
+        .map_or(best.1, |(_, on)| on)
 }
 
 /// The point of a line or a circular arc from `a` to `b` nearest `point`:
@@ -11463,12 +11503,53 @@ mod tests {
         }
     }
 
+    /// Checks that an edge on `curve` (on the domain 0 to 1), run either way,
+    /// reads each of `points` at the distance of the nearest of 200001 even
+    /// samples, to within their spacing, and each of `on_it` as on it.
+    fn assert_spline_reads_as_a_dense_scan(
+        curve: &brepkit_math::nurbs::curve::NurbsCurve,
+        points: &[Point3],
+        on_it: &[Point3],
+    ) {
+        const SAMPLES: u32 = 200_000;
+        let (start, end) = (curve.evaluate(0.0), curve.evaluate(1.0));
+        let at = |k: u32| curve.evaluate(f64::from(k) / f64::from(SAMPLES));
+        let spacing = (0..SAMPLES)
+            .map(|k| (at(k + 1) - at(k)).length())
+            .fold(0.0, f64::max);
+        for reversed in [false, true] {
+            let mut topo = Topology::new();
+            let v0 = topo.add_vertex(Vertex::new(start, 1e-7));
+            let v1 = topo.add_vertex(Vertex::new(end, 1e-7));
+            let (from, to) = if reversed { (v1, v0) } else { (v0, v1) };
+            let edge = topo.add_edge(Edge::new(from, to, EdgeCurve::NurbsCurve(curve.clone())));
+            let reads = EdgeReads::new(&topo, edge).unwrap();
+            for &point in points.iter().chain(on_it) {
+                let (found, on) = reads.nearest(point);
+                assert!(((on - point).length() - found).abs() < 1e-15);
+                let sampled = (0..=SAMPLES)
+                    .map(|k| (at(k) - point).length())
+                    .fold(f64::INFINITY, f64::min);
+                assert!(
+                    found <= sampled + 1e-12 && sampled - found <= spacing,
+                    "reversed {reversed}, from {point:?}: {found}, sampled {sampled}"
+                );
+            }
+            for &point in on_it {
+                let found = reads.nearest(point).0;
+                assert!(
+                    found < 1e-12,
+                    "reversed {reversed}, {point:?} reads {found} off"
+                );
+            }
+        }
+    }
+
     /// A B-spline edge's nearest point, from its nearest sample by Newton
-    /// steps, is the nearest of 200001 even samples to within their spacing,
-    /// run either way; a point on the edge reads as on it.
+    /// steps, is the nearest of the dense samples; a point on the edge reads
+    /// as on it.
     #[test]
     fn the_nearest_point_of_a_spline_edge_is_the_nearest_sample() {
-        const SAMPLES: u32 = 200_000;
         let p = Point3::new;
         let curve = brepkit_math::nurbs::curve::NurbsCurve::new(
             3,
@@ -11483,39 +11564,60 @@ mod tests {
             vec![1.0, 0.8, 1.2, 0.9, 1.0],
         )
         .unwrap();
-        let (start, end) = (curve.evaluate(0.0), curve.evaluate(1.0));
-        let on_it = curve.evaluate(0.37);
         let points = [
             p(3.0, 2.0, 0.0),
             p(-1.0, -1.0, 1.0),
             p(9.0, 1.0, -1.0),
             p(5.0, 0.5, 3.0),
-            on_it,
         ];
-        for reversed in [false, true] {
-            let mut topo = Topology::new();
-            let v0 = topo.add_vertex(Vertex::new(start, 1e-7));
-            let v1 = topo.add_vertex(Vertex::new(end, 1e-7));
-            let (from, to) = if reversed { (v1, v0) } else { (v0, v1) };
-            let edge = topo.add_edge(Edge::new(from, to, EdgeCurve::NurbsCurve(curve.clone())));
-            let reads = EdgeReads::new(&topo, edge).unwrap();
-            let at = |k: u32| curve.evaluate(f64::from(k) / f64::from(SAMPLES));
-            let spacing = (0..SAMPLES)
-                .map(|k| (at(k + 1) - at(k)).length())
-                .fold(0.0, f64::max);
-            for &point in &points {
-                let (found, on) = reads.nearest(point);
-                assert!(((on - point).length() - found).abs() < 1e-15);
-                let sampled = (0..=SAMPLES)
-                    .map(|k| (at(k) - point).length())
-                    .fold(f64::INFINITY, f64::min);
-                assert!(
-                    found <= sampled + 1e-12 && sampled - found <= spacing,
-                    "reversed {reversed}, from {point:?}: {found}, sampled {sampled}"
-                );
-            }
-            assert!(reads.nearest(on_it).0 < 1e-12);
-        }
+        assert_spline_reads_as_a_dense_scan(&curve, &points, &[curve.evaluate(0.37)]);
+    }
+
+    /// The parabola `(u - 256 u^2, 256 u^2)`, `u = t - 1/2`: its point at
+    /// `u = 1/256` is nearest the sample at `u = 0`, where the distance to
+    /// it is a maximum along the curve and a Newton step is zero. The read
+    /// still finds the point on the curve.
+    #[test]
+    fn a_read_from_a_sample_where_the_distance_peaks_finds_the_curve() {
+        let p = Point3::new;
+        let curve = brepkit_math::nurbs::curve::NurbsCurve::new(
+            2,
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            vec![
+                p(-64.5, 64.0, 0.0),
+                p(64.0, -64.0, 0.0),
+                p(-63.5, 64.0, 0.0),
+            ],
+            vec![1.0; 3],
+        )
+        .unwrap();
+        assert!((curve.evaluate(0.5) - p(0.0, 0.0, 0.0)).length() < 1e-12);
+        let on_it = curve.evaluate(0.503_906_25);
+        assert!((on_it - p(0.0, 1.0 / 256.0, 0.0)).length() < 1e-12);
+        assert_spline_reads_as_a_dense_scan(&curve, &[p(0.0, 0.002, 0.0)], &[on_it]);
+    }
+
+    /// A cubic whose first two poles coincide leaves its start at no speed.
+    /// The nearest sample to a point just off the curve near that end is the
+    /// end itself, where no Newton step can be taken; the read still finds
+    /// the nearest point a little way in.
+    #[test]
+    fn a_read_from_a_spline_end_at_no_speed_finds_the_nearest_point() {
+        let p = Point3::new;
+        let curve = brepkit_math::nurbs::curve::NurbsCurve::new(
+            3,
+            vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+            vec![
+                p(0.0, 0.0, 0.0),
+                p(0.0, 0.0, 0.0),
+                p(1.0, 0.0, 0.0),
+                p(2.0, 1.0, 0.0),
+            ],
+            vec![1.0; 4],
+        )
+        .unwrap();
+        let points = [p(2e-4, 1e-4, 0.0), p(5e-5, -3e-5, 1e-5)];
+        assert_spline_reads_as_a_dense_scan(&curve, &points, &[curve.evaluate(0.004)]);
     }
 
     /// The piece of a B-spline edge a spur leaves runs between the split and
