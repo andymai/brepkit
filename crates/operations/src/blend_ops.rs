@@ -198,8 +198,11 @@ fn fillet_directly(
     let mut builder = FilletBuilder::new(topo, solid);
     builder.add_edges(edges, radius);
     let built = builder.build()?;
-    let result = own_cavities(topo, solid, built, "fillet")?;
-    valid_fillet(topo, solid, result)
+    // Read before the cavities are detached: the detached copy takes new
+    // edges throughout, and the faces the fillet did not touch are known by
+    // the input's edges they keep.
+    let built = valid_fillet(topo, solid, built)?;
+    own_cavities(topo, solid, built, "fillet")
 }
 
 /// `edges` rounded on a copy of `solid` whose flat seams are gone: the
@@ -1559,8 +1562,8 @@ pub fn fillet_v2_variable(
         builder.add_edges_with_law(&chain, law);
     }
     let built = builder.build()?;
-    let result = own_cavities(topo, solid, built, "fillet")?;
-    valid_fillet(topo, solid, result)
+    let built = valid_fillet(topo, solid, built)?;
+    own_cavities(topo, solid, built, "fillet")
 }
 
 /// Whether `cand` shares an endpoint with some chain edge and meets it
