@@ -485,16 +485,34 @@ pub fn build_wire_loops_dcel_measured(
                 _ => d,
             }
         };
+        // The ends of a closed half are one point, so its span is whole
+        // periods: a whole rim in one edge goes once round. Taken the short
+        // way, its twin's orbit lost its turn to the last bit of its span,
+        // and it stood as a region of no area in place of an unbounded ring.
+        let whole_turns = |d: f64, period: Option<f64>| -> f64 {
+            match period {
+                Some(p) if p > 1e-12 => (d / p).round() * p,
+                _ => d,
+            }
+        };
         let mut area = 0.0;
         let mut perimeter = 0.0;
         let first = halves[orbit[0]].start_uv;
         let mut prev = first;
         for &i in &orbit {
             let d = halves[i].end_uv - halves[i].start_uv;
-            let b = Point2::new(
-                prev.x() + step(d.x(), u_period),
-                prev.y() + step(d.y(), v_period),
-            );
+            let closed = (halves[i].start_3d - halves[i].end_3d).length() < 1e-10;
+            let b = if closed {
+                Point2::new(
+                    prev.x() + whole_turns(d.x(), u_period),
+                    prev.y() + whole_turns(d.y(), v_period),
+                )
+            } else {
+                Point2::new(
+                    prev.x() + step(d.x(), u_period),
+                    prev.y() + step(d.y(), v_period),
+                )
+            };
             // Taken from the first vertex: far from the origin the
             // products of raw parameters round away a small orbit's area.
             let (p, q) = (prev - first, b - first);
@@ -1486,6 +1504,31 @@ mod tests {
         let loops = build_wire_loops_dcel(&edges, 1e-7, true, false);
         assert_eq!(loops.len(), 1, "the band below the rim is one region");
         assert_eq!(loops[0].len(), 8);
+    }
+
+    #[test]
+    fn dcel_twin_of_a_whole_rim_in_one_edge_is_no_region() {
+        // A band between the seam's two copies, its top rim one closed edge
+        // whose stored span is a period and a last bit. The rim's twin walks
+        // once round above the band, an unbounded ring. Taken the short way,
+        // the rim's step was the last bit: the ring stood as a region, and
+        // the band, with no turn left in it, read as no area.
+        let a = 4.712_388_980_384_691;
+        let turn = 6.283_185_307_179_587;
+        let p = Point2::new;
+        let mut rim = make_line_edge(p(a + turn, 1.0), p(a, 1.0));
+        rim.end_3d = rim.start_3d;
+        let edges = vec![
+            make_line_edge(p(a, 0.0), p(a + 2.0, 0.0)),
+            make_line_edge(p(a + 2.0, 0.0), p(a + 4.0, 0.0)),
+            make_line_edge(p(a + 4.0, 0.0), p(a + TAU, 0.0)),
+            make_line_edge(p(a + TAU, 0.0), p(a + TAU, 1.0)),
+            rim,
+            make_line_edge(p(a, 1.0), p(a, 0.0)),
+        ];
+        let loops = build_wire_loops_dcel(&edges, 1e-7, true, false);
+        assert_eq!(loops.len(), 1, "the band is the one region");
+        assert_eq!(loops[0].len(), 6);
     }
 
     #[test]
