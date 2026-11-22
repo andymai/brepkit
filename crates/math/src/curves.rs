@@ -796,13 +796,48 @@ impl Ellipse3D {
         PI * (a + b) * (1.0 + 3.0 * h / (10.0 + (3.0f64.madd(-h, 4.0)).sqrt()))
     }
 
-    /// Project a point onto the ellipse, returning the angle parameter.
+    /// Project a point onto the ellipse, returning the angle parameter of
+    /// its nearest point, in `(-π, π]`.
     #[must_use]
     pub fn project(&self, point: Point3) -> f64 {
-        let v = point - self.center;
-        let u_comp = self.u_axis.dot(v) / self.semi_major;
-        let v_comp = self.v_axis.dot(v) / self.semi_minor;
-        v_comp.atan2(u_comp)
+        let q = point - self.center;
+        let (x, y) = (self.u_axis.dot(q), self.v_axis.dot(q));
+        let (a, b) = (self.semi_major, self.semi_minor);
+        let distance2 = |t: f64| {
+            let (s, c) = t.sin_cos();
+            a.madd(c, -x).powi(2) + b.madd(s, -y).powi(2)
+        };
+        // The angle of the point drawn onto the circle the ellipse is
+        // squeezed from is its nearest point only on a circle. On a long thin
+        // ellipse a point off it by rounding alone (a section of a wall
+        // nearly along its axis, centred far away) moves that angle a long
+        // way along the curve: Newton on the distance's slope takes it on.
+        let guess = (y / b).atan2(x / a);
+        let mut t = guess;
+        for _ in 0..8 {
+            let (s, c) = t.sin_cos();
+            let (dx, dy) = (a.madd(c, -x), b.madd(s, -y));
+            let slope = (b * c).madd(dy, -a * s * dx);
+            let bend = (a * s).powi(2) + (b * c).powi(2) - (a * c).madd(dx, b * s * dy);
+            let step = slope / bend;
+            if bend <= 0.0 || !step.is_finite() || step.abs() > 0.5 {
+                break;
+            }
+            t -= step;
+            if step.abs() <= 4.0 * f64::EPSILON * t.abs().max(1.0) {
+                break;
+            }
+        }
+        if t.to_bits() != guess.to_bits() && distance2(t).total_cmp(&distance2(guess)).is_gt() {
+            t = guess;
+        }
+        if t > PI {
+            t - 2.0 * PI
+        } else if t <= -PI {
+            t + 2.0 * PI
+        } else {
+            t
+        }
     }
 
     /// The u-axis direction (major axis direction).

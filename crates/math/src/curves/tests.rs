@@ -268,6 +268,70 @@ fn ellipse_zero_axis_error() {
     );
 }
 
+/// A point off the ellipse along its normal projects to the point it was
+/// moved from, which the angle of the point drawn onto a circle is not.
+#[test]
+fn ellipse_project_finds_the_nearest_point() {
+    let ellipse = Ellipse3D::new(
+        Point3::new(1.0, -2.0, 0.5),
+        Vec3::new(0.0, 0.0, 1.0),
+        3.0,
+        2.0,
+    )
+    .unwrap();
+    for k in -7..8 {
+        let t = 0.4 * f64::from(k);
+        let along = ellipse.tangent(t);
+        let out = along.cross(ellipse.normal()).normalize().unwrap();
+        for off in [0.0, 0.3, -0.3] {
+            let p = ellipse.evaluate(t) + out * off;
+            let back = ellipse.project(p);
+            let gap = (back - t + PI).rem_euclid(2.0 * PI) - PI;
+            assert!(gap.abs() < 1e-12, "t {t} off {off}: {back}");
+        }
+    }
+}
+
+/// A long arc of an ellipse 2e8 across and 10 wide, centred 1e8 away, as a
+/// plane leaning 5e-8 off a wall's axis cuts the wall, turned: its centre
+/// rounds by 1e-8 in the turn, and each point of the arc still projects
+/// onto itself, not 0.1 along the curve.
+#[test]
+fn ellipse_project_holds_a_long_thin_arc_turned() {
+    let major = Vec3::new(0.0, -5e-8, 1.0).normalize().unwrap();
+    let minor = Vec3::new(1.0, 0.0, 0.0);
+    let upright = Ellipse3D::with_axes(
+        Point3::new(0.0, 0.0, 1e8),
+        major.cross(minor),
+        2e8,
+        10.0,
+        major,
+        minor,
+    )
+    .unwrap();
+    let turn = crate::mat::Mat4::rotation_x(0.4)
+        * crate::mat::Mat4::rotation_y(1.1)
+        * crate::mat::Mat4::rotation_z(0.3);
+    let o = Point3::new(0.0, 0.0, 0.0);
+    let dir = |v: Vec3| turn.mul_point(o + v) - o;
+    let turned = Ellipse3D::with_axes(
+        turn.mul_point(upright.center()),
+        dir(upright.normal()),
+        2e8,
+        10.0,
+        dir(major),
+        dir(minor),
+    )
+    .unwrap();
+    let end = 2.0 * PI / 3.0;
+    for k in 0..=10 {
+        let t = (-5.8e-6_f64).madd(f64::from(k) / 10.0, end);
+        let p = turn.mul_point(upright.evaluate(t));
+        let back = turned.evaluate(turned.project(p));
+        assert!((back - p).length() < 1e-6, "{k}: {:e}", (back - p).length());
+    }
+}
+
 // ── Parabola tests ──────────────────────────────────────────
 
 #[test]

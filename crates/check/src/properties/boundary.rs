@@ -573,10 +573,18 @@ pub(super) fn integrate_by_boundary<S: ParametricSurface>(
                     let mut sums = [0.0; 9];
                     let mut rounding = 0.0_f64;
                     for (t, un, vn, w) in nodes {
-                        let [(u1, v1), (u2, v2), (u3, v3), (u4, v4)] =
-                            [t + h, t - h, t + 2.0 * h, t - 2.0 * h].map(at);
+                        let [u1, u2, u3, u4] =
+                            [t + h, t - h, t + 2.0 * h, t - 2.0 * h].map(|x| at(x).0);
                         let du = 8.0f64.madd(wrap_pi(u1 - u2), -wrap_pi(u3 - u4)) / (12.0 * h);
-                        let dv = 8.0f64.madd(v_wrap(v1 - v2), -v_wrap(v3 - v4)) / (12.0 * h);
+                        // `dv/dt` from the curve's velocity: the surface's
+                        // partials are square to each other, and its `v`
+                        // partial never vanishes. A stencil's differences
+                        // carry the rounding of each point, which a curve far
+                        // from its own centre (a long arc of a huge ellipse)
+                        // has in plenty.
+                        let sv = chart.surface.partial_v(un, vn);
+                        let dv = sv.dot(edge_velocity(edge.curve, t, edge.start, edge.end))
+                            / sv.length_squared();
                         // Each difference rounds by an ulp of its coordinate.
                         let (nu, nv) = (
                             1.5 * f64::EPSILON * (1.0 + un.abs()) / h.abs(),
