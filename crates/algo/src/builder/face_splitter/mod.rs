@@ -12254,11 +12254,16 @@ fn attach_sphere_holes(pieces: &mut [SplitSubFace], holes: &[Vec<OrientedPCurveE
 /// then folds across the piece beside it.
 ///
 /// `None` for a piece with holes: they are read on their own stored
-/// `(u, v)`, which can lie a turn from the window this reading takes.
+/// `(u, v)`, which can lie a turn from the window this reading takes. `None`
+/// on a spindle torus too: a point of its sheet across the axis projects
+/// onto the near tube's sheet.
 fn torus_loop_uv(sub_face: &SplitSubFace) -> Option<Vec<Point2>> {
     use std::f64::consts::{PI, TAU};
     const CURVE_SAMPLES: u32 = 8;
-    if !matches!(sub_face.surface, FaceSurface::Torus(_)) || !sub_face.inner_wires.is_empty() {
+    let FaceSurface::Torus(torus) = &sub_face.surface else {
+        return None;
+    };
+    if torus.minor_radius() >= torus.major_radius() || !sub_face.inner_wires.is_empty() {
         return None;
     }
     let mut points = Vec::with_capacity(sub_face.outer_wire.len() * CURVE_SAMPLES as usize);
@@ -14953,6 +14958,32 @@ mod tests {
             !((0.5..0.9).contains(&u) && (1.2..1.8).contains(&v)),
             "({u}, {v}) lies in the hole"
         );
+    }
+
+    /// A patch of a spindle torus (radii 0.1 and 2.45) on its sheet across
+    /// the axis, round the point at `u = 0`, `v = pi`. Projected onto the
+    /// torus, its corners read the near tube's sheet; the patch's interior
+    /// point lies on its own sheet.
+    #[test]
+    fn a_spindle_torus_patch_across_the_axis_keeps_its_point_on_its_sheet() {
+        use std::f64::consts::PI;
+        let torus =
+            brepkit_math::surfaces::ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), 0.1, 2.45)
+                .unwrap();
+        let mut topo = Topology::new();
+        let face_id = make_unit_square_face(&mut topo);
+        let patch = SplitSubFace {
+            surface: FaceSurface::Torus(torus.clone()),
+            outer_wire: torus_rectangle(&torus, (-0.2, 0.2), (PI - 0.3, PI + 0.3), true),
+            inner_wires: vec![],
+            reversed: false,
+            parent: face_id,
+            rank: Rank::A,
+            precomputed_interior: None,
+        };
+        let p = interior_point_3d(&patch, None, 1e-7).unwrap();
+        let want = torus.evaluate(0.0, PI);
+        assert!((p - want).length() < 0.05, "{p:?} against {want:?}");
     }
 
     /// A loop through the north pole between two meridians a half turn
