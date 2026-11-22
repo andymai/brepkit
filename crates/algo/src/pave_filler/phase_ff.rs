@@ -226,6 +226,8 @@ pub fn perform(
 ) -> Result<(), AlgoError> {
     let faces_a = brepkit_topology::explorer::solid_faces(topo, solid_a)?;
     let faces_b = brepkit_topology::explorer::solid_faces(topo, solid_b)?;
+    let operand_faces: std::collections::HashSet<FaceId> =
+        faces_a.iter().chain(&faces_b).copied().collect();
 
     let mut junction_registry = JunctionRegistry::default();
     // Marched section ends, welded across pairs (see `section_end_vertex`).
@@ -823,6 +825,7 @@ pub fn perform(
                 raw_curves,
                 tol,
                 &mut junction_registry,
+                Some(&operand_faces),
             );
             if traced {
                 log::debug!(
@@ -1825,6 +1828,12 @@ enum FaceExtent {
         nurbs: Option<Box<crate::classifier::SpanTrim>>,
         /// The last point `nurbs` placed, the start for the next.
         hint: std::cell::Cell<Option<(f64, f64)>>,
+        /// A sphere face's own trim, read against its wires as well as the
+        /// window. The window is the band of latitudes its boundary spans,
+        /// which holds the rest of that band round the ball (a quarter of
+        /// the ball between two great circles off its axis takes in most of
+        /// the ball).
+        ball: Option<Box<crate::classifier::SphereFaceTrim>>,
     },
 }
 
@@ -2029,6 +2038,10 @@ impl FaceExtent {
                 .ok()
                 .flatten()
                 .map(Box::new);
+            let ball = crate::classifier::SphereFaceTrim::new(topo, face_id)
+                .ok()
+                .flatten()
+                .map(Box::new);
             Some(Self::Analytic {
                 surface: surface.clone(),
                 v0,
@@ -2043,6 +2056,7 @@ impl FaceExtent {
                 own_sheet,
                 nurbs,
                 hint: std::cell::Cell::new(None),
+                ball,
             })
         }
     }
@@ -2142,6 +2156,7 @@ impl FaceExtent {
                 uv_holes,
                 uv_base,
                 own_sheet,
+                ball,
                 ..
             } => surface.project_point(p).is_some_and(|(u, v)| {
                 // Unlike `contains` (conservative keep on projection failure),
@@ -2150,7 +2165,19 @@ impl FaceExtent {
                 if *own_sheet && !on_own_sheet(surface, p, u, v) {
                     return false;
                 }
-                let in_v = in_window(v, (*v0, *v1), -depth, *periodic_v);
+                if let (Some(trim), FaceSurface::Sphere(_)) = (ball, surface)
+                    && !trim.holds_clear(p, depth)
+                {
+                    return false;
+                }
+                // `depth` is a distance; a sphere's or a torus's `v` is an
+                // angle about the radius it turns on.
+                let v_depth = match surface {
+                    FaceSurface::Sphere(sphere) => depth / sphere.radius(),
+                    FaceSurface::Torus(torus) => depth / torus.minor_radius(),
+                    _ => depth,
+                };
+                let in_v = in_window(v, (*v0, *v1), -v_depth, *periodic_v);
                 let in_u = u_gap.is_none_or(|gap| !crate::classifier::u_in_gap(u, gap));
                 let in_poly = uv_poly.as_ref().is_none_or(|(poly, _)| {
                     use crate::builder::classify_2d::{
@@ -2207,9 +2234,15 @@ impl FaceExtent {
                 uv_holes,
                 uv_base,
                 own_sheet,
+                ball,
                 ..
             } => surface.project_point(p).is_none_or(|(u, v)| {
                 if *own_sheet && !on_own_sheet(surface, p, u, v) {
+                    return false;
+                }
+                if let (Some(trim), FaceSurface::Sphere(sphere)) = (ball, surface)
+                    && !trim.holds(p, margin * sphere.radius())
+                {
                     return false;
                 }
                 let in_v = in_window(v, (*v0, *v1), *margin, *periodic_v);
@@ -2461,15 +2494,32 @@ fn segment_meets_both_boxes(p0: Point3, p1: Point3, a: Aabb3, b: Aabb3) -> bool 
 /// 256 chords widened by their own sagitta (a closed rim's chords run up to
 /// `7.5e-5 R` inside it).
 pub(super) fn point_on_face_edges(topo: &Topology, face: FaceId, p: Point3, near: f64) -> bool {
-    let Ok(f) = topo.face(face) else {
-        return false;
-    };
-    std::iter::once(f.outer_wire())
-        .chain(f.inner_wires().iter().copied())
+    face_edges_near(topo, face, p, near).next().is_some()
+}
+
+/// The edges of a face that `p` lies within `near` of, as
+/// [`point_on_face_edges`] reads them.
+fn face_edges_near(
+    topo: &Topology,
+    face: FaceId,
+    p: Point3,
+    near: f64,
+) -> impl Iterator<Item = brepkit_topology::edge::EdgeId> + '_ {
+    let wires: Vec<_> = topo.face(face).map_or_else(
+        |_| Vec::new(),
+        |f| {
+            std::iter::once(f.outer_wire())
+                .chain(f.inner_wires().iter().copied())
+                .collect()
+        },
+    );
+    wires
+        .into_iter()
         .filter_map(|wid| topo.wire(wid).ok())
         .flat_map(|w| w.edges().to_vec())
-        .any(|oe| {
-            let Ok(edge) = topo.edge(oe.edge()) else {
+        .map(|oe| oe.edge())
+        .filter(move |&edge_id| {
+            let Ok(edge) = topo.edge(edge_id) else {
                 return false;
             };
             let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) else {
@@ -2497,6 +2547,39 @@ pub(super) fn point_on_face_edges(topo: &Topology, face: FaceId, p: Point3, near
         })
 }
 
+/// Whether an edge of `face` through `p` also bounds a face lying on
+/// `other`'s surface, among `operands` when given: the arena still holds
+/// faces of earlier results that can share the edge. Two coaxial wedges' floors meet the cylinder they
+/// share along their own rims: each rim is already the edge of a wall
+/// coincident with the other wedge's, whose same-domain faces split there.
+fn edge_beside_same_domain(
+    topo: &Topology,
+    face: FaceId,
+    other: FaceId,
+    p: Point3,
+    near: f64,
+    tol: Tolerance,
+    operands: Option<&std::collections::HashSet<FaceId>>,
+) -> bool {
+    let Ok(other_surface) = topo.face(other).map(|f| f.surface().clone()) else {
+        return false;
+    };
+    face_edges_near(topo, face, p, near).any(|edge| {
+        topo.faces_of_edge(edge).into_iter().any(|beside| {
+            beside != face
+                && operands.is_none_or(|faces| faces.contains(&beside))
+                && topo.face(beside).is_ok_and(|f| {
+                    crate::builder::same_domain::surfaces_same_domain(
+                        f.surface(),
+                        &other_surface,
+                        tol,
+                    )
+                    .is_some()
+                })
+        })
+    })
+}
+
 /// Restrict surface-surface intersection curves to the region inside BOTH
 /// faces. `compute_raw_curves` works on the unbounded surfaces, so a
 /// plane-analytic or algebraic curve (e.g. a cylinder/tilted-plane ellipse)
@@ -2520,6 +2603,7 @@ fn restrict_curves_to_faces(
     raw_curves: Vec<RawCurve>,
     tol: Tolerance,
     junctions: &mut JunctionRegistry,
+    operands: Option<&std::collections::HashSet<FaceId>>,
 ) -> Vec<RawCurve> {
     // `BK_RESTRICT=1`: the in-both window each section is trimmed to. Reports
     // whether a curve reached this clip at all, which is what separates "the
@@ -2647,9 +2731,12 @@ fn restrict_curves_to_faces(
                     .map(|(t, _)| t)
                     .collect();
                 ts.sort_by(f64::total_cmp);
-                // An arc along a face's own edge (a strut's floor meeting a
-                // coaxial strut's cylinder, already one of its boundary
-                // arcs) splits nothing.
+                // An arc along both faces' edges splits nothing, nor does one
+                // along a face's edge that a face on the partner's surface
+                // also bounds (a strut's floor meeting a coaxial strut's
+                // cylinder, already one of its boundary arcs). An arc along
+                // one face's edge alone splits the other (a rod's cap rim
+                // across a ball's face, the rod ending at the ball's centre).
                 let near = 1e-5 * (1.0 + circle.radius());
                 let on_both = ts.len() >= 2
                     && (0..ts.len()).any(|i| {
@@ -2658,10 +2745,15 @@ fn restrict_curves_to_faces(
                             .copied()
                             .unwrap_or(ts[0] + std::f64::consts::TAU);
                         let p = circle.evaluate(0.5 * (ts[i] + next));
+                        let edge_a = point_on_face_edges(topo, fa, p, near);
+                        let edge_b = point_on_face_edges(topo, fb, p, near);
                         ext_a.contains(p)
                             && ext_b.contains(p)
-                            && !point_on_face_edges(topo, fa, p, near)
-                            && !point_on_face_edges(topo, fb, p, near)
+                            && !(edge_a && edge_b)
+                            && !(edge_a
+                                && edge_beside_same_domain(topo, fa, fb, p, near, tol, operands))
+                            && !(edge_b
+                                && edge_beside_same_domain(topo, fb, fa, p, near, tol, operands))
                     });
                 if on_both {
                     out.push(raw);
@@ -11692,6 +11784,7 @@ mod tests {
                 raw,
                 tol,
                 &mut JunctionRegistry::default(),
+                None,
             );
             assert!(kept.is_empty(), "side {side}: {} sections kept", kept.len());
         }
@@ -11864,6 +11957,7 @@ mod tests {
             raw,
             tol,
             &mut JunctionRegistry::default(),
+            None,
         );
         let outer = 10.0 + 3.0 * 0.75_f64.sqrt();
         assert!(!kept.is_empty(), "the outer circle crosses the patch");
@@ -12980,7 +13074,7 @@ mod tests {
             Circle3D::new(
                 Point3::new(0.0, 0.0, 1.5 * v.sin()),
                 z,
-                1.5f64.mul_add(v.cos(), 4.0),
+                1.5f64.madd(v.cos(), 4.0),
             )
             .unwrap()
         };
@@ -13021,10 +13115,10 @@ mod tests {
         let z = Vec3::new(0.0, 0.0, 1.0);
         let top = (-2.0_f64 / 3.0).acos();
         let point = |v: f64, side: f64| {
-            let rho = 1.5f64.mul_add(v.cos(), 4.0);
+            let rho = 1.5f64.madd(v.cos(), 4.0);
             Point3::new(
                 3.0,
-                side * rho.mul_add(rho, -9.0).max(0.0).sqrt(),
+                side * rho.madd(rho, -9.0).max(0.0).sqrt(),
                 1.5 * v.sin(),
             )
         };
@@ -13145,8 +13239,8 @@ mod tests {
         let section: Vec<Point3> = (0..=24)
             .map(|k| {
                 let v = top * (std::f64::consts::FRAC_PI_2 * f64::from(k) / 24.0).cos();
-                let rho = 1.5f64.mul_add(v.cos(), 4.0);
-                Point3::new(3.0, rho.mul_add(rho, -9.0).max(0.0).sqrt(), 1.5 * v.sin())
+                let rho = 1.5f64.madd(v.cos(), 4.0);
+                Point3::new(3.0, rho.madd(rho, -9.0).max(0.0).sqrt(), 1.5 * v.sin())
             })
             .collect();
         let pi = std::f64::consts::PI;
@@ -13193,5 +13287,151 @@ mod tests {
         let off = torus.evaluate(0.3, 0.3);
         assert!(off.x() > 3.0);
         assert!(TorusRegion::of(&topo, face).is_none_or(|region| !region.holds(off, 1e-6)));
+    }
+
+    /// A face left in the arena by an earlier result can share an edge of an
+    /// operand's face and lie on the partner's surface. It splits nothing in
+    /// this boolean, so it must not stand for a same-domain neighbour.
+    #[test]
+    fn a_stray_face_on_the_partners_plane_is_no_neighbour() {
+        use brepkit_topology::edge::{Edge, EdgeId};
+        use brepkit_topology::face::Face;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let mut topo = Topology::new();
+        let p = |x: f64, y: f64, z: f64| Point3::new(x, y, z);
+        let square = |topo: &mut Topology, corners: [Point3; 4], shared: Option<EdgeId>| {
+            let vs: Vec<_> = corners
+                .iter()
+                .map(|&c| topo.add_vertex(Vertex::new(c, 1e-7)))
+                .collect();
+            let mut edges = Vec::new();
+            for k in 0..4 {
+                let e = match shared {
+                    Some(edge) if k == 0 => edge,
+                    _ => topo.add_edge(Edge::new(vs[k], vs[(k + 1) % 4], EdgeCurve::Line)),
+                };
+                edges.push(OrientedEdge::new(e, true));
+            }
+            let first = edges[0].edge();
+            let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+            (wire, first)
+        };
+        // The operand's face, in the plane x = 0, with its edge along y.
+        let (wire, rim) = square(
+            &mut topo,
+            [
+                p(0.0, 0.0, 0.0),
+                p(0.0, 1.0, 0.0),
+                p(0.0, 1.0, 1.0),
+                p(0.0, 0.0, 1.0),
+            ],
+            None,
+        );
+        let x = Vec3::new(1.0, 0.0, 0.0);
+        let face = topo.add_face(Face::new(
+            wire,
+            vec![],
+            FaceSurface::Plane { normal: x, d: 0.0 },
+        ));
+        // The partner's face in z = 0, clear of the edge.
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        let (wire, _) = square(
+            &mut topo,
+            [
+                p(1.0, 0.0, 0.0),
+                p(2.0, 0.0, 0.0),
+                p(2.0, 1.0, 0.0),
+                p(1.0, 1.0, 0.0),
+            ],
+            None,
+        );
+        let other = topo.add_face(Face::new(
+            wire,
+            vec![],
+            FaceSurface::Plane { normal: z, d: 0.0 },
+        ));
+        // A stray face in z = 0 on the operand's edge.
+        let (wire, _) = square(
+            &mut topo,
+            [
+                p(0.0, 0.0, 0.0),
+                p(0.0, 1.0, 0.0),
+                p(-1.0, 1.0, 0.0),
+                p(-1.0, 0.0, 0.0),
+            ],
+            Some(rim),
+        );
+        let stray = topo.add_face(Face::new(
+            wire,
+            vec![],
+            FaceSurface::Plane { normal: z, d: 0.0 },
+        ));
+        let at = p(0.0, 0.5, 0.0);
+        let tol = Tolerance::new();
+        assert!(edge_beside_same_domain(
+            &topo, face, other, at, 1e-6, tol, None
+        ));
+        let operands: std::collections::HashSet<FaceId> = [face, other].into_iter().collect();
+        assert!(!edge_beside_same_domain(
+            &topo,
+            face,
+            other,
+            at,
+            1e-6,
+            tol,
+            Some(&operands)
+        ));
+        let with_stray: std::collections::HashSet<FaceId> =
+            [face, other, stray].into_iter().collect();
+        assert!(edge_beside_same_domain(
+            &topo,
+            face,
+            other,
+            at,
+            1e-6,
+            tol,
+            Some(&with_stray)
+        ));
+    }
+
+    /// The strict gate's depth is a distance on any ball: a point 9e-5 above
+    /// the rim of a radius 10 ball's cap lies clear of a depth of 1e-5, and
+    /// one 5e-6 above it does not.
+    #[test]
+    fn a_large_balls_rim_is_kept_clear_by_a_distance() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::SphericalSurface;
+        use brepkit_topology::face::Face;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let tol = Tolerance::default();
+        let mut topo = Topology::default();
+        let rim = Circle3D::new(Point3::new(0.0, 0.0, 6.0), Vec3::new(0.0, 0.0, 1.0), 8.0).unwrap();
+        let v0 = topo.add_vertex(Vertex::new(Point3::new(8.0, 0.0, 6.0), 1e-7));
+        let edge = topo.add_edge(Edge::new(v0, v0, EdgeCurve::Circle(rim)));
+        let surface =
+            FaceSurface::Sphere(SphericalSurface::new(Point3::new(0.0, 0.0, 0.0), 10.0).unwrap());
+        let cap = |topo: &mut Topology, forward: bool| {
+            let wire =
+                topo.add_wire(Wire::new(vec![OrientedEdge::new(edge, forward)], true).unwrap());
+            topo.add_face(Face::new(wire, vec![], surface.clone()))
+        };
+        let above = |rise: f64| {
+            let z = 6.0 + rise;
+            let r = (100.0 - z * z).sqrt();
+            Point3::new(r * 0.6, r * 0.8, z)
+        };
+        let mut checked = false;
+        for forward in [true, false] {
+            let face = cap(&mut topo, forward);
+            let range = face_v_range(&topo, face, &surface);
+            let extent = FaceExtent::new(&topo, face, &surface, range, tol).unwrap();
+            if !extent.contains_strict(above(3.0), 0.0) {
+                continue;
+            }
+            checked = true;
+            assert!(extent.contains_strict(above(9e-5), 1e-5));
+            assert!(!extent.contains_strict(above(5e-6), 1e-5));
+        }
+        assert!(checked, "neither cap holds the pole");
     }
 }

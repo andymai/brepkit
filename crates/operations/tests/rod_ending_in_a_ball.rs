@@ -189,6 +189,11 @@ fn two_rods_ending_at_one_balls_centre_fuse_onto_it() {
         (0.3, 2.2, 0.0, false, (false, false), true),
         // The second rod's cap runs through both poles.
         (0.0, 2.2, 0.4, true, (false, false), true),
+        // The second rod's cap crosses the ball's upper quarter along a
+        // short arc of its rim, by the first rod's cap.
+        (0.0, 2.9, 1.0, false, (false, false), true),
+        (0.3, 2.9, 1.0, false, (true, true), true),
+        (0.0, 2.9, 1.0, true, (false, true), true),
     ] {
         let poses = [
             (Point3::new(0.0, 0.0, 0.0), false),
