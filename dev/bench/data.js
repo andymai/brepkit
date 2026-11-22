@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795326037304,
+  "lastUpdate": 1795328439151,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -74789,6 +74789,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 21246742,
             "range": "± 22888",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "9d1b09a6a3c64b5b23cccf2bdda52f9867e90869",
+          "message": "fix(algo,math): nest wall loops per loop, link split rim sections all or nothing, and bound curve-surface spans by their nets (#2658)\n\n## Summary\n\nA review of the contributor stack #2639 to #2645 listed four possible\ngaps in the boolean engine (#2650). This change fixes three of them:\n\n- On a cylinder wall, the loop nesting read every loop in one window of\nu. A taper pin's hole through a rod lost one of its two loops in 5 of 12\nposes (item 2).\n- `link_along_split_arc` split a section along a rim before it found\npartners, and left unlinked pieces when a link failed (item 3).\n- `intersect_curve_surface` dropped a span pair by the derivatives at\nits middle, so it missed both crossings of a tall arch through a plane\n(item 4).\n\nItem 1, the refusal of a cylinder band with no seam, stays as it is. The\nengine and the mesher cannot take such a band yet, so I filed #2656.\n\nThe change also corrects the reason that\n`turned_mirrored_two_rods_stay_exact` names for its fallback (#2648). It\nleaves the face trace as it is. A change to its tie order made a refused\ntaper pin cut come back as the uncut rod.\n\nFixes #2650.\n\n## The change\n\n- **Loop nesting (item 2).** A new `wall_loop_parents` in\n`crates/algo/src/builder/face_splitter/special_cases.rs` unwraps each\nloop on the wall along itself. It compares a pair after it moves the\ninner loop to the nearest copy of the period.\n- **Links along a split rim (item 3).** `link_along_split_arc` in\n`crates/algo/src/pave_filler/link_existing.rs` now finds a rim piece for\nevery piece of the section first. It leaves the section whole when any\npiece has none.\n- **Curve and surface spans (item 4).** `intersect_curve_surface` in\n`curve_surface.rs` now reads each span of the curve and the surface as a\nBezier net. De Casteljau halves the nets. It drops a pair only when the\nboxes of their nets stand more than the dedup distance apart. With\npositive weights, a net's box holds its span. A curve with a weight that\nis not positive takes the old path. The helpers `span_net`, `halve` and\n`span_bezier` in `span_index.rs` are now `pub(crate)`, and\n`span_ids_meeting` is new.\n\n## Tests\n\n- `taper_pin_through_a_rod.rs` is new. It cuts a cone (radii 1.5 and\n0.8) along y from a rod of radius 5, in 7 poses of spin and flip. Each\nresult is valid with 4 faces and a closed mesh. Points in the hole read\nOutside, and points in the rod read Inside. It fails before the change.\nOver 12 poses, the old code was exact in 3 and the new code in 7 (#2657\nlists the other 5).\n- `a_taper_pin_cut_the_engine_cannot_build_is_refused_not_wrong` cuts 5\nof those poses and accepts a refusal, but not a wrong result. It fails\nwith a change to the face trace's tie order, which assembled the rod\nalone, uncut, at spin 1.4.\n- `wall_loops_nest_across_the_window_edge` gives `[Some(1), None, None]`\nbefore the change and `[None, None, Some(1)]` after.\n- `a_section_along_a_rim_is_split_only_when_every_piece_links` splits a\nsection along two coincident rims that split at different vertices.\nBefore, the section ended in 3 pieces with 1 linked. Now it stays whole.\n- `curve_surface_tall_arch_through_flat_plane` is the case of item 4. It\ntakes the quadratic Bezier (0, 0.5, -3), (0.5, 0.5, 9), (1, 0.5, -3) and\nthe patch (u, v, 0). It found 0 crossings before and finds 2 now, at t =\n(1 - 1/sqrt 2) / 2 and (1 + 1/sqrt 2) / 2, within 1e-6.\n- `turned_mirrored_two_rods_stay_exact` stays ignored. Its reason now\nnames the fault that stays: the second fuse falls back, not the first.\nThe face splitter keeps each ball face whole by its sliver rule, so the\nrod wall's sliver covers the ball's sliver twice.\n- `cargo nextest run --no-fail-fast -p brepkit-algo -p brepkit-io -p\nbrepkit-operations -p brepkit-wasm -p brepkit-check -p brepkit-heal -p\nbrepkit-math` on `1a62ab28e`: 4893 tests run, 4893 passed, 32 skipped.\nThe gridfinity tests are among them.\n- The pose sweep (495 lines) and the truth audit (40 lines) give the\nsame output on main at `bf716d5cf` and on this branch.\n\n## Still open\n\n- #2648: the face trace breaks a tie between a rim piece and a seam\npiece with the same ends by index at both ends. The face splitter also\nkeeps the two ball faces whole by its sliver rule. Phase EF also puts\npieces of the ball's equator among the wall's paves, up to 0.0008 below\nthe rod's end circle. `fill_ef_in` tests only the distance to the\nsurface, not the face's domain.\n- #2656: a cylinder band with no seam.\n- #2657: the taper pin's other poses, among them one that returns the\nrod uncut.",
+          "timestamp": "2026-11-22T06:17:04Z",
+          "tree_id": "31780d286a1e0bb5f4d61b6bf7cfc7d07874ab16",
+          "url": "https://github.com/andymai/brepkit/commit/9d1b09a6a3c64b5b23cccf2bdda52f9867e90869"
+        },
+        "date": 1795328426209,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 837389,
+            "range": "± 23914",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 932835,
+            "range": "± 15389",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 9720,
+            "range": "± 43",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 566912,
+            "range": "± 9569",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 19371064,
+            "range": "± 67697",
             "unit": "ns/iter"
           }
         ]
