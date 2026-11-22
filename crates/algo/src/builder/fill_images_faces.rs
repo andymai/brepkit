@@ -3318,11 +3318,13 @@ fn conic_turns_about_u_axis(
     let axis = x.cross(y).normalize().ok()?;
     let reach = (center - on_axis).length() + ra.max(rb);
     let tol = brepkit_math::tolerance::Tolerance::new().linear * reach.max(1.0);
-    if conic_axis_gap(center, (a, ra), (b, rb), on_axis, axis) <= tol {
-        return None;
-    }
     let normal = a.cross(b);
     let along = axis.dot(normal);
+    if conic_axis_clearance(center, (a, ra), (b, rb), (on_axis, axis), along) <= tol
+        && conic_axis_gap(center, (a, ra), (b, rb), on_axis, axis) <= tol
+    {
+        return None;
+    }
     if along.abs() < 1e-12 {
         return Some(0.0);
     }
@@ -3330,6 +3332,33 @@ fn conic_turns_about_u_axis(
     let d = pierce - center;
     let inside = (d.dot(a) / ra).powi(2) + (d.dot(b) / rb).powi(2);
     Some(if inside < 1.0 { along.signum() } else { 0.0 })
+}
+
+/// A lower bound on the distance from the conic `center + ra cos(t) a +
+/// rb sin(t) b` to the line through `on_axis` along the unit `axis`, at no
+/// more cost than a few products. Every point of the conic lies within `ra`
+/// of its centre, and in its plane between `rb` and `ra` from the centre
+/// (`ra >= rb` or the other way). A point of the plane `d` from where the axis
+/// pierces it lies at least `d` times the sine of the axis's slope to the
+/// plane (`along`, the axis on the plane's normal) from the axis.
+fn conic_axis_clearance(
+    center: Point3,
+    (a, ra): (brepkit_math::vec::Vec3, f64),
+    (b, rb): (brepkit_math::vec::Vec3, f64),
+    (on_axis, axis): (Point3, brepkit_math::vec::Vec3),
+    along: f64,
+) -> f64 {
+    let (near, far) = (ra.min(rb), ra.max(rb));
+    let from_center = center - on_axis;
+    let off_axis = (from_center - axis * from_center.dot(axis)).length() - far;
+    if along.abs() < 1e-12 {
+        return off_axis;
+    }
+    let normal = a.cross(b);
+    let pierce = on_axis + axis * (from_center.dot(normal) / along);
+    let spread = (pierce - center).length();
+    let in_plane = (near - spread).max(spread - far);
+    off_axis.max(in_plane * along.abs())
 }
 
 /// The least distance from the conic `center + ra cos(t) a + rb sin(t) b` to
@@ -3356,7 +3385,10 @@ fn conic_axis_gap(
     for k in 0..SAMPLES {
         let here = square(at(k));
         least = least.min(here);
-        if here > square(at(k + SAMPLES - 1)) || here > square(at(k + 1)) {
+        let (before, after) = (square(at(k + SAMPLES - 1)), square(at(k + 1)));
+        // A sample above either neighbour, or level with both, holds no
+        // minimum to narrow.
+        if here > before || here > after || !(here < before || here < after) {
             continue;
         }
         let (mut lo, mut hi) = (at(k) - step, at(k) + step);
