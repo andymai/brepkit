@@ -854,6 +854,12 @@ impl Builder {
                                 continue;
                             }
                             let at = torus.evaluate(u, v);
+                            // A sample on the other solid's boundary (a ring
+                            // resting on a cone's wall along a circle) is on
+                            // neither side.
+                            if opposing_probe.point_on_boundary(at, self.tol.linear) {
+                                continue;
+                            }
                             let class = classifier::classify_point_cached(
                                 &self.topo,
                                 opposing_solid,
