@@ -165,6 +165,55 @@ mod tests {
         }
     }
 
+    /// A cone 3 across at its base and 4 high, its wall in B-spline form,
+    /// placed by `pose`, with its base rim chamfered 0.25 into the base and
+    /// 0.4 up the wall. The wall runs to a point, where the exact integral
+    /// declines it: it alone is read over its mesh.
+    fn chamfered_b_spline_cone(topo: &mut Topology, pose: &Mat4) -> SolidId {
+        let cone = make_cone(topo, 3.0, 0.0, 4.0).unwrap();
+        let rim = solid_edges(topo, cone)
+            .unwrap()
+            .into_iter()
+            .find(|&e| {
+                matches!(topo.edge(e).unwrap().curve(),
+                    EdgeCurve::Circle(c) if c.center().z().abs() < 1e-9)
+            })
+            .unwrap();
+        for face in solid_faces(topo, cone).unwrap() {
+            if topo.face(face).unwrap().surface().is_planar() {
+                continue;
+            }
+            let wall = face_bspline_surface(topo, face).unwrap().unwrap();
+            topo.face_mut(face)
+                .unwrap()
+                .set_surface(FaceSurface::Nurbs(wall));
+        }
+        transform_solid(topo, cone, pose).unwrap();
+        let built = chamfer_v2(topo, cone, &[rim], 0.4, 0.25).unwrap();
+        assert!(built.failed.is_empty(), "{:?}", built.failed);
+        built.solid
+    }
+
+    #[test]
+    fn a_chamfered_b_spline_cone_measures_exactly() {
+        // The chamfer's section swept round the axis at its centroid's
+        // radius, the wall rising 4 as it closes in by 3.
+        let (sin, cos) = 4.0_f64.atan2(3.0).sin_cos();
+        let section = 0.5 * 0.25 * 0.4 * sin;
+        let removed = 2.0 * PI * (3.0 - 0.4f64.mul_add(cos, 0.25) / 3.0) * section;
+        let expected = PI * 9.0 * 4.0 / 3.0 - removed;
+        for (name, pose) in poses() {
+            let mut topo = Topology::new();
+            let solid = chamfered_b_spline_cone(&mut topo, &pose);
+            let volume = solid_volume(&topo, solid, 1e-3).unwrap();
+            assert!(
+                (volume - expected).abs() < 1e-9 * expected,
+                "{name}: {volume}, expected {expected}, off {:e}",
+                (volume - expected) / expected
+            );
+        }
+    }
+
     const MAJOR: f64 = 4.0;
     const MINOR: f64 = 1.5;
     /// The cube's corner that reaches into the torus, `(x, y, z)` least.

@@ -1873,12 +1873,24 @@ pub(super) fn nurbs_face_by_boundary(
         let mut along = |t: f64| -> Option<[f64; 8]> {
             let c = on(edge, t, Some(seed))?;
             seed = c;
-            // `dv/dt` from the curve's velocity in the surface's tangent
-            // plane, by the first fundamental form.
+            // `dv/dt` of the point's nearest point on the surface, where the
+            // chart reads it: from the curve's velocity in the surface's
+            // tangent plane by the first fundamental form, less the
+            // surface's second partials along the point's offset from it
+            // where it lies off it (a chord of a rim), as the nearest point
+            // keeps the offset square to both partials.
+            let at = edge.curve.evaluate_with_endpoints(t, edge.start, edge.end);
             let velocity = edge_velocity(edge.curve, t, edge.start, edge.end);
             let d = s.first_derivatives(c.0, c.1);
             let (su, sv) = (d.1, d.2);
-            let (e, f, g) = (su.dot(su), su.dot(sv), sv.dot(sv));
+            let (mut e, mut f, mut g) = (su.dot(su), su.dot(sv), sv.dot(sv));
+            let off = Vec3::new(at.x(), at.y(), at.z()) - d.0;
+            if off.length() > 1e-12 * size {
+                let second = s.derivatives(c.0, c.1, 2);
+                e -= off.dot(second[2][0]);
+                f -= off.dot(second[1][1]);
+                g -= off.dot(second[0][2]);
+            }
             let det = e.madd(g, -f * f);
             if det <= 1e-24 * (e * g).max(1e-300) {
                 return None;

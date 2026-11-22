@@ -1846,4 +1846,103 @@ mod tests {
             got.volume
         );
     }
+
+    /// A patch of a ball of radius 3 in B-spline form, between the
+    /// longitudes 0.3 and 1.2 and the latitudes 0.2 and 0.9, its edges the
+    /// patch's sides moved out from the ball by 2e-7 of its radius: each
+    /// point of an edge has its nearest point on the side it stands over, so
+    /// the face is the patch, `R^3 (1.2 - 0.3)(sin 0.9 - sin 0.2) / 3` of
+    /// volume about the centre. Read from the edges' own speed, the sides
+    /// along the meridians run 2e-7 too fast.
+    #[test]
+    fn a_patch_bounded_by_edges_off_its_surface_reads_their_nearest_points() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::{Face, FaceSurface};
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let (r, lift) = (3.0, 2e-7);
+        let (a, b, c, d) = (0.3_f64, 1.2_f64, 0.2_f64, 0.9_f64);
+        // A circular arc's control points as `(x, y)` and its weights.
+        let arc = |from: f64, to: f64| {
+            let half = 0.5 * (to - from);
+            let mid = from + half;
+            (
+                [
+                    (from.cos(), from.sin()),
+                    (mid.cos() / half.cos(), mid.sin() / half.cos()),
+                    (to.cos(), to.sin()),
+                ],
+                [1.0, half.cos(), 1.0],
+            )
+        };
+        let (round, round_w) = arc(a, b);
+        let (up, up_w) = arc(c, d);
+        let net = |scale: f64| -> Vec<Vec<Point3>> {
+            (0..3)
+                .map(|i| {
+                    (0..3)
+                        .map(|j| {
+                            Point3::new(
+                                scale * up[j].0 * round[i].0,
+                                scale * up[j].0 * round[i].1,
+                                scale * up[j].1,
+                            )
+                        })
+                        .collect()
+                })
+                .collect()
+        };
+        let weights: Vec<Vec<f64>> = (0..3)
+            .map(|i| (0..3).map(|j| round_w[i] * up_w[j]).collect())
+            .collect();
+        let knots = vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0];
+        let surface = brepkit_math::nurbs::surface::NurbsSurface::new(
+            2,
+            2,
+            knots.clone(),
+            knots.clone(),
+            net(r),
+            weights.clone(),
+        )
+        .unwrap();
+        let expected = r * r * r * (b - a) * (d.sin() - c.sin()) / 3.0;
+        for scale in [r, r + lift * r] {
+            let cps = net(scale);
+            let side = |points: Vec<Point3>, w: Vec<f64>| {
+                EdgeCurve::NurbsCurve(NurbsCurve::new(2, knots.clone(), points, w).unwrap())
+            };
+            let row = |j: usize| (0..3).map(|i| cps[i][j]).collect::<Vec<_>>();
+            let row_w = |j: usize| (0..3).map(|i| weights[i][j]).collect::<Vec<_>>();
+            let mut topo = Topology::new();
+            let corner = |topo: &mut Topology, q: Point3| topo.add_vertex(Vertex::new(q, 1e-7));
+            let k = [
+                corner(&mut topo, cps[0][0]),
+                corner(&mut topo, cps[2][0]),
+                corner(&mut topo, cps[2][2]),
+                corner(&mut topo, cps[0][2]),
+            ];
+            let mut edge = |from, to, curve, forward| {
+                OrientedEdge::new(topo.add_edge(Edge::new(from, to, curve)), forward)
+            };
+            let edges = vec![
+                edge(k[0], k[1], side(row(0), row_w(0)), true),
+                edge(k[1], k[2], side(cps[2].clone(), weights[2].clone()), true),
+                edge(k[3], k[2], side(row(2), row_w(2)), false),
+                edge(k[0], k[3], side(cps[0].clone(), weights[0].clone()), false),
+            ];
+            let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+            let face = Face::new(wire, vec![], FaceSurface::Nurbs(surface.clone()));
+            let read =
+                boundary::nurbs_face_by_boundary(&topo, &face, 1.0, Vec3::new(0.0, 0.0, 0.0))
+                    .unwrap()
+                    .expect("read along its boundary");
+            assert!(
+                ((read.volume - expected) / expected).abs() < 1e-11,
+                "edges at radius {scale}: {}, expected {expected}, off {:e}",
+                read.volume,
+                (read.volume - expected) / expected
+            );
+        }
+    }
 }
