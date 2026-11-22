@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795328439151,
+  "lastUpdate": 1795330487002,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -74843,6 +74843,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 19371064,
             "range": "± 67697",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "4a5cbbb497bfc4cb02e1db275d9a1a50531f9679",
+          "message": "perf(operations): mesh a solid with less hashing in its shared passes (#2677)\n\n## Summary\n\nThe solid mesh of a 20 mm box with its 12 edges filleted at r = 1\n(`tessellate_solid_with_tolerance(.., 0.1, 10 degrees)`) took 0.39 ms on\nmain. With this change it takes 0.28 ms, and its output is the same bit\nfor bit. The 26 faces meshed one at a time take 0.93 ms. So the solid\nmesh now costs well under the sum of its faces, which #2515 asks for.\n\nThe other half of #2515 asks for a fillet gate that costs less than the\nfillet. That now turns on the fillet itself: `fillet_v2` of that box\ntakes 6.6 ms, against 0.29 ms at #2625. I filed that as #2675.\n\nRefs #2515.\n\n## The change\n\nThe time was spread out, and hashing was the largest common cost. Stack\nsamples came from gdb, because `perf` cannot run on this machine.\n\n- **The shared vertex pool.** `point_to_global` is now a `WordHashMap`\nbehind a new alias, `PointPool`, sized for the edge samples up front.\nBefore, it hashed each 24-byte key with byte-wise FNV and grew by\nrehashing. Nothing reads the order of its entries.\n- **`dedupe_coincident_triangles`.** Each vertex now reads as the first\nvertex at its grid point. The pass finds triangles with the same three\npoints in buckets by their least point. Before, it hashed a key of nine\n`i64` values for each triangle. The chain of earlier triangles for each\nkey is the same, and the pass cancels or keeps them by the same rule.\n- **Vertex normals.** The faces round each vertex come from one flat\narray filled by count, where each vertex had its own `DetHashSet`. The\npass sums the faces in the same order.\n- **The circle splice.** A step skips the 3 x 3 x 3 cells round the step\nbefore, which the visited set already holds. The list of candidates is\nthe same in content and order.\n- **The cylinder strip check** projects each rim sample once, not three\ntimes for each triangle.\n\n## Tests\n\n- `dedupe_cancels_pairs_then_keeps_the_last_of_one_winding` pins the\nrules that the dedupe rewrite keeps. It passes on main's code too,\nbecause the output does not change.\n- I meshed 15 probe solids at 4 tolerance settings, plain and grouped.\nEach gives the same hash over positions, normals, indices and face\noffsets on main and on this branch. They include the filleted box at r =\n1, 3 and 0.3, and turned. They also include a box less a cylinder, a rod\nfused with a ball, revolves, a sphere, a torus and a cone. A chamfered\nbox differs between runs on main itself (#2676).\n- All 450 fixtures in `crates/io/tests/data` at two tolerance settings,\nplain and grouped, give the same 1,797 digest lines on main and on this\nbranch.\n- `cargo nextest run -p brepkit-operations --lib tessellate` (145\npassed) and 10 mesh test files (27 passed) pass.\n- The pose sweep (495 lines) and the truth audit (40 lines) give the\nsame output as main.\n\nPhase times, medians of 600 meshes over 3 interleaved rounds, in ms:\n\n| Phase | main | branch |\n|---|---:|---:|\n| `edge_weld_pool` | 0.019 | 0.0096 |\n| `circle_refine_scan` | 0.054 | 0.043 |\n| `other_faces` | 0.122 | 0.103 |\n| `normals` | 0.033 | 0.0094 |\n| `weld_dedupe` | 0.069 | 0.046 |\n\n## Still open\n\n- Edge sampling hands 32 or more edges to rayon. On this box (48 cheap\nedges), the main thread waits 8 to 18% of each mesh. A build without the\nhandoff measured 0.30 ms against 0.33 ms. A new threshold needs data\nfrom large models at full thread count, so I left it.\n\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nSpeeds up solid meshing by replacing the hashing-heavy shared passes. A\n20 mm box with all 12 filleted edges meshes in 0.28 ms instead of 0.39\nms, with output identical bit for bit.\n\n- `PointPool`, the shared vertex pool, is now a `WordHashMap` pre-sized\nfor the edge samples instead of a growing FNV map.\n- `dedupe_coincident_triangles` buckets triangles by their least grid\npoint rather than hashing a nine-integer key per triangle.\n- Vertex normals use one flat face array per vertex instead of a\nper-vertex `DetHashSet`.\n- The circle splice skips cells already visited in the step before; the\ncylinder strip projects each rim sample once instead of once per\ntriangle.\n- Chord split caches and sets switch to word hashing too.\n\nA new test pins the dedupe cancellation rules. Fifteen probe solids at\nfour tolerances and all 450 fixtures produce the same mesh as main.\n\n<sup>Written for commit 8d1d937c74e0304824e9ccde399a445fe874ca17.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2677?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2677?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2677&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-11-22T06:50:40Z",
+          "tree_id": "3436f5962e4921b67e7019217d8933a0301a2a3d",
+          "url": "https://github.com/andymai/brepkit/commit/4a5cbbb497bfc4cb02e1db275d9a1a50531f9679"
+        },
+        "date": 1795330478159,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1186346,
+            "range": "± 10172",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1249485,
+            "range": "± 7164",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12539,
+            "range": "± 33",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 835314,
+            "range": "± 43279",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25421511,
+            "range": "± 95461",
             "unit": "ns/iter"
           }
         ]
