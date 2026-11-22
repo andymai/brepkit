@@ -226,6 +226,8 @@ pub fn perform(
 ) -> Result<(), AlgoError> {
     let faces_a = brepkit_topology::explorer::solid_faces(topo, solid_a)?;
     let faces_b = brepkit_topology::explorer::solid_faces(topo, solid_b)?;
+    let operand_faces: std::collections::HashSet<FaceId> =
+        faces_a.iter().chain(&faces_b).copied().collect();
 
     let mut junction_registry = JunctionRegistry::default();
     // Marched section ends, welded across pairs (see `section_end_vertex`).
@@ -823,6 +825,7 @@ pub fn perform(
                 raw_curves,
                 tol,
                 &mut junction_registry,
+                Some(&operand_faces),
             );
             if traced {
                 log::debug!(
@@ -2527,7 +2530,8 @@ fn face_edges_near(
 }
 
 /// Whether an edge of `face` through `p` also bounds a face lying on
-/// `other`'s surface. Two coaxial wedges' floors meet the cylinder they
+/// `other`'s surface, among `operands` when given: the arena still holds
+/// faces of earlier results that can share the edge. Two coaxial wedges' floors meet the cylinder they
 /// share along their own rims: each rim is already the edge of a wall
 /// coincident with the other wedge's, whose same-domain faces split there.
 fn edge_beside_same_domain(
@@ -2537,6 +2541,7 @@ fn edge_beside_same_domain(
     p: Point3,
     near: f64,
     tol: Tolerance,
+    operands: Option<&std::collections::HashSet<FaceId>>,
 ) -> bool {
     let Ok(other_surface) = topo.face(other).map(|f| f.surface().clone()) else {
         return false;
@@ -2544,6 +2549,7 @@ fn edge_beside_same_domain(
     face_edges_near(topo, face, p, near).any(|edge| {
         topo.faces_of_edge(edge).into_iter().any(|beside| {
             beside != face
+                && operands.is_none_or(|faces| faces.contains(&beside))
                 && topo.face(beside).is_ok_and(|f| {
                     crate::builder::same_domain::surfaces_same_domain(
                         f.surface(),
@@ -2579,6 +2585,7 @@ fn restrict_curves_to_faces(
     raw_curves: Vec<RawCurve>,
     tol: Tolerance,
     junctions: &mut JunctionRegistry,
+    operands: Option<&std::collections::HashSet<FaceId>>,
 ) -> Vec<RawCurve> {
     // `BK_RESTRICT=1`: the in-both window each section is trimmed to. Reports
     // whether a curve reached this clip at all, which is what separates "the
@@ -2725,8 +2732,10 @@ fn restrict_curves_to_faces(
                         ext_a.contains(p)
                             && ext_b.contains(p)
                             && !(edge_a && edge_b)
-                            && !(edge_a && edge_beside_same_domain(topo, fa, fb, p, near, tol))
-                            && !(edge_b && edge_beside_same_domain(topo, fb, fa, p, near, tol))
+                            && !(edge_a
+                                && edge_beside_same_domain(topo, fa, fb, p, near, tol, operands))
+                            && !(edge_b
+                                && edge_beside_same_domain(topo, fb, fa, p, near, tol, operands))
                     });
                 if on_both {
                     out.push(raw);
@@ -11482,6 +11491,7 @@ mod tests {
                 raw,
                 tol,
                 &mut JunctionRegistry::default(),
+                None,
             );
             assert!(kept.is_empty(), "side {side}: {} sections kept", kept.len());
         }
@@ -11654,6 +11664,7 @@ mod tests {
             raw,
             tol,
             &mut JunctionRegistry::default(),
+            None,
         );
         let outer = 10.0 + 3.0 * 0.75_f64.sqrt();
         assert!(!kept.is_empty(), "the outer circle crosses the patch");
@@ -12748,5 +12759,110 @@ mod tests {
         .unwrap();
         let raw = plane_nurbs_intersection(Vec3::new(1.0, 0.0, 0.0), 0.0, &sheet).unwrap();
         assert!(raw.is_empty());
+    }
+
+    /// A face left in the arena by an earlier result can share an edge of an
+    /// operand's face and lie on the partner's surface. It splits nothing in
+    /// this boolean, so it must not stand for a same-domain neighbour.
+    #[test]
+    fn a_stray_face_on_the_partners_plane_is_no_neighbour() {
+        use brepkit_topology::edge::{Edge, EdgeId};
+        use brepkit_topology::face::Face;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let mut topo = Topology::new();
+        let p = |x: f64, y: f64, z: f64| Point3::new(x, y, z);
+        let square = |topo: &mut Topology, corners: [Point3; 4], shared: Option<EdgeId>| {
+            let vs: Vec<_> = corners
+                .iter()
+                .map(|&c| topo.add_vertex(Vertex::new(c, 1e-7)))
+                .collect();
+            let mut edges = Vec::new();
+            for k in 0..4 {
+                let e = match shared {
+                    Some(edge) if k == 0 => edge,
+                    _ => topo.add_edge(Edge::new(vs[k], vs[(k + 1) % 4], EdgeCurve::Line)),
+                };
+                edges.push(OrientedEdge::new(e, true));
+            }
+            let first = edges[0].edge();
+            let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+            (wire, first)
+        };
+        // The operand's face, in the plane x = 0, with its edge along y.
+        let (wire, rim) = square(
+            &mut topo,
+            [
+                p(0.0, 0.0, 0.0),
+                p(0.0, 1.0, 0.0),
+                p(0.0, 1.0, 1.0),
+                p(0.0, 0.0, 1.0),
+            ],
+            None,
+        );
+        let x = Vec3::new(1.0, 0.0, 0.0);
+        let face = topo.add_face(Face::new(
+            wire,
+            vec![],
+            FaceSurface::Plane { normal: x, d: 0.0 },
+        ));
+        // The partner's face in z = 0, clear of the edge.
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        let (wire, _) = square(
+            &mut topo,
+            [
+                p(1.0, 0.0, 0.0),
+                p(2.0, 0.0, 0.0),
+                p(2.0, 1.0, 0.0),
+                p(1.0, 1.0, 0.0),
+            ],
+            None,
+        );
+        let other = topo.add_face(Face::new(
+            wire,
+            vec![],
+            FaceSurface::Plane { normal: z, d: 0.0 },
+        ));
+        // A stray face in z = 0 on the operand's edge.
+        let (wire, _) = square(
+            &mut topo,
+            [
+                p(0.0, 0.0, 0.0),
+                p(0.0, 1.0, 0.0),
+                p(-1.0, 1.0, 0.0),
+                p(-1.0, 0.0, 0.0),
+            ],
+            Some(rim),
+        );
+        let stray = topo.add_face(Face::new(
+            wire,
+            vec![],
+            FaceSurface::Plane { normal: z, d: 0.0 },
+        ));
+        let at = p(0.0, 0.5, 0.0);
+        let tol = Tolerance::new();
+        assert!(edge_beside_same_domain(
+            &topo, face, other, at, 1e-6, tol, None
+        ));
+        let operands: std::collections::HashSet<FaceId> = [face, other].into_iter().collect();
+        assert!(!edge_beside_same_domain(
+            &topo,
+            face,
+            other,
+            at,
+            1e-6,
+            tol,
+            Some(&operands)
+        ));
+        let with_stray: std::collections::HashSet<FaceId> =
+            [face, other, stray].into_iter().collect();
+        assert!(edge_beside_same_domain(
+            &topo,
+            face,
+            other,
+            at,
+            1e-6,
+            tol,
+            Some(&with_stray)
+        ));
     }
 }
