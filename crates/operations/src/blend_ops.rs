@@ -143,8 +143,10 @@ fn pcurve_off_its_edge(
 /// dispatch prefers; the deprecated `fillet_rolling_ball` remains callable
 /// only as an explicit reference implementation.
 ///
-/// A result that is not a valid solid is refused: the solid comes back with
-/// each edge named in `failed`. Where the fillet fails on a solid that keeps
+/// A result with a fault the builder does not read (a face whose outline
+/// crosses itself, a hole across or outside its face's outline, or two plane
+/// faces over one area) is refused: the solid comes back with each edge
+/// named in `failed`. Where the fillet fails on a solid that keeps
 /// flat seams (faces of one surface left in pieces by a boolean), it is made
 /// again on a copy with those faces joined; a picked seam is passed over.
 ///
@@ -336,10 +338,11 @@ fn fillet_across_flat_seams(
 }
 
 /// A walking-engine fillet's result, or `solid` with every edge the
-/// builder rounded reported as failed where the result is not a valid
-/// solid. The builder checks how its faces share edges, not where the
-/// faces lie: two rounds that meet at a corner the corner solver does not
-/// model can leave a face whose outline crosses itself.
+/// builder rounded reported as failed where the result has a fault the
+/// builder does not read (see [`fillet_fault`]). The builder checks how its
+/// faces share edges, not where the faces lie: two rounds that meet at a
+/// corner the corner solver does not model can leave a face whose outline
+/// crosses itself.
 fn valid_fillet(
     topo: &Topology,
     solid: SolidId,
@@ -348,21 +351,10 @@ fn valid_fillet(
     if result.solid == solid {
         return Ok(result);
     }
-    let report = crate::validate::validate_solid(topo, result.solid)?;
-    let Some(issue) = report
-        .issues
-        .iter()
-        .find(|issue| issue.severity == crate::validate::Severity::Error)
-    else {
+    let Some(fault) = fillet_fault(topo, solid, result.solid)? else {
         return Ok(result);
     };
-    // An input the checks already reject (two blocks meeting along one
-    // edge of four faces) gives them nothing to tell the fillet's own
-    // faults by.
-    if !crate::validate::validate_solid(topo, solid)?.is_valid() {
-        return Ok(result);
-    }
-    let reason = format!("the fillet leaves an invalid solid: {}", issue.description);
+    let reason = format!("the fillet leaves an invalid solid: {fault}");
     let mut failed = result.failed;
     failed.extend(result.succeeded.into_iter().map(|edge| {
         (
@@ -378,6 +370,55 @@ fn valid_fillet(
         failed,
         is_partial: true,
     })
+}
+
+/// The first fault of `result` in the faces a fillet of `input` made or
+/// trimmed (those with an edge `input` does not have): a wire that crosses
+/// itself, a hole that crosses or leaves its face's outline, or a plane
+/// face that covers the area of another. These are the checks of
+/// [`crate::validate::validate_solid`] that read where faces lie; the
+/// builder's own audit reads how they share edges. Faces the fillet left
+/// as they were are not read again.
+fn fillet_fault(
+    topo: &Topology,
+    input: SolidId,
+    result: SolidId,
+) -> Result<Option<String>, OperationsError> {
+    use brepkit_check::validate::face_overlap::check_faces_overlap_among;
+    use brepkit_check::validate::face_wires::{check_face_wires_apart, check_face_wires_simple};
+    // The tolerance `validate_solid` reads these at.
+    const TOL: f64 = 1e-6;
+    let checked = |found: Result<Vec<brepkit_check::validate::checks::ValidationIssue>, _>| {
+        found.map_err(
+            |e: brepkit_check::CheckError| OperationsError::InvalidInput {
+                reason: e.to_string(),
+            },
+        )
+    };
+    let old: HashSet<EdgeId> = brepkit_topology::explorer::solid_edges(topo, input)?
+        .into_iter()
+        .collect();
+    let mut made = HashSet::new();
+    for face in solid_faces(topo, result)? {
+        if !brepkit_topology::explorer::face_edges(topo, face)?
+            .iter()
+            .any(|edge| !old.contains(edge))
+        {
+            continue;
+        }
+        made.insert(face);
+        let mut found = checked(check_face_wires_simple(topo, face, TOL))?;
+        found.extend(checked(check_face_wires_apart(topo, face, TOL))?);
+        if let Some(issue) = found.first() {
+            return Ok(Some(format!(
+                "face {}: {}",
+                face.index(),
+                issue.description
+            )));
+        }
+    }
+    let overlaps = checked(check_faces_overlap_among(topo, result, TOL, &made))?;
+    Ok(overlaps.first().map(|issue| issue.description.clone()))
 }
 
 /// A straight through-bore: a cylinder wall with the material round it, from
