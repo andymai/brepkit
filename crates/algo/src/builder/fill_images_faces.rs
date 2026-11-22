@@ -587,13 +587,11 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
         // sections, as a face split into nothing does: both sides of each
         // must take one class. A taper pin's cone, whose two loops round its
         // side did not split it, stood whole partly inside the rod and partly
-        // out, and the rod's own faces assembled the rod uncut.
+        // out, and the rod's own faces assembled the rod uncut. A section the
+        // piece runs out and back, as a slit, splits nothing either.
         if !imprinting
             && let [only] = split_results.as_slice()
-            && std::iter::once(&only.outer_wire)
-                .chain(only.inner_wires.iter())
-                .flatten()
-                .all(|e| e.source_edge_idx.is_none())
+            && sections_only_as_slits(&only.outer_wire, &only.inner_wires, tol.linear)
             && let Some(loops) = face_loops.get(topo, face_id)
         {
             whole.extend(
@@ -8216,6 +8214,48 @@ mod tests {
         assert_eq!(turns(&horn, &horn_tube), None, "horn meridian");
     }
 
+    /// A piece that runs a section out and back holds it as a slit and
+    /// separates nothing across it; a piece that runs it one way only, or
+    /// runs another section back, is bounded by it.
+    #[test]
+    fn a_section_run_out_and_back_is_a_slit() {
+        use brepkit_math::curves2d::{Curve2D, Line2D};
+        use brepkit_math::vec::{Point2, Vec2};
+        let edge = |a: (f64, f64), b: (f64, f64), source: Option<usize>| {
+            let (pa, pb) = (Point2::new(a.0, a.1), Point2::new(b.0, b.1));
+            super::super::split_types::OrientedPCurveEdge {
+                curve_3d: EdgeCurve::Line,
+                pcurve: Curve2D::Line(Line2D::new(pa, Vec2::new(b.0 - a.0, b.1 - a.1)).unwrap()),
+                start_uv: pa,
+                end_uv: pb,
+                start_3d: Point3::new(a.0, a.1, 0.0),
+                end_3d: Point3::new(b.0, b.1, 0.0),
+                forward: true,
+                source_edge_idx: source,
+                pave_block_id: None,
+            }
+        };
+        let square = vec![
+            edge((0.0, 0.0), (4.0, 0.0), None),
+            edge((4.0, 0.0), (4.0, 4.0), None),
+            edge((4.0, 4.0), (0.0, 4.0), None),
+            edge((0.0, 4.0), (0.0, 0.0), None),
+        ];
+        assert!(sections_only_as_slits(&square, &[], 1e-7));
+        let mut slit = square.clone();
+        slit.insert(1, edge((4.0, 0.0), (2.0, 2.0), Some(0)));
+        slit.insert(2, edge((2.0, 2.0), (4.0, 0.0), Some(0)));
+        assert!(sections_only_as_slits(&slit, &[], 1e-7));
+        let mut one_way = square.clone();
+        one_way[1] = edge((4.0, 0.0), (0.0, 4.0), Some(0));
+        one_way.remove(2);
+        assert!(!sections_only_as_slits(&one_way, &[], 1e-7));
+        let mut other = slit;
+        other[2].source_edge_idx = Some(1);
+        assert!(!sections_only_as_slits(&other, &[], 1e-7));
+        assert!(!sections_only_as_slits(&square, &[one_way], 1e-7));
+    }
+
     /// A run 0.001 inside the top of a closed ellipse seamed a 64th of a
     /// turn from its major axis: both crossings fall between two of 32
     /// samples taken from the seam, and both are found.
@@ -8912,6 +8952,28 @@ fn polyline_meetings(a: &[Point3], b: &[Point3], band: f64) -> Vec<(Point3, f64,
         }
     }
     found
+}
+
+/// Whether each section edge in the wires runs out and back, as a slit: the
+/// same section, between the same two points, both ways. A piece that holds
+/// its sections only so separates nothing across them.
+fn sections_only_as_slits(
+    outer: &[super::split_types::OrientedPCurveEdge],
+    inner: &[Vec<super::split_types::OrientedPCurveEdge>],
+    tol: f64,
+) -> bool {
+    let edges: Vec<&super::split_types::OrientedPCurveEdge> = std::iter::once(outer)
+        .chain(inner.iter().map(Vec::as_slice))
+        .flatten()
+        .filter(|e| e.source_edge_idx.is_some())
+        .collect();
+    edges.iter().all(|e| {
+        edges.iter().any(|r| {
+            r.source_edge_idx == e.source_edge_idx
+                && (r.start_3d - e.end_3d).length() <= tol
+                && (r.end_3d - e.start_3d).length() <= tol
+        })
+    })
 }
 
 /// For each section that lies on a face, a point on either side of its
