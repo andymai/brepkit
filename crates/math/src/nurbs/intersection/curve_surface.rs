@@ -5,7 +5,7 @@ use crate::aabb::Aabb3;
 use crate::madd::Madd;
 use crate::nurbs::curve::NurbsCurve;
 use crate::nurbs::decompose::{curve_to_bezier_segments, surface_to_bezier_patches};
-use crate::nurbs::span_index::knot_spans;
+use crate::nurbs::span_index::{Hpoint, box_gap, halve, knot_spans, span_bezier};
 use crate::nurbs::surface::NurbsSurface;
 use crate::vec::{Point3, Vec3};
 
@@ -48,10 +48,13 @@ pub fn intersect_curve_surface(
     tolerance: f64,
 ) -> Result<Vec<CurveSurfaceHit>, MathError> {
     const DEPTH: u32 = 12;
-    const REACH: f64 = 1.5;
     let Some(index) = surface.span_index() else {
         return intersect_curve_surface_patches(curve, surface, tolerance);
     };
+    let weights = curve.weights();
+    if weights.iter().any(|&w| w <= 0.0 || !w.is_normal()) {
+        return intersect_curve_surface_patches(curve, surface, tolerance);
+    }
     // Use a generous dedup threshold: many seeds converge to the same root,
     // and we want to collapse them. 1e-6 in 3D space is well below any
     // meaningful geometric distinction at CAD tolerances.
@@ -60,52 +63,104 @@ pub fn intersect_curve_surface(
     let mut hits: Vec<CurveSurfaceHit> = Vec::new();
 
     // Each curve span against each surface span whose control box meets
-    // its own, searched by halving whichever of `t`, `u` and `v` reaches
-    // farthest, and dropping a piece pair whose middles lie farther apart
-    // than their half-widths along the derivatives reach (with a margin for
-    // curvature). Newton's method runs from the middles of the pairs left
-    // at the finest level. A fitted patch can hold tens of thousands of
-    // spans whose control boxes overlap a boundary curve's: seeding every
-    // such pair by sampling ran for minutes.
+    // its own, as Bezier nets, halved in whichever of the curve and the
+    // surface's two directions spans the most. Their weights being
+    // positive, each piece lies in the box of its net, so a pair whose
+    // boxes stand apart holds no hit and is dropped. Newton's method runs
+    // from the middles of the pairs left at the finest level. A fitted
+    // patch can hold tens of thousands of spans whose control boxes overlap
+    // a boundary curve's: seeding every such pair by sampling ran for
+    // minutes.
     let cps = curve.control_points();
     let p = curve.degree();
-    let mut stack: Vec<(Interval, Interval, Interval, u32)> = Vec::new();
+    let (nu, nv) = (surface.degree_u() + 1, surface.degree_v() + 1);
+    let mut stack: Vec<NetPair> = Vec::new();
     for (t0, t1, last) in knot_spans(curve.knots(), p, cps.len()) {
-        let bound = Aabb3::from_points(cps[last - p..=last].iter().copied()).expanded(dedup_dist);
-        for (us, vs) in index.spans_meeting(&bound) {
-            stack.push(((t0, t1), us, vs, 0));
-            while let Some((ts, us, vs, depth)) = stack.pop() {
-                let tm = f64::midpoint(ts.0, ts.1);
-                let (um, vm) = (f64::midpoint(us.0, us.1), f64::midpoint(vs.0, vs.1));
-                let cd = curve.derivatives(tm, 1);
-                let sd = surface.first_derivatives(um, vm);
-                let reach_t = cd[1].length() * (ts.1 - ts.0);
-                let reach_u = sd.1.length() * (us.1 - us.0);
-                let reach_v = sd.2.length() * (vs.1 - vs.0);
-                let gap = (cd[0] - sd.0).length();
-                if gap > REACH * 0.5 * (reach_t + reach_u + reach_v) + dedup_dist {
+        let local: Vec<Hpoint> = (last - p..=last)
+            .map(|i| {
+                let (q, w) = (cps[i], weights[i]);
+                [q.x() * w, q.y() * w, q.z() * w, w]
+            })
+            .collect();
+        let curve_net = span_bezier(&local, curve.knots(), last, (t0, t1));
+        let bound = net_box(&curve_net).expanded(dedup_dist);
+        for i in index.span_ids_meeting(&bound) {
+            let Some((surface_net, us, vs)) = index.bezier_net(surface, i) else {
+                continue;
+            };
+            stack.push(NetPair {
+                curve: curve_net.clone(),
+                ts: (t0, t1),
+                surface: surface_net.to_vec(),
+                us,
+                vs,
+                depth: 0,
+            });
+            while let Some(pair) = stack.pop() {
+                let (curve_box, surface_box) = (net_box(&pair.curve), net_box(&pair.surface));
+                if box_gap(&curve_box, &surface_box) > dedup_dist {
                     continue;
                 }
-                if depth < DEPTH {
-                    let half = |(lo, hi): (f64, f64)| {
-                        let m = f64::midpoint(lo, hi);
-                        [(lo, m), (m, hi)]
-                    };
-                    if reach_t >= reach_u && reach_t >= reach_v {
-                        for h in half(ts) {
-                            stack.push((h, us, vs, depth + 1));
-                        }
-                    } else if reach_u >= reach_v {
-                        for h in half(us) {
-                            stack.push((ts, h, vs, depth + 1));
-                        }
+                if pair.depth < DEPTH {
+                    let depth = pair.depth + 1;
+                    let size = |b: &Aabb3| (b.max - b.min).length();
+                    let (along_u, along_v) = net_spread(&pair.surface, nu, nv);
+                    if size(&curve_box) >= size(&surface_box) {
+                        let (lo, hi) = halve(&pair.curve, p + 1, 1, true);
+                        let tm = f64::midpoint(pair.ts.0, pair.ts.1);
+                        stack.push(NetPair {
+                            curve: lo,
+                            ts: (pair.ts.0, tm),
+                            surface: pair.surface.clone(),
+                            depth,
+                            ..pair
+                        });
+                        stack.push(NetPair {
+                            curve: hi,
+                            ts: (tm, pair.ts.1),
+                            depth,
+                            ..pair
+                        });
+                    } else if along_u >= along_v {
+                        let (lo, hi) = halve(&pair.surface, nu, nv, true);
+                        let um = f64::midpoint(pair.us.0, pair.us.1);
+                        stack.push(NetPair {
+                            curve: pair.curve.clone(),
+                            surface: lo,
+                            us: (pair.us.0, um),
+                            depth,
+                            ..pair
+                        });
+                        stack.push(NetPair {
+                            surface: hi,
+                            us: (um, pair.us.1),
+                            depth,
+                            ..pair
+                        });
                     } else {
-                        for h in half(vs) {
-                            stack.push((ts, us, h, depth + 1));
-                        }
+                        let (lo, hi) = halve(&pair.surface, nu, nv, false);
+                        let vm = f64::midpoint(pair.vs.0, pair.vs.1);
+                        stack.push(NetPair {
+                            curve: pair.curve.clone(),
+                            surface: lo,
+                            vs: (pair.vs.0, vm),
+                            depth,
+                            ..pair
+                        });
+                        stack.push(NetPair {
+                            surface: hi,
+                            vs: (vm, pair.vs.1),
+                            depth,
+                            ..pair
+                        });
                     }
                     continue;
                 }
+                let tm = f64::midpoint(pair.ts.0, pair.ts.1);
+                let (um, vm) = (
+                    f64::midpoint(pair.us.0, pair.us.1),
+                    f64::midpoint(pair.vs.0, pair.vs.1),
+                );
                 if let Some(hit) = refine_curve_surface_point(curve, surface, tm, um, vm, tolerance)
                 {
                     let dup = hits.iter().any(|h: &CurveSurfaceHit| {
@@ -123,6 +178,50 @@ pub fn intersect_curve_surface(
     // Sort by curve parameter for deterministic output.
     hits.sort_by(|a, b| a.t.partial_cmp(&b.t).unwrap_or(std::cmp::Ordering::Equal));
     Ok(hits)
+}
+
+/// A piece of a curve span and a piece of a surface span, as Bezier nets,
+/// with their parameter intervals.
+struct NetPair {
+    curve: Vec<Hpoint>,
+    ts: Interval,
+    surface: Vec<Hpoint>,
+    us: Interval,
+    vs: Interval,
+    depth: u32,
+}
+
+/// The box of a net's points.
+fn net_box(net: &[Hpoint]) -> Aabb3 {
+    Aabb3::from_points(
+        net.iter()
+            .map(|h| Point3::new(h[0] / h[3], h[1] / h[3], h[2] / h[3])),
+    )
+}
+
+/// How far a surface net of `nu` by `nv` points reaches along `u` and along
+/// `v`: the longest control polygon of a line, each way. A line's end chord
+/// would read a span that closes on itself as no reach at all.
+fn net_spread(net: &[Hpoint], nu: usize, nv: usize) -> (f64, f64) {
+    let at = |i: usize, j: usize| {
+        let h = net[i * nv + j];
+        Point3::new(h[0] / h[3], h[1] / h[3], h[2] / h[3])
+    };
+    let along_u = (0..nv)
+        .map(|j| {
+            (1..nu)
+                .map(|i| (at(i, j) - at(i - 1, j)).length())
+                .sum::<f64>()
+        })
+        .fold(0.0, f64::max);
+    let along_v = (0..nu)
+        .map(|i| {
+            (1..nv)
+                .map(|j| (at(i, j) - at(i, j - 1)).length())
+                .sum::<f64>()
+        })
+        .fold(0.0, f64::max);
+    (along_u, along_v)
 }
 
 /// [`intersect_curve_surface`] by Bezier decomposition, for a surface whose

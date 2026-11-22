@@ -4955,9 +4955,9 @@ pub(super) fn split_face_with_internal_loops(
         }
     }
     // On a cylinder or cone wall a loop that does not wind the axis lies
-    // in one stretch of `(u, v)`: laid out about one `u`, the loops nest as
-    // they would on a plane (a ring standing on the wall: its bore's section
-    // inside its outer wall's).
+    // in one stretch of `(u, v)`, where the loops nest as they would on a
+    // plane (a ring standing on the wall: its bore's section inside its
+    // outer wall's).
     if matches!(surface, FaceSurface::Cylinder(_) | FaceSurface::Cone(_))
         && parent_loop.iter().all(Option::is_none)
     {
@@ -4973,47 +4973,12 @@ pub(super) fn split_face_with_internal_loops(
                     .collect()
             })
             .collect();
-        if let Some(&(u0, _)) = raw.iter().find_map(|l| l.first()) {
-            let near = |u: f64| {
-                u0 + (u - u0 + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU)
-                    - std::f64::consts::PI
-            };
-            let polygons: Vec<Vec<Point2>> = raw
-                .iter()
-                .map(|l| l.iter().map(|&(u, v)| Point2::new(near(u), v)).collect())
-                .collect();
-            let area = |poly: &[Point2]| -> f64 {
-                poly.iter()
-                    .zip(poly.iter().cycle().skip(1))
-                    .map(|(a, b)| a.x() * b.y() - b.x() * a.y())
-                    .sum::<f64>()
-                    .abs()
-            };
-            for lj in 0..loops.len() {
-                if polygons[lj].len() < 3 {
-                    continue;
-                }
-                let mut best: Option<(f64, usize)> = None;
-                for li in 0..loops.len() {
-                    if li == lj || polygons[li].len() < 3 {
-                        continue;
-                    }
-                    let inside = polygons[lj]
-                        .iter()
-                        .all(|p| super::super::classify_2d::point_in_polygon_2d(*p, &polygons[li]));
-                    if inside {
-                        let a = area(&polygons[li]);
-                        if best.is_none_or(|(ba, _)| a < ba) {
-                            best = Some((a, li));
-                        }
-                    }
-                }
-                if let Some((_, li)) = best {
-                    log::debug!(
-                        "split_face_with_internal_loops: face {face_id:?} loop {li} encloses loop {lj} on the wall"
-                    );
-                    parent_loop[lj] = Some(li);
-                }
+        for (lj, parent) in wall_loop_parents(&raw).into_iter().enumerate() {
+            if let Some(li) = parent {
+                log::debug!(
+                    "split_face_with_internal_loops: face {face_id:?} loop {li} encloses loop {lj} on the wall"
+                );
+                parent_loop[lj] = Some(li);
             }
         }
     }
@@ -5397,6 +5362,82 @@ pub(super) fn split_face_with_internal_loops(
     result.push(remainder);
 
     Some(result)
+}
+
+/// For each loop on a cylinder or cone wall, given by its samples' `(u, v)`
+/// in order, the smallest other loop that encloses it; an empty loop (one
+/// that winds the axis) takes no part. Each loop is unwrapped along itself
+/// and a pair is compared with the inner loop moved by each whole turn that
+/// brings it over the outer one: read in one window of `u`, a loop across
+/// the window's edge spans the whole window, and a loop on its far side
+/// reads as inside it. A loop that winds nothing can still span more than a
+/// turn (a strip along a helix), so the nearest copy need not be the one it
+/// holds.
+fn wall_loop_parents(raw: &[Vec<(f64, f64)>]) -> Vec<Option<usize>> {
+    use std::f64::consts::{PI, TAU};
+    let polygons: Vec<Vec<Point2>> = raw
+        .iter()
+        .map(|l| {
+            let mut prev: Option<f64> = None;
+            l.iter()
+                .map(|&(u, v)| {
+                    let u = prev.map_or(u, |p| p + (u - p + PI).rem_euclid(TAU) - PI);
+                    prev = Some(u);
+                    Point2::new(u, v)
+                })
+                .collect()
+        })
+        .collect();
+    let u_range = |poly: &[Point2]| {
+        poly.iter()
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), p| {
+                (lo.min(p.x()), hi.max(p.x()))
+            })
+    };
+    let area = |poly: &[Point2]| -> f64 {
+        poly.iter()
+            .zip(poly.iter().cycle().skip(1))
+            .map(|(a, b)| a.x() * b.y() - b.x() * a.y())
+            .sum::<f64>()
+            .abs()
+    };
+    (0..polygons.len())
+        .map(|lj| {
+            if polygons[lj].len() < 3 {
+                return None;
+            }
+            let mut best: Option<(f64, usize)> = None;
+            for li in 0..polygons.len() {
+                if li == lj || polygons[li].len() < 3 {
+                    continue;
+                }
+                let ((outer_lo, outer_hi), (inner_lo, inner_hi)) =
+                    (u_range(&polygons[li]), u_range(&polygons[lj]));
+                #[allow(clippy::cast_possible_truncation)]
+                let (first, last) = (
+                    ((outer_lo - inner_hi) / TAU).floor() as i64,
+                    ((outer_hi - inner_lo) / TAU).ceil() as i64,
+                );
+                #[allow(clippy::cast_precision_loss)]
+                let inside = (first..=last).any(|k| {
+                    let shift = TAU * k as f64;
+                    polygons[lj].iter().all(|p| {
+                        super::super::classify_2d::point_in_polygon_2d(
+                            Point2::new(p.x() + shift, p.y()),
+                            &polygons[li],
+                        )
+                    })
+                });
+                if inside {
+                    let a = area(&polygons[li]);
+                    if best.is_none_or(|(ba, _)| a < ba) {
+                        best = Some((a, li));
+                    }
+                }
+            }
+            best.map(|(_, li)| li)
+        })
+        .collect()
 }
 
 /// 3D samples along a wire's edges: two per line, 32 per curved edge, never
@@ -9306,5 +9347,63 @@ mod tests {
             1e-7
         ));
         assert!(loop_crosses_hole(&rect(2.0, 4.0, -1.0, 1.0), &hole, 1e-7));
+    }
+
+    #[test]
+    fn wall_loops_nest_across_the_window_edge() {
+        // A small loop first, about u = 0, then a larger loop across
+        // u = pi with a smaller loop inside it. Read in one window of u
+        // about the first loop's first sample, the larger loop spanned the
+        // whole window and held the first loop.
+        let ring = |u: f64, v: f64, r: f64| -> Vec<(f64, f64)> {
+            (0..24)
+                .map(|k| {
+                    let a = f64::from(k) * std::f64::consts::TAU / 24.0;
+                    let w = u + r * a.cos();
+                    (w.rem_euclid(std::f64::consts::TAU), v + r * a.sin())
+                })
+                .collect()
+        };
+        let pi = std::f64::consts::PI;
+        let raw = vec![
+            ring(0.0, 0.0, 0.2),
+            ring(pi, 0.0, 0.5),
+            ring(pi + 0.1, 0.0, 0.2),
+        ];
+        assert_eq!(super::wall_loop_parents(&raw), vec![None, None, Some(1)]);
+        let winding = vec![Vec::new(), ring(1.0, 0.0, 0.3), ring(1.0, 0.05, 0.1)];
+        assert_eq!(
+            super::wall_loop_parents(&winding),
+            vec![None, None, Some(1)]
+        );
+    }
+
+    #[test]
+    fn a_strip_along_a_helix_holds_a_ring_more_than_a_turn_from_its_middle() {
+        // A strip from (0, -0.2) up to (8, 7.8) and (8, 8.2), back to
+        // (0, 0.2): it winds nothing but spans more than a turn of u. A ring
+        // at (0.5, 0.5) lies in it; the copy of the ring nearest the strip's
+        // middle in u lies a turn away, off the strip.
+        let tau = std::f64::consts::TAU;
+        let corners = [(0.0, -0.2), (8.0, 7.8), (8.0, 8.2), (0.0, 0.2)];
+        let mut strip = Vec::new();
+        for (k, &(u0, v0)) in corners.iter().enumerate() {
+            let (u1, v1) = corners[(k + 1) % corners.len()];
+            for step in 0..64 {
+                let t = f64::from(step) / 64.0;
+                let (u, v) = (u0 + (u1 - u0) * t, v0 + (v1 - v0) * t);
+                strip.push((u.rem_euclid(tau), v));
+            }
+        }
+        let ring: Vec<(f64, f64)> = (0..24)
+            .map(|k| {
+                let a = f64::from(k) * tau / 24.0;
+                (0.5 + 0.05 * a.cos(), 0.5 + 0.05 * a.sin())
+            })
+            .collect();
+        assert_eq!(
+            super::wall_loop_parents(&[strip, ring]),
+            vec![None, Some(0)]
+        );
     }
 }
