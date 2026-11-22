@@ -7060,15 +7060,15 @@ fn rejoin_untouched_rims(
 /// the rims running between them. A closed rim's UVs run its curve's own
 /// sense whatever its traversal, so one traversed against its curve leaves
 /// the walk a turn back from its start. False, with nothing moved, when
-/// there is no closed rim to walk from or a closed rim is not a circle (the
-/// split of a closed ellipse rim takes its pieces' u from projection, not
-/// from the rim's own span).
+/// there is no closed rim to walk from or a closed rim is neither a circle
+/// nor an ellipse (the split of a closed spline rim takes its pieces' u from
+/// projection, not from the rim's own span).
 fn walk_boundary_from_closed_rim(edges: &mut [OrientedPCurveEdge]) -> bool {
     use std::f64::consts::TAU;
     let closed = |e: &OrientedPCurveEdge| (e.start_3d - e.end_3d).length() < 1e-10;
     if edges
         .iter()
-        .any(|e| closed(e) && !matches!(e.curve_3d, EdgeCurve::Circle(_)))
+        .any(|e| closed(e) && !matches!(e.curve_3d, EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_)))
     {
         return false;
     }

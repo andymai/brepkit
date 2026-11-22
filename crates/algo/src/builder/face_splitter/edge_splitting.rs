@@ -117,7 +117,8 @@ fn split_edges_at_3d_points(
                     let first = (a1 - a0).rem_euclid(TAU);
                     let second = TAU - first;
                     for m in [a0 + 0.5 * first, a1 + 0.5 * second] {
-                        let t_mid = normalize_angle_in_span(m, t0, t1 - t0);
+                        let along = normalize_angle_in_span(m, t0, t1 - t0);
+                        let t_mid = if edge.forward { along } else { 1.0 - along };
                         if t_mid > tol && t_mid < 1.0 - tol {
                             splits.push((t_mid, e.evaluate(m)));
                         }
@@ -166,9 +167,16 @@ fn split_edges_at_3d_points(
         // follows the curve, not the traversal), which is opposite the
         // surface's u when the circle's normal opposes the axis (an
         // apex-up cone's rims, a mirrored cylinder's).
-        let closed_ring_dir = (matches!(edge.curve_3d, EdgeCurve::Circle(_))
+        // A closed ellipse rim on a cylinder or a cone (an oblique cut's
+        // rim) winds the wall once like a circle; its points' `v` vary, so
+        // a split's `u` is its projection's, on the copy of the period the
+        // rim's own span holds there.
+        let ellipse_rim = matches!(edge.curve_3d, EdgeCurve::Ellipse(_))
+            && matches!(surface, FaceSurface::Cylinder(_) | FaceSurface::Cone(_));
+        let closed_ring_dir = ((matches!(edge.curve_3d, EdgeCurve::Circle(_))
             && (matches!(surface, FaceSurface::Cylinder(_) | FaceSurface::Cone(_))
                 || matches!(surface, FaceSurface::Torus(_)) && is_parallel_ring(&edge))
+            || ellipse_rim)
             && (edge.start_3d - edge.end_3d).length() < tol)
             .then(|| {
                 let native = if edge.end_uv.x() < edge.start_uv.x() {
@@ -212,10 +220,16 @@ fn split_edges_at_3d_points(
             let split_uv = if let Some(f) = frame {
                 f.project(split_3d)
             } else if let Some(dir) = closed_ring_dir {
-                brepkit_math::vec::Point2::new(
-                    std::f64::consts::TAU.madd(dir * t, edge.start_uv.x()),
-                    edge.start_uv.y(),
-                )
+                let along = std::f64::consts::TAU.madd(dir * t, edge.start_uv.x());
+                if ellipse_rim {
+                    let at = project_point_on_surface(split_3d, surface, &[], None);
+                    let u = at.x()
+                        - ((at.x() - along) / std::f64::consts::TAU).round()
+                            * std::f64::consts::TAU;
+                    brepkit_math::vec::Point2::new(u, at.y())
+                } else {
+                    brepkit_math::vec::Point2::new(along, edge.start_uv.y())
+                }
             } else if circle_iso_v_rim {
                 // Interpolate within the edge's own UV span: an iso-v rim's
                 // pcurve is u-linear, and a raw principal-value projection
@@ -1111,6 +1125,9 @@ pub(super) fn find_splits_on_ellipse(
     // the traversal's order, a reversed arc's span is its complement, and a
     // point on the ellipse just past the arc's end (a strut notch's arc ending
     // a hair short of the seam vertex) split it into a detour through there.
+    // A closed ellipse runs its whole turn from its vertex, counter-clockwise
+    // as stored and clockwise reversed (a mirrored rod's slanted top), so its
+    // splits are ordered along the traversal too.
     let closed = (edge.start_3d - edge.end_3d).length() < tol;
     let (stored_start, stored_end) = if edge.forward || closed {
         (edge.start_3d, edge.end_3d)
@@ -1133,11 +1150,7 @@ pub(super) fn find_splits_on_ellipse(
             continue;
         }
         let along = normalize_angle_in_span(angle, t0, span);
-        let t_norm = if edge.forward || closed {
-            along
-        } else {
-            1.0 - along
-        };
+        let t_norm = if edge.forward { along } else { 1.0 - along };
         if t_norm <= tol || t_norm >= 1.0 - tol {
             continue;
         }
