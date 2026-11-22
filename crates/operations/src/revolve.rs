@@ -688,16 +688,17 @@ fn axis_sphere_meridian(
     if off <= linear || off > 1e-6 * radius {
         return None;
     }
-    // Ends at one height, mirrored across the axis, are equally far from
-    // every point of it, so the foot of the arc's centre serves.
-    let (wa, wb) = (a - axis_origin, b - axis_origin);
+    // Measured from the foot, so that the point the axis is given by does
+    // not change the result. Ends at one height, mirrored across the axis,
+    // are equally far from every point of it, so the foot itself serves.
+    let (wa, wb) = (a - foot, b - foot);
     let rise = 2.0 * axis.dot(wb - wa);
     let along = if rise.abs() > linear {
         (wb.length_squared() - wa.length_squared()) / rise
     } else {
-        (foot - axis_origin).dot(axis)
+        0.0
     };
-    let sphere_center = axis_origin + axis * along;
+    let sphere_center = foot + axis * along;
     if (sphere_center - foot).length() > 1e-6 * radius {
         return None;
     }
@@ -710,7 +711,9 @@ fn axis_sphere_meridian(
         (a - meridian_center).length(),
         (b - meridian_center).length(),
     );
-    if (ra - rb).abs() > 1e-9 * radius.max(1.0) {
+    // The meridian takes the mean of the two, so each end lies half the
+    // difference off it.
+    if (ra - rb).abs() > 2.0 * linear {
         return None;
     }
     // The meridian runs from `a` to `b` round the side the arc does.
@@ -3995,6 +3998,64 @@ mod tests {
                 "full segmented revolve (ccw={ccw}) volume should be ~{expected:.2}, \
                  got {vol:.2} (rel_err={rel_err:.2e})"
             );
+        }
+    }
+
+    /// An arc of radius 1e6 about a centre 0.75 off the axis, within a
+    /// millionth of its radius, with both ends at one height on one side of
+    /// the axis, 0.25 and 1.25 out. No sphere about the axis holds both ends:
+    /// on the one through their mean, each stands 3.75e-7 off. The arc keeps
+    /// its own edge and sweeps no sphere.
+    #[test]
+    fn a_large_arc_whose_ends_no_sphere_about_the_axis_holds_sweeps_no_sphere() {
+        use brepkit_math::curves::Circle3D;
+        let axis = Vec3::new(0.0, 0.0, 1.0);
+        let origin = Point3::new(0.0, 0.0, 0.0);
+        let r = 1e6;
+        let z = (r * r - 0.25_f64).sqrt();
+        let (a, b) = (Point3::new(0.25, 0.0, z), Point3::new(1.25, 0.0, z));
+        for normal in [Vec3::new(0.0, 1.0, 0.0), Vec3::new(0.0, -1.0, 0.0)] {
+            let centre = Point3::new(0.75, 0.0, 0.0);
+            let arc =
+                EdgeCurve::Circle(Circle3D::new_with_ref(centre, normal, r, a - centre).unwrap());
+            for origin in [origin, origin + axis * 1e6] {
+                assert!(axis_sphere_meridian(&arc, a, b, origin, axis).is_none());
+            }
+            let band =
+                revolution_sphere_band(centre, r, (a, b), origin, axis, PI / 2.0, a).unwrap();
+            assert!(band.is_none());
+        }
+    }
+
+    /// An arc of radius 100 about a centre 5e-7 off the axis takes the same
+    /// meridian whichever point gives the axis, near the arc or 1e6 along.
+    #[test]
+    fn an_arc_a_hair_off_the_axis_takes_one_meridian_from_any_axis_point() {
+        use brepkit_math::curves::Circle3D;
+        let axis = Vec3::new(0.0, 0.0, 1.0);
+        let (r, off) = (100.0, 5e-7);
+        let h = r * std::f64::consts::FRAC_PI_3.sin();
+        let w = r * std::f64::consts::FRAC_PI_3.cos();
+        let centre = Point3::new(off, 0.0, 0.0);
+        let (a, b) = (Point3::new(off + w, 0.0, -h), Point3::new(off + w, 0.0, h));
+        let arc = EdgeCurve::Circle(
+            Circle3D::new_with_ref(centre, Vec3::new(0.0, -1.0, 0.0), r, a - centre).unwrap(),
+        );
+        let meridians: Vec<Circle3D> = [0.0, 1e6, -1e6]
+            .into_iter()
+            .map(|along| {
+                axis_sphere_meridian(&arc, a, b, Point3::new(0.0, 0.0, along), axis).unwrap()
+            })
+            .collect();
+        for m in &meridians {
+            assert!(
+                (m.center() - Point3::new(0.0, 0.0, 0.0)).length() < 1e-9,
+                "{:?}",
+                m.center()
+            );
+            assert!(((a - m.center()).length() - m.radius()).abs() < 1e-9);
+            assert!(((b - m.center()).length() - m.radius()).abs() < 1e-9);
+            assert!((m.center() - meridians[0].center()).length() < 1e-9);
         }
     }
 
