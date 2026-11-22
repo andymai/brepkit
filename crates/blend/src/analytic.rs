@@ -649,14 +649,20 @@ fn plane_plane_chamfer(
     // INTO each face's material only on a CONVEX edge — on a concave edge it
     // flips onto the faces' extensions, placing the contacts on the external
     // tangent branch (a 0.02 chamfer on a reflex notch grew the solid by
-    // 6.7%). The exact, convexity-independent direction is the wire-traversal
-    // left side (`effective_normal x traversal_tangent` for a CCW-wound
-    // face); the bisector projection remains the fallback when the spine
-    // edge is not found in a face's wires.
-    let contact_dir1 = material_contact_direction(topo, face1, spine, n1, tangent)
-        .unwrap_or_else(|| compute_contact_direction(n1, bisector));
-    let contact_dir2 = material_contact_direction(topo, face2, spine, n2, tangent)
-        .unwrap_or_else(|| compute_contact_direction(n2, bisector));
+    // 6.7%). The exact, convexity-independent direction is the left of the
+    // face's wire along the edge about the plane's own normal, which a
+    // reversed face's wire winds about too (a pocket's wall); the bisector
+    // projection remains the fallback when the spine edge is not found in a
+    // face's wires.
+    let into = |face: FaceId, normal: Vec3| -> Result<Vec3, BlendError> {
+        let side = match spine.edges().first() {
+            Some(&edge) => crate::builder_utils::into_face_from_edge(topo, face, edge)?,
+            None => None,
+        };
+        Ok(side.unwrap_or_else(|| compute_contact_direction(normal, bisector)))
+    };
+    let contact_dir1 = into(face1, n1)?;
+    let contact_dir2 = into(face2, n2)?;
 
     let c1_start = p_start + contact_dir1 * d1;
     let c1_end = p_end + contact_dir1 * d1;

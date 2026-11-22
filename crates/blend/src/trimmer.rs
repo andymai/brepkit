@@ -556,8 +556,34 @@ fn trim_to_inside_corners(
     }
     let surface = face.surface().clone();
     let reversed = face.is_reversed();
+    let outline = face.outer_wire();
     let holes = face.inner_wires().to_vec();
-    let oriented_edges: Vec<OrientedEdge> = topo.wire(face.outer_wire())?.edges().to_vec();
+    // The wire through the blended edge's corners: the outline, or a hole
+    // whose own edge is blended (a pocket's rim on the face round it).
+    let through_corner = |wid: WireId| -> Result<bool, BlendError> {
+        for oe in topo.wire(wid)?.edges() {
+            let e = topo.edge(oe.edge())?;
+            if corners.contains(&e.start()) || corners.contains(&e.end()) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    };
+    let mut wire_id = outline;
+    if !through_corner(outline)? {
+        for &hole in &holes {
+            if through_corner(hole)? {
+                wire_id = hole;
+                break;
+            }
+        }
+    }
+    let in_hole = wire_id != outline;
+    let others: Vec<WireId> = std::iter::once(outline)
+        .chain(holes.iter().copied())
+        .filter(|&w| w != wire_id)
+        .collect();
+    let oriented_edges: Vec<OrientedEdge> = topo.wire(wire_id)?.edges().to_vec();
     let n = oriented_edges.len();
     let mut edge_data: Vec<(OrientedEdge, Point3, Point3)> = Vec::with_capacity(n);
     let mut starts: Vec<VertexId> = Vec::with_capacity(n);
@@ -609,7 +635,10 @@ fn trim_to_inside_corners(
         let d_out = sub2(project(next.2), project(corner));
         let turn = cross2(d_in, d_out);
         let scale = d_in.0.hypot(d_in.1) * d_out.0.hypot(d_out.1);
-        if turn * winding.signum() >= -1e-9 * scale {
+        // The outline's inside corner turns against its winding. A hole's
+        // corner that turns with the hole's winding points into the face.
+        let toward = if in_hole { -1.0 } else { 1.0 };
+        if turn * winding.signum() * toward >= -1e-9 * scale {
             continue;
         }
         let j = usize::from((ends[1] - corner).length() < (ends[0] - corner).length());
@@ -677,8 +706,9 @@ fn trim_to_inside_corners(
         contact_ends[j] = hit.point_3d;
         hits.push(hit);
     }
-    // The stretch from each inside corner to its contact end crosses no
-    // boundary edge but the two at the corner.
+    // The stretch from each inside corner to its contact end meets no
+    // boundary edge but the two at the corner. An edge in line with it but
+    // apart from it (the other end's set-back on a hole) does not meet it.
     for j in 0..2 {
         let Some(k) = inside[j] else { continue };
         let (c, p) = (project(edge_data[k].1), project(contact_ends[j]));
@@ -686,15 +716,7 @@ fn trim_to_inside_corners(
             if idx == k || idx == (k + n - 1) % n {
                 continue;
             }
-            let (d1, d2) = (
-                cross2(sub2(b, a), sub2(c, a)),
-                cross2(sub2(b, a), sub2(p, a)),
-            );
-            let (d3, d4) = (
-                cross2(sub2(p, c), sub2(a, c)),
-                cross2(sub2(p, c), sub2(b, c)),
-            );
-            if d1 * d2 <= 0.0 && d3 * d4 <= 0.0 {
+            if flat_segment_distance(c, p, a, b) <= CONTACT_END_TOL {
                 return Err(fail());
             }
         }
@@ -786,8 +808,9 @@ fn trim_to_inside_corners(
         loop_edges.extend(close_b.map(|e| OrientedEdge::new(e, false)));
     }
 
-    // No hole may lie in the strip cut off: its outline is the dropped
-    // chain closed through the contact.
+    // No other wire may reach into the strip cut off: its outline is the
+    // dropped chain closed through the contact. A wire that does either
+    // crosses the new edges or lies wholly inside.
     let mut cut: Vec<(f64, f64)> = Vec::new();
     for oe in &dropped {
         let e = topo.edge(oe.edge())?;
@@ -796,7 +819,34 @@ fn trim_to_inside_corners(
     let (first, second) = if keep_chain1 { (ja, jb) } else { (jb, ja) };
     cut.push(project(contact_ends[first]));
     cut.push(project(contact_ends[second]));
-    for &hole in &holes {
+    let FaceSurface::Plane { normal, .. } = surface else {
+        return Err(fail());
+    };
+    let mut new_segments = vec![(contact_ends[0], contact_ends[1])];
+    for j in 0..2 {
+        if let Some(k) = inside[j] {
+            new_segments.push((edge_data[k].1, contact_ends[j]));
+        }
+    }
+    for &wid in &others {
+        for oe in topo.wire(wid)?.edges() {
+            for &(s, e) in &new_segments {
+                let length = (e - s).length();
+                let along = (e - s) * (1.0 / length.max(f64::MIN_POSITIVE));
+                let across = normal.cross(along);
+                let (lo, hi) = edge_side_range(topo, oe.edge(), s, across)?;
+                let (start, end) = edge_side_range(topo, oe.edge(), s, along)?;
+                if lo <= CONTACT_END_TOL
+                    && hi >= -CONTACT_END_TOL
+                    && start <= length + CONTACT_END_TOL
+                    && end >= -CONTACT_END_TOL
+                {
+                    return Err(fail());
+                }
+            }
+        }
+    }
+    for &hole in &others {
         for oe in topo.wire(hole)?.edges() {
             let e = topo.edge(oe.edge())?;
             let (sp, ep) = (
@@ -818,7 +868,16 @@ fn trim_to_inside_corners(
 
     let trimmed_wire = Wire::new(loop_edges, true).map_err(|_| fail())?;
     let trimmed_wire_id = topo.add_wire(trimmed_wire);
-    let mut trimmed_face = Face::new(trimmed_wire_id, holes, surface);
+    let (outline, holes) = if in_hole {
+        let holes = holes
+            .iter()
+            .map(|&w| if w == wire_id { trimmed_wire_id } else { w })
+            .collect();
+        (outline, holes)
+    } else {
+        (trimmed_wire_id, holes)
+    };
+    let mut trimmed_face = Face::new(outline, holes, surface);
     if reversed {
         trimmed_face.set_reversed(true);
     }
