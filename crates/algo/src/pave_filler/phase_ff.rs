@@ -1448,14 +1448,11 @@ fn polyline_fraction(along: &[Point3], q: Point3) -> f64 {
 /// endpoints with the section: a lens (a scoop bulging into a corner wall
 /// between two crossings of the wall's seam line), which
 /// `merge_duplicate_edges` folds into one edge, putting the seam line on the
-/// scoop face. The halves meet at its middle, or where another boundary
-/// edge of the pair crosses the section near its middle (a rod's seam at the
-/// bottom of its U on a bore): a split beside that crossing would leave a
-/// sliver of the section between the two. A crossing farther off is a pave
-/// of its own and leaves the middle split in place: a half that ran to it
-/// could span more than half a turn of a cylinder, and its far end then
-/// reads a period short (a pin's section round a bore's mouth, cut at the
-/// pin's seam).
+/// scoop face. The halves meet where another boundary edge of the pair
+/// crosses the section (a rod's seam at the bottom of its U on a bore, a
+/// pin's seam on its section round a bore's mouth), and at its middle when
+/// none does: a middle split beside a crossing would leave a sliver of the
+/// section between the two.
 fn split_lens_off_boundary_edge(
     topo: &Topology,
     arena: &GfaArena,
@@ -1510,9 +1507,9 @@ fn split_lens_off_boundary_edge(
 }
 
 /// Where a boundary edge of one face of the pair crosses the other face
-/// on a marched section within a twentieth of its span of its middle: the
-/// crossing's vertex position and its parameter on the section, the
-/// crossing nearest the middle when several lie there.
+/// on a marched section, clear of its ends: the crossing's vertex position
+/// and its parameter on the section, the crossing nearest the middle when
+/// several lie there.
 fn crossing_inside_section(
     topo: &Topology,
     arena: &GfaArena,
@@ -1541,7 +1538,11 @@ fn crossing_inside_section(
     let (edges_a, edges_b) = (boundary(fa), boundary(fb));
     let (t0, t1) = raw.t_range;
     let t_mid = 0.5 * (t0 + t1);
-    let near = 0.05 * (t1 - t0);
+    let (lo, hi) = (t0.min(t1), t0.max(t1));
+    let clear_of_ends = |p: Point3| {
+        (p - raw.p_start).length() > JunctionRegistry::ADOPT_MAX
+            && (p - raw.p_end).length() > JunctionRegistry::ADOPT_MAX
+    };
     let mut best: Option<(f64, Point3)> = None;
     for i in &arena.interference.ef {
         let crate::ds::Interference::EF {
@@ -1563,7 +1564,11 @@ fn crossing_inside_section(
         let Ok(hit) = project_point_to_curve(curve, p, 1e-12) else {
             continue;
         };
-        if hit.distance > JunctionRegistry::ADOPT_MAX || (hit.parameter - t_mid).abs() > near {
+        if hit.distance > JunctionRegistry::ADOPT_MAX
+            || hit.parameter <= lo
+            || hit.parameter >= hi
+            || !clear_of_ends(p)
+        {
             continue;
         }
         if best.is_none_or(|(t, _)| (hit.parameter - t_mid).abs() < (t - t_mid).abs()) {

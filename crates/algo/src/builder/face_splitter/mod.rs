@@ -3091,6 +3091,12 @@ fn split_periodic_face_around_seam_holes(
         return None;
     }
 
+    // An entry's run in u, read along its samples: a piece over half a turn
+    // ends on the turn it runs to, not on the copy nearest its start.
+    let entry_run = |entry: &(usize, bool)| -> Option<f64> {
+        let samples = entry_samples(entry)?;
+        Some(samples.windows(2).map(|w| wrap_pi(w[1].0 - w[0].0)).sum())
+    };
     let materialize = |entries: &[(usize, bool)]| -> Option<Vec<OrientedPCurveEdge>> {
         let mut out = Vec::with_capacity(entries.len());
         let mut u_prev = seam_u;
@@ -3100,7 +3106,8 @@ fn split_periodic_face_around_seam_holes(
             let (u_raw0, v0) = surface.project_point(from)?;
             let (u_raw1, v1) = surface.project_point(to)?;
             let u0 = u_prev + wrap_pi(u_raw0 - u_prev);
-            let u1 = u0 + wrap_pi(u_raw1 - u_raw0);
+            let walked = u0 + entry_run(entry)?;
+            let u1 = walked + wrap_pi(u_raw1 - walked);
             u_prev = u1;
             out.push(OrientedPCurveEdge {
                 curve_3d: s.curve_3d.clone(),
@@ -3205,14 +3212,22 @@ fn split_periodic_face_around_seam_holes(
         let (first, second) = entries.split_at(split);
         let (_, v_first) = surface.project_point(traversal(&first[0]).0)?;
         let (_, v_second) = surface.project_point(traversal(&second[0]).0)?;
+        // Offsets from the seam carried continuously along the half, from
+        // its seam vertex: a half over half a turn runs past the opposite
+        // meridian, where a wrapped offset changes sign.
         let side = |half: &[(usize, bool)]| -> Option<bool> {
             let mut sum = 0.0;
+            let mut prev: Option<f64> = None;
             for entry in half {
                 let samples = entry_samples(entry)?;
-                sum += samples[1..samples.len() - 1]
-                    .iter()
-                    .map(|&(d, _)| d)
-                    .sum::<f64>();
+                let last = samples.len() - 1;
+                for (k, &(d, _)) in samples.iter().enumerate() {
+                    let d = prev.map_or(d, |p| p + wrap_pi(d - p));
+                    prev = Some(d);
+                    if k > 0 && k < last {
+                        sum += d;
+                    }
+                }
             }
             Some(sum > 0.0)
         };
@@ -15154,5 +15169,139 @@ mod tests {
             e.start_uv,
             e.end_uv
         );
+    }
+
+    /// A unit cylinder's wall from `v = 0` to `v = 10`, seamed at `u = 0`,
+    /// with a hole round the patch from `u = -1` to `u = 4` between `v = 4`
+    /// and `v = 6`: arcs along the two heights, split where they cross the
+    /// seam, and rulings at the patch's sides; and the patch mirrored in the
+    /// seam. The arcs from the seam to `u = 4` run more than half a turn.
+    /// Each piece of the hole in the split faces runs its own way round in
+    /// `u`, and so ends on its own turn.
+    #[test]
+    fn a_seam_hole_piece_over_half_a_turn_keeps_its_far_end_on_its_turn() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::CylindricalSurface;
+        use std::f64::consts::TAU;
+
+        let cyl =
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0)
+                .unwrap();
+        let surface = FaceSurface::Cylinder(cyl);
+        let on = |u: f64, v: f64| surface.evaluate(u, v).unwrap();
+        let ring = |v: f64, up: bool| {
+            let normal = Vec3::new(0.0, 0.0, if up { 1.0 } else { -1.0 });
+            let circle = Circle3D::new(Point3::new(0.0, 0.0, v), normal, 1.0).unwrap();
+            let t = circle.project(on(0.0, v));
+            let ahead = circle.evaluate(t + 0.1);
+            let step = if up { 0.1 } else { -0.1 };
+            assert!(
+                (ahead - on(step, v)).length() < 1e-12,
+                "the ring turns against u"
+            );
+            EdgeCurve::Circle(circle)
+        };
+        let rim = |v: f64, forward: bool| OrientedPCurveEdge {
+            curve_3d: ring(v, true),
+            pcurve: dummy_pcurve(),
+            start_uv: Point2::new(if forward { 0.0 } else { TAU }, v),
+            end_uv: Point2::new(if forward { TAU } else { 0.0 }, v),
+            start_3d: on(0.0, v),
+            end_3d: on(0.0, v),
+            forward,
+            source_edge_idx: None,
+            pave_block_id: None,
+        };
+        let seam = |from: f64, to: f64, u: f64| OrientedPCurveEdge {
+            curve_3d: EdgeCurve::Line,
+            pcurve: dummy_pcurve(),
+            start_uv: Point2::new(u, from),
+            end_uv: Point2::new(u, to),
+            start_3d: on(u, from),
+            end_3d: on(u, to),
+            forward: true,
+            source_edge_idx: None,
+            pave_block_id: None,
+        };
+        let boundary = vec![
+            rim(0.0, true),
+            seam(0.0, 10.0, TAU),
+            rim(10.0, false),
+            seam(10.0, 0.0, 0.0),
+        ];
+        // Each piece's ends in (u, v).
+        let patch: [((f64, f64), (f64, f64)); 6] = [
+            ((-1.0, 4.0), (0.0, 4.0)),
+            ((0.0, 4.0), (4.0, 4.0)),
+            ((4.0, 4.0), (4.0, 6.0)),
+            ((4.0, 6.0), (0.0, 6.0)),
+            ((0.0, 6.0), (-1.0, 6.0)),
+            ((-1.0, 6.0), (-1.0, 4.0)),
+        ];
+        // The patch as given, and mirrored in the seam: its long arm on the
+        // other side.
+        for side in [1.0, -1.0] {
+            let pieces = patch.map(|((u0, v0), (u1, v1))| ((side * u0, v0), (side * u1, v1)));
+            let sections: Vec<SectionEdge> = pieces
+                .iter()
+                .map(|&((u0, v0), (u1, v1))| {
+                    let curve = if (v1 - v0).abs() > 1e-12 {
+                        EdgeCurve::Line
+                    } else {
+                        ring(v0, u1 > u0)
+                    };
+                    SectionEdge {
+                        curve_3d: curve,
+                        ..line_section(on(u0, v0), on(u1, v1))
+                    }
+                })
+                .collect();
+            let mut topo = Topology::new();
+            let face_id = make_unit_square_face(&mut topo);
+            let split = split_periodic_face_around_seam_holes(
+                &surface,
+                &boundary,
+                &sections,
+                Rank::A,
+                false,
+                face_id,
+                1e-7,
+            )
+            .expect("the wall splits round the hole");
+            assert_eq!(split.len(), 3, "side {side}: the remainder and two halves");
+            let mut checked = 0;
+            for face in &split {
+                for e in face
+                    .outer_wire
+                    .iter()
+                    .chain(face.inner_wires.iter().flatten())
+                {
+                    let run = pieces.iter().find_map(|&((u0, v0), (u1, v1))| {
+                        let (a, b) = (on(u0, v0), on(u1, v1));
+                        if (e.start_3d - a).length() < 1e-9 && (e.end_3d - b).length() < 1e-9 {
+                            Some(u1 - u0)
+                        } else if (e.start_3d - b).length() < 1e-9 && (e.end_3d - a).length() < 1e-9
+                        {
+                            Some(u0 - u1)
+                        } else {
+                            None
+                        }
+                    });
+                    let Some(run) = run else { continue };
+                    let got = e.end_uv.x() - e.start_uv.x();
+                    assert!(
+                        (got - run).abs() < 1e-9,
+                        "side {side}: a piece from {:?} to {:?} runs {got} in u, not {run}",
+                        e.start_uv,
+                        e.end_uv
+                    );
+                    checked += 1;
+                }
+            }
+            assert_eq!(
+                checked, 12,
+                "side {side}: each piece in the outline and in its half"
+            );
+        }
     }
 }
