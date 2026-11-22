@@ -143,6 +143,9 @@ fn pcurve_off_its_edge(
 /// dispatch prefers; the deprecated `fillet_rolling_ball` remains callable
 /// only as an explicit reference implementation.
 ///
+/// A result that is not a valid solid is refused: the solid comes back with
+/// each edge named in `failed`.
+///
 /// # Errors
 /// Returns `OperationsError` if radius is non-positive, edges are empty,
 /// or the blend computation fails.
@@ -169,10 +172,66 @@ pub fn fillet_v2(
         Ok(None) => {}
         Err(e) => log::debug!("fillet over bores: {e}"),
     }
+    fillet_directly(topo, solid, edges, radius)
+}
+
+/// `edges` of `solid` rounded by the walking engine as they are.
+fn fillet_directly(
+    topo: &mut Topology,
+    solid: SolidId,
+    edges: &[EdgeId],
+    radius: f64,
+) -> Result<BlendResult, OperationsError> {
     let mut builder = FilletBuilder::new(topo, solid);
     builder.add_edges(edges, radius);
     let built = builder.build()?;
-    own_cavities(topo, solid, built, "fillet")
+    let result = own_cavities(topo, solid, built, "fillet")?;
+    valid_fillet(topo, solid, result)
+}
+
+/// A walking-engine fillet's result, or `solid` with every edge the
+/// builder rounded reported as failed where the result is not a valid
+/// solid. The builder checks how its faces share edges, not where the
+/// faces lie: two rounds that meet at a corner the corner solver does not
+/// model can leave a face whose outline crosses itself.
+fn valid_fillet(
+    topo: &Topology,
+    solid: SolidId,
+    result: BlendResult,
+) -> Result<BlendResult, OperationsError> {
+    if result.solid == solid {
+        return Ok(result);
+    }
+    let report = crate::validate::validate_solid(topo, result.solid)?;
+    let Some(issue) = report
+        .issues
+        .iter()
+        .find(|issue| issue.severity == crate::validate::Severity::Error)
+    else {
+        return Ok(result);
+    };
+    // An input the checks already reject (two blocks meeting along one
+    // edge of four faces) gives them nothing to tell the fillet's own
+    // faults by.
+    if !crate::validate::validate_solid(topo, solid)?.is_valid() {
+        return Ok(result);
+    }
+    let reason = format!("the fillet leaves an invalid solid: {}", issue.description);
+    let mut failed = result.failed;
+    failed.extend(result.succeeded.into_iter().map(|edge| {
+        (
+            edge,
+            brepkit_blend::BlendError::PlanningFailure {
+                reason: reason.clone(),
+            },
+        )
+    }));
+    Ok(BlendResult {
+        solid,
+        succeeded: Vec::new(),
+        failed,
+        is_partial: true,
+    })
 }
 
 /// A straight through-bore: a cylinder wall with the material round it, from
@@ -1313,7 +1372,8 @@ pub fn fillet_v2_variable(
         builder.add_edges_with_law(&chain, law);
     }
     let built = builder.build()?;
-    own_cavities(topo, solid, built, "fillet")
+    let result = own_cavities(topo, solid, built, "fillet")?;
+    valid_fillet(topo, solid, result)
 }
 
 /// Whether `cand` shares an endpoint with some chain edge and meets it
