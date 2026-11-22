@@ -9194,11 +9194,19 @@ fn emit_split_circle_arcs(
             })
         })
     };
+    // A ring torus face is read in its own angles. Its box, in the world's
+    // axes, grows as the torus turns, and can hold an arc off the face: a
+    // groove's meridian arc round the outside of the tube.
+    let (torus_a, torus_b) = (TorusRegion::of(topo, face_a), TorusRegion::of(topo, face_b));
     // A wall's trim stands in for its box, which samples an oblique rim
     // too coarsely to hold the arcs just under its peak.
     let in_both = |p: Point3| -> bool {
-        let a_ok = trim_a.is_some() || bbox_a.as_ref().is_none_or(|b| b.contains_point(p));
-        let b_ok = trim_b.is_some() || bbox_b.as_ref().is_none_or(|b| b.contains_point(p));
+        let a_ok = trim_a.is_some()
+            || torus_a.is_some()
+            || bbox_a.as_ref().is_none_or(|b| b.contains_point(p));
+        let b_ok = trim_b.is_some()
+            || torus_b.is_some()
+            || bbox_b.as_ref().is_none_or(|b| b.contains_point(p));
         let side_ok = |side: &Option<(Point3, Vec3)>| {
             side.as_ref()
                 .is_none_or(|(c, axis)| (p - *c).dot(*axis) >= -side_eps)
@@ -9212,6 +9220,8 @@ fn emit_split_circle_arcs(
             && trim_b.as_ref().is_none_or(|t| t.holds(p, side_eps))
             && ball_a.as_ref().is_none_or(|t| t.holds(p, side_eps))
             && ball_b.as_ref().is_none_or(|t| t.holds(p, side_eps))
+            && torus_a.as_ref().is_none_or(|t| t.holds(p, side_eps))
+            && torus_b.as_ref().is_none_or(|t| t.holds(p, side_eps))
     };
 
     // Pass 1: determine which arcs survive the AABB filter, *before*
@@ -9397,6 +9407,39 @@ fn emit_split_circle_arcs(
     }
 
     log::debug!("FF: emitted {emitted}/{n} arcs after AABB filter for {face_a:?}/{face_b:?}");
+}
+
+/// A ring torus face read in its own angles: the arc of the tube its
+/// outline spans and the turn about the axis it leaves out, each `None` when
+/// the face leaves none of it out.
+struct TorusRegion {
+    torus: brepkit_math::surfaces::ToroidalSurface,
+    window: Option<(f64, f64)>,
+    gap: Option<(f64, f64)>,
+}
+
+impl TorusRegion {
+    /// The region of a ring torus face, `None` for any other face.
+    fn of(topo: &Topology, face_id: FaceId) -> Option<Self> {
+        let face = topo.face(face_id).ok()?;
+        let FaceSurface::Torus(torus) = face.surface() else {
+            return None;
+        };
+        (torus.minor_radius() < torus.major_radius()).then(|| Self {
+            torus: torus.clone(),
+            window: face_tube_window(topo, face_id, face.surface()),
+            gap: face_circumferential_u_gap(topo, face_id, face.surface()),
+        })
+    }
+
+    /// Whether `p`, a point of the torus, lies on the face or within `near`
+    /// of its tube window.
+    fn holds(&self, p: Point3, near: f64) -> bool {
+        let (u, v) = self.torus.project_point(p);
+        self.window
+            .is_none_or(|w| in_window(v, w, near / self.torus.minor_radius(), true))
+            && self.gap.is_none_or(|g| !crate::classifier::u_in_gap(u, g))
+    }
 }
 
 /// Compute AABB for a NURBS curve.
