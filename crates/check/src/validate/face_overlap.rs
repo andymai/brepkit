@@ -52,9 +52,11 @@ const MOST_HALVINGS: u32 = 16;
 /// budgets of their own.
 const MOST_STRETCHES: usize = 128;
 
-/// The fractions along an edge both faces share at which it is read: more
-/// than one, so a vertex of either face touching the edge at one of them
-/// does not hide the side it lies on.
+/// The first stretches of an edge both faces share beside whose middles it
+/// is read, as fractions of their count: more than one, so a vertex of
+/// either face touching the edge at one of them does not hide the side it
+/// lies on. A middle of a stretch is never a knot of a B-spline, where a
+/// corner's sides turn away from the read.
 const SHARED_READS: [f64; 3] = [0.25, 0.5, 0.75];
 
 /// A plane face.
@@ -478,12 +480,25 @@ fn shares_area(
             let cuts = steps;
             // An edge the other face shares runs along its boundary, and each
             // face lies on one side of it all along it: it is read beside a
-            // few points, not each first stretch. Two faces on either side
-            // of it fail every read, each of them halved down to the
-            // tolerance on both sides.
+            // few of its first stretches, not each of them. Two faces on
+            // either side of it fail every read, each of them halved down to
+            // the tolerance on both sides.
             if other_face.edges.contains(&oe.edge()) {
-                for mid in SHARED_READS {
-                    if beside(mid) {
+                let count = cuts.len().saturating_sub(1);
+                #[allow(
+                    clippy::cast_possible_truncation,
+                    clippy::cast_sign_loss,
+                    clippy::cast_precision_loss
+                )]
+                let mut picked: Vec<usize> = SHARED_READS
+                    .iter()
+                    .map(|&f| ((f * count as f64) as usize).min(count.saturating_sub(1)))
+                    .collect();
+                picked.dedup();
+                for k in picked {
+                    if let (Some(&f0), Some(&f1)) = (cuts.get(k), cuts.get(k + 1))
+                        && beside(0.5 * (f0 + f1))
+                    {
                         return Ok(true);
                     }
                 }
@@ -1208,6 +1223,50 @@ mod tests {
                 "other side at {other}"
             );
         }
+    }
+
+    /// Two faces on one closed straight B-spline outline, a triangle whose
+    /// corners lie at a quarter, half and three quarters of its parameter,
+    /// cover the same area. The shared edge is read beside its first
+    /// stretches, never at its corners, where the read runs out of the
+    /// triangle along one side.
+    #[test]
+    fn faces_on_one_spline_triangle_with_corners_at_the_quarters_are_reported() {
+        let mut b = Builder::default();
+        let h = 10.0 * 0.75_f64.sqrt();
+        let (corner_a, corner_b, corner_c) = (
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(10.0, 0.0, 0.0),
+            Point3::new(5.0, h, 0.0),
+        );
+        let start = Point3::new(2.5, 0.5 * h, 0.0);
+        let outline = brepkit_math::nurbs::curve::NurbsCurve::new(
+            1,
+            vec![0.0, 0.0, 0.25, 0.5, 0.75, 1.0, 1.0],
+            vec![start, corner_a, corner_b, corner_c, start],
+            vec![1.0; 5],
+        )
+        .unwrap();
+        let v = b.vertex([start.x(), start.y(), 0.0]);
+        let e = b
+            .topo
+            .add_edge(Edge::new(v, v, EdgeCurve::NurbsCurve(outline)));
+        for (forward, z) in [(true, 1.0), (false, -1.0)] {
+            let wire = b
+                .topo
+                .add_wire(Wire::new(vec![OrientedEdge::new(e, forward)], true).unwrap());
+            let face = b.topo.add_face(Face::new(
+                wire,
+                vec![],
+                FaceSurface::Plane {
+                    normal: Vec3::new(0.0, 0.0, z),
+                    d: 0.0,
+                },
+            ));
+            b.faces.push(face);
+        }
+        let solid = b.solid();
+        assert_eq!(found(&b.topo, solid).len(), 1);
     }
 
     /// A face whose outline is one closed straight B-spline through
