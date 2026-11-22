@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794935346296,
+  "lastUpdate": 1795306520908,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -74519,6 +74519,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 16291733,
             "range": "± 630008",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b8c7dc6bd87cfb23e86b2e0ff5a42de4f81aa657",
+          "message": "fix(blend,algo,operations,io,topology): fillet, boolean, STEP and volume fixes from #2639 to #2645 (#2646)\n\nThis PR carries #2639, #2640, #2641, #2642, #2643, #2644 and #2645 by\n@Robokan onto the current main. Their commits are the contributor's,\nwith no change. Ten new commits follow them, with fixes from the reviews\nof the stack.\n\nSix of the PRs stack on each other, and a squash of one conflicts with\nthe next in `crates/blend/src/fillet_builder.rs`. So this PR lands them\nas one squash. #2645 holds #2639, #2642, #2643 and #2644. The\ncontributor added the last commit of #2641 (`9455cd8a0`, the round's own\nend wall) after #2642 to #2645. I cherry-picked it onto the head of\n#2645, and merged #2640 in.\n\nFor what each part does, see the descriptions of the seven PRs.\n\n## What the new commits change\n\n- **Chamfer of pieced edges** (#2645).\n- `join_picked_pieces` joined the split edges of the caller's solid in\nplace. The caller's edge ids for the pieces then left the solid, even\nwhen the chamfer failed. It now joins them on a copy.\n- When the selection held pieces, it reported an arc pick, or a line on\na face's hole, as lost. Both now move to the copy.\n- Two pieces of one edge with different reference faces are now refused.\nBefore, the first face won without notice.\n- **Loop samples on periodic faces** (#2643). A straight pcurve took one\nsample per parameter unit in both directions, so a ruling 100 000 high\ntook 100 000 samples. Only the periodic directions are now stepped.\n- **A B-spline face cut across its patch by a line** (#2643). `SpanTrim`\nread such a face as its whole patch, because it samples a line at its\nends only. Every hit on the patch then counted for the face. A line's\nmiddle must now lie on the border too.\n- **Two B-spline patches that cross along sample lines** (#2643).\n`nurbs_patch_on` passed over samples outside the common box. So a wave\nthat crosses a flat patch along two grid lines read as lying on it. The\nface intersection then took coincident boundaries in place of the two\nsections. The held samples must now cover a whole grid cell, with the\ncell's middle.\n- **Plane sections kept in a region** (#2643). The region pruning\ndropped a gap between two chain points when the chord's box, padded by\nhalf the chord, missed the region. That pad is not a bound on the\nsection, so a bump between two grid samples lost its section. Now a gap\ndrops only when its grid cell meets no knot span whose control box\nreaches the region. A chain along a parameter curve of the surface stays\nwhole, and the section reads it as that curve, as it does with no\nregion.\n- **The revolve sphere allowance** (#2642). An arc counts as centred on\nthe axis only within 1e-6 of its radius. The allowance was never under\n1e-6, so a radius 0.01 arc 8e-7 off the axis swept a sphere.\n- **Face normals with no seed** (#2640). A sphere face has no winding in\n(u, v). Read about its samples' centroid, a cap larger than a hemisphere\nreads backwards, and #2640 turned it inward. With no seed, only faces\nwith an exact reading now turn: planes, and faces read in (u, v).\n- **Round ends on curved caps** (#2639, #2641).\n- A band run on to a cap took a straight chord as its end edge where the\ntrace of the end failed. The fillet is now refused there.\n- Torus and walked bands on a curved cap skipped the clearance check of\nthe notch. A hole in the notch then gave `Ok` with a solid that\n`validate_solid` rejects (\"inner wire lies outside the outer wire\").\nThese fillets are now refused.\n- **Sphere and torus faces in the face-by-face volume** (#2644). The\nvolume code sums a solid face by face when the exact path cannot read\none of its B-spline faces. There, a torus band round the tube lost its\nhole, and a sphere collar read off its own mesh. Both now read exactly.\n- A notched torus with a cone on its wall read 0.487 against\n1544.689447. It now reads 1544.689444 in four poses.\n- A ball cap with its rim rounded at 0.05 read 3.53506 against\n3.5335170. It now reads 3.5335170.\n- **A mesh triangle at a pole** (#2644). The new surface quadrature read\na fan triangle at the apex of a loft to a point over the wrong part of\nthe patch. A cone of radius 0.8 and height 0.5 read 0.15622 against\n0.33510, and main reads 0.33508. A triangle with a corner at a pole now\nkeeps its flat flux, as on main.\n\n## How I checked it\n\n- Every new commit adds a test that fails without it. The chord refusal\nfor round ends has no test, because I could not build a case that\nreaches it. The two volume commits test four poses: upright, moved,\nturned, and turned and moved.\n- `cargo nextest run` for `brepkit-math`, `brepkit-topology`,\n`brepkit-blend`, `brepkit-algo`, `brepkit-io`, `brepkit-operations`,\n`brepkit-wasm`, `brepkit-check` and `brepkit-heal` passes (5,202 tests).\n- The pose sweep and the truth audit match main line for line.\n- `scripts/check-boundaries.sh`, `scripts/check-mul-add.sh` and\n`scripts/check-doc-paths.sh` pass.\n- A round of the rim of a unit ball cut at z = -0.5, at r = 0.05, 0.1\nand 0.2:\n- On main, `validate_solid` accepts each result, but the mesh is open.\nEach volume is also above the volume before the round (3.687 against\n3.534 at r = 0.05).\n- Here each result is valid, its mesh is closed, and its volume is below\nthe volume before the round.\n\n## Still open\n\n- #2647: a chamfer of one rim edge of a square pocket fails, on main\ntoo.\n- #2648: `turned_mirrored_two_rods_stay_exact` falls back to the mesh\nboolean with the rim linking of #2643, and #2643 ignores it.\n- #2649: a round of the rim of a ball cut at z = -0.2, at r = 0.2,\nleaves an open mesh.\n- #2650, #2651 and #2652: review findings that I did not reproduce. They\ncover the boolean engine, the fillet engine, and the mesher, revolve and\nSTEP reader.\n\nCo-authored-by: Eric Vaughan <eric.d.vaughan@gmail.com>\nCo-authored-by: Claude Opus 5.5 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Eric Vaughan <eric.d.vaughan@gmail.com>\nCo-authored-by: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-11-21T16:10:46-08:00",
+          "tree_id": "d40d7d6f195c3fe121dbee472e4f4158457a501f",
+          "url": "https://github.com/andymai/brepkit/commit/b8c7dc6bd87cfb23e86b2e0ff5a42de4f81aa657"
+        },
+        "date": 1795306509933,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1179002,
+            "range": "± 4648",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1246388,
+            "range": "± 1984",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13574,
+            "range": "± 205",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 784467,
+            "range": "± 3480",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26715460,
+            "range": "± 217232",
             "unit": "ns/iter"
           }
         ]
