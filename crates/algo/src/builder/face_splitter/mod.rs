@@ -7139,7 +7139,7 @@ fn weave_curved_hole(
     // from the face's window: move it to the copy whose point under a
     // section's end lies at that end's UV. Only an end with a piece's end
     // under it can say which copy: the split can refuse an end that the
-    // contact test takes (within the weld band, outside the splitter's own).
+    // contact test takes.
     let piece_ends: Vec<(Point3, Point2)> = pieces
         .iter()
         .flat_map(|e| [(e.start_3d, e.start_uv), (e.end_3d, e.end_uv)])
@@ -14045,9 +14045,10 @@ mod tests {
     }
 
     /// The bore window's bottom rim with three section ends: one inside a
-    /// sampling chord, one 5e-7 outside the rim (both off the rim for its
-    /// split), then one on it at u = 0.9 whose UV lies a period on. The hole
-    /// still weaves at the last end, and moves a period to that end's UV.
+    /// sampling chord (off the rim), one 5e-7 outside the rim (in the weld
+    /// band, so the rim splits at its foot), then one on it at u = 0.9. The
+    /// two on the rim have UVs a period on, and the hole moves a period to
+    /// them.
     #[test]
     fn a_curved_hole_weaves_at_its_contact_after_near_misses() {
         let (surface, hole) = bore_window();
@@ -14071,12 +14072,17 @@ mod tests {
         };
         let ends = [
             (lens, uv(lens)),
-            (near, uv(near)),
+            (near, uv(near) + Vec2::new(tau, 0.0)),
             (contact, Point2::new(0.9 + tau, 3.0)),
         ];
         let pieces =
             weave_curved_hole(&hole, &ends, &surface, 1e-7).expect("the hole stayed whole");
-        assert_eq!(pieces.len(), 5);
+        assert_eq!(pieces.len(), 6);
+        let foot = at(0.6, 3.0);
+        assert!(
+            pieces.iter().any(|e| (e.end_3d - foot).length() < 1e-9),
+            "no piece ends at the foot of the end in the weld band"
+        );
         let into = pieces
             .iter()
             .find(|e| (e.end_3d - contact).length() < 1e-9)

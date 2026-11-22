@@ -552,6 +552,55 @@ mod tests {
         assert_eq!((parts.solids.len(), parts.shells.len()), (2, 0));
     }
 
+    /// The facets of a cube of edge `size` at `at`, with outward normal
+    /// lines. `reverse` writes the vertices of each facet in the other order.
+    fn cube_facets(at: f64, size: f64, reverse: bool) -> String {
+        use std::fmt::Write;
+        let corner = |i: u32| {
+            let p = &cube_positions(0.0)[3 * i as usize..3 * i as usize + 3];
+            [p[0], p[1], p[2]].map(|c| at + c / 10.0 * size)
+        };
+        let mut text = String::new();
+        for tri in CUBE.chunks_exact(3) {
+            let [a, b, c] = [tri[0], tri[1], tri[2]].map(corner);
+            let (u, v) = (
+                [0, 1, 2].map(|k| b[k] - a[k]),
+                [0, 1, 2].map(|k| c[k] - a[k]),
+            );
+            let n = [
+                u[1] * v[2] - u[2] * v[1],
+                u[2] * v[0] - u[0] * v[2],
+                u[0] * v[1] - u[1] * v[0],
+            ];
+            writeln!(text, "facet normal {} {} {}\nouter loop", n[0], n[1], n[2]).unwrap();
+            for p in if reverse { [c, b, a] } else { [a, b, c] } {
+                writeln!(text, "vertex {} {} {}", p[0], p[1], p[2]).unwrap();
+            }
+            text += "endloop\nendfacet\n";
+        }
+        text
+    }
+
+    /// The vertex order of the inner box winds it inward, and its normal
+    /// lines point out. It is a cavity of the outer box.
+    #[test]
+    fn stl_parts_read_a_cavity_from_its_vertex_order() {
+        let stl = format!(
+            "solid hollow\n{}{}endsolid hollow\n",
+            cube_facets(0.0, 20.0, false),
+            cube_facets(5.0, 10.0, true)
+        );
+        let mut k = BrepKernel::new();
+        let json = k.import_stl_parts(stl.as_bytes()).unwrap();
+        let parts: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let solids = parts["solids"].as_array().unwrap();
+        assert_eq!(solids.len(), 1);
+        assert!(parts["shells"].as_array().unwrap().is_empty());
+        let solid = u32::try_from(solids[0].as_u64().unwrap()).unwrap();
+        assert_eq!(k.get_solid_shells(solid).unwrap().len(), 2);
+        assert!((k.volume(solid, 0.01).unwrap() - 7000.0).abs() < 1e-6);
+    }
+
     #[test]
     fn an_open_indexed_mesh_is_no_solid() {
         let mut k = BrepKernel::new();

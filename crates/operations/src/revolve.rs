@@ -521,6 +521,18 @@ pub(crate) fn profile_arc_center_radius(
     axis_origin: Point3,
     axis: Vec3,
 ) -> Option<(Point3, f64)> {
+    profile_arc(curve, p_start, p_end, axis_origin, axis)
+        .map(|(center, _, radius)| (center, radius))
+}
+
+/// [`profile_arc_center_radius`], with the normal of the arc's plane.
+fn profile_arc(
+    curve: &EdgeCurve,
+    p_start: Point3,
+    p_end: Point3,
+    axis_origin: Point3,
+    axis: Vec3,
+) -> Option<(Point3, Vec3, f64)> {
     let (center, normal, radius) = match curve {
         EdgeCurve::Circle(c) => (c.center(), c.normal(), c.radius()),
         EdgeCurve::NurbsCurve(nc) => {
@@ -539,7 +551,7 @@ pub(crate) fn profile_arc_center_radius(
     };
     let holds_axis = normal.dot(axis).abs() <= 1e-9
         && normal.dot(axis_origin - center).abs() <= Tolerance::new().linear;
-    holds_axis.then_some((center, radius))
+    holds_axis.then_some((center, normal, radius))
 }
 
 /// The profile arc's midpoint carried to the centre of the band it sweeps on
@@ -612,14 +624,9 @@ fn revolution_torus_band(
 
 /// Build the `Sphere` band swept by a circular-arc profile edge centred on
 /// the revolution axis, its poles on the axis. Returns `Ok(None)` when the
-/// arc's centre is off the axis.
-///
-/// A centre a millionth of the radius off the axis counts as on it, and the
-/// sphere is centred on the axis: a sketch's arc drawn about a point on a
-/// tilted axis lands that far off (9.6e-7 on a 16.5 arc, some 500 from the
-/// origin), and the band it then got was the NURBS one, which measured the
-/// solid a few parts in a million out and stopped booleans that take
-/// analytic surfaces only.
+/// arc's centre is off the axis by more than the linear tolerance: the
+/// band's edges would then stand off the sphere. A revolve first moves an
+/// arc a little farther off onto the axis (see [`axis_sphere_meridian`]).
 ///
 /// The band winds like the NURBS band (the chord swept about the axis, normal
 /// chord × sweep), read at the arc's midpoint half way through the sweep: the
@@ -637,7 +644,7 @@ fn revolution_sphere_band(
 ) -> Result<Option<(FaceSurface, bool)>, brepkit_math::MathError> {
     let to_center = arc_center - axis_origin;
     let on_axis = axis_origin + axis * to_center.dot(axis);
-    if (arc_center - on_axis).length() > 1e-6 * arc_radius {
+    if (arc_center - on_axis).length() > Tolerance::new().linear {
         return Ok(None);
     }
     let surface = brepkit_math::surfaces::SphericalSurface::with_axis(on_axis, arc_radius, axis)?;
@@ -651,6 +658,78 @@ fn revolution_sphere_band(
         FaceSurface::Sphere(surface),
         (arc_mid - arc_center).dot(band_normal) < 0.0,
     )))
+}
+
+/// The meridian of the sphere about the axis that a circular-arc profile
+/// edge from `a` to `b` sweeps, when the arc's centre lies off the axis by
+/// more than the linear tolerance and by no more than a millionth of the
+/// arc's radius.
+///
+/// Such an arc sweeps that sphere: a sketch's arc drawn about a point on a
+/// tilted axis lands that far off (9.6e-7 on a 16.5 arc, some 500 from the
+/// origin). Its NURBS band measured the solid a few parts in a million out,
+/// and booleans that take analytic surfaces only stopped on it. The
+/// sphere's centre is the point of the axis as far from `a` as from `b`, so
+/// both ends lie on the sphere, and the meridian is the circle of the sphere
+/// through them in the arc's plane. The band's edges then lie on the
+/// sphere. Returns `None` for any other edge, and for an arc whose ends no
+/// such sphere holds near the arc.
+fn axis_sphere_meridian(
+    curve: &EdgeCurve,
+    a: Point3,
+    b: Point3,
+    axis_origin: Point3,
+    axis: Vec3,
+) -> Option<brepkit_math::curves::Circle3D> {
+    let (center, normal, radius) = profile_arc(curve, a, b, axis_origin, axis)?;
+    let linear = Tolerance::new().linear;
+    let foot = axis_origin + axis * (center - axis_origin).dot(axis);
+    let off = (center - foot).length();
+    if off <= linear || off > 1e-6 * radius {
+        return None;
+    }
+    // Measured from the foot, so that the point the axis is given by does
+    // not change the result. Ends at one height, mirrored across the axis,
+    // are equally far from every point of it, so the foot itself serves.
+    let (wa, wb) = (a - foot, b - foot);
+    let rise = 2.0 * axis.dot(wb - wa);
+    let along = if rise.abs() > linear {
+        (wb.length_squared() - wa.length_squared()) / rise
+    } else {
+        0.0
+    };
+    let sphere_center = foot + axis * along;
+    if (sphere_center - foot).length() > 1e-6 * radius {
+        return None;
+    }
+    let lift = (sphere_center - center).dot(normal);
+    if lift.abs() > linear {
+        return None;
+    }
+    let meridian_center = sphere_center - normal * lift;
+    let (ra, rb) = (
+        (a - meridian_center).length(),
+        (b - meridian_center).length(),
+    );
+    // The meridian takes the mean of the two, so each end lies half the
+    // difference off it.
+    if (ra - rb).abs() > 2.0 * linear {
+        return None;
+    }
+    // The meridian runs from `a` to `b` round the side the arc does.
+    let (t0, t1) = curve.domain_with_endpoints(a, b);
+    let mid = curve.evaluate_with_endpoints(0.5 * (t0 + t1), a, b);
+    let turn = (a - meridian_center)
+        .cross(mid - meridian_center)
+        .dot(normal);
+    let normal = if turn < 0.0 { -normal } else { normal };
+    brepkit_math::curves::Circle3D::new_with_ref(
+        meridian_center,
+        normal,
+        0.5 * (ra + rb),
+        a - meridian_center,
+    )
+    .ok()
 }
 
 /// Index of the next ring for a given segment, wrapping to 0 for the last
@@ -1808,6 +1887,24 @@ pub fn revolve(
         } else {
             split_oriented
         };
+        // An arc about a point a hair off the axis takes the meridian of the
+        // sphere about the axis, so its band's edges lie on the sphere. The
+        // later rings turn the meridian, and a partial revolve's start cap
+        // takes it too.
+        let input_oriented = input_oriented
+            .into_iter()
+            .map(|oe| -> Result<OrientedEdge, crate::OperationsError> {
+                let edge = topo.edge(oe.edge())?;
+                let (start, end) = (edge.start(), edge.end());
+                let (a, b) = (topo.vertex(start)?.point(), topo.vertex(end)?.point());
+                let Some(meridian) = axis_sphere_meridian(edge.curve(), a, b, axis_origin, axis)
+                else {
+                    return Ok(oe);
+                };
+                let edge = topo.add_edge(Edge::new(start, end, EdgeCurve::Circle(meridian)));
+                Ok(OrientedEdge::new(edge, oe.is_forward()))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         let n = input_oriented.len();
 
         let mut input_verts: Vec<VertexId> = Vec::with_capacity(n);
@@ -3901,6 +3998,64 @@ mod tests {
                 "full segmented revolve (ccw={ccw}) volume should be ~{expected:.2}, \
                  got {vol:.2} (rel_err={rel_err:.2e})"
             );
+        }
+    }
+
+    /// An arc of radius 1e6 about a centre 0.75 off the axis, within a
+    /// millionth of its radius, with both ends at one height on one side of
+    /// the axis, 0.25 and 1.25 out. No sphere about the axis holds both ends:
+    /// on the one through their mean, each stands 3.75e-7 off. The arc keeps
+    /// its own edge and sweeps no sphere.
+    #[test]
+    fn a_large_arc_whose_ends_no_sphere_about_the_axis_holds_sweeps_no_sphere() {
+        use brepkit_math::curves::Circle3D;
+        let axis = Vec3::new(0.0, 0.0, 1.0);
+        let origin = Point3::new(0.0, 0.0, 0.0);
+        let r = 1e6;
+        let z = (r * r - 0.25_f64).sqrt();
+        let (a, b) = (Point3::new(0.25, 0.0, z), Point3::new(1.25, 0.0, z));
+        for normal in [Vec3::new(0.0, 1.0, 0.0), Vec3::new(0.0, -1.0, 0.0)] {
+            let centre = Point3::new(0.75, 0.0, 0.0);
+            let arc =
+                EdgeCurve::Circle(Circle3D::new_with_ref(centre, normal, r, a - centre).unwrap());
+            for origin in [origin, origin + axis * 1e6] {
+                assert!(axis_sphere_meridian(&arc, a, b, origin, axis).is_none());
+            }
+            let band =
+                revolution_sphere_band(centre, r, (a, b), origin, axis, PI / 2.0, a).unwrap();
+            assert!(band.is_none());
+        }
+    }
+
+    /// An arc of radius 100 about a centre 5e-7 off the axis takes the same
+    /// meridian whichever point gives the axis, near the arc or 1e6 along.
+    #[test]
+    fn an_arc_a_hair_off_the_axis_takes_one_meridian_from_any_axis_point() {
+        use brepkit_math::curves::Circle3D;
+        let axis = Vec3::new(0.0, 0.0, 1.0);
+        let (r, off) = (100.0, 5e-7);
+        let h = r * std::f64::consts::FRAC_PI_3.sin();
+        let w = r * std::f64::consts::FRAC_PI_3.cos();
+        let centre = Point3::new(off, 0.0, 0.0);
+        let (a, b) = (Point3::new(off + w, 0.0, -h), Point3::new(off + w, 0.0, h));
+        let arc = EdgeCurve::Circle(
+            Circle3D::new_with_ref(centre, Vec3::new(0.0, -1.0, 0.0), r, a - centre).unwrap(),
+        );
+        let meridians: Vec<Circle3D> = [0.0, 1e6, -1e6]
+            .into_iter()
+            .map(|along| {
+                axis_sphere_meridian(&arc, a, b, Point3::new(0.0, 0.0, along), axis).unwrap()
+            })
+            .collect();
+        for m in &meridians {
+            assert!(
+                (m.center() - Point3::new(0.0, 0.0, 0.0)).length() < 1e-9,
+                "{:?}",
+                m.center()
+            );
+            assert!(((a - m.center()).length() - m.radius()).abs() < 1e-9);
+            assert!(((b - m.center()).length() - m.radius()).abs() < 1e-9);
+            assert!((m.center() - meridians[0].center()).length() < 1e-9);
         }
     }
 
