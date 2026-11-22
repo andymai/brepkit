@@ -212,15 +212,29 @@ impl<'a, F: BlendFunction> Walker<'a, F> {
     }
 
     /// Whether a step from `from` (whose section is `last`, at `s0`) to the
-    /// section `next` (at `s1`) keeps to one branch: solved at the step's
-    /// middle, each contact must lie within three quarters of its own move
-    /// of both ends, and so again in the half where a contact makes the
-    /// most of its move, down to `DEPTH` halvings. On one branch each
-    /// contact lies about half way at every halving; a leap to another
-    /// branch, however fast the contact runs beside it, ends up a half's
-    /// whole move.
+    /// section `next` (at `s1`) keeps to one branch: each contact on its own
+    /// must split its move evenly ([`Self::contact_splits_evenly`]).
     fn splits_evenly(
         &self,
+        from: BlendParams,
+        last: &CircSection,
+        next: &CircSection,
+        span: (f64, f64),
+    ) -> bool {
+        [false, true]
+            .into_iter()
+            .all(|second| self.contact_splits_evenly(second, from, last, next, span))
+    }
+
+    /// Whether one contact (the second's if `second`) splits its move over
+    /// a step evenly: solved at the step's middle, it must lie within three
+    /// quarters of its move of both ends, and so again in the half where it
+    /// makes the most of its move, down to `DEPTH` halvings. On one branch
+    /// it lies about half way at every halving; a leap to another branch,
+    /// however fast the contact runs beside it, ends up a half's whole move.
+    fn contact_splits_evenly(
+        &self,
+        second: bool,
         from: BlendParams,
         last: &CircSection,
         next: &CircSection,
@@ -229,7 +243,8 @@ impl<'a, F: BlendFunction> Walker<'a, F> {
         const DEPTH: usize = 8;
         // A contact that barely moves may stray by the solve's own tolerance.
         let slack = 2.0 * self.config.tol_3d;
-        let (mut from, mut start, mut end) = (from, last.clone(), next.clone());
+        let contact = |section: &CircSection| if second { section.p2 } else { section.p1 };
+        let (mut from, mut start, mut end) = (from, contact(last), contact(next));
         let (mut lo, mut hi) = (s0, s1);
         for _ in 0..DEPTH {
             let s_mid = f64::midpoint(lo, hi);
@@ -239,23 +254,13 @@ impl<'a, F: BlendFunction> Walker<'a, F> {
             let Some(at_mid) = self.newton_solve(from, &ctx) else {
                 return false;
             };
-            let mid = self.func.section(self.surf1, self.surf2, &at_mid, &ctx);
-            // Each contact's moves over the two halves.
-            let halves = [(start.p1, mid.p1, end.p1), (start.p2, mid.p2, end.p2)]
-                .map(|(a, m, b)| ((m - a).length(), (b - m).length(), (b - a).length()));
-            if halves.iter().any(|&(first, second, moved)| {
-                first > 0.75f64.madd(moved, slack) || second > 0.75f64.madd(moved, slack)
-            }) {
+            let mid = contact(&self.func.section(self.surf1, self.surf2, &at_mid, &ctx));
+            let (first_half, second_half) = ((mid - start).length(), (end - mid).length());
+            let bound = 0.75f64.madd((end - start).length(), slack);
+            if first_half > bound || second_half > bound {
                 return false;
             }
-            let share = |(first, second, _): (f64, f64, f64)| {
-                let total = first + second;
-                if total > 0.0 { first / total } else { 0.5 }
-            };
-            let firsts = halves.map(share);
-            let most_first = firsts[0].max(firsts[1]);
-            let most_second = (1.0 - firsts[0]).max(1.0 - firsts[1]);
-            if most_first >= most_second {
+            if first_half >= second_half {
                 end = mid;
                 hi = s_mid;
             } else {
@@ -1450,6 +1455,21 @@ mod tests {
         assert!(!step_splits_evenly(|t| t, lept, |_| false));
     }
 
+    /// A leap of 10 at 0.075 in a contact running 200 times as fast as the
+    /// spine, beside a contact that runs fast and slows down (`1000 t -
+    /// 4500 t^2`), which makes most of its move in the step's first half:
+    /// each contact follows its own uneven half, and the first finds its
+    /// leap in the second half.
+    #[test]
+    fn a_leap_in_one_contact_s_other_half_does_not_split_evenly() {
+        let lept = |t: f64| 200.0f64.madd(t, leap(0.075, 10.0)(t));
+        let slowing = |t: f64| (-4500.0 * t).madd(t, 1000.0 * t);
+        assert!(!step_splits_evenly(lept, slowing, |_| false));
+        assert!(!step_splits_evenly(slowing, lept, |_| false));
+        // Without the leap, both run on one branch.
+        assert!(step_splits_evenly(|t| 200.0 * t, slowing, |_| false));
+    }
+
     #[test]
     fn a_step_whose_middle_does_not_solve_does_not_split_evenly() {
         let fails = |t: f64| (t - 0.05).abs() < 0.01;
@@ -1486,7 +1506,9 @@ mod tests {
         };
         let clear = first_step(&|_| false);
         assert!((clear - 0.05).abs() < 1e-12, "first step {clear}");
-        let blocked = first_step(&|t| (t - 0.025).abs() < 1e-3);
+        // No section solves at the first step's middle; past it the halving
+        // checks never land on that point.
+        let blocked = first_step(&|t| (t - 0.025).abs() < 1e-9);
         assert!(blocked < 0.05 - 1e-9, "first step {blocked}");
     }
 }
