@@ -1703,7 +1703,8 @@ fn profile_chart_is_ccw(
 ///
 /// # Errors
 ///
-/// Returns an error if the axis is zero-length, the angle is out of range, or a
+/// Returns an error if the axis is zero-length, the angle is out of range, a
+/// planar profile in a plane that holds the axis reaches across the axis, or a
 /// partial revolution is requested for a non-planar profile boundary.
 #[allow(clippy::too_many_lines)]
 pub fn revolve(
@@ -1758,6 +1759,21 @@ pub fn revolve(
     }
     let input_wire_id = face_data.outer_wire();
     let inner_wire_ids: Vec<brepkit_topology::wire::WireId> = face_data.inner_wires().to_vec();
+    if let Some(normal) = stored_plane_normal
+        && profile_reaches_across_axis(
+            topo,
+            topo.wire(input_wire_id)?.edges(),
+            normal,
+            axis_origin,
+            axis,
+        )?
+    {
+        return Err(crate::OperationsError::InvalidInput {
+            reason: "the revolve profile reaches across the axis, so its sweep would pass \
+                     through itself: keep the profile on one side of the axis"
+                .into(),
+        });
+    }
 
     // Fast exact path: a revolution of a single circular profile that clears
     // the axis is a torus (full turn: one doubly-periodic face; partial turn:
@@ -2251,6 +2267,54 @@ pub fn revolve(
     }
 
     Ok(solid)
+}
+
+/// Whether a profile in a plane that holds the axis has points of its outline
+/// on both sides of the axis.
+///
+/// Each side sweeps the space round the axis that the other side sweeps, the
+/// other way. The faces the two sides sweep then overlap, and no closed
+/// boundary holds the result: a full turn of an arc over both poles covers
+/// its sphere twice. A point on the axis, or off it by a millionth of the
+/// profile's size (an arc drawn about a point a hair off the axis), lies on
+/// neither side.
+fn profile_reaches_across_axis(
+    topo: &Topology,
+    oriented: &[OrientedEdge],
+    plane_normal: Vec3,
+    axis_origin: Point3,
+    axis: Vec3,
+) -> Result<bool, crate::OperationsError> {
+    const SAMPLES: u32 = 64;
+    let normal = plane_normal.normalize()?;
+    if normal.dot(axis).abs() > 1e-9 {
+        return Ok(false);
+    }
+    let across = normal.cross(axis).normalize()?;
+    let mut sides = Vec::with_capacity(oriented.len() * (SAMPLES as usize + 1));
+    let mut lo = Point3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY);
+    let mut hi = Point3::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
+    for oe in oriented {
+        let edge = topo.edge(oe.edge())?;
+        let (a, b) = (
+            topo.vertex(edge.start())?.point(),
+            topo.vertex(edge.end())?.point(),
+        );
+        let curve = edge.curve();
+        let (t0, t1) = curve.domain_with_endpoints(a, b);
+        for k in 0..=SAMPLES {
+            let p = curve.evaluate_with_endpoints(
+                (t1 - t0).madd(f64::from(k) / f64::from(SAMPLES), t0),
+                a,
+                b,
+            );
+            lo = Point3::new(lo.x().min(p.x()), lo.y().min(p.y()), lo.z().min(p.z()));
+            hi = Point3::new(hi.x().max(p.x()), hi.y().max(p.y()), hi.z().max(p.z()));
+            sides.push((p - axis_origin).dot(across));
+        }
+    }
+    let reach = 1e-6f64.madd((hi - lo).length(), Tolerance::new().linear);
+    Ok(sides.iter().any(|&s| s > reach) && sides.iter().any(|&s| s < -reach))
 }
 
 /// How near 1 a cap's normal may read along the axis before its plane could
