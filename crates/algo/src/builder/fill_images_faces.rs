@@ -3239,9 +3239,9 @@ fn build_section_edges(
 }
 
 /// The UVs at the ends of a closed section on a face periodic in `u`. The
-/// end lies past the start by the section's run in `u`, read along the
-/// curve: one period for a loop round the axis, none for a loop on one side
-/// of it.
+/// end lies past the start by the section's run in `u`: one period for a loop
+/// round the axis, either way, and none for a loop on one side of it. `None`
+/// when the loop passes through the axis, where `u` has no value.
 fn closed_section_end_uvs(
     curve_3d: &EdgeCurve,
     start: Point3,
@@ -3250,32 +3250,123 @@ fn closed_section_end_uvs(
     period: f64,
 ) -> Option<(brepkit_math::vec::Point2, brepkit_math::vec::Point2)> {
     use brepkit_math::vec::Point2;
-    const SAMPLES: u32 = 64;
     let (su, sv) = surface.project_point(start)?;
-    // The whole closed curve, whatever the start: its run is a whole number
-    // of periods from any point on it.
-    let (t0, t1) = match curve_3d {
+    let turns = match curve_3d {
         EdgeCurve::Line => return None,
-        EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => (0.0, std::f64::consts::TAU),
-        EdgeCurve::NurbsCurve(n) => n.domain(),
+        EdgeCurve::Circle(c) => conic_turns_about_u_axis(
+            surface,
+            c.center(),
+            (c.u_axis(), c.radius()),
+            (c.v_axis(), c.radius()),
+        )?,
+        EdgeCurve::Ellipse(e) => conic_turns_about_u_axis(
+            surface,
+            e.center(),
+            (e.u_axis(), e.semi_major()),
+            (e.v_axis(), e.semi_minor()),
+        )?,
+        EdgeCurve::NurbsCurve(n) => {
+            (spline_u_run(curve_3d, n.domain(), n.knots(), start, end, surface, period)? / period)
+                .round()
+        }
     };
-    let us = (0..=SAMPLES)
-        .map(|k| {
-            let t = (t1 - t0).madd(f64::from(k) / f64::from(SAMPLES), t0);
-            surface
-                .project_point(curve_3d.evaluate_with_endpoints(t, start, end))
-                .map(|(u, _)| u)
-        })
-        .collect::<Option<Vec<f64>>>()?;
-    let run: f64 = us
-        .windows(2)
-        .map(|w| {
-            let du = w[1] - w[0];
-            period.madd(-(du / period).round(), du)
-        })
-        .sum();
-    let end_u = period.madd((run / period).round(), su);
+    let end_u = period.madd(turns, su);
     Some((Point2::new(su, sv), Point2::new(end_u, sv)))
+}
+
+/// The axis `surface`'s `u` turns about, as a point on it and the direction
+/// `u` runs counter-clockwise about.
+fn u_axis_of(surface: &FaceSurface) -> Option<(Point3, brepkit_math::vec::Vec3)> {
+    let (on_axis, x, y) = match surface {
+        FaceSurface::Cylinder(c) => (c.origin(), c.x_axis(), c.y_axis()),
+        FaceSurface::Cone(c) => (c.apex(), c.x_axis(), c.y_axis()),
+        FaceSurface::Sphere(s) => (s.center(), s.x_axis(), s.y_axis()),
+        FaceSurface::Torus(t) => (t.center(), t.x_axis(), t.y_axis()),
+        FaceSurface::Plane { .. } | FaceSurface::Nurbs(_) => return None,
+    };
+    Some((on_axis, x.cross(y).normalize().ok()?))
+}
+
+/// The turns a closed circle or ellipse makes about `surface`'s `u` axis, the
+/// conic running from `a` toward `b` (each a unit axis with its radius). A
+/// plane conic winds a line once when the line passes through the region it
+/// bounds, and not at all otherwise. `None` when the conic passes through the
+/// axis.
+fn conic_turns_about_u_axis(
+    surface: &FaceSurface,
+    center: Point3,
+    (a, ra): (brepkit_math::vec::Vec3, f64),
+    (b, rb): (brepkit_math::vec::Vec3, f64),
+) -> Option<f64> {
+    let (on_axis, axis) = u_axis_of(surface)?;
+    let normal = a.cross(b);
+    let along = axis.dot(normal);
+    if along.abs() < 1e-12 {
+        return Some(0.0);
+    }
+    let pierce = on_axis + axis * ((center - on_axis).dot(normal) / along);
+    let d = pierce - center;
+    let inside = (d.dot(a) / ra).powi(2) + (d.dot(b) / rb).powi(2);
+    if (inside - 1.0).abs() < 1e-9 {
+        return None;
+    }
+    Some(if inside < 1.0 { along.signum() } else { 0.0 })
+}
+
+/// The run in `u` along a closed spline section, from samples in every span
+/// of its knots, with any step that turns more than an eighth of a turn
+/// halved until none does. `None` when a step keeps turning that far however
+/// short it gets: the curve passes through the axis.
+fn spline_u_run(
+    curve_3d: &EdgeCurve,
+    (t0, t1): (f64, f64),
+    knots: &[f64],
+    start: Point3,
+    end: Point3,
+    surface: &FaceSurface,
+    period: f64,
+) -> Option<f64> {
+    const PER_SPAN: u32 = 4;
+    const MAX_STEP: f64 = std::f64::consts::FRAC_PI_4;
+    const MAX_HALVINGS: u32 = 40;
+    let u_at = |t: f64| {
+        surface
+            .project_point(curve_3d.evaluate_with_endpoints(t, start, end))
+            .map(|(u, _)| u)
+    };
+    let wrap = |d: f64| period.madd(-(d / period).round(), d);
+    let mut breaks = vec![t0];
+    for &k in knots {
+        if k > breaks[breaks.len() - 1] && k < t1 {
+            breaks.push(k);
+        }
+    }
+    breaks.push(t1);
+    let mut steps = Vec::new();
+    for span in breaks.windows(2) {
+        let (a, b) = (span[0], span[1]);
+        for k in 0..PER_SPAN {
+            let ta = (b - a).madd(f64::from(k) / f64::from(PER_SPAN), a);
+            let tb = (b - a).madd(f64::from(k + 1) / f64::from(PER_SPAN), a);
+            steps.push((ta, u_at(ta)?, tb, u_at(tb)?, 0));
+        }
+    }
+    let mut run = 0.0;
+    while let Some((ta, ua, tb, ub, halvings)) = steps.pop() {
+        let du = wrap(ub - ua);
+        if du.abs() <= MAX_STEP {
+            run += du;
+            continue;
+        }
+        if halvings == MAX_HALVINGS {
+            return None;
+        }
+        let tm = 0.5 * (ta + tb);
+        let um = u_at(tm)?;
+        steps.push((ta, ua, tm, um, halvings + 1));
+        steps.push((tm, um, tb, ub, halvings + 1));
+    }
+    Some(run)
 }
 
 /// Whether the closed `curve` (a circle/ellipse) is contained within
@@ -7714,6 +7805,51 @@ mod tests {
             .collect();
         let spline = NurbsCurve::new(1, knots, corners.clone(), vec![1.0; 9]).unwrap();
         check(EdgeCurve::NurbsCurve(spline), corners[0], 0.0);
+    }
+
+    /// A rational quadratic circle round a cylinder's axis whose first three
+    /// quarters span 0.0001 of its knots each: its ends lie a turn apart in
+    /// `u`, one way round as written and the other way reversed.
+    #[test]
+    fn a_spline_circle_with_short_quarter_spans_runs_a_turn() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        use brepkit_math::surfaces::CylindricalSurface;
+        use std::f64::consts::{FRAC_1_SQRT_2, TAU};
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        let surface = FaceSurface::Cylinder(
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), z, 2.0).unwrap(),
+        );
+        let corners: Vec<Point3> = [
+            (1.0, 0.0),
+            (1.0, 1.0),
+            (0.0, 1.0),
+            (-1.0, 1.0),
+            (-1.0, 0.0),
+            (-1.0, -1.0),
+            (0.0, -1.0),
+            (1.0, -1.0),
+            (1.0, 0.0),
+        ]
+        .into_iter()
+        .map(|(x, y)| Point3::new(2.0 * x, 2.0 * y, 1.0))
+        .collect();
+        let weights: Vec<f64> = (0..9)
+            .map(|k| if k % 2 == 1 { FRAC_1_SQRT_2 } else { 1.0 })
+            .collect();
+        let knots = vec![
+            0.0, 0.0, 0.0, 0.0001, 0.0001, 0.0002, 0.0002, 0.0003, 0.0003, 1.0, 1.0, 1.0,
+        ];
+        let circle =
+            EdgeCurve::NurbsCurve(NurbsCurve::new(2, knots, corners.clone(), weights).unwrap());
+        let start = corners[0];
+        for (curve, turns) in [(circle.reversed().unwrap(), -1.0), (circle, 1.0)] {
+            let (s, e) = closed_section_end_uvs(&curve, start, start, &surface, TAU).unwrap();
+            assert!(
+                (e.x() - s.x() - turns * TAU).abs() < 1e-9,
+                "turns {turns}: {s:?} {e:?}"
+            );
+            assert!((e.y() - s.y()).abs() < 1e-9, "{s:?} {e:?}");
+        }
     }
 
     /// A run 0.001 inside the top of a closed ellipse seamed a 64th of a
