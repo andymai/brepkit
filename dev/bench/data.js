@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795330487002,
+  "lastUpdate": 1795332129636,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -74897,6 +74897,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25421511,
             "range": "± 95461",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b65d26a7d984e823f64874579405b655e36544d0",
+          "message": "fix(blend): register fillet contact pcurves along their edges, round ball rims past the equator, and walk fast and near-parallel rounds (#2672)\n\n## Summary\n\nOn main, these fillets come back wrong or fail:\n\n- The walking fillet registers a contact pcurve on a curved face that\ndoes not follow its edge: 1.13 off on a quarter-turn arc (#2628).\n- A round of the rim of a ball cut below its centre is wrong when the\nradius reaches the cut's depth. It reads 2.920 for 2.641, for example\n(#2649).\n- A round whose contacts move more than 100 times as fast as its spine\nfails at its first step (#2651, item 1).\n- A round between a plane and a cylinder within 1e-7 of parallel fails\nits residual check. A D-shaped hole rounds on the wrong side (#2651,\nitem 2).\n- A round of a sheared prism can meet its end cap at or past the\ncontact's far end. It then reads up to 0.414919 for 0.341291 (#2651,\nitem 3).\n\nWith this change, each of these builds valid, with a closed mesh and its\nvolume against an independent oracle. Three tests that skipped a failure\ntheir comments named now check it, or name it as ignored (#2651, item\n6).\n\nFixes #2628, fixes #2649, fixes #2651.\n\n## The change\n\n- **Contact pcurves (#2628).** On a curved support, the fillet\nregistered `build_pcurve_from_contact`: a line between the projected\nends over 0 to 1, with a unit direction. It unwrapped the short way\nacross the seam. A closed contact got a polyline of 64 points. The\nfillet and the walking chamfer now share one `pcurve_along` in\n`builder_utils.rs`.\n- It moves the image into a closed domain by whole turns. It tests the\nfit against the curve's own points, and cuts the curve at a sphere's\npoles.\n- On a B-spline wall, Newton finds each point from the point before it.\nIt reads the surface with its parameters wrapped into the domain.\n- The fillet lets a pcurve run past the seam, because its trim cuts the\ncontact there. The chamfer keeps its refusal.\n- Where the trim cuts a contact at the face's seam, each piece gets its\nown pcurve, fitted along its part of the curve. The fit allows for a\ncontact that stands off its wall, and refuses one more than 1e-4 (1 +\nsize) off.\n- **Ball rim (#2649).** The ball's two faces meet at a polygonal\nequator. When the radius reaches the cut's depth, the contact on the\nsphere lies on or past the equator, outside the narrow band below it.\n`check_contacts_on_faces` read a sphere face only against its sphere's\nbox, so the trim ran along a contact outside the band.\n- Where the face beyond lies on the same surface, the contact now runs\non to it, and the narrow face goes. The contact moves only where the far\nloop lies in a plane, with the rim on one side of it. Every control\npoint of the contact must lie past that plane or on it. That holds for\nthe whole contact by its convex hull. Otherwise the build refuses a\ncontact with any sample on the far loop.\n- **Fast contacts (#2651, item 1).** `walker.rs` refused a step faster\nthan 100 times the spine. It now keeps such a step when a solve at its\nmiddle puts each contact within 3/4 of the move from both ends. It\nhalves again, eight levels deep, into the half where a contact makes\nmost of its move, and tests each contact on its own. So the walker\nrefuses a leap of one contact, or a leap hidden in a fast run of the\nsame contact.\n- **Near-parallel plane and cylinder (#2651, item 2).** The ruling round\ntook a face's side as `outward normal x run`. A reversed face winds its\nwire about its stored normal, so that side pointed out of the face. The\nround now reads the side with `into_face_from_edge`. It takes only an\nexactly parallel plane, and walks one that is off parallel. An analytic\nband that fails its residual check now falls back to the walker. After\n#2654, `material_contact_direction` has no caller, so I removed it.\n- **Sheared prism (#2651, item 3).** `run_stripes_to_tilted_caps`\nretried a short run-on only when `0 < fraction <= 0.05`. An end where\nthe cap met the contact at or past its far end fell to a runout patch.\nIt now retries those ends too.\n\n## Tests\n\n- `crates/operations/tests/fillet_contact_pcurve.rs` rounds a sector's\narc and a slanted rod's rim, each in 4 poses. The same-parameter check\nof `brepkit_check` reports no issue at 1e-4 (1.13 and 6.14e-4 before).\nThe removed volume matches Pappus within 1e-3, and the mesh closes.\n`a_contact_across_a_small_wall_s_seam_is_cut_there` in\n`crates/io/tests/fillet_contact_across_wall_seam.rs` rounds the same at\n1/100 scale.\n- `crates/operations/tests/fillet_ball_cap_rim.rs` rounds 4 pairs of cut\nand radius in 3 poses. Each result is valid, its mesh closes at\ndeflection 0.002, and its volume matches a Green's theorem integral\nwithin 1e-5. A sweep of 5 cuts and 10 radii gave the integral to 6\ndigits.\n- `crates/operations/tests/fillet_fast_contacts.rs` rounds a unit edge\nwith a radius from 1 to 51 and from 1 to 201, in 3 poses. Each result is\nvalid and closed, within 1e-5 of the volume.\n- `crates/operations/tests/fillet_flat_beside_a_wall.rs` rounds a\nD-shaped hole and a D-shaped rod 10000 long in 3 poses. On main, the\nhole filled 95.98 for 121.96 with an open mesh, and the rod failed with\n\"stripe residuals exceed tolerance\". Now the edges lie within 1e-5 of\ntheir faces, and the volumes match the integrated section within 1e-3\n(hole) and 1e-5 (rod).\n- `crates/operations/tests/fillet_sheared_round_ends.rs` rounds a\nsheared parallelogram prism. Every shear from -1 to 2 removes 0.341291\n(0.402648 at 1.5 and 0.414919 at 2 before).\n- The kinked round end's oracle took the absolute curvature of a side\nwith an inflection. With the signed term, the engine matches within\n4e-8, and the tolerance is now 1e-6. The thin tube now checks its mesh\nat deflections 0.05 and 0.01. The swallowed face's open mesh is the\nignored test `the_round_s_mesh_closes_over_its_notched_ends` (#2664).\n- Five walker tests pin the fast-step guard with a scripted blend\nfunction. They cover a leap of either contact, a fast contact beside a\nleap of the other, and a midpoint that does not solve.\n`plane_cylinder_ruling_fillet_reads_reversed_faces_from_their_wires`\npins the ruling round's side on reversed faces, and\n`a_d_holes_corners_round_exactly_where_its_flat_is_parallel_to_the_bore`\nrounds an exactly parallel D-hole within 1e-6 of its section oracle.\n- Each new test fails on the commit before its fix. The `brepkit-blend`\nlib tests (204) pass. So do the fillet, blend, round and chamfer tests\nin `crates/operations/tests` (423), and the fillet, round and scoop\ntests in `crates/io/tests` (97). `brepkit-wasm` and `brepkit-blend` pass\ntoo (499 passed, 4 skipped), with the gridfinity tests among them.\n- I rebased the branch onto main with #2654. On `d4575645a`, the blend\nlib tests and the fillet, chamfer, round, blend and scoop test files\npass (729 passed, 7 skipped). So does `brepkit-wasm` (295 passed).\n\n## Items of #2651 that did not reproduce\n\n- Item 3 (`pivot_crossing_rounds`): I could not build two straight\nrounds whose contacts pass each other across a shared plane face without\ntheir regions overlapping. The sheared prism above came out of that\nsearch.\n- Item 4 (a step floor below the Newton tolerance): no walked round with\na still contact reached it.\n- Item 5 (absolute tolerances): a ledge run-up at scales 1, 0.01 and 100\nand a seam plate at scales 1e-4 to 100 round correctly.\n\n## Still open\n\n- #2660: a round of a ball's rim cut by a tilted plane meshes open and\nreads 2.346389 for 2.350488.\n- #2661: rounding the top edges of a sloped box with a rounded corner\ngives an invalid solid and no failed edge.\n- #2662: a fillet where a pocket's wall meets a bore fails with\n`ParameterOutOfRange` in the trimmer.\n- #2663: `solid_volume` of the D-hole block differs by 1.9e-5 between\ntwo poses, so its tests measure it upright.",
+          "timestamp": "2026-11-22T07:18:43Z",
+          "tree_id": "7986a00f296626375a524df29099bf73e5adda9c",
+          "url": "https://github.com/andymai/brepkit/commit/b65d26a7d984e823f64874579405b655e36544d0"
+        },
+        "date": 1795332116972,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 947889,
+            "range": "± 3706",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1004168,
+            "range": "± 2620",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11370,
+            "range": "± 125",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 629427,
+            "range": "± 1219",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 21227224,
+            "range": "± 264744",
             "unit": "ns/iter"
           }
         ]
