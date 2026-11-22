@@ -21,7 +21,7 @@ mod tests {
     use brepkit_operations::blend_ops::fillet_v2;
     use brepkit_operations::boolean::{BooleanOp, boolean};
     use brepkit_operations::measure::solid_volume;
-    use brepkit_operations::primitives::{make_box, make_sphere};
+    use brepkit_operations::primitives::{make_box, make_cylinder, make_sphere};
     use brepkit_operations::tessellate::{is_watertight, tessellate_solid};
     use brepkit_operations::transform::transform_solid;
     use brepkit_operations::validate::validate_solid;
@@ -150,6 +150,119 @@ mod tests {
                     "{what}: the cap's volume {after}, before {volume_before}"
                 );
             }
+        }
+    }
+
+    /// Every edge of the tilted cap picked: the rim's four arcs, and the two
+    /// arcs of the equator, between the ball's two faces. The equator has no
+    /// corner to round, so the round is that of the rim alone.
+    #[test]
+    fn a_round_of_every_edge_of_a_tilted_cap_rounds_its_rim() {
+        for (c, tilt, r) in [(-0.1, 0.3, 0.2), (-0.15, 0.2, 0.1)] {
+            for (name, pose) in poses() {
+                let what = format!("c = {c}, tilt = {tilt}, r = {r}, {name}");
+                let mut topo = Topology::new();
+                let (solid, rims) = tilted_cap(&mut topo, c, tilt, &pose);
+                let every = solid_edges(&topo, solid).unwrap();
+                assert_eq!(every.len(), rims.len() + 2, "{what}: the cap's edges");
+                let round = fillet_v2(&mut topo, solid, &every, r).unwrap();
+                assert!(round.failed.is_empty(), "{what}: {:?}", round.failed);
+                assert!(
+                    validate_solid(&topo, round.solid).unwrap().is_valid(),
+                    "{what}: not valid"
+                );
+                let h = 1.0 - c;
+                let expected = PI * h * h * (3.0 - h) / 3.0 - removed(c, r);
+                let volume = solid_volume(&topo, round.solid, 1e-4).unwrap();
+                assert!(
+                    (volume - expected).abs() < 1e-6 * expected,
+                    "{what}: volume {volume}, expected {expected}"
+                );
+                let mesh = tessellate_solid(&topo, round.solid, 0.01).unwrap();
+                assert!(is_watertight(&mesh), "{what}: open mesh");
+            }
+        }
+    }
+
+    /// The tilted cap less a rod through it, off its axis, whose mouth on
+    /// the ball is rounded first. That round registers the pcurve of its
+    /// contact on the ball's face, where the contact bounds the face's hole.
+    /// The round of the rim then keeps the hole, and the ball's face it
+    /// leaves keeps that pcurve.
+    #[test]
+    fn a_round_of_a_tilted_caps_rim_keeps_the_pcurves_of_the_ball_face() {
+        // Each edge of each hole of each ball face, and whether that face
+        // holds a pcurve for it.
+        let holes = |topo: &Topology, solid: SolidId| -> Vec<(EdgeId, bool)> {
+            let mut found = Vec::new();
+            for face in solid_faces(topo, solid).unwrap() {
+                let f = topo.face(face).unwrap();
+                if !matches!(f.surface(), FaceSurface::Sphere(_)) {
+                    continue;
+                }
+                for &wire in f.inner_wires() {
+                    for oe in topo.wire(wire).unwrap().edges() {
+                        found.push((oe.edge(), topo.pcurves().contains(oe.edge(), face)));
+                    }
+                }
+            }
+            found
+        };
+        for (name, pose) in poses() {
+            let mut topo = Topology::new();
+            let (cap, _) = tilted_cap(&mut topo, -0.1, 0.3, &Mat4::translation(0.0, 0.0, 0.0));
+            let rod = make_cylinder(&mut topo, 0.15, 4.0).unwrap();
+            transform_solid(&mut topo, rod, &Mat4::translation(0.35, 0.3, -2.0)).unwrap();
+            let drilled = boolean(&mut topo, BooleanOp::Cut, cap, rod).unwrap();
+            transform_solid(&mut topo, drilled, &pose).unwrap();
+            let adjacency = topo.build_adjacency(drilled).unwrap();
+            let surface_of = |f: brepkit_topology::face::FaceId| topo.face(f).unwrap().surface();
+            let mouth: Vec<EdgeId> = solid_edges(&topo, drilled)
+                .unwrap()
+                .into_iter()
+                .filter(|&e| {
+                    let faces = adjacency.faces_for_edge(e);
+                    faces.len() == 2
+                        && faces
+                            .iter()
+                            .any(|&f| matches!(surface_of(f), FaceSurface::Sphere(_)))
+                        && faces
+                            .iter()
+                            .any(|&f| matches!(surface_of(f), FaceSurface::Cylinder(_)))
+                })
+                .collect();
+            assert_eq!(mouth.len(), 1, "{name}: the rod's mouth on the ball");
+            let first = fillet_v2(&mut topo, drilled, &mouth, 0.03).unwrap();
+            assert!(first.failed.is_empty(), "{name}: {:?}", first.failed);
+            let before = holes(&topo, first.solid);
+            assert!(
+                !before.is_empty() && before.iter().all(|&(_, has)| has),
+                "{name}: the mouth's round left no pcurve on the ball: {before:?}"
+            );
+            let flat = solid_faces(&topo, first.solid)
+                .unwrap()
+                .into_iter()
+                .find(|&f| matches!(topo.face(f).unwrap().surface(), FaceSurface::Plane { .. }))
+                .unwrap();
+            let rims: Vec<EdgeId> = topo
+                .wire(topo.face(flat).unwrap().outer_wire())
+                .unwrap()
+                .edges()
+                .iter()
+                .map(brepkit_topology::wire::OrientedEdge::edge)
+                .collect();
+            let round = fillet_v2(&mut topo, first.solid, &rims, 0.2).unwrap();
+            assert!(round.failed.is_empty(), "{name}: {:?}", round.failed);
+            assert!(
+                validate_solid(&topo, round.solid).unwrap().is_valid(),
+                "{name}: not valid"
+            );
+            let after = holes(&topo, round.solid);
+            assert_eq!(after.len(), before.len(), "{name}: the hole's edges");
+            assert!(
+                after.iter().all(|&(_, has)| has),
+                "{name}: the hole lost its pcurves on the ball: {after:?}"
+            );
         }
     }
 

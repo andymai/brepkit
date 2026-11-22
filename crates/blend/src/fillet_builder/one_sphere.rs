@@ -20,30 +20,46 @@ use brepkit_topology::vertex::VertexId;
 use brepkit_topology::wire::{OrientedEdge, Wire};
 
 use crate::BlendError;
+use crate::fillet_plan::faces_tangent_along_edge;
 
 /// Joins, in place, each two faces of `solid`'s outer shell that lie on one
 /// sphere where a run of the `picked` edges passes from one to the other: at
 /// a vertex two picked edges share, each lies between a third face and one
 /// of the two, and an edge between the two that is not picked ends there.
 /// The caller restores the solid's shell after the round.
+///
+/// The picked edges are read as the plan reads them: an edge between two
+/// faces tangent along it has no corner to round, and the plan drops it, so
+/// it neither joins a run nor counts as picked. An edge the solid does not
+/// hold is left to the build, which fails it alone. Returns the edges the
+/// joins took out of the shell, each one between two faces tangent along it.
 pub(super) fn join_sphere_faces_the_rim_crosses(
     topo: &mut Topology,
     solid: SolidId,
     picked: &[EdgeId],
-) -> Result<(), BlendError> {
-    let picked: HashSet<EdgeId> = picked.iter().copied().collect();
+) -> Result<HashSet<EdgeId>, BlendError> {
     let mut pairs: Vec<(FaceId, FaceId)> = Vec::new();
+    let mut gone = HashSet::new();
     {
         let adjacency = topo.build_adjacency(solid)?;
+        let mut effective: HashSet<EdgeId> = HashSet::new();
         let mut at_vertex: HashMap<VertexId, Vec<EdgeId>> = HashMap::new();
-        for &edge_id in &picked {
-            let edge = topo.edge(edge_id)?;
-            if edge.start() == edge.end() {
+        for &edge_id in picked {
+            let Ok(edge) = topo.edge(edge_id) else {
+                continue;
+            };
+            if let &[f0, f1] = adjacency.faces_for_edge(edge_id)
+                && faces_tangent_along_edge(topo, edge_id, f0, f1)
+            {
+                continue;
+            }
+            if !effective.insert(edge_id) || edge.start() == edge.end() {
                 continue;
             }
             at_vertex.entry(edge.start()).or_default().push(edge_id);
             at_vertex.entry(edge.end()).or_default().push(edge_id);
         }
+        let picked = effective;
         for (&vertex, edges) in &at_vertex {
             let [e1, e2] = edges[..] else {
                 continue;
@@ -102,12 +118,13 @@ pub(super) fn join_sphere_faces_the_rim_crosses(
         if a == b {
             continue;
         }
-        if let Some(face) = join(topo, solid, a, b)? {
+        if let Some((face, between)) = join(topo, solid, a, b)? {
             joined.insert(a, face);
             joined.insert(b, face);
+            gone.extend(between);
         }
     }
-    Ok(())
+    Ok(gone)
 }
 
 /// Whether two faces' surfaces are one sphere read alike: each takes the
@@ -141,14 +158,16 @@ fn shared_edges(topo: &Topology, a: FaceId, b: FaceId) -> Result<Vec<EdgeId>, Bl
 /// The face `a` and `b` make together, put in the solid's outer shell in
 /// their place. Both must be faces of that shell, each outer wire must run
 /// the edges the two share in one stretch, and the rest of `a`'s wire and
-/// the rest of `b`'s must close one loop. Holes of either stay holes.
-/// Returns `None`, and changes nothing, for any other pair.
+/// the rest of `b`'s must close one loop. Holes of either stay holes. The
+/// new face takes the pcurves its edges had on `a` or `b`, which read alike
+/// on it. Returns the face and the edges the two shared, which go, or `None`,
+/// and changes nothing, for any other pair.
 fn join(
     topo: &mut Topology,
     solid: SolidId,
     a: FaceId,
     b: FaceId,
-) -> Result<Option<FaceId>, BlendError> {
+) -> Result<Option<(FaceId, HashSet<EdgeId>)>, BlendError> {
     let shell_id = topo.solid(solid)?.outer_shell();
     let outer = topo.shell(shell_id)?.faces();
     if !outer.contains(&a) || !outer.contains(&b) {
@@ -189,6 +208,16 @@ fn join(
         return Ok(None);
     }
     let (fa, fb) = (topo.face(a)?.clone(), topo.face(b)?.clone());
+    // Each edge the new face keeps, and the face it came from.
+    let mut kept: Vec<(EdgeId, FaceId)> = Vec::new();
+    for (run, from) in [(&run_a, a), (&run_b, b)] {
+        kept.extend(run.iter().map(|oe| (oe.edge(), from)));
+    }
+    for (holes, from) in [(fa.inner_wires(), a), (fb.inner_wires(), b)] {
+        for &hole in holes {
+            kept.extend(topo.wire(hole)?.edges().iter().map(|oe| (oe.edge(), from)));
+        }
+    }
     let mut edges = run_a;
     edges.extend(run_b);
     let wire = topo.add_wire(Wire::new(edges, true)?);
@@ -213,5 +242,10 @@ fn join(
         }
     }
     *topo.shell_mut(shell_id)? = Shell::new(faces)?;
-    Ok(Some(face))
+    for (edge, from) in kept {
+        if let Some(pcurve) = topo.pcurves().get(edge, from).cloned() {
+            topo.pcurves_mut().set(edge, face, pcurve);
+        }
+    }
+    Ok(Some((face, shared)))
 }
