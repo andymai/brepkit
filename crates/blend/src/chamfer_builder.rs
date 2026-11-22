@@ -582,11 +582,16 @@ fn chamfer_face_of(
     }
     let info = crate::builder_utils::create_chamfer_face_with_contacts(topo, stripe, c1, c2)?;
     orient_chamfer_face(topo, info.face, stripe)?;
-    if let (
-        FaceSurface::Nurbs(_) | FaceSurface::Cone(_) | FaceSurface::Cylinder(_),
-        [Some(c1), Some(c2)],
-    ) = (&stripe.surface, [c1, c2])
-    {
+    // A plane band between curved faces (two cylinders' ridge) runs its
+    // contacts as its spine runs, which need not agree with its normal.
+    let on_curved = !topo.face(stripe.face1)?.surface().is_planar()
+        || !topo.face(stripe.face2)?.surface().is_planar();
+    let band_runs_its_own_way = match &stripe.surface {
+        FaceSurface::Nurbs(_) | FaceSurface::Cone(_) | FaceSurface::Cylinder(_) => true,
+        FaceSurface::Plane { .. } => on_curved,
+        FaceSurface::Sphere(_) | FaceSurface::Torus(_) => false,
+    };
+    if let (true, [Some(c1), Some(c2)]) = (band_runs_its_own_way, [c1, c2]) {
         run_against_supports(topo, info.face, [(supports[0], c1), (supports[1], c2)])?;
     }
     // The spine runs the chamfered edge forward, so the cross edge at its

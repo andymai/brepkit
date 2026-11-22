@@ -5279,11 +5279,11 @@ pub fn cone_cone_coaxial_chamfer(
 /// a pair of straight lines. The chamfer surface is a **plane** that
 /// contains the two contact lines (each parallel to the cyl axes).
 ///
-/// Convex/concave configurations are unified via per-face
-/// `signed_offset_i = ±1`: the angular displacement on each cylinder
-/// from the spine flips toward or away from the OTHER cylinder. For
-/// convex-convex, both contacts move AWAY from the other cyl;
-/// concave-concave moves both TOWARD; mixed configurations swap one.
+/// Each contact turns off the spine into its face, the side the face's
+/// wire keeps along the edge. Where the edge is in no wire of a face, the
+/// per-face `signed_offset_i = ±1` below picks the side: both contacts
+/// move AWAY from the other cyl for outward faces, both TOWARD for
+/// reversed ones, and mixed configurations swap one.
 ///
 /// # Geometry
 ///
@@ -5429,8 +5429,22 @@ pub fn cylinder_cylinder_chamfer(
     let (Some(turn1), Some(turn2)) = (chord_turn(d1, r1), chord_turn(d2, r2)) else {
         return Ok(None);
     };
-    let dtheta1 = y_sign * s1 * turn1;
-    let dtheta2 = -y_sign * s2 * turn2;
+    // A face's reversal does not tell which way round its axis it runs off
+    // the ridge: the lens two cylinders share and their union both have
+    // outward faces, and run off the ridge opposite ways. The side the
+    // face's wire keeps does, where it runs along the edge; on cyl1 a turn
+    // `+θ` from the ridge runs along `ẑ × (x_spine, y_spine)`.
+    let side = |face: FaceId, tangent: Vec3| -> Result<Option<f64>, BlendError> {
+        let Some(&edge) = edges.first() else {
+            return Ok(None);
+        };
+        Ok(crate::builder_utils::into_face_from_edge(topo, face, edge)?
+            .map(|into| into.dot(tangent).signum()))
+    };
+    let ccw1 = a_cyl.cross(x_hat * x_spine + y_hat * y_spine);
+    let ccw2 = a_cyl.cross(x_hat * (x_spine - big_d) + y_hat * y_spine);
+    let dtheta1 = side(face1, ccw1)?.unwrap_or(y_sign * s1) * turn1;
+    let dtheta2 = side(face2, ccw2)?.unwrap_or(-y_sign * s2) * turn2;
     let (sin1, cos1) = dtheta1.sin_cos();
     let (sin2, cos2) = dtheta2.sin_cos();
 
