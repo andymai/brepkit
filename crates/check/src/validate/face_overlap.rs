@@ -335,6 +335,18 @@ fn meetings(piece: &Boundary2, others: &[Boundary2], tol: f64) -> Option<Vec<f64
     Some(cuts)
 }
 
+/// What a read beside an edge two faces share finds.
+#[derive(Clone, Copy)]
+enum SharedRead {
+    /// A point inside both faces.
+    Both,
+    /// Each face on one side of the edge alone: this face on its left
+    /// (`true`) or on its right (`false`).
+    Apart(bool),
+    /// Neither face read, or a face read on both sides.
+    Unknown,
+}
+
 /// The other face of a pair: its region, its boundary as lines and arcs
 /// (`None` where it has a B-spline), and its edges.
 struct Other<'a> {
@@ -438,6 +450,45 @@ fn shares_area(
                 }
                 false
             };
+            // A read beside the shared edge at `f`, as `beside`, which also
+            // tells where each face lies: `Both` where a point is inside both,
+            // `Apart(true)` where only this face is read on the left of the
+            // edge and only the other face on its right (`false` the other
+            // way round), and `Unknown` otherwise (neither face read, or a
+            // face read on both sides).
+            let shared_read = |f: f64| {
+                let m = point(f);
+                let along = curve.tangent_with_endpoints(at(f), a, b);
+                let Ok(across) = Vec2::new(-along.dot(frame.y), along.dot(frame.x)).normalize()
+                else {
+                    return SharedRead::Unknown;
+                };
+                let (mut mine, mut theirs) = ([false; 2], [false; 2]);
+                let mut step = edge_length;
+                for _ in 0..128 {
+                    if step <= tol {
+                        break;
+                    }
+                    for (side, s) in [step, -step].into_iter().enumerate() {
+                        let q = m + across * s;
+                        let (in_this, in_other) = (
+                            region.side(q, tol) == Some(true),
+                            other.side(q, tol) == Some(true),
+                        );
+                        if in_this && in_other {
+                            return SharedRead::Both;
+                        }
+                        mine[side] |= in_this;
+                        theirs[side] |= in_other;
+                    }
+                    step *= 0.5;
+                }
+                match (mine, theirs) {
+                    ([true, false], [false, true]) => SharedRead::Apart(true),
+                    ([false, true], [true, false]) => SharedRead::Apart(false),
+                    _ => SharedRead::Unknown,
+                }
+            };
             let cuts = flat_piece(curve, a, b, frame)
                 .zip(pieces)
                 .and_then(|(piece, others)| meetings(&piece, others, tol));
@@ -480,9 +531,11 @@ fn shares_area(
             let cuts = steps;
             // An edge the other face shares runs along its boundary, and each
             // face lies on one side of it all along it: it is read beside a
-            // few of its first stretches, not each of them. Two faces on
-            // either side of it fail every read, each of them halved down to
-            // the tolerance on both sides.
+            // few of its first stretches first. Where each read finds the two
+            // faces on either side of it, the same way round, they share no
+            // area along it. A read that finds neither face (a part of a face
+            // narrower than the tolerance), or reads that disagree, leave the
+            // edge to a read beside each first stretch.
             if other_face.edges.contains(&oe.edge()) {
                 let count = cuts.len().saturating_sub(1);
                 #[allow(
@@ -495,10 +548,26 @@ fn shares_area(
                     .map(|&f| ((f * count as f64) as usize).min(count.saturating_sub(1)))
                     .collect();
                 picked.dedup();
+                let mut way: Option<bool> = None;
+                let mut settled = true;
                 for k in picked {
-                    if let (Some(&f0), Some(&f1)) = (cuts.get(k), cuts.get(k + 1))
-                        && beside(0.5 * (f0 + f1))
-                    {
+                    let (Some(&f0), Some(&f1)) = (cuts.get(k), cuts.get(k + 1)) else {
+                        settled = false;
+                        continue;
+                    };
+                    match shared_read(0.5 * (f0 + f1)) {
+                        SharedRead::Both => return Ok(true),
+                        SharedRead::Apart(left) if way.is_none_or(|w| w == left) => {
+                            way = Some(left);
+                        }
+                        SharedRead::Apart(_) | SharedRead::Unknown => settled = false,
+                    }
+                }
+                if settled {
+                    continue;
+                }
+                for first in cuts.windows(2) {
+                    if beside(0.5 * (first[0] + first[1])) {
                         return Ok(true);
                     }
                 }
@@ -1223,6 +1292,62 @@ mod tests {
                 "other side at {other}"
             );
         }
+    }
+
+    /// Two faces on one closed straight B-spline outline: a square with a
+    /// tail narrower than the tolerance, the tail taking most of the curve's
+    /// parameter. The few reads of the shared edge land on the tail, where
+    /// neither face reads beside it, and the shared square is found by
+    /// the reads of every first stretch.
+    #[test]
+    fn faces_on_one_spline_square_with_a_thin_tail_are_reported() {
+        let mut b = Builder::default();
+        let width = 1e-7;
+        let mut points = vec![
+            Point3::new(5.0, 0.0, 0.0),
+            Point3::new(10.0, 0.0, 0.0),
+            Point3::new(10.0, 5.0, 0.0),
+        ];
+        let along = 30;
+        for k in 1..=along {
+            points.push(Point3::new(10.0 + f64::from(k), 5.0, 0.0));
+        }
+        for k in (0..along).rev() {
+            points.push(Point3::new(10.0 + f64::from(k), 5.0 + width, 0.0));
+        }
+        points.extend([
+            Point3::new(10.0, 10.0, 0.0),
+            Point3::new(0.0, 10.0, 0.0),
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(5.0, 0.0, 0.0),
+        ]);
+        let n = points.len();
+        #[allow(clippy::cast_precision_loss)]
+        let mut knots: Vec<f64> = (0..n).map(|k| k as f64 / (n - 1) as f64).collect();
+        knots.insert(0, 0.0);
+        knots.push(1.0);
+        let outline =
+            brepkit_math::nurbs::curve::NurbsCurve::new(1, knots, points, vec![1.0; n]).unwrap();
+        let v = b.vertex([5.0, 0.0, 0.0]);
+        let e = b
+            .topo
+            .add_edge(Edge::new(v, v, EdgeCurve::NurbsCurve(outline)));
+        for (forward, z) in [(true, 1.0), (false, -1.0)] {
+            let wire = b
+                .topo
+                .add_wire(Wire::new(vec![OrientedEdge::new(e, forward)], true).unwrap());
+            let face = b.topo.add_face(Face::new(
+                wire,
+                vec![],
+                FaceSurface::Plane {
+                    normal: Vec3::new(0.0, 0.0, z),
+                    d: 0.0,
+                },
+            ));
+            b.faces.push(face);
+        }
+        let solid = b.solid();
+        assert_eq!(found(&b.topo, solid).len(), 1);
     }
 
     /// Two faces on one closed straight B-spline outline, a triangle whose
