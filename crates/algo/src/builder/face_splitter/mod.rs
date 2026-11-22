@@ -7270,6 +7270,7 @@ fn place_section_in_turn(e: &mut OrientedPCurveEdge, surface: &FaceSurface, lo: 
         let mid = f64::midpoint(e.start_uv.x(), e.end_uv.x());
         let shift = -((mid - lo) / period).floor() * period;
         shift_to(e, e.start_uv.x() + shift, e.end_uv.x() + shift);
+        move_pcurve_to_ends(e, period);
         return;
     }
     let (s3, e3) = if e.forward {
@@ -14934,5 +14935,48 @@ mod tests {
                 assert!((got - want).abs() < 1e-12, "{us:?}");
             }
         }
+    }
+
+    #[test]
+    fn a_closed_section_moved_a_turn_takes_its_pcurve_along() {
+        use brepkit_math::curves2d::{Curve2D, NurbsCurve2D};
+        use brepkit_math::surfaces::CylindricalSurface;
+        use std::f64::consts::TAU;
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        let cyl = CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), z, 1.0).unwrap();
+        let surface = FaceSurface::Cylinder(cyl);
+        // A whole turn of the cylinder at v = 0.5, laid out a turn past
+        // [0, 2 pi): ends and pcurve both one turn up.
+        let u0 = TAU + 0.5;
+        let (a, b) = (Point2::new(u0, 0.5), Point2::new(u0 + TAU, 0.5));
+        let at = Point3::new(0.5_f64.cos(), 0.5_f64.sin(), 0.5);
+        let mut e = OrientedPCurveEdge {
+            curve_3d: EdgeCurve::Line,
+            pcurve: Curve2D::Nurbs(NurbsCurve2D::from_line(a, b).unwrap()),
+            start_uv: a,
+            end_uv: b,
+            start_3d: at,
+            end_3d: at,
+            forward: true,
+            source_edge_idx: None,
+            pave_block_id: None,
+        };
+        super::place_section_in_turn(&mut e, &surface, 0.0, TAU);
+        assert!(
+            (e.start_uv.x() - 0.5).abs() < 1e-12,
+            "start {:?}",
+            e.start_uv
+        );
+        let Curve2D::Nurbs(n) = &e.pcurve else {
+            unreachable!("the pcurve stays a B-spline");
+        };
+        let (k0, k1) = (n.knots()[0], n.knots()[n.knots().len() - 1]);
+        let (p0, p1) = (n.evaluate(k0), n.evaluate(k1));
+        assert!(
+            (p0 - e.start_uv).length() < 1e-9 && (p1 - e.end_uv).length() < 1e-9,
+            "the pcurve runs {p0:?} to {p1:?}, its ends {:?} to {:?}",
+            e.start_uv,
+            e.end_uv
+        );
     }
 }
