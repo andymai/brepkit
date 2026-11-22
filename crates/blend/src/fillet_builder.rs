@@ -34,6 +34,7 @@ use crate::trimmer;
 use crate::walker::{Walker, WalkerConfig, approximate_blend_surface, interpolate_blend_surface};
 use crate::{BlendError, BlendResult};
 
+mod junction_carry;
 mod wall_run_up;
 
 type BlendCrossEdge = (EdgeId, VertexId, VertexId);
@@ -5666,6 +5667,7 @@ fn run_stripes_to_tilted_caps(
     // A cap this oblique to the axis is left to the runout.
     const OBLIQUE: f64 = 0.05;
     carry_walked_rounds(topo, plan, stripe_results)?;
+    junction_carry::carry_walked_rounds_to_junction_walls(topo, plan, stripe_results)?;
     let mut caps = TiltedCaps::new();
     // A terminal whose contact would run back past nearly all of it, or all
     // of it and on, is tried again once the others are done: the far end may
