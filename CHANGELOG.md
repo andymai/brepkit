@@ -1,5 +1,13 @@
 # Changelog
 
+## [4.11.35](https://github.com/andymai/brepkit/compare/v4.11.34...v4.11.35) (2026-11-22)
+
+
+### Bug Fixes
+
+* **algo,operations:** mesh seamless ball faces and lobe holes, read a ball face's extent by its wires, and close thin ball faces ([#2679](https://github.com/andymai/brepkit/issues/2679)) ([8a63d77](https://github.com/andymai/brepkit/commit/8a63d77c663d89247e82ecb1c4223a9b8ebe61df))
+* **blend:** build concave rounds before the convex rounds they meet at a corner ([#2681](https://github.com/andymai/brepkit/issues/2681)) ([c7f7717](https://github.com/andymai/brepkit/commit/c7f7717a74b27c17019479edb77be9a90a3f0e46))
+
 ## [4.11.34](https://github.com/andymai/brepkit/compare/v4.11.33...v4.11.34) (2026-11-22)
 
 
