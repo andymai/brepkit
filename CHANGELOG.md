@@ -1,5 +1,13 @@
 # Changelog
 
+## [4.11.38](https://github.com/andymai/brepkit/compare/v4.11.37...v4.11.38) (2026-11-22)
+
+
+### Bug Fixes
+
+* **algo:** keep split arcs and long section pieces on the turn they run, and split a lens at any crossing ([#2691](https://github.com/andymai/brepkit/issues/2691)) ([06de75b](https://github.com/andymai/brepkit/commit/06de75bf36182815a447596fb2e41db1e6ad815f))
+* **blend,check,operations:** round a pocket wall into a bore and a fused L's rim, and refuse a walking fillet that leaves an invalid solid ([#2701](https://github.com/andymai/brepkit/issues/2701)) ([1d14937](https://github.com/andymai/brepkit/commit/1d14937ba6685863157a49e1d326c724e0bd30ef))
+
 ## [4.11.37](https://github.com/andymai/brepkit/compare/v4.11.36...v4.11.37) (2026-11-22)
 
 
