@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795350996239,
+  "lastUpdate": 1795358116810,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -75329,6 +75329,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26832087,
             "range": "± 57506",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b718d5100c391862d35423b95eccd702755c97bd",
+          "message": "chore(main): release 4.11.36 (#2687)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[4.11.36](https://github.com/andymai/brepkit/compare/v4.11.35...v4.11.36)\n(2026-11-22)\n\n\n### Bug Fixes\n\n* **algo:** cut wide windows and U-shaped solids through a tube's wall,\nand a slanted rod against a half-space through its seam, exactly\n([#2683](https://github.com/andymai/brepkit/issues/2683))\n([15f4b78](https://github.com/andymai/brepkit/commit/15f4b78314abdf128b706550603b1f945f71a002))\n* **algo:** fit cylinder pcurves at 3D chord lengths, carry a turned\nsection's pcurve, and read closed rims by their traversal\n([#2678](https://github.com/andymai/brepkit/issues/2678))\n([1969452](https://github.com/andymai/brepkit/commit/1969452f0271995e5665d3d0f5a6e89dd0bdc650))\n* **math,algo:** fit plane-torus sections to 1e-9, split half rings and\nturned grooves exactly, and keep a ring whole where a cone rests on it\n([#2673](https://github.com/andymai/brepkit/issues/2673))\n([24612cb](https://github.com/andymai/brepkit/commit/24612cbb3ad058b58524746238d5b720bf8789e8))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-11-22T14:31:47Z",
+          "tree_id": "2d79e8d263888e6dc2045dcc5a49f899db342ed5",
+          "url": "https://github.com/andymai/brepkit/commit/b718d5100c391862d35423b95eccd702755c97bd"
+        },
+        "date": 1795358103156,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 719145,
+            "range": "± 6463",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 761757,
+            "range": "± 5144",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 9050,
+            "range": "± 370",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 506462,
+            "range": "± 9571",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 16816514,
+            "range": "± 123412",
             "unit": "ns/iter"
           }
         ]
