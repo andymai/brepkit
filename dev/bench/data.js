@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795346163275,
+  "lastUpdate": 1795350996239,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -75275,6 +75275,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 20872676,
             "range": "± 33951",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "1969452f0271995e5665d3d0f5a6e89dd0bdc650",
+          "message": "fix(algo): fit cylinder pcurves at 3D chord lengths, carry a turned section's pcurve, and read closed rims by their traversal (#2678)\n\n## Summary\n\nThe struts of the brepjs playground example `cube-truss-frame` meet at\npoints on the chords' axes. On main, some of their fuses came back wrong\nwith no error, and others fell back:\n\n- Take a chord and two struts that meet at one point. Fused one strut at\na time, they came back invalid in 84 of 672 cases of a grid. Those\nresults were 1.6% to 2% short, with an edge that two faces run the same\nway (#2594, #2592).\n- Two struts that end at one point on a chord's axis, not in one plane,\nfailed with \"no outer shell found\" in 22 of 156 pair poses (#2593).\n\nWith this change, no case of that grid comes back wrong, and the pairs\nfuse exactly. Some fuses at the truss corners still fall back, or\n`fuse_cluster` refuses them (see \"Still open\").\n\nFixes #2592.\n\n## The change\n\n- **Pcurves on a curved face.** The pcurve of a closed section on a\ncylinder was a cubic fitted at chord lengths read in (u, v). A\ncylinder's u is an angle and its v a length, so the fit swung back\nacross the seam. The curve where strut 7 leaves chord 1 left its vertex\nat u = 2.19, where the curve is at 1.35. The trace then took the edge's\nreversed twin. `pcurve_compute.rs` now takes the fit's parameters from\n3D chord lengths.\n- **A section moved by a turn.** `place_section_in_turn` moved a\nsection's end UVs by whole turns but left its pcurve on the old turn.\nThe trace then read the pcurve as stale and took the chord. The pcurve\nnow moves with its ends.\n- **A closed rim run against its curve.** A closed boundary rim keeps\nits UVs in its curve's sense, whatever its traversal. The DCEL trace in\n`wire_builder.rs` read a rim traversed against its curve as running with\nit. A strut's wall then ran its mouth edge the same way as the chord.\n- **A face kept whole across a section.** The builder compared the\nclasses of a section's two sides only on a face that splits into\nnothing. In a taper pin's cut through a rod, the cone's side came back\nas one piece across its two loops, partly inside the rod. The builder\nthen dropped it and kept the rod uncut. `fill_images_faces.rs` now tests\na point each side of each section inside a face that comes back whole,\nclosed loops too.\n- The points lie in the face's own (u, v), nearer the section than\nanything else the face holds. A section off the face gets none.\n- If the two sides take different classes against the other solid, the\nbuilder refuses the face.\n- **A shell's flux from a closed rim.** `shell_is_outward_oriented`\nsampled a closed circle from the circle's frame origin, not from its\nvertex. The box of the samples spanned 1.25 turns. The walls' flux read\n-32341 and -312968 against 120637, so the builder took the shell for a\nhole. A closed circle is now sampled for one turn from its vertex.\n\n## Tests\n\n- `crates/operations/tests/chord_with_two_struts.rs` builds a chord and\ntwo struts from `make_cylinder`, in 3 poses and both orders. It checks\nthe volume against a line integral and classifies points.\n`a_chord_takes_two_struts_across_its_seam`,\n`a_strut_whose_seam_faces_the_other_strut_keeps_its_mouth` and\n`two_struts_that_meet_end_to_start_fuse` are in it.\n- `a_chord_takes_two_struts_that_meet_one_at_a_time` and\n`struts_that_meet_on_a_chord_axis_out_of_plane_fuse` in\n`crates/io/tests/cube_truss_fuse_inmem.rs` fuse the captured operands.\n- `a_closed_curve_round_a_thin_wall_runs_one_way_in_its_pcurve` is a\nunit test of the fit. Without the fix, the pcurve turns back at its\nfirst sample.\n- Each new test fails without its fix.\n- `a_taper_pin_cut_the_engine_cannot_build_is_refused_not_wrong` passes:\nthe cut at spin 1.4 is refused, as on main. Without the new check, it\ncame back as the uncut rod. `sphere_box_corner` also passes: the check\ncounts a section within 1% of the face's extent as on its boundary.\n- A grid takes 4 chord seams, 4 and 7 seams of the two struts, 2 orders\nand 3 poses: 672 cases. Main had 236 fallbacks or errors, 84 of them\naccepted wrong. Now 87 fall back, and none comes back wrong.\n- A sweep of strut pairs (156 cases) went from 22 failures to none. Pair\n6 and 11 reads 120168.852 against 120168.848.\n- The pose sweep (495 lines) and the truth audit (40 lines) give the\nsame output as main.\n- `cargo nextest run --no-fail-fast -p brepkit-algo -p brepkit-io -p\nbrepkit-operations -p brepkit-wasm -p brepkit-check -p brepkit-heal -p\nbrepkit-math` on `b24698bbe`, with main merged in: 4907 tests run, 4907\npassed, 32 skipped.\n- Unit tests place side points round a small loop in a large face, a\nloop in a hole, and a circle on a ball cap. Each fails with the first\nversion of the check.\n- The raw engine now refuses the honeycomb cutter `a2hcomb_pcut1.bin`.\nOn main it returned a solid with 50 free edges, where one wall stayed\nwhole across the cut. `boolean` gives the same result with the check on\nand off: valid and exact, with 90 faces.\n`honeycomb_pcut1_holds_in_the_boolean` pins both.\n- With main merged in (`29016d29c`), the broad suite runs 4981 tests:\n4981 passed, 29 skipped.\n- The broad suite on the check (`d34218772`): 4919 tests run, 4917\npassed, 32 skipped. The two failures were the raw honeycomb tests,\nchanged as above. The pose sweep and the truth audit give the same\noutput with the check on and off.\n\n## Still open\n\n- The five taper poses of the \"refused, not wrong\" test are refused, not\nexact. On the rod's wall, the near hole has only its small cap arc, and\nthe far hole's ends are laid a turn apart.\n- 87 of the grid's cases fall back, in two seam families. One is chord,\nstrut 5, strut 7, with strut 5's seam toward (-0.654, 0, -0.757). The\nother is chord, strut 7, strut 5, with strut 7's seam toward one of two\ndirections.\n- `fuse_n` at the truss corners still gives free edges or errors\n(#2593). Struts 4, 6 and 16 give 6 free edges and 149952.044 against\n153935.225. All 20 give 8 free edges and 3624817.208 against\n3753031.512. `fuse_cluster` refuses these, so `fuse_all` stays exact.",
+          "timestamp": "2026-11-22T12:32:07Z",
+          "tree_id": "775e311958fd943f8fb156188be7cbf9fd840297",
+          "url": "https://github.com/andymai/brepkit/commit/1969452f0271995e5665d3d0f5a6e89dd0bdc650"
+        },
+        "date": 1795350987009,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1174284,
+            "range": "± 3203",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1242573,
+            "range": "± 6101",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13749,
+            "range": "± 68",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 783219,
+            "range": "± 6238",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26832087,
+            "range": "± 57506",
             "unit": "ns/iter"
           }
         ]
