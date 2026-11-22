@@ -1524,7 +1524,9 @@ mod tests {
         }
     }
 
-    use crate::builder::pcurve_compute::cone_ellipse_fixture::{lifted_u, oblique_cone};
+    use crate::builder::pcurve_compute::cone_ellipse_fixture::{
+        assert_pcurve_follows, lifted_u, oblique_cone,
+    };
 
     /// The ellipse of [`oblique_cone`] at slope `m` as a rim starting at its
     /// parameter 2. Also the `u` its point at parameter 4 reaches along the
@@ -1618,7 +1620,9 @@ mod tests {
     /// more than half a turn off an even advance between the arc's ends; at
     /// slope 0.99999 nearly the whole turn of `u` lies within a hundredth of
     /// the parameter round the near vertex, at `pi`), and each piece's
-    /// pcurve runs between the piece's ends.
+    /// pcurve runs from the piece's start to its end, following the
+    /// ellipse's `(u, v)` with `u` running one way
+    /// ([`assert_pcurve_follows`]).
     #[test]
     fn an_oblique_cone_arc_splits_on_the_turn_it_runs() {
         let params = [2.6, 3.0, 3.4, 3.7, 4.0, 5.0, 7.0];
@@ -1668,24 +1672,25 @@ mod tests {
                 for w in pieces.windows(2) {
                     assert!((w[1].start_uv - w[0].end_uv).length() < 1e-12, "{what}");
                 }
-                for piece in &pieces {
-                    let ends = match &piece.pcurve {
-                        Curve2D::Nurbs(n) => {
-                            let k = n.knots();
-                            Some((n.evaluate(k[0]), n.evaluate(k[k.len() - 1])))
-                        }
-                        Curve2D::Line(_) | Curve2D::Circle(_) | Curve2D::Ellipse(_) => None,
-                    }
-                    .expect("a piece's pcurve on the cone is a spline");
+                let mut runs = vec![first];
+                runs.extend(order.iter().copied());
+                runs.push(last);
+                for (k, piece) in pieces.iter().enumerate() {
+                    let ends = (piece.pcurve.evaluate(0.0), piece.pcurve.evaluate(1.0));
                     let size = 1.0 + piece.start_uv.y().abs().max(piece.end_uv.y().abs());
-                    let off =
-                        |a: Point2, b: Point2| (ends.0 - a).length().max((ends.1 - b).length());
                     assert!(
-                        off(piece.start_uv, piece.end_uv).min(off(piece.end_uv, piece.start_uv))
-                            < 1e-6 * size,
+                        (ends.0 - piece.start_uv).length() < 1e-6 * size
+                            && (ends.1 - piece.end_uv).length() < 1e-6 * size,
                         "{what}: the pcurve of {:?} -> {:?} runs {ends:?}",
                         piece.start_uv,
                         piece.end_uv
+                    );
+                    assert_pcurve_follows(
+                        &piece.pcurve,
+                        &surface,
+                        &ellipse,
+                        (runs[k], runs[k + 1]),
+                        &format!("{what}, piece {k}"),
                     );
                 }
                 assert!((pieces[0].start_uv - start_uv).length() < 1e-12, "{what}");
