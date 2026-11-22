@@ -3228,8 +3228,9 @@ fn section_end_uv_hints(
     Option<brepkit_math::vec::Point2>,
 ) {
     // A closed section's pcurve ends where it starts, so a loop round the axis
-    // of a periodic face takes its end UV from its run in u, which makes the
-    // face splitter see a full-width cut.
+    // of a periodic face takes its end UV from its run in u, and a loop round
+    // a torus's tube from its run in v, which makes the face splitter see a
+    // full-width cut.
     let (u_per, _v_per) = super::pcurve_compute::surface_periods(surface);
     if let Some((s, e)) = u_per
         .filter(|_| is_closed)
@@ -3253,34 +3254,52 @@ fn section_end_uv_hints(
 
 /// The UVs at the ends of a closed section on a face periodic in `u`. The
 /// end lies past the start by the section's run in `u`: one period for a loop
-/// round the axis, either way, and none for a loop on one side of it. `None`
-/// when the loop passes through the axis, where `u` has no value.
+/// round the axis, either way, and none for a loop on one side of it. On a
+/// torus `v` runs round the tube, and the end lies past the start by the
+/// section's run in `v` too: one period for a loop round the tube, and none
+/// for a loop round the axis or on one side of the tube. `None` when the
+/// loop passes through the axis, or a torus's core circle, where `u` or `v`
+/// has no value.
 fn closed_section_end_uvs(
     curve_3d: &EdgeCurve,
     start: Point3,
     surface: &FaceSurface,
     period: f64,
 ) -> Option<(brepkit_math::vec::Point2, brepkit_math::vec::Point2)> {
-    use brepkit_math::vec::Point2;
+    use brepkit_math::vec::{Point2, Vec3};
     let (su, sv) = surface.project_point(start)?;
-    let turns = match curve_3d {
+    let v_period = super::pcurve_compute::surface_periods(surface).1;
+    let conic_turns = |center: Point3, a: (Vec3, f64), b: (Vec3, f64)| -> Option<(f64, f64)> {
+        let u = conic_turns_about_u_axis(surface, center, a, b)?;
+        let v = match v_period {
+            Some(_) => conic_turns_round_tube(surface, center, a, b)?,
+            None => 0.0,
+        };
+        Some((u, v))
+    };
+    let (turns_u, turns_v) = match curve_3d {
         EdgeCurve::Line => return None,
-        EdgeCurve::Circle(c) => conic_turns_about_u_axis(
-            surface,
+        EdgeCurve::Circle(c) => conic_turns(
             c.center(),
             (c.u_axis(), c.radius()),
             (c.v_axis(), c.radius()),
         )?,
-        EdgeCurve::Ellipse(e) => conic_turns_about_u_axis(
-            surface,
+        EdgeCurve::Ellipse(e) => conic_turns(
             e.center(),
             (e.u_axis(), e.semi_major()),
             (e.v_axis(), e.semi_minor()),
         )?,
-        EdgeCurve::NurbsCurve(n) => (spline_u_run(n, surface)? / period).round(),
+        EdgeCurve::NurbsCurve(n) => {
+            let (run_u, run_v) = spline_run(n, n.domain(), surface)?;
+            (
+                (run_u / period).round(),
+                v_period.map_or(0.0, |p| (run_v / p).round()),
+            )
+        }
     };
-    let end_u = period.madd(turns, su);
-    Some((Point2::new(su, sv), Point2::new(end_u, sv)))
+    let end_u = period.madd(turns_u, su);
+    let end_v = v_period.map_or(sv, |p| p.madd(turns_v, sv));
+    Some((Point2::new(su, sv), Point2::new(end_u, end_v)))
 }
 
 /// The frame `surface`'s `u` is read in: a point on its axis, and the axes
@@ -3330,6 +3349,69 @@ fn conic_turns_about_u_axis(
     let d = pierce - center;
     let inside = (d.dot(a) / ra).powi(2) + (d.dot(b) / rb).powi(2);
     Some(if inside < 1.0 { along.signum() } else { 0.0 })
+}
+
+/// The turns a closed circle or ellipse makes round a torus's tube, the
+/// angle `v`, the conic running from `a` toward `b` (each a unit axis with
+/// its radius). A closed curve on the torus winds the tube as often as the
+/// torus's core circle passes through the region it bounds, against the
+/// conic's normal: a meridian circle once, a circle round the axis and a
+/// small loop on the tube not at all. `None` on another surface, and when
+/// the core comes within the linear tolerance of the conic, where `v` has
+/// no value: there the count turns on rounding.
+fn conic_turns_round_tube(
+    surface: &FaceSurface,
+    center: Point3,
+    (a, ra): (brepkit_math::vec::Vec3, f64),
+    (b, rb): (brepkit_math::vec::Vec3, f64),
+) -> Option<f64> {
+    let FaceSurface::Torus(torus) = surface else {
+        return None;
+    };
+    let (origin, x, y, big) = (
+        torus.center(),
+        torus.x_axis(),
+        torus.y_axis(),
+        torus.major_radius(),
+    );
+    let reach = (center - origin).length() + ra.max(rb) + big;
+    let tol = brepkit_math::tolerance::Tolerance::new().linear * reach.max(1.0);
+    let normal = a.cross(b);
+    let core = |phi: f64| origin + (x * phi.cos() + y * phi.sin()) * big;
+    // The core meets the conic's plane where `ca cos(phi) + cb sin(phi) =
+    // -d`, at `psi -+ theta`. Along `phi` it crosses the plane with the
+    // normal at `psi - theta`, and against it at `psi + theta`.
+    let (ca, cb, d) = (
+        big * normal.dot(x),
+        big * normal.dot(y),
+        normal.dot(origin - center),
+    );
+    let swing = ca.hypot(cb);
+    let psi = cb.atan2(ca);
+    if swing <= d.abs() {
+        // The core keeps to one side of the plane. It comes nearest the
+        // plane at `psi`, or half a turn on.
+        let near = if d < 0.0 {
+            psi
+        } else {
+            psi + std::f64::consts::PI
+        };
+        let clear = d.abs() - swing > tol
+            || conic_axis_gap(center, (a, ra), (b, rb), core(near), normal) > tol;
+        return clear.then_some(0.0);
+    }
+    let theta = (-d / swing).acos();
+    let inside = |phi: f64| -> Option<bool> {
+        let p = core(phi);
+        if conic_axis_gap(center, (a, ra), (b, rb), p, normal) <= tol {
+            return None;
+        }
+        let q = p - center;
+        Some((q.dot(a) / ra).powi(2) + (q.dot(b) / rb).powi(2) < 1.0)
+    };
+    let against = f64::from(u8::from(inside(psi + theta)?));
+    let along = f64::from(u8::from(inside(psi - theta)?));
+    Some(against - along)
 }
 
 /// A lower bound on the distance from the conic `center + ra cos(t) a +
@@ -3403,21 +3485,35 @@ fn conic_axis_gap(
     least.sqrt()
 }
 
-/// The run in `u` along a closed spline section, in radians, proved piece by
-/// piece. A rational Bezier piece whose weights share a sign lies in the hull
-/// of its control points. When that hull lies in an open half-plane about the
-/// axis, seen along it, and keeps the linear tolerance from it, the piece
-/// turns about the axis by the wrapped angle between its ends. Each span of
-/// the knots is halved until its pieces pass. `None` when a piece still fails
-/// after many halvings: the curve comes within the tolerance of the axis,
-/// where `u` has no value, or has a pole there.
-fn spline_u_run(
+/// The runs in `u`, and on a torus in `v`, along a spline from its parameter
+/// `from` to its parameter `to`, in radians, proved piece by piece; the run in
+/// `v` is `0` on another surface. A rational Bezier piece whose weights share
+/// a sign lies in the hull of its control points. When that hull lies in an
+/// open half-plane about the axis, seen along it, and keeps the linear
+/// tolerance from it, the piece turns about the axis by the wrapped angle
+/// between its ends. On a torus, when the hull's distances from the axis and
+/// heights along it keep the tolerance to one side of the core circle's
+/// point in each half-plane through the axis, the piece turns round the tube
+/// by the wrapped angle between its ends too. Each span of the knots is
+/// halved until its pieces pass. `None` when a piece still fails after many
+/// halvings: the curve comes within the tolerance of the axis or the core,
+/// where `u` or `v` has no value, or has a pole there.
+pub(super) fn spline_run(
     curve: &brepkit_math::nurbs::curve::NurbsCurve,
+    (from, to): (f64, f64),
     surface: &FaceSurface,
-) -> Option<f64> {
+) -> Option<(f64, f64)> {
     use std::f64::consts::{PI, TAU};
     const MAX_HALVINGS: u32 = 48;
     let (on_axis, x, y) = u_frame_of(surface)?;
+    let core = match surface {
+        FaceSurface::Torus(t) => Some((t.major_radius(), t.z_axis())),
+        FaceSurface::Plane { .. }
+        | FaceSurface::Nurbs(_)
+        | FaceSurface::Cylinder(_)
+        | FaceSurface::Cone(_)
+        | FaceSurface::Sphere(_) => None,
+    };
     let wrap = |d: f64| TAU.madd(-(d / TAU).round(), d);
     let reach = curve
         .control_points()
@@ -3425,11 +3521,6 @@ fn spline_u_run(
         .map(|&p| (p - on_axis).length())
         .fold(1.0, f64::max);
     let tol = brepkit_math::tolerance::Tolerance::new().linear * reach;
-    // A control point seen along the axis, from it.
-    let flat = |q: [f64; 4]| {
-        let d = Point3::new(q[0] / q[3], q[1] / q[3], q[2] / q[3]) - on_axis;
-        (d.dot(x), d.dot(y))
-    };
     // How far the hull of points seen along the axis keeps from it: the
     // least distance to a segment between two of them, an edge of the hull
     // among them.
@@ -3449,31 +3540,72 @@ fn spline_u_run(
         }
         least
     };
-    let (t0, t1) = curve.domain();
-    let mut cuts = vec![t0];
+    // The wrapped turn from the first angle to the last, when every angle
+    // lies within an open half-turn of the others.
+    let turn_within_half = |angles: &[f64]| {
+        let offsets: Vec<f64> = angles.iter().map(|&t| wrap(t - angles[0])).collect();
+        let lo = offsets.iter().copied().fold(f64::INFINITY, f64::min);
+        let hi = offsets.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+        (hi - lo < PI - 1e-9).then(|| offsets[offsets.len() - 1])
+    };
+    let piece_turns = |hull: &[[f64; 4]]| -> Option<(f64, f64)> {
+        let same_sign = hull.iter().all(|q| q[3] > 0.0) || hull.iter().all(|q| q[3] < 0.0);
+        if !same_sign {
+            return None;
+        }
+        // Each control point from the axis's point.
+        let pts: Vec<brepkit_math::vec::Vec3> = hull
+            .iter()
+            .map(|q| Point3::new(q[0] / q[3], q[1] / q[3], q[2] / q[3]) - on_axis)
+            .collect();
+        // Seen along the axis.
+        let seen: Vec<(f64, f64)> = pts.iter().map(|d| (d.dot(x), d.dot(y))).collect();
+        let off_axis = clearance(&seen);
+        if off_axis <= tol {
+            return None;
+        }
+        let angles: Vec<f64> = seen.iter().map(|&(px, py)| py.atan2(px)).collect();
+        let turn_u = turn_within_half(&angles)?;
+        let Some((big, axis)) = core else {
+            return Some((turn_u, 0.0));
+        };
+        // The hull lies clear of the axis in a half-plane, so its least
+        // distance from the axis is its clearance, and its most, a convex
+        // function's, at a control point; its height runs between its
+        // control points' heights. The points of the half-plane through the
+        // axis that it reaches lie in that box, and `v` is their angle about
+        // the core's point there.
+        let rho: Vec<f64> = seen.iter().map(|&(px, py)| px.hypot(py)).collect();
+        let height: Vec<f64> = pts.iter().map(|d| d.dot(axis)).collect();
+        let most = rho.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+        let low = height.iter().copied().fold(f64::INFINITY, f64::min);
+        let high = height.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+        let clear = off_axis > big + tol || most < big - tol || low > tol || high < -tol;
+        if !clear {
+            return None;
+        }
+        let last = pts.len() - 1;
+        let v = |k: usize| height[k].atan2(rho[k] - big);
+        Some((turn_u, wrap(v(last) - v(0))))
+    };
+    let (lo, hi) = (from.min(to), from.max(to));
+    let mut cuts = vec![lo];
     for &k in curve.knots() {
-        if k > cuts[cuts.len() - 1] && k < t1 {
+        if k > cuts[cuts.len() - 1] && k < hi {
             cuts.push(k);
         }
     }
-    cuts.push(t1);
-    let mut pieces: Vec<(f64, f64, u32)> = cuts.windows(2).map(|w| (w[0], w[1], 0)).collect();
-    let mut run = 0.0;
+    cuts.push(hi);
+    let mut pieces: Vec<(f64, f64, u32)> = cuts
+        .windows(2)
+        .filter(|w| w[1] > w[0])
+        .map(|w| (w[0], w[1], 0))
+        .collect();
+    let mut run = (0.0, 0.0);
     while let Some((a, b, halvings)) = pieces.pop() {
         let hull = brepkit_math::nurbs::decompose::curve_bezier_between(curve, a, b).ok()?;
-        let same_sign = hull.iter().all(|q| q[3] > 0.0) || hull.iter().all(|q| q[3] < 0.0);
-        let turned = same_sign
-            .then(|| hull.iter().map(|&q| flat(q)).collect::<Vec<_>>())
-            .filter(|pts| clearance(pts) > tol)
-            .and_then(|pts| {
-                let angles: Vec<f64> = pts.iter().map(|&(px, py)| py.atan2(px)).collect();
-                let offsets: Vec<f64> = angles.iter().map(|&t| wrap(t - angles[0])).collect();
-                let lo = offsets.iter().copied().fold(f64::INFINITY, f64::min);
-                let hi = offsets.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-                (hi - lo < PI - 1e-9).then(|| offsets[offsets.len() - 1])
-            });
-        if let Some(turn) = turned {
-            run += turn;
+        if let Some((du, dv)) = piece_turns(&hull) {
+            run = (run.0 + du, run.1 + dv);
             continue;
         }
         if halvings == MAX_HALVINGS {
@@ -3483,7 +3615,7 @@ fn spline_u_run(
         pieces.push((a, mid, halvings + 1));
         pieces.push((mid, b, halvings + 1));
     }
-    Some(run)
+    Some(if to < from { (-run.0, -run.1) } else { run })
 }
 
 /// Whether the closed `curve` (a circle/ellipse) is contained within
@@ -8254,6 +8386,153 @@ mod tests {
         other[2].source_edge_idx = Some(1);
         assert!(!sections_only_as_slits(&other, &[], 1e-7));
         assert!(!sections_only_as_slits(&square, &[one_way], 1e-7));
+    }
+
+    /// On a ring torus of radii 3 and 1 a closed section's end UVs differ by
+    /// its turns in `u` and in `v`, each written as a circle and as a
+    /// rational spline, each way round: a meridian circle winds the tube
+    /// once and the axis not at all, a circle round the axis winds the axis
+    /// once and the tube not at all, a Villarceau circle winds each once, and
+    /// a small circle in the tube's tangent plane winds neither. A spline
+    /// loop on the tube winds neither too. The turns agree with a walk of
+    /// 20000 samples along each circle.
+    #[test]
+    fn a_closed_section_on_a_torus_runs_its_turns_in_v_too() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        use brepkit_math::surfaces::ToroidalSurface;
+        use std::f64::consts::{FRAC_1_SQRT_2, FRAC_PI_4, TAU};
+        let origin = Point3::new(0.0, 0.0, 0.0);
+        let surface = FaceSurface::Torus(ToroidalSurface::new(origin, 3.0, 1.0).unwrap());
+        let on = |u: f64, v: f64| surface.evaluate(u, v).unwrap();
+        // The circle as a nine-point rational quadratic spline.
+        let spline = |c: &Circle3D| {
+            let points: Vec<Point3> = (0..9_u32)
+                .map(|k| {
+                    let a = f64::from(k) * FRAC_PI_4;
+                    let reach = if k % 2 == 1 {
+                        c.radius() / FRAC_1_SQRT_2
+                    } else {
+                        c.radius()
+                    };
+                    c.center() + c.u_axis() * (reach * a.cos()) + c.v_axis() * (reach * a.sin())
+                })
+                .collect();
+            let weights = (0..9)
+                .map(|k| if k % 2 == 1 { FRAC_1_SQRT_2 } else { 1.0 })
+                .collect();
+            let knots = vec![
+                0.0, 0.0, 0.0, 0.25, 0.25, 0.5, 0.5, 0.75, 0.75, 1.0, 1.0, 1.0,
+            ];
+            EdgeCurve::NurbsCurve(NurbsCurve::new(2, knots, points, weights).unwrap())
+        };
+        // The turns of `u` and `v` along a walk of fine samples.
+        let walk = |at: &dyn Fn(f64) -> Point3| {
+            let steps = 20_000;
+            let mut last = surface.project_point(at(0.0)).unwrap();
+            let mut run = (0.0, 0.0);
+            for k in 1..=steps {
+                let now = surface
+                    .project_point(at(f64::from(k) / f64::from(steps)))
+                    .unwrap();
+                let wrap = |d: f64| TAU.madd(-(d / TAU).round(), d);
+                run = (run.0 + wrap(now.0 - last.0), run.1 + wrap(now.1 - last.1));
+                last = now;
+            }
+            ((run.0 / TAU).round(), (run.1 / TAU).round())
+        };
+        let check = |curve: EdgeCurve, start: Point3, want: (f64, f64), what: &str| {
+            let (s, e) = closed_section_end_uvs(&curve, start, &surface, TAU).unwrap();
+            let (su, sv) = surface.project_point(start).unwrap();
+            assert!(
+                (s.x() - su).abs() < 1e-12 && (s.y() - sv).abs() < 1e-12,
+                "{what}: {s:?}"
+            );
+            let got = ((e.x() - s.x()) / TAU, (e.y() - s.y()) / TAU);
+            assert!(
+                (got.0 - want.0).abs() < 1e-12 && (got.1 - want.1).abs() < 1e-12,
+                "{what}: turns {got:?}, want {want:?}"
+            );
+        };
+        let villarceau = {
+            let tilt = (1.0_f64 / 3.0).asin();
+            Circle3D::with_axes(
+                Point3::new(0.0, 1.0, 0.0),
+                Vec3::new(-tilt.sin(), 0.0, tilt.cos()),
+                3.0,
+                Vec3::new(tilt.cos(), 0.0, tilt.sin()),
+                Vec3::new(0.0, 1.0, 0.0),
+            )
+            .unwrap()
+        };
+        let (u0, v0) = (0.7, 2.2);
+        let radial = |u: f64| Vec3::new(u.cos(), u.sin(), 0.0);
+        let top = on(0.0, 1.0);
+        // Each circle with its turns in `u` and `v` as written.
+        let circles = [
+            (
+                "meridian",
+                Circle3D::new(
+                    origin + radial(u0) * 3.0,
+                    radial(u0 + 1.0) - radial(u0 - 1.0),
+                    1.0,
+                )
+                .unwrap(),
+                (0.0, -1.0),
+            ),
+            (
+                "round the axis",
+                Circle3D::new(
+                    Point3::new(0.0, 0.0, top.z()),
+                    Vec3::new(0.0, 0.0, 1.0),
+                    top.x(),
+                )
+                .unwrap(),
+                (1.0, 0.0),
+            ),
+            ("villarceau", villarceau, (1.0, -1.0)),
+            (
+                "small loop",
+                Circle3D::new(on(u0, v0), surface.normal(u0, v0), 0.2).unwrap(),
+                (0.0, 0.0),
+            ),
+        ];
+        for (what, circle, turns) in circles {
+            let EdgeCurve::Circle(back) = EdgeCurve::Circle(circle.clone()).reversed().unwrap()
+            else {
+                unreachable!()
+            };
+            for (c, way) in [(circle, 1.0), (back, -1.0)] {
+                let want = (turns.0 * way, turns.1 * way);
+                let start = c.evaluate(0.3);
+                let walked = walk(&|f| c.evaluate(TAU.madd(f, 0.3)));
+                assert!(
+                    (walked.0 - want.0).abs() < 0.5 && (walked.1 - want.1).abs() < 0.5,
+                    "{what}: the walk turns {walked:?}"
+                );
+                check(EdgeCurve::Circle(c.clone()), start, want, what);
+                let curve = spline(&c);
+                let walked = walk(&|f| curve.evaluate_with_endpoints(f, start, start));
+                assert!(
+                    (walked.0 - want.0).abs() < 0.5 && (walked.1 - want.1).abs() < 0.5,
+                    "{what} as a spline: the walk turns {walked:?}"
+                );
+                check(curve, c.evaluate(0.0), want, &format!("{what} as a spline"));
+            }
+        }
+        let corners: Vec<Point3> = (0..=8)
+            .map(|k| {
+                let a = FRAC_PI_4 * f64::from(k % 8);
+                on(0.3_f64.madd(a.sin(), u0), 0.3_f64.madd(a.cos(), v0))
+            })
+            .collect();
+        let knots: Vec<f64> = std::iter::once(0.0)
+            .chain((0..=8).map(f64::from))
+            .chain(std::iter::once(8.0))
+            .collect();
+        let polyline = EdgeCurve::NurbsCurve(
+            NurbsCurve::new(1, knots, corners.clone(), vec![1.0; 9]).unwrap(),
+        );
+        check(polyline, corners[0], (0.0, 0.0), "small spline loop");
     }
 
     /// A run 0.001 inside the top of a closed ellipse seamed a 64th of a
