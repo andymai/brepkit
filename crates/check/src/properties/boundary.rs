@@ -557,16 +557,36 @@ pub(super) fn integrate_by_boundary<S: ParametricSurface>(
     // `∮ 2π ḡ(v) dv`, nothing, or on a torus a whole turn of its tube, which
     // the count of whole surfaces below takes off.
     let u_from = wires.first().and_then(|w| w.first()).map_or(0.0, |e| {
-        (chart.project)(e.curve.evaluate_with_endpoints(e.from, e.start, e.end)).0
+        let walk = Walk::new(e.curve, e.start, e.end);
+        (chart.project)(walk.point(walk.tau(e.from))).0
     });
     let from_start = chart.revolution.turned(u_from);
+    // The straight step in `(u, v)` from where one edge's curve ends to where
+    // the next one's starts. Each curve is read from its own parameters, and
+    // two of them can part at a vertex by its tolerance (a long arc of a
+    // huge ellipse reads its ends 1e-7 along itself). The step keeps each
+    // loop closed, so its integral does not hang on where `F` is taken from.
+    let bridge = |acc: &mut [f64; 8], twice_area: &mut f64, from: (f64, f64), to: (f64, f64)| {
+        let (du, dv) = (to.0 - from.0, to.1 - from.1);
+        if dv.abs() > 0.0 {
+            for gp in gauss {
+                let s = 0.5.madd(gp.x, 0.5);
+                let g = from_start.antiderivative(
+                    du.madd(s, from.0) - u_from,
+                    dv.madd(s, from.1),
+                    about,
+                );
+                add(acc, &g, 0.5 * gp.w * dv);
+            }
+        }
+        *twice_area += from.0.madd(dv, -(from.1 * du));
+    };
     let mut total = [0.0; 8];
     let (mut turns_sum, mut winds, mut patch, mut holes) = (0_i64, false, false, true);
     for wire in wires {
         let first = wire.first()?;
-        let entry = first
-            .curve
-            .evaluate_with_endpoints(first.from, first.start, first.end);
+        let first_walk = Walk::new(first.curve, first.start, first.end);
+        let entry = first_walk.point(first_walk.tau(first.from));
         let (u_entry, v_start) = (chart.project)(entry);
         // Each wire starts within half a turn of the first.
         let mut u = u_from + wrap_pi(u_entry - u_from);
@@ -577,19 +597,31 @@ pub(super) fn integrate_by_boundary<S: ParametricSurface>(
         let mut twice_area = 0.0;
         let (mut exit, mut chord) = (entry, 0.0);
         for edge in wire {
-            let point = |t: f64| edge.curve.evaluate_with_endpoints(t, edge.start, edge.end);
+            let walk = Walk::new(edge.curve, edge.start, edge.end);
+            let (from, to) = (walk.tau(edge.from), walk.tau(edge.to));
+            let point = |t: f64| walk.point(t);
             let at = |t: f64| (chart.project)(point(t));
-            let (enter, leave) = (point(edge.from), point(edge.to));
+            let (enter, leave) = (point(from), point(to));
             chord = (leave - enter).length();
             if (enter - exit).length() > 1e-6 + 1e-3 * chord {
                 return None;
             }
             exit = leave;
+            let (ue, ve) = at(from);
+            let entered = (u + wrap_pi(ue - u), v + v_wrap(ve - v));
+            bridge(&mut acc, &mut twice_area, (u, v), entered);
+            (u, v) = entered;
             // A piece that turns a quarter turn about the axis is halved (a
             // NURBS rim's knot span may be a third of a circle); one that
             // still does at a thousandth of its edge runs past a pole.
-            let floor = 1e-3 * (edge.to - edge.from).abs();
-            let mut pending = edge_pieces(edge);
+            let floor = 1e-3 * (to - from).abs();
+            let mut pending = edge_pieces(&BoundaryEdge {
+                curve: edge.curve,
+                start: edge.start,
+                end: edge.end,
+                from,
+                to,
+            });
             pending.reverse();
             while let Some((ta, tb)) = pending.pop() {
                 let (ua, va) = at(ta);
@@ -645,12 +677,7 @@ pub(super) fn integrate_by_boundary<S: ParametricSurface>(
                         // rounding of each point, which a curve far from its
                         // own centre (a long arc of a huge ellipse) has in
                         // plenty.
-                        let dv = chart.revolution.dv_dt(
-                            point(t),
-                            edge_velocity(edge.curve, t, edge.start, edge.end),
-                            un,
-                            vn,
-                        );
+                        let dv = chart.revolution.dv_dt(point(t), walk.velocity(t), un, vn);
                         // Each difference rounds by an ulp of its coordinate.
                         let (nu, nv) = (
                             1.5 * f64::EPSILON * (1.0 + un.abs()) / h.abs(),
@@ -731,6 +758,16 @@ pub(super) fn integrate_by_boundary<S: ParametricSurface>(
         if chart.v_periodic && (v - v_start - tube_turns * TAU).abs() > 1e-6 {
             return None;
         }
+        #[allow(clippy::cast_precision_loss)]
+        let closed = (
+            (turns as f64).madd(TAU, u_start),
+            if chart.v_periodic {
+                tube_turns.madd(TAU, v_start)
+            } else {
+                v_start
+            },
+        );
+        bridge(&mut acc, &mut twice_area, (u, v), closed);
         if chart.v_periodic && tube_turns != 0.0 {
             if turns != 0 {
                 return None;
@@ -1919,6 +1956,69 @@ struct Piece<'e, 'a> {
     /// On a surface closed along one direction, the coordinate that way
     /// carried on along the wire to the sample `start` is read at.
     lifted: f64,
+}
+
+/// How the boundary integrals walk an edge: by `τ`, its parameter less
+/// `base`. A conic (`base` its parameter at its start vertex) is read as its
+/// point there plus its chord from there, by the half-angle forms
+/// `cos(b + τ) − cos b = −2 sin(b + τ/2) sin(τ/2)` and
+/// `sin(b + τ) − sin b = 2 cos(b + τ/2) sin(τ/2)`. The conic's own form
+/// rounds the angle and the centre's coordinates: a short arc of an ellipse
+/// 2e8 across has its centre 1e8 away, and one rounding of its angle moves
+/// its point 4e-8 along it. The chord keeps its digits, and two faces on one
+/// edge walk the same points whichever way each runs it. Any other curve is
+/// read at its own parameter (`base` is nothing).
+pub(super) struct Walk<'a> {
+    curve: &'a EdgeCurve,
+    start: Point3,
+    end: Point3,
+    base: f64,
+    at_base: Point3,
+}
+
+impl<'a> Walk<'a> {
+    pub(super) fn new(curve: &'a EdgeCurve, start: Point3, end: Point3) -> Self {
+        let base = match curve {
+            EdgeCurve::Circle(c) => c.project(start),
+            EdgeCurve::Ellipse(e) => e.project(start),
+            EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => 0.0,
+        };
+        let at_base = curve.evaluate_with_endpoints(base, start, end);
+        Self {
+            curve,
+            start,
+            end,
+            base,
+            at_base,
+        }
+    }
+
+    /// `τ` at the curve's parameter `t`.
+    pub(super) fn tau(&self, t: f64) -> f64 {
+        t - self.base
+    }
+
+    /// The point at `τ`.
+    pub(super) fn point(&self, tau: f64) -> Point3 {
+        let (major, minor, x, y) = match self.curve {
+            EdgeCurve::Circle(c) => (c.radius(), c.radius(), c.u_axis(), c.v_axis()),
+            EdgeCurve::Ellipse(e) => (e.semi_major(), e.semi_minor(), e.u_axis(), e.v_axis()),
+            EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => {
+                return self
+                    .curve
+                    .evaluate_with_endpoints(self.base + tau, self.start, self.end);
+            }
+        };
+        let half = 0.5 * tau;
+        let s = half.sin();
+        let (sin_m, cos_m) = (self.base + half).sin_cos();
+        self.at_base + x * (-2.0 * major * sin_m * s) + y * (2.0 * minor * cos_m * s)
+    }
+
+    /// The derivative in `τ` at `τ`.
+    pub(super) fn velocity(&self, tau: f64) -> Vec3 {
+        edge_velocity(self.curve, self.base + tau, self.start, self.end)
+    }
 }
 
 /// `d/dt` of `curve` at `t` as `evaluate_with_endpoints` runs it from
