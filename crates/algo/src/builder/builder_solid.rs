@@ -4578,11 +4578,16 @@ fn path_parting(topo: &Topology, a: EdgeId, b: EdgeId, tol: f64) -> Result<Optio
     }
     let (at_a, at_b) = (edge_path(topo, ea)?, edge_path(topo, eb)?);
     let (steps_a, steps_b) = (path_steps(topo, ea)?, path_steps(topo, eb)?);
-    let by_step = steps_a
-        .iter()
-        .chain(&steps_b)
-        .map(|&f| (at_a(f) - at_b(f)).length())
-        .fold(0.0, f64::max);
+    // Two edges may run between their ends either way: a face's copy of a
+    // section often runs against its partner's.
+    let along = |back: bool| {
+        steps_a
+            .iter()
+            .chain(&steps_b)
+            .map(|&f| (at_a(f) - at_b(if back { 1.0 - f } else { f })).length())
+            .fold(0.0, f64::max)
+    };
+    let by_step = along(false).min(along(true));
     if by_step <= PATH_MIN_TOL {
         return Ok(Some(by_step));
     }

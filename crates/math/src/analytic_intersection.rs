@@ -1330,7 +1330,7 @@ pub fn intersect_plane_torus(
     let mut curves = Vec::new();
     for ipts in plane_torus_loops(torus, normal, d, 128) {
         let pts: Vec<Point3> = ipts.iter().map(|p| p.point).collect();
-        if let Ok(curve) = interpolate(&pts, 3.min(pts.len() - 1)) {
+        if let Ok(curve) = fit_plane_torus_section(torus, normal, d, &pts) {
             curves.push(IntersectionCurve {
                 curve,
                 points: ipts,
@@ -1339,6 +1339,150 @@ pub fn intersect_plane_torus(
     }
 
     Ok(curves)
+}
+
+/// The point of a plane's section of a torus that `p`, a point near it,
+/// moves to across both surfaces.
+///
+/// Newton steps take the point onto the plane and onto the tube nearer `p`,
+/// both to rounding. Each step is the shortest move that clears both
+/// first-order distances, so the point moves across the section and not
+/// along it.
+///
+/// `None` where the two surfaces meet at a tangent (their normals within
+/// about 1e-6 of parallel), where `p` lies on the torus's axis or a tube's
+/// centre circle, or where the steps do not settle.
+#[must_use]
+pub fn plane_torus_section_point(
+    torus: &ToroidalSurface,
+    normal: Vec3,
+    d: f64,
+    p: Point3,
+) -> Option<Point3> {
+    let scale = normal.length();
+    if scale <= 0.0 || !scale.is_finite() {
+        return None;
+    }
+    let n = normal * (1.0 / scale);
+    let d = d / scale;
+    let (axis, centre) = (torus.z_axis(), torus.center());
+    let (big, small) = (torus.major_radius(), torus.minor_radius());
+    let radial_of = |x: Point3| {
+        let w = x - centre;
+        w - axis * axis.dot(w)
+    };
+    // The tube is held to the side `p` starts on: a spindle torus's sheet
+    // across the axis belongs to the far tube circle.
+    let side = {
+        let radial = radial_of(p);
+        let rho = radial.length();
+        let h = axis.dot(p - centre);
+        if (rho + big).hypot(h) - small < ((rho - big).hypot(h) - small).abs() {
+            -1.0
+        } else {
+            1.0
+        }
+    };
+    // Each surface's distance from `x` and the torus's normal there.
+    let residuals = |x: Point3| -> Option<(f64, f64, Vec3)> {
+        let radial = radial_of(x);
+        let rho = radial.length();
+        if rho <= 0.0 {
+            return None;
+        }
+        let to = (x - centre) - radial * (side * big / rho);
+        let reach = to.length();
+        if reach <= 0.0 {
+            return None;
+        }
+        Some((dot_np(n, x) - d, reach - small, to * (1.0 / reach)))
+    };
+    let rounding = 16.0 * f64::EPSILON * (big + small + (p - centre).length());
+    let mut x = p;
+    for _ in 0..16 {
+        let (f_plane, f_torus, g) = residuals(x)?;
+        if f_plane.abs() <= rounding && f_torus.abs() <= rounding {
+            return Some(x);
+        }
+        let c = n.dot(g);
+        let det = c.madd(-c, 1.0);
+        if det < 1e-12 {
+            return None;
+        }
+        let along_n = c.madd(-f_torus, f_plane) / det;
+        let along_g = c.madd(-f_plane, f_torus) / det;
+        x = x - n * along_n - g * along_g;
+    }
+    let (f_plane, f_torus, _) = residuals(x)?;
+    (f_plane.abs() <= 1e3 * rounding && f_torus.abs() <= 1e3 * rounding).then_some(x)
+}
+
+/// How far a fitted plane x torus section may stray from the true section
+/// between its points, as a fraction of the torus's outer radius.
+const PLANE_TORUS_FIT: f64 = 1e-9;
+
+/// The most points a fitted plane x torus section takes.
+const PLANE_TORUS_FIT_POINTS: usize = 4096;
+
+/// A cubic through `points`, points of a plane's section of a torus in order
+/// along it, and through more points of the section where it needs them.
+///
+/// The cubic meets the section only at its points, and between two of them
+/// it strays by about the fourth power of their spacing, which a tight turn
+/// of the section makes large: 25 points along the section of a wall 0.4
+/// outside the inner equator of a torus of radii 4 and 1.5 leave the cubic
+/// 8e-5 off it. Each pass checks the cubic halfway between each two points
+/// against the section and puts the section's point there between them
+/// where it lies more than [`PLANE_TORUS_FIT`] of the torus's outer radius
+/// away, until none does or the points reach [`PLANE_TORUS_FIT_POINTS`].
+///
+/// # Errors
+///
+/// Returns an error if the interpolation fails (fewer than 2 points, or
+/// repeated points).
+pub fn fit_plane_torus_section(
+    torus: &ToroidalSurface,
+    normal: Vec3,
+    d: f64,
+    points: &[Point3],
+) -> Result<NurbsCurve, MathError> {
+    let tol = PLANE_TORUS_FIT.madd(
+        torus.major_radius() + torus.minor_radius(),
+        64.0 * f64::EPSILON * (torus.center() - Point3::new(0.0, 0.0, 0.0)).length(),
+    );
+    let mut pts = points.to_vec();
+    loop {
+        let curve = interpolate(&pts, 3.min(pts.len().saturating_sub(1)))?;
+        if pts.len() >= PLANE_TORUS_FIT_POINTS {
+            return Ok(curve);
+        }
+        let params = crate::nurbs::fitting::chord_length_params(&pts);
+        let mut finer = Vec::with_capacity(2 * pts.len());
+        let mut added = false;
+        for (i, pair) in pts.windows(2).enumerate() {
+            finer.push(pair[0]);
+            let gap = (pair[1] - pair[0]).length();
+            let middle = curve.evaluate(f64::midpoint(params[i], params[i + 1]));
+            let Some(on) = plane_torus_section_point(torus, normal, d, middle) else {
+                continue;
+            };
+            let off = (on - middle).length();
+            // A point of the section half a spacing or more away lies on
+            // another stretch of it (a thin tube's other loop).
+            if off > tol && off < 0.5 * gap && finer.len() + pts.len() - i < PLANE_TORUS_FIT_POINTS
+            {
+                finer.push(on);
+                added = true;
+            }
+        }
+        if !added {
+            return Ok(curve);
+        }
+        if let Some(&last) = pts.last() {
+            finer.push(last);
+        }
+        pts = finer;
+    }
 }
 
 /// The fewest and most steps along each branch of a loop a plane cuts from
@@ -6327,6 +6471,56 @@ mod tests {
                         torus_implicit(p, major, minor)
                     );
                 }
+            }
+        }
+    }
+
+    /// A wall 0.4 outside the inner equator turns its loops tightly there.
+    /// Between its points, each fitted loop stays on the torus and on the
+    /// plane within the fit's bound.
+    #[test]
+    fn plane_torus_fits_stay_on_the_section_where_it_turns_tightly() {
+        use crate::traits::ParametricCurve;
+        let (major, minor) = (4.0, 1.5);
+        let torus = ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), major, minor).unwrap();
+        for (n, d) in [
+            (Vec3::new(0.0, 1.0, 0.0), 2.1),
+            (Vec3::new(1.0, 0.0, 0.0), -1.9),
+            (Vec3::new(0.0, 0.6, 0.8), 3.5),
+        ] {
+            let curves = intersect_plane_torus(&torus, n, d).unwrap();
+            assert!(!curves.is_empty(), "plane n={n:?} d={d} found no curves");
+            for c in &curves {
+                for k in 0..=4000 {
+                    let p = ParametricCurve::evaluate(&c.curve, f64::from(k) / 4000.0);
+                    let off = ((p.x().hypot(p.y()) - major).hypot(p.z()) - minor).abs();
+                    assert!(off <= 1e-8, "{off} off the torus at {p:?} (n={n:?} d={d})");
+                    let off_plane = (n.dot(Vec3::new(p.x(), p.y(), p.z())) - d).abs();
+                    assert!(off_plane <= 1e-12, "{off_plane} off the plane at {p:?}");
+                }
+            }
+        }
+    }
+
+    /// Points near a plane's section of a torus move onto it, on the plane
+    /// and the tube to rounding.
+    #[test]
+    fn plane_torus_section_points_lie_on_both_surfaces() {
+        let torus = ToroidalSurface::new(Point3::new(1.0, -2.0, 0.5), 4.0, 1.5).unwrap();
+        let (n, d) = (Vec3::new(0.0, 2.0, 0.0), 2.0 * (2.1 - 2.0));
+        for ipts in plane_torus_loops(&torus, n, d, 128) {
+            for ip in ipts.iter().step_by(5) {
+                let near = ip.point + Vec3::new(1e-4, -2e-4, 3e-4);
+                let on = plane_torus_section_point(&torus, n, d, near).unwrap();
+                let w = on - torus.center();
+                let off = ((w.x().hypot(w.y()) - 4.0).hypot(w.z()) - 1.5).abs();
+                assert!(off <= 1e-14, "{off} off the torus");
+                assert!(
+                    (on.y() - 0.1).abs() <= 1e-14,
+                    "{} off the plane",
+                    on.y() - 0.1
+                );
+                assert!((on - near).length() < 1e-3);
             }
         }
     }

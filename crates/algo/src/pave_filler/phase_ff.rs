@@ -3336,16 +3336,44 @@ fn trim_torus_oval_to_box_face(
     // (walking the closed oval the correct way) and fit a FRESH NURBS whose
     // endpoints are the EXACT box-edge crossings — so the adjacent box wall
     // shares those vertices. Re-sampling avoids out-of-domain clamped-NURBS
-    // evaluation on a wrapping arc.
+    // evaluation on a wrapping arc. The oval is itself a fit, so each sample
+    // moves onto the true section, or the new fit would carry the oval's
+    // error on. The arc is read at the oval's knots as well as at even steps:
+    // the knots crowd where the oval's fit needed points.
+    let knot_fracs: Vec<f64> = match &raw.curve {
+        EdgeCurve::NurbsCurve(nurbs) => {
+            let (t0, t1) = raw.t_range;
+            nurbs
+                .knots()
+                .iter()
+                .map(|&k| (k - t0) / (t1 - t0))
+                .filter(|f| *f > 0.0 && *f < 1.0)
+                .collect()
+        }
+        EdgeCurve::Line | EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => Vec::new(),
+    };
     let sample_arc = |f0: f64, f1: f64| -> Vec<Point3> {
         // Walk f0 -> f1 forward on the closed oval (wrapping past 1.0).
         let span = if f1 >= f0 { f1 - f0 } else { f1 + 1.0 - f0 };
         let steps = 48usize;
-        (0..=steps)
-            .map(|i| {
-                #[allow(clippy::cast_precision_loss)]
-                let f = (f0 + span * (i as f64 / steps as f64)).rem_euclid(1.0);
-                oval_at(f)
+        #[allow(clippy::cast_precision_loss)]
+        let mut along: Vec<f64> = (0..=steps)
+            .map(|i| span * (i as f64 / steps as f64))
+            .collect();
+        along.extend(
+            knot_fracs
+                .iter()
+                .map(|&f| (f - f0).rem_euclid(1.0))
+                .filter(|&a| a > 0.0 && a < span),
+        );
+        along.sort_by(f64::total_cmp);
+        along.dedup_by(|a, b| *a - *b <= 1e-9 * span);
+        along
+            .into_iter()
+            .map(|a| {
+                let p = oval_at((f0 + a).rem_euclid(1.0));
+                analytic_intersection::plane_torus_section_point(torus, plane_n, plane_d, p)
+                    .unwrap_or(p)
             })
             .collect()
     };
@@ -3387,7 +3415,8 @@ fn trim_torus_oval_to_box_face(
     // toroidal band and the box-wall sub-face — see the same midpoint vertex and
     // stay watertight. Geometry is unchanged (the two halves retrace the arc).
     let fit = |seg: &[Point3]| -> Option<RawCurve> {
-        let curve = brepkit_math::nurbs::fitting::interpolate(seg, 3.min(seg.len() - 1)).ok()?;
+        let curve =
+            analytic_intersection::fit_plane_torus_section(torus, plane_n, plane_d, seg).ok()?;
         let dom = curve.domain();
         let bbox = Aabb3::try_from_points(seg.iter().copied())?;
         Some(RawCurve {
@@ -7078,8 +7107,10 @@ fn plane_analytic_intersection(
                     let pts = pts_dedup;
                     crate::perf::bump_section_fit_points(pts.len() as u64);
                     // A cone's parabola or hyperbola between two of its samples
-                    // is exactly a rational quadratic; other runs take a cubic
-                    // through the samples, which only meets the curve at them.
+                    // is exactly a rational quadratic; a torus's section takes
+                    // a cubic through as many of its points as keep it on the
+                    // section; other runs take a cubic through the samples,
+                    // which only meets the curve at them.
                     let exact = match analytic {
                         analytic_intersection::AnalyticSurface::Cone(cone) => {
                             analytic_intersection::plane_cone_conic_arc(
@@ -7090,6 +7121,12 @@ fn plane_analytic_intersection(
                                 pts[pts.len() - 1],
                             )?
                         }
+                        analytic_intersection::AnalyticSurface::Torus(torus) => Some(
+                            analytic_intersection::fit_plane_torus_section(torus, normal, d, &pts)
+                                .map_err(|e| {
+                                    AlgoError::IntersectionFailed(format!("NURBS fit failed: {e}"))
+                                })?,
+                        ),
                         _ => None,
                     };
                     let nurbs = if let Some(arc) = exact {
