@@ -8366,6 +8366,58 @@ fn a_piece_that_meets_its_rings_hole_is_read_off_the_ring() {
     }
 }
 
+/// A ball touching a ring's outside, and a ball's cap resting on a block,
+/// are separate pieces whichever order they come in. The ring's wire is
+/// four seam edges of no length at one vertex, the point the ball touches;
+/// the cap's wire is the one circle it rests on. Each face's points were
+/// read over the box of its wire's points in `(u, v)`, which shrank to the
+/// contact, so every point read lay on the other piece and the check
+/// refused the pair. A face's whole period, or a ball's whole span of
+/// latitude, is read where the wire's box spans next to none of it.
+#[test]
+fn a_ball_on_a_ring_and_a_cap_on_a_block_are_separate_pieces() {
+    use brepkit_math::mat::Mat4;
+    use brepkit_topology::explorer::solid_faces;
+    let turn = Mat4::rotation_z(0.7) * Mat4::rotation_x(0.4) * Mat4::rotation_y(1.1);
+    for (name, pose) in [
+        ("upright", Mat4::identity()),
+        ("turned", turn),
+        ("mirrored", Mat4::scale(1.0, -1.0, 1.0)),
+    ] {
+        let mut topo = Topology::new();
+        let ring = crate::primitives::make_torus(&mut topo, 10.0, 2.0, 48).unwrap();
+        let ball = crate::primitives::make_sphere(&mut topo, 1.0, 32).unwrap();
+        crate::transform::transform_solid(&mut topo, ball, &Mat4::translation(13.0, 0.0, 0.0))
+            .unwrap();
+        let dome = crate::primitives::make_sphere(&mut topo, 2.0, 32).unwrap();
+        let top = crate::primitives::make_box(&mut topo, 6.0, 6.0, 2.0).unwrap();
+        crate::transform::transform_solid(&mut topo, top, &Mat4::translation(-3.0, -3.0, 1.0))
+            .unwrap();
+        let cap = boolean(&mut topo, BooleanOp::Intersect, dome, top).unwrap();
+        let block = crate::primitives::make_box(&mut topo, 10.0, 10.0, 4.0).unwrap();
+        crate::transform::transform_solid(&mut topo, block, &Mat4::translation(-5.0, -5.0, -3.0))
+            .unwrap();
+        for s in [ring, ball, cap, block] {
+            crate::transform::transform_solid(&mut topo, s, &pose).unwrap();
+        }
+        let faces = |s| solid_faces(&topo, s).unwrap();
+        for (what, a, b) in [
+            ("ball on the ring", faces(ring), faces(ball)),
+            ("cap on the block", faces(block), faces(cap)),
+        ] {
+            for (order, comps) in [
+                ("first", vec![a.clone(), b.clone()]),
+                ("second", vec![b, a]),
+            ] {
+                assert!(
+                    super::components_are_disjoint_pieces(&topo, &comps),
+                    "{name}: {what}, listed {order}, is a separate piece"
+                );
+            }
+        }
+    }
+}
+
 /// Multi-region Euler acceptance must tolerate genus per piece.
 ///
 /// `euler_balanced` used to compare against a fixed bound of 2, i.e. it assumed

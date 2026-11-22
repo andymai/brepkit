@@ -4323,6 +4323,7 @@ fn piece_encloses(
 /// booleans. Empty for a face with no wire to read; `None` when a topology
 /// lookup fails.
 fn face_grid_points(topo: &Topology, fid: FaceId, n: usize) -> Option<Vec<Point3>> {
+    use std::f64::consts::{FRAC_PI_2, PI, TAU};
     const PER_EDGE: usize = 8;
     let face = topo.face(fid).ok()?;
     let surface = face.surface();
@@ -4371,7 +4372,25 @@ fn face_grid_points(topo: &Topology, fid: FaceId, n: usize) -> Option<Vec<Point3
             lo = (lo.0.min(u), lo.1.min(v));
             hi = (hi.0.max(u), hi.1.max(v));
         }
-        ((lo.0, hi.0), (lo.1, hi.1))
+        // A wire can span next to none of a direction the face spans: seam
+        // edges of no length at one vertex (a whole ring), or one circle of
+        // latitude round a ball's cap. Such a direction takes the surface's
+        // whole span, its period or a ball's latitudes, and `face_contains`
+        // keeps the points the face holds.
+        let whole = |(a, b): (f64, f64), (from, span): (f64, f64)| {
+            if b - a < span * 1e-3 {
+                (from, from + span)
+            } else {
+                (a, b)
+            }
+        };
+        let (u, v) = ((lo.0, hi.0), (lo.1, hi.1));
+        match surface {
+            FaceSurface::Cylinder(_) | FaceSurface::Cone(_) => (whole(u, (u.0, TAU)), v),
+            FaceSurface::Sphere(_) => (whole(u, (u.0, TAU)), whole(v, (-FRAC_PI_2, PI))),
+            FaceSurface::Torus(_) => (whole(u, (u.0, TAU)), whole(v, (v.0, TAU))),
+            FaceSurface::Plane { .. } | FaceSurface::Nurbs(_) => (u, v),
+        }
     };
     let mut held = Vec::new();
     for i in 1..=n {
