@@ -100,10 +100,9 @@ fn rims_meeting_from_two_start_vertices_leave_no_ring() {
     assert_eq!(solid_faces(&topo, result.solid).unwrap().len(), 5);
     let report = validate_solid(&topo, result.solid).unwrap();
     assert!(report.is_valid(), "{:?}", report.issues);
-    // Closed as a coarse mesh gives it. (Finer meshes leave one triangle
-    // loose by the inner round's seam, which now ends at the outer
-    // contact's vertex, 3e-5 across the round from its own rim.)
-    for deflection in [0.5, 0.2] {
+    // Closed coarse and fine: the inner round's seam ends at the outer
+    // contact's vertex, 3e-5 across the round from its own rim.
+    for deflection in [0.5, 0.2, 0.05, 0.01] {
         let mesh = tessellate_solid(&topo, result.solid, deflection).unwrap();
         assert!(is_watertight(&mesh), "mesh open at {deflection}");
     }

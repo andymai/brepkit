@@ -402,32 +402,6 @@ fn section_basis(n1: Vec3, n2: Vec3, spine_tangent: Vec3) -> (Vec3, Vec3) {
     (bisector, cross_dir)
 }
 
-/// The in-plane direction from the spine INTO `face`'s material: the left
-/// side of the face's own traversal of the spine edge (`effective normal x
-/// traversal tangent` under the CCW-outer-wire convention). Returns `None`
-/// when the spine's first edge is not in the face's wires.
-fn material_contact_direction(
-    topo: &Topology,
-    face: FaceId,
-    spine: &Spine,
-    normal: Vec3,
-    tangent: Vec3,
-) -> Option<Vec3> {
-    let spine_edge = *spine.edges().first()?;
-    let f = topo.face(face).ok()?;
-    let n_eff = if f.is_reversed() { -normal } else { normal };
-    for wid in std::iter::once(f.outer_wire()).chain(f.inner_wires().iter().copied()) {
-        let w = topo.wire(wid).ok()?;
-        for oe in w.edges() {
-            if oe.edge() == spine_edge {
-                let t = if oe.is_forward() { tangent } else { -tangent };
-                return n_eff.cross(t).normalize().ok();
-            }
-        }
-    }
-    None
-}
-
 /// Compute the direction from edge toward contact point on a plane.
 ///
 /// This is the component of the bisector projected onto the plane surface,
@@ -1201,7 +1175,10 @@ fn plane_cylinder_ruling_fillet(
     face_plane: FaceId,
     face_cyl: FaceId,
 ) -> Result<Option<StripeResult>, BlendError> {
-    const PARALLEL_TOL: f64 = 1e-7;
+    // A plane off parallel to the axis meets the wall in an ellipse, along
+    // which no cylinder band rolls: over a long wall a band laid along its
+    // chord stands off the wall. The walker takes it.
+    const PARALLEL_TOL: f64 = ANALYTIC_TOL_ANG;
     let axis = cyl.axis();
     if spine.is_closed() || spine.edges().len() != 1 || n_p_inward.dot(axis).abs() > PARALLEL_TOL {
         return Ok(None);
@@ -1223,13 +1200,10 @@ fn plane_cylinder_ruling_fillet(
     };
     // Where the plane face lies off the edge, and the wall's material side
     // there: a convex edge's plane face reaches into the wall's material.
-    let plane_raw_normal = if topo.face(face_plane)?.is_reversed() {
-        n_p_inward
-    } else {
-        -n_p_inward
-    };
-    let Some(into_plane) =
-        material_contact_direction(topo, face_plane, spine, plane_raw_normal, tangent)
+    // A face's wire winds about its surface's normal, reversed or not, so
+    // the face lies on the wire's left about that normal.
+    let edge = spine.edges()[0];
+    let Some(into_plane) = crate::builder_utils::into_face_from_edge(topo, face_plane, edge)?
     else {
         return Ok(None);
     };
@@ -1278,8 +1252,7 @@ fn plane_cylinder_ruling_fillet(
     if (plane_start - p_start).dot(into_plane) <= 0.0 {
         return Ok(None);
     }
-    let Some(into_wall) = material_contact_direction(topo, face_cyl, spine, outward, tangent)
-    else {
+    let Some(into_wall) = crate::builder_utils::into_face_from_edge(topo, face_cyl, edge)? else {
         return Ok(None);
     };
     if (wall_start - p_start).dot(into_wall) <= 0.0 {
