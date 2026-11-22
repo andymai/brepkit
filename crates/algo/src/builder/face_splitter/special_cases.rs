@@ -5382,11 +5382,13 @@ fn sample_edges_3d(edges: &[OrientedPCurveEdge]) -> Vec<Point3> {
 }
 
 /// A point of a curved `surface` inside the loop through `ring` (its samples
-/// in traversal order) when the loop's `centroid` lies outside it, as it does
-/// in the notch of an L- or V-shaped loop. The point comes from the loop's
-/// own `(u, v)` polygon. `None` when the centroid already lies inside, or
-/// when the loop winds a periodic direction of the surface and so bounds no
-/// polygon in `(u, v)`.
+/// in traversal order). It is the surface point under the loop's
+/// `centroid` when that lies inside the loop, and otherwise (in the notch of
+/// an L- or V-shaped loop) a point of the loop's own `(u, v)` polygon. The
+/// centroid itself lies off a curved surface, as far as a wide window's
+/// sagitta, where it can fall outside a thin tool that holds the whole
+/// loop. `None` when the loop winds a periodic direction of the surface and
+/// so bounds no polygon in `(u, v)`.
 fn curved_loop_interior(
     surface: &FaceSurface,
     ring: &[Point3],
@@ -5432,10 +5434,13 @@ fn curved_loop_interior(
         unwrap(cu, mid(Point2::x), u_period),
         unwrap(cv, mid(Point2::y), v_period),
     );
-    if point_in_polygon_2d(c, &uv) && distance_to_polygon_boundary(c, &uv) > boundary_eps(&uv) {
-        return None;
-    }
-    let inner = sample_interior_point(&uv);
+    let inner = if point_in_polygon_2d(c, &uv)
+        && distance_to_polygon_boundary(c, &uv) > boundary_eps(&uv)
+    {
+        c
+    } else {
+        sample_interior_point(&uv)
+    };
     if !point_in_polygon_2d(inner, &uv) {
         return None;
     }
