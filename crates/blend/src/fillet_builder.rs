@@ -8498,7 +8498,15 @@ fn compute_stripe_for_spine(
             face1,
             face2,
         )? {
-            check_stripe_residuals(topo, &result.stripe)?;
+            // An exact band that misses its faces' tolerance is walked
+            // instead, as a pair no fast path takes is.
+            let fits = match check_stripe_residuals(topo, &result.stripe) {
+                Ok(()) => true,
+                Err(error) => {
+                    log::debug!("fillet: the exact band misses its faces ({error}); walking it");
+                    false
+                }
+            };
             // A closed round whose contact runs off its face (a tube's rim
             // rounded wider than the wall is thick) is not this exact band:
             // its trim built a valid solid with material added, not taken
@@ -8528,7 +8536,7 @@ fn compute_stripe_for_spine(
                 )?
                 .is_empty())
             };
-            if on_faces || (!spine.is_closed() && !open_band()?) {
+            if fits && (on_faces || (!spine.is_closed() && !open_band()?)) {
                 return Ok(result);
             }
         }
