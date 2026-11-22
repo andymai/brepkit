@@ -124,10 +124,18 @@ impl<'a> FilletBuilder<'a> {
             solid,
             edge_sets,
         } = self;
-        if let Some(stages) = concave_first::stages(topo, solid, &edge_sets)?
-            && let Some(result) = concave_first::build(topo, solid, stages)?
-        {
-            return Ok(result);
+        if let Some(stages) = concave_first::stages(topo, solid, &edge_sets)? {
+            // A staged attempt that falls back leaves nothing in the arena.
+            let staged = topo.transaction(|topo| {
+                concave_first::build(topo, solid, stages)
+                    .map_err(Some)?
+                    .ok_or(None)
+            });
+            match staged {
+                Ok(result) => return Ok(result),
+                Err(Some(error)) => return Err(error),
+                Err(None) => {}
+            }
         }
         let snapshot = SolidSnapshot::capture(topo, solid)?;
         let result = build_in_place(topo, solid, edge_sets);
