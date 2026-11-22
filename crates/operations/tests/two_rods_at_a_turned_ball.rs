@@ -52,10 +52,14 @@ fn turned() -> Mat4 {
     Mat4::rotation_z(0.7) * Mat4::rotation_x(0.4) * Mat4::rotation_y(1.1)
 }
 
-// With the rim linking in this PR the first fuse of this pose falls back:
-// its face splitter returns no pieces for two faces. Still to fix.
+// The second fuse falls back. The ball's equator lies within 3.2e-7 of the
+// second rod's wall, and each ball face meets the rod's end circle in a
+// sliver 0.0008 wide. The face splitter keeps each ball face whole (its
+// sliver rule), so the rod wall's sliver, kept, covers the ball's sliver
+// twice; and the equator's pieces below the rod's end circle bound pieces of
+// the wall outside its own rim.
 #[test]
-#[ignore = "falls back after this PR's rim linking; still to fix"]
+#[ignore = "second fuse falls back: the ball faces' slivers along the second rod's wall are not split off"]
 fn turned_mirrored_two_rods_stay_exact() {
     let pose = Mat4::scale(1.0, -1.0, 1.0) * turned();
     let mut topo = Topology::new();
