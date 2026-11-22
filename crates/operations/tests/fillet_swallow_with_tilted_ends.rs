@@ -22,12 +22,14 @@
 //! faces lean the same way, so the piece runs `L` along the strip.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+use brepkit_math::mat::Mat4;
 use brepkit_math::nurbs::curve::NurbsCurve;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_operations::blend_ops::fillet_v2;
 use brepkit_operations::extrude::extrude;
 use brepkit_operations::measure::solid_volume;
 use brepkit_operations::tessellate::{is_watertight, tessellate_solid};
+use brepkit_operations::transform::transform_solid;
 use brepkit_operations::validate::validate_solid;
 use brepkit_topology::Topology;
 use brepkit_topology::edge::{Edge, EdgeCurve, EdgeId};
@@ -126,7 +128,7 @@ fn piece_area(r: f64) -> f64 {
     W * rise - sum * step / 3.0
 }
 
-fn round_and_check(r: f64, mesh_too: bool) {
+fn round_and_check(r: f64) {
     let mut topo = Topology::new();
     let solid = strip(&mut topo);
     let edge = wall_top(&topo, solid);
@@ -149,42 +151,42 @@ fn round_and_check(r: f64, mesh_too: bool) {
         (lost - want).abs() <= 1e-4 * want,
         "r = {r}: lost {lost}, the round's sweep {want}"
     );
-    if mesh_too {
-        let mesh = tessellate_solid(&topo, result.solid, 0.01).unwrap();
-        assert!(is_watertight(&mesh), "r = {r}: mesh not watertight");
-    }
+    let mesh = tessellate_solid(&topo, result.solid, 0.01).unwrap();
+    assert!(is_watertight(&mesh), "r = {r}: mesh not watertight");
 }
 
 #[test]
 fn a_round_swallows_a_narrow_face_between_tilted_end_faces() {
-    for r in [1.25, 1.5, 2.0] {
-        round_and_check(r, true);
-    }
-    // Below 1.25 the solid is right, but its mesh is not: see the test below.
-    for r in [0.8, 1.0] {
-        round_and_check(r, false);
+    for r in [0.8, 1.0, 1.25, 1.5, 2.0] {
+        round_and_check(r);
     }
 }
 
-/// The mesh of the round's solid closes for each radius and deflection.
-/// The band's mesh crosses its notched end on the chord from its contact
-/// on the wall to the far wall's corner, and the end face's mesh covers
-/// that chord as well as the notch's arc: 2 edges with 4 triangles at
-/// r = 0.8, 1 at r = 1.0 to 1.2, and 1 at r = 1.25 with deflection 0.002.
+/// The mesh of the round's solid closes for each radius, deflection and
+/// pose. The end face's mesh covers the chords between the notch arc's
+/// samples. The band's mesh must not cover them too: its triangles at the
+/// notch take points on its surface.
 #[test]
-#[ignore = "the end face's and the band's meshes both cover the notch's chord"]
 fn the_round_s_mesh_closes_over_its_notched_ends() {
-    for r in [0.8, 1.0, 1.25] {
-        let mut topo = Topology::new();
-        let solid = strip(&mut topo);
-        let edge = wall_top(&topo, solid);
-        let result = fillet_v2(&mut topo, solid, &[edge], r).unwrap();
-        for deflection in [0.01, 0.002] {
-            let mesh = tessellate_solid(&topo, result.solid, deflection).unwrap();
-            assert!(
-                is_watertight(&mesh),
-                "r = {r}: mesh not watertight at {deflection}"
-            );
+    let poses = [
+        ("upright", Mat4::identity()),
+        ("turned", Mat4::rotation_z(1.0) * Mat4::rotation_y(0.3)),
+        ("mirrored", Mat4::scale(-1.0, 1.0, 1.0)),
+    ];
+    for r in [0.8, 1.0, 1.1, 1.2, 1.25] {
+        for (name, pose) in &poses {
+            let mut topo = Topology::new();
+            let solid = strip(&mut topo);
+            let edge = wall_top(&topo, solid);
+            let result = fillet_v2(&mut topo, solid, &[edge], r).unwrap();
+            transform_solid(&mut topo, result.solid, pose).unwrap();
+            for deflection in [0.01, 0.002] {
+                let mesh = tessellate_solid(&topo, result.solid, deflection).unwrap();
+                assert!(
+                    is_watertight(&mesh),
+                    "r = {r}, {name}: mesh not watertight at {deflection}"
+                );
+            }
         }
     }
 }
