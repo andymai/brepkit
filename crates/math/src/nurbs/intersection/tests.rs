@@ -984,6 +984,53 @@ fn curve_surface_tall_arch_through_flat_plane() {
     }
 }
 
+/// A cubic in `u` whose first and last control points coincide, swept one
+/// unit along `y`: its section is a closed teardrop in `x`, `z`. A line along
+/// `x` at `y = 0.5`, `z = 0` crosses the teardrop twice.
+#[test]
+fn curve_surface_line_through_a_closed_cubic_span() {
+    use crate::nurbs::curve::NurbsCurve;
+
+    let row = [(0.0, -3.0), (1.0, 9.0), (-1.0, 9.0), (0.0, -3.0)];
+    let surf = NurbsSurface::new(
+        3,
+        1,
+        vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+        vec![0.0, 0.0, 1.0, 1.0],
+        row.iter()
+            .map(|&(x, z)| vec![Point3::new(x, 0.0, z), Point3::new(x, 1.0, z)])
+            .collect(),
+        vec![vec![1.0, 1.0]; 4],
+    )
+    .unwrap();
+    let curve = NurbsCurve::new(
+        1,
+        vec![0.0, 0.0, 1.0, 1.0],
+        vec![Point3::new(-4.0, 0.5, 0.0), Point3::new(4.0, 0.5, 0.0)],
+        vec![1.0, 1.0],
+    )
+    .unwrap();
+
+    let hits = intersect_curve_surface(&curve, &surf, 1e-7).unwrap();
+    assert_eq!(hits.len(), 2, "hits {hits:?}");
+    for hit in &hits {
+        let on = surf.evaluate(hit.uv.0, hit.uv.1);
+        assert!(
+            (on - hit.point).length() < 1e-6,
+            "hit {hit:?} off the patch"
+        );
+        assert!(
+            hit.point.z().abs() < 1e-6,
+            "hit {:?} off the line",
+            hit.point
+        );
+    }
+    assert!(
+        (hits[0].point.x() + hits[1].point.x()).abs() < 1e-6,
+        "the crossings of a symmetric teardrop lie either side of x = 0: {hits:?}"
+    );
+}
+
 /// A degree-2 curve (parabola) intersecting a flat plane -- should find 2 points.
 #[test]
 fn curve_surface_parabola_through_flat_plane() {
