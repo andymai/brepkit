@@ -5320,12 +5320,20 @@ fn pinched_hole_lobes(
         if j - i < 3 || n - (j - i) < 3 {
             continue;
         }
-        let lobe = &points[i..j];
-        let area = twice_area(lobe);
-        if area * whole < 0.0 && area.abs() > 1e-12 * whole.abs() {
-            let start = lobe_pts.len();
-            lobe_pts.extend_from_slice(lobe);
-            ranges.push((start, lobe_pts.len()));
+        // The vertex parts the loop in two: the run between its two visits,
+        // and the run on past the loop's start back to it. Either can be the
+        // lobe, as the loop may start inside it.
+        let inside: Vec<brepkit_math::vec::Point2> = points[i..j].to_vec();
+        let around: Vec<brepkit_math::vec::Point2> =
+            points[j..].iter().chain(&points[..i]).copied().collect();
+        for lobe in [inside, around] {
+            let area = twice_area(&lobe);
+            if area * whole < 0.0 && area.abs() > 1e-12 * whole.abs() {
+                let start = lobe_pts.len();
+                lobe_pts.extend_from_slice(&lobe);
+                ranges.push((start, lobe_pts.len()));
+                break;
+            }
         }
     }
     (lobe_pts, ranges)
@@ -6747,6 +6755,45 @@ mod tests {
                 let f = ((p - a).dot(b - a) / chord.powi(2)).clamp(0.0, 1.0);
                 let off = (p - (a + (b - a) * f)).length();
                 assert!(off <= deflection, "span {w:?} stands {off} off its chord");
+            }
+        }
+    }
+
+    /// A square whose loop touches itself at a vertex of its bottom side, to
+    /// run a triangular hole round from it. Wherever the loop starts, the
+    /// hole is the one lobe that runs the other way round.
+    #[test]
+    fn a_pinched_hole_is_found_wherever_the_loop_starts() {
+        use brepkit_math::vec::Point2;
+        let p = |x: f64, y: f64| Point2::new(x, y);
+        let points = [
+            p(0.0, 0.0),
+            p(2.0, 0.0),
+            p(1.5, 1.0),
+            p(2.5, 1.0),
+            p(2.0, 0.0),
+            p(4.0, 0.0),
+            p(4.0, 4.0),
+            p(0.0, 4.0),
+        ];
+        let ids = [0, 1, 2, 3, 1, 4, 5, 6];
+        for start in 0..points.len() {
+            let turned_points: Vec<Point2> = (0..points.len())
+                .map(|k| points[(start + k) % points.len()])
+                .collect();
+            let turned_ids: Vec<usize> = (0..ids.len())
+                .map(|k| ids[(start + k) % ids.len()])
+                .collect();
+            let (lobe_pts, ranges) = pinched_hole_lobes(&turned_ids, &turned_points);
+            assert_eq!(ranges.len(), 1, "start {start}: lobes {ranges:?}");
+            let (a, b) = ranges[0];
+            assert_eq!(b - a, 3, "start {start}: the hole has 3 corners");
+            let corners = &lobe_pts[a..b];
+            for c in [p(2.0, 0.0), p(1.5, 1.0), p(2.5, 1.0)] {
+                assert!(
+                    corners.iter().any(|q| (*q - c).length() < 1e-12),
+                    "start {start}: corner {c:?} missing from {corners:?}"
+                );
             }
         }
     }
