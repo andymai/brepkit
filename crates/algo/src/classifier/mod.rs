@@ -91,7 +91,11 @@ pub struct FaceLoops2d {
     frame: Option<crate::builder::plane_frame::PlaneFrame>,
     surface: FaceSurface,
     periodic: bool,
-    u_mean: f64,
+    /// The middle of the outer loop's `u` span, which `u` is unwrapped
+    /// about. A face that runs a whole turn, seam to seam, then holds every
+    /// `u` once; about a mean of its samples, a point beside the seam wraps
+    /// out of the face.
+    u_mid: f64,
     /// A torus is periodic in `v` (round its tube) too, so a loop across its
     /// outer equator is unwrapped in `v` as well, about `v_mid`, the middle of
     /// the outer loop's `v` span (a mean of its samples drifts off it when
@@ -287,28 +291,26 @@ impl FaceLoops2d {
             Ok(out)
         };
         let outer = sample_loop(face.outer_wire(), None, None)?;
-        #[allow(clippy::cast_precision_loss)]
-        let u_mean = if outer.is_empty() {
-            0.0
-        } else {
-            outer.iter().map(|q| q.x()).sum::<f64>() / outer.len() as f64
+        let span_mid = |coord: fn(Point2) -> f64| {
+            outer
+                .iter()
+                .map(|&q| coord(q))
+                .fold(None, |span: Option<(f64, f64)>, c| {
+                    Some(span.map_or((c, c), |(lo, hi)| (lo.min(c), hi.max(c))))
+                })
+                .map_or(0.0, |(lo, hi)| f64::midpoint(lo, hi))
         };
-        let v_mid = outer
-            .iter()
-            .map(|q| q.y())
-            .fold(None, |span: Option<(f64, f64)>, v| {
-                Some(span.map_or((v, v), |(lo, hi)| (lo.min(v), hi.max(v))))
-            })
-            .map_or(0.0, |(lo, hi)| f64::midpoint(lo, hi));
+        let u_mid = span_mid(Point2::x);
+        let v_mid = span_mid(Point2::y);
         let mut holes = Vec::new();
         for &wid in face.inner_wires() {
-            holes.push(sample_loop(wid, Some(u_mean), Some(v_mid))?);
+            holes.push(sample_loop(wid, Some(u_mid), Some(v_mid))?);
         }
         Ok(Self {
             frame,
             surface,
             periodic,
-            u_mean,
+            u_mid,
             v_periodic,
             v_mid,
             outer,
@@ -330,7 +332,7 @@ impl FaceLoops2d {
             Point2::new(u, v)
         };
         let u = if self.periodic {
-            self.u_mean + (q.x() - self.u_mean + PI).rem_euclid(TAU) - PI
+            self.u_mid + (q.x() - self.u_mid + PI).rem_euclid(TAU) - PI
         } else {
             q.x()
         };
