@@ -8388,6 +8388,61 @@ mod tests {
         assert!(!sections_only_as_slits(&square, &[one_way], 1e-7));
     }
 
+    /// A closed section in a piece's wires once, as a hole's rim, bounds
+    /// the piece: its two ends are one point, and it does not match itself
+    /// as its own way back. Run once each way it is a slit; run twice the
+    /// same way it is not.
+    #[test]
+    fn a_closed_section_run_once_is_no_slit() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::curves2d::{Circle2D, Curve2D, Line2D};
+        use brepkit_math::vec::{Point2, Vec2};
+        let line = |a: (f64, f64), b: (f64, f64)| {
+            let (pa, pb) = (Point2::new(a.0, a.1), Point2::new(b.0, b.1));
+            super::super::split_types::OrientedPCurveEdge {
+                curve_3d: EdgeCurve::Line,
+                pcurve: Curve2D::Line(Line2D::new(pa, Vec2::new(b.0 - a.0, b.1 - a.1)).unwrap()),
+                start_uv: pa,
+                end_uv: pb,
+                start_3d: Point3::new(a.0, a.1, 0.0),
+                end_3d: Point3::new(b.0, b.1, 0.0),
+                forward: true,
+                source_edge_idx: None,
+                pave_block_id: None,
+            }
+        };
+        let square = vec![
+            line((0.0, 0.0), (4.0, 0.0)),
+            line((4.0, 0.0), (4.0, 4.0)),
+            line((4.0, 4.0), (0.0, 4.0)),
+            line((0.0, 4.0), (0.0, 0.0)),
+        ];
+        let rim = |forward: bool| {
+            let at = Point2::new(3.0, 2.0);
+            super::super::split_types::OrientedPCurveEdge {
+                curve_3d: EdgeCurve::Circle(
+                    Circle3D::new(Point3::new(2.0, 2.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0)
+                        .unwrap(),
+                ),
+                pcurve: Curve2D::Circle(Circle2D::new(Point2::new(2.0, 2.0), 1.0).unwrap()),
+                start_uv: at,
+                end_uv: at,
+                start_3d: Point3::new(3.0, 2.0, 0.0),
+                end_3d: Point3::new(3.0, 2.0, 0.0),
+                forward,
+                source_edge_idx: Some(0),
+                pave_block_id: None,
+            }
+        };
+        assert!(!sections_only_as_slits(&square, &[vec![rim(false)]], 1e-7));
+        let mut both = square.clone();
+        both.extend([rim(true), rim(false)]);
+        assert!(sections_only_as_slits(&both, &[], 1e-7));
+        let mut twice = square;
+        twice.extend([rim(false), rim(false)]);
+        assert!(!sections_only_as_slits(&twice, &[], 1e-7));
+    }
+
     /// On a ring torus of radii 3 and 1 a closed section's end UVs differ by
     /// its turns in `u` and in `v`, each written as a circle and as a
     /// rational spline, each way round: a meridian circle winds the tube
@@ -9234,8 +9289,10 @@ fn polyline_meetings(a: &[Point3], b: &[Point3], band: f64) -> Vec<(Point3, f64,
 }
 
 /// Whether each section edge in the wires runs out and back, as a slit: the
-/// same section, between the same two points, both ways. A piece that holds
-/// its sections only so separates nothing across them.
+/// same section, between the same two points, used a second time the other
+/// way. A piece that holds its sections only so separates nothing across
+/// them. The ends of a closed section are one point, so its way is its
+/// `forward` flag, and once in the wires (a hole's rim) it bounds the piece.
 fn sections_only_as_slits(
     outer: &[super::split_types::OrientedPCurveEdge],
     inner: &[Vec<super::split_types::OrientedPCurveEdge>],
@@ -9246,11 +9303,14 @@ fn sections_only_as_slits(
         .flatten()
         .filter(|e| e.source_edge_idx.is_some())
         .collect();
-    edges.iter().all(|e| {
-        edges.iter().any(|r| {
-            r.source_edge_idx == e.source_edge_idx
+    edges.iter().enumerate().all(|(i, e)| {
+        let closed = (e.start_3d - e.end_3d).length() <= tol;
+        edges.iter().enumerate().any(|(j, r)| {
+            j != i
+                && r.source_edge_idx == e.source_edge_idx
                 && (r.start_3d - e.end_3d).length() <= tol
                 && (r.end_3d - e.start_3d).length() <= tol
+                && (!closed || r.forward != e.forward)
         })
     })
 }
