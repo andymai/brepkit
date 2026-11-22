@@ -631,7 +631,7 @@ impl<'a> FilletBuilder<'a> {
                         crate::builder_utils::face_v_period(&source_surface),
                     ];
                     crate::builder_utils::pcurve_along(
-                        support,
+                        &source_surface,
                         periods,
                         &EdgeCurve::NurbsCurve(contact.clone()),
                         (start, end),

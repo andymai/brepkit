@@ -876,18 +876,21 @@ pub fn face_v_period(surface: &FaceSurface) -> Option<f64> {
     }
 }
 
-/// The pcurve on `support` of `curve` run from `start` to `end`, over the
+/// The pcurve on `surface` of `curve` run from `start` to `end`, over the
 /// curve's own parameters between them: one fraction of each span gives one
 /// point. The image of the curve in the surface's parameters is read along
-/// the curve, across the seams of `periods` (u, v). Where that image is a
+/// the curve, across the seams of `periods` (u, v), each point of it on a
+/// B-spline surface found from the one before. Where that image is a
 /// straight line run at an even rate (a circle round a cylinder's or a
 /// cone's axis), the pcurve is that line. Elsewhere a cubic interpolates the
 /// image at more and more points, until between them it lies within `FIT`
-/// times one more than the curve's size of the image, in pieces that meet at
-/// the curve's corners. `None` when no such cubic comes within it.
+/// times one more than the curve's size of the image, and as far again as
+/// the curve stands off the surface, in pieces that meet at the curve's
+/// corners. `None` when no such cubic comes within it, or when the curve
+/// stands far off the surface.
 #[must_use]
 pub fn pcurve_along(
-    support: &dyn ParametricSurface,
+    surface: &FaceSurface,
     periods: [Option<f64>; 2],
     curve: &EdgeCurve,
     (start, end): (Point3, Point3),
@@ -900,6 +903,13 @@ pub fn pcurve_along(
     const FIT: f64 = 1e-7;
     const FIRST: u32 = 16;
     const LAST: u32 = 4096;
+    // A curve off the surface by `off` (a walked contact between its
+    // sections, or below the edge of its wall's surface) has its image found
+    // to about that: the pcurve follows the image within `fit` more. Farther
+    // off than `SPREAD` times `fit` (1e-4 of the curve's size and one more,
+    // as far as the trimmer lets a contact stand off its face), the curve is
+    // not on the surface.
+    const SPREAD: f64 = 1000.0;
     let (t0, t1) = curve.domain_with_endpoints(start, end);
     // The tolerance scales with the curve's size, not with where it lies.
     let size = brepkit_math::aabb::Aabb3::try_from_points((0..=FIRST).map(|k| {
@@ -908,7 +918,26 @@ pub fn pcurve_along(
     }))
     .map_or(0.0, |aabb| (aabb.max - aabb.min).length());
     let fit = FIT * (1.0 + size);
+    let mut adapter = None;
+    let support = surface_ref_or_adapter(surface, &mut adapter);
     let on = |uv: Point2| support.evaluate(uv.x(), uv.y());
+    // A point of the curve lies on the surface beside the one before it, as
+    // far off it: Newton from there finds its foot where a search of the
+    // whole surface can miss it (a small part's B-spline wall).
+    let project = |point: Point3, before: Option<((f64, f64), f64)>| -> (f64, f64) {
+        if let (FaceSurface::Nurbs(nurbs), Some((seed, off))) = (surface, before)
+            && let Ok(found) = brepkit_math::nurbs::projection::project_point_to_surface_from(
+                nurbs,
+                point,
+                seed,
+                1e-3 * fit,
+            )
+            && found.distance <= 2.0f64.madd(off, fit)
+        {
+            return (found.u, found.v);
+        }
+        support.project_point(point)
+    };
     let mut pieces: Vec<f64> = curve_corners(curve)
         .into_iter()
         .map(|t| (t - t0) / (t1 - t0))
@@ -926,9 +955,17 @@ pub fn pcurve_along(
             fractions.extend((1..=count).map(|k| (piece[1] - piece[0]).madd(step(k), piece[0])));
         }
         let mut image: Vec<Point2> = Vec::with_capacity(fractions.len());
+        let mut before = None;
+        let mut farthest: f64 = 0.0;
         for &f in &fractions {
             let point = curve.evaluate_with_endpoints((t1 - t0).madd(f, t0), start, end);
-            let (mut u, mut v) = support.project_point(point);
+            let (mut u, mut v) = project(point, before);
+            let off = (support.evaluate(u, v) - point).length();
+            if off > SPREAD * fit {
+                return None;
+            }
+            farthest = farthest.max(off);
+            before = Some(((u, v), off));
             if let Some(last) = image.last() {
                 for (value, (period, reference)) in [
                     (&mut u, (periods[0], last.x())),
@@ -941,7 +978,8 @@ pub fn pcurve_along(
             }
             image.push(Point2::new(u, v));
         }
-        let near = |at: Point2, k: usize| (on(at) - on(image[k])).length() <= fit;
+        let within_fit = fit + farthest;
+        let near = |at: Point2, k: usize| (on(at) - on(image[k])).length() <= within_fit;
         let (first, chord) = (image[0], image[image.len() - 1] - image[0]);
         if fractions
             .iter()

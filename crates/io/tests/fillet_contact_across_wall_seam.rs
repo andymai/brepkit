@@ -14,10 +14,12 @@
 use std::path::Path;
 
 use brepkit_io::step::reader::read_step;
+use brepkit_math::mat::Mat4;
 use brepkit_math::vec::Point3;
 use brepkit_operations::blend_ops::fillet_v2;
 use brepkit_operations::measure::solid_volume;
 use brepkit_operations::tessellate::{is_watertight, tessellate_solid};
+use brepkit_operations::transform::transform_solid;
 use brepkit_operations::validate::validate_solid;
 use brepkit_topology::Topology;
 use brepkit_topology::edge::EdgeId;
@@ -80,4 +82,35 @@ fn a_contact_across_the_wall_s_seam_is_cut_there() {
         (volume - expected).abs() < 1e-5 * expected,
         "volume {volume}, expected {expected}"
     );
+}
+
+/// The same part at a hundredth and a ten-thousandth of its size: the
+/// contact's pcurve on the wall is read along the contact, each point from
+/// the one before, so a point the search of the whole wall misses at that
+/// size does not fail the trim.
+#[test]
+fn a_contact_across_a_small_wall_s_seam_is_cut_there() {
+    for scale in [1e-2, 1e-4] {
+        let mut topo = Topology::new();
+        let plate = load(&mut topo);
+        let picks = [
+            Point3::new(-415.159_424_679_209_7, 351.839_643_089_86, -120.0),
+            Point3::new(240.998_040_990_944_65, 69.993_421_862_153_55, -120.0),
+        ]
+        .map(|p| edge_through(&topo, plate, p));
+        transform_solid(&mut topo, plate, &Mat4::scale(scale, scale, scale)).unwrap();
+        let result = fillet_v2(&mut topo, plate, &picks, 50.0 * scale).unwrap();
+        assert!(result.failed.is_empty(), "{scale}: {:?}", result.failed);
+        let report = validate_solid(&topo, result.solid).unwrap();
+        assert!(report.is_valid(), "{scale}: {:?}", report.issues);
+        assert_eq!(solid_faces(&topo, result.solid).unwrap().len(), 8);
+        let mesh = tessellate_solid(&topo, result.solid, 0.5 * scale).unwrap();
+        assert!(is_watertight(&mesh), "{scale}: mesh not watertight");
+        let volume = solid_volume(&topo, result.solid, 0.1 * scale).unwrap() / scale.powi(3);
+        let expected = 93_285_967.06;
+        assert!(
+            (volume - expected).abs() < 1e-5 * expected,
+            "{scale}: volume {volume}, expected {expected}"
+        );
+    }
 }
