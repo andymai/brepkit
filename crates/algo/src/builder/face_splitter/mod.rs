@@ -9529,7 +9529,12 @@ fn split_face_2d_impl(
                 place_seam_slivers(&mut all_edges[n_boundary_edges..], lo, u_period, tol.linear);
             }
             one_turn = Some((lo, u_period));
-        } else if !cylinder && hi - lo > 0.5 * u_period {
+        } else if !cylinder
+            // A torus face over half a turn about the axis or less that holds
+            // the whole tube (a half ring) is read periodic in `u` too.
+            && (hi - lo > 0.5 * u_period
+                || matches!(surface, FaceSurface::Torus(_)) && hi - lo > 1e-6)
+        {
             for e in &mut all_edges[n_boundary_edges..] {
                 let mid = f64::midpoint(e.start_uv.x(), e.end_uv.x());
                 let shift = -((mid - lo) / u_period).floor() * u_period;
@@ -11909,7 +11914,7 @@ pub fn interior_point_3d(
             .zip(wire.iter().cycle().skip(1))
             .all(|(a, b)| (b.start_uv.x() - a.end_uv.x()).abs() < 1e-9);
         sample_wire_loop_uv_periodic(wire, if unbroken { None } else { u_period }, v_period)
-    } else if let Some(pts) = sphere_loop_uv(sub_face) {
+    } else if let Some(pts) = sphere_loop_uv(sub_face).or_else(|| torus_loop_uv(sub_face)) {
         pts
     } else if let (FaceSurface::Plane { .. }, Some(f)) = (&sub_face.surface, frame) {
         // Plane faces with a frame: sample the 3D curves, never the pcurves.
@@ -12227,6 +12232,67 @@ fn attach_sphere_holes(pieces: &mut [SplitSubFace], holes: &[Vec<OrientedPCurveE
         }
     }
     attach_whole_holes(pieces, &unplaced);
+}
+
+/// A torus piece's outer loop in `(u, v)`, sampled on its edges' own curves
+/// with both angles carried on continuously, when it winds neither the axis
+/// nor the tube. The edges' own `(u, v)` can put a stretch of the loop a turn
+/// of the tube away from the rest: a half ring's meridian arc from the tube
+/// angle 3pi/2 up to its outer equator ends at 0, not 2pi, and the polygon
+/// then folds across the piece beside it.
+fn torus_loop_uv(sub_face: &SplitSubFace) -> Option<Vec<Point2>> {
+    use std::f64::consts::{PI, TAU};
+    const CURVE_SAMPLES: u32 = 8;
+    if !matches!(sub_face.surface, FaceSurface::Torus(_)) {
+        return None;
+    }
+    let mut points = Vec::with_capacity(sub_face.outer_wire.len() * CURVE_SAMPLES as usize);
+    for e in &sub_face.outer_wire {
+        points.push(e.start_3d);
+        if matches!(e.curve_3d, EdgeCurve::Line) {
+            continue;
+        }
+        let closed = (e.start_3d - e.end_3d).length() < 1e-10;
+        let fraction = |k: u32| f64::from(k) / f64::from(CURVE_SAMPLES);
+        match &e.curve_3d {
+            EdgeCurve::Circle(c) if closed => {
+                let (a0, turn) = (c.project(e.start_3d), if e.forward { TAU } else { -TAU });
+                points.extend((1..CURVE_SAMPLES).map(|k| c.evaluate(turn.madd(fraction(k), a0))));
+            }
+            _ if closed => return None,
+            curve => {
+                let (s3, e3) = if e.forward {
+                    (e.start_3d, e.end_3d)
+                } else {
+                    (e.end_3d, e.start_3d)
+                };
+                let (t0, t1) = curve.domain_with_endpoints(s3, e3);
+                let mut samples: Vec<Point3> = (1..CURVE_SAMPLES)
+                    .map(|k| curve.evaluate_with_endpoints((t1 - t0).madd(fraction(k), t0), s3, e3))
+                    .collect();
+                // A marched curve's domain can run from either end.
+                let at_t0 = curve.evaluate_with_endpoints(t0, s3, e3);
+                if (at_t0 - e.start_3d).length() > (at_t0 - e.end_3d).length() {
+                    samples.reverse();
+                }
+                points.extend(samples);
+            }
+        }
+    }
+    let nearest = |from: f64, to: f64| from + (to - from + PI).rem_euclid(TAU) - PI;
+    let mut pts: Vec<Point2> = Vec::with_capacity(points.len());
+    for p in points {
+        let (u, v) = sub_face.surface.project_point(p)?;
+        let uv = match pts.last() {
+            Some(last) => Point2::new(nearest(last.x(), u), nearest(last.y(), v)),
+            None => Point2::new(u, v),
+        };
+        pts.push(uv);
+    }
+    let (first, last) = (*pts.first()?, *pts.last()?);
+    let closes = (nearest(last.x(), first.x()) - first.x()).abs() < 1e-9
+        && (nearest(last.y(), first.y()) - first.y()).abs() < 1e-9;
+    (pts.len() >= 3 && closes).then_some(pts)
 }
 
 /// A sphere piece's outer loop in `(u, v)`, sampled on its edges' own curves

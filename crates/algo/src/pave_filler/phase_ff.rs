@@ -1942,9 +1942,15 @@ impl FaceExtent {
             // A torus patch's tube angle wraps: a quarter tube from the bottom
             // to the outer equator reads both ends of the turn, and its
             // smallest and largest samples span the whole tube. The window is
-            // the arc its boundary's samples leave out of the turn.
+            // the arc its boundary's samples leave out of the turn. A face
+            // whose boundary leaves no arc out (a half ring, bounded by two
+            // meridian circles) holds the whole tube: a point on its outer
+            // equator reads a tube angle of 0 or of a whole turn by rounding.
             let torus_window = match surface {
-                FaceSurface::Torus(_) => face_tube_window(topo, face_id, surface),
+                FaceSurface::Torus(_) => Some(
+                    face_tube_window(topo, face_id, surface)
+                        .unwrap_or((0.0, std::f64::consts::TAU)),
+                ),
                 _ => None,
             };
             let periodic_v = torus_window.is_some();
