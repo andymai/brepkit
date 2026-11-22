@@ -191,6 +191,36 @@ mod tests {
         }
     }
 
+    /// A diamond pocket beside the rim's end: one of its edges, from
+    /// (9.8, -12.8) to (11.3, -11.3), spans the contact's end in both
+    /// directions of the contact's frame but passes 0.42 from it.
+    #[test]
+    fn a_hole_beside_the_contacts_end_leaves_the_chamfer_alone() {
+        let (w, depth, d) = (20.0, 5.0, 2.0);
+        let h = w / 2.0;
+        let side = 1.5 * std::f64::consts::SQRT_2;
+        for (name, pose) in poses() {
+            let mut topo = Topology::new();
+            let block = pocketed(&mut topo, w, depth, &Mat4::identity());
+            let diamond = make_box(&mut topo, side, side, depth + 10.0).unwrap();
+            let place = Mat4::translation(11.3, -14.3, -depth)
+                * Mat4::rotation_z(std::f64::consts::FRAC_PI_4);
+            transform_solid(&mut topo, diamond, &place).unwrap();
+            let solid = boolean(&mut topo, BooleanOp::Cut, block, diamond).unwrap();
+            transform_solid(&mut topo, solid, &pose).unwrap();
+            let rim = edge_between(
+                &topo,
+                solid,
+                &pose,
+                Point3::new(-h, -h, 0.0),
+                Point3::new(h, -h, 0.0),
+            );
+            let result =
+                chamfer(&mut topo, solid, &[rim], d).unwrap_or_else(|e| panic!("{name}: {e}"));
+            check(name, &topo, solid, result, 1, w * d * d / 2.0);
+        }
+    }
+
     /// Two opposite rims share no corner: each chamfer ends on the side
     /// walls alone.
     #[test]

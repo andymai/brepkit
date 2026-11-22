@@ -831,16 +831,7 @@ fn trim_to_inside_corners(
     for &wid in &others {
         for oe in topo.wire(wid)?.edges() {
             for &(s, e) in &new_segments {
-                let length = (e - s).length();
-                let along = (e - s) * (1.0 / length.max(f64::MIN_POSITIVE));
-                let across = normal.cross(along);
-                let (lo, hi) = edge_side_range(topo, oe.edge(), s, across)?;
-                let (start, end) = edge_side_range(topo, oe.edge(), s, along)?;
-                if lo <= CONTACT_END_TOL
-                    && hi >= -CONTACT_END_TOL
-                    && start <= length + CONTACT_END_TOL
-                    && end >= -CONTACT_END_TOL
-                {
+                if edge_meets_segment(topo, oe.edge(), s, e, normal, &project)? {
                     return Err(fail());
                 }
             }
@@ -955,6 +946,76 @@ fn edge_side_range(
 
 /// The range of `s0 + a cos t + b sin t` for `t` from `t0` to `t1`: its
 /// values at the ends and at the peak and trough angles inside the span.
+/// Whether a boundary edge of a plane face comes within `CONTACT_END_TOL`
+/// of the segment `s`..`e` in that plane. A line is measured exactly. A
+/// circle or an ellipse is split along its span until each piece's box in
+/// the segment's frame clears the segment, or is too small to tell. Any
+/// other curve is read by the box of its control points, so a near miss
+/// reads as a meeting.
+fn edge_meets_segment(
+    topo: &Topology,
+    edge_id: EdgeId,
+    s: Point3,
+    e: Point3,
+    normal: brepkit_math::vec::Vec3,
+    project: &dyn Fn(Point3) -> (f64, f64),
+) -> Result<bool, BlendError> {
+    let length = (e - s).length();
+    let along = (e - s) * (1.0 / length.max(f64::MIN_POSITIVE));
+    let across = normal.cross(along);
+    let overlaps = |(lo, hi): (f64, f64), (start, end): (f64, f64)| {
+        lo <= CONTACT_END_TOL
+            && hi >= -CONTACT_END_TOL
+            && start <= length + CONTACT_END_TOL
+            && end >= -CONTACT_END_TOL
+    };
+    let edge = topo.edge(edge_id)?;
+    let sp = topo.vertex(edge.start())?.point();
+    let ep = topo.vertex(edge.end())?.point();
+    let conic = match edge.curve() {
+        EdgeCurve::Line => {
+            let gap = flat_segment_distance(project(s), project(e), project(sp), project(ep));
+            return Ok(gap <= CONTACT_END_TOL);
+        }
+        EdgeCurve::Circle(c) => {
+            Some((c.center(), c.u_axis() * c.radius(), c.v_axis() * c.radius()))
+        }
+        EdgeCurve::Ellipse(el) => Some((
+            el.center(),
+            el.u_axis() * el.semi_major(),
+            el.v_axis() * el.semi_minor(),
+        )),
+        EdgeCurve::NurbsCurve(_) => None,
+    };
+    let Some((center, a_axis, b_axis)) = conic else {
+        return Ok(overlaps(
+            edge_side_range(topo, edge_id, s, across)?,
+            edge_side_range(topo, edge_id, s, along)?,
+        ));
+    };
+    let range = |dir: brepkit_math::vec::Vec3, span: (f64, f64)| {
+        sinusoid_range(
+            dir.dot(center - s),
+            (dir.dot(a_axis), dir.dot(b_axis)),
+            span,
+        )
+    };
+    let reach = a_axis.length().max(b_axis.length());
+    let mut pending = vec![edge.curve().domain_with_endpoints(sp, ep)];
+    while let Some((t0, t1)) = pending.pop() {
+        if !overlaps(range(across, (t0, t1)), range(along, (t0, t1))) {
+            continue;
+        }
+        if (t1 - t0).abs() * reach <= CONTACT_END_TOL || pending.len() > 4096 {
+            return Ok(true);
+        }
+        let mid = f64::midpoint(t0, t1);
+        pending.push((t0, mid));
+        pending.push((mid, t1));
+    }
+    Ok(false)
+}
+
 fn sinusoid_range(s0: f64, (a, b): (f64, f64), (t0, t1): (f64, f64)) -> (f64, f64) {
     use std::f64::consts::{PI, TAU};
     let (lo, hi) = if t1 >= t0 { (t0, t1) } else { (t1, t0) };
