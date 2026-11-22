@@ -7309,6 +7309,42 @@ fn place_section_in_turn(e: &mut OrientedPCurveEdge, surface: &FaceSurface, lo: 
         nearest(e.start_uv.x(), at_start),
         nearest(e.end_uv.x(), at_end),
     );
+    move_pcurve_to_ends(e, period);
+}
+
+/// Move a section's NURBS pcurve by the whole turns of `u` that its ends
+/// moved. A pcurve left a turn from its ends reads as stale, and the trace
+/// then reads the section's way out of an end from its chord. A section
+/// with both ends on the seam has its chord along the seam line, and the
+/// trace cannot tell it from the seam there.
+fn move_pcurve_to_ends(e: &mut OrientedPCurveEdge, period: f64) {
+    const NEAR: f64 = 1e-6;
+    let brepkit_math::curves2d::Curve2D::Nurbs(n) = &e.pcurve else {
+        return;
+    };
+    let knots = n.knots();
+    let (Some(&k0), Some(&k1)) = (knots.first(), knots.last()) else {
+        return;
+    };
+    let (a, b) = (n.evaluate(k0), n.evaluate(k1));
+    let turns = |from: Point2, to: Point2| -> Option<f64> {
+        let k = ((to.x() - from.x()) / period).round();
+        ((period.madd(k, from.x()) - to.x()).abs() < NEAR && (from.y() - to.y()).abs() < NEAR)
+            .then_some(k)
+    };
+    let k = match (
+        turns(a, e.start_uv).zip(turns(b, e.end_uv)),
+        turns(b, e.start_uv).zip(turns(a, e.end_uv)),
+    ) {
+        (Some((k, l)), _) | (_, Some((k, l))) if (k - l).abs() < 0.5 => k,
+        _ => return,
+    };
+    if k == 0.0 {
+        return;
+    }
+    if let Some(moved) = edge_splitting::shifted_pcurve(&e.pcurve, k * period, 0.0) {
+        e.pcurve = moved;
+    }
 }
 
 /// Give each end of a sliver section lying on the seam the seam copy of the
