@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795382750917,
+  "lastUpdate": 1795383817512,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -75761,6 +75761,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 19633386,
             "range": "± 81332",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "1d14937ba6685863157a49e1d326c724e0bd30ef",
+          "message": "fix(blend,check,operations): round a pocket wall into a bore and a fused L's rim, and refuse a walking fillet that leaves an invalid solid (#2701)\n\n## Summary\n\nOn main, three walking fillets go wrong:\n\n- Rounding the five top edges of a box with a sloped top and a round\ncorner returns an invalid solid with no failed edge (#2661).\n- Rounding the two edges where a pocket's wall meets a bore fails with\n`ParameterOutOfRange` (#2662).\n- Rounding the top rim of an L block made by a fuse fails with\n`CornerFailure`. Rounding all its edges, flat seams included, returns an\ninvalid solid (#2689).\n\nWith this change, #2662 and #2689 build exact, valid and watertight\nsolids. #2661 is now refused: `fillet_v2` returns the input with every\nedge failed. A new gate refuses any walking fillet whose result is\ninvalid. It costs 5.5 µs on a box's 12 rounds.\n\nFixes #2662, fixes #2689. For #2661, this PR stops the invalid result,\nand the round does not build yet.\n\n## The change\n\n- **The validity gate (#2661).** `fillet_v2` and `fillet_v2_variable`\nnow check the result's new faces. They return the input with every edge\nin `failed` when one of these holds:\n  - a face has a wire that crosses itself;\n  - a hole lies across or outside its face's outline;\n- two plane faces cover the same area. The gate checks only faces that\nhave an edge the input lacks. It runs `check_face_wires_simple`,\n`check_face_wires_apart`, and the new `check_faces_overlap_among` on\npairs that include such a face.\n- **The sloped rim still does not build (#2661).** The rising edges'\nsections lean, so two corners go wrong:\n- At (0, 20, 9) the rising round meets the level round at 87.14 degrees,\nand the upright edge stays sharp. `plan_capped_corner` takes only an\nangle over 90 degrees. So the builder makes a generic patch, and its\noutlines cross.\n- At the tangent joint (20, 18, 8.9), the line's round ends at y =\n18.0999, past the tangent line y = 18. A filler patch covers the gap.\n- **Flat seams (#2689).** The fused L's top is three flat faces. At (4,\n4, 3) the two rounds' tops are two of them, and the corner lies on the\nthird. So `build_junction_fan` finds no boundary. When the direct fillet\nfails on a solid with flat seams, `fillet_v2` now runs again on a copy\nwith same-surface faces merged (`unify_same_domain`).\n- The retry merges only plane faces that a seam splits at an end of a\npicked edge, on one plane within the linear tolerance\n(`heal::unify_face_groups`). It joins no edges, so each pick stays its\nown edge. The retry declines a pick that is not an edge of the solid.\n- **A pocket wall into a bore (#2662).** The two cuts leave the floor at\neach edge's foot as three flat faces. So the round's end gets a small\nthree-sided patch, whose edge runs back along the bore's foot arc.\n`wall_run_up::plan_run_up` read the contact's own start as a crossing,\nand `edge_piece` failed at parameter 1.0. The planner now ignores a\ncrossing at the contact's start, and `fold_spoke_spurs` also folds a\nfold-back along a curved edge.\n- **The gate reads the builder's result.** It runs before\n`detach_walked`, which gives every shell new edges. So it reads only the\nfaces that the round changed.\n- **A spline spur's piece.** `fold_spoke_spurs` now cuts a B-spline\nspoke's piece on the edge's own parameter range, between the split and\nthe far vertex. Before, an edge stored against its curve took the wrong\nhalf.\n- **Speed of `validate_solid`.** The gate first made the #2662 fillet\ntake 308 ms, almost all of it in the same-plane overlap check. Three\nchanges in brepkit-check make the gate cheap:\n- A plane wire that turns one way through exactly one full turn cannot\ncross itself, so the crossing search skips it.\n- Each face lies on one side of a shared edge all along it. So the\noverlap check reads that edge beside the middles of 3 of its stretches,\nnot at 64 stretches with 20 halvings each. The middles never fall on a\ncorner of the edge. Each read records which side each face lies on. When\na read finds neither face, or the reads disagree, the check reads beside\nevery stretch, as before.\n- The overlap check skips an edge whose box misses the other face's box.\n\n## Tests\n\n- `fillet_sloped_top_rim.rs` (#2661): two corners and three radii, each\nupright, turned and mirrored. It checks that the box comes back\nunchanged (7 faces, valid, 3392.29) with all 5 edges failed. On main the\nresult has 14 faces, is invalid, meshes open, and reads 3327.99.\n- `fillet_over_flat_seams.rs` (#2689), 5 tests at r 0.5 and 1, upright,\nturned and mirrored:\n- The rim and the 10 top edges read 189.9044885478146 against the closed\nform 189.90448854778688, which also matches the extruded L. Both are\nvalid and watertight.\n- All 28 edges read 187.27761599202464, against 187.27761599202336 for\nthe extruded L's 18 edges. On main the result is invalid (187.2568).\n  - One rim piece alone stops at the seam.\n- `fillet_pocket_wall_into_bore.rs` (#2662): 20 faces, valid and\nwatertight, in three poses. It reads 317495.55021702684 against the\nclosed form 317495.55021702667. It also runs `FilletBuilder` alone.\n- `fillet_over_a_bore.rs`: three tests pinned invalid results, where a\nhole stays in a face it no longer lies in, or crosses the face's\noutline. They now expect a refusal.\n- **Scoop tools that main pinned.** Four tests in\n`groupedscoop_fillet_cut_inmem.rs` and `scoop_fillet_variable_inmem.rs`\npinned walking tools in which each edge has two uses. Each has a wire\nthat crosses itself, and some have plane faces over one area. The\ngrouped scoop's tool meshes with 12 open edges. `fillet_v2_variable` now\nrefuses each, and the tests expect that refusal. They still check the\nbuilder's tool for edge pairs, twins and face senses.\n`groupedscoop_cut_stays_exact` is now an ignored ready repro, as are the\nfile's two other tests.\n- `a_spline_spokes_piece_keeps_to_the_edge`,\n`faces_on_one_spline_triangle_with_corners_at_the_quarters_are_reported`,\n`fillet_untouched_faults`, `a_retried_round_stays_on_its_picks`,\n`an_edge_of_another_solid_is_never_rounded` and\n`a_shallow_crease_is_not_merged_flat` pin the review fixes.\n`faces_on_one_spline_square_with_a_thin_tail_are_reported` puts all\nthree sparse reads on a tail 1e-7 wide. Each but the last fails on the\nfirst version of this PR.\n- `a_convex_loop_of_lines_and_arcs_is_read_without_a_search` and\n`faces_sharing_an_edge_beside_splines_are_read_on_its_sides` pin the\nfaster checks.\n- Times in a profiling build (medians):\n\n| Case | `fillet_v2` on main | this PR | the gate |\n|---|---|---|---|\n| 20 mm box, 12 edges, r 1 | 4.60 ms | 4.49 ms | 5.5 µs |\n| 20 x 12 x 4 plate with an r 2 bore, top edges, r 0.5 | 2.16 ms | 2.14\nms | 13.5 µs |\n| Fused L rim, r 0.5 | `CornerFailure` | 22.7 ms | 0.11 ms |\n| #2662 pocket wall into a bore, r 1 | `ParameterOutOfRange` | 24.1 ms |\n23.5 ms |\n\n- `validate_solid` alone now takes 0.64 ms on the box result (0.97 ms on\nmain), and 21.8 ms on the #2662 result (306 ms on main).\n- brepkit-check (171), brepkit-blend (217), brepkit-heal (98), and the\nbrepkit-operations lib tests for fillet (66) and validate (53) pass.\n- 99 operations integration test files pass with no stop at the first\nfailure. They are the files with fillet, blend, round or corner in their\nnames, and the `chamfer_v2` files. So do the 11 io files that call the\nblend.\n- The pose sweep and the truth audit give the same output as main.\n\n## Still open\n\n- #2661 needs the capped corner for a meeting under 90 degrees. Both\nrounds of a tangent joint must also end at the ball that touches the\ntangent line.\n- `FilletBuilder::build` in brepkit-blend has no gate, because\nbrepkit-blend cannot call brepkit-check. Called alone, it still returns\nthe invalid solids above.\n- `fillet_v2_variable` has the gate but not the flat-seam retry. I did\nnot try `chamfer_v2` on the flat-seam corner.\n- When `fillet_v2_variable` refuses a scoop tool, the deprecated\n`fillet_variable` returns its own planar rebuild as success. That\nrebuild is open (30 to 72 edges with one use), as on main.\n- The fused L takes 22.7 ms, most of it in `wall_run_up::crossing` on\nthe retry: 96 samples, each with a 144-step nearest-point search.",
+          "timestamp": "2026-11-22T21:39:49Z",
+          "tree_id": "10174cd76bf804ed30d8011c402126bf68375cf8",
+          "url": "https://github.com/andymai/brepkit/commit/1d14937ba6685863157a49e1d326c724e0bd30ef"
+        },
+        "date": 1795383803781,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 975896,
+            "range": "± 24853",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1016847,
+            "range": "± 6054",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11141,
+            "range": "± 200",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 631290,
+            "range": "± 3894",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 21549176,
+            "range": "± 72291",
             "unit": "ns/iter"
           }
         ]
