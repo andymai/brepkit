@@ -3075,20 +3075,28 @@ fn restrict_curves_to_faces(
 }
 
 /// Whether `face` is a plane face that the whole closed section `raw`, in
-/// its plane, lies off. The face's boundary must be lines and conic arcs,
-/// read exactly. The loop is read in pieces, each split until the distances
-/// of its two ends from the boundary sum to more than its length and twice
-/// ten times the linear tolerance: then no point of it comes nearer the
-/// boundary than that, the loop crosses no edge, and one point of it
-/// decides its side. `false` for any other face, a loop off the plane, a
-/// piece that does not settle, or a region that cannot be read.
+/// its plane, lies off, proved piece by piece. The face's boundary must be
+/// lines and conic arcs, read exactly. Each piece of the loop lies in a disc
+/// in the plane: a spline's knot span, its weights of one sign, in the hull
+/// of its control points, within its points' reach of their mean; an
+/// ellipse's arc within its middle point's reach at the ellipse's fastest
+/// speed. A piece is clear when the disc's centre lies off the face, farther
+/// from the boundary than the disc's radius and ten times the linear
+/// tolerance, and the piece lies within that tolerance of the plane. Other
+/// pieces are halved, at most `MAX_HALVINGS` times each. `false` for any
+/// other face, a region that cannot be read, a point of the loop on the
+/// face, near its boundary or off its plane, or a piece that does not clear.
 fn plane_face_clear_of_loop(topo: &Topology, face: FaceId, raw: &RawCurve, tol: Tolerance) -> bool {
+    const MAX_HALVINGS: u32 = 24;
     const MAX_PIECES: usize = 1 << 16;
     let depth = 10.0 * tol.linear;
     let Ok(data) = topo.face(face) else {
         return false;
     };
     let FaceSurface::Plane { normal, .. } = data.surface() else {
+        return false;
+    };
+    let Ok(normal) = normal.normalize() else {
         return false;
     };
     let Some(origin) = topo
@@ -3101,7 +3109,7 @@ fn plane_face_clear_of_loop(topo: &Topology, face: FaceId, raw: &RawCurve, tol: 
     else {
         return false;
     };
-    let frame = crate::builder::plane_frame::PlaneFrame::from_normal_and_point(*normal, origin);
+    let frame = crate::builder::plane_frame::PlaneFrame::from_normal_and_point(normal, origin);
     let Ok(Some(pieces)) = brepkit_topology::planar::face_boundary_2d(
         topo,
         face,
@@ -3111,42 +3119,93 @@ fn plane_face_clear_of_loop(topo: &Topology, face: FaceId, raw: &RawCurve, tol: 
     ) else {
         return false;
     };
-    let at = |t: f64| raw.curve.evaluate_with_endpoints(t, raw.p_start, raw.p_end);
-    let gap = |p: Point3| {
-        ((p - origin).dot(*normal).abs() <= depth)
-            .then(|| brepkit_math::region2d::distance_to_boundary(&pieces, frame.project(p)))
+    let off_plane = |p: Point3| (p - origin).dot(normal).abs();
+    // Whether the disc of `radius` round `centre`, in the plane, lies off
+    // the face and clear of its boundary.
+    let disc_clear = |centre: Point3, radius: f64| {
+        let flat = frame.project(centre);
+        brepkit_math::region2d::distance_to_boundary(&pieces, flat) > radius + depth
+            && brepkit_math::region2d::point_in_region(&pieces, flat, depth) == Some(false)
+    };
+    // A point of the loop itself that is not clear ends the proof: no
+    // halving clears the pieces round it.
+    let point_clear = |p: Point3| off_plane(p) <= depth && disc_clear(p, 0.0);
+    // An ellipse's speed is at most its larger semi-axis, and the ellipse
+    // strays from the face's plane by its tilt over that semi-axis.
+    let reach = match &raw.curve {
+        EdgeCurve::NurbsCurve(_) => 0.0,
+        EdgeCurve::Ellipse(ellipse) => {
+            let Ok(axis) = ellipse.normal().normalize() else {
+                return false;
+            };
+            let reach = ellipse.semi_major().max(ellipse.semi_minor());
+            if reach.madd(axis.cross(normal).length(), off_plane(ellipse.center())) > depth {
+                return false;
+            }
+            reach
+        }
+        EdgeCurve::Line | EdgeCurve::Circle(_) => return false,
+    };
+    // The disc a piece of the loop from `a` to `b` lies in, its centre and
+    // radius; `None` when the piece's bound does not hold.
+    let disc = |a: f64, b: f64| -> Option<(Point3, f64)> {
+        let EdgeCurve::NurbsCurve(curve) = &raw.curve else {
+            return Some((
+                raw.curve
+                    .evaluate_with_endpoints(f64::midpoint(a, b), raw.p_start, raw.p_end),
+                0.5 * reach * (b - a).abs(),
+            ));
+        };
+        let hull = brepkit_math::nurbs::decompose::curve_bezier_between(curve, a, b).ok()?;
+        let one_sign = hull.iter().all(|q| q[3] > 0.0) || hull.iter().all(|q| q[3] < 0.0);
+        if !one_sign {
+            return None;
+        }
+        let points: Vec<Point3> = hull
+            .iter()
+            .map(|q| Point3::new(q[0] / q[3], q[1] / q[3], q[2] / q[3]))
+            .collect();
+        if points.iter().any(|&p| off_plane(p) > depth) {
+            return None;
+        }
+        #[allow(clippy::cast_precision_loss)]
+        let share = 1.0 / points.len() as f64;
+        let centre = points.iter().fold(Point3::new(0.0, 0.0, 0.0), |sum, &p| {
+            sum + Vec3::new(p.x(), p.y(), p.z()) * share
+        });
+        let radius = points
+            .iter()
+            .map(|&p| (p - centre).length())
+            .fold(0.0, f64::max);
+        Some((centre, radius))
     };
     let (t0, t1) = raw.t_range;
-    let Some(first_gap) = gap(at(t0)) else {
-        return false;
-    };
-    if brepkit_math::region2d::point_in_region(&pieces, frame.project(at(t0)), depth) != Some(false)
-    {
-        return false;
+    let mut cuts = vec![t0];
+    if let EdgeCurve::NurbsCurve(curve) = &raw.curve {
+        for &k in curve.knots() {
+            if k > cuts[cuts.len() - 1] && k < t1 {
+                cuts.push(k);
+            }
+        }
     }
-    let mut pending = vec![(t0, t1, first_gap, first_gap)];
+    cuts.push(t1);
+    let mut pending: Vec<(f64, f64, u32)> = cuts.windows(2).map(|w| (w[0], w[1], 0)).collect();
+    let at = |t: f64| raw.curve.evaluate_with_endpoints(t, raw.p_start, raw.p_end);
     let mut read = 0;
-    while let Some((a, b, gap_a, gap_b)) = pending.pop() {
+    while let Some((a, b, halvings)) = pending.pop() {
         read += 1;
-        if read > MAX_PIECES {
+        if read > MAX_PIECES || !point_clear(at(a)) {
             return false;
         }
-        let points: Vec<Point3> = (0..=8)
-            .map(|k| at((b - a).madd(f64::from(k) / 8.0, a)))
-            .collect();
-        let length: f64 = points.windows(2).map(|w| (w[1] - w[0]).length()).sum();
-        if gap_a + gap_b > 1.05f64.madd(length, 2.0 * depth) {
+        if disc(a, b).is_some_and(|(centre, radius)| disc_clear(centre, radius)) {
             continue;
         }
-        let middle = f64::midpoint(a, b);
-        let Some(gap_m) = gap(at(middle)) else {
-            return false;
-        };
-        if gap_m <= depth {
+        if halvings == MAX_HALVINGS {
             return false;
         }
-        pending.push((a, middle, gap_a, gap_m));
-        pending.push((middle, b, gap_m, gap_b));
+        let middle = f64::midpoint(a, b);
+        pending.push((a, middle, halvings + 1));
+        pending.push((middle, b, halvings + 1));
     }
     true
 }
@@ -11105,6 +11164,75 @@ mod tests {
             &looped(0.0, 1.0),
             tol
         ));
+    }
+
+    /// A closed polygon of 2048 sides round the thin ring's centre at radius
+    /// 9 runs one corner out to radius 10.01, into the ring, and back. Read
+    /// at eight points of each piece, the corner lies between two of them,
+    /// and their chords run well clear of the ring. The loop is not off the
+    /// ring. Without the corner it is.
+    #[test]
+    fn a_loop_into_a_thin_ring_between_its_samples_is_not_off_it() {
+        let tol = Tolerance::default();
+        let polygon = |reach: f64| {
+            let n = 2048_u32;
+            let points: Vec<Point3> = (0..=n)
+                .map(|k| {
+                    let at = std::f64::consts::TAU * f64::from(k % n) / f64::from(n);
+                    let r = if k == 1001 { reach } else { 9.0 };
+                    Point3::new(r * at.cos(), r * at.sin(), 0.0)
+                })
+                .collect();
+            let mut knots = vec![0.0, 0.0];
+            knots.extend((1..n).map(|k| f64::from(k) / f64::from(n)));
+            knots.extend([1.0, 1.0]);
+            let weights = vec![1.0; points.len()];
+            let curve =
+                brepkit_math::nurbs::curve::NurbsCurve::new(1, knots, points.clone(), weights)
+                    .unwrap();
+            let t_range = curve.domain();
+            RawCurve {
+                bbox: Aabb3::from_points(points),
+                p_start: curve.evaluate(t_range.0),
+                p_end: curve.evaluate(t_range.1),
+                curve: EdgeCurve::NurbsCurve(curve),
+                t_range,
+            }
+        };
+        let mut topo = Topology::new();
+        let ring = thin_ring(&mut topo, false);
+        assert!(!plane_face_clear_of_loop(&topo, ring, &polygon(10.01), tol));
+        assert!(plane_face_clear_of_loop(&topo, ring, &polygon(9.0), tol));
+    }
+
+    /// An ellipse in the thin ring's hole, its semi-axes 9.99 and 5, comes
+    /// within 0.01 of the ring and stays off it. One whose major semi-axis
+    /// reaches 10.01 runs into the ring.
+    #[test]
+    fn an_ellipse_in_a_thin_rings_hole_is_off_it() {
+        use brepkit_math::curves::Ellipse3D;
+        let tol = Tolerance::default();
+        let ellipse = |major: f64| {
+            let curve = Ellipse3D::new(
+                Point3::new(0.0, 0.0, 0.0),
+                Vec3::new(0.0, 0.0, 1.0),
+                major,
+                5.0,
+            )
+            .unwrap();
+            let start = curve.evaluate(0.0);
+            RawCurve {
+                bbox: curve.aabb(),
+                curve: EdgeCurve::Ellipse(curve),
+                t_range: (0.0, std::f64::consts::TAU),
+                p_start: start,
+                p_end: start,
+            }
+        };
+        let mut topo = Topology::new();
+        let ring = thin_ring(&mut topo, false);
+        assert!(plane_face_clear_of_loop(&topo, ring, &ellipse(9.99), tol));
+        assert!(!plane_face_clear_of_loop(&topo, ring, &ellipse(10.01), tol));
     }
 
     /// A point on a torus and a plane lies on their section: its error is
