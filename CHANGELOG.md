@@ -1,5 +1,14 @@
 # Changelog
 
+## [4.11.36](https://github.com/andymai/brepkit/compare/v4.11.35...v4.11.36) (2026-11-22)
+
+
+### Bug Fixes
+
+* **algo:** cut wide windows and U-shaped solids through a tube's wall, and a slanted rod against a half-space through its seam, exactly ([#2683](https://github.com/andymai/brepkit/issues/2683)) ([15f4b78](https://github.com/andymai/brepkit/commit/15f4b78314abdf128b706550603b1f945f71a002))
+* **algo:** fit cylinder pcurves at 3D chord lengths, carry a turned section's pcurve, and read closed rims by their traversal ([#2678](https://github.com/andymai/brepkit/issues/2678)) ([1969452](https://github.com/andymai/brepkit/commit/1969452f0271995e5665d3d0f5a6e89dd0bdc650))
+* **math,algo:** fit plane-torus sections to 1e-9, split half rings and turned grooves exactly, and keep a ring whole where a cone rests on it ([#2673](https://github.com/andymai/brepkit/issues/2673)) ([24612cb](https://github.com/andymai/brepkit/commit/24612cbb3ad058b58524746238d5b720bf8789e8))
+
 ## [4.11.35](https://github.com/andymai/brepkit/compare/v4.11.34...v4.11.35) (2026-11-22)
 
 
