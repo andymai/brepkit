@@ -34,6 +34,7 @@ use crate::trimmer;
 use crate::walker::{Walker, WalkerConfig, approximate_blend_surface, interpolate_blend_surface};
 use crate::{BlendError, BlendResult};
 
+mod concave_first;
 mod wall_run_up;
 
 type BlendCrossEdge = (EdgeId, VertexId, VertexId);
@@ -121,8 +122,11 @@ impl<'a> FilletBuilder<'a> {
         let Self {
             topo,
             solid,
-            edge_sets,
+            mut edge_sets,
         } = self;
+        if let Some(stages) = concave_first::stages(topo, solid, &mut edge_sets)? {
+            return concave_first::build(topo, solid, stages);
+        }
         let snapshot = SolidSnapshot::capture(topo, solid)?;
         let result = build_in_place(topo, solid, edge_sets);
         match result {
@@ -723,14 +727,14 @@ impl<'a> FilletBuilder<'a> {
                 }
                 for &edge_id in &junction.unselected_sharp_edges {
                     let edge = topo.edge(edge_id)?;
-                    if matches!(edge.curve(), EdgeCurve::Line) {
-                        let spoke = (
-                            topo.vertex(edge.start())?.point(),
-                            topo.vertex(edge.end())?.point(),
-                        );
-                        if !spokes.contains(&spoke) {
-                            spokes.push(spoke);
-                        }
+                    let spoke = (
+                        topo.vertex(edge.start())?.point(),
+                        topo.vertex(edge.end())?.point(),
+                    );
+                    if trimmer::is_straight(edge.curve(), spoke.0, spoke.1)
+                        && !spokes.contains(&spoke)
+                    {
+                        spokes.push(spoke);
                     }
                 }
             }
