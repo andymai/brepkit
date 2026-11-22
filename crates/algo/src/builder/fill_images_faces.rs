@@ -3303,8 +3303,11 @@ fn u_frame_of(
 /// The turns a closed circle or ellipse makes about `surface`'s `u` axis, the
 /// conic running from `a` toward `b` (each a unit axis with its radius). A
 /// plane conic winds a line once when the line passes through the region it
-/// bounds, and not at all otherwise. `None` when the conic passes through the
-/// axis.
+/// bounds, and not at all otherwise. `None` when the conic comes within the
+/// linear tolerance of the axis, where `u` has no value: there the count
+/// turns on rounding. Clear of the axis, the count is exact: the axis then
+/// meets the conic's plane at least that far from the conic, or lies too
+/// near parallel to the plane to pass through the conic's region.
 fn conic_turns_about_u_axis(
     surface: &FaceSurface,
     center: Point3,
@@ -3313,6 +3316,11 @@ fn conic_turns_about_u_axis(
 ) -> Option<f64> {
     let (on_axis, x, y) = u_frame_of(surface)?;
     let axis = x.cross(y).normalize().ok()?;
+    let reach = (center - on_axis).length() + ra.max(rb);
+    let tol = brepkit_math::tolerance::Tolerance::new().linear * reach.max(1.0);
+    if conic_axis_gap(center, (a, ra), (b, rb), on_axis, axis) <= tol {
+        return None;
+    }
     let normal = a.cross(b);
     let along = axis.dot(normal);
     if along.abs() < 1e-12 {
@@ -3321,19 +3329,58 @@ fn conic_turns_about_u_axis(
     let pierce = on_axis + axis * ((center - on_axis).dot(normal) / along);
     let d = pierce - center;
     let inside = (d.dot(a) / ra).powi(2) + (d.dot(b) / rb).powi(2);
-    if (inside - 1.0).abs() < 1e-9 {
-        return None;
-    }
     Some(if inside < 1.0 { along.signum() } else { 0.0 })
+}
+
+/// The least distance from the conic `center + ra cos(t) a + rb sin(t) b` to
+/// the line through `on_axis` along the unit `axis`. Its square is a
+/// trigonometric polynomial of degree two in `t`, with at most two minima:
+/// each minimum among 256 samples is narrowed between its neighbours.
+fn conic_axis_gap(
+    center: Point3,
+    (a, ra): (brepkit_math::vec::Vec3, f64),
+    (b, rb): (brepkit_math::vec::Vec3, f64),
+    on_axis: Point3,
+    axis: brepkit_math::vec::Vec3,
+) -> f64 {
+    const SAMPLES: u32 = 256;
+    let off = |v: brepkit_math::vec::Vec3| v - axis * v.dot(axis);
+    let (c, a, b) = (off(center - on_axis), off(a) * ra, off(b) * rb);
+    let square = |t: f64| {
+        let (sin, cos) = t.sin_cos();
+        (c + a * cos + b * sin).length_squared()
+    };
+    let step = std::f64::consts::TAU / f64::from(SAMPLES);
+    let at = |k: u32| step * f64::from(k);
+    let mut least = f64::INFINITY;
+    for k in 0..SAMPLES {
+        let here = square(at(k));
+        least = least.min(here);
+        if here > square(at(k + SAMPLES - 1)) || here > square(at(k + 1)) {
+            continue;
+        }
+        let (mut lo, mut hi) = (at(k) - step, at(k) + step);
+        for _ in 0..100 {
+            let third = (hi - lo) / 3.0;
+            if square(lo + third) < square(hi - third) {
+                hi -= third;
+            } else {
+                lo += third;
+            }
+        }
+        least = least.min(square(0.5 * (lo + hi)));
+    }
+    least.sqrt()
 }
 
 /// The run in `u` along a closed spline section, in radians, proved piece by
 /// piece. A rational Bezier piece whose weights share a sign lies in the hull
 /// of its control points. When that hull lies in an open half-plane about the
-/// axis, seen along it, the piece turns about the axis by the wrapped angle
-/// between its ends. Each span of the knots is halved until its pieces pass.
-/// `None` when a piece still fails after many halvings: the curve passes
-/// through the axis, or has a pole there.
+/// axis, seen along it, and keeps the linear tolerance from it, the piece
+/// turns about the axis by the wrapped angle between its ends. Each span of
+/// the knots is halved until its pieces pass. `None` when a piece still fails
+/// after many halvings: the curve comes within the tolerance of the axis,
+/// where `u` has no value, or has a pole there.
 fn spline_u_run(
     curve: &brepkit_math::nurbs::curve::NurbsCurve,
     surface: &FaceSurface,
@@ -3342,12 +3389,35 @@ fn spline_u_run(
     const MAX_HALVINGS: u32 = 48;
     let (on_axis, x, y) = u_frame_of(surface)?;
     let wrap = |d: f64| TAU.madd(-(d / TAU).round(), d);
-    // A control point's angle about the axis, or `None` when it lies too
-    // near the axis for its angle to be read.
-    let angle_of = |q: [f64; 4]| {
+    let reach = curve
+        .control_points()
+        .iter()
+        .map(|&p| (p - on_axis).length())
+        .fold(1.0, f64::max);
+    let tol = brepkit_math::tolerance::Tolerance::new().linear * reach;
+    // A control point seen along the axis, from it.
+    let flat = |q: [f64; 4]| {
         let d = Point3::new(q[0] / q[3], q[1] / q[3], q[2] / q[3]) - on_axis;
-        let (px, py) = (d.dot(x), d.dot(y));
-        (px.hypot(py) > 1e-9 * d.length()).then(|| py.atan2(px))
+        (d.dot(x), d.dot(y))
+    };
+    // How far the hull of points seen along the axis keeps from it: the
+    // least distance to a segment between two of them, an edge of the hull
+    // among them.
+    let clearance = |pts: &[(f64, f64)]| {
+        let mut least = f64::INFINITY;
+        for (i, &(ax, ay)) in pts.iter().enumerate() {
+            for &(bx, by) in &pts[i..] {
+                let (ex, ey) = (bx - ax, by - ay);
+                let len2 = ex.madd(ex, ey * ey);
+                let f = if len2 > 0.0 {
+                    (-(ax.madd(ex, ay * ey)) / len2).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                least = least.min(ex.madd(f, ax).hypot(ey.madd(f, ay)));
+            }
+        }
+        least
     };
     let (t0, t1) = curve.domain();
     let mut cuts = vec![t0];
@@ -3361,19 +3431,17 @@ fn spline_u_run(
     let mut run = 0.0;
     while let Some((a, b, halvings)) = pieces.pop() {
         let hull = brepkit_math::nurbs::decompose::curve_bezier_between(curve, a, b).ok()?;
-        let turned = if hull.iter().all(|q| q[3] > 0.0) || hull.iter().all(|q| q[3] < 0.0) {
-            hull.iter()
-                .map(|&q| angle_of(q))
-                .collect::<Option<Vec<f64>>>()
-                .and_then(|angles| {
-                    let offsets: Vec<f64> = angles.iter().map(|&t| wrap(t - angles[0])).collect();
-                    let lo = offsets.iter().copied().fold(f64::INFINITY, f64::min);
-                    let hi = offsets.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-                    (hi - lo < PI - 1e-9).then(|| offsets[offsets.len() - 1])
-                })
-        } else {
-            None
-        };
+        let same_sign = hull.iter().all(|q| q[3] > 0.0) || hull.iter().all(|q| q[3] < 0.0);
+        let turned = same_sign
+            .then(|| hull.iter().map(|&q| flat(q)).collect::<Vec<_>>())
+            .filter(|pts| clearance(pts) > tol)
+            .and_then(|pts| {
+                let angles: Vec<f64> = pts.iter().map(|&(px, py)| py.atan2(px)).collect();
+                let offsets: Vec<f64> = angles.iter().map(|&t| wrap(t - angles[0])).collect();
+                let lo = offsets.iter().copied().fold(f64::INFINITY, f64::min);
+                let hi = offsets.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+                (hi - lo < PI - 1e-9).then(|| offsets[offsets.len() - 1])
+            });
         if let Some(turn) = turned {
             run += turn;
             continue;
@@ -7999,6 +8067,121 @@ mod tests {
             section_end_uv_hints(&curve, start, true, &surface, &line),
             (None, None)
         );
+    }
+
+    /// Circles on a unit ball whose planes nearly hold its axis, or that pass
+    /// near a pole: a meridian through both poles and a circle through one
+    /// touch the axis and give no count, and so do circles within 1e-12 and
+    /// 1e-9 of a pole. Circles 1e-6 from a pole count a turn with the pole
+    /// inside them and none with it outside, near either pole and either way
+    /// round, and a great circle tilted 1e-6 off a meridian counts a turn.
+    /// Each circle written as a rational spline reads the same. On a ring
+    /// torus a meridian and a tilted one count none and a latitude one; on a
+    /// horn torus a meridian touches the axis.
+    #[test]
+    fn a_conics_turns_about_the_axis_read_none_where_it_touches_the_axis() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        use brepkit_math::surfaces::{SphericalSurface, ToroidalSurface};
+        use std::f64::consts::{FRAC_1_SQRT_2, TAU};
+        let ball =
+            FaceSurface::Sphere(SphericalSurface::new(Point3::new(0.0, 0.0, 0.0), 1.0).unwrap());
+        let FaceSurface::Sphere(sphere) = &ball else {
+            unreachable!()
+        };
+        let (z, x) = (sphere.z_axis(), sphere.x_axis());
+        let origin = Point3::new(0.0, 0.0, 0.0);
+        // The circle as a nine-point rational quadratic spline.
+        let spline = |circle: &Circle3D| {
+            let (c, r) = (circle.center(), circle.radius());
+            let points: Vec<Point3> = (0..9_u32)
+                .map(|k| {
+                    let a = f64::from(k) * std::f64::consts::FRAC_PI_4;
+                    let reach = if k % 2 == 1 { r / FRAC_1_SQRT_2 } else { r };
+                    c + circle.u_axis() * (reach * a.cos()) + circle.v_axis() * (reach * a.sin())
+                })
+                .collect();
+            let weights = (0..9)
+                .map(|k| if k % 2 == 1 { FRAC_1_SQRT_2 } else { 1.0 })
+                .collect();
+            let knots = vec![
+                0.0, 0.0, 0.0, 0.25, 0.25, 0.5, 0.5, 0.75, 0.75, 1.0, 1.0, 1.0,
+            ];
+            EdgeCurve::NurbsCurve(NurbsCurve::new(2, knots, points, weights).unwrap())
+        };
+        let turns = |surface: &FaceSurface, circle: &Circle3D| {
+            let exact = conic_turns_about_u_axis(
+                surface,
+                circle.center(),
+                (circle.u_axis(), circle.radius()),
+                (circle.v_axis(), circle.radius()),
+            );
+            let curve = spline(circle);
+            let start = circle.evaluate(0.0);
+            let proved = closed_section_end_uvs(&curve, start, surface, TAU)
+                .map(|(s, e)| ((e.x() - s.x()) / TAU).round());
+            assert_eq!(exact, proved, "the spline reads as the circle does");
+            exact
+        };
+        // The circle of angular radius `rho` about the direction `polar` off
+        // the pole `toward`, its normal along that direction or against it.
+        let cap = |toward: Vec3, polar: f64, rho: f64, flip: bool| {
+            let dir = toward * polar.cos() + x * polar.sin();
+            let normal = if flip { -dir } else { dir };
+            Circle3D::new(origin + dir * rho.cos(), normal, rho.sin()).unwrap()
+        };
+        let meridian = Circle3D::new(origin, x, 1.0).unwrap();
+        assert_eq!(turns(&ball, &meridian), None, "meridian");
+        for (tilt, want) in [(1e-12, None), (1e-6, Some(1.0)), (-1e-6, Some(-1.0))] {
+            let normal = x + z * tilt;
+            let great = Circle3D::new(origin, normal, 1.0).unwrap();
+            assert_eq!(turns(&ball, &great), want, "great circle tilted {tilt}");
+        }
+        let rho = 0.5;
+        for (toward, sign) in [(z, 1.0), (-z, -1.0)] {
+            for flip in [false, true] {
+                let way = if flip { -sign } else { sign };
+                assert_eq!(
+                    turns(&ball, &cap(toward, rho, rho, flip)),
+                    None,
+                    "through the pole"
+                );
+                for (gap, inside, outside) in [
+                    (1e-12, None, None),
+                    (1e-9, None, None),
+                    (1e-6, Some(way), Some(0.0)),
+                ] {
+                    assert_eq!(
+                        turns(&ball, &cap(toward, rho - gap, rho, flip)),
+                        inside,
+                        "pole {gap} inside, sign {sign}, flip {flip}"
+                    );
+                    assert_eq!(
+                        turns(&ball, &cap(toward, rho + gap, rho, flip)),
+                        outside,
+                        "pole {gap} outside, sign {sign}, flip {flip}"
+                    );
+                }
+            }
+        }
+
+        let ring = FaceSurface::Torus(ToroidalSurface::new(origin, 3.0, 1.0).unwrap());
+        let FaceSurface::Torus(torus) = &ring else {
+            unreachable!()
+        };
+        let (tz, tx, ty) = (torus.z_axis(), torus.x_axis(), torus.y_axis());
+        let tube = Circle3D::new(origin + tx * 3.0, ty, 1.0).unwrap();
+        assert_eq!(turns(&ring, &tube), Some(0.0), "meridian");
+        let tilted = Circle3D::new(origin + tx * 3.0, ty + tz * 1e-9, 1.0).unwrap();
+        assert_eq!(turns(&ring, &tilted), Some(0.0), "tilted meridian");
+        let latitude = Circle3D::new(origin + tz, tz, 3.0).unwrap();
+        assert_eq!(turns(&ring, &latitude), Some(1.0), "latitude");
+        let horn = FaceSurface::Torus(ToroidalSurface::new(origin, 1.0, 1.0).unwrap());
+        let FaceSurface::Torus(horn_torus) = &horn else {
+            unreachable!()
+        };
+        let horn_tube =
+            Circle3D::new(origin + horn_torus.x_axis(), horn_torus.y_axis(), 1.0).unwrap();
+        assert_eq!(turns(&horn, &horn_tube), None, "horn meridian");
     }
 
     /// A run 0.001 inside the top of a closed ellipse seamed a 64th of a
