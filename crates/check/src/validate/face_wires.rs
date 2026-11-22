@@ -904,6 +904,159 @@ fn wire_stretches(
     Ok((stretches, uses))
 }
 
+/// Whether a wire of a plane face is a convex loop, which cannot cross
+/// itself: its direction turns one way all along it, through one whole
+/// turn, about the plane's `normal`. Lines and circles in the plane are
+/// read, each circle turning through its span; any other edge, or a turn
+/// back at a vertex, leaves the wire to the full search.
+fn convex_loop(topo: &Topology, normal: Vec3, wire_id: WireId) -> Result<bool, CheckError> {
+    // A turn smaller than this is read as none, either way.
+    const STRAIGHT: f64 = 1e-9;
+    let Ok(n) = normal.normalize() else {
+        return Ok(false);
+    };
+    let signed = |from: Vec3, to: Vec3| from.cross(to).dot(n).atan2(from.dot(to));
+    let mut turns = Vec::new();
+    let mut first: Option<Vec3> = None;
+    let mut last: Option<Vec3> = None;
+    for oe in topo.wire(wire_id)?.edges() {
+        let edge = topo.edge(oe.edge())?;
+        let (a, b) = (
+            topo.vertex(edge.start())?.point(),
+            topo.vertex(edge.end())?.point(),
+        );
+        let (start, end, turn) = match edge.curve() {
+            EdgeCurve::Line => {
+                let Ok(d) = (b - a).normalize() else {
+                    return Ok(false);
+                };
+                let d = if oe.is_forward() { d } else { -d };
+                (d, d, 0.0)
+            }
+            EdgeCurve::Circle(c) => {
+                let along = c.u_axis().cross(c.v_axis()).dot(n);
+                if (along.abs() - 1.0).abs() > STRAIGHT {
+                    return Ok(false);
+                }
+                let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
+                let (s, e) = (c.tangent(t0), c.tangent(t1));
+                let span = (t1 - t0) * along.signum();
+                if oe.is_forward() {
+                    (s, e, span)
+                } else {
+                    (-e, -s, -span)
+                }
+            }
+            EdgeCurve::NurbsCurve(curve) => {
+                let Some((s, e, turn)) = convex_spline(curve, (a, b), edge.curve(), n) else {
+                    return Ok(false);
+                };
+                if oe.is_forward() {
+                    (s, e, turn)
+                } else {
+                    (-e, -s, -turn)
+                }
+            }
+            EdgeCurve::Ellipse(_) => return Ok(false),
+        };
+        let (Ok(start), Ok(end)) = (start.normalize(), end.normalize()) else {
+            return Ok(false);
+        };
+        if let Some(previous) = last {
+            turns.push(signed(previous, start));
+        }
+        first.get_or_insert(start);
+        last = Some(end);
+        turns.push(turn);
+    }
+    let (Some(first), Some(last)) = (first, last) else {
+        return Ok(false);
+    };
+    turns.push(signed(last, first));
+    // A turn of a half turn at a vertex is a cusp: no way round is told.
+    if turns
+        .iter()
+        .any(|&t| (t.abs() - std::f64::consts::PI).abs() <= STRAIGHT)
+    {
+        return Ok(false);
+    }
+    let total: f64 = turns.iter().sum();
+    let one_way = turns.iter().all(|&t| t * total.signum() >= -STRAIGHT);
+    Ok(one_way && (total.abs() - TAU).abs() <= 1e-6)
+}
+
+/// A whole B-spline edge from `ends.0` to `ends.1` whose control polygon
+/// lies in the plane square to `n` and turns one way, through no more than
+/// a half turn where it is open: its direction at each end, in the edge's
+/// stored direction, and how far it turns about `n` between them. With
+/// positive weights the curve crosses no line more often than its control
+/// polygon does, so it is a convex arc from the first leg's direction to
+/// the last's. `None` for any other B-spline, or a piece of one.
+fn convex_spline(
+    curve: &brepkit_math::nurbs::curve::NurbsCurve,
+    ends: (Point3, Point3),
+    carrier: &EdgeCurve,
+    n: Vec3,
+) -> Option<(Vec3, Vec3, f64)> {
+    const STRAIGHT: f64 = 1e-9;
+    let (d0, d1) = curve.domain();
+    let (t0, t1) = carrier.domain_with_endpoints(ends.0, ends.1);
+    let width = (d1 - d0).abs().max(f64::MIN_POSITIVE);
+    let same = |x: f64, y: f64| (x - y).abs() <= 1e-12 * width;
+    let stored_forward = if same(t0, d0) && same(t1, d1) {
+        true
+    } else if same(t0, d1) && same(t1, d0) {
+        false
+    } else {
+        return None;
+    };
+    if !curve.weights().iter().all(|&w| w > 0.0) {
+        return None;
+    }
+    let mut points = curve.control_points().to_vec();
+    if !stored_forward {
+        points.reverse();
+    }
+    let first = *points.first()?;
+    let size = points
+        .iter()
+        .map(|&p| (p - first).length())
+        .fold(0.0, f64::max);
+    if points
+        .iter()
+        .any(|&p| (p - first).dot(n).abs() > STRAIGHT * size.max(1.0))
+    {
+        return None;
+    }
+    let legs: Vec<Vec3> = points
+        .windows(2)
+        .filter_map(|pair| {
+            let leg = pair[1] - pair[0];
+            (leg.length() > STRAIGHT * size.max(1.0))
+                .then(|| leg.normalize().ok())
+                .flatten()
+        })
+        .collect();
+    let (&start, &end) = (legs.first()?, legs.last()?);
+    let turns: Vec<f64> = legs
+        .windows(2)
+        .map(|pair| pair[0].cross(pair[1]).dot(n).atan2(pair[0].dot(pair[1])))
+        .collect();
+    let total: f64 = turns.iter().sum();
+    let one_way = turns.iter().all(|&t| t * total.signum() >= -STRAIGHT);
+    // A closed polygon turning one way is convex as a whole, through one
+    // whole turn with its closing turn, which the wire reads at the vertex.
+    let closed = points
+        .last()
+        .is_some_and(|&last| (last - first).length() <= STRAIGHT * size.max(1.0));
+    let most = if closed {
+        TAU
+    } else {
+        std::f64::consts::PI - STRAIGHT
+    };
+    (one_way && total.abs() <= most).then_some((start, end, total))
+}
+
 /// Check that no wire of a plane face crosses itself.
 ///
 /// No edge of a wire may cross another edge of the same wire. Edges that
@@ -921,10 +1074,13 @@ pub fn check_face_wires_simple(
     tolerance: f64,
 ) -> Result<Vec<ValidationIssue>, CheckError> {
     let face = topo.face(face_id)?;
-    if !face.surface().is_planar() {
+    let FaceSurface::Plane { normal, .. } = face.surface() else {
         return Ok(vec![]);
-    }
+    };
     for wire_id in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+        if convex_loop(topo, *normal, wire_id)? {
+            continue;
+        }
         let (stretches, uses) = wire_stretches(topo, wire_id)?;
         if stretches.len() > 1 && wire_crosses_itself(face.surface(), &stretches, &uses, tolerance)
         {
@@ -1026,6 +1182,99 @@ mod tests {
             .into_iter()
             .next()
             .map(|i| i.description)
+    }
+
+    /// A 10 x 6 rectangle with its corners rounded by `r`: lines along its
+    /// sides and quarter circles about z, run counter-clockwise, or
+    /// clockwise where `reverse`.
+    fn rounded_rectangle(topo: &mut Topology, r: f64, reverse: bool) -> WireId {
+        let (w, h) = (10.0, 6.0);
+        let corners = [
+            ([w - r, r], -std::f64::consts::FRAC_PI_2),
+            ([w - r, h - r], 0.0),
+            ([r, h - r], std::f64::consts::FRAC_PI_2),
+            ([r, r], std::f64::consts::PI),
+        ];
+        let mut edges = Vec::new();
+        let mut first = None;
+        let mut last: Option<VertexId> = None;
+        for ([cx, cy], from) in corners {
+            let x = Vec3::new(1.0, 0.0, 0.0);
+            let circle = Circle3D::new_with_ref(Point3::new(cx, cy, 0.0), Z, r, x).unwrap();
+            let [a, b] = [from, from + std::f64::consts::FRAC_PI_2].map(|t| {
+                let p = circle.evaluate(t);
+                vertex(topo, [p.x(), p.y(), 0.0])
+            });
+            if let Some(end) = last {
+                edges.push(OrientedEdge::new(
+                    topo.add_edge(Edge::new(end, a, EdgeCurve::Line)),
+                    true,
+                ));
+            }
+            first.get_or_insert(a);
+            edges.push(OrientedEdge::new(
+                topo.add_edge(Edge::new(a, b, EdgeCurve::Circle(circle))),
+                true,
+            ));
+            last = Some(b);
+        }
+        let (first, last) = (first.unwrap(), last.unwrap());
+        edges.push(OrientedEdge::new(
+            topo.add_edge(Edge::new(last, first, EdgeCurve::Line)),
+            true,
+        ));
+        if reverse {
+            edges = edges
+                .into_iter()
+                .rev()
+                .map(|oe| OrientedEdge::new(oe.edge(), !oe.is_forward()))
+                .collect();
+        }
+        topo.add_wire(Wire::new(edges, true).unwrap())
+    }
+
+    /// A rounded rectangle turns one way through one whole turn, either way
+    /// round: it is read as convex, and does not cross itself. An L of lines
+    /// turns back at its inner corner, and a bow tie turns through no whole
+    /// turn: neither is read as convex.
+    #[test]
+    fn a_convex_loop_of_lines_and_arcs_is_read_without_a_search() {
+        let mut topo = Topology::new();
+        for reverse in [false, true] {
+            let wire = rounded_rectangle(&mut topo, 1.5, reverse);
+            assert!(convex_loop(&topo, Z, wire).unwrap(), "reverse {reverse}");
+            assert!(convex_loop(&topo, -Z, wire).unwrap(), "reverse {reverse}");
+            let face = flat(&mut topo, wire, vec![]);
+            assert_eq!(crossed(&topo, face), None);
+        }
+        let l = points(
+            &mut topo,
+            &[
+                [0.0, 0.0, 0.0],
+                [4.0, 0.0, 0.0],
+                [4.0, 2.0, 0.0],
+                [2.0, 2.0, 0.0],
+                [2.0, 4.0, 0.0],
+                [0.0, 4.0, 0.0],
+            ],
+        );
+        let l = polygon(&mut topo, &l);
+        assert!(!convex_loop(&topo, Z, l).unwrap());
+        let face = flat(&mut topo, l, vec![]);
+        assert_eq!(crossed(&topo, face), None);
+        let bow = points(
+            &mut topo,
+            &[
+                [0.0, 0.0, 0.0],
+                [4.0, 4.0, 0.0],
+                [4.0, 0.0, 0.0],
+                [0.0, 4.0, 0.0],
+            ],
+        );
+        let bow = polygon(&mut topo, &bow);
+        assert!(!convex_loop(&topo, Z, bow).unwrap());
+        let face = flat(&mut topo, bow, vec![]);
+        assert!(crossed(&topo, face).is_some_and(|d| d.contains("crosses itself")));
     }
 
     #[test]

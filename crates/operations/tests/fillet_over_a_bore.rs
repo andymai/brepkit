@@ -344,13 +344,25 @@ fn a_spools_flange_rounds_off_and_keeps_its_hub() {
     );
 }
 
+/// Rounds `edges` by `r` and checks the round is refused: the solid comes
+/// back as it was, each edge named.
+fn refused(topo: &mut Topology, solid: SolidId, edges: &[EdgeId], r: f64) {
+    let result = fillet_v2(topo, solid, edges, r).unwrap();
+    assert_eq!(result.solid, solid, "a result came back");
+    assert!(result.succeeded.is_empty());
+    assert_eq!(result.failed.len(), edges.len());
+    assert!(validate_solid(topo, solid).unwrap().is_valid());
+}
+
 /// An L bracket: a base 20 x 20 x 5 and a wall 5 thick standing on it to
 /// z = 20, drilled through the base at (9, 10) by a bore of radius 2. The
 /// inner corner, concave, rounded by 6 adds material up to 1.5 over the
 /// bore's mouth, which a cut back a tenth of the bore's radius past the mouth
-/// leaves as a ledge in the bore: the round is the direct fillet's.
+/// leaves as a ledge in the bore, so the bore path declines it. The direct
+/// fillet keeps the mouth as a hole of the base's top where the round now
+/// covers it, outside the top's outline: no valid solid, and refused.
 #[test]
-fn a_concave_round_over_a_bore_is_the_direct_fillets() {
+fn a_concave_round_over_a_bore_is_refused() {
     let mut topo = Topology::new();
     let base = make_box(&mut topo, 20.0, 20.0, 5.0).unwrap();
     let wall = make_box(&mut topo, 5.0, 20.0, 20.0).unwrap();
@@ -359,7 +371,7 @@ fn a_concave_round_over_a_bore_is_the_direct_fillets() {
     transform_solid(&mut topo, drill, &Mat4::translation(9.0, 10.0, -1.0)).unwrap();
     let solid = boolean(&mut topo, BooleanOp::Cut, bracket, drill).unwrap();
     let corner = line_edge(&topo, solid, [5.0, 0.0, 5.0], [5.0, 20.0, 5.0]);
-    round_as_the_direct_fillet(&mut topo, solid, &[corner], 6.0);
+    refused(&mut topo, solid, &[corner], 6.0);
 }
 
 /// The box drilled at (20, `cy`) by a bore of radius `rho`, its top marked
@@ -439,26 +451,28 @@ fn slit_box(topo: &mut Topology, slits: &[(f64, f64)]) -> (SolidId, EdgeId) {
 
 /// A slit between z = 7 and 7.1, onto which the bore's lower mouth opens:
 /// the slit is thinner than the tenth of the bore's radius the cut back
-/// runs past the mouth, so the cut back would cut into the slit's floor.
-/// The round is the direct fillet's.
+/// runs past the mouth, so the cut back would cut into the slit's floor,
+/// and the bore path declines it. The direct fillet runs its band over the
+/// bore's upper mouth, which crosses the band's contact on the top: no
+/// valid solid, and refused.
 #[test]
-fn a_bore_onto_a_thin_slit_is_left_to_the_direct_fillet() {
+fn a_bore_onto_a_thin_slit_is_refused() {
     let mut topo = Topology::new();
     let (solid, edge) = slit_box(&mut topo, &[(7.0, 7.1)]);
-    round_as_the_direct_fillet(&mut topo, solid, &[edge], 7.0);
+    refused(&mut topo, solid, &[edge], 7.0);
 }
 
 /// The same slit with a second one below it, between z = 6.8 and 6.95: the
 /// cut back ends at z = 6.9, in the second slit, but on its way crosses the
-/// shelf between the two. The round is the direct fillet's, and the shelf
-/// keeps its material under the bore.
+/// shelf between the two. The round is refused as over the thin slit alone,
+/// and the shelf keeps its material under the bore.
 #[test]
-fn a_bore_onto_a_shelf_between_two_slits_is_left_to_the_direct_fillet() {
+fn a_bore_onto_a_shelf_between_two_slits_is_refused() {
     let mut topo = Topology::new();
     let (solid, edge) = slit_box(&mut topo, &[(7.0, 7.1), (6.8, 6.95)]);
-    let result = round_as_the_direct_fillet(&mut topo, solid, &[edge], 7.0);
+    refused(&mut topo, solid, &[edge], 7.0);
     assert!(
-        inside(&topo, result, [0.5 * LENGTH, 6.0, 6.975]),
+        inside(&topo, solid, [0.5 * LENGTH, 6.0, 6.975]),
         "shelf cut"
     );
 }
