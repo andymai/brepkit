@@ -58,6 +58,55 @@ fn edge_through(topo: &Topology, solid: SolidId, p: Point3) -> EdgeId {
     best
 }
 
+/// Each pcurve of `solid` that does not run with its edge by more than the
+/// edge itself stands off the face's surface: the same-parameter check at
+/// its tolerance of 1e-4, read at 11 points along the edge, against the
+/// farthest of 201 points of the edge from the surface. (A walked contact
+/// is a fit, and stands off its wall by up to 8.7e-4 on this part.)
+fn pcurves_off_their_edges(topo: &Topology, solid: SolidId) -> Vec<String> {
+    use brepkit_check::validate::{CheckId, EntityRef, ValidateOptions, validate_solid};
+    let report = validate_solid(topo, solid, &ValidateOptions::default()).unwrap();
+    let mut off = Vec::new();
+    for issue in report.issues {
+        if issue.check != CheckId::EdgeSameParameter {
+            continue;
+        }
+        let EntityRef::Edge(edge_id) = issue.entity else {
+            continue;
+        };
+        let edge = topo.edge(edge_id).unwrap();
+        let (a, b) = (
+            topo.vertex(edge.start()).unwrap().point(),
+            topo.vertex(edge.end()).unwrap().point(),
+        );
+        let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
+        let mut stands_off: f64 = 0.0;
+        for face in solid_faces(topo, solid).unwrap() {
+            if topo.pcurves().get(edge_id, face).is_none() {
+                continue;
+            }
+            let surface = topo.face(face).unwrap().surface();
+            for k in 0..=200 {
+                let p = edge.curve().evaluate_with_endpoints(
+                    (t1 - t0).mul_add(f64::from(k) / 200.0, t0),
+                    a,
+                    b,
+                );
+                if let Some((u, v)) = surface.project_point(p) {
+                    stands_off = stands_off.max((surface.evaluate(u, v).unwrap() - p).length());
+                }
+            }
+        }
+        if issue.deviation.unwrap_or(f64::INFINITY) > stands_off + 1e-4 {
+            off.push(format!(
+                "{} (the edge stands {stands_off:.2e} off)",
+                issue.description
+            ));
+        }
+    }
+    off
+}
+
 #[test]
 fn a_contact_across_the_wall_s_seam_is_cut_there() {
     let mut topo = Topology::new();
@@ -73,6 +122,8 @@ fn a_contact_across_the_wall_s_seam_is_cut_there() {
     assert!(report.is_valid(), "{:?}", report.issues);
     // The part's six faces and the two bands.
     assert_eq!(solid_faces(&topo, result.solid).unwrap().len(), 8);
+    let off = pcurves_off_their_edges(&topo, result.solid);
+    assert!(off.is_empty(), "{off:?}");
     let mesh = tessellate_solid(&topo, result.solid, 0.5).unwrap();
     assert!(is_watertight(&mesh), "mesh not watertight");
     // As a reference kernel measures it.
@@ -104,6 +155,8 @@ fn a_contact_across_a_small_wall_s_seam_is_cut_there() {
         let report = validate_solid(&topo, result.solid).unwrap();
         assert!(report.is_valid(), "{scale}: {:?}", report.issues);
         assert_eq!(solid_faces(&topo, result.solid).unwrap().len(), 8);
+        let off = pcurves_off_their_edges(&topo, result.solid);
+        assert!(off.is_empty(), "{scale}: {off:?}");
         let mesh = tessellate_solid(&topo, result.solid, 0.5 * scale).unwrap();
         assert!(is_watertight(&mesh), "{scale}: mesh not watertight");
         let volume = solid_volume(&topo, result.solid, 0.1 * scale).unwrap() / scale.powi(3);
