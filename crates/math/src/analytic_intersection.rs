@@ -5223,7 +5223,13 @@ fn march_analytic_intersection(
     // March backward from seed, collecting points (reversed at end).
     let mut backward = Vec::new();
 
+    // A loop the forward march closes is whole: marched back as well, it
+    // would come round a second time.
+    let mut looped = false;
     for (direction, points) in [(1.0_f64, &mut forward), (-1.0_f64, &mut backward)] {
+        if looped {
+            break;
+        }
         let mut current = seed;
         let mut h = initial_step;
         let mut prev_tangent: Option<Vec3> = None;
@@ -5303,6 +5309,7 @@ fn march_analytic_intersection(
             let dist_to_seed = (mid - seed).length();
             if points.len() > 10 && dist_to_seed < closure_dist {
                 points.push(seed);
+                looped = true;
                 break;
             }
 
@@ -7339,6 +7346,58 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    /// A funnel's outer wall, a 45 degree cone, crosses the tube of a lip
+    /// that leans a thousandth of a radian off the cone's axis in one loop
+    /// round the axis. The marcher closes the loop on its seed, and the loop
+    /// runs round the axis once.
+    #[test]
+    fn a_marched_loop_round_an_axis_runs_round_it_once() {
+        let skin = 1.6 * std::f64::consts::SQRT_2;
+        let tilt = 0.001_f64;
+        let torus = ToroidalSurface::with_axis(
+            Point3::new(0.0, 0.0, 70.5),
+            80.8 + skin / 2.0,
+            2.0,
+            Vec3::new(0.0, -tilt.sin(), tilt.cos()),
+        )
+        .unwrap();
+        let cone = ConicalSurface::new(
+            Point3::new(0.0, 0.0, -9.5 - skin),
+            Vec3::new(0.0, 0.0, 1.0),
+            std::f64::consts::FRAC_PI_4,
+        )
+        .unwrap();
+        let region = Aabb3 {
+            min: Point3::new(-84.0, -84.0, 68.0),
+            max: Point3::new(84.0, 84.0, 73.0),
+        };
+        let curves = intersect_analytic_analytic_in_region(
+            AnalyticSurface::Cone(&cone),
+            AnalyticSurface::Torus(&torus),
+            32,
+            Some((16.6, 116.3)),
+            None,
+            region,
+        )
+        .unwrap();
+        assert_eq!(curves.len(), 1);
+        let (t0, t1) = curves[0].curve.domain();
+        let (start, end) = (curves[0].curve.evaluate(t0), curves[0].curve.evaluate(t1));
+        assert!((start - end).length() < 1e-9, "{start:?} to {end:?}");
+        let n = 4000;
+        let mut turn = 0.0;
+        let mut last = start.y().atan2(start.x());
+        for k in 1..=n {
+            let p = curves[0]
+                .curve
+                .evaluate((t1 - t0).madd(f64::from(k) / f64::from(n), t0));
+            let at = p.y().atan2(p.x());
+            turn += (at - last + std::f64::consts::PI).rem_euclid(TAU) - std::f64::consts::PI;
+            last = at;
+        }
+        assert!((turn.abs() - TAU).abs() < 1e-6, "turns {}", turn / TAU);
     }
 
     /// A 45 degree cone about the axis of the ring (4, 1.5), its apex at

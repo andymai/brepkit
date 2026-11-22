@@ -3,14 +3,15 @@
 //!
 //! - `conical-pour-funnel`: a whole torus lip rolled onto the top rim of a
 //!   funnel's body. The tube crosses the two cones of the bowl's wall and
-//!   covers the flat ring between them.
+//!   covers the flat ring between them, on the body's axis or leaning off
+//!   it. A hang tab's plate runs out through the lip.
 //! - `rotary-potentiometer`: a lug, revolved 20 degrees, that stands on the
 //!   flat rim of a cup. Its bottom lies in the rim's plane and its inner and
 //!   outer faces lie on the cylinders of the cup's bore and wall.
 //!
-//! Each fuse is exact, valid and watertight in every pose, holds its volume
-//! from the closed forms, and holds a point of a grid round the contact
-//! exactly where one of its operands holds it.
+//! Each fuse is exact, valid and watertight in every pose, holds the volume
+//! that closed forms and quadratures of the operands give, and holds a point
+//! of a grid round the contact exactly where one of its operands holds it.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::f64::consts::{FRAC_1_SQRT_2, PI};
@@ -257,6 +258,111 @@ fn a_torus_lip_fuses_onto_a_funnels_rim() {
             truth,
             ([77.0, -4.0, 67.0], [85.0, 4.0, 73.0], 14),
         );
+    }
+}
+
+/// The volume the lip's tube (radius 2 about the circle of radius `major`
+/// about `z = 70.5`, its axis turned `tilt` about `x`) shares with the
+/// funnel's wall near the rim. In each half-plane through the funnel's axis,
+/// the tube's section is traced point by point round the tube (the ring
+/// angle found by Newton's method for each tube angle) and clipped by the
+/// wall's three bounds there: below the rim, outside the inner cone and
+/// inside the outer cone. Green's theorem gives the clipped polygon's
+/// `∫∫ ρ dρ dz`, and the trapezoid rule, exact enough on a periodic
+/// integrand, sums it round the axis.
+fn tilted_lip_in_wall(major: f64, tilt: f64) -> f64 {
+    let skin = 1.6 / FRAC_1_SQRT_2;
+    let (top, outside, minor): (f64, f64, f64) = (70.5, 9.5 + skin, 2.0);
+    let (around, round_tube) = (32_u32, 8000_u32);
+    let (sin_t, cos_t) = tilt.sin_cos();
+    let mut total = 0.0;
+    for j in 0..around {
+        let (sin_p, cos_p) = (2.0 * PI * f64::from(j) / f64::from(around)).sin_cos();
+        let phi = sin_p.atan2(cos_p);
+        let mut polygon: Vec<(f64, f64)> = (0..round_tube)
+            .map(|k| {
+                let (sin_v, cos_v) = (2.0 * PI * f64::from(k) / f64::from(round_tube)).sin_cos();
+                let (w, lift) = (minor.mul_add(cos_v, major), minor * sin_v * sin_t);
+                let mut u = phi;
+                for _ in 0..50 {
+                    let off = w * (u.sin() * cos_t * cos_p - u.cos() * sin_p) - lift * cos_p;
+                    let slope = w * (u.cos() * cos_t * cos_p + u.sin() * sin_p);
+                    let step = off / slope;
+                    u -= step;
+                    if step.abs() < 1e-15 {
+                        break;
+                    }
+                }
+                let (x, y) = (w * u.cos(), (w * u.sin()).mul_add(cos_t, -lift));
+                let z = (w * u.sin()).mul_add(sin_t, minor.mul_add(sin_v * cos_t, top));
+                (x.mul_add(cos_p, y * sin_p), z)
+            })
+            .collect();
+        let bounds: [&dyn Fn((f64, f64)) -> f64; 3] = [
+            &|(r, z)| z - r + outside,
+            &|(r, z)| r - 9.5 - z,
+            &|(_, z)| top - z,
+        ];
+        for bound in bounds {
+            let mut kept = Vec::with_capacity(polygon.len());
+            for (i, &a) in polygon.iter().enumerate() {
+                let b = polygon[(i + 1) % polygon.len()];
+                let (ga, gb) = (bound(a), bound(b));
+                if ga >= 0.0 {
+                    kept.push(a);
+                }
+                if (ga >= 0.0) != (gb >= 0.0) {
+                    let s = ga / (ga - gb);
+                    kept.push((s.mul_add(b.0 - a.0, a.0), s.mul_add(b.1 - a.1, a.1)));
+                }
+            }
+            polygon = kept;
+        }
+        let moment: f64 = (0..polygon.len())
+            .map(|i| {
+                let ((r0, z0), (r1, z1)) = (polygon[i], polygon[(i + 1) % polygon.len()]);
+                (z1 - z0) / 6.0 * r0.mul_add(r0 + r1, r1 * r1)
+            })
+            .sum();
+        total += moment.abs();
+    }
+    total * 2.0 * PI / f64::from(around)
+}
+
+/// The lip leans a ten-thousandth or a thousandth of a radian off the
+/// funnel's axis. The tube still covers the rim's flat ring, and crosses
+/// each cone of the wall along one loop round the axis: the fuse keeps the
+/// body's cones cut along those loops and the part of the tube outside the
+/// wall, and drops the ring, as on the axis.
+#[test]
+fn a_torus_lip_leaning_off_a_funnels_axis_fuses_onto_its_rim() {
+    let skin = 1.6 / FRAC_1_SQRT_2;
+    let major = 80.0 + skin / 2.0 + 0.8;
+    let profile = funnel_profile();
+    let lip = 2.0 * PI * PI * major * 4.0;
+    let level = tilted_lip_in_wall(major, 0.0);
+    assert!(
+        (level - lip_in_wall(major)).abs() < 1e-6 * level,
+        "{level} on the axis"
+    );
+    for tilt in [0.0001, 0.001] {
+        let truth = pappus(&profile) + lip - tilted_lip_in_wall(major, tilt);
+        for pose in POSES {
+            let mut topo = Topology::new();
+            let body = lathe(&mut topo, &profile, 2.0 * PI);
+            let torus = make_torus(&mut topo, major, 2.0, 32).unwrap();
+            let lean = Mat4::translation(0.0, 0.0, 70.5) * Mat4::rotation_x(tilt);
+            transform_solid(&mut topo, torus, &lean).unwrap();
+            let operands = (posed(&mut topo, body, pose), posed(&mut topo, torus, pose));
+            fuse_exactly(
+                &mut topo,
+                operands,
+                pose,
+                &[("cone", 4), ("cylinder", 4), ("plane", 1), ("torus", 1)],
+                truth,
+                ([77.0, -4.0, 67.0], [85.0, 4.0, 73.0], 14),
+            );
+        }
     }
 }
 

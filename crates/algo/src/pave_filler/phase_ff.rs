@@ -3054,9 +3054,96 @@ fn restrict_curves_to_faces(
         {
             continue;
         }
+        // So does a plane's closed section of a ring that leans off the
+        // ring's axis: a marched loop, not a circle.
+        if closed
+            && matches!(raw.curve, EdgeCurve::NurbsCurve(_) | EdgeCurve::Ellipse(_))
+            && [fa, fb]
+                .into_iter()
+                .any(|f| plane_face_clear_of_loop(topo, f, &raw, tol))
+        {
+            continue;
+        }
         out.push(raw);
     }
     out
+}
+
+/// Whether `face` is a plane face that the whole closed section `raw`, in
+/// its plane, lies off. The face's boundary must be lines and conic arcs,
+/// read exactly. The loop is read in pieces, each split until the distances
+/// of its two ends from the boundary sum to more than its length and twice
+/// ten times the linear tolerance: then no point of it comes nearer the
+/// boundary than that, the loop crosses no edge, and one point of it
+/// decides its side. `false` for any other face, a loop off the plane, a
+/// piece that does not settle, or a region that cannot be read.
+fn plane_face_clear_of_loop(topo: &Topology, face: FaceId, raw: &RawCurve, tol: Tolerance) -> bool {
+    const MAX_PIECES: usize = 1 << 16;
+    let depth = 10.0 * tol.linear;
+    let Ok(data) = topo.face(face) else {
+        return false;
+    };
+    let FaceSurface::Plane { normal, .. } = data.surface() else {
+        return false;
+    };
+    let Some(origin) = topo
+        .wire(data.outer_wire())
+        .ok()
+        .and_then(|w| w.edges().first().copied())
+        .and_then(|oe| topo.edge(oe.edge()).ok())
+        .and_then(|e| topo.vertex(e.start()).ok())
+        .map(Vertex::point)
+    else {
+        return false;
+    };
+    let frame = crate::builder::plane_frame::PlaneFrame::from_normal_and_point(*normal, origin);
+    let Ok(Some(pieces)) = brepkit_topology::planar::face_boundary_2d(
+        topo,
+        face,
+        frame.origin(),
+        frame.u_axis(),
+        frame.v_axis(),
+    ) else {
+        return false;
+    };
+    let at = |t: f64| raw.curve.evaluate_with_endpoints(t, raw.p_start, raw.p_end);
+    let gap = |p: Point3| {
+        ((p - origin).dot(*normal).abs() <= depth)
+            .then(|| brepkit_math::region2d::distance_to_boundary(&pieces, frame.project(p)))
+    };
+    let (t0, t1) = raw.t_range;
+    let Some(first_gap) = gap(at(t0)) else {
+        return false;
+    };
+    if brepkit_math::region2d::point_in_region(&pieces, frame.project(at(t0)), depth) != Some(false)
+    {
+        return false;
+    }
+    let mut pending = vec![(t0, t1, first_gap, first_gap)];
+    let mut read = 0;
+    while let Some((a, b, gap_a, gap_b)) = pending.pop() {
+        read += 1;
+        if read > MAX_PIECES {
+            return false;
+        }
+        let points: Vec<Point3> = (0..=8)
+            .map(|k| at((b - a).madd(f64::from(k) / 8.0, a)))
+            .collect();
+        let length: f64 = points.windows(2).map(|w| (w[1] - w[0]).length()).sum();
+        if gap_a + gap_b > 1.05f64.madd(length, 2.0 * depth) {
+            continue;
+        }
+        let middle = f64::midpoint(a, b);
+        let Some(gap_m) = gap(at(middle)) else {
+            return false;
+        };
+        if gap_m <= depth {
+            return false;
+        }
+        pending.push((a, middle, gap_a, gap_m));
+        pending.push((middle, b, gap_m, gap_b));
+    }
+    true
 }
 
 /// Whether `face` is a plane face that the whole `circle`, in its plane,
@@ -10905,6 +10992,54 @@ mod tests {
                 "spline {spline}: the circle in the hole"
             );
         }
+    }
+
+    /// A closed spline loop round the thin ring's centre at radius 9.95 lies
+    /// in the ring's hole, off the ring. With a bump to radius 10.01 along an
+    /// arc of a few hundredths of a radian it runs into the ring, and lifted
+    /// off the ring's plane it is not read at all.
+    #[test]
+    fn a_spline_loop_in_a_thin_rings_hole_is_off_it() {
+        let tol = Tolerance::default();
+        let looped = |bump: f64, lift: f64| {
+            let n = 2000;
+            let points: Vec<Point3> = (0..=n)
+                .map(|k| {
+                    let at = std::f64::consts::TAU * f64::from(k % n) / f64::from(n);
+                    let r = bump.madd((-((at - 1.0) / 0.02).powi(2)).exp(), 9.95);
+                    Point3::new(r * at.cos(), r * at.sin(), lift)
+                })
+                .collect();
+            let curve = brepkit_math::nurbs::fitting::interpolate(&points, 3).unwrap();
+            let t_range = curve.domain();
+            RawCurve {
+                bbox: Aabb3::from_points(points.iter().copied()),
+                p_start: curve.evaluate(t_range.0),
+                p_end: curve.evaluate(t_range.1),
+                curve: EdgeCurve::NurbsCurve(curve),
+                t_range,
+            }
+        };
+        let mut topo = Topology::new();
+        let ring = thin_ring(&mut topo, false);
+        assert!(plane_face_clear_of_loop(
+            &topo,
+            ring,
+            &looped(0.0, 0.0),
+            tol
+        ));
+        assert!(!plane_face_clear_of_loop(
+            &topo,
+            ring,
+            &looped(0.06, 0.0),
+            tol
+        ));
+        assert!(!plane_face_clear_of_loop(
+            &topo,
+            ring,
+            &looped(0.0, 1.0),
+            tol
+        ));
     }
 
     /// A point on a torus and a plane lies on their section: its error is
