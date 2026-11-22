@@ -1,5 +1,17 @@
 # Changelog
 
+## [4.11.37](https://github.com/andymai/brepkit/compare/v4.11.36...v4.11.37) (2026-11-22)
+
+
+### Bug Fixes
+
+* **algo,heal,operations,check:** read a closed section's run in u, keep a bored ball's halves apart, and seam a band before a boolean ([#2694](https://github.com/andymai/brepkit/issues/2694)) ([a40c22f](https://github.com/andymai/brepkit/commit/a40c22fe9e6cd50c3481dac4a7c5979a33280c50))
+* **algo,operations:** read a whole rim in one edge as one turn, and box pieces by their faces when testing nesting ([#2699](https://github.com/andymai/brepkit/issues/2699)) ([45ed878](https://github.com/andymai/brepkit/commit/45ed8781ccc548087d4abc3083662fbfa88b8651))
+* **algo:** read an edge nearly tangent to a surface as one touch, and keep the short arcs of a long thin ellipse ([#2709](https://github.com/andymai/brepkit/issues/2709)) ([5d2127d](https://github.com/andymai/brepkit/commit/5d2127d75e17452044edda17397bc0cb5045946f))
+* **math,check:** measure a block with a long D-shaped hole, a closed B-spline wall and a torus corner alike in every pose ([#2696](https://github.com/andymai/brepkit/issues/2696)) ([ba5d033](https://github.com/andymai/brepkit/commit/ba5d0334de448af1bd9897ab318d250a9862dcd5))
+* **operations,blend:** chamfer builds the same topology on every run, and the hole guard skips a face with no hole ([#2688](https://github.com/andymai/brepkit/issues/2688)) ([73017d0](https://github.com/andymai/brepkit/commit/73017d02ea1afb0baf036537852e2ba7287eb886))
+* **operations,blend:** close a swallowed round's notch mesh, refuse a revolve across its axis, and round a rim across a ball's equator ([#2705](https://github.com/andymai/brepkit/issues/2705)) ([5d2dae8](https://github.com/andymai/brepkit/commit/5d2dae84077f69286625058d1bda655339255228))
+
 ## [4.11.36](https://github.com/andymai/brepkit/compare/v4.11.35...v4.11.36) (2026-11-22)
 
 
