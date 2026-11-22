@@ -54,6 +54,10 @@ pub use solid::{
 /// when boolean operations create separate edge entities for the same curve.
 const MERGE_GRID: f64 = 1e-7;
 
+/// The global vertex at each [`point_merge_key`] of a solid's mesh. No
+/// result may depend on the order of its entries.
+pub(super) type PointPool = brepkit_math::det_hash::WordHashMap<(i64, i64, i64), u32>;
+
 /// Quantize a 3D point to a spatial grid cell for tolerance-based deduplication.
 ///
 /// Two points whose coordinates differ by less than `grid` will (usually) map to
