@@ -13687,4 +13687,73 @@ mod tests {
         }
         assert!(checked, "neither cap holds the pole");
     }
+
+    /// A section along the first half of a straight spline from the origin
+    /// to `(20, 0, 0)`, its parameter span `(0, 0.5)`, and boundary edges of
+    /// one face of the pair crossing the other face at points on the spline.
+    /// Points at either end of the section, within `ADOPT_MAX` of an end, and
+    /// on the spline past the section's end are none of its crossings. Of two
+    /// crossings inside it, both off its middle by more than a twentieth of
+    /// its span, the one nearer the middle is taken, and the two halves it
+    /// leaves are each longer than `ADOPT_MAX`.
+    #[test]
+    fn a_crossing_anywhere_inside_a_section_splits_it_and_none_at_its_ends() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        use brepkit_topology::test_utils::make_unit_square_face;
+
+        let mut topo = Topology::new();
+        let fa = make_unit_square_face(&mut topo);
+        let fb = make_unit_square_face(&mut topo);
+        let wire = topo.face(fa).unwrap().outer_wire();
+        let edge = topo.wire(wire).unwrap().edges()[0].edge();
+        let along = |x: f64| Point3::new(x, 0.0, 0.0);
+        let spline = NurbsCurve::new(
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![along(0.0), along(20.0)],
+            vec![1.0, 1.0],
+        )
+        .unwrap();
+        let raw = RawCurve {
+            curve: EdgeCurve::NurbsCurve(spline),
+            bbox: Aabb3::from_points([along(0.0), along(10.0)]),
+            t_range: (0.0, 0.5),
+            p_start: along(0.0),
+            p_end: along(10.0),
+        };
+        let near_end = 0.5 * JunctionRegistry::ADOPT_MAX;
+        let mut arena = GfaArena::new();
+        let cross_at = |topo: &mut Topology, arena: &mut GfaArena, x: f64| {
+            let v = topo.add_vertex(Vertex::new(along(x), 1e-7));
+            arena.interference.ef.push(crate::ds::Interference::EF {
+                edge,
+                face: fb,
+                new_vertex: Some(v),
+                parameter: None,
+                run: None,
+            });
+        };
+        for x in [0.0, near_end, 10.0 - near_end, 10.0, 15.0] {
+            cross_at(&mut topo, &mut arena, x);
+        }
+        assert_eq!(
+            crossing_inside_section(&topo, &arena, fa, fb, &raw),
+            None,
+            "a point at, by or past an end of the section is taken"
+        );
+        for x in [2.0, 7.4] {
+            cross_at(&mut topo, &mut arena, x);
+        }
+        let (t, p) = crossing_inside_section(&topo, &arena, fa, fb, &raw)
+            .expect("a crossing inside the section");
+        assert!((t - 0.37).abs() < 1e-9, "the crossing taken lies at {t}");
+        assert!((p - along(7.4)).length() < 1e-12);
+        assert!(
+            (p - raw.p_start).length() > JunctionRegistry::ADOPT_MAX
+                && (raw.p_end - p).length() > JunctionRegistry::ADOPT_MAX
+                && t - raw.t_range.0 > 0.0
+                && raw.t_range.1 - t > 0.0,
+            "a half of the section at {t} has no length"
+        );
+    }
 }
