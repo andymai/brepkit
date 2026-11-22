@@ -5151,9 +5151,9 @@ fn point_on_edge(
 }
 
 /// `point`'s distance from an edge, or from its trace on `onto` (each of
-/// its points projected on to that surface): in closed form for a line or
-/// an arc with no `onto`, else its nearest sample, refined by golden section
-/// between the sample's neighbours.
+/// its points projected on to that surface): with no `onto`, as
+/// [`EdgeReads`] reads it; else its nearest sample, refined by golden
+/// section between the sample's neighbours.
 fn edge_distance(
     topo: &Topology,
     edge_id: EdgeId,
