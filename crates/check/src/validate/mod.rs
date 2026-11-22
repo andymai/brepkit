@@ -1,6 +1,7 @@
 //! Hierarchical shape validation.
 
 pub mod checks;
+pub mod curved_overlap;
 pub(crate) mod edge;
 pub(crate) mod face;
 pub mod face_overlap;
@@ -77,6 +78,13 @@ pub fn validate_solid(
             solid_id,
             options.tolerance_scale * 1e-6,
         )?);
+        report
+            .issues
+            .extend(curved_overlap::check_curved_faces_overlap(
+                topo,
+                solid_id,
+                options.tolerance_scale * 1e-6,
+            )?);
     }
 
     let shells: Vec<_> = std::iter::once(solid_data.outer_shell())

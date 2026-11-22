@@ -153,13 +153,31 @@ fn hit_in_sphere_hole(
     outer: &[Point3],
     normal: Vec3,
 ) -> Result<bool, CheckError> {
+    Ok(in_sphere_hole(
+        &face_holes(topo, face_id)?,
+        hit,
+        outer,
+        normal,
+    ))
+}
+
+/// The samples of each of a face's holes with three or more of them.
+fn face_holes(topo: &Topology, face_id: FaceId) -> Result<Vec<Vec<Point3>>, CheckError> {
+    let mut holes = Vec::new();
     for &iw in topo.face(face_id)?.inner_wires() {
         let hole = crate::util::wire_polygon(topo, iw)?;
-        if hole.len() < 3 {
-            continue;
+        if hole.len() >= 3 {
+            holes.push(hole);
         }
-        let hole_normal = polygon_normal(&hole);
-        let in_hole = if loop_is_planar(&hole, hole_normal) {
+    }
+    Ok(holes)
+}
+
+/// [`hit_in_sphere_hole`] for a face's `holes` as [`face_holes`] reads them.
+fn in_sphere_hole(holes: &[Vec<Point3>], hit: Point3, outer: &[Point3], normal: Vec3) -> bool {
+    for hole in holes {
+        let hole_normal = polygon_normal(hole);
+        let in_hole = if loop_is_planar(hole, hole_normal) {
             let at = hole[0];
             let near = outer
                 .iter()
@@ -168,13 +186,13 @@ fn hit_in_sphere_hole(
             let side = (hit - at).dot(hole_normal);
             near != 0.0 && side * near.signum() < -HALF_SPACE_EPS
         } else {
-            point_in_polygon_along(&hit, &hole, normal)
+            point_in_polygon_along(&hit, hole, normal)
         };
         if in_hole {
-            return Ok(true);
+            return true;
         }
     }
-    Ok(false)
+    false
 }
 
 fn loop_is_planar(pts: &[Point3], normal: Vec3) -> bool {
@@ -246,30 +264,37 @@ fn hit_in_inner_wire_3d(
     Ok(false)
 }
 
-/// UV-space counterpart of [`hit_in_inner_wire_3d`] for curved faces.
-fn hit_in_inner_wire_uv<F>(
+/// A face's holes in `(u, v)`: the UV-space counterpart of
+/// [`hit_in_inner_wire_3d`]'s holes for curved faces.
+fn uv_holes<F>(
     topo: &Topology,
     face_id: FaceId,
-    hit_u: f64,
-    hit_v: f64,
     project: &F,
-    u_periodic: bool,
     v_periodic: bool,
-) -> Result<bool, CheckError>
+) -> Result<Vec<Vec<(f64, f64)>>, CheckError>
 where
     F: Fn(Point3) -> (f64, f64),
 {
-    for &iw in topo.face(face_id)?.inner_wires() {
-        let hole = crate::util::wire_polygon(topo, iw)?;
-        if hole.len() < 3 {
-            continue;
-        }
-        let uv_hole = build_uv_boundary(&hole, project, v_periodic);
-        if point_in_uv_boundary(hit_u, hit_v, &uv_hole, u_periodic, v_periodic) {
-            return Ok(true);
-        }
+    Ok(face_holes(topo, face_id)?
+        .iter()
+        .map(|hole| build_uv_boundary(hole, project, v_periodic))
+        .collect())
+}
+
+/// What a batch of points reads once of a face's holes: built when a point
+/// first needs them.
+pub type Holes<T> = std::cell::OnceCell<Vec<T>>;
+
+/// The holes in `cell`, read by `read` if no point has read them yet.
+fn holes_of<T>(
+    cell: &Holes<T>,
+    read: impl FnOnce() -> Result<Vec<T>, CheckError>,
+) -> Result<&[T], CheckError> {
+    if let Some(holes) = cell.get() {
+        return Ok(holes);
     }
-    Ok(false)
+    let holes = read()?;
+    Ok(cell.get_or_init(|| holes))
 }
 
 /// Count crossings for analytic (non-planar) faces using UV containment.
@@ -447,12 +472,43 @@ fn uv_region_contains<F>(
 where
     F: Fn(Point3) -> (f64, f64),
 {
+    uv_region_contains_with(
+        region,
+        &Holes::new(),
+        topo,
+        face_id,
+        (u, v),
+        project,
+        v_periodic,
+    )
+}
+
+/// [`uv_region_contains`] with the face's holes kept in `holes` from one
+/// point to the next.
+fn uv_region_contains_with<F>(
+    region: &UvRegion,
+    holes: &Holes<Vec<(f64, f64)>>,
+    topo: &Topology,
+    face_id: FaceId,
+    (u, v): (f64, f64),
+    project: &F,
+    v_periodic: bool,
+) -> Result<bool, CheckError>
+where
+    F: Fn(Point3) -> (f64, f64),
+{
     let in_outer = match region {
         UvRegion::Whole => true,
         UvRegion::Bounded(boundary) => point_in_uv_boundary(u, v, boundary, true, v_periodic),
         UvRegion::Band(rims) => return Ok(band_contains(rims, (u, v))),
     };
-    Ok(in_outer && !hit_in_inner_wire_uv(topo, face_id, u, v, project, true, v_periodic)?)
+    if !in_outer {
+        return Ok(false);
+    }
+    let holes = holes_of(holes, || uv_holes(topo, face_id, project, v_periodic))?;
+    Ok(!holes
+        .iter()
+        .any(|hole| point_in_uv_boundary(u, v, hole, true, v_periodic)))
 }
 
 /// A `(u, v)` loop's enclosed area, by the shoelace sum.
@@ -527,33 +583,69 @@ pub fn face_contains_each(
         FaceSurface::Cylinder(cyl) => {
             let project = |q: Point3| cyl.project_point(q);
             let region = uv_region(topo, face_id, &project, false, None)?;
+            let holes = Holes::new();
             points
                 .iter()
-                .map(|&p| uv_region_contains(&region, topo, face_id, project(p), &project, false))
+                .map(|&p| {
+                    uv_region_contains_with(
+                        &region,
+                        &holes,
+                        topo,
+                        face_id,
+                        project(p),
+                        &project,
+                        false,
+                    )
+                })
                 .collect()
         }
         FaceSurface::Cone(cone) => {
             let project = |q: Point3| cone.project_point(q);
             let region = uv_region(topo, face_id, &project, false, Some(cone.apex()))?;
+            let holes = Holes::new();
             points
                 .iter()
-                .map(|&p| uv_region_contains(&region, topo, face_id, project(p), &project, false))
+                .map(|&p| {
+                    uv_region_contains_with(
+                        &region,
+                        &holes,
+                        topo,
+                        face_id,
+                        project(p),
+                        &project,
+                        false,
+                    )
+                })
                 .collect()
         }
         FaceSurface::Torus(tor) => {
             let project = |q: Point3| tor.project_point_nearest(q);
             let apex = torus_axis_vertex(topo, face_id, tor)?;
             let region = uv_region(topo, face_id, &project, true, apex)?;
+            let holes = Holes::new();
             points
                 .iter()
-                .map(|&p| uv_region_contains(&region, topo, face_id, project(p), &project, true))
+                .map(|&p| {
+                    uv_region_contains_with(
+                        &region,
+                        &holes,
+                        topo,
+                        face_id,
+                        project(p),
+                        &project,
+                        true,
+                    )
+                })
                 .collect()
         }
         FaceSurface::Sphere(_) => match SphereRegion::of(topo, face_id)? {
-            Some(region) => points
-                .iter()
-                .map(|&p| region.contains(topo, face_id, p))
-                .collect(),
+            Some(region) => {
+                let holes = Holes::new();
+                points
+                    .iter()
+                    .map(|&p| region.contains_with(&holes, topo, face_id, p))
+                    .collect()
+            }
             None => Ok(vec![true; points.len()]),
         },
         FaceSurface::Nurbs(surface) => {
@@ -564,13 +656,19 @@ pub fn face_contains_each(
             // A closed surface's seam copies project to one `u`, folding its
             // loop flat: such a face is the whole surface.
             let whole = verts.len() < 3 || uv_area(&boundary) <= 1e-9 * uv_extent(&boundary);
+            let holes = Holes::new();
             points
                 .iter()
                 .map(|&p| {
                     let (u, v) = project(p);
                     let in_outer = whole || point_in_uv_boundary(u, v, &boundary, false, false);
-                    Ok(in_outer
-                        && !hit_in_inner_wire_uv(topo, face_id, u, v, &project, false, false)?)
+                    if !in_outer {
+                        return Ok(false);
+                    }
+                    let holes = holes_of(&holes, || uv_holes(topo, face_id, &project, false))?;
+                    Ok(!holes
+                        .iter()
+                        .any(|hole| point_in_uv_boundary(u, v, hole, false, false)))
                 })
                 .collect()
         }
@@ -698,6 +796,28 @@ impl SphereRegion {
             || ((p - self.outer[0]).dot(self.normal) >= -HALF_SPACE_EPS
                 && (self.planar || point_in_polygon_along(&p, &self.outer, self.normal)));
         Ok(in_outer && !hit_in_sphere_hole(topo, face_id, p, &self.outer, self.normal)?)
+    }
+
+    /// [`Self::contains`] with the face's holes kept in `holes` from one
+    /// point to the next.
+    pub fn contains_with(
+        &self,
+        holes: &Holes<Vec<Point3>>,
+        topo: &Topology,
+        face_id: FaceId,
+        p: Point3,
+    ) -> Result<bool, CheckError> {
+        if let Some(inside) = self.rims.as_ref().and_then(|rims| rims.contains(p)) {
+            return Ok(inside);
+        }
+        let in_outer = self.whole
+            || ((p - self.outer[0]).dot(self.normal) >= -HALF_SPACE_EPS
+                && (self.planar || point_in_polygon_along(&p, &self.outer, self.normal)));
+        if !in_outer {
+            return Ok(false);
+        }
+        let holes = holes_of(holes, || face_holes(topo, face_id))?;
+        Ok(!in_sphere_hole(holes, p, &self.outer, self.normal))
     }
 }
 
