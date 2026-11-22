@@ -122,6 +122,60 @@ pub fn unify_same_domain(
     Ok((solid_id, result))
 }
 
+/// Merge each given group of plane faces of the solid's outer shell.
+///
+/// The groups are the caller's: faces it has found on one plane, which this
+/// function does not read again. The edges between the faces of a group go;
+/// every other edge stays as it is, so no edge of the shell is joined to
+/// another. A group whose faces do not reassemble into loops is left as it
+/// was, and so is the whole shell where the merge would leave an edge with
+/// other than two uses. Returns the number of faces merged away.
+///
+/// # Errors
+///
+/// Returns [`HealError`] if entity lookups fail during merging.
+pub fn unify_face_groups(
+    topo: &mut Topology,
+    solid_id: SolidId,
+    groups: &[Vec<FaceId>],
+    options: &UnifyOptions,
+) -> Result<usize, HealError> {
+    let shell_id = topo.solid(solid_id)?.outer_shell();
+    let current: Vec<FaceId> = topo.shell(shell_id)?.faces().to_vec();
+    let mut removed: HashSet<FaceId> = HashSet::new();
+    let mut added: Vec<FaceId> = Vec::new();
+    let mut merged = 0;
+    for group in groups {
+        if group.len() < 2 || group.iter().any(|face| !current.contains(face)) {
+            continue;
+        }
+        let surface = topo.face(group[0])?.surface().clone();
+        if !surface.is_planar() {
+            continue;
+        }
+        let Some(faces) = merge_group_with_holes(topo, group, &surface, options)? else {
+            continue;
+        };
+        removed.extend(group.iter().copied());
+        merged += group.len() - faces.len();
+        added.extend(faces);
+    }
+    if merged == 0 {
+        return Ok(0);
+    }
+    let mut kept: Vec<FaceId> = current
+        .iter()
+        .copied()
+        .filter(|face| !removed.contains(face))
+        .collect();
+    kept.extend(&added);
+    if unpaired_edge_count(topo, &kept)? > unpaired_edge_count(topo, &current)? {
+        return Ok(0);
+    }
+    *topo.shell_mut(shell_id)? = Shell::new(kept)?;
+    Ok(merged)
+}
+
 #[allow(clippy::too_many_lines)]
 fn unify_faces(
     topo: &mut Topology,

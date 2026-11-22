@@ -146,9 +146,10 @@ fn pcurve_off_its_edge(
 /// A result with a fault the builder does not read (a face whose outline
 /// crosses itself, a hole across or outside its face's outline, or two plane
 /// faces over one area) is refused: the solid comes back with each edge
-/// named in `failed`. Where the fillet fails on a solid that keeps
-/// flat seams (faces of one surface left in pieces by a boolean), it is made
-/// again on a copy with those faces joined; a picked seam is passed over.
+/// named in `failed`. Where the fillet fails on a solid that keeps flat
+/// seams at the picked edges (faces of one plane left in pieces by a
+/// boolean), it is made again on a copy with those faces merged; a picked
+/// seam is passed over.
 ///
 /// # Errors
 /// Returns `OperationsError` if radius is non-positive, edges are empty,
@@ -205,36 +206,31 @@ fn fillet_directly(
     own_cavities(topo, solid, built, "fillet")
 }
 
-/// `edges` rounded on a copy of `solid` whose flat seams are gone: the
-/// faces of one surface that a boolean keeps as pieces are joined, and so
-/// are the pieces of each straight edge along them. The corner solver finds
-/// the face two rounds share by its identity, so two rounds that meet where
-/// a seam cuts that face in pieces find none.
+/// `edges` rounded on a copy of `solid` with the flat seams at the picks
+/// gone. A boolean can keep two faces of one plane as pieces that meet in a
+/// flat seam. The corner solver finds the face two rounds share by its
+/// identity, so two rounds that meet where a seam cuts that face find none.
+/// On the copy, the plane faces that a seam at an end of a pick divides are
+/// merged: faces of one plane within the linear tolerance
+/// ([`crate::query::edges_in_one_surface`]) and facing one way. No edge is
+/// joined to another, so each pick is its own edge on the copy.
 ///
-/// A picked seam is passed over, as the walking engine passes it over: it
-/// has no angle to round. `None` where `solid` has no seam between two
-/// faces, where a pick is only part of an edge the join makes (the round
-/// would then run past the pick), or where the fillet of the copy fails or
-/// leaves an invalid solid.
+/// A picked seam is passed over, as the walking engine passes it over. `None`
+/// where a pick is not an edge of `solid`, where no flat seam meets a pick,
+/// or where the fillet of the copy fails or leaves an invalid solid.
 fn fillet_across_flat_seams(
     topo: &mut Topology,
     solid: SolidId,
     edges: &[EdgeId],
     radius: f64,
 ) -> Result<Option<BlendResult>, OperationsError> {
-    use brepkit_heal::upgrade::unify_same_domain::{UnifyOptions, unify_same_domain};
+    use brepkit_heal::upgrade::unify_same_domain::{UnifyOptions, unify_face_groups};
     let all = brepkit_topology::explorer::solid_edges(topo, solid)?;
-    let in_one_surface = crate::query::edges_in_one_surface(topo, solid, &all)?;
-    let uses = brepkit_topology::explorer::edge_to_face_map(topo, solid)?;
-    let flat_seam = |edge: EdgeId| {
-        in_one_surface.contains(&edge.index())
-            && uses
-                .get(&edge.index())
-                .is_some_and(|faces| faces.len() == 2 && faces[0] != faces[1])
-    };
-    if !all.iter().any(|&edge| flat_seam(edge)) {
+    let known: HashSet<EdgeId> = all.iter().copied().collect();
+    if edges.iter().any(|edge| !known.contains(edge)) {
         return Ok(None);
     }
+    let in_one_surface = crate::query::edges_in_one_surface(topo, solid, &all)?;
     let mut picks: Vec<EdgeId> = Vec::with_capacity(edges.len());
     for &edge in edges {
         if !in_one_surface.contains(&edge.index()) && !picks.contains(&edge) {
@@ -244,92 +240,97 @@ fn fillet_across_flat_seams(
     if picks.is_empty() {
         return Ok(None);
     }
-    let ends = |topo: &Topology, edge: EdgeId| -> Result<(Point3, Point3), OperationsError> {
-        let edge = topo.edge(edge)?;
-        Ok((
-            topo.vertex(edge.start())?.point(),
-            topo.vertex(edge.end())?.point(),
-        ))
-    };
-    let middle = |topo: &Topology, edge: EdgeId| -> Result<Point3, OperationsError> {
-        let (a, b) = ends(topo, edge)?;
-        let data = topo.edge(edge)?;
-        let (t0, t1) = data.curve().domain_with_endpoints(a, b);
-        Ok(data.curve().evaluate_with_endpoints(0.5 * (t0 + t1), a, b))
-    };
-    let size = crate::measure::solid_bounding_box(topo, solid)
-        .map_or(1.0, |aabb| (aabb.max - aabb.min).length().max(1.0));
-    let tol = Tolerance::new().linear * size;
-    // Each pick's middle, the kind of its curve, and its length if straight.
-    let mut wanted = Vec::with_capacity(picks.len());
+    let mut reached: HashSet<VertexId> = HashSet::new();
     for &edge in &picks {
-        let curve = topo.edge(edge)?.curve();
-        let straight = matches!(curve, EdgeCurve::Line);
-        let kind = std::mem::discriminant(curve);
-        let (a, b) = ends(topo, edge)?;
-        wanted.push((
-            middle(topo, edge)?,
-            kind,
-            straight.then(|| (b - a).length()),
-        ));
+        let data = topo.edge(edge)?;
+        reached.extend([data.start(), data.end()]);
     }
-    let copy = crate::copy::copy_solid(topo, solid)?;
-    let (joined, unified) =
-        unify_same_domain(topo, copy, &UnifyOptions::default()).map_err(|e| {
-            OperationsError::InvalidInput {
-                reason: format!("joining the faces of one surface: {e}"),
-            }
-        })?;
-    if unified.faces_merged == 0 {
+    let uses = brepkit_topology::explorer::edge_to_face_map(topo, solid)?;
+    let mut seams: Vec<(FaceId, FaceId)> = Vec::new();
+    for &edge in &all {
+        let data = topo.edge(edge)?;
+        if !in_one_surface.contains(&edge.index())
+            || !(reached.contains(&data.start()) || reached.contains(&data.end()))
+        {
+            continue;
+        }
+        let Some(&[f1, f2]) = uses.get(&edge.index()).map(std::ops::Deref::deref) else {
+            continue;
+        };
+        let (Some(n1), Some(n2)) = (
+            topo.face(f1)?.effective_plane_normal(),
+            topo.face(f2)?.effective_plane_normal(),
+        ) else {
+            continue;
+        };
+        if f1 != f2 && n1.dot(n2) > 0.0 {
+            seams.push((f1, f2));
+        }
+    }
+    if seams.is_empty() {
         return Ok(None);
     }
-    let candidates = brepkit_topology::explorer::solid_edges(topo, joined)?;
-    // Each joined edge a pick lies on, with the length of it the picks take.
-    let mut targets: Vec<(EdgeId, f64)> = Vec::new();
-    for &(mid, kind, length) in &wanted {
-        let mut hit = None;
-        for &candidate in &candidates {
-            if std::mem::discriminant(topo.edge(candidate)?.curve()) != kind {
-                continue;
-            }
-            let on = if length.is_some() {
-                let (p, q) = ends(topo, candidate)?;
-                let d = q - p;
-                let t = (mid - p).dot(d) / d.dot(d).max(f64::MIN_POSITIVE);
-                (0.0..=1.0).contains(&t) && (p + d * t - mid).length() <= tol
-            } else {
-                (middle(topo, candidate)? - mid).length() <= tol
-            };
-            if on {
-                hit = Some(candidate);
-                break;
-            }
-        }
-        let Some(hit) = hit else {
+    let copy = crate::copy::copy_solid(topo, solid)?;
+    let (face_map, edge_map) = copy_maps(topo, solid, copy)?;
+    let order = solid_faces(topo, copy)?;
+    let mut group_of: HashMap<FaceId, usize> = order.iter().map(|&f| (f, usize::MAX)).collect();
+    let mut groups: Vec<Vec<FaceId>> = Vec::new();
+    for (a, b) in seams {
+        let (Some(&a), Some(&b)) = (face_map.get(&a), face_map.get(&b)) else {
             return Ok(None);
         };
-        match targets.iter_mut().find(|(edge, _)| *edge == hit) {
-            Some((_, taken)) => *taken += length.unwrap_or(0.0),
-            None => targets.push((hit, length.unwrap_or(0.0))),
-        }
-    }
-    for &(edge, taken) in &targets {
-        if matches!(topo.edge(edge)?.curve(), EdgeCurve::Line) {
-            let (p, q) = ends(topo, edge)?;
-            if ((q - p).length() - taken).abs() > tol {
-                return Ok(None);
+        let at = |face: &FaceId| group_of.get(face).copied().unwrap_or(usize::MAX);
+        match (at(&a), at(&b)) {
+            (usize::MAX, usize::MAX) => {
+                group_of.insert(a, groups.len());
+                group_of.insert(b, groups.len());
+                groups.push(vec![a, b]);
             }
+            (g, usize::MAX) => {
+                group_of.insert(b, g);
+                groups[g].push(b);
+            }
+            (usize::MAX, g) => {
+                group_of.insert(a, g);
+                groups[g].push(a);
+            }
+            (g, h) if g != h => {
+                let moved = std::mem::take(&mut groups[h]);
+                for &face in &moved {
+                    group_of.insert(face, g);
+                }
+                groups[g].extend(moved);
+            }
+            _ => {}
         }
     }
-    let targets: Vec<EdgeId> = targets.into_iter().map(|(edge, _)| edge).collect();
-    let result = match fillet_directly(topo, joined, &targets, radius) {
+    groups.retain(|group| !group.is_empty());
+    for group in &mut groups {
+        group.sort_by_key(|face| order.iter().position(|f| f == face));
+    }
+    let merged = unify_face_groups(topo, copy, &groups, &UnifyOptions::default()).map_err(|e| {
+        OperationsError::InvalidInput {
+            reason: format!("joining the faces of one plane: {e}"),
+        }
+    })?;
+    if merged == 0 {
+        return Ok(None);
+    }
+    let targets: Vec<EdgeId> = picks
+        .iter()
+        .filter_map(|edge| edge_map.get(edge).copied())
+        .collect();
+    if targets.len() != picks.len() {
+        return Ok(None);
+    }
+    let result = match fillet_directly(topo, copy, &targets, radius) {
         Ok(result) => result,
         Err(e) => {
             log::debug!("fillet across flat seams: the joined solid's fillet fails: {e}");
             return Ok(None);
         }
     };
-    if result.solid == joined || !result.failed.is_empty() {
+    if result.solid == copy || !result.failed.is_empty() {
         return Ok(None);
     }
     Ok(Some(BlendResult {
@@ -338,6 +339,47 @@ fn fillet_across_flat_seams(
         failed: Vec::new(),
         is_partial: false,
     }))
+}
+
+/// A copy's faces and edges, keyed by those of the solid they copy.
+type CopyMaps = (HashMap<FaceId, FaceId>, HashMap<EdgeId, EdgeId>);
+
+/// The faces and edges of `copy`, a [`crate::copy::copy_solid`] of `solid`,
+/// by those of `solid` they copy: the copy keeps the order of the shells,
+/// faces, wires and edges.
+fn copy_maps(topo: &Topology, solid: SolidId, copy: SolidId) -> Result<CopyMaps, OperationsError> {
+    let lost = || OperationsError::InvalidInput {
+        reason: "the copy does not match its solid".into(),
+    };
+    let (from, to) = (solid_faces(topo, solid)?, solid_faces(topo, copy)?);
+    if from.len() != to.len() {
+        return Err(lost());
+    }
+    let mut faces = HashMap::with_capacity(from.len());
+    let mut edges = HashMap::new();
+    for (&a, &b) in from.iter().zip(&to) {
+        faces.insert(a, b);
+        let wires = |face: FaceId| -> Result<Vec<brepkit_topology::wire::WireId>, OperationsError> {
+            let data = topo.face(face)?;
+            Ok(std::iter::once(data.outer_wire())
+                .chain(data.inner_wires().iter().copied())
+                .collect())
+        };
+        let (wa, wb) = (wires(a)?, wires(b)?);
+        if wa.len() != wb.len() {
+            return Err(lost());
+        }
+        for (wa, wb) in wa.into_iter().zip(wb) {
+            let (ea, eb) = (topo.wire(wa)?.edges(), topo.wire(wb)?.edges());
+            if ea.len() != eb.len() {
+                return Err(lost());
+            }
+            for (oa, ob) in ea.iter().zip(eb) {
+                edges.insert(oa.edge(), ob.edge());
+            }
+        }
+    }
+    Ok((faces, edges))
 }
 
 /// A walking-engine fillet's result, or `solid` with every edge the

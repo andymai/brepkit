@@ -244,4 +244,96 @@ mod tests {
             Some(VOLUME - 6.0 * area),
         );
     }
+
+    /// The rim less the piece of its y = 0 edge on the second box: the
+    /// rounds meet at the inside corner, so the fillet is made on a copy
+    /// with the seams merged. Each pick stays its own edge there, and the
+    /// round of the other piece ends square at the seam's vertex, as it
+    /// does where nothing is merged.
+    #[test]
+    fn a_retried_round_stays_on_its_picks() {
+        let r = 0.5;
+        let mut topo = Topology::new();
+        let l = fused_l(&mut topo);
+        let rim = edges_where(&topo, l, |a, b| {
+            on_top(a, b)
+                && !on_seam(a, b)
+                && !(a.y().abs() < 1e-9 && b.y().abs() < 1e-9 && a.x().max(b.x()) < 4.0 + 1e-9)
+        });
+        assert_eq!(rim.len(), 7);
+        let area = (1.0 - FRAC_PI_4) * r * r;
+        let ybar = r * (10.0 - 3.0 * PI) / (12.0 - 3.0 * PI);
+        let want = VOLUME - area * (36.0 - 8.0 * ybar + FRAC_PI_2 * ybar);
+        rounds_to("rim less a piece", &mut topo, l, &rim, r, Some(want));
+    }
+
+    /// An edge of another solid lying on the fused L's rim, picked in place
+    /// of the rim's two pieces there, is never reported as rounded.
+    #[test]
+    fn an_edge_of_another_solid_is_never_rounded() {
+        let mut topo = Topology::new();
+        let l = fused_l(&mut topo);
+        let other = make_box(&mut topo, 10.0, 4.0, HEIGHT).unwrap();
+        let foreign = edges_where(&topo, other, |a, b| {
+            on_top(a, b) && a.y().abs() < 1e-9 && b.y().abs() < 1e-9
+        });
+        assert_eq!(foreign.len(), 1);
+        let mut picks = edges_where(&topo, l, |a, b| {
+            on_top(a, b) && !on_seam(a, b) && !(a.y().abs() < 1e-9 && b.y().abs() < 1e-9)
+        });
+        assert_eq!(picks.len(), 6);
+        picks.push(foreign[0]);
+        if let Ok(result) = fillet_v2(&mut topo, l, &picks, 0.5) {
+            assert!(
+                !result.succeeded.contains(&foreign[0]),
+                "an edge of another solid was reported rounded"
+            );
+        }
+    }
+
+    /// The fused L with the top of its long arm dipping 1e-4 rad from
+    /// x = 8 on: a shallow crease, which a loose test of two planes reads as
+    /// one plane. Only faces of one plane within the linear tolerance are
+    /// merged for the fillet across the seams, so any result keeps every
+    /// vertex of a plane face on its plane.
+    #[test]
+    fn a_shallow_crease_is_not_merged_flat() {
+        let tilt = 1e-4_f64;
+        let mut topo = Topology::new();
+        let l = fused_l(&mut topo);
+        let cutter = make_box(&mut topo, 100.0, 100.0, 100.0).unwrap();
+        let place = Mat4::translation(8.0, 0.0, HEIGHT)
+            * Mat4::rotation_y(tilt)
+            * Mat4::translation(-50.0, -50.0, 0.0);
+        transform_solid(&mut topo, cutter, &place).unwrap();
+        let creased = boolean(&mut topo, BooleanOp::Cut, l, cutter).unwrap();
+        let top = |p: Point3| (p.z() - HEIGHT).abs() < 1e-3;
+        let rim = edges_where(&topo, creased, |a, b| {
+            top(a)
+                && top(b)
+                && !on_seam(a, b)
+                && !((a.x() - 8.0).abs() < 1e-9 && (b.x() - 8.0).abs() < 1e-9)
+        });
+        let Ok(result) = fillet_v2(&mut topo, creased, &rim, 0.5) else {
+            return;
+        };
+        if result.solid == creased {
+            return;
+        }
+        for face in brepkit_topology::explorer::solid_faces(&topo, result.solid).unwrap() {
+            let data = topo.face(face).unwrap();
+            let brepkit_topology::face::FaceSurface::Plane { normal, d } = data.surface() else {
+                continue;
+            };
+            for v in brepkit_topology::explorer::face_vertices(&topo, face).unwrap() {
+                let p = topo.vertex(v).unwrap().point();
+                let off = normal.dot(Vec3::new(p.x(), p.y(), p.z())) - d;
+                assert!(
+                    off.abs() < 1e-7,
+                    "face {} vertex {p:?} off its plane by {off}",
+                    face.index()
+                );
+            }
+        }
+    }
 }
