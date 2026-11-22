@@ -4256,16 +4256,15 @@ fn component_aabb(topo: &Topology, comp: &[FaceId]) -> Option<(Point3, Point3)> 
 /// (its chords pass inside the surface by up to the deflection). It builds
 /// nothing in the arena, which never reclaims what it holds. A piece can
 /// meet the surface at every vertex and along every edge (a plug in a hole
-/// of its own size), so the points inside its faces are read last: the
-/// centres of a mesh's triangles at `deflection`, put back on the face's
-/// surface and kept where the face holds them. `None` when no point of
-/// `inner` read stands off the surface or a face cannot be read, so callers
-/// can fall back rather than guess.
+/// of its own size), so the points inside its faces are read last, from
+/// [`face_grid_points`]: a 3 by 3 grid first, a 7 by 7 one only when the
+/// coarse one decides nothing. `None` when no point of `inner` read stands
+/// off the surface or a face cannot be read, so callers can fall back
+/// rather than guess.
 fn piece_encloses(
     topo: &Topology,
     classifier: &brepkit_check::classify::SolidClassifier<'_>,
     inner: &[FaceId],
-    deflection: f64,
 ) -> Option<bool> {
     use brepkit_check::classify::{ClassifyOptions, PointClassification};
     let options = ClassifyOptions {
@@ -4304,45 +4303,95 @@ fn piece_encloses(
             return Some(inside);
         }
     }
-    for &fid in inner {
-        let surface = topo.face(fid).ok()?.surface().clone();
-        let Ok(mesh) = crate::tessellate::tessellate_with_uvs(topo, fid, deflection) else {
-            continue;
-        };
-        let pos = &mesh.mesh.positions;
-        for tri in mesh.mesh.indices.chunks_exact(3) {
-            let (a, b, c) = (
-                pos[tri[0] as usize],
-                pos[tri[1] as usize],
-                pos[tri[2] as usize],
-            );
-            let centre = Point3::new(
-                (a.x() + b.x() + c.x()) / 3.0,
-                (a.y() + b.y() + c.y()) / 3.0,
-                (a.z() + b.z() + c.z()) / 3.0,
-            );
-            // A plane holds the centre already, and has no parameters to
-            // put it back through.
-            let p = if matches!(surface, FaceSurface::Plane { .. }) {
-                centre
-            } else {
-                let Some(p) = surface
-                    .project_point(centre)
-                    .and_then(|(u, v)| surface.evaluate(u, v))
-                else {
-                    continue;
-                };
-                p
-            };
-            if !brepkit_check::classify::face_contains(topo, fid, p).unwrap_or(false) {
-                continue;
-            }
-            if let Some(inside) = read(p)? {
-                return Some(inside);
+    for n in [3, 7] {
+        for &fid in inner {
+            for p in face_grid_points(topo, fid, n)? {
+                if let Some(inside) = read(p)? {
+                    return Some(inside);
+                }
             }
         }
     }
     None
+}
+
+/// Points on `face`, held by it, from an `n` by `n` grid over its parameter
+/// box: the box of its wire's points read in the surface's `(u, v)`, the
+/// whole domain for a NURBS face, and for a plane the box of its wire's
+/// points in a frame of the plane. Each grid point is put on the surface and
+/// kept where `face_contains` holds it. No mesh: tessellation stays out of
+/// booleans. Empty for a face with no wire to read; `None` when a topology
+/// lookup fails.
+fn face_grid_points(topo: &Topology, fid: FaceId, n: usize) -> Option<Vec<Point3>> {
+    const PER_EDGE: usize = 8;
+    let face = topo.face(fid).ok()?;
+    let surface = face.surface();
+    let mut wire_points = Vec::new();
+    for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+        for oe in topo.wire(wid).ok()?.edges() {
+            let edge = topo.edge(oe.edge()).ok()?;
+            let (sp, ep) = (
+                topo.vertex(edge.start()).ok()?.point(),
+                topo.vertex(edge.end()).ok()?.point(),
+            );
+            let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
+            #[allow(clippy::cast_precision_loss)]
+            wire_points.extend((0..=PER_EDGE).map(|k| {
+                let t = (t1 - t0).madd(k as f64 / PER_EDGE as f64, t0);
+                edge.curve().evaluate_with_endpoints(t, sp, ep)
+            }));
+        }
+    }
+    let Some(&first) = wire_points.first() else {
+        return Some(Vec::new());
+    };
+    let plane = match surface {
+        FaceSurface::Plane { normal, .. } => {
+            Some(brepkit_math::frame::Frame3::from_normal(first, *normal).ok()?)
+        }
+        _ => None,
+    };
+    let (u_range, v_range) = if let FaceSurface::Nurbs(nurbs) = surface {
+        (nurbs.domain_u(), nurbs.domain_v())
+    } else {
+        let mut lo = (f64::INFINITY, f64::INFINITY);
+        let mut hi = (f64::NEG_INFINITY, f64::NEG_INFINITY);
+        for &p in &wire_points {
+            let Some((u, v)) = plane.as_ref().map_or_else(
+                || surface.project_point(p),
+                |frame| {
+                    Some((
+                        (p - frame.origin).dot(frame.x),
+                        (p - frame.origin).dot(frame.y),
+                    ))
+                },
+            ) else {
+                continue;
+            };
+            lo = (lo.0.min(u), lo.1.min(v));
+            hi = (hi.0.max(u), hi.1.max(v));
+        }
+        ((lo.0, hi.0), (lo.1, hi.1))
+    };
+    let mut held = Vec::new();
+    for i in 1..=n {
+        for j in 1..=n {
+            #[allow(clippy::cast_precision_loss)]
+            let (fu, fv) = (i as f64 / (n + 1) as f64, j as f64 / (n + 1) as f64);
+            let u = (u_range.1 - u_range.0).madd(fu, u_range.0);
+            let v = (v_range.1 - v_range.0).madd(fv, v_range.0);
+            let Some(p) = plane.as_ref().map_or_else(
+                || surface.evaluate(u, v),
+                |frame| Some(frame.origin + frame.x * u + frame.y * v),
+            ) else {
+                continue;
+            };
+            if brepkit_check::classify::face_contains(topo, fid, p).unwrap_or(false) {
+                held.push(p);
+            }
+        }
+    }
+    Some(held)
 }
 
 /// The box of the vertices of `faces`, or `None` for faces with no vertex.
@@ -4449,8 +4498,7 @@ fn components_are_disjoint_pieces(topo: &Topology, components: &[Vec<FaceId>]) -
             let Some(classifier) = classifier.as_ref() else {
                 return false;
             };
-            let deflection = ((boxes[inner].1.max - boxes[inner].1.min).length() * 0.02).max(1e-4);
-            match piece_encloses(topo, classifier, &components[inner], deflection) {
+            match piece_encloses(topo, classifier, &components[inner]) {
                 Some(true) | None => return false,
                 Some(false) => {}
             }
