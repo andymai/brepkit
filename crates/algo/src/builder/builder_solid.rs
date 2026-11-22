@@ -1371,7 +1371,18 @@ fn shell_is_outward_oriented(topo: &Topology, faces: &[FaceId]) -> Option<bool> 
                     continue;
                 };
                 let (sp, ep) = (sv.point(), ev.point());
-                let (d0, d1) = edge.curve().domain_with_endpoints(sp, ep);
+                let (mut d0, mut d1) = edge.curve().domain_with_endpoints(sp, ep);
+                // A closed circle's domain starts at its frame's parameter
+                // 0, not at its vertex: run the full turn from the vertex.
+                // Read from 0, a strut's rim stepped a quarter turn off the
+                // seam line it meets, the box below spanned a turn and a
+                // quarter, and the wall's flux came out negative.
+                if let EdgeCurve::Circle(c) = edge.curve()
+                    && (sp - ep).length() < 1e-9
+                {
+                    d0 = c.project(sp);
+                    d1 = d0 + std::f64::consts::TAU;
+                }
                 // Traversal order (is_forward-aware), each edge's end taken
                 // too: a loop running a whole turn then spans the whole
                 // period, not all of it but its last step.

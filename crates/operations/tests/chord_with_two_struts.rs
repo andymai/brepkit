@@ -6,7 +6,8 @@
 //! Each strut leaves the chord in a closed curve that bounds the strut's
 //! wall. The cases turn the seams of the chord and the struts to where the
 //! fuses meet them: the chord's seam under both struts, and a strut's seam
-//! on the side of the other strut.
+//! on the side of the other strut. Struts 6 and 11 also end on the chord's
+//! axis, end to start, and fuse alone.
 
 #[cfg(test)]
 mod tests {
@@ -29,6 +30,8 @@ mod tests {
     const CHORD: ([f64; 3], [f64; 3]) = ([55.0, -120.0, 120.0], [445.0, -120.0, 120.0]);
     const STRUT_5: ([f64; 3], [f64; 3]) = ([430.0, 120.0, 120.0], [430.0, -120.0, 120.0]);
     const STRUT_7: ([f64; 3], [f64; 3]) = ([250.0, -120.0, 120.0], [430.0, 120.0, 120.0]);
+    const STRUT_6: ([f64; 3], [f64; 3]) = ([70.0, 120.0, 120.0], [250.0, -120.0, 120.0]);
+    const STRUT_11: ([f64; 3], [f64; 3]) = ([250.0, -120.0, 120.0], [430.0, -120.0, -120.0]);
 
     /// A finite cylinder: its start, unit axis, radius and length.
     #[derive(Clone, Copy)]
@@ -298,5 +301,59 @@ mod tests {
             [[0.0, -1.0, 0.0], [-1.0, 0.0, 0.0], [0.48, -0.36, 0.8]],
             "strut 5's seam toward strut 7",
         );
+    }
+
+    /// Strut 6 ends on the chord's axis where strut 11 starts, at 69 degrees
+    /// to it, and they fuse alone. Each strut's wall keeps a band whose far
+    /// rim is a whole circle, and the circle's own frame starts a quarter
+    /// turn from the seam line it meets.
+    #[test]
+    fn two_struts_that_meet_end_to_start_fuse() {
+        let options = BooleanOptions {
+            mesh_fallback: false,
+            ..BooleanOptions::default()
+        };
+        for (name, pose) in poses() {
+            for seams in [
+                [[0.0, 0.0, -1.0], [0.0, 1.0, 0.0]],
+                [[0.0, 0.0, -1.0], [-0.6, -0.65, -0.45]],
+            ] {
+                for strut_6_first in [true, false] {
+                    let mut topo = Topology::new();
+                    let (s6, s6_rod) = rod(&mut topo, &pose, 8.0, STRUT_6, seams[0]);
+                    let (s11, s11_rod) = rod(&mut topo, &pose, 8.0, STRUT_11, seams[1]);
+                    let (a, b) = if strut_6_first { (s6, s11) } else { (s11, s6) };
+                    let label = format!("{name}, seams {seams:?}, strut 6 first: {strut_6_first}");
+                    let fused = boolean_with_options(&mut topo, BooleanOp::Fuse, a, b, options)
+                        .expect(&label);
+                    let report = validate_solid(&topo, fused).unwrap();
+                    assert!(report.is_valid(), "{label}: {:?}", report.issues);
+                    assert_eq!(
+                        census(&topo, fused),
+                        BTreeMap::from([("cylinder", 2), ("plane", 4)]),
+                        "{label}"
+                    );
+                    let expected = union_volume(&[s6_rod, s11_rod]);
+                    let volume = solid_volume(&topo, fused, 0.005).unwrap();
+                    assert!(
+                        (volume - expected).abs() < 1e-6 * expected,
+                        "{label}: volume {volume} should be {expected}"
+                    );
+                    for (p, want) in [
+                        ([160.0, 0.0, 120.0], PointClassification::Inside),
+                        ([340.0, -120.0, 0.0], PointClassification::Inside),
+                        ([250.0, -117.0, 117.0], PointClassification::Inside),
+                        ([250.0, -124.0, 124.0], PointClassification::Outside),
+                        ([160.0, 0.0, 135.0], PointClassification::Outside),
+                    ] {
+                        let q = posed(&pose, p);
+                        let got =
+                            classify_point(&topo, fused, Point3::new(q[0], q[1], q[2]), 0.01, 1e-7)
+                                .unwrap();
+                        assert_eq!(got, want, "{label}: point {p:?}");
+                    }
+                }
+            }
+        }
     }
 }
