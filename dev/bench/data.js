@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795378823045,
+  "lastUpdate": 1795379016159,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -75545,6 +75545,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26688120,
             "range": "± 742874",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "5d2dae84077f69286625058d1bda655339255228",
+          "message": "fix(operations,blend): close a swallowed round's notch mesh, refuse a revolve across its axis, and round a rim across a ball's equator (#2705)\n\n## Summary\n\nOn main, three valid solids mesh open or not manifold:\n\n- A round that swallows a face between tilted ends meshes the notch's\nchord twice: 1 or 2 non-manifold edges (#2664).\n- A revolve of an arc over both poles gives a solid whose sphere faces\ncover the sphere twice. Its mesh has 66 boundary and 48 non-manifold\nedges at deflection 1 (#2659).\n- A round of a ball's rim cut by a tilted plane, where the rim crosses\nthe equator, reads 2.346389 against 2.350488 and meshes open (#2660).\n\nWith this change, the round of #2664 and the round of #2660 are exact\nand mesh closed in every pose. `revolve` refuses a profile that reaches\nacross its axis, as the sheet revolve does. The pose sweep and the truth\naudit give the same output as main.\n\nFixes #2664, fixes #2659, fixes #2660.\n\n## The change\n\n- **Ears on a curved face (#2664).** The band is a NURBS face meshed by\nCDT. Its grid has no interior point between the notched end curve and\nthe first ruling column. So Delaunay fanned the notch arc's own samples\ninto flat triangles in the end face's plane, and the end face meshes the\nsame chords. `split_edge_ears` in `tessellate/nonplanar.rs` now adds a\npoint on the surface at the middle of any triangle whose three corners\nare samples of one edge.\n- **A profile across the axis (#2659).** The fix is in `revolve`, not in\nthe mesher, because the solid itself is wrong.\n- The long-way arc's sphere faces measure 251327.4, twice the whole\nsphere (125663.7). The zone's area is 108828.0. The volume reads right\nonly because the overlaps cancel in the signed integral.\n- Splitting the arc at the axis does not help. The far half sweeps the\nwhole sphere, and the near pieces sweep the polar caps again the other\nway.\n- On main, a rectangle across the axis and a half turn of this arc were\ninvalid too.\n- `profile_reaches_across_axis` refuses a planar profile in a plane that\nholds the axis, when the outline has points on both sides. A point\ncounts as on a side when it is off the axis by more than 1e-6 of the\nprofile's size plus 1e-7.\n- The check reads each edge at its extremes across the axis. It reads a\nline at its ends and a circle or ellipse by a closed form. It reads a\nspline one Bézier piece at a time by its control hull, and halves a\npiece where the hull straddles the allowance. A piece with all weights\nnegative gets the same bound. `revolve` refuses a profile with a piece\nthat has a zero weight or weights of both signs, because the hull cannot\nbound it. The allowance keeps an arc drawn about a point a hair off the\naxis.\n- **A rim across a ball's equator (#2660).** The rim is four arcs, two\non each hemisphere face. The round's sections at the equator vertices\nput the sphere contact at z = 0.2147, above the equator. So the lower\nface's trimmed loop covered area that the upper face holds too, and\nslivers closed the gap. The new `fillet_builder/one_sphere.rs` joins two\nfaces on one sphere where the picked chain passes from one to the other\nat a vertex. `SolidSnapshot` restores the source solid afterwards.\n- The join reads the picks as the plan does, so it passes over a tangent\nseam. The joined face keeps the pcurves of its kept edges. A picked edge\nthat the join cannot find fails alone.\n\n## Tests\n\n- `the_round_s_mesh_closes_over_its_notched_ends` has no ignore now. It\nruns r 0.8, 1.0, 1.1, 1.2 and 1.25 at deflections 0.01 and 0.002,\nupright, turned and mirrored, with 0 non-manifold edges.\n`a_round_swallows_a_narrow_face_between_tilted_end_faces` now checks the\nmesh at each radius.\n- `revolve_across_the_axis.rs`, each upright, tilted and mirrored:\n- `an_arc_over_both_poles_is_refused` (a full turn and a half turn) and\n`a_rectangle_across_the_axis_is_refused`.\n- `the_arc_on_one_side_revolves_into_a_closed_zone` checks validity, the\nzone's volume `2πh(R² − h²/3)` within 1e-6, and a closed mesh.\n-\n`a_round_of_a_tilted_caps_rim_across_the_equator_is_the_level_round_turned`\nruns three cases in three poses. It reads 2.3504881184 against\n2.3504881199, and 2.5514680829 against 2.5514680832. It checks validity,\na closed mesh at 0.01 and 0.002, and that the source cap does not\nchange.\n- `an_arc_across_the_axis_between_samples_is_refused` revolves a circle\nand a B-spline arc whose crossing lies between samples.\n`a_spline_with_a_zero_weight_and_a_narrow_dip_across_the_axis_is_refused`\nand `a_spline_with_negative_weights_is_read_by_its_hull` pin the\nrational pieces.\n`a_round_of_every_edge_of_a_tilted_caps_rim_rounds_its_rim`,\n`a_round_of_a_tilted_caps_rim_keeps_the_pcurves_of_the_ball_face` and\n`an_edge_outside_the_arena_fails_alone` pin the join.\n- Each new or un-ignored test fails without its fix.\n- `brepkit-operations --lib`: 1203 passed. `brepkit-blend`: 217 passed.\n- 47 integration test files with mesh, tessellat, watertight, revolve,\nswallow, sphere or ball in their names pass. So do the other callers of\nrevolve, the fillet and chamfer files on spheres, `golden_regression`,\nand six io files.\n- The pose sweep and the truth audit give the same output as main.",
+          "timestamp": "2026-11-22T20:19:00Z",
+          "tree_id": "3688b8a2a7a6ad7320257da7f6cdf036f8dad761",
+          "url": "https://github.com/andymai/brepkit/commit/5d2dae84077f69286625058d1bda655339255228"
+        },
+        "date": 1795379002561,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 704044,
+            "range": "± 4509",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 734817,
+            "range": "± 12300",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 8450,
+            "range": "± 176",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 476758,
+            "range": "± 3444",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 15810276,
+            "range": "± 116633",
             "unit": "ns/iter"
           }
         ]
