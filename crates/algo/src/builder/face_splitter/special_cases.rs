@@ -4910,9 +4910,9 @@ pub(super) fn split_face_with_internal_loops(
         }
     }
     // On a cylinder or cone wall a loop that does not wind the axis lies
-    // in one stretch of `(u, v)`: laid out about one `u`, the loops nest as
-    // they would on a plane (a ring standing on the wall: its bore's section
-    // inside its outer wall's).
+    // in one stretch of `(u, v)`, where the loops nest as they would on a
+    // plane (a ring standing on the wall: its bore's section inside its
+    // outer wall's).
     if matches!(surface, FaceSurface::Cylinder(_) | FaceSurface::Cone(_))
         && parent_loop.iter().all(Option::is_none)
     {
@@ -4928,47 +4928,12 @@ pub(super) fn split_face_with_internal_loops(
                     .collect()
             })
             .collect();
-        if let Some(&(u0, _)) = raw.iter().find_map(|l| l.first()) {
-            let near = |u: f64| {
-                u0 + (u - u0 + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU)
-                    - std::f64::consts::PI
-            };
-            let polygons: Vec<Vec<Point2>> = raw
-                .iter()
-                .map(|l| l.iter().map(|&(u, v)| Point2::new(near(u), v)).collect())
-                .collect();
-            let area = |poly: &[Point2]| -> f64 {
-                poly.iter()
-                    .zip(poly.iter().cycle().skip(1))
-                    .map(|(a, b)| a.x() * b.y() - b.x() * a.y())
-                    .sum::<f64>()
-                    .abs()
-            };
-            for lj in 0..loops.len() {
-                if polygons[lj].len() < 3 {
-                    continue;
-                }
-                let mut best: Option<(f64, usize)> = None;
-                for li in 0..loops.len() {
-                    if li == lj || polygons[li].len() < 3 {
-                        continue;
-                    }
-                    let inside = polygons[lj]
-                        .iter()
-                        .all(|p| super::super::classify_2d::point_in_polygon_2d(*p, &polygons[li]));
-                    if inside {
-                        let a = area(&polygons[li]);
-                        if best.is_none_or(|(ba, _)| a < ba) {
-                            best = Some((a, li));
-                        }
-                    }
-                }
-                if let Some((_, li)) = best {
-                    log::debug!(
-                        "split_face_with_internal_loops: face {face_id:?} loop {li} encloses loop {lj} on the wall"
-                    );
-                    parent_loop[lj] = Some(li);
-                }
+        for (lj, parent) in wall_loop_parents(&raw).into_iter().enumerate() {
+            if let Some(li) = parent {
+                log::debug!(
+                    "split_face_with_internal_loops: face {face_id:?} loop {li} encloses loop {lj} on the wall"
+                );
+                parent_loop[lj] = Some(li);
             }
         }
     }
@@ -5352,6 +5317,73 @@ pub(super) fn split_face_with_internal_loops(
     result.push(remainder);
 
     Some(result)
+}
+
+/// For each loop on a cylinder or cone wall, given by its samples' `(u, v)`
+/// in order, the smallest other loop that encloses it; an empty loop (one
+/// that winds the axis) takes no part. Each loop is unwrapped along itself
+/// and a pair is compared with the inner loop moved to the period copy
+/// nearest the outer one: read in one window of `u`, a loop across the
+/// window's edge spans the whole window, and a loop on its far side reads
+/// as inside it.
+fn wall_loop_parents(raw: &[Vec<(f64, f64)>]) -> Vec<Option<usize>> {
+    use std::f64::consts::{PI, TAU};
+    let polygons: Vec<Vec<Point2>> = raw
+        .iter()
+        .map(|l| {
+            let mut prev: Option<f64> = None;
+            l.iter()
+                .map(|&(u, v)| {
+                    let u = prev.map_or(u, |p| p + (u - p + PI).rem_euclid(TAU) - PI);
+                    prev = Some(u);
+                    Point2::new(u, v)
+                })
+                .collect()
+        })
+        .collect();
+    let middle_u = |poly: &[Point2]| {
+        let (lo, hi) = poly
+            .iter()
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), p| {
+                (lo.min(p.x()), hi.max(p.x()))
+            });
+        f64::midpoint(lo, hi)
+    };
+    let area = |poly: &[Point2]| -> f64 {
+        poly.iter()
+            .zip(poly.iter().cycle().skip(1))
+            .map(|(a, b)| a.x() * b.y() - b.x() * a.y())
+            .sum::<f64>()
+            .abs()
+    };
+    (0..polygons.len())
+        .map(|lj| {
+            if polygons[lj].len() < 3 {
+                return None;
+            }
+            let mut best: Option<(f64, usize)> = None;
+            for li in 0..polygons.len() {
+                if li == lj || polygons[li].len() < 3 {
+                    continue;
+                }
+                let shift =
+                    TAU * ((middle_u(&polygons[li]) - middle_u(&polygons[lj])) / TAU).round();
+                let inside = polygons[lj].iter().all(|p| {
+                    super::super::classify_2d::point_in_polygon_2d(
+                        Point2::new(p.x() + shift, p.y()),
+                        &polygons[li],
+                    )
+                });
+                if inside {
+                    let a = area(&polygons[li]);
+                    if best.is_none_or(|(ba, _)| a < ba) {
+                        best = Some((a, li));
+                    }
+                }
+            }
+            best.map(|(_, li)| li)
+        })
+        .collect()
 }
 
 /// 3D samples along a wire's edges: two per line, 32 per curved edge, never
@@ -9261,5 +9293,34 @@ mod tests {
             1e-7
         ));
         assert!(loop_crosses_hole(&rect(2.0, 4.0, -1.0, 1.0), &hole, 1e-7));
+    }
+
+    #[test]
+    fn wall_loops_nest_across_the_window_edge() {
+        // A small loop first, about u = 0, then a larger loop across
+        // u = pi with a smaller loop inside it. Read in one window of u
+        // about the first loop's first sample, the larger loop spanned the
+        // whole window and held the first loop.
+        let ring = |u: f64, v: f64, r: f64| -> Vec<(f64, f64)> {
+            (0..24)
+                .map(|k| {
+                    let a = f64::from(k) * std::f64::consts::TAU / 24.0;
+                    let w = u + r * a.cos();
+                    (w.rem_euclid(std::f64::consts::TAU), v + r * a.sin())
+                })
+                .collect()
+        };
+        let pi = std::f64::consts::PI;
+        let raw = vec![
+            ring(0.0, 0.0, 0.2),
+            ring(pi, 0.0, 0.5),
+            ring(pi + 0.1, 0.0, 0.2),
+        ];
+        assert_eq!(super::wall_loop_parents(&raw), vec![None, None, Some(1)]);
+        let winding = vec![Vec::new(), ring(1.0, 0.0, 0.3), ring(1.0, 0.05, 0.1)];
+        assert_eq!(
+            super::wall_loop_parents(&winding),
+            vec![None, None, Some(1)]
+        );
     }
 }
