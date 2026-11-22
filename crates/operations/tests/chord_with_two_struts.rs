@@ -5,7 +5,8 @@
 //!
 //! Each strut leaves the chord in a closed curve that bounds the strut's
 //! wall. The cases turn the seams of the chord and the struts to where the
-//! fuses meet them.
+//! fuses meet them: the chord's seam under both struts, and a strut's seam
+//! on the side of the other strut.
 
 #[cfg(test)]
 mod tests {
@@ -286,6 +287,16 @@ mod tests {
         fuse_in_both_orders(
             [[0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [0.48, -0.36, 0.8]],
             "seam under both struts",
+        );
+    }
+
+    /// Strut 5's seam faces strut 7, and the curve where strut 5 leaves the
+    /// chord runs against its own curve in the strut's wall.
+    #[test]
+    fn a_strut_whose_seam_faces_the_other_strut_keeps_its_mouth() {
+        fuse_in_both_orders(
+            [[0.0, -1.0, 0.0], [-1.0, 0.0, 0.0], [0.48, -0.36, 0.8]],
+            "strut 5's seam toward strut 7",
         );
     }
 }
