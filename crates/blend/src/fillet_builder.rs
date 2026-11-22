@@ -642,13 +642,26 @@ impl<'a> FilletBuilder<'a> {
                     };
                     // The trim cuts a contact that crosses the face's seam
                     // there.
-                    crate::builder_utils::pcurve_along(
+                    let fitted = crate::builder_utils::pcurve_along(
                         &source_surface,
                         &EdgeCurve::NurbsCurve(contact.clone()),
                         (start, end),
                         true,
-                    )
-                    .ok_or(BlendError::TrimmingFailure { face: face_id })?
+                    );
+                    // A walked contact standing off a file's B-spline wall
+                    // farther than the fit allows takes the line between
+                    // its ends' parameters, as it did before contacts were
+                    // fitted along their edges.
+                    if let Some(pcurve) = fitted {
+                        pcurve
+                    } else {
+                        let analytic = if face_id == stripe.face1 {
+                            &stripe.pcurve1
+                        } else {
+                            &stripe.pcurve2
+                        };
+                        fallback_contact_pcurve(support, &contact, &source_surface, analytic)?
+                    }
                 };
                 restriction.curve = Some(EdgeCurve::NurbsCurve(contact));
                 restriction.pcurve = Some(pcurve);
@@ -10512,6 +10525,33 @@ pub(crate) fn build_planar_pcurve_from_contact(
     )?;
     let (start, end) = curve.domain();
     Ok((brepkit_math::curves2d::Curve2D::Nurbs(curve), start, end))
+}
+
+/// A contact's pcurve on a curved face where `pcurve_along` finds none:
+/// `build_pcurve_from_contact`'s, or where its ends project to one point,
+/// the stripe's own analytic pcurve.
+fn fallback_contact_pcurve(
+    support: &dyn brepkit_math::traits::ParametricSurface,
+    contact: &brepkit_math::nurbs::curve::NurbsCurve,
+    surface: &FaceSurface,
+    analytic: &brepkit_math::curves2d::Curve2D,
+) -> Result<brepkit_topology::pcurve::PCurve, BlendError> {
+    use brepkit_math::curves2d::Curve2D;
+    use brepkit_topology::pcurve::PCurve;
+    match build_pcurve_from_contact(support, contact, face_u_period(surface)) {
+        Ok(pcurve) => Ok(PCurve::new(pcurve, 0.0, 1.0)),
+        Err(BlendError::Math(brepkit_math::MathError::ZeroVector)) => match analytic {
+            Curve2D::Circle(_) | Curve2D::Ellipse(_) => {
+                Ok(PCurve::new(analytic.clone(), 0.0, std::f64::consts::TAU))
+            }
+            Curve2D::Nurbs(curve) => {
+                let (start, end) = curve.domain();
+                Ok(PCurve::new(analytic.clone(), start, end))
+            }
+            Curve2D::Line(_) => Err(BlendError::Math(brepkit_math::MathError::ZeroVector)),
+        },
+        Err(error) => Err(error),
+    }
 }
 
 /// Build a contact pcurve in a support surface's native UV frame.
