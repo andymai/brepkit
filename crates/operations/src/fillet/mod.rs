@@ -390,9 +390,14 @@ pub fn fillet(
 /// For constant radius, use `FilletRadiusLaw::Constant(r)` or the
 /// simpler [`fillet_rolling_ball`] function.
 ///
+/// Where the planar rebuild comes back open, the walking engine
+/// ([`crate::blend_ops::fillet_v2_variable`]) builds the round instead.
+///
 /// # Errors
 ///
-/// Returns errors similar to [`fillet_rolling_ball`].
+/// Returns errors similar to [`fillet_rolling_ball`], and an error where
+/// neither the planar rebuild nor the walking engine gives a closed, valid
+/// solid with every edge rounded.
 #[allow(clippy::too_many_lines)]
 pub fn fillet_variable(
     topo: &mut Topology,
@@ -902,6 +907,7 @@ pub fn fillet_variable(
             .iter()
             .map(|(eid, law)| (*eid, law.into()))
             .collect();
+        let mut why = String::from("the walking fillet's result is open");
         match crate::blend_ops::fillet_v2_variable(topo, solid, v2_laws) {
             Ok(v2) => {
                 let open = solid_has_free_edges(topo, v2.solid)?;
@@ -913,15 +919,36 @@ pub fn fillet_variable(
                 // filled them.
                 let kept = topo.solid(v2.solid)?.inner_shells().len()
                     == topo.solid(solid)?.inner_shells().len();
-                if v2.failed.is_empty() && kept && (!open || std::env::var("BK_FORCE_V2").is_ok()) {
+                if v2.failed.is_empty() && kept && !open {
                     return Ok(v2.solid);
                 }
+                if let Some((_, e)) = v2.failed.first() {
+                    why = format!("the walking fillet failed: {e}");
+                } else if !kept {
+                    why = "the walking fillet fills the solid's cavities".into();
+                }
             }
-            Err(e) => log::debug!("fillet_variable v2 retry errored: {e}"),
+            Err(e) => why = format!("the walking fillet failed: {e}"),
         }
+        return Err(crate::OperationsError::InvalidInput {
+            reason: format!("the variable fillet's planar rebuild is open, and {why}"),
+        });
     }
 
-    crate::cavities::keep_cavities(topo, solid, solid_id, "fillet")
+    let result = crate::cavities::keep_cavities(topo, solid, solid_id, "fillet")?;
+    if let Some(issue) = crate::validate::validate_solid(topo, result)?
+        .issues
+        .iter()
+        .find(|issue| issue.severity == crate::validate::Severity::Error)
+    {
+        return Err(crate::OperationsError::InvalidInput {
+            reason: format!(
+                "the variable fillet leaves an invalid solid: {}",
+                issue.description
+            ),
+        });
+    }
+    Ok(result)
 }
 
 fn solid_has_free_edges(topo: &Topology, solid: SolidId) -> Result<bool, crate::OperationsError> {
