@@ -8183,14 +8183,237 @@ fn compute_stripe_for_edge(
         });
     }
     let spine = Spine::from_single_edge(topo, edge_id)?;
-    compute_stripe_for_spine(
+    let mut result = compute_stripe_for_spine(
         topo,
         Some(adjacency),
         adj_faces[0],
         adj_faces[1],
         spine,
         law,
-    )
+    )?;
+    run_on_to_same_surface(topo, adjacency, &mut result.stripe)?;
+    Ok(result)
+}
+
+/// A closed round's contact on a curved face that reaches the face's far
+/// loop, or runs past it, where the one face beyond that loop lies on the
+/// same surface (a ball cut below its equator, whose two faces meet there):
+/// the contact lies on the face beyond. The band then meets that face in
+/// place of the narrow face, which goes, as a face [`swallow_narrow_face`]
+/// finds does. The band and its contacts stay as they are. A contact that
+/// runs past the far loop in one place and stays short of it in another is
+/// refused: no trim of either face alone holds it.
+fn run_on_to_same_surface(
+    topo: &Topology,
+    adjacency: &brepkit_topology::adjacency::AdjacencyIndex,
+    stripe: &mut Stripe,
+) -> Result<(), BlendError> {
+    const SAMPLES: u32 = 64;
+    if !stripe.spine.is_closed() {
+        return Ok(());
+    }
+    let spine_edges: HashSet<EdgeId> = stripe.spine.edges().iter().copied().collect();
+    let length = stripe.spine.length();
+    let mut rim = Vec::with_capacity(SAMPLES as usize + 1);
+    for k in 0..=SAMPLES {
+        rim.push(
+            stripe
+                .spine
+                .evaluate(topo, length * f64::from(k) / f64::from(SAMPLES))?,
+        );
+    }
+    let size = {
+        let bbox = Aabb3::from_points(rim.iter().copied());
+        (bbox.max - bbox.min).length()
+    };
+    let on_tol = 1e-7 * (1.0 + size);
+    let same_tol = 1e-6 * (1.0 + size);
+    for side in 0..2 {
+        let (face_id, other) = if side == 0 {
+            (stripe.face1, stripe.face2)
+        } else {
+            (stripe.face2, stripe.face1)
+        };
+        let face = topo.face(face_id)?;
+        let surface = face.surface();
+        let Some(period) = face_u_period(surface) else {
+            continue;
+        };
+        let loops: Vec<Vec<OrientedEdge>> = std::iter::once(face.outer_wire())
+            .chain(face.inner_wires().iter().copied())
+            .map(|wire| topo.wire(wire).map(|w| w.edges().to_vec()))
+            .collect::<Result<_, _>>()?;
+        let is_rim =
+            |edges: &[OrientedEdge]| edges.iter().all(|oe| spine_edges.contains(&oe.edge()));
+        let far = match &loops[..] {
+            [a, b] if is_rim(a) => b,
+            [a, b] if is_rim(b) => a,
+            _ => continue,
+        };
+        if far.iter().any(|oe| spine_edges.contains(&oe.edge())) {
+            continue;
+        }
+        let mut beyond = None;
+        for oe in far {
+            let next = match adjacency.faces_for_edge(oe.edge()) {
+                [a, b] if *a == face_id => *b,
+                [a, b] if *b == face_id => *a,
+                _ => {
+                    beyond = None;
+                    break;
+                }
+            };
+            if next == other || next == face_id || beyond.is_some_and(|b| b != next) {
+                beyond = None;
+                break;
+            }
+            beyond = Some(next);
+        }
+        let Some(beyond) = beyond else {
+            continue;
+        };
+        let contact = if side == 0 {
+            &stripe.contact1
+        } else {
+            &stripe.contact2
+        };
+        let (t0, t1) = contact.domain();
+        let contact: Vec<Point3> = (0..=SAMPLES)
+            .map(|k| contact.evaluate((t1 - t0).madd(f64::from(k) / f64::from(SAMPLES), t0)))
+            .collect();
+        // The face beyond lies on the same surface, facing the same way, at
+        // the rim and at the contact.
+        let beyond_face = topo.face(beyond)?;
+        let outward = |reversed: bool, n: Vec3| if reversed { -n } else { n };
+        let same = rim.iter().chain(&contact).all(|&q| {
+            let (Some((u, v)), Some((bu, bv))) = (
+                surface.project_point(q),
+                beyond_face.surface().project_point(q),
+            ) else {
+                return false;
+            };
+            let Some(foot) = beyond_face.surface().evaluate(bu, bv) else {
+                return false;
+            };
+            let n = outward(face.is_reversed(), surface.normal(u, v));
+            let nb = outward(
+                beyond_face.is_reversed(),
+                beyond_face.surface().normal(bu, bv),
+            );
+            (foot - q).length() <= same_tol && n.dot(nb) > 1.0 - 1e-6
+        });
+        if !same {
+            continue;
+        }
+        // The rim and the far loop in the surface's parameters, each a run
+        // once round in u.
+        let mut far_points = Vec::new();
+        for oe in far {
+            let edge = topo.edge(oe.edge())?;
+            let (a, b) = (
+                topo.vertex(edge.start())?.point(),
+                topo.vertex(edge.end())?.point(),
+            );
+            let (s0, s1) = edge.curve().domain_with_endpoints(a, b);
+            for k in 0..=SAMPLES {
+                let f = f64::from(k) / f64::from(SAMPLES);
+                let f = if oe.is_forward() { f } else { 1.0 - f };
+                far_points.push(
+                    edge.curve()
+                        .evaluate_with_endpoints((s1 - s0).madd(f, s0), a, b),
+                );
+            }
+        }
+        let (Some(rim_run), Some(far_run)) = (
+            RunRound::new(surface, &rim, period),
+            RunRound::new(surface, &far_points, period),
+        ) else {
+            continue;
+        };
+        let (mut reached, mut short) = (0_usize, 0_usize);
+        for &q in &contact {
+            let Some((u, v)) = surface.project_point(q) else {
+                return Ok(());
+            };
+            let (v_far, v_rim) = (far_run.v_at(u), rim_run.v_at(u));
+            let on = surface
+                .evaluate(u, v_far)
+                .is_some_and(|p| (p - q).length() <= on_tol);
+            if on || (v - v_far) * (v_far - v_rim) > 0.0 {
+                reached += 1;
+            } else {
+                short += 1;
+            }
+        }
+        if reached == 0 {
+            continue;
+        }
+        if short > 0 {
+            return Err(BlendError::PlanningFailure {
+                reason: format!(
+                    "the fillet's contact on face {} crosses its far loop on to the face beyond",
+                    side + 1
+                ),
+            });
+        }
+        log::debug!("closed round: contact on {face_id:?} runs on to {beyond:?}");
+        if side == 0 {
+            stripe.face1 = beyond;
+        } else {
+            stripe.face2 = beyond;
+        }
+    }
+    Ok(())
+}
+
+/// A loop on a surface that closes round in u, read in the surface's
+/// parameters as `v` against `u`: it must run once round, always the same
+/// way.
+struct RunRound {
+    /// `(u, v)` in order of increasing `u`, over one period from the first.
+    points: Vec<(f64, f64)>,
+    period: f64,
+}
+
+impl RunRound {
+    fn new(surface: &FaceSurface, points: &[Point3], period: f64) -> Option<Self> {
+        let mut run: Vec<(f64, f64)> = Vec::with_capacity(points.len());
+        for &p in points {
+            let (mut u, v) = surface.project_point(p)?;
+            if let Some(&(last, _)) = run.last() {
+                u -= period * ((u - last) / period).round();
+            }
+            run.push((u, v));
+        }
+        let (&(first, _), &(last, _)) = (run.first()?, run.last()?);
+        if ((last - first).abs() - period).abs() > 1e-6 * period {
+            return None;
+        }
+        if last < first {
+            run.reverse();
+        }
+        if run.windows(2).any(|w| w[1].0 < w[0].0) {
+            return None;
+        }
+        Some(Self {
+            points: run,
+            period,
+        })
+    }
+
+    fn v_at(&self, u: f64) -> f64 {
+        let base = self.points[0].0;
+        let u = base + (u - base).rem_euclid(self.period);
+        let at = self.points.partition_point(|&(pu, _)| pu < u);
+        match (
+            at.checked_sub(1).and_then(|i| self.points.get(i)),
+            self.points.get(at),
+        ) {
+            (Some(&(ua, va)), Some(&(ub, vb))) if ub > ua => va + (vb - va) * (u - ua) / (ub - ua),
+            (_, Some(&(_, v))) | (Some(&(_, v)), None) => v,
+            (None, None) => 0.0,
+        }
+    }
 }
 
 fn radius_law_from_plan(plan: &crate::fillet_plan::RadiusLawPlan) -> RadiusLaw {
@@ -8224,14 +8447,16 @@ fn compute_stripe_for_contour(
         });
     }
     let law = radius_law_from_plan(&contour.radius_law);
-    compute_stripe_for_spine(
+    let mut result = compute_stripe_for_spine(
         topo,
         Some(adjacency),
         contour.side1,
         contour.side2,
         contour.spine.clone(),
         &law,
-    )
+    )?;
+    run_on_to_same_surface(topo, adjacency, &mut result.stripe)?;
+    Ok(result)
 }
 
 #[allow(clippy::too_many_arguments)]
