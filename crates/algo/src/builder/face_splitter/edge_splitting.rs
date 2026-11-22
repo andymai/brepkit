@@ -1512,7 +1512,7 @@ mod tests {
         let flat = 1.0 - m * m;
         let x0 = m / flat;
         let ellipse = Ellipse3D::new_with_ref(
-            Point3::new(x0, 0.0, m.mul_add(x0, 1.0)),
+            Point3::new(x0, 0.0, m.madd(x0, 1.0)),
             Vec3::new(-m, 0.0, 1.0),
             m.hypot(1.0) / flat,
             1.0 / flat.sqrt(),
@@ -1531,7 +1531,7 @@ mod tests {
             let (u0, _) = surface.project_point(ellipse.evaluate(from)).unwrap();
             let mut u = u0;
             for k in 1..=n {
-                let a = (to - from).mul_add(f64::from(k) / f64::from(n), from);
+                let a = (to - from).madd(f64::from(k) / f64::from(n), from);
                 let (next, _) = surface.project_point(ellipse.evaluate(a)).unwrap();
                 u += (next - u + std::f64::consts::PI).rem_euclid(TAU) - std::f64::consts::PI;
             }
@@ -1584,7 +1584,7 @@ mod tests {
             assert!((pieces[1].start_uv.x() - at).abs() < 1e-12);
             assert!((pieces[0].start_uv.x() - start_u).abs() < 1e-12);
             assert!(
-                (pieces[1].end_uv.x() - sense.mul_add(TAU, start_u)).abs() < 1e-9,
+                (pieces[1].end_uv.x() - sense.madd(TAU, start_u)).abs() < 1e-9,
                 "forward {forward}: the rim closes at {}",
                 pieces[1].end_uv.x()
             );

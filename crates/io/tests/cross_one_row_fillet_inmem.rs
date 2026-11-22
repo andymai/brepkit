@@ -391,8 +391,14 @@ fn full_capture_fillet_is_complete_and_closed() {
         "volume must be finite and positive, got {volume}"
     );
 
-    // No volume oracle: the solid mesh is open (the roadmap's cross one-row
-    // row), so its volume depends on the point it is taken about.
+    // Criterion 11: the solid validates, and its mesh closes. Each vent
+    // slot's corners join a concave round to two convex ones. No volume
+    // oracle yet: the roadmap's cross one-row row.
+    let report = brepkit_operations::validate::validate_solid(&topo, result.solid).unwrap();
+    assert!(report.is_valid(), "{:?}", report.issues);
+    let mesh =
+        brepkit_operations::tessellate::tessellate_solid(&topo, result.solid, DEFLECTION).unwrap();
+    assert!(brepkit_operations::tessellate::is_watertight(&mesh));
 
     // Criterion 12: sampled blend sections meet the 0.5 mm radius and
     // support-surface tangency tolerances.
