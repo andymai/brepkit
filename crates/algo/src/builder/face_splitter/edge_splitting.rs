@@ -303,8 +303,11 @@ fn split_edges_at_3d_points(
             // edge's start; an arc's, a ring's and a ruling's parameter runs
             // evenly in the surface's, so the split's place in the edge's own
             // unwrapped span reads the copy, also on an arc over half a turn.
-            // A walk that cannot finish falls back to that span.
-            let split_uv = if nurbs_by_projection {
+            // A walk that cannot finish falls back to that span. A closed
+            // rim's split is on the rim's own turn already: an ellipse rim on
+            // a cone does not advance evenly in u, and moved to the copy
+            // nearest an even advance its split lands a turn off.
+            let split_uv = if nurbs_by_projection && closed_ring_dir.is_none() {
                 let span_end = match closed_ring_dir {
                     Some(dir) => brepkit_math::vec::Point2::new(
                         std::f64::consts::TAU.madd(dir, edge.start_uv.x()),
@@ -1561,38 +1564,52 @@ mod tests {
         (surface, edge, ellipse.evaluate(4.0), reached)
     }
 
-    /// The rim split at its parameter 4, run either way round: the split
+    /// The rim split at its parameter 4, run either way round, as an
+    /// outline's edge and as a hole woven into a curved face: the split
     /// takes the `u` the rim reaches along its traversal, and the two pieces
     /// run one turn from the start in that sense. A split read on the copy
     /// nearest an even advance with the parameter lands a turn off.
     #[test]
     fn an_oblique_cone_rim_splits_on_the_turn_it_runs() {
         use std::f64::consts::TAU;
-        for forward in [true, false] {
-            let (surface, edge, split, reached) = oblique_cone_rim(forward);
-            let (start_u, end_u) = (edge.start_uv.x(), edge.end_uv.x());
-            let native = (end_u - start_u).signum();
-            let sense = if forward { native } else { -native };
-            let pieces =
-                split_boundary_edges_at_3d_points(vec![edge], &[split], None, &surface, 1e-7);
-            assert_eq!(pieces.len(), 2, "forward {forward}: one split, two pieces");
-            let at = pieces[0].end_uv.x();
-            assert!(
-                (at - reached).abs() < 1e-9,
-                "forward {forward}: the split at u {at}, the rim reaches it at {reached}"
-            );
-            assert!((pieces[1].start_uv.x() - at).abs() < 1e-12);
-            assert!((pieces[0].start_uv.x() - start_u).abs() < 1e-12);
-            assert!(
-                (pieces[1].end_uv.x() - sense.madd(TAU, start_u)).abs() < 1e-9,
-                "forward {forward}: the rim closes at {}",
-                pieces[1].end_uv.x()
-            );
-            let ahead = sense * (at - start_u);
-            assert!(
-                ahead > 0.0 && ahead < TAU,
-                "forward {forward}: the split lies {ahead} along the turn"
-            );
+        type Split = fn(
+            Vec<OrientedPCurveEdge>,
+            &[Point3],
+            Option<&PlaneFrame>,
+            &FaceSurface,
+            f64,
+        ) -> Vec<OrientedPCurveEdge>;
+        let entries: [(&str, Split); 2] = [
+            ("outline", split_boundary_edges_at_3d_points),
+            ("hole", split_hole_edges_at_3d_points),
+        ];
+        for (entry, split_at) in entries {
+            for forward in [true, false] {
+                let what = format!("{entry}, forward {forward}");
+                let (surface, edge, split, reached) = oblique_cone_rim(forward);
+                let (start_u, end_u) = (edge.start_uv.x(), edge.end_uv.x());
+                let native = (end_u - start_u).signum();
+                let sense = if forward { native } else { -native };
+                let pieces = split_at(vec![edge], &[split], None, &surface, 1e-7);
+                assert_eq!(pieces.len(), 2, "{what}: one split, two pieces");
+                let at = pieces[0].end_uv.x();
+                assert!(
+                    (at - reached).abs() < 1e-9,
+                    "{what}: the split at u {at}, the rim reaches it at {reached}"
+                );
+                assert!((pieces[1].start_uv.x() - at).abs() < 1e-12, "{what}");
+                assert!((pieces[0].start_uv.x() - start_u).abs() < 1e-12, "{what}");
+                assert!(
+                    (pieces[1].end_uv.x() - sense.madd(TAU, start_u)).abs() < 1e-9,
+                    "{what}: the rim closes at {}",
+                    pieces[1].end_uv.x()
+                );
+                let ahead = sense * (at - start_u);
+                assert!(
+                    ahead > 0.0 && ahead < TAU,
+                    "{what}: the split lies {ahead} along the turn"
+                );
+            }
         }
     }
 
