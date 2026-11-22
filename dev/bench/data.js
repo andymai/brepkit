@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795345313803,
+  "lastUpdate": 1795346163275,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -75221,6 +75221,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 16193148,
             "range": "± 326753",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "15f4b78314abdf128b706550603b1f945f71a002",
+          "message": "fix(algo): cut wide windows and U-shaped solids through a tube's wall, and a slanted rod against a half-space through its seam, exactly (#2683)\n\n## Summary\n\nThree booleans through a tube's wall needed the mesh fallback on main:\n\n- a window over half a turn wide, cut through the wall away from the\nbore's seam (#2635);\n- a rod or a box that meets the bore in a U under a window, in fuse, cut\nand intersect (#2630);\n- a rod with a slanted top intersected with a half-space whose plane\nholds the wall's seam, in 16 of 48 poses (#2629).\n\nWith this change, each of them is exact in every pose tested, valid and\nwatertight, with its volume against a closed form. The `axial-fan`\nstator stack of #2624 already fuses exactly on main, and a test now pins\nit.\n\nFixes #2635, fixes #2630, fixes #2629, fixes #2624.\n\n## The change\n\n- **A wide window (#2635).** `split_face_with_internal_loops` classified\nthe bore's piece inside the window at the 3D centroid of its loop, which\nlies off a curved face. At 200 degrees it lay 12.1 from the axis,\noutside the window's sector, so the piece read as outside the tool.\n`curved_loop_interior` now returns the surface point under the centroid.\n- **A U under a window (#2630).** Four faults, each needed:\n- `FaceExtent` in `phase_ff.rs` ignored the holes of a whole cylinder or\ncone band. The rod's section loop on the bore read as inside both faces\nall round, across the window too. The extent now holds those holes in\n(u, v).\n- The face splitter treated sections whose ends lie on a hole as\ninternal loops, found no closed loop, and kept the bore whole. A section\nend on a hole now counts as an end on the boundary.\n- On a wall with a woven hole, a loop of hole pieces and sections alone\nread as a region. The window then became its own face. Such a loop now\nreads by its winding.\n- The lens split at a section's middle landed 2.08e-3 from the point\nwhere the rod's seam crosses the bore. It now lands on a crossing within\n5% of the section's length from its middle, and stays at the middle\notherwise.\n- **A slanted rod and a half-space (#2629).** Mirrored, the splits of a\nclosed ellipse ran along the curve, not along its traversal. The plane's\narc splitter then read each piece of a reversed rim as its complement.\nTurned, `walk_boundary_from_closed_rim` took circle rims only, so the\nwall was not laid out in one turn. The splits now follow the traversal,\nas for circles, and a closed ellipse rim walks like a circle.\n\n## Tests\n\n- `wide_window_through_a_tube_wall.rs` cuts windows of 200 and 190\ndegrees, a groove over half a turn, narrower windows and a window over\nthe seam. It runs cut, intersect and fuse, upright, turned and mirrored.\nEach checks validity, a watertight mesh, the face count, the closed-form\nvolume, and 36 points round the window. The 200 degree cut is 8 faces\nand 21279.054 (closed form 21279.05).\n- `u_under_a_window.rs`: a rod along the slot's floor, a rod under it\nand a box under it, in fuse, cut and intersect and 3 poses. All 27 runs\nare exact, where all 27 needed the fallback before. The common parts are\n5.61323, 7.95200 and 7.96268, within about 1e-7 of quadratures.\n- `slanted_rod_half_space.rs`: 4 slants, 4 halves and 3 poses. All 48\nare exact with 4 faces and the volume `8 pi + (g . d) 16 / 3`. On main,\n13 mirrored and 3 turned cases needed the fallback.\n- `stator_stack_fuse.rs` fuses each arm with its pole shoe in 4 quarters\nand 3 poses (closed form 369.390). It also fuses the 9 parts with\n`fuse_all`: 67 faces, 2044.593 against 2044.60.\n- Each test of #2635, #2630 and #2629 fails on main.\n- The pose sweep (495 lines) and the truth audit (40 lines) give the\nsame output as main.\n- Review fixes:\n- A closed ellipse rim on a cone now takes each split's `u` along its\ntraversal, and no later step moves it.\n`an_oblique_cone_rim_splits_on_the_turn_it_runs` checks both directions\nthrough both splitting entry points. Before, the split on `x² + y² = z²`\ncut by `z = 1 + 0.96x` landed at u = 4.578, a turn from 10.861.\n- `a_frustums_extent_leaves_out_a_window_across_its_seam` pins the hole\nof a whole cone band in the FF extent.\n- On `d156c04fc`, all of brepkit-algo (508 tests), the four test files,\nand the test files named for a cone, frustum or slant pass. The pose\nsweep and the truth audit give the same output as before.\n- With main merged in (`da0a188ca`), all of brepkit-algo and the test\nfiles for windows, rods, struts, tubes, ducts, bores, fans and tapers\npass: 660 tests. They include `taper_pin_through_a_rod` and\n`pin_through_hole_mouth`.\n\n## Still open\n\n- #2686: an open ellipse arc on a steep cone, split as a hole, still\ntakes its split's `u` from an even advance.\n- #2682: a section piece over half a turn round a cylinder gets its far\nend a turn short. The lens split moves off the middle only to a crossing\nwithin 5% of the section's length. No test on this branch reaches the\nfault.\n- On main, the mesh fallback's output for the box under the slot was\nopen or not manifold (the intersect read 7.2815 for 7.9627). The\nfallback has no validity gate of its own, which is the known product\nchoice in the roadmap. These cases no longer reach it.",
+          "timestamp": "2026-11-22T11:12:26Z",
+          "tree_id": "d4a8e0f838b80c4f94cf7135179b283a66a890ea",
+          "url": "https://github.com/andymai/brepkit/commit/15f4b78314abdf128b706550603b1f945f71a002"
+        },
+        "date": 1795346155642,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 984024,
+            "range": "± 10115",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1038704,
+            "range": "± 5264",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10551,
+            "range": "± 26",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 678824,
+            "range": "± 7306",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 20872676,
+            "range": "± 33951",
             "unit": "ns/iter"
           }
         ]
