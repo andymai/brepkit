@@ -1847,14 +1847,6 @@ pub(super) fn nurbs_face_by_boundary(
                 return None;
             }
             let dv = e.madd(sv.dot(velocity), -f * su.dot(velocity)) / det;
-            // Along a row of constant `v` (a side of a closed surface that
-            // is not its own control row) `dv` is rounding alone: it adds
-            // nothing, rather than a noise the halving would chase to its
-            // depth.
-            let most = e.madd(sv.length(), f.abs() * su.length()) * velocity.length() / det;
-            if dv.abs() <= 16.0 * f64::EPSILON * most {
-                return Some([0.0; 8]);
-            }
             let mut term = antiderivative(c.0, c.1)?;
             // Each turn on round `u` adds the integral of a whole turn.
             if let Some((0, period, _)) = closed {
