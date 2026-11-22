@@ -1,4 +1,5 @@
 use crate::MathError;
+use crate::det_hash::DetHashMap;
 use crate::predicates::orient2d;
 use crate::vec::Point2;
 
@@ -15,6 +16,18 @@ const MAX_SPLIT_DEPTH: usize = 16;
 /// only binds on a runaway, where it keeps the recursion off the wasm stack
 /// (1 MB by default) before the insert budget would.
 const MAX_RECOVERY_LEVEL: usize = 256;
+
+/// The edges that flips in [`Cdt::flip_any_crossing_edge`] made and left
+/// across the constraint, each with the order in which it was made.
+#[derive(Default)]
+struct Queued {
+    order: DetHashMap<(usize, usize), usize>,
+    next: usize,
+    /// The edge that the last flip of the recovery took away, and whether
+    /// that flip undid the flip before it. `None` after a flip that took a
+    /// crossing away.
+    last: Option<((usize, usize), bool)>,
+}
 
 impl Cdt {
     /// Recover a constraint edge (v0, v1) by flipping intersecting edges.
@@ -58,6 +71,7 @@ impl Cdt {
                 iterations: max_iter,
             });
         }
+        let mut queued = Queued::default();
 
         for _ in 0..max_iter {
             if self.edge_exists(v0, v1) {
@@ -130,6 +144,7 @@ impl Cdt {
                 // Check that flipping is valid (the quad is convex).
                 if self.is_convex_quad(ti, local, adj, opp_local) {
                     self.flip_edge(ti, local, adj, opp_local);
+                    queued.last = None;
                 } else {
                     // Quad is not convex — try from the other side.
                     // Find a different intersecting edge.
@@ -145,17 +160,20 @@ impl Cdt {
                             let opp2 = self.find_shared_edge_local(adj2, e2a, e2b).unwrap_or(0);
                             if self.is_convex_quad(ti2, local2, adj2, opp2) {
                                 self.flip_edge(ti2, local2, adj2, opp2);
+                                queued.last = None;
                                 flipped = true;
                             }
                         }
                     }
                     // Neither end of the corridor flips (a long side passing
                     // close by reflex corners): some crossing edge in it
-                    // always has a convex quad, so take the first that does
-                    // rather than spin until the bisection backstop splits a
-                    // valid outline.
-                    if !flipped {
-                        self.flip_any_crossing_edge(v0, v1);
+                    // always has a convex quad, so flip one of those rather
+                    // than spin until the bisection backstop splits a valid
+                    // outline.
+                    if !flipped && !self.flip_any_crossing_edge(v0, v1, &mut queued) {
+                        // No flip changes the triangulation, so the next
+                        // pass would find the same edges.
+                        break;
                     }
                 }
             } else {
@@ -457,9 +475,18 @@ impl Cdt {
         None
     }
 
-    /// Flip the first unconstrained edge crossing the segment `v0`–`v1`
-    /// whose quad is convex, if there is one.
-    fn flip_any_crossing_edge(&mut self, v0: usize, v1: usize) {
+    /// Flip an unconstrained edge crossing the segment `v0`–`v1` whose quad
+    /// is convex, if there is one. Returns whether it flipped an edge.
+    ///
+    /// A flip whose new diagonal misses the segment removes a crossing, and
+    /// the first such flip wins. Any other flip keeps the count, and its new
+    /// diagonal goes into `queued`. Of those flips, an edge not in `queued`
+    /// goes first, then the edge that was queued first. A flip that keeps
+    /// the count changes the quads of the edges next to it, so the next
+    /// call can often remove a crossing there. An edge that a flip just made
+    /// is the last to flip again, so the recovery does not flip one edge
+    /// back and forth.
+    fn flip_any_crossing_edge(&mut self, v0: usize, v1: usize, queued: &mut Queued) -> bool {
         let p0 = self.vertices[v0];
         let p1 = self.vertices[v1];
         // An edge whose box lies wholly to one side of the segment's cannot
@@ -473,6 +500,8 @@ impl Cdt {
                 || a.y().max(b.y()) < lo_y
                 || a.y().min(b.y()) > hi_y
         };
+        // The flip that keeps the count, with its rank in the queue.
+        let mut keep: Option<(usize, [usize; 4])> = None;
         for ti in 0..self.triangles.len() {
             if self.triangles[ti].removed {
                 continue;
@@ -496,12 +525,45 @@ impl Cdt {
                 let Some(opp) = self.find_shared_edge_local(adj, ea, eb) else {
                     continue;
                 };
-                if self.is_convex_quad(ti, local, adj, opp) {
+                if !self.is_convex_quad(ti, local, adj, opp) {
+                    continue;
+                }
+                let pc = self.vertices[self.triangles[ti].v[local]];
+                let pd = self.vertices[self.triangles[adj].v[opp]];
+                if !segments_properly_intersect(p0, p1, pc, pd) {
+                    queued.order.remove(&sorted_pair(ea, eb));
+                    queued.last = None;
                     self.flip_edge(ti, local, adj, opp);
-                    return;
+                    return true;
+                }
+                // After a flip that undid the flip before it, a flip back
+                // again repeats a triangulation with nothing else changed.
+                let made = sorted_pair(self.triangles[ti].v[local], self.triangles[adj].v[opp]);
+                if queued.last == Some((made, true)) {
+                    continue;
+                }
+                let rank = queued
+                    .order
+                    .get(&sorted_pair(ea, eb))
+                    .map_or(0, |&order| order + 1);
+                if keep.is_none_or(|(best, _)| rank < best) {
+                    keep = Some((rank, [ti, local, adj, opp]));
                 }
             }
         }
+        let Some((_, [ti, local, adj, opp])) = keep else {
+            return false;
+        };
+        let ea = self.triangles[ti].v[(local + 1) % 3];
+        let eb = self.triangles[ti].v[(local + 2) % 3];
+        let made = sorted_pair(self.triangles[ti].v[local], self.triangles[adj].v[opp]);
+        queued.order.remove(&sorted_pair(ea, eb));
+        let undo = queued.last.is_some_and(|(removed, _)| removed == made);
+        queued.last = Some((sorted_pair(ea, eb), undo));
+        queued.order.insert(made, queued.next);
+        queued.next += 1;
+        self.flip_edge(ti, local, adj, opp);
+        true
     }
 
     /// Find an intersecting edge different from (skip_e0, skip_e1).

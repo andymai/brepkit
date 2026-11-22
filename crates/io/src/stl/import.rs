@@ -42,6 +42,10 @@ pub struct MeshImport {
 /// one body, with vertices of its own: two bodies that touch at a point
 /// share no vertex.
 ///
+/// The order of the corners of a triangle gives the side that it faces.
+/// The import does not read the stored normals of the mesh, so the normal
+/// lines of an STL file do not change the result.
+///
 /// - At an edge of more than two triangles, the triangles pair off by their
 ///   order round the edge, and each pair joins one body there. In each pair
 ///   the two triangles run the edge in opposite directions. When two ways
@@ -54,10 +58,8 @@ pub struct MeshImport {
 ///   alternate round the edge, the two surfaces cross there: each pairs with
 ///   itself, and the two bodies cross.
 /// - The triangles of such an edge do not pair off, and join one shell,
-///   when two of them lie at one angle (as two cubes that share a side do),
-///   or when the stored normals neither agree nor disagree with the
-///   winding. A body that does not keep the winding of its pairs is a
-///   shell too.
+///   when two of them lie at one angle (as two cubes that share a side do).
+///   A body that does not keep the winding of its pairs is a shell too.
 /// - A body closes when each of its edges has two triangles that run it in
 ///   opposite directions. Triangles of a closed body that are wound against
 ///   their neighbours are turned.
@@ -118,18 +120,17 @@ impl MeshBodies {
         }
 
         let (points, remap) = merge_positions(&mesh.positions, tolerance);
-        let (mut tris, votes, directions) = mesh_triangles(mesh, &remap);
+        let mut tris = mesh_triangles(mesh, &remap);
         if tris.is_empty() {
             return Err(IoError::InvalidTopology {
                 reason: "no valid triangles in mesh".to_string(),
             });
         }
 
-        let mut links = Links::read(&tris, &points, &votes, &directions, tolerance);
-        let mut bodies = split_bodies(&mut tris, &votes, &points, &links);
+        let mut links = Links::read(&tris, &points, tolerance);
+        let mut bodies = split_bodies(&mut tris, &points, &links);
         let source = Source {
             points: &points,
-            votes: &votes,
             tolerance,
         };
         let placement = place_bodies(&mut bodies, &mut tris, &mut links, source);
@@ -353,51 +354,14 @@ fn merge_positions(positions: &[Point3], tolerance: f64) -> (Vec<Point3>, Vec<us
     (points, remap)
 }
 
-/// The bits of the one normal at the three corners of a triangle, when its
-/// corners have one normal.
-type Direction = Option<[u64; 3]>;
-
 /// The triangles of the mesh on its merged points, less each triangle with
 /// two corners on one point, as they are wound.
-///
-/// Each triangle comes with the vote of its stored normals: the dot product
-/// of their sum with the normal of the winding, or zero for a mesh with no
-/// normals. A vote below zero is a normal that points against the winding.
-/// It also comes with the bits of its normal when its three corners have
-/// one normal.
-fn mesh_triangles(
-    mesh: &TriangleMesh,
-    remap: &[usize],
-) -> (Vec<[usize; 3]>, Vec<f64>, Vec<Direction>) {
-    let has_normals = mesh.normals.len() >= mesh.positions.len();
-    let mut tris = Vec::with_capacity(mesh.indices.len() / 3);
-    let mut votes = Vec::with_capacity(mesh.indices.len() / 3);
-    let mut directions = Vec::with_capacity(mesh.indices.len() / 3);
-    let bits = |n: Vec3| [n.x(), n.y(), n.z()].map(f64::to_bits);
-    for tri in mesh.indices.chunks_exact(3) {
-        let (i0, i1, i2) = (tri[0] as usize, tri[1] as usize, tri[2] as usize);
-        let t = [remap[i0], remap[i1], remap[i2]];
-        if t[0] == t[1] || t[1] == t[2] || t[0] == t[2] {
-            continue;
-        }
-        let vote = if has_normals {
-            let p0 = mesh.positions[i0];
-            let geo_normal = (mesh.positions[i1] - p0).cross(mesh.positions[i2] - p0);
-            geo_normal.dot(mesh.normals[i0] + mesh.normals[i1] + mesh.normals[i2])
-        } else {
-            0.0
-        };
-        let direction = if has_normals {
-            let [a, b, c] = [i0, i1, i2].map(|i| bits(mesh.normals[i]));
-            (a == b && b == c).then_some(a)
-        } else {
-            None
-        };
-        tris.push(t);
-        votes.push(if vote.is_finite() { vote } else { 0.0 });
-        directions.push(direction);
-    }
-    (tris, votes, directions)
+fn mesh_triangles(mesh: &TriangleMesh, remap: &[usize]) -> Vec<[usize; 3]> {
+    mesh.indices
+        .chunks_exact(3)
+        .map(|tri| [tri[0], tri[1], tri[2]].map(|i| remap[i as usize]))
+        .filter(|t| t[0] != t[1] && t[1] != t[2] && t[0] != t[2])
+        .collect()
 }
 
 /// What a set of joined triangles is in the result.
@@ -446,13 +410,7 @@ struct Links {
 }
 
 impl Links {
-    fn read(
-        tris: &[[usize; 3]],
-        points: &[Point3],
-        votes: &[f64],
-        directions: &[Direction],
-        tolerance: f64,
-    ) -> Self {
+    fn read(tris: &[[usize; 3]], points: &[Point3], tolerance: f64) -> Self {
         let mut uses: HashMap<(usize, usize), Vec<(usize, bool)>> = HashMap::new();
         for (t, tri) in tris.iter().enumerate() {
             for k in 0..3 {
@@ -462,11 +420,9 @@ impl Links {
         }
         let mut pairs = HashMap::new();
         let (facing, patch) = if uses.values().any(|list| list.len() > 2) {
-            let (turned, unsure, patch) = patch_turns(tris, &uses, votes, directions);
+            let (turned, patch) = patch_turns(tris, &uses);
             for (&key, list) in &uses {
-                // The triangles of an edge are in one group, so one of them
-                // tells whether its side is sure.
-                if list.len() <= 2 || unsure[list[0].0] {
+                if list.len() <= 2 {
                     continue;
                 }
                 let sides = Sides {
@@ -513,22 +469,14 @@ impl Links {
 }
 
 /// For each triangle, whether it is wound against the side of the triangles
-/// joined to it through edges of two triangles, whether that side is
-/// unsure, and the first triangle of that set.
+/// joined to it through edges of two triangles, and the first triangle of
+/// that set.
 ///
 /// Such a set takes the side of most of its triangles as they are wound.
-/// The sets joined through any edge (a group) turn over together when
-/// their stored normals point against their sides, as a closed body does in
-/// [`split_bodies`]. When the normals of a group neither agree nor disagree
-/// with its sides, the side of the group is unsure. A group with one normal
-/// at each corner of each triangle (a reader's fill for a file with none)
-/// has no vote: such normals say nothing of its sides.
 fn patch_turns(
     tris: &[[usize; 3]],
     uses: &HashMap<(usize, usize), Vec<(usize, bool)>>,
-    votes: &[f64],
-    directions: &[Direction],
-) -> (Vec<bool>, Vec<bool>, Vec<usize>) {
+) -> (Vec<bool>, Vec<usize>) {
     let mut turn = vec![false; tris.len()];
     let mut seen = vec![false; tris.len()];
     let mut patch_of = vec![0; tris.len()];
@@ -569,57 +517,7 @@ fn patch_turns(
             patch_of[t] = seed;
         }
     }
-
-    // The sets joined through any edge turn over together. Over a closed
-    // group, normals in one direction sum to nothing and turn nothing.
-    let mut group: Vec<usize> = (0..tris.len()).collect();
-    for list in uses.values() {
-        let first = group_of(&mut group, list[0].0);
-        for &(t, _) in &list[1..] {
-            let other = group_of(&mut group, t);
-            group[other] = first;
-        }
-    }
-    let mut tally = vec![(0.0, 0.0); tris.len()];
-    // The one normal of each group, while its triangles have one.
-    let mut direction: Vec<Option<Direction>> = vec![None; tris.len()];
-    for t in 0..tris.len() {
-        let g = group_of(&mut group, t);
-        tally[g].0 += if turn[t] { -votes[t] } else { votes[t] };
-        tally[g].1 += votes[t].abs();
-        direction[g] = match direction[g] {
-            None => Some(directions[t]),
-            Some(d) if d == directions[t] => Some(d),
-            Some(_) => Some(None),
-        };
-    }
-    for (g, d) in direction.iter().enumerate() {
-        if matches!(d, Some(Some(_))) {
-            tally[g] = (0.0, 0.0);
-        }
-    }
-    // The normals of a group decide when they agree, or disagree, three to
-    // one by weight: the rule that turns a closed body in `split_bodies`.
-    // A group with no normals keeps the side of its winding.
-    let mut unsure = vec![false; tris.len()];
-    for t in 0..tris.len() {
-        let (vote, weight) = tally[group_of(&mut group, t)];
-        if vote < -0.5 * weight {
-            turn[t] = !turn[t];
-        } else if weight > 0.0 && vote <= 0.5 * weight {
-            unsure[t] = true;
-        }
-    }
-    (turn, unsure, patch_of)
-}
-
-/// The first triangle of the group of `t`, in a forest of groups.
-fn group_of(group: &mut [usize], mut t: usize) -> usize {
-    while group[t] != t {
-        group[t] = group[group[t]];
-        t = group[t];
-    }
-    t
+    (turn, patch_of)
 }
 
 /// For each triangle, the side that the pairs take it to face (see
@@ -779,21 +677,12 @@ fn pair_round_edge(
 /// Group the triangles into bodies, in the order of each body's first
 /// triangle, and turn the triangles of each body to one side.
 ///
-/// - A closed body takes the side of most of its triangles as they are
-///   wound. It is turned over when its stored normals, summed over the
-///   body, point against that side. Normals that say nothing (one direction
-///   for each triangle of a closed body sums to zero) leave the winding.
-/// - In a body that does not close, a stored normal that points against a
-///   triangle's winding turns the triangle.
+/// A closed body takes the side of most of its triangles as they are
+/// wound. A body that does not close keeps the winding of each triangle.
 ///
 /// A closed body has [`BodyKind::Solid`] here, whichever way it faces;
 /// [`assign_cavities`] reads the sign of its volume.
-fn split_bodies(
-    tris: &mut [[usize; 3]],
-    votes: &[f64],
-    points: &[Point3],
-    links: &Links,
-) -> Vec<Body> {
+fn split_bodies(tris: &mut [[usize; 3]], points: &[Point3], links: &Links) -> Vec<Body> {
     let mut body_of = vec![usize::MAX; tris.len()];
     let mut walked: HashSet<(usize, usize)> = HashSet::new();
     let mut bodies: Vec<Body> = Vec::new();
@@ -849,26 +738,7 @@ fn split_bodies(
         } else {
             None
         };
-        let closed = turned.and_then(|mut turned| {
-            // The body's stored normals against its one side.
-            let is_turned: HashSet<usize> = turned.iter().copied().collect();
-            let (mut vote, mut weight) = (0.0, 0.0);
-            for &t in &body.tris {
-                vote += if is_turned.contains(&t) {
-                    -votes[t]
-                } else {
-                    votes[t]
-                };
-                weight += votes[t].abs();
-            }
-            if vote < -0.5 * weight {
-                turned = body
-                    .tris
-                    .iter()
-                    .copied()
-                    .filter(|t| !is_turned.contains(t))
-                    .collect();
-            }
+        let closed = turned.and_then(|turned| {
             // The pairs round an edge hold the material of the winding that
             // they took. A body that ends up wound the other way is a shell.
             if body.tris.iter().any(|&t| links.is_paired(t, tris[t])) {
@@ -900,12 +770,6 @@ fn split_bodies(
         if let Some(volume6) = closed {
             body.kind = BodyKind::Solid;
             body.volume6 = volume6;
-        } else {
-            for &t in &body.tris {
-                if votes[t] < 0.0 {
-                    tris[t].swap(1, 2);
-                }
-            }
         }
     }
     bodies
@@ -1257,13 +1121,11 @@ const RAYS: [[f64; 3]; 4] = [
     [-1.0, -0.414_2, -0.302_7],
 ];
 
-/// What the import read from a mesh: its merged points, the vote of the
-/// stored normals of each triangle (see [`mesh_triangles`]), and the merge
+/// What the import read from a mesh: its merged points and the merge
 /// tolerance.
 #[derive(Clone, Copy)]
 struct Source<'a> {
     points: &'a [Point3],
-    votes: &'a [f64],
     tolerance: f64,
 }
 
@@ -1378,10 +1240,9 @@ fn assign_cavities(
 /// not one solid that pinches at the edge.
 ///
 /// The import has not turned the bodies yet. Each new body takes its side
-/// from the winding of the mesh and from its own stored normals (see
-/// [`take_side`]), as a closed body does in [`split_bodies`]. A new body
-/// with no volume is a shell. An edge in `paired_again` does not pair off
-/// again.
+/// from the winding of the mesh (see [`take_side`]), as a closed body does
+/// in [`split_bodies`]. A new body with no volume is a shell. An edge in
+/// `paired_again` does not pair off again.
 fn pair_after_turns(
     bodies: &mut Vec<Body>,
     turned: &[usize],
@@ -1390,11 +1251,7 @@ fn pair_after_turns(
     source: Source<'_>,
     paired_again: &mut HashSet<(usize, usize)>,
 ) -> bool {
-    let Source {
-        points,
-        votes,
-        tolerance,
-    } = source;
+    let Source { points, tolerance } = source;
     if turned.is_empty() || links.pairs.is_empty() {
         return false;
     }
@@ -1493,7 +1350,7 @@ fn pair_after_turns(
             }
         }
         members.sort_unstable();
-        take_side(&members, tris, links, votes);
+        take_side(&members, tris, links);
         let (volume6, terms) = signed_volume6(&members, tris, points);
         let closed = volume6.abs() > 1e-12 * terms;
         split.push(Body {
@@ -1522,11 +1379,11 @@ fn pair_after_turns(
 
 /// Turn a closed body, wound to one side, to the side that [`split_bodies`]
 /// gives a closed body: the side of most of its triangles as the mesh winds
-/// them, then the other side when its stored normals point against that.
+/// them.
 ///
 /// The import can already have turned some of the triangles from their
 /// winding in the mesh; `links` holds that winding.
-fn take_side(members: &[usize], tris: &mut [[usize; 3]], links: &Links, votes: &[f64]) {
+fn take_side(members: &[usize], tris: &mut [[usize; 3]], links: &Links) {
     let turned: Vec<bool> = members
         .iter()
         .map(|&t| {
@@ -1540,15 +1397,7 @@ fn take_side(members: &[usize], tris: &mut [[usize; 3]], links: &Links, votes: &
     // Of the two sides, the one that turns fewer triangles of the mesh, as
     // in `consistent_turns`: on a tie, the first triangle keeps its winding.
     let count = turned.iter().filter(|&&was| was).count();
-    let mut flip = count * 2 > members.len() || (count * 2 == members.len() && turned[0]);
-    let (mut vote, mut weight) = (0.0, 0.0);
-    for (&t, &was) in members.iter().zip(&turned) {
-        vote += if was == flip { votes[t] } else { -votes[t] };
-        weight += votes[t].abs();
-    }
-    if vote < -0.5 * weight {
-        flip = !flip;
-    }
+    let flip = count * 2 > members.len() || (count * 2 == members.len() && turned[0]);
     if flip {
         for &t in members {
             tris[t].swap(1, 2);
