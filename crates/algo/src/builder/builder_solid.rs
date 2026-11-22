@@ -4621,11 +4621,21 @@ fn path_parting(topo: &Topology, a: EdgeId, b: EdgeId, tol: f64) -> Result<Optio
     }
     let (at_a, at_b) = (edge_path(topo, ea)?, edge_path(topo, eb)?);
     let (steps_a, steps_b) = (path_steps(topo, ea)?, path_steps(topo, eb)?);
-    let by_step = steps_a
-        .iter()
-        .chain(&steps_b)
-        .map(|&f| (at_a(f) - at_b(f)).length())
-        .fold(0.0, f64::max);
+    // Two edges may run between their ends either way: a face's copy of a
+    // section often runs against its partner's. Each step is a share of the
+    // first edge's run, so the second edge's own steps (its knots, where a
+    // bulge between samples shows) are reflected onto it when the edges run
+    // against each other.
+    let along = |back: bool| {
+        let flip = |f: f64| if back { 1.0 - f } else { f };
+        steps_a
+            .iter()
+            .copied()
+            .chain(steps_b.iter().map(|&f| flip(f)))
+            .map(|f| (at_a(f) - at_b(flip(f))).length())
+            .fold(0.0, f64::max)
+    };
+    let by_step = along(false).min(along(true));
     if by_step <= PATH_MIN_TOL {
         return Ok(Some(by_step));
     }
@@ -5980,6 +5990,32 @@ mod tests {
             brepkit_topology::edge::EdgeCurve::Line,
             bulge
         ));
+    }
+
+    /// A polyline run from the line's end back to its start, on the line
+    /// but for a bulge 1e-3 high at its own knot 0.3. Read backwards, no
+    /// step of the line lands on the bulge; the polyline's own knots do,
+    /// read on the polyline.
+    #[test]
+    fn a_path_run_backwards_is_read_at_its_own_steps() {
+        use brepkit_topology::edge::Edge;
+        use brepkit_topology::vertex::Vertex;
+        let along: [f64; 8] = [0.0, 0.2, 0.28, 0.3, 0.32, 0.4, 0.9, 1.0];
+        let points: Vec<(f64, f64)> = along
+            .iter()
+            .map(|&g| (1.0 - g, if (g - 0.3).abs() < 1e-12 { 1e-3 } else { 0.0 }))
+            .collect();
+        let mut knots = vec![0.0];
+        knots.extend(along);
+        knots.push(1.0);
+        let back = spline(1, &points, knots);
+        let mut topo = Topology::new();
+        let va = topo.add_vertex(Vertex::new(Point3::new(0.0, 0.0, 0.0), 1e-7));
+        let vb = topo.add_vertex(Vertex::new(Point3::new(1.0, 0.0, 0.0), 1e-7));
+        let line = topo.add_edge(Edge::new(va, vb, EdgeCurveOf::Line));
+        let bulge = topo.add_edge(Edge::new(vb, va, back));
+        assert_eq!(path_parting(&topo, line, bulge, 1e-5).unwrap(), None);
+        assert_eq!(path_parting(&topo, bulge, line, 1e-5).unwrap(), None);
     }
 
     /// One face bounded by a B-spline rim cut in two near each other, the

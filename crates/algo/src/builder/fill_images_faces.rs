@@ -402,7 +402,11 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
         } else {
             sections
         };
-        if sections.is_empty() || (imprinting && lone_loop_around_ring(topo, face_id, &sections)) {
+        // A whole ring's lone loop round the ring or the tube parts nothing:
+        // the other solid's boundary only touches the ring there (a cone's
+        // wall resting on the tube along one circle), and the ring lies
+        // whole on one side of it.
+        if sections.is_empty() || lone_loop_around_ring(topo, face_id, &sections) {
             let expanded =
                 rebuild_face_with_edge_images(topo, face_id, edge_images).unwrap_or(face_id);
             sub_faces.push(SubFace {
