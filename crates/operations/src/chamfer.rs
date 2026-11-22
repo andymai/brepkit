@@ -5,7 +5,7 @@
 //! quadrilateral chamfer faces, then assembling the result using the same
 //! spatial-hash dedup pattern as [`crate::boolean`].
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use brepkit_math::tolerance::Tolerance;
 use brepkit_math::vec::{Point3, Vec3};
@@ -737,7 +737,9 @@ fn chamfer_core(
 
     // Track corner vertices where all adjacent edges are chamfered.
     // Maps vertex_id → (original_position, Vec<(face_id, intersection_point)>).
-    let mut corner_data: HashMap<usize, (Point3, Vec<(FaceId, Point3)>)> = HashMap::new();
+    // The corner faces are made in this map's order, so it must not depend
+    // on a hash seed.
+    let mut corner_data: BTreeMap<usize, (Point3, Vec<(FaceId, Point3)>)> = BTreeMap::new();
 
     // Count how many faces reference each vertex (to detect full-corner chamfer).
     let mut vertex_face_count: HashMap<usize, usize> = HashMap::new();
@@ -1044,7 +1046,10 @@ fn chamfer_core(
         let mut cy = 0.0;
         let mut cz = 0.0;
         let mut count = 0.0;
-        for poly in face_polygons.values() {
+        for poly in shell_face_ids
+            .iter()
+            .filter_map(|f| face_polygons.get(&f.index()))
+        {
             for p in &poly.positions {
                 cx += p.x();
                 cy += p.y();

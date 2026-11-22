@@ -553,7 +553,7 @@ fn ordered_face_fan(
 }
 
 /// Whether two faces share one outward normal along an edge.
-fn faces_tangent_along_edge(
+pub(crate) fn faces_tangent_along_edge(
     topo: &Topology,
     edge_id: EdgeId,
     face_a: FaceId,

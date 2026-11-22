@@ -485,16 +485,34 @@ pub fn build_wire_loops_dcel_measured(
                 _ => d,
             }
         };
+        // The ends of a closed half are one point, so its span is whole
+        // periods: a whole rim in one edge goes once round. Taken the short
+        // way, its twin's orbit lost its turn to the last bit of its span,
+        // and it stood as a region of no area in place of an unbounded ring.
+        let whole_turns = |d: f64, period: Option<f64>| -> f64 {
+            match period {
+                Some(p) if p > 1e-12 => (d / p).round() * p,
+                _ => d,
+            }
+        };
         let mut area = 0.0;
         let mut perimeter = 0.0;
         let first = halves[orbit[0]].start_uv;
         let mut prev = first;
         for &i in &orbit {
             let d = halves[i].end_uv - halves[i].start_uv;
-            let b = Point2::new(
-                prev.x() + step(d.x(), u_period),
-                prev.y() + step(d.y(), v_period),
-            );
+            let closed = (halves[i].start_3d - halves[i].end_3d).length() < 1e-10;
+            let b = if closed {
+                Point2::new(
+                    prev.x() + whole_turns(d.x(), u_period),
+                    prev.y() + whole_turns(d.y(), v_period),
+                )
+            } else {
+                Point2::new(
+                    prev.x() + step(d.x(), u_period),
+                    prev.y() + step(d.y(), v_period),
+                )
+            };
             // Taken from the first vertex: far from the origin the
             // products of raw parameters round away a small orbit's area.
             let (p, q) = (prev - first, b - first);
@@ -741,6 +759,33 @@ fn nurbs_endpoint(
     }
     let t0_raw = knots[0];
     let tn_raw = knots[knots.len() - 1];
+    // A closed half that goes round its surface's period has its ends a
+    // period apart, and its pcurve can lie a period from them, which no
+    // tangent depends on. It is read in the order whose span runs the way
+    // its stored span runs: read from the end nearer its start, a whole rim
+    // run against its curve read as stale, and its chord, folded by a
+    // period, gave it its twin's heading.
+    let stored = edge.end_uv - edge.start_uv;
+    if (edge.start_3d - edge.end_3d).length() < 1e-10 && stored.length() > 1e-9 {
+        let spans = nurbs.evaluate(tn_raw) - nurbs.evaluate(t0_raw);
+        let along = spans.dot(stored) > 0.0;
+        let off = if along {
+            spans - stored
+        } else {
+            spans + stored
+        };
+        if off.length() > 1e-9 {
+            return None;
+        }
+        let (t_start, t_end) = if along {
+            (t0_raw, tn_raw)
+        } else {
+            (tn_raw, t0_raw)
+        };
+        let inward = (t_end - t_start).signum() * if at_start { 1.0 } else { -1.0 };
+        let t_anchor = if at_start { t_start } else { t_end };
+        return Some((nurbs, t_anchor, inward, (t_end - t_start).abs()));
+    }
     let off_start = |t: f64| {
         let p = nurbs.evaluate(t);
         (p.x() - edge.start_uv.x()).powi(2) + (p.y() - edge.start_uv.y()).powi(2)
@@ -1486,6 +1531,63 @@ mod tests {
         let loops = build_wire_loops_dcel(&edges, 1e-7, true, false);
         assert_eq!(loops.len(), 1, "the band below the rim is one region");
         assert_eq!(loops[0].len(), 8);
+    }
+
+    #[test]
+    fn dcel_twin_of_a_whole_rim_in_one_edge_is_no_region() {
+        // A band between the seam's two copies, its top rim one closed edge
+        // whose stored span is a period and a last bit. The rim's twin walks
+        // once round above the band, an unbounded ring. Taken the short way,
+        // the rim's step was the last bit: the ring stood as a region, and
+        // the band, with no turn left in it, read as no area.
+        let a = 4.712_388_980_384_691;
+        let turn = 6.283_185_307_179_587;
+        let p = Point2::new;
+        let mut rim = make_line_edge(p(a + turn, 1.0), p(a, 1.0));
+        rim.end_3d = rim.start_3d;
+        let edges = vec![
+            make_line_edge(p(a, 0.0), p(a + 2.0, 0.0)),
+            make_line_edge(p(a + 2.0, 0.0), p(a + 4.0, 0.0)),
+            make_line_edge(p(a + 4.0, 0.0), p(a + TAU, 0.0)),
+            make_line_edge(p(a + TAU, 0.0), p(a + TAU, 1.0)),
+            rim,
+            make_line_edge(p(a, 1.0), p(a, 0.0)),
+        ];
+        let loops = build_wire_loops_dcel(&edges, 1e-7, true, false);
+        assert_eq!(loops.len(), 1, "the band is the one region");
+        assert_eq!(loops[0].len(), 6);
+    }
+
+    #[test]
+    fn a_whole_rim_a_period_from_its_pcurve_heads_the_way_it_runs() {
+        // A top rim in one closed edge, run against its curve: its ends sit
+        // a period up from its pcurve, which bows up to v = 3.1 between
+        // them. Each half leaves its start along its pcurve, whichever copy
+        // the pcurve lies on. Read as stale, the rim took its chord, which a
+        // period folds to nothing, and headed +u like its twin.
+        use std::f64::consts::PI;
+        let a = 4.712_388_980_384_691;
+        let v = 2.963;
+        let mut rim = make_bezier_edge([
+            Point2::new(a, v),
+            Point2::new(a + PI, 3.1),
+            Point2::new(a + TAU, v),
+        ]);
+        rim.start_uv = Point2::new(a + 2.0 * TAU, v);
+        rim.end_uv = Point2::new(a + TAU, v);
+        rim.end_3d = rim.start_3d;
+        rim.forward = false;
+        // The heading is read on a chord a hundredth of the curve long,
+        // which turns it by about 5e-4 from the curve's tangent.
+        let bow = (2.0 * (3.1 - v) / TAU).atan();
+        let angle = edge_angle_at_vertex_periodic(&rim, true, Some(TAU), None);
+        assert!((angle - (PI - bow)).abs() < 1e-3, "rim leaves at {angle}");
+
+        let mut twin = rim;
+        std::mem::swap(&mut twin.start_uv, &mut twin.end_uv);
+        twin.forward = true;
+        let angle = edge_angle_at_vertex_periodic(&twin, true, Some(TAU), None);
+        assert!((angle - bow).abs() < 1e-3, "twin leaves at {angle}");
     }
 
     #[test]

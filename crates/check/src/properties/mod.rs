@@ -847,6 +847,63 @@ mod tests {
         }
     }
 
+    /// A flat B-spline patch whose partials lean nearly together, trimmed
+    /// along a line that climbs `2^-17` in `v` across the patch: its
+    /// boundary integral keeps that edge's small `dv`, which a bound from
+    /// the partials' conditioning would read as rounding and drop.
+    #[test]
+    fn a_sheared_b_spline_patch_keeps_a_trim_with_a_small_slope() {
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::{Face, FaceSurface};
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let (thin, climb) = (2.0_f64.powi(-16), 2.0_f64.powi(-17));
+        // `(u + v, 2^-16 v, 1)` over the unit square.
+        let at = |u: f64, v: f64| Point3::new(u + v, thin * v, 1.0);
+        let sheared = brepkit_math::nurbs::surface::NurbsSurface::new(
+            1,
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![
+                vec![at(0.0, 0.0), at(0.0, 1.0)],
+                vec![at(1.0, 0.0), at(1.0, 1.0)],
+            ],
+            vec![vec![1.0; 2]; 2],
+        )
+        .unwrap();
+        let mut topo = Topology::new();
+        let corners: Vec<_> = [(0.0, 0.0), (1.0, climb), (1.0, 1.0), (0.0, 1.0)]
+            .iter()
+            .map(|&(u, v)| topo.add_vertex(Vertex::new(at(u, v), 1e-7)))
+            .collect();
+        let edges = (0..4)
+            .map(|k| {
+                let e = topo.add_edge(Edge::new(corners[k], corners[(k + 1) % 4], EdgeCurve::Line));
+                OrientedEdge::new(e, true)
+            })
+            .collect();
+        let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+        let face = Face::new(wire, vec![], FaceSurface::Nurbs(sheared));
+        let read = boundary::nurbs_face_by_boundary(&topo, &face, 1.0, Vec3::new(0.0, 0.0, 0.0))
+            .unwrap()
+            .unwrap();
+        // The patch's area is `2^-16` its `(u, v)` area, `1 - 2^-18`, at a
+        // height of one.
+        let area = thin * (1.0 - 0.5 * climb);
+        assert!(
+            (read.area - area).abs() < 1e-12 * area,
+            "{}, {area}",
+            read.area
+        );
+        assert!(
+            (read.volume.abs() - area / 3.0).abs() < 1e-12 * area,
+            "{}, {}",
+            read.volume,
+            area / 3.0
+        );
+    }
+
     /// The twisted patch with corners (0, 0, 0), (1, 0, 0), (0, 1, 0) and
     /// (1, 1, 1), bounded by its four sides: read over its domain it holds
     /// what it holds along its boundary, area, volume and moments alike.

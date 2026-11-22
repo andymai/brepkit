@@ -322,6 +322,38 @@ enum UvRegion {
     Whole,
     /// The outer loop's samples.
     Bounded(Vec<(f64, f64)>),
+    /// A band with no seam: its outer loop and its one hole each wind the
+    /// axis once, and the face lies between them.
+    Band([Vec<(f64, f64)>; 2]),
+}
+
+/// Whether a loop of unwrapped `(u, v)` samples winds the axis once.
+fn winds_once(loop_uv: &[(f64, f64)]) -> bool {
+    let (Some(&(u0, _)), Some(&(un, _))) = (loop_uv.first(), loop_uv.last()) else {
+        return false;
+    };
+    let turn = unwrap_angle(un, u0) - u0;
+    loop_uv.len() >= 3 && (turn.abs() - TAU).abs() < 1e-6
+}
+
+/// Whether `(u, v)` lies between a band's two rims: a line along `v` from
+/// it crosses the rims an odd number of times on one side.
+fn band_contains(rims: &[Vec<(f64, f64)>; 2], (u, v): (f64, f64)) -> bool {
+    let mut above = 0;
+    for rim in rims {
+        for (i, &(ua, va)) in rim.iter().enumerate() {
+            let (ub, vb) = rim[(i + 1) % rim.len()];
+            let ub = unwrap_angle(ua, ub);
+            let at = unwrap_angle(ua, u);
+            if (ua <= at && at < ub) || (ub <= at && at < ua) {
+                let f = (at - ua) / (ub - ua);
+                if (vb - va).madd(f, va) > v {
+                    above += 1;
+                }
+            }
+        }
+    }
+    above % 2 == 1
 }
 
 /// The vertex of a torus face's outer wire on the torus's axis, where its
@@ -372,6 +404,12 @@ where
     }
 
     let mut uv_boundary = build_uv_boundary(&verts, project, v_periodic);
+    if !v_periodic && let &[hole] = topo.face(face_id)?.inner_wires() {
+        let hole = build_uv_boundary(&crate::util::wire_polygon(topo, hole)?, project, false);
+        if winds_once(&uv_boundary) && winds_once(&hole) {
+            return Ok(UvRegion::Band([uv_boundary, hole]));
+        }
+    }
     // A pointed cone's wire runs up its seam to the apex and straight back,
     // which bounds nothing in (u, v): its region is the rim's run closed
     // along the apex row, as a pole closes a sphere cap.
@@ -412,6 +450,7 @@ where
     let in_outer = match region {
         UvRegion::Whole => true,
         UvRegion::Bounded(boundary) => point_in_uv_boundary(u, v, boundary, true, v_periodic),
+        UvRegion::Band(rims) => return Ok(band_contains(rims, (u, v))),
     };
     Ok(in_outer && !hit_in_inner_wire_uv(topo, face_id, u, v, project, true, v_periodic)?)
 }

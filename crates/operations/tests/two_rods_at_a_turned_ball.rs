@@ -56,11 +56,9 @@ fn turned() -> Mat4 {
     Mat4::rotation_z(0.7) * Mat4::rotation_x(0.4) * Mat4::rotation_y(1.1)
 }
 
-// Turned 1.57, the ball's equator runs 3.2e-7 inside the second rod's wall.
-// Phase EF reads it as crossing the wall at a dozen points, the wall gets a
-// third piece along it, and the second fuse falls back.
+// Turned 1.57, the ball's equator runs 3.2e-7 inside the second rod's wall
+// and touches it once, where it crosses the rod's rim.
 #[test]
-#[ignore = "phase EF reads the ball's equator as crossing the second rod's wall; the fuse falls back"]
 fn turned_mirrored_two_rods_stay_exact() {
     let pose = Mat4::scale(1.0, -1.0, 1.0) * turned();
     let mut topo = Topology::new();
@@ -263,12 +261,14 @@ fn a_thin_ball_face_beside_a_rods_cap_meshes_closed() {
 fn two_rods_at_a_ball_turned_near_a_quarter_turn_fuse_exactly() {
     // The ball's equator runs 0.011 to 0.016 radians from the second rod's
     // cap circle, and the sliver between them stays a face of the ball.
+    // From 1.565 to 1.575, it runs within 2e-5 of the rod's wall, nearly
+    // tangent to it, and the sliver lies within the rod.
     let opts = BooleanOptions {
         mesh_fallback: false,
         unify_faces: false,
         ..BooleanOptions::default()
     };
-    for spin in [1.555, 1.56, 1.58, 1.59] {
+    for spin in [1.555, 1.56, 1.565, 1.57, 1.575, 1.58, 1.59] {
         for (pose_name, pose) in [
             ("upright", Mat4::identity()),
             ("turned", turned()),

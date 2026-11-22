@@ -31,9 +31,9 @@ pub(super) fn tessellate_band_face_local(
     deflection: f64,
     angular_tol: f64,
 ) -> Result<Option<super::TriangleMeshUV>, crate::OperationsError> {
-    if !face_data.inner_wires().is_empty() {
+    let Some(rim_wires) = band_rim_wires(topo, face_data)? else {
         return Ok(None);
-    }
+    };
     let (project, surf_normal): (ProjectFn, NormalFn) = match face_data.surface() {
         FaceSurface::Cylinder(c) => {
             let (c1, c2) = (c.clone(), c.clone());
@@ -55,14 +55,19 @@ pub(super) fn tessellate_band_face_local(
     // Curved wire edges → endpoint-connected cycles (the pool version's
     // structure; a closed single-edge NURBS loop has no by-construction
     // winding, so decline).
-    let wire = topo.wire(face_data.outer_wire())?;
     let mut curved: Vec<(
         brepkit_topology::edge::EdgeId,
         brepkit_topology::vertex::VertexId,
         brepkit_topology::vertex::VertexId,
     )> = Vec::new();
     let mut seen: std::collections::HashSet<usize> = std::collections::HashSet::new();
-    for oe in wire.edges() {
+    for oe in rim_wires
+        .iter()
+        .map(|&w| topo.wire(w).map(brepkit_topology::wire::Wire::edges))
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .flatten()
+    {
         let e = topo.edge(oe.edge())?;
         match e.curve() {
             EdgeCurve::NurbsCurve(_) if e.start() == e.end() => return Ok(None),
@@ -232,6 +237,27 @@ pub(super) fn tessellate_band_face_local(
     Ok(Some(super::TriangleMeshUV { mesh, uvs }))
 }
 
+/// The wires that hold a band's rims: its outer wire, or with no seam the
+/// outer wire and its one hole, each wire then one rim. `None` for a face
+/// with more holes, or with a hole and a straight edge in its outer wire.
+fn band_rim_wires(
+    topo: &Topology,
+    face_data: &brepkit_topology::face::Face,
+) -> Result<Option<Vec<brepkit_topology::wire::WireId>>, crate::OperationsError> {
+    let outer = face_data.outer_wire();
+    Ok(match face_data.inner_wires() {
+        [] => Some(vec![outer]),
+        &[hole] => {
+            let straight = topo.wire(outer)?.edges().iter().any(|oe| {
+                topo.edge(oe.edge())
+                    .is_ok_and(|e| matches!(e.curve(), EdgeCurve::Line))
+            });
+            (!straight).then(|| vec![outer, hole])
+        }
+        _ => None,
+    })
+}
+
 /// Tessellate a cylinder/cone lateral "standard band" face directly from the
 /// shared rim edge vertices, bypassing the snap path's proximity reconciliation.
 ///
@@ -247,7 +273,8 @@ pub(super) fn tessellate_band_face_local(
 /// cone, one rim and a seam line up to the apex) that was handled here,
 /// `Ok(false)` when it is not (the caller then falls back to the snap or CDT
 /// path). A "simple band" has no inner wires and exactly two rims
-/// (everything else a seam line). Each rim is either one **closed** circle
+/// (everything else a seam line), or no seam, one rim its outer wire and the
+/// other its one hole. Each rim is either one **closed** circle
 /// edge or a CHAIN of open circle arcs at one constant `v` whose spans sum to
 /// a full revolution — a boolean that splits a rim at tangency or crossing
 /// points (e.g. the cone∪box inscribed-rim fuse, whose z=6 rim arrives as
@@ -266,9 +293,9 @@ pub(super) fn tessellate_revolution_band_shared(
     edge_global_indices: &DetHashMap<usize, Vec<u32>>,
     merged: &mut TriangleMesh,
 ) -> Result<bool, crate::OperationsError> {
-    if !face_data.inner_wires().is_empty() {
+    let Some(rim_wires) = band_rim_wires(topo, face_data)? else {
         return Ok(false);
-    }
+    };
 
     let (project, surf_normal): (ProjectFn, NormalFn) = match face_data.surface() {
         FaceSurface::Cylinder(c) => {
@@ -302,7 +329,13 @@ pub(super) fn tessellate_revolution_band_shared(
         brepkit_topology::vertex::VertexId,
     )> = Vec::new();
     let mut seen: std::collections::HashSet<usize> = std::collections::HashSet::new();
-    for oe in wire.edges() {
+    for oe in rim_wires
+        .iter()
+        .map(|&w| topo.wire(w).map(brepkit_topology::wire::Wire::edges))
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .flatten()
+    {
         let e = topo.edge(oe.edge())?;
         match e.curve() {
             // A closed single-edge NURBS loop has no by-construction winding
@@ -3957,6 +3990,17 @@ fn cdt_in_surface_frame(
             });
         }
     }
+    split_edge_ears(
+        topo,
+        face_data,
+        &anchored,
+        edge_global_indices,
+        &mut cdt,
+        &cdt_to_global,
+        &boundary_uv,
+        &hole_polys,
+        (cdt_u_scale, cdt_v_scale),
+    )?;
     let boundary_pairs: Vec<(usize, usize)> = (0..n_boundary)
         .map(|i| (boundary_cdt_ids[i], boundary_cdt_ids[(i + 1) % n_boundary]))
         .collect();
@@ -4096,6 +4140,112 @@ fn cdt_in_surface_frame(
         }
     }
 
+    Ok(())
+}
+
+/// Gives each triangle whose three corners are samples of one edge a point
+/// at its middle, on the surface.
+///
+/// Such a triangle spans the edge's chord, not the surface: its corners lie
+/// on one curve, so it lies where the curve does. The face across the edge
+/// can span the same chord (a plane face does, along a curve it holds), and
+/// the chord then bounds four triangles. The point joins each corner to the
+/// surface between them. Each pass splits the triangles left, until none is.
+#[allow(clippy::too_many_arguments)]
+fn split_edge_ears(
+    topo: &Topology,
+    face_data: &brepkit_topology::face::Face,
+    anchored: &DetHashMap<usize, Vec<u32>>,
+    edge_global_indices: &DetHashMap<usize, Vec<u32>>,
+    cdt: &mut brepkit_math::cdt::Cdt,
+    cdt_to_global: &[Option<u32>],
+    boundary_uv: &[(f64, f64)],
+    hole_polys: &[Vec<(f64, f64)>],
+    (u_scale, v_scale): (f64, f64),
+) -> Result<(), crate::OperationsError> {
+    use brepkit_math::vec::Point2;
+    const MAX_PASSES: usize = 8;
+    // The edges, by index, whose samples hold each shared point.
+    let mut edges_of: DetHashMap<u32, Vec<usize>> = DetHashMap::default();
+    for &wire_id in std::iter::once(&face_data.outer_wire()).chain(face_data.inner_wires()) {
+        for oe in topo.wire(wire_id)?.edges() {
+            let idx = oe.edge().index();
+            let Some(gids) = anchored.get(&idx).or_else(|| edge_global_indices.get(&idx)) else {
+                continue;
+            };
+            for &gid in gids {
+                let edges = edges_of.entry(gid).or_default();
+                if !edges.contains(&idx) {
+                    edges.push(idx);
+                }
+            }
+        }
+    }
+    if edges_of.is_empty() {
+        return Ok(());
+    }
+    let in_face = |p: (f64, f64)| {
+        let p = Point2::new(p.0, p.1);
+        point_in_polygon_2d(boundary_uv, p)
+            && hole_polys
+                .iter()
+                .filter(|h| point_in_polygon_2d(h, p))
+                .count()
+                % 2
+                == 0
+    };
+    for _ in 0..MAX_PASSES {
+        let vertices = cdt.vertices();
+        let mut splits: Vec<Point2> = Vec::new();
+        for (i0, i1, i2) in cdt.triangles() {
+            if i0 < 3 || i1 < 3 || i2 < 3 {
+                continue;
+            }
+            let gid = |i: usize| cdt_to_global.get(i).copied().flatten();
+            let (Some(a), Some(b), Some(c)) = (gid(i0), gid(i1), gid(i2)) else {
+                continue;
+            };
+            if a == b || b == c || a == c {
+                continue;
+            }
+            let (Some(ea), Some(eb), Some(ec)) =
+                (edges_of.get(&a), edges_of.get(&b), edges_of.get(&c))
+            else {
+                continue;
+            };
+            if !ea.iter().any(|e| eb.contains(e) && ec.contains(e)) {
+                continue;
+            }
+            let [p0, p1, p2] = [i0, i1, i2].map(|i| vertices[i]);
+            // A triangle with no area in (u, v) has its middle on its
+            // longest side, which can be a constrained edge.
+            let area =
+                (p1.x() - p0.x()).madd(p2.y() - p0.y(), -((p1.y() - p0.y()) * (p2.x() - p0.x())));
+            let longest = [(p0, p1), (p1, p2), (p2, p0)]
+                .iter()
+                .map(|(p, q)| (q.x() - p.x()).hypot(q.y() - p.y()))
+                .fold(0.0, f64::max);
+            if area.abs() <= 1e-9 * longest * longest {
+                continue;
+            }
+            let middle = Point2::new(
+                (p0.x() + p1.x() + p2.x()) / 3.0,
+                (p0.y() + p1.y() + p2.y()) / 3.0,
+            );
+            if in_face((middle.x() / u_scale, middle.y() / v_scale)) {
+                splits.push(middle);
+            }
+        }
+        if splits.is_empty() {
+            break;
+        }
+        let before = cdt.vertices().len();
+        cdt.insert_points_hilbert(&splits)
+            .map_err(crate::OperationsError::Math)?;
+        if cdt.vertices().len() == before {
+            break;
+        }
+    }
     Ok(())
 }
 
@@ -5469,7 +5619,7 @@ fn sphere_face_recharted(
 /// pole, or round none and counter-clockwise in `(u, v)`), `Some(false)` when
 /// it winds round none clockwise (the face holds both poles, or the loop
 /// passes a pole on the wrong side of the face), `None` when it cannot tell.
-fn sphere_loop_reads_right(
+pub fn sphere_loop_reads_right(
     sphere: &brepkit_math::surfaces::SphericalSurface,
     points: &[Point3],
 ) -> Option<bool> {

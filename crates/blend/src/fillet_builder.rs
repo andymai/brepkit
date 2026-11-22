@@ -35,6 +35,7 @@ use crate::walker::{Walker, WalkerConfig, approximate_blend_surface, interpolate
 use crate::{BlendError, BlendResult};
 
 mod concave_first;
+mod one_sphere;
 mod wall_run_up;
 
 type BlendCrossEdge = (EdgeId, VertexId, VertexId);
@@ -138,7 +139,23 @@ impl<'a> FilletBuilder<'a> {
             }
         }
         let snapshot = SolidSnapshot::capture(topo, solid)?;
-        let result = build_in_place(topo, solid, edge_sets);
+        let picked: Vec<EdgeId> = edge_sets
+            .iter()
+            .flat_map(|(edges, _)| edges.iter().copied())
+            .collect();
+        // The edges the joins took out of the shell lie between faces tangent
+        // along them, which the plan drops from the selection.
+        let result =
+            one_sphere::join_sphere_faces_the_rim_crosses(topo, solid, &picked).and_then(|gone| {
+                let edge_sets = edge_sets
+                    .into_iter()
+                    .map(|(edges, law)| {
+                        let edges = edges.into_iter().filter(|e| !gone.contains(e)).collect();
+                        (edges, law)
+                    })
+                    .collect();
+                build_in_place(topo, solid, edge_sets)
+            });
         match result {
             Ok(result) => {
                 let preserve = snapshot.clone_result_source_faces(topo, result.solid);
@@ -11720,6 +11737,37 @@ mod tests {
             found_cylinder,
             "fillet should produce a cylindrical blend surface"
         );
+    }
+
+    /// An edge the solid's arena does not hold, picked with one it does: the
+    /// one it holds is rounded, and the other fails alone.
+    #[test]
+    fn an_edge_outside_the_arena_fails_alone() {
+        let mut topo = Topology::new();
+        let solid = make_unit_cube_manifold(&mut topo);
+        let adjacency = AdjacencyIndex::build(&topo, solid).unwrap();
+        let edge = brepkit_topology::explorer::solid_edges(&topo, solid)
+            .unwrap()
+            .into_iter()
+            .find(|&edge| adjacency.faces_for_edge(edge).len() == 2)
+            .expect("a manifold edge");
+        let mut other = Topology::new();
+        while other.num_edges() <= topo.num_edges() {
+            let _ = make_unit_cube_manifold(&mut other);
+        }
+        let stale = other.edge_id_from_index(other.num_edges() - 1).unwrap();
+        assert!(topo.edge(stale).is_err());
+        let mut builder = FilletBuilder::new(&mut topo, solid);
+        builder.add_edges(&[edge, stale], 0.1);
+        let result = builder.build().expect("fillet build should succeed");
+        assert_eq!(result.succeeded, vec![edge]);
+        assert!(
+            result.failed.iter().any(|(failed, _)| *failed == stale),
+            "{:?}",
+            result.failed
+        );
+        assert!(result.failed.iter().all(|(failed, _)| *failed == stale));
+        assert_shell_edges_are_closed(&topo, result.solid);
     }
 
     /// An edge picked twice in one set is the same request: it is rounded
