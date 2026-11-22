@@ -5307,33 +5307,39 @@ fn pinched_hole_lobes(
             a.x().madd(b.y(), sum) - b.x() * a.y()
         })
     };
-    let n = ids.len();
     let whole = twice_area(points);
-    let mut lobe_pts = Vec::new();
-    let mut ranges = Vec::new();
-    let mut first_visit: DetHashMap<usize, usize> = DetHashMap::default();
+    // The walk parts at each vertex it revisits into simple cycles: a stack
+    // of the points since each vertex's last visit pops a cycle at the
+    // revisit, and what is left at the end closes the last one. Wherever the
+    // walk starts, and however many lobes meet at one vertex, each lobe is
+    // one cycle; those that run the other way round from the whole are holes.
+    let mut stack: Vec<usize> = Vec::with_capacity(ids.len());
+    let mut at_depth: DetHashMap<usize, usize> = DetHashMap::default();
+    let mut cycles: Vec<Vec<brepkit_math::vec::Point2>> = Vec::new();
     for (j, &id) in ids.iter().enumerate() {
-        let Some(&i) = first_visit.get(&id) else {
-            first_visit.insert(id, j);
-            continue;
-        };
-        if j - i < 3 || n - (j - i) < 3 {
+        if let Some(&depth) = at_depth.get(&id) {
+            cycles.push(stack[depth..].iter().map(|&k| points[k]).collect());
+            for &k in &stack[depth + 1..] {
+                at_depth.remove(&ids[k]);
+            }
+            stack.truncate(depth + 1);
             continue;
         }
-        // The vertex parts the loop in two: the run between its two visits,
-        // and the run on past the loop's start back to it. Either can be the
-        // lobe, as the loop may start inside it.
-        let inside: Vec<brepkit_math::vec::Point2> = points[i..j].to_vec();
-        let around: Vec<brepkit_math::vec::Point2> =
-            points[j..].iter().chain(&points[..i]).copied().collect();
-        for lobe in [inside, around] {
-            let area = twice_area(&lobe);
-            if area * whole < 0.0 && area.abs() > 1e-12 * whole.abs() {
-                let start = lobe_pts.len();
-                lobe_pts.extend_from_slice(&lobe);
-                ranges.push((start, lobe_pts.len()));
-                break;
-            }
+        at_depth.insert(id, stack.len());
+        stack.push(j);
+    }
+    cycles.push(stack.iter().map(|&k| points[k]).collect());
+    let mut lobe_pts = Vec::new();
+    let mut ranges = Vec::new();
+    for cycle in cycles {
+        if cycle.len() < 3 {
+            continue;
+        }
+        let area = twice_area(&cycle);
+        if area * whole < 0.0 && area.abs() > 1e-12 * whole.abs() {
+            let start = lobe_pts.len();
+            lobe_pts.extend_from_slice(&cycle);
+            ranges.push((start, lobe_pts.len()));
         }
     }
     (lobe_pts, ranges)
@@ -6794,6 +6800,41 @@ mod tests {
                     corners.iter().any(|q| (*q - c).length() < 1e-12),
                     "start {start}: corner {c:?} missing from {corners:?}"
                 );
+            }
+        }
+    }
+
+    /// Two triangular holes that touch the outline at one vertex: wherever
+    /// the loop starts, each is a hole of its own.
+    #[test]
+    fn two_holes_pinched_at_one_vertex_are_two_holes() {
+        use brepkit_math::vec::Point2;
+        let p = |x: f64, y: f64| Point2::new(x, y);
+        let points = [
+            p(0.0, 0.0),
+            p(2.0, 0.0),
+            p(1.0, 1.0),
+            p(1.8, 1.0),
+            p(2.0, 0.0),
+            p(2.2, 1.0),
+            p(3.0, 1.0),
+            p(2.0, 0.0),
+            p(4.0, 0.0),
+            p(4.0, 4.0),
+            p(0.0, 4.0),
+        ];
+        let ids = [0, 1, 2, 3, 1, 4, 5, 1, 6, 7, 8];
+        for start in 0..points.len() {
+            let turned_points: Vec<Point2> = (0..points.len())
+                .map(|k| points[(start + k) % points.len()])
+                .collect();
+            let turned_ids: Vec<usize> = (0..ids.len())
+                .map(|k| ids[(start + k) % ids.len()])
+                .collect();
+            let (_, ranges) = pinched_hole_lobes(&turned_ids, &turned_points);
+            assert_eq!(ranges.len(), 2, "start {start}: lobes {ranges:?}");
+            for &(a, b) in &ranges {
+                assert_eq!(b - a, 3, "start {start}: a hole has 3 corners, {ranges:?}");
             }
         }
     }
