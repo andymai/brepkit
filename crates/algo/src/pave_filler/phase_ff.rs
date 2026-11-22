@@ -6632,7 +6632,8 @@ fn torus_patch_box(
     }
     let face = topo.face(face_id).ok()?;
     let (mut ring, mut tube) = (Vec::new(), Vec::new());
-    let mut walk: Vec<(f64, f64)> = Vec::new();
+    let mut steps: Option<Vec<(f64, f64)>> = Some(Vec::new());
+    let mut first: Option<(f64, f64)> = None;
     let mut bounded = true;
     for oe in topo.wire(face.outer_wire()).ok()?.edges() {
         let edge = topo.edge(oe.edge()).ok()?;
@@ -6641,110 +6642,144 @@ fn torus_patch_box(
             topo.vertex(edge.end()).ok()?.point(),
         );
         bounded &= torus_edge_arcs(torus, edge.curve(), ends, &mut ring, &mut tube);
-        walk.extend(torus_edge_walk(torus, edge.curve(), ends, oe.is_forward()));
+        first.get_or_insert_with(|| {
+            torus.project_point(if oe.is_forward() { ends.0 } else { ends.1 })
+        });
+        let step = torus_edge_step(torus, edge.curve(), ends, oe.is_forward());
+        steps = steps.zip(step).map(|(mut all, one)| {
+            all.push(one);
+            all
+        });
     }
     let whole = (0.0, TAU);
     let span = |arcs: &[(f64, f64)], along_ring: bool| {
         bounded
             .then(|| turn_left_by(arcs))
             .flatten()
-            .filter(|&kept| wire_bounds_the_face_off(torus, &walk, kept, along_ring))
+            .filter(|&kept| {
+                first.zip(steps.as_deref()).is_some_and(|(at, steps)| {
+                    wire_bounds_the_face_off(torus, at, steps, kept, along_ring)
+                })
+            })
             .unwrap_or(whole)
     };
     Some(torus.patch_aabb(span(&ring, true), span(&tube, false)))
 }
 
-/// The ring and tube angles of points along an edge of a torus, `curve`
-/// between `ends`, the way a wire runs it: forward from its start vertex to
-/// its end vertex, or back.
-fn torus_edge_walk(
+/// A circle on a torus along one of its angles: about the axis (its ring
+/// angle runs and its tube angle stays at `fixed`), or round the tube in a
+/// half-plane through the axis (its tube angle runs and its ring angle stays
+/// at `fixed`). `along` says whether that angle grows with the circle's own.
+struct IsoCircle {
+    about_axis: bool,
+    fixed: f64,
+    along: bool,
+}
+
+/// The circle `c` as an [`IsoCircle`] of `torus`, or `None`.
+fn iso_circle(
+    torus: &brepkit_math::surfaces::ToroidalSurface,
+    c: &brepkit_math::curves::Circle3D,
+) -> Option<IsoCircle> {
+    let (centre, major, minor) = (torus.center(), torus.major_radius(), torus.minor_radius());
+    let (x, y, z) = (torus.x_axis(), torus.y_axis(), torus.z_axis());
+    let tol = Tolerance::new().linear * major.max(1.0);
+    let to_centre = c.center() - centre;
+    let height = to_centre.dot(z);
+    let radial = to_centre - z * height;
+    let turns = c.u_axis().cross(c.v_axis());
+    if c.normal().cross(z).length() <= 1e-12 && radial.length() <= tol {
+        return Some(IsoCircle {
+            about_axis: true,
+            fixed: height.atan2(c.radius() - major),
+            along: turns.dot(x.cross(y)) > 0.0,
+        });
+    }
+    let out = radial.normalize().ok()?;
+    (height.abs() <= tol
+        && (radial.length() - major).abs() <= tol
+        && (c.radius() - minor).abs() <= tol
+        && c.normal().cross(out.cross(z)).length() <= 1e-12)
+        .then(|| IsoCircle {
+            about_axis: false,
+            fixed: radial.dot(y).atan2(radial.dot(x)),
+            along: turns.dot(out.cross(z)) > 0.0,
+        })
+}
+
+/// The step an edge of a torus, `curve` between `ends`, takes in the ring
+/// and tube angles the way a wire runs it (`forward` from its start vertex
+/// to its end vertex), where the step is exact: a seam placeholder, a line
+/// from a point to itself, takes none, and an [`IsoCircle`] its arc along
+/// its angle. `None` for any other edge, whose angles a step cannot hold.
+fn torus_edge_step(
     torus: &brepkit_math::surfaces::ToroidalSurface,
     curve: &EdgeCurve,
     (start, end): (Point3, Point3),
     forward: bool,
-) -> Vec<(f64, f64)> {
-    const STEPS: u32 = 32;
-    let (t0, t1) = if matches!(curve, EdgeCurve::Line) {
-        (0.0, 1.0)
-    } else {
-        curve.domain_with_endpoints(start, end)
-    };
-    let at = |t: f64| match curve {
-        EdgeCurve::Line => start + (end - start) * t,
-        _ => curve.evaluate_with_endpoints(t, start, end),
-    };
-    let mut points: Vec<Point3> = (0..=STEPS)
-        .map(|k| at((t1 - t0).madd(f64::from(k) / f64::from(STEPS), t0)))
-        .collect();
-    // A spline can run its domain from its end vertex back.
-    if (start - end).length() > 0.0 && (points[0] - end).length() < (points[0] - start).length() {
-        points.reverse();
+) -> Option<(f64, f64)> {
+    match curve {
+        EdgeCurve::Line => ((start - end).length() <= 1e-9).then_some((0.0, 0.0)),
+        EdgeCurve::Circle(c) => {
+            let iso = iso_circle(torus, c)?;
+            let (t0, t1) = curve.domain_with_endpoints(start, end);
+            let mut step = (t1 - t0).abs();
+            if iso.along != forward {
+                step = -step;
+            }
+            Some(if iso.about_axis {
+                (step, 0.0)
+            } else {
+                (0.0, step)
+            })
+        }
+        EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_) => None,
     }
-    if !forward {
-        points.reverse();
-    }
-    // The last point is the next edge's first.
-    points.pop();
-    points.into_iter().map(|p| torus.project_point(p)).collect()
 }
 
 /// Whether the face an outer wire bounds keeps out of the arc of one angle
 /// the wire leaves out: of the ring angle `along_ring`, else of the tube
 /// angle. `kept` is the arc the wire spans, its first angle and its last.
-/// Cut across the arc left out, the surface is a band in which the other
-/// angle runs round, and the wire, read along `walk` (its points' ring and
-/// tube angles in order), must not wind round it: it then bounds a disc of
-/// the band. An outer wire runs counterclockwise about the surface's
-/// normal, so the face is that disc, clear of the arc left out, where the
-/// wire's area in `(u, v)` has the sign of the turn from `∂u` to `∂v` about
-/// that normal; otherwise the face is the rest of the surface.
+/// The wire runs from `first` (its ring and tube angles) by exact `steps`
+/// (`torus_edge_step`), a polygon in `(u, v)`. Cut across the arc left out,
+/// the surface is a band in which the other angle runs round, and the wire
+/// must wind round neither angle: it then bounds a disc of the band. An
+/// outer wire runs counterclockwise about the surface's normal, so the face
+/// is that disc, clear of the arc left out, where the polygon's area has
+/// the sign of the turn from `∂u` to `∂v` about that normal; otherwise the
+/// face is the rest of the surface.
 fn wire_bounds_the_face_off(
     torus: &brepkit_math::surfaces::ToroidalSurface,
-    walk: &[(f64, f64)],
+    first: (f64, f64),
+    steps: &[(f64, f64)],
     kept: (f64, f64),
     along_ring: bool,
 ) -> bool {
-    use std::f64::consts::{PI, TAU};
-    let wrap = |d: f64| (d + PI).rem_euclid(TAU) - PI;
-    if walk.len() < 3 {
-        return false;
-    }
+    use std::f64::consts::TAU;
     let span = kept.1 - kept.0;
-    let free_of = |(u, v): (f64, f64)| if along_ring { v } else { u };
-    let mut flat: Vec<(f64, f64)> = Vec::with_capacity(walk.len());
-    let mut free_run = free_of(walk[0]);
-    for (i, &point) in walk.iter().enumerate() {
-        let cut = if along_ring { point.0 } else { point.1 };
-        let mut across = (cut - kept.0).rem_euclid(TAU);
-        if across > TAU - 1e-9 {
-            across -= TAU;
-        }
-        if across > span + 1e-9 {
-            return false;
-        }
-        if i > 0 {
-            free_run += wrap(free_of(point) - free_of(walk[i - 1]));
-        }
-        flat.push(if along_ring {
-            (across, free_run)
-        } else {
-            (free_run, across)
-        });
+    let mut corners = Vec::with_capacity(steps.len() + 1);
+    let mut at = first;
+    corners.push(at);
+    for &(du, dv) in steps {
+        at = (at.0 + du, at.1 + dv);
+        corners.push(at);
     }
-    let round =
-        free_run - free_of(walk[0]) + wrap(free_of(walk[0]) - free_of(walk[walk.len() - 1]));
-    if round.abs() > PI {
+    let (net_u, net_v) = (at.0 - first.0, at.1 - first.1);
+    if net_u.abs() > 1e-9 || net_v.abs() > 1e-9 {
         return false;
     }
-    let area: f64 = (0..flat.len())
-        .map(|i| {
-            let ((x0, y0), (x1, y1)) = (flat[i], flat[(i + 1) % flat.len()]);
-            x0.madd(y1, -x1 * y0)
-        })
+    let inside = corners.iter().all(|&(u, v)| {
+        let cut = if along_ring { u } else { v };
+        let across = (cut - kept.0).rem_euclid(TAU);
+        across <= span + 1e-9 || across >= TAU - 1e-9
+    });
+    let area: f64 = corners
+        .windows(2)
+        .map(|w| w[0].0.madd(w[1].1, -w[1].0 * w[0].1))
         .sum::<f64>()
         * 0.5;
     let turn = torus.x_axis().cross(torus.y_axis()).dot(torus.z_axis());
-    area * turn > 1e-9 * TAU * TAU
+    inside && area * turn > 1e-9 * TAU * TAU
 }
 
 /// The angle from `from` to `to` about the origin of the plane, in the
@@ -6843,9 +6878,8 @@ fn torus_edge_arcs(
     const MAX_HALVINGS: u32 = 16;
     const MAX_PIECES: usize = 1 << 14;
     const SHORT: f64 = 0.05;
-    let (centre, major, minor) = (torus.center(), torus.major_radius(), torus.minor_radius());
+    let (centre, major) = (torus.center(), torus.major_radius());
     let (x, y, z) = (torus.x_axis(), torus.y_axis(), torus.z_axis());
-    let tol = Tolerance::new().linear * major.max(1.0);
     let ring_angle = |p: Point3| (p - centre).dot(y).atan2((p - centre).dot(x));
     let (t0, t1) = if matches!(curve, EdgeCurve::Line) {
         (0.0, 1.0)
@@ -6853,36 +6887,29 @@ fn torus_edge_arcs(
         let (a, b) = curve.domain_with_endpoints(start, end);
         (a.min(b), a.max(b))
     };
-    if let EdgeCurve::Circle(c) = curve {
-        let to_centre = c.center() - centre;
-        let height = to_centre.dot(z);
-        let radial = to_centre - z * height;
-        let turns = c.u_axis().cross(c.v_axis());
+    if let EdgeCurve::Circle(c) = curve
+        && let Some(iso) = iso_circle(torus, c)
+    {
+        // An arc along one angle runs that angle by its own and holds the
+        // other.
         let span = t1 - t0;
-        // A circle about the axis: its ring angle runs with its own, its
-        // tube angle stays put.
-        if c.normal().cross(z).length() <= 1e-12 && radial.length() <= tol {
-            let along = turns.dot(x.cross(y)) > 0.0;
-            let first = ring_angle(c.evaluate(t0));
-            ring.push((if along { first } else { first - span }, span));
-            tube.push((height.atan2(c.radius() - major), 0.0));
-            return true;
-        }
-        // A circle round the tube in a half-plane through the axis: its
-        // tube angle runs with its own, its ring angle stays put.
-        if let Ok(out) = radial.normalize()
-            && height.abs() <= tol
-            && (radial.length() - major).abs() <= tol
-            && (c.radius() - minor).abs() <= tol
-            && c.normal().cross(out.cross(z)).length() <= 1e-12
-        {
-            let along = turns.dot(out.cross(z)) > 0.0;
+        let first = if iso.about_axis {
+            ring_angle(c.evaluate(t0))
+        } else {
             let q = c.evaluate(t0) - centre;
-            let first = q.dot(z).atan2(q.dot(out) - major);
-            ring.push((radial.dot(y).atan2(radial.dot(x)), 0.0));
-            tube.push((if along { first } else { first - span }, span));
-            return true;
-        }
+            let out = (q - z * q.dot(z)).normalize().map_or(x, |v| v);
+            q.dot(z).atan2(q.dot(out) - major)
+        };
+        let run = (if iso.along { first } else { first - span }, span);
+        let still = (iso.fixed, 0.0);
+        let (r, t) = if iso.about_axis {
+            (run, still)
+        } else {
+            (still, run)
+        };
+        ring.push(r);
+        tube.push(t);
+        return true;
     }
     let hull = |a: f64, b: f64| -> Option<Vec<Point3>> {
         match curve {
@@ -11701,6 +11728,108 @@ mod tests {
             }
             assert!(bound.max.x() - bound.min.x() < 24.0 + 1e-6);
             assert!(bound.max.z() - bound.min.z() < 4.0 + 1e-6);
+        }
+    }
+
+    /// The quarter of a ring (10, 2) from its outer equator up to its top,
+    /// between two circles about its axis and along the meridian at the ring
+    /// angle 0, run counterclockwise about the surface's normal. Its wire's
+    /// steps are exact, so its box keeps the tube's top quarter alone.
+    #[test]
+    fn a_torus_band_between_circles_keeps_a_tight_box() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::ToroidalSurface;
+        use brepkit_topology::face::Face;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let torus = ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), 10.0, 2.0).unwrap();
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        let mut topo = Topology::new();
+        let low = topo.add_vertex(Vertex::new(Point3::new(12.0, 0.0, 0.0), 1e-7));
+        let high = topo.add_vertex(Vertex::new(Point3::new(10.0, 0.0, 2.0), 1e-7));
+        let equator = Circle3D::new(Point3::new(0.0, 0.0, 0.0), z, 12.0).unwrap();
+        let top = Circle3D::new(Point3::new(0.0, 0.0, 2.0), z, 10.0).unwrap();
+        let meridian =
+            Circle3D::new(Point3::new(10.0, 0.0, 0.0), Vec3::new(0.0, -1.0, 0.0), 2.0).unwrap();
+        let equator = topo.add_edge(Edge::new(low, low, EdgeCurve::Circle(equator)));
+        let top = topo.add_edge(Edge::new(high, high, EdgeCurve::Circle(top)));
+        let seam = topo.add_edge(Edge::new(low, high, EdgeCurve::Circle(meridian)));
+        let wire = topo.add_wire(
+            Wire::new(
+                vec![
+                    OrientedEdge::new(equator, true),
+                    OrientedEdge::new(seam, true),
+                    OrientedEdge::new(top, false),
+                    OrientedEdge::new(seam, false),
+                ],
+                true,
+            )
+            .unwrap(),
+        );
+        let face = topo.add_face(Face::new(wire, vec![], FaceSurface::Torus(torus.clone())));
+        let bound = torus_patch_box(&topo, face, &torus).unwrap();
+        for i in 0..=64 {
+            for j in 0..=16 {
+                let u = std::f64::consts::TAU * f64::from(i) / 64.0;
+                let v = std::f64::consts::FRAC_PI_2 * f64::from(j) / 16.0;
+                let p = torus.evaluate(u, v);
+                assert!(
+                    bound.expanded(1e-9).contains_point(p),
+                    "{p:?} off {bound:?}"
+                );
+            }
+        }
+        assert!(bound.min.z() > -1e-9, "{bound:?}");
+    }
+
+    /// A face of a ring (10, 2) whose outer wire is one closed spline: a
+    /// unit square about the outer equator's point on `x`, in the plane
+    /// tangent there, run clockwise about the surface's normal, with a dent
+    /// in its top side. The square's sides run over the parameters 0 to
+    /// 0.005 and the dent over the rest, so even samples of the parameter
+    /// read the dent alone, which runs counterclockwise. The face is the
+    /// ring less the square, and its box holds the whole ring.
+    #[test]
+    fn a_clockwise_spline_loop_with_clustered_knots_keeps_the_whole_box() {
+        use brepkit_math::surfaces::ToroidalSurface;
+        use brepkit_topology::face::Face;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let torus = ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), 10.0, 2.0).unwrap();
+        let corners = [
+            (0.3, 0.5),
+            (0.5, 0.5),
+            (0.5, -0.5),
+            (-0.5, -0.5),
+            (-0.5, 0.5),
+            (-0.3, 0.5),
+            (-0.3, 0.1),
+            (0.3, 0.1),
+            (0.3, 0.5),
+        ];
+        let points: Vec<Point3> = corners
+            .iter()
+            .map(|&(y, z)| Point3::new(12.0, y, z))
+            .collect();
+        let knots = vec![
+            0.0, 0.0, 0.001, 0.002, 0.003, 0.004, 0.005, 0.34, 0.67, 1.0, 1.0,
+        ];
+        let curve =
+            brepkit_math::nurbs::curve::NurbsCurve::new(1, knots, points, vec![1.0; 9]).unwrap();
+        let mut topo = Topology::new();
+        let start = topo.add_vertex(Vertex::new(Point3::new(12.0, 0.3, 0.5), 1e-7));
+        let edge = topo.add_edge(Edge::new(start, start, EdgeCurve::NurbsCurve(curve)));
+        let wire = topo.add_wire(Wire::new(vec![OrientedEdge::new(edge, true)], true).unwrap());
+        let face = topo.add_face(Face::new(wire, vec![], FaceSurface::Torus(torus.clone())));
+        let bound = torus_patch_box(&topo, face, &torus).unwrap();
+        for i in 0..=64 {
+            for j in 0..=64 {
+                let u = std::f64::consts::TAU * f64::from(i) / 64.0;
+                let v = std::f64::consts::TAU * f64::from(j) / 64.0;
+                let p = torus.evaluate(u, v);
+                assert!(
+                    bound.expanded(1e-9).contains_point(p),
+                    "{p:?} off {bound:?}"
+                );
+            }
         }
     }
 
