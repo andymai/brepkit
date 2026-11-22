@@ -402,32 +402,6 @@ fn section_basis(n1: Vec3, n2: Vec3, spine_tangent: Vec3) -> (Vec3, Vec3) {
     (bisector, cross_dir)
 }
 
-/// The in-plane direction from the spine INTO `face`'s material: the left
-/// side of the face's own traversal of the spine edge (`effective normal x
-/// traversal tangent` under the CCW-outer-wire convention). Returns `None`
-/// when the spine's first edge is not in the face's wires.
-fn material_contact_direction(
-    topo: &Topology,
-    face: FaceId,
-    spine: &Spine,
-    normal: Vec3,
-    tangent: Vec3,
-) -> Option<Vec3> {
-    let spine_edge = *spine.edges().first()?;
-    let f = topo.face(face).ok()?;
-    let n_eff = if f.is_reversed() { -normal } else { normal };
-    for wid in std::iter::once(f.outer_wire()).chain(f.inner_wires().iter().copied()) {
-        let w = topo.wire(wid).ok()?;
-        for oe in w.edges() {
-            if oe.edge() == spine_edge {
-                let t = if oe.is_forward() { tangent } else { -tangent };
-                return n_eff.cross(t).normalize().ok();
-            }
-        }
-    }
-    None
-}
-
 /// Compute the direction from edge toward contact point on a plane.
 ///
 /// This is the component of the bisector projected onto the plane surface,
