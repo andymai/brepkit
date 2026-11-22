@@ -2264,6 +2264,49 @@ mod tests {
         (worst, matches!(pcurve.curve(), Curve2D::Line(_)))
     }
 
+    /// A closed contact on a ball that starts and ends at one of the ball's
+    /// poles: both of its ends take the u their runs lead to, and its
+    /// pcurve follows it.
+    #[test]
+    fn a_closed_contact_from_a_pole_back_to_it_has_a_pcurve() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::SphericalSurface;
+        let (radius, a) = (2.0, 0.22244_f64);
+        let pole = Vec3::new(a.cos(), 0.0, a.sin());
+        let ball = SphericalSurface::with_axis(Point3::new(0.0, 0.0, 0.0), radius, pole).unwrap();
+        let poles = [
+            Point3::new(0.0, 0.0, 0.0) + pole * radius,
+            Point3::new(0.0, 0.0, 0.0) - pole * radius,
+        ];
+        let circle = Circle3D::new(
+            Point3::new(0.0, 0.0, radius * a.sin()),
+            Vec3::new(0.0, 0.0, 1.0),
+            radius * a.cos(),
+        )
+        .unwrap();
+        let start = poles[0];
+        let curve = EdgeCurve::Circle(circle);
+        let pcurve = pcurve_along(
+            &ball,
+            [Some(std::f64::consts::TAU), None],
+            &poles,
+            &curve,
+            (start, start),
+        )
+        .expect("a pcurve");
+        let (t0, t1) = curve.domain_with_endpoints(start, start);
+        let (p0, p1) = (pcurve.t_start(), pcurve.t_end());
+        let worst = (0..=400)
+            .map(|k| {
+                let f = f64::from(k) / 400.0;
+                let uv = pcurve.evaluate(p0 + (p1 - p0) * f);
+                let on_curve = curve.evaluate_with_endpoints(t0 + (t1 - t0) * f, start, start);
+                (ParametricSurface::evaluate(&ball, uv.x(), uv.y()) - on_curve).length()
+            })
+            .fold(0.0_f64, f64::max);
+        assert!(worst < 1e-6, "the pcurve strays {worst} off the contact");
+    }
+
     /// The fit's tolerance follows the size of the contact, not where it
     /// lies: 1e7 from the origin, the pcurve comes as close as at the origin.
     #[test]
