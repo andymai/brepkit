@@ -7061,15 +7061,15 @@ fn rejoin_untouched_rims(
 /// the rims running between them. A closed rim's UVs run its curve's own
 /// sense whatever its traversal, so one traversed against its curve leaves
 /// the walk a turn back from its start. False, with nothing moved, when
-/// there is no closed rim to walk from or a closed rim is not a circle (the
-/// split of a closed ellipse rim takes its pieces' u from projection, not
-/// from the rim's own span).
+/// there is no closed rim to walk from or a closed rim is neither a circle
+/// nor an ellipse (the split of a closed spline rim takes its pieces' u from
+/// projection, not from the rim's own span).
 fn walk_boundary_from_closed_rim(edges: &mut [OrientedPCurveEdge]) -> bool {
     use std::f64::consts::TAU;
     let closed = |e: &OrientedPCurveEdge| (e.start_3d - e.end_3d).length() < 1e-10;
     if edges
         .iter()
-        .any(|e| closed(e) && !matches!(e.curve_3d, EdgeCurve::Circle(_)))
+        .any(|e| closed(e) && !matches!(e.curve_3d, EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_)))
     {
         return false;
     }
@@ -8294,12 +8294,23 @@ fn split_face_2d_impl(
                 !is_point_on_boundary_uv(p, &surface, &boundary_edges, uv_tol)
             })
         };
+        // A section that ends on a hole runs from it, as from the outer
+        // boundary: a rod's footprint on a bore, in a U from a window's
+        // bottom edge and back, closes on the window, not on itself.
+        let on_hole = |p: Point3| {
+            original_inner_wires
+                .iter()
+                .flatten()
+                .any(|e| point_on_oriented_edge(e, p, tol.linear * 100.0))
+        };
         let endpoints_internal = whole_ring
             || sections.iter().all(|s| {
                 let start_on_boundary =
-                    is_point_on_boundary_uv(s.start, &surface, &boundary_edges, uv_tol);
+                    is_point_on_boundary_uv(s.start, &surface, &boundary_edges, uv_tol)
+                        || on_hole(s.start);
                 let end_on_boundary =
-                    is_point_on_boundary_uv(s.end, &surface, &boundary_edges, uv_tol);
+                    is_point_on_boundary_uv(s.end, &surface, &boundary_edges, uv_tol)
+                        || on_hole(s.end);
                 (!start_on_boundary && !end_on_boundary) || touches_only(s)
             });
         // Winding veto: on a u-periodic lateral, a section chain that winds
@@ -11117,7 +11128,30 @@ fn split_face_2d_impl(
         outline_sign.is_some_and(|sign| area.abs() > perimeter * tol.linear && area * sign > 0.0)
     };
 
+    // A woven hole's pieces carry no section index, like the outline's
+    // edges. A loop runs on the outline only where it holds an outline edge.
+    let on_outline = |e: &OrientedPCurveEdge| {
+        let weld = 100.0 * tol.linear;
+        all_edges[..n_boundary_edges].iter().any(|b| {
+            ((b.start_3d - e.start_3d).length() <= weld && (b.end_3d - e.end_3d).length() <= weld)
+                || ((b.start_3d - e.end_3d).length() <= weld
+                    && (b.end_3d - e.start_3d).length() <= weld)
+        })
+    };
     for wire_loop in loops {
+        // On a wall traced with a woven hole, a loop of the hole's pieces and
+        // sections only (a window's sides and a rod's U from its bottom edge)
+        // is read by its winding: the piece the U cuts off the window's edge
+        // is a region, the window widened by it a hole of the region round
+        // it.
+        if use_structural_classification && woven_trace && !wire_loop.iter().any(&on_outline) {
+            if loop_eff_area(&wire_loop) > 0.0 {
+                outers.push((wire_loop, 1.0));
+            } else {
+                holes.push(wire_loop);
+            }
+            continue;
+        }
         if use_structural_classification {
             // Structural: a loop containing both Line edges (seam) and
             // non-Line edges (section arcs / circles) is a band = outer.

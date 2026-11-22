@@ -854,7 +854,7 @@ pub fn perform(
                         }
                     }
                 })
-                .flat_map(|raw| split_lens_off_boundary_edge(topo, fa, fb, raw, tol))
+                .flat_map(|raw| split_lens_off_boundary_edge(topo, arena, fa, fb, raw, tol))
                 .collect();
             // Emit the EXACT faceted-ramp arcs with registry-aware endpoint
             // resolution: each arc's endpoints are bit-identical to the shared
@@ -1448,9 +1448,17 @@ fn polyline_fraction(along: &[Point3], q: Point3) -> f64 {
 /// endpoints with the section: a lens (a scoop bulging into a corner wall
 /// between two crossings of the wall's seam line), which
 /// `merge_duplicate_edges` folds into one edge, putting the seam line on the
-/// scoop face.
+/// scoop face. The halves meet at its middle, or where another boundary
+/// edge of the pair crosses the section near its middle (a rod's seam at the
+/// bottom of its U on a bore): a split beside that crossing would leave a
+/// sliver of the section between the two. A crossing farther off is a pave
+/// of its own and leaves the middle split in place: a half that ran to it
+/// could span more than half a turn of a cylinder, and its far end then
+/// reads a period short (a pin's section round a bore's mouth, cut at the
+/// pin's seam).
 fn split_lens_off_boundary_edge(
     topo: &Topology,
+    arena: &GfaArena,
     fa: FaceId,
     fb: FaceId,
     raw: RawCurve,
@@ -1481,6 +1489,8 @@ fn split_lens_off_boundary_edge(
     if !lens {
         return vec![raw];
     }
+    let (t_mid, p_mid) =
+        crossing_inside_section(topo, arena, fa, fb, &raw).unwrap_or((t_mid, p_mid));
     vec![
         RawCurve {
             curve: raw.curve.clone(),
@@ -1497,6 +1507,70 @@ fn split_lens_off_boundary_edge(
             p_end: raw.p_end,
         },
     ]
+}
+
+/// Where a boundary edge of one face of the pair crosses the other face
+/// on a marched section within a twentieth of its span of its middle: the
+/// crossing's vertex position and its parameter on the section, the
+/// crossing nearest the middle when several lie there.
+fn crossing_inside_section(
+    topo: &Topology,
+    arena: &GfaArena,
+    fa: FaceId,
+    fb: FaceId,
+    raw: &RawCurve,
+) -> Option<(f64, Point3)> {
+    use brepkit_math::nurbs::projection::project_point_to_curve;
+    let EdgeCurve::NurbsCurve(curve) = &raw.curve else {
+        return None;
+    };
+    let boundary = |f: FaceId| -> Vec<brepkit_topology::edge::EdgeId> {
+        topo.face(f).ok().map_or_else(Vec::new, |face| {
+            std::iter::once(face.outer_wire())
+                .chain(face.inner_wires().iter().copied())
+                .filter_map(|w| topo.wire(w).ok())
+                .flat_map(|w| {
+                    w.edges()
+                        .iter()
+                        .map(brepkit_topology::wire::OrientedEdge::edge)
+                        .collect::<Vec<_>>()
+                })
+                .collect()
+        })
+    };
+    let (edges_a, edges_b) = (boundary(fa), boundary(fb));
+    let (t0, t1) = raw.t_range;
+    let t_mid = 0.5 * (t0 + t1);
+    let near = 0.05 * (t1 - t0);
+    let mut best: Option<(f64, Point3)> = None;
+    for i in &arena.interference.ef {
+        let crate::ds::Interference::EF {
+            edge,
+            face,
+            new_vertex: Some(v),
+            ..
+        } = i
+        else {
+            continue;
+        };
+        if !((*face == fb && edges_a.contains(edge)) || (*face == fa && edges_b.contains(edge))) {
+            continue;
+        }
+        let Ok(vertex) = topo.vertex(arena.resolve_vertex(*v)) else {
+            continue;
+        };
+        let p = vertex.point();
+        let Ok(hit) = project_point_to_curve(curve, p, 1e-12) else {
+            continue;
+        };
+        if hit.distance > JunctionRegistry::ADOPT_MAX || (hit.parameter - t_mid).abs() > near {
+            continue;
+        }
+        if best.is_none_or(|(t, _)| (hit.parameter - t_mid).abs() < (t - t_mid).abs()) {
+            best = Some((hit.parameter, p));
+        }
+    }
+    best
 }
 
 /// Distance from `p` to a face's unbounded surface; `None` when no foot is
@@ -1809,8 +1883,10 @@ enum FaceExtent {
         /// trimmed patch ends across both parameters (a scoop clipped by a
         /// tapered envelope's corner curves), which a `v` window alone misses.
         uv_poly: Option<(Vec<brepkit_math::vec::Point2>, f64)>,
-        /// Holes of a partial band's `uv_poly`, in the same `(u, v)`.
-        uv_holes: Vec<Vec<brepkit_math::vec::Point2>>,
+        /// Holes of the face in `(u, v)`: a partial band's, read from
+        /// `uv_base` like its `uv_poly`, or a whole cylinder or cone band's,
+        /// each read round a turn from its own middle.
+        uv_holes: Vec<UvHole>,
         /// The angle `uv_poly`'s `u` is read round a turn from: the middle of
         /// the angle a partial band leaves out.
         uv_base: Option<f64>,
@@ -1835,6 +1911,15 @@ enum FaceExtent {
         /// the ball).
         ball: Option<Box<crate::classifier::SphereFaceTrim>>,
     },
+}
+
+/// A hole of a curved face in its surface's `(u, v)`, `u` read round a
+/// turn from `base` when one is given, with the band its sampled edges can
+/// sag across.
+struct UvHole {
+    poly: Vec<brepkit_math::vec::Point2>,
+    base: Option<f64>,
+    band: f64,
 }
 
 impl FaceExtent {
@@ -2027,11 +2112,25 @@ impl FaceExtent {
                 _ => None,
             };
             let (uv_poly, uv_holes) = match uv_base {
-                Some(base) => lateral_face_uv_polygon(topo, face_id, surface, base)
-                    .map_or((None, Vec::new()), |(poly, sag, holes)| {
+                Some(base) => lateral_face_uv_polygon(topo, face_id, surface, base).map_or(
+                    (None, Vec::new()),
+                    |(poly, sag, holes)| {
+                        let band = 2.0f64.madd(sag, 1e-7);
+                        let holes = holes
+                            .into_iter()
+                            .map(|poly| UvHole {
+                                poly,
+                                base: Some(base),
+                                band,
+                            })
+                            .collect();
                         (Some((poly, sag)), holes)
-                    }),
-                None => (nurbs_face_uv_polygon(topo, face_id, surface), Vec::new()),
+                    },
+                ),
+                None => (
+                    nurbs_face_uv_polygon(topo, face_id, surface),
+                    whole_band_uv_holes(topo, face_id, surface),
+                ),
             };
             let uv_poly = uv_poly.map(|(poly, sag)| (poly, 2.0f64.madd(sag, 1e-7)));
             let nurbs = crate::classifier::SpanTrim::of_face(topo, face_id)
@@ -2159,6 +2258,9 @@ impl FaceExtent {
                 ball,
                 ..
             } => surface.project_point(p).is_some_and(|(u, v)| {
+                use crate::builder::classify_2d::{
+                    distance_to_polygon_boundary, point_in_polygon_2d,
+                };
                 // Unlike `contains` (conservative keep on projection failure),
                 // the STRICT gate fails closed: an unprojectable point cannot
                 // certify a genuine interior crossing.
@@ -2180,18 +2282,15 @@ impl FaceExtent {
                 let in_v = in_window(v, (*v0, *v1), -v_depth, *periodic_v);
                 let in_u = u_gap.is_none_or(|gap| !crate::classifier::u_in_gap(u, gap));
                 let in_poly = uv_poly.as_ref().is_none_or(|(poly, _)| {
-                    use crate::builder::classify_2d::{
-                        distance_to_polygon_boundary, point_in_polygon_2d,
-                    };
                     let uv = brepkit_math::vec::Point2::new(rebase_u(u, *uv_base), v);
-                    point_in_polygon_2d(uv, poly)
-                        && distance_to_polygon_boundary(uv, poly) > depth
-                        && !uv_holes.iter().any(|h| {
-                            point_in_polygon_2d(uv, h)
-                                || distance_to_polygon_boundary(uv, h) <= depth
-                        })
+                    point_in_polygon_2d(uv, poly) && distance_to_polygon_boundary(uv, poly) > depth
                 });
-                in_v && in_u && in_poly
+                let in_hole = uv_holes.iter().any(|h| {
+                    let uv = brepkit_math::vec::Point2::new(rebase_u(u, h.base), v);
+                    point_in_polygon_2d(uv, &h.poly)
+                        || distance_to_polygon_boundary(uv, &h.poly) <= depth
+                });
+                in_v && in_u && in_poly && !in_hole
             }),
         }
     }
@@ -2237,6 +2336,9 @@ impl FaceExtent {
                 ball,
                 ..
             } => surface.project_point(p).is_none_or(|(u, v)| {
+                use crate::builder::classify_2d::{
+                    distance_to_polygon_boundary, point_in_polygon_2d,
+                };
                 if *own_sheet && !on_own_sheet(surface, p, u, v) {
                     return false;
                 }
@@ -2248,18 +2350,15 @@ impl FaceExtent {
                 let in_v = in_window(v, (*v0, *v1), *margin, *periodic_v);
                 let in_u = u_gap.is_none_or(|gap| !crate::classifier::u_in_gap(u, gap));
                 let in_poly = uv_poly.as_ref().is_none_or(|(poly, band)| {
-                    use crate::builder::classify_2d::{
-                        distance_to_polygon_boundary, point_in_polygon_2d,
-                    };
                     let uv = brepkit_math::vec::Point2::new(rebase_u(u, *uv_base), v);
-                    (point_in_polygon_2d(uv, poly)
-                        || distance_to_polygon_boundary(uv, poly) <= *band)
-                        && !uv_holes.iter().any(|h| {
-                            point_in_polygon_2d(uv, h)
-                                && distance_to_polygon_boundary(uv, h) > *band
-                        })
+                    point_in_polygon_2d(uv, poly) || distance_to_polygon_boundary(uv, poly) <= *band
                 });
-                in_v && in_u && in_poly
+                let in_hole = uv_holes.iter().any(|h| {
+                    let uv = brepkit_math::vec::Point2::new(rebase_u(u, h.base), v);
+                    point_in_polygon_2d(uv, &h.poly)
+                        && distance_to_polygon_boundary(uv, &h.poly) > h.band
+                });
+                in_v && in_u && in_poly && !in_hole
             }),
         }
     }
@@ -6008,6 +6107,44 @@ fn lateral_face_uv_polygon(
     let rect = (hi.x() - lo.x()) * (hi.y() - lo.y());
     (poly.len() >= 3 && (!holes.is_empty() || area < rect * (1.0 - 1e-6)))
         .then_some((poly, sag, holes))
+}
+
+/// A whole cylinder or cone band's holes in `(u, v)` (a window cut through
+/// a tube's wall). Each hole's `u` is read round a turn from half a turn
+/// before its own middle, so a hole across the surface's seam stays one
+/// polygon. A wire that winds the axis bounds no polygon and is left out.
+fn whole_band_uv_holes(topo: &Topology, face_id: FaceId, surface: &FaceSurface) -> Vec<UvHole> {
+    use std::f64::consts::{PI, TAU};
+    if !matches!(surface, FaceSurface::Cylinder(_) | FaceSurface::Cone(_)) {
+        return Vec::new();
+    }
+    let Ok(face) = topo.face(face_id) else {
+        return Vec::new();
+    };
+    let step = |from: f64, to: f64| from + (to - from + PI).rem_euclid(TAU) - PI;
+    face.inner_wires()
+        .iter()
+        .filter_map(|&w| {
+            let (raw, _) = wire_uv_polygon(topo, w, surface, None)?;
+            let first = raw.first()?.x();
+            let (mut lo, mut hi, mut at) = (first, first, first);
+            for p in &raw[1..] {
+                at = step(at, p.x());
+                lo = lo.min(at);
+                hi = hi.max(at);
+            }
+            if (step(at, first) - first).abs() > PI || hi - lo >= TAU {
+                return None;
+            }
+            let base = 0.5f64.madd(lo + hi, -PI);
+            let (poly, sag) = wire_uv_polygon(topo, w, surface, Some(base))?;
+            Some(UvHole {
+                poly,
+                base: Some(base),
+                band: 2.0f64.madd(sag, 1e-7),
+            })
+        })
+        .collect()
 }
 
 /// A face's outer wire sampled into its surface's `(u, v)` with the chords'
@@ -10596,6 +10733,117 @@ mod tests {
                 d: 0.0,
             },
         ))
+    }
+
+    /// The frustum of the cone `x^2 + y^2 = z^2` from z = 2 to 6, its seam at
+    /// `+x`, with a window from z = 3 to 4.5 and from -0.5 to 0.5 about the
+    /// axis: two coaxial arcs and two rulings across the seam. Also the cone.
+    fn holed_frustum(topo: &mut Topology) -> (FaceId, brepkit_math::surfaces::ConicalSurface) {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::ConicalSurface;
+        use brepkit_topology::face::Face;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        let x = Vec3::new(1.0, 0.0, 0.0);
+        let cone = ConicalSurface::with_ref_dir(
+            Point3::new(0.0, 0.0, 0.0),
+            z,
+            std::f64::consts::FRAC_PI_4,
+            x,
+        )
+        .unwrap();
+        let at = |u: f64, h: f64| Point3::new(h * u.cos(), h * u.sin(), h);
+        let arc = |h: f64| Circle3D::new_with_ref(Point3::new(0.0, 0.0, h), z, h, x).unwrap();
+        let mut vertex = |p: Point3| topo.add_vertex(Vertex::new(p, 1e-7));
+        let (bottom, top) = (vertex(at(0.0, 2.0)), vertex(at(0.0, 6.0)));
+        let corners = [
+            vertex(at(-0.5, 3.0)),
+            vertex(at(0.5, 3.0)),
+            vertex(at(0.5, 4.5)),
+            vertex(at(-0.5, 4.5)),
+        ];
+        let mut edge = |a, b, curve| topo.add_edge(Edge::new(a, b, curve));
+        let low = edge(bottom, bottom, EdgeCurve::Circle(arc(2.0)));
+        let seam = edge(bottom, top, EdgeCurve::Line);
+        let high = edge(top, top, EdgeCurve::Circle(arc(6.0)));
+        let sill = edge(corners[0], corners[1], EdgeCurve::Circle(arc(3.0)));
+        let right = edge(corners[1], corners[2], EdgeCurve::Line);
+        let lintel = edge(corners[3], corners[2], EdgeCurve::Circle(arc(4.5)));
+        let left = edge(corners[3], corners[0], EdgeCurve::Line);
+        let outer = topo.add_wire(
+            Wire::new(
+                vec![
+                    OrientedEdge::new(low, true),
+                    OrientedEdge::new(seam, true),
+                    OrientedEdge::new(high, false),
+                    OrientedEdge::new(seam, false),
+                ],
+                true,
+            )
+            .unwrap(),
+        );
+        let window = topo.add_wire(
+            Wire::new(
+                vec![
+                    OrientedEdge::new(left, false),
+                    OrientedEdge::new(lintel, true),
+                    OrientedEdge::new(right, false),
+                    OrientedEdge::new(sill, false),
+                ],
+                true,
+            )
+            .unwrap(),
+        );
+        let face = topo.add_face(Face::new(
+            outer,
+            vec![window],
+            FaceSurface::Cone(cone.clone()),
+        ));
+        (face, cone)
+    }
+
+    /// The holed frustum's extent leaves out the window across the seam, on
+    /// both sides of the seam and on it, and keeps the frustum round it:
+    /// under, over and beside the window and on the far side of the axis.
+    #[test]
+    fn a_frustums_extent_leaves_out_a_window_across_its_seam() {
+        let tol = Tolerance::default();
+        let mut topo = Topology::new();
+        let (face, cone) = holed_frustum(&mut topo);
+        let surface = FaceSurface::Cone(cone.clone());
+        let range = face_v_range(&topo, face, &surface);
+        let extent = FaceExtent::new(&topo, face, &surface, range, tol).unwrap();
+        let on = |u: f64, h: f64| cone.evaluate(u, h * std::f64::consts::SQRT_2);
+        for (u, h) in [
+            (0.0, 3.75),
+            (0.3, 3.75),
+            (-0.3, 3.75),
+            (0.45, 3.1),
+            (-0.45, 4.4),
+        ] {
+            let p = on(u, h);
+            assert!(!extent.contains(p), "in the window at u {u}, z {h}");
+            assert!(
+                !extent.contains_strict(p, 0.0),
+                "in the window at u {u}, z {h}"
+            );
+        }
+        for (u, h) in [
+            (0.0, 2.5),
+            (0.0, 5.25),
+            (0.8, 3.75),
+            (-0.8, 3.75),
+            (std::f64::consts::PI, 3.75),
+            (0.3, 2.9),
+            (-0.3, 4.6),
+        ] {
+            let p = on(u, h);
+            assert!(extent.contains(p), "on the frustum at u {u}, z {h}");
+            assert!(
+                extent.contains_strict(p, 0.01),
+                "on the frustum at u {u}, z {h}"
+            );
+        }
     }
 
     /// A circle of radius 9.99 whose centre lies 0.01001 off the thin ring's
