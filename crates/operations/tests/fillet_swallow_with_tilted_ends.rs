@@ -160,9 +160,31 @@ fn a_round_swallows_a_narrow_face_between_tilted_end_faces() {
     for r in [1.25, 1.5, 2.0] {
         round_and_check(r, true);
     }
-    // Below about 1.2 the solid is right, but its mesh is not yet: the end
-    // face's mesh doubles a triangle over the chord of its shallow notch.
+    // Below 1.25 the solid is right, but its mesh is not: see the test below.
     for r in [0.8, 1.0] {
         round_and_check(r, false);
+    }
+}
+
+/// The mesh of the round's solid closes for each radius and deflection.
+/// The band's mesh crosses its notched end on the chord from its contact
+/// on the wall to the far wall's corner, and the end face's mesh covers
+/// that chord as well as the notch's arc: 2 edges with 4 triangles at
+/// r = 0.8, 1 at r = 1.0 to 1.2, and 1 at r = 1.25 with deflection 0.002.
+#[test]
+#[ignore = "the end face's and the band's meshes both cover the notch's chord"]
+fn the_round_s_mesh_closes_over_its_notched_ends() {
+    for r in [0.8, 1.0, 1.25] {
+        let mut topo = Topology::new();
+        let solid = strip(&mut topo);
+        let edge = wall_top(&topo, solid);
+        let result = fillet_v2(&mut topo, solid, &[edge], r).unwrap();
+        for deflection in [0.01, 0.002] {
+            let mesh = tessellate_solid(&topo, result.solid, deflection).unwrap();
+            assert!(
+                is_watertight(&mesh),
+                "r = {r}: mesh not watertight at {deflection}"
+            );
+        }
     }
 }
