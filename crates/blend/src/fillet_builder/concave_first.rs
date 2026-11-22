@@ -260,8 +260,9 @@ fn ends(topo: &Topology, edge: EdgeId) -> Result<Option<Ends>, BlendError> {
     Ok(Some([(start, a), (end, b)]))
 }
 
-/// Whether `edge` lies along `source` from end to end.
-fn image_of(topo: &Topology, edge: EdgeId, source: EdgeId, tol: f64) -> Result<bool, BlendError> {
+/// Whether `edge` lies along `source` from end to end, within a tolerance of
+/// `edge`'s own size: a piece of `source` lies on it to roundoff.
+fn image_of(topo: &Topology, edge: EdgeId, source: EdgeId) -> Result<bool, BlendError> {
     let data = topo.edge(edge)?;
     let (start, end) = (
         topo.vertex(data.start())?.point(),
@@ -271,6 +272,7 @@ fn image_of(topo: &Topology, edge: EdgeId, source: EdgeId, tol: f64) -> Result<b
     let middle = data
         .curve()
         .evaluate_with_endpoints(f64::midpoint(t0, t1), start, end);
+    let tol = match_tolerance(&[start, middle, end]);
     for point in [start, middle, end] {
         if !on_edge(topo, source, point, tol)? {
             return Ok(false);
@@ -280,8 +282,9 @@ fn image_of(topo: &Topology, edge: EdgeId, source: EdgeId, tol: f64) -> Result<b
 }
 
 /// How near a point must lie to an edge to count as on it: a fraction of the
-/// points' extent, and a roundoff allowance for coordinates far from the
-/// origin. Moving a solid does not change which edges match.
+/// extent of the points compared, and a roundoff allowance for coordinates
+/// far from the origin. Neither moving the solid nor its size elsewhere
+/// changes which edges match.
 fn match_tolerance(points: &[Point3]) -> f64 {
     let mut lo = [f64::INFINITY; 3];
     let mut hi = [f64::NEG_INFINITY; 3];
@@ -329,15 +332,6 @@ pub(super) fn build(
         .copied()
         .filter(|edge| !before.contains(edge))
         .collect();
-    let mut corners = Vec::with_capacity(2 * after.len());
-    for &edge in &after {
-        let data = topo.edge(edge)?;
-        for vertex in [data.start(), data.end()] {
-            corners.push(topo.vertex(vertex)?.point());
-        }
-    }
-    let tol = match_tolerance(&corners);
-
     // Each convex edge's pieces left by the concave rounds.
     let mut source_of: HashMap<EdgeId, EdgeId> = HashMap::new();
     let mut sets: Vec<(Vec<EdgeId>, f64)> = Vec::with_capacity(convex.len());
@@ -349,8 +343,7 @@ pub(super) fn build(
             } else {
                 let mut found = Vec::new();
                 for &candidate in &fresh {
-                    if !source_of.contains_key(&candidate) && image_of(topo, candidate, edge, tol)?
-                    {
+                    if !source_of.contains_key(&candidate) && image_of(topo, candidate, edge)? {
                         found.push(candidate);
                     }
                 }
@@ -377,7 +370,7 @@ pub(super) fn build(
             }
         }
     }
-    let tangent_to = |point: Point3, along: Vec3| {
+    let tangent_to = |point: Point3, along: Vec3, tol: f64| {
         ends_of
             .iter()
             .filter_map(move |(image, set, image_ends)| {
@@ -398,7 +391,8 @@ pub(super) fn build(
         let Some([(a, ta), (b, tb)]) = ends(topo, candidate)? else {
             continue;
         };
-        let (at_a, at_b) = (tangent_to(a, ta), tangent_to(b, tb));
+        let tol = match_tolerance(&[a, b]);
+        let (at_a, at_b) = (tangent_to(a, ta, tol), tangent_to(b, tb, tol));
         let joined = at_a.iter().find_map(|&(image_a, set_a)| {
             at_b.iter().find_map(|&(image_b, set_b)| {
                 let (ra, rb) = (sets[set_a].1, sets[set_b].1);
@@ -436,7 +430,27 @@ pub(super) fn build(
 #[cfg(test)]
 mod tests {
     use super::match_tolerance;
+    use brepkit_math::madd::Madd;
     use brepkit_math::vec::Point3;
+
+    /// A radius 2 quarter arc's middle lies 0.59 off its chord. Matched by
+    /// its own points, it cannot pass for a straight edge however far off it
+    /// lies or however long the solid it is on.
+    #[test]
+    fn an_arc_far_off_keeps_a_tolerance_of_its_own_size() {
+        let arc = |x: f64| {
+            let h = std::f64::consts::FRAC_1_SQRT_2;
+            [
+                Point3::new(x + 2.0, 0.0, 0.0),
+                Point3::new(2.0f64.madd(h, x), 2.0 * h, 0.0),
+                Point3::new(x, 2.0, 0.0),
+            ]
+        };
+        for x in [0.0, 1e8] {
+            let tol = match_tolerance(&arc(x));
+            assert!(tol < 1e-5, "an arc at x = {x} matches within {tol}");
+        }
+    }
 
     #[test]
     fn moving_the_solid_far_off_keeps_its_match_tolerance() {
