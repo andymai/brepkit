@@ -3957,6 +3957,17 @@ fn cdt_in_surface_frame(
             });
         }
     }
+    split_edge_ears(
+        topo,
+        face_data,
+        &anchored,
+        edge_global_indices,
+        &mut cdt,
+        &cdt_to_global,
+        &boundary_uv,
+        &hole_polys,
+        (cdt_u_scale, cdt_v_scale),
+    )?;
     let boundary_pairs: Vec<(usize, usize)> = (0..n_boundary)
         .map(|i| (boundary_cdt_ids[i], boundary_cdt_ids[(i + 1) % n_boundary]))
         .collect();
@@ -4096,6 +4107,112 @@ fn cdt_in_surface_frame(
         }
     }
 
+    Ok(())
+}
+
+/// Gives each triangle whose three corners are samples of one edge a point
+/// at its middle, on the surface.
+///
+/// Such a triangle spans the edge's chord, not the surface: its corners lie
+/// on one curve, so it lies where the curve does. The face across the edge
+/// can span the same chord (a plane face does, along a curve it holds), and
+/// the chord then bounds four triangles. The point joins each corner to the
+/// surface between them. Each pass splits the triangles left, until none is.
+#[allow(clippy::too_many_arguments)]
+fn split_edge_ears(
+    topo: &Topology,
+    face_data: &brepkit_topology::face::Face,
+    anchored: &DetHashMap<usize, Vec<u32>>,
+    edge_global_indices: &DetHashMap<usize, Vec<u32>>,
+    cdt: &mut brepkit_math::cdt::Cdt,
+    cdt_to_global: &[Option<u32>],
+    boundary_uv: &[(f64, f64)],
+    hole_polys: &[Vec<(f64, f64)>],
+    (u_scale, v_scale): (f64, f64),
+) -> Result<(), crate::OperationsError> {
+    use brepkit_math::vec::Point2;
+    const MAX_PASSES: usize = 8;
+    // The edges, by index, whose samples hold each shared point.
+    let mut edges_of: DetHashMap<u32, Vec<usize>> = DetHashMap::default();
+    for &wire_id in std::iter::once(&face_data.outer_wire()).chain(face_data.inner_wires()) {
+        for oe in topo.wire(wire_id)?.edges() {
+            let idx = oe.edge().index();
+            let Some(gids) = anchored.get(&idx).or_else(|| edge_global_indices.get(&idx)) else {
+                continue;
+            };
+            for &gid in gids {
+                let edges = edges_of.entry(gid).or_default();
+                if !edges.contains(&idx) {
+                    edges.push(idx);
+                }
+            }
+        }
+    }
+    if edges_of.is_empty() {
+        return Ok(());
+    }
+    let in_face = |p: (f64, f64)| {
+        let p = Point2::new(p.0, p.1);
+        point_in_polygon_2d(boundary_uv, p)
+            && hole_polys
+                .iter()
+                .filter(|h| point_in_polygon_2d(h, p))
+                .count()
+                % 2
+                == 0
+    };
+    for _ in 0..MAX_PASSES {
+        let vertices = cdt.vertices();
+        let mut splits: Vec<Point2> = Vec::new();
+        for (i0, i1, i2) in cdt.triangles() {
+            if i0 < 3 || i1 < 3 || i2 < 3 {
+                continue;
+            }
+            let gid = |i: usize| cdt_to_global.get(i).copied().flatten();
+            let (Some(a), Some(b), Some(c)) = (gid(i0), gid(i1), gid(i2)) else {
+                continue;
+            };
+            if a == b || b == c || a == c {
+                continue;
+            }
+            let (Some(ea), Some(eb), Some(ec)) =
+                (edges_of.get(&a), edges_of.get(&b), edges_of.get(&c))
+            else {
+                continue;
+            };
+            if !ea.iter().any(|e| eb.contains(e) && ec.contains(e)) {
+                continue;
+            }
+            let [p0, p1, p2] = [i0, i1, i2].map(|i| vertices[i]);
+            // A triangle with no area in (u, v) has its middle on its
+            // longest side, which can be a constrained edge.
+            let area =
+                (p1.x() - p0.x()).madd(p2.y() - p0.y(), -((p1.y() - p0.y()) * (p2.x() - p0.x())));
+            let longest = [(p0, p1), (p1, p2), (p2, p0)]
+                .iter()
+                .map(|(p, q)| (q.x() - p.x()).hypot(q.y() - p.y()))
+                .fold(0.0, f64::max);
+            if area.abs() <= 1e-9 * longest * longest {
+                continue;
+            }
+            let middle = Point2::new(
+                (p0.x() + p1.x() + p2.x()) / 3.0,
+                (p0.y() + p1.y() + p2.y()) / 3.0,
+            );
+            if in_face((middle.x() / u_scale, middle.y() / v_scale)) {
+                splits.push(middle);
+            }
+        }
+        if splits.is_empty() {
+            break;
+        }
+        let before = cdt.vertices().len();
+        cdt.insert_points_hilbert(&splits)
+            .map_err(crate::OperationsError::Math)?;
+        if cdt.vertices().len() == before {
+            break;
+        }
+    }
     Ok(())
 }
 
