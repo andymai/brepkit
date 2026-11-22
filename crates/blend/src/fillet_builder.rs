@@ -626,15 +626,13 @@ impl<'a> FilletBuilder<'a> {
                     } else {
                         end
                     };
-                    let periods = [
-                        face_u_period(&source_surface),
-                        crate::builder_utils::face_v_period(&source_surface),
-                    ];
+                    // The trim cuts a contact that crosses the face's seam
+                    // there.
                     crate::builder_utils::pcurve_along(
                         &source_surface,
-                        periods,
                         &EdgeCurve::NurbsCurve(contact.clone()),
                         (start, end),
+                        true,
                     )
                     .ok_or(BlendError::TrimmingFailure { face: face_id })?
                 };
