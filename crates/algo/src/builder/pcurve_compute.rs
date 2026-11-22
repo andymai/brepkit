@@ -74,6 +74,16 @@ pub fn compute_pcurve_on_surface(
     } else {
         sample_edge_on_surface(curve_3d, start, end, surface)
     };
+    if let EdgeCurve::Ellipse(ellipse) = curve_3d
+        && !is_collinear_2d(&uv_pts, 1e-6)
+        && let Some(pcurve) = wall_ellipse_pcurve(
+            ellipse,
+            surface,
+            ellipse_sample_span(ellipse, start, end, surface),
+        )
+    {
+        return pcurve;
+    }
     pcurve_through_uv_samples(uv_pts, &pts_3d, start, end, surface)
 }
 
@@ -142,10 +152,18 @@ pub fn compute_boundary_pcurve_on_surface(
                 Point2::new(u, v)
             })
             .collect();
-        let (u_period, v_period) = surface_periods(surface);
-        unwrap_periodic_params(&mut uv, u_period, v_period);
+        lift_edge_samples(curve_3d, surface, &pts_3d, &mut uv);
         uv
     };
+    if let EdgeCurve::Ellipse(ellipse) = curve_3d
+        && !is_collinear_2d(&uv_pts, 1e-6)
+    {
+        let (t0, t1) = curve_3d.domain_with_endpoints(stored_start, stored_end);
+        let span = if forward { (t0, t1) } else { (t1, t0) };
+        if let Some(pcurve) = wall_ellipse_pcurve(ellipse, surface, span) {
+            return pcurve;
+        }
+    }
     pcurve_through_uv_samples(uv_pts, &pts_3d, start, end, surface)
 }
 
@@ -351,15 +369,6 @@ pub(super) fn make_line2d_safe(origin: Point2, dir: Vec2) -> Line2D {
     })
 }
 
-/// Unwrap periodic UV parameters (public wrapper for use by other modules).
-pub(super) fn unwrap_periodic_params_pub(
-    pts: &mut [Point2],
-    u_period: Option<f64>,
-    v_period: Option<f64>,
-) {
-    unwrap_periodic_params(pts, u_period, v_period);
-}
-
 /// Returns `(u_period, v_period)` for a surface -- `Some(TAU)` if periodic.
 pub(super) fn surface_periods(surface: &FaceSurface) -> (Option<f64>, Option<f64>) {
     match surface {
@@ -407,8 +416,9 @@ fn sample_edge_on_surface(
             EdgeCurve::Circle(c) if closed_cone_rim => {
                 ParametricCurve::evaluate(c, c.project(start) + TAU * t)
             }
-            EdgeCurve::Ellipse(e) if closed_cone_rim => {
-                ParametricCurve::evaluate(e, e.project(start) + TAU * t)
+            EdgeCurve::Ellipse(e) => {
+                let (ta, tb) = ellipse_sample_span(e, start, end, surface);
+                ParametricCurve::evaluate(e, (tb - ta).madd(t, ta))
             }
             _ => at(t),
         };
@@ -423,11 +433,335 @@ fn sample_edge_on_surface(
         })
         .collect();
 
-    // Unwrap periodicity.
-    let (u_period, v_period) = surface_periods(surface);
-    unwrap_periodic_params(&mut uv_pts, u_period, v_period);
+    lift_edge_samples(curve_3d, surface, &pts_3d, &mut uv_pts);
 
     (pts_3d, uv_pts)
+}
+
+/// The way the `u` of a cylinder or a cone runs along an ellipse on it as
+/// the ellipse's parameter grows: `1.0` or `-1.0`. `None` on another
+/// surface, and when the axis does not pass inside the ellipse's shadow
+/// along the axis.
+///
+/// `u` is the angle about the axis of the point's shadow. The shadow of the
+/// ellipse is `q0 + M (cos t, sin t)`, an ellipse traced the way the sign
+/// of `det M` says. A plane section of the wall encloses the axis, so the
+/// axis's point lies inside the shadow, at `M^-1 (-q0)` within the unit
+/// circle. The angle about a point inside a convex loop runs strictly one
+/// way round the loop, one turn each turn.
+pub(super) fn ellipse_u_sense(
+    ellipse: &brepkit_math::curves::Ellipse3D,
+    surface: &FaceSurface,
+) -> Option<f64> {
+    let (origin, x, y) = match surface {
+        FaceSurface::Cylinder(c) => (c.origin(), c.x_axis(), c.y_axis()),
+        FaceSurface::Cone(c) => (c.apex(), c.x_axis(), c.y_axis()),
+        FaceSurface::Plane { .. }
+        | FaceSurface::Nurbs(_)
+        | FaceSurface::Sphere(_)
+        | FaceSurface::Torus(_) => return None,
+    };
+    let centre = ellipse.center() - origin;
+    let (a, b) = (
+        ellipse.u_axis() * ellipse.semi_major(),
+        ellipse.v_axis() * ellipse.semi_minor(),
+    );
+    let (q0x, q0y) = (x.dot(centre), y.dot(centre));
+    let (m11, m12, m21, m22) = (x.dot(a), x.dot(b), y.dot(a), y.dot(b));
+    let det = m11.madd(m22, -(m12 * m21));
+    if !det.is_finite() || det.abs() <= f64::EPSILON * ellipse.semi_major() * ellipse.semi_minor() {
+        return None;
+    }
+    let (wx, wy) = (
+        m12.madd(q0y, -(m22 * q0x)) / det,
+        m21.madd(q0x, -(m11 * q0y)) / det,
+    );
+    (wx.hypot(wy) < 1.0).then_some(det.signum())
+}
+
+/// The `u` of a point of `ellipse` on a cylinder or a cone `surface`
+/// reached by a run `run` of the ellipse's parameter on from a point whose
+/// `u` is `u_from`; `u_raw` is the point's own projected `u`. `None` when
+/// [`ellipse_u_sense`] is.
+///
+/// `u` runs strictly one way along the ellipse, so a run of the parameter
+/// under a turn advances it by less than a turn, the way the run goes: the
+/// point lies the projected value's advance on, read that way round. Within
+/// rounding of the start's ruling, the run says which end: none, or a turn.
+pub(super) fn ellipse_u_after(
+    ellipse: &brepkit_math::curves::Ellipse3D,
+    surface: &FaceSurface,
+    (u_from, u_raw): (f64, f64),
+    run: f64,
+) -> Option<f64> {
+    use std::f64::consts::PI;
+    let sense = ellipse_u_sense(ellipse, surface)?;
+    let way = sense * run.signum();
+    let ahead = (way * (u_raw - u_from)).rem_euclid(TAU);
+    let ahead = if ahead < 1e-9 && run.abs() > PI {
+        ahead + TAU
+    } else if ahead > TAU - 1e-9 && run.abs() < PI {
+        ahead - TAU
+    } else {
+        ahead
+    };
+    Some(way.madd(ahead, u_from))
+}
+
+/// Lift UV samples `uv`, the projections of points `pts_3d` taken in order
+/// along one edge whose curve is `curve`, onto the copies of the periods the
+/// edge reaches them on, from the first sample's copy.
+///
+/// Along an ellipse on a cylinder or a cone, `u` runs one way, so each step
+/// advances it by [`ellipse_u_after`], however far: round a steep cut's near
+/// vertex `u` runs most of a turn between two samples, which a step to the
+/// nearest copy reads as a short step back. Along any other curve each
+/// sample goes to the copy nearest the one before. The samples lie under
+/// half a turn of the curve's parameter apart.
+pub(super) fn lift_edge_samples(
+    curve: &EdgeCurve,
+    surface: &FaceSurface,
+    pts_3d: &[Point3],
+    uv: &mut [Point2],
+) {
+    let (u_period, v_period) = surface_periods(surface);
+    unwrap_periodic_params(uv, u_period, v_period);
+    let EdgeCurve::Ellipse(ellipse) = curve else {
+        return;
+    };
+    if pts_3d.len() != uv.len() || ellipse_u_sense(ellipse, surface).is_none() {
+        return;
+    }
+    for k in 1..uv.len() {
+        let step = shorter_arc_delta(ellipse.project(pts_3d[k]) - ellipse.project(pts_3d[k - 1]));
+        if let Some(u) = ellipse_u_after(ellipse, surface, (uv[k - 1].x(), uv[k].x()), step) {
+            uv[k] = Point2::new(u, uv[k].y());
+        }
+    }
+}
+
+/// The UV samples of points `pts_3d` taken in order along one edge whose
+/// curve is `curve`, lifted as [`lift_edge_samples`] lifts them from the
+/// first point's own projection. `None` when a point does not project.
+pub(super) fn edge_uv_samples(
+    curve: &EdgeCurve,
+    surface: &FaceSurface,
+    pts_3d: &[Point3],
+) -> Option<Vec<Point2>> {
+    let mut uv: Vec<Point2> = pts_3d
+        .iter()
+        .map(|&p| surface.project_point(p).map(|(u, v)| Point2::new(u, v)))
+        .collect::<Option<_>>()?;
+    lift_edge_samples(curve, surface, pts_3d, &mut uv);
+    Some(uv)
+}
+
+/// The span of its parameter that an ellipse from `start` to `end` runs
+/// over when sampled on `surface` ([`sample_edge_on_surface`]): a whole
+/// turn from its vertex when closed, else the shorter arc between its ends.
+fn ellipse_sample_span(
+    ellipse: &brepkit_math::curves::Ellipse3D,
+    start: Point3,
+    end: Point3,
+    surface: &FaceSurface,
+) -> (f64, f64) {
+    let a0 = ellipse.project(start);
+    let gap = (start - end).length();
+    if matches!(surface, FaceSurface::Cone(_)) && gap < 1e-10 {
+        (a0, a0 + TAU)
+    } else if gap > 1e-12 {
+        (a0, a0 + shorter_arc_delta(ellipse.project(end) - a0))
+    } else {
+        EdgeCurve::Ellipse(ellipse.clone()).domain_with_endpoints(start, end)
+    }
+}
+
+/// The most a wall ellipse's pcurve moves in `u` between two samples.
+const WALL_ELLIPSE_STEP: f64 = std::f64::consts::FRAC_PI_8;
+/// How far a wall ellipse's pcurve may stand off the ellipse's own `(u, v)`
+/// at the points each piece is tested at: in `u`, and in `v` as a fraction
+/// of `max(1, r)`, `r` the point's distance from the axis. `v` is a length
+/// along the wall's ruling, on a cylinder and on a cone, so its error is a
+/// distance in model units; `r`, unlike `v`, does not move with a
+/// cylinder's parameter origin along its axis.
+const WALL_ELLIPSE_DEVIATION: f64 = 1e-6;
+/// The most pieces a wall ellipse's pcurve takes before the fit gives up.
+const WALL_ELLIPSE_MAX_PIECES: usize = 4096;
+
+/// A sample of an ellipse on a wall: its parameter `s` on `[0, 1]`, its
+/// `(u, v)` with `u` lifted along the ellipse, their rates in `s`, and its
+/// distance from the axis.
+#[derive(Clone, Copy)]
+struct WallSample {
+    s: f64,
+    uv: Point2,
+    rate: Vec2,
+    radius: f64,
+}
+
+/// The pcurve of an ellipse on a cylinder or a cone as its parameter runs
+/// evenly from `ta` to `tb` over `[0, 1]`: cubic pieces through samples
+/// that each match the ellipse's `(u, v)` and their rates exactly. `None`
+/// when [`ellipse_u_sense`] is, or when the pieces cannot meet the tests.
+///
+/// A fit through even samples cannot follow a steep cut, whose `u` runs
+/// most of a turn round the near vertex within a hundredth of the
+/// parameter: it swings back across the turn. Here a piece splits in two
+/// until its run in `u` is at most [`WALL_ELLIPSE_STEP`], its cubic in `u`
+/// lies in the region where a cubic between two increasing ends with those
+/// end rates is monotone (`alpha^2 + beta^2 <= 9`, Fritsch and Carlson),
+/// and at a quarter, half and three quarters of the way it stands within
+/// [`WALL_ELLIPSE_DEVIATION`] of the ellipse's `(u, v)`.
+#[allow(clippy::too_many_lines)]
+fn wall_ellipse_pcurve(
+    ellipse: &brepkit_math::curves::Ellipse3D,
+    surface: &FaceSurface,
+    (ta, tb): (f64, f64),
+) -> Option<Curve2D> {
+    let sense = ellipse_u_sense(ellipse, surface)?;
+    let (origin, x, y, axis, v_per_height) = match surface {
+        FaceSurface::Cylinder(c) => (c.origin(), c.x_axis(), c.y_axis(), c.axis(), 1.0),
+        FaceSurface::Cone(c) => (
+            c.apex(),
+            c.x_axis(),
+            c.y_axis(),
+            c.axis(),
+            1.0 / c.half_angle().sin(),
+        ),
+        FaceSurface::Plane { .. }
+        | FaceSurface::Nurbs(_)
+        | FaceSurface::Sphere(_)
+        | FaceSurface::Torus(_) => return None,
+    };
+    let span = tb - ta;
+    if !span.is_finite() || span.abs() < 1e-12 || !v_per_height.is_finite() {
+        return None;
+    }
+    let way = sense * span.signum();
+    // The angle about the axis, its value in `v`, both rates in `s`, and
+    // the distance from the axis.
+    let exact = |s: f64| {
+        let t = span.madd(s, ta);
+        let p = ellipse.evaluate(t) - origin;
+        let d = ellipse.tangent(t) * span;
+        let (px, py, dx, dy) = (x.dot(p), y.dot(p), x.dot(d), y.dot(d));
+        let r2 = px.madd(px, py * py);
+        (
+            py.atan2(px),
+            axis.dot(p) * v_per_height,
+            px.madd(dy, -(py * dx)) / r2,
+            axis.dot(d) * v_per_height,
+            r2.sqrt(),
+        )
+    };
+    // `u` runs one way along the ellipse: on from `prev` by the advance read
+    // that way round, a step of no length read with rounding a hair back.
+    let lift = |prev: f64, raw: f64| {
+        let ahead = (way * (raw - prev)).rem_euclid(TAU);
+        let ahead = if ahead > TAU - 1e-9 {
+            ahead - TAU
+        } else {
+            ahead
+        };
+        way.madd(ahead, prev)
+    };
+    let sample = |s: f64, prev_u: f64| {
+        let (raw, v, du, dv, radius) = exact(s);
+        WallSample {
+            s,
+            uv: Point2::new(lift(prev_u, raw), v),
+            rate: Vec2::new(du, dv),
+            radius,
+        }
+    };
+    let hermite = |a: &WallSample, b: &WallSample, f: f64| {
+        let h = b.s - a.s;
+        let (f2, f3) = (f * f, f * f * f);
+        let (h00, h10, h01, h11) = (
+            2.0f64.madd(f3, (-3.0f64).madd(f2, 1.0)),
+            (-2.0f64).madd(f2, f3) + f,
+            (-2.0f64).madd(f3, 3.0 * f2),
+            f3 - f2,
+        );
+        let at = |p0: f64, m0: f64, p1: f64, m1: f64| {
+            h00.madd(p0, h10.madd(h * m0, h01.madd(p1, h11 * h * m1)))
+        };
+        Point2::new(
+            at(a.uv.x(), a.rate.x(), b.uv.x(), b.rate.x()),
+            at(a.uv.y(), a.rate.y(), b.uv.y(), b.rate.y()),
+        )
+    };
+    let fits = |a: &WallSample, b: &WallSample| {
+        let h = b.s - a.s;
+        let run = b.uv.x() - a.uv.x();
+        if run.abs() > WALL_ELLIPSE_STEP || run * way < 0.0 {
+            return false;
+        }
+        if run.abs() > 0.0 {
+            let (alpha, beta) = (a.rate.x() * h / run, b.rate.x() * h / run);
+            if alpha < 0.0 || beta < 0.0 || alpha.madd(alpha, beta * beta) > 9.0 {
+                return false;
+            }
+        }
+        [0.25, 0.5, 0.75].into_iter().all(|f| {
+            let truth = sample(h.madd(f, a.s), a.uv.x());
+            let fit = hermite(a, b, f);
+            (fit.x() - truth.uv.x()).abs() <= WALL_ELLIPSE_DEVIATION
+                && (fit.y() - truth.uv.y()).abs() <= WALL_ELLIPSE_DEVIATION * truth.radius.max(1.0)
+        })
+    };
+
+    let (u0, v0) = surface.project_point(ellipse.evaluate(ta))?;
+    let (_, _, du0, dv0, radius0) = exact(0.0);
+    let first = WallSample {
+        s: 0.0,
+        uv: Point2::new(u0, v0),
+        rate: Vec2::new(du0, dv0),
+        radius: radius0,
+    };
+    // Even samples to start from, each lifted from the one before.
+    let mut even = vec![first];
+    for k in 1..=PCURVE_SAMPLES {
+        #[allow(clippy::cast_precision_loss)]
+        let s = k as f64 / PCURVE_SAMPLES as f64;
+        let prev = even[even.len() - 1].uv.x();
+        even.push(sample(s, prev));
+    }
+    let mut pending: Vec<WallSample> = even.drain(1..).rev().collect();
+    let mut done = even;
+    while let Some(b) = pending.pop() {
+        let a = done[done.len() - 1];
+        if fits(&a, &b) {
+            done.push(b);
+            continue;
+        }
+        if b.s - a.s < 1e-12 || done.len() + pending.len() >= WALL_ELLIPSE_MAX_PIECES {
+            return None;
+        }
+        pending.push(b);
+        pending.push(sample(f64::midpoint(a.s, b.s), a.uv.x()));
+    }
+
+    // Each piece as a Bezier cubic, joined at triple knots.
+    let pieces = done.len() - 1;
+    let mut points = Vec::with_capacity(3 * pieces + 1);
+    let mut knots = vec![0.0; 4];
+    points.push(done[0].uv);
+    for (k, w) in done.windows(2).enumerate() {
+        let (a, b) = (w[0], w[1]);
+        let third = (b.s - a.s) / 3.0;
+        points.push(a.uv + a.rate * third);
+        points.push(b.uv - b.rate * third);
+        points.push(b.uv);
+        if k + 1 < pieces {
+            knots.extend([b.s; 3]);
+        }
+    }
+    knots.extend([1.0; 4]);
+    let weights = vec![1.0; points.len()];
+    NurbsCurve2D::new(3, knots, points, weights)
+        .ok()
+        .map(Curve2D::Nurbs)
 }
 
 /// Evaluate a 3D edge curve at parameter t in [0, 1].
@@ -672,6 +1006,194 @@ pub(super) fn fit_nurbs2d_through_points(pts: &[Point2]) -> Curve2D {
     let knots = nurbs_3d.knots().to_vec();
     NurbsCurve2D::new(nurbs_3d.degree(), knots, cp_2d, weights)
         .map_or_else(|_| fallback(), Curve2D::Nurbs)
+}
+
+/// A cone cut by a plane at a slope near its own, and an exact lift of `u`
+/// along the ellipse, for tests here and in the face splitter.
+#[cfg(test)]
+pub(super) mod cone_ellipse_fixture {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+    use brepkit_math::madd::Madd;
+    use brepkit_math::vec::Point3;
+    use brepkit_topology::face::FaceSurface;
+
+    /// The cone `x^2 + y^2 = z^2` with its seam turned 1.1 off the plane
+    /// `y = 0`, and the closed ellipse where the plane `z = 1 + m x` cuts it,
+    /// for a slope `m` under 1. The ellipse's near vertex lies about 0.5 from
+    /// the axis and its far one `1 / (1 - m)` out (25 at `m = 0.96`, 1e5 at
+    /// `m = 0.99999`), so its `u` runs most of the turn round the near vertex,
+    /// over a span of its parameter that narrows as `m` nears 1.
+    pub(in crate::builder) fn oblique_cone(
+        m: f64,
+    ) -> (FaceSurface, brepkit_math::curves::Ellipse3D) {
+        use brepkit_math::curves::Ellipse3D;
+        use brepkit_math::surfaces::ConicalSurface;
+        use brepkit_math::vec::Vec3;
+        use std::f64::consts::{FRAC_PI_4, TAU};
+
+        let cone = ConicalSurface::with_ref_dir(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            FRAC_PI_4,
+            Vec3::new(1.1f64.cos(), 1.1f64.sin(), 0.0),
+        )
+        .unwrap();
+        let surface = FaceSurface::Cone(cone);
+        let flat = 1.0 - m * m;
+        let x0 = m / flat;
+        let ellipse = Ellipse3D::new_with_ref(
+            Point3::new(x0, 0.0, m.madd(x0, 1.0)),
+            Vec3::new(-m, 0.0, 1.0),
+            m.hypot(1.0) / flat,
+            1.0 / flat.sqrt(),
+            Vec3::new(1.0, 0.0, m),
+        )
+        .unwrap();
+        for k in 0..16 {
+            let p = ellipse.evaluate(f64::from(k) * TAU / 16.0);
+            assert!(
+                (p.x().hypot(p.y()) - p.z()).abs() < 1e-9 * p.z(),
+                "the ellipse lies off the cone at {p:?}"
+            );
+        }
+        (surface, ellipse)
+    }
+
+    /// The `u` of the point of `ellipse` at its parameter `from` on the cone
+    /// `surface`, and the `u` the point reaches moving along the ellipse to
+    /// its parameter `to`.
+    ///
+    /// The lift takes no steps, so it cannot skip a turn. Across the axis the
+    /// point lies at `(X(t), Y(t))` in the cone's frame, each a sinusoid in
+    /// the parameter, and its `u` is the angle of that point. The angle's
+    /// principal value jumps by a turn only where the point crosses the half
+    /// line `X < 0, Y = 0`, at the roots of `Y(t) = 0`, found in closed form.
+    pub(in crate::builder) fn lifted_u(
+        surface: &FaceSurface,
+        ellipse: &brepkit_math::curves::Ellipse3D,
+        from: f64,
+        to: f64,
+    ) -> (f64, f64) {
+        use std::f64::consts::TAU;
+        let cone = match surface {
+            FaceSurface::Cone(cone) => Some(cone),
+            _ => None,
+        }
+        .expect("a cone");
+        let centre = ellipse.center() - cone.apex();
+        let (a, b) = (
+            ellipse.u_axis() * ellipse.semi_major(),
+            ellipse.v_axis() * ellipse.semi_minor(),
+        );
+        let (x, y) = (cone.x_axis(), cone.y_axis());
+        let across = |t: f64| {
+            (
+                x.dot(centre) + x.dot(a) * t.cos() + x.dot(b) * t.sin(),
+                y.dot(centre) + y.dot(a) * t.cos() + y.dot(b) * t.sin(),
+            )
+        };
+        let angle = |t: f64| {
+            let (px, py) = across(t);
+            py.atan2(px)
+        };
+        // Y(t) = y0 + r cos(t - phi).
+        let (y0, yc, ys) = (y.dot(centre), y.dot(a), y.dot(b));
+        let (r, phi) = (yc.hypot(ys), ys.atan2(yc));
+        let (lo, hi) = (from.min(to), from.max(to));
+        let mut turns = 0.0;
+        if y0.abs() < r {
+            let alpha = (-y0 / r).acos();
+            for base in [phi + alpha, phi - alpha] {
+                let mut k = ((lo - base) / TAU).floor();
+                loop {
+                    let root = TAU.madd(k, base);
+                    if root >= hi {
+                        break;
+                    }
+                    if root > lo && across(root).0 < 0.0 {
+                        // Y rising through the half line along the motion:
+                        // the principal angle jumps a turn up, the true one
+                        // runs on down.
+                        let rising = (ys * root.cos() - yc * root.sin() > 0.0) == (to > from);
+                        turns += if rising { -1.0 } else { 1.0 };
+                    }
+                    k += 1.0;
+                }
+            }
+        }
+        let (u0, _) = surface.project_point(ellipse.evaluate(from)).unwrap();
+        (u0, TAU.madd(turns, u0 + angle(to) - angle(from)))
+    }
+
+    /// Check that `pcurve` follows `ellipse` on the cone `surface` as the
+    /// ellipse's parameter runs evenly from `ta` to `tb` over `[0, 1]`, on
+    /// some copy of the period: at 4001 even points its `(u, v)` stands
+    /// within 2e-6 of the exact lift ([`lifted_u`]) in `u`, and within
+    /// 2e-6 of `max(1, r)` in `v`, `r` the point's distance from the axis;
+    /// its `u` never steps back against the way the ellipse's `u` runs; and
+    /// it leaves each end that way. Returns the largest deviation in `u` and
+    /// in relative `v`.
+    pub(in crate::builder) fn assert_pcurve_follows(
+        pcurve: &brepkit_math::curves2d::Curve2D,
+        surface: &FaceSurface,
+        ellipse: &brepkit_math::curves::Ellipse3D,
+        (ta, tb): (f64, f64),
+        what: &str,
+    ) -> (f64, f64) {
+        use std::f64::consts::TAU;
+        const N: u32 = 4000;
+        let (u_start, u_end) = lifted_u(surface, ellipse, ta, tb);
+        let way = (u_end - u_start).signum();
+        let radius = |p: Point3| match surface {
+            FaceSurface::Cone(c) => {
+                let w = p - c.apex();
+                (w - c.axis() * c.axis().dot(w)).length()
+            }
+            _ => 0.0,
+        };
+        let first = pcurve.evaluate(0.0);
+        let last = pcurve.evaluate(1.0);
+        let copy = ((first.x() - u_start) / TAU).round() * TAU;
+        let mut worst = (0.0_f64, 0.0_f64);
+        let mut prev: Option<f64> = None;
+        for k in 0..=N {
+            let s = f64::from(k) / f64::from(N);
+            let t = (tb - ta).madd(s, ta);
+            let (_, u) = lifted_u(surface, ellipse, ta, t);
+            let at = ellipse.evaluate(t);
+            let (_, v) = surface.project_point(at).unwrap();
+            let p = pcurve.evaluate(s);
+            let (du, dv) = (
+                (p.x() - copy - u).abs(),
+                (p.y() - v).abs() / radius(at).max(1.0),
+            );
+            worst = (worst.0.max(du), worst.1.max(dv));
+            assert!(
+                du <= 2e-6 && dv <= 2e-6,
+                "{what}: at {s} the pcurve stands at {p:?}, the ellipse at ({}, {v})",
+                u + copy
+            );
+            if let Some(q) = prev {
+                assert!(
+                    (p.x() - q) * way >= -1e-12,
+                    "{what}: at {s} the pcurve's u steps back from {q} to {}",
+                    p.x()
+                );
+            }
+            prev = Some(p.x());
+        }
+        for d in [1e-9, 1e-6, 1e-2] {
+            assert!(
+                (pcurve.evaluate(d).x() - first.x()) * way > 0.0,
+                "{what}: the pcurve leaves its start against u, {d} along"
+            );
+            assert!(
+                (last.x() - pcurve.evaluate(1.0 - d).x()) * way > 0.0,
+                "{what}: the pcurve reaches its end against u, {d} short"
+            );
+        }
+        worst
+    }
 }
 
 #[cfg(test)]
@@ -1001,6 +1523,149 @@ mod tests {
                 "the pcurve turns back at u = {:.4} on its way from {:.4}",
                 w[0],
                 us[0]
+            );
+        }
+    }
+
+    /// The ellipse of [`cone_ellipse_fixture::oblique_cone`] at slopes 0.96,
+    /// 0.99 and 0.99999, as a closed rim from its parameter 2, and an open
+    /// arc of it from parameter 3 to 3.4 across its near vertex, both ways
+    /// round. At slope 0.99999 nearly the whole turn of `u` lies within a
+    /// hundredth of the parameter round the near vertex, between two even
+    /// samples. The rim's samples run one way through one turn. The rim's
+    /// pcurve and the arc's follow the ellipse's `(u, v)` along their whole
+    /// length, with `u` running one way, and leave each end that way
+    /// ([`cone_ellipse_fixture::assert_pcurve_follows`]).
+    #[test]
+    fn samples_along_a_steep_oblique_cone_ellipse_keep_its_turn() {
+        use super::cone_ellipse_fixture::{assert_pcurve_follows, lifted_u, oblique_cone};
+        use brepkit_topology::edge::EdgeCurve;
+        use std::f64::consts::TAU;
+
+        for m in [0.96, 0.99, 0.99999] {
+            let (surface, ellipse) = oblique_cone(m);
+            let curve = EdgeCurve::Ellipse(ellipse.clone());
+            let start = ellipse.evaluate(2.0);
+            let us: Vec<f64> = sample_edge_to_uv(&curve, start, start, &surface)
+                .iter()
+                .map(|p| p.x())
+                .collect();
+            let (_, want) = lifted_u(&surface, &ellipse, 2.0, 2.0 + TAU);
+            let turn = us[us.len() - 1] - us[0];
+            assert!(
+                (turn - (want - us[0])).abs() < 1e-9,
+                "slope {m}: the rim's samples run {turn}, the rim {}",
+                want - us[0]
+            );
+            let steps: Vec<f64> = us.windows(2).map(|w| w[1] - w[0]).collect();
+            assert!(
+                steps.iter().all(|&d| d * turn > 0.0),
+                "slope {m}: the rim's u turns back: {us:?}"
+            );
+            let rim = compute_pcurve_on_surface(&curve, start, start, &surface, &[], None);
+            assert!(
+                (rim.evaluate(0.0).x() - us[0]).abs() < 1e-12,
+                "slope {m}: the rim's pcurve leaves its samples' start"
+            );
+            assert_pcurve_follows(
+                &rim,
+                &surface,
+                &ellipse,
+                (2.0, 2.0 + TAU),
+                &format!("slope {m}, rim"),
+            );
+            let (a, b) = (ellipse.evaluate(3.0), ellipse.evaluate(3.4));
+            for forward in [true, false] {
+                let pcurve =
+                    compute_boundary_pcurve_on_surface(&curve, a, b, forward, &surface, &[], None);
+                let span = if forward { (3.0, 3.4) } else { (3.4, 3.0) };
+                let (u_from, u_to) = lifted_u(&surface, &ellipse, span.0, span.1);
+                let (first, last) = (pcurve.evaluate(0.0).x(), pcurve.evaluate(1.0).x());
+                assert!(
+                    (first - u_from).abs() < 1e-9 && (last - u_to).abs() < 1e-9,
+                    "slope {m}, forward {forward}: the pcurve runs {first} to {last}, \
+                     the arc {u_from} to {u_to}"
+                );
+                assert_pcurve_follows(
+                    &pcurve,
+                    &surface,
+                    &ellipse,
+                    span,
+                    &format!("slope {m}, arc forward {forward}"),
+                );
+            }
+        }
+    }
+
+    /// The section of a cylinder of radius 1000 by a plane at one radian to
+    /// its axis, through the axis at the origin, as a closed rim and as an
+    /// arc from its parameter 0.5 to 5.5, on the cylinder with its parameter
+    /// origin at the section's centre and moved 1e6 along the axis. The
+    /// pcurves stand off the ellipse, in 3D at each parameter, by the same
+    /// distance on both, within `2e-6 * max(1, r)` = 2e-3 of it.
+    #[test]
+    fn a_cylinder_sections_pcurve_keeps_its_accuracy_wherever_the_axis_origin_lies() {
+        use brepkit_math::curves::Ellipse3D;
+        use brepkit_math::surfaces::CylindricalSurface;
+        use brepkit_topology::edge::EdgeCurve;
+        use std::f64::consts::TAU;
+
+        let (radius, tilt) = (1000.0_f64, 1.0_f64);
+        let ellipse = Ellipse3D::new_with_ref(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(-tilt.sin(), 0.0, tilt.cos()),
+            radius / tilt.cos(),
+            radius,
+            Vec3::new(tilt.cos(), 0.0, tilt.sin()),
+        )
+        .unwrap();
+        let curve = EdgeCurve::Ellipse(ellipse.clone());
+        let worst = |surface: &FaceSurface, pcurve: &Curve2D, (ta, tb): (f64, f64)| {
+            (0..=4000)
+                .map(|k| {
+                    let s = f64::from(k) / 4000.0;
+                    let at = pcurve.evaluate(s);
+                    let on = surface.evaluate(at.x(), at.y()).unwrap();
+                    (on - ellipse.evaluate((tb - ta).madd(s, ta))).length()
+                })
+                .fold(0.0, f64::max)
+        };
+        let mut errors: Vec<(f64, f64)> = Vec::new();
+        for offset in [0.0, -1e6] {
+            let surface = FaceSurface::Cylinder(
+                CylindricalSurface::new(
+                    Point3::new(0.0, 0.0, offset),
+                    Vec3::new(0.0, 0.0, 1.0),
+                    radius,
+                )
+                .unwrap(),
+            );
+            for k in 0..16 {
+                let p = ellipse.evaluate(f64::from(k) * TAU / 16.0);
+                assert!((p.x().hypot(p.y()) - radius).abs() < 1e-9 * radius);
+            }
+            let start = ellipse.evaluate(0.3);
+            let rim = compute_pcurve_on_surface(&curve, start, start, &surface, &[], None);
+            let arc = compute_boundary_pcurve_on_surface(
+                &curve,
+                ellipse.evaluate(0.5),
+                ellipse.evaluate(5.5),
+                true,
+                &surface,
+                &[],
+                None,
+            );
+            errors.push((
+                worst(&surface, &rim, (0.3, 0.3 + TAU)),
+                worst(&surface, &arc, (0.5, 5.5)),
+            ));
+        }
+        let (near, far) = (errors[0], errors[1]);
+        for (what, a, b) in [("rim", near.0, far.0), ("arc", near.1, far.1)] {
+            assert!(
+                a <= 2e-3 && b <= 2e-3 && (a - b).abs() <= 1e-6,
+                "{what}: the pcurve stands {a} off with the origin at the centre, {b} with it \
+                 1e6 away"
             );
         }
     }

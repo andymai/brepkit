@@ -6,8 +6,8 @@ use brepkit_topology::edge::EdgeCurve;
 use brepkit_topology::face::FaceSurface;
 
 use super::super::pcurve_compute::{
-    compute_boundary_pcurve_on_surface, evaluate_edge_at_t, project_point_on_surface,
-    shorter_arc_delta,
+    compute_boundary_pcurve_on_surface, ellipse_u_after, evaluate_edge_at_t,
+    project_point_on_surface, shorter_arc_delta,
 };
 use super::super::plane_frame::PlaneFrame;
 use super::super::split_types::OrientedPCurveEdge;
@@ -300,32 +300,28 @@ fn split_edges_at_3d_points(
             };
             // On the copy the edge runs on at the split. A spline's parameter
             // need not run evenly in u (its knots), so walk along it from the
-            // edge's start; an arc's, a ring's and a ruling's parameter runs
-            // evenly in the surface's, so the split's place in the edge's own
-            // unwrapped span reads the copy, also on an arc over half a turn.
-            // A walk that cannot finish falls back to that span. A closed
-            // rim's split is on the rim's own turn already: an ellipse rim on
-            // a cone does not advance evenly in u, and moved to the copy
-            // nearest an even advance its split lands a turn off.
+            // edge's start. An ellipse's on a cone does not either (a steep
+            // cut runs most of the turn near the apex end), but its u runs
+            // one way, so the split's advance from the start reads the copy.
+            // An arc's, a ring's and a ruling's parameter runs evenly in the
+            // surface's, so the split's place in the edge's own unwrapped span
+            // reads the copy, also on an arc over half a turn. A walk that
+            // cannot finish falls back to that span. A closed rim's split is
+            // on the rim's own turn already.
             let split_uv = if nurbs_by_projection && closed_ring_dir.is_none() {
-                let span_end = match closed_ring_dir {
-                    Some(dir) => brepkit_math::vec::Point2::new(
-                        std::f64::consts::TAU.madd(dir, edge.start_uv.x()),
-                        edge.start_uv.y(),
-                    ),
-                    None => edge.end_uv,
-                };
                 let along = brepkit_math::vec::Point2::new(
-                    (span_end.x() - edge.start_uv.x()).madd(t, edge.start_uv.x()),
-                    (span_end.y() - edge.start_uv.y()).madd(t, edge.start_uv.y()),
+                    (edge.end_uv.x() - edge.start_uv.x()).madd(t, edge.start_uv.x()),
+                    (edge.end_uv.y() - edge.start_uv.y()).madd(t, edge.start_uv.y()),
                 );
-                let near = match edge.curve_3d {
-                    EdgeCurve::NurbsCurve(_) => {
-                        walked_uv(&edge, t, surface, periods).unwrap_or(along)
+                let near = match &edge.curve_3d {
+                    EdgeCurve::NurbsCurve(_) => walked_uv(&edge, t, surface, periods),
+                    EdgeCurve::Ellipse(ellipse) => {
+                        ellipse_split_u(ellipse, &edge, (t, split_uv.x()), surface, tol)
+                            .map(|u| brepkit_math::vec::Point2::new(u, split_uv.y()))
                     }
-                    EdgeCurve::Line | EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => along,
+                    EdgeCurve::Line | EdgeCurve::Circle(_) => None,
                 };
-                on_copy_near(split_uv, near, periods)
+                on_copy_near(split_uv, near.unwrap_or(along), periods)
             } else {
                 split_uv
             };
@@ -807,6 +803,23 @@ fn walked_uv(
     None
 }
 
+/// The `u` of the point at fraction `t` of an ellipse edge on a cylinder or
+/// a cone, `t` read as [`find_splits_on_ellipse`] reads it, on the turn the
+/// edge reaches it along its traversal ([`ellipse_u_after`] from the edge's
+/// start). `u` is the point's projected `u`.
+fn ellipse_split_u(
+    ellipse: &brepkit_math::curves::Ellipse3D,
+    edge: &OrientedPCurveEdge,
+    (t, u): (f64, f64),
+    surface: &FaceSurface,
+    tol: f64,
+) -> Option<f64> {
+    let (t0, t1) = ellipse_edge_span(edge, tol);
+    let run = (t1 - t0) * t;
+    let run = if edge.forward { run } else { -run };
+    ellipse_u_after(ellipse, surface, (edge.start_uv.x(), u), run)
+}
+
 /// `uv` moved by whole periods to the copy nearest `near`.
 fn on_copy_near(
     uv: brepkit_math::vec::Point2,
@@ -1141,9 +1154,30 @@ pub(super) fn find_splits_on_section_ellipse(
     splits
 }
 
+/// The span of its ellipse that an ellipse edge runs on, counter-clockwise
+/// from the stored edge's start.
+///
+/// An open arc spans its stored edge's counter-clockwise range; read in the
+/// traversal's order, a reversed arc's span is its complement, and a point
+/// on the ellipse just past the arc's end (a strut notch's arc ending a hair
+/// short of the seam vertex) split it into a detour through there. A closed
+/// ellipse runs its whole turn from its vertex, counter-clockwise as stored
+/// and clockwise reversed (a mirrored rod's slanted top).
+fn ellipse_edge_span(edge: &OrientedPCurveEdge, tol: f64) -> (f64, f64) {
+    let closed = (edge.start_3d - edge.end_3d).length() < tol;
+    let (stored_start, stored_end) = if edge.forward || closed {
+        (edge.start_3d, edge.end_3d)
+    } else {
+        (edge.end_3d, edge.start_3d)
+    };
+    edge.curve_3d
+        .domain_with_endpoints(stored_start, stored_end)
+}
+
 /// Find split parameters on an ellipse edge. A point within `band` of the
 /// ellipse splits it: at the point itself within `tol`, and at its foot
-/// farther off, so the pieces stay on the ellipse.
+/// farther off, so the pieces stay on the ellipse. A split's parameter is
+/// its fraction of [`ellipse_edge_span`] in the traversal's order.
 pub(super) fn find_splits_on_ellipse(
     ellipse: &brepkit_math::curves::Ellipse3D,
     edge: &OrientedPCurveEdge,
@@ -1151,22 +1185,7 @@ pub(super) fn find_splits_on_ellipse(
     tol: f64,
     band: f64,
 ) -> Vec<(f64, Point3)> {
-    // An open arc spans its stored edge's counter-clockwise range; read in
-    // the traversal's order, a reversed arc's span is its complement, and a
-    // point on the ellipse just past the arc's end (a strut notch's arc ending
-    // a hair short of the seam vertex) split it into a detour through there.
-    // A closed ellipse runs its whole turn from its vertex, counter-clockwise
-    // as stored and clockwise reversed (a mirrored rod's slanted top), so its
-    // splits are ordered along the traversal too.
-    let closed = (edge.start_3d - edge.end_3d).length() < tol;
-    let (stored_start, stored_end) = if edge.forward || closed {
-        (edge.start_3d, edge.end_3d)
-    } else {
-        (edge.end_3d, edge.start_3d)
-    };
-    let (t0, t1) = edge
-        .curve_3d
-        .domain_with_endpoints(stored_start, stored_end);
+    let (t0, t1) = ellipse_edge_span(edge, tol);
     let span = t1 - t0;
     if span.abs() < 1e-14 {
         return Vec::new();
@@ -1490,56 +1509,18 @@ mod tests {
         }
     }
 
-    /// The closed ellipse where the plane `z = 1 + 0.96 x` cuts the cone
-    /// `x^2 + y^2 = z^2`, as a rim starting at its parameter 2, on the cone
-    /// with its seam turned 1.1 off the ellipse's plane of symmetry. Its
-    /// near vertex lies 0.51 from the axis and its far one 25 out, so its
-    /// `u` runs most of the turn round the near vertex. Also the `u` its
-    /// point at parameter 4 reaches along the traversal, walked in steps of
-    /// a thousandth of a turn.
-    fn oblique_cone_rim(forward: bool) -> (FaceSurface, OrientedPCurveEdge, Point3, f64) {
-        use brepkit_math::curves::Ellipse3D;
-        use brepkit_math::surfaces::ConicalSurface;
-        use brepkit_math::vec::Vec3;
-        use std::f64::consts::{FRAC_PI_4, TAU};
+    use crate::builder::pcurve_compute::cone_ellipse_fixture::{
+        assert_pcurve_follows, lifted_u, oblique_cone,
+    };
 
-        let cone = ConicalSurface::with_ref_dir(
-            Point3::new(0.0, 0.0, 0.0),
-            Vec3::new(0.0, 0.0, 1.0),
-            FRAC_PI_4,
-            Vec3::new(1.1f64.cos(), 1.1f64.sin(), 0.0),
-        )
-        .unwrap();
-        let surface = FaceSurface::Cone(cone);
-        let m = 0.96;
-        let flat = 1.0 - m * m;
-        let x0 = m / flat;
-        let ellipse = Ellipse3D::new_with_ref(
-            Point3::new(x0, 0.0, m.madd(x0, 1.0)),
-            Vec3::new(-m, 0.0, 1.0),
-            m.hypot(1.0) / flat,
-            1.0 / flat.sqrt(),
-            Vec3::new(1.0, 0.0, m),
-        )
-        .unwrap();
-        for k in 0..16 {
-            let p = ellipse.evaluate(f64::from(k) * TAU / 16.0);
-            assert!(
-                (p.x().hypot(p.y()) - p.z()).abs() < 1e-9 * p.z(),
-                "the ellipse lies off the cone at {p:?}"
-            );
-        }
-        let walk = |from: f64, to: f64| -> (f64, f64) {
-            let n = 1000;
-            let (u0, _) = surface.project_point(ellipse.evaluate(from)).unwrap();
-            let mut u = u0;
-            for k in 1..=n {
-                let a = (to - from).madd(f64::from(k) / f64::from(n), from);
-                let (next, _) = surface.project_point(ellipse.evaluate(a)).unwrap();
-                u += (next - u + std::f64::consts::PI).rem_euclid(TAU) - std::f64::consts::PI;
-            }
-            (u0, u)
-        };
+    /// The ellipse of [`oblique_cone`] at slope `m` as a rim starting at its
+    /// parameter 2. Also the `u` its point at parameter 4 reaches along the
+    /// traversal.
+    fn oblique_cone_rim(m: f64, forward: bool) -> (FaceSurface, OrientedPCurveEdge, Point3, f64) {
+        use std::f64::consts::TAU;
+
+        let (surface, ellipse) = oblique_cone(m);
+        let walk = |from: f64, to: f64| lifted_u(&surface, &ellipse, from, to);
         // A closed rim's UVs run its curve's way round, whatever its
         // traversal.
         let (u_start, u_end) = walk(2.0, 2.0 + TAU);
@@ -1565,10 +1546,11 @@ mod tests {
     }
 
     /// The rim split at its parameter 4, run either way round, as an
-    /// outline's edge and as a hole woven into a curved face: the split
-    /// takes the `u` the rim reaches along its traversal, and the two pieces
-    /// run one turn from the start in that sense. A split read on the copy
-    /// nearest an even advance with the parameter lands a turn off.
+    /// outline's edge and as a hole woven into a curved face, at slopes
+    /// 0.96, 0.99 and 0.99999: the split takes the `u` the rim reaches along
+    /// its traversal, and the two pieces run one turn from the start in that
+    /// sense. A split read on the copy nearest an even advance with the
+    /// parameter lands a turn off.
     #[test]
     fn an_oblique_cone_rim_splits_on_the_turn_it_runs() {
         use std::f64::consts::TAU;
@@ -1583,31 +1565,123 @@ mod tests {
             ("outline", split_boundary_edges_at_3d_points),
             ("hole", split_hole_edges_at_3d_points),
         ];
-        for (entry, split_at) in entries {
+        for m in [0.96, 0.99, 0.99999] {
+            for (entry, split_at) in entries {
+                for forward in [true, false] {
+                    let what = format!("slope {m}, {entry}, forward {forward}");
+                    let (surface, edge, split, reached) = oblique_cone_rim(m, forward);
+                    let (start_u, end_u) = (edge.start_uv.x(), edge.end_uv.x());
+                    let native = (end_u - start_u).signum();
+                    let sense = if forward { native } else { -native };
+                    let pieces = split_at(vec![edge], &[split], None, &surface, 1e-7);
+                    assert_eq!(pieces.len(), 2, "{what}: one split, two pieces");
+                    let at = pieces[0].end_uv.x();
+                    assert!(
+                        (at - reached).abs() < 1e-9,
+                        "{what}: the split at u {at}, the rim reaches it at {reached}"
+                    );
+                    assert!((pieces[1].start_uv.x() - at).abs() < 1e-12, "{what}");
+                    assert!((pieces[0].start_uv.x() - start_u).abs() < 1e-12, "{what}");
+                    assert!(
+                        (pieces[1].end_uv.x() - sense.madd(TAU, start_u)).abs() < 1e-9,
+                        "{what}: the rim closes at {}",
+                        pieces[1].end_uv.x()
+                    );
+                    let ahead = sense * (at - start_u);
+                    assert!(
+                        ahead > 0.0 && ahead < TAU,
+                        "{what}: the split lies {ahead} along the turn"
+                    );
+                }
+            }
+        }
+    }
+
+    /// An open arc of the ellipse of [`oblique_cone`], from its parameter 2
+    /// to its parameter 8, nearly a whole turn, woven into the cone as a
+    /// hole and split at seven points, run either way, at slopes 0.96, 0.99
+    /// and 0.99999. Each split takes the `u` and `v` the arc reaches along
+    /// its traversal (at slope 0.96, at parameters 3.7 and 4, its `u` stands
+    /// more than half a turn off an even advance between the arc's ends; at
+    /// slope 0.99999 nearly the whole turn of `u` lies within a hundredth of
+    /// the parameter round the near vertex, at `pi`), and each piece's
+    /// pcurve runs from the piece's start to its end, following the
+    /// ellipse's `(u, v)` with `u` running one way
+    /// ([`assert_pcurve_follows`]).
+    #[test]
+    fn an_oblique_cone_arc_splits_on_the_turn_it_runs() {
+        let params = [2.6, 3.0, 3.4, 3.7, 4.0, 5.0, 7.0];
+        for m in [0.96, 0.99, 0.99999] {
+            let (surface, ellipse) = oblique_cone(m);
+            let at = |a: f64| ellipse.evaluate(a);
             for forward in [true, false] {
-                let what = format!("{entry}, forward {forward}");
-                let (surface, edge, split, reached) = oblique_cone_rim(forward);
-                let (start_u, end_u) = (edge.start_uv.x(), edge.end_uv.x());
-                let native = (end_u - start_u).signum();
-                let sense = if forward { native } else { -native };
-                let pieces = split_at(vec![edge], &[split], None, &surface, 1e-7);
-                assert_eq!(pieces.len(), 2, "{what}: one split, two pieces");
-                let at = pieces[0].end_uv.x();
+                let what = format!("slope {m}, forward {forward}");
+                let (first, last) = if forward { (2.0, 8.0) } else { (8.0, 2.0) };
+                let (start_u, end_u) = lifted_u(&surface, &ellipse, first, last);
+                let (_, start_v) = surface.project_point(at(first)).unwrap();
+                let (_, end_v) = surface.project_point(at(last)).unwrap();
+                let (start_uv, end_uv) = (Point2::new(start_u, start_v), Point2::new(end_u, end_v));
+                let edge = OrientedPCurveEdge {
+                    curve_3d: EdgeCurve::Ellipse(ellipse.clone()),
+                    pcurve: Curve2D::Line(Line2D::new(start_uv, end_uv - start_uv).unwrap()),
+                    start_uv,
+                    end_uv,
+                    start_3d: at(first),
+                    end_3d: at(last),
+                    forward,
+                    source_edge_idx: None,
+                    pave_block_id: None,
+                };
+                let splits: Vec<Point3> = params.iter().map(|&a| at(a)).collect();
+                let pieces =
+                    split_hole_edges_at_3d_points(vec![edge], &splits, None, &surface, 1e-7);
+                assert_eq!(pieces.len(), params.len() + 1, "{what}");
+                let mut order = params.to_vec();
+                if !forward {
+                    order.reverse();
+                }
+                for (piece, &a) in pieces.iter().zip(&order) {
+                    let (_, u) = lifted_u(&surface, &ellipse, first, a);
+                    let (_, v) = surface.project_point(at(a)).unwrap();
+                    assert!(
+                        (piece.end_3d - at(a)).length() < 1e-9 * (1.0 + v.abs()),
+                        "{what}: the split at {a} is out of order"
+                    );
+                    assert!(
+                        (piece.end_uv.x() - u).abs() < 1e-9
+                            && (piece.end_uv.y() - v).abs() < 1e-9 * (1.0 + v.abs()),
+                        "{what}: the split at {a} takes {:?}, the arc reaches it at ({u}, {v})",
+                        piece.end_uv
+                    );
+                }
+                for w in pieces.windows(2) {
+                    assert!((w[1].start_uv - w[0].end_uv).length() < 1e-12, "{what}");
+                }
+                let mut runs = vec![first];
+                runs.extend(order.iter().copied());
+                runs.push(last);
+                for (k, piece) in pieces.iter().enumerate() {
+                    let ends = (piece.pcurve.evaluate(0.0), piece.pcurve.evaluate(1.0));
+                    let size = 1.0 + piece.start_uv.y().abs().max(piece.end_uv.y().abs());
+                    assert!(
+                        (ends.0 - piece.start_uv).length() < 1e-6 * size
+                            && (ends.1 - piece.end_uv).length() < 1e-6 * size,
+                        "{what}: the pcurve of {:?} -> {:?} runs {ends:?}",
+                        piece.start_uv,
+                        piece.end_uv
+                    );
+                    assert_pcurve_follows(
+                        &piece.pcurve,
+                        &surface,
+                        &ellipse,
+                        (runs[k], runs[k + 1]),
+                        &format!("{what}, piece {k}"),
+                    );
+                }
+                assert!((pieces[0].start_uv - start_uv).length() < 1e-12, "{what}");
                 assert!(
-                    (at - reached).abs() < 1e-9,
-                    "{what}: the split at u {at}, the rim reaches it at {reached}"
-                );
-                assert!((pieces[1].start_uv.x() - at).abs() < 1e-12, "{what}");
-                assert!((pieces[0].start_uv.x() - start_u).abs() < 1e-12, "{what}");
-                assert!(
-                    (pieces[1].end_uv.x() - sense.madd(TAU, start_u)).abs() < 1e-9,
-                    "{what}: the rim closes at {}",
-                    pieces[1].end_uv.x()
-                );
-                let ahead = sense * (at - start_u);
-                assert!(
-                    ahead > 0.0 && ahead < TAU,
-                    "{what}: the split lies {ahead} along the turn"
+                    (pieces[params.len()].end_uv - end_uv).length() < 1e-12,
+                    "{what}"
                 );
             }
         }
