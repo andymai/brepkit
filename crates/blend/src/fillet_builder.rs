@@ -2312,8 +2312,12 @@ fn fold_spoke_spurs(
                     let rest = if straight {
                         topo.add_edge(Edge::new(split, far, EdgeCurve::Line))
                     } else {
+                        let ends = (
+                            point(topo, long_edge.start())?,
+                            point(topo, long_edge.end())?,
+                        );
                         let Some(piece) =
-                            long_piece(&long_edge, point(topo, split)?, rest_from_split)
+                            long_piece(&long_edge, ends, point(topo, split)?, rest_from_split)
                         else {
                             continue;
                         };
@@ -2440,16 +2444,27 @@ fn curved_spur(
 }
 
 /// The curve of `edge`'s piece between `split` (a point on it) and its end
-/// (`toward_end`) or its start, stored the way `edge` is. An analytic curve
-/// is its own piece: the piece's ends give its span. A B-spline is cut at
-/// `split`. `None` where `split` does not project on to it.
-fn long_piece(edge: &Edge, split: Point3, toward_end: bool) -> Option<EdgeCurve> {
+/// vertex (`toward_end`) or its start vertex, run from the piece's first
+/// vertex to its last: from `split` toward the end, or from the start to
+/// `split`. `ends` are the points of `edge`'s start and end vertices. An
+/// analytic curve is its own piece, its span given by the piece's ends. A
+/// B-spline is cut to the piece's span of the edge's own span, which runs
+/// against the curve where the edge is stored so. `None` where `split` does
+/// not project on to it.
+fn long_piece(
+    edge: &Edge,
+    (start, end): (Point3, Point3),
+    split: Point3,
+    toward_end: bool,
+) -> Option<EdgeCurve> {
     let EdgeCurve::NurbsCurve(curve) = edge.curve() else {
         return Some(edge.curve().clone());
     };
+    let (t0, t1) = edge.curve().domain_with_endpoints(start, end);
     let found = brepkit_math::nurbs::projection::project_point_to_curve(curve, split, 1e-9).ok()?;
-    let (left, right) = brepkit_math::nurbs::knot_ops::curve_split(curve, found.parameter).ok()?;
-    Some(EdgeCurve::NurbsCurve(if toward_end { right } else { left }))
+    let at = found.parameter.clamp(t0.min(t1), t0.max(t1));
+    let (from, to) = if toward_end { (at, t1) } else { (t0, at) };
+    trimmer::edge_curve_for_span(edge.curve(), from, to).ok()
 }
 
 /// Split a face pinched along a contact that runs over one of the face's
@@ -11183,7 +11198,7 @@ fn rebuild_closed_rim_loop_faces(
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used, clippy::expect_used)]
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
     use super::*;
     use brepkit_topology::adjacency::AdjacencyIndex;
     use brepkit_topology::edge::{Edge, EdgeCurve};
@@ -11195,6 +11210,59 @@ mod tests {
     /// The notch triangle at a corner filleted r 6: the arc's ends on the two
     /// corner edges and the corner itself.
     const NOTCH: [(f64, f64); 3] = [(6.0, 0.0), (0.0, 0.0), (0.0, 6.0)];
+
+    /// The piece of a B-spline edge a spur leaves runs between the split and
+    /// the edge's own vertex: where the edge runs against its curve, and
+    /// where it takes only a span of its curve.
+    #[test]
+    fn a_spline_spokes_piece_keeps_to_the_edge() {
+        let curve = brepkit_math::nurbs::curve::NurbsCurve::new(
+            2,
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            vec![
+                Point3::new(0.0, 0.0, 0.0),
+                Point3::new(5.0, 5.0, 0.0),
+                Point3::new(10.0, 0.0, 0.0),
+            ],
+            vec![1.0, 1.0, 1.0],
+        )
+        .unwrap();
+        let at = |t: f64| curve.evaluate(t);
+        let mut topo = Topology::new();
+        let mut piece_ends = |from: f64, to: f64, split: f64, toward_end: bool| {
+            let (a, b) = (at(from), at(to));
+            let edge = Edge::new(
+                topo.add_vertex(Vertex::new(a, 1e-7)),
+                topo.add_vertex(Vertex::new(b, 1e-7)),
+                EdgeCurve::NurbsCurve(curve.clone()),
+            );
+            let Some(EdgeCurve::NurbsCurve(piece)) =
+                long_piece(&edge, (a, b), at(split), toward_end)
+            else {
+                panic!("no piece");
+            };
+            let (lo, hi) = piece.domain();
+            (piece.evaluate(lo), piece.evaluate(hi))
+        };
+        let near = |p: Point3, q: Point3| (p - q).length() < 1e-9;
+        // Stored from C(1) to C(0): toward its end runs to C(0).
+        let (first, last) = piece_ends(1.0, 0.0, 0.5, true);
+        assert!(
+            near(first, at(0.5)) && near(last, at(0.0)),
+            "{first:?} {last:?}"
+        );
+        let (first, last) = piece_ends(1.0, 0.0, 0.5, false);
+        assert!(
+            near(first, at(1.0)) && near(last, at(0.5)),
+            "{first:?} {last:?}"
+        );
+        // A span from C(0.2) to C(0.8): toward its end stops at C(0.8).
+        let (first, last) = piece_ends(0.2, 0.8, 0.5, true);
+        assert!(
+            near(first, at(0.5)) && near(last, at(0.8)),
+            "{first:?} {last:?}"
+        );
+    }
 
     /// An arc from the corner at angle 0 to a contact's end at `turn`, on a
     /// unit circle in the plane z = 0, seen along z.

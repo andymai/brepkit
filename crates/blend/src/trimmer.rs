@@ -1770,7 +1770,7 @@ fn batch_node_for_point(
 /// arrangement piece. NURBS carriers are exactly knot-split; analytic
 /// carriers retain their geometry and derive the trimmed domain from their
 /// endpoint vertices.
-fn edge_curve_for_span(
+pub fn edge_curve_for_span(
     curve: &EdgeCurve,
     curve_t0: f64,
     curve_t1: f64,
