@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795379245665,
+  "lastUpdate": 1795382368183,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -75653,6 +75653,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26686920,
             "range": "± 66230",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "da9f57c8f0c7c5e839b8172e3598601fb089d906",
+          "message": "chore(main): release 4.11.37 (#2712)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[4.11.37](https://github.com/andymai/brepkit/compare/v4.11.36...v4.11.37)\n(2026-11-22)\n\n\n### Bug Fixes\n\n* **algo,heal,operations,check:** read a closed section's run in u, keep\na bored ball's halves apart, and seam a band before a boolean\n([#2694](https://github.com/andymai/brepkit/issues/2694))\n([a40c22f](https://github.com/andymai/brepkit/commit/a40c22fe9e6cd50c3481dac4a7c5979a33280c50))\n* **algo,operations:** read a whole rim in one edge as one turn, and box\npieces by their faces when testing nesting\n([#2699](https://github.com/andymai/brepkit/issues/2699))\n([45ed878](https://github.com/andymai/brepkit/commit/45ed8781ccc548087d4abc3083662fbfa88b8651))\n* **algo:** read an edge nearly tangent to a surface as one touch, and\nkeep the short arcs of a long thin ellipse\n([#2709](https://github.com/andymai/brepkit/issues/2709))\n([5d2127d](https://github.com/andymai/brepkit/commit/5d2127d75e17452044edda17397bc0cb5045946f))\n* **math,check:** measure a block with a long D-shaped hole, a closed\nB-spline wall and a torus corner alike in every pose\n([#2696](https://github.com/andymai/brepkit/issues/2696))\n([ba5d033](https://github.com/andymai/brepkit/commit/ba5d0334de448af1bd9897ab318d250a9862dcd5))\n* **operations,blend:** chamfer builds the same topology on every run,\nand the hole guard skips a face with no hole\n([#2688](https://github.com/andymai/brepkit/issues/2688))\n([73017d0](https://github.com/andymai/brepkit/commit/73017d02ea1afb0baf036537852e2ba7287eb886))\n* **operations,blend:** close a swallowed round's notch mesh, refuse a\nrevolve across its axis, and round a rim across a ball's equator\n([#2705](https://github.com/andymai/brepkit/issues/2705))\n([5d2dae8](https://github.com/andymai/brepkit/commit/5d2dae84077f69286625058d1bda655339255228))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-11-22T21:16:07Z",
+          "tree_id": "2de02925556e54baf7233c239abdc0398daada04",
+          "url": "https://github.com/andymai/brepkit/commit/da9f57c8f0c7c5e839b8172e3598601fb089d906"
+        },
+        "date": 1795382357599,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 953958,
+            "range": "± 2849",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1014243,
+            "range": "± 17592",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11341,
+            "range": "± 58",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 623678,
+            "range": "± 10199",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 21320737,
+            "range": "± 40548",
             "unit": "ns/iter"
           }
         ]
