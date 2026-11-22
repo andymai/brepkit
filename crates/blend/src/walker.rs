@@ -1445,7 +1445,7 @@ mod tests {
     /// splits unevenly again.
     #[test]
     fn a_leap_hidden_by_a_fast_run_of_the_same_contact_does_not_split_evenly() {
-        let lept = |t: f64| 200.0f64.mul_add(t, leap(0.075, 20.0)(t));
+        let lept = |t: f64| 200.0f64.madd(t, leap(0.075, 20.0)(t));
         assert!(!step_splits_evenly(lept, |t| t, |_| false));
         assert!(!step_splits_evenly(|t| t, lept, |_| false));
     }
