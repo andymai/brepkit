@@ -1460,12 +1460,14 @@ fn find_edge_surface_crossings(
         })
         .collect();
 
-    // A run of samples within the tolerance of the surface is one contact,
-    // where the edge comes nearest to it. An edge nearly tangent to the
-    // surface stays within the tolerance over a long stretch (a ball's
-    // equator 3e-7 inside a rod's wall for a third of a turn), and a
-    // crossing at each of its samples would cut it into pieces that all lie
-    // on the surface.
+    // A run of samples within the tolerance of the surface that stays on one
+    // side of it is one contact, where the edge comes nearest to it. An edge
+    // nearly tangent to the surface stays within the tolerance over a long
+    // stretch (a ball's equator 3e-7 inside a rod's wall for a third of a
+    // turn), and a crossing at each of its samples would cut it into pieces
+    // that all lie on the surface. Where the edge passes to the other side
+    // inside the run, each such crossing is kept: a line 6e-8 inside a ball
+    // at its middle crosses it twice, 2385 tolerances apart.
     let mut run: Option<(usize, usize)> = None;
     let near_a_crossing = |t: f64, crossings: &[(f64, Point3)]| {
         crossings
@@ -1490,6 +1492,23 @@ fn find_edge_surface_crossings(
             let around: Vec<f64> = (first.saturating_sub(1)..=(last + 1).min(n))
                 .map(|k| samples[k].0)
                 .collect();
+            let flips = run_crossings(
+                curve,
+                start_pos,
+                end_pos,
+                around.iter().copied(),
+                surface,
+                tol,
+            );
+            if !flips.is_empty() {
+                let before = crossings.len();
+                for (t, p) in flips {
+                    if !near_a_crossing(t, &crossings[..before]) {
+                        crossings.push((t, p));
+                    }
+                }
+                return;
+            }
             let found = tangent_contact(curve, start_pos, end_pos, &around, surface, tol)
                 .unwrap_or_else(|| {
                     refine_crossing(
@@ -1705,8 +1724,9 @@ fn tangent_contact(
 
 /// The span of the samples that the crossing scan reads, lying within the
 /// tolerance of `surface` next to each other around a contact at `t`, where
-/// at least two do: the stretch along which the curve runs within the
-/// tolerance of the surface.
+/// at least two do and the curve stays on one side of the surface across
+/// them: the stretch along which the curve grazes the surface. A curve
+/// that passes through the surface in that stretch crosses it there.
 fn tangent_band(
     curve: &EdgeCurve,
     start_pos: Point3,
@@ -1735,7 +1755,74 @@ fn tangent_band(
     while hi < n && within(hi + 1) {
         hi += 1;
     }
-    (hi > lo).then(|| (at(lo).min(at(hi)), at(lo).max(at(hi))))
+    if hi == lo {
+        return None;
+    }
+    let around = (lo.saturating_sub(1)..=(hi + 1).min(n)).map(at);
+    run_crossings(curve, start_pos, end_pos, around, surface, tol)
+        .is_empty()
+        .then(|| (at(lo).min(at(hi)), at(lo).max(at(hi))))
+}
+
+/// Where a curve passes from one side of a surface to the other between
+/// the first and last of the parameters `ts`, each bisected onto the
+/// surface and kept where it lands within the tolerance of it. A parameter
+/// whose point lies within a thousandth of the tolerance of the surface
+/// takes no side: where the curve touches the surface at a sample, as a
+/// ball's equator touches a rod's wall, rounding alone sets that sample's
+/// sign.
+fn run_crossings(
+    curve: &EdgeCurve,
+    start_pos: Point3,
+    end_pos: Point3,
+    ts: impl IntoIterator<Item = f64>,
+    surface: &FaceSurface,
+    tol: Tolerance,
+) -> Vec<(f64, Point3)> {
+    let floor = 1e-3 * tol.linear;
+    let side = |t: f64| -> Option<f64> {
+        let pt = curve.evaluate_with_endpoints(t, start_pos, end_pos);
+        let (u, v) = surface.project_point(pt)?;
+        let on = surface.evaluate(u, v)?;
+        Some((pt - on).dot(surface.normal(u, v)))
+    };
+    let mut out: Vec<(f64, Point3)> = Vec::new();
+    let mut prev: Option<(f64, f64)> = None;
+    for t in ts {
+        let Some(s) = side(t) else {
+            prev = None;
+            continue;
+        };
+        if s.abs() <= floor {
+            continue;
+        }
+        if let Some((t_prev, s_prev)) = prev
+            && (s_prev > 0.0) != (s > 0.0)
+        {
+            let (mut lo, mut hi, mut s_lo) = (t_prev, t, s_prev);
+            for _ in 0..60 {
+                let mid = f64::midpoint(lo, hi);
+                let Some(s_mid) = side(mid) else { break };
+                if (s_mid > 0.0) == (s_lo > 0.0) {
+                    lo = mid;
+                    s_lo = s_mid;
+                } else {
+                    hi = mid;
+                }
+            }
+            let tc = f64::midpoint(lo, hi);
+            let pc = curve.evaluate_with_endpoints(tc, start_pos, end_pos);
+            if distance_to_surface(pc, surface) < tol.linear
+                && !out
+                    .iter()
+                    .any(|&(_, q)| (pc - q).length() < tol.linear * 100.0)
+            {
+                out.push((tc, pc));
+            }
+        }
+        prev = Some((t, s));
+    }
+    out
 }
 
 /// Points where a curve passes from one side of a surface to the other,
@@ -2500,6 +2587,73 @@ mod tests {
         assert_eq!(crossings.len(), 2, "{crossings:?}");
         assert!((crossings[0].1.x() - 0.404).abs() < 1e-6, "{crossings:?}");
         assert!((crossings[1].1.x() - 0.421).abs() < 1e-6, "{crossings:?}");
+    }
+
+    /// A line within the tolerance of a ball over a run of samples that
+    /// passes through the ball's surface twice in that run: radius
+    /// `2002001 s` and the line at `y = 2002000 s`, with `s = 2^-24`, cross
+    /// at `x = ±2001 s`, about 2385 tolerances apart.
+    #[test]
+    fn a_shallow_line_through_a_ball_keeps_both_crossings() {
+        use brepkit_math::surfaces::SphericalSurface;
+        let s = 2.0_f64.powi(-24);
+        let surface = FaceSurface::Sphere(
+            SphericalSurface::new(Point3::new(0.0, 0.0, 0.0), 2_002_001.0 * s).unwrap(),
+        );
+        let (a, b) = (
+            Point3::new(-16.0 * 2001.0 * s, 2_002_000.0 * s, 0.0),
+            Point3::new(16.0 * 2001.0 * s, 2_002_000.0 * s, 0.0),
+        );
+        let tol = Tolerance::new();
+        let crossings =
+            find_edge_surface_crossings(&EdgeCurve::Line, a, b, 0.0, 1.0, &surface, None, tol);
+        let xs: Vec<f64> = crossings.iter().map(|(_, p)| p.x()).collect();
+        assert_eq!(xs.len(), 2, "crossings at {xs:?}");
+        for (x, want) in xs.iter().zip([-2001.0 * s, 2001.0 * s]) {
+            assert!((x - want).abs() < 1e-9, "crossing at {x}, expected {want}");
+        }
+    }
+
+    /// A ball's equator turned 1.57 about `x`, against a rod of the ball's
+    /// radius along `y`: the circle runs up to 3.2e-7 inside the rod's wall
+    /// and touches it at `(1, 0, 0)` only, whether that point falls between
+    /// two samples or on one.
+    #[test]
+    fn a_circle_nearly_tangent_inside_a_wall_touches_it_once() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::CylindricalSurface;
+        use brepkit_math::vec::Vec3;
+        let spin = 1.57_f64;
+        let circle = Circle3D::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, -spin.sin(), spin.cos()),
+            1.0,
+        )
+        .unwrap();
+        let surface = FaceSurface::Cylinder(
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 1.0, 0.0), 1.0)
+                .unwrap(),
+        );
+        let touch = circle.project(Point3::new(1.0, 0.0, 0.0));
+        let curve = EdgeCurve::Circle(circle.clone());
+        for (t0, t1) in [(touch - 1.0, touch + 1.5), (touch - 1.5, touch + 1.5)] {
+            let crossings = find_edge_surface_crossings(
+                &curve,
+                circle.evaluate(t0),
+                circle.evaluate(t1),
+                t0,
+                t1,
+                &surface,
+                None,
+                Tolerance::new(),
+            );
+            assert_eq!(crossings.len(), 1, "crossings {crossings:?}");
+            let p = crossings[0].1;
+            assert!(
+                (p - Point3::new(1.0, 0.0, 0.0)).length() < 1e-9,
+                "touch at {p:?}"
+            );
+        }
     }
 
     #[test]
