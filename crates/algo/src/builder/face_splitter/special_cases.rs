@@ -625,25 +625,27 @@ fn split_noseam_by_arrangement(
     // can carry a pcurve a turn out at that end, which runs the long way round.
     let net_u = |l: &[OrientedPCurveEdge]| -> f64 {
         use std::f64::consts::{PI, TAU};
-        let poly = match surface {
-            FaceSurface::Sphere(sphere) => sphere_loop_polyline(sphere, l),
+        match surface {
+            FaceSurface::Sphere(sphere) => {
+                let poly = sphere_loop_polyline(sphere, l);
+                if poly.len() < 2 {
+                    return 0.0;
+                }
+                // Sum of shortest signed u-steps (each wrapped into
+                // (-pi, pi]) — a discretization-independent winding measure.
+                (0..poly.len())
+                    .map(|i| {
+                        let d = poly[(i + 1) % poly.len()].x() - poly[i].x();
+                        d - TAU * ((d + PI) / TAU).floor()
+                    })
+                    .sum()
+            }
             FaceSurface::Plane { .. }
             | FaceSurface::Cylinder(_)
             | FaceSurface::Cone(_)
             | FaceSurface::Torus(_)
-            | FaceSurface::Nurbs(_) => loop_polyline(l),
-        };
-        if poly.len() < 2 {
-            return 0.0;
+            | FaceSurface::Nurbs(_) => loop_polyline_unwrapped(l).1,
         }
-        // Sum of shortest signed u-steps (each wrapped into (-pi, pi]) — a
-        // discretization-independent winding measure.
-        (0..poly.len())
-            .map(|i| {
-                let d = poly[(i + 1) % poly.len()].x() - poly[i].x();
-                d - TAU * ((d + PI) / TAU).floor()
-            })
-            .sum()
     };
     let loop_is_sliver = |l: &[OrientedPCurveEdge]| -> bool {
         for i in 0..l.len() {
@@ -824,21 +826,8 @@ fn split_noseam_by_arrangement(
 /// (a latitude cap's rim) winds against it, and any other hole runs
 /// clockwise in `(u, v)`, `u` unwrapped along it (it can straddle the seam).
 fn as_hole(section: &[OrientedPCurveEdge], parent_net_u: f64) -> Vec<OrientedPCurveEdge> {
-    use std::f64::consts::{PI, TAU};
-    let poly = loop_polyline(section);
-    let mut u = poly.first().map_or(0.0, |p| p.x());
-    let mut unwrapped = Vec::with_capacity(poly.len());
-    for (i, p) in poly.iter().enumerate() {
-        if i > 0 {
-            let d = p.x() - poly[i - 1].x();
-            u += d - TAU * ((d + PI) / TAU).floor();
-        }
-        unwrapped.push((u, p.y()));
-    }
-    let net_u = poly.last().map_or(0.0, |last| {
-        let d = poly[0].x() - last.x();
-        u + d - TAU * ((d + PI) / TAU).floor() - poly[0].x()
-    });
+    use std::f64::consts::PI;
+    let (unwrapped, net_u) = loop_polyline_unwrapped(section);
     let reverse = if net_u.abs() > PI {
         net_u * parent_net_u > 0.0
     } else {
@@ -1526,22 +1515,41 @@ fn sphere_loop_polyline(
     poly
 }
 
-/// Polyline (UV) approximation of a loop, sampling curved edges.
-fn loop_polyline(loop_edges: &[OrientedPCurveEdge]) -> Vec<brepkit_math::vec::Point2> {
-    let mut poly = Vec::new();
+/// A loop's samples on its edges' pcurves (sixteen to a curved edge, one to
+/// a line), with `u` read as the loop runs: along each edge as its pcurve
+/// moves, continuously, and from each edge's end to the next one's start the
+/// short way round. Also the net `u` the loop winds, closing from its last
+/// edge's end to its first edge's start. Between two samples a pcurve can
+/// run most of a turn (a steep cut's near vertex), which a step the short
+/// way round reads as a step back.
+fn loop_polyline_unwrapped(loop_edges: &[OrientedPCurveEdge]) -> (Vec<(f64, f64)>, f64) {
+    use std::f64::consts::{PI, TAU};
+    let wrap = |d: f64| d - TAU * ((d + PI) / TAU).floor();
+    let mut out: Vec<(f64, f64)> = Vec::new();
+    let mut end: Option<(f64, f64)> = None;
+    let mut first_raw: Option<f64> = None;
     for e in loop_edges {
         let n = if matches!(e.curve_3d, EdgeCurve::Line) {
             1
         } else {
             16
         };
+        let start = sample_half_edge_uv(e, 0.0);
+        first_raw.get_or_insert_with(|| start.x());
+        let base = end.map_or_else(|| start.x(), |(lifted, raw)| lifted + wrap(start.x() - raw));
         for k in 0..n {
             #[allow(clippy::cast_precision_loss)]
-            let f = k as f64 / f64::from(n);
-            poly.push(sample_half_edge_uv(e, f));
+            let q = sample_half_edge_uv(e, k as f64 / f64::from(n));
+            out.push((base + q.x() - start.x(), q.y()));
         }
+        let last = sample_half_edge_uv(e, 1.0);
+        end = Some((base + last.x() - start.x(), last.x()));
     }
-    poly
+    let net = match (end, first_raw, out.first()) {
+        (Some((lifted, raw)), Some(first), Some(&(u0, _))) => lifted + wrap(first - raw) - u0,
+        _ => 0.0,
+    };
+    (out, net)
 }
 
 /// The plane of a closed polyline: its unit Newell normal (along its vector
@@ -1867,18 +1875,31 @@ fn winds_once(
     const SAMPLES: u32 = 64;
     let half = 0.5 * period;
     let (t0, t1) = curve.domain_with_endpoints(start, end);
-    let us: Vec<f64> = (0..=SAMPLES)
+    let pts: Vec<Point3> = (0..=SAMPLES)
         .map(|k| {
             let t = (t1 - t0).madd(f64::from(k) / f64::from(SAMPLES), t0);
-            surface
-                .project_point(curve.evaluate_with_endpoints(t, start, end))
-                .map(|(u, _)| u)
+            curve.evaluate_with_endpoints(t, start, end)
         })
-        .collect::<Option<_>>()?;
-    let turn: f64 = us
-        .windows(2)
-        .map(|w| (w[1] - w[0] + half).rem_euclid(period) - half)
-        .sum();
+        .collect();
+    // Read along the curve on a surface of revolution ([`edge_uv_samples`]),
+    // and step by step to the nearest copy of `period` on a spline wall.
+    //
+    // [`edge_uv_samples`]: super::super::pcurve_compute::edge_uv_samples
+    let turn = if super::super::pcurve_compute::surface_periods(surface)
+        .0
+        .is_some()
+    {
+        let uv = super::super::pcurve_compute::edge_uv_samples(curve, surface, &pts)?;
+        uv.last()?.x() - uv.first()?.x()
+    } else {
+        let us: Vec<f64> = pts
+            .iter()
+            .map(|&p| surface.project_point(p).map(|(u, _)| u))
+            .collect::<Option<_>>()?;
+        us.windows(2)
+            .map(|w| (w[1] - w[0] + half).rem_euclid(period) - half)
+            .sum()
+    };
     Some(turn.abs() > half)
 }
 
@@ -1908,6 +1929,28 @@ pub(super) fn band_stack<'a>(
             .collect()
     };
     let turn_of = |uv: &[(f64, f64)]| -> f64 { uv.windows(2).map(|w| wrap(w[1].0 - w[0].0)).sum() };
+    // A closed curve's run in `u` along its own domain: an ellipse on a
+    // cylinder or a cone lifted along it ([`edge_uv_samples`]), where a
+    // sample step can carry most of a turn (a steep cut's near vertex);
+    // any other curve read step by step the short way round.
+    //
+    // [`edge_uv_samples`]: super::super::pcurve_compute::edge_uv_samples
+    let rim_turn = |e: &OrientedPCurveEdge| -> Option<f64> {
+        if matches!(e.curve_3d, EdgeCurve::Ellipse(_))
+            && matches!(surface, FaceSurface::Cylinder(_) | FaceSurface::Cone(_))
+        {
+            let (t0, t1) = e.curve_3d.domain_with_endpoints(e.start_3d, e.end_3d);
+            let pts: Vec<Point3> = (0..=RIM_SAMPLES)
+                .map(|k| {
+                    let t = (t1 - t0).madd(f64::from(k) / f64::from(RIM_SAMPLES), t0);
+                    e.curve_3d.evaluate_with_endpoints(t, e.start_3d, e.end_3d)
+                })
+                .collect();
+            let uv = super::super::pcurve_compute::edge_uv_samples(&e.curve_3d, surface, &pts)?;
+            return Some(uv.last()?.x() - uv.first()?.x());
+        }
+        Some(turn_of(&rim_samples(e)?))
+    };
 
     let apex = match surface {
         FaceSurface::Cone(c) => Some(c.apex()),
@@ -1932,7 +1975,7 @@ pub(super) fn band_stack<'a>(
             }
             (EdgeCurve::Circle(_), true) => rims.push(e),
             (EdgeCurve::NurbsCurve(_) | EdgeCurve::Ellipse(_), true)
-                if turn_of(&rim_samples(e)?).abs() > half =>
+                if rim_turn(e)?.abs() > half =>
             {
                 rims.push(e);
             }
@@ -1983,7 +2026,7 @@ pub(super) fn band_stack<'a>(
             let (_, v) = surface.project_point(e.start_3d)?;
             let step = 1e-4;
             let along = surface.evaluate(seam_u + step, v)? - surface.evaluate(seam_u - step, v)?;
-            along * turn_of(&rim_samples(e)?).signum()
+            along * rim_turn(e)?.signum()
         };
         Some(if e.forward { t } else { -t })
     };
@@ -4961,19 +5004,32 @@ pub(super) fn split_face_with_internal_loops(
     if matches!(surface, FaceSurface::Cylinder(_) | FaceSurface::Cone(_))
         && parent_loop.iter().all(Option::is_none)
     {
-        let raw: Vec<Vec<(f64, f64)>> = loops
+        let polygons: Vec<Vec<Point2>> = loops
             .iter()
             .map(|l| {
                 if loop_winds_cylinder(surface, l) {
                     return Vec::new();
                 }
-                sample_edges_3d(l)
+                let runs = l
                     .iter()
-                    .filter_map(|p| surface.project_point(*p))
+                    .map(|e| {
+                        let (from, to) = (e.start_3d, e.end_3d);
+                        let mut run = vec![from];
+                        run.extend(sample_edges_3d(std::slice::from_ref(e)));
+                        run.push(to);
+                        (&e.curve_3d, run)
+                    })
+                    .collect();
+                lift_loop_runs(runs, surface)
+                    .into_iter()
+                    .flat_map(|run| {
+                        let n = run.len();
+                        run.into_iter().skip(1).take(n.saturating_sub(2))
+                    })
                     .collect()
             })
             .collect();
-        for (lj, parent) in wall_loop_parents(&raw).into_iter().enumerate() {
+        for (lj, parent) in wall_loops_nesting(&polygons).into_iter().enumerate() {
             if let Some(li) = parent {
                 log::debug!(
                     "split_face_with_internal_loops: face {face_id:?} loop {li} encloses loop {lj} on the wall"
@@ -5026,26 +5082,25 @@ pub(super) fn split_face_with_internal_loops(
             // parameter origin keeps its true winding. Every surface here
             // has its normal along ∂u × ∂v, so the sign reads like the
             // plane frame's.
-            let (u_period, v_period) = parameter_periods(surface);
-            let unwrap = |x: f64, prev: f64, period: Option<f64>| {
-                period.map_or(x, |p| x - ((x - prev) / p).round() * p)
-            };
-            let mut uv: Vec<(f64, f64)> = Vec::new();
-            for edge in loop_edges.iter() {
-                let n = if matches!(edge.curve_3d, EdgeCurve::Line) {
-                    1
-                } else {
-                    16
-                };
-                for p in edge_samples(edge, n).into_iter().take(n) {
-                    if let Some((u, v)) = surface.project_point(p) {
-                        let (u, v) = uv.last().map_or((u, v), |&(pu, pv)| {
-                            (unwrap(u, pu, u_period), unwrap(v, pv, v_period))
-                        });
-                        uv.push((u, v));
-                    }
-                }
-            }
+            let (u_period, _) = parameter_periods(surface);
+            let runs = loop_edges
+                .iter()
+                .map(|edge| {
+                    let n = if matches!(edge.curve_3d, EdgeCurve::Line) {
+                        1
+                    } else {
+                        16
+                    };
+                    (&edge.curve_3d, edge_samples(edge, n))
+                })
+                .collect();
+            let mut uv: Vec<(f64, f64)> = lift_loop_runs(runs, surface)
+                .into_iter()
+                .flat_map(|run| {
+                    let n = run.len().saturating_sub(1);
+                    run.into_iter().take(n).map(|q| (q.x(), q.y()))
+                })
+                .collect();
             close_around_pole(surface, u_period, boundary_edges, &mut uv);
             uv.iter()
                 .zip(uv.iter().cycle().skip(1))
@@ -5111,14 +5166,24 @@ pub(super) fn split_face_with_internal_loops(
             // A loop that is not convex (a keyhole's outline, its chamber
             // bulging in) can put its centroid outside itself: take a point
             // of the loop's own polygon instead.
-            let centroid = match &surface {
-                FaceSurface::Plane { normal, .. } => {
-                    let frame = PlaneFrame::from_normal_and_point(*normal, centroid);
-                    let flat: Vec<Point2> = ring.iter().map(|&p| frame.project(p)).collect();
-                    let inner = super::super::classify_2d::sample_interior_point(&flat);
-                    frame.evaluate(inner.x(), inner.y())
-                }
-                _ => curved_loop_interior(surface, &ring, centroid).unwrap_or(centroid),
+            let centroid = if let FaceSurface::Plane { normal, .. } = &surface {
+                let frame = PlaneFrame::from_normal_and_point(*normal, centroid);
+                let flat: Vec<Point2> = ring.iter().map(|&p| frame.project(p)).collect();
+                let inner = super::super::classify_2d::sample_interior_point(&flat);
+                frame.evaluate(inner.x(), inner.y())
+            } else {
+                let runs = loop_edges
+                    .iter()
+                    .map(|edge| (&edge.curve_3d, edge_samples(edge, n_samples)))
+                    .collect();
+                let runs = lift_loop_runs(runs, surface);
+                let end = runs.iter().rev().find_map(|r| r.last().copied());
+                let uv: Vec<Point2> = runs
+                    .into_iter()
+                    .flat_map(|run| run.into_iter().take(n_samples))
+                    .collect();
+                end.and_then(|end| curved_loop_interior_uv(surface, uv, end, centroid))
+                    .unwrap_or(centroid)
             };
             // Offset along the face normal by a small amount to ensure
             // the point is clearly inside the opposing solid (not on the
@@ -5373,6 +5438,7 @@ pub(super) fn split_face_with_internal_loops(
 /// reads as inside it. A loop that winds nothing can still span more than a
 /// turn (a strip along a helix), so the nearest copy need not be the one it
 /// holds.
+#[cfg(test)]
 fn wall_loop_parents(raw: &[Vec<(f64, f64)>]) -> Vec<Option<usize>> {
     use std::f64::consts::{PI, TAU};
     let polygons: Vec<Vec<Point2>> = raw
@@ -5388,6 +5454,15 @@ fn wall_loop_parents(raw: &[Vec<(f64, f64)>]) -> Vec<Option<usize>> {
                 .collect()
         })
         .collect();
+    wall_loops_nesting(&polygons)
+}
+
+/// For each loop on a cylinder or cone wall, given by its `(u, v)` samples
+/// in order, each already read along the loop, the smallest other loop that
+/// encloses it; an empty loop takes no part. A pair is compared with the
+/// inner loop moved by each whole turn that brings it over the outer one.
+fn wall_loops_nesting(polygons: &[Vec<Point2>]) -> Vec<Option<usize>> {
+    use std::f64::consts::TAU;
     let u_range = |poly: &[Point2]| {
         poly.iter()
             .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), p| {
@@ -5475,14 +5550,12 @@ fn sample_edges_3d(edges: &[OrientedPCurveEdge]) -> Vec<Point3> {
 /// sagitta, where it can fall outside a thin tool that holds the whole
 /// loop. `None` when the loop winds a periodic direction of the surface and
 /// so bounds no polygon in `(u, v)`.
+#[cfg(test)]
 fn curved_loop_interior(
     surface: &FaceSurface,
     ring: &[Point3],
     centroid: Point3,
 ) -> Option<Point3> {
-    use super::super::classify_2d::{
-        boundary_eps, distance_to_polygon_boundary, point_in_polygon_2d, sample_interior_point,
-    };
     let (u_period, v_period) = parameter_periods(surface);
     let unwrap = |x: f64, prev: f64, period: Option<f64>| {
         period.map_or(x, |p| x - ((x - prev) / p).round() * p)
@@ -5495,14 +5568,38 @@ fn curved_loop_interior(
         });
         uv.push(Point2::new(u, v));
     }
-    let (Some(&first), Some(&last)) = (uv.first(), uv.last()) else {
-        return None;
+    let (&first, &last) = (uv.first()?, uv.last()?);
+    // The loop closes where its first point, read from its last, lands.
+    let end = Point2::new(
+        unwrap(first.x(), last.x(), u_period),
+        unwrap(first.y(), last.y(), v_period),
+    );
+    curved_loop_interior_uv(surface, uv, end, centroid)
+}
+
+/// A point of a curved `surface` inside a loop, given by its `(u, v)`
+/// samples `uv` read along it, with `end` where the loop comes back to its
+/// first point that way. It is the surface point under the loop's
+/// `centroid` when that lies inside the loop, and otherwise a point of the
+/// loop's own `(u, v)` polygon. `None` when the loop winds a periodic
+/// direction of the surface and so bounds no polygon in `(u, v)`.
+fn curved_loop_interior_uv(
+    surface: &FaceSurface,
+    uv: Vec<Point2>,
+    end: Point2,
+    centroid: Point3,
+) -> Option<Point3> {
+    use super::super::classify_2d::{
+        boundary_eps, distance_to_polygon_boundary, point_in_polygon_2d, sample_interior_point,
     };
-    let winds = |x: f64, prev: f64, period: Option<f64>| {
-        period.is_some_and(|p| (unwrap(x, prev, period) - x).abs() > 0.5 * p)
+    let (u_period, v_period) = parameter_periods(surface);
+    let unwrap = |x: f64, prev: f64, period: Option<f64>| {
+        period.map_or(x, |p| x - ((x - prev) / p).round() * p)
     };
-    if uv.len() < 3 || winds(first.x(), last.x(), u_period) || winds(first.y(), last.y(), v_period)
-    {
+    let first = *uv.first()?;
+    let winds =
+        |x: f64, to: f64, period: Option<f64>| period.is_some_and(|p| (to - x).abs() > 0.5 * p);
+    if uv.len() < 3 || winds(first.x(), end.x(), u_period) || winds(first.y(), end.y(), v_period) {
         return None;
     }
     let mid = |coord: fn(Point2) -> f64| {
@@ -5559,6 +5656,59 @@ fn parameter_periods(surface: &FaceSurface) -> (Option<f64>, Option<f64>) {
         }
         FaceSurface::Plane { .. } => (None, None),
     }
+}
+
+/// The `(u, v)` of a loop's points on `surface`, given for each edge in
+/// order as its curve and its 3D points from its start to its end. Each
+/// edge's points are lifted along it ([`edge_uv_samples`] on a cylinder,
+/// cone, sphere or torus; to the nearest copy of the surface's periods on a
+/// spline surface), and the edge moves by whole periods to meet the edge
+/// before at the vertex they share. Points that do not project are dropped.
+///
+/// [`edge_uv_samples`]: super::super::pcurve_compute::edge_uv_samples
+fn lift_loop_runs(runs: Vec<(&EdgeCurve, Vec<Point3>)>, surface: &FaceSurface) -> Vec<Vec<Point2>> {
+    let (u_period, v_period) = parameter_periods(surface);
+    let by_surface = super::super::pcurve_compute::surface_periods(surface)
+        .0
+        .is_some();
+    let near =
+        |x: f64, to: f64, period: Option<f64>| period.map_or(x, |p| x + ((to - x) / p).round() * p);
+    let mut out = Vec::with_capacity(runs.len());
+    let mut end: Option<Point2> = None;
+    for (curve, pts) in runs {
+        let pts: Vec<Point3> = pts
+            .into_iter()
+            .filter(|&p| surface.project_point(p).is_some())
+            .collect();
+        let mut uv: Vec<Point2> = if by_surface {
+            super::super::pcurve_compute::edge_uv_samples(curve, surface, &pts).unwrap_or_default()
+        } else {
+            let mut uv: Vec<Point2> = Vec::with_capacity(pts.len());
+            for &p in &pts {
+                let Some((u, v)) = surface.project_point(p) else {
+                    continue;
+                };
+                let q = uv.last().map_or_else(
+                    || Point2::new(u, v),
+                    |prev| Point2::new(near(u, prev.x(), u_period), near(v, prev.y(), v_period)),
+                );
+                uv.push(q);
+            }
+            uv
+        };
+        if let (Some(at), Some(&first)) = (end, uv.first()) {
+            let shift = Vec2::new(
+                near(first.x(), at.x(), u_period) - first.x(),
+                near(first.y(), at.y(), v_period) - first.y(),
+            );
+            for q in &mut uv {
+                *q = *q + shift;
+            }
+        }
+        end = uv.last().copied().or(end);
+        out.push(uv);
+    }
+    out
 }
 
 /// Close a loop of unwrapped `(u, v)` samples that winds `u` once around a
@@ -6654,15 +6804,44 @@ fn loop_chords(
     };
     let mut first: Option<(f64, f64)> = None;
     let mut prev: Option<(f64, f64)> = None;
+    let lifted = super::super::pcurve_compute::surface_periods(surface)
+        .0
+        .is_some();
     for e in edges {
         // Four samples to a chord: the three between measure its stray.
         let mut uvs = Vec::with_capacity(4 * per_edge + 1);
-        for p in samples_of(e, 4 * per_edge) {
-            let (u, v) = surface.project_point(p)?;
-            // Unwrapped against the previous sample, so a seam-crossing step
-            // is one continuous segment; the containment test tries every
-            // turn, so a loop living past the seam still closes.
-            let u = prev.map_or(u, |(pu, _)| pu + ((u - pu + PI).rem_euclid(TAU) - PI));
+        let pts = samples_of(e, 4 * per_edge);
+        // Read along the edge ([`edge_uv_samples`]), each sample's own `u`
+        // where the surface has no period of its own here.
+        //
+        // [`edge_uv_samples`]: super::super::pcurve_compute::edge_uv_samples
+        let along: Vec<f64> = if lifted {
+            super::super::pcurve_compute::edge_uv_samples(&e.curve_3d, surface, &pts)?
+                .iter()
+                .map(|q| q.x())
+                .collect()
+        } else {
+            pts.iter()
+                .map(|&p| surface.project_point(p).map(|(u, _)| u))
+                .collect::<Option<_>>()?
+        };
+        // The edge moves by whole turns to meet the edge before at the
+        // vertex they share, so a seam-crossing step is one continuous
+        // segment; the containment test tries every turn, so a loop living
+        // past the seam still closes.
+        let shift = match (prev, along.first()) {
+            (Some((pu, _)), Some(&u)) => ((pu - u) / TAU).round() * TAU,
+            _ => 0.0,
+        };
+        for (k, p) in pts.into_iter().enumerate() {
+            let (_, v) = surface.project_point(p)?;
+            let u = if lifted {
+                along[k] + shift
+            } else {
+                prev.map_or(along[k], |(pu, _)| {
+                    pu + ((along[k] - pu + PI).rem_euclid(TAU) - PI)
+                })
+            };
             out.pts.push(p);
             out.us.push(u);
             out.v_range = (out.v_range.0.min(v), out.v_range.1.max(v));

@@ -1297,8 +1297,25 @@ fn edge_minus_v_du(
             }
         }
     };
+    // An ellipse on a cylinder or a cone takes its `u` from the edge's start
+    // over the run of its parameter: between two points a hair apart in it,
+    // `u` can run most of a turn (a steep cut's near vertex).
     let at = |f: f64, u_near: f64| -> Option<(f64, f64)> {
         let (u, v) = surface.project_point(point(f))?;
+        if let EdgeCurve::Ellipse(el) = &e.curve_3d {
+            let run = if closed {
+                turn * f
+            } else if flip {
+                -(t1 - t0) * f
+            } else {
+                (t1 - t0) * f
+            };
+            if let Some(lifted) =
+                super::pcurve_compute::ellipse_u_after(el, surface, (e.start_uv.x(), u), run)
+            {
+                return Some((lifted, v - v0));
+            }
+        }
         Some((u_near + wrap(u - u_near), v - v0))
     };
     let trapezoid = |a: (f64, f64), b: (f64, f64)| -0.5 * (a.1 + b.1) * (b.0 - a.0);
@@ -1350,16 +1367,22 @@ fn is_periodic_face_outside(lp: &[OrientedPCurveEdge], surface: &FaceSurface) ->
     if lp.is_empty() || lp.iter().any(|e| e.source_edge_idx.is_some()) {
         return false;
     }
-    let mut pts = sampling::sample_wire_loop_uv_on_surface(lp, surface);
-    for i in 1..pts.len() {
-        let (prev, u) = (pts[i - 1].x(), pts[i].x());
-        pts[i] = Point2::new(u - ((u - prev) / TAU).round() * TAU, pts[i].y());
+    // Each edge keeps its own run in u, and moves by whole turns to meet the
+    // edge before at the vertex they share.
+    let mut pts: Vec<Point2> = Vec::new();
+    let mut end: Option<f64> = None;
+    for (samples, edge_end) in sampling::sample_wire_edges_uv_on_surface(lp, surface) {
+        let Some(start) = samples.first() else {
+            continue;
+        };
+        let shift = end.map_or(0.0, |at| ((at - start.x()) / TAU).round() * TAU);
+        pts.extend(samples.iter().map(|p| Point2::new(p.x() + shift, p.y())));
+        end = Some(edge_end + shift);
     }
-    let (Some(first), Some(last)) = (pts.first().copied(), pts.last().copied()) else {
+    let (Some(first), Some(end)) = (pts.first().copied(), end) else {
         return false;
     };
-    let closing = first.x() - ((first.x() - last.x()) / TAU).round() * TAU;
-    (closing - first.x()).abs() < PI && signed_area_2d(&pts) < 0.0
+    (end - first.x()).abs() < PI && signed_area_2d(&pts) < 0.0
 }
 
 /// Whether every piece of `lp` is one of the face's own boundary pieces run
@@ -2103,7 +2126,8 @@ fn bands_from_winding_chains(
                 let (u_raw0, v0) = surface.project_point(from)?;
                 let (u_raw1, v1) = surface.project_point(to)?;
                 let u0 = u_prev + wrap_pi(u_raw0 - u_prev);
-                let u1 = u0 + wrap_pi(u_raw1 - u_raw0);
+                let u1 = ellipse_section_u_run(s, fwd, surface)
+                    .map_or_else(|| u0 + wrap_pi(u_raw1 - u_raw0), |run| u0 + run);
                 u_prev = u1;
                 let pcurve = match rank {
                     Rank::A => s.pcurve_a.clone(),
@@ -2219,32 +2243,40 @@ fn bands_from_winding_chains(
         let du = surface.evaluate(seam_u + 1e-4, mid)? - surface.evaluate(seam_u - 1e-4, mid)?;
         ref_tan.dot(du) > 0.0
     };
+    // Samples along a section on a cylinder or a cone come lifted
+    // ([`section_uv_run`]); on a periodic spline wall they come raw.
+    let lifted = super::pcurve_compute::surface_periods(surface).0.is_some();
     // Each loop's band, `(u, v)` samples (`u` past the seam, kept on one side
     // of it), disc and hole wires.
     let mut holes: Vec<HoleLoop> = Vec::with_capacity(hole_loops.len());
     for entries in hole_loops {
         let mut uv: Vec<Point2> = Vec::new();
         let mut band: Option<usize> = None;
+        // Each entry's samples lifted along it, and carried on from the
+        // entry before at the vertex they share.
+        let mut end: Option<f64> = None;
         for &(idx, fwd) in entries {
-            let s = &sections[idx];
-            let (d0, d1) = s.curve_3d.domain_with_endpoints(s.start, s.end);
-            for k in 0..HOLE_SAMPLES {
-                let f = f64::from(k) / f64::from(HOLE_SAMPLES);
-                let t = if fwd { f } else { 1.0 - f };
-                let p = s
-                    .curve_3d
-                    .evaluate_with_endpoints((d1 - d0).madd(t, d0), s.start, s.end);
-                let (u, v) = surface.project_point(p)?;
-                let raw = wrap_pi(u - seam_u);
-                let in_band = band_of(raw, v)?;
+            let run = section_uv_run(&sections[idx], fwd, surface, HOLE_SAMPLES)?;
+            let first = run.first()?.x();
+            let mut d = end.map_or_else(
+                || wrap_pi(first - seam_u),
+                |e| e + wrap_pi(first - seam_u - e),
+            );
+            for (k, p) in run.iter().enumerate() {
+                if k > 0 {
+                    let step = p.x() - run[k - 1].x();
+                    d += if lifted { step } else { wrap_pi(step) };
+                }
+                if k + 1 == run.len() {
+                    end = Some(d);
+                    break;
+                }
+                let in_band = band_of(wrap_pi(p.x() - seam_u), p.y())?;
                 if band.is_some_and(|b| b != in_band) {
                     return None;
                 }
                 band = Some(in_band);
-                let d = uv
-                    .last()
-                    .map_or(raw, |prev: &Point2| prev.x() + wrap_pi(raw - prev.x()));
-                uv.push(Point2::new(d, v));
+                uv.push(Point2::new(d, p.y()));
             }
         }
         let band = band?;
@@ -2292,7 +2324,8 @@ fn bands_from_winding_chains(
                     },
                     |prev| prev + wrap_pi(u_raw0 - prev),
                 );
-                let u1 = u0 + wrap_pi(u_raw1 - u_raw0);
+                let u1 = ellipse_section_u_run(s, fwd, surface)
+                    .map_or_else(|| u0 + wrap_pi(u_raw1 - u_raw0), |run| u0 + run);
                 u_prev = Some(u1);
                 out.push(OrientedPCurveEdge {
                     curve_3d: s.curve_3d.clone(),
@@ -2849,6 +2882,47 @@ fn point_inside_region_uv(outer: &[Point2], holes: &[&[Point2]]) -> Option<Point
         .map(|span| Point2::new(f64::midpoint(span[0], span[1]), v))
 }
 
+/// The `(u, v)` of `samples + 1` points of section `s` at even steps of its
+/// domain, read from its start when `forward` and from its end when not,
+/// with `u` lifted along the section ([`super::pcurve_compute::edge_uv_samples`])
+/// from the first point's own `u`.
+fn section_uv_run(
+    s: &SectionEdge,
+    forward: bool,
+    surface: &FaceSurface,
+    samples: u32,
+) -> Option<Vec<Point2>> {
+    let (d0, d1) = s.curve_3d.domain_with_endpoints(s.start, s.end);
+    let pts: Vec<Point3> = (0..=samples)
+        .map(|k| {
+            let f = f64::from(k) / f64::from(samples);
+            let f = if forward { f } else { 1.0 - f };
+            s.curve_3d
+                .evaluate_with_endpoints((d1 - d0).madd(f, d0), s.start, s.end)
+        })
+        .collect();
+    super::pcurve_compute::edge_uv_samples(&s.curve_3d, surface, &pts)
+}
+
+/// The run in `u` of section `s` from its start to its end when `forward`,
+/// and back when not, where it is an ellipse on a cylinder or a cone: by
+/// [`super::pcurve_compute::ellipse_u_after`] over the run of its parameter, with no
+/// samples to step over a turn. `None` for another curve or surface.
+fn ellipse_section_u_run(s: &SectionEdge, forward: bool, surface: &FaceSurface) -> Option<f64> {
+    let EdgeCurve::Ellipse(ellipse) = &s.curve_3d else {
+        return None;
+    };
+    let (d0, d1) = s.curve_3d.domain_with_endpoints(s.start, s.end);
+    let (from, to, run) = if forward {
+        (s.start, s.end, d1 - d0)
+    } else {
+        (s.end, s.start, d0 - d1)
+    };
+    let (u0, _) = surface.project_point(from)?;
+    let (u1, _) = surface.project_point(to)?;
+    Some(super::pcurve_compute::ellipse_u_after(ellipse, surface, (u0, u1), run)? - u0)
+}
+
 /// Split a u-periodic cylinder/cone lateral (two closed rims, or a pointed
 /// cone's one rim and its apex, plus the seam) along closed section loops of
 /// winding zero when some of them straddle the seam meridian (a bore through a
@@ -2977,22 +3051,30 @@ fn split_periodic_face_around_seam_holes(
             (s.end, s.start)
         }
     };
-    // (delta u from the seam, v) samples along an entry in traversal order.
+    // (offset from the seam, v) samples along an entry in traversal order,
+    // the offset lifted along the entry ([`section_uv_run`]) from the first
+    // sample's, read within half a turn of the seam.
     let entry_samples = |entry: &(usize, bool)| -> Option<Vec<(f64, f64)>> {
-        let s = &sections[entry.0];
-        let (d0, d1) = s.curve_3d.domain_with_endpoints(s.start, s.end);
-        (0..=SAMPLES)
-            .map(|k| {
-                let f = f64::from(k) / f64::from(SAMPLES);
-                let f = if entry.1 { f } else { 1.0 - f };
-                let p = s
-                    .curve_3d
-                    .evaluate_with_endpoints(d0 + (d1 - d0) * f, s.start, s.end);
-                surface
-                    .project_point(p)
-                    .map(|(u, v)| (wrap_pi(u - seam_u), v))
-            })
-            .collect()
+        let uv = section_uv_run(&sections[entry.0], entry.1, surface, SAMPLES)?;
+        let first = uv.first()?.x() - seam_u;
+        let shift = wrap_pi(first) - first;
+        Some(uv.iter().map(|p| (p.x() - seam_u + shift, p.y())).collect())
+    };
+    // Each entry's samples carried on from the entry before at the vertex
+    // they share.
+    let carried = |entries: &[(usize, bool)]| -> Option<Vec<Vec<(f64, f64)>>> {
+        let mut out: Vec<Vec<(f64, f64)>> = Vec::with_capacity(entries.len());
+        for entry in entries {
+            let mut run = entry_samples(entry)?;
+            if let Some(&(prev, _)) = out.last().and_then(|r| r.last()) {
+                let shift = ((prev - run.first()?.0) / TAU).round() * TAU;
+                for p in &mut run {
+                    p.0 += shift;
+                }
+            }
+            out.push(run);
+        }
+        Some(out)
     };
 
     let qscale = 1.0 / tol.max(1e-12);
@@ -3031,27 +3113,23 @@ fn split_periodic_face_around_seam_holes(
         // Unwrapped UV walk: winding, area, centroid; crossings only at
         // vertices; strictly between the rims.
         let mut uv: Vec<(f64, f64)> = Vec::new();
-        let mut u_prev: Option<f64> = None;
-        for entry in &entries {
-            let samples = entry_samples(entry)?;
+        for samples in carried(&entries)? {
             for (k, &(d, v)) in samples.iter().enumerate() {
                 if v < v_bot + close_tol || v > v_top - close_tol {
                     return None;
                 }
-                if k > 0 && k + 1 < samples.len() && d.abs() < 1e-9 {
+                if k > 0 && k + 1 < samples.len() && wrap_pi(d).abs() < 1e-9 {
                     return None;
                 }
-                if k > 0 {
-                    let (pd, _) = samples[k - 1];
-                    let interior = k > 1 && k + 1 < samples.len();
-                    if interior && pd * d < 0.0 && (pd - d).abs() < PI {
-                        return None;
-                    }
+                // Two inner samples on either side of a copy of the seam.
+                if k > 1
+                    && k + 1 < samples.len()
+                    && ((samples[k - 1].0 / TAU).floor() - (d / TAU).floor()).abs() > 0.5
+                {
+                    return None;
                 }
-                let u = u_prev.map_or(d, |up| up + wrap_pi(d - up));
-                u_prev = Some(u);
                 if k + 1 < samples.len() {
-                    uv.push((u, v));
+                    uv.push((d, v));
                 }
             }
         }
@@ -3091,6 +3169,12 @@ fn split_periodic_face_around_seam_holes(
         return None;
     }
 
+    // An entry's run in u, read along it: a piece over half a turn ends on
+    // the turn it runs to, not on the copy nearest its start.
+    let entry_run = |entry: &(usize, bool)| -> Option<f64> {
+        let samples = entry_samples(entry)?;
+        Some(samples.last()?.0 - samples.first()?.0)
+    };
     let materialize = |entries: &[(usize, bool)]| -> Option<Vec<OrientedPCurveEdge>> {
         let mut out = Vec::with_capacity(entries.len());
         let mut u_prev = seam_u;
@@ -3100,7 +3184,8 @@ fn split_periodic_face_around_seam_holes(
             let (u_raw0, v0) = surface.project_point(from)?;
             let (u_raw1, v1) = surface.project_point(to)?;
             let u0 = u_prev + wrap_pi(u_raw0 - u_prev);
-            let u1 = u0 + wrap_pi(u_raw1 - u_raw0);
+            let walked = u0 + entry_run(entry)?;
+            let u1 = walked + wrap_pi(u_raw1 - walked);
             u_prev = u1;
             out.push(OrientedPCurveEdge {
                 curve_3d: s.curve_3d.clone(),
@@ -3147,17 +3232,9 @@ fn split_periodic_face_around_seam_holes(
     // can leave the half where its edge slopes back toward the seam.
     let half_interior = |half: &[(usize, bool)], v_a: f64, v_b: f64| -> Option<Point3> {
         let v_mid = 0.5 * (v_a + v_b);
-        // Offsets from the seam carried continuously along the chain: a half
-        // wider than half a turn runs past the opposite meridian.
-        let mut chain: Vec<(f64, f64)> = Vec::new();
-        for entry in half {
-            for (d, v) in entry_samples(entry)? {
-                let d = chain
-                    .last()
-                    .map_or(d, |&(prev, _)| prev + wrap_pi(d - prev));
-                chain.push((d, v));
-            }
-        }
+        // Offsets from the seam carried along the chain: a half wider than
+        // half a turn runs past the opposite meridian.
+        let chain: Vec<(f64, f64)> = carried(half)?.into_iter().flatten().collect();
         let mut nearest: Option<f64> = None;
         for w in chain.windows(2) {
             let ((d0, v0), (d1, v1)) = (w[0], w[1]);
@@ -3205,14 +3282,14 @@ fn split_periodic_face_around_seam_holes(
         let (first, second) = entries.split_at(split);
         let (_, v_first) = surface.project_point(traversal(&first[0]).0)?;
         let (_, v_second) = surface.project_point(traversal(&second[0]).0)?;
+        // Offsets from the seam carried along the half from its seam vertex:
+        // a half over half a turn runs past the opposite meridian, where a
+        // wrapped offset changes sign.
         let side = |half: &[(usize, bool)]| -> Option<bool> {
             let mut sum = 0.0;
-            for entry in half {
-                let samples = entry_samples(entry)?;
-                sum += samples[1..samples.len() - 1]
-                    .iter()
-                    .map(|&(d, _)| d)
-                    .sum::<f64>();
+            for run in carried(half)? {
+                let last = run.len() - 1;
+                sum += run[1..last].iter().map(|&(d, _)| d).sum::<f64>();
             }
             Some(sum > 0.0)
         };
@@ -3401,11 +3478,15 @@ fn winding_chain_in(
                         .evaluate_with_endpoints(d0 + (d1 - d0) * t, s.start, s.end),
                 )
             };
-            let mut u_prev = at(0)?;
-            for k in 1..=samples {
-                let u = at(k)?;
-                winding += wrap_pi(u - u_prev);
-                u_prev = u;
+            if let Some(run) = ellipse_section_u_run(s, forward, surface) {
+                winding += run;
+            } else {
+                let mut u_prev = at(0)?;
+                for k in 1..=samples {
+                    let u = at(k)?;
+                    winding += wrap_pi(u - u_prev);
+                    u_prev = u;
+                }
             }
             let to_key = q3(to);
             if to_key == origin {
@@ -6172,18 +6253,22 @@ fn clip_sections_to_outer_region(
         {
             pts3.reverse();
         }
-        let samples: Vec<Point2> = pts3
-            .into_iter()
-            .filter_map(|p| surface.project_point(p).map(|(u, v)| Point2::new(u, v)))
-            .collect();
+        // Lifted along the edge, and carried on from the edge before at the
+        // vertex they share.
+        pts3.retain(|&p| surface.project_point(p).is_some());
+        let Some(samples) = super::pcurve_compute::edge_uv_samples(&e.curve_3d, surface, &pts3)
+        else {
+            continue;
+        };
+        let shift = match (prev, samples.first()) {
+            (Some(pv), Some(first)) => {
+                let du = ((first.x() - pv.x() + PI).rem_euclid(TAU)) - PI;
+                pv.x() + du - first.x()
+            }
+            _ => 0.0,
+        };
         for s in samples {
-            let unwrapped = match prev {
-                Some(pv) => {
-                    let du = ((s.x() - pv.x() + PI).rem_euclid(TAU)) - PI;
-                    Point2::new(pv.x() + du, s.y())
-                }
-                None => s,
-            };
+            let unwrapped = Point2::new(s.x() + shift, s.y());
             prev = Some(unwrapped);
             poly.push(unwrapped);
         }
@@ -6905,6 +6990,67 @@ fn sample_wire_outline(topo: &Topology, wire_id: brepkit_topology::wire::WireId)
     pts
 }
 
+/// [`sample_wire_outline`] in `surface`'s parameters: each edge's samples
+/// lifted along it ([`super::pcurve_compute::edge_uv_samples`]), and moved
+/// by whole periods to meet the edge before at the vertex they share.
+fn sample_wire_outline_uv(
+    topo: &Topology,
+    wire_id: brepkit_topology::wire::WireId,
+    surface: &FaceSurface,
+) -> Vec<Point2> {
+    let Ok(wire) = topo.wire(wire_id) else {
+        return Vec::new();
+    };
+    let (u_period, v_period) = super::pcurve_compute::surface_periods(surface);
+    let turns =
+        |x: f64, to: f64, period: Option<f64>| period.map_or(0.0, |p| ((to - x) / p).round() * p);
+    let mut pts: Vec<Point2> = Vec::new();
+    let mut end: Option<Point2> = None;
+    for oe in wire.edges() {
+        let Ok(edge) = topo.edge(oe.edge()) else {
+            continue;
+        };
+        let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) else {
+            continue;
+        };
+        let n = if matches!(edge.curve(), EdgeCurve::Line) {
+            1
+        } else {
+            OUTLINE_CURVE_SAMPLES
+        };
+        let mut chain = Vec::with_capacity(n + 1);
+        super::pcurve_compute::sample_edge_uniform_native(
+            edge.curve(),
+            sv.point(),
+            ev.point(),
+            n,
+            oe.is_forward(),
+            &mut chain,
+        );
+        chain.push(if oe.is_forward() {
+            ev.point()
+        } else {
+            sv.point()
+        });
+        chain.retain(|&p| surface.project_point(p).is_some());
+        let Some(uv) = super::pcurve_compute::edge_uv_samples(edge.curve(), surface, &chain) else {
+            continue;
+        };
+        let (Some(&first), Some(&last)) = (uv.first(), uv.last()) else {
+            continue;
+        };
+        let shift = end.map_or(brepkit_math::vec::Vec2::new(0.0, 0.0), |at| {
+            brepkit_math::vec::Vec2::new(
+                turns(first.x(), at.x(), u_period),
+                turns(first.y(), at.y(), v_period),
+            )
+        });
+        pts.extend(uv[..uv.len() - 1].iter().map(|&p| p + shift));
+        end = Some(last + shift);
+    }
+    pts
+}
+
 /// Slack on the cap interiority test. A genuine drilled hole's centre clears
 /// the face outline by more than its radius, while a corner cylinder's section
 /// circle is exactly tangent (centre exactly one radius out); the 5% margin
@@ -7280,25 +7426,20 @@ fn place_section_in_turn(e: &mut OrientedPCurveEdge, surface: &FaceSurface, lo: 
         (e.end_3d, e.start_3d)
     };
     let (t0, t1) = e.curve_3d.domain_with_endpoints(s3, e3);
-    let Some(mut path) = (0..=SAMPLES)
+    let pts: Vec<Point3> = (0..=SAMPLES)
         .map(|k| {
             let t = (t1 - t0).madd(f64::from(k) / f64::from(SAMPLES), t0);
-            surface
-                .project_point(e.curve_3d.evaluate_with_endpoints(t, s3, e3))
-                .map(|(u, _)| u)
+            e.curve_3d.evaluate_with_endpoints(t, s3, e3)
         })
-        .collect::<Option<Vec<f64>>>()
-    else {
+        .collect();
+    // Lifted along the section, then moved by whole periods so its middle
+    // lies in the window.
+    let Some(uv) = super::pcurve_compute::edge_uv_samples(&e.curve_3d, surface, &pts) else {
         return;
     };
-    let mid = path.len() / 2;
-    path[mid] = lo + (path[mid] - lo).rem_euclid(period);
-    for k in (0..mid).rev() {
-        path[k] = nearest(path[k], path[k + 1]);
-    }
-    for k in mid + 1..path.len() {
-        path[k] = nearest(path[k], path[k - 1]);
-    }
+    let mid = uv.len() / 2;
+    let shift = lo + (uv[mid].x() - lo).rem_euclid(period) - uv[mid].x();
+    let path: Vec<f64> = uv.iter().map(|p| p.x() + shift).collect();
     // A marched curve's domain can run from either end.
     let first = e.curve_3d.evaluate_with_endpoints(t0, s3, e3);
     let (at_start, at_end) = if (first - e.start_3d).length() <= (first - e.end_3d).length() {
@@ -11137,12 +11278,7 @@ fn split_face_2d_impl(
     // The way the face's outline winds in (u, v), where it bounds an area
     // there: a face round a pole of its chart (a whole hemisphere) does not.
     let outline_sign = {
-        let (u_period, v_period) = super::pcurve_compute::surface_periods(&surface);
-        let mut uv: Vec<Point2> = sample_wire_outline(topo, face.outer_wire())
-            .into_iter()
-            .filter_map(|p| surface.project_point(p).map(|(u, v)| Point2::new(u, v)))
-            .collect();
-        super::pcurve_compute::unwrap_periodic_params_pub(&mut uv, u_period, v_period);
+        let uv = sample_wire_outline_uv(topo, face.outer_wire(), &surface);
         let area = signed_area_2d(&uv);
         let perimeter: f64 = uv
             .iter()
@@ -15154,5 +15290,316 @@ mod tests {
             e.start_uv,
             e.end_uv
         );
+    }
+
+    /// A unit cylinder's wall from `v = 0` to `v = 10`, seamed at `u = 0`,
+    /// with a hole round the patch from `u = -1` to `u = 4` between `v = 4`
+    /// and `v = 6`: arcs along the two heights, split where they cross the
+    /// seam, and rulings at the patch's sides; and the patch mirrored in the
+    /// seam. The arcs from the seam to `u = 4` run more than half a turn.
+    /// Each piece of the hole in the split faces runs its own way round in
+    /// `u`, and so ends on its own turn.
+    #[test]
+    fn a_seam_hole_piece_over_half_a_turn_keeps_its_far_end_on_its_turn() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::CylindricalSurface;
+        use std::f64::consts::TAU;
+
+        let cyl =
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0)
+                .unwrap();
+        let surface = FaceSurface::Cylinder(cyl);
+        let on = |u: f64, v: f64| surface.evaluate(u, v).unwrap();
+        let ring = |v: f64, up: bool| {
+            let normal = Vec3::new(0.0, 0.0, if up { 1.0 } else { -1.0 });
+            let circle = Circle3D::new(Point3::new(0.0, 0.0, v), normal, 1.0).unwrap();
+            let t = circle.project(on(0.0, v));
+            let ahead = circle.evaluate(t + 0.1);
+            let step = if up { 0.1 } else { -0.1 };
+            assert!(
+                (ahead - on(step, v)).length() < 1e-12,
+                "the ring turns against u"
+            );
+            EdgeCurve::Circle(circle)
+        };
+        let rim = |v: f64, forward: bool| OrientedPCurveEdge {
+            curve_3d: ring(v, true),
+            pcurve: dummy_pcurve(),
+            start_uv: Point2::new(if forward { 0.0 } else { TAU }, v),
+            end_uv: Point2::new(if forward { TAU } else { 0.0 }, v),
+            start_3d: on(0.0, v),
+            end_3d: on(0.0, v),
+            forward,
+            source_edge_idx: None,
+            pave_block_id: None,
+        };
+        let seam = |from: f64, to: f64, u: f64| OrientedPCurveEdge {
+            curve_3d: EdgeCurve::Line,
+            pcurve: dummy_pcurve(),
+            start_uv: Point2::new(u, from),
+            end_uv: Point2::new(u, to),
+            start_3d: on(u, from),
+            end_3d: on(u, to),
+            forward: true,
+            source_edge_idx: None,
+            pave_block_id: None,
+        };
+        let boundary = vec![
+            rim(0.0, true),
+            seam(0.0, 10.0, TAU),
+            rim(10.0, false),
+            seam(10.0, 0.0, 0.0),
+        ];
+        // Each piece's ends in (u, v).
+        let patch: [((f64, f64), (f64, f64)); 6] = [
+            ((-1.0, 4.0), (0.0, 4.0)),
+            ((0.0, 4.0), (4.0, 4.0)),
+            ((4.0, 4.0), (4.0, 6.0)),
+            ((4.0, 6.0), (0.0, 6.0)),
+            ((0.0, 6.0), (-1.0, 6.0)),
+            ((-1.0, 6.0), (-1.0, 4.0)),
+        ];
+        // The patch as given, and mirrored in the seam: its long arm on the
+        // other side.
+        for side in [1.0, -1.0] {
+            let pieces = patch.map(|((u0, v0), (u1, v1))| ((side * u0, v0), (side * u1, v1)));
+            let sections: Vec<SectionEdge> = pieces
+                .iter()
+                .map(|&((u0, v0), (u1, v1))| {
+                    let curve = if (v1 - v0).abs() > 1e-12 {
+                        EdgeCurve::Line
+                    } else {
+                        ring(v0, u1 > u0)
+                    };
+                    SectionEdge {
+                        curve_3d: curve,
+                        ..line_section(on(u0, v0), on(u1, v1))
+                    }
+                })
+                .collect();
+            let mut topo = Topology::new();
+            let face_id = make_unit_square_face(&mut topo);
+            let split = split_periodic_face_around_seam_holes(
+                &surface,
+                &boundary,
+                &sections,
+                Rank::A,
+                false,
+                face_id,
+                1e-7,
+            )
+            .expect("the wall splits round the hole");
+            assert_eq!(split.len(), 3, "side {side}: the remainder and two halves");
+            let mut checked = 0;
+            for face in &split {
+                for e in face
+                    .outer_wire
+                    .iter()
+                    .chain(face.inner_wires.iter().flatten())
+                {
+                    let run = pieces.iter().find_map(|&((u0, v0), (u1, v1))| {
+                        let (a, b) = (on(u0, v0), on(u1, v1));
+                        if (e.start_3d - a).length() < 1e-9 && (e.end_3d - b).length() < 1e-9 {
+                            Some(u1 - u0)
+                        } else if (e.start_3d - b).length() < 1e-9 && (e.end_3d - a).length() < 1e-9
+                        {
+                            Some(u0 - u1)
+                        } else {
+                            None
+                        }
+                    });
+                    let Some(run) = run else { continue };
+                    let got = e.end_uv.x() - e.start_uv.x();
+                    assert!(
+                        (got - run).abs() < 1e-9,
+                        "side {side}: a piece from {:?} to {:?} runs {got} in u, not {run}",
+                        e.start_uv,
+                        e.end_uv
+                    );
+                    checked += 1;
+                }
+            }
+            assert_eq!(
+                checked, 12,
+                "side {side}: each piece in the outline and in its half"
+            );
+        }
+    }
+
+    /// The wall of the cone of [`cone_ellipse_fixture::oblique_cone`] at
+    /// slope 0.99999, between rims at `v = 0.1` and `v = 1e4`, with a hole
+    /// whose loop runs along the ellipse from its parameter 3.12 to 3.4, up a
+    /// ruling to `v = 5000`, back along that height, and down a ruling. The
+    /// ellipse crosses the seam at its parameter 3.1343, and the arc above
+    /// it at the same `u`; both are split there. From the seam the ellipse's
+    /// `u` runs 5.149 to 3.4, nearly all of it round the near vertex. Run
+    /// either way round, every piece of the hole in the split faces runs its
+    /// own way in `u`, by its exact run.
+    ///
+    /// [`cone_ellipse_fixture::oblique_cone`]: crate::builder::pcurve_compute::cone_ellipse_fixture::oblique_cone
+    #[test]
+    fn a_seam_hole_on_a_steep_cone_keeps_each_pieces_run() {
+        use crate::builder::pcurve_compute::cone_ellipse_fixture::{lifted_u, oblique_cone};
+        use brepkit_math::curves::Circle3D;
+        use std::f64::consts::{FRAC_PI_4, TAU};
+
+        let (surface, ellipse) = oblique_cone(0.99999);
+        let on = |u: f64, v: f64| surface.evaluate(u, v).unwrap();
+        let ring = |v: f64, up: bool| {
+            let z = v * FRAC_PI_4.sin();
+            let normal = Vec3::new(0.0, 0.0, if up { 1.0 } else { -1.0 });
+            Circle3D::new(Point3::new(0.0, 0.0, z), normal, v * FRAC_PI_4.cos()).unwrap()
+        };
+        let (a, b) = (3.12, 3.4);
+        let (u_a, u_b) = lifted_u(&surface, &ellipse, a, b);
+        // Where the arc crosses the seam, `u` a whole number of turns.
+        let seam = (u_a / TAU).ceil() * TAU;
+        assert!(seam < u_b);
+        let (mut lo, mut hi) = (a, b);
+        for _ in 0..100 {
+            let mid = f64::midpoint(lo, hi);
+            if lifted_u(&surface, &ellipse, a, mid).1 < seam {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        let t_seam = f64::midpoint(lo, hi);
+        assert!(
+            t_seam - a > 1e-3 && u_b - seam > 5.0,
+            "the arc crosses the seam at {t_seam}, and runs {} on from it",
+            u_b - seam
+        );
+        let (_, v_a) = surface.project_point(ellipse.evaluate(a)).unwrap();
+        let (_, v_b) = surface.project_point(ellipse.evaluate(b)).unwrap();
+        let (v_bot, v_high, v_top) = (0.1, 5000.0, 1e4);
+        let rim = |v: f64, forward: bool| OrientedPCurveEdge {
+            curve_3d: EdgeCurve::Circle(ring(v, true)),
+            pcurve: dummy_pcurve(),
+            start_uv: Point2::new(if forward { 0.0 } else { TAU }, v),
+            end_uv: Point2::new(if forward { TAU } else { 0.0 }, v),
+            start_3d: on(0.0, v),
+            end_3d: on(0.0, v),
+            forward,
+            source_edge_idx: None,
+            pave_block_id: None,
+        };
+        let seam_line = |from: f64, to: f64, u: f64| OrientedPCurveEdge {
+            curve_3d: EdgeCurve::Line,
+            pcurve: dummy_pcurve(),
+            start_uv: Point2::new(u, from),
+            end_uv: Point2::new(u, to),
+            start_3d: on(u, from),
+            end_3d: on(u, to),
+            forward: true,
+            source_edge_idx: None,
+            pave_block_id: None,
+        };
+        let boundary = vec![
+            rim(v_bot, true),
+            seam_line(v_bot, v_top, TAU),
+            rim(v_top, false),
+            seam_line(v_top, v_bot, 0.0),
+        ];
+        let section = |curve: EdgeCurve, start: Point3, end: Point3| SectionEdge {
+            curve_3d: curve,
+            ..line_section(start, end)
+        };
+        let at = |t: f64| ellipse.evaluate(t);
+        let high = |u: f64| on(u, v_high);
+        // Each piece as stored, and its run in u from its stored start.
+        let pieces: Vec<(SectionEdge, f64)> = vec![
+            (
+                section(EdgeCurve::Ellipse(ellipse.clone()), at(a), at(t_seam)),
+                seam - u_a,
+            ),
+            (
+                section(EdgeCurve::Ellipse(ellipse.clone()), at(t_seam), at(b)),
+                u_b - seam,
+            ),
+            (section(EdgeCurve::Line, at(b), high(u_b)), 0.0),
+            (
+                section(
+                    EdgeCurve::Circle(ring(v_high, false)),
+                    high(u_b),
+                    high(seam),
+                ),
+                seam - u_b,
+            ),
+            (
+                section(
+                    EdgeCurve::Circle(ring(v_high, false)),
+                    high(seam),
+                    high(u_a),
+                ),
+                u_a - seam,
+            ),
+            (section(EdgeCurve::Line, high(u_a), at(a)), 0.0),
+        ];
+        assert!(v_a < v_high && v_b < v_high);
+        let mut topo = Topology::new();
+        let face_id = make_unit_square_face(&mut topo);
+        // Chained from the first piece as stored, the loop runs along the
+        // ellipse first; from the last ruling stored the other way, it runs
+        // the loop backwards.
+        let mut backwards = pieces.clone();
+        let (last, run) = backwards.pop().unwrap();
+        backwards.insert(
+            0,
+            (
+                SectionEdge {
+                    start: last.end,
+                    end: last.start,
+                    ..last
+                },
+                run,
+            ),
+        );
+        for (way, pieces) in [("along", pieces), ("back", backwards)] {
+            let sections: Vec<SectionEdge> = pieces.iter().map(|(s, _)| s.clone()).collect();
+            let split = split_periodic_face_around_seam_holes(
+                &surface,
+                &boundary,
+                &sections,
+                Rank::A,
+                false,
+                face_id,
+                1e-7,
+            )
+            .expect("the wall splits round the hole");
+            assert_eq!(split.len(), 3, "{way}: the remainder and two halves");
+            let mut checked = 0;
+            for face in &split {
+                for e in face
+                    .outer_wire
+                    .iter()
+                    .chain(face.inner_wires.iter().flatten())
+                {
+                    let run = pieces.iter().find_map(|(s, run)| {
+                        if (e.start_3d - s.start).length() < 1e-6
+                            && (e.end_3d - s.end).length() < 1e-6
+                        {
+                            Some(*run)
+                        } else if (e.start_3d - s.end).length() < 1e-6
+                            && (e.end_3d - s.start).length() < 1e-6
+                        {
+                            Some(-*run)
+                        } else {
+                            None
+                        }
+                    });
+                    let Some(run) = run else { continue };
+                    let got = e.end_uv.x() - e.start_uv.x();
+                    assert!(
+                        (got - run).abs() < 1e-9,
+                        "{way}: a piece from {:?} to {:?} runs {got} in u, not {run}",
+                        e.start_uv,
+                        e.end_uv
+                    );
+                    checked += 1;
+                }
+            }
+            assert_eq!(checked, 12, "{way}: each piece in the outline and its half");
+        }
     }
 }

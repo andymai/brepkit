@@ -143,6 +143,14 @@ fn pcurve_off_its_edge(
 /// dispatch prefers; the deprecated `fillet_rolling_ball` remains callable
 /// only as an explicit reference implementation.
 ///
+/// A result with a fault the builder does not read (a face whose outline
+/// crosses itself, a hole across or outside its face's outline, or two plane
+/// faces over one area) is refused: the solid comes back with each edge
+/// named in `failed`. Where the fillet fails on a solid that keeps flat
+/// seams at the picked edges (faces of one plane left in pieces by a
+/// boolean), it is made again on a copy with those faces merged; a picked
+/// seam is passed over.
+///
 /// # Errors
 /// Returns `OperationsError` if radius is non-positive, edges are empty,
 /// or the blend computation fails.
@@ -169,10 +177,293 @@ pub fn fillet_v2(
         Ok(None) => {}
         Err(e) => log::debug!("fillet over bores: {e}"),
     }
+    let direct = fillet_directly(topo, solid, edges, radius);
+    if direct.as_ref().is_ok_and(|result| result.failed.is_empty()) {
+        return direct;
+    }
+    match fillet_across_flat_seams(topo, solid, edges, radius) {
+        Ok(Some(result)) => return Ok(result),
+        Ok(None) => {}
+        Err(e) => log::debug!("fillet across flat seams: {e}"),
+    }
+    direct
+}
+
+/// `edges` of `solid` rounded by the walking engine as they are.
+fn fillet_directly(
+    topo: &mut Topology,
+    solid: SolidId,
+    edges: &[EdgeId],
+    radius: f64,
+) -> Result<BlendResult, OperationsError> {
     let mut builder = FilletBuilder::new(topo, solid);
     builder.add_edges(edges, radius);
     let built = builder.build()?;
+    // Read before the cavities are detached: the detached copy takes new
+    // edges throughout, and the faces the fillet did not touch are known by
+    // the input's edges they keep.
+    let built = valid_fillet(topo, solid, built)?;
     own_cavities(topo, solid, built, "fillet")
+}
+
+/// `edges` rounded on a copy of `solid` with the flat seams at the picks
+/// gone. A boolean can keep two faces of one plane as pieces that meet in a
+/// flat seam. The corner solver finds the face two rounds share by its
+/// identity, so two rounds that meet where a seam cuts that face find none.
+/// On the copy, the plane faces that a seam at an end of a pick divides are
+/// merged: faces of one plane within the linear tolerance
+/// ([`crate::query::edges_in_one_surface`]) and facing one way. No edge is
+/// joined to another, so each pick is its own edge on the copy.
+///
+/// A picked seam is passed over, as the walking engine passes it over. `None`
+/// where a pick is not an edge of `solid`, where no flat seam meets a pick,
+/// or where the fillet of the copy fails or leaves an invalid solid.
+fn fillet_across_flat_seams(
+    topo: &mut Topology,
+    solid: SolidId,
+    edges: &[EdgeId],
+    radius: f64,
+) -> Result<Option<BlendResult>, OperationsError> {
+    use brepkit_heal::upgrade::unify_same_domain::{UnifyOptions, unify_face_groups};
+    let all = brepkit_topology::explorer::solid_edges(topo, solid)?;
+    let known: HashSet<EdgeId> = all.iter().copied().collect();
+    if edges.iter().any(|edge| !known.contains(edge)) {
+        return Ok(None);
+    }
+    let in_one_surface = crate::query::edges_in_one_surface(topo, solid, &all)?;
+    let mut picks: Vec<EdgeId> = Vec::with_capacity(edges.len());
+    for &edge in edges {
+        if !in_one_surface.contains(&edge.index()) && !picks.contains(&edge) {
+            picks.push(edge);
+        }
+    }
+    if picks.is_empty() {
+        return Ok(None);
+    }
+    let mut reached: HashSet<VertexId> = HashSet::new();
+    for &edge in &picks {
+        let data = topo.edge(edge)?;
+        reached.extend([data.start(), data.end()]);
+    }
+    let uses = brepkit_topology::explorer::edge_to_face_map(topo, solid)?;
+    let mut seams: Vec<(FaceId, FaceId)> = Vec::new();
+    for &edge in &all {
+        let data = topo.edge(edge)?;
+        if !in_one_surface.contains(&edge.index())
+            || !(reached.contains(&data.start()) || reached.contains(&data.end()))
+        {
+            continue;
+        }
+        let Some(&[f1, f2]) = uses.get(&edge.index()).map(std::ops::Deref::deref) else {
+            continue;
+        };
+        let (Some(n1), Some(n2)) = (
+            topo.face(f1)?.effective_plane_normal(),
+            topo.face(f2)?.effective_plane_normal(),
+        ) else {
+            continue;
+        };
+        if f1 != f2 && n1.dot(n2) > 0.0 {
+            seams.push((f1, f2));
+        }
+    }
+    if seams.is_empty() {
+        return Ok(None);
+    }
+    let copy = crate::copy::copy_solid(topo, solid)?;
+    let (face_map, edge_map) = copy_maps(topo, solid, copy)?;
+    let order = solid_faces(topo, copy)?;
+    let mut group_of: HashMap<FaceId, usize> = order.iter().map(|&f| (f, usize::MAX)).collect();
+    let mut groups: Vec<Vec<FaceId>> = Vec::new();
+    for (a, b) in seams {
+        let (Some(&a), Some(&b)) = (face_map.get(&a), face_map.get(&b)) else {
+            return Ok(None);
+        };
+        let at = |face: &FaceId| group_of.get(face).copied().unwrap_or(usize::MAX);
+        match (at(&a), at(&b)) {
+            (usize::MAX, usize::MAX) => {
+                group_of.insert(a, groups.len());
+                group_of.insert(b, groups.len());
+                groups.push(vec![a, b]);
+            }
+            (g, usize::MAX) => {
+                group_of.insert(b, g);
+                groups[g].push(b);
+            }
+            (usize::MAX, g) => {
+                group_of.insert(a, g);
+                groups[g].push(a);
+            }
+            (g, h) if g != h => {
+                let moved = std::mem::take(&mut groups[h]);
+                for &face in &moved {
+                    group_of.insert(face, g);
+                }
+                groups[g].extend(moved);
+            }
+            _ => {}
+        }
+    }
+    groups.retain(|group| !group.is_empty());
+    for group in &mut groups {
+        group.sort_by_key(|face| order.iter().position(|f| f == face));
+    }
+    let merged = unify_face_groups(topo, copy, &groups, &UnifyOptions::default()).map_err(|e| {
+        OperationsError::InvalidInput {
+            reason: format!("joining the faces of one plane: {e}"),
+        }
+    })?;
+    if merged == 0 {
+        return Ok(None);
+    }
+    let targets: Vec<EdgeId> = picks
+        .iter()
+        .filter_map(|edge| edge_map.get(edge).copied())
+        .collect();
+    if targets.len() != picks.len() {
+        return Ok(None);
+    }
+    let result = match fillet_directly(topo, copy, &targets, radius) {
+        Ok(result) => result,
+        Err(e) => {
+            log::debug!("fillet across flat seams: the joined solid's fillet fails: {e}");
+            return Ok(None);
+        }
+    };
+    if result.solid == copy || !result.failed.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(BlendResult {
+        solid: result.solid,
+        succeeded: picks,
+        failed: Vec::new(),
+        is_partial: false,
+    }))
+}
+
+/// A copy's faces and edges, keyed by those of the solid they copy.
+type CopyMaps = (HashMap<FaceId, FaceId>, HashMap<EdgeId, EdgeId>);
+
+/// The faces and edges of `copy`, a [`crate::copy::copy_solid`] of `solid`,
+/// by those of `solid` they copy: the copy keeps the order of the shells,
+/// faces, wires and edges.
+fn copy_maps(topo: &Topology, solid: SolidId, copy: SolidId) -> Result<CopyMaps, OperationsError> {
+    let lost = || OperationsError::InvalidInput {
+        reason: "the copy does not match its solid".into(),
+    };
+    let (from, to) = (solid_faces(topo, solid)?, solid_faces(topo, copy)?);
+    if from.len() != to.len() {
+        return Err(lost());
+    }
+    let mut faces = HashMap::with_capacity(from.len());
+    let mut edges = HashMap::new();
+    for (&a, &b) in from.iter().zip(&to) {
+        faces.insert(a, b);
+        let wires = |face: FaceId| -> Result<Vec<brepkit_topology::wire::WireId>, OperationsError> {
+            let data = topo.face(face)?;
+            Ok(std::iter::once(data.outer_wire())
+                .chain(data.inner_wires().iter().copied())
+                .collect())
+        };
+        let (wa, wb) = (wires(a)?, wires(b)?);
+        if wa.len() != wb.len() {
+            return Err(lost());
+        }
+        for (wa, wb) in wa.into_iter().zip(wb) {
+            let (ea, eb) = (topo.wire(wa)?.edges(), topo.wire(wb)?.edges());
+            if ea.len() != eb.len() {
+                return Err(lost());
+            }
+            for (oa, ob) in ea.iter().zip(eb) {
+                edges.insert(oa.edge(), ob.edge());
+            }
+        }
+    }
+    Ok((faces, edges))
+}
+
+/// A walking-engine fillet's result, or `solid` with every edge the
+/// builder rounded reported as failed where the result has a fault the
+/// builder does not read (see [`fillet_fault`]). The builder checks how its
+/// faces share edges, not where the faces lie: two rounds that meet at a
+/// corner the corner solver does not model can leave a face whose outline
+/// crosses itself.
+fn valid_fillet(
+    topo: &Topology,
+    solid: SolidId,
+    result: BlendResult,
+) -> Result<BlendResult, OperationsError> {
+    if result.solid == solid {
+        return Ok(result);
+    }
+    let Some(fault) = fillet_fault(topo, solid, result.solid)? else {
+        return Ok(result);
+    };
+    let reason = format!("the fillet leaves an invalid solid: {fault}");
+    let mut failed = result.failed;
+    failed.extend(result.succeeded.into_iter().map(|edge| {
+        (
+            edge,
+            brepkit_blend::BlendError::PlanningFailure {
+                reason: reason.clone(),
+            },
+        )
+    }));
+    Ok(BlendResult {
+        solid,
+        succeeded: Vec::new(),
+        failed,
+        is_partial: true,
+    })
+}
+
+/// The first fault of `result` in the faces a fillet of `input` made or
+/// trimmed (those with an edge `input` does not have): a wire that crosses
+/// itself, a hole that crosses or leaves its face's outline, or a plane
+/// face that covers the area of another. These are the checks of
+/// [`crate::validate::validate_solid`] that read where faces lie; the
+/// builder's own audit reads how they share edges. Faces the fillet left
+/// as they were are not read again.
+fn fillet_fault(
+    topo: &Topology,
+    input: SolidId,
+    result: SolidId,
+) -> Result<Option<String>, OperationsError> {
+    use brepkit_check::validate::face_overlap::check_faces_overlap_among;
+    use brepkit_check::validate::face_wires::{check_face_wires_apart, check_face_wires_simple};
+    // The tolerance `validate_solid` reads these at.
+    const TOL: f64 = 1e-6;
+    let checked = |found: Result<Vec<brepkit_check::validate::checks::ValidationIssue>, _>| {
+        found.map_err(
+            |e: brepkit_check::CheckError| OperationsError::InvalidInput {
+                reason: e.to_string(),
+            },
+        )
+    };
+    let old: HashSet<EdgeId> = brepkit_topology::explorer::solid_edges(topo, input)?
+        .into_iter()
+        .collect();
+    let mut made = HashSet::new();
+    for face in solid_faces(topo, result)? {
+        if !brepkit_topology::explorer::face_edges(topo, face)?
+            .iter()
+            .any(|edge| !old.contains(edge))
+        {
+            continue;
+        }
+        made.insert(face);
+        let mut found = checked(check_face_wires_simple(topo, face, TOL))?;
+        found.extend(checked(check_face_wires_apart(topo, face, TOL))?);
+        if let Some(issue) = found.first() {
+            return Ok(Some(format!(
+                "face {}: {}",
+                face.index(),
+                issue.description
+            )));
+        }
+    }
+    let overlaps = checked(check_faces_overlap_among(topo, result, TOL, &made))?;
+    Ok(overlaps.first().map(|issue| issue.description.clone()))
 }
 
 /// A straight through-bore: a cylinder wall with the material round it, from
@@ -1313,6 +1604,7 @@ pub fn fillet_v2_variable(
         builder.add_edges_with_law(&chain, law);
     }
     let built = builder.build()?;
+    let built = valid_fillet(topo, solid, built)?;
     own_cavities(topo, solid, built, "fillet")
 }
 

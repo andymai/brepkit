@@ -1703,7 +1703,8 @@ fn profile_chart_is_ccw(
 ///
 /// # Errors
 ///
-/// Returns an error if the axis is zero-length, the angle is out of range, or a
+/// Returns an error if the axis is zero-length, the angle is out of range, a
+/// planar profile in a plane that holds the axis reaches across the axis, or a
 /// partial revolution is requested for a non-planar profile boundary.
 #[allow(clippy::too_many_lines)]
 pub fn revolve(
@@ -1758,6 +1759,21 @@ pub fn revolve(
     }
     let input_wire_id = face_data.outer_wire();
     let inner_wire_ids: Vec<brepkit_topology::wire::WireId> = face_data.inner_wires().to_vec();
+    if let Some(normal) = stored_plane_normal
+        && profile_reaches_across_axis(
+            topo,
+            topo.wire(input_wire_id)?.edges(),
+            normal,
+            axis_origin,
+            axis,
+        )?
+    {
+        return Err(crate::OperationsError::InvalidInput {
+            reason: "the revolve profile reaches across the axis, so its sweep would pass \
+                     through itself: keep the profile on one side of the axis"
+                .into(),
+        });
+    }
 
     // Fast exact path: a revolution of a single circular profile that clears
     // the axis is a torus (full turn: one doubly-periodic face; partial turn:
@@ -2251,6 +2267,197 @@ pub fn revolve(
     }
 
     Ok(solid)
+}
+
+/// Whether a profile in a plane that holds the axis has points of its outline
+/// on both sides of the axis.
+///
+/// Each side sweeps the space round the axis that the other side sweeps, the
+/// other way. The faces the two sides sweep then overlap, and no closed
+/// boundary holds the result: a full turn of an arc over both poles covers
+/// its sphere twice. A point on the axis, or off it by a millionth of the
+/// profile's size (an arc drawn about a point a hair off the axis), lies on
+/// neither side. Each edge is read at its extremes across the axis, not at
+/// samples, which an arc can pass the axis between.
+fn profile_reaches_across_axis(
+    topo: &Topology,
+    oriented: &[OrientedEdge],
+    plane_normal: Vec3,
+    axis_origin: Point3,
+    axis: Vec3,
+) -> Result<bool, crate::OperationsError> {
+    const SAMPLES: u32 = 64;
+    let normal = plane_normal.normalize()?;
+    if normal.dot(axis).abs() > 1e-9 {
+        return Ok(false);
+    }
+    let across = normal.cross(axis).normalize()?;
+    let mut lo = Point3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY);
+    let mut hi = Point3::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
+    let mut edges = Vec::with_capacity(oriented.len());
+    for oe in oriented {
+        let edge = topo.edge(oe.edge())?;
+        let (a, b) = (
+            topo.vertex(edge.start())?.point(),
+            topo.vertex(edge.end())?.point(),
+        );
+        let curve = edge.curve();
+        let (t0, t1) = curve.domain_with_endpoints(a, b);
+        // The samples give the profile's size, which only scales the
+        // allowance.
+        for k in 0..=SAMPLES {
+            let p = curve.evaluate_with_endpoints(
+                (t1 - t0).madd(f64::from(k) / f64::from(SAMPLES), t0),
+                a,
+                b,
+            );
+            lo = Point3::new(lo.x().min(p.x()), lo.y().min(p.y()), lo.z().min(p.z()));
+            hi = Point3::new(hi.x().max(p.x()), hi.y().max(p.y()), hi.z().max(p.z()));
+        }
+        edges.push((curve.clone(), a, b, (t0, t1)));
+    }
+    let reach = 1e-6f64.madd((hi - lo).length(), Tolerance::new().linear);
+    // Whether some point of the outline lies farther than `reach` on the
+    // side of the axis that `sign` picks.
+    let past = |sign: f64| -> Result<bool, crate::OperationsError> {
+        let depth = |p: Point3| -sign * (p - axis_origin).dot(across);
+        for (curve, a, b, (t0, t1)) in &edges {
+            let below = match curve {
+                EdgeCurve::Line => depth(*a).min(depth(*b)) < -reach,
+                EdgeCurve::Circle(circle) => {
+                    conic_least(|t| circle.evaluate(t), &depth, (*t0, *t1)) < -reach
+                }
+                EdgeCurve::Ellipse(ellipse) => {
+                    conic_least(|t| ellipse.evaluate(t), &depth, (*t0, *t1)) < -reach
+                }
+                // An edge stored against its spline's direction reads its
+                // span backward.
+                EdgeCurve::NurbsCurve(nurbs) => spline_dips_below(
+                    &nurbs_span(nurbs, t0.min(*t1), t0.max(*t1))?,
+                    &depth,
+                    -reach,
+                )?,
+            };
+            if below {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    };
+    Ok(past(1.0)? && past(-1.0)?)
+}
+
+/// The least that `f`, an affine function of the point, takes on the conic
+/// `at(t) = c + p cos t + q sin t` between `t0` and `t1 >= t0`.
+///
+/// On the conic `f` reads `f(c) + alpha cos t + beta sin t`, least at the
+/// angle opposite `atan2(beta, alpha)`. It counts where the span holds that
+/// angle, a whole turn on or back.
+fn conic_least(
+    at: impl Fn(f64) -> Point3,
+    f: &impl Fn(Point3) -> f64,
+    (t0, t1): (f64, f64),
+) -> f64 {
+    let (start, quarter, half) = (at(0.0), at(FRAC_PI_2), at(PI));
+    let centre = Point3::new(
+        0.5 * (start.x() + half.x()),
+        0.5 * (start.y() + half.y()),
+        0.5 * (start.z() + half.z()),
+    );
+    let at_centre = f(centre);
+    let (alpha, beta) = (f(start) - at_centre, f(quarter) - at_centre);
+    let ends = f(at(t0)).min(f(at(t1)));
+    let turn = 2.0 * PI;
+    let least = beta.atan2(alpha) + PI;
+    let first = least + ((t0 - least) / turn).ceil() * turn;
+    if first <= t1 {
+        ends.min(at_centre - alpha.hypot(beta))
+    } else {
+        ends
+    }
+}
+
+/// Whether `f`, an affine function of the point, falls below `floor`
+/// somewhere on `curve`.
+///
+/// Each Bezier piece of the spline is read on its own. A piece whose
+/// weights are all positive lies in the hull of its control points, where
+/// `f` is least at a control point; one whose weights are all negative is
+/// the same curve with every weight turned positive. A piece whose control
+/// points all read `floor` or more stays there, and a piece read below
+/// `floor` at a point of the curve is past it. A piece between is halved,
+/// which keeps its weights positive. Each span has its own cap on halvings,
+/// so spans that only come near `floor` do not use up the halvings of a span
+/// that dips past it.
+///
+/// # Errors
+///
+/// A piece with a zero weight, or weights of both signs, has no such hull,
+/// and samples of it prove nothing: the revolve is refused. So is a span
+/// whose cap on halvings runs out while a piece of it is still between: a
+/// hull not settled is not clear of `floor`.
+fn spline_dips_below(
+    curve: &NurbsCurve,
+    f: &impl Fn(Point3) -> f64,
+    floor: f64,
+) -> Result<bool, crate::OperationsError> {
+    const MAX_HALVINGS: usize = 4096;
+    let unbounded = || crate::OperationsError::InvalidInput {
+        reason: "the revolve profile has a rational span with a zero weight or weights of \
+                 both signs, which the test against the axis cannot bound"
+            .into(),
+    };
+    let unsettled = || crate::OperationsError::InvalidInput {
+        reason: "the revolve profile has a span whose hull still reaches across the axis after \
+                 the test against the axis has halved it as far as it may"
+            .into(),
+    };
+    let segments =
+        brepkit_math::nurbs::decompose::curve_to_bezier_segments(curve).map_err(|e| match e {
+            brepkit_math::MathError::PoleAtInfinity { .. } => unbounded(),
+            other => other.into(),
+        })?;
+    let mut pieces = Vec::with_capacity(segments.len());
+    for segment in segments {
+        let weights = segment.weights();
+        if weights.iter().all(|&w| w > 0.0) {
+            pieces.push(segment);
+        } else if weights.iter().all(|&w| w < 0.0) {
+            pieces.push(NurbsCurve::new(
+                segment.degree(),
+                segment.knots().to_vec(),
+                segment.control_points().to_vec(),
+                weights.iter().map(|w| -w).collect(),
+            )?);
+        } else {
+            return Err(unbounded());
+        }
+    }
+    for span in pieces {
+        let mut open = vec![span];
+        let mut halvings = 0;
+        while let Some(piece) = open.pop() {
+            if piece.control_points().iter().all(|&p| f(p) >= floor) {
+                continue;
+            }
+            let (d0, d1) = piece.domain();
+            let middle = 0.5 * (d0 + d1);
+            if [d0, middle, d1]
+                .iter()
+                .any(|&t| f(piece.evaluate(t)) < floor)
+            {
+                return Ok(true);
+            }
+            if halvings >= MAX_HALVINGS {
+                return Err(unsettled());
+            }
+            halvings += 1;
+            let (left, right) = brepkit_math::nurbs::knot_ops::curve_split(&piece, middle)?;
+            open.push(left);
+            open.push(right);
+        }
+    }
+    Ok(false)
 }
 
 /// How near 1 a cap's normal may read along the axis before its plane could

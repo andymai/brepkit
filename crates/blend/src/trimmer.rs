@@ -1770,7 +1770,7 @@ fn batch_node_for_point(
 /// arrangement piece. NURBS carriers are exactly knot-split; analytic
 /// carriers retain their geometry and derive the trimmed domain from their
 /// endpoint vertices.
-fn edge_curve_for_span(
+pub fn edge_curve_for_span(
     curve: &EdgeCurve,
     curve_t0: f64,
     curve_t1: f64,
@@ -3430,6 +3430,13 @@ type Flat = (f64, f64);
 /// closed contact (the contact takes sixteen times as many).
 const HOLE_SAMPLES: u32 = 64;
 
+#[cfg(test)]
+thread_local! {
+    /// The curve points [`check_holes_clear_of_closed_contacts`] read on a
+    /// plane face, so a test can see that it reads none where it needs none.
+    static PLANE_HOLE_GUARD_SAMPLES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// A curve sampled in a plane face's frame: its polyline, and how far the
 /// curve can stray from it (the largest gap between the curve, read at a
 /// span's quarter points and middle, and that span's chord, doubled for what
@@ -3563,6 +3570,23 @@ fn check_holes_clear_of_closed_contacts(
     let FaceSurface::Plane { normal, .. } = face.surface() else {
         return check_holes_clear_in_space(topo, face_id, restrictions);
     };
+    // With no hole, only two closed contacts can meet: an open contact, or
+    // one closed contact alone, has nothing to be checked against.
+    let has_holes = !face.inner_wires().is_empty();
+    if !has_holes {
+        let closed = restrictions
+            .iter()
+            .filter(
+                |r| match (r.contact_3d.first(), r.contact_3d.last(), &r.curve) {
+                    (Some(&first), Some(&last), Some(_)) => (first - last).length() <= VERTEX_TOL,
+                    _ => false,
+                },
+            )
+            .count();
+        if closed < 2 {
+            return Ok(());
+        }
+    }
     let u_axis = normal
         .cross(brepkit_math::vec::Vec3::new(1.0, 0.0, 0.0))
         .normalize()
@@ -3584,6 +3608,8 @@ fn check_holes_clear_of_closed_contacts(
                   forward: bool,
                   n: u32,
                   line: &mut FlatPolyline| {
+        #[cfg(test)]
+        PLANE_HOLE_GUARD_SAMPLES.with(|count| count.set(count.get() + n as usize));
         let (t0, t1) = curve.domain_with_endpoints(a, b);
         let at = |k: f64| {
             let k = if forward { k } else { f64::from(n) - k };
@@ -3613,6 +3639,9 @@ fn check_holes_clear_of_closed_contacts(
             continue;
         };
         if (first - last).length() > VERTEX_TOL {
+            if !has_holes {
+                continue;
+            }
             let mut contact = FlatPolyline {
                 points: Vec::new(),
                 sag: 0.0,
@@ -6098,6 +6127,84 @@ mod tests {
             check_holes_clear_of_closed_contacts(&topo, face, std::slice::from_ref(&own)).is_ok()
         );
         assert!(check_holes_clear_of_closed_contacts(&topo, face, &[rim, own]).is_err());
+    }
+
+    /// An open contact along the first outer edge of `face` (from
+    /// (-10, -10) to (10, -10)), standing `width` off it.
+    fn open_contact_along_first_edge(
+        topo: &Topology,
+        face: FaceId,
+        width: f64,
+    ) -> ParametricRestriction {
+        let outer = topo.face(face).unwrap().outer_wire();
+        let edge = topo.wire(outer).unwrap().edges()[0].edge();
+        ParametricRestriction {
+            contact_3d: vec![
+                Point3::new(-10.0, -10.0 + width, 0.0),
+                Point3::new(10.0, -10.0 + width, 0.0),
+            ],
+            keep: TrimKeep::AwayFrom(Point3::new(0.0, -10.0, 0.0)),
+            curve: Some(EdgeCurve::Line),
+            pcurve: None,
+            source_edges: vec![edge],
+        }
+    }
+
+    fn hole_guard_samples(
+        topo: &Topology,
+        face: FaceId,
+        restrictions: &[ParametricRestriction],
+    ) -> (bool, usize) {
+        PLANE_HOLE_GUARD_SAMPLES.with(|count| count.set(0));
+        let ok = check_holes_clear_of_closed_contacts(topo, face, restrictions).is_ok();
+        (ok, PLANE_HOLE_GUARD_SAMPLES.with(std::cell::Cell::get))
+    }
+
+    /// On a face with no hole, an open contact and a lone closed contact
+    /// have nothing to be checked against, so the guard reads no curve. With
+    /// a hole, it reads them, and still refuses a hole under the band.
+    #[test]
+    fn hole_guard_reads_no_curve_on_a_face_with_no_hole() {
+        let away = TrimKeep::AwayFrom(Point3::new(9.0, 0.0, 0.0));
+        let mut topo = Topology::new();
+        let (face, _) = face_with_round_holes(&mut topo, &[]);
+        let open = open_contact_along_first_edge(&topo, face, 1.0);
+        assert_eq!(
+            hole_guard_samples(&topo, face, &[open, closed_contact(3.0, away, vec![])]),
+            (true, 0)
+        );
+
+        let (clear, _) = face_with_round_holes(&mut topo, &[((0.0, 5.0), 1.0)]);
+        let open = open_contact_along_first_edge(&topo, clear, 1.0);
+        let (ok, samples) = hole_guard_samples(&topo, clear, &[open]);
+        assert!(ok);
+        assert!(samples > 0);
+
+        let (under, _) = face_with_round_holes(&mut topo, &[((0.0, -9.5), 0.2)]);
+        let open = open_contact_along_first_edge(&topo, under, 1.0);
+        assert!(!hole_guard_samples(&topo, under, &[open]).0);
+
+        // Two closed contacts that cross are still refused on a face with
+        // no hole.
+        let (plain, _) = face_with_round_holes(&mut topo, &[]);
+        let crossing = closed_contact(3.0, away, vec![]);
+        let circle = brepkit_math::curves::Circle3D::new(
+            Point3::new(4.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            2.0,
+        )
+        .unwrap();
+        let start = circle.evaluate(0.0);
+        let other = ParametricRestriction {
+            contact_3d: vec![start, start],
+            keep: away,
+            curve: Some(EdgeCurve::Circle(circle)),
+            pcurve: None,
+            source_edges: vec![],
+        };
+        let (ok, samples) = hole_guard_samples(&topo, plain, &[crossing, other]);
+        assert!(!ok);
+        assert!(samples > 0);
     }
 
     #[test]

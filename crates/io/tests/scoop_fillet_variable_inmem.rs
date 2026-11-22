@@ -9,6 +9,14 @@
 //! issue's 25-63 boundary-edge measurements). The booleans are exonerated —
 //! chain replay shows every fuse/cut input-clean except for this operand.
 //!
+//! The walking engine's tool for each captured case is closed by edge count
+//! and orientation-consistent, which the tests here pin on the builder
+//! itself. Its two-stripe corners still cross: `validate_solid` reads a
+//! face's wire that crosses itself in each case, and plane faces over one
+//! area in two (the base case's mesh has 12 open edges at deflection 0.01,
+//! the depth step's 43). `fillet_v2_variable` refuses that tool, naming each
+//! planned edge.
+//!
 //! Replay tooling: `crates/io/examples/replay_fillet_variable.rs` (matches
 //! spec edges by captured endpoint pairs; tool-side midpoint params are not
 //! portable).
@@ -18,9 +26,11 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use brepkit_blend::fillet_builder::FilletBuilder;
+use brepkit_blend::radius_law::RadiusLaw;
 use brepkit_io::arena_io::deserialize_solid;
 use brepkit_math::vec::Point3;
-use brepkit_operations::fillet::{FilletRadiusLaw, fillet_variable};
+use brepkit_operations::blend_ops::fillet_v2_variable;
 use brepkit_topology::Topology;
 use brepkit_topology::solid::SolidId;
 
@@ -124,24 +134,57 @@ fn same_sense_pair_count(topo: &Topology, solid: SolidId) -> usize {
         .count()
 }
 
+/// The walking engine's tool, built as `fillet_v2_variable` builds it (the
+/// edges of one radius in one set), is closed by edge count with each edge
+/// used both ways; `fillet_v2_variable` refuses it for a face whose wire
+/// crosses itself.
 fn assert_watertight(input: &str, spec: &str) {
     let mut topo = Topology::new();
     let (solid, picks) = load_named_case(&mut topo, input, spec);
     assert_eq!(free_edge_count(&topo, solid), 0, "operand must be clean");
-    let edge_laws: Vec<_> = picks
-        .into_iter()
-        .map(|(e, r)| (e, FilletRadiusLaw::Constant(r)))
-        .collect();
-    let result = fillet_variable(&mut topo, solid, &edge_laws).unwrap();
-    let free = free_edge_count(&topo, result);
+    let mut sets: Vec<(f64, Vec<brepkit_topology::edge::EdgeId>)> = Vec::new();
+    for &(edge, r) in &picks {
+        match sets
+            .iter_mut()
+            .find(|(radius, _)| (radius - r).abs() < 1e-12)
+        {
+            Some((_, edges)) => edges.push(edge),
+            None => sets.push((r, vec![edge])),
+        }
+    }
+    let mut built_topo = topo.clone();
+    let mut builder = FilletBuilder::new(&mut built_topo, solid);
+    for (r, edges) in &sets {
+        builder.add_edges(edges, *r);
+    }
+    let built = builder.build().unwrap();
+    assert!(built.failed.is_empty());
+    let result = built.solid;
+    let free = free_edge_count(&built_topo, result);
     assert_eq!(
         free, 0,
         "fillet must produce a watertight solid, got {free} free edges"
     );
-    let ss = same_sense_pair_count(&topo, result);
+    let ss = same_sense_pair_count(&built_topo, result);
     assert_eq!(
         ss, 0,
         "fillet must emit orientation-consistent faces, got {ss} same-sense edge pairs"
+    );
+
+    let laws = picks
+        .into_iter()
+        .map(|(e, r)| (e, RadiusLaw::Constant(r)))
+        .collect();
+    let refused = fillet_v2_variable(&mut topo, solid, laws).unwrap();
+    assert_eq!(refused.solid, solid);
+    assert!(refused.succeeded.is_empty() && !refused.failed.is_empty());
+    assert!(
+        refused
+            .failed
+            .iter()
+            .all(|(_, e)| e.to_string().contains("crosses itself")),
+        "{:?}",
+        refused.failed
     );
 }
 

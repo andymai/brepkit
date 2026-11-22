@@ -1448,14 +1448,11 @@ fn polyline_fraction(along: &[Point3], q: Point3) -> f64 {
 /// endpoints with the section: a lens (a scoop bulging into a corner wall
 /// between two crossings of the wall's seam line), which
 /// `merge_duplicate_edges` folds into one edge, putting the seam line on the
-/// scoop face. The halves meet at its middle, or where another boundary
-/// edge of the pair crosses the section near its middle (a rod's seam at the
-/// bottom of its U on a bore): a split beside that crossing would leave a
-/// sliver of the section between the two. A crossing farther off is a pave
-/// of its own and leaves the middle split in place: a half that ran to it
-/// could span more than half a turn of a cylinder, and its far end then
-/// reads a period short (a pin's section round a bore's mouth, cut at the
-/// pin's seam).
+/// scoop face. The halves meet where another boundary edge of the pair
+/// crosses the section (a rod's seam at the bottom of its U on a bore, a
+/// pin's seam on its section round a bore's mouth), and at its middle when
+/// none does: a middle split beside a crossing would leave a sliver of the
+/// section between the two.
 fn split_lens_off_boundary_edge(
     topo: &Topology,
     arena: &GfaArena,
@@ -1510,9 +1507,9 @@ fn split_lens_off_boundary_edge(
 }
 
 /// Where a boundary edge of one face of the pair crosses the other face
-/// on a marched section within a twentieth of its span of its middle: the
-/// crossing's vertex position and its parameter on the section, the
-/// crossing nearest the middle when several lie there.
+/// on a marched section, clear of its ends: the crossing's vertex position
+/// and its parameter on the section, the crossing nearest the middle when
+/// several lie there.
 fn crossing_inside_section(
     topo: &Topology,
     arena: &GfaArena,
@@ -1541,7 +1538,11 @@ fn crossing_inside_section(
     let (edges_a, edges_b) = (boundary(fa), boundary(fb));
     let (t0, t1) = raw.t_range;
     let t_mid = 0.5 * (t0 + t1);
-    let near = 0.05 * (t1 - t0);
+    let (lo, hi) = (t0.min(t1), t0.max(t1));
+    let clear_of_ends = |p: Point3| {
+        (p - raw.p_start).length() > JunctionRegistry::ADOPT_MAX
+            && (p - raw.p_end).length() > JunctionRegistry::ADOPT_MAX
+    };
     let mut best: Option<(f64, Point3)> = None;
     for i in &arena.interference.ef {
         let crate::ds::Interference::EF {
@@ -1563,7 +1564,11 @@ fn crossing_inside_section(
         let Ok(hit) = project_point_to_curve(curve, p, 1e-12) else {
             continue;
         };
-        if hit.distance > JunctionRegistry::ADOPT_MAX || (hit.parameter - t_mid).abs() > near {
+        if hit.distance > JunctionRegistry::ADOPT_MAX
+            || hit.parameter <= lo
+            || hit.parameter >= hi
+            || !clear_of_ends(p)
+        {
             continue;
         }
         if best.is_none_or(|(t, _)| (hit.parameter - t_mid).abs() < (t - t_mid).abs()) {
@@ -4260,6 +4265,14 @@ fn trim_ellipse_to_boundary_crossings(
                 SecCurve::Circ(c) => EdgeCurve::Circle((*c).clone()),
             }
         }
+        /// Whether the arc from `t0` to `t1` is shorter than a millionth of
+        /// the curve's smaller radius: its two ends are one crossing.
+        fn is_sliver(&self, t0: f64, t1: f64) -> bool {
+            match self {
+                SecCurve::Ell(e) => ellipse_arc_is_sliver(e, t0, t1),
+                SecCurve::Circ(_) => (t1 - t0) < 1e-6,
+            }
+        }
     }
     let sec = match &raw.curve {
         EdgeCurve::Ellipse(e) => SecCurve::Ell(e),
@@ -4655,8 +4668,7 @@ fn trim_ellipse_to_boundary_crossings(
         {
             continue;
         }
-        // Skip a degenerate sliver (the two crossings coincide angularly).
-        if (t1 - t0) < 1e-6 {
+        if sec.is_sliver(t0, t1) {
             continue;
         }
         // Split into sub-arcs each spanning strictly less than π, mirroring
@@ -4697,6 +4709,35 @@ fn trim_ellipse_to_boundary_crossings(
     }
 
     if arcs.is_empty() { None } else { Some(arcs) }
+}
+
+/// Whether the arc of `ellipse` from `t0` to `t1` is shorter than a
+/// millionth of its semi-minor axis. The arc is read by its length, not its
+/// angle. A flat leaning 5e-8 off the axis of a bore of radius 10 meets the
+/// bore in an ellipse of semi-major axis 2e8, where a millionth of a radian
+/// runs 170 along the curve.
+///
+/// The length is bounded above: the speed `|(a sin t, b cos t)|` is at most
+/// `|(a S, b C)|`, with `S` and `C` the largest `|sin|` and `|cos|` over the
+/// span. The speed at the span's middle can be far less than at its ends,
+/// as across the tip of a long ellipse's major axis.
+fn ellipse_arc_is_sliver(ellipse: &brepkit_math::curves::Ellipse3D, t0: f64, t1: f64) -> bool {
+    use std::f64::consts::{FRAC_PI_2, PI};
+    let (lo, hi) = (t0.min(t1), t0.max(t1));
+    // Whether the span holds `phase + k π` for some whole `k`.
+    let holds = |phase: f64| ((lo - phase) / PI).ceil() <= ((hi - phase) / PI).floor();
+    let sin_most = if holds(FRAC_PI_2) {
+        1.0
+    } else {
+        lo.sin().abs().max(hi.sin().abs())
+    };
+    let cos_most = if holds(0.0) {
+        1.0
+    } else {
+        lo.cos().abs().max(hi.cos().abs())
+    };
+    let (a, b) = (ellipse.semi_major(), ellipse.semi_minor());
+    (a * sin_most).hypot(b * cos_most) * (hi - lo) < 1e-6 * b
 }
 
 /// Whether a closed plane section through `point`, crossing none of the
@@ -10796,6 +10837,30 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::*;
 
+    /// An arc of a long thin ellipse across the tip of its major axis is
+    /// slow at its middle and fast at its ends: over 8e-7 radians about the
+    /// tip of the ellipse with semi-axes 2e9 and 100, the speed at the
+    /// middle times the span is 8e-5, but the two chords from the tip to
+    /// the ends alone are 3.3e-4 long, more than a millionth of 100.
+    #[test]
+    fn an_ellipse_arc_is_a_sliver_only_when_it_is_short() {
+        use brepkit_math::curves::Ellipse3D;
+        use std::f64::consts::PI;
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        let origin = Point3::new(0.0, 0.0, 0.0);
+        let long = Ellipse3D::new(origin, z, 2e9, 100.0).unwrap();
+        let (t0, t1) = (PI - 4e-7, PI + 4e-7);
+        let chords = (long.evaluate(t0) - long.evaluate(PI)).length()
+            + (long.evaluate(PI) - long.evaluate(t1)).length();
+        assert!(chords > 3e-4, "chords {chords}");
+        assert!(!ellipse_arc_is_sliver(&long, t0, t1));
+        assert!(ellipse_arc_is_sliver(&long, PI - 1e-10, PI + 1e-10));
+        let bore = Ellipse3D::new(origin, z, 2e8, 10.0).unwrap();
+        let t = 2.0 * PI / 3.0;
+        assert!(!ellipse_arc_is_sliver(&bore, t, t + 6.9e-7));
+        assert!(ellipse_arc_is_sliver(&bore, t, t + 1e-15));
+    }
+
     /// The ring in `z = 0` between radii 10 and 10.02 about the origin, its
     /// rims whole circles, or rational quadratics in four quarters when
     /// `spline`.
@@ -13846,5 +13911,74 @@ mod tests {
             assert!(!extent.contains_strict(above(5e-6), 1e-5));
         }
         assert!(checked, "neither cap holds the pole");
+    }
+
+    /// A section along the first half of a straight spline from the origin
+    /// to `(20, 0, 0)`, its parameter span `(0, 0.5)`, and boundary edges of
+    /// one face of the pair crossing the other face at points on the spline.
+    /// Points at either end of the section, within `ADOPT_MAX` of an end, and
+    /// on the spline past the section's end are none of its crossings. Of two
+    /// crossings inside it, both off its middle by more than a twentieth of
+    /// its span, the one nearer the middle is taken, and the two halves it
+    /// leaves are each longer than `ADOPT_MAX`.
+    #[test]
+    fn a_crossing_anywhere_inside_a_section_splits_it_and_none_at_its_ends() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        use brepkit_topology::test_utils::make_unit_square_face;
+
+        let mut topo = Topology::new();
+        let fa = make_unit_square_face(&mut topo);
+        let fb = make_unit_square_face(&mut topo);
+        let wire = topo.face(fa).unwrap().outer_wire();
+        let edge = topo.wire(wire).unwrap().edges()[0].edge();
+        let along = |x: f64| Point3::new(x, 0.0, 0.0);
+        let spline = NurbsCurve::new(
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![along(0.0), along(20.0)],
+            vec![1.0, 1.0],
+        )
+        .unwrap();
+        let raw = RawCurve {
+            curve: EdgeCurve::NurbsCurve(spline),
+            bbox: Aabb3::from_points([along(0.0), along(10.0)]),
+            t_range: (0.0, 0.5),
+            p_start: along(0.0),
+            p_end: along(10.0),
+        };
+        let near_end = 0.5 * JunctionRegistry::ADOPT_MAX;
+        let mut arena = GfaArena::new();
+        let cross_at = |topo: &mut Topology, arena: &mut GfaArena, x: f64| {
+            let v = topo.add_vertex(Vertex::new(along(x), 1e-7));
+            arena.interference.ef.push(crate::ds::Interference::EF {
+                edge,
+                face: fb,
+                new_vertex: Some(v),
+                parameter: None,
+                run: None,
+            });
+        };
+        for x in [0.0, near_end, 10.0 - near_end, 10.0, 15.0] {
+            cross_at(&mut topo, &mut arena, x);
+        }
+        assert_eq!(
+            crossing_inside_section(&topo, &arena, fa, fb, &raw),
+            None,
+            "a point at, by or past an end of the section is taken"
+        );
+        for x in [2.0, 7.4] {
+            cross_at(&mut topo, &mut arena, x);
+        }
+        let (t, p) = crossing_inside_section(&topo, &arena, fa, fb, &raw)
+            .expect("a crossing inside the section");
+        assert!((t - 0.37).abs() < 1e-9, "the crossing taken lies at {t}");
+        assert!((p - along(7.4)).length() < 1e-12);
+        assert!(
+            (p - raw.p_start).length() > JunctionRegistry::ADOPT_MAX
+                && (raw.p_end - p).length() > JunctionRegistry::ADOPT_MAX
+                && t - raw.t_range.0 > 0.0
+                && raw.t_range.1 - t > 0.0,
+            "a half of the section at {t} has no length"
+        );
     }
 }

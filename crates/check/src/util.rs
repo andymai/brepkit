@@ -4,7 +4,7 @@ use brepkit_math::aabb::Aabb3;
 use brepkit_math::madd::Madd;
 use brepkit_math::vec::{Point2, Point3, Vec3};
 use brepkit_topology::Topology;
-use brepkit_topology::edge::EdgeCurve;
+use brepkit_topology::edge::{EdgeCurve, EdgeId};
 use brepkit_topology::face::{FaceId, FaceSurface};
 
 use crate::CheckError;
@@ -403,28 +403,62 @@ fn expand_aabb_for_curve(aabb: &mut Aabb3, curve: &EdgeCurve) {
     }
 }
 
+/// A box that holds an edge: its ends, and the whole circle or ellipse of
+/// an arc, or a B-spline's control points. `None` for a B-spline with a
+/// weight that is not positive, whose control points need not hold it.
+///
+/// # Errors
+///
+/// Returns an error if the edge or its vertices are missing.
+pub fn edge_aabb(topo: &Topology, edge_id: EdgeId) -> Result<Option<Aabb3>, CheckError> {
+    let edge = topo.edge(edge_id)?;
+    if let EdgeCurve::NurbsCurve(nc) = edge.curve()
+        && !nc.weights().iter().all(|&w| w > 0.0)
+    {
+        return Ok(None);
+    }
+    let ends = [
+        topo.vertex(edge.start())?.point(),
+        topo.vertex(edge.end())?.point(),
+    ];
+    let Some(mut aabb) = Aabb3::try_from_points(ends) else {
+        return Ok(None);
+    };
+    expand_aabb_for_curve(&mut aabb, edge.curve());
+    Ok(Some(aabb))
+}
+
 /// Compute the axis-aligned bounding box of a face.
 ///
 /// Starts from the wire vertex positions, expands for curved-edge extent,
 /// then expands for surface curvature (spheres, cylinders, tori, NURBS).
+/// The holes count too: a band with no seam has one rim as its outer wire
+/// and the other as its hole.
 ///
 /// # Errors
 ///
 /// Returns an error if any topology entity referenced by the face is missing.
 pub fn face_aabb(topo: &Topology, face_id: FaceId) -> Result<Aabb3, CheckError> {
     let face = topo.face(face_id)?;
-    let wire = topo.wire(face.outer_wire())?;
+    let mut edges = Vec::new();
+    for w in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+        edges.extend(
+            topo.wire(w)?
+                .edges()
+                .iter()
+                .map(brepkit_topology::wire::OrientedEdge::edge),
+        );
+    }
     let mut points = Vec::new();
-    for oe in wire.edges() {
-        let edge = topo.edge(oe.edge())?;
+    for &e in &edges {
+        let edge = topo.edge(e)?;
         points.push(topo.vertex(edge.start())?.point());
         points.push(topo.vertex(edge.end())?.point());
     }
     let mut aabb = Aabb3::try_from_points(points.iter().copied())
         .ok_or_else(|| CheckError::ClassificationFailed("face has no vertices".into()))?;
-    for oe in wire.edges() {
-        let edge = topo.edge(oe.edge())?;
-        expand_aabb_for_curve(&mut aabb, edge.curve());
+    for &e in &edges {
+        expand_aabb_for_curve(&mut aabb, topo.edge(e)?.curve());
     }
     expand_aabb_for_surface(&mut aabb, face.surface());
     Ok(aabb)

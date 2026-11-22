@@ -2709,7 +2709,6 @@ fn build_section_edges(
     for source in sources {
         match source {
             SectionSource::Curve(curve_idx) => {
-                use brepkit_math::vec::Point2;
                 // Use the COMPLETE intersection curve, not individual PBs.
                 // The face splitter needs whole curves to form proper loops.
                 let curve_ds = match arena.curves.get(*curve_idx) {
@@ -2879,65 +2878,9 @@ fn build_section_edges(
                         None,
                     );
 
-                    // For closed curves on periodic surfaces (e.g. circle on cylinder),
-                    // the pcurve wraps around and evaluate(0) ≈ evaluate(1). We need
-                    // UV endpoints that span the full period so the face splitter
-                    // sees the section edge as a full-width cut.
                     let is_closed = (start - end).length() < tol * 100.0;
-                    let (u_per, _v_per) = super::pcurve_compute::surface_periods(face.surface());
-                    let (start_uv_pt, end_uv_pt) = if is_closed && u_per.is_some() {
-                        let period = u_per.unwrap_or(std::f64::consts::TAU);
-                        // Project the start 3D point to UV.
-                        let start_uv = face.surface().project_point(start);
-                        if let Some((su, sv)) = start_uv {
-                            // Sample the curve a quarter turn on from its start to
-                            // determine winding direction. A closed circle's domain
-                            // starts at its own angle origin, which need not be the
-                            // start: a quarter of the way on from there can be the
-                            // start's antipode, which reads either way round.
-                            let (t0, t1) = curve_3d.domain_with_endpoints(start, end);
-                            let t_start = match &curve_3d {
-                                EdgeCurve::Circle(c) => c.project(start),
-                                _ => t0,
-                            };
-                            let mid_3d = curve_3d.evaluate_with_endpoints(
-                                (t1 - t0).madd(0.25, t_start),
-                                start,
-                                end,
-                            );
-                            let mid_uv = face.surface().project_point(mid_3d);
-                            if let Some((mu, _mv)) = mid_uv {
-                                // Determine winding: does the curve go in +u or -u
-                                // direction from start?
-                                let du = mu - su;
-                                // Normalize du to [-period/2, period/2].
-                                let du_norm = du - (du / period).round() * period;
-                                let end_u = if du_norm < 0.0 {
-                                    su - period
-                                } else {
-                                    su + period
-                                };
-                                (Some(Point2::new(su, sv)), Some(Point2::new(end_u, sv)))
-                            } else {
-                                let s = pcurve.evaluate(0.0);
-                                (Some(s), Some(Point2::new(s.x() - period, s.y())))
-                            }
-                        } else {
-                            // Plane surface — project via pcurve.
-                            (Some(pcurve.evaluate(0.0)), Some(pcurve.evaluate(1.0)))
-                        }
-                    } else if matches!(pcurve, brepkit_math::curves2d::Curve2D::Line(_)) {
-                        // Line2D pcurves use arc-length parameterization, so
-                        // `evaluate(1.0)` is one UV unit along the line, not the
-                        // endpoint (e.g. a horizontal circle on a cylinder maps
-                        // to a Line2D spanning the angular extent). Leave the
-                        // endpoints unset; downstream consumers fall back to
-                        // `uv_endpoints_from_pcurve`, which measures the true
-                        // 2D length.
-                        (None, None)
-                    } else {
-                        (Some(pcurve.evaluate(0.0)), Some(pcurve.evaluate(1.0)))
-                    };
+                    let (start_uv_pt, end_uv_pt) =
+                        section_end_uv_hints(&curve_3d, start, is_closed, face.surface(), &pcurve);
 
                     sections.push(SectionEdge {
                         curve_3d,
@@ -3272,6 +3215,277 @@ fn build_section_edges(
     dedup_collinear_sections(&mut sections, tol);
 
     sections
+}
+
+/// The end UVs a section hands the face splitter, or none for the splitter
+/// to recover from the pcurve.
+fn section_end_uv_hints(
+    curve_3d: &EdgeCurve,
+    start: Point3,
+    is_closed: bool,
+    surface: &FaceSurface,
+    pcurve: &brepkit_math::curves2d::Curve2D,
+) -> (
+    Option<brepkit_math::vec::Point2>,
+    Option<brepkit_math::vec::Point2>,
+) {
+    // A closed section's pcurve ends where it starts, so a loop round the axis
+    // of a periodic face takes its end UV from its run in u, which makes the
+    // face splitter see a full-width cut.
+    let (u_per, _v_per) = super::pcurve_compute::surface_periods(surface);
+    if let Some((s, e)) = u_per
+        .filter(|_| is_closed)
+        .and_then(|period| closed_section_end_uvs(curve_3d, start, surface, period))
+    {
+        return (Some(s), Some(e));
+    }
+    if matches!(pcurve, brepkit_math::curves2d::Curve2D::Line(_)) {
+        // Line2D pcurves use arc-length parameterization, so
+        // `evaluate(1.0)` is one UV unit along the line, not the
+        // endpoint (e.g. a horizontal circle on a cylinder maps
+        // to a Line2D spanning the angular extent). Leave the
+        // endpoints unset; downstream consumers fall back to
+        // `uv_endpoints_from_pcurve`, which measures the true
+        // 2D length.
+        (None, None)
+    } else {
+        (Some(pcurve.evaluate(0.0)), Some(pcurve.evaluate(1.0)))
+    }
+}
+
+/// The UVs at the ends of a closed section on a face periodic in `u`. The
+/// end lies past the start by the section's run in `u`: one period for a loop
+/// round the axis, either way, and none for a loop on one side of it. `None`
+/// when the loop passes through the axis, where `u` has no value.
+fn closed_section_end_uvs(
+    curve_3d: &EdgeCurve,
+    start: Point3,
+    surface: &FaceSurface,
+    period: f64,
+) -> Option<(brepkit_math::vec::Point2, brepkit_math::vec::Point2)> {
+    use brepkit_math::vec::Point2;
+    let (su, sv) = surface.project_point(start)?;
+    let turns = match curve_3d {
+        EdgeCurve::Line => return None,
+        EdgeCurve::Circle(c) => conic_turns_about_u_axis(
+            surface,
+            c.center(),
+            (c.u_axis(), c.radius()),
+            (c.v_axis(), c.radius()),
+        )?,
+        EdgeCurve::Ellipse(e) => conic_turns_about_u_axis(
+            surface,
+            e.center(),
+            (e.u_axis(), e.semi_major()),
+            (e.v_axis(), e.semi_minor()),
+        )?,
+        EdgeCurve::NurbsCurve(n) => (spline_u_run(n, surface)? / period).round(),
+    };
+    let end_u = period.madd(turns, su);
+    Some((Point2::new(su, sv), Point2::new(end_u, sv)))
+}
+
+/// The frame `surface`'s `u` is read in: a point on its axis, and the axes
+/// `u` runs from (`x`) and toward (`y`), so `u` is a point's angle about the
+/// axis from `x`.
+fn u_frame_of(
+    surface: &FaceSurface,
+) -> Option<(Point3, brepkit_math::vec::Vec3, brepkit_math::vec::Vec3)> {
+    Some(match surface {
+        FaceSurface::Cylinder(c) => (c.origin(), c.x_axis(), c.y_axis()),
+        FaceSurface::Cone(c) => (c.apex(), c.x_axis(), c.y_axis()),
+        FaceSurface::Sphere(s) => (s.center(), s.x_axis(), s.y_axis()),
+        FaceSurface::Torus(t) => (t.center(), t.x_axis(), t.y_axis()),
+        FaceSurface::Plane { .. } | FaceSurface::Nurbs(_) => return None,
+    })
+}
+
+/// The turns a closed circle or ellipse makes about `surface`'s `u` axis, the
+/// conic running from `a` toward `b` (each a unit axis with its radius). A
+/// plane conic winds a line once when the line passes through the region it
+/// bounds, and not at all otherwise. `None` when the conic comes within the
+/// linear tolerance of the axis, where `u` has no value: there the count
+/// turns on rounding. Clear of the axis, the count is exact: the axis then
+/// meets the conic's plane at least that far from the conic, or lies too
+/// near parallel to the plane to pass through the conic's region.
+fn conic_turns_about_u_axis(
+    surface: &FaceSurface,
+    center: Point3,
+    (a, ra): (brepkit_math::vec::Vec3, f64),
+    (b, rb): (brepkit_math::vec::Vec3, f64),
+) -> Option<f64> {
+    let (on_axis, x, y) = u_frame_of(surface)?;
+    let axis = x.cross(y).normalize().ok()?;
+    let reach = (center - on_axis).length() + ra.max(rb);
+    let tol = brepkit_math::tolerance::Tolerance::new().linear * reach.max(1.0);
+    let normal = a.cross(b);
+    let along = axis.dot(normal);
+    if conic_axis_clearance(center, (a, ra), (b, rb), (on_axis, axis), along) <= tol
+        && conic_axis_gap(center, (a, ra), (b, rb), on_axis, axis) <= tol
+    {
+        return None;
+    }
+    if along.abs() < 1e-12 {
+        return Some(0.0);
+    }
+    let pierce = on_axis + axis * ((center - on_axis).dot(normal) / along);
+    let d = pierce - center;
+    let inside = (d.dot(a) / ra).powi(2) + (d.dot(b) / rb).powi(2);
+    Some(if inside < 1.0 { along.signum() } else { 0.0 })
+}
+
+/// A lower bound on the distance from the conic `center + ra cos(t) a +
+/// rb sin(t) b` to the line through `on_axis` along the unit `axis`, at no
+/// more cost than a few products. Every point of the conic lies within `ra`
+/// of its centre, and in its plane between `rb` and `ra` from the centre
+/// (`ra >= rb` or the other way). A point of the plane `d` from where the axis
+/// pierces it lies at least `d` times the sine of the axis's slope to the
+/// plane (`along`, the axis on the plane's normal) from the axis.
+fn conic_axis_clearance(
+    center: Point3,
+    (a, ra): (brepkit_math::vec::Vec3, f64),
+    (b, rb): (brepkit_math::vec::Vec3, f64),
+    (on_axis, axis): (Point3, brepkit_math::vec::Vec3),
+    along: f64,
+) -> f64 {
+    let (near, far) = (ra.min(rb), ra.max(rb));
+    let from_center = center - on_axis;
+    let off_axis = (from_center - axis * from_center.dot(axis)).length() - far;
+    if along.abs() < 1e-12 {
+        return off_axis;
+    }
+    let normal = a.cross(b);
+    let pierce = on_axis + axis * (from_center.dot(normal) / along);
+    let spread = (pierce - center).length();
+    let in_plane = (near - spread).max(spread - far);
+    off_axis.max(in_plane * along.abs())
+}
+
+/// The least distance from the conic `center + ra cos(t) a + rb sin(t) b` to
+/// the line through `on_axis` along the unit `axis`. Its square is a
+/// trigonometric polynomial of degree two in `t`, with at most two minima:
+/// each minimum among 256 samples is narrowed between its neighbours.
+fn conic_axis_gap(
+    center: Point3,
+    (a, ra): (brepkit_math::vec::Vec3, f64),
+    (b, rb): (brepkit_math::vec::Vec3, f64),
+    on_axis: Point3,
+    axis: brepkit_math::vec::Vec3,
+) -> f64 {
+    const SAMPLES: u32 = 256;
+    let off = |v: brepkit_math::vec::Vec3| v - axis * v.dot(axis);
+    let (c, a, b) = (off(center - on_axis), off(a) * ra, off(b) * rb);
+    let square = |t: f64| {
+        let (sin, cos) = t.sin_cos();
+        (c + a * cos + b * sin).length_squared()
+    };
+    let step = std::f64::consts::TAU / f64::from(SAMPLES);
+    let at = |k: u32| step * f64::from(k);
+    let mut least = f64::INFINITY;
+    for k in 0..SAMPLES {
+        let here = square(at(k));
+        least = least.min(here);
+        let (before, after) = (square(at(k + SAMPLES - 1)), square(at(k + 1)));
+        // A sample above either neighbour, or level with both, holds no
+        // minimum to narrow.
+        if here > before || here > after || !(here < before || here < after) {
+            continue;
+        }
+        let (mut lo, mut hi) = (at(k) - step, at(k) + step);
+        for _ in 0..100 {
+            let third = (hi - lo) / 3.0;
+            if square(lo + third) < square(hi - third) {
+                hi -= third;
+            } else {
+                lo += third;
+            }
+        }
+        least = least.min(square(0.5 * (lo + hi)));
+    }
+    least.sqrt()
+}
+
+/// The run in `u` along a closed spline section, in radians, proved piece by
+/// piece. A rational Bezier piece whose weights share a sign lies in the hull
+/// of its control points. When that hull lies in an open half-plane about the
+/// axis, seen along it, and keeps the linear tolerance from it, the piece
+/// turns about the axis by the wrapped angle between its ends. Each span of
+/// the knots is halved until its pieces pass. `None` when a piece still fails
+/// after many halvings: the curve comes within the tolerance of the axis,
+/// where `u` has no value, or has a pole there.
+fn spline_u_run(
+    curve: &brepkit_math::nurbs::curve::NurbsCurve,
+    surface: &FaceSurface,
+) -> Option<f64> {
+    use std::f64::consts::{PI, TAU};
+    const MAX_HALVINGS: u32 = 48;
+    let (on_axis, x, y) = u_frame_of(surface)?;
+    let wrap = |d: f64| TAU.madd(-(d / TAU).round(), d);
+    let reach = curve
+        .control_points()
+        .iter()
+        .map(|&p| (p - on_axis).length())
+        .fold(1.0, f64::max);
+    let tol = brepkit_math::tolerance::Tolerance::new().linear * reach;
+    // A control point seen along the axis, from it.
+    let flat = |q: [f64; 4]| {
+        let d = Point3::new(q[0] / q[3], q[1] / q[3], q[2] / q[3]) - on_axis;
+        (d.dot(x), d.dot(y))
+    };
+    // How far the hull of points seen along the axis keeps from it: the
+    // least distance to a segment between two of them, an edge of the hull
+    // among them.
+    let clearance = |pts: &[(f64, f64)]| {
+        let mut least = f64::INFINITY;
+        for (i, &(ax, ay)) in pts.iter().enumerate() {
+            for &(bx, by) in &pts[i..] {
+                let (ex, ey) = (bx - ax, by - ay);
+                let len2 = ex.madd(ex, ey * ey);
+                let f = if len2 > 0.0 {
+                    (-(ax.madd(ex, ay * ey)) / len2).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                least = least.min(ex.madd(f, ax).hypot(ey.madd(f, ay)));
+            }
+        }
+        least
+    };
+    let (t0, t1) = curve.domain();
+    let mut cuts = vec![t0];
+    for &k in curve.knots() {
+        if k > cuts[cuts.len() - 1] && k < t1 {
+            cuts.push(k);
+        }
+    }
+    cuts.push(t1);
+    let mut pieces: Vec<(f64, f64, u32)> = cuts.windows(2).map(|w| (w[0], w[1], 0)).collect();
+    let mut run = 0.0;
+    while let Some((a, b, halvings)) = pieces.pop() {
+        let hull = brepkit_math::nurbs::decompose::curve_bezier_between(curve, a, b).ok()?;
+        let same_sign = hull.iter().all(|q| q[3] > 0.0) || hull.iter().all(|q| q[3] < 0.0);
+        let turned = same_sign
+            .then(|| hull.iter().map(|&q| flat(q)).collect::<Vec<_>>())
+            .filter(|pts| clearance(pts) > tol)
+            .and_then(|pts| {
+                let angles: Vec<f64> = pts.iter().map(|&(px, py)| py.atan2(px)).collect();
+                let offsets: Vec<f64> = angles.iter().map(|&t| wrap(t - angles[0])).collect();
+                let lo = offsets.iter().copied().fold(f64::INFINITY, f64::min);
+                let hi = offsets.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+                (hi - lo < PI - 1e-9).then(|| offsets[offsets.len() - 1])
+            });
+        if let Some(turn) = turned {
+            run += turn;
+            continue;
+        }
+        if halvings == MAX_HALVINGS {
+            return None;
+        }
+        let mid = 0.5 * (a + b);
+        pieces.push((a, mid, halvings + 1));
+        pieces.push((mid, b, halvings + 1));
+    }
+    Some(run)
 }
 
 /// Whether the closed `curve` (a circle/ellipse) is contained within
@@ -7654,6 +7868,352 @@ mod tests {
                 "forward={forward}: {hits:?}"
             );
         }
+    }
+
+    /// On a cylinder of radius 2 about `z`, a closed section's end UVs lie a
+    /// turn apart in `u` for a circle round the axis, either way round and
+    /// from any start, and coincide for a loop on one side of the axis,
+    /// across the seam or clear of it.
+    #[test]
+    fn a_closed_sections_end_uvs_differ_by_its_run_in_u() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        use brepkit_math::surfaces::CylindricalSurface;
+        use std::f64::consts::{FRAC_PI_2, FRAC_PI_4, TAU};
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        let surface = FaceSurface::Cylinder(
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), z, 2.0).unwrap(),
+        );
+        let on_wall = |u: f64, v: f64| surface.evaluate(u, v).unwrap();
+        let check = |curve: EdgeCurve, start: Point3, turns: f64| {
+            let (s, e) = closed_section_end_uvs(&curve, start, &surface, TAU).unwrap();
+            let (su, sv) = surface.project_point(start).unwrap();
+            assert!(
+                (s.x() - su).abs() < 1e-9 && (s.y() - sv).abs() < 1e-9,
+                "{s:?}"
+            );
+            assert!((e.x() - s.x() - turns * TAU).abs() < 1e-9, "{s:?} {e:?}");
+            assert!((e.y() - s.y()).abs() < 1e-9, "{s:?} {e:?}");
+        };
+
+        for (normal, turns) in [(z, 1.0), (-z, -1.0)] {
+            let rim = Circle3D::new(Point3::new(0.0, 0.0, 1.0), normal, 2.0).unwrap();
+            for from in [0.0, 1.0, 4.0] {
+                check(EdgeCurve::Circle(rim.clone()), on_wall(from, 1.0), turns);
+            }
+        }
+
+        for centre_u in [0.0, FRAC_PI_2] {
+            let lobe =
+                Circle3D::new(on_wall(centre_u, 1.0), surface.normal(centre_u, 1.0), 0.5).unwrap();
+            let start = lobe.evaluate(0.3);
+            check(EdgeCurve::Circle(lobe), start, 0.0);
+        }
+
+        let corners: Vec<Point3> = (0..=8)
+            .map(|k| {
+                let a = FRAC_PI_4 * f64::from(k % 8);
+                on_wall(
+                    0.3_f64.madd(a.sin(), 3.0 * FRAC_PI_2),
+                    0.3_f64.madd(a.cos(), 4.7),
+                )
+            })
+            .collect();
+        let knots: Vec<f64> = std::iter::once(0.0)
+            .chain((0..=8).map(f64::from))
+            .chain(std::iter::once(8.0))
+            .collect();
+        let spline = NurbsCurve::new(1, knots, corners.clone(), vec![1.0; 9]).unwrap();
+        check(EdgeCurve::NurbsCurve(spline), corners[0], 0.0);
+    }
+
+    /// A rational quadratic circle round a cylinder's axis whose first three
+    /// quarters span 0.0001 of its knots each: its ends lie a turn apart in
+    /// `u`, one way round as written and the other way reversed.
+    #[test]
+    fn a_spline_circle_with_short_quarter_spans_runs_a_turn() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        use brepkit_math::surfaces::CylindricalSurface;
+        use std::f64::consts::{FRAC_1_SQRT_2, TAU};
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        let surface = FaceSurface::Cylinder(
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), z, 2.0).unwrap(),
+        );
+        let corners: Vec<Point3> = [
+            (1.0, 0.0),
+            (1.0, 1.0),
+            (0.0, 1.0),
+            (-1.0, 1.0),
+            (-1.0, 0.0),
+            (-1.0, -1.0),
+            (0.0, -1.0),
+            (1.0, -1.0),
+            (1.0, 0.0),
+        ]
+        .into_iter()
+        .map(|(x, y)| Point3::new(2.0 * x, 2.0 * y, 1.0))
+        .collect();
+        let weights: Vec<f64> = (0..9)
+            .map(|k| if k % 2 == 1 { FRAC_1_SQRT_2 } else { 1.0 })
+            .collect();
+        let knots = vec![
+            0.0, 0.0, 0.0, 0.0001, 0.0001, 0.0002, 0.0002, 0.0003, 0.0003, 1.0, 1.0, 1.0,
+        ];
+        let circle =
+            EdgeCurve::NurbsCurve(NurbsCurve::new(2, knots, corners.clone(), weights).unwrap());
+        let start = corners[0];
+        for (curve, turns) in [(circle.reversed().unwrap(), -1.0), (circle, 1.0)] {
+            let (s, e) = closed_section_end_uvs(&curve, start, &surface, TAU).unwrap();
+            assert!(
+                (e.x() - s.x() - turns * TAU).abs() < 1e-9,
+                "turns {turns}: {s:?} {e:?}"
+            );
+            assert!((e.y() - s.y()).abs() < 1e-9, "{s:?} {e:?}");
+        }
+    }
+
+    /// A rational quadratic circle round a cylinder's axis in two spans, the
+    /// first 330 degrees (its middle weight negative) and the second 30, with
+    /// the first span's homogeneous points scaled by 1, 1000 and 1,000,000 so
+    /// that it runs almost all its turn in the first part of its knots: its
+    /// ends lie a turn apart in `u`, one way round as written and the other
+    /// way reversed.
+    #[test]
+    fn a_spline_circle_with_a_concentrated_span_runs_a_turn() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        use brepkit_math::surfaces::CylindricalSurface;
+        use std::f64::consts::TAU;
+        let surface = FaceSurface::Cylinder(
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 2.0)
+                .unwrap(),
+        );
+        let at = |degrees: f64, r: f64| {
+            let a = degrees.to_radians();
+            Point3::new(r * a.cos(), r * a.sin(), 1.0)
+        };
+        let half = 15.0_f64.to_radians().cos();
+        let (from, tip, to) = (at(0.0, 2.0), at(345.0, 2.0 / half), at(330.0, 2.0));
+        let circle = EdgeCurve::NurbsCurve(
+            NurbsCurve::new(
+                2,
+                vec![0.0, 0.0, 0.0, 0.5, 0.5, 1.0, 1.0, 1.0],
+                vec![from, tip, to, tip, from],
+                vec![1.0, -1000.0 * half, 1e6, 1e6 * half, 1e6],
+            )
+            .unwrap(),
+        );
+        for (curve, turns) in [(circle.reversed().unwrap(), -1.0), (circle, 1.0)] {
+            let (s, e) = closed_section_end_uvs(&curve, from, &surface, TAU).unwrap();
+            assert!(
+                (e.x() - s.x() - turns * TAU).abs() < 1e-9,
+                "turns {turns}: {s:?} {e:?}"
+            );
+            assert!((e.y() - s.y()).abs() < 1e-9, "{s:?} {e:?}");
+        }
+    }
+
+    /// A rational quadratic circle round a cylinder's axis with every weight
+    /// negated, which is the same circle: its end UVs lie a turn apart, one
+    /// way round as written and the other way reversed, and never hold the
+    /// end its line pcurve puts one unit along.
+    #[test]
+    fn a_spline_circle_with_negated_weights_runs_a_turn() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        use brepkit_math::surfaces::CylindricalSurface;
+        use std::f64::consts::{FRAC_1_SQRT_2, TAU};
+        let surface = FaceSurface::Cylinder(
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 2.0)
+                .unwrap(),
+        );
+        let corners: Vec<Point3> = [
+            (1.0, 0.0),
+            (1.0, 1.0),
+            (0.0, 1.0),
+            (-1.0, 1.0),
+            (-1.0, 0.0),
+            (-1.0, -1.0),
+            (0.0, -1.0),
+            (1.0, -1.0),
+            (1.0, 0.0),
+        ]
+        .into_iter()
+        .map(|(x, y)| Point3::new(2.0 * x, 2.0 * y, 1.0))
+        .collect();
+        let weights: Vec<f64> = (0..9)
+            .map(|k| if k % 2 == 1 { -FRAC_1_SQRT_2 } else { -1.0 })
+            .collect();
+        let knots = vec![
+            0.0, 0.0, 0.0, 0.25, 0.25, 0.5, 0.5, 0.75, 0.75, 1.0, 1.0, 1.0,
+        ];
+        let circle =
+            EdgeCurve::NurbsCurve(NurbsCurve::new(2, knots, corners.clone(), weights).unwrap());
+        let start = corners[0];
+        for (curve, turns) in [(circle.reversed().unwrap(), -1.0), (circle, 1.0)] {
+            let pcurve = super::super::pcurve_compute::compute_pcurve_on_surface(
+                &curve,
+                start,
+                start,
+                &surface,
+                &[],
+                None,
+            );
+            let (s, e) = section_end_uv_hints(&curve, start, true, &surface, &pcurve);
+            let (s, e) = (s.unwrap(), e.unwrap());
+            assert!(
+                (e.x() - s.x() - turns * TAU).abs() < 1e-9,
+                "turns {turns}: {s:?} {e:?} from {pcurve:?}"
+            );
+            assert!((e.y() - s.y()).abs() < 1e-9, "{s:?} {e:?}");
+        }
+    }
+
+    /// A closed spline whose weights change sign, so that it runs off to
+    /// infinity and back, has no run in `u` to prove. Its line pcurve's end
+    /// is left unset for the splitter to recover, not put one unit along.
+    #[test]
+    fn a_section_with_no_proved_run_leaves_a_line_pcurves_end_unset() {
+        use brepkit_math::curves2d::{Curve2D, Line2D};
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        use brepkit_math::surfaces::CylindricalSurface;
+        use brepkit_math::vec::{Point2, Vec2};
+        let surface = FaceSurface::Cylinder(
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 2.0)
+                .unwrap(),
+        );
+        let start = Point3::new(2.0, 0.0, 1.0);
+        let curve = EdgeCurve::NurbsCurve(
+            NurbsCurve::new(
+                2,
+                vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+                vec![start, Point3::new(0.0, 2.0, 1.0), start],
+                vec![1.0, -2.0, 1.0],
+            )
+            .unwrap(),
+        );
+        let (su, sv) = surface.project_point(start).unwrap();
+        let line = Curve2D::Line(Line2D::new(Point2::new(su, sv), Vec2::new(1.0, 0.0)).unwrap());
+        assert_eq!(
+            closed_section_end_uvs(&curve, start, &surface, std::f64::consts::TAU),
+            None
+        );
+        assert_eq!(
+            section_end_uv_hints(&curve, start, true, &surface, &line),
+            (None, None)
+        );
+    }
+
+    /// Circles on a unit ball whose planes nearly hold its axis, or that pass
+    /// near a pole: a meridian through both poles and a circle through one
+    /// touch the axis and give no count, and so do circles within 1e-12 and
+    /// 1e-9 of a pole. Circles 1e-6 from a pole count a turn with the pole
+    /// inside them and none with it outside, near either pole and either way
+    /// round, and a great circle tilted 1e-6 off a meridian counts a turn.
+    /// Each circle written as a rational spline reads the same. On a ring
+    /// torus a meridian and a tilted one count none and a latitude one; on a
+    /// horn torus a meridian touches the axis.
+    #[test]
+    fn a_conics_turns_about_the_axis_read_none_where_it_touches_the_axis() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        use brepkit_math::surfaces::{SphericalSurface, ToroidalSurface};
+        use std::f64::consts::{FRAC_1_SQRT_2, TAU};
+        let ball =
+            FaceSurface::Sphere(SphericalSurface::new(Point3::new(0.0, 0.0, 0.0), 1.0).unwrap());
+        let FaceSurface::Sphere(sphere) = &ball else {
+            unreachable!()
+        };
+        let (z, x) = (sphere.z_axis(), sphere.x_axis());
+        let origin = Point3::new(0.0, 0.0, 0.0);
+        // The circle as a nine-point rational quadratic spline.
+        let spline = |circle: &Circle3D| {
+            let (c, r) = (circle.center(), circle.radius());
+            let points: Vec<Point3> = (0..9_u32)
+                .map(|k| {
+                    let a = f64::from(k) * std::f64::consts::FRAC_PI_4;
+                    let reach = if k % 2 == 1 { r / FRAC_1_SQRT_2 } else { r };
+                    c + circle.u_axis() * (reach * a.cos()) + circle.v_axis() * (reach * a.sin())
+                })
+                .collect();
+            let weights = (0..9)
+                .map(|k| if k % 2 == 1 { FRAC_1_SQRT_2 } else { 1.0 })
+                .collect();
+            let knots = vec![
+                0.0, 0.0, 0.0, 0.25, 0.25, 0.5, 0.5, 0.75, 0.75, 1.0, 1.0, 1.0,
+            ];
+            EdgeCurve::NurbsCurve(NurbsCurve::new(2, knots, points, weights).unwrap())
+        };
+        let turns = |surface: &FaceSurface, circle: &Circle3D| {
+            let exact = conic_turns_about_u_axis(
+                surface,
+                circle.center(),
+                (circle.u_axis(), circle.radius()),
+                (circle.v_axis(), circle.radius()),
+            );
+            let curve = spline(circle);
+            let start = circle.evaluate(0.0);
+            let proved = closed_section_end_uvs(&curve, start, surface, TAU)
+                .map(|(s, e)| ((e.x() - s.x()) / TAU).round());
+            assert_eq!(exact, proved, "the spline reads as the circle does");
+            exact
+        };
+        // The circle of angular radius `rho` about the direction `polar` off
+        // the pole `toward`, its normal along that direction or against it.
+        let cap = |toward: Vec3, polar: f64, rho: f64, flip: bool| {
+            let dir = toward * polar.cos() + x * polar.sin();
+            let normal = if flip { -dir } else { dir };
+            Circle3D::new(origin + dir * rho.cos(), normal, rho.sin()).unwrap()
+        };
+        let meridian = Circle3D::new(origin, x, 1.0).unwrap();
+        assert_eq!(turns(&ball, &meridian), None, "meridian");
+        for (tilt, want) in [(1e-12, None), (1e-6, Some(1.0)), (-1e-6, Some(-1.0))] {
+            let normal = x + z * tilt;
+            let great = Circle3D::new(origin, normal, 1.0).unwrap();
+            assert_eq!(turns(&ball, &great), want, "great circle tilted {tilt}");
+        }
+        let rho = 0.5;
+        for (toward, sign) in [(z, 1.0), (-z, -1.0)] {
+            for flip in [false, true] {
+                let way = if flip { -sign } else { sign };
+                assert_eq!(
+                    turns(&ball, &cap(toward, rho, rho, flip)),
+                    None,
+                    "through the pole"
+                );
+                for (gap, inside, outside) in [
+                    (1e-12, None, None),
+                    (1e-9, None, None),
+                    (1e-6, Some(way), Some(0.0)),
+                ] {
+                    assert_eq!(
+                        turns(&ball, &cap(toward, rho - gap, rho, flip)),
+                        inside,
+                        "pole {gap} inside, sign {sign}, flip {flip}"
+                    );
+                    assert_eq!(
+                        turns(&ball, &cap(toward, rho + gap, rho, flip)),
+                        outside,
+                        "pole {gap} outside, sign {sign}, flip {flip}"
+                    );
+                }
+            }
+        }
+
+        let ring = FaceSurface::Torus(ToroidalSurface::new(origin, 3.0, 1.0).unwrap());
+        let FaceSurface::Torus(torus) = &ring else {
+            unreachable!()
+        };
+        let (tz, tx, ty) = (torus.z_axis(), torus.x_axis(), torus.y_axis());
+        let tube = Circle3D::new(origin + tx * 3.0, ty, 1.0).unwrap();
+        assert_eq!(turns(&ring, &tube), Some(0.0), "meridian");
+        let tilted = Circle3D::new(origin + tx * 3.0, ty + tz * 1e-9, 1.0).unwrap();
+        assert_eq!(turns(&ring, &tilted), Some(0.0), "tilted meridian");
+        let latitude = Circle3D::new(origin + tz, tz, 3.0).unwrap();
+        assert_eq!(turns(&ring, &latitude), Some(1.0), "latitude");
+        let horn = FaceSurface::Torus(ToroidalSurface::new(origin, 1.0, 1.0).unwrap());
+        let FaceSurface::Torus(horn_torus) = &horn else {
+            unreachable!()
+        };
+        let horn_tube =
+            Circle3D::new(origin + horn_torus.x_axis(), horn_torus.y_axis(), 1.0).unwrap();
+        assert_eq!(turns(&horn, &horn_tube), None, "horn meridian");
     }
 
     /// A run 0.001 inside the top of a closed ellipse seamed a 64th of a

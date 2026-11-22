@@ -35,6 +35,7 @@ use crate::walker::{Walker, WalkerConfig, approximate_blend_surface, interpolate
 use crate::{BlendError, BlendResult};
 
 mod concave_first;
+mod one_sphere;
 mod wall_run_up;
 
 type BlendCrossEdge = (EdgeId, VertexId, VertexId);
@@ -138,7 +139,23 @@ impl<'a> FilletBuilder<'a> {
             }
         }
         let snapshot = SolidSnapshot::capture(topo, solid)?;
-        let result = build_in_place(topo, solid, edge_sets);
+        let picked: Vec<EdgeId> = edge_sets
+            .iter()
+            .flat_map(|(edges, _)| edges.iter().copied())
+            .collect();
+        // The edges the joins took out of the shell lie between faces tangent
+        // along them, which the plan drops from the selection.
+        let result =
+            one_sphere::join_sphere_faces_the_rim_crosses(topo, solid, &picked).and_then(|gone| {
+                let edge_sets = edge_sets
+                    .into_iter()
+                    .map(|(edges, law)| {
+                        let edges = edges.into_iter().filter(|e| !gone.contains(e)).collect();
+                        (edges, law)
+                    })
+                    .collect();
+                build_in_place(topo, solid, edge_sets)
+            });
         match result {
             Ok(result) => {
                 let preserve = snapshot.clone_result_source_faces(topo, result.solid);
@@ -2137,8 +2154,8 @@ fn outward_normal_at(
     Ok(Some(if face.is_reversed() { -normal } else { normal }))
 }
 
-/// Fold out a spur where a face's wire runs along a straight edge and back
-/// along a longer straight edge that overlaps it.
+/// Fold out a spur where a face's wire runs along an edge and back along a
+/// longer edge that overlaps it.
 ///
 /// A terminal whose cap cannot be notched keeps the edge leaving the spine's
 /// end (the spoke) whole, and the trim bridges the contact's end to that
@@ -2161,6 +2178,11 @@ fn outward_normal_at(
 /// a step's edge): the face's wire runs along those edges and back along the
 /// contact. Folding one edge at a time, the contact takes the input's edges,
 /// and the round meets each face beyond them along its own edge.
+///
+/// The spoke may be curved: a round ending on a floor that flat seams cut
+/// in pieces at the spine's end keeps the arc where the floor meets a bore
+/// whole, and the runout edge runs back along it to the contact. The arc is
+/// split there the same way.
 fn fold_spoke_spurs(
     topo: &mut Topology,
     faces: &[FaceId],
@@ -2195,9 +2217,8 @@ fn fold_spoke_spurs(
                     if v != v2 || p == q {
                         continue;
                     }
-                    if !straight_edge(topo, e1, ON_LINE)? || !straight_edge(topo, e2, ON_LINE)? {
-                        continue;
-                    }
+                    let straight =
+                        straight_edge(topo, e1, ON_LINE)? && straight_edge(topo, e2, ON_LINE)?;
                     let (pp, vp, qp) = (point(topo, p)?, point(topo, v)?, point(topo, q)?);
                     // Which of the two is the short one doubling back over
                     // the other: its far end lies inside the long one.
@@ -2210,9 +2231,17 @@ fn fold_spoke_spurs(
                         let t = (far - vp).dot(span) / length2;
                         t > 1e-9 && t < 1.0 - 1e-9 && (vp + span * t - far).length() <= ON_LINE
                     };
-                    let (short, long, short_first) = if inside(pp, qp) {
+                    let (short, long, short_first) = if straight {
+                        if inside(pp, qp) {
+                            (first, second, true)
+                        } else if inside(qp, pp) {
+                            (second, first, false)
+                        } else {
+                            continue;
+                        }
+                    } else if curved_spur(topo, first.edge(), second.edge(), v, ON_LINE)? {
                         (first, second, true)
-                    } else if inside(qp, pp) {
+                    } else if curved_spur(topo, second.edge(), first.edge(), v, ON_LINE)? {
                         (second, first, false)
                     } else {
                         continue;
@@ -2293,10 +2322,35 @@ fn fold_spoke_spurs(
                         long.edge(),
                         point(topo, split)?
                     );
-                    let rest = topo.add_edge(Edge::new(split, far, EdgeCurve::Line));
+                    // The far piece, stored the way the long edge is: from
+                    // the split to the far end, or (where the long edge
+                    // starts at the far end) back from it.
+                    let rest_from_split = long_edge.end() == far;
+                    let rest = if straight {
+                        topo.add_edge(Edge::new(split, far, EdgeCurve::Line))
+                    } else {
+                        let ends = (
+                            point(topo, long_edge.start())?,
+                            point(topo, long_edge.end())?,
+                        );
+                        let Some(piece) =
+                            long_piece(&long_edge, ends, point(topo, split)?, rest_from_split)
+                        else {
+                            continue;
+                        };
+                        topo.add_edge(if rest_from_split {
+                            Edge::new(split, far, piece)
+                        } else {
+                            Edge::new(far, split, piece)
+                        })
+                    };
+                    let rest_from_split = straight || rest_from_split;
                     // In this wire the pair becomes the far piece alone, run
                     // the way the long edge was.
-                    let rest_here = OrientedEdge::new(rest, long.oriented_start(&long_edge) == v);
+                    let rest_here = OrientedEdge::new(
+                        rest,
+                        (long.oriented_start(&long_edge) == v) == rest_from_split,
+                    );
                     let mut folded = Vec::with_capacity(n - 1);
                     for (k, &oe) in edges.iter().enumerate() {
                         if k == i {
@@ -2323,9 +2377,9 @@ fn fold_spoke_spurs(
                             OrientedEdge::new(short.edge(), short.is_forward() == short_from_v);
                         if from_v {
                             rewritten.push(short_away);
-                            rewritten.push(OrientedEdge::new(rest, true));
+                            rewritten.push(OrientedEdge::new(rest, rest_from_split));
                         } else {
-                            rewritten.push(OrientedEdge::new(rest, false));
+                            rewritten.push(OrientedEdge::new(rest, !rest_from_split));
                             rewritten
                                 .push(OrientedEdge::new(short.edge(), !short_away.is_forward()));
                         }
@@ -2338,6 +2392,96 @@ fn fold_spoke_spurs(
         }
     }
     Ok(())
+}
+
+/// Whether `short`, leaving `v`, runs back along `long`, which also leaves
+/// `v`: each of its points lies within `tol` of `long`, and its far end
+/// lies inside `long`, clear of both of its ends. For a pair where either
+/// edge is curved (a cap's arc kept whole past a round's contact, and the
+/// runout edge along it).
+fn curved_spur(
+    topo: &Topology,
+    short: EdgeId,
+    long: EdgeId,
+    v: VertexId,
+    tol: f64,
+) -> Result<bool, BlendError> {
+    const SAMPLES: u32 = 8;
+    // The cosine of the most angle between the two edges' directions at
+    // `v`: a runout edge fitted along an arc leaves it within a degree.
+    const SAME_WAY: f64 = 0.999;
+    let (s, l) = (topo.edge(short)?, topo.edge(long)?);
+    if s.start() == s.end() || l.start() == l.end() {
+        return Ok(false);
+    }
+    let far = if s.start() == v { s.end() } else { s.start() };
+    let far_point = topo.vertex(far)?.point();
+    for end in [l.start(), l.end()] {
+        if (topo.vertex(end)?.point() - far_point).length() <= tol {
+            return Ok(false);
+        }
+    }
+    // Both leave `v` the same way, which most pairs of a face's edges do
+    // not: read first, before the samples.
+    let away = |edge: &Edge| -> Result<Option<Vec3>, BlendError> {
+        let (a, b) = (
+            topo.vertex(edge.start())?.point(),
+            topo.vertex(edge.end())?.point(),
+        );
+        let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
+        let tangent = if edge.start() == v {
+            edge.curve().tangent_with_endpoints(t0, a, b)
+        } else {
+            -edge.curve().tangent_with_endpoints(t1, a, b)
+        };
+        Ok(tangent.normalize().ok())
+    };
+    let (Some(ts), Some(tl)) = (away(s)?, away(l)?) else {
+        return Ok(false);
+    };
+    if ts.dot(tl) < SAME_WAY {
+        return Ok(false);
+    }
+    if edge_nearest(topo, long, far_point, None)?.0 > tol {
+        return Ok(false);
+    }
+    let (a, b) = (
+        topo.vertex(s.start())?.point(),
+        topo.vertex(s.end())?.point(),
+    );
+    let (t0, t1) = s.curve().domain_with_endpoints(a, b);
+    for k in 1..SAMPLES {
+        let t = (t1 - t0).madd(f64::from(k) / f64::from(SAMPLES), t0);
+        let at = s.curve().evaluate_with_endpoints(t, a, b);
+        if edge_nearest(topo, long, at, None)?.0 > tol {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// The curve of `edge`'s piece between `split` (a point on it) and its end
+/// vertex (`toward_end`) or its start vertex, run from the piece's first
+/// vertex to its last: from `split` toward the end, or from the start to
+/// `split`. `ends` are the points of `edge`'s start and end vertices. An
+/// analytic curve is its own piece, its span given by the piece's ends. A
+/// B-spline is cut to the piece's span of the edge's own span, which runs
+/// against the curve where the edge is stored so. `None` where `split` does
+/// not project on to it.
+fn long_piece(
+    edge: &Edge,
+    (start, end): (Point3, Point3),
+    split: Point3,
+    toward_end: bool,
+) -> Option<EdgeCurve> {
+    let EdgeCurve::NurbsCurve(curve) = edge.curve() else {
+        return Some(edge.curve().clone());
+    };
+    let (t0, t1) = edge.curve().domain_with_endpoints(start, end);
+    let found = brepkit_math::nurbs::projection::project_point_to_curve(curve, split, 1e-9).ok()?;
+    let at = found.parameter.clamp(t0.min(t1), t0.max(t1));
+    let (from, to) = if toward_end { (at, t1) } else { (t0, at) };
+    trimmer::edge_curve_for_span(edge.curve(), from, to).ok()
 }
 
 /// Split a face pinched along a contact that runs over one of the face's
@@ -11071,7 +11215,7 @@ fn rebuild_closed_rim_loop_faces(
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used, clippy::expect_used)]
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
     use super::*;
     use brepkit_topology::adjacency::AdjacencyIndex;
     use brepkit_topology::edge::{Edge, EdgeCurve};
@@ -11083,6 +11227,59 @@ mod tests {
     /// The notch triangle at a corner filleted r 6: the arc's ends on the two
     /// corner edges and the corner itself.
     const NOTCH: [(f64, f64); 3] = [(6.0, 0.0), (0.0, 0.0), (0.0, 6.0)];
+
+    /// The piece of a B-spline edge a spur leaves runs between the split and
+    /// the edge's own vertex: where the edge runs against its curve, and
+    /// where it takes only a span of its curve.
+    #[test]
+    fn a_spline_spokes_piece_keeps_to_the_edge() {
+        let curve = brepkit_math::nurbs::curve::NurbsCurve::new(
+            2,
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            vec![
+                Point3::new(0.0, 0.0, 0.0),
+                Point3::new(5.0, 5.0, 0.0),
+                Point3::new(10.0, 0.0, 0.0),
+            ],
+            vec![1.0, 1.0, 1.0],
+        )
+        .unwrap();
+        let at = |t: f64| curve.evaluate(t);
+        let mut topo = Topology::new();
+        let mut piece_ends = |from: f64, to: f64, split: f64, toward_end: bool| {
+            let (a, b) = (at(from), at(to));
+            let edge = Edge::new(
+                topo.add_vertex(Vertex::new(a, 1e-7)),
+                topo.add_vertex(Vertex::new(b, 1e-7)),
+                EdgeCurve::NurbsCurve(curve.clone()),
+            );
+            let Some(EdgeCurve::NurbsCurve(piece)) =
+                long_piece(&edge, (a, b), at(split), toward_end)
+            else {
+                panic!("no piece");
+            };
+            let (lo, hi) = piece.domain();
+            (piece.evaluate(lo), piece.evaluate(hi))
+        };
+        let near = |p: Point3, q: Point3| (p - q).length() < 1e-9;
+        // Stored from C(1) to C(0): toward its end runs to C(0).
+        let (first, last) = piece_ends(1.0, 0.0, 0.5, true);
+        assert!(
+            near(first, at(0.5)) && near(last, at(0.0)),
+            "{first:?} {last:?}"
+        );
+        let (first, last) = piece_ends(1.0, 0.0, 0.5, false);
+        assert!(
+            near(first, at(1.0)) && near(last, at(0.5)),
+            "{first:?} {last:?}"
+        );
+        // A span from C(0.2) to C(0.8): toward its end stops at C(0.8).
+        let (first, last) = piece_ends(0.2, 0.8, 0.5, true);
+        assert!(
+            near(first, at(0.5)) && near(last, at(0.8)),
+            "{first:?} {last:?}"
+        );
+    }
 
     /// An arc from the corner at angle 0 to a contact's end at `turn`, on a
     /// unit circle in the plane z = 0, seen along z.
@@ -11720,6 +11917,37 @@ mod tests {
             found_cylinder,
             "fillet should produce a cylindrical blend surface"
         );
+    }
+
+    /// An edge the solid's arena does not hold, picked with one it does: the
+    /// one it holds is rounded, and the other fails alone.
+    #[test]
+    fn an_edge_outside_the_arena_fails_alone() {
+        let mut topo = Topology::new();
+        let solid = make_unit_cube_manifold(&mut topo);
+        let adjacency = AdjacencyIndex::build(&topo, solid).unwrap();
+        let edge = brepkit_topology::explorer::solid_edges(&topo, solid)
+            .unwrap()
+            .into_iter()
+            .find(|&edge| adjacency.faces_for_edge(edge).len() == 2)
+            .expect("a manifold edge");
+        let mut other = Topology::new();
+        while other.num_edges() <= topo.num_edges() {
+            let _ = make_unit_cube_manifold(&mut other);
+        }
+        let stale = other.edge_id_from_index(other.num_edges() - 1).unwrap();
+        assert!(topo.edge(stale).is_err());
+        let mut builder = FilletBuilder::new(&mut topo, solid);
+        builder.add_edges(&[edge, stale], 0.1);
+        let result = builder.build().expect("fillet build should succeed");
+        assert_eq!(result.succeeded, vec![edge]);
+        assert!(
+            result.failed.iter().any(|(failed, _)| *failed == stale),
+            "{:?}",
+            result.failed
+        );
+        assert!(result.failed.iter().all(|(failed, _)| *failed == stale));
+        assert_shell_edges_are_closed(&topo, result.solid);
     }
 
     /// An edge picked twice in one set is the same request: it is rounded

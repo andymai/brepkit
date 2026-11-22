@@ -268,6 +268,299 @@ fn ellipse_zero_axis_error() {
     );
 }
 
+/// The distance between `p` and `q`, by hypot, so it neither overflows nor
+/// underflows where the coordinates' squares would.
+fn apart(p: Point3, q: Point3) -> f64 {
+    let d = p - q;
+    d.x().hypot(d.y()).hypot(d.z())
+}
+
+/// The distance from `p` to the nearest of a dense scan of `ellipse`, each
+/// best sample refined by golden section between its neighbours.
+fn nearest_by_scan(ellipse: &Ellipse3D, p: Point3) -> f64 {
+    const N: u32 = 4_000;
+    let off = |t: f64| apart(ellipse.evaluate(t), p);
+    let step = 2.0 * PI / f64::from(N);
+    let best = (0..N)
+        .map(|k| step.madd(f64::from(k), -PI))
+        .min_by(|&a, &b| off(a).total_cmp(&off(b)))
+        .unwrap();
+    let (mut lo, mut hi) = (best - step, best + step);
+    let golden = 0.5 * (5.0_f64.sqrt() - 1.0);
+    for _ in 0..200 {
+        let (a, b) = ((hi - lo).madd(-golden, hi), (hi - lo).madd(golden, lo));
+        if off(a) < off(b) {
+            hi = b;
+        } else {
+            lo = a;
+        }
+    }
+    off(best).min(off(0.5 * (lo + hi)))
+}
+
+/// A point off the ellipse along its normal projects to the point it was
+/// moved from, which the angle of the point drawn onto a circle is not;
+/// and every point, inside the ellipse, on either axis, at its centre or
+/// far off, projects to a point no farther than the nearest of a dense
+/// scan.
+#[test]
+fn ellipse_project_finds_the_nearest_point() {
+    let ellipse = Ellipse3D::new(
+        Point3::new(1.0, -2.0, 0.5),
+        Vec3::new(0.0, 0.0, 1.0),
+        3.0,
+        2.0,
+    )
+    .unwrap();
+    for k in -7..8 {
+        let t = 0.4 * f64::from(k);
+        let along = ellipse.tangent(t);
+        let out = along.cross(ellipse.normal()).normalize().unwrap();
+        for off in [0.0, 0.3, -0.3] {
+            let p = ellipse.evaluate(t) + out * off;
+            let back = ellipse.project(p);
+            let gap = (back - t + PI).rem_euclid(2.0 * PI) - PI;
+            assert!(gap.abs() < 1e-12, "t {t} off {off}: {back}");
+        }
+    }
+    let normal = Vec3::new(0.3, -0.2, 1.0).normalize().unwrap();
+    let centre = Point3::new(0.5, 1.0, -2.0);
+    let frame = crate::frame::Frame3::from_normal(centre, normal).unwrap();
+    let ellipses = [
+        Ellipse3D::new(centre, normal, 3.0, 2.0).unwrap(),
+        Ellipse3D::new(centre, normal, 5.0, 1.0).unwrap(),
+        Ellipse3D::new(centre, normal, 2.0, 2.0).unwrap(),
+        // The longer semi-axis along `v`.
+        Ellipse3D::with_axes(centre, frame.z, 1.0, 3.0, frame.x, frame.y).unwrap(),
+    ];
+    let across = [-1e6, -2.9, -1.2, -0.7, -0.3, 0.0, 0.3, 0.7, 1.2, 2.9, 1e3];
+    for ellipse in &ellipses {
+        let (a, b) = (ellipse.semi_major(), ellipse.semi_minor());
+        let (u, v) = (ellipse.u_axis(), ellipse.v_axis());
+        for x in across {
+            for y in across {
+                let p = centre + u * (a * x) + v * (b * y);
+                let t = ellipse.project(p);
+                assert!(t > -PI && t <= PI, "({x}, {y}) on {a} x {b}: {t}");
+                let reached = apart(ellipse.evaluate(t), p);
+                let nearest = nearest_by_scan(ellipse, p);
+                assert!(reached.is_finite() && nearest.is_finite());
+                let scale = apart(p, centre).max(a.max(b));
+                assert!(
+                    reached <= nearest + 1e-12 * scale,
+                    "({x}, {y}) on {a} x {b}: {reached}, the scan finds {nearest}"
+                );
+            }
+        }
+    }
+    // A point near the centre on the longer axis has two nearest points,
+    // off the axis, where the curve's own angle is no nearest point.
+    let wide = &ellipses[0];
+    let p = centre + wide.u_axis() * 0.5;
+    let t = wide.project(p);
+    assert!((t - 0.3_f64.acos()).abs() < 1e-12, "{t}");
+    assert!(((wide.evaluate(t) - p).length_squared() - 3.8).abs() < 1e-12);
+    // A point so far off that the squares of its coordinates overflow: its
+    // nearest point is where the normal runs along `(1, 1)`, `tan t = b / a`.
+    let far = centre + wide.u_axis() * 1e200 + wide.v_axis() * 1e200;
+    let t = wide.project(far);
+    assert!((t - 2.0_f64.atan2(3.0)).abs() < 1e-12, "{t}");
+    // At the centre of a circle every point is nearest: `0`. At the centre
+    // of a longer ellipse, the end of its shorter semi-axis.
+    assert!(ellipses[2].project(centre).abs() < 1e-15);
+    assert!((ellipses[0].project(centre) - FRAC_PI_2).abs() < 1e-15);
+    assert!((ellipses[3].project(centre)).abs() < 1e-15);
+}
+
+/// The same ellipse and point, scaled from `1e-200` to `1e200`, where the
+/// squares of the semi-axes leave the range of a double, read the same angle
+/// to a few units in the last place, and points `1e-300` and `1e300`
+/// semi-axes from the centre read a number at every scale. Ellipses whose
+/// shorter semi-axis is below the rounding of the longer, down to the least
+/// double, read a number and a nearest point at every scale too.
+#[test]
+fn ellipse_project_reads_alike_at_every_scale() {
+    let normal = Vec3::new(0.3, -0.2, 1.0).normalize().unwrap();
+    let at_scale = |k: f64| {
+        Ellipse3D::new(Point3::new(0.5 * k, k, -2.0 * k), normal, 3.0 * k, 2.0 * k).unwrap()
+    };
+    let points = [
+        (1.7, 0.4),
+        (-0.3, 0.2),
+        (0.0, 0.5),
+        (2.5, 0.0),
+        (0.5, 0.0),
+        (-4.0, -3.0),
+        (1e3, -7e2),
+        (1e-3, 2e-3),
+    ];
+    for (x, y) in points {
+        let read = |k: f64| {
+            let ellipse = at_scale(k);
+            let p = ellipse.center() + ellipse.u_axis() * (x * k) + ellipse.v_axis() * (y * k);
+            ellipse.project(p)
+        };
+        // On the longer axis within the evolute two points are nearest, and
+        // the rounding of the scaled point picks the side.
+        let side = |t: f64| if y == 0.0 { t.abs() } else { t };
+        let one = side(read(1.0));
+        for k in [1e-200, 1e-150, 1e150, 1e200] {
+            let t = side(read(k));
+            assert!(
+                (t - one).abs() <= 8.0 * f64::EPSILON * one.abs().max(1.0),
+                "({x}, {y}) at {k}: {t}, at 1: {one}"
+            );
+        }
+    }
+    // Far off and near the centre, the centre at the origin so the point's
+    // own digits survive the subtraction.
+    for k in [1e-200, 1e-150, 1.0, 1e150, 1e200] {
+        let ellipse = Ellipse3D::new(Point3::new(0.0, 0.0, 0.0), normal, 3.0 * k, 2.0 * k).unwrap();
+        let (u, v) = (ellipse.u_axis(), ellipse.v_axis());
+        for (reach, expected) in [
+            (1e300, 2.0_f64.atan2(3.0)),
+            (1e150, 2.0_f64.atan2(3.0)),
+            (1e-150, FRAC_PI_2),
+            (1e-300, FRAC_PI_2),
+        ] {
+            let scale = reach * k;
+            if !scale.is_normal() {
+                continue;
+            }
+            let p = Point3::new(0.0, 0.0, 0.0) + u * scale + v * scale;
+            let t = ellipse.project(p);
+            assert!(t.is_finite(), "{reach} at {k}: {t}");
+            assert!(
+                (t - expected).abs() <= 8.0 * f64::EPSILON,
+                "{reach} at {k}: {t}, expected {expected}"
+            );
+        }
+    }
+    let origin = Point3::new(0.0, 0.0, 0.0);
+    let frame = crate::frame::Frame3::from_normal(origin, normal).unwrap();
+    let thin = [
+        (1e150_f64, 1e-150_f64),
+        (1.0, 1e-300),
+        (1e300, 1.0),
+        (1.0, 5e-324),
+        (1e-150, 1e-300),
+        (1e-150, 1e150),
+        (5e-324, 1.0),
+    ];
+    for (a, b) in thin {
+        for k in [1e-100_f64, 1.0, 1e100] {
+            let (ak, bk) = (a * k, b * k);
+            if !(ak.is_finite() && bk.is_finite() && ak > 0.0 && bk > 0.0) {
+                continue;
+            }
+            let ellipse = Ellipse3D::with_axes(origin, frame.z, ak, bk, frame.x, frame.y).unwrap();
+            let long = ak.max(bk);
+            for (x, y) in [
+                (0.5, 0.0),
+                (0.5, 0.5),
+                (0.5, -0.5),
+                (0.0, 0.0),
+                (0.0, 0.7),
+                (2.0, 0.0),
+                (-0.7, -3.0),
+                (-1.0, 0.0),
+            ] {
+                let (along, across) = if ak >= bk { (x, y) } else { (y, x) };
+                let p = origin + frame.x * (along * long) + frame.y * (across * long);
+                let t = ellipse.project(p);
+                assert!(
+                    t.is_finite() && t > -PI && t <= PI,
+                    "({x}, {y}) on {ak} x {bk}: {t}"
+                );
+                let reached = apart(ellipse.evaluate(t), p);
+                let nearest = nearest_by_scan(&ellipse, p);
+                assert!(
+                    reached.is_finite() && nearest.is_finite(),
+                    "({x}, {y}) on {ak} x {bk}: {reached}, {nearest}"
+                );
+                assert!(
+                    reached <= nearest + 1e-12 * long,
+                    "({x}, {y}) on {ak} x {bk}: {reached}, the scan finds {nearest}"
+                );
+            }
+        }
+    }
+    // A thin ellipse and a point far enough off across it that the short
+    // axis turns the nearest point round toward the end, the longer axis
+    // along either frame axis: the angle is the root of the stationary
+    // condition, bisected. The frame is square to the last digit, which a
+    // point `1e20` off needs.
+    let stationary = |(a, b): (f64, f64), (x, y): (f64, f64), (lo, hi): (f64, f64)| {
+        let slope = |t: f64| {
+            let (s, c) = t.sin_cos();
+            (b * c).madd(b.madd(s, -y), -a * s * a.madd(c, -x))
+        };
+        let (mut lo, mut hi) = (lo, hi);
+        for _ in 0..200 {
+            let mid = 0.5 * (lo + hi);
+            if (slope(mid) > 0.0) == (slope(lo) > 0.0) {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        0.5 * (lo + hi)
+    };
+    for ((a, b), (x, y), bracket) in [
+        ((1.0, 1e-17), (0.5, 1e20), (1.0, FRAC_PI_2)),
+        ((1e-17, 1.0), (1e20, 0.5), (0.0, 0.5)),
+    ] {
+        let (u, v) = (Vec3::new(1.0, 0.0, 0.0), Vec3::new(0.0, 1.0, 0.0));
+        let ellipse = Ellipse3D::with_axes(origin, u.cross(v), a, b, u, v).unwrap();
+        let t = ellipse.project(origin + u * x + v * y);
+        let root = stationary((a, b), (x, y), bracket);
+        assert!(
+            (t - root).abs() < 1e-12,
+            "({x}, {y}) on {a} x {b}: {t}, the root {root}"
+        );
+    }
+}
+
+/// A long arc of an ellipse 2e8 across and 10 wide, centred 1e8 away, as a
+/// plane leaning 5e-8 off a wall's axis cuts the wall, turned: its centre
+/// rounds by 1e-8 in the turn, and each point of the arc still projects
+/// onto itself, not 0.1 along the curve.
+#[test]
+fn ellipse_project_holds_a_long_thin_arc_turned() {
+    let major = Vec3::new(0.0, -5e-8, 1.0).normalize().unwrap();
+    let minor = Vec3::new(1.0, 0.0, 0.0);
+    let upright = Ellipse3D::with_axes(
+        Point3::new(0.0, 0.0, 1e8),
+        major.cross(minor),
+        2e8,
+        10.0,
+        major,
+        minor,
+    )
+    .unwrap();
+    let turn = crate::mat::Mat4::rotation_x(0.4)
+        * crate::mat::Mat4::rotation_y(1.1)
+        * crate::mat::Mat4::rotation_z(0.3);
+    let o = Point3::new(0.0, 0.0, 0.0);
+    let dir = |v: Vec3| turn.mul_point(o + v) - o;
+    let turned = Ellipse3D::with_axes(
+        turn.mul_point(upright.center()),
+        dir(upright.normal()),
+        2e8,
+        10.0,
+        dir(major),
+        dir(minor),
+    )
+    .unwrap();
+    let end = 2.0 * PI / 3.0;
+    for k in 0..=10 {
+        let t = (-5.8e-6_f64).madd(f64::from(k) / 10.0, end);
+        let p = turn.mul_point(upright.evaluate(t));
+        let back = turned.evaluate(turned.project(p));
+        assert!((back - p).length() < 1e-6, "{k}: {:e}", (back - p).length());
+    }
+}
+
 // ── Parabola tests ──────────────────────────────────────────
 
 #[test]
