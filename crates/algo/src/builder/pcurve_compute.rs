@@ -152,9 +152,7 @@ pub fn compute_boundary_pcurve_on_surface(
                 Point2::new(u, v)
             })
             .collect();
-        let (u_period, v_period) = surface_periods(surface);
-        unwrap_periodic_params(&mut uv, u_period, v_period);
-        lift_ellipse_samples(curve_3d, surface, &pts_3d, &mut uv);
+        lift_edge_samples(curve_3d, surface, &pts_3d, &mut uv);
         uv
     };
     if let EdgeCurve::Ellipse(ellipse) = curve_3d
@@ -371,15 +369,6 @@ pub(super) fn make_line2d_safe(origin: Point2, dir: Vec2) -> Line2D {
     })
 }
 
-/// Unwrap periodic UV parameters (public wrapper for use by other modules).
-pub(super) fn unwrap_periodic_params_pub(
-    pts: &mut [Point2],
-    u_period: Option<f64>,
-    v_period: Option<f64>,
-) {
-    unwrap_periodic_params(pts, u_period, v_period);
-}
-
 /// Returns `(u_period, v_period)` for a surface -- `Some(TAU)` if periodic.
 pub(super) fn surface_periods(surface: &FaceSurface) -> (Option<f64>, Option<f64>) {
     match surface {
@@ -444,10 +433,7 @@ fn sample_edge_on_surface(
         })
         .collect();
 
-    // Unwrap periodicity.
-    let (u_period, v_period) = surface_periods(surface);
-    unwrap_periodic_params(&mut uv_pts, u_period, v_period);
-    lift_ellipse_samples(curve_3d, surface, &pts_3d, &mut uv_pts);
+    lift_edge_samples(curve_3d, surface, &pts_3d, &mut uv_pts);
 
     (pts_3d, uv_pts)
 }
@@ -493,41 +479,81 @@ pub(super) fn ellipse_u_sense(
     (wx.hypot(wy) < 1.0).then_some(det.signum())
 }
 
-/// Lift the `u` of UV samples taken in order along an ellipse on a
-/// cylinder or a cone, `uv[k]` the projection of `pts_3d[k]`. Unwrapped to
-/// the nearest copy, a step over which `u` runs most of a turn (round a
-/// steep cut's near vertex) reads as a short step back. `u` runs one way
-/// along the ellipse ([`ellipse_u_sense`]), so each step advances it the
-/// way the step runs round the ellipse, by its change read that way round.
-/// The samples lie under half a turn of the ellipse's parameter apart.
-fn lift_ellipse_samples(
+/// The `u` of a point of `ellipse` on a cylinder or a cone `surface`
+/// reached by a run `run` of the ellipse's parameter on from a point whose
+/// `u` is `u_from`; `u_raw` is the point's own projected `u`. `None` when
+/// [`ellipse_u_sense`] is.
+///
+/// `u` runs strictly one way along the ellipse, so a run of the parameter
+/// under a turn advances it by less than a turn, the way the run goes: the
+/// point lies the projected value's advance on, read that way round. Within
+/// rounding of the start's ruling, the run says which end: none, or a turn.
+pub(super) fn ellipse_u_after(
+    ellipse: &brepkit_math::curves::Ellipse3D,
+    surface: &FaceSurface,
+    (u_from, u_raw): (f64, f64),
+    run: f64,
+) -> Option<f64> {
+    use std::f64::consts::PI;
+    let sense = ellipse_u_sense(ellipse, surface)?;
+    let way = sense * run.signum();
+    let ahead = (way * (u_raw - u_from)).rem_euclid(TAU);
+    let ahead = if ahead < 1e-9 && run.abs() > PI {
+        ahead + TAU
+    } else if ahead > TAU - 1e-9 && run.abs() < PI {
+        ahead - TAU
+    } else {
+        ahead
+    };
+    Some(way.madd(ahead, u_from))
+}
+
+/// Lift UV samples `uv`, the projections of points `pts_3d` taken in order
+/// along one edge whose curve is `curve`, onto the copies of the periods the
+/// edge reaches them on, from the first sample's copy.
+///
+/// Along an ellipse on a cylinder or a cone, `u` runs one way, so each step
+/// advances it by [`ellipse_u_after`], however far: round a steep cut's near
+/// vertex `u` runs most of a turn between two samples, which a step to the
+/// nearest copy reads as a short step back. Along any other curve each
+/// sample goes to the copy nearest the one before. The samples lie under
+/// half a turn of the curve's parameter apart.
+pub(super) fn lift_edge_samples(
     curve: &EdgeCurve,
     surface: &FaceSurface,
     pts_3d: &[Point3],
     uv: &mut [Point2],
 ) {
+    let (u_period, v_period) = surface_periods(surface);
+    unwrap_periodic_params(uv, u_period, v_period);
     let EdgeCurve::Ellipse(ellipse) = curve else {
         return;
     };
-    let Some(sense) = ellipse_u_sense(ellipse, surface) else {
-        return;
-    };
-    if pts_3d.len() != uv.len() {
+    if pts_3d.len() != uv.len() || ellipse_u_sense(ellipse, surface).is_none() {
         return;
     }
     for k in 1..uv.len() {
         let step = shorter_arc_delta(ellipse.project(pts_3d[k]) - ellipse.project(pts_3d[k - 1]));
-        let way = sense * step.signum();
-        let prev = uv[k - 1].x();
-        let ahead = (way * (uv[k].x() - prev)).rem_euclid(TAU);
-        // A step of no length, read with rounding a hair back.
-        let ahead = if ahead > TAU - 1e-9 {
-            ahead - TAU
-        } else {
-            ahead
-        };
-        uv[k] = Point2::new(way.madd(ahead, prev), uv[k].y());
+        if let Some(u) = ellipse_u_after(ellipse, surface, (uv[k - 1].x(), uv[k].x()), step) {
+            uv[k] = Point2::new(u, uv[k].y());
+        }
     }
+}
+
+/// The UV samples of points `pts_3d` taken in order along one edge whose
+/// curve is `curve`, lifted as [`lift_edge_samples`] lifts them from the
+/// first point's own projection. `None` when a point does not project.
+pub(super) fn edge_uv_samples(
+    curve: &EdgeCurve,
+    surface: &FaceSurface,
+    pts_3d: &[Point3],
+) -> Option<Vec<Point2>> {
+    let mut uv: Vec<Point2> = pts_3d
+        .iter()
+        .map(|&p| surface.project_point(p).map(|(u, v)| Point2::new(u, v)))
+        .collect::<Option<_>>()?;
+    lift_edge_samples(curve, surface, pts_3d, &mut uv);
+    Some(uv)
 }
 
 /// The span of its parameter that an ellipse from `start` to `end` runs

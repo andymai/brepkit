@@ -2906,7 +2906,24 @@ fn build_section_edges(
                                 end,
                             );
                             let mid_uv = face.surface().project_point(mid_3d);
-                            if let Some((mu, _mv)) = mid_uv {
+                            // An ellipse on a cylinder or a cone runs one way
+                            // in u: a quarter of its turn can carry most of a
+                            // turn of u (a steep cut's near vertex), where the
+                            // nearest copy reads the wrong way.
+                            let ellipse_way = match &curve_3d {
+                                EdgeCurve::Ellipse(e) => {
+                                    super::pcurve_compute::ellipse_u_sense(e, face.surface())
+                                }
+                                EdgeCurve::Line
+                                | EdgeCurve::Circle(_)
+                                | EdgeCurve::NurbsCurve(_) => None,
+                            };
+                            if let Some(way) = ellipse_way {
+                                (
+                                    Some(Point2::new(su, sv)),
+                                    Some(Point2::new(way.madd(period, su), sv)),
+                                )
+                            } else if let Some((mu, _mv)) = mid_uv {
                                 // Determine winding: does the curve go in +u or -u
                                 // direction from start?
                                 let du = mu - su;

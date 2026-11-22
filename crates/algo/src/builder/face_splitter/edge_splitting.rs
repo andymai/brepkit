@@ -6,7 +6,7 @@ use brepkit_topology::edge::EdgeCurve;
 use brepkit_topology::face::FaceSurface;
 
 use super::super::pcurve_compute::{
-    compute_boundary_pcurve_on_surface, ellipse_u_sense, evaluate_edge_at_t,
+    compute_boundary_pcurve_on_surface, ellipse_u_after, evaluate_edge_at_t,
     project_point_on_surface, shorter_arc_delta,
 };
 use super::super::plane_frame::PlaneFrame;
@@ -805,13 +805,8 @@ fn walked_uv(
 
 /// The `u` of the point at fraction `t` of an ellipse edge on a cylinder or
 /// a cone, `t` read as [`find_splits_on_ellipse`] reads it, on the turn the
-/// edge reaches it along its traversal. `u` is the point's projected `u`.
-/// `None` when [`ellipse_u_sense`] is.
-///
-/// `u` runs strictly one way along the ellipse, so a run of its parameter
-/// under a turn advances `u` by less than a turn, and the split lies the
-/// projected value's advance from the start, read the way `u` runs. Within
-/// rounding of the start's ruling, the run of the parameter says which end.
+/// edge reaches it along its traversal ([`ellipse_u_after`] from the edge's
+/// start). `u` is the point's projected `u`.
 fn ellipse_split_u(
     ellipse: &brepkit_math::curves::Ellipse3D,
     edge: &OrientedPCurveEdge,
@@ -819,20 +814,10 @@ fn ellipse_split_u(
     surface: &FaceSurface,
     tol: f64,
 ) -> Option<f64> {
-    use std::f64::consts::{PI, TAU};
-    let sense = ellipse_u_sense(ellipse, surface)?;
-    let way = if edge.forward { sense } else { -sense };
     let (t0, t1) = ellipse_edge_span(edge, tol);
     let run = (t1 - t0) * t;
-    let ahead = (way * (u - edge.start_uv.x())).rem_euclid(TAU);
-    let ahead = if ahead < 1e-9 && run > PI {
-        ahead + TAU
-    } else if ahead > TAU - 1e-9 && run < PI {
-        ahead - TAU
-    } else {
-        ahead
-    };
-    Some(way.madd(ahead, edge.start_uv.x()))
+    let run = if edge.forward { run } else { -run };
+    ellipse_u_after(ellipse, surface, (edge.start_uv.x(), u), run)
 }
 
 /// `uv` moved by whole periods to the copy nearest `near`.
