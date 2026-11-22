@@ -580,18 +580,23 @@ fn ellipse_sample_span(
 const WALL_ELLIPSE_STEP: f64 = std::f64::consts::FRAC_PI_8;
 /// How far a wall ellipse's pcurve may stand off the ellipse's own `(u, v)`
 /// at the points each piece is tested at: in `u`, and in `v` as a fraction
-/// of `max(1, |v|)`.
+/// of `max(1, r)`, `r` the point's distance from the axis. `v` is a length
+/// along the wall's ruling, on a cylinder and on a cone, so its error is a
+/// distance in model units; `r`, unlike `v`, does not move with a
+/// cylinder's parameter origin along its axis.
 const WALL_ELLIPSE_DEVIATION: f64 = 1e-6;
 /// The most pieces a wall ellipse's pcurve takes before the fit gives up.
 const WALL_ELLIPSE_MAX_PIECES: usize = 4096;
 
 /// A sample of an ellipse on a wall: its parameter `s` on `[0, 1]`, its
-/// `(u, v)` with `u` lifted along the ellipse, and their rates in `s`.
+/// `(u, v)` with `u` lifted along the ellipse, their rates in `s`, and its
+/// distance from the axis.
 #[derive(Clone, Copy)]
 struct WallSample {
     s: f64,
     uv: Point2,
     rate: Vec2,
+    radius: f64,
 }
 
 /// The pcurve of an ellipse on a cylinder or a cone as its parameter runs
@@ -633,7 +638,8 @@ fn wall_ellipse_pcurve(
         return None;
     }
     let way = sense * span.signum();
-    // The angle about the axis, its value in `v`, and both rates in `s`.
+    // The angle about the axis, its value in `v`, both rates in `s`, and
+    // the distance from the axis.
     let exact = |s: f64| {
         let t = span.madd(s, ta);
         let p = ellipse.evaluate(t) - origin;
@@ -645,6 +651,7 @@ fn wall_ellipse_pcurve(
             axis.dot(p) * v_per_height,
             px.madd(dy, -(py * dx)) / r2,
             axis.dot(d) * v_per_height,
+            r2.sqrt(),
         )
     };
     // `u` runs one way along the ellipse: on from `prev` by the advance read
@@ -659,11 +666,12 @@ fn wall_ellipse_pcurve(
         way.madd(ahead, prev)
     };
     let sample = |s: f64, prev_u: f64| {
-        let (raw, v, du, dv) = exact(s);
+        let (raw, v, du, dv, radius) = exact(s);
         WallSample {
             s,
             uv: Point2::new(lift(prev_u, raw), v),
             rate: Vec2::new(du, dv),
+            radius,
         }
     };
     let hermite = |a: &WallSample, b: &WallSample, f: f64| {
@@ -699,17 +707,17 @@ fn wall_ellipse_pcurve(
             let truth = sample(h.madd(f, a.s), a.uv.x());
             let fit = hermite(a, b, f);
             (fit.x() - truth.uv.x()).abs() <= WALL_ELLIPSE_DEVIATION
-                && (fit.y() - truth.uv.y()).abs()
-                    <= WALL_ELLIPSE_DEVIATION * truth.uv.y().abs().max(1.0)
+                && (fit.y() - truth.uv.y()).abs() <= WALL_ELLIPSE_DEVIATION * truth.radius.max(1.0)
         })
     };
 
     let (u0, v0) = surface.project_point(ellipse.evaluate(ta))?;
-    let (_, _, du0, dv0) = exact(0.0);
+    let (_, _, du0, dv0, radius0) = exact(0.0);
     let first = WallSample {
         s: 0.0,
         uv: Point2::new(u0, v0),
         rate: Vec2::new(du0, dv0),
+        radius: radius0,
     };
     // Even samples to start from, each lifted from the one before.
     let mut even = vec![first];
@@ -1121,9 +1129,10 @@ pub(super) mod cone_ellipse_fixture {
     /// ellipse's parameter runs evenly from `ta` to `tb` over `[0, 1]`, on
     /// some copy of the period: at 4001 even points its `(u, v)` stands
     /// within 2e-6 of the exact lift ([`lifted_u`]) in `u`, and within
-    /// 2e-6 of `max(1, |v|)` in `v`; its `u` never steps back against the
-    /// way the ellipse's `u` runs; and it leaves each end that way. Returns
-    /// the largest deviation in `u` and in relative `v`.
+    /// 2e-6 of `max(1, r)` in `v`, `r` the point's distance from the axis;
+    /// its `u` never steps back against the way the ellipse's `u` runs; and
+    /// it leaves each end that way. Returns the largest deviation in `u` and
+    /// in relative `v`.
     pub(in crate::builder) fn assert_pcurve_follows(
         pcurve: &brepkit_math::curves2d::Curve2D,
         surface: &FaceSurface,
@@ -1135,6 +1144,13 @@ pub(super) mod cone_ellipse_fixture {
         const N: u32 = 4000;
         let (u_start, u_end) = lifted_u(surface, ellipse, ta, tb);
         let way = (u_end - u_start).signum();
+        let radius = |p: Point3| match surface {
+            FaceSurface::Cone(c) => {
+                let w = p - c.apex();
+                (w - c.axis() * c.axis().dot(w)).length()
+            }
+            _ => 0.0,
+        };
         let first = pcurve.evaluate(0.0);
         let last = pcurve.evaluate(1.0);
         let copy = ((first.x() - u_start) / TAU).round() * TAU;
@@ -1144,11 +1160,12 @@ pub(super) mod cone_ellipse_fixture {
             let s = f64::from(k) / f64::from(N);
             let t = (tb - ta).madd(s, ta);
             let (_, u) = lifted_u(surface, ellipse, ta, t);
-            let (_, v) = surface.project_point(ellipse.evaluate(t)).unwrap();
+            let at = ellipse.evaluate(t);
+            let (_, v) = surface.project_point(at).unwrap();
             let p = pcurve.evaluate(s);
             let (du, dv) = (
                 (p.x() - copy - u).abs(),
-                (p.y() - v).abs() / v.abs().max(1.0),
+                (p.y() - v).abs() / radius(at).max(1.0),
             );
             worst = (worst.0.max(du), worst.1.max(dv));
             assert!(
@@ -1577,6 +1594,79 @@ mod tests {
                     &format!("slope {m}, arc forward {forward}"),
                 );
             }
+        }
+    }
+
+    /// The section of a cylinder of radius 1000 by a plane at one radian to
+    /// its axis, through the axis at the origin, as a closed rim and as an
+    /// arc from its parameter 0.5 to 5.5, on the cylinder with its parameter
+    /// origin at the section's centre and moved 1e6 along the axis. The
+    /// pcurves stand off the ellipse, in 3D at each parameter, by the same
+    /// distance on both, within `2e-6 * max(1, r)` = 2e-3 of it.
+    #[test]
+    fn a_cylinder_sections_pcurve_keeps_its_accuracy_wherever_the_axis_origin_lies() {
+        use brepkit_math::curves::Ellipse3D;
+        use brepkit_math::surfaces::CylindricalSurface;
+        use brepkit_topology::edge::EdgeCurve;
+        use std::f64::consts::TAU;
+
+        let (radius, tilt) = (1000.0_f64, 1.0_f64);
+        let ellipse = Ellipse3D::new_with_ref(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(-tilt.sin(), 0.0, tilt.cos()),
+            radius / tilt.cos(),
+            radius,
+            Vec3::new(tilt.cos(), 0.0, tilt.sin()),
+        )
+        .unwrap();
+        let curve = EdgeCurve::Ellipse(ellipse.clone());
+        let worst = |surface: &FaceSurface, pcurve: &Curve2D, (ta, tb): (f64, f64)| {
+            (0..=4000)
+                .map(|k| {
+                    let s = f64::from(k) / 4000.0;
+                    let at = pcurve.evaluate(s);
+                    let on = surface.evaluate(at.x(), at.y()).unwrap();
+                    (on - ellipse.evaluate((tb - ta).madd(s, ta))).length()
+                })
+                .fold(0.0, f64::max)
+        };
+        let mut errors: Vec<(f64, f64)> = Vec::new();
+        for offset in [0.0, -1e6] {
+            let surface = FaceSurface::Cylinder(
+                CylindricalSurface::new(
+                    Point3::new(0.0, 0.0, offset),
+                    Vec3::new(0.0, 0.0, 1.0),
+                    radius,
+                )
+                .unwrap(),
+            );
+            for k in 0..16 {
+                let p = ellipse.evaluate(f64::from(k) * TAU / 16.0);
+                assert!((p.x().hypot(p.y()) - radius).abs() < 1e-9 * radius);
+            }
+            let start = ellipse.evaluate(0.3);
+            let rim = compute_pcurve_on_surface(&curve, start, start, &surface, &[], None);
+            let arc = compute_boundary_pcurve_on_surface(
+                &curve,
+                ellipse.evaluate(0.5),
+                ellipse.evaluate(5.5),
+                true,
+                &surface,
+                &[],
+                None,
+            );
+            errors.push((
+                worst(&surface, &rim, (0.3, 0.3 + TAU)),
+                worst(&surface, &arc, (0.5, 5.5)),
+            ));
+        }
+        let (near, far) = (errors[0], errors[1]);
+        for (what, a, b) in [("rim", near.0, far.0), ("arc", near.1, far.1)] {
+            assert!(
+                a <= 2e-3 && b <= 2e-3 && (a - b).abs() <= 1e-6,
+                "{what}: the pcurve stands {a} off with the origin at the centre, {b} with it \
+                 1e6 away"
+            );
         }
     }
 }
