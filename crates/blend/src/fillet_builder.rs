@@ -611,46 +611,33 @@ impl<'a> FilletBuilder<'a> {
                 let source_surface = topo.face(face_id)?.surface().clone();
                 let mut adapter = None;
                 let support = surface_ref_or_adapter(&source_surface, &mut adapter);
-                let analytic_pcurve = if face_id == stripe.face1 {
-                    &stripe.pcurve1
+                let pcurve = if source_surface.is_planar() {
+                    let (pcurve, start, end) = build_planar_pcurve_from_contact(support, &contact)?;
+                    brepkit_topology::pcurve::PCurve::new(pcurve, start, end)
                 } else {
-                    &stripe.pcurve2
-                };
-                let (pcurve, pcurve_start, pcurve_end) = if source_surface.is_planar() {
-                    build_planar_pcurve_from_contact(support, &contact)?
-                } else {
-                    match build_pcurve_from_contact(
-                        support,
-                        &contact,
-                        face_u_period(&source_surface),
-                    ) {
-                        Ok(pcurve) => (pcurve, 0.0, 1.0),
-                        Err(BlendError::Math(brepkit_math::MathError::ZeroVector)) => {
-                            match analytic_pcurve {
-                                brepkit_math::curves2d::Curve2D::Circle(_)
-                                | brepkit_math::curves2d::Curve2D::Ellipse(_) => {
-                                    (analytic_pcurve.clone(), 0.0, std::f64::consts::TAU)
-                                }
-                                brepkit_math::curves2d::Curve2D::Nurbs(curve) => {
-                                    let (start, end) = curve.domain();
-                                    (analytic_pcurve.clone(), start, end)
-                                }
-                                brepkit_math::curves2d::Curve2D::Line(_) => {
-                                    return Err(BlendError::Math(
-                                        brepkit_math::MathError::ZeroVector,
-                                    ));
-                                }
-                            }
-                        }
-                        Err(error) => return Err(error),
-                    }
+                    // The trimmer's weld distance: ends this close make one
+                    // closed contact.
+                    const CLOSED: f64 = 1e-7;
+                    let [start, end] = restriction.contact_3d[..] else {
+                        return Err(BlendError::TrimmingFailure { face: face_id });
+                    };
+                    let end = if (end - start).length() <= CLOSED {
+                        start
+                    } else {
+                        end
+                    };
+                    // The trim cuts a contact that crosses the face's seam
+                    // there.
+                    crate::builder_utils::pcurve_along(
+                        &source_surface,
+                        &EdgeCurve::NurbsCurve(contact.clone()),
+                        (start, end),
+                        true,
+                    )
+                    .ok_or(BlendError::TrimmingFailure { face: face_id })?
                 };
                 restriction.curve = Some(EdgeCurve::NurbsCurve(contact));
-                restriction.pcurve = Some(brepkit_topology::pcurve::PCurve::new(
-                    pcurve,
-                    pcurve_start,
-                    pcurve_end,
-                ));
+                restriction.pcurve = Some(pcurve);
                 restrictions_by_face
                     .entry(face_id)
                     .or_default()
@@ -5680,10 +5667,10 @@ fn run_stripes_to_tilted_caps(
     const OBLIQUE: f64 = 0.05;
     carry_walked_rounds(topo, plan, stripe_results)?;
     let mut caps = TiltedCaps::new();
-    // A terminal whose contact would run back past nearly all of it is tried
-    // again once the others are done: the far end may run on outward at the
-    // contour's other terminal (a cap leaning the same way at both ends), and
-    // the contact read from there is long enough.
+    // A terminal whose contact would run back past nearly all of it, or all
+    // of it and on, is tried again once the others are done: the far end may
+    // run on outward at the contour's other terminal (a cap leaning the same
+    // way at both ends), and the contact read from there is long enough.
     let mut order: Vec<usize> = (0..plan.junctions.len()).collect();
     let mut retried = vec![false; plan.junctions.len()];
     let mut next = 0;
@@ -5851,7 +5838,7 @@ fn run_stripes_to_tilted_caps(
                     reached = far + run * s;
                 }
             }
-            if fraction <= 0.05 && fraction > 0.0 && !retried[slot] && on_corner(reached)? {
+            if fraction <= 0.05 && !retried[slot] && on_corner(reached)? {
                 short = true;
             }
             if fraction <= 0.05 || !on_corner(reached)? {
@@ -8194,14 +8181,311 @@ fn compute_stripe_for_edge(
         });
     }
     let spine = Spine::from_single_edge(topo, edge_id)?;
-    compute_stripe_for_spine(
+    let mut result = compute_stripe_for_spine(
         topo,
         Some(adjacency),
         adj_faces[0],
         adj_faces[1],
         spine,
         law,
-    )
+    )?;
+    run_on_to_same_surface(topo, adjacency, &mut result.stripe)?;
+    Ok(result)
+}
+
+/// A closed round's contact on a curved face that reaches the face's far
+/// loop, or runs past it, where the one face beyond that loop lies on the
+/// same surface (a ball cut below its equator, whose two faces meet there):
+/// the contact lies on the face beyond. The band then meets that face in
+/// place of the narrow face, which goes, as a face [`swallow_narrow_face`]
+/// finds does. The band and its contacts stay as they are. The contact
+/// moves only where it is proved past the far loop's plane
+/// ([`contact_against_far_plane`]); one that reaches the far loop and is
+/// not proved past it is refused: no trim of either face alone holds it.
+fn run_on_to_same_surface(
+    topo: &Topology,
+    adjacency: &brepkit_topology::adjacency::AdjacencyIndex,
+    stripe: &mut Stripe,
+) -> Result<(), BlendError> {
+    const SAMPLES: u32 = 64;
+    if !stripe.spine.is_closed() {
+        return Ok(());
+    }
+    let spine_edges: HashSet<EdgeId> = stripe.spine.edges().iter().copied().collect();
+    let length = stripe.spine.length();
+    let mut rim = Vec::with_capacity(SAMPLES as usize + 1);
+    for k in 0..=SAMPLES {
+        rim.push(
+            stripe
+                .spine
+                .evaluate(topo, length * f64::from(k) / f64::from(SAMPLES))?,
+        );
+    }
+    let size = {
+        let bbox = Aabb3::from_points(rim.iter().copied());
+        (bbox.max - bbox.min).length()
+    };
+    let on_tol = 1e-7 * (1.0 + size);
+    let same_tol = 1e-6 * (1.0 + size);
+    for side in 0..2 {
+        let (face_id, other) = if side == 0 {
+            (stripe.face1, stripe.face2)
+        } else {
+            (stripe.face2, stripe.face1)
+        };
+        let face = topo.face(face_id)?;
+        let surface = face.surface();
+        let Some(period) = face_u_period(surface) else {
+            continue;
+        };
+        // The test below reads `v` as it comes, which a surface closed in
+        // `v` (a torus) wraps between the rim and the far loop.
+        if crate::builder_utils::face_v_period(surface).is_some() {
+            continue;
+        }
+        let loops: Vec<Vec<OrientedEdge>> = std::iter::once(face.outer_wire())
+            .chain(face.inner_wires().iter().copied())
+            .map(|wire| topo.wire(wire).map(|w| w.edges().to_vec()))
+            .collect::<Result<_, _>>()?;
+        let is_rim =
+            |edges: &[OrientedEdge]| edges.iter().all(|oe| spine_edges.contains(&oe.edge()));
+        let far = match &loops[..] {
+            [a, b] if is_rim(a) => b,
+            [a, b] if is_rim(b) => a,
+            _ => continue,
+        };
+        if far.iter().any(|oe| spine_edges.contains(&oe.edge())) {
+            continue;
+        }
+        let mut beyond = None;
+        for oe in far {
+            let next = match adjacency.faces_for_edge(oe.edge()) {
+                [a, b] if *a == face_id => *b,
+                [a, b] if *b == face_id => *a,
+                _ => {
+                    beyond = None;
+                    break;
+                }
+            };
+            if next == other || next == face_id || beyond.is_some_and(|b| b != next) {
+                beyond = None;
+                break;
+            }
+            beyond = Some(next);
+        }
+        let Some(beyond) = beyond else {
+            continue;
+        };
+        let contact_curve = if side == 0 {
+            stripe.contact1.clone()
+        } else {
+            stripe.contact2.clone()
+        };
+        let (t0, t1) = contact_curve.domain();
+        let contact: Vec<Point3> = (0..=SAMPLES)
+            .map(|k| contact_curve.evaluate((t1 - t0).madd(f64::from(k) / f64::from(SAMPLES), t0)))
+            .collect();
+        // The face beyond lies on the same surface, facing the same way, at
+        // the rim and at the contact.
+        let beyond_face = topo.face(beyond)?;
+        let outward = |reversed: bool, n: Vec3| if reversed { -n } else { n };
+        let same = rim.iter().chain(&contact).all(|&q| {
+            let (Some((u, v)), Some((bu, bv))) = (
+                surface.project_point(q),
+                beyond_face.surface().project_point(q),
+            ) else {
+                return false;
+            };
+            let Some(foot) = beyond_face.surface().evaluate(bu, bv) else {
+                return false;
+            };
+            let n = outward(face.is_reversed(), surface.normal(u, v));
+            let nb = outward(
+                beyond_face.is_reversed(),
+                beyond_face.surface().normal(bu, bv),
+            );
+            (foot - q).length() <= same_tol && n.dot(nb) > 1.0 - 1e-6
+        });
+        if !same {
+            continue;
+        }
+        // The rim and the far loop in the surface's parameters, each a run
+        // once round in u.
+        let mut far_points = Vec::new();
+        for oe in far {
+            let edge = topo.edge(oe.edge())?;
+            let (a, b) = (
+                topo.vertex(edge.start())?.point(),
+                topo.vertex(edge.end())?.point(),
+            );
+            let (s0, s1) = edge.curve().domain_with_endpoints(a, b);
+            for k in 0..=SAMPLES {
+                let f = f64::from(k) / f64::from(SAMPLES);
+                let f = if oe.is_forward() { f } else { 1.0 - f };
+                far_points.push(
+                    edge.curve()
+                        .evaluate_with_endpoints((s1 - s0).madd(f, s0), a, b),
+                );
+            }
+        }
+        // The contact moves to the face beyond only where that is proved:
+        // short of the far loop's plane it stays, and where neither is
+        // proved, a contact any station of which reaches the far loop is
+        // refused.
+        match contact_against_far_plane(&rim, &far_points, &contact_curve, on_tol) {
+            FarSide::Beyond => {
+                log::debug!("closed round: contact on {face_id:?} runs on to {beyond:?}");
+                if side == 0 {
+                    stripe.face1 = beyond;
+                } else {
+                    stripe.face2 = beyond;
+                }
+                continue;
+            }
+            FarSide::Short => continue,
+            FarSide::Unsure => {}
+        }
+        let (Some(rim_run), Some(far_run)) = (
+            RunRound::new(surface, &rim, period),
+            RunRound::new(surface, &far_points, period),
+        ) else {
+            continue;
+        };
+        let mut reached = false;
+        for &q in &contact {
+            let Some((u, v)) = surface.project_point(q) else {
+                return Ok(());
+            };
+            let (v_far, v_rim) = (far_run.v_at(u), rim_run.v_at(u));
+            let on = surface
+                .evaluate(u, v_far)
+                .is_some_and(|p| (p - q).length() <= on_tol);
+            reached |= on || (v - v_far) * (v_far - v_rim) > 0.0;
+        }
+        if !reached {
+            continue;
+        }
+        return Err(BlendError::PlanningFailure {
+            reason: format!(
+                "the fillet's contact on face {} reaches its far loop, and it is not proved past it",
+                side + 1
+            ),
+        });
+    }
+    Ok(())
+}
+
+/// Where a closed contact lies against the plane of its face's far loop.
+#[derive(Debug, PartialEq, Eq)]
+enum FarSide {
+    /// All of it past the plane, or on it, away from the rim.
+    Beyond,
+    /// All of it short of the plane, on the rim's side.
+    Short,
+    /// Neither proved: the far loop is not plane, the rim does not lie on
+    /// one side of it, or the contact's control points lie on both sides.
+    Unsure,
+}
+
+/// Where `contact` lies against the plane the far loop (`far`, points of
+/// it in order round) lies in, read against the side the rim (`rim`) lies
+/// on, within `tol`. A rational curve whose weights are all positive lies
+/// in the hull of its control points, so where they all lie past the
+/// plane, or on it, so does the whole curve.
+fn contact_against_far_plane(
+    rim: &[Point3],
+    far: &[Point3],
+    contact: &brepkit_math::nurbs::curve::NurbsCurve,
+    tol: f64,
+) -> FarSide {
+    let Some(&first) = far.first() else {
+        return FarSide::Unsure;
+    };
+    // Newell's normal of the far loop.
+    let mut normal = Vec3::new(0.0, 0.0, 0.0);
+    for (k, &p) in far.iter().enumerate() {
+        let q = far[(k + 1) % far.len()];
+        normal += (p - first).cross(q - first);
+    }
+    let Ok(normal) = normal.normalize() else {
+        return FarSide::Unsure;
+    };
+    let height = |p: Point3| normal.dot(p - first);
+    if far.iter().any(|&p| height(p).abs() > tol) {
+        return FarSide::Unsure;
+    }
+    let rim_side = if rim.iter().all(|&p| height(p) < -tol) {
+        -1.0
+    } else if rim.iter().all(|&p| height(p) > tol) {
+        1.0
+    } else {
+        return FarSide::Unsure;
+    };
+    if contact.weights().iter().any(|&w| w <= 0.0) {
+        return FarSide::Unsure;
+    }
+    let past: Vec<f64> = contact
+        .control_points()
+        .iter()
+        .map(|&p| -rim_side * height(p))
+        .collect();
+    if past.iter().all(|&h| h >= -tol) {
+        FarSide::Beyond
+    } else if past.iter().all(|&h| h < -tol) {
+        FarSide::Short
+    } else {
+        FarSide::Unsure
+    }
+}
+
+/// A loop on a surface that closes round in u, read in the surface's
+/// parameters as `v` against `u`: it must run once round, always the same
+/// way.
+struct RunRound {
+    /// `(u, v)` in order of increasing `u`, over one period from the first.
+    points: Vec<(f64, f64)>,
+    period: f64,
+}
+
+impl RunRound {
+    fn new(surface: &FaceSurface, points: &[Point3], period: f64) -> Option<Self> {
+        let mut run: Vec<(f64, f64)> = Vec::with_capacity(points.len());
+        for &p in points {
+            let (mut u, v) = surface.project_point(p)?;
+            if let Some(&(last, _)) = run.last() {
+                u -= period * ((u - last) / period).round();
+            }
+            run.push((u, v));
+        }
+        let (&(first, _), &(last, _)) = (run.first()?, run.last()?);
+        if ((last - first).abs() - period).abs() > 1e-6 * period {
+            return None;
+        }
+        if last < first {
+            run.reverse();
+        }
+        if run.windows(2).any(|w| w[1].0 < w[0].0) {
+            return None;
+        }
+        Some(Self {
+            points: run,
+            period,
+        })
+    }
+
+    fn v_at(&self, u: f64) -> f64 {
+        let base = self.points[0].0;
+        let u = base + (u - base).rem_euclid(self.period);
+        let at = self.points.partition_point(|&(pu, _)| pu < u);
+        match (
+            at.checked_sub(1).and_then(|i| self.points.get(i)),
+            self.points.get(at),
+        ) {
+            (Some(&(ua, va)), Some(&(ub, vb))) if ub > ua => va + (vb - va) * (u - ua) / (ub - ua),
+            (_, Some(&(_, v))) | (Some(&(_, v)), None) => v,
+            (None, None) => 0.0,
+        }
+    }
 }
 
 fn radius_law_from_plan(plan: &crate::fillet_plan::RadiusLawPlan) -> RadiusLaw {
@@ -8235,14 +8519,16 @@ fn compute_stripe_for_contour(
         });
     }
     let law = radius_law_from_plan(&contour.radius_law);
-    compute_stripe_for_spine(
+    let mut result = compute_stripe_for_spine(
         topo,
         Some(adjacency),
         contour.side1,
         contour.side2,
         contour.spine.clone(),
         &law,
-    )
+    )?;
+    run_on_to_same_surface(topo, adjacency, &mut result.stripe)?;
+    Ok(result)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -8284,7 +8570,15 @@ fn compute_stripe_for_spine(
             face1,
             face2,
         )? {
-            check_stripe_residuals(topo, &result.stripe)?;
+            // An exact band that misses its faces' tolerance is walked
+            // instead, as a pair no fast path takes is.
+            let fits = match check_stripe_residuals(topo, &result.stripe) {
+                Ok(()) => true,
+                Err(error) => {
+                    log::debug!("fillet: the exact band misses its faces ({error}); walking it");
+                    false
+                }
+            };
             // A closed round whose contact runs off its face (a tube's rim
             // rounded wider than the wall is thick) is not this exact band:
             // its trim built a valid solid with material added, not taken
@@ -8314,7 +8608,7 @@ fn compute_stripe_for_spine(
                 )?
                 .is_empty())
             };
-            if on_faces || (!spine.is_closed() && !open_band()?) {
+            if fits && (on_faces || (!spine.is_closed() && !open_band()?)) {
                 return Ok(result);
             }
         }
@@ -12026,5 +12320,91 @@ mod tests {
     fn a_hole_past_the_end_curve_reaching_outside_the_triangle_is_passed_over() {
         let hole = [(5.0, -0.2, -0.2), (5.5, -1.6, -0.2), (6.0, -0.2, -1.6)];
         assert!(notch_clear_of_hole(hole).unwrap());
+    }
+
+    /// `count` points round the circle about `z` of radius `radius` at
+    /// height `z`, the first again at the end.
+    fn ring(radius: f64, z: f64, count: u32) -> Vec<Point3> {
+        (0..=count)
+            .map(|k| {
+                let a = std::f64::consts::TAU * f64::from(k) / f64::from(count);
+                Point3::new(radius * a.cos(), radius * a.sin(), z)
+            })
+            .collect()
+    }
+
+    /// The polyline through `points` as a curve of degree 1, `knots` its
+    /// inner knots.
+    fn polyline(points: Vec<Point3>, inner: &[f64]) -> brepkit_math::nurbs::curve::NurbsCurve {
+        let mut knots = vec![0.0, 0.0];
+        knots.extend_from_slice(inner);
+        knots.extend([1.0, 1.0]);
+        let weights = vec![1.0; points.len()];
+        brepkit_math::nurbs::curve::NurbsCurve::new(1, knots, points, weights).unwrap()
+    }
+
+    fn even_knots(count: usize) -> Vec<f64> {
+        (1..count - 1)
+            .map(|k| k as f64 / (count - 1) as f64)
+            .collect()
+    }
+
+    /// A unit ball cut at `z = -0.2`: its equator, 32 chords at `z = 0`, is
+    /// the far loop of the band the rim at `z = -0.2` lies on. A contact all
+    /// past the equator's plane, or on it, moves to the face beyond; one all
+    /// short of it stays. A contact that dips below the plane between the
+    /// 65 stations at which it was read has every station past it, which
+    /// moved it, though part of it lies on the band: it is not proved past.
+    #[test]
+    fn a_contact_is_past_its_far_loop_only_where_its_control_points_prove_it() {
+        let tol = 1e-7;
+        let far: Vec<Point3> = ring(1.0, 0.0, 32);
+        let rim: Vec<Point3> = ring(0.96_f64.sqrt(), -0.2, 64);
+        let circle = |z: f64| {
+            let points = ring((1.0 - z * z).sqrt(), z, 64);
+            let count = points.len();
+            polyline(points, &even_knots(count))
+        };
+        assert_eq!(
+            contact_against_far_plane(&rim, &far, &circle(0.067), tol),
+            FarSide::Beyond
+        );
+        assert_eq!(
+            contact_against_far_plane(&rim, &far, &circle(0.0), tol),
+            FarSide::Beyond
+        );
+        assert_eq!(
+            contact_against_far_plane(&rim, &far, &circle(-0.1), tol),
+            FarSide::Short
+        );
+
+        // A dip to z = -0.05 from z = 0.05, narrow, between stations 32 and
+        // 33 of 64.
+        let at = 0.5 + 1.0 / 256.0;
+        let inner = [at - 1.0 / 1024.0, at, at + 1.0 / 1024.0];
+        let points = vec![
+            Point3::new(1.0, 0.0, 0.05),
+            Point3::new(0.0, 1.0, 0.05),
+            Point3::new(-1.0, 0.0, 0.05),
+            Point3::new(-1.0, -0.01, -0.05),
+            Point3::new(-1.0, -0.02, 0.05),
+            Point3::new(1.0, 0.0, 0.05),
+        ];
+        let dip = polyline(points, &[0.25, inner[0], inner[1], inner[2]]);
+        let stations_past = (0..=64).all(|k| dip.evaluate(f64::from(k) / 64.0).z() > 0.0);
+        assert!(stations_past, "every station lies past the plane");
+        assert!(dip.evaluate(at).z() < 0.0, "the dip lies short of it");
+        assert_eq!(
+            contact_against_far_plane(&rim, &far, &dip, tol),
+            FarSide::Unsure
+        );
+
+        // A far loop off a plane proves nothing.
+        let mut bent = far;
+        bent[5] = Point3::new(bent[5].x(), bent[5].y(), 0.01);
+        assert_eq!(
+            contact_against_far_plane(&rim, &bent, &circle(0.067), tol),
+            FarSide::Unsure
+        );
     }
 }

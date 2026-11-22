@@ -31,6 +31,7 @@ zip.workspace = true
 [dev-dependencies]
 brepkit-algo.workspace = true
 brepkit-blend.workspace = true
+brepkit-check.workspace = true
 brepkit-geometry.workspace = true
 brepkit-topology = {workspace = true, features = ["test-utils"]}
 proptest.workspace = true

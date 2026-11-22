@@ -10,6 +10,7 @@
 //! each section; [`approximate_blend_surface`] makes one that takes them as
 //! its control points.
 
+use brepkit_math::madd::Madd;
 use brepkit_math::nurbs::surface::NurbsSurface;
 use brepkit_math::traits::ParametricSurface;
 use brepkit_math::vec::Point3;
@@ -208,6 +209,67 @@ impl<'a, F: BlendFunction> Walker<'a, F> {
             short_way(self.surf2.closed_v(), to.v2 - from.v2),
         );
         BlendParams { u1, v1, u2, v2 }
+    }
+
+    /// Whether a step from `from` (whose section is `last`, at `s0`) to the
+    /// section `next` (at `s1`) keeps to one branch: each contact on its own
+    /// must split its move evenly ([`Self::contact_splits_evenly`]).
+    fn splits_evenly(
+        &self,
+        from: BlendParams,
+        last: &CircSection,
+        next: &CircSection,
+        span: (f64, f64),
+    ) -> bool {
+        [false, true]
+            .into_iter()
+            .all(|second| self.contact_splits_evenly(second, from, last, next, span))
+    }
+
+    /// Whether one contact (the second's if `second`) splits its move over
+    /// a step evenly: solved at the step's middle, it must lie within three
+    /// quarters of its move of both ends, and so again in the half where it
+    /// makes the most of its move, down to `DEPTH` halvings. On one branch
+    /// it lies about half way at every halving; a leap to another branch,
+    /// however fast the contact runs beside it, ends up a half's whole move.
+    fn contact_splits_evenly(
+        &self,
+        second: bool,
+        from: BlendParams,
+        last: &CircSection,
+        next: &CircSection,
+        (s0, s1): (f64, f64),
+    ) -> bool {
+        const DEPTH: usize = 8;
+        // A contact that barely moves may stray by the solve's own tolerance.
+        let slack = 2.0 * self.config.tol_3d;
+        let contact = |section: &CircSection| if second { section.p2 } else { section.p1 };
+        let (mut from, mut start, mut end) = (from, contact(last), contact(next));
+        let (mut lo, mut hi) = (s0, s1);
+        for _ in 0..DEPTH {
+            let s_mid = f64::midpoint(lo, hi);
+            let Ok(ctx) = self.make_context(s_mid) else {
+                return false;
+            };
+            let Some(at_mid) = self.newton_solve(from, &ctx) else {
+                return false;
+            };
+            let mid = contact(&self.func.section(self.surf1, self.surf2, &at_mid, &ctx));
+            let (first_half, second_half) = ((mid - start).length(), (end - mid).length());
+            let bound = 0.75f64.madd((end - start).length(), slack);
+            if first_half > bound || second_half > bound {
+                return false;
+            }
+            if first_half >= second_half {
+                end = mid;
+                hi = s_mid;
+            } else {
+                start = mid;
+                lo = s_mid;
+                from = at_mid;
+            }
+        }
+        true
     }
 
     /// Run Newton-Raphson iteration to convergence from an initial guess.
@@ -416,7 +478,11 @@ impl<'a, F: BlendFunction> Walker<'a, F> {
             // A contact leaping far along its face while the spine moves a
             // little is the solve landing on another branch (a ball too big
             // for a hollow of a face, wedged where the contact runs away):
-            // not a step either, so it halves like a solve that fails.
+            // not a step either, so it halves like a solve that fails. A
+            // contact that runs fast along its branch (a radius growing
+            // much faster than the spine runs) moves half as far by the
+            // step's middle, where a leap to another branch does all or
+            // none of its move.
             let solved = self.newton_solve(predicted, &ctx_next).filter(|converged| {
                 sections.last().is_none_or(|last| {
                     let sec = self
@@ -424,6 +490,7 @@ impl<'a, F: BlendFunction> Walker<'a, F> {
                         .section(self.surf1, self.surf2, converged, &ctx_next);
                     let moved = (sec.p1 - last.p1).length().max((sec.p2 - last.p2).length());
                     moved <= MAX_CONTACT_SPEED * clamped_step
+                        || self.splits_evenly(params, last, &sec, (s, s_next))
                 })
             });
             if let Some(converged) = solved {
@@ -1220,5 +1287,228 @@ mod tests {
         let sections = boss_foot_sections(&[0.4, 0.4, 0.4, 0.4, 0.5]);
         assert!(interpolate_blend_surface(&sections).is_err());
         assert!(approximate_blend_surface(&sections).is_ok());
+    }
+
+    /// A blend whose contacts sit where it is told: at spine fraction `t`
+    /// the first contact is at `(first(t), 0)` on its plane and the second
+    /// at `(second(t), 0)` on its own, and no section solves where `fails`
+    /// says so. Its Jacobian is the identity, so Newton lands at once.
+    struct Scripted<A, B, C> {
+        first: A,
+        second: B,
+        fails: C,
+    }
+
+    impl<A, B, C> BlendFunction for Scripted<A, B, C>
+    where
+        A: Fn(f64) -> f64,
+        B: Fn(f64) -> f64,
+        C: Fn(f64) -> bool,
+    {
+        fn value(
+            &self,
+            _surf1: &dyn ParametricSurface,
+            _surf2: &dyn ParametricSurface,
+            params: &BlendParams,
+            ctx: &BlendContext,
+        ) -> [f64; 4] {
+            if (self.fails)(ctx.t) {
+                return [1.0, 0.0, 0.0, 0.0];
+            }
+            [
+                params.u1 - (self.first)(ctx.t),
+                params.v1,
+                params.u2 - (self.second)(ctx.t),
+                params.v2,
+            ]
+        }
+
+        fn jacobian(
+            &self,
+            _surf1: &dyn ParametricSurface,
+            _surf2: &dyn ParametricSurface,
+            _params: &BlendParams,
+            _ctx: &BlendContext,
+        ) -> [[f64; 4]; 4] {
+            [
+                [1.0, 0.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0, 0.0],
+                [0.0, 0.0, 0.0, 1.0],
+            ]
+        }
+
+        fn section(
+            &self,
+            surf1: &dyn ParametricSurface,
+            surf2: &dyn ParametricSurface,
+            params: &BlendParams,
+            ctx: &BlendContext,
+        ) -> CircSection {
+            let p1 = surf1.evaluate(params.u1, params.v1);
+            let p2 = surf2.evaluate(params.u2, params.v2);
+            CircSection {
+                p1,
+                p2,
+                center: Point3::new(
+                    0.5 * (p1.x() + p2.x()),
+                    0.5 * (p1.y() + p2.y()),
+                    0.5 * (p1.z() + p2.z()),
+                ),
+                radius: 1.0,
+                uv1: (params.u1, params.v1),
+                uv2: (params.u2, params.v2),
+                t: ctx.t,
+            }
+        }
+    }
+
+    /// Whether a step of 0.1 along a unit spine, from 0, keeps to one branch
+    /// for the contacts `first` and `second` script, read at its middle.
+    fn step_splits_evenly(
+        first: impl Fn(f64) -> f64,
+        second: impl Fn(f64) -> f64,
+        fails: impl Fn(f64) -> bool,
+    ) -> bool {
+        let (p1, p2) = make_perpendicular_planes();
+        let mut topo = Topology::new();
+        let eid = make_line_edge(
+            &mut topo,
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(0.0, 0.0, 1.0),
+        );
+        let spine = Spine::from_single_edge(&topo, eid).unwrap();
+        let blend = Scripted {
+            first,
+            second,
+            fails,
+        };
+        let walker = Walker::new(&blend, &p1, &p2, &spine, &topo, WalkerConfig::default());
+        let solve = |t: f64| {
+            walker
+                .solve_section(t, None)
+                .expect("a section at either end")
+        };
+        let (from, last) = solve(0.0);
+        let (_, next) = solve(0.1);
+        walker.splits_evenly(from, &last, &next, (0.0, 0.1))
+    }
+
+    /// A contact that leaps from where it was to where it lands, at `at`.
+    fn leap(at: f64, to: f64) -> impl Fn(f64) -> f64 {
+        move |t: f64| if t < at { 0.0 } else { to }
+    }
+
+    #[test]
+    fn a_fast_step_on_one_branch_splits_evenly() {
+        // Both contacts run 200 and 3 times as fast as the spine.
+        assert!(step_splits_evenly(|t| 200.0 * t, |t| 3.0 * t, |_| false));
+        // A contact that stands still may stray by the solve's tolerance.
+        let jitter = |t: f64| if (t - 0.05).abs() < 1e-12 { 1e-7 } else { 0.0 };
+        assert!(step_splits_evenly(|t| 200.0 * t, jitter, |_| false));
+    }
+
+    #[test]
+    fn a_leap_of_either_contact_by_the_step_s_middle_does_not_split_evenly() {
+        for at in [0.025, 0.075] {
+            // A leap before the middle has done all its move there, after
+            // it none.
+            assert!(
+                !step_splits_evenly(leap(at, 20.0), |t| t, |_| false),
+                "first at {at}"
+            );
+            assert!(
+                !step_splits_evenly(|t| t, leap(at, 20.0), |_| false),
+                "second at {at}"
+            );
+        }
+        // Past the solve's tolerance a contact that stands still does not
+        // stray.
+        let stray = |t: f64| if (t - 0.05).abs() < 1e-12 { 1e-5 } else { 0.0 };
+        assert!(!step_splits_evenly(|t| t, stray, |_| false));
+    }
+
+    #[test]
+    fn a_fast_contact_does_not_hide_a_leap_of_the_other() {
+        // The fast contact moves 20 in the step, evenly; the other leaps 5,
+        // under three quarters of the fast one's move.
+        assert!(!step_splits_evenly(
+            |t| 200.0 * t,
+            leap(0.075, 5.0),
+            |_| false
+        ));
+        assert!(!step_splits_evenly(
+            leap(0.075, 5.0),
+            |t| 200.0 * t,
+            |_| false
+        ));
+    }
+
+    /// A contact that runs 200 times as fast as the spine and leaps 20 past
+    /// the step's middle stands at 0, 10 and 40: each half of the step moves
+    /// it within three quarters of the whole, but the half with the leap
+    /// splits unevenly again.
+    #[test]
+    fn a_leap_hidden_by_a_fast_run_of_the_same_contact_does_not_split_evenly() {
+        let lept = |t: f64| 200.0f64.madd(t, leap(0.075, 20.0)(t));
+        assert!(!step_splits_evenly(lept, |t| t, |_| false));
+        assert!(!step_splits_evenly(|t| t, lept, |_| false));
+    }
+
+    /// A leap of 10 at 0.075 in a contact running 200 times as fast as the
+    /// spine, beside a contact that runs fast and slows down (`1000 t -
+    /// 4500 t^2`), which makes most of its move in the step's first half:
+    /// each contact follows its own uneven half, and the first finds its
+    /// leap in the second half.
+    #[test]
+    fn a_leap_in_one_contact_s_other_half_does_not_split_evenly() {
+        let lept = |t: f64| 200.0f64.madd(t, leap(0.075, 10.0)(t));
+        let slowing = |t: f64| (-4500.0 * t).madd(t, 1000.0 * t);
+        assert!(!step_splits_evenly(lept, slowing, |_| false));
+        assert!(!step_splits_evenly(slowing, lept, |_| false));
+        // Without the leap, both run on one branch.
+        assert!(step_splits_evenly(|t| 200.0 * t, slowing, |_| false));
+    }
+
+    #[test]
+    fn a_step_whose_middle_does_not_solve_does_not_split_evenly() {
+        let fails = |t: f64| (t - 0.05).abs() < 0.01;
+        assert!(!step_splits_evenly(|t| 200.0 * t, |t| t, fails));
+    }
+
+    /// A walk whose contact runs 200 times as fast as the spine: its first
+    /// step is the longest the walker takes, 0.05 of the spine, unless the
+    /// solve at that step's middle fails, when the step halves.
+    #[test]
+    fn a_fast_step_whose_middle_does_not_solve_shrinks() {
+        let first_step = |fails: &dyn Fn(f64) -> bool| {
+            let (p1, p2) = make_perpendicular_planes();
+            let mut topo = Topology::new();
+            let eid = make_line_edge(
+                &mut topo,
+                Point3::new(0.0, 0.0, 0.0),
+                Point3::new(0.0, 0.0, 1.0),
+            );
+            let spine = Spine::from_single_edge(&topo, eid).unwrap();
+            let blend = Scripted {
+                first: |t: f64| 200.0 * t,
+                second: |t: f64| t,
+                fails,
+            };
+            let walker = Walker::new(&blend, &p1, &p2, &spine, &topo, WalkerConfig::default());
+            let (start, _) = walker.solve_section(0.0, None).unwrap();
+            let walked = walker.walk(start, 0.0, 1.0).unwrap();
+            assert!(
+                (walked.sections.last().unwrap().t - 1.0).abs() < 1e-12,
+                "the walk reaches the spine's end"
+            );
+            walked.sections[1].t
+        };
+        let clear = first_step(&|_| false);
+        assert!((clear - 0.05).abs() < 1e-12, "first step {clear}");
+        // No section solves at the first step's middle; past it the halving
+        // checks never land on that point.
+        let blocked = first_step(&|t| (t - 0.025).abs() < 1e-9);
+        assert!(blocked < 0.05 - 1e-9, "first step {blocked}");
     }
 }

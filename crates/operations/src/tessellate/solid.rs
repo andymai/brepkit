@@ -1,7 +1,7 @@
 //! Solid-level tessellation orchestration.
 
 use brepkit_geometry::extrema::segment_segment_distance;
-use brepkit_math::det_hash::{DetHashMap, DetHashSet, WordHashMap, WordHashSet, WordState};
+use brepkit_math::det_hash::{DetHashMap, WordHashMap, WordHashSet, WordState};
 use brepkit_math::madd::Madd;
 use brepkit_math::traits::ParametricSurface;
 use brepkit_math::vec::{Point3, Vec3};
@@ -28,7 +28,7 @@ use super::planar::{
     project_by_normal, remove_closing_duplicate_global, remove_closing_duplicate_ids,
     run_planar_cdt, tessellate_planar_shared_with_holes, unproject_point,
 };
-use super::{MERGE_GRID, point_merge_key};
+use super::{MERGE_GRID, PointPool, point_merge_key};
 
 /// Tessellate all faces of a solid into a single watertight triangle mesh.
 ///
@@ -460,7 +460,7 @@ pub(super) fn split_crossing_spline_chords(
 ) -> Result<bool, crate::OperationsError> {
     // A face's projections of sample points, keyed by the point's bits, and
     // the surface's point there once it is read.
-    type UvCache = DetHashMap<(u64, u64, u64), Option<((f64, f64), Option<Point3>)>>;
+    type UvCache = WordHashMap<(u64, u64, u64), Option<((f64, f64), Option<Point3>)>>;
     const MAX_ROUNDS: usize = 8;
     // Chord ends closer than this are one sample.
     const SAME: f64 = 1e-9;
@@ -515,10 +515,10 @@ pub(super) fn split_crossing_spline_chords(
     // Each face's samples in its (u, v), kept from round to round.
     let mut caches: Vec<UvCache> = vec![UvCache::default(); faces.len()];
     // The edges the last round halved: a face none of them bound is as it was.
-    let mut changed: Option<DetHashSet<usize>> = None;
+    let mut changed: Option<WordHashSet<usize>> = None;
     let mut halved = false;
     for _ in 0..MAX_ROUNDS {
-        let mut halve: DetHashSet<(usize, usize)> = DetHashSet::default();
+        let mut halve: WordHashSet<(usize, usize)> = WordHashSet::default();
         for (k, &face_id) in faces.iter().enumerate() {
             let face = topo.face(face_id)?;
             if let Some(changed) = &changed {
@@ -547,7 +547,7 @@ pub(super) fn split_crossing_spline_chords(
                 FaceSurface::Torus(_) => (turn, turn),
             };
             let mut chords: Vec<Chord<'_>> = Vec::new();
-            let mut seen: DetHashSet<usize> = DetHashSet::default();
+            let mut seen: WordHashSet<usize> = WordHashSet::default();
             for &wire_id in std::iter::once(&face.outer_wire()).chain(face.inner_wires()) {
                 for oe in topo.wire(wire_id)?.edges() {
                     let idx = oe.edge().index();
@@ -1159,7 +1159,9 @@ pub(super) fn tessellate_solid_core(
     split_chords_and_share(topo, &all_faces, &mut edge_points, edge_params, deflection)?;
     phase("circle_sync", &mut phase_t);
     let mut merged = TriangleMesh::default();
-    let mut point_to_global: DetHashMap<(i64, i64, i64), u32> = DetHashMap::default();
+    // Room for the edges' samples and as many again inside the faces.
+    let samples: usize = edge_points.values().map(Vec::len).sum();
+    let mut point_to_global = PointPool::with_capacity_and_hasher(2 * samples, WordState);
     let mut edge_global_indices: DetHashMap<usize, Vec<u32>> = DetHashMap::default();
 
     let mut sampled_edges: Vec<usize> = edge_points.keys().copied().collect();
@@ -1301,15 +1303,26 @@ pub(super) fn tessellate_solid_core(
                 let last = if walk_arc { steps } else { steps - 1 };
                 visited.clear();
                 let mut cand: Vec<u32> = Vec::new();
+                // The cells round the step before, which the set holds already.
+                let mut before: Option<(i64, i64, i64)> = None;
                 #[allow(clippy::cast_precision_loss)]
                 for i in 0..=last {
                     let t = span.madd(i as f64 / steps as f64, first);
                     let (cx, cy, cz) = cell_of(&circle.evaluate(t));
+                    if before == Some((cx, cy, cz)) {
+                        continue;
+                    }
+                    let near_before = |c: (i64, i64, i64)| {
+                        before.is_some_and(|(bx, by, bz)| {
+                            (c.0 - bx).abs() <= 1 && (c.1 - by).abs() <= 1 && (c.2 - bz).abs() <= 1
+                        })
+                    };
                     for dx in -1..=1_i64 {
                         for dy in -1..=1_i64 {
                             for dz in -1..=1_i64 {
                                 let c = (cx + dx, cy + dy, cz + dz);
-                                if visited.insert(c)
+                                if !near_before(c)
+                                    && visited.insert(c)
                                     && let Some(&(from, to)) = cell_runs.get(&c)
                                 {
                                     cand.extend_from_slice(&pool_by_cell[from..to]);
@@ -1317,6 +1330,7 @@ pub(super) fn tessellate_solid_core(
                             }
                         }
                     }
+                    before = Some((cx, cy, cz));
                 }
                 cand
             };
@@ -1732,15 +1746,35 @@ pub(super) fn tessellate_solid_core(
     }
 
     {
-        let mut vertex_faces: DetHashMap<usize, DetHashSet<FaceId>> = DetHashMap::default();
+        // The faces of the edges through each vertex that needs a normal,
+        // with repeats: `vertex_faces[first[i]..first[i + 1]]` for vertex `i`.
+        let mut first = vec![0_usize; n_verts + 1];
         for (&edge_idx, global_ids) in &edge_global_indices {
             if let Some(face_ids) = edge_face_map.get(&edge_idx) {
                 for &gid in global_ids {
                     let gi = gid as usize;
                     if gi < n_verts && needs_normal[gi] {
-                        let entry = vertex_faces.entry(gi).or_default();
+                        first[gi + 1] += face_ids.len();
+                    }
+                }
+            }
+        }
+        for i in 0..n_verts {
+            first[i + 1] += first[i];
+        }
+        let mut vertex_faces: Vec<FaceId> = match all_faces.first() {
+            Some(&any) => vec![any; first[n_verts]],
+            None => Vec::new(),
+        };
+        let mut fill = first.clone();
+        for (&edge_idx, global_ids) in &edge_global_indices {
+            if let Some(face_ids) = edge_face_map.get(&edge_idx) {
+                for &gid in global_ids {
+                    let gi = gid as usize;
+                    if gi < n_verts && needs_normal[gi] {
                         for &fid in face_ids {
-                            entry.insert(fid);
+                            vertex_faces[fill[gi]] = fid;
+                            fill[gi] += 1;
                         }
                     }
                 }
@@ -1755,21 +1789,24 @@ pub(super) fn tessellate_solid_core(
             let pos = merged.positions[i];
             let mut normal_sum = Vec3::new(0.0, 0.0, 0.0);
             let mut count = 0_u32;
-            if let Some(faces) = vertex_faces.get(&i) {
-                let mut faces: Vec<FaceId> = faces.iter().copied().collect();
-                faces.sort_unstable_by_key(|f| f.index());
-                for fid in faces {
-                    if let Ok(face_data) = topo.face(fid) {
-                        let surf = face_data.surface();
-                        if let Some(n) = crate::fillet::face_surface_normal_at(surf, pos) {
-                            let oriented = if face_data.is_reversed() {
-                                Vec3::new(-n.x(), -n.y(), -n.z())
-                            } else {
-                                n
-                            };
-                            normal_sum += oriented;
-                            count += 1;
-                        }
+            let faces = &mut vertex_faces[first[i]..first[i + 1]];
+            faces.sort_unstable_by_key(|f| f.index());
+            let mut last: Option<FaceId> = None;
+            for &fid in faces.iter() {
+                if last == Some(fid) {
+                    continue;
+                }
+                last = Some(fid);
+                if let Ok(face_data) = topo.face(fid) {
+                    let surf = face_data.surface();
+                    if let Some(n) = crate::fillet::face_surface_normal_at(surf, pos) {
+                        let oriented = if face_data.is_reversed() {
+                            Vec3::new(-n.x(), -n.y(), -n.z())
+                        } else {
+                            n
+                        };
+                        normal_sum += oriented;
+                        count += 1;
                     }
                 }
             }
@@ -1993,7 +2030,7 @@ pub(super) fn tessellate_face_with_shared_edges(
     circle_floor: bool,
     edge_global_indices: &DetHashMap<usize, Vec<u32>>,
     merged: &mut TriangleMesh,
-    point_to_global: &mut DetHashMap<(i64, i64, i64), u32>,
+    point_to_global: &mut PointPool,
 ) -> Result<(), crate::OperationsError> {
     let face_data = topo.face(face_id)?;
     let is_reversed = face_data.is_reversed();

@@ -3345,7 +3345,20 @@ fn rebuild_mapped_parametric_face(
         .flat_map(|(index, pieces)| pieces.iter().map(move |piece| (index, piece)))
     {
         let whole = contact_pieces[restriction_index].len() == 1;
-        let closed_piece =
+        // A piece of a contact cut at the seam runs its own part of the
+        // contact's curve, on one side of the seam: its pcurve is fitted
+        // along that part.
+        let fitted_piece = if whole || surface.is_planar() {
+            None
+        } else {
+            let piece = topo.edge(contact_edge)?;
+            let ends = (
+                topo.vertex(piece.start())?.point(),
+                topo.vertex(piece.end())?.point(),
+            );
+            crate::builder_utils::pcurve_along(&surface, piece.curve(), ends, false)
+        };
+        let closed_piece = fitted_piece.or_else(|| {
             closed_seam_splits
                 .get(&restriction_index)
                 .and_then(|&(seam_vertex, _)| {
@@ -3353,7 +3366,8 @@ fn rebuild_mapped_parametric_face(
                     let point = topo.vertex(seam_vertex).ok()?.point();
                     let first = contact_pieces[restriction_index].first() == Some(&contact_edge);
                     closed_pcurve_piece(&surface, pcurve, point, first)
-                });
+                })
+        });
         let pcurve = if let Some(pcurve) = closed_piece {
             pcurve
         } else if let Some(pcurve) = restrictions[restriction_index]

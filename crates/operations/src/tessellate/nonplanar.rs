@@ -10,7 +10,7 @@ use brepkit_topology::face::{FaceId, FaceSurface};
 use std::f64::consts::TAU;
 
 use super::edge_sampling::{sample_edge, segments_for_chord_deviation_a};
-use super::{MERGE_GRID, TriangleMesh, point_merge_key};
+use super::{MERGE_GRID, PointPool, TriangleMesh, point_merge_key};
 
 /// Maps a 3D point to its `(u, v)` surface parameters.
 type ProjectFn = Box<dyn Fn(Point3) -> (f64, f64)>;
@@ -769,7 +769,7 @@ pub(super) fn tessellate_torus_two_rim_band(
     angular_tol: f64,
     edge_global_indices: &DetHashMap<usize, Vec<u32>>,
     merged: &mut TriangleMesh,
-    point_to_global: &mut DetHashMap<(i64, i64, i64), u32>,
+    point_to_global: &mut PointPool,
 ) -> Result<bool, crate::OperationsError> {
     use std::f64::consts::TAU;
     let FaceSurface::Torus(torus) = face_data.surface() else {
@@ -1183,7 +1183,7 @@ pub(super) fn tessellate_torus_notch_band(
     angular_tol: f64,
     edge_global_indices: &DetHashMap<usize, Vec<u32>>,
     merged: &mut TriangleMesh,
-    point_to_global: &mut DetHashMap<(i64, i64, i64), u32>,
+    point_to_global: &mut PointPool,
 ) -> Result<bool, crate::OperationsError> {
     use std::f64::consts::{PI, TAU};
     let FaceSurface::Torus(torus) = face_data.surface() else {
@@ -1278,27 +1278,25 @@ pub(super) fn tessellate_torus_notch_band(
             .max(8);
 
     // Build interior rings as `LatRing` (sorted by v) of fresh vertices.
-    let build_u_ring = |u: f64,
-                        merged: &mut TriangleMesh,
-                        point_to_global: &mut DetHashMap<(i64, i64, i64), u32>|
-     -> LatRing {
-        let mut row: LatRing = Vec::with_capacity(n_v);
-        for j in 0..n_v {
-            #[allow(clippy::cast_precision_loss)]
-            let v = TAU * (j as f64) / (n_v as f64);
-            let p = torus.evaluate(u, v);
-            let key = point_merge_key(p, MERGE_GRID);
-            let gid = *point_to_global.entry(key).or_insert_with(|| {
-                let idx = merged.positions.len() as u32;
-                merged.positions.push(p);
-                merged.normals.push(surf_normal(u, v));
-                idx
-            });
-            row.push((v, gid));
-        }
-        row.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-        row
-    };
+    let build_u_ring =
+        |u: f64, merged: &mut TriangleMesh, point_to_global: &mut PointPool| -> LatRing {
+            let mut row: LatRing = Vec::with_capacity(n_v);
+            for j in 0..n_v {
+                #[allow(clippy::cast_precision_loss)]
+                let v = TAU * (j as f64) / (n_v as f64);
+                let p = torus.evaluate(u, v);
+                let key = point_merge_key(p, MERGE_GRID);
+                let gid = *point_to_global.entry(key).or_insert_with(|| {
+                    let idx = merged.positions.len() as u32;
+                    merged.positions.push(p);
+                    merged.normals.push(surf_normal(u, v));
+                    idx
+                });
+                row.push((v, gid));
+            }
+            row.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+            row
+        };
 
     let emit = make_band_emit(&project, &surf_normal);
     let idx_start = merged.indices.len();
@@ -1351,7 +1349,7 @@ pub(super) fn tessellate_latitude_band_shared(
     angular_tol: f64,
     edge_global_indices: &DetHashMap<usize, Vec<u32>>,
     merged: &mut TriangleMesh,
-    point_to_global: &mut DetHashMap<(i64, i64, i64), u32>,
+    point_to_global: &mut PointPool,
 ) -> Result<bool, crate::OperationsError> {
     if face_data.inner_wires().len() != 1 {
         return Ok(false);
@@ -1611,7 +1609,7 @@ pub(super) fn tessellate_sphere_triangle_shared(
     angular_tol: f64,
     edge_global_indices: &DetHashMap<usize, Vec<u32>>,
     merged: &mut TriangleMesh,
-    point_to_global: &mut DetHashMap<(i64, i64, i64), u32>,
+    point_to_global: &mut PointPool,
 ) -> Result<bool, crate::OperationsError> {
     let FaceSurface::Sphere(sphere) = face_data.surface() else {
         return Ok(false);
@@ -1881,7 +1879,7 @@ pub(super) fn tessellate_sphere_triangle_shared(
 /// never halved. Returns `false` when the halving runs past a bound.
 fn halve_long_sphere_edges(
     merged: &mut TriangleMesh,
-    point_to_global: &mut DetHashMap<(i64, i64, i64), u32>,
+    point_to_global: &mut PointPool,
     idx_start: usize,
     (center, radius): (Point3, f64),
     min_cos: f64,
@@ -2063,6 +2061,17 @@ pub(super) fn tessellate_cylinder_strip_shared(
         let d = position_of(merged, a) - position_of(merged, b);
         (d - axis * d.dot(axis)).length()
     };
+    let turn = |p: Point3| cylinder.project_point(p).0.rem_euclid(TAU);
+    let upper_turns: Vec<f64> = upper
+        .iter()
+        .map(|&g| turn(position_of(merged, g)))
+        .collect();
+    let lower_turns: Vec<f64> = lower
+        .iter()
+        .map(|&g| turn(position_of(merged, g)))
+        .collect();
+    // The turns of each triangle's corners, in any order.
+    let mut tri_turns: Vec<[f64; 3]> = Vec::with_capacity(upper.len() + lower.len());
     let (mut i, mut l) = (0, 0);
     while i + 1 < upper.len() || l + 1 < lower.len() {
         let lower_next = l + 1 < lower.len()
@@ -2072,11 +2081,13 @@ pub(super) fn tessellate_cylinder_strip_shared(
             merged
                 .indices
                 .extend_from_slice(&[upper[i], lower[l], lower[l + 1]]);
+            tri_turns.push([upper_turns[i], lower_turns[l], lower_turns[l + 1]]);
             l += 1;
         } else {
             merged
                 .indices
                 .extend_from_slice(&[upper[i], lower[l], upper[i + 1]]);
+            tri_turns.push([upper_turns[i], lower_turns[l], upper_turns[i + 1]]);
             i += 1;
         }
     }
@@ -2108,16 +2119,18 @@ pub(super) fn tessellate_cylinder_strip_shared(
         TAU
     };
     let reach = (2.0 * (1.0 - (deflection / radius).min(1.0)).acos()).min(by_angle);
-    let turn = |p: Point3| cylinder.project_point(p).0.rem_euclid(TAU);
-    let sound = merged.indices[idx_start..].chunks_exact(3).all(|t| {
-        let mut turns = [0, 1, 2].map(|k| turn(position_of(merged, t[k])));
-        turns.sort_by(f64::total_cmp);
-        // The shortest arc holding all three: the turn less its widest gap.
-        let widest = (turns[1] - turns[0])
-            .max(turns[2] - turns[1])
-            .max(TAU - (turns[2] - turns[0]));
-        outward(merged, t) > 0.0 && TAU - widest <= reach
-    });
+    let sound = merged.indices[idx_start..]
+        .chunks_exact(3)
+        .zip(&tri_turns)
+        .all(|(t, &turns)| {
+            let mut turns = turns;
+            turns.sort_by(f64::total_cmp);
+            // The shortest arc holding all three: the turn less its widest gap.
+            let widest = (turns[1] - turns[0])
+                .max(turns[2] - turns[1])
+                .max(TAU - (turns[2] - turns[0]));
+            outward(merged, t) > 0.0 && TAU - widest <= reach
+        });
     if !sound {
         merged.indices.truncate(idx_start);
         return Ok(false);
@@ -2164,7 +2177,7 @@ fn position_of(merged: &TriangleMesh, gid: u32) -> Point3 {
 /// and `ptg_start` on.
 fn rollback(
     merged: &mut TriangleMesh,
-    point_to_global: &mut DetHashMap<(i64, i64, i64), u32>,
+    point_to_global: &mut PointPool,
     pos_start: usize,
     idx_start: usize,
     ptg_start: usize,
@@ -2415,7 +2428,7 @@ fn build_interior_row(
     surf_eval: &dyn Fn(f64, f64) -> Point3,
     surf_normal: &dyn Fn(f64, f64) -> Vec3,
     merged: &mut TriangleMesh,
-    point_to_global: &mut DetHashMap<(i64, i64, i64), u32>,
+    point_to_global: &mut PointPool,
 ) -> LatRing {
     let mut row: LatRing = Vec::with_capacity(n);
     for i in 0..n {
@@ -2446,7 +2459,7 @@ fn build_collar_row(
     surf_eval: &dyn Fn(f64, f64) -> Point3,
     surf_normal: &dyn Fn(f64, f64) -> Vec3,
     merged: &mut TriangleMesh,
-    point_to_global: &mut DetHashMap<(i64, i64, i64), u32>,
+    point_to_global: &mut PointPool,
 ) -> LatRing {
     let mut row: LatRing = Vec::with_capacity(floor.len());
     for &(u, v_floor, _) in floor {
@@ -2597,7 +2610,7 @@ pub(super) fn tessellate_nonplanar_cdt(
     circle_floor: bool,
     edge_global_indices: &DetHashMap<usize, Vec<u32>>,
     merged: &mut TriangleMesh,
-    point_to_global: &mut DetHashMap<(i64, i64, i64), u32>,
+    point_to_global: &mut PointPool,
 ) -> Result<(), crate::OperationsError> {
     // Every seam, pole and winding-loop rule below reads the closed direction
     // as u. A NURBS face closed along v alone (a revolved fillet whose profile
@@ -2693,7 +2706,7 @@ fn cdt_in_surface_frame(
     circle_floor: bool,
     edge_global_indices: &DetHashMap<usize, Vec<u32>>,
     merged: &mut TriangleMesh,
-    point_to_global: &mut DetHashMap<(i64, i64, i64), u32>,
+    point_to_global: &mut PointPool,
 ) -> Result<(), crate::OperationsError> {
     use brepkit_math::cdt::Cdt;
     use brepkit_math::vec::Point2;
@@ -4304,7 +4317,7 @@ pub(super) fn tessellate_holed_face_local(
     circle_floor: bool,
 ) -> Result<super::TriangleMeshUV, crate::OperationsError> {
     let mut merged = TriangleMesh::default();
-    let mut point_to_global: DetHashMap<(i64, i64, i64), u32> = DetHashMap::default();
+    let mut point_to_global = PointPool::default();
     let mut pool: DetHashMap<usize, Vec<u32>> = DetHashMap::default();
     // A twisted face's straight edges are sampled as finely as its grid, as
     // the solid mesher samples them.
@@ -4539,7 +4552,7 @@ fn inner_wire_uv_loops(
     circle_floor: bool,
     edge_global_indices: &DetHashMap<usize, Vec<u32>>,
     merged: &mut TriangleMesh,
-    point_to_global: &mut DetHashMap<(i64, i64, i64), u32>,
+    point_to_global: &mut PointPool,
 ) -> Result<Vec<HoleLoop>, crate::OperationsError> {
     let tol_dup = 1e-10;
     let (u_period, v_period) = surface_periods(face_data.surface());
@@ -4670,7 +4683,7 @@ fn close_loop_at_pole(
     deflection: f64,
     angular_tol: f64,
     merged: &mut TriangleMesh,
-    point_to_global: &mut DetHashMap<(i64, i64, i64), u32>,
+    point_to_global: &mut PointPool,
 ) -> Result<(), crate::OperationsError> {
     // The closing meridian's radius, for a surface whose seam sides are
     // sampled along it.
@@ -4818,7 +4831,7 @@ fn whole_ring_rectangle(
     angular_tol: f64,
     circle_floor: bool,
     merged: &mut TriangleMesh,
-    point_to_global: &mut DetHashMap<(i64, i64, i64), u32>,
+    point_to_global: &mut PointPool,
 ) -> Result<
     Option<(
         Vec<(f64, f64)>,
@@ -5472,7 +5485,7 @@ fn join_winding_hole(
     deflection: f64,
     angular_tol: f64,
     merged: &mut TriangleMesh,
-    point_to_global: &mut DetHashMap<(i64, i64, i64), u32>,
+    point_to_global: &mut PointPool,
 ) -> bool {
     let surface = face_data.surface();
     if !matches!(surface, FaceSurface::Nurbs(_) | FaceSurface::Sphere(_)) || boundary_uv.len() < 3 {
@@ -6272,7 +6285,7 @@ pub(super) fn tessellate_nonplanar_snap(
     circle_floor: bool,
     edge_global_indices: &DetHashMap<usize, Vec<u32>>,
     merged: &mut TriangleMesh,
-    point_to_global: &mut DetHashMap<(i64, i64, i64), u32>,
+    point_to_global: &mut PointPool,
 ) -> Result<(), crate::OperationsError> {
     let mut face_mesh = super::face::tessellate_with_uvs_floor(
         topo,
