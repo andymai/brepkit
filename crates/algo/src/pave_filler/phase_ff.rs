@@ -4173,6 +4173,20 @@ fn trim_ellipse_to_boundary_crossings(
                 SecCurve::Circ(c) => EdgeCurve::Circle((*c).clone()),
             }
         }
+        /// Whether the arc from `t0` to `t1` is shorter than a millionth of
+        /// the curve's smaller radius: its two ends are one crossing. An
+        /// ellipse's arc is read by its length, not its angle. A flat
+        /// leaning 5e-8 off the axis of a bore of radius 10 meets the bore
+        /// in an ellipse of semi-major axis 2e8, where a millionth of a
+        /// radian runs 170 along the curve.
+        fn is_sliver(&self, t0: f64, t1: f64) -> bool {
+            match self {
+                SecCurve::Ell(e) => {
+                    e.tangent(0.5 * (t0 + t1)).length() * (t1 - t0) < 1e-6 * e.semi_minor()
+                }
+                SecCurve::Circ(_) => (t1 - t0) < 1e-6,
+            }
+        }
     }
     let sec = match &raw.curve {
         EdgeCurve::Ellipse(e) => SecCurve::Ell(e),
@@ -4568,8 +4582,7 @@ fn trim_ellipse_to_boundary_crossings(
         {
             continue;
         }
-        // Skip a degenerate sliver (the two crossings coincide angularly).
-        if (t1 - t0) < 1e-6 {
+        if sec.is_sliver(t0, t1) {
             continue;
         }
         // Split into sub-arcs each spanning strictly less than π, mirroring
