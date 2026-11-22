@@ -8198,9 +8198,10 @@ fn compute_stripe_for_edge(
 /// same surface (a ball cut below its equator, whose two faces meet there):
 /// the contact lies on the face beyond. The band then meets that face in
 /// place of the narrow face, which goes, as a face [`swallow_narrow_face`]
-/// finds does. The band and its contacts stay as they are. A contact that
-/// runs past the far loop in one place and stays short of it in another is
-/// refused: no trim of either face alone holds it.
+/// finds does. The band and its contacts stay as they are. The contact
+/// moves only where it is proved past the far loop's plane
+/// ([`contact_against_far_plane`]); one that reaches the far loop and is
+/// not proved past it is refused: no trim of either face alone holds it.
 fn run_on_to_same_surface(
     topo: &Topology,
     adjacency: &brepkit_topology::adjacency::AdjacencyIndex,
@@ -8275,14 +8276,14 @@ fn run_on_to_same_surface(
         let Some(beyond) = beyond else {
             continue;
         };
-        let contact = if side == 0 {
-            &stripe.contact1
+        let contact_curve = if side == 0 {
+            stripe.contact1.clone()
         } else {
-            &stripe.contact2
+            stripe.contact2.clone()
         };
-        let (t0, t1) = contact.domain();
+        let (t0, t1) = contact_curve.domain();
         let contact: Vec<Point3> = (0..=SAMPLES)
-            .map(|k| contact.evaluate((t1 - t0).madd(f64::from(k) / f64::from(SAMPLES), t0)))
+            .map(|k| contact_curve.evaluate((t1 - t0).madd(f64::from(k) / f64::from(SAMPLES), t0)))
             .collect();
         // The face beyond lies on the same surface, facing the same way, at
         // the rim and at the contact.
@@ -8327,13 +8328,30 @@ fn run_on_to_same_surface(
                 );
             }
         }
+        // The contact moves to the face beyond only where that is proved:
+        // short of the far loop's plane it stays, and where neither is
+        // proved, a contact any station of which reaches the far loop is
+        // refused.
+        match contact_against_far_plane(&rim, &far_points, &contact_curve, on_tol) {
+            FarSide::Beyond => {
+                log::debug!("closed round: contact on {face_id:?} runs on to {beyond:?}");
+                if side == 0 {
+                    stripe.face1 = beyond;
+                } else {
+                    stripe.face2 = beyond;
+                }
+                continue;
+            }
+            FarSide::Short => continue,
+            FarSide::Unsure => {}
+        }
         let (Some(rim_run), Some(far_run)) = (
             RunRound::new(surface, &rim, period),
             RunRound::new(surface, &far_points, period),
         ) else {
             continue;
         };
-        let (mut reached, mut short) = (0_usize, 0_usize);
+        let mut reached = false;
         for &q in &contact {
             let Some((u, v)) = surface.project_point(q) else {
                 return Ok(());
@@ -8342,31 +8360,82 @@ fn run_on_to_same_surface(
             let on = surface
                 .evaluate(u, v_far)
                 .is_some_and(|p| (p - q).length() <= on_tol);
-            if on || (v - v_far) * (v_far - v_rim) > 0.0 {
-                reached += 1;
-            } else {
-                short += 1;
-            }
+            reached |= on || (v - v_far) * (v_far - v_rim) > 0.0;
         }
-        if reached == 0 {
+        if !reached {
             continue;
         }
-        if short > 0 {
-            return Err(BlendError::PlanningFailure {
-                reason: format!(
-                    "the fillet's contact on face {} crosses its far loop on to the face beyond",
-                    side + 1
-                ),
-            });
-        }
-        log::debug!("closed round: contact on {face_id:?} runs on to {beyond:?}");
-        if side == 0 {
-            stripe.face1 = beyond;
-        } else {
-            stripe.face2 = beyond;
-        }
+        return Err(BlendError::PlanningFailure {
+            reason: format!(
+                "the fillet's contact on face {} reaches its far loop, and it is not proved past it",
+                side + 1
+            ),
+        });
     }
     Ok(())
+}
+
+/// Where a closed contact lies against the plane of its face's far loop.
+#[derive(Debug, PartialEq, Eq)]
+enum FarSide {
+    /// All of it past the plane, or on it, away from the rim.
+    Beyond,
+    /// All of it short of the plane, on the rim's side.
+    Short,
+    /// Neither proved: the far loop is not plane, the rim does not lie on
+    /// one side of it, or the contact's control points lie on both sides.
+    Unsure,
+}
+
+/// Where `contact` lies against the plane the far loop (`far`, points of
+/// it in order round) lies in, read against the side the rim (`rim`) lies
+/// on, within `tol`. A rational curve whose weights are all positive lies
+/// in the hull of its control points, so where they all lie past the
+/// plane, or on it, so does the whole curve.
+fn contact_against_far_plane(
+    rim: &[Point3],
+    far: &[Point3],
+    contact: &brepkit_math::nurbs::curve::NurbsCurve,
+    tol: f64,
+) -> FarSide {
+    let Some(&first) = far.first() else {
+        return FarSide::Unsure;
+    };
+    // Newell's normal of the far loop.
+    let mut normal = Vec3::new(0.0, 0.0, 0.0);
+    for (k, &p) in far.iter().enumerate() {
+        let q = far[(k + 1) % far.len()];
+        normal += (p - first).cross(q - first);
+    }
+    let Ok(normal) = normal.normalize() else {
+        return FarSide::Unsure;
+    };
+    let height = |p: Point3| normal.dot(p - first);
+    if far.iter().any(|&p| height(p).abs() > tol) {
+        return FarSide::Unsure;
+    }
+    let rim_side = if rim.iter().all(|&p| height(p) < -tol) {
+        -1.0
+    } else if rim.iter().all(|&p| height(p) > tol) {
+        1.0
+    } else {
+        return FarSide::Unsure;
+    };
+    if contact.weights().iter().any(|&w| w <= 0.0) {
+        return FarSide::Unsure;
+    }
+    let past: Vec<f64> = contact
+        .control_points()
+        .iter()
+        .map(|&p| -rim_side * height(p))
+        .collect();
+    if past.iter().all(|&h| h >= -tol) {
+        FarSide::Beyond
+    } else if past.iter().all(|&h| h < -tol) {
+        FarSide::Short
+    } else {
+        FarSide::Unsure
+    }
 }
 
 /// A loop on a surface that closes round in u, read in the surface's
@@ -12251,5 +12320,91 @@ mod tests {
     fn a_hole_past_the_end_curve_reaching_outside_the_triangle_is_passed_over() {
         let hole = [(5.0, -0.2, -0.2), (5.5, -1.6, -0.2), (6.0, -0.2, -1.6)];
         assert!(notch_clear_of_hole(hole).unwrap());
+    }
+
+    /// `count` points round the circle about `z` of radius `radius` at
+    /// height `z`, the first again at the end.
+    fn ring(radius: f64, z: f64, count: u32) -> Vec<Point3> {
+        (0..=count)
+            .map(|k| {
+                let a = std::f64::consts::TAU * f64::from(k) / f64::from(count);
+                Point3::new(radius * a.cos(), radius * a.sin(), z)
+            })
+            .collect()
+    }
+
+    /// The polyline through `points` as a curve of degree 1, `knots` its
+    /// inner knots.
+    fn polyline(points: Vec<Point3>, inner: &[f64]) -> brepkit_math::nurbs::curve::NurbsCurve {
+        let mut knots = vec![0.0, 0.0];
+        knots.extend_from_slice(inner);
+        knots.extend([1.0, 1.0]);
+        let weights = vec![1.0; points.len()];
+        brepkit_math::nurbs::curve::NurbsCurve::new(1, knots, points, weights).unwrap()
+    }
+
+    fn even_knots(count: usize) -> Vec<f64> {
+        (1..count - 1)
+            .map(|k| k as f64 / (count - 1) as f64)
+            .collect()
+    }
+
+    /// A unit ball cut at `z = -0.2`: its equator, 32 chords at `z = 0`, is
+    /// the far loop of the band the rim at `z = -0.2` lies on. A contact all
+    /// past the equator's plane, or on it, moves to the face beyond; one all
+    /// short of it stays. A contact that dips below the plane between the
+    /// 65 stations at which it was read has every station past it, which
+    /// moved it, though part of it lies on the band: it is not proved past.
+    #[test]
+    fn a_contact_is_past_its_far_loop_only_where_its_control_points_prove_it() {
+        let tol = 1e-7;
+        let far: Vec<Point3> = ring(1.0, 0.0, 32);
+        let rim: Vec<Point3> = ring(0.96_f64.sqrt(), -0.2, 64);
+        let circle = |z: f64| {
+            let points = ring((1.0 - z * z).sqrt(), z, 64);
+            let count = points.len();
+            polyline(points, &even_knots(count))
+        };
+        assert_eq!(
+            contact_against_far_plane(&rim, &far, &circle(0.067), tol),
+            FarSide::Beyond
+        );
+        assert_eq!(
+            contact_against_far_plane(&rim, &far, &circle(0.0), tol),
+            FarSide::Beyond
+        );
+        assert_eq!(
+            contact_against_far_plane(&rim, &far, &circle(-0.1), tol),
+            FarSide::Short
+        );
+
+        // A dip to z = -0.05 from z = 0.05, narrow, between stations 32 and
+        // 33 of 64.
+        let at = 0.5 + 1.0 / 256.0;
+        let inner = [at - 1.0 / 1024.0, at, at + 1.0 / 1024.0];
+        let points = vec![
+            Point3::new(1.0, 0.0, 0.05),
+            Point3::new(0.0, 1.0, 0.05),
+            Point3::new(-1.0, 0.0, 0.05),
+            Point3::new(-1.0, -0.01, -0.05),
+            Point3::new(-1.0, -0.02, 0.05),
+            Point3::new(1.0, 0.0, 0.05),
+        ];
+        let dip = polyline(points, &[0.25, inner[0], inner[1], inner[2]]);
+        let stations_past = (0..=64).all(|k| dip.evaluate(f64::from(k) / 64.0).z() > 0.0);
+        assert!(stations_past, "every station lies past the plane");
+        assert!(dip.evaluate(at).z() < 0.0, "the dip lies short of it");
+        assert_eq!(
+            contact_against_far_plane(&rim, &far, &dip, tol),
+            FarSide::Unsure
+        );
+
+        // A far loop off a plane proves nothing.
+        let mut bent = far;
+        bent[5] = Point3::new(bent[5].x(), bent[5].y(), 0.01);
+        assert_eq!(
+            contact_against_far_plane(&rim, &bent, &circle(0.067), tol),
+            FarSide::Unsure
+        );
     }
 }
