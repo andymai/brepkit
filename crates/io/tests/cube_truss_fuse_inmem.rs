@@ -275,3 +275,25 @@ fn struts_that_start_at_one_point_fuse() {
         check(&topo, pair, &rods, 2, &format!("{name}, pairwise"));
     }
 }
+
+/// Chord 1 takes struts 5 and 7 one at a time, in either order. The struts
+/// meet off the chord, and strut 7 leaves the chord in a closed curve whose
+/// pcurve on the strut's wall must run one way round from the wall's seam.
+#[test]
+fn a_chord_takes_two_struts_that_meet_one_at_a_time() {
+    let options = BooleanOptions {
+        mesh_fallback: false,
+        ..BooleanOptions::default()
+    };
+    for (name, pose) in poses() {
+        for order in [[1, 7, 5], [1, 5, 7]] {
+            let mut topo = Topology::new();
+            let solids = load(&mut topo, &pose);
+            let [a, b, c] = order.map(|i| solids[i]);
+            let rods = [rod(&topo, a), rod(&topo, b), rod(&topo, c)];
+            let first = boolean_with_options(&mut topo, BooleanOp::Fuse, a, b, options).unwrap();
+            let both = boolean_with_options(&mut topo, BooleanOp::Fuse, first, c, options).unwrap();
+            check(&topo, both, &rods, 3, &format!("{name}, {order:?}"));
+        }
+    }
+}
