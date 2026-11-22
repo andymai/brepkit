@@ -8042,6 +8042,74 @@ fn nested_pieces_are_not_disjoint() {
     );
 }
 
+/// A ball's cavity off the ball's centre nests in the ball, though the box of
+/// its vertices does not lie in the ball's: each ball's vertices all lie on
+/// its own equator, so each box of vertices is a flat slice through its own
+/// centre. Read by their faces' extremes, the boxes nest, and the ray probe
+/// finds the cavity inside the ball.
+#[test]
+fn a_ball_cavity_off_the_balls_centre_is_nested() {
+    use brepkit_math::mat::Mat4;
+    let vertex_box = |topo: &Topology, faces: &[FaceId]| {
+        let points = faces.iter().flat_map(|&f| {
+            let face = topo.face(f).unwrap();
+            std::iter::once(face.outer_wire())
+                .chain(face.inner_wires().iter().copied())
+                .flat_map(|w| topo.wire(w).unwrap().edges().to_vec())
+                .flat_map(|oe| {
+                    let e = topo.edge(oe.edge()).unwrap();
+                    [e.start(), e.end()]
+                })
+                .map(|v| topo.vertex(v).unwrap().point())
+                .collect::<Vec<_>>()
+        });
+        brepkit_math::aabb::Aabb3::try_from_points(points).unwrap()
+    };
+    // Poses that keep the equators level: a tilted equator spans enough
+    // height that the boxes of the vertices nest anyway.
+    for (name, pose) in [
+        ("upright", Mat4::identity()),
+        ("mirrored", Mat4::scale(1.0, -1.0, 1.0)),
+        ("rolled about z", Mat4::rotation_z(2.0)),
+    ] {
+        let mut topo = Topology::new();
+        let ball = crate::primitives::make_sphere(&mut topo, 10.0, 32).unwrap();
+        let small = crate::primitives::make_sphere(&mut topo, 2.0, 32).unwrap();
+        crate::transform::transform_solid(&mut topo, small, &Mat4::translation(0.0, 0.0, 5.0))
+            .unwrap();
+        for s in [ball, small] {
+            crate::transform::transform_solid(&mut topo, s, &pose).unwrap();
+        }
+        let hollow = boolean(&mut topo, BooleanOp::Cut, ball, small).unwrap();
+        assert_eq!(
+            topo.solid(hollow).unwrap().inner_shells().len(),
+            1,
+            "{name}"
+        );
+        let faces = brepkit_topology::explorer::solid_faces(&topo, hollow).unwrap();
+        let comps = super::assembly::edge_connected_faces(&topo, &faces);
+        assert_eq!(comps.len(), 2, "{name}: the ball and its cavity");
+
+        let boxes: Vec<_> = comps.iter().map(|c| vertex_box(&topo, c)).collect();
+        let holds = |o: &brepkit_math::aabb::Aabb3, i: &brepkit_math::aabb::Aabb3| {
+            o.min.x() <= i.min.x()
+                && o.min.y() <= i.min.y()
+                && o.min.z() <= i.min.z()
+                && o.max.x() >= i.max.x()
+                && o.max.y() >= i.max.y()
+                && o.max.z() >= i.max.z()
+        };
+        assert!(
+            !holds(&boxes[0], &boxes[1]) && !holds(&boxes[1], &boxes[0]),
+            "{name}: the boxes of the vertices must miss the nesting for this test to mean anything"
+        );
+        assert!(
+            !super::components_are_disjoint_pieces(&topo, &comps),
+            "{name}: the cavity nests in the ball"
+        );
+    }
+}
+
 /// Multi-region Euler acceptance must tolerate genus per piece.
 ///
 /// `euler_balanced` used to compare against a fixed bound of 2, i.e. it assumed

@@ -4313,46 +4313,24 @@ fn any_vertex_of(topo: &Topology, faces: &[FaceId]) -> Option<Point3> {
 /// a box inside another's is only a suspect, rejected when a ray-parity
 /// probe finds the inner piece enclosed.
 fn components_are_disjoint_pieces(topo: &Topology, components: &[Vec<FaceId>]) -> bool {
-    let aabbs: Vec<(Point3, Point3)> = components
-        .iter()
-        .map(|comp| {
-            let mut min = Point3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY);
-            let mut max = Point3::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
-            for &fid in comp {
-                let Ok(face) = topo.face(fid) else {
-                    continue;
-                };
-                for wid in
-                    std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied())
-                {
-                    let Ok(wire) = topo.wire(wid) else {
-                        continue;
-                    };
-                    for oe in wire.edges() {
-                        let Ok(edge) = topo.edge(oe.edge()) else {
-                            continue;
-                        };
-                        for vid in [edge.start(), edge.end()] {
-                            if let Ok(v) = topo.vertex(vid) {
-                                let p = v.point();
-                                min = Point3::new(
-                                    min.x().min(p.x()),
-                                    min.y().min(p.y()),
-                                    min.z().min(p.z()),
-                                );
-                                max = Point3::new(
-                                    max.x().max(p.x()),
-                                    max.y().max(p.y()),
-                                    max.z().max(p.z()),
-                                );
-                            }
-                        }
-                    }
-                }
-            }
-            (min, max)
-        })
-        .collect();
+    // Each piece's box reads its curved edges and faces by their extremes:
+    // a ball's vertices all lie on its own rims, so a box of its vertices can
+    // miss the room it takes. The outer box of a pair also holds each NURBS
+    // face's control net, so it bounds the piece whole, while the inner box
+    // stays tight: nesting puts the inner piece's tight box in the outer
+    // piece's whole one. A piece that cannot be boxed gives the conservative
+    // answer.
+    let mut boxes: Vec<(brepkit_math::aabb::Aabb3, brepkit_math::aabb::Aabb3)> =
+        Vec::with_capacity(components.len());
+    for comp in components {
+        let Ok(tight) = crate::measure::face_set_bounding_box(topo, comp) else {
+            return false;
+        };
+        let Ok(held) = crate::measure::hold_nurbs_faces(topo, comp, tight) else {
+            return false;
+        };
+        boxes.push((tight, held));
+    }
 
     // Reject NESTING, not mere AABB overlap.
     //
@@ -4379,13 +4357,14 @@ fn components_are_disjoint_pieces(topo: &Topology, components: &[Vec<FaceId>]) -
     // is tight in the direction that matters: nesting implies it, and rotation
     // does not manufacture it.
     let eps = 1e-7;
-    let contains = |(o_min, o_max): (Point3, Point3), (i_min, i_max): (Point3, Point3)| {
-        o_min.x() - eps <= i_min.x()
-            && o_min.y() - eps <= i_min.y()
-            && o_min.z() - eps <= i_min.z()
-            && o_max.x() + eps >= i_max.x()
-            && o_max.y() + eps >= i_max.y()
-            && o_max.z() + eps >= i_max.z()
+    let contains = |outer: usize, inner: usize| {
+        let (o, i) = (boxes[outer].1, boxes[inner].0);
+        o.min.x() - eps <= i.min.x()
+            && o.min.y() - eps <= i.min.y()
+            && o.min.z() - eps <= i.min.z()
+            && o.max.x() + eps >= i.max.x()
+            && o.max.y() + eps >= i.max.y()
+            && o.max.z() + eps >= i.max.z()
     };
     // AABB containment is only the PRE-FILTER. It is necessary for nesting but
     // far from sufficient: a ring's box contains the box of a separate piece
@@ -4393,20 +4372,16 @@ fn components_are_disjoint_pieces(topo: &Topology, components: &[Vec<FaceId>]) -
     // gets a real ray-parity test against the enclosing candidate's own surface,
     // and only genuine enclosure rejects. If the probe cannot be evaluated the
     // pair falls back to the conservative answer.
-    for i in 0..aabbs.len() {
-        for j in (i + 1)..aabbs.len() {
-            let (outer, inner) = if contains(aabbs[i], aabbs[j]) {
+    for i in 0..boxes.len() {
+        for j in (i + 1)..boxes.len() {
+            let (outer, inner) = if contains(i, j) {
                 (i, j)
-            } else if contains(aabbs[j], aabbs[i]) {
+            } else if contains(j, i) {
                 (j, i)
             } else {
                 continue;
             };
-            let (o_min, o_max) = aabbs[outer];
-            let diag = ((o_max.x() - o_min.x()).powi(2)
-                + (o_max.y() - o_min.y()).powi(2)
-                + (o_max.z() - o_min.z()).powi(2))
-            .sqrt();
+            let diag = (boxes[outer].0.max - boxes[outer].0.min).length();
             let deflection = (diag / 200.0).max(1e-4);
             let Some(probe) = any_vertex_of(topo, &components[inner]) else {
                 return false;
