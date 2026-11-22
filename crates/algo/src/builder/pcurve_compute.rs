@@ -852,7 +852,7 @@ pub(super) mod cone_ellipse_fixture {
             for base in [phi + alpha, phi - alpha] {
                 let mut k = ((lo - base) / TAU).floor();
                 loop {
-                    let root = TAU.mul_add(k, base);
+                    let root = TAU.madd(k, base);
                     if root >= hi {
                         break;
                     }
@@ -868,7 +868,7 @@ pub(super) mod cone_ellipse_fixture {
             }
         }
         let (u0, _) = surface.project_point(ellipse.evaluate(from)).unwrap();
-        (u0, TAU.mul_add(turns, u0 + angle(to) - angle(from)))
+        (u0, TAU.madd(turns, u0 + angle(to) - angle(from)))
     }
 }
 
