@@ -1431,15 +1431,18 @@ const PLANE_TORUS_FIT_POINTS: usize = 4096;
 /// it strays by about the fourth power of their spacing, which a tight turn
 /// of the section makes large: 25 points along the section of a wall 0.4
 /// outside the inner equator of a torus of radii 4 and 1.5 leave the cubic
-/// 8e-5 off it. Each pass checks the cubic halfway between each two points
-/// against the section and puts the section's point there between them
-/// where it lies more than 1e-9 of the torus's outer radius away, until
-/// none does or the points reach 4096.
+/// 8e-5 off it. Each pass checks the cubic halfway between each two points:
+/// where that point moves onto the section, within half the points'
+/// spacing, by more than 1e-9 of the torus's outer radius, the section's
+/// point there goes between them. Where it does not move onto the section
+/// (on the axis, or where the plane all but touches the torus), it must lie
+/// on both the plane and the torus within that bound itself.
 ///
 /// # Errors
 ///
 /// Returns an error if the interpolation fails (fewer than 2 points, or
-/// repeated points).
+/// repeated points), if a middle neither moves onto the section nor lies
+/// on both surfaces, or if the cubic needs more than 4096 points.
 pub fn fit_plane_torus_section(
     torus: &ToroidalSurface,
     normal: Vec3,
@@ -1450,12 +1453,27 @@ pub fn fit_plane_torus_section(
         torus.major_radius() + torus.minor_radius(),
         64.0 * f64::EPSILON * (torus.center() - Point3::new(0.0, 0.0, 0.0)).length(),
     );
+    // How far a point lies from the plane, or from the torus, whichever is
+    // farther.
+    let strays = |p: Point3| {
+        let w = p - torus.center();
+        let height = torus.z_axis().dot(w);
+        let rho = (w - torus.z_axis() * height).length();
+        let off_torus = [1.0, -1.0]
+            .into_iter()
+            .map(|side: f64| {
+                (side.madd(-torus.major_radius(), rho).hypot(height) - torus.minor_radius()).abs()
+            })
+            .fold(f64::INFINITY, f64::min);
+        ((dot_np(normal, p) - d) / normal.length())
+            .abs()
+            .max(off_torus)
+    };
     let mut pts = points.to_vec();
+    let mut passes = 0;
     loop {
+        passes += 1;
         let curve = interpolate(&pts, 3.min(pts.len().saturating_sub(1)))?;
-        if pts.len() >= PLANE_TORUS_FIT_POINTS {
-            return Ok(curve);
-        }
         let params = crate::nurbs::fitting::chord_length_params(&pts);
         let mut finer = Vec::with_capacity(2 * pts.len());
         let mut added = false;
@@ -1463,16 +1481,18 @@ pub fn fit_plane_torus_section(
             finer.push(pair[0]);
             let gap = (pair[1] - pair[0]).length();
             let middle = curve.evaluate(f64::midpoint(params[i], params[i + 1]));
-            let Some(on) = plane_torus_section_point(torus, normal, d, middle) else {
-                continue;
-            };
-            let off = (on - middle).length();
             // A point of the section half a spacing or more away lies on
             // another stretch of it (a thin tube's other loop).
-            if off > tol && off < 0.5 * gap && finer.len() + pts.len() - i < PLANE_TORUS_FIT_POINTS
-            {
-                finer.push(on);
-                added = true;
+            let on = plane_torus_section_point(torus, normal, d, middle)
+                .filter(|on| (*on - middle).length() < 0.5 * gap);
+            match on {
+                Some(on) if (on - middle).length() <= tol => {}
+                Some(on) => {
+                    finer.push(on);
+                    added = true;
+                }
+                None if strays(middle) <= tol => {}
+                None => return Err(MathError::ConvergenceFailure { iterations: passes }),
             }
         }
         if !added {
@@ -1480,6 +1500,9 @@ pub fn fit_plane_torus_section(
         }
         if let Some(&last) = pts.last() {
             finer.push(last);
+        }
+        if finer.len() > PLANE_TORUS_FIT_POINTS {
+            return Err(MathError::ConvergenceFailure { iterations: passes });
         }
         pts = finer;
     }
@@ -6500,6 +6523,17 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// The plane `z = 0`'s section of the torus of radii 4 and 1.5 read
+    /// from two of its points across the axis: the line between them strays
+    /// 2.5 off the torus at its middle, on the axis, where no point moves onto
+    /// the section. The fit cannot check that span, and is refused.
+    #[test]
+    fn a_plane_torus_fit_it_cannot_check_is_refused() {
+        let torus = ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), 4.0, 1.5).unwrap();
+        let across = [Point3::new(5.5, 0.0, 0.0), Point3::new(-5.5, 0.0, 0.0)];
+        assert!(fit_plane_torus_section(&torus, Vec3::new(0.0, 0.0, 1.0), 0.0, &across).is_err());
     }
 
     /// Points near a plane's section of a torus move onto it, on the plane

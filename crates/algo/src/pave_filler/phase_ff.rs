@@ -3438,6 +3438,8 @@ fn trim_torus_oval_to_box_face(
             p_end: seg[seg.len() - 1],
         })
     };
+    // An arc no fit can be checked on leaves the oval to the sample clip,
+    // which keeps it whole: dropped, it would leave the wall's section open.
     let mut out_arcs = Vec::new();
     for pts in &arc_point_sets {
         if pts.len() >= 7 {
@@ -3445,12 +3447,10 @@ fn trim_torus_oval_to_box_face(
             if let (Some(a0), Some(a1)) = (fit(&pts[..=mid]), fit(&pts[mid..])) {
                 out_arcs.push(a0);
                 out_arcs.push(a1);
-            } else if let Some(a) = fit(pts) {
-                out_arcs.push(a);
+                continue;
             }
-        } else if let Some(a) = fit(pts) {
-            out_arcs.push(a);
         }
+        out_arcs.push(fit(pts)?);
     }
     if out_arcs.is_empty() {
         return None;
