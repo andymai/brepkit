@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.11.33](https://github.com/andymai/brepkit/compare/v4.11.32...v4.11.33) (2026-11-22)
+
+
+### Bug Fixes
+
+* **blend,algo,operations,io,topology:** fillet, boolean, STEP and volume fixes from [#2639](https://github.com/andymai/brepkit/issues/2639) to [#2645](https://github.com/andymai/brepkit/issues/2645) ([#2646](https://github.com/andymai/brepkit/issues/2646)) ([b8c7dc6](https://github.com/andymai/brepkit/commit/b8c7dc6bd87cfb23e86b2e0ff5a42de4f81aa657))
+
 ## [4.11.32](https://github.com/andymai/brepkit/compare/v4.11.31...v4.11.32) (2026-11-17)
 
 
