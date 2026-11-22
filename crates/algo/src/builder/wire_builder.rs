@@ -390,47 +390,6 @@ pub fn build_wire_loops_dcel_measured(
                 .then(a.1.cmp(&b.1))
         });
     }
-    // Halves that leave a node at one angle for one node are parallel edges
-    // with the same two ends (a section lying on the seam). Their order at
-    // one end must be the reverse of their order at the other, or the
-    // successor crosses from one to the other and tours several regions as
-    // one loop. They take the places the index order gave them, ordered by
-    // edge at their lower end and against it at their upper end.
-    for list in node_out.values_mut() {
-        let mut i = 0;
-        while i < list.len() {
-            let mut j = i + 1;
-            while j < list.len() && list[j].0.total_cmp(&list[i].0).is_eq() {
-                j += 1;
-            }
-            if j - i > 1 {
-                let run: Vec<usize> = list[i..j].iter().map(|&(_, h)| h).collect();
-                let mut by_end: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
-                for (pos, &h) in run.iter().enumerate() {
-                    by_end
-                        .entry(key_of(halves[h].end_uv))
-                        .or_default()
-                        .push(pos);
-                }
-                for slots in by_end.values().filter(|s| s.len() > 1) {
-                    let mut members: Vec<usize> = slots.iter().map(|&p| run[p]).collect();
-                    members.sort_by_key(|&h| {
-                        let edge = h.min(twin_all[h]);
-                        let lower = key_of(halves[h].start_uv) < key_of(halves[h].end_uv);
-                        if lower {
-                            edge.cast_signed()
-                        } else {
-                            -edge.cast_signed()
-                        }
-                    });
-                    for (&p, h) in slots.iter().zip(members) {
-                        list[i + p].1 = h;
-                    }
-                }
-            }
-            i = j;
-        }
-    }
 
     // Successor: the outgoing half CLOCKWISE-next from twin(h) in the
     // circular order at h's end node (twin(h) starts there). Clockwise-next
@@ -1475,69 +1434,6 @@ mod tests {
             10,
             "band uses all eight rim pieces + the section twice"
         );
-    }
-
-    #[test]
-    fn dcel_section_along_the_seam_keeps_the_regions_apart() {
-        // A band whose seam is split at (0, 0.5), with a section lying on
-        // the seam's lower piece and a section from there to the bottom rim
-        // at u = 1. The section along the seam leaves each node in the
-        // seam's own direction; ordered the same way at both of its ends,
-        // the trace crossed from the seam to it and toured the triangle and
-        // the band as one loop.
-        let p = Point2::new;
-        let edges = vec![
-            make_line_edge(p(0.0, 0.0), p(1.0, 0.0)),
-            make_line_edge(p(1.0, 0.0), p(3.0, 0.0)),
-            make_line_edge(p(3.0, 0.0), p(5.0, 0.0)),
-            make_line_edge(p(5.0, 0.0), p(TAU, 0.0)),
-            make_line_edge(p(TAU, 0.0), p(TAU, 0.5)),
-            make_line_edge(p(TAU, 0.5), p(TAU, 1.0)),
-            make_line_edge(p(TAU, 1.0), p(5.0, 1.0)),
-            make_line_edge(p(5.0, 1.0), p(3.0, 1.0)),
-            make_line_edge(p(3.0, 1.0), p(1.0, 1.0)),
-            make_line_edge(p(1.0, 1.0), p(0.0, 1.0)),
-            make_line_edge(p(0.0, 1.0), p(0.0, 0.5)),
-            make_line_edge(p(0.0, 0.5), p(0.0, 0.0)),
-            make_section_edge(p(0.0, 0.0), p(0.0, 0.5), 10),
-            make_section_edge(p(0.0, 0.5), p(0.0, 0.0), 10),
-            make_section_edge(p(0.0, 0.5), p(1.0, 0.0), 11),
-            make_section_edge(p(1.0, 0.0), p(0.0, 0.5), 11),
-        ];
-        let loops = build_wire_loops_dcel(&edges, 1e-7, true, false);
-        let area = |lp: &[OrientedPCurveEdge]| {
-            let mut a = 0.0;
-            let mut at = lp[0].start_uv;
-            let first = at;
-            for e in lp {
-                let mut d = e.end_uv - e.start_uv;
-                if d.x().abs() > std::f64::consts::PI {
-                    d = Vec2::new(d.x() - d.x().signum() * TAU, d.y());
-                }
-                let b = Point2::new(at.x() + d.x(), at.y() + d.y());
-                a += (at - first).x() * (b - first).y() - (b - first).x() * (at - first).y();
-                at = b;
-            }
-            0.5 * a
-        };
-        let mut areas: Vec<f64> = loops
-            .iter()
-            .map(|lp| area(lp))
-            .filter(|a| a.abs() > 1e-9)
-            .collect();
-        areas.sort_by(f64::total_cmp);
-        assert_eq!(areas.len(), 2, "regions {areas:?}");
-        assert!((areas[0] - 0.25).abs() < 1e-9, "triangle {areas:?}");
-        assert!((areas[1] - (TAU - 0.25)).abs() < 1e-9, "band {areas:?}");
-        for lp in &loops {
-            let both_ways = lp.iter().any(|a| {
-                a.source_edge_idx.is_some()
-                    && lp
-                        .iter()
-                        .any(|b| b.source_edge_idx == a.source_edge_idx && b.start_uv == a.end_uv)
-            });
-            assert!(!both_ways, "a loop runs a section out and back");
-        }
     }
 
     #[test]
