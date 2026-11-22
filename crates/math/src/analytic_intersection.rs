@@ -1433,8 +1433,8 @@ const PLANE_TORUS_FIT_POINTS: usize = 4096;
 /// outside the inner equator of a torus of radii 4 and 1.5 leave the cubic
 /// 8e-5 off it. Each pass checks the cubic halfway between each two points
 /// against the section and puts the section's point there between them
-/// where it lies more than [`PLANE_TORUS_FIT`] of the torus's outer radius
-/// away, until none does or the points reach [`PLANE_TORUS_FIT_POINTS`].
+/// where it lies more than 1e-9 of the torus's outer radius away, until
+/// none does or the points reach 4096.
 ///
 /// # Errors
 ///
