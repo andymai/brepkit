@@ -5469,7 +5469,7 @@ fn sphere_face_recharted(
 /// pole, or round none and counter-clockwise in `(u, v)`), `Some(false)` when
 /// it winds round none clockwise (the face holds both poles, or the loop
 /// passes a pole on the wrong side of the face), `None` when it cannot tell.
-fn sphere_loop_reads_right(
+pub fn sphere_loop_reads_right(
     sphere: &brepkit_math::surfaces::SphericalSurface,
     points: &[Point3],
 ) -> Option<bool> {

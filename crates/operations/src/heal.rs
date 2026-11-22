@@ -1732,10 +1732,13 @@ fn edge_position_key(
     Ok(if a <= b { (a, b, mid) } else { (b, a, mid) })
 }
 
-/// Whether boundary loops on a curved surface leave a band with no seam the
-/// mesher cannot cover: a loop goes once around a cylinder's or cone's axis.
-/// On a torus or NURBS surface any face with several loops counts, which errs
-/// toward keeping faces apart.
+/// Whether boundary loops on a curved surface leave a face that the mesher
+/// cannot cover and a later boolean misreads. On a cylinder or cone, a loop
+/// goes once around the axis, which leaves a band with no seam. On a sphere,
+/// no loop keeps a pole of the sphere off the face: the face holds both poles,
+/// and the sphere's chart reads none of its loops as a boundary. On a torus or
+/// NURBS surface any face with several loops counts, which errs toward keeping
+/// faces apart.
 fn seamless_band(
     topo: &Topology,
     surface: &FaceSurface,
@@ -1744,8 +1747,16 @@ fn seamless_band(
     let (origin, axis) = match surface {
         FaceSurface::Cylinder(c) => (c.origin(), c.axis()),
         FaceSurface::Cone(c) => (c.apex(), c.axis()),
-        // The mesher covers a merged sphere face, latitude bands included.
-        FaceSurface::Plane { .. } | FaceSurface::Sphere(_) => return Ok(false),
+        FaceSurface::Sphere(sphere) => {
+            for lp in loops {
+                let points = loop_points(topo, lp, 32)?;
+                if crate::tessellate::sphere_loop_reads_right(sphere, &points) == Some(true) {
+                    return Ok(false);
+                }
+            }
+            return Ok(true);
+        }
+        FaceSurface::Plane { .. } => return Ok(false),
         FaceSurface::Torus(_) | FaceSurface::Nurbs(_) => return Ok(true),
     };
     let Ok(frame) = brepkit_math::frame::Frame3::from_normal(origin, axis) else {
@@ -1756,34 +1767,7 @@ fn seamless_band(
         d.dot(frame.y).atan2(d.dot(frame.x))
     };
     for lp in loops {
-        let mut points = Vec::new();
-        for oe in lp {
-            let e = topo.edge(oe.edge())?;
-            let (a, b) = (
-                topo.vertex(e.start())?.point(),
-                topo.vertex(e.end())?.point(),
-            );
-            // A closed circle or ellipse runs its whole turn.
-            let (t0, t1) = if e.start() == e.end()
-                && matches!(e.curve(), EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_))
-            {
-                (0.0, std::f64::consts::TAU)
-            } else {
-                e.curve().domain_with_endpoints(a, b)
-            };
-            let mut samples: Vec<Point3> = (0..8)
-                .map(|k| {
-                    let t = (t1 - t0).madd(f64::from(k) / 8.0, t0);
-                    e.curve().evaluate_with_endpoints(t, a, b)
-                })
-                .collect();
-            if !oe.is_forward() {
-                samples.push(e.curve().evaluate_with_endpoints(t1, a, b));
-                samples.reverse();
-                samples.pop();
-            }
-            points.extend(samples);
-        }
+        let points = loop_points(topo, lp, 8)?;
         let mut turn = 0.0;
         for (i, &p) in points.iter().enumerate() {
             let q = points[(i + 1) % points.len()];
@@ -1800,6 +1784,44 @@ fn seamless_band(
         }
     }
     Ok(false)
+}
+
+/// Points along a loop in the order it runs, `per_edge` from each edge's
+/// start up to, not at, its end.
+fn loop_points(
+    topo: &Topology,
+    lp: &[OrientedEdge],
+    per_edge: u32,
+) -> Result<Vec<Point3>, crate::OperationsError> {
+    let mut points = Vec::new();
+    for oe in lp {
+        let e = topo.edge(oe.edge())?;
+        let (a, b) = (
+            topo.vertex(e.start())?.point(),
+            topo.vertex(e.end())?.point(),
+        );
+        // A closed circle or ellipse runs its whole turn.
+        let (t0, t1) = if e.start() == e.end()
+            && matches!(e.curve(), EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_))
+        {
+            (0.0, std::f64::consts::TAU)
+        } else {
+            e.curve().domain_with_endpoints(a, b)
+        };
+        let mut samples: Vec<Point3> = (0..per_edge)
+            .map(|k| {
+                let t = (t1 - t0).madd(f64::from(k) / f64::from(per_edge), t0);
+                e.curve().evaluate_with_endpoints(t, a, b)
+            })
+            .collect();
+        if !oe.is_forward() {
+            samples.push(e.curve().evaluate_with_endpoints(t1, a, b));
+            samples.reverse();
+            samples.pop();
+        }
+        points.extend(samples);
+    }
+    Ok(points)
 }
 
 /// Order boundary edges into one or more closed loops.
