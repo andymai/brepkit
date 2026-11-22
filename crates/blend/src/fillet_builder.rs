@@ -33,12 +33,28 @@ use crate::stripe::{Stripe, StripeResult};
 use crate::trimmer;
 use crate::walker::{Walker, WalkerConfig, approximate_blend_surface, interpolate_blend_surface};
 use crate::{BlendError, BlendResult};
+
+mod wall_run_up;
+
 type BlendCrossEdge = (EdgeId, VertexId, VertexId);
 type BlendCrossPair = (Option<BlendCrossEdge>, Option<BlendCrossEdge>);
 type BlendCrossHandlePair = (
     Option<crate::boundary_registry::BoundaryHandle>,
     Option<crate::boundary_registry::BoundaryHandle>,
 );
+/// The edges in the order given, each once: an edge picked twice in one set
+/// (two picks landing on the same edge) asks for the same round, so it is
+/// the same request. Across sets an edge may still be asked for twice, with
+/// two laws, which is refused.
+fn distinct_edges(edges: &[EdgeId]) -> Vec<EdgeId> {
+    let mut seen = HashSet::new();
+    edges
+        .iter()
+        .copied()
+        .filter(|edge| seen.insert(edge.index()))
+        .collect()
+}
+
 /// Builder for fillet (rounding) operations on solid edges.
 ///
 /// Collects edge sets with their radius laws, then computes and assembles
@@ -66,7 +82,7 @@ impl<'a> FilletBuilder<'a> {
     /// Returns `&mut Self` for method chaining.
     pub fn add_edges(&mut self, edges: &[EdgeId], radius: f64) -> &mut Self {
         self.edge_sets
-            .push((edges.to_vec(), RadiusLaw::Constant(radius)));
+            .push((distinct_edges(edges), RadiusLaw::Constant(radius)));
         self
     }
 
@@ -74,7 +90,7 @@ impl<'a> FilletBuilder<'a> {
     ///
     /// Returns `&mut Self` for method chaining.
     pub fn add_edges_with_law(&mut self, edges: &[EdgeId], law: RadiusLaw) -> &mut Self {
-        self.edge_sets.push((edges.to_vec(), law));
+        self.edge_sets.push((distinct_edges(edges), law));
         self
     }
 
@@ -174,6 +190,13 @@ impl<'a> FilletBuilder<'a> {
         // Keep actual RadiusLaw values only for the recoverable invalid-edge
         // fallback. Valid geometry always consumes the immutable plan's law.
         let mut all_edges: Vec<(EdgeId, usize)> = Vec::new();
+        // The edges in the order they were picked: where two rounds cross,
+        // the first picked is made as it would be alone.
+        let pick_order: Vec<EdgeId> = self
+            .edge_sets
+            .iter()
+            .flat_map(|(edges, _)| edges.iter().copied())
+            .collect();
         let mut laws: Vec<RadiusLaw> = Vec::with_capacity(self.edge_sets.len());
         for (law_idx, (edges, law)) in self.edge_sets.into_iter().enumerate() {
             for eid in edges {
@@ -311,6 +334,7 @@ impl<'a> FilletBuilder<'a> {
         } else {
             HashSet::new()
         };
+        pivot_crossing_rounds(topo, &mut stripe_results, &pick_order)?;
         let tilted_caps = if let Some(plan) = plan.as_ref() {
             run_stripes_to_tilted_caps(topo, plan, &mut stripe_results)?
         } else {
@@ -497,6 +521,14 @@ impl<'a> FilletBuilder<'a> {
             Option<crate::boundary_registry::BoundaryHandle>,
             Option<crate::boundary_registry::BoundaryHandle>,
         )> = regular_results.iter().map(|_| (None, None)).collect();
+        // Every piece of each side's contact, along the contact, where the
+        // trim cut it in pieces (on its support's own seam); empty otherwise,
+        // the side's one handle above being the whole contact.
+        let mut stripe_contact_chains: Vec<[Vec<crate::boundary_registry::BoundaryHandle>; 2]> =
+            regular_results
+                .iter()
+                .map(|_| [Vec::new(), Vec::new()])
+                .collect();
         let mut stripe_contact_edges: Vec<(
             Option<brepkit_topology::edge::EdgeId>,
             Option<brepkit_topology::edge::EdgeId>,
@@ -531,6 +563,51 @@ impl<'a> FilletBuilder<'a> {
                 let mut restriction =
                     trimmer::ParametricRestriction::new(sample_nurbs_endpoints(&contact), keep);
                 restriction.source_edges = stripe.spine_edges().to_vec();
+                // A face the stripe does not run along lies beyond a plane
+                // face the round swallowed (`swallow_narrow_face`): its
+                // contact replaces the loop it shares with that face, and
+                // the face goes.
+                let spine_faces = stripe
+                    .spine_edges()
+                    .first()
+                    .map(|&edge| adjacency.faces_for_edge(edge).to_vec())
+                    .unwrap_or_default();
+                if !spine_faces.contains(&face_id) {
+                    let swallowed: Vec<FaceId> = spine_faces
+                        .iter()
+                        .copied()
+                        .filter(|&f| f != stripe.face1 && f != stripe.face2)
+                        .collect();
+                    let [plane] = swallowed[..] else {
+                        return Err(BlendError::TrimmingFailure { face: face_id });
+                    };
+                    let face_edges = |face: FaceId| -> Result<HashSet<EdgeId>, BlendError> {
+                        let f = topo.face(face)?;
+                        let mut edges = HashSet::new();
+                        for wire in
+                            std::iter::once(f.outer_wire()).chain(f.inner_wires().iter().copied())
+                        {
+                            edges.extend(topo.wire(wire)?.edges().iter().map(OrientedEdge::edge));
+                        }
+                        Ok(edges)
+                    };
+                    let plane_edges = face_edges(plane)?;
+                    let f = topo.face(face_id)?;
+                    let mut far = Vec::new();
+                    for wire in
+                        std::iter::once(f.outer_wire()).chain(f.inner_wires().iter().copied())
+                    {
+                        for oriented in topo.wire(wire)?.edges() {
+                            if plane_edges.contains(&oriented.edge())
+                                && !far.contains(&oriented.edge())
+                            {
+                                far.push(oriented.edge());
+                            }
+                        }
+                    }
+                    restriction.source_edges = far;
+                    vanished_walls.insert(plane);
+                }
                 let source_surface = topo.face(face_id)?.surface().clone();
                 let mut adapter = None;
                 let support = surface_ref_or_adapter(&source_surface, &mut adapter);
@@ -698,6 +775,7 @@ impl<'a> FilletBuilder<'a> {
             if let Some(restrictions) = restrictions_by_face.get(face_id) {
                 check_closed_contacts_do_not_cross(*face_id, restrictions)?;
                 check_contacts_keep_their_edges(topo, *face_id, restrictions)?;
+                check_apart_contacts_do_not_cross(topo, *face_id, restrictions)?;
             }
         }
         for face_id in restriction_faces {
@@ -720,86 +798,112 @@ impl<'a> FilletBuilder<'a> {
                 face_replacements.entry(source).or_insert(replacement);
             }
             for (index, &(si, _)) in restrictions.iter().enumerate() {
-                let Some(&contact_edge) = batch.contact_edges.get(index) else {
+                let Some(pieces) = batch.contact_pieces.get(index) else {
                     return Err(BlendError::TrimmingFailure { face: face_id });
                 };
-                let stripe = &regular_results[si].stripe;
-                let support_forward = std::iter::once(topo.face(batch.trimmed_face)?.outer_wire())
-                    .chain(topo.face(batch.trimmed_face)?.inner_wires().iter().copied())
-                    .find_map(|wire_id| {
-                        topo.wire(wire_id)
-                            .ok()?
-                            .edges()
-                            .iter()
-                            .find_map(|oriented| {
-                                (oriented.edge() == contact_edge).then_some(oriented.is_forward())
+                let mut chain = Vec::with_capacity(pieces.len());
+                for (piece, &contact_edge) in pieces.iter().enumerate() {
+                    let stripe = &regular_results[si].stripe;
+                    let support_forward =
+                        std::iter::once(topo.face(batch.trimmed_face)?.outer_wire())
+                            .chain(topo.face(batch.trimmed_face)?.inner_wires().iter().copied())
+                            .find_map(|wire_id| {
+                                topo.wire(wire_id)
+                                    .ok()?
+                                    .edges()
+                                    .iter()
+                                    .find_map(|oriented| {
+                                        (oriented.edge() == contact_edge)
+                                            .then_some(oriented.is_forward())
+                                    })
                             })
-                    })
-                    .ok_or(BlendError::TrimmingFailure { face: face_id })?;
-                let contour_id = plan
-                    .as_ref()
-                    .and_then(|fillet_plan| {
-                        fillet_plan
-                            .contours
-                            .iter()
-                            .position(|contour| contour.spine.edges() == stripe.spine_edges())
-                    })
-                    .unwrap_or(si);
-                let side = if stripe.face1 == face_id { 0 } else { 1 };
-                let edge = topo.edge(contact_edge)?;
-                let start = edge.start();
-                let end = edge.end();
-                let curve = restrictions[index]
-                    .1
-                    .curve
-                    .clone()
-                    .unwrap_or(EdgeCurve::Line);
-                let start_point = topo.vertex(start)?.point();
-                let end_point = topo.vertex(end)?.point();
-                let periodic_support = matches!(
-                    topo.face(face_id)?.surface(),
-                    FaceSurface::Cylinder(_)
-                        | FaceSurface::Cone(_)
-                        | FaceSurface::Torus(_)
-                        | FaceSurface::Sphere(_)
-                ) || matches!(
-                    topo.face(face_id)?.surface(),
-                    FaceSurface::Nurbs(surface) if surface.is_periodic_u()
-                );
-                let start_vertex = if periodic_support {
-                    PlannedVertex::periodic(start, (contour_id as u64) << 32 | (side as u64) << 8)
-                } else {
-                    PlannedVertex::new(start)
-                };
-                let end_vertex = if periodic_support {
-                    PlannedVertex::periodic(end, (contour_id as u64) << 32 | (side as u64) << 8 | 1)
-                } else {
-                    PlannedVertex::new(end)
-                };
-                let handle = boundary_registry.register(
-                    BoundaryKey::contact(contour_id, 0, side),
-                    start_vertex,
-                    end_vertex,
-                    curve.clone(),
-                    curve.domain_with_endpoints(start_point, end_point),
-                    [
-                        BoundaryOwner::planned(
-                            format!("support face {face_id:?} contour {contour_id}"),
-                            support_forward,
-                        ),
-                        BoundaryOwner::planned(
-                            format!("blend contour {contour_id} contact {side}"),
-                            side == 0,
-                        ),
-                    ],
-                )?;
-                boundary_registry.bind_existing_edge(topo, handle, contact_edge)?;
-                if side == 0 {
-                    stripe_contact_handles[si].0 = Some(handle);
-                    stripe_contact_edges[si].0 = Some(contact_edge);
-                } else {
-                    stripe_contact_handles[si].1 = Some(handle);
-                    stripe_contact_edges[si].1 = Some(contact_edge);
+                            .ok_or(BlendError::TrimmingFailure { face: face_id })?;
+                    let contour_id =
+                        plan.as_ref()
+                            .and_then(|fillet_plan| {
+                                fillet_plan.contours.iter().position(|contour| {
+                                    contour.spine.edges() == stripe.spine_edges()
+                                })
+                            })
+                            .unwrap_or(si);
+                    let side = if stripe.face1 == face_id { 0 } else { 1 };
+                    let edge = topo.edge(contact_edge)?;
+                    let start = edge.start();
+                    let end = edge.end();
+                    let curve = if pieces.len() == 1 {
+                        restrictions[index]
+                            .1
+                            .curve
+                            .clone()
+                            .unwrap_or(EdgeCurve::Line)
+                    } else {
+                        edge.curve().clone()
+                    };
+                    let start_point = topo.vertex(start)?.point();
+                    let end_point = topo.vertex(end)?.point();
+                    let periodic_support = matches!(
+                        topo.face(face_id)?.surface(),
+                        FaceSurface::Cylinder(_)
+                            | FaceSurface::Cone(_)
+                            | FaceSurface::Torus(_)
+                            | FaceSurface::Sphere(_)
+                    ) || matches!(
+                        topo.face(face_id)?.surface(),
+                        FaceSurface::Nurbs(surface) if surface.is_periodic_u()
+                    );
+                    // A contact in pieces keys the vertices between them
+                    // apart from its two ends.
+                    let key = |at: usize| -> u64 {
+                        let slot = match at {
+                            0 => 0,
+                            at if at == pieces.len() => 1,
+                            at => 1 + at as u64,
+                        };
+                        (contour_id as u64) << 32 | (side as u64) << 8 | slot
+                    };
+                    let start_vertex = if periodic_support {
+                        PlannedVertex::periodic(start, key(piece))
+                    } else {
+                        PlannedVertex::new(start)
+                    };
+                    let end_vertex = if periodic_support {
+                        PlannedVertex::periodic(end, key(piece + 1))
+                    } else {
+                        PlannedVertex::new(end)
+                    };
+                    let handle = boundary_registry.register(
+                        BoundaryKey::contact(contour_id, piece, side),
+                        start_vertex,
+                        end_vertex,
+                        curve.clone(),
+                        curve.domain_with_endpoints(start_point, end_point),
+                        [
+                            BoundaryOwner::planned(
+                                format!("support face {face_id:?} contour {contour_id}"),
+                                support_forward,
+                            ),
+                            BoundaryOwner::planned(
+                                format!("blend contour {contour_id} contact {side}"),
+                                side == 0,
+                            ),
+                        ],
+                    )?;
+                    boundary_registry.bind_existing_edge(topo, handle, contact_edge)?;
+                    chain.push(handle);
+                    if piece > 0 {
+                        continue;
+                    }
+                    if side == 0 {
+                        stripe_contact_handles[si].0 = Some(handle);
+                        stripe_contact_edges[si].0 = Some(contact_edge);
+                    } else {
+                        stripe_contact_handles[si].1 = Some(handle);
+                        stripe_contact_edges[si].1 = Some(contact_edge);
+                    }
+                }
+                if chain.len() > 1 {
+                    let side = usize::from(regular_results[si].stripe.face1 != face_id);
+                    stripe_contact_chains[si][side] = chain;
                 }
             }
         }
@@ -871,46 +975,47 @@ impl<'a> FilletBuilder<'a> {
                         .unwrap_or(stripe.face2),
                 ];
                 let terminals = ordered_spine_endpoints(topo, &stripe.spine)?;
-                if let Some(forward) = contact_forward_for_spine(
-                    topo,
-                    &boundary_registry,
-                    contact1,
-                    support_faces[0],
-                    terminals,
-                    true,
-                )? {
-                    boundary_registry.set_owner_forward(contact1, 1, forward)?;
+                let chains = [
+                    if stripe_contact_chains[si][0].is_empty() {
+                        vec![contact1]
+                    } else {
+                        stripe_contact_chains[si][0].clone()
+                    },
+                    if stripe_contact_chains[si][1].is_empty() {
+                        vec![contact2]
+                    } else {
+                        stripe_contact_chains[si][1].clone()
+                    },
+                ];
+                for (side, chain) in chains.iter().enumerate() {
+                    if let Some(forward) = contact_forward_for_spine(
+                        topo,
+                        &boundary_registry,
+                        chain,
+                        support_faces[side],
+                        terminals,
+                        side == 0,
+                    )? {
+                        for &handle in chain {
+                            boundary_registry.set_owner_forward(handle, 1, forward)?;
+                        }
+                    }
                 }
-                if let Some(forward) = contact_forward_for_spine(
-                    topo,
-                    &boundary_registry,
-                    contact2,
-                    support_faces[1],
-                    terminals,
-                    false,
-                )? {
-                    boundary_registry.set_owner_forward(contact2, 1, forward)?;
-                }
-                let contact_vertices =
-                    |handle: crate::boundary_registry::BoundaryHandle| -> Result<
-                        (VertexId, VertexId),
-                        BlendError,
-                    > {
-                        let entry =
-                            boundary_registry.entry(handle).ok_or_else(|| {
-                                BlendError::PlanningFailure {
-                                    reason: format!("unknown contact boundary {handle}"),
-                                }
-                            })?;
-                        let (start, end) = (entry.start.vertex, entry.end.vertex);
-                        Ok(if entry.owners[1].forward {
-                            (start, end)
-                        } else {
-                            (end, start)
-                        })
-                    };
-                let (p1_start, p1_end) = contact_vertices(contact1)?;
-                let (p2_start, p2_end) = contact_vertices(contact2)?;
+                // The band runs each contact's chain forward or backward
+                // whole: its ends are the chain's.
+                let contact_vertices = |chain: &[crate::boundary_registry::BoundaryHandle]| -> Result<
+                    (VertexId, VertexId),
+                    BlendError,
+                > {
+                    let (start, end) = contact_chain_ends(&boundary_registry, chain)?;
+                    let forward = chain
+                        .first()
+                        .and_then(|&handle| boundary_registry.entry(handle))
+                        .is_some_and(|entry| entry.owners[1].forward);
+                    Ok(if forward { (start, end) } else { (end, start) })
+                };
+                let (p1_start, p1_end) = contact_vertices(&chains[0])?;
+                let (p2_start, p2_end) = contact_vertices(&chains[1])?;
                 let mut section_curve = |section: Option<&crate::section::CircSection>,
                                          cap: Option<&RunOnCap>,
                                          start: VertexId,
@@ -924,44 +1029,37 @@ impl<'a> FilletBuilder<'a> {
                     }
                     let start_point = topo.vertex(start)?.point();
                     let end_point = topo.vertex(end)?.point();
-                    let curve = match (cap, &stripe.surface) {
-                        (Some(&RunOnCap::Plane(normal, d)), FaceSurface::Cylinder(cylinder)) => {
-                            crate::builder_utils::cylinder_plane_arc(
-                                cylinder,
-                                normal,
-                                d,
-                                start_point,
-                                end_point,
-                            )
-                        }
-                        (Some(&RunOnCap::Face(cap)), FaceSurface::Cylinder(cylinder)) => {
-                            // A chord would leave the band's end off the cap.
-                            Some(
-                                cylinder_meets_cap(
-                                    cylinder,
-                                    topo.face(cap)?.surface(),
+                    let curve = match cap {
+                        // A chord would leave the band's end off the cap and
+                        // off the band.
+                        Some(&cap) => band_meets_run_on_cap(
+                            topo,
+                            &stripe.surface,
+                            cap,
+                            start_point,
+                            end_point,
+                        )?
+                        .ok_or_else(|| BlendError::PlanningFailure {
+                            reason: match cap {
+                                RunOnCap::Plane(..) => {
+                                    "the round's end on its tilted cap cannot be traced".to_owned()
+                                }
+                                RunOnCap::Face(face) => format!(
+                                    "the round's end on face {} cannot be traced",
+                                    face.index()
+                                ),
+                            },
+                        })?,
+                        None => section
+                            .and_then(|section| {
+                                crate::builder_utils::cross_section_curve(
+                                    section,
                                     start_point,
                                     end_point,
                                 )
-                                .ok_or_else(|| {
-                                    BlendError::PlanningFailure {
-                                        reason: format!(
-                                            "the round's end on face {} cannot be traced",
-                                            cap.index()
-                                        ),
-                                    }
-                                })?,
-                            )
-                        }
-                        _ => section.and_then(|section| {
-                            crate::builder_utils::cross_section_curve(
-                                section,
-                                start_point,
-                                end_point,
-                            )
-                        }),
-                    }
-                    .unwrap_or(EdgeCurve::Line);
+                            })
+                            .unwrap_or(EdgeCurve::Line),
+                    };
                     // Two stripes meeting tangentially across a seam between
                     // faces on one surface end at the same section. The
                     // second band becomes the second owner of the first
@@ -1054,11 +1152,12 @@ impl<'a> FilletBuilder<'a> {
                         topo,
                         stripe,
                         &mut boundary_registry,
-                        contact1,
-                        contact2,
+                        &chains[0],
+                        &chains[1],
                     )?;
-                    boundary_registry.set_owner_face(contact1, 1, info.face)?;
-                    boundary_registry.set_owner_face(contact2, 1, info.face)?;
+                    for &handle in chains.iter().flatten() {
+                        boundary_registry.set_owner_face(handle, 1, info.face)?;
+                    }
                     blend_cross_handles[si] = (None, None);
                     stripe_faces[si] = Some(info.face);
                     info
@@ -1087,20 +1186,34 @@ impl<'a> FilletBuilder<'a> {
                             p2_start,
                         )?
                     };
+                    // Each chain in the order the band runs it.
+                    let band_order = |chain: &[crate::boundary_registry::BoundaryHandle]| {
+                        let forward = chain
+                            .first()
+                            .and_then(|&handle| boundary_registry.entry(handle))
+                            .is_some_and(|entry| entry.owners[1].forward);
+                        let mut ordered: Vec<_> = chain.iter().map(|&handle| (handle, 1)).collect();
+                        if !forward {
+                            ordered.reverse();
+                        }
+                        ordered
+                    };
+                    let (band1, band2) = (band_order(&chains[0]), band_order(&chains[1]));
                     let info = crate::builder_utils::create_blend_face_from_registry(
                         topo,
                         stripe,
                         &mut boundary_registry,
-                        (contact1, 1),
-                        (contact2, 1),
+                        &band1,
+                        &band2,
                         cross_end,
                         cross_start,
                     )?;
                     for (handle, owner) in [cross_end, cross_start].into_iter().flatten() {
                         boundary_registry.set_owner_face(handle, owner, info.face)?;
                     }
-                    boundary_registry.set_owner_face(contact1, 1, info.face)?;
-                    boundary_registry.set_owner_face(contact2, 1, info.face)?;
+                    for &handle in chains.iter().flatten() {
+                        boundary_registry.set_owner_face(handle, 1, info.face)?;
+                    }
                     blend_cross_handles[si] = (
                         cross_end.map(|(handle, _)| handle),
                         cross_start.map(|(handle, _)| handle),
@@ -1631,8 +1744,15 @@ impl<'a> FilletBuilder<'a> {
                 let Some(handle) = handle else {
                     continue;
                 };
-                boundary_registry.set_owner_face(handle, 0, support_face)?;
-                let _ = boundary_registry.oriented_edge(topo, handle, 0)?;
+                let chain = if stripe_contact_chains[si][side].is_empty() {
+                    vec![handle]
+                } else {
+                    stripe_contact_chains[si][side].clone()
+                };
+                for handle in chain {
+                    boundary_registry.set_owner_face(handle, 0, support_face)?;
+                    let _ = boundary_registry.oriented_edge(topo, handle, 0)?;
+                }
             }
         }
         boundary_registry.preassembly_audit()?;
@@ -1677,7 +1797,9 @@ impl<'a> FilletBuilder<'a> {
         // because a disc bounded by one closed circle also has a single
         // vertex but a real boundary. A two-vertex face whose edges are
         // anti-parallel (a zero-area planar remnant) fails the extent test
-        // and keeps closing the shell.
+        // and keeps closing the shell. A closed edge (a contact round a whole
+        // rim) starts and ends at one vertex too, but runs round its curve:
+        // its middle stands off that vertex.
         result_faces.retain(|&face_id| {
             let Ok(face) = topo.face(face_id) else {
                 return true;
@@ -1697,7 +1819,12 @@ impl<'a> FilletBuilder<'a> {
                 else {
                     return true;
                 };
-                (start.point() - end.point()).length() > 1e-7
+                let (start, end) = (start.point(), end.point());
+                let (t0, t1) = edge.curve().domain_with_endpoints(start, end);
+                let middle =
+                    edge.curve()
+                        .evaluate_with_endpoints(f64::midpoint(t0, t1), start, end);
+                (start - end).length() > 1e-7 || (middle - start).length() > 1e-7
             })
         });
 
@@ -1736,6 +1863,11 @@ impl<'a> FilletBuilder<'a> {
         // Registry-backed boundaries are the sole closure mechanism for the
         // authoritative fillet path. Positional welding and residual-loop
         // filling are intentionally not available here.
+        for edge in drop_point_edges(topo, &result_faces)? {
+            if let Some(handle) = boundary_registry.handle_for_edge(edge) {
+                boundary_registry.retire(handle);
+            }
+        }
         brepkit_topology::orientation::propagate_orientation(topo, &result_faces, &seeds)?;
         brepkit_topology::orientation::normalize_face_normals(topo, &new_faces, &seeds)?;
         brepkit_topology::orientation::propagate_orientation(topo, &result_faces, &seeds)?;
@@ -1758,14 +1890,32 @@ impl<'a> FilletBuilder<'a> {
             brepkit_topology::orientation::propagate_orientation(topo, &result_faces, &seeds)?;
             boundary_registry.refresh_owner_orientations(topo)?;
         }
-        if align_seamed_faces_with_tangent_neighbours(topo, &new_faces, &result_faces)? {
+        let mut sources: std::collections::HashMap<FaceId, FaceId> =
+            std::collections::HashMap::new();
+        for &original in &original_faces {
+            let mut current = original;
+            for _ in 0..=face_replacements.len() {
+                match face_replacements.get(&current) {
+                    Some(&next) if next != current => current = next,
+                    _ => break,
+                }
+            }
+            if current != original {
+                sources.insert(current, original);
+            }
+        }
+        if align_seamed_faces_with_tangent_neighbours(topo, &new_faces, &result_faces, &sources)? {
             boundary_registry.refresh_owner_orientations(topo)?;
         }
         let postassembly = if force_postassembly_failure {
             Err("forced postassembly incidence gate failure".to_owned())
         } else {
             boundary_registry
-                .postassembly_audit(topo, &result_faces)
+                .postassembly_audit_with_input(
+                    topo,
+                    &result_faces,
+                    &input_edge_uses(topo, &original_faces),
+                )
                 .map(|_| ())
                 .map_err(|error| error.to_string())
         };
@@ -1789,6 +1939,10 @@ impl<'a> FilletBuilder<'a> {
         let result_faces = drop_contact_slivers(topo, result_faces, &input_edges)?;
         fold_spoke_spurs(topo, &result_faces, &input_edges)?;
         let result_faces = split_pinched_faces(topo, result_faces, &input_edges)?;
+        let result_faces = drop_contact_slivers(topo, result_faces, &input_edges)?;
+        let result_faces = extend_caps_over_runouts(topo, result_faces, &input_edges)?;
+        let result_faces =
+            wall_run_up::run_walls_up_over_runouts(topo, result_faces, &input_edges)?;
         let new_shell = match Shell::new(result_faces) {
             Ok(shell) => shell,
             Err(error) => {
@@ -1825,6 +1979,85 @@ impl<'a> FilletBuilder<'a> {
             is_partial,
         })
     }
+}
+
+/// Drop from `faces`' wires every edge that runs from a vertex back to itself
+/// with no length. A round whose ball pivots on one face while it rolls round
+/// the other (its radius that of a round it meets, so its centre stays on
+/// that round's axis) has a contact that shrinks to a point: the band and the
+/// face meet at a vertex alone. The edge the contact leaves has no sense, so
+/// two faces cannot use it in opposite senses, and the orientation passes
+/// read it as a fold. An edge that is all of some face's wire stays (a pin's
+/// end rounded at the pin's own radius leaves its end face a point, which
+/// shares that edge with the band). Returns the edges dropped.
+fn drop_point_edges(topo: &mut Topology, faces: &[FaceId]) -> Result<Vec<EdgeId>, BlendError> {
+    const SAMPLES: usize = 8;
+    let tol = brepkit_math::tolerance::Tolerance::new().linear;
+    let mut wires_of: Vec<(FaceId, WireId)> = Vec::new();
+    for &face_id in faces {
+        let face = topo.face(face_id)?;
+        wires_of.extend(
+            std::iter::once(face.outer_wire())
+                .chain(face.inner_wires().iter().copied())
+                .map(|wire| (face_id, wire)),
+        );
+    }
+    let mut points: HashSet<EdgeId> = HashSet::new();
+    let mut kept_whole: HashSet<EdgeId> = HashSet::new();
+    for &(_, wire_id) in &wires_of {
+        let wire = topo.wire(wire_id)?;
+        let mut in_wire = Vec::new();
+        for &oriented in wire.edges() {
+            let edge = topo.edge(oriented.edge())?;
+            let point = (edge.start() == edge.end())
+                .then(|| topo.vertex(edge.start()).map(Vertex::point))
+                .transpose()?
+                .is_some_and(|p| {
+                    let (t0, t1) = edge.curve().domain_with_endpoints(p, p);
+                    (0..=SAMPLES).all(|k| {
+                        #[allow(clippy::cast_precision_loss)]
+                        let t = t0 + (t1 - t0) * k as f64 / SAMPLES as f64;
+                        (edge.curve().evaluate_with_endpoints(t, p, p) - p).length() <= tol
+                    })
+                });
+            if point {
+                in_wire.push(oriented.edge());
+            }
+        }
+        if in_wire.len() == wire.edges().len() {
+            kept_whole.extend(in_wire.iter().copied());
+        }
+        points.extend(in_wire);
+    }
+    let mut dropped: Vec<EdgeId> = points.difference(&kept_whole).copied().collect();
+    dropped.sort_unstable_by_key(|edge| edge.index());
+    if dropped.is_empty() {
+        return Ok(dropped);
+    }
+    for (face_id, wire_id) in wires_of {
+        let wire = topo.wire(wire_id)?;
+        let kept: Vec<_> = wire
+            .edges()
+            .iter()
+            .copied()
+            .filter(|oriented| !dropped.contains(&oriented.edge()))
+            .collect();
+        if kept.len() == wire.edges().len() {
+            continue;
+        }
+        let closed = wire.is_closed();
+        let new_wire = topo.add_wire(Wire::new(kept, closed)?);
+        let face = topo.face_mut(face_id)?;
+        if face.outer_wire() == wire_id {
+            face.set_outer_wire(new_wire);
+        }
+        for inner in face.inner_wires_mut() {
+            if *inner == wire_id {
+                *inner = new_wire;
+            }
+        }
+    }
+    Ok(dropped)
 }
 
 /// A planar face's outward normal and offset, its reversal applied.
@@ -2031,30 +2264,17 @@ fn fold_spoke_spurs(
                     // along that edge.
                     let own_boundary =
                         input_edges.contains(&short.edge()) && !input_edges.contains(&long.edge());
-                    if !own_boundary {
-                        let Some((n2, _)) = outward_plane(topo, *beyond_short)? else {
-                            continue;
-                        };
-                        let short_edge = topo.edge(short.edge())?;
-                        let (a, b) = (
-                            point(topo, short_edge.start())?,
-                            point(topo, short_edge.end())?,
-                        );
-                        // A curved face beyond may meet the patch at a slight
-                        // kink: a fitted surface rarely runs on exactly level.
-                        let alike = if topo.face(*beyond_long)?.surface().is_planar() {
-                            1.0 - 1e-9
-                        } else {
-                            CURVED_CARRIES_ON.cos()
-                        };
-                        let mut carries_on = true;
-                        for at in [a, b, a + (b - a) * 0.5] {
-                            carries_on &= outward_normal_at(topo, *beyond_long, at, ON_LINE)?
-                                .is_some_and(|n1| n1.dot(n2) >= alike);
-                        }
-                        if !carries_on {
-                            continue;
-                        }
+                    if !own_boundary
+                        && !patch_carries_on(
+                            topo,
+                            *beyond_short,
+                            *beyond_long,
+                            short.edge(),
+                            ON_LINE,
+                            CURVED_CARRIES_ON,
+                        )?
+                    {
+                        continue;
                     }
                     let other_wire = *other_wire;
                     // The short edge's far end, where the long edge splits.
@@ -2310,6 +2530,28 @@ fn split_pinched_faces(
     Ok(faces)
 }
 
+/// How many uses each edge of the input's faces has there.
+fn input_edge_uses(
+    topo: &Topology,
+    original_faces: &[FaceId],
+) -> std::collections::HashMap<EdgeId, usize> {
+    let mut uses = std::collections::HashMap::new();
+    for &face_id in original_faces {
+        let Ok(face) = topo.face(face_id) else {
+            continue;
+        };
+        for wire_id in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied())
+        {
+            if let Ok(wire) = topo.wire(wire_id) {
+                for oriented in wire.edges() {
+                    *uses.entry(oriented.edge()).or_insert(0) += 1;
+                }
+            }
+        }
+    }
+    uses
+}
+
 /// The edges of the input's faces after the trim: their own edges and the
 /// pieces the trim split them into, which lie along the input's boundary
 /// just the same.
@@ -2362,6 +2604,11 @@ fn straight_edge(topo: &Topology, edge: &Edge, tol: f64) -> Result<bool, BlendEr
 /// face's wire is the contact and that edge alone, joining the same two
 /// vertices. The face goes, and the round takes the wall's edge in place of
 /// its contact, so it meets the face beyond the wall along it.
+///
+/// A wall exactly twice the radius high, rounded along both rims (a full
+/// round), keeps only the strip between the two rounds' contacts, which lie
+/// on each other along its middle. The face goes the same way, and the one
+/// round takes the other's contact.
 fn drop_contact_slivers(
     topo: &mut Topology,
     faces: Vec<FaceId>,
@@ -2380,35 +2627,51 @@ fn drop_contact_slivers(
         for (index, &face_id) in faces.iter().enumerate() {
             let face = topo.face(face_id)?;
             if !face.inner_wires().is_empty() {
+                if drop_coincident_loops(topo, &faces, face_id, ON_EDGE)? {
+                    faces.remove(index);
+                    continue 'slivers;
+                }
                 continue;
             }
             let wire_id = face.outer_wire();
             let [first, second] = topo.wire(wire_id)?.edges() else {
+                if drop_folded_sliver(topo, &faces, face_id, input_edges)? {
+                    faces.remove(index);
+                    continue 'slivers;
+                }
                 continue;
             };
             let (first, second) = (*first, *second);
+            // Two contacts lying on each other (a full round, a wall twice
+            // the radius high rounded along both rims) are kept as the first.
             let (own, contact) = match (
                 input_edges.contains(&first.edge()),
                 input_edges.contains(&second.edge()),
             ) {
-                (true, false) => (first, second),
+                (_, false) => (first, second),
                 (false, true) => (second, first),
-                _ => continue,
+                (true, true) => continue,
             };
             let (own_edge, contact_edge) = (
                 topo.edge(own.edge())?.clone(),
                 topo.edge(contact.edge())?.clone(),
             );
             let ends = [contact_edge.start(), contact_edge.end()];
-            if own_edge.start() == own_edge.end()
+            // Two closed contacts round one vertex (a full round of a closed
+            // rim's wall) span their length; open edges their chord.
+            let loops = own_edge.start() == own_edge.end() && ends[0] == ends[1];
+            if (own_edge.start() == own_edge.end() && !loops)
                 || ([own_edge.start(), own_edge.end()] != ends
                     && [own_edge.end(), own_edge.start()] != ends)
             {
                 continue;
             }
-            let span = (topo.vertex(own_edge.start())?.point()
-                - topo.vertex(own_edge.end())?.point())
-            .length();
+            let span = if loops {
+                loop_length(topo, &own_edge)?
+            } else {
+                (topo.vertex(own_edge.start())?.point() - topo.vertex(own_edge.end())?.point())
+                    .length()
+            };
             if !edge_lies_on(topo, &contact_edge, &own_edge, ON_EDGE * span.max(1e-2))? {
                 continue;
             }
@@ -2446,6 +2709,13 @@ fn drop_contact_slivers(
                 .iter()
                 .map(|&oe| {
                     if oe.edge() == contact.edge() {
+                        if loops {
+                            // The sliver runs along one loop and back along
+                            // the other: their curves run the same way where
+                            // its wire takes them in opposite senses.
+                            let same = own.is_forward() != contact.is_forward();
+                            return OrientedEdge::new(own.edge(), oe.is_forward() == same);
+                        }
                         let from = oe.oriented_start(&contact_edge);
                         OrientedEdge::new(own.edge(), own_edge.start() == from)
                     } else {
@@ -2461,24 +2731,1122 @@ fn drop_contact_slivers(
     }
 }
 
-/// Whether `edge` traces `on` within `tol`, certified rather than sampled.
-/// `on` must be a line or an arc of a circle short of a whole turn, so the
-/// distance to it is exact. Every point of `edge` is held within `tol` of
-/// `on` by a bound on `edge`'s speed along its parameter: between two
-/// samples, no point strays farther than that speed allows. `edge` runs
-/// between `on`'s ends, so the feet of its points on `on` sweep all of
-/// `on`, and every point of `on` then lies within `tol` of `edge` too. An
-/// ellipse or a B-spline `on` has no such sweep to stand on and is refused.
-fn edge_lies_on(topo: &Topology, edge: &Edge, on: &Edge, tol: f64) -> Result<bool, BlendError> {
-    let (a, b) = (
-        topo.vertex(edge.start())?.point(),
-        topo.vertex(edge.end())?.point(),
+/// A closed round's last section is its first, walked or pivoted apart
+/// only by the solve (by up to about 1e-7): made one, the band through
+/// them closes on itself and reads as periodic, which its mesher and trim
+/// rely on. Sections further apart than a millionth of the radius are left.
+fn close_sections(sections: &mut [crate::section::CircSection]) {
+    let (Some(first), Some(last)) = (sections.first(), sections.last()) else {
+        return;
+    };
+    let tol = 1e-6 * first.radius.max(1.0);
+    if sections.len() < 3
+        || (first.center - last.center).length() > tol
+        || (first.p1 - last.p1).length() > tol
+        || (first.p2 - last.p2).length() > tol
+    {
+        return;
+    }
+    let mut closing = first.clone();
+    closing.t = last.t;
+    if let Some(last) = sections.last_mut() {
+        *last = closing;
+    }
+}
+
+/// A face bounded by two closed contacts lying on each other, one its
+/// outline and the other its hole: two rounds of a plane face's two rims
+/// meeting along it (the second pivoting on the first's contact) leave
+/// the face a ring with no area. The face goes, and the hole's round takes
+/// the outline's contact in place of its own, cut at its own contact's
+/// vertex where the two loops start apart, the outline's round taking the
+/// two pieces too. `true` where the face was dropped so.
+fn drop_coincident_loops(
+    topo: &mut Topology,
+    faces: &[FaceId],
+    face_id: FaceId,
+    on_edge: f64,
+) -> Result<bool, BlendError> {
+    let face = topo.face(face_id)?;
+    let ([hole], outer) = (face.inner_wires(), face.outer_wire()) else {
+        return Ok(false);
+    };
+    let (Some(&[kept]), Some(&[dropped])) = (
+        topo.wire(outer).ok().map(Wire::edges),
+        topo.wire(*hole).ok().map(Wire::edges),
+    ) else {
+        return Ok(false);
+    };
+    let (kept_edge, dropped_edge) = (
+        topo.edge(kept.edge())?.clone(),
+        topo.edge(dropped.edge())?.clone(),
     );
+    if kept_edge.start() != kept_edge.end() || dropped_edge.start() != dropped_edge.end() {
+        return Ok(false);
+    }
+    let span = loop_length(topo, &kept_edge)?;
+    if !edge_lies_on(topo, &dropped_edge, &kept_edge, on_edge * span.max(1e-2))? {
+        return Ok(false);
+    }
+    // Each loop's one use outside this face: its wire, whether that runs
+    // the edge forward, and whether its face is reversed.
+    let other_use = |edge: EdgeId| -> Result<Option<(WireId, bool, bool)>, BlendError> {
+        let mut uses = Vec::new();
+        for &other in faces {
+            if other == face_id {
+                continue;
+            }
+            let f = topo.face(other)?;
+            for w in std::iter::once(f.outer_wire()).chain(f.inner_wires().iter().copied()) {
+                for oe in topo.wire(w)?.edges() {
+                    if oe.edge() == edge {
+                        uses.push((w, oe.is_forward(), f.is_reversed()));
+                    }
+                }
+            }
+        }
+        Ok(if let [only] = uses[..] {
+            Some(only)
+        } else {
+            None
+        })
+    };
+    let (Some((kept_wire, kept_forward, kept_reversed)), Some((dropped_wire, _, dropped_reversed))) =
+        (other_use(kept.edge())?, other_use(dropped.edge())?)
+    else {
+        return Ok(false);
+    };
+    if kept_wire == dropped_wire {
+        return Ok(false);
+    }
+    // The dropped contact's round runs the outline the way it ran its own
+    // contact, read where the two lie on each other; the outline's round
+    // must run it the other way, its face's sense taken into account.
+    let Some(along) = runs_along(
+        topo,
+        &dropped_edge,
+        dropped_wire,
+        dropped.edge(),
+        &kept_edge,
+    )?
+    else {
+        return Ok(false);
+    };
+    if (kept_forward != kept_reversed) == (along != dropped_reversed) {
+        return Ok(false);
+    }
+    // Loops starting at one point, as separate vertices (a walked contact
+    // closed a hair from where the other starts), start together: the
+    // hole's round takes the outline whole, and its edges ending at the
+    // hole's vertex (its seam) end at the outline's.
+    let (kept_start, dropped_start) = (kept_edge.start(), dropped_edge.start());
+    let start_gap =
+        (topo.vertex(kept_start)?.point() - topo.vertex(dropped_start)?.point()).length();
+    let pieces: Vec<OrientedEdge> = if kept_start == dropped_start
+        || start_gap <= on_edge * span.max(1e-2)
+    {
+        if kept_start != dropped_start {
+            let mut moved = HashSet::new();
+            for &other in faces {
+                let f = topo.face(other)?;
+                let wires: Vec<WireId> = std::iter::once(f.outer_wire())
+                    .chain(f.inner_wires().iter().copied())
+                    .collect();
+                for w in wires {
+                    let edges: Vec<EdgeId> = topo
+                        .wire(w)?
+                        .edges()
+                        .iter()
+                        .map(OrientedEdge::edge)
+                        .collect();
+                    for e in edges {
+                        if e == dropped.edge() || !moved.insert(e) {
+                            continue;
+                        }
+                        let edge = topo.edge_mut(e)?;
+                        if edge.start() == dropped_start {
+                            edge.set_start(kept_start);
+                        }
+                        if edge.end() == dropped_start {
+                            edge.set_end(kept_start);
+                        }
+                    }
+                }
+            }
+        }
+        vec![OrientedEdge::new(kept.edge(), along)]
+    } else {
+        // Cut the outline at the hole's vertex, which must lie on it.
+        let EdgeCurve::NurbsCurve(curve) = kept_edge.curve() else {
+            return Ok(false);
+        };
+        let start = topo.vertex(kept_edge.start())?.point();
+        let (t0, t1) = curve.domain();
+        if (curve.evaluate(t0) - start).length() > on_edge * span.max(1e-2)
+            || (curve.evaluate(t1) - start).length() > on_edge * span.max(1e-2)
+        {
+            return Ok(false);
+        }
+        let cut_vertex = dropped_edge.start();
+        let at = topo.vertex(cut_vertex)?.point();
+        let Ok(found) = brepkit_math::nurbs::projection::project_point_to_curve(curve, at, 1e-9)
+        else {
+            return Ok(false);
+        };
+        let margin = 1e-6 * (t1 - t0);
+        if found.distance > on_edge * span.max(1e-2)
+            || found.parameter <= t0 + margin
+            || found.parameter >= t1 - margin
+        {
+            return Ok(false);
+        }
+        let (left, right) = brepkit_math::nurbs::knot_ops::curve_split(curve, found.parameter)?;
+        let first = topo.add_edge(Edge::new(
+            kept_edge.start(),
+            cut_vertex,
+            EdgeCurve::NurbsCurve(left),
+        ));
+        let second = topo.add_edge(Edge::new(
+            cut_vertex,
+            kept_edge.start(),
+            EdgeCurve::NurbsCurve(right),
+        ));
+        // The outline's round runs it as it did, from its own vertex.
+        let back = if kept_forward {
+            vec![
+                OrientedEdge::new(first, true),
+                OrientedEdge::new(second, true),
+            ]
+        } else {
+            vec![
+                OrientedEdge::new(second, false),
+                OrientedEdge::new(first, false),
+            ]
+        };
+        rewrite_wire(topo, kept_wire, |oe| {
+            if oe.edge() == kept.edge() {
+                back.clone()
+            } else {
+                vec![oe]
+            }
+        })?;
+        // The hole's round runs `along`, from the cut.
+        if along {
+            vec![
+                OrientedEdge::new(second, true),
+                OrientedEdge::new(first, true),
+            ]
+        } else {
+            vec![
+                OrientedEdge::new(first, false),
+                OrientedEdge::new(second, false),
+            ]
+        }
+    };
+    log::debug!(
+        "coincident loops {face_id:?}: {:?} lies on {:?}",
+        dropped.edge(),
+        kept.edge()
+    );
+    rewrite_wire(topo, dropped_wire, |oe| {
+        if oe.edge() == dropped.edge() {
+            pieces.clone()
+        } else {
+            vec![oe]
+        }
+    })?;
+    Ok(true)
+}
+
+/// Whether `wire`'s use of `edge` (`edge_data`) runs the way `on`'s curve
+/// does, read at the edge's middle; `None` where the two are square there.
+fn runs_along(
+    topo: &Topology,
+    edge_data: &Edge,
+    wire: WireId,
+    edge: EdgeId,
+    on: &Edge,
+) -> Result<Option<bool>, BlendError> {
+    let Some(forward) = topo
+        .wire(wire)?
+        .edges()
+        .iter()
+        .find(|oe| oe.edge() == edge)
+        .map(OrientedEdge::is_forward)
+    else {
+        return Ok(None);
+    };
+    let (a, b) = (
+        topo.vertex(edge_data.start())?.point(),
+        topo.vertex(edge_data.end())?.point(),
+    );
+    let (t0, t1) = edge_data.curve().domain_with_endpoints(a, b);
+    let at = |t: f64| edge_data.curve().evaluate_with_endpoints(t, a, b);
+    let (middle, h) = (f64::midpoint(t0, t1), 1e-4 * (t1 - t0));
+    let tangent = at(middle + h) - at(middle - h);
+    let point = at(middle);
     let (p, q) = (
         topo.vertex(on.start())?.point(),
         topo.vertex(on.end())?.point(),
     );
+    let EdgeCurve::NurbsCurve(curve) = on.curve() else {
+        return Ok(None);
+    };
+    let Ok(found) = brepkit_math::nurbs::projection::project_point_to_curve(curve, point, 1e-9)
+    else {
+        return Ok(None);
+    };
     let (s0, s1) = on.curve().domain_with_endpoints(p, q);
+    let k = 1e-4 * (s1 - s0);
+    let along = curve.evaluate((found.parameter + k).min(s1))
+        - curve.evaluate((found.parameter - k).max(s0));
+    let dot = tangent.dot(along);
+    if dot.abs() <= 0.5 * tangent.length() * along.length() {
+        return Ok(None);
+    }
+    Ok(Some((dot > 0.0) == forward))
+}
+
+/// A face whose wire only runs out and back along itself, enclosing
+/// nothing: where two crossing rounds meet along a contact on a wall that
+/// also ends on split edges, the wall is left running up an end edge, back
+/// down its pieces, and out and back along the two contacts. Two edges
+/// running between the same vertices both ways, lying on each other, are
+/// paired, the one kept (an input edge where there is one) taking the
+/// other's place in its other face; every edge left must have a chain of
+/// pieces lying on it running back from its end to its start, which take
+/// its place in its other face; there must be at least one pair. Every edge
+/// involved has exactly one use outside this face. `true` where the
+/// face was dropped so.
+#[allow(clippy::too_many_lines)]
+fn drop_folded_sliver(
+    topo: &mut Topology,
+    faces: &[FaceId],
+    face_id: FaceId,
+    input_edges: &HashSet<EdgeId>,
+) -> Result<bool, BlendError> {
+    // As in `drop_contact_slivers`.
+    const ON_EDGE: f64 = 1e-4;
+    let face = topo.face(face_id)?;
+    if !face.inner_wires().is_empty() {
+        return Ok(false);
+    }
+    let mut ring: Vec<OrientedEdge> = topo.wire(face.outer_wire())?.edges().to_vec();
+    if ring.len() < 3 {
+        return Ok(false);
+    }
+    // The one wire outside this face using each edge.
+    let other_use = |topo: &Topology, edge: EdgeId| -> Result<Option<WireId>, BlendError> {
+        let mut uses = Vec::new();
+        for &other in faces {
+            if other == face_id {
+                continue;
+            }
+            let f = topo.face(other)?;
+            for w in std::iter::once(f.outer_wire()).chain(f.inner_wires().iter().copied()) {
+                for oe in topo.wire(w)?.edges() {
+                    if oe.edge() == edge {
+                        uses.push(w);
+                    }
+                }
+            }
+        }
+        Ok(if let [only] = uses.as_slice() {
+            Some(*only)
+        } else {
+            None
+        })
+    };
+    let ends = |topo: &Topology, oe: OrientedEdge| -> Result<(VertexId, VertexId), BlendError> {
+        let edge = topo.edge(oe.edge())?;
+        Ok(if oe.is_forward() {
+            (edge.start(), edge.end())
+        } else {
+            (edge.end(), edge.start())
+        })
+    };
+    let span = |topo: &Topology, edge: &Edge| -> Result<f64, BlendError> {
+        Ok((topo.vertex(edge.start())?.point() - topo.vertex(edge.end())?.point()).length())
+    };
+    // (kept, dropped): `dropped` runs back along `kept`, between the same
+    // two vertices, anywhere in the wire.
+    let mut pairs: Vec<(OrientedEdge, OrientedEdge)> = Vec::new();
+    'pair: loop {
+        for i in 0..ring.len() {
+            for j in i + 1..ring.len() {
+                let (a, b) = (ring[i], ring[j]);
+                if a.edge() == b.edge() {
+                    continue;
+                }
+                let ((sa, ea), (sb, eb)) = (ends(topo, a)?, ends(topo, b)?);
+                if sb != ea || eb != sa || sa == ea {
+                    continue;
+                }
+                let (kept, dropped) = match (
+                    input_edges.contains(&a.edge()),
+                    input_edges.contains(&b.edge()),
+                ) {
+                    (_, false) => (a, b),
+                    (false, true) => (b, a),
+                    (true, true) => continue,
+                };
+                let (kept_edge, dropped_edge) = (
+                    topo.edge(kept.edge())?.clone(),
+                    topo.edge(dropped.edge())?.clone(),
+                );
+                let tol = ON_EDGE * span(topo, &kept_edge)?.max(1e-2);
+                if !edge_lies_on(topo, &dropped_edge, &kept_edge, tol)? {
+                    continue;
+                }
+                pairs.push((kept, dropped));
+                ring.remove(j);
+                ring.remove(i);
+                continue 'pair;
+            }
+        }
+        break;
+    }
+    // A strip between two contacts lying on each other: without such a
+    // pair, a face of an edge and pieces near it may be a thin face of the
+    // part's own.
+    if pairs.is_empty() {
+        return Ok(false);
+    }
+    // Each edge left and the chain of pieces lying on it, running from its
+    // end back to its start.
+    let mut chains: Vec<(OrientedEdge, Vec<OrientedEdge>)> = Vec::new();
+    'chain: while !ring.is_empty() {
+        for w in 0..ring.len() {
+            let whole = ring[w];
+            let (start, end) = ends(topo, whole)?;
+            if start == end {
+                continue;
+            }
+            let whole_edge = topo.edge(whole.edge())?.clone();
+            let tol = ON_EDGE * span(topo, &whole_edge)?.max(1e-2);
+            let mut used = vec![w];
+            let mut at = end;
+            while at != start {
+                let mut next = None;
+                for (k, &piece) in ring.iter().enumerate() {
+                    if used.contains(&k) || piece.edge() == whole.edge() {
+                        continue;
+                    }
+                    let (from, _) = ends(topo, piece)?;
+                    if from != at {
+                        continue;
+                    }
+                    let piece_edge = topo.edge(piece.edge())?.clone();
+                    if stays_within(topo, &piece_edge, &whole_edge, tol)? {
+                        next = Some(k);
+                        break;
+                    }
+                }
+                let Some(k) = next else {
+                    break;
+                };
+                used.push(k);
+                at = ends(topo, ring[k])?.1;
+            }
+            if at != start || used.len() < 2 {
+                continue;
+            }
+            let pieces: Vec<OrientedEdge> = used[1..].iter().map(|&k| ring[k]).collect();
+            chains.push((whole, pieces));
+            used.sort_unstable();
+            for &k in used.iter().rev() {
+                ring.remove(k);
+            }
+            continue 'chain;
+        }
+        return Ok(false);
+    }
+    // Each edge used once outside this face.
+    let mut rewrites: Vec<(WireId, EdgeId, Vec<OrientedEdge>)> = Vec::new();
+    for &(kept, dropped) in &pairs {
+        let (Some(_), Some(wire)) = (
+            other_use(topo, kept.edge())?,
+            other_use(topo, dropped.edge())?,
+        ) else {
+            return Ok(false);
+        };
+        // The other face ran the dropped edge one way; it runs the kept
+        // edge the same way between the same vertices.
+        let kept_edge = topo.edge(kept.edge())?.clone();
+        let dropped_edge = topo.edge(dropped.edge())?.clone();
+        let Some(oe) = topo
+            .wire(wire)?
+            .edges()
+            .iter()
+            .find(|oe| oe.edge() == dropped.edge())
+            .copied()
+        else {
+            return Ok(false);
+        };
+        let from = oe.oriented_start(&dropped_edge);
+        rewrites.push((
+            wire,
+            dropped.edge(),
+            vec![OrientedEdge::new(kept.edge(), kept_edge.start() == from)],
+        ));
+    }
+    for (whole, pieces) in &chains {
+        let Some(wire) = other_use(topo, whole.edge())? else {
+            return Ok(false);
+        };
+        for piece in pieces {
+            if other_use(topo, piece.edge())?.is_none() {
+                return Ok(false);
+            }
+        }
+        let whole_edge = topo.edge(whole.edge())?.clone();
+        let Some(oe) = topo
+            .wire(wire)?
+            .edges()
+            .iter()
+            .find(|oe| oe.edge() == whole.edge())
+            .copied()
+        else {
+            return Ok(false);
+        };
+        // The pieces run from the whole edge's end back to its start in
+        // this face; the other face takes them the way it ran the edge.
+        let (_, whole_end) = ends(topo, *whole)?;
+        let replacement: Vec<OrientedEdge> = if oe.oriented_start(&whole_edge) == whole_end {
+            pieces.clone()
+        } else {
+            pieces
+                .iter()
+                .rev()
+                .map(|piece| OrientedEdge::new(piece.edge(), !piece.is_forward()))
+                .collect()
+        };
+        rewrites.push((wire, whole.edge(), replacement));
+    }
+    if rewrites.is_empty() {
+        return Ok(false);
+    }
+    log::debug!(
+        "folded sliver {face_id:?}: {} pairs run back on each other, {} edges replaced by their pieces",
+        pairs.len(),
+        chains.len()
+    );
+    for (wire, edge, replacement) in rewrites {
+        let closed = topo.wire(wire)?.is_closed();
+        let rewritten: Vec<OrientedEdge> = topo
+            .wire(wire)?
+            .edges()
+            .iter()
+            .flat_map(|&oe| {
+                if oe.edge() == edge {
+                    replacement.clone()
+                } else {
+                    vec![oe]
+                }
+            })
+            .collect();
+        *topo.wire_mut(wire)? = Wire::new(rewritten, closed)?;
+    }
+    Ok(true)
+}
+
+/// A closed edge's length, along its curve.
+fn loop_length(topo: &Topology, edge: &Edge) -> Result<f64, BlendError> {
+    const SAMPLES: u32 = 256;
+    let at = topo.vertex(edge.start())?.point();
+    let curve = edge.curve();
+    let (t0, t1) = curve.domain_with_endpoints(at, at);
+    let point = |k: u32| {
+        curve.evaluate_with_endpoints(
+            (t1 - t0).madd(f64::from(k) / f64::from(SAMPLES), t0),
+            at,
+            at,
+        )
+    };
+    Ok((0..SAMPLES)
+        .map(|k| (point(k + 1) - point(k)).length())
+        .sum())
+}
+
+/// Ends walked rounds on the curved caps they ran into at a kink
+/// ([`extend_cap_over_runout`]), each runout patch in turn. Where nothing
+/// else is left at the corner, the cap's corner edge and its run on are
+/// then one edge.
+fn extend_caps_over_runouts(
+    topo: &mut Topology,
+    faces: Vec<FaceId>,
+    input_edges: &HashSet<EdgeId>,
+) -> Result<Vec<FaceId>, BlendError> {
+    let mut faces = faces;
+    let mut runs = Vec::new();
+    'runouts: loop {
+        for (index, &face_id) in faces.iter().enumerate() {
+            if let Some(run) = extend_cap_over_runout(topo, &faces, face_id, input_edges)? {
+                runs.push(run);
+                faces.remove(index);
+                continue 'runouts;
+            }
+        }
+        break;
+    }
+    for run in runs {
+        join_run_on(topo, &faces, run)?;
+    }
+    Ok(faces)
+}
+
+/// A cap's corner edge run on past its corner: the corner, the edge, the
+/// run on, and the two wires using both.
+struct RunOn {
+    corner: VertexId,
+    edge: EdgeId,
+    run: EdgeId,
+    wires: [WireId; 2],
+}
+
+/// Rewrites a wire edge by edge, each edge taking the edges `swap` gives.
+fn rewrite_wire(
+    topo: &mut Topology,
+    wire: WireId,
+    swap: impl Fn(OrientedEdge) -> Vec<OrientedEdge>,
+) -> Result<(), BlendError> {
+    let closed = topo.wire(wire)?.is_closed();
+    let edges: Vec<OrientedEdge> = topo
+        .wire(wire)?
+        .edges()
+        .iter()
+        .flat_map(|&oe| swap(oe))
+        .collect();
+    *topo.wire_mut(wire)? = Wire::new(edges, closed)?;
+    Ok(())
+}
+
+/// Joins a cap's corner edge and its run on into one edge where they are
+/// the only edges left at the corner and are the same kind of curve, run
+/// the same way.
+fn join_run_on(topo: &mut Topology, faces: &[FaceId], run_on: RunOn) -> Result<(), BlendError> {
+    let RunOn {
+        corner,
+        edge,
+        run,
+        wires,
+    } = run_on;
+    for &face_id in faces {
+        let face = topo.face(face_id)?;
+        for w in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            for oe in topo.wire(w)?.edges() {
+                if oe.edge() == edge || oe.edge() == run {
+                    if !wires.contains(&w) {
+                        return Ok(());
+                    }
+                    continue;
+                }
+                let e = topo.edge(oe.edge())?;
+                if e.start() == corner || e.end() == corner {
+                    return Ok(());
+                }
+            }
+        }
+    }
+    let (edge_data, run_data) = (topo.edge(edge)?.clone(), topo.edge(run)?.clone());
+    let joined = match (edge_data.curve(), run_data.curve()) {
+        (EdgeCurve::Line, EdgeCurve::Line) => EdgeCurve::Line,
+        (EdgeCurve::Circle(a), EdgeCurve::Circle(_)) => EdgeCurve::Circle(a.clone()),
+        _ => return Ok(()),
+    };
+    let (start, end) = if run_data.end() == corner && edge_data.start() == corner {
+        (run_data.start(), edge_data.end())
+    } else if edge_data.end() == corner && run_data.start() == corner {
+        (edge_data.start(), run_data.end())
+    } else {
+        return Ok(());
+    };
+    let joined = topo.add_edge(Edge::new(start, end, joined));
+    for wire in wires {
+        // The joined edge runs the way the corner edge did.
+        rewrite_wire(topo, wire, |oe| {
+            if oe.edge() == run {
+                vec![]
+            } else if oe.edge() == edge {
+                vec![OrientedEdge::new(joined, oe.is_forward())]
+            } else {
+                vec![oe]
+            }
+        })?;
+    }
+    Ok(())
+}
+
+/// A walked round whose edge ends where its wall meets a cap at a kink (a
+/// plate's spline side running into its rounded end at an angle) ends in
+/// the plane square to its spine, closed by a three-edge runout patch: the
+/// band's end section `B` from its contact end `P` to `A`, the piece `V` of
+/// the cap's corner edge from `A` to the corner `C`, and a line `L` on the
+/// contact's face from `P` to `C`. Where `P` lies inside the cap's material
+/// (the cap's surface turned in past the kink), the round has cut into the
+/// cap: the band and its contact are cut back where the contact crosses the
+/// cap's surface, at `X`, which lies on the carrier of the cap's corner
+/// edge `E` on the contact's face (a circle or a line); the band ends on its
+/// intersection with the cap from `X` to `A`, the cap takes that curve and
+/// `E` run on from `C` to `X` in place of `V`, the contact's face takes
+/// that run in place of `L`, and the patch goes. The run on where the face
+/// was such a patch and is dropped.
+#[allow(clippy::too_many_lines)]
+fn extend_cap_over_runout(
+    topo: &mut Topology,
+    faces: &[FaceId],
+    face_id: FaceId,
+    input_edges: &HashSet<EdgeId>,
+) -> Result<Option<RunOn>, BlendError> {
+    let face = topo.face(face_id)?;
+    if !face.inner_wires().is_empty() || !matches!(face.surface(), FaceSurface::Plane { .. }) {
+        return Ok(None);
+    }
+    let ring = topo.wire(face.outer_wire())?.edges().to_vec();
+    if ring.len() != 3 || ring.iter().any(|oe| input_edges.contains(&oe.edge())) {
+        return Ok(None);
+    }
+    // The one other face using each edge, with its wire.
+    let other_use = |edge: EdgeId| -> Result<Option<(FaceId, WireId)>, BlendError> {
+        let mut uses = Vec::new();
+        for &other in faces {
+            if other == face_id {
+                continue;
+            }
+            let f = topo.face(other)?;
+            for w in std::iter::once(f.outer_wire()).chain(f.inner_wires().iter().copied()) {
+                for oe in topo.wire(w)?.edges() {
+                    if oe.edge() == edge {
+                        uses.push((other, w));
+                    }
+                }
+            }
+        }
+        Ok(if let [one] = uses.as_slice() {
+            Some(*one)
+        } else {
+            None
+        })
+    };
+    let mut users = Vec::with_capacity(3);
+    for oe in &ring {
+        let Some(user) = other_use(oe.edge())? else {
+            return Ok(None);
+        };
+        users.push(user);
+    }
+    let ends = |e: &Edge| [e.start(), e.end()];
+    let other_end = |e: &Edge, v: VertexId| if e.start() == v { e.end() } else { e.start() };
+    // Each edge with a B-spline face beyond may be the band's end.
+    for b in 0..3 {
+        if !topo
+            .face(users[b].0)
+            .is_ok_and(|f| matches!(f.surface(), FaceSurface::Nurbs(_)))
+        {
+            continue;
+        }
+        let (band_face, band_wire) = users[b];
+        let b_id = ring[b].edge();
+        let b_edge = topo.edge(b_id)?.clone();
+        let band = topo.face(band_face)?.surface().clone();
+        let (k1, k2) = ((b + 1) % 3, (b + 2) % 3);
+        for (kl, kv) in [(k1, k2), (k2, k1)] {
+            let (l_id, v_id) = (ring[kl].edge(), ring[kv].edge());
+            let (l_edge, v_edge) = (topo.edge(l_id)?.clone(), topo.edge(v_id)?.clone());
+            let Some(c) = ends(&l_edge)
+                .into_iter()
+                .find(|v| ends(&v_edge).contains(v))
+            else {
+                continue;
+            };
+            let (p, a) = (other_end(&l_edge, c), other_end(&v_edge, c));
+            if p == a || ends(&b_edge).contains(&c) || !ends(&b_edge).contains(&p) {
+                continue;
+            }
+            if let Some(run) = runout_onto_cap(
+                topo,
+                faces,
+                face_id,
+                RunoutPatch {
+                    band: (band_wire, &band, b_id, &b_edge),
+                    line: (users[kl].1, l_id, &l_edge),
+                    piece: (users[kv], v_id, &v_edge),
+                    corner: c,
+                    contact_end: p,
+                    cap_end: a,
+                },
+            )? {
+                return Ok(Some(run));
+            }
+        }
+    }
+    Ok(None)
+}
+
+/// A runout patch's three edges: the band's end section (the band's wire,
+/// surface, the edge), the line on the contact's face (that face's wire, the
+/// edge), and the piece of the cap's corner edge (the face and wire beyond
+/// it, the edge), with the corner `C`, the contact's end `P` and the piece's
+/// end `A`.
+struct RunoutPatch<'a> {
+    band: (WireId, &'a FaceSurface, EdgeId, &'a Edge),
+    line: (WireId, EdgeId, &'a Edge),
+    piece: ((FaceId, WireId), EdgeId, &'a Edge),
+    corner: VertexId,
+    contact_end: VertexId,
+    cap_end: VertexId,
+}
+
+/// A runout patch's cap (its face and wire), with the whole corner edge and
+/// the wall's wire where a wall runs up that edge and back down the piece.
+type RunoutCap = ((FaceId, WireId), Option<(EdgeId, WireId)>);
+
+/// The cap a runout patch's corner piece lies on: the face beyond the piece
+/// where its wire takes the cap's corner edge on the contact's face too, or,
+/// where the face beyond is a wall running up the whole corner edge and
+/// back down the piece (a spur), the face beyond that edge. The cap's face
+/// and wire, with the spur's whole edge and wall wire.
+fn runout_cap(
+    topo: &Topology,
+    faces: &[FaceId],
+    beyond: (FaceId, WireId),
+    piece: (EdgeId, &Edge),
+    corner: VertexId,
+    f_wire: WireId,
+) -> Result<Option<RunoutCap>, BlendError> {
+    const ON_LINE: f64 = 1e-6;
+    let at_corner = |e: &Edge| e.start() == corner || e.end() == corner;
+    let f_edges = topo.wire(f_wire)?.edges().to_vec();
+    let beyond_edges = topo.wire(beyond.1)?.edges().to_vec();
+    let shares_corner = beyond_edges.iter().any(|oe| {
+        oe.edge() != piece.0
+            && f_edges.iter().any(|f| f.edge() == oe.edge())
+            && topo.edge(oe.edge()).is_ok_and(at_corner)
+    });
+    if shares_corner {
+        return Ok(Some((beyond, None)));
+    }
+    if !straight_edge(topo, piece.1, ON_LINE)? {
+        return Ok(None);
+    }
+    let a = if piece.1.start() == corner {
+        piece.1.end()
+    } else {
+        piece.1.start()
+    };
+    let ap = topo.vertex(a)?.point();
+    let cp = topo.vertex(corner)?.point();
+    for oe in &beyond_edges {
+        if oe.edge() == piece.0 {
+            continue;
+        }
+        let whole = topo.edge(oe.edge())?;
+        if !at_corner(whole) || !straight_edge(topo, whole, ON_LINE)? {
+            continue;
+        }
+        let far = if whole.start() == corner {
+            whole.end()
+        } else {
+            whole.start()
+        };
+        let span = topo.vertex(far)?.point() - cp;
+        let t = (ap - cp).dot(span) / span.dot(span).max(1e-300);
+        if !(1e-9..1.0 - 1e-9).contains(&t) || (cp + span * t - ap).length() > ON_LINE {
+            continue;
+        }
+        let mut uses = Vec::new();
+        for &other in faces {
+            let f = topo.face(other)?;
+            for w in std::iter::once(f.outer_wire()).chain(f.inner_wires().iter().copied()) {
+                if w == beyond.1 {
+                    continue;
+                }
+                if topo.wire(w)?.edges().iter().any(|e| e.edge() == oe.edge()) {
+                    uses.push((other, w));
+                }
+            }
+        }
+        if let [cap] = uses.as_slice() {
+            return Ok(Some((*cap, Some((oe.edge(), beyond.1)))));
+        }
+    }
+    Ok(None)
+}
+
+/// Extends the cap over a runout patch where its contact runs on into the
+/// cap ([`extend_cap_over_runout`]).
+#[allow(clippy::too_many_lines)]
+fn runout_onto_cap(
+    topo: &mut Topology,
+    faces: &[FaceId],
+    face_id: FaceId,
+    patch: RunoutPatch<'_>,
+) -> Result<Option<RunOn>, BlendError> {
+    const SAMPLES: usize = 200;
+    let ends = |e: &Edge| [e.start(), e.end()];
+    let other_end = |e: &Edge, v: VertexId| if e.start() == v { e.end() } else { e.start() };
+    let RunoutPatch {
+        band: (band_wire, band, b_id, b_edge),
+        line: (f_wire, l_id, l_edge),
+        piece: (beyond, v_id, v_edge),
+        corner: c,
+        contact_end: p,
+        cap_end: a,
+    } = patch;
+    let b_edge = b_edge.clone();
+    let l_edge = l_edge.clone();
+    let v_edge = v_edge.clone();
+    let Some(((k_face, k_wire), spur)) =
+        runout_cap(topo, faces, beyond, (v_id, &v_edge), c, f_wire)?
+    else {
+        return Ok(None);
+    };
+    let band_edges = topo.wire(band_wire)?.edges().to_vec();
+    let f_edges = topo.wire(f_wire)?.edges().to_vec();
+    let k_edges = topo.wire(k_wire)?.edges().to_vec();
+    // The band's contact on the contact's face, ending at `P`.
+    let contact = band_edges.iter().map(OrientedEdge::edge).find(|&e| {
+        e != b_id
+            && f_edges.iter().any(|oe| oe.edge() == e)
+            && topo.edge(e).is_ok_and(|edge| ends(edge).contains(&p))
+    });
+    // The cap's corner edge on the contact's face, from `C`.
+    let corner = f_edges.iter().map(OrientedEdge::edge).find(|&e| {
+        e != l_id
+            && k_edges.iter().any(|oe| oe.edge() == e)
+            && topo.edge(e).is_ok_and(|edge| ends(edge).contains(&c))
+    });
+    let (Some(contact), Some(corner)) = (contact, corner) else {
+        return Ok(None);
+    };
+    let contact_edge = topo.edge(contact)?.clone();
+    let corner_edge = topo.edge(corner)?.clone();
+    let q = other_end(&contact_edge, p);
+    let [pp, qp, cp, ap] = [p, q, c, a].map(|v| topo.vertex(v).map(Vertex::point));
+    let (pp, qp, cp, ap) = (pp?, qp?, cp?, ap?);
+    let tol = 1e-6 * (pp - ap).length().max(1.0);
+    let offset = |point: Point3| cap_offset(topo, RunOnCap::Face(k_face), point, tol);
+    let (Some(at_p), Some(at_q)) = (offset(pp), offset(qp)) else {
+        return Ok(None);
+    };
+    log::debug!("runout {face_id:?}: P offset {at_p}, far end {at_q}");
+    if at_p >= -tol || at_q <= tol {
+        return Ok(None);
+    }
+    // Where the contact crosses the cap's surface, back from `P`.
+    let (sp, ep) = (
+        topo.vertex(contact_edge.start())?.point(),
+        topo.vertex(contact_edge.end())?.point(),
+    );
+    let curve = contact_edge.curve();
+    let (t0, t1) = curve.domain_with_endpoints(sp, ep);
+    let (tp, tq) = if contact_edge.start() == p {
+        (t0, t1)
+    } else {
+        (t1, t0)
+    };
+    #[allow(clippy::cast_precision_loss)]
+    let at_sample = |k: usize| tp + (tq - tp) * (k as f64) / (SAMPLES as f64);
+    let mut bracket = None;
+    for k in 1..=SAMPLES {
+        match offset(curve.evaluate_with_endpoints(at_sample(k), sp, ep)) {
+            Some(off) if off >= 0.0 => {
+                bracket = Some((at_sample(k - 1), at_sample(k)));
+                break;
+            }
+            Some(_) => {}
+            None => return Ok(None),
+        }
+    }
+    let Some((mut inside, mut outside)) = bracket else {
+        return Ok(None);
+    };
+    for _ in 0..100 {
+        let middle = f64::midpoint(inside, outside);
+        match offset(curve.evaluate_with_endpoints(middle, sp, ep)) {
+            Some(off) if off < 0.0 => inside = middle,
+            Some(_) => outside = middle,
+            None => return Ok(None),
+        }
+    }
+    let tx = f64::midpoint(inside, outside);
+    let x = curve.evaluate_with_endpoints(tx, sp, ep);
+    // `E` run on from `C` to `X`: `X` on its carrier, past `C`.
+    let on_carrier = 1e-5 * (pp - ap).length().max(1.0);
+    let other = topo.vertex(other_end(&corner_edge, c))?.point();
+    let run_on = match corner_edge.curve() {
+        EdgeCurve::Line => {
+            let along = (cp - other).normalize()?;
+            let reach = (x - cp).dot(along);
+            if reach <= tol || (x - cp - along * reach).length() > on_carrier {
+                return Ok(None);
+            }
+            EdgeCurve::Line
+        }
+        EdgeCurve::Circle(circle) => {
+            let off_plane = (x - circle.center()).dot(circle.normal()).abs();
+            let off_circle = ((x - circle.center()).length() - circle.radius()).abs();
+            if off_plane > on_carrier || off_circle > on_carrier {
+                return Ok(None);
+            }
+            EdgeCurve::Circle(circle.clone())
+        }
+        _ => return Ok(None),
+    };
+    // The run must leave `C` away from `E` and take the short way round;
+    // a circle runs its own way, so the edge runs from whichever end
+    // makes it so.
+    let probe = Edge::new(c, c, run_on.clone());
+    let mut run_from_x = None;
+    for from_x in [true, false] {
+        let (s0, s1) = if from_x { (x, cp) } else { (cp, x) };
+        let (r0, r1) = probe.curve().domain_with_endpoints(s0, s1);
+        let middle = probe
+            .curve()
+            .evaluate_with_endpoints(f64::midpoint(r0, r1), s0, s1);
+        if (middle - x).length() < (cp - x).length()
+            && !point_on_edge(topo, corner, middle, on_carrier)?
+        {
+            run_from_x = Some(from_x);
+            break;
+        }
+    }
+    let Some(run_from_x) = run_from_x else {
+        return Ok(None);
+    };
+    let Some(meet) = band_meets_cap(band, x, ap, offset) else {
+        return Ok(None);
+    };
+    let piece = match curve {
+        EdgeCurve::NurbsCurve(nurbs) => {
+            let (left, right) = brepkit_math::nurbs::knot_ops::curve_split(nurbs, tx)?;
+            EdgeCurve::NurbsCurve(if tq > tx { right } else { left })
+        }
+        other => other.clone(),
+    };
+    log::debug!(
+        "runout {face_id:?}: the round is cut back to its cap {k_face:?} at {x:?}, the cap run on over the notch"
+    );
+    // A wall running up the cap's whole corner edge and back down the
+    // piece: the edge splits at `A`, the wall keeps the piece below, and
+    // the cap takes the piece below and the piece above.
+    if let Some((whole, wall_wire)) = spur {
+        let whole_edge = topo.edge(whole)?.clone();
+        let far = other_end(&whole_edge, c);
+        let wall = topo.wire(wall_wire)?.edges().to_vec();
+        let n = wall.len();
+        let Some(at) = (0..n).find(|&k| {
+            let pair = [wall[k].edge(), wall[(k + 1) % n].edge()];
+            pair == [whole, v_id] || pair == [v_id, whole]
+        }) else {
+            return Ok(None);
+        };
+        let rest = topo.add_edge(Edge::new(a, far, EdgeCurve::Line));
+        let first = wall[at];
+        let first_edge = topo.edge(first.edge())?.clone();
+        let from = first.oriented_start(&first_edge);
+        let mut folded: Vec<OrientedEdge> = Vec::with_capacity(n - 1);
+        for (k, &oe) in wall.iter().enumerate() {
+            if k == at {
+                folded.push(OrientedEdge::new(rest, from == a));
+            } else if k != (at + 1) % n {
+                folded.push(oe);
+            }
+        }
+        let closed = topo.wire(wall_wire)?.is_closed();
+        *topo.wire_mut(wall_wire)? = Wire::new(folded, closed)?;
+        rewrite_wire(topo, k_wire, |oe| {
+            if oe.edge() != whole {
+                vec![oe]
+            } else if oe.oriented_start(&whole_edge) == c {
+                vec![
+                    OrientedEdge::new(v_id, v_edge.start() == c),
+                    OrientedEdge::new(rest, true),
+                ]
+            } else {
+                vec![
+                    OrientedEdge::new(rest, false),
+                    OrientedEdge::new(v_id, v_edge.start() == a),
+                ]
+            }
+        })?;
+    }
+    let vertex_tol = topo.vertex(p)?.tolerance();
+    let vx = topo.add_vertex(Vertex::new(x, vertex_tol));
+    let new_contact = topo.add_edge(if contact_edge.start() == p {
+        Edge::new(vx, q, piece)
+    } else {
+        Edge::new(q, vx, piece)
+    });
+    let meet_id = topo.add_edge(Edge::new(vx, a, meet));
+    let run_id = topo.add_edge(if run_from_x {
+        Edge::new(vx, c, run_on)
+    } else {
+        Edge::new(c, vx, run_on)
+    });
+    // `from` -> the start the replacement takes.
+    let moved = |from: VertexId| if from == p { vx } else { from };
+    let swap_contact = |oe: OrientedEdge| {
+        (oe.edge() == contact).then(|| OrientedEdge::new(new_contact, oe.is_forward()))
+    };
+    rewrite_wire(topo, band_wire, |oe| {
+        if let Some(swapped) = swap_contact(oe) {
+            vec![swapped]
+        } else if oe.edge() == b_id {
+            let from = moved(oe.oriented_start(&b_edge));
+            vec![OrientedEdge::new(meet_id, from == vx)]
+        } else {
+            vec![oe]
+        }
+    })?;
+    rewrite_wire(topo, f_wire, |oe| {
+        if let Some(swapped) = swap_contact(oe) {
+            vec![swapped]
+        } else if oe.edge() == l_id {
+            let from = moved(oe.oriented_start(&l_edge));
+            vec![OrientedEdge::new(run_id, (from == vx) == run_from_x)]
+        } else {
+            vec![oe]
+        }
+    })?;
+    rewrite_wire(topo, k_wire, |oe| {
+        if oe.edge() != v_id {
+            vec![oe]
+        } else if oe.oriented_start(&v_edge) == a {
+            // `A` -> `X` -> `C`.
+            vec![
+                OrientedEdge::new(meet_id, false),
+                OrientedEdge::new(run_id, run_from_x),
+            ]
+        } else {
+            vec![
+                OrientedEdge::new(run_id, !run_from_x),
+                OrientedEdge::new(meet_id, true),
+            ]
+        }
+    })?;
+    Ok(Some(RunOn {
+        corner: c,
+        edge: corner,
+        run: run_id,
+        wires: [f_wire, k_wire],
+    }))
+}
+
+/// Whether `edge` traces `on` within `tol`, certified rather than sampled.
+/// Every point of `edge` is held within `tol` of `on` by a bound on
+/// `edge`'s speed along its parameter: between two samples, no point
+/// strays farther than that speed allows. Where `on` is a line or an arc
+/// of a circle short of a whole turn, `edge` runs between `on`'s ends, so
+/// the feet of its points on `on` sweep all of `on`, and every point of
+/// `on` then lies within `tol` of `edge` too. An ellipse or a B-spline `on`
+/// (the other round's contact, in a full round) has no such sweep to stand
+/// on, so it is held to `edge` the same way in turn.
+fn edge_lies_on(topo: &Topology, edge: &Edge, on: &Edge, tol: f64) -> Result<bool, BlendError> {
+    let (p, q) = (
+        topo.vertex(on.start())?.point(),
+        topo.vertex(on.end())?.point(),
+    );
     match on.curve() {
         EdgeCurve::Line => {
             if (q - p).length_squared() <= 1e-18 {
@@ -2488,13 +3856,32 @@ fn edge_lies_on(topo: &Topology, edge: &Edge, on: &Edge, tol: f64) -> Result<boo
         // Points within `tol` of the arc must keep off the half-plane across
         // its gap, where the nearer end (and so the foot) jumps.
         EdgeCurve::Circle(circle) => {
+            let (s0, s1) = on.curve().domain_with_endpoints(p, q);
             let gap = std::f64::consts::TAU - (s1 - s0);
             if circle.radius() * (0.5 * gap).min(std::f64::consts::FRAC_PI_2).sin() <= tol {
                 return Ok(false);
             }
         }
-        EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_) => return Ok(false),
+        EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_) => {
+            return Ok(stays_within(topo, edge, on, tol)? && stays_within(topo, on, edge, tol)?);
+        }
     }
+    stays_within(topo, edge, on, tol)
+}
+
+/// Whether every point of `edge` lies within `tol` of `on`, between `on`'s
+/// ends: `edge` sampled closely enough for its speed bound to cover the
+/// gaps, each sample's distance to `on` read as no less than the true one.
+fn stays_within(topo: &Topology, edge: &Edge, on: &Edge, tol: f64) -> Result<bool, BlendError> {
+    let (a, b) = (
+        topo.vertex(edge.start())?.point(),
+        topo.vertex(edge.end())?.point(),
+    );
+    let (p, q) = (
+        topo.vertex(on.start())?.point(),
+        topo.vertex(on.end())?.point(),
+    );
+    let (s0, s1) = on.curve().domain_with_endpoints(p, q);
     let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
     let Some(speed) = speed_bound(edge.curve(), a, b) else {
         return Ok(false);
@@ -2508,6 +3895,12 @@ fn edge_lies_on(topo: &Topology, edge: &Edge, on: &Edge, tol: f64) -> Result<boo
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let count = count as u32;
     let step = (t1 - t0) / f64::from(count);
+    // Where a point's foot on the whole curve falls outside `on`, its
+    // distance to the nearer end stands in, which is never less than its
+    // distance to `on`.
+    let nearer_end = |at: Point3| (p - at).length().min((q - at).length());
+    // The bound only grows with `worst`, so once one sample puts it past
+    // `tol` the answer is settled.
     let mut worst: f64 = 0.0;
     for k in 0..=count {
         let at = edge
@@ -2516,24 +3909,82 @@ fn edge_lies_on(topo: &Topology, edge: &Edge, on: &Edge, tol: f64) -> Result<boo
         let off = match on.curve() {
             EdgeCurve::Line => {
                 let chord = q - p;
-                let along = ((at - p).dot(chord) / chord.dot(chord)).clamp(0.0, 1.0);
-                (p + chord * along - at).length()
+                if chord.length_squared() <= 1e-18 {
+                    (p - at).length()
+                } else {
+                    let along = ((at - p).dot(chord) / chord.dot(chord)).clamp(0.0, 1.0);
+                    (p + chord * along - at).length()
+                }
             }
             EdgeCurve::Circle(circle) => {
                 let angle = circle.project(at);
                 if (angle - s0).rem_euclid(std::f64::consts::TAU) <= s1 - s0 {
                     (circle.evaluate(angle) - at).length()
                 } else {
-                    (p - at).length().min((q - at).length())
+                    nearer_end(at)
                 }
             }
-            EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_) => return Ok(false),
+            EdgeCurve::Ellipse(ellipse) => {
+                let angle = ellipse.project(at);
+                if (angle - s0).rem_euclid(std::f64::consts::TAU) <= s1 - s0 {
+                    (ellipse.evaluate(angle) - at).length()
+                } else {
+                    nearer_end(at)
+                }
+            }
+            EdgeCurve::NurbsCurve(nurbs) => {
+                match brepkit_math::nurbs::projection::project_point_to_curve(nurbs, at, 1e-9) {
+                    Ok(found) if (s0.min(s1)..=s0.max(s1)).contains(&found.parameter) => {
+                        found.distance
+                    }
+                    Ok(_) => nearer_end(at),
+                    Err(_) => return Ok(false),
+                }
+            }
         };
         worst = worst.max(off);
+        if (0.5 * speed).madd(step.abs(), worst) > tol {
+            log::debug!("edge stands {worst:e} off its neighbour at a sample, past {tol:e}");
+            return Ok(false);
+        }
     }
     let bound = (0.5 * speed).madd(step.abs(), worst);
     log::debug!("edge lies within {bound:e} of its neighbour ({worst:e} at its samples)");
     Ok(bound <= tol)
+}
+
+/// Whether a patch beyond a spur's short edge carries on the face beyond its
+/// long edge: in its plane (or, on a curved face, its tangent plane along the
+/// short edge, within `curved` radians) and facing its way.
+fn patch_carries_on(
+    topo: &Topology,
+    patch: FaceId,
+    beyond: FaceId,
+    short: EdgeId,
+    tol: f64,
+    curved: f64,
+) -> Result<bool, BlendError> {
+    let Some((n2, _)) = outward_plane(topo, patch)? else {
+        return Ok(false);
+    };
+    let edge = topo.edge(short)?;
+    let (a, b) = (
+        topo.vertex(edge.start())?.point(),
+        topo.vertex(edge.end())?.point(),
+    );
+    // A curved face beyond may meet the patch at a slight kink: a fitted
+    // surface rarely runs on exactly level.
+    let alike = if topo.face(beyond)?.surface().is_planar() {
+        1.0 - 1e-9
+    } else {
+        curved.cos()
+    };
+    for at in [a, b, a + (b - a) * 0.5] {
+        if !outward_normal_at(topo, beyond, at, tol)?.is_some_and(|n1| n1.dot(n2) >= alike) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 /// A bound on `curve`'s speed along its parameter: a line's length (its
@@ -2710,10 +4161,31 @@ fn contact_source_vertex(
     None
 }
 
+/// The first and last vertex of a contact's chain of registry boundaries,
+/// along the contact.
+fn contact_chain_ends(
+    registry: &BoundaryRegistry,
+    chain: &[crate::boundary_registry::BoundaryHandle],
+) -> Result<(VertexId, VertexId), BlendError> {
+    let entry = |handle: crate::boundary_registry::BoundaryHandle| {
+        registry
+            .entry(handle)
+            .ok_or_else(|| BlendError::PlanningFailure {
+                reason: format!("unknown contact boundary {handle}"),
+            })
+    };
+    let (Some(&first), Some(&last)) = (chain.first(), chain.last()) else {
+        return Err(BlendError::PlanningFailure {
+            reason: "empty contact chain".to_owned(),
+        });
+    };
+    Ok((entry(first)?.start.vertex, entry(last)?.end.vertex))
+}
+
 fn contact_forward_for_spine(
     topo: &Topology,
     registry: &BoundaryRegistry,
-    handle: crate::boundary_registry::BoundaryHandle,
+    chain: &[crate::boundary_registry::BoundaryHandle],
     support_face: FaceId,
     terminals: Option<(VertexId, VertexId)>,
     starts_at_spine_start: bool,
@@ -2721,24 +4193,10 @@ fn contact_forward_for_spine(
     let Some((spine_start, spine_end)) = terminals else {
         return Ok(None);
     };
-    let entry = registry
-        .entry(handle)
-        .ok_or_else(|| BlendError::PlanningFailure {
-            reason: format!("unknown contact boundary {handle}"),
-        })?;
+    let (first, last) = contact_chain_ends(registry, chain)?;
     let direct_vertices = (
-        contact_source_vertex(
-            topo,
-            support_face,
-            entry.start.vertex,
-            (spine_start, spine_end),
-        ),
-        contact_source_vertex(
-            topo,
-            support_face,
-            entry.end.vertex,
-            (spine_start, spine_end),
-        ),
+        contact_source_vertex(topo, support_face, first, (spine_start, spine_end)),
+        contact_source_vertex(topo, support_face, last, (spine_start, spine_end)),
     );
     let (Some(start), Some(end)) = direct_vertices else {
         return Ok(None);
@@ -3533,6 +4991,29 @@ fn point_on_edge(
     point: Point3,
     tol: f64,
 ) -> Result<bool, BlendError> {
+    Ok(edge_distance(topo, edge_id, point, None)? <= tol)
+}
+
+/// `point`'s distance from an edge, or from its trace on `onto` (each of
+/// its points projected on to that surface): its nearest sample, refined
+/// by golden section between the sample's neighbours.
+fn edge_distance(
+    topo: &Topology,
+    edge_id: EdgeId,
+    point: Point3,
+    onto: Option<&FaceSurface>,
+) -> Result<f64, BlendError> {
+    edge_nearest(topo, edge_id, point, onto).map(|(distance, _)| distance)
+}
+
+/// `point`'s distance from an edge, or from its trace on `onto`, as
+/// [`edge_distance`], with the point of the edge (or its trace) nearest it.
+fn edge_nearest(
+    topo: &Topology,
+    edge_id: EdgeId,
+    point: Point3,
+    onto: Option<&FaceSurface>,
+) -> Result<(f64, Point3), BlendError> {
     const SAMPLES: usize = 64;
     let edge = topo.edge(edge_id)?;
     let (a, b) = (
@@ -3541,11 +5022,27 @@ fn point_on_edge(
     );
     let curve = edge.curve();
     let (t0, t1) = curve.domain_with_endpoints(a, b);
-    let at = |t: f64| (curve.evaluate_with_endpoints(t, a, b) - point).length();
+    let at = |t: f64| {
+        let on = curve.evaluate_with_endpoints(t, a, b);
+        let on = match onto {
+            Some(FaceSurface::Plane { normal, d }) => {
+                on - *normal
+                    * ((normal.dot(Vec3::new(on.x(), on.y(), on.z())) - d)
+                        / normal.length_squared())
+            }
+            Some(surface) => surface
+                .project_point(on)
+                .and_then(|(u, v)| surface.evaluate(u, v))
+                .unwrap_or(on),
+            None => on,
+        };
+        ((on - point).length(), on)
+    };
+    let dist = |t: f64| at(t).0;
     #[allow(clippy::cast_precision_loss)]
     let param = |k: usize| t0 + (t1 - t0) * (k as f64) / (SAMPLES as f64);
     let nearest = (0..=SAMPLES)
-        .min_by(|&i, &j| at(param(i)).total_cmp(&at(param(j))))
+        .min_by(|&i, &j| dist(param(i)).total_cmp(&dist(param(j))))
         .unwrap_or(0);
     // Golden-section refinement between the nearest sample's neighbours.
     let (mut lo, mut hi) = (
@@ -3555,13 +5052,67 @@ fn point_on_edge(
     let ratio = 0.5 * (5.0_f64.sqrt() - 1.0);
     for _ in 0..80 {
         let (x1, x2) = (hi - ratio * (hi - lo), lo + ratio * (hi - lo));
-        if at(x1) <= at(x2) {
+        if dist(x1) <= dist(x2) {
             hi = x2;
         } else {
             lo = x1;
         }
     }
-    Ok(at(f64::midpoint(lo, hi)) <= tol)
+    Ok(at(f64::midpoint(lo, hi)))
+}
+
+/// Where the line `origin + run * s` passes through an edge: the edge's
+/// point nearest the line (its nearest sample, refined by golden section
+/// between the sample's neighbours), and the line's `s` there; `None` where
+/// the line passes farther than `tol` from the edge.
+fn line_meets_edge(
+    topo: &Topology,
+    edge_id: EdgeId,
+    origin: Point3,
+    run: Vec3,
+    tol: f64,
+) -> Result<Option<f64>, BlendError> {
+    const SAMPLES: usize = 64;
+    let len2 = run.length_squared();
+    if len2 <= 1e-24 {
+        return Ok(None);
+    }
+    let edge = topo.edge(edge_id)?;
+    let (a, b) = (
+        topo.vertex(edge.start())?.point(),
+        topo.vertex(edge.end())?.point(),
+    );
+    let curve = edge.curve();
+    let (t0, t1) = curve.domain_with_endpoints(a, b);
+    let off = |t: f64| {
+        let d = curve.evaluate_with_endpoints(t, a, b) - origin;
+        (d - run * (d.dot(run) / len2)).length()
+    };
+    #[allow(clippy::cast_precision_loss)]
+    let param = |k: usize| t0 + (t1 - t0) * (k as f64) / (SAMPLES as f64);
+    let nearest = (0..=SAMPLES)
+        .min_by(|&i, &j| off(param(i)).total_cmp(&off(param(j))))
+        .unwrap_or(0);
+    let (mut lo, mut hi) = (
+        param(nearest.saturating_sub(1)),
+        param((nearest + 1).min(SAMPLES)),
+    );
+    let ratio = 0.5 * (5.0_f64.sqrt() - 1.0);
+    for _ in 0..80 {
+        let (x1, x2) = (hi - ratio * (hi - lo), lo + ratio * (hi - lo));
+        if off(x1) <= off(x2) {
+            hi = x2;
+        } else {
+            lo = x1;
+        }
+    }
+    let t = f64::midpoint(lo, hi);
+    if off(t) > tol {
+        return Ok(None);
+    }
+    Ok(Some(
+        (curve.evaluate_with_endpoints(t, a, b) - origin).dot(run) / len2,
+    ))
 }
 
 /// Where the line `origin + run * s` meets `surface`, by Newton steps from
@@ -3596,11 +5147,18 @@ fn line_meets_surface(
 }
 
 /// The curve where a cylinder band meets a curved cap between the contact
-/// ends `a` and `b`: each ruling of the band, the shorter way round from `a`
-/// to `b`, cut by the cap's surface, and a cubic through those points. The
-/// rulings are doubled until the cubic lies on both the band and the cap
-/// between its points, within the cuts' tolerance. `None` where a ruling
-/// misses the cap, or the cubic stays off them.
+/// ends `a` and `b`, and a cubic through points along it.
+///
+/// The curve is traced in the band's development, `w` the arc round the
+/// axis from `a` and `s` the height along it, by steps of equal length
+/// along the curve, each pulled back on to the cap along the gradient of
+/// its offset from the cap. Cutting each ruling of the band by the cap
+/// instead cannot follow a curve that runs nearly along the rulings (a cap
+/// meeting the support face almost tangentially at the corner, where the
+/// band's end runs to the corner along the rulings, and a ruling there can
+/// cross the cap beyond the face). The steps are halved until the cubic
+/// lies on both the band and the cap between its points. `None` where the
+/// trace leaves the cap, or the cubic stays off them.
 fn cylinder_meets_cap(
     cylinder: &brepkit_math::surfaces::CylindricalSurface,
     cap: &FaceSurface,
@@ -3621,13 +5179,37 @@ fn cylinder_meets_cap(
     let across = axis.cross(ra);
     let angle = rb.dot(across).atan2(rb.dot(ra));
     let (sa, sb) = ((a - origin).dot(axis), (b - origin).dot(axis));
-    // The ruling `f` of the way round from `a`, cut by the cap from a guess
-    // of its height along the axis: the point and its height.
-    let cut = |f: f64, guess: f64| -> Option<(Point3, f64)> {
-        let theta = angle * f;
-        let foot = origin + (ra * theta.cos() + across * theta.sin()) * radius;
-        let s = line_meets_surface(cap, foot, axis, guess, tol)?;
-        Some((foot + axis * s, s))
+    let target = (radius * angle, sb);
+    let at = |w: f64, s: f64| {
+        let theta = w / radius;
+        origin + (ra * theta.cos() + across * theta.sin()) * radius + axis * s
+    };
+    // The point's offset from the cap along the cap's normal, and that
+    // offset's gradient in (w, s).
+    let offset = |w: f64, s: f64| -> Option<(f64, f64, f64)> {
+        let p = at(w, s);
+        let (u, v) = cap.project_point(p)?;
+        let q = cap.evaluate(u, v)?;
+        let n = cap.normal(u, v);
+        let theta = w / radius;
+        let round = across * theta.cos() - ra * theta.sin();
+        Some(((p - q).dot(n), n.dot(round), n.dot(axis)))
+    };
+    // Pulls (w, s) back on to the cap along the offset's gradient.
+    let settle = |mut w: f64, mut s: f64| -> Option<(f64, f64)> {
+        for _ in 0..30 {
+            let (f, gw, gs) = offset(w, s)?;
+            if f.abs() <= 1e-3 * tol {
+                return Some((w, s));
+            }
+            let g2 = gw.madd(gw, gs * gs);
+            if g2 <= 1e-24 {
+                return None;
+            }
+            w -= f * gw / g2;
+            s -= f * gs / g2;
+        }
+        None
     };
     // How far a point lies off the band or the cap, whichever is farther.
     let off = |p: Point3| -> Option<f64> {
@@ -3635,18 +5217,42 @@ fn cylinder_meets_cap(
         let on_cap = (cap.evaluate(u, v)? - p).length();
         Some(on_cap.max((radial(p).length() - radius).abs()))
     };
-    let mut cuts = Vec::with_capacity(FIRST + 1);
-    cuts.push((a, sa));
-    for k in 1..FIRST {
-        let s = cuts[k - 1].1;
-        #[allow(clippy::cast_precision_loss)]
-        let guess = s + (sb - s) / ((FIRST - k + 1) as f64);
-        #[allow(clippy::cast_precision_loss)]
-        cuts.push(cut(k as f64 / FIRST as f64, guess)?);
+    let span = target.0.hypot(target.1 - sa);
+    if span <= tol {
+        return None;
     }
-    cuts.push((b, sb));
+    let mut steps = FIRST;
     loop {
-        let points: Vec<Point3> = cuts.iter().map(|&(p, _)| p).collect();
+        #[allow(clippy::cast_precision_loss)]
+        let h = span / steps as f64;
+        let mut points = vec![a];
+        let (mut w, mut s) = (0.0, sa);
+        let mut heading: Option<(f64, f64)> = None;
+        loop {
+            if (target.0 - w).hypot(target.1 - s) <= 1.5 * h {
+                points.push(b);
+                break;
+            }
+            if points.len() > 8 * steps {
+                return None;
+            }
+            let (_, gw, gs) = offset(w, s)?;
+            let g = gw.hypot(gs);
+            if g <= 1e-12 {
+                return None;
+            }
+            let (mut tw, mut ts) = (-gs / g, gw / g);
+            let backwards = heading.map_or_else(
+                || tw.madd(target.0 - w, ts * (target.1 - s)) < 0.0,
+                |(hw, hs)| tw.madd(hw, ts * hs) < 0.0,
+            );
+            if backwards {
+                (tw, ts) = (-tw, -ts);
+            }
+            heading = Some((tw, ts));
+            (w, s) = settle(tw.madd(h, w), ts.madd(h, s))?;
+            points.push(at(w, s));
+        }
         let curve = brepkit_math::nurbs::fitting::interpolate(&points, 3).ok()?;
         // The cubic takes its points at their chord-length parameters: check
         // it at the quarters between each two.
@@ -3674,19 +5280,10 @@ fn cylinder_meets_cap(
         if on {
             return Some(EdgeCurve::NurbsCurve(curve));
         }
-        let steps = cuts.len() - 1;
         if steps >= MOST {
             return None;
         }
-        let mut finer = Vec::with_capacity(2 * steps + 1);
-        for (k, pair) in cuts.windows(2).enumerate() {
-            finer.push(pair[0]);
-            #[allow(clippy::cast_precision_loss)]
-            let f = (2 * k + 1) as f64 / (2 * steps) as f64;
-            finer.push(cut(f, f64::midpoint(pair[0].1, pair[1].1))?);
-        }
-        finer.push((b, sb));
-        cuts = finer;
+        steps *= 2;
     }
 }
 
@@ -3701,6 +5298,359 @@ enum RunOnCap {
 /// The caps stripe ends were run on to, keyed by the stripe's first spine
 /// edge and its end (0 at the spine's start, 1 at its end).
 type TiltedCaps = std::collections::HashMap<(EdgeId, usize), RunOnCap>;
+
+/// Two rounds of parallel straight edges of one plane face, together wider
+/// than the face (a slab's end rounded at both corners past half its
+/// width), cross on it: each one's contact on the face lies past the
+/// other's. The round picked first (`pick_order`) is kept; the second rests
+/// on its other face and pivots on the first's contact on the shared face,
+/// so the face goes and the two bands meet there along the first's contact.
+/// Both rounds then have that contact on the face, which is trimmed to the
+/// strip between them, with no area, and dropped as a full round's is.
+/// Walked rounds crossing on a face (a curved plate rounded on both rims,
+/// thinner than twice the radius) pivot the same way
+/// ([`pivot_walked_round`]).
+fn pivot_crossing_rounds(
+    topo: &Topology,
+    stripe_results: &mut [StripeResult],
+    pick_order: &[EdgeId],
+) -> Result<(), BlendError> {
+    const PARALLEL: f64 = 1e-12;
+    let picked = |stripe: &Stripe| {
+        stripe
+            .spine_edges()
+            .iter()
+            .filter_map(|edge| pick_order.iter().position(|picked| picked == edge))
+            .min()
+            .unwrap_or(usize::MAX)
+    };
+    let mut moved = vec![false; stripe_results.len()];
+    for first in 0..stripe_results.len() {
+        for second in first + 1..stripe_results.len() {
+            if moved[first] || moved[second] {
+                continue;
+            }
+            // `i` is the round picked first, made as it would be alone.
+            let (i, j) =
+                if picked(&stripe_results[second].stripe) < picked(&stripe_results[first].stripe) {
+                    (second, first)
+                } else {
+                    (first, second)
+                };
+            let (a, b) = (&stripe_results[i].stripe, &stripe_results[j].stripe);
+            if let (FaceSurface::Nurbs(_), FaceSurface::Nurbs(_)) = (&a.surface, &b.surface) {
+                if let Some(pivoted) = pivot_walked_round(topo, a, b)? {
+                    log::debug!(
+                        "crossing walked rounds: stripe {j} pivots on stripe {i}'s contact"
+                    );
+                    stripe_results[j].stripe = pivoted;
+                    moved[i] = true;
+                    moved[j] = true;
+                }
+                continue;
+            }
+            let (FaceSurface::Cylinder(ca), FaceSurface::Cylinder(cb)) = (&a.surface, &b.surface)
+            else {
+                continue;
+            };
+            if a.sections.len() != 2 || b.sections.len() != 2 {
+                continue;
+            }
+            let axis = ca.axis();
+            let r = ca.radius();
+            if axis.dot(cb.axis()).abs() < 1.0 - PARALLEL || (r - cb.radius()).abs() > 1e-9 * r {
+                continue;
+            }
+            let side = |stripe: &Stripe, face: FaceId| {
+                if stripe.face1 == face {
+                    Some(1_u8)
+                } else if stripe.face2 == face {
+                    Some(2)
+                } else {
+                    None
+                }
+            };
+            let Some((face, sa, sb)) = [a.face1, a.face2]
+                .into_iter()
+                .find_map(|face| Some((face, side(a, face)?, side(b, face)?)))
+            else {
+                continue;
+            };
+            let Some((normal, _)) = outward_plane(topo, face)? else {
+                continue;
+            };
+            let other = if sb == 1 { b.face2 } else { b.face1 };
+            let Some((other_normal, _)) = outward_plane(topo, other)? else {
+                continue;
+            };
+            let on = |section: &crate::section::CircSection, side: u8| {
+                if side == 1 { section.p1 } else { section.p2 }
+            };
+            let across = normal.cross(axis);
+            let (pa, pb) = (on(&a.sections[0], sa), on(&b.sections[0], sb));
+            let (ea, eb) = (a.spine.evaluate(topo, 0.0)?, b.spine.evaluate(topo, 0.0)?);
+            // Each contact lies past the other, toward the other's edge.
+            if across.dot(pa - pb) * across.dot(eb - ea) <= 0.0 {
+                continue;
+            }
+            // The second round's ball, kept a radius off its other face,
+            // moves along it until it passes through the first's contact.
+            let along = other_normal.cross(axis).normalize()?;
+            let line = on(&a.sections[0], sa);
+            let mut sections = b.sections.clone();
+            let mut ok = true;
+            for section in &mut sections {
+                let c = section.center;
+                let pivot = line + axis * (c - line).dot(axis);
+                let off = c - pivot;
+                let half = along.dot(off);
+                let disc = half * half - (off.length_squared() - r * r);
+                if disc < 0.0 {
+                    ok = false;
+                    break;
+                }
+                let root = disc.sqrt();
+                let lambda = if (-half + root).abs() <= (-half - root).abs() {
+                    -half + root
+                } else {
+                    -half - root
+                };
+                let centre = c + along * lambda;
+                let touch = centre + other_normal * r;
+                if sb == 1 {
+                    section.p1 = pivot;
+                    section.p2 = touch;
+                } else {
+                    section.p2 = pivot;
+                    section.p1 = touch;
+                }
+                section.center = centre;
+            }
+            if !ok {
+                continue;
+            }
+            let line_of = |from: Point3, to: Point3| {
+                brepkit_math::nurbs::curve::NurbsCurve::new(
+                    1,
+                    vec![0.0, 0.0, 1.0, 1.0],
+                    vec![from, to],
+                    vec![1.0, 1.0],
+                )
+            };
+            let contact1 = line_of(sections[0].p1, sections[1].p1)?;
+            let contact2 = line_of(sections[0].p2, sections[1].p2)?;
+            let cylinder =
+                brepkit_math::surfaces::CylindricalSurface::new(sections[0].center, cb.axis(), r)?;
+            log::debug!(
+                "crossing rounds on face {face:?}: stripe {j} pivots on stripe {i}'s contact"
+            );
+            let b = &mut stripe_results[j].stripe;
+            b.surface = FaceSurface::Cylinder(cylinder);
+            b.contact1 = contact1;
+            b.contact2 = contact2;
+            b.sections = sections;
+            moved[i] = true;
+            moved[j] = true;
+        }
+    }
+    Ok(())
+}
+
+/// [`pivot_crossing_rounds`] for two walked rounds (fitted bands) on one
+/// face: `second`, crossing `first` on it, rebuilt with its ball resting on
+/// its other face and pivoting on `first`'s contact there. `None` where they
+/// do not cross, or the pivot cannot be found.
+fn pivot_walked_round(
+    topo: &Topology,
+    first: &Stripe,
+    second: &Stripe,
+) -> Result<Option<Stripe>, BlendError> {
+    const SAMPLES: usize = 512;
+    let Some(radius) = second.sections.first().map(|section| section.radius) else {
+        return Ok(None);
+    };
+    if first
+        .sections
+        .iter()
+        .chain(&second.sections)
+        .any(|section| (section.radius - radius).abs() > 1e-9 * radius)
+    {
+        return Ok(None);
+    }
+    let side = |stripe: &Stripe, face: FaceId| {
+        if stripe.face1 == face {
+            Some(0_usize)
+        } else if stripe.face2 == face {
+            Some(1)
+        } else {
+            None
+        }
+    };
+    let Some((face, sa, sb)) = [first.face1, first.face2]
+        .into_iter()
+        .find_map(|face| Some((face, side(first, face)?, side(second, face)?)))
+    else {
+        return Ok(None);
+    };
+    let on_first = if sa == 0 {
+        &first.contact1
+    } else {
+        &first.contact2
+    };
+    let on_second = if sb == 0 {
+        &second.contact1
+    } else {
+        &second.contact2
+    };
+    // Crossing: each round's edge nearer the other's contact on the face
+    // than its own.
+    let distance = |p: Point3, curve: &brepkit_math::nurbs::curve::NurbsCurve| {
+        brepkit_math::nurbs::projection::project_point_to_curve(curve, p, 1e-9)
+            .map_or(f64::INFINITY, |found| found.distance)
+    };
+    let middle = |stripe: &Stripe| stripe.spine.evaluate(topo, 0.5 * stripe.spine.length());
+    let (ma, mb) = (middle(first)?, middle(second)?);
+    // Contacts that only meet (a full round, a wall exactly twice the
+    // radius high, its walked contacts a little apart) are left to the
+    // full-round check.
+    let clear = 1e-3 * radius;
+    if distance(ma, on_second) + clear >= distance(ma, on_first)
+        || distance(mb, on_first) + clear >= distance(mb, on_second)
+    {
+        return Ok(None);
+    }
+    let other = if sb == 0 { second.face2 } else { second.face1 };
+    let wall_surface = topo.face(other)?.surface().clone();
+    let face_surface = topo.face(face)?.surface().clone();
+    let mut adapter = None;
+    let wall = surface_ref_or_adapter(&wall_surface, &mut adapter);
+    let mut face_adapter = None;
+    let face_surface = surface_ref_or_adapter(&face_surface, &mut face_adapter);
+    // The first's contact, carried on through the sections its ball rolls
+    // on past the spine's ends (where its end is run on to a cap, its
+    // contact is the side of the band rebuilt through them).
+    let carried: Vec<crate::section::CircSection> = first.beyond[0]
+        .iter()
+        .rev()
+        .chain(&first.sections)
+        .chain(&first.beyond[1])
+        .cloned()
+        .collect();
+    let extended = if first.beyond.iter().all(Vec::is_empty) {
+        None
+    } else {
+        interpolate_blend_surface(&carried)
+            .ok()
+            .map(|band| {
+                band_side(
+                    &band,
+                    if sa == 0 {
+                        0
+                    } else {
+                        band.control_points().len() - 1
+                    },
+                )
+            })
+            .transpose()?
+    };
+    let rim = extended.as_ref().unwrap_or(on_first);
+    let (t0, t1) = rim.domain();
+    let pieces: Vec<((), f64, f64)> = (0..SAMPLES)
+        .map(|k| {
+            let f = |k: usize| t0 + (t1 - t0) * k as f64 / SAMPLES as f64;
+            ((), f(k), f(k + 1))
+        })
+        .collect();
+    let at = |(): &(), t: f64| -> Result<Point3, BlendError> { Ok(rim.evaluate(t)) };
+    // The ball pivoting stays on the walk's side of the first's contact:
+    // within a radius of the walk's centre, as it rests on the same face
+    // and touches a line on the wall the walk touches (the far root lies
+    // past the contact, outside the part).
+    let near = |new: &crate::section::CircSection, old: &crate::section::CircSection| {
+        (new.center - old.center).length() < radius
+    };
+    // The sections, then those rolled on past one end, pivoted in turn;
+    // the rolled-on ones as far as they still pivot.
+    let core = second.sections.len();
+    let pivot_on = |run: Vec<crate::section::CircSection>| {
+        let pivoted = pivot_sections(
+            &pieces,
+            &at,
+            wall,
+            face_surface,
+            sb,
+            radius,
+            &run,
+            true,
+            core,
+        )?;
+        Ok::<_, BlendError>(pivoted.and_then(|pivoted| {
+            let kept = pivoted
+                .iter()
+                .zip(&run)
+                .take_while(|(new, old)| near(new, old))
+                .count();
+            (kept >= core).then(|| pivoted[..kept].to_vec())
+        }))
+    };
+    let Some(mut ahead) = pivot_on(
+        second
+            .sections
+            .iter()
+            .chain(&second.beyond[1])
+            .cloned()
+            .collect(),
+    )?
+    else {
+        return Ok(None);
+    };
+    let Some(mut behind) = pivot_on(
+        second
+            .sections
+            .iter()
+            .rev()
+            .chain(&second.beyond[0])
+            .cloned()
+            .collect(),
+    )?
+    else {
+        return Ok(None);
+    };
+    let beyond = [behind.split_off(core), ahead.split_off(core)];
+    let mut sections = ahead;
+    if second.spine.is_closed() {
+        close_sections(&mut sections);
+    }
+    let Ok(surface) = interpolate_blend_surface(&sections) else {
+        return Ok(None);
+    };
+    let contact1 = band_side(&surface, 0)?;
+    let contact2 = band_side(&surface, surface.control_points().len() - 1)?;
+    let surfaces = [
+        topo.face(second.face1)?.surface().clone(),
+        topo.face(second.face2)?.surface().clone(),
+    ];
+    let (mut adapter1, mut adapter2) = (None, None);
+    let pcurve1 = build_pcurve_from_contact(
+        surface_ref_or_adapter(&surfaces[0], &mut adapter1),
+        &contact1,
+        face_u_period(&surfaces[0]),
+    )?;
+    let pcurve2 = build_pcurve_from_contact(
+        surface_ref_or_adapter(&surfaces[1], &mut adapter2),
+        &contact2,
+        face_u_period(&surfaces[1]),
+    )?;
+    let mut pivoted = second.clone();
+    pivoted.surface = FaceSurface::Nurbs(surface);
+    pivoted.contact1 = contact1;
+    pivoted.contact2 = contact2;
+    pivoted.pcurve1 = pcurve1;
+    pivoted.pcurve2 = pcurve2;
+    pivoted.sections = sections;
+    pivoted.beyond = beyond;
+    Ok(Some(pivoted))
+}
 
 /// Runs a straight round's ends on to tilted end caps.
 ///
@@ -3728,8 +5678,18 @@ fn run_stripes_to_tilted_caps(
     const SQUARE: f64 = 1e-9;
     // A cap this oblique to the axis is left to the runout.
     const OBLIQUE: f64 = 0.05;
+    carry_walked_rounds(topo, plan, stripe_results)?;
     let mut caps = TiltedCaps::new();
-    for junction in &plan.junctions {
+    // A terminal whose contact would run back past nearly all of it is tried
+    // again once the others are done: the far end may run on outward at the
+    // contour's other terminal (a cap leaning the same way at both ends), and
+    // the contact read from there is long enough.
+    let mut order: Vec<usize> = (0..plan.junctions.len()).collect();
+    let mut retried = vec![false; plan.junctions.len()];
+    let mut next = 0;
+    while let Some(&slot) = order.get(next) {
+        next += 1;
+        let junction = &plan.junctions[slot];
         if !matches!(
             junction.classification,
             crate::fillet_plan::CornerClassification::Terminal
@@ -3742,15 +5702,55 @@ fn run_stripes_to_tilted_caps(
         let Some(contour) = plan.contours.get(*contour_index) else {
             continue;
         };
-        let Some(result) = stripe_results
-            .iter_mut()
-            .find(|result| result.stripe.spine_edges() == contour.spine.edges())
+        let Some(index) = stripe_results
+            .iter()
+            .position(|result| result.stripe.spine_edges() == contour.spine.edges())
         else {
             continue;
         };
+        let result = &mut stripe_results[index];
         let stripe = &result.stripe;
-        let FaceSurface::Cylinder(cylinder) = &stripe.surface else {
-            continue;
+        let cylinder = match &stripe.surface {
+            FaceSurface::Cylinder(cylinder) => cylinder,
+            FaceSurface::Torus(torus) => {
+                let torus = torus.clone();
+                if let Some(run) = torus_run_on(topo, junction, contour, stripe, &torus)? {
+                    let edge = stripe.spine_edges()[0];
+                    let result_stripe = &mut result.stripe;
+                    result_stripe.contact1 = run.contact1;
+                    result_stripe.contact2 = run.contact2;
+                    let section = &mut result_stripe.sections[run.end];
+                    section.p1 = run.p1;
+                    section.p2 = run.p2;
+                    section.center = run.centre;
+                    log::debug!(
+                        "terminal {:?}: torus round runs on to its tilted cap",
+                        junction.vertex
+                    );
+                    caps.insert((edge, run.end), run.cap);
+                }
+                continue;
+            }
+            FaceSurface::Nurbs(_) => {
+                if let Some(run) = walked_run_back(topo, junction, contour, stripe)? {
+                    let edge = stripe.spine_edges()[0];
+                    let result_stripe = &mut result.stripe;
+                    result_stripe.contact1 = run.contact1;
+                    result_stripe.contact2 = run.contact2;
+                    // The sections stay as walked (or carried on): a
+                    // section's contact points moved to the contacts' new
+                    // ends would no longer lie on its arc, and a band rebuilt
+                    // through them at its other end would fold. The contacts'
+                    // own ends are what the trim and the notch read.
+                    log::debug!(
+                        "terminal {:?}: walked round cut back to its tilted cap",
+                        junction.vertex
+                    );
+                    caps.insert((edge, run.end), run.cap);
+                }
+                continue;
+            }
+            _ => continue,
         };
         if stripe.sections.len() != 2 {
             continue;
@@ -3800,6 +5800,7 @@ fn run_stripes_to_tilted_caps(
         // end as before; the stripe is left alone unless both reach the
         // cap's corner edges.
         let mut contacts = Vec::with_capacity(2);
+        let mut short = false;
         for (contact, at) in [
             (&stripe.contact1, section.p1),
             (&stripe.contact2, section.p2),
@@ -3830,7 +5831,29 @@ fn run_stripes_to_tilted_caps(
                     None => break,
                 },
             };
-            let reached = far + run * fraction;
+            let mut reached = far + run * fraction;
+            if plane.is_none() && !on_corner(reached)? {
+                // A curved cap may cross the contact's line more than once
+                // (an extruded profile curling back across it beyond the
+                // face): the crossing the run-on wants is the one on the
+                // cap's corner edge with the contact's face, the nearest to
+                // the end section.
+                let mut best: Option<f64> = None;
+                for &edge in &corner_edges {
+                    if let Some(s) = line_meets_edge(topo, edge, far, run, tol)?
+                        && s > 0.05
+                        && best.is_none_or(|b| (s - 1.0).abs() < (b - 1.0).abs())
+                    {
+                        best = Some(s);
+                    }
+                }
+                if let Some(s) = best {
+                    reached = far + run * s;
+                }
+            }
+            if fraction <= 0.05 && fraction > 0.0 && !retried[slot] && on_corner(reached)? {
+                short = true;
+            }
             if fraction <= 0.05 || !on_corner(reached)? {
                 break;
             }
@@ -3850,6 +5873,10 @@ fn run_stripes_to_tilted_caps(
             ));
         }
         let Ok([(contact1, p1), (contact2, p2)]) = <[_; 2]>::try_from(contacts) else {
+            if short {
+                retried[slot] = true;
+                order.push(slot);
+            }
             continue;
         };
         // The section's centre: where the axis meets the cap's plane (the
@@ -3882,6 +5909,925 @@ fn run_stripes_to_tilted_caps(
         caps.insert((edge, end), run_on);
     }
     Ok(caps)
+}
+
+/// How far `point` stands outside a run-on cap, along the cap's outward
+/// normal: the plane's offset, or on a curved cap the point's offset from
+/// its nearest point on the cap's surface (within `tol` of it). `None` where
+/// the point does not project on to the cap.
+fn cap_offset(topo: &Topology, cap: RunOnCap, point: Point3, tol: f64) -> Option<f64> {
+    match cap {
+        RunOnCap::Plane(normal, d) => {
+            Some(normal.dot(Vec3::new(point.x(), point.y(), point.z())) - d)
+        }
+        RunOnCap::Face(face) => {
+            let surface = topo.face(face).ok()?.surface();
+            let (u, v) = surface.project_point(point)?;
+            let on = surface.evaluate(u, v)?;
+            let normal = outward_normal_at(topo, face, on, tol).ok()??;
+            Some((point - on).dot(normal))
+        }
+    }
+}
+
+/// A walked round's single cap at a terminal: the cap, its two corner edges,
+/// the run-on cap, which end of the spine meets it and its end section.
+struct WalkedEnd {
+    corner_edges: Vec<EdgeId>,
+    run_on: RunOnCap,
+    end: usize,
+    section: crate::section::CircSection,
+    tol: f64,
+    /// The sign of the cap's offset past it, away from the round: `1.0` for
+    /// an end face the round runs out through, `-1.0` for a floor it stands
+    /// on (the walls meeting the cap in concave edges), whose outward side
+    /// is the round's own.
+    past: f64,
+    /// Where the round swallowed a narrow side face: which contact (0 or 1)
+    /// is pivoted on the face's far edge, and that edge's corner on the cap,
+    /// where that contact ends.
+    pivot: Option<(usize, Point3)>,
+}
+
+impl WalkedEnd {
+    /// How far `point` lies past the cap, away from the round.
+    fn past_cap(&self, topo: &Topology, point: Point3) -> Option<f64> {
+        cap_offset(topo, self.run_on, point, self.tol).map(|offset| self.past * offset)
+    }
+}
+
+/// The cap a walked round's end meets at `junction`, where there is exactly
+/// one, with its two corner edges.
+fn walked_end(
+    topo: &Topology,
+    junction: &crate::fillet_plan::VertexJunction,
+    contour: &crate::fillet_plan::FilletContour,
+    stripe: &Stripe,
+) -> Result<Option<WalkedEnd>, BlendError> {
+    let fan: Vec<FaceId> = junction
+        .face_fan
+        .iter()
+        .copied()
+        .filter(|&face| face != contour.side1 && face != contour.side2)
+        .collect();
+    let [cap] = fan.as_slice() else {
+        return Ok(None);
+    };
+    let mut corner_edges = cap_corner_edges(topo, *cap, junction.vertex)?;
+    if corner_edges.len() != 2 {
+        return Ok(None);
+    }
+    let mut pivot = None;
+    // A round that swallowed a narrow side face (`swallow_narrow_face`)
+    // rests its pivoted contact on the face beyond, so that contact ends on
+    // the cap's edges at the swallowed face's far corner: the other end of
+    // the cap edge the swallowed face shares with the cap.
+    for side in [contour.side1, contour.side2] {
+        if side == stripe.face1 || side == stripe.face2 {
+            continue;
+        }
+        let Some(&shared) = corner_edges
+            .iter()
+            .find(|&&edge| topo.faces_of_edge(edge).contains(&side))
+        else {
+            continue;
+        };
+        let edge = topo.edge(shared)?;
+        let far = if edge.start() == junction.vertex {
+            edge.end()
+        } else {
+            edge.start()
+        };
+        for extra in cap_corner_edges(topo, *cap, far)? {
+            if !corner_edges.contains(&extra) {
+                corner_edges.push(extra);
+            }
+        }
+        let pivoted = usize::from(stripe.face1 == contour.side1 || stripe.face1 == contour.side2);
+        pivot = Some((pivoted, topo.vertex(far)?.point()));
+    }
+    let run_on = outward_plane(topo, *cap)?.map_or(RunOnCap::Face(*cap), |(normal, d)| {
+        RunOnCap::Plane(normal, d)
+    });
+    let vertex = topo.vertex(junction.vertex)?.point();
+    let end = usize::from(spine_ends_at(topo, stripe, vertex)?);
+    let Some(section) = end_section(topo, stripe, vertex)? else {
+        return Ok(None);
+    };
+    let tol = 1e-6 * (section.p1 - section.p2).length().max(1.0);
+    // The round lies on the cap's inner side: read where the ball's centre
+    // moves from the end section to the next one in (the far end of a
+    // spine curving round may lie anywhere about the cap's plane).
+    let count = stripe.sections.len();
+    if count < 2 {
+        return Ok(None);
+    }
+    let next = &stripe.sections[if end == 0 { 1 } else { count - 2 }];
+    let (Some(at_end), Some(inward)) = (
+        cap_offset(topo, run_on, section.center, tol),
+        cap_offset(topo, run_on, next.center, tol),
+    ) else {
+        return Ok(None);
+    };
+    let towards_round = inward - at_end;
+    if towards_round.abs() <= tol * 1e-3 {
+        return Ok(None);
+    }
+    Ok(Some(WalkedEnd {
+        corner_edges,
+        run_on,
+        end,
+        section: section.clone(),
+        tol,
+        past: -towards_round.signum(),
+        pivot,
+    }))
+}
+
+/// A contact's `(near, far, near is its end)` parameters, `near` being its
+/// end at `at`.
+fn contact_ends(contact: &brepkit_math::nurbs::curve::NurbsCurve, at: Point3) -> (f64, f64, bool) {
+    let (t0, t1) = contact.domain();
+    let (_, at_end) = contact_end_at(contact, at);
+    if at_end {
+        (t1, t0, true)
+    } else {
+        (t0, t1, false)
+    }
+}
+
+/// The sections a walked round is carried on through past its end at
+/// `junction`, outwards, where a contact stops short of the end's single
+/// tilted or curved cap: the sections the ball rolls through past the
+/// spine's end ([`Stripe::beyond`]), until both contacts are past the cap,
+/// and a couple more. `None` where no contact falls short, or the ball's
+/// sections never take it past.
+fn walked_carry(
+    topo: &Topology,
+    junction: &crate::fillet_plan::VertexJunction,
+    contour: &crate::fillet_plan::FilletContour,
+    stripe: &Stripe,
+) -> Result<Option<(usize, Vec<crate::section::CircSection>)>, BlendError> {
+    // Sections carried past the first one with both contacts past the cap.
+    const MARGIN: usize = 2;
+    let FaceSurface::Nurbs(_) = &stripe.surface else {
+        return Ok(None);
+    };
+    let Some(walked) = walked_end(topo, junction, contour, stripe)? else {
+        return Ok(None);
+    };
+    let tol = walked.tol;
+    let offset = |point: Point3| walked.past_cap(topo, point);
+    let past = &stripe.beyond[walked.end];
+    let mut needed = None;
+    for (side, contact, at) in [
+        (0, &stripe.contact1, walked.section.p1),
+        (1, &stripe.contact2, walked.section.p2),
+    ] {
+        let (near, _, _) = contact_ends(contact, at);
+        let Some(beyond) = offset(contact.evaluate(near)) else {
+            return Ok(None);
+        };
+        if beyond >= -tol {
+            continue;
+        }
+        let reached = past.iter().position(|section| {
+            let point = if side == 0 { section.p1 } else { section.p2 };
+            offset(point).is_some_and(|off| off > tol)
+        });
+        let Some(index) = reached else {
+            return Ok(None);
+        };
+        needed = Some(needed.map_or(index + 1, |most: usize| most.max(index + 1)));
+    }
+    Ok(needed.map(|needed| {
+        (
+            walked.end,
+            past[..(needed + MARGIN).min(past.len())].to_vec(),
+        )
+    }))
+}
+
+/// Carries walked rounds on past their ends where a contact stops short of
+/// a tilted or curved cap ([`walked_carry`]), every end before any is cut
+/// back, so a band rebuilt for one end is never one already cut at its
+/// other. The band is rebuilt through its sections and the carried ones,
+/// passing through each ([`interpolate_blend_surface`]): the end section,
+/// now inside the band, keeps its contact points on it, the one on the
+/// cap's corner edge among them. Its contacts are the rebuilt band's sides.
+fn carry_walked_rounds(
+    topo: &Topology,
+    plan: &crate::fillet_plan::FilletPlan,
+    stripe_results: &mut [StripeResult],
+) -> Result<(), BlendError> {
+    let mut carries: Vec<(
+        usize,
+        usize,
+        Vec<crate::section::CircSection>,
+        &crate::fillet_plan::VertexJunction,
+        &crate::fillet_plan::FilletContour,
+    )> = Vec::new();
+    for junction in &plan.junctions {
+        if !matches!(
+            junction.classification,
+            crate::fillet_plan::CornerClassification::Terminal
+        ) {
+            continue;
+        }
+        let [contour_index] = junction.incident_contours.as_slice() else {
+            continue;
+        };
+        let Some(contour) = plan.contours.get(*contour_index) else {
+            continue;
+        };
+        let Some(index) = stripe_results
+            .iter()
+            .position(|result| result.stripe.spine_edges() == contour.spine.edges())
+        else {
+            continue;
+        };
+        if let Some((end, sections)) =
+            walked_carry(topo, junction, contour, &stripe_results[index].stripe)?
+        {
+            carries.push((index, end, sections, junction, contour));
+        }
+    }
+    for index in 0..stripe_results.len() {
+        let mut ends: [Option<&Vec<crate::section::CircSection>>; 2] = [None, None];
+        for (at, end, sections, _, _) in &carries {
+            if *at == index {
+                ends[*end] = Some(sections);
+            }
+        }
+        if ends.iter().all(Option::is_none) {
+            continue;
+        }
+        let stripe = &stripe_results[index].stripe;
+        let mut sections = Vec::with_capacity(stripe.sections.len() + 16);
+        if let Some(carried) = ends[0] {
+            sections.extend(carried.iter().rev().cloned());
+        }
+        sections.extend(stripe.sections.iter().cloned());
+        if let Some(carried) = ends[1] {
+            sections.extend(carried.iter().cloned());
+        }
+        let Ok(surface) = interpolate_blend_surface(&sections) else {
+            continue;
+        };
+        let mut carried = stripe.clone();
+        carried.contact1 = band_side(&surface, 0)?;
+        carried.contact2 = band_side(&surface, surface.control_points().len() - 1)?;
+        carried.sections = sections;
+        carried.surface = FaceSurface::Nurbs(surface);
+        // Kept only where every end carried on then cuts back to its cap: a
+        // contact left running past its face could not be trimmed.
+        let mut cuts = true;
+        for (at, _, _, junction, contour) in &carries {
+            if *at == index && walked_run_back(topo, junction, contour, &carried)?.is_none() {
+                cuts = false;
+            }
+        }
+        if !cuts {
+            continue;
+        }
+        log::debug!(
+            "walked round carried on past {} end(s)",
+            ends.iter().filter(|end| end.is_some()).count()
+        );
+        stripe_results[index].stripe = carried;
+    }
+    Ok(())
+}
+
+/// Cuts a walked round's end back to a tilted or curved cap.
+///
+/// A walked round (a fitted band between curved faces) ends in the plane
+/// square to its spine. Where its edge ends on a single cap turned to that
+/// plane, a contact runs on past the cap (the corner was closed by a runout
+/// patch, or the trim found the contact's end on no edge it could split);
+/// one stopping short has been carried on past it ([`carry_walked_rounds`]).
+/// Each contact running past the cap is cut where it crosses it, which lies
+/// on the cap's corner edge with that contact's face; a contact ending on
+/// the cap keeps its end. The band then ends on its intersection with the
+/// cap, between those two points, which the cap takes as its notch.
+fn walked_run_back(
+    topo: &Topology,
+    junction: &crate::fillet_plan::VertexJunction,
+    contour: &crate::fillet_plan::FilletContour,
+    stripe: &Stripe,
+) -> Result<Option<TorusRunOn>, BlendError> {
+    const SAMPLES: usize = 400;
+    let Some(walked) = walked_end(topo, junction, contour, stripe)? else {
+        return Ok(None);
+    };
+    let offset = |point: Point3| walked.past_cap(topo, point);
+    let WalkedEnd {
+        ref corner_edges,
+        run_on,
+        end,
+        ref section,
+        tol,
+        pivot,
+        ..
+    } = walked;
+    // A contact on a side face ends on the cap's corner edge with that face,
+    // within as far as the edge stands off the face (a B-spline skin's edge
+    // stands off it, a file's tolerance) and the walk's own tolerance. A
+    // round that swallowed a narrow face has its sections pivoted and its
+    // contact on the wall refitted through them, within that fit too. A
+    // contact missing its corner edge by more is left to the runout.
+    let sides = [contour.side1, contour.side2]
+        .map(|side| topo.face(side).map(|f| f.surface().clone()))
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut slack: f64 = 0.0;
+    for &edge_id in corner_edges {
+        let edge = topo.edge(edge_id)?;
+        let (a, b) = (
+            topo.vertex(edge.start())?.point(),
+            topo.vertex(edge.end())?.point(),
+        );
+        let off = sides
+            .iter()
+            .map(|surface| edge_off_surface(edge.curve(), a, b, surface))
+            .fold(f64::INFINITY, f64::min);
+        if off.is_finite() {
+            slack = slack.max(off);
+        }
+    }
+    let corner_tol = if pivot.is_some() {
+        tol.max(1e-5 + slack)
+    } else {
+        tol.max(tol + slack)
+    };
+    let mut contacts = Vec::with_capacity(2);
+    let mut cut = false;
+    for (index, (contact, at)) in [
+        (&stripe.contact1, section.p1),
+        (&stripe.contact2, section.p2),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let (near, far, at_end) = contact_ends(contact, at);
+        // The contact pivoted on a swallowed face's far edge runs along that
+        // edge, so it ends where the edge does, at its corner on the cap.
+        if let Some((_, corner)) = pivot.filter(|&(pivoted, _)| pivoted == index) {
+            let Some(piece) =
+                pivoted_contact_to_corner(contact, near, far, at_end, corner, section.radius)?
+            else {
+                log::debug!("walked_run_back: pivoted contact misses its corner");
+                return Ok(None);
+            };
+            cut |= (contact.evaluate(near) - corner).length() > tol;
+            contacts.push((piece, corner));
+            continue;
+        }
+        let Some(beyond) = offset(contact.evaluate(near)) else {
+            return Ok(None);
+        };
+        if beyond < -tol {
+            return Ok(None);
+        }
+        let at_near = beyond <= tol;
+        let crossing = if at_near {
+            near
+        } else {
+            // The first crossing back from the end: a scan, then bisection
+            // between the last sample past the cap and the first inside it.
+            #[allow(clippy::cast_precision_loss)]
+            let at_sample = |k: usize| near + (far - near) * (k as f64) / (SAMPLES as f64);
+            let mut bracket = None;
+            for k in 1..=SAMPLES {
+                match offset(contact.evaluate(at_sample(k))) {
+                    Some(off) if off <= 0.0 => {
+                        bracket = Some((at_sample(k - 1), at_sample(k)));
+                        break;
+                    }
+                    Some(_) => {}
+                    None => return Ok(None),
+                }
+            }
+            let Some((mut outside, mut inside)) = bracket else {
+                return Ok(None);
+            };
+            for _ in 0..100 {
+                let middle = f64::midpoint(outside, inside);
+                match offset(contact.evaluate(middle)) {
+                    Some(off) if off > 0.0 => outside = middle,
+                    Some(_) => inside = middle,
+                    None => return Ok(None),
+                }
+            }
+            cut = true;
+            f64::midpoint(outside, inside)
+        };
+        let reached = contact.evaluate(crossing);
+        // The contact ends on the corner edge it reaches: within the
+        // tolerance it may miss the edge by, it is ended on the edge itself,
+        // where the trim splits the edge.
+        let mut corner = None;
+        for &edge in corner_edges {
+            let (distance, on) = edge_nearest(topo, edge, reached, None)?;
+            if distance <= corner_tol && corner.is_none_or(|(best, _)| distance < best) {
+                corner = Some((distance, on));
+            }
+        }
+        let Some((_, on)) = corner else {
+            return Ok(None);
+        };
+        let piece = if at_near {
+            contact.clone()
+        } else {
+            let (left, right) = brepkit_math::nurbs::knot_ops::curve_split(contact, crossing)?;
+            if at_end { left } else { right }
+        };
+        contacts.push((pin_contact_end(&piece, at_end, on)?, on));
+    }
+    if !cut {
+        return Ok(None);
+    }
+    let Ok([(contact1, p1), (contact2, p2)]) = <[_; 2]>::try_from(contacts) else {
+        return Ok(None);
+    };
+    Ok(Some(TorusRunOn {
+        end,
+        contact1,
+        p1,
+        contact2,
+        p2,
+        centre: section.center,
+        cap: run_on,
+    }))
+}
+
+/// A contact pivoted on a swallowed face's far edge, cut where it passes the
+/// edge's `corner` on the cap and ended exactly there: `near` is its end at
+/// the cap and `far` its other end (`at_end` when `near` is the curve's own
+/// end). `None` where it passes farther from the corner than its fit could
+/// stray (a thousandth of the round's radius).
+fn pivoted_contact_to_corner(
+    contact: &brepkit_math::nurbs::curve::NurbsCurve,
+    near: f64,
+    far: f64,
+    at_end: bool,
+    corner: Point3,
+    radius: f64,
+) -> Result<Option<brepkit_math::nurbs::curve::NurbsCurve>, BlendError> {
+    let reach = 1e-3 * radius.abs().max(1e-9);
+    // The corner may lie past the contact's end (the contact carried on
+    // stopped short of it by its fit) or inside it.
+    let found = brepkit_math::nurbs::projection::project_point_to_curve(contact, corner, 1e-12)?;
+    if found.distance > reach {
+        return Ok(None);
+    }
+    let (low, high) = (near.min(far), near.max(far));
+    let inside =
+        found.parameter > low + 1e-9 * (high - low) && found.parameter < high - 1e-9 * (high - low);
+    let piece = if inside {
+        let (left, right) = brepkit_math::nurbs::knot_ops::curve_split(contact, found.parameter)?;
+        if at_end { left } else { right }
+    } else {
+        contact.clone()
+    };
+    Ok(Some(pin_contact_end(&piece, at_end, corner)?))
+}
+
+/// `contact` with its end at the cap (its last end with `at_end`, else its
+/// first) moved on to `point`, the end being a control point of the curve.
+fn pin_contact_end(
+    contact: &brepkit_math::nurbs::curve::NurbsCurve,
+    at_end: bool,
+    point: Point3,
+) -> Result<brepkit_math::nurbs::curve::NurbsCurve, BlendError> {
+    let mut points = contact.control_points().to_vec();
+    let slot = if at_end { points.len() - 1 } else { 0 };
+    points[slot] = point;
+    Ok(brepkit_math::nurbs::curve::NurbsCurve::new(
+        contact.degree(),
+        contact.knots().to_vec(),
+        points,
+        contact.weights().to_vec(),
+    )?)
+}
+
+/// The curve where a walked band meets its cap between the contact ends `a`
+/// and `b`: across the band from `a` to `b`, each row of the band (fixed
+/// `u`) followed along the spine (`v`, by secant steps from the straight
+/// guess between the ends) to where `offset`, the point's offset outside the
+/// cap, is zero, and a cubic through those points. `None` where a row
+/// misses the cap.
+fn band_meets_cap(
+    band: &FaceSurface,
+    a: Point3,
+    b: Point3,
+    offset: impl Fn(Point3) -> Option<f64>,
+) -> Option<EdgeCurve> {
+    const SAMPLES: usize = 32;
+    let (ua, va) = band.project_point(a)?;
+    let (ub, vb) = band.project_point(b)?;
+    let tol = 1e-9 * (a - b).length().max(1.0);
+    let row = |u: f64, guess: f64| -> Option<Point3> {
+        let at = |v: f64| {
+            band.evaluate(u, v)
+                .and_then(|p| offset(p).map(|off| (p, off)))
+        };
+        let (mut v0, mut v1) = (guess, guess + 1e-4);
+        let (_, mut f0) = at(v0)?;
+        let (mut p1, mut f1) = at(v1)?;
+        for _ in 0..60 {
+            if f1.abs() <= tol {
+                return Some(p1);
+            }
+            if (f1 - f0).abs() <= f64::EPSILON * f1.abs() {
+                return None;
+            }
+            let v2 = v1 - f1 * (v1 - v0) / (f1 - f0);
+            (v0, f0) = (v1, f1);
+            v1 = v2;
+            (p1, f1) = at(v1)?;
+        }
+        None
+    };
+    let mut points = Vec::with_capacity(SAMPLES + 1);
+    points.push(a);
+    for k in 1..SAMPLES {
+        #[allow(clippy::cast_precision_loss)]
+        let f = k as f64 / SAMPLES as f64;
+        points.push(row(ua + (ub - ua) * f, va + (vb - va) * f)?);
+    }
+    points.push(b);
+    brepkit_math::nurbs::fitting::interpolate(&points, 3)
+        .ok()
+        .map(EdgeCurve::NurbsCurve)
+}
+
+/// A torus round's end run on to a tilted or curved cap.
+struct TorusRunOn {
+    /// Which end of the stripe (0 at the spine's start, 1 at its end).
+    end: usize,
+    contact1: brepkit_math::nurbs::curve::NurbsCurve,
+    p1: Point3,
+    contact2: brepkit_math::nurbs::curve::NurbsCurve,
+    p2: Point3,
+    centre: Point3,
+    cap: RunOnCap,
+}
+
+/// Where the parallel of `torus` at tube angle `v` meets the plane
+/// `normal . p = d`: the angle round the axis nearest `near`, or `None`
+/// where it misses the plane.
+fn torus_parallel_meets_plane(
+    torus: &brepkit_math::surfaces::ToroidalSurface,
+    normal: Vec3,
+    d: f64,
+    v: f64,
+    near: f64,
+) -> Option<f64> {
+    let rho = torus.minor_radius().madd(v.cos(), torus.major_radius());
+    let centre = torus.center();
+    let a = rho * normal.dot(torus.x_axis());
+    let b = rho * normal.dot(torus.y_axis());
+    let k = d
+        - normal.dot(Vec3::new(centre.x(), centre.y(), centre.z()))
+        - torus.minor_radius() * v.sin() * normal.dot(torus.z_axis());
+    let h = a.hypot(b);
+    if h <= 1e-12 * rho.abs().max(1.0) || (k / h).abs() > 1.0 {
+        return None;
+    }
+    let (phase, spread) = (b.atan2(a), (k / h).acos());
+    let tau = std::f64::consts::TAU;
+    [phase + spread, phase - spread]
+        .into_iter()
+        .map(|u| u + tau * ((near - u) / tau).round())
+        .min_by(|p, q| (p - near).abs().total_cmp(&(q - near).abs()))
+}
+
+/// An angle wrapped into `(-pi, pi]`.
+fn wrapped(angle: f64) -> f64 {
+    let tau = std::f64::consts::TAU;
+    angle - tau * (angle / tau).round()
+}
+
+/// Where the parallel of `torus` at tube angle `v` meets a curved cap's
+/// surface: Newton round the axis from `near`, each step the point's offset
+/// along the surface normal over the parallel's slope across it. `None`
+/// where it runs along the surface or misses it.
+fn torus_parallel_meets_surface(
+    torus: &brepkit_math::surfaces::ToroidalSurface,
+    surface: &FaceSurface,
+    v: f64,
+    near: f64,
+    tol: f64,
+) -> Option<f64> {
+    let rho = torus.minor_radius().madd(v.cos(), torus.major_radius());
+    if rho <= 0.0 {
+        return None;
+    }
+    let mut u = near;
+    for _ in 0..60 {
+        let p = torus.evaluate(u, v);
+        let (su, sv) = surface.project_point(p)?;
+        let q = surface.evaluate(su, sv)?;
+        let n = surface.normal(su, sv).normalize().ok()?;
+        let along = (torus.y_axis() * u.cos() - torus.x_axis() * u.sin()) * rho;
+        let slope = along.dot(n);
+        if slope.abs() <= 1e-12 * rho {
+            return None;
+        }
+        let step = (p - q).dot(n) / slope;
+        u -= step;
+        if (step * rho).abs() <= 1e-3 * tol {
+            let p = torus.evaluate(u, v);
+            let (su, sv) = surface.project_point(p)?;
+            return ((surface.evaluate(su, sv)? - p).length() <= tol).then_some(u);
+        }
+    }
+    None
+}
+
+/// Where the parallel of `torus` at tube angle `v` passes closest to
+/// `edge`'s trace on `support` (the face the parallel lies on) within a
+/// twentieth of a radian of `near` round the axis: the angle and the gap,
+/// by a scan and golden-section refinement. `None` where the nearest pass
+/// is at the window's end (the parallel does not cross the edge there).
+fn parallel_meets_edge(
+    topo: &Topology,
+    torus: &brepkit_math::surfaces::ToroidalSurface,
+    v: f64,
+    (edge, support): (EdgeId, &FaceSurface),
+    near: f64,
+) -> Result<Option<(f64, f64)>, BlendError> {
+    const WINDOW: f64 = 0.05;
+    const SAMPLES: usize = 40;
+    let gap = |u: f64| edge_distance(topo, edge, torus.evaluate(u, v), Some(support));
+    #[allow(clippy::cast_precision_loss)]
+    let at = |k: usize| near - WINDOW + 2.0 * WINDOW * (k as f64) / (SAMPLES as f64);
+    let mut best = (0, f64::MAX);
+    for k in 0..=SAMPLES {
+        let g = gap(at(k))?;
+        if g < best.1 {
+            best = (k, g);
+        }
+    }
+    if best.0 == 0 || best.0 == SAMPLES {
+        return Ok(None);
+    }
+    let (mut lo, mut hi) = (at(best.0 - 1), at(best.0 + 1));
+    let ratio = 0.5 * (5.0_f64.sqrt() - 1.0);
+    for _ in 0..80 {
+        let (x1, x2) = (hi - ratio * (hi - lo), lo + ratio * (hi - lo));
+        if gap(x1)? <= gap(x2)? {
+            hi = x2;
+        } else {
+            lo = x1;
+        }
+    }
+    let u = f64::midpoint(lo, hi);
+    Ok(Some((u, gap(u)?)))
+}
+
+/// Runs a torus round's end on to a tilted planar cap, or a curved one.
+///
+/// A round of an arc between a plane and a coaxial wall (or of a circle on
+/// a revolved part) is a torus whose sections are its tube circles, square
+/// to the arc. Where the arc ends on a planar cap square to it the end
+/// section lies in the cap; where the cap is tilted the section stands off
+/// it, and the end was closed by a runout patch. Each contact, a parallel
+/// of the torus, is run on (or back) round the axis to where it meets the
+/// cap's plane, which lies on that support face's corner edge with the
+/// cap, and the band ends on its section by the cap's plane: each parallel
+/// between the two contacts cut by it. A curved cap (a fitted face the arc
+/// ends on) is taken the same way: each contact runs to where its parallel
+/// meets the cap's surface, on the cap's corner edges, and the band ends on
+/// its intersection with that surface.
+fn torus_run_on(
+    topo: &Topology,
+    junction: &crate::fillet_plan::VertexJunction,
+    contour: &crate::fillet_plan::FilletContour,
+    stripe: &Stripe,
+    torus: &brepkit_math::surfaces::ToroidalSurface,
+) -> Result<Option<TorusRunOn>, BlendError> {
+    // Below this the cap is square to the round's end.
+    const SQUARE: f64 = 1e-9;
+    // A cap this oblique to the end is left to the runout.
+    const OBLIQUE: f64 = 0.05;
+    const SAMPLES: usize = 16;
+    if stripe.sections.len() != 2 {
+        return Ok(None);
+    }
+    let fan: Vec<FaceId> = junction
+        .face_fan
+        .iter()
+        .copied()
+        .filter(|&face| face != contour.side1 && face != contour.side2)
+        .collect();
+    let [cap] = fan.as_slice() else {
+        return Ok(None);
+    };
+    let plane = outward_plane(topo, *cap)?;
+    let cap_surface = topo.face(*cap)?.surface();
+    // The cap's two edges at the corner: straight on a plane, any curve on
+    // a curved cap.
+    let corner_edges = cap_corner_edges(topo, *cap, junction.vertex)?;
+    if corner_edges.len() != 2
+        || (plane.is_some()
+            && corner_edges.iter().any(|&edge| {
+                !topo
+                    .edge(edge)
+                    .is_ok_and(|e| matches!(e.curve(), EdgeCurve::Line))
+            }))
+    {
+        return Ok(None);
+    }
+    let vertex = topo.vertex(junction.vertex)?.point();
+    let end = usize::from(spine_ends_at(topo, stripe, vertex)?);
+    let section = &stripe.sections[end];
+    if let Some((normal, _)) = plane {
+        let (u_end, _) = torus.project_point(section.center);
+        let tangent = torus.y_axis() * u_end.cos() - torus.x_axis() * u_end.sin();
+        let tilt = normal.dot(tangent).abs();
+        if tilt >= 1.0 - SQUARE || tilt <= OBLIQUE {
+            return Ok(None);
+        }
+    }
+    let tol = torus_cap_tol(torus, section.p1, section.p2);
+    let mut contacts = Vec::with_capacity(2);
+    for (contact, at, support) in [
+        (&stripe.contact1, section.p1, stripe.face1),
+        (&stripe.contact2, section.p2, stripe.face2),
+    ] {
+        let support = topo.face(support)?.surface();
+        let (t0, t1) = contact.domain();
+        let (_, at_end) = contact_end_at(contact, at);
+        let (from, to) = if at_end { (t0, t1) } else { (t1, t0) };
+        let far = contact.evaluate(from);
+        let (u_far, v) = torus.project_point(far);
+        // The contact is the parallel at `v`: its sweep round the axis from
+        // its far end to its near one, read over its samples.
+        let mut sweep = 0.0;
+        let mut previous = u_far;
+        let mut parallel = true;
+        for k in 1..=SAMPLES {
+            #[allow(clippy::cast_precision_loss)]
+            let t = from + (to - from) * (k as f64) / (SAMPLES as f64);
+            let point = contact.evaluate(t);
+            let (u, v_k) = torus.project_point(point);
+            if wrapped(v_k - v).abs() > 1e-9 || (torus.evaluate(u, v) - point).length() > tol {
+                parallel = false;
+                break;
+            }
+            sweep += wrapped(u - previous);
+            previous = u;
+        }
+        if !parallel {
+            break;
+        }
+        let u_new = match plane {
+            Some((normal, d)) => torus_parallel_meets_plane(torus, normal, d, v, u_far + sweep),
+            None => torus_parallel_meets_surface(torus, cap_surface, v, u_far + sweep, tol),
+        };
+        let Some(u_new) = u_new else {
+            break;
+        };
+        // A fitted cap need not hold its corner edges to more than a file's
+        // tolerance, nor a fitted edge its support face (one stood 8e-5 off
+        // its plane on a 500 mm part), so the contact lands where its
+        // parallel crosses a corner edge's trace on the contact's support
+        // face, near where it meets the cap's surface; the trim then finds
+        // it on that edge.
+        let mut landing = None;
+        for &edge in &corner_edges {
+            if let Some((u, gap)) = parallel_meets_edge(topo, torus, v, (edge, support), u_new)?
+                && landing.is_none_or(|(_, best)| gap < best)
+            {
+                landing = Some((u, gap));
+            }
+        }
+        let u_new = match landing {
+            Some((u, gap)) if gap <= tol => u,
+            _ => break,
+        };
+        let new_sweep = u_new - u_far;
+        if new_sweep * sweep <= 0.0 || new_sweep.abs() <= 0.05 * sweep.abs() {
+            break;
+        }
+        let reached = torus.evaluate(u_new, v);
+        let rho = torus.minor_radius().madd(v.cos(), torus.major_radius());
+        if rho <= 0.0 {
+            break;
+        }
+        let circle = Circle3D::with_axes(
+            torus.center() + torus.z_axis() * (torus.minor_radius() * v.sin()),
+            torus.z_axis(),
+            rho,
+            torus.x_axis(),
+            torus.y_axis(),
+        )?;
+        let curve = if at_end {
+            crate::analytic::circle_arc_to_nurbs(&circle, u_far, u_new)?
+        } else {
+            crate::analytic::circle_arc_to_nurbs(&circle, u_new, u_far)?
+        };
+        contacts.push((curve, reached, u_new));
+    }
+    let Ok([(contact1, p1, u1), (contact2, p2, u2)]) = <[_; 2]>::try_from(contacts) else {
+        return Ok(None);
+    };
+    // The section's centre: the tube's centre midway round between the two
+    // contact ends.
+    let u_mid = u1 + 0.5 * wrapped(u2 - u1);
+    let centre = torus.center()
+        + (torus.x_axis() * u_mid.cos() + torus.y_axis() * u_mid.sin()) * torus.major_radius();
+    Ok(Some(TorusRunOn {
+        end,
+        contact1,
+        p1,
+        contact2,
+        p2,
+        centre,
+        cap: plane.map_or(RunOnCap::Face(*cap), |(normal, d)| {
+            RunOnCap::Plane(normal, d)
+        }),
+    }))
+}
+
+/// The curve where a torus band meets its cap between the contact ends `a`
+/// and `b`: each parallel of the band, the shorter way round its tube from
+/// `a` to `b`, cut by the cap (`hit` takes a parallel's tube angle and a
+/// guess round the axis to where it meets the cap), and a cubic through
+/// those points. `None` where a parallel misses the cap.
+fn torus_meets_cap(
+    torus: &brepkit_math::surfaces::ToroidalSurface,
+    a: Point3,
+    b: Point3,
+    hit: impl Fn(f64, f64) -> Option<f64>,
+) -> Option<EdgeCurve> {
+    const SAMPLES: usize = 32;
+    let (ua, va) = torus.project_point(a);
+    let (ub, vb) = torus.project_point(b);
+    let (du, dv) = (wrapped(ub - ua), wrapped(vb - va));
+    let mut points = Vec::with_capacity(SAMPLES + 1);
+    points.push(a);
+    for k in 1..SAMPLES {
+        #[allow(clippy::cast_precision_loss)]
+        let f = k as f64 / SAMPLES as f64;
+        let v = va + dv * f;
+        let u = hit(v, ua + du * f)?;
+        points.push(torus.evaluate(u, v));
+    }
+    points.push(b);
+    brepkit_math::nurbs::fitting::interpolate(&points, 3)
+        .ok()
+        .map(EdgeCurve::NurbsCurve)
+}
+
+/// The tolerance a torus round's run-on holds its contacts to, which the
+/// trace of its end across a curved cap takes too: a millionth of the tube's
+/// chord between the contacts' parallels through `a` and `b`, and a
+/// millionth at least.
+fn torus_cap_tol(torus: &brepkit_math::surfaces::ToroidalSurface, a: Point3, b: Point3) -> f64 {
+    let (_, va) = torus.project_point(a);
+    let (_, vb) = torus.project_point(b);
+    let chord = 2.0 * torus.minor_radius() * (0.5 * wrapped(vb - va)).sin().abs();
+    1e-6 * chord.max(1.0)
+}
+
+/// The curve where a band run on to `cap` meets it between the contact ends
+/// `a` and `b`. `None` where the trace fails, and for a band of a kind no
+/// run-on makes (one other than a cylinder, a torus or a walked band).
+fn band_meets_run_on_cap(
+    topo: &Topology,
+    band: &FaceSurface,
+    cap: RunOnCap,
+    a: Point3,
+    b: Point3,
+) -> Result<Option<EdgeCurve>, BlendError> {
+    Ok(match (cap, band) {
+        (RunOnCap::Plane(normal, d), FaceSurface::Cylinder(cylinder)) => {
+            crate::builder_utils::cylinder_plane_arc(cylinder, normal, d, a, b)
+        }
+        (RunOnCap::Face(cap), FaceSurface::Cylinder(cylinder)) => {
+            cylinder_meets_cap(cylinder, topo.face(cap)?.surface(), a, b)
+        }
+        (RunOnCap::Plane(normal, d), FaceSurface::Torus(torus)) => {
+            torus_meets_cap(torus, a, b, |v, near| {
+                torus_parallel_meets_plane(torus, normal, d, v, near)
+            })
+        }
+        (RunOnCap::Face(cap), FaceSurface::Torus(torus)) => {
+            let cap = topo.face(cap)?.surface();
+            let tol = torus_cap_tol(torus, a, b);
+            torus_meets_cap(torus, a, b, |v, near| {
+                torus_parallel_meets_surface(torus, cap, v, near, tol)
+            })
+        }
+        (_, FaceSurface::Nurbs(_)) => {
+            let scale = (a - b).length().max(1.0);
+            band_meets_cap(band, a, b, |p| cap_offset(topo, cap, p, 1e-6 * scale))
+        }
+        (_, FaceSurface::Plane { .. } | FaceSurface::Cone(_) | FaceSurface::Sphere(_)) => None,
+    })
 }
 
 /// Whether a stripe's terminal vertex sits on a planar cap whose two edges
@@ -3922,18 +6868,44 @@ fn terminal_cap_is_notchable(
         ) {
             return Ok(false);
         }
-        // Seen along the band's axis, the notch lies in the triangle between
-        // its ends and the corner, as on a planar cap seen square to it.
-        let FaceSurface::Cylinder(cylinder) = &stripe.surface else {
+        // Seen along the band's axis at its end, the notch lies in the
+        // triangle between its ends and the corner, as on a planar cap seen
+        // square to it. A torus round's axis there is its parallels'
+        // tangent, a walked band's its end section's normal.
+        let Some(section) = end_section(topo, stripe, vertex)? else {
             return Ok(false);
         };
-        let section = &stripe.sections[end];
+        let view = match &stripe.surface {
+            FaceSurface::Cylinder(cylinder) => cylinder.axis(),
+            FaceSurface::Torus(torus) => {
+                let (u, _) = torus.project_point(section.center);
+                torus.y_axis() * u.cos() - torus.x_axis() * u.sin()
+            }
+            FaceSurface::Nurbs(_) => {
+                let Ok(normal) = (section.p1 - section.center)
+                    .cross(section.p2 - section.center)
+                    .normalize()
+                else {
+                    return Ok(false);
+                };
+                normal
+            }
+            FaceSurface::Plane { .. } | FaceSurface::Cone(_) | FaceSurface::Sphere(_) => {
+                return Ok(false);
+            }
+        };
         let near_ends = [
             (&stripe.contact1, section.p1),
             (&stripe.contact2, section.p2),
         ]
         .map(|(contact, at)| contact_end_at(contact, at).0);
-        let end_curve = cylinder_meets_cap(cylinder, face.surface(), near_ends[0], near_ends[1]);
+        let end_curve = band_meets_run_on_cap(
+            topo,
+            &stripe.surface,
+            RunOnCap::Face(*cap),
+            near_ends[0],
+            near_ends[1],
+        )?;
         let end_hull = match &end_curve {
             Some(EdgeCurve::NurbsCurve(curve))
                 if curve.weights().iter().all(|w| w.is_finite() && *w > 0.0) =>
@@ -3942,14 +6914,7 @@ fn terminal_cap_is_notchable(
             }
             _ => None,
         };
-        return notch_stays_clear(
-            topo,
-            face,
-            junction.vertex,
-            cylinder.axis(),
-            near_ends,
-            end_hull,
-        );
+        return notch_stays_clear(topo, face, junction.vertex, view, near_ends, end_hull);
     }
     // The corner sits on the cap's outer wire (a convex fillet) or on one of
     // its holes (a concave one ending on a cup's rim); the notch replaces it
@@ -3998,6 +6963,18 @@ fn terminal_cap_is_notchable(
     // the cap's edge while the notch can never match its corner path.
     let on_segment = |point: Point3| {
         corner_edges.iter().any(|&(a, b, curve)| {
+            if let brepkit_topology::edge::EdgeCurve::Circle(circle) = curve {
+                let t = circle.project(point);
+                if (circle.evaluate(t) - point).length() > reach {
+                    return false;
+                }
+                let (t0, t1) = curve.domain_with_endpoints(a, b);
+                let (low, high) = (t0.min(t1) - 1e-9, t0.max(t1) + 1e-9);
+                let tau = std::f64::consts::TAU;
+                return [t - tau, t, t + tau]
+                    .iter()
+                    .any(|&t| (low..=high).contains(&t));
+            }
             if let brepkit_topology::edge::EdgeCurve::NurbsCurve(nurbs) = curve {
                 let (t0, t1) = curve.domain_with_endpoints(a, b);
                 let (low, high) = (t0.min(t1) - 1e-9, t0.max(t1) + 1e-9);
@@ -4083,10 +7060,11 @@ fn edge_off_surface(
 
 /// Whether a cap's notch at `corner`, ending at `near_ends`, stays clear of
 /// the cap's other boundaries, seen along `view` (the normal of a planar cap,
-/// or the axis of a band run on to a curved one). The notch lies in the
-/// triangle between its ends and the corner, so no other boundary of the cap
-/// may reach into that triangle (a fillet wider than a cup's wall would cross
-/// its mouth): that is an error. `Ok(false)` where the view cannot be read.
+/// or the axis at its end of a band run on to a curved one). The notch lies
+/// in the triangle between its ends and the corner, so no other boundary of
+/// the cap may reach into that triangle (a fillet wider than a cup's wall
+/// would cross its mouth): that is an error. `Ok(false)` where the view
+/// cannot be read.
 ///
 /// On a curved cap, the notch lies in the triangle only while the cap does
 /// not turn parallel to the axis over it, and the checks below take that
@@ -4472,8 +7450,58 @@ fn cap_edge_reaches_region(
             }
             let hull: Vec<(f64, f64)> = curve.control_points().iter().map(|&p| flat(p)).collect();
             hull_overlaps_region(&hull, region)
+                && nurbs_pieces_reach_region(curve, t0, t1, flat, region)
         }
     }
+}
+
+/// Whether the edge's stretch `t0..t1` of a B-spline with positive weights
+/// reaches into the region, its pieces certified by their own Bezier
+/// hulls. The whole curve's hull is loose on a long curve of many spans (a
+/// cap's outline bowing away from a corner its chord passes close to), so
+/// each span's piece is tested, and halved while its hull overlaps, down
+/// to a limit at which an overlap counts as reaching.
+fn nurbs_pieces_reach_region(
+    curve: &brepkit_math::nurbs::curve::NurbsCurve,
+    t0: f64,
+    t1: f64,
+    flat: &impl Fn(Point3) -> (f64, f64),
+    region: &[(f64, f64)],
+) -> bool {
+    const DEPTH: u32 = 16;
+    let (d0, d1) = curve.domain();
+    let (lo, hi) = (t0.min(t1).max(d0), t0.max(t1).min(d1));
+    if lo.partial_cmp(&hi) != Some(std::cmp::Ordering::Less) {
+        return true;
+    }
+    let mut cuts: Vec<f64> = std::iter::once(lo)
+        .chain(curve.knots().iter().copied().filter(|&k| k > lo && k < hi))
+        .chain(std::iter::once(hi))
+        .collect();
+    cuts.dedup();
+    let mut pending: Vec<(f64, f64, u32)> = cuts.windows(2).map(|w| (w[0], w[1], 0)).collect();
+    while let Some((a, b, depth)) = pending.pop() {
+        let Ok(points) = brepkit_math::nurbs::decompose::curve_bezier_between(curve, a, b) else {
+            return true;
+        };
+        let mut hull = Vec::with_capacity(points.len());
+        for [x, y, z, w] in points {
+            if !(w.is_finite() && w > 0.0) {
+                return true;
+            }
+            hull.push(flat(Point3::new(x / w, y / w, z / w)));
+        }
+        if !hull_overlaps_region(&hull, region) {
+            continue;
+        }
+        if depth >= DEPTH {
+            return true;
+        }
+        let mid = 0.5 * (a + b);
+        pending.push((a, mid, depth + 1));
+        pending.push((mid, b, depth + 1));
+    }
+    false
 }
 
 /// Whether a polyline comes within `margin` of a convex region, its inside
@@ -4659,23 +7687,60 @@ fn effective_normal(
 /// senses and reversal flag toggled, so shared edges keep their senses) when
 /// the tangent neighbours disagree with it. Only faces already settled vote,
 /// so a seamed wall and the band beside it are not judged by each other
-/// first; they settle in rounds outward from the other faces.
+/// first; they settle in rounds outward from the other faces. A seamed
+/// face trimmed from an input face (`sources` maps it to that face) is set
+/// facing as its source did, before the rounds: it lies on the source's
+/// surface, while its neighbours may meet it at a knife edge, facing the
+/// other way rightly.
 fn align_seamed_faces_with_tangent_neighbours(
     topo: &mut Topology,
     new_faces: &[FaceId],
     result_faces: &[FaceId],
+    sources: &std::collections::HashMap<FaceId, FaceId>,
 ) -> Result<bool, BlendError> {
     const TANGENT_COS: f64 = 0.985;
     let mut pending: Vec<FaceId> = Vec::new();
+    let mut turned_any = false;
     for &face_id in new_faces {
         let face = topo.face(face_id)?;
         if matches!(face.surface(), FaceSurface::Plane { .. }) || !face.inner_wires().is_empty() {
             continue;
         }
-        let edges = topo.wire(face.outer_wire())?.edges();
+        let edges = topo.wire(face.outer_wire())?.edges().to_vec();
         let mut seen = HashSet::new();
-        if !edges.iter().all(|oe| seen.insert(oe.edge())) {
+        if edges.iter().all(|oe| seen.insert(oe.edge())) {
+            continue;
+        }
+        let Some(&source) = sources.get(&face_id) else {
             pending.push(face_id);
+            continue;
+        };
+        // A trimmed input face lies on its source's surface, so it faces as
+        // its source did; its neighbours cannot say (a knife edge, two
+        // sheets meeting at no angle, has them facing opposite ways).
+        let uses = |e: EdgeId| edges.iter().filter(|oe| oe.edge() == e).count();
+        for oe in edges.iter().filter(|oe| uses(oe.edge()) == 1) {
+            let edge = topo.edge(oe.edge())?;
+            let (a, b) = (
+                topo.vertex(edge.start())?.point(),
+                topo.vertex(edge.end())?.point(),
+            );
+            let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
+            let p = edge
+                .curve()
+                .evaluate_with_endpoints(f64::midpoint(t0, t1), a, b);
+            let (Some(mine), Some(theirs)) = (
+                effective_normal(topo, face_id, p)?,
+                effective_normal(topo, source, p)?,
+            ) else {
+                continue;
+            };
+            if mine.dot(theirs) < 0.0 {
+                log::debug!("trimmed face {face_id:?} faced away from its source: turned");
+                turn_face(topo, face_id)?;
+                turned_any = true;
+            }
+            break;
         }
     }
     let mut edge_faces: std::collections::HashMap<EdgeId, Vec<FaceId>> =
@@ -4693,7 +7758,6 @@ fn align_seamed_faces_with_tangent_neighbours(
             }
         }
     }
-    let mut turned_any = false;
     while !pending.is_empty() {
         let mut settled = Vec::new();
         for &face_id in &pending {
@@ -4739,19 +7803,7 @@ fn align_seamed_faces_with_tangent_neighbours(
                 continue;
             }
             log::debug!("seamed face {face_id:?} faced away from its tangent neighbours: turned");
-            let wire_id = topo.face(face_id)?.outer_wire();
-            let wire = topo.wire_mut(wire_id)?;
-            let turned: Vec<OrientedEdge> = wire
-                .edges()
-                .iter()
-                .rev()
-                .map(|oe| OrientedEdge::new(oe.edge(), !oe.is_forward()))
-                .collect();
-            for (slot, oe) in wire.edges_mut().iter_mut().zip(turned) {
-                *slot = oe;
-            }
-            let face = topo.face_mut(face_id)?;
-            face.set_reversed(!face.is_reversed());
+            turn_face(topo, face_id)?;
             turned_any = true;
         }
         if settled.is_empty() {
@@ -4760,6 +7812,25 @@ fn align_seamed_faces_with_tangent_neighbours(
         pending.retain(|f| !settled.contains(f));
     }
     Ok(turned_any)
+}
+
+/// Turns a face over: its wire reversed, edge senses and reversal flag
+/// toggled, so the edges it shares keep their senses.
+fn turn_face(topo: &mut Topology, face_id: FaceId) -> Result<(), BlendError> {
+    let wire_id = topo.face(face_id)?.outer_wire();
+    let wire = topo.wire_mut(wire_id)?;
+    let turned: Vec<OrientedEdge> = wire
+        .edges()
+        .iter()
+        .rev()
+        .map(|oe| OrientedEdge::new(oe.edge(), !oe.is_forward()))
+        .collect();
+    for (slot, oe) in wire.edges_mut().iter_mut().zip(turned) {
+        *slot = oe;
+    }
+    let face = topo.face_mut(face_id)?;
+    face.set_reversed(!face.is_reversed());
+    Ok(())
 }
 
 fn succeeded_candidates(
@@ -4966,24 +8037,79 @@ fn check_stripe_residuals(topo: &Topology, stripe: &Stripe) -> Result<(), BlendE
     let mut adapter2 = None;
     let ps1 = surface_ref_or_adapter(&surface1, &mut adapter1);
     let ps2 = surface_ref_or_adapter(&surface2, &mut adapter2);
+    // A side whose face the spine does not run along is a face beyond a
+    // narrow face the round swallowed: the ball pivots on its rim there
+    // (`pivot_on_far_loop`), and is not tangent to it. Its contact is the
+    // rim itself, carried straight on past the rim's ends where the round
+    // runs on to a tilted cap: off the face's surface there, until the cap
+    // cuts it back to the rim's end (`walked_run_back`).
+    let along = |face_id: FaceId| -> Result<bool, BlendError> {
+        let Some(&edge) = stripe.spine_edges().first() else {
+            return Ok(true);
+        };
+        let face = topo.face(face_id)?;
+        for wire in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            if topo.wire(wire)?.edges().iter().any(|oe| oe.edge() == edge) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    };
+    let (tangent1, tangent2) = (along(stripe.face1)?, along(stripe.face2)?);
     let mut max_contact: f64 = 0.0;
     let mut max_radius: f64 = 0.0;
     let mut max_tangent: f64 = 0.0;
-    for section in &stripe.sections {
+    // With the ball pivoted on a swallowed face's rim, a round ending on a
+    // tilted cap can end with its wall contact past the cap, beyond the edge
+    // of the wall's spline surface, where it cannot be read: the cap cuts
+    // the contact back inside it (`walked_run_back`).
+    let pivoted = !(tangent1 && tangent2);
+    let past_spline = |surface: &FaceSurface, (u, v): (f64, f64)| -> bool {
+        let FaceSurface::Nurbs(spline) = surface else {
+            return false;
+        };
+        let on = |x: f64, (low, high): (f64, f64)| {
+            let slack = 1e-12 * (high - low).abs().max(1.0);
+            (x - low).abs() <= slack || (x - high).abs() <= slack
+        };
+        on(u, spline.domain_u()) || on(v, spline.domain_v())
+    };
+    let last = stripe.sections.len().saturating_sub(1);
+    for (index, section) in stripe.sections.iter().enumerate() {
         let uv1 = ps1.project_point(section.p1);
         let uv2 = ps2.project_point(section.p2);
-        max_contact = max_contact
-            .max((ps1.evaluate(uv1.0, uv1.1) - section.p1).length())
-            .max((ps2.evaluate(uv2.0, uv2.1) - section.p2).length());
+        let at_end = pivoted && (index == 0 || index == last);
+        if tangent1 && !(at_end && past_spline(&surface1, uv1)) {
+            max_contact = max_contact.max((ps1.evaluate(uv1.0, uv1.1) - section.p1).length());
+        }
+        if tangent2 && !(at_end && past_spline(&surface2, uv2)) {
+            max_contact = max_contact.max((ps2.evaluate(uv2.0, uv2.1) - section.p2).length());
+        }
         max_radius = max_radius
             .max(((section.center - section.p1).length() - section.radius).abs())
             .max(((section.center - section.p2).length() - section.radius).abs());
         let radial1 = (section.p1 - section.center).normalize();
         let radial2 = (section.p2 - section.center).normalize();
+        // A contact standing still between two sections is a cut crossing's
+        // point (`cut_contact_crossing`): the arcs there pass through it
+        // without touching the face tangentially.
+        let still = |side: fn(&crate::section::CircSection) -> Point3| {
+            [index.checked_sub(1), Some(index + 1)]
+                .into_iter()
+                .flatten()
+                .filter_map(|k| stripe.sections.get(k))
+                .any(|other| (side(other) - side(section)).length() <= 1e-12)
+        };
+        let (still1, still2) = (still(|s| s.p1), still(|s| s.p2));
         if let (Ok(radial1), Ok(radial2)) = (radial1, radial2) {
-            max_tangent = max_tangent
-                .max((1.0 - ps1.normal(uv1.0, uv1.1).dot(radial1).abs()).abs())
-                .max((1.0 - ps2.normal(uv2.0, uv2.1).dot(radial2).abs()).abs());
+            if tangent1 && !still1 {
+                max_tangent =
+                    max_tangent.max((1.0 - ps1.normal(uv1.0, uv1.1).dot(radial1).abs()).abs());
+            }
+            if tangent2 && !still2 {
+                max_tangent =
+                    max_tangent.max((1.0 - ps2.normal(uv2.0, uv2.1).dot(radial2).abs()).abs());
+            }
         }
     }
     if max_contact > CONTACT_TOL || max_radius > RADIUS_TOL || max_tangent > TANGENT_TOL {
@@ -5068,7 +8194,14 @@ fn compute_stripe_for_edge(
         });
     }
     let spine = Spine::from_single_edge(topo, edge_id)?;
-    compute_stripe_for_spine(topo, adj_faces[0], adj_faces[1], spine, law)
+    compute_stripe_for_spine(
+        topo,
+        Some(adjacency),
+        adj_faces[0],
+        adj_faces[1],
+        spine,
+        law,
+    )
 }
 
 fn radius_law_from_plan(plan: &crate::fillet_plan::RadiusLawPlan) -> RadiusLaw {
@@ -5104,6 +8237,7 @@ fn compute_stripe_for_contour(
     let law = radius_law_from_plan(&contour.radius_law);
     compute_stripe_for_spine(
         topo,
+        Some(adjacency),
         contour.side1,
         contour.side2,
         contour.spine.clone(),
@@ -5114,6 +8248,7 @@ fn compute_stripe_for_contour(
 #[allow(clippy::too_many_arguments)]
 fn compute_stripe_for_spine(
     topo: &Topology,
+    adjacency: Option<&brepkit_topology::adjacency::AdjacencyIndex>,
     face1: FaceId,
     face2: FaceId,
     spine: Spine,
@@ -5150,7 +8285,38 @@ fn compute_stripe_for_spine(
             face2,
         )? {
             check_stripe_residuals(topo, &result.stripe)?;
-            return Ok(result);
+            // A closed round whose contact runs off its face (a tube's rim
+            // rounded wider than the wall is thick) is not this exact band:
+            // its trim built a valid solid with material added, not taken
+            // off. The walk below finds such a round's ball pivoting on the
+            // face's far rim, or refuses it.
+            // An open one is too where the face it runs off is a narrow
+            // band between the rim and a far rim (a ledge cut through by
+            // the plane the round ends on).
+            // (An open one is kept with its contacts on its faces' edges, as
+            // at a round exactly the face's width: only a contact run off
+            // the face sends it to the walk.)
+            let on_faces = check_contacts_on_faces(topo, face1, face2, &result.stripe.sections)
+                .is_ok()
+                && (!spine.is_closed()
+                    || contacts_inside_plane_faces(topo, face1, face2, &result.stripe.sections)?);
+            let open_band = || -> Result<bool, BlendError> {
+                let Some(adjacency) = adjacency else {
+                    return Ok(false);
+                };
+                Ok(!swallow_narrow_face(
+                    topo,
+                    adjacency,
+                    face1,
+                    face2,
+                    &spine,
+                    &result.stripe.sections,
+                )?
+                .is_empty())
+            };
+            if on_faces || (!spine.is_closed() && !open_band()?) {
+                return Ok(result);
+            }
         }
     }
 
@@ -5238,36 +8404,189 @@ fn compute_stripe_for_spine(
 
     let config = WalkerConfig::default();
 
-    let walk_result = if let RadiusLaw::Constant(r) = law {
+    let closed = spine.is_closed();
+    let plane_normal = |surf: &FaceSurface| match surf {
+        FaceSurface::Plane { normal, .. } => Some(*normal),
+        _ => None,
+    };
+    let planes = [plane_normal(&oriented_surf1), plane_normal(&oriented_surf2)];
+    // Where a round's contact on a plane turns back on itself past a tip a
+    // little tighter than the round, the crossing it makes is cut out, and
+    // the band is built in three pieces about the cut.
+    let mut crossing_cut: Option<[usize; 2]> = None;
+    let (walk_result, mut beyond) = if let RadiusLaw::Constant(r) = law {
         let blend = ConstRadBlend { radius: *r };
         let walker = Walker::new(&blend, ps1, ps2, &spine, topo, config);
         let start = walker.find_start(0.0)?;
-        walker.walk(start, 0.0, spine.length())?
+        let mut result = walker.walk(start, 0.0, spine.length())?;
+        if !closed
+            && check_contacts_run_on(&result.sections).is_err()
+            && let Some(cut) =
+                cut_contact_crossing(&walker, spine.length(), &result.sections, planes)
+        {
+            result.sections = cut.sections;
+            crossing_cut = Some(cut.bounds);
+        }
+        let beyond = walk_beyond(&walker, start, &result, closed);
+        (result, beyond)
     } else {
         let evol = EvolRadBlend {
             law: mirror_law(law),
         };
         let walker = Walker::new(&evol, ps1, ps2, &spine, topo, config);
         let start = walker.find_start(0.0)?;
-        walker.walk(start, 0.0, spine.length())?
+        let result = walker.walk(start, 0.0, spine.length())?;
+        let beyond = walk_beyond(&walker, start, &result, closed);
+        (result, beyond)
     };
 
-    if spine.is_closed() {
-        check_contacts_on_faces(topo, face1, face2, &walk_result.sections)?;
+    let mut walk_result = walk_result;
+    // A closed round wider than a narrow face (a thin shell's rim or a
+    // counterbore's ledge rounded past its width, a thin disc's edge past
+    // its thickness) runs its contact off the face, past its far rim: the
+    // ball, resting on the other face, pivots on that rim, the band meets
+    // the face beyond there in place of the face, and the face goes.
+    // An open round does so where the face is a band between the rim and a
+    // far rim, its ends in the round's end sections (see
+    // [`open_band_far_run`]); with no such face, its contacts are left as
+    // walked.
+    let off_faces = check_contacts_on_faces(topo, face1, face2, &walk_result.sections).err();
+    let candidates = match (&off_faces, adjacency) {
+        (Some(_), Some(adjacency)) => {
+            swallow_narrow_face(topo, adjacency, face1, face2, &spine, &walk_result.sections)?
+        }
+        _ => Vec::new(),
+    };
+    let swallowed = if let Some(error) = off_faces
+        && (spine.is_closed() || !candidates.is_empty())
+    {
+        // Each face the contacts run off is tried in turn: the first whose
+        // pivot keeps both contacts on their faces.
+        let mut pivoted = None;
+        for found in candidates {
+            let Some(sections) = pivot_on_far_loop(
+                topo,
+                &found,
+                ps1,
+                ps2,
+                law,
+                &walk_result.sections,
+                walk_result.sections.len(),
+            )?
+            else {
+                continue;
+            };
+            let (on1, on2) = if found.side == 0 {
+                (found.beyond, face2)
+            } else {
+                (face1, found.beyond)
+            };
+            // An open round's end sections may pivot past the far run's
+            // ends, on to its extension, where an end face leans across
+            // them: the end face cuts them back (`walked_run_back`). The
+            // sections between must keep both contacts on their faces.
+            let inner = if spine.is_closed() || sections.len() < 3 {
+                &sections[..]
+            } else {
+                &sections[1..sections.len() - 1]
+            };
+            if check_contacts_on_faces(topo, on1, on2, inner).is_ok() {
+                pivoted = Some((found, sections));
+                break;
+            }
+        }
+        // An open round none of whose candidates pivots is left as walked,
+        // as one with no candidate is.
+        match pivoted {
+            Some((found, sections)) => {
+                walk_result.sections = sections;
+                // The sections the ball rolls through past the spine's ends,
+                // which carry the round on to a tilted cap, pivot on the far
+                // run too.
+                for past in &mut beyond {
+                    *past = pivot_on_far_loop(topo, &found, ps1, ps2, law, past, 0)?
+                        .unwrap_or_default();
+                }
+                Some(found)
+            }
+            None if spine.is_closed() => return Err(error),
+            None => None,
+        }
+    } else {
+        None
+    };
+    let (face1, face2) = match &swallowed {
+        Some(found) if found.side == 0 => (found.beyond, face2),
+        Some(found) => (face1, found.beyond),
+        None => (face1, face2),
+    };
+    let beyond_surface = swallowed
+        .as_ref()
+        .map(|found| topo.face(found.beyond).map(|f| f.surface().clone()))
+        .transpose()?;
+    let mut beyond_adapter = None;
+    let beyond_ps = beyond_surface
+        .as_ref()
+        .map(|surface| surface_ref_or_adapter(surface, &mut beyond_adapter));
+    let (ps1, period1) = match (&swallowed, beyond_ps, &beyond_surface) {
+        (Some(found), Some(ps), Some(surface)) if found.side == 0 => (ps, face_u_period(surface)),
+        _ => (ps1, face_u_period(&oriented_surf1)),
+    };
+    let (ps2, period2) = match (&swallowed, beyond_ps, &beyond_surface) {
+        (Some(found), Some(ps), Some(surface)) if found.side == 1 => (ps, face_u_period(surface)),
+        _ => (ps2, face_u_period(&oriented_surf2)),
+    };
+    // A cut contact turns at its crossing point, where the band's pieces
+    // meet: each piece runs on by itself.
+    match crossing_cut.filter(|_| swallowed.is_none()) {
+        Some([first, last]) => {
+            let all = &walk_result.sections;
+            for piece in [&all[..=first], &all[first..=last], &all[last..]] {
+                check_contacts_run_on(piece)?;
+            }
+        }
+        None => check_contacts_run_on(&walk_result.sections)?,
+    }
+    if closed {
+        close_sections(&mut walk_result.sections);
     }
     // The band passes through its walked sections, so its boundary rows pass
     // through the walked contacts. Where the interpolation is refused, the
     // band takes the sections as its control points.
-    let blend_surface = interpolate_blend_surface(&walk_result.sections)
-        .or_else(|_| approximate_blend_surface(&walk_result.sections))?;
+    // A round with its contact's crossing cut out is three bands end to end:
+    // up to the cut, across it, and on from it, joined at the cut's bounds.
+    let blend_surface = match crossing_cut.filter(|_| swallowed.is_none()) {
+        Some([first, last]) => {
+            let all = &walk_result.sections;
+            let pieces = [&all[..=first], &all[first..=last], &all[last..]];
+            let mut bands = Vec::with_capacity(3);
+            let mut lengths = Vec::with_capacity(3);
+            for piece in pieces {
+                bands.push(interpolate_blend_surface(piece)?);
+                lengths.push(
+                    piece
+                        .windows(2)
+                        .map(|w| {
+                            (w[1].p1 - w[0].p1)
+                                .length()
+                                .max((w[1].p2 - w[0].p2).length())
+                        })
+                        .sum::<f64>(),
+                );
+            }
+            join_bands(&bands, &lengths)?
+        }
+        None => interpolate_blend_surface(&walk_result.sections)
+            .or_else(|_| approximate_blend_surface(&walk_result.sections))?,
+    };
     // The band's sides are its own boundary rows: between two sections, a
     // polyline through the contacts leaves the band.
     let contact1 = band_side(&blend_surface, 0)?;
     let contact2 = band_side(&blend_surface, blend_surface.control_points().len() - 1)?;
     let blend_face_surface = brepkit_topology::face::FaceSurface::Nurbs(blend_surface);
 
-    let pcurve1 = build_pcurve_from_contact(ps1, &contact1, face_u_period(&oriented_surf1))?;
-    let pcurve2 = build_pcurve_from_contact(ps2, &contact2, face_u_period(&oriented_surf2))?;
+    let pcurve1 = build_pcurve_from_contact(ps1, &contact1, period1)?;
+    let pcurve2 = build_pcurve_from_contact(ps2, &contact2, period2)?;
 
     let stripe = Stripe {
         spine,
@@ -5278,6 +8597,7 @@ fn compute_stripe_for_spine(
         contact2,
         face1,
         face2,
+        beyond,
         sections: walk_result.sections,
     };
 
@@ -5286,6 +8606,851 @@ fn compute_stripe_for_spine(
         stripe,
         new_edges: Vec::new(),
     })
+}
+
+/// A narrow face a round swallows (see
+/// [`swallow_narrow_face`]).
+struct SwallowedFace {
+    /// Which side of the stripe the face was (0: `face1`).
+    side: usize,
+    /// The face beyond it, which the band meets in its place.
+    beyond: FaceId,
+    /// The plane face's far loop, which it shares with `beyond`.
+    far: Vec<EdgeId>,
+}
+
+/// The faces a round's contact runs off past their far loop all
+/// round, each the face a narrow annulus between the rim
+/// rounded and one other loop (a thin shell's rim, a counterbore's ledge),
+/// or a wall lower than the round running up its seam from the rim to its
+/// far rim (a thin disc's edge), or, for an open round, a narrow plane band
+/// between the rim and a far rim whose ends lie in the round's end sections
+/// (a ledge cut through by the plane the round ends on), its far loop all
+/// shared with one face beyond. Each section's arc, from the contact on the other face towards
+/// the narrow face's, then crosses the face beyond's surface before it
+/// reaches the narrow face's: it is cut there.
+fn swallow_narrow_face(
+    topo: &Topology,
+    adjacency: &brepkit_topology::adjacency::AdjacencyIndex,
+    face1: FaceId,
+    face2: FaceId,
+    spine: &Spine,
+    sections: &[crate::section::CircSection],
+) -> Result<Vec<SwallowedFace>, BlendError> {
+    let mut found = Vec::new();
+    let spine_edges: HashSet<EdgeId> = spine.edges().iter().copied().collect();
+    'sides: for (side, (plane, wall)) in [(face1, face2), (face2, face1)].into_iter().enumerate() {
+        let face = topo.face(plane)?;
+        let loops: Vec<Vec<EdgeId>> = std::iter::once(face.outer_wire())
+            .chain(face.inner_wires().iter().copied())
+            .map(|wire| {
+                topo.wire(wire)
+                    .map(|w| w.edges().iter().map(OrientedEdge::edge).collect())
+            })
+            .collect::<Result<_, _>>()?;
+        let rim_loop = |edges: &[EdgeId]| edges.iter().all(|e| spine_edges.contains(e));
+        let far: Vec<EdgeId> = if !spine.is_closed() {
+            // An open round of a narrow band's edge (a ledge between two
+            // coaxial walls, cut through by a plane the round ends on): the
+            // band's one loop runs along the rim, out along an end edge in
+            // the round's end section, back along its far rim and in along
+            // the other end edge.
+            let [wire] = &loops[..] else {
+                continue;
+            };
+            match open_band_far_run(topo, spine, wire)? {
+                Some(far) => far,
+                None => continue,
+            }
+        } else if face.surface().is_planar() {
+            let [first, second] = &loops[..] else {
+                continue;
+            };
+            match (rim_loop(first), rim_loop(second)) {
+                (true, false) => second.clone(),
+                (false, true) => first.clone(),
+                _ => continue,
+            }
+        } else {
+            // A wall lower than the round (a thin disc's rim rounded past
+            // its thickness): one wire running round the rim, up its seam,
+            // round its far rim and back down the seam.
+            let [wire] = &loops[..] else {
+                continue;
+            };
+            let count = |e: EdgeId| wire.iter().filter(|&&x| x == e).count();
+            let (rim, far): (Vec<EdgeId>, Vec<EdgeId>) = wire
+                .iter()
+                .copied()
+                .filter(|&e| count(e) == 1)
+                .partition(|e| spine_edges.contains(e));
+            if rim.is_empty() || far.is_empty() || wire.len() == rim.len() + far.len() {
+                continue;
+            }
+            far
+        };
+        let far = &far;
+        let mut beyond = None;
+        let mut shared = true;
+        for &edge in far {
+            let faces = adjacency.faces_for_edge(edge);
+            let other = match faces {
+                [a, b] if *a == plane => *b,
+                [a, b] if *b == plane => *a,
+                _ => {
+                    shared = false;
+                    break;
+                }
+            };
+            if other == wall || beyond.is_some_and(|b| b != other) {
+                shared = false;
+                break;
+            }
+            beyond = Some(other);
+        }
+        let (true, Some(beyond)) = (shared, beyond) else {
+            continue;
+        };
+        let beyond_face = topo.face(beyond)?;
+        let surface = beyond_face.surface();
+        let outward = if beyond_face.is_reversed() { -1.0 } else { 1.0 };
+        // Signed distance off the face beyond's surface, outward of the
+        // solid, and the surface's (u, v) there.
+        let off = |q: Point3| -> Option<(f64, (f64, f64))> {
+            if let FaceSurface::Plane { normal, d } = surface {
+                let value = (normal.dot(Vec3::new(q.x(), q.y(), q.z())) - d) / normal.length();
+                return Some((outward * value, (0.0, 0.0)));
+            }
+            let (u, v) = surface.project_point(q)?;
+            let foot = surface.evaluate(u, v)?;
+            let n = surface.normal(u, v);
+            Some((outward * (q - foot).dot(n), (u, v)))
+        };
+        // Each section's arc must cross the face beyond, from inside the
+        // solid out, for the face to be swallowed.
+        for section in sections {
+            let (on_plane, on_wall) = if side == 0 {
+                (section.p1, section.p2)
+            } else {
+                (section.p2, section.p1)
+            };
+            let (a, b) = (on_wall - section.center, on_plane - section.center);
+            let angle = a
+                .normalize()
+                .ok()
+                .zip(b.normalize().ok())
+                .map(|(a, b)| a.dot(b).clamp(-1.0, 1.0).acos());
+            let Some(angle) = angle.filter(|&angle| angle > 1e-9) else {
+                continue 'sides;
+            };
+            // The arc from the wall's contact to the plane's, by slerp.
+            let at = |f: f64| {
+                let (sa, sb) = (((1.0 - f) * angle).sin(), (f * angle).sin());
+                section.center + (a * sa + b * sb) * (1.0 / angle.sin())
+            };
+            // From either side: past a ledge's far rim the face beyond (a
+            // wider bore's wall) stands over the wall's side of its surface.
+            let Some((start, _)) = off(at(0.0)) else {
+                continue 'sides;
+            };
+            if start == 0.0 {
+                continue 'sides;
+            }
+            let inside = start < 0.0;
+            let samples = 32_u32;
+            let mut low = 0.0;
+            let mut high = None;
+            for k in 1..=samples {
+                let f = f64::from(k) / f64::from(samples);
+                let Some((value, _)) = off(at(f)) else {
+                    continue 'sides;
+                };
+                if (value < 0.0) != inside {
+                    high = Some(f);
+                    break;
+                }
+                low = f;
+            }
+            let Some(mut high) = high else {
+                continue 'sides;
+            };
+            for _ in 0..60 {
+                let mid = 0.5 * (low + high);
+                match off(at(mid)) {
+                    Some((value, _)) if (value < 0.0) == inside => low = mid,
+                    Some(_) => high = mid,
+                    None => continue 'sides,
+                }
+            }
+            if off(at(0.5 * (low + high))).is_none() {
+                continue 'sides;
+            }
+        }
+        found.push(SwallowedFace {
+            side,
+            beyond,
+            far: far.clone(),
+        });
+    }
+    Ok(found)
+}
+
+/// The far run of a narrow band an open round's spine runs along: `wire`
+/// (the band's one loop) is the spine's edges, one straight edge out from
+/// each of the spine's ends (in that end's section plane, or leaning across
+/// it where the end face is tilted to the round), and the rest, its far
+/// rim. `None` when the loop is not that.
+fn open_band_far_run(
+    topo: &Topology,
+    spine: &Spine,
+    wire: &[EdgeId],
+) -> Result<Option<Vec<EdgeId>>, BlendError> {
+    let spine_edges: HashSet<EdgeId> = spine.edges().iter().copied().collect();
+    if wire.iter().filter(|e| spine_edges.contains(e)).count() != spine_edges.len() {
+        return Ok(None);
+    }
+    let length = spine.length();
+    let ends = [spine.evaluate(topo, 0.0)?, spine.evaluate(topo, length)?];
+    let size = length.max(1e-9);
+    let at_end = |p: Point3| ends.iter().position(|q| (p - *q).length() < 1e-6 * size);
+    let mut far = Vec::new();
+    let mut end_edges = [false; 2];
+    for &edge_id in wire {
+        if spine_edges.contains(&edge_id) {
+            continue;
+        }
+        let edge = topo.edge(edge_id)?;
+        let (a, b) = (
+            topo.vertex(edge.start())?.point(),
+            topo.vertex(edge.end())?.point(),
+        );
+        let end = match (at_end(a), at_end(b)) {
+            (Some(end), None) | (None, Some(end)) => end,
+            (None, None) => {
+                far.push(edge_id);
+                continue;
+            }
+            (Some(_), Some(_)) => return Ok(None),
+        };
+        // The end edge is straight: in the end's section plane the band's
+        // end section closes the end face where it was; leaning across it
+        // (an end face tilted to the round), the end face cuts the band
+        // back (`walked_run_back`).
+        if !matches!(edge.curve(), EdgeCurve::Line) || end_edges[end] {
+            return Ok(None);
+        }
+        end_edges[end] = true;
+    }
+    Ok((end_edges == [true, true] && !far.is_empty()).then_some(far))
+}
+
+/// The round's sections where it swallows a narrow face: the ball
+/// rests on the wall and pivots on the face's far rim (`found.far`), each
+/// in its section's plane, so the band runs from its contact on the wall to
+/// that rim, where it meets the face beyond. `sections` are the walk on the
+/// plane, whose contacts on it lie past the rim.
+fn pivot_on_far_loop(
+    topo: &Topology,
+    found: &SwallowedFace,
+    ps1: &dyn brepkit_math::traits::ParametricSurface,
+    ps2: &dyn brepkit_math::traits::ParametricSurface,
+    law: &RadiusLaw,
+    sections: &[crate::section::CircSection],
+    required: usize,
+) -> Result<Option<Vec<crate::section::CircSection>>, BlendError> {
+    const SAMPLES: usize = 128;
+    let RadiusLaw::Constant(radius) = law else {
+        return Ok(None);
+    };
+    let radius = *radius;
+    // The far rim as a closed polyline of curve samples, each segment
+    // refined on its curve where a section's plane crosses it.
+    let mut rim: Vec<(EdgeId, f64, f64)> = Vec::new();
+    for &edge_id in &found.far {
+        let edge = topo.edge(edge_id)?;
+        let (a, b) = (
+            topo.vertex(edge.start())?.point(),
+            topo.vertex(edge.end())?.point(),
+        );
+        let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
+        for k in 0..SAMPLES {
+            let f = |k: usize| t0 + (t1 - t0) * k as f64 / SAMPLES as f64;
+            rim.push((edge_id, f(k), f(k + 1)));
+        }
+    }
+    let at = |edge_id: EdgeId, t: f64| -> Result<Point3, BlendError> {
+        let edge = topo.edge(edge_id)?;
+        let (a, b) = (
+            topo.vertex(edge.start())?.point(),
+            topo.vertex(edge.end())?.point(),
+        );
+        Ok(edge.curve().evaluate_with_endpoints(t, a, b))
+    };
+    let wall = if found.side == 0 { ps2 } else { ps1 };
+    let beyond_surface = topo.face(found.beyond)?.surface().clone();
+    let mut beyond_adapter = None;
+    let beyond_surface = surface_ref_or_adapter(&beyond_surface, &mut beyond_adapter);
+    // An open round's far run ends on the end faces, which may lean across
+    // the round's end sections: the last section's plane can pass beyond
+    // the run's end. The run is carried on straight past each free end, a
+    // few radii along its tangent there, so every section finds its pivot;
+    // the band is cut back to the end face afterwards.
+    let mut ends: std::collections::HashMap<VertexId, usize> = std::collections::HashMap::new();
+    for &edge_id in &found.far {
+        let edge = topo.edge(edge_id)?;
+        *ends.entry(edge.start()).or_default() += 1;
+        *ends.entry(edge.end()).or_default() += 1;
+    }
+    let mut extend: Vec<(EdgeId, f64, f64)> = Vec::new();
+    {
+        for &edge_id in &found.far {
+            let edge = topo.edge(edge_id)?;
+            let (a, b) = (
+                topo.vertex(edge.start())?.point(),
+                topo.vertex(edge.end())?.point(),
+            );
+            let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
+            let span = (t1 - t0).abs().max(1e-12);
+            let length = (b - a).length().max(1e-12);
+            // Eight radii on, in the curve's parameter.
+            let reach = 8.0 * radius * span / length;
+            if ends.get(&edge.start()) == Some(&1) {
+                extend.push((edge_id, t0 - reach.copysign(t1 - t0), t0));
+            }
+            if ends.get(&edge.end()) == Some(&1) {
+                extend.push((edge_id, t1, t1 + reach.copysign(t1 - t0)));
+            }
+        }
+    }
+    let at = |&(edge_id, _, _): &(EdgeId, f64, f64), t: f64| -> Result<Point3, BlendError> {
+        let edge = topo.edge(edge_id)?;
+        let (a, b) = (
+            topo.vertex(edge.start())?.point(),
+            topo.vertex(edge.end())?.point(),
+        );
+        let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
+        let (lo, hi) = (t0.min(t1), t0.max(t1));
+        if t >= lo && t <= hi {
+            return at(edge_id, t);
+        }
+        // Past an end: straight on along the curve's tangent there.
+        let end = if t < lo { lo } else { hi };
+        let step = 1e-6 * (hi - lo).max(1e-12);
+        let inner = if t < lo { end + step } else { end - step };
+        let (p, q) = (at(edge_id, end)?, at(edge_id, inner)?);
+        Ok(p + (p - q) * ((t - end).abs() / step))
+    };
+    let pieces: Vec<((EdgeId, f64, f64), f64, f64)> = rim
+        .iter()
+        .chain(extend.iter())
+        .map(|&piece| (piece, piece.1, piece.2))
+        .collect();
+    pivot_sections(
+        &pieces,
+        &at,
+        wall,
+        beyond_surface,
+        found.side,
+        radius,
+        sections,
+        false,
+        required,
+    )
+}
+
+/// The sections of a round whose ball rests on `wall` (the side other than
+/// `side_index`) and pivots on a rim, each in its section's plane: the
+/// rim's crossing of that plane nearest its contact on side `side_index`,
+/// which that contact moves to (its `(u, v)` on `pivot_surface`). With
+/// `follow`, each section after the first takes the crossing nearest the
+/// last one's pivot and starts its ball from the last one's contact on the
+/// wall, as the ball rolls on (a plane cutting a curved rim more than once,
+/// a curved wall the walk's own contact would lead it off). The rim is `pieces`, each a
+/// key evaluated by `at` over its parameter range. Where a plane misses the
+/// rim or the ball cannot be placed against it, the sections pivoted before
+/// it, if they are at least `required`, else `None`.
+#[allow(clippy::too_many_lines, clippy::too_many_arguments)]
+fn pivot_sections<K>(
+    pieces: &[(K, f64, f64)],
+    at: &dyn Fn(&K, f64) -> Result<Point3, BlendError>,
+    wall: &dyn brepkit_math::traits::ParametricSurface,
+    pivot_surface: &dyn brepkit_math::traits::ParametricSurface,
+    side_index: usize,
+    radius: f64,
+    sections: &[crate::section::CircSection],
+    follow: bool,
+    required: usize,
+) -> Result<Option<Vec<crate::section::CircSection>>, BlendError> {
+    let tol = 1e-9 * radius.max(1.0);
+    let mut pivoted: Vec<crate::section::CircSection> = Vec::with_capacity(sections.len());
+    for section in sections {
+        let (on_plane, on_wall, wall_uv) = if side_index == 0 {
+            (section.p1, section.p2, section.uv2)
+        } else {
+            (section.p2, section.p1, section.uv1)
+        };
+        let Ok(normal) = (on_plane - section.center)
+            .cross(on_wall - section.center)
+            .normalize()
+        else {
+            return Ok((pivoted.len() >= required).then_some(pivoted));
+        };
+        let height = |p: Point3| (p - section.center).dot(normal);
+        // The rim's crossing of the section's plane nearest the plane's
+        // contact.
+        let mut pivot: Option<Point3> = None;
+        for (key, a, b) in pieces {
+            let (a, b) = (*a, *b);
+            let (pa, pb) = (at(key, a)?, at(key, b)?);
+            let (ha, hb) = (height(pa), height(pb));
+            // A crossing at a piece's end (a section in the plane of the
+            // rim's seam) reads a hair off zero on both sides of it.
+            if ha * hb > 0.0 && ha.abs().min(hb.abs()) > tol {
+                continue;
+            }
+            let (mut lo, mut hi, mut h_lo) = (a, b, ha);
+            if ha * hb > 0.0 {
+                (lo, hi) = if ha.abs() <= hb.abs() { (a, a) } else { (b, b) };
+            }
+            for _ in 0..80 {
+                let mid = 0.5 * (lo + hi);
+                let h = height(at(key, mid)?);
+                if h * h_lo > 0.0 {
+                    lo = mid;
+                    h_lo = h;
+                } else {
+                    hi = mid;
+                }
+            }
+            let q = at(key, 0.5 * (lo + hi))?;
+            // Following, from the last section's pivot, so a plane cutting
+            // the rim more than once takes the crossing the rim runs on to.
+            let from = pivoted.last().filter(|_| follow).map_or(on_plane, |last| {
+                if side_index == 0 { last.p1 } else { last.p2 }
+            });
+            if pivot.is_none_or(|p| (q - from).length() < (p - from).length()) {
+                pivot = Some(q);
+            }
+        }
+        let Some(pivot) = pivot else {
+            return Ok((pivoted.len() >= required).then_some(pivoted));
+        };
+        // The ball on the wall: its centre a radius off the wall, toward
+        // the ball, in the section's plane, a radius from the pivot.
+        let side = (section.center - on_wall).dot(wall.normal(wall_uv.0, wall_uv.1));
+        let sign = if side < 0.0 { -1.0 } else { 1.0 };
+        // A wall closed round on itself (a B-spline rim's wall) is read
+        // across its seam.
+        let centre = |u: f64, v: f64| {
+            let (u, v) = crate::walker::wrap_params(wall, u, v);
+            wall.evaluate(u, v) + wall.normal(u, v) * (sign * radius)
+        };
+        let residual = |u: f64, v: f64| {
+            let c = centre(u, v);
+            (height(c), (c - pivot).length() - radius)
+        };
+        // Following, from the last section's contact on the wall, as the
+        // ball rolls on (from the walk's own contact it can land on
+        // another part of a curved wall). The first from the walk's
+        // `(u, v)` on the wall, or its contact projected where the walk read
+        // the face in a frame of its own (a reversed plane).
+        let start = if (wall.evaluate(wall_uv.0, wall_uv.1) - on_wall).length() <= tol {
+            wall_uv
+        } else {
+            wall.project_point(on_wall)
+        };
+        let (mut u, mut v) = pivoted.last().filter(|_| follow).map_or(start, |last| {
+            if side_index == 0 { last.uv2 } else { last.uv1 }
+        });
+        let mut solved = false;
+        for _ in 0..40 {
+            let (f1, f2) = residual(u, v);
+            if f1.abs() <= tol && f2.abs() <= tol {
+                solved = true;
+                break;
+            }
+            let h = 1e-7 * (1.0 + u.abs().max(v.abs()));
+            let (a1, a2) = residual(u + h, v);
+            let (b1, b2) = residual(u, v + h);
+            let (j11, j21, j12, j22) = ((a1 - f1) / h, (a2 - f2) / h, (b1 - f1) / h, (b2 - f2) / h);
+            let det = j11 * j22 - j12 * j21;
+            if det.abs() < 1e-30 {
+                break;
+            }
+            u -= (j22 * f1 - j12 * f2) / det;
+            v -= (j11 * f2 - j21 * f1) / det;
+        }
+        if !solved {
+            return Ok((pivoted.len() >= required).then_some(pivoted));
+        }
+        let pivot_uv = pivot_surface.project_point(pivot);
+        let (u, v) = crate::walker::wrap_params(wall, u, v);
+        let mut next = section.clone();
+        next.center = centre(u, v);
+        if side_index == 0 {
+            next.p1 = pivot;
+            next.uv1 = pivot_uv;
+            next.p2 = wall.evaluate(u, v);
+            next.uv2 = (u, v);
+        } else {
+            next.p1 = wall.evaluate(u, v);
+            next.uv1 = (u, v);
+            next.p2 = pivot;
+            next.uv2 = pivot_uv;
+        }
+        pivoted.push(next);
+    }
+    Ok(Some(pivoted))
+}
+
+/// The ball rolled on past both ends of an open spine, out to four radii in
+/// steps of a quarter radius (see [`Stripe::beyond`]).
+fn walk_beyond<F: crate::blend_func::BlendFunction>(
+    walker: &Walker<'_, F>,
+    start: crate::blend_func::BlendParams,
+    result: &crate::walker::WalkResult,
+    closed: bool,
+) -> [Vec<crate::section::CircSection>; 2] {
+    if closed {
+        return Default::default();
+    }
+    let past = |at_end: bool, from, section: Option<&crate::section::CircSection>| {
+        section.map_or_else(Vec::new, |section| {
+            walker.walk_past_end(at_end, from, 0.25 * section.radius, 4.0 * section.radius)
+        })
+    };
+    [
+        past(false, start, result.sections.first()),
+        past(true, result.end_params, result.sections.last()),
+    ]
+}
+
+/// Refuses a walk whose contact on either face turns back on itself: a
+/// ball wider than a convex bend of its face (a round past the radius of
+/// an outline's tip) still solves at every station, but its contact on the
+/// face the bend is in runs to a cusp and back, the swallowtail of the
+/// face's outline set in by the radius. The band through such sections
+/// crosses itself, and the trimmed face's loop with it, though every edge
+/// still has two faces.
+fn check_contacts_run_on(sections: &[crate::section::CircSection]) -> Result<(), BlendError> {
+    for (side, contact) in [
+        sections.iter().map(|s| s.p1).collect::<Vec<_>>(),
+        sections.iter().map(|s| s.p2).collect::<Vec<_>>(),
+    ]
+    .iter()
+    .enumerate()
+    {
+        let steps: Vec<Vec3> = contact
+            .windows(2)
+            .map(|w| w[1] - w[0])
+            .filter(|d| d.length() > CONTACT_STEP_FLOOR)
+            .collect();
+        if let Some(i) = steps.windows(2).position(|w| w[0].dot(w[1]) < 0.0) {
+            return Err(BlendError::PlanningFailure {
+                reason: format!(
+                    "the fillet's contact on face {} turns back on itself near section {i}: the radius is larger than the face's bend there",
+                    side + 1
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Contact steps shorter than this are read as standing still, not as a
+/// direction (a ball pinned where a face's contact barely moves).
+const CONTACT_STEP_FLOOR: f64 = 1e-9;
+
+/// A walked round's sections with the crossing of its contact on a plane
+/// face cut out, and the places of the two sections that bound the cut.
+struct CrossingCut {
+    sections: Vec<crate::section::CircSection>,
+    /// The section where the contact reaches its crossing, and the one
+    /// where it leaves it.
+    bounds: [usize; 2],
+}
+
+/// Cut out the stretch where a round's contact on a plane face crosses
+/// itself: an outline's tip whose bend is a little tighter than the round,
+/// where the ball cannot roll round the tip.
+///
+/// Past the bend the contact on the plane runs back, forms a small loop and
+/// crosses where it was before. The sections through that crossing bound
+/// the cut: both are arcs of one ball, its centre where the ball's path
+/// crosses itself, from the crossing point down to the wall. Between them
+/// the contact on the plane stands still at the crossing point and the
+/// contact on the wall runs on as walked; each section there is the arc
+/// from the crossing point to the wall contact, tangent to the wall there.
+/// At the two bounds those arcs are the ball's own.
+///
+/// `None` unless one side's contact crosses itself once, that side is a
+/// plane, and every cut section solves.
+fn cut_contact_crossing<F: crate::blend_func::BlendFunction>(
+    walker: &Walker<'_, F>,
+    spine_length: f64,
+    sections: &[crate::section::CircSection],
+    planes: [Option<Vec3>; 2],
+) -> Option<CrossingCut> {
+    use crate::blend_func::BlendParams;
+    use crate::section::CircSection;
+
+    const CUT_STEPS: usize = 8;
+    let contact = |sec: &CircSection, side: usize| if side == 0 { sec.p1 } else { sec.p2 };
+    let params = |sec: &CircSection| BlendParams {
+        u1: sec.uv1.0,
+        v1: sec.uv1.1,
+        u2: sec.uv2.0,
+        v2: sec.uv2.1,
+    };
+    for (side, normal) in planes.iter().enumerate() {
+        let Some(normal) = *normal else {
+            continue;
+        };
+        let e1 = normal.cross(Vec3::new(1.0, 0.0, 0.0));
+        let e1 = if e1.length() < 0.1 {
+            normal.cross(Vec3::new(0.0, 1.0, 0.0))
+        } else {
+            e1
+        };
+        let Ok(e1) = e1.normalize() else {
+            continue;
+        };
+        let e2 = normal.cross(e1);
+        let flat = |p: Point3| {
+            (
+                Vec3::new(p.x(), p.y(), p.z()).dot(e1),
+                Vec3::new(p.x(), p.y(), p.z()).dot(e2),
+            )
+        };
+        let pts: Vec<(f64, f64)> = sections.iter().map(|s| flat(contact(s, side))).collect();
+        // The first two segments of the contact that cross, not neighbours.
+        let cross = |a: (f64, f64), b: (f64, f64), c: (f64, f64), d: (f64, f64)| {
+            let r = (b.0 - a.0, b.1 - a.1);
+            let s = (d.0 - c.0, d.1 - c.1);
+            let den = r.0 * s.1 - r.1 * s.0;
+            if den.abs() < 1e-300 {
+                return None;
+            }
+            let q = (c.0 - a.0, c.1 - a.1);
+            let ta = (q.0 * s.1 - q.1 * s.0) / den;
+            let tb = (q.0 * r.1 - q.1 * r.0) / den;
+            ((0.0..=1.0).contains(&ta) && (0.0..=1.0).contains(&tb)).then_some((ta, tb))
+        };
+        let mut found = None;
+        'outer: for i in 0..pts.len().saturating_sub(1) {
+            for j in i + 2..pts.len().saturating_sub(1) {
+                if let Some(at) = cross(pts[i], pts[i + 1], pts[j], pts[j + 1]) {
+                    found = Some((i, j, at));
+                    break 'outer;
+                }
+            }
+        }
+        let Some((i, j, (fa, fb))) = found else {
+            continue;
+        };
+        // Pin the two sections whose contacts on the plane meet.
+        let length = spine_length;
+        let s_of =
+            |k: usize, f: f64| (sections[k].t + (sections[k + 1].t - sections[k].t) * f) * length;
+        let (mut sa, mut sb) = (s_of(i, fa), s_of(j, fb));
+        let (mut ga, mut gb) = (params(&sections[i]), params(&sections[j]));
+        let mut solved = None;
+        let h = 1e-7 * length.max(1e-9);
+        for _ in 0..30 {
+            let (pa, a) = walker.solve_section(sa, Some(ga))?;
+            let (pb, b) = walker.solve_section(sb, Some(gb))?;
+            ga = pa;
+            gb = pb;
+            let (ca, cb) = (flat(contact(&a, side)), flat(contact(&b, side)));
+            let f = (ca.0 - cb.0, ca.1 - cb.1);
+            // The walker solves each section to its own tolerance, which
+            // bounds how closely two of them meet.
+            if f.0.hypot(f.1) <= 1e-7 * sections[i].radius.max(1e-6) {
+                solved = Some((a, b));
+                break;
+            }
+            let (_, a2) = walker.solve_section(sa + h, Some(pa))?;
+            let (_, b2) = walker.solve_section(sb + h, Some(pb))?;
+            let (da, db) = (flat(contact(&a2, side)), flat(contact(&b2, side)));
+            let ja = ((da.0 - ca.0) / h, (da.1 - ca.1) / h);
+            let jb = ((cb.0 - db.0) / h, (cb.1 - db.1) / h);
+            let det = ja.0 * jb.1 - jb.0 * ja.1;
+            if det.abs() < 1e-300 {
+                return None;
+            }
+            let dsa = (-f.0 * jb.1 + jb.0 * f.1) / det;
+            let dsb = (-ja.0 * f.1 + ja.1 * f.0) / det;
+            sa += dsa;
+            sb += dsb;
+            if !(sa.is_finite() && sb.is_finite()) || sa <= 0.0 || sb >= length || sa >= sb {
+                return None;
+            }
+        }
+        let (mut a, mut b) = solved?;
+        let crossing = {
+            let (p, q) = (contact(&a, side), contact(&b, side));
+            Point3::new(
+                f64::midpoint(p.x(), q.x()),
+                f64::midpoint(p.y(), q.y()),
+                f64::midpoint(p.z(), q.z()),
+            )
+        };
+        for sec in [&mut a, &mut b] {
+            if side == 0 {
+                sec.p1 = crossing;
+            } else {
+                sec.p2 = crossing;
+            }
+        }
+        // Between the bounds: from the crossing point to the walked wall
+        // contact, tangent to the wall there.
+        let mut cut = Vec::with_capacity(CUT_STEPS + 1);
+        let mut guess = ga;
+        for k in 1..CUT_STEPS {
+            #[allow(clippy::cast_precision_loss)]
+            let s = sa + (sb - sa) * (k as f64 / CUT_STEPS as f64);
+            let (p, sec) = walker.solve_section(s, Some(guess))?;
+            guess = p;
+            let wall = contact(&sec, 1 - side);
+            let inward = (sec.center - wall).normalize().ok()?;
+            let chord = crossing - wall;
+            let along = chord.dot(inward);
+            if along <= 1e-9 * sec.radius {
+                return None;
+            }
+            let radius = chord.dot(chord) / (2.0 * along);
+            if !(radius.is_finite() && radius < 4.0 * sec.radius) {
+                return None;
+            }
+            let mut mid = sec.clone();
+            mid.center = wall + inward * radius;
+            mid.radius = radius;
+            if side == 0 {
+                mid.p1 = crossing;
+                mid.uv1 = a.uv1;
+            } else {
+                mid.p2 = crossing;
+                mid.uv2 = a.uv2;
+            }
+            cut.push(mid);
+        }
+        let mut out: Vec<CircSection> = sections[..=i].to_vec();
+        let first = out.len();
+        out.push(a);
+        out.extend(cut);
+        let last = out.len();
+        out.push(b);
+        out.extend_from_slice(&sections[j + 1..]);
+        // Each piece must hold enough sections for a cubic of its own.
+        if first < 3 || out.len() - last < 4 {
+            return None;
+        }
+        return Some(CrossingCut {
+            sections: out,
+            bounds: [first, last],
+        });
+    }
+    None
+}
+
+/// Join bands built piece by piece along a round end to end, each piece's
+/// last section the next one's first: a band only C0 at the joins, each
+/// piece taking a share of the parameter range as long as its `lengths`.
+fn join_bands(
+    pieces: &[brepkit_math::nurbs::surface::NurbsSurface],
+    lengths: &[f64],
+) -> Result<brepkit_math::nurbs::surface::NurbsSurface, BlendError> {
+    let fail = || BlendError::Math(brepkit_math::MathError::EmptyInput);
+    let first = pieces.first().ok_or_else(fail)?;
+    let degree = first.degree_v();
+    let rows = first.control_points().len();
+    let total: f64 = lengths.iter().sum();
+    if pieces.len() != lengths.len() || total.is_nan() || total <= 0.0 {
+        return Err(fail());
+    }
+    let mut knots = vec![0.0; degree + 1];
+    let mut points: Vec<Vec<Point3>> = vec![Vec::new(); rows];
+    let mut weights: Vec<Vec<f64>> = vec![Vec::new(); rows];
+    let mut start = 0.0;
+    for (k, (piece, &length)) in pieces.iter().zip(lengths).enumerate() {
+        if piece.degree_v() != degree
+            || piece.control_points().len() != rows
+            || piece.knots_u() != first.knots_u()
+        {
+            return Err(fail());
+        }
+        let share = length / total;
+        let pk = piece.knots_v();
+        for &knot in &pk[degree + 1..pk.len() - degree - 1] {
+            knots.push(start + share * knot);
+        }
+        start += share;
+        let end = if k + 1 == pieces.len() { 1.0 } else { start };
+        knots.extend(std::iter::repeat_n(
+            end,
+            if k + 1 == pieces.len() {
+                degree + 1
+            } else {
+                degree
+            },
+        ));
+        let skip = usize::from(k > 0);
+        for row in 0..rows {
+            points[row].extend_from_slice(&piece.control_points()[row][skip..]);
+            weights[row].extend_from_slice(&piece.weights()[row][skip..]);
+        }
+    }
+    Ok(brepkit_math::nurbs::surface::NurbsSurface::new(
+        first.degree_u(),
+        degree,
+        first.knots_u().to_vec(),
+        knots,
+        points,
+        weights,
+    )?)
+}
+
+/// Whether every contact a band leaves on a plane face lies inside that
+/// face, read against its exact outline in its plane (a box holds a tilted
+/// ring's whole circle a little past its rim). `true` where an outline
+/// cannot be read.
+fn contacts_inside_plane_faces(
+    topo: &Topology,
+    face1: FaceId,
+    face2: FaceId,
+    sections: &[crate::section::CircSection],
+) -> Result<bool, BlendError> {
+    for (side, face_id) in [face1, face2].into_iter().enumerate() {
+        let FaceSurface::Plane { normal, d } = *topo.face(face_id)?.surface() else {
+            continue;
+        };
+        let Ok(n) = normal.normalize() else {
+            continue;
+        };
+        let origin = Point3::new(0.0, 0.0, 0.0) + n * (d / normal.length());
+        let seed = if n.x().abs() < 0.9 {
+            Vec3::new(1.0, 0.0, 0.0)
+        } else {
+            Vec3::new(0.0, 1.0, 0.0)
+        };
+        let Ok(x) = n.cross(seed).normalize() else {
+            continue;
+        };
+        let y = n.cross(x);
+        let Some(region) =
+            brepkit_topology::planar::face_region_2d(topo, face_id, origin, x, y, 1e-7)?
+        else {
+            continue;
+        };
+        for section in sections {
+            let p = if side == 0 { section.p1 } else { section.p2 };
+            let q = brepkit_math::vec::Point2::new((p - origin).dot(x), (p - origin).dot(y));
+            if !region.contains_clear(q, 0.0) {
+                return Ok(false);
+            }
+        }
+    }
+    Ok(true)
 }
 
 /// Refuses a walked band round a closed spine whose contacts leave their
@@ -5499,6 +9664,7 @@ fn check_closed_contacts_do_not_cross(
 ) -> Result<(), BlendError> {
     const SAMPLES: u32 = 256;
     const GAP: f64 = 1e-4;
+    const FULL_ROUND: f64 = 1e-5;
     // A closed contact is a loop: its ends meet, within a small fraction of
     // its own length (a fillet near half a box's size leaves contacts a few
     // microns long whose ends lie a few microns apart).
@@ -5538,8 +9704,29 @@ fn check_closed_contacts_do_not_cross(
                 .collect()
         })
         .collect();
+    // Two contacts lying on each other all round, within a small fraction of
+    // their length, are a full round: a wall exactly twice the radius high,
+    // rounded along both rims, kept as the strip between them, which has
+    // no area (`drop_contact_slivers` takes it out, one round taking the
+    // other's contact). Walked contacts through the same sections differ
+    // only by their fits between them.
+    let length = |points: &[Point3]| {
+        points
+            .windows(2)
+            .map(|pair| (pair[1] - pair[0]).length())
+            .sum::<f64>()
+    };
+    let full_round = |i: usize, j: usize| {
+        let (a, b) = (&sampled[i], &sampled[j]);
+        let tol = FULL_ROUND * length(a).min(length(b));
+        a.iter().all(|&p| distance(p, closed[j].1) <= tol)
+            && b.iter().all(|&p| distance(p, closed[i].1) <= tol)
+    };
     for (i, a) in sampled.iter().enumerate() {
-        for b in &sampled[i + 1..] {
+        for (j, b) in sampled.iter().enumerate().skip(i + 1) {
+            if full_round(i, j) {
+                continue;
+            }
             let meet = a.windows(2).any(|p| {
                 b.windows(2)
                     .any(|q| segments_within(p[0], p[1], q[0], q[1], GAP))
@@ -5557,7 +9744,7 @@ fn check_closed_contacts_do_not_cross(
     for (i, &(rim, own)) in closed.iter().enumerate() {
         let near = distance(rim, own);
         for (j, &(_, other)) in closed.iter().enumerate() {
-            if i != j && distance(rim, other) <= near {
+            if i != j && !full_round(i.min(j), i.max(j)) && distance(rim, other) <= near {
                 return Err(BlendError::PlanningFailure {
                     reason: format!(
                         "two fillets on face {} cross: their radii are too large for the face between them",
@@ -5615,6 +9802,13 @@ fn check_contacts_keep_their_edges(
                 if d.0 < best.0 { d } else { best }
             })
     };
+    // Each contact as points along its exact curve where it has one: a
+    // walked contact's sampled points may be its two ends alone, whose chord
+    // stands far off the contact on a curved face.
+    let contacts: Vec<Vec<Point3>> = restrictions
+        .iter()
+        .map(|(_, restriction)| contact_points(restriction))
+        .collect();
     let mut middles = Vec::with_capacity(restrictions.len());
     for (_, restriction) in restrictions {
         let edges = &restriction.source_edges;
@@ -5644,10 +9838,8 @@ fn check_contacts_keep_their_edges(
     // stripes' sections ending on one line), which `SWAP_MARGIN` leaves.
     let swapped = |i: usize, j: usize| {
         middles[i].is_some_and(|(middle, tangent)| {
-            let (own, own_alongside, own_cos) =
-                distance(middle, tangent, &restrictions[i].1.contact_3d);
-            let (other, other_alongside, other_cos) =
-                distance(middle, tangent, &restrictions[j].1.contact_3d);
+            let (own, own_alongside, own_cos) = distance(middle, tangent, &contacts[i]);
+            let (other, other_alongside, other_cos) = distance(middle, tangent, &contacts[j]);
             own_alongside
                 && other_alongside
                 && own_cos >= SWAP_PARALLEL
@@ -5668,6 +9860,128 @@ fn check_contacts_keep_their_edges(
         }
     }
     Ok(())
+}
+
+/// Refuses two contacts on a plane face that cross although their edges
+/// share no vertex, when a round between them runs on smoothly from one of
+/// them. An outline that runs on round a short edge tangent to its
+/// neighbour and then turns a convex corner is rounded as one corner of two
+/// rounds, but a radius past the short edge's length puts the corner's
+/// crossing beyond the short edge, on the contact before it. The trim, which
+/// ends each contact on its own neighbour's, then leaves the face a loop
+/// that crosses itself, a lobe of it walked backwards, which the shell still
+/// closes over (and which a reference kernel reads inside out).
+fn check_apart_contacts_do_not_cross(
+    topo: &Topology,
+    face_id: FaceId,
+    restrictions: &[(usize, trimmer::ParametricRestriction)],
+) -> Result<(), BlendError> {
+    let face = topo.face(face_id)?;
+    let brepkit_topology::face::FaceSurface::Plane { normal, .. } = face.surface() else {
+        return Ok(());
+    };
+    let origin = Point3::new(0.0, 0.0, 0.0);
+    let frame = brepkit_math::frame::Frame3::from_normal(origin, *normal)
+        .map_err(|_| BlendError::TrimmingFailure { face: face_id })?;
+    let in_plane = |p: Point3| ((p - origin).dot(frame.x), (p - origin).dot(frame.y));
+    // Each round's source edges' ends, with the edge's direction there.
+    let mut ends: Vec<Vec<(VertexId, Vec3)>> = Vec::with_capacity(restrictions.len());
+    for (_, restriction) in restrictions {
+        let mut round = Vec::new();
+        for &edge_id in &restriction.source_edges {
+            let edge = topo.edge(edge_id)?;
+            let (a, b) = (
+                topo.vertex(edge.start())?.point(),
+                topo.vertex(edge.end())?.point(),
+            );
+            let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
+            for (vertex, t) in [(edge.start(), t0), (edge.end(), t1)] {
+                if let Ok(direction) = edge.curve().tangent_with_endpoints(t, a, b).normalize() {
+                    round.push((vertex, direction));
+                }
+            }
+        }
+        ends.push(round);
+    }
+    let meet = |x: usize, y: usize| {
+        ends[x]
+            .iter()
+            .flat_map(|&(v, a)| {
+                ends[y]
+                    .iter()
+                    .filter(move |&&(w, _)| w == v)
+                    .map(move |&(_, b)| a.dot(b).abs())
+            })
+            .fold(None, |best: Option<f64>, cos| {
+                Some(best.map_or(cos, |b| b.max(cos)))
+            })
+    };
+    let tangent = |cos: Option<f64>| cos.is_some_and(|cos| cos >= APART_TANGENT_COS);
+    let flat: Vec<Vec<(f64, f64)>> = restrictions
+        .iter()
+        .map(|(_, restriction)| {
+            contact_points(restriction)
+                .into_iter()
+                .map(in_plane)
+                .collect()
+        })
+        .collect();
+    let orient = |p: (f64, f64), q: (f64, f64), r: (f64, f64)| {
+        (q.0 - p.0).madd(r.1 - p.1, -((q.1 - p.1) * (r.0 - p.0)))
+    };
+    let cross = |a: &[(f64, f64)], b: &[(f64, f64)]| {
+        a.windows(2).any(|s| {
+            b.windows(2).any(|t| {
+                orient(s[0], s[1], t[0]) * orient(s[0], s[1], t[1]) < 0.0
+                    && orient(t[0], t[1], s[0]) * orient(t[0], t[1], s[1]) < 0.0
+            })
+        })
+    };
+    for i in 0..restrictions.len() {
+        for j in i + 1..restrictions.len() {
+            if meet(i, j).is_some() {
+                continue;
+            }
+            let runs_on = (0..restrictions.len()).any(|k| {
+                let (ik, kj) = (meet(i, k), meet(k, j));
+                k != i && k != j && ik.is_some() && kj.is_some() && (tangent(ik) || tangent(kj))
+            });
+            if runs_on && cross(&flat[i], &flat[j]) {
+                return Err(BlendError::PlanningFailure {
+                    reason: format!(
+                        "two fillets on face {} cross past the short edge between them: the radius is larger than that edge allows",
+                        face_id.index()
+                    ),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+/// How nearly two edges must run on from each other at their shared vertex,
+/// as the cosine of the angle between them, to read as one smooth outline.
+const APART_TANGENT_COS: f64 = 0.999_95;
+
+/// Samples along a contact's exact curve when reading where it runs.
+const CONTACT_CURVE_SAMPLES: u32 = 64;
+
+/// A contact's points in traversal order: along its exact curve, between its
+/// first and last sampled points, when it has one; else its sampled points.
+fn contact_points(restriction: &trimmer::ParametricRestriction) -> Vec<Point3> {
+    let points = &restriction.contact_3d;
+    let (Some(curve), Some(&first), Some(&last)) =
+        (restriction.curve.as_ref(), points.first(), points.last())
+    else {
+        return points.clone();
+    };
+    let (t0, t1) = curve.domain_with_endpoints(first, last);
+    (0..=CONTACT_CURVE_SAMPLES)
+        .map(|k| {
+            let t = (t1 - t0).madd(f64::from(k) / f64::from(CONTACT_CURVE_SAMPLES), t0);
+            curve.evaluate_with_endpoints(t, first, last)
+        })
+        .collect()
 }
 
 /// Samples per boundary edge when bounding a face's extent.
@@ -6840,6 +11154,42 @@ mod tests {
         assert!(straight_edge(&topo, &straight, 1e-6).unwrap());
     }
 
+    /// A cubic B-spline edge of two spans from `(8, -4)` to `(-4, 8)`, its
+    /// chord across the notch triangle, bowing through `bow`.
+    fn bowed_edge(topo: &mut Topology, bow: [(f64, f64); 3]) -> (Edge, Point3, Point3) {
+        let (a, b) = (Point3::new(8.0, -4.0, 0.0), Point3::new(-4.0, 8.0, 0.0));
+        let mut points = vec![a];
+        points.extend(bow.iter().map(|&(x, y)| Point3::new(x, y, 0.0)));
+        points.push(b);
+        let curve = brepkit_math::nurbs::curve::NurbsCurve::new(
+            3,
+            vec![0.0, 0.0, 0.0, 0.0, 0.5, 1.0, 1.0, 1.0, 1.0],
+            points,
+            vec![1.0; 5],
+        )
+        .unwrap();
+        let va = topo.add_vertex(Vertex::new(a, 1e-7));
+        let vb = topo.add_vertex(Vertex::new(b, 1e-7));
+        (Edge::new(va, vb, EdgeCurve::NurbsCurve(curve)), a, b)
+    }
+
+    #[test]
+    fn a_curve_bowing_away_is_clear_though_its_whole_hull_is_not() {
+        // A cap's long outline whose chord passes the corner: the hull of
+        // all its control points holds the notch, its spans' hulls do not.
+        let mut topo = Topology::new();
+        let flat = |p: Point3| (p.x(), p.y());
+        let bow = [(12.0, 4.0), (12.0, 12.0), (4.0, 12.0)];
+        let (edge, a, b) = bowed_edge(&mut topo, bow);
+        let mut hull = vec![(8.0, -4.0), (-4.0, 8.0)];
+        hull.extend(bow);
+        assert!(hull_overlaps_region(&hull, &NOTCH));
+        assert!(!cap_edge_reaches_region(&edge, a, b, &flat, &NOTCH));
+        // Bowed into the notch, it reaches it.
+        let (edge, a, b) = bowed_edge(&mut topo, [(2.0, -1.0), (1.0, 1.0), (-1.0, 2.0)]);
+        assert!(cap_edge_reaches_region(&edge, a, b, &flat, &NOTCH));
+    }
+
     #[test]
     fn a_curve_with_a_negative_weight_is_never_certified_clear() {
         // Its control hull lies outside the triangle, yet the curve passes
@@ -6994,7 +11344,7 @@ mod tests {
         };
         for (face1, face2) in [(wall, plate), (plate, wall)] {
             let spine = Spine::from_single_edge(&topo, foot_edge).unwrap();
-            let result = compute_stripe_for_spine(&topo, face1, face2, spine, &law).unwrap();
+            let result = compute_stripe_for_spine(&topo, None, face1, face2, spine, &law).unwrap();
             for contact in [&result.stripe.contact1, &result.stripe.contact2] {
                 let (t0, t1) = contact.domain();
                 for k in 0..=8 {
@@ -7062,6 +11412,26 @@ mod tests {
             found_cylinder,
             "fillet should produce a cylindrical blend surface"
         );
+    }
+
+    /// An edge picked twice in one set is the same request: it is rounded
+    /// once, as if picked once.
+    #[test]
+    fn an_edge_picked_twice_is_rounded_once() {
+        let mut topo = Topology::new();
+        let solid = make_unit_cube_manifold(&mut topo);
+        let adjacency = AdjacencyIndex::build(&topo, solid).unwrap();
+        let edge = brepkit_topology::explorer::solid_edges(&topo, solid)
+            .unwrap()
+            .into_iter()
+            .find(|&edge| adjacency.faces_for_edge(edge).len() == 2)
+            .expect("a manifold edge");
+        let mut builder = FilletBuilder::new(&mut topo, solid);
+        builder.add_edges(&[edge, edge], 0.1);
+        let result = builder.build().expect("fillet build should succeed");
+        assert!(result.failed.is_empty(), "{:?}", result.failed);
+        assert_eq!(result.succeeded, vec![edge]);
+        assert_shell_edges_are_closed(&topo, result.solid);
     }
 
     #[test]
@@ -7447,9 +11817,12 @@ mod tests {
         let b = topo.add_vertex(Vertex::new(ellipse.evaluate(to), 1e-7));
         let short = Edge::new(a, b, EdgeCurve::Ellipse(ellipse.clone()));
         let long = Edge::new(b, a, EdgeCurve::Ellipse(ellipse));
-        for (edge, on) in [(&short, &short), (&long, &long), (&short, &long)] {
-            assert!(!edge_lies_on(&topo, edge, on, tol).unwrap());
-        }
+        // An ellipse is held both ways: an arc lies on itself, and not on
+        // the rest of its curve.
+        assert!(edge_lies_on(&topo, &short, &short, tol).unwrap());
+        assert!(edge_lies_on(&topo, &long, &long, tol).unwrap());
+        assert!(!edge_lies_on(&topo, &short, &long, tol).unwrap());
+        assert!(!edge_lies_on(&topo, &long, &short, tol).unwrap());
     }
 
     /// A degree-1 B-spline from `(0, 0)` to `(1, 0)` with knots at 0.52,

@@ -139,6 +139,164 @@ fn edge_is_tangent(
     }
 }
 
+/// Whether the two faces of an edge run on smoothly into the two faces of
+/// another edge at `vertex`, where both pairs are split (a face cut into
+/// pieces along an edge leaving the vertex, as a rim in quarters on a wall
+/// in quarters): each face of the one pair meets a face of the other with
+/// normals within `angle` there.
+fn faces_run_on(
+    topo: &Topology,
+    faces: &HashSet<FaceId>,
+    others: &HashSet<FaceId>,
+    vertex: brepkit_topology::vertex::VertexId,
+    angle: f64,
+) -> Result<bool, OperationsError> {
+    let at = topo.vertex(vertex)?.point();
+    let normal = |fid: FaceId| -> Option<brepkit_math::vec::Vec3> {
+        let face = topo.face(fid).ok()?;
+        let n = match face.surface() {
+            FaceSurface::Plane { normal, .. } => *normal,
+            other => {
+                let (u, v) = other.project_point(at)?;
+                other.normal(u, v)
+            }
+        };
+        let n = if face.is_reversed() { -n } else { n };
+        n.normalize().ok()
+    };
+    let smooth = |f: FaceId, g: FaceId| match (normal(f), normal(g)) {
+        (Some(n), Some(m)) => n.dot(m) >= angle.cos(),
+        _ => false,
+    };
+    let (Some(&f1), Some(&f2)) = (faces.iter().next(), faces.iter().nth(1)) else {
+        return Ok(false);
+    };
+    let (Some(&g1), Some(&g2)) = (others.iter().next(), others.iter().nth(1)) else {
+        return Ok(false);
+    };
+    Ok((smooth(f1, g1) && smooth(f2, g2)) || (smooth(f1, g2) && smooth(f2, g1)))
+}
+
+/// The edges a round of `edges` runs along: each picked edge, and every
+/// edge that runs on from one tangent to it, as some kernels round a picked
+/// edge along its whole smooth chain.
+///
+/// An edge runs on from a chain edge at their shared vertex when it leaves
+/// that vertex the opposite way, within `angle` radians, shares a face with
+/// it (or has two faces running on smoothly, within `angle`, from its two:
+/// faces split at the vertex), has two faces meeting at a crease (not a
+/// smooth edge, which has no round), and is the only such edge there. The result keeps the picks in
+/// their order, followed by the edges added.
+///
+/// # Errors
+///
+/// Returns `OperationsError::Topology` if any entity ID is invalid.
+pub fn tangent_chain(
+    topo: &Topology,
+    solid_id: SolidId,
+    edges: &[EdgeId],
+    angle: f64,
+) -> Result<Vec<EdgeId>, OperationsError> {
+    use brepkit_math::vec::Vec3;
+    use brepkit_topology::vertex::VertexId;
+
+    let mut edge_faces: HashMap<EdgeId, HashSet<FaceId>> = HashMap::new();
+    for fid in brepkit_topology::explorer::solid_faces(topo, solid_id)? {
+        let face = topo.face(fid)?;
+        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            for oe in topo.wire(wid)?.edges() {
+                edge_faces.entry(oe.edge()).or_default().insert(fid);
+            }
+        }
+    }
+    let mut vertex_edges: HashMap<VertexId, Vec<EdgeId>> = HashMap::new();
+    for &edge_id in edge_faces.keys() {
+        let edge = topo.edge(edge_id)?;
+        for v in [edge.start(), edge.end()] {
+            let at = vertex_edges.entry(v).or_default();
+            if !at.contains(&edge_id) {
+                at.push(edge_id);
+            }
+        }
+    }
+    // The way an edge leaves each of its ends: its curve's tangent there,
+    // turned to point along the edge (whatever its curve's
+    // parameterisation), as a short step along it shows.
+    let leaving = |edge_id: EdgeId| -> Result<[(VertexId, Vec3); 2], OperationsError> {
+        let edge = topo.edge(edge_id)?;
+        let (a, b) = (
+            topo.vertex(edge.start())?.point(),
+            topo.vertex(edge.end())?.point(),
+        );
+        let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
+        let step = 1e-3 * (t1 - t0);
+        let at = |t: f64, inward: Vec3| {
+            let tangent = edge.curve().tangent_with_endpoints(t, a, b);
+            let tangent = tangent.normalize().unwrap_or(inward);
+            if tangent.dot(inward) < 0.0 {
+                -tangent
+            } else {
+                tangent
+            }
+        };
+        Ok([
+            (
+                edge.start(),
+                at(
+                    t0,
+                    edge.curve().evaluate_with_endpoints(t0 + step, a, b) - a,
+                ),
+            ),
+            (
+                edge.end(),
+                at(
+                    t1,
+                    edge.curve().evaluate_with_endpoints(t1 - step, a, b) - b,
+                ),
+            ),
+        ])
+    };
+    let opposite = -angle.cos();
+    let mut chain: Vec<EdgeId> = edges.to_vec();
+    let mut queue: Vec<EdgeId> = edges.to_vec();
+    while let Some(edge_id) = queue.pop() {
+        let Some(faces) = edge_faces.get(&edge_id) else {
+            continue;
+        };
+        let faces = faces.clone();
+        for (vertex, out) in leaving(edge_id)? {
+            let mut runs_on = Vec::new();
+            for &other in vertex_edges.get(&vertex).map_or(&[][..], Vec::as_slice) {
+                if other == edge_id {
+                    continue;
+                }
+                let Some(other_faces) = edge_faces.get(&other) else {
+                    continue;
+                };
+                if other_faces.len() != 2
+                    || (other_faces.is_disjoint(&faces)
+                        && !faces_run_on(topo, &faces, other_faces, vertex, angle)?)
+                {
+                    continue;
+                }
+                let tangent = leaving(other)?
+                    .iter()
+                    .any(|&(v, dir)| v == vertex && dir.dot(out) <= opposite);
+                if tangent && !edge_is_tangent(topo, other, other_faces)? {
+                    runs_on.push(other);
+                }
+            }
+            if let [next] = runs_on.as_slice()
+                && !chain.contains(next)
+            {
+                chain.push(*next);
+                queue.push(*next);
+            }
+        }
+    }
+    Ok(chain)
+}
+
 /// The outward normal of a face at the point of its surface nearest `near`.
 fn outward_normal_near(
     topo: &Topology,
@@ -410,6 +568,129 @@ mod tests {
     use brepkit_topology::explorer::solid_edges;
 
     use super::*;
+
+    /// A stadium plate (two lines and two half circles, extruded): a picked
+    /// top line runs on round the whole top outline, tangent at each join;
+    /// the vertical edges, where a flat side meets a round end smoothly, are
+    /// left out, and so is the bottom.
+    #[test]
+    fn tangent_chain_runs_round_a_stadium_outline() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::vec::{Point3, Vec3};
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        let (length, radius, height) = (6.0, 2.0, 1.0);
+        let mut topo = Topology::new();
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        let corners = [
+            (0.0, -radius),
+            (length, -radius),
+            (length, radius),
+            (0.0, radius),
+        ]
+        .map(|(x, y)| topo.add_vertex(Vertex::new(Point3::new(x, y, 0.0), 1e-7)));
+        let arc =
+            |x: f64| EdgeCurve::Circle(Circle3D::new(Point3::new(x, 0.0, 0.0), z, radius).unwrap());
+        let edges = [
+            Edge::new(corners[0], corners[1], EdgeCurve::Line),
+            Edge::new(corners[1], corners[2], arc(length)),
+            Edge::new(corners[2], corners[3], EdgeCurve::Line),
+            Edge::new(corners[3], corners[0], arc(0.0)),
+        ]
+        .map(|edge| OrientedEdge::new(topo.add_edge(edge), true));
+        let wire = topo.add_wire(Wire::new(edges.to_vec(), true).unwrap());
+        let face = topo.add_face(Face::new(
+            wire,
+            vec![],
+            FaceSurface::Plane { normal: z, d: 0.0 },
+        ));
+        let solid = crate::extrude::extrude(&mut topo, face, z, height).unwrap();
+
+        let at_height = |edge: EdgeId, h: f64| {
+            let edge = topo.edge(edge).unwrap();
+            [edge.start(), edge.end()]
+                .iter()
+                .all(|&v| (topo.vertex(v).unwrap().point().z() - h).abs() < 1e-9)
+        };
+        let all = solid_edges(&topo, solid).unwrap();
+        let top_line = all
+            .iter()
+            .copied()
+            .find(|&e| {
+                at_height(e, height) && matches!(topo.edge(e).unwrap().curve(), EdgeCurve::Line)
+            })
+            .unwrap();
+        let chain = tangent_chain(&topo, solid, &[top_line], 1e-3).unwrap();
+        assert_eq!(chain[0], top_line, "the pick comes first");
+        let mut top: Vec<EdgeId> = all
+            .iter()
+            .copied()
+            .filter(|&e| at_height(e, height))
+            .collect();
+        let mut got = chain;
+        top.sort_unstable_by_key(|e| e.index());
+        got.sort_unstable_by_key(|e| e.index());
+        assert_eq!(got, top, "the whole top outline, and nothing else");
+
+        // A box's edge meets its neighbours square: it stays alone.
+        let boxed = crate::primitives::make_box(&mut topo, 1.0, 2.0, 3.0).unwrap();
+        let edge = solid_edges(&topo, boxed).unwrap()[0];
+        assert_eq!(
+            tangent_chain(&topo, boxed, &[edge], 1e-3).unwrap(),
+            vec![edge]
+        );
+    }
+
+    /// A box imprinted across its length: the top front edge is in two
+    /// pieces, and both its faces are split where they meet, so the pieces
+    /// share no face. A picked piece still runs on to the other (its faces
+    /// carry on smoothly from the pick's), and to nothing else.
+    #[test]
+    fn tangent_chain_runs_on_over_split_faces() {
+        use brepkit_math::vec::Point3;
+
+        let mut topo = Topology::new();
+        let boxed = crate::primitives::make_box(&mut topo, 4.0, 1.0, 1.0).unwrap();
+        let wall = brepkit_topology::builder::make_planar_face(
+            &mut topo,
+            &[
+                Point3::new(2.0, -1.0, -1.0),
+                Point3::new(2.0, 2.0, -1.0),
+                Point3::new(2.0, 2.0, 2.0),
+                Point3::new(2.0, -1.0, 2.0),
+            ],
+            1e-7,
+        )
+        .unwrap();
+        let solid = crate::imprint::imprint_faces(
+            &mut topo,
+            boxed,
+            &[crate::imprint::ImprintTool::Face(wall)],
+        )
+        .unwrap();
+        // The top front edge's pieces: y = 0 and z = 1 at both ends.
+        let along = |e: EdgeId| {
+            let edge = topo.edge(e).unwrap();
+            [edge.start(), edge.end()].iter().all(|&v| {
+                let p = topo.vertex(v).unwrap().point();
+                p.y().abs() < 1e-9 && (p.z() - 1.0).abs() < 1e-9
+            })
+        };
+        let mut pieces: Vec<EdgeId> = solid_edges(&topo, solid)
+            .unwrap()
+            .into_iter()
+            .filter(|&e| along(e))
+            .collect();
+        assert_eq!(pieces.len(), 2, "the imprint cuts the edge in two");
+        let chain = tangent_chain(&topo, solid, &pieces[..1], 1e-3).unwrap();
+        let mut got = chain;
+        got.sort_unstable_by_key(|e| e.index());
+        pieces.sort_unstable_by_key(|e| e.index());
+        assert_eq!(got, pieces, "both pieces, and nothing else");
+    }
 
     #[test]
     fn a_box_edge_and_a_cylinders_rim_lie_in_two_surfaces() {

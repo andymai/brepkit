@@ -245,6 +245,20 @@ fn split_edges_at_3d_points(
                     u,
                     (edge.end_uv.y() - edge.start_uv.y()).madd(t, edge.start_uv.y()),
                 )
+            } else if matches!(
+                (&edge.curve_3d, surface),
+                (EdgeCurve::Line, FaceSurface::Cylinder(_))
+            ) && (edge.end_uv.x() - edge.start_uv.x()).abs() <= 1e-9
+            {
+                // A ruling of a cylinder lies at one u, and so does a split
+                // on it: projected, a split on the far copy of the seam would
+                // take the near copy's u, and its two pieces would cut across
+                // the whole face (a box's side through a hole's axis, its
+                // section on the hole's seam).
+                brepkit_math::vec::Point2::new(
+                    edge.start_uv.x(),
+                    (edge.end_uv.y() - edge.start_uv.y()).madd(t, edge.start_uv.y()),
+                )
             } else {
                 project_point_on_surface(split_3d, surface, &[], None)
             };
@@ -456,6 +470,16 @@ pub(super) fn find_splits_on_circle(
     ) && (edge.start_3d - edge.end_3d).length() < tol)
         .then(|| circle.project(edge.start_3d));
     let u_span = edge.end_uv.x() - edge.start_uv.x();
+    let reversed_on_nurbs =
+        matches!(surface, FaceSurface::Nurbs(_)) && !edge.forward && closed_anchor.is_none();
+    let reversed_span = reversed_on_nurbs
+        .then(|| {
+            reversed_arc_is_complement(circle, edge, surface, (t0, span)).then(|| {
+                edge.curve_3d
+                    .domain_with_endpoints(edge.end_3d, edge.start_3d)
+            })
+        })
+        .flatten();
     let mut splits = Vec::new();
     for &sp in split_pts_3d {
         crate::perf::bump_face_split_probe();
@@ -505,6 +529,8 @@ pub(super) fn find_splits_on_circle(
                 continue;
             }
             1.0 - normalize_angle_in_span(angle, p0, pspan)
+        } else if let Some((p0, p1)) = reversed_span {
+            1.0 - normalize_angle_in_span(angle, p0, p1 - p0)
         } else {
             normalize_angle_in_span(angle, t0, span)
         };
@@ -516,6 +542,38 @@ pub(super) fn find_splits_on_circle(
     splits.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
     splits.dedup_by(|a, b| (a.0 - b.0).abs() < tol);
     splits
+}
+
+/// Whether an open arc walked against its curve on a B-spline face covers
+/// the circle's span from its walk's end to its start, not the span from
+/// its start to its end that the reading on such a face takes by default.
+///
+/// That reading is the complement of the arc wherever the stored edge runs
+/// counter-clockwise: a crease between two rounds' bands, a quarter turn
+/// walked back on the second band, read as the other three quarters, and a
+/// section ending on it never split it. The arc lies on the face, so the
+/// reading whose middle stands off the surface, where the other's lies on
+/// it, is the complement.
+fn reversed_arc_is_complement(
+    circle: &brepkit_math::curves::Circle3D,
+    edge: &OrientedPCurveEdge,
+    surface: &FaceSurface,
+    (t0, span): (f64, f64),
+) -> bool {
+    let (p0, p1) = edge
+        .curve_3d
+        .domain_with_endpoints(edge.end_3d, edge.start_3d);
+    let off = |angle: f64| {
+        let p = circle.evaluate(angle);
+        surface
+            .project_point(p)
+            .and_then(|(u, v)| surface.evaluate(u, v))
+            .map_or(f64::INFINITY, |q| (q - p).length())
+    };
+    let (start_to_end, end_to_start) = (off(span.madd(0.5, t0)), off((p1 - p0).madd(0.5, p0)));
+    end_to_start.is_finite()
+        && start_to_end > 1e-3 * circle.radius()
+        && start_to_end > 10.0 * end_to_start
 }
 
 /// Whether a closed circle on a torus is a parallel, a turn of `u` at one
@@ -540,6 +598,32 @@ pub(super) fn circle_edge_is_iso_v_rim(
         && (edge.start_uv.y() - edge.end_uv.y()).abs() < 1e-9
         && u_span.abs() > 1e-9
         && u_span.abs() < std::f64::consts::TAU - 1e-9
+}
+
+/// The span of `curve` that an edge from `start` to `end` traces, in the
+/// order the edge runs. On a closed NURBS curve `domain_with_endpoints` reads
+/// an edge run against the curve as the whole loop (its reversed projection
+/// pair could be a sub-arc across the curve's seam); the edge's ends read the
+/// other way round give its own span, reversed. A section that is a piece of
+/// a closed intersection loop (a pin crossing a bore's mouth) has such a
+/// reversed copy, and sampling the whole loop found the far piece's ends on
+/// it.
+fn traversal_domain(curve: &EdgeCurve, start: Point3, end: Point3) -> (f64, f64) {
+    let span = curve.domain_with_endpoints(start, end);
+    if let EdgeCurve::NurbsCurve(n) = curve
+        && (start - end).length() > 1e-9
+    {
+        let whole = brepkit_math::traits::ParametricCurve::domain(n);
+        let is_whole =
+            |d: (f64, f64)| (d.0 - whole.0).abs() < 1e-12 && (d.1 - whole.1).abs() < 1e-12;
+        if is_whole(span) {
+            let back = curve.domain_with_endpoints(end, start);
+            if !is_whole(back) && !is_whole((back.1, back.0)) {
+                return (back.1, back.0);
+            }
+        }
+    }
+    span
 }
 
 /// Find split parameters on a marched-NURBS SECTION edge by sampled
@@ -840,9 +924,7 @@ pub(super) fn find_splits_on_nurbs_section(
     // evaluations per candidate point, which turned each pad-fuse face split
     // into ~700ms (the lite magnet scenarios' timeout class). One domain
     // computation per edge, then direct parametric evaluation.
-    let (dom0, dom1) = edge
-        .curve_3d
-        .domain_with_endpoints(edge.start_3d, edge.end_3d);
+    let (dom0, dom1) = traversal_domain(&edge.curve_3d, edge.start_3d, edge.end_3d);
     let dom_span = dom1 - dom0;
     let eval_at = |t: f64| -> Point3 {
         edge.curve_3d

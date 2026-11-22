@@ -55,10 +55,21 @@ pub(super) fn sample_wire_loop_uv_via_frame(
             t0 = c.project(s3);
             t1 = t0 + std::f64::consts::TAU;
         }
+        // A conic's samples follow its turn, one at least every 1/64 of it:
+        // eight over a whole circle make an octagon whose sides cut inside
+        // it by 7.6% of its radius, past which a hole near the rim pokes.
+        let n = match &e.curve_3d {
+            EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => {
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                let by_turn = ((t1 - t0).abs() / (std::f64::consts::PI / 32.0)).ceil() as usize;
+                by_turn.clamp(CURVE_SAMPLES, 64)
+            }
+            _ => CURVE_SAMPLES,
+        };
         #[allow(clippy::cast_precision_loss)]
-        let mut samples: Vec<Point2> = (1..CURVE_SAMPLES)
+        let mut samples: Vec<Point2> = (1..n)
             .map(|k| {
-                let t = (t1 - t0).madd(k as f64 / CURVE_SAMPLES as f64, t0);
+                let t = (t1 - t0).madd(k as f64 / n as f64, t0);
                 frame.project(e.curve_3d.evaluate_with_endpoints(t, s3, e3))
             })
             .collect();
@@ -164,6 +175,28 @@ pub(super) fn sample_wire_loop_uv_periodic(
                 // proper unwrapping across periodic jumps at seam vertices.
                 pts.push(edge.start_uv);
                 if has_period {
+                    // Steps well under half a period, so the unwrap below
+                    // keeps the edge's own run: a rim half spans exactly
+                    // half a turn, which it would read either way. Only the
+                    // periodic directions are stepped: a wall's height in
+                    // model units needs no unwrapping.
+                    let d = edge.end_uv - edge.start_uv;
+                    let turn = |delta: f64, period: Option<f64>| {
+                        period.map_or(0.0, |p| delta.abs() * std::f64::consts::TAU / p)
+                    };
+                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                    let steps = turn(d.x(), u_period)
+                        .max(turn(d.y(), v_period))
+                        .ceil()
+                        .max(1.0) as usize;
+                    #[allow(clippy::cast_precision_loss)]
+                    for i in 1..steps {
+                        let t = i as f64 / steps as f64;
+                        pts.push(Point2::new(
+                            d.x().madd(t, edge.start_uv.x()),
+                            d.y().madd(t, edge.start_uv.y()),
+                        ));
+                    }
                     pts.push(edge.end_uv);
                 }
             }
@@ -210,10 +243,35 @@ pub(super) fn sample_wire_loop_uv_periodic(
                     // fit's band, both ways land within it).
                     let (from, to) = if edge.forward { (t0, tn) } else { (tn, t0) };
                     let (stored, turned) = (shifts(from, to), shifts(to, from));
+                    // Where neither way lands within whole turns of the
+                    // edge's ends, the way whose ends land clearly nearer,
+                    // read modulo the surface's periods, is the one the wire
+                    // runs, whatever the flag says (a plane facing against a
+                    // circle's axis has its rim arcs both ways).
+                    let nearer_turned = || {
+                        let span_off = |dx: f64, dy: f64| {
+                            let reduce = |x: f64, period: Option<f64>| {
+                                period.map_or(x, |p| x - (x / p).round() * p)
+                            };
+                            reduce(dx, u_period).hypot(reduce(dy, v_period))
+                        };
+                        let misfit = |t_first: f64, t_last: f64| {
+                            let (first, last) = (nurbs.evaluate(t_first), nurbs.evaluate(t_last));
+                            span_off(edge.start_uv.x() - first.x(), edge.start_uv.y() - first.y())
+                                + span_off(edge.end_uv.x() - last.x(), edge.end_uv.y() - last.y())
+                        };
+                        let (flagged, other) = (misfit(from, to), misfit(to, from));
+                        (edge.end_uv.x() - edge.start_uv.x())
+                            .hypot(edge.end_uv.y() - edge.start_uv.y())
+                            > 1e-9
+                            && flagged > 1e-6
+                            && other < 0.25 * flagged
+                    };
                     let reads_turned = match (stored.2, turned.2) {
                         (Some(a), Some(b)) => b < a,
                         (None, Some(_)) => true,
-                        _ => false,
+                        (Some(_), None) => false,
+                        (None, None) => nearer_turned(),
                     };
                     let (from, to, (du, dv, _)) = if reads_turned {
                         (to, from, turned)
@@ -353,5 +411,40 @@ mod tests {
                 "{pcurve:?}: {pts:?}"
             );
         }
+    }
+
+    /// A pcurve whose ends land on neither of the edge's ends within whole
+    /// turns, either way it is read (a fit 0.05 off them), is read the way
+    /// whose ends land clearly nearer, whatever the flag says.
+    #[test]
+    fn a_pcurve_off_its_edge_is_read_the_way_that_lands_nearer() {
+        let (a, b) = (Point2::new(1.0, 2.0), Point2::new(3.0, 2.5));
+        let off = |p: Point2| Point2::new(p.x() + 0.05, p.y() - 0.05);
+        // The pcurve runs from b to a, the edge from a to b, the flag forward.
+        let pts = sample_wire_loop_uv_periodic(&[edge((off(b), off(a)), (a, b), true)], None, None);
+        assert!((pts[0] - off(a)).length() < 1e-12, "{pts:?}");
+        assert!(pts.windows(2).all(|w| w[1].x() > w[0].x()), "{pts:?}");
+    }
+
+    fn line(a: Point2, b: Point2) -> OrientedPCurveEdge {
+        OrientedPCurveEdge {
+            pcurve: Curve2D::Line(brepkit_math::curves2d::Line2D::new(a, b - a).unwrap()),
+            ..edge((a, b), (a, b), true)
+        }
+    }
+
+    /// On a cylinder only `u` turns: a ruling 100 000 high is its two ends,
+    /// and a rim half (half a turn) is stepped under a radian at a time
+    /// whatever the wall's height.
+    #[test]
+    fn a_line_is_stepped_along_its_periodic_direction_only() {
+        let tau = std::f64::consts::TAU;
+        let ruling = line(Point2::new(1.0, 0.0), Point2::new(1.0, 1e5));
+        let pts = sample_wire_loop_uv_periodic(&[ruling], Some(tau), None);
+        assert_eq!(pts.len(), 2, "{} samples", pts.len());
+        let rim = line(Point2::new(0.0, 1e5), Point2::new(tau / 2.0, 1e5));
+        let pts = sample_wire_loop_uv_periodic(&[rim], Some(tau), None);
+        assert_eq!(pts.len(), 5, "{pts:?}");
+        assert!(pts.windows(2).all(|w| w[1].x() - w[0].x() < 1.0), "{pts:?}");
     }
 }

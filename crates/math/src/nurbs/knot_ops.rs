@@ -502,6 +502,12 @@ pub fn curve_split(curve: &NurbsCurve, u: f64) -> Result<(NurbsCurve, NurbsCurve
     // The split control point index: with multiplicity p, the curve passes
     // through the CP at index (last_u - p). Both halves share this point.
     let split_cp = last_u.checked_sub(p).ok_or(MathError::EmptyInput)?;
+    // At the domain's last knot there is no right half to split off (the
+    // split point would be past the last control point).
+    if split_cp >= cps.len() || split_cp == 0 {
+        let (min, max) = curve.domain();
+        return Err(MathError::ParameterOutOfRange { value: u, min, max });
+    }
 
     // Left curve: CPs 0..=split_cp, knots up to first_u then add p+1-mult
     // copies of u to form a proper clamped end.

@@ -383,6 +383,12 @@ struct BezierPiece {
     start: Point2,
     /// The chord's last end, likewise.
     end: Point2,
+    /// The farthest a control point lies from the chord (see
+    /// [`BezierPiece::bound`]), worked out once: every query reads it.
+    reach: f64,
+    /// The piece's two halves, made the first time a query halves it: the
+    /// queries near one stretch of the boundary halve the same pieces.
+    halves: std::sync::OnceLock<Box<(Self, Self)>>,
 }
 
 /// How a NURBS piece stands to a point.
@@ -397,15 +403,27 @@ enum Reading {
 }
 
 impl BezierPiece {
+    /// The piece on `hull` with its chord from `start` to `end`.
+    fn new(hull: Vec<[f64; 3]>, start: Point2, end: Point2) -> Self {
+        let reach = hull
+            .iter()
+            .map(|&[x, y, w]| distance_to_segment(Point2::new(x / w, y / w), start, end))
+            .fold(0.0, f64::max);
+        Self {
+            hull,
+            start,
+            end,
+            reach,
+            halves: std::sync::OnceLock::new(),
+        }
+    }
+
     /// The farthest a control point lies from the chord. With positive
     /// weights the piece, and the sliver between it and its chord, lie in
     /// the hull of the control points and the chord's ends, so no point of
     /// either lies farther.
     fn bound(&self) -> f64 {
-        self.hull
-            .iter()
-            .map(|&[x, y, w]| distance_to_segment(Point2::new(x / w, y / w), self.start, self.end))
-            .fold(0.0, f64::max)
+        self.reach
     }
 
     fn read(&self, p: Point2, margin: f64) -> Reading {
@@ -418,9 +436,15 @@ impl BezierPiece {
         }
     }
 
+    /// The piece's halves at its middle parameter, made once.
+    fn halves(&self) -> (&Self, &Self) {
+        let pair = self.halves.get_or_init(|| Box::new(self.split()));
+        (&pair.0, &pair.1)
+    }
+
     /// The piece split at its middle parameter, by de Casteljau in
     /// homogeneous form.
-    fn halves(&self) -> (Self, Self) {
+    fn split(&self) -> (Self, Self) {
         let mut work = self.hull.clone();
         let n = work.len();
         let mut left = Vec::with_capacity(n);
@@ -443,16 +467,8 @@ impl BezierPiece {
         let [x, y, w] = work[0];
         let mid = Point2::new(x / w, y / w);
         (
-            Self {
-                hull: left,
-                start: self.start,
-                end: mid,
-            },
-            Self {
-                hull: right,
-                start: mid,
-                end: self.end,
-            },
+            Self::new(left, self.start, mid),
+            Self::new(right, mid, self.end),
         )
     }
 }
@@ -514,14 +530,12 @@ impl PlanarRegion {
         }
         let mut pieces = Vec::with_capacity(self.exact.len() + self.beziers.len());
         pieces.extend_from_slice(&self.exact);
-        let mut pending: Vec<BezierPiece> = Vec::new();
+        let mut pending: Vec<&BezierPiece> = Vec::new();
         let mut halvings = 0_usize;
         let mut whole = self.beziers.iter();
         loop {
-            let owned;
             let piece = if let Some(half) = pending.pop() {
-                owned = half;
-                &owned
+                half
             } else if let Some(piece) = whole.next() {
                 piece
             } else {
@@ -670,7 +684,7 @@ fn bezier_pieces(
         } else {
             return false;
         };
-        out.push(BezierPiece { hull, start, end });
+        out.push(BezierPiece::new(hull, start, end));
         start = end;
     }
     true

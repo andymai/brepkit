@@ -1,6 +1,7 @@
 //! Plane-NURBS surface intersection.
 
 use crate::MathError;
+use crate::aabb::Aabb3;
 use crate::madd::Madd;
 use crate::nurbs::curve::NurbsCurve;
 use crate::nurbs::projection::{project_point_to_surface, project_point_to_surface_from};
@@ -30,6 +31,25 @@ pub fn intersect_plane_nurbs(
     plane_normal: Vec3,
     plane_d: f64,
     samples: usize,
+) -> Result<Vec<IntersectionCurve>, MathError> {
+    intersect_plane_nurbs_in_region(surface, plane_normal, plane_d, samples, None)
+}
+
+/// Intersect a plane with a NURBS surface, keeping only the section's runs
+/// through `region` (all of it when `None`).
+///
+/// Each run kept is fitted to the section within its tolerance, as the whole
+/// section is.
+///
+/// # Errors
+///
+/// Returns an error if NURBS evaluation fails or curve fitting fails.
+pub fn intersect_plane_nurbs_in_region(
+    surface: &NurbsSurface,
+    plane_normal: Vec3,
+    plane_d: f64,
+    samples: usize,
+    region: Option<Aabb3>,
 ) -> Result<Vec<IntersectionCurve>, MathError> {
     let n = samples.max(10);
 
@@ -420,11 +440,37 @@ pub fn intersect_plane_nurbs(
         off: &off,
         settle: &settle,
     };
+    let chains: Vec<Vec<IntersectionPoint>> = match region {
+        None => ordered_chains,
+        Some(region) => {
+            let step = (u_step, v_step);
+            let kept = RegionReach {
+                region,
+                spans: surface
+                    .span_index_shared()
+                    .map(|index| index.spans_meeting(&region)),
+                step,
+            };
+            // A chain along one of the surface's own parameter curves is
+            // kept whole, to be read as that curve below: a run cut from it
+            // would be fitted through its samples alone, and miss what the
+            // curve does between them.
+            let mut chains = Vec::with_capacity(ordered_chains.len());
+            for chain in ordered_chains {
+                if iso_section(surface, plane_normal, plane_d, &chain).is_some() {
+                    chains.push(chain);
+                } else {
+                    chains.extend(runs_through_region(&chain, &kept));
+                }
+            }
+            chains
+        }
+    };
     // A chain along one of the surface's own parameter curves is that curve:
     // nothing to fit.
-    let mut curves = Vec::with_capacity(ordered_chains.len());
+    let mut curves = Vec::with_capacity(chains.len());
     let mut to_fit: Vec<Vec<IntersectionPoint>> = Vec::new();
-    for chain in ordered_chains {
+    for chain in chains {
         match iso_section(surface, plane_normal, plane_d, &chain) {
             Some(curve) => curves.push(curve),
             None => to_fit.push(chain),
@@ -1362,6 +1408,96 @@ fn encloses(ring: &[IntersectionPoint], (u, v): (f64, f64)) -> bool {
         }
     }
     inside
+}
+
+/// The region a plane section is kept in, with what bounds the surface
+/// there: the parameter rectangles of the knot spans whose control boxes
+/// meet it (`None` where the spans are not indexed), and the sample grid's
+/// step in `u` and `v`.
+struct RegionReach {
+    region: Aabb3,
+    spans: Option<Vec<SpanRect>>,
+    step: (f64, f64),
+}
+
+/// A knot span's parameter rectangle, `(u0, u1)` and `(v0, v1)`.
+type SpanRect = ((f64, f64), (f64, f64));
+
+impl RegionReach {
+    /// Whether the section between two of its points may pass through the
+    /// region. Two points next to each other on a chain cross the sample
+    /// grid in one cell, and the section between them stays in it. The
+    /// surface over the cell lies in the control boxes of the spans the cell
+    /// meets, so a gap whose cell meets no span reaching the region stays
+    /// clear of it. The chord's box, padded by half the chord, answers first.
+    fn gap_meets(&self, a: &IntersectionPoint, b: &IntersectionPoint) -> bool {
+        let pad = 0.5 * (b.point - a.point).length();
+        if Aabb3::from_points([a.point, b.point])
+            .expanded(pad)
+            .intersects(self.region)
+        {
+            return true;
+        }
+        let Some(spans) = &self.spans else {
+            return true;
+        };
+        let ((ua, va), (ub, vb)) = (a.param1, b.param1);
+        let (u0, u1) = (ua.min(ub) - self.step.0, ua.max(ub) + self.step.0);
+        let (v0, v1) = (va.min(vb) - self.step.1, va.max(vb) + self.step.1);
+        spans
+            .iter()
+            .any(|&((su0, su1), (sv0, sv1))| su0 <= u1 && u0 <= su1 && sv0 <= v1 && v0 <= sv1)
+    }
+}
+
+/// The runs of `chain` through `region`, each with one point beyond it on
+/// either side. A closed chain is turned to start in a gap clear of the
+/// region, so a run is never cut in two at the chain's seam.
+fn runs_through_region(
+    chain: &[IntersectionPoint],
+    reach: &RegionReach,
+) -> Vec<Vec<IntersectionPoint>> {
+    let n = chain.len();
+    if n < 2 {
+        return Vec::new();
+    }
+    let closed = (chain[0].point - chain[n - 1].point).length() < 1e-9;
+    let mut pts: Vec<IntersectionPoint> = chain.to_vec();
+    if closed {
+        let gaps = n - 1;
+        let clear = |g: usize| !reach.gap_meets(&chain[g], &chain[g + 1]);
+        let Some(g) =
+            (0..gaps).find(|&g| clear(g) && clear((g + gaps - 1) % gaps) && clear((g + 1) % gaps))
+        else {
+            // Every gap is near the region: the whole loop is the run.
+            return vec![pts];
+        };
+        // Start the loop at the far end of the clear gap.
+        pts = chain[g + 1..n].to_vec();
+        pts.extend_from_slice(&chain[1..=g + 1]);
+    }
+    let gaps = pts.len() - 1;
+    let meets: Vec<bool> = pts
+        .windows(2)
+        .map(|w| reach.gap_meets(&w[0], &w[1]))
+        .collect();
+    let keep: Vec<bool> = (0..gaps)
+        .map(|g| meets[g] || (g > 0 && meets[g - 1]) || (g + 1 < gaps && meets[g + 1]))
+        .collect();
+    let mut runs = Vec::new();
+    let mut g = 0;
+    while g < gaps {
+        if !keep[g] {
+            g += 1;
+            continue;
+        }
+        let first = g;
+        while g < gaps && keep[g] {
+            g += 1;
+        }
+        runs.push(pts[first..=g].to_vec());
+    }
+    runs
 }
 
 /// The parameter a boundary crossing holds fixed during refinement.

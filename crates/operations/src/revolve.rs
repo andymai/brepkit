@@ -614,6 +614,13 @@ fn revolution_torus_band(
 /// the revolution axis, its poles on the axis. Returns `Ok(None)` when the
 /// arc's centre is off the axis.
 ///
+/// A centre a millionth of the radius off the axis counts as on it, and the
+/// sphere is centred on the axis: a sketch's arc drawn about a point on a
+/// tilted axis lands that far off (9.6e-7 on a 16.5 arc, some 500 from the
+/// origin), and the band it then got was the NURBS one, which measured the
+/// solid a few parts in a million out and stopped booleans that take
+/// analytic surfaces only.
+///
 /// The band winds like the NURBS band (the chord swept about the axis, normal
 /// chord × sweep), read at the arc's midpoint half way through the sweep: the
 /// chord runs parallel to the arc there, and the sweep direction is defined
@@ -629,11 +636,11 @@ fn revolution_sphere_band(
     arc_mid: Point3,
 ) -> Result<Option<(FaceSurface, bool)>, brepkit_math::MathError> {
     let to_center = arc_center - axis_origin;
-    if (to_center - axis * to_center.dot(axis)).length() > 1e-9 {
+    let on_axis = axis_origin + axis * to_center.dot(axis);
+    if (arc_center - on_axis).length() > 1e-6 * arc_radius {
         return Ok(None);
     }
-    let surface =
-        brepkit_math::surfaces::SphericalSurface::with_axis(arc_center, arc_radius, axis)?;
+    let surface = brepkit_math::surfaces::SphericalSurface::with_axis(on_axis, arc_radius, axis)?;
     let half = seg_angle / 2.0;
     let chord = rotate_point(chord_to, axis_origin, axis, half)
         - rotate_point(chord_from, axis_origin, axis, half);
@@ -3894,6 +3901,25 @@ mod tests {
                 "full segmented revolve (ccw={ccw}) volume should be ~{expected:.2}, \
                  got {vol:.2} (rel_err={rel_err:.2e})"
             );
+        }
+    }
+
+    /// A quarter arc of radius 0.01 about a centre 8e-7 off the axis, 8e-5
+    /// of its radius, sweeps no sphere; 5e-9 off, under a millionth of its
+    /// radius, it does.
+    #[test]
+    fn a_small_arc_off_the_axis_by_more_than_a_millionth_of_its_radius_sweeps_no_sphere() {
+        let axis = Vec3::new(0.0, 0.0, 1.0);
+        let origin = Point3::new(0.0, 0.0, 0.0);
+        let r = 0.01;
+        let h = r * std::f64::consts::FRAC_1_SQRT_2;
+        for (off, sphere) in [(8e-7, false), (5e-9, true)] {
+            let centre = Point3::new(off, 0.0, 0.0);
+            let chord = (Point3::new(off + r, 0.0, 0.0), Point3::new(off, 0.0, r));
+            let mid = Point3::new(off + h, 0.0, h);
+            let band =
+                revolution_sphere_band(centre, r, chord, origin, axis, PI / 2.0, mid).unwrap();
+            assert_eq!(band.is_some(), sphere, "{off} off the axis");
         }
     }
 }

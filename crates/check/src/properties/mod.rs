@@ -71,42 +71,59 @@ pub fn solid_volume(
 
 /// [`solid_volume`] when every face integrates exactly, else `None`.
 ///
-/// A plane face integrates along its edges, a cylinder, cone or sphere face
-/// along its wires. `None` for a solid with a torus or NURBS face, or a face
-/// neither path reads (a wire that does not chain, a cone face across its
-/// apex), for a caller that would otherwise measure it from a mesh.
+/// Each face is read by [`exact_face_volume`]. `None` for a solid with a face
+/// that does not read, for a caller that would otherwise measure it from a
+/// mesh.
 ///
 /// # Errors
 ///
 /// Returns an error if any topology entity is missing.
 pub fn exact_solid_volume(topo: &Topology, solid: SolidId) -> Result<Option<f64>, CheckError> {
-    use brepkit_topology::face::FaceSurface;
-    let about = volume_anchor(topo, solid);
+    let about = Point3::new(0.0, 0.0, 0.0) + volume_anchor(topo, solid);
     let mut total = 0.0;
     for fid in brepkit_topology::explorer::solid_faces(topo, solid)? {
-        let face = topo.face(fid)?;
-        let sign = if face.is_reversed() { -1.0 } else { 1.0 };
-        let contribution = match face.surface() {
-            FaceSurface::Plane { normal, .. } => {
-                face_integrator::planar_face_by_edges(topo, fid, *normal * sign, about)?
-            }
-            FaceSurface::Cylinder(_)
-            | FaceSurface::Cone(_)
-            | FaceSurface::Sphere(_)
-            | FaceSurface::Torus(_) => boundary::curved_face_by_boundary(topo, face, sign, about)?,
-            FaceSurface::Nurbs(_) => {
-                match boundary::nurbs_face_over_domain(topo, face, sign, about)? {
-                    Some(whole) => Some(whole),
-                    None => boundary::nurbs_face_by_boundary(topo, face, sign, about)?,
-                }
-            }
-        };
-        let Some(contribution) = contribution else {
+        let Some(volume) = exact_face_volume(topo, fid, about)? else {
             return Ok(None);
         };
-        total += contribution.volume;
+        total += volume;
     }
     Ok(Some(total))
+}
+
+/// The volume one face adds to its solid's, integrated exactly.
+///
+/// That is `(1/3) ∫ (P − about)·N dA` over the face under its outward
+/// normal: a plane face along its edges, any other face along its wires (a
+/// NURBS face that is its whole patch over its domain). `None` for a face
+/// neither path reads (a wire that does not chain, a cone face across its
+/// apex, a NURBS face on a surface that closes on itself or has a pole).
+///
+/// # Errors
+///
+/// Returns an error if any topology entity is missing.
+pub fn exact_face_volume(
+    topo: &Topology,
+    face_id: FaceId,
+    about: Point3,
+) -> Result<Option<f64>, CheckError> {
+    use brepkit_topology::face::FaceSurface;
+    let about = about - Point3::new(0.0, 0.0, 0.0);
+    let face = topo.face(face_id)?;
+    let sign = if face.is_reversed() { -1.0 } else { 1.0 };
+    let contribution = match face.surface() {
+        FaceSurface::Plane { normal, .. } => {
+            face_integrator::planar_face_by_edges(topo, face_id, *normal * sign, about)?
+        }
+        FaceSurface::Cylinder(_)
+        | FaceSurface::Cone(_)
+        | FaceSurface::Sphere(_)
+        | FaceSurface::Torus(_) => boundary::curved_face_by_boundary(topo, face, sign, about)?,
+        FaceSurface::Nurbs(_) => match boundary::nurbs_face_over_domain(topo, face, sign, about)? {
+            Some(whole) => Some(whole),
+            None => boundary::nurbs_face_by_boundary(topo, face, sign, about)?,
+        },
+    };
+    Ok(contribution.map(|c| c.volume))
 }
 
 /// The point [`solid_volume`] sums about: the origin, as it always has, unless
@@ -1145,9 +1162,9 @@ mod tests {
                 for &(v0, v1) in &panels {
                     for gv in rule {
                         let v = (0.5 * (v1 - v0)).madd(gv.x, 0.5 * (v0 + v1));
-                        let d = surface.derivatives(u, v, 1);
+                        let d = surface.first_derivatives(u, v);
                         let w = 0.25 * (u1 - u0) * (v1 - v0) * gu.w * gv.w;
-                        brute += w * d[1][0].cross(d[0][1]).length();
+                        brute += w * d.1.cross(d.2).length();
                     }
                 }
             }

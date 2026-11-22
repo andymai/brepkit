@@ -15,7 +15,7 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
-use brepkit_topology::edge::EdgeId;
+use brepkit_topology::edge::{EdgeCurve, EdgeId};
 use brepkit_topology::face::{Face, FaceId, FaceSurface};
 use brepkit_topology::shell::Shell;
 use brepkit_topology::solid::{Solid, SolidId};
@@ -168,6 +168,21 @@ pub fn build_solid_with_origins(
     if shells.is_empty() {
         return Err(AlgoError::AssemblyFailed("no shells formed".into()));
     }
+
+    // A shell of faces lying on each other in pairs, facing apart over the
+    // same edges, holds no material: closed by edge count, its volume is
+    // zero and its growth/hole reading the sign of rounding.
+    let count = shells.len();
+    let shells: Vec<Vec<FaceId>> = shells
+        .into_iter()
+        .filter(|shell| {
+            let fold = count > 1 && is_fold_shell(topo, shell);
+            if fold {
+                log::debug!("BuilderSolid: dropping a {}-face fold shell", shell.len());
+            }
+            !fold
+        })
+        .collect();
 
     // Phase 3: Classify Growth vs Hole
     let (growth, holes) = perform_areas(topo, &shells);
@@ -985,6 +1000,26 @@ fn perform_loops(topo: &Topology, faces: &[FaceId]) -> Result<Vec<Vec<FaceId>>, 
         .iter()
         .filter_map(|&fid| Some((fid, face_edge_keys(topo, fid).ok()?)))
         .collect();
+    // The edges behind each face's keys: two edges can share a key (a hole's
+    // arc and the straight edge across its opening join the same two
+    // points), and a neighbour across the very edge comes before one that
+    // only shares its ends.
+    let mut key_edges: HashMap<(FaceId, VPair), Vec<brepkit_topology::edge::EdgeId>> =
+        HashMap::new();
+    let mut face_own_edges: HashMap<FaceId, Vec<brepkit_topology::edge::EdgeId>> = HashMap::new();
+    for &fid in faces {
+        let face = topo.face(fid)?;
+        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            for oe in topo.wire(wid)?.edges() {
+                let edge = topo.edge(oe.edge())?;
+                let qs = quantize_point(topo.vertex(edge.start())?.point(), MERGE_TOL);
+                let qe = quantize_point(topo.vertex(edge.end())?.point(), MERGE_TOL);
+                let key = if qs <= qe { (qs, qe) } else { (qe, qs) };
+                key_edges.entry((fid, key)).or_default().push(oe.edge());
+                face_own_edges.entry(fid).or_default().push(oe.edge());
+            }
+        }
+    }
 
     for &start_face in faces {
         if visited.contains(&start_face) {
@@ -996,6 +1031,13 @@ fn perform_loops(topo: &Topology, faces: &[FaceId]) -> Result<Vec<Vec<FaceId>>, 
 
         // Track edges already filled (2 faces) in this shell
         let mut shell_edge_count: HashMap<VPair, u32> = HashMap::new();
+        // The same count per edge, for faces across the very edge.
+        let mut shell_own_count: HashMap<brepkit_topology::edge::EdgeId, u32> = HashMap::new();
+        let count_own = |fid: FaceId, counts: &mut HashMap<brepkit_topology::edge::EdgeId, u32>| {
+            for e in face_own_edges.get(&fid).into_iter().flatten() {
+                *counts.entry(*e).or_default() += 1;
+            }
+        };
 
         visited.insert(start_face);
         shell.push(start_face);
@@ -1006,6 +1048,7 @@ fn perform_loops(topo: &Topology, faces: &[FaceId]) -> Result<Vec<Vec<FaceId>>, 
                 *shell_edge_count.entry(*key).or_default() += 1;
             }
         }
+        count_own(start_face, &mut shell_own_count);
 
         while let Some(current) = queue.pop_front() {
             let Some(keys) = face_edges.get(&current) else {
@@ -1013,11 +1056,6 @@ fn perform_loops(topo: &Topology, faces: &[FaceId]) -> Result<Vec<Vec<FaceId>>, 
             };
 
             for key in keys {
-                // Skip edges already manifold in this shell
-                if shell_edge_count.get(key).copied().unwrap_or(0) >= 2 {
-                    continue;
-                }
-
                 let Some(candidates) = edge_map.get(key) else {
                     continue;
                 };
@@ -1032,6 +1070,30 @@ fn perform_loops(topo: &Topology, faces: &[FaceId]) -> Result<Vec<Vec<FaceId>>, 
                     continue;
                 }
 
+                // A face across the very edge joins whatever the key's count:
+                // the count is per pair of ends, and another edge on the same
+                // ends (the box floor's chord across a hole's opening beside
+                // the hole's arc) can fill it first.
+                let current_edges = key_edges.get(&(current, *key));
+                let across: Vec<FaceId> = unvisited
+                    .iter()
+                    .copied()
+                    .filter(|&f| {
+                        key_edges.get(&(f, *key)).is_some_and(|es| {
+                            current_edges.is_some_and(|cs| {
+                                es.iter().any(|e| {
+                                    cs.contains(e)
+                                        && shell_own_count.get(e).copied().unwrap_or(0) < 2
+                                })
+                            })
+                        })
+                    })
+                    .collect();
+                // Skip edges already manifold in this shell
+                if across.is_empty() && shell_edge_count.get(key).copied().unwrap_or(0) >= 2 {
+                    continue;
+                }
+                let unvisited = if across.is_empty() { unvisited } else { across };
                 let selected = if unvisited.len() == 1 {
                     unvisited[0]
                 } else if let Some((start, end)) = edge_positions.get(key) {
@@ -1050,6 +1112,7 @@ fn perform_loops(topo: &Topology, faces: &[FaceId]) -> Result<Vec<Vec<FaceId>>, 
                         *shell_edge_count.entry(*k).or_default() += 1;
                     }
                 }
+                count_own(selected, &mut shell_own_count);
             }
         }
 
@@ -1553,6 +1616,50 @@ fn shell_edge_point(topo: &Topology, faces: &[FaceId]) -> Option<Point3> {
     let b = topo.vertex(edge.end()).ok()?.point();
     let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
     Some(edge.curve().evaluate_with_endpoints(0.5 * (t0 + t1), a, b))
+}
+
+/// Whether every face of `shell` pairs off with another lying on it over
+/// the same edges, the two facing apart: a fold of no thickness.
+fn is_fold_shell(topo: &Topology, shell: &[FaceId]) -> bool {
+    if shell.len() < 2 || !shell.len().is_multiple_of(2) {
+        return false;
+    }
+    let edge_set = |fid: FaceId| -> Option<Vec<EdgeId>> {
+        let face = topo.face(fid).ok()?;
+        let mut edges = Vec::new();
+        for wire in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            edges.extend(topo.wire(wire).ok()?.edges().iter().map(OrientedEdge::edge));
+        }
+        edges.sort_unstable();
+        Some(edges)
+    };
+    let Some(sets): Option<Vec<Vec<EdgeId>>> = shell.iter().map(|&f| edge_set(f)).collect() else {
+        return false;
+    };
+    let tol = brepkit_math::tolerance::Tolerance::new();
+    let mut paired = vec![false; shell.len()];
+    for i in 0..shell.len() {
+        if paired[i] {
+            continue;
+        }
+        let Ok(fi) = topo.face(shell[i]) else {
+            return false;
+        };
+        let twin = (i + 1..shell.len()).find(|&j| {
+            !paired[j]
+                && sets[i] == sets[j]
+                && topo.face(shell[j]).is_ok_and(|fj| {
+                    super::same_domain::surfaces_same_domain(fi.surface(), fj.surface(), tol)
+                        .is_some_and(|same_dir| same_dir == (fi.is_reversed() != fj.is_reversed()))
+                })
+        });
+        let Some(j) = twin else {
+            return false;
+        };
+        paired[i] = true;
+        paired[j] = true;
+    }
+    true
 }
 
 /// Classify shells as Growth (outer) or Hole (inner).
@@ -2082,6 +2189,65 @@ fn excise_out_and_back_spurs(
     }
 }
 
+/// The seam of a face whose outer wire is its one closed rim and a single
+/// edge from the rim's vertex run out and back to one of `poles`: a dome
+/// opened along a seam to its pole.
+fn dome_seam(
+    topo: &Topology,
+    face: &brepkit_topology::face::Face,
+    poles: &[Point3],
+) -> Option<brepkit_topology::edge::EdgeId> {
+    let wire = topo.wire(face.outer_wire()).ok()?;
+    let [a, b, c] = wire.edges() else {
+        return None;
+    };
+    let closed = |oe: &OrientedEdge| topo.edge(oe.edge()).is_ok_and(|e| e.start() == e.end());
+    // The rim sits between the seam's two runs, wherever the wire starts.
+    let (rim, out, back) = [(b, c, a), (c, a, b), (a, b, c)]
+        .into_iter()
+        .find(|(rim, _, _)| closed(rim))?;
+    let seam = topo.edge(out.edge()).ok()?;
+    let rim_vertex = topo.edge(rim.edge()).ok()?.start();
+    let tip = if seam.start() == rim_vertex {
+        seam.end()
+    } else if seam.end() == rim_vertex {
+        seam.start()
+    } else {
+        return None;
+    };
+    let tip = topo.vertex(tip).ok()?.point();
+    (out.edge() == back.edge()
+        && out.is_forward() != back.is_forward()
+        && tip != topo.vertex(rim_vertex).ok()?.point()
+        && poles.iter().any(|&p| (tip - p).length() < MERGE_TOL))
+    .then_some(out.edge())
+}
+
+/// The points a B-spline surface collapses to: each boundary row or column
+/// of its control net whose points all coincide.
+fn nurbs_poles(surface: &brepkit_math::nurbs::surface::NurbsSurface) -> Vec<Point3> {
+    let net = surface.control_points();
+    let (Some(first), Some(last)) = (net.first(), net.last()) else {
+        return Vec::new();
+    };
+    let column = |j: usize| net.iter().filter_map(move |row| row.get(j).copied());
+    let width = first.len();
+    let rows: [Vec<Point3>; 4] = [
+        first.clone(),
+        last.clone(),
+        column(0).collect(),
+        column(width.saturating_sub(1)).collect(),
+    ];
+    rows.into_iter()
+        .filter_map(|row| {
+            let p = *row.first()?;
+            row.iter()
+                .all(|&q| (q - p).length() < MERGE_TOL)
+                .then_some(p)
+        })
+        .collect()
+}
+
 /// A pointed cone face's seam, or a spherical cap's: the line or meridian
 /// its outer wire runs up to the apex or pole and straight back down, which
 /// reads like a spur but is the cut the surface is opened along.
@@ -2096,6 +2262,9 @@ fn pointed_cone_seam(topo: &Topology, fid: FaceId) -> Option<brepkit_topology::e
             let pole = sphere.z_axis() * sphere.radius();
             vec![sphere.center() + pole, sphere.center() - pole]
         }
+        // A B-spline dome read from a file: one closed rim, its seam run up
+        // to the pole and back down.
+        FaceSurface::Nurbs(surface) => return dome_seam(topo, face, &nurbs_poles(surface)),
         _ => return None,
     };
     topo.wire(face.outer_wire())
@@ -3467,6 +3636,24 @@ fn split_arc_edges_at_collinear_vertices(
     let positions: Vec<Point3> = verts.iter().map(|&(_, p)| p).collect();
     let grid = PointGrid::new(&positions, snap);
 
+    // The open circle and ellipse arcs, by their two ends and middle: a full
+    // rim cut once may match a mate rim already in two arcs (below).
+    let open_arcs: Vec<(Point3, Point3, Point3)> = arc_edges
+        .iter()
+        .filter(|(_, _, _, sp, ep, curve)| {
+            (*ep - *sp).length() >= snap
+                && matches!(curve, EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_))
+        })
+        .map(|(_, _, _, sp, ep, curve)| {
+            let (t0, t1) = curve.domain_with_endpoints(*sp, *ep);
+            (
+                *sp,
+                *ep,
+                curve.evaluate_with_endpoints(0.5 * (t0 + t1), *sp, *ep),
+            )
+        })
+        .collect();
+
     let mut replacements: HashMap<EdgeId, Vec<OrientedEdge>> = HashMap::new();
     for (eid, sv, ev, sp, ep, curve) in arc_edges {
         // A closed (full) circle/ellipse CAN be refined — at global vertices
@@ -3533,10 +3720,23 @@ fn split_arc_edges_at_collinear_vertices(
                     amax.z().max(q.z()),
                 );
             }
+            // Every point of the curve lies in one of its pieces' boxes: a
+            // vertex farther than `snap` from all of them is farther from the
+            // curve, and the search below would leave it out. On a long
+            // section through a dense part most candidates are such, each
+            // 80 evaluations of the curve.
+            let pieces = crate::pave_filler::phase_ef::curve_piece_boxes(&curve, sp, ep, t0, t1);
             let mut cuts: Vec<(f64, VertexId)> = Vec::new();
             for ci in grid.box_candidates(amin, amax, snap * 2.0) {
                 let (vid, p) = verts[ci];
                 if (p - sp).length() < snap || (p - ep).length() < snap {
+                    continue;
+                }
+                if pieces.as_ref().is_some_and(|boxes| {
+                    boxes
+                        .iter()
+                        .all(|b| b.distance_squared_to_point(p) > snap * snap)
+                }) {
                     continue;
                 }
                 let mut best_k = 0;
@@ -3665,7 +3865,34 @@ fn split_arc_edges_at_collinear_vertices(
             }
             cuts.push((a_branch, vid));
         }
-        if cuts.is_empty() || (is_closed && cuts.len() < 2) {
+        // A single cut halves a closed rim only where a mate rim already runs
+        // as both halves, two arcs of this curve between its seam vertex and
+        // the cut (a wall's rim split where a section ends on it, its cap's
+        // rim whole). Split at any one vertex on it, a rim whose mate is cut
+        // elsewhere too, or not at all, would lose its partner.
+        let halved_mate = || {
+            let (_, cut_v) = cuts[0];
+            let Ok(cut) = topo
+                .vertex(cut_v)
+                .map(brepkit_topology::vertex::Vertex::point)
+            else {
+                return false;
+            };
+            let mut halves: Vec<Point3> = Vec::new();
+            for &(a, b, mid) in &open_arcs {
+                let ends = ((a - sp).length() < snap && (b - cut).length() < snap)
+                    || ((b - sp).length() < snap && (a - cut).length() < snap);
+                let on = curve.evaluate_with_endpoints(project_angle_on_curve(&curve, mid), sp, ep);
+                if ends
+                    && (on - mid).length() < snap
+                    && halves.iter().all(|&h| (h - mid).length() >= snap)
+                {
+                    halves.push(mid);
+                }
+            }
+            halves.len() == 2
+        };
+        if cuts.is_empty() || (is_closed && cuts.len() < 2 && !halved_mate()) {
             continue;
         }
         // Total order: angle then vertex index (the `vert_at` HashMap iteration
@@ -3738,6 +3965,7 @@ fn separate_arcs_sharing_ends(
     // A ball's equator is chords standing for arcs of its circle, which the
     // merge takes for the arcs they stand for.
     let mut on_sphere: HashSet<EdgeId> = HashSet::new();
+    let mut edge_faces: HashMap<EdgeId, Vec<FaceId>> = HashMap::new();
     let mut faces_of: HashMap<EdgeId, Vec<(usize, bool)>> = HashMap::new();
     for (fi, &fid) in face_ids.iter().enumerate() {
         let ball = matches!(topo.face(fid)?.surface(), FaceSurface::Sphere(_));
@@ -3745,6 +3973,7 @@ fn separate_arcs_sharing_ends(
             if ball {
                 on_sphere.insert(edge_id);
             }
+            edge_faces.entry(edge_id).or_default().push(fid);
             faces_of.entry(edge_id).or_default().push((fi, forward));
             let edge = topo.edge(edge_id)?;
             if !seen.insert(edge_id) || edge.start() == edge.end() {
@@ -3779,12 +4008,44 @@ fn separate_arcs_sharing_ends(
         if group.len() < 2 || group.iter().all(|&e| is_line(topo, e)) {
             continue;
         }
-        let chord = |e: &EdgeId| is_line(topo, *e) && on_sphere.contains(e);
+        // A coplanar face's section along its partner's curved edge reaches
+        // assembly as that edge's chord, on a plane the curve lies in: it
+        // stands for the curve, as a ball's chord does for its arc. A chord
+        // on a face that a curve of the group bounds too is a section across
+        // that face, and stays apart.
+        let stands_for = |e: EdgeId| -> Option<EdgeId> {
+            if !is_line(topo, e) {
+                return None;
+            }
+            let faces = edge_faces.get(&e)?;
+            let crosses = group.iter().any(|&c| {
+                !is_line(topo, c)
+                    && edge_faces
+                        .get(&c)
+                        .is_some_and(|fs| fs.iter().any(|f| faces.contains(f)))
+            });
+            if crosses {
+                return None;
+            }
+            group
+                .iter()
+                .copied()
+                .find(|&c| !is_line(topo, c) && curve_in_planes(topo, faces, c))
+        };
+        let chord =
+            |e: &EdgeId| is_line(topo, *e) && (on_sphere.contains(e) || stands_for(*e).is_some());
         let members: Vec<EdgeId> = group.iter().copied().filter(|e| !chord(e)).collect();
         let mut paths = paths_among(topo, &members, &faces_of)?;
         // A chord of a ball's equator joins the arc it stands for: the path
         // with an arc whose middle lies nearest its own.
         for &e in group.iter().filter(|e| chord(e)) {
+            if !on_sphere.contains(&e)
+                && let Some(c) = stands_for(e)
+                && let Some(path) = paths.iter_mut().find(|path| path.contains(&c))
+            {
+                path.push(e);
+                continue;
+            }
             let at = mid_of(topo, e)?;
             let mut nearest: Option<(f64, usize)> = None;
             for (k, path) in paths.iter().enumerate() {
@@ -3815,6 +4076,16 @@ fn separate_arcs_sharing_ends(
             paths.remove(seam);
         }
         if paths.len() < 2 {
+            continue;
+        }
+        // Pieces of one face's own loop between the same two points (a
+        // B-spline rim cut short of a turn and the long way round) are no
+        // two curves the merge could weld; their partner elsewhere may be
+        // the rim whole, which the pieces split here would no longer rejoin.
+        let mut owners = group.iter().filter_map(|e| edge_faces.get(e)).flatten();
+        if let Some(first) = owners.next()
+            && owners.all(|f| f == first)
+        {
             continue;
         }
         let mut chords: Vec<(Point3, Vec3)> = Vec::new();
@@ -4118,6 +4389,29 @@ fn lies_on_seam_of(topo: &Topology, source: FaceId, edge: EdgeId) -> Result<bool
         }
     }
     Ok(false)
+}
+
+/// Whether every face of `faces` is a plane that the curve of `curve` lies
+/// in, read at its ends and at five points between.
+fn curve_in_planes(topo: &Topology, faces: &[FaceId], curve: EdgeId) -> bool {
+    const IN_PLANE: f64 = 1e-7;
+    let Ok(edge) = topo.edge(curve) else {
+        return false;
+    };
+    let Ok(at) = edge_path(topo, edge) else {
+        return false;
+    };
+    !faces.is_empty()
+        && faces.iter().all(
+            |f| match topo.face(*f).map(brepkit_topology::face::Face::surface) {
+                Ok(FaceSurface::Plane { normal, d }) => (0..=6).all(|k| {
+                    let p = at(f64::from(k) / 6.0);
+                    let off = normal.dot(Vec3::new(p.x(), p.y(), p.z())) - d;
+                    off.abs() <= IN_PLANE * d.abs().max(1.0)
+                }),
+                _ => false,
+            },
+        )
 }
 
 /// The curves of the two pieces of an edge from `sp` to `ep`, split at its
@@ -4503,6 +4797,26 @@ fn project_angle_on_curve(curve: &brepkit_topology::edge::EdgeCurve, p: Point3) 
     }
 }
 
+/// An edge's middle and size, as `merge_duplicate_edges` compares copies.
+type EdgeMiddle = Option<(Point3, f64, u64)>;
+
+/// A fitted curve's identity: its control points, weights and knots, so
+/// edges cut from one curve key alike (never 0, which marks an exact curve).
+fn nurbs_key(nc: &brepkit_math::nurbs::curve::NurbsCurve) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    for p in nc.control_points() {
+        [p.x(), p.y(), p.z()].map(f64::to_bits).hash(&mut h);
+    }
+    for w in nc.weights() {
+        w.to_bits().hash(&mut h);
+    }
+    for k in nc.knots() {
+        k.to_bits().hash(&mut h);
+    }
+    h.finish().max(1)
+}
+
 /// Merge duplicate edges across selected faces by quantized endpoint position.
 ///
 /// For each group of edges with the same quantized start/end positions,
@@ -4534,6 +4848,12 @@ fn merge_duplicate_edges(topo: &mut Topology, face_ids: &mut [FaceId]) -> Result
                 });
             }
         }
+    }
+
+    // How many wire uses each edge has.
+    let mut uses: HashMap<EdgeId, usize> = HashMap::new();
+    for entry in &entries {
+        *uses.entry(entry.edge_id).or_default() += 1;
     }
 
     // Find groups where multiple DIFFERENT EdgeIds share the same qpair.
@@ -4603,27 +4923,121 @@ fn merge_duplicate_edges(topo: &mut Topology, face_ids: &mut [FaceId]) -> Result
             continue; // Only one unique edge — no merge needed
         }
 
-        // Pick the first (lowest index) as canonical, or the arc a ball's
-        // equator chords stand for.
+        // Edges sharing both ends are one edge only when they also run
+        // through the same middle: a hole's arc and the straight edge across
+        // it (a box's top crossing the hole) join the same two points, and
+        // merged they give the arc's wall and the box's strip one edge set,
+        // which then reads as a doubled face and drops both.
+        // The middle of an edge, with the edge's size and, for a fitted
+        // curve, its curve (0 for an exact one); `None` where it cannot be
+        // trusted: a closed edge's middle hangs on its own parameter origin,
+        // and a fitted curve's span may resolve to its whole parent curve.
+        // Those keep matching by their ends alone. Fitted edges compare
+        // middles only on the very same curve, where two pieces between the
+        // same two points (a closed section's two halves) are two edges; two
+        // fits of one section, one per face, read their spans each its own
+        // way and still match by their ends.
+        let middle = |e: EdgeId| -> Result<EdgeMiddle, AlgoError> {
+            let edge = topo.edge(e)?;
+            let sp = topo.vertex(edge.start())?.point();
+            let ep = topo.vertex(edge.end())?.point();
+            if quantize_point(sp, tol) == quantize_point(ep, tol) {
+                return Ok(None);
+            }
+            let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
+            let curve_key = if let EdgeCurve::NurbsCurve(nc) = edge.curve() {
+                let (d0, d1) = nc.domain();
+                if (t1 - t0).abs() >= (d1 - d0) * (1.0 - 1e-9) {
+                    return Ok(None);
+                }
+                nurbs_key(nc)
+            } else {
+                0
+            };
+            let mid = edge
+                .curve()
+                .evaluate_with_endpoints(0.5 * (t0 + t1), sp, ep);
+            Ok(Some((
+                mid,
+                (ep - sp).length().max((mid - sp).length()),
+                curve_key,
+            )))
+        };
+        // How far apart two copies' middles may lie: a quarter of the edge's
+        // size, so a faceted ball's chord still joins the exact arc it stands
+        // for (2.5% apart at 32 segments), while an arc over a hole and the
+        // straight edge across it (98%) stay apart.
+        let alongside = |a: EdgeMiddle, b: EdgeMiddle| match (a, b) {
+            (Some((ma, sa, ka)), Some((mb, sb, kb))) if ka == kb => {
+                (ma - mb).length() <= 0.25 * sa.max(sb) + 10.0 * tol
+            }
+            _ => true,
+        };
+        // Copies of one edge share their middle outright.
+        let same = |a: EdgeMiddle, b: EdgeMiddle| match (a, b) {
+            (Some((ma, sa, ka)), Some((mb, sb, kb))) if ka == kb => {
+                (ma - mb).length() <= 1e-4 * sa.max(sb) + 10.0 * tol
+            }
+            _ => true,
+        };
+        // Copies first; then a set of copies that still lacks a partner (an
+        // odd number of uses) joins one alongside it that lacks one too. Two
+        // sets each already paired are two edges: a hole's short rim arc and
+        // a box edge's chord across the opening, each shared by its own two
+        // faces, would otherwise weld into one edge of four faces.
+        let mut sets: Vec<(EdgeId, EdgeMiddle, Vec<EdgeId>, usize)> = Vec::new();
+        for &e in &unique {
+            let mid = middle(e)?;
+            let n = uses.get(&e).copied().unwrap_or(0);
+            if let Some(set) = sets.iter_mut().find(|set| same(mid, set.1)) {
+                set.2.push(e);
+                set.3 += n;
+            } else {
+                sets.push((e, mid, vec![e], n));
+            }
+        }
+        // The arc a ball's equator chords stand for is the canonical edge,
+        // so its set goes first, and every chord joins it whatever its uses:
+        // the chords are the arc, faceted.
         let chords_of_arc = unique.iter().filter(|&&e| is_arc(e)).count() == 1
             && unique
                 .iter()
                 .all(|&e| is_arc(e) || (is_line(e) && on_sphere.contains(&e)));
-        let canonical = if chords_of_arc {
-            unique
-                .iter()
-                .copied()
-                .find(|&e| is_arc(e))
-                .unwrap_or(unique[0])
-        } else {
-            unique[0]
-        };
-        let canon_start = topo.edge(canonical)?.start();
-        let canon_end = topo.edge(canonical)?.end();
-        let canon_qs = quantize_point(topo.vertex(canon_start)?.point(), tol);
-        let canon_qe = quantize_point(topo.vertex(canon_end)?.point(), tol);
-
-        for &dup in unique.iter().filter(|&&e| e != canonical) {
+        if chords_of_arc {
+            sets.sort_by_key(|set| !is_arc(set.0));
+        }
+        let mut canonicals: Vec<(EdgeId, EdgeMiddle, usize)> = Vec::new();
+        let mut joins: Vec<(EdgeId, EdgeId)> = Vec::new();
+        for (head, mid, members, n) in sets {
+            let into = if chords_of_arc {
+                canonicals.first_mut()
+            } else if n % 2 == 1 {
+                canonicals
+                    .iter_mut()
+                    .find(|(_, cm, cn)| *cn % 2 == 1 && alongside(mid, *cm))
+            } else {
+                None
+            };
+            let canonical = if let Some(c) = into {
+                c.2 += n;
+                c.0
+            } else {
+                canonicals.push((head, mid, n));
+                head
+            };
+            joins.extend(
+                members
+                    .into_iter()
+                    .filter(|&m| m != canonical)
+                    .map(|m| (m, canonical)),
+            );
+        }
+        for (e, canonical) in joins {
+            let dup = e;
+            let canon_start = topo.edge(canonical)?.start();
+            let canon_end = topo.edge(canonical)?.end();
+            let canon_qs = quantize_point(topo.vertex(canon_start)?.point(), tol);
+            let canon_qe = quantize_point(topo.vertex(canon_end)?.point(), tol);
             let dup_edge = topo.edge(dup)?;
             let dup_qs = quantize_point(topo.vertex(dup_edge.start())?.point(), tol);
             let dup_qe = quantize_point(topo.vertex(dup_edge.end())?.point(), tol);
@@ -5523,6 +5937,63 @@ mod tests {
             brepkit_topology::edge::EdgeCurve::Line,
             bulge
         ));
+    }
+
+    /// One face bounded by a B-spline rim cut in two near each other, the
+    /// short piece and the long way round between the same two points: both
+    /// are the face's own, so neither is split (their partner on the face
+    /// beyond can be the rim whole, which split pieces no longer rejoin: a
+    /// cut through such a rim came back with four free edges).
+    #[test]
+    fn a_face_s_own_rim_pieces_are_not_separated() {
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::Wire;
+
+        let arc = |from: f64, to: f64| {
+            let pts: Vec<Point3> = (0..=24)
+                .map(|i| {
+                    let t = (to - from).madd(f64::from(i) / 24.0, from);
+                    Point3::new(t.cos(), t.sin(), 0.0)
+                })
+                .collect();
+            EdgeCurve::NurbsCurve(brepkit_math::nurbs::fitting::interpolate(&pts, 3).unwrap())
+        };
+        let mut topo = Topology::new();
+        let (t0, t1) = (0.0_f64, 0.3_f64);
+        let a = topo.add_vertex(Vertex::new(Point3::new(t0.cos(), t0.sin(), 0.0), 1e-7));
+        let b = topo.add_vertex(Vertex::new(Point3::new(t1.cos(), t1.sin(), 0.0), 1e-7));
+        let short = topo.add_edge(Edge::new(a, b, arc(t0, t1)));
+        let long = topo.add_edge(Edge::new(b, a, arc(t1, std::f64::consts::TAU)));
+        let wire = topo.add_wire(
+            Wire::new(
+                vec![
+                    OrientedEdge::new(short, true),
+                    OrientedEdge::new(long, true),
+                ],
+                true,
+            )
+            .unwrap(),
+        );
+        let disc = topo.add_face(Face::new(
+            wire,
+            vec![],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: 0.0,
+            },
+        ));
+        let mut face_ids = vec![disc];
+        let mut unsourced = vec![None; face_ids.len()];
+        let welds = Welds::of(&topo, &face_ids).unwrap();
+        separate_arcs_sharing_ends(&mut topo, &mut face_ids, &mut unsourced, &welds).unwrap();
+        let edges: Vec<EdgeId> = face_edge_uses(&topo, face_ids[0])
+            .unwrap()
+            .into_iter()
+            .map(|(e, _)| e)
+            .collect();
+        assert_eq!(edges, vec![short, long]);
     }
 
     /// Two faces each bounded by a chord and a spline that crosses it at its
@@ -6810,6 +7281,25 @@ mod tests {
                 if out > 0.0 { "out" } else { "in" }
             );
         }
+    }
+
+    /// A square and its twin over the same edges, facing the other way, is a
+    /// fold of no thickness; the same square twice facing one way, or a
+    /// cube, is not.
+    #[test]
+    fn a_face_and_its_reversed_twin_are_a_fold() {
+        let mut topo = Topology::new();
+        let square = brepkit_topology::test_utils::make_unit_square_face(&mut topo);
+        let snapshot = topo.face(square).unwrap().clone();
+        let mut twin = snapshot.clone();
+        twin.set_reversed(true);
+        let twin = topo.add_face(twin);
+        assert!(is_fold_shell(&topo, &[square, twin]));
+        let copy = topo.add_face(snapshot);
+        assert!(!is_fold_shell(&topo, &[square, copy]));
+        let solid = brepkit_topology::test_utils::make_unit_cube_manifold(&mut topo);
+        let faces = brepkit_topology::explorer::solid_faces(&topo, solid).unwrap();
+        assert!(!is_fold_shell(&topo, &faces));
     }
 
     #[test]

@@ -787,6 +787,14 @@ pub fn surfaces_apart(s1: &NurbsSurface, s2: &NurbsSurface, margin: f64) -> bool
     if !holds_its_hull(s1) || !holds_its_hull(s2) {
         return false;
     }
+    // Each Bezier patch lies in its knot span's control box: spans whose
+    // boxes all part leave every pair of patches parted at the first test
+    // below, without splitting either surface into patches.
+    if let (Some(a), Some(b)) = (s1.span_index(), s2.span_index())
+        && a.boxes_apart(b, margin)
+    {
+        return true;
+    }
     let (Ok(patches_a), Ok(patches_b)) = (s1.bezier_patches(), s2.bezier_patches()) else {
         return false;
     };

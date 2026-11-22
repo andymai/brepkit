@@ -232,10 +232,18 @@ fn pave_co_endpoint_curves(
                 let Some(&[pb_id]) = arena.edge_pave_blocks.get(&edge_id).map(Vec::as_slice) else {
                     continue;
                 };
-                let unsplit = arena
-                    .pave_blocks
-                    .get(pb_id)
-                    .is_some_and(|pb| pb.extra_paves.is_empty());
+                // A pave at one of the block's own ends (a crossing with
+                // another edge there) splits nothing: the copy is whole, and
+                // left so it would not split as its twin does.
+                let unsplit = arena.pave_blocks.get(pb_id).is_some_and(|pb| {
+                    let ends = [
+                        arena.resolve_vertex(pb.start.vertex),
+                        arena.resolve_vertex(pb.end.vertex),
+                    ];
+                    pb.extra_paves
+                        .iter()
+                        .all(|pave| ends.contains(&arena.resolve_vertex(pave.vertex)))
+                });
                 if !(curved && unsplit) {
                     continue;
                 }
@@ -748,11 +756,13 @@ fn split_sections_at_rim_vertices(
         // A whole circle splits only into arcs under half a turn, at least
         // three of them: an open arc's pcurve runs the short way round, and
         // two arcs between the same two vertices would weld into one edge.
+        // An arc a hair under half a turn (cut at two vertices opposite each
+        // other) reads either way round too.
         if whole
             && (paves.len() < 4
                 || paves
                     .windows(2)
-                    .any(|w| w[1].parameter - w[0].parameter >= std::f64::consts::PI))
+                    .any(|w| w[1].parameter - w[0].parameter >= std::f64::consts::PI - 1e-9))
         {
             continue;
         }

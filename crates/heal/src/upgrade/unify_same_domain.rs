@@ -404,85 +404,91 @@ fn merge_split_edges(
         .collect::<Result<_, _>>()?;
     let bad_before = unpaired_edge_count(topo, &faces)?;
 
+    // edge -> the faces and wires using it, and vertex -> the edges at it,
+    // each in the order the wires first reach them, kept up to date as
+    // edges are joined. A join changes only the edges at its pair's far
+    // ends, so only those vertices are looked at again; the rest are taken
+    // once, in order of their index, as a scan from the first after every
+    // join would take them.
+    let mut uses: HashMap<EdgeId, Vec<(FaceId, WireId)>> = HashMap::new();
+    let mut edge_order: Vec<EdgeId> = Vec::new();
+    for &(fid, wid) in &wires {
+        for oe in topo.wire(wid)?.edges() {
+            let list = uses.entry(oe.edge()).or_default();
+            if list.is_empty() {
+                edge_order.push(oe.edge());
+            }
+            list.push((fid, wid));
+        }
+    }
+    let mut at_vertex: HashMap<VertexId, Vec<EdgeId>> = HashMap::new();
+    for &eid in &edge_order {
+        let e = topo.edge(eid)?;
+        for v in [e.start(), e.end()] {
+            let list = at_vertex.entry(v).or_default();
+            if !list.contains(&eid) {
+                list.push(eid);
+            }
+        }
+    }
+    let face_of: HashMap<WireId, FaceId> = wires.iter().map(|&(f, w)| (w, f)).collect();
+    let mut queue: std::collections::BTreeMap<usize, VertexId> =
+        at_vertex.keys().map(|&v| (v.index(), v)).collect();
+
     let mut merged = 0usize;
     let mut skip: HashSet<VertexId> = HashSet::new();
-    loop {
-        // edge -> the faces and wires using it; vertex -> the edges at it
-        let mut uses: HashMap<EdgeId, Vec<(FaceId, WireId)>> = HashMap::new();
-        let mut at_vertex: HashMap<VertexId, Vec<EdgeId>> = HashMap::new();
-        for &(fid, wid) in &wires {
-            for oe in topo.wire(wid)?.edges() {
-                uses.entry(oe.edge()).or_default().push((fid, wid));
+    while let Some((_, v)) = queue.pop_first() {
+        let Some(es) = at_vertex.get(&v) else {
+            continue;
+        };
+        if es.len() != 2 || skip.contains(&v) {
+            continue;
+        }
+        let (e1, e2) = (es[0], es[1]);
+        let (a, b) = (topo.edge(e1)?, topo.edge(e2)?);
+        if !matches!(a.curve(), EdgeCurve::Line) || !matches!(b.curve(), EdgeCurve::Line) {
+            continue;
+        }
+        let far1 = if a.end() == v { a.start() } else { a.end() };
+        let far2 = if b.end() == v { b.start() } else { b.end() };
+        if far1 == far2 || a.start() == a.end() || b.start() == b.end() {
+            continue;
+        }
+        let (p1, pv, p2) = (
+            topo.vertex(far1)?.point(),
+            topo.vertex(v)?.point(),
+            topo.vertex(far2)?.point(),
+        );
+        let (Ok(d1), Ok(d2)) = ((pv - p1).normalize(), (p2 - pv).normalize()) else {
+            continue;
+        };
+        if d1.dot(d2) < 1.0 - options.angular_tolerance.max(1e-9) {
+            continue; // a corner, not a straight run
+        }
+        let mut f1: Vec<FaceId> = uses[&e1].iter().map(|&(f, _)| f).collect();
+        let mut f2: Vec<FaceId> = uses[&e2].iter().map(|&(f, _)| f).collect();
+        f1.sort_unstable_by_key(|f| f.index());
+        f2.sort_unstable_by_key(|f| f.index());
+        if f1 != f2 || f1.len() != 2 {
+            continue;
+        }
+        let mut planar = true;
+        for &f in &f1 {
+            if !matches!(topo.face(f)?.surface(), FaceSurface::Plane { .. })
+                || topo.pcurves().contains(e1, f)
+                || topo.pcurves().contains(e2, f)
+            {
+                planar = false;
             }
         }
-        for &eid in uses.keys() {
-            let e = topo.edge(eid)?;
-            for v in [e.start(), e.end()] {
-                let list = at_vertex.entry(v).or_default();
-                if !list.contains(&eid) {
-                    list.push(eid);
-                }
-            }
+        if !planar {
+            continue;
         }
-        let mut found = None;
-        let mut vertices: Vec<VertexId> = at_vertex.keys().copied().collect();
-        vertices.sort_unstable_by_key(|v| v.index()); // (a stable order: deterministic results)
-        for v in vertices {
-            let es = &at_vertex[&v];
-            if es.len() != 2 || skip.contains(&v) {
-                continue;
-            }
-            let (e1, e2) = (es[0], es[1]);
-            let (a, b) = (topo.edge(e1)?, topo.edge(e2)?);
-            if !matches!(a.curve(), EdgeCurve::Line) || !matches!(b.curve(), EdgeCurve::Line) {
-                continue;
-            }
-            let far1 = if a.end() == v { a.start() } else { a.end() };
-            let far2 = if b.end() == v { b.start() } else { b.end() };
-            if far1 == far2 || a.start() == a.end() || b.start() == b.end() {
-                continue;
-            }
-            let (p1, pv, p2) = (
-                topo.vertex(far1)?.point(),
-                topo.vertex(v)?.point(),
-                topo.vertex(far2)?.point(),
-            );
-            let (Ok(d1), Ok(d2)) = ((pv - p1).normalize(), (p2 - pv).normalize()) else {
-                continue;
-            };
-            if d1.dot(d2) < 1.0 - options.angular_tolerance.max(1e-9) {
-                continue; // a corner, not a straight run
-            }
-            let mut f1: Vec<FaceId> = uses[&e1].iter().map(|&(f, _)| f).collect();
-            let mut f2: Vec<FaceId> = uses[&e2].iter().map(|&(f, _)| f).collect();
-            f1.sort_unstable_by_key(|f| f.index());
-            f2.sort_unstable_by_key(|f| f.index());
-            if f1 != f2 || f1.len() != 2 {
-                continue;
-            }
-            let mut planar = true;
-            for &f in &f1 {
-                if !matches!(topo.face(f)?.surface(), FaceSurface::Plane { .. })
-                    || topo.pcurves().contains(e1, f)
-                    || topo.pcurves().contains(e2, f)
-                {
-                    planar = false;
-                }
-            }
-            if !planar {
-                continue;
-            }
-            // the new edge runs the way e1 does
-            let (start, end) = if a.end() == v {
-                (far1, far2)
-            } else {
-                (far2, far1)
-            };
-            found = Some((v, e1, e2, start, end));
-            break;
-        }
-        let Some((v, e1, e2, start, end)) = found else {
-            break;
+        // the new edge runs the way e1 does
+        let (start, end) = if a.end() == v {
+            (far1, far2)
+        } else {
+            (far2, far1)
         };
         let new_edge = Edge::new(start, end, EdgeCurve::Line);
         let mut touched: Vec<WireId> = uses[&e1].iter().map(|&(_, w)| w).collect();
@@ -536,7 +542,42 @@ fn merge_split_edges(
                     edges.push(*oe);
                 }
             }
+            // The wire's uses of the pair go, and it uses the new edge once.
+            let fid = face_of[&r.wire];
+            for gone in [e1, e2] {
+                for _ in r.old.iter().filter(|oe| oe.edge() == gone) {
+                    if let Some(list) = uses.get_mut(&gone)
+                        && let Some(at) = list.iter().position(|&u| u == (fid, r.wire))
+                    {
+                        list.remove(at);
+                    }
+                }
+            }
+            uses.entry(new_edge).or_default().push((fid, r.wire));
             *topo.wire_mut(r.wire)? = Wire::new(edges, r.closed)?;
+        }
+        // An edge no wire uses leaves its vertices; the new one joins its
+        // ends; and those ends are looked at again.
+        for gone in [e1, e2] {
+            if uses.get(&gone).is_some_and(Vec::is_empty) {
+                uses.remove(&gone);
+                let e = topo.edge(gone)?;
+                for w in [e.start(), e.end()] {
+                    if let Some(list) = at_vertex.get_mut(&w) {
+                        list.retain(|&x| x != gone);
+                        if list.is_empty() {
+                            at_vertex.remove(&w);
+                        }
+                    }
+                }
+            }
+        }
+        for w in [start, end] {
+            let list = at_vertex.entry(w).or_default();
+            if !list.contains(&new_edge) {
+                list.push(new_edge);
+            }
+            queue.insert(w.index(), w);
         }
         merged += 1;
     }

@@ -11,6 +11,11 @@
 //! must still face out of the part: the result is valid, has six faces,
 //! and its mesh is watertight.
 //!
+//! The band also took the walked sections as its control points, so along
+//! a curved edge it cut inside them: its contact on the wall stood about
+//! 1e-3 inside the wall, and the part came out 0.45 light, at either
+//! radius. It now interpolates them.
+//!
 //! The volume taken off: the top is a plane, the wall stands square to it
 //! and the round ends square on the radial walls, so the round takes the
 //! corner's section, `(1 - pi/4) r^2`, along the edge, less the inset's
@@ -121,7 +126,7 @@ fn round_the_arc(r: f64) {
     // A band that faces into the part adds its own volume and does not take
     // the corner's off: the bound tells the two apart.
     assert!(
-        (volume - expected).abs() < 0.05 * removed,
+        (volume - expected).abs() < 1e-4 * removed,
         "{case}: volume {volume}, expected {expected} ({removed} taken off)"
     );
 }

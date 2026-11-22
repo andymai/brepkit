@@ -509,9 +509,9 @@ impl StepWriteContext {
                 id
             }
             FaceSurface::Sphere(sphere) => {
-                let z = Vec3::new(0.0, 0.0, 1.0);
-                let ref_dir = compute_ref_direction(z);
-                let axis = self.write_axis2_placement(sphere.center(), z, ref_dir);
+                // The sphere's own frame, so its latitudes read back as such.
+                let axis =
+                    self.write_axis2_placement(sphere.center(), sphere.z_axis(), sphere.x_axis());
                 let id = self.next_id();
                 self.write_entity(
                     id,

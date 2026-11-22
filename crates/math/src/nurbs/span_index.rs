@@ -10,12 +10,17 @@
 //! nets hug the surface far closer than the span's: over a span turning
 //! through a wide angle the span's box holds points of the surface far from
 //! the span.
+//!
+//! A line meets the surface only in spans whose box it meets, and each such
+//! span is solved on its own, so a fitted patch with hundreds of spans is
+//! read as finely as its knots for exact line hits, however small a fixed
+//! grid over its whole domain would leave each span.
 
 use crate::aabb::Aabb3;
 use crate::bvh::Bvh;
 use crate::madd::Madd;
 use crate::nurbs::surface::NurbsSurface;
-use crate::vec::Point3;
+use crate::vec::{Point3, Vec3};
 
 /// A parameter interval.
 type Interval = (f64, f64);
@@ -54,6 +59,8 @@ pub struct SpanIndex {
     /// control box diagonal, the scale of the surface's pieces, and a
     /// share of the largest coordinate, which rounding moves points by.
     pad: f64,
+    /// The largest control box diagonal, the scale of the surface's pieces.
+    scale: f64,
     /// Each span's sub-patch boxes, by span index, each made the first time
     /// a search reads it.
     sub_boxes: std::sync::OnceLock<Box<[std::sync::OnceLock<SubBoxes>]>>,
@@ -62,9 +69,23 @@ pub struct SpanIndex {
     nets: std::sync::OnceLock<Box<[std::sync::OnceLock<Vec<Hpoint>>]>>,
 }
 
+/// A point where a line meets the surface.
+#[derive(Debug, Clone, Copy)]
+pub struct LineHit {
+    /// The line's parameter: the hit is `origin + dir * t`.
+    pub t: f64,
+    /// The surface's parameters at the hit.
+    pub uv: (f64, f64),
+    /// The hit itself.
+    pub point: Point3,
+    /// Whether the line meets the surface at a grazing angle there, so the
+    /// hit may be a touch rather than a crossing.
+    pub grazing: bool,
+}
+
 /// The distinct knot spans of one direction: each span's bounds and the
 /// index of its last control point.
-fn knot_spans(knots: &[f64], degree: usize, n: usize) -> Vec<(f64, f64, usize)> {
+pub(crate) fn knot_spans(knots: &[f64], degree: usize, n: usize) -> Vec<(f64, f64, usize)> {
     (degree..n)
         .filter(|&i| knots[i + 1] > knots[i])
         .map(|i| (knots[i], knots[i + 1], i))
@@ -142,6 +163,7 @@ impl SpanIndex {
             boxes,
             bvh: Bvh::build(&padded),
             pad,
+            scale,
             sub_boxes: std::sync::OnceLock::new(),
             nets: std::sync::OnceLock::new(),
         })
@@ -190,6 +212,30 @@ impl SpanIndex {
         found
     }
 
+    /// Whether every point of `surface` lies at least `reach` from `point`:
+    /// no span whose control box comes nearer has a sub-patch box nearer.
+    #[must_use]
+    pub fn clear_of(&self, surface: &NurbsSurface, point: Point3, reach: f64) -> bool {
+        self.spans_within(point, reach)
+            .into_iter()
+            .all(|(i, _)| self.sub_gap(surface, i, point) >= reach)
+    }
+
+    /// Whether no span's control box of this index comes within `margin` of
+    /// one of `other`'s, read against its boxes padded for rounding: then no
+    /// part of either surface's Bezier decomposition does, each part's net
+    /// lying in its span's control box.
+    #[must_use]
+    pub fn boxes_apart(&self, other: &Self, margin: f64) -> bool {
+        let mut near = Vec::new();
+        self.boxes.iter().all(|b| {
+            other
+                .bvh
+                .query_overlap_into(&b.expanded(margin + self.pad), &mut near);
+            near.is_empty()
+        })
+    }
+
     /// Whether every point of `b` lies farther than `reach` from `surface`:
     /// none of the sub-patch boxes of the spans whose boxes come within
     /// `reach` of `b` does.
@@ -202,6 +248,19 @@ impl SpanIndex {
                 self.sub_boxes_of(surface, i)
                     .is_some_and(|boxes| boxes.iter().all(|sub| box_gap(sub, b) > reach))
             })
+    }
+
+    /// A lower bound on the distance from `point` to span `i`: its distance
+    /// to the nearest of the span's sub-patch boxes, which hug the span far
+    /// closer than its control box; 0 where they cannot be made.
+    pub(crate) fn sub_gap(&self, surface: &NurbsSurface, i: usize, point: Point3) -> f64 {
+        self.sub_boxes_of(surface, i).map_or(0.0, |boxes| {
+            boxes
+                .iter()
+                .map(|b| b.distance_squared_to_point(point))
+                .fold(f64::INFINITY, f64::min)
+                .sqrt()
+        })
     }
 
     /// Span `i`'s Bezier net (see [`span_net`]), made the first time it is
@@ -238,6 +297,180 @@ impl SpanIndex {
                 .get(i)?
                 .get_or_init(|| sub_patch_boxes(surface, net, pad)),
         )
+    }
+
+    /// The parameter rectangles `(u, v)` of the spans whose control boxes
+    /// meet `aabb`, in span order.
+    #[must_use]
+    pub fn spans_meeting(&self, aabb: &Aabb3) -> Vec<((f64, f64), (f64, f64))> {
+        let mut found = self.bvh.query_overlap(aabb);
+        found.sort_unstable();
+        found
+            .into_iter()
+            .map(|i| (self.spans[i].u, self.spans[i].v))
+            .collect()
+    }
+
+    /// Every point where the line `origin + dir * t` meets `surface` (the
+    /// surface this index was built from), each found once, in no order.
+    ///
+    /// Each span whose box the line meets is halved in both parameters,
+    /// dropping each piece whose middle lies farther from the line than its
+    /// half-widths along the surface's derivatives reach (with a margin for
+    /// curvature), and each piece left at the finest level is searched by
+    /// Newton's method on `S(u, v) = origin + dir * t` from its middle.
+    #[must_use]
+    pub fn line_hits(&self, surface: &NurbsSurface, origin: Point3, dir: Vec3) -> Vec<LineHit> {
+        const DEPTH: u32 = 4;
+        const REACH: f64 = 1.5;
+        let mut hits: Vec<LineHit> = Vec::new();
+        let dd = dir.dot(dir);
+        if dd <= 1e-300 {
+            return hits;
+        }
+        // The BVH's ray query keeps positive t only; a line runs both ways.
+        let mut candidates = self.bvh.query_ray(origin, dir);
+        candidates.extend(self.bvh.query_ray(origin, -dir));
+        candidates.sort_unstable();
+        candidates.dedup();
+        let off_line = |p: Point3| {
+            let w = p - origin;
+            (w - dir * (w.dot(dir) / dd)).length()
+        };
+        let mut stack: Vec<(Interval, Interval, u32)> = Vec::new();
+        for idx in candidates {
+            let span = self.spans[idx];
+            stack.push((span.u, span.v, 0));
+            while let Some((u, v, depth)) = stack.pop() {
+                let mid = (f64::midpoint(u.0, u.1), f64::midpoint(v.0, v.1));
+                let (p, su, sv) = surface.first_derivatives(mid.0, mid.1);
+                let reach = REACH * 0.5 * su.length().madd(u.1 - u.0, sv.length() * (v.1 - v.0));
+                if off_line(Point3::new(p.x(), p.y(), p.z())) > reach + 1e-9 * self.scale.max(1.0) {
+                    continue;
+                }
+                if depth < DEPTH {
+                    let (um, vm) = mid;
+                    for (uu, vv) in [
+                        ((u.0, um), (v.0, vm)),
+                        ((um, u.1), (v.0, vm)),
+                        ((u.0, um), (vm, v.1)),
+                        ((um, u.1), (vm, v.1)),
+                    ] {
+                        stack.push((uu, vv, depth + 1));
+                    }
+                    continue;
+                }
+                let Some(hit) = self.solve(surface, origin, dir, mid, (u, v)) else {
+                    continue;
+                };
+                let slack = |(lo, hi): (f64, f64)| 1e-9 * (hi - lo);
+                if hit.uv.0 < span.u.0 - slack(span.u)
+                    || hit.uv.0 > span.u.1 + slack(span.u)
+                    || hit.uv.1 < span.v.0 - slack(span.v)
+                    || hit.uv.1 > span.v.1 + slack(span.v)
+                {
+                    continue;
+                }
+                // A root on a piece's edge is found from both sides of it.
+                let same =
+                    |h: &LineHit| (h.point - hit.point).length() <= 1e-9 * self.scale.max(1.0);
+                if !hits.iter().any(same) {
+                    hits.push(hit);
+                }
+            }
+        }
+        hits
+    }
+
+    /// The point of `surface` closest to `p`, as `(u, v, distance)`.
+    ///
+    /// Each span's own closest point is found by Gauss-Newton from its
+    /// middle, kept within the span, and the spans are searched nearest box
+    /// first: a span whose box lies farther than the best point found so far
+    /// holds no closer one. `None` for an empty index.
+    #[must_use]
+    pub fn closest_point(&self, surface: &NurbsSurface, p: Point3) -> Option<(f64, f64, f64)> {
+        let in_span = |i: usize| {
+            let span = self.spans[i];
+            closest_from(
+                surface,
+                p,
+                (
+                    f64::midpoint(span.u.0, span.u.1),
+                    f64::midpoint(span.v.0, span.v.1),
+                ),
+                span.u,
+                span.v,
+            )
+        };
+        let best = self
+            .bvh
+            .query_closest_with_distance(p, &|i| in_span(i).2.powi(2))?;
+        Some(in_span(best))
+    }
+
+    /// The point of `surface` closest to `p` found by Gauss-Newton from
+    /// `guess` over the whole domain, as `(u, v, distance)`: the nearest
+    /// point to a point beside one already placed (the next sample along a
+    /// curve on the surface), which a search over the whole surface need not
+    /// find on a surface with many spans.
+    #[must_use]
+    pub fn closest_point_near(
+        surface: &NurbsSurface,
+        p: Point3,
+        guess: (f64, f64),
+    ) -> (f64, f64, f64) {
+        closest_from(surface, p, guess, surface.domain_u(), surface.domain_v())
+    }
+
+    /// Newton's method on `S(u, v) - (origin + dir * t)` from `seed`, given
+    /// up once it leaves the piece `(u, v)` by more than the piece's width.
+    fn solve(
+        &self,
+        surface: &NurbsSurface,
+        origin: Point3,
+        dir: Vec3,
+        seed: (f64, f64),
+        (pu, pv): ((f64, f64), (f64, f64)),
+    ) -> Option<LineHit> {
+        const MAX_ITER: usize = 30;
+        let (u_lo, u_hi) = surface.domain_u();
+        let (v_lo, v_hi) = surface.domain_v();
+        let (du, dv) = (pu.1 - pu.0, pv.1 - pv.0);
+        let u_win = ((pu.0 - du).max(u_lo), (pu.1 + du).min(u_hi));
+        let v_win = ((pv.0 - dv).max(v_lo), (pv.1 + dv).min(v_hi));
+        let dd = dir.dot(dir);
+        let (mut u, mut v) = seed;
+        let p = surface.evaluate(u, v);
+        let mut t = (p - origin).dot(dir) / dd;
+        let tol = 1e-12 * self.scale.max(1.0);
+        for _ in 0..MAX_ITER {
+            let (p, su, sv) = surface.first_derivatives(u, v);
+            let r = Point3::new(p.x(), p.y(), p.z()) - (origin + dir * t);
+            let back = -dir;
+            let det = su.dot(sv.cross(back));
+            let size = su.length() * sv.length() * dir.length();
+            if r.length() <= tol {
+                return Some(LineHit {
+                    t,
+                    uv: (u, v),
+                    point: Point3::new(p.x(), p.y(), p.z()),
+                    grazing: det.abs() <= 1e-3 * size,
+                });
+            }
+            if det.abs() <= 1e-12 * size {
+                return None;
+            }
+            // Solve su du + sv dv - dir dt = -r.
+            let rhs = -r;
+            u += rhs.dot(sv.cross(back)) / det;
+            v += su.dot(rhs.cross(back)) / det;
+            t += su.dot(sv.cross(rhs)) / det;
+            if u < u_win.0 || u > u_win.1 || v < v_win.0 || v > v_win.1 {
+                return None;
+            }
+        }
+        None
     }
 }
 
@@ -371,6 +604,42 @@ fn halve(net: &[Hpoint], nu: usize, nv: usize, along_u: bool) -> (Vec<Hpoint>, V
         }
     }
     (lo, hi)
+}
+
+/// Gauss-Newton for the point of `surface` nearest `p` from `start`, kept
+/// within the parameter window `(u_win, v_win)`, as `(u, v, distance)`.
+fn closest_from(
+    surface: &NurbsSurface,
+    p: Point3,
+    start: (f64, f64),
+    u_win: Interval,
+    v_win: Interval,
+) -> (f64, f64, f64) {
+    const MAX_ITER: usize = 30;
+    let (mut u, mut v) = start;
+    let gap = |u: f64, v: f64| (surface.evaluate(u, v) - p).length();
+    for _ in 0..MAX_ITER {
+        let (s, su, sv) = surface.first_derivatives(u, v);
+        let r = Vec3::new(s.x() - p.x(), s.y() - p.y(), s.z() - p.z());
+        let (a11, a12, a22) = (su.dot(su), su.dot(sv), sv.dot(sv));
+        let (b1, b2) = (-su.dot(r), -sv.dot(r));
+        let det = a11.madd(a22, -(a12 * a12));
+        if det.abs() <= 1e-300 {
+            break;
+        }
+        let du = b1.madd(a22, -(b2 * a12)) / det;
+        let dv = a11.madd(b2, -(a12 * b1)) / det;
+        let (nu, nv) = (
+            (u + du).clamp(u_win.0, u_win.1),
+            (v + dv).clamp(v_win.0, v_win.1),
+        );
+        let moved = (nu - u).abs() + (nv - v).abs();
+        (u, v) = (nu, nv);
+        if moved <= 1e-15 * (1.0 + u.abs() + v.abs()) {
+            break;
+        }
+    }
+    (u, v, gap(u, v))
 }
 
 #[cfg(test)]
@@ -613,5 +882,118 @@ mod tests {
             let near = Point3::new(q.x(), q.y(), q.z() + 0.2);
             assert!(!index.box_clears(&s, &cube(near, 0.05), 0.16), "({u}, {v})");
         }
+    }
+
+    #[test]
+    fn vertical_line_meets_the_bump_once() {
+        let s = bump();
+        let index = SpanIndex::new(&s).unwrap();
+        let hits = index.line_hits(&s, Point3::new(1.5, 1.5, -5.0), Vec3::new(0.0, 0.0, 1.0));
+        assert_eq!(hits.len(), 1, "{hits:?}");
+        let h = hits[0];
+        assert!((h.point - s.evaluate(h.uv.0, h.uv.1)).length() < 1e-9);
+        assert!((h.point.x() - 1.5).abs() < 1e-9 && (h.point.y() - 1.5).abs() < 1e-9);
+        assert!(!h.grazing);
+    }
+
+    #[test]
+    fn a_hit_on_a_span_edge_counts_once() {
+        let s = bump();
+        let index = SpanIndex::new(&s).unwrap();
+        // u = 1 is an interior knot; find its x at v = 1.5 and shoot there.
+        let p = s.evaluate(1.0, 1.5);
+        let hits = index.line_hits(
+            &s,
+            Point3::new(p.x(), p.y(), -5.0),
+            Vec3::new(0.0, 0.0, 1.0),
+        );
+        assert_eq!(hits.len(), 1, "{hits:?}");
+    }
+
+    #[test]
+    fn horizontal_line_through_the_bump_meets_it_twice() {
+        let s = bump();
+        let index = SpanIndex::new(&s).unwrap();
+        let top = s.evaluate(1.5, 1.5).z();
+        let hits = index.line_hits(
+            &s,
+            Point3::new(-1.0, 1.5, 0.5 * top),
+            Vec3::new(1.0, 0.0, 0.0),
+        );
+        assert_eq!(hits.len(), 2, "{hits:?}");
+    }
+
+    #[test]
+    fn closest_point_near_finds_a_point_on_the_patch() {
+        let s = bump();
+        for &(u, v) in &[(0.3, 2.7), (1.5, 1.5), (2.0, 0.0), (1.0, 1.0)] {
+            let q = s.evaluate(u, v);
+            let (_, _, dn) = SpanIndex::closest_point_near(&s, q, (u + 0.05, v - 0.05));
+            assert!(dn < 1e-9, "({u}, {v}) projected {dn} off from nearby");
+        }
+    }
+
+    #[test]
+    fn line_beside_the_patch_misses() {
+        let s = bump();
+        let index = SpanIndex::new(&s).unwrap();
+        let hits = index.line_hits(&s, Point3::new(5.0, 5.0, -5.0), Vec3::new(0.0, 0.0, 1.0));
+        assert!(hits.is_empty(), "{hits:?}");
+    }
+
+    /// A surface is clear of a point only where every point of it lies at
+    /// least that far, and is never clear of a point on it.
+    #[test]
+    fn clear_of_only_a_point_the_surface_keeps_away_from() {
+        let s = u_wall();
+        let index = SpanIndex::new(&s).unwrap();
+        for x in -2..=6 {
+            for z in -3..=5 {
+                let p = Point3::new(f64::from(x), 0.5, f64::from(z));
+                let nearest = (0..index.len())
+                    .map(|i| sampled_gap(&s, &index, i, p))
+                    .fold(f64::INFINITY, f64::min);
+                for reach in [0.1, 0.5, 1.0, 2.0] {
+                    if index.clear_of(&s, p, reach) {
+                        assert!(nearest >= reach - 1e-12, "{p:?} at {reach}: {nearest}");
+                    }
+                }
+            }
+        }
+        let on = s.evaluate(0.7, 0.3);
+        assert!(!index.clear_of(&s, on, 1e-9));
+        assert!(index.clear_of(&s, Point3::new(2.0, 0.5, 30.0), 10.0));
+    }
+
+    /// Two surfaces' spans are apart only where the surfaces are.
+    #[test]
+    fn boxes_apart_only_for_surfaces_apart() {
+        let s = bump();
+        let index = SpanIndex::new(&s).unwrap();
+        let moved = |dz: f64| {
+            let cps: Vec<Vec<Point3>> = s
+                .control_points()
+                .iter()
+                .map(|row| {
+                    row.iter()
+                        .map(|p| Point3::new(p.x(), p.y(), p.z() + dz))
+                        .collect()
+                })
+                .collect();
+            NurbsSurface::new(
+                3,
+                3,
+                s.knots_u().to_vec(),
+                s.knots_v().to_vec(),
+                cps,
+                s.weights().to_vec(),
+            )
+            .unwrap()
+        };
+        let far = moved(5.0);
+        assert!(index.boxes_apart(SpanIndex::new(&far).as_ref().unwrap(), 1.0));
+        assert!(!index.boxes_apart(SpanIndex::new(&far).as_ref().unwrap(), 4.5));
+        let near = moved(0.5);
+        assert!(!index.boxes_apart(SpanIndex::new(&near).as_ref().unwrap(), 0.0));
     }
 }

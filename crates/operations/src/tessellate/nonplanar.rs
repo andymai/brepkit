@@ -384,6 +384,37 @@ pub(super) fn tessellate_revolution_band_shared(
         if !whole_turn && (winding.abs() - TAU).abs() > 1e-6 {
             return Ok(false);
         }
+        // The sweep pairs the rims by angle, so each must advance in u one
+        // way all round: a pin's section through a bore's mouth runs back on
+        // itself where the pin's wall is tangent to the bore's, and sorting
+        // its samples by angle stitched the fold across itself.
+        if !whole_turn {
+            let mut at: Option<brepkit_topology::vertex::VertexId> = None;
+            let mut prev: Option<f64> = None;
+            for &ci in cycle {
+                let (eid, sv, ev) = curved[ci];
+                let Some(ids) = edge_global_indices.get(&eid) else {
+                    return Ok(false);
+                };
+                let along = !matches!(at, Some(v) if v != sv);
+                at = Some(if along { ev } else { sv });
+                let ordered: Box<dyn Iterator<Item = &u32>> = if along {
+                    Box::new(ids.iter())
+                } else {
+                    Box::new(ids.iter().rev())
+                };
+                for &gid in ordered {
+                    let (u, _) = project(merged.positions[gid as usize]);
+                    if let Some(p) = prev {
+                        let du = wrap_pi(u - p);
+                        if du * winding < -1e-9 {
+                            return Ok(false);
+                        }
+                    }
+                    prev = Some(u);
+                }
+            }
+        }
     }
 
     // Pull each rim's shared global vertex IDs in the order its cycle walks
@@ -3382,6 +3413,34 @@ fn cdt_in_surface_frame(
     } else {
         (u_min, u_max, v_min, v_max)
     };
+    // A hole that touches a wall's rim without a vertex there (a rod's wall
+    // tangent to a drum's end cap) has samples on the rim's line, or a
+    // fitted curve's rounding past it, between the rim's own samples. Left
+    // there, the wall leaves the sliver between the rim's chord and them
+    // outside both its outline and its hole, and no face covers it. They
+    // are moved just inside for the triangulation only: each keeps its
+    // shared point, so the wall's mesh closes on the rim's chord.
+    if matches!(
+        face_data.surface(),
+        FaceSurface::Cylinder(_) | FaceSurface::Cone(_)
+    ) && v_max > v_min
+    {
+        let span = v_max - v_min;
+        let (reach, inset) = (1e-6 * span, 1e-9 * span);
+        let on_outline: DetHashSet<u32> = boundary_3d.iter().map(|b| b.1).collect();
+        for hole in &mut holes {
+            for (_, v, gid) in hole.iter_mut() {
+                if on_outline.contains(gid) {
+                    continue;
+                }
+                if *v < v_min + inset && *v >= v_min - reach {
+                    *v = v_min + inset;
+                } else if *v > v_max - inset && *v <= v_max + reach {
+                    *v = v_max - inset;
+                }
+            }
+        }
+    }
     let n_boundary = boundary_3d.len();
     if cdt_trace() {
         log::debug!("cdt {face_id:?} outer u[{u_min:.4},{u_max:.4}] v[{v_min:.4},{v_max:.4}]");
@@ -3468,11 +3527,13 @@ fn cdt_in_surface_frame(
     // round the wall, a sheared strip longer than the surface it spans. And
     // so does a wall whose ruling a neighbour's vertex splits: Delaunay fans
     // that vertex to rim samples a quarter turn away, a flat chord through
-    // the solid.
+    // the solid. So does a wall stepped along its rim, whose reflex corner
+    // Delaunay fans to the far rim.
     let notched_wall = is_notched_wall(topo, face_data)?
         || is_wound_wall(topo, face_data)?
         || is_section_bound(topo, face_data)?
-        || is_split_ruling_wall(topo, face_data)?;
+        || is_split_ruling_wall(topo, face_data)?
+        || is_stepped_wall(topo, face_data)?;
     let holed_wall_radius = if holes.is_empty() && !notched_wall {
         None
     } else {
@@ -3684,26 +3745,41 @@ fn cdt_in_surface_frame(
         };
         let on_constraint = &on_constraint;
         let vs = &vs;
+        // Each row's crossings of the boundary and the holes, found once.
+        let rows: Vec<(RowCrossings, Vec<RowCrossings>)> = vs
+            .iter()
+            .map(|&v| {
+                (
+                    row_crossings(boundary_uv_ref, v),
+                    hole_polys.iter().map(|h| row_crossings(h, v)).collect(),
+                )
+            })
+            .collect();
+        let rows = &rows;
         let interior_pts: Vec<Point2> = us
             .iter()
             .enumerate()
             .flat_map(|(i, &u)| {
-                vs.iter().enumerate().filter_map(move |(j, &v)| {
-                    if on_constraint.contains(&(i, j)) {
-                        return None;
-                    }
-                    let parameter = Point2::new(u, v);
-                    // Nested inner wires alternate void and island, so a
-                    // point is void at odd depth.
-                    let in_hole = hole_polys
-                        .iter()
-                        .filter(|h| point_in_polygon_2d(h, parameter))
-                        .count()
-                        % 2
-                        == 1;
-                    (point_in_polygon_2d(boundary_uv_ref, parameter) && !in_hole)
-                        .then_some(to_cdt(parameter))
-                })
+                vs.iter()
+                    .zip(rows)
+                    .enumerate()
+                    .filter_map(move |(j, (&v, (outer, holes)))| {
+                        if on_constraint.contains(&(i, j)) {
+                            return None;
+                        }
+                        let parameter = Point2::new(u, v);
+                        // Nested inner wires alternate void and island, so a
+                        // point is void at odd depth.
+                        let in_hole = hole_polys
+                            .iter()
+                            .zip(holes)
+                            .filter(|(h, row)| point_in_polygon_row(h, row, parameter))
+                            .count()
+                            % 2
+                            == 1;
+                        (point_in_polygon_row(boundary_uv_ref, outer, parameter) && !in_hole)
+                            .then_some(to_cdt(parameter))
+                    })
             })
             .collect();
         if !interior_pts.is_empty() {
@@ -5880,6 +5956,32 @@ pub(super) fn is_section_bound(
     Ok(false)
 }
 
+/// Whether a cylinder or cone wall's outer loop has rim circles at more
+/// than two heights: a wall stepped along its rim (a C-shaped band whose
+/// floor drops partway round), which is not the (u, v) box between two rims
+/// that the grid fills.
+pub(super) fn is_stepped_wall(
+    topo: &Topology,
+    face_data: &brepkit_topology::face::Face,
+) -> Result<bool, crate::OperationsError> {
+    let (origin, axis, scale) = match face_data.surface() {
+        FaceSurface::Cylinder(c) => (c.origin(), c.axis(), c.radius()),
+        FaceSurface::Cone(c) => (c.apex(), c.axis(), 1.0),
+        _ => return Ok(false),
+    };
+    let tol = 1e-7 * scale.max(1.0);
+    let mut heights: Vec<f64> = Vec::new();
+    for oe in topo.wire(face_data.outer_wire())?.edges() {
+        if let EdgeCurve::Circle(circle) = topo.edge(oe.edge())?.curve() {
+            let h = axis.dot(circle.center() - origin);
+            if heights.iter().all(|&k| (k - h).abs() > tol) {
+                heights.push(h);
+            }
+        }
+    }
+    Ok(heights.len() > 2)
+}
+
 /// Evaluate a non-planar surface at `(u, v)` and return a 3D point.
 fn eval_surface_point(surface: &FaceSurface, u: f64, v: f64) -> Point3 {
     let (u, v) = wrap_to_domain(surface, u, v);
@@ -6085,6 +6187,54 @@ fn grid_points_on_segments(
 
 /// Check if a 2D point is inside a polygon defined by (u, v) coordinates.
 /// Uses the winding number algorithm for robustness.
+/// A polygon's edges a grid row crosses: each edge's first vertex, and
+/// whether it runs upward.
+type RowCrossings = Vec<(usize, bool)>;
+
+/// The edges of `polygon` that [`point_in_polygon_2d`] counts for a point at
+/// height `y`, each as the index of its first vertex and whether it runs
+/// upward: a grid row's points share their height, so its crossings are
+/// found once for the row.
+fn row_crossings(polygon: &[(f64, f64)], y: f64) -> RowCrossings {
+    let n = polygon.len();
+    (0..n)
+        .filter_map(|i| {
+            let (yi, yj) = (polygon[i].1, polygon[(i + 1) % n].1);
+            if yi <= y {
+                (yj > y).then_some((i, true))
+            } else {
+                (yj <= y).then_some((i, false))
+            }
+        })
+        .collect()
+}
+
+/// [`point_in_polygon_2d`] of `pt`, from the crossings [`row_crossings`]
+/// found at its height: the same edges, each read as it reads them.
+fn point_in_polygon_row(
+    polygon: &[(f64, f64)],
+    row: &[(usize, bool)],
+    pt: brepkit_math::vec::Point2,
+) -> bool {
+    let n = polygon.len();
+    let mut winding = 0i32;
+    for &(i, up) in row {
+        let j = (i + 1) % n;
+        let yi = polygon[i].1;
+        let yj = polygon[j].1;
+        let cross =
+            (polygon[j].0 - polygon[i].0) * (pt.y() - yi) - (pt.x() - polygon[i].0) * (yj - yi);
+        if up {
+            if cross > 0.0 {
+                winding += 1;
+            }
+        } else if cross < 0.0 {
+            winding -= 1;
+        }
+    }
+    winding != 0
+}
+
 pub(super) fn point_in_polygon_2d(polygon: &[(f64, f64)], pt: brepkit_math::vec::Point2) -> bool {
     let n = polygon.len();
     let mut winding = 0i32;
@@ -6239,6 +6389,40 @@ pub(super) fn tessellate_nonplanar_snap(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A grid row's crossings give every point of the row the answer the
+    /// whole polygon does, points level with vertices and on edges included.
+    #[test]
+    fn row_crossings_answer_as_the_whole_polygon() {
+        use brepkit_math::vec::Point2;
+        // A star with vertices at the grid's own heights and a horizontal
+        // edge, walked one way and then the other.
+        let mut star: Vec<(f64, f64)> = (0..14)
+            .map(|k| {
+                let a = f64::from(k) * std::f64::consts::TAU / 14.0;
+                let r = if k % 2 == 0 { 1.0 } else { 0.45 };
+                (
+                    (r * a.cos() * 8.0).round() / 8.0,
+                    (r * a.sin() * 8.0).round() / 8.0,
+                )
+            })
+            .collect();
+        star.insert(3, (0.5, star[2].1));
+        for polygon in [star.clone(), star.into_iter().rev().collect()] {
+            for iv in -10..=10 {
+                let y = f64::from(iv) / 8.0;
+                let row = row_crossings(&polygon, y);
+                for iu in -100..=100 {
+                    let pt = Point2::new(f64::from(iu) / 80.0, y);
+                    assert_eq!(
+                        point_in_polygon_row(&polygon, &row, pt),
+                        point_in_polygon_2d(&polygon, pt),
+                        "{pt:?}"
+                    );
+                }
+            }
+        }
+    }
 
     /// Grid points on a segment along a grid line, or on a slanted one
     /// through grid points, are found; the others are not.

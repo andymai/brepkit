@@ -3447,3 +3447,65 @@ fn grid_seeds_do_not_depend_on_how_many_pairs_are_refined_at_once() {
         assert_eq!(bits(at_once), whole, "{at_once} at a time");
     }
 }
+
+/// The surface `(u, y(u), v)`, with `y` zero but for a bump of height 1.5 at
+/// `u = 0.5` on `[0.45, 0.55]`, cut by the plane `z = 0.5` and kept near the
+/// bump's top. Ten samples in `u` fall at 4/9 and 5/9, on either side of
+/// the bump, so every sampled point of the section has `y = 0`, and no
+/// chord between them comes near the top. The section still passes through
+/// it.
+#[test]
+fn a_plane_section_keeps_a_bump_between_its_samples() {
+    let knots = vec![
+        0.0,
+        0.0,
+        0.0,
+        0.45,
+        0.45 + 0.1 / 3.0,
+        0.55 - 0.1 / 3.0,
+        0.55,
+        1.0,
+        1.0,
+        1.0,
+    ];
+    let ys = [0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0];
+    let rows: Vec<Vec<Point3>> = ys
+        .iter()
+        .enumerate()
+        .map(|(i, &y)| {
+            let x = f64::midpoint(knots[i + 1], knots[i + 2]);
+            vec![Point3::new(x, y, 0.0), Point3::new(x, y, 1.0)]
+        })
+        .collect();
+    let surface = NurbsSurface::new(
+        2,
+        1,
+        knots,
+        vec![0.0, 0.0, 1.0, 1.0],
+        rows,
+        vec![vec![1.0; 2]; 7],
+    )
+    .unwrap();
+    let top = surface.evaluate(0.5, 0.5);
+    assert!((top.y() - 1.5).abs() < 1e-12, "{top:?}");
+    let region = crate::aabb::Aabb3 {
+        min: Point3::new(0.48, 1.0, 0.4),
+        max: Point3::new(0.52, 2.0, 0.6),
+    };
+    let curves = super::plane::intersect_plane_nurbs_in_region(
+        &surface,
+        Vec3::new(0.0, 0.0, 1.0),
+        0.5,
+        10,
+        Some(region),
+    )
+    .unwrap();
+    let reaches = curves.iter().any(|c| {
+        let (t0, t1) = c.curve.domain();
+        (0..=200).any(|k| {
+            let p = c.curve.evaluate(t0 + (t1 - t0) * f64::from(k) / 200.0);
+            p.y() > 1.4
+        })
+    });
+    assert!(reaches, "{} curves, none through the bump", curves.len());
+}

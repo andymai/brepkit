@@ -795,6 +795,20 @@ impl BoundaryRegistry {
         topo: &Topology,
         result_faces: &[FaceId],
     ) -> Result<Vec<BoundaryIncidence>, BoundaryAuditError> {
+        self.postassembly_audit_with_input(topo, result_faces, &HashMap::new())
+    }
+
+    /// [`Self::postassembly_audit`], where an edge the registry does not
+    /// hold that `input_uses` counts keeps the uses it had in the input: an
+    /// input edge shared by four faces (a body two pieces of which meet
+    /// along it) that the operation leaves alone is no fault of the
+    /// operation. Every other unregistered edge takes two uses.
+    pub fn postassembly_audit_with_input(
+        &self,
+        topo: &Topology,
+        result_faces: &[FaceId],
+        input_uses: &HashMap<EdgeId, usize>,
+    ) -> Result<Vec<BoundaryIncidence>, BoundaryAuditError> {
         let mut incidences: HashMap<EdgeId, Vec<(FaceId, bool)>> = HashMap::new();
         for &face_id in result_faces {
             let face = topo.face(face_id).map_err(topology_audit_error)?;
@@ -863,7 +877,7 @@ impl BoundaryRegistry {
                         })
                         .count()
                 })
-                .unwrap_or(2);
+                .unwrap_or_else(|| input_uses.get(edge).copied().unwrap_or(2));
             // A retired boundary's construction no longer exists, so
             // neither its expected owner uses nor its edge's incidence is
             // audited (see `Self::retire`).

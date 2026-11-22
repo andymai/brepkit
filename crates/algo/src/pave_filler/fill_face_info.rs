@@ -495,22 +495,29 @@ fn fill_ef_in(topo: &Topology, arena: &mut GfaArena) {
                     // it quadratically) can hug it within the ratio at any
                     // size.
                     let straight = matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Line);
-                    let conic_on_quadric = matches!(
-                        edge.curve(),
-                        brepkit_topology::edge::EdgeCurve::Circle(_)
-                            | brepkit_topology::edge::EdgeCurve::Ellipse(_)
-                    ) && matches!(
+                    //
+                    // Any other leaf on an analytic curved face stays within
+                    // the absolute ceiling too: a cylinder's rim arc that
+                    // crosses another cylinder at its two ends (a pipe's end
+                    // circle across a post) stands 18% of its chord off it.
+                    let quadric = matches!(
                         surface,
                         FaceSurface::Cylinder(_)
                             | FaceSurface::Cone(_)
                             | FaceSurface::Sphere(_)
                             | FaceSurface::Torus(_)
                     );
+                    let conic_on_quadric = quadric
+                        && matches!(
+                            edge.curve(),
+                            brepkit_topology::edge::EdgeCurve::Circle(_)
+                                | brepkit_topology::edge::EdgeCurve::Ellipse(_)
+                        );
                     let band = if straight && matches!(surface, FaceSurface::Plane { .. })
                         || conic_on_quadric
                     {
                         (IN_FACE_MAX_DEVIATION_RATIO * chord).min(crate::ds::shape_store::MAX_WIDEN)
-                    } else if straight {
+                    } else if straight || quadric {
                         (IN_FACE_MAX_DEVIATION_RATIO * chord).min(IN_FACE_MAX_DEVIATION_ABS)
                     } else {
                         IN_FACE_MAX_DEVIATION_RATIO * chord

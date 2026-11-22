@@ -37,6 +37,12 @@ enum FaceGeom {
         surface: std::sync::Arc<brepkit_math::nurbs::intersection::RaySurface>,
         trim: NurbsTrim,
     },
+    /// A NURBS face the variant above declines (a closed one too), read on
+    /// its own surface: the ray's hits on the patch, found knot span by knot
+    /// span, kept where the face's wires hold them. A flat polygon through
+    /// the wires of a curved patch (a lofted wall bulging between its rims)
+    /// stands where the patch does not.
+    NurbsSpans(Box<SpanTrim>),
     /// A planar (or planar-approximated) face: boundary polygon, hole
     /// polygons, and the supporting plane.
     Planar {
@@ -819,7 +825,7 @@ fn geom_box(geom: &FaceGeom, tol: Tolerance) -> Option<brepkit_math::aabb::Aabb3
             let b = surface.aabb();
             finite_box([b.min, b.max])?
         }
-        FaceGeom::Extrusion { .. } => return None,
+        FaceGeom::Extrusion { .. } | FaceGeom::NurbsSpans(_) => return None,
         FaceGeom::Nurbs { surface, .. } => {
             let b = surface.surface().aabb();
             finite_box([b.min, b.max])?
@@ -1047,6 +1053,7 @@ fn votes_from_geoms(
                         FaceGeom::SphereTrim { .. } => "sphere trim".to_string(),
                         FaceGeom::Extrusion { .. } => "extrusion".to_string(),
                         FaceGeom::Nurbs { .. } => "nurbs".to_string(),
+                        FaceGeom::NurbsSpans(_) => "nurbs".to_string(),
                     };
                     log::debug!(
                         "RAYHIT {label} dir=({:.3},{:.3},{:.3}) geom#{gi} {tag} c={c} susp={s}",
@@ -1172,6 +1179,40 @@ fn wire_polygon(
     wire_id: brepkit_topology::wire::WireId,
 ) -> Result<Vec<Point3>, AlgoError> {
     wire_polygon_arcs(topo, wire_id, None).map(|(verts, _)| verts)
+}
+
+/// Points along a wire, each curved edge at `ARC_SAMPLES` places inside it,
+/// for reading the angle round an axis that a patch covers.
+///
+/// [`wire_polygon`] takes three points inside an open curve: along an arc
+/// of 324 degrees they stand 81 degrees apart, wider than the patch's real
+/// 36 degree gap, and the largest gap between them is then a stretch of the
+/// patch itself.
+fn wire_angle_samples(
+    topo: &Topology,
+    wire_id: brepkit_topology::wire::WireId,
+) -> Result<Vec<Point3>, AlgoError> {
+    /// Places inside each curved edge: a whole turn's samples stand under
+    /// 0.1 rad apart, under the smallest gap [`largest_u_gap`] reads.
+    const ARC_SAMPLES: i32 = 64;
+    let mut pts = Vec::new();
+    for oe in topo.wire(wire_id)?.edges() {
+        let edge = topo.edge(oe.edge())?;
+        let (start, end) = (
+            topo.vertex(edge.start())?.point(),
+            topo.vertex(edge.end())?.point(),
+        );
+        pts.push(start);
+        if !matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Line) {
+            let (t0, t1) = edge.curve().domain_with_endpoints(start, end);
+            for k in 1..=ARC_SAMPLES {
+                let t = (t1 - t0).madd(f64::from(k) / f64::from(ARC_SAMPLES + 1), t0);
+                pts.push(edge.curve().evaluate_with_endpoints(t, start, end));
+            }
+        }
+        pts.push(end);
+    }
+    Ok(pts)
 }
 
 /// [`wire_polygon`], with each curved edge of a face in `plane` (the face's
@@ -1354,13 +1395,15 @@ fn collect_geoms_of(
                 if verts.len() >= 3 {
                     let mut pv_min = f64::INFINITY;
                     let mut pv_max = f64::NEG_INFINITY;
-                    let mut u_samples = Vec::with_capacity(verts.len());
                     for p in &verts {
-                        let (u, v) = cyl.project_point(*p);
+                        let (_, v) = cyl.project_point(*p);
                         pv_min = pv_min.min(v);
                         pv_max = pv_max.max(v);
-                        u_samples.push(u);
                     }
+                    let u_samples: Vec<f64> = wire_angle_samples(topo, face.outer_wire())?
+                        .into_iter()
+                        .map(|p| cyl.project_point(p).0)
+                        .collect();
                     if pv_min.is_finite()
                         && pv_max > pv_min
                         && let Some(gap) = largest_u_gap(&u_samples)
@@ -1423,8 +1466,9 @@ fn collect_geoms_of(
                 // The apex has no `u` of its own, so it takes no part in the
                 // gap.
                 let apex = 1e-9 * pv_min.abs().max(pv_max.abs()).max(1.0);
-                let u_samples: Vec<f64> = uv
-                    .iter()
+                let u_samples: Vec<f64> = wire_angle_samples(topo, face.outer_wire())?
+                    .into_iter()
+                    .map(|p| cone.project_point(p))
                     .filter(|s| s.1.abs() > apex)
                     .map(|s| s.0)
                     .collect();
@@ -1550,18 +1594,19 @@ fn collect_geoms_of(
             }
         }
 
-        if let brepkit_topology::face::FaceSurface::Nurbs(n) = face.surface()
-            && let Some(geom) = extrusion_geom(topo, face, n)?
-        {
-            result.push(geom);
-            continue;
-        }
-
-        if let brepkit_topology::face::FaceSurface::Nurbs(n) = face.surface()
-            && let Some(geom) = nurbs_geom(topo, face, n)?
-        {
-            result.push(geom);
-            continue;
+        if let brepkit_topology::face::FaceSurface::Nurbs(n) = face.surface() {
+            if let Some(geom) = extrusion_geom(topo, face, n)? {
+                result.push(geom);
+                continue;
+            }
+            if let Some(geom) = nurbs_geom(topo, face, n)? {
+                result.push(geom);
+                continue;
+            }
+            if let Some(geom) = SpanTrim::new(topo, face, n)? {
+                result.push(FaceGeom::NurbsSpans(Box::new(geom)));
+                continue;
+            }
         }
 
         if let brepkit_topology::face::FaceSurface::Torus(t) = face.surface()
@@ -1667,6 +1712,330 @@ fn collect_geoms_of(
     }
 
     Ok(result)
+}
+
+/// A NURBS face's surface, its knot spans indexed for line hits and for
+/// placing points on it, and its wires: sampled in 3D, for points that graze
+/// them, and in the patch's `(u, v)` to read whether a point lies on the
+/// face.
+pub struct SpanTrim {
+    surface: brepkit_math::nurbs::surface::NurbsSurface,
+    index: std::sync::Arc<brepkit_math::nurbs::SpanIndex>,
+    /// Each wire as a closed polyline (its first point not repeated).
+    loops_3d: Vec<Vec<Point3>>,
+    /// How far a polyline may stand from its wire: a hit within this of one
+    /// is read as grazing the face's boundary.
+    band: f64,
+    /// The wires in `(u, v)`, outer first, each unwrapped across a closed
+    /// patch's seam; `None` when the face is its whole patch.
+    trim: Option<Vec<Vec<Point2>>>,
+    /// A closed patch's period in each direction.
+    periods: (Option<f64>, Option<f64>),
+    /// How near the patch a point placed from a neighbour's `(u, v)` must
+    /// come to stand placed.
+    on_patch: f64,
+}
+
+impl SpanTrim {
+    /// The trim of a NURBS face. `None` for any other surface, or as for
+    /// [`Self::new`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AlgoError`] if a topology lookup fails.
+    pub fn of_face(
+        topo: &Topology,
+        face_id: brepkit_topology::face::FaceId,
+    ) -> Result<Option<Self>, AlgoError> {
+        let face = topo.face(face_id)?;
+        let brepkit_topology::face::FaceSurface::Nurbs(n) = face.surface() else {
+            return Ok(None);
+        };
+        Self::new(topo, face, n)
+    }
+
+    /// Where `p` stands on the patch, placed from `hint` (the last point
+    /// placed, as along a curve) when that reaches it, else by a search of
+    /// the whole patch; `hint` then holds it.
+    fn locate(&self, p: Point3, hint: &std::cell::Cell<Option<(f64, f64)>>) -> Option<(f64, f64)> {
+        let near = hint
+            .get()
+            .map(|g| brepkit_math::nurbs::SpanIndex::closest_point_near(&self.surface, p, g))
+            .filter(|&(_, _, d)| d <= self.on_patch);
+        let (u, v, _) = near.or_else(|| self.index.closest_point(&self.surface, p))?;
+        hint.set(Some((u, v)));
+        Some((u, v))
+    }
+
+    /// How far `p` lies from the face's wires.
+    fn wire_distance(&self, p: Point3) -> f64 {
+        self.loops_3d
+            .iter()
+            .map(|pts| dist_to_polygon_boundary(p, pts))
+            .fold(f64::INFINITY, f64::min)
+    }
+
+    /// Whether `p` lies on the face, or within `band` of its wires.
+    #[must_use]
+    pub fn contains(
+        &self,
+        p: Point3,
+        hint: &std::cell::Cell<Option<(f64, f64)>>,
+        band: f64,
+    ) -> bool {
+        self.locate(p, hint).is_none_or(|(u, v)| self.holds(u, v))
+            || self.wire_distance(p) <= self.band + band
+    }
+
+    /// Whether `p` lies on the face farther than `depth` from its wires.
+    #[must_use]
+    pub fn contains_strict(
+        &self,
+        p: Point3,
+        hint: &std::cell::Cell<Option<(f64, f64)>>,
+        depth: f64,
+    ) -> bool {
+        self.locate(p, hint).is_some_and(|(u, v)| self.holds(u, v))
+            && self.wire_distance(p) > self.band + depth
+    }
+
+    /// The geometry of a NURBS `face` on `surface`. `None` when its spans
+    /// cannot be indexed (a weight that is not positive) or its wires do not
+    /// project onto the patch.
+    fn new(
+        topo: &Topology,
+        face: &brepkit_topology::face::Face,
+        surface: &brepkit_math::nurbs::surface::NurbsSurface,
+    ) -> Result<Option<Self>, AlgoError> {
+        use brepkit_topology::edge::EdgeCurve;
+        const PIECES: u32 = 64;
+        let Some(index) = surface.span_index_shared() else {
+            return Ok(None);
+        };
+        let mut loops_3d = Vec::new();
+        let mut band = 0.0_f64;
+        // A line is sampled at its ends alone, which a line across the patch
+        // from border to border shares with the patch's own edges: its
+        // middle tells the two apart.
+        let mut line_middles: Vec<Point3> = Vec::new();
+        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            let mut pts: Vec<Point3> = Vec::new();
+            for oe in topo.wire(wid)?.edges() {
+                let edge = topo.edge(oe.edge())?;
+                let (sp, ep) = (
+                    topo.vertex(edge.start())?.point(),
+                    topo.vertex(edge.end())?.point(),
+                );
+                let curve = edge.curve();
+                let pieces = if matches!(curve, EdgeCurve::Line) {
+                    1
+                } else {
+                    PIECES
+                };
+                let (t0, t1) = curve.domain_with_endpoints(sp, ep);
+                let at = |k: f64| {
+                    curve.evaluate_with_endpoints((t1 - t0).madd(k / f64::from(pieces), t0), sp, ep)
+                };
+                let mut along: Vec<Point3> = (0..=pieces).map(|k| at(f64::from(k))).collect();
+                if pieces == 1 {
+                    line_middles.push(at(0.5));
+                }
+                for k in 0..pieces {
+                    let (a, b) = (along[k as usize], along[k as usize + 1]);
+                    let mid = at(f64::from(k) + 0.5);
+                    band = band.max((mid - (a + (b - a) * 0.5)).length());
+                }
+                if !oe.is_forward() {
+                    along.reverse();
+                }
+                along.pop();
+                pts.extend(along);
+            }
+            if pts.len() >= 2 {
+                loops_3d.push(pts);
+            }
+        }
+        if loops_3d.is_empty() {
+            return Ok(None);
+        }
+        let (u_dom, v_dom) = (surface.domain_u(), surface.domain_v());
+        let periods = (
+            surface.is_periodic_u().then_some(u_dom.1 - u_dom.0),
+            surface.is_periodic_v().then_some(v_dom.1 - v_dom.0),
+        );
+        let mut loops_uv: Vec<Vec<Point2>> = Vec::with_capacity(loops_3d.len());
+        let unwrap = |prev: f64, next: f64, period: Option<f64>| {
+            period.map_or(next, |p| p.madd(-((next - prev) / p).round(), next))
+        };
+        // Each sample is placed from the one before it, as a curve on the
+        // patch runs on; a search over the whole patch can settle on a far
+        // span of a patch with hundreds of them, and only the first sample
+        // of a loop, or one the step from its neighbour does not reach,
+        // needs it.
+        let scale = loops_3d
+            .iter()
+            .flatten()
+            .fold(0.0_f64, |m, p| {
+                m.max(p.x().abs()).max(p.y().abs()).max(p.z().abs())
+            })
+            .max(1.0);
+        let on_patch = 1e-6 * scale;
+        for pts in &loops_3d {
+            let mut uv: Vec<Point2> = Vec::with_capacity(pts.len());
+            let mut placed: Option<(f64, f64)> = None;
+            for &p in pts {
+                let near = placed
+                    .map(|g| brepkit_math::nurbs::SpanIndex::closest_point_near(surface, p, g))
+                    .filter(|&(_, _, d)| d <= on_patch);
+                let Some((u, v, _)) = near.or_else(|| index.closest_point(surface, p)) else {
+                    return Ok(None);
+                };
+                placed = Some((u, v));
+                let next = match uv.last() {
+                    Some(prev) => Point2::new(
+                        unwrap(prev.x(), u, periods.0),
+                        unwrap(prev.y(), v, periods.1),
+                    ),
+                    None => Point2::new(u, v),
+                };
+                uv.push(next);
+            }
+            loops_uv.push(uv);
+        }
+        // A face whose wires all run along the patch's own edges is the
+        // whole patch: every hit is on it.
+        let eps_u = 1e-7 * (u_dom.1 - u_dom.0);
+        let eps_v = 1e-7 * (v_dom.1 - v_dom.0);
+        let on_border = |q: &Point2| {
+            let u = periods
+                .0
+                .map_or_else(|| q.x(), |p| (q.x() - u_dom.0).rem_euclid(p) + u_dom.0);
+            let v = periods
+                .1
+                .map_or_else(|| q.y(), |p| (q.y() - v_dom.0).rem_euclid(p) + v_dom.0);
+            (u - u_dom.0).abs() <= eps_u
+                || (u_dom.1 - u).abs() <= eps_u
+                || (v - v_dom.0).abs() <= eps_v
+                || (v_dom.1 - v).abs() <= eps_v
+        };
+        let whole = face.inner_wires().is_empty()
+            && loops_uv.iter().flatten().all(on_border)
+            && line_middles.iter().all(|&p| {
+                index
+                    .closest_point(surface, p)
+                    .is_some_and(|(u, v, _)| on_border(&Point2::new(u, v)))
+            });
+        Ok(Some(Self {
+            surface: surface.clone(),
+            index,
+            loops_3d,
+            band,
+            trim: (!whole).then_some(loops_uv),
+            periods,
+            on_patch,
+        }))
+    }
+
+    /// Whether the patch point `(u, v)` lies on the face: a ray from it
+    /// toward growing `v` crosses its wires an odd number of times.
+    ///
+    /// On a patch closed in `u` a wire can wind round it (a wall's rims, or a
+    /// rim that runs round a hole lying across the seam), and is a closed
+    /// curve on the patch though not in its unwrapped `(u, v)`: each piece's
+    /// step in `u` is taken a period nearest zero, and `u` is read at the
+    /// piece's own copy, so the count holds however the loops wind.
+    fn holds(&self, u: f64, v: f64) -> bool {
+        let Some(loops) = &self.trim else {
+            return true;
+        };
+        if self.periods.1.is_some() {
+            return self.holds_in_polygons(loops, u, v);
+        }
+        let period = self.periods.0;
+        let mut crossings = 0_u32;
+        for wire in loops {
+            for (k, &a) in wire.iter().enumerate() {
+                let b = wire[(k + 1) % wire.len()];
+                let mut du = b.x() - a.x();
+                if let Some(p) = period {
+                    du -= (du / p).round() * p;
+                }
+                if du == 0.0 {
+                    continue;
+                }
+                let (lo, hi) = if du > 0.0 {
+                    (a.x(), a.x() + du)
+                } else {
+                    (a.x() + du, a.x())
+                };
+                let at = period.map_or(u, |p| ((u - lo) / p).floor().madd(-p, u));
+                if at < lo || at >= hi {
+                    continue;
+                }
+                let t = (at - a.x()) / du;
+                if t.madd(b.y() - a.y(), a.y()) > v {
+                    crossings += 1;
+                }
+            }
+        }
+        crossings % 2 == 1
+    }
+
+    /// [`Self::holds`] on a patch closed in `v` too: inside the outer wire
+    /// and no hole, each read at the period copy nearest its middle.
+    fn holds_in_polygons(&self, loops: &[Vec<Point2>], u: f64, v: f64) -> bool {
+        let inside = |poly: &[Point2]| {
+            let middle = |of: fn(Point2) -> f64| {
+                let (lo, hi) = poly
+                    .iter()
+                    .map(|&q| of(q))
+                    .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), x| {
+                        (lo.min(x), hi.max(x))
+                    });
+                f64::midpoint(lo, hi)
+            };
+            let near = |m: f64, x: f64, period: Option<f64>| {
+                period.map_or(x, |p| p.madd(-((x - m) / p).round(), x))
+            };
+            point_in_polygon(
+                Point2::new(
+                    near(middle(Point2::x), u, self.periods.0),
+                    near(middle(Point2::y), v, self.periods.1),
+                ),
+                poly,
+            )
+        };
+        loops.first().is_some_and(|outer| inside(outer)) && !loops[1..].iter().any(|h| inside(h))
+    }
+
+    /// Crossings of the ray from `origin` along `dir` with the face, and
+    /// whether any hit grazed the patch, sat at the origin, or lay within
+    /// the band of a wire.
+    fn crossings(&self, origin: Point3, dir: Vec3, tol: Tolerance) -> (i32, bool) {
+        let near = 10.0 * tol.linear;
+        let band = self.band + near;
+        let mut crossings = 0;
+        let mut suspicious = false;
+        for hit in self.index.line_hits(&self.surface, origin, dir) {
+            let dist = hit.t * dir.length();
+            if dist.abs() <= near {
+                suspicious = true;
+                continue;
+            }
+            if dist < 0.0 {
+                continue;
+            }
+            suspicious |= hit.grazing
+                || self
+                    .loops_3d
+                    .iter()
+                    .any(|pts| dist_to_polygon_boundary(hit.point, pts) <= band);
+            if self.holds(hit.uv.0, hit.uv.1) {
+                crossings += 1;
+            }
+        }
+        (crossings, suspicious)
+    }
 }
 
 /// A NURBS face whose two control rows (or columns) differ by one vector:
@@ -1894,8 +2263,26 @@ fn nurbs_geom(
         });
         let warm = tried.filter(|q| q.distance <= 64.0 * f64::EPSILON * size.max(1.0));
         let found = warm.or_else(|| {
+            // The search proves its foot nearest to a millionth of the
+            // face's size, and Newton takes it the rest of the way: proved
+            // to 1e-12, a boundary standing off its surface (a file's edges,
+            // 3e-5 off a fitted skin) had every point's foot halved down to
+            // that, most of a boolean's time.
+            let near = 1e-6 * size.max(1.0);
             let searched =
-                brepkit_math::nurbs::projection::project_point_to_surface(surface, p, 1e-12).ok();
+                brepkit_math::nurbs::projection::project_point_to_surface(surface, p, near)
+                    .ok()
+                    .map(|s| {
+                        brepkit_math::nurbs::projection::project_point_to_surface_from(
+                            surface,
+                            p,
+                            (s.u, s.v),
+                            1e-12,
+                        )
+                        .ok()
+                        .filter(|r| r.distance <= s.distance)
+                        .unwrap_or(s)
+                    });
             match (searched, tried) {
                 (Some(s), Some(t)) if t.distance < s.distance => Some(t),
                 (s, t) => s.or(t),
@@ -2725,6 +3112,7 @@ fn ray_geom_crossings(
         FaceGeom::Nurbs { surface, trim } => {
             ray_nurbs_crossings(origin, ray_dir, surface, trim, tol)
         }
+        FaceGeom::NurbsSpans(geom) => geom.crossings(origin, ray_dir, tol),
     }
 }
 
@@ -5865,5 +6253,42 @@ mod tests {
         };
         assert!(geom_box(&band(0.0, 2.0), tol).is_some());
         assert!(geom_box(&band(0.0, f64::NAN), tol).is_none());
+    }
+
+    /// The flat patch `(u, v, 0)` over the unit square, its face the left
+    /// half: a line from the bottom border to the top one closes it, so
+    /// every wire end lies on the patch's border, but the face is not the
+    /// whole patch, and a point on the right half is off it.
+    #[test]
+    fn a_nurbs_face_cut_across_its_patch_by_a_line_is_not_the_whole_patch() {
+        use brepkit_math::nurbs::surface::NurbsSurface;
+        let mut topo = Topology::new();
+        let p = Point3::new;
+        let surface = NurbsSurface::new(
+            1,
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![
+                vec![p(0.0, 0.0, 0.0), p(0.0, 1.0, 0.0)],
+                vec![p(1.0, 0.0, 0.0), p(1.0, 1.0, 0.0)],
+            ],
+            vec![vec![1.0; 2]; 2],
+        )
+        .unwrap();
+        let corners = [(0.0, 0.0), (0.5, 0.0), (0.5, 1.0), (0.0, 1.0)]
+            .map(|(x, y)| topo.add_vertex(Vertex::new(p(x, y, 0.0), 1e-7)));
+        let edges: Vec<_> = (0..4)
+            .map(|i| {
+                let edge = Edge::new(corners[i], corners[(i + 1) % 4], EdgeCurve::Line);
+                OrientedEdge::new(topo.add_edge(edge), true)
+            })
+            .collect();
+        let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+        let face_id = topo.add_face(Face::new(wire, vec![], FaceSurface::Nurbs(surface)));
+        let trim = SpanTrim::of_face(&topo, face_id).unwrap().unwrap();
+        let on = |q: Point3| trim.contains_strict(q, &std::cell::Cell::new(None), 1e-3);
+        assert!(on(p(0.25, 0.5, 0.0)));
+        assert!(!on(p(0.75, 0.5, 0.0)));
     }
 }

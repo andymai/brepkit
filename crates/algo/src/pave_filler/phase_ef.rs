@@ -1263,7 +1263,7 @@ fn survey_pairs(
 /// B-spline's the boxes of the nets of the Bezier pieces the range runs
 /// over, each piece within the hull of its net. `None` where a weight is not
 /// positive, the pieces cannot be read, or a box is not finite.
-fn curve_piece_boxes(
+pub fn curve_piece_boxes(
     curve: &EdgeCurve,
     start_pos: Point3,
     end_pos: Point3,
