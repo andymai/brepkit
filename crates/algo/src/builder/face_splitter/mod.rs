@@ -12252,10 +12252,13 @@ fn attach_sphere_holes(pieces: &mut [SplitSubFace], holes: &[Vec<OrientedPCurveE
 /// of the tube away from the rest: a half ring's meridian arc from the tube
 /// angle 3pi/2 up to its outer equator ends at 0, not 2pi, and the polygon
 /// then folds across the piece beside it.
+///
+/// `None` for a piece with holes: they are read on their own stored
+/// `(u, v)`, which can lie a turn from the window this reading takes.
 fn torus_loop_uv(sub_face: &SplitSubFace) -> Option<Vec<Point2>> {
     use std::f64::consts::{PI, TAU};
     const CURVE_SAMPLES: u32 = 8;
-    if !matches!(sub_face.surface, FaceSurface::Torus(_)) {
+    if !matches!(sub_face.surface, FaceSurface::Torus(_)) || !sub_face.inner_wires.is_empty() {
         return None;
     }
     let mut points = Vec::with_capacity(sub_face.outer_wire.len() * CURVE_SAMPLES as usize);
@@ -14881,6 +14884,75 @@ mod tests {
         let p = interior_point_3d(&thin, Some(&frame), 1e-11).unwrap();
         assert!(inside(p, 1e-3, 1.5e-7), "{p:?}");
         assert!(interior_point_3d(&thin, Some(&frame), containment::SEED_CLEARANCE).is_none());
+    }
+
+    /// A rectangle in a torus's `(u, v)`, its edges straight between its
+    /// corners and its `(u, v)` stored as given.
+    fn torus_rectangle(
+        torus: &brepkit_math::surfaces::ToroidalSurface,
+        (u0, u1): (f64, f64),
+        (v0, v1): (f64, f64),
+        counterclockwise: bool,
+    ) -> Vec<OrientedPCurveEdge> {
+        let mut corners = [(u0, v0), (u1, v0), (u1, v1), (u0, v1)];
+        if !counterclockwise {
+            corners.reverse();
+        }
+        (0..4)
+            .map(|k| {
+                let (from, to) = (corners[k], corners[(k + 1) % 4]);
+                let (s, e) = (Point2::new(from.0, from.1), Point2::new(to.0, to.1));
+                OrientedPCurveEdge {
+                    curve_3d: EdgeCurve::Line,
+                    pcurve: brepkit_math::curves2d::Curve2D::Line(Line2D::new(s, e - s).unwrap()),
+                    start_uv: s,
+                    end_uv: e,
+                    start_3d: torus.evaluate(from.0, from.1),
+                    end_3d: torus.evaluate(to.0, to.1),
+                    forward: true,
+                    source_edge_idx: None,
+                    pave_block_id: None,
+                }
+            })
+            .collect()
+    }
+
+    /// A torus patch with a hole in its middle, both laid out a turn of `u`
+    /// on from the principal window. The patch's interior point lies on it,
+    /// off the hole.
+    #[test]
+    fn a_holed_torus_patch_a_turn_on_keeps_its_point_off_the_hole() {
+        use std::f64::consts::TAU;
+        let torus =
+            brepkit_math::surfaces::ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), 4.0, 1.5)
+                .unwrap();
+        let mut topo = Topology::new();
+        let face_id = make_unit_square_face(&mut topo);
+        let patch = SplitSubFace {
+            surface: FaceSurface::Torus(torus.clone()),
+            outer_wire: torus_rectangle(&torus, (TAU + 0.2, TAU + 1.2), (0.5, 2.5), true),
+            inner_wires: vec![torus_rectangle(
+                &torus,
+                (TAU + 0.5, TAU + 0.9),
+                (1.2, 1.8),
+                false,
+            )],
+            reversed: false,
+            parent: face_id,
+            rank: Rank::A,
+            precomputed_interior: None,
+        };
+        let p = interior_point_3d(&patch, None, 1e-7).unwrap();
+        let (u, v) = torus.project_point(p);
+        let u = u.rem_euclid(TAU);
+        assert!(
+            (0.2..1.2).contains(&u) && (0.5..2.5).contains(&v),
+            "({u}, {v})"
+        );
+        assert!(
+            !((0.5..0.9).contains(&u) && (1.2..1.8).contains(&v)),
+            "({u}, {v}) lies in the hole"
+        );
     }
 
     /// A loop through the north pole between two meridians a half turn
