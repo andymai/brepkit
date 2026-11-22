@@ -52,6 +52,11 @@ const MOST_HALVINGS: u32 = 16;
 /// budgets of their own.
 const MOST_STRETCHES: usize = 128;
 
+/// The fractions along an edge both faces share at which it is read: more
+/// than one, so a vertex of either face touching the edge at one of them
+/// does not hide the side it lies on.
+const SHARED_READS: [f64; 3] = [0.25, 0.5, 0.75];
+
 /// A plane face.
 struct Flat {
     face: FaceId,
@@ -334,6 +339,9 @@ struct Other<'a> {
     region: &'a PlanarRegion,
     pieces: Option<&'a [Boundary2]>,
     edges: &'a HashSet<EdgeId>,
+    /// A box that holds the face, widened by the tolerance: an edge clear
+    /// of it is clear of the face.
+    bounds: Aabb3,
 }
 
 /// Whether some point lies inside both faces, farther than `tol` from the
@@ -357,6 +365,11 @@ fn shares_area(
     let wires = std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied());
     for wid in wires {
         for oe in topo.wire(wid)?.edges() {
+            if crate::util::edge_aabb(topo, oe.edge())?
+                .is_some_and(|bounds| !bounds.intersects(other_face.bounds))
+            {
+                continue;
+            }
             let edge = topo.edge(oe.edge())?;
             let curve = edge.curve();
             let (a, b) = (
@@ -463,11 +476,13 @@ fn shares_area(
                     }),
             };
             let cuts = steps;
-            // An edge the other face shares runs along its boundary: it is
-            // read beside the middle of each first stretch.
+            // An edge the other face shares runs along its boundary, and each
+            // face lies on one side of it all along it: it is read beside a
+            // few points, not each first stretch. Two faces on either side
+            // of it fail every read, each of them halved down to the
+            // tolerance on both sides.
             if other_face.edges.contains(&oe.edge()) {
-                for first in cuts.windows(2) {
-                    let mid = 0.5 * (first[0] + first[1]);
+                for mid in SHARED_READS {
                     if beside(mid) {
                         return Ok(true);
                     }
@@ -528,6 +543,37 @@ pub fn check_faces_overlap(
     solid_id: SolidId,
     tolerance: f64,
 ) -> Result<Vec<ValidationIssue>, CheckError> {
+    faces_overlap(topo, solid_id, tolerance, None)
+}
+
+/// Check the pairs of plane faces of a solid with one face in `faces`.
+///
+/// Reports what [`check_faces_overlap`] reports, for an operation that
+/// changed only those faces of a solid that was sound before.
+///
+/// # Errors
+///
+/// Returns an error if topology lookups fail.
+pub fn check_faces_overlap_among<S: std::hash::BuildHasher>(
+    topo: &Topology,
+    solid_id: SolidId,
+    tolerance: f64,
+    faces: &HashSet<FaceId, S>,
+) -> Result<Vec<ValidationIssue>, CheckError> {
+    faces_overlap(
+        topo,
+        solid_id,
+        tolerance,
+        Some(&|face| faces.contains(&face)),
+    )
+}
+
+fn faces_overlap(
+    topo: &Topology,
+    solid_id: SolidId,
+    tolerance: f64,
+    among: Option<&dyn Fn(FaceId) -> bool>,
+) -> Result<Vec<ValidationIssue>, CheckError> {
     let mut flats = Vec::new();
     for face_id in solid_faces(topo, solid_id)? {
         if let Some(flat) = Flat::of(topo, face_id)? {
@@ -579,6 +625,9 @@ pub fn check_faces_overlap(
                 if flats[j].bounds.min.0[axis] > flats[i].bounds.max.0[axis] + tolerance {
                     break;
                 }
+                if among.is_some_and(|among| !among(flats[i].face) && !among(flats[j].face)) {
+                    continue;
+                }
                 if (flats[i].offset - flats[j].offset).abs() <= window
                     && on_one_plane(&flats[i], &flats[j], tolerance)
                 {
@@ -609,11 +658,13 @@ pub fn check_faces_overlap(
             region: &rb,
             pieces: pb.as_deref(),
             edges: &eb,
+            bounds: b.bounds.expanded(tolerance),
         };
         let of_a = Other {
             region: &ra,
             pieces: pa.as_deref(),
             edges: &ea,
+            bounds: a.bounds.expanded(tolerance),
         };
         if shares_area(topo, a.face, &ra, &of_b, &frame, tolerance)?
             || shares_area(topo, b.face, &rb, &of_a, &frame, tolerance)?
@@ -1104,6 +1155,59 @@ mod tests {
         spline_rectangle(&mut b, (0.100, 0.03), (0.101, 5.0));
         let solid = b.solid();
         assert!(found(&b.topo, solid).is_empty());
+    }
+
+    /// The straight edge from `a` to `b` of the builder, its line made a
+    /// B-spline of degree 1, so its faces are read through samples.
+    fn as_spline(b: &mut Builder, from: [f64; 3], to: [f64; 3]) {
+        let (va, vb) = (b.vertex(from), b.vertex(to));
+        let key = (va.index().min(vb.index()), va.index().max(vb.index()));
+        let id = b.edges[&key];
+        let edge = b.topo.edge(id).unwrap();
+        let points = [edge.start(), edge.end()].map(|v| b.topo.vertex(v).unwrap().point());
+        let line = brepkit_math::nurbs::curve::NurbsCurve::new(
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            points.to_vec(),
+            vec![1.0, 1.0],
+        )
+        .unwrap();
+        b.topo
+            .edge_mut(id)
+            .unwrap()
+            .set_curve(EdgeCurve::NurbsCurve(line));
+    }
+
+    /// Two faces sharing an edge, each with a B-spline edge elsewhere: the
+    /// shared edge is read beside a few of its points. Faces either side
+    /// of it pass, and a face on the same side as the other is reported.
+    #[test]
+    fn faces_sharing_an_edge_beside_splines_are_read_on_its_sides() {
+        let z = [0.0, 0.0, 1.0];
+        for (other, overlap) in [(20.0, false), (5.0, true)] {
+            let mut b = Builder::default();
+            b.face(
+                &[[0., 0., 0.], [10., 0., 0.], [10., 10., 0.], [0., 10., 0.]],
+                z,
+            );
+            b.face(
+                &[
+                    [10., 0., 0.],
+                    [other, 0., 0.],
+                    [other, 10., 0.],
+                    [10., 10., 0.],
+                ],
+                z,
+            );
+            as_spline(&mut b, [0., 10., 0.], [0., 0., 0.]);
+            as_spline(&mut b, [other, 0., 0.], [other, 10., 0.]);
+            let solid = b.solid();
+            assert_eq!(
+                !found(&b.topo, solid).is_empty(),
+                overlap,
+                "other side at {other}"
+            );
+        }
     }
 
     /// A face whose outline is one closed straight B-spline through

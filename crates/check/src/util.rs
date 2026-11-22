@@ -4,7 +4,7 @@ use brepkit_math::aabb::Aabb3;
 use brepkit_math::madd::Madd;
 use brepkit_math::vec::{Point2, Point3, Vec3};
 use brepkit_topology::Topology;
-use brepkit_topology::edge::EdgeCurve;
+use brepkit_topology::edge::{EdgeCurve, EdgeId};
 use brepkit_topology::face::{FaceId, FaceSurface};
 
 use crate::CheckError;
@@ -401,6 +401,31 @@ fn expand_aabb_for_curve(aabb: &mut Aabb3, curve: &EdgeCurve) {
             }
         }
     }
+}
+
+/// A box that holds an edge: its ends, and the whole circle or ellipse of
+/// an arc, or a B-spline's control points. `None` for a B-spline with a
+/// weight that is not positive, whose control points need not hold it.
+///
+/// # Errors
+///
+/// Returns an error if the edge or its vertices are missing.
+pub fn edge_aabb(topo: &Topology, edge_id: EdgeId) -> Result<Option<Aabb3>, CheckError> {
+    let edge = topo.edge(edge_id)?;
+    if let EdgeCurve::NurbsCurve(nc) = edge.curve()
+        && !nc.weights().iter().all(|&w| w > 0.0)
+    {
+        return Ok(None);
+    }
+    let ends = [
+        topo.vertex(edge.start())?.point(),
+        topo.vertex(edge.end())?.point(),
+    ];
+    let Some(mut aabb) = Aabb3::try_from_points(ends) else {
+        return Ok(None);
+    };
+    expand_aabb_for_curve(&mut aabb, edge.curve());
+    Ok(Some(aabb))
 }
 
 /// Compute the axis-aligned bounding box of a face.
