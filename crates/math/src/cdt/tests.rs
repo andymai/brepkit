@@ -1168,3 +1168,66 @@ fn points_paired_on_both_axes_read_on_the_circle() {
         in_circle(a, b, c, d).signum()
     );
 }
+
+/// Points round a constraint from (0, 5) to (10, 5), first in the order of
+/// insertion.
+const FLIP_CORRIDOR: [(f64, f64); 31] = [
+    (0.0, 5.0),
+    (10.0, 5.0),
+    (0.787_201_073_454_015_8, 3.291_621_841_085_643),
+    (8.970_277_774_059_639, 4.770_750_836_437_926_5),
+    (4.090_516_550_520_467_5, 6.177_004_919_650_124),
+    (2.414_019_347_537_929, 3.797_392_698_313_49),
+    (5.490_207_622_402_364, 4.219_244_377_252_081),
+    (5.465_467_773_857_052, 5.217_020_597_003_628_5),
+    (6.895_723_100_547_359, 4.510_107_840_530_808),
+    (9.442_919_577_434_01, 4.909_221_038_680_277),
+    (7.222_793_280_189_133_5, 3.706_089_702_303_402_5),
+    (7.488_687_016_172_184, 4.013_914_306_023_798),
+    (9.286_146_972_624_58, 4.629_652_162_416_461),
+    (4.637_811_847_739_178_5, 6.328_095_083_569_281_5),
+    (1.188_055_970_430_913_5, 3.296_500_700_112_922_3),
+    (5.707_299_382_704_66, 6.142_897_982_895_163),
+    (2.664_487_862_717_597, 5.423_415_934_075_283),
+    (1.602_487_603_325_550_8, 5.223_281_836_260_014),
+    (0.541_106_438_317_344_7, 4.439_567_214_122_167),
+    (3.710_041_057_011_558_5, 4.194_065_686_390_291),
+    (8.586_183_419_747_48, 6.001_344_209_894_486),
+    (2.176_399_051_305_013_5, 2.602_840_865_486_570_5),
+    (1.676_992_238_669_744_5, 5.019_142_322_511_415),
+    (8.919_991_032_244_024, 5.686_451_078_084_743),
+    (5.349_989_764_266_087, 5.651_869_446_740_09),
+    (3.714_788_562_061_777, 5.245_960_865_270_493),
+    (8.388_352_637_222_333, 5.268_702_041_026_930_5),
+    (9.731_803_036_350_898, 5.168_598_461_947_104),
+    (4.624_106_202_104_022, 4.958_574_073_803_683),
+    (4.852_298_124_197_37, 5.712_643_186_661_032),
+    (0.420_606_627_940_289_8, 4.350_402_805_147_554),
+];
+
+/// Neither end of the corridor of edges that cross the constraint flips,
+/// and the lowest convex quad in it has both diagonals across the
+/// constraint. Flips there must move along the corridor. A flip of the new
+/// diagonal straight back makes no progress, and the recovery then splits
+/// the constraint at a point of its own.
+#[test]
+fn a_constraint_recovers_by_flips_where_a_quad_has_both_diagonals_across_it() {
+    let mut cdt = Cdt::new((Point2::new(-1.0, -1.0), Point2::new(11.0, 11.0)));
+    let ids: Vec<usize> = FLIP_CORRIDOR
+        .iter()
+        .map(|&(x, y)| cdt.insert_point(Point2::new(x, y)).unwrap())
+        .collect();
+    let before = cdt.vertices().len();
+    cdt.insert_constraint(ids[0], ids[1]).unwrap();
+    assert_eq!(
+        cdt.vertices().len(),
+        before,
+        "constraint recovery added vertices"
+    );
+    assert!(
+        cdt.triangles()
+            .iter()
+            .any(|&(a, b, c)| [a, b, c].contains(&ids[0]) && [a, b, c].contains(&ids[1])),
+        "the constraint is not an edge"
+    );
+}

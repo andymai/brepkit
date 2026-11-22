@@ -1436,27 +1436,12 @@ fn shell_is_outward_oriented(topo: &Topology, faces: &[FaceId]) -> Option<bool> 
             // A sphere face whose loop winds the axis holds the pole on the
             // loop's left, which the box of its boundary never reaches (a
             // hemisphere's box is a sliver on its equator, and the face's
-            // flux would drop out of the vote): progress toward +u puts the
-            // north pole there. A sample at a pole has no longitude, and
-            // stepping through one could count a turn the loop never makes.
+            // flux would drop out of the vote).
             if matches!(surface, FaceSurface::Sphere(_)) {
-                let off_pole: Vec<f64> = uvs
-                    .iter()
-                    .filter(|&&(_, v)| v.abs() < std::f64::consts::FRAC_PI_2 - 1e-6)
-                    .map(|&(u, _)| u)
-                    .collect();
-                let progress: f64 = off_pole
-                    .iter()
-                    .zip(off_pole.iter().cycle().skip(1))
-                    .map(|(a, b)| {
-                        (b - a + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU)
-                            - std::f64::consts::PI
-                    })
-                    .sum();
-                if progress > std::f64::consts::PI {
-                    v_hi = std::f64::consts::FRAC_PI_2;
-                } else if progress < -std::f64::consts::PI {
-                    v_lo = -std::f64::consts::FRAC_PI_2;
+                match pole_on_left(&uvs) {
+                    Some(v) if v > 0.0 => v_hi = v,
+                    Some(v) => v_lo = v,
+                    None => {}
                 }
             }
             // A whole ring's outer wire is its two seam placeholders, one
@@ -1972,6 +1957,62 @@ fn corner_fan_holds_holes(topo: &Topology, faces: &[FaceId]) -> bool {
     })
 }
 
+/// The latitude of the pole a sphere face's loop holds on its left, from
+/// the loop's samples in `(u, v)`: a loop winding the axis toward +u holds
+/// the north pole there. `None` when the loop does not wind the axis. A
+/// sample at a pole has no longitude, and stepping through one could count
+/// a turn the loop never makes, so those are passed over.
+fn pole_on_left(uvs: &[(f64, f64)]) -> Option<f64> {
+    use std::f64::consts::{FRAC_PI_2, PI, TAU};
+    let off_pole: Vec<f64> = uvs
+        .iter()
+        .filter(|&&(_, v)| v.abs() < FRAC_PI_2 - 1e-6)
+        .map(|&(u, _)| u)
+        .collect();
+    let progress: f64 = off_pole
+        .iter()
+        .zip(off_pole.iter().cycle().skip(1))
+        .map(|(a, b)| (b - a + PI).rem_euclid(TAU) - PI)
+        .sum();
+    if progress > PI {
+        Some(FRAC_PI_2)
+    } else if progress < -PI {
+        Some(-FRAC_PI_2)
+    } else {
+        None
+    }
+}
+
+/// The outward normal of a sphere face whose outer loop winds the sphere's
+/// axis, read at the pole the loop holds. The loop's corners centre on the
+/// axis, at the sphere's centre for a hemisphere, where every point of the
+/// sphere is equally near and no normal can be read. Past a hemisphere they
+/// project to the pole the face does not hold.
+fn sphere_pole_normal(topo: &Topology, face: &Face) -> Option<Vec3> {
+    let surface = face.surface();
+    if !matches!(surface, FaceSurface::Sphere(_)) {
+        return None;
+    }
+    let wire = topo.wire(face.outer_wire()).ok()?;
+    let mut uvs = Vec::new();
+    for oe in wire.edges() {
+        let edge = topo.edge(oe.edge()).ok()?;
+        let sp = topo.vertex(edge.start()).ok()?.point();
+        let ep = topo.vertex(edge.end()).ok()?.point();
+        let (d0, d1) = edge.curve().domain_with_endpoints(sp, ep);
+        for k in 0..8 {
+            let f = f64::from(k) / 8.0;
+            let f = if oe.is_forward() { f } else { 1.0 - f };
+            let p = edge
+                .curve()
+                .evaluate_with_endpoints((d1 - d0).madd(f, d0), sp, ep);
+            uvs.extend(surface.project_point(p));
+        }
+    }
+    let n = surface.normal(0.0, pole_on_left(&uvs)?);
+    Some(if face.is_reversed() { -n } else { n })
+}
+
 /// Compute a signed volume estimate for a shell using the divergence theorem.
 ///
 /// Positive = outward-oriented normals (growth shell).
@@ -2022,7 +2063,9 @@ fn signed_volume_of_shell(topo: &Topology, faces: &[FaceId]) -> f64 {
             Point3::new(c.x() * inv, c.y() * inv, c.z() * inv)
         };
         let wound_normal = newell_normal(&verts);
-        let sign = match face_normal_at(topo, fid, centroid) {
+        let reading =
+            sphere_pole_normal(topo, face).or_else(|| face_normal_at(topo, fid, centroid));
+        let sign = match reading {
             // Flip when the wire winds opposite the outward normal so the
             // fan tets are consistent with the divergence-theorem convention.
             Some(outward) if wound_normal.dot(outward) < 0.0 => -1.0,
