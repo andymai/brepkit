@@ -123,6 +123,9 @@ enum FaceGeom {
         surface: brepkit_math::surfaces::ToroidalSurface,
         trim: UvTrim,
         v_mid: f64,
+        /// The face is the whole ring less the regions its wires bound: its
+        /// outer wire runs only the ring's seam placeholders, at one point.
+        holes_only: bool,
     },
     /// A spherical face whose loops each bound a region of the sphere cut out
     /// by planes. Crossings come from the ray/sphere quadratic, kept when the
@@ -3084,7 +3087,8 @@ fn ray_geom_crossings(
             surface,
             trim,
             v_mid,
-        } => ray_torus_trim_crossings(origin, ray_dir, surface, trim, *v_mid, tol),
+            holes_only,
+        } => ray_torus_trim_crossings(origin, ray_dir, surface, (trim, *v_mid, *holes_only), tol),
         FaceGeom::Sphere { surface, loops } => {
             ray_sphere_crossings(origin, ray_dir, surface, loops, tol)
         }
@@ -4448,10 +4452,19 @@ fn torus_trim_geom(
     if hi - v_mid >= reach || v_mid - lo >= reach {
         return Ok(None);
     }
+    let outer = topo.wire(face.outer_wire())?;
+    let mut holes_only = !outer.edges().is_empty();
+    for oe in outer.edges() {
+        let edge = topo.edge(oe.edge())?;
+        holes_only &= matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Line)
+            && (topo.vertex(edge.start())?.point() - topo.vertex(edge.end())?.point()).length()
+                < 1e-9;
+    }
     Ok(Some(FaceGeom::TorusTrim {
         surface: surface.clone(),
         trim,
         v_mid,
+        holes_only,
     }))
 }
 
@@ -4462,8 +4475,7 @@ fn ray_torus_trim_crossings(
     origin: Point3,
     ray_dir: Vec3,
     surface: &brepkit_math::surfaces::ToroidalSurface,
-    trim: &UvTrim,
-    v_mid: f64,
+    (trim, v_mid, holes_only): (&UvTrim, f64, bool),
     tol: Tolerance,
 ) -> (i32, bool) {
     let near = 10.0 * tol.linear;
@@ -4486,9 +4498,9 @@ fn ray_torus_trim_crossings(
         if (surface.evaluate(u, v) - hit).length() > near.max(1e-9 * surface.major_radius()) {
             continue;
         }
-        let (on, close) = trim.contains(u, v, 1.0, torus_radius_at(surface, v), near, &project);
+        let (inside, close) = trim.contains(u, v, 1.0, torus_radius_at(surface, v), near, &project);
         suspicious |= close;
-        crossings += i32::from(on);
+        crossings += i32::from(inside != holes_only);
     }
     (crossings, suspicious)
 }
