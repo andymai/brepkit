@@ -12,6 +12,9 @@
 //!   most of a turn the other way once mirrored.
 //! - A ball less a corner: the ball's halves meet along a polygon of chords
 //!   of its equator, which lie inside the ball.
+//! - A rod with a cone on each end, its two rims polygons of chords: each
+//!   face reads a chord where the chord's points project onto it, on the
+//!   circle of the rim's height.
 
 #[cfg(test)]
 mod tests {
@@ -22,6 +25,8 @@ mod tests {
     use brepkit_heal::custom::convert_to_bspline::face_bspline_surface;
     use brepkit_math::mat::Mat4;
     use brepkit_math::quadrature::gauss_legendre_points;
+    use brepkit_math::surfaces::{ConicalSurface, CylindricalSurface};
+    use brepkit_math::vec::{Point3, Vec3};
     use brepkit_operations::blend_ops::chamfer_v2;
     use brepkit_operations::boolean::{BooleanOp, boolean};
     use brepkit_operations::measure::solid_volume;
@@ -30,10 +35,13 @@ mod tests {
     };
     use brepkit_operations::transform::transform_solid;
     use brepkit_topology::Topology;
-    use brepkit_topology::edge::EdgeCurve;
+    use brepkit_topology::edge::{Edge, EdgeCurve, EdgeId};
     use brepkit_topology::explorer::{solid_edges, solid_faces};
-    use brepkit_topology::face::FaceSurface;
-    use brepkit_topology::solid::SolidId;
+    use brepkit_topology::face::{Face, FaceSurface};
+    use brepkit_topology::shell::Shell;
+    use brepkit_topology::solid::{Solid, SolidId};
+    use brepkit_topology::vertex::Vertex;
+    use brepkit_topology::wire::{OrientedEdge, Wire};
 
     fn poses() -> Vec<(&'static str, Mat4)> {
         vec![
@@ -224,6 +232,83 @@ mod tests {
             let rest = boolean(&mut topo, BooleanOp::Cut, ball, cube).unwrap();
             transform_solid(&mut topo, rest, &pose).unwrap();
             let volume = solid_volume(&topo, rest, 1e-3).unwrap();
+            assert!(
+                (volume - expected).abs() < 1e-9 * expected,
+                "{name}: {volume}, expected {expected}, off {:e}",
+                (volume - expected) / expected
+            );
+        }
+    }
+
+    /// The rod's radius and length, each cone's height, and the chords of
+    /// each rim.
+    const ROD: (f64, f64, f64, u32) = (2.0, 3.0, 1.5, 24);
+
+    /// A polygon of chords round the rim of radius `ROD.0` at `z`.
+    fn chord_rim(topo: &mut Topology, z: f64) -> Vec<EdgeId> {
+        let (radius, _, _, chords) = ROD;
+        let corners: Vec<_> = (0..chords)
+            .map(|k| {
+                let angle = 2.0 * PI * f64::from(k) / f64::from(chords);
+                let at = Point3::new(radius * angle.cos(), radius * angle.sin(), z);
+                topo.add_vertex(Vertex::new(at, 1e-7))
+            })
+            .collect();
+        (0..corners.len())
+            .map(|k| {
+                let next = corners[(k + 1) % corners.len()];
+                topo.add_edge(Edge::new(corners[k], next, EdgeCurve::Line))
+            })
+            .collect()
+    }
+
+    /// The rim's chords round the `z` axis, counter-clockwise seen from
+    /// above or the other way.
+    fn rim_wire(topo: &mut Topology, rim: &[EdgeId], up: bool) -> brepkit_topology::wire::WireId {
+        let edges = if up {
+            rim.iter().map(|&e| OrientedEdge::new(e, true)).collect()
+        } else {
+            rim.iter()
+                .rev()
+                .map(|&e| OrientedEdge::new(e, false))
+                .collect()
+        };
+        topo.add_wire(Wire::new(edges, true).unwrap())
+    }
+
+    /// The rod from `z = 0` to its length, with a cone of `ROD.2` on each
+    /// end, its rims polygons of chords shared by the rod and the cones.
+    fn rod_with_chord_rims(topo: &mut Topology) -> SolidId {
+        let (radius, length, height, _) = ROD;
+        let lean = height.atan2(radius);
+        let (bottom, top) = (chord_rim(topo, 0.0), chord_rim(topo, length));
+        let up = Vec3::new(0.0, 0.0, 1.0);
+        let wall = CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), up, radius).unwrap();
+        let below = ConicalSurface::new(Point3::new(0.0, 0.0, -height), up, lean).unwrap();
+        let above = ConicalSurface::new(Point3::new(0.0, 0.0, length + height), -up, lean).unwrap();
+        let (wall_bottom, wall_top) = (rim_wire(topo, &bottom, true), rim_wire(topo, &top, false));
+        let wall = topo.add_face(Face::new(
+            wall_bottom,
+            vec![wall_top],
+            FaceSurface::Cylinder(wall),
+        ));
+        let cone_below = rim_wire(topo, &bottom, false);
+        let cone_above = rim_wire(topo, &top, true);
+        let below = topo.add_face(Face::new(cone_below, vec![], FaceSurface::Cone(below)));
+        let above = topo.add_face(Face::new(cone_above, vec![], FaceSurface::Cone(above)));
+        let shell = topo.add_shell(Shell::new(vec![below, wall, above]).unwrap());
+        topo.add_solid(Solid::new(shell, vec![]))
+    }
+
+    #[test]
+    fn a_rod_and_cones_whose_rims_are_chords_measure_alike_in_every_pose() {
+        let (radius, length, height, _) = ROD;
+        let expected = PI * radius * radius * (length + 2.0 * height / 3.0);
+        for (name, pose) in poses() {
+            let mut topo = Topology::new();
+            let solid = rod_with_chord_rims(&mut topo);
+            transform_solid(&mut topo, solid, &pose).unwrap();
+            let volume = solid_volume(&topo, solid, 1e-3).unwrap();
             assert!(
                 (volume - expected).abs() < 1e-9 * expected,
                 "{name}: {volume}, expected {expected}, off {:e}",

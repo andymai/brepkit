@@ -327,26 +327,35 @@ impl Revolution {
         }
     }
 
-    /// How far `p` lies from the centre of the meridian through it at `u`,
-    /// where the meridian is a circle (a sphere's centre, the centre of a
-    /// torus's tube), against the circle's radius; one where the meridian
-    /// is straight. A point off the surface by `d` moves the latitude of its
-    /// nearest point on the surface `1 + d / radius` times slower.
-    fn meridian_stretch(&self, p: Point3, u: f64) -> f64 {
-        let p = Vec3::new(p.x(), p.y(), p.z());
-        let (centre, radius) = match self.profile {
-            Profile::Cylinder { .. } | Profile::Cone { .. } => return 1.0,
-            Profile::Sphere { radius } => (self.centre, radius),
-            Profile::Torus { major, minor } => {
-                let (sin, cos) = u.sin_cos();
-                (self.centre + (self.x * cos + self.y * sin) * major, minor)
+    /// `dv/dt` of the point the chart's projection reads for a point moving
+    /// at `velocity` through `p`, at `(u, v)`. The projection reads `v` from
+    /// the height along the axis on a cylinder and a cone, and from the
+    /// angle round the meridian's centre on a ball and a torus, so an edge
+    /// off the surface (a chord of a rim) is read where its points project.
+    fn dv_dt(&self, p: Point3, velocity: Vec3, u: f64, v: f64) -> f64 {
+        let (sin_u, cos_u) = u.sin_cos();
+        let out = self.x * cos_u + self.y * sin_u;
+        let (along, across) = (self.z.dot(velocity), out.dot(velocity));
+        let centre = match self.profile {
+            Profile::Cylinder { .. } => return along,
+            Profile::Cone { cos_a, sin_a } => {
+                return if sin_a.abs() > 1e-15 {
+                    along / sin_a
+                } else if cos_a.abs() > 1e-15 {
+                    across / cos_a
+                } else {
+                    0.0
+                };
             }
+            Profile::Sphere { .. } => self.centre,
+            Profile::Torus { major, .. } => self.centre + out * major,
         };
-        let reach = (p - centre).length();
-        if reach > 1e-9 * radius {
-            reach / radius
+        let reach = (Vec3::new(p.x(), p.y(), p.z()) - centre).length();
+        if reach > 0.0 {
+            let (sin_v, cos_v) = v.sin_cos();
+            cos_v.madd(along, -sin_v * across) / reach
         } else {
-            1.0
+            0.0
         }
     }
 
@@ -624,19 +633,17 @@ pub(super) fn integrate_by_boundary<S: ParametricSurface>(
                         let [u1, u2, u3, u4] =
                             [t + h, t - h, t + 2.0 * h, t - 2.0 * h].map(|x| at(x).0);
                         let du = 8.0f64.madd(wrap_pi(u1 - u2), -wrap_pi(u3 - u4)) / (12.0 * h);
-                        // `dv/dt` of the edge's nearest points on the
-                        // surface, from the edge's velocity: the surface's
-                        // partials are square to each other, and its `v`
-                        // partial never vanishes. A stencil's differences
-                        // carry the rounding of each point, which a curve far
-                        // from its own centre (a long arc of a huge ellipse)
-                        // has in plenty. An edge off the surface (a chord of
-                        // a ball's equator) runs its nearest points slower
-                        // where the meridian curves.
-                        let sv = chart.surface.partial_v(un, vn);
-                        let dv = sv.dot(edge_velocity(edge.curve, t, edge.start, edge.end))
-                            / (sv.length_squared()
-                                * chart.revolution.meridian_stretch(point(t), un));
+                        // `dv/dt` of the projected edge from the edge's
+                        // velocity. A stencil's differences carry the
+                        // rounding of each point, which a curve far from its
+                        // own centre (a long arc of a huge ellipse) has in
+                        // plenty.
+                        let dv = chart.revolution.dv_dt(
+                            point(t),
+                            edge_velocity(edge.curve, t, edge.start, edge.end),
+                            un,
+                            vn,
+                        );
                         // Each difference rounds by an ulp of its coordinate.
                         let (nu, nv) = (
                             1.5 * f64::EPSILON * (1.0 + un.abs()) / h.abs(),
