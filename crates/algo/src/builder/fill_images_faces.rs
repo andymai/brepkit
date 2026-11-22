@@ -81,9 +81,9 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
     let face_loops = FaceLoopsCache::default();
     // Faces whose sections the splitter could not lay out.
     let mut unsplit: Vec<FaceId> = Vec::new();
-    // Faces kept whole although a section runs across them from boundary to
-    // boundary, with a point on either side of each such section: the face
-    // may stand whole only if both sides take the same class.
+    // Faces kept whole although a section runs across them, with a point on
+    // either side of each such section: the face may stand whole only if
+    // both sides take the same class.
     let mut whole: Vec<(FaceId, Point3, Point3)> = Vec::new();
 
     // Shared edge cache: (face_id, source_edge_idx) → EdgeId. Ensures section
@@ -582,6 +582,25 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
                 interior_unclear: false,
             });
             continue;
+        }
+        // One piece with no section in its wires stands whole across its
+        // sections, as a face split into nothing does: both sides of each
+        // must take one class. A taper pin's cone, whose two loops round its
+        // side did not split it, stood whole partly inside the rod and partly
+        // out, and the rod's own faces assembled the rod uncut.
+        if !imprinting
+            && let [only] = split_results.as_slice()
+            && std::iter::once(&only.outer_wire)
+                .chain(only.inner_wires.iter())
+                .flatten()
+                .all(|e| e.source_edge_idx.is_none())
+            && let Some(loops) = face_loops.get(topo, face_id)
+        {
+            whole.extend(
+                section_side_probes(topo, face_id, &loops, &sections)
+                    .into_iter()
+                    .map(|(p, q)| (face_id, p, q)),
+            );
         }
 
         // Build the parent face's PlaneFrame for consistent UV→3D conversion.
@@ -8335,6 +8354,128 @@ fn polyline_meetings(a: &[Point3], b: &[Point3], band: f64) -> Vec<(Point3, f64,
     found
 }
 
+/// For each section that lies on a face, a point on either side of its
+/// middle, both on the face and nearer that middle than anything else the
+/// face holds in its own `(u, v)`: its wires, its other sections, and the
+/// rest of the section beyond a sixteenth of it either side. The step from
+/// one point to the other then crosses this section and nothing else, so
+/// the two lie in the regions a split along it would separate, however
+/// small the section or the face (an offset read off the face's wires alone
+/// steps clean across a small loop). A section whose middle or either point
+/// falls off the face (in a hole, or past a wire the section rides) gets no
+/// points, and nor does one within a thousandth of the face's extent of its
+/// wires, read on finely sampled boundary edges.
+fn section_side_probes(
+    topo: &Topology,
+    face_id: FaceId,
+    loops: &crate::classifier::FaceLoops2d,
+    sections: &[SectionEdge],
+) -> Vec<(Point3, Point3)> {
+    use brepkit_math::vec::{Point2, Vec2};
+    const SAMPLES: usize = 64;
+    const NEAR: usize = SAMPLES / 16;
+    let Ok(face) = topo.face(face_id) else {
+        return Vec::new();
+    };
+    let (u_period, v_period) = super::pcurve_compute::surface_periods(face.surface());
+    // A cap of a ball bounded by one circle of latitude has an outline of
+    // no area in `(u, v)`: the face lies on the side its wire keeps.
+    let reversed = face.is_reversed();
+    // A step a period long or more wraps round the face, not along it.
+    let wraps = |a: Point2, b: Point2| {
+        u_period.is_some_and(|p| (b.x() - a.x()).abs() > 0.5 * p)
+            || v_period.is_some_and(|p| (b.y() - a.y()).abs() > 0.5 * p)
+    };
+    let to_segment = |p: Point2, a: Point2, b: Point2| {
+        let ab = b - a;
+        let len2 = ab.x().madd(ab.x(), ab.y() * ab.y());
+        let t = if len2 > 0.0 {
+            ((p - a).x().madd(ab.x(), (p - a).y() * ab.y()) / len2).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        (p - (a + ab * t)).length()
+    };
+    let polylines: Vec<Option<Vec<Point2>>> = sections
+        .iter()
+        .map(|s| {
+            // An open arc section runs the short way round between its ends.
+            let at = super::pcurve_compute::edge_point_at(&s.curve_3d, s.start, s.end);
+            (0..=SAMPLES)
+                .map(|k| {
+                    #[allow(clippy::cast_precision_loss)]
+                    loops.to_uv(at(k as f64 / SAMPLES as f64))
+                })
+                .collect()
+        })
+        .collect();
+    let wires: Vec<Vec<Point2>> = std::iter::once(&loops.outer)
+        .chain(loops.holes.iter())
+        .filter(|l| l.len() >= 2)
+        .map(|l| l.iter().copied().chain(l.first().copied()).collect())
+        .collect();
+    let boundary = boundary_runs(topo, face_id, 1024);
+    let extent = {
+        let points: Vec<Point3> = boundary.iter().flatten().copied().collect();
+        let Some(&first) = points.first() else {
+            return Vec::new();
+        };
+        let (lo, hi) = points.iter().fold((first, first), |(lo, hi), p| {
+            (
+                Point3::new(lo.x().min(p.x()), lo.y().min(p.y()), lo.z().min(p.z())),
+                Point3::new(hi.x().max(p.x()), hi.y().max(p.y()), hi.z().max(p.z())),
+            )
+        });
+        (hi - lo).length()
+    };
+    let mut probes = Vec::new();
+    for (i, (s, line)) in sections.iter().zip(&polylines).enumerate() {
+        let Some(line) = line else { continue };
+        let middle_3d = super::pcurve_compute::evaluate_edge_at_t(&s.curve_3d, s.start, s.end, 0.5);
+        if distance_to_runs(middle_3d, &boundary) <= 0.001 * extent {
+            continue;
+        }
+        let mid = SAMPLES / 2;
+        let m = line[mid];
+        let (before, after) = (line[mid - 1], line[mid + 1]);
+        if wraps(before, after) {
+            continue;
+        }
+        let Ok(along) = (after - before).normalize() else {
+            continue;
+        };
+        let across = Vec2::new(-along.y(), along.x());
+        let mut clear = f64::INFINITY;
+        for wire in &wires {
+            for w in wire.windows(2) {
+                clear = clear.min(to_segment(m, w[0], w[1]));
+            }
+        }
+        for (j, other) in polylines.iter().enumerate() {
+            let Some(other) = other else { continue };
+            for (k, w) in other.windows(2).enumerate() {
+                if (j == i && k + NEAR >= mid && k < mid + NEAR) || wraps(w[0], w[1]) {
+                    continue;
+                }
+                clear = clear.min(to_segment(m, w[0], w[1]));
+            }
+        }
+        let step = 0.5 * clear;
+        if !step.is_finite() || step <= 1e-12 {
+            continue;
+        }
+        let (p, q) = (m + across * step, m - across * step);
+        let on_face = |x| loops.contains_over_pole(x, reversed);
+        if !(on_face(m) && on_face(p) && on_face(q)) {
+            continue;
+        }
+        if let (Some(p), Some(q)) = (loops.to_3d(p), loops.to_3d(q)) {
+            probes.push((p, q));
+        }
+    }
+    probes
+}
+
 /// For each section running across a face from boundary to boundary through
 /// its interior, a point on either side of its middle, half its depth from
 /// it in the face: the regions a split would separate there, however close
@@ -8463,4 +8604,138 @@ fn folded_sliver(topo: &Topology, face_id: FaceId, tol: f64) -> bool {
         used[j] = true;
     }
     true
+}
+
+#[cfg(test)]
+mod side_point_tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+    use super::*;
+    use brepkit_math::curves::Circle3D;
+    use brepkit_math::vec::Vec3;
+
+    /// A plane face in `z = 0` with the outline `outer` and the holes
+    /// `holes`, each a polygon of lines, the holes run clockwise.
+    fn polygon_face(topo: &mut Topology, outer: &[(f64, f64)], holes: &[&[(f64, f64)]]) -> FaceId {
+        let mut wire = |corners: &[(f64, f64)]| {
+            let verts: Vec<_> = corners
+                .iter()
+                .map(|&(x, y)| topo.add_vertex(Vertex::new(Point3::new(x, y, 0.0), 1e-7)))
+                .collect();
+            let sides: Vec<OrientedEdge> = (0..verts.len())
+                .map(|i| {
+                    let e = topo.add_edge(Edge::new(
+                        verts[i],
+                        verts[(i + 1) % verts.len()],
+                        EdgeCurve::Line,
+                    ));
+                    OrientedEdge::new(e, true)
+                })
+                .collect();
+            topo.add_wire(Wire::new(sides, true).unwrap())
+        };
+        let outer = wire(outer);
+        let holes: Vec<_> = holes.iter().map(|h| wire(h)).collect();
+        topo.add_face(brepkit_topology::face::Face::new(
+            outer,
+            holes,
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: 0.0,
+            },
+        ))
+    }
+
+    /// A closed section in `z = 0`: a circle of radius `r` about `(x, y)`.
+    fn circle_section(x: f64, y: f64, r: f64) -> SectionEdge {
+        use brepkit_math::curves2d::{Curve2D, Line2D};
+        use brepkit_math::vec::{Point2, Vec2};
+        let circle = Circle3D::new(Point3::new(x, y, 0.0), Vec3::new(0.0, 0.0, 1.0), r).unwrap();
+        let start = circle.evaluate(0.0);
+        let line = Curve2D::Line(Line2D::new(Point2::new(0.0, 0.0), Vec2::new(1.0, 0.0)).unwrap());
+        SectionEdge {
+            curve_3d: EdgeCurve::Circle(circle),
+            pcurve_a: line.clone(),
+            pcurve_b: line,
+            start,
+            end: start,
+            start_uv_a: None,
+            end_uv_a: None,
+            start_uv_b: None,
+            end_uv_b: None,
+            target_face: None,
+            pave_block_id: None,
+        }
+    }
+
+    /// A loop of radius 1 in the square `[-10, 10]` gets one point inside it
+    /// and one outside, on the face: half the depth to the square's sides
+    /// would step clean across the loop and leave both outside it.
+    #[test]
+    fn side_points_straddle_a_small_loop_in_a_large_face() {
+        let mut topo = Topology::new();
+        let square = [(-10.0, -10.0), (10.0, -10.0), (10.0, 10.0), (-10.0, 10.0)];
+        let face = polygon_face(&mut topo, &square, &[]);
+        let loops = crate::classifier::FaceLoops2d::new(&topo, face).unwrap();
+        for (x, y) in [(0.0, 0.0), (6.0, -7.5)] {
+            let probes = section_side_probes(&topo, face, &loops, &[circle_section(x, y, 1.0)]);
+            assert_eq!(probes.len(), 1, "loop about ({x}, {y})");
+            let (p, q) = probes[0];
+            let from = |a: Point3| (a - Point3::new(x, y, 0.0)).length();
+            assert!(
+                from(p).min(from(q)) < 1.0 && from(p).max(from(q)) > 1.0,
+                "loop about ({x}, {y}): {p:?} and {q:?} lie on one side"
+            );
+            assert!(p.z().abs() < 1e-12 && q.z().abs() < 1e-12);
+        }
+    }
+
+    /// A loop in a hole of the face, or one whose point would fall in a
+    /// hole, divides nothing on the face and gets no points.
+    #[test]
+    fn side_points_skip_a_loop_off_the_face() {
+        let mut topo = Topology::new();
+        let square = [(-10.0, -10.0), (10.0, -10.0), (10.0, 10.0), (-10.0, 10.0)];
+        let hole = [(-8.0, -8.0), (-8.0, 8.0), (8.0, 8.0), (8.0, -8.0)];
+        let face = polygon_face(&mut topo, &square, &[&hole]);
+        let loops = crate::classifier::FaceLoops2d::new(&topo, face).unwrap();
+        let probes = section_side_probes(&topo, face, &loops, &[circle_section(0.0, 0.0, 1.0)]);
+        assert!(probes.is_empty(), "{probes:?}");
+    }
+
+    /// A cap of a ball above a circle of latitude, its wire a single closed
+    /// circle, has an outline of no area in `(u, v)`. A circle of latitude
+    /// nearer the pole still gets one point on each side of it on the cap.
+    #[test]
+    fn side_points_straddle_a_circle_across_a_ball_cap() {
+        use brepkit_math::surfaces::SphericalSurface;
+        let mut topo = Topology::new();
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        let rim = Circle3D::new(Point3::new(0.0, 0.0, 1.0), z, 3.0_f64.sqrt()).unwrap();
+        let at = topo.add_vertex(Vertex::new(rim.evaluate(0.0), 1e-7));
+        let edge = topo.add_edge(Edge::new(at, at, EdgeCurve::Circle(rim)));
+        let wire = topo.add_wire(Wire::new(vec![OrientedEdge::new(edge, true)], true).unwrap());
+        let ball = SphericalSurface::new(Point3::new(0.0, 0.0, 0.0), 2.0).unwrap();
+        let face = topo.add_face(brepkit_topology::face::Face::new(
+            wire,
+            vec![],
+            FaceSurface::Sphere(ball),
+        ));
+        let loops = crate::classifier::FaceLoops2d::new(&topo, face).unwrap();
+        let mut section = circle_section(0.0, 0.0, 1.2);
+        let circle = Circle3D::new(Point3::new(0.0, 0.0, 1.6), z, 1.2).unwrap();
+        section.start = circle.evaluate(0.0);
+        section.end = section.start;
+        section.curve_3d = EdgeCurve::Circle(circle);
+        let probes = section_side_probes(&topo, face, &loops, &[section]);
+        assert_eq!(probes.len(), 1, "{probes:?}");
+        let (p, q) = probes[0];
+        let (low, high) = if p.z() < q.z() { (p, q) } else { (q, p) };
+        assert!(
+            1.0 < low.z() && low.z() < 1.6 && high.z() > 1.6,
+            "{low:?} and {high:?}"
+        );
+        for x in [p, q] {
+            assert!(((x - Point3::new(0.0, 0.0, 0.0)).length() - 2.0).abs() < 1e-9);
+        }
+    }
 }

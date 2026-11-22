@@ -275,3 +275,62 @@ fn struts_that_start_at_one_point_fuse() {
         check(&topo, pair, &rods, 2, &format!("{name}, pairwise"));
     }
 }
+
+/// Chord 1 takes struts 5 and 7 one at a time, in either order. The struts
+/// meet off the chord, and strut 7 leaves the chord in a closed curve whose
+/// pcurve on the strut's wall must run one way round from the wall's seam.
+#[test]
+fn a_chord_takes_two_struts_that_meet_one_at_a_time() {
+    let options = BooleanOptions {
+        mesh_fallback: false,
+        ..BooleanOptions::default()
+    };
+    for (name, pose) in poses() {
+        for order in [[1, 7, 5], [1, 5, 7]] {
+            let mut topo = Topology::new();
+            let solids = load(&mut topo, &pose);
+            let [a, b, c] = order.map(|i| solids[i]);
+            let rods = [rod(&topo, a), rod(&topo, b), rod(&topo, c)];
+            let first = boolean_with_options(&mut topo, BooleanOp::Fuse, a, b, options).unwrap();
+            let both = boolean_with_options(&mut topo, BooleanOp::Fuse, first, c, options).unwrap();
+            check(&topo, both, &rods, 3, &format!("{name}, {order:?}"));
+        }
+    }
+}
+
+/// Two struts that meet end to start, or start at one point, on chord 1's
+/// axis but not in one plane: struts 6 and 11, 7 and 10, and 7 and 11.
+/// Each pair fuses alone, pairwise and through `fuse_n`, and so do chord 1
+/// and struts 7 and 11.
+#[test]
+fn struts_that_meet_on_a_chord_axis_out_of_plane_fuse() {
+    let options = BooleanOptions {
+        mesh_fallback: false,
+        ..BooleanOptions::default()
+    };
+    for (name, pose) in poses() {
+        for [i, j] in [[6, 11], [7, 10], [7, 11]] {
+            let mut topo = Topology::new();
+            let solids = load(&mut topo, &pose);
+            let (a, b) = (solids[i], solids[j]);
+            let rods = [rod(&topo, a), rod(&topo, b)];
+            let label = format!("{name}, struts {i} and {j}");
+            let fused = brepkit_algo::gfa::fuse_n(&mut topo, &[a, b]).unwrap();
+            check(&topo, fused, &rods, 2, &label);
+            let pair = boolean_with_options(&mut topo, BooleanOp::Fuse, a, b, options).unwrap();
+            check(&topo, pair, &rods, 2, &format!("{label}, pairwise"));
+        }
+        let mut topo = Topology::new();
+        let solids = load(&mut topo, &pose);
+        let three = [solids[1], solids[7], solids[11]];
+        let rods = three.map(|s| rod(&topo, s));
+        let fused = brepkit_algo::gfa::fuse_n(&mut topo, &three).unwrap();
+        check(
+            &topo,
+            fused,
+            &rods,
+            3,
+            &format!("{name}, chord 1, struts 7 and 11"),
+        );
+    }
+}

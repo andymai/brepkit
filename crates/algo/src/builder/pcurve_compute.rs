@@ -59,7 +59,7 @@ pub fn compute_pcurve_on_surface(
     }
 
     // For plane surfaces with curved edges, use PlaneFrame for projection.
-    let uv_pts = if let FaceSurface::Plane { normal, .. } = surface {
+    let (pts_3d, uv_pts) = if let FaceSurface::Plane { normal, .. } = surface {
         let owned;
         let f = if let Some(fr) = frame {
             fr
@@ -67,11 +67,14 @@ pub fn compute_pcurve_on_surface(
             owned = PlaneFrame::from_plane_face(*normal, wire_pts);
             &owned
         };
-        sample_edge_to_uv_via_frame(curve_3d, start, end, f)
+        (
+            Vec::new(),
+            sample_edge_to_uv_via_frame(curve_3d, start, end, f),
+        )
     } else {
-        sample_edge_to_uv(curve_3d, start, end, surface)
+        sample_edge_on_surface(curve_3d, start, end, surface)
     };
-    pcurve_through_uv_samples(uv_pts, start, end, surface)
+    pcurve_through_uv_samples(uv_pts, &pts_3d, start, end, surface)
 }
 
 /// The pcurve of a face's own boundary edge. An open circle or ellipse
@@ -143,7 +146,7 @@ pub fn compute_boundary_pcurve_on_surface(
         unwrap_periodic_params(&mut uv, u_period, v_period);
         uv
     };
-    pcurve_through_uv_samples(uv_pts, start, end, surface)
+    pcurve_through_uv_samples(uv_pts, &pts_3d, start, end, surface)
 }
 
 /// A circle or ellipse arc in a plane's frame, exactly: the frame maps the
@@ -207,9 +210,11 @@ fn plane_conic_arc(
 }
 
 /// A pcurve through UV samples running from `start` to `end`: a `Line2D`
-/// when they are collinear and distinct, else a fitted NURBS.
+/// when they are collinear and distinct, else a fitted NURBS. `pts_3d` are
+/// the samples on the edge, one for each UV sample, or none.
 fn pcurve_through_uv_samples(
     uv_pts: Vec<Point2>,
+    pts_3d: &[Point3],
     start: Point3,
     end: Point3,
     surface: &FaceSurface,
@@ -246,8 +251,64 @@ fn pcurve_through_uv_samples(
         // p0 ≈ pn: fall through to NURBS interpolation.
     }
 
-    // Fit a NURBS curve through the UV sample points.
-    fit_nurbs2d_through_points(&uv_pts)
+    if matches!(surface, FaceSurface::Plane { .. }) {
+        return fit_nurbs2d_through_points(&uv_pts);
+    }
+    fit_nurbs2d_at_chords_3d(&uv_pts, pts_3d)
+}
+
+/// A NURBS through UV samples, each at the length along the edge's chords
+/// in 3D to its 3D sample.
+///
+/// A curved surface's parameters are not lengths alike: a cylinder's `u` is
+/// an angle and its `v` a length. Chords read in UV then give samples
+/// uneven parameters where the curve runs mostly along one of them, and the
+/// interpolant swings past its samples. A closed curve round a thin strut's
+/// wall left its first sample back across the wall's seam, so the face's
+/// trace read that boundary edge as leaving the other way. Samples with no
+/// 3D length between them (at a cone's apex) keep the chords in UV.
+fn fit_nurbs2d_at_chords_3d(uv_pts: &[Point2], pts_3d: &[Point3]) -> Curve2D {
+    let n = uv_pts.len();
+    if n < 2 || pts_3d.len() != n {
+        return fit_nurbs2d_through_points(uv_pts);
+    }
+    let mut params = Vec::with_capacity(n);
+    let mut run = 0.0;
+    params.push(0.0);
+    for w in pts_3d.windows(2) {
+        run += (w[1] - w[0]).length();
+        params.push(run);
+    }
+    if !run.is_finite() || run <= 0.0 {
+        return fit_nurbs2d_through_points(uv_pts);
+    }
+    for t in &mut params {
+        *t /= run;
+    }
+    params[n - 1] = 1.0;
+    if params.windows(2).any(|w| w[1] - w[0] <= 1e-9) {
+        return fit_nurbs2d_through_points(uv_pts);
+    }
+    let lifted: Vec<Point3> = uv_pts
+        .iter()
+        .map(|p| Point3::new(p.x(), p.y(), 0.0))
+        .collect();
+    let Ok(fit) = brepkit_math::nurbs::fitting::interpolate_at(&lifted, &params, 3.min(n - 1))
+    else {
+        return fit_nurbs2d_through_points(uv_pts);
+    };
+    let cp_2d: Vec<Point2> = fit
+        .control_points()
+        .iter()
+        .map(|p| Point2::new(p.x(), p.y()))
+        .collect();
+    NurbsCurve2D::new(
+        fit.degree(),
+        fit.knots().to_vec(),
+        cp_2d,
+        fit.weights().to_vec(),
+    )
+    .map_or_else(|_| fit_nurbs2d_through_points(uv_pts), Curve2D::Nurbs)
 }
 
 /// Project a 3D point onto a surface's parameter space.
@@ -322,6 +383,16 @@ pub(super) fn sample_edge_to_uv(
     end: Point3,
     surface: &FaceSurface,
 ) -> Vec<Point2> {
+    sample_edge_on_surface(curve_3d, start, end, surface).1
+}
+
+/// [`sample_edge_to_uv`] with the 3D samples the UV samples project.
+fn sample_edge_on_surface(
+    curve_3d: &EdgeCurve,
+    start: Point3,
+    end: Point3,
+    surface: &FaceSurface,
+) -> (Vec<Point3>, Vec<Point2>) {
     let n = PCURVE_SAMPLES;
     let mut pts_3d = Vec::with_capacity(n + 1);
     // A cone's closed rim runs a full turn from its vertex, wherever the
@@ -356,7 +427,7 @@ pub(super) fn sample_edge_to_uv(
     let (u_period, v_period) = surface_periods(surface);
     unwrap_periodic_params(&mut uv_pts, u_period, v_period);
 
-    uv_pts
+    (pts_3d, uv_pts)
 }
 
 /// Evaluate a 3D edge curve at parameter t in [0, 1].
@@ -881,6 +952,56 @@ mod tests {
             #[allow(clippy::cast_precision_loss)]
             let want = circle.evaluate(span * (1.0 - k as f64 / n as f64));
             assert!((*p - want).length() < 1e-12, "rev k={k}: {p:?} vs {want:?}");
+        }
+    }
+
+    /// A closed curve round a thin cylinder, rising and falling a few times
+    /// the radius over the turn, as where a strut leaves a chord. Its pcurve
+    /// runs round the axis one way all the way: read with chords in UV, the
+    /// fit ran back across the seam from its first sample.
+    #[test]
+    fn a_closed_curve_round_a_thin_wall_runs_one_way_in_its_pcurve() {
+        use brepkit_math::surfaces::CylindricalSurface;
+        use brepkit_topology::edge::EdgeCurve;
+
+        let radius = 8.0;
+        let cylinder =
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), radius)
+                .unwrap();
+        let x = cylinder.x_axis();
+        let y = cylinder.y_axis();
+        let surface = FaceSurface::Cylinder(cylinder);
+        // The curve starts 0.6 of a radian before its highest point.
+        let start_u = 1.0_f64;
+        let at = |u: f64| {
+            let h = 30.0 + 6.0 * (u - start_u - 0.6).cos();
+            Point3::new(0.0, 0.0, h) + x * (radius * u.cos()) + y * (radius * u.sin())
+        };
+        let points: Vec<Point3> = (0..=64)
+            .map(|k| at(start_u + TAU * f64::from(k) / 64.0))
+            .collect();
+        let nurbs = brepkit_math::nurbs::fitting::interpolate(&points, 3).unwrap();
+        let curve = EdgeCurve::NurbsCurve(nurbs);
+        let vertex = points[0];
+        let pcurve = compute_pcurve_on_surface(&curve, vertex, vertex, &surface, &[], None);
+        let knots = match &pcurve {
+            Curve2D::Nurbs(n) => n.knots().to_vec(),
+            other => vec![0.0, other.evaluate(0.0).x()],
+        };
+        assert!(matches!(pcurve, Curve2D::Nurbs(_)));
+        let (t0, t1) = (knots[0], knots[knots.len() - 1]);
+        let us: Vec<f64> = (0..=400)
+            .map(|k| pcurve.evaluate(t0 + (t1 - t0) * f64::from(k) / 400.0).x())
+            .collect();
+        let way = (us[400] - us[0]).signum();
+        assert!(((us[400] - us[0]).abs() - TAU).abs() < 1e-6);
+        for w in us.windows(2) {
+            assert!(
+                (w[1] - w[0]) * way > 0.0,
+                "the pcurve turns back at u = {:.4} on its way from {:.4}",
+                w[0],
+                us[0]
+            );
         }
     }
 }

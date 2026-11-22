@@ -310,6 +310,28 @@ pub fn build_wire_loops_dcel_measured(
     let u_period = if u_periodic { Some(TAU) } else { None };
     let v_period = if v_periodic { Some(TAU) } else { None };
 
+    // A closed boundary edge on a periodic face keeps its UVs in its curve's
+    // own sense, whatever its traversal (`walk_boundary_from_closed_rim`).
+    // The trace reads each half from its start UV, so one run against its
+    // curve is turned to run its traversal. Left the curve's way, the region
+    // beside it took its reversed twin, and the face's piece ran the edge
+    // the same way as the face it shares the edge with.
+    let traversed: Vec<OrientedPCurveEdge> = edges
+        .iter()
+        .map(|e| {
+            let mut h = e.clone();
+            if h.source_edge_idx.is_none()
+                && !h.forward
+                && (h.start_3d - h.end_3d).length() < 1e-10
+                && (h.start_uv - h.end_uv).length() > tol
+            {
+                std::mem::swap(&mut h.start_uv, &mut h.end_uv);
+            }
+            h
+        })
+        .collect();
+    let edges = traversed.as_slice();
+
     // Half-edge table: the input edges, plus synthetic reversed twins for
     // every input half that has no reverse partner. `real` marks inputs.
     let mut halves: Vec<OrientedPCurveEdge> = edges.to_vec();

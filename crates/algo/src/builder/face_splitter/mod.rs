@@ -7271,6 +7271,7 @@ fn place_section_in_turn(e: &mut OrientedPCurveEdge, surface: &FaceSurface, lo: 
         let mid = f64::midpoint(e.start_uv.x(), e.end_uv.x());
         let shift = -((mid - lo) / period).floor() * period;
         shift_to(e, e.start_uv.x() + shift, e.end_uv.x() + shift);
+        move_pcurve_to_ends(e, period);
         return;
     }
     let (s3, e3) = if e.forward {
@@ -7310,6 +7311,42 @@ fn place_section_in_turn(e: &mut OrientedPCurveEdge, surface: &FaceSurface, lo: 
         nearest(e.start_uv.x(), at_start),
         nearest(e.end_uv.x(), at_end),
     );
+    move_pcurve_to_ends(e, period);
+}
+
+/// Move a section's NURBS pcurve by the whole turns of `u` that its ends
+/// moved. A pcurve left a turn from its ends reads as stale, and the trace
+/// then reads the section's way out of an end from its chord. A section
+/// with both ends on the seam has its chord along the seam line, and the
+/// trace cannot tell it from the seam there.
+fn move_pcurve_to_ends(e: &mut OrientedPCurveEdge, period: f64) {
+    const NEAR: f64 = 1e-6;
+    let brepkit_math::curves2d::Curve2D::Nurbs(n) = &e.pcurve else {
+        return;
+    };
+    let knots = n.knots();
+    let (Some(&k0), Some(&k1)) = (knots.first(), knots.last()) else {
+        return;
+    };
+    let (a, b) = (n.evaluate(k0), n.evaluate(k1));
+    let turns = |from: Point2, to: Point2| -> Option<f64> {
+        let k = ((to.x() - from.x()) / period).round();
+        ((period.madd(k, from.x()) - to.x()).abs() < NEAR && (from.y() - to.y()).abs() < NEAR)
+            .then_some(k)
+    };
+    let k = match (
+        turns(a, e.start_uv).zip(turns(b, e.end_uv)),
+        turns(b, e.start_uv).zip(turns(a, e.end_uv)),
+    ) {
+        (Some((k, l)), _) | (_, Some((k, l))) if (k - l).abs() < 0.5 => k,
+        _ => return,
+    };
+    if k == 0.0 {
+        return;
+    }
+    if let Some(moved) = edge_splitting::shifted_pcurve(&e.pcurve, k * period, 0.0) {
+        e.pcurve = moved;
+    }
 }
 
 /// Give each end of a sliver section lying on the seam the seam copy of the
@@ -15074,5 +15111,48 @@ mod tests {
                 assert!((got - want).abs() < 1e-12, "{us:?}");
             }
         }
+    }
+
+    #[test]
+    fn a_closed_section_moved_a_turn_takes_its_pcurve_along() {
+        use brepkit_math::curves2d::{Curve2D, NurbsCurve2D};
+        use brepkit_math::surfaces::CylindricalSurface;
+        use std::f64::consts::TAU;
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        let cyl = CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), z, 1.0).unwrap();
+        let surface = FaceSurface::Cylinder(cyl);
+        // A whole turn of the cylinder at v = 0.5, laid out a turn past
+        // [0, 2 pi): ends and pcurve both one turn up.
+        let u0 = TAU + 0.5;
+        let (a, b) = (Point2::new(u0, 0.5), Point2::new(u0 + TAU, 0.5));
+        let at = Point3::new(0.5_f64.cos(), 0.5_f64.sin(), 0.5);
+        let mut e = OrientedPCurveEdge {
+            curve_3d: EdgeCurve::Line,
+            pcurve: Curve2D::Nurbs(NurbsCurve2D::from_line(a, b).unwrap()),
+            start_uv: a,
+            end_uv: b,
+            start_3d: at,
+            end_3d: at,
+            forward: true,
+            source_edge_idx: None,
+            pave_block_id: None,
+        };
+        super::place_section_in_turn(&mut e, &surface, 0.0, TAU);
+        assert!(
+            (e.start_uv.x() - 0.5).abs() < 1e-12,
+            "start {:?}",
+            e.start_uv
+        );
+        let Curve2D::Nurbs(n) = &e.pcurve else {
+            unreachable!("the pcurve stays a B-spline");
+        };
+        let (k0, k1) = (n.knots()[0], n.knots()[n.knots().len() - 1]);
+        let (p0, p1) = (n.evaluate(k0), n.evaluate(k1));
+        assert!(
+            (p0 - e.start_uv).length() < 1e-9 && (p1 - e.end_uv).length() < 1e-9,
+            "the pcurve runs {p0:?} to {p1:?}, its ends {:?} to {:?}",
+            e.start_uv,
+            e.end_uv
+        );
     }
 }
