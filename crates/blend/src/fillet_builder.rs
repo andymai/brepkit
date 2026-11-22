@@ -8239,6 +8239,11 @@ fn run_on_to_same_surface(
         let Some(period) = face_u_period(surface) else {
             continue;
         };
+        // The test below reads `v` as it comes, which a surface closed in
+        // `v` (a torus) wraps between the rim and the far loop.
+        if crate::builder_utils::face_v_period(surface).is_some() {
+            continue;
+        }
         let loops: Vec<Vec<OrientedEdge>> = std::iter::once(face.outer_wire())
             .chain(face.inner_wires().iter().copied())
             .map(|wire| topo.wire(wire).map(|w| w.edges().to_vec()))

@@ -10,6 +10,7 @@
 //! each section; [`approximate_blend_surface`] makes one that takes them as
 //! its control points.
 
+use brepkit_math::madd::Madd;
 use brepkit_math::nurbs::surface::NurbsSurface;
 use brepkit_math::traits::ParametricSurface;
 use brepkit_math::vec::Point3;
@@ -229,10 +230,16 @@ impl<'a, F: BlendFunction> Walker<'a, F> {
             return false;
         };
         let mid = self.func.section(self.surf1, self.surf2, &mid, &ctx);
-        let apart =
-            |a: &CircSection, b: &CircSection| (a.p1 - b.p1).length().max((a.p2 - b.p2).length());
-        let moved = apart(last, next);
-        apart(last, &mid) <= 0.75 * moved && apart(&mid, next) <= 0.75 * moved
+        // Each contact on its own, so that one that runs fast cannot hide a
+        // leap of the other; one that barely moves may stray by the solve's
+        // own tolerance.
+        let slack = 2.0 * self.config.tol_3d;
+        let even = |a: Point3, m: Point3, b: Point3| {
+            let moved = (b - a).length();
+            (m - a).length() <= 0.75f64.madd(moved, slack)
+                && (b - m).length() <= 0.75f64.madd(moved, slack)
+        };
+        even(last.p1, mid.p1, next.p1) && even(last.p2, mid.p2, next.p2)
     }
 
     /// Run Newton-Raphson iteration to convergence from an initial guess.
