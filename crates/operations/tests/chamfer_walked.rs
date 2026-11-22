@@ -164,13 +164,25 @@ fn on_faces(topo: &Topology, solid: SolidId, edge: EdgeId, (d1, d2): (f64, f64))
 /// Valid, watertight, and `removed` less than `before`, to `1e-6` of what
 /// it took off.
 fn assert_removed(topo: &Topology, result: SolidId, before: f64, removed: f64, what: &str) {
+    assert_removed_measured(topo, result, before, removed, what, 0.001);
+}
+
+/// [`assert_removed`], with the result measured at `deflection`.
+fn assert_removed_measured(
+    topo: &Topology,
+    result: SolidId,
+    before: f64,
+    removed: f64,
+    what: &str,
+    deflection: f64,
+) {
     let report = validate_solid(topo, result).unwrap();
     assert!(report.is_valid(), "{what}: {:?}", report.issues);
     assert!(
         is_watertight(&tessellate_solid(topo, result, 0.01).unwrap()),
         "{what}: its mesh is open"
     );
-    let took = before - solid_volume(topo, result, 0.001).unwrap();
+    let took = before - solid_volume(topo, result, deflection).unwrap();
     assert!(
         (took - removed).abs() < 1e-6 * removed,
         "{what}: took off {took}, expected {removed}"
@@ -587,6 +599,64 @@ fn a_balls_rim_takes_one_chamfer_whichever_way_its_poles_lie() {
     }
 }
 
+/// The ball of [`capped_ball`] with both its faces read about `poles`,
+/// placed by `pose`, and its rim.
+fn capped_ball_about(topo: &mut Topology, poles: Vec3, pose: &Mat4) -> (SolidId, EdgeId) {
+    let (ball, rim) = capped_ball(topo, false, &Mat4::translation(0.0, 0.0, 0.0));
+    for face in solid_faces(topo, ball).unwrap() {
+        let FaceSurface::Sphere(sphere) = topo.face(face).unwrap().surface() else {
+            continue;
+        };
+        let about = SphericalSurface::with_axis(sphere.center(), R, poles).unwrap();
+        topo.face_mut(face)
+            .unwrap()
+            .set_surface(FaceSurface::Sphere(about));
+    }
+    transform_solid(topo, ball, pose).unwrap();
+    (ball, rim)
+}
+
+/// A ball's rim whose contact on the ball runs through a pole of the ball's
+/// parameters, the north or the south one, at two places round the contact:
+/// the chamfer is the one Pappus's theorem gives, its contacts lie on their
+/// circles, and their pcurves follow them.
+#[test]
+fn a_balls_rim_chamfers_when_its_contact_runs_through_a_pole() {
+    let (d1, d2) = (0.3, 0.6);
+    for (round, side) in [(0.0_f64, 1.0), (1.0, -1.0)] {
+        for (name, pose) in poses() {
+            let what = format!("round {round} side {side} {name}");
+            let mut topo = Topology::new();
+            let (ball, rim) = capped_ball(&mut topo, false, &Mat4::translation(0.0, 0.0, 0.0));
+            let (cap, wall) = on_faces(&topo, ball, rim, (d1, d2));
+            let (removed, [plane, sphere]) = ball_chamfer(cap, wall);
+            let on_contact = Vec3::new(sphere.0 * round.cos(), sphere.0 * round.sin(), sphere.1);
+            let mut topo = Topology::new();
+            let (ball, rim) = capped_ball_about(&mut topo, on_contact * (side / R), &pose);
+            let before = solid_volume(&topo, ball, 0.001).unwrap();
+            let old: HashSet<EdgeId> = solid_edges(&topo, ball).unwrap().into_iter().collect();
+            let side_of = wall_of(&topo, ball, rim);
+            let mut builder = ChamferBuilder::new(&mut topo, ball);
+            builder.add_edges_asymmetric(&[rim], d1, d2);
+            let built = builder.build().unwrap();
+            assert!(built.failed.is_empty(), "{what}: {:?}", built.failed);
+            assert_removed(&topo, built.solid, before, removed, &what);
+            for (kind, at) in [("plane", plane), ("sphere", sphere)] {
+                let (count, off) = off_circle(&topo, &old, built.solid, &pose, kind, at);
+                assert_eq!(count, 1, "{what}: contacts on the {kind}");
+                assert!(off < 1e-6, "{what}: the {kind}'s contact lies {off} off");
+            }
+            assert_eq!(wall_contacts(&topo, &side_of, built.solid, &what).len(), 1);
+            if name != "upright" {
+                continue;
+            }
+            let built = chamfer_v2(&mut topo, ball, &[rim], d1, d2).unwrap();
+            assert!(built.failed.is_empty(), "{what}: {:?}", built.failed);
+            assert_removed(&topo, built.solid, before, removed, &what);
+        }
+    }
+}
+
 /// The torus: radius 4 round its axis, 1.5 round its tube.
 const TORUS: (f64, f64) = (4.0, 1.5);
 
@@ -686,38 +756,6 @@ fn a_rim_round_a_torus_tube_takes_a_chamfer() {
     }
 }
 
-/// That a chamfer refused `edge` and left `solid` as it was: the result is
-/// the input, the edge is in `failed` and nothing in `succeeded`, and the
-/// input is still valid and watertight, with its volume `before`. The text
-/// of the edge's failure.
-fn refused(
-    topo: &Topology,
-    solid: SolidId,
-    built: &brepkit_blend::BlendResult,
-    edge: EdgeId,
-    before: f64,
-    what: &str,
-) -> String {
-    assert_eq!(built.solid, solid, "{what}: a new solid");
-    assert!(built.succeeded.is_empty(), "{what}: {:?}", built.succeeded);
-    let failure = built
-        .failed
-        .iter()
-        .find(|(e, _)| *e == edge)
-        .unwrap_or_else(|| panic!("{what}: the edge is not in failed"));
-    assert!(validate_solid(topo, solid).unwrap().is_valid(), "{what}");
-    assert!(
-        is_watertight(&tessellate_solid(topo, solid, 0.01).unwrap()),
-        "{what}: its mesh is open"
-    );
-    let now = solid_volume(topo, solid, 0.001).unwrap();
-    assert!(
-        (now - before).abs() <= 1e-12 * before,
-        "{what}: {now} against {before}"
-    );
-    format!("{:?}", failure.1)
-}
-
 /// A cylinder (3, 4) or a frustum (3 to 1, 4 high) whose wall is put in its
 /// B-spline form, which closes round on itself, placed by `pose`, and its
 /// bottom or top rim.
@@ -756,31 +794,50 @@ fn b_spline_walled(
     (solid, rim)
 }
 
-/// The walking chamfer does not trim a B-spline face that closes round on
-/// itself: a rim on one is refused, and the solid comes back as it was.
+/// A cylinder's rims and a frustum's bottom rim on their walls put in
+/// B-spline form, which closes round on itself: the walking chamfer cuts
+/// each exactly, as on the analytic walls, and the pcurve of each contact
+/// on the wall follows its edge within the wall's knot domain.
 #[test]
-fn a_rim_on_a_closed_b_spline_wall_is_refused() {
+fn a_rim_on_a_closed_b_spline_wall_chamfers_exactly() {
+    let (d1, d2) = (0.4, 0.25);
+    // The frustum's wall rises 4 as it closes in by 2.
+    let slope = 2.0_f64.atan2(1.0);
     for (frustum, top) in [(false, false), (false, true), (true, false)] {
         for (name, pose) in poses() {
             let what = format!("frustum {frustum} top {top} {name}");
             let mut topo = Topology::new();
             let (solid, rim) = b_spline_walled(&mut topo, frustum, top, &pose);
-            let before = solid_volume(&topo, solid, 0.001).unwrap();
+            let (cap, wall) = on_faces(&topo, solid, rim, (d1, d2));
+            let rise = if frustum { slope } else { 0.5 * PI };
+            let area = 0.5 * cap * wall * rise.sin();
+            let removed = TAU * (3.0 - (cap + wall * rise.cos()) / 3.0) * area;
+            // The measure of a B-spline cone trimmed along a circle is
+            // 2.2e-5 high at 0.001 and comes down to 2.3e-8 at 1e-6.
+            let deflection = if frustum { 1e-5 } else { 0.001 };
+            let before = solid_volume(&topo, solid, deflection).unwrap();
+            let side = wall_of(&topo, solid, rim);
             let mut builder = ChamferBuilder::new(&mut topo, solid);
-            builder.add_edges_asymmetric(&[rim], 0.4, 0.25);
+            builder.add_edges_asymmetric(&[rim], d1, d2);
             let built = builder.build().unwrap();
-            let why = refused(&topo, solid, &built, rim, before, &what);
-            assert!(why.starts_with("UnsupportedSurface"), "{what}: {why}");
-            let built = chamfer_v2(&mut topo, solid, &[rim], 0.4, 0.25).unwrap();
-            let why = refused(&topo, solid, &built, rim, before, &what);
-            assert!(why.starts_with("UnsupportedSurface"), "{what}: {why}");
+            assert!(built.failed.is_empty(), "{what}: {:?}", built.failed);
+            assert_removed_measured(&topo, built.solid, before, removed, &what, deflection);
+            assert_eq!(wall_contacts(&topo, &side, built.solid, &what).len(), 1);
+            if name != "upright" {
+                continue;
+            }
+            let built = chamfer_v2(&mut topo, solid, &[rim], d1, d2).unwrap();
+            assert!(built.failed.is_empty(), "{what}: {:?}", built.failed);
+            assert_removed_measured(&topo, built.solid, before, removed, &what, deflection);
+            assert_eq!(wall_contacts(&topo, &side, built.solid, &what).len(), 1);
         }
     }
 }
 
 /// The common part of two cylinders of radius 2 and height 4 whose axes lie
-/// 3 apart, and its two ridges, one stored up and one down.
-fn lens(topo: &mut Topology) -> (SolidId, Vec<EdgeId>) {
+/// 3 apart, placed by `pose`, and its two ridges, one stored up and one
+/// down.
+fn lens(topo: &mut Topology, pose: &Mat4) -> (SolidId, Vec<EdgeId>) {
     let a = make_cylinder(topo, 2.0, 4.0).unwrap();
     let b = make_cylinder(topo, 2.0, 4.0).unwrap();
     transform_solid(topo, b, &Mat4::translation(3.0, 0.0, 0.0)).unwrap();
@@ -795,31 +852,76 @@ fn lens(topo: &mut Topology) -> (SolidId, Vec<EdgeId>) {
                 .all(|v| (topo.vertex(v).unwrap().point().x() - 1.5).abs() < 1e-6)
         })
         .collect();
+    transform_solid(topo, lens, pose).unwrap();
     (lens, ridges)
 }
 
-/// A lens's ridge, where the builder cannot close the chamfer's ends: each
-/// ridge is refused on its own, and the solid comes back as it was, from
-/// the builder and from `chamfer_v2`.
+/// The section a chamfer of chord `on_a` along the cylinder about the axis
+/// and `on_b` along the one about `x = 3` takes off a ridge of the lens:
+/// the triangle between the ridge and the two contacts, and each wall's
+/// segment past its chord.
+fn lens_ridge_section(on_a: f64, on_b: f64) -> f64 {
+    let r = 2.0_f64;
+    let ridge = (1.5, (r * r - 2.25).sqrt());
+    let turn = |c: f64| 2.0 * (0.5 * c / r).asin();
+    let segment = |c: f64| 0.5 * r * r * (turn(c) - turn(c).sin());
+    // Each contact turns from the ridge toward the line through both axes.
+    let to_a = ridge.1.atan2(ridge.0) - turn(on_a);
+    let to_b = ridge.1.atan2(ridge.0 - 3.0) + turn(on_b);
+    let a = (r * to_a.cos(), r * to_a.sin());
+    let b = (r.mul_add(to_b.cos(), 3.0), r * to_b.sin());
+    let triangle =
+        0.5 * ((a.0 - ridge.0) * (b.1 - ridge.1) - (a.1 - ridge.1) * (b.0 - ridge.0)).abs();
+    triangle + segment(on_a) + segment(on_b)
+}
+
+/// A lens's ridge, where two parallel cylinders cross: each ridge alone and
+/// both together take a plane chamfer that cuts each wall along a ruling,
+/// with one distance and with two, from the builder and from `chamfer_v2`.
+/// Both walls run off the ridge toward the line through the axes, which
+/// their faces' reversal does not tell (a union's walls run away from it),
+/// and the ridge stored from `z = 4` down closes its shell as the one
+/// stored up does.
 #[test]
-fn a_ridge_whose_chamfer_ends_do_not_close_is_refused_on_its_own() {
-    let mut topo = Topology::new();
-    let (solid, ridges) = lens(&mut topo);
-    assert_eq!(ridges.len(), 2);
-    let before = solid_volume(&topo, solid, 0.001).unwrap();
-    for &ridge in &ridges {
-        let what = format!("{ridge:?}");
+fn a_lens_ridge_takes_a_plane_chamfer() {
+    let height = 4.0;
+    for (name, pose) in poses() {
+        let mut topo = Topology::new();
+        let (solid, ridges) = lens(&mut topo, &pose);
+        assert_eq!(ridges.len(), 2);
+        let before = solid_volume(&topo, solid, 0.001).unwrap();
+        let undo = pose.inverse().unwrap();
+        for &ridge in &ridges {
+            let what = format!("{name} {ridge:?}");
+            let one = height * lens_ridge_section(0.3, 0.3);
+            let mut builder = ChamferBuilder::new(&mut topo, solid);
+            builder.add_edges_symmetric(&[ridge], 0.3);
+            let built = builder.build().unwrap();
+            assert!(built.failed.is_empty(), "{what}: {:?}", built.failed);
+            assert_removed(&topo, built.solid, before, one, &what);
+            let built = chamfer_v2(&mut topo, solid, &[ridge], 0.3, 0.3).unwrap();
+            assert!(built.failed.is_empty(), "{what}: {:?}", built.failed);
+            assert_removed(&topo, built.solid, before, one, &what);
+
+            // The first face along the ridge takes 0.3, the other 0.2.
+            let first = AdjacencyIndex::build(&topo, solid)
+                .unwrap()
+                .faces_for_edge(ridge)[0];
+            let FaceSurface::Cylinder(wall) = topo.face(first).unwrap().surface() else {
+                panic!("{what}: a ridge between cylinders");
+            };
+            let about_a = undo.mul_point(wall.origin()).x().abs() < 1.0;
+            let (on_a, on_b) = if about_a { (0.3, 0.2) } else { (0.2, 0.3) };
+            let built = chamfer_v2(&mut topo, solid, &[ridge], 0.3, 0.2).unwrap();
+            assert!(built.failed.is_empty(), "{what}: {:?}", built.failed);
+            let two = height * lens_ridge_section(on_a, on_b);
+            assert_removed(&topo, built.solid, before, two, &what);
+        }
         let mut builder = ChamferBuilder::new(&mut topo, solid);
-        builder.add_edges_symmetric(&[ridge], 0.3);
+        builder.add_edges_symmetric(&ridges, 0.3);
         let built = builder.build().unwrap();
-        refused(&topo, solid, &built, ridge, before, &what);
-        let built = chamfer_v2(&mut topo, solid, &[ridge], 0.3, 0.3).unwrap();
-        refused(&topo, solid, &built, ridge, before, &what);
-    }
-    let mut builder = ChamferBuilder::new(&mut topo, solid);
-    builder.add_edges_symmetric(&ridges, 0.3);
-    let built = builder.build().unwrap();
-    for &ridge in &ridges {
-        refused(&topo, solid, &built, ridge, before, "both ridges");
+        assert!(built.failed.is_empty(), "{name}: {:?}", built.failed);
+        let both = 2.0 * height * lens_ridge_section(0.3, 0.3);
+        assert_removed(&topo, built.solid, before, both, name);
     }
 }
