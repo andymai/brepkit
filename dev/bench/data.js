@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795309228734,
+  "lastUpdate": 1795321372577,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -74627,6 +74627,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 27385304,
             "range": "± 509333",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "9c190c3cb978637f688745ddd813b41181d8cf3b",
+          "message": "fix(blend,operations,check): chamfer pocket rims, closed B-spline rims, pole contacts and lens ridges exactly (#2654)\n\n## Summary\n\nOn main, four chamfers fail or refuse to build:\n\n- one straight rim edge of a square pocket (#2647);\n- a closed rim on a B-spline wall that closes round on itself (#2631);\n- a ball's rim whose contact runs through the sphere's parameter pole\n(#2632);\n- the ridge where two parallel cylinders cross (#2633).\n\nWith this change, each of them builds, and each removes the volume of\nits closed form. The chamfer gate also refuses a result whose new pcurve\nleaves its edge, which `validate_solid` did not catch (#2634, in part).\n\nFixes #2647, fixes #2631, fixes #2632, fixes #2633.\n\n## The change\n\n- **Pocket rim (#2647).** `plane_plane_chamfer` took each face's side as\n`outward_normal x tangent`. A reversed plane (a pocket's wall) winds its\nwire about its stored normal, so the wall's contact landed outside the\nwall. Both contacts now take their side from\n`builder_utils::into_face_from_edge`. `trim_to_inside_corners` in the\ntrimmer read the outer wire only, and now trims a hole's wire too. The\nplanar `chamfer` sends an edge of a hole to the blend engine, because\nits rebuild sets back an outer wire only.\n- **B-spline wall (#2631).** `pcurve_along` unwrapped u across the seam\nby the length of the knot domain, so the pcurve could run outside the\ndomain. It now moves the image by whole turns into the domain, and\nrefuses an image that runs across the domain's end. Its fit test\ncompares the fit with the curve's own points. `compute_chamfer_stripe`\nno longer refuses a stripe on a closed B-spline face.\n- **Ball rim through a pole (#2632).** At a pole, the contact's image\njumps by pi in u, so no cubic fit can follow it. `pcurve_along` now cuts\nthe curve where it crosses each pole, and a segment along the pole's\nline joins the pieces.\n- **Lens ridge (#2633).** `cylinder_cylinder_chamfer` chose each\ncontact's side from the face's reversal flag. The flag is the same on\nthe lens and on the union of the two cylinders. But their walls run off\nthe ridge in opposite directions. Each contact now turns to the side\nthat its face's wire keeps, with the old rule as the fallback.\n`chamfer_face_of` runs `run_against_supports` on a plane band between\ncurved faces too. Without it, the ridge stored from z = 4 down gave 4\nshared edges with inconsistent face orientations.\n- **Gate (#2634).** `valid_chamfer` in `blend_ops.rs` runs the\nsame-parameter check of `brepkit_check` on the pcurves of edges that the\nchamfer made. The tolerance is the larger of 1e-4 and 1e-5 (1 + size).\n`brepkit_check` now exports `check_edge_same_parameter`.\n\n## Tests\n\n- `crates/operations/tests/chamfer_pocket_rim.rs` is new. It chamfers\nthe four pocket rows of #2647 with either reference face, upright,\nturned and mirrored. The removed volume equals `w d1 d2 / 2` (80 and 20\non the 20 x 5 pocket). Two more tests take one distance, and chamfer two\nopposite rims together.\n- `a_hole_beside_the_contacts_end_leaves_the_chamfer_alone` cuts a\ndiamond pocket beside the rim's end. One of its edges passes 0.42 from\nthe contact's end, inside the box of the contact. The trimmer measures a\nline edge exactly, and splits a circle or ellipse edge along its span.\nWith the box test, the chamfer failed.\n- `a_rim_on_a_closed_b_spline_wall_chamfers_exactly` replaces the\nrefusal test in `chamfer_walked.rs`: 3 rims in 4 poses. The cylinder rim\nremoves 0.9162978927 against the closed form 0.9162978573. The\nsame-parameter check reports no issue.\n- `a_balls_rim_chamfers_when_its_contact_runs_through_a_pole` puts the\npoles on the contact, at both poles and two longitudes, in 4 poses. The\nchamfer removes 1.0031344694 against 1.0031342 by Pappus.\n- `a_lens_ridge_takes_a_plane_chamfer` chamfers both ridges (one stored\nup, one stored down) in 4 poses. The chamfer removes 0.18222883510198\nagainst the closed form 0.18222883510202.\n- `a_chamfer_whose_pcurve_leaves_its_edge_is_refused` moves a new\ncontact pcurve by one knot domain. `validate_solid` passes that solid,\nand the gate refuses it.\n- I ran `chamfer_pocket_rim`, `chamfer_walked`, `chamfer_tangent_chains`\nand `two_distance_chamfers` (54 passed), and the `blend_ops` unit tests\n(6 passed). The `brepkit-blend` lib tests (204), the `brepkit-check` lib\ntests (167), every chamfer test file in `crates/operations/tests` and\n`brepkit-wasm --lib chamfer` (16) also pass.\n\n## Still open\n\n- The ridge on the union of the same two cylinders stays\n`UnsupportedSurface`.\n- Chamfers of two adjacent pocket rims meet at a corner and fail with\n`CornerFailure`, as on a box.\n- #2634 stays open. The commit that made its bad solid lies off main, so\nI did not find why that solid's mesh was open. `validate_solid` still\ndoes not read pcurves.",
+          "timestamp": "2026-11-22T04:19:29Z",
+          "tree_id": "03b8cea03a2028df51834a9ee4226c967c16dada",
+          "url": "https://github.com/andymai/brepkit/commit/9c190c3cb978637f688745ddd813b41181d8cf3b"
+        },
+        "date": 1795321363865,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 954713,
+            "range": "± 2516",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1012868,
+            "range": "± 3269",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11315,
+            "range": "± 15",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 630467,
+            "range": "± 2524",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 21405001,
+            "range": "± 68756",
             "unit": "ns/iter"
           }
         ]
