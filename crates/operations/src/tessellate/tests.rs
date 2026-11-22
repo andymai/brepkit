@@ -509,6 +509,41 @@ fn dedupe_matches_position_coincidence_not_index() {
 }
 
 #[test]
+fn dedupe_cancels_pairs_then_keeps_the_last_of_one_winding() {
+    // Five triangles on the grid points a, b, c, two of them on copies of
+    // the points with other ids, and one more triangle on a, d, b between
+    // them. Copies are listed before the points they copy, so the ids do
+    // not sort as the points do. Three triangles wind one way and two the
+    // other: two pairs cancel, and the last of the three stays.
+    let [a, b, c, d] = [
+        Point3::new(0.0, 0.0, 0.0),
+        Point3::new(1.0, 0.0, 0.0),
+        Point3::new(0.0, 1.0, 0.0),
+        Point3::new(1.0, -1.0, 0.0),
+    ];
+    let mut mesh = TriangleMesh {
+        positions: vec![c, b, a, a, b, c, d],
+        normals: vec![Vec3::new(0.0, 0.0, 1.0); 7],
+        indices: vec![
+            3, 4, 5, // a b c
+            2, 0, 1, // a c b
+            3, 4, 5, // a b c
+            3, 6, 4, // a d b
+            0, 1, 2, // c b a
+            4, 5, 3, // b c a
+        ],
+    };
+    let mut tri_faces = vec![10, 11, 12, 13, 14, 15];
+    super::mesh_ops::dedupe_coincident_triangles(&mut mesh, Some(&mut tri_faces));
+    assert_eq!(tri_faces, vec![13, 15]);
+    assert_eq!(mesh.indices, vec![0, 1, 2, 2, 3, 0]);
+    assert_eq!(mesh.positions.len(), 4);
+    for (p, q) in mesh.positions.iter().zip([a, d, b, c]) {
+        assert!((*p - q).length() < 1e-12, "{p:?} should be {q:?}");
+    }
+}
+
+#[test]
 fn dedupe_preserves_thin_plate_geometry() {
     // 1e-4mm-thick plate: front face (z=0) and back face (z=1e-4) tessellate
     // to disjoint triangle pairs that share x/y. The quantization grid must
@@ -2564,7 +2599,7 @@ fn band_with_split_ruling_on_cylinder_at(origin_z: f64) {
     let face_data = topo.face(face).unwrap().clone();
     let edge_global_indices: DetHashMap<usize, Vec<u32>> = DetHashMap::default();
     let mut merged = TriangleMesh::default();
-    let mut point_to_global: DetHashMap<(i64, i64, i64), u32> = DetHashMap::default();
+    let mut point_to_global = super::PointPool::default();
     super::nonplanar::tessellate_nonplanar_cdt(
         &topo,
         face,
@@ -2669,7 +2704,7 @@ fn cdt_covers_steiner_vertices_from_constraint_recovery() {
     let face_data = topo.face(face).unwrap().clone();
     let edge_global_indices: DetHashMap<usize, Vec<u32>> = DetHashMap::default();
     let mut merged = TriangleMesh::default();
-    let mut point_to_global: DetHashMap<(i64, i64, i64), u32> = DetHashMap::default();
+    let mut point_to_global = super::PointPool::default();
 
     let result = super::nonplanar::tessellate_nonplanar_cdt(
         &topo,

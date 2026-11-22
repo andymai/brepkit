@@ -207,7 +207,7 @@ pub(super) fn dedupe_coincident_triangles(
 ) {
     const POS_GRID: f64 = COINCIDENT_DEDUPE_GRID;
 
-    type TriKey = [(i64, i64, i64); 3];
+    type TriKey = [u32; 3];
 
     let tri_count = mesh.indices.len() / 3;
     if tri_count < 2 {
@@ -215,26 +215,30 @@ pub(super) fn dedupe_coincident_triangles(
     }
 
     let s = 1.0 / POS_GRID;
+    // Each vertex reads as the first vertex at its grid point, so a key of
+    // three such ids is the key of three grid points.
+    let mut first_at: WordHashMap<(i64, i64, i64), u32> =
+        WordHashMap::with_capacity_and_hasher(mesh.positions.len(), WordState);
     #[allow(clippy::cast_possible_truncation)]
-    let quantized: Vec<(i64, i64, i64)> = mesh
+    let quantized: Vec<u32> = mesh
         .positions
         .iter()
-        .map(|p| {
-            (
+        .enumerate()
+        .map(|(v, p)| {
+            let at = (
                 (p.x() * s).round() as i64,
                 (p.y() * s).round() as i64,
                 (p.z() * s).round() as i64,
-            )
+            );
+            *first_at.entry(at).or_insert(v as u32)
         })
         .collect();
 
-    // Each key's latest triangle, and for each triangle the one before it
-    // with its key: the triangles of a key form a chain, read back to front.
-    let mut latest: WordHashMap<TriKey, usize> =
-        WordHashMap::with_capacity_and_hasher(tri_count, WordState);
-    let mut earlier = vec![usize::MAX; tri_count];
+    // Each triangle's key, and the count of keys at each least grid point:
+    // the triangles of one key share their least point.
+    let mut keys: Vec<Option<TriKey>> = vec![None; tri_count];
     let mut parity = vec![true; tri_count];
-    let mut repeated = false;
+    let mut start = vec![0_usize; mesh.positions.len() + 1];
     for t in 0..tri_count {
         let mut tri_pts = [0, 1, 2].map(|k| quantized[mesh.indices[t * 3 + k] as usize]);
         // Sort tri_pts ascending; track parity of the sort permutation.
@@ -256,9 +260,37 @@ pub(super) fn dedupe_coincident_triangles(
             continue;
         }
         parity[t] = parity_even;
-        if let Some(before) = latest.insert(tri_pts, t) {
-            earlier[t] = before;
-            repeated = true;
+        keys[t] = Some(tri_pts);
+        start[tri_pts[0] as usize + 1] += 1;
+    }
+    for v in 1..start.len() {
+        start[v] += start[v - 1];
+    }
+    let mut by_least = vec![0_usize; start[start.len() - 1]];
+    let mut fill = start.clone();
+    for (t, key) in keys.iter().enumerate() {
+        if let Some(key) = key {
+            let at = &mut fill[key[0] as usize];
+            by_least[*at] = t;
+            *at += 1;
+        }
+    }
+    // For each triangle the one before it with its key: the triangles of a
+    // key form a chain, read back to front.
+    let mut earlier = vec![usize::MAX; tri_count];
+    let mut repeated = false;
+    let key_of = |t: usize| keys[t].unwrap_or([u32::MAX; 3]);
+    for (&from, &to) in start.iter().zip(&start[1..]) {
+        let bucket = &mut by_least[from..to];
+        if bucket.len() < 2 {
+            continue;
+        }
+        bucket.sort_unstable_by_key(|&t| (key_of(t), t));
+        for pair in bucket.windows(2) {
+            if key_of(pair[0]) == key_of(pair[1]) {
+                earlier[pair[1]] = pair[0];
+                repeated = true;
+            }
         }
     }
     if !repeated {
