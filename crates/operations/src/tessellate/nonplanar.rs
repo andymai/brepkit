@@ -31,9 +31,9 @@ pub(super) fn tessellate_band_face_local(
     deflection: f64,
     angular_tol: f64,
 ) -> Result<Option<super::TriangleMeshUV>, crate::OperationsError> {
-    if !face_data.inner_wires().is_empty() {
+    let Some(rim_wires) = band_rim_wires(topo, face_data)? else {
         return Ok(None);
-    }
+    };
     let (project, surf_normal): (ProjectFn, NormalFn) = match face_data.surface() {
         FaceSurface::Cylinder(c) => {
             let (c1, c2) = (c.clone(), c.clone());
@@ -55,14 +55,19 @@ pub(super) fn tessellate_band_face_local(
     // Curved wire edges → endpoint-connected cycles (the pool version's
     // structure; a closed single-edge NURBS loop has no by-construction
     // winding, so decline).
-    let wire = topo.wire(face_data.outer_wire())?;
     let mut curved: Vec<(
         brepkit_topology::edge::EdgeId,
         brepkit_topology::vertex::VertexId,
         brepkit_topology::vertex::VertexId,
     )> = Vec::new();
     let mut seen: std::collections::HashSet<usize> = std::collections::HashSet::new();
-    for oe in wire.edges() {
+    for oe in rim_wires
+        .iter()
+        .map(|&w| topo.wire(w).map(brepkit_topology::wire::Wire::edges))
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .flatten()
+    {
         let e = topo.edge(oe.edge())?;
         match e.curve() {
             EdgeCurve::NurbsCurve(_) if e.start() == e.end() => return Ok(None),
@@ -232,6 +237,27 @@ pub(super) fn tessellate_band_face_local(
     Ok(Some(super::TriangleMeshUV { mesh, uvs }))
 }
 
+/// The wires that hold a band's rims: its outer wire, or with no seam the
+/// outer wire and its one hole, each wire then one rim. `None` for a face
+/// with more holes, or with a hole and a straight edge in its outer wire.
+fn band_rim_wires(
+    topo: &Topology,
+    face_data: &brepkit_topology::face::Face,
+) -> Result<Option<Vec<brepkit_topology::wire::WireId>>, crate::OperationsError> {
+    let outer = face_data.outer_wire();
+    Ok(match face_data.inner_wires() {
+        [] => Some(vec![outer]),
+        &[hole] => {
+            let straight = topo.wire(outer)?.edges().iter().any(|oe| {
+                topo.edge(oe.edge())
+                    .is_ok_and(|e| matches!(e.curve(), EdgeCurve::Line))
+            });
+            (!straight).then(|| vec![outer, hole])
+        }
+        _ => None,
+    })
+}
+
 /// Tessellate a cylinder/cone lateral "standard band" face directly from the
 /// shared rim edge vertices, bypassing the snap path's proximity reconciliation.
 ///
@@ -247,7 +273,8 @@ pub(super) fn tessellate_band_face_local(
 /// cone, one rim and a seam line up to the apex) that was handled here,
 /// `Ok(false)` when it is not (the caller then falls back to the snap or CDT
 /// path). A "simple band" has no inner wires and exactly two rims
-/// (everything else a seam line). Each rim is either one **closed** circle
+/// (everything else a seam line), or no seam, one rim its outer wire and the
+/// other its one hole. Each rim is either one **closed** circle
 /// edge or a CHAIN of open circle arcs at one constant `v` whose spans sum to
 /// a full revolution — a boolean that splits a rim at tangency or crossing
 /// points (e.g. the cone∪box inscribed-rim fuse, whose z=6 rim arrives as
@@ -266,9 +293,9 @@ pub(super) fn tessellate_revolution_band_shared(
     edge_global_indices: &DetHashMap<usize, Vec<u32>>,
     merged: &mut TriangleMesh,
 ) -> Result<bool, crate::OperationsError> {
-    if !face_data.inner_wires().is_empty() {
+    let Some(rim_wires) = band_rim_wires(topo, face_data)? else {
         return Ok(false);
-    }
+    };
 
     let (project, surf_normal): (ProjectFn, NormalFn) = match face_data.surface() {
         FaceSurface::Cylinder(c) => {
@@ -302,7 +329,13 @@ pub(super) fn tessellate_revolution_band_shared(
         brepkit_topology::vertex::VertexId,
     )> = Vec::new();
     let mut seen: std::collections::HashSet<usize> = std::collections::HashSet::new();
-    for oe in wire.edges() {
+    for oe in rim_wires
+        .iter()
+        .map(|&w| topo.wire(w).map(brepkit_topology::wire::Wire::edges))
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .flatten()
+    {
         let e = topo.edge(oe.edge())?;
         match e.curve() {
             // A closed single-edge NURBS loop has no by-construction winding

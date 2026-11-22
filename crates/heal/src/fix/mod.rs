@@ -9,6 +9,7 @@
 pub mod config;
 pub mod edge;
 pub mod face;
+pub mod seam;
 pub mod shell;
 pub mod small_face;
 pub mod solid;

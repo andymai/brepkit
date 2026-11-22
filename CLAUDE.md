@@ -208,6 +208,7 @@ Quick reference — find the right file for any task:
 | Shell fixing (orientation consistency) | `fix/shell.rs` |
 | Solid fixing (top-level orchestrator) | `fix/solid.rs` |
 | Small face removal | `fix/small_face.rs` |
+| Seams missing from cylinder/cone faces bounded by their rims alone | `fix/seam.rs` |
 | Wireframe repair | `fix/wireframe.rs` |
 | Split over-connected vertices | `fix/split_vertex.rs` |
 | Unify same-domain faces (merge coplanar/co-cylindrical) | `upgrade/unify_same_domain.rs` |
@@ -334,7 +335,6 @@ Quick reference — find the right file for any task:
 | STEP read/write | `step/reader.rs`, `step/writer.rs` |
 | STEP length units and assembly placements | `step/assembly.rs` |
 | STEP surfaces of revolution | `step/revolution.rs` |
-| STEP seams missing from cylinder/cone faces | `step/seam.rs` |
 | IGES read/write | `iges/reader.rs`, `iges/writer.rs` |
 | STL read/write/import | `stl/reader.rs`, `stl/writer.rs`, `stl/import.rs` |
 | 3MF read/write | `threemf/reader.rs`, `threemf/writer.rs` |

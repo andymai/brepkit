@@ -3,7 +3,6 @@
 mod assembly;
 pub mod reader;
 mod revolution;
-mod seam;
 pub mod writer;
 
 pub use reader::read_step;

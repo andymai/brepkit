@@ -308,7 +308,7 @@ impl<'a> StepBuilder<'a> {
             let face_id = self.build_face(face_ref, flip)?;
             face_ids.push(face_id);
         }
-        super::seam::close_seams(self.topo, &face_ids, &self.vertex_loops)?;
+        brepkit_operations::heal::close_seams(self.topo, &face_ids, &self.vertex_loops)?;
 
         let shell = Shell::new(face_ids).map_err(|e| IoError::ParseError {
             reason: format!("failed to build shell from STEP: {e}"),
@@ -1336,7 +1336,7 @@ impl<'a> StepBuilder<'a> {
         }
 
         let edge_id = self.topo.add_edge(Edge::new(start_vp, end_vp, curve));
-        super::seam::anchor_circle(self.topo, edge_id)?;
+        brepkit_operations::heal::anchor_circle(self.topo, edge_id)?;
 
         self.edge_cache.insert(ec_ref, edge_id);
         Ok(edge_id)

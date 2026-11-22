@@ -1,11 +1,12 @@
-//! Seams that a STEP file leaves out of a face of revolution.
+//! Seams missing from a face of revolution.
 //!
-//! A STEP face may bound a full cylinder or cone band by its two rims alone,
-//! and a pointed cone by its base rim alone (with or without a vertex loop at
-//! the apex), with no edge where the surface's angle wraps. brepkit bounds
-//! every such face with one loop that runs up a seam line and back, as its
-//! own primitives do, and its meshers and booleans rely on that seam. Once a
-//! shell's faces are built, [`close_seams`] adds the seam each one lacks.
+//! A face may bound a full cylinder or cone band by its two rims alone, and a
+//! pointed cone by its base rim alone (with or without a vertex at the apex),
+//! with no edge where the surface's angle wraps: a STEP file can write it so,
+//! and a solid built by hand can hold it. brepkit bounds every such face with
+//! one loop that runs up a seam line and back, as its own primitives do, and
+//! its booleans rely on that seam. [`close_seams`] adds the seam each face of
+//! a shell lacks.
 
 use brepkit_math::madd::Madd;
 use std::collections::{HashMap, HashSet};
@@ -19,25 +20,31 @@ use brepkit_topology::face::{FaceId, FaceSurface};
 use brepkit_topology::vertex::{Vertex, VertexId};
 use brepkit_topology::wire::{OrientedEdge, Wire, WireId};
 
-use crate::IoError;
+use crate::HealError;
 
 /// Samples per edge when measuring how far a loop turns about the axis.
 const WINDING_SAMPLES: u32 = 16;
 /// Samples per edge when looking for where a rim crosses a generator.
 const CROSSING_SAMPLES: u32 = 64;
 
-/// Add the missing seam to every face of `faces` that needs one. `apexes`
-/// holds the vertex a face's vertex loop puts at its cone's apex. A face the
-/// seam cannot be fitted to is left as written, with a warning.
-pub(super) fn close_seams(
+/// Add the missing seam to every face of `faces` that needs one.
+///
+/// `apexes` holds the vertex a face's vertex loop puts at its cone's apex. A
+/// face the seam cannot be fitted to is left as it is, with a warning.
+///
+/// # Errors
+///
+/// Returns [`HealError`] if a face, wire, edge or vertex of `faces` is
+/// missing.
+pub fn close_seams<S: std::hash::BuildHasher>(
     topo: &mut Topology,
     faces: &[FaceId],
-    apexes: &HashMap<FaceId, VertexId>,
-) -> Result<(), IoError> {
+    apexes: &HashMap<FaceId, VertexId, S>,
+) -> Result<(), HealError> {
     let mut uses = Uses::of(topo, faces)?;
     for &fid in faces {
         if let Err(e) = close_seam(topo, &mut uses, fid, apexes.get(&fid).copied()) {
-            log::warn!("STEP face {fid:?} left without a seam: {e}");
+            log::warn!("face {fid:?} left without a seam: {e}");
         }
     }
     Ok(())
@@ -51,7 +58,7 @@ struct Uses {
 }
 
 impl Uses {
-    fn of(topo: &Topology, faces: &[FaceId]) -> Result<Self, IoError> {
+    fn of(topo: &Topology, faces: &[FaceId]) -> Result<Self, HealError> {
         let mut uses = Self {
             at_vertex: HashMap::new(),
             faces_of: HashMap::new(),
@@ -67,7 +74,7 @@ impl Uses {
         Ok(uses)
     }
 
-    fn add(&mut self, topo: &Topology, edge: EdgeId, face: FaceId) -> Result<(), IoError> {
+    fn add(&mut self, topo: &Topology, edge: EdgeId, face: FaceId) -> Result<(), HealError> {
         let e = topo.edge(edge)?;
         for v in [e.start(), e.end()] {
             self.at_vertex.entry(v).or_default().insert(edge);
@@ -83,7 +90,7 @@ impl Uses {
         edge: EdgeId,
         head: EdgeId,
         tail: EdgeId,
-    ) -> Result<(), IoError> {
+    ) -> Result<(), HealError> {
         let e = topo.edge(edge)?;
         for v in [e.start(), e.end()] {
             if let Some(edges) = self.at_vertex.get_mut(&v) {
@@ -141,7 +148,7 @@ impl Revolution {
     }
 }
 
-fn oriented_ends(topo: &Topology, oe: OrientedEdge) -> Result<(VertexId, VertexId), IoError> {
+fn oriented_ends(topo: &Topology, oe: OrientedEdge) -> Result<(VertexId, VertexId), HealError> {
     let e = topo.edge(oe.edge())?;
     Ok(if oe.is_forward() {
         (e.start(), e.end())
@@ -151,7 +158,7 @@ fn oriented_ends(topo: &Topology, oe: OrientedEdge) -> Result<(VertexId, VertexI
 }
 
 /// Points along an oriented edge from its start, its end left out.
-fn edge_samples(topo: &Topology, oe: OrientedEdge, n: u32) -> Result<Vec<Point3>, IoError> {
+fn edge_samples(topo: &Topology, oe: OrientedEdge, n: u32) -> Result<Vec<Point3>, HealError> {
     let e = topo.edge(oe.edge())?;
     let (a, b) = (
         topo.vertex(e.start())?.point(),
@@ -172,7 +179,7 @@ fn edge_samples(topo: &Topology, oe: OrientedEdge, n: u32) -> Result<Vec<Point3>
 }
 
 /// Whole turns a loop makes about the axis.
-fn winding(topo: &Topology, rev: &Revolution, wire: WireId) -> Result<i64, IoError> {
+fn winding(topo: &Topology, rev: &Revolution, wire: WireId) -> Result<i64, HealError> {
     let mut points = Vec::new();
     for &oe in topo.wire(wire)?.edges() {
         points.extend(edge_samples(topo, oe, WINDING_SAMPLES)?);
@@ -188,7 +195,7 @@ fn winding(topo: &Topology, rev: &Revolution, wire: WireId) -> Result<i64, IoErr
 }
 
 /// A loop that already runs down a seam uses some edge both ways.
-fn has_seam(topo: &Topology, wire: WireId) -> Result<bool, IoError> {
+fn has_seam(topo: &Topology, wire: WireId) -> Result<bool, HealError> {
     let mut seen = HashSet::new();
     for oe in topo.wire(wire)?.edges() {
         if !seen.insert(oe.edge()) {
@@ -198,13 +205,45 @@ fn has_seam(topo: &Topology, wire: WireId) -> Result<bool, IoError> {
     Ok(false)
 }
 
+/// Whether [`close_seams`] would give `fid` a seam.
+///
+/// It would when `fid` lies on a cylinder or cone, no loop of it runs down a
+/// seam, and two loops of it wind the axis (one on a cone, which the seam
+/// can run up to the apex from).
+///
+/// # Errors
+///
+/// Returns [`HealError`] if the face or one of its wires, edges or vertices
+/// is missing.
+pub fn lacks_seam(topo: &Topology, fid: FaceId) -> Result<bool, HealError> {
+    let face = topo.face(fid)?;
+    let Some(rev) = Revolution::of(face.surface()) else {
+        return Ok(false);
+    };
+    let wires: Vec<WireId> = std::iter::once(face.outer_wire())
+        .chain(face.inner_wires().iter().copied())
+        .collect();
+    for &w in &wires {
+        if has_seam(topo, w)? {
+            return Ok(false);
+        }
+    }
+    let mut rims = 0;
+    for &w in &wires {
+        if winding(topo, &rev, w)? != 0 {
+            rims += 1;
+        }
+    }
+    Ok(rims == 2 || (rims == 1 && rev.apex.is_some()))
+}
+
 #[allow(clippy::too_many_lines)]
 fn close_seam(
     topo: &mut Topology,
     uses: &mut Uses,
     fid: FaceId,
     apex_vertex: Option<VertexId>,
-) -> Result<(), IoError> {
+) -> Result<(), HealError> {
     let face = topo.face(fid)?;
     let Some(rev) = Revolution::of(face.surface()) else {
         return Ok(());
@@ -250,7 +289,7 @@ fn close_seam(
                 .chain(face.inner_wires().iter().copied())
                 .filter(|w| !holes.contains(w))
                 .collect();
-            let rim_from = |v: VertexId| -> Result<Option<Vec<OrientedEdge>>, IoError> {
+            let rim_from = |v: VertexId| -> Result<Option<Vec<OrientedEdge>>, HealError> {
                 for &w in &rims {
                     let edges = topo.wire(w)?.edges().to_vec();
                     for k in 0..edges.len() {
@@ -264,9 +303,9 @@ fn close_seam(
                 Ok(None)
             };
             let (Some(rim_a), Some(rim_b)) = (rim_from(a)?, rim_from(b)?) else {
-                return Err(IoError::ParseError {
-                    reason: format!("face {fid:?}: a seam end is on no rim"),
-                });
+                return Err(HealError::FixFailed(format!(
+                    "face {fid:?}: a seam end is on no rim"
+                )));
             };
             let seam = topo.add_edge(Edge::new(a, b, EdgeCurve::Line));
             uses.add(topo, seam, fid)?;
@@ -278,7 +317,7 @@ fn close_seam(
         }
         _ => {
             log::warn!(
-                "STEP face {fid:?}: {} loops wind about its axis; left without a seam",
+                "face {fid:?}: {} loops wind about its axis; left without a seam",
                 rims.len()
             );
             return Ok(());
@@ -300,8 +339,8 @@ fn seam_ends(
     rev: &Revolution,
     first: WireId,
     second: WireId,
-) -> Result<(VertexId, VertexId), IoError> {
-    let starts = |topo: &Topology, w: WireId| -> Result<Vec<VertexId>, IoError> {
+) -> Result<(VertexId, VertexId), HealError> {
+    let starts = |topo: &Topology, w: WireId| -> Result<Vec<VertexId>, HealError> {
         topo.wire(w)?
             .edges()
             .iter()
@@ -324,7 +363,7 @@ fn seam_ends(
     }
 
     // Put the new vertex on whichever rim takes it without a split.
-    let movable = |topo: &Topology, w: WireId| -> Result<bool, IoError> {
+    let movable = |topo: &Topology, w: WireId| -> Result<bool, HealError> {
         let edges = topo.wire(w)?.edges();
         Ok(edges.len() == 1 && closed_conic_alone(topo, uses, edges[0].edge())?)
     };
@@ -344,7 +383,7 @@ fn seam_ends(
 
 /// Whether `edge` is a closed circle or ellipse whose vertex no other edge
 /// of the shell uses, so the vertex can slide round it.
-fn closed_conic_alone(topo: &Topology, uses: &Uses, edge: EdgeId) -> Result<bool, IoError> {
+fn closed_conic_alone(topo: &Topology, uses: &Uses, edge: EdgeId) -> Result<bool, HealError> {
     let e = topo.edge(edge)?;
     if e.start() != e.end() || !matches!(e.curve(), EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_)) {
         return Ok(false);
@@ -364,7 +403,7 @@ fn vertex_on_rim(
     rev: &Revolution,
     rim: WireId,
     at: Point3,
-) -> Result<VertexId, IoError> {
+) -> Result<VertexId, HealError> {
     let target = rev.angle(at);
     let off = |p: Point3| (rev.angle(p) - target + PI).rem_euclid(TAU) - PI;
     let rim_edges = topo.wire(rim)?.edges().to_vec();
@@ -401,9 +440,9 @@ fn vertex_on_rim(
         }
     }
     let Some((edge, t, point)) = crossing else {
-        return Err(IoError::ParseError {
-            reason: "a rim of a seamless band never crosses the other rim's generator".into(),
-        });
+        return Err(HealError::FixFailed(
+            "a rim of a seamless band never crosses the other rim's generator".into(),
+        ));
     };
 
     if closed_conic_alone(topo, uses, edge)? {
@@ -422,11 +461,8 @@ fn vertex_on_rim(
     // gets its own curve.
     let (head_curve, tail_curve) = match &curve {
         EdgeCurve::NurbsCurve(n) if start == end => {
-            let (h, t) = brepkit_math::nurbs::knot_ops::curve_split(n, t).map_err(|e| {
-                IoError::ParseError {
-                    reason: format!("splitting a rim at its seam: {e}"),
-                }
-            })?;
+            let (h, t) = brepkit_math::nurbs::knot_ops::curve_split(n, t)
+                .map_err(|e| HealError::FixFailed(format!("splitting a rim at its seam: {e}")))?;
             (EdgeCurve::NurbsCurve(h), EdgeCurve::NurbsCurve(t))
         }
         _ => (curve.clone(), curve),
@@ -439,7 +475,11 @@ fn vertex_on_rim(
 }
 
 /// Start a closed circle at its vertex, where its loop starts and ends.
-pub(super) fn anchor_circle(topo: &mut Topology, edge: EdgeId) -> Result<(), IoError> {
+///
+/// # Errors
+///
+/// Returns [`HealError`] if `edge` or its vertex is missing.
+pub fn anchor_circle(topo: &mut Topology, edge: EdgeId) -> Result<(), HealError> {
     let e = topo.edge(edge)?;
     let EdgeCurve::Circle(c) = e.curve() else {
         return Ok(());
@@ -467,7 +507,7 @@ fn split_in_wires(
     edge: EdgeId,
     head: EdgeId,
     tail: EdgeId,
-) -> Result<(), IoError> {
+) -> Result<(), HealError> {
     let faces: Vec<FaceId> = uses
         .faces_of
         .get(&edge)

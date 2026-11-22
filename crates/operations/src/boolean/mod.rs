@@ -569,6 +569,8 @@ fn boolean_inner(
     } else {
         b
     };
+    let gfa_a = crate::heal::with_seams(topo, gfa_a)?;
+    let gfa_b = crate::heal::with_seams(topo, gfa_b)?;
     let gfa_start = timer_now();
     match brepkit_algo::gfa::boolean(topo, algo_op, gfa_a, gfa_b) {
         Ok(result) => {

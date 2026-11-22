@@ -1904,6 +1904,78 @@ fn order_edges_into_loops(
     Ok(loops)
 }
 
+/// Add the missing seam to each cylinder or cone face of `faces` whose rims
+/// wind its axis with no seam between them.
+///
+/// The seam runs between the two rims, or up a cone's one rim to its apex.
+/// `apexes` holds the vertex at a face's cone apex where the face already
+/// has one. A face the seam cannot be fitted to is left as it is, with a
+/// warning.
+///
+/// # Errors
+///
+/// Returns an error if a face, wire, edge or vertex of `faces` is missing.
+pub fn close_seams<S: std::hash::BuildHasher>(
+    topo: &mut Topology,
+    faces: &[FaceId],
+    apexes: &HashMap<FaceId, VertexId, S>,
+) -> Result<(), crate::OperationsError> {
+    brepkit_heal::fix::seam::close_seams(topo, faces, apexes).map_err(|e| {
+        crate::OperationsError::InvalidInput {
+            reason: format!("closing seams failed: {e}"),
+        }
+    })
+}
+
+/// Start a closed circle edge's curve at its vertex.
+///
+/// # Errors
+///
+/// Returns an error if `edge` or its vertex is missing.
+pub fn anchor_circle(topo: &mut Topology, edge: EdgeId) -> Result<(), crate::OperationsError> {
+    brepkit_heal::fix::seam::anchor_circle(topo, edge).map_err(|e| {
+        crate::OperationsError::InvalidInput {
+            reason: format!("anchoring a circle failed: {e}"),
+        }
+    })
+}
+
+/// `solid`, or a copy of it with a seam on each face that [`close_seams`]
+/// closes.
+///
+/// The boolean engine splits a face of revolution along its seam and cannot
+/// read a band bounded by its rims alone.
+///
+/// # Errors
+///
+/// Returns an error if a topology lookup fails.
+pub(crate) fn with_seams(
+    topo: &mut Topology,
+    solid: SolidId,
+) -> Result<SolidId, crate::OperationsError> {
+    let lacks = |topo: &Topology, f: FaceId| {
+        brepkit_heal::fix::seam::lacks_seam(topo, f).map_err(|e| {
+            crate::OperationsError::InvalidInput {
+                reason: format!("reading a face's seam failed: {e}"),
+            }
+        })
+    };
+    let mut any = false;
+    for f in brepkit_topology::explorer::solid_faces(topo, solid)? {
+        if lacks(topo, f)? {
+            any = true;
+            break;
+        }
+    }
+    if !any {
+        return Ok(solid);
+    }
+    let copy = crate::copy::copy_solid(topo, solid)?;
+    let faces = brepkit_topology::explorer::solid_faces(topo, copy)?;
+    close_seams(topo, &faces, &HashMap::new())?;
+    Ok(copy)
+}
+
 /// Convert all analytic geometry in a solid to NURBS (B-Spline) representation.
 ///
 /// Replaces every analytic surface (Plane, Cylinder, Cone, Sphere, Torus) with

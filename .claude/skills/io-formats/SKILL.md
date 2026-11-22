@@ -77,7 +77,7 @@ Full anatomy in [reference.md](reference.md) section 1. The load-bearing facts:
   (`ITEM_DEFINED_TRANSFORMATION` relationships, `MAPPED_ITEM`) put each shape where the
   assembly does, one copy per use. No pcurves: trimming is topological (vertex endpoints +
   edge-loop order); pcurve/seam records are ignored and recomputed downstream.
-- **Missing seams are added** (`step/seam.rs`): a cylinder or cone face bounded by its rims
+- **Missing seams are added** (`heal/src/fix/seam.rs`, through `operations::heal::close_seams`): a cylinder or cone face bounded by its rims
   alone, or a pointed cone by its base rim (with or without a `VERTEX_LOOP` apex), gets the
   seam line brepkit's primitives carry. Beyond that the reader does **no healing**.
 - **Solid order follows the file**: shape records by id, each shape's placements in turn.
