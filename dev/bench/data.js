@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795324178704,
+  "lastUpdate": 1795326037304,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -74735,6 +74735,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 21458320,
             "range": "± 45888",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "1b61f91140686e0944e92320d52c39a8378a92bf",
+          "message": "fix(algo): keep a ball's cavity a cavity, read rulings on a notched wall against its loops, and give a sphere face's holes to the loops round them (#2671)\n\n## Summary\n\nThe random boolean sweep found four booleans that came back wrong or\nopen (#2618, #2619, #2620, #2622). This change makes the ones that main\nstill gets wrong or refuses exact, and pins the ones that newer main\nalready fixed:\n\n- A ball with a cavity, fused with a rod, meshed open in two of five\nposes (#2620). It is now exact in all five, with the cavity as an inner\nshell.\n- A thin rod standing out of a notched cylinder wall gave faces that ran\nthe same way on 6 edges on 4.11.32. Main needs the mesh fallback for it\n(#2619). It is now exact in all five poses.\n- A ball cut across a smaller ball fused onto it kept a hole nested in\nanother hole, which main refuses (#2618, case 51). It is now exact.\n- A rod across a cylinder's cap (#2618, case 17) is right on main since\n#2583. Two crossing cylinders of one radius (#2622) are right since\n#2646. Tests now pin both.\n\nFixes #2618, fixes #2619, fixes #2620, fixes #2622.\n\n## The change\n\n- **Cavity shells (#2620).** `signed_volume_of_shell` signed each face\nat the centroid of its corners. For a cavity's hemisphere, that centroid\nis the cavity's centre, where the sphere has no normal. One half took\nthe wrong sign, the cavity's fan read +0.0715 where it is 0, and the\nbuilder filed the cavity as a lump. In the turned poses, `unify_faces`\nthen merged the ball's two halves into one face with 98 open mesh edges.\nA sphere face whose loop winds the axis now takes its sign at the pole\nthat its loop holds, the rule the flux code uses.\n- **Rulings on a notched wall (#2619).** The two rulings where the rod\nmeets the wall never reached the wall, so the wall kept no hole. The\ntunnel notches the wall's rim, and the clip measured the rulings against\nchords of the rim's arcs, which they never meet. `FaceLoops2d` also\ncentred u on the mean of its samples. That put a ruling 0.006 rad from\nthe seam outside a wall that runs from seam to seam. The clip now reads\na ruling on a cylinder face with no holes against the face's own loops,\nwith u centred on the outline's span. Cone faces keep the old reading.\n- **Holes on a split sphere face (#2618, case 51).**\n`split_face_with_internal_loops` gave a face's holes to the loops round\nthem only on plane faces. On the sphere, the hole where the small ball\nstood stayed on the outer part, inside the cut's new hole. Sphere faces\nnow give their holes the same way.\n\n## Tests\n\nEach test runs its boolean with the mesh fallback off, in the five poses\nof the sweep.\n\n- `ball_cavity_and_rod.rs`: 4 sphere faces, the cavity an inner shell,\nno open mesh edges, and a volume of 5.257463 against 5.257461 from an\nintegral.\n- `rod_out_of_a_notched_wall.rs`, with and without the tunnel: 11.284634\nagainst 11.284635 from the integral of #2619. Each of the two changes\nalone still fails it.\n- `ball_cut_across_a_fused_ball.rs`: 3.816642 against the closed form\n3.8166416.\n- `rod_across_a_cylinder_cap.rs` fails at `9713d6ec7`, the commit before\n#2583.\n- `crossing_cylinders_one_radius.rs` takes the fuse, the cut and the\nintersect at radii 8.25 and 3. At 8.25 they read 22664.208, 9834.729 and\n2994.750, and the bicylinder's closed form gives the same. It fails at\n`1844fdc00` (4.11.32).\n- `cargo nextest run --cargo-profile ci -p brepkit-algo -p\nbrepkit-operations -p brepkit-io` on the branch before it took main's\n#2654: 3580 passed, 28 skipped.\n- On `fde1e2f38`, with main merged in, `brepkit-wasm`, `brepkit-check`\nand `brepkit-heal` pass (560 passed, 4 skipped), with the gridfinity\ntests among them.\n- The pose sweep gives the same output as main. The truth audit differs\nin one line: \"ball slab z 1..2 Cut\" in its third pose reads 8e-16 where\nmain reads 9e-16.\n- I ran the random boolean sweep, seeds 1 to 3 with 150 cases each,\nagainst main. GOOD went from 314 to 323, ERR from 107 to 99, and BAD\nfrom 2 to 1. No case is worse. The BAD case that stays is #2669, the\nsame on main.\n\n## Still open\n\n- #2668: `unify_faces`, called on a ball with a rod through it, merges\nthe two hemispheres into one face whose mesh is open.\n- #2670: `components_are_disjoint_pieces` boxes pieces by their vertices\nand read the cavity of #2620 as a separate piece in one pose.\n- The universal-joint cross of #2502 still falls back in `fuse_all`: the\nfuse that adds the shoulder along y leaves 13 free edges.\n- `validate_boolean_result` only logs \"shared edges have inconsistent\nface orientations\", because operands from the layout tool often carry\nit. On 4.11.32 that let the wrong result of #2619 through. A gate could\nrefuse the fault only when both operands are free of it. That gate\ncatches the old result, but nothing on main reaches it now.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes four boolean failures from the random sweep: a ball's cavity was\nfiled as a lump (#2620), a rod out of a notched wall kept no hole\n(#2619), and a ball cut across a fused ball left a hole nested in\nanother hole (#2618). Also pins two booleans, a rod across a cylinder\ncap and crossing cylinders of one radius, that main already fixes\nexactly.\n\n**Bug Fixes**\n- A sphere face whose loop winds the axis now takes its sign at the pole\nthe loop holds instead of at the centroid of its corners, which lies on\nthe axis for a hemisphere; the cavity stays an inner shell and the fuse\nmeshes closed.\n- Rulings on a cylinder wall with no holes are now clipped against the\nwall's own loops, with `u` centred on the outline's span, so the rod's\nhole stays on the notched wall; cones keep the old chord reading.\n- Sphere faces now give a hole to the loop round it the way plane faces\nalready did, so the fuse-and-cut on balls no longer leaves a hole inside\na hole; only loops that lie in one plane take a hole this way, since a\nloop where a rod meets the ball is not planar.\n\n**Tests**\n- `ball_cavity_and_rod`, `rod_out_of_a_notched_wall`, and\n`ball_cut_across_a_fused_ball` run their booleans with the mesh fallback\noff in the sweep's five poses, checking face counts, validity, closed\nmeshes, and volumes against closed-form or integral values.\n- `rod_across_a_cylinder_cap` and `crossing_cylinders_one_radius` pin\ntwo results main already fixes; each fails on the commit before its fix.\n\n<sup>Written for commit 25046604c3c77960dbaeea0a97b1b22466c16add.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2671?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2671?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2671&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-11-22T05:37:16Z",
+          "tree_id": "cfa451ba4f456fd3ae9e3f81b2d8b41537d8375e",
+          "url": "https://github.com/andymai/brepkit/commit/1b61f91140686e0944e92320d52c39a8378a92bf"
+        },
+        "date": 1795326027143,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 949192,
+            "range": "± 2553",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1005012,
+            "range": "± 3642",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11593,
+            "range": "± 45",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 626990,
+            "range": "± 1558",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 21246742,
+            "range": "± 22888",
             "unit": "ns/iter"
           }
         ]
