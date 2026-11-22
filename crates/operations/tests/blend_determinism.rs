@@ -91,6 +91,39 @@ mod tests {
         }
     }
 
+    /// The top rim of an L block made by a fuse of two boxes, by the
+    /// variable fillet at one radius. Its planar rebuild comes back open, and
+    /// the walking engine rounds the rim with the flat seams merged. At the
+    /// inside corner the top's square piece meets the rim's two rounds with
+    /// neither of its edges there rounded, so its corner takes two of the
+    /// three contacts there.
+    #[test]
+    fn fused_l_rim_fillet_variable() {
+        use brepkit_operations::fillet::{FilletRadiusLaw, fillet_variable};
+        assert_repeatable("fused L rim fillet_variable", |t| {
+            let a = make_box(t, 10.0, 4.0, 3.0).unwrap();
+            let b = make_box(t, 4.0, 10.0, 3.0).unwrap();
+            let l = boolean(t, BooleanOp::Fuse, a, b).unwrap();
+            let seam = |p: f64, q: f64, u: f64, w: f64| {
+                (p - 4.0).abs() < 1e-9 && (q - 4.0).abs() < 1e-9 && u.max(w) <= 4.0 + 1e-9
+            };
+            let rim = edges_where(t, l, |t, e| {
+                let edge = t.edge(e).unwrap();
+                let p = t.vertex(edge.start()).unwrap().point();
+                let q = t.vertex(edge.end()).unwrap().point();
+                on_level(t, e, 3.0)
+                    && !seam(p.x(), q.x(), p.y(), q.y())
+                    && !seam(p.y(), q.y(), p.x(), q.x())
+            });
+            assert_eq!(rim.len(), 8);
+            let laws: Vec<_> = rim
+                .into_iter()
+                .map(|e| (e, FilletRadiusLaw::Constant(0.5)))
+                .collect();
+            fillet_variable(t, l, &laws).unwrap()
+        });
+    }
+
     fn edges_where(
         t: &Topology,
         s: SolidId,

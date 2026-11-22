@@ -3071,7 +3071,7 @@ fn rebuild_mapped_parametric_face(
                 if c_len <= 1e-12 {
                     return None;
                 }
-                let mut best: Option<(usize, f64)> = None;
+                let mut best: Option<(usize, f64, usize)> = None;
                 for (&source_edge, &owner) in &restriction_for_edge {
                     if source_edge == eid {
                         continue;
@@ -3117,13 +3117,22 @@ fn rebuild_mapped_parametric_face(
                     let b = (ct - ss).dot(dir);
                     if a >= -1e-6 && b >= -1e-6 && a <= s_len + 1e-6 && b <= s_len + 1e-6 {
                         // Smallest covering span wins: a child lies inside
-                        // exactly one edge after a clean split.
-                        if best.is_none_or(|(_, best_len)| s_len < best_len) {
-                            best = Some((owner, s_len));
+                        // exactly one edge after a clean split. Spans of one
+                        // length go to the least owner, then the least edge,
+                        // whatever order the map gives them in.
+                        let key = (s_len, owner, source_edge.index());
+                        if best.is_none_or(|best| {
+                            key.0
+                                .total_cmp(&best.1)
+                                .then(key.1.cmp(&best.0))
+                                .then(key.2.cmp(&best.2))
+                                .is_lt()
+                        }) {
+                            best = Some((owner, s_len, source_edge.index()));
                         }
                     }
                 }
-                best.map(|(owner, _)| owner)
+                best.map(|(owner, ..)| owner)
             })
             .collect();
         if owners.iter().all(Option::is_none) {

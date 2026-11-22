@@ -41,7 +41,7 @@ pub use radius_law::FilletRadiusLaw;
 #[allow(deprecated)]
 pub use rolling_ball::fillet_rolling_ball;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use brepkit_math::tolerance::Tolerance;
 use brepkit_math::vec::Point3;
@@ -507,8 +507,10 @@ pub fn fillet_variable(
     // (vertex_index, edge_index, face_index). Computing it once guarantees the
     // trimmed face boundary and the blend boundary coincide (watertight shell).
     // Per-end radius: the edge's start vertex uses R(0), the end uses R(1).
-    let fillet_contact_map: HashMap<(usize, usize, usize), Point3> = {
-        let mut map = HashMap::new();
+    // Kept in order of its keys: a side face's corner below takes the first
+    // contacts at its vertex, which must not hang on the order of a hash map.
+    let fillet_contact_map: BTreeMap<(usize, usize, usize), Point3> = {
+        let mut map = BTreeMap::new();
         for (edge_id, law) in edge_laws {
             let edge = topo.edge(*edge_id)?;
             let p_start = topo.vertex(edge.start())?.point();
@@ -620,11 +622,12 @@ pub fn fillet_variable(
                 // ordered toward prev/next to keep the wire convex.
                 (false, false, true) => {
                     let mut unique_contacts: Vec<Point3> = Vec::new();
-                    for (&(vi_k, _, _), &pt) in &fillet_contact_map {
-                        if vi_k == vi
-                            && !unique_contacts
-                                .iter()
-                                .any(|uc| (*uc - pt).length() < tol.linear)
+                    for (_, &pt) in
+                        fillet_contact_map.range((vi, 0, 0)..=(vi, usize::MAX, usize::MAX))
+                    {
+                        if !unique_contacts
+                            .iter()
+                            .any(|uc| (*uc - pt).length() < tol.linear)
                         {
                             unique_contacts.push(pt);
                         }
