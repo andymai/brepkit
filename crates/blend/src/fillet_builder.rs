@@ -611,46 +611,35 @@ impl<'a> FilletBuilder<'a> {
                 let source_surface = topo.face(face_id)?.surface().clone();
                 let mut adapter = None;
                 let support = surface_ref_or_adapter(&source_surface, &mut adapter);
-                let analytic_pcurve = if face_id == stripe.face1 {
-                    &stripe.pcurve1
+                let pcurve = if source_surface.is_planar() {
+                    let (pcurve, start, end) = build_planar_pcurve_from_contact(support, &contact)?;
+                    brepkit_topology::pcurve::PCurve::new(pcurve, start, end)
                 } else {
-                    &stripe.pcurve2
-                };
-                let (pcurve, pcurve_start, pcurve_end) = if source_surface.is_planar() {
-                    build_planar_pcurve_from_contact(support, &contact)?
-                } else {
-                    match build_pcurve_from_contact(
-                        support,
-                        &contact,
+                    // The trimmer's weld distance: ends this close make one
+                    // closed contact.
+                    const CLOSED: f64 = 1e-7;
+                    let [start, end] = restriction.contact_3d[..] else {
+                        return Err(BlendError::TrimmingFailure { face: face_id });
+                    };
+                    let end = if (end - start).length() <= CLOSED {
+                        start
+                    } else {
+                        end
+                    };
+                    let periods = [
                         face_u_period(&source_surface),
-                    ) {
-                        Ok(pcurve) => (pcurve, 0.0, 1.0),
-                        Err(BlendError::Math(brepkit_math::MathError::ZeroVector)) => {
-                            match analytic_pcurve {
-                                brepkit_math::curves2d::Curve2D::Circle(_)
-                                | brepkit_math::curves2d::Curve2D::Ellipse(_) => {
-                                    (analytic_pcurve.clone(), 0.0, std::f64::consts::TAU)
-                                }
-                                brepkit_math::curves2d::Curve2D::Nurbs(curve) => {
-                                    let (start, end) = curve.domain();
-                                    (analytic_pcurve.clone(), start, end)
-                                }
-                                brepkit_math::curves2d::Curve2D::Line(_) => {
-                                    return Err(BlendError::Math(
-                                        brepkit_math::MathError::ZeroVector,
-                                    ));
-                                }
-                            }
-                        }
-                        Err(error) => return Err(error),
-                    }
+                        crate::builder_utils::face_v_period(&source_surface),
+                    ];
+                    crate::builder_utils::pcurve_along(
+                        support,
+                        periods,
+                        &EdgeCurve::NurbsCurve(contact.clone()),
+                        (start, end),
+                    )
+                    .ok_or(BlendError::TrimmingFailure { face: face_id })?
                 };
                 restriction.curve = Some(EdgeCurve::NurbsCurve(contact));
-                restriction.pcurve = Some(brepkit_topology::pcurve::PCurve::new(
-                    pcurve,
-                    pcurve_start,
-                    pcurve_end,
-                ));
+                restriction.pcurve = Some(pcurve);
                 restrictions_by_face
                     .entry(face_id)
                     .or_default()

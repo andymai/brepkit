@@ -858,6 +858,164 @@ pub fn surface_ref_or_adapter<'a>(
     }
 }
 
+/// The period of `surface` in v: the torus's, and a NURBS surface's that
+/// closes round in v.
+#[must_use]
+pub fn face_v_period(surface: &FaceSurface) -> Option<f64> {
+    match surface {
+        FaceSurface::Torus(_) => Some(std::f64::consts::TAU),
+        FaceSurface::Nurbs(nurbs) if nurbs.is_periodic_v() => {
+            let (v0, v1) = nurbs.domain_v();
+            (v1 > v0).then_some(v1 - v0)
+        }
+        FaceSurface::Plane { .. }
+        | FaceSurface::Cylinder(_)
+        | FaceSurface::Cone(_)
+        | FaceSurface::Sphere(_)
+        | FaceSurface::Nurbs(_) => None,
+    }
+}
+
+/// The pcurve on `support` of `curve` run from `start` to `end`, over the
+/// curve's own parameters between them: one fraction of each span gives one
+/// point. The image of the curve in the surface's parameters is read along
+/// the curve, across the seams of `periods` (u, v). Where that image is a
+/// straight line run at an even rate (a circle round a cylinder's or a
+/// cone's axis), the pcurve is that line. Elsewhere a cubic interpolates the
+/// image at more and more points, until between them it lies within `FIT`
+/// times one more than the curve's size of the image, in pieces that meet at
+/// the curve's corners. `None` when no such cubic comes within it.
+#[must_use]
+pub fn pcurve_along(
+    support: &dyn ParametricSurface,
+    periods: [Option<f64>; 2],
+    curve: &EdgeCurve,
+    (start, end): (Point3, Point3),
+) -> Option<brepkit_topology::pcurve::PCurve> {
+    use brepkit_math::curves2d::{Curve2D, Line2D, NurbsCurve2D};
+    use brepkit_math::madd::Madd;
+    use brepkit_math::vec::Point2;
+    use brepkit_topology::pcurve::PCurve;
+
+    const FIT: f64 = 1e-7;
+    const FIRST: u32 = 16;
+    const LAST: u32 = 4096;
+    let (t0, t1) = curve.domain_with_endpoints(start, end);
+    // The tolerance scales with the curve's size, not with where it lies.
+    let size = brepkit_math::aabb::Aabb3::try_from_points((0..=FIRST).map(|k| {
+        let f = f64::from(k) / f64::from(FIRST);
+        curve.evaluate_with_endpoints((t1 - t0).madd(f, t0), start, end)
+    }))
+    .map_or(0.0, |aabb| (aabb.max - aabb.min).length());
+    let fit = FIT * (1.0 + size);
+    let on = |uv: Point2| support.evaluate(uv.x(), uv.y());
+    let mut pieces: Vec<f64> = curve_corners(curve)
+        .into_iter()
+        .map(|t| (t - t0) / (t1 - t0))
+        .filter(|f| *f > 1e-9 && *f < 1.0 - 1e-9)
+        .collect();
+    pieces.sort_by(f64::total_cmp);
+    pieces.insert(0, 0.0);
+    pieces.push(1.0);
+    let mut steps = FIRST;
+    while steps <= LAST {
+        let count = 2 * steps;
+        let step = |k: u32| f64::from(k) / f64::from(count);
+        let mut fractions = vec![0.0];
+        for piece in pieces.windows(2) {
+            fractions.extend((1..=count).map(|k| (piece[1] - piece[0]).madd(step(k), piece[0])));
+        }
+        let mut image: Vec<Point2> = Vec::with_capacity(fractions.len());
+        for &f in &fractions {
+            let point = curve.evaluate_with_endpoints((t1 - t0).madd(f, t0), start, end);
+            let (mut u, mut v) = support.project_point(point);
+            if let Some(last) = image.last() {
+                for (value, (period, reference)) in [
+                    (&mut u, (periods[0], last.x())),
+                    (&mut v, (periods[1], last.y())),
+                ] {
+                    if let Some(period) = period {
+                        *value -= period * ((*value - reference) / period).round();
+                    }
+                }
+            }
+            image.push(Point2::new(u, v));
+        }
+        let near = |at: Point2, k: usize| (on(at) - on(image[k])).length() <= fit;
+        let (first, chord) = (image[0], image[image.len() - 1] - image[0]);
+        if fractions
+            .iter()
+            .enumerate()
+            .all(|(k, &f)| near(first + chord * f, k))
+        {
+            let line = Line2D::new(first, chord).ok()?;
+            return Some(PCurve::new(Curve2D::Line(line), 0.0, chord.length()));
+        }
+        let params: Vec<f64> = (0..=steps)
+            .map(|k| f64::from(k) / f64::from(steps))
+            .collect();
+        let flat = |p: Point3| Point2::new(p.x(), p.y());
+        let mut knots = vec![0.0; 4];
+        let mut points: Vec<Point2> = Vec::new();
+        let mut within = true;
+        for (index, piece) in pieces.windows(2).enumerate() {
+            let base = index * count as usize;
+            let run = &image[base..=base + count as usize];
+            let nodes: Vec<Point3> = run
+                .iter()
+                .step_by(2)
+                .map(|uv| Point3::new(uv.x(), uv.y(), 0.0))
+                .collect();
+            let cubic = brepkit_math::nurbs::fitting::interpolate_at(&nodes, &params, 3).ok()?;
+            within &= (1..count)
+                .step_by(2)
+                .all(|k| near(flat(cubic.evaluate(step(k))), base + k as usize));
+            let inner = &cubic.knots()[4..cubic.knots().len() - 4];
+            knots.extend(
+                inner
+                    .iter()
+                    .map(|&k| (piece[1] - piece[0]).madd(k, piece[0])),
+            );
+            knots.extend(std::iter::repeat_n(piece[1], 3));
+            let skip = usize::from(index > 0);
+            points.extend(cubic.control_points()[skip..].iter().copied().map(flat));
+        }
+        if within {
+            knots.push(1.0);
+            let weights = vec![1.0; points.len()];
+            let pcurve = NurbsCurve2D::new(3, knots, points, weights).ok()?;
+            return Some(PCurve::new(Curve2D::Nurbs(pcurve), 0.0, 1.0));
+        }
+        steps *= 2;
+    }
+    None
+}
+
+/// The parameters of `curve` where it may turn a corner: the knots of a
+/// NURBS curve that reach its degree in number, inside its domain.
+fn curve_corners(curve: &EdgeCurve) -> Vec<f64> {
+    let EdgeCurve::NurbsCurve(nurbs) = curve else {
+        return Vec::new();
+    };
+    let (d0, d1) = nurbs.domain();
+    let same = 1e-12 * (d1 - d0).abs();
+    let knots = nurbs.knots();
+    let mut found = Vec::new();
+    let mut i = 0;
+    while i < knots.len() {
+        let knot = knots[i];
+        let run = knots[i..]
+            .iter()
+            .take_while(|&&k| (k - knot).abs() <= same)
+            .count();
+        if run >= nurbs.degree() && knot - d0 > same && d1 - knot > same {
+            found.push(knot);
+        }
+        i += run;
+    }
+    found
+}
+
 struct SolidGraph {
     solid_id: SolidId,
     shell_ids: Vec<ShellId>,
