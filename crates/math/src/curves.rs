@@ -823,12 +823,16 @@ impl Ellipse3D {
         }
         // A shorter semi-axis below the rounding of the longer leaves, to
         // working precision, the longer axis run along twice: the nearest
-        // point lies square across from the point, on the point's side.
-        if b < a * f64::EPSILON {
+        // point lies square across from the point, on the point's side. So
+        // long as its term in the stationary condition, `b |y|`, is below
+        // the rounding of `a max(a, |x|)`: a point far enough off across
+        // the axis still turns the nearest point round the end.
+        let (b_on_a, a_on_b) = (b / a, a / b);
+        if b_on_a < f64::EPSILON && b_on_a * (y.abs() / a) < f64::EPSILON * (x.abs() / a).max(1.0) {
             let t = (x / a).clamp(-1.0, 1.0).acos();
             return if y < 0.0 && t < PI { -t } else { t };
         }
-        if a < b * f64::EPSILON {
+        if a_on_b < f64::EPSILON && a_on_b * (x.abs() / b) < f64::EPSILON * (y.abs() / b).max(1.0) {
             let t = (y / b).clamp(-1.0, 1.0).asin();
             return if x >= 0.0 {
                 t

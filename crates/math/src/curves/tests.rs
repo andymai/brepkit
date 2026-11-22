@@ -268,11 +268,18 @@ fn ellipse_zero_axis_error() {
     );
 }
 
+/// The distance between `p` and `q`, by hypot, so it neither overflows nor
+/// underflows where the coordinates' squares would.
+fn apart(p: Point3, q: Point3) -> f64 {
+    let d = p - q;
+    d.x().hypot(d.y()).hypot(d.z())
+}
+
 /// The distance from `p` to the nearest of a dense scan of `ellipse`, each
 /// best sample refined by golden section between its neighbours.
 fn nearest_by_scan(ellipse: &Ellipse3D, p: Point3) -> f64 {
     const N: u32 = 4_000;
-    let off = |t: f64| (ellipse.evaluate(t) - p).length();
+    let off = |t: f64| apart(ellipse.evaluate(t), p);
     let step = 2.0 * PI / f64::from(N);
     let best = (0..N)
         .map(|k| step.madd(f64::from(k), -PI))
@@ -335,9 +342,10 @@ fn ellipse_project_finds_the_nearest_point() {
                 let p = centre + u * (a * x) + v * (b * y);
                 let t = ellipse.project(p);
                 assert!(t > -PI && t <= PI, "({x}, {y}) on {a} x {b}: {t}");
-                let reached = (ellipse.evaluate(t) - p).length();
+                let reached = apart(ellipse.evaluate(t), p);
                 let nearest = nearest_by_scan(ellipse, p);
-                let scale = (p - centre).length().max(a.max(b));
+                assert!(reached.is_finite() && nearest.is_finite());
+                let scale = apart(p, centre).max(a.max(b));
                 assert!(
                     reached <= nearest + 1e-12 * scale,
                     "({x}, {y}) on {a} x {b}: {reached}, the scan finds {nearest}"
@@ -464,14 +472,52 @@ fn ellipse_project_reads_alike_at_every_scale() {
                     t.is_finite() && t > -PI && t <= PI,
                     "({x}, {y}) on {ak} x {bk}: {t}"
                 );
-                let reached = (ellipse.evaluate(t) - p).length();
+                let reached = apart(ellipse.evaluate(t), p);
                 let nearest = nearest_by_scan(&ellipse, p);
+                assert!(
+                    reached.is_finite() && nearest.is_finite(),
+                    "({x}, {y}) on {ak} x {bk}: {reached}, {nearest}"
+                );
                 assert!(
                     reached <= nearest + 1e-12 * long,
                     "({x}, {y}) on {ak} x {bk}: {reached}, the scan finds {nearest}"
                 );
             }
         }
+    }
+    // A thin ellipse and a point far enough off across it that the short
+    // axis turns the nearest point round toward the end, the longer axis
+    // along either frame axis: the angle is the root of the stationary
+    // condition, bisected. The frame is square to the last digit, which a
+    // point `1e20` off needs.
+    let stationary = |(a, b): (f64, f64), (x, y): (f64, f64), (lo, hi): (f64, f64)| {
+        let slope = |t: f64| {
+            let (s, c) = t.sin_cos();
+            (b * c).madd(b.madd(s, -y), -a * s * a.madd(c, -x))
+        };
+        let (mut lo, mut hi) = (lo, hi);
+        for _ in 0..200 {
+            let mid = 0.5 * (lo + hi);
+            if (slope(mid) > 0.0) == (slope(lo) > 0.0) {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        0.5 * (lo + hi)
+    };
+    for ((a, b), (x, y), bracket) in [
+        ((1.0, 1e-17), (0.5, 1e20), (1.0, FRAC_PI_2)),
+        ((1e-17, 1.0), (1e20, 0.5), (0.0, 0.5)),
+    ] {
+        let (u, v) = (Vec3::new(1.0, 0.0, 0.0), Vec3::new(0.0, 1.0, 0.0));
+        let ellipse = Ellipse3D::with_axes(origin, u.cross(v), a, b, u, v).unwrap();
+        let t = ellipse.project(origin + u * x + v * y);
+        let root = stationary((a, b), (x, y), bracket);
+        assert!(
+            (t - root).abs() < 1e-12,
+            "({x}, {y}) on {a} x {b}: {t}, the root {root}"
+        );
     }
 }
 
