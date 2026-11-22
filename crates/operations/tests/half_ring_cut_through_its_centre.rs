@@ -1,15 +1,18 @@
 //! Half of a thin ring (radii 4 and 0.1, the half `x > 0`) cut and
-//! intersected by a box whose floor is the plane through the ring's centre
-//! across its axis. The floor meets the half ring's torus face along its
-//! inner equator and its outer equator, which is the face's seam, and
-//! crosses each of its two end discs along a diameter.
+//! intersected by a box whose floor is a plane through the ring's centre,
+//! across its axis or turned a little about `x`. The floor meets the half
+//! ring's torus face in two loops a tube's diameter apart, one along or
+//! across the outer equator, which is the face's seam, and crosses each of
+//! the half ring's two end discs.
 //!
 //! The half ring's torus face holds the whole tube over half a turn about
 //! the axis. Its outline was laid half a turn of `u` from the floor's arcs on
 //! it, so they joined none of its rims; a point of its lower half read the
-//! tube angle of the upper one; and the floor's arc along the outer equator
-//! read a tube angle of a whole turn by rounding when turned, past the face's
-//! sampled window. Each case fell back to a mesh.
+//! tube angle of the upper one; the floor's arc along the outer equator read
+//! a tube angle of a whole turn by rounding when turned, past the face's
+//! sampled window; and a turned floor's loop across the seam had no anchor
+//! on it, so the face was traced into slivers. Each case fell back to a
+//! mesh.
 //!
 //! A half turn about the axis `x` maps the half ring onto itself and the two
 //! sides of the floor onto each other, so each side holds a quarter of the
@@ -48,8 +51,10 @@ mod tests {
         ]
     }
 
-    fn check(op: BooleanOp, name: &str, pose: &Mat4) {
-        let label = format!("{op:?}, {name}");
+    /// The floor's loops are fits within 1e-9 of the ring's outer radius
+    /// of the true sections; across the axis they are its equators.
+    fn check(tilt: f64, op: BooleanOp, name: &str, pose: &Mat4, rel: f64) {
+        let label = format!("tilt {tilt}, {op:?}, {name}");
         let mut topo = Topology::new();
         let ring = make_torus(&mut topo, MAJOR, MINOR, 32).unwrap();
         let other_half = make_box(&mut topo, 20.0, 20.0, 20.0).unwrap();
@@ -60,7 +65,12 @@ mod tests {
         )
         .unwrap();
         let lid = make_box(&mut topo, 20.0, 20.0, 20.0).unwrap();
-        transform_solid(&mut topo, lid, &Mat4::translation(-10.0, -10.0, 0.0)).unwrap();
+        transform_solid(
+            &mut topo,
+            lid,
+            &(Mat4::rotation_x(tilt) * Mat4::translation(-10.0, -10.0, 0.0)),
+        )
+        .unwrap();
         for solid in [ring, other_half, lid] {
             transform_solid(&mut topo, solid, pose).unwrap();
         }
@@ -82,24 +92,30 @@ mod tests {
         let want = 0.5 * PI * PI * MAJOR * MINOR * MINOR;
         let volume = solid_volume(&topo, piece, 0.0001).unwrap();
         assert!(
-            (volume - want).abs() <= 1e-9 * want,
+            (volume - want).abs() <= rel * want,
             "{label}: volume {volume}, want {want}"
         );
 
-        // Points in the tube above and below the floor, on both sides of the
-        // ring's middle meridian, and one in the half the cut takes off.
+        // Points in the tube on both sides of the floor and of the ring's
+        // middle meridian, clear of the floor, and one in the half the cut
+        // takes off.
         let tol = brepkit_math::tolerance::Tolerance::new();
         let kept_below = op == BooleanOp::Cut;
-        for (p, below) in [
-            (Point3::new(4.0, 0.0, -0.05), true),
-            (Point3::new(0.4, 3.95, -0.05), true),
-            (Point3::new(0.4, -4.05, -0.05), true),
-            (Point3::new(4.0, 0.0, 0.05), false),
-            (Point3::new(0.4, 3.95, 0.05), false),
-            (Point3::new(0.4, -4.05, 0.05), false),
+        let (sin, cos) = tilt.sin_cos();
+        let over = |p: Point3| p.z().mul_add(cos, -p.y() * sin);
+        for p in [
+            Point3::new(4.0, 0.0, -0.05),
+            Point3::new(0.4, 3.95, -0.05),
+            Point3::new(0.4, -4.05, -0.05),
+            Point3::new(4.0, 0.0, 0.05),
+            Point3::new(0.4, 3.95, 0.05),
+            Point3::new(0.4, -4.05, 0.05),
         ] {
+            if over(p).abs() < 0.01 {
+                continue;
+            }
             let class = classify_point(&topo, piece, pose.mul_point(p), 0.01, tol.linear).unwrap();
-            let want = if below == kept_below {
+            let want = if (over(p) < 0.0) == kept_below {
                 PointClassification::Inside
             } else {
                 PointClassification::Outside
@@ -118,14 +134,25 @@ mod tests {
     #[test]
     fn the_part_under_a_floor_through_the_centre_is_a_quarter_ring() {
         for (name, pose) in poses() {
-            check(BooleanOp::Cut, name, &pose);
+            check(0.0, BooleanOp::Cut, name, &pose, 1e-9);
         }
     }
 
     #[test]
     fn the_part_over_a_floor_through_the_centre_is_a_quarter_ring() {
         for (name, pose) in poses() {
-            check(BooleanOp::Intersect, name, &pose);
+            check(0.0, BooleanOp::Intersect, name, &pose, 1e-9);
+        }
+    }
+
+    #[test]
+    fn a_floor_turned_about_x_takes_a_quarter_ring_each_side() {
+        for tilt in [0.005, 0.01, 0.02] {
+            for op in [BooleanOp::Cut, BooleanOp::Intersect] {
+                for (name, pose) in poses() {
+                    check(tilt, op, name, &pose, 1e-7);
+                }
+            }
         }
     }
 }

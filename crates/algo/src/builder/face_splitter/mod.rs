@@ -9,6 +9,7 @@ mod conversion;
 mod edge_splitting;
 mod sampling;
 mod special_cases;
+mod tube_band;
 pub(in crate::builder) use special_cases::cylinder_cone_remainder_interior;
 
 use brepkit_math::madd::Madd;
@@ -8086,6 +8087,17 @@ fn split_face_2d_impl(
         )
         .or_else(|| {
             special_cases::split_torus_by_ring_loops(
+                &surface,
+                &boundary_edges,
+                sections,
+                rank,
+                reversed,
+                face_id,
+                tol.linear,
+            )
+        })
+        .or_else(|| {
+            tube_band::split_tube_band(
                 &surface,
                 &boundary_edges,
                 sections,
