@@ -2455,6 +2455,29 @@ fn mapped_contact_forward(
     Ok(contact_tangent.dot(source_tangent) >= 0.0)
 }
 
+/// Whether an edge from `start` to `end` on `curve` is straight: a line, or a
+/// B-spline whose control points lie on the line through its ends (a round's
+/// contact on a plane, or a piece of one that still carries the whole
+/// contact's curve).
+pub fn is_straight(curve: &EdgeCurve, start: Point3, end: Point3) -> bool {
+    match curve {
+        EdgeCurve::Line => true,
+        EdgeCurve::NurbsCurve(spline) => {
+            let chord = end - start;
+            let Ok(along) = chord.normalize() else {
+                return false;
+            };
+            let tol = 1e-9 * chord.length().max(1.0);
+            spline.weights().iter().all(|w| w.is_finite() && *w > 0.0)
+                && spline.control_points().iter().all(|&p| {
+                    let off = p - start;
+                    (off - along * off.dot(along)).length() <= tol
+                })
+        }
+        EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => false,
+    }
+}
+
 #[allow(clippy::too_many_lines)]
 /// Which boundary edges a trim may split where a contact ends on them.
 #[derive(Clone, Copy)]
@@ -2820,7 +2843,7 @@ fn rebuild_mapped_parametric_face(
                     let tp = topo.vertex(t)?.point();
                     let curve = edge.curve();
                     let spoke = !single_contact
-                        && matches!(curve, EdgeCurve::Line)
+                        && is_straight(curve, sp, tp)
                         && split_policy.on_spoke((s, sp), (t, tp));
                     if !(own_seam || spoke || split_policy.allows(single_contact, s, t)) {
                         continue;
@@ -3345,7 +3368,20 @@ fn rebuild_mapped_parametric_face(
         .flat_map(|(index, pieces)| pieces.iter().map(move |piece| (index, piece)))
     {
         let whole = contact_pieces[restriction_index].len() == 1;
-        let closed_piece =
+        // A piece of a contact cut at the seam runs its own part of the
+        // contact's curve, on one side of the seam: its pcurve is fitted
+        // along that part.
+        let fitted_piece = if whole || surface.is_planar() {
+            None
+        } else {
+            let piece = topo.edge(contact_edge)?;
+            let ends = (
+                topo.vertex(piece.start())?.point(),
+                topo.vertex(piece.end())?.point(),
+            );
+            crate::builder_utils::pcurve_along(&surface, piece.curve(), ends, false)
+        };
+        let closed_piece = fitted_piece.or_else(|| {
             closed_seam_splits
                 .get(&restriction_index)
                 .and_then(|&(seam_vertex, _)| {
@@ -3353,7 +3389,8 @@ fn rebuild_mapped_parametric_face(
                     let point = topo.vertex(seam_vertex).ok()?.point();
                     let first = contact_pieces[restriction_index].first() == Some(&contact_edge);
                     closed_pcurve_piece(&surface, pcurve, point, first)
-                });
+                })
+        });
         let pcurve = if let Some(pcurve) = closed_piece {
             pcurve
         } else if let Some(pcurve) = restrictions[restriction_index]

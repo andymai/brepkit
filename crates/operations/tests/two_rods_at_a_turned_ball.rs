@@ -6,10 +6,14 @@
 use std::f64::consts::PI;
 
 use brepkit_math::mat::Mat4;
+use brepkit_math::vec::{Point3, Vec3};
 use brepkit_operations::boolean::{self, BooleanOp, BooleanOptions};
+use brepkit_operations::classify::{PointClassification, classify_point};
 use brepkit_operations::measure::solid_volume;
 use brepkit_operations::primitives::{make_cylinder, make_sphere};
-use brepkit_operations::tessellate::{boundary_edge_count, tessellate_solid};
+use brepkit_operations::tessellate::{
+    boundary_edge_count, non_manifold_edge_count, tessellate_solid,
+};
 use brepkit_operations::transform::transform_solid;
 use brepkit_operations::validate::validate_solid;
 use brepkit_topology::Topology;
@@ -52,14 +56,11 @@ fn turned() -> Mat4 {
     Mat4::rotation_z(0.7) * Mat4::rotation_x(0.4) * Mat4::rotation_y(1.1)
 }
 
-// The second fuse falls back. The ball's equator lies within 3.2e-7 of the
-// second rod's wall, and each ball face meets the rod's end circle in a
-// sliver 0.0008 wide. The face splitter keeps each ball face whole (its
-// sliver rule), so the rod wall's sliver, kept, covers the ball's sliver
-// twice; and the equator's pieces below the rod's end circle bound pieces of
-// the wall outside its own rim.
+// Turned 1.57, the ball's equator runs 3.2e-7 inside the second rod's wall.
+// Phase EF reads it as crossing the wall at a dozen points, the wall gets a
+// third piece along it, and the second fuse falls back.
 #[test]
-#[ignore = "second fuse falls back: the ball faces' slivers along the second rod's wall are not split off"]
+#[ignore = "phase EF reads the ball's equator as crossing the second rod's wall; the fuse falls back"]
 fn turned_mirrored_two_rods_stay_exact() {
     let pose = Mat4::scale(1.0, -1.0, 1.0) * turned();
     let mut topo = Topology::new();
@@ -125,4 +126,197 @@ fn a_bar_cut_through_two_rods_at_a_ball_stays_valid() {
     assert!(report.is_valid(), "{:?}", report.issues);
     let mesh = tessellate_solid(&topo, cut, 0.005).unwrap();
     assert_eq!(boundary_edge_count(&mesh), 0, "open mesh");
+}
+
+/// The part of the bar of [`a_bar_cut_through_two_rods_at_a_ball_is_exact`]
+/// the solid holds: along y from 0 to 2 within the rod along +y, and from
+/// the ball's face to 0 within the ball, by Gauss-Legendre over the bar's
+/// disc in polar coordinates.
+fn bar_within() -> f64 {
+    let (radius, cx, cz) = (0.12_f64, 0.3_f64, 0.8_f64);
+    // Nodes and weights of 16-point Gauss-Legendre on [-1, 1].
+    let half = [
+        (0.095_012_509_837_637_44, 0.189_450_610_455_068_5),
+        (0.281_603_550_779_258_9, 0.182_603_415_044_923_6),
+        (0.458_016_777_657_227_4, 0.169_156_519_395_002_5),
+        (0.617_876_244_402_643_7, 0.149_595_988_816_576_7),
+        (0.755_404_408_355_003, 0.124_628_971_255_533_9),
+        (0.865_631_202_387_831_7, 0.095_158_511_682_492_8),
+        (0.944_575_023_073_232_6, 0.062_253_523_938_647_9),
+        (0.989_400_934_991_649_9, 0.027_152_459_411_754_1),
+    ];
+    let nodes: Vec<(f64, f64)> = half.iter().flat_map(|&(x, w)| [(-x, w), (x, w)]).collect();
+    let mut within_ball = 0.0;
+    for &(a, wa) in &nodes {
+        let r = 0.5 * radius * (a + 1.0);
+        for k in 0..64 {
+            let t = (f64::from(k) + 0.5) * 2.0 * PI / 64.0;
+            let (x, z) = (cx + r * t.cos(), cz + r * t.sin());
+            within_ball += wa * 0.5 * radius * r * (2.0 * PI / 64.0) * (1.0 - x * x - z * z).sqrt();
+        }
+    }
+    2.0 * PI * radius * radius + within_ball
+}
+
+#[test]
+fn a_bar_cut_through_two_rods_at_a_ball_is_exact() {
+    // The bar enters the ball's quarter outside both rods and ends in the rod
+    // along +y. Its other crossing of the ball lies within that rod, off the
+    // ball's face.
+    let opts = BooleanOptions {
+        mesh_fallback: false,
+        unify_faces: false,
+        ..BooleanOptions::default()
+    };
+    for (name, pose) in [
+        ("upright", Mat4::identity()),
+        ("turned", turned()),
+        ("mirrored", Mat4::scale(1.0, -1.0, 1.0) * turned()),
+    ] {
+        let mut topo = Topology::new();
+        let ball = make_sphere(&mut topo, 1.0, 32).unwrap();
+        transform_solid(
+            &mut topo,
+            ball,
+            &(Mat4::rotation_z(0.4) * Mat4::rotation_y(1.2)),
+        )
+        .unwrap();
+        let [_, a, b] = scene(&mut topo, 0.0, &Mat4::identity());
+        let rods = boolean::boolean_with_options(&mut topo, BooleanOp::Fuse, a, b, opts).unwrap();
+        let fused =
+            boolean::boolean_with_options(&mut topo, BooleanOp::Fuse, rods, ball, opts).unwrap();
+        let bar = make_cylinder(&mut topo, 0.12, 4.0).unwrap();
+        transform_solid(
+            &mut topo,
+            bar,
+            &(Mat4::rotation_x(-PI / 2.0)
+                * Mat4::rotation_z(-PI / 2.0)
+                * Mat4::translation(0.8, 0.3, -2.0)),
+        )
+        .unwrap();
+        for s in [fused, bar] {
+            transform_solid(&mut topo, s, &pose).unwrap();
+        }
+        let cut = boolean::boolean_with_options(&mut topo, BooleanOp::Cut, fused, bar, opts)
+            .map_err(|e| format!("{name}: {e}"))
+            .unwrap();
+        let report = validate_solid(&topo, cut).unwrap();
+        assert!(report.is_valid(), "{name}: {:?}", report.issues);
+        let expected = expected() - bar_within();
+        let v = solid_volume(&topo, cut, 0.0005).unwrap();
+        assert!(
+            (v - expected).abs() < 1e-6 * expected,
+            "{name}: volume {v} against {expected}"
+        );
+        let mesh = tessellate_solid(&topo, cut, 0.005).unwrap();
+        assert_eq!(boundary_edge_count(&mesh), 0, "{name}: open mesh");
+        assert_eq!(
+            non_manifold_edge_count(&mesh),
+            0,
+            "{name}: non-manifold mesh"
+        );
+    }
+}
+
+#[test]
+fn a_thin_ball_face_beside_a_rods_cap_meshes_closed() {
+    // Turned 1.55 about x, the ball's equator runs 0.021 radians from the
+    // second rod's cap circle, and the ball keeps the sliver between them.
+    let opts = BooleanOptions {
+        mesh_fallback: false,
+        unify_faces: false,
+        ..BooleanOptions::default()
+    };
+    for spin in [1.54, 1.55] {
+        for (pose_name, pose) in [
+            ("upright", Mat4::identity()),
+            ("turned", turned()),
+            ("mirrored", Mat4::scale(1.0, -1.0, 1.0) * turned()),
+        ] {
+            let name = format!("spin {spin} {pose_name}");
+            let mut topo = Topology::new();
+            let [ball, a, b] = scene(&mut topo, spin, &pose);
+            let first =
+                boolean::boolean_with_options(&mut topo, BooleanOp::Fuse, ball, a, opts).unwrap();
+            let fused = boolean::boolean_with_options(&mut topo, BooleanOp::Fuse, first, b, opts)
+                .map_err(|e| format!("{name}: {e}"))
+                .unwrap();
+            let report = validate_solid(&topo, fused).unwrap();
+            assert!(report.is_valid(), "{name}: {:?}", report.issues);
+            let v = solid_volume(&topo, fused, 0.0005).unwrap();
+            assert!(
+                (v - expected()).abs() < 1e-6 * expected(),
+                "{name}: volume {v}"
+            );
+            let mesh = tessellate_solid(&topo, fused, 0.005).unwrap();
+            assert_eq!(boundary_edge_count(&mesh), 0, "{name}: open mesh");
+            assert_eq!(
+                non_manifold_edge_count(&mesh),
+                0,
+                "{name}: non-manifold mesh"
+            );
+        }
+    }
+}
+
+#[test]
+fn two_rods_at_a_ball_turned_near_a_quarter_turn_fuse_exactly() {
+    // The ball's equator runs 0.011 to 0.016 radians from the second rod's
+    // cap circle, and the sliver between them stays a face of the ball.
+    let opts = BooleanOptions {
+        mesh_fallback: false,
+        unify_faces: false,
+        ..BooleanOptions::default()
+    };
+    for spin in [1.555, 1.56, 1.58, 1.59] {
+        for (pose_name, pose) in [
+            ("upright", Mat4::identity()),
+            ("turned", turned()),
+            ("mirrored", Mat4::scale(1.0, -1.0, 1.0) * turned()),
+        ] {
+            let name = format!("spin {spin} {pose_name}");
+            let mut topo = Topology::new();
+            let [ball, a, b] = scene(&mut topo, spin, &pose);
+            let first =
+                boolean::boolean_with_options(&mut topo, BooleanOp::Fuse, ball, a, opts).unwrap();
+            let fused = boolean::boolean_with_options(&mut topo, BooleanOp::Fuse, first, b, opts)
+                .map_err(|e| format!("{name}: {e}"))
+                .unwrap();
+            let report = validate_solid(&topo, fused).unwrap();
+            assert!(report.is_valid(), "{name}: {:?}", report.issues);
+            let v = solid_volume(&topo, fused, 0.0005).unwrap();
+            assert!(
+                (v - expected()).abs() < 1e-6 * expected(),
+                "{name}: volume {v}"
+            );
+            let mesh = tessellate_solid(&topo, fused, 0.005).unwrap();
+            assert_eq!(boundary_edge_count(&mesh), 0, "{name}: open mesh");
+            assert_eq!(
+                non_manifold_edge_count(&mesh),
+                0,
+                "{name}: non-manifold mesh"
+            );
+            // Along each rod, in the ball's quarter outside both rods, past
+            // the ball there, and beside each rod.
+            let away = Vec3::new(1.0, -1.0, 0.0) * (1.0 / 2.0_f64.sqrt());
+            for (p, want) in [
+                (Point3::new(-3.0, 0.0, 0.0), PointClassification::Inside),
+                (Point3::new(0.0, 3.0, 0.0), PointClassification::Inside),
+                (
+                    Point3::new(0.0, 0.0, 0.0) + away * 0.9,
+                    PointClassification::Inside,
+                ),
+                (Point3::new(0.6, -0.01, -0.6), PointClassification::Inside),
+                (
+                    Point3::new(0.0, 0.0, 0.0) + away * 1.05,
+                    PointClassification::Outside,
+                ),
+                (Point3::new(-3.0, 1.1, 0.0), PointClassification::Outside),
+                (Point3::new(1.1, 3.0, 0.0), PointClassification::Outside),
+            ] {
+                let got = classify_point(&topo, fused, pose.mul_point(p), 0.01, 1e-7).unwrap();
+                assert_eq!(got, want, "{name} at {p:?}");
+            }
+        }
+    }
 }

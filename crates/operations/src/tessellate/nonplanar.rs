@@ -10,7 +10,7 @@ use brepkit_topology::face::{FaceId, FaceSurface};
 use std::f64::consts::TAU;
 
 use super::edge_sampling::{sample_edge, segments_for_chord_deviation_a};
-use super::{MERGE_GRID, TriangleMesh, point_merge_key};
+use super::{MERGE_GRID, PointPool, TriangleMesh, point_merge_key};
 
 /// Maps a 3D point to its `(u, v)` surface parameters.
 type ProjectFn = Box<dyn Fn(Point3) -> (f64, f64)>;
@@ -769,7 +769,7 @@ pub(super) fn tessellate_torus_two_rim_band(
     angular_tol: f64,
     edge_global_indices: &DetHashMap<usize, Vec<u32>>,
     merged: &mut TriangleMesh,
-    point_to_global: &mut DetHashMap<(i64, i64, i64), u32>,
+    point_to_global: &mut PointPool,
 ) -> Result<bool, crate::OperationsError> {
     use std::f64::consts::TAU;
     let FaceSurface::Torus(torus) = face_data.surface() else {
@@ -1183,7 +1183,7 @@ pub(super) fn tessellate_torus_notch_band(
     angular_tol: f64,
     edge_global_indices: &DetHashMap<usize, Vec<u32>>,
     merged: &mut TriangleMesh,
-    point_to_global: &mut DetHashMap<(i64, i64, i64), u32>,
+    point_to_global: &mut PointPool,
 ) -> Result<bool, crate::OperationsError> {
     use std::f64::consts::{PI, TAU};
     let FaceSurface::Torus(torus) = face_data.surface() else {
@@ -1278,27 +1278,25 @@ pub(super) fn tessellate_torus_notch_band(
             .max(8);
 
     // Build interior rings as `LatRing` (sorted by v) of fresh vertices.
-    let build_u_ring = |u: f64,
-                        merged: &mut TriangleMesh,
-                        point_to_global: &mut DetHashMap<(i64, i64, i64), u32>|
-     -> LatRing {
-        let mut row: LatRing = Vec::with_capacity(n_v);
-        for j in 0..n_v {
-            #[allow(clippy::cast_precision_loss)]
-            let v = TAU * (j as f64) / (n_v as f64);
-            let p = torus.evaluate(u, v);
-            let key = point_merge_key(p, MERGE_GRID);
-            let gid = *point_to_global.entry(key).or_insert_with(|| {
-                let idx = merged.positions.len() as u32;
-                merged.positions.push(p);
-                merged.normals.push(surf_normal(u, v));
-                idx
-            });
-            row.push((v, gid));
-        }
-        row.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-        row
-    };
+    let build_u_ring =
+        |u: f64, merged: &mut TriangleMesh, point_to_global: &mut PointPool| -> LatRing {
+            let mut row: LatRing = Vec::with_capacity(n_v);
+            for j in 0..n_v {
+                #[allow(clippy::cast_precision_loss)]
+                let v = TAU * (j as f64) / (n_v as f64);
+                let p = torus.evaluate(u, v);
+                let key = point_merge_key(p, MERGE_GRID);
+                let gid = *point_to_global.entry(key).or_insert_with(|| {
+                    let idx = merged.positions.len() as u32;
+                    merged.positions.push(p);
+                    merged.normals.push(surf_normal(u, v));
+                    idx
+                });
+                row.push((v, gid));
+            }
+            row.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+            row
+        };
 
     let emit = make_band_emit(&project, &surf_normal);
     let idx_start = merged.indices.len();
@@ -1351,7 +1349,7 @@ pub(super) fn tessellate_latitude_band_shared(
     angular_tol: f64,
     edge_global_indices: &DetHashMap<usize, Vec<u32>>,
     merged: &mut TriangleMesh,
-    point_to_global: &mut DetHashMap<(i64, i64, i64), u32>,
+    point_to_global: &mut PointPool,
 ) -> Result<bool, crate::OperationsError> {
     if face_data.inner_wires().len() != 1 {
         return Ok(false);
@@ -1611,7 +1609,7 @@ pub(super) fn tessellate_sphere_triangle_shared(
     angular_tol: f64,
     edge_global_indices: &DetHashMap<usize, Vec<u32>>,
     merged: &mut TriangleMesh,
-    point_to_global: &mut DetHashMap<(i64, i64, i64), u32>,
+    point_to_global: &mut PointPool,
 ) -> Result<bool, crate::OperationsError> {
     let FaceSurface::Sphere(sphere) = face_data.surface() else {
         return Ok(false);
@@ -1881,7 +1879,7 @@ pub(super) fn tessellate_sphere_triangle_shared(
 /// never halved. Returns `false` when the halving runs past a bound.
 fn halve_long_sphere_edges(
     merged: &mut TriangleMesh,
-    point_to_global: &mut DetHashMap<(i64, i64, i64), u32>,
+    point_to_global: &mut PointPool,
     idx_start: usize,
     (center, radius): (Point3, f64),
     min_cos: f64,
@@ -2063,6 +2061,17 @@ pub(super) fn tessellate_cylinder_strip_shared(
         let d = position_of(merged, a) - position_of(merged, b);
         (d - axis * d.dot(axis)).length()
     };
+    let turn = |p: Point3| cylinder.project_point(p).0.rem_euclid(TAU);
+    let upper_turns: Vec<f64> = upper
+        .iter()
+        .map(|&g| turn(position_of(merged, g)))
+        .collect();
+    let lower_turns: Vec<f64> = lower
+        .iter()
+        .map(|&g| turn(position_of(merged, g)))
+        .collect();
+    // The turns of each triangle's corners, in any order.
+    let mut tri_turns: Vec<[f64; 3]> = Vec::with_capacity(upper.len() + lower.len());
     let (mut i, mut l) = (0, 0);
     while i + 1 < upper.len() || l + 1 < lower.len() {
         let lower_next = l + 1 < lower.len()
@@ -2072,11 +2081,13 @@ pub(super) fn tessellate_cylinder_strip_shared(
             merged
                 .indices
                 .extend_from_slice(&[upper[i], lower[l], lower[l + 1]]);
+            tri_turns.push([upper_turns[i], lower_turns[l], lower_turns[l + 1]]);
             l += 1;
         } else {
             merged
                 .indices
                 .extend_from_slice(&[upper[i], lower[l], upper[i + 1]]);
+            tri_turns.push([upper_turns[i], lower_turns[l], upper_turns[i + 1]]);
             i += 1;
         }
     }
@@ -2108,16 +2119,18 @@ pub(super) fn tessellate_cylinder_strip_shared(
         TAU
     };
     let reach = (2.0 * (1.0 - (deflection / radius).min(1.0)).acos()).min(by_angle);
-    let turn = |p: Point3| cylinder.project_point(p).0.rem_euclid(TAU);
-    let sound = merged.indices[idx_start..].chunks_exact(3).all(|t| {
-        let mut turns = [0, 1, 2].map(|k| turn(position_of(merged, t[k])));
-        turns.sort_by(f64::total_cmp);
-        // The shortest arc holding all three: the turn less its widest gap.
-        let widest = (turns[1] - turns[0])
-            .max(turns[2] - turns[1])
-            .max(TAU - (turns[2] - turns[0]));
-        outward(merged, t) > 0.0 && TAU - widest <= reach
-    });
+    let sound = merged.indices[idx_start..]
+        .chunks_exact(3)
+        .zip(&tri_turns)
+        .all(|(t, &turns)| {
+            let mut turns = turns;
+            turns.sort_by(f64::total_cmp);
+            // The shortest arc holding all three: the turn less its widest gap.
+            let widest = (turns[1] - turns[0])
+                .max(turns[2] - turns[1])
+                .max(TAU - (turns[2] - turns[0]));
+            outward(merged, t) > 0.0 && TAU - widest <= reach
+        });
     if !sound {
         merged.indices.truncate(idx_start);
         return Ok(false);
@@ -2164,7 +2177,7 @@ fn position_of(merged: &TriangleMesh, gid: u32) -> Point3 {
 /// and `ptg_start` on.
 fn rollback(
     merged: &mut TriangleMesh,
-    point_to_global: &mut DetHashMap<(i64, i64, i64), u32>,
+    point_to_global: &mut PointPool,
     pos_start: usize,
     idx_start: usize,
     ptg_start: usize,
@@ -2415,7 +2428,7 @@ fn build_interior_row(
     surf_eval: &dyn Fn(f64, f64) -> Point3,
     surf_normal: &dyn Fn(f64, f64) -> Vec3,
     merged: &mut TriangleMesh,
-    point_to_global: &mut DetHashMap<(i64, i64, i64), u32>,
+    point_to_global: &mut PointPool,
 ) -> LatRing {
     let mut row: LatRing = Vec::with_capacity(n);
     for i in 0..n {
@@ -2446,7 +2459,7 @@ fn build_collar_row(
     surf_eval: &dyn Fn(f64, f64) -> Point3,
     surf_normal: &dyn Fn(f64, f64) -> Vec3,
     merged: &mut TriangleMesh,
-    point_to_global: &mut DetHashMap<(i64, i64, i64), u32>,
+    point_to_global: &mut PointPool,
 ) -> LatRing {
     let mut row: LatRing = Vec::with_capacity(floor.len());
     for &(u, v_floor, _) in floor {
@@ -2597,7 +2610,7 @@ pub(super) fn tessellate_nonplanar_cdt(
     circle_floor: bool,
     edge_global_indices: &DetHashMap<usize, Vec<u32>>,
     merged: &mut TriangleMesh,
-    point_to_global: &mut DetHashMap<(i64, i64, i64), u32>,
+    point_to_global: &mut PointPool,
 ) -> Result<(), crate::OperationsError> {
     // Every seam, pole and winding-loop rule below reads the closed direction
     // as u. A NURBS face closed along v alone (a revolved fillet whose profile
@@ -2621,6 +2634,22 @@ pub(super) fn tessellate_nonplanar_cdt(
             face_id,
             &local,
             &pcurve_uv,
+            deflection,
+            angular_tol,
+            circle_floor,
+            edge_global_indices,
+            merged,
+            point_to_global,
+        );
+    }
+    // The edges' pcurves lie in the face's own chart, so a face put on a new
+    // one reads its samples' (u, v) by projection.
+    if let Some(local) = sphere_face_recharted(topo, face_data)? {
+        return cdt_in_surface_frame(
+            topo,
+            face_id,
+            &local,
+            &|_, _| None,
             deflection,
             angular_tol,
             circle_floor,
@@ -2693,7 +2722,7 @@ fn cdt_in_surface_frame(
     circle_floor: bool,
     edge_global_indices: &DetHashMap<usize, Vec<u32>>,
     merged: &mut TriangleMesh,
-    point_to_global: &mut DetHashMap<(i64, i64, i64), u32>,
+    point_to_global: &mut PointPool,
 ) -> Result<(), crate::OperationsError> {
     use brepkit_math::cdt::Cdt;
     use brepkit_math::vec::Point2;
@@ -3958,6 +3987,27 @@ fn cdt_in_surface_frame(
             }
         }
     }
+    // A hole that reaches the outline at one point can come as a lobe of
+    // the outer loop, closed at that vertex. The loop's own constraints wall
+    // it in, so the exterior flood leaves it.
+    let (lobe_pts, lobe_ranges) = pinched_hole_lobes(&boundary_cdt_ids, &boundary_pts);
+    if !lobe_ranges.is_empty() {
+        let barrier: DetHashSet<(usize, usize)> = cdt
+            .constraint_edges()
+            .iter()
+            .flat_map(|&(a, b)| [(a, b), (b, a)])
+            .collect();
+        for seed in super::planar::hole_removal_seeds(&lobe_pts, &lobe_ranges) {
+            cdt.flood_remove_from_point(seed, &barrier);
+            if cdt_trace() {
+                log::debug!(
+                    "cdt {face_id:?} lobe flood from {:?}: {} tris left",
+                    from_cdt(seed),
+                    cdt.triangles().len()
+                );
+            }
+        }
+    }
 
     let cdt_verts = cdt.vertices();
     let triangles = cdt.triangles();
@@ -4304,7 +4354,7 @@ pub(super) fn tessellate_holed_face_local(
     circle_floor: bool,
 ) -> Result<super::TriangleMeshUV, crate::OperationsError> {
     let mut merged = TriangleMesh::default();
-    let mut point_to_global: DetHashMap<(i64, i64, i64), u32> = DetHashMap::default();
+    let mut point_to_global = PointPool::default();
     let mut pool: DetHashMap<usize, Vec<u32>> = DetHashMap::default();
     // A twisted face's straight edges are sampled as finely as its grid, as
     // the solid mesher samples them.
@@ -4539,7 +4589,7 @@ fn inner_wire_uv_loops(
     circle_floor: bool,
     edge_global_indices: &DetHashMap<usize, Vec<u32>>,
     merged: &mut TriangleMesh,
-    point_to_global: &mut DetHashMap<(i64, i64, i64), u32>,
+    point_to_global: &mut PointPool,
 ) -> Result<Vec<HoleLoop>, crate::OperationsError> {
     let tol_dup = 1e-10;
     let (u_period, v_period) = surface_periods(face_data.surface());
@@ -4670,7 +4720,7 @@ fn close_loop_at_pole(
     deflection: f64,
     angular_tol: f64,
     merged: &mut TriangleMesh,
-    point_to_global: &mut DetHashMap<(i64, i64, i64), u32>,
+    point_to_global: &mut PointPool,
 ) -> Result<(), crate::OperationsError> {
     // The closing meridian's radius, for a surface whose seam sides are
     // sampled along it.
@@ -4818,7 +4868,7 @@ fn whole_ring_rectangle(
     angular_tol: f64,
     circle_floor: bool,
     merged: &mut TriangleMesh,
-    point_to_global: &mut DetHashMap<(i64, i64, i64), u32>,
+    point_to_global: &mut PointPool,
 ) -> Result<
     Option<(
         Vec<(f64, f64)>,
@@ -5256,6 +5306,226 @@ fn route_through_poles(
     Some(routed)
 }
 
+/// The lobes of a loop that touches itself at a vertex and run the other way
+/// round from the whole loop: holes it holds, as points with the range of
+/// each lobe among them. `ids` names each point's CDT vertex, the same at
+/// each visit of the vertex.
+fn pinched_hole_lobes(
+    ids: &[usize],
+    points: &[brepkit_math::vec::Point2],
+) -> (Vec<brepkit_math::vec::Point2>, Vec<(usize, usize)>) {
+    let twice_area = |pts: &[brepkit_math::vec::Point2]| {
+        (0..pts.len()).fold(0.0, |sum, i| {
+            let (a, b) = (pts[i], pts[(i + 1) % pts.len()]);
+            a.x().madd(b.y(), sum) - b.x() * a.y()
+        })
+    };
+    let whole = twice_area(points);
+    // The walk parts at each vertex it revisits into simple cycles: a stack
+    // of the points since each vertex's last visit pops a cycle at the
+    // revisit, and what is left at the end closes the last one. Wherever the
+    // walk starts, and however many lobes meet at one vertex, each lobe is
+    // one cycle; those that run the other way round from the whole are holes.
+    let mut stack: Vec<usize> = Vec::with_capacity(ids.len());
+    let mut at_depth: DetHashMap<usize, usize> = DetHashMap::default();
+    let mut cycles: Vec<Vec<brepkit_math::vec::Point2>> = Vec::new();
+    for (j, &id) in ids.iter().enumerate() {
+        if let Some(&depth) = at_depth.get(&id) {
+            cycles.push(stack[depth..].iter().map(|&k| points[k]).collect());
+            for &k in &stack[depth + 1..] {
+                at_depth.remove(&ids[k]);
+            }
+            stack.truncate(depth + 1);
+            continue;
+        }
+        at_depth.insert(id, stack.len());
+        stack.push(j);
+    }
+    cycles.push(stack.iter().map(|&k| points[k]).collect());
+    let mut lobe_pts = Vec::new();
+    let mut ranges = Vec::new();
+    for cycle in cycles {
+        if cycle.len() < 3 {
+            continue;
+        }
+        let area = twice_area(&cycle);
+        if area * whole < 0.0 && area.abs() > 1e-12 * whole.abs() {
+            let start = lobe_pts.len();
+            lobe_pts.extend_from_slice(&cycle);
+            ranges.push((start, lobe_pts.len()));
+        }
+    }
+    (lobe_pts, ranges)
+}
+
+/// A sphere face bounded by one loop with no seam, on the same sphere with
+/// its poles moved, when its own chart reads the loop the wrong way round.
+///
+/// The face lies to the left of its loop, which runs counter-clockwise about
+/// the sphere's normal. The mesher meshes what a loop bounds in `(u, v)`, so
+/// a loop that winds round no pole must run counter-clockwise there. One
+/// that runs clockwise holds both poles, and one through a pole can read as
+/// the lune on its other side. The new chart puts both poles outside a face
+/// that lies within one hemisphere, else one pole at the face's middle and
+/// the other in the rest of the sphere, each clear of the loop. `None` when
+/// the face's own chart reads it right, or no new chart does.
+fn sphere_face_recharted(
+    topo: &Topology,
+    face_data: &brepkit_topology::face::Face,
+) -> Result<Option<brepkit_topology::face::Face>, crate::OperationsError> {
+    const SAMPLES: u32 = 16;
+    let FaceSurface::Sphere(sphere) = face_data.surface() else {
+        return Ok(None);
+    };
+    if !face_data.inner_wires().is_empty() {
+        return Ok(None);
+    }
+    let wire = topo.wire(face_data.outer_wire())?;
+    let mut edges = DetHashSet::default();
+    if !wire.edges().iter().all(|oe| edges.insert(oe.edge())) {
+        return Ok(None);
+    }
+    let mut points = Vec::new();
+    for oe in wire.edges() {
+        let edge = topo.edge(oe.edge())?;
+        let (start, end) = (
+            topo.vertex(edge.start())?.point(),
+            topo.vertex(edge.end())?.point(),
+        );
+        let (t0, t1) = edge.curve().domain_with_endpoints(start, end);
+        let along = |f: f64| if oe.is_forward() { f } else { 1.0 - f };
+        // From the edge's start in the loop up to, not at, its end there,
+        // which the next edge starts at.
+        let mut fractions: Vec<f64> = (0..SAMPLES)
+            .map(|k| f64::from(k) / f64::from(SAMPLES))
+            .collect();
+        if let EdgeCurve::Circle(circle) = edge.curve() {
+            fractions.extend(
+                circle_pole_params(circle, (t0, t1), sphere)
+                    .into_iter()
+                    .map(|t| along((t - t0) / (t1 - t0))),
+            );
+            fractions.sort_by(f64::total_cmp);
+        }
+        for f in fractions {
+            points.push(edge.curve().evaluate_with_endpoints(
+                t0 + (t1 - t0) * along(f),
+                start,
+                end,
+            ));
+        }
+    }
+    if points.len() < 3 || sphere_loop_reads_right(sphere, &points) != Some(false) {
+        return Ok(None);
+    }
+    let center = sphere.center();
+    let mut area = Vec3::new(0.0, 0.0, 0.0);
+    for (i, &p) in points.iter().enumerate() {
+        let q = points[(i + 1) % points.len()];
+        area += (p - center).cross(q - center);
+    }
+    let Ok(middle) = area.normalize() else {
+        return Ok(None);
+    };
+    let directions: Vec<Vec3> = points
+        .iter()
+        .filter_map(|&p| (p - center).normalize().ok())
+        .collect();
+    // Both poles stand at least this angle off the loop.
+    let margin = 1e-3_f64;
+    let clear = margin.cos();
+    let within_hemisphere = directions.iter().all(|d| d.dot(middle) > margin.sin());
+    let axis = if within_hemisphere {
+        let aside = if middle.x().abs() < 0.9 {
+            Vec3::new(1.0, 0.0, 0.0)
+        } else {
+            Vec3::new(0.0, 1.0, 0.0)
+        };
+        match middle.cross(aside).normalize() {
+            Ok(axis) => axis,
+            Err(_) => return Ok(None),
+        }
+    } else {
+        middle
+    };
+    if directions.iter().any(|d| d.dot(axis).abs() >= clear) {
+        return Ok(None);
+    }
+    let Ok(turned) =
+        brepkit_math::surfaces::SphericalSurface::with_axis(center, sphere.radius(), axis)
+    else {
+        return Ok(None);
+    };
+    if sphere_loop_reads_right(&turned, &points) != Some(true) {
+        return Ok(None);
+    }
+    let mut local = face_data.clone();
+    local.set_surface(FaceSurface::Sphere(turned));
+    Ok(Some(local))
+}
+
+/// How a sphere's chart reads a loop of points on it, the face to its left:
+/// `Some(true)` when the mesher meshes that face (the loop winds once round a
+/// pole, or round none and counter-clockwise in `(u, v)`), `Some(false)` when
+/// it winds round none clockwise (the face holds both poles, or the loop
+/// passes a pole on the wrong side of the face), `None` when it cannot tell.
+fn sphere_loop_reads_right(
+    sphere: &brepkit_math::surfaces::SphericalSurface,
+    points: &[Point3],
+) -> Option<bool> {
+    use std::f64::consts::FRAC_PI_2;
+    let tol = MERGE_GRID.max(1e-9 * sphere.radius());
+    let (north, south) = (
+        sphere.evaluate(0.0, FRAC_PI_2),
+        sphere.evaluate(0.0, -FRAC_PI_2),
+    );
+    let pole_v = |p: Point3| {
+        if (p - north).length() <= tol {
+            Some(FRAC_PI_2)
+        } else if (p - south).length() <= tol {
+            Some(-FRAC_PI_2)
+        } else {
+            None
+        }
+    };
+    let uv: Vec<(f64, f64)> = points.iter().map(|&p| sphere.project_point(p)).collect();
+    let us: Vec<Option<f64>> = points
+        .iter()
+        .zip(&uv)
+        .map(|(&p, &(u, _))| pole_v(p).is_none().then_some(u))
+        .collect();
+    if us.iter().all(Option::is_none) {
+        return None;
+    }
+    let (unwrapped, winding) = unwrap_loop_u(&us, TAU);
+    if (winding.abs() - TAU).abs() < 1e-6 {
+        return Some(true);
+    }
+    if winding.abs() > 1e-6 {
+        return None;
+    }
+    let mut corners = Vec::with_capacity(points.len() + 4);
+    for (i, &p) in points.iter().enumerate() {
+        let (u_in, u_out) = unwrapped[i];
+        match pole_v(p) {
+            Some(v) => corners.extend([(u_in, v), (u_out, v)]),
+            None => corners.push((u_in, uv[i].1)),
+        }
+    }
+    let mut twice_area = 0.0;
+    for (i, &(u0, v0)) in corners.iter().enumerate() {
+        let (u1, v1) = corners[(i + 1) % corners.len()];
+        twice_area += u0 * v1 - u1 * v0;
+    }
+    let handed = sphere
+        .x_axis()
+        .cross(sphere.y_axis())
+        .dot(sphere.z_axis())
+        .signum();
+    let signed = twice_area * handed;
+    (signed.abs() > 1e-12).then_some(signed > 0.0)
+}
+
 /// A NURBS face's average speeds along u and v over its parameter box. Its
 /// knot values carry no common scale (a converted cylinder's u spans 1 around
 /// a circumference its v spans 4 along), so the CDT measures in lengths:
@@ -5472,7 +5742,7 @@ fn join_winding_hole(
     deflection: f64,
     angular_tol: f64,
     merged: &mut TriangleMesh,
-    point_to_global: &mut DetHashMap<(i64, i64, i64), u32>,
+    point_to_global: &mut PointPool,
 ) -> bool {
     let surface = face_data.surface();
     if !matches!(surface, FaceSurface::Nurbs(_) | FaceSurface::Sphere(_)) || boundary_uv.len() < 3 {
@@ -6272,7 +6542,7 @@ pub(super) fn tessellate_nonplanar_snap(
     circle_floor: bool,
     edge_global_indices: &DetHashMap<usize, Vec<u32>>,
     merged: &mut TriangleMesh,
-    point_to_global: &mut DetHashMap<(i64, i64, i64), u32>,
+    point_to_global: &mut PointPool,
 ) -> Result<(), crate::OperationsError> {
     let mut face_mesh = super::face::tessellate_with_uvs_floor(
         topo,
@@ -6504,6 +6774,80 @@ mod tests {
                 let f = ((p - a).dot(b - a) / chord.powi(2)).clamp(0.0, 1.0);
                 let off = (p - (a + (b - a) * f)).length();
                 assert!(off <= deflection, "span {w:?} stands {off} off its chord");
+            }
+        }
+    }
+
+    /// A square whose loop touches itself at a vertex of its bottom side, to
+    /// run a triangular hole round from it. Wherever the loop starts, the
+    /// hole is the one lobe that runs the other way round.
+    #[test]
+    fn a_pinched_hole_is_found_wherever_the_loop_starts() {
+        use brepkit_math::vec::Point2;
+        let p = |x: f64, y: f64| Point2::new(x, y);
+        let points = [
+            p(0.0, 0.0),
+            p(2.0, 0.0),
+            p(1.5, 1.0),
+            p(2.5, 1.0),
+            p(2.0, 0.0),
+            p(4.0, 0.0),
+            p(4.0, 4.0),
+            p(0.0, 4.0),
+        ];
+        let ids = [0, 1, 2, 3, 1, 4, 5, 6];
+        for start in 0..points.len() {
+            let turned_points: Vec<Point2> = (0..points.len())
+                .map(|k| points[(start + k) % points.len()])
+                .collect();
+            let turned_ids: Vec<usize> = (0..ids.len())
+                .map(|k| ids[(start + k) % ids.len()])
+                .collect();
+            let (lobe_pts, ranges) = pinched_hole_lobes(&turned_ids, &turned_points);
+            assert_eq!(ranges.len(), 1, "start {start}: lobes {ranges:?}");
+            let (a, b) = ranges[0];
+            assert_eq!(b - a, 3, "start {start}: the hole has 3 corners");
+            let corners = &lobe_pts[a..b];
+            for c in [p(2.0, 0.0), p(1.5, 1.0), p(2.5, 1.0)] {
+                assert!(
+                    corners.iter().any(|q| (*q - c).length() < 1e-12),
+                    "start {start}: corner {c:?} missing from {corners:?}"
+                );
+            }
+        }
+    }
+
+    /// Two triangular holes that touch the outline at one vertex: wherever
+    /// the loop starts, each is a hole of its own.
+    #[test]
+    fn two_holes_pinched_at_one_vertex_are_two_holes() {
+        use brepkit_math::vec::Point2;
+        let p = |x: f64, y: f64| Point2::new(x, y);
+        let points = [
+            p(0.0, 0.0),
+            p(2.0, 0.0),
+            p(1.0, 1.0),
+            p(1.8, 1.0),
+            p(2.0, 0.0),
+            p(2.2, 1.0),
+            p(3.0, 1.0),
+            p(2.0, 0.0),
+            p(4.0, 0.0),
+            p(4.0, 4.0),
+            p(0.0, 4.0),
+        ];
+        let ids = [0, 1, 2, 3, 1, 4, 5, 1, 6, 7, 8];
+        for start in 0..points.len() {
+            let turned_points: Vec<Point2> = (0..points.len())
+                .map(|k| points[(start + k) % points.len()])
+                .collect();
+            let turned_ids: Vec<usize> = (0..ids.len())
+                .map(|k| ids[(start + k) % ids.len()])
+                .collect();
+            let (_, ranges) = pinched_hole_lobes(&turned_ids, &turned_points);
+            assert_eq!(ranges.len(), 2, "start {start}: lobes {ranges:?}");
+            for &(a, b) in &ranges {
+                assert_eq!(b - a, 3, "start {start}: a hole has 3 corners, {ranges:?}");
             }
         }
     }

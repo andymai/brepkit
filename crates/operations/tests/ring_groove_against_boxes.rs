@@ -375,8 +375,10 @@ fn a_corner_whose_floor_lies_in_the_groove() {
 }
 
 /// A flat through the axis meets the groove's band in two meridian
-/// circles. The pieces of the band keep them as exact circular arcs.
-/// Turned, the ring of radius 5.9 falls back to a mesh (#2595).
+/// circles. The pieces of the band keep them as exact circular arcs. Each
+/// circle's arc round the outside of the tube lies off the band; the box of
+/// the band's rims, taken in the world's axes, held it when turned, and the
+/// ring of radius 5.9 fell back to a mesh.
 #[test]
 fn a_flat_through_the_axis_keeps_the_grooves_meridians_circular() {
     let block = Block {
@@ -386,9 +388,6 @@ fn a_flat_through_the_axis_keeps_the_grooves_meridians_circular() {
     for major in [5.9, 6.0, 6.1, 6.3] {
         for op in [BooleanOp::Cut, BooleanOp::Intersect, BooleanOp::Fuse] {
             for (pose_name, pose) in poses() {
-                if major < 6.0 && pose_name == "turned" {
-                    continue;
-                }
                 let label = format!("flat through the axis, {pose_name}");
                 let (topo, solid) = check(major, &block, op, &pose, &label);
                 for face in solid_faces(&topo, solid).unwrap() {

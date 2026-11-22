@@ -113,7 +113,9 @@ fn rim(topo: &Topology, solid: SolidId, z: f64) -> EdgeId {
 /// The area of the side's strip set in by `w`, clipped to `x >= 0` and to
 /// outside the circle: across the side `p(u) + t n(u)`, `n` its inward unit
 /// normal, the area element is `det(p' + t n', n)` and each line in from
-/// the side is clipped exactly.
+/// the side is clipped exactly. The side has an inflection, so `det(n', n)`
+/// changes sign along it: the strip narrows where the side bends toward the
+/// plate and widens where it bends away.
 fn strip(w: f64) -> f64 {
     if w <= 0.0 {
         return 0.0;
@@ -139,8 +141,8 @@ fn strip(w: f64) -> f64 {
         let dn = ((nb.0 - na.0) / (u1 - u0), (nb.1 - na.1) / (u1 - u0));
         let p = at(u);
         let n = normal(u);
-        let det = |a: (f64, f64)| (a.0 * n.1 - a.1 * n.0).abs();
-        let (a, b) = (det(dp), det(dn));
+        let det = |a: (f64, f64)| a.0 * n.1 - a.1 * n.0;
+        let (a, b) = (det(dp), -det(dn));
         // `t` in `[0, w]` with `x >= 0` and outside the circle.
         let mut lo = 0.0_f64;
         let mut hi = w;
@@ -224,11 +226,10 @@ fn check(name: &str, picks: &[f64], r: f64, removed: f64) {
     let mesh = tessellate_solid(&topo, result.solid, 0.05).unwrap();
     assert!(is_watertight(&mesh), "{name}: mesh open");
     let lost = before - solid_volume(&topo, result.solid, 1e-3).unwrap();
-    // A walked band stands off its sections between them by about 2e-5
-    // of the volume here; a round ended by a flat runout patch instead
-    // takes off 1.8% too much.
+    // The walked band comes within 1e-7 of the volume here; a round ended
+    // by a flat runout patch instead takes off 1.8% too much.
     assert!(
-        (lost - removed).abs() <= 1e-4 * removed,
+        (lost - removed).abs() <= 1e-6 * removed,
         "{name}: removed {lost}, the round takes off {removed}"
     );
 }

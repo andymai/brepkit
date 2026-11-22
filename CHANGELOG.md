@@ -1,5 +1,29 @@
 # Changelog
 
+## [4.11.35](https://github.com/andymai/brepkit/compare/v4.11.34...v4.11.35) (2026-11-22)
+
+
+### Bug Fixes
+
+* **algo,operations:** mesh seamless ball faces and lobe holes, read a ball face's extent by its wires, and close thin ball faces ([#2679](https://github.com/andymai/brepkit/issues/2679)) ([8a63d77](https://github.com/andymai/brepkit/commit/8a63d77c663d89247e82ecb1c4223a9b8ebe61df))
+* **blend:** build concave rounds before the convex rounds they meet at a corner ([#2681](https://github.com/andymai/brepkit/issues/2681)) ([c7f7717](https://github.com/andymai/brepkit/commit/c7f7717a74b27c17019479edb77be9a90a3f0e46))
+
+## [4.11.34](https://github.com/andymai/brepkit/compare/v4.11.33...v4.11.34) (2026-11-22)
+
+
+### Bug Fixes
+
+* **algo,math:** nest wall loops per loop, link split rim sections all or nothing, and bound curve-surface spans by their nets ([#2658](https://github.com/andymai/brepkit/issues/2658)) ([9d1b09a](https://github.com/andymai/brepkit/commit/9d1b09a6a3c64b5b23cccf2bdda52f9867e90869))
+* **algo:** keep a ball's cavity a cavity, read rulings on a notched wall against its loops, and give a sphere face's holes to the loops round them ([#2671](https://github.com/andymai/brepkit/issues/2671)) ([1b61f91](https://github.com/andymai/brepkit/commit/1b61f91140686e0944e92320d52c39a8378a92bf))
+* **blend,operations,check:** chamfer pocket rims, closed B-spline rims, pole contacts and lens ridges exactly ([#2654](https://github.com/andymai/brepkit/issues/2654)) ([9c190c3](https://github.com/andymai/brepkit/commit/9c190c3cb978637f688745ddd813b41181d8cf3b))
+* **blend:** register fillet contact pcurves along their edges, round ball rims past the equator, and walk fast and near-parallel rounds ([#2672](https://github.com/andymai/brepkit/issues/2672)) ([b65d26a](https://github.com/andymai/brepkit/commit/b65d26a7d984e823f64874579405b655e36544d0))
+* **io,math,operations,algo:** read STL sides by vertex order, end CDT flip cycles, and put sphere bands on their spheres ([#2655](https://github.com/andymai/brepkit/issues/2655)) ([a173f07](https://github.com/andymai/brepkit/commit/a173f078af567e8cdb7654fd27cdeb65973cac18))
+
+
+### Performance
+
+* **operations:** mesh a solid with less hashing in its shared passes ([#2677](https://github.com/andymai/brepkit/issues/2677)) ([4a5cbbb](https://github.com/andymai/brepkit/commit/4a5cbbb497bfc4cb02e1db275d9a1a50531f9679))
+
 ## [4.11.33](https://github.com/andymai/brepkit/compare/v4.11.32...v4.11.33) (2026-11-22)
 
 

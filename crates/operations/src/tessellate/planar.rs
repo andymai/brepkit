@@ -6,7 +6,7 @@ use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
 
 use super::edge_sampling::{sample_edge, sample_wire_positions, segments_for_chord_deviation_a};
-use super::{AnalyticKind, MERGE_GRID, TriangleMesh, TriangleMeshUV, point_merge_key};
+use super::{AnalyticKind, MERGE_GRID, PointPool, TriangleMesh, TriangleMeshUV, point_merge_key};
 
 /// Tessellate a cylindrical face using its actual boundary polygon (CDT-based).
 ///
@@ -1230,7 +1230,7 @@ pub(super) fn tessellate_planar_shared_with_holes(
     normal: Vec3,
     edge_global_indices: &DetHashMap<usize, Vec<u32>>,
     merged: &mut TriangleMesh,
-    point_to_global: &mut DetHashMap<(i64, i64, i64), u32>,
+    point_to_global: &mut PointPool,
 ) -> Result<(), crate::OperationsError> {
     use brepkit_math::cdt::Cdt;
     use brepkit_math::vec::Point2;

@@ -9,6 +9,7 @@ mod conversion;
 mod edge_splitting;
 mod sampling;
 mod special_cases;
+mod tube_band;
 pub(in crate::builder) use special_cases::cylinder_cone_remainder_interior;
 
 use brepkit_math::madd::Madd;
@@ -7060,15 +7061,15 @@ fn rejoin_untouched_rims(
 /// the rims running between them. A closed rim's UVs run its curve's own
 /// sense whatever its traversal, so one traversed against its curve leaves
 /// the walk a turn back from its start. False, with nothing moved, when
-/// there is no closed rim to walk from or a closed rim is not a circle (the
-/// split of a closed ellipse rim takes its pieces' u from projection, not
-/// from the rim's own span).
+/// there is no closed rim to walk from or a closed rim is neither a circle
+/// nor an ellipse (the split of a closed spline rim takes its pieces' u from
+/// projection, not from the rim's own span).
 fn walk_boundary_from_closed_rim(edges: &mut [OrientedPCurveEdge]) -> bool {
     use std::f64::consts::TAU;
     let closed = |e: &OrientedPCurveEdge| (e.start_3d - e.end_3d).length() < 1e-10;
     if edges
         .iter()
-        .any(|e| closed(e) && !matches!(e.curve_3d, EdgeCurve::Circle(_)))
+        .any(|e| closed(e) && !matches!(e.curve_3d, EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_)))
     {
         return false;
     }
@@ -8132,6 +8133,17 @@ fn split_face_2d_impl(
                 tol.linear,
             )
         })
+        .or_else(|| {
+            tube_band::split_tube_band(
+                &surface,
+                &boundary_edges,
+                sections,
+                rank,
+                reversed,
+                face_id,
+                tol.linear,
+            )
+        })
     {
         return bands;
     }
@@ -8319,12 +8331,23 @@ fn split_face_2d_impl(
                 !is_point_on_boundary_uv(p, &surface, &boundary_edges, uv_tol)
             })
         };
+        // A section that ends on a hole runs from it, as from the outer
+        // boundary: a rod's footprint on a bore, in a U from a window's
+        // bottom edge and back, closes on the window, not on itself.
+        let on_hole = |p: Point3| {
+            original_inner_wires
+                .iter()
+                .flatten()
+                .any(|e| point_on_oriented_edge(e, p, tol.linear * 100.0))
+        };
         let endpoints_internal = whole_ring
             || sections.iter().all(|s| {
                 let start_on_boundary =
-                    is_point_on_boundary_uv(s.start, &surface, &boundary_edges, uv_tol);
+                    is_point_on_boundary_uv(s.start, &surface, &boundary_edges, uv_tol)
+                        || on_hole(s.start);
                 let end_on_boundary =
-                    is_point_on_boundary_uv(s.end, &surface, &boundary_edges, uv_tol);
+                    is_point_on_boundary_uv(s.end, &surface, &boundary_edges, uv_tol)
+                        || on_hole(s.end);
                 (!start_on_boundary && !end_on_boundary) || touches_only(s)
             });
         // Winding veto: on a u-periodic lateral, a section chain that winds
@@ -9566,7 +9589,12 @@ fn split_face_2d_impl(
                 place_seam_slivers(&mut all_edges[n_boundary_edges..], lo, u_period, tol.linear);
             }
             one_turn = Some((lo, u_period));
-        } else if !cylinder && hi - lo > 0.5 * u_period {
+        } else if !cylinder
+            // A torus face over half a turn about the axis or less that holds
+            // the whole tube (a half ring) is read periodic in `u` too.
+            && (hi - lo > 0.5 * u_period
+                || matches!(surface, FaceSurface::Torus(_)) && hi - lo > 1e-6)
+        {
             for e in &mut all_edges[n_boundary_edges..] {
                 let mid = f64::midpoint(e.start_uv.x(), e.end_uv.x());
                 let shift = -((mid - lo) / u_period).floor() * u_period;
@@ -11123,43 +11151,6 @@ fn split_face_2d_impl(
             .sum();
         (uv.len() >= 3 && area.abs() > 1e-3 * perimeter).then(|| area.signum())
     };
-    // A loop that runs along the outline and back along sections lying
-    // within a fiftieth of the surface's radius of it is the sliver between
-    // a section and a boundary arc of nearly one circle. A face with one is
-    // kept as the seam rule alone reads it: its sliver as a piece leaves the
-    // solid's mesh open at the tip and its interior unclear.
-    let near_outline = |wl: &[OrientedPCurveEdge]| -> bool {
-        let sample = |e: &OrientedPCurveEdge, n: u32| -> Vec<Point3> {
-            let (s3, e3) = if e.forward {
-                (e.start_3d, e.end_3d)
-            } else {
-                (e.end_3d, e.start_3d)
-            };
-            let (t0, t1) = e.curve_3d.domain_with_endpoints(s3, e3);
-            (0..=n)
-                .map(|k| {
-                    e.curve_3d.evaluate_with_endpoints(
-                        (t1 - t0).madd(f64::from(k) / f64::from(n), t0),
-                        s3,
-                        e3,
-                    )
-                })
-                .collect()
-        };
-        let outline: Vec<Point3> = wl
-            .iter()
-            .filter(|e| e.source_edge_idx.is_none())
-            .flat_map(|e| sample(e, 64))
-            .collect();
-        let near = 0.02 * surface.estimate_radius();
-        !outline.is_empty()
-            && wl
-                .iter()
-                .filter(|e| e.source_edge_idx.is_some())
-                .flat_map(|e| sample(e, 8))
-                .all(|q| outline.iter().any(|o| (*o - q).length() <= near))
-    };
-    let has_sliver = use_structural_classification && loops.iter().any(|wl| near_outline(wl));
     // A loop along the outline and a section bounds a piece only where it
     // winds as the outline does: one that runs against it closes round the
     // rest of the surface.
@@ -11171,12 +11162,33 @@ fn split_face_2d_impl(
             .zip(pts.iter().cycle().skip(1))
             .map(|(a, b)| (*b - *a).length())
             .sum();
-        !has_sliver
-            && outline_sign
-                .is_some_and(|sign| area.abs() > perimeter * tol.linear && area * sign > 0.0)
+        outline_sign.is_some_and(|sign| area.abs() > perimeter * tol.linear && area * sign > 0.0)
     };
 
+    // A woven hole's pieces carry no section index, like the outline's
+    // edges. A loop runs on the outline only where it holds an outline edge.
+    let on_outline = |e: &OrientedPCurveEdge| {
+        let weld = 100.0 * tol.linear;
+        all_edges[..n_boundary_edges].iter().any(|b| {
+            ((b.start_3d - e.start_3d).length() <= weld && (b.end_3d - e.end_3d).length() <= weld)
+                || ((b.start_3d - e.end_3d).length() <= weld
+                    && (b.end_3d - e.start_3d).length() <= weld)
+        })
+    };
     for wire_loop in loops {
+        // On a wall traced with a woven hole, a loop of the hole's pieces and
+        // sections only (a window's sides and a rod's U from its bottom edge)
+        // is read by its winding: the piece the U cuts off the window's edge
+        // is a region, the window widened by it a hole of the region round
+        // it.
+        if use_structural_classification && woven_trace && !wire_loop.iter().any(&on_outline) {
+            if loop_eff_area(&wire_loop) > 0.0 {
+                outers.push((wire_loop, 1.0));
+            } else {
+                holes.push(wire_loop);
+            }
+            continue;
+        }
         if use_structural_classification {
             // Structural: a loop containing both Line edges (seam) and
             // non-Line edges (section arcs / circles) is a band = outer.
@@ -11946,7 +11958,7 @@ pub fn interior_point_3d(
             .zip(wire.iter().cycle().skip(1))
             .all(|(a, b)| (b.start_uv.x() - a.end_uv.x()).abs() < 1e-9);
         sample_wire_loop_uv_periodic(wire, if unbroken { None } else { u_period }, v_period)
-    } else if let Some(pts) = sphere_loop_uv(sub_face) {
+    } else if let Some(pts) = sphere_loop_uv(sub_face).or_else(|| torus_loop_uv(sub_face)) {
         pts
     } else if let (FaceSurface::Plane { .. }, Some(f)) = (&sub_face.surface, frame) {
         // Plane faces with a frame: sample the 3D curves, never the pcurves.
@@ -12264,6 +12276,75 @@ fn attach_sphere_holes(pieces: &mut [SplitSubFace], holes: &[Vec<OrientedPCurveE
         }
     }
     attach_whole_holes(pieces, &unplaced);
+}
+
+/// A torus piece's outer loop in `(u, v)`, sampled on its edges' own curves
+/// with both angles carried on continuously, when it winds neither the axis
+/// nor the tube. The edges' own `(u, v)` can put a stretch of the loop a turn
+/// of the tube away from the rest: a half ring's meridian arc from the tube
+/// angle 3pi/2 up to its outer equator ends at 0, not 2pi, and the polygon
+/// then folds across the piece beside it.
+///
+/// `None` for a piece with holes: they are read on their own stored
+/// `(u, v)`, which can lie a turn from the window this reading takes. `None`
+/// on a spindle torus too: a point of its sheet across the axis projects
+/// onto the near tube's sheet.
+fn torus_loop_uv(sub_face: &SplitSubFace) -> Option<Vec<Point2>> {
+    use std::f64::consts::{PI, TAU};
+    const CURVE_SAMPLES: u32 = 8;
+    let FaceSurface::Torus(torus) = &sub_face.surface else {
+        return None;
+    };
+    if torus.minor_radius() >= torus.major_radius() || !sub_face.inner_wires.is_empty() {
+        return None;
+    }
+    let mut points = Vec::with_capacity(sub_face.outer_wire.len() * CURVE_SAMPLES as usize);
+    for e in &sub_face.outer_wire {
+        points.push(e.start_3d);
+        if matches!(e.curve_3d, EdgeCurve::Line) {
+            continue;
+        }
+        let closed = (e.start_3d - e.end_3d).length() < 1e-10;
+        let fraction = |k: u32| f64::from(k) / f64::from(CURVE_SAMPLES);
+        match &e.curve_3d {
+            EdgeCurve::Circle(c) if closed => {
+                let (a0, turn) = (c.project(e.start_3d), if e.forward { TAU } else { -TAU });
+                points.extend((1..CURVE_SAMPLES).map(|k| c.evaluate(turn.madd(fraction(k), a0))));
+            }
+            _ if closed => return None,
+            curve => {
+                let (s3, e3) = if e.forward {
+                    (e.start_3d, e.end_3d)
+                } else {
+                    (e.end_3d, e.start_3d)
+                };
+                let (t0, t1) = curve.domain_with_endpoints(s3, e3);
+                let mut samples: Vec<Point3> = (1..CURVE_SAMPLES)
+                    .map(|k| curve.evaluate_with_endpoints((t1 - t0).madd(fraction(k), t0), s3, e3))
+                    .collect();
+                // A marched curve's domain can run from either end.
+                let at_t0 = curve.evaluate_with_endpoints(t0, s3, e3);
+                if (at_t0 - e.start_3d).length() > (at_t0 - e.end_3d).length() {
+                    samples.reverse();
+                }
+                points.extend(samples);
+            }
+        }
+    }
+    let nearest = |from: f64, to: f64| from + (to - from + PI).rem_euclid(TAU) - PI;
+    let mut pts: Vec<Point2> = Vec::with_capacity(points.len());
+    for p in points {
+        let (u, v) = sub_face.surface.project_point(p)?;
+        let uv = match pts.last() {
+            Some(last) => Point2::new(nearest(last.x(), u), nearest(last.y(), v)),
+            None => Point2::new(u, v),
+        };
+        pts.push(uv);
+    }
+    let (first, last) = (*pts.first()?, *pts.last()?);
+    let closes = (nearest(last.x(), first.x()) - first.x()).abs() < 1e-9
+        && (nearest(last.y(), first.y()) - first.y()).abs() < 1e-9;
+    (pts.len() >= 3 && closes).then_some(pts)
 }
 
 /// A sphere piece's outer loop in `(u, v)`, sampled on its edges' own curves
@@ -14846,6 +14927,101 @@ mod tests {
         let p = interior_point_3d(&thin, Some(&frame), 1e-11).unwrap();
         assert!(inside(p, 1e-3, 1.5e-7), "{p:?}");
         assert!(interior_point_3d(&thin, Some(&frame), containment::SEED_CLEARANCE).is_none());
+    }
+
+    /// A rectangle in a torus's `(u, v)`, its edges straight between its
+    /// corners and its `(u, v)` stored as given.
+    fn torus_rectangle(
+        torus: &brepkit_math::surfaces::ToroidalSurface,
+        (u0, u1): (f64, f64),
+        (v0, v1): (f64, f64),
+        counterclockwise: bool,
+    ) -> Vec<OrientedPCurveEdge> {
+        let mut corners = [(u0, v0), (u1, v0), (u1, v1), (u0, v1)];
+        if !counterclockwise {
+            corners.reverse();
+        }
+        (0..4)
+            .map(|k| {
+                let (from, to) = (corners[k], corners[(k + 1) % 4]);
+                let (s, e) = (Point2::new(from.0, from.1), Point2::new(to.0, to.1));
+                OrientedPCurveEdge {
+                    curve_3d: EdgeCurve::Line,
+                    pcurve: brepkit_math::curves2d::Curve2D::Line(Line2D::new(s, e - s).unwrap()),
+                    start_uv: s,
+                    end_uv: e,
+                    start_3d: torus.evaluate(from.0, from.1),
+                    end_3d: torus.evaluate(to.0, to.1),
+                    forward: true,
+                    source_edge_idx: None,
+                    pave_block_id: None,
+                }
+            })
+            .collect()
+    }
+
+    /// A torus patch with a hole in its middle, both laid out a turn of `u`
+    /// on from the principal window. The patch's interior point lies on it,
+    /// off the hole.
+    #[test]
+    fn a_holed_torus_patch_a_turn_on_keeps_its_point_off_the_hole() {
+        use std::f64::consts::TAU;
+        let torus =
+            brepkit_math::surfaces::ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), 4.0, 1.5)
+                .unwrap();
+        let mut topo = Topology::new();
+        let face_id = make_unit_square_face(&mut topo);
+        let patch = SplitSubFace {
+            surface: FaceSurface::Torus(torus.clone()),
+            outer_wire: torus_rectangle(&torus, (TAU + 0.2, TAU + 1.2), (0.5, 2.5), true),
+            inner_wires: vec![torus_rectangle(
+                &torus,
+                (TAU + 0.5, TAU + 0.9),
+                (1.2, 1.8),
+                false,
+            )],
+            reversed: false,
+            parent: face_id,
+            rank: Rank::A,
+            precomputed_interior: None,
+        };
+        let p = interior_point_3d(&patch, None, 1e-7).unwrap();
+        let (u, v) = torus.project_point(p);
+        let u = u.rem_euclid(TAU);
+        assert!(
+            (0.2..1.2).contains(&u) && (0.5..2.5).contains(&v),
+            "({u}, {v})"
+        );
+        assert!(
+            !((0.5..0.9).contains(&u) && (1.2..1.8).contains(&v)),
+            "({u}, {v}) lies in the hole"
+        );
+    }
+
+    /// A patch of a spindle torus (radii 0.1 and 2.45) on its sheet across
+    /// the axis, round the point at `u = 0`, `v = pi`. Projected onto the
+    /// torus, its corners read the near tube's sheet; the patch's interior
+    /// point lies on its own sheet.
+    #[test]
+    fn a_spindle_torus_patch_across_the_axis_keeps_its_point_on_its_sheet() {
+        use std::f64::consts::PI;
+        let torus =
+            brepkit_math::surfaces::ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), 0.1, 2.45)
+                .unwrap();
+        let mut topo = Topology::new();
+        let face_id = make_unit_square_face(&mut topo);
+        let patch = SplitSubFace {
+            surface: FaceSurface::Torus(torus.clone()),
+            outer_wire: torus_rectangle(&torus, (-0.2, 0.2), (PI - 0.3, PI + 0.3), true),
+            inner_wires: vec![],
+            reversed: false,
+            parent: face_id,
+            rank: Rank::A,
+            precomputed_interior: None,
+        };
+        let p = interior_point_3d(&patch, None, 1e-7).unwrap();
+        let want = torus.evaluate(0.0, PI);
+        assert!((p - want).length() < 0.05, "{p:?} against {want:?}");
     }
 
     /// A loop through the north pole between two meridians a half turn
