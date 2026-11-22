@@ -2629,6 +2629,22 @@ pub(super) fn tessellate_nonplanar_cdt(
             point_to_global,
         );
     }
+    // The edges' pcurves lie in the face's own chart, so a face put on a new
+    // one reads its samples' (u, v) by projection.
+    if let Some(local) = sphere_face_recharted(topo, face_data)? {
+        return cdt_in_surface_frame(
+            topo,
+            face_id,
+            &local,
+            &|_, _| None,
+            deflection,
+            angular_tol,
+            circle_floor,
+            edge_global_indices,
+            merged,
+            point_to_global,
+        );
+    }
     let pcurve_uv = |edge: brepkit_topology::edge::EdgeId, pt: Point3| {
         topo.pcurves()
             .get(edge, face_id)
@@ -3958,6 +3974,27 @@ fn cdt_in_surface_frame(
             }
         }
     }
+    // A hole that reaches the outline at one point can come as a lobe of
+    // the outer loop, closed at that vertex. The loop's own constraints wall
+    // it in, so the exterior flood leaves it.
+    let (lobe_pts, lobe_ranges) = pinched_hole_lobes(&boundary_cdt_ids, &boundary_pts);
+    if !lobe_ranges.is_empty() {
+        let barrier: DetHashSet<(usize, usize)> = cdt
+            .constraint_edges()
+            .iter()
+            .flat_map(|&(a, b)| [(a, b), (b, a)])
+            .collect();
+        for seed in super::planar::hole_removal_seeds(&lobe_pts, &lobe_ranges) {
+            cdt.flood_remove_from_point(seed, &barrier);
+            if cdt_trace() {
+                log::debug!(
+                    "cdt {face_id:?} lobe flood from {:?}: {} tris left",
+                    from_cdt(seed),
+                    cdt.triangles().len()
+                );
+            }
+        }
+    }
 
     let cdt_verts = cdt.vertices();
     let triangles = cdt.triangles();
@@ -5254,6 +5291,212 @@ fn route_through_poles(
         }));
     }
     Some(routed)
+}
+
+/// The lobes of a loop that touches itself at a vertex and run the other way
+/// round from the whole loop: holes it holds, as points with the range of
+/// each lobe among them. `ids` names each point's CDT vertex, the same at
+/// each visit of the vertex.
+fn pinched_hole_lobes(
+    ids: &[usize],
+    points: &[brepkit_math::vec::Point2],
+) -> (Vec<brepkit_math::vec::Point2>, Vec<(usize, usize)>) {
+    let twice_area = |pts: &[brepkit_math::vec::Point2]| {
+        (0..pts.len()).fold(0.0, |sum, i| {
+            let (a, b) = (pts[i], pts[(i + 1) % pts.len()]);
+            a.x().madd(b.y(), sum) - b.x() * a.y()
+        })
+    };
+    let n = ids.len();
+    let whole = twice_area(points);
+    let mut lobe_pts = Vec::new();
+    let mut ranges = Vec::new();
+    let mut first_visit: DetHashMap<usize, usize> = DetHashMap::default();
+    for (j, &id) in ids.iter().enumerate() {
+        let Some(&i) = first_visit.get(&id) else {
+            first_visit.insert(id, j);
+            continue;
+        };
+        if j - i < 3 || n - (j - i) < 3 {
+            continue;
+        }
+        let lobe = &points[i..j];
+        let area = twice_area(lobe);
+        if area * whole < 0.0 && area.abs() > 1e-12 * whole.abs() {
+            let start = lobe_pts.len();
+            lobe_pts.extend_from_slice(lobe);
+            ranges.push((start, lobe_pts.len()));
+        }
+    }
+    (lobe_pts, ranges)
+}
+
+/// A sphere face bounded by one loop with no seam, on the same sphere with
+/// its poles moved, when its own chart reads the loop the wrong way round.
+///
+/// The face lies to the left of its loop, which runs counter-clockwise about
+/// the sphere's normal. The mesher meshes what a loop bounds in `(u, v)`, so
+/// a loop that winds round no pole must run counter-clockwise there. One
+/// that runs clockwise holds both poles, and one through a pole can read as
+/// the lune on its other side. The new chart puts both poles outside a face
+/// that lies within one hemisphere, else one pole at the face's middle and
+/// the other in the rest of the sphere, each clear of the loop. `None` when
+/// the face's own chart reads it right, or no new chart does.
+fn sphere_face_recharted(
+    topo: &Topology,
+    face_data: &brepkit_topology::face::Face,
+) -> Result<Option<brepkit_topology::face::Face>, crate::OperationsError> {
+    const SAMPLES: u32 = 16;
+    let FaceSurface::Sphere(sphere) = face_data.surface() else {
+        return Ok(None);
+    };
+    if !face_data.inner_wires().is_empty() {
+        return Ok(None);
+    }
+    let wire = topo.wire(face_data.outer_wire())?;
+    let mut edges = DetHashSet::default();
+    if !wire.edges().iter().all(|oe| edges.insert(oe.edge())) {
+        return Ok(None);
+    }
+    let mut points = Vec::new();
+    for oe in wire.edges() {
+        let edge = topo.edge(oe.edge())?;
+        let (start, end) = (
+            topo.vertex(edge.start())?.point(),
+            topo.vertex(edge.end())?.point(),
+        );
+        let (t0, t1) = edge.curve().domain_with_endpoints(start, end);
+        let along = |f: f64| if oe.is_forward() { f } else { 1.0 - f };
+        // From the edge's start in the loop up to, not at, its end there,
+        // which the next edge starts at.
+        let mut fractions: Vec<f64> = (0..SAMPLES)
+            .map(|k| f64::from(k) / f64::from(SAMPLES))
+            .collect();
+        if let EdgeCurve::Circle(circle) = edge.curve() {
+            fractions.extend(
+                circle_pole_params(circle, (t0, t1), sphere)
+                    .into_iter()
+                    .map(|t| along((t - t0) / (t1 - t0))),
+            );
+            fractions.sort_by(f64::total_cmp);
+        }
+        for f in fractions {
+            points.push(edge.curve().evaluate_with_endpoints(
+                t0 + (t1 - t0) * along(f),
+                start,
+                end,
+            ));
+        }
+    }
+    if points.len() < 3 || sphere_loop_reads_right(sphere, &points) != Some(false) {
+        return Ok(None);
+    }
+    let center = sphere.center();
+    let mut area = Vec3::new(0.0, 0.0, 0.0);
+    for (i, &p) in points.iter().enumerate() {
+        let q = points[(i + 1) % points.len()];
+        area += (p - center).cross(q - center);
+    }
+    let Ok(middle) = area.normalize() else {
+        return Ok(None);
+    };
+    let directions: Vec<Vec3> = points
+        .iter()
+        .filter_map(|&p| (p - center).normalize().ok())
+        .collect();
+    // Both poles stand at least this angle off the loop.
+    let margin = 1e-3_f64;
+    let clear = margin.cos();
+    let within_hemisphere = directions.iter().all(|d| d.dot(middle) > margin.sin());
+    let axis = if within_hemisphere {
+        let aside = if middle.x().abs() < 0.9 {
+            Vec3::new(1.0, 0.0, 0.0)
+        } else {
+            Vec3::new(0.0, 1.0, 0.0)
+        };
+        match middle.cross(aside).normalize() {
+            Ok(axis) => axis,
+            Err(_) => return Ok(None),
+        }
+    } else {
+        middle
+    };
+    if directions.iter().any(|d| d.dot(axis).abs() >= clear) {
+        return Ok(None);
+    }
+    let Ok(turned) =
+        brepkit_math::surfaces::SphericalSurface::with_axis(center, sphere.radius(), axis)
+    else {
+        return Ok(None);
+    };
+    if sphere_loop_reads_right(&turned, &points) != Some(true) {
+        return Ok(None);
+    }
+    let mut local = face_data.clone();
+    local.set_surface(FaceSurface::Sphere(turned));
+    Ok(Some(local))
+}
+
+/// How a sphere's chart reads a loop of points on it, the face to its left:
+/// `Some(true)` when the mesher meshes that face (the loop winds once round a
+/// pole, or round none and counter-clockwise in `(u, v)`), `Some(false)` when
+/// it winds round none clockwise (the face holds both poles, or the loop
+/// passes a pole on the wrong side of the face), `None` when it cannot tell.
+fn sphere_loop_reads_right(
+    sphere: &brepkit_math::surfaces::SphericalSurface,
+    points: &[Point3],
+) -> Option<bool> {
+    use std::f64::consts::FRAC_PI_2;
+    let tol = MERGE_GRID.max(1e-9 * sphere.radius());
+    let (north, south) = (
+        sphere.evaluate(0.0, FRAC_PI_2),
+        sphere.evaluate(0.0, -FRAC_PI_2),
+    );
+    let pole_v = |p: Point3| {
+        if (p - north).length() <= tol {
+            Some(FRAC_PI_2)
+        } else if (p - south).length() <= tol {
+            Some(-FRAC_PI_2)
+        } else {
+            None
+        }
+    };
+    let uv: Vec<(f64, f64)> = points.iter().map(|&p| sphere.project_point(p)).collect();
+    let us: Vec<Option<f64>> = points
+        .iter()
+        .zip(&uv)
+        .map(|(&p, &(u, _))| pole_v(p).is_none().then_some(u))
+        .collect();
+    if us.iter().all(Option::is_none) {
+        return None;
+    }
+    let (unwrapped, winding) = unwrap_loop_u(&us, TAU);
+    if (winding.abs() - TAU).abs() < 1e-6 {
+        return Some(true);
+    }
+    if winding.abs() > 1e-6 {
+        return None;
+    }
+    let mut corners = Vec::with_capacity(points.len() + 4);
+    for (i, &p) in points.iter().enumerate() {
+        let (u_in, u_out) = unwrapped[i];
+        match pole_v(p) {
+            Some(v) => corners.extend([(u_in, v), (u_out, v)]),
+            None => corners.push((u_in, uv[i].1)),
+        }
+    }
+    let mut twice_area = 0.0;
+    for (i, &(u0, v0)) in corners.iter().enumerate() {
+        let (u1, v1) = corners[(i + 1) % corners.len()];
+        twice_area += u0 * v1 - u1 * v0;
+    }
+    let handed = sphere
+        .x_axis()
+        .cross(sphere.y_axis())
+        .dot(sphere.z_axis())
+        .signum();
+    let signed = twice_area * handed;
+    (signed.abs() > 1e-12).then_some(signed > 0.0)
 }
 
 /// A NURBS face's average speeds along u and v over its parameter box. Its
