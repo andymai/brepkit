@@ -214,3 +214,44 @@ fn a_bar_cut_through_two_rods_at_a_ball_is_exact() {
         );
     }
 }
+
+#[test]
+fn a_thin_ball_face_beside_a_rods_cap_meshes_closed() {
+    // Turned 1.55 about x, the ball's equator runs 0.021 radians from the
+    // second rod's cap circle, and the ball keeps the sliver between them.
+    let opts = BooleanOptions {
+        mesh_fallback: false,
+        unify_faces: false,
+        ..BooleanOptions::default()
+    };
+    for spin in [1.54, 1.55] {
+        for (pose_name, pose) in [
+            ("upright", Mat4::identity()),
+            ("turned", turned()),
+            ("mirrored", Mat4::scale(1.0, -1.0, 1.0) * turned()),
+        ] {
+            let name = format!("spin {spin} {pose_name}");
+            let mut topo = Topology::new();
+            let [ball, a, b] = scene(&mut topo, spin, &pose);
+            let first =
+                boolean::boolean_with_options(&mut topo, BooleanOp::Fuse, ball, a, opts).unwrap();
+            let fused = boolean::boolean_with_options(&mut topo, BooleanOp::Fuse, first, b, opts)
+                .map_err(|e| format!("{name}: {e}"))
+                .unwrap();
+            let report = validate_solid(&topo, fused).unwrap();
+            assert!(report.is_valid(), "{name}: {:?}", report.issues);
+            let v = solid_volume(&topo, fused, 0.0005).unwrap();
+            assert!(
+                (v - expected()).abs() < 1e-6 * expected(),
+                "{name}: volume {v}"
+            );
+            let mesh = tessellate_solid(&topo, fused, 0.005).unwrap();
+            assert_eq!(boundary_edge_count(&mesh), 0, "{name}: open mesh");
+            assert_eq!(
+                non_manifold_edge_count(&mesh),
+                0,
+                "{name}: non-manifold mesh"
+            );
+        }
+    }
+}

@@ -438,11 +438,14 @@ fn share_doubled_back_samples(
 /// and its mesh then loses the triangles past the crossing; and on a spline
 /// face whose (u, v) is skewed, a chord's straight line in (u, v) can run far
 /// off the edge on the surface, taking grid points outside the face. A
-/// straight edge on a spline face strays in its (u, v) the same way. Each such
-/// chord, a spline's or a straight edge's on a spline face, crossing another
-/// chord of its face's outline, or whose middle in (u, v) lies farther than
-/// the deflection from its edge, is halved on its edge, round by round. The
-/// samples are shared, so the face across each edge takes them too.
+/// straight edge on a spline face strays in its (u, v) the same way, and a
+/// sphere face's arcs close the same slivers (between a rod's cap circle and
+/// the ball's equator a few hundredths of a turn apart). Each such chord, a
+/// spline's, a straight edge's on a spline face or an arc's on a sphere
+/// face, crossing another chord of its face's outline, or whose middle in
+/// (u, v) lies farther than the deflection from its edge, is halved on its
+/// edge, round by round. The samples are shared, so the face across each
+/// edge takes them too.
 ///
 /// Two chords can cross in (u, v) only where their lines in (u, v), read on
 /// the surface, meet: such a chord's reach covers how far that line strays
@@ -473,6 +476,8 @@ pub(super) fn split_crossing_spline_chords(
         Spline(&'a brepkit_math::nurbs::curve::NurbsCurve, f64, f64),
         // A straight edge on a spline face.
         Line,
+        // An arc on a sphere face.
+        Arc,
     }
     struct Chord<'a> {
         edge: usize,
@@ -503,8 +508,12 @@ pub(super) fn split_crossing_spline_chords(
             .is_some_and(|pts| pts.len() == ts.len())
     });
     let spline_face = |f: &FaceId| {
-        topo.face(*f)
-            .is_ok_and(|face| matches!(face.surface(), FaceSurface::Nurbs(_)))
+        topo.face(*f).is_ok_and(|face| {
+            matches!(
+                face.surface(),
+                FaceSurface::Nurbs(_) | FaceSurface::Sphere(_)
+            )
+        })
     };
     if params.is_empty() && !faces.iter().any(spline_face) {
         return Ok(false);
@@ -546,6 +555,18 @@ pub(super) fn split_crossing_spline_chords(
                 }
                 FaceSurface::Torus(_) => (turn, turn),
             };
+            // A sphere face's (u, v) runs on past its seam (its evaluation
+            // turns with u), so a chord across the seam, and a pair of chords
+            // either side of it, are read with u carried round the turn. On
+            // another closed surface such a chord is no chord in (u, v).
+            let round_seam = matches!(surface, FaceSurface::Sphere(_));
+            let near = |a: (f64, f64), b: (f64, f64)| {
+                if round_seam {
+                    ((b.0 - a.0) / su).round().madd(-su, b.0)
+                } else {
+                    b.0
+                }
+            };
             let mut chords: Vec<Chord<'_>> = Vec::new();
             let mut seen: DetHashSet<usize> = DetHashSet::default();
             for &wire_id in std::iter::once(&face.outer_wire()).chain(face.inner_wires()) {
@@ -568,6 +589,7 @@ pub(super) fn split_crossing_spline_chords(
                             (EdgeCurve::NurbsCurve(nurbs), Some(ts)) => {
                                 (SAME, Some(Span::Spline(nurbs, ts[index], ts[index + 1])))
                             }
+                            (EdgeCurve::Circle(_), _) if round_seam => (SAME, Some(Span::Arc)),
                             _ => (deflection, None),
                         };
                         chords.push(Chord {
@@ -621,6 +643,7 @@ pub(super) fn split_crossing_spline_chords(
                     else {
                         continue;
                     };
+                    let b = (near(a, b), b.1);
                     if (a.0 - b.0).abs() > 0.5 * su || (a.1 - b.1).abs() > 0.5 * sv {
                         continue;
                     }
@@ -659,7 +682,7 @@ pub(super) fn split_crossing_spline_chords(
                                 .distance
                                     > deflection
                         }
-                        Span::Line => off_segment(on_line, c.a, c.b) > deflection,
+                        Span::Line | Span::Arc => off_segment(on_line, c.a, c.b) > deflection,
                     };
                     if strays {
                         halve.insert((c.edge, c.index));
@@ -723,6 +746,17 @@ pub(super) fn split_crossing_spline_chords(
                 else {
                     return;
                 };
+                // A sphere's pole has no u of its own.
+                if round_seam
+                    && [a, b, c, d]
+                        .iter()
+                        .any(|p| (p.1.abs() - std::f64::consts::FRAC_PI_2).abs() < 1e-9)
+                {
+                    return;
+                }
+                let b = (near(a, b), b.1);
+                let c = (near(a, c), c.1);
+                let d = (near(c, d), d.1);
                 // A chord across a closed surface's seam is no chord in (u, v).
                 if [(a, b), (c, d)]
                     .iter()
@@ -822,6 +856,17 @@ pub(super) fn split_crossing_spline_chords(
                 for index in indices {
                     let middle = pts[index] + (pts[index + 1] - pts[index]) * 0.5;
                     pts.insert(index + 1, middle);
+                }
+                continue;
+            }
+            if let EdgeCurve::Circle(circle) = curve {
+                // Two samples of an arc lie less than half a turn apart.
+                for index in indices {
+                    let t0 = circle.project(pts[index]);
+                    let step = (circle.project(pts[index + 1]) - t0 + std::f64::consts::PI)
+                        .rem_euclid(std::f64::consts::TAU)
+                        - std::f64::consts::PI;
+                    pts.insert(index + 1, circle.evaluate(step.madd(0.5, t0)));
                 }
                 continue;
             }
