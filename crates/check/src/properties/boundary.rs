@@ -327,6 +327,17 @@ impl Revolution {
         }
     }
 
+    /// The same surface with `u` taken from `angle`: `u - angle` in it is
+    /// `u` here.
+    fn turned(self, angle: f64) -> Self {
+        let (sin, cos) = angle.sin_cos();
+        Self {
+            x: self.x * cos + self.y * sin,
+            y: self.y * cos - self.x * sin,
+            ..self
+        }
+    }
+
     /// Each [`integrand`] at `v` as a trigonometric polynomial in `u`.
     fn series(&self, v: f64, about: Vec3) -> [Trig; 8] {
         let (a, b, da, db) = self.profile.at(v);
@@ -498,6 +509,18 @@ pub(super) fn integrate_by_boundary<S: ParametricSurface>(
         chart.surface.partial_u(u, v).length() <= 1e-6 * chart.surface.partial_v(u, v).length()
     };
     let quarter = std::f64::consts::FRAC_PI_2;
+    // `F` is taken from where the first wire starts rather than from the
+    // frame's `u = 0`, which may lie most of a turn away: there `F` is the
+    // integral over most of a turn, and the wires' sums cancel it out to the
+    // face's far smaller one, losing its digits on the way. `F(u, v) -
+    // F(u₀, v)` serves as well, for the face's wires together do not wind
+    // round `v`; so does a wire's `u` a whole turn on, which moves it by
+    // `∮ 2π ḡ(v) dv`, nothing, or on a torus a whole turn of its tube, which
+    // the count of whole surfaces below takes off.
+    let u_from = wires.first().and_then(|w| w.first()).map_or(0.0, |e| {
+        (chart.project)(e.curve.evaluate_with_endpoints(e.from, e.start, e.end)).0
+    });
+    let from_start = chart.revolution.turned(u_from);
     let mut total = [0.0; 8];
     let (mut turns_sum, mut winds, mut patch, mut holes) = (0_i64, false, false, true);
     for wire in wires {
@@ -505,7 +528,9 @@ pub(super) fn integrate_by_boundary<S: ParametricSurface>(
         let entry = first
             .curve
             .evaluate_with_endpoints(first.from, first.start, first.end);
-        let (mut u, v_start) = (chart.project)(entry);
+        let (u_entry, v_start) = (chart.project)(entry);
+        // Each wire starts within half a turn of the first.
+        let mut u = u_from + wrap_pi(u_entry - u_from);
         let u_start = u;
         let mut v = v_start;
         let v_wrap = |x: f64| if chart.v_periodic { wrap_pi(x) } else { x };
@@ -592,7 +617,7 @@ pub(super) fn integrate_by_boundary<S: ParametricSurface>(
                         );
                         // A latitude (a rim circle about the axis) adds nothing.
                         if dv.abs() > 1e-12 * (1.0 + vn.abs()) {
-                            let g = chart.revolution.antiderivative(un, vn, about);
+                            let g = from_start.antiderivative(un - u_from, vn, about);
                             for (s, x) in sums.iter_mut().zip(g) {
                                 *s += w * dv * x;
                                 rounding = rounding.max((w * nv * x).abs());

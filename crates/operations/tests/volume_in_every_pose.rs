@@ -7,6 +7,9 @@
 //! - A frustum whose wall is put in its B-spline form, which closes round on
 //!   itself, with its bottom rim chamfered: the wall is trimmed along the
 //!   chamfer's contact, which its seam crosses.
+//! - The corner of a cube that reaches into a torus: three flats and a patch
+//!   of the torus a sixth of a turn from where its frame's angle starts, or
+//!   most of a turn the other way once mirrored.
 
 #[cfg(test)]
 mod tests {
@@ -20,7 +23,7 @@ mod tests {
     use brepkit_operations::blend_ops::chamfer_v2;
     use brepkit_operations::boolean::{BooleanOp, boolean};
     use brepkit_operations::measure::solid_volume;
-    use brepkit_operations::primitives::{make_box, make_cone, make_cylinder};
+    use brepkit_operations::primitives::{make_box, make_cone, make_cylinder, make_torus};
     use brepkit_operations::transform::transform_solid;
     use brepkit_topology::Topology;
     use brepkit_topology::edge::EdgeCurve;
@@ -142,6 +145,55 @@ mod tests {
             let mut topo = Topology::new();
             let solid = chamfered_b_spline_frustum(&mut topo, &pose);
             let volume = solid_volume(&topo, solid, 1e-3).unwrap();
+            assert!(
+                (volume - expected).abs() < 1e-9 * expected,
+                "{name}: {volume}, expected {expected}, off {:e}",
+                (volume - expected) / expected
+            );
+        }
+    }
+
+    const MAJOR: f64 = 4.0;
+    const MINOR: f64 = 1.5;
+    /// The cube's corner that reaches into the torus, `(x, y, z)` least.
+    const CORNER: [f64; 3] = [2.4, 4.6, 0.5];
+
+    /// The area of the disc of radius `rho` about the torus's axis beyond
+    /// the corner's lines `x = 2.4` and `y = 4.6`: the circle stays inside
+    /// the cube's other sides.
+    fn corner_cap(rho: f64) -> f64 {
+        let [x0, y0, _] = CORNER;
+        if rho * rho <= x0.mul_add(x0, y0 * y0) {
+            return 0.0;
+        }
+        let x1 = rho.mul_add(rho, -y0 * y0).sqrt();
+        let below = |x: f64| {
+            0.5 * x.mul_add(
+                rho.mul_add(rho, -x * x).sqrt(),
+                rho * rho * (x / rho).asin(),
+            )
+        };
+        below(x1) - below(x0) - y0 * (x1 - x0)
+    }
+
+    #[test]
+    fn a_cube_corner_in_a_torus_measures_alike_in_every_pose() {
+        // At height `z` the torus holds the disc out to `R + sqrt(r² - z²)`,
+        // which reaches the corner's edge below `top`.
+        let [x0, y0, z0] = CORNER;
+        let reach = x0.hypot(y0) - MAJOR;
+        let top = MINOR.mul_add(MINOR, -reach * reach).sqrt();
+        let expected = integral(z0, top, 8, |z| {
+            corner_cap(MAJOR + MINOR.mul_add(MINOR, -z * z).sqrt())
+        });
+        for (name, pose) in poses() {
+            let mut topo = Topology::new();
+            let ring = make_torus(&mut topo, MAJOR, MINOR, 32).unwrap();
+            let cube = make_box(&mut topo, 1.2, 1.2, 1.2).unwrap();
+            transform_solid(&mut topo, cube, &Mat4::translation(x0, y0, z0)).unwrap();
+            let piece = boolean(&mut topo, BooleanOp::Intersect, ring, cube).unwrap();
+            transform_solid(&mut topo, piece, &pose).unwrap();
+            let volume = solid_volume(&topo, piece, 1e-3).unwrap();
             assert!(
                 (volume - expected).abs() < 1e-9 * expected,
                 "{name}: {volume}, expected {expected}, off {:e}",
