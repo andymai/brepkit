@@ -27,7 +27,8 @@ mod tests {
     use brepkit_operations::validate::validate_solid;
     use brepkit_topology::Topology;
     use brepkit_topology::edge::{EdgeCurve, EdgeId};
-    use brepkit_topology::explorer::solid_edges;
+    use brepkit_topology::explorer::{solid_edges, solid_faces};
+    use brepkit_topology::face::FaceSurface;
     use brepkit_topology::solid::SolidId;
 
     fn integral(a: f64, b: f64, f: impl Fn(f64) -> f64) -> f64 {
@@ -80,6 +81,76 @@ mod tests {
             .filter(|&e| matches!(topo.edge(e).unwrap().curve(), EdgeCurve::Circle(_)))
             .collect();
         (cap, rims)
+    }
+
+    /// The unit ball less the box below a plane `tilt` off level at `c` from
+    /// the centre, placed by `pose`, and the edges of its flat face. The cut
+    /// is the cap above `z = c` turned, but the ball's equator stays level,
+    /// so the rim crosses it: half the rim lies on one face of the ball and
+    /// half on the other.
+    fn tilted_cap(topo: &mut Topology, c: f64, tilt: f64, pose: &Mat4) -> (SolidId, Vec<EdgeId>) {
+        let ball = make_sphere(topo, 1.0, 32).unwrap();
+        let slab = make_box(topo, 4.0, 4.0, 4.0).unwrap();
+        let place = Mat4::rotation_x(tilt) * Mat4::translation(-2.0, -2.0, -4.0 + c);
+        transform_solid(topo, slab, &place).unwrap();
+        let cap = boolean(topo, BooleanOp::Cut, ball, slab).unwrap();
+        transform_solid(topo, cap, pose).unwrap();
+        let flat = solid_faces(topo, cap)
+            .unwrap()
+            .into_iter()
+            .find(|&f| matches!(topo.face(f).unwrap().surface(), FaceSurface::Plane { .. }))
+            .unwrap();
+        let rims = topo
+            .wire(topo.face(flat).unwrap().outer_wire())
+            .unwrap()
+            .edges()
+            .iter()
+            .map(brepkit_topology::wire::OrientedEdge::edge)
+            .collect();
+        (cap, rims)
+    }
+
+    /// The round of a rim that crosses the ball's equator is the round of
+    /// the same cut level, turned: the same volume, valid, with a closed
+    /// mesh. The cap is left as it was.
+    #[test]
+    fn a_round_of_a_tilted_caps_rim_across_the_equator_is_the_level_round_turned() {
+        for (c, tilt, r) in [(-0.1, 0.3, 0.2), (-0.15, 0.2, 0.1), (0.1, 0.25, 0.15)] {
+            for (name, pose) in poses() {
+                let what = format!("c = {c}, tilt = {tilt}, r = {r}, {name}");
+                let mut topo = Topology::new();
+                let (solid, rims) = tilted_cap(&mut topo, c, tilt, &pose);
+                let faces_before = solid_faces(&topo, solid).unwrap();
+                let volume_before = solid_volume(&topo, solid, 1e-4).unwrap();
+                let round = fillet_v2(&mut topo, solid, &rims, r).unwrap();
+                assert!(round.failed.is_empty(), "{what}: {:?}", round.failed);
+                assert!(
+                    validate_solid(&topo, round.solid).unwrap().is_valid(),
+                    "{what}: not valid"
+                );
+                let h = 1.0 - c;
+                let expected = PI * h * h * (3.0 - h) / 3.0 - removed(c, r);
+                let volume = solid_volume(&topo, round.solid, 1e-4).unwrap();
+                assert!(
+                    (volume - expected).abs() < 1e-6 * expected,
+                    "{what}: volume {volume}, expected {expected}"
+                );
+                for deflection in [0.01, 0.002] {
+                    let mesh = tessellate_solid(&topo, round.solid, deflection).unwrap();
+                    assert!(is_watertight(&mesh), "{what}: open mesh at {deflection}");
+                }
+                assert_eq!(
+                    solid_faces(&topo, solid).unwrap(),
+                    faces_before,
+                    "{what}: the cap's faces"
+                );
+                let after = solid_volume(&topo, solid, 1e-4).unwrap();
+                assert!(
+                    (after - volume_before).abs() < 1e-9 * volume_before,
+                    "{what}: the cap's volume {after}, before {volume_before}"
+                );
+            }
+        }
     }
 
     /// Short of the equator (`c = -0.5`), on it (`r = -c`) and past it.

@@ -35,6 +35,7 @@ use crate::walker::{Walker, WalkerConfig, approximate_blend_surface, interpolate
 use crate::{BlendError, BlendResult};
 
 mod concave_first;
+mod one_sphere;
 mod wall_run_up;
 
 type BlendCrossEdge = (EdgeId, VertexId, VertexId);
@@ -138,7 +139,12 @@ impl<'a> FilletBuilder<'a> {
             }
         }
         let snapshot = SolidSnapshot::capture(topo, solid)?;
-        let result = build_in_place(topo, solid, edge_sets);
+        let picked: Vec<EdgeId> = edge_sets
+            .iter()
+            .flat_map(|(edges, _)| edges.iter().copied())
+            .collect();
+        let result = one_sphere::join_sphere_faces_the_rim_crosses(topo, solid, &picked)
+            .and_then(|()| build_in_place(topo, solid, edge_sets));
         match result {
             Ok(result) => {
                 let preserve = snapshot.clone_result_source_faces(topo, result.solid);
