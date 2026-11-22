@@ -8374,6 +8374,9 @@ fn section_side_probes(
         return Vec::new();
     };
     let (u_period, v_period) = super::pcurve_compute::surface_periods(face.surface());
+    // A cap of a ball bounded by one circle of latitude has an outline of
+    // no area in `(u, v)`: the face lies on the side its wire keeps.
+    let reversed = face.is_reversed();
     // A step a period long or more wraps round the face, not along it.
     let wraps = |a: Point2, b: Point2| {
         u_period.is_some_and(|p| (b.x() - a.x()).abs() > 0.5 * p)
@@ -8458,7 +8461,8 @@ fn section_side_probes(
             continue;
         }
         let (p, q) = (m + across * step, m - across * step);
-        if !(loops.contains(m) && loops.contains(p) && loops.contains(q)) {
+        let on_face = |x| loops.contains_over_pole(x, reversed);
+        if !(on_face(m) && on_face(p) && on_face(q)) {
             continue;
         }
         if let (Some(p), Some(q)) = (loops.to_3d(p), loops.to_3d(q)) {
@@ -8692,5 +8696,42 @@ mod side_point_tests {
         let loops = crate::classifier::FaceLoops2d::new(&topo, face).unwrap();
         let probes = section_side_probes(&topo, face, &loops, &[circle_section(0.0, 0.0, 1.0)]);
         assert!(probes.is_empty(), "{probes:?}");
+    }
+
+    /// A cap of a ball above a circle of latitude, its wire a single closed
+    /// circle, has an outline of no area in `(u, v)`. A circle of latitude
+    /// nearer the pole still gets one point on each side of it on the cap.
+    #[test]
+    fn side_points_straddle_a_circle_across_a_ball_cap() {
+        use brepkit_math::surfaces::SphericalSurface;
+        let mut topo = Topology::new();
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        let rim = Circle3D::new(Point3::new(0.0, 0.0, 1.0), z, 3.0_f64.sqrt()).unwrap();
+        let at = topo.add_vertex(Vertex::new(rim.evaluate(0.0), 1e-7));
+        let edge = topo.add_edge(Edge::new(at, at, EdgeCurve::Circle(rim)));
+        let wire = topo.add_wire(Wire::new(vec![OrientedEdge::new(edge, true)], true).unwrap());
+        let ball = SphericalSurface::new(Point3::new(0.0, 0.0, 0.0), 2.0).unwrap();
+        let face = topo.add_face(brepkit_topology::face::Face::new(
+            wire,
+            vec![],
+            FaceSurface::Sphere(ball),
+        ));
+        let loops = crate::classifier::FaceLoops2d::new(&topo, face).unwrap();
+        let mut section = circle_section(0.0, 0.0, 1.2);
+        let circle = Circle3D::new(Point3::new(0.0, 0.0, 1.6), z, 1.2).unwrap();
+        section.start = circle.evaluate(0.0);
+        section.end = section.start;
+        section.curve_3d = EdgeCurve::Circle(circle);
+        let probes = section_side_probes(&topo, face, &loops, &[section]);
+        assert_eq!(probes.len(), 1, "{probes:?}");
+        let (p, q) = probes[0];
+        let (low, high) = if p.z() < q.z() { (p, q) } else { (q, p) };
+        assert!(
+            1.0 < low.z() && low.z() < 1.6 && high.z() > 1.6,
+            "{low:?} and {high:?}"
+        );
+        for x in [p, q] {
+            assert!(((x - Point3::new(0.0, 0.0, 0.0)).length() - 2.0).abs() < 1e-9);
+        }
     }
 }
