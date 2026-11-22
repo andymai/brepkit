@@ -5669,10 +5669,10 @@ fn run_stripes_to_tilted_caps(
     const OBLIQUE: f64 = 0.05;
     carry_walked_rounds(topo, plan, stripe_results)?;
     let mut caps = TiltedCaps::new();
-    // A terminal whose contact would run back past nearly all of it is tried
-    // again once the others are done: the far end may run on outward at the
-    // contour's other terminal (a cap leaning the same way at both ends), and
-    // the contact read from there is long enough.
+    // A terminal whose contact would run back past nearly all of it, or all
+    // of it and on, is tried again once the others are done: the far end may
+    // run on outward at the contour's other terminal (a cap leaning the same
+    // way at both ends), and the contact read from there is long enough.
     let mut order: Vec<usize> = (0..plan.junctions.len()).collect();
     let mut retried = vec![false; plan.junctions.len()];
     let mut next = 0;
@@ -5840,7 +5840,7 @@ fn run_stripes_to_tilted_caps(
                     reached = far + run * s;
                 }
             }
-            if fraction <= 0.05 && fraction > 0.0 && !retried[slot] && on_corner(reached)? {
+            if fraction <= 0.05 && !retried[slot] && on_corner(reached)? {
                 short = true;
             }
             if fraction <= 0.05 || !on_corner(reached)? {
