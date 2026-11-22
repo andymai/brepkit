@@ -23,6 +23,12 @@ mod tests {
     /// cone of radii 1.5 and 0.8 along y through it at z = 10, its wide end
     /// at y = 8 when `flip`, else at y = -8.
     fn cut(spin: f64, flip: bool) {
+        check_cut(spin, flip, true);
+    }
+
+    /// The cut of [`cut`]. With `exact`, the boolean must build it exactly;
+    /// without, it may also refuse, but what it returns must be right.
+    fn check_cut(spin: f64, flip: bool, exact: bool) {
         let mut topo = Topology::new();
         let rod = make_cylinder(&mut topo, 5.0, 20.0).unwrap();
         transform_solid(&mut topo, rod, &Mat4::rotation_z(spin)).unwrap();
@@ -39,6 +45,9 @@ mod tests {
         };
         let name = format!("spin {spin} flip {flip}");
         let result = boolean::boolean_with_options(&mut topo, BooleanOp::Cut, rod, pin, opts);
+        if !exact && result.is_err() {
+            return;
+        }
         assert!(result.is_ok(), "{name}: {result:?}");
         let result = result.unwrap();
         let report = validate_solid(&topo, result).unwrap();
@@ -80,6 +89,23 @@ mod tests {
             (3.0, false),
         ] {
             cut(spin, flip);
+        }
+    }
+
+    /// Poses that need the mesh fallback today. A cut there must not come
+    /// back exact and wrong: at spin 1.4 the rod's wall and the cone's side
+    /// each split into one piece, and a change to the face trace once
+    /// assembled the rod alone, uncut.
+    #[test]
+    fn a_taper_pin_cut_the_engine_cannot_build_is_refused_not_wrong() {
+        for (spin, flip) in [
+            (1.4, false),
+            (1.4, true),
+            (2.0, false),
+            (2.6, true),
+            (3.0, true),
+        ] {
+            check_cut(spin, flip, false);
         }
     }
 }
