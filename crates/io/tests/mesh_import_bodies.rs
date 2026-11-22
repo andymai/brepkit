@@ -427,12 +427,13 @@ fn normals_in_one_direction_leave_a_cavity_inward() {
     assert!((volume(&topo, solid) - 7000.0).abs() < 1e-9);
 }
 
-/// Normals that point against the winding of a whole body turn the body.
+/// Normals that point against the winding of a whole body do not turn it.
+/// The inner cube is wound outward, with normals that point to its centre:
+/// it is a solid in the material of the outer cube, not a cavity.
 #[test]
-fn normals_against_the_winding_turn_a_body() {
+fn normals_against_the_winding_do_not_turn_a_body() {
     let mut mesh = TriangleMesh::default();
     add_cube(&mut mesh, [0.0; 3], 20.0, false);
-    // Wound outward, with normals that point to its centre: a cavity.
     add_cube(&mut mesh, [5.0; 3], 10.0, false);
     let centre = Point3::new(10.0, 10.0, 10.0);
     mesh.normals = mesh.positions[..8]
@@ -442,10 +443,13 @@ fn normals_against_the_winding_turn_a_body() {
         .collect();
 
     let mut topo = Topology::new();
-    let solid = import_mesh(&mut topo, &mesh, 1e-7).unwrap();
-    assert_eq!(topo.solid(solid).unwrap().inner_shells().len(), 1);
-    assert!((volume(&topo, solid) - 7000.0).abs() < 1e-9);
-    assert_valid(&topo, solid);
+    let err = import_mesh(&mut topo, &mesh, 1e-7).unwrap_err();
+    assert!(err.to_string().contains("material"), "{err}");
+    let parts = import_mesh_parts(&mut topo, &mesh, 1e-7).unwrap();
+    assert_eq!((parts.solids.len(), parts.shells.len()), (2, 0));
+    let volumes = sorted_volumes(&topo, &parts.solids);
+    assert!((volumes[0] - 1000.0).abs() < 1e-9, "{volumes:?}");
+    assert!((volumes[1] - 8000.0).abs() < 1e-9, "{volumes:?}");
 }
 
 #[test]
@@ -926,10 +930,11 @@ fn a_grid_box_is_a_solid() {
     assert_valid(&topo, solid);
 }
 
-/// Wound inward, with normals that point out: the normals turn each cube
-/// before its triangles pair off round the shared edge.
+/// Wound inward, with normals that point out. The winding decides: the two
+/// cubes lie in no body, so the import turns them, as it does with no
+/// normals.
 #[test]
-fn normals_against_the_winding_turn_two_cubes_that_share_an_edge() {
+fn two_inward_cubes_with_outward_normals_that_share_an_edge_are_two_solids() {
     let mut mesh = TriangleMesh::default();
     add_cube(&mut mesh, [0.0; 3], 10.0, true);
     add_cube(&mut mesh, [10.0, 10.0, 0.0], 10.0, true);
@@ -1155,10 +1160,10 @@ fn set_normals(mesh: &mut TriangleMesh, first: usize, centre: Point3, inward: bo
 }
 
 /// Both cubes are wound outward. The normals of the first point out and
-/// those of the second point in, so over the two the normals neither agree
-/// nor disagree with the winding: the shared edge does not pair off.
+/// those of the second point in. The winding decides: the shared edge
+/// pairs off, and the two cubes are two solids.
 #[test]
-fn normals_that_cancel_over_two_cubes_that_share_an_edge_make_a_shell() {
+fn normals_that_cancel_over_two_cubes_that_share_an_edge_leave_two_solids() {
     let mut mesh = TriangleMesh::default();
     add_cube(&mut mesh, [0.0; 3], 10.0, false);
     add_cube(&mut mesh, [10.0, 10.0, 0.0], 10.0, false);
@@ -1167,15 +1172,17 @@ fn normals_that_cancel_over_two_cubes_that_share_an_edge_make_a_shell() {
 
     let mut topo = Topology::new();
     let parts = import_mesh_parts(&mut topo, &mesh, 1e-7).unwrap();
-    assert_eq!((parts.solids.len(), parts.shells.len()), (0, 1));
-    assert_eq!(topo.shell(parts.shells[0]).unwrap().faces().len(), 24);
+    assert_eq!((parts.solids.len(), parts.shells.len()), (2, 0));
+    for &solid in &parts.solids {
+        assert!((volume(&topo, solid) - 1000.0).abs() < 1e-9);
+        assert_valid(&topo, solid);
+    }
 }
 
-/// The normals of the large box agree with its winding and outweigh the
-/// thin box, whose normals point against its winding. The thin box does
-/// not keep the winding that its pairs at the shared edge took.
+/// The thin box has normals that point against its winding. It keeps its
+/// winding, and is a solid beside the large box.
 #[test]
-fn a_body_wound_against_its_normals_at_a_shared_edge_is_a_shell() {
+fn a_body_wound_against_its_normals_at_a_shared_edge_keeps_its_winding() {
     let mut mesh = TriangleMesh::default();
     add_box(&mut mesh, [0.0; 3], [20.0; 3], false);
     set_normals(&mut mesh, 0, Point3::new(10.0, 10.0, 10.0), false);
@@ -1185,9 +1192,13 @@ fn a_body_wound_against_its_normals_at_a_shared_edge_is_a_shell() {
 
     let mut topo = Topology::new();
     let parts = import_mesh_parts(&mut topo, &mesh, 1e-7).unwrap();
-    assert_eq!((parts.solids.len(), parts.shells.len()), (1, 1));
-    assert!((volume(&topo, parts.solids[0]) - 8000.0).abs() < 1e-9);
-    assert_eq!(topo.shell(parts.shells[0]).unwrap().faces().len(), 12);
+    assert_eq!((parts.solids.len(), parts.shells.len()), (2, 0));
+    let volumes = sorted_volumes(&topo, &parts.solids);
+    assert!((volumes[0] - 500.0).abs() < 1e-9, "{volumes:?}");
+    assert!((volumes[1] - 8000.0).abs() < 1e-9, "{volumes:?}");
+    for &solid in &parts.solids {
+        assert_valid(&topo, solid);
+    }
 }
 
 /// The two cubes that share an edge have normals in one direction, and a
@@ -1675,12 +1686,11 @@ fn add_with_normals(mesh: &mut TriangleMesh, part: &TriangleMesh, against: bool)
 }
 
 /// The cube and the larger hook share an edge and cross, both wound
-/// inward. The normals of the cube point out, against its winding. The
-/// normals of the hook point in, with its winding, and outweigh those of the
-/// cube. Each body takes the side of its own normals: the cube is an
-/// outward solid, and the hook is an inward body that crosses it: a shell.
+/// inward. The normals of the cube point out, against its winding, and the
+/// normals of the hook point in. Each body keeps its winding: two inward
+/// bodies that cross are two shells.
 #[test]
-fn a_cube_and_a_hook_that_cross_take_the_sides_of_their_own_normals() {
+fn a_cube_and_a_hook_that_cross_keep_their_winding_whatever_their_normals() {
     let mut cube = TriangleMesh::default();
     add_cube(&mut cube, [0.0; 3], 10.0, true);
     let mut hook = TriangleMesh::default();
@@ -1696,8 +1706,105 @@ fn a_cube_and_a_hook_that_cross_take_the_sides_of_their_own_normals() {
     let err = import_mesh(&mut topo, &mesh, 1e-7).unwrap_err();
     assert!(err.to_string().contains("cross"), "{err}");
     let parts = import_mesh_parts(&mut topo, &mesh, 1e-7).unwrap();
-    assert_eq!((parts.solids.len(), parts.shells.len()), (1, 1));
-    assert!((volume(&topo, parts.solids[0]) - 1000.0).abs() < 1e-9);
-    assert_valid(&topo, parts.solids[0]);
-    assert_eq!(topo.shell(parts.shells[0]).unwrap().faces().len(), 28);
+    assert_eq!((parts.solids.len(), parts.shells.len()), (0, 2));
+    let mut faces: Vec<usize> = parts
+        .shells
+        .iter()
+        .map(|&shell| topo.shell(shell).unwrap().faces().len())
+        .collect();
+    faces.sort_unstable();
+    assert_eq!(faces, [12, 28]);
+}
+
+/// The facets of a cube of edge `size` at `at`, each with the outward
+/// normal line that an STL writer gives it. `reverse` writes the three
+/// vertices of each facet in the other order and keeps the normal line.
+fn cube_facets(at: [f64; 3], size: f64, reverse: bool) -> Vec<(Vec3, [Point3; 3])> {
+    let mut cube = TriangleMesh::default();
+    add_cube(&mut cube, at, size, false);
+    cube.indices
+        .chunks_exact(3)
+        .map(|tri| {
+            let [a, b, c] = [tri[0], tri[1], tri[2]].map(|i| cube.positions[i as usize]);
+            let normal = (b - a).cross(c - a).normalize().unwrap();
+            (normal, if reverse { [c, b, a] } else { [a, b, c] })
+        })
+        .collect()
+}
+
+fn ascii_stl(facets: &[(Vec3, [Point3; 3])]) -> Vec<u8> {
+    use std::fmt::Write;
+    let mut text = String::from("solid hollow\n");
+    for (n, corners) in facets {
+        writeln!(text, "  facet normal {} {} {}", n.x(), n.y(), n.z()).unwrap();
+        text += "    outer loop\n";
+        for p in corners {
+            writeln!(text, "      vertex {} {} {}", p.x(), p.y(), p.z()).unwrap();
+        }
+        text += "    endloop\n  endfacet\n";
+    }
+    text += "endsolid hollow\n";
+    text.into_bytes()
+}
+
+fn binary_stl(facets: &[(Vec3, [Point3; 3])]) -> Vec<u8> {
+    let mut bytes = vec![0u8; 80];
+    bytes.extend(u32::try_from(facets.len()).unwrap().to_le_bytes());
+    #[allow(clippy::cast_possible_truncation)]
+    for (n, corners) in facets {
+        for v in [n.x(), n.y(), n.z()] {
+            bytes.extend((v as f32).to_le_bytes());
+        }
+        for p in corners {
+            for v in [p.x(), p.y(), p.z()] {
+                bytes.extend((v as f32).to_le_bytes());
+            }
+        }
+        bytes.extend([0, 0]);
+    }
+    bytes
+}
+
+/// The vertex order of each facet says which way it faces. The inner box
+/// is wound inward, and its normal lines point out: it is a cavity.
+#[test]
+fn an_stl_cavity_wound_inward_with_outward_normal_lines_is_a_cavity() {
+    let mut facets = cube_facets([0.0; 3], 20.0, false);
+    facets.extend(cube_facets([5.0; 3], 10.0, true));
+    for bytes in [ascii_stl(&facets), binary_stl(&facets)] {
+        let mesh = read_stl(&bytes).unwrap();
+        let mut topo = Topology::new();
+        let parts = import_mesh_parts(&mut topo, &mesh, 1e-7).unwrap();
+        assert_eq!((parts.solids.len(), parts.shells.len()), (1, 0));
+        let solid = parts.solids[0];
+        assert_eq!(topo.solid(solid).unwrap().inner_shells().len(), 1);
+        assert!((volume(&topo, solid) - 7000.0).abs() < 1e-6);
+        assert_valid(&topo, solid);
+
+        let mut topo = Topology::new();
+        let solid = import_mesh(&mut topo, &mesh, 1e-7).unwrap();
+        assert_eq!(topo.solid(solid).unwrap().inner_shells().len(), 1);
+        assert!((volume(&topo, solid) - 7000.0).abs() < 1e-6);
+    }
+}
+
+/// A 30 mm box, a 20 mm cavity wound inward with outward normal lines, and
+/// a 10 mm island in the cavity: two solids.
+#[test]
+fn an_stl_island_in_a_cavity_with_outward_normal_lines_is_a_solid_of_its_own() {
+    let mut facets = cube_facets([0.0; 3], 30.0, false);
+    facets.extend(cube_facets([5.0; 3], 20.0, true));
+    facets.extend(cube_facets([10.0; 3], 10.0, false));
+    for bytes in [ascii_stl(&facets), binary_stl(&facets)] {
+        let mesh = read_stl(&bytes).unwrap();
+        let mut topo = Topology::new();
+        let parts = import_mesh_parts(&mut topo, &mesh, 1e-7).unwrap();
+        assert_eq!((parts.solids.len(), parts.shells.len()), (2, 0));
+        let volumes = sorted_volumes(&topo, &parts.solids);
+        assert!((volumes[0] - 1000.0).abs() < 1e-6, "{volumes:?}");
+        assert!((volumes[1] - 19000.0).abs() < 1e-6, "{volumes:?}");
+        for &solid in &parts.solids {
+            assert_valid(&topo, solid);
+        }
+    }
 }
