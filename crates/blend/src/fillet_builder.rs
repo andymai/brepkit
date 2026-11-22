@@ -2386,6 +2386,9 @@ fn curved_spur(
     tol: f64,
 ) -> Result<bool, BlendError> {
     const SAMPLES: u32 = 8;
+    // The cosine of the most angle between the two edges' directions at
+    // `v`: a runout edge fitted along an arc leaves it within a degree.
+    const SAME_WAY: f64 = 0.999;
     let (s, l) = (topo.edge(short)?, topo.edge(long)?);
     if s.start() == s.end() || l.start() == l.end() {
         return Ok(false);
@@ -2397,12 +2400,36 @@ fn curved_spur(
             return Ok(false);
         }
     }
+    // Both leave `v` the same way, which most pairs of a face's edges do
+    // not: read first, before the samples.
+    let away = |edge: &Edge| -> Result<Option<Vec3>, BlendError> {
+        let (a, b) = (
+            topo.vertex(edge.start())?.point(),
+            topo.vertex(edge.end())?.point(),
+        );
+        let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
+        let tangent = if edge.start() == v {
+            edge.curve().tangent_with_endpoints(t0, a, b)
+        } else {
+            -edge.curve().tangent_with_endpoints(t1, a, b)
+        };
+        Ok(tangent.normalize().ok())
+    };
+    let (Some(ts), Some(tl)) = (away(s)?, away(l)?) else {
+        return Ok(false);
+    };
+    if ts.dot(tl) < SAME_WAY {
+        return Ok(false);
+    }
+    if edge_nearest(topo, long, far_point, None)?.0 > tol {
+        return Ok(false);
+    }
     let (a, b) = (
         topo.vertex(s.start())?.point(),
         topo.vertex(s.end())?.point(),
     );
     let (t0, t1) = s.curve().domain_with_endpoints(a, b);
-    for k in 0..=SAMPLES {
+    for k in 1..SAMPLES {
         let t = (t1 - t0).madd(f64::from(k) / f64::from(SAMPLES), t0);
         let at = s.curve().evaluate_with_endpoints(t, a, b);
         if edge_nearest(topo, long, at, None)?.0 > tol {
