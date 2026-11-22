@@ -81,9 +81,9 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
     let face_loops = FaceLoopsCache::default();
     // Faces whose sections the splitter could not lay out.
     let mut unsplit: Vec<FaceId> = Vec::new();
-    // Faces kept whole although a section runs across them from boundary to
-    // boundary, with a point on either side of each such section: the face
-    // may stand whole only if both sides take the same class.
+    // Faces kept whole although a section runs across them, with a point on
+    // either side of each such section: the face may stand whole only if
+    // both sides take the same class.
     let mut whole: Vec<(FaceId, Point3, Point3)> = Vec::new();
 
     // Shared edge cache: (face_id, source_edge_idx) → EdgeId. Ensures section
@@ -560,7 +560,7 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
             // section actually crosses it.
             if crossing_points(topo, face_id, &sections).0.is_empty() {
                 whole.extend(
-                    cut_across_probes(topo, face_id, &sections)
+                    cut_across_probes(topo, face_id, &sections, false)
                         .into_iter()
                         .map(|(p, q)| (face_id, p, q)),
                 );
@@ -578,6 +578,24 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
                 interior_unclear: false,
             });
             continue;
+        }
+        // One piece with no section in its wires stands whole across its
+        // sections, as a face split into nothing does: both sides of each
+        // must take one class. A taper pin's cone, whose two loops round its
+        // side did not split it, stood whole partly inside the rod and partly
+        // out, and the rod's own faces assembled the rod uncut.
+        if !imprinting
+            && let [only] = split_results.as_slice()
+            && std::iter::once(&only.outer_wire)
+                .chain(only.inner_wires.iter())
+                .flatten()
+                .all(|e| e.source_edge_idx.is_none())
+        {
+            whole.extend(
+                cut_across_probes(topo, face_id, &sections, true)
+                    .into_iter()
+                    .map(|(p, q)| (face_id, p, q)),
+            );
         }
 
         // Build the parent face's PlaneFrame for consistent UV→3D conversion.
@@ -8336,11 +8354,16 @@ fn polyline_meetings(a: &[Point3], b: &[Point3], band: f64) -> Vec<(Point3, f64,
 /// it in the face: the regions a split would separate there, however close
 /// to the boundary the section stays (a slab skimming an oblique rim's peak).
 /// Read on finely sampled boundary edges, to a thousandth of the face's
-/// extent.
+/// extent. With `any_ends`, a section whose ends lie off the boundary (a
+/// closed loop, or one that ends inside the face) gets its points too, and a
+/// section counts as on the boundary within a hundredth of the extent: a
+/// ball's equator is a polygon of 32 lines, and the exact circle a box's
+/// floor leaves on it lies a six-hundredth of the extent off them.
 fn cut_across_probes(
     topo: &Topology,
     face_id: FaceId,
     sections: &[crate::builder::split_types::SectionEdge],
+    any_ends: bool,
 ) -> Vec<(Point3, Point3)> {
     let Ok(face) = topo.face(face_id) else {
         return Vec::new();
@@ -8357,13 +8380,14 @@ fn cut_across_probes(
             Point3::new(hi.x().max(p.x()), hi.y().max(p.y()), hi.z().max(p.z())),
         )
     });
-    let band = 0.001 * (hi - lo).length();
+    let band = if any_ends { 0.01 } else { 0.001 } * (hi - lo).length();
     sections
         .iter()
         .filter_map(|s| {
-            if (s.start - s.end).length() <= band
-                || distance_to_runs(s.start, &boundary) > band
-                || distance_to_runs(s.end, &boundary) > band
+            if !any_ends
+                && ((s.start - s.end).length() <= band
+                    || distance_to_runs(s.start, &boundary) > band
+                    || distance_to_runs(s.end, &boundary) > band)
             {
                 return None;
             }
