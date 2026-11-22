@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795382368183,
+  "lastUpdate": 1795382750917,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -75707,6 +75707,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 21320737,
             "range": "± 40548",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "06de75bf36182815a447596fb2e41db1e6ad815f",
+          "message": "fix(algo): keep split arcs and long section pieces on the turn they run, and split a lens at any crossing (#2691)\n\n## Summary\n\nOn main, two curve pieces on a periodic face can get their `u` a turn\noff:\n\n- an open ellipse arc on a steep cone, split as a hole (#2686);\n- a section piece that runs more than half a turn round a cylinder,\nwhere its far end lands a turn short (#2682).\n\nWith this change, each piece follows its own traversal in `u`. A lens on\na bore now splits at a crossing anywhere on it, not only within 5% of\nits middle. The pose sweep and the truth audit give the same output as\nmain.\n\nFixes #2686, fixes #2682.\n\n## The change\n\n- **An open ellipse arc (#2686).** `split_edges_at_3d_points` put each\nsplit of an open arc on the turn nearest an even advance between the\narc's end UVs. On a steep cone, an ellipse's `u` does not advance evenly\nwith its parameter. On `x² + y² = z²` cut by `z = 1 + 0.96x`, the split\nat parameter 3.7 got u = 4.2586, where a walk along the arc reaches\n10.5418. Reversed, the split at 4 got -1.7051, against 4.5781.\n- **The lift of `u` along a cone's ellipse.** A walk in steps can also\nmiss a turn. At slope 0.99999, nearly the whole turn of `u` lies within\n0.01 of the arc's parameter. So the change lifts `u` by a proof, not by\nsteps:\n- Viewed along the axis, the ellipse is a convex loop round the axis. So\n`u` runs strictly one way along it.\n- `ellipse_u_sense` in `pcurve_compute.rs` returns that way, after it\nchecks that the axis lies inside the loop. Otherwise it returns `None`,\nand the splitter keeps the even guess.\n- `ellipse_split_u` puts each split at its projected `u`, read that way\nfrom the start.\n- `lift_ellipse_samples` lifts the samples of `sample_edge_on_surface`\nand `compute_boundary_pcurve_on_surface` the same way. At slope 0.99999,\ntheir 16 samples of a closed rim ran 0 in `u` where the rim runs a full\nturn.\n- **The pcurve of a wall's ellipse.** On main, the pcurve was a cubic\nthrough 17 even samples. Near a steep cut's near vertex, almost a turn\nof `u` falls between two samples, and the cubic swings back. At slope\n0.99999 a rim's fitted `u` ran over [-0.61, 18.05] for ends at 5.19 and\n11.47. Even at slope 0.96 it stepped back below its start.\n`wall_ellipse_pcurve` now builds the pcurve from cubic pieces with the\nexact (u, v) and rates at their ends. It splits a piece until three\ntests pass:\n  - its run in `u` is at most π/8;\n- its cubic in `u` passes the Fritsch and Carlson test for a monotone\ncubic;\n- at 1/4, 1/2 and 3/4 of the piece, it stands within 1e-6 rad of the\ntrue `u`, and within 1e-6·max(1, r) of the true `v`. Here r is the\ndistance from the axis. So the `v` bound is a length on the wall, and\nthe axis's origin does not change it.\n- A closed rim takes 117, 139 and 212 pieces at slopes 0.96, 0.99 and\n0.99999. Collinear samples still give an exact `Line2D`.\n- **Every sampler of an edge's UVs.** Many steps sampled an edge at even\nparameters. Each step moved a sample to the copy nearest the sample\nbefore it. On a steep cone's ellipse, one step can run more than half a\nturn, and then loses a turn.\n- The new `lift_edge_samples` and `edge_uv_samples` in\n`pcurve_compute.rs` lift an edge's samples along the edge. They use the\none-way lift for an ellipse on a cylinder or cone, and the old rule for\nother curves.\n- Each sampler in the face splitter now takes an edge's samples from\nthem. It moves a whole period only to align an edge to the end of the\nedge before it.\n- The changed sites include the seam-hole split (`entry_run`, `side`,\nthe loop walk) and the wire samplers in `sampling.rs`. They also include\nthe loop tests in `special_cases.rs`, and the way round of a closed\nellipse section in `fill_images_faces.rs`.\n- **A piece over half a turn (#2682).**\n`split_periodic_face_around_seam_holes` had two faults with such a\npiece:\n- `materialize` put each piece's far end on the copy nearest its start.\nIt now follows the piece along its samples.\n- The `side` test summed wrapped offsets from the seam. A half past the\nopposite meridian then read as being on the wrong side. The offsets now\ncarry on along the half.\n- With the window open on main, the pin face's 216 degree piece came out\nas (0.9419 → -1.5708). It now comes out as (0.9419 → 4.7124) and (4.7124\n→ 8.4829).\n- **The lens split.** `crossing_inside_section` in `phase_ff.rs` took a\ncrossing only within 5% of the section's length from its middle. It now\ntakes the crossing nearest the middle that lies strictly inside the\nsection and more than `ADOPT_MAX` (1e-3) from both ends. A crossing at\nthe section's own end split off a piece of zero length.\n\n## Tests\n\n- `an_oblique_cone_arc_splits_on_the_turn_it_runs` splits an arc of the\ncone from parameter 2 to 8, as a hole, at 7 points, in both directions.\nIt runs at the slopes 0.96, 0.99 and 0.99999. Each split's (u, v) and\neach pcurve end must match the oracle `lifted_u`. It fails on main in\neach direction.\n- `lifted_u` takes no steps. It counts, in closed form, the roots where\nthe principal `u` jumps a turn. Over a full turn it gives ±2π at all\nthree slopes.\n- `samples_along_a_steep_oblique_cone_ellipse_keep_its_turn` pins the\nsamples of a closed rim and the pcurve of an arc piece across the near\nvertex, at the three slopes, both ways. It fails without the lift.\n- `an_oblique_cone_rim_splits_on_the_turn_it_runs` now also runs at the\nthree slopes.\n- `assert_pcurve_follows` checks each of these pcurves at 4001 points.\nEach stays within 2e-6 of the exact lift, never steps back in `u`, and\ndeparts the right way. The worst deviation is 9.99e-7. With the old fit\nforced, it fails at the first point.\n- `a_seam_hole_piece_over_half_a_turn_keeps_its_far_end_on_its_turn`\nsplits a seamed cylinder round a patch from u = -1 to 4, and round its\nmirror. It checks the run in `u` of each of 12 pieces. It fails without\neither half of the fix.\n- `a_seam_hole_on_a_steep_cone_keeps_each_pieces_run` splits a cone\nround a loop whose ellipse crosses the seam and runs 5.149 in `u` from\nthere, at slope 0.99999, both ways. Main refuses the split.\n`wire_samplers_keep_a_steep_cone_ellipse_on_its_turn` checks the wire\nsamplers on the same arc. On main, one sample sits a turn off.\n-\n`a_cylinder_sections_pcurve_keeps_its_accuracy_wherever_the_axis_origin_lies`\nfits a section of a radius-1000 cylinder with the axis origin at its\ncentre and 1e6 away. Both stand 3.76e-4 off on the rim. A bound scaled\nby |v| gave 0.0957 at 1e6.\n- `a_crossing_anywhere_inside_a_section_splits_it_and_none_at_its_ends`\npins the lens split. It fails with the old 5% window, and with each end\nguard removed.\n- `pin_through_hole_mouth` now runs through the wider lens split. It is\nexact and valid in all 15 poses. It does not pin the `u` fix alone: on\nmain, #2678 already masks the fallback that the wrong `u` gave.\n- `cargo nextest run -p brepkit-algo`: 527 passed.\n- 60 brepkit-operations integration test files have cone, cylinder, rod,\npin, tube, bore, window, slant, taper or frustum in their names. In\nthem, 158 tests passed and 2 have an ignore on main.\n- The pose sweep (495 lines) and the truth audit (40 lines) give the\nsame output as main after each commit.\n\n## Still open\n\n- The ignored pose\n`a_pin_across_a_bores_mouth_with_both_seams_at_the_fold` (270, 180)\nstill falls back, as on main.",
+          "timestamp": "2026-11-22T21:22:11Z",
+          "tree_id": "52e774b5032e9133b1c45c9687a34a00f9751c4c",
+          "url": "https://github.com/andymai/brepkit/commit/06de75bf36182815a447596fb2e41db1e6ad815f"
+        },
+        "date": 1795382741557,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 882285,
+            "range": "± 9472",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 917735,
+            "range": "± 29188",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 9601,
+            "range": "± 29",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 579581,
+            "range": "± 8747",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 19633386,
+            "range": "± 81332",
             "unit": "ns/iter"
           }
         ]
