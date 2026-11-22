@@ -337,46 +337,62 @@ fn link_along_split_arc(
     } else {
         cuts.sort_by(|a, b| a.parameter.total_cmp(&b.parameter));
     }
-    let mut children = Vec::with_capacity(cuts.len() + 1);
+    // Pair every piece with its rim piece before the section is split: a
+    // piece left without one would stay beside the rim as the sliver this
+    // function exists to prevent.
+    let mut pieces: Vec<(Pave, Pave, PaveBlockId)> = Vec::with_capacity(cuts.len() + 1);
     let mut from = start;
     for pave in cuts.into_iter().chain(std::iter::once(end)) {
-        children.push(
-            arena
-                .pave_blocks
-                .alloc(PaveBlock::new(original_edge, from, pave)),
-        );
-        from = pave;
-    }
-    if let Some(pb) = arena.pave_blocks.get_mut(section_pb_id) {
-        pb.children.clone_from(&children);
-    }
-    let mut linked = 0;
-    for child in children {
-        let Some(pb) = arena.pave_blocks.get(child) else {
-            continue;
-        };
-        let ends = [
-            arena.resolve_vertex(pb.start.vertex),
-            arena.resolve_vertex(pb.end.vertex),
+        let mut ours = [
+            arena.resolve_vertex(from.vertex),
+            arena.resolve_vertex(pave.vertex),
         ];
+        ours.sort_by_key(|v| v.index());
         let partner = chain.iter().find_map(|&(pb_id, _)| {
             let b = arena.pave_blocks.get(pb_id)?;
             let mut theirs = [
                 arena.resolve_vertex(b.start.vertex),
                 arena.resolve_vertex(b.end.vertex),
             ];
-            let mut ours = ends;
             theirs.sort_by_key(|v| v.index());
-            ours.sort_by_key(|v| v.index());
-            (theirs == ours).then_some(pb_id)
+            (theirs == ours && can_link(topo, tol, arena, section_curve, pb_id)).then_some(pb_id)
         });
-        if let Some(partner) = partner
-            && try_link(topo, tol, arena, child, section_curve, partner)
-        {
+        let Some(partner) = partner else {
+            return 0;
+        };
+        pieces.push((from, pave, partner));
+        from = pave;
+    }
+    let children: Vec<PaveBlockId> = pieces
+        .iter()
+        .map(|&(a, b, _)| arena.pave_blocks.alloc(PaveBlock::new(original_edge, a, b)))
+        .collect();
+    if let Some(pb) = arena.pave_blocks.get_mut(section_pb_id) {
+        pb.children.clone_from(&children);
+    }
+    let mut linked = 0;
+    for (child, &(_, _, partner)) in children.into_iter().zip(&pieces) {
+        if try_link(topo, tol, arena, child, section_curve, partner) {
             linked += 1;
         }
     }
     linked
+}
+
+/// Whether [`try_link`] can link a new pave block, in no common block yet,
+/// on `section_curve` with `boundary_pb_id`.
+fn can_link(
+    topo: &Topology,
+    tol: Tolerance,
+    arena: &GfaArena,
+    section_curve: &EdgeCurve,
+    boundary_pb_id: PaveBlockId,
+) -> bool {
+    arena
+        .pave_blocks
+        .get(boundary_pb_id)
+        .and_then(|pb| topo.edge(pb.original_edge).ok())
+        .is_some_and(|edge| curves_compatible(section_curve, edge.curve(), tol))
 }
 
 /// Attempt to link a section PB with a boundary PB into a CommonBlock.
@@ -463,5 +479,84 @@ fn curves_compatible(a: &EdgeCurve, b: &EdgeCurve, tol: Tolerance) -> bool {
             EdgeCurve::NurbsCurve(_),
             EdgeCurve::Line | EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_),
         ) => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use brepkit_math::aabb::Aabb3;
+    use brepkit_math::curves::Circle3D;
+    use brepkit_math::tolerance::Tolerance;
+    use brepkit_math::vec::{Point3, Vec3};
+    use brepkit_topology::Topology;
+    use brepkit_topology::edge::{Edge, EdgeCurve};
+    use brepkit_topology::face::{Face, FaceSurface};
+    use brepkit_topology::vertex::Vertex;
+    use brepkit_topology::wire::{OrientedEdge, Wire};
+
+    use crate::ds::{GfaArena, IntersectionCurveDS};
+
+    #[test]
+    fn a_section_along_a_rim_is_split_only_when_every_piece_links() {
+        // Two coincident rims split at different vertices: one piece runs
+        // from the start at angle 0 to angle 2, the other's pieces from 2
+        // back to 1 and from 1 to the end at 3. The walk along them from
+        // the section's start reaches its end, but the section's pieces
+        // (0 to 1, 1 to 2, 2 to 3) match only one of the three rim pieces.
+        let circle =
+            Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0).unwrap();
+        let mut topo = Topology::default();
+        let v: Vec<_> = [0.0, 1.0, 2.0, 3.0]
+            .iter()
+            .map(|&t| topo.add_vertex(Vertex::new(circle.evaluate(t), 1e-7)))
+            .collect();
+        let rim = |topo: &mut Topology, a: usize, b: usize| {
+            topo.add_edge(Edge::new(v[a], v[b], EdgeCurve::Circle(circle.clone())))
+        };
+        let e02 = rim(&mut topo, 0, 2);
+        let e21 = rim(&mut topo, 1, 2);
+        let e13 = rim(&mut topo, 1, 3);
+        let section = rim(&mut topo, 0, 3);
+        let wire = topo.add_wire(Wire::new(vec![OrientedEdge::new(section, true)], false).unwrap());
+        let face = topo.add_face(Face::new(
+            wire,
+            vec![],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: 0.0,
+            },
+        ));
+        let mut arena = GfaArena::new();
+        arena.init_edge_pave_block(e02, v[0], 0.0, v[2], 2.0);
+        arena.init_edge_pave_block(e21, v[1], 1.0, v[2], 2.0);
+        arena.init_edge_pave_block(e13, v[1], 1.0, v[3], 3.0);
+        let section_pb = arena.pave_blocks.alloc(crate::ds::PaveBlock::new(
+            section,
+            crate::ds::Pave::new(v[0], 0.0),
+            crate::ds::Pave::new(v[3], 3.0),
+        ));
+        arena.curves.push(IntersectionCurveDS {
+            curve: EdgeCurve::Circle(circle),
+            face_a: face,
+            face_b: face,
+            bbox: Aabb3::from_points([Point3::new(-1.0, -1.0, 0.0), Point3::new(1.0, 1.0, 0.0)]),
+            pave_blocks: vec![section_pb],
+            t_range: (0.0, 3.0),
+        });
+
+        super::perform(&topo, Tolerance::default(), &mut arena).unwrap();
+
+        let leaves = arena.collect_leaf_pave_blocks(&[section_pb]);
+        let linked = leaves
+            .iter()
+            .filter(|pb| arena.pb_to_cb.contains_key(pb))
+            .count();
+        assert!(
+            leaves == vec![section_pb] && linked == 0,
+            "the section is left in {} pieces, {linked} linked",
+            leaves.len()
+        );
     }
 }

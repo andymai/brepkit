@@ -299,6 +299,14 @@ impl SpanIndex {
         )
     }
 
+    /// The indices of the spans whose control boxes meet `aabb`, in span
+    /// order.
+    pub(crate) fn span_ids_meeting(&self, aabb: &Aabb3) -> Vec<usize> {
+        let mut found = self.bvh.query_overlap(aabb);
+        found.sort_unstable();
+        found
+    }
+
     /// The parameter rectangles `(u, v)` of the spans whose control boxes
     /// meet `aabb`, in span order.
     #[must_use]
@@ -475,7 +483,7 @@ impl SpanIndex {
 }
 
 /// The distance between two boxes, 0 where they meet.
-fn box_gap(a: &Aabb3, b: &Aabb3) -> f64 {
+pub(crate) fn box_gap(a: &Aabb3, b: &Aabb3) -> f64 {
     let gap = |a_lo: f64, a_hi: f64, b_lo: f64, b_hi: f64| (a_lo - b_hi).max(b_lo - a_hi).max(0.0);
     let x = gap(a.min.x(), a.max.x(), b.min.x(), b.max.x());
     let y = gap(a.min.y(), a.max.y(), b.min.y(), b.max.y());
@@ -484,7 +492,7 @@ fn box_gap(a: &Aabb3, b: &Aabb3) -> f64 {
 }
 
 /// A homogeneous control point: `(w x, w y, w z, w)`.
-type Hpoint = [f64; 4];
+pub(crate) type Hpoint = [f64; 4];
 
 /// `span`'s Bezier net, read off its control points by blossoming: rows
 /// along `u` of homogeneous points, point `(i, j)` at `i * (degree_v + 1) +
@@ -553,7 +561,12 @@ fn sub_patch_boxes(surface: &NurbsSurface, net: &[Hpoint], pad: f64) -> SubBoxes
 /// homogeneous de Boor points `points` (the curve's `i - p` to `i`): point
 /// `j` is the curve's blossom at `a` taken `p - j` times and `b` taken `j`
 /// times.
-fn span_bezier(points: &[Hpoint], knots: &[f64], i: usize, (a, b): Interval) -> Vec<Hpoint> {
+pub(crate) fn span_bezier(
+    points: &[Hpoint],
+    knots: &[f64],
+    i: usize,
+    (a, b): Interval,
+) -> Vec<Hpoint> {
     let p = points.len() - 1;
     let blossom = |at_b: usize| {
         let mut d = points.to_vec();
@@ -576,7 +589,12 @@ fn span_bezier(points: &[Hpoint], knots: &[f64], i: usize, (a, b): Interval) -> 
 /// A Bezier net of `nu` by `nv` homogeneous points (row `i`, column `j` at
 /// `i * nv + j`) split at the middle of `u` (rows) or of `v` (columns), by
 /// de Casteljau: the two halves' nets.
-fn halve(net: &[Hpoint], nu: usize, nv: usize, along_u: bool) -> (Vec<Hpoint>, Vec<Hpoint>) {
+pub(crate) fn halve(
+    net: &[Hpoint],
+    nu: usize,
+    nv: usize,
+    along_u: bool,
+) -> (Vec<Hpoint>, Vec<Hpoint>) {
     let (lines, len) = if along_u { (nv, nu) } else { (nu, nv) };
     let at = |line: usize, k: usize| {
         if along_u {
