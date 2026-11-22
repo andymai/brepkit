@@ -4246,34 +4246,99 @@ fn component_aabb(topo: &Topology, comp: &[FaceId]) -> Option<(Point3, Point3)> 
 }
 
 /// Whether the closed surface that `classifier` holds encloses the piece made
-/// of `inner`, read at the first vertex of `inner` that lies off that
-/// surface.
+/// of `inner`, read at the first point of `inner` that lies off that surface
+/// by more than the boolean's linear tolerance: a vertex, else the middle of
+/// an edge, else a point inside a face.
 ///
 /// The classifier casts rays against the faces' own surfaces, analytic and
 /// NURBS, trimmed by their wires: a piece just inside the wall reads as
 /// inside however near it lies, which a mesh of the wall cannot promise
 /// (its chords pass inside the surface by up to the deflection). It builds
-/// nothing in the arena, which never reclaims what it holds. `None` when no
-/// vertex of `inner` stands off the surface or a face cannot be read, so
-/// callers can fall back rather than guess.
+/// nothing in the arena, which never reclaims what it holds. A piece can
+/// meet the surface at every vertex and along every edge (a plug in a hole
+/// of its own size), so the points inside its faces are read last: the
+/// centres of a mesh's triangles at `deflection`, put back on the face's
+/// surface and kept where the face holds them. `None` when no point of
+/// `inner` read stands off the surface or a face cannot be read, so callers
+/// can fall back rather than guess.
 fn piece_encloses(
     topo: &Topology,
     classifier: &brepkit_check::classify::SolidClassifier<'_>,
     inner: &[FaceId],
+    deflection: f64,
 ) -> Option<bool> {
     use brepkit_check::classify::{ClassifyOptions, PointClassification};
-    let options = ClassifyOptions::default();
+    let options = ClassifyOptions {
+        tolerance: brepkit_math::tolerance::Tolerance::new().linear,
+        ..ClassifyOptions::default()
+    };
+    // `Some(None)` for a point on the surface.
+    let read = |p: Point3| -> Option<Option<bool>> {
+        match classifier.classify(p, &options).ok()? {
+            PointClassification::Inside => Some(Some(true)),
+            PointClassification::Outside => Some(Some(false)),
+            PointClassification::OnBoundary => Some(None),
+        }
+    };
+    let mut edges = Vec::new();
     for &fid in inner {
         let face = topo.face(fid).ok()?;
         for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
             for oe in topo.wire(wid).ok()?.edges() {
                 let edge = topo.edge(oe.edge()).ok()?;
-                let p = topo.vertex(edge.start()).ok()?.point();
-                match classifier.classify(p, &options).ok()? {
-                    PointClassification::Inside => return Some(true),
-                    PointClassification::Outside => return Some(false),
-                    PointClassification::OnBoundary => {}
+                let (sp, ep) = (
+                    topo.vertex(edge.start()).ok()?.point(),
+                    topo.vertex(edge.end()).ok()?.point(),
+                );
+                if let Some(inside) = read(sp)? {
+                    return Some(inside);
                 }
+                edges.push((edge.curve().clone(), sp, ep));
+            }
+        }
+    }
+    for (curve, sp, ep) in &edges {
+        let (t0, t1) = curve.domain_with_endpoints(*sp, *ep);
+        let middle = curve.evaluate_with_endpoints(0.5 * (t0 + t1), *sp, *ep);
+        if let Some(inside) = read(middle)? {
+            return Some(inside);
+        }
+    }
+    for &fid in inner {
+        let surface = topo.face(fid).ok()?.surface().clone();
+        let Ok(mesh) = crate::tessellate::tessellate_with_uvs(topo, fid, deflection) else {
+            continue;
+        };
+        let pos = &mesh.mesh.positions;
+        for tri in mesh.mesh.indices.chunks_exact(3) {
+            let (a, b, c) = (
+                pos[tri[0] as usize],
+                pos[tri[1] as usize],
+                pos[tri[2] as usize],
+            );
+            let centre = Point3::new(
+                (a.x() + b.x() + c.x()) / 3.0,
+                (a.y() + b.y() + c.y()) / 3.0,
+                (a.z() + b.z() + c.z()) / 3.0,
+            );
+            // A plane holds the centre already, and has no parameters to
+            // put it back through.
+            let p = if matches!(surface, FaceSurface::Plane { .. }) {
+                centre
+            } else {
+                let Some(p) = surface
+                    .project_point(centre)
+                    .and_then(|(u, v)| surface.evaluate(u, v))
+                else {
+                    continue;
+                };
+                p
+            };
+            if !brepkit_check::classify::face_contains(topo, fid, p).unwrap_or(false) {
+                continue;
+            }
+            if let Some(inside) = read(p)? {
+                return Some(inside);
             }
         }
     }
@@ -4352,7 +4417,7 @@ fn components_are_disjoint_pieces(topo: &Topology, components: &[Vec<FaceId>]) -
     // `tests::rotated_separate_pieces_are_recognised_as_disjoint`). Containment
     // is tight in the direction that matters: nesting implies it, and rotation
     // does not manufacture it.
-    let eps = 1e-7;
+    let eps = brepkit_math::tolerance::Tolerance::new().linear;
     let may_nest = |outer: usize, inner: usize| {
         let (o, i) = (boxes[outer].1, boxes[inner].0);
         o.min.x() - eps <= i.min.x()
@@ -4384,7 +4449,8 @@ fn components_are_disjoint_pieces(topo: &Topology, components: &[Vec<FaceId>]) -
             let Some(classifier) = classifier.as_ref() else {
                 return false;
             };
-            match piece_encloses(topo, classifier, &components[inner]) {
+            let deflection = ((boxes[inner].1.max - boxes[inner].1.min).length() * 0.02).max(1e-4);
+            match piece_encloses(topo, classifier, &components[inner], deflection) {
                 Some(true) | None => return false,
                 Some(false) => {}
             }

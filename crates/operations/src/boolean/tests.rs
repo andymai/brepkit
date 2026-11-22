@@ -8284,6 +8284,88 @@ fn a_ball_just_inside_its_balls_wall_nests_whichever_order_it_comes_in() {
     }
 }
 
+/// A ball 5e-7 clear of the inside of a ring's hole is a separate piece,
+/// whichever order the two come in. All the ball's vertices lie on its
+/// equator, each 5e-7 from the ring, and the probe read them as on the ring
+/// at the classifier's default tolerance of 1e-6; with no point of the ball
+/// to read, the check gave its conservative answer and refused the pair.
+#[test]
+fn a_ball_just_clear_of_a_rings_hole_is_a_separate_piece() {
+    use brepkit_math::mat::Mat4;
+    use brepkit_topology::explorer::solid_faces;
+    let turn = Mat4::rotation_z(0.7) * Mat4::rotation_x(0.4) * Mat4::rotation_y(1.1);
+    for (name, pose) in [
+        ("upright", Mat4::identity()),
+        ("turned", turn),
+        ("mirrored", Mat4::scale(1.0, -1.0, 1.0)),
+    ] {
+        let mut topo = Topology::new();
+        let ring = crate::primitives::make_torus(&mut topo, 10.0, 2.0, 48).unwrap();
+        let ball = crate::primitives::make_sphere(&mut topo, 7.999_999_5, 32).unwrap();
+        for s in [ring, ball] {
+            crate::transform::transform_solid(&mut topo, s, &pose).unwrap();
+        }
+        let (ring_faces, ball_faces) = (
+            solid_faces(&topo, ring).unwrap(),
+            solid_faces(&topo, ball).unwrap(),
+        );
+        for (order, comps) in [
+            ("first", vec![ball_faces.clone(), ring_faces.clone()]),
+            ("second", vec![ring_faces, ball_faces]),
+        ] {
+            assert!(
+                super::components_are_disjoint_pieces(&topo, &comps),
+                "{name}: the ball in the ring's hole is a separate piece, listed {order}"
+            );
+        }
+    }
+}
+
+/// A piece that meets the piece round it at its vertices, or along its
+/// edges too, is read at a point off that piece's surface. A ball whose
+/// equator lies on a ring's hole is read at the middle of an equator chord;
+/// a plug that fills a tube's hole, its rims on the tube's inner rims and
+/// its wall on the tube's wall, at a point inside its flat end. Both are
+/// separate pieces: with no point of them to read, the check gave its
+/// conservative answer and refused them.
+#[test]
+fn a_piece_that_meets_its_rings_hole_is_read_off_the_ring() {
+    use brepkit_math::mat::Mat4;
+    use brepkit_topology::explorer::solid_faces;
+    let turn = Mat4::rotation_z(0.7) * Mat4::rotation_x(0.4) * Mat4::rotation_y(1.1);
+    for (name, pose) in [
+        ("upright", Mat4::identity()),
+        ("turned", turn),
+        ("mirrored", Mat4::scale(1.0, -1.0, 1.0)),
+    ] {
+        let mut topo = Topology::new();
+        let ring = crate::primitives::make_torus(&mut topo, 10.0, 2.0, 48).unwrap();
+        let ball = crate::primitives::make_sphere(&mut topo, 8.0, 32).unwrap();
+        let drum = crate::primitives::make_cylinder(&mut topo, 10.0, 1.0).unwrap();
+        let bore = crate::primitives::make_cylinder(&mut topo, 8.0, 1.0).unwrap();
+        let tube = boolean(&mut topo, BooleanOp::Cut, drum, bore).unwrap();
+        let plug = crate::primitives::make_cylinder(&mut topo, 8.0, 1.0).unwrap();
+        for s in [ring, ball, tube, plug] {
+            crate::transform::transform_solid(&mut topo, s, &pose).unwrap();
+        }
+        let faces = |s| solid_faces(&topo, s).unwrap();
+        for (what, outer, inner) in [
+            ("ball in the ring", faces(ring), faces(ball)),
+            ("plug in the tube", faces(tube), faces(plug)),
+        ] {
+            for (order, comps) in [
+                ("first", vec![inner.clone(), outer.clone()]),
+                ("second", vec![outer, inner]),
+            ] {
+                assert!(
+                    super::components_are_disjoint_pieces(&topo, &comps),
+                    "{name}: {what}, listed {order}, is a separate piece"
+                );
+            }
+        }
+    }
+}
+
 /// Multi-region Euler acceptance must tolerate genus per piece.
 ///
 /// `euler_balanced` used to compare against a fixed bound of 2, i.e. it assumed
