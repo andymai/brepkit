@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795332129636,
+  "lastUpdate": 1795338326856,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -74951,6 +74951,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 21227224,
             "range": "± 264744",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b7b207b9c867b745b9fea3068eda4925a5da1a28",
+          "message": "chore(main): release 4.11.34 (#2667)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[4.11.34](https://github.com/andymai/brepkit/compare/v4.11.33...v4.11.34)\n(2026-11-22)\n\n\n### Bug Fixes\n\n* **algo,math:** nest wall loops per loop, link split rim sections all\nor nothing, and bound curve-surface spans by their nets\n([#2658](https://github.com/andymai/brepkit/issues/2658))\n([9d1b09a](https://github.com/andymai/brepkit/commit/9d1b09a6a3c64b5b23cccf2bdda52f9867e90869))\n* **algo:** keep a ball's cavity a cavity, read rulings on a notched\nwall against its loops, and give a sphere face's holes to the loops\nround them ([#2671](https://github.com/andymai/brepkit/issues/2671))\n([1b61f91](https://github.com/andymai/brepkit/commit/1b61f91140686e0944e92320d52c39a8378a92bf))\n* **blend,operations,check:** chamfer pocket rims, closed B-spline rims,\npole contacts and lens ridges exactly\n([#2654](https://github.com/andymai/brepkit/issues/2654))\n([9c190c3](https://github.com/andymai/brepkit/commit/9c190c3cb978637f688745ddd813b41181d8cf3b))\n* **blend:** register fillet contact pcurves along their edges, round\nball rims past the equator, and walk fast and near-parallel rounds\n([#2672](https://github.com/andymai/brepkit/issues/2672))\n([b65d26a](https://github.com/andymai/brepkit/commit/b65d26a7d984e823f64874579405b655e36544d0))\n* **io,math,operations,algo:** read STL sides by vertex order, end CDT\nflip cycles, and put sphere bands on their spheres\n([#2655](https://github.com/andymai/brepkit/issues/2655))\n([a173f07](https://github.com/andymai/brepkit/commit/a173f078af567e8cdb7654fd27cdeb65973cac18))\n\n\n### Performance\n\n* **operations:** mesh a solid with less hashing in its shared passes\n([#2677](https://github.com/andymai/brepkit/issues/2677))\n([4a5cbbb](https://github.com/andymai/brepkit/commit/4a5cbbb497bfc4cb02e1db275d9a1a50531f9679))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-11-22T09:01:29Z",
+          "tree_id": "e0dfd5843bf3b4674dc39da21fd70faa3b4c5497",
+          "url": "https://github.com/andymai/brepkit/commit/b7b207b9c867b745b9fea3068eda4925a5da1a28"
+        },
+        "date": 1795338319068,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1154774,
+            "range": "± 19055",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1218634,
+            "range": "± 12815",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13295,
+            "range": "± 111",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 775396,
+            "range": "± 10534",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26145435,
+            "range": "± 64490",
             "unit": "ns/iter"
           }
         ]
