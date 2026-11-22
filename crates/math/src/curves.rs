@@ -805,7 +805,9 @@ impl Ellipse3D {
     /// is the root of a monotone function of one variable, found by Newton
     /// kept inside a closing bracket. A point more than `1e100` semi-axes off
     /// reads its nearest point from its direction alone, where the normal
-    /// runs along it, which is exact to the last digit there. Where more
+    /// runs along it, which is exact to the last digit there; an ellipse
+    /// whose shorter semi-axis is below the rounding of its longer is read
+    /// as that axis, run along twice. Where more
     /// than one point of the ellipse is nearest, the one with no negative
     /// coordinate along either axis is taken: the centre of a circle gives
     /// `0`, the centre of a longer ellipse the end of its shorter semi-axis,
@@ -818,6 +820,23 @@ impl Ellipse3D {
         let (a, b) = (self.semi_major, self.semi_minor);
         if !(x.is_finite() && y.is_finite()) {
             return (y / b).atan2(x / a);
+        }
+        // A shorter semi-axis below the rounding of the longer leaves, to
+        // working precision, the longer axis run along twice: the nearest
+        // point lies square across from the point, on the point's side.
+        if b < a * f64::EPSILON {
+            let t = (x / a).clamp(-1.0, 1.0).acos();
+            return if y < 0.0 && t < PI { -t } else { t };
+        }
+        if a < b * f64::EPSILON {
+            let t = (y / b).clamp(-1.0, 1.0).asin();
+            return if x >= 0.0 {
+                t
+            } else if t >= 0.0 {
+                PI - t
+            } else {
+                -PI - t
+            };
         }
         // In units of about the longer semi-axis no square of the steps
         // below leaves the range of a double. The unit is a power of two,

@@ -367,7 +367,9 @@ fn ellipse_project_finds_the_nearest_point() {
 /// The same ellipse and point, scaled from `1e-200` to `1e200`, where the
 /// squares of the semi-axes leave the range of a double, read the same angle
 /// to a few units in the last place, and points `1e-300` and `1e300`
-/// semi-axes from the centre read a number at every scale.
+/// semi-axes from the centre read a number at every scale. Ellipses whose
+/// shorter semi-axis is below the rounding of the longer, down to the least
+/// double, read a number and a nearest point at every scale too.
 #[test]
 fn ellipse_project_reads_alike_at_every_scale() {
     let normal = Vec3::new(0.3, -0.2, 1.0).normalize().unwrap();
@@ -424,6 +426,51 @@ fn ellipse_project_reads_alike_at_every_scale() {
                 (t - expected).abs() <= 8.0 * f64::EPSILON,
                 "{reach} at {k}: {t}, expected {expected}"
             );
+        }
+    }
+    let origin = Point3::new(0.0, 0.0, 0.0);
+    let frame = crate::frame::Frame3::from_normal(origin, normal).unwrap();
+    let thin = [
+        (1e150_f64, 1e-150_f64),
+        (1.0, 1e-300),
+        (1e300, 1.0),
+        (1.0, 5e-324),
+        (1e-150, 1e-300),
+        (1e-150, 1e150),
+        (5e-324, 1.0),
+    ];
+    for (a, b) in thin {
+        for k in [1e-100_f64, 1.0, 1e100] {
+            let (ak, bk) = (a * k, b * k);
+            if !(ak.is_finite() && bk.is_finite() && ak > 0.0 && bk > 0.0) {
+                continue;
+            }
+            let ellipse = Ellipse3D::with_axes(origin, frame.z, ak, bk, frame.x, frame.y).unwrap();
+            let long = ak.max(bk);
+            for (x, y) in [
+                (0.5, 0.0),
+                (0.5, 0.5),
+                (0.5, -0.5),
+                (0.0, 0.0),
+                (0.0, 0.7),
+                (2.0, 0.0),
+                (-0.7, -3.0),
+                (-1.0, 0.0),
+            ] {
+                let (along, across) = if ak >= bk { (x, y) } else { (y, x) };
+                let p = origin + frame.x * (along * long) + frame.y * (across * long);
+                let t = ellipse.project(p);
+                assert!(
+                    t.is_finite() && t > -PI && t <= PI,
+                    "({x}, {y}) on {ak} x {bk}: {t}"
+                );
+                let reached = (ellipse.evaluate(t) - p).length();
+                let nearest = nearest_by_scan(&ellipse, p);
+                assert!(
+                    reached <= nearest + 1e-12 * long,
+                    "({x}, {y}) on {ak} x {bk}: {reached}, the scan finds {nearest}"
+                );
+            }
         }
     }
 }
