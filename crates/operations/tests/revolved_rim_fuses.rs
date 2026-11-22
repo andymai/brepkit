@@ -4,7 +4,8 @@
 //! - `conical-pour-funnel`: a whole torus lip rolled onto the top rim of a
 //!   funnel's body. The tube crosses the two cones of the bowl's wall and
 //!   covers the flat ring between them, on the body's axis or leaning off
-//!   it. A hang tab's plate runs out through the lip.
+//!   it. A hang tab's plate runs out through the lip, and a rib stands on
+//!   the wall across the body's seam.
 //! - `rotary-potentiometer`: a lug, revolved 20 degrees, that stands on the
 //!   flat rim of a cup. Its bottom lies in the rim's plane and its inner and
 //!   outer faces lie on the cylinders of the cup's bore and wall.
@@ -21,6 +22,7 @@ use brepkit_math::quadrature::gauss_legendre_points;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_operations::boolean::{BooleanOp, BooleanOptions, boolean_with_options};
 use brepkit_operations::classify::{PointClassification, classify_point};
+use brepkit_operations::extrude::extrude;
 use brepkit_operations::measure::solid_volume;
 use brepkit_operations::mirror::mirror;
 use brepkit_operations::primitives::{make_box, make_torus};
@@ -459,6 +461,102 @@ fn a_hang_tab_fuses_through_a_funnels_lip() {
             &[("cone", 4), ("cylinder", 4), ("plane", 8), ("torus", 1)],
             truth,
             ([-86.0, -12.0, 68.0], [-78.0, 12.0, 73.0], 14),
+        );
+    }
+}
+
+/// The rib's profile `(r, z)`: a hexagon in the plane `y = -1`, pushed 2
+/// along `y`. It runs up the spout's outer wall and on up the bowl's outer
+/// cone, its inner side half a unit inside the wall.
+fn rib_profile() -> Vec<(f64, f64)> {
+    let outside = 9.5 + 1.6 / FRAC_1_SQRT_2;
+    let corner = 3.0 * 22.5f64.to_radians().tan();
+    vec![
+        (outside - 0.5, -24.0),
+        (outside + 3.0, -20.0),
+        (outside + 3.0, corner),
+        (outside + 29.0, corner + 26.0),
+        (outside + 31.5, 32.0),
+        (outside - 0.5, 0.0),
+    ]
+}
+
+/// The volume the rib shares with the funnel's wall. At a height `z`, the
+/// rib holds `x` from its inner side `a` to its outer side `b`, and the wall
+/// holds the points within `R`, the outer wall's radius, of the axis. Across
+/// the rib's thickness, `y` from -1 to 1, the shared length is from `a` to
+/// the nearer of `b` and `√(R² − y²)`, in closed form; the heights are
+/// summed by Gauss rules.
+fn rib_in_wall() -> f64 {
+    let profile = rib_profile();
+    let outside = 9.5 + 1.6 / FRAC_1_SQRT_2;
+    let side = |z: f64, from: usize, to: usize| {
+        let ((r0, z0), (r1, z1)) = (profile[from], profile[to]);
+        (z - z0).mul_add((r1 - r0) / (z1 - z0), r0)
+    };
+    let inner = |z: f64| {
+        if z <= 0.0 {
+            side(z, 0, 5)
+        } else {
+            side(z, 5, 4)
+        }
+    };
+    let outer = |z: f64| match z {
+        z if z <= profile[1].1 => side(z, 0, 1),
+        z if z <= profile[2].1 => side(z, 1, 2),
+        z if z <= profile[3].1 => side(z, 2, 3),
+        z => side(z, 3, 4),
+    };
+    let shared = |z: f64| {
+        let (a, b, wall) = (inner(z), outer(z), outside + z.max(0.0));
+        let arc = |y: f64| {
+            0.5 * y.mul_add(
+                wall.mul_add(wall, -y * y).sqrt(),
+                wall * wall * (y / wall).asin(),
+            )
+        };
+        let reach = if b < wall {
+            wall.mul_add(wall, -b * b).sqrt().min(1.0)
+        } else {
+            0.0
+        };
+        2.0 * (reach * (b - a) + arc(1.0) - arc(reach) - (1.0 - reach) * a)
+    };
+    integrate(shared, (profile[0].1, profile[4].1), 20_000)
+}
+
+/// A rib fused onto the funnel's body across the body's seam, the
+/// half-plane `y = 0`, `x > 0`, where each of the body's faces starts and
+/// ends: the rib spans `y` from -1 to 1 there, through the spout's outer
+/// cylinder and the bowl's outer cone. The fuse cuts the wall along the
+/// rib's sides and holds the body's volume and the rib's, less what they
+/// share.
+#[test]
+fn a_rib_fuses_onto_a_funnel_across_its_seam() {
+    let profile = funnel_profile();
+    let rib = rib_profile();
+    let twice_area: f64 = (0..rib.len())
+        .map(|i| {
+            let ((r0, z0), (r1, z1)) = (rib[i], rib[(i + 1) % rib.len()]);
+            r0.mul_add(z1, -r1 * z0)
+        })
+        .sum();
+    let truth = pappus(&profile) + twice_area.abs() - rib_in_wall();
+    for pose in POSES {
+        let mut topo = Topology::new();
+        let body = lathe(&mut topo, &profile, 2.0 * PI);
+        let points: Vec<Point3> = rib.iter().map(|&(r, z)| Point3::new(r, -1.0, z)).collect();
+        let wire = make_polygon_wire(&mut topo, &points, 1e-7).unwrap();
+        let face = make_planar_face_from_wire(&mut topo, wire).unwrap();
+        let rib = extrude(&mut topo, face, Vec3::new(0.0, 1.0, 0.0), 2.0).unwrap();
+        let operands = (posed(&mut topo, body, pose), posed(&mut topo, rib, pose));
+        fuse_exactly(
+            &mut topo,
+            operands,
+            pose,
+            &[("cone", 4), ("cylinder", 4), ("plane", 8)],
+            truth,
+            ([8.5, -2.0, -26.0], [16.5, 2.0, 6.0], 14),
         );
     }
 }
