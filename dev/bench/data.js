@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795342333187,
+  "lastUpdate": 1795345313803,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -75167,6 +75167,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26813410,
             "range": "± 127376",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "24612cbb3ad058b58524746238d5b720bf8789e8",
+          "message": "fix(math,algo): fit plane-torus sections to 1e-9, split half rings and turned grooves exactly, and keep a ring whole where a cone rests on it (#2673)\n\n## Summary\n\nFour torus booleans came back off or fell back to a mesh:\n\n- Nine exact intersects of `make_torus(4, 1.5)` with a box read 1.3e-6\nto 1.5e-5 off in volume (#2585).\n- Half of a thin ring cut or intersected by a plane through the ring's\ncentre fell back in 15 of 16 runs (#2596).\n- A flat through a grooved rod's axis fell back in a turned pose with a\ngroove ring of radius 5.9 (#2595).\n- A torus that touches a frustum's wall along a circle fell back in all\n12 booleans when it rests on the wall from outside (#2627).\n\nWith this change, each of them is exact, valid and watertight, with its\nvolume against a closed form or an integral.\n\nFixes #2585, fixes #2596, fixes #2595, fixes #2627.\n\n## The change\n\n- **Plane and torus sections (#2585).** A plane's section of a torus was\na cubic fit through a fixed number of exact points. Where a loop turns\ntightly, the fit strayed up to 8.3e-5 off the torus.\n`trim_torus_oval_to_box_face` then refitted each kept arc through 48\npoints of that fit. `fit_plane_torus_section` now adds exact points of\nthe section until the curve lies within 1e-9 (R + r) of it.\n`plane_torus_section_point` finds each by Newton across the plane and\nthe tube. The trim takes its samples on the exact section, at the oval's\nknots too.\n- **Reversed copies of a fit.** `path_parting` now also matches two\nedges that trace each other backwards at its first check. A reversed\ncopy of a long fit no longer takes the slow scan.\n- **A half ring through its centre (#2596).** The half ring's torus face\nholds the whole tube over half a turn. Sections moved into the face's\nu-window only when the window was wider than half a period, and here it\nis exactly pi. A piece's interior point came from edge (u, v) values\nthat put v = 2 pi at 0. The new `torus_loop_uv` reads a loop on its 3D\ncurves with both angles unwrapped. A face whose boundary leaves no arc\nof the tube out now holds the whole tube. For a tilted floor, whose\nloops cross the seam on the outer equator, the new\n`tube_band::split_tube_band` builds the pieces directly.\n- **A turned groove (#2595).** `emit_split_circle_arcs` read a torus\nface by the box of its outline in world axes. Turned, that box held the\nmeridian's arc round the outside of the tube, which became a third\nsection on each meridian. A ring torus face is now read in its own\nangles (`TorusRegion`: the tube's window and the gap in u).\n- **A torus resting on a cone (#2627).** The tangent circle was the\nwhole ring's only section. A lone loop that winds the ring or the tube\ndivides nothing, but the splitter made a disc and a ring with a winding\nhole. Booleans now keep such a ring whole, as imprint does. The check of\na whole ring sampled the tube at 3 pi / 4, the contact circle itself.\nThose samples lay on the cone's wall. The check now skips samples on the\nother solid's boundary.\n\n## Tests\n\n- `crates/operations/tests/torus_box_intersect_volumes.rs`: four boxes\nagainst the torus, upright, turned and mirrored. The edges now lie\nwithin 5.5e-9 of the torus (3e-7 to 8.3e-5 before). The boxes of\nhalf-size 2 read within 3e-11 to 8e-11 of the integral, and those of 0.6\nwithin 1.6e-10 to 1.1e-8. The math tests\n`plane_torus_fits_stay_on_the_section_where_it_turns_tightly` and\n`plane_torus_section_points_lie_on_both_surfaces` pin the fit.\n- `crates/operations/tests/half_ring_cut_through_its_centre.rs`: the cut\nand the intersect with floors tilted 0, 0.005, 0.01 and 0.02 about x, in\n3 poses. Each side is a quarter ring, `0.5 pi^2 R r^2`, within 1.3e-10\nuntilted and within 3.3e-8 tilted.\n- `a_flat_through_the_axis_keeps_the_grooves_meridians_circular` in\n`ring_groove_against_boxes.rs` now runs the turned pose for the ring of\nradius 5.9: 900.68943527107 turned against 900.68943527110 upright.\n- `crates/operations/tests/torus_touching_a_cone_wall.rs` takes a ring\nresting on a frustum's wall and a ring sitting in a frustum. It checks 4\nbooleans in 3 poses each, against closed forms to 1e-9. The empty\nintersect returns a volume of 0.\n- Each new test fails on the code before its fix.\n- Review fixes, each with a unit test that fails before it:\n- A torus face's extent and `TorusRegion` take a whole tube or turn only\nwhere the outline holds a whole meridian or latitude circle. Otherwise\nthe extent keeps its sampled range, and `TorusRegion` gives way to the\nbounding box.\n- `TorusRegion` applies only to a whole ring, or to a band with no holes\nbetween two whole meridians or two whole latitudes.\n- The plane-torus fit refuses a span it cannot check, where before it\ntook the span as within tolerance.\n- With main merged in (`3f6b87827`), all of brepkit-algo and\nbrepkit-math and the torus, ring, revolve, imprint, taper, ball and\ntwo-rod test files pass: 1473 tests.\n- The pose sweep gives the same output as main. The truth audit changes\nfour ring lines, each to a smaller error. The half ring over x > 0.5\ngoes from 2e-10 to 2e-11 or less, and the corner intersect from 3e-9 to\n2e-10.\n- `cargo nextest run --no-fail-fast -p brepkit-algo -p brepkit-io -p\nbrepkit-operations -p brepkit-wasm -p brepkit-check -p brepkit-heal -p\nbrepkit-math` on `3b3b9dca0`: 4898 tests run, 4898 passed, 32 skipped.\nThe gridfinity tests are among them.\n\n## Still open\n\n- The box at (3, 5.2, 1.1) of half-size 0.6 reads 1.2e-8 off turned and\n1.6e-8 mirrored (about 1.6e-10 absolute). A fit at 1e-10 gives the same,\nso the residual lies elsewhere.\n- The tighter fits cost time: the mean of 30 runs of these intersects\nwent from 1.7 to 3.8 ms to 2.8 to 6.7 ms. Tight loops now take up to\nabout 600 points.",
+          "timestamp": "2026-11-22T10:58:45Z",
+          "tree_id": "143176fe676715a1042e867587d972506c936913",
+          "url": "https://github.com/andymai/brepkit/commit/24612cbb3ad058b58524746238d5b720bf8789e8"
+        },
+        "date": 1795345305817,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 714471,
+            "range": "± 5950",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 771137,
+            "range": "± 32177",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 8775,
+            "range": "± 36",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 477638,
+            "range": "± 4545",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 16193148,
+            "range": "± 326753",
             "unit": "ns/iter"
           }
         ]
