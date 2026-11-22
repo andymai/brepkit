@@ -30,9 +30,11 @@ pub(super) fn split_boundary_edges_at_3d_points(
 }
 
 /// [`split_boundary_edges_at_3d_points`] for a hole woven into a curved
-/// face's arrangement, at the ends of the sections that reach it. A spline
-/// edge splits where projection onto the part of the spline the edge runs on
-/// finds the point, as the weave's contact test finds it.
+/// face's arrangement, at the ends of the sections that reach it. Each edge
+/// takes a point within the weld band of it, as the weave's contact test
+/// does. A spline edge splits where projection onto the part of the spline
+/// the edge runs on finds the point, and a circle or an ellipse at the
+/// point's foot on it.
 pub(super) fn split_hole_edges_at_3d_points(
     edges: Vec<OrientedPCurveEdge>,
     split_pts_3d: &[Point3],
@@ -52,14 +54,19 @@ fn split_edges_at_3d_points(
     tol: f64,
     nurbs_by_projection: bool,
 ) -> Vec<OrientedPCurveEdge> {
+    let conic_band = if nurbs_by_projection {
+        tol * 100.0
+    } else {
+        tol
+    };
     let mut result = Vec::new();
     for edge in edges {
         let mut splits = match &edge.curve_3d {
             EdgeCurve::Circle(circle) => {
-                find_splits_on_circle(circle, &edge, split_pts_3d, surface, tol)
+                find_splits_on_circle(circle, &edge, split_pts_3d, surface, tol, conic_band)
             }
             EdgeCurve::Ellipse(ellipse) => {
-                find_splits_on_ellipse(ellipse, &edge, split_pts_3d, tol)
+                find_splits_on_ellipse(ellipse, &edge, split_pts_3d, tol, conic_band)
             }
             // A marched-NURBS boundary edge (a plane×cone conic minted by an
             // earlier boolean) must split where a neighbouring face's
@@ -419,7 +426,8 @@ pub(super) fn find_splits_on_line(
 }
 
 /// Find split parameters on a circle edge. Uses `Circle3D::project` for angular
-/// projection, then normalizes into the edge's `[0, 1]` parameter range.
+/// projection, then normalizes into the edge's `[0, 1]` parameter range. A
+/// point within `band` of the circle splits it at its foot.
 ///
 /// Note: `domain_with_endpoints` for full circles (start approx end) returns the
 /// full `(-pi, pi]` domain. For true arcs, it uses endpoint projection -- this
@@ -430,6 +438,7 @@ pub(super) fn find_splits_on_circle(
     split_pts_3d: &[Point3],
     surface: &FaceSurface,
     tol: f64,
+    band: f64,
 ) -> Vec<(f64, Point3)> {
     let (t0, t1) = edge
         .curve_3d
@@ -499,7 +508,7 @@ pub(super) fn find_splits_on_circle(
         crate::perf::bump_face_split_probe();
         let angle = circle.project(sp);
         let closest = circle.evaluate(angle);
-        if (sp - closest).length() > tol {
+        if (sp - closest).length() > band {
             continue;
         }
         let t_norm = if let Some(base) = closed_anchor {
@@ -1114,12 +1123,15 @@ pub(super) fn find_splits_on_section_ellipse(
     splits
 }
 
-/// Find split parameters on an ellipse edge.
+/// Find split parameters on an ellipse edge. A point within `band` of the
+/// ellipse splits it: at the point itself within `tol`, and at its foot
+/// farther off, so the pieces stay on the ellipse.
 pub(super) fn find_splits_on_ellipse(
     ellipse: &brepkit_math::curves::Ellipse3D,
     edge: &OrientedPCurveEdge,
     split_pts_3d: &[Point3],
     tol: f64,
+    band: f64,
 ) -> Vec<(f64, Point3)> {
     // An open arc spans its stored edge's counter-clockwise range; read in
     // the traversal's order, a reversed arc's span is its complement, and a
@@ -1146,7 +1158,8 @@ pub(super) fn find_splits_on_ellipse(
         crate::perf::bump_face_split_probe();
         let angle = ellipse.project(sp);
         let closest = ellipse.evaluate(angle);
-        if (sp - closest).length() > tol {
+        let off = (sp - closest).length();
+        if off > band {
             continue;
         }
         let along = normalize_angle_in_span(angle, t0, span);
@@ -1154,7 +1167,7 @@ pub(super) fn find_splits_on_ellipse(
         if t_norm <= tol || t_norm >= 1.0 - tol {
             continue;
         }
-        splits.push((t_norm, sp));
+        splits.push((t_norm, if off <= tol { sp } else { closest }));
     }
     splits.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
     splits.dedup_by(|a, b| (a.0 - b.0).abs() < tol);
@@ -1314,7 +1327,7 @@ mod tests {
 
         // The boundary finder reads a reversed arc by its stored span too.
         let rev = ellipse_section_edge(&ellipse, 0.2, 1.0, false);
-        let boundary = find_splits_on_ellipse(&ellipse, &rev, &[other_window_pt], 1e-7);
+        let boundary = find_splits_on_ellipse(&ellipse, &rev, &[other_window_pt], 1e-7, 1e-7);
         assert!(
             boundary.is_empty(),
             "a point off a reversed boundary arc must not split it"
@@ -1827,6 +1840,107 @@ mod hole_copy_tests {
             "the spline did not split at the section's end"
         );
         assert!((pieces[0].end_3d - off).length() < 1e-12);
+    }
+
+    /// A hole edge on a unit cylinder along `curve` from `a` to `b`, and a
+    /// point on it at `mid` moved `off` out from the axis.
+    fn hole_conic(
+        curve: EdgeCurve,
+        a: Point3,
+        b: Point3,
+        mid: Point3,
+        off: f64,
+    ) -> (OrientedPCurveEdge, Point3, FaceSurface) {
+        let surface = FaceSurface::Cylinder(
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0)
+                .unwrap(),
+        );
+        let uv = |p: Point3| {
+            let (u, v) = surface.project_point(p).unwrap();
+            Point2::new(u, v)
+        };
+        let edge = OrientedPCurveEdge {
+            curve_3d: curve,
+            pcurve: Curve2D::Line(Line2D::new(uv(a), uv(b) - uv(a)).unwrap()),
+            start_uv: uv(a),
+            end_uv: uv(b),
+            start_3d: a,
+            end_3d: b,
+            forward: true,
+            source_edge_idx: None,
+            pave_block_id: None,
+        };
+        let out = Vec3::new(mid.x(), mid.y(), 0.0).normalize().unwrap();
+        (edge, mid + out * off, surface)
+    }
+
+    /// A woven hole's arc and ellipse, each with a section's end 5e-7 off
+    /// it: the weave's contact test takes the end as on the edge, and the
+    /// split makes the junction at the end's foot on the edge. An end 2e-5
+    /// off, past the weld band, splits neither. The boundary splitter keeps
+    /// its own band, `tol`.
+    #[test]
+    fn a_hole_conic_splits_at_a_section_end_its_fit_error_off_it() {
+        use brepkit_math::curves::{Circle3D, Ellipse3D};
+        let tol = 1e-7;
+        let circle =
+            Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0).unwrap();
+        let tilt = 0.4_f64;
+        let ellipse = Ellipse3D::new_with_ref(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(-tilt.sin(), 0.0, tilt.cos()),
+            1.0 / tilt.cos(),
+            1.0,
+            Vec3::new(tilt.cos(), 0.0, tilt.sin()),
+        )
+        .unwrap();
+        let off_curve = |curve: &EdgeCurve, p: Point3| match curve {
+            EdgeCurve::Circle(c) => (c.evaluate(c.project(p)) - p).length(),
+            EdgeCurve::Ellipse(e) => (e.evaluate(e.project(p)) - p).length(),
+            EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => f64::INFINITY,
+        };
+        let cases = [
+            (
+                EdgeCurve::Circle(circle.clone()),
+                [0.2, 0.7, 1.2].map(|t| circle.evaluate(t)),
+            ),
+            (
+                EdgeCurve::Ellipse(ellipse.clone()),
+                [0.2, 0.7, 1.2].map(|t| ellipse.evaluate(t)),
+            ),
+        ];
+        for (curve, [a, mid, b]) in cases {
+            let label = curve.type_tag();
+            let (edge, end, surface) = hole_conic(curve.clone(), a, b, mid, 5e-7);
+            let pieces = split_hole_edges_at_3d_points(vec![edge], &[end], None, &surface, tol);
+            assert_eq!(
+                pieces.len(),
+                2,
+                "{label}: the hole did not split at the end"
+            );
+            let joint = pieces[0].end_3d;
+            assert!(
+                off_curve(&curve, joint) < 1e-12,
+                "{label}: the joint is off the edge"
+            );
+            assert!(
+                (joint - end).length() < 1e-6,
+                "{label}: the joint is not at the end"
+            );
+            assert!((pieces[1].start_3d - joint).length() < 1e-15);
+
+            let (edge, end, surface) = hole_conic(curve.clone(), a, b, mid, 5e-7);
+            let pieces = split_boundary_edges_at_3d_points(vec![edge], &[end], None, &surface, tol);
+            assert_eq!(pieces.len(), 1, "{label}: the boundary split took the end");
+
+            let (edge, end, surface) = hole_conic(curve, a, b, mid, 2e-5);
+            let pieces = split_hole_edges_at_3d_points(vec![edge], &[end], None, &surface, tol);
+            assert_eq!(
+                pieces.len(),
+                1,
+                "{label}: an end past the weld band split the hole"
+            );
+        }
     }
 
     /// A spline rim on a unit cylinder at z = 3 over u = 0 to 5, through

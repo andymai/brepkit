@@ -906,6 +906,9 @@ impl<'a> StepBuilder<'a> {
             (FaceSurface::Sphere(sphere), Some(pole)) if inner_wires.is_empty() => {
                 FaceSurface::Sphere(self.sphere_about_cap(sphere, outer, pole)?)
             }
+            (FaceSurface::Sphere(sphere), None) if inner_wires.is_empty() => {
+                FaceSurface::Sphere(self.open_sphere_frame(sphere, outer)?)
+            }
             (surface, _) => surface,
         };
 
@@ -931,22 +934,89 @@ impl<'a> StepBuilder<'a> {
 
     /// A sphere face with holes keeps the file's frame when its circles fit
     /// it: each a latitude (about the frame's axis) or a meridian (through
-    /// its poles). Otherwise it takes the sphere's default frame, about
-    /// `+Z`, as every sphere face read before: in a frame its holes cross
-    /// at random, a seam the wire runs both ways (from a rim to the pole)
-    /// can cross a hole a later boolean cuts, which neither the face
-    /// splitter nor the mesher takes, and the result's dome is written
-    /// wrong.
+    /// its poles). Otherwise it takes a frame its circles fit (see
+    /// [`Self::fitted_sphere_frame`]): in a frame its holes cross at
+    /// random, a seam the wire runs both ways (from a rim to the pole) can
+    /// cross a hole a later boolean cuts, which neither the face splitter
+    /// nor the mesher takes, and the result's dome is written wrong.
     fn holed_sphere_frame(
         &self,
         sphere: brepkit_math::surfaces::SphericalSurface,
         outer: brepkit_topology::wire::WireId,
         inner: &[brepkit_topology::wire::WireId],
     ) -> Result<brepkit_math::surfaces::SphericalSurface, IoError> {
-        let (center, radius, axis) = (sphere.center(), sphere.radius(), sphere.z_axis());
-        let tol = 1e-6 * radius;
+        let wires: Vec<_> = std::iter::once(outer)
+            .chain(inner.iter().copied())
+            .collect();
+        match self.circles_in_frame(&sphere, &wires)? {
+            Some(circles) if circles > 0 => Ok(sphere),
+            _ => self.fitted_sphere_frame(&sphere, &wires),
+        }
+    }
+
+    /// A sphere face with no holes and no pole of its own (no cap) keeps the
+    /// file's frame unless one of its circles does not fit it. Otherwise it
+    /// takes a frame its circles fit (see [`Self::fitted_sphere_frame`]). A
+    /// band whose rims are not latitudes of its frame can hold the frame's
+    /// poles, its seam running through one, and the mesher leaves gaps in
+    /// it.
+    fn open_sphere_frame(
+        &self,
+        sphere: brepkit_math::surfaces::SphericalSurface,
+        outer: brepkit_topology::wire::WireId,
+    ) -> Result<brepkit_math::surfaces::SphericalSurface, IoError> {
+        match self.circles_in_frame(&sphere, &[outer])? {
+            Some(_) => Ok(sphere),
+            None => self.fitted_sphere_frame(&sphere, &[outer]),
+        }
+    }
+
+    /// The default frame about `+Z` when the circles of `wires` fit it, else
+    /// the frame about the axis of their first circle off the sphere's
+    /// centre (a rim) when they fit that, else the default frame.
+    fn fitted_sphere_frame(
+        &self,
+        sphere: &brepkit_math::surfaces::SphericalSurface,
+        wires: &[brepkit_topology::wire::WireId],
+    ) -> Result<brepkit_math::surfaces::SphericalSurface, IoError> {
+        let (center, radius) = (sphere.center(), sphere.radius());
+        let default = Self::default_sphere(center, radius)?;
+        if self.circles_in_frame(&default, wires)?.is_some() {
+            return Ok(default);
+        }
+        let mut rim_axis = None;
+        'wires: for &wire in wires {
+            for oe in self.topo.wire(wire)?.edges() {
+                if let EdgeCurve::Circle(circle) = self.topo.edge(oe.edge())?.curve()
+                    && (circle.center() - center).length() > 1e-6 * radius
+                {
+                    rim_axis = Some(circle.normal());
+                    break 'wires;
+                }
+            }
+        }
+        if let Some(axis) = rim_axis
+            && let Ok(framed) =
+                brepkit_math::surfaces::SphericalSurface::with_axis(center, radius, axis)
+            && self.circles_in_frame(&framed, wires)?.is_some()
+        {
+            return Ok(framed);
+        }
+        Ok(default)
+    }
+
+    /// The count of circles in `wires`, when each is a latitude of the
+    /// sphere's frame (about its axis) or a meridian (through its poles).
+    /// `None` when a circle is neither.
+    fn circles_in_frame(
+        &self,
+        sphere: &brepkit_math::surfaces::SphericalSurface,
+        wires: &[brepkit_topology::wire::WireId],
+    ) -> Result<Option<usize>, IoError> {
+        let (center, axis) = (sphere.center(), sphere.z_axis());
+        let tol = 1e-6 * sphere.radius();
         let mut circles = 0_usize;
-        for &wire in std::iter::once(&outer).chain(inner) {
+        for &wire in wires {
             for oe in self.topo.wire(wire)?.edges() {
                 let EdgeCurve::Circle(circle) = self.topo.edge(oe.edge())?.curve() else {
                     continue;
@@ -955,15 +1025,12 @@ impl<'a> StepBuilder<'a> {
                 let latitude = n.cross(axis).length() <= 1e-6 && off.cross(axis).length() <= tol;
                 let meridian = n.dot(axis).abs() <= 1e-6 && off.length() <= tol;
                 if !(latitude || meridian) {
-                    return Self::default_sphere(center, radius);
+                    return Ok(None);
                 }
                 circles += 1;
             }
         }
-        if circles > 0 {
-            return Ok(sphere);
-        }
-        Self::default_sphere(center, radius)
+        Ok(Some(circles))
     }
 
     fn default_sphere(
