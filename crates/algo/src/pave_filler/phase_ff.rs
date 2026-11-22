@@ -1943,14 +1943,19 @@ impl FaceExtent {
             // to the outer equator reads both ends of the turn, and its
             // smallest and largest samples span the whole tube. The window is
             // the arc its boundary's samples leave out of the turn. A face
-            // whose boundary leaves no arc out (a half ring, bounded by two
-            // meridian circles) holds the whole tube: a point on its outer
-            // equator reads a tube angle of 0 or of a whole turn by rounding.
+            // with a whole meridian circle in its boundary (a half ring) holds
+            // the whole tube: a point on its outer equator reads a tube angle
+            // of 0 or of a whole turn by rounding. The samples leave no arc out
+            // of a band that leaves out less than their largest step either,
+            // and such a face keeps its sampled range.
             let torus_window = match surface {
-                FaceSurface::Torus(_) => Some(
-                    face_tube_window(topo, face_id, surface)
-                        .unwrap_or((0.0, std::f64::consts::TAU)),
-                ),
+                FaceSurface::Torus(torus) => {
+                    face_tube_window(topo, face_id, surface).or_else(|| {
+                        TorusOutline::of(topo, face_id, torus)
+                            .is_some_and(|outline| outline.whole_meridians().count() > 0)
+                            .then_some((0.0, std::f64::consts::TAU))
+                    })
+                }
                 _ => None,
             };
             let periodic_v = torus_window.is_some();
@@ -9419,16 +9424,48 @@ struct TorusRegion {
 }
 
 impl TorusRegion {
-    /// The region of a ring torus face, `None` for any other face.
+    /// The region of a ring torus face, `None` for any other face. The
+    /// outline's samples find no arc left out of a turn shorter than their
+    /// largest step: only a whole meridian circle in the outline says the
+    /// face holds the whole tube, and a whole latitude circle the whole
+    /// turn about the axis. A face that leaves the question open is `None`.
     fn of(topo: &Topology, face_id: FaceId) -> Option<Self> {
         let face = topo.face(face_id).ok()?;
         let FaceSurface::Torus(torus) = face.surface() else {
             return None;
         };
-        (torus.minor_radius() < torus.major_radius()).then(|| Self {
+        if torus.minor_radius() >= torus.major_radius() {
+            return None;
+        }
+        let whole_ring =
+            face_boundary_all_degenerate(topo, face_id, Tolerance::new()).unwrap_or(false);
+        let outline = TorusOutline::of(topo, face_id, torus);
+        let window = match face_tube_window(topo, face_id, face.surface()) {
+            Some(w) => Some(w),
+            None if whole_ring
+                || outline
+                    .as_ref()
+                    .is_some_and(|o| o.whole_meridians().count() > 0) =>
+            {
+                None
+            }
+            None => return None,
+        };
+        let gap = match face_circumferential_u_gap(topo, face_id, face.surface()) {
+            Some(g) => Some(g),
+            None if whole_ring
+                || outline
+                    .as_ref()
+                    .is_some_and(|o| o.whole_latitudes().count() > 0) =>
+            {
+                None
+            }
+            None => return None,
+        };
+        Some(Self {
             torus: torus.clone(),
-            window: face_tube_window(topo, face_id, face.surface()),
-            gap: face_circumferential_u_gap(topo, face_id, face.surface()),
+            window,
+            gap,
         })
     }
 
@@ -9440,6 +9477,121 @@ impl TorusRegion {
             .is_none_or(|w| in_window(v, w, near / self.torus.minor_radius(), true))
             && self.gap.is_none_or(|g| !crate::classifier::u_in_gap(u, g))
     }
+}
+
+/// One edge of a torus face's outline lying on a meridian (a tube circle at
+/// one azimuth `u`) or a latitude (a circle about the axis at one tube angle
+/// `v`): that angle and the turn of its circle it covers.
+struct IsoPiece {
+    at: f64,
+    turn: f64,
+}
+
+/// A ring torus face's outline read as meridian and latitude pieces. An edge
+/// the outline runs twice, one way and back, is read once. `None` when an
+/// outline edge lies on neither (a plane's section), or a point is not read.
+struct TorusOutline {
+    meridians: Vec<IsoPiece>,
+    latitudes: Vec<IsoPiece>,
+}
+
+impl TorusOutline {
+    fn of(
+        topo: &Topology,
+        face_id: FaceId,
+        torus: &brepkit_math::surfaces::ToroidalSurface,
+    ) -> Option<Self> {
+        use std::f64::consts::TAU;
+        let tol = Tolerance::new().linear;
+        let face = topo.face(face_id).ok()?;
+        let wire = topo.wire(face.outer_wire()).ok()?;
+        let (axis, centre) = (torus.z_axis(), torus.center());
+        let (big, small) = (torus.major_radius(), torus.minor_radius());
+        let mut outline = Self {
+            meridians: Vec::new(),
+            latitudes: Vec::new(),
+        };
+        for oe in wire.edges() {
+            let uses = wire
+                .edges()
+                .iter()
+                .filter(|o| o.edge() == oe.edge())
+                .count();
+            if uses == 2 && !oe.is_forward() {
+                continue;
+            }
+            let edge = topo.edge(oe.edge()).ok()?;
+            let (sp, ep) = (
+                topo.vertex(edge.start()).ok()?.point(),
+                topo.vertex(edge.end()).ok()?.point(),
+            );
+            let closed = edge.start() == edge.end();
+            if matches!(edge.curve(), EdgeCurve::Line) && closed {
+                continue;
+            }
+            let EdgeCurve::Circle(c) = edge.curve() else {
+                return None;
+            };
+            let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
+            let turn = if closed { TAU } else { (t1 - t0).abs() };
+            let w = c.center() - centre;
+            let height = axis.dot(w);
+            let off_axis = (w - axis * height).length();
+            if c.normal().cross(axis).length() <= 1e-9 && off_axis <= tol {
+                outline.latitudes.push(IsoPiece {
+                    at: height.atan2(c.radius() - big),
+                    turn,
+                });
+            } else if c.normal().dot(axis).abs() <= 1e-9
+                && height.abs() <= tol
+                && (off_axis - big).abs() <= tol
+                && (c.radius() - small).abs() <= tol
+            {
+                outline.meridians.push(IsoPiece {
+                    at: torus.y_axis().dot(w).atan2(torus.x_axis().dot(w)),
+                    turn,
+                });
+            } else {
+                return None;
+            }
+        }
+        Some(outline)
+    }
+
+    /// The angles of the circles whose pieces cover a whole turn.
+    fn whole(pieces: &[IsoPiece]) -> Vec<f64> {
+        let mut angles: Vec<f64> = Vec::new();
+        for p in pieces {
+            if !angles.iter().any(|&a| same_angle(a, p.at)) {
+                angles.push(p.at);
+            }
+        }
+        angles
+            .into_iter()
+            .filter(|&a| {
+                let covered: f64 = pieces
+                    .iter()
+                    .filter(|p| same_angle(p.at, a))
+                    .map(|p| p.turn)
+                    .sum();
+                (covered - std::f64::consts::TAU).abs() <= 1e-9
+            })
+            .collect()
+    }
+
+    fn whole_meridians(&self) -> impl Iterator<Item = f64> {
+        Self::whole(&self.meridians).into_iter()
+    }
+
+    fn whole_latitudes(&self) -> impl Iterator<Item = f64> {
+        Self::whole(&self.latitudes).into_iter()
+    }
+}
+
+/// Whether two angles are one, read round a turn.
+fn same_angle(a: f64, b: f64) -> bool {
+    let d = (a - b).rem_euclid(std::f64::consts::TAU);
+    d.min(std::f64::consts::TAU - d) <= 1e-9
 }
 
 /// Compute AABB for a NURBS curve.
@@ -12758,5 +12910,87 @@ mod tests {
         .unwrap();
         let raw = plane_nurbs_intersection(Vec3::new(1.0, 0.0, 0.0), 0.0, &sheet).unwrap();
         assert!(raw.is_empty());
+    }
+
+    /// The torus of radii 4 and 1.5 about the `z` axis.
+    fn ring_torus() -> brepkit_math::surfaces::ToroidalSurface {
+        brepkit_math::surfaces::ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), 4.0, 1.5).unwrap()
+    }
+
+    /// A band of the ring torus round its axis between the latitudes at tube
+    /// angles 0.05 and 2pi - 0.05, seamed along the meridian at `u = 0`
+    /// through the inner equator. It leaves out 0.1 of the tube round the
+    /// outer equator, less than the largest step its outline's samples take.
+    fn band_short_of_the_outer_equator(topo: &mut Topology) -> FaceId {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_topology::face::Face;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let torus = ring_torus();
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        let (v0, v1) = (0.05, std::f64::consts::TAU - 0.05);
+        let latitude = |v: f64| {
+            Circle3D::new(
+                Point3::new(0.0, 0.0, 1.5 * v.sin()),
+                z,
+                1.5f64.mul_add(v.cos(), 4.0),
+            )
+            .unwrap()
+        };
+        let (a, b) = (
+            topo.add_vertex(Vertex::new(torus.evaluate(0.0, v0), 1e-7)),
+            topo.add_vertex(Vertex::new(torus.evaluate(0.0, v1), 1e-7)),
+        );
+        let low = topo.add_edge(Edge::new(a, a, EdgeCurve::Circle(latitude(v0))));
+        let high = topo.add_edge(Edge::new(b, b, EdgeCurve::Circle(latitude(v1))));
+        // Counterclockwise about -y, the meridian at u = 0 runs up the tube.
+        let meridian =
+            Circle3D::new(Point3::new(4.0, 0.0, 0.0), Vec3::new(0.0, -1.0, 0.0), 1.5).unwrap();
+        let seam = topo.add_edge(Edge::new(a, b, EdgeCurve::Circle(meridian)));
+        let wire = topo.add_wire(
+            Wire::new(
+                vec![
+                    OrientedEdge::new(low, true),
+                    OrientedEdge::new(seam, true),
+                    OrientedEdge::new(high, false),
+                    OrientedEdge::new(seam, false),
+                ],
+                true,
+            )
+            .unwrap(),
+        );
+        topo.add_face(Face::new(wire, vec![], FaceSurface::Torus(torus)))
+    }
+
+    /// A band that leaves out 0.1 of the tube, less than its samples' largest
+    /// step, keeps that sliver out of its extent: only a whole meridian in
+    /// the outline says the face holds the whole tube.
+    #[test]
+    fn a_band_short_of_a_sliver_of_the_tube_keeps_it_out_of_its_extent() {
+        let mut topo = Topology::new();
+        let face = band_short_of_the_outer_equator(&mut topo);
+        let surface = FaceSurface::Torus(ring_torus());
+        let extent = FaceExtent::new(
+            &topo,
+            face,
+            &surface,
+            face_v_range(&topo, face, &surface),
+            Tolerance::new(),
+        )
+        .unwrap();
+        let torus = ring_torus();
+        assert!(!extent.contains(torus.evaluate(0.3, 0.0)));
+        assert!(extent.contains(torus.evaluate(0.3, std::f64::consts::PI)));
+    }
+
+    /// The same band read in its own angles admits no point of that sliver.
+    #[test]
+    fn a_band_short_of_a_sliver_of_the_tube_reads_it_off_the_band() {
+        let mut topo = Topology::new();
+        let face = band_short_of_the_outer_equator(&mut topo);
+        let torus = ring_torus();
+        assert!(
+            TorusRegion::of(&topo, face)
+                .is_none_or(|region| !region.holds(torus.evaluate(0.3, 0.0), 1e-6))
+        );
     }
 }
