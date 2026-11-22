@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795374507910,
+  "lastUpdate": 1795375864267,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -75437,6 +75437,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 16901140,
             "range": "± 243979",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "45ed8781ccc548087d4abc3083662fbfa88b8651",
+          "message": "fix(algo,operations): read a whole rim in one edge as one turn, and box pieces by their faces when testing nesting (#2699)\n\n## Summary\n\nOn main, three faults hit booleans of balls, rods and slabs:\n\n- The engine refuses a slab fused across a rod's hole in a ball in two\nof five poses: \"no contained interior for curved-lens wall\" (#2669).\nBefore #2678, three other poses returned an invalid exact solid with no\nerror.\n- Clip a y-rod to a drum, then fuse it with an x-rod. The fuse is an\ninvalid exact solid in all five poses, 5.6% to 6.7% short, with 106 to\n108 open mesh edges. The random sweep scores this case (seed 1, case\n131) as good, because the final intersect hides it.\n- `components_are_disjoint_pieces` reads a ball's cavity off the ball's\ncentre as a separate piece (#2670).\n\nWith this change, both booleans are exact, valid and watertight in all\nfive poses, and the nesting check reads the cavity as nested. The pose\nsweep and the truth audit give the same output as main.\n\nFixes #2669, fixes #2670.\n\n## The change\n\n- **A whole rim in one edge (#2669).** The top rim of the rod's hole on\nthe ball is one closed NURBS edge. Its stored span in `u` is 2π plus one\nulp. `build_wire_loops_dcel_measured` lifted each half the short way\nround, so the rim's twin moved only about 1e-15. Its orbit did not wind,\nand its area of about 5e-16 passed the zero-area test. So it stayed as a\nregion, and the face splitter gave the rim to the wall's remainder a\nsecond time, as a hole. A closed half now lifts by its stored span in\nwhole periods.\n- **A whole rim's heading.** `nurbs_endpoint` read a closed rim's pcurve\nfrom the end nearer the edge's start. When the pcurve lay a period away,\nthat read came out stale. The fallback chord, folded by a period, then\ngave the rim its twin's heading. A closed half's pcurve is now read in\nthe order that its stored span runs. Without this, the first fix turned\nthe wrong result of seed 1, case 131 into a refusal.\n- **Nesting (#2670).** The check boxed each piece by its vertices. A\nball's vertices all lie on its rims, so the box of a cavity off the\ncentre fell outside the ball's box. Now:\n- The box that holds a piece whole is its face box\n(`face_set_bounding_box`) plus the control nets of its NURBS faces\n(`hold_nurbs_faces`).\n- A piece is a suspect inside another when its vertex box lies in the\nother's whole box. A vertex box spans points on the piece, so it cannot\nreach past the piece, as a face box of an untrimmed NURBS surface can.\n- Each ordered pair goes to the ray probe on its own, so the answer does\nnot depend on the order of the pieces.\n- The filter can only let extra pairs through. A piece with no vertex\ngives the safe answer: not disjoint.\n- The probe counted ray crossings on a mesh of the outer piece, whose\nchords pass inside the surface. So a piece near the wall read as inside\nor outside by the sample count. The probe now runs `brepkit_check`'s\nexact ray cast (`classify_point`, three rays and a vote) against the\nouter piece's own faces, through a new `SolidClassifier::of_faces`. It\nuses no mesh.\n- The probe reads at the boolean's linear tolerance (1e-7). It tries the\ninner piece's vertices first, then the middles of its edges. Last, it\ntries grid points over each face's (u, v) box that `face_contains`\nholds. Where a face's wire spans next to none of a periodic direction (a\ntorus bounded by its seams), the grid takes the whole period. Only when\nnone stands off the outer piece is the answer the safe one.\n\n## Tests\n\n- `ball_bump_rod_and_slab.rs` builds the case of #2669 directly in five\nposes. It checks validity and a closed mesh at deflections 0.01 and\n0.002. It also checks the volume against a slice integral of the four\nsolids (within 2e-5), the face types, and 9 classified points. Upright\nand rolled, it fails on main.\n- `clipped_rod_and_crossing_rod.rs` checks the fuse and the final\nintersect of seed 1, case 131 in five poses against a slice integral,\nand classifies points. It fails on main.\n- Unit tests: `dcel_twin_of_a_whole_rim_in_one_edge_is_no_region`,\n`a_whole_rim_a_period_from_its_pcurve_heads_the_way_it_runs`, and\n`a_ball_cavity_off_the_balls_centre_is_nested` (upright, mirrored and\nrolled). Each fails on main.\n- `a_spline_ball_cavity_nests_whichever_order_it_comes_in` nests a ball\nin B-spline form in an analytic ball, in three poses, listed first and\nsecond. `a_cavity_whose_face_box_reaches_past_its_ball_is_nested` nests\na cut ball in B-spline form whose face box reaches z = 9.289 past a ball\nof radius 9. Both fail on the first version of this PR's nesting fix.\n`a_ball_just_inside_its_balls_wall_nests_whichever_order_it_comes_in`\nnests a ball of radius 9.93 and one of 9.999 in a ball of radius 10, in\nthree poses and both orders. It fails with the mesh probe.\n- `a_ball_just_clear_of_a_rings_hole_is_a_separate_piece` puts a ball\n5e-7 clear of a torus's hole.\n`a_piece_that_meets_its_rings_hole_is_read_off_the_ring` checks a ball\nwhose vertices all lie on the ring, and a plug whose vertices and edges\nall lie on a tube. Each runs in three poses and both orders.\n`a_ball_on_a_ring_and_a_cap_on_a_block_are_separate_pieces` checks a\nball that touches a torus from outside, and a ball's cap that rests on a\nblock.\n- brepkit-algo lib: 522 passed. brepkit-operations lib, `boolean`\nfilter: 223 passed, 7 ignored.\n- 136 operations integration test files for balls, rods, cylinders,\ncones, tori, pins, seams and booleans: 588 tests passed. 2 have an\nignore on main.\n- 26 brepkit-io test files for balls, rods, cylinders, tori, cones, the\ntruss and gridfinity bins: 40 passed.\n- The random sweep ran seeds 1 to 3 with 150 cases each. Each case gets\nthe same verdict as on main: 331 good, 92 errors, 27 empty, 0 bad. Seed\n2, case 95 now reads good at 8.72e-7.\n\n## Still open\n\n- For a winding orbit with real halves, the DCEL \"area\" comes from the\ngap term about v = 0. So its value depends on where the orbit sits in\n`v`. No test shows a fault from it.",
+          "timestamp": "2026-11-22T19:27:23Z",
+          "tree_id": "ce4659a1a588f26f0bc8439723577ac26a78c2e6",
+          "url": "https://github.com/andymai/brepkit/commit/45ed8781ccc548087d4abc3083662fbfa88b8651"
+        },
+        "date": 1795375850656,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 886637,
+            "range": "± 18795",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 905793,
+            "range": "± 24029",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10092,
+            "range": "± 95",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 575663,
+            "range": "± 5556",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 19634353,
+            "range": "± 95422",
             "unit": "ns/iter"
           }
         ]
