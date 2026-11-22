@@ -670,8 +670,12 @@ fn a_sectors_top_outline_takes_a_chamfer_its_insets_allow() {
     assert!(chamfer(&mut topo, solid, &top, 1.0).is_err());
 }
 
-/// A selection no exact path takes must not come back with the solid's arcs
-/// flattened to chords: the planar rebuild reads only a face's corners.
+/// The corner where a lens's two round walls meet: the planar rebuild reads
+/// only a face's corners, so it refuses the corner rather than flatten the
+/// solid's arcs to chords. `chamfer` cuts it exactly, with a plane through a
+/// ruling of each wall a chord of 0.5 from the corner: the section is the
+/// triangle between the corner and the two contacts, and each wall's
+/// segment past its chord.
 #[test]
 fn the_planar_rebuild_refuses_curved_edges() {
     let mut topo = Topology::new();
@@ -703,13 +707,24 @@ fn the_planar_rebuild_refuses_curved_edges() {
     // The vertical edge at the corner between the two round walls.
     let corner = upper_upright(&topo, solid);
 
-    let refused = chamfer(&mut topo, solid, &[corner], 0.5);
-
+    let refused = chamfer_asymmetric(&mut topo, solid, &[corner], 0.5, 0.5);
     assert!(
         refused.is_err(),
         "a chamfer through the planar rebuild read {:?}",
         refused.map(|s| solid_volume(&topo, s, 0.001))
     );
+
+    let rho = 13.0_f64.sqrt();
+    let turn = 2.0 * (0.25 / rho).asin();
+    let segment = 0.5 * rho * rho * (turn - turn.sin());
+    // The wall about (2, 0) turns on from the corner away from (0, 0).
+    let to = 3.0_f64.atan2(-2.0) + turn;
+    let contact = (rho.mul_add(to.cos(), 2.0), rho * to.sin());
+    let triangle = contact.0.abs() * (3.0 - contact.1);
+    let lens = 4.0 * 13.0 * (2.0 * (3.0 / rho).asin() - 12.0 / 13.0);
+    let removed = 4.0 * (triangle + 2.0 * segment);
+    let result = chamfer(&mut topo, solid, &[corner], 0.5).unwrap();
+    assert_exact(&topo, result, lens - removed, "the lens's corner");
 }
 
 /// A hole the rebuild can carry goes through it: a drilled plate's far edge

@@ -92,6 +92,10 @@ pub fn check_edge_degenerate(
 ///
 /// Samples N points along the edge, evaluates both the 3D curve and the
 /// PCurve projected through the surface, and measures the maximum deviation.
+///
+/// # Errors
+///
+/// Returns an error if the edge, its vertices, or the face are missing.
 #[allow(clippy::cast_precision_loss)]
 pub fn check_edge_same_parameter(
     topo: &Topology,
